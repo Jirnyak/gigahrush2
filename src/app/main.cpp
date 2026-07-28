@@ -112,12 +112,32 @@ struct DemoFloor {
     int number;
     game::FloorKind kind;
 };
+//
+// The numbers are DEEP on purpose, and this is a correction rather than content.
+// The stack used to be 0..4, and every depth budget in the game keys off |z|:
+//
+//   * `anchor_for_floor` snaps anything within a few floors of 0 to FloorBit::Z0, so
+//     all five floors drew from the same habitat slice of the 69-kind roster.
+//   * `samosbor_duty01` at |z| <= 4 is ~2%, so the depth gradient the samosbor clock
+//     exists to produce was invisible — one duty figure, five floors.
+//   * `economy_band` put every floor in E0, capping loot at 90 roubles, so the
+//     extraction loop's entire risk/reward curve was flat.
+//
+// Three shipped systems were therefore unobservable, and no test would have said so
+// because each of them is correct in isolation. The anchors the mob ecology actually
+// authors are {-50, -36, -26, 0, +14, +30}, so the stack now reaches them: the hub,
+// two shallow floors, then the four descending anchors and the two above.
 constexpr DemoFloor kDemoFloors[] = {
-    {0, game::FloorKind::Residential}, // start / hub
+    {0, game::FloorKind::Residential},   // start / hub — E0, samosbor ~2% duty
     {1, game::FloorKind::Commercial},
     {2, game::FloorKind::Industrial},
-    {3, game::FloorKind::Derelict},
-    {4, game::FloorKind::Residential},
+    {-8, game::FloorKind::Derelict},     // E1
+    {-14, game::FloorKind::Industrial},  // E2
+    {-26, game::FloorKind::Derelict},    // anchor ZMinus26 — E3
+    {-36, game::FloorKind::Industrial},  // anchor ZMinus36
+    {-50, game::FloorKind::Derelict},    // anchor ZMinus50 — E4, samosbor ~94% duty
+    {14, game::FloorKind::Commercial},   // anchor ZPlus14 — up is depth too
+    {30, game::FloorKind::Residential},  // anchor ZPlus30
 };
 
 // How far the world has closed in, as a multiplier on the fog range.

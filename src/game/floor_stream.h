@@ -104,6 +104,14 @@ public:
     // ride_elevator, and adopts its freshly-embodied player body into the
     // destination module so a later unload folds it correctly. Returns a no-op
     // RideResult if the destination floor maps to no registered module.
+    // `dir` is a DIRECTION, not an offset: the destination is the nearest labelled
+    // floor beyond `fromFloor` on that side, found through `next_labelled_floor`.
+    //
+    // This used to compute `fromFloor + dir` and no-op when that landed on nothing,
+    // which silently made the elevator unusable on any sparse stack — and a sparse
+    // stack is legal by design, since floor numbers are mutable labels rather than
+    // indices. The bug only appears when the numbers stop being contiguous, so it sat
+    // dormant while the demo stack happened to be 0..4.
     RideResult travel(LevelStack& stack, FloorRegistry& reg, Registry& ecs,
                       NpcPool& pool, Entity player, int fromFloor, int dir,
                       std::uint8_t arrivalZ, NpcId& playerId);

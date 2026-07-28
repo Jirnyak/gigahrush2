@@ -154,14 +154,22 @@ RideResult FloorStreamer::travel(LevelStack& stack, FloorRegistry& reg,
     r.floor = fromFloor;
     if (auto* tr = ecs.try_get<Transform>(player)) r.layer = tr->layer;
 
-    const int dstFloor = fromFloor + dir;
+    // The nearest labelled floor on that side, NOT fromFloor + dir. A sparse stack
+    // is legal (floor numbers are mutable labels, not indices) and `+dir` lands on
+    // nothing for most of one. [floor_registry.h next_labelled_floor]
+    const int dstFloor = next_labelled_floor(reg, fromFloor, dir);
+    if (dstFloor == fromFloor) return r;                     // end of the stack
     if (reg.module_at(dstFloor) == kInvalidModule) return r; // no such floor -> no-op
 
     // Load the destination on demand. playerId is valid here, so its crowd is
     // embodied as plain bodies and the player (embodied on the source) is skipped;
     // then the elevator moves the player across.
     ensure_loaded(stack, reg, ecs, pool, dstFloor, playerId);
-    RideResult ride = ride_elevator(ecs, pool, reg, player, fromFloor, dir, arrivalZ);
+    // Hand the elevator the resolved delta so it agrees with the module that
+    // was just loaded. Passing the raw dir would move the player to a floor
+    // whose geometry is not resident.
+    RideResult ride = ride_elevator(ecs, pool, reg, player, fromFloor,
+                                    dstFloor - fromFloor, arrivalZ);
     if (!ride.moved) return ride;
 
     // The ride built a fresh player body on the destination; adopt it into the

@@ -121,4 +121,14 @@ private:
     LayerId moduleToLayer_[kMaxModules];   // module -> resident slot (kInvalidLayer)
 };
 
+// Nearest labelled floor strictly beyond `from` in direction `dir` (+1 up, -1
+// down), or `from` itself when there is none.
+//
+// Floor numbers are MUTABLE LABELS, not indices — that is the whole point of this
+// registry ([floors.md]: LayerId is not the floor number). So a stack may legitimately
+// be sparse: {0, 1, 2, -8, -26, -50, 14, 30} is a perfectly valid building, and
+// `from + dir` lands on nothing for almost all of it. Anything that steps between
+// floors must ask this rather than assume adjacency.
+int next_labelled_floor(const FloorRegistry& reg, int from, int dir);
+
 } // namespace giga::game

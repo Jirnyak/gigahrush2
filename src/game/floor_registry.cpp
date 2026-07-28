@@ -64,4 +64,20 @@ LayerId FloorRegistry::layer_at(int number) const {
     return layer_of(m);
 }
 
+int next_labelled_floor(const FloorRegistry& reg, int from, int dir) {
+    if (dir == 0) return from;
+    int best = from;
+    int bestGap = 0;
+    // Linear over the labelled floors. The stack is tens of entries, this runs on a
+    // keypress, and a sorted index would have to be kept correct across every
+    // renumbering the registry exists to allow.
+    for (int f = kMinFloor; f <= kMaxFloor; ++f) {
+        if (reg.module_at(f) == kInvalidModule) continue;
+        const int gap = (f - from) * dir;
+        if (gap <= 0) continue;                      // wrong side, or `from` itself
+        if (bestGap == 0 || gap < bestGap) { bestGap = gap; best = f; }
+    }
+    return best;
+}
+
 } // namespace giga::game
