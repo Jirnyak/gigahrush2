@@ -20,6 +20,13 @@ destination on demand and folds the floor left behind — the owner saw distinct
 floors swap in with their crowds, no duplicate player); `Esc` opens the pause
 menu.
 
+**Since then (headless, `ctest`-green, NOT yet visible in-game):** the whole
+**navigation bake** landed — the fixed 4×4×4 lattice, the L1 coarse graph, and
+the L2 flow fields (§7 #11, increments **A/B/C**). It is built and tested but
+**deliberately wired to no consumer** (movement AI is #12), so the running game
+looks unchanged and NPCs still stand still. Shipped on branch `nav-lattice-bake`,
+open for review as **PR #1 → main**.
+
 ---
 
 ## 1. The vision (from the owner)
@@ -190,9 +197,11 @@ hostility rises in **both** directions — roof (+) is crowded-but-weak, hell/vo
 ## 5. Architecture layers & key files
 
 ```
-src/core     dependency-free math (math.h) + toroidal wrap (wrap.h)
+src/core     dependency-free math (math.h) + toroidal wrap (wrap.h) +
+             bake-time job system (jobs.h: parallel_for)              [giga_core]
 src/world    macro grid + 8³ sub-voxel masks, typed fields, vector gravity,
-             LevelStack (W), world types/constants (types.h)          [giga_core]
+             LevelStack (W), world types/constants (types.h), the 4×4×4
+             nav lattice (lattice.h) + baked nav (nav.{h,cpp})        [giga_core]
 src/ecs      universal POD components (components.h) + EnTT alias      [giga_core]
 src/sim      physics, controller, camera, fluid  (*_step free fns)    [giga_core]
 src/game     GAME LAYER — NpcPool, inventory, event_bus, embody,
@@ -203,7 +212,8 @@ src/render   Vulkan device/swapchain/renderer, cube_pass (world),
 src/input    SDL3 → ECS input bridge
 src/app      window + main loop + worldgen (main.cpp, worldgen.*)
 shaders      cube.vert/frag (world), body.vert (NPCs) → SPIR-V at build
-tests        world_test (core), game_test (game layer, headless)
+tests        world_test (core), game_test (game layer) — both headless;
+             sim_bench (16k-agent crowd benchmark; an executable, not a ctest)
 ```
 
 **Game-layer files you will touch most:**
@@ -233,6 +243,22 @@ tests        world_test (core), game_test (game layer, headless)
   sim loop (1/120 s, frozen while paused), the render loop, HUD, the **pause
   menu** overlay, and event handling incl. `[` / `]` (via `streamer.travel`) and
   `Esc` (toggles pause + frees the cursor).
+
+**Core nav / bake files (new — the §7 #11 bake, `giga_core`, no consumer yet):**
+
+- `core/jobs.h` — header-only `parallel_for(n, body, threads=0)`, the bake-time
+  job system. Parallelize **across** independent units (never inside one BFS);
+  deterministic when `body(i)` writes only slot `i`. Bake-time only, never on the
+  tick.
+- `world/lattice.h` — the fixed 4×4×4 = 64-node cyclic `(Z/4)³` torus lattice
+  (pure `constexpr`, dependency-free): `lattice_coord / _id / _unpack / _neighbor`,
+  axis centres {16,48,80,112}, spacing 32. Both the elevator-hub set and the nav
+  coarse-graph node set.
+- `world/nav.{h,cpp}` — the baked navigation. `bake_coarse(grid, CoarseGraph&)` =
+  64 parallel wrapped BFS → Floyd-Warshall all-pairs `dist` + `next` (O(1) query
+  `coarse_next(g, from, to)`). `bake_fine(grid, FineNav&)` = 64 flow fields
+  (128 MiB; `FineNav::at(node,x,y,z)` → a step direction `0..5` into `kNavDir`, or
+  `kFlowArrived` / `kFlowNone`). Bake-time only; **not wired into `ensure_loaded`**.
 
 **Key components** (`ecs/components.h`, all POD): `Transform{vec3 pos; LayerId
 layer}`, `Velocity`, `AABB{half}`, `GravityAffected{scale,grounded}`,
@@ -314,22 +340,55 @@ cellular fluid, Vulkan renderer (instanced cube pass + ImGui), demo worldgen
   through the menu. The single-button layout is deliberately extensible for future
   items (settings, save/load, character sheet).
 
+**Navigation bake — built (headless, `ctest`-green; the §7 #11 increments
+A/B/C; NOT wired to an in-game consumer — nothing visible changed yet):**
+
+- **A — L0 carve.** `src/world/lattice.h` (the fixed 4×4×4 lattice) + `floor_gen`
+  now carves the 64 nodes (shaft through the full height — Z wraps, so top links
+  back to storey 0 — plus a lobby opening and coloured hub pads at the 4 lattice
+  z-levels) **deterministically and seed-independently** on every floor kind,
+  replacing the old `rng.below(...)` random shafts.
+- **B — L1 coarse graph + job system.** `src/core/jobs.h` (`parallel_for`) +
+  `src/world/nav.{h,cpp}`: `bake_coarse` runs 64 wrapped BFS through the *real*
+  geometry (parallel across nodes) → edge weights → Floyd-Warshall all-pairs
+  `dist` + `next`-hop. Cyclic graph ⇒ **no torus seam** (node 0 → antipode is
+  exactly 192 cells / 6 hops on open air; a spanning tree would blow both up).
+  `Threads::Threads` is now a `giga_core` dependency.
+- **C — L2 flow fields.** `bake_fine` / `FineNav`: 64 dense flow fields, 1 B/cell
+  = the step direction toward each node (**128 MiB/floor**). The field is a BFS
+  parent chain, so descent strictly shortens and always arrives. Route (once #12
+  consumes it) = coarse `next`-hop → descend that node's field, O(1)/tick.
+- **Honest crowd bench** (`tests/sim_bench.cpp`) — see §8; it's what motivated the
+  job system (the agent tick must be threaded to fit 16k/floor in budget).
+- **Connectivity caveat (honest, documented).** The carve guarantees **vertical**
+  node links (shafts, intact even on decayed Derelict); full **horizontal**
+  64-node connectivity relies on a floor's rooms/lobbies — proven fully connected
+  on dense Residential, **not** structurally guaranteed on sparse/Derelict (the
+  graph then correctly reports `kUnreachable`, which is sound for nav). Optional
+  fix deferred: carve thin corridors along lattice edges (geometry change, owner's
+  call).
+
 **Tests (`game_test`, headless):** inventory, pool basics + death-keeps-slot,
 relationships, design flag, event bus (transient/overflow/log), attribute block,
 height→body, embody/foldback, player-is-a-record, population seed, floor_spec,
-seed_from_spec, floor_registry, floor_gen, elevator, floor_stream, floor_travel.
-`world_test` covers the core.
+seed_from_spec, floor_registry, floor_gen, elevator, floor_stream, floor_travel,
+**nav coarse + fine on a real floor** (full connectivity; every node routes home
+without crossing solid; determinism). `world_test` covers the core, **plus
+`parallel_for`, the all-air coarse no-seam bake, and the all-air fine flow-field
+bake** (follow == exact wrapped-Manhattan; bit-identical re-bake = determinism).
 
 ---
 
 ## 7. Remaining roadmap (tracked as tasks #10–#13)
 
 Work **one verified increment per turn, build green, stop green with a plan**
-(§9). Order below is the intended sequence; the floor-module epic (#6–#9) is
-**done** (see §6), so what remains is the "life" layer (#10–#12), then content
-(#13).
+(§9). Order below is the intended sequence, but note the owner pulled the **nav
+bake (#11 A/B/C) forward** ahead of #10 — that core is now built (§6). So the
+open work is: **#10** macro tick, **#11 C.2** (the nav glue + wiring into
+streaming), **#12** movement AI (now unblocked by the flow fields), then content
+**#13**. The floor-module epic (#6–#9) is **done**.
 
-### #10 — Macro tick skeleton (NEXT)
+### #10 — Macro tick skeleton
 Coarse clock (own rate, **never** the 120 Hz tick — [macrosim.md](macrosim.md)) +
 a **columnar full-sweep** aging pass over the pool arrays; bench at 1M. Later:
 budgeted-cursor passes (migration/social, ~64 records/tick). This is where the
@@ -343,11 +402,21 @@ a maintained **per-floor bucket index** over `pool.floor(id)`, so a floor
 re-embodies whoever is *currently* labelled with its number — otherwise migration
 (which moves records between floors) is invisible to streaming.
 
-### #11 — Baked nav / flow / distance fields (`src/world/nav`) — DESIGN LOCKED 2026-07-28
-Bake BFS/flow/distance into flat 128³ fields at load; O(1) lookups at tick. This
-**gates movement AI** (#12). Re-bake on geometry mutation (freeze → re-bake →
-resume). Dense over sparse. **Design (owner + reference-audit); full capture in
-agent memory `torus-nav-baking`:**
+### #11 — Baked nav / flow / distance fields (`src/world/nav`) — A/B/C BUILT 2026-07-28 (headless green)
+The core is **done**: L0 carve (A), L1 coarse graph + core job system (B), L2
+flow fields (C) — all built and `ctest`-green (§6), all **bake-time-only with no
+consumer wired**. **What remains before #12 can eat it:**
+- **C.2 (near-term):** a *nearest-node field* (per cell: closest lattice node +
+  the flow toward it) so an agent enters the route from **any** cell, and a route
+  API `route_step(coarse, fine, fromCell, toCell)` = nearest node to the target →
+  `coarse_next` chain → descend that node's `FineNav`.
+- **Wiring:** call the bake from `FloorStreamer::ensure_loaded` (freeze → bake →
+  resume), with **disk memoization** — geometry is a pure `fn(seed, number)` so
+  the bake is too; skip re-bake on re-entry.
+- **Dirty local re-bake:** the cheap in-play patch for destructibility (below).
+
+Design rules below stay authoritative; the full built API is captured in agent
+memory `torus-nav-baking`. **Original design (owner + reference-audit):**
 - **The 4×4×4 = 64-node elevator lattice IS the HPA\* coarse graph** — a cyclic
   `(Z/4)³` torus graph, so it structurally cannot hit the reference's
   spanning-tree "seam" bug (a tree/forest over a 3-torus cuts cycles → 240-step
@@ -356,11 +425,12 @@ agent memory `torus-nav-baking`:**
   never re-bake structure per tick (bake at boundaries, hysteresis at the
   consumer); the toroidal `wrap_delta` heuristic is for A\* ordering **only**,
   never as a path metric (it lies at the antipode).
-- **Layers.** L0 geometry = carve the 64 nodes + their real connectivity. L1
-  coarse = 64-node all-pairs next-hop, edge weights from real wrapped BFS through
-  geometry. L2 fine = **64 flow fields** (one per node, 1 B/cell, dist fits
-  `uint8` since max 6-conn geodesic 3·64=192<255) + a nearest-node field; a route
-  is coarse next-hop → descend that node's flow field. This is the reference's
+- **Layers (L0/L1/L2 all BUILT — §6; the nearest-node field is C.2, still to do).**
+  L0 geometry = carve the 64 nodes + their real connectivity. L1 coarse = 64-node
+  all-pairs next-hop, edge weights from real wrapped BFS through geometry. L2 fine
+  = **64 flow fields** (one per node, 1 B/cell, dist fits `uint8` since max 6-conn
+  geodesic 3·64=192<255) + a nearest-node field; a route is coarse next-hop →
+  descend that node's flow field. This is the reference's
   wished-for "64-anchor flow field" it couldn't afford in a 536 MB browser — we
   can (infinite RAM). Flee/scent = a **diffusion field** on the macro tick (like
   `src/sim/fluid`, periodic on the torus), not pathfinding.
@@ -376,15 +446,17 @@ agent memory `torus-nav-baking`:**
   exactly one thread). Geometry is a pure `fn(seed, number)`, so the whole bake is
   **memoizable to disk** (unlimited) and skipped on re-entry — something the
   browser reference could never do.
-- **Bake boundaries (two regimes):** the **full** bake runs only at floor load
-  (`FloorStreamer::ensure_loaded`) and the post-`samosbor` stitch. Between them,
+- **Bake boundaries (two regimes)** *(design target — the call site is the "Wiring"
+  item above, not yet in `ensure_loaded`):* the **full** bake runs only at floor
+  load (`FloorStreamer::ensure_loaded`) and the post-`samosbor` stitch. Between them,
   in-play destructibility gets a **dirty local re-bake** — patch only the mutated
   region, cheap and approximate, no freeze; accept-stale at the edges until the
   next full bake makes it exact ([performance.md](performance.md) §Two regimes).
-- **Precursor increment (A):** carve the fixed lattice — a guaranteed shaft + lobby
-  at all 64 nodes, seed-independent, connectivity-guaranteed — into `floor_gen`,
-  replacing today's *random* shafts (`rx=rng.below(...)`); add `src/world/lattice.h`
-  (core, pure `constexpr`, dependency-free) and hook elevators/streaming to it.
+- **Increment A (DONE):** the fixed lattice is carved — a guaranteed shaft + lobby
+  + hub pads at all 64 nodes, seed-independent — in `floor_gen`, replacing the old
+  *random* shafts (`rx=rng.below(...)`); `src/world/lattice.h` added (core, pure
+  `constexpr`, dependency-free). *(Fast-travel **elevator** hookup to the lattice
+  — teleport between unlocked nodes — is still a standing follow-up, unbuilt.)*
 
 ### #12 — Utility-AI for embodied NPCs
 13 intents scored 0–100, argmax + hysteresis, **identity-hash stagger** (zero
@@ -434,6 +506,15 @@ union), loot (spawnW + value-gate + depth caps), economy bands E0–E4. Mobs are
   `kAttrSlots=8`, `kNameLen=24`, `kRelSlots=16`, `kInvalidNpc=0xFFFFFFFF`.
 - **Registry:** floors `−127..127` (`kFloorSlots=255`), `kMaxModules=256`,
   `ModuleId=uint16_t`, `kInvalidModule=0xFFFF`.
+- **Nav lattice & bake** (`world/lattice.h`, `world/nav.h`): `kLatticeDim=4`,
+  `kLatticeCount=64`, `kLatticeSpacing=32`, axis centres {16,48,80,112};
+  `lattice_neighbor(id, dir)` dirs `0..5 = −x,+x,−y,+y,−z,+z` (cyclic). Coarse:
+  `nav::kNodes=64`, `Dist=uint16`, `kUnreachable=0xFFFF`; `CoarseGraph` =
+  `edge[64][6]` + `dist[64][64]` + `next[64][64]` (a few KB). Fine: `FineNav.flow`
+  = node-major `uint8[64·128³]` = **128 MiB/floor**; byte `0..5` = step dir into
+  `kNavDir` (same `−x,+x,−y,+y,−z,+z` order; `reverse(d)==d^1`), `kFlowArrived=6`,
+  `kFlowNone=0xFF` (wall/unreachable). Bake pegs all cores; deterministic
+  (bit-identical re-bake) because each of the 64 BFS writes a disjoint slice.
 - **Sim loop:** fixed `kSimDt = 1/120 s`; fluid steps every 4 sim steps (maze mode
   only); fog `kWorldExtent*0.30 .. 0.50`.
 - **Demo floors** (`main.cpp`): `{0 Residential(hub), 1 Commercial, 2 Industrial,
@@ -485,5 +566,7 @@ A separate persistent memory tracks the same project state for the assistant, at
 (NOT in the repo). Relevant files: `gigahrush2-architecture.md`,
 `floor-module-architecture.md` (incl. the V-shape danger formulas + elevator note),
 `population-roadmap.md` (the #6–#13 ledger), `player-is-alife-record.md`,
-`build-constraints.md`. If you are a fresh agent without that memory, **this file
-plus AGENTS.md + ARCHITECTURE.md are sufficient** to continue.
+`build-constraints.md`, `torus-nav-baking.md` (the full nav-bake design + the
+built L0/L1/L2 API + the connectivity caveat). If you are a fresh agent without
+that memory, **this file plus AGENTS.md + ARCHITECTURE.md are sufficient** to
+continue.
