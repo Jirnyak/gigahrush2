@@ -254,10 +254,18 @@ bool CubePass::create_pipeline(VkRenderPass renderPass, const char* shaderDir) {
     return ok;
 }
 
-void CubePass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
-                      const World& world, const CubePush& push) {
+void CubePass::invalidate() {
+    for (int i = 0; i < kMaxFramesInFlight; ++i) dirty_[i] = true;
+}
+
+// Scan the grid once and fill one frame slot's instance buffer. Origins are
+// ABSOLUTE grid positions (cell index * kCellSize, inside [0, kWorldExtent)):
+// the nearest-toroidal-image shift is done per-vertex in cube.vert against
+// push.camPos. Keeping the camera out of the instance data is precisely what
+// makes this buffer cacheable across frames.
+std::uint32_t CubePass::build_instances(std::uint32_t frameIndex,
+                                        const World& world) {
     const MacroGrid& g = world.grid();
-    const vec3 camPos{push.camPos.x, push.camPos.y, push.camPos.z};
 
     // Fluid field is optional; if present, cells with liquid tint blue.
     const Field<float>* fluid =
@@ -265,27 +273,6 @@ void CubePass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
 
     auto* dst = static_cast<CubeInstance*>(instances_[frameIndex].mapped);
     std::uint32_t count = 0;
-
-    // Toroidal (minimal-image) placement. The world tiles space with period
-    // kWorldExtent on every axis, so we draw each cell not at its absolute grid
-    // origin but at the tile-copy nearest the camera. This wraps the far side of
-    // the torus into view right in front of the player instead of leaving the
-    // background clear-colour showing through the seam. `base` is the camera
-    // snapped to the tile whose [-half, +half) window is centred on it.
-    const float period = kWorldExtent;
-    const float half = 0.5f * period;
-    const vec3 base{std::floor(camPos.x / period) * period,
-                    std::floor(camPos.y / period) * period,
-                    std::floor(camPos.z / period) * period};
-
-    auto nearest = [&](float origin, float b, float c) -> float {
-        // Shift `origin` (in [0,period)) by whole periods into the window
-        // centred on the camera, choosing whichever copy is closest.
-        float p = b + origin;
-        if (p - c > half) p -= period;
-        else if (c - p > half) p += period;
-        return p;
-    };
 
     for (int z = 0; z < kMacroDim && count < instanceCapacity_; ++z)
     for (int y = 0; y < kMacroDim && count < instanceCapacity_; ++y)
@@ -300,15 +287,31 @@ void CubePass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
                            lerp(col.z, 0.85f, t)};
             }
         }
-        dst[count].origin =
-            vec3{nearest(static_cast<float>(x) * kCellSize, base.x, camPos.x),
-                 nearest(static_cast<float>(y) * kCellSize, base.y, camPos.y),
-                 nearest(static_cast<float>(z) * kCellSize, base.z, camPos.z)};
+        dst[count].origin = vec3{static_cast<float>(x) * kCellSize,
+                                 static_cast<float>(y) * kCellSize,
+                                 static_cast<float>(z) * kCellSize};
         dst[count].scale = kCellSize;
         dst[count].color = col;
         ++count;
     }
-    lastInstanceCount_ = count;
+    return count;
+}
+
+void CubePass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
+                      const World& world, const CubePush& push) {
+    // A different World object is a guaranteed content change; the same object
+    // with mutated contents is not detectable here, which is why invalidate()
+    // exists (floor streaming recycles World objects in place).
+    if (cachedWorld_ != &world) {
+        cachedWorld_ = &world;
+        invalidate();
+    }
+    if (dirty_[frameIndex]) {
+        lastInstanceCount_ = build_instances(frameIndex, world);
+        dirty_[frameIndex] = false;
+    }
+
+    const std::uint32_t count = lastInstanceCount_;
     if (count == 0) return;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);

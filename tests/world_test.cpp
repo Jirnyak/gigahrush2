@@ -48,6 +48,48 @@ static void test_wrap() {
     CHECK(wrap_delta(0, 10, 128) == 10);
 }
 
+// The minimal-image rule the renderer draws by. This is a *contract test*: the
+// same expression is reimplemented in shaders/cube.vert (GLSL cannot include
+// core/wrap.h), and it is what keeps the toroidal wrap seam out of view. If the
+// two drift apart, geometry pops across the seam and the world stops reading as
+// endless — easy to introduce, hard to notice.
+static void test_nearest_image() {
+    const float p = 256.0f;
+
+    for (int ai = 0; ai < 256; ai += 7) {
+        for (int ci = -600; ci <= 600; ci += 37) {
+            const float a = static_cast<float>(ai);   // absolute, in [0, p)
+            const float c = static_cast<float>(ci);   // reference (camera)
+            const float got = nearest_image(a, c, p);
+
+            // Reference: shift by whole periods until within [-p/2, p/2] of c.
+            // This is the branch-based formulation the branchless one replaced.
+            float want = a;
+            while (want - c > p * 0.5f) want -= p;
+            while (c - want > p * 0.5f) want += p;
+
+            // Asserted as a property, not as equality with one arbitrary
+            // tie-break. At an exact half-period tie the two images are
+            // equidistant and both are correct minimal images; the branchless and
+            // branch-based forms resolve it in opposite directions. That is
+            // unobservable — fog is fully black at exactly p/2 — so pinning
+            // equality there would be testing an accident, not the contract.
+            const bool tie = std::fabs(std::fabs(got - c) - p * 0.5f) < 1e-3f;
+            if (!tie) CHECK_NEAR(got, want, 1e-3f);
+
+            CHECK(std::fabs(got - c) <= p * 0.5f + 1e-3f);
+            // Congruence: (got - a) must be a whole number of periods.
+            const float k = (got - a) / p;
+            CHECK_NEAR(k, std::round(k), 1e-4f);
+        }
+    }
+
+    // The seam cases: a cell at the origin, seen from just inside the far edge,
+    // must render *ahead* of the camera rather than a whole period behind it.
+    CHECK(nearest_image(0.0f, 250.0f, p) > 250.0f);
+    CHECK(nearest_image(254.0f, 2.0f, p) < 2.0f);
+}
+
 static void test_submask() {
     SubMask m;
     CHECK(m.empty());
@@ -314,6 +356,7 @@ static void test_nav_fine() {
 
 int main() {
     test_wrap();
+    test_nearest_image();
     test_submask();
     test_grid_toroidal();
     test_fields();

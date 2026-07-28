@@ -278,6 +278,15 @@ int main(int argc, char** argv) {
     float simAccum = 0.0f;
     std::uint64_t prevTicks = SDL_GetPerformanceCounter();
     const double freq = static_cast<double>(SDL_GetPerformanceFrequency());
+
+    // CPU time spent inside each pass's record(), reported in the HUD. The HUD is
+    // built before the passes run, so these carry last frame's figures — which is
+    // what you want anyway when reading a steady-state number. This exists so
+    // "the renderer is slow" is a measurement and not a guess: it separates the
+    // CPU instance-build cost from GPU fill/present cost, which need opposite
+    // fixes.
+    float cubeMs = 0.0f;
+    float bodyMs = 0.0f;
     int fluidStepEvery = 4; // sim steps between fluid updates
     int fluidCounter = 0;
 
@@ -328,6 +337,9 @@ int main(int argc, char** argv) {
                         player = ride.player;
                         currentFloor = ride.floor;
                         currentSpec = spec_for_floor(currentFloor);
+                        // Streaming recycles World objects in place, so the cube
+                        // pass cannot detect the new geometry by identity.
+                        cubePass.invalidate();
                     }
                 }
             }
@@ -373,6 +385,10 @@ int main(int argc, char** argv) {
                     ++fluidCounter >= fluidStepEvery) {
                     fluid_step(stack.layer(activeLayer));
                     fluidCounter = 0;
+                    // Fluid tints cell colours, so the cached instance list is
+                    // stale. This is the one place the cache rebuilds regularly —
+                    // and only in maze mode, where fluid exists.
+                    cubePass.invalidate();
                 }
                 simAccum -= kSimDt;
             }
@@ -390,6 +406,7 @@ int main(int argc, char** argv) {
             ImGui::Begin("gigahrush2");
             ImGui::Text("%.1f FPS (%.2f ms)", frameDt > 0 ? 1.0f / frameDt : 0.0f,
                         frameDt * 1000.0f);
+            ImGui::Text("cpu record: cube %.2f ms | body %.2f ms", cubeMs, bodyMs);
             auto& tr = reg.get<Transform>(player);
             auto& ctl = reg.get<Controller>(player);
             auto& ga = reg.get<GravityAffected>(player);
@@ -456,10 +473,19 @@ int main(int argc, char** argv) {
             // the wrap seam is always hidden inside full-black fog.
             push.fog = vec4{kWorldExtent * 0.30f, kWorldExtent * 0.50f,
                             kLampRadius, kAmbient};
+            // The wrap period, so cube.vert can place each cell at its nearest
+            // toroidal image itself. Instance origins are absolute, which is what
+            // makes the cube pass's instance cache possible.
+            push.torus = vec4{kWorldExtent, 0.0f, 0.0f, 0.0f};
+            std::uint64_t t0 = SDL_GetPerformanceCounter();
             cubePass.record(cmd, renderer.currentFrame,
                             stack.layer(activeLayer), push);
+            std::uint64_t t1 = SDL_GetPerformanceCounter();
             // Draw the embodied population on the active layer (shared depth).
             bodyPass.record(cmd, renderer.currentFrame, reg, activeLayer, push);
+            std::uint64_t t2 = SDL_GetPerformanceCounter();
+            cubeMs = static_cast<float>((t1 - t0) / freq * 1000.0);
+            bodyMs = static_cast<float>((t2 - t1) / freq * 1000.0);
             hud.render(cmd);
             renderer.end_frame(window);
         }

@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "core/wrap.h"
 #include "ecs/components.h"
 
 namespace giga::gpu {
@@ -239,17 +240,10 @@ void BodyPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
     // Toroidal (minimal-image) placement, identical to the world pass: draw each
     // body at the tile-copy nearest the camera so a body across the seam appears
     // in front of the player instead of vanishing at the wrap.
+    // One shared definition in core/wrap.h rather than a local lambda — the same
+    // rule is implemented in shaders/cube.vert for the world pass, and having it
+    // written out three different ways is how the seam eventually comes back.
     const float period = kWorldExtent;
-    const float half = 0.5f * period;
-    const vec3 base{std::floor(camPos.x / period) * period,
-                    std::floor(camPos.y / period) * period,
-                    std::floor(camPos.z / period) * period};
-    auto nearest = [&](float origin, float b, float c) -> float {
-        float p = b + origin;
-        if (p - c > half) p -= period;
-        else if (c - p > half) p += period;
-        return p;
-    };
 
     auto* dst = static_cast<BodyInstance*>(instances_[frameIndex].mapped);
     std::uint32_t count = 0;
@@ -261,9 +255,9 @@ void BodyPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
         const Transform& tr = view.get<const Transform>(e);
         if (tr.layer != layer) continue;
 
-        vec3 c{nearest(tr.pos.x, base.x, camPos.x),
-               nearest(tr.pos.y, base.y, camPos.y),
-               nearest(tr.pos.z, base.z, camPos.z)};
+        vec3 c{nearest_image(tr.pos.x, camPos.x, period),
+               nearest_image(tr.pos.y, camPos.y, period),
+               nearest_image(tr.pos.z, camPos.z, period)};
         float dx = c.x - camPos.x, dy = c.y - camPos.y, dz = c.z - camPos.z;
         if (dx * dx + dy * dy + dz * dz > fogEndSq) continue; // fogged to black
 
