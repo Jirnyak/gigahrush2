@@ -159,10 +159,11 @@ def main():
     MobDef{{ {flags},
              {hp}, {dmg}, {spd}, {cd}, {reach},
              {pspd}, {sw}, static_cast<std::uint16_t>({rooms}),
+             {shot}, {minr}, {wind},
              u8(MobKind::{kind}), u8(MobTier::{tier}),
              u8(MobBehaviour::{beh}), u8(ProjType::{proj}),
              {samo}, static_cast<std::uint8_t>({floors}),
-             u8(MobPackMode::{pack}), {pmin}, {pmax}, {pspread}, {{0, 0}} }},"""
+             u8(MobPackMode::{pack}), {pmin}, {pmax}, {pspread} }},"""
             .format(
                 idx=i, rid=r["id"],
                 flags=" | ".join(flags) if flags else "0u",
@@ -174,6 +175,9 @@ def main():
                 pspd=fixed(r["proj_speed_cps"], 1000, "proj_speed_cps", i),
                 sw=fixed(r["spawn_weight"], 10, "spawn_weight", i),
                 rooms=mask(r["rooms"], ROOM, "RoomBit", "rooms", i),
+                shot=fixed(r["shot_range_cells"], 1000, "shot_range_cells", i),
+                minr=fixed(r["min_range_cells"], 1000, "min_range_cells", i),
+                wind=fixed(r["windup_s"], 1000, "windup_s", i),
                 kind=cpp_kind(r["id"], i),
                 tier=TIER[tier], beh=BEHAVIOUR[beh], proj=PROJ[proj],
                 samo=fixed(r["min_samosbor"], 1, "min_samosbor", i, 0, 99),

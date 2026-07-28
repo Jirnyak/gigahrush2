@@ -11,6 +11,8 @@
 #include "game/mob_table.h"
 #include "game/weapon_table.h"
 #include "sim/camera.h"   // camera_forward
+#include "world/macro_grid.h"
+#include "world/world.h"
 #include "world/types.h"
 
 namespace giga::game {
@@ -27,6 +29,12 @@ std::int16_t mitigate(std::int16_t raw, std::int8_t resistPct) {
     if (out < 0) out = 0;
     return static_cast<std::int16_t>(out);
 }
+
+// Defined further down, beside projectile_step where the flight logic lives.
+// Declared here because mob_attack_step launches shots and sits above it.
+void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
+                      const vec3& to, std::int16_t dmg,
+                      std::uint16_t projSpeedMmps, Entity source);
 
 } // namespace
 
@@ -123,7 +131,7 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
     return static_cast<std::uint32_t>(doomed.size());
 }
 
-std::uint32_t mob_melee_step(Registry& reg, NpcPool& pool, EventBus& bus,
+std::uint32_t mob_attack_step(Registry& reg, NpcPool& pool, EventBus& bus,
                              LayerId layer, float dt, std::uint64_t tick) {
     // The one target, stated in the header: whoever holds the camera.
     Entity victim = entt::null;
@@ -153,7 +161,15 @@ std::uint32_t mob_melee_step(Registry& reg, NpcPool& pool, EventBus& bus,
     // intent. Phase 2 applies damage after the view is gone. This is the same
     // discipline finalize_deaths, despawn_layer_mobs, loot_dead_mobs and
     // pickup_step already follow — this was the one place it was missed.
-    struct Swing { Entity mob; std::int16_t raw; std::uint16_t cd; };
+    struct Swing {
+        Entity mob;
+        std::int16_t raw;
+        std::uint16_t cd;
+        bool ranged;         // launch a projectile instead of touching the victim
+        vec3 from;           // launch origin, captured while the view was alive
+        float dist;          // horizontal range, for the gravity arc
+        std::uint16_t projSpeedMmps;
+    };
     std::vector<Swing> queued;
 
     for (auto e : reg.view<const MobRef, const Transform, MobCombat>()) {
@@ -164,6 +180,20 @@ std::uint32_t mob_melee_step(Registry& reg, NpcPool& pool, EventBus& bus,
         if (mc.cooldownMs > elapsedMs) mc.cooldownMs =
             static_cast<std::uint16_t>(mc.cooldownMs - elapsedMs);
         else mc.cooldownMs = 0;
+        // The windup runs down in the SAME one place, for the same reason: two
+        // sites decrementing a timer is how a monster ends up firing twice as fast
+        // as it is authored to.
+        //
+        // The transition is captured BEFORE the decrement, and that is load-bearing.
+        // A single u16 cannot tell "no telegraph started" from "telegraph just
+        // finished" — both read 0 — so without this flag the ranged branch saw zero
+        // after the windup expired and started a *fresh* telegraph, forever. The mob
+        // would wind up on a loop and never actually fire. Caught by a test, not by
+        // playing: an infinite telegraph looks exactly like a monster idling.
+        const bool windupDone = mc.windupMs > 0 && mc.windupMs <= elapsedMs;
+        if (mc.windupMs > elapsedMs) mc.windupMs =
+            static_cast<std::uint16_t>(mc.windupMs - elapsedMs);
+        else mc.windupMs = 0;
 
         if (victim == entt::null) continue;
         const Transform& tr = reg.get<const Transform>(e);
@@ -174,22 +204,59 @@ std::uint32_t mob_melee_step(Registry& reg, NpcPool& pool, EventBus& bus,
         const MobDef& def = kMobTable[mr.kind];
         if (def.dmg == 0) continue;  // PAUPSINA and friends do not hit
 
-        // Reach is authored in cells; distances are toroidal.
-        const float reach = static_cast<float>(def.meleeReachMm) * 0.001f * kCellSize;
+        // Distances are toroidal.
         const float dx = wrap_delta_f(tr.pos.x, victimPos.x, kWorldExtent);
         const float dy = wrap_delta_f(tr.pos.y, victimPos.y, kWorldExtent);
         const float dz = wrap_delta_f(tr.pos.z, victimPos.z, kWorldExtent);
-        if (dx * dx + dy * dy + dz * dz > reach * reach) continue;
+        const float d2 = dx * dx + dy * dy + dz * dz;
 
         // Damage scales with the mob's level on the same curve as its HP, so a
         // deep-floor elite hits as hard as it is tough.
-        queued.push_back(Swing{
-            e, static_cast<std::int16_t>(mob_hp_at_level(def.dmg, mr.level)),
-            def.attackCdMs});
+        const std::int16_t raw =
+            static_cast<std::int16_t>(mob_hp_at_level(def.dmg, mr.level));
+
+        // Melee first: if it can touch you, it touches you. Reach is in cells.
+        const float reach = static_cast<float>(def.meleeReachMm) * 0.001f * kCellSize;
+        if (d2 <= reach * reach) {
+            mc.windupMs = 0;   // contact cancels a shot it was lining up
+            queued.push_back(Swing{e, raw, def.attackCdMs, false, tr.pos, 0.0f, 0});
+            continue;
+        }
+
+        // Ranged. 13 of the 69 kinds; the rest have shotRangeMm == 0 and stop here.
+        if (def.shotRangeMm == 0) continue;
+        const float maxR = static_cast<float>(def.shotRangeMm) * 0.001f * kCellSize;
+        const float minR = static_cast<float>(def.minRangeMm) * 0.001f * kCellSize;
+        if (d2 > maxR * maxR || d2 < minR * minR) {
+            mc.windupMs = 0;   // out of the band: abort whatever it was aiming
+            continue;
+        }
+
+        // The telegraph. A shot is not fired on the tick it is decided: the kind's
+        // authored windup runs first, and leaving the band during it aborts (above).
+        // This is the entire difference between a fair ranged monster and an unfair
+        // one, so it is not optional and not tunable away.
+        if (mc.windupMs > 0) continue;              // mid-telegraph
+        if (!windupDone && def.windupMs > 0) {      // start one
+            mc.windupMs = def.windupMs;
+            continue;
+        }
+        // windupDone, or a kind with no authored windup: the shot leaves now.
+
+        queued.push_back(Swing{e, raw, def.attackCdMs, true, tr.pos,
+                               std::sqrt(dx * dx + dy * dy), def.projSpeedMmps});
     }
 
     std::uint32_t swings = 0;
     for (const Swing& s : queued) {
+        if (s.ranged) {
+            spawn_projectile(reg, layer, s.from, victimPos, s.raw,
+                             s.projSpeedMmps, s.mob);
+            ++swings;
+            if (MobCombat* mc = reg.try_get<MobCombat>(s.mob))
+                mc->cooldownMs = s.cd;
+            continue;   // a shot in flight is not a hit yet
+        }
         DamageResult r = apply_damage(reg, pool, victim, s.raw,
                                       DamageChannel::Kinetic, s.mob);
         if (r.hit) {
@@ -197,8 +264,9 @@ std::uint32_t mob_melee_step(Registry& reg, NpcPool& pool, EventBus& bus,
             if (MobCombat* mc = reg.try_get<MobCombat>(s.mob))
                 mc->cooldownMs = s.cd;
         }
-        // Once the victim is down the rest of the queue has nothing to hit, and
+        // Once the victim is down the rest of the queue has nothing to touch, and
         // apply_damage would no-op on it anyway — it refuses a target already Dead.
+        // Projectiles already launched still fly; that is correct.
         if (r.lethal) break;
     }
     (void)bus;
@@ -246,6 +314,128 @@ void sync_armour(Registry& reg, NpcPool& pool, Entity e) {
     for (std::size_t c = 0; c < kDamageChannels; ++c)
         a.resist[c] = d.resist[c];
     reg.emplace_or_replace<Armour>(e, a);
+}
+
+namespace {
+
+// Launch a shot from `from` toward `to`.
+//
+// Aimed with a gravity-compensated lob, which is the most important asymmetry in
+// the whole model: fired level from chest height a projectile reaches the floor in
+// well under a second, so a flat shot is short whatever its muzzle speed. Distance
+// has to be bought with arc. The vertical rate below is the one that lands the shot
+// at the target's height after dist/speed seconds.
+void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
+                      const vec3& to, std::int16_t dmg,
+                      std::uint16_t projSpeedMmps, Entity source) {
+    // Table speed is cells/s in fixed point; a cell is kCellSize metres.
+    float speed = static_cast<float>(projSpeedMmps) * 0.001f * kCellSize;
+    if (speed < 1.0f) speed = 12.0f;   // a ranged kind with no authored speed
+
+    const float dx = wrap_delta_f(from.x, to.x, kWorldExtent);
+    const float dy = wrap_delta_f(from.y, to.y, kWorldExtent);
+    const float dz = wrap_delta_f(from.z, to.z, kWorldExtent);
+    const float flat = std::sqrt(dx * dx + dy * dy);
+    if (flat < 1e-3f) return;
+
+    const float tof = flat / speed;                   // time of flight
+    const float vz = dz / tof + 0.5f * kProjGravity * tof;
+
+    Entity e = reg.create();
+    Transform tr;
+    tr.pos = from;
+    tr.pos.z += 0.6f;        // leaves from chest height, not from the feet
+    tr.layer = layer;
+    reg.emplace<Transform>(e, tr);
+    reg.emplace<Velocity>(
+        e, Velocity{vec3{dx / flat * speed, dy / flat * speed, vz}});
+    reg.emplace<AABB>(e, AABB{vec3{0.10f, 0.10f, 0.10f}});
+    // Hot white-yellow: a shot must read against both the monster palette (the red
+    // axis) and the faction one, so it is brighter than anything else in the frame.
+    reg.emplace<Renderable>(e, Renderable{vec3{1.00f, 0.95f, 0.70f}});
+    reg.emplace<Projectile>(e, Projectile{source, dmg, kProjTtlMs});
+}
+
+} // namespace
+
+std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
+                              const LevelStack& stack, LayerId layer, float dt,
+                              std::uint64_t tick) {
+    if (!stack.valid(layer)) return 0;
+    const MacroGrid& grid = stack.layer(layer).grid();
+
+    Entity victim = entt::null;
+    vec3 victimPos{0, 0, 0};
+    for (auto e : reg.view<const CameraTag, const Transform>()) {
+        const Transform& t = reg.get<const Transform>(e);
+        if (t.layer != layer) continue;
+        victim = e;
+        victimPos = t.pos;
+        break;
+    }
+
+    const std::uint16_t elapsedMs =
+        static_cast<std::uint16_t>(dt * 1000.0f + 0.5f);
+
+    // Same two-phase discipline as the attack step, for the same reason:
+    // apply_damage can create the Dead pool and dangle a live view.
+    struct Hit { Entity proj; std::int16_t dmg; Entity source; bool onVictim; };
+    std::vector<Hit> resolved;
+
+    for (auto e : reg.view<Projectile, Transform, Velocity>()) {
+        Transform& tr = reg.get<Transform>(e);
+        if (tr.layer != layer) continue;
+        Projectile& p = reg.get<Projectile>(e);
+        Velocity& v = reg.get<Velocity>(e);
+
+        if (p.ttlMs > elapsedMs)
+            p.ttlMs = static_cast<std::uint16_t>(p.ttlMs - elapsedMs);
+        else
+            p.ttlMs = 0;
+
+        v.v.z -= kProjGravity * dt;
+        tr.pos.x = wrapf(tr.pos.x + v.v.x * dt, kWorldExtent);
+        tr.pos.y = wrapf(tr.pos.y + v.v.y * dt, kWorldExtent);
+        tr.pos.z += v.v.z * dt;
+
+        if (p.ttlMs == 0) {
+            resolved.push_back(Hit{e, 0, p.source, false});
+            continue;
+        }
+
+        if (victim != entt::null) {
+            const float hx = wrap_delta_f(tr.pos.x, victimPos.x, kWorldExtent);
+            const float hy = wrap_delta_f(tr.pos.y, victimPos.y, kWorldExtent);
+            const float hz = wrap_delta_f(tr.pos.z, victimPos.z, kWorldExtent);
+            if (hx * hx + hy * hy + hz * hz <= kProjHitRadius * kProjHitRadius) {
+                resolved.push_back(Hit{e, p.dmg, p.source, true});
+                continue;
+            }
+        }
+
+        // Solid geometry stops it. Cell-level rather than sub-voxel on purpose: a
+        // shot clipping the corner of a wall should stop, and the sub-voxel mask
+        // would let it slip through a half-carved cell that reads as solid.
+        const int cx = wrap_macro(static_cast<int>(tr.pos.x / kCellSize));
+        const int cy = wrap_macro(static_cast<int>(tr.pos.y / kCellSize));
+        const int cz = static_cast<int>(tr.pos.z / kCellSize);
+        if (cz < 0 || cz >= kMacroDim ||
+            grid.cell(cx, cy, wrap_macro(cz)) != kCellAir)
+            resolved.push_back(Hit{e, 0, p.source, false});
+    }
+
+    std::uint32_t hits = 0;
+    for (const Hit& h : resolved) {
+        if (h.onVictim && victim != entt::null) {
+            DamageResult r = apply_damage(reg, pool, victim, h.dmg,
+                                          DamageChannel::Kinetic, h.source);
+            if (r.hit) ++hits;
+        }
+        if (reg.valid(h.proj)) reg.destroy(h.proj);
+    }
+    (void)bus;
+    (void)tick;
+    return hits;
 }
 
 bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId layer,

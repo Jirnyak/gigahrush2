@@ -146,7 +146,7 @@ enum class FloorBit : std::uint8_t {
 
 // POD, trivially copyable, no pointers. Ordered widest-first so there is no
 // interior padding, and the six fields the tick actually reads sit in the first
-// 14 bytes. The whole 69-row table is 2,208 B — permanently cache-resident.
+// 14 bytes. The whole 69-row table is 2,484 B — permanently cache-resident.
 //
 // Fractional reference values (speed 3.15, attackRate 0.24, spawnWeight 8.5) are
 // stored fixed-point so the table is integral and bit-identical across builds.
@@ -162,20 +162,23 @@ struct MobDef {
     std::uint16_t projSpeedMmps;   // 14  cells/s * 1000, 0 = melee only
     std::uint16_t spawnWeightX10;  // 16  ecology.spawnWeight * 10, 0..85
     std::uint16_t roomMask;        // 18  RoomBit bitmask
+    // --- ranged: 13 of 69 kinds; zero on the rest ------------------------
+    std::uint16_t shotRangeMm;     // 20  cells * 1000, 0 = melee only
+    std::uint16_t minRangeMm;      // 22  dead zone; inside it a ranged kind closes
+    std::uint16_t windupMs;        // 24  telegraph before the shot leaves
     // --- bytes ------------------------------------------------------------
-    std::uint8_t kind;             // 20  MobKind; must equal the row index
-    std::uint8_t tier;             // 21  MobTier, derived
-    std::uint8_t behaviour;        // 22  MobBehaviour
-    std::uint8_t projType;         // 23  ProjType
-    std::uint8_t minSamosbor;      // 24  ecology.minSamosborCount; 99 = never
-    std::uint8_t floorMask;        // 25  FloorBit bitmask
-    std::uint8_t packMode;         // 26  MobPackMode
-    std::uint8_t packMin;          // 27  1..8
-    std::uint8_t packMax;          // 28  1..16
-    std::uint8_t packSpread;       // 29  cells, 0..10
-    std::uint8_t pad_[2];          // 30..31
+    std::uint8_t kind;             // 26  MobKind; must equal the row index
+    std::uint8_t tier;             // 27  MobTier, derived
+    std::uint8_t behaviour;        // 28  MobBehaviour
+    std::uint8_t projType;         // 29  ProjType
+    std::uint8_t minSamosbor;      // 30  ecology.minSamosborCount; 99 = never
+    std::uint8_t floorMask;        // 31  FloorBit bitmask
+    std::uint8_t packMode;         // 32  MobPackMode
+    std::uint8_t packMin;          // 33  1..8
+    std::uint8_t packMax;          // 34  1..16
+    std::uint8_t packSpread;       // 35  cells, 0..10
 };
-static_assert(sizeof(MobDef) == 32, "MobDef must stay a tight 32-byte row");
+static_assert(sizeof(MobDef) == 36, "MobDef must stay a tight 36-byte row");
 static_assert(alignof(MobDef) == 4);
 static_assert(std::is_trivially_copyable_v<MobDef>);
 static_assert(offsetof(MobDef, projSpeedMmps) == 14, "hot prefix boundary moved");

@@ -1440,7 +1440,7 @@ static void test_melee_cooldown_and_reach() {
     reg.emplace<MobRef>(far, MobRef{kind, 1, 100, 100});
     reg.emplace<MobCombat>(far, MobCombat{500});
 
-    CHECK(mob_melee_step(reg, pool, bus, 0, dt, 0) == 0);
+    CHECK(mob_attack_step(reg, pool, bus, 0, dt, 0) == 0);
     CHECK(reg.get<MobCombat>(far).cooldownMs == 500 - step);
     CHECK(pool.hp(pid) == 30000);
 
@@ -1453,7 +1453,7 @@ static void test_melee_cooldown_and_reach() {
     reg.emplace<MobRef>(adj, MobRef{kind, 1, 100, 100});
     reg.emplace<MobCombat>(adj, MobCombat{0});
 
-    CHECK(mob_melee_step(reg, pool, bus, 0, dt, 1) == 1);
+    CHECK(mob_attack_step(reg, pool, bus, 0, dt, 1) == 1);
     const std::int16_t expect = static_cast<std::int16_t>(
         mob_hp_at_level(def.dmg, 1));
     CHECK(pool.hp(pid) == 30000 - expect);
@@ -1465,13 +1465,13 @@ static void test_melee_cooldown_and_reach() {
     const std::int16_t hpAfterFirst = pool.hp(pid);
     const int passes = static_cast<int>(def.attackCdMs / step);
     for (int i = 0; i < passes - 1; ++i)
-        CHECK(mob_melee_step(reg, pool, bus, 0, dt, 2u + static_cast<std::uint64_t>(i))
+        CHECK(mob_attack_step(reg, pool, bus, 0, dt, 2u + static_cast<std::uint64_t>(i))
               == 0);
     CHECK(pool.hp(pid) == hpAfterFirst);
     // ...and then exactly one more, once it has.
     std::uint32_t later = 0;
     for (int i = 0; i < 3; ++i)
-        later += mob_melee_step(reg, pool, bus, 0, dt,
+        later += mob_attack_step(reg, pool, bus, 0, dt,
                                 100u + static_cast<std::uint64_t>(i));
     CHECK(later == 1);
 }
@@ -1836,6 +1836,135 @@ static void test_floor_kinds_use_distinct_materials() {
     CHECK(!has(der, kMatPlaster));
 }
 
+
+// Ranged monsters: the windup is the contract. 13 of the 69 kinds shoot, and a
+// shot that lands with no warning is the difference between tense and unfair.
+static void test_ranged_windup_and_deadzone() {
+    // Every ranged kind must carry all three numbers, and no melee-only kind may.
+    int ranged = 0;
+    for (std::size_t i = 0; i < kMobKindCount; ++i) {
+        const MobDef& m = kMobTable[i];
+        const bool isRanged = has_flag(m.aiFlags, AiFlag::Ranged);
+        if (isRanged) {
+            ++ranged;
+            CHECK(m.shotRangeMm > 0);
+            CHECK(m.windupMs > 0);
+            CHECK(m.projSpeedMmps > 0);
+            // The dead zone must sit inside the shot range or the band is empty.
+            CHECK(m.minRangeMm < m.shotRangeMm);
+            // And outside melee reach, or the kind could never choose to shoot.
+            CHECK(m.shotRangeMm > m.meleeReachMm);
+        } else {
+            CHECK(m.shotRangeMm == 0 && m.minRangeMm == 0 && m.windupMs == 0);
+        }
+    }
+    CHECK(ranged == 13);
+
+    NpcPool pool;
+    pool.init();
+    Registry reg;
+    EventBus bus;
+    bus.init();
+    LevelStack stack;
+    LayerId layer = stack.push_layer();
+
+    NpcId pid = pool.spawn();
+    pool.hp(pid) = 30000;
+    pool.max_hp(pid) = 30000;
+    Entity player = embody_as_player(reg, pool, pid, layer);
+    const vec3 ppos = reg.get<Transform>(player).pos;
+
+    // An Eye: 15 cells max, 1.5 min, 0.85 s windup.
+    const std::uint8_t kind = static_cast<std::uint8_t>(MobKind::Eye);
+    const MobDef& def = kMobTable[kind];
+    CHECK(has_flag(def.aiFlags, AiFlag::Ranged));
+
+    auto place = [&](float metres) {
+        Entity e = reg.create();
+        Transform t;
+        t.pos = vec3{ppos.x + metres, ppos.y, ppos.z};
+        t.layer = layer;
+        reg.emplace<Transform>(e, t);
+        reg.emplace<MobRef>(e, MobRef{kind, 1, 500, 500});
+        reg.emplace<MobCombat>(e, MobCombat{0, 0});
+        return e;
+    };
+
+    const float dt = 1.0f / 120.0f;
+    const std::uint16_t step = static_cast<std::uint16_t>(dt * 1000.0f + 0.5f);
+
+    // Inside the band. The first pass must NOT fire — it starts the telegraph.
+    Entity shooter = place(12.0f);
+    // The first pass starts the telegraph and fires NOTHING. That is the point.
+    CHECK(mob_attack_step(reg, pool, bus, layer, dt, 0) == 0);
+    CHECK(reg.get<MobCombat>(shooter).windupMs == def.windupMs);
+    std::uint32_t inFlight = 0;
+    for (auto e : reg.view<const Projectile>()) { (void)e; ++inFlight; }
+    CHECK(inFlight == 0);            // telegraphing, nothing launched yet
+
+    // Run the telegraph down. NOTHING may launch on any pass while it runs — that
+    // is the whole guarantee, so it is checked on every pass rather than at the end.
+    const int passes = static_cast<int>(def.windupMs / step);
+    for (int i = 0; i < passes; ++i) {
+        mob_attack_step(reg, pool, bus, layer, dt,
+                        1u + static_cast<std::uint64_t>(i));
+        std::uint32_t f = 0;
+        for (auto e : reg.view<const Projectile>()) { (void)e; ++f; }
+        CHECK(f == 0);
+    }
+    CHECK(reg.get<MobCombat>(shooter).windupMs > 0);   // a remainder is still due
+    // The pass that finishes the windup is the pass that fires.
+    mob_attack_step(reg, pool, bus, layer, dt, 500u);
+    CHECK(reg.get<MobCombat>(shooter).windupMs == 0);
+    inFlight = 0;
+    for (auto e : reg.view<const Projectile>()) { (void)e; ++inFlight; }
+    CHECK(inFlight >= 1);
+
+    // A shot must not damage on the frame it is fired, and must be able to reach.
+    CHECK(pool.hp(pid) == 30000);
+    std::int16_t before = pool.hp(pid);
+    for (int i = 0; i < 400 && pool.hp(pid) == before; ++i)
+        projectile_step(reg, pool, bus, stack, layer, dt,
+                        600u + static_cast<std::uint64_t>(i));
+    CHECK(pool.hp(pid) < before);    // it connected
+
+    // Nothing lives forever: every projectile is eventually gone.
+    for (int i = 0; i < 1000; ++i)
+        projectile_step(reg, pool, bus, stack, layer, dt,
+                        2000u + static_cast<std::uint64_t>(i));
+    inFlight = 0;
+    for (auto e : reg.view<const Projectile>()) { (void)e; ++inFlight; }
+    CHECK(inFlight == 0);
+
+    // Leaving the band mid-windup ABORTS the shot rather than banking it.
+    Registry r2;
+    NpcPool p2;
+    p2.init();
+    NpcId pid2 = p2.spawn();
+    p2.hp(pid2) = 30000;
+    p2.max_hp(pid2) = 30000;
+    Entity pl2 = embody_as_player(r2, p2, pid2, layer);
+    const vec3 pp2 = r2.get<Transform>(pl2).pos;
+
+    Entity s2 = r2.create();
+    Transform t2;
+    t2.pos = vec3{pp2.x + 12.0f, pp2.y, pp2.z};
+    t2.layer = layer;
+    r2.emplace<Transform>(s2, t2);
+    r2.emplace<MobRef>(s2, MobRef{kind, 1, 500, 500});
+    r2.emplace<MobCombat>(s2, MobCombat{0, 0});
+
+    mob_attack_step(r2, p2, bus, layer, dt, 0);
+    CHECK(r2.get<MobCombat>(s2).windupMs > 0);   // telegraphing
+    // Walk it far out of range; the next pass must clear the windup.
+    r2.get<Transform>(s2).pos.x = pp2.x + 200.0f;
+    mob_attack_step(r2, p2, bus, layer, dt, 1);
+    CHECK(r2.get<MobCombat>(s2).windupMs == 0);
+    std::uint32_t shots = 0;
+    for (auto e : r2.view<const Projectile>()) { (void)e; ++shots; }
+    CHECK(shots == 0);                            // aborted, not banked
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -1876,6 +2005,7 @@ int main() {
     test_heal_picks_the_right_item();
     test_loadout_changes_the_numbers();
     test_floor_kinds_use_distinct_materials();
+    test_ranged_windup_and_deadzone();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

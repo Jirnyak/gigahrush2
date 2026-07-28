@@ -72,7 +72,23 @@ struct Dead {
 // Per-instance melee state. Separate from MobRef because MobRef is the spawn
 // record (what this monster IS) and this is combat state (what it is DOING).
 struct MobCombat {
-    std::uint16_t cooldownMs = 0;  // time until this mob may swing again
+    std::uint16_t cooldownMs = 0;  // time until this mob may attack again
+    // >0 while a ranged shot is being telegraphed. The windup is the whole reason
+    // ranged monsters are fair: you get 0.48-1.25 s of warning, per kind, and
+    // breaking line of sight or leaving the cone during it aborts the shot.
+    std::uint16_t windupMs = 0;
+};
+
+// A monster's shot in flight. Not a mob and not an alife record — it exists for a
+// fraction of a second and then hits something, hits the floor, or times out.
+//
+// Carries Transform + AABB + Renderable too, so it renders through the existing
+// body pass with no new render code: shots are visible tracers, not invisible
+// damage events.
+struct Projectile {
+    Entity source = entt::null;   // for the kill feed; may already be dead
+    std::int16_t dmg = 0;
+    std::uint16_t ttlMs = 0;      // hard bound, so a stray shot cannot live forever
 };
 
 // The camera holder's swing state. Attached lazily by player_melee_step, so
@@ -92,6 +108,15 @@ inline constexpr float kMeleeFacingDot = 0.35f;
 // not touch a boss. This slack is added to every weapon's reach so contact is
 // possible at all; it is a body-size allowance, not a weapon buff.
 inline constexpr float kMeleeReachSlack = 0.9f;   // metres
+
+// Projectile constants. Gravity is lighter than the world's so a shot arcs
+// readably instead of dropping like a stone; the TTL is a hard backstop so a
+// shot fired into open space cannot live forever; the hit radius is generous
+// because a 10 cm box at 20 m/s would tunnel clean through a body between two
+// 120 Hz steps.
+inline constexpr float kProjGravity = 6.0f;        // m/s^2
+inline constexpr std::uint16_t kProjTtlMs = 4000;
+inline constexpr float kProjHitRadius = 0.75f;     // metres
 
 // The best melee weapon in an inventory, or kInvalidItem for bare hands. "Best"
 // is highest damage — reach and speed are not traded off, because with no stamina
@@ -136,8 +161,15 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
 std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
                               std::uint64_t tick);
 
-// Melee pass: every mob on `layer` whose cooldown has expired and which has the
-// camera-holder within its authored reach swings once, for its authored damage.
+// Attack pass: every mob on `layer` whose cooldown has expired attacks the
+// camera-holder — melee if it is in reach, or a telegraphed shot if the kind is
+// ranged and the target sits between its minimum and maximum range.
+//
+// One function rather than a melee one and a ranged one, deliberately. The
+// reference had ~60 places decrementing `attackCd` and at least one monster
+// (Slepoglaz) decremented twice, doubling its own fire rate. Keeping both attack
+// modes behind the single decrement makes that unrepresentable instead of merely
+// absent.
 //
 // First slice, stated plainly: mobs attack **only the camera holder**. Monsters
 // mauling the civilian crowd needs faction relations and a threat model, and
@@ -145,8 +177,18 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
 // bloodbath on load.
 //
 // Returns the number of swings that landed.
-std::uint32_t mob_melee_step(Registry& reg, NpcPool& pool, EventBus& bus,
+std::uint32_t mob_attack_step(Registry& reg, NpcPool& pool, EventBus& bus,
                              LayerId layer, float dt, std::uint64_t tick);
+
+// Advance every shot in flight: integrate under gravity, stop on solid geometry,
+// damage the camera-holder on contact, expire on TTL. Destroys spent projectiles.
+//
+// Gravity is what makes a ranged monster miss: a shot fired level from chest height
+// reaches the floor in well under a second, so distance is bought with arc. The
+// launch adds a vertical rate proportional to range for exactly that reason.
+std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
+                              const LevelStack& stack, LayerId layer, float dt,
+                              std::uint64_t tick);
 
 // The camera holder swings at whatever monster is in front of it.
 //

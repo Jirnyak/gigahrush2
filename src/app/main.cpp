@@ -549,8 +549,12 @@ int main(int argc, char** argv) {
                 // rather than a guaranteed loss to whoever the view yields first.
                 game::player_melee_step(reg, pool, bus, activeLayer, kSimDt,
                                         attackHeld && !paused, simTick);
-                meleeHits += game::mob_melee_step(reg, pool, bus, activeLayer,
-                                                  kSimDt, simTick);
+                meleeHits += game::mob_attack_step(reg, pool, bus, activeLayer,
+                                                   kSimDt, simTick);
+                // Shots resolve AFTER the pass that launched them, so a
+                // projectile never lands on the frame it is fired.
+                meleeHits += game::projectile_step(
+                    reg, pool, bus, stack, activeLayer, kSimDt, simTick);
                 // Corpses pay out BEFORE they are destroyed. The gap between
                 // "hp hit zero" and "gone" is precisely what the Dead tag exists
                 // to create (combat.h defect 2) — the reference's P0 was culling
