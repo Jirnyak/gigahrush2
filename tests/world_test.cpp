@@ -265,6 +265,53 @@ static void test_nav_coarse() {
     CHECK(std::memcmp(&g, &g2, sizeof(CoarseGraph)) == 0);
 }
 
+// L2 fine bake on open space. Following a node's flow field must descend a
+// SHORTEST wrapped path: on all-air the step count equals the wrapped Manhattan
+// distance to that node's cell — proving the field is both correct and, being a
+// BFS parent chain, cycle-free (it always arrives). Plus determinism.
+static void test_nav_fine() {
+    using namespace nav;
+    MacroGrid air;
+    FineNav f;
+    bake_fine(air, f);
+
+    // The node cell itself is "arrived".
+    CHECK(f.at(0, 16, 16, 16) == kFlowArrived);
+
+    auto follow = [&](int node, int x, int y, int z) -> int {
+        int cx = x, cy = y, cz = z;
+        for (int steps = 0; steps <= 4 * kMacroDim; ++steps) {
+            const std::uint8_t d = f.at(node, cx, cy, cz);
+            if (d == kFlowArrived) return steps;
+            if (d == kFlowNone) return -1; // no route (never, on open air)
+            cx = wrap_macro(cx + kNavDir[d][0]);
+            cy = wrap_macro(cy + kNavDir[d][1]);
+            cz = wrap_macro(cz + kNavDir[d][2]);
+        }
+        return -2; // exceeded the bound without arriving
+    };
+    auto wrapped_manhattan = [](int a, int b) {
+        int d = a - b < 0 ? b - a : a - b;
+        return d < kMacroDim - d ? d : kMacroDim - d;
+    };
+    // Node 0's cell is (16,16,16); sample cells at varied wrapped distances.
+    const int cells[][3] = {
+        {16, 16, 16}, {17, 16, 16}, {48, 16, 16}, {100, 50, 80}, {0, 0, 0},
+    };
+    for (auto& c : cells) {
+        const int expect = wrapped_manhattan(c[0], 16) +
+                           wrapped_manhattan(c[1], 16) +
+                           wrapped_manhattan(c[2], 16);
+        CHECK(follow(0, c[0], c[1], c[2]) == expect);
+    }
+
+    // Deterministic: a second bake is bit-identical (schedule-invariant).
+    FineNav f2;
+    bake_fine(air, f2);
+    CHECK(f.flow.size() == f2.flow.size());
+    CHECK(std::memcmp(f.flow.data(), f2.flow.data(), f.flow.size()) == 0);
+}
+
 int main() {
     test_wrap();
     test_submask();
@@ -277,6 +324,7 @@ int main() {
     test_camera_component_is_movable();
     test_parallel_for();
     test_nav_coarse();
+    test_nav_fine();
 
     std::printf("%d/%d checks passed\n", g_checks - g_fails, g_checks);
     if (g_fails) {

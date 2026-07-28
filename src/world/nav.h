@@ -16,9 +16,12 @@
 // one node's row, so the result is bit-identical regardless of scheduling.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <vector>
 
 #include "world/lattice.h"
+#include "world/types.h"
 
 namespace giga {
 class MacroGrid;
@@ -57,6 +60,47 @@ void bake_coarse(const MacroGrid& grid, CoarseGraph& out);
 inline int coarse_next(const CoarseGraph& g, int from, int to) {
     return g.next[from][to];
 }
+
+// --- L2 fine navigation: per-node flow fields --------------------------------
+//
+// Where the coarse graph gets an agent from node to node, the flow fields get
+// it cell-to-cell WITHIN the void toward a chosen node. One dense field per
+// lattice node covers the whole 128^3 grid: at every walkable cell it stores
+// the direction of the next step along a SHORTEST wrapped path to that node.
+// Movement is then O(1) per tick — descend the field of `coarse_next`'s target
+// — with no per-agent search (master_prompt #11; feeds the #12 movement AI).
+
+// The 6 unit steps, in the SAME order the BFS and lattice neighbours use:
+// -x,+x,-y,+y,-z,+z. A flow byte in [0,6) indexes this table; note reverse(d)
+// == (d ^ 1), which the bake relies on to point a cell back toward its parent.
+inline constexpr int kNavDir[6][3] = {
+    {-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1},
+};
+
+// Flow bytes that are not a step direction.
+inline constexpr std::uint8_t kFlowArrived = 6;   // this cell IS the node
+inline constexpr std::uint8_t kFlowNone = 0xFFu;  // wall, or unreachable void
+
+// The 64 baked flow fields. 64 * 128^3 * 1 B = 128 MiB, resident per live floor
+// — affordable by design (performance.md: RAM/disk are the generous budgets,
+// the CPU tick is the scarce one). This is exactly the reference's abandoned
+// "64-anchor packed flow fields", abandoned only for a browser's memory ceiling.
+struct FineNav {
+    std::vector<std::uint8_t> flow; // node-major: flow[node*kMacroCells + cell]
+
+    // Flow byte at a cell for routing toward `node`. Coordinates are wrapped, so
+    // callers can pass raw (possibly out-of-range) cell indices.
+    std::uint8_t at(int node, int x, int y, int z) const {
+        return flow[static_cast<std::size_t>(node) * kMacroCells +
+                    macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z))];
+    }
+};
+
+// Bake all 64 flow fields from the floor geometry: one wrapped BFS per node,
+// parallel ACROSS nodes — each owns a disjoint 2M-cell slice, so the run is
+// race-free and bit-identical regardless of scheduling. Allocates ~128 MiB into
+// out.flow. Bake-time only (floor load / post-samosbor), never on the tick.
+void bake_fine(const MacroGrid& grid, FineNav& out);
 
 } // namespace nav
 } // namespace giga

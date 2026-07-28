@@ -82,6 +82,44 @@ void bake_node(const MacroGrid& g, int id, CoarseGraph& out) {
     }
 }
 
+// One node's flow field: the same wrapped BFS as bake_node, but instead of
+// keeping the distance it records, at every cell it reaches, the direction of
+// the step back toward the node (its BFS parent). `slice` is this node's own
+// kMacroCells-byte region of FineNav::flow, PRE-CLEARED to kFlowNone by the
+// caller — so kFlowNone doubles as the "unvisited" marker and walls (never
+// visited) correctly keep it. Writes only `slice`: race-free across nodes.
+void bake_fine_node(const MacroGrid& g, int id, std::uint8_t* slice) {
+    int sx, sy, sz;
+    node_cell(id, sx, sy, sz);
+    if (blocked(g, sx, sy, sz)) return; // no field (carve guarantees it is air)
+
+    std::vector<int> q;
+    q.reserve(1u << 16);
+
+    const int W = kMacroDim;
+    const int start = static_cast<int>(macro_index(sx, sy, sz));
+    slice[start] = kFlowArrived;
+    q.push_back(start);
+
+    for (std::size_t head = 0; head < q.size(); ++head) {
+        const int ci = q[head];
+        const int cz = ci / (W * W);
+        const int cy = (ci / W) % W;
+        const int cx = ci % W;
+        for (int d = 0; d < 6; ++d) {
+            const int nx = wrap_macro(cx + kNavDir[d][0]);
+            const int ny = wrap_macro(cy + kNavDir[d][1]);
+            const int nz = wrap_macro(cz + kNavDir[d][2]);
+            const std::size_t ni = macro_index(nx, ny, nz);
+            if (slice[ni] != kFlowNone) continue; // already reached (or arrived)
+            if (blocked(g, nx, ny, nz)) continue;  // wall stays kFlowNone
+            // We stepped cur -> nbr in dir d, so nbr routes back in dir (d ^ 1).
+            slice[ni] = static_cast<std::uint8_t>(d ^ 1);
+            q.push_back(static_cast<int>(ni));
+        }
+    }
+}
+
 } // namespace
 
 void bake_coarse(const MacroGrid& grid, CoarseGraph& out) {
@@ -118,6 +156,19 @@ void bake_coarse(const MacroGrid& grid, CoarseGraph& out) {
                 }
             }
         }
+}
+
+void bake_fine(const MacroGrid& grid, FineNav& out) {
+    // Pre-clear once, sequentially: every slice starts kFlowNone, which each
+    // node's BFS then uses as its "unvisited" marker.
+    out.flow.assign(static_cast<std::size_t>(kNodes) * kMacroCells, kFlowNone);
+    std::uint8_t* base = out.flow.data();
+    // 64 independent per-node floods, fanned across the hardware threads. Each
+    // writes a disjoint kMacroCells slice -> race-free + deterministic.
+    parallel_for(kNodes, [&grid, base](int id) {
+        bake_fine_node(grid, id,
+                       base + static_cast<std::size_t>(id) * kMacroCells);
+    });
 }
 
 } // namespace giga::nav

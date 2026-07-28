@@ -833,6 +833,57 @@ static void test_nav_realfloor() {
     }
 }
 
+// The L2 fine bake on a REAL carved floor (master_prompt #11, increment C). Each
+// node's flow field must carry an agent cell-by-cell home through the actual
+// rooms/shafts without ever crossing a wall, and re-bake bit-identically.
+static void test_nav_fine_realfloor() {
+    using namespace nav;
+
+    World res;
+    generate_floor(res, /*number=*/0, floor_spec(FloorKind::Residential), 1337u);
+    FineNav f;
+    bake_fine(res.grid(), f);
+
+    // Descend `node`'s field from a start cell, asserting nothing it steps onto
+    // is solid. Returns steps to arrive, -1 at a dead end (kFlowNone), -2 if it
+    // ever lands in a wall, -3 if it fails to terminate (a cycle => a bug). A
+    // BFS parent chain strictly shortens, so a correct field always arrives.
+    auto follow = [&](int node, int x, int y, int z) -> int {
+        int cx = x, cy = y, cz = z;
+        for (std::size_t steps = 0; steps <= kMacroCells; ++steps) {
+            if (res.grid().mask(cx, cy, cz).full()) return -2;
+            const std::uint8_t d = f.at(node, cx, cy, cz);
+            if (d == kFlowArrived) return static_cast<int>(steps);
+            if (d == kFlowNone) return -1;
+            cx = wrap_macro(cx + kNavDir[d][0]);
+            cy = wrap_macro(cy + kNavDir[d][1]);
+            cz = wrap_macro(cz + kNavDir[d][2]);
+        }
+        return -3;
+    };
+
+    // Every one of the 64 node cells routes home to node 0. Dense residential is
+    // fully connected (proven by the coarse test), so each must arrive.
+    for (int id = 0; id < kNodes; ++id) {
+        const LatticeNode n = lattice_unpack(id);
+        CHECK(follow(0, lattice_coord(n.ix), lattice_coord(n.iy),
+                     lattice_coord(n.iz)) >= 0);
+    }
+    // The target's own cell is "arrived".
+    CHECK(f.at(0, lattice_coord(0), lattice_coord(0), lattice_coord(0)) ==
+          kFlowArrived);
+    // A different target field routes too: node 0's cell to the antipode (2,2,2).
+    const int antipode = lattice_id(2, 2, 2);
+    CHECK(follow(antipode, lattice_coord(0), lattice_coord(0),
+                 lattice_coord(0)) >= 0);
+
+    // Deterministic on real geometry (schedule-invariant across the 64 threads).
+    FineNav f2;
+    bake_fine(res.grid(), f2);
+    CHECK(f.flow.size() == f2.flow.size());
+    CHECK(std::memcmp(f.flow.data(), f2.flow.data(), f.flow.size()) == 0);
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -856,6 +907,7 @@ int main() {
     test_floor_stream();
     test_floor_travel();
     test_nav_realfloor();
+    test_nav_fine_realfloor();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
