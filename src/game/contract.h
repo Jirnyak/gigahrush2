@@ -60,6 +60,11 @@ enum class ContractState : std::uint8_t {
 
 // One job. POD, 24 bytes, no pointers — it serializes with the save verbatim and can
 // be copied into a report without a thought.
+// A Descend job stamps how deep you ALREADY were when you took it, in `baseline`, and
+// pays only for progress beyond that. Without it the job compares against
+// `RunLedger::deepestFloor` — a high-water mark for the whole run — so accepting one you
+// already satisfy pays instantly, and re-accepting pays again. An audit measured 900
+// roubles on accept and 900 more on re-accept with the player never moving.
 struct Contract {
     NpcId giver = kInvalidNpc;   // stable for the whole run; see the header
     std::uint16_t subject = 0;   // ItemId for Fetch, MobKind for Hunt, unused for Descend
@@ -68,7 +73,11 @@ struct Contract {
     std::int32_t reward = 0;     // roubles, paid into RunLedger::banked
     std::uint8_t kind = 0;       // ObjectiveKind
     std::uint8_t state = 0;      // ContractState
-    std::uint16_t pad_ = 0;
+    // |z| already reached when this job was accepted. Takes one of the two spare
+    // padding bytes rather than growing the row, and a uint8 is enough because the
+    // floor stack is bounded at +/-127 ([floor_registry.h] kMinFloor/kMaxFloor).
+    std::uint8_t baseline = 0;
+    std::uint8_t pad_ = 0;
 };
 static_assert(sizeof(Contract) == 24, "Contract must stay a tight 24-byte row");
 
@@ -100,7 +109,15 @@ bool contract_text(const Contract& c, char* out, std::size_t cap);
 
 // Take an offer into the book. Returns false when the book is full or the offer is
 // invalid — a refusal, not an error.
-bool contract_accept(ContractBook& book, const Contract& offer);
+// Takes the LEDGER, and that is deliberate rather than convenient.
+//
+// A Descend job must pay only for a descent made after it was taken, which means
+// stamping how deep the run had already been. The first version left that to the caller
+// — and an audit accepted a job directly, without stamping, and collected 900 roubles
+// for a descent that predated the job, then 900 more on re-accept. A rule the caller has
+// to remember is a rule that gets forgotten; taking the ledger here makes forgetting it
+// impossible to express.
+bool contract_accept(ContractBook& book, const Contract& offer, const RunLedger& led);
 
 // Advance every active contract against the world, and pay out the ones that are done.
 //

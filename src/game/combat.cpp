@@ -372,12 +372,24 @@ ItemId equipped_melee(const Inventory& inv) {
     return best;
 }
 
+// What is worn is decided by the item's declared equip slot, NOT by "it happens to
+// have resistances". Today the two agree exactly — measured on data/items.csv, the five
+// rows with a nonzero resist are precisely the five with equip_slot=Armor — so this
+// changes no current behaviour. It closes a trap that was one CSV row from firing:
+// author a Misc trinket with resist_psi > 0 (a lead-lined charm is entirely in genre)
+// and the resist-sum rule would silently wear it as body armour. `bankable_slot` would
+// then refuse to ever bank it, because you cannot bank what you are holding, so
+// high-value loot would become permanently unsellable and nothing would object.
+//
+// There is no ItemCategory::Armour to test instead: all five armour rows carry category
+// MISC. `equipSlot` is the only field that actually encodes the intent.
 ItemId equipped_armour(const Inventory& inv) {
     ItemId best = kInvalidItem;
     int bestSum = 0;
     for (const ItemSlot& s : inv.slots) {
         if (s.item == kInvalidItem || s.count == 0 || !item_valid(s.item)) continue;
         const ItemDef& d = item_def(s.item);
+        if (d.equipSlot != static_cast<std::uint8_t>(EquipSlot::Armor)) continue;
         int sum = 0;
         for (std::size_t c = 0; c < kItemResistChannels; ++c) sum += d.resist[c];
         if (sum > bestSum) { bestSum = sum; best = s.item; }
@@ -436,6 +448,8 @@ void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
     reg.emplace<Velocity>(
         e, Velocity{vec3{dx / flat * speed, dy / flat * speed, vz}});
     reg.emplace<AABB>(e, AABB{vec3{0.10f, 0.10f, 0.10f}});
+    // projectile_step owns this entity's motion; keep physics_step off it.
+    reg.emplace<SelfIntegrating>(e);
     // Hot white-yellow: a shot must read against both the monster palette (the red
     // axis) and the faction one, so it is brighter than anything else in the frame.
     reg.emplace<Renderable>(e, Renderable{vec3{1.00f, 0.95f, 0.70f}});
@@ -467,6 +481,8 @@ void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
                                            dir.y * inv * speed,
                                            dir.z * inv * speed}});
     reg.emplace<AABB>(e, AABB{vec3{0.10f, 0.10f, 0.10f}});
+    // projectile_step owns this entity's motion; keep physics_step off it.
+    reg.emplace<SelfIntegrating>(e);
     reg.emplace<Renderable>(e, Renderable{vec3{1.00f, 0.95f, 0.70f}});
     reg.emplace<Projectile>(e, Projectile{source, dmg, kProjTtlMs, gravityPct, team});
 }
@@ -634,8 +650,16 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                 // Credit the shooter, the same way the melee path credits a swing.
                 // Only a player carries PlayerRanged, so this quietly does nothing for
                 // the monster-shot-hit-a-resident case and needs no team test.
-                if (reg.valid(h.source))
+                if (reg.valid(h.source)) {
                     if (auto* pr = reg.try_get<PlayerRanged>(h.source)) ++pr->hits;
+                    // And a KILL is a kill however it was made. `PlayerMelee::kills` is
+                    // the game's only kill counter and the HUD prints it as "kills", so
+                    // leaving shot monsters out of it meant a player with a rifle watched
+                    // the number stay at zero while the corridor emptied. The field's
+                    // NAME is now wrong; the behaviour was worse.
+                    if (r.lethal)
+                        if (auto* pm = reg.try_get<PlayerMelee>(h.source)) ++pm->kills;
+                }
             }
         }
         if (reg.valid(h.proj)) reg.destroy(h.proj);

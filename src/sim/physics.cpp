@@ -79,7 +79,10 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
         static_cast<int>(std::ceil(dt / params.maxStep)), 1, params.maxSubsteps);
     float h = dt / static_cast<float>(steps);
 
-    auto view = reg.view<Transform, Velocity>();
+    // Excludes anything that integrates its own motion. Projectiles do, and until
+    // this exclusion existed they were moved twice per tick — double speed, double
+    // gravity, every shot in the game. [components.h SelfIntegrating]
+    auto view = reg.view<Transform, Velocity>(entt::exclude<SelfIntegrating>);
     for (int s = 0; s < steps; ++s) {
         for (auto e : view) {
             auto& tr = view.get<Transform>(e);

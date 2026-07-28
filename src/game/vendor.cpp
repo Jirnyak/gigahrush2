@@ -152,8 +152,18 @@ std::int32_t vendor_resupply(Inventory& inv, RunLedger& led, std::int32_t budget
     // Cheapest useful thing in each of the three categories that keep you alive. Water
     // first, because the water clock is the harshest — about 10 minutes against food's
     // 15-20 ([needs.h]) — so it is what actually ends trips.
-    const ItemCategory order[3] = {ItemCategory::Drink, ItemCategory::Medicine,
-                                   ItemCategory::Food};
+    // **Ammo is in this list because `vendor_stocks` says the vendor sells it.** An
+    // audit gave the resupply 50,000 roubles and found it bought no ammunition at all:
+    // the promise and the only wired buy path disagreed, so a player with money and an
+    // empty magazine had nowhere to spend it. The vendor is the ONLY reliable ammo source
+    // in the game — every AMMO row has spawn weight 0, so the loot roller cannot produce
+    // a single round.
+    //
+    // Ammo goes LAST on purpose: water is the harshest clock (~10 minutes against food's
+    // 15-20, [needs.h]), so when the budget is short the trip is what gets funded, not
+    // the firefight.
+    const ItemCategory order[4] = {ItemCategory::Drink, ItemCategory::Medicine,
+                                   ItemCategory::Food, ItemCategory::Ammo};
     for (ItemCategory cat : order) {
         ItemId best = kInvalidItem;
         std::int32_t bestPrice = 0;
@@ -169,9 +179,10 @@ std::int32_t vendor_resupply(Inventory& inv, RunLedger& led, std::int32_t budget
             if (best == kInvalidItem || p < bestPrice) { best = id; bestPrice = p; }
         }
         if (best == kInvalidItem) continue;
-        // A third of the remaining budget per category, so one cheap category cannot
-        // eat the whole purse and leave you with no medicine.
-        const std::int64_t share = (led.banked - floorAt) / 3;
+        // An even share of what is left per remaining category, so one cheap category
+        // cannot eat the whole purse and leave you with no medicine — and so the last
+        // category in the list still gets funded rather than being paid out of nothing.
+        const std::int64_t share = (led.banked - floorAt) / 4;
         std::uint32_t want = bestPrice > 0
                                  ? static_cast<std::uint32_t>(share / bestPrice)
                                  : 0u;

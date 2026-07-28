@@ -63,6 +63,19 @@ struct Controller {
     bool fly = false; // true = 6DoF free-cam; false = walk + gravity
 };
 
+// "Something else owns my motion — physics_step, keep out."
+//
+// **This closes a real double-integration bug.** `physics_step` iterates
+// `<Transform, Velocity>` and integrates everything it finds. Projectiles carry both,
+// and `projectile_step` ALSO integrates them — so every shot in the game moved twice per
+// tick, at double speed AND double gravity. An audit measured a projectile authored at
+// 30 m/s covering 6.000 m in 12 ticks where 3.000 m was intended: ratio exactly 2.00.
+//
+// A TAG in the core rather than a `Projectile` check inside physics_step, because
+// `src/sim` may not include `src/game` ([AGENTS.md] layering). Anything that integrates
+// its own motion carries this.
+struct SelfIntegrating {};
+
 // Cosmetic body colour for the render layer. Any entity that also carries a
 // Transform + AABB is drawn by the body pass as one lit box, sized to the AABB
 // half-extents and tinted by `color`. Purely a render skin: data flows

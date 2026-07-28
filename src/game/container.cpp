@@ -146,12 +146,51 @@ Container roll_container(ContainerKind kind, int floorZ, std::uint32_t seed) {
     switch (kind) {
         case ContainerKind::PublicBox:   fill = 1 + static_cast<int>(h0 % 2u); break;
         case ContainerKind::Safe:        fill = 1 + static_cast<int>(h0 % 2u); break;
-        case ContainerKind::WeaponCrate: fill = 2; break;
+        case ContainerKind::WeaponCrate: fill = 3; break;   // ammo + two weapons
         default:                         fill = 1 + static_cast<int>(h0 % 3u); break;
     }
     if (fill > kContainerSlots) fill = kContainerSlots;
 
-    for (int i = 0; i < fill; ++i) {
+    // **A weapon crate reserves its first slot for AMMO, chosen directly rather than
+    // rolled.** The weighted roll cannot produce ammo at all: every one of the 17 AMMO
+    // rows in items.csv has `spawn_w_milli == 0`, so `item_weight_on_floor` returns 0 and
+    // the candidate loop above skips all of them. The crate promised "weapons and ammo"
+    // and could only ever deliver weapons — a gun in a box with nothing to load it.
+    //
+    // Picking the ammo for whatever weapon the crate also holds would be better, and is
+    // not possible here: the weapon is rolled below, and a crate whose contents depend on
+    // each other stops being a pure function of its seed. So the ammo is the commonest
+    // kind, which fits the commonest guns, and the mob-drop path already bundles
+    // matched ammo with a dropped weapon ([loot.h drop_weapon_ammo]).
+    int firstSlot = 0;
+    if (kind == ContainerKind::WeaponCrate) {
+        // The CHEAPEST ammo that still fits this crate's value share, not merely the
+        // first one found. The share is the same ceiling every other slot obeys
+        // ([container.h]), and a forced slot that ignored it would make a weapon crate on
+        // floor 0 richer than its band allows — which a test caught immediately, 123
+        // times over. A crate whose band cannot afford any ammunition simply gets none.
+        ItemId ammo = kInvalidItem;
+        std::int32_t cheapest = 0;
+        for (ItemId id = 1; id <= kItemCount; ++id) {
+            const ItemDef& d = item_def(id);
+            if (static_cast<ItemCategory>(d.category) != ItemCategory::Ammo) continue;
+            if (d.value <= 0 || d.value > cap) continue;
+            if (d.stackMax < 8) continue;              // a useful quantity, not one round
+            if (ammo == kInvalidItem || d.value < cheapest) {
+                ammo = id;
+                cheapest = d.value;
+            }
+        }
+        if (ammo != kInvalidItem) {
+            const std::uint8_t st = item_def(ammo).stackMax;
+            const std::uint32_t n = 8u + (mix(seed ^ 0xA11A0u) % 16u);
+            c.item[0] = ammo;
+            c.count[0] = static_cast<std::uint8_t>(n > st ? st : n);
+            firstSlot = 1;
+        }
+    }
+
+    for (int i = firstSlot; i < fill; ++i) {
         const std::uint32_t h = mix(seed ^ (static_cast<std::uint32_t>(i + 1) *
                                             0x9e3779b9u));
         const std::uint32_t r = h % total;

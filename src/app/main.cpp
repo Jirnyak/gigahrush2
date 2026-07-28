@@ -30,6 +30,7 @@
 #include "app/worldgen.h"
 #include "core/math.h"
 #include "game/mob_table.h"
+#include "core/tick.h"
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "ecs/registry.h"
@@ -80,7 +81,8 @@ constexpr int kWinH = 720;
 
 // Fixed sim step (seconds). Physics + controller run at this rate; rendering is
 // uncapped and interpolation is skipped for simplicity (the step is small).
-constexpr float kSimDt = 1.0f / 120.0f;
+// The sim tick rate now lives in core/tick.h so the tests can see the same number.
+// See that header for why it is 125 and not 120.
 
 // Lighting tunables, packed into the dead lanes of CubePush (see cube.frag).
 // The floors are windowless interiors, so the headlamp the player carries is the
@@ -703,7 +705,7 @@ int main(int argc, char** argv) {
                 // actively agree to — everything else is walked into.
                 if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
                     e.key.scancode == SDL_SCANCODE_E) {
-                    if (game::contract_accept(contracts, offer)) {
+                    if (game::contract_accept(contracts, offer, ledger)) {
                         offer = game::Contract{};
                         offerLine[0] = 0;
                     }

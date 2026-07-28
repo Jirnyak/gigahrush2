@@ -235,6 +235,13 @@ std::int32_t pickup_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId la
         if (inv.slots[slot].item == p.item) {
             inv.slots[slot].count =
                 static_cast<std::uint16_t>(inv.slots[slot].count + p.count);
+            // **Clamp to the item's own cap.** An audit put 7 of a cap-8 item in a slot,
+            // dropped a stack of 8 on it, and pickup_step merged the lot into 15 — the
+            // cap was consulted to CHOOSE the slot and then ignored when writing it. A
+            // slot over cap is not a crash; it is an inventory that quietly holds more
+            // than the rules allow, which is worse because nothing complains.
+            if (def.stackMax && inv.slots[slot].count > def.stackMax)
+                inv.slots[slot].count = def.stackMax;
         } else {
             inv.slots[slot].item = p.item;
             inv.slots[slot].count = p.count;

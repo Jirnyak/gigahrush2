@@ -143,7 +143,8 @@ bool contract_text(const Contract& c, char* out, std::size_t cap) {
     }
 }
 
-bool contract_accept(ContractBook& book, const Contract& offer) {
+bool contract_accept(ContractBook& book, const Contract& offer,
+                     const RunLedger& led) {
     if (offer.giver == kInvalidNpc) return false;
     for (int i = 0; i < kMaxContracts; ++i) {
         const Contract& s = book.slot[i];
@@ -158,6 +159,12 @@ bool contract_accept(ContractBook& book, const Contract& offer) {
         if (s.state == static_cast<std::uint8_t>(ContractState::Active)) continue;
         s = offer;
         s.state = static_cast<std::uint8_t>(ContractState::Active);
+        s.progress = 0;
+        // Stamped here, not by the caller, so it cannot be forgotten. |z| because depth
+        // is bidirectional; clamped to a byte because the stack is bounded at +/-127.
+        const int already =
+            led.deepestFloor < 0 ? -led.deepestFloor : led.deepestFloor;
+        s.baseline = static_cast<std::uint8_t>(already > 127 ? 127 : already);
         s.progress = 0;
         return true;
     }
@@ -234,8 +241,19 @@ std::int32_t contract_step(ContractBook& book, const NpcPool& pool, Inventory& i
                 const int reached = led.deepestFloor < 0 ? -led.deepestFloor
                                                          : led.deepestFloor;
                 const int want = c.target < 0 ? -c.target : c.target;
+                // **Against where you were WHEN YOU TOOK IT, not against the run's
+                // high-water mark.** `RunLedger::deepestFloor` never falls, so comparing
+                // to it paid instantly for a descent made before the job existed — and
+                // paid AGAIN on every re-accept. An audit measured 900 roubles on accept
+                // and 900 more on re-accept with the player never moving: an infinite
+                // press, limited only by how fast the accept key could be pressed.
+                //
+                // `baseline` is stamped at accept time ([contract.h]), so a Descend job
+                // now requires progress beyond that point. A job whose target is already
+                // behind you is refused at accept rather than paid.
+                if (reached < want) { c.progress = reached; continue; }
+                if (want <= c.baseline) continue;   // nothing was actually descended
                 c.progress = reached;
-                if (reached < want) continue;
                 break;
             }
             default:

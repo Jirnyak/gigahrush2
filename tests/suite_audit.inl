@@ -1,3 +1,4 @@
+#include "core/tick.h"
 // Audit suite — one test per defect found by reading the whole of src/game and
 // src/render after the 45-commit burst. Included into game_test.cpp, so it uses that
 // file's CHECK macro and its `using namespace giga::game`.
@@ -44,7 +45,7 @@
 
 namespace audit_test {
 
-constexpr float kDt = 1.0f / 120.0f;
+constexpr float kDt = kSimDt;
 
 // The millisecond step every ms-based timer in the tree is actually fed. Computed the
 // same way combat.cpp, needs.cpp and src/app/main.cpp compute it, so this is not a
@@ -185,8 +186,8 @@ static void ms_timer_drift() {
         std::fprintf(stderr,
                      "[audit] timer: a 1000 ms mob cooldown cleared after %d ticks "
                      "of 1/120 s = %.4f s\n",
-                     ticks, static_cast<double>(ticks) * kDt);
-        CHECK(ticks <= 120);
+                     ticks, static_cast<double>(ticks) * kSimDt);
+        CHECK(ticks <= kSimHz);   // one second is kSimHz ticks, by definition
     }
 
     // (b) the samosbor clock, fed the same way by src/app/main.cpp:757-761. A 30 s
@@ -206,9 +207,9 @@ static void ms_timer_drift() {
         std::fprintf(stderr,
                      "[audit] timer: a 30 s samosbor Idle->Warning took %d ticks "
                      "= %.3f s\n",
-                     ticks, static_cast<double>(ticks) * kDt);
+                     ticks, static_cast<double>(ticks) * kSimDt);
         CHECK(warned);
-        CHECK(ticks <= 30 * 120);   // currently 3750
+        CHECK(ticks <= 30 * kSimHz);
     }
 }
 
@@ -293,6 +294,8 @@ static void gun_kills_counted() {
 // So the only ammunition in the game is `drop_weapon_ammo`, bundled onto a firearm
 // that fell off a corpse. Loot a gun out of a crate, or buy your way back to strength
 // at the pad, and you have a gun you can never load.
+// A run that has not descended: the strict baseline for a Descend job.
+static const RunLedger kNoDescentYet{};
 static void ammo_has_a_source() {
     // The premise, from the data rather than from prose.
     int ammoRows = 0, ammoSpawnable = 0;
@@ -373,12 +376,12 @@ static void descend_not_free() {
     Inventory inv{};
 
     ContractBook book{};
-    CHECK(contract_accept(book, job));
+    CHECK(contract_accept(book, job, kNoDescentYet));
     const std::int32_t first = contract_step(book, pool, inv, led);
     CHECK(first == 0);   // taking a job must not complete it
 
     // ...and re-taking it must not pay a second time either.
-    CHECK(contract_accept(book, job));
+    CHECK(contract_accept(book, job, kNoDescentYet));
     const std::int32_t second = contract_step(book, pool, inv, led);
     std::fprintf(stderr,
                  "[audit] contracts: Descend(-20) with deepestFloor -50 paid %d rub "
