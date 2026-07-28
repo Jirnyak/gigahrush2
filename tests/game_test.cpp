@@ -3190,6 +3190,235 @@ static void test_vendor() {
     }
 }
 
+
+// The WHOLE loop, through the real systems, in one test.
+//
+// Every system in this game was proven on its own and none of them was ever proven
+// together. That is the gap this closes, and it is the gap that matters: eight systems
+// were written separately and hand-integrated from worktrees on stale bases, so the
+// SEAMS are where the bugs live, not the interiors. A test per system cannot see a seam.
+//
+// The chain, in the order a player experiences it:
+//   spawn a floor with crates -> loot one -> ride to the hub -> bank the haul
+//   -> sell the rest -> re-supply -> take a job -> finish it -> get paid
+//
+// Every assertion below is about a HANDOFF, not about a system.
+static void test_full_loop() {
+    LevelStack stack;
+    FloorRegistry registry;
+    Registry reg;
+    NpcPool pool;
+    EventBus bus;
+    pool.init();
+
+    // A deep floor, because that is where the value is: economy_band(-26) is E3, so the
+    // crates there can actually hold something worth banking. On floor 0 the cap is 90
+    // roubles and the whole loop would be exercised over pocket change.
+    LayerId layer = stack.push_layer();
+    generate_floor(stack.layer(layer), -26, floor_spec(FloorKind::Derelict), 11u);
+
+    // --- seam 1: containers put value in rooms -------------------------------
+    const std::uint32_t crates =
+        spawn_floor_containers(reg, stack.layer(layer), -26, FloorKind::Derelict,
+                               layer, 4242u,
+                               container_budget(FloorKind::Derelict));
+    CHECK(crates > 0);
+
+    // Find a crate holding something the BANK will take, and stand on it.
+    //
+    // Not simply the first crate — and that distinction is the first thing this test
+    // found. My first version grabbed whichever container the view yielded, got a
+    // PublicBox, and banked zero. Both systems were right on their own: a public box is
+    // consumables-only by design ([container.cpp]), and `bankable_slot` refuses
+    // consumables by design ([extraction.h]). Jointly they are confusing — the HUD says
+    // "40 crates unopened", the player empties them, and the banked total does not move.
+    //
+    // So the assertion that matters is not "a crate banks" but **"a deep floor offers at
+    // least one crate whose contents the bank accepts"**. If it did not, the entire
+    // container system would feed nothing to the entire extraction system, and each
+    // would still pass its own tests.
+    Entity crate = entt::null;
+    vec3 cratePos{0, 0, 0};
+    int bankableCrates = 0, consumableOnlyCrates = 0;
+    for (auto e : reg.view<const Container, const Transform>()) {
+        const Container& c = reg.get<const Container>(e);
+        bool anyBankable = false;
+        for (int i = 0; i < kContainerSlots; ++i) {
+            const ItemId id = c.item[i];
+            if (!item_valid(id)) continue;
+            if (bankable_category(static_cast<ItemCategory>(item_def(id).category)) &&
+                item_def(id).value > 0)
+                anyBankable = true;
+        }
+        if (anyBankable) {
+            ++bankableCrates;
+            if (crate == entt::null) {
+                crate = e;
+                cratePos = reg.get<const Transform>(e).pos;
+            }
+        } else {
+            ++consumableOnlyCrates;
+        }
+    }
+    std::printf("  crates: %d bankable, %d consumable-only\n",
+                bankableCrates, consumableOnlyCrates);
+    CHECK(bankableCrates > 0);   // the seam: containers must feed the bank at all
+    CHECK(crate != entt::null);
+
+    NpcId me = pool.spawn();
+    pool.hp(me) = 100;
+    pool.max_hp(me) = 100;
+    Entity player = reg.create();
+    Transform pt;
+    pt.pos = cratePos;
+    pt.layer = layer;
+    reg.emplace<Transform>(player, pt);
+    reg.emplace<NpcRef>(player, NpcRef{me});
+    reg.emplace<CameraTag>(player, CameraTag{});
+
+    const std::int32_t looted = loot_containers_step(reg, pool, layer);
+    CHECK(looted > 0);                                   // the crate paid out
+    CHECK(reg.get<Container>(crate).opened);             // and it stays opened
+    Inventory& inv = pool.inventory(me);
+    CHECK(inventory_value(inv) > 0);                     // into MY inventory
+
+    // Looting the same crate twice must yield nothing. An opened crate that refills is
+    // an infinite money press, and it would be invisible — the number would just rise.
+    CHECK(loot_containers_step(reg, pool, layer) == 0);
+
+    // --- seam 2: carried value is AT RISK, not banked ------------------------
+    RunLedger led;
+    record_floor(led, -26);
+    CHECK(led.deepestFloor == -26);
+    CHECK(led.deepestBand == economy_band(-26));
+    const std::int32_t carried = at_risk_value(inv);
+    CHECK(carried > 0);
+    CHECK(led.banked == 0);                              // nothing is yours yet
+    CHECK(risk_share(led, carried) > 0.99f);             // a death costs everything
+
+    // Deep floors do NOT bank. If they did, the walk home would be pointless and the
+    // whole risk half of the loop would evaporate.
+    CHECK(!on_extraction_pad(stack.layer(layer).grid(), cratePos));
+
+    // --- seam 3: the hub banks ----------------------------------------------
+    LayerId hub = stack.push_layer();
+    generate_floor(stack.layer(hub), 0, floor_spec(FloorKind::Residential), 1u);
+
+    // Stand on the extraction ring. Walkable ground is cell z=1 and the pad is the slab
+    // at z=0, which is the pairing the pad check relies on.
+    vec3 padPos{0, 0, 0};
+    bool found = false;
+    for (int y = 0; y < kMacroDim && !found; ++y)
+        for (int x = 0; x < kMacroDim && !found; ++x) {
+            if (stack.layer(hub).grid().cell(x, y, 1) != kCellAir) continue;
+            const vec3 c{(x + 0.5f) * kCellSize, (y + 0.5f) * kCellSize,
+                         1.5f * kCellSize};
+            if (on_extraction_pad(stack.layer(hub).grid(), c)) { padPos = c; found = true; }
+        }
+    CHECK(found);
+
+    // Diagnostic: what did the crate actually give? The first run of this test banked
+    // ZERO, which is the seam bug it exists to find.
+    if (at_risk_value(inv) > 0) {
+        int byCat[static_cast<std::size_t>(ItemCategory::Count)] = {};
+        for (const ItemSlot& sl : inv.slots) {
+            if (!item_valid(sl.item)) continue;
+            byCat[item_def(sl.item).category] += sl.count;
+        }
+        std::printf("  crate loot by category:");
+        for (int c = 0; c < static_cast<int>(ItemCategory::Count); ++c)
+            if (byCat[c]) std::printf(" cat%d=%d", c, byCat[c]);
+        std::printf("  (total value=%d)\n", at_risk_value(inv));
+    }
+    const std::int32_t banked = deposit_valuables(inv, led);
+    CHECK(banked > 0);
+    CHECK(led.banked == banked);
+    CHECK(led.bestHaul == banked);
+    // The haul left the inventory but the KIT did not — banking must never disarm you,
+    // or never banking becomes the optimal play.
+    CHECK(at_risk_value(inv) < carried);
+
+    // --- seam 4: the vendor turns banked value into survival -----------------
+    // Sell whatever the pad would not take (trade goods it declined, consumables above
+    // the keep-back), then buy supplies with the proceeds.
+    const std::int64_t beforeSale = led.banked;
+    vendor_sell_all(inv, led, VendorKind::Citizen);
+    CHECK(led.banked >= beforeSale);                     // selling never loses money
+
+    const std::int64_t beforeBuy = led.banked;
+    const std::int32_t spent = vendor_resupply(inv, led, 600);
+    CHECK(spent > 0);                                    // there was something to buy
+    CHECK(led.banked == beforeBuy - spent);              // charged exactly once
+    // And what was bought actually DOES something — the placebo guard.
+    int useful = 0;
+    for (const ItemSlot& sl : inv.slots) {
+        if (!item_valid(sl.item)) continue;
+        if (static_cast<UseEffect>(item_def(sl.item).useEffect) != UseEffect::None)
+            ++useful;
+    }
+    CHECK(useful > 0);
+
+    // The round trip LOSES money. Buy then immediately sell the same thing back and the
+    // banked total must fall — this is the one property that stops the pad being a money
+    // press, and it is a seam between vendor pricing and the ledger, not a vendor
+    // internal.
+    {
+        ItemId thing = kInvalidItem;
+        for (ItemId i = 1; i <= kItemCount; ++i)
+            if (vendor_buy_price(i) > 20) { thing = i; break; }
+        CHECK(thing != kInvalidItem);
+        Inventory ci;
+        RunLedger cl;
+        cl.banked = 100000;
+        const std::int64_t start = cl.banked;
+        CHECK(vendor_buy(ci, cl, thing, 10) == 10);
+        vendor_sell_all(ci, cl, VendorKind::Citizen);
+        CHECK(cl.banked < start);
+    }
+
+    // --- seam 5: a job, and it pays into the bank ---------------------------
+    // Find somebody who is hiring, on a floor where their job is possible.
+    ContractBook book;
+    Contract job{};
+    for (std::uint32_t i = 1; i < 600; ++i) {
+        NpcId g = pool.spawn();
+        const Contract c = contract_offer(pool, g, -26, 0x51EDu);
+        if (c.giver == kInvalidNpc) continue;
+        if (static_cast<ObjectiveKind>(c.kind) != ObjectiveKind::Hunt) continue;
+        job = c;
+        break;
+    }
+    CHECK(job.giver != kInvalidNpc);
+    CHECK(contract_accept(book, job));
+
+    // Kills arrive as the same NpcDied event the kill feed reads — the seam between
+    // combat and the job board is one event, not a second counter.
+    for (std::uint16_t k = 0; k < job.target; ++k)
+        contract_on_kill(book, static_cast<std::uint8_t>(job.subject));
+    const std::int64_t beforePay = led.banked;
+    const std::int32_t paid = contract_step(book, pool, inv, led);
+    CHECK(paid == job.reward);
+    CHECK(led.banked == beforePay + paid);               // paid into BANKED, not carried
+    CHECK(book.completed == 1);
+    CHECK(contract_step(book, pool, inv, led) == 0);      // and paid exactly once
+
+    // --- seam 6: the run is now readable ------------------------------------
+    // Everything the HUD prints about this run has to agree with what happened.
+    CHECK(led.deepestFloor == -26);
+    CHECK(led.deposits == 1);
+    CHECK(led.deaths == 0);
+    CHECK(led.lostToDeath == 0);
+    CHECK(led.banked > 0);
+
+    // And a death still costs what is carried, after all of that.
+    const std::int32_t stillCarried = at_risk_value(inv);
+    const std::int64_t safe = led.banked;
+    record_death(led, inv);
+    CHECK(led.deaths == 1);
+    CHECK(led.lostToDeath == stillCarried);
+    CHECK(led.banked == safe);                           // banked survives a death
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -3238,6 +3467,7 @@ int main() {
     test_contracts();
     test_vendor();
     test_hunt_all();
+    test_full_loop();
     test_extraction_reachable();
     test_mob_behaviour();
     test_ranged_table();

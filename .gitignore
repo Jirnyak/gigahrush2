@@ -29,3 +29,7 @@ imgui.ini
 # sees each one as an embedded repo and commits a gitlink that points nowhere for
 # anybody else. Committed two by accident in 107b6fa; removed in the next commit.
 .claude/worktrees/
+
+# Python bytecode from the table generators.
+tools/__pycache__/
+__pycache__/
