@@ -14,7 +14,7 @@
 // floor. `gigahrush2 maze` selects the single-world labyrinth test bed instead.
 //
 // Controls: WASD move, mouse look (hold right mouse / press Tab to toggle),
-// Space jump, F toggles fly, [ / ] change floor, Esc quits.
+// Space jump, F toggles fly, Q works the nearest door, [ / ] change floor, Esc quits.
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 
@@ -46,6 +46,7 @@
 #include "game/contract.h"
 #include "game/vendor.h"
 #include "game/container.h"
+#include "game/door.h"
 #include "game/combat.h"
 #include "game/extraction.h"
 #include "game/faction_relations.h"
@@ -461,6 +462,21 @@ int main(int argc, char** argv) {
     int currentFloor = 0;                         // in-game label of the live floor
     const game::FloorSpec* currentSpec = nullptr; // its rule-set (HUD only)
 
+    // Every door on the live floor. Rebuilt per arrival like mobs and containers,
+    // because a door belongs to the floor and not to the player — and because the
+    // dense cell->door index is sized for exactly ONE layer ([door.h]).
+    //
+    // Declared up here rather than beside the ledger because the FIRST floor is set
+    // up above the ledger, and a DoorSet declared later compiled as "undeclared
+    // identifier" at the very site that has to build the starting floor's doors.
+    game::DoorSet doors;
+    game::DoorTick doorTick{};      // last step's report, for the HUD
+    std::uint32_t doorsBuilt = 0;   // on this floor, so the HUD can say "0 doors"
+    bool doorWanted = false;        // Q, consumed by one sim step
+    // One seed for every floor's doors. door_build is deterministic in it, so a floor
+    // gets the same doors on every visit, the same way its mobs and crates do.
+    constexpr unsigned kDoorSeed = 0xD00D5u;
+
     Entity player = entt::null;
 
     if (genMode == WorldGenMode::Maze) {
@@ -491,6 +507,14 @@ int main(int argc, char** argv) {
             LayerId l0 = reg.get<Transform>(player).layer;
             refresh_floor_mobs(reg, stack.layer(l0), 0, l0);
             refresh_floor_containers(reg, stack.layer(l0), 0, l0);
+            // Doors BEFORE the bake, and frozen for its duration: door_build leaves
+            // every door open so the bake sees all-open geometry (an upper bound on
+            // connectivity), and AsyncBake holds a raw pointer to the live MacroGrid
+            // that must not be mutated until ready(). [door.h]
+            if (currentSpec)
+                doorsBuilt = game::door_build(stack.layer(l0), doors, 0,
+                                              *currentSpec, kDoorSeed);
+            doors.frozen = true;
             begin_floor_nav(stack.layer(l0), nav);
         }
     }
@@ -605,6 +629,10 @@ int main(int argc, char** argv) {
                                   ? reg.get<Transform>(player).layer
                                   : LayerId{0};
             finish_floor_nav(reg, l, 0xA11FEu, nav);
+            // The bake has released the grid, so doors may move again. Until this
+            // point every mutator refused, which is why a door cannot be worked
+            // during the ~3.7 s bake rather than corrupting it. [door.h]
+            doors.frozen = false;
         }
         if (frameDt > 0.1f) frameDt = 0.1f; // clamp after a stall
 
@@ -678,6 +706,12 @@ int main(int argc, char** argv) {
                         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
                         refresh_floor_containers(reg, stack.layer(nl),
                                                  currentFloor, nl);
+                        // Doors before the bake, frozen for its duration. [door.h]
+                        if (currentSpec)
+                            doorsBuilt = game::door_build(
+                                stack.layer(nl), doors, currentFloor,
+                                *currentSpec, kDoorSeed);
+                        doors.frozen = true;
                         begin_floor_nav(stack.layer(nl), nav);
                     }
                 }
@@ -690,6 +724,13 @@ int main(int argc, char** argv) {
                     e.key.scancode == SDL_SCANCODE_H) {
                     healWanted = true;
                 }
+                // Q works the nearest door. Recorded as intent for the same reason
+                // as the trades below: a door moves solid geometry, so it belongs on
+                // the sim's clock, not the window's, and the event loop has no
+                // `activeLayer` in scope.
+                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
+                    e.key.scancode == SDL_SCANCODE_Q)
+                    doorWanted = true;
                 // B sells the haul, R re-supplies. Recorded as INTENT here and acted
                 // on in the sim loop, the same shape `healWanted` uses — the event loop
                 // has no `activeLayer` in scope, and more importantly a trade is a
@@ -787,6 +828,22 @@ int main(int argc, char** argv) {
                                   nav.coarse(),
                                   nav.fine(), activeLayer, simTick);
                 physics_step(reg, stack, kSimDt);
+                // Doors resolve AFTER physics for the same reason melee does: contact
+                // is tested by ADJACENCY against where bodies actually ended up this
+                // step, not where they intended to go. Costs nothing while no door is
+                // shut — door_step early-outs on doors.shut == 0. [door.h]
+                doorTick = game::door_step(reg, stack.layer(activeLayer), doors,
+                                           activeLayer, kSimDt, simTick);
+                // Q, consumed once. The player works a door with a keypress; leaning
+                // on one is how MONSTERS open it, and door_step skips the camera
+                // holder precisely so the two cannot be confused.
+                if (doorWanted) {
+                    doorWanted = false;
+                    if (reg.valid(player))
+                        game::door_toggle_near(stack.layer(activeLayer), doors, reg,
+                                               activeLayer,
+                                               reg.get<Transform>(player).pos);
+                }
                 // Melee resolves AFTER physics, so reach is tested against where
                 // bodies actually ended up this step rather than where they
                 // intended to go.
@@ -1096,6 +1153,12 @@ int main(int argc, char** argv) {
                     ImGui::Text("crates %d unopened / %d emptied | took %d rub",
                                 shut, open, containerTake);
                 }
+                // Doors: built/shut/broken, plus how many bodies are leaning on one
+                // right now. `pressing` is the number that makes a shut door read as
+                // a consumable resource rather than a wall — you can watch it fall.
+                ImGui::Text("doors %u built | %u shut | %u broken | %u pressing%s",
+                            doorsBuilt, doors.shut, doors.broken, doorTick.pressing,
+                            doors.frozen ? "  (frozen: nav baking)" : "");
                 ImGui::Text("loot %d rub (%d/%d slots) | healed %d | band E%u",
                             carried, slots, game::kInvSlots, healed,
                             game::economy_band(currentFloor));
@@ -1231,7 +1294,7 @@ int main(int argc, char** argv) {
             }
             ImGui::TextUnformatted(
                 "WASD move | mouse look | Tab toggle look | Space jump | "
-                "F fly | [ / ] floor down/up | Esc menu");
+                "F fly | Q door | [ / ] floor down/up | Esc menu");
             ImGui::End();
         }
 
@@ -1331,6 +1394,15 @@ int main(int argc, char** argv) {
                         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
                         refresh_floor_containers(reg, stack.layer(nl),
                                                  currentFloor, nl);
+                        // Doors before the bake, frozen for its duration. [door.h]
+                        // This is the SECOND travel site — see the note below; a fix
+                        // that touches only the keyboard path leaves --shot without
+                        // doors and the capture then proves nothing about them.
+                        if (currentSpec)
+                            doorsBuilt = game::door_build(
+                                stack.layer(nl), doors, currentFloor,
+                                *currentSpec, kDoorSeed);
+                        doors.frozen = true;
                         begin_floor_nav(stack.layer(nl), nav);
                         cubePass.invalidate();
                         // Same clear as the keyboard ride path. There are TWO travel
