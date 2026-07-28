@@ -1,10 +1,13 @@
 // Game-layer unit tests. Same tiny CHECK harness as world_test; links giga_game
 // so it exercises the macro entity systems headless (no SDL/Vulkan).
+#include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 #include "ecs/components.h"
 #include "ecs/registry.h"
+#include "game/ai.h"
 #include "game/embody.h"
 #include "game/elevator.h"
 #include "game/event_bus.h"
@@ -1710,6 +1713,150 @@ static void test_macro_social_determinism() {
     }
 }
 
+// ---- #12a Needs: deterministic seed + one-pass decay ----------------------
+static void test_needs_decay() {
+    const float dt = 1.0f / 120.0f; // one sim tick
+
+    // --- Seed: deterministic (pure function of id), lands in each need's band,
+    //     and the pending gut pools start empty (fresh body). ---
+    Needs a{}, b{};
+    seed_needs(a, 12345u);
+    seed_needs(b, 12345u);
+    for (std::uint8_t n = 0; n < kNeedCount; ++n) {
+        CHECK(a.v[n] == b.v[n]);                                   // determinism
+        CHECK(a.v[n] >= kNeedSeedLo[n] && a.v[n] <= kNeedSeedHi[n]); // per-need band
+    }
+    CHECK(a.pendingPee == 0.0f && a.pendingPoo == 0.0f);          // fresh gut
+
+    // Different ids give different rows (the crowd is not in lockstep).
+    Needs c{};
+    seed_needs(c, 999u);
+    bool anyDiff = false;
+    for (std::uint8_t n = 0; n < kNeedCount; ++n)
+        if (c.v[n] != a.v[n]) anyDiff = true;
+    CHECK(anyDiff);
+
+    // A shared pool supplies the attribute block for reserve scaling. Zeroed stats
+    // leave the base decay rate untouched, so expected deltas are exactly rate*dt.
+    NpcPool pool;
+    pool.init();
+
+    // --- One step: reserves fall by exactly rate*dt (stat 0 => unscaled);
+    //     pressures HOLD, because a fresh body's pending pools are empty. ---
+    {
+        NpcId id = pool.spawn();
+        pool.set_floor(id, 0);
+        for (auto& s : pool.attrs(id)) s = 0; // no attribute slowing
+        Registry reg;
+        auto e = reg.create();
+        reg.emplace<NpcRef>(e).id = id;
+        Needs seeded{};
+        seed_needs(seeded, 42u);
+        reg.emplace<Needs>(e, seeded);
+        needs_step(reg, pool, dt);
+        const auto& stepped = reg.get<Needs>(e);
+        for (std::uint8_t n = 0; n < kFirstPressure; ++n) {
+            const float expect = seeded.v[n] - kNeedRatePerSec[n] * dt;
+            CHECK(std::fabs(stepped.v[n] - expect) < 1e-4f);
+            CHECK(stepped.v[n] < seeded.v[n]);        // reserve fell
+        }
+        CHECK(stepped.v[NeedPee] == seeded.v[NeedPee]); // pressure held (empty pool)
+        CHECK(stepped.v[NeedPoo] == seeded.v[NeedPoo]);
+    }
+
+    // --- Digestion: a non-empty pending pool raises its pressure by rate*dt and
+    //     drains the pool; over many steps the pool empties and the pressure has
+    //     risen by exactly the amount digested (never past it). ---
+    {
+        NpcId id = pool.spawn();
+        pool.set_floor(id, 0);
+        Registry reg;
+        auto e = reg.create();
+        reg.emplace<NpcRef>(e).id = id;
+        Needs n{};
+        n.v[NeedPee] = 10.0f;
+        n.pendingPee = 5.0f;
+        reg.emplace<Needs>(e, n);
+        needs_step(reg, pool, 1.0f); // dt=1s: digest min(5, 0.10)=0.10
+        const auto& d = reg.get<Needs>(e);
+        CHECK(std::fabs(d.v[NeedPee] - 10.10f) < 1e-4f); // rose by rate*dt
+        CHECK(std::fabs(d.pendingPee - 4.90f) < 1e-4f);  // pool drained equally
+        for (int i = 0; i < 100; ++i) needs_step(reg, pool, 1.0f); // drain the rest
+        const auto& d2 = reg.get<Needs>(e);
+        CHECK(d2.pendingPee <= 1e-3f);                   // pool empty
+        CHECK(std::fabs(d2.v[NeedPee] - 15.0f) < 1e-2f); // exactly 10 + 5 digested
+    }
+
+    // --- Attribute scaling: a higher governing stat drains its reserve slower.
+    //     STR (slot 0) governs food: STR 0 loses 0.08/s, STR 10 loses 0.08/2. ---
+    {
+        NpcId weak = pool.spawn();
+        NpcId hardy = pool.spawn();
+        for (auto& s : pool.attrs(weak)) s = 0;
+        for (auto& s : pool.attrs(hardy)) s = 0;
+        pool.attrs(hardy)[0] = 10; // STR 10 -> foodRate /= (1 + 0.1*10) = /2
+        Registry reg;
+        auto ew = reg.create();
+        reg.emplace<NpcRef>(ew).id = weak;
+        auto eh = reg.create();
+        reg.emplace<NpcRef>(eh).id = hardy;
+        Needs full{};
+        for (auto& x : full.v) x = 100.0f;
+        reg.emplace<Needs>(ew, full);
+        reg.emplace<Needs>(eh, full);
+        for (int i = 0; i < 120; ++i) needs_step(reg, pool, dt); // one sim-second
+        const float fw = reg.get<Needs>(ew).v[NeedFood];
+        const float fh = reg.get<Needs>(eh).v[NeedFood];
+        CHECK(fh > fw);                                   // hardy kept more food
+        CHECK(std::fabs((100.0f - fw) - 0.08f) < 1e-3f);  // weak lost 0.08 in 1 s
+        CHECK(std::fabs((100.0f - fh) - 0.04f) < 1e-3f);  // hardy lost half that
+    }
+
+    // --- Clamp: a drained reserve rests exactly at 0, never negative. ---
+    {
+        NpcId id = pool.spawn();
+        for (auto& s : pool.attrs(id)) s = 0;
+        Registry reg;
+        auto e = reg.create();
+        reg.emplace<NpcRef>(e).id = id;
+        Needs edge{};
+        for (auto& x : edge.v) x = 0.05f;
+        reg.emplace<Needs>(e, edge);
+        for (int i = 0; i < 2000; ++i) needs_step(reg, pool, dt);
+        const auto& settled = reg.get<Needs>(e);
+        for (std::uint8_t n = 0; n < kFirstPressure; ++n) {
+            CHECK(settled.v[n] >= kNeedMin && settled.v[n] <= kNeedMax);
+            CHECK(settled.v[n] == kNeedMin); // fully drained reserve rests at 0
+        }
+    }
+
+    // --- O(n) over the WHOLE column: one pass advances every agent. ---
+    {
+        Registry reg;
+        const int kN = 500;
+        std::vector<Entity> es;
+        std::vector<Needs> seeds;
+        es.reserve(kN);
+        seeds.reserve(kN);
+        for (int i = 0; i < kN; ++i) {
+            NpcId nid = pool.spawn();
+            for (auto& s : pool.attrs(nid)) s = 0;
+            auto en = reg.create();
+            reg.emplace<NpcRef>(en).id = nid;
+            Needs s{};
+            seed_needs(s, static_cast<std::uint32_t>(i));
+            seeds.push_back(s);
+            reg.emplace<Needs>(en, s);
+            es.push_back(en);
+        }
+        needs_step(reg, pool, dt);
+        for (int i = 0; i < kN; ++i) {
+            const auto& got = reg.get<Needs>(es[i]);
+            CHECK(got.v[NeedWater] < seeds[i].v[NeedWater]); // every agent drained
+        }
+    }
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -1750,6 +1897,7 @@ int main() {
     test_macro_social_determinism();
     test_floor_bucket_index();
     test_stream_migration_reembodies();
+    test_needs_decay();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

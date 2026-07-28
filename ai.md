@@ -1,15 +1,19 @@
 # AI — utility brain for embodied NPCs
 
-> **Status: PLANNED (master_prompt §7 #12) — not yet built.** This is the
-> porting-target spec for the embodied NPC brain, captured from the reference
-> (`../gigahrush`: `needs.ts`, `npc_utility.ts`, `npc_fsm.ts`, and the pathfinding
-> steering). Exact per-intent scorer constants will be **re-extracted verbatim at
-> build time** (the same design-doc → exact-extraction → code flow used for the
+> **Status: needs layer (#12a) BUILT; scorer + selection (#12b) and stagger +
+> steering + embody/loop wiring (#12c) pending.** This is the porting-target spec
+> for the embodied NPC brain, captured from the reference (`../gigahrush`:
+> `needs.ts`, `npc_utility.ts`, `npc_fsm.ts`, and the pathfinding steering). Exact
+> per-intent scorer constants are **re-extracted verbatim at build time** (the
+> same design-doc → exact-extraction → code flow used for the
 > [faction matrix](macrosim.md)); the numbers below are the shape, not the frozen
-> table. When built it will live in the game layer (`src/game/`, `giga_game`) over
-> the ECS ([ecs.md](ecs.md)) and consume the baked nav ([nav.md](nav.md)) and flee
-> field ([diffusion.md](diffusion.md)).
+> table. It lives in the game layer (`src/game/`, `giga_game`) over the ECS
+> ([ecs.md](ecs.md)) and consumes the baked nav ([nav.md](nav.md)) and flee field
+> ([diffusion.md](diffusion.md)) — pure game-layer over EnTT + NpcPool, so the
+> whole brain is exercised **headless** by `game_test`, exactly like the macro tick.
 >
+> - **Code:** [src/game/ai.h](src/game/ai.h) / [.cpp](src/game/ai.cpp)
+> - **Tests:** [tests/game_test.cpp](tests/game_test.cpp) `test_needs_decay`
 > - **Architecture:** [ARCHITECTURE.md](ARCHITECTURE.md) §L4
 > - Upstream of [controller.md](controller.md): the brain writes
 >   `Controller::wishDir`; `controller_step` turns it into velocity, then
@@ -36,13 +40,13 @@ component, not a per-entity object). They **decay/rise every sim tick** at
 data-driven rates, scaled by the character-sheet attribute block
 ([npcs.md](npcs.md): generic 8-slot attributes, slot→meaning is a table):
 
-| Need | Direction | Ref rate (per sec) | Attribute scale |
+| Need | Direction | Ref rate (per sec) | Attribute scale (`rate /= 1 + 0.1·stat`) |
 |------|-----------|--------------------|-----------------|
-| food | falls (hunger rises as it empties) | ~0.08 | STR-ish |
-| water | falls | ~0.12 | — |
-| sleep | falls | ~0.05 | — |
-| pee | **rises** (bladder fills, digestion) | ~0.10 | — |
-| poo | **rises** | ~0.06 | — |
+| food | reserve, **falls** | 0.08 | STR (attr slot 0) |
+| water | reserve, **falls** | 0.12 | AGI (attr slot 1) |
+| sleep | reserve, **falls** | 0.05 | INT (attr slot 2) |
+| pee | pressure, **rises only via digestion** | 0.10 (digest) | — |
+| poo | pressure, **rises only via digestion** | 0.06 (digest) | — |
 
 Rates are a **table**, not code; attribute scaling means a hardier NPC hungers
 slower. Restoring a need (eating, drinking, using a toilet, sleeping) is an
@@ -50,6 +54,33 @@ intent's *effect*, applied when the FSM reaches the target. Cold NPCs carry no
 fine needs — the macro tick models their lives abstractly; needs materialise only
 on embodiment and fold away on de-embodiment, like every other transient
 ([npcs.md](npcs.md): hp/inventory stay canonical, only transient state folds).
+
+**Built (#12a — [src/game/ai.h](src/game/ai.h) / [.cpp](src/game/ai.cpp)).** The
+`Needs` component is a flat `float[kNeedCount]` block **plus two `pending`
+digestion pools** (`pendingPee` / `pendingPoo`). One block holds both flavours,
+split only by **index** (`kFirstPressure`), never a type tag: `[0, kFirstPressure)`
+are the **reserves** (food/water/sleep), the rest the **pressures** (pee/poo).
+`needs_step(reg, pool, dt)` is one linear sweep over the packed EnTT column — O(n)
+over the live set, no per-object dispatch:
+
+- **reserves decay** every tick by `rate·dt`, each **attribute-slowed** by
+  `rate /= (1 + 0.1·stat)` — STR (attr slot 0) slows food, AGI (slot 1) water, INT
+  (slot 2) sleep, read from the record's generic 8-slot block (`pool.attrs(id)`);
+  clamped at 0. (Fixing slots 0/1/2 = STR/AGI/INT is the `slot→meaning` data
+  decision [npcs.md](npcs.md) defers, taken here to match the reference RPGStats.)
+- **pressures rise only by digesting** their pool: `dp = min(pending, rate·dt);
+  v += dp; pending -= dp`, clamped at 100. A **fresh gut (empty pool) holds pee/poo
+  flat** — they do not climb on their own; the eat intent (#12b) fills the pool.
+
+`seed_needs(needs, id)` seeds a fresh body deterministically from its stable id (a
+stateless `hash3` per need over an independent salt; per-need bands food/water
+70–100, sleep 60–100, pee 0–30, poo 0–20; pending pools empty), so embodiment is
+reproducible with **zero stored RNG state**. Every rate, range, the digestion
+model, and the `0.1`-per-point attribute coefficient are **ported verbatim from
+the reference `needs.ts`** (same design-doc → exact-extraction → code flow as the
+[faction matrix](macrosim.md)). Restore-on-use — eating / drinking / toilet /
+sleep filling or draining a need — is an intent *effect*, so it lands with the
+scorer (#12b). Verified headless by `test_needs_decay`.
 
 ### 2. Utility scorer — 13 intents, pure and stateless
 
