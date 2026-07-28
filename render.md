@@ -27,7 +27,8 @@ This is why we can lean hard on procedural/shader generation for *look* without
 risk: the shader is downstream of truth, never the source of it.
 
 - **Code:** [src/render/](src/render) — `vk_device`, `vk_swapchain`,
-  `vk_renderer`, `vk_buffer`, `vk_common`, `cube_pass`, `imgui_layer`
+  `vk_renderer`, `vk_buffer`, `vk_common`, `cube_pass`, `imgui_layer`,
+  `gpu_timer`
 - **Shaders:** [shaders/cube.vert](shaders/cube.vert),
   [shaders/cube.frag](shaders/cube.frag) → SPIR-V via `glslc` at build time
 - **Architecture:** [ARCHITECTURE.md](ARCHITECTURE.md) §L3
@@ -42,6 +43,7 @@ risk: the shader is downstream of truth, never the source of it.
 | `vk_buffer` | Device-local (staged) buffers for static geometry; persistently-mapped host-visible buffers for per-frame instance data |
 | `cube_pass` | The instanced-cube pipeline that draws the world |
 | `imgui_layer` | Dear ImGui SDL3 + Vulkan overlay, own descriptor pool |
+| `gpu_timer` | `VK_QUERY_TYPE_TIMESTAMP` brackets around each pass; the only honest cost number in the renderer |
 
 Frame lifecycle is double-buffered (`kMaxFramesInFlight = 2`) with
 out-of-date/resize handling driving swapchain recreation.
@@ -96,8 +98,20 @@ rather than a workaround:
 - Wallpaper, parquet, tile and linoleum are parametric surfaces — grids plus noise
   — which is exactly what procedural generation is good at.
 - It costs only ALU, on a GPU [performance.md](performance.md) declares unlimited,
-  and touches no buffer, no descriptor and no CPU work. **Measured: no frame-time
-  change at all** (16.6 ms before and after, 717k instances).
+  and touches no buffer, no descriptor and no CPU work. **Measured on the GPU
+  clock: below the noise floor.** Deleting `grain` + `seam` moved the world pass
+  from 6.71 ms to 6.76 ms at 717,638 instances — i.e. *up* by 0.05 ms, which is
+  the run-to-run spread, so the true cost is under 0.05 ms. The ALU slope
+  measured with a calibrated probe (18 µs per extra `vnoise` per frame at this
+  camera) predicts ~0.04 ms for the two octaves plus the seam, which agrees.
+  This pass is geometry-bound — 717,638 × 36 = **25.8 M vertices** a frame — so
+  fragment ALU is not where its time goes.
+  > The number this bullet used to carry was **16.6 ms before and after**, which
+  > is the vsync period: FIFO present pins the frame time at the cap, so both
+  > figures were the cap and the comparison could not have detected a *doubling*
+  > of fragment cost. The conclusion happened to survive re-measurement; the
+  > evidence never existed. Never cost a shader change with the frame-time
+  > counter — use the per-pass GPU numbers below.
 - Zero licensing surface. Harvesting from another project on the same machine was
   evaluated and rejected: an inventory of 1,784 images found **zero** wallpaper,
   parquet, linoleum, tile, plaster, brick or panel-seam concrete — it was a
@@ -259,6 +273,79 @@ depth (`m[10] = zf/(zn-zf)`, `m[14] = zn·zf/(zn-zf)`), matching a depth buffer
 cleared to `1.0` and compared `LESS`. The camera flips Y for Vulkan's +Y-down
 clip space ([camera.md](camera.md)). Nothing to do here; this section exists so
 nobody "fixes" it twice.
+
+## Measuring the renderer — per-pass GPU time
+
+**The frame-time counter cannot cost a render change, and must never be used to
+try.** The swapchain presents FIFO ([vk_swapchain.cpp](src/render/vk_swapchain.cpp)),
+so `x.x FPS (16.6 ms)` is the vsync period whenever the machine keeps up: it is a
+*cap*, blind to everything happening below it. It is also wall-clock around the
+whole application — sim tick, 400–1100-body crowd, nav bake, ImGui, present wait
+— so even uncapped it cannot attribute a cost to a pass.
+
+[gpu_timer.h](src/render/gpu_timer.h) brackets each pass with
+`VK_QUERY_TYPE_TIMESTAMP` queries and the HUD reports the result:
+
+```
+59.6 FPS (16.78 ms)                                        <- vsync cap, uninformative
+gpu: world 6.796 | bodies 0.001 | hud 0.006 | frame 6.821 ms   <- the real cost
+```
+
+Ten milliseconds of GPU headroom that the top line could not see. Measured on an
+RTX 3060 Laptop at 1280×720, floor 0, 717,638 instances, 428 bodies.
+
+| Decision | What it is | Why |
+|---|---|---|
+| readback latency | `kMaxFramesInFlight` frames (2) | `acquire_frame` already waits on this slot's fence to recycle its command buffer, and that fence belongs to the submission from 2 frames ago — so the results are complete *and* the read is free. Reading sooner blocks on in-flight work and inflates the number being measured. |
+| stage | `BOTTOM_OF_PIPE` on both marks | each mark is stamped when all preceding work has completed, so the interval is a real completion-to-completion span rather than a command-fetch time. |
+| tick → ms | `limits.timestampPeriod` | ns per tick. Measured 1.000 here; commonly ~40 on AMD and ~52 on Intel (reported, not measured on this machine). Assuming 1 silently scales every number on most of the market. |
+| counter width | queue family `timestampValidBits`, masked | fewer than 64 bits is normal; the high bits are undefined and a long session wraps. Differences are taken modulo 2^bits. |
+| unsupported | `validBits == 0` → `supported() == false`, HUD reads `n/a` | verified by forcing the path: the game boots and renders normally. Instrumentation never fails a boot. |
+| smoothing | **median of 31 frames** (~0.5 s) | GPU noise is one-sided — preemption only ever makes a frame slower. A mean or EMA folds one 40 ms hitch into the figure and sheds it over tens of frames; a median needs 16 of 31 frames to move, so a spike cannot lie and a real regression still lands immediately. |
+
+`vkCmdResetQueryPool` is illegal inside a render pass, and the readback has to sit
+exactly on the fence wait, so `VulkanRenderer` owns the timer and does both;
+callers only wrap their own draws in `timer.pass_begin/pass_end`. Verified under
+`VK_LAYER_KHRONOS_validation` with zero query-related messages.
+
+**What the split does not mean.** A timestamp is not a barrier — it does not stop
+the driver overlapping two draws, so when passes overlap the earlier one's figure
+absorbs a little of the later one's. The frame total is exact regardless, and a
+change in one pass's cost lands in that pass's number. Do not read the per-pass
+figures as a hard partition of the frame.
+
+### The acceptance test — it can see a 1 ms change
+
+A timing system that reports plausible numbers but cannot detect a real change is
+worse than none, because it manufactures confidence. So the readout was calibrated
+against a deliberate, known fragment cost (a temporary loop of `vnoise` calls in
+[cube.frag](shaders/cube.frag), mixed into the output at 0.001 so the image and
+therefore the overdraw stay identical), three Release runs each:
+
+| `cube.frag` | world pass | frame time |
+|---|---|---|
+| baseline | 6.77 / 6.83 / 6.93 ms | 16.78 ms |
+| +55 noise iterations | 7.76 / 7.78 / 7.76 ms | 16.79 ms |
+| +200 noise iterations | 10.40 / 10.52 ms | 16.80 ms |
+| probe reverted | 6.73 / 6.73 / 6.68 ms | 16.78 ms |
+
+A **+0.93 ms** change reads as a clean 0.83 ms gap between the slowest baseline run
+and the fastest loaded one — no overlap, ~5× the worst run-to-run spread. So yes:
+this resolves a 1 ms change at 717,638 instances, which is the size of change the
+frame-time counter could not see at all. The frame-time column is the control: it
+never moved, across a 55% increase in GPU frame cost.
+
+Two cross-checks that the numbers are real and not decorative: the `bodies`
+channel rose 0.001 → 0.10 → 0.24 ms across the same three builds, because
+`body_pass` shares `cube.frag` and covers far fewer pixels — the cost landed in
+both passes in proportion to their coverage; and `frame` tracked
+`world + bodies + hud` to within 0.03 ms throughout.
+
+Practical limits, measured: ~0.05 ms spread within a session, ~0.13 ms drift
+between sessions on byte-identical shaders (GPU clock state). Compare
+Release-to-Release, and treat anything under ~0.2 ms as unproven. Debug builds
+read ~3× higher because the app runs slow enough for the GPU to downclock — that
+is a clock artefact, not a cost.
 
 ## Security / platform note
 

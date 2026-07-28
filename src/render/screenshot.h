@@ -26,14 +26,31 @@ namespace giga::gpu {
 struct VulkanDevice;
 struct VulkanRenderer;
 
-// Copy the LAST PRESENTED swapchain image to `path` as a PNG.
+// A capture in progress. Two phases, because the copy has to be recorded INSIDE a
+// frame: the swapchain image belongs to the application only between
+// vkAcquireNextImageKHR and vkQueuePresentKHR, so there is no legal way to read it
+// after presenting. Request on one frame, save after the next.
 //
-// Must be called after `end_frame` returned true, so the image contains a complete
-// frame. Blocks on a fence — this is a debug tool, not a per-frame path.
-//
-// Handles the two format families the swapchain is created with: B8G8R8A8 and
-// R8G8B8A8, swizzling as needed. Returns false and writes nothing on any failure
-// (unsupported format, no host-visible memory, unwritable path).
-bool save_swapchain_png(VulkanDevice& dev, VulkanRenderer& ren, const char* path);
+// The first version of this did the copy after present from a throwaway command pool.
+// It produced correct PNGs on this NVIDIA driver and was a spec violation the whole
+// time — flagged by a validation run, invisible to any amount of testing here, and
+// MoltenVK is where it would have bitten.
+struct Capture {
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    bool bgr = false;
+};
+
+// Allocate a host-visible staging buffer and ask the renderer to fill it on its next
+// end_frame. Returns false and touches nothing on failure.
+bool capture_request(VulkanDevice& dev, VulkanRenderer& ren, Capture& cap);
+
+// Write the captured frame to `path` as a PNG and release the buffer. Must be called
+// AFTER at least one end_frame has run since capture_request. Safe to call on a failed
+// or unfilled capture — it releases and returns false.
+bool capture_save(VulkanDevice& dev, VulkanRenderer& ren, Capture& cap,
+                  const char* path);
 
 } // namespace giga::gpu

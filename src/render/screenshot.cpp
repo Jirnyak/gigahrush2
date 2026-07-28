@@ -118,143 +118,93 @@ std::uint32_t find_memory(const VulkanDevice& dev, std::uint32_t typeBits,
 
 } // namespace
 
-bool save_swapchain_png(VulkanDevice& dev, VulkanRenderer& ren, const char* path) {
+bool capture_request(VulkanDevice& dev, VulkanRenderer& ren, Capture& cap) {
     const VulkanSwapchain& sc = ren.swap();
     if (sc.images.empty()) return false;
-    const std::uint32_t idx = ren.currentImageIndex;
-    if (idx >= sc.images.size()) return false;
-    const std::uint32_t w = sc.extent.width, h = sc.extent.height;
-    if (w == 0 || h == 0) return false;
+    cap.width = sc.extent.width;
+    cap.height = sc.extent.height;
+    if (cap.width == 0 || cap.height == 0) return false;
 
-    // Which channel order the swapchain gave us. The renderer deliberately asks for a
-    // UNORM format so the shader can do its own sRGB encode ([cube.frag]); both BGRA
-    // and RGBA are plausible depending on the driver, so handle both rather than
-    // assuming and silently producing a blue-tinted PNG.
-    bool bgr;
+    // The renderer deliberately asks for a UNORM format so the shader does its own sRGB
+    // encode ([cube.frag]); both BGRA and RGBA are plausible depending on the driver, so
+    // handle both rather than assuming and silently writing a blue-tinted PNG.
     switch (sc.format) {
         case VK_FORMAT_B8G8R8A8_UNORM:
-        case VK_FORMAT_B8G8R8A8_SRGB: bgr = true; break;
+        case VK_FORMAT_B8G8R8A8_SRGB: cap.bgr = true; break;
         case VK_FORMAT_R8G8B8A8_UNORM:
-        case VK_FORMAT_R8G8B8A8_SRGB: bgr = false; break;
+        case VK_FORMAT_R8G8B8A8_SRGB: cap.bgr = false; break;
         default:
             std::fprintf(stderr, "screenshot: unsupported swapchain format %d\n",
                          static_cast<int>(sc.format));
             return false;
     }
 
-    const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * 4;
-
+    const VkDeviceSize bytes = static_cast<VkDeviceSize>(cap.width) * cap.height * 4;
     VkBufferCreateInfo bci{};
     bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bci.size = bytes;
     bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    VkBuffer buf = VK_NULL_HANDLE;
-    if (vkCreateBuffer(dev.device, &bci, nullptr, &buf) != VK_SUCCESS) return false;
+    if (vkCreateBuffer(dev.device, &bci, nullptr, &cap.buffer) != VK_SUCCESS)
+        return false;
 
     VkMemoryRequirements mr{};
-    vkGetBufferMemoryRequirements(dev.device, buf, &mr);
+    vkGetBufferMemoryRequirements(dev.device, cap.buffer, &mr);
     const std::uint32_t type =
         find_memory(dev, mr.memoryTypeBits,
                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     if (type == UINT32_MAX) {
-        vkDestroyBuffer(dev.device, buf, nullptr);
+        vkDestroyBuffer(dev.device, cap.buffer, nullptr);
+        cap.buffer = VK_NULL_HANDLE;
         return false;
     }
     VkMemoryAllocateInfo mai{};
     mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     mai.allocationSize = mr.size;
     mai.memoryTypeIndex = type;
-    VkDeviceMemory mem = VK_NULL_HANDLE;
-    if (vkAllocateMemory(dev.device, &mai, nullptr, &mem) != VK_SUCCESS) {
-        vkDestroyBuffer(dev.device, buf, nullptr);
+    if (vkAllocateMemory(dev.device, &mai, nullptr, &cap.memory) != VK_SUCCESS) {
+        vkDestroyBuffer(dev.device, cap.buffer, nullptr);
+        cap.buffer = VK_NULL_HANDLE;
         return false;
     }
-    vkBindBufferMemory(dev.device, buf, mem, 0);
+    vkBindBufferMemory(dev.device, cap.buffer, cap.memory, 0);
+    ren.request_capture(cap.buffer);
+    return true;
+}
 
-    // A one-shot command buffer from a throwaway pool: the renderer's own pool and
-    // command buffers belong to the frame loop and must not be reused here.
-    VkCommandPoolCreateInfo pci{};
-    pci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    pci.queueFamilyIndex = dev.families.graphics;
-    pci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-    VkCommandPool pool = VK_NULL_HANDLE;
-    vkCreateCommandPool(dev.device, &pci, nullptr, &pool);
-
-    VkCommandBufferAllocateInfo cai{};
-    cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    cai.commandPool = pool;
-    cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    cai.commandBufferCount = 1;
-    VkCommandBuffer cmd = VK_NULL_HANDLE;
-    vkAllocateCommandBuffers(dev.device, &cai, &cmd);
-
-    VkCommandBufferBeginInfo cbi{};
-    cbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    cbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(cmd, &cbi);
-
-    // PRESENT_SRC -> TRANSFER_SRC, copy, and back. The image must be returned to
-    // PRESENT_SRC or the next present is undefined; on a --shot run we exit
-    // immediately, but leaving a layout wrong because "we are about to quit" is the
-    // kind of shortcut that breaks the day someone captures mid-session.
-    VkImageMemoryBarrier b{};
-    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    b.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    b.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
-    b.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    b.image = sc.images[idx];
-    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
-                         1, &b);
-
-    VkBufferImageCopy region{};
-    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.imageExtent = {w, h, 1};
-    vkCmdCopyImageToBuffer(cmd, sc.images[idx],
-                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1, &region);
-
-    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    b.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    b.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    b.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
-                         1, &b);
-    vkEndCommandBuffer(cmd);
-
-    VkSubmitInfo si{};
-    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    si.commandBufferCount = 1;
-    si.pCommandBuffers = &cmd;
-    vkQueueSubmit(dev.graphicsQueue, 1, &si, VK_NULL_HANDLE);
-    vkQueueWaitIdle(dev.graphicsQueue);
-
-    void* mapped = nullptr;
+bool capture_save(VulkanDevice& dev, VulkanRenderer& ren, Capture& cap,
+                  const char* path) {
     bool ok = false;
-    if (vkMapMemory(dev.device, mem, 0, bytes, 0, &mapped) == VK_SUCCESS) {
-        const std::uint8_t* src = static_cast<const std::uint8_t*>(mapped);
-        std::vector<std::uint8_t> rgb(static_cast<std::size_t>(w) * h * 3);
-        for (std::size_t i = 0, n = static_cast<std::size_t>(w) * h; i < n; ++i) {
-            const std::uint8_t c0 = src[i * 4 + 0];
-            const std::uint8_t c1 = src[i * 4 + 1];
-            const std::uint8_t c2 = src[i * 4 + 2];
-            rgb[i * 3 + 0] = bgr ? c2 : c0;
-            rgb[i * 3 + 1] = c1;
-            rgb[i * 3 + 2] = bgr ? c0 : c2;
+    if (cap.buffer != VK_NULL_HANDLE && ren.capture_done()) {
+        // vkDeviceWaitIdle rather than a fence: this runs once per process, and
+        // threading a fence handle out through the renderer's API buys nothing.
+        vkDeviceWaitIdle(dev.device);
+        const VkDeviceSize bytes =
+            static_cast<VkDeviceSize>(cap.width) * cap.height * 4;
+        void* mapped = nullptr;
+        if (vkMapMemory(dev.device, cap.memory, 0, bytes, 0, &mapped) == VK_SUCCESS) {
+            const std::uint8_t* src = static_cast<const std::uint8_t*>(mapped);
+            std::vector<std::uint8_t> rgb(
+                static_cast<std::size_t>(cap.width) * cap.height * 3);
+            for (std::size_t i = 0,
+                             n = static_cast<std::size_t>(cap.width) * cap.height;
+                 i < n; ++i) {
+                const std::uint8_t c0 = src[i * 4 + 0];
+                const std::uint8_t c1 = src[i * 4 + 1];
+                const std::uint8_t c2 = src[i * 4 + 2];
+                rgb[i * 3 + 0] = cap.bgr ? c2 : c0;
+                rgb[i * 3 + 1] = c1;
+                rgb[i * 3 + 2] = cap.bgr ? c0 : c2;
+            }
+            vkUnmapMemory(dev.device, cap.memory);
+            ok = write_png(path, cap.width, cap.height, rgb);
         }
-        vkUnmapMemory(dev.device, mem);
-        ok = write_png(path, w, h, rgb);
     }
-
-    vkDestroyCommandPool(dev.device, pool, nullptr);
-    vkFreeMemory(dev.device, mem, nullptr);
-    vkDestroyBuffer(dev.device, buf, nullptr);
+    ren.clear_capture();
+    if (cap.memory) vkFreeMemory(dev.device, cap.memory, nullptr);
+    if (cap.buffer) vkDestroyBuffer(dev.device, cap.buffer, nullptr);
+    cap = Capture{};
     return ok;
 }
 

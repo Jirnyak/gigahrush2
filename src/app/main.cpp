@@ -56,6 +56,7 @@
 #include "input/input.h"
 #include "render/body_pass.h"
 #include "render/cube_pass.h"
+#include "render/gpu_timer.h"
 #include "render/imgui_layer.h"
 #include "render/vk_device.h"
 #include "render/vk_renderer.h"
@@ -342,6 +343,7 @@ int main(int argc, char** argv) {
     int shotRide = 0;        // floors to descend before capturing
     int shotFramesSeen = 0;
     int shotRideDone = 0;
+    gpu::Capture shotCap{};
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "maze") genMode = WorldGenMode::Maze;
@@ -931,6 +933,26 @@ int main(int argc, char** argv) {
             ImGui::Text("%.1f FPS (%.2f ms)", frameDt > 0 ? 1.0f / frameDt : 0.0f,
                         frameDt * 1000.0f);
             ImGui::Text("cpu record: cube %.2f ms | body %.2f ms", cubeMs, bodyMs);
+            // Real GPU time, per pass, from timestamp queries — NOT the frame
+            // time above. The frame time is wall-clock around sim + crowd + HUD
+            // + the FIFO present wait, so it sits pinned at the vsync period
+            // whenever the machine keeps up and cannot see a change below the
+            // cap. This line can: it is the GPU's own clock across each pass's
+            // draws. Median of 31 frames, and two frames stale by construction
+            // (gpu_timer.h). Read it before claiming a shader change is free.
+            // Three decimals, not two: the body and HUD passes land in the single
+            // microseconds, and printing those as "0.00" reads as "not measured"
+            // — the exact false-confidence this whole module exists to remove.
+            if (renderer.timer.supported())
+                ImGui::Text("gpu: world %.3f | bodies %.3f | hud %.3f | "
+                            "frame %.3f ms",
+                            renderer.timer.pass_ms(gpu::GpuPass::World),
+                            renderer.timer.pass_ms(gpu::GpuPass::Bodies),
+                            renderer.timer.pass_ms(gpu::GpuPass::Hud),
+                            renderer.timer.frame_ms());
+            else
+                ImGui::TextUnformatted(
+                    "gpu: n/a (queue family writes no timestamps)");
             auto& tr = reg.get<Transform>(player);
             auto& ctl = reg.get<Controller>(player);
             auto& ga = reg.get<GravityAffected>(player);
@@ -1204,16 +1226,26 @@ int main(int argc, char** argv) {
             // toroidal image itself. Instance origins are absolute, which is what
             // makes the cube pass's instance cache possible.
             push.torus = vec4{kWorldExtent, kAoDirect, 0.0f, 0.0f};
+            // Each pass is bracketed by GPU timestamps as well as by the CPU
+            // clock: the two answer different questions and need opposite fixes.
+            // The CPU figure is time spent building instance data on this thread;
+            // the GPU figure is what the hardware then spent rasterising it.
             std::uint64_t t0 = SDL_GetPerformanceCounter();
+            renderer.timer.pass_begin(cmd, gpu::GpuPass::World);
             cubePass.record(cmd, renderer.currentFrame,
                             stack.layer(activeLayer), push);
+            renderer.timer.pass_end(cmd, gpu::GpuPass::World);
             std::uint64_t t1 = SDL_GetPerformanceCounter();
             // Draw the embodied population on the active layer (shared depth).
+            renderer.timer.pass_begin(cmd, gpu::GpuPass::Bodies);
             bodyPass.record(cmd, renderer.currentFrame, reg, activeLayer, push);
+            renderer.timer.pass_end(cmd, gpu::GpuPass::Bodies);
             std::uint64_t t2 = SDL_GetPerformanceCounter();
             cubeMs = static_cast<float>((t1 - t0) / freq * 1000.0);
             bodyMs = static_cast<float>((t2 - t1) / freq * 1000.0);
+            renderer.timer.pass_begin(cmd, gpu::GpuPass::Hud);
             hud.render(cmd);
+            renderer.timer.pass_end(cmd, gpu::GpuPass::Hud);
             renderer.end_frame(window);
 
             // --shot: count presented frames, then capture and quit. Counted here
@@ -1255,12 +1287,33 @@ int main(int argc, char** argv) {
                     }
                     ++shotRideDone;
                 }
-                if (shotFramesSeen >= shotFrames) {
-                    const bool ok = gpu::save_swapchain_png(device, renderer,
-                                                            shotPath);
+                // Two frames, because the copy is recorded INSIDE end_frame — the
+                // only window in which the swapchain image legally belongs to the
+                // application. Request on the target frame, save on the next.
+                // [screenshot.h]
+                if (shotFramesSeen == shotFrames) {
+                    gpu::capture_request(device, renderer, shotCap);
+                } else if (shotFramesSeen > shotFrames) {
+                    const bool ok =
+                        gpu::capture_save(device, renderer, shotCap, shotPath);
                     std::fprintf(stderr, "shot: %s -> %s (floor %d, %d frames)\n",
                                  ok ? "saved" : "FAILED", shotPath, currentFloor,
                                  shotFramesSeen);
+                    // The same GPU figures the HUD is showing, on stderr, so an
+                    // unattended capture leaves a machine-readable measurement
+                    // beside the pixels instead of only a number to squint at.
+                    if (renderer.timer.supported())
+                        std::fprintf(stderr,
+                                     "gpu-ms: world %.3f bodies %.3f hud %.3f "
+                                     "frame %.3f  (instances %u, bodies %u)\n",
+                                     renderer.timer.pass_ms(gpu::GpuPass::World),
+                                     renderer.timer.pass_ms(gpu::GpuPass::Bodies),
+                                     renderer.timer.pass_ms(gpu::GpuPass::Hud),
+                                     renderer.timer.frame_ms(),
+                                     cubePass.last_instance_count(),
+                                     bodyPass.last_instance_count());
+                    else
+                        std::fprintf(stderr, "gpu-ms: n/a (no timestamps)\n");
                     running = false;
                 }
             }

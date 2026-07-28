@@ -216,6 +216,17 @@ bool VulkanDevice::init(SDL_Window* window, bool enableValidation) {
         return false;
     }
 
+    // Timestamp width is a property of the QUEUE FAMILY, not of the device, so
+    // it has to be re-read for the family we actually settled on (gpu_timer.h).
+    {
+        std::uint32_t n = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(physical, &n, nullptr);
+        std::vector<VkQueueFamilyProperties> fams(n);
+        vkGetPhysicalDeviceQueueFamilyProperties(physical, &n, fams.data());
+        if (families.graphics < n)
+            graphicsTimestampValidBits = fams[families.graphics].timestampValidBits;
+    }
+
     float prio = 1.0f;
     std::vector<VkDeviceQueueCreateInfo> qcis;
     VkDeviceQueueCreateInfo qg{};

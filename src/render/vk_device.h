@@ -28,6 +28,13 @@ struct VulkanDevice {
     VkQueue presentQueue = VK_NULL_HANDLE;
     QueueFamilies families;
     VkPhysicalDeviceProperties props{};
+    // Timestamp counter width of the GRAPHICS family, from
+    // VkQueueFamilyProperties. 0 means that family cannot write timestamps at
+    // all, which is legal and happens on real drivers — it is the authoritative
+    // per-queue answer, where limits.timestampComputeAndGraphics only says
+    // whether every graphics+compute family agrees. Fewer than 64 bits is
+    // common; the high bits are undefined and must be masked off.
+    std::uint32_t graphicsTimestampValidBits = 0;
     bool validation = false;
 
     // window must have been created with SDL_WINDOW_VULKAN.

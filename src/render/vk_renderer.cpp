@@ -41,6 +41,9 @@ bool VulkanRenderer::init(VulkanDevice& d, SDL_Window* window) {
     if (!create_commands()) return false;
     if (!create_frame_sync()) return false;
     if (!create_present_semaphores()) return false;
+    // Deliberately not checked: missing timestamp support disables the readout,
+    // it does not stop the game booting (gpu_timer.h).
+    timer.init(d);
     return true;
 }
 
@@ -218,6 +221,14 @@ void VulkanRenderer::destroy_present_semaphores() {
 bool VulkanRenderer::acquire_frame(SDL_Window* window) {
     vkWaitForFences(dev->device, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
 
+    // The fence just waited on belongs to this slot's submission from
+    // kMaxFramesInFlight frames ago, so that frame's timestamps are now complete
+    // and readable with no additional stall. This is the only correct place for
+    // the readback: earlier would block on in-flight GPU work and inflate the
+    // very numbers being measured, and later would be after frame_begin() has
+    // reset the range. See GpuTimer::collect.
+    timer.collect(currentFrame);
+
     VkResult acq = vkAcquireNextImageKHR(
         dev->device, swapchain_->handle, UINT64_MAX,
         imageAvailable[currentFrame], VK_NULL_HANDLE, &currentImageIndex);
@@ -279,6 +290,9 @@ void VulkanRenderer::begin_render_pass(float r, float g, float b) {
 
 bool VulkanRenderer::begin_frame(SDL_Window* window, float r, float g, float b) {
     if (!acquire_frame(window)) return false;
+    // Between vkBeginCommandBuffer and vkCmdBeginRenderPass: vkCmdResetQueryPool
+    // is invalid inside a render pass instance.
+    timer.frame_begin(cmd[currentFrame], currentFrame);
     begin_render_pass(r, g, b);
     return true;
 }
@@ -286,6 +300,45 @@ bool VulkanRenderer::begin_frame(SDL_Window* window, float r, float g, float b) 
 bool VulkanRenderer::end_frame(SDL_Window* window) {
     VkCommandBuffer c = cmd[currentFrame];
     vkCmdEndRenderPass(c);
+
+    // A pending capture is recorded HERE: after the render pass, before submit and
+    // present. This is the only point at which the swapchain image is legally ours to
+    // read — handed to us by vkAcquireNextImageKHR and not yet handed back.
+    if (captureTo_ != VK_NULL_HANDLE) {
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        b.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = swapchain_->images[currentImageIndex];
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                             nullptr, 1, &b);
+
+        VkBufferImageCopy region{};
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageExtent = {swapchain_->extent.width, swapchain_->extent.height, 1};
+        vkCmdCopyImageToBuffer(c, swapchain_->images[currentImageIndex],
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, captureTo_, 1,
+                               &region);
+
+        // Back to PRESENT_SRC, or the present that immediately follows is undefined.
+        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        b.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        b.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        b.dstAccessMask = 0;
+        vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0,
+                             nullptr, 1, &b);
+        captureDone_ = true;
+    }
+
+    // Last command in the buffer: the whole-GPU-frame closing mark.
+    timer.frame_end(c);
     if (vkEndCommandBuffer(c) != VK_SUCCESS) return false;
 
     VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -299,6 +352,9 @@ bool VulkanRenderer::end_frame(SDL_Window* window) {
     si.signalSemaphoreCount = 1;
     si.pSignalSemaphores = &renderFinished[currentImageIndex];
     VK_TRY(vkQueueSubmit(dev->graphicsQueue, 1, &si, inFlight[currentFrame]));
+    // Only now are this slot's queries worth reading: before the submit the GPU
+    // has written nothing and their contents are undefined.
+    timer.frame_submitted();
 
     VkPresentInfoKHR pi{};
     pi.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -343,6 +399,7 @@ bool VulkanRenderer::recreate(SDL_Window* window) {
 void VulkanRenderer::destroy() {
     if (!dev) return;
     vkDeviceWaitIdle(dev->device);
+    timer.destroy();
     destroy_present_semaphores();
     for (int i = 0; i < kMaxFramesInFlight; ++i) {
         if (imageAvailable[i]) vkDestroySemaphore(dev->device, imageAvailable[i], nullptr);

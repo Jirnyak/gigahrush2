@@ -12,14 +12,15 @@
 #include <cstdint>
 #include <vector>
 
+#include "render/gpu_timer.h"
+#include "render/vk_common.h" // kMaxFramesInFlight
+
 struct SDL_Window;
 
 namespace giga::gpu {
 
 struct VulkanDevice;
 struct VulkanSwapchain;
-
-inline constexpr int kMaxFramesInFlight = 2;
 
 struct VulkanRenderer {
     // Non-owning; must outlive the renderer.
@@ -43,6 +44,13 @@ struct VulkanRenderer {
     std::uint32_t currentImageIndex = 0;
     bool framebufferResized = false;
 
+    // Real per-pass GPU time. The renderer owns it because both ends of it are
+    // frame-lifecycle events with hard placement rules: the query-pool reset must
+    // be recorded before the render pass opens, and the readback must sit exactly
+    // on the fence wait that recycles this slot's command buffer. Callers only
+    // bracket their own draws with timer.pass_begin/pass_end. See gpu_timer.h.
+    GpuTimer timer;
+
     bool init(VulkanDevice& dev, SDL_Window* window);
     void destroy();
 
@@ -54,12 +62,29 @@ struct VulkanRenderer {
 
     VkCommandBuffer current_cmd() const { return cmd[currentFrame]; }
 
+    // Ask the NEXT end_frame to copy the swapchain image into `dst` before presenting.
+    //
+    // **This exists because reading the image AFTER present is illegal.** The spec says
+    // use of a presentable image may occur only after it is returned by
+    // vkAcquireNextImageKHR, and vkQueuePresentKHR hands it back to the presentation
+    // engine. The first screenshot path copied it after present: correct output on this
+    // NVIDIA driver, undefined everywhere else, and MoltenVK — the owner's machine — is
+    // exactly where it would surface. Found by a validation-layer run, not by a crash.
+    //
+    // Recorded into the SAME command buffer as the draws, immediately after
+    // vkCmdEndRenderPass, which is the only window in which the image is ours.
+    void request_capture(VkBuffer dst) { captureTo_ = dst; captureDone_ = false; }
+    bool capture_done() const { return captureDone_; }
+    void clear_capture() { captureTo_ = VK_NULL_HANDLE; captureDone_ = false; }
+
     // Owned swapchain access for the cube pass (viewport, extent, format).
     const VulkanSwapchain& swap() const { return *swapchain_; }
     bool recreate(SDL_Window* window);
 
 private:
     VulkanSwapchain* swapchain_ = nullptr;
+    VkBuffer captureTo_ = VK_NULL_HANDLE;
+    bool captureDone_ = false;
     std::vector<VkFramebuffer> framebuffers_;
 
     bool create_render_pass();

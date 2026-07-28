@@ -15,6 +15,13 @@ compile_commands.json
 # ImGui runtime state
 imgui.ini
 
+# Screenshot proofs. `gigahrush2 --shot out.png` writes into the working
+# directory, so every capture the debug tool exists to produce (render/
+# screenshot.h) is a 2-4 MB file that `git add -A` would otherwise sweep in.
+# Safe as a blanket rule: this engine has no image assets and no image decoder
+# to read them with — surfaces are generated, not sampled (render.md).
+*.png
+
 # Claude Code personal/local settings (not shared)
 .claude/settings.local.json
 

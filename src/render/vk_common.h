@@ -10,6 +10,13 @@
 
 namespace giga::gpu {
 
+// Frame pipelining depth: how far the CPU may run ahead of the GPU. It lives in
+// the common header rather than in vk_renderer.h because the renderer, every
+// pass's per-frame buffers, and the GPU timer's query pool must all agree on it
+// — and gpu_timer.h cannot include vk_renderer.h, since the renderer owns a
+// timer by value.
+inline constexpr int kMaxFramesInFlight = 2;
+
 // Human-readable VkResult for logging. Covers the results we act on.
 const char* vk_result_str(VkResult r);
 
