@@ -72,6 +72,39 @@ mechanical enforcer: **if you introduce a throw, the macOS build catches it and
 the Windows build does not.** Treat a green Windows build as necessary, not
 sufficient.
 
+**Gap closed mechanically, 2026-07-28.** [../check_source_rules.cmake](../check_source_rules.cmake)
+is a text gate registered as the ctest `source_rules`. Seven rules, none needing a
+compiler, so **both hosts now reject a `throw` identically** and the sentence above
+is a statement about the compiler, no longer about the project's actual safety net:
+
+1. `throw` / `catch` / `try` — the no-exceptions rule MSVC cannot enforce.
+   `try_emplace` and `try_lock` deliberately do not match.
+2. `dynamic_cast` / `typeid` — no RTTI.
+3. GLM / Eigen includes — core ships its own math.
+4. SDL / Vulkan / ImGui / GLFW includes under `src/{world,sim,ecs,core}`.
+5. The same under `src/game`, which has to stay headless-testable.
+6. A UTF-8 BOM in any `src/`, `tests/` or `shaders/` file — `/utf-8` already pins
+   the source charset, so a BOM buys nothing and breaks `glslc`.
+7. CSV-to-generated-header count drift: `data/items.csv` rows vs `kItemCount`, and
+   `data/mobs.csv` rows vs the `kMobKindCount` static_assert. Editing a CSV without
+   re-running the generator is invisible to the compiler — this is what catches it.
+
+```bat
+cmake -P tools\check_source_rules.cmake
+```
+
+Verified 2026-07-28 on this tree: 79 files scanned, PASS. Each rule was also
+exercised against a seeded-violation scaffold and exits 1, including a check that
+the reported line number is correct inside a file containing Cyrillic literals —
+that one caught a real bug in the gate, since CMake's `file(STRINGS)` splits on
+non-ASCII bytes and had read `items.csv` as 2465 rows instead of 446. The reader is
+now built on `file(READ)`.
+
+A line carrying `giga-check: allow` is exempt, with the reason on the same line;
+grep that marker to audit every exemption. If `source_rules` stops appearing in the
+ctest listing, the `add_test()` wiring was lost to a sync — re-add it rather than
+assuming the rules are still enforced.
+
 ### 2. Warning flags
 
 `-Wall -Wextra -Wno-unused-parameter` maps to `/W4 /wd4100`. Both are applied by
@@ -106,13 +139,24 @@ Two flags were dropped as dead after grepping the tree: `_USE_MATH_DEFINES` (no
 unused conformance flag is a liability — `/Zc:preprocessor` has historically
 broken Windows SDK headers — so they go back only with a use to justify them.
 
-`/utf-8` buys codepage independence; it is **not** fixing a live defect. Corrected
-2026-07-28 after measurement: on a CP1251 host the emitted string bytes are
-byte-identical with and without the flag, no C4819 fires, and the tree carries no
-Cyrillic literals yet. The earlier claim here — that dropping it garbles in-game
-text with no build error — was wrong and had already propagated into `AGENTS.md`
-and the Claude path-scoped rule before it was measured. Do not restore it.
+`/utf-8` has been through both states, and the history matters because it is a good
+example of a claim that was false, then true, for different reasons:
 
-Where the flag does earn its keep is a DBCS host (CP932/936/950): there a
-multi-byte character inside a comment can swallow the following quote and break the
-parse. Keep the flag for that, and for reproducibility across developer machines.
+1. **Originally claimed load-bearing — wrong, and measured wrong.** The assertion
+   was that dropping it garbles in-game text with no build error. Measured on a
+   CP1251 host: the emitted string bytes are byte-identical with and without the
+   flag, no C4819 fires. The claim had already propagated into `AGENTS.md` and a
+   Claude path-scoped rule before anyone checked it.
+2. **Then genuinely load-bearing, from a different cause.** The content tables
+   landed: `src/game/mob_table.cpp` carries 69 Cyrillic monster names and
+   `src/game/item_table.cpp` carries 446 item names, all generated from the CSVs in
+   `data/`. The source charset now has to be *pinned* rather than inferred from
+   whatever codepage the host happens to have.
+
+So keep the flag — but for the current reason, not the original one. It also still
+earns its keep on a DBCS host (CP932/936/950), where a multi-byte character inside a
+comment can swallow the following quote and break the parse outright.
+
+The lesson worth keeping: the measurement was correct when taken and the conclusion
+expired anyway. A "measured, therefore settled" note needs the *thing measured*
+written down, not just the verdict.

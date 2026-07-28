@@ -1,0 +1,135 @@
+// Global item table — one POD row per item kind, shared by every floor.
+//
+// Like the mob table ([monsters.md]) this is engine-wide data: a floor never forks
+// the catalog, it only shifts which rows are likely to appear ([items.md]). Adding
+// an item is one row in `data/items.csv` plus `python tools/gen_item_table.py`.
+//
+// **446 items**, ported from the TypeScript reference — not the ~434 that both
+// `items.md` and the reference's own `desdoc.md` claim, and not the 253 in its
+// `balance.md`. 446 is what `Object.keys(ITEMS)` actually yields once spreads and
+// computed keys are resolved, and it is the number the reference's own README
+// agrees with.
+//
+// This table is deliberately LEAN. The reference's `ItemDef` carries ~40 fields;
+// only the ones with a live consumer are ported, because a column nothing reads is
+// a column that silently rots. Explicitly deferred, with their reason:
+//
+//   craft[9] + station + tier   crafting is not implemented
+//   ammo_id / use_grant_id      needs interned string ids; nothing fires yet
+//   durability (17 items)       no wear system
+//   science/contraband/deceptive (2/5/2 items)  no faction or trade system
+//   tags (465 distinct strings) no consumer; the two-tier flattening plan is in
+//                               the research spec when one appears
+//   en names, descriptions      no localization or inspect UI
+//
+// Also worth knowing, from the port: **there is no weight field in the reference at
+// all.** No mass, no encumbrance, no carry capacity. Inventory is purely slots (64)
+// and stacks. Its `gameplay.md` names weight in one sentence and its `balance.md`
+// explicitly rejects it — "scarcity держится доступностью, а не весом". Do not add
+// one on the assumption it was lost in translation.
+#pragma once
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <type_traits>
+
+#include "game/mob_table.h"  // RoomBit — items and mobs share the room taxonomy
+
+namespace giga::game {
+
+// Item handle. **1-based**, because `ItemSlot::item == 0` already means "empty
+// slot" ([inventory.h]) — so id N is table row N-1 and 0 can never be an item.
+using ItemId = std::uint16_t;
+inline constexpr ItemId kInvalidItem = 0;
+
+inline constexpr std::size_t kItemCount = 446;
+
+enum class ItemCategory : std::uint8_t {
+    Misc = 0,   // 268
+    Weapon,     //  88
+    Food,       //  22
+    Medicine,   //  20
+    Ammo,       //  17
+    Tool,       //  17
+    Drink,      //   9
+    Key,        //   3
+    Note,       //   2
+    Count
+};
+
+enum class EquipSlot : std::uint8_t { None = 0, Weapon, Armor, Tool, Count };
+
+// What using an item does. 387 of 446 do nothing — the reference implements a use
+// action on only 59. Names map 1:1 onto its closures.
+enum class UseEffect : std::uint8_t {
+    None = 0,
+    Heal, HealPsi, Feed, FeedPsi, FeedRisky, Drink, DrinkStim,
+    Painkiller, Antiemetic, SleepingPills, PsiSurge, TechnicalSpirit,
+    Unpack, UnsealSample, RedeemCoupon,
+    Count
+};
+
+// Armour channels an item can resist. Must equal DamageChannel::Count in
+// combat.h; asserted in item_table.cpp, which includes both. Declared here rather
+// than including combat.h so this header stays free of the pool/event-bus weight.
+inline constexpr std::size_t kItemResistChannels = 5;
+
+// POD, trivially copyable, 20 bytes, no interior padding. The whole table is
+// 8,920 B — permanently cache-resident, like the mob table.
+struct ItemDef {
+    std::int32_t value;         //  0  roubles, 0 .. 500,000
+    std::uint16_t spawnWeight;  //  4  milli-weight, 0..50,000; 0 = never random
+    std::uint16_t roomMask;     //  6  RoomBit bitmask — where it is found
+    std::int16_t useA;          //  8  primary use magnitude, signed (-6 .. 60)
+    std::uint8_t category;      // 10  ItemCategory
+    std::uint8_t equipSlot;     // 11  EquipSlot
+    std::uint8_t stackMax;      // 12  1..255
+    std::uint8_t useEffect;     // 13  UseEffect
+    std::int8_t resist[kItemResistChannels];  // 14..18, armour; 441 are zero
+    std::uint8_t pad_;          // 19
+};
+static_assert(sizeof(ItemDef) == 20, "ItemDef must stay a tight 20-byte row");
+static_assert(alignof(ItemDef) == 4);
+static_assert(std::is_trivially_copyable_v<ItemDef>);
+
+// Generated from data/items.csv by tools/gen_item_table.py. Row N is item id N+1.
+extern const std::array<ItemDef, kItemCount> kItemTable;
+
+// Russian display names, parallel to kItemTable. Kept out of ItemDef so the row
+// stays pointer-free and trivially serializable.
+extern const std::array<const char*, kItemCount> kItemNames;
+
+// Item ids are 1-based; these are the only sanctioned way to index the table.
+inline bool item_valid(ItemId id) {
+    return id != kInvalidItem && id <= kItemCount;
+}
+inline const ItemDef& item_def(ItemId id) {
+    return kItemTable[static_cast<std::size_t>(id) - 1];
+}
+inline const char* item_name(ItemId id) {
+    return kItemNames[static_cast<std::size_t>(id) - 1];
+}
+
+// ---------------------------------------------------------------------------
+// Depth gating — the greed loop, as data
+// ---------------------------------------------------------------------------
+// Value is gated by depth, and NOT with a hard cut: the reference maps |floor| to
+// an economy band, each band to a value cap, and then decays an item's spawn
+// weight exponentially once its value exceeds that cap. So a deep floor *can*
+// cough up something absurd, just rarely — which is the entire greed loop. A hard
+// cut would replace "worth the risk" with "not on this floor".
+
+inline constexpr std::size_t kEconomyBands = 5;   // E0..E4
+inline constexpr std::int32_t kLootValueCap[kEconomyBands] = {
+    90, 450, 4000, 80000, 250000
+};
+
+// Economy band for a floor: driven by |floor|, like every other depth budget.
+std::uint8_t economy_band(int floorZ);
+
+// Spawn weight of `id` on a floor, after depth gating. Returns 0 when the item
+// cannot appear there at all (weight 0, or wrong room).
+std::uint32_t item_weight_on_floor(ItemId id, int floorZ, std::uint16_t roomMask);
+
+} // namespace giga::game

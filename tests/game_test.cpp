@@ -17,6 +17,8 @@
 #include "game/faction.h"
 #include "game/floor_spec.h"
 #include "game/mob_table.h"
+#include "game/item_table.h"
+#include "game/loot.h"
 #include "game/mob_spawn.h"
 #include "game/floor_stream.h"
 #include "game/inventory.h"
@@ -1472,6 +1474,213 @@ static void test_melee_cooldown_and_reach() {
     CHECK(later == 1);
 }
 
+// ---- Item table + the greed loop -------------------------------------------
+
+static void test_item_table() {
+    CHECK(kItemTable.size() == kItemCount);
+    CHECK(kItemNames.size() == kItemCount);
+    CHECK(kItemCount == 446);          // not the ~434 the docs claim
+
+    // Ids are 1-based because ItemSlot::item == 0 already means "empty slot".
+    CHECK(!item_valid(kInvalidItem));
+    CHECK(item_valid(1));
+    CHECK(item_valid(static_cast<ItemId>(kItemCount)));
+    CHECK(!item_valid(static_cast<ItemId>(kItemCount + 1)));
+
+    int weapons = 0, healers = 0, armoured = 0, spawnable = 0;
+    for (std::size_t i = 0; i < kItemCount; ++i) {
+        const ItemId id = static_cast<ItemId>(i + 1);
+        const ItemDef& d = item_def(id);
+
+        CHECK(item_name(id) != nullptr && item_name(id)[0] != '\0');
+        CHECK(d.category < static_cast<std::uint8_t>(ItemCategory::Count));
+        CHECK(d.equipSlot < static_cast<std::uint8_t>(EquipSlot::Count));
+        CHECK(d.useEffect < static_cast<std::uint8_t>(UseEffect::Count));
+        CHECK(d.stackMax >= 1);
+        CHECK(d.value >= 0 && d.value <= 500000);
+
+        if (d.category == static_cast<std::uint8_t>(ItemCategory::Weapon)) ++weapons;
+        if (d.useEffect == static_cast<std::uint8_t>(UseEffect::Heal) && d.useA > 0)
+            ++healers;
+        for (std::size_t c = 0; c < kItemResistChannels; ++c)
+            if (d.resist[c] != 0) { ++armoured; break; }
+        if (d.spawnWeight > 0) ++spawnable;
+    }
+    // Census pins, so a truncated or duplicated regenerate fails here rather than
+    // passing every per-row check.
+    CHECK(weapons == 88);
+    CHECK(healers == 12);
+    CHECK(armoured == 5);
+    CHECK(spawnable == 355);
+}
+
+// Depth gating is the greed loop: value rises with depth, and NOT via a hard cut.
+static void test_economy_bands_gate_by_depth() {
+    CHECK(economy_band(0) == 0);
+    CHECK(economy_band(3) == 0);
+    CHECK(economy_band(-3) == 0);      // symmetric: driven by |floor|
+    CHECK(economy_band(4) == 1);
+    CHECK(economy_band(-40) == 4);
+    CHECK(economy_band(127) == 4);     // saturates, never overruns the array
+    for (int z = -60; z <= 60; ++z) {
+        CHECK(economy_band(z) < kEconomyBands);
+        CHECK(economy_band(z) == economy_band(-z));
+    }
+
+    // Find a genuinely expensive spawnable item and show it is rarer shallow than
+    // deep — that is the whole mechanic.
+    ItemId pricey = kInvalidItem;
+    for (std::size_t i = 0; i < kItemCount; ++i) {
+        const ItemId id = static_cast<ItemId>(i + 1);
+        const ItemDef& d = item_def(id);
+        if (d.spawnWeight > 0 && d.value > 5000) { pricey = id; break; }
+    }
+    CHECK(pricey != kInvalidItem);
+    const std::uint32_t shallow = item_weight_on_floor(pricey, 0, 0);
+    const std::uint32_t deep = item_weight_on_floor(pricey, 50, 0);
+    CHECK(deep > shallow);
+    // Decay, not a cut: at its own band the weight is exactly the authored one.
+    CHECK(deep == item_def(pricey).spawnWeight);
+
+    // A cheap item is unaffected by depth — the gate only bites above the cap.
+    ItemId cheap = kInvalidItem;
+    for (std::size_t i = 0; i < kItemCount; ++i) {
+        const ItemId id = static_cast<ItemId>(i + 1);
+        if (item_def(id).spawnWeight > 0 && item_def(id).value <= 50) {
+            cheap = id;
+            break;
+        }
+    }
+    CHECK(cheap != kInvalidItem);
+    CHECK(item_weight_on_floor(cheap, 0, 0) == item_def(cheap).spawnWeight);
+    CHECK(item_weight_on_floor(cheap, 50, 0) == item_def(cheap).spawnWeight);
+
+    // Weight 0 means never random, whatever the floor.
+    for (std::size_t i = 0; i < kItemCount; ++i) {
+        const ItemId id = static_cast<ItemId>(i + 1);
+        if (item_def(id).spawnWeight == 0)
+            CHECK(item_weight_on_floor(id, 30, 0) == 0);
+    }
+    CHECK(item_weight_on_floor(kInvalidItem, 0, 0) == 0);
+}
+
+// Loot must drop in the window between "died" and "destroyed" — the reason the
+// Dead tag exists at all. The reference's P0 was culling an entity before its loot
+// hook ran; this asserts the ordering that makes that impossible.
+static void test_loot_drops_before_the_corpse_is_gone() {
+    World w;
+    generate_floor(w, 0, floor_spec(FloorKind::Residential), 5u);
+    NpcPool pool;
+    pool.init();
+    Registry reg;
+    EventBus bus;
+    bus.init();
+
+    NpcId pid = pool.spawn();
+    pool.hp(pid) = 500;
+    pool.max_hp(pid) = 500;
+    Entity player = embody_as_player(reg, pool, pid, 0);
+    const vec3 ppos = reg.get<Transform>(player).pos;
+
+    // A Boss dies right next to the player: 5 rolls at 100% means it always pays.
+    Entity boss = reg.create();
+    Transform bt;
+    bt.pos = ppos;
+    bt.layer = 0;
+    reg.emplace<Transform>(boss, bt);
+    reg.emplace<MobRef>(boss,
+                        MobRef{static_cast<std::uint8_t>(MobKind::Mancobus), 1, 5, 5});
+    CHECK(kMobTable[static_cast<std::uint8_t>(MobKind::Mancobus)].tier ==
+          static_cast<std::uint8_t>(MobTier::Boss));
+
+    DamageResult r = apply_damage(reg, pool, boss, 999, DamageChannel::Kinetic,
+                                  player);
+    CHECK(r.lethal);
+    CHECK(reg.valid(boss));       // tagged, not gone — this is the window
+
+    const std::uint32_t dropped = loot_dead_mobs(reg, 0, /*floor=*/0, 1234u);
+    CHECK(dropped > 0);           // a boss always pays out
+
+    // Only NOW is the corpse destroyed, and the loot outlives it.
+    CHECK(finalize_deaths(reg, pool, bus, 1u) == 1);
+    CHECK(!reg.valid(boss));
+    std::uint32_t onFloor = 0;
+    for (auto e : reg.view<const Pickup>()) { (void)e; ++onFloor; }
+    CHECK(onFloor == dropped);
+
+    // Sweeping it up moves value into the pool row, which is canonical and folds
+    // back on floor exit.
+    CHECK(inventory_value(pool.inventory(pid)) == 0);
+    const std::int32_t gained = pickup_step(reg, pool, bus, 0, 2u);
+    CHECK(gained >= 0);
+    CHECK(inventory_value(pool.inventory(pid)) == gained);
+    // Everything in reach is gone from the floor.
+    std::uint32_t left = 0;
+    for (auto e : reg.view<const Pickup>()) { (void)e; ++left; }
+    CHECK(left < dropped || dropped == 0);
+}
+
+// Healing: use the smallest item that covers the wound, and report what landed.
+static void test_heal_picks_the_right_item() {
+    NpcPool pool;
+    pool.init();
+    Registry reg;
+    EventBus bus;
+    bus.init();
+
+    NpcId pid = pool.spawn();
+    pool.max_hp(pid) = 100;
+    pool.hp(pid) = 100;
+    embody_as_player(reg, pool, pid, 0);
+
+    // Collect a small and a large healer straight from the table.
+    ItemId small = kInvalidItem, large = kInvalidItem;
+    std::int16_t smallAmt = 0, largeAmt = 0;
+    for (std::size_t i = 0; i < kItemCount; ++i) {
+        const ItemId id = static_cast<ItemId>(i + 1);
+        const ItemDef& d = item_def(id);
+        if (d.useEffect != static_cast<std::uint8_t>(UseEffect::Heal)) continue;
+        if (d.useA <= 0) continue;
+        if (small == kInvalidItem || d.useA < smallAmt) {
+            small = id;
+            smallAmt = static_cast<std::int16_t>(d.useA);
+        }
+        if (large == kInvalidItem || d.useA > largeAmt) {
+            large = id;
+            largeAmt = static_cast<std::int16_t>(d.useA);
+        }
+    }
+    CHECK(small != kInvalidItem && large != kInvalidItem && largeAmt > smallAmt);
+
+    // At full health nothing is spent — a bandage is not burned on a scratch that
+    // does not exist.
+    Inventory& inv = pool.inventory(pid);
+    inv.slots[0] = ItemSlot{small, 1};
+    inv.slots[1] = ItemSlot{large, 1};
+    CHECK(use_best_heal(reg, pool, bus, 0, 1u) == 0);
+    CHECK(inv.slots[0].item == small && inv.slots[1].item == large);
+
+    // A small wound spends the small item, and the return value is what LANDED,
+    // clamped to the wound rather than the item's label.
+    pool.hp(pid) = static_cast<std::int16_t>(100 - smallAmt);
+    const std::int16_t got = use_best_heal(reg, pool, bus, 0, 2u);
+    CHECK(got == smallAmt);
+    CHECK(pool.hp(pid) == 100);
+    CHECK(inv.slots[0].item == kInvalidItem);   // consumed
+    CHECK(inv.slots[1].item == large);          // the big one was NOT wasted
+
+    // Overheal is clamped and reported honestly.
+    pool.hp(pid) = 99;
+    const std::int16_t over = use_best_heal(reg, pool, bus, 0, 3u);
+    CHECK(over == 1);                 // not largeAmt
+    CHECK(pool.hp(pid) == 100);
+    CHECK(pool.hp(pid) <= pool.max_hp(pid));
+
+    // Nothing left to heal with.
+    pool.hp(pid) = 50;
+    CHECK(use_best_heal(reg, pool, bus, 0, 4u) == 0);
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -1506,6 +1715,10 @@ int main() {
     test_damage_reports_applied_not_raw();
     test_death_goes_through_one_finalizer();
     test_melee_cooldown_and_reach();
+    test_item_table();
+    test_economy_bands_gate_by_depth();
+    test_loot_drops_before_the_corpse_is_gone();
+    test_heal_picks_the_right_item();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

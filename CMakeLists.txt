@@ -45,10 +45,13 @@ if(NOT MSVC)
         add_link_options(-fsanitize=address,undefined)
     endif()
 else()
-    # /utf-8 makes the build independent of the host's ANSI codepage rather than
-    # fixing anything today (the tree has no Cyrillic literals yet — the content
-    # tables will). On a DBCS locale a multi-byte comment character can swallow
-    # the following quote and break the parse; this removes that class of bug.
+    # /utf-8 is load-bearing now, not merely defensive: src/game/mob_table.cpp and
+    # item_table.cpp are generated with Cyrillic name literals, so the source
+    # charset has to be pinned rather than inferred from the host's ANSI codepage.
+    # (It started as insurance — measured, the emitted bytes were byte-identical
+    # with and without it — and became necessary the moment the content tables
+    # landed.) On a DBCS locale a multi-byte character can also swallow the
+    # following quote and break the parse outright.
     # NOMINMAX is load-bearing: <SDL3/SDL.h> can reach <windows.h>, whose
     # min/max macros collide with the std::min/max/clamp used in core/math.h,
     # sim/fluid.cpp, render/vk_swapchain.cpp and input/input.cpp.
@@ -243,6 +246,18 @@ if(GIGA_BUILD_TESTS)
     target_link_libraries(game_test PRIVATE giga_game)
     giga_target_flags(game_test OFF)
     add_test(NAME game_test COMMAND game_test)
+
+    # Text gate for the AGENTS.md rules that no compiler enforces on every host.
+    # The load-bearing one is no-exceptions: MSVC's STL is unsupported under
+    # _HAS_EXCEPTIONS=0, so Windows compiles /EHsc and a `throw` would fail only
+    # the macOS build — the defect would ship to the other host. This makes both
+    # hosts reject it. Also covers no-RTTI, the GLM/Eigen ban, and the layering
+    # invariant that giga_core and giga_game never include SDL/Vulkan/ImGui.
+    # Rationale, known limits and the `giga-check: allow` escape hatch live in
+    # tools/check_source_rules.cmake. Needs no build, so it is cheap and runs first.
+    add_test(NAME source_rules
+        COMMAND ${CMAKE_COMMAND} -DGIGA_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_source_rules.cmake)
 
     # Honest crowd benchmark: real floor + 16k wandering agents + real physics.
     # An executable, not a ctest (it measures, it doesn't pass/fail). Runs at the

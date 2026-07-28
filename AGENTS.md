@@ -56,8 +56,14 @@ each one**. Correctness first; speed is a side effect of not backtracking.
   unsupported under `_HAS_EXCEPTIONS=0`, so Windows compiles `/EHsc`; only RTTI
   ports across (`/GR-`). On MSVC the no-exceptions rule is code discipline, not a
   compiler gate: add a `throw` and the macOS build catches it while Windows stays
-  green. A green Windows build is necessary, never sufficient. Full deviation
-  list: [tools/win/README.md](tools/win/README.md).
+  green. A green Windows build is necessary, never sufficient for the *compiler*.
+  **Gated mechanically since 2026-07-28** by
+  [tools/check_source_rules.cmake](tools/check_source_rules.cmake), the ctest
+  `source_rules`: a text gate that needs no compiler and so rejects a `throw` on
+  both hosts identically. It also covers no-RTTI, the GLM/Eigen ban, and the
+  layering rule below. Run it standalone with
+  `cmake -P tools/check_source_rules.cmake`. Full platform deviation list:
+  [tools/win/README.md](tools/win/README.md).
 - **Core stays dependency-free.** `giga_core` (`src/world`, `src/sim`, `src/ecs`)
   must not include SDL, Vulkan, or ImGui. It links only EnTT and ships its own
   math ([src/core/math.h](src/core/math.h)) — no GLM/Eigen. This is what keeps
@@ -89,6 +95,17 @@ each one**. Correctness first; speed is a side effect of not backtracking.
 - **Data-driven by default.** Adding a cell type / field / monster / loot entry
   / floor module must be one new table entry or one registered field — never an
   `if` chain baked into the engine.
+- **The content tables are GENERATED — the CSV is the source.**
+  `src/game/item_table.cpp` comes from `data/items.csv` via
+  `tools/gen_item_table.py`, and `src/game/mob_table.cpp` from `data/mobs.csv` via
+  `tools/gen_mob_table.py`. Edit the CSV and re-run the generator. Never hand-edit
+  the generated `.cpp`: GLOB picks it up and compiles it, so the edit looks like it
+  worked right up until the next regeneration silently discards it. The reverse
+  failure — CSV edited, generator not re-run — is invisible to the compiler, so the
+  `source_rules` ctest compares each CSV's row count against the count the
+  generated header declares (`kItemCount`, the `kMobKindCount` static_assert) and
+  fails on drift. These files are also why `/utf-8` is load-bearing on MSVC: they
+  carry Cyrillic name literals.
 - **The player is not special.** It is simply the entity that currently holds a
   `CameraTag` + `Controller`. Never hardcode a player singleton; systems operate
   on whatever entity owns the components.

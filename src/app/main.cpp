@@ -36,6 +36,7 @@
 #include "game/floor_stream.h"
 #include "game/mob_spawn.h"
 #include "game/combat.h"
+#include "game/loot.h"
 #include "game/event_bus.h"
 #include "game/wander.h"
 #include "game/npc_pool.h"
@@ -395,6 +396,9 @@ int main(int argc, char** argv) {
     std::uint32_t deaths = 0;
     std::uint32_t kills = 0;       // carried across possession
     bool attackHeld = false;
+    bool healWanted = false;       // set by H, consumed by one sim step
+    std::int32_t loot = 0;         // roubles swept up this run
+    std::int32_t healed = 0;
     int fluidStepEvery = 4; // sim steps between fluid updates
     int fluidCounter = 0;
 
@@ -468,6 +472,10 @@ int main(int argc, char** argv) {
             // the cursor and the game is frozen.
             if (!paused) {
                 // Hold right mouse button to look, release to free the cursor.
+                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
+                    e.key.scancode == SDL_SCANCODE_H) {
+                    healWanted = true;
+                }
                 if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
                     e.button.button == SDL_BUTTON_LEFT) {
                     attackHeld = true;
@@ -519,9 +527,21 @@ int main(int argc, char** argv) {
                                         attackHeld && !paused, simTick);
                 meleeHits += game::mob_melee_step(reg, pool, bus, activeLayer,
                                                   kSimDt, simTick);
+                // Corpses pay out BEFORE they are destroyed. The gap between
+                // "hp hit zero" and "gone" is precisely what the Dead tag exists
+                // to create (combat.h defect 2) — the reference's P0 was culling
+                // an entity before its loot hook ran.
+                game::loot_dead_mobs(reg, activeLayer, currentFloor,
+                                     static_cast<std::uint32_t>(simTick));
                 // ONE death point per tick, after everything that can deal damage
                 // (combat.h). Nothing else in the tree destroys a damaged entity.
                 deaths += game::finalize_deaths(reg, pool, bus, simTick);
+                loot += game::pickup_step(reg, pool, bus, activeLayer, simTick);
+                if (healWanted) {
+                    healed += game::use_best_heal(reg, pool, bus, activeLayer,
+                                                  simTick);
+                    healWanted = false;
+                }
                 // The player is not exempt: if it died it no longer exists, and
                 // everything below reads through it. Take another body now.
                 if (!reg.valid(player)) {
@@ -579,6 +599,21 @@ int main(int argc, char** argv) {
                     kills = pm->kills;
             ImGui::Text("hits taken: %u | deaths: %u | kills: %u", meleeHits,
                         deaths, kills);
+            {
+                std::int32_t carried = 0;
+                int slots = 0;
+                if (reg.valid(player))
+                    if (const auto* nr = reg.try_get<game::NpcRef>(player))
+                        if (pool.valid(nr->id)) {
+                            const game::Inventory& inv = pool.inventory(nr->id);
+                            carried = game::inventory_value(inv);
+                            for (const auto& sl : inv.slots)
+                                if (sl.item != 0) ++slots;
+                        }
+                ImGui::Text("loot %d rub (%d/%d slots) | healed %d | band E%u",
+                            carried, slots, game::kInvSlots, healed,
+                            game::economy_band(currentFloor));
+            }
             ImGui::Text("mobs: %u live on this floor",
                         game::count_layer_mobs(reg, activeLayer));
             ImGui::Text("bodies drawn: %u  (pop %u alive / %u slots)",
