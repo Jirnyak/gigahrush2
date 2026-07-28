@@ -83,6 +83,50 @@ draw it at fixed absolute coordinates. Every present/future pass (transparent
 props, particles, procedural detail) must place geometry via the same
 minimal-image rule so the camera sits at the centre of a full, seamless shell.
 
+## Surfaces are generated, not sampled
+
+There is no texture in this engine and no image decoder to load one — the
+dependency set is EnTT, Dear ImGui, SDL3 and Vulkan, nothing else. Surface detail
+in [cube.frag](shaders/cube.frag) is **procedural**, and that is a design choice
+rather than a workaround:
+
+- A khrushchevka is up to **255 floors** deep. A fixed atlas gives every floor the
+  same six surfaces; a position-hashed generator gives every *apartment* its own.
+  That is the difference between a stack of floors and one floor copy-pasted.
+- Wallpaper, parquet, tile and linoleum are parametric surfaces — grids plus noise
+  — which is exactly what procedural generation is good at.
+- It costs only ALU, on a GPU [performance.md](performance.md) declares unlimited,
+  and touches no buffer, no descriptor and no CPU work. **Measured: no frame-time
+  change at all** (16.6 ms before and after, 717k instances).
+- Zero licensing surface. Harvesting from another project on the same machine was
+  evaluated and rejected: an inventory of 1,784 images found **zero** wallpaper,
+  parquet, linoleum, tile, plaster, brick or panel-seam concrete — it was a
+  deep-sea game. Only its CC0 corroded-metal set is worth taking later, because
+  real rust has long-range spatial correlation that FBM reproduces badly.
+
+**UVs come from the dominant face axis, with no UV attribute.** Cube faces are
+axis-aligned, so the two world coordinates that are *not* the face normal are
+already a correct, non-stretching parameterisation — and because it is world-space
+it stays continuous across neighbouring cells instead of restarting per cube.
+Normalised so one unit is one cell, which is what lets the seam pattern land
+exactly on cell boundaries.
+
+Two layers, both brightness-only so a surface keeps its cell-type hue and the
+faction/tier palette contract (see [monsters.md](monsters.md)) is untouched:
+
+| Layer | What it does | Frequency |
+|---|---|---|
+| **grain** | two octaves of value noise — plaster, grit, wear | ~7 cm and ~2 cm |
+| **seam** | darkened recess at cell boundaries — precast panel joins | every 2 m |
+
+The seams are the load-bearing half: they make the 2 m grid, and therefore the
+*scale of the building*, legible. Without them a corridor is an untextured tube.
+
+Frequency is not cosmetic here. The first version used one cycle per 25 cm and
+read as soft blotches rather than a material at the range the headlamp lights.
+Hashing is integer-lattice, deliberately **not** the `sin`-based hash, which has
+precision artefacts on some drivers that show up as a diagonal moiré.
+
 ## Shading model — the light is the one you carry
 
 The floors are **windowless interiors**. There is no sun down here, so the model

@@ -37,12 +37,87 @@ layout(location = 0) out vec4 outColor;
 
 const float kGamma = 2.2;
 
+// ---------------------------------------------------------------------------
+// Procedural surface detail
+// ---------------------------------------------------------------------------
+// Generated, not sampled: there is no image decoder in the tree (deps are only
+// EnTT/ImGui/SDL3/Vulkan) and no texture to sample even if there were. More to
+// the point, a khrushchevka is up to 255 floors deep — a fixed atlas would give
+// every one of them the same six surfaces, while a position-hashed generator
+// gives every *apartment* its own. render.md:26 sanctions exactly this.
+//
+// Costs nothing but ALU on a GPU that performance.md declares unlimited, and
+// touches no buffer, no descriptor, and no CPU work.
+
+float hash21(vec2 p) {
+    // Integer-lattice value hash. Deliberately not the sin-based one: that has
+    // known precision artefacts on some drivers and shows as a diagonal moire.
+    vec3 q = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+    q += dot(q, q.yzx + 33.33);
+    return fract((q.x + q.y) * q.z);
+}
+
+// Value noise with smooth interpolation.
+float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);           // smoothstep weights
+    float a = hash21(i);
+    float b = hash21(i + vec2(1.0, 0.0));
+    float c = hash21(i + vec2(0.0, 1.0));
+    float d = hash21(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// Frequencies are in CELLS (uv is normalised so 1 unit == one 2 m cell), and they
+// are high on purpose. The first pass used 8 and 31, which is one cycle per 25 cm
+// — at the range the headlamp actually lights, that reads as soft blotches rather
+// than a material. 26 and 97 put the base grain at roughly one cycle per 7 cm and
+// the detail octave near 2 cm, which is plaster and grit.
+//
+// Two octaves only: a third would sit below a pixel at any distance the headlamp
+// still reaches, so it would buy nothing but fill rate and aliasing.
+float grain(vec2 uv) {
+    return vnoise(uv * 26.0) * 0.62 + vnoise(uv * 97.0) * 0.38;
+}
+
+// Distance to the nearest cell boundary along either axis, in cell units. This
+// is what draws the precast panel seams that make the 2 m grid — and therefore
+// the scale of the building — legible.
+float seam(vec2 uv) {
+    vec2 e = abs(fract(uv) - 0.5);
+    float m = max(e.x, e.y);
+    // 0 in the middle of a panel, 1 hard against a seam.
+    return smoothstep(0.44, 0.5, m);
+}
+
 void main() {
     // Instance colours are authored as display-referred values; linearise once
     // so the lighting arithmetic below is physically sane.
     vec3 albedo = pow(vColor, vec3(kGamma));
 
     vec3 n = normalize(vNormal);
+
+    // Triplanar-by-dominant-axis UV: the cube faces are axis-aligned, so the two
+    // world coordinates that are NOT the face normal are already a correct,
+    // seamless, non-stretching parameterisation. No UV attribute needed, and it
+    // stays continuous across neighbouring cells because it is world-space.
+    vec3 aw = abs(n);
+    vec2 uv = aw.z > 0.5 ? vWorldPos.xy
+            : (aw.x > 0.5 ? vWorldPos.yz : vWorldPos.xz);
+    uv /= 2.0;                              // kCellSize: one unit == one cell
+
+    // Grain modulates brightness only, so a surface keeps its cell-type hue and
+    // the faction/tier palette contract is untouched.
+    float g = grain(uv);
+    float s = seam(uv);
+    // Floors get finer, busier detail than walls (scuffs, grit); walls read as
+    // painted plaster over panel joins.
+    float amount = aw.z > 0.5 ? 0.26 : 0.17;
+    albedo *= (1.0 - amount * 0.5) + amount * g;
+    // Seams are recessed grout, not painted lines: darken and let the lighting
+    // below do the rest.
+    albedo *= 1.0 - 0.28 * s;
 
     // Distance is computed per-fragment, not interpolated from the vertex stage.
     // Interpolating a nonlinear function across a 2 m face that fills the screen
