@@ -21,6 +21,7 @@
 
 #include <cstdint>
 
+#include "core/tick.h"
 #include "ecs/registry.h"
 #include "game/npc_pool.h"
 #include "world/level_stack.h"
@@ -45,6 +46,18 @@ static_assert(sizeof(WanderTarget) == 3,
 // body needs and still costs an eighth of the naive sweep.
 inline constexpr std::uint32_t kWanderPeriod = 8;
 
+// Sight-aggro range, metres. Inside this a mob drops navigation and closes on the
+// camera holder directly. 20 m is a corridor-and-a-half: far enough that a floor
+// feels hunted, near enough that the whole roster does not converge at once. From
+// the reference's `MONSTER_DETECT = 20`.
+//
+// Promoted out of wander.cpp's anonymous namespace because [investigate.h] needs the same
+// number to answer "is this mob already coming for you, or is it free to
+// investigate a sound". A value two systems must agree on cannot live private to
+// one of them — a copied 20.0f is a divergence waiting for one of the two to be
+// tuned.
+inline constexpr float kAggroRadius = 20.0f;
+
 // Sim ticks a pack holds one shared destination before agreeing on another.
 //
 // This is the whole cohesion mechanism, and that it is a TIME QUANTUM rather than a
@@ -60,11 +73,17 @@ inline constexpr std::uint32_t kWanderPeriod = 8;
 // leader, no shared mutable state, no message passing, no path — and no write to
 // another entity, so it cannot dangle a live view.
 //
-// 1800 ticks is 15 s at the 120 Hz step. Lattice nodes are 32 cells = 64 m apart,
-// so that is long enough for a pack to cover real ground between decisions, and
-// short enough that a pack aimed at a node it cannot reach stands about for 15 s
-// rather than forever.
-inline constexpr std::uint64_t kPackEpochTicks = 1800;
+// 15 s. Lattice nodes are 32 cells = 64 m apart, so that is long enough for a pack
+// to cover real ground between decisions, and short enough that a pack aimed at a
+// node it cannot reach stands about for 15 s rather than forever.
+//
+// Derived from kSimHz rather than written as a tick count, because it was a tick
+// count — 1800, authored as "15 s at the 120 Hz step" — and when core/tick.h moved
+// the sim to 125 Hz the epoch silently became 14.4 s while the comment kept saying
+// 15. Nothing failed, which is the problem: a duration authored in seconds and
+// stored in ticks is a comment away from a lie on every rate change. Spelling the
+// seconds in the expression makes the rate change carry it.
+inline constexpr std::uint64_t kPackEpochTicks = 15u * static_cast<std::uint64_t>(kSimHz);
 
 // The lattice node pack `pack` is walking toward at `tick`. Pure, O(1), no state.
 // Exposed so a test can assert that the pack AGREES, rather than inferring
