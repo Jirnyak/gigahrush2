@@ -35,6 +35,29 @@ bool ImGuiLayer::init(VulkanDevice& dev, SDL_Window* window,
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr; // no imgui.ini side effects for a debug HUD
 
+    // Cyrillic. The default ImGui font is ProggyClean, which is ASCII-only, so any
+    // Russian string handed to ImGui::Text renders as mojibake — and the HUD now
+    // prints item and monster names straight out of the content tables, all of
+    // which are Russian. This was a live defect: the weapon/armour line was showing
+    // garbage rather than "Арматура".
+    //
+    // A system font is loaded rather than a vendored one so no font binary lands in
+    // the repository. If it is missing the default font is kept: a HUD in mojibake
+    // is worse than one in ASCII, but neither is worth failing to boot over, and
+    // ImGui falls back on its own if AddFontFromFileTTF returns null.
+    {
+        static const ImWchar* cyr = io.Fonts->GetGlyphRangesCyrillic();
+        const char* candidates[] = {
+            "C:/Windows/Fonts/consola.ttf",  // monospace suits a debug readout
+            "C:/Windows/Fonts/tahoma.ttf",
+            "C:/Windows/Fonts/segoeui.ttf",
+            "/System/Library/Fonts/Menlo.ttc",          // macOS
+            "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        };
+        for (const char* path : candidates)
+            if (io.Fonts->AddFontFromFileTTF(path, 15.0f, nullptr, cyr)) break;
+    }
+
     if (!ImGui_ImplSDL3_InitForVulkan(window)) return false;
 
     ImGui_ImplVulkan_InitInfo info{};

@@ -18,6 +18,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -27,6 +28,8 @@
 
 #include "app/worldgen.h"
 #include "core/math.h"
+#include "game/mob_table.h"
+#include "core/wrap.h"
 #include "ecs/components.h"
 #include "ecs/registry.h"
 #include "game/embody.h"
@@ -659,6 +662,35 @@ int main(int argc, char** argv) {
                 ImGui::Text("loot %d rub (%d/%d slots) | healed %d | band E%u",
                             carried, slots, game::kInvSlots, healed,
                             game::economy_band(currentFloor));
+            }
+            // Nearest monster, by name. Doubles as the proof that the Cyrillic font
+            // actually loaded: every one of the 69 names is Russian.
+            {
+                const char* threat = nullptr;
+                float bestD2 = 1e30f;
+                std::int16_t thp = 0, tmax = 0;
+                if (reg.valid(player)) {
+                    const vec3 me = reg.get<Transform>(player).pos;
+                    for (auto me_ : reg.view<const game::MobRef, const Transform>()) {
+                        const Transform& t = reg.get<const Transform>(me_);
+                        if (t.layer != activeLayer) continue;
+                        const float dx = wrap_delta_f(me.x, t.pos.x, kWorldExtent);
+                        const float dy = wrap_delta_f(me.y, t.pos.y, kWorldExtent);
+                        const float dz = wrap_delta_f(me.z, t.pos.z, kWorldExtent);
+                        const float d2 = dx * dx + dy * dy + dz * dz;
+                        if (d2 >= bestD2) continue;
+                        bestD2 = d2;
+                        const game::MobRef& m = reg.get<const game::MobRef>(me_);
+                        threat = game::mob_name(static_cast<game::MobKind>(m.kind));
+                        thp = m.hp;
+                        tmax = m.maxHp;
+                    }
+                }
+                if (threat)
+                    ImGui::Text("nearest: %s  %d/%d hp  %.1f m", threat, thp, tmax,
+                                std::sqrt(bestD2));
+                else
+                    ImGui::TextUnformatted("nearest: -");
             }
             ImGui::Text("nav: %s  (last bake %.0f + %.0f ms, async)",
                         nav.baking() ? "BAKING - crowd idle"
