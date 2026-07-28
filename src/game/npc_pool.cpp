@@ -25,6 +25,11 @@ void NpcPool::init() {
     surname_.assign(kNpcPoolSize, std::array<char, kNameLen>{});
     rel_.assign(kNpcPoolSize, std::array<Relationship, kRelSlots>{});
     inv_.assign(kNpcPoolSize, Inventory{});
+
+    // The per-floor index is derived state, rebuilt here from empty: buckets grow
+    // on demand as labels appear, slotInBucket_ is one wide column indexed by id.
+    floorBuckets_.clear();
+    slotInBucket_.assign(kNpcPoolSize, 0);
     count_ = 0;
 }
 
@@ -34,13 +39,56 @@ NpcId NpcPool::spawn() {
     // Slot came from the zeroed tail; just light the ALIVE bit. (Killed slots
     // below count_ are never handed back out — new NPCs always bump the tail.)
     flags_[id] = NpcAlive;
+    // Not on any floor until set_floor() places it — so it sits in no bucket and
+    // the index invariant (floor_[id]==label <-> id in bucket[label]) holds from
+    // birth. The zeroed tail reads floor 0, which is a REAL floor, so make the
+    // "unfloored" state explicit rather than aliasing floor 0.
+    floor_[id] = kNoFloorLabel;
     return id;
+}
+
+void NpcPool::set_floor(NpcId id, std::uint16_t label) {
+    if (!valid(id)) return;
+    const std::uint16_t old = floor_[id];
+    if (old == label) return;
+
+    // Splice out of the old bucket in O(1): overwrite this id's slot with the
+    // bucket's last id, repoint that id's recorded slot, then pop the tail.
+    if (old != kNoFloorLabel && old < floorBuckets_.size()) {
+        std::vector<NpcId>& b = floorBuckets_[old];
+        const std::uint32_t s = slotInBucket_[id];
+        const NpcId moved = b.back();
+        b[s] = moved;
+        slotInBucket_[moved] = s;
+        b.pop_back();
+    }
+
+    floor_[id] = label;
+
+    // Splice into the new bucket, growing the (small) top-level index to cover
+    // this label the first time it is seen.
+    if (label != kNoFloorLabel) {
+        if (label >= floorBuckets_.size())
+            floorBuckets_.resize(static_cast<std::size_t>(label) + 1);
+        std::vector<NpcId>& b = floorBuckets_[label];
+        slotInBucket_[id] = static_cast<std::uint32_t>(b.size());
+        b.push_back(id);
+    }
+}
+
+const std::vector<NpcId>& NpcPool::floor_bucket(std::uint16_t label) const {
+    static const std::vector<NpcId> kEmpty;
+    if (label == kNoFloorLabel || label >= floorBuckets_.size()) return kEmpty;
+    return floorBuckets_[label];
 }
 
 void NpcPool::kill(NpcId id) {
     if (!valid(id)) return;
     // Dead but not reclaimed: clear ALIVE (and EMBODIED), keep the slot & id.
     flags_[id] &= static_cast<std::uint8_t>(~(NpcAlive | NpcEmbodied));
+    // A corpse is on no floor: drop it from its bucket so floor rosters stay a
+    // clean list of the living (streaming enumerates them). Keeps the invariant.
+    set_floor(id, kNoFloorLabel);
 }
 
 void NpcPool::set_name(NpcId id, const char* first, const char* last) {

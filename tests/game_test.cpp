@@ -91,7 +91,7 @@ static void test_pool_basics() {
     pool.hp(a) = 30;
     pool.max_hp(a) = 30;
     pool.faction(a) = 4;
-    pool.floor(a) = 12;
+    pool.set_floor(a, 12);
     CHECK(pool.hp(a) == 30 && pool.faction(a) == 4 && pool.floor(a) == 12);
 
     // Inventory lives inline in the row.
@@ -235,7 +235,7 @@ static void test_embody_and_foldback() {
     NpcPool pool;
     pool.init();
     NpcId id = pool.spawn();
-    pool.floor(id) = 3;
+    pool.set_floor(id, 3);
     pool.cx(id) = 20; pool.cy(id) = 40; pool.cz(id) = 13;
     pool.height_mm(id) = 1600;
 
@@ -1119,7 +1119,7 @@ static NpcId spawn_aged(NpcPool& pool, std::uint8_t age, std::uint16_t floor,
     NpcId id = pool.spawn();
     if (id == kInvalidNpc) return id;
     pool.age(id) = age;
-    pool.floor(id) = floor;
+    pool.set_floor(id, floor);
     pool.faction(id) = faction;
     pool.sex(id) = SexFemale;
     pool.height_mm(id) = 1700;
@@ -1276,6 +1276,140 @@ static void test_macro_determinism() {
     }
 }
 
+// ---- #10b per-floor bucket index -----------------------------------------
+
+// Linear membership probe — the bucket is a set with unspecified order, so tests
+// ask "is id in this floor's roster?" rather than assuming a position.
+static bool bucket_has(const NpcPool& pool, std::uint16_t label, NpcId id) {
+    for (NpcId x : pool.floor_bucket(label))
+        if (x == id) return true;
+    return false;
+}
+
+// The inverted index inside NpcPool: set_floor maintains a live per-label roster
+// with O(1) swap-remove, and kill / leave (kNoFloorLabel) drop a record from its
+// bucket. Streaming enumerates these rosters, so the invariant "id is in
+// floor_bucket(floor(id)) exactly once, and nowhere else" is load-bearing.
+static void test_floor_bucket_index() {
+    NpcPool pool;
+    pool.init();
+
+    // Fresh spawns sit in NO bucket until placed (the kNoFloorLabel sentinel), so
+    // floor 0 — a real floor — is not aliased by zeroed reserve slots.
+    NpcId a = pool.spawn();
+    NpcId b = pool.spawn();
+    NpcId c = pool.spawn();
+    CHECK(pool.floor(a) == kNoFloorLabel);
+    CHECK(pool.floor_bucket(5).empty());
+
+    // Place all three on floor 5; the bucket holds exactly them.
+    pool.set_floor(a, 5);
+    pool.set_floor(b, 5);
+    pool.set_floor(c, 5);
+    CHECK(pool.floor_bucket(5).size() == 3);
+    CHECK(bucket_has(pool, 5, a));
+    CHECK(bucket_has(pool, 5, b));
+    CHECK(bucket_has(pool, 5, c));
+
+    // Migrate b 5 -> 8: it leaves 5 and joins 8; the swap-remove must repair the
+    // moved element's recorded slot so a and c stay findable.
+    pool.set_floor(b, 8);
+    CHECK(pool.floor_bucket(5).size() == 2);
+    CHECK(!bucket_has(pool, 5, b));
+    CHECK(bucket_has(pool, 5, a));
+    CHECK(bucket_has(pool, 5, c));
+    CHECK(pool.floor_bucket(8).size() == 1);
+    CHECK(bucket_has(pool, 8, b));
+
+    // Re-setting to the current label is a no-op — no duplicate insertion.
+    pool.set_floor(a, 5);
+    CHECK(pool.floor_bucket(5).size() == 2);
+
+    // A corpse is on no floor: kill drops c from its bucket and reads kNoFloor.
+    pool.kill(c);
+    CHECK(pool.floor_bucket(5).size() == 1);
+    CHECK(bucket_has(pool, 5, a));
+    CHECK(!bucket_has(pool, 5, c));
+    CHECK(pool.floor(c) == kNoFloorLabel);
+
+    // Leaving explicitly (kNoFloorLabel) also drops from the bucket.
+    pool.set_floor(a, kNoFloorLabel);
+    CHECK(pool.floor_bucket(5).empty());
+    CHECK(pool.floor(a) == kNoFloorLabel);
+
+    // Stress the swap-remove bookkeeping: fill a bucket, pull every other id out
+    // to another floor, and confirm both rosters stay exact and unique.
+    NpcPool p2;
+    p2.init();
+    constexpr int kN = 64;
+    NpcId ids[kN];
+    for (int i = 0; i < kN; ++i) { ids[i] = p2.spawn(); p2.set_floor(ids[i], 3); }
+    CHECK(p2.floor_bucket(3).size() == (std::size_t)kN);
+    for (int i = 0; i < kN; i += 2) p2.set_floor(ids[i], 9);
+    CHECK(p2.floor_bucket(3).size() == (std::size_t)(kN / 2));
+    CHECK(p2.floor_bucket(9).size() == (std::size_t)(kN / 2));
+    for (int i = 1; i < kN; i += 2) CHECK(bucket_has(p2, 3, ids[i])); // stayed
+    for (int i = 0; i < kN; i += 2) CHECK(bucket_has(p2, 9, ids[i])); // moved
+}
+
+// Streaming keys on the LIVE floor label, not a frozen seed range: a cold record
+// relabelled ONTO a floor (a macro migration) is embodied when that floor next
+// loads, and one relabelled OFF it is not. This is the whole reason for the
+// bucket index — the reference's fixed [firstId,count) roster could migrate no
+// one (master_prompt #10b).
+static void test_stream_migration_reembodies() {
+    Registry ecs;
+    NpcPool pool;
+    pool.init();
+    FloorRegistry reg;
+    LevelStack stack;
+    FloorStreamer stream;
+    stream.init(stack, /*keepRadius=*/0);
+    stream.add_module(reg, /*number=*/0, FloorKind::Residential, /*seed=*/1234u);
+
+    // A player parked on an unrelated layer so no crowd member is claimed as the
+    // player (keeps the migration assertions about the crowd, not the camera).
+    NpcId dummy = pool.spawn();
+    pool.height_mm(dummy) = 1750;
+    embody_as_player(ecs, pool, dummy, /*layer=*/999);
+    NpcId playerId = dummy;
+
+    const NpcId lo = pool.count();
+    stream.ensure_loaded(stack, reg, ecs, pool, 0, playerId);
+    const NpcId hi = pool.count();
+    const std::uint32_t pop = floor_spec(FloorKind::Residential).population;
+    CHECK(hi == lo + pop);
+    CHECK(pool.floor_bucket(0).size() == pop);   // seeding filled floor 0's roster
+
+    // Fold the crowd cold, then edit LABELS the way the macro sim will: spawn a
+    // newcomer onto floor 0, and move one existing resident off to (cold) floor 1.
+    // Neither call touches embodiment — pure migration.
+    stream.unload(stack, reg, ecs, pool, 0);
+    for (NpcId id = lo; id < hi; ++id) CHECK(!pool.embodied(id));
+
+    NpcId newcomer = pool.spawn();
+    pool.height_mm(newcomer) = 1700;
+    pool.max_hp(newcomer) = 100; pool.hp(newcomer) = 100;
+    pool.set_floor(newcomer, 0);                 // migrated IN
+    NpcId emigrant = lo;                         // the first seeded resident
+    pool.set_floor(emigrant, 1);                 // migrated OUT
+
+    CHECK(pool.floor_bucket(0).size() == pop);   // -1 resident, +1 newcomer
+    CHECK(bucket_has(pool, 0, newcomer));
+    CHECK(!bucket_has(pool, 0, emigrant));
+
+    // Reload floor 0: the newcomer materializes on it, the emigrant does not, and
+    // the embodied crowd equals the current roster (no reseed — seeding is once).
+    LoadResult r2 = stream.ensure_loaded(stack, reg, ecs, pool, 0, playerId);
+    CHECK(r2.layer != kInvalidLayer);
+    CHECK(pool.embodied(newcomer));
+    CHECK(live_on_layer(ecs, newcomer, newcomer + 1, r2.layer) == 1);
+    CHECK(!pool.embodied(emigrant));
+    CHECK(live_on_layer(ecs, emigrant, emigrant + 1, r2.layer) == 0);
+    CHECK(live_on_layer(ecs, lo, pool.count(), r2.layer) ==
+          (int)pool.floor_bucket(0).size());
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -1307,7 +1441,10 @@ int main() {
     test_macro_aging();
     test_macro_mortality();
     test_macro_births();
+    test_macro_skips_embodied();
     test_macro_determinism();
+    test_floor_bucket_index();
+    test_stream_migration_reembodies();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

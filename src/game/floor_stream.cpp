@@ -45,11 +45,20 @@ void FloorStreamer::free_slot(LayerId slot) {
 void FloorStreamer::embody_crowd(Registry& ecs, NpcPool& pool, FloorModule& fm,
                                  LayerId layer, NpcId& playerId,
                                  Entity& outPlayer) {
-    for (NpcId id = fm.firstId; id < fm.firstId + fm.count; ++id) {
-        // Skip the dead, and skip anyone already embodied (e.g. the player, who
-        // may live in this module's range but is currently standing on another
-        // floor) — that is what prevents a duplicate body.
-        if (!pool.alive(id) || pool.embodied(id)) continue;
+    // Snapshot whoever is CURRENTLY labelled with this floor's number — the live
+    // per-floor bucket (npc_pool.h), not a frozen seed range, so a macro migration
+    // that relabelled a record onto this floor is picked up on the next load.
+    // Copied because embody() could in principle re-label a record (it does not
+    // today, but a snapshot keeps this loop correct regardless — set_floor would
+    // swap-remove from the very bucket we walk). This is floor-load, not tick, work
+    // and the copy is free beside the ~130 MiB nav bake next to it.
+    const std::vector<NpcId> crowd =
+        pool.floor_bucket(static_cast<std::uint16_t>(fm.number));
+    for (NpcId id : crowd) {
+        // Bucket residents are alive by construction (kill/leave drop them). Skip
+        // anyone already embodied — e.g. the player, labelled with this floor but
+        // currently standing on another — which is what prevents a duplicate body.
+        if (pool.embodied(id)) continue;
         if (playerId == kInvalidNpc && id == fm.candidate) {
             Entity e = embody_as_player(ecs, pool, id, layer);
             playerId = id;
@@ -82,12 +91,13 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
     // population never grows per visit (master_prompt #9).
     if (!fm.seeded) {
         const FloorSpec& spec = floor_spec(fm.kind);
-        NpcId before = pool.count();
+        // seed_floor_from_spec set_floor()s every record it spawns to this floor's
+        // number, so they land in pool.floor_bucket(number) — exactly the set
+        // embody_crowd re-materializes on this and every later load. Nothing else
+        // to remember: the label is the membership.
         fm.candidate = seed_floor_from_spec(pool,
                                             static_cast<std::uint16_t>(fm.number),
                                             spec, fm.seed ^ kPopSeedSalt);
-        fm.firstId = before;
-        fm.count = pool.count() - before;
         fm.seeded = true;
     }
 

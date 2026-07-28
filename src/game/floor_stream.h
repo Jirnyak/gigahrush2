@@ -11,10 +11,14 @@
 //     (position/state persist in the row), free the physical slot, and evict it.
 //
 // The load-bearing subtlety (master_prompt #9): re-entering a floor must
-// re-embody the SAME records, never seed new ones — otherwise the population
-// grows every visit. Each module therefore seeds its crowd exactly ONCE into a
-// contiguous pool id range [firstId, firstId+count); every later load
-// re-embodies that same range, whose positions were frozen back on the way out.
+// re-embody records, never seed new ones — otherwise the population grows every
+// visit. Each module therefore seeds its crowd exactly ONCE, labelling every
+// seeded record with the floor's number; every later load re-embodies whoever is
+// CURRENTLY labelled with that number (pool.floor_bucket — the per-floor index in
+// npc_pool.h), whose positions were frozen back on the way out. Keying on the
+// live label rather than a frozen id range is what lets the macro sim migrate a
+// resident between floors (master_prompt #10b) and have the destination
+// re-embody them on arrival.
 //
 // FloorRegistry owns the number <-> module <-> layer indirection; this owns the
 // module *content* (how to build it, and the cold crowd it re-materializes) plus
@@ -58,11 +62,11 @@ struct FloorModule {
     FloorKind kind = FloorKind::Residential;
     std::uint32_t seed = 0;               // base seed; geometry + population derive
 
-    // The cold crowd: the contiguous pool id range this module seeded ONCE. Every
-    // load re-embodies exactly this range, so population never grows per visit.
+    // The cold crowd is seeded ONCE (the first load), which labels every seeded
+    // record with this floor's number; from then on the crowd IS whoever is in
+    // pool.floor_bucket(number). No frozen id range to remember — the label is the
+    // membership, so a migration in/out of this floor is reflected on next load.
     bool seeded = false;
-    NpcId firstId = kInvalidNpc;
-    std::uint32_t count = 0;
     NpcId candidate = kInvalidNpc;        // the seed's player-candidate record
 
     // Live set while loaded (empty when cold): the entities embodied for this

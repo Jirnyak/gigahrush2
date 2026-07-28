@@ -40,6 +40,11 @@ inline constexpr std::uint32_t kNpcActiveTarget = 950000;
 using NpcId = std::uint32_t;
 inline constexpr NpcId kInvalidNpc = 0xFFFFFFFFu;
 
+// Sentinel floor label meaning "not currently on any floor": a record between
+// spawn() and its first set_floor(), or a killed one. Never a real floor number,
+// so it indexes no bucket in the per-floor index below.
+inline constexpr std::uint16_t kNoFloorLabel = 0xFFFFu;
+
 inline constexpr int kNameLen = 24;   // inline fixed-width, no heap strings
 inline constexpr int kRelSlots = 16;  // fixed relationship capacity per NPC
 
@@ -121,10 +126,24 @@ public:
     std::uint16_t& faction(NpcId id) { return faction_[id]; }
     std::int16_t&  hp(NpcId id)      { return hp_[id]; }
     std::int16_t&  max_hp(NpcId id)  { return maxHp_[id]; }
-    std::uint16_t& floor(NpcId id)   { return floor_[id]; }
     std::uint8_t&  cx(NpcId id)      { return cx_[id]; }
     std::uint8_t&  cy(NpcId id)      { return cy_[id]; }
     std::uint8_t&  cz(NpcId id)      { return cz_[id]; }
+
+    // Floor LABEL (logical, not a storage slot — floors.md). READ with floor();
+    // WRITE with set_floor(), which also maintains the per-floor bucket index so a
+    // migration (a change of label) is visible to whoever enumerates a floor's
+    // residents. Direct assignment is intentionally not offered — it would desync
+    // the index.
+    std::uint16_t floor(NpcId id) const { return floor_[id]; }
+    void set_floor(NpcId id, std::uint16_t label);
+
+    // Live roster of a floor: the ids CURRENTLY labelled `label`, alive only
+    // (spawn/kill/set_floor keep it tight). This is what floor streaming embodies
+    // when a floor loads ([floors.md]); a floor nobody is on returns a stable
+    // shared empty vector. Order is unspecified — swap-remove churns it — so
+    // callers must treat it as a set, not a sequence.
+    const std::vector<NpcId>& floor_bucket(std::uint16_t label) const;
 
     // Character-sheet fields (same struct the future creation screen writes to).
     std::uint8_t&  age(NpcId id)     { return age_[id]; }      // years, 1..100
@@ -161,6 +180,15 @@ private:
     std::vector<std::array<char, kNameLen>> surname_;
     std::vector<std::array<Relationship, kRelSlots>> rel_;
     std::vector<Inventory> inv_;
+
+    // Per-floor inverted index over floor_: floorBuckets_[label] is the live
+    // roster of ids on floor `label`; slotInBucket_[id] is id's position inside
+    // its bucket, so set_floor()/kill() splice in O(1) via swap-remove — never the
+    // reference's linear bucket scan on a cold move ([macrosim.md] hot spot). This
+    // is DERIVED state (rebuildable from floor_ + the alive bit), so it is not part
+    // of the serialized rectangle; init() clears it, spawn/set_floor/kill keep it.
+    std::vector<std::vector<NpcId>> floorBuckets_;
+    std::vector<std::uint32_t> slotInBucket_;
 };
 
 } // namespace giga::game

@@ -143,7 +143,7 @@ MacroStats MacroSim::step(NpcPool& pool, const MacroParams& params) {
             pool.age(baby) = 0;
             pool.sex(baby) = (hash3(t32, k, kSaltBaby) & 1u) ? SexFemale : SexMale;
             pool.height_mm(baby) = height_for_age(0, hash3(baby, t32, kSaltBaby));
-            pool.floor(baby) = pool.floor(parent);
+            pool.set_floor(baby, pool.floor(parent));
             pool.cx(baby) = pool.cx(parent);
             pool.cy(baby) = pool.cy(parent);
             pool.cz(baby) = pool.cz(parent);

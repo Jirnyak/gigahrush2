@@ -143,9 +143,12 @@ Seeding lives in [src/game/population.h](src/game/population.h):
 floor's apartment lattice with deterministic demographics and **returns the record
 chosen as the player candidate** — which becomes the player only once
 `embody_as_player` flips its bit. The floor streamer ([floors.md](floors.md))
-calls a seeder **once** per module and remembers the resulting contiguous
-`[firstId, count)` id range, so every later visit re-embodies the **same**
-records rather than growing the population — the streaming invariant.
+calls a seeder **once** per module, which labels every seeded record with the
+floor's number; every later visit re-embodies whoever is **currently** in that
+floor's `pool.floor_bucket(number)` (the per-floor inverted index, #10b), so the
+roster is live — a macro migration onto/off the floor is honoured — while the
+head-count stays steady because seeding is once-only. This is the streaming
+invariant that keeps the 2²⁰ population from growing per visit.
 
 ## Behaviour — migration, trade, honest projectiles
 

@@ -28,7 +28,7 @@ int main() {
         NpcId id = pool.spawn();
         if (id == kInvalidNpc) break;
         pool.age(id) = static_cast<std::uint8_t>(1 + (i % 100u));
-        pool.floor(id) = static_cast<std::uint16_t>(i % 64u);
+        pool.set_floor(id, static_cast<std::uint16_t>(i % 64u));
         pool.faction(id) = static_cast<std::uint16_t>(i % 4u);
         pool.height_mm(id) = 1700;
         pool.max_hp(id) = 100;

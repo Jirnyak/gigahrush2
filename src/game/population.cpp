@@ -106,7 +106,7 @@ NpcId seed_floor_from_spec(NpcPool& pool, std::uint16_t floor,
         pool.cy(id) = static_cast<std::uint8_t>(ry * kRoomStride + oy);
         pool.cz(id) = static_cast<std::uint8_t>(kGroundZ);
 
-        pool.floor(id) = floor;
+        pool.set_floor(id, floor);
 
         // Demographics: age from the spec window, sex, height from age.
         std::uint8_t age =

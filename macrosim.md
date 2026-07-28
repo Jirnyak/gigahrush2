@@ -109,14 +109,32 @@ only because it runs headless on a decoupled coarse clock over flat SoA. The
 reference's bounded-cursor primitive (`RECORDS_PER_TICK ≈ 64`) is the model for
 the *next* passes (migration/social), not this demographic full-sweep.
 
-### Still pending (master_prompt §7 #10b/#10c and beyond)
+### Built — the per-floor bucket index (#10b, 2026-07-28)
 
-- **Per-floor bucket index (#10b).** An inverted index over the `floor` column so
-  streaming/embodiment can enumerate a floor's residents in O(residents), and cold
-  moves are O(1) — replacing `FloorStreamer`'s fixed `[firstId,count)` roster and
-  avoiding the reference's linear-bucket-scan hot spot.
+An inverted index over the `floor` column, living **inside `NpcPool`** (universal,
+minimum-systems): `floorBuckets_[label]` is the live roster of ids currently on
+that floor, and `slotInBucket_[id]` records each id's position so `set_floor()` and
+`kill()` splice a record between buckets in **O(1)** via swap-remove — never the
+reference's linear-bucket-scan on a cold move. Membership is the label itself:
+`floor_[id] == label ⇔ id ∈ floorBuckets_[label]` (with `kNoFloorLabel = 0xFFFF`
+meaning "in no bucket" for a just-spawned or dead record). The index is **derived**
+state — `init()` rebuilds it empty, so it is not part of the serialized rectangle.
+
+This replaced `FloorStreamer`'s fixed `[firstId, count)` roster: `embody_crowd` now
+re-materializes `pool.floor_bucket(number)` — **whoever is currently labelled with
+the floor** — so a macro migration that relabels a record onto (or off) a floor is
+reflected the next time that floor loads. Population still never grows per visit
+because *seeding* is once-only (guarded by `seeded`); only the *membership* is now
+live. Direct `floor()=` assignment was removed pool-wide (it would desync the
+index); every write goes through `set_floor()`. Cost: nil on the demographic sweep
+(3.0 ms/tick unchanged — the sweep touches no buckets; only births' `set_floor`
+does, and that is O(1)).
+
+### Still pending (master_prompt §7 #10c and beyond)
+
 - **Budgeted-cursor migration/social pass (#10c).** A bounded ring-scan (~64
-  records/tick) for off-floor migration and relationship drift, on the same tables.
+  records/tick) for off-floor migration and relationship drift, on the same tables;
+  migration is now just a `set_floor()` call that the bucket index absorbs in O(1).
 - Faction/economy dynamics (6×6 Int8 relation matrix; per-floor commodity stock).
 
 ## Determinism

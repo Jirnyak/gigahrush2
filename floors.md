@@ -113,10 +113,12 @@ for the momentary overlap during a ride) and keeps the rest of the population co
 in the `NpcPool` ([npcs.md](npcs.md)).
 
 - **Enter** (`ensure_loaded(number)`): the first time a module is entered its
-  crowd is seeded **once** into a contiguous `[firstId, firstId+count)` range of
-  the cold pool; a free slot is allocated; `generate_floor` rebuilds the geometry
-  into it; and the crowd is embodied. Records already embodied elsewhere (e.g. the
-  player standing on another floor) are **skipped**, so nobody is duplicated. The
+  crowd is seeded **once** into the cold pool, which labels every seeded record
+  with the floor's number (so they land in `pool.floor_bucket(number)`); a free
+  slot is allocated; `generate_floor` rebuilds the geometry into it; and the crowd
+  — **whoever is currently in that floor's bucket** — is embodied. Records already
+  embodied elsewhere (e.g. the player standing on another floor) are **skipped**,
+  so nobody is duplicated. The
   first ever load — before any player exists — designates the module's candidate
   as the player. Right after the geometry is built, the floor's **navigation is
   baked** into a per-module `FloorNav` (coarse graph + flow fields, freed on
@@ -130,12 +132,13 @@ in the `NpcPool` ([npcs.md](npcs.md)).
   ([elevators.md](elevators.md)) → adopt the fresh player body into the
   destination module → `keep_only` prunes back to the kept window.
 
-**The population never grows per visit.** Re-entering a floor re-embodies the
-**same** id range (seeding is once-only, guarded by a `seeded` flag) and the
-geometry regenerates **bit-for-bit** from `(seed, number)` — nothing is persisted
-floor-to-floor except the folded-back records themselves. This is what makes the
-2²⁰ target affordable: the sim tick is O(live entities), and only ~one floor is
-ever live.
+**The population never grows per visit.** Re-entering a floor re-embodies its
+**current roster** — the live `floor_bucket` — not a fresh crowd: seeding is
+once-only (guarded by a `seeded` flag), so only *membership* is live, never the
+head-count. The geometry regenerates **bit-for-bit** from `(seed, number)` —
+nothing is persisted floor-to-floor except the folded-back records themselves.
+This is what makes the 2²⁰ target affordable: the sim tick is O(live entities),
+and only ~one floor is ever live.
 
 Because exactly one floor is live, its size is fixed at **N = 128** — depth comes
 from the many-floor W-stack, not a bigger floor — and *that* one floor is where
@@ -143,11 +146,13 @@ the real-time engine runs: ~16k embodied **agents on the CPU**, every cellular
 **field on the GPU** ([performance.md](performance.md) §The compute split,
 §Active-floor sizing).
 
-> **Roster caveat.** The fixed `[firstId, count)` roster is a pre-migration
-> simplification: it assumes a module's residents never leave its id range. Once
-> the macro tick ([macrosim.md](macrosim.md)) migrates NPCs between floors, the
-> streamer must re-embody by a maintained **per-floor bucket index** over the
-> pool's floor label instead of a fixed range.
+> **Migration-ready roster (built 2026-07-28, #10b).** The streamer re-embodies by
+> a maintained **per-floor bucket index** over the pool's floor label
+> (`pool.floor_bucket`, [npcs.md](npcs.md) / [macrosim.md](macrosim.md)), not a
+> fixed id range. So when the macro tick relabels an NPC onto (or off) a floor, the
+> destination materializes them on next load and the origin no longer does — the
+> membership is live, `set_floor`/`kill` keep it in O(1). Seeding stays once-only,
+> so the population is still steady per visit.
 
 ## Open questions (resolve when implementing)
 
@@ -155,8 +160,6 @@ the real-time engine runs: ~16k embodied **agents on the CPU**, every cellular
 - Larger `keepRadius` and the 4×4×4 fast-travel lattice
   ([elevators.md](elevators.md)): multiple live floors at once, and pre-warming
   likely destinations.
-- Migrating the fixed-range roster to a per-floor bucket index (see the caveat
-  above) so mid-transition / migrated entities are captured.
 
 ## Connections
 

@@ -244,8 +244,10 @@ tests        world_test (core), game_test (game layer) — both headless;
 - `game/elevator.{h,cpp}` — `ride_elevator`: the real inter-floor travel (§6, #8).
 - `game/floor_stream.{h,cpp}` — `FloorStreamer`: one-live-floor streaming (§6,
   #9). `add_module` / `ensure_loaded` / `unload` / `keep_only` / `travel`. Owns
-  each module's build recipe + its cold `[firstId, count)` crowd range and a
-  free-list of recyclable `LevelStack` slots (`init(stack, keepRadius=0)`).
+  each module's build recipe; its cold crowd is whoever is currently labelled with
+  the floor's number (`pool.floor_bucket`, #10b — seeded once, membership live),
+  not a fixed id range. Holds a free-list of recyclable `LevelStack` slots
+  (`init(stack, keepRadius=0)`).
 - `app/main.cpp` — window/Vulkan bring-up, the floor stack setup, the fixed-step
   sim loop (1/120 s, frozen while paused), the render loop, HUD, the **pause
   menu** overlay, and event handling incl. `[` / `]` (via `streamer.travel`) and
@@ -342,19 +344,21 @@ cellular fluid, Vulkan renderer (instanced cube pass + ImGui), demo worldgen
   live** by default (`init(stack, keepRadius=0)` reserves `2*keepRadius+2`
   recyclable slots). `add_module(reg, number, kind, seed)` registers a module's
   identity + build recipe without loading; `ensure_loaded` seeds the crowd
-  **once** into a contiguous `[firstId, count)` cold-pool range, allocates a slot,
-  `generate_floor`s the geometry, and embodies the crowd — skipping records
-  already embodied elsewhere (so the player is never duplicated; the first ever
-  load designates the player). `unload` / `keep_only` `fold_back` the whole crowd
-  and free the slot. `travel` loads the destination on demand → `ride_elevator` →
-  adopts the fresh player body → prunes to the kept window. **Invariant:**
-  re-entry re-embodies the SAME id range and geometry regenerates bit-for-bit, so
-  `pool.count()` never grows per visit. `main.cpp` (default `floors` mode) now
-  registers the 5 modules and `ensure_loaded`s **only floor 0** at startup;
-  `[` / `]` = `streamer.travel`. **Owner-confirmed in-game** (distinct floors swap
-  in with their crowds; no duplicate player). *Roster caveat:* the fixed id range
-  is a pre-migration simplification — #10 swaps it for a per-floor bucket index
-  over `pool.floor(id)` so migrants are captured.
+  **once** (labelling each seeded record with the floor number), allocates a slot,
+  `generate_floor`s the geometry, and embodies the crowd — **whoever is currently
+  in `pool.floor_bucket(number)`** (#10b) — skipping records already embodied
+  elsewhere (so the player is never duplicated; the first ever load designates the
+  player). `unload` / `keep_only` `fold_back` the whole crowd and free the slot.
+  `travel` loads the destination on demand → `ride_elevator` → adopts the fresh
+  player body → prunes to the kept window. **Invariant:** re-entry re-embodies the
+  floor's *current roster* and geometry regenerates bit-for-bit, and since seeding
+  is once-only, `pool.count()` never grows per visit. `main.cpp` (default `floors`
+  mode) now registers the 5 modules and `ensure_loaded`s **only floor 0** at
+  startup; `[` / `]` = `streamer.travel`. **Owner-confirmed in-game** (distinct
+  floors swap in with their crowds; no duplicate player). *Migration-ready (#10b,
+  done):* the roster is a maintained per-floor bucket index over `pool.floor(id)`,
+  so a macro relabel migrates residents between floors and the destination
+  re-embodies them.
 - **Pause menu (owner-requested UX).** `Esc` no longer quits — it toggles a
   centered ImGui **"Menu"** overlay (Resume / Quit) and **frees the cursor**
   (relative mouse mode off) so the OS window can be moved/minimized; the sim
@@ -435,11 +439,12 @@ torus periodicity, wall block, flee-gradient sign, determinism, monotone decay).
 Work **one verified increment per turn, build green, stop green with a plan**
 (§9). Order below is the intended sequence, but note the owner pulled the **nav
 bake (#11 A/B/C) forward** ahead of #10 — that core is now built (§6). So the
-open work is: **#10** macro tick, **#12** movement AI (now unblocked — the flow
-fields, `route_step`, and the diffusion flee field are all built), then content
+open work is: **#10c** macro migration/social pass (the demographic core #10a and
+per-floor bucket index #10b are **done**), **#12** movement AI (now unblocked — the
+flow fields, `route_step`, and the diffusion flee field are all built), then content
 **#13**. The floor-module epic (#6–#9) is **done**.
 
-### #10 — Macro tick (demographic core BUILT 2026-07-28; #10b/#10c pending)
+### #10 — Macro tick (demographic core + bucket index BUILT 2026-07-28; #10c pending)
 Coarse clock (own rate, **never** the 120 Hz tick — [macrosim.md](macrosim.md)).
 This is where the **off-screen population comes alive**; the ref proved 2²⁰ is
 viable *only if the macro tick stays columnar* (its own 1M target was retired
@@ -457,12 +462,18 @@ avoids that with inline names + inline inventory in SoA).
   (`macro_bench`). 5 tests in `game_test` (aging, mortality, births, determinism,
   embodied-skip). Divergence from ref: aging+births is a **new capability** — the
   TS society only decays; affordable here because it's headless on a coarse clock.
-- **#10b — per-floor bucket index (NEXT).** Swap `FloorStreamer`'s fixed
-  `[firstId, count)` roster for a maintained **inverted index** over
-  `pool.floor(id)`, so a floor re-embodies whoever is *currently* labelled with its
-  number — otherwise migration (which moves records between floors) is invisible to
-  streaming. The ref's per-floor `floorIndex` is exactly this; avoid its
-  linear-bucket-scan hot spot on cold moves (keep relocation O(1)/O(small)).
+- **#10b — per-floor bucket index (DONE 2026-07-28).** ✔ A maintained **inverted
+  index** over `pool.floor(id)`, living inside `NpcPool` (`floorBuckets_[label]` +
+  `slotInBucket_[id]`): `set_floor`/`kill` splice a record between rosters in O(1)
+  via swap-remove (no linear bucket scan, unlike the ref's `floorIndex`).
+  `FloorStreamer` now embodies `pool.floor_bucket(number)` — whoever is *currently*
+  labelled with the floor — instead of a fixed `[firstId, count)` range, so a macro
+  relabel migrates residents and the destination re-embodies them; seeding stays
+  once-only so the head-count is still steady. Direct `floor()=` removed pool-wide
+  (would desync the index). Index is derived state (rebuilt empty in `init`, not
+  serialized). Sweep cost unchanged (3.0 ms/1M — the sweep touches no buckets). 2
+  new tests (`test_floor_bucket_index`, `test_stream_migration_reembodies`) +
+  `test_macro_skips_embodied` now registered.
 - **#10c — budgeted-cursor passes.** Bounded ring-scan (~64 records/tick, the
   ref's `RECORDS_PER_TICK` primitive) for off-floor migration + relationship drift,
   on the same tables. Then faction/economy dynamics (6×6 Int8 relation matrix).
