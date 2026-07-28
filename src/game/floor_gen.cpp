@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "world/lattice.h"
 #include "world/types.h"
 #include "world/world.h"
 
@@ -58,15 +59,14 @@ struct FloorGeom {
     int gapPct;    // % of wall cells knocked out (0 = intact ... high = maze/decay)
     int holePct;   // % of slab cells missing (collapsed floors, vertical holes)
     int rubblePct; // % of interior air cells filled with a debris block
-    int shafts;    // vertical stairwell shafts punched through every slab
 };
 
-//                         storey stride doorH pillars gap hole rubble shafts
+//                         storey stride doorH pillars gap hole rubble
 constexpr FloorGeom kGeom[] = {
-    /* Residential */ {  4,  8, 2, false,  0,  0, 0,  6},
-    /* Commercial  */ {  8, 16, 3, false,  0,  0, 0,  8},
-    /* Industrial  */ { 16, 32, 5, true,   0,  0, 2, 10},
-    /* Derelict    */ {  4,  8, 2, false, 38, 12, 9,  4},
+    /* Residential */ {  4,  8, 2, false,  0,  0, 0},
+    /* Commercial  */ {  8, 16, 3, false,  0,  0, 0},
+    /* Industrial  */ { 16, 32, 5, true,   0,  0, 2},
+    /* Derelict    */ {  4,  8, 2, false, 38, 12, 9},
 };
 static_assert(sizeof(kGeom) / sizeof(kGeom[0]) ==
                   static_cast<std::size_t>(FloorKind::Count),
@@ -83,8 +83,9 @@ const FloorGeom& geom_for(FloorKind kind) {
 void generate_floor(World& world, int number, const FloorSpec& spec,
                     unsigned seed) {
     MacroGrid& g = world.grid();
-    constexpr CellType kSlab = 4; // floor/ceiling slab (tan)
-    constexpr CellType kWall = 1; // concrete wall / rubble (grey)
+    constexpr CellType kSlab = 4;   // floor/ceiling slab (tan)
+    constexpr CellType kWall = 1;   // concrete wall / rubble (grey)
+    constexpr CellType kHubPad = 7; // nav / fast-travel hub landing pad (cyan)
 
     const FloorGeom& geom = geom_for(spec.kind);
     Rng rng(floor_seed(seed, number));
@@ -162,19 +163,66 @@ void generate_floor(World& world, int number, const FloorSpec& spec,
         }
     }
 
-    // Stairwell shafts: 2x2 columns punched through every slab so you can move
-    // between storeys. Because Z wraps, a full-height shaft also links the top
-    // storey back down to storey 0.
-    for (int i = 0; i < geom.shafts; ++i) {
-        const int rx = rng.below(roomsPerAxis);
-        const int ry = rng.below(roomsPerAxis);
-        const int sx = rx * stride + stride / 2;
-        const int sy = ry * stride + stride / 2;
-        for (int z = 0; z < kMacroDim; ++z)
-            for (int dy = 0; dy < 2; ++dy)
-                for (int dx = 0; dx < 2; ++dx)
-                    g.clear_cell(wrap_macro(sx + dx), wrap_macro(sy + dy), z);
-    }
+    // Fast-travel / navigation lattice: a FIXED 4x4x4 = 64-node grid, stamped
+    // identically into every floor (src/world/lattice.h) and INDEPENDENT of the
+    // seed — these hubs replace the old random stairwells. They are both the
+    // elevator hub set (elevators.md) and the coarse graph the nav bake rides on
+    // (master_prompt #11), so their placement and mutual connectivity must be
+    // deterministic and must NOT depend on the RNG.
+    //
+    // The 64 graph nodes sit at cell centres {16,48,80,112} on each axis;
+    // vertically a single full-height shaft per (x,y) column links all four
+    // z-levels (and, via the Z wrap, the top storey back to storey 0), so the
+    // geometry only has to punch the 4x4 = 16 columns. At each column punch a
+    // 3x3 shaft through every slab, then open a 7x7 lobby in each storey's air
+    // band while KEEPING the slab, so the shaft always joins the room graph and
+    // there is a floor to stand on.
+    constexpr int kShaftR = 1; // 3x3 shaft column, punched to air through slabs
+    constexpr int kLobbyR = 3; // 7x7 lobby, walls opened per storey (slab kept)
+    for (int ny = 0; ny < kLatticeDim; ++ny)
+        for (int nx = 0; nx < kLatticeDim; ++nx) {
+            const int cx = lattice_coord(nx);
+            const int cy = lattice_coord(ny);
+            for (int z = 0; z < kMacroDim; ++z)
+                for (int dy = -kShaftR; dy <= kShaftR; ++dy)
+                    for (int dx = -kShaftR; dx <= kShaftR; ++dx)
+                        g.clear_cell(wrap_macro(cx + dx), wrap_macro(cy + dy), z);
+            for (int f = 0; f < storeys; ++f) {
+                const int base = f * storey;
+                for (int z = base + 1; z < base + storey; ++z)
+                    for (int dy = -kLobbyR; dy <= kLobbyR; ++dy)
+                        for (int dx = -kLobbyR; dx <= kLobbyR; ++dx)
+                            g.clear_cell(wrap_macro(cx + dx), wrap_macro(cy + dy),
+                                         z);
+            }
+            // Hub pads: recolour the slab at each of the 4 lattice z-levels
+            // (16/48/80/112) across the lobby footprint to a distinct type,
+            // leaving the shaft hole open. This makes the 4x4x4 = 64 nodes read
+            // as stacked landing pads (4 per shaft column) instead of a flat 4x4
+            // of grey shafts, and makes them findable from across the floor.
+            for (int nz = 0; nz < kLatticeDim; ++nz) {
+                const int z0 = lattice_coord(nz);
+                for (int dy = -kLobbyR; dy <= kLobbyR; ++dy)
+                    for (int dx = -kLobbyR; dx <= kLobbyR; ++dx) {
+                        const int x = wrap_macro(cx + dx);
+                        const int y = wrap_macro(cy + dy);
+                        if (g.cell(x, y, z0) != kCellAir)
+                            g.set_cell(x, y, z0, kHubPad);
+                    }
+            }
+            // Elevator column: 4 full-height posts hugging the shaft, so each of
+            // the 16 shafts reads as ONE continuous vertical column spanning the
+            // whole map (Z wraps, so the column closes into a loop). The 3x3
+            // interior stays open to ride / fall through, and the 4 orthogonal
+            // sides stay open so the lobby still joins the rooms — only the 4
+            // diagonal corners are posted. The pads above mark the 4 stops
+            // (nodes) along each column: 16 columns x 4 stops = 64.
+            for (int sy = -1; sy <= 1; sy += 2)
+                for (int sx = -1; sx <= 1; sx += 2)
+                    for (int z = 0; z < kMacroDim; ++z)
+                        g.fill_cell(wrap_macro(cx + sx * 2),
+                                    wrap_macro(cy + sy * 2), z, kHubPad);
+        }
 
     (void)spec.population; // geometry ignores population; the seeder consumes it
 }

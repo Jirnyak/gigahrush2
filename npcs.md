@@ -1,13 +1,16 @@
 # NPCs — Macro population & embodiment
 
-> **Status: macro pool + embodiment built; macro tick pending.** Game layer
-> (`src/game/`, the `giga_game` library), on top of the ECS ([ecs.md](ecs.md))
-> and macro simulation ([macrosim.md](macrosim.md)).
+> **Status: macro pool + embodiment + one-live-floor streaming built; macro tick
+> pending.** Game layer (`src/game/`, the `giga_game` library), on top of the ECS
+> ([ecs.md](ecs.md)) and macro simulation ([macrosim.md](macrosim.md)).
 >
 > - **Code:** [src/game/npc_pool.h](src/game/npc_pool.h) /
 >   [.cpp](src/game/npc_pool.cpp), [src/game/embody.h](src/game/embody.h) /
 >   [.cpp](src/game/embody.cpp), [src/game/population.h](src/game/population.h) /
->   [.cpp](src/game/population.cpp), [src/game/inventory.h](src/game/inventory.h)
+>   [.cpp](src/game/population.cpp), [src/game/inventory.h](src/game/inventory.h),
+>   [src/game/floor_stream.h](src/game/floor_stream.h) /
+>   [.cpp](src/game/floor_stream.cpp) (embody / fold-back at floor granularity —
+>   [floors.md](floors.md))
 > - **Tests:** [tests/game_test.cpp](tests/game_test.cpp) (headless, links
 >   `giga_game` only)
 
@@ -47,11 +50,15 @@ at the new body's stature.
 - **Per-floor modifiers** — a floor's rule-set ([floors.md](floors.md)) tweaks
   population-matrix weights (which kinds concentrate on this floor) — it does not
   own its own NPC catalog.
-- **Embodiment** — when the player is present, relevant NPCs are instantiated as
-  ECS entities with the universal components ([ecs.md](ecs.md)) and driven by the
-  same [controller.md](controller.md) / [physics.md](physics.md) systems as the
-  player. Leaving the area de-embodies them back into the macro model. NPCs are
-  never faked or frozen — only their execution unit changes.
+- **Embodiment (built, floor-granular).** Entering a floor instantiates its
+  crowd as ECS entities with the universal components ([ecs.md](ecs.md)), driven
+  by the same [controller.md](controller.md) / [physics.md](physics.md) systems
+  as the player; **leaving a floor de-embodies (`fold_back`) the whole crowd**
+  back into the cold pool. This is the one-live-floor streaming seam
+  ([floors.md](floors.md), `src/game/floor_stream.h`): only ~one floor is embodied
+  at a time, so the sim tick stays O(live entities). NPCs are never faked or
+  frozen — only their execution unit changes. (Granularity is a whole floor
+  today; a near-player radius is a later refinement.)
 
 ## Scale & storage — dense flat tables, ~1 M NPCs
 
@@ -135,7 +142,10 @@ Seeding lives in [src/game/population.h](src/game/population.h):
 `seed_floor_population(pool, floor, n, seed)` bump-allocates `n` records onto a
 floor's apartment lattice with deterministic demographics and **returns the record
 chosen as the player candidate** — which becomes the player only once
-`embody_as_player` flips its bit.
+`embody_as_player` flips its bit. The floor streamer ([floors.md](floors.md))
+calls a seeder **once** per module and remembers the resulting contiguous
+`[firstId, count)` id range, so every later visit re-embodies the **same**
+records rather than growing the population — the streaming invariant.
 
 ## Behaviour — migration, trade, honest projectiles
 

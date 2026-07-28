@@ -5,7 +5,7 @@
 
 namespace giga {
 
-inline int wrapi(int v, int size) {
+inline constexpr int wrapi(int v, int size) {
     int m = v % size;
     return m < 0 ? m + size : m;
 }

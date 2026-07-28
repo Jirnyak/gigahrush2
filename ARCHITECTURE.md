@@ -20,16 +20,21 @@ This is a **native C++/Vulkan desktop game**. That fixes the cost model:
 
 - **Disk unlimited** → save whole worlds verbatim (all cells + objects),
   persisted as the player explores (Dwarf Fortress / Minecraft style).
-- **GPU unlimited** → full dynamic lighting/shadows, generous overdraw; the
-  renderer is not the bottleneck.
+- **GPU unlimited — draw *and* compute** → full dynamic lighting/shadows and
+  generous overdraw, *plus* every cellular field (fluid/gas/heat/pressure/light)
+  runs here as async compute. The GPU is the field engine, not just the renderer.
 - **RAM ~8 GB** → generous but finite; the one budget that bounds the dense model.
-- **CPU is the bottleneck** → the sim tick must stay **O(n)** in live entities/cells.
+- **CPU is the bottleneck — it runs the agents** → the player + ~16k embodied
+  NPCs/mobs (movement, collision, AI). The agent tick must stay **O(n)** in live
+  agents; fields are off-CPU (see the compute split below).
 - **Load time unbounded** → do all heavy precomputation (BFS/nav, light maps) at
   load and bake it into flat memory; the tick only does O(1) lookups.
 
-The consequences — **dense over sparse**, **bake at load, tick in O(n)**,
-data-oriented elegance/universality/minimalism — are detailed in
-[performance.md](performance.md) and drive every layer below.
+The consequences — **dense over sparse**, **bake at load, tick in O(n)**, the
+**CPU-agents / GPU-fields compute split**, **two regimes of re-bake** (ideal at
+load/self-assembly, cheap dirty-local for in-play destruction), and the fixed
+**N = 128 active floor** — are detailed in [performance.md](performance.md) and
+drive every layer below.
 
 ## Layers
 
@@ -98,7 +103,10 @@ Free functions over EnTT views, each taking the state it needs plus `dt`:
 - **camera** ([camera.md](camera.md)) — derives view/projection from whichever
   entity holds a `CameraTag`. Not a singleton.
 - **fluid** ([fluid.md](fluid.md)) — deterministic, mass-conserving cellular
-  liquid stored as a runtime field, pooling on sub-voxel terrain.
+  liquid stored as a runtime field, pooling on sub-voxel terrain. The current
+  step is CPU (throttled); as a *cellular field* it is destined for GPU async
+  compute like all fields (see [performance.md](performance.md) §The compute
+  split).
 
 The **player is not special**: it is the entity that currently owns a
 `CameraTag` + `Controller` + physics components. Move those components and the

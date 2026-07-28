@@ -32,6 +32,12 @@ Fluid is just a registered [field](fields.md) — proving the field system carri
 real simulation state, not only static overlays. A game can run several
 independent fluids (water, lava, gas) by naming different fields.
 
+**Where it runs.** `fluid_step` is the CPU prototype (throttled, maze demo only).
+As a *cellular field* it belongs on the **GPU as an async-compute stencil** like
+every other field — fluids, gases, and heat share the same substrate and the same
+destination ([performance.md](performance.md) §The compute split). The CPU agent
+tick never pays for it.
+
 ## Connections
 
 Uses [fields.md](fields.md) for storage, [voxels.md](voxels.md) masks for
