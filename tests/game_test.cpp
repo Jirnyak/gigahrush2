@@ -8,6 +8,7 @@
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "ecs/registry.h"
+#include "game/container.h"
 #include "game/combat.h"
 #include "game/embody.h"
 #include "game/elevator.h"
@@ -2740,6 +2741,117 @@ static void test_faction_gates_hunting() {
     (void)pool;
 }
 
+
+// Containers. The one rule that must not break is the per-KIND cap: the floor's band
+// raises the CEILING and the kind takes a fixed share of it, so a public emergency box
+// on the deepest floor is still a public emergency box.
+//
+// Without that, depth alone turns every waste bin into a jackpot and the five economy
+// bands collapse into a single multiplier — which is the failure the reference's own
+// economics doc warns about and then only half-enforces.
+static void test_containers() {
+    auto worth = [](const Container& c) {
+        std::int32_t v = 0;
+        for (int i = 0; i < kContainerSlots; ++i)
+            if (item_valid(c.item[i]))
+                v += item_def(c.item[i]).value * c.count[i];
+        return v;
+    };
+
+    // Sample many seeds: one roll says nothing about a cap.
+    auto worst = [&](ContainerKind k, int floorZ) {
+        std::int32_t hi = 0;
+        for (std::uint32_t s = 0; s < 400; ++s) {
+            const std::int32_t v = worth(roll_container(k, floorZ, s * 2654435761u));
+            if (v > hi) hi = v;
+        }
+        return hi;
+    };
+
+    // A deep safe must be worth vastly more than a deep public box. This is the whole
+    // design in one assertion.
+    const std::int32_t deepBox = worst(ContainerKind::PublicBox, -50);
+    const std::int32_t deepSafe = worst(ContainerKind::Safe, -50);
+    CHECK(deepSafe > deepBox * 4);
+
+    // And depth must still matter: the same KIND is richer deeper.
+    CHECK(worst(ContainerKind::Safe, -50) > worst(ContainerKind::Safe, 0));
+    CHECK(worst(ContainerKind::RoomStash, -50) > worst(ContainerKind::RoomStash, 0));
+
+    // Every roll respects its own share of the band cap, at both ends of the stack.
+    for (int fz : {0, -8, -26, -50, 30}) {
+        const std::int32_t band = kLootValueCap[economy_band(fz)];
+        for (std::uint8_t k = 0; k < static_cast<std::uint8_t>(ContainerKind::Count);
+             ++k) {
+            const std::int32_t share =
+                band * kContainerCapPct[k] / 100;
+            for (std::uint32_t s = 0; s < 120; ++s) {
+                const Container c =
+                    roll_container(static_cast<ContainerKind>(k), fz, s * 40503u);
+                for (int i = 0; i < kContainerSlots; ++i)
+                    if (item_valid(c.item[i]))
+                        // Per ITEM, not per container: the cap gates what may appear,
+                        // and a stack of cheap things is allowed to add up past it.
+                        CHECK(item_def(c.item[i]).value <= share);
+            }
+        }
+    }
+
+    // A public box is survival support only — never a weapon, never trade goods. That
+    // is what keeps it useful at depth without ever being a jackpot.
+    for (std::uint32_t s = 0; s < 200; ++s) {
+        const Container c = roll_container(ContainerKind::PublicBox, -50, s * 7919u);
+        for (int i = 0; i < kContainerSlots; ++i) {
+            if (!item_valid(c.item[i])) continue;
+            const auto cat = static_cast<ItemCategory>(item_def(c.item[i]).category);
+            CHECK(cat == ItemCategory::Food || cat == ItemCategory::Drink ||
+                  cat == ItemCategory::Medicine || cat == ItemCategory::Ammo);
+        }
+    }
+
+    // A weapon crate carries weapons and ammo and nothing else, or it is just a
+    // differently-coloured stash.
+    int crateWeapons = 0;
+    for (std::uint32_t s = 0; s < 200; ++s) {
+        const Container c = roll_container(ContainerKind::WeaponCrate, -26, s * 104729u);
+        for (int i = 0; i < kContainerSlots; ++i) {
+            if (!item_valid(c.item[i])) continue;
+            const auto cat = static_cast<ItemCategory>(item_def(c.item[i]).category);
+            CHECK(cat == ItemCategory::Weapon || cat == ItemCategory::Ammo);
+            if (cat == ItemCategory::Weapon) ++crateWeapons;
+        }
+    }
+    CHECK(crateWeapons > 0);   // and it must actually produce weapons sometimes
+
+    // Placement: containers must land where a body can reach them, on the ground
+    // storey, with something solid underneath. Derelict drops 12% of its slab cells,
+    // so a container spawned over a hole falls out of the world — the failure this
+    // guards is silent and only visible as a missing crate.
+    World w;
+    generate_floor(w, -50, floor_spec(FloorKind::Derelict), 3u);
+    Registry reg;
+    const std::uint32_t made = spawn_floor_containers(
+        reg, w, -50, FloorKind::Derelict, 0, /*seed=*/99u, /*cap=*/64);
+    CHECK(made > 8);
+    int reachable = 0;
+    for (auto e : reg.view<const Container, const Transform>()) {
+        const Transform& t = reg.get<const Transform>(e);
+        const int cx = static_cast<int>(t.pos.x / kCellSize);
+        const int cy = static_cast<int>(t.pos.y / kCellSize);
+        CHECK(w.grid().cell(cx, cy, 1) == kCellAir);      // standable
+        CHECK(w.grid().cell(cx, cy, 0) != kCellAir);      // and not over a hole
+        ++reachable;
+    }
+    CHECK(reachable == static_cast<int>(made));
+
+    // Deterministic: the same floor holds the same crates in the same places, which is
+    // what makes the building a place rather than a slot machine.
+    Registry r2;
+    const std::uint32_t again = spawn_floor_containers(
+        r2, w, -50, FloorKind::Derelict, 0, /*seed=*/99u, /*cap=*/64);
+    CHECK(again == made);
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -2784,6 +2896,7 @@ int main() {
     test_faction_relations();
     test_faction_gates_hunting();
     test_extraction();
+    test_containers();
     test_extraction_reachable();
     test_mob_behaviour();
     test_ranged_table();

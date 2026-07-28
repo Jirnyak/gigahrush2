@@ -42,6 +42,7 @@
 #include "game/needs.h"
 #include "game/rumour.h"
 #include "game/samosbor.h"
+#include "game/container.h"
 #include "game/combat.h"
 #include "game/extraction.h"
 #include "game/faction_relations.h"
@@ -221,6 +222,26 @@ constexpr std::uint32_t kMobSpawnCap = 600;
 // spawn this floor's roster from the global table ([monsters.md]). Mobs are not
 // alife records — they do not fold back, they are simply destroyed and remade,
 // deterministically per (floor, seed).
+// Containers are placed on the same trigger as monsters and with the same
+// determinism, so a floor you leave and return to holds the same crates in the same
+// rooms. Kept separate from refresh_floor_mobs because an emptied container is world
+// state a save must eventually keep, while a monster is not ([container.h]).
+std::uint32_t refresh_floor_containers(Registry& reg, const World& world,
+                                      int floorNumber, LayerId layer) {
+    // Clear whatever the previous occupant of this layer slot left behind.
+    std::vector<Entity> old_;
+    for (auto e : reg.view<const game::Container, const Transform>())
+        if (reg.get<const Transform>(e).layer == layer) old_.push_back(e);
+    for (Entity e : old_) reg.destroy(e);
+
+    const DemoFloor* df = demo_floor(floorNumber);
+    if (!df) return 0;
+    return game::spawn_floor_containers(
+        reg, world, floorNumber, df->kind, layer,
+        /*seed=*/0xC0FFEEu ^ static_cast<std::uint32_t>(floorNumber) * 0x9e3779b9u,
+        /*cap=*/64);
+}
+
 std::uint32_t refresh_floor_mobs(Registry& reg, const World& world, int floorNumber,
                                  LayerId layer) {
     game::despawn_layer_mobs(reg, layer);
@@ -458,6 +479,7 @@ int main(int argc, char** argv) {
             aim_player(reg, player);
             LayerId l0 = reg.get<Transform>(player).layer;
             refresh_floor_mobs(reg, stack.layer(l0), 0, l0);
+            refresh_floor_containers(reg, stack.layer(l0), 0, l0);
             begin_floor_nav(stack.layer(l0), nav);
         }
     }
@@ -517,6 +539,7 @@ int main(int argc, char** argv) {
     std::uint32_t shots = 0;   // rounds the player has fired
     game::RunLedger ledger;
     std::int32_t banked = 0;
+    std::int32_t containerTake = 0;   // roubles pulled out of crates
     std::uint32_t deaths = 0;
     std::uint32_t kills = 0;       // carried across possession
     bool attackHeld = false;
@@ -614,6 +637,8 @@ int main(int argc, char** argv) {
                         // same every visit).
                         LayerId nl = reg.get<Transform>(player).layer;
                         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
+                        refresh_floor_containers(reg, stack.layer(nl),
+                                                 currentFloor, nl);
                         begin_floor_nav(stack.layer(nl), nav);
                     }
                 }
@@ -773,6 +798,16 @@ int main(int argc, char** argv) {
                 // ONE death point per tick, after everything that can deal damage
                 // (combat.h). Nothing else in the tree destroys a damaged entity.
                 deaths += game::finalize_deaths(reg, pool, bus, simTick);
+                // Containers first, then loose pickups: a crate emptied this tick
+                // should be sweepable in the same tick if the inventory overflowed
+                // onto the floor. [container.h]
+                const std::int32_t fromBox =
+                    game::loot_containers_step(reg, pool, activeLayer);
+                if (fromBox != 0) {
+                    loot += fromBox;
+                    containerTake += fromBox;
+                    game::sync_armour(reg, pool, player);
+                }
                 const std::int32_t got =
                     game::pickup_step(reg, pool, bus, activeLayer, simTick);
                 if (got != 0) {
@@ -922,6 +957,16 @@ int main(int argc, char** argv) {
                         ImGui::TextColored(ImVec4(0.29f, 0.75f, 0.57f, 1.0f),
                                            "body: %s  (monsters ignore you)",
                                            game::faction_name(f));
+                }
+                {
+                    int shut = 0, open = 0;
+                    for (auto ce : reg.view<const game::Container, const Transform>()) {
+                        if (reg.get<const Transform>(ce).layer != activeLayer) continue;
+                        if (reg.get<const game::Container>(ce).opened) ++open;
+                        else ++shut;
+                    }
+                    ImGui::Text("crates %d unopened / %d emptied | took %d rub",
+                                shut, open, containerTake);
                 }
                 ImGui::Text("loot %d rub (%d/%d slots) | healed %d | band E%u",
                             carried, slots, game::kInvSlots, healed,
@@ -1125,8 +1170,17 @@ int main(int argc, char** argv) {
                         LayerId nl = reg.get<Transform>(player).layer;
                         activeLayer = nl;
                         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
+                        refresh_floor_containers(reg, stack.layer(nl),
+                                                 currentFloor, nl);
                         begin_floor_nav(stack.layer(nl), nav);
                         cubePass.invalidate();
+                        // Same clear as the keyboard ride path. There are TWO travel
+                        // sites and the first fix only touched one, so a --shot
+                        // capture kept reporting a rumour about the floor it started
+                        // on. A duplicated code path is a duplicated bug; this is the
+                        // second one and the reason to be suspicious of the shape.
+                        rumourLine[0] = 0;
+                        rumourAt = 0;
                     }
                     ++shotRideDone;
                 }
