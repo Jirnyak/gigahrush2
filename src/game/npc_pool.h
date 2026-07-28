@@ -139,7 +139,15 @@ public:
 
     // High-water mark of allocated slots (active + dead, excludes untouched
     // reserve). Also the exclusive upper bound of every valid id.
+    // Slots ever handed out. This is a HIGH-WATER MARK and can never decrease —
+    // the pool deliberately never reclaims ([npcs.md]) — so it is the wrong number
+    // to show a player as a population. Use alive() for that.
     std::uint32_t count() const { return count_; }
+
+    // Records currently alive. Maintained in spawn()/kill() rather than counted,
+    // because a scan of 2^20 flag bytes per HUD frame is not free and the answer is
+    // exact either way.
+    std::uint32_t alive() const { return alive_; }
     std::uint32_t capacity() const { return kNpcPoolSize; }
     std::uint32_t reserve_remaining() const { return kNpcPoolSize - count_; }
 
@@ -192,6 +200,7 @@ private:
     std::vector<std::array<Relationship, kRelSlots>> rel_;
     std::vector<Inventory> inv_;
     std::vector<Needs> needs_;   // survival clock ([needs.h]); 36 B/row
+    std::uint32_t alive_ = 0;
 };
 
 } // namespace giga::game

@@ -935,8 +935,11 @@ int main(int argc, char** argv) {
                         nav.last_coarse_ms(), nav.last_fine_ms());
             ImGui::Text("mobs: %u live on this floor",
                         game::count_layer_mobs(reg, activeLayer));
-            ImGui::Text("bodies drawn: %u  (pop %u alive / %u slots)",
-                        bodyPass.last_instance_count(), pool.count(),
+            // `alive`, not `count`: count() is the high-water mark of slots ever
+            // handed out and cannot decrease, so it was reporting a population that
+            // never fell no matter how many died.
+            ImGui::Text("bodies drawn: %u  (pop %u alive / %u ever / %u slots)",
+                        bodyPass.last_instance_count(), pool.alive(), pool.count(),
                         pool.capacity());
             ImGui::Text("floor %d: %s (target pop %u)", currentFloor,
                         currentSpec ? currentSpec->name : "maze",

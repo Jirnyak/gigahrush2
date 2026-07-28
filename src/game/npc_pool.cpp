@@ -30,6 +30,7 @@ void NpcPool::init() {
     // rather than "starving and dehydrated" ([needs.h]).
     needs_.assign(kNpcPoolSize, Needs{});
     count_ = 0;
+    alive_ = 0;
 }
 
 NpcId NpcPool::spawn() {
@@ -38,13 +39,24 @@ NpcId NpcPool::spawn() {
     // Slot came from the zeroed tail; just light the ALIVE bit. (Killed slots
     // below count_ are never handed back out — new NPCs always bump the tail.)
     flags_[id] = NpcAlive;
+    ++alive_;
     return id;
 }
 
 void NpcPool::kill(NpcId id) {
     if (!valid(id)) return;
     // Dead but not reclaimed: clear ALIVE (and EMBODIED), keep the slot & id.
-    flags_[id] &= static_cast<std::uint8_t>(~(NpcAlive | NpcEmbodied));
+    //
+    // **NpcPlayer must be cleared here too, and leaving it out was a live bug.**
+    // `finalize_deaths` calls kill() and then destroys the entity — it never routes
+    // through `fold_back`, which is the only other place the player bit is cleared.
+    // So every player death left a permanent record still flagged as the player, and
+    // `rel_row` ([faction_relations.h]) hands every one of them faction row 5. The
+    // phantom count would have equalled the death counter exactly, growing for the
+    // whole session, and nothing would have complained.
+    flags_[id] &=
+        static_cast<std::uint8_t>(~(NpcAlive | NpcEmbodied | NpcPlayer));
+    if (alive_) --alive_;
 }
 
 void NpcPool::set_name(NpcId id, const char* first, const char* last) {

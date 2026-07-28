@@ -232,6 +232,11 @@ _giga_csv_vs_header("data/mobs.csv" "src/game/mob_table.h"
 # CSV-generated table here at the same time as the generator, not afterwards.
 _giga_csv_vs_header("data/weapons_melee.csv" "src/game/weapon_table.h"
     "kMeleeCount[ \t]*=[ \t]*([0-9]+)" "melee weapon")
+# And the very next table did exactly what the note above warns against: ranged
+# weapons shipped outside this gate. Found by an audit, not by the gate — which is the
+# whole argument for the gate.
+_giga_csv_vs_header("data/weapons_ranged.csv" "src/game/ranged_table.h"
+    "kRangedCount[ \t]*=[ \t]*([0-9]+)" "ranged weapon")
 
 # ---- Verdict ---------------------------------------------------------------
 list(LENGTH GIGA_FAILURES GIGA_FAILURE_COUNT)

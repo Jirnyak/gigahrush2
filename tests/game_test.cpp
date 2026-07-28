@@ -2484,6 +2484,161 @@ static void test_ranged_table() {
     }
 }
 
+
+// Firing, end to end, through the real systems — because the two bugs this increment
+// prevents are RUNTIME bugs and arithmetic in a comment is not proof they are gone.
+//
+// This is deliberately a stronger check than a screenshot would be: a capture would
+// show a tracer leaving the barrel, which says nothing about who took the damage.
+static void test_player_shoots() {
+    LevelStack stack;
+    LayerId layer = stack.push_layer();
+    generate_floor(stack.layer(layer), 1, floor_spec(FloorKind::Commercial), 5u);
+    // Hollow out the firing lane. The floors are dense interiors and a bullet stops on
+    // the first solid cell, so without this the test would measure a wall.
+    for (int z = 20; z <= 23; ++z)
+        for (int y = 18; y <= 22; ++y)
+            for (int x = 18; x <= 46; ++x)
+                stack.layer(layer).grid().clear_cell(x, y, z);
+
+    Registry reg;
+    NpcPool pool;
+    pool.init();
+    EventBus bus;
+
+    // The shooter is an ordinary record holding the camera — there is no player
+    // singleton, so this is exactly how the game does it.
+    NpcId sid = pool.spawn();
+    pool.hp(sid) = 100;
+    pool.max_hp(sid) = 100;
+
+    ItemId gun = kInvalidItem;
+    for (ItemId i = 1; i <= kItemCount; ++i)
+        if (const RangedDef* d = ranged_for_item(i))
+            if (d->pellets == 1 && d->magazine >= 8 && d->dmg >= 20) { gun = i; break; }
+    CHECK(gun != kInvalidItem);
+    const RangedDef& def = *ranged_for_item(gun);
+
+    Inventory& inv = pool.inventory(sid);
+    inv.slots[0] = ItemSlot{gun, 1};
+    inv.slots[1] = ItemSlot{def.ammo, 30};
+
+    Entity shooter = reg.create();
+    Transform st;
+    st.pos = vec3{40.0f, 41.0f, 42.0f};   // cell (20, 20, 21), inside the lane
+    st.layer = layer;
+    reg.emplace<Transform>(shooter, st);
+    reg.emplace<NpcRef>(shooter, NpcRef{sid});
+    CameraTag cam;
+    cam.yaw = 0.0f;          // face +X, straight down the hollowed lane
+    cam.pitch = 0.0f;
+    reg.emplace<CameraTag>(shooter, cam);
+
+    // A monster 12 m down the lane, with enough HP to survive one hit so the test can
+    // tell "damaged" from "deleted".
+    Entity mob = reg.create();
+    Transform mt;
+    // Cell 26, which IS inside the cleared span. My first attempt put it at cell 14 —
+    // outside it — so the bullet correctly stopped on the wall in between and the test
+    // measured masonry rather than marksmanship.
+    mt.pos = vec3{53.0f, 41.0f, 42.0f};
+    mt.layer = layer;
+    reg.emplace<Transform>(mob, mt);
+    reg.emplace<MobRef>(mob, MobRef{0, 1, 500, 500});
+
+    const float dt = 1.0f / 120.0f;
+
+    // First call with the trigger down must RELOAD, not fire: the magazine starts
+    // empty and a gun that fired on an empty chamber would be free ammo.
+    CHECK(player_ranged_step(reg, pool, layer, true, dt, 0) == 0);
+    const PlayerRanged* pr = reg.try_get<PlayerRanged>(shooter);
+    CHECK(pr != nullptr);
+    CHECK(pr->magCount == def.magazine);       // a full magazine came out of the pack
+    CHECK(pr->reloadMs > 0);
+    // ...and the rounds LEFT the inventory. A reload that duplicated ammo would be
+    // invisible until someone counted.
+    std::uint16_t left = 0;
+    for (const ItemSlot& sl : inv.slots)
+        if (sl.item == def.ammo) left = static_cast<std::uint16_t>(left + sl.count);
+    CHECK(left == 30 - def.magazine);
+
+    // Nothing fires while reloading — and the tick count is computed, not sampled.
+    //
+    // My first version of this loop asserted `while reloadMs > 0` and failed, because
+    // the call that brings the timer to zero ALSO fires in that same call: the
+    // condition is read before the step, the step decrements, and the guard is
+    // already satisfied. Exactly the off-by-one that made the monster windup test
+    // wrong. So the boundary is derived instead: elapsedMs is dt*1000+0.5 = 8, and a
+    // 1000 ms reload therefore clears on step ceil(1000/8) = 125.
+    const std::uint16_t stepMs = static_cast<std::uint16_t>(dt * 1000.0f + 0.5f);
+    const int clearAt = (def.reloadMs + stepMs - 1) / stepMs;
+    const std::uint16_t magBefore = reg.get<PlayerRanged>(shooter).magCount;
+    for (int i = 1; i < clearAt; ++i)
+        CHECK(player_ranged_step(reg, pool, layer, true, dt,
+                                 static_cast<std::uint64_t>(i)) == 0);
+    CHECK(reg.get<PlayerRanged>(shooter).reloadMs > 0);   // still not ready
+    // The step that clears the reload is the step that fires.
+    CHECK(player_ranged_step(reg, pool, layer, true, dt,
+                             static_cast<std::uint64_t>(clearAt)) == 1);
+    CHECK(reg.get<PlayerRanged>(shooter).reloadMs == 0);
+    CHECK(reg.get<PlayerRanged>(shooter).magCount == magBefore - 1);
+    CHECK(reg.get<PlayerRanged>(shooter).cooldownMs == def.cooldownMs);
+
+    // One pellet, tagged as the player's, flying flat.
+    int inFlight = 0;
+    for (auto e : reg.view<const Projectile>()) {
+        const Projectile& p = reg.get<const Projectile>(e);
+        CHECK(p.team == 1);
+        CHECK(p.gravityPct == kPlayerGravityPct);
+        CHECK(p.source == shooter);
+        ++inFlight;
+    }
+    CHECK(inFlight == def.pellets);
+
+    // The cooldown gates the next shot rather than the trigger being polled.
+    CHECK(player_ranged_step(reg, pool, layer, true, dt, 501u) == 0);
+
+    // Fly it. THE assertion: the monster loses HP and the SHOOTER does not.
+    const std::int16_t mobHp0 = reg.get<MobRef>(mob).hp;
+    const std::int16_t meHp0 = pool.hp(sid);
+    std::uint32_t hits = 0;
+    for (int i = 0; i < 240 && !reg.view<const Projectile>().empty(); ++i)
+        hits += projectile_step(reg, pool, bus, stack, layer, dt,
+                                600u + static_cast<std::uint64_t>(i));
+    CHECK(hits == 1);
+    CHECK(reg.get<MobRef>(mob).hp == mobHp0 - static_cast<std::int16_t>(def.dmg));
+    // Self-hit, the whole reason kMuzzleForward and the source filter exist. Before
+    // those, this shot killed its own shooter on the first integration step.
+    CHECK(pool.hp(sid) == meHp0);
+    CHECK(reg.get<PlayerRanged>(shooter).hits == 1);
+
+    // And a MONSTER's shot must still not hit the monster that fired it. Same bug,
+    // other shooter: 13 kinds shoot, and each would have died on its first attack.
+    {
+        Entity gunner = reg.create();
+        Transform gt;
+        gt.pos = vec3{41.0f, 41.0f, 42.0f};   // cell 20, inside the lane
+        gt.layer = layer;
+        reg.emplace<Transform>(gunner, gt);
+        reg.emplace<MobRef>(gunner, MobRef{0, 1, 400, 400});
+        const std::int16_t gunnerHp0 = reg.get<MobRef>(gunner).hp;
+        // A monster shot: team 0, so it may not touch a mob at all — including itself.
+        Entity shot = reg.create();
+        Transform pt;
+        pt.pos = gt.pos;
+        pt.pos.z += 0.6f;              // exactly the naive placement
+        pt.layer = layer;
+        reg.emplace<Transform>(shot, pt);
+        reg.emplace<Velocity>(shot, Velocity{vec3{30.0f, 0.0f, 0.0f}});
+        reg.emplace<AABB>(shot, AABB{vec3{0.1f, 0.1f, 0.1f}});
+        reg.emplace<Projectile>(shot, Projectile{gunner, 50, kProjTtlMs, 100, 0});
+        for (int i = 0; i < 30 && reg.valid(shot); ++i)
+            projectile_step(reg, pool, bus, stack, layer, dt,
+                            900u + static_cast<std::uint64_t>(i));
+        CHECK(reg.get<MobRef>(gunner).hp == gunnerHp0);   // it did not shoot itself
+    }
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -2530,6 +2685,7 @@ int main() {
     test_extraction_reachable();
     test_mob_behaviour();
     test_ranged_table();
+    test_player_shoots();
     test_needs_all();
     test_samosbor_all();
 
