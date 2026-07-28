@@ -9,6 +9,7 @@
 #include "ecs/components.h"
 #include "ecs/registry.h"
 #include "game/contract.h"
+#include "game/vendor.h"
 #include "game/container.h"
 #include "game/combat.h"
 #include "game/embody.h"
@@ -3006,6 +3007,188 @@ static void test_contracts() {
     CHECK(dl.banked == 0);
 }
 
+
+// The vendor. One assertion carries the whole design: buying then selling the same item
+// must LOSE money. Without the spread, the optimal play is to stand on the pad cycling
+// one item forever, and every other number in the economy becomes decoration.
+static void test_vendor() {
+    // Something the vendor stocks, with a real price.
+    ItemId drink = kInvalidItem;
+    for (ItemId i = 1; i <= kItemCount; ++i) {
+        const ItemDef& d = item_def(i);
+        if (static_cast<ItemCategory>(d.category) != ItemCategory::Drink) continue;
+        if (d.value <= 0) continue;
+        if (static_cast<UseEffect>(d.useEffect) == UseEffect::None) continue;
+        drink = i;
+        break;
+    }
+    CHECK(drink != kInvalidItem);
+
+    // THE round-trip loss. 1.15 out, 0.85 back = 26% gone.
+    const std::int32_t buy = vendor_buy_price(drink);
+    const std::int32_t sell = vendor_sell_price(drink, VendorKind::Citizen);
+    CHECK(buy > 0 && sell > 0);
+    CHECK(sell < buy);
+
+    // **The invariant that holds at EVERY price: sell < buy, always.** Truncating 0.85x
+    // can never exceed truncating 1.15x, so the money press is closed for all 446 items
+    // regardless of how cheap they are. Checked exhaustively, because this is the one
+    // property the whole economy rests on.
+    for (ItemId i = 1; i <= kItemCount; ++i) {
+        const std::int32_t b = vendor_buy_price(i);
+        if (b <= 0) continue;   // not stocked
+        for (std::uint8_t v = 0; v < static_cast<std::uint8_t>(VendorKind::Count); ++v) {
+            const std::int32_t sp = vendor_sell_price(i, static_cast<VendorKind>(v));
+            // 0 means the vendor will not take it at all — correct for a 1-rouble item,
+            // and the reason the sell price is NOT clamped up to 1 the way the buy price
+            // is. Clamping both left the press ajar: buy 1, sell 1, cycle for free.
+            CHECK(sp == 0 || sp < b);
+        }
+    }
+
+    // The 0.739 RATE, however, is only representable above about 7 roubles. Below that
+    // integer roubles cannot express a 26% spread — water at 2 buys for 2 and sells for
+    // 1, a 50% loss — and the three faction rates collapse onto one integer. That is a
+    // real limitation of integer currency, recorded in the header, not a test bug: my
+    // first version asserted the ratio on the cheapest drink and failed for exactly
+    // this reason.
+    ItemId dearDrink = kInvalidItem;
+    for (ItemId i = 1; i <= kItemCount; ++i) {
+        const ItemDef& d = item_def(i);
+        if (static_cast<ItemCategory>(d.category) != ItemCategory::Drink) continue;
+        if (d.value < 40) continue;
+        dearDrink = i;
+        break;
+    }
+    if (dearDrink != kInvalidItem) {
+        const float ratio =
+            static_cast<float>(vendor_sell_price(dearDrink, VendorKind::Citizen)) /
+            static_cast<float>(vendor_buy_price(dearDrink));
+        CHECK(ratio > 0.70f && ratio < 0.78f);   // 0.85 / 1.15 = 0.739
+        // And the faction order IS strict once it is representable.
+        CHECK(vendor_sell_price(dearDrink, VendorKind::Scientist) >
+              vendor_sell_price(dearDrink, VendorKind::Citizen));
+        CHECK(vendor_sell_price(dearDrink, VendorKind::Wild) <
+              vendor_sell_price(dearDrink, VendorKind::Citizen));
+    }
+    // At any price the order is at least non-strict, which is what a caller may rely on.
+    CHECK(vendor_sell_price(drink, VendorKind::Scientist) >=
+          vendor_sell_price(drink, VendorKind::Citizen));
+    CHECK(vendor_sell_price(drink, VendorKind::Wild) <=
+          vendor_sell_price(drink, VendorKind::Citizen));
+
+    // No weapons for sale: a shop that sells guns removes the reason to open a weapon
+    // crate on a deep floor, and the crate is the better story.
+    CHECK(!vendor_stocks(ItemCategory::Weapon));
+    CHECK(vendor_stocks(ItemCategory::Drink));
+    CHECK(vendor_stocks(ItemCategory::Ammo));
+
+    // Buying spends BANKED and reports what LANDED.
+    RunLedger led;
+    led.banked = buy * 5;
+    Inventory inv;
+    CHECK(vendor_buy(inv, led, drink, 3) == 3);
+    CHECK(led.banked == buy * 2);
+    // Broke: a partial buy, charged only for what arrived, never a negative balance.
+    led.banked = buy;
+    CHECK(vendor_buy(inv, led, drink, 4) == 1);
+    CHECK(led.banked == 0);
+    CHECK(vendor_buy(inv, led, drink, 1) == 0);
+    CHECK(led.banked == 0);
+
+    // A full inventory buys nothing rather than dropping items on the floor.
+    {
+        Inventory full;
+        ItemId single = kInvalidItem;
+        for (ItemId i = 1; i <= kItemCount; ++i)
+            if (item_def(i).stackMax == 1) { single = i; break; }
+        CHECK(single != kInvalidItem);
+        for (int i = 0; i < kInvSlots; ++i) full.slots[i] = ItemSlot{single, 1};
+        RunLedger rich;
+        rich.banked = 1000000;
+        CHECK(vendor_buy(full, rich, drink, 5) == 0);
+        CHECK(rich.banked == 1000000);
+    }
+
+    // Selling never takes the equipped weapon.
+    {
+        ItemId wpn = kInvalidItem;
+        for (ItemId i = 1; i <= kItemCount; ++i)
+            if (melee_for_item(i)) { wpn = i; break; }
+        CHECK(wpn != kInvalidItem);
+        Inventory si;
+        si.slots[0] = ItemSlot{wpn, 1};
+        CHECK(equipped_melee(si) == wpn);
+        RunLedger sl;
+        vendor_sell_all(si, sl, VendorKind::Citizen);
+        CHECK(equipped_melee(si) == wpn);   // still armed
+    }
+
+    // ...and never the last of a survival consumable. A vendor that strips you thirsty
+    // for a profit is a trap dressed as a convenience.
+    {
+        Inventory si;
+        si.slots[0] = ItemSlot{drink, 1};
+        si.slots[1] = ItemSlot{drink, 1};
+        RunLedger sl;
+        CHECK(vendor_sell_all(si, sl, VendorKind::Citizen) == 0);
+        std::int32_t left = 0;
+        for (const ItemSlot& x : si.slots) if (x.item == drink) left += x.count;
+        CHECK(left == 2);
+        // With plenty, the spare IS sold and exactly two are kept back.
+        Inventory bi;
+        bi.slots[0] = ItemSlot{drink, 9};
+        RunLedger bl;
+        CHECK(vendor_sell_all(bi, bl, VendorKind::Citizen) == sell * 7);
+        std::int32_t kept = 0;
+        for (const ItemSlot& x : bi.slots) if (x.item == drink) kept += x.count;
+        CHECK(kept == 2);
+    }
+
+    // The per-visit cap stands in for the reference's missing trader liquidity cap,
+    // which its own balance doc calls a P0: an unlimited buyer converts one deep safe
+    // into enough money to skip the early game.
+    {
+        ItemId dear = kInvalidItem;
+        for (ItemId i = 1; i <= kItemCount; ++i)
+            if (item_def(i).value > 8000 && item_def(i).stackMax == 1) { dear = i; break; }
+        if (dear != kInvalidItem) {
+            Inventory ci;
+            for (int i = 0; i < 20; ++i) ci.slots[i] = ItemSlot{dear, 1};
+            RunLedger cl;
+            const std::int32_t got = vendor_sell_all(ci, cl, VendorKind::Citizen);
+            CHECK(got <= kSellPerVisitCap);
+            // And the unsold remainder is still THERE, not deleted.
+            std::int32_t remaining = 0;
+            for (const ItemSlot& x : ci.slots) if (x.item == dear) remaining += x.count;
+            CHECK(remaining > 0);
+        }
+    }
+
+    // Resupply spends the budget and buys things that actually DO something —
+    // `calm_brew` is a DRINK with no effect, and buying it would be a placebo sale.
+    {
+        Inventory ri;
+        RunLedger rl;
+        rl.banked = 3000;
+        const std::int32_t used = vendor_resupply(ri, rl, 600);
+        CHECK(used > 0 && used <= 600);
+        CHECK(rl.banked == 3000 - used);
+        int items = 0;
+        for (const ItemSlot& x : ri.slots) {
+            if (!item_valid(x.item)) continue;
+            items += x.count;
+            CHECK(static_cast<UseEffect>(item_def(x.item).useEffect) != UseEffect::None);
+        }
+        CHECK(items > 0);
+        // Broke means nothing is bought and nothing goes negative.
+        RunLedger poor;
+        Inventory pi;
+        CHECK(vendor_resupply(pi, poor, 600) == 0);
+        CHECK(poor.banked == 0);
+    }
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -3052,6 +3235,7 @@ int main() {
     test_extraction();
     test_containers();
     test_contracts();
+    test_vendor();
     test_extraction_reachable();
     test_mob_behaviour();
     test_ranged_table();

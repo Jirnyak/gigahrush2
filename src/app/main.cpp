@@ -43,6 +43,7 @@
 #include "game/rumour.h"
 #include "game/samosbor.h"
 #include "game/contract.h"
+#include "game/vendor.h"
 #include "game/container.h"
 #include "game/combat.h"
 #include "game/extraction.h"
@@ -110,6 +111,11 @@ constexpr float kSamosborFogSqueeze = 0.34f;
 // Controller it overwrites — otherwise the first exhausted tick would halve the
 // speed and the second would halve the already-halved value, decaying to zero.
 // Matches Controller::moveSpeed's own default ([components.h]).
+// What one R press spends on supplies. A fixed budget rather than a shopping UI: the
+// interesting decision is HOW MUCH of the run to convert back into survival, not which
+// of 446 items to click. [vendor.h]
+constexpr std::int32_t kResupplyBudget = 600;
+
 constexpr float kPlayerWalkSpeed = 6.0f;       // fog.w, scales the hemispheric term
 
 // The demo floor stack: one row per floor MODULE. Numbers are the in-game labels
@@ -548,10 +554,18 @@ int main(int argc, char** argv) {
     std::int32_t banked = 0;
     std::int32_t containerTake = 0;   // roubles pulled out of crates
     std::int32_t contractPaid = 0;    // roubles paid by finished jobs
+    std::int32_t sold = 0;            // roubles taken for the haul
+    std::int32_t spent = 0;           // roubles spent on supplies
+    // Who buys on this floor. The dominant faction sets the sell rate, which gives the
+    // faction matrix a second live consumer and makes the territory rumour worth
+    // acting on rather than being colour. [vendor.h]
+    game::VendorKind vendorKind = game::VendorKind::Citizen;
     std::uint32_t deaths = 0;
     std::uint32_t kills = 0;       // carried across possession
     bool attackHeld = false;
-    bool healWanted = false;       // set by H, consumed by one sim step
+    bool healWanted = false;
+    bool sellWanted = false;      // B, consumed by one sim step
+    bool buyWanted = false;       // R, consumed by one sim step       // set by H, consumed by one sim step
     std::int32_t loot = 0;         // roubles swept up this run
     std::int32_t healed = 0;
     int fluidStepEvery = 4; // sim steps between fluid updates
@@ -674,6 +688,16 @@ int main(int argc, char** argv) {
                     e.key.scancode == SDL_SCANCODE_H) {
                     healWanted = true;
                 }
+                // B sells the haul, R re-supplies. Recorded as INTENT here and acted
+                // on in the sim loop, the same shape `healWanted` uses — the event loop
+                // has no `activeLayer` in scope, and more importantly a trade is a
+                // world mutation and belongs on the sim's clock, not the window's.
+                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
+                    e.key.scancode == SDL_SCANCODE_B)
+                    sellWanted = true;
+                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
+                    e.key.scancode == SDL_SCANCODE_R)
+                    buyWanted = true;
                 // E takes the job on offer. The only interaction bind in the game, and
                 // it exists because a contract is the one thing the player has to
                 // actively agree to — everything else is walked into.
@@ -872,6 +896,27 @@ int main(int argc, char** argv) {
                                     pool.inventory(nrx->id), ledger);
                     }
                 }
+                // The pad is the shop, and only the pad. A vendor reachable from
+                // anywhere would make the walk home pointless, and the walk home IS
+                // the extraction loop. [vendor.h]
+                if ((sellWanted || buyWanted) && reg.valid(player)) {
+                    const Transform& vt = reg.get<Transform>(player);
+                    if (game::on_extraction_pad(stack.layer(activeLayer).grid(),
+                                                vt.pos)) {
+                        if (const auto* nrv = reg.try_get<game::NpcRef>(player))
+                            if (pool.valid(nrv->id)) {
+                                game::Inventory& vi = pool.inventory(nrv->id);
+                                if (sellWanted)
+                                    sold += game::vendor_sell_all(vi, ledger,
+                                                                 vendorKind);
+                                if (buyWanted)
+                                    spent += game::vendor_resupply(vi, ledger,
+                                                                   kResupplyBudget);
+                            }
+                    }
+                    sellWanted = false;
+                    buyWanted = false;
+                }
                 // Contracts advance and pay AFTER the extraction step, so a Fetch
                 // job completes at the pad — the same moment the loop's own payoff
                 // lands, which is what makes the errand feel like part of the trip
@@ -1029,6 +1074,15 @@ int main(int argc, char** argv) {
                         ImGui::TextColored(ImVec4(0.29f, 0.75f, 0.57f, 1.0f),
                                            "body: %s  (monsters ignore you)",
                                            game::faction_name(f));
+                }
+                if (reg.valid(player)) {
+                    const Transform& vt2 = reg.get<Transform>(player);
+                    if (game::on_extraction_pad(stack.layer(activeLayer).grid(),
+                                                vt2.pos))
+                        ImGui::TextColored(ImVec4(0.29f, 0.75f, 0.57f, 1.0f),
+                                           "PAD: banking | B sell haul | R resupply "
+                                           "(%d rub) | sold %d spent %d",
+                                           kResupplyBudget, sold, spent);
                 }
                 {
                     int shut = 0, open = 0;
