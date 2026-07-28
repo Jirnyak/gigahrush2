@@ -227,6 +227,11 @@ _giga_csv_vs_header("data/items.csv" "src/game/item_table.h"
     "kItemCount[ \t]*=[ \t]*([0-9]+)" "item")
 _giga_csv_vs_header("data/mobs.csv" "src/game/mob_table.h"
     "kMobKindCount[ \t]*==[ \t]*([0-9]+)" "mob kind")
+# Melee weapons were shipping OUTSIDE this gate — a third generated table with the
+# same drift hazard as the other two and none of the protection. Add every new
+# CSV-generated table here at the same time as the generator, not afterwards.
+_giga_csv_vs_header("data/weapons_melee.csv" "src/game/weapon_table.h"
+    "kMeleeCount[ \t]*=[ \t]*([0-9]+)" "melee weapon")
 
 # ---- Verdict ---------------------------------------------------------------
 list(LENGTH GIGA_FAILURES GIGA_FAILURE_COUNT)

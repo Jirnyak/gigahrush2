@@ -55,6 +55,7 @@
 #include "sim/physics.h"
 #include "world/level_stack.h"
 #include "world/nav.h"
+#include "world/nav_async.h"
 
 using namespace giga;
 
@@ -159,26 +160,31 @@ std::uint32_t refresh_floor_mobs(Registry& reg, const World& world, int floorNum
         kMobSpawnCap);
 }
 
-// Bake this floor's navigation and give its inhabitants somewhere to walk.
+// Kick off this floor's navigation bake on a worker thread.
 //
-// This is the first thing in the project to actually CONSUME the nav bake, which
-// until now was complete, tested, and wired to nothing. It is bake-time work by
-// design (64 wrapped BFS for the coarse graph, 64 more for the flow fields) and
-// belongs at floor load / post-samosbor, never on the tick — performance.md
-// declares load time unbounded and RAM generous, which is exactly what buys the
-// O(1)-per-agent steering it enables.
-void bake_floor_nav(Registry& reg, const World& world, LayerId layer,
-                    nav::CoarseGraph& coarse, nav::FineNav& fine,
-                    std::uint32_t seed, double freq) {
-    std::uint64_t t0 = SDL_GetPerformanceCounter();
-    nav::bake_coarse(world.grid(), coarse);
-    std::uint64_t t1 = SDL_GetPerformanceCounter();
-    nav::bake_fine(world.grid(), fine);
-    std::uint64_t t2 = SDL_GetPerformanceCounter();
+// This used to block: coarse ~1.9 s + fine ~1.8 s, measured, so every elevator ride
+// froze the frame for ~3.7 s. The bake is not naive — it is already fanned across
+// all 20 hardware threads by core/jobs.h — it is simply a lot of work (128 wrapped
+// BFS over a 128^3 grid). performance.md declares load time unbounded, so the
+// freeze was within contract and still the worst thing the player felt.
+//
+// Now the player moves, looks, fights and loots immediately; the floor's crowd
+// stands still until the bake lands, because wander_step no-ops on an empty flow
+// field. That degradation is automatic rather than special-cased.
+void begin_floor_nav(const World& world, nav::AsyncBake& bake) {
+    bake.start(world.grid());
+}
+
+// Called once the bake has landed: hand the new floor's inhabitants somewhere to
+// walk. Separate from begin_floor_nav because it can only run after the swap.
+std::uint32_t finish_floor_nav(Registry& reg, LayerId layer, std::uint32_t seed,
+                               const nav::AsyncBake& bake) {
     std::uint32_t n = game::wander_init(reg, layer, seed);
     std::fprintf(stderr,
-                 "[nav] bake coarse %.0f ms | fine %.0f ms | %u agents wandering\n",
-                 (t1 - t0) / freq * 1000.0, (t2 - t1) / freq * 1000.0, n);
+                 "[nav] bake coarse %.0f ms | fine %.0f ms | %u agents wandering "
+                 "(async, off the main thread)\n",
+                 bake.last_coarse_ms(), bake.last_fine_ms(), n);
+    return n;
 }
 
 // Wake up in someone else's body.
@@ -310,8 +316,9 @@ int main(int argc, char** argv) {
     // Navigation for the ONE live floor. Re-baked on every floor entry; ~128 MiB
     // for the flow fields, which is affordable precisely because streaming keeps
     // a single floor resident (performance.md).
-    static nav::CoarseGraph navCoarse;   // ~13 KB, static to keep it off the stack
-    nav::FineNav navFine;
+    // Baked asynchronously; owns both the live graph the tick reads and the
+    // pending one a worker fills (world/nav_async.h).
+    nav::AsyncBake nav;
     game::NpcPool pool;
     pool.init();
     // Transient event ring ([events.md]). Combat publishes deaths into it; it is
@@ -359,8 +366,7 @@ int main(int argc, char** argv) {
             aim_player(reg, player);
             LayerId l0 = reg.get<Transform>(player).layer;
             refresh_floor_mobs(reg, stack.layer(l0), 0, l0);
-            bake_floor_nav(reg, stack.layer(l0), l0, navCoarse, navFine, 0xA11FEu,
-                           static_cast<double>(SDL_GetPerformanceFrequency()));
+            begin_floor_nav(stack.layer(l0), nav);
         }
     }
 
@@ -421,6 +427,15 @@ int main(int argc, char** argv) {
         // last frame has had its chance to be consumed. Clearing here rather than
         // at the end means a consumer added later sees a full frame's batch.
         bus.clear();
+
+        // Hand over a finished nav bake. Cheap every frame; true only on the frame
+        // the swap happens, which is when the floor's crowd can start walking.
+        if (nav.poll()) {
+            const LayerId l = reg.valid(player)
+                                  ? reg.get<Transform>(player).layer
+                                  : LayerId{0};
+            finish_floor_nav(reg, l, 0xA11FEu, nav);
+        }
         if (frameDt > 0.1f) frameDt = 0.1f; // clamp after a stall
 
         // --- events --------------------------------------------------------
@@ -473,8 +488,7 @@ int main(int argc, char** argv) {
                         // same every visit).
                         LayerId nl = reg.get<Transform>(player).layer;
                         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
-                        bake_floor_nav(reg, stack.layer(nl), nl, navCoarse,
-                                       navFine, 0xA11FEu, freq);
+                        begin_floor_nav(stack.layer(nl), nav);
                     }
                 }
             }
@@ -526,7 +540,7 @@ int main(int argc, char** argv) {
                 controller_step(reg, kSimDt);
                 // Steer the crowd BEFORE physics: wander writes horizontal
                 // velocity, physics integrates it and resolves collision.
-                game::wander_step(reg, navCoarse, navFine, activeLayer, simTick);
+                game::wander_step(reg, nav.coarse(), nav.fine(), activeLayer, simTick);
                 physics_step(reg, stack, kSimDt);
                 // Melee resolves AFTER physics, so reach is tested against where
                 // bodies actually ended up this step rather than where they
@@ -642,6 +656,10 @@ int main(int argc, char** argv) {
                             carried, slots, game::kInvSlots, healed,
                             game::economy_band(currentFloor));
             }
+            ImGui::Text("nav: %s  (last bake %.0f + %.0f ms, async)",
+                        nav.baking() ? "BAKING - crowd idle"
+                                     : (nav.ready() ? "ready" : "none"),
+                        nav.last_coarse_ms(), nav.last_fine_ms());
             ImGui::Text("mobs: %u live on this floor",
                         game::count_layer_mobs(reg, activeLayer));
             ImGui::Text("bodies drawn: %u  (pop %u alive / %u slots)",
