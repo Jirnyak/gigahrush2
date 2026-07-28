@@ -1,5 +1,6 @@
 # Build output
 /build/
+/build-win/
 /out/
 
 # CMake FetchContent caches live under build/, but guard the source tree too.

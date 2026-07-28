@@ -40,10 +40,13 @@ int g_checks = 0;
     } while (0)
 
 static void test_inventory() {
+    // Compile-time layout contract: a static_assert, not a CHECK. It is a fact
+    // about the type, so it belongs to the build, not to a test run.
+    static_assert(kInvSlots == 64, "inventory is an 8x8 grid ([items.md])");
+
     Inventory inv;
     CHECK(inv.empty());
     CHECK(inv.first_free() == 0);
-    CHECK(kInvSlots == 64);
 
     inv.at(3, 2).item = 7;
     inv.at(3, 2).count = 5;
@@ -63,10 +66,13 @@ static void test_inventory() {
 }
 
 static void test_pool_basics() {
+    // 2^20 slots is a load-bearing constant (id masking, verbatim serialization
+    // with the world) — assert it at build time.
+    static_assert(kNpcPoolSize == 1048576u, "pool is 2^20 slots ([npcs.md])");
+
     NpcPool pool;
     pool.init();
     CHECK(pool.capacity() == kNpcPoolSize);
-    CHECK(kNpcPoolSize == 1048576u);
     CHECK(pool.count() == 0);
     CHECK(pool.reserve_remaining() == kNpcPoolSize);
 
@@ -621,9 +627,12 @@ static void test_elevator() {
     CHECK(pool.cz(id) == 2);  // dropped onto the arrival storey
     // View + movement mode preserved across the swap.
     CHECK(reg.get<Controller>(p).fly == true);
-    auto near = [](float a, float b) { return (a - b) * (a - b) < 1e-8f; };
-    CHECK(near(reg.get<CameraTag>(p).yaw, 1.234f));
-    CHECK(near(reg.get<CameraTag>(p).pitch, -0.321f));
+    // Not named `near`: <minwindef.h> defines `near` and `far` as object-like
+    // macros, so that identifier detonates the moment anything in giga_game's
+    // header chain reaches <windows.h>.
+    auto approx = [](float a, float b) { return (a - b) * (a - b) < 1e-8f; };
+    CHECK(approx(reg.get<CameraTag>(p).yaw, 1.234f));
+    CHECK(approx(reg.get<CameraTag>(p).pitch, -0.321f));
 
     // Ride up again: floor 2 is not loaded -> no-op, player untouched.
     RideResult none = ride_elevator(reg, pool, registry, p, /*from=*/1,

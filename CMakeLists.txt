@@ -1,4 +1,7 @@
-cmake_minimum_required(VERSION 3.20)
+# 3.21 is a hard floor, not a preference: MSVC gained a CXX23 mapping in CMake
+# 3.21 (3.20 rejects CMAKE_CXX_STANDARD 23 outright), and $<TARGET_RUNTIME_DLLS>
+# — which stages SDL3.dll beside the exe on Windows — is also 3.21.
+cmake_minimum_required(VERSION 3.21)
 project(gigahrush2 LANGUAGES CXX)
 
 # ---------------------------------------------------------------------------
@@ -13,9 +16,13 @@ project(gigahrush2 LANGUAGES CXX)
 # left for game teams to layer on top via ECS components + systems.
 #
 # Dependencies:
-#   - SDL3, Vulkan, MoltenVK  -> system (Homebrew) via find_package
+#   - Vulkan                  -> system (Homebrew / LunarG SDK) via find_package
+#   - SDL3                    -> system if present, else pinned via FetchContent
 #   - EnTT, Dear ImGui        -> pinned via FetchContent
 # No GLM: the engine ships its own dependency-free math in src/core/math.h.
+#
+# Platforms: macOS (Clang + MoltenVK) and Windows (MSVC + LunarG Vulkan SDK).
+# See tools/win/ for the Windows build entry point.
 # ---------------------------------------------------------------------------
 
 set(CMAKE_CXX_STANDARD 23)
@@ -37,15 +44,65 @@ if(NOT MSVC)
             -fno-sanitize=vptr -g)
         add_link_options(-fsanitize=address,undefined)
     endif()
+else()
+    # /utf-8 makes the build independent of the host's ANSI codepage rather than
+    # fixing anything today (the tree has no Cyrillic literals yet — the content
+    # tables will). On a DBCS locale a multi-byte comment character can swallow
+    # the following quote and break the parse; this removes that class of bug.
+    # NOMINMAX is load-bearing: <SDL3/SDL.h> can reach <windows.h>, whose
+    # min/max macros collide with the std::min/max/clamp used in core/math.h,
+    # sim/fluid.cpp, render/vk_swapchain.cpp and input/input.cpp.
+    add_compile_options(/utf-8 /permissive- /Zc:__cplusplus /MP)
+    add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+    if(GIGA_ASAN)
+        add_compile_options(/fsanitize=address)
+    endif()
 endif()
 
-# Link-time optimization for optimized configs.
+# Link-time optimization, probed once and applied per-target below. It is
+# deliberately NOT set as a directory variable: those are inherited by every
+# FetchContent subproject, which would push /GL (or -flto) through all of SDL3
+# and Dear ImGui — slow to build and a less-tested compile path for platform C.
 include(CheckIPOSupported)
 check_ipo_supported(RESULT _giga_ipo OUTPUT _giga_ipo_msg)
-if(_giga_ipo)
-    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
-    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO ON)
-endif()
+
+# ---- Per-target policy -----------------------------------------------------
+# One place instead of five near-identical if(MSVC) blocks. Applies our warning
+# level, the RTTI decision, and LTO — so third-party targets get none of it.
+#
+# `rtti` controls whether the target may use RTTI. The no-exceptions rule
+# (AGENTS.md) is enforced by the compiler on Clang/GCC only: MSVC's STL is not
+# supportable under _HAS_EXCEPTIONS=0 (it rewrites every STL catch block to
+# `else if (0)`, so vector::at terminates instead of throwing, and mixing the
+# macro across TUs is an undiagnosable ODR violation). On MSVC we therefore
+# compile /EHsc and the rule reverts to code discipline. Consequence worth
+# remembering: the macOS build is the mechanical enforcer — introduce a throw
+# and macOS catches it while Windows stays green. See tools/win/README.md.
+function(giga_target_flags tgt rtti)
+    if(MSVC)
+        target_compile_options(${tgt} PRIVATE /W4 /EHsc
+            /wd4100  # unreferenced formal parameter (== -Wno-unused-parameter)
+        )
+        if(NOT rtti)
+            target_compile_options(${tgt} PRIVATE /GR-)
+        endif()
+    else()
+        target_compile_options(${tgt} PRIVATE -Wall -Wextra -Wno-unused-parameter)
+        if(NOT rtti)
+            target_compile_options(${tgt} PRIVATE -fno-rtti -fno-exceptions)
+        endif()
+    endif()
+    if(_giga_ipo)
+        # Release only. MSVC adds /INCREMENTAL to RelWithDebInfo, which conflicts
+        # with the /LTCG that IPO implies (LNK4075); LTO also defeats the point
+        # of a fast-iteration debug-info build.
+        set_property(TARGET ${tgt} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+        if(NOT MSVC)
+            set_property(TARGET ${tgt} PROPERTY
+                INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO ON)
+        endif()
+    endif()
+endfunction()
 
 # ---- Third-party (pinned) -------------------------------------------------
 include(FetchContent)
@@ -63,11 +120,33 @@ FetchContent_Declare(imgui
 FetchContent_MakeAvailable(imgui)
 
 # ---- System dependencies --------------------------------------------------
-find_package(SDL3 REQUIRED CONFIG)
+# Vulkan is always a system dependency: MoltenVK via Homebrew on macOS, the
+# LunarG SDK on Windows (set VULKAN_SDK). glslc ships with both.
 find_package(Vulkan REQUIRED)
+if(NOT Vulkan_GLSLC_EXECUTABLE)
+    message(FATAL_ERROR "glslc not found. macOS: brew install shaderc. "
+        "Windows: install the LunarG Vulkan SDK and set VULKAN_SDK.")
+endif()
+
 # Threads is a CORE dependency: the nav bake job system (src/core/jobs.h) fans
 # its 64 per-node BFS across std::thread. Found here so giga_core can link it.
 find_package(Threads REQUIRED)
+
+# SDL3: prefer a system install (Homebrew), otherwise build it from source.
+# Windows has no system SDL3, so FetchContent is the normal path there.
+find_package(SDL3 QUIET CONFIG)
+if(NOT SDL3_FOUND)
+    message(STATUS "SDL3 not found on the system — fetching from source.")
+    set(SDL_SHARED ON CACHE BOOL "" FORCE)
+    set(SDL_STATIC OFF CACHE BOOL "" FORCE)
+    set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+    set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(SDL3
+        GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+        GIT_TAG release-3.4.12 GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(SDL3)
+endif()
 
 set(IMGUI_SOURCES
     ${imgui_SOURCE_DIR}/imgui.cpp
@@ -87,10 +166,7 @@ add_library(giga_core STATIC ${GIGA_CORE_SOURCES})
 target_include_directories(giga_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(giga_core PUBLIC EnTT::EnTT Threads::Threads)
 target_compile_definitions(giga_core PUBLIC ENTT_NOEXCEPTION)
-if(NOT MSVC)
-    target_compile_options(giga_core PRIVATE
-        -Wall -Wextra -Wno-unused-parameter -fno-rtti -fno-exceptions)
-endif()
+giga_target_flags(giga_core OFF)
 
 # ---- Game layer library ---------------------------------------------------
 # Gameplay macro-systems (NPC pool, event bus, inventory, mob table) layered on
@@ -100,10 +176,7 @@ file(GLOB_RECURSE GIGA_GAME_SOURCES CONFIGURE_DEPENDS src/game/*.cpp)
 add_library(giga_game STATIC ${GIGA_GAME_SOURCES})
 target_include_directories(giga_game PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(giga_game PUBLIC giga_core)
-if(NOT MSVC)
-    target_compile_options(giga_game PRIVATE
-        -Wall -Wextra -Wno-unused-parameter -fno-rtti -fno-exceptions)
-endif()
+giga_target_flags(giga_game OFF)
 
 # ---- Shader compilation (GLSL -> SPIR-V) ----------------------------------
 set(_giga_spv_dir ${CMAKE_BINARY_DIR}/shaders)
@@ -125,20 +198,31 @@ add_custom_target(giga_shaders DEPENDS ${_giga_spv_files})
 file(GLOB GIGA_RENDER_SOURCES CONFIGURE_DEPENDS src/render/*.cpp)
 file(GLOB GIGA_APP_SOURCES CONFIGURE_DEPENDS src/app/*.cpp src/input/*.cpp)
 
-add_executable(gigahrush2 ${GIGA_APP_SOURCES} ${GIGA_RENDER_SOURCES}
-    ${IMGUI_SOURCES})
-add_dependencies(gigahrush2 giga_shaders)
-target_include_directories(gigahrush2 PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
+# Dear ImGui is third-party: its own target with default warnings, so our
+# zero-warning policy applies to *our* code only and never has to be relaxed
+# to accommodate vendored sources.
+add_library(giga_imgui STATIC ${IMGUI_SOURCES})
+target_include_directories(giga_imgui PUBLIC
     ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
+target_link_libraries(giga_imgui PUBLIC SDL3::SDL3 Vulkan::Vulkan)
+
+add_executable(gigahrush2 ${GIGA_APP_SOURCES} ${GIGA_RENDER_SOURCES})
+add_dependencies(gigahrush2 giga_shaders)
+target_include_directories(gigahrush2 PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_definitions(gigahrush2 PRIVATE
     GIGA_SHADER_DIR="${_giga_spv_dir}")
-target_link_libraries(gigahrush2 PRIVATE giga_game giga_core SDL3::SDL3 Vulkan::Vulkan)
-if(NOT MSVC)
-    # ImGui uses exceptions/RTTI-free is fine, but the SDL3/Vulkan backends and
-    # our render code do not rely on either. Keep the whole binary lean.
-    target_compile_options(gigahrush2 PRIVATE
-        -Wall -Wextra -Wno-unused-parameter)
+target_link_libraries(gigahrush2 PRIVATE giga_game giga_core giga_imgui
+    SDL3::SDL3 Vulkan::Vulkan)
+# RTTI is permitted in the app shell (ON) — only the core/game libs forbid it.
+giga_target_flags(gigahrush2 ON)
+
+# Windows needs the runtime DLLs (SDL3.dll) beside the executable.
+if(WIN32)
+    add_custom_command(TARGET gigahrush2 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:gigahrush2> $<TARGET_FILE_DIR:gigahrush2>
+        COMMAND_EXPAND_LISTS
+        COMMENT "Staging runtime DLLs next to gigahrush2")
 endif()
 
 # ---- Tests ----------------------------------------------------------------
@@ -146,16 +230,12 @@ if(GIGA_BUILD_TESTS)
     enable_testing()
     add_executable(world_test tests/world_test.cpp)
     target_link_libraries(world_test PRIVATE giga_core)
-    if(NOT MSVC)
-        target_compile_options(world_test PRIVATE -fno-rtti -fno-exceptions)
-    endif()
+    giga_target_flags(world_test OFF)
     add_test(NAME world_test COMMAND world_test)
 
     add_executable(game_test tests/game_test.cpp)
     target_link_libraries(game_test PRIVATE giga_game)
-    if(NOT MSVC)
-        target_compile_options(game_test PRIVATE -fno-rtti -fno-exceptions)
-    endif()
+    giga_target_flags(game_test OFF)
     add_test(NAME game_test COMMAND game_test)
 
     # Honest crowd benchmark: real floor + 16k wandering agents + real physics.
