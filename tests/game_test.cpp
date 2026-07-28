@@ -1,8 +1,11 @@
 // Game-layer unit tests. Same tiny CHECK harness as world_test; links giga_game
 // so it exercises the macro entity systems headless (no SDL/Vulkan).
 #include <cstdio>
+#include <cmath>
 #include <cstring>
+#include <vector>
 
+#include "core/wrap.h"
 #include "ecs/components.h"
 #include "ecs/registry.h"
 #include "game/embody.h"
@@ -17,8 +20,10 @@
 #include "game/floor_stream.h"
 #include "game/inventory.h"
 #include "game/npc_pool.h"
+#include "game/wander.h"
 #include "game/population.h"
 
+#include "sim/physics.h"
 #include "world/lattice.h"
 #include "world/level_stack.h"
 #include "world/nav.h"
@@ -1222,6 +1227,90 @@ static void test_faction_mix_is_five_wide() {
     CHECK(der.factionMix[cul] > der.factionMix[cit]);
 }
 
+// ---- Wander locomotion: the crowd actually moves ---------------------------
+
+// The nav bake existed complete, tested, and wired to NOTHING. This is the test
+// that the seam is real: run the sim and assert that bodies are in different
+// places afterwards. Screenshots cannot prove this (a stationary camera and a
+// drifting player confound it); a headless step-and-measure can.
+static void test_wander_moves_the_crowd() {
+    World w;
+    const FloorSpec& spec = floor_spec(FloorKind::Residential);
+    generate_floor(w, 0, spec, 21u);
+
+    LevelStack stack;
+    LayerId layer = stack.push_layer();
+    stack.layer(layer).grid() = w.grid();
+
+    // A modest crowd is enough to measure, and keeps the 64-BFS bake affordable.
+    NpcPool pool;
+    pool.init();
+    Registry reg;
+    NpcId first = seed_floor_population(pool, /*floor=*/0, /*n=*/120, /*seed=*/9u);
+    CHECK(first != kInvalidNpc);
+    for (NpcId id = 0; id < pool.count(); ++id)
+        if (pool.alive(id)) embody(reg, pool, id, layer);
+
+    nav::CoarseGraph coarse;
+    nav::FineNav fine;
+    nav::bake_coarse(stack.layer(layer).grid(), coarse);
+    nav::bake_fine(stack.layer(layer).grid(), fine);
+
+    const std::uint32_t wandering = wander_init(reg, layer, 4u);
+    CHECK(wandering > 0);
+
+    // Snapshot start positions.
+    std::vector<Entity> agents;
+    std::vector<vec3> start;
+    for (auto e : reg.view<const WanderTarget, const Transform>()) {
+        agents.push_back(e);
+        start.push_back(reg.get<const Transform>(e).pos);
+    }
+    CHECK(agents.size() == wandering);
+
+    // Run a second of sim. kWanderPeriod = 8, so every agent gets ~15 steering
+    // passes in this window.
+    const float dt = 1.0f / 120.0f;
+    for (std::uint64_t t = 0; t < 120; ++t) {
+        wander_step(reg, coarse, fine, layer, t);
+        physics_step(reg, stack, dt);
+    }
+
+    // Count how many actually travelled. Not all will: an agent sealed into an
+    // apartment, or one whose flow byte is a vertical step, legitimately stays put
+    // (see wander.h — stairwell traversal is not wired). So this asserts a
+    // MAJORITY moved, not everyone.
+    std::size_t moved = 0;
+    float maxDist = 0.0f;
+    for (std::size_t i = 0; i < agents.size(); ++i) {
+        const vec3& p = reg.get<const Transform>(agents[i]).pos;
+        const float dx = wrap_delta_f(start[i].x, p.x, kWorldExtent);
+        const float dy = wrap_delta_f(start[i].y, p.y, kWorldExtent);
+        const float d = std::sqrt(dx * dx + dy * dy);
+        if (d > 0.25f) ++moved;
+        if (d > maxDist) maxDist = d;
+    }
+    CHECK(moved * 2 > agents.size());   // a majority is walking
+    CHECK(maxDist > 1.0f);              // and somebody covered real ground
+
+    // Steering must be a pure read of the bake: it may not mutate the nav data,
+    // or a second floor visit would behave differently from the first.
+    nav::CoarseGraph after = coarse;
+    wander_step(reg, coarse, fine, layer, 999u);
+    CHECK(std::memcmp(&after, &coarse, sizeof(coarse)) == 0);
+
+    // Immobile mobs are never given a target: a spore carpet must not walk.
+    Registry mobReg;
+    spawn_floor_mobs(mobReg, w, 0, danger_for_hostility(spec.hostility),
+                     theme_for_kind(FloorKind::Residential), layer, 3u, 400);
+    wander_init(mobReg, layer, 7u);
+    for (auto e : mobReg.view<const MobRef>()) {
+        const MobRef& m = mobReg.get<const MobRef>(e);
+        if (has_flag(kMobTable[m.kind].aiFlags, AiFlag::Immobile))
+            CHECK(!mobReg.all_of<WanderTarget>(e));
+    }
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -1252,6 +1341,7 @@ int main() {
     test_mob_spawn_v_shape_in_world();
     test_palette_separation();
     test_faction_mix_is_five_wide();
+    test_wander_moves_the_crowd();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

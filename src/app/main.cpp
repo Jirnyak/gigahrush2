@@ -35,6 +35,7 @@
 #include "game/floor_spec.h"
 #include "game/floor_stream.h"
 #include "game/mob_spawn.h"
+#include "game/wander.h"
 #include "game/npc_pool.h"
 #include "game/population.h"
 #include "input/input.h"
@@ -49,6 +50,7 @@
 #include "sim/fluid.h"
 #include "sim/physics.h"
 #include "world/level_stack.h"
+#include "world/nav.h"
 
 using namespace giga;
 
@@ -153,6 +155,28 @@ std::uint32_t refresh_floor_mobs(Registry& reg, const World& world, int floorNum
         kMobSpawnCap);
 }
 
+// Bake this floor's navigation and give its inhabitants somewhere to walk.
+//
+// This is the first thing in the project to actually CONSUME the nav bake, which
+// until now was complete, tested, and wired to nothing. It is bake-time work by
+// design (64 wrapped BFS for the coarse graph, 64 more for the flow fields) and
+// belongs at floor load / post-samosbor, never on the tick — performance.md
+// declares load time unbounded and RAM generous, which is exactly what buys the
+// O(1)-per-agent steering it enables.
+void bake_floor_nav(Registry& reg, const World& world, LayerId layer,
+                    nav::CoarseGraph& coarse, nav::FineNav& fine,
+                    std::uint32_t seed, double freq) {
+    std::uint64_t t0 = SDL_GetPerformanceCounter();
+    nav::bake_coarse(world.grid(), coarse);
+    std::uint64_t t1 = SDL_GetPerformanceCounter();
+    nav::bake_fine(world.grid(), fine);
+    std::uint64_t t2 = SDL_GetPerformanceCounter();
+    std::uint32_t n = game::wander_init(reg, layer, seed);
+    std::fprintf(stderr,
+                 "[nav] bake coarse %.0f ms | fine %.0f ms | %u agents wandering\n",
+                 (t1 - t0) / freq * 1000.0, (t2 - t1) / freq * 1000.0, n);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -241,6 +265,11 @@ int main(int argc, char** argv) {
     // Build the world population-first, then embody the player from it ([npcs.md]).
     LevelStack stack;
     Registry reg;
+    // Navigation for the ONE live floor. Re-baked on every floor entry; ~128 MiB
+    // for the flow fields, which is affordable precisely because streaming keeps
+    // a single floor resident (performance.md).
+    static nav::CoarseGraph navCoarse;   // ~13 KB, static to keep it off the stack
+    nav::FineNav navFine;
     game::NpcPool pool;
     pool.init();
     game::FloorRegistry registry;
@@ -281,8 +310,10 @@ int main(int argc, char** argv) {
         currentSpec = spec_for_floor(0);
         if (player != entt::null) {
             aim_player(reg, player);
-            refresh_floor_mobs(reg, stack.layer(reg.get<Transform>(player).layer),
-                               0, reg.get<Transform>(player).layer);
+            LayerId l0 = reg.get<Transform>(player).layer;
+            refresh_floor_mobs(reg, stack.layer(l0), 0, l0);
+            bake_floor_nav(reg, stack.layer(l0), l0, navCoarse, navFine, 0xA11FEu,
+                           static_cast<double>(SDL_GetPerformanceFrequency()));
         }
     }
 
@@ -320,6 +351,10 @@ int main(int argc, char** argv) {
     // fixes.
     float cubeMs = 0.0f;
     float bodyMs = 0.0f;
+
+    // Sim tick index. Drives the wander stagger, which spreads the crowd's
+    // steering across kWanderPeriod ticks with no per-agent scheduling state.
+    std::uint64_t simTick = 0;
     int fluidStepEvery = 4; // sim steps between fluid updates
     int fluidCounter = 0;
 
@@ -379,6 +414,8 @@ int main(int argc, char** argv) {
                         // same every visit).
                         LayerId nl = reg.get<Transform>(player).layer;
                         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
+                        bake_floor_nav(reg, stack.layer(nl), nl, navCoarse,
+                                       navFine, 0xA11FEu, freq);
                     }
                 }
             }
@@ -417,7 +454,11 @@ int main(int argc, char** argv) {
             while (simAccum >= kSimDt && guard++ < 8) {
                 input.apply(reg, kSimDt);
                 controller_step(reg, kSimDt);
+                // Steer the crowd BEFORE physics: wander writes horizontal
+                // velocity, physics integrates it and resolves collision.
+                game::wander_step(reg, navCoarse, navFine, activeLayer, simTick);
                 physics_step(reg, stack, kSimDt);
+                ++simTick;
                 // Fluid only lives in the maze test bed (the floor modules seed no
                 // puddles yet); step it on the active layer there.
                 if (genMode == WorldGenMode::Maze && !fluidPaused &&
