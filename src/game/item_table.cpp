@@ -827,7 +827,7 @@ const std::array<ItemDef, kItemCount> kItemTable = {{
              u8(ItemCategory::Food), u8(EquipSlot::None), 255,
              u8(UseEffect::Feed), {0, 0, 0, 0, 0}, 0 },
     // [201] id 202  key
-    ItemDef{ 50, 0, static_cast<std::uint16_t>(0), 0,
+    ItemDef{ 50, 350, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Living)), 0,
              u8(ItemCategory::Key), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
     // [202] id 203  key_tutorial_apartment

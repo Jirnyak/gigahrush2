@@ -327,11 +327,46 @@ const char* samosbor_phase_name(SamosborPhase p);
 // clock does not know what floor it is on (the caller passes `floorZ` to
 // `samosbor_step`, which is what lets one floor be renumbered without its clock
 // noticing — `LayerId` != floor number, [floors.md]).
+//
+// TWO DIFFERENT SCOPES LIVE IN ONE STRUCT, and mixing them up is how
+// `minSamosbor` stayed dead. The **timer** (phaseMs/phaseTotalMs/activeMs/phase/
+// variant/sealed) is per-floor: it is a function of |z| and must be re-rolled on
+// arrival, which is what `samosbor_enter_floor` does. `count` is **per-run**: it
+// is the progression axis `MobDef::minSamosbor` gates the roster on, so resetting
+// it on a floor ride cancels the unlock permanently. Measured over the GENERATED
+// `kMobTable` (not `data/mobs.csv` — see the SCULPTURE note below) against
+// `anchor_for_floor`'s six habitat anchors: rows with `spawnWeightX10 > 0` whose
+// `floorMask` includes the anchor, then gated by `samosbor_allows_kind`:
+//
+//     anchor   roster   allowed at count 0 / 1 / 2 / 3 / 4 / 7
+//   ---------------------------------------------------------------
+//      -50       15        0    0    2    8   13   15
+//      -36       28        0    4   11   16   21   28
+//      -26       41        1   11   25   30   35   41
+//        0       42        0   12   31   38   40   42
+//      +14       23        0   10   21   23   23   23
+//      +30       26        0    2   13   22   26   26
+//
+// So a per-floor `count` means every floor you walk onto has an **empty** fog
+// roster on five of the six anchors, and at |z| = 50 — the floor that is in
+// samosbor 94% of the time — it stays empty at count 1 as well. That is not a
+// balance nudge, it is the whole subsystem producing nothing. Run-scoped `count`
+// plus the relaxation rule on `samosbor_fog_roster` is what makes the column live.
+//
+// **Read the table, not the CSV, and here is the row that proves it.** SCULPTURE
+// (`data/mobs.csv` idx 53) is authored at spawn weight 0.05, which the generator
+// stores as `spawnWeightX10 = int(round(0.05 * 10)) = round(0.5)`. Python rounds
+// half to EVEN, so that is **0** — the same value `spawnWeightX10 == 0` uses to mean
+// "hand-placed, never rolled". SCULPTURE is therefore unrollable by every spawner in
+// the tree, `spawn_floor_mobs` included, and the numbers above are one lower at
+// ZMinus50 / ZMinus36 / ZMinus26 than a CSV-side count gives. Not this file's bug to
+// fix (the fix is the fixed-point scale or the generator's rounding, plus a
+// regenerate) but it IS the reason a habitat count derived from the CSV is wrong.
 struct SamosborState {
     std::uint32_t phaseMs = 0;       // time left in the current phase
     std::uint32_t phaseTotalMs = 0;  // what it started at, for HUD fill bars
     std::uint32_t activeMs = 0;      // rolled duration of the pending/running Active
-    std::uint16_t count = 0;         // completed samosbors here; feeds MobDef::minSamosbor
+    std::uint16_t count = 0;         // samosbors survived THIS RUN; feeds MobDef::minSamosbor
     std::uint8_t phase = 0;          // SamosborPhase
     std::uint8_t variant = 0;        // SamosborVariant; meaningful from Warning onward
     bool sealed = false;             // the one-shot seal already resolved this cycle
@@ -342,14 +377,30 @@ static_assert(std::is_trivially_copyable_v<SamosborState>);
 // phase every frame and diffing it itself. All flags are false on the common
 // path (no transition), which is the overwhelming majority of frames — a caller
 // can early-out on `!changed`.
+//
+// THE FLAGS ARE NOT REDUNDANT WITH `from`/`to`, and that is the reason they are
+// worth their bytes. On a single-crossing step they are derivable
+// (`activeBegan == changed && to == Active`), and a single crossing is what every
+// ordinary 8 ms tick produces, because the shortest phase in the machine is
+// `kSamosborMinIdleMs` = 3 s. But `samosbor_step` walks up to four crossings in one
+// call, and on a `steps >= 2` step — a load stall, a debug time-skip, a frame that
+// took longer than 3 s — `from` and `to` are the endpoints and the intermediate
+// phases are gone. A caller that reconstructed `activeBegan` from `to` would miss
+// exactly the transition it most needs (fog spawn pressure starting), on exactly the
+// frames where missing it is invisible. Read the flags, not the pair.
+//
+// All three of `warningBegan` / `activeBegan` / `activeEnded` are consumed by
+// `samosbor_fog_tick` ([mob_spawn.h]) — the fog population exists only between
+// `activeBegan` and `activeEnded`, and `warningBegan` is the safety net that
+// enforces it from the other side.
 struct SamosborTransition {
     std::uint8_t from = 0;        // SamosborPhase at entry
     std::uint8_t to = 0;          // SamosborPhase at exit
     std::uint8_t variant = 0;     // SamosborVariant in play
     std::uint8_t steps = 0;       // phase boundaries crossed; 0 on the common path
     bool changed = false;         // steps != 0
-    bool warningBegan = false;    // the decision window opened: HUD, siren, barks
-    bool activeBegan = false;     // fog and spawn pressure start NOW
+    bool warningBegan = false;    // decision window open: HUD, siren, clear stale fog mobs
+    bool activeBegan = false;     // fog and spawn pressure start NOW (first fog tick)
     bool sealed = false;          // resolve shelter and apply unsheltered pressure
     bool activeEnded = false;     // fog and spawn pressure stop; despawn fog mobs
     bool cycleEnded = false;      // aftermath spent; `count` incremented
@@ -359,7 +410,37 @@ struct SamosborTransition {
 // Depth-independent on purpose — the very first samosbor of a run lands on the
 // same schedule whether you started on the roof or in the void, because the
 // depth curve is about where you *go*, not where you spawn.
+//
+// **Once per RUN.** Call `samosbor_enter_floor` on a floor ride; calling this
+// instead is the two-defect mistake documented there.
 SamosborState samosbor_new_game(SamosborRng& rng);
+
+// Arm the clock for a floor the player has just ARRIVED on. The timer is re-rolled
+// from `floorZ`'s own cooldown curve; `count` is carried across from `prev`.
+//
+// This exists because `samosbor_new_game` on every ride is wrong twice over, and
+// both defects are silent:
+//
+//   1. **It zeroes `count`.** `MobDef::minSamosbor` is a per-run unlock (see
+//      SamosborState), and a stack of 10 demo floors means the player rides
+//      constantly, so a reset-per-ride pins the roster at count 0 forever — which
+//      is an *empty* fog roster on five of six habitat anchors. The whole
+//      `min_samosbor` column of `data/mobs.csv` (69 rows) becomes dead data.
+//   2. **It hands out the easiest gap in the game.** `samosbor_new_game` is the
+//      flat 120..180 s new-game timer, not a depth roll — its own doc says "use
+//      this once". At |z| = 50 the authored cooldown is 60 s, so re-arming with the
+//      new-game timer gives 2-3x the calm that floor is ever supposed to give, and
+//      riding down-and-back-up is a free reset of the depth pressure the whole file
+//      exists to produce. Arming off `samosbor_cooldown_ms` instead puts the first
+//      samosbor 33..63 s after arrival at |z| = 50 and 22..38 min after it at z = 0.
+//
+// Arms via `samosbor_arm(cooldown - kSamosborAftermathMs)`, exactly as the
+// Aftermath branch of `samosbor_step` does, so a ride and a completed cycle produce
+// the same distribution of gaps. The subtraction cannot underflow: the smallest
+// cooldown is `kSamosborCooldownFloorMs` (45 s) and the difference is
+// `kSamosborArmFloorMs` (33 s) on the nose.
+SamosborState samosbor_enter_floor(const SamosborState& prev, int floorZ,
+                                   SamosborRng& rng);
 
 // Arm the clock explicitly, for tests, debug and floor load from a save.
 // `untilActiveMs` is wall time from now until the next Active phase begins — NOT
@@ -519,6 +600,14 @@ struct ThreatCensus {
 // corridor. This is the one function in this file whose absence is a crash
 // rather than a balance complaint.
 //
+// That claim was **unfalsifiable until 2026-07-29**, because nothing in `src/`
+// called this or anything that called it: the only caller was
+// `samosbor_threat_headroom`, which had no caller of its own. An untested crash
+// guard is not a guard. `samosbor_fog_tick` ([mob_spawn.h]) is now the live caller,
+// it re-tests this predicate after **every** individual spawn rather than trusting
+// the headroom it computed at entry, and `test_samosbor2_all` drives it against a
+// census above and below the target.
+//
 // Gates, in order of authority:
 //   1. `withinOuter >= kThreatHardMaxOuter` — absolute, ignores `highRisk`.
 //   2. `withinNear >= kThreatBackoffNear` — local crowding; you are surrounded.
@@ -547,6 +636,16 @@ std::uint8_t samosbor_threat_target(int floorZ, SamosborVariant variant,
 // the layer), no allocation, toroidal (`wrap_delta_f` — x/y/z wrap, so a mob 2 m
 // away across the seam is 2 m away, not 254 m).
 //
+// **NOT a per-tick call.** `samosbor_fog_tick` runs it once every
+// `kFogSpawnPeriodTicks` (250 ticks = 2 s at kSimHz), and the cadence is a design
+// gate before it is a perf one. Estimated cost per sweep, from the work in the loop
+// (three `wrap_delta_f`, each a float divide plus a floor, then three multiplies and
+// two compares): ~30-40 ns per mob, so ~20 us at the demo's 600-head cap and
+// ~140 us at the 4096 budget. Per tick that would be 0.25%-1.75% of one core —
+// survivable, and NOT the reason for the cadence. The reason is that spawning up to
+// four heads every 8 ms reads as monsters teleporting in; at 2 s the same budget
+// reads as pressure building. Estimated, not profiled: no profiler was run.
+//
 // **`withLos` is left at 0 and the LOS gate is therefore dormant.** There is no
 // cheap line-of-fire query in the sim yet: `nav.h` is bake-time only and running
 // a raycast per mob per fog tick would violate the O(n) tick rule. A caller that
@@ -571,12 +670,29 @@ ThreatCensus samosbor_census(const Registry& reg, LayerId layer, vec3 around);
 // (`data/monster_ecology.ts:1891`) — not a rounding preference, a load-bearing
 // workaround for its own content distribution.
 //
-// This function keeps `count` honest (0 means zero survived events) and leaves
-// the choice to the caller, which has two defensible options: seed a floor's
-// first population at an effective count of 1, matching the reference, or treat
-// this as an *unlock* layer on top of the existing floorMask/spawnWeight roster
-// rather than as a replacement for it. `spawn_floor_mobs` does not consult
-// `minSamosbor` at all today, so nothing regresses until someone wires it.
+// **AND THE 69-KIND FIGURE UNDERSTATES IT.** A fog roster is already narrowed by
+// `floorMask` and `spawnWeightX10 > 0` before this gate sees it, and per habitat
+// anchor that leaves 15..42 kinds — of which **zero** pass at count 0 on five of the
+// six anchors, and zero at count 1 as well on ZMinus50. The full table is in the
+// SamosborState comment above. So "collapses to one kind" is the global view; the
+// view that matters to a spawner is "collapses to none".
+//
+// This function keeps `count` honest (0 means zero survived events) and leaves the
+// resolution to the caller. `samosbor_fog_roster` ([mob_spawn.h]) is that caller and
+// it resolves it by **relaxation, not by a magic default**: build the gated roster,
+// and if it came out empty, re-evaluate the gate at the roster's own minimum
+// `minSamosbor` — the floor's first unlock. The ordering is preserved, so every count
+// above that minimum still admits strictly more kinds, and no floor can ever produce
+// an empty fog roster. Measured at ZMinus50: count 0 and 1 draw from the 2 kinds
+// whose minSamosbor is 2 (SHADOW, TONKAYA_TEN), count 3 from 8, count 7 from all 15.
+// The reference's "default an absent count to 1" workaround
+// (`monster_ecology.ts:1891`) does NOT solve this — it is still 0 kinds at ZMinus50 —
+// which is evidence its content distribution and its habitat masks were never checked
+// against each other.
+//
+// `spawn_floor_mobs` still does not consult `minSamosbor`: the floor-load roster is
+// deliberately ungated, so the unlock layer applies to fog arrivals only and a fresh
+// floor's authored population is unchanged.
 bool samosbor_allows_kind(const MobDef& def, std::uint16_t samosborCount);
 
 } // namespace giga::game

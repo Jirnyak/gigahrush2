@@ -1,41 +1,65 @@
 #include "core/tick.h"
 // Audit suite — one test per defect found by reading the whole of src/game and
-// src/render after the 45-commit burst. Included into tests/audit_test.cpp (NOT
-// game_test.cpp — it was split out into its own target so a red finding here stops
-// failing the healthy suite), so it uses that file's CHECK macro and its
-// `using namespace giga::game`. The ctest name is audit_findings.
+// src/render after the 45-commit burst. Compiled as its own translation unit by
+// tests/audit_test.cpp — NOT included into game_test.cpp any more, because sharing an
+// exit code with ~45 real regression gates demoted all of them to stderr; read that
+// file's header for the WILL_FAIL contract. It still uses that file's CHECK macro and
+// its `using namespace giga::game`.
 //
 // EVERY TEST IN HERE THAT CURRENTLY FAILS IS A FINDING. They are written to fail
 // against HEAD and to pass once the named defect is fixed, so the fix has a witness
-// and the regression has a tripwire. Nothing here fixes anything: a failing test that
-// names the bug is worth more than a quiet patch, because the next person reads the
-// name.
+// and the regression has a tripwire. A test whose defect is FIXED stays, inverted: it
+// stops being a report and becomes the pin that fails again the day the fix is reverted.
+// Deleting it would trade a permanent guard for a one-line ctest saving.
 //
-// Currently RED (the findings), in the order they appear below:
+// The ledger, in the order the tests appear below. Statuses re-derived by reading the
+// live source on 2026-07-29; only 1 and 6 were edited by that pass.
 //
-//   1. projectile_once     projectiles are integrated TWICE per tick — physics_step
-//                          and projectile_step both own them, so every bullet flies
-//                          at double its authored speed and a bullet stopped by
-//                          physics is never destroyed.
-//   2. ms_timer_drift      FIXED — see the GREEN list. Its number is kept so this
-//                          index still matches the order of the tests below, and so a
-//                          reader who remembers "finding 2" learns what happened to it
-//                          instead of concluding it was quietly dropped.
-//   3. gun_kills_counted   a kill by firearm increments no kill counter at all; the
-//                          HUD's "kills" is melee-only.
-//   4. ammo_has_a_source   all 17 AMMO rows have spawn weight 0, so a weapon crate
-//                          cannot contain a round and the vendor cannot sell one.
-//                          The only ammo in the game is bundled with a MOB drop.
-//   5. descend_not_free    a Descend contract measures RunLedger::deepestFloor with
-//                          no baseline at acceptance, so it completes the instant it
-//                          is taken — and can be re-taken from the same body for an
-//                          unbounded money press.
-//   6. hunt_is_findable    contract_offer picks a Hunt kind uniformly over all 69
-//                          rows with no spawn-weight or habitat filter, so it can
-//                          name a monster that cannot spawn anywhere.
-//   7. stack_max_respected pickup_step merges a bundle into a partly-filled slot
-//                          without re-checking stackMax, so a slot can hold more
-//                          than the item legally stacks.
+//   1. projectile_once     CLOSED, now a two-sided pin. Projectiles were integrated
+//                          TWICE per tick — physics_step iterated <Transform, Velocity>
+//                          and projectile_step integrated them again — so every shot
+//                          flew at double its authored speed and double gravity. Fixed
+//                          by the `SelfIntegrating` tag (components.h:77) plus
+//                          `entt::exclude<SelfIntegrating>` at physics.cpp:85, tagged at
+//                          both spawn sites (combat.cpp:452, :485).
+//   2. ms_timer_drift      CLOSED by the tick rate. kSimHz is 125, so
+//                          uint16(dt*1000+0.5) is exactly 8 ms and an authored duration
+//                          means what it says ([core/tick.h]).
+//   3. gun_kills_counted   CLOSED. combat.cpp:660-661 credits a lethal shot to
+//                          PlayerMelee::kills — the counter the HUD prints and the one
+//                          that survives a body swap.
+//   4. ammo_has_a_source   CLOSED without touching the data. A weapon crate reserves
+//                          slot 0 for the cheapest affordable ammo
+//                          (container.cpp:154-190) and vendor_resupply walks Ammo last
+//                          (vendor.cpp:165-166). All 17 AMMO rows still carry
+//                          spawn_w_milli 0, which is exactly why the crate has to force
+//                          the slot instead of rolling for it.
+//   5. descend_not_free    **STILL RED, and unsatisfiable as written — the test is now
+//                          the defect.** The game side landed: `Contract::baseline` is
+//                          stamped inside contract_accept (contract.cpp:163-167) so the
+//                          caller cannot forget it. But this test stamps the baseline
+//                          from `kNoDescentYet` (deepestFloor 0) and then steps against
+//                          a ledger saying -50, which reads as "descended from 0 to -50
+//                          AFTER accepting", so paying is correct: baseline 0 < want 20
+//                          <= reached 50, `first` is 900, not 0. And the assertion right
+//                          after it wants the re-accept to SUCCEED, which only happens
+//                          while the slot is not Active — i.e. only if the first step
+//                          did complete and pay. The two halves cannot both hold under
+//                          any implementation. Fixing it means deciding what it should
+//                          measure (pass `led` to contract_accept and assert a job you
+//                          already satisfy pays nothing, ever), which is a call for
+//                          whoever owns the Descend lane, not a silent rewrite here.
+//                          Related, and NOT covered by any test: contract.h promises "a
+//                          job whose target is already behind you is refused at accept",
+//                          and contract_accept refuses nothing of the kind — it accepts
+//                          the job, stamps `want <= baseline`, and the slot can then
+//                          never complete or fail. Three of those brick the 3-slot book.
+//   6. hunt_is_findable    CLOSED. contract_offer picked a Hunt kind uniformly over all
+//                          69 rows with no spawn-weight filter, so 11 of 318 live offers
+//                          named a monster that can never appear. Now guarded on the
+//                          same two row fields the spawn roster reads
+//                          (contract.cpp Hunt branch, mob_spawn.cpp:161-162).
+//   7. stack_max_respected CLOSED. loot.cpp:243-244 clamps a merged slot to stackMax.
 //
 // Currently GREEN (pins, not findings): budget_vs_demo_cap records the numbers behind
 // the kMobSpawnCap claim in src/app/main.cpp so the report's arithmetic is machine-
@@ -72,25 +96,40 @@ inline std::uint8_t a_biting_kind() {
 }
 
 // ---------------------------------------------------------------------------
-// 1. Projectiles are integrated twice per tick
+// 1. Projectiles were integrated twice per tick — CLOSED, pinned from both sides
 // ---------------------------------------------------------------------------
-// `projectile_step` integrates position itself (combat.cpp:482-484: wrapf(pos + v*dt)
+// `projectile_step` integrates position itself (combat.cpp:540-543: wrapf(pos + v*dt)
 // on x/y and pos.z += v.z*dt). `physics_step` iterates `view<Transform, Velocity>`
-// (physics.cpp:82) and a Projectile carries both — plus an AABB — so the sweep moves
-// it a second time and collides it.
+// and a Projectile carries both — plus an AABB — so the sweep used to move it a second
+// time and collide it. Two consequences, both player-visible:
 //
-// Two consequences, both player-visible:
-//
-//   * every shot travels at 2x its authored muzzle speed, which silently doubles the
-//     effective range of all 29 firearms and all 13 ranged monsters and halves the
+//   * every shot travelled at 2x its authored muzzle speed, which silently doubled the
+//     effective range of all 29 firearms and all 13 ranged monsters and halved the
 //     telegraph value of the windup;
 //   * physics ZEROES the velocity on a wall hit and leaves the entity flush against
-//     an AIR cell, so `projectile_step`'s own solid-cell test never fires and the
-//     tracer hangs in the air, lit, until kProjTtlMs (4 s) expires.
+//     an AIR cell, so `projectile_step`'s own solid-cell test never fired and the
+//     tracer hung in the air, lit, until kProjTtlMs (4 s) expired.
 //
-// Nothing caught it because tests/game_test.cpp test_player_shoots drives
+// The fix is one tag and one exclusion: `SelfIntegrating` (components.h:77),
+// `entt::exclude<SelfIntegrating>` at physics.cpp:85, and an `emplace` at both spawn
+// sites (combat.cpp:452 for a monster's lob, :485 for the player's flat shot). A tag in
+// the CORE rather than a `Projectile` test inside physics_step, because `src/sim` may
+// not include `src/game` ([AGENTS.md] layering).
+//
+// **This test builds its shot by hand and therefore has to add the tag by hand.** The
+// alternative — driving a real spawn — is not available: both `spawn_projectile` and
+// `spawn_projectile_dir` live in combat.cpp's anonymous namespace, so the only exported
+// way to create a projectile is `player_ranged_step` (needs a camera holder, a gun in a
+// pool inventory, a loaded magazine, and therefore a live AMMO row — finding 4) or
+// `mob_attack_step` (needs a ranged kind, a target inside its shot band, and a windup to
+// elapse). Either would make an arithmetic assertion about ONE integration depend on the
+// weapon table, the ammo economy and the hunt-licence rules. Hand-building keeps the
+// measurement about integration and nothing else; the cost is that the tag has to be
+// written here too, and case (c) is what stops that from being a silent lie.
+//
+// Nothing caught the original because tests/game_test.cpp test_player_shoots drives
 // projectile_step in a loop with no physics_step, which is not the tick order
-// src/app/main.cpp uses (physics_step at :787, projectile_step at :820).
+// src/app/main.cpp uses (physics_step at :789, projectile_step at :822).
 static void projectile_once() {
     LevelStack stack;
     LayerId layer = stack.push_layer();   // a fresh layer is all air
@@ -101,8 +140,10 @@ static void projectile_once() {
     bus.init();   // publish() indexes ring_ without checking it exists — see the report
 
     // gravityPct 0 so the x displacement is exactly speed*dt per integration and the
-    // assertion is arithmetic rather than a tolerance on a ballistic arc.
-    auto make_shot = [&](vec3 at, vec3 vel) {
+    // assertion is arithmetic rather than a tolerance on a ballistic arc. `tagged`
+    // selects whether this shot carries `SelfIntegrating` — the real spawn sites always
+    // do, and case (c) below is the one place a false is wanted.
+    auto make_shot = [&](vec3 at, vec3 vel, bool tagged) {
         Entity e = reg.create();
         Transform tr;
         tr.pos = at;
@@ -110,13 +151,23 @@ static void projectile_once() {
         reg.emplace<Transform>(e, tr);
         reg.emplace<Velocity>(e, Velocity{vel});
         reg.emplace<AABB>(e, AABB{vec3{0.10f, 0.10f, 0.10f}});
+        // Exactly what combat.cpp:452 and :485 do. Without it this entity is not the
+        // thing the game ships and the measurement below is about a different object.
+        if (tagged) reg.emplace<SelfIntegrating>(e);
         reg.emplace<Projectile>(e, Projectile{entt::null, 10, kProjTtlMs, 0, 1});
         return e;
     };
 
+    const float speed = 30.0f;
+    const int ticks = 12;
+    // 30 m/s * 12 ticks * 8 ms = 2.880 m. One integration is 2.880, two is 5.760.
+    const float want = speed * static_cast<float>(ticks) * kDt;
+
     // (a) physics_step must not move a projectile at all: projectile_step owns it.
+    //     Exact equality, not a tolerance — the excluded entity is never written, so a
+    //     single float of drift here means the exclusion stopped working.
     {
-        Entity p = make_shot(vec3{40.0f, 40.0f, 40.0f}, vec3{30.0f, 0.0f, 0.0f});
+        Entity p = make_shot(vec3{40.0f, 40.0f, 40.0f}, vec3{speed, 0.0f, 0.0f}, true);
         const float x0 = reg.get<Transform>(p).pos.x;
         physics_step(reg, stack, kDt);
         CHECK(reg.get<Transform>(p).pos.x == x0);
@@ -124,25 +175,57 @@ static void projectile_once() {
     }
 
     // (b) one tick in src/app/main.cpp's real order must advance a shot by exactly
-    //     one speed*dt, not two.
+    //     one speed*dt, not two. Ratio 1.00 is the pass; delete the
+    //     `entt::exclude<SelfIntegrating>` at physics.cpp:85 and this prints 5.760 m
+    //     against an authored 2.880 m, ratio 2.00 — the original finding, restated as a
+    //     number rather than as prose.
     {
-        const float speed = 30.0f;
-        const int ticks = 12;
-        Entity p = make_shot(vec3{40.0f, 40.0f, 40.0f}, vec3{speed, 0.0f, 0.0f});
+        Entity p = make_shot(vec3{40.0f, 40.0f, 40.0f}, vec3{speed, 0.0f, 0.0f}, true);
         for (int i = 0; i < ticks; ++i) {
-            physics_step(reg, stack, kDt);      // main.cpp:787
+            physics_step(reg, stack, kDt);      // main.cpp:789
             projectile_step(reg, pool, bus, stack, layer, kDt,
-                            static_cast<std::uint64_t>(i));   // main.cpp:820
+                            static_cast<std::uint64_t>(i));   // main.cpp:822
         }
         CHECK(reg.valid(p));
         if (reg.valid(p)) {
             const float moved = reg.get<Transform>(p).pos.x - 40.0f;
-            const float want = speed * static_cast<float>(ticks) * kDt;
             std::fprintf(stderr,
                          "[audit] projectile: %d ticks at %.1f m/s moved %.3f m, "
-                         "authored %.3f m (ratio %.2f)\n",
+                         "authored %.3f m (ratio %.2f; 2.00 would mean physics.cpp "
+                         "integrates it too)\n",
                          ticks, speed, moved, want, moved / want);
             CHECK(std::fabs(moved - want) < 0.01f);
+            reg.destroy(p);
+        }
+    }
+
+    // (c) THE TRIPWIRE, and the reason (a) and (b) are not circular. An identical shot
+    //     with the tag WITHDRAWN is still integrated by both systems and still moves
+    //     exactly twice as far — so the exclusion is proven to be what does the work,
+    //     and the pass in (b) cannot be an accident of a loose tolerance or of a
+    //     projectile_step that quietly stopped moving anything.
+    //
+    //     It also splits the two ways this can regress, which read identically in a log
+    //     otherwise: (a)+(b) failing while (c) passes means the exclude<> in physics.cpp
+    //     is gone; (c) failing alone means physics_step stopped integrating at all, or
+    //     `SelfIntegrating` acquired a second reader that changed what an untagged
+    //     entity does.
+    {
+        Entity p = make_shot(vec3{40.0f, 40.0f, 40.0f}, vec3{speed, 0.0f, 0.0f}, false);
+        for (int i = 0; i < ticks; ++i) {
+            physics_step(reg, stack, kDt);
+            projectile_step(reg, pool, bus, stack, layer, kDt,
+                            static_cast<std::uint64_t>(i));
+        }
+        CHECK(reg.valid(p));
+        if (reg.valid(p)) {
+            const float moved = reg.get<Transform>(p).pos.x - 40.0f;
+            std::fprintf(stderr,
+                         "[audit] projectile: the same shot UNTAGGED moved %.3f m "
+                         "(ratio %.2f), which is the bug the tag closes\n",
+                         moved, moved / want);
+            CHECK(std::fabs(moved - 2.0f * want) < 0.02f);
+            reg.destroy(p);
         }
     }
 }
@@ -420,43 +503,82 @@ static void descend_not_free() {
 }
 
 // ---------------------------------------------------------------------------
-// 6. A Hunt contract can name a monster that cannot spawn
+// 6. A Hunt contract could name a monster that cannot spawn — CLOSED
 // ---------------------------------------------------------------------------
-// contract.cpp:84-87 comments "A kind that lives at this depth, so the job is\n// findable" and then picks uniformly over all `kMobKindCount` rows with no
+// contract.cpp's Hunt branch comments "a kind that lives at this depth, so the job is
+// findable" and then picked uniformly over all `kMobKindCount` rows with no
 // spawn-weight and no floorMask filter. `spawn_floor_mobs` skips any row with
-// `spawnWeightX10 == 0` (mob_spawn.cpp:162), and data/mobs.csv has two such rows —
-// CREATOR and PSEUDOLIFT, both with dmg > 0 so the `md.dmg == 0` guard lets them
-// through. Neither can appear on any floor by any path, so a Hunt naming one is
-// exactly the "quest that can never complete" the same comment says it is avoiding.
+// `spawnWeightX10 == 0` (mob_spawn.cpp:162), and data/mobs.csv has THREE such rows —
+// CREATOR, PSEUDOLIFT and SCULPTURE, whose authored 0.05 weight the generator's
+// `int(round(0.05 * 10))` takes to 0 — all with dmg > 0, so the `md.dmg == 0` guard let
+// every one of them through. None can appear on any floor by any path, so a Hunt naming
+// one was exactly the "quest that can never complete" the same comment claims to avoid.
+// Measured before the fix, over the live offer stream: 11 of 318 Hunt offers, CREATOR 3,
+// PSEUDOLIFT 4, SCULPTURE 4.
 //
-// The habitat half is worse but softer: a kind whose floorMask excludes every floor
-// the building actually labels is equally unhuntable, and nothing checks that either.
+// The habitat half is checked here as `floorMask != 0` — a row naming no anchor at all
+// matches no floor — and deliberately NOT as "must live at THIS floor's anchor", because
+// that overshoot costs more than the bug: measured, it drops Hunt offers on -50 from 32
+// to 5, since only 15 of 69 rows carry the ZMinus50 bit. A Hunt has no floor gate
+// (`contract_on_kill`, src/app/main.cpp:593) and the shipped stack covers all six
+// anchors, so a weight-bearing kind is already meetable somewhere in the run.
+//
+// So the test guards both directions. `impossible == 0` is the finding; `leanestKinds` is
+// the overshoot, because a filter that passed the first assertion by naming the same
+// three monsters on every floor would be a worse contract system than the broken one.
 static void hunt_is_findable() {
     NpcPool pool;
     pool.init();
     for (int i = 0; i < 512; ++i) pool.spawn();
 
+    // Floor-major, so per-floor variety can be counted without a second pass.
+    // `contract_offer` is a pure function of (giver, floorZ, seed), so the order the
+    // pairs are visited in cannot change a single answer.
     const int floors[] = {0, 1, 2, -8, -14, -26, -36, -50, 14, 30};
     int hunts = 0;
     int impossible = 0;
-    for (NpcId g = 0; g < 512; ++g)
-        for (int z : floors) {
-            // 0x9E37u is the seed src/app/main.cpp:843 actually passes, so this is
+    int leanestFloor = 0;
+    int leanestKinds = static_cast<int>(kMobKindCount) + 1;
+    for (int z : floors) {
+        bool named[kMobKindCount] = {};
+        int distinct = 0;
+        for (NpcId g = 0; g < 512; ++g) {
+            // 0x9E37u is the seed src/app/main.cpp:844-845 actually passes, so this is
             // the live offer stream and not a synthetic one.
             const Contract c = contract_offer(pool, g, z, 0x9E37u);
             if (c.giver == kInvalidNpc) continue;
             if (c.kind != static_cast<std::uint8_t>(ObjectiveKind::Hunt)) continue;
             ++hunts;
             if (c.subject >= kMobKindCount ||
-                kMobTable[c.subject].spawnWeightX10 == 0)
+                kMobTable[c.subject].spawnWeightX10 == 0 ||
+                kMobTable[c.subject].floorMask == 0) {
                 ++impossible;
+                continue;
+            }
+            if (!named[c.subject]) {
+                named[c.subject] = true;
+                ++distinct;
+            }
         }
+        if (distinct < leanestKinds) {
+            leanestKinds = distinct;
+            leanestFloor = z;
+        }
+    }
     std::fprintf(stderr,
-                 "[audit] contracts: %d Hunt offers scanned, %d name a kind with "
-                 "spawn weight 0 (unspawnable)\n",
-                 hunts, impossible);
-    CHECK(hunts > 0);        // the scan actually exercised the Hunt branch
-    CHECK(impossible == 0);  // no offer may name an unspawnable kind
+                 "[audit] contracts: %d Hunt offers scanned, %d name an unspawnable "
+                 "kind; leanest floor %d offers %d distinct targets\n",
+                 hunts, impossible, leanestFloor, leanestKinds);
+    CHECK(hunts > 0);          // the scan actually exercised the Hunt branch
+    CHECK(impossible == 0);    // no offer may name a kind the roster cannot roll
+    // 307 of the 318 pre-fix offers survive the guard. A guard that has started eating
+    // most of the stream is a bug in the guard, not a stricter contract system. The
+    // threshold sits well under the measurement so a CSV edit is not a false alarm.
+    CHECK(hunts >= 240);
+    // Measured 19-30 distinct kinds per floor after the fix (leanest: -36 with 19).
+    // 8 is the line between "this floor has its own bestiary" and "everyone here wants
+    // the same thing killed".
+    CHECK(leanestKinds >= 8);
 }
 
 // ---------------------------------------------------------------------------

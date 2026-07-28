@@ -24,14 +24,20 @@ namespace giga::game {
 // the wall lattice — so a dense spec reads as a real crowd, not a wall of boxes.
 // Designates one record (roughly central) as the player candidate and returns
 // its id. Returns kInvalidNpc if the pool could not allocate any records.
-NpcId seed_floor_from_spec(NpcPool& pool, std::uint16_t floor,
-                           const FloorSpec& spec, std::uint32_t seed);
+//
+// `floor` is a SIGNED label — plain `int`, matching FloorModule::number,
+// FloorRegistry (kMinFloor -127 .. kMaxFloor +127) and next_labelled_floor. It was
+// std::uint16_t, which made the demo stack's descending floors (-8, -14, -26, -36,
+// -50) arrive as 65528..65486 and get stored that way; the player descends, so an
+// unsigned floor label is wrong by construction rather than merely risky.
+NpcId seed_floor_from_spec(NpcPool& pool, int floor, const FloorSpec& spec,
+                           std::uint32_t seed);
 
 // Seed `n` alife records onto `floor` with a uniform faction mix and full adult
 // age range — a thin wrapper over seed_floor_from_spec for callers (the maze
 // test bed) that want a plain count rather than a floor character.
-NpcId seed_floor_population(NpcPool& pool, std::uint16_t floor,
-                            std::uint32_t n, std::uint32_t seed);
+NpcId seed_floor_population(NpcPool& pool, int floor, std::uint32_t n,
+                            std::uint32_t seed);
 
 // Deterministic stature (mm) for an age, matching the reference's rule: children
 // scale up with age, adults settle around ~1.8 m with per-record variation.

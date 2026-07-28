@@ -82,9 +82,17 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
     if (!fm.seeded) {
         const FloorSpec& spec = floor_spec(fm.kind);
         NpcId before = pool.count();
-        fm.candidate = seed_floor_from_spec(pool,
-                                            static_cast<std::uint16_t>(fm.number),
-                                            spec, fm.seed ^ kPopSeedSalt);
+        // fm.number goes through UNCAST. This used to be
+        // static_cast<std::uint16_t>(fm.number), which is the exact line that wrote
+        // the demo stack's negative labels into the pool as garbage: floor -50 became
+        // 65486, -36 became 65500, -8 became 65528. Every floor below the hub was
+        // stored wrong and nothing in src/ ever read pool.floor() back, so it was a
+        // silent corruption waiting for master_prompt #10's per-floor bucket index —
+        // the first reader — to inherit it. The label is signed all the way through
+        // now (FloorRegistry kMinFloor -127 .. kMaxFloor +127, NpcPool::floor()
+        // std::int16_t), so the cast has nothing left to do.
+        fm.candidate = seed_floor_from_spec(pool, fm.number, spec,
+                                            fm.seed ^ kPopSeedSalt);
         fm.firstId = before;
         fm.count = pool.count() - before;
         fm.seeded = true;

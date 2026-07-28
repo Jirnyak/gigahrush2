@@ -15,6 +15,11 @@
 //     is cleared) and stays in the table. New NPCs always come from the reserve.
 //   * Both procedural and authored ("design") NPCs share this one linear store,
 //     distinguished only by a flag bit, never by living in different arrays.
+//   * Columns are allocated by DEMAND, not uniformly. The ROW LAYOUT below is
+//     unchanged — every field is still 1 fixed-width column, still indexed by id —
+//     but *when* a column gets its memory now depends on who touches it. See
+//     "Column allocation policy" further down; that comment carries the measured
+//     numbers and is the justification for the whole scheme.
 //
 // Mobs are deliberately NOT here: they don't exist in the macro model, they are
 // spawned per-floor from the mob table and vanish ([monsters.md]).
@@ -34,7 +39,18 @@ inline constexpr std::uint32_t kNpcPoolSize = 1u << kNpcPoolBits; // 1,048,576
 inline constexpr std::uint32_t kNpcIdMask = kNpcPoolSize - 1;
 
 // ~950k active at world start; the remaining ~98k slots are the reserve plast.
+//
+// This is a DESIGN TARGET, not a measurement: the demo floor stack in main.cpp seeds
+// 1,930 records across all ten floors (420+260+150+40+150+40+150+40+260+420) and 420
+// at startup, because only floor 0 loads. The static_assert is what stops the target
+// from being a claim the code never checks — if the target is ever raised past the
+// capacity the reserve plast the whole "dead are never reclaimed" policy depends on
+// would be empty, and spawn() would start returning kInvalidNpc at world start.
 inline constexpr std::uint32_t kNpcActiveTarget = 950000;
+static_assert(kNpcActiveTarget < kNpcPoolSize,
+              "the reserve plast must be non-empty: the pool never reclaims a dead "
+              "slot, so every runtime spawn comes from kNpcPoolSize - "
+              "kNpcActiveTarget ([npcs.md])");
 
 // A stable NPC handle == its index into the pool. Never reused once allocated.
 using NpcId = std::uint32_t;
@@ -58,6 +74,11 @@ struct Relationship {
     std::int16_t affinity = 0;  // signed valence, -32768..32767
     std::uint16_t pad = 0;
 };
+// 8 B x kRelSlots = 128 B/row is the single widest column in the table — 128 MiB at
+// full capacity, more than a quarter of the whole row. Every footprint number in
+// "Column allocation policy" below is derived from this width, so pin it.
+static_assert(sizeof(Relationship) == 8, "Relationship must stay a tight 8-byte edge");
+static_assert(alignof(Relationship) == 4);
 
 // The per-body survival clock — food/water/sleep and the two pressures. Lives in
 // the pool row for the same reason hp does: an elevator ride DESTROYS the
@@ -100,12 +121,80 @@ enum NpcFlag : std::uint8_t {
 // as "not initialized", matching the reference's compact demographic model.
 enum NpcSex : std::uint8_t { SexUnset = 0, SexMale = 1, SexFemale = 2 };
 
-// SoA population table. One std::vector per field, all sized to kNpcPoolSize at
-// init() and never resized again — dense over sparse ([performance.md]).
+// ---------------------------------------------------------------------------
+// Column allocation policy
+//
+// init() used to `assign(kNpcPoolSize, ...)` all 18 SoA columns. assign WRITES every
+// byte, so the table was not merely *committed*, it was fully RESIDENT — 493 B/row x
+// 2^20 = 493.0 MiB touched before the first floor is even generated. (Because the
+// capacity is exactly 2^20, 1 B/row == 1.0 MiB of table; every figure below is just
+// the row width.)
+//
+// Measured row widths: inv_ 256, rel_ 128, needs_ 36, name_ 24, surname_ 24, attr_ 8,
+// faction_/hp_/maxHp_/floor_/heightMm_ 2 each, flags_/cx_/cy_/cz_/age_/sex_/level_ 1
+// each = 493 B. Of that, 187 B/row = 187.0 MiB belonged to columns with NO reader
+// anywhere in src/: rel_ 128 (no reader at all — Relationship is written nowhere),
+// name_ + surname_ 48 (set_name has no caller in src/), and attr_/age_/sex_/level_ 11
+// (written by seed_floor_from_spec, read by nothing).
+//
+// Three policies, chosen per column by who actually touches it:
+//
+//   EAGER  — flags_, faction_, hp_, maxHp_, floor_, cx_/cy_/cz_, heightMm_, inv_,
+//            needs_. Read on live paths (combat, loot, needs, embody, wander), so
+//            they keep the old "sized once at init(), never resized" contract and a
+//            reference into them is stable for the pool's whole life. 306 B/row =
+//            306.0 MiB.
+//   LIVE   — age_, sex_, level_, attr_. Written for every seeded record by
+//            seed_floor_from_spec, so they track count_ and are grown inside
+//            spawn(). 11 B/row: the demo stack's 1,930 records need 21.2 KB of rows
+//            and allocate 44.0 KiB (11 B x the kNpcLazyChunk floor of 4096) instead
+//            of 11.0 MiB. They still reach 11.0 MiB at the 950k target.
+//   DEMAND — rel_, name_, surname_. Zero cost until something actually calls
+//            relations() / set_name(); the shipping game never does, so it pays 0 B
+//            for all three (176 B/row = 176.0 MiB saved outright). On first touch
+//            the column materializes and then JOINS the LIVE set, so relations()
+//            itself never resizes afterwards.
+//
+// New resident footprint after init(): 306.0 MiB (was 493.0 MiB), and the demo stack
+// adds 44.0 KiB of LIVE columns rather than 11.0 MiB. resident_bytes() reports the
+// live figure so this is checkable at runtime, not only on paper. 256 of the
+// remaining 306 B/row is inv_, which stays EAGER because loot / containers / vendor /
+// needs all read it — it is the obvious next 256.0 MiB, not this lane's.
+//
+// Reference-lifetime rule, unchanged in spirit but worth stating: a reference handed
+// out by attrs() / relations() / level() is invalidated by a later spawn(), because
+// spawn() is the ONLY place a LIVE column resizes. Nothing may hold one across a
+// spawn — the existing pattern (`auto& a = pool.attrs(id);` then write, per seeded
+// record) is safe because it never does.
+//
+// Verbatim serialization ([npcs.md] "the tables serialize verbatim") is not yet
+// implemented anywhere in src/ — there is no save/load path. When one lands it must
+// either materialize the DEMAND/LIVE columns to kNpcPoolSize first or write each
+// column's row count into the header; dumping a short column as if it were full is
+// the one way this change can bite.
+// ---------------------------------------------------------------------------
+
+// Growth floor for a lazily-sized column. 4096 rows costs 512 KB for rel_ (the
+// widest) and covers ~10x the demo stack's startup crowd of 420, so a normal session
+// resizes exactly once. Growth is geometric above this: a fixed-chunk resize() copies
+// the whole column at every boundary, which at the 950k target would be 232 copies of
+// rel_ averaging 62 MiB each (~14 GB of memcpy) because vector::resize allocates for
+// the size asked for, not a geometric step past it.
+inline constexpr std::uint32_t kNpcLazyChunk = 4096;
+
+// Returned by name() / surname() while the identity columns are still unallocated, so
+// a caller reads an empty string instead of indexing an empty vector. Const accessors
+// cannot materialize a column, and silently returning row 0 would be worse than blank.
+inline constexpr std::array<char, kNameLen> kBlankName{};
+
+// SoA population table. One std::vector per field; the EAGER columns are sized to
+// kNpcPoolSize at init() and never resized again, the LIVE/DEMAND columns grow as
+// described above — dense over sparse either way ([performance.md]).
 class NpcPool {
 public:
-    // Allocate all backing arrays (one time). ~0.48 GiB for the full table
-    // (493 B/row x 2^20; the survival clock is 36 B of that).
+    // Allocate the EAGER backing arrays (one time): 306 B/row x 2^20 = 306.0 MiB.
+    // The LIVE and DEMAND columns start empty and are grown by spawn() / first touch
+    // ("Column allocation policy" above), which is where the other 187.0 MiB went.
     void init();
 
     // Bump-allocate the next blank slot from the reserve. Returns kInvalidNpc if
@@ -151,17 +240,34 @@ public:
     std::uint32_t capacity() const { return kNpcPoolSize; }
     std::uint32_t reserve_remaining() const { return kNpcPoolSize - count_; }
 
-    // Field accessors (SoA rows). Callers index by NpcId.
+    // Bytes the SoA columns currently hold, summed over vector capacities. Exists so
+    // the allocation policy above is a measurement rather than a comment: 306.0 MiB
+    // right after init(), and it only moves when a LIVE/DEMAND column grows.
+    std::size_t resident_bytes() const;
+
+    // Field accessors (SoA rows). Callers index by NpcId — an id from spawn(), i.e.
+    // id < count(). That was already the contract (nothing bounds-checks) and the
+    // LIVE columns now depend on it: they are only sized to cover count().
     std::uint8_t&  flags(NpcId id)   { return flags_[id]; }
     std::uint16_t& faction(NpcId id) { return faction_[id]; }
     std::int16_t&  hp(NpcId id)      { return hp_[id]; }
     std::int16_t&  max_hp(NpcId id)  { return maxHp_[id]; }
-    std::uint16_t& floor(NpcId id)   { return floor_[id]; }
+    // SIGNED, and that is load-bearing: the building descends, so the demo stack's
+    // labels are {0,1,2,-8,-14,-26,-36,-50,14,30} and FloorRegistry's legal range is
+    // kMinFloor -127 .. kMaxFloor +127. As std::uint16_t this column stored floor -50
+    // as 65486 and floor -127 as 65409; nothing in src/ read it back, which is the
+    // only reason it never showed. master_prompt #10 (per-floor bucket index over
+    // pool.floor(id), replacing FloorStreamer's fixed [firstId, count) roster) is
+    // exactly the reader that would have hit it. int16_t, not int32_t, so the column
+    // stays 2 B/row — the fix costs nothing.
+    std::int16_t&  floor(NpcId id)   { return floor_[id]; }
     std::uint8_t&  cx(NpcId id)      { return cx_[id]; }
     std::uint8_t&  cy(NpcId id)      { return cy_[id]; }
     std::uint8_t&  cz(NpcId id)      { return cz_[id]; }
 
     // Character-sheet fields (same struct the future creation screen writes to).
+    // age/sex/level/attrs are LIVE columns: sized by spawn(), so a reference from one
+    // of them dies at the next spawn().
     std::uint8_t&  age(NpcId id)     { return age_[id]; }      // years, 1..100
     std::uint8_t&  sex(NpcId id)     { return sex_[id]; }      // NpcSex code
     std::uint16_t& height_mm(NpcId id) { return heightMm_[id]; } // stature, mm
@@ -174,30 +280,45 @@ public:
     // The survival clock. Canonical here, not on the entity, so it survives the
     // body swap an elevator ride performs ([needs.h]).
     Needs&         needs(NpcId id)     { return needs_[id]; }
-    std::array<Relationship, kRelSlots>& relations(NpcId id) { return rel_[id]; }
-    const std::array<char, kNameLen>& name(NpcId id) const { return name_[id]; }
+    // DEMAND column: the first call materializes 128 B x count() and enrols rel_ in
+    // spawn()'s growth set. Out of line because that is not header-shaped, and
+    // because a call is no longer free — nothing in src/ makes one today.
+    std::array<Relationship, kRelSlots>& relations(NpcId id);
+    // DEMAND columns, read-only side: blank until set_name() has allocated them. A
+    // const accessor cannot materialize a column, so an unallocated row reads as the
+    // empty string — which is what a never-named record means anyway.
+    const std::array<char, kNameLen>& name(NpcId id) const {
+        return id < name_.size() ? name_[id] : kBlankName;
+    }
     const std::array<char, kNameLen>& surname(NpcId id) const {
-        return surname_[id];
+        return id < surname_.size() ? surname_[id] : kBlankName;
     }
 
 private:
+    // Size the LIVE columns (and any DEMAND column already materialized) to cover
+    // `rows` allocated records. Called from spawn() and nowhere else, which is what
+    // makes spawn() the single reference-invalidating operation.
+    void grow_live_columns(std::uint32_t rows);
+
     std::uint32_t count_ = 0;  // bump pointer / high-water mark
 
-    // Parallel SoA arrays, each kNpcPoolSize long after init().
+    // Parallel SoA arrays. EAGER: kNpcPoolSize long after init(). LIVE/DEMAND: see
+    // "Column allocation policy" above — sized to count_, or empty until first touch.
     std::vector<std::uint8_t>  flags_;
     std::vector<std::uint16_t> faction_;
     std::vector<std::int16_t>  hp_;
     std::vector<std::int16_t>  maxHp_;
-    std::vector<std::uint16_t> floor_;  // logical floor label ([floors.md])
+    std::vector<std::int16_t>  floor_;  // signed logical floor label ([floors.md])
     std::vector<std::uint8_t>  cx_, cy_, cz_;  // macro cell within the floor
-    std::vector<std::uint8_t>  age_;    // years, 1..100
-    std::vector<std::uint8_t>  sex_;    // NpcSex code (0 = unset)
+    std::vector<std::uint8_t>  age_;    // LIVE — years, 1..100
+    std::vector<std::uint8_t>  sex_;    // LIVE — NpcSex code (0 = unset)
     std::vector<std::uint16_t> heightMm_; // stature in mm; drives embodied AABB
-    std::vector<std::uint8_t>  level_;
-    std::vector<std::array<std::uint8_t, kAttrSlots>> attr_; // generic sheet block
-    std::vector<std::array<char, kNameLen>> name_;
-    std::vector<std::array<char, kNameLen>> surname_;
-    std::vector<std::array<Relationship, kRelSlots>> rel_;
+    std::vector<std::uint8_t>  level_;  // LIVE
+    // LIVE — generic sheet block, 8 B/row
+    std::vector<std::array<std::uint8_t, kAttrSlots>> attr_;
+    std::vector<std::array<char, kNameLen>> name_;      // DEMAND
+    std::vector<std::array<char, kNameLen>> surname_;   // DEMAND
+    std::vector<std::array<Relationship, kRelSlots>> rel_; // DEMAND — 128 B/row
     std::vector<Inventory> inv_;
     std::vector<Needs> needs_;   // survival clock ([needs.h]); 36 B/row
     std::uint32_t alive_ = 0;

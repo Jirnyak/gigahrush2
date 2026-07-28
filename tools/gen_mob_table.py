@@ -86,6 +86,35 @@ def fixed(value, scale, field, row_idx, lo=0, hi=65535):
     return n
 
 
+def fixed_nonzero(value, scale, field, row_idx, lo=0, hi=65535):
+    """`fixed`, but a non-zero authored value may never quantize to zero.
+
+    This exists because the quantization silently DELETED a monster. `spawn_weight`
+    is stored in tenths (MobDef::spawnWeightX10), so the smallest weight the table
+    can express is 0.1. SCULPTURE was authored at 0.05 — deliberately the rarest row
+    in the catalog, below BETONOED's 0.12 — and 0.05 * 10 = 0.5, which Python 3
+    rounds half-to-EVEN, i.e. to 0. mob_spawn.cpp:162 skips any row with
+    `spawnWeightX10 == 0`, so the row cost a table slot, a name, a behaviour
+    enumerator and 36 bytes, and no floor could ever roll it. Its WeepingAngel
+    behaviour is the only one `frozen_by_gaze` (mob_behaviour.cpp:69) answers for and
+    is dispatched live in wander.cpp:256, so the quantization also took an
+    implemented, unit-tested mechanic offline.
+
+    Zero stays legal: `spawn_weight == 0` is an authored opt-out of random spawning
+    (CREATOR, PSEUDOLIFT), and the generator must not second-guess it. What is
+    rejected is the ONE case that cannot be distinguished from that opt-out by
+    reading the table: the author asked for "very rare" and got "never".
+    """
+    n = fixed(value, scale, field, row_idx, lo, hi)
+    if n == 0 and (value or "").strip() not in ("", "0"):
+        die("row %d: %s = %r quantizes to 0 at scale %d, which mob_spawn.cpp reads "
+            "as 'never spawns' — indistinguishable from an authored 0. The smallest "
+            "expressible non-zero value is %s; either use it or set the cell to 0 "
+            "to mean never."
+            % (row_idx, field, value, scale, repr(1.0 / scale)))
+    return n
+
+
 def mask(value, table, cpp_enum, field, row_idx):
     """OR together a '|'-separated token list into a C++ bitmask expression."""
     text = (value or "").strip()
@@ -173,7 +202,7 @@ def main():
                 cd=fixed(r["attack_cd_s"], 1000, "attack_cd_s", i),
                 reach=fixed(r["melee_reach_cells"], 1000, "melee_reach_cells", i),
                 pspd=fixed(r["proj_speed_cps"], 1000, "proj_speed_cps", i),
-                sw=fixed(r["spawn_weight"], 10, "spawn_weight", i),
+                sw=fixed_nonzero(r["spawn_weight"], 10, "spawn_weight", i),
                 rooms=mask(r["rooms"], ROOM, "RoomBit", "rooms", i),
                 shot=fixed(r["shot_range_cells"], 1000, "shot_range_cells", i),
                 minr=fixed(r["min_range_cells"], 1000, "min_range_cells", i),

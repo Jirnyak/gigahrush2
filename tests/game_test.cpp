@@ -65,6 +65,11 @@ int g_checks = 0;
 #include "suite_hunt.inl"
 #include "suite_samosbor.inl"
 #include "suite_doors.inl"
+#include "suite_saveload.inl"
+#include "suite_vendorammo.inl"
+#include "suite_npcpool.inl"
+#include "suite_samosbor2.inl"
+#include "suite_faction2.inl"
 static void test_inventory() {
     // Compile-time layout contract: a static_assert, not a CHECK. It is a fact
     // about the type, so it belongs to the build, not to a test run.
@@ -1535,7 +1540,11 @@ static void test_item_table() {
     CHECK(weapons == 88);
     CHECK(healers == 12);
     CHECK(armoured == 5);
-    CHECK(spawnable == 355);
+    // 356, not 355: data/items.csv gave the `key` row spawn_w_milli 350 (it was 0),
+    // which is what makes the whole KEY category reachable at all. All three KEY rows
+    // used to be unspawnable, unstockable and unbankable — content that cost a table
+    // row and could never appear.
+    CHECK(spawnable == 356);
 }
 
 // Depth gating is the greed loop: value rises with depth, and NOT via a hard cut.
@@ -3180,6 +3189,16 @@ static void test_vendor() {
         for (const ItemSlot& x : ri.slots) {
             if (!item_valid(x.item)) continue;
             items += x.count;
+            // Ammo is exempt, and the exemption IS the fix. `vendor_resupply` used to
+            // filter candidates on `useEffect != None`, which of the 17 AMMO rows
+            // selects exactly the 3 unpack-packs and excludes all 13 loadable rounds —
+            // so it always bought the cheapest, `homemade_9mm`, which is the ammo_item
+            // of none of the 29 guns and whose UseEffect::Unpack has no handler
+            // anywhere. The vendor converted roubles into a permanently unusable item
+            // while its own comment called it the only reliable ammo source. A real
+            // round has UseEffect::None by design; asserting otherwise pinned the bug.
+            if (static_cast<ItemCategory>(item_def(x.item).category) == ItemCategory::Ammo)
+                continue;
             CHECK(static_cast<UseEffect>(item_def(x.item).useEffect) != UseEffect::None);
         }
         CHECK(items > 0);
@@ -3533,6 +3552,11 @@ int main() {
     test_packs_all();
     test_samosbor_all();
     test_doors_all();
+    test_saveload_all();
+    test_vendorammo_all();
+    test_npcpool_all();
+    test_samosbor2_all();
+    test_faction2_all();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

@@ -57,9 +57,27 @@ struct RunLedger {
     std::int32_t bestHaul = 0;      // largest single deposit
     std::uint32_t deposits = 0;
     std::uint32_t deaths = 0;
-    int deepestFloor = 0;           // the signed floor whose |z| was the greatest
+    // The signed floor whose |z| was the greatest.
+    //
+    // **Fixed-width, and it was a bare `int` until [save.h] existed.** Signed because
+    // the stack runs [-127, +127] ([floor_registry.h]) and the basement is the half
+    // that matters; explicitly 32-bit because this row is the one thing the save
+    // writes verbatim, and a serialized struct carrying one implementation-defined
+    // width is a save whose meaning depends on which compiler wrote it. `int32_t` is
+    // `int` on both hosts we build on, so this is a promise rather than a change:
+    // every `%d` and every `int` comparison against it still reads correctly.
+    std::int32_t deepestFloor = 0;
     std::uint8_t deepestBand = 0;   // economy_band(deepestFloor)
 };
+// 33 bytes of fields, rounded to 40 by the 8-byte alignment the two int64 totals
+// force — so 7 of these bytes are tail padding and are NOT serialized ([save.h]
+// writes field by field, little-endian, for exactly that reason). This was the only
+// run struct with no size assert, which made it the only one where a field could be
+// added without any test noticing that a save had silently changed shape.
+static_assert(sizeof(RunLedger) == 40,
+              "RunLedger is the whole run score and the save format pins its size; "
+              "grow it on purpose and bump kSaveVersion in the same edit");
+static_assert(alignof(RunLedger) == 8);
 
 // The pad is the bank. `kMatHubPad` already exists as a cell material and is already
 // generated into the hub floor ([floor_gen.cpp]) as the nav/fast-travel pad, so the

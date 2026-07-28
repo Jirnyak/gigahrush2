@@ -101,6 +101,16 @@ struct ContractBook {
 // Returns state Offered, or a contract with `giver == kInvalidNpc` when this body has
 // nothing to ask (which is most of them; a floor where everyone wants something is a
 // job board, not a building).
+//
+// **Guaranteed completable, and that guarantee is the whole reason this returns a
+// refusal so often.** A Fetch names only items `item_weight_on_floor` can produce at
+// this depth, and a Hunt names only a kind the spawn roster can actually roll —
+// `spawnWeightX10 != 0` and a non-empty `floorMask`, the same two row fields
+// `spawn_floor_mobs` filters on. An audit measured 11 of 318 live Hunt offers naming
+// CREATOR, PSEUDOLIFT or SCULPTURE, all three weight 0 and all three with dmg > 0 so the
+// only guard in place waved them through: an errand whose target does not exist. The
+// habitat half is deliberately global rather than per-floor — see contract.cpp for the
+// measurement that made per-floor the worse option.
 Contract contract_offer(const NpcPool& pool, NpcId giver, int floorZ,
                         std::uint32_t seed);
 

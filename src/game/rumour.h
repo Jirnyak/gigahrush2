@@ -75,15 +75,31 @@ struct Rumour {
 // not sweep the whole floor from a doorway.
 inline constexpr float kOverhearRange = 6.0f;
 
-// Cooldown between overheard lines: 2 s. Without one, standing in a crowd would
-// replace the line every frame and none of them would be readable — the system would
-// produce a flicker rather than information.
+// Cooldown between overheard lines, in sim ticks. Without one, standing in a crowd
+// would replace the line every frame and none of them would be readable — the system
+// would produce a flicker rather than information.
 //
-// This is the one of the three drifted epochs where the drift was actually readable by
-// a player: 240 ticks was 2 s at 120 Hz and became 1.92 s at 125 Hz, and the whole
-// point of the constant is that a human has time to read a line before it is replaced.
-// Derived from kSimHz so the reading budget is stated in the unit a human reads in.
-inline constexpr std::uint32_t kOverhearCooldownTicks = 2u * static_cast<std::uint32_t>(kSimHz);
+// Derived from kSimHz rather than written out. It was a literal 240 documented as "2 s
+// at 120 Hz", and the sim has run at 125 Hz since [core/tick.h] — so the constant was
+// really 1.92 s and the comment was a rate the game does not have. That is the exact
+// class of drift tick.h exists to kill.
+inline constexpr std::uint32_t kOverhearCooldownTicks =
+    2u * static_cast<std::uint32_t>(kSimHz);   // 250 ticks = 2 s, exactly
+
+// The dominant faction among the embodied bodies on `layer`, counted rather than
+// authored. Ties break toward the lower Faction value; an empty layer answers
+// Citizens, which is also the default vendor.
+//
+// **Exported because the Territory rumour was not its only consumer — it was just the
+// only one that could reach it.** This lived in rumour.cpp's anonymous namespace, so
+// `src/app/main.cpp` had no way to ask which faction holds a floor, and
+// `VendorKind` therefore stayed on Citizen forever: two of its three sell rates were
+// dead constants ([vendor.h]). Pair it with `vendor_kind_for` on floor arrival and the
+// rumour becomes information you can act on — walk into a Scientist floor and the same
+// haul is worth 8% more.
+//
+// O(bodies on the layer), one pass, no allocation. Called on arrival, never per tick.
+Faction dominant_faction(const Registry& reg, const NpcPool& pool, LayerId layer);
 
 // Build the rumour a given speaker would tell, from live state.
 //

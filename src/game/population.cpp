@@ -77,8 +77,8 @@ std::uint16_t height_for_age(std::uint8_t age, std::uint32_t jitter) {
     return static_cast<std::uint16_t>(mm);
 }
 
-NpcId seed_floor_from_spec(NpcPool& pool, std::uint16_t floor,
-                           const FloorSpec& spec, std::uint32_t seed) {
+NpcId seed_floor_from_spec(NpcPool& pool, int floor, const FloorSpec& spec,
+                           std::uint32_t seed) {
     NpcId first = kInvalidNpc;
     NpcId last = kInvalidNpc;
     std::uint32_t placed = 0;
@@ -108,7 +108,11 @@ NpcId seed_floor_from_spec(NpcPool& pool, std::uint16_t floor,
         pool.cy(id) = static_cast<std::uint8_t>(ry * kRoomStride + oy);
         pool.cz(id) = static_cast<std::uint8_t>(kGroundZ);
 
-        pool.floor(id) = floor;
+        // The label is signed end to end: `floor` is an int (FloorRegistry's range is
+        // kMinFloor -127 .. kMaxFloor +127) and the column is std::int16_t, so a
+        // descending floor round-trips. It used to arrive here as std::uint16_t, i.e.
+        // floor -50 already wrecked into 65486 before the store.
+        pool.floor(id) = static_cast<std::int16_t>(floor);
 
         // Demographics: age from the spec window, sex, height from age.
         std::uint8_t age =
@@ -140,8 +144,8 @@ NpcId seed_floor_from_spec(NpcPool& pool, std::uint16_t floor,
     return playerId;
 }
 
-NpcId seed_floor_population(NpcPool& pool, std::uint16_t floor,
-                            std::uint32_t n, std::uint32_t seed) {
+NpcId seed_floor_population(NpcPool& pool, int floor, std::uint32_t n,
+                            std::uint32_t seed) {
     // A plain count with no floor character: flat faction mix, full adult age
     // range. Everything else routes through the spec-driven path.
     FloorSpec uniform{};

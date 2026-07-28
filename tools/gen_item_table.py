@@ -59,6 +59,36 @@ def num(row, col, i, lo, hi, scale=1):
     return v
 
 
+def spawn_weight(row, i):
+    """`spawn_w_milli`, with the one rounding case that silently deletes an item.
+
+    `spawnWeight == 0` means "never spawns randomly" — item_table.cpp's
+    `item_weight_on_floor` returns 0 outright, which removes the row from all three
+    weighted paths (loot.cpp:91, container.cpp:119, contract.cpp:65). That is a
+    legitimate authored state and stays legal.
+
+    What is rejected is a non-zero cell that ROUNDS to zero, because this column's
+    unit differs from the reference's by 1000x: the TypeScript source authors
+    `spawnW: 0.35` and this CSV stores 350. Paste the reference's number into the
+    cell unconverted and `int(round(0.35))` is 0 — the item is not rare, it is gone,
+    and nothing downstream can tell that apart from an authored opt-out. Measured
+    2026-07-29: 0 of 446 rows are currently in that state and none carries a
+    fractional cell, so this is a tripwire on a live hazard, not a fix.
+
+    The sibling generator hit exactly this class of bug for real: mobs.csv authored
+    SCULPTURE at spawn_weight 0.05 into a tenths field and lost the row. See
+    gen_mob_table.fixed_nonzero.
+    """
+    text = (row.get("spawn_w_milli") or "").strip()
+    v = num(row, "spawn_w_milli", i, 0, 65535)
+    if v == 0 and text not in ("", "0"):
+        die("row %d (%s): spawn_w_milli = %r rounds to 0, which reads as 'never "
+            "spawns'. This column is MILLI-weight (the reference's spawnW * 1000): "
+            "0.35 there is 350 here. Write the milli value, or 0 to mean never."
+            % (i, row["id"], text))
+    return v
+
+
 def room_mask(row, i):
     text = (row.get("spawn_rooms") or "").strip()
     if not text:
@@ -119,7 +149,7 @@ def main():
             "             u8(UseEffect::%s), {%s}, 0 },"
             % (i, i + 1, r["id"],
                num(r, "value_rub", i, 0, 2000000000),
-               num(r, "spawn_w_milli", i, 0, 65535),
+               spawn_weight(r, i),
                room_mask(r, i),
                num(r, "use_a", i, -32768, 32767),
                cat, eq,

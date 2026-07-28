@@ -82,11 +82,37 @@ Contract contract_offer(const NpcPool& pool, NpcId giver, int floorZ,
             static_cast<float>(item_def(want).value * n) * kFetchPayMult);
         if (c.reward < 20) c.reward = 20;
     } else if (pick < 80) {
-        // HUNT. A kind that lives at this depth, so the job is findable.
+        // HUNT. A kind that can actually be met, which takes two tests and not one.
         const std::uint16_t kind = static_cast<std::uint16_t>(
             mix(h ^ 0x51ed270bu) % static_cast<std::uint32_t>(kMobKindCount));
         const MobDef& md = kMobTable[kind];
         if (md.dmg == 0) return c;   // do not send anyone to hunt scenery
+        // **SPAWNABILITY — the other half of "findable", and it was missing.** A floor's
+        // roster is built from exactly two fields of the row (mob_spawn.cpp:161-162): a
+        // `spawnWeightX10` of 0 is never rolled, and a `floorMask` naming no habitat
+        // anchor matches no floor. Fail either for every floor and the kind cannot appear
+        // by any path — the quest that can never complete this branch claims to avoid.
+        // `dmg > 0` does not exclude them: all three offenders hit hard. Measured on the
+        // live offer stream (512 bodies x the 10 shipped floors, seed 0x9E37 exactly as
+        // src/app/main.cpp:844-845 passes it), 11 of 318 Hunt offers named one —
+        // CREATOR 3, PSEUDOLIFT 4, SCULPTURE 4 (0.05 authored weight, which the
+        // generator's round() takes to 0). 307 survive, over 19 distinct kinds on the
+        // leanest floor, so this costs variety nothing. The floorMask half is vacuous
+        // against today's CSV (0 of 69 rows) and is here because `mask()` in
+        // tools/gen_mob_table.py emits 0 for an empty `floors_z` cell — one blank cell
+        // reintroduces the bug.
+        //
+        // GLOBAL rather than per-floor, deliberately. `contract_on_kill`
+        // (src/app/main.cpp:593) has no floor gate — a Hunt counts the kind wherever it
+        // dies — and the shipped stack {0,1,2,-8,-14,-26,-36,-50,14,30} touches all six
+        // anchors, so weight > 0 already means "meetable somewhere this run". Also
+        // requiring the kind to live at THIS depth would remove no impossibility, only a
+        // reason to descend, and it is measurably expensive: Hunt offers on -50 collapse
+        // from 32 to 5 (only 15 of 69 rows carry the ZMinus50 bit) and on +14 from 25 to
+        // 10. `minSamosbor` is deliberately not tested either — spawn_floor_mobs never
+        // reads it, so even a 99 ("never") row spawns, and gating on it here would invent
+        // an impossibility instead of removing one.
+        if (md.spawnWeightX10 == 0 || md.floorMask == 0) return c;
         const std::int32_t n = 2 + static_cast<std::int32_t>((h >> 20) % 4u);
         // Danger 5 as the pricing baseline rather than the floor's real hostility: a
         // contract's price must not change because the floor spec was retuned, or the

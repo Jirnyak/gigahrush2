@@ -186,6 +186,22 @@ SamosborState samosbor_new_game(SamosborRng& rng) {
     return st;
 }
 
+SamosborState samosbor_enter_floor(const SamosborState& prev, int floorZ,
+                                   SamosborRng& rng) {
+    SamosborState st;
+    // The ONE field that crosses a ride. Everything else in the struct is a
+    // function of |z| or of the cycle in progress, and inheriting either would
+    // carry the departed floor's rhythm onto the arrival — which is the mistake
+    // the other direction, and the reason main.cpp reached for
+    // samosbor_new_game in the first place.
+    st.count = prev.count;
+    // Same arithmetic as samosbor_step's Aftermath branch, so a ride and a
+    // completed cycle draw from one distribution rather than two. The aftermath
+    // deduction is what keeps a cooldown meaning Active-end-to-Active-start.
+    samosbor_arm(st, samosbor_cooldown_ms(floorZ, rng) - kSamosborAftermathMs);
+    return st;
+}
+
 std::uint32_t samosbor_seal_before_end_ms(SamosborVariant variant) {
     const int delta = samosbor_variant_def(variant).sealDeltaSec;
     const int ms = static_cast<int>(kSamosborSealBeforeEndMs) + delta * 1000;

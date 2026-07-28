@@ -2,11 +2,14 @@
 
 #include "game/combat.h"
 
+#include <algorithm>
 #include <vector>
 
 #include "core/math.h"
+#include "core/wrap.h"        // wrap_delta_f — the census and the placement must agree
 #include "ecs/components.h"
 #include "game/floor_gen.h"  // floor_room_stride
+#include "game/wander.h"     // wander_init — a fog mob with no WanderTarget is a statue
 #include "world/macro_grid.h"
 #include "world/world.h"
 
@@ -111,6 +114,63 @@ vec3 mob_half_extents(MobTier tier) {
         case MobTier::Boss:   return vec3{0.90f, 0.90f, 1.70f};
         default:              return vec3{0.40f, 0.40f, 0.70f};
     }
+}
+
+// World position of a mob of this tier standing on cell (cx, cy) of the ground
+// storey. Split out because the FOG spawner has to know the exact position before
+// it commits to it: its candidate cell is only legal if `samosbor_census` would
+// count the resulting body inside the outer radius, and the body sits `half.z`
+// above the cell floor — up to 1.70 m for a Boss, which is enough to push a
+// 40 m-away candidate out of a 40 m census bubble.
+vec3 mob_stand_pos(int cx, int cy, const vec3& half) {
+    return vec3{(static_cast<float>(cx) + 0.5f) * kCellSize,
+                (static_cast<float>(cy) + 0.5f) * kCellSize,
+                static_cast<float>(kGroundZ) * kCellSize + half.z};
+}
+
+// Create ONE live monster. **The single place a mob entity's component set is
+// written**, so the floor-load spawner and the samosbor fog spawner cannot drift
+// apart about what a monster *is*.
+//
+// That is not a stylistic preference here. main.cpp carried the same bug twice
+// because it has two floor-ride paths (the keyboard one and the --shot one) and the
+// first fix touched only one; the comment at its second site says so. A mob missing
+// MobCombat is invisible to `mob_attack_step`, and one missing GravityAffected hangs
+// in the air — both are silent, and both are what a second hand-rolled emplace block
+// eventually produces.
+//
+// `headHash` is the per-HEAD scramble: it drives the colour jitter and the initial
+// attack cooldown, so two heads created from one pack hash must not share it or a
+// room full of monsters swings in lockstep.
+Entity emplace_mob(Registry& reg, LayerId layer, MobKind kind, const MobDef& def,
+                   std::uint8_t level, int cx, int cy, std::uint32_t headHash,
+                   std::uint8_t packId) {
+    const MobTier tier = static_cast<MobTier>(def.tier);
+    const vec3 half = mob_half_extents(tier);
+    const std::uint16_t hp = mob_hp_at_level(def.hp, level);
+
+    Entity e = reg.create();
+    Transform tr;
+    // Centre the body on the cell and sit it on the floor of that cell.
+    tr.pos = mob_stand_pos(cx, cy, half);
+    tr.layer = layer;
+    reg.emplace<Transform>(e, tr);
+    reg.emplace<Velocity>(e);
+    reg.emplace<AABB>(e, AABB{half});
+    // Immobile kinds (turrets, plants, spore carpets) are not moved by gravity —
+    // they are part of the architecture, not bodies in it.
+    if (!has_flag(def.aiFlags, AiFlag::Immobile))
+        reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
+    reg.emplace<Renderable>(e, Renderable{tier_color(tier, headHash)});
+
+    reg.emplace<MobRef>(e, MobRef{static_cast<std::uint8_t>(kind), level,
+                                  static_cast<std::int16_t>(hp),
+                                  static_cast<std::int16_t>(hp), packId});
+    // Staggered initial cooldown so a room full of mobs does not swing in lockstep
+    // on the frame the player walks in.
+    reg.emplace<MobCombat>(
+        e, MobCombat{static_cast<std::uint16_t>(headHash % (def.attackCdMs + 1u))});
+    return e;
 }
 
 } // namespace
@@ -266,10 +326,6 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
         int spread = static_cast<int>(def.packSpread);
         if (heads > 1 && spread < 1) spread = 1;  // a group needs somewhere to stand
 
-        const MobTier tier = static_cast<MobTier>(def.tier);
-        const vec3 half = mob_half_extents(tier);
-        const std::uint16_t hp = mob_hp_at_level(def.hp, level);
-
         for (std::uint32_t k = 0; k < heads; ++k) {
             int cx = ax, cy = ay;
             if (k != 0) {
@@ -302,30 +358,7 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
             // is the very thing the stagger below exists to prevent, and packs make
             // it far more likely than independent placement ever did.
             const std::uint32_t rh = mix(r ^ (k * 0x9e3779b9u) ^ 0x51ed270bu);
-
-            Entity e = reg.create();
-            Transform tr;
-            // Centre the body on the cell and sit it on the floor of that cell.
-            tr.pos = vec3{(static_cast<float>(cx) + 0.5f) * kCellSize,
-                          (static_cast<float>(cy) + 0.5f) * kCellSize,
-                          static_cast<float>(kGroundZ) * kCellSize + half.z};
-            tr.layer = layer;
-            reg.emplace<Transform>(e, tr);
-            reg.emplace<Velocity>(e);
-            reg.emplace<AABB>(e, AABB{half});
-            // Immobile kinds (turrets, plants, spore carpets) are not moved by
-            // gravity — they are part of the architecture, not bodies in it.
-            if (!has_flag(def.aiFlags, AiFlag::Immobile))
-                reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
-            reg.emplace<Renderable>(e, Renderable{tier_color(tier, rh)});
-
-            reg.emplace<MobRef>(e, MobRef{static_cast<std::uint8_t>(mobKind), level,
-                                          static_cast<std::int16_t>(hp),
-                                          static_cast<std::int16_t>(hp), packId});
-            // Staggered initial cooldown so a room full of mobs does not swing in
-            // lockstep on the frame the player walks in.
-            reg.emplace<MobCombat>(
-                e, MobCombat{static_cast<std::uint16_t>(rh % (def.attackCdMs + 1u))});
+            emplace_mob(reg, layer, mobKind, def, level, cx, cy, rh, packId);
             ++spawned;
         }
     }
@@ -349,6 +382,292 @@ std::uint32_t count_layer_mobs(const Registry& reg, LayerId layer) {
     for (auto e : view)
         if (view.get<const Transform>(e).layer == layer) ++n;
     return n;
+}
+
+// ---------------------------------------------------------------------------
+// Fog spawn — the samosbor's spawn pressure, wired
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Fog spawn entropy salt, distinct from every constant the floor-load spawner uses
+// so a fog arrival and a load-time pack that happen to share a (tick, floor) pair
+// cannot draw the same kind into the same cell.
+constexpr std::uint32_t kFogSalt = 0xF0605EEDu;
+
+// Attempts per head to find a legal fog arrival cell.
+//
+// The GEOMETRY almost never costs anything: candidates are drawn from the
+// (2*20+1)^2 = 1681-cell square around the anchor and the legal annulus between the
+// two census radii is pi*(20^2 - 12^2)/1681 = 47.8% of it, so 32 tries clear the
+// geometric test with probability 1 - 0.522^32, about 1e-9. What actually spends the
+// budget is the AIR test: a Derelict floor is 38% gap and 12% holes, and a player
+// standing in a sealed stairwell can legitimately have no legal arrival cell at all.
+// Giving up on that head is the correct answer — the alternative is spawning inside
+// a wall.
+constexpr int kFogPlaceTries = 32;
+
+// The half of a fog tick that needs no anchor: a FogSpawn exists only inside an
+// Active phase, and both edges of that window are enforced here rather than at two
+// call sites. `activeEnded` is the ordinary edge; `warningBegan` is the safety net
+// for a cycle whose end was never observed (samosbor_step's four-crossing clamp, a
+// loaded save, a ride taken mid-samosbor).
+std::uint32_t fog_phase_cleanup(Registry& reg, const SamosborTransition& tr,
+                                LayerId layer) {
+    if (!tr.activeEnded && !tr.warningBegan) return 0;
+    return despawn_layer_fog_mobs(reg, layer);
+}
+
+} // namespace
+
+FogRoster samosbor_fog_roster(int floorNumber, std::uint16_t samosborCount) {
+    const std::uint8_t floorBit =
+        static_cast<std::uint8_t>(anchor_for_floor(floorNumber));
+
+    // Pass 1: the habitat roster, UNGATED, to learn this floor's first unlock — the
+    // lowest minSamosbor any kind that could ever stand here carries. Reading it off
+    // the floor's own content is what makes the relaxation data-driven; a constant
+    // would be a guess, and the reference's guess (default the count to 1) is wrong
+    // for ZMinus50, whose lowest is 2.
+    std::uint16_t lowest = 0xFFFFu;
+    std::uint32_t habitatN = 0;
+    for (std::size_t i = 0; i < kMobKindCount; ++i) {
+        const MobDef& m = kMobTable[i];
+        if ((m.floorMask & floorBit) == 0) continue;
+        if (m.spawnWeightX10 == 0) continue;
+        ++habitatN;
+        const std::uint16_t need = static_cast<std::uint16_t>(m.minSamosbor);
+        if (need < lowest) lowest = need;
+    }
+
+    FogRoster out;
+    if (habitatN == 0) return out;  // no kind is authored for this anchor at all
+
+    // `samosborCount >= lowest` is EXACTLY the condition "the gated roster is
+    // non-empty", so lifting the count to `lowest` relaxes if and only if the gate
+    // would have emptied the roster, and by the least amount that works. Monotone by
+    // construction: a higher count can only ever admit a superset.
+    out.effCount = samosborCount >= lowest ? samosborCount : lowest;
+    out.relaxed = out.effCount != samosborCount;
+
+    // Pass 2: the same three filters plus the unlock. Prefix sums so one draw over
+    // `total` picks a kind — a flat scan of at most 69 rows out of a 2,484 B
+    // cache-resident table, at one build per fog tick.
+    for (std::size_t i = 0; i < kMobKindCount; ++i) {
+        const MobDef& m = kMobTable[i];
+        if ((m.floorMask & floorBit) == 0) continue;
+        if (m.spawnWeightX10 == 0) continue;
+        if (!samosbor_allows_kind(m, out.effCount)) continue;
+        out.total += m.spawnWeightX10;
+        out.kind[out.n] = static_cast<std::uint8_t>(i);
+        out.cumWeight[out.n] = out.total;
+        ++out.n;
+    }
+    return out;
+}
+
+std::uint32_t despawn_layer_fog_mobs(Registry& reg, LayerId layer) {
+    // Collect first, then destroy: destroying while iterating a view invalidates it.
+    std::vector<Entity> doomed;
+    auto view = reg.view<const FogSpawn, const Transform>();
+    for (auto e : view)
+        if (view.get<const Transform>(e).layer == layer) doomed.push_back(e);
+    for (Entity e : doomed) reg.destroy(e);
+    return static_cast<std::uint32_t>(doomed.size());
+}
+
+std::uint32_t count_layer_fog_mobs(const Registry& reg, LayerId layer) {
+    std::uint32_t n = 0;
+    auto view = reg.view<const FogSpawn, const Transform>();
+    for (auto e : view)
+        if (view.get<const Transform>(e).layer == layer) ++n;
+    return n;
+}
+
+FogTickReport samosbor_fog_tick_at(Registry& reg, const World& world,
+                                   const SamosborState& st,
+                                   const SamosborTransition& tr, LayerId layer,
+                                   vec3 around, int floorNumber,
+                                   std::uint8_t danger, std::uint64_t simTick) {
+    FogTickReport out;
+    out.despawned = fog_phase_cleanup(reg, tr, layer);
+
+    // No pressure outside the Active phase. This is the gate the whole subsystem
+    // hangs off, and it is why a 2% duty floor barely notices this function exists
+    // while a 94% duty floor is running it almost continuously — the depth gradient
+    // reaching the spawner with no `if (deep)` anywhere.
+    if (!samosbor_active(st)) return out;
+
+    // Cadence, forced onto the arrival tick. `activeBegan` matters more than it
+    // looks: without it the first fog head lands up to kFogSpawnPeriodTicks after
+    // the fog does, and on a floor whose whole Active phase is 30 s that is a 7%
+    // dead window at the one moment the player is looking for the threat.
+    if (!tr.activeBegan && (simTick % kFogSpawnPeriodTicks) != 0u) return out;
+
+    const SamosborVariant variant = static_cast<SamosborVariant>(st.variant);
+    const bool highRisk = danger >= kFogHighRiskDanger;
+
+    out.census = samosbor_census(reg, layer, around);
+    out.censused = true;
+    out.target = samosbor_threat_target(floorNumber, variant, highRisk);
+    out.headroom = samosbor_threat_headroom(out.census, highRisk);
+
+    // Built BEFORE the early-outs below, at the cost of two 69-row scans every 2 s,
+    // so the report always says what the unlock left available. A HUD or a test that
+    // sees `spawned == 0` needs to know whether the budget was full or the roster was
+    // empty, and those are opposite problems.
+    const FogRoster roster = samosbor_fog_roster(floorNumber, st.count);
+    out.rosterN = static_cast<std::uint8_t>(roster.n);
+    out.effCount = roster.effCount;
+    out.relaxed = roster.relaxed;
+
+    // DEMAND is measured against `withinOuter`, not `withinNear`, and the constants
+    // say so: kThreatPressureMax (7) is kThreatBackoffOuter (7) and kThreatSpikeMax
+    // (10) is kThreatHardMaxOuter (10). The target band was calibrated against the
+    // outer count; comparing it to the near count would ask for 7 hostiles inside
+    // 24 m while the back-off refuses the 5th, and the tick would spin asking.
+    const std::uint8_t demand =
+        out.census.withinOuter < out.target
+            ? static_cast<std::uint8_t>(out.target - out.census.withinOuter)
+            : static_cast<std::uint8_t>(0);
+    // Two independent brakes and both must hold: `demand` is what the floor WANTS,
+    // `headroom` is what the back-off ALLOWS. The back-off wins ties by being the
+    // smaller of the two.
+    out.wanted = std::min(demand, out.headroom);
+    if (out.wanted == 0) return out;
+    if (roster.n == 0 || roster.total == 0) return out;
+
+    const MacroGrid& grid = world.grid();
+    const std::uint8_t level = mob_level_for_floor(floorNumber, danger);
+    const float nearR2 = kThreatNearRadiusM * kThreatNearRadiusM;
+    const float outerR2 = kThreatOuterRadiusM * kThreatOuterRadiusM;
+    const int acx = wrap_macro(static_cast<int>(around.x / kCellSize));
+    const int acy = wrap_macro(static_cast<int>(around.y / kCellSize));
+    const std::uint32_t span =
+        static_cast<std::uint32_t>(2 * kThreatOuterRadiusCells + 1);
+    const std::uint32_t wanted = out.wanted;
+
+    // Re-tested after EVERY head rather than trusting the headroom computed above,
+    // which is what samosbor.h asks a caller to do: each arrival changes the census
+    // the next one is judged against, and the hard cap has to be the last word even
+    // if `wanted` was computed generously.
+    ThreatCensus live = out.census;
+
+    for (std::uint32_t i = 0; i < wanted; ++i) {
+        if (!samosbor_fog_spawn_allowed(live, highRisk)) break;
+        if (live.withinOuter >= out.target) break;
+
+        const std::uint32_t r =
+            mix(kFogSalt ^ (static_cast<std::uint32_t>(simTick) * 0x9e3779b9u) ^
+                ((i + 1u) * 0x85ebca6bu) ^
+                (static_cast<std::uint32_t>(floorNumber) * 0x27220a95u));
+
+        // KIND FIRST, cell second — the order is load-bearing. The body sits
+        // `half.z` above the cell floor (1.70 m for a Boss), and the legality test
+        // below is the census's own distance test on the FINAL position, so the cell
+        // cannot be judged before the tier that decides how tall the thing is.
+        const std::uint32_t pick = mix(r ^ 0x2545f491u) % roster.total;
+        std::uint32_t ri = 0;
+        while (ri + 1 < roster.n && pick >= roster.cumWeight[ri]) ++ri;
+        const MobKind kind = static_cast<MobKind>(roster.kind[ri]);
+        const MobDef& def = mob_def(kind);
+        const vec3 half = mob_half_extents(static_cast<MobTier>(def.tier));
+
+        // A cell in the ANNULUS between the two census radii: 24 m..40 m from the
+        // anchor. Never inside the near radius, because a monster appearing 5 m away
+        // out of nothing is not pressure, it is a bug the player cannot distinguish
+        // from one. They still count against `withinOuter`, so the budget sees them.
+        int cx = 0, cy = 0;
+        float d2 = 0.0f;
+        bool placed = false;
+        for (int t = 0; t < kFogPlaceTries; ++t) {
+            const std::uint32_t h =
+                mix(r ^ (static_cast<std::uint32_t>(t + 1) * 0xc2b2ae35u));
+            const int tx = wrap_macro(acx + static_cast<int>((h >> 7) % span) -
+                                      kThreatOuterRadiusCells);
+            const int ty = wrap_macro(acy + static_cast<int>((h >> 19) % span) -
+                                      kThreatOuterRadiusCells);
+            if (grid.cell(tx, ty, kGroundZ) != kCellAir) continue;
+
+            // The census's own arithmetic, on the exact position about to be
+            // written. **This is the invariant that makes the budget terminate**:
+            // anything spawned here is guaranteed to be counted by the next
+            // samosbor_census, so the loop cannot add heads the gate never sees.
+            // Getting it wrong is not a rounding error — a flying player at z = 180 m
+            // is 88 cells above the ground storey, every arrival would fall outside
+            // the 40 m bubble, the census would keep reporting an empty floor and the
+            // spawner would run until the 4096-actor pool was gone. As written, that
+            // player simply gets no fog spawns, which is the honest answer while
+            // there is no air-spawn rule.
+            const vec3 at = mob_stand_pos(tx, ty, half);
+            const float dx = wrap_delta_f(around.x, at.x, kWorldExtent);
+            const float dy = wrap_delta_f(around.y, at.y, kWorldExtent);
+            const float dz = wrap_delta_f(around.z, at.z, kWorldExtent);
+            d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 < nearR2 || d2 > outerR2) continue;
+            cx = tx;
+            cy = ty;
+            placed = true;
+            break;
+        }
+        if (!placed) continue;
+
+        // ONE head, and `packMode` is deliberately ignored. A fog roster is full of
+        // Crowd kinds with authored packs of 8..16, and the budget being spent is
+        // measured in *threats near the player* with a ceiling of 7 — so honouring
+        // one Crowd row would blow the whole band in a single draw and then the
+        // back-off would starve the rest of the samosbor. Grouping is a floor-load
+        // property ([mob_spawn.h] header); fog arrivals trickle. pack = 0 is the
+        // matching truth for wander: "walks alone".
+        Entity e = emplace_mob(reg, layer, kind, def, level, cx, cy,
+                               mix(r ^ 0x51ed270bu), /*packId=*/0u);
+        reg.emplace<FogSpawn>(e);
+        ++out.spawned;
+
+        // Exactly samosbor_census's two tests, applied to the head just added. The
+        // `<= nearR2` branch is unreachable for all but an exact-boundary candidate
+        // and is kept anyway: the moment it stops mirroring the census, the re-test
+        // above starts answering a different question than the gate.
+        if (live.withinOuter < 0xFFu) ++live.withinOuter;
+        if (d2 <= nearR2 && live.withinNear < 0xFFu) ++live.withinNear;
+    }
+
+    // **A fog mob with no WanderTarget is a STATUE.** `wander_step` iterates
+    // `view<Transform, Velocity, WanderTarget>` and `wander_init` runs only at floor
+    // load (main.cpp's finish_floor_nav), so a head created mid-samosbor would stand
+    // exactly where it appeared until something killed it — and it would still
+    // attack, so it would read as a turret rather than as a bug. Reusing wander_init
+    // rather than hand-rolling the node roll is deliberate: it already skips the
+    // camera holder, skips anything that has a target, and refuses Immobile kinds a
+    // destination, and a second copy of that roll is how the two would drift.
+    //
+    // Cost: one O(entities on layer) pass plus one std::vector that holds only the
+    // heads just added, on the ticks that actually spawned — at most once every
+    // kFogSpawnPeriodTicks (2 s).
+    if (out.spawned != 0)
+        out.wandering =
+            wander_init(reg, layer, kFogSalt ^ static_cast<std::uint32_t>(simTick));
+    return out;
+}
+
+FogTickReport samosbor_fog_tick(Registry& reg, const World& world,
+                                const SamosborState& st,
+                                const SamosborTransition& tr, LayerId layer,
+                                Entity anchor, int floorNumber,
+                                std::uint8_t danger, std::uint64_t simTick) {
+    const Transform* tf =
+        reg.valid(anchor) ? reg.try_get<Transform>(anchor) : nullptr;
+    if (tf == nullptr || tf->layer != layer) {
+        // Nothing to measure pressure around: the anchor died and has not been
+        // re-possessed, or it is on another layer. The phase clean-up still has to
+        // run — a death mid-samosbor would otherwise leak that samosbor's whole fog
+        // population until some later cycle noticed — but nothing spawns.
+        FogTickReport out;
+        out.despawned = fog_phase_cleanup(reg, tr, layer);
+        return out;
+    }
+    return samosbor_fog_tick_at(reg, world, st, tr, layer, tf->pos, floorNumber,
+                                danger, simTick);
 }
 
 } // namespace giga::game

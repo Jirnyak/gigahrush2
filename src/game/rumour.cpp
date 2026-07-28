@@ -44,7 +44,13 @@ std::uint16_t sample_live_mob_kind(const Registry& reg, LayerId layer,
     return pick;
 }
 
+} // namespace
+
 // The dominant faction among embodied bodies on this layer.
+//
+// Body for body unchanged from the version that lived in the anonymous namespace above;
+// only the linkage moved, so the Territory rumour keeps answering exactly what it did
+// while `src/app/main.cpp` gains the ability to ask the same question. [rumour.h]
 Faction dominant_faction(const Registry& reg, const NpcPool& pool, LayerId layer) {
     std::uint32_t tally[kFactionCount] = {};
     for (auto e : reg.view<const NpcRef, const Transform>()) {
@@ -58,8 +64,6 @@ Faction dominant_faction(const Registry& reg, const NpcPool& pool, LayerId layer
         if (tally[i] > tally[best]) best = i;
     return static_cast<Faction>(best);
 }
-
-} // namespace
 
 NpcId nearest_speaker(const Registry& reg, LayerId layer) {
     // The listener.

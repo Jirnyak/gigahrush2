@@ -497,7 +497,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [53] SCULPTURE
     MobDef{ f(AiFlag::Rare),
              250, 1000, 8500, 250, 1200,
-             0, 0, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Storage) | u16(RoomBit::Production)),
+             0, 1, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Storage) | u16(RoomBit::Production)),
              0, 0, 0,
              u8(MobKind::Sculpture), u8(MobTier::Elite),
              u8(MobBehaviour::WeepingAngel), u8(ProjType::Bullet),
