@@ -1,19 +1,21 @@
 # AI — utility brain for embodied NPCs
 
-> **Status: needs layer (#12a) BUILT; scorer + selection (#12b) and stagger +
-> steering + embody/loop wiring (#12c) pending.** This is the porting-target spec
-> for the embodied NPC brain, captured from the reference (`../gigahrush`:
-> `needs.ts`, `npc_utility.ts`, `npc_fsm.ts`, and the pathfinding steering). Exact
-> per-intent scorer constants are **re-extracted verbatim at build time** (the
+> **Status: needs layer (#12a) and the pure scorer + selection FSM (#12b) BUILT;
+> stagger + steering + embody/loop wiring (#12c) pending.** This is the
+> porting-target spec for the embodied NPC brain, captured from the reference
+> (`../gigahrush`: `needs.ts`, `npc_utility.ts`, `npc_fsm.ts`, and the pathfinding
+> steering). Exact per-intent scorer constants were **re-extracted verbatim** (the
 > same design-doc → exact-extraction → code flow used for the
-> [faction matrix](macrosim.md)); the numbers below are the shape, not the frozen
-> table. It lives in the game layer (`src/game/`, `giga_game`) over the ECS
+> [faction matrix](macrosim.md)) and are now the frozen table in
+> [src/game/ai.cpp](src/game/ai.cpp); the per-intent formulas quoted below are the
+> shape. It lives in the game layer (`src/game/`, `giga_game`) over the ECS
 > ([ecs.md](ecs.md)) and consumes the baked nav ([nav.md](nav.md)) and flee field
 > ([diffusion.md](diffusion.md)) — pure game-layer over EnTT + NpcPool, so the
 > whole brain is exercised **headless** by `game_test`, exactly like the macro tick.
 >
 > - **Code:** [src/game/ai.h](src/game/ai.h) / [.cpp](src/game/ai.cpp)
-> - **Tests:** [tests/game_test.cpp](tests/game_test.cpp) `test_needs_decay`
+> - **Tests:** [tests/game_test.cpp](tests/game_test.cpp) `test_needs_decay`,
+>   `test_scorer`, `test_selection`
 > - **Architecture:** [ARCHITECTURE.md](ARCHITECTURE.md) §L4
 > - Upstream of [controller.md](controller.md): the brain writes
 >   `Controller::wishDir`; `controller_step` turns it into velocity, then
@@ -100,22 +102,54 @@ of a faction its own faction is `hostile()` toward. `social` biases toward
 faction-`friendly()` neighbours and the agent's own high-affinity relationship
 edges (the per-NPC `rel_` block, [npcs.md](npcs.md)).
 
+**Built (#12b — [src/game/ai.cpp](src/game/ai.cpp) `score_intents`).** A pure
+`score_intents(perception, needs, out[13])` fills the 13 utilities, each an
+additive body clamped to 0..100, then nudged by a per-agent **identity jitter**
+(§Scheduling) so a uniform crowd does not tie in lockstep. Every coefficient,
+pressure curve (`lowNeedPressure` / `highNeedPressure` / `healthPressure` /
+`computeThreatPressure`) and the `clampScore`/`unitish` band logic is **ported
+verbatim** from `npc_utility.ts`. The scorer never touches the pool or world: it
+reads a **`Perception`** snapshot the driver (#12c) fills from whatever the engine
+currently exposes. Signals the target does not yet produce — mobs/combat (#13), a
+room-affordance model, a minute-of-day clock, the samosbor event — sit at
+zero/`none`/−1 in `Perception`, so **every additive term with a missing input
+contributes 0 and the ranking among the live intents (needs-driven + diffusion
+threat) is exactly the reference's**; a later system fills the field and its term
+switches on with *no scorer edit*. Verified headless by `test_scorer` (need- and
+threat-driven argmax, the 0..100 range, per-identity spread).
+
 ### 3. Selection — argmax with hysteresis (anti-flapping)
 
 Raw argmax over 13 scores flaps every frame at a tie; the reference guards it with
 a small state machine (kept as a minimal per-entity FSM record — the current
 intent, its start time, its committed path):
 
-- **Switch margin ~7** — a new intent must beat the current by a margin to win, so
-  near-ties stick.
-- **Emergency override ~58** — `safety / flee / combat / heal` above an emergency
+- **Switch margin 7** — a new intent must beat the current by this margin to win,
+  so near-ties stick. (The FSM override 7, *not* the `npc_utility` default 8 —
+  using 8 diverges at the hysteresis boundary.)
+- **Emergency override 58** — `safety / flee / combat / heal` at or above this
   score preempt immediately, bypassing the margin (survival never waits).
-- **Stickiness ~+5 → +12** — the current intent gets a bonus that grows the longer
-  it's held, so a chosen task runs to a sensible end instead of churning.
-- **Re-plan every ~1.5–4.0 s**, the interval **hash-seeded per agent** so the crowd
+- **Stickiness +5 → +12** — the current intent gets a bonus `5 + min(7, t·0.18)`
+  that grows the longer it's held, so a chosen task runs to a sensible end instead
+  of churning. Applied *inside* the scorer (via `Perception.stickinessAmount`), so
+  selection only needs the raw scores.
+- **Re-plan every 1.5–4.0 s**, the interval **hash-seeded per agent** so the crowd
   doesn't re-plan in lockstep. Between re-plans the committed path is followed.
 - **Path-commitment guard** — don't abandon an in-progress route for a marginally
   better intent; finishing beats thrashing.
+
+**Built (#12b — [src/game/ai.cpp](src/game/ai.cpp) `select_intent`).** The
+argmax + hysteresis itself: `select_intent(scores[13], current)` takes the raw
+argmax (ties → lower index), keeps `current` unless a challenger clears the switch
+margin, and lets an emergency intent ≥ 58 preempt regardless. The frozen
+thresholds live as named constants in [ai.h](src/game/ai.h) (`kSwitchMargin`,
+`kEmergencyScore`, and the `stickiness_amount` curve / re-plan bounds the #12c
+driver consumes). The **AiBrain** component (current intent + `stateTimer` +
+`nextDecisionAt`) is defined here and folds with embodiment like `Needs`; the
+re-plan **cadence**, the identity **stagger**, and the **path-commitment guard**
+are the driver's job and land with #12c. Verified headless by `test_selection`
+(margin stick/switch, emergency preempt, emergency-below-score fallback,
+tie-break).
 
 ### 4. Steering — follow the baked nav, don't search
 

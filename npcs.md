@@ -179,8 +179,11 @@ invariant that keeps the 2²⁰ population from growing per visit.
   the `Needs` SoA component + its one-pass `needs_step` decay — food/water/sleep
   reserves fall (attribute-slowed by STR/AGI/INT), pee/poo pressures rise only by
   digesting a pending pool — materialised on embodiment and folded away with it,
-  like every other transient. The scorer (#12b) and stagger + steering (#12c) are
-  pending, so the crowd has drives but does not yet move.
+  like every other transient. **Also built (#12b):** the pure `score_intents`
+  ranking all 13 intents 0..100 and the `select_intent` argmax + hysteresis, both
+  ported verbatim and exercised headless — so the crowd now has drives *and* a
+  decision. Only the stagger + baked-nav steering + loop wiring (#12c) remain
+  before the crowd visibly moves.
 
 ## Baked, not searched
 

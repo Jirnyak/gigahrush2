@@ -1857,6 +1857,206 @@ static void test_needs_decay() {
     }
 }
 
+// #12b — the pure utility scorer. Faithful-port checks: determinism, the 0..100
+// range, need- and threat-driven argmax, the emergency band, and the per-identity
+// jitter that keeps a uniform crowd from acting in lockstep. The coefficient
+// bands below are the reference pre-jitter value +/- the identity jitter
+// amplitude (2.5), so they pin the ported constants without being brittle to the
+// per-agent nudge.
+static void test_scorer() {
+    // A fully comfortable Citizen with no threat: reserves full, pressures empty,
+    // full HP. Every scenario below is a one-field mutation of this.
+    auto fresh = [] {
+        Needs n{};
+        n.v[NeedFood] = 100.0f;
+        n.v[NeedWater] = 100.0f;
+        n.v[NeedSleep] = 100.0f;
+        n.v[NeedPee] = 0.0f;
+        n.v[NeedPoo] = 0.0f;
+        return n;
+    };
+    auto base = [] {
+        Perception p;
+        p.idSeed = identity_seed(1234u);
+        p.faction = FactionCitizen;
+        p.hp = 100.0f;
+        p.maxHp = 100.0f;
+        return p;
+    };
+    auto argmax = [](const float s[kIntentCount]) {
+        std::uint8_t b = 0;
+        for (std::uint8_t i = 1; i < kIntentCount; ++i)
+            if (s[i] > s[b]) b = i;
+        return b;
+    };
+
+    // --- Determinism: same (perception, needs) -> identical scores. ---
+    {
+        Perception p = base();
+        Needs n = fresh();
+        n.v[NeedFood] = 20.0f;
+        float a[kIntentCount], b[kIntentCount];
+        score_intents(p, n, a);
+        score_intents(p, n, b);
+        for (std::uint8_t i = 0; i < kIntentCount; ++i) CHECK(a[i] == b[i]);
+    }
+
+    // --- Range: every intent stays in [0, 100], even under nonsense inputs
+    //     (over-damaged HP, out-of-band unit-ish fields, over-100 needs). This
+    //     exercises clamp_score's NaN/edge handling and the unitish() bands. ---
+    {
+        Perception p = base();
+        p.hp = -50.0f;
+        p.danger = 999.0f;
+        p.visibleHostiles = 40.0f;
+        p.fire = 255.0f;
+        p.samosborActive = true;
+        Needs n = fresh();
+        for (auto& v : n.v) v = 137.0f;
+        float s[kIntentCount];
+        score_intents(p, n, s);
+        for (std::uint8_t i = 0; i < kIntentCount; ++i)
+            CHECK(s[i] >= 0.0f && s[i] <= 100.0f);
+    }
+
+    // --- Idle comfortable Citizen: work is the argmax (duty*34 + workDrive*18
+    //     ~= 27.7), ahead of the always-on flee baseline (~19.2). ---
+    {
+        Perception p = base();
+        Needs n = fresh();
+        float s[kIntentCount];
+        score_intents(p, n, s);
+        CHECK(argmax(s) == IntentWork);
+        CHECK(s[IntentWork] >= 25.0f && s[IntentWork] <= 31.0f); // 27.7 +/- 2.5
+    }
+
+    // --- Starving (food -> 0): eat dominates (eatP saturates -> *86 ~= 86). ---
+    {
+        Perception p = base();
+        Needs n = fresh();
+        n.v[NeedFood] = 0.0f;
+        float s[kIntentCount];
+        score_intents(p, n, s);
+        CHECK(argmax(s) == IntentEat);
+        CHECK(s[IntentEat] >= 83.0f && s[IntentEat] <= 89.0f); // 86 +/- 2.5
+    }
+
+    // --- Bladder full (pee -> 100): toilet dominates (toiletP*92 ~= 92). ---
+    {
+        Perception p = base();
+        Needs n = fresh();
+        n.v[NeedPee] = 100.0f;
+        float s[kIntentCount];
+        score_intents(p, n, s);
+        CHECK(argmax(s) == IntentToilet);
+        CHECK(s[IntentToilet] >= 89.0f && s[IntentToilet] <= 95.0f); // 92 +/- 2.5
+    }
+
+    // --- Danger field saturated (danger=1) on an unarmed Citizen: flee is the
+    //     argmax (threat*42 + (1-risk)*15 + panic*18 ~= 61.2) AND clears the
+    //     emergency band, so #12c's selection FSM will preempt whatever it was
+    //     doing. threat also lifts safety above the (now threat-crushed) work. ---
+    {
+        Perception p = base();
+        p.danger = 1.0f;
+        Needs n = fresh();
+        float s[kIntentCount];
+        score_intents(p, n, s);
+        CHECK(argmax(s) == IntentFlee);
+        CHECK(s[IntentFlee] >= kEmergencyScore);                 // emergency-eligible
+        CHECK(s[IntentFlee] >= 58.0f && s[IntentFlee] <= 64.0f); // 61.2 +/- 2.5
+        CHECK(s[IntentSafety] > s[IntentWork]);
+    }
+
+    // --- Identity jitter: two agents identical but for their id get different
+    //     score vectors, so a uniform crowd does not act in lockstep. ---
+    {
+        Perception pa = base();
+        pa.idSeed = identity_seed(7u);
+        Perception pb = base();
+        pb.idSeed = identity_seed(8u);
+        Needs n = fresh();
+        float a[kIntentCount], b[kIntentCount];
+        score_intents(pa, n, a);
+        score_intents(pb, n, b);
+        bool anyDiff = false;
+        for (std::uint8_t i = 0; i < kIntentCount; ++i)
+            if (a[i] != b[i]) anyDiff = true;
+        CHECK(anyDiff);
+    }
+
+    // --- Stickiness bonus lands on the current intent ONLY (the FSM feeds it in
+    //     through Perception so select_intent needs only the raw scores). ---
+    {
+        Perception p = base();
+        Needs n = fresh();
+        float without[kIntentCount];
+        score_intents(p, n, without);
+        p.currentIntent = IntentWork;
+        p.stickinessAmount = 10.0f;
+        float with[kIntentCount];
+        score_intents(p, n, with);
+        CHECK(with[IntentWork] > without[IntentWork] + 8.0f); // rose by ~the bonus
+        CHECK(with[IntentSocial] == without[IntentSocial]);   // others untouched
+    }
+}
+
+// #12b — argmax + hysteresis (select_intent). Crafted score vectors exercise each
+// branch of the anti-flapping FSM in isolation: fresh argmax, tie-break, the
+// switch margin, and the emergency override (which bypasses the margin).
+static void test_selection() {
+    float s[kIntentCount];
+    auto reset = [&](float v) { for (auto& x : s) x = v; };
+
+    // Fresh agent (kIntentNone) returns the raw argmax.
+    reset(10.0f);
+    s[IntentSocial] = 40.0f;
+    CHECK(select_intent(s, kIntentNone) == IntentSocial);
+
+    // Argmax ties favour the lower index (strict > in the scan).
+    reset(10.0f);
+    s[IntentToilet] = 50.0f; // index 3
+    s[IntentEat] = 50.0f;    // index 5, same score -> lower index (toilet) wins
+    CHECK(select_intent(s, kIntentNone) == IntentToilet);
+
+    // Staying on the current intent when it is already best is a no-op.
+    reset(10.0f);
+    s[IntentPatrol] = 80.0f;
+    CHECK(select_intent(s, IntentPatrol) == IntentPatrol);
+
+    // Hysteresis: a challenger within the switch margin does NOT displace the
+    // incumbent (near-ties stick), but one beyond it wins.
+    reset(10.0f);
+    s[IntentWork] = 50.0f;
+    s[IntentEat] = 55.0f; // beats work by 5 < margin 7
+    CHECK(select_intent(s, IntentWork) == IntentWork);
+    s[IntentEat] = 58.0f; // beats work by 8 > margin 7
+    CHECK(select_intent(s, IntentWork) == IntentEat);
+
+    // Emergency override: a survival intent >= kEmergencyScore preempts even when
+    // it does NOT clear the switch margin.
+    reset(10.0f);
+    s[IntentWork] = 55.0f;
+    s[IntentFlee] = 59.0f; // 59 < 55 + 7 = 62 (margin fails) but 59 >= 58
+    CHECK(select_intent(s, IntentWork) == IntentFlee);
+
+    // ...an emergency intent BELOW the emergency score falls back to the margin
+    // rule (so it does NOT preempt here).
+    reset(10.0f);
+    s[IntentWork] = 55.0f;
+    s[IntentFlee] = 57.0f; // emergency intent, but < 58 and < 62
+    CHECK(select_intent(s, IntentWork) == IntentWork);
+
+    // A non-emergency intent never takes the emergency path, even above 58: it
+    // must clear the margin like any other challenger.
+    reset(10.0f);
+    s[IntentWork] = 55.0f;
+    s[IntentEat] = 60.0f; // 60 < 62, and eat is not an emergency intent
+    CHECK(select_intent(s, IntentWork) == IntentWork);
+    s[IntentEat] = 63.0f; // now clears the margin
+    CHECK(select_intent(s, IntentWork) == IntentEat);
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -1898,6 +2098,8 @@ int main() {
     test_floor_bucket_index();
     test_stream_migration_reembodies();
     test_needs_decay();
+    test_scorer();
+    test_selection();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

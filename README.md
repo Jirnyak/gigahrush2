@@ -45,7 +45,7 @@ built.
 | Monsters | [monsters.md](monsters.md) | Global monster tables + per-floor weights | design |
 | Items / loot | [items.md](items.md) | Global item catalog + loot tables | design |
 | NPCs | [npcs.md](npcs.md) | Macro population + local embodiment; player is an embodied record | pool + embodiment + streaming |
-| NPC AI | [ai.md](ai.md) | Utility brain: needs, 13-intent scorer + hysteresis, baked-nav steering | needs (#12a) built; scorer + steering pending |
+| NPC AI | [ai.md](ai.md) | Utility brain: needs, 13-intent scorer + hysteresis, baked-nav steering | needs (#12a) + scorer/selection (#12b) built; steering + loop wiring (#12c) pending |
 | Events | [events.md](events.md) | Decoupled gameplay event bus (transient ring + optional log) | built |
 | Macrosim | [macrosim.md](macrosim.md) | Background global population / faction / social simulation | core built (headless); app-loop wiring pending |
 
@@ -110,7 +110,7 @@ src/ecs      universal components + EnTT registry alias
 src/sim      physics, controller, camera, fluid, diffusion (danger/scent) systems
 src/game     game layer: NPC pool + embodiment, floor modules, streaming, elevator,
              nav disk cache, macro society tick (demographics + migration +
-             faction + social), utility-AI needs
+             faction + social), utility-AI needs + intent scorer
 src/render   Vulkan device/swapchain/renderer, cube pass + NPC body pass, ImGui layer
 src/input    SDL3 -> ECS input bridge
 src/app      window + main loop + demo worldgen
@@ -124,7 +124,8 @@ embeddable in a different host. The gameplay macro-systems — NPC pool +
 embodiment, inventory, event bus, the floor modules (per-floor generator,
 `FloorRegistry`, one-live-floor streaming, elevator), the background **macro
 society tick** (columnar demographics, inter-floor migration, a faction matrix +
-social graph), and the embodied **utility-AI** (needs today; scorer + steering
-next), with the mob / item tables still pending — live in `src/game` as
+social graph), and the embodied **utility-AI** (needs + a pure 13-intent scorer
+with argmax/hysteresis today; baked-nav steering next), with the mob / item
+tables still pending — live in `src/game` as
 `giga_game`, which links `giga_core` and is likewise headless-testable
 (`game_test`).
