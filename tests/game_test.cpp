@@ -60,6 +60,7 @@ int g_checks = 0;
     } while (0)
 
 #include "suite_needs.inl"
+#include "suite_noise.inl"
 #include "suite_packs.inl"
 #include "suite_hunt.inl"
 #include "suite_samosbor.inl"
@@ -3528,6 +3529,7 @@ int main() {
     test_ranged_table();
     test_player_shoots();
     test_needs_all();
+    test_noise_all();
     test_packs_all();
     test_samosbor_all();
     test_doors_all();

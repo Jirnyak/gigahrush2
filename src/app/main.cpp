@@ -53,6 +53,8 @@
 #include "game/loot.h"
 #include "game/weapon_table.h"
 #include "game/event_bus.h"
+#include "game/investigate.h"
+#include "game/noise.h"
 #include "game/wander.h"
 #include "game/npc_pool.h"
 #include "game/population.h"
@@ -451,6 +453,10 @@ int main(int argc, char** argv) {
     // the opt-in log.
     game::EventBus bus;
     bus.init();
+    // Recent noises, fading ([noise.h]). A sibling of the bus, not a part of it: the
+    // bus is "this happened" and is wiped every tick, this is "this happened HERE and
+    // is still fading". No init() — it is a 2 KB POD with no allocation anywhere.
+    game::NoiseField noiseField;
     game::FloorRegistry registry;
 
     // Streaming keeps only the ACTIVE floor's World + crowd live; every other
@@ -558,6 +564,10 @@ int main(int argc, char** argv) {
     // steering across kWanderPeriod ticks with no per-agent scheduling state.
     std::uint64_t simTick = 0;
     std::uint32_t meleeHits = 0;   // cumulative, for the HUD
+    // Mobs steered by SOUND on the last sim tick ([investigate.h]). Not cumulative: the
+    // point of the readout is "is anything investigating right now", and a running
+    // total would answer a different question badly.
+    std::uint32_t heardMobs = 0;
     // The samosbor clock. One per live floor; the demo keeps one floor live, so one
     // clock, re-armed on arrival ([samosbor.h]).
     game::SamosborRng sbRng{0x5A303B0Du};
@@ -694,6 +704,12 @@ int main(int argc, char** argv) {
                         // stale one is worse than none. [rumour.h]
                         rumourLine[0] = 0;
                         rumourAt = 0;
+                        // A gunshot on the floor you just left must not be audible to
+                        // the crowd on the one you arrived at. The streamer RECYCLES
+                        // LayerId slots, so a surviving record would not merely be
+                        // stale — it would match the new floor's layer id and be heard
+                        // there. [noise.h]
+                        game::noise_clear(noiseField);
                         currentSpec = spec_for_floor(currentFloor);
                         // Streaming recycles World objects in place, so the cube
                         // pass cannot detect the new geometry by identity.
@@ -787,6 +803,13 @@ int main(int argc, char** argv) {
             simAccum += frameDt;
             int guard = 0;
             while (simAccum >= kSimDt && guard++ < 8) {
+                // Age the noise field ONCE per tick, at the top ([noise.h]). Everything
+                // published later in this tick therefore gets a full tick of life before
+                // it can expire, and investigate_step below reads a field that nothing has yet
+                // mutated this tick — so a gunshot fired on tick N is investigated on
+                // tick N+1 rather than racing the pass that fired it.
+                game::noise_step(noiseField,
+                                 static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f));
                 input.apply(reg, kSimDt);
                 controller_step(reg, kSimDt);
                 // Steer the crowd BEFORE physics: wander writes horizontal
@@ -827,6 +850,13 @@ int main(int argc, char** argv) {
                 game::wander_step(reg, stack.layer(activeLayer).grid(), pool,
                                   nav.coarse(),
                                   nav.fine(), activeLayer, simTick);
+                // Sound overrides sight's absence: a mob with no visible prey that
+                // heard something recently walks at the sound instead of at a random
+                // lattice node. Purely additive on top of wander_step and it returns
+                // before touching an entity when the field is quiet, which is almost
+                // every tick. [investigate.h]
+                heardMobs = game::investigate_step(reg, noiseField, pool, activeLayer,
+                                            simTick);
                 physics_step(reg, stack, kSimDt);
                 // Doors resolve AFTER physics for the same reason melee does: contact
                 // is tested by ADJACENCY against where bodies actually ended up this
@@ -867,7 +897,7 @@ int main(int argc, char** argv) {
                                       game::kInvalidItem;
                 shots += game::player_ranged_step(reg, pool, activeLayer,
                                                   haveGun && attackHeld && !paused,
-                                                  kSimDt, simTick);
+                                                  kSimDt, simTick, &noiseField);
                 game::player_melee_step(reg, pool, bus, activeLayer, kSimDt,
                                         !haveGun && attackHeld && !paused, simTick);
                 meleeHits += game::mob_attack_step(reg,
@@ -923,12 +953,13 @@ int main(int argc, char** argv) {
                                      static_cast<std::uint32_t>(simTick));
                 // ONE death point per tick, after everything that can deal damage
                 // (combat.h). Nothing else in the tree destroys a damaged entity.
-                deaths += game::finalize_deaths(reg, pool, bus, simTick);
+                deaths += game::finalize_deaths(reg, pool, bus, simTick,
+                                                &noiseField);
                 // Containers first, then loose pickups: a crate emptied this tick
                 // should be sweepable in the same tick if the inventory overflowed
                 // onto the floor. [container.h]
                 const std::int32_t fromBox =
-                    game::loot_containers_step(reg, pool, activeLayer);
+                    game::loot_containers_step(reg, pool, activeLayer, &noiseField);
                 if (fromBox != 0) {
                     loot += fromBox;
                     containerTake += fromBox;
@@ -1192,6 +1223,35 @@ int main(int argc, char** argv) {
                 else
                     ImGui::TextUnformatted("nearest: -");
             }
+            // The loudest recent noise, and how far away it is. Without this the whole
+            // system is invisible: a monster walking toward a gunshot looks exactly
+            // like a monster wandering, and "a change nobody can see" is
+            // indistinguishable from a no-op. Reported from the PLAYER's ear with no
+            // hearing bonus and no severity floor, so it shows what is actually in the
+            // field rather than what a monster would bother with. [noise.h]
+            {
+                float nd = 0.0f;
+                const game::Noise* ln = reg.valid(player)
+                    ? game::loudest_heard(noiseField, activeLayer,
+                                          reg.get<Transform>(player).pos,
+                                          /*hearingMult=*/1.0f, /*minSeverity=*/0,
+                                          /*ignoreActor=*/0, &nd)
+                    : nullptr;
+                if (ln)
+                    ImGui::TextColored(ImVec4(0.98f, 0.79f, 0.55f, 1.0f),
+                                       "NOISE %s sev%u  %.1f m of %.0f  %.2f s left"
+                                       "  | %u live, %u investigating",
+                                       game::noise_source_name(
+                                           static_cast<game::NoiseSource>(ln->source)),
+                                       ln->severity, nd, ln->radius,
+                                       ln->ttlMs * 0.001f,
+                                       static_cast<unsigned>(noiseField.live()),
+                                       heardMobs);
+                else
+                    ImGui::Text("noise: - (%u live, %u dropped)",
+                                static_cast<unsigned>(noiseField.live()),
+                                noiseField.dropped);
+            }
             {
                 const auto ph = static_cast<game::SamosborPhase>(samosbor.phase);
                 const float fogScale = samosbor_fog_scale(samosbor);
@@ -1412,6 +1472,12 @@ int main(int argc, char** argv) {
                         // second one and the reason to be suspicious of the shape.
                         rumourLine[0] = 0;
                         rumourAt = 0;
+                        // A gunshot on the floor you just left must not be audible to
+                        // the crowd on the one you arrived at. The streamer RECYCLES
+                        // LayerId slots, so a surviving record would not merely be
+                        // stale — it would match the new floor's layer id and be heard
+                        // there. [noise.h]
+                        game::noise_clear(noiseField);
                     }
                     ++shotRideDone;
                 }

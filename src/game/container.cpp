@@ -260,7 +260,8 @@ std::uint32_t spawn_floor_containers(Registry& reg, const World& world,
     return made;
 }
 
-std::int32_t loot_containers_step(Registry& reg, NpcPool& pool, LayerId layer) {
+std::int32_t loot_containers_step(Registry& reg, NpcPool& pool, LayerId layer,
+                                  NoiseField* noise) {
     // The looter.
     Entity who = entt::null;
     vec3 pos{0, 0, 0};
@@ -301,6 +302,13 @@ std::int32_t loot_containers_step(Registry& reg, NpcPool& pool, LayerId layer) {
             c.count[i] = 0;
             anyMoved = true;
         }
+        // The lid. Gated on `anyMoved`, so the pass that empties a crate makes one
+        // noise and the ticks that merely find it already empty make none — without
+        // that, standing next to an opened box would publish 120 records a second and
+        // the whole 64-slot field would be one crate. [noise.h]
+        if (noise && anyMoved)
+            noise_publish(*noise, layer, t.pos, container_open_noise(),
+                          static_cast<std::uint32_t>(entt::to_integral(who)));
         // Opened only when it is actually empty. A container left half-full by a full
         // inventory must stay lootable, or the player is punished for carrying things.
         bool empty = true;
@@ -313,7 +321,6 @@ std::int32_t loot_containers_step(Registry& reg, NpcPool& pool, LayerId layer) {
             // that yourself across 256 rooms is not reasonable.
             if (Renderable* r = reg.try_get<Renderable>(e)) r->color = kOpenColour;
         }
-        (void)anyMoved;
     }
     return took;
 }

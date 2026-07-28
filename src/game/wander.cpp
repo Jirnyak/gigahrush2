@@ -37,10 +37,8 @@ constexpr float kNpcWalkSpeed = 1.35f;
 // Staggered visits, not ticks: with kWanderPeriod = 8 at 120 Hz this is ~1.1 s.
 constexpr std::uint8_t kRepathCooldown = 16;
 
-// Aggro range, metres. Inside this a mob drops navigation and closes on the
-// camera holder directly. 20 m is a corridor-and-a-half: far enough that a floor
-// feels hunted, near enough that the whole roster does not converge at once.
-constexpr float kAggroRadius = 20.0f;
+// kAggroRadius moved to wander.h — [investigate.h] needs the same number to decide
+// whether a mob is already hunting by sight or is free to investigate a sound.
 
 // Cell the agent currently occupies.
 void agent_cell(const vec3& pos, int& cx, int& cy, int& cz) {

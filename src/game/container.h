@@ -33,6 +33,7 @@
 #include "ecs/registry.h"
 #include "game/item_table.h"
 #include "game/floor_gen.h"
+#include "game/noise.h"          // NoiseField, for the lid
 #include "world/level_stack.h"
 
 namespace giga::game {
@@ -114,7 +115,12 @@ std::uint32_t spawn_floor_containers(Registry& reg, const World& world,
 // An emptied container is NOT destroyed. It stays as a visibly-open box, because a
 // container that vanishes when looted tells the player nothing about where they have
 // already been — and on a 128^3 floor, remembering that yourself is not reasonable.
-std::int32_t loot_containers_step(Registry& reg, class NpcPool& pool, LayerId layer);
+//
+// `noise` is an optional sink for the lid ([noise.h]): opening a crate is audible, so
+// looting a room is no longer free of consequence. Optional and trailing so the two
+// existing call sites — main.cpp and test_containers — compile unchanged.
+std::int32_t loot_containers_step(Registry& reg, class NpcPool& pool, LayerId layer,
+                                  NoiseField* noise = nullptr);
 
 // Roll the contents of one container. Exposed for tests: the value cap is the whole
 // design and it needs to be checkable without generating a floor.

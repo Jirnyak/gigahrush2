@@ -26,6 +26,7 @@
 #include <cstdint>
 
 #include "core/math.h"
+#include "core/tick.h"
 #include "ecs/registry.h"
 #include "game/faction.h"
 #include "game/item_table.h"
@@ -74,10 +75,15 @@ struct Rumour {
 // not sweep the whole floor from a doorway.
 inline constexpr float kOverhearRange = 6.0f;
 
-// Cooldown between overheard lines, sim ticks at 120 Hz. Without one, standing in a
-// crowd would replace the line every frame and none of them would be readable — the
-// system would produce a flicker rather than information.
-inline constexpr std::uint32_t kOverhearCooldownTicks = 240;   // 2 s
+// Cooldown between overheard lines: 2 s. Without one, standing in a crowd would
+// replace the line every frame and none of them would be readable — the system would
+// produce a flicker rather than information.
+//
+// This is the one of the three drifted epochs where the drift was actually readable by
+// a player: 240 ticks was 2 s at 120 Hz and became 1.92 s at 125 Hz, and the whole
+// point of the constant is that a human has time to read a line before it is replaced.
+// Derived from kSimHz so the reading budget is stated in the unit a human reads in.
+inline constexpr std::uint32_t kOverhearCooldownTicks = 2u * static_cast<std::uint32_t>(kSimHz);
 
 // Build the rumour a given speaker would tell, from live state.
 //

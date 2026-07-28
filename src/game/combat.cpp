@@ -110,13 +110,22 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
 }
 
 std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
-                              std::uint64_t tick) {
+                              std::uint64_t tick, NoiseField* noise) {
     // Collect before destroying: mutating while iterating a view invalidates it.
     std::vector<Entity> doomed;
     for (auto e : reg.view<const Dead>()) doomed.push_back(e);
 
     for (Entity e : doomed) {
         const Dead& d = reg.get<const Dead>(e);
+
+        // A body hitting the floor is audible. Published BEFORE the destroy, for the
+        // same reason the NpcDied event is: afterwards there is no Transform to read.
+        // The victim is credited as the noise's actor, not the killer — a monster must
+        // not skip investigating a corpse just because it did not make it.
+        if (noise)
+            if (const Transform* tr = reg.try_get<Transform>(e))
+                noise_publish(*noise, tr->layer, tr->pos, body_fall_noise(),
+                              static_cast<std::uint32_t>(entt::to_integral(e)));
 
         std::uint32_t victim = kInvalidNpc;
         std::uint32_t kind = 0xFFu;
@@ -670,7 +679,8 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
 }
 
 std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
-                                 bool wantFire, float dt, std::uint64_t tick) {
+                                 bool wantFire, float dt, std::uint64_t tick,
+                                 NoiseField* noise) {
     Entity shooter = entt::null;
     for (auto e : reg.view<const CameraTag, const Transform>()) {
         if (reg.get<const Transform>(e).layer != layer) continue;
@@ -778,6 +788,15 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
                              static_cast<std::int16_t>(def->dmg),
                              def->projSpeedMmps, shooter, kPlayerGravityPct, 1);
     }
+
+    // The shot is heard. ONE noise per trigger pull, not one per pellet: a shotgun
+    // blast is one bang, and twelve records would also evict everything else in a
+    // 64-slot field. Published at the SHOOTER's position rather than the muzzle so a
+    // monster investigating the sound walks at the player and not at a point 1.7 m in
+    // front of him. [noise.h]
+    if (noise)
+        noise_publish(*noise, layer, tr.pos, weapon_fire_noise(*def),
+                      static_cast<std::uint32_t>(entt::to_integral(shooter)));
 
     // ONE round per shot regardless of pellet count — a shotgun blast costs one shell
     // and produces up to twelve projectiles. The reference's rule.

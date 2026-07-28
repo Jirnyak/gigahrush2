@@ -47,6 +47,7 @@
 #include <cstdint>
 
 #include "core/math.h"
+#include "core/tick.h"
 #include "ecs/registry.h"
 #include "game/npc_pool.h"
 #include "world/level_stack.h"   // LayerId
@@ -75,6 +76,28 @@ inline constexpr float kHuntRadius = 6.0f;
 // taste: an abandoned half-kill leaves a wounded body that the NEXT cohort finishes
 // in half the time, and nothing ever heals it, so short windows convert a flat
 // casualty rate into an accelerating one.
+//
+// KNOWN DRIFT, deliberately not fixed here — read this before "correcting" the value.
+// 2400 was 20 s at the old 120 Hz step. core/tick.h now runs the sim at 125 Hz, so this
+// window is 19.2 s, which errs short in exactly the direction the paragraph above
+// forbids: the margin over the 13.8 s time-to-kill fell from 6.2 s to 5.4 s and nobody
+// decided that. The sibling epochs in wander.h and rumour.h were repaired in place by
+// deriving them from kSimHz; this one was not, and the reason is measured rather than
+// cautious.
+//
+// Changing it to 20u * kSimHz (2500) was tried and reverted. It shifts the phase of the
+// identity-staggered epoch, which changes WHICH cohort holds a licence during any given
+// tick window — and tests/suite_noise.inl's gunshot demo depends on that alignment: its
+// mob stops firing inside the 300-tick window and three checks fail (shotsFired == 1,
+// soundSteers > 0, noise.live() == 1). Bisected: 4 failures with the change, 1 without,
+// and that remaining 1 is present at HEAD with all of my edits stashed, so it is not
+// from this work.
+//
+// The fix therefore has to move the test's window with the constant, and suite_noise.inl
+// is being edited by another session right now — its failing line moved from :440 to
+// :457 between two runs of mine. Deferred rather than forced, because a phase-shifted
+// epoch silently changing a noise test is precisely the class of breakage this file's
+// own comments warn about.
 inline constexpr std::uint64_t kHuntEpochTicks = 2400;
 
 // One monster in this many is hunting at any given moment.

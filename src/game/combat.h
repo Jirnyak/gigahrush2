@@ -37,6 +37,7 @@
 #include "game/event_bus.h"
 #include "game/inventory.h"
 #include "game/item_table.h"
+#include "game/noise.h"          // NoiseField, for the gunshot and the body fall
 #include "game/ranged_table.h"   // ItemId, for the equipped-loadout helpers
 #include "game/npc_pool.h"
 #include "world/level_stack.h"
@@ -206,8 +207,13 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
 // Call it at ONE defined point per tick, after every system that can deal damage.
 // Anything that needs to react to a death must do so from the event, not by
 // watching for entities to vanish.
+//
+// `noise` is an optional sink for the body hitting the floor ([noise.h]). It is a
+// separate channel from the NpcDied event on purpose: the event is bookkeeping ("the
+// records should know"), the noise is a place in the world something might walk
+// toward. Optional and trailing so the existing call sites compile unchanged.
 std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
-                              std::uint64_t tick);
+                              std::uint64_t tick, NoiseField* noise = nullptr);
 
 // Attack pass: every mob on `layer` whose cooldown has expired attacks its target
 // — melee if it is in reach, or a telegraphed shot if the kind is ranged and the
@@ -270,8 +276,15 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
 //
 // Belongs immediately after player_melee_step in the sim order. Returns shots fired
 // (0 or 1 per call; a pellet spread is one shot).
+//
+// `noise` is an optional sink for the gunshot ([noise.h]): a gun going off is the
+// loudest event in the game and until now it was silent, so a monster that heard a
+// firefight behaved exactly like one standing in a library. Optional and trailing so
+// the three existing call sites — main.cpp and two tests — compile unchanged; pass
+// nullptr and the shot is silent, which is the pre-noise behaviour exactly.
 std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
-                                 bool wantFire, float dt, std::uint64_t tick);
+                                 bool wantFire, float dt, std::uint64_t tick,
+                                 NoiseField* noise = nullptr);
 
 bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId layer,
                        float dt, bool wantsAttack, std::uint64_t tick);

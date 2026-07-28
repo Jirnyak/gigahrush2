@@ -17,7 +17,16 @@ namespace giga {
 struct PhysicsParams {
     // Substeps keep fast movers from tunneling through thin sub-voxel walls.
     int maxSubsteps = 4;
-    float maxStep = 1.0f / 120.0f; // seconds per substep cap
+    // Seconds per substep cap. This is the last 1/120 in src/ and it stays a literal
+    // deliberately rather than becoming kSimDt, which is not an oversight: physics_step
+    // is called with a local dt of 1.0f / 120.0f by two test sites that predate the
+    // 125 Hz move (tests/game_test.cpp and tests/suite_hunt.inl). Tightening the cap to
+    // kSimDt (0.008) would make ceil(0.008333 / 0.008) == 2 there, doubling their
+    // substep count and silently changing what those tests measure. Migrate those dt
+    // literals first, then this becomes kSimDt in the same commit. At the live rate the
+    // cap is inert either way: an 8.0 ms tick is under the 8.333 ms cap, so the ceil()
+    // in physics.cpp:79 yields one substep.
+    float maxStep = 1.0f / 120.0f;
 };
 
 // Advance all dynamic entities by dt seconds against their layers.
