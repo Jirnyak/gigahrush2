@@ -162,6 +162,14 @@ invariant that keeps the 2²⁰ population from growing per visit.
   can hit *anyone* — including the NPC that fired it. No attacker/victim special
   cases; combat is isotropic, exactly like the player's. The player is not
   privileged ([ecs.md](ecs.md)).
+- **Embodied brain (planned, #12 — [ai.md](ai.md)).** On the live floor each
+  embodied NPC runs a **utility-AI**: 0..100 needs decay, a pure scorer ranks 13
+  intents (eat/drink/toilet/sleep/flee/combat/social/patrol/wander/…), argmax +
+  hysteresis picks one, and steering follows the **baked** nav ([nav.md](nav.md)
+  `route_step`) or the flee field ([diffusion.md](diffusion.md)) by writing
+  `Controller::wishDir` — the same locomotion path as the player. Re-plan cadence
+  is an identity-hash stagger, so the crowd spreads across frames with zero
+  scheduling RAM.
 
 ## Baked, not searched
 
