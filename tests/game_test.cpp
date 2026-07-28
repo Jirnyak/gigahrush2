@@ -18,6 +18,7 @@
 #include "game/faction.h"
 #include "game/faction_relations.h"
 #include "game/floor_spec.h"
+#include "game/mob_behaviour.h"
 #include "game/mob_table.h"
 #include "game/item_table.h"
 #include "game/loot.h"
@@ -2205,6 +2206,141 @@ static void test_extraction_reachable() {
     CHECK(navPads > 0);
 }
 
+
+// Behaviour dispatch, wave 1. Every function under test is pure, which is exactly
+// why this wave was chosen first: no world, no registry, no tick needed to pin any
+// of it, and nothing here can desynchronise from anything.
+static void test_mob_behaviour() {
+    // --- encirclement -----------------------------------------------------
+    // The property that matters is SPREAD: before this, every aggroed monster
+    // steered at the same point and a group converged into one cell. Assert that a
+    // crowd of Помойный Рой takes distinct ring slots, because "it compiles and
+    // returns a vector" would pass with a constant.
+    bool slotSeen[8] = {false};
+    for (std::uint32_t m = 0; m < 512; ++m) {
+        const PursuitOffset o =
+            pursuit_offset(MobBehaviour::GarbageSurround, m, 7u, 1.0f, 0.0f);
+        const float r = std::sqrt(o.x * o.x + o.y * o.y);
+        CHECK(r > 1.6f && r < 1.7f);          // on the 1.65 m ring
+        // Recover the slot from the angle and mark it.
+        int best = 0;
+        float bestDot = -2.0f;
+        const float ring[8][2] = {{1,0},{0.7071068f,0.7071068f},{0,1},
+                                  {-0.7071068f,0.7071068f},{-1,0},
+                                  {-0.7071068f,-0.7071068f},{0,-1},
+                                  {0.7071068f,-0.7071068f}};
+        for (int i = 0; i < 8; ++i) {
+            const float d = (o.x / r) * ring[i][0] + (o.y / r) * ring[i][1];
+            if (d > bestDot) { bestDot = d; best = i; }
+        }
+        slotSeen[best] = true;
+    }
+    for (int i = 0; i < 8; ++i) CHECK(slotSeen[i]);   // all 8 slots used
+
+    // Stable: the same pair must always produce the same slot, or the ring would
+    // shimmer every frame and read as jitter rather than as encirclement.
+    const PursuitOffset a1 = pursuit_offset(MobBehaviour::GarbageSurround, 42u, 7u, 1, 0);
+    const PursuitOffset a2 = pursuit_offset(MobBehaviour::GarbageSurround, 42u, 7u, 1, 0);
+    CHECK(a1.x == a2.x && a1.y == a2.y);
+    // ...and different targets must pull a different slot, so a rat pack that
+    // switches victim re-forms rather than keeping its old shape.
+    int differing = 0;
+    for (std::uint32_t v = 0; v < 64; ++v) {
+        const PursuitOffset o = pursuit_offset(MobBehaviour::GarbageSurround, 42u, v, 1, 0);
+        if (o.x != a1.x || o.y != a1.y) ++differing;
+    }
+    CHECK(differing > 32);
+
+    // Green dogs: the flank must be PERPENDICULAR to the approach, and both sides
+    // must occur. A pack that all flanked the same way would just be an offset line.
+    int left = 0, right = 0, behind = 0;
+    for (std::uint32_t m = 0; m < 256; ++m) {
+        const PursuitOffset o =
+            pursuit_offset(MobBehaviour::GreenDogPack, m, 1u, 1.0f, 0.0f);
+        if ((m & 3u) == 0u) {
+            CHECK(o.x < 0.0f);                       // cuts in behind
+            ++behind;
+        } else {
+            CHECK(std::fabs(o.x) < 1e-5f);           // no along-track component
+            if (o.y > 0.0f) ++left; else ++right;
+        }
+    }
+    CHECK(behind == 64);                             // exactly one in four
+    CHECK(left > 40 && right > 40);                  // both flanks used
+    // Degenerate direction must not divide by zero.
+    const PursuitOffset z = pursuit_offset(MobBehaviour::GreenDogPack, 5u, 1u, 0, 0);
+    CHECK(z.x == 0.0f && z.y == 0.0f);
+    // Plain monsters are unaffected — this wave must not change 60-odd kinds by
+    // accident.
+    const PursuitOffset p = pursuit_offset(MobBehaviour::Plain, 3u, 4u, 1, 0);
+    CHECK(p.x == 0.0f && p.y == 0.0f);
+
+    // --- detect radius ----------------------------------------------------
+    CHECK(behaviour_aggro_radius(MobBehaviour::DeadEcho, 20.0f) == 7.5f);
+    CHECK(behaviour_aggro_radius(MobBehaviour::CloseReveal, 20.0f) == 6.0f);
+    CHECK(behaviour_aggro_radius(MobBehaviour::Plain, 20.0f) == 20.0f);
+    // Both overrides must SHRINK the radius. An override that grew it would make a
+    // kind harder rather than sneakable, which is the opposite of the intent.
+    CHECK(behaviour_aggro_radius(MobBehaviour::DeadEcho, 20.0f) < 20.0f);
+    CHECK(behaviour_aggro_radius(MobBehaviour::CloseReveal, 20.0f) < 20.0f);
+
+    // --- the gaze ---------------------------------------------------------
+    // Looking straight at it, in range: frozen. This is the assertion that matters,
+    // because Sculpture's row is 8.5 cells/s and 1000 damage — with the behaviour
+    // unimplemented it sprinted in and one-shot the player with no counterplay.
+    CHECK(frozen_by_gaze(MobBehaviour::WeepingAngel, 1.0f, 0.0f, 10.0f, 0.0f));
+    // Just inside the 45-degree cone edge, and just outside it.
+    CHECK(frozen_by_gaze(MobBehaviour::WeepingAngel, 1.0f, 0.0f, 10.0f, 9.0f));
+    CHECK(!frozen_by_gaze(MobBehaviour::WeepingAngel, 1.0f, 0.0f, 10.0f, 11.0f));
+    // Behind you: free to move. That is the entire mechanic.
+    CHECK(!frozen_by_gaze(MobBehaviour::WeepingAngel, 1.0f, 0.0f, -10.0f, 0.0f));
+    // Beyond 25 m it does not care whether you are looking.
+    CHECK(!frozen_by_gaze(MobBehaviour::WeepingAngel, 1.0f, 0.0f, 30.0f, 0.0f));
+    // Range is a circle, not a square: 20,20 is 28.3 m away and must NOT freeze.
+    CHECK(!frozen_by_gaze(MobBehaviour::WeepingAngel, 0.7071068f, 0.7071068f,
+                          20.0f, 20.0f));
+    // No other kind is affected.
+    CHECK(!frozen_by_gaze(MobBehaviour::Plain, 1.0f, 0.0f, 1.0f, 0.0f));
+
+    // --- wall bias --------------------------------------------------------
+    const std::uint32_t wb = static_cast<std::uint32_t>(AiFlag::WallBias);
+    CHECK(wall_bias_speed(wb, true) > 1.0f);
+    CHECK(wall_bias_speed(wb, false) < 1.0f);
+    CHECK(wall_bias_speed(0u, true) == 1.0f);      // non-carriers untouched
+    CHECK(wall_bias_damage(wb, true) > 1.0f);
+    CHECK(wall_bias_damage(wb, false) == 1.0f);
+    CHECK(wall_bias_damage(0u, true) == 1.0f);
+
+    // --- the dead ones ----------------------------------------------------
+    // Compiled rather than commented, so the finding cannot rot: these four have no
+    // implementation in the reference to port. Naming them is worth more than
+    // specifying them, because it stops the next pass re-deriving the same dead end.
+    CHECK(behaviour_is_dead(MobBehaviour::Melee));
+    CHECK(behaviour_is_dead(MobBehaviour::WeakWallBreach));
+    CHECK(behaviour_is_dead(MobBehaviour::RangedClause));
+    CHECK(behaviour_is_dead(MobBehaviour::SourceSwarm));
+    CHECK(!behaviour_is_dead(MobBehaviour::Plain));
+    CHECK(!behaviour_is_dead(MobBehaviour::GarbageSurround));
+    // And the four implemented here must not be marked dead.
+    CHECK(!behaviour_is_dead(MobBehaviour::GreenDogPack));
+    CHECK(!behaviour_is_dead(MobBehaviour::WeepingAngel));
+    CHECK(!behaviour_is_dead(MobBehaviour::DeadEcho));
+    CHECK(!behaviour_is_dead(MobBehaviour::CloseReveal));
+
+    // Every kind that carries a behaviour this wave dispatches must actually exist
+    // in the table — otherwise the code is dispatching on a value no row uses and
+    // the whole wave is dead on arrival, silently.
+    int carriers = 0;
+    for (std::size_t k = 0; k < kMobKindCount; ++k) {
+        const MobBehaviour b = static_cast<MobBehaviour>(kMobTable[k].behaviour);
+        if (b == MobBehaviour::GarbageSurround || b == MobBehaviour::GreenDogPack ||
+            b == MobBehaviour::WeepingAngel || b == MobBehaviour::DeadEcho ||
+            b == MobBehaviour::CloseReveal)
+            ++carriers;
+    }
+    CHECK(carriers == 5);   // one kind each
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -2249,6 +2385,7 @@ int main() {
     test_faction_relations();
     test_extraction();
     test_extraction_reachable();
+    test_mob_behaviour();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

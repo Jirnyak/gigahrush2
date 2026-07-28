@@ -5,6 +5,7 @@
 #include "core/math.h"
 #include "core/wrap.h"
 #include "ecs/components.h"
+#include "game/mob_behaviour.h"
 #include "game/mob_table.h"
 #include "game/mob_spawn.h"
 #include "world/lattice.h"
@@ -78,10 +79,19 @@ void wander_step(Registry& reg, const nav::CoarseGraph& coarse,
     // per pass, not per agent.
     bool haveVictim = false;
     vec3 victimPos{0, 0, 0};
+    std::uint32_t victimId = 0;
+    // The viewer's forward, for WeepingAngel. Computed ONCE per pass, not per
+    // monster: the whole reason the gaze test compares cosines is that no monster
+    // then needs any trig of its own.
+    float fwdX = 1.0f, fwdY = 0.0f;
     for (auto e : reg.view<const CameraTag, const Transform>()) {
         const Transform& t = reg.get<const Transform>(e);
         if (t.layer != layer) continue;
         victimPos = t.pos;
+        victimId = static_cast<std::uint32_t>(entt::to_integral(e));
+        const CameraTag& cam = reg.get<const CameraTag>(e);
+        fwdX = std::cos(cam.yaw);
+        fwdY = std::sin(cam.yaw);
         haveVictim = true;
         break;
     }
@@ -109,15 +119,39 @@ void wander_step(Registry& reg, const nav::CoarseGraph& coarse,
             const float ay = wrap_delta_f(tr.pos.y, victimPos.y, kWorldExtent);
             const float az = wrap_delta_f(tr.pos.z, victimPos.z, kWorldExtent);
             const float d2 = ax * ax + ay * ay + az * az;
-            if (d2 < kAggroRadius * kAggroRadius) {
+            const MobRef& mr = reg.get<const MobRef>(e);
+            const MobDef& md = kMobTable[mr.kind];
+            const MobBehaviour beh = static_cast<MobBehaviour>(md.behaviour);
+            // Two kinds notice you far later than everyone else, which is the only
+            // reason walking past a monster is ever possible. [mob_behaviour.h]
+            const float radius = behaviour_aggro_radius(beh, kAggroRadius);
+            if (d2 < radius * radius) {
+                // Frozen while looked at. This returns BEFORE any velocity is
+                // written, so a gazed Sculpture holds perfectly still instead of
+                // coasting on last pass's velocity.
+                if (frozen_by_gaze(beh, fwdX, fwdY, -ax, -ay)) {
+                    vel.v.x = 0.0f;
+                    vel.v.y = 0.0f;
+                    continue;
+                }
                 const float len = std::sqrt(ax * ax + ay * ay);
                 if (len > 0.05f) {
-                    const MobRef& mr = reg.get<const MobRef>(e);
-                    const float sp = static_cast<float>(
-                                         kMobTable[mr.kind].speedMmps) *
+                    // Steer at a SLOT around the victim, not at the victim itself.
+                    // Two behaviours turn a converging queue into an encirclement,
+                    // and both offsets are pure functions of entity ids — no state,
+                    // no coordination, no spatial query. [mob_behaviour.h]
+                    const PursuitOffset off =
+                        pursuit_offset(beh, id, victimId, ax / len, ay / len);
+                    float tx = ax + off.x;
+                    float ty = ay + off.y;
+                    float tl = std::sqrt(tx * tx + ty * ty);
+                    // Standing exactly on the slot must not divide by zero, and
+                    // must not stop the chase either: fall back to the direct line.
+                    if (tl < 0.05f) { tx = ax; ty = ay; tl = len; }
+                    const float sp = static_cast<float>(md.speedMmps) *
                                      0.001f * kCellSize;
-                    vel.v.x = ax / len * sp;
-                    vel.v.y = ay / len * sp;
+                    vel.v.x = tx / tl * sp;
+                    vel.v.y = ty / tl * sp;
                 }
                 continue;  // no repath, no flow read — it has a target
             }
