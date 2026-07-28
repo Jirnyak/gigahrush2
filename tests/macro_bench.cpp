@@ -3,7 +3,9 @@
 // The macro society sim ([macrosim.md]) runs on its own coarse clock, never the
 // 120 Hz frame, so the question this answers is: how cheap is ONE O(n) columnar
 // sweep over the whole SoA population? That number decides how often the
-// off-screen society can advance without ever touching the render budget.
+// off-screen society can advance without ever touching the render budget. Two
+// phases are measured: the demographic sweep alone, then with the budgeted
+// migration pass (#10c) enabled, to show the bounded pass adds no O(n) cost.
 //
 // Headless: links giga_game + giga_core only, no SDL/Vulkan. An executable, not
 // a ctest — it measures, it does not pass/fail.
@@ -41,22 +43,37 @@ int main() {
     MacroParams p;
     p.daysPerTick = 7;  // weekly ticks
 
-    const int warmup = 5;
-    const int iters = 200;
-    for (int i = 0; i < warmup; ++i) macro.step(pool, p);
+    auto measure = [&](const MacroParams& params, const char* label) {
+        const int warmup = 5;
+        const int iters = 200;
+        for (int i = 0; i < warmup; ++i) macro.step(pool, params);
+        auto t0 = std::chrono::steady_clock::now();
+        MacroStats last{};
+        for (int i = 0; i < iters; ++i) last = macro.step(pool, params);
+        auto t1 = std::chrono::steady_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(t1 - t0).count() /
+                    static_cast<double>(iters);
+        std::printf(
+            "macro_bench[%s]: pool=%u ticks=%d  %.3f ms/tick "
+            "(living=%u births=%u deaths=%u inTransit=%u simDay=%.0f)\n",
+            label, pool.count(), iters, ms, last.living, last.births, last.deaths,
+            last.inTransit, last.day);
+        std::printf("  throughput: %.1f M records/sec\n",
+                    (static_cast<double>(pool.count()) / (ms / 1000.0)) / 1e6);
+    };
 
-    auto t0 = std::chrono::steady_clock::now();
-    MacroStats last{};
-    for (int i = 0; i < iters; ++i) last = macro.step(pool, p);
-    auto t1 = std::chrono::steady_clock::now();
+    // Phase 1: demographic sweep only (migration off — no floor band configured).
+    measure(p, "demographic");
 
-    double ms = std::chrono::duration<double, std::milli>(t1 - t0).count() /
-                static_cast<double>(iters);
-    std::printf(
-        "macro_bench: pool=%u ticks=%d  %.3f ms/tick "
-        "(living=%u births=%u deaths=%u simDay=%.0f)\n",
-        pool.count(), iters, ms, last.living, last.births, last.deaths, last.day);
-    std::printf("  throughput: %.1f M records/sec\n",
-                (static_cast<double>(pool.count()) / (ms / 1000.0)) / 1e6);
+    // Phase 2: migration ON over the full 0..63 band, scanning a big slice each
+    // tick so the bounded pass is actually exercised at scale. The realistic
+    // 64/tick budget is free next to the O(n) sweep; this deliberately heavier
+    // budget is an upper bound on what the migration pass itself costs.
+    MacroParams pm = p;
+    pm.floorLo = 0;
+    pm.floorHi = 63;
+    pm.migrateRecordsPerTick = 65536;
+    pm.migrateRatePerYear = 1.0f;
+    measure(pm, "migration");
     return 0;
 }

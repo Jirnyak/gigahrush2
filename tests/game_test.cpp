@@ -1410,6 +1410,108 @@ static void test_stream_migration_reembodies() {
           (int)pool.floor_bucket(0).size());
 }
 
+// ---- #10c budgeted-cursor migration ---------------------------------------
+
+// The macro migration pass: a bounded ring-scan starts multi-tick journeys that
+// relabel cold records between floors (landing via set_floor, the #10b index).
+// Isolate it from demographics (no births, no deaths) so the ONLY motion is
+// migration, then assert its invariants: population conserved, every record stays
+// in the floor band, an embodied record never moves, and journeys conserve
+// (Sum(departures) - Sum(arrivals) == still-in-transit).
+static void test_macro_migration() {
+    NpcPool pool;
+    pool.init();
+    const int N = 200;
+    const std::uint16_t lo = 10, hi = 13;               // a 4-floor band
+    for (int i = 0; i < N; ++i) spawn_aged(pool, 30, lo, 1);  // all start on floor 10
+    // One embodied record must be immune to macro migration (micro sim owns it).
+    NpcId hero = spawn_aged(pool, 30, lo, 1);
+    pool.set_embodied(hero, true);
+
+    MacroSim macro;
+    macro.init(pool);
+    MacroParams p;
+    p.daysPerTick = 30;
+    p.mortalityOnset = 200;      // nobody dies
+    p.maxAge = 200;
+    p.birthRate = 0.0f;          // nobody is born — living is constant
+    p.targetPopulation = 0;
+    p.floorLo = lo;
+    p.floorHi = hi;
+    p.migrateRatePerYear = 5.0f; // brisk churn so journeys start every tick
+
+    std::uint64_t totalDep = 0, totalArr = 0;
+    bool sawDeparture = false, sawArrival = false;
+    for (int t = 0; t < 40; ++t) {
+        MacroStats s = macro.step(pool, p);
+        CHECK(s.living == static_cast<std::uint32_t>(N) + 1);  // 200 cold + hero
+        totalDep += s.departures;
+        totalArr += s.arrivals;
+        if (s.departures > 0) sawDeparture = true;
+        if (s.arrivals > 0) sawArrival = true;
+        // Every alive record is always labelled with an in-band floor: they start
+        // in-band and migration only ever picks in-band destinations (in-transit
+        // records keep their source label, itself in-band).
+        for (NpcId id = 0; id < pool.count(); ++id) {
+            if (!pool.alive(id)) continue;
+            CHECK(pool.floor(id) >= lo && pool.floor(id) <= hi);
+        }
+    }
+
+    CHECK(sawDeparture);
+    CHECK(sawArrival);
+    // Journey conservation: everyone who left either arrived or is still en route
+    // (nothing dies or is embodied mid-transit here, so no journey is forfeited).
+    CHECK(totalDep - totalArr == macro.in_transit());
+    // The embodied record never migrated — still on its start floor, still embodied.
+    CHECK(pool.embodied(hero));
+    CHECK(pool.floor(hero) == lo);
+    // Migration actually relocated cold records off floor 10 (not all still home).
+    int movedOff = 0;
+    for (int i = 0; i < N; ++i)
+        if (pool.floor(static_cast<NpcId>(i)) != lo) ++movedOff;
+    CHECK(movedOff > 0);
+}
+
+// Migration is a deterministic function of (initial pool, params, tick count):
+// two independently built pools evolve bit-identically — same floor labels, same
+// journey stats — after many migration ticks. This locks the stateless-hash stance
+// for the new pass (matches test_macro_determinism for the demographic sweep).
+static void test_macro_migration_determinism() {
+    auto build = [](NpcPool& pool) {
+        pool.init();
+        for (int i = 0; i < 300; ++i)  // spread across the 20..24 band
+            spawn_aged(pool, 30, static_cast<std::uint16_t>(20 + (i % 5)), 1);
+    };
+    NpcPool p1, p2;
+    build(p1);
+    build(p2);
+    MacroSim m1, m2;
+    m1.init(p1);
+    m2.init(p2);
+    MacroParams p;
+    p.daysPerTick = 15;
+    p.mortalityOnset = 200;
+    p.maxAge = 200;
+    p.birthRate = 0.0f;
+    p.targetPopulation = 0;
+    p.floorLo = 20;
+    p.floorHi = 24;
+    p.migrateRatePerYear = 3.0f;
+    for (int t = 0; t < 30; ++t) {
+        MacroStats a = m1.step(p1, p);
+        MacroStats b = m2.step(p2, p);
+        CHECK(a.departures == b.departures);
+        CHECK(a.arrivals == b.arrivals);
+        CHECK(a.inTransit == b.inTransit);
+    }
+    CHECK(m1.in_transit() == m2.in_transit());
+    for (NpcId id = 0; id < p1.count(); ++id) {
+        CHECK(p1.floor(id) == p2.floor(id));
+        CHECK(p1.alive(id) == p2.alive(id));
+    }
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -1443,6 +1545,8 @@ int main() {
     test_macro_births();
     test_macro_skips_embodied();
     test_macro_determinism();
+    test_macro_migration();
+    test_macro_migration_determinism();
     test_floor_bucket_index();
     test_stream_migration_reembodies();
 

@@ -439,12 +439,13 @@ torus periodicity, wall block, flee-gradient sign, determinism, monotone decay).
 Work **one verified increment per turn, build green, stop green with a plan**
 (§9). Order below is the intended sequence, but note the owner pulled the **nav
 bake (#11 A/B/C) forward** ahead of #10 — that core is now built (§6). So the
-open work is: **#10c** macro migration/social pass (the demographic core #10a and
-per-floor bucket index #10b are **done**), **#12** movement AI (now unblocked — the
-flow fields, `route_step`, and the diffusion flee field are all built), then content
-**#13**. The floor-module epic (#6–#9) is **done**.
+open work is: **#10d** macro social/faction pass (the demographic core #10a,
+per-floor bucket index #10b, and the budgeted-cursor **migration pass #10c** are all
+**done**), **#12** movement AI (now unblocked — the flow fields, `route_step`, and
+the diffusion flee field are all built), then content **#13**. The floor-module epic
+(#6–#9) is **done**.
 
-### #10 — Macro tick (demographic core + bucket index BUILT 2026-07-28; #10c pending)
+### #10 — Macro tick (demographic core + bucket index + migration BUILT 2026-07-28; social #10d pending)
 Coarse clock (own rate, **never** the 120 Hz tick — [macrosim.md](macrosim.md)).
 This is where the **off-screen population comes alive**; the ref proved 2²⁰ is
 viable *only if the macro tick stays columnar* (its own 1M target was retired
@@ -474,9 +475,21 @@ avoids that with inline names + inline inventory in SoA).
   serialized). Sweep cost unchanged (3.0 ms/1M — the sweep touches no buckets). 2
   new tests (`test_floor_bucket_index`, `test_stream_migration_reembodies`) +
   `test_macro_skips_embodied` now registered.
-- **#10c — budgeted-cursor passes.** Bounded ring-scan (~64 records/tick, the
-  ref's `RECORDS_PER_TICK` primitive) for off-floor migration + relationship drift,
-  on the same tables. Then faction/economy dynamics (6×6 Int8 relation matrix).
+- **#10c — budgeted-cursor migration (DONE 2026-07-28).** ✔ A persistent ring
+  cursor (`migCursor_`) visits ~64 cold records/tick (the ref's `RECORDS_PER_TICK`),
+  deterministically rolls a departure, and starts a **multi-tick journey** to a
+  destination floor in the configured band with an ETA `(base + perFloor·|Δ|)×jitter`
+  (ref shape). Journeys are macro-owned (`std::vector<Journey>`, external to the
+  pool); due ones **land as an O(1) `set_floor` relabel** — the #10b bucket index's
+  first client — while dead / embodied-mid-transit records forfeit theirs. Off unless
+  a floor band is set (`floorHi>floorLo`), so the demographic bench/tests are
+  unaffected; **+0.05 ms/tick** at 1M even under a heavy 65536-rec budget
+  (`macro_bench` two-phase). 2 new tests (`test_macro_migration`, `…_determinism`).
+  Deferred: route/danger destination gating (no route metadata ported yet) and
+  live-floor arrival materialization (a streaming concern).
+- **#10d — social + faction pass.** A second budgeted-cursor ring-scan for per-NPC
+  relationship drift (10-slot Int8 edges) and a 6×6 Int8 faction relation matrix,
+  event-driven, on the same tables. Then economy dynamics (per-floor commodity stock).
 
 ### #11 — Baked nav / flow / distance fields (`src/world/nav`) — A→D BUILT 2026-07-28 (headless green)
 The stack is **done**: L0 carve (A), L1 coarse graph + core job system (B), L2

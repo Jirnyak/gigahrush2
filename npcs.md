@@ -152,9 +152,11 @@ invariant that keeps the 2²⁰ population from growing per visit.
 
 ## Behaviour — migration, trade, honest projectiles
 
-- **Migration & trade between floors.** The macro tick moves NPCs across the
-  floor stack and runs aggregate trade/economy — the world keeps living when the
-  player isn't watching ([macrosim.md](macrosim.md)).
+- **Migration & trade between floors.** The macro tick moves NPCs across the floor
+  stack — **built** as a budgeted-cursor journey pass (#10c): a bounded ring-scan
+  starts multi-tick inter-floor journeys that relabel cold records on arrival
+  (through the per-floor bucket index), so any floor's roster is live the next time
+  it loads. Aggregate trade/economy is still pending ([macrosim.md](macrosim.md)).
 - **Embodied NPCs are ordinary entities.** An embodied NPC that shoots simply
   **spawns a projectile entity** that flies under [physics.md](physics.md) and
   can hit *anyone* — including the NPC that fired it. No attacker/victim special

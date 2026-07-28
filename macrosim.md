@@ -1,9 +1,10 @@
 # Macrosim — Macro population simulation
 
 > **Status: NPC pool built ([npcs.md](npcs.md)); macro tick built — demographic
-> core (aging + old-age mortality + reserve-drawn births).** Migration, social,
-> faction, and economy passes still pending. Game layer, its own module in
-> `src/game/` (the `giga_game` library): `src/game/macro_sim.{h,cpp}`.
+> core (aging + old-age mortality + reserve-drawn births) plus the budgeted-cursor
+> migration pass (#10c).** Social, faction, and economy passes still pending. Game
+> layer, its own module in `src/game/` (the `giga_game` library):
+> `src/game/macro_sim.{h,cpp}`.
 
 The background simulation that advances the **global** NPC population, factions,
 and economy across the whole floor stack — the layer that decides what the world
@@ -107,7 +108,8 @@ never does a full-pool scan (every off-floor pass is a bounded cursor + budget).
 gigahrush2's aging + births pass is a deliberate **new capability**, affordable
 only because it runs headless on a decoupled coarse clock over flat SoA. The
 reference's bounded-cursor primitive (`RECORDS_PER_TICK ≈ 64`) is the model for
-the *next* passes (migration/social), not this demographic full-sweep.
+the migration/social passes — now realized for migration in #10c below — not this
+demographic full-sweep.
 
 ### Built — the per-floor bucket index (#10b, 2026-07-28)
 
@@ -130,12 +132,55 @@ index); every write goes through `set_floor()`. Cost: nil on the demographic swe
 (3.0 ms/tick unchanged — the sweep touches no buckets; only births' `set_floor`
 does, and that is O(1)).
 
-### Still pending (master_prompt §7 #10c and beyond)
+### Built — the budgeted-cursor migration pass (#10c, 2026-07-28)
 
-- **Budgeted-cursor migration/social pass (#10c).** A bounded ring-scan (~64
-  records/tick) for off-floor migration and relationship drift, on the same tables;
-  migration is now just a `set_floor()` call that the bucket index absorbs in O(1).
-- Faction/economy dynamics (6×6 Int8 relation matrix; per-floor commodity stock).
+On top of the O(n) demographic sweep, `step()` now runs a **bounded** migration
+pass — O(budget), not O(n) — porting the reference's off-screen movement model
+(`alife_migration.ts`) to the floor-number world. A **persistent ring cursor**
+(`migCursor_`) walks the pool `migrateRecordsPerTick` records per tick (default
+**64** — the reference's `RECORDS_PER_TICK`), wrapping over the live count so a
+growing population is covered evenly. For each visited **cold** record (alive,
+**not embodied**, not already travelling) it rolls a deterministic departure
+(`hash3(id, tick, kSaltMigrate)` against the per-tick probability
+`migrateRatePerYear × daysPerTick/365`) and, on success, **starts a journey**:
+picks a destination floor uniformly in the configured band `[floorLo, floorHi]`
+(excluding the current one, `pick_dest_floor`) with an ETA
+`(travelBaseDays + travelPerFloorDays·|Δfloor|) × jitter(0.8‥1.35)` — the
+reference's ETA shape.
+
+Journeys are **multi-tick and macro-owned** — a `std::vector<Journey>` in
+`MacroSim`, external to the pool like `ageDays_`, so the pool stays a clean
+demographic table. Each tick, before starting new journeys, `step()` **lands**
+every journey whose ETA the world clock has passed: an off-screen arrival is a
+**pure `set_floor` relabel**, which the #10b bucket index absorbs in **O(1)** —
+migration is that index's first real client. A record that **died or was embodied**
+mid-transit (pulled onto the live floor by the player) forfeits its journey: the
+micro sim owns embodied floors, and the dead are off the map. A `traveling_[id]`
+byte gives O(1) "already travelling" skips; `maxJourneys` caps concurrent transit.
+
+The whole pass is **off unless a real floor band is configured** (`floorHi >
+floorLo`), so the demographic-only bench and tests are byte-for-byte unaffected.
+Cost at the full 2²⁰: **+0.05 ms/tick** even with a deliberately heavy
+65536-record budget over the full 0‥63 band (3.17 → 3.22 ms — `macro_bench`, two
+phases), i.e. the bounded pass adds **no O(n) term**. Verified by
+`test_macro_migration` (population conserved, every record stays in-band, embodied
+records never move, journeys conserve Σdepartures − Σarrivals == in-transit) and
+`test_macro_migration_determinism` (two pools evolve bit-identically over 30
+ticks).
+
+**Not yet ported** (deferred, noted for follow-ups): the reference's route/danger
+**gating** on destinations (no baked route metadata exists on this side yet — every
+in-band floor is currently an equal candidate) and the immediate
+**materialization of an arrival onto the *live* floor** (an arrival re-buckets the
+cold record; it embodies on that floor's next load, not the instant it lands — a
+streaming-layer concern, not a pool one).
+
+### Still pending (master_prompt §7 #10d and beyond)
+
+- **Social graph + faction matrix (#10d).** A second budgeted-cursor pass for
+  per-NPC relationship drift (10-slot Int8 edges) and a 6×6 Int8 faction relation
+  matrix, event-driven, on the same tables.
+- Economy dynamics (per-floor commodity stock, trade).
 
 ## Determinism
 
