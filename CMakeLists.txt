@@ -187,13 +187,20 @@ giga_target_flags(giga_game OFF)
 set(_giga_spv_dir ${CMAKE_BINARY_DIR}/shaders)
 file(MAKE_DIRECTORY ${_giga_spv_dir})
 set(_giga_spv_files "")
+# Non-stage GLSL that a shader #includes. glslc resolves these relative to the
+# including file, but CMake cannot see through a #include, so they must be listed as
+# explicit DEPENDS: edit an include without this and ninja reports "no work to do",
+# leaves the stale .spv in place, and the change looks like it did nothing. Kept an
+# explicit list rather than a GLOB — a stray .glsl should not silently start forcing
+# every shader to recompile.
+set(_giga_glsl_includes ${CMAKE_SOURCE_DIR}/shaders/material_surface.glsl)
 foreach(_sh cube.vert cube.frag body.vert)
     add_custom_command(
         OUTPUT ${_giga_spv_dir}/${_sh}.spv
         COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O
             ${CMAKE_SOURCE_DIR}/shaders/${_sh}
             -o ${_giga_spv_dir}/${_sh}.spv
-        DEPENDS ${CMAKE_SOURCE_DIR}/shaders/${_sh}
+        DEPENDS ${CMAKE_SOURCE_DIR}/shaders/${_sh} ${_giga_glsl_includes}
         COMMENT "glslc ${_sh}")
     list(APPEND _giga_spv_files ${_giga_spv_dir}/${_sh}.spv)
 endforeach()

@@ -11,7 +11,10 @@ layout(location = 1) in vec3 inNormal;   // per-vertex face normal
 layout(location = 2) in vec3 inOrigin;   // per-instance ABSOLUTE grid origin
 layout(location = 3) in float inScale;   // per-instance edge length
 layout(location = 4) in vec3 inColor;    // per-instance base colour
-layout(location = 5) in uint inOcc;      // per-instance 3x3x3 occupancy mask
+// Bits 0..26 = 3x3x3 occupancy mask (AO), bits 27..31 = material id. Two fields in
+// one attribute because a uint32 has five bits more than the AO mask needs; see
+// CubeInstance in render/cube_pass.h.
+layout(location = 5) in uint inOcc;
 
 layout(push_constant) uniform Push {
     mat4 viewProj;
@@ -32,6 +35,12 @@ layout(location = 2) out vec3 vWorldPos;
 // than flat per-cell. body.vert MUST declare this too (it writes 1.0) — cube.frag
 // is shared and a missing varying is undefined, not an error.
 layout(location = 3) out float vAo;
+// Material id, selecting the surface family and its measured amplitude in
+// cube.frag. `flat`: it is per-instance, so interpolating it would be meaningless
+// and would also stop the const-array lookups from resolving cleanly.
+//
+// Same shared-varying contract as vAo — body.vert declares and writes this too.
+layout(location = 4) flat out uint vMat;
 
 // Nearest toroidal image of an absolute world position, relative to the camera.
 //
@@ -92,4 +101,5 @@ void main() {
     vNormal = inNormal;
     vColor = inColor;
     vWorldPos = world;
+    vMat = inOcc >> 27u;   // cube_pass.cpp kMatIdShift
 }

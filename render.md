@@ -111,21 +111,80 @@ it stays continuous across neighbouring cells instead of restarting per cube.
 Normalised so one unit is one cell, which is what lets the seam pattern land
 exactly on cell boundaries.
 
-Two layers, both brightness-only so a surface keeps its cell-type hue and the
-faction/tier palette contract (see [monsters.md](monsters.md)) is untouched:
+Everything is brightness-only so a surface keeps its cell-type hue and the
+faction/tier palette contract (see [monsters.md](monsters.md)) is untouched, and
+multiplicative and strictly positive so nothing can lift a fogged pixel off black:
 
 | Layer | What it does | Frequency |
 |---|---|---|
 | **grain** | two octaves of value noise — plaster, grit, wear | ~7 cm and ~2 cm |
 | **seam** | darkened recess at cell boundaries — precast panel joins | every 2 m |
+| **family** | per-material structure: ribs, planks, tiles, studs, patches | per material |
 
-The seams are the load-bearing half: they make the 2 m grid, and therefore the
-*scale of the building*, legible. Without them a corridor is an untextured tube.
+The seams are the load-bearing half of the base layer: they make the 2 m grid, and
+therefore the *scale of the building*, legible. Without them a corridor is an
+untextured tube.
 
 Frequency is not cosmetic here. The first version used one cycle per 25 cm and
 read as soft blotches rather than a material at the range the headlamp lights.
 Hashing is integer-lattice, deliberately **not** the `sin`-based hash, which has
 precision artefacts on some drivers that show up as a diagonal moiré.
+
+## Per-material surfaces — the amount is measured, the structure is authored
+
+For a while the grain+seam pair was **all** there was, identically for all 16
+materials, so a rusted plate, dirty plaster and varnished parquet differed only in
+average colour and the world read as a mosaic of tinted boxes. Meanwhile
+`data/materials.csv` had carried a measured `lum_std` per material since the harvest
+and nothing in the renderer read it. Two things are now per-material, and the split
+between them is the point:
+
+- **Amount is measured.** `lum_std / mean luminance` (both linear) is each
+  material's luminance **coefficient of variation**, and albedo is modulated by
+  `exp(sigma·n − sigma²/2)` for a zero-mean, unit-variance procedural `n`. That form
+  is lognormal with mean exactly **1** — so the measured mean albedo in `kMaterial`
+  survives untouched — and CV `sqrt(exp(sigma²) − 1)`, which the generator inverts to
+  get sigma. Rusty corrugated iron gets 0.42 and rubber tiles 0.07 because the
+  photographs say so. Note the raw `lum_std` is **absolute** and cannot be an
+  amplitude directly: rubber tiles read 0.0011 and corrugated iron 0.0287, and the
+  26×-larger number describes the *flatter* surface.
+- **Structure is authored,** because it has to be: the CSV measured the colour
+  statistics of a flat-lit photograph and holds nothing about whether a surface is
+  ribbed, planked or tiled, nor how deep a groove is. Nine families — generic,
+  plaster, plank, tile, ribbed, tread, rust, rubble, smooth — are declared in
+  [tools/gen_material_surface.py](tools/gen_material_surface.py) and implemented in
+  [cube.frag](shaders/cube.frag). Periodic families fade themselves out via
+  `fwidth`, because regular structure aliases where noise merely goes grey.
+
+Two consequences worth keeping:
+
+- Rust's patches come from **thresholding** a low-frequency field, not from another
+  FBM octave. That answers the objection recorded above — real corrosion has
+  long-range spatial correlation FBM reproduces badly — and it is why no harvest is
+  needed for it: an FBM sum has no edges, and edges are what make a patch a patch.
+- Rust and rubble have all but identical measured amplitude (CV 0.4437 vs 0.4411), so
+  amplitude alone cannot separate the two Derelict surfaces. The **family** does.
+  That is the argument for structure over a single roughness dial.
+
+The table is **generated**: `tools/gen_material_surface.py` reads
+`data/materials.csv` and emits `shaders/material_surface.glsl`, which `cube.frag`
+`#include`s. It is the fourth generated table in the tree and it joined the
+`source_rules` CSV-drift gate in the same change as the generator. Two traps:
+
+- the declared count is `kMaterialCsvRows` — **photographs read**, not the material
+  count. Unrelated numbers that both happen to be 16 today, with only 6 of the 16
+  rows consumed; comparing against the array length would make the gate blind.
+- `material_surface.glsl` is listed in the glslc `DEPENDS` in `CMakeLists.txt`.
+  CMake cannot see through a `#include`, so without that entry a change to the table
+  leaves a stale `.spv` and looks like a no-op.
+
+**The material id reaches the shader for free.** `CubeInstance::occ` needs 27 bits
+for the AO mask and a `uint32` has 32, so the id rides in bits 27..31: no new vertex
+attribute, no new byte, `sizeof(CubeInstance)` still 32, `CubePush` still 128.
+`cube.frag` reads it as a `flat uint` at location 4 — which, exactly like `vAo`,
+**both** vertex stages must declare and write. `body.vert` writes `0` (the air id,
+which the world pass never draws), whose family is `generic`, so the crowd renders
+exactly as it did.
 
 ## Shading model — the light is the one you carry
 

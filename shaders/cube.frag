@@ -1,4 +1,5 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 // Shading for both the world pass (cube.vert) and the population pass
 // (body.vert) — see render.md. The model is built for a *windowless interior*:
 // there is no sun down here, so the light the player actually sees is the light
@@ -25,6 +26,14 @@ layout(location = 1) in vec3 vColor;
 layout(location = 2) in vec3 vWorldPos;
 // Baked corner occlusion from cube.vert; body.vert writes a constant 1.0.
 layout(location = 3) in float vAo;
+// Material id (world/materials.h) from cube.vert; body.vert writes a constant 0,
+// whose family is the generic surface. BOTH vertex stages must declare and write
+// this — see the note at body.vert's declaration for what happens if one does not.
+layout(location = 4) flat in uint vMat;
+
+// Per-material family + measured amplitude, GENERATED from data/materials.csv by
+// tools/gen_material_surface.py. Provides kMatFamily[] and kMatSurface[].
+#include "material_surface.glsl"
 
 layout(push_constant) uniform Push {
     mat4 viewProj;
@@ -93,6 +102,246 @@ float seam(vec2 uv) {
     return smoothstep(0.44, 0.5, m);
 }
 
+// ---------------------------------------------------------------------------
+// Per-material surface families
+// ---------------------------------------------------------------------------
+// Before these existed, ONE generic two-octave noise plus one 2 m seam was applied
+// to every surface in the game, brightness-only and identical for all 16 materials.
+// So a rusted plate, dirty plaster and varnished parquet differed only in average
+// colour and were otherwise the same surface — a mosaic of tinted boxes. Meanwhile
+// data/materials.csv had carried a MEASURED per-material luminance dispersion since
+// the harvest and nothing in the renderer read it.
+//
+// Two things are now per-material, and they are different in kind:
+//
+//   AMOUNT     is measured. kMatSurface[].x is the lognormal sigma that reproduces
+//              the material's measured luminance coefficient of variation. Rusty
+//              corrugated iron gets 0.42 and rubber tiles get 0.07 because the
+//              photographs say so, not because it looked right.
+//   STRUCTURE  is authored, because it has to be: the CSV measured the colour
+//              statistics of a flat-lit photograph, which contains no information
+//              about whether a surface is ribbed, planked or tiled. Family choice
+//              and groove depth are declared in tools/gen_material_surface.py and
+//              here, and labelled as authored where they are.
+//
+// Everything is still brightness-only, so every material keeps its cell-type hue and
+// the faction/tier palette contract (monsters.md) is untouched — and multiplicative,
+// so nothing here can lift a fogged pixel off black and expose the toroidal seam.
+//
+// Cost: the two-octave `grain` is computed ONCE, before the family branch, because
+// most families use it as their fine layer and hoisting it keeps the expensive part
+// out of the divergent region. Each family then adds at most two more vnoise calls.
+// vMat is `flat`, so the branch is uniform across a primitive and only quads that
+// straddle two materials evaluate two arms.
+
+const uint kFamGeneric = 0u;   // the pre-existing surface: grain + 2 m panel seam
+const uint kFamPlaster = 1u;   // fine mottle + broad staining + panel seam
+const uint kFamPlank   = 2u;   // directional boards, staggered butt joints
+const uint kFamTile    = 3u;   // square grid, recessed grout, per-tile shade
+const uint kFamRibbed  = 4u;   // corrugation / shutter slats
+const uint kFamTread   = 5u;   // raised lozenges on a staggered lattice
+const uint kFamRust     = 6u;  // large irregular patches with pitting inside
+const uint kFamRubble  = 7u;   // warped chunk plateaus with dark cracks
+const uint kFamSmooth  = 8u;   // near-flat painted plate, no seams
+
+// Reciprocal standard deviation of each primitive, so a weighted sum of them can be
+// given unit variance and `sigma` can mean the measured dispersion rather than an
+// arbitrary knob. These are MEASURED over 2 M samples of a float32 replica of these
+// exact functions, not derived: value noise with smoothstep weights has std 0.2143,
+// not the 0.2887 of the uniform lattice values it interpolates, and guessing that
+// would have put every amplitude 35% low.
+const float kNormGrain = 6.413;   // grain(), the 0.62/0.38 two-octave mix
+const float kNormNoise = 4.665;   // one vnoise octave
+const float kNormHash  = 3.465;   // hash21(), uniform on [0,1]
+const float kNormMask  = 2.293;   // the rust patch mask, after its smoothstep
+const float kMeanMask  = 0.4497;  // ...and its mean, which is not 0.5
+const float kNormRib   = 1.4145;  // cos()
+const float kNormStud  = 2.518;   // tread lozenge coverage
+const float kMeanStud  = 0.2331;  // ...and its mean
+const float kNormShade = 2.448;   // the cross-lozenge gradient
+
+// Multiplicative albedo modulation reproducing a measured luminance dispersion.
+//
+// For zero-mean unit-variance `n`, exp(sigma*n - sigma^2/2) is lognormal with mean
+// exactly 1 and coefficient of variation exactly sqrt(exp(sigma^2) - 1) — which is
+// the CV the generator solved sigma for. Mean 1 is the load-bearing half: it leaves
+// the measured mean albedo in cube_pass.cpp kMaterial untouched, so adding surface
+// character does not quietly re-tint the world brighter.
+//
+// Strictly positive by construction, which matters beyond neatness. Nothing this
+// returns can lift a fogged pixel off zero, so the wrap seam stays buried in black
+// no matter what the noise does — and it needs no clamp, where a naive
+// 1 + sigma*n would go NEGATIVE at the rust end.
+// How close the result actually lands, MEASURED over 1.5 M samples of a float32
+// replica of every family below (target = the CV in material_surface.glsl):
+//
+//   plaster 0.1300 -> 0.1291    shutter 0.1519 -> 0.1513    rust   0.4411 -> 0.3831
+//   parquet 0.1100 -> 0.1100    factory 0.2231 -> 0.2206    rubble 0.4437 -> 0.4264
+//   lino    0.0724 -> 0.0723    tread   0.1940 -> 0.2075    pads   0.0300 -> 0.0300
+//
+// Every family's `n` is normalised to unit variance, verified. The residuals are a
+// DISTRIBUTION-SHAPE effect and are recorded rather than corrected: the CV identity
+// above holds exactly for Gaussian n, and the tread lattice and the rust patch mask
+// are strongly bimodal, so exp() weights their tails differently. Chasing the last
+// 10% with a per-family fudge factor would be false precision on a statistic that
+// came from a 256x256 resample of one photograph. Mean stays within 0.999..1.001 for
+// all nine, which is the part that had to be exact.
+float mottle(float sigma, float n) {
+    return exp(sigma * n - 0.5 * sigma * sigma);
+}
+
+// Fade a periodic pattern out as its period approaches a pixel. Regular structure
+// aliases far more visibly than noise does — a 28-cycle corrugation becomes a moire
+// fan at 20 m, where the noise octaves merely go grey. `px` is cell units per pixel
+// from fwidth(); this costs one multiply-add and a clamp, and no texture LOD machinery.
+float resolved(float px, float freq) {
+    return clamp(1.0 - px * freq * 2.2, 0.0, 1.0);
+}
+
+// The brightness multiplier for one material's surface. `g` is the shared two-octave
+// grain, `px` the screen-space rate of change of uv, `aw` the absolute face normal.
+float surface(uint mat, vec2 uv, vec3 aw, float px, float g) {
+    uint id = min(mat, kMatSurfaceCount - 1u);
+    uint fam = kMatFamily[id];
+    float sigma = kMatSurface[id].x;
+    float pitch = kMatSurface[id].y;   // cycles per 2 m cell
+
+    if (fam == kFamGeneric) {
+        // The pre-existing surface, arithmetic unchanged: floors get busier detail
+        // than walls (scuffs, grit), walls read as paint over panel joins. Kept
+        // literal rather than re-expressed through mottle() so the maze test bed and
+        // the crowd — body.vert writes material 0, which lands here — render exactly
+        // as they did before the families existed.
+        float amount = aw.z > 0.5 ? 0.26 : 0.17;
+        return ((1.0 - amount * 0.5) + amount * g) * (1.0 - 0.28 * seam(uv));
+    }
+
+    if (fam == kFamSmooth) {
+        // A painted marker plate: mottle only, no seam. A gameplay pad has to read as
+        // signage rather than as a surface (materials.h: the bank must be
+        // unmistakable), so nothing is allowed to break it into panels.
+        return mottle(sigma, (g - 0.5) * kNormGrain);
+    }
+
+    if (fam == kFamPlaster) {
+        // Fine even mottle plus broad damp/dirt staining, over the precast panel
+        // join. Weights 0.78/0.62 sum to 1 in quadrature, so splitting the measured
+        // amplitude across two scales does not exceed it. The broad layer is what
+        // gives one apartment a different wall from the next instead of 255 floors
+        // of the same whitewash.
+        float stain = vnoise(uv * pitch);
+        float n = (g - 0.5) * kNormGrain * 0.78
+                + (stain - 0.5) * kNormNoise * 0.62;
+        return mottle(sigma, n) * (1.0 - 0.30 * seam(uv));
+    }
+
+    if (fam == kFamPlank) {
+        // Boards run along uv.x, `pitch` of them across uv.y, with butt joints every
+        // 40 cm STAGGERED per row by a hashed offset. The stagger is the whole trick:
+        // unstaggered joints line up and the floor reads as a tile grid, not boards.
+        float row = floor(uv.y * pitch);
+        float along = uv.x * 5.0 + hash21(vec2(row, 7.0)) * 3.0;
+        float tone = hash21(vec2(floor(along), row)) - 0.5;
+        // Figure stretched 4:1 along the board, which is what says wood rather than
+        // painted stripes.
+        float streak = vnoise(vec2(uv.x * 40.0, uv.y * pitch * 8.0)) - 0.5;
+        float n = tone * kNormHash * 0.85 + streak * kNormNoise * 0.53;
+        float jAcross = smoothstep(0.42, 0.5, abs(fract(uv.y * pitch) - 0.5))
+                      * resolved(px, pitch);
+        float jAlong = smoothstep(0.46, 0.5, abs(fract(along) - 0.5))
+                     * resolved(px, 5.0);
+        return mottle(sigma, n) * (1.0 - 0.34 * jAcross - 0.20 * jAlong);
+    }
+
+    if (fam == kFamTile) {
+        // Grid, recessed grout, and a per-tile shade jitter — for rubber floor tiles
+        // the measured mottle is almost nil (CV 0.072, the flattest material in the
+        // pack), so the grout is what makes it nameable and the tile-to-tile tone is
+        // what stops the grid looking printed.
+        vec2 q = uv * pitch;
+        float tone = hash21(floor(q)) - 0.5;
+        vec2 e = abs(fract(q) - 0.5);
+        float grout = smoothstep(0.42, 0.5, max(e.x, e.y)) * resolved(px, pitch);
+        float n = tone * kNormHash * 0.88 + (g - 0.5) * kNormGrain * 0.47;
+        return mottle(sigma, n) * (1.0 - 0.30 * grout);
+    }
+
+    if (fam == kFamRibbed) {
+        // Corrugation varying along uv.x. The uv basis drops the face-normal axis, so
+        // on a ±X or ±Y wall uv.y IS world z — meaning the ribs stand VERTICALLY, the
+        // way shutter slats and cladding do, with the shader needing to know nothing
+        // about which wall it is on.
+        float d = resolved(px, pitch);
+        float rib = cos(uv.x * pitch * 6.2831853);
+        float n = rib * kNormRib * 0.90 * d + (g - 0.5) * kNormGrain * 0.44;
+        // Deepen the valleys past what a symmetric cosine gives: a rolled sheet has a
+        // tight trough and a broad crest.
+        float trough = smoothstep(-0.2, -0.95, rib) * d;
+        return mottle(sigma, n) * (1.0 - 0.16 * trough);
+    }
+
+    if (fam == kFamTread) {
+        // Raised lozenges on a row-staggered lattice. The gradient across each
+        // lozenge fakes the round-over that makes chequer plate read as raised rather
+        // than as diamonds painted on a flat sheet.
+        float d = resolved(px, pitch);
+        vec2 q = uv * pitch;
+        q.x += 0.5 * floor(q.y);
+        vec2 f = fract(q) - 0.5;
+        float stud = 1.0 - smoothstep(0.28, 0.40, abs(f.x) + abs(f.y));
+        // Weights are 0.83/0.57/0.55 and NOT a quadrature-1 triple: the coverage and
+        // the gradient come off the same lattice, so they are correlated and their
+        // variances do not add. The first version used quadrature weights and
+        // measured 0.872 std instead of 1.0, which put this material 8% under its
+        // measured amplitude. Scaled by 1/0.872 to land on it.
+        float n = (stud - kMeanStud) * kNormStud * 0.826 * d
+                + (f.x + f.y) * stud * kNormShade * 0.574 * d
+                + (g - 0.5) * kNormGrain * 0.550;
+        return mottle(sigma, n) * (1.0 - 0.28 * (1.0 - stud) * d);
+    }
+
+    if (fam == kFamRust) {
+        // Patches, not octaves — and this is the one place the family choice answers
+        // a recorded objection rather than just picking a look. render.md rejected
+        // harvesting rust textures partly because real corrosion has long-range
+        // spatial correlation that FBM reproduces badly. An FBM sum has no edges; a
+        // low-frequency blob field pushed through a narrow smoothstep does, and edges
+        // are what makes a patch a patch.
+        //
+        // No seam: a corroded steel plate is not a precast concrete panel, and that
+        // absence is half of what distinguishes a Derelict wall from a Residential one.
+        float lo = vnoise(uv * pitch);
+        float hi = vnoise(uv * pitch * 2.85);
+        float mask = smoothstep(0.42, 0.62, lo * 0.65 + hi * 0.35);
+        // Corroded patches are darker, and pitted harder inside than outside.
+        float n = -(mask - kMeanMask) * kNormMask * 0.92
+                + (g - 0.5) * kNormGrain * 0.55 * (0.45 + 0.85 * mask);
+        return mottle(sigma, n);
+    }
+
+    if (fam == kFamRubble) {
+        // Chunk plateaus with dark cracks between them. The lattice is WARPED by a
+        // low-frequency noise before being quantised, and that is the whole
+        // difference between debris and floor tiles: an unwarped lattice reads as a
+        // grid however you shade it.
+        //
+        // Rubble and rust have all but identical measured amplitude (CV 0.4437 vs
+        // 0.4411), so amplitude cannot tell the two Derelict surfaces apart — the
+        // structure has to, which is the argument for families over a single dial.
+        float warp = vnoise(uv * 2.3);
+        vec2 q = uv * pitch + warp * 2.5;
+        float chunk = hash21(floor(q)) - 0.5;
+        vec2 e = abs(fract(q) - 0.5);
+        float crack = smoothstep(0.36, 0.5, max(e.x, e.y)) * resolved(px, pitch);
+        float n = chunk * kNormHash * 0.90 + (g - 0.5) * kNormGrain * 0.44;
+        return mottle(sigma, n) * (1.0 - 0.32 * crack);
+    }
+
+    // Unreachable: cube_pass.cpp maps every unknown id to 0 and the generator emits a
+    // family for every id. Here so the function has a defined value on every path.
+    return 1.0;
+}
+
 void main() {
     // Instance colours are authored as display-referred values; linearise once
     // so the lighting arithmetic below is physically sane.
@@ -109,17 +358,17 @@ void main() {
             : (aw.x > 0.5 ? vWorldPos.yz : vWorldPos.xz);
     uv /= 2.0;                              // kCellSize: one unit == one cell
 
-    // Grain modulates brightness only, so a surface keeps its cell-type hue and
-    // the faction/tier palette contract is untouched.
+    // Per-material surface. Brightness-only, so a surface keeps its cell-type hue and
+    // the faction/tier palette contract is untouched; multiplicative and strictly
+    // positive, so it cannot lift a fogged pixel off black.
+    //
+    // The shared two-octave grain is computed here rather than inside surface() so
+    // the expensive part stays out of the divergent branch — most families use it as
+    // their fine layer. `px` is how much uv moves per pixel, which is what lets the
+    // periodic families fade themselves out before they alias.
     float g = grain(uv);
-    float s = seam(uv);
-    // Floors get finer, busier detail than walls (scuffs, grit); walls read as
-    // painted plaster over panel joins.
-    float amount = aw.z > 0.5 ? 0.26 : 0.17;
-    albedo *= (1.0 - amount * 0.5) + amount * g;
-    // Seams are recessed grout, not painted lines: darken and let the lighting
-    // below do the rest.
-    albedo *= 1.0 - 0.28 * s;
+    float px = max(fwidth(uv.x), fwidth(uv.y));
+    albedo *= surface(vMat, uv, aw, px, g);
 
     // Distance is computed per-fragment, not interpolated from the vertex stage.
     // Interpolating a nonlinear function across a 2 m face that fills the screen

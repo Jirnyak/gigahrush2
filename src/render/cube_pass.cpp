@@ -97,6 +97,27 @@ vec3 type_color(CellType t) {
     return t < kMatCount ? kMaterial[t] : vec3{0.75f, 0.75f, 0.78f};
 }
 
+// Where the material id rides inside CubeInstance::occ. The AO mask occupies bits
+// 0..26, so bits 27..31 were already allocated and unused; putting the id there is
+// what makes per-material surfaces cost zero extra bytes per instance.
+//
+// Five bits hold 0..31 against kMatCount == 16. The static_assert is the guard that
+// matters: extend materials.h past 32 ids and the build stops here rather than
+// wrapping the id into the AO mask, which would corrupt the occlusion of every cell
+// of the new material and look like an unrelated shading bug.
+constexpr int kMatIdShift = 27;
+static_assert(kMatCount <= (1u << (32 - kMatIdShift)),
+              "material ids no longer fit in the spare high bits of CubeInstance::occ "
+              "— widen the field or add an attribute, do not let it wrap into the AO "
+              "mask");
+
+// Unknown ids fall back to 0, whose family in shaders/material_surface.glsl is the
+// generic pre-existing surface. Matches type_color()'s spirit: an id the tables do
+// not know renders as something plain, never as garbage.
+std::uint32_t surface_id(CellType t) {
+    return t < kMatCount ? static_cast<std::uint32_t>(t) : 0u;
+}
+
 // A cell is a surface cell (worth drawing) if it is non-empty and at least one
 // of its six neighbours is not fully solid. Fully-buried cells are skipped.
 // The 3x3x3 occupancy mask this cell's AO is derived from. 26 neighbour reads —
@@ -336,7 +357,8 @@ std::uint32_t CubePass::build_instances(std::uint32_t frameIndex,
     for (int y = 0; y < kMacroDim && count < instanceCapacity_; ++y)
     for (int x = 0; x < kMacroDim && count < instanceCapacity_; ++x) {
         if (!is_visible_surface(g, x, y, z)) continue;
-        vec3 col = type_color(g.cell(x, y, z));
+        const CellType type = g.cell(x, y, z);
+        vec3 col = type_color(type);
         if (fluid) {
             float f = fluid->at(x, y, z);
             if (f > 0.05f) {
@@ -350,7 +372,11 @@ std::uint32_t CubePass::build_instances(std::uint32_t frameIndex,
                                  static_cast<float>(z) * kCellSize};
         dst[count].scale = kCellSize;
         dst[count].color = col;
-        dst[count].occ = occupancy_mask(g, x, y, z);
+        // The fluid tint above deliberately does NOT change the surface family: a
+        // flooded parquet floor is still parquet, wet. Tint is colour, family is
+        // material.
+        dst[count].occ = occupancy_mask(g, x, y, z)
+                       | (surface_id(type) << kMatIdShift);
         ++count;
     }
     return count;

@@ -37,9 +37,20 @@ struct CubeInstance {
     vec3 origin;
     float scale;
     vec3 color;
-    // Ambient-occlusion input: a 27-bit occupancy mask of this cell's own 3x3x3
-    // neighbourhood, bit ((dz+1)*9 + (dy+1)*3 + (dx+1)) set when that neighbour is
-    // solid. The centre bit (13) is this cell and is never read.
+    // Two things in one uint32, because there was no room for a second.
+    //
+    //   bits 0..26  ambient-occlusion input: the occupancy mask of this cell's own
+    //               3x3x3 neighbourhood, bit ((dz+1)*9 + (dy+1)*3 + (dx+1)) set when
+    //               that neighbour is solid. Bit 13 is the centre — this cell — and
+    //               is neither written nor read.
+    //   bits 27..31 the MATERIAL ID (world/materials.h), for the per-material
+    //               surface families in cube.frag.
+    //
+    // The material id is free. `occ` needs 27 bits and a uint32 has 32, so the top
+    // five were already being paid for and thrown away; five bits hold 0..31 against
+    // a kMatCount of 16, which is a full doubling of headroom. Nothing here grows:
+    // CubeInstance stays 32 bytes, the vertex layout keeps its six attributes, and
+    // the instance buffer keeps its size. See kMatIdShift in cube_pass.cpp.
     //
     // One uint32 is the ENTIRE cost of baked AO on the GPU side, and that is only
     // true because of a property of the shared mesh worth stating: which three
@@ -49,7 +60,14 @@ struct CubeInstance {
     // *values* — so nothing about the mesh changes and body_pass keeps its own.
     std::uint32_t occ;
 };
-static_assert(sizeof(CubeInstance) == 32, "AO must cost exactly one uint32");
+static_assert(sizeof(CubeInstance) == 32,
+              "AO plus the material id must cost exactly one uint32 between them");
+// `scale` is written unconditionally as kCellSize by build_instances and nothing
+// varies it, so 4 of these 32 bytes are a per-instance constant — about 2.7 MB of a
+// 22 MB instance buffer at 717 k instances. Left alone on purpose: it is the lane a
+// merged-cluster / LOD pass would need first, and reclaiming it now would buy
+// bandwidth nothing is currently short of. Noted so the next person looking for a
+// spare lane finds this one before inventing a seventh attribute.
 
 // Push-constant block shared by cube.vert / cube.frag / body.vert. All three
 // declare it identically; body_pass reuses cube.frag, so the block and the

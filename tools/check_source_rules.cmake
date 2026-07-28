@@ -174,7 +174,7 @@ file(GLOB_RECURSE GIGA_BOM_FILES
     "${GIGA_ROOT}/src/*.cpp" "${GIGA_ROOT}/src/*.h"
     "${GIGA_ROOT}/tests/*.cpp" "${GIGA_ROOT}/tests/*.h"
     "${GIGA_ROOT}/shaders/*.vert" "${GIGA_ROOT}/shaders/*.frag"
-    "${GIGA_ROOT}/shaders/*.comp")
+    "${GIGA_ROOT}/shaders/*.comp" "${GIGA_ROOT}/shaders/*.glsl")
 foreach(_file IN LISTS GIGA_BOM_FILES)
     file(READ "${_file}" _head LIMIT 3 HEX)
     if(_head STREQUAL "efbbbf")
@@ -237,6 +237,18 @@ _giga_csv_vs_header("data/weapons_melee.csv" "src/game/weapon_table.h"
 # whole argument for the gate.
 _giga_csv_vs_header("data/weapons_ranged.csv" "src/game/ranged_table.h"
     "kRangedCount[ \t]*=[ \t]*([0-9]+)" "ranged weapon")
+# Fourth generated table, added in the same change as tools/gen_material_surface.py
+# rather than after it — the note above has been the pattern twice and the cost was an
+# audit both times. Two things are unlike the other three:
+#
+#   * the generated file is GLSL, not C++. This macro only does file(READ) + regex, so
+#     the language is irrelevant; what matters is that the count lives in the output.
+#   * the declared count is kMaterialCsvRows, the number of PHOTOGRAPHS read, and NOT
+#     the material count. Those are unrelated numbers that both happen to be 16 today,
+#     and only 6 of the 16 rows are consumed. Matching against the array length
+#     instead would make this rule pass while blind to a re-harvest.
+_giga_csv_vs_header("data/materials.csv" "shaders/material_surface.glsl"
+    "kMaterialCsvRows[ \t]*=[ \t]*([0-9]+)" "material surface")
 
 # ---- Verdict ---------------------------------------------------------------
 list(LENGTH GIGA_FAILURES GIGA_FAILURE_COUNT)

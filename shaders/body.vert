@@ -35,6 +35,18 @@ layout(location = 2) out vec3 vWorldPos;
 // plausibly correct on this machine and black on the owner's. Silent by
 // construction, which is exactly why it is spelled out here.
 layout(location = 3) out float vAo;
+// Material id for cube.frag's per-material surface families. Same contract as vAo
+// and for the same reason: cube.frag reads location 4, so if this stage does not
+// write it the value is whatever the driver left in the register — which on this
+// machine might happen to be 0 and read as correct, and on the owner's Mac might
+// index the family table out of range. `flat` must match cube.vert's declaration
+// exactly or the interface is mismatched.
+//
+// 0 is the air id, which the world pass never draws, so it is free to mean "a body"
+// here. Its family is `generic` — the two-octave grain and 2 m seam that bodies
+// already had before the families existed — so this change leaves the crowd looking
+// exactly as it did.
+layout(location = 4) flat out uint vMat;
 
 void main() {
     // Map the [0,1] cube corner onto [-half, +half] around the body centre, so
@@ -46,4 +58,5 @@ void main() {
     vColor = inColor;
     vWorldPos = world;
     vAo = 1.0;
+    vMat = 0u;
 }
