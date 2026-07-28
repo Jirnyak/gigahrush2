@@ -89,7 +89,23 @@ extern const std::int8_t kMobVsFaction[kRelFactionCount];
 // pointer, that selects row 5.
 std::uint8_t rel_row(const NpcPool& pool, NpcId id);
 
-// Would a monster attack this record? Convenience over kMobVsFaction.
+// Which faction row a record's BODY belongs to, ignoring the player bit.
+//
+// Distinct from `rel_row` and the difference is load-bearing. `rel_row` deliberately
+// promotes the player to row 5, because the player has their own diplomatic standing
+// with each society. **A monster does not care who is driving.** It cares what body is
+// in front of it — so anything asking "is this prey" must ask the body, not the
+// occupant, or the player row shadows the faction and the answer is always the same.
+//
+// That shadowing was a live bug: `mob_hostile_to` went through `rel_row`, so a player
+// wearing a Cultist body resolved to row 5 (-100, hunted) instead of the Cultist row
+// (+50, ignored). The "wear the right body" mechanic could never once have fired, and
+// the HUD printed the body's faction while the gate read the player's — the two
+// disagreed on screen and nothing else would have noticed.
+std::uint8_t body_row(const NpcPool& pool, NpcId id);
+
+// Would a monster attack this record? Convenience over kMobVsFaction, resolved
+// through `body_row` and NOT `rel_row` — see above.
 bool mob_hostile_to(const NpcPool& pool, NpcId id);
 
 } // namespace giga::game

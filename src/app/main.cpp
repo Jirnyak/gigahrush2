@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 #include "imgui.h"
@@ -56,6 +57,7 @@
 #include "render/vk_device.h"
 #include "render/vk_renderer.h"
 #include "render/vk_swapchain.h"
+#include "render/screenshot.h"
 #include "sim/camera.h"
 #include "sim/controller.h"
 #include "sim/fluid.h"
@@ -302,10 +304,25 @@ int main(int argc, char** argv) {
     // World select: `gigahrush2 maze` for the labyrinth test bed, otherwise the
     // floor-module stack (default).
     WorldGenMode genMode = WorldGenMode::FloorStack;
+    // --shot FILE [--frames N] [--ride N]: render, capture, exit.
+    //
+    // Visual work has to be looked at, and grabbing the window through the compositor
+    // proved unreliable — another window can come to the front between focusing the
+    // game and copying the pixels, and then the "proof" is a screenshot of a browser.
+    // This reads the presented swapchain image directly and quits, so the window is up
+    // for a couple of seconds instead of indefinitely. [screenshot.h]
+    const char* shotPath = nullptr;
+    int shotFrames = 600;    // ~10 s at 60 Hz: long enough for the first nav bake
+    int shotRide = 0;        // floors to descend before capturing
+    int shotFramesSeen = 0;
+    int shotRideDone = 0;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "maze") genMode = WorldGenMode::Maze;
         else if (a == "floors" || a == "stack") genMode = WorldGenMode::FloorStack;
+        else if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
+        else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
+        else if (a == "--ride" && i + 1 < argc) shotRide = std::atoi(argv[++i]);
     }
 
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -1048,6 +1065,46 @@ int main(int argc, char** argv) {
             bodyMs = static_cast<float>((t2 - t1) / freq * 1000.0);
             hud.render(cmd);
             renderer.end_frame(window);
+
+            // --shot: count presented frames, then capture and quit. Counted here
+            // rather than in the event loop so a skipped frame (swapchain out of
+            // date, window minimised) does not count toward the budget — otherwise a
+            // capture on a machine that drops frames would fire before the nav bake
+            // and photograph a world with no crowd in it.
+            if (shotPath) {
+                ++shotFramesSeen;
+                if (shotRideDone < shotRide && shotFramesSeen % 420 == 0) {
+                    // One floor down every ~7 s: long enough for the async nav bake
+                    // (measured 2.5 s + 2.4 s) to finish before the next ride.
+                    game::NpcId pid = reg.valid(player)
+                                          ? reg.get<game::NpcRef>(player).id
+                                          : game::kInvalidNpc;
+                    game::RideResult r = streamer.travel(
+                        stack, registry, reg, pool, player, currentFloor, -1,
+                        /*arrivalZ=*/2, pid);
+                    if (r.moved) {
+                        player = r.player;
+                        currentFloor = r.floor;
+                        game::record_floor(ledger, currentFloor);
+                        samosbor = game::samosbor_new_game(sbRng);
+                        aim_player(reg, player);
+                        LayerId nl = reg.get<Transform>(player).layer;
+                        activeLayer = nl;
+                        refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
+                        begin_floor_nav(stack.layer(nl), nav);
+                        cubePass.invalidate();
+                    }
+                    ++shotRideDone;
+                }
+                if (shotFramesSeen >= shotFrames) {
+                    const bool ok = gpu::save_swapchain_png(device, renderer,
+                                                            shotPath);
+                    std::fprintf(stderr, "shot: %s -> %s (floor %d, %d frames)\n",
+                                 ok ? "saved" : "FAILED", shotPath, currentFloor,
+                                 shotFramesSeen);
+                    running = false;
+                }
+            }
         }
     }
 

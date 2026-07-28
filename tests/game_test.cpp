@@ -2060,8 +2060,13 @@ static void test_faction_relations() {
     CHECK(mob_hostile_to(pool, b));
 
     pool.set_player(a, true);
-    CHECK(rel_row(pool, a) == ply);       // the bit moved the row
-    CHECK(mob_hostile_to(pool, a));       // and being the player is never safe
+    CHECK(rel_row(pool, a) == ply);       // the bit moved the DIPLOMATIC row
+    // ...but NOT what a monster sees. A monster does not care who is driving, only
+    // what body is in front of it — so a player wearing a cultist body is still
+    // ignored. Going through rel_row here was a live bug: the player row (-100)
+    // shadowed the cultist row (+50) and the mechanic could never fire.
+    CHECK(body_row(pool, a) == cul);
+    CHECK(!mob_hostile_to(pool, a));
     pool.set_player(a, false);
     CHECK(rel_row(pool, a) == cul);       // and back
 
@@ -2700,6 +2705,21 @@ static void test_faction_gates_hunting() {
                             static_cast<std::uint64_t>(i));
         return static_cast<std::int16_t>(30000 - p.hp(id));
     };
+
+    // The player bit must not change the answer. This is the regression that a
+    // screenshot found and no test had: the HUD read the body's faction while the
+    // gate read the player's diplomatic row, so a cultist-bodied player was still
+    // hunted and the whole mechanic was inert.
+    {
+        NpcPool p;
+        p.init();
+        NpcId id = p.spawn();
+        p.faction(id) = static_cast<std::uint16_t>(Faction::Cultists);
+        CHECK(!mob_hostile_to(p, id));
+        p.set_player(id, true);
+        CHECK(!mob_hostile_to(p, id));   // still ignored while BEING the player
+        CHECK(rel_row(p, id) == kFactionPlayerRow);   // diplomacy still sees a player
+    }
 
     // A citizen is prey and loses HP.
     const std::int16_t citizenLost = trial(Faction::Citizens);

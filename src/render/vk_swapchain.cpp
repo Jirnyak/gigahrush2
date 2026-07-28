@@ -58,7 +58,12 @@ bool VulkanSwapchain::create(const VulkanDevice& d, int fbWidth, int fbHeight) {
     ci.imageColorSpace = sf.colorSpace;
     ci.imageExtent = extent;
     ci.imageArrayLayers = 1;
-    ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    // TRANSFER_SRC as well as COLOR_ATTACHMENT, so a presented frame can be read
+    // back to a PNG ([screenshot.h]). Universally supported for a swapchain and free
+    // when unused; without it vkCmdCopyImageToBuffer on a swapchain image is invalid
+    // usage, which validation would catch and Release would not.
+    ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
     std::uint32_t qf[2] = {d.families.graphics, d.families.present};
     if (d.families.graphics != d.families.present) {

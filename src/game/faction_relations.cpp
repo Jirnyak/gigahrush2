@@ -78,8 +78,15 @@ std::uint8_t rel_row(const NpcPool& pool, NpcId id) {
     return static_cast<std::uint8_t>(f % kFactionCount);
 }
 
+std::uint8_t body_row(const NpcPool& pool, NpcId id) {
+    NpcPool& p = const_cast<NpcPool&>(pool);
+    if (!p.valid(id)) return C;
+    // No is_player() check, deliberately: this is the body's own faction.
+    return static_cast<std::uint8_t>(p.faction(id) % kFactionCount);
+}
+
 bool mob_hostile_to(const NpcPool& pool, NpcId id) {
-    return kMobVsFaction[rel_row(pool, id)] <= kHostileRelation;
+    return kMobVsFaction[body_row(pool, id)] <= kHostileRelation;
 }
 
 } // namespace giga::game
