@@ -11,6 +11,7 @@
 #include "game/floor_gen.h"
 #include "game/floor_registry.h"
 #include "game/floor_spec.h"
+#include "game/mob_table.h"
 #include "game/floor_stream.h"
 #include "game/inventory.h"
 #include "game/npc_pool.h"
@@ -896,6 +897,133 @@ static void test_nav_fine_realfloor() {
     CHECK(std::memcmp(f.flow.data(), f2.flow.data(), f.flow.size()) == 0);
 }
 
+// ---- Global mob table -----------------------------------------------------
+
+// Table integrity. Every assertion here was checked against data/mobs.csv before
+// being written, so a failure means the table drifted from its source — not that
+// the assertion was optimistic.
+static void test_mob_table() {
+    CHECK(kMobTable.size() == kMobKindCount);
+    CHECK(kMobNames.size() == kMobKindCount);
+
+    int ranged = 0, immobile = 0, boss = 0, rare = 0, plain = 0;
+    for (std::size_t i = 0; i < kMobKindCount; ++i) {
+        const MobDef& m = kMobTable[i];
+
+        // The row index IS the kind; this is what lets a MobKind be a raw index.
+        CHECK(m.kind == static_cast<std::uint8_t>(i));
+        CHECK(kMobNames[i] != nullptr && kMobNames[i][0] != '\0');
+
+        // Every enum-valued byte must be in range, or a jump table walks off.
+        CHECK(m.tier < static_cast<std::uint8_t>(MobTier::Count));
+        CHECK(m.behaviour < static_cast<std::uint8_t>(MobBehaviour::Count));
+        CHECK(m.projType < static_cast<std::uint8_t>(ProjType::Count));
+        CHECK(m.packMode < static_cast<std::uint8_t>(MobPackMode::Count));
+
+        // Measured ranges from the reference.
+        CHECK(m.hp >= 8 && m.hp <= 1000);
+        CHECK(m.dmg <= 1000);            // PAUPSINA is the one 0-damage kind
+        CHECK(m.speedMmps <= 8500);
+        CHECK(m.attackCdMs >= 240 && m.attackCdMs <= 3800);
+        CHECK(m.meleeReachMm >= 1050 && m.meleeReachMm <= 1550);
+        CHECK(m.spawnWeightX10 <= 850);
+        CHECK(m.minSamosbor <= 99);
+        CHECK(m.packMin >= 1 && m.packMax >= m.packMin && m.packMax <= 16);
+        CHECK(m.packSpread <= 10);
+
+        // Every kind has a habitat: an empty mask would make it unspawnable
+        // everywhere, silently.
+        CHECK(m.roomMask != 0);
+        CHECK(m.floorMask != 0);
+
+        // Derived flags must agree with the fields they were derived from.
+        CHECK(has_flag(m.aiFlags, AiFlag::Immobile) == (m.speedMmps == 0));
+        if (has_flag(m.aiFlags, AiFlag::Ranged)) {
+            ++ranged;
+            CHECK(m.projSpeedMmps > 0);  // a ranged kind with no projectile speed
+        }                                // could never actually shoot
+        if (has_flag(m.aiFlags, AiFlag::Immobile)) ++immobile;
+        if (has_flag(m.aiFlags, AiFlag::Boss)) ++boss;
+        if (has_flag(m.aiFlags, AiFlag::Rare)) ++rare;
+        if (m.behaviour == static_cast<std::uint8_t>(MobBehaviour::Plain)) ++plain;
+    }
+
+    // Population counts, pinned to the reference. These catch a truncated or
+    // duplicated regenerate that per-row checks would pass.
+    CHECK(ranged == 13);
+    CHECK(immobile == 4);   // IDOL, BORSHCHEVIK, KANTSELYARSKIY_IDOL, BLOOD_PLANT
+    CHECK(boss == 3);       // MANCOBUS, HERALD, CREATOR
+    CHECK(rare == 33);
+    CHECK(plain == 23);     // 15 with no flags + 8 whose flags are all shared bits
+
+    // Spot-check both ends of the catalog against the CSV.
+    const MobDef& sborka = mob_def(MobKind::Sborka);
+    CHECK(sborka.hp == 8 && sborka.dmg == 3 && sborka.speedMmps == 3150);
+    CHECK(has_flag(sborka.aiFlags, AiFlag::FoodBait));
+    CHECK(mob_def(MobKind::Gnome).behaviour ==
+          static_cast<std::uint8_t>(MobBehaviour::Melee));
+    // GREEN_DOG is the only kind whose two singleton flags were merged.
+    CHECK(mob_def(MobKind::GreenDog).behaviour ==
+          static_cast<std::uint8_t>(MobBehaviour::GreenDogPack));
+}
+
+// Danger is V-shaped about the hub, NOT monotonic with depth: floor 0 is the safe
+// living hub and hostility rises in BOTH directions. This is the contract most
+// likely to be "simplified" into a monotonic depth curve by a later change.
+static void test_mob_budget_v_shape() {
+    const FloorTheme t = FloorTheme::Ministry;
+
+    // Head-count depends on |floor|, so the two arms are mirror images.
+    for (int z = 1; z <= 50; z += 7)
+        CHECK(mob_count_for_floor(z, 3, t) == mob_count_for_floor(-z, 3, t));
+
+    // ...and it RISES away from the hub in both directions.
+    const int hub = mob_count_for_floor(0, 3, t);
+    CHECK(hub < mob_count_for_floor(20, 3, t));
+    CHECK(mob_count_for_floor(20, 3, t) < mob_count_for_floor(50, 3, t));
+    CHECK(hub < mob_count_for_floor(-20, 3, t));
+    CHECK(mob_count_for_floor(-20, 3, t) < mob_count_for_floor(-50, 3, t));
+
+    // The curve saturates at |z| = 50; past the ends nothing changes or overflows.
+    CHECK(mob_count_for_floor(50, 3, t) == mob_count_for_floor(127, 3, t));
+    CHECK(mob_count_for_floor(-50, 3, t) == mob_count_for_floor(-127, 3, t));
+    CHECK(mob_count_for_floor(127, 5, FloorTheme::Void) <= kMobBudgetCap);
+
+    // Theme trims head-count without changing its shape: the hub is deliberately
+    // the emptiest floor of monsters and the void the fullest.
+    CHECK(mob_count_for_floor(30, 3, FloorTheme::Living) <
+          mob_count_for_floor(30, 3, FloorTheme::Void));
+    // Danger trims it too, monotonically.
+    CHECK(mob_count_for_floor(30, 1, t) < mob_count_for_floor(30, 5, t));
+
+    // LEVEL = f(|floor|) + danger, clamped 1..12, and never below the authored
+    // danger — a danger-5 floor near the hub is small but not soft.
+    for (int z = -60; z <= 60; z += 5) {
+        for (std::uint8_t d = 1; d <= 5; ++d) {
+            std::uint8_t lv = mob_level_for_floor(z, d);
+            CHECK(lv >= 1 && lv <= 12);
+            CHECK(lv >= d);
+            CHECK(mob_level_for_floor(z, d) == mob_level_for_floor(-z, d));
+        }
+    }
+    CHECK(mob_level_for_floor(0, 1) < mob_level_for_floor(50, 1));
+
+    // 11, not 12. The floor formula tops out at 1 + 8 + (5-1)*0.55 = 11.2, so the
+    // documented 1..12 range is really 1..11 from floor geometry alone — LEVEL 12
+    // needs the reference's per-zone bonus, which gigahrush2 has no zones for yet.
+    // Pinned deliberately: when zones land, this is the assertion that should
+    // change, and it should change on purpose.
+    CHECK(mob_level_for_floor(50, 5) == 11);
+    CHECK(mob_level_for_floor(-50, 5) == 11);
+
+    // A level-1 instance sits at exactly its authored base HP — that is why the
+    // samosbor HP curve was chosen over the design-floor one.
+    CHECK(mob_hp_at_level(100, 1) == 100);
+    CHECK(mob_hp_at_level(100, 12) == 232);   // 100 * (1 + 0.12*11)
+    CHECK(mob_hp_at_level(100, 200) == mob_hp_at_level(100, 12)); // clamped
+    CHECK(mob_hp_at_level(8, 1) == 8);
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -920,6 +1048,8 @@ int main() {
     test_floor_travel();
     test_nav_realfloor();
     test_nav_fine_realfloor();
+    test_mob_table();
+    test_mob_budget_v_shape();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

@@ -48,6 +48,11 @@ echo [giga] Configuring %CONFIG% -^> %BUILD%
 cmake -S . -B "%BUILD%" -G Ninja -DCMAKE_BUILD_TYPE=%CONFIG% || (
     echo [giga] CONFIGURE FAILED & goto :fail
 )
+rem A running instance holds a write lock on the exe, and the link then dies with
+rem a bare "LNK1104: cannot open file gigahrush2.exe" that says nothing about why.
+tasklist /fi "imagename eq gigahrush2.exe" 2>nul | find /i "gigahrush2.exe" >nul
+if not errorlevel 1 echo [giga] NOTE: gigahrush2.exe is running — it holds a lock on the output and the link will fail with LNK1104. Close it (or: taskkill /f /im gigahrush2.exe).
+
 echo [giga] Building
 cmake --build "%BUILD%" --parallel || (
     echo [giga] BUILD FAILED & goto :fail

@@ -1,6 +1,9 @@
 # Items & Loot — Global loot tables
 
-> **Status: design, not yet built.** Game layer (`src/app/`).
+> **Status: design, not yet built.** It belongs in **`giga_game` (`src/game/`)**,
+> not `src/app/` — [AGENTS.md](AGENTS.md) requires gameplay macro-systems to link
+> `giga_core` without SDL/Vulkan/ImGui so they stay headless-testable via
+> `game_test`.
 
 Item definitions and loot tables are **global**, shared by every floor. Floors
 adjust drop likelihood through their rule-set ([floors.md](floors.md)); they do
