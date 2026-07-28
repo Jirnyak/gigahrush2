@@ -7,11 +7,15 @@
 > (floors, quests, NPCs, items, combat) is layered on top as **modules** and ECS
 > systems. Keep the engine core game-agnostic.
 >
-> **⚠ Token economy.** Work to a tight token budget. Do not re-read files
-> already in context, restate large blocks, or emit change-log prose. Stop
-> exploring once you can act. When a check is cheaper for the human to run
-> (a build, a launch, a visual glance), hand it to them instead of burning
-> tokens simulating it. Prefer the smallest surgical edit that solves the task.
+> **♾ Tokens are unlimited — maximize; do NOT economize.** The owner's standing
+> mandate (master_prompt.md §1.4): pour everything into the result. Explore
+> deeply, read widely, fan out **many subagents** for read-only research and
+> parallel isolated work, and verify thoroughly — never cut a corner or skip a
+> check to save tokens. Spend freely on getting it *right*. This is **not** a
+> licence to sprawl: still make the smallest *surgical* edit that solves the task
+> (slow is fast — a tight diff is easier to verify, not cheaper), and still hand
+> the runtime checks a human owns — a build, a launch, a visual glance — to them,
+> because they own that verification loop, not to conserve tokens.
 
 ## Working Method — *slow is fast*
 

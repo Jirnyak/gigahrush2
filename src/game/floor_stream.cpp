@@ -3,6 +3,7 @@
 #include "ecs/components.h"   // giga::Transform
 #include "game/embody.h"      // embody, embody_as_player, fold_back, NpcRef
 #include "game/floor_gen.h"   // generate_floor
+#include "game/nav_cache.h"   // nav_cache_name, save/load_nav_cache
 #include "game/population.h"  // seed_floor_from_spec
 
 namespace giga::game {
@@ -98,6 +99,31 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
     generate_floor(stack.layer(slot), fm.number, floor_spec(fm.kind), fm.seed);
     reg.set_resident(m, slot);
 
+    // Bring up this floor's navigation into a per-module holder that lives only
+    // while the floor is resident (performance.md "bake at load, tick in O(1)").
+    // The geometry was just rebuilt deterministically above, so this is the
+    // freeze -> bake -> resume seam: the coarse next-hop graph plus the 64 flow
+    // fields + nearest-node field, ~130 MiB, all freed again in unload. With a
+    // cache dir set (C.2b) we first try the memoized bake keyed on this floor's
+    // (number, kind, seed) — a pure fn of the geometry — and only bake + write
+    // the cache on a miss.
+    auto fn = std::make_unique<FloorNav>();
+    std::string cachePath;
+    bool haveNav = false;
+    if (!navCacheDir_.empty()) {
+        cachePath = navCacheDir_ + "/" + nav_cache_name(fm.number, fm.kind, fm.seed);
+        haveNav = load_nav_cache(cachePath, fm.number, fm.kind, fm.seed, fn->coarse,
+                                 fn->fine);
+    }
+    if (!haveNav) {
+        nav::bake_coarse(stack.layer(slot).grid(), fn->coarse);
+        nav::bake_fine(stack.layer(slot).grid(), fn->fine);
+        if (!cachePath.empty())
+            save_nav_cache(cachePath, fm.number, fm.kind, fm.seed, fn->coarse,
+                           fn->fine);
+    }
+    nav_[m] = std::move(fn);
+
     fm.bodies.clear();
     embody_crowd(ecs, pool, fm, slot, playerId, out.player);
     out.layer = slot;
@@ -125,12 +151,23 @@ void FloorStreamer::unload(LevelStack& stack, FloorRegistry& reg, Registry& ecs,
     }
     fm.bodies.clear();
 
+    // Free the floor's baked nav — resident only while the floor is live, so a
+    // cold floor costs no nav RAM (~130 MiB reclaimed here); a later reload rebakes
+    // it from the deterministically regenerated geometry.
+    nav_[m].reset();
+
     // Recycle the physical layer (its World stays allocated in the stack, ready to
     // be regenerated for the next floor — dense over sparse, performance.md) and
     // break the module's residency.
     free_slot(layer);
     reg.evict(m);
     (void)stack;
+}
+
+const FloorNav* FloorStreamer::nav_at(const FloorRegistry& reg, int number) const {
+    ModuleId m = reg.module_at(number);
+    if (m == kInvalidModule) return nullptr;
+    return nav_[m].get();
 }
 
 void FloorStreamer::keep_only(LevelStack& stack, FloorRegistry& reg, Registry& ecs,

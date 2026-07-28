@@ -13,6 +13,7 @@
 #include "game/floor_spec.h"
 #include "game/floor_stream.h"
 #include "game/inventory.h"
+#include "game/nav_cache.h"
 #include "game/npc_pool.h"
 #include "game/population.h"
 
@@ -884,6 +885,231 @@ static void test_nav_fine_realfloor() {
     CHECK(std::memcmp(f.flow.data(), f2.flow.data(), f.flow.size()) == 0);
 }
 
+// route_step on real carved floors (master_prompt #11, C.2). Ties the nearest-
+// node field + coarse reachability + flow fields together and asserts the whole
+// query is consistent with the coarse graph and never steps through a wall.
+static void test_route_realfloor() {
+    using namespace nav;
+
+    // Follow route_step from `from` to `to`, asserting it never lands in solid.
+    // Returns steps to arrive, -1 if route_step reports unreachable, -2 if it
+    // ever steps into a wall (a bug), -3 if it fails to terminate (a cycle bug).
+    auto route_follow = [](const MacroGrid& grid, const CoarseGraph& g,
+                           const FineNav& f, ivec3 from, ivec3 to) -> int {
+        int cx = from.x, cy = from.y, cz = from.z;
+        for (std::size_t steps = 0; steps <= kMacroCells; ++steps) {
+            if (grid.mask(cx, cy, cz).full()) return -2;
+            const std::uint8_t d = route_step(g, f, ivec3{cx, cy, cz}, to);
+            if (d == kFlowArrived) return static_cast<int>(steps);
+            if (d == kFlowNone) return -1;
+            cx = wrap_macro(cx + kNavDir[d][0]);
+            cy = wrap_macro(cy + kNavDir[d][1]);
+            cz = wrap_macro(cz + kNavDir[d][2]);
+        }
+        return -3;
+    };
+    auto node_cell = [](int id) {
+        const LatticeNode n = lattice_unpack(id);
+        return ivec3{lattice_coord(n.ix), lattice_coord(n.iy), lattice_coord(n.iz)};
+    };
+
+    // Dense residential is fully connected, so a route between any two anchors
+    // arrives without ever crossing solid.
+    World res;
+    generate_floor(res, /*number=*/0, floor_spec(FloorKind::Residential), 1337u);
+    CoarseGraph g{};
+    bake_coarse(res.grid(), g);
+    FineNav f;
+    bake_fine(res.grid(), f);
+
+    // Each node's own cell is its own anchor (seeded at distance 0).
+    for (int id = 0; id < kNodes; ++id) {
+        const ivec3 c = node_cell(id);
+        CHECK(f.nearest_node(c.x, c.y, c.z) == id);
+    }
+    CHECK(route_follow(res.grid(), g, f, node_cell(5), node_cell(58)) >= 0);
+    CHECK(route_follow(res.grid(), g, f, node_cell(60), node_cell(3)) >= 0);
+
+    // Nearest-node field is deterministic on real geometry too.
+    FineNav f2;
+    bake_fine(res.grid(), f2);
+    CHECK(f.nearest.size() == f2.nearest.size());
+    CHECK(std::memcmp(f.nearest.data(), f2.nearest.data(), f.nearest.size()) == 0);
+
+    // Derelict may leave some anchors in disconnected pockets. Whatever the seed
+    // yields, route_step MUST agree with the coarse graph for every anchor pair:
+    // reachable => arrives, unreachable => reports kFlowNone (route_follow -1).
+    World der;
+    generate_floor(der, /*number=*/-3, floor_spec(FloorKind::Derelict), 42u);
+    CoarseGraph gd{};
+    bake_coarse(der.grid(), gd);
+    FineNav fd;
+    bake_fine(der.grid(), fd);
+    for (int i = 0; i < kNodes; ++i)
+        for (int j = 0; j < kNodes; ++j) {
+            if (i == j) continue;
+            const bool reachable = gd.dist[i][j] != kUnreachable;
+            const int r = route_follow(der.grid(), gd, fd, node_cell(i), node_cell(j));
+            if (reachable) CHECK(r >= 0);
+            else CHECK(r == -1);
+        }
+}
+
+// The nav bake wired into streaming (C.2b): ensure_loaded bakes the floor's nav
+// into a resident holder; unload frees it. The streamed bake must be identical to
+// a standalone bake of the same deterministic geometry, route through it, and
+// re-bake identically after an unload/reload round trip (freeze -> bake -> resume).
+static void test_streamed_nav() {
+    using namespace nav;
+
+    Registry ecs;
+    NpcPool pool;
+    pool.init();
+    FloorRegistry reg;
+    LevelStack stack;
+    FloorStreamer stream;
+    stream.init(stack, /*keepRadius=*/0);
+
+    const std::uint32_t seed = 4242u;
+    stream.add_module(reg, /*number=*/0, FloorKind::Residential, seed);
+    CHECK(stream.nav_at(reg, 0) == nullptr); // cold: no nav yet
+
+    NpcId playerId = kInvalidNpc;
+    LoadResult r = stream.ensure_loaded(stack, reg, ecs, pool, 0, playerId);
+    CHECK(r.layer != kInvalidLayer);
+
+    // Loaded => nav is resident, and equals a standalone bake of the same
+    // (number, spec, seed) geometry (generate_floor is a pure fn of those).
+    const FloorNav* fn = stream.nav_at(reg, 0);
+    CHECK(fn != nullptr);
+    World ref;
+    generate_floor(ref, /*number=*/0, floor_spec(FloorKind::Residential), seed);
+    CoarseGraph gref{};
+    bake_coarse(ref.grid(), gref);
+    FineNav fref;
+    bake_fine(ref.grid(), fref);
+    CHECK(std::memcmp(&fn->coarse, &gref, sizeof(CoarseGraph)) == 0);
+    CHECK(fn->fine.flow.size() == fref.flow.size());
+    CHECK(std::memcmp(fn->fine.flow.data(), fref.flow.data(), fref.flow.size()) == 0);
+    CHECK(fn->fine.nearest.size() == fref.nearest.size());
+    CHECK(std::memcmp(fn->fine.nearest.data(), fref.nearest.data(),
+                      fref.nearest.size()) == 0);
+
+    // It actually routes: one anchor cell to another arrives on this dense floor.
+    const LatticeNode a = lattice_unpack(5), b = lattice_unpack(58);
+    CHECK(route_step(fn->coarse, fn->fine,
+                     ivec3{lattice_coord(a.ix), lattice_coord(a.iy), lattice_coord(a.iz)},
+                     ivec3{lattice_coord(b.ix), lattice_coord(b.iy), lattice_coord(b.iz)}) !=
+          kFlowNone);
+
+    // Unload frees the nav (resident only while live).
+    stream.unload(stack, reg, ecs, pool, 0);
+    CHECK(stream.nav_at(reg, 0) == nullptr);
+
+    // Reload rebakes it bit-identically across the freeze -> bake -> resume.
+    LoadResult r2 = stream.ensure_loaded(stack, reg, ecs, pool, 0, playerId);
+    CHECK(r2.layer != kInvalidLayer);
+    const FloorNav* fn2 = stream.nav_at(reg, 0);
+    CHECK(fn2 != nullptr);
+    CHECK(std::memcmp(&fn2->coarse, &gref, sizeof(CoarseGraph)) == 0);
+    CHECK(fn2->fine.flow.size() == fref.flow.size());
+    CHECK(std::memcmp(fn2->fine.flow.data(), fref.flow.data(), fref.flow.size()) == 0);
+}
+
+// The optional on-disk nav cache (C.2b): save -> load must round-trip a baked nav
+// bit-identically, and a mismatched key or a missing file must be rejected so the
+// caller falls back to baking. Cleans up its ~130 MiB artifact.
+static void test_nav_cache_roundtrip() {
+    using namespace nav;
+
+    World w;
+    generate_floor(w, /*number=*/-3, floor_spec(FloorKind::Commercial), 77u);
+    CoarseGraph g{};
+    bake_coarse(w.grid(), g);
+    FineNav f;
+    bake_fine(w.grid(), f);
+
+    const std::string dir = "navcache_test_tmp";
+    const std::string path = dir + "/" + nav_cache_name(-3, FloorKind::Commercial, 77u);
+    std::remove(path.c_str());
+    CHECK(save_nav_cache(path, -3, FloorKind::Commercial, 77u, g, f));
+
+    // Reload into a fresh holder: every byte matches the original bake.
+    CoarseGraph g2{};
+    FineNav f2;
+    CHECK(load_nav_cache(path, -3, FloorKind::Commercial, 77u, g2, f2));
+    CHECK(std::memcmp(&g, &g2, sizeof(CoarseGraph)) == 0);
+    CHECK(f.flow.size() == f2.flow.size());
+    CHECK(std::memcmp(f.flow.data(), f2.flow.data(), f.flow.size()) == 0);
+    CHECK(f.nearest.size() == f2.nearest.size());
+    CHECK(std::memcmp(f.nearest.data(), f2.nearest.data(), f.nearest.size()) == 0);
+
+    // Wrong seed => header mismatch => rejected (caller must re-bake).
+    CoarseGraph g3{};
+    FineNav f3;
+    CHECK(!load_nav_cache(path, -3, FloorKind::Commercial, 78u, g3, f3));
+    // Wrong kind, and a missing file, are likewise rejected.
+    CHECK(!load_nav_cache(path, -3, FloorKind::Residential, 77u, g3, f3));
+    CHECK(!load_nav_cache(dir + "/nope.bin", -3, FloorKind::Commercial, 77u, g3, f3));
+
+    std::remove(path.c_str());
+}
+
+// The cache wired into streaming (C.2b): a cache dir makes ensure_loaded write a
+// file on the first (miss) load, and READ it on the next — proven by doctoring
+// the file with a sentinel a fresh bake could never produce and seeing it survive.
+static void test_streamed_nav_cache() {
+    using namespace nav;
+
+    Registry ecs;
+    NpcPool pool;
+    pool.init();
+    FloorRegistry reg;
+    LevelStack stack;
+    FloorStreamer stream;
+    stream.init(stack, /*keepRadius=*/0);
+
+    const std::string dir = "navcache_test_tmp";
+    const std::uint32_t seed = 9001u;
+    const std::string path = dir + "/" + nav_cache_name(0, FloorKind::Residential, seed);
+    std::remove(path.c_str()); // start from a guaranteed miss
+
+    stream.set_nav_cache_dir(dir);
+    stream.add_module(reg, /*number=*/0, FloorKind::Residential, seed);
+
+    // First load: cache miss -> bakes and writes the file. The written file
+    // reloads identically to the resident nav.
+    NpcId playerId = kInvalidNpc;
+    LoadResult r = stream.ensure_loaded(stack, reg, ecs, pool, 0, playerId);
+    CHECK(r.layer != kInvalidLayer);
+    const FloorNav* fn = stream.nav_at(reg, 0);
+    CHECK(fn != nullptr);
+    CoarseGraph gchk{};
+    FineNav fchk;
+    CHECK(load_nav_cache(path, 0, FloorKind::Residential, seed, gchk, fchk));
+    CHECK(std::memcmp(&fn->coarse, &gchk, sizeof(CoarseGraph)) == 0);
+
+    stream.unload(stack, reg, ecs, pool, 0);
+
+    // Doctor the on-disk cache with an impossible sentinel (adjacent connected
+    // nodes are a small multiple of 32 apart, never 0x0BAD) and save it back under
+    // the same key. If the next load reads the cache the sentinel survives; if it
+    // re-baked, dist[0][1] would be its true small value instead.
+    CoarseGraph gdoc = gchk;
+    FineNav fdoc = fchk;
+    const Dist sentinel = 0x0BAD;
+    gdoc.dist[0][1] = sentinel;
+    CHECK(save_nav_cache(path, 0, FloorKind::Residential, seed, gdoc, fdoc));
+
+    LoadResult r2 = stream.ensure_loaded(stack, reg, ecs, pool, 0, playerId);
+    CHECK(r2.layer != kInvalidLayer);
+    const FloorNav* fn2 = stream.nav_at(reg, 0);
+    CHECK(fn2 != nullptr);
+    CHECK(fn2->coarse.dist[0][1] == sentinel); // came from disk, not a re-bake
+
+    std::remove(path.c_str());
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -908,6 +1134,10 @@ int main() {
     test_floor_travel();
     test_nav_realfloor();
     test_nav_fine_realfloor();
+    test_route_realfloor();
+    test_streamed_nav();
+    test_nav_cache_roundtrip();
+    test_streamed_nav_cache();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

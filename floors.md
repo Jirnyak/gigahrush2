@@ -53,7 +53,8 @@ elevator target (floor number)  ──►  FloorRegistry  ──►  ModuleId  �
 - Floors occupy an array indexed roughly **−127 … 127**, **sparsely populated** —
   not every slot is filled; modules load/unload on demand.
 - Game starts at floor **0**. Adjacent travel (`±1`) via elevators reaches −1 /
-  +1. See [elevators.md](elevators.md) for the `8×8` fast-travel grid.
+  +1. See [elevators.md](elevators.md) for the `4×4×4` = 64-node fast-travel
+  lattice (which doubles as the [nav.md](nav.md) coarse graph).
 - W does not wrap ([world.md](world.md)); floors have a genuine top and bottom.
 
 ## Global vs. local — the rule-set boundary
@@ -117,7 +118,10 @@ in the `NpcPool` ([npcs.md](npcs.md)).
   into it; and the crowd is embodied. Records already embodied elsewhere (e.g. the
   player standing on another floor) are **skipped**, so nobody is duplicated. The
   first ever load — before any player exists — designates the module's candidate
-  as the player.
+  as the player. Right after the geometry is built, the floor's **navigation is
+  baked** into a per-module `FloorNav` (coarse graph + flow fields, freed on
+  unload, retrieved via `nav_at`), with an opt-in disk cache — see [nav.md](nav.md).
+  This is the one place the full nav bake runs.
 - **Leave** (`unload` / `keep_only`): every embodied body on the floor is
   `fold_back`'d into its cold record (position/state deltas persist), the layer is
   freed, and the slot returns to the free-list. An invalid handle (a body the
@@ -148,8 +152,9 @@ the real-time engine runs: ~16k embodied **agents on the CPU**, every cellular
 ## Open questions (resolve when implementing)
 
 - Serialization of the number→module mapping (and the cold pool) across saves.
-- Larger `keepRadius` and the 8×8 fast-travel grid ([elevators.md](elevators.md)):
-  multiple live floors at once, and pre-warming likely destinations.
+- Larger `keepRadius` and the 4×4×4 fast-travel lattice
+  ([elevators.md](elevators.md)): multiple live floors at once, and pre-warming
+  likely destinations.
 - Migrating the fixed-range roster to a per-floor bucket index (see the caveat
   above) so mid-transition / migrated entities are captured.
 
@@ -157,5 +162,5 @@ the real-time engine runs: ~16k embodied **agents on the CPU**, every cellular
 
 Built on [world.md](world.md); consumes global [monsters.md](monsters.md) /
 [items.md](items.md) / [macrosim.md](macrosim.md); reached via
-[elevators.md](elevators.md); may install [gravity.md](gravity.md) /
-[fields.md](fields.md) overrides.
+[elevators.md](elevators.md); bakes [nav.md](nav.md) on load; may install
+[gravity.md](gravity.md) / [fields.md](fields.md) overrides.

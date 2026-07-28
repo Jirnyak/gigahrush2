@@ -35,6 +35,8 @@ built.
 | Controller | [controller.md](controller.md) | Input intent → velocity, walk vs. fly | built |
 | Camera | [camera.md](camera.md) | View/proj derived from the `CameraTag` entity | built |
 | Fluid | [fluid.md](fluid.md) | Deterministic mass-conserving cellular liquid | built |
+| Diffusion | [diffusion.md](diffusion.md) | Danger/scent field — spreads & fades, flee gradient | built |
+| Navigation | [nav.md](nav.md) | Baked 4×4×4 lattice, coarse graph + 64 flow fields, `route_step`, disk cache | built (no consumer yet) |
 | Rendering | [render.md](render.md) | Vulkan backend modules + instanced cube pass | built |
 | Performance | [performance.md](performance.md) | Resource model, dense-over-sparse, bake-at-load, O(n) tick | principle |
 | Worldgen | [worldgen.md](worldgen.md) | Demo world modules: 3D maze + toroidal floor stack | built |
@@ -100,11 +102,13 @@ the pause menu (Resume / Quit).
 ## Layout
 
 ```
-src/core     dependency-free math + toroidal wrap helpers
-src/world    macro grid, sub-voxel masks, typed fields, gravity, level stack
+src/core     dependency-free math + toroidal wrap helpers + bake-time job system
+src/world    macro grid, sub-voxel masks, typed fields, gravity, level stack,
+             the 4×4×4 nav lattice + baked navigation (nav)
 src/ecs      universal components + EnTT registry alias
-src/sim      physics, controller, camera, fluid systems
-src/game     game layer: NPC pool + embodiment, floor modules, streaming, elevator
+src/sim      physics, controller, camera, fluid, diffusion (danger/scent) systems
+src/game     game layer: NPC pool + embodiment, floor modules, streaming, elevator,
+             nav disk cache
 src/render   Vulkan device/swapchain/renderer, cube pass + NPC body pass, ImGui layer
 src/input    SDL3 -> ECS input bridge
 src/app      window + main loop + demo worldgen

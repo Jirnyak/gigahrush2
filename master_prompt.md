@@ -20,12 +20,19 @@ destination on demand and folds the floor left behind — the owner saw distinct
 floors swap in with their crowds, no duplicate player); `Esc` opens the pause
 menu.
 
-**Since then (headless, `ctest`-green, NOT yet visible in-game):** the whole
-**navigation bake** landed — the fixed 4×4×4 lattice, the L1 coarse graph, and
-the L2 flow fields (§7 #11, increments **A/B/C**). It is built and tested but
-**deliberately wired to no consumer** (movement AI is #12), so the running game
-looks unchanged and NPCs still stand still. Shipped on branch `nav-lattice-bake`,
-open for review as **PR #1 → main**.
+**Since then (headless, `ctest`-green):** the whole **navigation + flee stack**
+landed. **PR #1** merged the bake foundation to `main` — the fixed 4×4×4 lattice,
+the L1 coarse graph, and the L2 flow fields (§7 #11, increments **A/B/C**). On top
+of that, three more increments shipped **directly on `main`** (2026-07-28):
+**C.2** — the nearest-node field + the O(1) `route_step(coarse, fine, from, to)`
+routing API; **C.2b** — the bake wired into `FloorStreamer::ensure_loaded` (every
+live floor now bakes its `FloorNav` on load) + an opt-in disk cache; and
+**increment D** — `src/sim/diffusion` (the diffusion danger/scent field +
+`diffusion_gradient` flee vector). All built and tested. There is still **no
+runtime consumer** — the movement AI that calls `route_step` / `diffusion_gradient`
+is **#12** — so the running game looks unchanged and NPCs still stand still: the
+nav + flee fields are *ready*, not *visible*. New system docs: **[nav.md](nav.md)**,
+**[diffusion.md](diffusion.md)**.
 
 ---
 
@@ -203,9 +210,9 @@ src/world    macro grid + 8³ sub-voxel masks, typed fields, vector gravity,
              LevelStack (W), world types/constants (types.h), the 4×4×4
              nav lattice (lattice.h) + baked nav (nav.{h,cpp})        [giga_core]
 src/ecs      universal POD components (components.h) + EnTT alias      [giga_core]
-src/sim      physics, controller, camera, fluid  (*_step free fns)    [giga_core]
+src/sim      physics, controller, camera, fluid, diffusion (*_step fns) [giga_core]
 src/game     GAME LAYER — NpcPool, inventory, event_bus, embody,
-             floor_spec, floor_registry, floor_gen, floor_stream,
+             floor_spec, floor_registry, floor_gen, floor_stream, nav_cache,
              population, elevator                                      [giga_game]
 src/render   Vulkan device/swapchain/renderer, cube_pass (world),
              body_pass (NPCs), imgui_layer                             [render]
@@ -244,7 +251,9 @@ tests        world_test (core), game_test (game layer) — both headless;
   menu** overlay, and event handling incl. `[` / `]` (via `streamer.travel`) and
   `Esc` (toggles pause + frees the cursor).
 
-**Core nav / bake files (new — the §7 #11 bake, `giga_core`, no consumer yet):**
+**Core nav / bake + field files (§7 #11 bake + increment D; `giga_core` except
+`nav_cache`; baked into streaming, but the runtime consumer is #12 — see
+[nav.md](nav.md) / [diffusion.md](diffusion.md)):**
 
 - `core/jobs.h` — header-only `parallel_for(n, body, threads=0)`, the bake-time
   job system. Parallelize **across** independent units (never inside one BFS);
@@ -258,7 +267,20 @@ tests        world_test (core), game_test (game layer) — both headless;
   64 parallel wrapped BFS → Floyd-Warshall all-pairs `dist` + `next` (O(1) query
   `coarse_next(g, from, to)`). `bake_fine(grid, FineNav&)` = 64 flow fields
   (128 MiB; `FineNav::at(node,x,y,z)` → a step direction `0..5` into `kNavDir`, or
-  `kFlowArrived` / `kFlowNone`). Bake-time only; **not wired into `ensure_loaded`**.
+  `kFlowArrived` / `kFlowNone`) **plus a 2 MiB nearest-node field** (`nearest_node`,
+  one multi-source BFS = geodesic Voronoi anchor per cell). `route_step(coarse,
+  fine, from, to)` is the O(1)/tick entry from ANY cell: target's nearest anchor →
+  coarse reachability guard → descend that anchor's flow field. **Wired into
+  `FloorStreamer::ensure_loaded`** (C.2b): each live floor holds a `FloorNav`
+  (`nav_at(number)`), baked on load and freed on unload, with an opt-in disk cache
+  (`set_nav_cache_dir`, `game/nav_cache.{h,cpp}`, keyed on `(number,kind,seed)`).
+- `sim/diffusion.{h,cpp}` — the diffusion danger/scent field (increment D).
+  `diffusion_step(world, params)` = double-buffered toroidal heat-equation relax +
+  evaporate over a named `float` field (default `"danger"`), no-flux at walls;
+  stable at `rate·6 ≤ 1` (default 0.15). `diffusion_gradient(f, grid, x,y,z)` =
+  the flee vector (agents flee along −gradient). Runs on the macro tick, not the
+  120 Hz tick. The flee/scent input to #12, distinct from nav and from
+  `FloorSpec.hostility`. See [diffusion.md](diffusion.md).
 
 **Key components** (`ecs/components.h`, all POD): `Transform{vec3 pos; LayerId
 layer}`, `Velocity`, `AABB{half}`, `GravityAffected{scale,grounded}`,
@@ -340,8 +362,11 @@ cellular fluid, Vulkan renderer (instanced cube pass + ImGui), demo worldgen
   through the menu. The single-button layout is deliberately extensible for future
   items (settings, save/load, character sheet).
 
-**Navigation bake — built (headless, `ctest`-green; the §7 #11 increments
-A/B/C; NOT wired to an in-game consumer — nothing visible changed yet):**
+**Navigation + flee stack — built (headless, `ctest`-green; §7 #11 increments
+A/B/C/C.2/C.2b + increment D; full docs [nav.md](nav.md) / [diffusion.md](diffusion.md)).
+The nav is now baked into floor streaming, but no runtime consumer steers by it
+yet (movement AI is #12), so nothing visible changed — the fields are *ready*, not
+*visible*:**
 
 - **A — L0 carve.** `src/world/lattice.h` (the fixed 4×4×4 lattice) + `floor_gen`
   now carves the 64 nodes (shaft through the full height — Z wraps, so top links
@@ -356,8 +381,27 @@ A/B/C; NOT wired to an in-game consumer — nothing visible changed yet):**
   `Threads::Threads` is now a `giga_core` dependency.
 - **C — L2 flow fields.** `bake_fine` / `FineNav`: 64 dense flow fields, 1 B/cell
   = the step direction toward each node (**128 MiB/floor**). The field is a BFS
-  parent chain, so descent strictly shortens and always arrives. Route (once #12
-  consumes it) = coarse `next`-hop → descend that node's field, O(1)/tick.
+  parent chain, so descent strictly shortens and always arrives.
+- **C.2 — routing glue.** `bake_fine` also paints a **nearest-node field**
+  (`uint16 nearest[128³]`, +2 MiB — a geodesic Voronoi anchor per open cell,
+  `FineNav::nearest_node`), and **`route_step(coarse, fine, from, to)`** composes
+  the two layers into the O(1)/tick entry from ANY cell (target's nearest anchor →
+  coarse reachability guard → follow `next`-hop / descend that anchor's flow
+  field; returns a `kNavDir` byte, `kFlowArrived`, or `kFlowNone`). L2 is now
+  ≈ **130 MiB/floor**. Details: [nav.md](nav.md).
+- **C.2b — wired into streaming + disk cache.** `FloorStreamer::ensure_loaded`
+  now bakes a per-module `FloorNav{CoarseGraph, FineNav}` right after
+  `generate_floor` (heap-held `unique_ptr`, freed on `unload`, retrieved via
+  `nav_at(reg, number)`). **Opt-in** disk memoization — `set_nav_cache_dir(dir)`
+  (empty = off, the default) + `game/nav_cache.{h,cpp}` (versioned blob keyed on
+  `(number, kind, seed)`, `-fno-exceptions`-clean) — skips the re-bake on
+  re-entry. This is the reference's impossible-in-a-browser optimization.
+- **D — diffusion danger/scent field.** `src/sim/diffusion.{h,cpp}`:
+  `diffusion_step` (double-buffered, toroidal, **no-flux walls**, evaporating;
+  explicit-stable at `rate·6 ≤ 1`, default 0.15) + `diffusion_gradient` (the
+  per-cell flee vector — agents flee along −gradient). The flee/scent field #12
+  steers by; deliberately **not** pathfinding and distinct from the authored
+  `FloorSpec.hostility` rating. Details: [diffusion.md](diffusion.md).
 - **Honest crowd bench** (`tests/sim_bench.cpp`) — see §8; it's what motivated the
   job system (the agent tick must be threaded to fit 16k/floor in budget).
 - **Connectivity caveat (honest, documented).** The carve guarantees **vertical**
@@ -372,10 +416,17 @@ A/B/C; NOT wired to an in-game consumer — nothing visible changed yet):**
 relationships, design flag, event bus (transient/overflow/log), attribute block,
 height→body, embody/foldback, player-is-a-record, population seed, floor_spec,
 seed_from_spec, floor_registry, floor_gen, elevator, floor_stream, floor_travel,
-**nav coarse + fine on a real floor** (full connectivity; every node routes home
-without crossing solid; determinism). `world_test` covers the core, **plus
-`parallel_for`, the all-air coarse no-seam bake, and the all-air fine flow-field
-bake** (follow == exact wrapped-Manhattan; bit-identical re-bake = determinism).
+**nav coarse + fine on a real floor** (`test_nav_realfloor` / `test_nav_fine_realfloor`
+— full connectivity; every node routes home without crossing solid; determinism),
+**routing** (`test_route_realfloor` — `route_step` reaches iff coarse-reachable),
+and **streaming + disk cache** (`test_streamed_nav`, `test_nav_cache_roundtrip`,
+`test_streamed_nav_cache` — bake-on-load is bit-identical to standalone, freed on
+unload, cache round-trips + rejects wrong seed/kind, read path proven by a
+sentinel). `world_test` covers the core, **plus `test_parallel_for`, the all-air
+coarse no-seam bake (`test_nav_coarse`), the all-air fine flow-field bake
+(`test_nav_fine`)** (follow == exact wrapped-Manhattan; bit-identical re-bake =
+determinism), **and the diffusion field (`test_diffusion`** — symmetric spread,
+torus periodicity, wall block, flee-gradient sign, determinism, monotone decay).
 
 ---
 
@@ -384,8 +435,8 @@ bake** (follow == exact wrapped-Manhattan; bit-identical re-bake = determinism).
 Work **one verified increment per turn, build green, stop green with a plan**
 (§9). Order below is the intended sequence, but note the owner pulled the **nav
 bake (#11 A/B/C) forward** ahead of #10 — that core is now built (§6). So the
-open work is: **#10** macro tick, **#11 C.2** (the nav glue + wiring into
-streaming), **#12** movement AI (now unblocked by the flow fields), then content
+open work is: **#10** macro tick, **#12** movement AI (now unblocked — the flow
+fields, `route_step`, and the diffusion flee field are all built), then content
 **#13**. The floor-module epic (#6–#9) is **done**.
 
 ### #10 — Macro tick skeleton
@@ -402,18 +453,19 @@ a maintained **per-floor bucket index** over `pool.floor(id)`, so a floor
 re-embodies whoever is *currently* labelled with its number — otherwise migration
 (which moves records between floors) is invisible to streaming.
 
-### #11 — Baked nav / flow / distance fields (`src/world/nav`) — A/B/C BUILT 2026-07-28 (headless green)
-The core is **done**: L0 carve (A), L1 coarse graph + core job system (B), L2
-flow fields (C) — all built and `ctest`-green (§6), all **bake-time-only with no
-consumer wired**. **What remains before #12 can eat it:**
-- **C.2 (near-term):** a *nearest-node field* (per cell: closest lattice node +
-  the flow toward it) so an agent enters the route from **any** cell, and a route
-  API `route_step(coarse, fine, fromCell, toCell)` = nearest node to the target →
-  `coarse_next` chain → descend that node's `FineNav`.
-- **Wiring:** call the bake from `FloorStreamer::ensure_loaded` (freeze → bake →
-  resume), with **disk memoization** — geometry is a pure `fn(seed, number)` so
-  the bake is too; skip re-bake on re-entry.
-- **Dirty local re-bake:** the cheap in-play patch for destructibility (below).
+### #11 — Baked nav / flow / distance fields (`src/world/nav`) — A→D BUILT 2026-07-28 (headless green)
+The stack is **done**: L0 carve (A), L1 coarse graph + core job system (B), L2
+flow fields (C), the nearest-node field + `route_step` (C.2), the wiring into
+streaming + disk cache (C.2b), and the diffusion flee/scent field (D) — all built
+and `ctest`-green (§6; docs [nav.md](nav.md) / [diffusion.md](diffusion.md)). The
+nav is now **fully consumable**: a live floor bakes its `FloorNav` on load and #12
+can call `route_step` from any cell + read `diffusion_gradient`. **What remains:**
+- **C.2 / C.2b (DONE 2026-07-28):** ✔ nearest-node field (geodesic Voronoi anchor
+  per cell) + `route_step(coarse, fine, from, to)`; ✔ bake wired into
+  `FloorStreamer::ensure_loaded` (freeze → bake → resume), per-floor `FloorNav`
+  freed on unload, opt-in disk memoization keyed on `(number,kind,seed)`.
+- **Dirty local re-bake:** the cheap in-play patch for destructibility (below) —
+  still the one unbuilt piece of the bake story.
 
 Design rules below stay authoritative; the full built API is captured in agent
 memory `torus-nav-baking`. **Original design (owner + reference-audit):**
@@ -425,7 +477,7 @@ memory `torus-nav-baking`. **Original design (owner + reference-audit):**
   never re-bake structure per tick (bake at boundaries, hysteresis at the
   consumer); the toroidal `wrap_delta` heuristic is for A\* ordering **only**,
   never as a path metric (it lies at the antipode).
-- **Layers (L0/L1/L2 all BUILT — §6; the nearest-node field is C.2, still to do).**
+- **Layers (L0/L1/L2 + the nearest-node field all BUILT — §6; C.2/C.2b done).**
   L0 geometry = carve the 64 nodes + their real connectivity. L1 coarse = 64-node
   all-pairs next-hop, edge weights from real wrapped BFS through geometry. L2 fine
   = **64 flow fields** (one per node, 1 B/cell, dist fits `uint8` since max 6-conn
@@ -433,7 +485,9 @@ memory `torus-nav-baking`. **Original design (owner + reference-audit):**
   descend that node's flow field. This is the reference's
   wished-for "64-anchor flow field" it couldn't afford in a 536 MB browser — we
   can (infinite RAM). Flee/scent = a **diffusion field** on the macro tick (like
-  `src/sim/fluid`, periodic on the torus), not pathfinding.
+  `src/sim/fluid`, periodic on the torus), not pathfinding — **BUILT 2026-07-28**
+  as `src/sim/diffusion.{h,cpp}` (increment D): `diffusion_step` (double-buffered,
+  toroidal, no-flux walls, evaporating) + `diffusion_gradient` (the flee vector).
 - **Multithreaded bake** (owner's golden rule, sharpened 2026-07-28 — **two
   regimes, don't conflate**): baking happens **only at loads** (every floor
   transition/elevator is a load-on-demand; the post-`samosbor` stitch; initial
@@ -446,9 +500,9 @@ memory `torus-nav-baking`. **Original design (owner + reference-audit):**
   exactly one thread). Geometry is a pure `fn(seed, number)`, so the whole bake is
   **memoizable to disk** (unlimited) and skipped on re-entry — something the
   browser reference could never do.
-- **Bake boundaries (two regimes)** *(design target — the call site is the "Wiring"
-  item above, not yet in `ensure_loaded`):* the **full** bake runs only at floor
-  load (`FloorStreamer::ensure_loaded`) and the post-`samosbor` stitch. Between them,
+- **Bake boundaries (two regimes)** *(the full bake is now wired into
+  `ensure_loaded` — C.2b):* the **full** bake runs only at floor load
+  (`FloorStreamer::ensure_loaded`) and the post-`samosbor` stitch. Between them,
   in-play destructibility gets a **dirty local re-bake** — patch only the mutated
   region, cheap and approximate, no freeze; accept-stale at the edges until the
   next full bake makes it exact ([performance.md](performance.md) §Two regimes).
@@ -567,6 +621,7 @@ A separate persistent memory tracks the same project state for the assistant, at
 `floor-module-architecture.md` (incl. the V-shape danger formulas + elevator note),
 `population-roadmap.md` (the #6–#13 ledger), `player-is-alife-record.md`,
 `build-constraints.md`, `torus-nav-baking.md` (the full nav-bake design + the
-built L0/L1/L2 API + the connectivity caveat). If you are a fresh agent without
-that memory, **this file plus AGENTS.md + ARCHITECTURE.md are sufficient** to
-continue.
+built L0/L1/L2 + C.2/C.2b API, the diffusion field, and the connectivity caveat).
+If you are a fresh agent without that memory, **this file plus AGENTS.md +
+ARCHITECTURE.md are sufficient** to continue — and for the two newest subsystems,
+their own docs [nav.md](nav.md) and [diffusion.md](diffusion.md).
