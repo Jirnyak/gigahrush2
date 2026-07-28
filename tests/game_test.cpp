@@ -55,6 +55,7 @@ int g_checks = 0;
         }                                                                      \
     } while (0)
 
+#include "suite_samosbor.inl"
 static void test_inventory() {
     // Compile-time layout contract: a static_assert, not a CHECK. It is a fact
     // about the type, so it belongs to the build, not to a test run.
@@ -2391,6 +2392,7 @@ int main() {
     test_extraction();
     test_extraction_reachable();
     test_mob_behaviour();
+    test_samosbor_all();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
