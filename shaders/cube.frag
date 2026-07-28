@@ -353,6 +353,16 @@ void main() {
     // world coordinates that are NOT the face normal are already a correct,
     // seamless, non-stretching parameterisation. No UV attribute needed, and it
     // stays continuous across neighbouring cells because it is world-space.
+    //
+    // WORLD-space is load-bearing, not incidental, and this is the line that makes
+    // run merging possible at all. The world pass emits one stretched box per merged
+    // run of cells (render/cube_merge.h), so a single primitive can be twenty cells
+    // long. Because uv is derived from vWorldPos it sweeps twenty cells' worth of
+    // pattern and the parquet planks and tread-plate lozenges keep their real pitch;
+    // re-express this in the cube-local [0,1] corner — the obvious "optimisation",
+    // since inPos is right there in the vertex stage — and every merged box smears
+    // its texture along the run. There is no per-instance scale left to correct for
+    // it with: those four bytes are now the span.
     vec3 aw = abs(n);
     vec2 uv = aw.z > 0.5 ? vWorldPos.xy
             : (aw.x > 0.5 ? vWorldPos.yz : vWorldPos.xz);

@@ -1,24 +1,31 @@
-// The world renderer: draws visible macro cells as instanced cubes.
+// The world renderer: draws visible macro cells as instanced stretched boxes.
 //
 // This is the concrete "we can actually see the world" pass. It walks the macro
-// grid, emits one cube instance per visible-surface cell whose colour comes from
-// its cell type (and, if present, its fluid field), and issues a single instanced
-// draw. The cube mesh is static device-local geometry; the per-instance data is a
-// persistently-mapped host-visible buffer (double-buffered so we never stomp a
-// frame still in flight).
+// grid, merges adjacent cells that agree on everything the shader can observe into
+// single stretched boxes, and issues a single instanced draw. The cube mesh is
+// static device-local geometry; the per-instance data is a persistently-mapped
+// host-visible buffer (double-buffered so we never stomp a frame still in flight).
 //
 // The instance list is CACHED, not rebuilt per frame — the grid only changes when
 // a floor is generated/streamed or fluid moves, so rebuilding it every frame was
 // spending 28.6 ms of a 43.6 ms frame scanning 2,097,152 cells that had not
 // changed. Callers must invalidate() when the world mutates.
 //
-// Surface culling (skipping cells fully surrounded by solid neighbours) keeps
-// the instance count proportional to visible surface area, not world volume.
+// Two things keep the instance count down, and they compose:
+//   - surface culling: cells fully surrounded by solid neighbours are skipped, so
+//     the count follows visible surface area rather than world volume;
+//   - RUN MERGING: adjacent surface cells sharing a material, a colour and an
+//     ambient-occlusion neighbourhood collapse into one box (render/cube_merge.h).
+//     This pass is geometry-bound — measured, deleting the whole procedural surface
+//     layer from cube.frag moved it +0.05 ms, i.e. upwards inside the noise — so
+//     vertices are the only thing worth cutting, and a 40-cell wall was 40 boxes.
 #pragma once
 
 #include <vulkan/vulkan.h>
 
+#include <cstddef>
 #include <cstdint>
+#include <vector>
 
 #include "core/math.h"
 #include "render/vk_buffer.h"
@@ -34,17 +41,42 @@ struct VulkanDevice;
 
 // Matches the per-instance vertex attributes in cube.vert.
 struct CubeInstance {
+    // Absolute grid position of the box's MINIMUM corner. Absolute, not
+    // camera-relative: the nearest-toroidal-image shift happens per-vertex in
+    // cube.vert, which is what makes this buffer cacheable across frames. A box
+    // whose run crosses the wrap legitimately extends past kWorldExtent.
     vec3 origin;
-    float scale;
+    // Extent in CELLS along x, y, z. {1,1,1} is a single cell; a merged run has
+    // exactly one entry > 1 (see render/cube_merge.h). The fourth byte is the
+    // remainder of what used to be a `float scale` written unconditionally as
+    // kCellSize by every instance ever emitted — four bytes of per-instance
+    // constant, which is exactly the lane a merged pass needed and the reason the
+    // merge cost zero extra bytes per instance. Uploaded as
+    // VK_FORMAT_R8G8B8A8_UINT and read as a uvec4; cube.vert multiplies by
+    // kCellSize itself, the same 2.0 m that cube.frag already hardcodes to
+    // normalise its world-space uv.
+    //
+    // uint8 caps a run at 255 cells against a 128-cell grid, so the type is not
+    // the binding constraint — cube_merge.h kMaxRunCells is, and it is a toroidal
+    // seam budget rather than a storage limit.
+    std::uint8_t span[3];
+    std::uint8_t spanW;
     vec3 color;
     // Two things in one uint32, because there was no room for a second.
     //
-    //   bits 0..26  ambient-occlusion input: the occupancy mask of this cell's own
+    //   bits 0..26  ambient-occlusion input: the occupancy mask of this box's
     //               3x3x3 neighbourhood, bit ((dz+1)*9 + (dy+1)*3 + (dx+1)) set when
     //               that neighbour is solid. Bit 13 is the centre — this cell — and
     //               is neither written nor read.
     //   bits 27..31 the MATERIAL ID (world/materials.h), for the per-material
     //               surface families in cube.frag.
+    //
+    // Only the 20 bits corner_ao() in cube.vert can actually READ are written; the
+    // six single-axis face offsets are masked off, because no shader looks at them
+    // and a merged box has no single honest value for them (see kAoReadBits in
+    // render/cube_merge.h). For a merged run every cell agrees on all 20 by
+    // construction, so the word means the same thing for a 1-cell box and a 7-cell
+    // one — which is the property that lets a stretched box keep exact AO.
     //
     // The material id is free. `occ` needs 27 bits and a uint32 has 32, so the top
     // five were already being paid for and thrown away; five bits hold 0..31 against
@@ -62,12 +94,15 @@ struct CubeInstance {
 };
 static_assert(sizeof(CubeInstance) == 32,
               "AO plus the material id must cost exactly one uint32 between them");
-// `scale` is written unconditionally as kCellSize by build_instances and nothing
-// varies it, so 4 of these 32 bytes are a per-instance constant — about 2.7 MB of a
-// 22 MB instance buffer at 717 k instances. Left alone on purpose: it is the lane a
-// merged-cluster / LOD pass would need first, and reclaiming it now would buy
-// bandwidth nothing is currently short of. Noted so the next person looking for a
-// spare lane finds this one before inventing a seventh attribute.
+static_assert(offsetof(CubeInstance, spanW) == offsetof(CubeInstance, span) + 3,
+              "the span bytes must be contiguous: one R8G8B8A8_UINT attribute "
+              "covers all four");
+// The spare lane is now SPENT. `span` reclaimed the four bytes the old `float scale`
+// wasted on a per-instance constant, so there is no longer a free attribute lane
+// here: the next thing that needs per-instance data must either shrink `color` (a
+// display-referred albedo would survive R8G8B8A8_UNORM at a cost of one LSB) or grow
+// CubeInstance past 32 bytes and pay the bandwidth. `spanW` is the only slack left —
+// one byte, currently zero.
 
 // Push-constant block shared by cube.vert / cube.frag / body.vert. All three
 // declare it identically; body_pass reuses cube.frag, so the block and the
@@ -136,7 +171,37 @@ private:
     bool dirty_[kMaxFramesInFlight] = {};
     const World* cachedWorld_ = nullptr;
 
-    // Fill one instance buffer from `world`. Returns the instance count.
+    // Per-cell classification: the surface flag plus the AO bits plus the material
+    // id, one uint32 per macro cell (8 MB). Allocated once in init(), never in a
+    // frame. It exists because run merging PROBES neighbours — up to three axes by
+    // kMaxRunCells steps per emitted box — and recomputing a 3x3x3 occupancy mask
+    // per probe means re-reading 26 x 64-byte SubMasks out of a 134 MB array. With
+    // the classification precomputed, the whole 128^3 neighbourhood question is
+    // answered from an array that streams, and the merge is cheaper than the scan it
+    // replaced rather than three times its cost.
+    //
+    // Shared across frame slots and rebuilt only on invalidate(), so the SECOND
+    // frame slot's refill is merge-plus-write and skips the grid sweep entirely.
+    // That is what keeps an elevator ride from paying the whole cost twice.
+    std::vector<std::uint32_t> cellClass_;
+    bool classValid_ = false;
+    // Run-merge scratch: one bit per cell marking cells already swallowed by an
+    // earlier run. Needed because runs may go along y or z while the scan walks x.
+    std::vector<std::uint64_t> claimed_;
+
+    // Longest run the merge may emit, in cells. Defaults to cube_merge.h
+    // kMaxRunCells; overridable once at init from GIGA_CUBE_MAXRUN so the merged and
+    // unmerged paths can be A/B measured in the SAME binary. Setting it to 1 makes
+    // this pass emit exactly one unit cube per surface cell, i.e. the pre-merge
+    // renderer, which is the only honest way to compare a GPU time against it
+    // without a second build in the comparison.
+    int maxRun_ = 0;
+
+    // Recompute cellClass_ from `world`. One sequential sweep of the sub-voxel
+    // masks into two 256 KB occupancy bitmaps, then one sweep turning those into
+    // per-cell AO masks.
+    void classify(const World& world);
+    // Fill one instance buffer from cellClass_. Returns the instance count.
     std::uint32_t build_instances(std::uint32_t frameIndex, const World& world);
 
     bool create_pipeline(VkRenderPass renderPass, const char* shaderDir);

@@ -1,9 +1,12 @@
 #include "render/cube_pass.h"
 
+#include "render/cube_merge.h"
 #include "render/vk_common.h"
 #include "render/vk_device.h"
 
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -105,7 +108,10 @@ vec3 type_color(CellType t) {
 // matters: extend materials.h past 32 ids and the build stops here rather than
 // wrapping the id into the AO mask, which would corrupt the occlusion of every cell
 // of the new material and look like an unrelated shading bug.
-constexpr int kMatIdShift = 27;
+//
+// The shift itself now lives in render/cube_merge.h, because the merge has to know
+// which bits are the material id in order to refuse to merge across one. Kept
+// visible under the old name here so the reference in cube.vert still resolves.
 static_assert(kMatCount <= (1u << (32 - kMatIdShift)),
               "material ids no longer fit in the spare high bits of CubeInstance::occ "
               "— widen the field or add an attribute, do not let it wrap into the AO "
@@ -118,36 +124,79 @@ std::uint32_t surface_id(CellType t) {
     return t < kMatCount ? static_cast<std::uint32_t>(t) : 0u;
 }
 
-// A cell is a surface cell (worth drawing) if it is non-empty and at least one
-// of its six neighbours is not fully solid. Fully-buried cells are skipped.
-// The 3x3x3 occupancy mask this cell's AO is derived from. 26 neighbour reads —
-// paid once per cell per cache rebuild, i.e. on a floor change, not per frame.
+// --- occupancy bitmaps -----------------------------------------------------
+// One bit per macro cell, 256 KB each, for "fully solid" and "not empty".
 //
-// `full()` and not `empty()`: a half-carved cell reads as NOT an occluder, which is
-// the conservative choice. Over-occluding a doorway would put a dark smudge in the
-// one place the player is trying to walk through.
+// Why they exist rather than reading SubMask directly, which is what this pass did
+// before: a SubMask is 64 bytes, so a 3x3x3 neighbourhood question touches 27 cache
+// lines scattered over a 134 MB array, and run merging asks that question several
+// times per cell because it probes along three axes. Packed to bits the whole 128^3
+// occupancy field is 256 KB, fits in L2, and the probes are free. The masks are read
+// exactly once, sequentially, which is also the fastest way to read 134 MB.
 //
-// Every read goes through MacroGrid::mask, which wraps all three coordinates — so
-// AO is continuous across the torus seam for free, with nothing to special-case.
-std::uint32_t occupancy_mask(const MacroGrid& g, int x, int y, int z) {
+// `full()` and not `empty()` for the occluder test: a half-carved cell reads as NOT
+// an occluder, which is the conservative choice. Over-occluding a doorway would put
+// a dark smudge in the one place the player is trying to walk through.
+struct OccBits {
+    std::vector<std::uint64_t> full;     // mask(x,y,z).full()
+    std::vector<std::uint64_t> nonEmpty; // !mask(x,y,z).empty()
+
+    void resize() {
+        full.assign(kClaimWords, 0);
+        nonEmpty.assign(kClaimWords, 0);
+    }
+    static bool get(const std::vector<std::uint64_t>& b, std::size_t i) {
+        return (b[i >> 6] >> (i & 63)) & 1u;
+    }
+};
+
+// Wrapped flat index of the neighbour at (x+dx, y+dy, z+dz). Every read goes
+// through wrap_macro on all three axes — so AO is continuous across the torus seam
+// for free, with nothing to special-case.
+inline std::size_t neighbour_index(int x, int y, int z, int dx, int dy, int dz) {
+    return macro_index(wrap_macro(x + dx), wrap_macro(y + dy), wrap_macro(z + dz));
+}
+
+void build_occ_bits(const MacroGrid& g, OccBits& out) {
+    out.resize();
+    const std::vector<SubMask>& masks = g.masks();
+    for (std::size_t i = 0; i < masks.size(); ++i) {
+        const SubMask& m = masks[i];
+        const std::uint64_t bit = std::uint64_t{1} << (i & 63);
+        if (!m.empty()) {
+            out.nonEmpty[i >> 6] |= bit;
+            if (m.full()) out.full[i >> 6] |= bit;
+        }
+    }
+}
+
+// A cell is a surface cell (worth drawing) if it is non-empty and at least one of
+// its six face neighbours is not fully solid. Fully-buried cells are skipped.
+bool is_visible_surface(const OccBits& o, int x, int y, int z) {
+    if (!OccBits::get(o.nonEmpty, macro_index(x, y, z))) return false;
+    const int d[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0},
+                         {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+    for (auto& n : d)
+        if (!OccBits::get(o.full, neighbour_index(x, y, z, n[0], n[1], n[2])))
+            return true;
+    return false;
+}
+
+// The AO input for one cell: the occupancy of the 20 neighbours cube.vert's
+// corner_ao() can actually sample. The other six of the 26 — the single-axis face
+// offsets — are deliberately left clear: no shader reads them, and a merged run has
+// no single honest value for them, so writing them would be storing a number whose
+// meaning depends on which cell of the run was scanned first. See kAoReadBits.
+std::uint32_t ao_mask(const OccBits& o, int x, int y, int z) {
     std::uint32_t m = 0;
     for (int dz = -1; dz <= 1; ++dz)
         for (int dy = -1; dy <= 1; ++dy)
             for (int dx = -1; dx <= 1; ++dx) {
-                if (dx == 0 && dy == 0 && dz == 0) continue;
-                if (g.mask(x + dx, y + dy, z + dz).full())
-                    m |= 1u << ((dz + 1) * 9 + (dy + 1) * 3 + (dx + 1));
+                if ((dx != 0) + (dy != 0) + (dz != 0) < 2) continue;
+                if (OccBits::get(o.full, neighbour_index(x, y, z, dx, dy, dz)))
+                    m |= ao_bit(dx, dy, dz);
             }
     return m;
-}
-
-bool is_visible_surface(const MacroGrid& g, int x, int y, int z) {
-    if (g.mask(x, y, z).empty()) return false;
-    const int d[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0},
-                         {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
-    for (auto& n : d)
-        if (!g.mask(x + n[0], y + n[1], z + n[2]).full()) return true;
-    return false;
 }
 
 std::string join(const char* dir, const char* file) {
@@ -186,8 +235,8 @@ bool CubePass::init(VulkanDevice& dev, VkRenderPass renderPass,
     if (!create_cube_mesh()) return false;
     if (!create_pipeline(renderPass, shaderDir)) return false;
 
-    // Upper bound: one instance per macro cell. In practice surface culling
-    // keeps this far lower, but sizing for the worst case means the buffer
+    // Upper bound: one instance per macro cell. In practice surface culling and run
+    // merging keep this far lower, but sizing for the worst case means the buffer
     // never reallocates mid-run.
     instanceCapacity_ = static_cast<std::uint32_t>(kMacroCells);
     VkDeviceSize bytes = static_cast<VkDeviceSize>(instanceCapacity_)
@@ -196,6 +245,24 @@ bool CubePass::init(VulkanDevice& dev, VkRenderPass renderPass,
         if (!instances_[i].create_host_visible(
                 dev, bytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT))
             return false;
+
+    // Rebuild scratch, allocated once and never in a frame: 8 MB of per-cell
+    // classification and 256 KB of run-claim bits.
+    cellClass_.assign(kMacroCells, 0u);
+    claimed_.assign(kClaimWords, 0ull);
+    classValid_ = false;
+
+    // A/B knob, read exactly once. GIGA_CUBE_MAXRUN=1 reproduces the pre-merge
+    // renderer instance-for-instance in this same binary, which is the only way to
+    // compare two GPU timings without a rebuild between them — and a rebuild between
+    // them is precisely how a thermally-downclocked "improvement" gets published.
+    maxRun_ = kMaxRunCells;
+    if (const char* e = std::getenv("GIGA_CUBE_MAXRUN")) {
+        const int v = std::atoi(e);
+        if (v >= 1 && v <= kMacroDim) maxRun_ = v;
+        std::fprintf(stderr, "[cube] GIGA_CUBE_MAXRUN=%s -> max run %d cells\n", e,
+                     maxRun_);
+    }
     return true;
 }
 
@@ -243,7 +310,10 @@ bool CubePass::create_pipeline(VkRenderPass renderPass, const char* shaderDir) {
     attrs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(CubeVertex, pos)};
     attrs[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(CubeVertex, normal)};
     attrs[2] = {2, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(CubeInstance, origin)};
-    attrs[3] = {3, 1, VK_FORMAT_R32_SFLOAT, offsetof(CubeInstance, scale)};
+    // R8G8B8A8_UINT over the four bytes the old `float scale` occupied. Mandatory
+    // vertex-buffer format in the Vulkan spec (and a native Metal uchar4 under
+    // MoltenVK), so this needs no format-feature query.
+    attrs[3] = {3, 1, VK_FORMAT_R8G8B8A8_UINT, offsetof(CubeInstance, span)};
     attrs[4] = {4, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(CubeInstance, color)};
     attrs[5] = {5, 1, VK_FORMAT_R32_UINT, offsetof(CubeInstance, occ)};
 
@@ -335,51 +405,95 @@ bool CubePass::create_pipeline(VkRenderPass renderPass, const char* shaderDir) {
 
 void CubePass::invalidate() {
     for (int i = 0; i < kMaxFramesInFlight; ++i) dirty_[i] = true;
+    classValid_ = false;
 }
 
-// Scan the grid once and fill one frame slot's instance buffer. Origins are
-// ABSOLUTE grid positions (cell index * kCellSize, inside [0, kWorldExtent)):
-// the nearest-toroidal-image shift is done per-vertex in cube.vert against
-// push.camPos. Keeping the camera out of the instance data is precisely what
-// makes this buffer cacheable across frames.
+// Classify every macro cell once: surface flag, AO input, material id, packed into
+// one uint32 per cell. Two sequential sweeps — the sub-voxel masks into occupancy
+// bitmaps, then the bitmaps into per-cell AO — because the 134 MB mask array wants
+// to be read exactly once and in order, while the 3x3x3 neighbourhood question wants
+// its input to fit in L2.
+//
+// Shared by both frame slots, so an invalidate() pays this once no matter how many
+// buffers have to be refilled from it.
+void CubePass::classify(const World& world) {
+    const MacroGrid& g = world.grid();
+    OccBits occ;
+    build_occ_bits(g, occ);
+    const std::vector<CellType>& types = g.types();
+    for (int z = 0; z < kMacroDim; ++z)
+        for (int y = 0; y < kMacroDim; ++y)
+            for (int x = 0; x < kMacroDim; ++x) {
+                const std::size_t i = macro_index(x, y, z);
+                if (!is_visible_surface(occ, x, y, z)) {
+                    cellClass_[i] = 0;
+                    continue;
+                }
+                cellClass_[i] = kSurfaceFlag | ao_mask(occ, x, y, z)
+                              | (surface_id(types[i]) << kMatIdShift);
+            }
+    classValid_ = true;
+}
+
+// Merge runs and fill one frame slot's instance buffer. Origins are ABSOLUTE grid
+// positions (cell index * kCellSize): the nearest-toroidal-image shift is done
+// per-vertex in cube.vert against push.camPos. Keeping the camera out of the
+// instance data is precisely what makes this buffer cacheable across frames — and it
+// is also why a merged box has a single toroidal image for all its cells, which is
+// the one property of the merge that is a bounded trade-off rather than an identity
+// (see the note on kMaxRunCells in render/cube_merge.h).
 std::uint32_t CubePass::build_instances(std::uint32_t frameIndex,
                                         const World& world) {
     const MacroGrid& g = world.grid();
+    if (!classValid_) classify(world);
 
     // Fluid field is optional; if present, cells with liquid tint blue.
     const Field<float>* fluid =
         const_cast<World&>(world).fields().find<float>("fluid");
+    const float* fluidData = fluid ? fluid->data().data() : nullptr;
+    const std::vector<CellType>& types = g.types();
+
+    // The instance colour is a pure function of (cell type, fluid tint strength), so
+    // comparing those two inputs is EXACTLY equivalent to comparing the colours and
+    // needs no second cache. `tint` collapses every sub-threshold fluid amount to one
+    // value, because those all produce the identical untinted colour and refusing to
+    // merge them would cost runs for nothing.
+    auto tint = [fluidData](std::size_t i) -> float {
+        if (!fluidData) return 0.0f;
+        const float f = fluidData[i];
+        return f > 0.05f ? clamp01(f) : 0.0f;
+    };
+    auto same_colour = [&](std::size_t a, std::size_t b) {
+        return types[a] == types[b] && tint(a) == tint(b);
+    };
 
     auto* dst = static_cast<CubeInstance*>(instances_[frameIndex].mapped);
-    std::uint32_t count = 0;
-
-    for (int z = 0; z < kMacroDim && count < instanceCapacity_; ++z)
-    for (int y = 0; y < kMacroDim && count < instanceCapacity_; ++y)
-    for (int x = 0; x < kMacroDim && count < instanceCapacity_; ++x) {
-        if (!is_visible_surface(g, x, y, z)) continue;
-        const CellType type = g.cell(x, y, z);
-        vec3 col = type_color(type);
-        if (fluid) {
-            float f = fluid->at(x, y, z);
-            if (f > 0.05f) {
-                float t = clamp01(f);
-                col = vec3{lerp(col.x, 0.15f, t), lerp(col.y, 0.35f, t),
-                           lerp(col.z, 0.85f, t)};
-            }
-        }
-        dst[count].origin = vec3{static_cast<float>(x) * kCellSize,
-                                 static_cast<float>(y) * kCellSize,
-                                 static_cast<float>(z) * kCellSize};
-        dst[count].scale = kCellSize;
-        dst[count].color = col;
+    auto emit = [&](std::size_t i, int x, int y, int z,
+                    const std::uint8_t span[3]) {
+        CubeInstance& inst = *dst;
+        inst.origin = vec3{static_cast<float>(x) * kCellSize,
+                           static_cast<float>(y) * kCellSize,
+                           static_cast<float>(z) * kCellSize};
+        inst.span[0] = span[0];
+        inst.span[1] = span[1];
+        inst.span[2] = span[2];
+        inst.spanW = 0;
+        vec3 col = type_color(types[i]);
+        const float t = tint(i);
+        if (t > 0.0f)
+            col = vec3{lerp(col.x, 0.15f, t), lerp(col.y, 0.35f, t),
+                       lerp(col.z, 0.85f, t)};
+        inst.color = col;
         // The fluid tint above deliberately does NOT change the surface family: a
         // flooded parquet floor is still parquet, wet. Tint is colour, family is
-        // material.
-        dst[count].occ = occupancy_mask(g, x, y, z)
-                       | (surface_id(type) << kMatIdShift);
-        ++count;
-    }
-    return count;
+        // material. The surface flag comes off before upload — it lives on the
+        // never-read centre bit of the mask and means nothing to the shader.
+        inst.occ = cellClass_[i] & ~kSurfaceFlag;
+        ++dst;
+    };
+
+    return merge_surface_runs(cellClass_.data(), claimed_.data(), maxRun_,
+                              instanceCapacity_, same_colour, emit);
 }
 
 void CubePass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
@@ -392,7 +506,16 @@ void CubePass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
         invalidate();
     }
     if (dirty_[frameIndex]) {
+        // The rebuild is the whole cost of a floor change on this thread, and it is
+        // the number an elevator ride is judged by, so it is printed rather than left
+        // to the HUD: a --shot run has no HUD reader. Two lines per invalidate (one
+        // per frame slot), not per frame.
+        const auto t0 = std::chrono::steady_clock::now();
         lastInstanceCount_ = build_instances(frameIndex, world);
+        const auto t1 = std::chrono::steady_clock::now();
+        std::fprintf(stderr, "[cube] rebuild slot %u: %u instances in %.2f ms\n",
+                     frameIndex, lastInstanceCount_,
+                     std::chrono::duration<double, std::milli>(t1 - t0).count());
         dirty_[frameIndex] = false;
     }
 
