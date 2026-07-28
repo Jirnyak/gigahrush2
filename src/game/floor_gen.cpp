@@ -88,9 +88,87 @@ const FloorGeom& geom_for(FloorKind kind) {
     return kGeom[i];
 }
 
+// --- doorway placement ------------------------------------------------------
+// Where the opening sits inside one wall segment, in cells from the segment's
+// low corner. Range [2, stride-2], matching the original `2 + rng.below(stride-3)`
+// — far enough from both lattice crossings that the opening's jambs are real wall
+// cells and not a corner.
+//
+// A PURE HASH and deliberately not a draw from `rng`. door.cpp must enumerate
+// exactly these cells at floor load, and replaying the shared xorshift stream
+// would tie it to the order the slab / wall / rubble loops consume numbers in —
+// retune `rubblePct` and every door on every floor silently moves. See the note on
+// floor_doorways in [floor_gen.h].
+//
+// The four inputs pack into 16 bits (storey <= 31, room <= 31 each, axis <= 1), so
+// one splitmix32 finalizer over (fseed ^ key*phi) decorrelates all of them.
+int doorway_slot(std::uint32_t fseed, int storey, int rx, int ry, int axis,
+                 int stride) {
+    const std::uint32_t key = static_cast<std::uint32_t>(storey & 31) |
+                              (static_cast<std::uint32_t>(rx & 31) << 5) |
+                              (static_cast<std::uint32_t>(ry & 31) << 10) |
+                              (static_cast<std::uint32_t>(axis & 1) << 15);
+    std::uint32_t h = fseed ^ (key * 0x9E3779B9u);
+    h ^= h >> 16;
+    h *= 0x7FEB352Du;
+    h ^= h >> 15;
+    h *= 0x846CA68Bu;
+    h ^= h >> 16;
+    const int span = stride - 3;
+    return 2 + (span > 0 ? static_cast<int>(h % static_cast<unsigned>(span)) : 0);
+}
+
+// Visit every doorway of a floor: fn(cx, cy, cz, h, axis).
+//
+// ONE definition, two callers — generate_floor punches these cells and
+// floor_doorways reports them. Sharing the walk (and not just the hash) is what
+// makes "the doors are exactly where the openings are" a property of the code
+// rather than a claim about two loops that happen to look alike today.
+template <class Fn>
+void for_each_doorway(const FloorGeom& geom, std::uint32_t fseed, Fn&& fn) {
+    if (geom.pillars) return; // an open plate is already fully connected
+    const int storeys = kMacroDim / geom.storey;
+    const int roomsPerAxis = kMacroDim / geom.stride;
+    for (int f = 0; f < storeys; ++f) {
+        const int base = f * geom.storey;
+        const int z0 = base + 1;               // first air cell above the slab
+        int h = geom.doorH;
+        if (z0 + h > base + geom.storey) h = base + geom.storey - z0;
+        if (h <= 0) continue;
+        for (int rx = 0; rx < roomsPerAxis; ++rx)
+            for (int ry = 0; ry < roomsPerAxis; ++ry) {
+                // Through the wall line x == rx*stride.
+                fn(rx * geom.stride,
+                   ry * geom.stride +
+                       doorway_slot(fseed, f, rx, ry, 0, geom.stride),
+                   z0, h, 0);
+                // Through the wall line y == ry*stride.
+                fn(rx * geom.stride +
+                       doorway_slot(fseed, f, rx, ry, 1, geom.stride),
+                   ry * geom.stride, z0, h, 1);
+            }
+    }
+}
+
 } // namespace
 
 int floor_room_stride(FloorKind kind) { return geom_for(kind).stride; }
+
+std::uint32_t floor_doorways(int number, const FloorSpec& spec, unsigned seed,
+                             std::vector<Doorway>& out) {
+    std::uint32_t n = 0;
+    for_each_doorway(
+        geom_for(spec.kind), floor_seed(seed, number),
+        [&](int cx, int cy, int cz, int h, int axis) {
+            out.push_back(Doorway{static_cast<std::uint8_t>(wrap_macro(cx)),
+                                  static_cast<std::uint8_t>(wrap_macro(cy)),
+                                  static_cast<std::uint8_t>(cz),
+                                  static_cast<std::uint8_t>(h),
+                                  static_cast<std::uint8_t>(axis)});
+            ++n;
+        });
+    return n;
+}
 
 void generate_floor(World& world, int number, const FloorSpec& spec,
                     unsigned seed) {
@@ -105,7 +183,6 @@ void generate_floor(World& world, int number, const FloorSpec& spec,
     const int storey = geom.storey;
     const int stride = geom.stride;
     const int storeys = kMacroDim / storey;
-    const int roomsPerAxis = kMacroDim / stride;
 
     // 0. Clear to air. Building into a known-empty grid is what makes the result
     //    depend only on (number, kind, seed), so a recycled World regenerates
@@ -143,26 +220,6 @@ void generate_floor(World& world, int number, const FloorSpec& spec,
                     g.fill_cell(x, y, z, kWall);
                 }
 
-        // Doorways: open one gap in every wall segment between adjacent rooms so
-        // the storey is one connected apartment graph. Skipped in pillar mode —
-        // an open plate is already fully connected.
-        if (!geom.pillars) {
-            const int doorTop = base + 1 + geom.doorH;
-            for (int rx = 0; rx < roomsPerAxis; ++rx)
-                for (int ry = 0; ry < roomsPerAxis; ++ry) {
-                    // Door through the vertical wall (x == rx*stride).
-                    const int wx = rx * stride;
-                    const int dy = ry * stride + 2 + rng.below(stride - 3);
-                    for (int z = base + 1; z < doorTop && z < top; ++z)
-                        g.clear_cell(wx, dy, z);
-                    // Door through the horizontal wall (y == ry*stride).
-                    const int wy = ry * stride;
-                    const int dx = rx * stride + 2 + rng.below(stride - 3);
-                    for (int z = base + 1; z < doorTop && z < top; ++z)
-                        g.clear_cell(dx, wy, z);
-                }
-        }
-
         // Rubble: scatter debris blocks in interior air just above the slab
         // (derelict clutter / industrial machinery), never on the wall lattice.
         if (geom.rubblePct) {
@@ -174,6 +231,21 @@ void generate_floor(World& world, int number, const FloorSpec& spec,
                 }
         }
     }
+
+    // Doorways: open one gap in every wall segment between adjacent rooms so each
+    // storey is one connected apartment graph. Skipped in pillar mode — an open
+    // plate is already fully connected.
+    //
+    // One pass over all storeys rather than a step inside the loop above, and that
+    // is safe rather than merely tidier: the only later writer is the rubble
+    // scatter, which skips every cell on the wall lattice, and a doorway is always
+    // on one. The walk and the offset hash are shared with floor_doorways() so the
+    // door system cannot disagree with the geometry about where an opening is.
+    for_each_doorway(geom, floor_seed(seed, number),
+                     [&](int cx, int cy, int cz, int h, int) {
+                         for (int z = cz; z < cz + h; ++z)
+                             g.clear_cell(cx, cy, z);
+                     });
 
     // Fast-travel / navigation lattice: a FIXED 4x4x4 = 64-node grid, stamped
     // identically into every floor (src/world/lattice.h) and INDEPENDENT of the

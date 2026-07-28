@@ -16,6 +16,9 @@
 // Pure game-layer + core: no SDL/Vulkan/ImGui, headless-testable in game_test.
 #pragma once
 
+#include <cstdint>
+#include <vector>
+
 #include "game/floor_spec.h"
 
 namespace giga {
@@ -44,5 +47,41 @@ void generate_floor(World& world, int number, const FloorSpec& spec,
 // generator's geometry profile is retuned — a silent, seed-dependent drift.
 // Out-of-range kinds fall back to row 0, the same clamp generate_floor uses.
 int floor_room_stride(FloorKind kind);
+
+// One opening this generator punches through an interior wall — the cell a DOOR
+// occupies ([door.h]). Positions are macro cells, so a byte each.
+//
+// `axis` says which wall line the opening is IN, which is the only thing a
+// consumer cannot re-derive from the cell alone once the wall has decayed:
+//   0 -> the wall line x == cx, so the jambs are at (cx, cy+-1)
+//   1 -> the wall line y == cy, so the jambs are at (cx+-1, cy)
+struct Doorway {
+    std::uint8_t cx = 0;   // opening cell, X
+    std::uint8_t cy = 0;   // opening cell, Y
+    std::uint8_t cz = 0;   // BOTTOM cell of the opening
+    std::uint8_t h = 0;    // opening height in cells, >= 1
+    std::uint8_t axis = 0; // which wall line holds it (see above)
+};
+
+// Enumerate every doorway `generate_floor(world, number, spec, seed)` punches,
+// appending to `out`; returns how many were added. Empty for a pillar-mode kind
+// (an open plate has no wall segments to open).
+//
+// Exported for the same reason floor_room_stride is: a second consumer has to
+// agree with the generator EXACTLY. door.cpp needs the doorway cells at floor
+// load, and the two ways to get them are both traps —
+//
+//   * re-deriving them from the finished grid guesses, and guesses wrong on a
+//     Derelict floor, where `gapPct` has knocked 38% of the wall out and a
+//     collapsed hole is indistinguishable from an architectural opening;
+//   * replaying the generator's xorshift stream couples the replay to the ORDER
+//     every other loop in generate_floor draws numbers in — the same silent,
+//     seed-dependent drift the note above warns about for the stride table.
+//
+// So the offset of an opening inside its wall segment is a pure HASH of
+// (seed, number, storey, room, axis), and this function and the generator call
+// the same one. A hash has no order to get wrong.
+std::uint32_t floor_doorways(int number, const FloorSpec& spec, unsigned seed,
+                             std::vector<Doorway>& out);
 
 } // namespace giga::game

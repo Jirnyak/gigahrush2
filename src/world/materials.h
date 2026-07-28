@@ -37,6 +37,24 @@ inline constexpr CellType kMatHubPad = 7;    // nav / fast-travel pad (cyan)
 // playing, which is the only way this class of bug gets found.
 inline constexpr CellType kMatExtract = 5;   // extraction pad / bank (emerald)
 
+// Doors ([game/door.h]) — the shut leaf AND the permanent frame around every
+// doorway, so a doorway is findable at range whether or not its door is closed.
+//
+// Takes id 6, the one id the tables already carried and no generator wrote, for a
+// harder reason than tidiness: kMatCount must stay at 16. The albedo table in
+// render/cube_pass.cpp is sized from it and would simply grow, but
+// shaders/material_surface.glsl is GENERATED with `uint[16]` literals and
+// cube.frag clamps the incoming id with `min(mat, kMatSurfaceCount - 1u)`. So an
+// id 16 would silently render with the RUBBLE surface family — right colour,
+// wrong material character, no warning on either host. Reusing 6 keeps every id
+// inside the generated tables and leaves the CSV drift gate untouched.
+//
+// One id and not two: an OPEN door is air, so there is no leaf to draw, and what
+// makes the doorway legible in both states is the frame — the two jambs plus the
+// lintel, recoloured in place over cells that were already solid wall. Shut reads
+// as the frame filled in, open as the frame around a hole.
+inline constexpr CellType kMatDoor = 6;      // door leaf + frame (painted steel)
+
 // --- Khrushchevka materials, one pair per FloorKind -------------------------
 // Before these existed every floor kind wrote kMatConcrete + kMatSlabTan, so an
 // Industrial pillar plate and a Residential warren rendered in identical grey and

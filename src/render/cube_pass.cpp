@@ -79,7 +79,22 @@ constexpr vec3 kMaterial[kMatCount] = {
                                                          // and NOT red, which is
                                                          // reserved for danger
                                                          // ([faction.h])
-    /*  6 unused                */ {0.75f, 0.75f, 0.78f},
+    /*  6 door leaf + frame     */ {0.20f, 0.31f, 0.58f}, // painted steel, the
+                                                         // stairwell blue every
+                                                         // khrushchevka entrance
+                                                         // door is primed in. The
+                                                         // one hue no interior
+                                                         // material uses: the
+                                                         // palette is plaster,
+                                                         // parquet, greys, greens
+                                                         // and four browns, and
+                                                         // red is danger
+                                                         // ([faction.h]), emerald
+                                                         // the bank, cyan the nav
+                                                         // pad. Family 0 (flat) in
+                                                         // material_surface.glsl,
+                                                         // so it reads as paint
+                                                         // against mottled plaster
     /*  7 nav / hub pad         */ {0.00f, 0.80f, 0.95f},
     // --- khrushchevka ---
     /*  8 plaster    authored   */ {0.72f, 0.69f, 0.62f}, // dirty warm whitewash

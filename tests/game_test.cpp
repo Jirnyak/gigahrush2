@@ -63,6 +63,7 @@ int g_checks = 0;
 #include "suite_packs.inl"
 #include "suite_hunt.inl"
 #include "suite_samosbor.inl"
+#include "suite_doors.inl"
 static void test_inventory() {
     // Compile-time layout contract: a static_assert, not a CHECK. It is a fact
     // about the type, so it belongs to the build, not to a test run.
@@ -3529,6 +3530,7 @@ int main() {
     test_needs_all();
     test_packs_all();
     test_samosbor_all();
+    test_doors_all();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

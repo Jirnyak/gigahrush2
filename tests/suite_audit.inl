@@ -1,7 +1,9 @@
 #include "core/tick.h"
 // Audit suite — one test per defect found by reading the whole of src/game and
-// src/render after the 45-commit burst. Included into game_test.cpp, so it uses that
-// file's CHECK macro and its `using namespace giga::game`.
+// src/render after the 45-commit burst. Included into tests/audit_test.cpp (NOT
+// game_test.cpp — it was split out into its own target so a red finding here stops
+// failing the healthy suite), so it uses that file's CHECK macro and its
+// `using namespace giga::game`. The ctest name is audit_findings.
 //
 // EVERY TEST IN HERE THAT CURRENTLY FAILS IS A FINDING. They are written to fail
 // against HEAD and to pass once the named defect is fixed, so the fix has a witness
@@ -15,10 +17,10 @@
 //                          and projectile_step both own them, so every bullet flies
 //                          at double its authored speed and a bullet stopped by
 //                          physics is never destroyed.
-//   2. ms_timer_drift      every millisecond timer is driven by
-//                          uint16(dt*1000+0.5) = 8 for a 8.3333 ms tick, so all
-//                          cooldowns, windups, reloads, TTLs and the samosbor clock
-//                          run 4.17% slow with no accumulator to recover the loss.
+//   2. ms_timer_drift      FIXED — see the GREEN list. Its number is kept so this
+//                          index still matches the order of the tests below, and so a
+//                          reader who remembers "finding 2" learns what happened to it
+//                          instead of concluding it was quietly dropped.
 //   3. gun_kills_counted   a kill by firearm increments no kill counter at all; the
 //                          HUD's "kills" is melee-only.
 //   4. ammo_has_a_source   all 17 AMMO rows have spawn weight 0, so a weapon crate
@@ -37,7 +39,14 @@
 //
 // Currently GREEN (pins, not findings): budget_vs_demo_cap records the numbers behind
 // the kMobSpawnCap claim in src/app/main.cpp so the report's arithmetic is machine-
-// checked rather than asserted in prose.
+// checked rather than asserted in prose. ms_timer_drift joined it once core/tick.h
+// moved the sim to 125 Hz — read its own comment for why it stays in the file.
+//
+// A word on why this index matters more than it looks. This file's whole value rests on
+// red meaning "a real defect is live right now". An entry that stays red after its fix,
+// or prose that keeps asserting a defect in the present tense, teaches the next reader
+// to skim past red — and then a genuine finding gets skimmed past too. Reclassifying is
+// therefore not bookkeeping; it is the maintenance that keeps the other six honest.
 
 #include "game/needs.h"
 #include "game/samosbor.h"
@@ -139,23 +148,41 @@ static void projectile_once() {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Every millisecond timer runs 4.17% slow
+// 2. Millisecond timers keep exact time — FIXED, now a tripwire
 // ---------------------------------------------------------------------------
-// The sim step is 1/120 s = 8.3333 ms, and every consumer converts it with
-// `uint16(dt * 1000.0f + 0.5f)`, which is 8 — a third of a millisecond dropped on the
-// floor every tick, with no accumulator anywhere to carry it. So an authored 1000 ms
-// cooldown takes 125 ticks (1.0417 s), a 30 s samosbor warning takes 31.25 s, and a
-// 4 s projectile TTL lasts 4.17 s.
+// This was a finding and is now a pin. What it caught: at 120 Hz the step is 8.3333 ms,
+// every consumer converted it with `uint16(dt * 1000.0f + 0.5f)` = 8, and a third of a
+// millisecond went on the floor every tick with no accumulator to carry it — so an
+// authored 1000 ms cooldown ran 1.0417 s and a 30 s samosbor warning ran 31.25 s. It was
+// uniform, which is why nothing looked obviously wrong and why it needed a test.
 //
-// It is uniform, so nothing looks obviously wrong — which is exactly why it is worth a
-// test. It is also already baked in as *expected* by
-// tests/game_test.cpp test_player_shoots, which derives its boundary as
-// `ceil(reloadMs / stepMs)` from the implementation instead of from the spec. That
-// test would keep passing after a fix; this one only passes after one.
+// The fix was not an accumulator. core/tick.h:26 moved the sim to kSimHz = 125, which
+// makes the step exactly 8.0 ms and the conversion lossless, and tick.h:31-33 then pins
+// that property with a static_assert(kSimStepMs * kSimHz == 1000) so the build fails if
+// anyone moves the rate back to a value that does not divide a second. Choosing the rate
+// over an accumulator is worth understanding rather than just recording: an accumulator
+// would have added per-timer residue state to a deterministic sim, i.e. more state to
+// serialise, desync and replay, to compensate for an arithmetic problem the rate itself
+// could delete. Do NOT "improve" this by adding one.
 //
-// Sites: combat.cpp:188, :453, :586, :705 and src/app/main.cpp:759.
+// Why the test stays after passing. It reads kSimDt (kDt, :48) rather than restating a
+// rate, and both bounds are written as kSimHz and 30 * kSimHz, so it measures whatever
+// the sim is configured to do instead of a number a human retyped. Both bounds pass with
+// ZERO margin — 125 <= 125 and 3750 <= 3750 — which is the useful part: reintroduce any
+// residue and the step stops being integral, every loop below needs one extra tick, and
+// both CHECKs fail on the first one. A test that only passes exactly is a better tripwire
+// than one with slack.
+//
+// One caveat left in place deliberately: tests/game_test.cpp test_player_shoots still
+// derives its boundary as `ceil(reloadMs / stepMs)` from the implementation rather than
+// from the spec, so it would pass under either rate and proves nothing about timing.
+//
+// Sites the fix reaches: combat.cpp:192, :509, :687, :806 and src/app/main.cpp:762 — all
+// fed kSimDt from the main loop, so all now convert to exactly 8.
 static void ms_timer_drift() {
-    CHECK(step_ms() == 8);   // the quantisation, stated so the arithmetic is visible
+    // 8 is the correct step at 125 Hz, not a quantisation loss. Stated so the arithmetic
+    // the rest of this test depends on is visible at the top.
+    CHECK(step_ms() == 8);
 
     // (a) a mob's attack cooldown. mob_attack_step decrements exactly once per call,
     //     before any early-out, so this measures the timer and nothing else.
@@ -182,11 +209,13 @@ static void ms_timer_drift() {
                             static_cast<std::uint64_t>(ticks));
             ++ticks;
         }
-        // One second of sim time is 120 ticks of 1/120 s. Currently 125.
+        // One second of sim time is kSimHz ticks, by definition of the rate. Printed
+        // rather than hardcoded so a future rate change cannot leave this message lying
+        // about what was measured — which is exactly what the old "1/120 s" text did.
         std::fprintf(stderr,
                      "[audit] timer: a 1000 ms mob cooldown cleared after %d ticks "
-                     "of 1/120 s = %.4f s\n",
-                     ticks, static_cast<double>(ticks) * kSimDt);
+                     "of 1/%d s = %.4f s\n",
+                     ticks, kSimHz, static_cast<double>(ticks) * kSimDt);
         CHECK(ticks <= kSimHz);   // one second is kSimHz ticks, by definition
     }
 
