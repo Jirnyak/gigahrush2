@@ -42,6 +42,7 @@
 #include "game/needs.h"
 #include "game/rumour.h"
 #include "game/samosbor.h"
+#include "game/contract.h"
 #include "game/container.h"
 #include "game/combat.h"
 #include "game/extraction.h"
@@ -532,6 +533,10 @@ int main(int argc, char** argv) {
     // The last thing overheard, and when. Held rather than recomputed per frame
     // because a rumour is something you were TOLD — it should stay on screen after you
     // walk away, not vanish the moment the speaker is out of range.
+    // The job on offer from whoever is nearest, and the book of taken ones.
+    game::ContractBook contracts;
+    game::Contract offer{};
+    char offerLine[200] = {};
     char rumourLine[160] = {};
     std::uint64_t rumourAt = 0;
     game::NeedsTick needs{};   // last step's report, for the HUD
@@ -540,6 +545,7 @@ int main(int argc, char** argv) {
     game::RunLedger ledger;
     std::int32_t banked = 0;
     std::int32_t containerTake = 0;   // roubles pulled out of crates
+    std::int32_t contractPaid = 0;    // roubles paid by finished jobs
     std::uint32_t deaths = 0;
     std::uint32_t kills = 0;       // carried across possession
     bool attackHeld = false;
@@ -557,6 +563,21 @@ int main(int argc, char** argv) {
         // Events are transient by design ([events.md]): whatever was published
         // last frame has had its chance to be consumed. Clearing here rather than
         // at the end means a consumer added later sees a full frame's batch.
+        // Drain the bus BEFORE clearing it. `finalize_deaths` publishes NpcDied with
+        // the victim's pool id and the mob kind, which is exactly what a Hunt job needs
+        // to count and what a giver's death needs to fail a contract — so both hook the
+        // same event the kill feed does rather than inventing a second notion of death.
+        for (std::uint32_t i = 0; i < bus.size(); ++i) {
+            const game::Event& ev = bus.events()[i];
+            if (ev.type != game::EventType::NpcDied) continue;
+            // `b` is the mob kind, 0xFF when the dead thing was not a monster.
+            if (ev.b != 0xFFu)
+                game::contract_on_kill(contracts, static_cast<std::uint8_t>(ev.b));
+            // `a` is the pool id, kInvalidNpc when the dead thing had no record. A
+            // monster has no record, so this only ever fires for a real person.
+            if (ev.a != game::kInvalidNpc)
+                game::contract_on_giver_died(contracts, ev.a);
+        }
         bus.clear();
 
         // Hand over a finished nav bake. Cheap every frame; true only on the frame
@@ -650,6 +671,16 @@ int main(int argc, char** argv) {
                 if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
                     e.key.scancode == SDL_SCANCODE_H) {
                     healWanted = true;
+                }
+                // E takes the job on offer. The only interaction bind in the game, and
+                // it exists because a contract is the one thing the player has to
+                // actively agree to — everything else is walked into.
+                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
+                    e.key.scancode == SDL_SCANCODE_E) {
+                    if (game::contract_accept(contracts, offer)) {
+                        offer = game::Contract{};
+                        offerLine[0] = 0;
+                    }
                 }
                 if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
                     e.button.button == SDL_BUTTON_LEFT) {
@@ -778,6 +809,16 @@ int main(int argc, char** argv) {
                             reg, pool, sp, activeLayer, currentFloor);
                         if (game::rumour_text(ru, rumourLine, sizeof(rumourLine)))
                             rumourAt = simTick;
+                        // The same body may also be hiring. One proximity sweep, two
+                        // payloads — a contract is a thing you walk into, because there
+                        // is no talk verb and building one to deliver a sentence would
+                        // be the expensive way round. [contract.h]
+                        const game::Contract off = game::contract_offer(
+                            pool, sp, currentFloor, 0x9E37u);
+                        if (off.giver != game::kInvalidNpc &&
+                            game::contract_text(off, offerLine, sizeof(offerLine))) {
+                            offer = off;
+                        }
                     }
                 }
                 needs = game::needs_step(reg, pool, activeLayer, kSimDt);
@@ -829,6 +870,15 @@ int main(int argc, char** argv) {
                                     pool.inventory(nrx->id), ledger);
                     }
                 }
+                // Contracts advance and pay AFTER the extraction step, so a Fetch
+                // job completes at the pad — the same moment the loop's own payoff
+                // lands, which is what makes the errand feel like part of the trip
+                // rather than a parallel accounting system. [contract.h]
+                if (reg.valid(player))
+                    if (const auto* nrc = reg.try_get<game::NpcRef>(player))
+                        if (pool.valid(nrc->id))
+                            contractPaid += game::contract_step(
+                                contracts, pool, pool.inventory(nrc->id), ledger);
                 if (healWanted) {
                     healed += game::use_best_heal(reg, pool, bus, activeLayer,
                                                   simTick);
@@ -1057,6 +1107,27 @@ int main(int argc, char** argv) {
                                 nd.food, nd.water, nd.sleep, toDmg / 60.0f);
                 ImGui::Text("pressure pee %.0f poo %.0f | speed x%.2f | starved %d hp",
                             nd.pee, nd.poo, needs.speedScale, needsHpLost);
+            }
+            {
+                int active = 0;
+                for (int i = 0; i < game::kMaxContracts; ++i) {
+                    const game::Contract& c = contracts.slot[i];
+                    if (c.state != static_cast<std::uint8_t>(
+                                      game::ContractState::Active))
+                        continue;
+                    ++active;
+                    char line[200];
+                    if (game::contract_text(c, line, sizeof(line)))
+                        ImGui::Text("  job: %s  [%d/%d]", line,
+                                    static_cast<int>(c.progress),
+                                    static_cast<int>(c.target));
+                }
+                if (offerLine[0])
+                    ImGui::TextColored(ImVec4(0.98f, 0.82f, 0.35f, 1.0f),
+                                       "OFFER (E to take): %s", offerLine);
+                ImGui::Text("jobs %d active | %u done | %u failed | paid %d rub",
+                            active, contracts.completed, contracts.failed,
+                            contractPaid);
             }
             if (rumourLine[0])
                 ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.91f, 1.0f), "\"%s\"",
