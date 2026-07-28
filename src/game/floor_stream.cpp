@@ -125,6 +125,36 @@ void FloorStreamer::unload(LevelStack& stack, FloorRegistry& reg, Registry& ecs,
     }
     fm.bodies.clear();
 
+    // Sweep whatever ELSE still lives on this layer.
+    //
+    // Folding fm.bodies only covers the embodied crowd. Entity kinds created outside
+    // it — pickups dropped by loot_dead_mobs, in-flight projectiles, containers —
+    // kept Transform.layer pointing at a slot about to be recycled, and nothing ever
+    // destroyed them. LevelStack never pops, so stack.valid(layer) stayed true and
+    // physics_step kept paying a full swept-AABB step per orphan for the rest of the
+    // session. Worse: with keepRadius 0 the free list holds two slots, so the second
+    // ride handed this slot straight back, generate_floor rewrote the geometry around
+    // the orphans, and body_pass drew floor N's gold on floor N+2 where pickup_step
+    // would bank it — an economy bug, not only a tick-budget one. floors.md "nothing
+    // is persisted floor-to-floor except the folded-back records themselves" and
+    // main.cpp's "exactly one floor's worth is ever simulated" were both false in
+    // writing until this swept.
+    //
+    // Reuses fm.bodies as scratch: it was just cleared and keeps its capacity, so
+    // this costs no allocation. Two-phase because destroying inside a view
+    // invalidates the iterator. The CameraTag holder is exempt — unload() is public
+    // API and must never evict the body the player is looking through.
+    auto onLayer = ecs.view<const Transform>();
+    for (auto e : onLayer) {
+        if (onLayer.get<const Transform>(e).layer != layer) continue;
+        if (ecs.all_of<CameraTag>(e)) continue;
+        fm.bodies.push_back(e);
+    }
+    for (Entity e : fm.bodies) {
+        if (ecs.valid(e)) ecs.destroy(e);
+    }
+    fm.bodies.clear();
+
     // Recycle the physical layer (its World stays allocated in the stack, ready to
     // be regenerated for the next floor — dense over sparse, performance.md) and
     // break the module's residency.

@@ -164,6 +164,20 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         Transform& tr = view.get<Transform>(e);
         if (tr.layer != layer) continue;
 
+        // The player is steered by input, never by the flow field. wander_init
+        // already refuses to GIVE the camera holder a target (see the CameraTag
+        // check in its loop above), but that only protects a body that was the
+        // player when the floor was populated. possess_a_survivor hands CameraTag
+        // and Controller to a resident that has been wandering for minutes and
+        // therefore already carries a WanderTarget, so after any death this loop
+        // was overwriting the player's own velocity every stagger period — the
+        // documented contract in [wander.h] ("The player is skipped — it holds
+        // CameraTag and is steered by input") held only until the first death.
+        // Checked here rather than by stripping WanderTarget on possession: the
+        // component is harmless data, and an exclusion at the point of steering
+        // cannot be defeated by a future third way of becoming the player.
+        if (reg.all_of<CameraTag>(e)) continue;
+
         // Identity-hash stagger: an agent's slot is a function of its own id, so
         // the crowd spreads evenly across the period with no scheduling state.
         const std::uint32_t id = static_cast<std::uint32_t>(entt::to_integral(e));
