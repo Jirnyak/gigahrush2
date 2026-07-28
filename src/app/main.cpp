@@ -557,7 +557,8 @@ int main(int argc, char** argv) {
                 controller_step(reg, kSimDt);
                 // Steer the crowd BEFORE physics: wander writes horizontal
                 // velocity, physics integrates it and resolves collision.
-                game::wander_step(reg, nav.coarse(), nav.fine(), activeLayer, simTick);
+                game::wander_step(reg, stack.layer(activeLayer).grid(), nav.coarse(),
+                                  nav.fine(), activeLayer, simTick);
                 physics_step(reg, stack, kSimDt);
                 // Melee resolves AFTER physics, so reach is tested against where
                 // bodies actually ended up this step rather than where they
@@ -566,7 +567,9 @@ int main(int argc, char** argv) {
                 // rather than a guaranteed loss to whoever the view yields first.
                 game::player_melee_step(reg, pool, bus, activeLayer, kSimDt,
                                         attackHeld && !paused, simTick);
-                meleeHits += game::mob_attack_step(reg, pool, bus, activeLayer,
+                meleeHits += game::mob_attack_step(reg,
+                                   stack.layer(activeLayer).grid(),
+                                   pool, bus, activeLayer,
                                                    kSimDt, simTick);
                 // Shots resolve AFTER the pass that launched them, so a
                 // projectile never lands on the frame it is fired.

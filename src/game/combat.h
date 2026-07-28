@@ -39,6 +39,7 @@
 #include "game/item_table.h"   // ItemId, for the equipped-loadout helpers
 #include "game/npc_pool.h"
 #include "world/level_stack.h"
+#include "world/macro_grid.h"
 
 namespace giga::game {
 
@@ -177,7 +178,10 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
 // bloodbath on load.
 //
 // Returns the number of swings that landed.
-std::uint32_t mob_attack_step(Registry& reg, NpcPool& pool, EventBus& bus,
+// `grid` is read only for the wall-adjacency test AiFlag::WallBias needs — four
+// cardinal cell reads, and only for a monster actually in reach and swinging.
+std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
+                             NpcPool& pool, EventBus& bus,
                              LayerId layer, float dt, std::uint64_t tick);
 
 // Advance every shot in flight: integrate under gravity, stop on solid geometry,

@@ -23,6 +23,7 @@
 
 #include "ecs/registry.h"
 #include "world/level_stack.h"
+#include "world/macro_grid.h"
 #include "world/nav.h"
 
 namespace giga::game {
@@ -51,7 +52,11 @@ std::uint32_t wander_init(Registry& reg, LayerId layer, std::uint32_t seed);
 // step up a storey, and stairwell/elevator traversal is not wired yet. They
 // repath instead of grinding into the ceiling, which is honest but does mean the
 // crowd currently explores only what is reachable on its own storey.
-void wander_step(Registry& reg, const nav::CoarseGraph& coarse,
+// `grid` is read only for the wall-adjacency test AiFlag::WallBias needs: four
+// cardinal cell reads, and only for a mob already aggroed and already in its
+// stagger slot — so 4 reads for roughly 1/8 of the hostiles per pass.
+void wander_step(Registry& reg, const MacroGrid& grid,
+                 const nav::CoarseGraph& coarse,
                  const nav::FineNav& fine, LayerId layer, std::uint64_t tick);
 
 } // namespace giga::game

@@ -8,6 +8,7 @@
 #include "ecs/components.h"
 #include "game/embody.h"   // NpcRef
 #include "game/mob_spawn.h"
+#include "game/mob_behaviour.h"
 #include "game/mob_table.h"
 #include "game/weapon_table.h"
 #include "sim/camera.h"   // camera_forward
@@ -131,7 +132,25 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
     return static_cast<std::uint32_t>(doomed.size());
 }
 
-std::uint32_t mob_attack_step(Registry& reg, NpcPool& pool, EventBus& bus,
+// Is any of the four cardinal neighbours solid? Duplicated deliberately rather than
+// exported from wander.cpp: it is four lines, both callers want it inlined in a hot
+// loop, and a shared helper would drag a header dependency between two systems that
+// are otherwise independent. If a third caller appears, promote it then.
+namespace {
+bool adjacent_wall(const MacroGrid& grid, const vec3& pos) {
+    const int cx = static_cast<int>(pos.x / kCellSize);
+    const int cy = static_cast<int>(pos.y / kCellSize);
+    const int cz = static_cast<int>(pos.z / kCellSize);
+    if (cz < 0 || cz >= kMacroDim) return false;
+    return grid.cell(cx + 1, cy, cz) != kCellAir ||
+           grid.cell(cx - 1, cy, cz) != kCellAir ||
+           grid.cell(cx, cy + 1, cz) != kCellAir ||
+           grid.cell(cx, cy - 1, cz) != kCellAir;
+}
+} // namespace
+
+std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
+                             NpcPool& pool, EventBus& bus,
                              LayerId layer, float dt, std::uint64_t tick) {
     // The one target, stated in the header: whoever holds the camera.
     Entity victim = entt::null;
@@ -212,8 +231,14 @@ std::uint32_t mob_attack_step(Registry& reg, NpcPool& pool, EventBus& bus,
 
         // Damage scales with the mob's level on the same curve as its HP, so a
         // deep-floor elite hits as hard as it is tough.
-        const std::int16_t raw =
-            static_cast<std::int16_t>(mob_hp_at_level(def.dmg, mr.level));
+        float dmg = static_cast<float>(mob_hp_at_level(def.dmg, mr.level));
+        // Wall-adjacency bias: the four carriers hit harder with a wall at their
+        // back. Combined with the matching speed bonus in wander.cpp, this makes a
+        // corridor a genuinely worse place to be caught than an open room — level
+        // design out of geometry that already exists. [mob_behaviour.h]
+        if (has_flag(def.aiFlags, AiFlag::WallBias))
+            dmg *= wall_bias_damage(def.aiFlags, adjacent_wall(grid, tr.pos));
+        const std::int16_t raw = static_cast<std::int16_t>(dmg);
 
         // Melee first: if it can touch you, it touches you. Reach is in cells.
         const float reach = static_cast<float>(def.meleeReachMm) * 0.001f * kCellSize;

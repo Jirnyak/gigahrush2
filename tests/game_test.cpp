@@ -1280,7 +1280,7 @@ static void test_wander_moves_the_crowd() {
     // passes in this window.
     const float dt = 1.0f / 120.0f;
     for (std::uint64_t t = 0; t < 120; ++t) {
-        wander_step(reg, coarse, fine, layer, t);
+        wander_step(reg, stack.layer(layer).grid(), coarse, fine, layer, t);
         physics_step(reg, stack, dt);
     }
 
@@ -1304,7 +1304,7 @@ static void test_wander_moves_the_crowd() {
     // Steering must be a pure read of the bake: it may not mutate the nav data,
     // or a second floor visit would behave differently from the first.
     nav::CoarseGraph after = coarse;
-    wander_step(reg, coarse, fine, layer, 999u);
+    wander_step(reg, stack.layer(layer).grid(), coarse, fine, layer, 999u);
     CHECK(std::memcmp(&after, &coarse, sizeof(coarse)) == 0);
 
     // Immobile mobs are never given a target: a spore carpet must not walk.
@@ -1417,6 +1417,11 @@ static void test_death_goes_through_one_finalizer() {
 // The reference decremented attackCd at ~60 sites, several as max() floors, so
 // some monsters out-attacked their own authored rate.
 static void test_melee_cooldown_and_reach() {
+    // An empty grid on purpose: all-air means no cell is wall-adjacent, so the
+    // wall-bias path is inert here and every expectation below is unchanged from
+    // before the grid became an argument.
+    World world;
+    const MacroGrid& grid = world.grid();
     NpcPool pool;
     pool.init();
     Registry reg;
@@ -1443,7 +1448,7 @@ static void test_melee_cooldown_and_reach() {
     reg.emplace<MobRef>(far, MobRef{kind, 1, 100, 100});
     reg.emplace<MobCombat>(far, MobCombat{500});
 
-    CHECK(mob_attack_step(reg, pool, bus, 0, dt, 0) == 0);
+    CHECK(mob_attack_step(reg, grid, pool, bus, 0, dt, 0) == 0);
     CHECK(reg.get<MobCombat>(far).cooldownMs == 500 - step);
     CHECK(pool.hp(pid) == 30000);
 
@@ -1456,7 +1461,7 @@ static void test_melee_cooldown_and_reach() {
     reg.emplace<MobRef>(adj, MobRef{kind, 1, 100, 100});
     reg.emplace<MobCombat>(adj, MobCombat{0});
 
-    CHECK(mob_attack_step(reg, pool, bus, 0, dt, 1) == 1);
+    CHECK(mob_attack_step(reg, grid, pool, bus, 0, dt, 1) == 1);
     const std::int16_t expect = static_cast<std::int16_t>(
         mob_hp_at_level(def.dmg, 1));
     CHECK(pool.hp(pid) == 30000 - expect);
@@ -1468,13 +1473,13 @@ static void test_melee_cooldown_and_reach() {
     const std::int16_t hpAfterFirst = pool.hp(pid);
     const int passes = static_cast<int>(def.attackCdMs / step);
     for (int i = 0; i < passes - 1; ++i)
-        CHECK(mob_attack_step(reg, pool, bus, 0, dt, 2u + static_cast<std::uint64_t>(i))
+        CHECK(mob_attack_step(reg, grid, pool, bus, 0, dt, 2u + static_cast<std::uint64_t>(i))
               == 0);
     CHECK(pool.hp(pid) == hpAfterFirst);
     // ...and then exactly one more, once it has.
     std::uint32_t later = 0;
     for (int i = 0; i < 3; ++i)
-        later += mob_attack_step(reg, pool, bus, 0, dt,
+        later += mob_attack_step(reg, grid, pool, bus, 0, dt,
                                 100u + static_cast<std::uint64_t>(i));
     CHECK(later == 1);
 }
@@ -1902,7 +1907,7 @@ static void test_ranged_windup_and_deadzone() {
     // Inside the band. The first pass must NOT fire — it starts the telegraph.
     Entity shooter = place(12.0f);
     // The first pass starts the telegraph and fires NOTHING. That is the point.
-    CHECK(mob_attack_step(reg, pool, bus, layer, dt, 0) == 0);
+    CHECK(mob_attack_step(reg, stack.layer(layer).grid(), pool, bus, layer, dt, 0) == 0);
     CHECK(reg.get<MobCombat>(shooter).windupMs == def.windupMs);
     std::uint32_t inFlight = 0;
     for (auto e : reg.view<const Projectile>()) { (void)e; ++inFlight; }
@@ -1912,7 +1917,7 @@ static void test_ranged_windup_and_deadzone() {
     // is the whole guarantee, so it is checked on every pass rather than at the end.
     const int passes = static_cast<int>(def.windupMs / step);
     for (int i = 0; i < passes; ++i) {
-        mob_attack_step(reg, pool, bus, layer, dt,
+        mob_attack_step(reg, stack.layer(layer).grid(), pool, bus, layer, dt,
                         1u + static_cast<std::uint64_t>(i));
         std::uint32_t f = 0;
         for (auto e : reg.view<const Projectile>()) { (void)e; ++f; }
@@ -1920,7 +1925,7 @@ static void test_ranged_windup_and_deadzone() {
     }
     CHECK(reg.get<MobCombat>(shooter).windupMs > 0);   // a remainder is still due
     // The pass that finishes the windup is the pass that fires.
-    mob_attack_step(reg, pool, bus, layer, dt, 500u);
+    mob_attack_step(reg, stack.layer(layer).grid(), pool, bus, layer, dt, 500u);
     CHECK(reg.get<MobCombat>(shooter).windupMs == 0);
     inFlight = 0;
     for (auto e : reg.view<const Projectile>()) { (void)e; ++inFlight; }
@@ -1960,11 +1965,11 @@ static void test_ranged_windup_and_deadzone() {
     r2.emplace<MobRef>(s2, MobRef{kind, 1, 500, 500});
     r2.emplace<MobCombat>(s2, MobCombat{0, 0});
 
-    mob_attack_step(r2, p2, bus, layer, dt, 0);
+    mob_attack_step(r2, stack.layer(layer).grid(), p2, bus, layer, dt, 0);
     CHECK(r2.get<MobCombat>(s2).windupMs > 0);   // telegraphing
     // Walk it far out of range; the next pass must clear the windup.
     r2.get<Transform>(s2).pos.x = pp2.x + 200.0f;
-    mob_attack_step(r2, p2, bus, layer, dt, 1);
+    mob_attack_step(r2, stack.layer(layer).grid(), p2, bus, layer, dt, 1);
     CHECK(r2.get<MobCombat>(s2).windupMs == 0);
     std::uint32_t shots = 0;
     for (auto e : r2.view<const Projectile>()) { (void)e; ++shots; }

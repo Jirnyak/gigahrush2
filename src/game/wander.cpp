@@ -68,7 +68,27 @@ std::uint32_t wander_init(Registry& reg, LayerId layer, std::uint32_t seed) {
     return n;
 }
 
-void wander_step(Registry& reg, const nav::CoarseGraph& coarse,
+namespace {
+
+// Is any of the four cardinal neighbours solid? The reference's wall-bias context
+// runs a radius-2 disc scan and derives several scores from it; only `adjacentWall`
+// has a consumer here, so only that is computed — four cell reads instead of
+// twenty-one, for the one number that is actually read.
+bool adjacent_wall(const MacroGrid& grid, const vec3& pos) {
+    const int cx = static_cast<int>(pos.x / kCellSize);
+    const int cy = static_cast<int>(pos.y / kCellSize);
+    const int cz = static_cast<int>(pos.z / kCellSize);
+    if (cz < 0 || cz >= kMacroDim) return false;
+    return grid.cell(cx + 1, cy, cz) != kCellAir ||
+           grid.cell(cx - 1, cy, cz) != kCellAir ||
+           grid.cell(cx, cy + 1, cz) != kCellAir ||
+           grid.cell(cx, cy - 1, cz) != kCellAir;
+}
+
+} // namespace
+
+void wander_step(Registry& reg, const MacroGrid& grid,
+                 const nav::CoarseGraph& coarse,
                  const nav::FineNav& fine, LayerId layer, std::uint64_t tick) {
     if (fine.flow.empty()) return;  // nav not baked for this floor
 
@@ -148,8 +168,16 @@ void wander_step(Registry& reg, const nav::CoarseGraph& coarse,
                     // Standing exactly on the slot must not divide by zero, and
                     // must not stop the chase either: fall back to the direct line.
                     if (tl < 0.05f) { tx = ax; ty = ay; tl = len; }
-                    const float sp = static_cast<float>(md.speedMmps) *
-                                     0.001f * kCellSize;
+                    float sp = static_cast<float>(md.speedMmps) *
+                               0.001f * kCellSize;
+                    // Wall-adjacency bias: the four carriers move faster
+                    // hugging a wall and slower in the open, which makes
+                    // corridors and doorways genuinely worse places to be
+                    // caught than open rooms. Free level design, extracted from
+                    // geometry that already exists. [mob_behaviour.h]
+                    if (has_flag(md.aiFlags, AiFlag::WallBias))
+                        sp *= wall_bias_speed(md.aiFlags,
+                                              adjacent_wall(grid, tr.pos));
                     vel.v.x = tx / tl * sp;
                     vel.v.y = ty / tl * sp;
                 }
