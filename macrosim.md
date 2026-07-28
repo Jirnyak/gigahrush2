@@ -1,7 +1,9 @@
 # Macrosim — Macro population simulation
 
-> **Status: NPC pool built ([npcs.md](npcs.md)); macro tick pending.** Game
-> layer, its own module in `src/game/` (the `giga_game` library).
+> **Status: NPC pool built ([npcs.md](npcs.md)); macro tick built — demographic
+> core (aging + old-age mortality + reserve-drawn births).** Migration, social,
+> faction, and economy passes still pending. Game layer, its own module in
+> `src/game/` (the `giga_game` library): `src/game/macro_sim.{h,cpp}`.
 
 The background simulation that advances the **global** NPC population, factions,
 and economy across the whole floor stack — the layer that decides what the world
@@ -66,10 +68,66 @@ a cheap approximate **dirty local re-bake** for in-play destruction — never a 
 incremental recompute in the hot path ([performance.md](performance.md) §Two
 regimes).
 
+## Built — the columnar demographic tick (`MacroSim`)
+
+`MacroSim::step(NpcPool&, const MacroParams&)` is one **O(n) columnar full-sweep**
+over the pool's SoA rows — the whole society advances in a single linear pass, no
+per-NPC search. Measured on the full **1,048,576-record** pool: **~2.8 ms/tick,
+~373 M records/sec** (`macro_bench`, Release -O3), so the background society can
+advance often and still never touch the 8.33 ms frame.
+
+One sweep, three data-driven demographic events (all knobs live in `MacroParams`,
+never in code branches):
+
+- **Aging.** A fractional-year accumulator (`ageDays_`, macro-owned so the pool
+  schema stays clean) advances every living record by `daysPerTick`; whole years
+  roll the `age` column and saturate at `maxAge`.
+- **Old-age mortality.** Certain death at `maxAge`; below it, a data-driven annual
+  curve — zero before `mortalityOnset`, rising quadratically to `mortalityPeak` —
+  scaled to the tick. `kill()` clears the alive bit but keeps the slot (the pool
+  never reclaims, [npcs.md](npcs.md)).
+- **Births.** Fertile adults (`fertileLo..fertileHi`) are **reservoir-sampled
+  during the same sweep** (Algorithm R, 64 slots) — parent selection costs no
+  extra scan. A per-capita `birthRate` plus a gentle catch-up toward
+  `targetPopulation` sets the expected count; deterministic rounding (floor + a
+  probabilistic carry) turns it into whole newborns, capped by `reserve_remaining`.
+  Newborns bump-allocate from the reserve and inherit a living parent's
+  floor/cell/faction so they appear where people actually live.
+
+**The macro tick owns COLD records only.** Embodied records — the player included,
+since the player is just a record with the `NpcPlayer` bit ([npcs.md](npcs.md)) —
+are skipped entirely: counted among the living but never aged, killed, or drafted
+as parents. Those belong to the live micro/ECS sim on the fine clock; the macro
+sweep touching them would quietly age the on-screen player to death. This is the
+standard detailed-near / coarse-far split.
+
+Divergence from the reference (noted by the porting survey): the TS reference's
+society is **monotonic-decreasing** — death is its only demographic event, and it
+never does a full-pool scan (every off-floor pass is a bounded cursor + budget).
+gigahrush2's aging + births pass is a deliberate **new capability**, affordable
+only because it runs headless on a decoupled coarse clock over flat SoA. The
+reference's bounded-cursor primitive (`RECORDS_PER_TICK ≈ 64`) is the model for
+the *next* passes (migration/social), not this demographic full-sweep.
+
+### Still pending (master_prompt §7 #10b/#10c and beyond)
+
+- **Per-floor bucket index (#10b).** An inverted index over the `floor` column so
+  streaming/embodiment can enumerate a floor's residents in O(residents), and cold
+  moves are O(1) — replacing `FloorStreamer`'s fixed `[firstId,count)` roster and
+  avoiding the reference's linear-bucket-scan hot spot.
+- **Budgeted-cursor migration/social pass (#10c).** A bounded ring-scan (~64
+  records/tick) for off-floor migration and relationship drift, on the same tables.
+- Faction/economy dynamics (6×6 Int8 relation matrix; per-floor commodity stock).
+
 ## Determinism
 
 Same seed → same macro evolution within a build (matches the engine's
-determinism stance, [ARCHITECTURE.md](ARCHITECTURE.md) §Determinism).
+determinism stance, [ARCHITECTURE.md](ARCHITECTURE.md) §Determinism). Concretely:
+every per-record decision in the tick — mortality roll, parent reservoir, newborn
+attributes — is a **stateless hash of `(id, tick, salt)`** (`core/rng.h`), so the
+sweep carries no per-NPC RNG state, is independent of iteration order, and
+reproduces exactly for a given `(seed, tick)`. Verified by `test_macro_determinism`
+(two independently seeded pools evolve bit-identically over 24 monthly ticks).
 
 ## Connections
 

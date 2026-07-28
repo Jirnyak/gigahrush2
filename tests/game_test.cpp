@@ -13,6 +13,7 @@
 #include "game/floor_spec.h"
 #include "game/floor_stream.h"
 #include "game/inventory.h"
+#include "game/macro_sim.h"
 #include "game/nav_cache.h"
 #include "game/npc_pool.h"
 #include "game/population.h"
@@ -1110,6 +1111,171 @@ static void test_streamed_nav_cache() {
     std::remove(path.c_str());
 }
 
+// ---- #10 macro tick ------------------------------------------------------
+
+// Spawn one controlled record for the macro-tick tests.
+static NpcId spawn_aged(NpcPool& pool, std::uint8_t age, std::uint16_t floor,
+                        std::uint16_t faction) {
+    NpcId id = pool.spawn();
+    if (id == kInvalidNpc) return id;
+    pool.age(id) = age;
+    pool.floor(id) = floor;
+    pool.faction(id) = faction;
+    pool.sex(id) = SexFemale;
+    pool.height_mm(id) = 1700;
+    pool.max_hp(id) = 100;
+    pool.hp(id) = 100;
+    pool.level(id) = 1;
+    return id;
+}
+
+static void test_macro_aging() {
+    NpcPool pool;
+    pool.init();
+    NpcId a = spawn_aged(pool, 20, 3, 1);
+    NpcId b = spawn_aged(pool, 30, 3, 1);
+    MacroSim macro;
+    macro.init(pool);
+
+    // Isolate aging: no mortality (onset past any reachable age), no births.
+    MacroParams p;
+    p.daysPerTick = 365;  // exactly one simulated year per tick
+    p.maxAge = 200;
+    p.mortalityOnset = 200;
+    p.birthRate = 0.0f;
+    p.targetPopulation = 0;
+
+    for (int i = 0; i < 5; ++i) macro.step(pool, p);
+    CHECK(pool.age(a) == 25);
+    CHECK(pool.age(b) == 35);
+    CHECK(macro.tick() == 5);
+    CHECK(pool.count() == 2);  // no births, dead never reclaimed
+
+    // Fractional-year accumulation: 73-day ticks * 5 == exactly one year.
+    NpcPool pool2;
+    pool2.init();
+    NpcId c = spawn_aged(pool2, 40, 0, 0);
+    MacroSim m2;
+    m2.init(pool2);
+    MacroParams q = p;
+    q.daysPerTick = 73;
+    for (int i = 0; i < 4; ++i) {
+        m2.step(pool2, q);
+        CHECK(pool2.age(c) == 40);  // not yet a full year
+    }
+    m2.step(pool2, q);
+    CHECK(pool2.age(c) == 41);
+}
+
+static void test_macro_mortality() {
+    NpcPool pool;
+    pool.init();
+    const int N = 200;
+    for (int i = 0; i < N; ++i) spawn_aged(pool, 99, 5, 2);
+    std::uint32_t before = pool.count();
+    MacroSim macro;
+    macro.init(pool);
+    MacroParams p;
+    p.daysPerTick = 365;
+    p.maxAge = 100;
+    p.birthRate = 0.0f;
+    p.targetPopulation = 0;  // isolate mortality from births
+    MacroStats s = macro.step(pool, p);
+
+    // Everyone crosses 99 -> 100 (the ceiling) = certain death this tick.
+    CHECK(s.deaths == static_cast<std::uint32_t>(N));
+    CHECK(s.living == 0);
+    CHECK(pool.count() == before);  // dead keep their slots
+    for (NpcId id = 0; id < before; ++id) CHECK(!pool.alive(id));
+}
+
+static void test_macro_births() {
+    NpcPool pool;
+    pool.init();
+    const int N = 50;
+    for (int i = 0; i < N; ++i) spawn_aged(pool, 30, 7, 2);  // fertile, floor 7, faction 2
+    std::uint32_t before = pool.count();
+    MacroSim macro;
+    macro.init(pool);
+    MacroParams p;
+    p.daysPerTick = 365;
+    p.maxAge = 200;
+    p.mortalityOnset = 200;  // nobody dies, so births are the only change
+    p.birthRate = 0.05f;
+    p.targetPopulation = 500;  // deficit drives catch-up births
+    MacroStats s = macro.step(pool, p);
+
+    CHECK(s.births > 0);
+    CHECK(pool.count() == before + s.births);
+    CHECK(s.living == static_cast<std::uint32_t>(N) + s.births);  // survivors + newborns
+    // Newborns inherit a parent's floor + faction, start at age 0, alive.
+    for (NpcId id = before; id < pool.count(); ++id) {
+        CHECK(pool.alive(id));
+        CHECK(pool.age(id) == 0);
+        CHECK(pool.floor(id) == 7);
+        CHECK(pool.faction(id) == 2);
+    }
+    CHECK(pool.reserve_remaining() == kNpcPoolSize - pool.count());
+}
+
+static void test_macro_skips_embodied() {
+    // The macro sweep must never age or kill an EMBODIED record — those belong to
+    // the live micro sim, and the on-screen player is just an embodied record with
+    // the NpcPlayer bit. A cold age-99 NPC crosses the ceiling and dies; an
+    // embodied age-99 NPC beside it must survive, unaged, still counted as living.
+    NpcPool pool;
+    pool.init();
+    NpcId cold = spawn_aged(pool, 99, 4, 1);
+    NpcId hero = spawn_aged(pool, 99, 4, 1);
+    pool.set_embodied(hero, true);
+    pool.set_player(hero, true);
+
+    MacroSim macro;
+    macro.init(pool);
+    MacroParams p;
+    p.daysPerTick = 365;  // one year: the cold NPC hits maxAge and dies
+    p.maxAge = 100;
+    p.birthRate = 0.0f;
+    p.targetPopulation = 0;
+    MacroStats s = macro.step(pool, p);
+
+    CHECK(!pool.alive(cold));       // cold record aged to the ceiling and died
+    CHECK(pool.alive(hero));        // embodied record untouched
+    CHECK(pool.age(hero) == 99);    // ...and not aged by the macro clock
+    CHECK(s.deaths == 1);           // only the cold record
+    CHECK(s.living == 1);           // the embodied record still counts as living
+}
+
+static void test_macro_determinism() {
+    auto build = [](NpcPool& pool) {
+        pool.init();
+        FloorSpec spec = floor_spec(FloorKind::Residential);
+        seed_floor_from_spec(pool, 2, spec, 0xC0FFEEu);
+    };
+    NpcPool p1, p2;
+    build(p1);
+    build(p2);
+    MacroSim m1, m2;
+    m1.init(p1);
+    m2.init(p2);
+    MacroParams p;
+    p.daysPerTick = 30;  // ~monthly ticks
+    for (int i = 0; i < 24; ++i) {  // two simulated years
+        MacroStats a = m1.step(p1, p);
+        MacroStats b = m2.step(p2, p);
+        CHECK(a.living == b.living);
+        CHECK(a.deaths == b.deaths);
+        CHECK(a.births == b.births);
+    }
+    CHECK(p1.count() == p2.count());
+    for (NpcId id = 0; id < p1.count(); ++id) {
+        CHECK(p1.age(id) == p2.age(id));
+        CHECK(p1.alive(id) == p2.alive(id));
+        CHECK(p1.floor(id) == p2.floor(id));
+        CHECK(p1.faction(id) == p2.faction(id));
+    }
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -1138,6 +1304,10 @@ int main() {
     test_streamed_nav();
     test_nav_cache_roundtrip();
     test_streamed_nav_cache();
+    test_macro_aging();
+    test_macro_mortality();
+    test_macro_births();
+    test_macro_determinism();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

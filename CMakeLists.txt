@@ -167,4 +167,12 @@ if(GIGA_BUILD_TESTS)
     if(NOT MSVC)
         target_compile_options(sim_bench PRIVATE -fno-rtti -fno-exceptions)
     endif()
+
+    # Macro-society benchmark: advance the FULL 2^20 population one coarse tick at
+    # a time and report ms/tick. Like sim_bench, an executable, not a ctest.
+    add_executable(macro_bench tests/macro_bench.cpp)
+    target_link_libraries(macro_bench PRIVATE giga_game)
+    if(NOT MSVC)
+        target_compile_options(macro_bench PRIVATE -fno-rtti -fno-exceptions)
+    endif()
 endif()

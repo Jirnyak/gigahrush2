@@ -439,19 +439,33 @@ open work is: **#10** macro tick, **#12** movement AI (now unblocked — the flo
 fields, `route_step`, and the diffusion flee field are all built), then content
 **#13**. The floor-module epic (#6–#9) is **done**.
 
-### #10 — Macro tick skeleton
-Coarse clock (own rate, **never** the 120 Hz tick — [macrosim.md](macrosim.md)) +
-a **columnar full-sweep** aging pass over the pool arrays; bench at 1M. Later:
-budgeted-cursor passes (migration/social, ~64 records/tick). This is where the
-**off-screen population comes alive**; the ref proved 2²⁰ is viable *only if the
-macro tick stays columnar* (its own 1M target was retired because per-record
-object graphs — not typed columns — dominated cost; gigahrush2 avoids that with
-inline names + inline inventory in SoA).
+### #10 — Macro tick (demographic core BUILT 2026-07-28; #10b/#10c pending)
+Coarse clock (own rate, **never** the 120 Hz tick — [macrosim.md](macrosim.md)).
+This is where the **off-screen population comes alive**; the ref proved 2²⁰ is
+viable *only if the macro tick stays columnar* (its own 1M target was retired
+because per-record object graphs — not typed columns — dominated cost; gigahrush2
+avoids that with inline names + inline inventory in SoA).
 
-**Also fold in here:** swap `FloorStreamer`'s fixed `[firstId, count)` roster for
-a maintained **per-floor bucket index** over `pool.floor(id)`, so a floor
-re-embodies whoever is *currently* labelled with its number — otherwise migration
-(which moves records between floors) is invisible to streaming.
+- **#10a — columnar demographic full-sweep (DONE 2026-07-28).** ✔
+  `src/game/macro_sim.{h,cpp}`: one O(n) sweep = aging (fractional-year
+  accumulator, macro-owned) + old-age mortality (data-driven quadratic curve) +
+  reserve-drawn births (fertile adults reservoir-sampled in the same pass,
+  catch-up toward `targetPopulation`, newborns inherit a parent's floor/cell/
+  faction). Skips embodied/player records (micro sim owns them). Fully
+  deterministic via stateless `(id,tick,salt)` hashing (`src/core/rng.h`, new
+  shared primitive). **Bench: ~2.8 ms / 1,048,576 records, ~373 M rec/s**
+  (`macro_bench`). 5 tests in `game_test` (aging, mortality, births, determinism,
+  embodied-skip). Divergence from ref: aging+births is a **new capability** — the
+  TS society only decays; affordable here because it's headless on a coarse clock.
+- **#10b — per-floor bucket index (NEXT).** Swap `FloorStreamer`'s fixed
+  `[firstId, count)` roster for a maintained **inverted index** over
+  `pool.floor(id)`, so a floor re-embodies whoever is *currently* labelled with its
+  number — otherwise migration (which moves records between floors) is invisible to
+  streaming. The ref's per-floor `floorIndex` is exactly this; avoid its
+  linear-bucket-scan hot spot on cold moves (keep relocation O(1)/O(small)).
+- **#10c — budgeted-cursor passes.** Bounded ring-scan (~64 records/tick, the
+  ref's `RECORDS_PER_TICK` primitive) for off-floor migration + relationship drift,
+  on the same tables. Then faction/economy dynamics (6×6 Int8 relation matrix).
 
 ### #11 — Baked nav / flow / distance fields (`src/world/nav`) — A→D BUILT 2026-07-28 (headless green)
 The stack is **done**: L0 carve (A), L1 coarse graph + core job system (B), L2
