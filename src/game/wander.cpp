@@ -5,6 +5,8 @@
 #include "core/math.h"
 #include "core/wrap.h"
 #include "ecs/components.h"
+#include "game/embody.h"   // NpcRef
+#include "game/faction_relations.h"
 #include "game/mob_behaviour.h"
 #include "game/mob_table.h"
 #include "game/mob_spawn.h"
@@ -87,7 +89,7 @@ bool adjacent_wall(const MacroGrid& grid, const vec3& pos) {
 
 } // namespace
 
-void wander_step(Registry& reg, const MacroGrid& grid,
+void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                  const nav::CoarseGraph& coarse,
                  const nav::FineNav& fine, LayerId layer, std::uint64_t tick) {
     if (fine.flow.empty()) return;  // nav not baked for this floor
@@ -107,6 +109,12 @@ void wander_step(Registry& reg, const MacroGrid& grid,
     for (auto e : reg.view<const CameraTag, const Transform>()) {
         const Transform& t = reg.get<const Transform>(e);
         if (t.layer != layer) continue;
+        // Monsters do not hunt what they do not consider prey. Same gate as
+        // mob_attack_step, and it has to be in BOTH: gating only the attack would
+        // give a cultist a floor of monsters that chase and never swing, which reads
+        // as broken pathfinding rather than as safety.
+        if (const NpcRef* nr = reg.try_get<NpcRef>(e))
+            if (!mob_hostile_to(pool, nr->id)) continue;
         victimPos = t.pos;
         victimId = static_cast<std::uint32_t>(entt::to_integral(e));
         const CameraTag& cam = reg.get<const CameraTag>(e);

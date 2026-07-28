@@ -63,4 +63,21 @@ inline vec3 faction_color(std::uint16_t faction, std::uint32_t jitterKey) {
     return vec3{clamp01(c.x + j), clamp01(c.y + j), clamp01(c.z + j)};
 }
 
+// Russian display names, for the HUD. Parallel to the Faction enum.
+//
+// Kept here rather than in a table because five strings do not need a CSV, and
+// because faction identity is now player-visible: whether monsters hunt you depends
+// on which body you are wearing ([faction_relations.h] kMobVsFaction), so the player
+// has to be able to READ their own faction or the mechanic is invisible.
+inline const char* faction_name(Faction f) {
+    switch (f) {
+        case Faction::Citizens:    return "\xd0\x96\xd0\xb8\xd0\xbb\xd1\x8c\xd1\x86\xd1\x8b";
+        case Faction::Liquidators: return "\xd0\x9b\xd0\xb8\xd0\xba\xd0\xb2\xd0\xb8\xd0\xb4\xd0\xb0\xd1\x82\xd0\xbe\xd1\x80\xd1\x8b";
+        case Faction::Cultists:    return "\xd0\x9a\xd1\x83\xd0\xbb\xd1\x8c\xd1\x82\xd0\xb8\xd1\x81\xd1\x82\xd1\x8b";
+        case Faction::Scientists:  return "\xd0\x9d\xd0\xb0\xd1\x83\xd1\x87\xd0\xbd\xd1\x8b\xd0\xb5";
+        case Faction::Wild:        return "\xd0\x94\xd0\xb8\xd0\xba\xd0\xb8\xd0\xb5";
+        default:                   return "?";
+    }
+}
+
 } // namespace giga::game

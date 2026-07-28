@@ -22,6 +22,7 @@
 #include <cstdint>
 
 #include "ecs/registry.h"
+#include "game/npc_pool.h"
 #include "world/level_stack.h"
 #include "world/macro_grid.h"
 #include "world/nav.h"
@@ -55,7 +56,9 @@ std::uint32_t wander_init(Registry& reg, LayerId layer, std::uint32_t seed);
 // `grid` is read only for the wall-adjacency test AiFlag::WallBias needs: four
 // cardinal cell reads, and only for a mob already aggroed and already in its
 // stagger slot — so 4 reads for roughly 1/8 of the hostiles per pass.
-void wander_step(Registry& reg, const MacroGrid& grid,
+// `pool` is read to resolve the camera holder's faction: monsters do not hunt a body
+// they do not consider prey ([faction_relations.h] kMobVsFaction).
+void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                  const nav::CoarseGraph& coarse,
                  const nav::FineNav& fine, LayerId layer, std::uint64_t tick);
 

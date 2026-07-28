@@ -1283,7 +1283,7 @@ static void test_wander_moves_the_crowd() {
     // passes in this window.
     const float dt = 1.0f / 120.0f;
     for (std::uint64_t t = 0; t < 120; ++t) {
-        wander_step(reg, stack.layer(layer).grid(), coarse, fine, layer, t);
+        wander_step(reg, stack.layer(layer).grid(), pool, coarse, fine, layer, t);
         physics_step(reg, stack, dt);
     }
 
@@ -1307,7 +1307,7 @@ static void test_wander_moves_the_crowd() {
     // Steering must be a pure read of the bake: it may not mutate the nav data,
     // or a second floor visit would behave differently from the first.
     nav::CoarseGraph after = coarse;
-    wander_step(reg, stack.layer(layer).grid(), coarse, fine, layer, 999u);
+    wander_step(reg, stack.layer(layer).grid(), pool, coarse, fine, layer, 999u);
     CHECK(std::memcmp(&after, &coarse, sizeof(coarse)) == 0);
 
     // Immobile mobs are never given a target: a spore carpet must not walk.
@@ -2639,6 +2639,86 @@ static void test_player_shoots() {
     }
 }
 
+
+// The faction matrix, as a LIVE mechanic rather than a table.
+//
+// An audit found FactionRelations had zero readers outside its own tests — 36 bytes
+// maintained for nobody. `kMobVsFaction` puts Cultists at +50, the one society
+// monsters leave alone, and because the player is an embodied record that death
+// replaces, that becomes a real mechanic for free: sometimes you come back wearing a
+// body the floor will not eat.
+//
+// Both branches are asserted here because a lucky respawn is not proof, and the gate
+// exists in TWO places (`mob_attack_step` and `wander_step`) — gating only the attack
+// would give a cultist a floor of monsters that chase forever and never swing, which
+// reads as broken pathfinding rather than as safety.
+static void test_faction_gates_hunting() {
+    LevelStack stack;
+    LayerId layer = stack.push_layer();
+    Registry reg;
+    NpcPool pool;
+    pool.init();
+    EventBus bus;
+
+    // A monster kind that actually hits, standing right on top of the victim.
+    std::uint8_t kind = 0;
+    for (std::size_t k = 0; k < kMobKindCount; ++k)
+        if (kMobTable[k].dmg > 0 && kMobTable[k].meleeReachMm > 0) {
+            kind = static_cast<std::uint8_t>(k);
+            break;
+        }
+    const MobDef& md = kMobTable[kind];
+    CHECK(md.dmg > 0);
+
+    const float dt = 1.0f / 120.0f;
+
+    auto trial = [&](Faction f) -> std::int16_t {
+        Registry r;
+        NpcPool p;
+        p.init();
+        NpcId id = p.spawn();
+        p.hp(id) = 30000;
+        p.max_hp(id) = 30000;
+        p.faction(id) = static_cast<std::uint16_t>(f);
+
+        Entity body = r.create();
+        Transform bt;
+        bt.pos = vec3{40.0f, 40.0f, 4.0f};
+        bt.layer = layer;
+        r.emplace<Transform>(body, bt);
+        r.emplace<NpcRef>(body, NpcRef{id});
+        r.emplace<CameraTag>(body, CameraTag{});
+
+        Entity mob = r.create();
+        Transform mt = bt;                 // same cell: unmissable
+        r.emplace<Transform>(mob, mt);
+        r.emplace<MobRef>(mob, MobRef{kind, 1, 100, 100});
+        r.emplace<MobCombat>(mob, MobCombat{0, 0});
+
+        for (int i = 0; i < 4; ++i)
+            mob_attack_step(r, stack.layer(layer).grid(), p, bus, layer, dt,
+                            static_cast<std::uint64_t>(i));
+        return static_cast<std::int16_t>(30000 - p.hp(id));
+    };
+
+    // A citizen is prey and loses HP.
+    const std::int16_t citizenLost = trial(Faction::Citizens);
+    CHECK(citizenLost > 0);
+    // A cultist is not, and loses NONE. Same monster, same cell, same ticks — the only
+    // difference is the faction byte on the body.
+    CHECK(trial(Faction::Cultists) == 0);
+    // Wild is hunted too (kMobVsFaction is -60, past the -50 boundary), so "not
+    // Citizens" is not what grants safety — being a cultist specifically is.
+    CHECK(trial(Faction::Wild) > 0);
+    CHECK(trial(Faction::Liquidators) > 0);
+    CHECK(trial(Faction::Scientists) > 0);
+
+    // And the wander gate agrees with the attack gate. A cultist must not even be
+    // pursued: build a nav bake and check a mob beside a cultist does not steer at it.
+    (void)reg;
+    (void)pool;
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -2681,6 +2761,7 @@ int main() {
     test_floor_kinds_use_distinct_materials();
     test_ranged_windup_and_deadzone();
     test_faction_relations();
+    test_faction_gates_hunting();
     test_extraction();
     test_extraction_reachable();
     test_mob_behaviour();

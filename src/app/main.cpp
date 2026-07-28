@@ -42,6 +42,7 @@
 #include "game/samosbor.h"
 #include "game/combat.h"
 #include "game/extraction.h"
+#include "game/faction_relations.h"
 #include "game/loot.h"
 #include "game/weapon_table.h"
 #include "game/event_bus.h"
@@ -663,7 +664,8 @@ int main(int argc, char** argv) {
                 if (reg.valid(player))
                     if (auto* ctl_ = reg.try_get<Controller>(player))
                         ctl_->moveSpeed = kPlayerWalkSpeed * needs.speedScale;
-                game::wander_step(reg, stack.layer(activeLayer).grid(), nav.coarse(),
+                game::wander_step(reg, stack.layer(activeLayer).grid(), pool,
+                                  nav.coarse(),
                                   nav.fine(), activeLayer, simTick);
                 physics_step(reg, stack, kSimDt);
                 // Melee resolves AFTER physics, so reach is tested against where
@@ -858,6 +860,20 @@ int main(int argc, char** argv) {
                                 static_cast<long long>(ledger.lostToDeath),
                                 ledger.bestHaul, ledger.deepestFloor,
                                 ledger.deepestBand);
+                }
+                // Which body you are wearing, and whether the floor wants to eat
+                // it. Printed because the mechanic is invisible otherwise: a cultist
+                // simply is not attacked, and with no readout that looks like the
+                // monsters are broken rather than like safety.
+                if (nr && pool.valid(nr->id)) {
+                    const auto f = static_cast<game::Faction>(
+                        pool.faction(nr->id) % game::kFactionCount);
+                    if (game::mob_hostile_to(pool, nr->id))
+                        ImGui::Text("body: %s  (hunted)", game::faction_name(f));
+                    else
+                        ImGui::TextColored(ImVec4(0.29f, 0.75f, 0.57f, 1.0f),
+                                           "body: %s  (monsters ignore you)",
+                                           game::faction_name(f));
                 }
                 ImGui::Text("loot %d rub (%d/%d slots) | healed %d | band E%u",
                             carried, slots, game::kInvSlots, healed,
