@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
@@ -49,6 +50,7 @@
 #include "game/door.h"
 #include "game/combat.h"
 #include "game/extraction.h"
+#include "game/save.h"
 #include "game/faction_relations.h"
 #include "game/loot.h"
 #include "game/weapon_table.h"
@@ -230,6 +232,44 @@ const DemoFloor* demo_floor(int number) {
 // would be a large one-frame allocation; the demo floors (|number| <= 4) are far
 // below this anyway, so it is a guard rail rather than a live limit.
 constexpr std::uint32_t kMobSpawnCap = 600;
+
+// Where a run lives on disk. `giga_game` does no file I/O by design — it links
+// giga_core and nothing platform-shaped ([AGENTS.md]) — so the fopen is HERE and the
+// format is over there ([game/save.h]). save_write/save_read take a byte buffer and
+// never touch a FILE*, which is also what makes them testable headlessly.
+constexpr const char* kSavePath = "gigahrush2.sav";
+
+bool write_run(const game::SaveState& st, const char* path) {
+    std::vector<std::uint8_t> bytes;
+    game::save_write(st, bytes);
+    std::FILE* f = std::fopen(path, "wb");
+    if (!f) return false;
+    const std::size_t n = std::fwrite(bytes.data(), 1, bytes.size(), f);
+    const bool ok = (n == bytes.size());
+    std::fclose(f);
+    return ok;
+}
+
+// False when there is no save, when it cannot be read, or when the format refuses it.
+// `err` says which, and `game::save_error_text` turns that into a sentence for the
+// player. An absent file leaves `err` at None, which is how "first run" is told apart
+// from "your save is from an older build" — the two need different words.
+bool read_run(game::SaveState& st, const char* path, game::SaveError& err) {
+    err = game::SaveError::None;
+    std::FILE* f = std::fopen(path, "rb");
+    if (!f) return false;
+    std::vector<std::uint8_t> bytes;
+    std::uint8_t chunk[1024];
+    for (;;) {
+        const std::size_t got = std::fread(chunk, 1, sizeof(chunk), f);
+        if (got == 0) break;
+        bytes.insert(bytes.end(), chunk, chunk + got);
+    }
+    std::fclose(f);
+    // An empty file yields bytes.data() == nullptr, which save_read reports as TooShort
+    // rather than dereferencing.
+    return game::save_read(bytes.data(), bytes.size(), st, &err);
+}
 
 // Repopulate the active floor's monsters: clear whatever was on the layer, then
 // spawn this floor's roster from the global table ([monsters.md]). Mobs are not
@@ -578,7 +618,13 @@ int main(int argc, char** argv) {
     // because a rumour is something you were TOLD — it should stay on screen after you
     // walk away, not vanish the moment the speaker is out of range.
     // The job on offer from whoever is nearest, and the book of taken ones.
-    game::ContractBook contracts;
+    // The whole run in ONE struct, because that is exactly what gets written to disk.
+    // `contracts` and `ledger` below are REFERENCES into it, not copies: every one of
+    // the ~30 existing use sites keeps working untouched, and there is no "which copy is
+    // authoritative at save time" question — the answer that bug always gives is "the
+    // stale one". A load is then `runState = in;` and both references see it. [save.h]
+    game::SaveState runState;
+    game::ContractBook& contracts = runState.book;
     game::Contract offer{};
     char offerLine[200] = {};
     char rumourLine[160] = {};
@@ -586,7 +632,16 @@ int main(int argc, char** argv) {
     game::NeedsTick needs{};   // last step's report, for the HUD
     int needsHpLost = 0;       // running total, so the HUD is not one tick
     std::uint32_t shots = 0;   // rounds the player has fired
-    game::RunLedger ledger;
+    game::RunLedger& ledger = runState.ledger;
+    // F5 saves, F9 loads. Recorded as intent and acted on in the sim loop, the same
+    // shape sellWanted/buyWanted use: a load rewrites world state and belongs on the
+    // sim's clock, not the window's.
+    bool saveWanted = false;
+    bool loadWanted = false;
+    // What the last save or load actually said. A save that fails silently is a save the
+    // player only finds out about by losing a run.
+    char saveLine[96] = {};
+    std::uint64_t saveLineAt = 0;
     std::int32_t banked = 0;
     std::int32_t containerTake = 0;   // roubles pulled out of crates
     std::int32_t contractPaid = 0;    // roubles paid by finished jobs
@@ -747,6 +802,13 @@ int main(int argc, char** argv) {
                 if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
                     e.key.scancode == SDL_SCANCODE_Q)
                     doorWanted = true;
+                // F5 saves the run, F9 loads it.
+                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
+                    e.key.scancode == SDL_SCANCODE_F5)
+                    saveWanted = true;
+                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
+                    e.key.scancode == SDL_SCANCODE_F9)
+                    loadWanted = true;
                 // B sells the haul, R re-supplies. Recorded as INTENT here and acted
                 // on in the sim loop, the same shape `healWanted` uses — the event loop
                 // has no `activeLayer` in scope, and more importantly a trade is a
@@ -986,6 +1048,94 @@ int main(int argc, char** argv) {
                                     pool.inventory(nrx->id), ledger);
                     }
                 }
+                // Save and load. Both are world mutations, so they sit on the sim's
+                // clock beside the other intent flags rather than in the event loop.
+                if (saveWanted) {
+                    saveWanted = false;
+                    const game::NpcRef* nrs = reg.valid(player)
+                                                  ? reg.try_get<game::NpcRef>(player)
+                                                  : nullptr;
+                    if (nrs && pool.valid(nrs->id)) {
+                        const vec3& sp = reg.get<Transform>(player).pos;
+                        runState.player.clock = pool.needs(nrs->id);
+                        runState.player.inv = pool.inventory(nrs->id);
+                        runState.player.hp = pool.hp(nrs->id);
+                        runState.player.maxHp = pool.max_hp(nrs->id);
+                        // The SIGNED floor, explicitly: NpcPool::floor() is unsigned
+                        // (floor -50 stores as 65486) and LayerId is a storage slot that
+                        // means nothing across a restart. [save.h]
+                        runState.player.floorNumber = currentFloor;
+                        runState.player.cx = static_cast<std::uint8_t>(
+                            wrap_macro(static_cast<int>(sp.x / kCellSize)));
+                        runState.player.cy = static_cast<std::uint8_t>(
+                            wrap_macro(static_cast<int>(sp.y / kCellSize)));
+                        runState.player.cz = static_cast<std::uint8_t>(
+                            wrap_macro(static_cast<int>(sp.z / kCellSize)));
+                        // REFRESH, not append and not clear: only one floor is ever
+                        // resident, so every other floor's opened crates exist nowhere
+                        // but in this list. Appending would duplicate the live floor on
+                        // every save; clearing would forget the other nine. [save.h]
+                        game::refresh_opened_containers(reg, activeLayer, currentFloor,
+                                                        runState.opened);
+                        if (write_run(runState, kSavePath))
+                            std::snprintf(saveLine, sizeof(saveLine),
+                                          "saved: floor %d, %u rub, %u crates",
+                                          currentFloor,
+                                          static_cast<unsigned>(ledger.banked),
+                                          static_cast<unsigned>(runState.opened.size()));
+                        else
+                            std::snprintf(saveLine, sizeof(saveLine),
+                                          "SAVE FAILED: could not write %s", kSavePath);
+                        saveLineAt = simTick;
+                    }
+                }
+                if (loadWanted) {
+                    loadWanted = false;
+                    game::SaveState in;
+                    game::SaveError err = game::SaveError::None;
+                    if (!read_run(in, kSavePath, err)) {
+                        // No file and a refused file need different words: one is a
+                        // first run, the other is a save the build can no longer read.
+                        if (err == game::SaveError::None)
+                            std::snprintf(saveLine, sizeof(saveLine),
+                                          "no save file (%s)", kSavePath);
+                        else
+                            std::snprintf(saveLine, sizeof(saveLine),
+                                          "load refused: %s",
+                                          game::save_error_text(err));
+                    } else {
+                        // `ledger` and `contracts` are references INTO runState, so this
+                        // one assignment republishes both without touching a use site.
+                        runState = in;
+                        const game::NpcRef* nrl = reg.valid(player)
+                                                      ? reg.try_get<game::NpcRef>(player)
+                                                      : nullptr;
+                        if (nrl && pool.valid(nrl->id)) {
+                            pool.needs(nrl->id) = runState.player.clock;
+                            pool.inventory(nrl->id) = runState.player.inv;
+                            pool.hp(nrl->id) =
+                                static_cast<std::int16_t>(runState.player.hp);
+                        }
+                        const std::size_t re = game::apply_opened_containers(
+                            reg, activeLayer, currentFloor, runState.opened.data(),
+                            runState.opened.size());
+                        // Honest about the one thing this does NOT do: it restores the
+                        // run, not the position. Travelling to the saved floor means
+                        // driving the elevator and re-baking nav, so a load on the wrong
+                        // floor says so instead of pretending.
+                        if (runState.player.floorNumber != currentFloor)
+                            std::snprintf(saveLine, sizeof(saveLine),
+                                          "loaded %u rub (saved on floor %d, you are on %d)",
+                                          static_cast<unsigned>(ledger.banked),
+                                          runState.player.floorNumber, currentFloor);
+                        else
+                            std::snprintf(saveLine, sizeof(saveLine),
+                                          "loaded: %u rub, %u crates re-opened",
+                                          static_cast<unsigned>(ledger.banked),
+                                          static_cast<unsigned>(re));
+                    }
+                    saveLineAt = simTick;
+                }
                 // The pad is the shop, and only the pad. A vendor reachable from
                 // anywhere would make the walk home pointless, and the walk home IS
                 // the extraction loop. [vendor.h]
@@ -1187,6 +1337,10 @@ int main(int argc, char** argv) {
                 // Doors: built/shut/broken, plus how many bodies are leaning on one
                 // right now. `pressing` is the number that makes a shut door read as
                 // a consumable resource rather than a wall — you can watch it fall.
+                // What the last save or load said, for ~6 s. A save that fails silently
+                // is a save the player only finds out about by losing a run.
+                if (saveLine[0] && simTick - saveLineAt < 6u * kSimHz)
+                    ImGui::TextUnformatted(saveLine);
                 ImGui::Text("doors %u built | %u shut | %u broken | %u pressing%s",
                             doorsBuilt, doors.shut, doors.broken, doorTick.pressing,
                             doors.frozen ? "  (frozen: nav baking)" : "");
@@ -1354,7 +1508,7 @@ int main(int argc, char** argv) {
             }
             ImGui::TextUnformatted(
                 "WASD move | mouse look | Tab toggle look | Space jump | "
-                "F fly | Q door | [ / ] floor down/up | Esc menu");
+                "F fly | Q door | F5/F9 save/load | [ / ] floor down/up | Esc menu");
             ImGui::End();
         }
 

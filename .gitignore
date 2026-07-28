@@ -33,3 +33,6 @@ imgui.ini
 # Python bytecode from the table generators.
 tools/__pycache__/
 __pycache__/
+
+# Save games written next to the exe by F5 ([app/main.cpp] kSavePath).
+*.sav
