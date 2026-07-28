@@ -93,8 +93,18 @@ the binary runs from the build directory.
 ### 4. MSVC-only compile settings
 
 `/utf-8` (source and execution charset pinned independently of the host's ANSI
-codepage), `/permissive-`, `/Zc:preprocessor`, `/Zc:__cplusplus`, `/MP`, plus
-`NOMINMAX`, `WIN32_LEAN_AND_MEAN`, `_USE_MATH_DEFINES`, `_CRT_SECURE_NO_WARNINGS`.
+codepage), `/permissive-`, `/Zc:__cplusplus`, `/MP`, plus `NOMINMAX`,
+`WIN32_LEAN_AND_MEAN`, `_CRT_SECURE_NO_WARNINGS`.
+
+`NOMINMAX` is the load-bearing one: `<SDL3/SDL.h>` can reach `<windows.h>`, whose
+`min`/`max` macros collide with the `std::min`/`max`/`clamp` used in
+`core/math.h`, `sim/fluid.cpp`, `render/vk_swapchain.cpp` and `input/input.cpp`.
+
+Two flags were dropped as dead after grepping the tree: `_USE_MATH_DEFINES` (no
+`M_PI`/`M_SQRT*`/`M_E` anywhere in `src/`, `tests/` or `shaders/`) and
+`/Zc:preprocessor` (no `__VA_ARGS__` or `__VA_OPT__`). Neither was wrong, but an
+unused conformance flag is a liability — `/Zc:preprocessor` has historically
+broken Windows SDK headers — so they go back only with a use to justify them.
 
 `/utf-8` buys codepage independence; it is **not** fixing a live defect. Corrected
 2026-07-28 after measurement: on a CP1251 host the emitted string bytes are
