@@ -8,6 +8,7 @@
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "ecs/registry.h"
+#include "game/combat.h"
 #include "game/embody.h"
 #include "game/elevator.h"
 #include "game/event_bus.h"
@@ -1311,6 +1312,166 @@ static void test_wander_moves_the_crowd() {
     }
 }
 
+// ---- Combat: the three reference defects, asserted impossible ---------------
+
+// Defect 1 — one damage function, and it reports what it APPLIED. In the
+// reference, pre-armour damage leaked into the kill feed and the threat model
+// while HP took the mitigated value, so the number shown was not the number that
+// landed.
+static void test_damage_reports_applied_not_raw() {
+    NpcPool pool;
+    pool.init();
+    Registry reg;
+    NpcId id = pool.spawn();
+    pool.hp(id) = 100;
+    pool.max_hp(id) = 100;
+    Entity e = embody(reg, pool, id, 0);
+
+    DamageResult r = apply_damage(reg, pool, e, 30, DamageChannel::Kinetic,
+                                  entt::null);
+    CHECK(r.hit && r.applied == 30 && r.blocked == 0 && !r.lethal);
+    CHECK(pool.hp(id) == 70);
+
+    // 50% kinetic armour halves it, and `applied` is the halved number — the raw
+    // 40 must not escape anywhere.
+    Armour a{};
+    a.resist[static_cast<std::size_t>(DamageChannel::Kinetic)] = 50;
+    reg.emplace<Armour>(e, a);
+    r = apply_damage(reg, pool, e, 40, DamageChannel::Kinetic, entt::null);
+    CHECK(r.applied == 20 && r.blocked == 20);
+    CHECK(pool.hp(id) == 50);
+
+    // Armour is per channel: the same plate does nothing against fire.
+    r = apply_damage(reg, pool, e, 10, DamageChannel::Fire, entt::null);
+    CHECK(r.applied == 10 && r.blocked == 0);
+    CHECK(pool.hp(id) == 40);
+
+    // A negative resist is a vulnerability, deliberately not clamped away.
+    reg.get<Armour>(e).resist[static_cast<std::size_t>(DamageChannel::Energy)] =
+        -100;
+    r = apply_damage(reg, pool, e, 10, DamageChannel::Energy, entt::null);
+    CHECK(r.applied == 20);
+
+    // Overkill reports what HP actually lost, not the authored swing.
+    const std::int16_t before = pool.hp(id);
+    r = apply_damage(reg, pool, e, 9999, DamageChannel::Kinetic, entt::null);
+    CHECK(r.applied == before);   // not 9999, and not the mitigated 5000 either
+    CHECK(r.lethal);
+    CHECK(pool.hp(id) == 0);
+}
+
+// Defect 2 — apply_damage never destroys; finalize_deaths is the only place a
+// life ends, and the event is published while the victim can still be read.
+static void test_death_goes_through_one_finalizer() {
+    NpcPool pool;
+    pool.init();
+    Registry reg;
+    EventBus bus;
+    bus.init();
+
+    NpcId id = pool.spawn();
+    pool.hp(id) = 10;
+    pool.max_hp(id) = 10;
+    Entity e = embody(reg, pool, id, 0);
+
+    DamageResult r = apply_damage(reg, pool, e, 50, DamageChannel::Kinetic,
+                                  entt::null);
+    CHECK(r.lethal);
+    // Tagged, not destroyed. This is what gives loot / quest / A-Life hooks a
+    // chance to run — the reference's P0 was that they could be skipped.
+    CHECK(reg.valid(e));
+    CHECK(reg.all_of<Dead>(e));
+    CHECK(pool.alive(id));        // the record is not killed until finalize either
+
+    // A second hit on a corpse-in-waiting is a no-op, so a death cannot be
+    // double-counted by two systems in the same tick.
+    DamageResult again = apply_damage(reg, pool, e, 50, DamageChannel::Kinetic,
+                                      entt::null);
+    CHECK(!again.hit && again.applied == 0);
+
+    CHECK(finalize_deaths(reg, pool, bus, /*tick=*/7u) == 1);
+    CHECK(!reg.valid(e));         // now it is gone
+    CHECK(!pool.alive(id));       // and the record is dead
+    CHECK(pool.valid(id));        // but its id stays valid forever ([npcs.md])
+
+    std::uint32_t died = 0;
+    for (std::size_t i = 0; i < bus.size(); ++i) {
+        const Event& ev = bus.events()[i];
+        if (ev.type != EventType::NpcDied) continue;
+        ++died;
+        CHECK(ev.a == id);
+        CHECK(ev.tick == 7u);
+    }
+    CHECK(died == 1);
+    CHECK(finalize_deaths(reg, pool, bus, 8u) == 0);   // idempotent
+}
+
+// Defect 3 — one cooldown decrement, for every mob, whether or not it can attack.
+// The reference decremented attackCd at ~60 sites, several as max() floors, so
+// some monsters out-attacked their own authored rate.
+static void test_melee_cooldown_and_reach() {
+    NpcPool pool;
+    pool.init();
+    Registry reg;
+    EventBus bus;
+    bus.init();
+
+    NpcId pid = pool.spawn();
+    pool.hp(pid) = 30000;         // enough to survive the whole test
+    pool.max_hp(pid) = 30000;
+    Entity player = embody_as_player(reg, pool, pid, 0);
+    const vec3 ppos = reg.get<Transform>(player).pos;
+
+    const std::uint8_t kind = static_cast<std::uint8_t>(MobKind::Tvar);
+    const MobDef& def = kMobTable[kind];
+    const float dt = 1.0f / 120.0f;
+    const std::uint16_t step = static_cast<std::uint16_t>(dt * 1000.0f + 0.5f);
+
+    // Far mob: must never land a hit, but its cooldown must still run down.
+    Entity far = reg.create();
+    Transform ft;
+    ft.pos = vec3{ppos.x + 60.0f, ppos.y, ppos.z};
+    ft.layer = 0;
+    reg.emplace<Transform>(far, ft);
+    reg.emplace<MobRef>(far, MobRef{kind, 1, 100, 100});
+    reg.emplace<MobCombat>(far, MobCombat{500});
+
+    CHECK(mob_melee_step(reg, pool, bus, 0, dt, 0) == 0);
+    CHECK(reg.get<MobCombat>(far).cooldownMs == 500 - step);
+    CHECK(pool.hp(pid) == 30000);
+
+    // Adjacent mob with an expired cooldown hits on the first pass.
+    Entity adj = reg.create();
+    Transform nt;
+    nt.pos = ppos;
+    nt.layer = 0;
+    reg.emplace<Transform>(adj, nt);
+    reg.emplace<MobRef>(adj, MobRef{kind, 1, 100, 100});
+    reg.emplace<MobCombat>(adj, MobCombat{0});
+
+    CHECK(mob_melee_step(reg, pool, bus, 0, dt, 1) == 1);
+    const std::int16_t expect = static_cast<std::int16_t>(
+        mob_hp_at_level(def.dmg, 1));
+    CHECK(pool.hp(pid) == 30000 - expect);
+    // Reset to the AUTHORED rate — not to zero, and not through a max() floor.
+    CHECK(reg.get<MobCombat>(adj).cooldownMs == def.attackCdMs);
+
+    // It may not swing again until the whole cooldown has elapsed. This is the
+    // defect: run one pass short of it and assert no second hit.
+    const std::int16_t hpAfterFirst = pool.hp(pid);
+    const int passes = static_cast<int>(def.attackCdMs / step);
+    for (int i = 0; i < passes - 1; ++i)
+        CHECK(mob_melee_step(reg, pool, bus, 0, dt, 2u + static_cast<std::uint64_t>(i))
+              == 0);
+    CHECK(pool.hp(pid) == hpAfterFirst);
+    // ...and then exactly one more, once it has.
+    std::uint32_t later = 0;
+    for (int i = 0; i < 3; ++i)
+        later += mob_melee_step(reg, pool, bus, 0, dt,
+                                100u + static_cast<std::uint64_t>(i));
+    CHECK(later == 1);
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -1342,6 +1503,9 @@ int main() {
     test_palette_separation();
     test_faction_mix_is_five_wide();
     test_wander_moves_the_crowd();
+    test_damage_reports_applied_not_raw();
+    test_death_goes_through_one_finalizer();
+    test_melee_cooldown_and_reach();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

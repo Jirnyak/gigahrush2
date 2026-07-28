@@ -1,5 +1,7 @@
 #include "game/mob_spawn.h"
 
+#include "game/combat.h"
+
 #include <vector>
 
 #include "core/math.h"
@@ -195,6 +197,10 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
         reg.emplace<MobRef>(e, MobRef{static_cast<std::uint8_t>(kind), level,
                                       static_cast<std::int16_t>(hp),
                                       static_cast<std::int16_t>(hp)});
+        // Staggered initial cooldown so a room full of mobs does not swing in
+        // lockstep on the frame the player walks in.
+        reg.emplace<MobCombat>(
+            e, MobCombat{static_cast<std::uint16_t>(r % (def.attackCdMs + 1u))});
         ++spawned;
     }
     return spawned;

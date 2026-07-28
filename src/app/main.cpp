@@ -35,6 +35,8 @@
 #include "game/floor_spec.h"
 #include "game/floor_stream.h"
 #include "game/mob_spawn.h"
+#include "game/combat.h"
+#include "game/event_bus.h"
 #include "game/wander.h"
 #include "game/npc_pool.h"
 #include "game/population.h"
@@ -177,6 +179,35 @@ void bake_floor_nav(Registry& reg, const World& world, LayerId layer,
                  (t1 - t0) / freq * 1000.0, (t2 - t1) / freq * 1000.0, n);
 }
 
+// Wake up in someone else's body.
+//
+// There is no player singleton: the player IS whichever entity holds a CameraTag
+// plus a Controller ([npcs.md], embody.h). So death is not a special case needing
+// a save-game — it is losing those two components and gaining them somewhere else.
+// This picks a living resident already embodied on the floor and hangs the camera
+// on it. The building carries on; you are just someone new in it.
+//
+// Returns entt::null when the floor has nobody left to be, which is the honest
+// end state and the caller must handle it.
+Entity possess_a_survivor(Registry& reg, game::NpcPool& pool, LayerId layer) {
+    for (auto e : reg.view<const game::NpcRef, const Transform>()) {
+        if (reg.get<const Transform>(e).layer != layer) continue;
+        if (reg.all_of<CameraTag>(e)) continue;      // already the player
+        const game::NpcId id = reg.get<const game::NpcRef>(e).id;
+        if (!pool.valid(id) || !pool.alive(id)) continue;
+
+        CameraTag cam;
+        cam.eyeOffset =
+            vec3{0.0f, 0.0f, game::body_eye_height(pool.height_mm(id))};
+        reg.emplace<CameraTag>(e, cam);
+        reg.emplace<Controller>(e, Controller{7.0f, {0, 0, 0}, false});
+        pool.set_player(id, true);
+        std::fprintf(stderr, "[death] possessed record %u\n", id);
+        return e;
+    }
+    return entt::null;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -272,6 +303,11 @@ int main(int argc, char** argv) {
     nav::FineNav navFine;
     game::NpcPool pool;
     pool.init();
+    // Transient event ring ([events.md]). Combat publishes deaths into it; it is
+    // cleared once per frame, so a listener must consume within the frame or use
+    // the opt-in log.
+    game::EventBus bus;
+    bus.init();
     game::FloorRegistry registry;
 
     // Streaming keeps only the ACTIVE floor's World + crowd live; every other
@@ -355,6 +391,8 @@ int main(int argc, char** argv) {
     // Sim tick index. Drives the wander stagger, which spreads the crowd's
     // steering across kWanderPeriod ticks with no per-agent scheduling state.
     std::uint64_t simTick = 0;
+    std::uint32_t meleeHits = 0;   // cumulative, for the HUD
+    std::uint32_t deaths = 0;
     int fluidStepEvery = 4; // sim steps between fluid updates
     int fluidCounter = 0;
 
@@ -362,6 +400,11 @@ int main(int argc, char** argv) {
         std::uint64_t now = SDL_GetPerformanceCounter();
         float frameDt = static_cast<float>((now - prevTicks) / freq);
         prevTicks = now;
+
+        // Events are transient by design ([events.md]): whatever was published
+        // last frame has had its chance to be consumed. Clearing here rather than
+        // at the end means a consumer added later sees a full frame's batch.
+        bus.clear();
         if (frameDt > 0.1f) frameDt = 0.1f; // clamp after a stall
 
         // --- events --------------------------------------------------------
@@ -458,6 +501,21 @@ int main(int argc, char** argv) {
                 // velocity, physics integrates it and resolves collision.
                 game::wander_step(reg, navCoarse, navFine, activeLayer, simTick);
                 physics_step(reg, stack, kSimDt);
+                // Melee resolves AFTER physics, so reach is tested against where
+                // bodies actually ended up this step rather than where they
+                // intended to go.
+                meleeHits += game::mob_melee_step(reg, pool, bus, activeLayer,
+                                                  kSimDt, simTick);
+                // ONE death point per tick, after everything that can deal damage
+                // (combat.h). Nothing else in the tree destroys a damaged entity.
+                deaths += game::finalize_deaths(reg, pool, bus, simTick);
+                // The player is not exempt: if it died it no longer exists, and
+                // everything below reads through it. Take another body now.
+                if (!reg.valid(player)) {
+                    player = possess_a_survivor(reg, pool, activeLayer);
+                    if (player == entt::null) { running = false; break; }
+                    aim_player(reg, player);
+                }
                 ++simTick;
                 // Fluid only lives in the maze test bed (the floor modules seed no
                 // puddles yet); step it on the active layer there.
@@ -496,6 +554,10 @@ int main(int argc, char** argv) {
                         ga.grounded ? " (grounded)" : "");
             ImGui::Text("instances drawn: %u / %zu cells",
                         cubePass.last_instance_count(), kMacroCells);
+            std::int16_t php = 0, pmax = 0;
+            if (game::entity_health(reg, pool, player, php, pmax))
+                ImGui::Text("HP %d / %d%s", php, pmax, php <= 0 ? "  DEAD" : "");
+            ImGui::Text("hits taken: %u | deaths: %u", meleeHits, deaths);
             ImGui::Text("mobs: %u live on this floor",
                         game::count_layer_mobs(reg, activeLayer));
             ImGui::Text("bodies drawn: %u  (pop %u alive / %u slots)",

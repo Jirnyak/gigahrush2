@@ -32,6 +32,11 @@ constexpr float kNpcWalkSpeed = 1.35f;
 // Staggered visits, not ticks: with kWanderPeriod = 8 at 120 Hz this is ~1.1 s.
 constexpr std::uint8_t kRepathCooldown = 16;
 
+// Aggro range, metres. Inside this a mob drops navigation and closes on the
+// camera holder directly. 20 m is a corridor-and-a-half: far enough that a floor
+// feels hunted, near enough that the whole roster does not converge at once.
+constexpr float kAggroRadius = 20.0f;
+
 // Cell the agent currently occupies.
 void agent_cell(const vec3& pos, int& cx, int& cy, int& cz) {
     cx = wrap_macro(static_cast<int>(pos.x / kCellSize));
@@ -68,6 +73,19 @@ void wander_step(Registry& reg, const nav::CoarseGraph& coarse,
 
     const std::uint32_t phase = static_cast<std::uint32_t>(tick % kWanderPeriod);
 
+    // Whoever holds the camera. Mobs inside kAggroRadius abandon their wander and
+    // come for it, which is what turns 77 idle monsters into a threat. Found once
+    // per pass, not per agent.
+    bool haveVictim = false;
+    vec3 victimPos{0, 0, 0};
+    for (auto e : reg.view<const CameraTag, const Transform>()) {
+        const Transform& t = reg.get<const Transform>(e);
+        if (t.layer != layer) continue;
+        victimPos = t.pos;
+        haveVictim = true;
+        break;
+    }
+
     auto view = reg.view<Transform, Velocity, WanderTarget>();
     for (auto e : view) {
         Transform& tr = view.get<Transform>(e);
@@ -80,6 +98,30 @@ void wander_step(Registry& reg, const nav::CoarseGraph& coarse,
 
         WanderTarget& wt = view.get<WanderTarget>(e);
         Velocity& vel = view.get<Velocity>(e);
+
+        // Aggro overrides navigation entirely: a monster that can see you does not
+        // consult a flow field, it comes straight at you. Straight-line pursuit is
+        // correct at this range — inside 20 m in an apartment interior there is
+        // rarely a wall worth routing around, and physics stops it if there is.
+        // Only mobs hunt; residents keep wandering past the carnage for now.
+        if (haveVictim && reg.all_of<MobRef>(e)) {
+            const float ax = wrap_delta_f(tr.pos.x, victimPos.x, kWorldExtent);
+            const float ay = wrap_delta_f(tr.pos.y, victimPos.y, kWorldExtent);
+            const float az = wrap_delta_f(tr.pos.z, victimPos.z, kWorldExtent);
+            const float d2 = ax * ax + ay * ay + az * az;
+            if (d2 < kAggroRadius * kAggroRadius) {
+                const float len = std::sqrt(ax * ax + ay * ay);
+                if (len > 0.05f) {
+                    const MobRef& mr = reg.get<const MobRef>(e);
+                    const float sp = static_cast<float>(
+                                         kMobTable[mr.kind].speedMmps) *
+                                     0.001f * kCellSize;
+                    vel.v.x = ax / len * sp;
+                    vel.v.y = ay / len * sp;
+                }
+                continue;  // no repath, no flow read — it has a target
+            }
+        }
 
         int cx, cy, cz;
         agent_cell(tr.pos, cx, cy, cz);

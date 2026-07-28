@@ -63,9 +63,47 @@ implements the V-shape on a signed axis of ±50. Two honest caveats:
   curves; this is the one its `balance.md` documents, and it keeps a level-1
   monster at exactly its authored base HP.
 
+## Spawning and melee (built)
+
+- **`spawn_floor_mobs`** ([src/game/mob_spawn.h](src/game/mob_spawn.h)) builds a
+  floor's roster from every row whose `floorMask` includes this floor's nearest
+  signed anchor and whose spawn weight is nonzero — which correctly excludes the
+  hand-placed kinds (`CREATOR` and `PSEUDOLIFT` carry weight 0). Placement is
+  rejection sampling for air on the internal ground storey. Deterministic per
+  (floor, seed), so a floor looks the same every visit.
+- **Aggro and pursuit** ([src/game/wander.h](src/game/wander.h)): inside 20 m a mob
+  abandons the baked flow field and closes on the camera holder directly. Outside
+  it, mobs wander the nav lattice like anyone else.
+- **Melee** ([src/game/combat.h](src/game/combat.h)) is shaped around three defects
+  found in the reference, each now impossible rather than merely absent: **one**
+  damage function that reports what it *applied* (the reference leaked pre-armour
+  damage into the kill feed while HP took the mitigated value), **one** death
+  finalizer that publishes before destroying (the reference could cull an entity
+  before its loot/quest hooks ran — a P0 its own `balance.md` documented), and
+  **one** cooldown decrement (the reference had ~60, several as `max()` floors, so
+  some monsters out-attacked their own authored rate).
+- **Death is not a special case.** The player is whatever entity holds a
+  `CameraTag` ([npcs.md](npcs.md)), so dying means losing it and gaining it
+  elsewhere — you wake up as another resident of the same floor. The building
+  carries on.
+
+Immobile kinds (the four with speed 0 — `IDOL`, `BORSHCHEVIK`,
+`KANTSELYARSKIY_IDOL`, `BLOOD_PLANT`) get no gravity and no wander target: they are
+architecture, not bodies in it.
+
 ## Not yet built
 
-- **Spawning.** Placement, pack resolution, and the room/floor mask pick.
+- **Mobs attacking the crowd.** They attack only the camera holder today. Monsters
+  mauling civilians needs faction relations and a threat model, and faking it with
+  "hit the nearest body" would turn a residential floor into a bloodbath on load.
+- **Ranged attacks.** 13 kinds are flagged `Ranged` with real projectile speeds and
+  nothing fires them.
+- **The 47 `MobBehaviour` scripts.** Every kind carries its behaviour id; none are
+  dispatched yet, so a `WeepingAngel` currently behaves like a `Plain` chaser.
+- **Armour.** The mitigation path exists and is tested, but nothing populates
+  `Armour` — resistances are an item property and the item table is not ported.
+- **Pack resolution.** `packMode`/`packMin`/`packMax`/`packSpread` are in the table
+  and unread; mobs spawn individually.
 - **Loot.** 66 of the 69 kinds have *no* loot table in the reference — they drop at
   most one rare item. That is a real content hole inherited from the reference, not
   a porting gap.
