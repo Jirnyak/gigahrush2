@@ -25,6 +25,10 @@ void NpcPool::init() {
     surname_.assign(kNpcPoolSize, std::array<char, kNameLen>{});
     rel_.assign(kNpcPoolSize, std::array<Relationship, kRelSlots>{});
     inv_.assign(kNpcPoolSize, Inventory{});
+    // All-zero is deliberately NOT "a healthy body": it reads as seeded == 0,
+    // which is what makes an untouched reserve slot mean "clock never rolled"
+    // rather than "starving and dehydrated" ([needs.h]).
+    needs_.assign(kNpcPoolSize, Needs{});
     count_ = 0;
 }
 

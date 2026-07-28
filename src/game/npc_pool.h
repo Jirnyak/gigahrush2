@@ -59,6 +59,32 @@ struct Relationship {
     std::uint16_t pad = 0;
 };
 
+// The per-body survival clock — food/water/sleep and the two pressures. Lives in
+// the pool row for the same reason hp does: an elevator ride DESTROYS the
+// player's body and builds a new one (`fold_back` -> `embody_as_player`,
+// [embody.h]), so an ECS component would silently reset the clock on every floor
+// change — turning the trip clock into a floor clock, which is the opposite of
+// what it is for. Ticking is a separate question from storage and the answer is
+// different: only the camera holder's row advances ([needs.h]).
+//
+// A zeroed reserve slot reads as `seeded == 0`, i.e. "never rolled", NOT as a
+// body that is starving and dehydrated — which is what the all-zero default would
+// otherwise mean. `needs_step` rolls it lazily on first use.
+struct Needs {
+    float food = 0.0f;        // 0..100 reserve, drains; 0 = starving
+    float water = 0.0f;       // 0..100 reserve, drains; 0 = dehydrated
+    float sleep = 0.0f;       // 0..100 reserve, drains; costs speed, never hp
+    float pee = 0.0f;         // 0..100 pressure, fills; 100 = overflowing
+    float poo = 0.0f;         // 0..100 pressure, fills; 100 = overflowing
+    float pendingPee = 0.0f;  // drunk/eaten but not yet digested into `pee`
+    float pendingPoo = 0.0f;  // ditto for `poo`
+    float hpDebt = 0.0f;      // sub-1-HP attrition carried between ticks
+    std::uint8_t seeded = 0;  // 0 = never rolled (see above)
+    std::uint8_t pad_[3] = {};
+};
+static_assert(sizeof(Needs) == 36, "Needs must stay a tight 36-byte row");
+static_assert(alignof(Needs) == 4);
+
 // Per-NPC flag bits packed into one byte.
 enum NpcFlag : std::uint8_t {
     NpcAlive    = 1u << 0,  // not dead (dead slots stay in the table)
@@ -78,7 +104,8 @@ enum NpcSex : std::uint8_t { SexUnset = 0, SexMale = 1, SexFemale = 2 };
 // init() and never resized again — dense over sparse ([performance.md]).
 class NpcPool {
 public:
-    // Allocate all backing arrays (one time). ~0.45 GB for the full table.
+    // Allocate all backing arrays (one time). ~0.48 GiB for the full table
+    // (493 B/row x 2^20; the survival clock is 36 B of that).
     void init();
 
     // Bump-allocate the next blank slot from the reserve. Returns kInvalidNpc if
@@ -136,6 +163,9 @@ public:
     std::array<std::uint8_t, kAttrSlots>& attrs(NpcId id) { return attr_[id]; }
 
     Inventory&     inventory(NpcId id) { return inv_[id]; }
+    // The survival clock. Canonical here, not on the entity, so it survives the
+    // body swap an elevator ride performs ([needs.h]).
+    Needs&         needs(NpcId id)     { return needs_[id]; }
     std::array<Relationship, kRelSlots>& relations(NpcId id) { return rel_[id]; }
     const std::array<char, kNameLen>& name(NpcId id) const { return name_[id]; }
     const std::array<char, kNameLen>& surname(NpcId id) const {
@@ -161,6 +191,7 @@ private:
     std::vector<std::array<char, kNameLen>> surname_;
     std::vector<std::array<Relationship, kRelSlots>> rel_;
     std::vector<Inventory> inv_;
+    std::vector<Needs> needs_;   // survival clock ([needs.h]); 36 B/row
 };
 
 } // namespace giga::game

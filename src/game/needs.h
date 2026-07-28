@@ -1,0 +1,282 @@
+// Needs — the survival clock that makes a descent a *trip* rather than a stroll.
+//
+// Three reserves DRAIN (food, water, sleep); two pressures FILL (pee, poo). Empty a
+// reserve or fill a pressure and it costs HP per second, additively. That clock is
+// the whole reason to leave a floor: with no cost to standing still there is no
+// decision in going deeper.
+//
+// EVERY NUMBER HERE IS MEASURED FROM THE TYPESCRIPT REFERENCE, not chosen:
+// `systems/needs.ts:22-27` (rates), `:201-213` (attrition), `data/names.ts:316-318`
+// (`freshNeeds`), `data/items.ts:32-37` (consumption), `main.ts:3777-3786`
+// (exhaustion), and its own `balance.md:42-48` for the window they produce.
+//
+// STORAGE: THE POOL ROW, NOT AN ECS COMPONENT. `Needs` is a column in `NpcPool`,
+// following hp ([combat.h]: "embodied HP is canonical in the pool row"). The
+// deciding argument is the elevator: riding one calls `fold_back` then
+// `embody_as_player` ([embody.h]), which destroys the player's entity and builds a
+// new one. A component would reset the clock on every floor change — turning the
+// trip clock into a floor clock, the exact exploit it exists to prevent. The
+// alternative ("copy it across at each body swap") is the forget-to-call-it class of
+// bug [combat.h]'s one-finalizer design exists to make unrepresentable. Second
+// reason: the macro society sim reads and writes `NpcPool` on its own coarse clock
+// ([macrosim.md]), so this is where hungry citizens will look. 36 B x 2^20 = 38 MB,
+// noise against the pool's 0.48 GiB.
+//
+// TICK SCOPE: ONLY THE CAMERA HOLDER. O(1) per sim step, whatever the population.
+// Does an off-screen citizen on floor -12 need to starve? No — and not for
+// performance reasons. 950k rows of float math is cheap; it is simply WRONG. At
+// 0.12/s the whole population dehydrates inside 14 minutes of play and the building
+// is a morgue before the player reaches floor -3, because no citizen has an AI that
+// eats yet. The reference survives this with a round-robin cold budget (192
+// entities/tick) PLUS ambient recovery in kitchens and bathrooms
+// (`needs.ts:279-314`); gigahrush2 has neither, so the honest slice is "the clock
+// belongs to the body you are playing". Widen it when the utility AI (#12) can walk
+// an NPC to a kitchen, not before.
+//
+// ATTRITION GOES THROUGH `apply_damage`, ON A CHANNEL ARMOUR CANNOT SEE. Starving to
+// death must be the same death as being clubbed to death — `Dead` tag, one
+// `finalize_deaths` ([combat.h] defect 2). But a liquidator vest resists 80 %
+// kinetic, and letting it slow starvation 5x is absurd. All five real channels are
+// resisted by at least one of the table's 5 armour rows, so there is no free channel
+// to borrow: `kAttritionChannel` is one index PAST the last real one, which
+// `apply_damage`'s `if (i < kDamageChannels)` guard skips. Unmitigated by
+// construction rather than by a zero a future armour row could fill in.
+//
+// SLEEP COSTS SPEED, NEVER HP. Three HP drains stacking is a death spiral with no
+// decision in it. The reference agrees: sleep contributes 0 HP/s and its only tooth
+// is a flat x0.5 move-speed multiplier below 10 (not below 0 — the penalty lands
+// before the bar empties). That taxes your ability to RUN AWAY, which is what turns
+// "one more floor" into a question.
+#pragma once
+
+#include <cstdint>
+
+#include "ecs/registry.h"
+#include "game/combat.h"      // DamageChannel, kDamageChannels
+#include "game/event_bus.h"
+#include "game/item_table.h"  // ItemId, UseEffect
+#include "game/npc_pool.h"    // Needs is a column there
+#include "world/level_stack.h"
+
+namespace giga::game {
+
+inline constexpr float kNeedMax = 100.0f;
+
+// Drain per REAL second (`needs.ts:22-27`).
+inline constexpr float kFoodDrainPerSec  = 0.08f;
+inline constexpr float kWaterDrainPerSec = 0.12f;
+inline constexpr float kSleepDrainPerSec = 0.05f;
+static_assert(kWaterDrainPerSec > kFoodDrainPerSec,
+              "water must run out before food — that ordering IS the design");
+
+// Pending -> actual pressure, per second (`needs.ts:26-27`). Pee and poo have NO
+// autonomous growth: they are metered out of a queue only consumption fills, which
+// is what makes them a tax on eating and drinking rather than a second clock.
+inline constexpr float kPeeDigestPerSec = 0.10f;
+inline constexpr float kPooDigestPerSec = 0.06f;
+
+// HP/s once a need has failed (`needs.ts:201-213`). ADDITIVE: all four at once is
+// exactly 1.0 HP/s, which is what makes ignoring the clock lethal rather than merely
+// irritating.
+inline constexpr float kHungerHpPerSec      = 0.3f;   // food  <= 0
+inline constexpr float kDehydrationHpPerSec = 0.5f;   // water <= 0
+inline constexpr float kOverflowHpPerSec    = 0.1f;   // pee or poo >= 100, each
+
+// `main.ts:3777-3786`: flat, binary, no ramp.
+inline constexpr float kSleepExhaustedAt = 10.0f;
+inline constexpr float kSleepExhaustedSpeedScale = 0.5f;
+
+// Starting values, randomised per body (`names.ts:316-318`). The spread is the
+// point: the body you wake up in decides how long your first trip can be.
+inline constexpr float kStartFoodLo  = 70.0f, kStartFoodHi  = 100.0f;
+inline constexpr float kStartWaterLo = 70.0f, kStartWaterHi = 100.0f;
+inline constexpr float kStartSleepLo = 60.0f, kStartSleepHi = 100.0f;
+inline constexpr float kStartPeeLo   =  0.0f, kStartPeeHi   =  30.0f;
+inline constexpr float kStartPooLo   =  0.0f, kStartPooHi   =  20.0f;
+
+// THE SURVIVAL WINDOW. A reserve `v` at drain `r` lasts `v / r` seconds:
+//
+//   WATER (0.12/s):  70 ->  583 s =  9.72 min   100 ->  833 s = 13.89 min
+//   FOOD  (0.08/s):  70 ->  875 s = 14.58 min   100 -> 1250 s = 20.83 min
+//   SLEEP (0.05/s):  60 -> 1200 s = 20.00 min   100 -> 2000 s = 33.33 min
+//
+// So water 9.72..13.89 min and food 14.58..20.83 min — the figures the reference's
+// `balance.md:42-48` states in prose. A brief circulated during this port asked for
+// "8..12 on water, 12..18 on food"; those ceilings are ~16 % low (8..12 min of water
+// is a start of 57.6..86.4, not 70..100). The FLOORS it was reaching for do hold:
+// the unluckiest body still gets >= 8 min of water and >= 12 min of food.
+// `suite_needs.inl` asserts both, so drift in either direction goes red.
+constexpr float needs_survival_minutes(float startValue, float drainPerSec) {
+    return startValue / drainPerSec / 60.0f;
+}
+
+// WARNING THRESHOLDS, DERIVED FROM THE RATE. "How long until this hurts" is
+// `value / rate`, so a threshold must be `rate * lead` or it silently drifts when a
+// rate is retuned. The reference hardcodes 15/15/10/85 (`needs.ts:216-221`) and pays
+// for it: at 0.08/s its food warning fires 187 s out against water's 125 s, for no
+// authored reason. 120 s is the target lead — mid-band of the 90..150 s a player
+// needs to find and use a bottle. Sanity check on that choice: 0.12 * 120 = 14.4,
+// within 4 % of the reference's hand-picked 15, so the derived rule reproduces the
+// number a human chose and then applies it consistently to food.
+inline constexpr float kNeedWarnLeadSec = 120.0f;
+inline constexpr float kFoodWarnAt  = kFoodDrainPerSec  * kNeedWarnLeadSec;  //  9.6
+inline constexpr float kWaterWarnAt = kWaterDrainPerSec * kNeedWarnLeadSec;  // 14.4
+inline constexpr float kSleepWarnAt = kSleepDrainPerSec * kNeedWarnLeadSec;  //  6.0
+// Pressures warn by headroom, and their lead is a WORST case: it only elapses while
+// the pending queue still has something to meter out.
+inline constexpr float kPeeWarnAt = kNeedMax - kPeeDigestPerSec * kNeedWarnLeadSec; // 88.0
+inline constexpr float kPooWarnAt = kNeedMax - kPooDigestPerSec * kNeedWarnLeadSec; // 92.8
+
+// What goes in comes out. Structural helper constants in the reference
+// (`items.ts:32-34`), not per-item data, so they port verbatim.
+inline constexpr float kFeedPooShare  = 0.7f;   // feed(v)      -> pendingPoo += v*0.7
+inline constexpr float kFeedPeeShare  = 0.3f;   //              -> pendingPee += v*0.3
+inline constexpr float kRiskyPooShare = 1.0f;   // riskyFeed(v) -> pendingPoo += v*1.0
+inline constexpr float kRiskyPeeShare = 0.4f;   //              -> pendingPee += v*0.4
+inline constexpr float kDrinkPeeShare = 0.6f;   // drink(v)     -> pendingPee += v*0.6
+
+// **THE ONE APPROXIMATION IN THIS FILE.** The reference authors a per-item HP cost
+// for risky food in the CSV's `use_b`: 8 (infected_mushroom), 6 (zhelemish_raw),
+// 5 (experimental_concentrate), 6 (sand_spoiled_ration). `ItemDef` stops at `useA`
+// and does not port `use_b`, so all four cost the median 6 here. Fix when the exact
+// numbers are wanted: rename `ItemDef::pad_` (offset 19, currently dead) to
+// `std::int8_t useB`, add the column to `tools/gen_item_table.py`, regenerate —
+// `sizeof(ItemDef)` stays 20.
+inline constexpr std::int16_t kRiskyFeedHpCost = 6;
+
+// Exact, not approximated: `siren_energy` is the ONLY DrinkStim row and
+// `sleeping_pills` the ONLY SleepingPills row in all 446 items, so one constant IS
+// the per-item value. The test asserts both counts are still 1 — a second such item
+// would turn these into approximations, and is the signal `useB` is now needed.
+inline constexpr float kDrinkStimSleepBonus = 10.0f;     // items.ts:449
+inline constexpr float kSleepingPillsWaterCost = 16.0f;  // items.ts:37
+inline constexpr float kSleepingPillsFoodCost  =  8.0f;
+inline constexpr std::int16_t kSleepingPillsHpCost = 4;
+
+// The reference's toilet (`interactive.ts:144-166`). No toilet object exists in
+// gigahrush2 yet; these are what `relieve_needs` takes when one does. Deliberately
+// partial, so a long trip still has to come home.
+inline constexpr float kToiletPeeRelief = 70.0f;
+inline constexpr float kToiletPooRelief = 65.0f;
+
+// One index past the last real `DamageChannel` — see the header comment.
+// `enum class : uint8_t` carries the underlying type's value range, so this cast is
+// well-defined, not UB. It also lands in `Dead::channel`, where it reads as
+// "attrition"; nothing switches on that field.
+inline constexpr DamageChannel kAttritionChannel =
+    static_cast<DamageChannel>(kDamageChannels);
+
+// One byte answers the HUD, the warning line and the damage sum at once.
+enum NeedBit : std::uint8_t {
+    NeedFood  = 1u << 0,
+    NeedWater = 1u << 1,
+    NeedSleep = 1u << 2,
+    NeedPee   = 1u << 3,
+    NeedPoo   = 1u << 4,
+};
+
+// What one `needs_step` actually did — the "report what LANDED" shape of
+// `DamageResult` and `use_best_heal`.
+struct NeedsTick {
+    std::int16_t hpLost = 0;      // whole HP taken THIS step, post-clamp
+    float speedScale = 1.0f;      // multiply into Controller::moveSpeed
+    float secondsToDamage = 0.0f; // 0 while already losing HP
+    std::uint8_t failed = 0;      // NeedBit mask: at the limit
+    std::uint8_t warned = 0;      // NeedBit mask: inside the warning band
+    bool lethal = false;
+    bool ticked = false;          // false when no camera holder is on this layer
+};
+
+// Deterministic in `seed`, so a record gets the same body across a save/load rather
+// than a fresh roll each session.
+Needs needs_roll(std::uint32_t seed);
+
+// The pure clock: no registry, no HP, no allocation. The piece the macro sim can
+// reuse on its own coarse clock, and the piece a test can drive without a world.
+void needs_advance(Needs& n, float dt);
+
+// Sleep IS reported when empty, but contributes 0 HP/s — use `needs_hp_rate`.
+std::uint8_t needs_failed_mask(const Needs& n);
+std::uint8_t needs_warn_mask(const Needs& n);
+
+// HP/s this body is losing, summed over every failed need. 0 when nothing failed.
+float needs_hp_rate(const Needs& n);
+
+// Seconds until HP loss begins; 0 if it already has. Pressures only count while
+// their pending queue has something left to meter.
+float needs_seconds_to_damage(const Needs& n);
+
+// 1.0, or `kSleepExhaustedSpeedScale` below `kSleepExhaustedAt`. `needs_step`
+// returns the same value, so the caller needs no second call.
+float needs_speed_scale(const Needs& n);
+
+// Advance the camera holder's clock and charge it. Resolves the player the same way
+// every other system here does (first `CameraTag` on `layer`), so there is still no
+// player singleton. Rolls the record's needs lazily on first sight — the way
+// `player_melee_step` attaches `PlayerMelee` lazily — so no spawn, elevator or
+// possession path has to remember to seed them.
+//
+// WHERE IT BELONGS IN THE SIM LOOP (`src/app/main.cpp`) — it is a damage source, so
+// it goes LAST among them, immediately before `loot_dead_mobs`:
+//
+//   input.apply -> controller_step -> wander_step -> physics_step ->
+//   player_melee_step -> mob_attack_step -> projectile_step ->
+//   >> needs_step << -> loot_dead_mobs -> finalize_deaths -> pickup_step
+//
+// It MUST precede `finalize_deaths`, or a body that starves this tick dies on the
+// next one and the single-death-point contract breaks. Last among damage sources is
+// the fair order: a monster's blow lands first, and if the monster already killed you
+// `apply_damage` refuses the target, so you cannot be billed for starving after you
+// are dead.
+//
+// No allocation, no exceptions, O(1) in population.
+NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt);
+
+// Keyed off `UseEffect`, never `ItemCategory` — and the distinction is real:
+// `calm_brew` is category DRINK and `easter_egg` is category FOOD, but both are
+// `HealPsi` and restore nothing. Category would let you "drink" a brew and stay
+// thirsty.
+bool item_feeds(ItemId id);     // Feed | FeedRisky | FeedPsi   (21 of 446)
+bool item_hydrates(ItemId id);  // Drink | DrinkStim            ( 8 of 446)
+
+// What a consumable actually did after clamping into 0..100 — what LANDED, never the
+// number on the tin ([loot.h] `use_best_heal`).
+struct ConsumeResult {
+    ItemId item = kInvalidItem;
+    float food = 0.0f;
+    float water = 0.0f;
+    float sleep = 0.0f;
+    float peeQueued = 0.0f;    // added to pendingPee, not to pee
+    float pooQueued = 0.0f;
+    std::int16_t hpCost = 0;   // risky food / pills; clamped so it can never kill
+    bool used = false;
+};
+
+// Apply one consumable to one clock. Does NOT touch HP: it reports the cost for the
+// caller to route through `apply_damage`, clamped to `hp - 1` because bad food in the
+// reference floors at 1 HP (`items.ts:33`) — eating something questionable is a
+// gamble you always survive.
+//
+// Faithfully ported oddity: queued pressure is computed from the item's LABEL, not
+// from what landed. Eating a 40-point ration at 99 food wastes the food and still
+// bills the full 40 points of digestion — it went through you either way.
+ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp);
+
+// `use_best_heal`'s rule on the other bars: the smallest portion that still covers
+// the deficit, falling back to the largest available. Consumes one unit, charges any
+// HP cost through `apply_damage`, publishes `ItemTransferred`.
+// Call site: beside `use_best_heal`, after `pickup_step`, on an input edge.
+ConsumeResult use_best_food(Registry& reg, NpcPool& pool, EventBus& bus,
+                           LayerId layer, std::uint64_t tick);
+ConsumeResult use_best_drink(Registry& reg, NpcPool& pool, EventBus& bus,
+                            LayerId layer, std::uint64_t tick);
+
+// Returns what actually came off, so "you did not need to" is distinguishable from
+// "that helped". The hook a toilet object calls once one exists.
+struct ReliefResult {
+    float pee = 0.0f;
+    float poo = 0.0f;
+};
+ReliefResult relieve_needs(Needs& n, float peeAmount, float pooAmount);
+
+} // namespace giga::game

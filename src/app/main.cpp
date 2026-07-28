@@ -38,6 +38,7 @@
 #include "game/floor_spec.h"
 #include "game/floor_stream.h"
 #include "game/mob_spawn.h"
+#include "game/needs.h"
 #include "game/samosbor.h"
 #include "game/combat.h"
 #include "game/extraction.h"
@@ -95,7 +96,14 @@ constexpr float kAoDirect = 0.65f;
 // would break that unless the clear colour moved with it, and a visible seam is the
 // worst failure this renderer has. Pulling the range IN is strictly safe — more fog
 // hides the seam harder, never less.
-constexpr float kSamosborFogSqueeze = 0.34f;       // fog.w, scales the hemispheric term
+constexpr float kSamosborFogSqueeze = 0.34f;
+
+// The player's unencumbered walk speed. Named here because the survival clock now
+// scales it every tick, so the base value has to live somewhere that is not the
+// Controller it overwrites — otherwise the first exhausted tick would halve the
+// speed and the second would halve the already-halved value, decaying to zero.
+// Matches Controller::moveSpeed's own default ([components.h]).
+constexpr float kPlayerWalkSpeed = 6.0f;       // fog.w, scales the hemispheric term
 
 // The demo floor stack: one row per floor MODULE. Numbers are the in-game labels
 // the FloorRegistry assigns (floors.md); kinds are picked to show every geometry
@@ -457,6 +465,8 @@ int main(int argc, char** argv) {
     game::SamosborState samosbor = game::samosbor_new_game(sbRng);
     std::uint32_t samosborCycles = 0;
     std::int16_t samosborDamage = 0;
+    game::NeedsTick needs{};   // last step's report, for the HUD
+    int needsHpLost = 0;       // running total, so the HUD is not one tick
     game::RunLedger ledger;
     std::int32_t banked = 0;
     std::uint32_t deaths = 0;
@@ -625,6 +635,13 @@ int main(int argc, char** argv) {
                             static_cast<std::int16_t>(samosborDamage + dr_.applied);
                     }
                 }
+                // Exhaustion costs movement speed, not HP — three stacking HP
+                // drains is a death spiral with no decision in it. Applied to the
+                // live Controller each tick rather than baked into it, so recovering
+                // sleep restores the speed with nothing to remember. [needs.h]
+                if (reg.valid(player))
+                    if (auto* ctl_ = reg.try_get<Controller>(player))
+                        ctl_->moveSpeed = kPlayerWalkSpeed * needs.speedScale;
                 game::wander_step(reg, stack.layer(activeLayer).grid(), nav.coarse(),
                                   nav.fine(), activeLayer, simTick);
                 physics_step(reg, stack, kSimDt);
@@ -643,6 +660,13 @@ int main(int argc, char** argv) {
                 // projectile never lands on the frame it is fired.
                 meleeHits += game::projectile_step(
                     reg, pool, bus, stack, activeLayer, kSimDt, simTick);
+                // The survival clock is a damage source, so it goes LAST among
+                // them and still before finalize_deaths: a monster's blow lands
+                // first, and if that already killed you apply_damage refuses the
+                // target, so you cannot be billed for starving after you are dead.
+                // [needs.h]
+                needs = game::needs_step(reg, pool, activeLayer, kSimDt);
+                needsHpLost += needs.hpLost;
                 // Corpses pay out BEFORE they are destroyed. The gap between
                 // "hp hit zero" and "gone" is precisely what the Dead tag exists
                 // to create (combat.h defect 2) — the reference's P0 was culling
@@ -846,6 +870,31 @@ int main(int argc, char** argv) {
                 ImGui::Text("duty here %.1f%% | cycles %u | fog x%.2f | took %d hp",
                             game::samosbor_duty01(currentFloor) * 100.0f,
                             samosborCycles, fogScale, samosborDamage);
+            }
+            {
+                const game::Needs& nd = [&]() -> const game::Needs& {
+                    static game::Needs blank{};
+                    if (reg.valid(player))
+                        if (const auto* nr_ = reg.try_get<game::NpcRef>(player))
+                            if (pool.valid(nr_->id)) return pool.needs(nr_->id);
+                    return blank;
+                }();
+                // Minutes, not percent: the decision this clock exists to force is
+                // "do I have time for one more floor", and that is asked in minutes.
+                const float toDmg = game::needs_seconds_to_damage(nd);
+                const bool warn = needs.warned != 0 || needs.failed != 0;
+                if (warn)
+                    ImGui::TextColored(ImVec4(0.90f, 0.31f, 0.36f, 1.0f),
+                                       "NEEDS food %.0f water %.0f sleep %.0f"
+                                       "  | %.1f min to damage%s",
+                                       nd.food, nd.water, nd.sleep, toDmg / 60.0f,
+                                       needs.failed ? "  BLEEDING" : "");
+                else
+                    ImGui::Text("needs food %.0f water %.0f sleep %.0f"
+                                "  | %.1f min to damage",
+                                nd.food, nd.water, nd.sleep, toDmg / 60.0f);
+                ImGui::Text("pressure pee %.0f poo %.0f | speed x%.2f | starved %d hp",
+                            nd.pee, nd.poo, needs.speedScale, needsHpLost);
             }
             ImGui::Text("nav: %s  (last bake %.0f + %.0f ms, async)",
                         nav.baking() ? "BAKING - crowd idle"
