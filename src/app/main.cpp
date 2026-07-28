@@ -227,11 +227,14 @@ std::uint32_t refresh_floor_mobs(Registry& reg, const World& world, int floorNum
     const DemoFloor* df = demo_floor(floorNumber);
     if (!df) return 0;
     const game::FloorSpec& spec = game::floor_spec(df->kind);
+    // `df->kind` twice, deliberately: the theme drives the head-count multiplier and
+    // the kind drives the ROOM PITCH that packs are placed by. theme_for_kind is not
+    // invertible, so the spawner cannot recover the second from the first.
     return game::spawn_floor_mobs(
         reg, world, floorNumber, game::danger_for_hostility(spec.hostility),
         game::theme_for_kind(df->kind), layer,
         /*seed=*/0xB0B5EEDu ^ static_cast<std::uint32_t>(floorNumber) * 0x9e3779b9u,
-        kMobSpawnCap);
+        kMobSpawnCap, df->kind);
 }
 
 // Kick off this floor's navigation bake on a worker thread.

@@ -6,6 +6,7 @@
 
 #include "core/math.h"
 #include "ecs/components.h"
+#include "game/floor_gen.h"  // floor_room_stride
 #include "world/macro_grid.h"
 #include "world/world.h"
 
@@ -33,6 +34,21 @@ constexpr int kGroundZ = 1;
 // Derelict floor is 38% gap and 12% holes, so a handful of rejections is normal;
 // this bound is what keeps a pathological floor from spinning.
 constexpr int kPlaceTries = 24;
+
+// Rooms drawn before a pack accepts one that already holds a pack.
+//
+// A deep floor's budget (up to 4096 heads) outruns its room count (256 on a
+// stride-8 floor), so rooms MUST be shareable — "try a few unused ones, then take
+// what you get" is the only termination rule that keeps a floor's head-count intact
+// on exactly the floors that need the monsters most. Refusing to share would turn a
+// spatial change into a population regression.
+constexpr int kRoomTries = 24;
+
+// Clamp a room-local coordinate into the interior, 1..span. The wall lattice sits
+// on local 0, so 0 is never a legal standing cell even when it happens to be air
+// (a knocked-out wall cell on a Derelict floor) — a monster in a doorway reads as a
+// monster stuck in a wall.
+int clamp_local(int v, int span) { return v < 1 ? 1 : (v > span ? span : v); }
 
 // Tier tint. This is a **gameplay read**, not decoration: in a dark corridor the
 // player must be able to tell a monster from a civilian instantly, so the palette
@@ -119,7 +135,8 @@ std::uint8_t danger_for_hostility(float hostility) {
 std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
                                int floorNumber, std::uint8_t danger,
                                FloorTheme theme, LayerId layer,
-                               std::uint32_t seed, std::uint32_t cap) {
+                               std::uint32_t seed, std::uint32_t cap,
+                               FloorKind kind) {
     const MacroGrid& grid = world.grid();
 
     std::uint32_t want =
@@ -150,58 +167,167 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
     }
     if (rosterN == 0 || total == 0) return 0;
 
-    std::uint32_t spawned = 0;
-    for (std::uint32_t n = 0; n < want; ++n) {
-        std::uint32_t r = mix(seed ^ (n * 0x9e3779b9u) ^
-                              static_cast<std::uint32_t>(floorNumber) * 0x85ebca6bu);
+    // The room lattice, straight from the generator so the two can never disagree
+    // about where a wall is. A room is the (stride-1)^2 interior at local 1..span.
+    // Clamped rather than trusted. The authored strides are 8/16/32, but a stride of
+    // 1 leaves a room with no interior and a stride above 128 makes the room count
+    // zero — a modulo by zero followed by an out-of-bounds write, the kind of crash
+    // that appears only the day someone authors a one-room floor. Clamping here
+    // keeps every index below in range by construction: span <= 127 and
+    // x0 + span <= 127.
+    int stride = floor_room_stride(kind);
+    if (stride < 2) stride = 2;
+    if (stride > kMacroDim) stride = kMacroDim;
+    const int roomsPerAxis = kMacroDim / stride;
+    const int span = stride - 1;
+    // One byte per room, sized from the real room count rather than a worst-case
+    // constant: a std::vector here is a single allocation at FLOOR LOAD, which is
+    // not a hot path (the same call is about to create up to 4096 entities), and it
+    // is what makes a future tighter room pitch impossible to overflow.
+    std::vector<std::uint8_t> packsInRoom(
+        static_cast<std::size_t>(roomsPerAxis * roomsPerAxis), 0u);
 
-        // Weighted pick over the roster.
-        std::uint32_t pick = r % total;
+    std::uint32_t spawned = 0;
+    std::uint32_t packSeq = 0;
+
+    // ONE ITERATION IS ONE PACK, not one monster. A pack that places anything
+    // places at least its anchor head, so `want` iterations is a hard upper bound
+    // even in the degenerate all-Loner case — the loop cannot spin.
+    for (std::uint32_t p = 0; p < want && spawned < want; ++p) {
+        const std::uint32_t r =
+            mix(seed ^ (p * 0x9e3779b9u) ^
+                static_cast<std::uint32_t>(floorNumber) * 0x85ebca6bu);
+
+        // 1. Draw a room, preferring an empty one. This is the entire difference
+        //    between a floor that has quiet rooms in it and a floor that is evenly
+        //    salted: an independent cell per monster fills 134 of 256 rooms on a
+        //    stride-8 floor from 194 heads, so nowhere is ever empty.
+        int room = 0;
+        for (int t = 0; t < kRoomTries; ++t) {
+            const std::uint32_t h =
+                mix(r ^ (static_cast<std::uint32_t>(t) * 0x27220a95u));
+            const int rx = static_cast<int>(
+                (h >> 8) % static_cast<std::uint32_t>(roomsPerAxis));
+            const int ry = static_cast<int>(
+                (h >> 20) % static_cast<std::uint32_t>(roomsPerAxis));
+            room = ry * roomsPerAxis + rx;
+            if (packsInRoom[static_cast<std::size_t>(room)] == 0) break;
+        }
+        std::uint8_t& roomUse = packsInRoom[static_cast<std::size_t>(room)];
+        if (roomUse < 0xFFu) ++roomUse;
+
+        // 2. ONE kind for the whole room. Rolled from its own hash rather than from
+        //    `r` directly, so the room draw and the kind draw are not correlated.
+        const std::uint32_t pick = mix(r ^ 0x2545f491u) % total;
         std::uint32_t ri = 0;
         while (ri + 1 < rosterN && pick >= cumWeight[ri]) ++ri;
-        const MobKind kind = static_cast<MobKind>(roster[ri]);
-        const MobDef& def = mob_def(kind);
+        const MobKind mobKind = static_cast<MobKind>(roster[ri]);
+        const MobDef& def = mob_def(mobKind);
 
-        // Standable cell: air on the ground storey. floor_gen guarantees a solid
-        // slab at z=0, so "air here" is sufficient — no need to probe below.
-        int cx = 0, cy = 0;
-        bool placed = false;
-        for (int t = 0; t < kPlaceTries; ++t) {
-            std::uint32_t h = mix(r ^ (static_cast<std::uint32_t>(t) * 0xc2b2ae35u));
-            cx = static_cast<int>((h >> 8) & 127u);
-            cy = static_cast<int>((h >> 20) & 127u);
-            if (grid.cell(cx, cy, kGroundZ) == kCellAir) { placed = true; break; }
+        // 3. How many heads, from the row's own authored band. Loner is forced to
+        //    one rather than trusted to have packMax == 1: the columns are generated
+        //    from a CSV, and a Loner row with a stray packMax is a data typo, not a
+        //    design decision to place five of something that hunts alone.
+        std::uint32_t heads = 1;
+        if (static_cast<MobPackMode>(def.packMode) != MobPackMode::Loner) {
+            const std::uint32_t lo = def.packMin ? def.packMin : 1u;
+            const std::uint32_t hi = def.packMax > lo ? def.packMax : lo;
+            heads = lo + mix(r ^ 0x165667b1u) % (hi - lo + 1u);
         }
-        if (!placed) continue;  // dense floor, no room for this one
+        // The budget is the budget: the last pack of a floor is truncated rather
+        // than allowed to overshoot it.
+        if (heads > want - spawned) heads = want - spawned;
+
+        // 4. The pack's anchor: a standable cell inside the room. floor_gen
+        //    guarantees a solid slab at z=0, so "air here" is sufficient.
+        const int x0 = (room % roomsPerAxis) * stride;
+        const int y0 = (room / roomsPerAxis) * stride;
+        int ax = 0, ay = 0;
+        bool haveAnchor = false;
+        for (int t = 0; t < kPlaceTries; ++t) {
+            const std::uint32_t h =
+                mix(r ^ (static_cast<std::uint32_t>(t + 1) * 0xc2b2ae35u));
+            ax = x0 + 1 +
+                 static_cast<int>((h >> 7) % static_cast<std::uint32_t>(span));
+            ay = y0 + 1 +
+                 static_cast<int>((h >> 19) % static_cast<std::uint32_t>(span));
+            if (grid.cell(ax, ay, kGroundZ) == kCellAir) { haveAnchor = true; break; }
+        }
+        if (!haveAnchor) continue;  // a room filled solid with rubble
+
+        // The cohesion key. Sequential rather than hashed so the first 255 packs on
+        // a floor are guaranteed distinct — a hash over 255 buckets would collide
+        // after about 19 packs (birthday), which would fuse unrelated groups'
+        // destinations on every floor instead of only on the crowded ones.
+        const std::uint8_t packId =
+            static_cast<std::uint8_t>(packSeq % kPackIdSpan + 1u);
+        ++packSeq;
+
+        int spread = static_cast<int>(def.packSpread);
+        if (heads > 1 && spread < 1) spread = 1;  // a group needs somewhere to stand
 
         const MobTier tier = static_cast<MobTier>(def.tier);
         const vec3 half = mob_half_extents(tier);
-
-        Entity e = reg.create();
-        Transform tr;
-        // Centre the body on the cell and sit it on the floor of that cell.
-        tr.pos = vec3{(static_cast<float>(cx) + 0.5f) * kCellSize,
-                      (static_cast<float>(cy) + 0.5f) * kCellSize,
-                      static_cast<float>(kGroundZ) * kCellSize + half.z};
-        tr.layer = layer;
-        reg.emplace<Transform>(e, tr);
-        reg.emplace<Velocity>(e);
-        reg.emplace<AABB>(e, AABB{half});
-        // Immobile kinds (turrets, plants, spore carpets) are not moved by
-        // gravity — they are part of the architecture, not bodies in it.
-        if (!has_flag(def.aiFlags, AiFlag::Immobile))
-            reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
-        reg.emplace<Renderable>(e, Renderable{tier_color(tier, r)});
-
         const std::uint16_t hp = mob_hp_at_level(def.hp, level);
-        reg.emplace<MobRef>(e, MobRef{static_cast<std::uint8_t>(kind), level,
-                                      static_cast<std::int16_t>(hp),
-                                      static_cast<std::int16_t>(hp)});
-        // Staggered initial cooldown so a room full of mobs does not swing in
-        // lockstep on the frame the player walks in.
-        reg.emplace<MobCombat>(
-            e, MobCombat{static_cast<std::uint16_t>(r % (def.attackCdMs + 1u))});
-        ++spawned;
+
+        for (std::uint32_t k = 0; k < heads; ++k) {
+            int cx = ax, cy = ay;
+            if (k != 0) {
+                bool placed = false;
+                const std::uint32_t sp = static_cast<std::uint32_t>(2 * spread + 1);
+                for (int t = 0; t < kPlaceTries; ++t) {
+                    const std::uint32_t h =
+                        mix(r ^ ((k * 0x9e3779b9u + static_cast<std::uint32_t>(t)) *
+                                 0x7feb352du));
+                    const int dx = static_cast<int>((h >> 6) % sp) - spread;
+                    const int dy = static_cast<int>((h >> 17) % sp) - spread;
+                    // The ROOM wins over packSpread. A Roamer's authored 10-cell
+                    // spread inside a 7-cell apartment reads as "anywhere in this
+                    // room", which is the honest resolution: letting the spread win
+                    // would push half the pack through the walls into two other
+                    // rooms and undo the grouping this whole function exists for.
+                    cx = x0 + clamp_local(ax - x0 + dx, span);
+                    cy = y0 + clamp_local(ay - y0 + dy, span);
+                    if (grid.cell(cx, cy, kGroundZ) == kCellAir) {
+                        placed = true;
+                        break;
+                    }
+                }
+                if (!placed) continue;
+            }
+
+            // Per-HEAD hash. `r` is per-pack now, so reusing it here would give a
+            // whole pack one colour jitter and — much worse — one initial attack
+            // cooldown, putting eight monsters in a room into perfect lockstep. That
+            // is the very thing the stagger below exists to prevent, and packs make
+            // it far more likely than independent placement ever did.
+            const std::uint32_t rh = mix(r ^ (k * 0x9e3779b9u) ^ 0x51ed270bu);
+
+            Entity e = reg.create();
+            Transform tr;
+            // Centre the body on the cell and sit it on the floor of that cell.
+            tr.pos = vec3{(static_cast<float>(cx) + 0.5f) * kCellSize,
+                          (static_cast<float>(cy) + 0.5f) * kCellSize,
+                          static_cast<float>(kGroundZ) * kCellSize + half.z};
+            tr.layer = layer;
+            reg.emplace<Transform>(e, tr);
+            reg.emplace<Velocity>(e);
+            reg.emplace<AABB>(e, AABB{half});
+            // Immobile kinds (turrets, plants, spore carpets) are not moved by
+            // gravity — they are part of the architecture, not bodies in it.
+            if (!has_flag(def.aiFlags, AiFlag::Immobile))
+                reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
+            reg.emplace<Renderable>(e, Renderable{tier_color(tier, rh)});
+
+            reg.emplace<MobRef>(e, MobRef{static_cast<std::uint8_t>(mobKind), level,
+                                          static_cast<std::int16_t>(hp),
+                                          static_cast<std::int16_t>(hp), packId});
+            // Staggered initial cooldown so a room full of mobs does not swing in
+            // lockstep on the frame the player walks in.
+            reg.emplace<MobCombat>(
+                e, MobCombat{static_cast<std::uint16_t>(rh % (def.attackCdMs + 1u))});
+            ++spawned;
+        }
     }
     return spawned;
 }

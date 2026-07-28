@@ -29,21 +29,55 @@
 
 namespace giga::game {
 
-// The lattice node this agent is currently walking toward. Two bytes: an agent's
-// entire navigation state. Everything else is in the shared baked fields.
+// The lattice node this agent is currently walking toward. THREE bytes: an agent's
+// entire navigation state. Everything else is in the shared baked fields, and there
+// is deliberately no path in here — not per agent and not per pack.
 struct WanderTarget {
     std::uint8_t node;      // lattice node 0..63
     std::uint8_t cooldown;  // staggered visits to wait before repathing
+    std::uint8_t pack;      // spawn group (MobRef::pack); 0 = walks alone
 };
+static_assert(sizeof(WanderTarget) == 3,
+              "an agent's whole navigation state is three bytes");
 
 // Visit each agent once every N ticks. 8 at the 120 Hz sim step means ~15
 // steering decisions per agent per second, which is far finer than a walking
 // body needs and still costs an eighth of the naive sweep.
 inline constexpr std::uint32_t kWanderPeriod = 8;
 
+// Sim ticks a pack holds one shared destination before agreeing on another.
+//
+// This is the whole cohesion mechanism, and that it is a TIME QUANTUM rather than a
+// stored decision is the load-bearing part. Members sit in different stagger slots
+// and reach their repath at different moments, so a destination rolled "whenever I
+// happened to repath" differs member to member and the pack disperses — which is
+// exactly what makes spawn-only grouping a lie: `wander_init` randomises each node
+// independently and the nav bake takes ~3.7 s, so a pack looks perfect for the
+// length of the bake and scatters the instant the flow fields arrive.
+//
+// Quantising the tick makes the destination a pure function of (pack, epoch) that
+// every member recomputes for itself and all of them get the same answer. No
+// leader, no shared mutable state, no message passing, no path — and no write to
+// another entity, so it cannot dangle a live view.
+//
+// 1800 ticks is 15 s at the 120 Hz step. Lattice nodes are 32 cells = 64 m apart,
+// so that is long enough for a pack to cover real ground between decisions, and
+// short enough that a pack aimed at a node it cannot reach stands about for 15 s
+// rather than forever.
+inline constexpr std::uint64_t kPackEpochTicks = 1800;
+
+// The lattice node pack `pack` is walking toward at `tick`. Pure, O(1), no state.
+// Exposed so a test can assert that the pack AGREES, rather than inferring
+// agreement from where the bodies ended up.
+std::uint8_t pack_target_node(std::uint8_t pack, std::uint64_t tick);
+
 // Give every mob and embodied NPC on `layer` a wander target. Call after a floor
 // is populated (embody + mob spawn); entities that already have a target keep it.
 // The player is skipped — it holds CameraTag and is steered by input.
+//
+// A mob carrying a MobRef::pack starts on its PACK's destination, not on a private
+// one, so a pack walks as one from the first steering pass rather than only until
+// the bake lands.
 std::uint32_t wander_init(Registry& reg, LayerId layer, std::uint32_t seed);
 
 // One staggered steering pass. Sets horizontal velocity from the baked flow

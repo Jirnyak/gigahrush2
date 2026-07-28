@@ -34,4 +34,15 @@ namespace giga::game {
 void generate_floor(World& world, int number, const FloorSpec& spec,
                     unsigned seed);
 
+// The X/Y room-lattice pitch this kind builds on, in macro cells. A "room" is the
+// (stride-1)^2 interior between four wall lines; the wall lines themselves sit on
+// every cell whose x or y is a multiple of the stride.
+//
+// Exported rather than copied because the mob spawner places packs BY ROOM and has
+// to agree with the generator exactly. A duplicated stride table would keep
+// compiling and start placing "rooms" straddling wall lines the day a row in the
+// generator's geometry profile is retuned — a silent, seed-dependent drift.
+// Out-of-range kinds fall back to row 0, the same clamp generate_floor uses.
+int floor_room_stride(FloorKind kind);
+
 } // namespace giga::game

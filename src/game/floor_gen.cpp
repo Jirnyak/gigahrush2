@@ -90,6 +90,8 @@ const FloorGeom& geom_for(FloorKind kind) {
 
 } // namespace
 
+int floor_room_stride(FloorKind kind) { return geom_for(kind).stride; }
+
 void generate_floor(World& world, int number, const FloorSpec& spec,
                     unsigned seed) {
     MacroGrid& g = world.grid();

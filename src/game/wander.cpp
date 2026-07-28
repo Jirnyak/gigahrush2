@@ -1,6 +1,7 @@
 #include "game/wander.h"
 
 #include <cmath>
+#include <vector>
 
 #include "core/math.h"
 #include "core/wrap.h"
@@ -49,25 +50,58 @@ void agent_cell(const vec3& pos, int& cx, int& cy, int& cz) {
 
 } // namespace
 
+std::uint8_t pack_target_node(std::uint8_t pack, std::uint64_t tick) {
+    const std::uint32_t epoch = static_cast<std::uint32_t>(tick / kPackEpochTicks);
+    // The epoch is mixed before it is combined, not after: raw epochs are 0,1,2...
+    // and XORing a small counter into a small pack id would make neighbouring packs
+    // and neighbouring epochs collide in blocks.
+    const std::uint32_t h =
+        mix((static_cast<std::uint32_t>(pack) * 0x9e3779b9u) ^ mix(epoch));
+    return static_cast<std::uint8_t>(h % nav::kNodes);
+}
+
 std::uint32_t wander_init(Registry& reg, LayerId layer, std::uint32_t seed) {
-    std::uint32_t n = 0;
+    // Two phases, and the split is the discipline combat.cpp documents at length,
+    // not tidiness: `emplace<WanderTarget>` on the FIRST agent creates that
+    // component's storage, which can reallocate the registry's pool container and
+    // dangle the view being iterated. Phase 1 only reads; phase 2 writes once the
+    // view is gone. Bounded by the live-actor budget, and this runs at floor load.
+    struct Candidate {
+        Entity e;
+        std::uint8_t pack;
+    };
+    std::vector<Candidate> fresh;
+
     auto view = reg.view<const Transform>();
     for (auto e : view) {
         if (view.get<const Transform>(e).layer != layer) continue;
         if (reg.all_of<CameraTag>(e)) continue;          // the player
         if (reg.all_of<WanderTarget>(e)) continue;       // already wandering
-        // Immobile mobs are architecture; giving them a destination would only
-        // make them fight their own zero speed every pass.
-        if (const MobRef* m = reg.try_get<MobRef>(e))
+        std::uint8_t pack = 0;
+        if (const MobRef* m = reg.try_get<MobRef>(e)) {
+            // Immobile mobs are architecture; giving them a destination would only
+            // make them fight their own zero speed every pass.
             if (has_flag(kMobTable[m->kind].aiFlags, AiFlag::Immobile)) continue;
-
-        std::uint32_t h = mix(seed ^ (static_cast<std::uint32_t>(entt::to_integral(e)) *
-                                      0x9e3779b9u));
-        reg.emplace<WanderTarget>(
-            e, WanderTarget{static_cast<std::uint8_t>(h % nav::kNodes), 0});
-        ++n;
+            pack = m->pack;
+        }
+        fresh.push_back(Candidate{e, pack});
     }
-    return n;
+
+    for (const Candidate& c : fresh) {
+        // A packed agent's very first destination is its PACK's, so the group is
+        // coherent on pass one. Anything without a pack — every embodied resident —
+        // keeps the original per-identity roll and is completely unaffected.
+        const std::uint8_t node =
+            c.pack != 0
+                ? pack_target_node(c.pack, 0)
+                : static_cast<std::uint8_t>(
+                      mix(seed ^
+                          (static_cast<std::uint32_t>(entt::to_integral(c.e)) *
+                           0x9e3779b9u)) %
+                      nav::kNodes);
+        reg.emplace<WanderTarget>(c.e, WanderTarget{node, 0, c.pack});
+    }
+    return static_cast<std::uint32_t>(fresh.size());
 }
 
 namespace {
@@ -136,6 +170,13 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
 
         WanderTarget& wt = view.get<WanderTarget>(e);
         Velocity& vel = view.get<Velocity>(e);
+
+        // A packed agent's destination is DERIVED from the pack every pass, never
+        // remembered from whenever it last repathed. That is what makes cohesion
+        // exact instead of statistical: two members in different stagger slots
+        // cannot come to hold different nodes, because neither of them is holding a
+        // decision of its own. One mix per visit, and `wt.node` degrades to a cache.
+        if (wt.pack != 0) wt.node = pack_target_node(wt.pack, tick);
 
         // Aggro overrides navigation entirely: a monster that can see you does not
         // consult a flow field, it comes straight at you. Straight-line pursuit is
@@ -211,7 +252,15 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         if (arrived || stuck) {
             // Pick a fresh destination, but not every pass — thrashing between
             // unreachable nodes would burn the whole stagger budget on repathing.
-            if (wt.cooldown == 0) {
+            //
+            // A PACKED agent does not re-roll: its node is the pack's, and rolling a
+            // private one here is precisely the bug that would let a member peel off
+            // the first time it arrived or hit a dead end. It instead waits out the
+            // epoch, which reads as a pack that has arrived and is milling about.
+            // The honest cost: a pack aimed at a node it cannot reach stands still
+            // until the epoch turns (kPackEpochTicks, ~15 s) rather than retrying
+            // after ~1.1 s.
+            if (wt.pack == 0 && wt.cooldown == 0) {
                 std::uint32_t h = mix(id ^ static_cast<std::uint32_t>(tick));
                 wt.node = static_cast<std::uint8_t>(h % nav::kNodes);
                 wt.cooldown = kRepathCooldown;
@@ -252,8 +301,10 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
             const float oy = wrap_delta_f(tr.pos.y, ty, kWorldExtent);
             const float len = std::sqrt(ox * ox + oy * oy);
             if (len < kCellSize) {
-                // Already in the node's column with nowhere horizontal to go.
-                if (wt.cooldown == 0) {
+                // Already in the node's column with nowhere horizontal to go. Same
+                // rule as the repath above: a packed agent keeps the pack's node and
+                // waits out the epoch instead of privately picking another.
+                if (wt.pack == 0 && wt.cooldown == 0) {
                     std::uint32_t h =
                         mix(id ^ static_cast<std::uint32_t>(tick) ^ 0x5bf03635u);
                     wt.node = static_cast<std::uint8_t>(h % nav::kNodes);
