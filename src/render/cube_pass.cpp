@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "world/materials.h"
 #include "world/world.h"
 
 namespace giga::gpu {
@@ -48,17 +49,46 @@ void build_unit_cube(std::vector<CubeVertex>& out) {
     }
 }
 
-// A colour per cell type. Games can extend this; the core ships sensible
-// defaults so the world is legible out of the box.
+// Albedo per material id ([world/materials.h]), in **display-referred** values —
+// cube.frag linearises once with pow(2.2) before lighting, so these are what you
+// would pick in a colour picker, not linear.
+//
+// The industrial half is MEASURED, not chosen: each value is the mean albedo of a
+// real 2 K photograph (Poly Haven, CC0), measured after linearising and converted
+// back for this table. data/materials.csv carries the source URL, the linear mean
+// and the luminance variance for every one, produced by tools/measure_materials.py.
+// The residential half is authored, because the pack has no wallpaper, parquet,
+// plaster or linoleum.
+//
+// Why bother measuring: hand-picked albedos drift bright and desaturated, which is
+// exactly how "flat painted cubes" looks. Real rust is darker and far more
+// saturated than anyone guesses.
+constexpr vec3 kMaterial[kMatCount] = {
+    /*  0 air, never drawn      */ {0.00f, 0.00f, 0.00f},
+    /*  1 concrete (maze)       */ {0.45f, 0.42f, 0.40f},
+    /*  2 soil (maze)           */ {0.30f, 0.55f, 0.25f},
+    /*  3 water marker (maze)   */ {0.20f, 0.35f, 0.80f},
+    /*  4 tan slab (maze)       */ {0.70f, 0.60f, 0.35f},
+    /*  5 unused                */ {0.75f, 0.75f, 0.78f},
+    /*  6 unused                */ {0.75f, 0.75f, 0.78f},
+    /*  7 nav / hub pad         */ {0.00f, 0.80f, 0.95f},
+    // --- khrushchevka ---
+    /*  8 plaster    authored   */ {0.72f, 0.69f, 0.62f}, // dirty warm whitewash
+    /*  9 parquet    authored   */ {0.52f, 0.36f, 0.19f}, // dark varnished wood
+    /* 10 shop shutter  measured*/ {0.50f, 0.52f, 0.53f}, // painted_metal_shutter
+    /* 11 lino          measured*/ {0.13f, 0.13f, 0.15f}, // rubber_tiles, near-black
+    /* 12 factory wall  measured*/ {0.39f, 0.46f, 0.30f}, // factory_wall, green paint
+    /* 13 tread plate   measured*/ {0.52f, 0.33f, 0.20f}, // metal_grate_rusty
+    /* 14 rust          measured*/ {0.53f, 0.34f, 0.10f}, // rusty_metal_03
+    /* 15 rubble        measured*/ {0.35f, 0.17f, 0.11f}, // rusty_corrugated_iron
+};
+static_assert(sizeof(kMaterial) / sizeof(kMaterial[0]) == kMatCount,
+              "one albedo row per material id in world/materials.h");
+
 vec3 type_color(CellType t) {
-    switch (t) {
-    case 1: return {0.45f, 0.42f, 0.40f}; // rock / stone
-    case 2: return {0.30f, 0.55f, 0.25f}; // grass / soil
-    case 3: return {0.20f, 0.35f, 0.80f}; // solid water ice / marker
-    case 4: return {0.70f, 0.60f, 0.35f}; // sand
-    case 7: return {0.00f, 0.80f, 0.95f}; // nav / fast-travel hub pad (cyan)
-    default: return {0.75f, 0.75f, 0.78f};
-    }
+    // Unknown ids render as the old default rather than black, so a generator that
+    // writes a material the table does not know is visible but not invisible.
+    return t < kMatCount ? kMaterial[t] : vec3{0.75f, 0.75f, 0.78f};
 }
 
 // A cell is a surface cell (worth drawing) if it is non-empty and at least one

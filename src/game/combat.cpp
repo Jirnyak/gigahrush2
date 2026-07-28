@@ -139,7 +139,23 @@ std::uint32_t mob_melee_step(Registry& reg, NpcPool& pool, EventBus& bus,
     const std::uint16_t elapsedMs =
         static_cast<std::uint16_t>(dt * 1000.0f + 0.5f);
 
-    std::uint32_t swings = 0;
+    // Two phases, and the split is a CRASH FIX rather than a style choice.
+    //
+    // apply_damage can `emplace<Dead>`, and the first time it does, EnTT creates a
+    // new component storage — which can reallocate the registry's pool container
+    // and dangle the pointers the view being iterated is holding. Damaging a target
+    // from inside a view loop therefore segfaults *sometimes*: only when the pool
+    // vector happens to be at capacity. Exactly the bug that survives several clean
+    // runs and then bites. Observed as a hard crash immediately after the first
+    // mob-killed-the-player death.
+    //
+    // Phase 1 touches only components already in the view (safe) and records
+    // intent. Phase 2 applies damage after the view is gone. This is the same
+    // discipline finalize_deaths, despawn_layer_mobs, loot_dead_mobs and
+    // pickup_step already follow — this was the one place it was missed.
+    struct Swing { Entity mob; std::int16_t raw; std::uint16_t cd; };
+    std::vector<Swing> queued;
+
     for (auto e : reg.view<const MobRef, const Transform, MobCombat>()) {
         MobCombat& mc = reg.get<MobCombat>(e);
 
@@ -167,15 +183,23 @@ std::uint32_t mob_melee_step(Registry& reg, NpcPool& pool, EventBus& bus,
 
         // Damage scales with the mob's level on the same curve as its HP, so a
         // deep-floor elite hits as hard as it is tough.
-        const std::int16_t raw = static_cast<std::int16_t>(
-            mob_hp_at_level(def.dmg, mr.level));
-        DamageResult r = apply_damage(reg, pool, victim, raw,
-                                      DamageChannel::Kinetic, e);
+        queued.push_back(Swing{
+            e, static_cast<std::int16_t>(mob_hp_at_level(def.dmg, mr.level)),
+            def.attackCdMs});
+    }
+
+    std::uint32_t swings = 0;
+    for (const Swing& s : queued) {
+        DamageResult r = apply_damage(reg, pool, victim, s.raw,
+                                      DamageChannel::Kinetic, s.mob);
         if (r.hit) {
             ++swings;
-            mc.cooldownMs = def.attackCdMs;
+            if (MobCombat* mc = reg.try_get<MobCombat>(s.mob))
+                mc->cooldownMs = s.cd;
         }
-        if (r.lethal) break;  // nothing left to hit this tick
+        // Once the victim is down the rest of the queue has nothing to hit, and
+        // apply_damage would no-op on it anyway — it refuses a target already Dead.
+        if (r.lethal) break;
     }
     (void)bus;
     (void)tick;

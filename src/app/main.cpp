@@ -192,22 +192,31 @@ void bake_floor_nav(Registry& reg, const World& world, LayerId layer,
 // Returns entt::null when the floor has nobody left to be, which is the honest
 // end state and the caller must handle it.
 Entity possess_a_survivor(Registry& reg, game::NpcPool& pool, LayerId layer) {
+    // Choose first, mutate after: adding a component while a view is being
+    // iterated can dangle that view if EnTT has to grow its pool container. The
+    // pools involved here already exist, so this is insurance rather than a fix —
+    // but it is the same rule combat.cpp had to learn the hard way.
+    Entity chosen = entt::null;
+    game::NpcId chosenId = game::kInvalidNpc;
     for (auto e : reg.view<const game::NpcRef, const Transform>()) {
         if (reg.get<const Transform>(e).layer != layer) continue;
         if (reg.all_of<CameraTag>(e)) continue;      // already the player
         const game::NpcId id = reg.get<const game::NpcRef>(e).id;
         if (!pool.valid(id) || !pool.alive(id)) continue;
-
-        CameraTag cam;
-        cam.eyeOffset =
-            vec3{0.0f, 0.0f, game::body_eye_height(pool.height_mm(id))};
-        reg.emplace<CameraTag>(e, cam);
-        reg.emplace<Controller>(e, Controller{7.0f, {0, 0, 0}, false});
-        pool.set_player(id, true);
-        std::fprintf(stderr, "[death] possessed record %u\n", id);
-        return e;
+        chosen = e;
+        chosenId = id;
+        break;
     }
-    return entt::null;
+    if (chosen == entt::null) return entt::null;
+
+    CameraTag cam;
+    cam.eyeOffset =
+        vec3{0.0f, 0.0f, game::body_eye_height(pool.height_mm(chosenId))};
+    reg.emplace<CameraTag>(chosen, cam);
+    reg.emplace<Controller>(chosen, Controller{7.0f, {0, 0, 0}, false});
+    pool.set_player(chosenId, true);
+    std::fprintf(stderr, "[death] possessed record %u\n", chosenId);
+    return chosen;
 }
 
 } // namespace

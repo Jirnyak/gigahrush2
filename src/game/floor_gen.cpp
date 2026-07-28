@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "world/materials.h"
 #include "world/lattice.h"
 #include "world/types.h"
 #include "world/world.h"
@@ -59,14 +60,23 @@ struct FloorGeom {
     int gapPct;    // % of wall cells knocked out (0 = intact ... high = maze/decay)
     int holePct;   // % of slab cells missing (collapsed floors, vertical holes)
     int rubblePct; // % of interior air cells filled with a debris block
+    CellType wall; // material id for this kind's walls  ([voxels.md])
+    CellType slab; // material id for this kind's floor/ceiling slabs
 };
 
-//                         storey stride doorH pillars gap hole rubble
+// The two material columns are what make a floor kind *look* like itself rather
+// than only be shaped like itself. Until now every kind wrote the same two cell
+// types, so an Industrial plate and a Residential warren rendered in identical
+// grey and tan — the maze demo's palette. The albedos behind these ids are
+// measured off real photographs where a real material exists (data/materials.csv)
+// and authored where none does; see kMaterial in render/cube_pass.cpp.
+//
+//                         storey stride doorH pillars gap hole rubble  wall  slab
 constexpr FloorGeom kGeom[] = {
-    /* Residential */ {  4,  8, 2, false,  0,  0, 0},
-    /* Commercial  */ {  8, 16, 3, false,  0,  0, 0},
-    /* Industrial  */ { 16, 32, 5, true,   0,  0, 2},
-    /* Derelict    */ {  4,  8, 2, false, 38, 12, 9},
+    /* Residential */ {  4,  8, 2, false,  0,  0, 0, kMatPlaster,     kMatParquet },
+    /* Commercial  */ {  8, 16, 3, false,  0,  0, 0, kMatShopShutter, kMatLino    },
+    /* Industrial  */ { 16, 32, 5, true,   0,  0, 2, kMatFactoryWall, kMatTread   },
+    /* Derelict    */ {  4,  8, 2, false, 38, 12, 9, kMatRust,        kMatRubble  },
 };
 static_assert(sizeof(kGeom) / sizeof(kGeom[0]) ==
                   static_cast<std::size_t>(FloorKind::Count),
@@ -83,11 +93,11 @@ const FloorGeom& geom_for(FloorKind kind) {
 void generate_floor(World& world, int number, const FloorSpec& spec,
                     unsigned seed) {
     MacroGrid& g = world.grid();
-    constexpr CellType kSlab = 4;   // floor/ceiling slab (tan)
-    constexpr CellType kWall = 1;   // concrete wall / rubble (grey)
-    constexpr CellType kHubPad = 7; // nav / fast-travel hub landing pad (cyan)
-
     const FloorGeom& geom = geom_for(spec.kind);
+    // Per-kind materials, from the table above.
+    const CellType kSlab = geom.slab;
+    const CellType kWall = geom.wall;
+    constexpr CellType kHubPad = kMatHubPad;
     Rng rng(floor_seed(seed, number));
 
     const int storey = geom.storey;
