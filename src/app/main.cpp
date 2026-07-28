@@ -40,6 +40,7 @@
 #include "game/floor_stream.h"
 #include "game/mob_spawn.h"
 #include "game/needs.h"
+#include "game/rumour.h"
 #include "game/samosbor.h"
 #include "game/combat.h"
 #include "game/extraction.h"
@@ -503,6 +504,11 @@ int main(int argc, char** argv) {
     game::SamosborState samosbor = game::samosbor_new_game(sbRng);
     std::uint32_t samosborCycles = 0;
     std::int16_t samosborDamage = 0;
+    // The last thing overheard, and when. Held rather than recomputed per frame
+    // because a rumour is something you were TOLD — it should stay on screen after you
+    // walk away, not vanish the moment the speaker is out of range.
+    char rumourLine[160] = {};
+    std::uint64_t rumourAt = 0;
     game::NeedsTick needs{};   // last step's report, for the HUD
     int needsHpLost = 0;       // running total, so the HUD is not one tick
     std::uint32_t shots = 0;   // rounds the player has fired
@@ -586,6 +592,15 @@ int main(int argc, char** argv) {
                         // inheriting a 30-minute surface gap into the void would
                         // silently cancel the entire depth gradient.
                         samosbor = game::samosbor_new_game(sbRng);
+                        // A rumour is about a FLOOR, so carrying one across a ride
+                        // makes it false. Caught on a capture: the line read
+                        // "самосбор здесь часто (17.2%)" while the HUD's own duty for
+                        // the floor underfoot said 35.0% — the number was true of the
+                        // floor the speaker was standing on, two rides ago. The whole
+                        // premise of this system is that a rumour is checkable, so a
+                        // stale one is worse than none. [rumour.h]
+                        rumourLine[0] = 0;
+                        rumourAt = 0;
                         currentSpec = spec_for_floor(currentFloor);
                         // Streaming recycles World objects in place, so the cube
                         // pass cannot detect the new geometry by identity.
@@ -724,6 +739,19 @@ int main(int argc, char** argv) {
                 // first, and if that already killed you apply_damage refuses the
                 // target, so you cannot be billed for starving after you are dead.
                 // [needs.h]
+                // Overhear the nearest body, at most once every kOverhearCooldownTicks.
+                // Without the cooldown, standing in a crowd would replace the line
+                // every frame and none of them would be readable — a flicker instead
+                // of information. [rumour.h]
+                if (simTick - rumourAt >= game::kOverhearCooldownTicks) {
+                    const game::NpcId sp = game::nearest_speaker(reg, activeLayer);
+                    if (sp != game::kInvalidNpc) {
+                        const game::Rumour ru = game::rumour_for(
+                            reg, pool, sp, activeLayer, currentFloor);
+                        if (game::rumour_text(ru, rumourLine, sizeof(rumourLine)))
+                            rumourAt = simTick;
+                    }
+                }
                 needs = game::needs_step(reg, pool, activeLayer, kSimDt);
                 needsHpLost += needs.hpLost;
                 // Corpses pay out BEFORE they are destroyed. The gap between
@@ -982,6 +1010,9 @@ int main(int argc, char** argv) {
                 ImGui::Text("pressure pee %.0f poo %.0f | speed x%.2f | starved %d hp",
                             nd.pee, nd.poo, needs.speedScale, needsHpLost);
             }
+            if (rumourLine[0])
+                ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.91f, 1.0f), "\"%s\"",
+                                   rumourLine);
             ImGui::Text("nav: %s  (last bake %.0f + %.0f ms, async)",
                         nav.baking() ? "BAKING - crowd idle"
                                      : (nav.ready() ? "ready" : "none"),
