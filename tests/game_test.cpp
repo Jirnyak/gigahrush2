@@ -15,6 +15,7 @@
 #include "game/floor_gen.h"
 #include "game/floor_registry.h"
 #include "game/faction.h"
+#include "game/faction_relations.h"
 #include "game/floor_spec.h"
 #include "game/mob_table.h"
 #include "game/item_table.h"
@@ -1965,6 +1966,97 @@ static void test_ranged_windup_and_deadzone() {
     CHECK(shots == 0);                            // aborted, not banked
 }
 
+
+// The relations matrix. The load-bearing assertion is the hostile-pair COUNT: every
+// Wild cell sits exactly on the -50 boundary, so a strict `<` instead of `<=` leaves
+// the matrix with zero hostile pairs and the whole system silently does nothing.
+// Counting them is the only check that catches that, and it is why it is first.
+static void test_faction_relations() {
+    static_assert(kRelFactionCount == 6, "five factions plus the player row");
+    static_assert(sizeof(FactionRelations) == 36);
+
+    FactionRelations m = kBaseFactionMatrix;
+
+    // Symmetric, and nobody is hostile to themselves.
+    for (std::uint8_t a = 0; a < kRelFactionCount; ++a) {
+        CHECK(!m.hostile(a, a));
+        for (std::uint8_t b = 0; b < kRelFactionCount; ++b)
+            CHECK(m.at(a, b) == m.at(b, a));
+    }
+
+    // Exactly six hostile unordered pairs at t=0.
+    int pairs = 0;
+    for (std::uint8_t a = 0; a < kRelFactionCount; ++a)
+        for (std::uint8_t b = static_cast<std::uint8_t>(a + 1);
+             b < kRelFactionCount; ++b)
+            if (m.hostile(a, b)) ++pairs;
+    CHECK(pairs == 6);
+
+    const std::uint8_t cit = static_cast<std::uint8_t>(Faction::Citizens);
+    const std::uint8_t liq = static_cast<std::uint8_t>(Faction::Liquidators);
+    const std::uint8_t cul = static_cast<std::uint8_t>(Faction::Cultists);
+    const std::uint8_t sci = static_cast<std::uint8_t>(Faction::Scientists);
+    const std::uint8_t wld = static_cast<std::uint8_t>(Faction::Wild);
+    const std::uint8_t ply = kFactionPlayerRow;
+
+    // Wild against everyone; cultists against the police only.
+    CHECK(m.hostile(wld, cit) && m.hostile(wld, liq) && m.hostile(wld, cul));
+    CHECK(m.hostile(wld, sci) && m.hostile(wld, ply));
+    CHECK(m.hostile(cul, liq));
+    // Cultists are cold-neutral to citizens, NOT hostile — they live among them.
+    CHECK(!m.hostile(cul, cit));
+    CHECK(m.at(cul, cit) == 0);
+    // The civil bloc.
+    CHECK(m.at(cit, liq) == 50 && m.at(cit, sci) == 50 && m.at(liq, sci) == 50);
+    // The boundary itself is inclusive: exactly -50 IS hostile.
+    CHECK(m.at(wld, cit) == kHostileRelation);
+    CHECK(m.hostile(wld, cit));
+
+    // Mutation is symmetric and clamped.
+    CHECK(m.add_mutual(cit, liq, -30) == 20);
+    CHECK(m.at(cit, liq) == 20 && m.at(liq, cit) == 20);
+    CHECK(m.add_mutual(cit, liq, -10000) == -128);   // clamps, does not wrap
+    CHECK(m.add_mutual(cit, liq, 100000) == 127);
+
+    // Rebirth: the player's row and column reset; the world's memory does not.
+    m.reset();
+    m.add_mutual(cit, liq, -30);          // the world bends
+    m.add_mutual(ply, liq, -30);          // and so does the player's standing
+    CHECK(m.at(cit, liq) == 20);
+    CHECK(m.at(ply, liq) == -5);
+    m.reset_player_row_col();
+    CHECK(m.at(cit, liq) == 20);          // survived — this is the point
+    CHECK(m.at(ply, liq) == 25);          // back to authored
+    CHECK(m.at(liq, ply) == 25);          // and the column too
+
+    // Monsters: cultists are the one society they leave alone.
+    CHECK(kMobVsFaction[cul] > 0);
+    CHECK(kMobVsFaction[cit] <= kHostileRelation);
+    CHECK(kMobVsFaction[ply] <= kHostileRelation);
+
+    // rel_row is driven by the NpcPlayer BIT, not by an id — which is what lets the
+    // player have a matrix row without being a singleton.
+    NpcPool pool;
+    pool.init();
+    NpcId a = pool.spawn();
+    NpcId b = pool.spawn();
+    pool.faction(a) = static_cast<std::uint16_t>(Faction::Cultists);
+    pool.faction(b) = static_cast<std::uint16_t>(Faction::Citizens);
+    CHECK(rel_row(pool, a) == cul);
+    CHECK(!mob_hostile_to(pool, a));      // a cultist is safe from monsters
+    CHECK(mob_hostile_to(pool, b));
+
+    pool.set_player(a, true);
+    CHECK(rel_row(pool, a) == ply);       // the bit moved the row
+    CHECK(mob_hostile_to(pool, a));       // and being the player is never safe
+    pool.set_player(a, false);
+    CHECK(rel_row(pool, a) == cul);       // and back
+
+    // An out-of-range faction folds rather than reading past the matrix.
+    pool.faction(b) = 999;
+    CHECK(rel_row(pool, b) < kFactionCount);
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -2006,6 +2098,7 @@ int main() {
     test_loadout_changes_the_numbers();
     test_floor_kinds_use_distinct_materials();
     test_ranged_windup_and_deadzone();
+    test_faction_relations();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
