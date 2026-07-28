@@ -220,6 +220,29 @@ void generate_floor(World& world, int number, const FloorSpec& spec,
                             g.set_cell(x, y, z0, kHubPad);
                     }
             }
+            // The extraction pad — the bank, and ONLY on the hub.
+            //
+            // Recolours the ground-storey slab (z=0) inside the lobby ring, which
+            // is the one pad surface a walking body ever has under its feet: it
+            // stands at cell z=1, and on_extraction_pad checks the cell it is in
+            // and the one below. The 3x3 shaft hole is already air here and the
+            // != air guard leaves it open, so what remains is a 7x7-minus-3x3 ring
+            // of 40 cells around each of the 16 shafts.
+            //
+            // Hub only, and that is the whole loop rather than an optimisation: if
+            // you could bank on the floor you looted, carried value would never be
+            // at risk for longer than it took to walk to the nearest lobby, and
+            // "value is not yours until it is banked" ([extraction.h]) would cost
+            // nothing. Riding back up IS the extraction.
+            if (number == 0) {
+                for (int dy = -kLobbyR; dy <= kLobbyR; ++dy)
+                    for (int dx = -kLobbyR; dx <= kLobbyR; ++dx) {
+                        const int x = wrap_macro(cx + dx);
+                        const int y = wrap_macro(cy + dy);
+                        if (g.cell(x, y, 0) != kCellAir)
+                            g.set_cell(x, y, 0, kMatExtract);
+                    }
+            }
             // Elevator column: 4 full-height posts hugging the shaft, so each of
             // the 16 shafts reads as ONE continuous vertical column spanning the
             // whole map (Z wraps, so the column closes into a loop). The 3x3

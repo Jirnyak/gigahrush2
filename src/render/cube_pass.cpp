@@ -69,7 +69,13 @@ constexpr vec3 kMaterial[kMatCount] = {
     /*  2 soil (maze)           */ {0.30f, 0.55f, 0.25f},
     /*  3 water marker (maze)   */ {0.20f, 0.35f, 0.80f},
     /*  4 tan slab (maze)       */ {0.70f, 0.60f, 0.35f},
-    /*  5 unused                */ {0.75f, 0.75f, 0.78f},
+    /*  5 extraction pad        */ {0.10f, 0.85f, 0.42f}, // the bank: saturated
+                                                         // emerald, unmistakable
+                                                         // against a palette of
+                                                         // rust, tan and grey —
+                                                         // and NOT red, which is
+                                                         // reserved for danger
+                                                         // ([faction.h])
     /*  6 unused                */ {0.75f, 0.75f, 0.78f},
     /*  7 nav / hub pad         */ {0.00f, 0.80f, 0.95f},
     // --- khrushchevka ---

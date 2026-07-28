@@ -1820,7 +1820,10 @@ static void test_floor_kinds_use_distinct_materials() {
         for (CellType t : used) {
             CHECK(t != kMatConcrete);
             CHECK(t != kMatSlabTan);
-            CHECK(t >= kMatPlaster || t == kMatHubPad);
+            // kMatExtract (5) is the deliberate third exception: it reuses a free
+            // low id so kMatCount and the count-drift checks stay put. See
+            // world/materials.h for why extraction could not reuse kMatHubPad.
+            CHECK(t >= kMatPlaster || t == kMatHubPad || t == kMatExtract);
         }
 
     // Spot-check both extremes against the table.
@@ -2146,6 +2149,62 @@ static void test_extraction() {
     CHECK(d.deepestFloor == 9);             // equal magnitude does not overwrite
 }
 
+
+// Can the player ever actually stand on an extraction pad?
+//
+// This test exists because the answer was NO for the first version, and nothing
+// caught it: the mechanic was pointed at kMatHubPad, which the generator stamps onto
+// the slab at the four lattice z-levels {16,48,80,112}, while a body walks at cell
+// z=1. The pad was permanently 30 m above the player's feet. No crash, no warning,
+// no failing test — banking would simply never have fired, and the only symptom
+// would have been a player wondering why the number never went up.
+//
+// So the assertion is deliberately about REACHABILITY, at the height a body really
+// occupies, against the real generator. A unit test of deposit_valuables cannot
+// catch this class of bug and neither can the compiler.
+static void test_extraction_reachable() {
+    World hub;
+    generate_floor(hub, 0, floor_spec(FloorKind::Residential), 1u);
+
+    // Walkable ground is cell z=1: the storey-0 slab is z=0 and a body stands on it.
+    const float standZ = 1.5f * kCellSize;
+    int reachable = 0;
+    for (int y = 0; y < kMacroDim; ++y)
+        for (int x = 0; x < kMacroDim; ++x) {
+            if (hub.grid().cell(x, y, 1) != kCellAir) continue;   // must be standable
+            const vec3 p{(x + 0.5f) * kCellSize, (y + 0.5f) * kCellSize, standZ};
+            if (on_extraction_pad(hub.grid(), p)) ++reachable;
+        }
+    // 16 shafts x (7x7 lobby minus the 3x3 shaft hole) = 16 x 40 = 640 cells. Assert
+    // a floor rather than the exact number: the lobby radius is the generator's to
+    // tune, but "hundreds of cells, spread over all 16 lobbies" is the contract.
+    if (reachable <= 400)
+        std::printf("  extraction ring reachable cells: %d (want >400)\n", reachable);
+    CHECK(reachable > 400);
+
+    // And the ring is ONLY on the hub. A looting floor that banked would delete the
+    // entire risk half of the loop, so this is as load-bearing as the line above.
+    World deep;
+    generate_floor(deep, -7, floor_spec(FloorKind::Derelict), 3u);
+    int leaked = 0;
+    for (int y = 0; y < kMacroDim; ++y)
+        for (int x = 0; x < kMacroDim; ++x) {
+            if (deep.grid().cell(x, y, 1) != kCellAir) continue;
+            const vec3 p{(x + 0.5f) * kCellSize, (y + 0.5f) * kCellSize, standZ};
+            if (on_extraction_pad(deep.grid(), p)) ++leaked;
+        }
+    CHECK(leaked == 0);
+
+    // The nav pads must still be there and must still NOT bank: they are a
+    // different material for a reason, and this pins the two apart.
+    static_assert(kMatExtract != kMatHubPad, "the bank and the nav pad must differ");
+    int navPads = 0;
+    for (int y = 0; y < kMacroDim; ++y)
+        for (int x = 0; x < kMacroDim; ++x)
+            if (hub.grid().cell(x, y, 16) == kMatHubPad) ++navPads;
+    CHECK(navPads > 0);
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -2189,6 +2248,7 @@ int main() {
     test_ranged_windup_and_deadzone();
     test_faction_relations();
     test_extraction();
+    test_extraction_reachable();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

@@ -25,6 +25,18 @@ inline constexpr CellType kMatWaterMark = 3;
 inline constexpr CellType kMatSlabTan = 4;   // generic tan slab
 inline constexpr CellType kMatHubPad = 7;    // nav / fast-travel pad (cyan)
 
+// The bank. Takes the free id 5 rather than extending the table, so kMatCount and
+// every count-drift check stay exactly where they were.
+//
+// It needs its own material because reusing kMatHubPad DID NOT WORK, and the way it
+// failed is worth recording: the hub pads are stamped onto the slab at the four
+// lattice z-levels {16, 48, 80, 112}, while a body walks at cell z=1. So the pad was
+// always 15 cells (30 m) above the player's feet and the extraction check could
+// never once return true. Nothing would have crashed, nothing would have warned —
+// banking would simply never have happened. Found by reading the generator, not by
+// playing, which is the only way this class of bug gets found.
+inline constexpr CellType kMatExtract = 5;   // extraction pad / bank (emerald)
+
 // --- Khrushchevka materials, one pair per FloorKind -------------------------
 // Before these existed every floor kind wrote kMatConcrete + kMatSlabTan, so an
 // Industrial pillar plate and a Residential warren rendered in identical grey and

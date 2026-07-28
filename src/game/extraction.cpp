@@ -19,7 +19,7 @@ bool on_extraction_pad(const MacroGrid& grid, const vec3& pos) {
     for (int dz = 0; dz >= -1; --dz) {
         const int z = cz + dz;
         if (z < 0 || z >= kMacroDim) continue;
-        if (grid.cell(cx, cy, z) == kMatHubPad) return true;
+        if (grid.cell(cx, cy, z) == kMatExtract) return true;
     }
     return false;
 }
