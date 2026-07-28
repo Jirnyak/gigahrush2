@@ -10,6 +10,7 @@
 #include "game/event_bus.h"
 #include "game/floor_gen.h"
 #include "game/floor_registry.h"
+#include "game/faction.h"
 #include "game/floor_spec.h"
 #include "game/mob_table.h"
 #include "game/mob_spawn.h"
@@ -1122,6 +1123,105 @@ static void test_mob_spawn_v_shape_in_world() {
     CHECK(nRoof > nHub * 2);
 }
 
+// ---- Palette separation: monsters must not look like people ---------------
+
+// This is a gameplay contract, not a style guide. In a dark corridor the player
+// has to tell a civilian from a monster instantly, so the two palettes occupy
+// different axes: people are green-teal/blue/violet/cyan/amber, monsters own the
+// red/dark axis, and red belongs to danger only (faction.h).
+//
+// The first mob palette violated this — boss yellow (1.00, 0.92, 0.30) sat a
+// squared distance of only 0.023 from faction amber (0.95, 0.80, 0.22). This test
+// exists so that regression cannot happen quietly.
+static void test_palette_separation() {
+    // faction.h owns the people side; sample it through the public accessor.
+    vec3 people[kFactionCount];
+    for (std::uint16_t f = 0; f < kFactionCount; ++f)
+        people[f] = faction_color(f, /*jitterKey=*/0u);
+
+    // mob_spawn keeps tier_color internal, so mirror the authored rows here. A
+    // divergence shows up as this test passing while the game looks wrong, which
+    // is why the values are commented with their names in both places.
+    const vec3 threats[] = {
+        {0.30f, 0.26f, 0.22f}, {0.42f, 0.30f, 0.18f}, {0.56f, 0.26f, 0.15f},
+        {0.68f, 0.14f, 0.13f}, {0.90f, 0.31f, 0.36f}, {1.00f, 0.58f, 0.52f},
+    };
+    const std::size_t nThreats = sizeof(threats) / sizeof(threats[0]);
+    static_assert(sizeof(threats) / sizeof(threats[0]) ==
+                      static_cast<std::size_t>(MobTier::Count),
+                  "one mirrored tier colour per MobTier");
+
+    // Separation is measured as squared RGB distance MINIMISED OVER THE JITTER,
+    // which is the only honest form: faction_color and tier_color each add a
+    // deterministic per-record offset of the same amount to all three channels
+    // (+/-0.09), so two colours can be pushed toward each other by up to 0.18
+    // along the grey diagonal. Comparing base colours alone would pass a palette
+    // that collides in the crowd.
+    //
+    // For d = a - b and a uniform shift delta applied to one of them, the squared
+    // distance is sum(d_i + delta)^2 = Q + 2*S*delta + 3*delta^2, minimised at
+    // delta = -S/3 (clamped to the jitter range). Closed form, no sampling.
+    auto worst_d2 = [](const vec3& a, const vec3& b) {
+        const float d0 = a.x - b.x, d1 = a.y - b.y, d2v = a.z - b.z;
+        const float S = d0 + d1 + d2v;
+        const float Q = d0 * d0 + d1 * d1 + d2v * d2v;
+        float delta = -S / 3.0f;
+        if (delta < -0.18f) delta = -0.18f;
+        if (delta > 0.18f) delta = 0.18f;
+        return Q + 2.0f * S * delta + 3.0f * delta * delta;
+    };
+
+    // No monster may be confusable with any civilian. Measured worst case for the
+    // current palettes is 0.0533 (Wild amber vs Boss); the threshold keeps
+    // headroom. For scale, the palette this replaced put boss yellow at 0.0283
+    // from faction amber under the same measure — half as far.
+    for (std::uint16_t f = 0; f < kFactionCount; ++f)
+        for (std::size_t t = 0; t < nThreats; ++t)
+            CHECK(worst_d2(people[f], threats[t]) > 0.040f);
+
+    // Factions must also be distinguishable from each other, or a five-way
+    // society reads as one crowd. Worst case is 0.0333 (Liquidators vs
+    // Scientists — blue against cyan, the tightest authored pair).
+    for (std::uint16_t a = 0; a < kFactionCount; ++a)
+        for (std::uint16_t b = static_cast<std::uint16_t>(a + 1);
+             b < kFactionCount; ++b)
+            CHECK(worst_d2(people[a], people[b]) > 0.025f);
+
+    auto d2 = [](const vec3& a, const vec3& b) {
+        const float dr = a.x - b.x, dg = a.y - b.y, db = a.z - b.z;
+        return dr * dr + dg * dg + db * db;
+    };
+
+    // Five factions, and the index must wrap by modulo, not fold: the `faction & 3`
+    // mask this replaced silently mapped Wild onto Citizens.
+    static_assert(kFactionCount == 5, "five factions");
+    for (std::uint16_t f = 0; f < kFactionCount; ++f)
+        CHECK(d2(faction_color(f, 0u),
+                 faction_color(static_cast<std::uint16_t>(f + kFactionCount), 0u))
+              < 1e-6f);  // wraps by modulo, same hue
+    CHECK(d2(faction_color(static_cast<std::uint16_t>(Faction::Wild), 0u),
+             faction_color(static_cast<std::uint16_t>(Faction::Citizens), 0u))
+          > 0.03f);
+}
+
+// The floor catalog must carry five faction weights and mean something by them.
+static void test_faction_mix_is_five_wide() {
+    for (int k = 0; k < static_cast<int>(FloorKind::Count); ++k) {
+        const FloorSpec& s = floor_spec(static_cast<FloorKind>(k));
+        std::uint32_t total = 0;
+        for (std::size_t f = 0; f < kFactionCount; ++f) total += s.factionMix[f];
+        CHECK(total > 0);  // a zero mix would seed one arbitrary faction
+    }
+    // Fiction checks: the hub is citizen-dominant, the derelict cultist-dominant.
+    const FloorSpec& res = floor_spec(FloorKind::Residential);
+    const std::size_t cit = static_cast<std::size_t>(Faction::Citizens);
+    const std::size_t cul = static_cast<std::size_t>(Faction::Cultists);
+    for (std::size_t f = 0; f < kFactionCount; ++f)
+        if (f != cit) CHECK(res.factionMix[cit] > res.factionMix[f]);
+    const FloorSpec& der = floor_spec(FloorKind::Derelict);
+    CHECK(der.factionMix[cul] > der.factionMix[cit]);
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -1150,6 +1250,8 @@ int main() {
     test_mob_budget_v_shape();
     test_mob_spawn();
     test_mob_spawn_v_shape_in_world();
+    test_palette_separation();
+    test_faction_mix_is_five_wide();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

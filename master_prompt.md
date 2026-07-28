@@ -249,7 +249,7 @@ tests        world_test (core), game_test (game layer) — both headless;
   Faction colour palette lives here (§8). `embody_as_player` builds a **fresh**
   `CameraTag`+`Controller`, so callers preserving view/mode must re-apply them.
 - `game/floor_spec.{h,cpp}` — `FloorSpec` data catalog per `FloorKind`
-  (Residential/Commercial/Industrial/Derelict): population, `factionMix[4]`,
+  (Residential/Commercial/Industrial/Derelict): population, `factionMix[5]`,
   hostility, age window. `floor_spec(kind)` and `floor_spec_for(number)`.
 - `game/floor_registry.{h,cpp}` — the number↔module↔layer indirection (§4).
 - `game/floor_gen.{h,cpp}` — `generate_floor(World&, number, spec, seed)`: a
@@ -543,15 +543,23 @@ union), loot (spawnW + value-gate + depth caps), economy bands E0–E4. Mobs are
   3 Derelict, 4 Residential}`, registered as modules; only floor 0 is embodied at
   startup (streaming). `FloorStreamer.init(stack, keepRadius=0)` reserves
   `2*keepRadius+2 = 2` recyclable `LevelStack` slots (the ride-overlap peak).
-- **Faction palette** (`embody.cpp`, +per-record jitter): 0 = **red**
-  (0.90,0.28,0.26), 1 = **blue** (0.28,0.55,0.95), 2 = **amber** (0.95,0.80,0.22),
-  3 = **violet** (0.66,0.34,0.86).
-- **`FloorSpec` table** (`floor_spec.cpp`) — `kind: pop, factionMix{r,b,amber,violet},
-  hostility, ageLo–ageHi`:
-  - Residential: 420, {6,1,1,0}, 0.05, 1–90  *(red-dominant, no violet by design)*
-  - Commercial:  260, {3,3,2,1}, 0.20, 14–80 *(all four factions)*
-  - Industrial:  150, {2,4,1,0}, 0.35, 18–65 *(blue-dominant, no violet)*
-  - Derelict:     40, {1,0,0,3}, 0.90, 16–70 *(mostly violet + a little red; sparse, ominous)*
+- **Factions — FIVE, not four** (`src/game/faction.h`, +per-record jitter of
+  ±0.09 applied uniformly to all channels): 0 = Citizens **green-teal** `#4abe91`,
+  1 = Liquidators **blue** `#5b9eee`, 2 = Cultists **violet** `#bc59ff`,
+  3 = Scientists **cyan** `#67d8e8`, 4 = Wild **amber** `#e0a745`.
+  **Red is reserved for danger and is never a faction** — in the reference
+  `#e64e5c` belongs to *samosbor*, a territory owner with no diplomacy. Monsters
+  own the red/dark axis (`mob_spawn.cpp` `tier_color`), which is what makes a
+  civilian distinguishable from a threat in a dark corridor. `game_test`'s
+  `test_palette_separation` pins the two palettes apart, measured under
+  worst-case jitter. Anything indexing factions must be **5** wide: the earlier
+  `faction & 3` mask silently folded Wild onto Citizens.
+- **`FloorSpec` table** (`floor_spec.cpp`) — `kind: pop,
+  factionMix{citizen,liquidator,cultist,scientist,wild}, hostility, ageLo–ageHi`:
+  - Residential: 420, {7,1,1,0,1}, 0.05, 1–90  *(the citizen hub)*
+  - Commercial:  260, {3,2,1,2,2}, 0.20, 14–80 *(all five mix)*
+  - Industrial:  150, {2,4,0,2,1}, 0.35, 18–65 *(liquidators keep it running)*
+  - Derelict:     40, {1,0,4,0,3}, 0.90, 16–70 *(cultists + wild; sparse, ominous)*
 - **`FloorGeom` table** (`floor_gen.cpp`) — `storey, stride, doorH, pillars, gap%,
   hole%, rubble%, shafts` (storey & stride must divide 128):
   - Residential: 4, 8, 2, false, 0, 0, 0, 6

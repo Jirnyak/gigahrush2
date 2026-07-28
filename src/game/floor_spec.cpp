@@ -11,12 +11,21 @@ namespace {
 // the seeder. Populations give a clear dense->sparse gradient; hostility runs
 // the opposite way (safe residential -> deadly derelict).
 //
-//   kind         name           pop  factionMix    hostility  age window
+// factionMix is FIVE wide, in Faction enum order:
+//   Citizens, Liquidators, Cultists, Scientists, Wild
+//
+// The mixes are fiction, not filler. Citizens dominate the residential hub;
+// Liquidators cluster where the building is maintained; Cultists live *among* the
+// citizens rather than apart from them (the reference has them cold-neutral to
+// citizens, not hostile); Scientists belong to the civil bloc; Wild are hostile to
+// everyone and gather where nobody keeps order.
+//
+//   kind         name           pop  factionMix       hostility  age window
 constexpr FloorSpec kCatalog[] = {
-    {FloorKind::Residential, "Residential", 420, {6, 1, 1, 0}, 0.05f, 1, 90},
-    {FloorKind::Commercial,  "Commercial",  260, {3, 3, 2, 1}, 0.20f, 14, 80},
-    {FloorKind::Industrial,  "Industrial",  150, {2, 4, 1, 0}, 0.35f, 18, 65},
-    {FloorKind::Derelict,    "Derelict",     40, {1, 0, 0, 3}, 0.90f, 16, 70},
+    {FloorKind::Residential, "Residential", 420, {7, 1, 1, 0, 1}, 0.05f, 1, 90},
+    {FloorKind::Commercial,  "Commercial",  260, {3, 2, 1, 2, 2}, 0.20f, 14, 80},
+    {FloorKind::Industrial,  "Industrial",  150, {2, 4, 0, 2, 1}, 0.35f, 18, 65},
+    {FloorKind::Derelict,    "Derelict",     40, {1, 0, 4, 0, 3}, 0.90f, 16, 70},
 };
 static_assert(sizeof(kCatalog) / sizeof(kCatalog[0]) ==
                   static_cast<std::size_t>(FloorKind::Count),

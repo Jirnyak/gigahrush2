@@ -37,17 +37,19 @@ constexpr int kSlotsPerRoom = 16;
 
 // Sample a faction 0..3 from relative weights. Zero total falls back to a flat
 // spread so a blank spec still produces a mixed crowd rather than all faction 0.
-std::uint16_t sample_faction(const std::uint8_t mix[4], std::uint32_t r) {
-    std::uint32_t total = static_cast<std::uint32_t>(mix[0]) + mix[1] + mix[2] +
-                          mix[3];
-    if (total == 0) return static_cast<std::uint16_t>(r % 4u);
+std::uint16_t sample_faction(const std::uint8_t mix[kFactionCount],
+                            std::uint32_t r) {
+    std::uint32_t total = 0;
+    for (std::size_t f = 0; f < kFactionCount; ++f) total += mix[f];
+    if (total == 0)
+        return static_cast<std::uint16_t>(r % kFactionCount);
     std::uint32_t pick = r % total;
     std::uint32_t acc = 0;
-    for (std::uint16_t f = 0; f < 4; ++f) {
+    for (std::uint16_t f = 0; f < kFactionCount; ++f) {
         acc += mix[f];
         if (pick < acc) return f;
     }
-    return 3;
+    return static_cast<std::uint16_t>(kFactionCount - 1);
 }
 
 } // namespace
@@ -146,10 +148,7 @@ NpcId seed_floor_population(NpcPool& pool, std::uint16_t floor,
     uniform.kind = FloorKind::Residential;
     uniform.name = "uniform";
     uniform.population = n;
-    uniform.factionMix[0] = 1;
-    uniform.factionMix[1] = 1;
-    uniform.factionMix[2] = 1;
-    uniform.factionMix[3] = 1;
+    for (std::size_t f = 0; f < kFactionCount; ++f) uniform.factionMix[f] = 1;
     uniform.hostility = 0.0f;
     uniform.minAge = 1;
     uniform.maxAge = 100;

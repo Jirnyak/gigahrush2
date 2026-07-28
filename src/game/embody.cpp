@@ -1,5 +1,7 @@
 #include "game/embody.h"
 
+#include "game/faction.h"
+
 namespace giga::game {
 
 namespace {
@@ -8,24 +10,6 @@ namespace {
 // height for an unset/blank (zeroed reserve) record so it still embodies sanely.
 std::uint16_t resolved_height_mm(std::uint16_t stored) {
     return stored != 0 ? stored : kDefaultHeightMm;
-}
-
-// Body tint for the render skin: one hue per faction (distinct from the world's
-// grays/greens/tans so people pop against the building), plus a little
-// deterministic per-record jitter so a crowd doesn't look like flat clones. The
-// sim never reads this — it is purely how the body pass draws the entity.
-vec3 faction_color(std::uint16_t faction, NpcId id) {
-    static const vec3 kFactionHue[4] = {
-        {0.90f, 0.28f, 0.26f}, // 0 — red
-        {0.28f, 0.55f, 0.95f}, // 1 — blue
-        {0.95f, 0.80f, 0.22f}, // 2 — amber
-        {0.66f, 0.34f, 0.86f}, // 3 — violet
-    };
-    vec3 c = kFactionHue[faction & 3u];
-    std::uint32_t h = id * 0x9e3779b9u;
-    h ^= h >> 15;
-    float j = (static_cast<float>(h & 0xFFu) / 255.0f - 0.5f) * 0.18f; // +/-0.09
-    return vec3{clamp01(c.x + j), clamp01(c.y + j), clamp01(c.z + j)};
 }
 
 } // namespace

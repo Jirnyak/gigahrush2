@@ -14,6 +14,8 @@
 
 #include <cstdint>
 
+#include "game/faction.h"
+
 namespace giga::game {
 
 // Coarse archetypes a floor can take. The enum is just an index into the
@@ -34,7 +36,9 @@ struct FloorSpec {
     FloorKind kind;
     const char* name;            // static label for HUD/debug
     std::uint32_t population;     // how many alife records to seed here
-    std::uint8_t factionMix[4];  // relative weights of factions 0..3 (any scale)
+    // Relative weights of the five factions (any scale). FIVE, not four: an
+    // earlier four-slot version silently folded Wild onto Citizens.
+    std::uint8_t factionMix[kFactionCount];
     float hostility;             // 0..1 monster spawn-weight multiplier (used once mobs land)
     std::uint8_t minAge;         // demographic window: youngest resident...
     std::uint8_t maxAge;         // ...and oldest

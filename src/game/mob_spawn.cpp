@@ -32,16 +32,25 @@ constexpr int kGroundZ = 1;
 // this bound is what keeps a pathological floor from spinning.
 constexpr int kPlaceTries = 24;
 
-// Tier tint, so the danger of a mob reads at a glance before any AI exists.
+// Tier tint. This is a **gameplay read**, not decoration: in a dark corridor the
+// player must be able to tell a monster from a civilian instantly, so the palette
+// is split by axis rather than by hue-picking — monsters own the red/dark axis and
+// people own green-teal/blue/violet/cyan/amber (faction.h).
+//
+// The first attempt did pick hues, and collided: boss yellow (1.00, 0.92, 0.30)
+// was nearly indistinguishable from faction amber (0.95, 0.80, 0.22), and trash
+// grey-khaki read as wall. Brightness now rises with tier along one axis, so a
+// bigger threat is simply a hotter red.
+//
 // Render-only: deleting this changes pixels, never outcomes.
 vec3 tier_color(MobTier tier, std::uint32_t jitterKey) {
     static const vec3 kTierHue[static_cast<std::size_t>(MobTier::Count)] = {
-        {0.62f, 0.60f, 0.55f}, // Trash  — drab grey-khaki
-        {0.72f, 0.52f, 0.30f}, // Light  — dull orange
-        {0.80f, 0.36f, 0.22f}, // Medium — rust
-        {0.66f, 0.18f, 0.20f}, // Heavy  — dark blood
-        {0.86f, 0.14f, 0.52f}, // Elite  — hot magenta
-        {1.00f, 0.92f, 0.30f}, // Boss   — unmissable yellow
+        {0.30f, 0.26f, 0.22f}, // Trash  — near-black; chaff should barely register
+        {0.42f, 0.30f, 0.18f}, // Light  — dark olive
+        {0.56f, 0.26f, 0.15f}, // Medium — dark rust
+        {0.68f, 0.14f, 0.13f}, // Heavy  — deep blood
+        {0.90f, 0.31f, 0.36f}, // Elite  — samosbor red (kSamosborRed)
+        {1.00f, 0.58f, 0.52f}, // Boss   — red-shifted near-white, unmistakable
     };
     std::size_t i = static_cast<std::size_t>(tier);
     if (i >= static_cast<std::size_t>(MobTier::Count)) i = 0;
