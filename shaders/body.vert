@@ -27,6 +27,14 @@ layout(location = 1) out vec3 vColor;
 // Must mirror cube.vert exactly — this stage feeds cube.frag (body_pass.cpp
 // loads cube.frag.spv), so the varying set is a shared contract.
 layout(location = 2) out vec3 vWorldPos;
+// AO is a world-geometry term and a body is not world geometry, so bodies write a
+// constant 1.0 (unoccluded). This declaration is NOT optional: cube.frag reads
+// location 3, and a fragment stage reading a varying no vertex stage writes is
+// undefined behaviour, not a compile error. Validation is off in Release, so the
+// symptom would be bodies rendering at whatever the driver leaves in the register —
+// plausibly correct on this machine and black on the owner's. Silent by
+// construction, which is exactly why it is spelled out here.
+layout(location = 3) out float vAo;
 
 void main() {
     // Map the [0,1] cube corner onto [-half, +half] around the body centre, so
@@ -37,4 +45,5 @@ void main() {
     vNormal = inNormal;
     vColor = inColor;
     vWorldPos = world;
+    vAo = 1.0;
 }

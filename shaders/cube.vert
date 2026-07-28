@@ -11,6 +11,7 @@ layout(location = 1) in vec3 inNormal;   // per-vertex face normal
 layout(location = 2) in vec3 inOrigin;   // per-instance ABSOLUTE grid origin
 layout(location = 3) in float inScale;   // per-instance edge length
 layout(location = 4) in vec3 inColor;    // per-instance base colour
+layout(location = 5) in uint inOcc;      // per-instance 3x3x3 occupancy mask
 
 layout(push_constant) uniform Push {
     mat4 viewProj;
@@ -26,6 +27,11 @@ layout(location = 1) out vec3 vColor;
 // camera for the headlamp, and deriving the fog distance from it per-fragment is
 // exact where an interpolated distance is not.
 layout(location = 2) out vec3 vWorldPos;
+// Baked ambient occlusion, 0 = fully enclosed corner, 1 = fully open. Computed
+// per-vertex and interpolated, which is what makes it smooth across a face rather
+// than flat per-cell. body.vert MUST declare this too (it writes 1.0) — cube.frag
+// is shared and a missing varying is undefined, not an error.
+layout(location = 3) out float vAo;
 
 // Nearest toroidal image of an absolute world position, relative to the camera.
 //
@@ -46,7 +52,40 @@ vec3 nearest_image(vec3 absPos, vec3 cam, float p) {
     return cam + d - p * floor(d / p + 0.5);
 }
 
+// Is the neighbour at integer offset `o` solid? Bit layout matches
+// cube_pass.cpp occupancy_mask() exactly; the two must not drift.
+float occluder(ivec3 o) {
+    int b = (o.z + 1) * 9 + (o.y + 1) * 3 + (o.x + 1);
+    return float((inOcc >> uint(b)) & 1u);
+}
+
+// Classic three-sample corner occlusion. For the corner of a face, the three cells
+// that can occlude it are the two edge neighbours in the face plane and the one
+// diagonally between them — all offset one step ALONG the normal, because a cell in
+// this cell's own plane is beside the surface, not in front of it.
+//
+// The `both sides solid` case is special-cased to full darkness rather than falling
+// out of the sum: when two walls meet, the diagonal behind them is not visible and
+// its occupancy must not lighten the seam. Skipping that check is the classic bug
+// that makes inside corners glow.
+float corner_ao(ivec3 n, ivec3 u, ivec3 v) {
+    float s1 = occluder(n + u);
+    float s2 = occluder(n + v);
+    if (s1 > 0.5 && s2 > 0.5) return 0.0;
+    return (3.0 - (s1 + s2 + occluder(n + u + v))) / 3.0;
+}
+
 void main() {
+    // Face basis. inNormal is axis-aligned and unit by construction (the mesh is a
+    // unit cube), so rounding is exact rather than approximate.
+    ivec3 n = ivec3(round(inNormal));
+    ivec3 u = (abs(n.x) == 1) ? ivec3(0, 1, 0) : ivec3(1, 0, 0);
+    ivec3 v = (abs(n.z) == 1) ? ivec3(0, 1, 0) : ivec3(0, 0, 1);
+    // Which way this vertex sits along each tangent: inPos is a {0,1}^3 corner.
+    int su = (dot(inPos, vec3(u)) > 0.5) ? 1 : -1;
+    int sv = (dot(inPos, vec3(v)) > 0.5) ? 1 : -1;
+    vAo = corner_ao(n, u * su, v * sv);
+
     vec3 origin = nearest_image(inOrigin, pc.camPos.xyz, pc.torus.x);
     vec3 world = origin + inPos * inScale;
     gl_Position = pc.viewProj * vec4(world, 1.0);

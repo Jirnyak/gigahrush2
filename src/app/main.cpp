@@ -80,6 +80,13 @@ constexpr float kLampIntensity = 2.2f;  // camPos.w
 constexpr float kLampRadius = 14.0f;    // fog.z, metres (7 macro cells)
 constexpr float kFillStrength = 0.10f;  // sunDir.w, weak non-black backstop
 constexpr float kAmbient = 0.35f;       // fog.w, scales the hemispheric term
+// How much of the DIRECT light (headlamp + fill) baked AO is allowed to occlude.
+// Ambient is always fully occluded; this is the share of the lamp, and it is a dial
+// because occluding a direct light is not physical — it is a legibility choice. At
+// 0 AO is nearly invisible in this scene, because ambient is only ~8% of the image
+// here (see cube.frag). 0.65 reads as contact shadow without making corridors feel
+// like caves.
+constexpr float kAoDirect = 0.65f;       // fog.w, scales the hemispheric term
 
 // The demo floor stack: one row per floor MODULE. Numbers are the in-game labels
 // the FloorRegistry assigns (floors.md); kinds are picked to show every geometry
@@ -803,7 +810,7 @@ int main(int argc, char** argv) {
             // The wrap period, so cube.vert can place each cell at its nearest
             // toroidal image itself. Instance origins are absolute, which is what
             // makes the cube pass's instance cache possible.
-            push.torus = vec4{kWorldExtent, 0.0f, 0.0f, 0.0f};
+            push.torus = vec4{kWorldExtent, kAoDirect, 0.0f, 0.0f};
             std::uint64_t t0 = SDL_GetPerformanceCounter();
             cubePass.record(cmd, renderer.currentFrame,
                             stack.layer(activeLayer), push);

@@ -23,6 +23,8 @@
 layout(location = 0) in vec3 vNormal;
 layout(location = 1) in vec3 vColor;
 layout(location = 2) in vec3 vWorldPos;
+// Baked corner occlusion from cube.vert; body.vert writes a constant 1.0.
+layout(location = 3) in float vAo;
 
 layout(push_constant) uniform Push {
     mat4 viewProj;
@@ -139,7 +141,23 @@ void main() {
     float hemi = 0.5 + 0.5 * n.z;
     vec3 amb = pc.fog.w * mix(vec3(0.10, 0.11, 0.14), vec3(0.24, 0.23, 0.21), hemi);
 
-    vec3 lit = albedo * (amb + vec3(lamp + fill));
+    // Ambient occlusion.
+    //
+    // **It must attenuate the headlamp, not only the ambient, and that is measured
+    // rather than stylistic.** Ambient here is pc.fog.w (0.35) times the hemi mix,
+    // so 0.035..0.084 of albedo, while the headlamp lands at 0.44..2.2 — occluding
+    // only the ambient term would modulate about 8% of the image and be invisible
+    // in a scene this lamp-dominated. Occluding a *direct* light by AO is not
+    // physical, which is why the direct share rides on a dial (pc.torus.y) instead
+    // of being hardcoded to 1.
+    //
+    // The floor stops an enclosed corner from reaching pure black: vAo is one of
+    // {0, 1/3, 2/3, 1}, and a raw 0 would punch holes that read as missing
+    // geometry rather than as shadow.
+    const float kAoFloor = 0.32;
+    float ao = kAoFloor + (1.0 - kAoFloor) * vAo;
+    float aoDirect = mix(1.0, ao, pc.torus.y);
+    vec3 lit = albedo * (amb * ao + vec3(lamp + fill) * aoDirect);
 
     // Distance fog to black, in LINEAR space and BEFORE the encode. Everything
     // past fog.y is fully black, which is exactly the toroidal minimal-image

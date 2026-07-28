@@ -37,7 +37,19 @@ struct CubeInstance {
     vec3 origin;
     float scale;
     vec3 color;
+    // Ambient-occlusion input: a 27-bit occupancy mask of this cell's own 3x3x3
+    // neighbourhood, bit ((dz+1)*9 + (dy+1)*3 + (dx+1)) set when that neighbour is
+    // solid. The centre bit (13) is this cell and is never read.
+    //
+    // One uint32 is the ENTIRE cost of baked AO on the GPU side, and that is only
+    // true because of a property of the shared mesh worth stating: which three
+    // neighbours occlude a given vertex is a pure function of (face normal, corner
+    // sign), both of which the vertex shader already has from inNormal and inPos.
+    // A shared 36-vertex mesh forbids per-instance *topology*, not per-instance
+    // *values* — so nothing about the mesh changes and body_pass keeps its own.
+    std::uint32_t occ;
 };
+static_assert(sizeof(CubeInstance) == 32, "AO must cost exactly one uint32");
 
 // Push-constant block shared by cube.vert / cube.frag / body.vert. All three
 // declare it identically; body_pass reuses cube.frag, so the block and the
@@ -54,7 +66,8 @@ struct CubePush {
                     //       and the headlamp origin), w = headlamp intensity
     vec4 fog;       // x = fog start dist, y = fog end dist (fades to black),
                     // z = headlamp radius (m), w = ambient scale
-    vec4 torus;     // x = wrap period (kWorldExtent); y,z,w free
+    vec4 torus;     // x = wrap period (kWorldExtent), y = AO strength 0..1,
+                    // z,w free
 };
 static_assert(sizeof(CubePush) == 128,
               "CubePush must not exceed the 128-byte guaranteed push-constant "

@@ -99,6 +99,27 @@ vec3 type_color(CellType t) {
 
 // A cell is a surface cell (worth drawing) if it is non-empty and at least one
 // of its six neighbours is not fully solid. Fully-buried cells are skipped.
+// The 3x3x3 occupancy mask this cell's AO is derived from. 26 neighbour reads —
+// paid once per cell per cache rebuild, i.e. on a floor change, not per frame.
+//
+// `full()` and not `empty()`: a half-carved cell reads as NOT an occluder, which is
+// the conservative choice. Over-occluding a doorway would put a dark smudge in the
+// one place the player is trying to walk through.
+//
+// Every read goes through MacroGrid::mask, which wraps all three coordinates — so
+// AO is continuous across the torus seam for free, with nothing to special-case.
+std::uint32_t occupancy_mask(const MacroGrid& g, int x, int y, int z) {
+    std::uint32_t m = 0;
+    for (int dz = -1; dz <= 1; ++dz)
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) {
+                if (dx == 0 && dy == 0 && dz == 0) continue;
+                if (g.mask(x + dx, y + dy, z + dz).full())
+                    m |= 1u << ((dz + 1) * 9 + (dy + 1) * 3 + (dx + 1));
+            }
+    return m;
+}
+
 bool is_visible_surface(const MacroGrid& g, int x, int y, int z) {
     if (g.mask(x, y, z).empty()) return false;
     const int d[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0},
@@ -197,18 +218,19 @@ bool CubePass::create_pipeline(VkRenderPass renderPass, const char* shaderDir) {
     bindings[1].stride = sizeof(CubeInstance);
     bindings[1].inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
 
-    VkVertexInputAttributeDescription attrs[5]{};
+    VkVertexInputAttributeDescription attrs[6]{};
     attrs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(CubeVertex, pos)};
     attrs[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(CubeVertex, normal)};
     attrs[2] = {2, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(CubeInstance, origin)};
     attrs[3] = {3, 1, VK_FORMAT_R32_SFLOAT, offsetof(CubeInstance, scale)};
     attrs[4] = {4, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(CubeInstance, color)};
+    attrs[5] = {5, 1, VK_FORMAT_R32_UINT, offsetof(CubeInstance, occ)};
 
     VkPipelineVertexInputStateCreateInfo vi{};
     vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vi.vertexBindingDescriptionCount = 2;
     vi.pVertexBindingDescriptions = bindings;
-    vi.vertexAttributeDescriptionCount = 5;
+    vi.vertexAttributeDescriptionCount = 6;
     vi.pVertexAttributeDescriptions = attrs;
 
     VkPipelineInputAssemblyStateCreateInfo ia{};
@@ -328,6 +350,7 @@ std::uint32_t CubePass::build_instances(std::uint32_t frameIndex,
                                  static_cast<float>(z) * kCellSize};
         dst[count].scale = kCellSize;
         dst[count].color = col;
+        dst[count].occ = occupancy_mask(g, x, y, z);
         ++count;
     }
     return count;
