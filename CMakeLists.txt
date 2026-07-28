@@ -249,6 +249,23 @@ if(GIGA_BUILD_TESTS)
     giga_target_flags(world_test OFF)
     add_test(NAME world_test COMMAND world_test)
 
+    # The deliberately-red audit findings get their own target and their own exit code.
+    # They used to be #included into game_test, which meant game_test returned 1 while
+    # any finding stood — so ctest reported one bit, "game_test failed", identically
+    # whether the seven known findings were outstanding or whether somebody had also
+    # broken an unrelated regression test. That demoted ~45 real gates to stderr.
+    #
+    # WILL_FAIL inverts the exit code: ctest is GREEN while the findings stand, and goes
+    # RED the moment the last one is fixed. That is the tripwire, not a regression —
+    # whoever closes a finding has to come here and say so. Rationale and the honest
+    # limitation (WILL_FAIL cannot tell an expected assertion failure from a crash) are
+    # documented at the top of tests/audit_test.cpp.
+    add_executable(audit_test tests/audit_test.cpp)
+    target_link_libraries(audit_test PRIVATE giga_game)
+    giga_target_flags(audit_test OFF)
+    add_test(NAME audit_findings COMMAND audit_test)
+    set_tests_properties(audit_findings PROPERTIES WILL_FAIL TRUE)
+
     add_executable(game_test tests/game_test.cpp)
     target_link_libraries(game_test PRIVATE giga_game)
     giga_target_flags(game_test OFF)

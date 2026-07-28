@@ -61,7 +61,6 @@ int g_checks = 0;
 
 #include "suite_needs.inl"
 #include "suite_packs.inl"
-#include "suite_audit.inl"
 #include "suite_hunt.inl"
 #include "suite_samosbor.inl"
 static void test_inventory() {
@@ -3469,7 +3468,6 @@ int main() {
     test_vendor();
     test_hunt_all();
     test_full_loop();
-    test_audit_all();
     test_extraction_reachable();
     test_mob_behaviour();
     test_ranged_table();
