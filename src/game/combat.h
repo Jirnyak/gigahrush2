@@ -73,6 +73,23 @@ struct MobCombat {
     std::uint16_t cooldownMs = 0;  // time until this mob may swing again
 };
 
+// The camera holder's swing state. Attached lazily by player_melee_step, so
+// possessing a new body after death does not need to remember to add it.
+struct PlayerMelee {
+    std::uint16_t cooldownMs = 0;
+    std::uint32_t kills = 0;       // cumulative, survives possession
+};
+
+// Unarmed reach and swing, until weapons arrive with the item table. Reach is a
+// little over one cell so you can hit what is standing in the doorway with you.
+inline constexpr float kFistReach = 2.4f;      // metres
+inline constexpr std::int16_t kFistDamage = 25;
+inline constexpr std::uint16_t kFistCooldownMs = 450;
+// Cosine of the half-angle you must be facing the target within. 0.35 is roughly
+// a 70-degree half-cone: generous enough not to feel like pixel-hunting in a dark
+// corridor, tight enough that you cannot hit what is behind you.
+inline constexpr float kFistFacingDot = 0.35f;
+
 struct DamageResult {
     std::int16_t applied = 0;  // AFTER mitigation — the only number worth reporting
     std::int16_t blocked = 0;
@@ -110,6 +127,18 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
 // Returns the number of swings that landed.
 std::uint32_t mob_melee_step(Registry& reg, NpcPool& pool, EventBus& bus,
                              LayerId layer, float dt, std::uint64_t tick);
+
+// The camera holder swings at whatever monster is in front of it.
+//
+// Symmetry with mob_melee_step is deliberate: the same apply_damage, the same
+// Dead tag, the same finalize_deaths. A mob killed by the player dies through
+// exactly the path a player killed by a mob does, so there is no second death
+// route to forget to maintain.
+//
+// `wantsAttack` is edge-or-held at the caller's discretion; the cooldown is what
+// bounds the rate either way. Returns true if a swing actually landed.
+bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId layer,
+                       float dt, bool wantsAttack, std::uint64_t tick);
 
 // Current/maximum HP of an entity, wherever its HP lives. Returns false if it
 // holds none. For HUD and tests.

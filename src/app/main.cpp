@@ -393,6 +393,8 @@ int main(int argc, char** argv) {
     std::uint64_t simTick = 0;
     std::uint32_t meleeHits = 0;   // cumulative, for the HUD
     std::uint32_t deaths = 0;
+    std::uint32_t kills = 0;       // carried across possession
+    bool attackHeld = false;
     int fluidStepEvery = 4; // sim steps between fluid updates
     int fluidCounter = 0;
 
@@ -467,6 +469,13 @@ int main(int argc, char** argv) {
             if (!paused) {
                 // Hold right mouse button to look, release to free the cursor.
                 if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+                    e.button.button == SDL_BUTTON_LEFT) {
+                    attackHeld = true;
+                } else if (e.type == SDL_EVENT_MOUSE_BUTTON_UP &&
+                           e.button.button == SDL_BUTTON_LEFT) {
+                    attackHeld = false;
+                }
+                if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
                     e.button.button == SDL_BUTTON_RIGHT) {
                     input.set_mouselook(true);
                     SDL_SetWindowRelativeMouseMode(window, true);
@@ -504,6 +513,10 @@ int main(int argc, char** argv) {
                 // Melee resolves AFTER physics, so reach is tested against where
                 // bodies actually ended up this step rather than where they
                 // intended to go.
+                // The player swings first on a tick, so trading blows is a trade
+                // rather than a guaranteed loss to whoever the view yields first.
+                game::player_melee_step(reg, pool, bus, activeLayer, kSimDt,
+                                        attackHeld && !paused, simTick);
                 meleeHits += game::mob_melee_step(reg, pool, bus, activeLayer,
                                                   kSimDt, simTick);
                 // ONE death point per tick, after everything that can deal damage
@@ -512,9 +525,13 @@ int main(int argc, char** argv) {
                 // The player is not exempt: if it died it no longer exists, and
                 // everything below reads through it. Take another body now.
                 if (!reg.valid(player)) {
+                    // The PlayerMelee component dies with the body; the tally of
+                    // what that person killed does not.
                     player = possess_a_survivor(reg, pool, activeLayer);
                     if (player == entt::null) { running = false; break; }
                     aim_player(reg, player);
+                    reg.emplace_or_replace<game::PlayerMelee>(
+                        player, game::PlayerMelee{0, kills});
                 }
                 ++simTick;
                 // Fluid only lives in the maze test bed (the floor modules seed no
@@ -557,7 +574,11 @@ int main(int argc, char** argv) {
             std::int16_t php = 0, pmax = 0;
             if (game::entity_health(reg, pool, player, php, pmax))
                 ImGui::Text("HP %d / %d%s", php, pmax, php <= 0 ? "  DEAD" : "");
-            ImGui::Text("hits taken: %u | deaths: %u", meleeHits, deaths);
+            if (reg.valid(player))
+                if (const auto* pm = reg.try_get<game::PlayerMelee>(player))
+                    kills = pm->kills;
+            ImGui::Text("hits taken: %u | deaths: %u | kills: %u", meleeHits,
+                        deaths, kills);
             ImGui::Text("mobs: %u live on this floor",
                         game::count_layer_mobs(reg, activeLayer));
             ImGui::Text("bodies drawn: %u  (pop %u alive / %u slots)",

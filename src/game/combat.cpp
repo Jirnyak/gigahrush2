@@ -9,6 +9,7 @@
 #include "game/embody.h"   // NpcRef
 #include "game/mob_spawn.h"
 #include "game/mob_table.h"
+#include "sim/camera.h"   // camera_forward
 #include "world/types.h"
 
 namespace giga::game {
@@ -178,6 +179,68 @@ std::uint32_t mob_melee_step(Registry& reg, NpcPool& pool, EventBus& bus,
     (void)bus;
     (void)tick;
     return swings;
+}
+
+bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId layer,
+                       float dt, bool wantsAttack, std::uint64_t tick) {
+    Entity self = entt::null;
+    for (auto e : reg.view<const CameraTag, const Transform>()) {
+        if (reg.get<const Transform>(e).layer != layer) continue;
+        self = e;
+        break;
+    }
+    if (self == entt::null) return false;
+
+    // Attached lazily so possessing a new body after death does not have to
+    // remember to add it — but the kill count is carried over by the caller.
+    if (!reg.all_of<PlayerMelee>(self)) reg.emplace<PlayerMelee>(self);
+    PlayerMelee& pm = reg.get<PlayerMelee>(self);
+
+    const std::uint16_t elapsedMs =
+        static_cast<std::uint16_t>(dt * 1000.0f + 0.5f);
+    if (pm.cooldownMs > elapsedMs)
+        pm.cooldownMs = static_cast<std::uint16_t>(pm.cooldownMs - elapsedMs);
+    else
+        pm.cooldownMs = 0;
+
+    if (!wantsAttack || pm.cooldownMs > 0) return false;
+
+    const Transform& me = reg.get<const Transform>(self);
+    const CameraTag& cam = reg.get<const CameraTag>(self);
+    const vec3 fwd = camera_forward(cam.yaw, cam.pitch);
+
+    // Nearest monster inside reach that is also roughly in front. Nearest rather
+    // than first-found, so a swing in a crowd hits what you are actually up
+    // against instead of whichever entity the view happened to yield first.
+    Entity best = entt::null;
+    float bestD2 = kFistReach * kFistReach;
+    for (auto e : reg.view<const MobRef, const Transform>()) {
+        const Transform& tr = reg.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+        const float dx = wrap_delta_f(me.pos.x, tr.pos.x, kWorldExtent);
+        const float dy = wrap_delta_f(me.pos.y, tr.pos.y, kWorldExtent);
+        const float dz = wrap_delta_f(me.pos.z, tr.pos.z, kWorldExtent);
+        const float d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 > bestD2) continue;
+        const float len = std::sqrt(d2);
+        if (len > 1e-3f) {
+            const float dot = (dx * fwd.x + dy * fwd.y + dz * fwd.z) / len;
+            if (dot < kFistFacingDot) continue;   // behind or off to the side
+        }
+        bestD2 = d2;
+        best = e;
+    }
+    if (best == entt::null) return false;
+
+    // Same damage path, same Dead tag, same finalizer as a mob's swing. There is
+    // deliberately no second way for something to die.
+    DamageResult r = apply_damage(reg, pool, best, kFistDamage,
+                                  DamageChannel::Kinetic, self);
+    pm.cooldownMs = kFistCooldownMs;
+    if (r.lethal) ++pm.kills;
+    (void)bus;
+    (void)tick;
+    return r.hit;
 }
 
 } // namespace giga::game

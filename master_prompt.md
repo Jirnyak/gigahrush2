@@ -104,7 +104,8 @@ tools\win\build.bat Release fresh   :: wipe build-win\ first
 Output is `build-win\gigahrush2.exe`; run modes and controls are unchanged. SDL3,
 EnTT and Dear ImGui are fetched and pinned by CMake, so they are not prerequisites.
 
-**Controls:** `WASD` move · mouse look (`Tab` toggles, or hold **RMB**) · `Space`
+**Controls:** `WASD` move · mouse look (`Tab` toggles, or hold **RMB**) · **LMB**
+swing (unarmed, 25 dmg, 2.4 m reach, 450 ms) · `Space`
 jump · **`F`** toggle fly/walk (starts in fly) · **`[` / `]`** ride elevator
 down / up a floor (loads the destination on demand, unloads the one left) · `Esc`
 opens the **pause menu** (Resume / Quit; frees the cursor so the window can be
