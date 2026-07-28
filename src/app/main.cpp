@@ -38,6 +38,7 @@
 #include "game/floor_spec.h"
 #include "game/floor_stream.h"
 #include "game/mob_spawn.h"
+#include "game/samosbor.h"
 #include "game/combat.h"
 #include "game/extraction.h"
 #include "game/loot.h"
@@ -86,7 +87,15 @@ constexpr float kAmbient = 0.35f;       // fog.w, scales the hemispheric term
 // 0 AO is nearly invisible in this scene, because ambient is only ~8% of the image
 // here (see cube.frag). 0.65 reads as contact shadow without making corridors feel
 // like caves.
-constexpr float kAoDirect = 0.65f;       // fog.w, scales the hemispheric term
+constexpr float kAoDirect = 0.65f;
+// How far the world closes in at the peak of a samosbor, as a fraction of the normal
+// fog end. The fog is the ONLY visual the hazard has right now, and it is deliberately
+// a range squeeze rather than a colour: fog mixes to BLACK and the encode satisfies
+// f(0) == 0, which is what hides the toroidal wrap seam ([cube.frag]). Tinting the fog
+// would break that unless the clear colour moved with it, and a visible seam is the
+// worst failure this renderer has. Pulling the range IN is strictly safe — more fog
+// hides the seam harder, never less.
+constexpr float kSamosborFogSqueeze = 0.34f;       // fog.w, scales the hemispheric term
 
 // The demo floor stack: one row per floor MODULE. Numbers are the in-game labels
 // the FloorRegistry assigns (floors.md); kinds are picked to show every geometry
@@ -102,6 +111,28 @@ constexpr DemoFloor kDemoFloors[] = {
     {3, game::FloorKind::Derelict},
     {4, game::FloorKind::Residential},
 };
+
+// How far the world has closed in, as a multiplier on the fog range.
+//
+// The fog is the only visual a samosbor has right now. It ramps IN over the first
+// fifth of the Active phase and eases back OUT across the Aftermath, so one number —
+// `samosbor_phase01` — produces both halves with no extra state to keep in sync.
+//
+// A squeeze and NOT a tint, deliberately: fog mixes to black and the encode satisfies
+// f(0) == 0, which is what hides the toroidal wrap seam ([cube.frag]). Tinting would
+// break that unless the clear colour moved with it, and a visible seam is the worst
+// failure this renderer has. Pulling the range in is strictly safe — more fog hides
+// the seam harder, never less.
+float samosbor_fog_scale(const game::SamosborState& st) {
+    const float p = game::samosbor_phase01(st);
+    if (st.phase == static_cast<std::uint8_t>(game::SamosborPhase::Active)) {
+        const float in_ = p < 0.2f ? p / 0.2f : 1.0f;
+        return 1.0f - (1.0f - kSamosborFogSqueeze) * in_;
+    }
+    if (st.phase == static_cast<std::uint8_t>(game::SamosborPhase::Aftermath))
+        return kSamosborFogSqueeze + (1.0f - kSamosborFogSqueeze) * p;
+    return 1.0f;
+}
 
 // Point the fresh player's camera somewhere interesting and start in fly mode
 // (F toggles) so the view is free to explore.
@@ -420,6 +451,12 @@ int main(int argc, char** argv) {
     // steering across kWanderPeriod ticks with no per-agent scheduling state.
     std::uint64_t simTick = 0;
     std::uint32_t meleeHits = 0;   // cumulative, for the HUD
+    // The samosbor clock. One per live floor; the demo keeps one floor live, so one
+    // clock, re-armed on arrival ([samosbor.h]).
+    game::SamosborRng sbRng{0x5A303B0Du};
+    game::SamosborState samosbor = game::samosbor_new_game(sbRng);
+    std::uint32_t samosborCycles = 0;
+    std::int16_t samosborDamage = 0;
     game::RunLedger ledger;
     std::int32_t banked = 0;
     std::uint32_t deaths = 0;
@@ -495,6 +532,11 @@ int main(int argc, char** argv) {
                         // depth is bidirectional: the roof is as far from safety as
                         // the basement. [extraction.h]
                         game::record_floor(ledger, currentFloor);
+                        // A new floor gets its own clock at its own depth. Not
+                        // carried over: the cooldown is a function of |z|, so
+                        // inheriting a 30-minute surface gap into the void would
+                        // silently cancel the entire depth gradient.
+                        samosbor = game::samosbor_new_game(sbRng);
                         currentSpec = spec_for_floor(currentFloor);
                         // Streaming recycles World objects in place, so the cube
                         // pass cannot detect the new geometry by identity.
@@ -557,6 +599,32 @@ int main(int argc, char** argv) {
                 controller_step(reg, kSimDt);
                 // Steer the crowd BEFORE physics: wander writes horizontal
                 // velocity, physics integrates it and resolves collision.
+                // Samosbor advances HERE — after controller_step, before
+                // wander_step — for the three reasons in [samosbor.h]: the seal can
+                // kill and must precede finalize_deaths by a whole tick; behaviour
+                // systems must never read a stale phase; and anything spawned on a
+                // transition needs physics in the same tick.
+                {
+                    const game::SamosborTransition tr_ =
+                        game::samosbor_step(samosbor,
+                                            static_cast<std::uint32_t>(
+                                                kSimDt * 1000.0f + 0.5f),
+                                            currentFloor, sbRng);
+                    if (tr_.cycleEnded) ++samosborCycles;
+                    // The seal is ONE SHOT, not a per-tick drain. Modelled as a DoT a
+                    // 15-minute samosbor at |z|=50 would deal 3600 damage instead of
+                    // 4 — the correction that mattered most in the port.
+                    if (tr_.sealed && reg.valid(player)) {
+                        // No shelter model yet, so everyone is caught outside. That is
+                        // the honest placeholder: the cost is real and small, and it
+                        // starts meaning something the day shelter exists.
+                        const game::DamageResult dr_ = game::apply_damage(
+                            reg, pool, player, game::kSamosborUnshelteredHp,
+                            game::DamageChannel::Kinetic, player);
+                        samosborDamage =
+                            static_cast<std::int16_t>(samosborDamage + dr_.applied);
+                    }
+                }
                 game::wander_step(reg, stack.layer(activeLayer).grid(), nav.coarse(),
                                   nav.fine(), activeLayer, simTick);
                 physics_step(reg, stack, kSimDt);
@@ -747,6 +815,38 @@ int main(int argc, char** argv) {
                 else
                     ImGui::TextUnformatted("nearest: -");
             }
+            {
+                const auto ph = static_cast<game::SamosborPhase>(samosbor.phase);
+                const float fogScale = samosbor_fog_scale(samosbor);
+                const bool danger =
+                    ph == game::SamosborPhase::Warning ||
+                    ph == game::SamosborPhase::Active;
+                // Red only for the two phases that actually threaten you. The colour
+                // is reserved for danger ([faction.h]) and spending it on Idle would
+                // spend it on nothing.
+                if (danger)
+                    ImGui::TextColored(ImVec4(0.90f, 0.31f, 0.36f, 1.0f),
+                                       "SAMOSBOR %s  %s  %.0f%%  (%.1f s left)",
+                                       game::samosbor_phase_name(ph),
+                                       game::samosbor_variant_name(
+                                           static_cast<game::SamosborVariant>(
+                                               samosbor.variant)),
+                                       game::samosbor_phase01(samosbor) * 100.0f,
+                                       samosbor.phaseMs * 0.001f);
+                else
+                    // "to warning" is only true of Idle. In Aftermath phaseMs is the
+                    // aftermath's own remainder and the warning is a whole cooldown
+                    // away, so labelling both the same way printed a wrong number —
+                    // caught by reading my own HUD in a screenshot, not by a test.
+                    ImGui::Text("samosbor %s  (%.0f s %s)",
+                                game::samosbor_phase_name(ph),
+                                samosbor.phaseMs * 0.001f,
+                                ph == game::SamosborPhase::Idle ? "to warning"
+                                                                : "left");
+                ImGui::Text("duty here %.1f%% | cycles %u | fog x%.2f | took %d hp",
+                            game::samosbor_duty01(currentFloor) * 100.0f,
+                            samosborCycles, fogScale, samosborDamage);
+            }
             ImGui::Text("nav: %s  (last bake %.0f + %.0f ms, async)",
                         nav.baking() ? "BAKING - crowd idle"
                                      : (nav.ready() ? "ready" : "none"),
@@ -808,7 +908,9 @@ int main(int argc, char** argv) {
             // Fog fades to black between 0.30 and 0.50 of the torus period. The
             // end (kWorldExtent/2 = 64 cells) is the minimal-image radius, so
             // the wrap seam is always hidden inside full-black fog.
-            push.fog = vec4{kWorldExtent * 0.30f, kWorldExtent * 0.50f,
+            const float fogScale = samosbor_fog_scale(samosbor);
+            push.fog = vec4{kWorldExtent * 0.30f * fogScale,
+                            kWorldExtent * 0.50f * fogScale,
                             kLampRadius, kAmbient};
             // The wrap period, so cube.vert can place each cell at its nearest
             // toroidal image itself. Instance origins are absolute, which is what
