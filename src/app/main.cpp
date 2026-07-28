@@ -1601,6 +1601,17 @@ int main(int argc, char** argv) {
                         player = r.player;
                         currentFloor = r.floor;
                         game::record_floor(ledger, currentFloor);
+                        // currentSpec was "(HUD only)" until door_build started reading
+                        // it, and only the KEYBOARD ride path maintained it — so a
+                        // --shot ride built floor -36's doors against floor 0's
+                        // Residential spec and produced ZERO doors. Caught by running
+                        // the game, not by a test: the HUD read "doors 0 built" on a
+                        // floor where the keyboard path builds thousands.
+                        //
+                        // This is the two-travel-sites trap this file already warns
+                        // about, hit again by promoting a display variable to a source
+                        // of truth. Both sites now set it.
+                        currentSpec = spec_for_floor(currentFloor);
                         samosbor = game::samosbor_new_game(sbRng);
                         aim_player(reg, player);
                         LayerId nl = reg.get<Transform>(player).layer;
