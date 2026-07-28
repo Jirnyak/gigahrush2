@@ -17,3 +17,8 @@ imgui.ini
 
 # Claude Code personal/local settings (not shared)
 .claude/settings.local.json
+
+# Agent worktrees. These are live git worktrees of THIS repository, so `git add -A`
+# sees each one as an embedded repo and commits a gitlink that points nowhere for
+# anybody else. Committed two by accident in 107b6fa; removed in the next commit.
+.claude/worktrees/
