@@ -11,10 +11,14 @@
 #include "game/floor_gen.h"
 #include "game/floor_registry.h"
 #include "game/floor_spec.h"
+#include "game/floor_stream.h"
 #include "game/inventory.h"
 #include "game/npc_pool.h"
 #include "game/population.h"
 
+#include "world/lattice.h"
+#include "world/level_stack.h"
+#include "world/nav.h"
 #include "world/world.h"
 
 using namespace giga;
@@ -442,6 +446,51 @@ static std::size_t solid_cells(const World& w) {
     return n;
 }
 
+// The fixed 4x4x4 = 64-node nav / fast-travel lattice (src/world/lattice.h).
+// Pure, seed-independent geometry; it must be a cyclic (Z/4)^3 torus graph (no
+// boundary node) so the nav bake avoids spanning-tree seams on the torus.
+static void test_lattice() {
+    CHECK(kLatticeCount == 64);
+    CHECK(kLatticeSpacing == 32);
+    CHECK(lattice_coord(0) == 16);
+    CHECK(lattice_coord(1) == 48);
+    CHECK(lattice_coord(2) == 80);
+    CHECK(lattice_coord(3) == 112);
+
+    // Each axis band is the node's Voronoi cell: [0,32)->0 ... [96,128)->3.
+    CHECK(lattice_axis_of(0) == 0);
+    CHECK(lattice_axis_of(31) == 0);
+    CHECK(lattice_axis_of(32) == 1);
+    CHECK(lattice_axis_of(112) == 3);
+    CHECK(lattice_axis_of(127) == 3);
+
+    // id <-> (ix,iy,iz) round-trips for all 64 nodes.
+    for (int id = 0; id < kLatticeCount; ++id) {
+        LatticeNode n = lattice_unpack(id);
+        CHECK(n.ix >= 0 && n.ix < kLatticeDim);
+        CHECK(n.iy >= 0 && n.iy < kLatticeDim);
+        CHECK(n.iz >= 0 && n.iz < kLatticeDim);
+        CHECK(lattice_id(n.ix, n.iy, n.iz) == id);
+    }
+
+    // The graph wraps on every axis (the "no seam" property): stepping off the
+    // last column returns to the first, and -x/+x are inverses.
+    CHECK(lattice_neighbor(lattice_id(3, 1, 2), 1) == lattice_id(0, 1, 2)); // +x
+    CHECK(lattice_neighbor(lattice_id(0, 1, 2), 0) == lattice_id(3, 1, 2)); // -x
+    CHECK(lattice_neighbor(lattice_id(2, 3, 0), 3) == lattice_id(2, 0, 0)); // +y
+    CHECK(lattice_neighbor(lattice_id(1, 1, 3), 5) == lattice_id(1, 1, 0)); // +z
+    // Every node has exactly 6 distinct neighbours (degree-6 cyclic graph).
+    for (int id = 0; id < kLatticeCount; ++id) {
+        bool seen[kLatticeCount] = {false};
+        for (int d = 0; d < 6; ++d) {
+            int nb = lattice_neighbor(id, d);
+            CHECK(nb != id);
+            CHECK(!seen[nb]);
+            seen[nb] = true;
+        }
+    }
+}
+
 // The per-floor generator (floors.md: floor = pure fn(seed, number)). It must be
 // deterministic, wipe prior contents, and give each FloorKind a measurably
 // different interior.
@@ -485,6 +534,42 @@ static void test_floor_gen() {
     CHECK(nc > ni);
     CHECK(nr > nd);
     CHECK(ni > 0);
+
+    // Fixed lattice: on EVERY floor kind the 16 shaft columns are carved to air
+    // through the FULL height (Z wraps, so this also links top -> 0), and an
+    // adjacent lobby cell is opened so the shaft joins the walkable graph.
+    // Node-to-node reachability is exercised by the nav no-seam test (#11).
+    for (World* w : {&res, &com, &ind, &der}) {
+        auto& g = w->grid();
+        for (int ny = 0; ny < kLatticeDim; ++ny)
+            for (int nx = 0; nx < kLatticeDim; ++nx) {
+                const int cx = lattice_coord(nx);
+                const int cy = lattice_coord(ny);
+                for (int z = 0; z < kMacroDim; ++z)
+                    CHECK(g.cell(cx, cy, z) == kCellAir); // shaft is air
+                CHECK(g.cell(cx + 2, cy, 1) == kCellAir);  // lobby opened
+                // Elevator column: diagonal corner posts are solid hub-pad type
+                // the FULL height (span the whole map; Z wraps into a loop).
+                CHECK(g.cell(cx + 2, cy + 2, 0) == 7);
+                CHECK(g.cell(cx + 2, cy + 2, 1) == 7);
+                CHECK(g.cell(cx + 2, cy + 2, kMacroDim - 1) == 7);
+            }
+    }
+
+    // Hub pads: each column carries a coloured landing pad (type 7) at all four
+    // lattice z-levels {16,48,80,112}, so the 16 columns present 4x4x4 = 64
+    // visible nodes. Checked on the intact kinds only: derelict randomly drops
+    // slab cells (holePct), so a given pad cell there may be an open hole.
+    for (World* w : {&res, &com, &ind}) {
+        auto& g = w->grid();
+        for (int ny = 0; ny < kLatticeDim; ++ny)
+            for (int nx = 0; nx < kLatticeDim; ++nx) {
+                const int cx = lattice_coord(nx);
+                const int cy = lattice_coord(ny);
+                for (int nz = 0; nz < kLatticeDim; ++nz)
+                    CHECK(g.cell(cx + 2, cy, lattice_coord(nz)) == 7); // kHubPad
+            }
+    }
 }
 
 static void test_elevator() {
@@ -561,6 +646,193 @@ static void test_elevator() {
     CHECK(pool.is_player(id));
 }
 
+// Count records whose id is in [lo, hi) that are currently live ECS entities
+// standing on `layer` — i.e. the crowd of one streamed floor.
+static int live_on_layer(Registry& ecs, NpcId lo, NpcId hi, LayerId layer) {
+    int n = 0;
+    auto view = ecs.view<NpcRef, Transform>();
+    for (auto e : view) {
+        const NpcRef& ref = view.get<NpcRef>(e);
+        const Transform& tr = view.get<Transform>(e);
+        if (ref.id >= lo && ref.id < hi && tr.layer == layer) ++n;
+    }
+    return n;
+}
+
+static void test_floor_stream() {
+    // The heart of streaming (master_prompt #9): a floor's crowd is seeded into
+    // the cold pool exactly once, embodied on load, folded back on unload, and
+    // re-embodied — same records, no growth — on every later load. Verified with a
+    // pure crowd: a standalone player parked on another layer keeps the streamer
+    // from claiming a candidate here, and proves an already-embodied record is
+    // skipped rather than duplicated.
+    Registry ecs;
+    NpcPool pool;
+    pool.init();
+    FloorRegistry reg;
+    LevelStack stack;
+
+    FloorStreamer stream;
+    stream.init(stack, /*keepRadius=*/0); // two recyclable physical layers
+
+    ModuleId m0 = stream.add_module(reg, /*number=*/0, FloorKind::Residential,
+                                    /*seed=*/1234u);
+    CHECK(m0 != kInvalidModule);
+    const std::uint32_t pop = floor_spec(FloorKind::Residential).population;
+
+    // A player that lives elsewhere: spawned before the crowd (so it is outside
+    // the crowd's id range) and embodied on an unrelated layer. Passing its id as
+    // playerId means ensure_loaded will NOT designate a player from the crowd.
+    NpcId dummy = pool.spawn();
+    pool.height_mm(dummy) = 1750;
+    Entity dummyBody = embody_as_player(ecs, pool, dummy, /*layer=*/999);
+    CHECK(dummyBody != entt::null);
+    CHECK(pool.is_player(dummy));
+    NpcId playerId = dummy;
+
+    const NpcId before = pool.count();
+
+    // First load: seeds the crowd once and embodies all of it.
+    LoadResult r = stream.ensure_loaded(stack, reg, ecs, pool, 0, playerId);
+    CHECK(r.layer != kInvalidLayer);
+    CHECK(r.player == entt::null); // a player already existed -> none created
+    CHECK(stream.loaded(reg, 0));
+    const NpcId lo = before, hi = pool.count();
+    CHECK(hi == before + pop);                          // crowd seeded exactly once
+    CHECK(live_on_layer(ecs, lo, hi, r.layer) == (int)pop); // ...and all embodied
+    CHECK(playerId == dummy);                           // player untouched
+    CHECK(pool.embodied(dummy));
+
+    // Unload: the same ids fold back (embodied=false); no record is created/freed.
+    stream.unload(stack, reg, ecs, pool, 0);
+    CHECK(!stream.loaded(reg, 0));
+    CHECK(pool.count() == hi); // bump high-water mark unchanged
+    CHECK(live_on_layer(ecs, lo, hi, r.layer) == 0);
+    for (NpcId id = lo; id < hi; ++id) CHECK(!pool.embodied(id));
+
+    // Reload: re-embodies THAT SAME range, seeds nothing -> population steady.
+    LoadResult r2 = stream.ensure_loaded(stack, reg, ecs, pool, 0, playerId);
+    CHECK(r2.layer != kInvalidLayer);
+    CHECK(pool.count() == hi); // <-- the #9 invariant: no per-visit growth
+    CHECK(live_on_layer(ecs, lo, hi, r2.layer) == (int)pop);
+    for (NpcId id = lo; id < hi; ++id) CHECK(pool.embodied(id));
+
+    // Asking again while resident is an idempotent no-op returning the same layer.
+    const NpcId steady = pool.count();
+    LoadResult r3 = stream.ensure_loaded(stack, reg, ecs, pool, 0, playerId);
+    CHECK(r3.layer == r2.layer);
+    CHECK(pool.count() == steady);
+
+    // Load-on-demand boundary: an unregistered floor maps to no module -> empty.
+    LoadResult none = stream.ensure_loaded(stack, reg, ecs, pool, 7, playerId);
+    CHECK(none.layer == kInvalidLayer);
+    CHECK(!stream.loaded(reg, 7));
+}
+
+static void test_floor_travel() {
+    // A real player riding between streamed floors. The destination loads on
+    // demand, the departed floor folds away (keepRadius 0), the population never
+    // grows on the return trip, and the player is the SAME record throughout.
+    Registry ecs;
+    NpcPool pool;
+    pool.init();
+    FloorRegistry reg;
+    LevelStack stack;
+
+    FloorStreamer stream;
+    stream.init(stack, /*keepRadius=*/0);
+    stream.add_module(reg, /*number=*/0, FloorKind::Residential, /*seed=*/1u);
+    stream.add_module(reg, /*number=*/1, FloorKind::Commercial, /*seed=*/2u);
+    const std::uint32_t popRes = floor_spec(FloorKind::Residential).population;
+    const std::uint32_t popCom = floor_spec(FloorKind::Commercial).population;
+
+    // Start on floor 0: no player yet, so the streamer designates one from floor
+    // 0's crowd and embodies it with a camera.
+    NpcId playerId = kInvalidNpc;
+    LoadResult start = stream.ensure_loaded(stack, reg, ecs, pool, 0, playerId);
+    CHECK(start.layer != kInvalidLayer);
+    CHECK(start.player != entt::null);
+    CHECK(playerId != kInvalidNpc);
+    Entity player = start.player;
+    CHECK(ecs.get<NpcRef>(player).id == playerId);
+    CHECK(pool.is_player(playerId));
+    CHECK(pool.count() == popRes);  // only floor 0 seeded so far
+    CHECK(!stream.loaded(reg, 1));  // floor 1 stays cold until entered
+
+    // Ride up 0 -> 1: destination loads on demand, floor 0 unloads.
+    RideResult up = stream.travel(stack, reg, ecs, pool, player, /*from=*/0,
+                                  /*dir=*/+1, /*arrivalZ=*/2, playerId);
+    CHECK(up.moved);
+    CHECK(up.floor == 1);
+    player = up.player;
+    CHECK(ecs.get<NpcRef>(player).id == playerId); // same record survived the swap
+    CHECK(pool.is_player(playerId));
+    CHECK(pool.embodied(playerId));
+    CHECK(ecs.get<Transform>(player).layer == up.layer);
+    CHECK(stream.loaded(reg, 1));
+    CHECK(!stream.loaded(reg, 0));               // departed crowd folded away
+    const NpcId afterUp = pool.count();
+    CHECK(afterUp == popRes + popCom);           // floor 1 seeded exactly once
+
+    // Ride back down 1 -> 0: floor 0 reloads its SAME range (no growth), and the
+    // player — a member of floor 0's range but currently embodied — is skipped by
+    // the crowd pass and moved across by the elevator, so it is never duplicated.
+    RideResult down = stream.travel(stack, reg, ecs, pool, player, /*from=*/1,
+                                    /*dir=*/-1, /*arrivalZ=*/2, playerId);
+    CHECK(down.moved);
+    CHECK(down.floor == 0);
+    player = down.player;
+    CHECK(ecs.get<NpcRef>(player).id == playerId); // identity preserved round trip
+    CHECK(pool.is_player(playerId));
+    CHECK(ecs.get<Transform>(player).layer == down.layer);
+    CHECK(stream.loaded(reg, 0));
+    CHECK(!stream.loaded(reg, 1));
+    CHECK(pool.count() == afterUp); // <-- #9: population steady across the return
+    CHECK(live_on_layer(ecs, 0, popRes, down.layer) == (int)popRes); // full crowd
+}
+
+// The nav coarse bake on a REAL carved floor (master_prompt #11 — the "no-seam"
+// test that test_floor_gen defers to). Shafts guarantee vertical links; the bake
+// must find full node-to-node connectivity on a dense floor, stay deterministic
+// on actual geometry, and keep the lattice intact on a decayed floor.
+static void test_nav_realfloor() {
+    using namespace nav;
+
+    // Dense residential: rooms tile the whole floor and the 7x7 lobbies punch
+    // through the wall lattice, so all 64 nodes join one connected component.
+    World res;
+    generate_floor(res, /*number=*/0, floor_spec(FloorKind::Residential), 1337u);
+    CoarseGraph g{};
+    bake_coarse(res.grid(), g);
+    for (int i = 0; i < kNodes; ++i)
+        for (int j = 0; j < kNodes; ++j)
+            CHECK(g.dist[i][j] != kUnreachable); // fully connected
+
+    // Vertical neighbours share a shaft carved to air through every slab, so the
+    // +/-z edge is the pure spacing (32): a straight open column, no detour.
+    for (int i = 0; i < kNodes; ++i) {
+        CHECK(g.edge[i][4] == kLatticeSpacing); // -z
+        CHECK(g.edge[i][5] == kLatticeSpacing); // +z
+    }
+
+    // Deterministic on real geometry too.
+    CoarseGraph g2{};
+    bake_coarse(res.grid(), g2);
+    CHECK(std::memcmp(&g, &g2, sizeof(CoarseGraph)) == 0);
+
+    // Derelict randomly drops slab/wall cells, but the lattice is carved LAST and
+    // seed-independently, so every shaft stays open: the vertical links survive a
+    // half-collapsed floor even where the horizontal rooms may not.
+    World der;
+    generate_floor(der, /*number=*/-3, floor_spec(FloorKind::Derelict), 42u);
+    CoarseGraph gd{};
+    bake_coarse(der.grid(), gd);
+    for (int i = 0; i < kNodes; ++i) {
+        CHECK(gd.edge[i][4] == kLatticeSpacing);
+        CHECK(gd.edge[i][5] == kLatticeSpacing);
+    }
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -578,8 +850,12 @@ int main() {
     test_floor_spec();
     test_seed_from_spec();
     test_floor_registry();
+    test_lattice();
     test_floor_gen();
     test_elevator();
+    test_floor_stream();
+    test_floor_travel();
+    test_nav_realfloor();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

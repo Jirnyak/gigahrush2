@@ -56,6 +56,7 @@ vec3 type_color(CellType t) {
     case 2: return {0.30f, 0.55f, 0.25f}; // grass / soil
     case 3: return {0.20f, 0.35f, 0.80f}; // solid water ice / marker
     case 4: return {0.70f, 0.60f, 0.35f}; // sand
+    case 7: return {0.00f, 0.80f, 0.95f}; // nav / fast-travel hub pad (cyan)
     default: return {0.75f, 0.75f, 0.78f};
     }
 }

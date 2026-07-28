@@ -53,6 +53,13 @@ are all solid, and emits one instance per visible cell — position, colour (by
 the whole visible surface, so instance count scales with visible *area*, not
 world volume. See [voxels.md](voxels.md).
 
+Note the *scan* itself is **O(N³)** — the pass visits every cell each frame to
+decide visibility, even though only the surface is drawn. That per-frame walk, not
+the draw, is what gates active-floor size: at N = 256 it is 16.8 M cells × 60 fps.
+It is the first thing to break as N grows, so lifting N past 128 needs a chunked /
+dirty-region mesher ([performance.md](performance.md) §Active-floor sizing). At
+N = 128 it is a comfortable 2.1 M-cell walk.
+
 ## Toroidal (minimal-image) placement
 
 The world wraps ([physics.md](physics.md) wraps entity positions), so rendering

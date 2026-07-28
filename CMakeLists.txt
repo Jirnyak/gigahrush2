@@ -65,6 +65,9 @@ FetchContent_MakeAvailable(imgui)
 # ---- System dependencies --------------------------------------------------
 find_package(SDL3 REQUIRED CONFIG)
 find_package(Vulkan REQUIRED)
+# Threads is a CORE dependency: the nav bake job system (src/core/jobs.h) fans
+# its 64 per-node BFS across std::thread. Found here so giga_core can link it.
+find_package(Threads REQUIRED)
 
 set(IMGUI_SOURCES
     ${imgui_SOURCE_DIR}/imgui.cpp
@@ -82,7 +85,7 @@ file(GLOB_RECURSE GIGA_CORE_SOURCES CONFIGURE_DEPENDS
 
 add_library(giga_core STATIC ${GIGA_CORE_SOURCES})
 target_include_directories(giga_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(giga_core PUBLIC EnTT::EnTT)
+target_link_libraries(giga_core PUBLIC EnTT::EnTT Threads::Threads)
 target_compile_definitions(giga_core PUBLIC ENTT_NOEXCEPTION)
 if(NOT MSVC)
     target_compile_options(giga_core PRIVATE
@@ -154,4 +157,14 @@ if(GIGA_BUILD_TESTS)
         target_compile_options(game_test PRIVATE -fno-rtti -fno-exceptions)
     endif()
     add_test(NAME game_test COMMAND game_test)
+
+    # Honest crowd benchmark: real floor + 16k wandering agents + real physics.
+    # An executable, not a ctest (it measures, it doesn't pass/fail). Runs at the
+    # global Release -O3 so the numbers reflect an optimized build. Threads come
+    # in transitively via giga_core now; kept explicit here to document the need.
+    add_executable(sim_bench tests/sim_bench.cpp)
+    target_link_libraries(sim_bench PRIVATE giga_game Threads::Threads)
+    if(NOT MSVC)
+        target_compile_options(sim_bench PRIVATE -fno-rtti -fno-exceptions)
+    endif()
 endif()

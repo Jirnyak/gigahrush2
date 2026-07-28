@@ -51,11 +51,30 @@ cells" in a hash map: a dense field is branch-free, cache-friendly,
 parallelizable, and serializes with the world verbatim. Use dense by default;
 only sparsify if a specific field genuinely blows the RAM budget.
 
+**Dense at macro res only.** Everything above is the *macro* grid (128³, 2 M
+cells). A dense field at *sub-voxel* resolution is a different animal: 128³ × 8³ =
+1024³ ≈ 1.07 **billion** cells — ~1 GB per byte-field, hundreds of ms per pass.
+That is the real budget wall ([performance.md](performance.md) §The compute
+split). Fields live on the macro grid; the 8³ sub-voxel layer stays a *sparse*
+occupancy mask, never a second dense simulation field.
+
 **Blood/urine/stains** are the canonical example. The 2D reference lazily
 allocated a 16×16 RGBA buffer per painted cell (sparse — it ran in a browser).
-Here the elegant form is a **dense sub-voxel stain field** over the grid: uniform
-paint of sub-voxels, O(1) read/write, universal, and it saves with everything
-else. No allocation, no presence checks, one code path.
+Here the elegant form is a **dense field on the _macro_ grid** (128³): uniform,
+O(1) read/write, universal, and it saves with everything else. No allocation, no
+presence checks, one code path. **Do not** make it a dense *sub-voxel* field — at
+1024³ that is ~1 GB per byte-field and hundreds of ms/pass (the wall above);
+under-a-cell stain detail, if ever wanted, is a *sparse* GPU-resident render
+layer, not a second dense grid.
+
+## Where fields run — GPU async compute
+
+A field is host-side dense memory, but a *cellular* field's per-step evolution
+(diffusion, flow, heat, pressure, light, destruction propagation) is a stencil
+over the whole grid — that runs as **async compute on the GPU**, not on the CPU
+agent tick ([performance.md](performance.md) §The compute split). The CPU uploads
+only the cells it dirtied and reads back the sparse subset the agents must sense.
+Static overlays the CPU merely reads (e.g. a baked light map) need no such pass.
 
 ## Connections
 

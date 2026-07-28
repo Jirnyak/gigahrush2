@@ -3,7 +3,10 @@
 // so it runs headless in CI.
 #include <cstdio>
 #include <cmath>
+#include <cstring>
+#include <vector>
 
+#include "core/jobs.h"
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "ecs/registry.h"
@@ -13,6 +16,7 @@
 #include "world/field.h"
 #include "world/level_stack.h"
 #include "world/macro_grid.h"
+#include "world/nav.h"
 #include "world/world.h"
 
 using namespace giga;
@@ -200,6 +204,67 @@ static void test_camera_component_is_movable() {
     CHECK_NEAR(m.eye.x, 1.0f, 1e-4f);
 }
 
+// The bake-time job system (src/core/jobs.h). Its whole contract is that a
+// parallel run over disjoint indices equals the serial run — deterministic, not
+// merely "eventually the same".
+static void test_parallel_for() {
+    const int n = 10000;
+    std::vector<int> a(n, -1);
+    parallel_for(n, [&a](int i) { a[i] = i * i; });
+    for (int i = 0; i < n; ++i) CHECK(a[i] == i * i);
+
+    // Degenerate ranges are safe: n<=0 never calls the body, n==1 calls once.
+    parallel_for(0, [](int) { CHECK(false); }); // body must never run
+    int calls = 0, last = -1;
+    parallel_for(1, [&](int i) { ++calls; last = i; });
+    CHECK(calls == 1 && last == 0);
+
+    // A forced single worker gives the identical result to the multi-thread run.
+    std::vector<int> b(n, -1);
+    parallel_for(n, [&b](int i) { b[i] = i * i; }, /*threads=*/1);
+    CHECK(a == b);
+}
+
+// L1 nav bake on open space (master_prompt #11). A fresh MacroGrid is all-air
+// (empty masks) hence fully walkable, so this isolates the graph math from any
+// floor geometry: the coarse graph must be complete, symmetric, and SEAM-FREE.
+static void test_nav_coarse() {
+    using namespace nav;
+    MacroGrid air;
+    CoarseGraph g{};
+    bake_coarse(air, g);
+
+    for (int i = 0; i < kNodes; ++i) {
+        CHECK(g.dist[i][i] == 0);
+        for (int j = 0; j < kNodes; ++j) {
+            CHECK(g.dist[i][j] != kUnreachable);  // fully connected
+            CHECK(g.dist[i][j] == g.dist[j][i]);  // symmetric geometry
+        }
+    }
+    // Every lattice edge is one clear spacing (32) through open air.
+    for (int i = 0; i < kNodes; ++i)
+        for (int d = 0; d < 6; ++d) CHECK(g.edge[i][d] == kLatticeSpacing);
+
+    // No seam: node 0's antipode on (Z/4)^3 is (2,2,2). On the torus each axis
+    // hop-pair costs 2*32 = 64, so the coarse distance is 3*64 = 192 and routing
+    // reaches it in EXACTLY 6 lattice hops. A spanning tree over the torus would
+    // blow both up — that is the reference's documented failure this rules out.
+    const int antipode = lattice_id(2, 2, 2);
+    CHECK(g.dist[0][antipode] == 192);
+    int cur = 0, hops = 0;
+    while (cur != antipode && hops <= kNodes) {
+        cur = coarse_next(g, cur, antipode);
+        ++hops;
+    }
+    CHECK(cur == antipode);
+    CHECK(hops == 6);
+
+    // Deterministic: a second bake is bit-identical (schedule-invariant).
+    CoarseGraph g2{};
+    bake_coarse(air, g2);
+    CHECK(std::memcmp(&g, &g2, sizeof(CoarseGraph)) == 0);
+}
+
 int main() {
     test_wrap();
     test_submask();
@@ -210,6 +275,8 @@ int main() {
     test_physics_lands_on_floor();
     test_fluid_conserves_mass();
     test_camera_component_is_movable();
+    test_parallel_for();
+    test_nav_coarse();
 
     std::printf("%d/%d checks passed\n", g_checks - g_fails, g_checks);
     if (g_fails) {

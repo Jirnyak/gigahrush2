@@ -11,12 +11,14 @@ is doing when the player isn't looking.
 
 ## A standalone module — "a game within the game"
 
-Macrosim is designed as a **self-contained module that runs in the background**
-during normal play and can be **developed, run, and tested entirely on its own**,
-with no window, no renderer, no player. Its focus is **social and economic**:
-NPCs migrate between floors, their relationships shift, factions and trade
-evolve — a living society sim that happens to share a world with the action game
-in front of it.
+Macrosim is designed as a **self-contained module that runs as its own process**
+alongside normal play — a separate coarse-clock simulation that can be
+**developed, run, and tested entirely on its own**, with no window, no renderer,
+no player. Its focus is **social and economic**: the whole **2²⁰** population
+migrates between floors, relationships shift, factions and trade evolve — a living
+society sim that happens to share a world with the action game in front of it. The
+action game **materializes ~16k of those records** on the active floor as embodied
+agents ([npcs.md](npcs.md)); the macro process never touches the 8.33 ms frame.
 
 Because it links only `giga_game` → `giga_core` (no SDL/Vulkan/ImGui), the whole
 macro simulation is **headless-testable and headless-runnable**: you can spin up
@@ -58,8 +60,11 @@ macro tick is a single **O(n)** sweep over them — migration, trade, spawns as
 linear passes, never per-NPC search. Expensive structure (nav/flow fields,
 distance fields, faction reachability) is **baked once at load** and read O(1)
 during the tick. Load time is unbounded; tick time is not
-([performance.md](performance.md)). When floor geometry mutates, freeze, re-bake,
-resume — no incremental recompute in the hot path.
+([performance.md](performance.md)). Geometry mutation has **two regimes**: the
+full freeze → re-bake → resume only at special moments (load, post-samosbor), and
+a cheap approximate **dirty local re-bake** for in-play destruction — never a full
+incremental recompute in the hot path ([performance.md](performance.md) §Two
+regimes).
 
 ## Determinism
 
