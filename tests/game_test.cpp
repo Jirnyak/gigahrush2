@@ -2833,6 +2833,21 @@ static void test_containers() {
     const std::uint32_t made = spawn_floor_containers(
         reg, w, -50, FloorKind::Derelict, 0, /*seed=*/99u, /*cap=*/64);
     CHECK(made > 8);
+    // Every geometry family must produce a usable number of crates, not just the ones
+    // with many rooms. Industrial is a pillar plate with 16 rooms and as much floor as
+    // a 256-room warren; scaling on rooms alone gave it THREE reachable crates on a
+    // whole floor, measured in the running game. This is the assertion that would have
+    // caught that before a capture did.
+    for (FloorKind fk : {FloorKind::Residential, FloorKind::Commercial,
+                         FloorKind::Industrial, FloorKind::Derelict}) {
+        CHECK(container_budget(fk) >= kContainerFloorMin);
+        World fw;
+        generate_floor(fw, -26, floor_spec(fk), 11u);
+        Registry fr;
+        const std::uint32_t n = spawn_floor_containers(
+            fr, fw, -26, fk, 0, /*seed=*/5u, /*cap=*/64);
+        CHECK(n >= 8);
+    }
     int reachable = 0;
     for (auto e : reg.view<const Container, const Transform>()) {
         const Transform& t = reg.get<const Transform>(e);

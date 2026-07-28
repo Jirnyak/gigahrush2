@@ -79,15 +79,24 @@ bool standable(const MacroGrid& g, int x, int y, int z) {
 } // namespace
 
 std::uint32_t container_budget(FloorKind kind) {
-    // Rooms per axis squared, thinned. A Residential floor at stride 8 has 256 rooms
-    // and gets ~40 containers; an Industrial pillar plate at stride 32 has 16 and gets
-    // ~6. Scaling on rooms rather than on depth is deliberate: a deeper floor should be
+    // Scaled on the room count, thinned — and then FLOORED, which is the correction
+    // that matters.
+    //
+    // Rooms alone gave a Residential warren (stride 8, 256 rooms) about 40 crates and
+    // an Industrial pillar plate (stride 32, 16 rooms) about 6 — and after
+    // standability filtering that landed at **3 crates on an entire 128x128 floor**,
+    // measured in the running game. Three is not an economy; it is a rounding error
+    // the player will never walk into. An open-plan floor has few ROOMS and just as
+    // much FLOOR, so the room count is the wrong denominator there.
+    //
+    // Scaling on rooms rather than on depth stays deliberate: a deeper floor should be
     // RICHER, not fuller, and conflating the two turns the bottom of the building into
-    // a supermarket.
+    // a supermarket. The floor is a floor, not a depth bonus.
     const int stride = floor_room_stride(kind);
     const int rooms = (kMacroDim / stride) * (kMacroDim / stride);
-    const std::uint32_t n = static_cast<std::uint32_t>(rooms) / 6u;
-    return n < 4u ? 4u : n;
+    std::uint32_t n = static_cast<std::uint32_t>(rooms) / 6u;
+    if (n < kContainerFloorMin) n = kContainerFloorMin;
+    return n;
 }
 
 Container roll_container(ContainerKind kind, int floorZ, std::uint32_t seed) {

@@ -82,6 +82,14 @@ struct Container {
 // a container is a whole cell, so its centre is further away than a dropped item's.
 inline constexpr float kContainerReach = 2.4f;
 
+// Fewest containers any floor may hold, whatever its geometry.
+//
+// An open-plan floor has few ROOMS and exactly as much FLOOR, so scaling purely on the
+// room count starved it: an Industrial pillar plate produced 3 reachable crates across
+// a whole 128x128 floor, measured in the running game. Three is not an economy, it is a
+// rounding error nobody will walk into. This is the floor under that.
+inline constexpr std::uint32_t kContainerFloorMin = 24;
+
 // Half-extents of the drawn box, metres.
 inline constexpr vec3 kContainerHalf{0.55f, 0.55f, 0.45f};
 
