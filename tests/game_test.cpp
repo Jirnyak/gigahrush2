@@ -61,6 +61,7 @@ int g_checks = 0;
 
 #include "suite_needs.inl"
 #include "suite_packs.inl"
+#include "suite_hunt.inl"
 #include "suite_samosbor.inl"
 static void test_inventory() {
     // Compile-time layout contract: a static_assert, not a CHECK. It is a fact
@@ -3236,6 +3237,7 @@ int main() {
     test_containers();
     test_contracts();
     test_vendor();
+    test_hunt_all();
     test_extraction_reachable();
     test_mob_behaviour();
     test_ranged_table();

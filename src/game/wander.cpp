@@ -8,6 +8,7 @@
 #include "ecs/components.h"
 #include "game/embody.h"   // NpcRef
 #include "game/faction_relations.h"
+#include "game/hunt.h"
 #include "game/mob_behaviour.h"
 #include "game/mob_table.h"
 #include "game/mob_spawn.h"
@@ -182,26 +183,67 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         // consult a flow field, it comes straight at you. Straight-line pursuit is
         // correct at this range — inside 20 m in an apartment interior there is
         // rarely a wall worth routing around, and physics stops it if there is.
-        // Only mobs hunt; residents keep wandering past the carnage for now.
-        if (haveVictim && reg.all_of<MobRef>(e)) {
-            const float ax = wrap_delta_f(tr.pos.x, victimPos.x, kWorldExtent);
-            const float ay = wrap_delta_f(tr.pos.y, victimPos.y, kWorldExtent);
-            const float az = wrap_delta_f(tr.pos.z, victimPos.z, kWorldExtent);
-            const float d2 = ax * ax + ay * ay + az * az;
+        //
+        // Only mobs hunt. What they may hunt is now the crowd as well as the camera
+        // holder, and the RATE is the whole design — see [hunt.h] before touching
+        // this. Residents themselves still walk past the carnage: NPC-on-NPC and
+        // NPC-on-monster fighting is a threat model this does not have.
+        if (reg.all_of<MobRef>(e)) {
             const MobRef& mr = reg.get<const MobRef>(e);
             const MobDef& md = kMobTable[mr.kind];
             const MobBehaviour beh = static_cast<MobBehaviour>(md.behaviour);
             // Two kinds notice you far later than everyone else, which is the only
             // reason walking past a monster is ever possible. [mob_behaviour.h]
             const float radius = behaviour_aggro_radius(beh, kAggroRadius);
-            if (d2 < radius * radius) {
+
+            // Pick the chase target. The camera holder first and at its full aggro
+            // radius; only a monster with nobody better, and holding this epoch's
+            // hunting licence, drops to the crowd — and then only inside kHuntRadius,
+            // which is never larger than the smallest aggro radius, so the player can
+            // never lose a monster to a resident standing further away.
+            //
+            // The prey scan runs inside this view's iteration and that is safe for one
+            // stated reason: `nearest_prey` takes a const Registry and reads only
+            // components that already exist, so it can neither create a storage nor
+            // reallocate the pool container this live view is holding.
+            bool chasing = false;
+            float ax = 0.0f, ay = 0.0f;
+            std::uint32_t chaseId = victimId;
+            if (haveVictim) {
+                ax = wrap_delta_f(tr.pos.x, victimPos.x, kWorldExtent);
+                ay = wrap_delta_f(tr.pos.y, victimPos.y, kWorldExtent);
+                const float az = wrap_delta_f(tr.pos.z, victimPos.z, kWorldExtent);
+                if (ax * ax + ay * ay + az * az < radius * radius) chasing = true;
+            }
+            if (!chasing && mob_hunts_npcs(id, tick)) {
+                const Prey pr = nearest_prey(reg, pool, layer, tr.pos, kHuntRadius);
+                if (pr.e != entt::null) {
+                    ax = wrap_delta_f(tr.pos.x, pr.pos.x, kWorldExtent);
+                    ay = wrap_delta_f(tr.pos.y, pr.pos.y, kWorldExtent);
+                    chaseId = static_cast<std::uint32_t>(entt::to_integral(pr.e));
+                    chasing = true;
+                }
+            }
+            if (chasing) {
                 // Frozen while looked at. This returns BEFORE any velocity is
                 // written, so a gazed Sculpture holds perfectly still instead of
                 // coasting on last pass's velocity.
-                if (frozen_by_gaze(beh, fwdX, fwdY, -ax, -ay)) {
-                    vel.v.x = 0.0f;
-                    vel.v.y = 0.0f;
-                    continue;
+                //
+                // The delta is VIEWER -> monster and is recomputed from the camera
+                // holder rather than reused from the chase vector, because those are
+                // now two different things: a Sculpture stalking a resident must still
+                // freeze while you are watching it, or the one behaviour that gives it
+                // counterplay would switch itself off the moment it found other prey.
+                if (haveVictim) {
+                    const float gx =
+                        wrap_delta_f(victimPos.x, tr.pos.x, kWorldExtent);
+                    const float gy =
+                        wrap_delta_f(victimPos.y, tr.pos.y, kWorldExtent);
+                    if (frozen_by_gaze(beh, fwdX, fwdY, gx, gy)) {
+                        vel.v.x = 0.0f;
+                        vel.v.y = 0.0f;
+                        continue;
+                    }
                 }
                 const float len = std::sqrt(ax * ax + ay * ay);
                 if (len > 0.05f) {
@@ -210,7 +252,7 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                     // and both offsets are pure functions of entity ids — no state,
                     // no coordination, no spatial query. [mob_behaviour.h]
                     const PursuitOffset off =
-                        pursuit_offset(beh, id, victimId, ax / len, ay / len);
+                        pursuit_offset(beh, id, chaseId, ax / len, ay / len);
                     float tx = ax + off.x;
                     float ty = ay + off.y;
                     float tl = std::sqrt(tx * tx + ty * ty);

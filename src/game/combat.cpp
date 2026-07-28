@@ -7,6 +7,7 @@
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "game/embody.h"   // NpcRef
+#include "game/hunt.h"
 #include "game/mob_spawn.h"
 #include "game/faction_relations.h"
 #include "game/mob_behaviour.h"
@@ -159,9 +160,11 @@ bool adjacent_wall(const MacroGrid& grid, const vec3& pos) {
 std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
                              NpcPool& pool, EventBus& bus,
                              LayerId layer, float dt, std::uint64_t tick) {
-    // The one target, stated in the header: whoever holds the camera.
-    Entity victim = entt::null;
-    vec3 victimPos{0, 0, 0};
+    // The camera holder, resolved ONCE per pass. It is a single entity that every
+    // monster may want, so hoisting it out of the loop is free; crowd prey is
+    // per-monster and cannot be hoisted the same way ([hunt.h]).
+    Entity player = entt::null;
+    vec3 playerPos{0, 0, 0};
     for (auto e : reg.view<const CameraTag, const Transform>()) {
         const Transform& tr = reg.get<const Transform>(e);
         if (tr.layer != layer) continue;
@@ -180,8 +183,8 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         // mysterious.
         if (const NpcRef* nr = reg.try_get<NpcRef>(e))
             if (!mob_hostile_to(pool, nr->id)) continue;
-        victim = e;
-        victimPos = tr.pos;
+        player = e;
+        playerPos = tr.pos;
         break;
     }
 
@@ -204,11 +207,14 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
     // pickup_step already follow — this was the one place it was missed.
     struct Swing {
         Entity mob;
+        // Per-swing now, not one shared victim: a monster may be hunting a resident
+        // while its neighbour is hunting the player ([hunt.h]).
+        Entity target;
         std::int16_t raw;
         std::uint16_t cd;
         bool ranged;         // launch a projectile instead of touching the victim
         vec3 from;           // launch origin, captured while the view was alive
-        float dist;          // horizontal range, for the gravity arc
+        vec3 to;             // aim point, captured with it
         std::uint16_t projSpeedMmps;
     };
     std::vector<Swing> queued;
@@ -236,7 +242,6 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
             static_cast<std::uint16_t>(mc.windupMs - elapsedMs);
         else mc.windupMs = 0;
 
-        if (victim == entt::null) continue;
         const Transform& tr = reg.get<const Transform>(e);
         if (tr.layer != layer) continue;
         if (mc.cooldownMs > 0) continue;
@@ -244,6 +249,38 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         const MobRef& mr = reg.get<const MobRef>(e);
         const MobDef& def = kMobTable[mr.kind];
         if (def.dmg == 0) continue;  // PAUPSINA and friends do not hit
+
+        // Who this one is swinging at. The camera holder wins whenever it is inside
+        // kHuntRadius, so a monster with the player in the room never turns on the
+        // locals and the player's side of combat is bit-for-bit what it was. Only a
+        // monster holding this epoch's hunting licence looks any further ([hunt.h]).
+        //
+        // The prey scan runs INSIDE this view's iteration, which is safe for exactly
+        // one reason: `nearest_prey` takes a const Registry and reads only components
+        // that already exist, so it cannot create a storage and cannot reallocate the
+        // pool container the live view is holding. That is the same crash this
+        // function's two-phase split exists to prevent — the read-only half of the
+        // rule, not an exception to it.
+        Entity victim = player;
+        vec3 victimPos = playerPos;
+        if (mob_hunts_npcs(static_cast<std::uint32_t>(entt::to_integral(e)), tick)) {
+            bool playerClose = false;
+            if (player != entt::null) {
+                const float px = wrap_delta_f(tr.pos.x, playerPos.x, kWorldExtent);
+                const float py = wrap_delta_f(tr.pos.y, playerPos.y, kWorldExtent);
+                const float pz = wrap_delta_f(tr.pos.z, playerPos.z, kWorldExtent);
+                playerClose =
+                    px * px + py * py + pz * pz <= kHuntRadius * kHuntRadius;
+            }
+            if (!playerClose) {
+                const Prey pr = nearest_prey(reg, pool, layer, tr.pos, kHuntRadius);
+                if (pr.e != entt::null) {
+                    victim = pr.e;
+                    victimPos = pr.pos;
+                }
+            }
+        }
+        if (victim == entt::null) continue;
 
         // Distances are toroidal.
         const float dx = wrap_delta_f(tr.pos.x, victimPos.x, kWorldExtent);
@@ -266,7 +303,8 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         const float reach = static_cast<float>(def.meleeReachMm) * 0.001f * kCellSize;
         if (d2 <= reach * reach) {
             mc.windupMs = 0;   // contact cancels a shot it was lining up
-            queued.push_back(Swing{e, raw, def.attackCdMs, false, tr.pos, 0.0f, 0});
+            queued.push_back(Swing{e, victim, raw, def.attackCdMs, false, tr.pos,
+                                   victimPos, 0});
             continue;
         }
 
@@ -290,34 +328,35 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         }
         // windupDone, or a kind with no authored windup: the shot leaves now.
 
-        queued.push_back(Swing{e, raw, def.attackCdMs, true, tr.pos,
-                               std::sqrt(dx * dx + dy * dy), def.projSpeedMmps});
+        queued.push_back(Swing{e, victim, raw, def.attackCdMs, true, tr.pos,
+                               victimPos, def.projSpeedMmps});
     }
 
     std::uint32_t swings = 0;
     for (const Swing& s : queued) {
         if (s.ranged) {
-            spawn_projectile(reg, layer, s.from, victimPos, s.raw,
+            spawn_projectile(reg, layer, s.from, s.to, s.raw,
                              s.projSpeedMmps, s.mob);
             ++swings;
             if (MobCombat* mc = reg.try_get<MobCombat>(s.mob))
                 mc->cooldownMs = s.cd;
             continue;   // a shot in flight is not a hit yet
         }
-        DamageResult r = apply_damage(reg, pool, victim, s.raw,
+        // No early `break` on a lethal hit any more, and its removal is required
+        // rather than tidying: the queue now holds swings at DIFFERENT targets, so
+        // one body going down must not cancel the monster mauling somebody else in
+        // another room. Nothing is lost by dropping it — apply_damage already refuses
+        // a target that is `Dead`, returns hit == false, and so leaves that mob's
+        // cooldown unset exactly as the break did.
+        DamageResult r = apply_damage(reg, pool, s.target, s.raw,
                                       DamageChannel::Kinetic, s.mob);
         if (r.hit) {
             ++swings;
             if (MobCombat* mc = reg.try_get<MobCombat>(s.mob))
                 mc->cooldownMs = s.cd;
         }
-        // Once the victim is down the rest of the queue has nothing to touch, and
-        // apply_damage would no-op on it anyway — it refuses a target already Dead.
-        // Projectiles already launched still fly; that is correct.
-        if (r.lethal) break;
     }
     (void)bus;
-    (void)tick;
     return swings;
 }
 
@@ -460,7 +499,11 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         std::int16_t dmg;
         Entity source;
         bool onVictim;
-        Entity mob = entt::null;   // set instead of onVictim for player shots
+        // Set instead of onVictim when the shot struck a specific body that is not
+        // the camera holder: a monster for a player shot, a resident for a monster
+        // shot. One field rather than two, because phase 2 does the same thing with
+        // either — apply_damage does not care what it is pointed at.
+        Entity other = entt::null;
     };
     std::vector<Hit> resolved;
 
@@ -535,6 +578,37 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
             if (struck) continue;
         }
 
+        // The crowd, and ONLY for monster shots — the mirror image of the branch
+        // above, and it exists because without it a ranged hunter is broken rather
+        // than merely limited. Every one of the 13 ranged kinds has a 2.4 m melee
+        // reach and a minimum shot range of 1.5-6.8 m, so a hunter that has closed to
+        // [hunt.h]'s 6 m radius is very often INSIDE its shot band and outside its
+        // reach: it would telegraph, fire, burn its cooldown, and the resident would
+        // never take a scratch. Forever.
+        //
+        // Gating on `team == 0` keeps a player bullet from mowing down the civilians
+        // it passes, which would be a different feature with different consequences.
+        // The faction gate is the same `mob_hostile_to` the melee path uses, so a
+        // stray monster shot spares a Cultist too.
+        if (p.team == 0) {
+            bool struck = false;
+            for (auto b : reg.view<const NpcRef, const Transform>()) {
+                if (b == victim) continue;      // already tested above, at priority
+                const Transform& bt = reg.get<const Transform>(b);
+                if (bt.layer != layer) continue;
+                const float hx = wrap_delta_f(tr.pos.x, bt.pos.x, kWorldExtent);
+                const float hy = wrap_delta_f(tr.pos.y, bt.pos.y, kWorldExtent);
+                const float hz = wrap_delta_f(tr.pos.z, bt.pos.z, kWorldExtent);
+                if (hx * hx + hy * hy + hz * hz > kProjHitRadius * kProjHitRadius)
+                    continue;
+                if (!mob_hostile_to(pool, reg.get<const NpcRef>(b).id)) continue;
+                resolved.push_back(Hit{e, p.dmg, p.source, false, b});
+                struck = true;
+                break;
+            }
+            if (struck) continue;
+        }
+
         // Solid geometry stops it. Cell-level rather than sub-voxel on purpose: a
         // shot clipping the corner of a wall should stop, and the sub-voxel mask
         // would let it slip through a half-carved cell that reads as solid.
@@ -552,12 +626,14 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
             DamageResult r = apply_damage(reg, pool, victim, h.dmg,
                                           DamageChannel::Kinetic, h.source);
             if (r.hit) ++hits;
-        } else if (h.mob != entt::null && reg.valid(h.mob)) {
-            DamageResult r = apply_damage(reg, pool, h.mob, h.dmg,
+        } else if (h.other != entt::null && reg.valid(h.other)) {
+            DamageResult r = apply_damage(reg, pool, h.other, h.dmg,
                                           DamageChannel::Kinetic, h.source);
             if (r.hit) {
                 ++hits;
                 // Credit the shooter, the same way the melee path credits a swing.
+                // Only a player carries PlayerRanged, so this quietly does nothing for
+                // the monster-shot-hit-a-resident case and needs no team test.
                 if (reg.valid(h.source))
                     if (auto* pr = reg.try_get<PlayerRanged>(h.source)) ++pr->hits;
             }

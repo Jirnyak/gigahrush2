@@ -74,6 +74,21 @@ implements the V-shape on a signed axis of ±50. Two honest caveats:
 - **Aggro and pursuit** ([src/game/wander.h](src/game/wander.h)): inside 20 m a mob
   abandons the baked flow field and closes on the camera holder directly. Outside
   it, mobs wander the nav lattice like anyone else.
+- **Predation on the crowd** ([src/game/hunt.h](src/game/hunt.h)) — monsters hunt
+  residents, and the design is the **rate**, not the targeting. Scarcity of hunters is
+  the whole restraint: the camera holder outranks the crowd inside 6 m, the hunting
+  radius is 6 m against the 20 m player aggro, and only **1 monster in 32** holds a
+  hunting licence at any moment — a pure hash of (entity id, 20 s epoch), so there is
+  no hunt state anywhere and the steering and attack passes cannot disagree about the
+  target. `test_hunt_all` measures the outcome instead of asserting it: on floor 15
+  (420 residents, 593 monsters at level 3) ten simulated minutes leave **361
+  survivors, 59 dead, 14%**. The steady-state toll is 1-3 a minute at *any* licence
+  density, because once the initially co-located bodies are eaten predation is limited
+  by how often a monster and a resident meet — so the licence density mostly sets how
+  hard the first minute after a floor loads bites. A monster's projectile can hit a
+  resident too (`Projectile::team == 0`); without that a ranged hunter telegraphs and
+  fires forever with nothing to show, because every ranged kind's minimum shot range
+  starts inside the 6 m hunting radius while its 2.4 m melee reach does not cover it.
 - **Melee** ([src/game/combat.h](src/game/combat.h)) is shaped around three defects
   found in the reference, each now impossible rather than merely absent: **one**
   damage function that reports what it *applied* (the reference leaked pre-armour
@@ -93,9 +108,12 @@ architecture, not bodies in it.
 
 ## Not yet built
 
-- **Mobs attacking the crowd.** They attack only the camera holder today. Monsters
-  mauling civilians needs faction relations and a threat model, and faking it with
-  "hit the nearest body" would turn a residential floor into a bloodbath on load.
+- **The crowd fighting back.** Predation is one-directional: monsters hunt residents
+  ([hunt.h](src/game/hunt.h), above), and residents walk past the carnage without
+  fleeing, defending each other, or attacking monsters. NPC-on-monster and NPC-on-NPC
+  combat needs a threat model per body, which is the next increment, not this one.
+  Nothing heals a crowd body either — [needs.h](src/game/needs.h) ticks the camera
+  holder's row alone — so a resident that survives a hunt stays wounded forever.
 - **Ranged attacks.** 13 kinds are flagged `Ranged` with real projectile speeds and
   nothing fires them.
 - **The 47 `MobBehaviour` scripts.** Every kind carries its behaviour id; none are

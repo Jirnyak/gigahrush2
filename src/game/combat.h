@@ -209,9 +209,9 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
 std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
                               std::uint64_t tick);
 
-// Attack pass: every mob on `layer` whose cooldown has expired attacks the
-// camera-holder — melee if it is in reach, or a telegraphed shot if the kind is
-// ranged and the target sits between its minimum and maximum range.
+// Attack pass: every mob on `layer` whose cooldown has expired attacks its target
+// — melee if it is in reach, or a telegraphed shot if the kind is ranged and the
+// target sits between its minimum and maximum range.
 //
 // One function rather than a melee one and a ranged one, deliberately. The
 // reference had ~60 places decrementing `attackCd` and at least one monster
@@ -219,10 +219,13 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
 // modes behind the single decrement makes that unrepresentable instead of merely
 // absent.
 //
-// First slice, stated plainly: mobs attack **only the camera holder**. Monsters
-// mauling the civilian crowd needs faction relations and a threat model, and
-// faking it with "attack the nearest body" would make a residential floor a
-// bloodbath on load.
+// The target is the camera holder OR a member of the crowd, and which one is
+// decided by [hunt.h] — read that file before touching the choice. The short
+// version: the camera holder wins whenever it is within `kHuntRadius`, so being
+// hunted as the player is unchanged, and only ~1 monster in `kHuntShare` is
+// licensed to take a resident at all. That licence, not a radius, is what keeps a
+// 600-monster floor from emptying its 420-body crowd in a minute — which is the
+// bloodbath this whole feature was deferred over.
 //
 // Returns the number of swings that landed.
 // `grid` is read only for the wall-adjacency test AiFlag::WallBias needs — four
@@ -232,7 +235,14 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
                              LayerId layer, float dt, std::uint64_t tick);
 
 // Advance every shot in flight: integrate under gravity, stop on solid geometry,
-// damage the camera-holder on contact, expire on TTL. Destroys spent projectiles.
+// damage what it touches on contact, expire on TTL. Destroys spent projectiles.
+//
+// Who a shot may hit is decided by `Projectile::team`, and it is deliberately not
+// symmetric. A player shot (team 1) may hit monsters and never a civilian. A monster
+// shot (team 0) may hit the camera holder or any resident monsters consider prey —
+// without that a ranged hunter would telegraph, fire, burn its cooldown and never
+// land anything, because every ranged kind's minimum shot range starts INSIDE
+// [hunt.h]'s 6 m hunting radius while its 2.4 m melee reach does not cover it.
 //
 // Gravity is what makes a ranged monster miss: a shot fired level from chest height
 // reaches the floor in well under a second, so distance is bought with arc. The

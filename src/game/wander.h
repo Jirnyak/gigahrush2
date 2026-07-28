@@ -90,8 +90,11 @@ std::uint32_t wander_init(Registry& reg, LayerId layer, std::uint32_t seed);
 // `grid` is read only for the wall-adjacency test AiFlag::WallBias needs: four
 // cardinal cell reads, and only for a mob already aggroed and already in its
 // stagger slot — so 4 reads for roughly 1/8 of the hostiles per pass.
-// `pool` is read to resolve the camera holder's faction: monsters do not hunt a body
-// they do not consider prey ([faction_relations.h] kMobVsFaction).
+// `pool` is read to resolve a body's faction: monsters do not hunt a body they do
+// not consider prey ([faction_relations.h] kMobVsFaction). That applies to the
+// camera holder and — since monsters now pursue the crowd as well — to every
+// resident a hunting monster weighs up. The rate control that keeps this from
+// emptying a floor is [hunt.h]; read it before changing what a mob chases.
 void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                  const nav::CoarseGraph& coarse,
                  const nav::FineNav& fine, LayerId layer, std::uint64_t tick);
