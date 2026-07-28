@@ -37,9 +37,15 @@ struct CubeInstance {
 // Push-constant block shared by cube.vert / cube.frag.
 struct CubePush {
     mat4 viewProj;
-    vec4 sunDir;    // xyz = direction toward the sun
-    vec4 camPos;    // xyz = camera world position (fog + toroidal placement)
-    vec4 fog;       // x = fog start dist, y = fog end dist (fades to black)
+    // 112 bytes total, deliberately under the 128-byte push-constant floor the
+    // Vulkan spec guarantees (real Windows drivers report exactly 128). The
+    // lighting knobs therefore ride in the otherwise-dead w lanes rather than
+    // growing the block — see cube.frag and the tunables in app/main.cpp.
+    vec4 sunDir;    // xyz = direction toward the fill light, w = fill strength
+    vec4 camPos;    // xyz = camera world position (fog + toroidal placement,
+                    //       and the headlamp origin), w = headlamp intensity
+    vec4 fog;       // x = fog start dist, y = fog end dist (fades to black),
+                    // z = headlamp radius (m), w = ambient scale
 };
 
 class CubePass {

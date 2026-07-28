@@ -60,6 +60,15 @@ constexpr int kWinH = 720;
 // uncapped and interpolation is skipped for simplicity (the step is small).
 constexpr float kSimDt = 1.0f / 120.0f;
 
+// Lighting tunables, packed into the dead lanes of CubePush (see cube.frag).
+// The floors are windowless interiors, so the headlamp the player carries is the
+// primary light and ambient is deliberately near-black; raise kAmbient and the
+// world flattens back into an evenly-lit mosaic.
+constexpr float kLampIntensity = 2.2f;  // camPos.w
+constexpr float kLampRadius = 14.0f;    // fog.z, metres (7 macro cells)
+constexpr float kFillStrength = 0.10f;  // sunDir.w, weak non-black backstop
+constexpr float kAmbient = 0.35f;       // fog.w, scales the hemispheric term
+
 // The demo floor stack: one row per floor MODULE. Numbers are the in-game labels
 // the FloorRegistry assigns (floors.md); kinds are picked to show every geometry
 // family side by side. Floor 0 is the residential hub the player starts on.
@@ -439,12 +448,14 @@ int main(int argc, char** argv) {
             VkCommandBuffer cmd = renderer.current_cmd();
             gpu::CubePush push{};
             push.viewProj = mat4_mul(camMat.proj, camMat.view);
-            push.sunDir = vec4{0.4f, 0.3f, 0.85f, 0.0f};
-            push.camPos = vec4{camMat.eye.x, camMat.eye.y, camMat.eye.z, 0.0f};
+            push.sunDir = vec4{0.4f, 0.3f, 0.85f, kFillStrength};
+            push.camPos = vec4{camMat.eye.x, camMat.eye.y, camMat.eye.z,
+                               kLampIntensity};
             // Fog fades to black between 0.30 and 0.50 of the torus period. The
             // end (kWorldExtent/2 = 64 cells) is the minimal-image radius, so
             // the wrap seam is always hidden inside full-black fog.
-            push.fog = vec4{kWorldExtent * 0.30f, kWorldExtent * 0.50f, 0.0f, 0.0f};
+            push.fog = vec4{kWorldExtent * 0.30f, kWorldExtent * 0.50f,
+                            kLampRadius, kAmbient};
             cubePass.record(cmd, renderer.currentFrame,
                             stack.layer(activeLayer), push);
             // Draw the embodied population on the active layer (shared depth).

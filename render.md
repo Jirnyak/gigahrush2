@@ -1,8 +1,9 @@
 # Rendering — Vulkan backend & cube pass
 
-A minimal-but-real **Vulkan** backend (MoltenVK on macOS) that opens an SDL3
-window and draws the visible world as **instanced cubes** with a directional sun
-and a Dear ImGui HUD. This is L3 — platform side, outside `giga_core`.
+A minimal-but-real **Vulkan** backend (MoltenVK on macOS, LunarG on Windows) that
+opens an SDL3 window and draws the visible world as **instanced cubes** under a
+camera-carried headlamp, with a Dear ImGui HUD. This is L3 — platform side,
+outside `giga_core`.
 
 ## Render is a pure shell — the load-bearing principle
 
@@ -82,13 +83,56 @@ draw it at fixed absolute coordinates. Every present/future pass (transparent
 props, particles, procedural detail) must place geometry via the same
 minimal-image rule so the camera sits at the centre of a full, seamless shell.
 
+## Shading model — the light is the one you carry
+
+The floors are **windowless interiors**. There is no sun down here, so the model
+in [cube.frag](shaders/cube.frag) — shared by the world pass and the population
+pass — is built around the light the player brings:
+
+| Term | What it is | Knob |
+|------|------------|------|
+| **headlamp** | camera-attached point light, `1/(1 + d²/r²)` falloff | `camPos.w` intensity, `fog.z` radius (m) |
+| **fill** | weak directional backstop so geometry outside the lamp is a dim shape, not a black silhouette | `sunDir.w` strength |
+| **ambient** | low hemispheric term; up-facing faces slightly brighter and cooler | `fog.w` scale |
+
+The knobs ride in the otherwise-dead `w` lanes of `CubePush`, keeping the block at
+**112 bytes** — under the 128-byte push-constant floor the Vulkan spec guarantees
+and real Windows drivers report exactly. Values live as `constexpr` in
+[main.cpp](src/app/main.cpp).
+
+Why a headlamp and not a directional sun: with one directional light there are
+only **six** possible `N·L` values in the entire world (six cube-face normals), so
+every +Z face everywhere renders the *identical* colour. That is the literal cause
+of a flat-mosaic image, and no amount of colour authoring fixes it. A point light
+at the camera makes brightness vary continuously across every face and between
+every cell, which also gives the frame a depth cue at every distance rather than
+only where the fog starts.
+
+Lighting is computed in **linear** space and encoded to sRGB at the end of the
+fragment shader. That is not optional here: the swapchain is deliberately
+`VK_FORMAT_B8G8R8A8_UNORM` in `VK_COLOR_SPACE_SRGB_NONLINEAR_KHR`
+([vk_swapchain.cpp](src/render/vk_swapchain.cpp) `choose_format`), and a UNORM
+format performs **no hardware encode** — the presentation engine displays exactly
+what we write, as if it were already sRGB. Encoding in the shader is therefore
+correct, and it leaves the ImGui pass (whose vertex colours are authored in sRGB)
+untouched. Do not "fix" this by switching the swapchain to `_SRGB` without also
+linearising the ImGui style, or the HUD washes out.
+
+One LSB of interleaved-gradient-noise dither is added before output, scaled by
+`(1 - fog)`. A long mid-grey-to-black ramp into an 8-bit target bands visibly, and
+here the fade to black *is* the aesthetic; the `(1 - fog)` factor keeps a
+fully-fogged pixel bit-exact `0` so it matches the cleared background precisely.
+
 ## Distance fog — fades to black
 
 Depth fog is a **render-only** effect (no sim state). Fragment colour is
 `mix(lit, black, fog)` where `fog` ramps `0→1` between `fog.x` and `fog.y`
-(world-space distance from the camera, computed per-vertex in
-[cube.vert](shaders/cube.vert), applied in [cube.frag](shaders/cube.frag)).
-Current tuning (in [main.cpp](src/app/main.cpp)):
+(world-space distance from the camera). Distance is derived **per-fragment** from
+the interpolated `vWorldPos`, not interpolated from a per-vertex distance:
+interpolating a nonlinear function across a 2 m face that fills the screen up
+close visibly skews the gradient, and [cube.frag](shaders/cube.frag) needs the
+vector to the camera for the headlamp regardless. Current tuning (in
+[main.cpp](src/app/main.cpp)):
 
 | Knob | Value | Why |
 |------|-------|-----|
@@ -105,13 +149,13 @@ a coloured horizon would betray a fixed skybox and break the "infinite interior"
 feel. Tune the two `fog` distances (and matching clear colour) together; keep
 `fog end ≤ kWorldExtent/2`.
 
-## Known issue — depth clip range
+## Depth clip range — resolved
 
-`mat4_perspective` ([core/math.h](src/core/math.h)) emits GL-style `[-1, 1]`
-depth, but the render pass clears depth to `1.0` and compares `LESS` (Vulkan
-`[0, 1]`). If far geometry disappears or z-fights, remap projected z to `[0, 1]`
-(`m[10] = zf/(zn-zf)`, `m[14] = zn*zf/(zn-zf)`). Camera already flips Y for
-Vulkan's +Y-down clip space ([camera.md](camera.md)).
+`mat4_perspective` ([core/math.h](src/core/math.h)) emits Vulkan-style `[0, 1]`
+depth (`m[10] = zf/(zn-zf)`, `m[14] = zn·zf/(zn-zf)`), matching a depth buffer
+cleared to `1.0` and compared `LESS`. The camera flips Y for Vulkan's +Y-down
+clip space ([camera.md](camera.md)). Nothing to do here; this section exists so
+nobody "fixes" it twice.
 
 ## Security / platform note
 
