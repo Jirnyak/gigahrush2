@@ -175,11 +175,53 @@ in-band floor is currently an equal candidate) and the immediate
 cold record; it embodies on that floor's next load, not the instant it lands — a
 streaming-layer concern, not a pool one).
 
-### Still pending (master_prompt §7 #10d and beyond)
+### Built — the faction relation matrix (#10d-i, 2026-07-28)
 
-- **Social graph + faction matrix (#10d).** A second budgeted-cursor pass for
-  per-NPC relationship drift (10-slot Int8 edges) and a 6×6 Int8 faction relation
-  matrix, event-driven, on the same tables.
+The society's **baseline attitude table**: a `kFactionCount × kFactionCount = 6×6`
+row-major matrix of signed-byte attitudes, one directed cell per ordered faction
+pair (`src/game/faction.{h,cpp}`). The six factions (`FactionId`: Citizen,
+Liquidator, Cultist, Scientist, Wild, Player) and the base values are **ported
+verbatim from the reference** (`../gigahrush`, `src/data/relations.ts` base seed) —
+symmetric, diagonal 100 (own faction), span -50..100. This formalises what the
+seeder already assigns (`FloorSpec::factionMix` samples factions 0..3, the four
+civilian-ish kinds, [npcs.md](npcs.md)) and rounds it out with Wild (hostile
+fauna/raiders) and Player, so **combat targeting and the player's own standing
+resolve through the one table** — never a code branch.
+
+A tiny data primitive, the same stance as `FloorSpec` / `MacroParams`:
+`attitude(a,b)` reads a directed cell (out-of-range faction → neutral `0`, so a
+stray pool value never indexes past the table); `set` / `nudge` / `nudge_mutual`
+mutate with integer-math clamping to `[-127,127]` (the reference clamps to
+`[-128,127]` — an immaterial one-unit-lower floor; we avoid -128 so negation stays
+well-defined); and two **data-driven thresholds** classify a cell branch-free —
+`hostile()` at or below **-50**, `friendly()` at or above **50** (ported from the
+reference's `areFactionsHostile` / `FRIENDLY_RELATION_THRESHOLD`). `reset_to_base()`
+restores the seed (a future respawn hook will reset just the Player row/column).
+
+Standalone and headless-verified by `test_faction_matrix` (base values, full
+symmetry + diagonal, threshold edges, out-of-range tolerance, clamp, mutual
+nudge, reset). It carries **no per-tick cost** yet — it is the state the two
+consumers below read: the **#10d-ii social pass** (which seeds per-NPC edges from
+`factionAffinity`, the symmetric quarter-scaled cell average) and the **#12
+utility-AI** (`faction_assault` / `social` intents, [ai.md](ai.md)).
+
+> **NOTE — three distinct relationship stores, do not conflate.** (A) this
+> faction↔faction matrix (thresholds ±50, span ±100); (B) a per-record
+> player-standing column (planned, range ±100, sentinel -128); (C) the per-NPC
+> social graph (the pool's 16-slot `rel_` block, wider ±64 thresholds) that
+> #10d-ii drifts. Different ranges and thresholds — the reference keeps them
+> separate and so do we.
+
+### Still pending (master_prompt §7 #10d-ii and beyond)
+
+- **Macro social pass (#10d-ii).** A second budgeted-cursor pass over cold records
+  that **lazily forms per-NPC relationship edges** (the pool's 16-slot `rel_`
+  block) to co-floor peers, each seeded from the faction matrix's `factionAffinity`
+  plus deterministic jitter — the reference's `describeCandidateEdge` acquaintance
+  path (slot resolution existing → first-empty → evict-weakest). Event-driven
+  drift (combat/quests) lands with the systems that raise those events.
+- **Faction-vs-monster** row + player-standing column — deferred until their
+  consumers (mob combat, respawn) exist.
 - Economy dynamics (per-floor commodity stock, trade).
 
 ## Determinism

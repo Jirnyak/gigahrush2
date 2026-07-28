@@ -8,6 +8,7 @@
 #include "game/embody.h"
 #include "game/elevator.h"
 #include "game/event_bus.h"
+#include "game/faction.h"
 #include "game/floor_gen.h"
 #include "game/floor_registry.h"
 #include "game/floor_spec.h"
@@ -132,6 +133,75 @@ static void test_relationships() {
     rel[0].affinity = -100;
     CHECK(pool.relations(a)[0].target == 5);
     CHECK(pool.relations(a)[0].affinity == -100);
+}
+
+// #10d-i — the 6×6 inter-faction attitude matrix (faction.h/.cpp). Verifies the
+// ported base values, symmetry, the data-driven hostile/friendly thresholds,
+// out-of-range tolerance, and mutation clamping.
+static void test_faction_matrix() {
+    FactionMatrix fm; // default-constructs to the ported base
+
+    // Spot-check base cells against the reference seed matrix.
+    CHECK(fm.attitude(FactionCitizen, FactionCitizen) == 100); // diagonal = self
+    CHECK(fm.attitude(FactionWild, FactionWild) == 100);
+    CHECK(fm.attitude(FactionCitizen, FactionWild) == -50);
+    CHECK(fm.attitude(FactionCultist, FactionLiquidator) == -50);
+    CHECK(fm.attitude(FactionCultist, FactionScientist) == -20);
+    CHECK(fm.attitude(FactionCultist, FactionCitizen) == 0);
+    CHECK(fm.attitude(FactionPlayer, FactionCitizen) == 50);
+    CHECK(fm.attitude(FactionPlayer, FactionWild) == -50);
+
+    // The base is symmetric and the diagonal is 100 for every faction.
+    for (int a = 0; a < kFactionCount; ++a) {
+        CHECK(fm.attitude(static_cast<std::uint16_t>(a),
+                          static_cast<std::uint16_t>(a)) == 100);
+        for (int b = 0; b < kFactionCount; ++b) {
+            CHECK(fm.attitude(static_cast<std::uint16_t>(a),
+                              static_cast<std::uint16_t>(b)) ==
+                  fm.attitude(static_cast<std::uint16_t>(b),
+                              static_cast<std::uint16_t>(a)));
+        }
+    }
+
+    // Threshold classification (hostile <= -50, friendly >= 50, band = neutral).
+    CHECK(fm.hostile(FactionCitizen, FactionWild));   // -50, exactly on the edge
+    CHECK(fm.hostile(FactionWild, FactionCitizen));
+    CHECK(!fm.hostile(FactionCultist, FactionScientist)); // -20 is in the band
+    CHECK(!fm.friendly(FactionCultist, FactionScientist));
+    CHECK(fm.friendly(FactionCitizen, FactionLiquidator)); // 50, on the edge
+    CHECK(!fm.friendly(FactionCultist, FactionCitizen));   // 0 is neutral
+    CHECK(!fm.hostile(FactionCultist, FactionCitizen));
+
+    // Out-of-range factions read as neutral 0 (never index past the table), and
+    // writes to them are ignored.
+    CHECK(fm.attitude(99, 0) == 0);
+    CHECK(fm.attitude(0, 99) == 0);
+    CHECK(!fm.hostile(99, 0) && !fm.friendly(99, 0));
+    fm.set(99, 0, 100); // no-op, must not corrupt neighbours
+    CHECK(fm.attitude(99, 0) == 0);
+
+    // set + nudge with integer-math clamping at the byte edges.
+    fm.set(FactionCitizen, FactionCultist, 0);
+    CHECK(fm.attitude(FactionCitizen, FactionCultist) == 0);
+    fm.nudge(FactionCitizen, FactionCultist, -30);
+    CHECK(fm.attitude(FactionCitizen, FactionCultist) == -30);
+    fm.nudge(FactionCitizen, FactionCultist, -1000); // clamp at kAttitudeMin
+    CHECK(fm.attitude(FactionCitizen, FactionCultist) == kAttitudeMin);
+    fm.nudge(FactionCitizen, FactionCultist, 100000); // clamp at kAttitudeMax
+    CHECK(fm.attitude(FactionCitizen, FactionCultist) == kAttitudeMax);
+
+    // nudge_mutual moves both directions together.
+    fm.set(FactionLiquidator, FactionCultist, 0);
+    fm.set(FactionCultist, FactionLiquidator, 0);
+    fm.nudge_mutual(FactionLiquidator, FactionCultist, -20);
+    CHECK(fm.attitude(FactionLiquidator, FactionCultist) == -20);
+    CHECK(fm.attitude(FactionCultist, FactionLiquidator) == -20);
+
+    // reset_to_base restores the seed after arbitrary mutation.
+    fm.reset_to_base();
+    CHECK(fm.attitude(FactionCitizen, FactionCultist) == 0);
+    CHECK(fm.attitude(FactionLiquidator, FactionCultist) == -50);
+    CHECK(fm.attitude(FactionCitizen, FactionCitizen) == 100);
 }
 
 static void test_design_flag() {
@@ -1517,6 +1587,7 @@ int main() {
     test_pool_basics();
     test_pool_death_keeps_slot();
     test_relationships();
+    test_faction_matrix();
     test_design_flag();
     test_event_bus_transient();
     test_event_bus_overflow();
