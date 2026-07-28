@@ -9,6 +9,7 @@
 #include "game/embody.h"   // NpcRef
 #include "game/mob_spawn.h"
 #include "game/mob_table.h"
+#include "game/weapon_table.h"
 #include "sim/camera.h"   // camera_forward
 #include "world/types.h"
 
@@ -181,6 +182,48 @@ std::uint32_t mob_melee_step(Registry& reg, NpcPool& pool, EventBus& bus,
     return swings;
 }
 
+ItemId equipped_melee(const Inventory& inv) {
+    ItemId best = kInvalidItem;
+    std::uint16_t bestDmg = 0;
+    for (const ItemSlot& s : inv.slots) {
+        if (s.item == kInvalidItem || s.count == 0) continue;
+        const MeleeDef* m = melee_for_item(s.item);
+        if (!m) continue;
+        if (m->dmg > bestDmg) { bestDmg = m->dmg; best = s.item; }
+    }
+    return best;
+}
+
+ItemId equipped_armour(const Inventory& inv) {
+    ItemId best = kInvalidItem;
+    int bestSum = 0;
+    for (const ItemSlot& s : inv.slots) {
+        if (s.item == kInvalidItem || s.count == 0 || !item_valid(s.item)) continue;
+        const ItemDef& d = item_def(s.item);
+        int sum = 0;
+        for (std::size_t c = 0; c < kItemResistChannels; ++c) sum += d.resist[c];
+        if (sum > bestSum) { bestSum = sum; best = s.item; }
+    }
+    return best;
+}
+
+void sync_armour(Registry& reg, NpcPool& pool, Entity e) {
+    if (!reg.valid(e)) return;
+    const NpcRef* n = reg.try_get<NpcRef>(e);
+    if (!n || !pool.valid(n->id)) return;
+
+    const ItemId worn = equipped_armour(pool.inventory(n->id));
+    if (worn == kInvalidItem) {
+        if (reg.all_of<Armour>(e)) reg.remove<Armour>(e);
+        return;
+    }
+    const ItemDef& d = item_def(worn);
+    Armour a{};
+    for (std::size_t c = 0; c < kDamageChannels; ++c)
+        a.resist[c] = d.resist[c];
+    reg.emplace_or_replace<Armour>(e, a);
+}
+
 bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId layer,
                        float dt, bool wantsAttack, std::uint64_t tick) {
     Entity self = entt::null;
@@ -205,6 +248,17 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
 
     if (!wantsAttack || pm.cooldownMs > 0) return false;
 
+    // Whatever is in hand. A found rebar hits eight times as hard as a fist and
+    // reaches four times as far — which is the entire point of picking loot up.
+    const MeleeDef* wp = &unarmed_melee();
+    if (const NpcRef* n = reg.try_get<NpcRef>(self))
+        if (pool.valid(n->id)) {
+            const ItemId held = equipped_melee(pool.inventory(n->id));
+            if (const MeleeDef* m = melee_for_item(held)) wp = m;
+        }
+    const float reach =
+        static_cast<float>(wp->reachMm) * 0.001f * kCellSize + kMeleeReachSlack;
+
     const Transform& me = reg.get<const Transform>(self);
     const CameraTag& cam = reg.get<const CameraTag>(self);
     const vec3 fwd = camera_forward(cam.yaw, cam.pitch);
@@ -213,7 +267,7 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
     // than first-found, so a swing in a crowd hits what you are actually up
     // against instead of whichever entity the view happened to yield first.
     Entity best = entt::null;
-    float bestD2 = kFistReach * kFistReach;
+    float bestD2 = reach * reach;
     for (auto e : reg.view<const MobRef, const Transform>()) {
         const Transform& tr = reg.get<const Transform>(e);
         if (tr.layer != layer) continue;
@@ -225,7 +279,7 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
         const float len = std::sqrt(d2);
         if (len > 1e-3f) {
             const float dot = (dx * fwd.x + dy * fwd.y + dz * fwd.z) / len;
-            if (dot < kFistFacingDot) continue;   // behind or off to the side
+            if (dot < kMeleeFacingDot) continue;  // behind or off to the side
         }
         bestD2 = d2;
         best = e;
@@ -234,9 +288,10 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
 
     // Same damage path, same Dead tag, same finalizer as a mob's swing. There is
     // deliberately no second way for something to die.
-    DamageResult r = apply_damage(reg, pool, best, kFistDamage,
+    DamageResult r = apply_damage(reg, pool, best,
+                                  static_cast<std::int16_t>(wp->dmg),
                                   DamageChannel::Kinetic, self);
-    pm.cooldownMs = kFistCooldownMs;
+    pm.cooldownMs = wp->cooldownMs;
     if (r.lethal) ++pm.kills;
     (void)bus;
     (void)tick;

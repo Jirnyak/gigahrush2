@@ -37,6 +37,7 @@
 #include "game/mob_spawn.h"
 #include "game/combat.h"
 #include "game/loot.h"
+#include "game/weapon_table.h"
 #include "game/event_bus.h"
 #include "game/wander.h"
 #include "game/npc_pool.h"
@@ -536,7 +537,13 @@ int main(int argc, char** argv) {
                 // ONE death point per tick, after everything that can deal damage
                 // (combat.h). Nothing else in the tree destroys a damaged entity.
                 deaths += game::finalize_deaths(reg, pool, bus, simTick);
-                loot += game::pickup_step(reg, pool, bus, activeLayer, simTick);
+                const std::int32_t got =
+                    game::pickup_step(reg, pool, bus, activeLayer, simTick);
+                if (got != 0) {
+                    loot += got;
+                    // Picking a vest up must actually protect you.
+                    game::sync_armour(reg, pool, player);
+                }
                 if (healWanted) {
                     healed += game::use_best_heal(reg, pool, bus, activeLayer,
                                                   simTick);
@@ -602,14 +609,26 @@ int main(int argc, char** argv) {
             {
                 std::int32_t carried = 0;
                 int slots = 0;
-                if (reg.valid(player))
-                    if (const auto* nr = reg.try_get<game::NpcRef>(player))
-                        if (pool.valid(nr->id)) {
-                            const game::Inventory& inv = pool.inventory(nr->id);
-                            carried = game::inventory_value(inv);
-                            for (const auto& sl : inv.slots)
-                                if (sl.item != 0) ++slots;
-                        }
+                const game::NpcRef* nr = reg.valid(player)
+                                             ? reg.try_get<game::NpcRef>(player)
+                                             : nullptr;
+                if (nr && pool.valid(nr->id)) {
+                    const game::Inventory& inv = pool.inventory(nr->id);
+                    carried = game::inventory_value(inv);
+                    for (const auto& sl : inv.slots)
+                        if (sl.item != 0) ++slots;
+
+                    const game::ItemId wpn = game::equipped_melee(inv);
+                    const game::ItemId arm = game::equipped_armour(inv);
+                    const game::MeleeDef* md = game::melee_for_item(wpn);
+                    if (!md) md = &game::unarmed_melee();
+                    ImGui::Text("weapon: %s (%u dmg) | armour: %s",
+                                wpn == game::kInvalidItem ? "fists"
+                                                          : game::item_name(wpn),
+                                md->dmg,
+                                arm == game::kInvalidItem ? "none"
+                                                          : game::item_name(arm));
+                }
                 ImGui::Text("loot %d rub (%d/%d slots) | healed %d | band E%u",
                             carried, slots, game::kInvSlots, healed,
                             game::economy_band(currentFloor));

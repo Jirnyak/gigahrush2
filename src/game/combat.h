@@ -35,6 +35,8 @@
 #include "ecs/components.h"
 #include "ecs/registry.h"
 #include "game/event_bus.h"
+#include "game/inventory.h"
+#include "game/item_table.h"   // ItemId, for the equipped-loadout helpers
 #include "game/npc_pool.h"
 #include "world/level_stack.h"
 
@@ -80,15 +82,33 @@ struct PlayerMelee {
     std::uint32_t kills = 0;       // cumulative, survives possession
 };
 
-// Unarmed reach and swing, until weapons arrive with the item table. Reach is a
-// little over one cell so you can hit what is standing in the doorway with you.
-inline constexpr float kFistReach = 2.4f;      // metres
-inline constexpr std::int16_t kFistDamage = 25;
-inline constexpr std::uint16_t kFistCooldownMs = 450;
 // Cosine of the half-angle you must be facing the target within. 0.35 is roughly
 // a 70-degree half-cone: generous enough not to feel like pixel-hunting in a dark
 // corridor, tight enough that you cannot hit what is behind you.
-inline constexpr float kFistFacingDot = 0.35f;
+inline constexpr float kMeleeFacingDot = 0.35f;
+
+// Reach is authored in cells and a cell is 2 m, but a bare 0.5-cell fist would be
+// a 1 m reach against bodies whose own half-extents are up to 0.9 m — you could
+// not touch a boss. This slack is added to every weapon's reach so contact is
+// possible at all; it is a body-size allowance, not a weapon buff.
+inline constexpr float kMeleeReachSlack = 0.9f;   // metres
+
+// The best melee weapon in an inventory, or kInvalidItem for bare hands. "Best"
+// is highest damage — reach and speed are not traded off, because with no stamina
+// or stagger system there is nothing to trade them against yet.
+ItemId equipped_melee(const Inventory& inv);
+
+// The best armour in an inventory, by total resistance across all channels, or
+// kInvalidItem for none.
+ItemId equipped_armour(const Inventory& inv);
+
+// Copy the equipped armour's resistances onto `e`'s Armour component, adding or
+// removing it as needed. Call after anything that changes the inventory, so that
+// picking a vest up actually protects you.
+//
+// This is what finally gives Armour data: the resistances were in the item table
+// all along (5 of 446 items carry them) — mitigation just had nothing feeding it.
+void sync_armour(Registry& reg, NpcPool& pool, Entity e);
 
 struct DamageResult {
     std::int16_t applied = 0;  // AFTER mitigation — the only number worth reporting

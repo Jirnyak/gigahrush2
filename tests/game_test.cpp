@@ -19,6 +19,7 @@
 #include "game/mob_table.h"
 #include "game/item_table.h"
 #include "game/loot.h"
+#include "game/weapon_table.h"
 #include "game/mob_spawn.h"
 #include "game/floor_stream.h"
 #include "game/inventory.h"
@@ -1477,9 +1478,13 @@ static void test_melee_cooldown_and_reach() {
 // ---- Item table + the greed loop -------------------------------------------
 
 static void test_item_table() {
+    // 446, not the ~434 items.md and the reference's own desdoc.md both claim, and
+    // not the 253 in its balance.md. Compile-time, so it belongs to the build.
+    static_assert(kItemCount == 446, "446 items ([items.md])");
+    static_assert(kMeleeCount == 23, "23 melee weapons, 22 of them items");
+
     CHECK(kItemTable.size() == kItemCount);
     CHECK(kItemNames.size() == kItemCount);
-    CHECK(kItemCount == 446);          // not the ~434 the docs claim
 
     // Ids are 1-based because ItemSlot::item == 0 already means "empty slot".
     CHECK(!item_valid(kInvalidItem));
@@ -1681,6 +1686,104 @@ static void test_heal_picks_the_right_item() {
     CHECK(use_best_heal(reg, pool, bus, 0, 4u) == 0);
 }
 
+// Loot has to MATTER: a found weapon must hit harder than fists, and found armour
+// must actually reduce the damage that lands. That is the whole reason to pick
+// anything up, so it is asserted rather than assumed.
+static void test_loadout_changes_the_numbers() {
+    // Every melee row is sane and reachable, and the sparse index is consistent
+    // both ways — a rename in the CSV would otherwise silently orphan the stats.
+    CHECK(kMeleeTable.size() == kMeleeCount);
+    CHECK(kMeleeByItem.size() == kItemCount + 1);
+    int linked = 0;
+    for (std::size_t i = 0; i <= kItemCount; ++i) {
+        const std::uint8_t mi = kMeleeByItem[i];
+        CHECK(mi < kMeleeCount);
+        if (mi == 0) continue;
+        ++linked;
+        // Index 0 is unarmed and must never be reachable via an item.
+        CHECK(melee_for_item(static_cast<ItemId>(i)) == &kMeleeTable[mi]);
+    }
+    CHECK(linked == 22);                     // 22 item-backed + fists
+    CHECK(melee_for_item(kInvalidItem) == nullptr);
+    for (const MeleeDef& m : kMeleeTable) {
+        CHECK(m.dmg >= 1 && m.dmg <= 4000);
+        CHECK(m.reachMm >= 100 && m.reachMm <= 4000);
+        CHECK(m.cooldownMs >= 50);
+    }
+
+    // Fists are deliberately feeble, so anything at all is an upgrade.
+    const MeleeDef& fist = unarmed_melee();
+    CHECK(fist.dmg == 3);
+    for (std::size_t i = 1; i < kMeleeCount; ++i)
+        CHECK(kMeleeTable[i].dmg > fist.dmg);
+
+    // equipped_melee picks the hardest hitter present, and ignores non-weapons.
+    Inventory inv;
+    CHECK(equipped_melee(inv) == kInvalidItem);      // bare hands
+
+    ItemId weak = kInvalidItem, strong = kInvalidItem;
+    std::uint16_t weakD = 0xFFFF, strongD = 0;
+    for (std::size_t i = 1; i <= kItemCount; ++i) {
+        const ItemId id = static_cast<ItemId>(i);
+        const MeleeDef* m = melee_for_item(id);
+        if (!m) continue;
+        if (m->dmg < weakD) { weakD = m->dmg; weak = id; }
+        if (m->dmg > strongD) { strongD = m->dmg; strong = id; }
+    }
+    CHECK(weak != kInvalidItem && strong != kInvalidItem && strongD > weakD);
+
+    inv.slots[0] = ItemSlot{weak, 1};
+    CHECK(equipped_melee(inv) == weak);
+    inv.slots[1] = ItemSlot{strong, 1};
+    CHECK(equipped_melee(inv) == strong);            // upgrade wins
+    // A zero-count slot is not held, even if the id is still in it.
+    inv.slots[1].count = 0;
+    CHECK(equipped_melee(inv) == weak);
+
+    // Armour: resistances were in the item table all along; sync_armour is what
+    // finally feeds mitigation. 5 of 446 items carry them.
+    ItemId vest = equipped_armour(inv);
+    CHECK(vest == kInvalidItem);                    // no armour among weapons
+
+    ItemId best = kInvalidItem;
+    int bestSum = 0;
+    for (std::size_t i = 1; i <= kItemCount; ++i) {
+        const ItemDef& d = item_def(static_cast<ItemId>(i));
+        int sum = 0;
+        for (std::size_t c = 0; c < kItemResistChannels; ++c) sum += d.resist[c];
+        if (sum > bestSum) { bestSum = sum; best = static_cast<ItemId>(i); }
+    }
+    CHECK(best != kInvalidItem && bestSum > 0);
+
+    NpcPool pool;
+    pool.init();
+    Registry reg;
+    NpcId id = pool.spawn();
+    pool.hp(id) = 1000;
+    pool.max_hp(id) = 1000;
+    Entity e = embody(reg, pool, id, 0);
+
+    // Unarmoured baseline.
+    sync_armour(reg, pool, e);
+    CHECK(!reg.all_of<Armour>(e));
+    const std::int16_t bare =
+        apply_damage(reg, pool, e, 100, DamageChannel::Kinetic, entt::null).applied;
+    CHECK(bare == 100);
+
+    // Now wear the best armour and take the same hit.
+    pool.inventory(id).slots[0] = ItemSlot{best, 1};
+    sync_armour(reg, pool, e);
+    CHECK(reg.all_of<Armour>(e));
+    const std::int16_t worn =
+        apply_damage(reg, pool, e, 100, DamageChannel::Kinetic, entt::null).applied;
+    CHECK(worn < bare);        // armour actually protects
+
+    // Taking it off removes the component again, rather than leaving stale resists.
+    pool.inventory(id).slots[0] = ItemSlot{};
+    sync_armour(reg, pool, e);
+    CHECK(!reg.all_of<Armour>(e));
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -1719,6 +1822,7 @@ int main() {
     test_economy_bands_gate_by_depth();
     test_loot_drops_before_the_corpse_is_gone();
     test_heal_picks_the_right_item();
+    test_loadout_changes_the_numbers();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
