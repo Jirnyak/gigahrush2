@@ -449,16 +449,48 @@ static void test_packs_all() {
         // every monster on the floor walks to one lobby and the floor empties out.
         CHECK(columns >= 8);
 
-        // Members of one pack agree on the destination at every instant, which is
-        // the mechanism the geometry above is only evidence for.
-        for (std::uint64_t t : {0ull, 500ull, 2000ull, 3599ull}) {
-            std::vector<int> node(256, -1);
+        // Members of one pack agree on the destination, which is the mechanism the
+        // geometry above is only evidence for.
+        //
+        // This block used to be a tautology, and that is worth recording so it is not
+        // written back. It read `want = pack_target_node(p, t)`, stored that same call
+        // into `node[p]`, then asserted `node[p] == want` — one pure function compared
+        // against itself, which cannot fail for any implementation of anything. It
+        // never touched WanderTarget at all, despite requiring it in the view.
+        //
+        // The consequence was concrete: delete wander.cpp's
+        // `if (wt.pack != 0) wt.node = pack_target_node(wt.pack, tick);` — the whole
+        // epoch re-derivation, the reason kPackEpochTicks exists — and every assertion
+        // in this file still passed, including the geometry above, because a pack
+        // frozen on its wander_init node reads as MORE cohesive rather than less.
+        //
+        // So read what wander_step actually WROTE. The loop above ran ticks 0..3599
+        // with kWanderPeriod == 8, so the final eight ticks refreshed every staggered
+        // agent exactly once, and 3592..3599 all sit inside epoch 1 (kPackEpochTicks
+        // == 1800). Every packed member must therefore hold epoch 1's node. Packed
+        // agents never repath on their own — both repath sites are gated on
+        // `wt.pack == 0` — so nothing else can have written it.
+        {
+            const std::uint64_t lastTick = 3599;
+            std::vector<int> held(256, -1);
+            std::size_t packedSeen = 0;
             for (auto e : reg.view<const MobRef, const WanderTarget>()) {
                 const std::uint8_t p = reg.get<const MobRef>(e).pack;
-                const int want = pack_target_node(p, t);
-                if (node[p] < 0) node[p] = want;
-                CHECK(node[p] == want);
+                if (p == 0) continue;  // unpacked agents own private nodes by design
+                const int node = static_cast<int>(reg.get<const WanderTarget>(e).node);
+                ++packedSeen;
+                if (held[p] < 0) held[p] = node;
+                // Members of the same pack agree with each other...
+                CHECK(held[p] == node);
+                // ...and with the epoch their pack key derives. This is the assertion
+                // that dies if the re-derivation is removed: the pack would still
+                // agree, but on epoch 0's node, and the pure-function block earlier in
+                // this file already pins that epoch 0 and epoch 1 differ.
+                CHECK(node == static_cast<int>(pack_target_node(p, lastTick)));
             }
+            // An empty view would make both CHECKs above vacuous, which is the other
+            // way this block could quietly stop testing anything.
+            CHECK(packedSeen > 0);
         }
     }
 }
