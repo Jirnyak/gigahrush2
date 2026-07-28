@@ -34,6 +34,7 @@
 #include "game/floor_registry.h"
 #include "game/floor_spec.h"
 #include "game/floor_stream.h"
+#include "game/mob_spawn.h"
 #include "game/npc_pool.h"
 #include "game/population.h"
 #include "input/input.h"
@@ -117,11 +118,39 @@ Entity setup_maze(game::NpcPool& pool, Registry& reg, LayerId layer) {
     return player;
 }
 
-// Look up the rule-set for a demo floor by its in-game number (HUD only).
+// Look up the rule-set for a demo floor by its in-game number.
 const game::FloorSpec* spec_for_floor(int number) {
     for (const DemoFloor& f : kDemoFloors)
         if (f.number == number) return &game::floor_spec(f.kind);
     return nullptr;
+}
+const DemoFloor* demo_floor(int number) {
+    for (const DemoFloor& f : kDemoFloors)
+        if (f.number == number) return &f;
+    return nullptr;
+}
+
+// Ceiling on how many monsters one floor may add. The V-shape budget saturates
+// at 4096 on the deepest floors, which shares a pool with the embodied crowd and
+// would be a large one-frame allocation; the demo floors (|number| <= 4) are far
+// below this anyway, so it is a guard rail rather than a live limit.
+constexpr std::uint32_t kMobSpawnCap = 600;
+
+// Repopulate the active floor's monsters: clear whatever was on the layer, then
+// spawn this floor's roster from the global table ([monsters.md]). Mobs are not
+// alife records — they do not fold back, they are simply destroyed and remade,
+// deterministically per (floor, seed).
+std::uint32_t refresh_floor_mobs(Registry& reg, const World& world, int floorNumber,
+                                 LayerId layer) {
+    game::despawn_layer_mobs(reg, layer);
+    const DemoFloor* df = demo_floor(floorNumber);
+    if (!df) return 0;
+    const game::FloorSpec& spec = game::floor_spec(df->kind);
+    return game::spawn_floor_mobs(
+        reg, world, floorNumber, game::danger_for_hostility(spec.hostility),
+        game::theme_for_kind(df->kind), layer,
+        /*seed=*/0xB0B5EEDu ^ static_cast<std::uint32_t>(floorNumber) * 0x9e3779b9u,
+        kMobSpawnCap);
 }
 
 } // namespace
@@ -250,7 +279,11 @@ int main(int argc, char** argv) {
         player = start.player;
         currentFloor = 0;
         currentSpec = spec_for_floor(0);
-        if (player != entt::null) aim_player(reg, player);
+        if (player != entt::null) {
+            aim_player(reg, player);
+            refresh_floor_mobs(reg, stack.layer(reg.get<Transform>(player).layer),
+                               0, reg.get<Transform>(player).layer);
+        }
     }
 
     if (player == entt::null) {
@@ -340,6 +373,12 @@ int main(int argc, char** argv) {
                         // Streaming recycles World objects in place, so the cube
                         // pass cannot detect the new geometry by identity.
                         cubePass.invalidate();
+                        // Mobs belong to the floor, not to the player: the
+                        // departed layer's are destroyed and the arrival's are
+                        // spawned fresh (deterministically, so a floor looks the
+                        // same every visit).
+                        LayerId nl = reg.get<Transform>(player).layer;
+                        refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
                     }
                 }
             }
@@ -416,6 +455,8 @@ int main(int argc, char** argv) {
                         ga.grounded ? " (grounded)" : "");
             ImGui::Text("instances drawn: %u / %zu cells",
                         cubePass.last_instance_count(), kMacroCells);
+            ImGui::Text("mobs: %u live on this floor",
+                        game::count_layer_mobs(reg, activeLayer));
             ImGui::Text("bodies drawn: %u  (pop %u alive / %u slots)",
                         bodyPass.last_instance_count(), pool.count(),
                         pool.capacity());

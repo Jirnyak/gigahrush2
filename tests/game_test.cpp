@@ -12,6 +12,7 @@
 #include "game/floor_registry.h"
 #include "game/floor_spec.h"
 #include "game/mob_table.h"
+#include "game/mob_spawn.h"
 #include "game/floor_stream.h"
 #include "game/inventory.h"
 #include "game/npc_pool.h"
@@ -1024,6 +1025,103 @@ static void test_mob_budget_v_shape() {
     CHECK(mob_hp_at_level(8, 1) == 8);
 }
 
+// ---- Mob spawning ---------------------------------------------------------
+
+static void test_mob_spawn() {
+    World w;
+    const FloorSpec& spec = floor_spec(FloorKind::Derelict);
+    generate_floor(w, 4, spec, 11u);
+
+    Registry reg;
+    const std::uint8_t danger = danger_for_hostility(spec.hostility);
+    const FloorTheme theme = theme_for_kind(FloorKind::Derelict);
+    CHECK(danger == 5);                        // 0.90 hostility -> danger 5
+    CHECK(theme == FloorTheme::Hell);
+
+    const std::uint32_t budget = static_cast<std::uint32_t>(
+        mob_count_for_floor(4, danger, theme));
+    CHECK(budget > 0);
+
+    const std::uint32_t n =
+        spawn_floor_mobs(reg, w, 4, danger, theme, /*layer=*/0, /*seed=*/77u);
+    CHECK(n > 0);
+    CHECK(n <= budget);                        // never exceeds the budget
+    CHECK(count_layer_mobs(reg, 0) == n);
+    CHECK(count_layer_mobs(reg, 1) == 0);      // layer-scoped
+
+    // Every spawned mob must be a legal inhabitant of this floor and a legal row.
+    const std::uint8_t level = mob_level_for_floor(4, danger);
+    auto view = reg.view<const MobRef, const Transform, const AABB>();
+    for (auto e : view) {
+        const MobRef& m = view.get<const MobRef>(e);
+        CHECK(m.kind < kMobKindCount);
+        CHECK(m.level == level);
+        CHECK(m.hp > 0 && m.hp == m.maxHp);
+        CHECK(m.hp == static_cast<std::int16_t>(
+                          mob_hp_at_level(kMobTable[m.kind].hp, level)));
+
+        // Spawned into air, not inside a wall — the whole point of the placement
+        // rejection loop.
+        const Transform& tr = view.get<const Transform>(e);
+        int cx = static_cast<int>(tr.pos.x / kCellSize);
+        int cy = static_cast<int>(tr.pos.y / kCellSize);
+        CHECK(w.grid().cell(cx, cy, 1) == kCellAir);
+
+        // Immobile kinds are architecture, not bodies: no gravity component.
+        const bool immobile = has_flag(kMobTable[m.kind].aiFlags, AiFlag::Immobile);
+        CHECK(reg.all_of<GravityAffected>(e) == !immobile);
+    }
+
+    // The cap bounds the spawn regardless of budget — this is what keeps a deep
+    // floor from adding thousands of entities in one frame.
+    Registry capped;
+    std::uint32_t c = spawn_floor_mobs(capped, w, 4, danger, theme, 0, 77u,
+                                       /*cap=*/5);
+    CHECK(c <= 5);
+
+    // Determinism: same (floor, seed) must reproduce the same roster in the same
+    // places, or unloading and reloading a floor visibly rearranges it.
+    Registry again;
+    std::uint32_t n2 = spawn_floor_mobs(again, w, 4, danger, theme, 0, 77u);
+    CHECK(n2 == n);
+
+    // Despawn is total and layer-scoped.
+    CHECK(despawn_layer_mobs(reg, 0) == n);
+    CHECK(count_layer_mobs(reg, 0) == 0);
+}
+
+// The hub must be meaningfully safer than the depths — the V-shape has to survive
+// contact with real generated geometry, not just the formula.
+static void test_mob_spawn_v_shape_in_world() {
+    Registry reg;
+    World hub, deep;
+    generate_floor(hub, 0, floor_spec(FloorKind::Residential), 3u);
+    generate_floor(deep, 40, floor_spec(FloorKind::Derelict), 3u);
+
+    std::uint32_t nHub = spawn_floor_mobs(
+        reg, hub, 0, danger_for_hostility(floor_spec(FloorKind::Residential).hostility),
+        theme_for_kind(FloorKind::Residential), 0, 5u, /*cap=*/4096);
+    std::uint32_t nDeep = spawn_floor_mobs(
+        reg, deep, 40, danger_for_hostility(floor_spec(FloorKind::Derelict).hostility),
+        theme_for_kind(FloorKind::Derelict), 1, 5u, /*cap=*/4096);
+
+    CHECK(nHub < nDeep);
+    CHECK(count_layer_mobs(reg, 0) == nHub);
+    CHECK(count_layer_mobs(reg, 1) == nDeep);
+
+    // ...and the roof arm is as crowded as the equally-deep basement arm, because
+    // COUNT is driven by |floor|.
+    World roof;
+    generate_floor(roof, -40, floor_spec(FloorKind::Derelict), 3u);
+    Registry r2;
+    std::uint32_t nRoof = spawn_floor_mobs(
+        r2, roof, -40, danger_for_hostility(floor_spec(FloorKind::Derelict).hostility),
+        theme_for_kind(FloorKind::Derelict), 0, 5u, /*cap=*/4096);
+    // Not equal — placement depends on the floor's own geometry — but the same
+    // order of magnitude, and both far above the hub.
+    CHECK(nRoof > nHub * 2);
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -1050,6 +1148,8 @@ int main() {
     test_nav_fine_realfloor();
     test_mob_table();
     test_mob_budget_v_shape();
+    test_mob_spawn();
+    test_mob_spawn_v_shape_in_world();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
