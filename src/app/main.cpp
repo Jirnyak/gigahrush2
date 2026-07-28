@@ -467,6 +467,7 @@ int main(int argc, char** argv) {
     std::int16_t samosborDamage = 0;
     game::NeedsTick needs{};   // last step's report, for the HUD
     int needsHpLost = 0;       // running total, so the HUD is not one tick
+    std::uint32_t shots = 0;   // rounds the player has fired
     game::RunLedger ledger;
     std::int32_t banked = 0;
     std::uint32_t deaths = 0;
@@ -650,8 +651,27 @@ int main(int argc, char** argv) {
                 // intended to go.
                 // The player swings first on a tick, so trading blows is a trade
                 // rather than a guaranteed loss to whoever the view yields first.
+                // Left mouse routes by loadout: a gun shoots, a fist swings. One
+                // button, because there is no weapon-selection UI yet and adding a
+                // second bind for a system with no way to choose a weapon would be a
+                // control for a choice the player cannot make.
+                //
+                // `player_ranged_step` is called unconditionally so its cooldown and
+                // reload timers advance even on ticks the trigger is not held —
+                // gating the whole call on `attackHeld` would freeze a reload the
+                // moment you let go.
+                bool haveGun = false;
+                if (reg.valid(player))
+                    if (const auto* nrg = reg.try_get<game::NpcRef>(player))
+                        if (pool.valid(nrg->id))
+                            haveGun = game::equipped_ranged(
+                                          pool.inventory(nrg->id)) !=
+                                      game::kInvalidItem;
+                shots += game::player_ranged_step(reg, pool, activeLayer,
+                                                  haveGun && attackHeld && !paused,
+                                                  kSimDt, simTick);
                 game::player_melee_step(reg, pool, bus, activeLayer, kSimDt,
-                                        attackHeld && !paused, simTick);
+                                        !haveGun && attackHeld && !paused, simTick);
                 meleeHits += game::mob_attack_step(reg,
                                    stack.layer(activeLayer).grid(),
                                    pool, bus, activeLayer,
@@ -789,6 +809,19 @@ int main(int argc, char** argv) {
                     const game::ItemId arm = game::equipped_armour(inv);
                     const game::MeleeDef* md = game::melee_for_item(wpn);
                     if (!md) md = &game::unarmed_melee();
+                    // The firearm, when there is one. Named separately from the
+                    // melee line because they are different loadout slots, not two
+                    // spellings of the same one.
+                    if (const game::ItemId g_ = game::equipped_ranged(inv)) {
+                        const game::RangedDef* rd = game::ranged_for_item(g_);
+                        const auto* prs = reg.try_get<game::PlayerRanged>(player);
+                        if (rd)
+                            ImGui::Text("gun: %s  %u x%u dmg  %u/%u mag  "
+                                        "%u shots %u hits",
+                                        game::item_name(g_), rd->dmg, rd->pellets,
+                                        prs ? prs->magCount : 0, rd->magazine,
+                                        prs ? prs->shots : 0, prs ? prs->hits : 0);
+                    }
                     ImGui::Text("weapon: %s (%u dmg) | armour: %s",
                                 wpn == game::kInvalidItem ? "fists"
                                                           : game::item_name(wpn),

@@ -22,6 +22,7 @@
 #include "game/mob_table.h"
 #include "game/item_table.h"
 #include "game/loot.h"
+#include "game/ranged_table.h"
 #include "game/weapon_table.h"
 #include "game/mob_spawn.h"
 #include "game/floor_stream.h"
@@ -2348,6 +2349,141 @@ static void test_mob_behaviour() {
     CHECK(carriers == 5);   // one kind each
 }
 
+
+// Player firearms. Three of these assertions guard failures that would have shipped
+// silently, and they are first for that reason.
+static void test_ranged_table() {
+    static_assert(sizeof(RangedDef) == 16);
+    CHECK(kRangedTable.size() == kRangedCount);
+
+    // 1. THE ONE-BASED INDEX. kRangedByItem stores slot+1, because 0 means "not a
+    //    firearm" and slot 0 is makarov — a real gun. A raw index would make the very
+    //    first weapon in the table permanently unreachable, and silently, since the
+    //    lookup would read as "this item is not a weapon". Every row must be findable
+    //    by its own item id.
+    int reachable = 0;
+    for (ItemId i = 1; i <= kItemCount; ++i)
+        if (ranged_for_item(i)) ++reachable;
+    CHECK(reachable == static_cast<int>(kRangedCount));
+
+    // Every row's ammo must resolve to a real AMMO item. A weapon pointed at a tin of
+    // stew is an unloadable gun, and the generator would rather fail the build.
+    for (const RangedDef& d : kRangedTable) {
+        CHECK(item_valid(d.ammo));
+        CHECK(static_cast<ItemCategory>(item_def(d.ammo).category) ==
+              ItemCategory::Ammo);
+        CHECK(d.dmg > 0 && d.pellets >= 1 && d.magazine >= 1);
+        CHECK(d.cooldownMs > 0 && d.projSpeedMmps > 0);
+    }
+
+    // 2. THE SPREAD UNIT. spreadE4 is radians x 1e-4, and the choice is load-bearing:
+    //    ptrs_liquidator is authored at 0.0015 rad, which milliradians would round to
+    //    2 — a 33% error on the game's most precise weapon. Assert both ends of the
+    //    range survive the encoding, which is what pins the unit.
+    std::uint16_t minSpread = 0xFFFFu, maxSpread = 0;
+    for (const RangedDef& d : kRangedTable) {
+        if (d.spreadE4 && d.spreadE4 < minSpread) minSpread = d.spreadE4;
+        if (d.spreadE4 > maxSpread) maxSpread = d.spreadE4;
+    }
+    CHECK(minSpread == 15);     // 0.0015 rad, intact rather than rounded to 2
+    CHECK(maxSpread == 4600);   // granit4u's 0.46 rad, which microradians would overflow
+
+    // Shotguns are the pellet weapons and their damage is PER PELLET, so a burst is
+    // dmg x pellets. Pin the extreme so a future CSV pass cannot quietly turn a
+    // 96-damage blast into an 8-damage one.
+    const RangedDef* granit = nullptr;
+    for (ItemId i = 1; i <= kItemCount; ++i)
+        if (const RangedDef* d = ranged_for_item(i))
+            if (d->pellets == 12) granit = d;
+    CHECK(granit != nullptr);
+    CHECK(granit->dmg * granit->pellets == 96);
+
+    // DPS picking: the best gun in an inventory must be chosen by BURST dps, so a
+    // 12-pellet shotgun beats a weapon with higher per-hit damage and a slower cycle.
+    // Picking on `dmg` alone would rate the shotgun eighth-best.
+    ItemId shotgunId = kInvalidItem, rifleId = kInvalidItem;
+    for (ItemId i = 1; i <= kItemCount; ++i) {
+        const RangedDef* d = ranged_for_item(i);
+        if (!d) continue;
+        if (d->pellets == 12) shotgunId = i;
+        if (d->dmg == 170) rifleId = i;   // ptrs_liquidator
+    }
+    CHECK(shotgunId && rifleId);
+    CHECK(ranged_dps(*ranged_for_item(shotgunId)) >
+          ranged_dps(*ranged_for_item(rifleId)));
+
+    Inventory inv;
+    CHECK(equipped_ranged(inv) == kInvalidItem);   // empty hands are not a gun
+    inv.slots[0] = ItemSlot{rifleId, 1};
+    CHECK(equipped_ranged(inv) == rifleId);
+    inv.slots[1] = ItemSlot{shotgunId, 1};
+    CHECK(equipped_ranged(inv) == shotgunId);      // higher burst dps wins
+
+    // 3. THE SELF-HIT ARITHMETIC, asserted rather than trusted.
+    //    A shot born at the shooter with only +0.6 z, from a makarov at 22 cells/s,
+    //    advances one 120 Hz step and lands INSIDE kProjHitRadius of its own shooter.
+    //    That is why kMuzzleForward exists, and this is the calculation that proves
+    //    the naive placement was fatal — for the player AND for all 13 ranged monster
+    //    kinds, which would each have killed themselves on their first shot.
+    {
+        const RangedDef* mak = nullptr;
+        for (ItemId i = 1; i <= kItemCount; ++i)
+            if (const RangedDef* d = ranged_for_item(i))
+                if (d->dmg == 22 && d->magazine == 8) mak = d;
+        CHECK(mak != nullptr);
+        const float speed =
+            static_cast<float>(mak->projSpeedMmps) * 0.001f * kCellSize;  // 44 m/s
+        const float step = speed / 120.0f;                                // 0.367 m
+        const float naive = step * step + 0.6f * 0.6f;
+        CHECK(naive < kProjHitRadius * kProjHitRadius);   // the bug, quantified
+        // And with the muzzle offset it is clear of the shooter immediately.
+        const float fixed_ = (kMuzzleForward + step) * (kMuzzleForward + step);
+        CHECK(fixed_ > kProjHitRadius * kProjHitRadius);
+    }
+
+    // Gravity: a player bullet must fly FLATTER than a monster's lob, because a
+    // camera-aimed shot cannot be gravity-compensated without being an aimbot.
+    static_assert(kPlayerGravityPct < 100,
+                  "a camera-aimed shot cannot be gravity-compensated, so it must fly "
+                  "flatter than a monster's lob");
+    static_assert(kPlayerGravityPct == 40,
+                  "the reference's own 2.4 / 6.0 ratio, not a guess");
+
+    // 4. THE AMMO SUPPLY. Every AMMO row has spawn weight 0, so the loot roller can
+    //    never produce a bullet — a fact, not an opinion. If this ever becomes false
+    //    the bundling rule is redundant and should be reconsidered rather than
+    //    silently doubled up.
+    int ammoRows = 0, ammoWithWeight = 0;
+    for (ItemId i = 1; i <= kItemCount; ++i) {
+        if (static_cast<ItemCategory>(item_def(i).category) != ItemCategory::Ammo)
+            continue;
+        ++ammoRows;
+        if (item_def(i).spawnWeight != 0) ++ammoWithWeight;
+    }
+    CHECK(ammoRows == 17);
+    CHECK(ammoWithWeight == 0);   // hence drop_weapon_ammo
+
+    // The bundle itself: dropping a gun must put reachable ammo of the RIGHT kind
+    // beside it. Without this the increment ships a gun you can never load.
+    {
+        Registry reg;
+        const std::uint32_t made =
+            drop_weapon_ammo(reg, 0, vec3{10.0f, 10.0f, 4.0f}, shotgunId, 12345u);
+        CHECK(made == 1);
+        int found = 0;
+        for (auto e : reg.view<const Pickup>()) {
+            const Pickup& pk = reg.get<const Pickup>(e);
+            CHECK(pk.item == ranged_for_item(shotgunId)->ammo);
+            CHECK(pk.count >= 4 && pk.count <= 11);   // the shotgun rule
+            ++found;
+        }
+        CHECK(found == 1);
+        // A melee weapon bundles nothing — the rule must not fire for a crowbar.
+        Registry r2;
+        CHECK(drop_weapon_ammo(r2, 0, vec3{1, 1, 1}, kInvalidItem, 1u) == 0);
+    }
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -2393,6 +2529,7 @@ int main() {
     test_extraction();
     test_extraction_reachable();
     test_mob_behaviour();
+    test_ranged_table();
     test_needs_all();
     test_samosbor_all();
 

@@ -77,6 +77,22 @@ std::int32_t pickup_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId la
 std::int16_t use_best_heal(Registry& reg, NpcPool& pool, EventBus& bus,
                            LayerId layer, std::uint64_t tick);
 
+// How much ammo drops alongside a firearm, from the reference's own bundling rule.
+//
+// **Without this the firearm increment is unplayable, and the reason is a data fact
+// rather than a design opinion: every one of the 17 AMMO rows in items.csv has
+// `spawn_w_milli == 0`.** `drop_mob_loot` rolls the global catalog BY WEIGHT, so it
+// can never produce a single bullet — while guns spawn freely at weight 1000. A
+// player would find a Makarov and never be able to load it.
+//
+// The reference does not solve this with loot weights either; it bundles ammo at the
+// moment a weapon drops. Shotguns get 4..11 shells; everything else gets
+// max(10, magazine) + 0..19 rounds. So a Makarov (mag 8) yields 10..29 and an RPL-23
+// (mag 100) yields 100..119 — the magazine size decides the bundle, which keeps a
+// belt-fed LMG from being a paperweight.
+std::uint32_t drop_weapon_ammo(Registry& reg, LayerId layer, const vec3& pos,
+                               ItemId weapon, std::uint32_t seed);
+
 // Total rouble value of an inventory. For the HUD and the extraction score.
 std::int32_t inventory_value(const Inventory& inv);
 

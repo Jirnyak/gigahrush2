@@ -9,6 +9,7 @@
 #include "game/embody.h"
 #include "game/mob_spawn.h"  // MobRef
 #include "game/mob_table.h"
+#include "game/ranged_table.h"
 #include "world/types.h"
 
 namespace giga::game {
@@ -122,8 +123,48 @@ std::uint32_t drop_mob_loot(Registry& reg, LayerId layer, const vec3& pos,
         reg.emplace<Renderable>(e, Renderable{kPickupColor});
         reg.emplace<Pickup>(e, Pickup{id, 1});
         ++made;
+        // A gun without bullets is a paperweight. Bundle its ammo at the moment it
+        // drops, because the loot roller CANNOT produce ammo any other way — every
+        // AMMO row has spawn weight 0. [loot.h drop_weapon_ammo]
+        made += drop_weapon_ammo(reg, layer, tr.pos, id, seed ^ (j * 0x2545F491u));
     }
     return made;
+}
+
+std::uint32_t drop_weapon_ammo(Registry& reg, LayerId layer, const vec3& pos,
+                               ItemId weapon, std::uint32_t seed) {
+    const RangedDef* def = ranged_for_item(weapon);
+    if (!def) return 0;
+    const std::uint32_t h = mix(seed ^ 0xA11A3300u);
+
+    // Shotguns get shells by the handful; everything else gets at least a magazine
+    // plus change, so the magazine size — not the item's rarity — decides the bundle.
+    std::uint16_t count;
+    if (def->pellets > 1)
+        count = static_cast<std::uint16_t>(4u + (h % 8u));            // 4..11
+    else {
+        const std::uint16_t base = def->magazine > 10 ? def->magazine : 10;
+        count = static_cast<std::uint16_t>(base + (h % 20u));         // base..base+19
+    }
+    // Never exceed the item's own stack cap, or a single pickup would carry more than
+    // an inventory slot can legally hold and pickup_step would silently drop the rest.
+    const std::uint8_t cap = item_def(def->ammo).stackMax;
+    if (cap && count > cap) count = cap;
+
+    Entity e = reg.create();
+    Transform tr;
+    // Beside the gun, not inside it: two pickups at the same point are one pickup you
+    // can see.
+    tr.pos = vec3{pos.x + 0.45f, pos.y - 0.35f, pos.z};
+    tr.layer = layer;
+    reg.emplace<Transform>(e, tr);
+    reg.emplace<Velocity>(e);
+    reg.emplace<AABB>(e, AABB{kPickupHalf});
+    reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
+    reg.emplace<Renderable>(e, Renderable{kPickupColor});
+    reg.emplace<Pickup>(e, Pickup{def->ammo, static_cast<std::uint8_t>(
+                                                 count > 255 ? 255 : count)});
+    return 1;
 }
 
 std::uint32_t loot_dead_mobs(Registry& reg, LayerId layer, int floorNumber,

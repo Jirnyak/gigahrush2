@@ -36,7 +36,8 @@
 #include "ecs/registry.h"
 #include "game/event_bus.h"
 #include "game/inventory.h"
-#include "game/item_table.h"   // ItemId, for the equipped-loadout helpers
+#include "game/item_table.h"
+#include "game/ranged_table.h"   // ItemId, for the equipped-loadout helpers
 #include "game/npc_pool.h"
 #include "world/level_stack.h"
 #include "world/macro_grid.h"
@@ -90,6 +91,52 @@ struct Projectile {
     Entity source = entt::null;   // for the kill feed; may already be dead
     std::int16_t dmg = 0;
     std::uint16_t ttlMs = 0;      // hard bound, so a stray shot cannot live forever
+    // Percent of kProjGravity this shot obeys. 100 for a monster, kPlayerGravityPct
+    // for the player.
+    //
+    // These two bytes are what keep ONE projectile system instead of two. A monster
+    // auto-aims at a known point and therefore gets a gravity-compensated lob
+    // (`vz = dz/tof + 0.5*g*tof`, below). The player aims with the camera and cannot
+    // be handed that compensation without it being an aimbot — so a player bullet
+    // gets a flatter arc instead. Forking projectile_step to express that would mean
+    // maintaining two integrators forever.
+    std::uint8_t gravityPct = 100;
+    // 0 = fired by a monster, 1 = fired by the player. Decides who it may hit.
+    //
+    // It exists so that giving player bullets the ability to damage monsters does not
+    // silently also create monster-on-monster friendly fire: once projectiles test
+    // MobRef at all, a monster shooting past another monster would hit it. One branch
+    // keeps that from being an accident. faction_relations.h is available if a richer
+    // answer is ever wanted.
+    std::uint8_t team = 0;
+};
+
+// Fraction of gravity a player bullet obeys, in percent. The reference's NORMAL
+// projectile gravity is 1.2 spriteZ/s^2 over a 2 m cell, i.e. ~2.4 m/s^2, against our
+// kProjGravity of 6.0 — so 40% reproduces its trajectory rather than guessing one.
+inline constexpr std::uint8_t kPlayerGravityPct = 40;
+
+// How far in front of the eye a player bullet is born, metres.
+//
+// NOT cosmetic — without it the player shoots himself on the first frame, and the
+// arithmetic is decisive: a shot spawned at the body with only +0.6 z, fired from a
+// makarov at 44 m/s, advances 0.37 m in one 120 Hz step, giving
+// d^2 = 0.37^2 + 0.6^2 = 0.497 against kProjHitRadius^2 = 0.5625. It hits. The
+// reference uses 0.85 cells; this is that.
+inline constexpr float kMuzzleForward = 1.7f;
+
+// The camera holder's firearm state. A sibling of PlayerMelee rather than an
+// extension of it, so one body can carry both a pipe and a pistol.
+//
+// `weapon` records which gun the magazine belongs to: swapping guns empties it, since
+// a magazine of shells is not a magazine of 9mm. Attached lazily, like PlayerMelee.
+struct PlayerRanged {
+    std::uint16_t cooldownMs = 0;
+    std::uint16_t reloadMs = 0;
+    std::uint16_t magCount = 0;
+    ItemId weapon = 0;
+    std::uint32_t shots = 0;    // cumulative; survives possession like kills does
+    std::uint32_t hits = 0;
 };
 
 // The camera holder's swing state. Attached lazily by player_melee_step, so
@@ -203,6 +250,19 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
 //
 // `wantsAttack` is edge-or-held at the caller's discretion; the cooldown is what
 // bounds the rate either way. Returns true if a swing actually landed.
+// The player's firearm, and the structural twin of player_melee_step: resolve the
+// camera holder, attach state lazily, decrement the cooldown EXACTLY ONCE at the top
+// (defect 3 above), pick the best gun in the inventory, spend one round of its ammo,
+// and launch `pellets` projectiles down the camera ray inside the weapon's spread.
+//
+// ONE round per shot regardless of pellet count — a shotgun blast costs one shell and
+// produces up to twelve projectiles, which is the reference's rule.
+//
+// Belongs immediately after player_melee_step in the sim order. Returns shots fired
+// (0 or 1 per call; a pellet spread is one shot).
+std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
+                                 bool wantFire, float dt, std::uint64_t tick);
+
 bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId layer,
                        float dt, bool wantsAttack, std::uint64_t tick);
 

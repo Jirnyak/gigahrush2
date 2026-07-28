@@ -10,6 +10,7 @@
 #include "game/mob_spawn.h"
 #include "game/mob_behaviour.h"
 #include "game/mob_table.h"
+#include "game/ranged_table.h"
 #include "game/weapon_table.h"
 #include "sim/camera.h"   // camera_forward
 #include "world/macro_grid.h"
@@ -36,6 +37,11 @@ std::int16_t mitigate(std::int16_t raw, std::int8_t resistPct) {
 void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
                       const vec3& to, std::int16_t dmg,
                       std::uint16_t projSpeedMmps, Entity source);
+// The player's launch: an explicit direction, no lob compensation, flatter gravity.
+void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
+                          const vec3& dir, std::int16_t dmg,
+                          std::uint16_t projSpeedMmps, Entity source,
+                          std::uint8_t gravityPct, std::uint8_t team);
 
 } // namespace
 
@@ -378,7 +384,36 @@ void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
     // Hot white-yellow: a shot must read against both the monster palette (the red
     // axis) and the faction one, so it is brighter than anything else in the frame.
     reg.emplace<Renderable>(e, Renderable{vec3{1.00f, 0.95f, 0.70f}});
-    reg.emplace<Projectile>(e, Projectile{source, dmg, kProjTtlMs});
+    // gravityPct 100, team 0: a monster shot, fully compensated, and it may only
+    // damage the camera holder.
+    reg.emplace<Projectile>(e, Projectile{source, dmg, kProjTtlMs, 100, 0});
+}
+
+void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
+                          const vec3& dir, std::int16_t dmg,
+                          std::uint16_t projSpeedMmps, Entity source,
+                          std::uint8_t gravityPct, std::uint8_t team) {
+    float speed = static_cast<float>(projSpeedMmps) * 0.001f * kCellSize;
+    if (speed < 1.0f) speed = 12.0f;
+    const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+    if (len < 1e-4f) return;
+    const float inv = 1.0f / len;
+
+    Entity e = reg.create();
+    Transform tr;
+    // Born kMuzzleForward metres in front of the eye. Without this the first
+    // integration step lands inside kProjHitRadius of the shooter — see the constant.
+    tr.pos = vec3{from.x + dir.x * inv * kMuzzleForward,
+                  from.y + dir.y * inv * kMuzzleForward,
+                  from.z + dir.z * inv * kMuzzleForward};
+    tr.layer = layer;
+    reg.emplace<Transform>(e, tr);
+    reg.emplace<Velocity>(e, Velocity{vec3{dir.x * inv * speed,
+                                           dir.y * inv * speed,
+                                           dir.z * inv * speed}});
+    reg.emplace<AABB>(e, AABB{vec3{0.10f, 0.10f, 0.10f}});
+    reg.emplace<Renderable>(e, Renderable{vec3{1.00f, 0.95f, 0.70f}});
+    reg.emplace<Projectile>(e, Projectile{source, dmg, kProjTtlMs, gravityPct, team});
 }
 
 } // namespace
@@ -404,7 +439,13 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
 
     // Same two-phase discipline as the attack step, for the same reason:
     // apply_damage can create the Dead pool and dangle a live view.
-    struct Hit { Entity proj; std::int16_t dmg; Entity source; bool onVictim; };
+    struct Hit {
+        Entity proj;
+        std::int16_t dmg;
+        Entity source;
+        bool onVictim;
+        Entity mob = entt::null;   // set instead of onVictim for player shots
+    };
     std::vector<Hit> resolved;
 
     for (auto e : reg.view<Projectile, Transform, Velocity>()) {
@@ -418,7 +459,10 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         else
             p.ttlMs = 0;
 
-        v.v.z -= kProjGravity * dt;
+        // Per-projectile gravity. A monster's lob is compensated for full gravity;
+        // a camera-aimed player shot cannot be, so it flies flatter instead. One
+        // integrator, two trajectories. [combat.h Projectile::gravityPct]
+        v.v.z -= kProjGravity * (static_cast<float>(p.gravityPct) * 0.01f) * dt;
         tr.pos.x = wrapf(tr.pos.x + v.v.x * dt, kWorldExtent);
         tr.pos.y = wrapf(tr.pos.y + v.v.y * dt, kWorldExtent);
         tr.pos.z += v.v.z * dt;
@@ -428,7 +472,15 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
             continue;
         }
 
-        if (victim != entt::null) {
+        // The camera holder, but NEVER by his own bullet.
+        //
+        // `p.source != victim` is not defensive tidiness — without it the player
+        // shoots himself the instant he fires. `Projectile::source` was carried for
+        // the kill feed and read by nothing until now; the muzzle offset
+        // (kMuzzleForward) and this test are the two halves of the fix and neither is
+        // sufficient alone, because a shot fired straight down still passes through
+        // the shooter on its way to the floor.
+        if (victim != entt::null && p.source != victim) {
             const float hx = wrap_delta_f(tr.pos.x, victimPos.x, kWorldExtent);
             const float hy = wrap_delta_f(tr.pos.y, victimPos.y, kWorldExtent);
             const float hz = wrap_delta_f(tr.pos.z, victimPos.z, kWorldExtent);
@@ -436,6 +488,35 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                 resolved.push_back(Hit{e, p.dmg, p.source, true});
                 continue;
             }
+        }
+
+        // Monsters, but ONLY for player shots.
+        //
+        // Gating on `team` is what stops this from silently inventing monster-on-
+        // monster friendly fire: 13 kinds shoot, and once projectiles test MobRef at
+        // all, every shot fired past another monster would hit it.
+        //
+        // And `p.source != m` matters even more here than above. A mob's shot is born
+        // 0.6 m from its own chest, kProjHitRadius is 0.75 m, so on the very next step
+        // EVERY ranged monster would kill itself. That is not a hypothetical: it is
+        // arithmetic, and it would have looked like ranged monsters mysteriously
+        // dropping dead the moment they attacked.
+        if (p.team == 1) {
+            bool struck = false;
+            for (auto m : reg.view<const MobRef, const Transform>()) {
+                if (m == p.source) continue;
+                const Transform& mt = reg.get<const Transform>(m);
+                if (mt.layer != layer) continue;
+                const float hx = wrap_delta_f(tr.pos.x, mt.pos.x, kWorldExtent);
+                const float hy = wrap_delta_f(tr.pos.y, mt.pos.y, kWorldExtent);
+                const float hz = wrap_delta_f(tr.pos.z, mt.pos.z, kWorldExtent);
+                if (hx * hx + hy * hy + hz * hz > kProjHitRadius * kProjHitRadius)
+                    continue;
+                resolved.push_back(Hit{e, p.dmg, p.source, false, m});
+                struck = true;
+                break;
+            }
+            if (struck) continue;
         }
 
         // Solid geometry stops it. Cell-level rather than sub-voxel on purpose: a
@@ -455,12 +536,139 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
             DamageResult r = apply_damage(reg, pool, victim, h.dmg,
                                           DamageChannel::Kinetic, h.source);
             if (r.hit) ++hits;
+        } else if (h.mob != entt::null && reg.valid(h.mob)) {
+            DamageResult r = apply_damage(reg, pool, h.mob, h.dmg,
+                                          DamageChannel::Kinetic, h.source);
+            if (r.hit) {
+                ++hits;
+                // Credit the shooter, the same way the melee path credits a swing.
+                if (reg.valid(h.source))
+                    if (auto* pr = reg.try_get<PlayerRanged>(h.source)) ++pr->hits;
+            }
         }
         if (reg.valid(h.proj)) reg.destroy(h.proj);
     }
     (void)bus;
     (void)tick;
     return hits;
+}
+
+std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
+                                 bool wantFire, float dt, std::uint64_t tick) {
+    Entity shooter = entt::null;
+    for (auto e : reg.view<const CameraTag, const Transform>()) {
+        if (reg.get<const Transform>(e).layer != layer) continue;
+        shooter = e;
+        break;
+    }
+    if (shooter == entt::null) return 0;
+
+    // Lazily attached, like PlayerMelee: possessing a new body after death must not
+    // have to remember to add it.
+    PlayerRanged& pr = reg.get_or_emplace<PlayerRanged>(shooter);
+
+    const std::uint16_t elapsedMs =
+        static_cast<std::uint16_t>(dt * 1000.0f + 0.5f);
+
+    // Decremented EXACTLY ONCE, at the top, before any early-out. Defect 3: the
+    // reference decremented cooldowns at ~60 sites and some monsters out-attacked
+    // their own authored rate.
+    if (pr.cooldownMs > elapsedMs) pr.cooldownMs -= elapsedMs; else pr.cooldownMs = 0;
+    if (pr.reloadMs > elapsedMs) pr.reloadMs -= elapsedMs; else pr.reloadMs = 0;
+
+    const NpcRef* nr = reg.try_get<NpcRef>(shooter);
+    if (!nr || !pool.valid(nr->id)) return 0;
+    Inventory& inv = pool.inventory(nr->id);
+
+    const ItemId gun = equipped_ranged(inv);
+    const RangedDef* def = ranged_for_item(gun);
+    if (!def) return 0;
+
+    // Swapping guns empties the magazine: a magazine of shells is not a magazine of
+    // 9mm, and carrying the count across would let a shotgun fire rifle rounds.
+    if (pr.weapon != gun) {
+        pr.weapon = gun;
+        pr.magCount = 0;
+        pr.reloadMs = 0;
+    }
+
+    if (pr.reloadMs > 0) return 0;
+
+    if (pr.magCount == 0) {
+        // Reload: move up to a magazine's worth out of the inventory. Counting first
+        // and only starting the timer if something is actually there, so an empty
+        // pack does not lock the player into a permanent reload.
+        std::uint16_t want = def->magazine;
+        std::uint16_t got = 0;
+        for (ItemSlot& sl : inv.slots) {
+            if (got >= want) break;
+            if (sl.item != def->ammo || sl.count == 0) continue;
+            const std::uint16_t take =
+                static_cast<std::uint16_t>(sl.count < (want - got) ? sl.count
+                                                                   : (want - got));
+            sl.count = static_cast<std::uint16_t>(sl.count - take);
+            if (sl.count == 0) sl.item = kInvalidItem;
+            got = static_cast<std::uint16_t>(got + take);
+        }
+        if (got == 0) return 0;   // out of ammo entirely; nothing to do but not fire
+        pr.magCount = got;
+        pr.reloadMs = def->reloadMs;
+        return 0;
+    }
+
+    if (!wantFire || pr.cooldownMs > 0) return 0;
+
+    const CameraTag& cam = reg.get<const CameraTag>(shooter);
+    const Transform& tr = reg.get<const Transform>(shooter);
+    const vec3 eye{tr.pos.x + cam.eyeOffset.x, tr.pos.y + cam.eyeOffset.y,
+                   tr.pos.z + cam.eyeOffset.z};
+    const vec3 fwd = camera_forward(cam.yaw, cam.pitch);
+
+    // Spread is applied as a CONE, not as the reference's yaw-only jitter. The
+    // reference is 2.5D, so jittering yaw alone was correct there; in true 3D it
+    // would put a shotgun's pellets in a dead-flat horizontal line, which reads as a
+    // bug rather than as a spread.
+    const float spread = static_cast<float>(def->spreadE4) * 1e-4f;
+    // Any two vectors perpendicular to fwd. Guarding on |fwd.z| rather than fwd.x
+    // keeps the cross product well-conditioned when looking straight up or down.
+    vec3 up = (fwd.z > 0.9f || fwd.z < -0.9f) ? vec3{1, 0, 0} : vec3{0, 0, 1};
+    vec3 rt{fwd.y * up.z - fwd.z * up.y, fwd.z * up.x - fwd.x * up.z,
+            fwd.x * up.y - fwd.y * up.x};
+    float rl = std::sqrt(rt.x * rt.x + rt.y * rt.y + rt.z * rt.z);
+    if (rl < 1e-4f) return 0;
+    rt = vec3{rt.x / rl, rt.y / rl, rt.z / rl};
+    vec3 ud{rt.y * fwd.z - rt.z * fwd.y, rt.z * fwd.x - rt.x * fwd.z,
+            rt.x * fwd.y - rt.y * fwd.x};
+
+    std::uint32_t seed = static_cast<std::uint32_t>(tick) * 0x9e3779b9u ^
+                         static_cast<std::uint32_t>(entt::to_integral(shooter));
+    for (std::uint8_t i = 0; i < def->pellets; ++i) {
+        // splitmix-ish, the same idiom the spawner and the loot roller use.
+        seed += 0x9e3779b9u;
+        std::uint32_t h = seed;
+        h ^= h >> 16; h *= 0x7feb352du;
+        h ^= h >> 15; h *= 0x846ca68bu;
+        h ^= h >> 16;
+        const float a = static_cast<float>(h & 0xFFFFu) / 65535.0f * 6.2831853f;
+        const float r = static_cast<float>((h >> 16) & 0xFFFFu) / 65535.0f;
+        // sqrt(r) so pellets are uniform over the cone's DISC rather than piling up
+        // in the middle, which is what a bare uniform radius would do.
+        const float m = std::sqrt(r) * spread * 0.5f;
+        const float ox = std::cos(a) * m, oy = std::sin(a) * m;
+        const vec3 dir{fwd.x + rt.x * ox + ud.x * oy,
+                       fwd.y + rt.y * ox + ud.y * oy,
+                       fwd.z + rt.z * ox + ud.z * oy};
+        spawn_projectile_dir(reg, layer, eye, dir,
+                             static_cast<std::int16_t>(def->dmg),
+                             def->projSpeedMmps, shooter, kPlayerGravityPct, 1);
+    }
+
+    // ONE round per shot regardless of pellet count — a shotgun blast costs one shell
+    // and produces up to twelve projectiles. The reference's rule.
+    --pr.magCount;
+    pr.cooldownMs = def->cooldownMs;
+    ++pr.shots;
+    return 1;
 }
 
 bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId layer,
