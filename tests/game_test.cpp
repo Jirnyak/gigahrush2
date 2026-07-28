@@ -1582,6 +1582,134 @@ static void test_macro_migration_determinism() {
     }
 }
 
+// #10d-ii — the budgeted-cursor macro social pass. A bounded ring-scan lazily
+// forms per-NPC relationship edges toward co-floor peers, each seeded from the
+// faction matrix. Verifies edges form, stay in range / co-floor / self-free /
+// duplicate-free, that faction standing drives the seed SIGN, and that the pass is
+// off by default.
+static void test_macro_social() {
+    NpcPool pool;
+    pool.init();
+    const std::uint16_t kFloorCit = 100;  // all-Citizen floor: warm seeds (+)
+    const std::uint16_t kFloorMix = 200;  // Citizen + Wild floor: hostile pairs (-)
+    const int kPerFloor = 60;
+    for (int i = 0; i < kPerFloor; ++i)
+        spawn_aged(pool, 30, kFloorCit, FactionCitizen);
+    for (int i = 0; i < kPerFloor; ++i)
+        spawn_aged(pool, 30, kFloorMix,
+                   (i & 1) ? static_cast<std::uint16_t>(FactionWild)
+                           : static_cast<std::uint16_t>(FactionCitizen));
+
+    MacroSim macro;
+    macro.init(pool);
+    MacroParams p;
+    p.daysPerTick = 30;
+    p.mortalityOnset = 200;  // nobody dies
+    p.maxAge = 200;
+    p.birthRate = 0.0f;      // nobody is born — the population is static
+    p.targetPopulation = 0;
+    // Migration stays OFF (floorHi == floorLo == 0), so floors are static and the
+    // "co-floor" invariant holds for the whole run.
+    p.socialFormRatePerYear = 20.0f;  // formProb >= 1 -> every visited cold record forms
+    p.socialRecordsPerTick = 128;     // cover both floors each tick
+
+    std::uint64_t totalEdges = 0;
+    for (int t = 0; t < 25; ++t) totalEdges += macro.step(pool, p).socialEdges;
+    CHECK(totalEdges > 0);
+
+    int withEdges = 0, negOnMix = 0, negOnCit = 0, edgesSeen = 0;
+    for (NpcId id = 0; id < pool.count(); ++id) {
+        const auto& rel = pool.relations(id);
+        int mine = 0;
+        for (int s = 0; s < kRelSlots; ++s) {
+            if (rel[s].target == kInvalidNpc) continue;
+            ++mine;
+            ++edgesSeen;
+            const NpcId tgt = rel[s].target;
+            CHECK(tgt != id);                          // no self-edges
+            CHECK(pool.alive(tgt));                    // target is a live record
+            CHECK(pool.floor(tgt) == pool.floor(id));  // co-floor peer
+            CHECK(rel[s].affinity >= kRelAffinityMin &&
+                  rel[s].affinity <= kRelAffinityMax);
+            for (int u = s + 1; u < kRelSlots; ++u)    // no duplicate target
+                CHECK(rel[u].target != tgt);
+            if (rel[s].affinity < 0) {
+                if (pool.floor(id) == kFloorMix) ++negOnMix;
+                else ++negOnCit;
+            }
+            // All-Citizen floor: factionAffinity(Cit,Cit)=50, jitter +-40 -> [10,90].
+            if (pool.floor(id) == kFloorCit)
+                CHECK(rel[s].affinity >= 10 && rel[s].affinity <= 90);
+        }
+        if (mine > 0) ++withEdges;
+    }
+    CHECK(withEdges > 0);
+    CHECK(edgesSeen > 0);
+    // Faction standing drives the seed SIGN: the all-Citizen floor never produces a
+    // hostile edge; the Citizen+Wild floor does (factionAffinity(Cit,Wild) = -25).
+    CHECK(negOnCit == 0);
+    CHECK(negOnMix > 0);
+
+    // Off by default: with the rate at 0 the pass forms nothing and leaves every
+    // relationship block untouched (so the demographic/migration tests are safe).
+    NpcPool q;
+    q.init();
+    for (int i = 0; i < 20; ++i) spawn_aged(q, 30, kFloorCit, FactionCitizen);
+    MacroSim m2;
+    m2.init(q);
+    MacroParams pq;  // socialFormRatePerYear defaults to 0
+    pq.mortalityOnset = 200;
+    pq.maxAge = 200;
+    pq.birthRate = 0.0f;
+    pq.targetPopulation = 0;
+    std::uint64_t edges0 = 0;
+    for (int t = 0; t < 10; ++t) edges0 += m2.step(q, pq).socialEdges;
+    CHECK(edges0 == 0);
+    for (NpcId id = 0; id < q.count(); ++id)
+        CHECK(q.relations(id)[0].target == kInvalidNpc);
+}
+
+// The social pass is a deterministic function of (initial pool, params, tick
+// count): two independently built pools grow bit-identical relationship graphs.
+// Locks the stateless-hash stance for the new pass (cf. the migration determinism
+// test above).
+static void test_macro_social_determinism() {
+    auto build = [](NpcPool& pool) {
+        pool.init();
+        for (int i = 0; i < 120; ++i)
+            spawn_aged(pool, 30, static_cast<std::uint16_t>(50),
+                       (i % 3 == 0) ? static_cast<std::uint16_t>(FactionWild)
+                                    : static_cast<std::uint16_t>(FactionCitizen));
+    };
+    NpcPool p1, p2;
+    build(p1);
+    build(p2);
+    MacroSim m1, m2;
+    m1.init(p1);
+    m2.init(p2);
+    MacroParams p;
+    p.daysPerTick = 20;
+    p.mortalityOnset = 200;
+    p.maxAge = 200;
+    p.birthRate = 0.0f;
+    p.targetPopulation = 0;
+    p.socialFormRatePerYear = 8.0f;
+    p.socialRecordsPerTick = 64;
+    for (int t = 0; t < 30; ++t) {
+        MacroStats a = m1.step(p1, p);
+        MacroStats b = m2.step(p2, p);
+        CHECK(a.socialEdges == b.socialEdges);
+    }
+    for (NpcId id = 0; id < p1.count(); ++id) {
+        const auto& r1 = p1.relations(id);
+        const auto& r2 = p2.relations(id);
+        for (int s = 0; s < kRelSlots; ++s) {
+            CHECK(r1[s].target == r2[s].target);
+            CHECK(r1[s].affinity == r2[s].affinity);
+        }
+    }
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -1618,6 +1746,8 @@ int main() {
     test_macro_determinism();
     test_macro_migration();
     test_macro_migration_determinism();
+    test_macro_social();
+    test_macro_social_determinism();
     test_floor_bucket_index();
     test_stream_migration_reembodies();
 

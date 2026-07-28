@@ -3,9 +3,10 @@
 // The macro society sim ([macrosim.md]) runs on its own coarse clock, never the
 // 120 Hz frame, so the question this answers is: how cheap is ONE O(n) columnar
 // sweep over the whole SoA population? That number decides how often the
-// off-screen society can advance without ever touching the render budget. Two
+// off-screen society can advance without ever touching the render budget. Three
 // phases are measured: the demographic sweep alone, then with the budgeted
-// migration pass (#10c) enabled, to show the bounded pass adds no O(n) cost.
+// migration pass (#10c) enabled, then with the budgeted social pass (#10d-ii) also
+// on, to show each bounded pass adds no O(n) cost.
 //
 // Headless: links giga_game + giga_core only, no SDL/Vulkan. An executable, not
 // a ctest — it measures, it does not pass/fail.
@@ -75,5 +76,14 @@ int main() {
     pm.migrateRecordsPerTick = 65536;
     pm.migrateRatePerYear = 1.0f;
     measure(pm, "migration");
+
+    // Phase 3: social pass ALSO on, with a deliberately heavy 65536-record budget
+    // (the realistic 64/tick is free) — an upper bound on what edge formation costs
+    // next to the O(n) sweep. Records fan across 64 floors, so buckets are ~16k
+    // deep and peer draws hit populated rosters.
+    MacroParams ps = pm;
+    ps.socialFormRatePerYear = 1.0f;
+    ps.socialRecordsPerTick = 65536;
+    measure(ps, "social");
     return 0;
 }

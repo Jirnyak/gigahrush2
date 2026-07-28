@@ -14,7 +14,9 @@
 // a persistent ring cursor considers ~migrateRecordsPerTick cold records and may
 // start a multi-tick JOURNEY to another floor, which lands as an O(1) set_floor
 // relabel (the #10b per-floor bucket index) once the coarse clock crosses its ETA.
-// Social/faction passes are the next increment (master_prompt §7 #10d).
+// A second bounded SOCIAL pass (#10d-ii) then lazily forms per-NPC relationship
+// edges toward co-floor peers, seeded from the owned FactionMatrix (#10d-i).
+// Economy is the next increment (master_prompt §7 #10d and beyond).
 //
 // Determinism ([ARCHITECTURE.md] §Determinism): same (initial pool, params, step
 // count) -> same evolution. All per-record randomness is a STATELESS hash of
@@ -28,6 +30,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "game/faction.h"
 #include "game/npc_pool.h"
 
 namespace giga::game {
@@ -57,6 +60,16 @@ struct MacroParams {
     float travelBaseDays = 0.5f;      // ETA days = (base + perFloor*|dz|) * jitter,
     float travelPerFloorDays = 0.25f; //   with jitter in 0.8..1.35 (ref ETA shape)
     std::uint32_t maxJourneys = 8192; // cap on concurrent in-transit records
+
+    // ---- Social graph growth (budgeted ring-scan; master_prompt §7 #10d-ii). --
+    // OFF unless socialFormRatePerYear > 0, so the demographic/migration bench and
+    // tests are byte-for-byte unaffected. When on, a second bounded cursor lazily
+    // FORMS per-NPC relationship edges ([npcs.md] `rel_`) toward co-floor peers,
+    // each seeded from the faction matrix (factionAffinity) — the reference's
+    // describeCandidateEdge acquaintance path. Event-driven drift (combat/quests)
+    // lands with the systems that raise those events; this pass only grows the graph.
+    std::uint32_t socialRecordsPerTick = 64;  // ring-scan budget (ref RECORDS_PER_TICK)
+    float socialFormRatePerYear = 0.0f;       // annual per-capita edge-formation attempts
 };
 
 // Aggregate results of the last step(), for HUD / bench / tests. Cheap running
@@ -68,6 +81,7 @@ struct MacroStats {
     std::uint32_t departures = 0;  // migration journeys STARTED this tick
     std::uint32_t arrivals = 0;    // journeys that LANDED (relabelled) this tick
     std::uint32_t inTransit = 0;   // journeys still pending after this tick
+    std::uint32_t socialEdges = 0; // relationship edges FORMED this tick (#10d-ii)
     std::uint64_t tick = 0;    // macro ticks elapsed (after this step)
     double day = 0.0;          // simulated days elapsed (after this step)
 };
@@ -89,6 +103,13 @@ public:
         return static_cast<std::uint32_t>(journeys_.size());
     }
 
+    // The society's baseline inter-faction attitudes (faction.h), owned here as
+    // society state and read by the social pass to seed new edges. Mutable so
+    // events (a crackdown, an alliance) can shift whole-faction standing; init()
+    // resets it to the ported base.
+    FactionMatrix& factions() { return factions_; }
+    const FactionMatrix& factions() const { return factions_; }
+
 private:
     std::vector<std::uint16_t> ageDays_;  // days lived into the current year [0,365)
 
@@ -104,6 +125,13 @@ private:
     std::vector<Journey> journeys_;        // in-transit records (<= maxJourneys)
     std::vector<std::uint8_t> traveling_;  // per-id: 1 while a journey is pending
     std::uint32_t migCursor_ = 0;          // persistent ring-scan position (ref cursor)
+
+    // ---- Social scratch (macro-owned, master_prompt §7 #10d-ii). The baseline
+    // attitude table the social pass reads, plus its own persistent ring cursor —
+    // independent of the migration cursor so the two passes cover the pool at
+    // their own budgets.
+    FactionMatrix factions_;       // society baseline attitudes (reset in init())
+    std::uint32_t socCursor_ = 0;  // persistent social ring-scan position
 
     std::uint64_t tick_ = 0;
     double day_ = 0.0;

@@ -1,10 +1,11 @@
 # Macrosim — Macro population simulation
 
 > **Status: NPC pool built ([npcs.md](npcs.md)); macro tick built — demographic
-> core (aging + old-age mortality + reserve-drawn births) plus the budgeted-cursor
-> migration pass (#10c).** Social, faction, and economy passes still pending. Game
-> layer, its own module in `src/game/` (the `giga_game` library):
-> `src/game/macro_sim.{h,cpp}`.
+> core (aging + old-age mortality + reserve-drawn births), the budgeted-cursor
+> migration pass (#10c), the faction relation matrix (#10d-i) and the budgeted
+> social pass that grows the relationship graph (#10d-ii).** Event-driven drift and
+> economy passes still pending. Game layer, its own module in `src/game/` (the
+> `giga_game` library): `src/game/macro_sim.{h,cpp}`, `src/game/faction.{h,cpp}`.
 
 The background simulation that advances the **global** NPC population, factions,
 and economy across the whole floor stack — the layer that decides what the world
@@ -212,14 +213,58 @@ utility-AI** (`faction_assault` / `social` intents, [ai.md](ai.md)).
 > #10d-ii drifts. Different ranges and thresholds — the reference keeps them
 > separate and so do we.
 
-### Still pending (master_prompt §7 #10d-ii and beyond)
+### Built — the budgeted-cursor social pass (#10d-ii, 2026-07-28)
 
-- **Macro social pass (#10d-ii).** A second budgeted-cursor pass over cold records
-  that **lazily forms per-NPC relationship edges** (the pool's 16-slot `rel_`
-  block) to co-floor peers, each seeded from the faction matrix's `factionAffinity`
-  plus deterministic jitter — the reference's `describeCandidateEdge` acquaintance
-  path (slot resolution existing → first-empty → evict-weakest). Event-driven
-  drift (combat/quests) lands with the systems that raise those events.
+On top of migration, `step()` now runs a **second bounded ring-scan** — again
+O(budget), not O(n) — that grows the society's **relationship graph** (the pool's
+16-slot `rel_` block, [npcs.md](npcs.md)). A **persistent cursor** (`socCursor_`,
+independent of the migration cursor) walks `socialRecordsPerTick` records per tick
+(default **64** — the reference's `RECORDS_PER_TICK`). For each visited **cold**
+record it rolls a deterministic formation chance (`hash3(id, tick, kSaltSocial)`
+against `socialFormRatePerYear × daysPerTick/365`) and, on success, draws a
+**co-floor peer** from the #10b bucket index (up to `kSocialCandidateTries = 8`
+deterministic tries, skipping self and the dead) and **forms one edge** toward it.
+
+The edge is seeded exactly as the reference's `describeCandidateEdge` acquaintance
+path: initial affinity = **`factionAffinity(a,b)`** — the symmetric quarter-scaled
+average of the two faction-matrix cells, `(attitude(a,b)+attitude(b,a)+2) >> 2`,
+the #10d-i table's **first real consumer** — plus deterministic jitter in `±40`,
+clamped to the social range `[-127,127]` ([npcs.md](npcs.md) `kRelAffinity*`). Slot
+policy is the reference's **existing → first-empty → evict-weakest** (min
+`|affinity|`), so an NPC's 16 edges churn toward the peers it keeps meeting. So two
+Citizens meet warm (base +50) and a Citizen and a Wild meet cold (base −25) — the
+graph is faction-consistent from birth, with no per-edge authoring.
+
+`MacroSim` now **owns the `FactionMatrix`** (society state, reset to base in
+`init()`, mutable via `factions()`), and the social pass reads it. The pass is a
+**faithful subset**: it only **grows** the graph. The reference's ongoing
+relationship *drift* is entirely event-driven (combat, posts, quests, director
+reactions) with **no baseline pull-back**; off-screen cold records raise none of
+those events, so a macro drift pass would have nothing to drive it — drift lands
+with the systems that raise the events (combat → #13, quests → content). We also
+**drop the reference's reserved player slot** (slot 0): the player is just a record
+([npcs.md](npcs.md)), so its edges use the same slots as anyone's.
+
+**Off unless `socialFormRatePerYear > 0`**, so the demographic/migration bench and
+tests are byte-for-byte unaffected. Cost at the full 2²⁰ with a deliberately heavy
+65536-record budget over 64 floors: **+0.11 ms/tick** (3.16 → 3.27 ms —
+`macro_bench`, Release -O3, three phases), i.e. **no O(n) term**; the realistic
+64/tick budget is free. Verified by `test_macro_social` (edges form; every edge is
+in-range, co-floor, self-free and duplicate-free; the all-Citizen floor yields only
+warm edges while the Citizen+Wild floor yields hostile ones — faction standing
+drives the sign; off by default) and `test_macro_social_determinism` (two pools
+grow bit-identical graphs over 30 ticks).
+
+**Not yet ported** (deferred, noted for follow-ups): event-driven edge **drift**
+(needs combat/quest events), the reference's one-hop **social-circle propagation**
+of a delta to a friend's friends (a drift concern, same gate), and its
+post/reaction **director** content.
+
+### Still pending (master_prompt §7 #10d and beyond)
+
+- **Event-driven relationship drift** — combat/quest events nudging `rel_` edges
+  (and faction standing via `nudge_mutual`), with one-hop social-circle
+  propagation. Lands with combat (#13) / quests.
 - **Faction-vs-monster** row + player-standing column — deferred until their
   consumers (mob combat, respawn) exist.
 - Economy dynamics (per-floor commodity stock, trade).

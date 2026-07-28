@@ -64,6 +64,18 @@ struct Relationship {
     std::uint16_t pad = 0;
 };
 
+// Semantics of Relationship::affinity — the per-NPC social graph ([macrosim.md]
+// #10d-ii), which the macro social pass grows and the embodied utility-AI
+// ([ai.md] #12) reads. Ported from the reference's demos social store: a signed
+// valence clamped to [-127,127], classified hostile at or below -64 and friendly
+// at or above 64. This is a SEPARATE store from the faction matrix (faction.h),
+// which has its own narrower ±50 thresholds — do not conflate the two. There is
+// no affinity sentinel: an empty edge is `target == kInvalidNpc`, so -128 is free.
+inline constexpr std::int16_t kRelAffinityMin = -127;
+inline constexpr std::int16_t kRelAffinityMax =  127;
+inline constexpr std::int16_t kRelHostile     =  -64;
+inline constexpr std::int16_t kRelFriendly    =   64;
+
 // Per-NPC flag bits packed into one byte.
 enum NpcFlag : std::uint8_t {
     NpcAlive    = 1u << 0,  // not dead (dead slots stay in the table)

@@ -22,6 +22,20 @@ constexpr std::uint32_t kSaltMigrate = 0x0319a70u;  // does this record depart?
 constexpr std::uint32_t kSaltDest    = 0x0de5700u;  // which floor does it pick?
 constexpr std::uint32_t kSaltEta     = 0x0e7a411u;  // travel-time jitter
 
+// Social hash streams (master_prompt §7 #10d-ii) — independent again, so edge
+// formation is uncorrelated with movement, life, and death.
+constexpr std::uint32_t kSaltSocial       = 0x05c1a10u;  // does this record form an edge?
+constexpr std::uint32_t kSaltSocialPeer   = 0x0bdd1e5u;  // which co-floor peer?
+constexpr std::uint32_t kSaltSocialJitter = 0x0777e13u;  // seed-affinity jitter
+
+// A visited record makes a few deterministic tries to land on a valid distinct
+// co-floor peer before giving up this tick (ref DEMOS_SOCIAL_CANDIDATE_TRIES).
+constexpr int kSocialCandidateTries = 8;
+// Symmetric ± jitter added to the faction-pair baseline when seeding a new edge
+// (ref describeCandidateEdge acquaintance jitter), so same-faction pairs don't all
+// start at an identical affinity.
+constexpr int kSocialSeedJitter = 40;
+
 // Reservoir size for birth-parent sampling. Filled during the sweep via
 // Algorithm R, so choosing parents costs one linear scan, not a search.
 constexpr int kReservoir = 64;
@@ -57,6 +71,57 @@ std::uint16_t pick_dest_floor(NpcId id, std::uint32_t t32, std::uint16_t cur,
     return dst;
 }
 
+// Baseline affinity between two factions — the symmetric quarter-scaled average of
+// the two directed matrix cells (ref factionAffinity = round((rel(a,b)+rel(b,a)) *
+// 0.25)). It biases a NEWLY formed relationship edge toward the factions' standing:
+// two Citizens meet warm, a Citizen and a Wild meet cold. `(sum + 2) >> 2` is
+// round-half-toward-+inf of sum/4 for the signed sum (matching JS Math.round);
+// arithmetic right shift is floor-division by 4 in C++20+. Range: [-25, 50].
+int faction_affinity(const FactionMatrix& fm, std::uint16_t fa, std::uint16_t fb) {
+    int sum = static_cast<int>(fm.attitude(fa, fb)) +
+              static_cast<int>(fm.attitude(fb, fa));
+    return (sum + 2) >> 2;
+}
+
+// Ensure record `a` holds a relationship edge toward `b`, seeded from the pair's
+// faction baseline plus deterministic jitter (ref describeCandidateEdge,
+// acquaintance mode). Slot policy = existing → first-empty → evict-weakest
+// (min |affinity|), the reference's firstEmptySlot / weakestSlot. Returns true iff
+// a NEW edge was created: an already-present edge is left untouched, because the
+// reference has no baseline pull-back and off-screen life raises no drift events —
+// this pass only GROWS the graph ([macrosim.md] #10d-ii).
+bool form_edge(NpcPool& pool, const FactionMatrix& fm, NpcId a, NpcId b,
+               std::uint32_t t32) {
+    auto& rel = pool.relations(a);
+    int firstEmpty = -1;
+    int weakest = 0;
+    int weakestMag = 0x7fffffff;
+    for (int s = 0; s < kRelSlots; ++s) {
+        if (rel[s].target == b) return false;  // already acquainted — leave it
+        if (rel[s].target == kInvalidNpc) {
+            if (firstEmpty < 0) firstEmpty = s;  // remember, but keep scanning for b
+            continue;                            // empty slots are not eviction candidates
+        }
+        int mag = rel[s].affinity < 0 ? -rel[s].affinity : rel[s].affinity;
+        if (mag < weakestMag) {
+            weakestMag = mag;
+            weakest = s;
+        }
+    }
+    const int slot = firstEmpty >= 0 ? firstEmpty : weakest;
+
+    const int base = faction_affinity(fm, pool.faction(a), pool.faction(b));
+    const int jit = static_cast<int>(rand_below(hash3(a, b, kSaltSocialJitter ^ t32),
+                                                2u * kSocialSeedJitter + 1u)) -
+                    kSocialSeedJitter;
+    int val = base + jit;
+    if (val < kRelAffinityMin) val = kRelAffinityMin;
+    if (val > kRelAffinityMax) val = kRelAffinityMax;
+    rel[slot].target = b;
+    rel[slot].affinity = static_cast<std::int16_t>(val);
+    return true;
+}
+
 }  // namespace
 
 void MacroSim::init(const NpcPool& pool) {
@@ -64,6 +129,8 @@ void MacroSim::init(const NpcPool& pool) {
     traveling_.assign(pool.capacity(), 0);
     journeys_.clear();
     migCursor_ = 0;
+    factions_.reset_to_base();  // fresh society baseline (customise after init())
+    socCursor_ = 0;
     tick_ = 0;
     day_ = 0.0;
     stats_ = MacroStats{};
@@ -248,6 +315,51 @@ MacroStats MacroSim::step(NpcPool& pool, const MacroParams& params) {
         migCursor_ = total ? id : 0u;
     }
 
+    // ---- Social: a budgeted ring-scan that LAZILY forms per-NPC relationship
+    // edges toward co-floor peers, each seeded from the faction matrix
+    // (factionAffinity + jitter). O(budget), not O(n) — the reference's
+    // bounded-cursor primitive again, on the same coarse clock. Off unless a
+    // formation rate is configured, so the demographic/migration bench is
+    // untouched. It reads POST-migration buckets, so "co-floor" means the roster
+    // after this tick's arrivals. Only grows the graph; event-driven drift lands
+    // with combat/quests ([macrosim.md] #10d-ii).
+    std::uint32_t socialEdges = 0;
+    if (params.socialFormRatePerYear > 0.0f && params.socialRecordsPerTick > 0) {
+        const float formProb = params.socialFormRatePerYear * yearFrac;
+        const std::uint32_t total = pool.count();
+        std::uint32_t budget = params.socialRecordsPerTick;
+        if (budget > total) budget = total;
+        NpcId id = total ? socCursor_ % total : 0u;
+        for (std::uint32_t k = 0; k < budget; ++k, id = (id + 1u) % total) {
+            // Cold records only: embodied social life is the utility-AI's job on
+            // the live floor ([ai.md] #12), not the macro pass's.
+            if (!pool.alive(id) || pool.embodied(id)) continue;
+            if (rand01(hash3(id, t32, kSaltSocial)) >= formProb) continue;
+
+            const std::uint16_t label = pool.floor(id);
+            if (label == kNoFloorLabel) continue;  // not on a floor -> no peers
+            const std::vector<NpcId>& bucket = pool.floor_bucket(label);
+            if (bucket.size() < 2) continue;  // need someone other than self
+
+            // A few deterministic tries to draw a valid distinct peer from the
+            // #10b co-floor roster (skip self / the dead).
+            NpcId peer = kInvalidNpc;
+            for (int tryi = 0; tryi < kSocialCandidateTries; ++tryi) {
+                std::uint32_t bi =
+                    hash3(id, t32 + static_cast<std::uint32_t>(tryi), kSaltSocialPeer) %
+                    static_cast<std::uint32_t>(bucket.size());
+                NpcId cand = bucket[bi];
+                if (cand == id || !pool.alive(cand)) continue;
+                peer = cand;
+                break;
+            }
+            if (peer == kInvalidNpc) continue;
+
+            if (form_edge(pool, factions_, id, peer, t32)) ++socialEdges;
+        }
+        socCursor_ = total ? id : 0u;
+    }
+
     ++tick_;
     day_ += static_cast<double>(days);
     stats_.living = living;
@@ -256,6 +368,7 @@ MacroStats MacroSim::step(NpcPool& pool, const MacroParams& params) {
     stats_.departures = departures;
     stats_.arrivals = arrivals;
     stats_.inTransit = static_cast<std::uint32_t>(journeys_.size());
+    stats_.socialEdges = socialEdges;
     stats_.tick = tick_;
     stats_.day = day_;
     return stats_;

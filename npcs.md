@@ -157,6 +157,12 @@ invariant that keeps the 2²⁰ population from growing per visit.
   starts multi-tick inter-floor journeys that relabel cold records on arrival
   (through the per-floor bucket index), so any floor's roster is live the next time
   it loads. Aggregate trade/economy is still pending ([macrosim.md](macrosim.md)).
+- **Relationships grow off-screen.** A second budgeted-cursor pass (#10d-ii,
+  [macrosim.md](macrosim.md)) lazily fills each NPC's 16-slot `rel_` block with
+  edges to co-floor peers, seeded from the [faction matrix](macrosim.md) (#10d-i)
+  so acquaintances start faction-consistent (Citizens warm, Wild cold). The graph
+  is thus already populated when the crowd embodies — the #12 `social` intent
+  ([ai.md](ai.md)) has real edges to act on rather than a world of strangers.
 - **Embodied NPCs are ordinary entities.** An embodied NPC that shoots simply
   **spawns a projectile entity** that flies under [physics.md](physics.md) and
   can hit *anyone* — including the NPC that fired it. No attacker/victim special
