@@ -1,0 +1,18 @@
+# Build output
+/build/
+/out/
+
+# CMake FetchContent caches live under build/, but guard the source tree too.
+_deps/
+
+# Editor / OS cruft
+.DS_Store
+*.swp
+compile_commands.json
+.cache/
+
+# ImGui runtime state
+imgui.ini
+
+# Claude Code personal/local settings (not shared)
+.claude/settings.local.json

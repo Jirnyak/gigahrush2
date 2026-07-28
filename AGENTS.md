@@ -1,0 +1,160 @@
+# Agent Instructions — gigahrush2
+
+> **gigahrush2 is a universal voxel *core engine*, not a game.** It provides the
+> substrate — a toroidal 128³ macro world, 8³ sub-voxel masks, runtime typed
+> fields, vector gravity, a level stack, swept-AABB physics, cellular fluid, an
+> attachable ECS camera/controller, and a real Vulkan renderer. Gameplay
+> (floors, quests, NPCs, items, combat) is layered on top as **modules** and ECS
+> systems. Keep the engine core game-agnostic.
+>
+> **⚠ Token economy.** Work to a tight token budget. Do not re-read files
+> already in context, restate large blocks, or emit change-log prose. Stop
+> exploring once you can act. When a check is cheaper for the human to run
+> (a build, a launch, a visual glance), hand it to them instead of burning
+> tokens simulating it. Prefer the smallest surgical edit that solves the task.
+
+## Working Method — *slow is fast*
+
+Do migrations and large refactors **inline, in small steps, building green after
+each one**. Correctness first; speed is a side effect of not backtracking.
+
+- **Never hand a large, interconnected task to an autonomous coding subagent.**
+  Subagents are for **bounded, low-risk** work: read-only research, or one
+  clearly-scoped isolated file — not multi-file architecture.
+- **Keep the build green at every step.** Run the build after each edit. Prefer
+  additive changes that compile *alongside* the old path until the final
+  switch-over.
+- **One verified increment per turn.** Land it, build, hand the visual/runtime
+  check to the human, then continue. Do not chain many unverified edits.
+- **When you must stop, stop GREEN**, and leave a precise written plan so the
+  next agent — even a cheaper one — can continue mechanically.
+
+## Hard Rules
+
+- **No exceptions. No RTTI.** The core is built `-fno-exceptions -fno-rtti`
+  (EnTT with `ENTT_NOEXCEPTION`). Do not use `try`/`catch`/`throw`/
+  `dynamic_cast`/`typeid`. For type identity without RTTI use the `type_tag<T>()`
+  pattern in [src/world/field.h](src/world/field.h).
+- **Core stays dependency-free.** `giga_core` (`src/world`, `src/sim`, `src/ecs`)
+  must not include SDL, Vulkan, or ImGui. It links only EnTT and ships its own
+  math ([src/core/math.h](src/core/math.h)) — no GLM/Eigen. This is what keeps
+  the simulation headless-testable and embeddable.
+- **Render is a pure shell; sim never depends on it.** Rendering is a read-only
+  skin over the sim: data flows **sim → render only**, the renderer mutates no
+  game state, and the game must stay fully "playable" headless with L3 removed
+  (see [render.md](render.md)). Never answer a gameplay question (line-of-fire,
+  reachability, visibility) by reading the framebuffer/depth buffer — that lives
+  in the sim. Fog, culling, and toroidal placement are render-local; deleting
+  them changes pixels, never outcomes.
+- **Always render around the camera.** The world wraps (torus), so every pass
+  draws each cell at its **nearest toroidal image** relative to the camera, never
+  at fixed absolute coordinates — the camera sits at the centre of a seamless
+  shell. Distance fog fades to **black** (not blue) at the `kWorldExtent/2`
+  render radius, which is exactly the minimal-image radius, so the wrap seam is
+  always hidden. Keep `fog end ≤ kWorldExtent/2` and the clear colour black.
+- **Performance first.** Favour better algorithms, contiguous (SoA) data,
+  EnTT views over pointer chasing. Do not allocate per-frame in hot paths.
+- **Native game; CPU is the only scarce resource.** This is a native C++/Vulkan
+  desktop game. Treat disk and GPU as unlimited, RAM as ~8 GB, load time as
+  unbounded — and the **sim tick as sacred: O(n) in live entities/cells**. Two
+  standing consequences (see [performance.md](performance.md)): **(1) dense over
+  sparse** — prefer flat, fully-populated arrays/fields to lazily-allocated
+  sparse structures; a `128³` field is only 2–8 MB. **(2) bake at load, tick in
+  O(n)** — precompute BFS/nav/flow/light maps once at load into flat memory; the
+  tick only does O(1) lookups. Never run BFS/A* or worse-than-O(n) work in the
+  hot path; when geometry mutates, freeze → re-bake → resume.
+- **Data-driven by default.** Adding a cell type / field / monster / loot entry
+  / floor module must be one new table entry or one registered field — never an
+  `if` chain baked into the engine.
+- **The player is not special.** It is simply the entity that currently holds a
+  `CameraTag` + `Controller`. Never hardcode a player singleton; systems operate
+  on whatever entity owns the components.
+- **`LayerId` (storage slot) ≠ floor number (logical label).** The array slot an
+  entity references and the in-game floor number are different concepts; the
+  floor number is a mutable label the macro-system assigns and may reshuffle at
+  runtime. Do not conflate them. See [floors.md](floors.md).
+- **Backend = Vulkan; SDL3 is platform-only.** Rendering targets Vulkan
+  (MoltenVK on macOS). SDL3 is window + input + timing only, never the graphics
+  API. New GPU code lives in `src/render/`.
+- **GLOB is on.** New `.cpp` under `src/{world,sim,ecs}` (core) and
+  `src/{app,input,render}` (app) are auto-picked-up via `CONFIGURE_DEPENDS`. New
+  `.cpp` under `src/game` is globbed into **`giga_game`** the same way. Do not
+  edit `CMakeLists.txt` for individual files.
+- **Gameplay macro-systems live in `giga_game` (`src/game`), not `src/app`.** It
+  links `giga_core` but **not** SDL/Vulkan/ImGui, so it stays headless-testable
+  (`game_test`) and the society sim can run without a GPU. Keep it that way: no
+  platform includes in `src/game`. The NPC pool, inventory, event bus, and mob
+  table belong here ([npcs.md](npcs.md), [macrosim.md](macrosim.md)).
+- **Macrosim is a background module — a game within the game.** The macro NPC
+  society sim ([macrosim.md](macrosim.md)) must remain independently runnable and
+  testable headless: it reads *up* into the action game (embodiment) but never
+  depends on render, input, or the app shell. Don't wire it to the render/present
+  path or the 120 Hz tick; it has its own coarse clock.
+
+## Toroidal + dimensional invariants
+
+- **x/y/z wrap; W does not.** The 128³ macro grid is a torus on all three
+  spatial axes — always normalize coordinates through `wrap_macro` /
+  `wrapi` ([src/core/wrap.h](src/core/wrap.h)). Entity *positions* wrap too:
+  physics wraps `Transform.pos` into `[0, kWorldExtent)` each step, so the torus
+  is real for the agent (fall off any face, re-enter opposite). World-space
+  distance math must use `wrap_delta`. The level stack (W, the 4th coordinate)
+  does **not** wrap: `above`/`below` return `kInvalidLayer` at the ends.
+- **One macro cell ≈ 2 m** (`kCellSize = 2.0`). Speeds/accelerations are real
+  m/s over a 256 m (`kWorldExtent`) torus. Don't assume unit cells.
+- **One macro cell = 8³ sub-voxels** packed into `kSubMaskWords × uint64_t`.
+  Collision tests bitwise against these masks; a fully solid and a half-carved
+  cell cost the same to query.
+- **Gravity is a vector, not a scalar.** Read it via `world.gravity().at(pos)`;
+  never assume −Z.
+
+## File Organization
+
+- One file = one responsibility. Do not split files to satisfy a line count.
+- Split at real architectural seams (pure logic vs. Vulkan code, a shared
+  utility used by 3+ consumers, a dedicated `*_types.h`).
+- Files over ~800 lines should be reviewed; avoid exceeding 1000 unless it is a
+  naturally encapsulated module (renderer, generator).
+
+## C++ Style
+
+- C++23. Prefer `std::uint8_t` / `std::int32_t` — never bare `unsigned int`.
+- POD components (`struct Foo { int x, y; };`). No virtuals on hot data.
+- Headers minimal — forward-declare in headers, include in `.cpp`.
+- No global state. Pass `Registry&`, `World&`, `LevelStack&` explicitly.
+- Use `constexpr` for tunables; group at top of file.
+- Math: use the `vec2/vec3/vec4/mat4` POD helpers in `core/math.h`.
+
+## ECS Conventions (EnTT)
+
+- Components are POD structs in [src/ecs/components.h](src/ecs/components.h).
+  Keep them small; split large blobs into separate components.
+- Systems are free functions (`*_step(Registry&, …, float dt)`) operating on
+  views (`reg.view<A, B>()`). See `src/sim/`.
+- Spawning goes through factory functions, never ad-hoc entity construction
+  scattered across call sites.
+- Tag types carry no data — use `view<Tag>`.
+
+## Build
+
+Native (macOS / Homebrew) — see [README.md](README.md) for dependency install:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+```
+
+Ensure **zero warnings** (`-Wall -Wextra`). Treat warnings as errors in review.
+Shaders (`shaders/*.vert|frag`) compile to SPIR-V at build time via `glslc`; a
+GLSL error surfaces at build time.
+
+## Workflow Checklist
+
+1. Make the smallest change that solves the problem.
+2. Build clean (no warnings) and run `ctest`.
+3. New shader → confirm it compiles (glslc runs in the build).
+4. Update the relevant system `.md` **only** if you added a real subsystem or
+   changed a documented contract; do not document trivial edits.
+5. Do not create stand-alone notes / changelogs / "summary of changes" markdown.
+   Documentation lives in the per-system docs orchestrated by the README.

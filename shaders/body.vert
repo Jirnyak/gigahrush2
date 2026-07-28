@@ -1,0 +1,36 @@
+#version 450
+// Instanced body (box) vertex stage — the population's counterpart to cube.vert.
+//
+// Binding 0 (per-vertex): the same 36-vertex unit cube [0,1]^3 with face normals
+// as the world pass. Binding 1 (per-instance): a body's world-space centre, its
+// AABB half-extents, and an RGB tint. One draw call renders the whole crowd as N
+// boxes. Reuses cube.frag for shading, so bodies are lit and fogged exactly like
+// the world and blend into the toroidal black-fog seam the same way.
+layout(location = 0) in vec3 inPos;      // per-vertex, cube-local [0,1]
+layout(location = 1) in vec3 inNormal;   // per-vertex face normal
+
+layout(location = 2) in vec3 inCenter;   // per-instance body centre (world)
+layout(location = 3) in vec3 inHalf;     // per-instance AABB half-extents
+layout(location = 4) in vec3 inColor;    // per-instance tint
+
+layout(push_constant) uniform Push {
+    mat4 viewProj;
+    vec4 sunDir;   // xyz = direction toward the sun
+    vec4 camPos;   // xyz = camera world position
+    vec4 fog;      // x = fog start, y = fog end
+} pc;
+
+layout(location = 0) out vec3 vNormal;
+layout(location = 1) out vec3 vColor;
+layout(location = 2) out float vViewDist;
+
+void main() {
+    // Map the [0,1] cube corner onto [-half, +half] around the body centre, so
+    // the box spans the AABB exactly (Transform.pos is the centre; AABB is
+    // half-extents). Uniform-sign scale keeps the axis-aligned normals valid.
+    vec3 world = inCenter + (inPos - 0.5) * (inHalf * 2.0);
+    gl_Position = pc.viewProj * vec4(world, 1.0);
+    vNormal = inNormal;
+    vColor = inColor;
+    vViewDist = distance(world, pc.camPos.xyz);
+}

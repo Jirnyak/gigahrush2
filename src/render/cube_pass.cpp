@@ -1,0 +1,331 @@
+#include "render/cube_pass.h"
+
+#include "render/vk_common.h"
+#include "render/vk_device.h"
+
+#include <cmath>
+#include <cstring>
+#include <string>
+#include <vector>
+
+#include "world/world.h"
+
+namespace giga::gpu {
+
+namespace {
+
+struct CubeVertex {
+    vec3 pos;
+    vec3 normal;
+};
+
+// 6 faces * 2 triangles * 3 verts = 36 vertices of a unit cube [0,1]^3, each
+// carrying its outward face normal. Counter-clockwise winding when viewed from
+// outside (front face = CCW to match the pipeline).
+void build_unit_cube(std::vector<CubeVertex>& out) {
+    struct Face { vec3 n; vec3 a, b, c, d; };
+    const Face faces[6] = {
+        // +X
+        {{1, 0, 0}, {1, 0, 0}, {1, 1, 0}, {1, 1, 1}, {1, 0, 1}},
+        // -X
+        {{-1, 0, 0}, {0, 0, 0}, {0, 0, 1}, {0, 1, 1}, {0, 1, 0}},
+        // +Y
+        {{0, 1, 0}, {0, 1, 0}, {0, 1, 1}, {1, 1, 1}, {1, 1, 0}},
+        // -Y
+        {{0, -1, 0}, {0, 0, 0}, {1, 0, 0}, {1, 0, 1}, {0, 0, 1}},
+        // +Z
+        {{0, 0, 1}, {0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1}},
+        // -Z
+        {{0, 0, -1}, {0, 0, 0}, {0, 1, 0}, {1, 1, 0}, {1, 0, 0}},
+    };
+    for (const auto& f : faces) {
+        out.push_back({f.a, f.n});
+        out.push_back({f.b, f.n});
+        out.push_back({f.c, f.n});
+        out.push_back({f.a, f.n});
+        out.push_back({f.c, f.n});
+        out.push_back({f.d, f.n});
+    }
+}
+
+// A colour per cell type. Games can extend this; the core ships sensible
+// defaults so the world is legible out of the box.
+vec3 type_color(CellType t) {
+    switch (t) {
+    case 1: return {0.45f, 0.42f, 0.40f}; // rock / stone
+    case 2: return {0.30f, 0.55f, 0.25f}; // grass / soil
+    case 3: return {0.20f, 0.35f, 0.80f}; // solid water ice / marker
+    case 4: return {0.70f, 0.60f, 0.35f}; // sand
+    default: return {0.75f, 0.75f, 0.78f};
+    }
+}
+
+// A cell is a surface cell (worth drawing) if it is non-empty and at least one
+// of its six neighbours is not fully solid. Fully-buried cells are skipped.
+bool is_visible_surface(const MacroGrid& g, int x, int y, int z) {
+    if (g.mask(x, y, z).empty()) return false;
+    const int d[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0},
+                         {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+    for (auto& n : d)
+        if (!g.mask(x + n[0], y + n[1], z + n[2]).full()) return true;
+    return false;
+}
+
+std::string join(const char* dir, const char* file) {
+    std::string s = dir;
+    if (!s.empty() && s.back() != '/') s += '/';
+    s += file;
+    return s;
+}
+
+bool read_file(const std::string& path, std::vector<char>& out) {
+    std::FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) { std::fprintf(stderr, "[vk] cannot open %s\n", path.c_str()); return false; }
+    std::fseek(f, 0, SEEK_END);
+    long n = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    if (n <= 0) { std::fclose(f); return false; }
+    out.resize(static_cast<std::size_t>(n));
+    std::size_t rd = std::fread(out.data(), 1, static_cast<std::size_t>(n), f);
+    std::fclose(f);
+    return rd == static_cast<std::size_t>(n);
+}
+
+bool make_module(VkDevice dev, const std::vector<char>& spv, VkShaderModule* m) {
+    VkShaderModuleCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    ci.codeSize = spv.size();
+    ci.pCode = reinterpret_cast<const std::uint32_t*>(spv.data());
+    return vkCreateShaderModule(dev, &ci, nullptr, m) == VK_SUCCESS;
+}
+
+} // namespace
+
+bool CubePass::init(VulkanDevice& dev, VkRenderPass renderPass,
+                    const char* shaderDir) {
+    dev_ = &dev;
+    if (!create_cube_mesh()) return false;
+    if (!create_pipeline(renderPass, shaderDir)) return false;
+
+    // Upper bound: one instance per macro cell. In practice surface culling
+    // keeps this far lower, but sizing for the worst case means the buffer
+    // never reallocates mid-run.
+    instanceCapacity_ = static_cast<std::uint32_t>(kMacroCells);
+    VkDeviceSize bytes = static_cast<VkDeviceSize>(instanceCapacity_)
+                       * sizeof(CubeInstance);
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
+        if (!instances_[i].create_host_visible(
+                dev, bytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT))
+            return false;
+    return true;
+}
+
+bool CubePass::create_cube_mesh() {
+    std::vector<CubeVertex> verts;
+    build_unit_cube(verts);
+    vertexCount_ = static_cast<std::uint32_t>(verts.size());
+    return cubeVerts_.create_device_local(
+        *dev_, verts.data(), verts.size() * sizeof(CubeVertex),
+        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+}
+
+bool CubePass::create_pipeline(VkRenderPass renderPass, const char* shaderDir) {
+    std::vector<char> vsrc, fsrc;
+    if (!read_file(join(shaderDir, "cube.vert.spv"), vsrc)) return false;
+    if (!read_file(join(shaderDir, "cube.frag.spv"), fsrc)) return false;
+
+    VkShaderModule vs = VK_NULL_HANDLE, fs = VK_NULL_HANDLE;
+    if (!make_module(dev_->device, vsrc, &vs)) return false;
+    if (!make_module(dev_->device, fsrc, &fs)) {
+        vkDestroyShaderModule(dev_->device, vs, nullptr);
+        return false;
+    }
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vs;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fs;
+    stages[1].pName = "main";
+
+    // Two bindings: 0 = per-vertex cube mesh, 1 = per-instance voxel data.
+    VkVertexInputBindingDescription bindings[2]{};
+    bindings[0].binding = 0;
+    bindings[0].stride = sizeof(CubeVertex);
+    bindings[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    bindings[1].binding = 1;
+    bindings[1].stride = sizeof(CubeInstance);
+    bindings[1].inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
+
+    VkVertexInputAttributeDescription attrs[5]{};
+    attrs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(CubeVertex, pos)};
+    attrs[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(CubeVertex, normal)};
+    attrs[2] = {2, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(CubeInstance, origin)};
+    attrs[3] = {3, 1, VK_FORMAT_R32_SFLOAT, offsetof(CubeInstance, scale)};
+    attrs[4] = {4, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(CubeInstance, color)};
+
+    VkPipelineVertexInputStateCreateInfo vi{};
+    vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vi.vertexBindingDescriptionCount = 2;
+    vi.pVertexBindingDescriptions = bindings;
+    vi.vertexAttributeDescriptionCount = 5;
+    vi.pVertexAttributeDescriptions = attrs;
+
+    VkPipelineInputAssemblyStateCreateInfo ia{};
+    ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo vp{};
+    vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rs{};
+    rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode = VK_CULL_MODE_BACK_BIT;
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms{};
+    ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState cba{};
+    cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
+                       | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    cba.blendEnable = VK_FALSE;
+    VkPipelineColorBlendStateCreateInfo cb{};
+    cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    cb.attachmentCount = 1;
+    cb.pAttachments = &cba;
+
+    VkPipelineDepthStencilStateCreateInfo ds{};
+    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    ds.depthTestEnable = VK_TRUE;
+    ds.depthWriteEnable = VK_TRUE;
+    ds.depthCompareOp = VK_COMPARE_OP_LESS;
+
+    VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dsi{};
+    dsi.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dsi.dynamicStateCount = 2;
+    dsi.pDynamicStates = dyn;
+
+    VkPushConstantRange pcr{};
+    pcr.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pcr.offset = 0;
+    pcr.size = sizeof(CubePush);
+
+    VkPipelineLayoutCreateInfo lci{};
+    lci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    lci.pushConstantRangeCount = 1;
+    lci.pPushConstantRanges = &pcr;
+
+    bool ok = vkCreatePipelineLayout(dev_->device, &lci, nullptr, &layout_)
+              == VK_SUCCESS;
+    if (ok) {
+        VkGraphicsPipelineCreateInfo gp{};
+        gp.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        gp.stageCount = 2;
+        gp.pStages = stages;
+        gp.pVertexInputState = &vi;
+        gp.pInputAssemblyState = &ia;
+        gp.pViewportState = &vp;
+        gp.pRasterizationState = &rs;
+        gp.pMultisampleState = &ms;
+        gp.pColorBlendState = &cb;
+        gp.pDepthStencilState = &ds;
+        gp.pDynamicState = &dsi;
+        gp.layout = layout_;
+        gp.renderPass = renderPass;
+        gp.subpass = 0;
+        ok = vkCreateGraphicsPipelines(dev_->device, VK_NULL_HANDLE, 1, &gp,
+                                       nullptr, &pipeline_) == VK_SUCCESS;
+    }
+
+    vkDestroyShaderModule(dev_->device, vs, nullptr);
+    vkDestroyShaderModule(dev_->device, fs, nullptr);
+    if (!ok) std::fprintf(stderr, "[vk] cube pipeline creation failed\n");
+    return ok;
+}
+
+void CubePass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
+                      const World& world, const CubePush& push) {
+    const MacroGrid& g = world.grid();
+    const vec3 camPos{push.camPos.x, push.camPos.y, push.camPos.z};
+
+    // Fluid field is optional; if present, cells with liquid tint blue.
+    const Field<float>* fluid =
+        const_cast<World&>(world).fields().find<float>("fluid");
+
+    auto* dst = static_cast<CubeInstance*>(instances_[frameIndex].mapped);
+    std::uint32_t count = 0;
+
+    // Toroidal (minimal-image) placement. The world tiles space with period
+    // kWorldExtent on every axis, so we draw each cell not at its absolute grid
+    // origin but at the tile-copy nearest the camera. This wraps the far side of
+    // the torus into view right in front of the player instead of leaving the
+    // background clear-colour showing through the seam. `base` is the camera
+    // snapped to the tile whose [-half, +half) window is centred on it.
+    const float period = kWorldExtent;
+    const float half = 0.5f * period;
+    const vec3 base{std::floor(camPos.x / period) * period,
+                    std::floor(camPos.y / period) * period,
+                    std::floor(camPos.z / period) * period};
+
+    auto nearest = [&](float origin, float b, float c) -> float {
+        // Shift `origin` (in [0,period)) by whole periods into the window
+        // centred on the camera, choosing whichever copy is closest.
+        float p = b + origin;
+        if (p - c > half) p -= period;
+        else if (c - p > half) p += period;
+        return p;
+    };
+
+    for (int z = 0; z < kMacroDim && count < instanceCapacity_; ++z)
+    for (int y = 0; y < kMacroDim && count < instanceCapacity_; ++y)
+    for (int x = 0; x < kMacroDim && count < instanceCapacity_; ++x) {
+        if (!is_visible_surface(g, x, y, z)) continue;
+        vec3 col = type_color(g.cell(x, y, z));
+        if (fluid) {
+            float f = fluid->at(x, y, z);
+            if (f > 0.05f) {
+                float t = clamp01(f);
+                col = vec3{lerp(col.x, 0.15f, t), lerp(col.y, 0.35f, t),
+                           lerp(col.z, 0.85f, t)};
+            }
+        }
+        dst[count].origin =
+            vec3{nearest(static_cast<float>(x) * kCellSize, base.x, camPos.x),
+                 nearest(static_cast<float>(y) * kCellSize, base.y, camPos.y),
+                 nearest(static_cast<float>(z) * kCellSize, base.z, camPos.z)};
+        dst[count].scale = kCellSize;
+        dst[count].color = col;
+        ++count;
+    }
+    lastInstanceCount_ = count;
+    if (count == 0) return;
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
+    vkCmdPushConstants(cmd, layout_,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0, sizeof(CubePush), &push);
+    VkDeviceSize offs[2] = {0, 0};
+    VkBuffer bufs[2] = {cubeVerts_.buffer, instances_[frameIndex].buffer};
+    vkCmdBindVertexBuffers(cmd, 0, 2, bufs, offs);
+    vkCmdDraw(cmd, vertexCount_, count, 0, 0);
+}
+
+void CubePass::destroy() {
+    if (!dev_) return;
+    for (int i = 0; i < kMaxFramesInFlight; ++i) instances_[i].destroy(*dev_);
+    cubeVerts_.destroy(*dev_);
+    if (pipeline_) { vkDestroyPipeline(dev_->device, pipeline_, nullptr); pipeline_ = VK_NULL_HANDLE; }
+    if (layout_) { vkDestroyPipelineLayout(dev_->device, layout_, nullptr); layout_ = VK_NULL_HANDLE; }
+}
+
+} // namespace giga::gpu

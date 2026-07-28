@@ -1,0 +1,169 @@
+# NPCs — Macro population & embodiment
+
+> **Status: macro pool + embodiment built; macro tick pending.** Game layer
+> (`src/game/`, the `giga_game` library), on top of the ECS ([ecs.md](ecs.md))
+> and macro simulation ([macrosim.md](macrosim.md)).
+>
+> - **Code:** [src/game/npc_pool.h](src/game/npc_pool.h) /
+>   [.cpp](src/game/npc_pool.cpp), [src/game/embody.h](src/game/embody.h) /
+>   [.cpp](src/game/embody.cpp), [src/game/population.h](src/game/population.h) /
+>   [.cpp](src/game/population.cpp), [src/game/inventory.h](src/game/inventory.h)
+> - **Tests:** [tests/game_test.cpp](tests/game_test.cpp) (headless, links
+>   `giga_game` only)
+
+The NPC population is modelled **globally** across the whole floor stack, then
+individual NPCs are **embodied** into full ECS entities only where they matter
+(near the player / on the active floor).
+
+- **Architecture:** [ARCHITECTURE.md](ARCHITECTURE.md) §L4
+
+## The world is not player-oriented
+
+The game does **not** start with a player and decorate the world around them.
+The alife population exists **first**; entering a floor **materializes** that
+floor's slice of records into ECS entities; and **the player is one of those
+embodied records** that additionally receives a `CameraTag` + `Controller`.
+There is **no player singleton** — the "player" is just the alife record
+currently wearing the camera (the `NpcPlayer` flag bit). Aging, death, relations,
+faction and stature apply to it exactly like any other NPC.
+
+This is stronger than the reference prototype (`../gigahrush`), which keeps the
+player as privileged "current-floor runtime state" bolted onto the world. Here
+the player has no privileged execution path: it dies, folds back and embodies
+through the same functions as everyone else.
+
+Down the line this is what lets the character-creation screen work cleanly: the
+player fills in name/sex/age/height/attributes/perks, that **writes an ordinary
+alife record**, and floor design then embodies it into the 128³ module like any
+pre-generated NPC. Switching characters (or dying into a new body) is just: fold
+the old record back, embody the new one as player — the camera immediately sits
+at the new body's stature.
+
+## Model (planned)
+
+- **Global macro population** — an aggregate model of who exists where across
+  floors, advanced by the macro tick ([macrosim.md](macrosim.md)). Shared, not
+  per-floor.
+- **Per-floor modifiers** — a floor's rule-set ([floors.md](floors.md)) tweaks
+  population-matrix weights (which kinds concentrate on this floor) — it does not
+  own its own NPC catalog.
+- **Embodiment** — when the player is present, relevant NPCs are instantiated as
+  ECS entities with the universal components ([ecs.md](ecs.md)) and driven by the
+  same [controller.md](controller.md) / [physics.md](physics.md) systems as the
+  player. Leaving the area de-embodies them back into the macro model. NPCs are
+  never faked or frozen — only their execution unit changes.
+
+## Scale & storage — dense flat tables, ~1 M NPCs
+
+The population is **large — on the order of a million NPCs** — and stored the
+data-oriented way: **flat, dense, parallel arrays** (SoA), one row per NPC, not
+objects. This is the same dense-over-sparse stance as the rest of the engine
+([performance.md](performance.md)); a million NPCs in flat arrays is a few
+hundred MB, comfortably inside the RAM budget, and a macro pass over them is a
+single O(n) sweep of contiguous memory.
+
+The pool is **fixed at `2^20 = 1,048,576` slots** (`kNpcPoolSize`) — a power of
+two so an id masks/indexes without a divide and the table is a fixed rectangle.
+**The id *is* the slot index**, stable for the NPC's whole life, so lookup is
+O(1) and the arrays stay dense. Slots are **bump-allocated** from a monotonic
+high-water mark (`count()`); ~950k (`kNpcActiveTarget`) are populated at world
+start and the tail is a **reserve plast** of blanks for runtime spawns.
+
+**The dead are never reclaimed.** `kill()` clears the `NpcAlive` bit but keeps
+the slot and id forever; new NPCs always come from the reserve (bump the tail),
+never by reusing a dead slot. Procedural and authored NPCs share this one linear
+store, told apart only by the `NpcDesign` flag bit — never separate arrays.
+
+Each NPC row carries (`src/game/npc_pool.h`):
+
+- **Identity** — `name` / `surname` as fixed-width `char[24]` arrays (inline in
+  the SoA row, no heap strings); the stable id is the slot index itself.
+- **Relationships** — a fixed **16-slot** inline array (`kRelSlots`) per NPC
+  (target id + signed `affinity`). A hard cap keeps the row fixed-size and the
+  table a flat rectangle — no per-NPC allocation, O(1) to scan an NPC's relations.
+- **State** — flags, hp/max_hp, faction, floor label + macro cell (cx/cy/cz).
+- **Inventory** — a full **inline 8×8 `Inventory`** ([items.md](items.md)),
+  carried by *every* NPC in the macro row, not just embodied ones (256 B × 1 M ≈
+  256 MB, inside budget). No macro/embodied special case: embodiment is a byte
+  copy of the same rectangle. See [src/game/inventory.h](src/game/inventory.h).
+
+Because the tables are flat and dense they **serialize verbatim** with the save
+(whole-world persistence, [performance.md](performance.md)).
+
+## Character-sheet fields (skeleton, extensible)
+
+Every record — player and NPC alike — carries the character-sheet fields, so the
+future creation screen writes into the **same struct** floor design later embodies:
+
+- **`age`** (`u8`, 1..100) and **`sex`** (`NpcSex`: unset/male/female).
+- **`height_mm`** (`u16`) — stature in millimetres, derived from age at seeding
+  (children scale up, adults settle ~1.75 m with variation). Stature is not
+  flavour: it **drives the embodied body** (see below).
+- **`level`** (`u8`) and an **8-slot generic attribute block** (`kAttrSlots`,
+  byte-valued, addressed by index).
+
+The attribute block is deliberately a **fixed-width skeleton, not named columns**.
+The game is a prototype: the count, names and meaning of attributes aren't final
+(likely more than 3 — think ~8+, plus perks and traits later). Rather than
+hardcode a `str/agi/int` schema we'd have to migrate, we bake a stable-width block
+now and let a data table map *slot → meaning*. **Perks and traits get their own
+extensible block when the character sheet is designed** — this is the crossbeam,
+not the finished sheet. Adding a real attribute later stays a data change, not a
+table reshape.
+
+## Embodiment — the alife↔ECS seam ([src/game/embody.h](src/game/embody.h))
+
+`embody(reg, pool, id, layer)` materializes one record into an ECS entity:
+Transform at the record's macro cell, Velocity, an **AABB whose half-height comes
+from `height_mm`**, gravity + jump, and an `NpcRef{id}` linking the entity back to
+its cold row. hp/inventory stay canonical in the pool row (the entity shares
+identity by id), so only transient ECS state (position) needs folding.
+
+`embody_as_player(...)` does the above **and** attaches a `CameraTag` — whose
+`eyeOffset.z` is derived from the same `height_mm` — plus a `Controller`, and sets
+the `NpcPlayer` bit. This is the *only* thing that makes a record the player.
+Because eye height tracks stature, embodying a shorter or taller record views the
+world from that character's height, and **body-swaps / respawns pick up the new
+stature automatically** — the reference-style "camera at the new character's
+eyes" behaviour, for free.
+
+`fold_back(...)` writes the live entity's cell back into the record, clears
+`NpcEmbodied`/`NpcPlayer`, and destroys the entity — freezing the record where it
+stood. `kill()` clears embodiment too, so a dead record is never left live.
+
+Seeding lives in [src/game/population.h](src/game/population.h):
+`seed_floor_population(pool, floor, n, seed)` bump-allocates `n` records onto a
+floor's apartment lattice with deterministic demographics and **returns the record
+chosen as the player candidate** — which becomes the player only once
+`embody_as_player` flips its bit.
+
+## Behaviour — migration, trade, honest projectiles
+
+- **Migration & trade between floors.** The macro tick moves NPCs across the
+  floor stack and runs aggregate trade/economy — the world keeps living when the
+  player isn't watching ([macrosim.md](macrosim.md)).
+- **Embodied NPCs are ordinary entities.** An embodied NPC that shoots simply
+  **spawns a projectile entity** that flies under [physics.md](physics.md) and
+  can hit *anyone* — including the NPC that fired it. No attacker/victim special
+  cases; combat is isotropic, exactly like the player's. The player is not
+  privileged ([ecs.md](ecs.md)).
+
+## Baked, not searched
+
+Anything an NPC needs to path or decide is **baked at load** — nav/flow fields
+over the sub-voxel space, distance fields, relationship lookups — so the macro
+and embodied ticks do O(1) reads, never per-NPC BFS/A* in the hot path
+([performance.md](performance.md)).
+
+## Global vs. local
+
+| Global | Per-floor (rule-set) |
+|--------|----------------------|
+| Population model & NPC kinds | Population-matrix weight tweaks |
+| Macro tick behavior | Which kinds cluster on this floor |
+
+## Connections
+
+Advanced by [macrosim.md](macrosim.md); shares monster kinds with
+[monsters.md](monsters.md); weighted by [floors.md](floors.md); embodied onto
+[ecs.md](ecs.md) systems.
