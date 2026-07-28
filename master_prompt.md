@@ -32,12 +32,13 @@ open for review as **PR #1 → main**.
 ## 1. The vision (from the owner)
 
 gigahrush2 is a **native C++23 / Vulkan (MoltenVK) / SDL3 / Dear ImGui** rewrite
-of the browser game at `/Users/jirnyak/Mirror/gigahrush` — a Russian social /
+of the browser game at `/Users/jirnyak/Mirror/gigahrush` on the macOS host, or
+`C:\hades\gigahrush` on the Windows host — a Russian social /
 A-Life horror-sim about descending through the themed floors of a giant
 khrushchevka apartment building ("Спуск и Экстракция" — *Descent & Extraction*, a
 greed loop). Take the **best of the reference**, but native and honest-3D.
 
-Three owner directives shape everything:
+Four owner directives shape everything:
 
 1. **Full honest 3D, 128×128×128 voxel world, target population 2²⁰ = 1,048,576.**
    Native desktop, 16+ GB RAM, GPU ample — **the CPU tick is the only bottleneck.**
@@ -50,7 +51,11 @@ Three owner directives shape everything:
    The owner's standing mandate: pour everything into the result. Explore deeply,
    read widely, fan out **many subagents** for research and parallel isolated
    work, verify thoroughly, and aim for the best possible outcome — never cut a
-   corner or skip a check to save tokens.
+   corner or skip a check to save tokens. This directive **supersedes** the older
+   token-budget note; [AGENTS.md](AGENTS.md) was reconciled to it on 2026-07-28 and
+   now reads as output discipline rather than a budget. The only thing still
+   bounded is what a subagent may **write** (§9) — never how many you run for
+   reading, research, or review.
 
 **The committed runtime shape (owner concept, 2026-07-28).** Two budgets, two
 processes:
@@ -88,6 +93,17 @@ ctest --test-dir build --output-on-failure
 ./build/gigahrush2 maze      # the 3D labyrinth isotropy test bed (single world)
 ```
 
+Windows host (MSVC + Ninja + LunarG Vulkan SDK) — prerequisites and the full
+platform-deviation list live in [tools/win/README.md](tools/win/README.md):
+
+```bat
+tools\win\build.bat                 :: configure + build + ctest, Release
+tools\win\build.bat Release fresh   :: wipe build-win\ first
+```
+
+Output is `build-win\gigahrush2.exe`; run modes and controls are unchanged. SDL3,
+EnTT and Dear ImGui are fetched and pinned by CMake, so they are not prerequisites.
+
 **Controls:** `WASD` move · mouse look (`Tab` toggles, or hold **RMB**) · `Space`
 jump · **`F`** toggle fly/walk (starts in fly) · **`[` / `]`** ride elevator
 down / up a floor (loads the destination on demand, unloads the one left) · `Esc`
@@ -98,7 +114,9 @@ draw counts, and the active floor number + kind + target pop.
 **GLOB is on** (`CONFIGURE_DEPENDS`): new `.cpp` under `src/{world,sim,ecs,app,
 input,render,game}` is auto-picked-up — **do not** edit `CMakeLists.txt` for
 individual sources. Shaders (`shaders/*.vert|frag`) are an explicit `foreach` —
-add new shaders there. Build must be **zero-warnings** (`-Wall -Wextra`).
+add new shaders there. Build must be **zero-warnings**: `-Wall -Wextra
+-Wno-unused-parameter` on Clang/GCC, `/W4 /wd4100` on MSVC, both applied by
+`giga_target_flags()` in the top-level `CMakeLists.txt`.
 
 ---
 
@@ -109,6 +127,10 @@ A future agent will trip on these; obey them:
 - **No exceptions, no RTTI.** Built `-fno-exceptions -fno-rtti`, EnTT with
   `ENTT_NOEXCEPTION`. No `try/catch/throw/dynamic_cast/typeid`. For type identity
   use the `type_tag<T>()` pattern in `src/world/field.h`.
+  **On Windows this is not compiler-enforced.** MSVC's STL is unsupported under
+  `_HAS_EXCEPTIONS=0`, so the Windows build uses `/EHsc`; only RTTI ports (`/GR-`).
+  There the rule is code discipline: add a `throw` and the **macOS build catches it
+  while Windows stays green**. A green Windows build is necessary, never sufficient.
 - **`giga_core` stays dependency-free** (`src/world`, `src/sim`, `src/ecs`): no
   SDL / Vulkan / ImGui, ships its own math (`src/core/math.h`), links only EnTT.
   Keeps the sim headless-testable and embeddable.
@@ -549,6 +571,11 @@ union), loot (spawnW + value-gate + depth caps), economy bands E0–E4. Mobs are
   even a cheaper one — can continue mechanically.
 - **Never hand a large, interconnected task to an autonomous coding subagent.**
   Subagents are for read-only research or one clearly-scoped isolated file only.
+  This bounds what a subagent may **write**, not how many run: read-only fan-out is
+  uncapped per §1.4. The lead does the interconnected edit itself. One build owner
+  at a time — a single `build/` or `build-win/` tree, so concurrent builds corrupt
+  each other's artifacts and `ctest` results. A subagent's "builds clean" is
+  evidence to re-run, not proof.
 - **Tokens are unlimited — maximize.** Never economize on research depth, reading,
   subagent fan-out, or verification (§1.4). Hand builds/launches/visual glances to
   the human — they own the runtime verification loop.
@@ -563,7 +590,11 @@ union), loot (spawnW + value-gate + depth caps), economy bands E0–E4. Mobs are
 
 A separate persistent memory tracks the same project state for the assistant, at
 `/Users/jirnyak/.claude/projects/-Users-jirnyak-Mirror-gigahrush2/memory/`
-(NOT in the repo). Relevant files: `gigahrush2-architecture.md`,
+(NOT in the repo). **That path is macOS-host-only and does not exist on the
+Windows host** — verified absent 2026-07-28; a Windows agent has no gigahrush2
+memory directory and must work from this file plus `AGENTS.md` and
+`ARCHITECTURE.md`, which the closing line below confirms is sufficient. Relevant
+files on the macOS host: `gigahrush2-architecture.md`,
 `floor-module-architecture.md` (incl. the V-shape danger formulas + elevator note),
 `population-roadmap.md` (the #6–#13 ledger), `player-is-alife-record.md`,
 `build-constraints.md`, `torus-nav-baking.md` (the full nav-bake design + the

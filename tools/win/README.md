@@ -92,9 +92,17 @@ the binary runs from the build directory.
 
 ### 4. MSVC-only compile settings
 
-`/utf-8` (the content tables carry Cyrillic and MSVC otherwise guesses the source
+`/utf-8` (source and execution charset pinned independently of the host's ANSI
 codepage), `/permissive-`, `/Zc:preprocessor`, `/Zc:__cplusplus`, `/MP`, plus
 `NOMINMAX`, `WIN32_LEAN_AND_MEAN`, `_USE_MATH_DEFINES`, `_CRT_SECURE_NO_WARNINGS`.
 
-`/utf-8` is load-bearing, not cosmetic: without it MSVC misreads Cyrillic string
-literals and the failure shows up as garbled in-game text, not a build error.
+`/utf-8` buys codepage independence; it is **not** fixing a live defect. Corrected
+2026-07-28 after measurement: on a CP1251 host the emitted string bytes are
+byte-identical with and without the flag, no C4819 fires, and the tree carries no
+Cyrillic literals yet. The earlier claim here — that dropping it garbles in-game
+text with no build error — was wrong and had already propagated into `AGENTS.md`
+and the Claude path-scoped rule before it was measured. Do not restore it.
+
+Where the flag does earn its keep is a DBCS host (CP932/936/950): there a
+multi-byte character inside a comment can swallow the following quote and break the
+parse. Keep the flag for that, and for reproducibility across developer machines.

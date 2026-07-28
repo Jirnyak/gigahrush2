@@ -7,11 +7,15 @@
 > (floors, quests, NPCs, items, combat) is layered on top as **modules** and ECS
 > systems. Keep the engine core game-agnostic.
 >
-> **⚠ Token economy.** Work to a tight token budget. Do not re-read files
-> already in context, restate large blocks, or emit change-log prose. Stop
-> exploring once you can act. When a check is cheaper for the human to run
-> (a build, a launch, a visual glance), hand it to them instead of burning
-> tokens simulating it. Prefer the smallest surgical edit that solves the task.
+> **⚠ Output discipline — not a token budget.** Superseded 2026-07-28 by the
+> owner's standing mandate in [master_prompt.md](master_prompt.md) §1.4: *tokens
+> are unlimited — do not economize.* What stays banned is churn, not depth: do
+> not re-read files already in context, restate large blocks, or emit change-log
+> prose; stop exploring once you can act; prefer the smallest surgical edit that
+> solves the task. What is explicitly **not** capped: reading a doc the task
+> actually touches, research depth, subagent fan-out, and verification. Handing a
+> build, a launch, or a visual glance to the human is division of labour — they
+> own the runtime loop — not a saving measure.
 
 ## Working Method — *slow is fast*
 
@@ -20,7 +24,20 @@ each one**. Correctness first; speed is a side effect of not backtracking.
 
 - **Never hand a large, interconnected task to an autonomous coding subagent.**
   Subagents are for **bounded, low-risk** work: read-only research, or one
-  clearly-scoped isolated file — not multi-file architecture.
+  clearly-scoped isolated file — not multi-file architecture. This bounds what a
+  subagent may **write**, not how many you run: read-only fan-out is encouraged
+  and uncapped (§1.4 of [master_prompt.md](master_prompt.md)) — parallel research,
+  source and doc reconnaissance, adversarial review of a plan, independent second
+  opinions. The lead performs the interconnected edit itself, in verified
+  increments. Every assignment states role, why delegated, the files to read,
+  owned scope, forbidden scope, output format, and whether edits are allowed.
+- **One build owner at a time.** There is a single `build/` (macOS) or
+  `build-win/` (Windows) tree, and `glslc` writes SPIR-V into it. Two agents
+  building concurrently corrupt each other's artifacts and each other's `ctest`
+  results. Serialize the build; parallelize only reading.
+- **A subagent cannot close the verification loop.** The human owns the runtime
+  and visual check. A subagent reporting "builds clean" is evidence to re-run,
+  never proof — the lead re-runs the build itself before repeating the claim.
 - **Keep the build green at every step.** Run the build after each edit. Prefer
   additive changes that compile *alongside* the old path until the final
   switch-over.
@@ -35,6 +52,12 @@ each one**. Correctness first; speed is a side effect of not backtracking.
   (EnTT with `ENTT_NOEXCEPTION`). Do not use `try`/`catch`/`throw`/
   `dynamic_cast`/`typeid`. For type identity without RTTI use the `type_tag<T>()`
   pattern in [src/world/field.h](src/world/field.h).
+  **Platform caveat — the Windows build does not enforce this.** MSVC's STL is
+  unsupported under `_HAS_EXCEPTIONS=0`, so Windows compiles `/EHsc`; only RTTI
+  ports across (`/GR-`). On MSVC the no-exceptions rule is code discipline, not a
+  compiler gate: add a `throw` and the macOS build catches it while Windows stays
+  green. A green Windows build is necessary, never sufficient. Full deviation
+  list: [tools/win/README.md](tools/win/README.md).
 - **Core stays dependency-free.** `giga_core` (`src/world`, `src/sim`, `src/ecs`)
   must not include SDL, Vulkan, or ImGui. It links only EnTT and ships its own
   math ([src/core/math.h](src/core/math.h)) — no GLM/Eigen. This is what keeps
@@ -137,7 +160,8 @@ each one**. Correctness first; speed is a side effect of not backtracking.
 
 ## Build
 
-Native (macOS / Homebrew) — see [README.md](README.md) for dependency install:
+macOS / Homebrew (primary, and the mechanical enforcer of the no-throw rule) —
+see [README.md](README.md) for dependency install:
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -145,9 +169,28 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-Ensure **zero warnings** (`-Wall -Wextra`). Treat warnings as errors in review.
-Shaders (`shaders/*.vert|frag`) compile to SPIR-V at build time via `glslc`; a
-GLSL error surfaces at build time.
+Windows / MSVC + Ninja + LunarG Vulkan SDK — entry point is
+[tools/win/README.md](tools/win/README.md), which carries the prerequisites and
+the full platform-deviation list:
+
+```bat
+tools\win\build.bat                 :: configure + build + ctest, Release
+tools\win\build.bat Release fresh   :: wipe build-win\ first
+```
+
+Output is `build-win\gigahrush2.exe`; run modes and controls are unchanged.
+
+Ensure **zero warnings**. That is `-Wall -Wextra -Wno-unused-parameter` on
+Clang/GCC and `/W4 /wd4100` on MSVC, applied by the single `giga_target_flags()`
+function in the top-level `CMakeLists.txt`; vendored Dear ImGui lives in its own
+`giga_imgui` target with default warnings so the policy never has to be relaxed
+for third-party code. Treat warnings as errors in review. Shaders
+(`shaders/*.vert|frag`) compile to SPIR-V at build time via `glslc`; a GLSL error
+surfaces at build time. MSVC also gets `/utf-8`, for codepage independence rather
+than to fix anything today: measured on a CP1251 host, the emitted string bytes
+are identical with and without it, and the tree has no Cyrillic literals yet. It
+earns its place on a DBCS host, where a multi-byte comment character can swallow
+the following quote and break the parse.
 
 ## Workflow Checklist
 

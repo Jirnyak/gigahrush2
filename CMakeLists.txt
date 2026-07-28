@@ -159,8 +159,10 @@ set(IMGUI_SOURCES
 # ---- Engine core library --------------------------------------------------
 # Everything except the app entry point and rendering lives here so tests can
 # link the simulation core without pulling in SDL/Vulkan/ImGui.
+# src/core is header-only today (math.h, wrap.h, jobs.h) but is globbed anyway,
+# so the first .cpp added there is compiled instead of silently ignored.
 file(GLOB_RECURSE GIGA_CORE_SOURCES CONFIGURE_DEPENDS
-    src/world/*.cpp src/sim/*.cpp src/ecs/*.cpp)
+    src/core/*.cpp src/world/*.cpp src/sim/*.cpp src/ecs/*.cpp)
 
 add_library(giga_core STATIC ${GIGA_CORE_SOURCES})
 target_include_directories(giga_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
@@ -195,8 +197,12 @@ endforeach()
 add_custom_target(giga_shaders DEPENDS ${_giga_spv_files})
 
 # ---- Rendering + app shell ------------------------------------------------
-file(GLOB GIGA_RENDER_SOURCES CONFIGURE_DEPENDS src/render/*.cpp)
-file(GLOB GIGA_APP_SOURCES CONFIGURE_DEPENDS src/app/*.cpp src/input/*.cpp)
+# GLOB_RECURSE, matching giga_core/giga_game. A plain file(GLOB) silently drops
+# any .cpp added in a subdirectory, and the symptom is a link error far from the
+# cause.
+file(GLOB_RECURSE GIGA_RENDER_SOURCES CONFIGURE_DEPENDS src/render/*.cpp)
+file(GLOB_RECURSE GIGA_APP_SOURCES CONFIGURE_DEPENDS
+    src/app/*.cpp src/input/*.cpp)
 
 # Dear ImGui is third-party: its own target with default warnings, so our
 # zero-warning policy applies to *our* code only and never has to be relaxed
@@ -244,7 +250,5 @@ if(GIGA_BUILD_TESTS)
     # in transitively via giga_core now; kept explicit here to document the need.
     add_executable(sim_bench tests/sim_bench.cpp)
     target_link_libraries(sim_bench PRIVATE giga_game Threads::Threads)
-    if(NOT MSVC)
-        target_compile_options(sim_bench PRIVATE -fno-rtti -fno-exceptions)
-    endif()
+    giga_target_flags(sim_bench OFF)
 endif()

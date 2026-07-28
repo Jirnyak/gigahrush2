@@ -456,8 +456,11 @@ static std::size_t solid_cells(const World& w) {
 // Pure, seed-independent geometry; it must be a cyclic (Z/4)^3 torus graph (no
 // boundary node) so the nav bake avoids spanning-tree seams on the torus.
 static void test_lattice() {
-    CHECK(kLatticeCount == 64);
-    CHECK(kLatticeSpacing == 32);
+    // Geometry contract, so a static_assert rather than a CHECK: 4^3 nodes at a
+    // 32-cell spacing is what makes the lattice a cyclic (Z/4)^3 torus graph.
+    static_assert(kLatticeCount == 64, "4x4x4 nav lattice ([floors.md])");
+    static_assert(kLatticeSpacing == 32, "128 / 4 == 32 cells between nodes");
+
     CHECK(lattice_coord(0) == 16);
     CHECK(lattice_coord(1) == 48);
     CHECK(lattice_coord(2) == 80);
