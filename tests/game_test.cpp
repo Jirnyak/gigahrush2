@@ -14,6 +14,7 @@
 #include "game/event_bus.h"
 #include "game/floor_gen.h"
 #include "game/floor_registry.h"
+#include "game/extraction.h"
 #include "game/faction.h"
 #include "game/faction_relations.h"
 #include "game/floor_spec.h"
@@ -2057,6 +2058,94 @@ static void test_faction_relations() {
     CHECK(rel_row(pool, b) < kFactionCount);
 }
 
+
+// Extraction. The mechanic is "value is not yours until it is banked", so the tests
+// that matter are the two that keep it from quietly becoming pointless:
+//   1. banking must never take your equipped kit (if it did, never banking would be
+//      optimal and the whole system would be dead on arrival), and
+//   2. a death must be recorded as a LOSS, because an invisible cost is not a cost.
+static void test_extraction() {
+    // Find one real item of each shape we care about, from the live table rather
+    // than by hardcoding an id — 446 rows generated from CSV will renumber.
+    ItemId misc = 0, food = 0, wpn = 0, key = 0;
+    for (ItemId i = 1; i <= kItemCount; ++i) {
+        const ItemDef& d = item_def(i);
+        if (d.value <= 0) continue;
+        const ItemCategory c = static_cast<ItemCategory>(d.category);
+        if (!misc && c == ItemCategory::Misc) misc = i;
+        if (!food && c == ItemCategory::Food) food = i;
+        // Must be a weapon `equipped_melee` will actually SELECT, which means one of
+        // the 23 rows in the melee table — not merely any Weapon-category item. My
+        // first attempt picked the latter and the test failed for the right reason.
+        if (!wpn && melee_for_item(i) != nullptr) wpn = i;
+        if (!key && c == ItemCategory::Key) key = i;
+    }
+    CHECK(misc && food && wpn);   // Key may legitimately be valueless; the rest are not
+
+    CHECK(bankable_category(ItemCategory::Misc));
+    CHECK(bankable_category(ItemCategory::Weapon));
+    CHECK(bankable_category(ItemCategory::Tool));
+    CHECK(!bankable_category(ItemCategory::Food));
+    CHECK(!bankable_category(ItemCategory::Drink));
+    CHECK(!bankable_category(ItemCategory::Medicine));
+    CHECK(!bankable_category(ItemCategory::Ammo));
+    CHECK(!bankable_category(ItemCategory::Key));   // a route key is progress, not money
+
+    RunLedger led;
+    Inventory inv;
+    inv.slots[0] = ItemSlot{misc, 1};
+    inv.slots[1] = ItemSlot{food, 2};
+    inv.slots[2] = ItemSlot{wpn, 1};
+
+    const std::int32_t before = at_risk_value(inv);
+    const std::int32_t mv = item_def(misc).value;
+    const std::int32_t fv = item_def(food).value * 2;
+    const std::int32_t wv = item_def(wpn).value;
+    CHECK(before == mv + fv + wv);
+
+    // The weapon is equipped, so it must survive the deposit; the misc item must not.
+    CHECK(equipped_melee(inv) == wpn);
+    const std::int32_t got = deposit_valuables(inv, led);
+    CHECK(got == mv);                       // ONLY the haul
+    CHECK(led.banked == mv);
+    CHECK(led.bestHaul == mv);
+    CHECK(led.deposits == 1);
+    CHECK(equipped_melee(inv) == wpn);      // still armed — the load-bearing assertion
+    CHECK(at_risk_value(inv) == fv + wv);   // food and the weapon stayed
+
+    // Banking again with nothing bankable left is a no-op, not a phantom deposit.
+    // This runs every tick you stand on the pad, so a false deposit would inflate
+    // the count without limit.
+    CHECK(deposit_valuables(inv, led) == 0);
+    CHECK(led.deposits == 1);
+
+    // A death takes everything still carried, kit included.
+    record_death(led, inv);
+    CHECK(led.deaths == 1);
+    CHECK(led.lostToDeath == fv + wv);
+    CHECK(led.banked == mv);                // banked value survives the death
+
+    // Greed reading. Carrying nothing is safe, not maximally endangered.
+    CHECK(risk_share(led, 0) == 0.0f);
+    RunLedger fresh;
+    CHECK(risk_share(fresh, 500) > 0.99f);  // nothing banked: a death costs everything
+    fresh.banked = 9500;
+    const float half = risk_share(fresh, 500);
+    CHECK(half > 0.04f && half < 0.06f);    // 500 / 10000
+
+    // Depth tracking is on |z| — the roof is as far from safety as the basement.
+    RunLedger d;
+    record_floor(d, -3);
+    CHECK(d.deepestFloor == -3);
+    record_floor(d, 1);
+    CHECK(d.deepestFloor == -3);            // shallower, ignored
+    record_floor(d, 9);
+    CHECK(d.deepestFloor == 9);             // |9| > |-3|
+    CHECK(d.deepestBand == economy_band(9));
+    record_floor(d, -9);
+    CHECK(d.deepestFloor == 9);             // equal magnitude does not overwrite
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -2099,6 +2188,7 @@ int main() {
     test_floor_kinds_use_distinct_materials();
     test_ranged_windup_and_deadzone();
     test_faction_relations();
+    test_extraction();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

@@ -39,6 +39,7 @@
 #include "game/floor_stream.h"
 #include "game/mob_spawn.h"
 #include "game/combat.h"
+#include "game/extraction.h"
 #include "game/loot.h"
 #include "game/weapon_table.h"
 #include "game/event_bus.h"
@@ -412,6 +413,8 @@ int main(int argc, char** argv) {
     // steering across kWanderPeriod ticks with no per-agent scheduling state.
     std::uint64_t simTick = 0;
     std::uint32_t meleeHits = 0;   // cumulative, for the HUD
+    game::RunLedger ledger;
+    std::int32_t banked = 0;
     std::uint32_t deaths = 0;
     std::uint32_t kills = 0;       // carried across possession
     bool attackHeld = false;
@@ -481,6 +484,10 @@ int main(int argc, char** argv) {
                     if (ride.moved) {
                         player = ride.player;
                         currentFloor = ride.floor;
+                        // Deepest point reached, for the run score. |z|, because
+                        // depth is bidirectional: the roof is as far from safety as
+                        // the basement. [extraction.h]
+                        game::record_floor(ledger, currentFloor);
                         currentSpec = spec_for_floor(currentFloor);
                         // Streaming recycles World objects in place, so the cube
                         // pass cannot detect the new geometry by identity.
@@ -562,6 +569,13 @@ int main(int argc, char** argv) {
                 // "hp hit zero" and "gone" is precisely what the Dead tag exists
                 // to create (combat.h defect 2) — the reference's P0 was culling
                 // an entity before its loot hook ran.
+                // Remember which pool row is the player BEFORE the death point,
+                // because after it the entity is gone and the row is the only way
+                // back to what was being carried.
+                game::NpcId deadRow = game::kInvalidNpc;
+                if (reg.valid(player))
+                    if (const auto* nr0 = reg.try_get<game::NpcRef>(player))
+                        deadRow = nr0->id;
                 game::loot_dead_mobs(reg, activeLayer, currentFloor,
                                      static_cast<std::uint32_t>(simTick));
                 // ONE death point per tick, after everything that can deal damage
@@ -574,6 +588,20 @@ int main(int argc, char** argv) {
                     // Picking a vest up must actually protect you.
                     game::sync_armour(reg, pool, player);
                 }
+                // Extraction. The pad is the bank: stand on it and the haul
+                // becomes permanently yours. Runs every tick, deposits nothing
+                // almost every tick, and that is fine — it is a handful of slot
+                // reads. [extraction.h]
+                if (reg.valid(player)) {
+                    const Transform& ptr_ = reg.get<Transform>(player);
+                    if (game::on_extraction_pad(
+                            stack.layer(activeLayer).grid(), ptr_.pos)) {
+                        if (const auto* nrx = reg.try_get<game::NpcRef>(player))
+                            if (pool.valid(nrx->id))
+                                banked += game::deposit_valuables(
+                                    pool.inventory(nrx->id), ledger);
+                    }
+                }
                 if (healWanted) {
                     healed += game::use_best_heal(reg, pool, bus, activeLayer,
                                                   simTick);
@@ -582,6 +610,13 @@ int main(int argc, char** argv) {
                 // The player is not exempt: if it died it no longer exists, and
                 // everything below reads through it. Take another body now.
                 if (!reg.valid(player)) {
+                    // Bill the death before taking a new body. The dead pool row
+                    // keeps its inventory forever (the pool never reclaims a slot),
+                    // so those items are already gone in the only sense that
+                    // matters — no living body can reach them. All that was missing
+                    // was counting it. [extraction.h]
+                    if (pool.valid(deadRow))
+                        game::record_death(ledger, pool.inventory(deadRow));
                     // The PlayerMelee component dies with the body; the tally of
                     // what that person killed does not.
                     player = possess_a_survivor(reg, pool, activeLayer);
@@ -658,6 +693,16 @@ int main(int argc, char** argv) {
                                 md->dmg,
                                 arm == game::kInvalidItem ? "none"
                                                           : game::item_name(arm));
+                }
+                {
+                    const float share = game::risk_share(ledger, carried);
+                    ImGui::Text("BANKED %lld rub | at risk %d (%.0f%% of the run)",
+                                static_cast<long long>(ledger.banked), carried,
+                                share * 100.0f);
+                    ImGui::Text("lost to death %lld | best haul %d | deepest %d (E%u)",
+                                static_cast<long long>(ledger.lostToDeath),
+                                ledger.bestHaul, ledger.deepestFloor,
+                                ledger.deepestBand);
                 }
                 ImGui::Text("loot %d rub (%d/%d slots) | healed %d | band E%u",
                             carried, slots, game::kInvSlots, healed,
