@@ -40,6 +40,7 @@
 #include "core/math.h"
 #include "render/vk_buffer.h"
 #include "render/vk_renderer.h"
+#include "render/vk_texture.h"
 
 namespace giga {
 class World;
@@ -71,6 +72,25 @@ struct CubeInstance {
     // seam budget rather than a storage limit.
     std::uint8_t span[3];
     std::uint8_t spanW;
+    // TWO MEANINGS, selected by whether this instance's material has a
+    // photographic albedo layer (see texMask_ below):
+    //
+    //   no texture  the material's DISPLAY-REFERRED albedo, fluid tint already
+    //               mixed in. cube.frag linearises it with pow(kGamma) and
+    //               multiplies the procedural surface into it. Unchanged since the
+    //               pass was written, and this is what every material used to do.
+    //   textured    a LINEAR multiplier on the sampled texel, exactly {1,1,1}
+    //               unless the cell is fluid-tinted, in which case it is the
+    //               per-channel ratio linear(tinted)/linear(base).
+    //
+    // The second case exists because the fluid tint is applied on the CPU and the
+    // shader cannot recover it: `color` is the only per-instance lane cube.frag
+    // sees, `spanW` is the last spare byte and cube.vert would have to be edited
+    // to forward it. Writing the ratio keeps a flooded floor blue without giving
+    // the shader a per-material mean albedo it has no way to know. No cell type
+    // that is currently textured is ever flooded — the "fluid" field is only
+    // created by app/worldgen.cpp's maze bed, which writes materials 1..4 — so
+    // this path is correct-by-construction rather than exercised today.
     vec3 color;
     // Two things in one uint32, because there was no room for a second.
     //
@@ -130,7 +150,18 @@ struct CubePush {
     vec4 fog;       // x = fog start dist, y = fog end dist (fades to black),
                     // z = headlamp radius (m), w = ambient scale
     vec4 torus;     // x = wrap period (kWorldExtent), y = AO strength 0..1,
-                    // z,w free
+                    // z = OUTPUT ONLY, w free
+                    //
+                    // z is the bitmask of material ids that have a live
+                    // photographic albedo layer, as a float — 16 bits, so every
+                    // value is exact in float32. CubePass::record OVERWRITES
+                    // whatever the caller put there with what the loader actually
+                    // decoded, so main.cpp does not have to know about textures
+                    // and body_pass (which shares this block and this fragment
+                    // source) keeps the 0 it already writes, i.e. the procedural
+                    // path. It rides in a dead lane because this block is
+                    // EXACTLY the 128-byte guaranteed maximum, per the note
+                    // below: there was nowhere else for it to go.
 };
 static_assert(sizeof(CubePush) == 128,
               "CubePush must not exceed the 128-byte guaranteed push-constant "
@@ -186,10 +217,33 @@ public:
 
     std::uint32_t last_instance_count() const { return lastInstanceCount_; }
 
+    // Bit i set == material id i is being drawn from a real photograph rather
+    // than from the procedural surface. 0 means the whole pass fell back, which is
+    // exactly how it rendered before data/textures had a reader.
+    std::uint32_t textured_materials() const { return texMask_; }
+
 private:
     VulkanDevice* dev_ = nullptr;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
+
+    // The photographic albedo maps, one array layer per material id.
+    //
+    // WHY IT LIVES HERE and not in the renderer: this is the only pass that has a
+    // material id to index it with. body_pass writes material 0 for every body and
+    // shares cube.frag, which is why the sampler is behind a #ifdef there — see
+    // the header comment in shaders/cube.frag.
+    VulkanTextureArray albedo_;
+    // Which materials actually decoded. Written once at init, pushed to the
+    // shader every frame in CubePush::torus.z, and consulted by build_instances()
+    // to decide what `CubeInstance::color` means for a cell. A material whose file
+    // was missing or rejected is absent here and keeps its procedural surface, so
+    // a load failure degrades one material instead of the frame.
+    std::uint32_t texMask_ = 0;
+    // True when the textured pipeline (cube_tex.frag.spv + a sampler descriptor)
+    // is the one that was created. False makes this pass bit-identical to the
+    // pre-texture renderer: cube.frag.spv, no descriptor set, torus.z == 0.
+    bool textured_ = false;
 
     VulkanBuffer cubeVerts_;  // static per-vertex mesh (pos + normal)
     std::uint32_t vertexCount_ = 0;
@@ -265,6 +319,12 @@ private:
 
     bool create_pipeline(VkRenderPass renderPass, const char* shaderDir);
     bool create_cube_mesh();
+    // Decode data/textures into albedo_ and set texMask_/textured_. Never fails
+    // the pass: a device that cannot sample a block format, a missing directory or
+    // a rejected file all report loudly and leave this pass on the procedural
+    // path. Must run BEFORE create_pipeline(), which needs to know which fragment
+    // module and which descriptor set layout to build with.
+    void load_material_textures();
 };
 
 } // namespace giga::gpu

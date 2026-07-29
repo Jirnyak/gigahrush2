@@ -49,6 +49,46 @@ layout(location = 0) out vec4 outColor;
 const float kGamma = 2.2;
 
 // ---------------------------------------------------------------------------
+// Photographic albedo — world pass only
+// ---------------------------------------------------------------------------
+// THIS FILE IS COMPILED TWICE, and the #ifdef is the reason rather than a second
+// .frag. body_pass.cpp reuses cube.frag.spv with its own vertex stage and its own
+// pipeline layout, and that layout declares push constants and NO descriptor
+// sets. A sampler declared unconditionally here would be *statically used* by the
+// body pipeline too, and a pipeline layout that omits a binding its shader uses is
+// invalid — so the body pass would fail to create or run undefined. Two outputs
+// from one source instead, which keeps the ~300 lines of surface and lighting code
+// below single-sourced:
+//
+//   cube.frag.spv                          -> body_pass  (unchanged, byte-for-byte)
+//   cube_tex.frag.spv  -DGIGA_ALBEDO_ARRAY -> cube_pass
+//
+// The second glslc command lives in CMakeLists.txt. If it is missing there is no
+// cube_tex.frag.spv, and CubePass::init refuses to start rather than quietly
+// rendering without textures.
+#ifdef GIGA_ALBEDO_ARRAY
+// 16 layers, layer index == material id (world/materials.h). Six carry a real
+// Poly Haven photograph (data/textures); the other ten are allocated, never
+// written and never sampled. pc.torus.z is the bitmask of which layers actually
+// decoded, written by CubePass::record from what the loader reported — so a
+// material whose file was missing or corrupt takes the procedural branch below
+// rather than sampling undefined memory.
+layout(set = 0, binding = 0) uniform sampler2DArray uAlbedo;
+
+// Texture repeats per 2 m cell. 0.5 == one photograph per 4 m (two cells), and
+// both halves of that choice are stated because NOBODY HAS SEEN A FRAME OF IT:
+//   * commensurate with the grid — the repeat boundary always lands on a cell
+//     boundary, where the geometry already has an AO crease, so the one place the
+//     tiling could show is the one place the eye is already given an edge;
+//   * 2048 texels over 4 m is 1.95 mm/texel at mip 0, far below anything the
+//     headlamp resolves at any range, so the extra 2x costs no visible sharpness
+//     and halves the repeat count along a long wall.
+// A 40-cell corridor still shows the same 4 m photograph 20 times. That is the
+// known weakness of this constant, and it is a judgement call, not a measurement.
+const float kTexRepeat = 0.5;
+#endif
+
+// ---------------------------------------------------------------------------
 // Procedural surface detail
 // ---------------------------------------------------------------------------
 // Generated, not sampled: there is no image decoder in the tree (deps are only
@@ -343,10 +383,6 @@ float surface(uint mat, vec2 uv, vec3 aw, float px, float g) {
 }
 
 void main() {
-    // Instance colours are authored as display-referred values; linearise once
-    // so the lighting arithmetic below is physically sane.
-    vec3 albedo = pow(vColor, vec3(kGamma));
-
     vec3 n = normalize(vNormal);
 
     // Triplanar-by-dominant-axis UV: the cube faces are axis-aligned, so the two
@@ -376,9 +412,61 @@ void main() {
     // the expensive part stays out of the divergent branch — most families use it as
     // their fine layer. `px` is how much uv moves per pixel, which is what lets the
     // periodic families fade themselves out before they alias.
+    //
+    // BOTH are computed before the textured/procedural branch below, deliberately:
+    // fwidth() in divergent control flow has undefined results, and hoisting it is
+    // free where reasoning about quad uniformity is not. `g` is wasted on a textured
+    // pixel; deleting the whole procedural layer was MEASURED at +0.05 ms on this
+    // pass (see cube_pass.h), i.e. inside the noise, so that waste is not worth a
+    // second branch.
     float g = grain(uv);
     float px = max(fwidth(uv.x), fwidth(uv.y));
+
+#ifdef GIGA_ALBEDO_ARRAY
+    // THE SAMPLED ALBEDO REPLACES BOTH the per-material constant colour and the
+    // procedural surface, for the six materials that have a photograph. It does not
+    // modulate them, and that is arithmetic rather than taste:
+    //
+    //   * the constant in cube_pass.cpp kMaterial[10..15] IS the measured mean
+    //     albedo of this very photograph, so texture * constant would darken every
+    //     bound material by its own mean — the shutter's 0.50 grey would land at
+    //     0.25;
+    //   * kMatSurface[id].x is the lognormal sigma solved from the measured
+    //     luminance CV of that same photograph (data/materials.csv lum_std, via
+    //     tools/gen_material_surface.py). Multiplying two unit-mean factors that
+    //     each reproduce CV c gives CV sqrt((1+c*c)^2 - 1): rust 0.4411 -> 0.657,
+    //     tread 0.1940 -> 0.277, lino 0.0724 -> 0.1025. Keeping both would
+    //     over-contrast every bound material by exactly the amount the generator
+    //     was calibrated to produce ONCE.
+    //   * the families exist because there was no image (see the header comment
+    //     above `hash21`). Where the image exists it also carries the STRUCTURE the
+    //     generator had to author blind — real corrugation, real grate, real
+    //     corrosion edges — which was the weakest part of the procedural pass.
+    //
+    // NO pow() ON THE SAMPLE. The array is a *_SRGB format, so the sampler has
+    // already linearised each texel in hardware, before filtering. Applying
+    // kGamma here as well would darken mid-grey by roughly 2x — the classic failure
+    // this whole path is documented against in data/textures/README.md.
+    //
+    // vColor MEANS SOMETHING DIFFERENT ON THIS BRANCH, and cube_pass.cpp writes it
+    // to match: a LINEAR multiplier, exactly (1,1,1) unless the cell is fluid-
+    // tinted, in which case it is the linear ratio tinted/base. That is what keeps
+    // a flooded floor blue without the shader needing a per-material mean albedo it
+    // has no way to know.
+    uint mid = min(vMat, kMatSurfaceCount - 1u);
+    vec3 albedo;
+    if ((uint(pc.torus.z) & (1u << mid)) != 0u) {
+        albedo = texture(uAlbedo, vec3(uv * kTexRepeat, float(mid))).rgb * vColor;
+    } else {
+        albedo = pow(vColor, vec3(kGamma));
+        albedo *= surface(vMat, uv, aw, px, g);
+    }
+#else
+    // Instance colours are authored as display-referred values; linearise once
+    // so the lighting arithmetic below is physically sane.
+    vec3 albedo = pow(vColor, vec3(kGamma));
     albedo *= surface(vMat, uv, aw, px, g);
+#endif
 
     // Distance is computed per-fragment, not interpolated from the vertex stage.
     // Interpolating a nonlinear function across a 2 m face that fills the screen

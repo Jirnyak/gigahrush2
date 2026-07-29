@@ -4,6 +4,7 @@
 #include "render/vk_common.h"
 #include "render/vk_device.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -114,6 +115,101 @@ vec3 type_color(CellType t) {
     // Unknown ids render as the old default rather than black, so a generator that
     // writes a material the table does not know is visible but not invisible.
     return t < kMatCount ? kMaterial[t] : vec3{0.75f, 0.75f, 0.78f};
+}
+
+// --- photographic albedo ----------------------------------------------------
+// The SECOND per-material table in this file, deliberately next to the first:
+// which photograph in data/textures is a material's real albedo. Six rows,
+// because six is how many of the sixteen ids the pack covers.
+//
+// AUTHORITY for this binding is the MATERIALS table in
+// tools/gen_material_surface.py — the same table that decides each material's
+// surface family and its measured sigma — and data/textures/README.md restates it.
+// The other ten files in that pack (blue_metal_plate, corrugated_iron, ...) are
+// bound to NOTHING: they were harvested for equipment casings and prop panels, and
+// pointing an unbound cell material at one just because the counts happen to match
+// is explicitly warned against there. Ids 1..9 stay authored because the pack has
+// no plaster, wood, lino or concrete photograph, and 0/5/6/7 are air, signage and
+// door paint.
+//
+// This IS a hand-written table and the data-driven rule says content belongs in a
+// CSV plus a generator. What is hand-written here is six filenames, i.e. a
+// resource binding, not content — but the drift it can suffer is real (rename a
+// file in the pack and this goes quiet at build time and loud only at startup), so
+// the mechanical check for it belongs in tools/check_source_rules.cmake next to
+// the other generated-table drift rules. That is reported, not done, because that
+// file is not this lane's.
+struct MaterialMap {
+    CellType id;
+    const char* file;
+};
+constexpr MaterialMap kMaterialMaps[] = {
+    {kMatShopShutter, "painted_metal_shutter.ktx2"},
+    {kMatLino, "rubber_tiles.ktx2"},
+    {kMatFactoryWall, "factory_wall.ktx2"},
+    {kMatTread, "metal_grate_rusty.ktx2"},
+    {kMatRust, "rusty_metal_03.ktx2"},
+    {kMatRubble, "rusty_corrugated_iron.ktx2"},
+};
+inline constexpr int kMaterialMapCount =
+    static_cast<int>(sizeof(kMaterialMaps) / sizeof(kMaterialMaps[0]));
+// The array layer index IS the material id, so an id past the end of the array
+// would index a layer that does not exist. Caught here rather than by a Vulkan
+// validation message at load time.
+constexpr bool material_maps_in_range() {
+    for (const MaterialMap& m : kMaterialMaps)
+        if (m.id >= kMatCount) return false;
+    return true;
+}
+static_assert(material_maps_in_range(),
+              "every textured material id must be < kMatCount — the albedo array "
+              "is indexed by the id directly, with no mapping table");
+
+// Where the pack lives on disk. A compile definition rather than a runtime search,
+// exactly like GIGA_SHADER_DIR — the fallback below is a relative path and is only
+// correct when the process happens to run from the repo root, so a build without
+// the definition is a build that has to be told. The environment variable is the
+// override that lets a packaged build point somewhere else without a rebuild.
+#ifndef GIGA_TEXTURE_DIR
+#define GIGA_TEXTURE_DIR "data/textures"
+#endif
+
+// The pack's shape, and every one of these is CHECKED rather than trusted:
+// load_layer() rejects a file whose dimensions or level count differ, naming it.
+// Measured across all six committed files (one byte-identical header signature):
+// 2048x2048, levelCount 12, 4x4 blocks, 16 bytes/block, one RGB sample.
+inline constexpr std::uint32_t kAlbedoDim = 2048;
+constexpr std::uint32_t mip_count(std::uint32_t dim) {
+    std::uint32_t n = 1;
+    while (dim > 1) {
+        dim >>= 1;
+        ++n;
+    }
+    return n;
+}
+inline constexpr std::uint32_t kAlbedoMips = mip_count(kAlbedoDim);
+static_assert(kAlbedoMips == 12,
+              "the committed pack carries a full 12-level chain from 2048 to 1x1; "
+              "a different count means the pack changed and every level offset in "
+              "data/textures/README.md with it");
+
+// Display-referred to linear with the SAME curve shaders/cube.frag uses — plain
+// pow(2.2), NOT the piecewise sRGB transfer function. They have to agree, or the
+// ratio below stops being exactly 1 for an untinted cell.
+float to_linear(float v) { return std::pow(v, 2.2f); }
+
+// The linear multiplier a TEXTURED instance carries in CubeInstance::color.
+//
+// Exactly {1,1,1} for an untinted cell — short-circuited rather than computed, so
+// the common path pays no pow() and the identity is exact by construction instead
+// of by floating-point luck. For a flooded cell it is the per-channel ratio of the
+// tinted colour to the material's own mean albedo, which is what survives the
+// sampled texel replacing that mean. The max() guards a material whose table entry
+// has a zero channel; none of ids 10..15 does today (the smallest is lino's 0.13).
+vec3 tint_multiplier(const vec3& base, const vec3& tinted) {
+    return vec3{to_linear(tinted.x) / std::max(to_linear(base.x), 1e-4f),
+                to_linear(tinted.y) / std::max(to_linear(base.y), 1e-4f),
+                to_linear(tinted.z) / std::max(to_linear(base.z), 1e-4f)};
 }
 
 // Where the material id rides inside CubeInstance::occ. The AO mask occupies bits
@@ -348,6 +444,9 @@ bool CubePass::init(VulkanDevice& dev, VkRenderPass renderPass,
                     const char* shaderDir) {
     dev_ = &dev;
     if (!create_cube_mesh()) return false;
+    // BEFORE the pipeline: it decides which fragment module is compiled in and
+    // whether the pipeline layout carries a sampler descriptor.
+    load_material_textures();
     if (!create_pipeline(renderPass, shaderDir)) return false;
 
     // Upper bound: one instance per macro cell. In practice surface culling and run
@@ -425,10 +524,94 @@ bool CubePass::create_cube_mesh() {
         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
 }
 
+// Load the pack, and say out loud what happened either way.
+//
+// This function CANNOT fail the pass. Every way it can go wrong — a GPU with no
+// block-compressed format, a missing data directory, one corrupt file — leaves the
+// pass on the procedural surface, which is not a stub or a placeholder but the
+// renderer this project shipped for its whole life up to this change. What it must
+// never do is go quiet: the one line it always prints at the end is the only place
+// a human can read whether the six committed photographs are on screen.
+void CubePass::load_material_textures() {
+    const char* dir = std::getenv("GIGA_TEXTURE_DIR");
+    if (dir == nullptr || *dir == '\0') dir = GIGA_TEXTURE_DIR;
+
+    if (!albedo_.init(*dev_, kMatCount, kAlbedoDim, kAlbedoDim, kAlbedoMips)) {
+        std::fprintf(stderr,
+                     "[cube] albedo array could not be created — every material "
+                     "renders with the procedural surface\n");
+        albedo_.destroy();
+        return;
+    }
+
+    for (const MaterialMap& m : kMaterialMaps) {
+        const std::string path = join(dir, m.file);
+        if (albedo_.load_layer(m.id, path.c_str()))
+            texMask_ |= 1u << m.id;
+    }
+
+    // Nothing loaded is almost always a path problem, and it is the one case where
+    // keeping the textured pipeline would buy nothing at all: an image whose every
+    // layer is undefined, a descriptor nothing samples, and a second .spv to find.
+    if (texMask_ == 0) {
+        std::fprintf(stderr,
+                     "[cube] ERROR: 0 of %d albedo maps loaded from '%s'. The "
+                     "world renders with the procedural surface only. Check that "
+                     "GIGA_TEXTURE_DIR points at data/textures and read the "
+                     "per-file errors above.\n",
+                     kMaterialMapCount, dir);
+        albedo_.destroy();
+        return;
+    }
+    if (!albedo_.finish()) {
+        std::fprintf(stderr,
+                     "[cube] ERROR: albedo array could not be made readable; "
+                     "falling back to the procedural surface\n");
+        albedo_.destroy();
+        texMask_ = 0;
+        return;
+    }
+    textured_ = albedo_.ready();
+    std::fprintf(stderr,
+                 "[cube] albedo: %u/%d materials from photographs (%s, %.2f MiB "
+                 "device memory, mask 0x%04x) in %.0f ms decode + %.0f ms upload\n",
+                 albedo_.layers_loaded(), kMaterialMapCount,
+                 albedo_.format_name(),
+                 static_cast<double>(albedo_.device_bytes()) / (1024.0 * 1024.0),
+                 texMask_, albedo_.decode_ms(), albedo_.upload_ms());
+    if (albedo_.layers_loaded() < static_cast<std::uint32_t>(kMaterialMapCount))
+        std::fprintf(stderr,
+                     "[cube] WARNING: %d of %d albedo maps FAILED to load and "
+                     "those materials keep the procedural surface — see the "
+                     "errors above\n",
+                     kMaterialMapCount
+                         - static_cast<int>(albedo_.layers_loaded()),
+                     kMaterialMapCount);
+}
+
 bool CubePass::create_pipeline(VkRenderPass renderPass, const char* shaderDir) {
     std::vector<char> vsrc, fsrc;
     if (!read_file(join(shaderDir, "cube.vert.spv"), vsrc)) return false;
-    if (!read_file(join(shaderDir, "cube.frag.spv"), fsrc)) return false;
+    // Two modules from ONE source: shaders/cube.frag is compiled plain for
+    // body_pass and again with -DGIGA_ALBEDO_ARRAY for this pass, because a
+    // sampler declared unconditionally would be statically used by the body
+    // pipeline, whose layout has no descriptor sets (see the header comment in
+    // cube.frag). If the second glslc command is missing from CMakeLists.txt this
+    // read fails and the pass refuses to start — deliberately louder than
+    // silently reverting to the untextured module, which would look like the
+    // loader did nothing.
+    const char* fragSpv = textured_ ? "cube_tex.frag.spv" : "cube.frag.spv";
+    if (!read_file(join(shaderDir, fragSpv), fsrc)) {
+        if (textured_)
+            std::fprintf(stderr,
+                         "[cube] ERROR: %s is missing. CMakeLists.txt needs a "
+                         "glslc command that compiles shaders/cube.frag with "
+                         "-DGIGA_ALBEDO_ARRAY into that name; see the shader "
+                         "block next to `foreach(_sh cube.vert cube.frag "
+                         "body.vert)`.\n",
+                         fragSpv);
+        return false;
+    }
 
     VkShaderModule vs = VK_NULL_HANDLE, fs = VK_NULL_HANDLE;
     if (!make_module(dev_->device, vsrc, &vs)) return false;
@@ -524,6 +707,16 @@ bool CubePass::create_pipeline(VkRenderPass renderPass, const char* shaderDir) {
     lci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     lci.pushConstantRangeCount = 1;
     lci.pPushConstantRanges = &pcr;
+    // Set 0 = the albedo array's combined image sampler, and ONLY when the
+    // textured module is the one being compiled in. A layout that declares a set
+    // the shader does not use is legal but pointless; a shader that uses a set the
+    // layout does not declare is invalid, which is the whole reason for the two
+    // modules.
+    const VkDescriptorSetLayout setLayout = albedo_.set_layout();
+    if (textured_) {
+        lci.setLayoutCount = 1;
+        lci.pSetLayouts = &setLayout;
+    }
 
     bool ok = vkCreatePipelineLayout(dev_->device, &lci, nullptr, &layout_)
               == VK_SUCCESS;
@@ -653,6 +846,11 @@ std::uint32_t CubePass::build_instances(std::uint32_t frameIndex,
     // needs no second cache. `tint` collapses every sub-threshold fluid amount to one
     // value, because those all produce the identical untinted colour and refusing to
     // merge them would cost runs for nothing.
+    //
+    // Still exactly equivalent now that a textured material writes a linear tint
+    // RATIO instead of an absolute colour: the ratio is a pure function of the same
+    // two inputs, and whether a material is textured is fixed for the whole run of
+    // the process. No merge is gained or lost by this change.
     auto tint = [fluidData](std::size_t i) -> float {
         if (!fluidData) return 0.0f;
         const float f = fluidData[i];
@@ -673,11 +871,19 @@ std::uint32_t CubePass::build_instances(std::uint32_t frameIndex,
         inst.span[1] = span[1];
         inst.span[2] = span[2];
         inst.spanW = 0;
-        vec3 col = type_color(types[i]);
+        const CellType ct = types[i];
+        const vec3 base = type_color(ct);
         const float t = tint(i);
+        vec3 col = base;
         if (t > 0.0f)
-            col = vec3{lerp(col.x, 0.15f, t), lerp(col.y, 0.35f, t),
-                       lerp(col.z, 0.85f, t)};
+            col = vec3{lerp(base.x, 0.15f, t), lerp(base.y, 0.35f, t),
+                       lerp(base.z, 0.85f, t)};
+        // A textured material's mean albedo already arrives in the sampled texel,
+        // so shipping it again in `color` would darken the photograph by its own
+        // mean. What ships instead is the linear tint ratio — {1,1,1} when dry.
+        // See the two-meanings note on CubeInstance::color.
+        if (ct < kMatCount && ((texMask_ >> ct) & 1u) != 0u)
+            col = t > 0.0f ? tint_multiplier(base, col) : vec3{1.0f, 1.0f, 1.0f};
         inst.color = col;
         // The fluid tint above deliberately does NOT change the surface family: a
         // flooded parquet floor is still parquet, wet. Tint is colour, family is
@@ -718,9 +924,21 @@ void CubePass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
     if (count == 0) return;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
+    if (textured_) {
+        const VkDescriptorSet set = albedo_.descriptor_set();
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0,
+                                1, &set, 0, nullptr);
+    }
+    // torus.z is this pass's output lane, not the caller's input: whatever main.cpp
+    // put there is replaced by the set of materials that actually decoded. Copying
+    // 128 bytes on the stack once per frame is the price of main.cpp not having to
+    // know textures exist, and of body_pass — which shares this block AND this
+    // fragment source — keeping the 0 that selects the procedural path.
+    CubePush p = push;
+    p.torus.z = static_cast<float>(texMask_);
     vkCmdPushConstants(cmd, layout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0, sizeof(CubePush), &push);
+                       0, sizeof(CubePush), &p);
     VkDeviceSize offs[2] = {0, 0};
     VkBuffer bufs[2] = {cubeVerts_.buffer, instances_[frameIndex].buffer};
     vkCmdBindVertexBuffers(cmd, 0, 2, bufs, offs);
@@ -733,6 +951,14 @@ void CubePass::destroy() {
     cubeVerts_.destroy(*dev_);
     if (pipeline_) { vkDestroyPipeline(dev_->device, pipeline_, nullptr); pipeline_ = VK_NULL_HANDLE; }
     if (layout_) { vkDestroyPipelineLayout(dev_->device, layout_, nullptr); layout_ = VK_NULL_HANDLE; }
+    // LAST, after the pipeline layout that names its descriptor set layout is
+    // already gone. Vulkan permits the other order — a pipeline layout keeps its
+    // own reference — but destroying dependents first is the ordering that stays
+    // correct if this pass ever holds two pipelines. Idempotent, so the early-bail
+    // paths in load_material_textures() that already called it cost nothing here.
+    albedo_.destroy();
+    textured_ = false;
+    texMask_ = 0;
 }
 
 } // namespace giga::gpu
