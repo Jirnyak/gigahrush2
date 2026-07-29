@@ -402,9 +402,16 @@ foreach(_suite IN LISTS GIGA_SUITE_FILES)
     # Included, so it compiles. Now check it is actually REACHED: an entry point
     # nobody calls is the same defect one layer in, and the compiler is perfectly
     # happy to build a static function that is never invoked.
-    string(REGEX MATCHALL "static void test_[A-Za-z0-9_]*_all\\(\\)" _entries "${_suite_body}")
+    # Match on `void ` alone, which subsumes `static void ` - do NOT require `static`.
+    # Measured 2026-07-29: 22 of the 23 entry points are `static void`, and exactly one is bare
+    # `void` (tests/suite_speech.inl:612 `void test_speech_all()`). Requiring `static` made that
+    # one suite's 81 CHECK sites invisible to the dispatch half of this guard, which is the same
+    # class of defect the guard exists to catch - a check that silently sees nothing. Found by an
+    # agent auditing the guard rather than by the guard itself, which is the argument for auditing
+    # new gates instead of trusting them because they are new.
+    string(REGEX MATCHALL "void test_[A-Za-z0-9_]*_all\\(\\)" _entries "${_suite_body}")
     foreach(_entry_decl IN LISTS _entries)
-        string(REGEX REPLACE "^static void " "" _entry "${_entry_decl}")
+        string(REGEX REPLACE "^void " "" _entry "${_entry_decl}")
         string(REGEX REPLACE "\\(\\)$" "" _entry "${_entry}")
         string(FIND "${GIGA_TU_TEXT}" "${_entry}();" _entry_called)
         if(_entry_called EQUAL -1)
