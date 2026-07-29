@@ -52,8 +52,12 @@ void FloorStreamer::embody_crowd(Registry& ecs, NpcPool& pool, FloorModule& fm,
     // today, but a snapshot keeps this loop correct regardless — set_floor would
     // swap-remove from the very bucket we walk). This is floor-load, not tick, work
     // and the copy is free beside the ~130 MiB nav bake next to it.
+    // int16_t, not uint16_t: floor labels are SIGNED and this stack really does go
+    // negative (-8 .. -50). `floor_bucket` takes std::int16_t, so the old uint16_t
+    // cast turned floor -50 into 65486 and only got -50 back out of the implicit
+    // narrowing by modular wraparound. Correct by accident is not correct.
     const std::vector<NpcId> crowd =
-        pool.floor_bucket(static_cast<std::uint16_t>(fm.number));
+        pool.floor_bucket(static_cast<std::int16_t>(fm.number));
     for (NpcId id : crowd) {
         // Bucket residents are alive by construction (kill/leave drop them). Skip
         // anyone already embodied — e.g. the player, labelled with this floor but
@@ -91,7 +95,6 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
     // population never grows per visit (master_prompt #9).
     if (!fm.seeded) {
         const FloorSpec& spec = floor_spec(fm.kind);
-        NpcId before = pool.count();
         // fm.number goes through UNCAST. This used to be
         // static_cast<std::uint16_t>(fm.number), which is the exact line that wrote
         // the demo stack's negative labels into the pool as garbage: floor -50 became
@@ -107,7 +110,9 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
         // crowd IS pool.floor_bucket(number) once seed_floor_from_spec has labelled
         // every record it spawned. A frozen [firstId, count) range could not express a
         // record migrating in or out of this floor; the label can, and macro_sim
-        // migration is exactly that operation. `before` stays local for the count below.
+        // migration is exactly that operation. A `NpcId before = pool.count()` also
+        // survived here, feeding a delta that was deleted with those fields — dead
+        // since, and a C4189 the zero-warning standard should have caught.
         fm.seeded = true;
     }
 
