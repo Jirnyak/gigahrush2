@@ -730,6 +730,14 @@ int main(int argc, char** argv) {
     game::ContractBook& contracts = runState.book;
     game::Contract offer{};
     char offerLine[200] = {};
+    // Quest offer from the same proximity sweep that feeds contract_offer. One
+    // body can carry both a procedural contract AND an authored quest, and both
+    // are displayed side-by-side — E takes whichever is pending. Contract is
+    // preferred when both land simultaneously (walk-in economy vs authored story);
+    // in practice the 8% quest share keeps collisions rare. [quest.h]
+    game::QuestId questOffer = game::kInvalidQuest;
+    game::NpcId questOfferGiver = game::kInvalidNpc;
+    char questOfferLine[320] = {};
     char rumourLine[160] = {};
     std::uint64_t rumourAt = 0;
     // The murmur, next to the rumour and deliberately separate from it: a rumour is a
@@ -1000,14 +1008,23 @@ int main(int argc, char** argv) {
                 if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
                     e.key.scancode == SDL_SCANCODE_X)
                     scrapWanted = true;
-                // E takes the job on offer. The only interaction bind in the game, and
-                // it exists because a contract is the one thing the player has to
-                // actively agree to — everything else is walked into.
+                // E takes the job on offer — contract first, then quest if no
+                // contract is pending. Both clear on take so a second press is
+                // harmless. Quest accept refuses a dead giver or a chain gate;
+                // contract_accept refuses the same. [quest.h, contract.h]
                 if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
                     e.key.scancode == SDL_SCANCODE_E) {
                     if (game::contract_accept(contracts, offer, ledger)) {
                         offer = game::Contract{};
                         offerLine[0] = 0;
+                    } else if (game::quest_valid(questOffer) &&
+                               questOfferGiver != game::kInvalidNpc &&
+                               game::quest_accept(quests, pool, questOffer,
+                                                  questOfferGiver,
+                                                  currentFloor, ledger)) {
+                        questOffer = game::kInvalidQuest;
+                        questOfferGiver = game::kInvalidNpc;
+                        questOfferLine[0] = 0;
                     }
                 }
                 if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
@@ -1263,6 +1280,19 @@ int main(int argc, char** argv) {
                         if (off.giver != game::kInvalidNpc &&
                             game::contract_text(off, offerLine, sizeof(offerLine))) {
                             offer = off;
+                        }
+                        // The same body may also carry an authored quest. Seed
+                        // 0xB4C3 is distinct from the contract seed (0x9E37) so the
+                        // two hashes land in different equivalence classes and a body
+                        // hired for a contract does not automatically offer a quest
+                        // with the same random-chain outcome. [quest.h]
+                        const game::QuestId qid = game::quest_offer(
+                            pool, quests, sp, currentFloor, 0xB4C3u);
+                        if (game::quest_valid(qid) &&
+                            game::quest_offer_text(qid, questOfferLine,
+                                                   sizeof(questOfferLine))) {
+                            questOffer = qid;
+                            questOfferGiver = sp;
                         }
                     }
                 }
@@ -1933,9 +1963,25 @@ int main(int argc, char** argv) {
                 if (offerLine[0])
                     ImGui::TextColored(ImVec4(0.98f, 0.82f, 0.35f, 1.0f),
                                        "OFFER (E to take): %s", offerLine);
+                if (questOfferLine[0])
+                    ImGui::TextColored(ImVec4(0.70f, 0.98f, 0.60f, 1.0f),
+                                       "QUEST (E to take): %s", questOfferLine);
                 ImGui::Text("jobs %d active | %u done | %u failed | paid %d rub",
                             active, contracts.completed, contracts.failed,
                             contractPaid);
+                // Active quests — each row reports title + progress + time left.
+                const int qActive = game::quest_active_count(quests);
+                if (qActive > 0) {
+                    ImGui::Separator();
+                    ImGui::Text("quests %d active | paid %d rub", qActive, questPaid);
+                    for (int qi = 1; qi <= static_cast<int>(game::kQuestCount); ++qi) {
+                        char qline[320];
+                        const game::QuestId qid = static_cast<game::QuestId>(qi);
+                        if (game::quest_line(quests, qid, qline, sizeof(qline)))
+                            ImGui::TextColored(ImVec4(0.70f, 0.98f, 0.60f, 1.0f),
+                                               "  quest: %s", qline);
+                    }
+                }
             }
             if (rumourLine[0])
                 ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.91f, 1.0f), "\"%s\"",
