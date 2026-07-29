@@ -10,11 +10,46 @@
 // spawn weight exponentially past that cap — so a shallow floor *can* cough up
 // something absurd, just rarely. That rare payout is the loop.
 //
-// Honest inheritance note: **66 of the reference's 69 monster kinds have no loot
-// table at all** — they drop at most one rare item. That hole is inherited, not
-// introduced, and closing it properly is design work. Until then drops are rolled
-// from the global catalog under the floor's value cap, which is the same mechanism
-// the reference uses for container/room loot.
+// Honest inheritance note, CORRECTED 2026-07-29. This file used to claim "66 of the
+// reference's 69 monster kinds have no loot table at all", and treated that as licence to
+// ignore `mobKind` entirely. The half that is true: 66 of 69 kinds carry no `lootTable`.
+// The half that was wrong, and it is the load-bearing half: the reference authors **136
+// `rareDrops` rows across all 69 kinds** — every kind has at least one. It simply never
+// reads them (`generateMonsterLoot` consults `lootTable` only), which is why a port that
+// went looking for a reader found nothing.
+//
+// So drops are now **per-kind first, catalog second**: `drop_mob_loot` offers each roll
+// to the mob's authored row ([loot_table.h]) and falls back to the global weighted
+// catalog when it misses. The tier envelope below still decides HOW MUCH falls; the table
+// only decides WHAT. One roller, one `Pickup` spawner, one walk over the `Dead` set —
+// there is deliberately no second death-drop system beside this one.
+//
+// ---------------------------------------------------------------------------
+// Kills vs crates — measured, and it contradicts what [container.h] asserts
+// ---------------------------------------------------------------------------
+// [container.h] opens by stating that containers are the PRIMARY loot source and monster
+// drops the secondary one, citing the reference's economics doc. Measured 2026-07-29
+// against the tables this build actually ships, that is false at every depth, and by one
+// to two orders of magnitude at the bottom:
+//
+//   floor   heads/floor   rub/kill   all kills   24 crates   682 crates
+//   0            106          53.3       5,647       1,717       48,792
+//   -13          622         720.5     448,174      13,997      397,742
+//   -26        2,157       1,657.4   3,574,960      36,632    1,040,951
+//
+// (heads = `mob_count_for_floor(z, danger 3, Ministry)`; rub/kill averaged over all 69
+// kinds at their own tier; a crate priced as the modal RoomStash, at `container_budget`'s
+// hard floor of 24 and its Residential ceiling of 682.) A floor's monsters carry 3x to
+// 98x what its crates do, depending on how many crates the geometry allows.
+//
+// **This is not caused by the loot table and must not be "fixed" here.** The table
+// LOWERED expected income by 3-10% ([loot_table.h] has the grid); the imbalance is a
+// head-count fact — `mob_count_for_floor` reaches 2,157 on floor -26 while
+// `container_budget` caps at 682 and bottoms out at 24. Nobody clears a floor, so what
+// the player feels is softer than the totals; but 22 kills at -26 already out-earn every
+// crate on a 24-crate floor, so the ratio does not save the claim either. Which loop the
+// game pays for is an owner-level balance decision, so it is recorded here with its
+// numbers rather than silently patched by a roller.
 #pragma once
 
 #include <cstdint>
@@ -54,8 +89,14 @@ inline constexpr float kPickupReach = 1.8f;
 std::uint32_t loot_dead_mobs(Registry& reg, LayerId layer, int floorNumber,
                              std::uint32_t seed);
 
-// Drop one mob's spoils at `pos`. Rolls the global catalog through the floor's value
-// cap, so what falls is depth-appropriate without any per-mob table.
+// Drop one mob's spoils at `pos`.
+//
+// `mobTier` sets the envelope — how many rolls and how likely each is to pay. Each
+// paying roll then asks `roll_kind_drop(mobKind, ...)` ([loot_table.h]) for the mob's own
+// authored item and, on a miss, picks from the global catalog through the floor's value
+// cap. So what falls is both depth-appropriate AND recognisable as having come off THAT
+// monster, and the substitution keeps the item count per kill exactly what the envelope
+// says it is.
 std::uint32_t drop_mob_loot(Registry& reg, LayerId layer, const vec3& pos,
                             std::uint8_t mobKind, std::uint8_t mobTier,
                             int floorNumber, std::uint32_t seed);
