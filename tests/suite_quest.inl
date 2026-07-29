@@ -4,7 +4,7 @@
 // `using namespace giga` / `using namespace giga::game`. Everything except the single
 // entry point `test_quest_all()` lives in `namespace quest_test`.
 //
-// FOUR load-bearing groups, and they test different kinds of thing:
+// FIVE load-bearing groups, and they test different kinds of thing:
 //
 //   * `catalog_is_reachable()` re-checks, against the REAL engine functions, every
 //     property tools/gen_quest_table.py mirrors in Python. That mirror is the fast
@@ -25,6 +25,11 @@
 //     because a round-trip over zeroes passes even when the serializer drops half the
 //     struct, and proves the block composes at a non-zero offset inside a larger
 //     payload — which is how save.cpp will hold it.
+//   * `the_slot_is_recycled()` arms `pool.set_recycling(true)` and requires an authored
+//     quest whose giver died in the MACRO sweep to FAIL rather than transfer to the
+//     newborn who inherited the id. It is the only group here that tests a POLICY the
+//     shipping pool has not turned on yet, and it is the reason `QuestProgress::giver` is
+//     an `NpcHandle` — see the A/B measurement in its own banner.
 //
 // A note on memcmp, because the sibling suite (suite_saveload.inl) is careful to say
 // that comparing two `Contract`s with memcmp is a test that can fail for a reason which
@@ -34,6 +39,7 @@
 // byte-for-byte comparison is exact. The `static_assert`s in quest.h are what keep that
 // true.
 
+#include <cstdio>
 #include <cstring>
 #include <vector>
 
@@ -277,7 +283,7 @@ void offers() {
             CHECK(d.prereq == kInvalidQuest);   // nothing chained is open on a fresh log
             QuestLog log{};
             RunLedger led{};
-            CHECK(quest_accept(log, id, g, fz, led));
+            CHECK(quest_accept(log, pool, id, g, fz, led));
         }
     }
     CHECK(offered > 50);   // the whole shipped stack really does hand quests out
@@ -326,7 +332,7 @@ void the_chain() {
     // Step 2 is invisible until step 1 is DONE, and refused if asked for directly.
     CHECK(quest_eligible(log, head, 0));
     CHECK(!quest_eligible(log, step2, 0));
-    CHECK(!quest_accept(log, step2, giver, 0, led));
+    CHECK(!quest_accept(log, pool, step2, giver, 0, led));
 
     // Not offered either, over the whole crowd on every floor step 2 lives on.
     for (int i = 0; i < 400; ++i) (void)pool.spawn();
@@ -338,7 +344,7 @@ void the_chain() {
     CHECK(!leaked);
 
     // Take and finish step 1 the way a player would: carry the cargo, stand there, tick.
-    CHECK(quest_accept(log, head, giver, 0, led));
+    CHECK(quest_accept(log, pool, head, giver, 0, led));
     CHECK(quest_state(log, head) == QuestState::Active);
     const QuestDef& h = quest_def(head);
     CHECK(quest_step(log, pool, inv, led, static_cast<std::uint32_t>(kSimStepMs)) == 0);
@@ -370,7 +376,7 @@ void the_chain() {
     // contract does not have.
     const QuestDef& s2 = quest_def(step2);
     CHECK(s2.rewardItem != kInvalidItem);
-    CHECK(quest_accept(log, step2, giver, 0, led));
+    CHECK(quest_accept(log, pool, step2, giver, 0, led));
     for (int k = 0; k < s2.target; ++k) (void)quest_grant_item(inv, s2.subject, 1);
     CHECK(quest_step(log, pool, inv, led, static_cast<std::uint32_t>(kSimStepMs)) ==
           s2.reward);
@@ -418,7 +424,7 @@ void hunting() {
             hunt = static_cast<QuestId>(i + 1);
     CHECK(hunt != kInvalidQuest);
     const QuestDef& d = quest_def(hunt);
-    CHECK(quest_accept(log, hunt, giver, 0, led));
+    CHECK(quest_accept(log, pool, hunt, giver, 0, led));
 
     // A different kind earns nothing. Picked as any kind that is not this row's target,
     // so the assertion does not depend on which monster the CSV happens to name.
@@ -469,7 +475,7 @@ void the_clock_runs_out() {
     {
         QuestLog log{};
         RunLedger led{};
-        CHECK(quest_accept(log, urgent, giver, fz, led));
+        CHECK(quest_accept(log, pool, urgent, giver, fz, led));
         CHECK(log.row[urgent - 1].remainingMs == d.limitMs);
 
         // **THE MEASUREMENT.** Not "it expires eventually" — the number of sim steps a
@@ -498,7 +504,7 @@ void the_clock_runs_out() {
         // Expired is TERMINAL. Unlike a dead giver, running out of time is the player's
         // own doing, so the row does not come back.
         CHECK(!quest_eligible(log, urgent, fz));
-        CHECK(!quest_accept(log, urgent, giver, fz, led));
+        CHECK(!quest_accept(log, pool, urgent, giver, fz, led));
         // ...and an expired row is not silently revived by later ticks either.
         CHECK(quest_step(log, pool, inv, led,
                          static_cast<std::uint32_t>(kSimStepMs)) == 0);
@@ -510,7 +516,7 @@ void the_clock_runs_out() {
     {
         QuestLog log{};
         RunLedger led{};
-        CHECK(quest_accept(log, urgent, giver, fz, led));
+        CHECK(quest_accept(log, pool, urgent, giver, fz, led));
         std::int32_t paid = 0;
         for (int k = 0; k < 5000; ++k) paid += quest_step(log, pool, inv, led, 0u);
         CHECK(paid == 0);
@@ -530,7 +536,7 @@ void the_clock_runs_out() {
         QuestLog log{};
         RunLedger led{};
         Inventory empty;
-        CHECK(quest_accept(log, head, giver, quest_def(head).floorLo, led));
+        CHECK(quest_accept(log, pool, head, giver, quest_def(head).floorLo, led));
         // Long enough to outlast the LONGEST limit in the catalog, derived from the
         // table rather than hardcoded so a content edit cannot quietly make this loop
         // too short to prove anything.
@@ -552,7 +558,7 @@ void the_clock_runs_out() {
     {
         QuestLog log{};
         RunLedger led{};
-        CHECK(quest_accept(log, urgent, giver, fz, led));
+        CHECK(quest_accept(log, pool, urgent, giver, fz, led));
         std::uint32_t prev = log.row[urgent - 1].remainingMs;
         bool monotone = true;
         for (int k = 0; k < 1000; ++k) {
@@ -597,7 +603,7 @@ void the_giver_dies() {
                 q = static_cast<QuestId>(i + 1);
         CHECK(q != kInvalidQuest);
         const QuestDef& d = quest_def(q);
-        CHECK(quest_accept(log, q, doomed, d.floorLo, led));
+        CHECK(quest_accept(log, pool, q, doomed, d.floorLo, led));
         quest_on_kill(log, static_cast<std::uint8_t>(d.subject));
         CHECK(log.row[q - 1].progress == 1);
 
@@ -618,9 +624,14 @@ void the_giver_dies() {
         // citizen dying anywhere in the building delete authored content for the rest of
         // the run, and `finalize_deaths` runs every tick.
         CHECK(quest_eligible(log, q, d.floorLo));
-        CHECK(quest_accept(log, q, other, d.floorLo, led));
+        CHECK(quest_accept(log, pool, q, other, d.floorLo, led));
         CHECK(quest_state(log, q) == QuestState::Active);
-        CHECK(log.row[q - 1].giver == other);
+        // The HANDLE for `other`, not the bare id. Written this way on purpose: `other`
+        // has never died, so its generation is 0 and `giver == other` would pass by
+        // accident — an `NpcHandle` and an `NpcId` are the same `std::uint32_t`, so
+        // nothing but the assertion itself can catch that confusion.
+        CHECK(log.row[q - 1].giver == pool.handle(other));
+        CHECK(npc_handle_id(log.row[q - 1].giver) == other);
         CHECK(log.row[q - 1].remainingMs == d.limitMs);
         CHECK(log.row[q - 1].progress == 0);
         // Counters do not un-count: the run really did lose a job.
@@ -650,8 +661,8 @@ void the_giver_dies() {
             else if (qb == kInvalidQuest) qb = static_cast<QuestId>(i + 1);
         }
         CHECK(qa != kInvalidQuest && qb != kInvalidQuest);
-        CHECK(quest_accept(log, qa, a, 0, led));
-        CHECK(quest_accept(log, qb, b, 0, led));
+        CHECK(quest_accept(log, pool, qa, a, 0, led));
+        CHECK(quest_accept(log, pool, qb, b, 0, led));
 
         quest_on_giver_died(log, kInvalidNpc);          // a no-op, never a wildcard
         CHECK(log.failed == 0u);
@@ -666,7 +677,147 @@ void the_giver_dies() {
 }
 
 // ---------------------------------------------------------------------------
-// 7. Descend — the baseline guard, ported for a measured reason
+// 7. A RECYCLED slot — the ABA hole, and the reason `giver` is a handle
+// ---------------------------------------------------------------------------
+// The finding [tests/suite_audit.inl] `giver_slot_recycled` closed for contracts, asked
+// of quests — because `QuestProgress::giver` was the same bare `NpcId` held across ticks
+// and `quest_step`'s poll was the identical `!valid(id) || !alive(id)` line.
+//
+// The mechanism, in order. [npc_pool.h] never-reclaim is a POLICY, not a property of the
+// type, and `set_recycling(true)` suspends it. The giver then dies in the MACRO sweep,
+// which publishes no `NpcDied` event ([macro_sim.h]) — so `quest_on_giver_died` never
+// fires, exactly as it never fires for a contract — the freed slot is handed to a newborn,
+// and a poll that asks "is somebody alive at that index" answers YES. The authored errand
+// completes for a stranger who never offered it, which is the reference's own broken quest
+// binding that contract.h opens by claiming this engine is immune to.
+//
+// **MEASURED against the bare-id body**, not reasoned about: this same suite text, linked
+// twice against two `quest.cpp` objects differing in exactly one line — `quest_step`'s
+// liveness poll, `!pool.handle_valid(p.giver)` against the old
+// `!pool.valid(p.giver) || !pool.alive(p.giver)`. Both runs execute 2,823 checks. The
+// handle body fails 0; the bare-id body fails FOURTEEN, and the numbers are the finding:
+// the row paid 180 rub instead of 0, banked 180 instead of 0, `earned` 180 instead of 0,
+// ended in state 2 (Complete) instead of 4 (Orphaned), and counted completed 1 / failed 0
+// instead of completed 0 / failed 1. An authored quest was paid out in full to a newborn
+// who never offered it — the identical shape contract.cpp measured at 700 rub.
+//
+// Armed HERE and not in the shipping pool, deliberately: a test is exactly where an
+// unshipped policy belongs, and the guard has to be proven against the policy before
+// main.cpp turns it on.
+void the_slot_is_recycled() {
+    NpcPool pool;
+    pool.init();
+    pool.set_recycling(true);
+    CHECK(pool.recycling());
+
+    // A Hunt already AT its target, so the bare-id version does not merely keep the row
+    // alive — it PAYS. The finding is a payout to a stranger, not a lingering row, and the
+    // assertions below should read as one.
+    const NpcId giver = pool.spawn();
+    QuestLog log{};
+    RunLedger led{};
+    Inventory inv;
+
+    QuestId q = kInvalidQuest;
+    for (std::size_t i = 0; i < kQuestCount && q == kInvalidQuest; ++i)
+        if (static_cast<ObjectiveKind>(kQuestTable[i].kind) == ObjectiveKind::Hunt &&
+            kQuestTable[i].prereq == kInvalidQuest)
+            q = static_cast<QuestId>(i + 1);
+    CHECK(q != kInvalidQuest);
+    const QuestDef& d = quest_def(q);
+    CHECK(quest_accept(log, pool, q, giver, d.floorLo, led));
+
+    // The STORED field is a (generation, id) pair, and its ID HALF is still exactly the id
+    // that was passed in — which is what keeps `quest_offer`'s determinism hash and
+    // `quest_on_giver_died`'s event comparison working off a bare id.
+    const NpcHandle bound = log.row[q - 1].giver;
+    CHECK(bound == pool.handle(giver));
+    CHECK(npc_handle_id(bound) == giver);
+    CHECK(npc_handle_gen(bound) == pool.generation(giver));
+    CHECK(pool.handle_valid(bound));
+
+    for (int k = 0; k < d.target; ++k)
+        quest_on_kill(log, static_cast<std::uint8_t>(d.subject));
+    CHECK(log.row[q - 1].progress == d.target);   // one quest_step from d.reward
+
+    // The giver dies the way NOTHING reports: in the macro sweep. No NpcDied event is
+    // published, so `quest_on_giver_died` is deliberately NOT called here — that is
+    // precisely the gap `quest_step`'s poll has to cover on its own.
+    pool.kill(giver);
+    const NpcId newborn = pool.spawn();
+    CHECK(newborn == giver);          // the ABA actually happened, not hypothetically
+    CHECK(pool.recycled() == 1u);     // ...out of the free list, not off the tail
+    // BOTH halves of the poll the bare-id version ran now pass. That is the whole finding:
+    // it would have kept this row and paid it out to whoever this newborn is.
+    CHECK(pool.valid(newborn));
+    CHECK(pool.alive(newborn));
+    // The one bit of state a bare id could not see.
+    CHECK(pool.generation(newborn) != npc_handle_gen(bound));
+    CHECK(!pool.handle_valid(bound));
+
+    const std::int32_t paid =
+        quest_step(log, pool, inv, led, static_cast<std::uint32_t>(kSimStepMs));
+    // PRINTED, so a human reading the log gets the measured figure rather than a green
+    // tick: the reward that was at stake, and what the row actually did with it.
+    std::fprintf(stderr,
+                 "[quest] giver id %u recycled into a newborn (gen %u -> %u); the "
+                 "authored row paid %d rub of %d and ended in state %u (4 = Orphaned)\n",
+                 static_cast<unsigned>(giver),
+                 static_cast<unsigned>(npc_handle_gen(bound)),
+                 static_cast<unsigned>(pool.generation(newborn)),
+                 static_cast<int>(paid), static_cast<int>(d.reward),
+                 static_cast<unsigned>(log.row[q - 1].state));
+    CHECK(paid == 0);
+    CHECK(led.banked == 0);
+    CHECK(log.earned == 0);
+    CHECK(quest_state(log, q) == QuestState::Orphaned);
+    CHECK(log.failed == 1u && log.orphaned == 1u);
+    CHECK(log.completed == 0u && log.expired == 0u);
+    // RELEASED, not merely unpaid: the clock and the kill count both go, so the newborn
+    // never inherits work done for somebody else.
+    CHECK(log.row[q - 1].progress == 0);
+    CHECK(log.row[q - 1].remainingMs == 0u);
+
+    // And the guard DISCRIMINATES rather than refusing everything: a handle minted from
+    // the NEWBORN — same slot, current generation — is valid, and the row is takeable from
+    // them, which is the quest-specific deviation (Orphaned, never terminal). Without this
+    // every assertion above would also pass against a `handle_valid` that always said no.
+    CHECK(pool.handle_valid(pool.handle(newborn)));
+    CHECK(quest_eligible(log, q, d.floorLo));
+    CHECK(quest_accept(log, pool, q, newborn, d.floorLo, led));
+    CHECK(log.row[q - 1].giver == pool.handle(newborn));
+    CHECK(log.row[q - 1].giver != bound);      // same id, demonstrably a different person
+    for (int k = 0; k < d.target; ++k)
+        quest_on_kill(log, static_cast<std::uint8_t>(d.subject));
+    CHECK(quest_step(log, pool, inv, led, static_cast<std::uint32_t>(kSimStepMs)) ==
+          d.reward);
+    CHECK(quest_state(log, q) == QuestState::Complete);
+    CHECK(log.completed == 1u);
+    CHECK(led.banked == d.reward);
+    // Counters do not un-count: the run really did lose the first attempt.
+    CHECK(log.failed == 1u && log.orphaned == 1u);
+
+    // **A corpse cannot be BOUND either**, which is the other half of the migration.
+    // `pool.handle()` on a dead record returns the generation `kill()` already bumped, so
+    // an accept that minted one would write an Active row `quest_step` orphans on the very
+    // next tick — billing the run a `failed` for a job it never had. Refused instead, and
+    // that refusal is why `quest_accept` takes the pool at all.
+    NpcPool p3;
+    p3.init();
+    const NpcId corpse = p3.spawn();
+    p3.kill(corpse);
+    QuestLog fresh{};
+    RunLedger led2{};
+    CHECK(!quest_accept(fresh, p3, q, corpse, d.floorLo, led2));
+    CHECK(!quest_accept(fresh, p3, q, 100000u, d.floorLo, led2));   // past high-water
+    CHECK(!quest_accept(fresh, p3, q, kInvalidNpc, d.floorLo, led2));
+    CHECK(quest_state(fresh, q) == QuestState::Unseen);   // nothing was written
+    CHECK(fresh.failed == 0u);
+    CHECK(quest_active_count(fresh) == 0);
+}
+
+// ---------------------------------------------------------------------------
+// 8. Descend — the baseline guard, ported for a measured reason
 // ---------------------------------------------------------------------------
 void descending() {
     NpcPool pool;
@@ -687,7 +838,7 @@ void descending() {
     {
         QuestLog log{};
         RunLedger led{};
-        CHECK(quest_accept(log, q, giver, fz, led));
+        CHECK(quest_accept(log, pool, q, giver, fz, led));
         CHECK(quest_step(log, pool, inv, led,
                          static_cast<std::uint32_t>(kSimStepMs)) == 0);
         CHECK(log.row[q - 1].progress == 0);
@@ -712,21 +863,21 @@ void descending() {
         QuestLog log{};
         RunLedger led{};
         led.deepestFloor = -d.target;      // exactly the target, in |z|
-        CHECK(!quest_accept(log, q, giver, fz, led));
+        CHECK(!quest_accept(log, pool, q, giver, fz, led));
         led.deepestFloor = -(d.target + 4);
-        CHECK(!quest_accept(log, q, giver, fz, led));
+        CHECK(!quest_accept(log, pool, q, giver, fz, led));
         // Up is depth too, and the ledger keeps only one high-water mark.
         led.deepestFloor = d.target;
-        CHECK(!quest_accept(log, q, giver, fz, led));
+        CHECK(!quest_accept(log, pool, q, giver, fz, led));
         CHECK(quest_state(log, q) == QuestState::Unseen);   // nothing was written
         led.deepestFloor = d.target - 1;
-        CHECK(quest_accept(log, q, giver, fz, led));
+        CHECK(quest_accept(log, pool, q, giver, fz, led));
         CHECK(log.row[q - 1].baseline == static_cast<std::uint8_t>(d.target - 1));
     }
 }
 
 // ---------------------------------------------------------------------------
-// 8. Text — rendered, sized, and byte-valid
+// 9. Text — rendered, sized, and byte-valid
 // ---------------------------------------------------------------------------
 void text() {
     NpcPool pool;
@@ -775,12 +926,12 @@ void text() {
 
     // The HUD's active count tracks reality.
     CHECK(quest_active_count(log) == 0);
-    CHECK(quest_accept(log, 1, giver, quest_def(1).floorLo, led));
+    CHECK(quest_accept(log, pool, 1, giver, quest_def(1).floorLo, led));
     CHECK(quest_active_count(log) == 1);
 }
 
 // ---------------------------------------------------------------------------
-// 9. The save block
+// 10. The save block
 // ---------------------------------------------------------------------------
 // `save.h` owns the FILE and is not this lane's to edit, so what is proved here is the
 // BLOCK: lossless, deterministic, refusing rather than half-applying, and composable at
@@ -802,7 +953,11 @@ void round_trip() {
     for (std::size_t i = 0; i < kQuestCount; ++i) {
         a.row[i].remainingMs = static_cast<std::uint32_t>(0x11110000u + i * 7u);
         a.row[i].progress = static_cast<std::int32_t>(i) - 5;
-        a.row[i].giver = static_cast<NpcId>(0x00ABCD00u + i);
+        // A real HANDLE and not a bare id, because that is what the field holds now — and
+        // deliberately the SAME 32 bits the bare-id version of this line wrote:
+        // (10 << kNpcPoolBits) | 0x000BCD00 + i == 0x00ABCD00 + i. So this documents the
+        // new type while proving the wire did not move a single byte.
+        a.row[i].giver = npc_handle(static_cast<NpcId>(0x000BCD00u + i), 10u);
         a.row[i].state = static_cast<std::uint8_t>(i % 5u);   // all five states appear
         a.row[i].baseline = static_cast<std::uint8_t>(120u + (i % 8u));
     }
@@ -831,6 +986,11 @@ void round_trip() {
     CHECK(b.earned == a.earned);
     CHECK(b.row[3].progress == a.row[3].progress);
     CHECK(b.row[kQuestCount - 1].giver == a.row[kQuestCount - 1].giver);
+    // BOTH halves of the handle survive. The generation is the half a save could drop
+    // without anything else noticing — every id would still resolve to a living record,
+    // and every stored handle would then match whoever occupies that slot on load.
+    CHECK(npc_handle_id(b.row[7].giver) == 0x000BCD07u);
+    CHECK(npc_handle_gen(b.row[7].giver) == 10u);
 
     // Composes at an offset: save.cpp appends this block after others.
     std::vector<std::uint8_t> payload(37u, 0xA5u);
@@ -891,6 +1051,7 @@ static void test_quest_all() {
     quest_test::hunting();
     quest_test::the_clock_runs_out();
     quest_test::the_giver_dies();
+    quest_test::the_slot_is_recycled();
     quest_test::descending();
     quest_test::text();
     quest_test::round_trip();

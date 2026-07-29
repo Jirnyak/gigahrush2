@@ -210,23 +210,31 @@ struct QuestProgress {
     std::uint32_t remainingMs = 0;
     std::int32_t progress = 0;
     // Bound at accept and never rebound, so this names that person for the rest of the
-    // run — **but the guarantee is CONDITIONAL and contract.h states it too strongly.**
-    // [npc_pool.h] never-reclaim is the DEFAULT policy, not a property of the type:
-    // `set_recycling(true)` suspends it, and a recycled id is a REUSED id. That header
-    // enumerates the bare-`NpcId`-across-time stores which must move to
-    // `handle()`/`handle_valid()` before the shipping pool may arm it — Relationship::
-    // target, NpcRef::id, Contract::giver, FloorModule::candidate, MacroSim::Journey::id,
-    // RelationEdge::id — and THIS FIELD IS A SEVENTH, not on that list because it did not
-    // exist when the list was written.
+    // run — and it is a GENERATION-TAGGED HANDLE, which is what makes that sentence true
+    // rather than conditional on a pool policy.
     //
-    // Nothing is broken today: `pool.set_recycling(true)` is commented out in
-    // [src/app/main.cpp], whose comment says "DO NOT UNCOMMENT until Contract::giver is an
-    // NpcHandle" and spells out the failure — `quest_step`'s liveness poll would see a
-    // recycled newborn as the living giver and silently transfer the errand to a stranger,
-    // which is the reference's own broken contract binding that contract.h opens by
-    // claiming this engine is immune to. Arming recycling now needs TWO fields migrated,
-    // not one; the main.cpp comment is in the handoff for that reason.
-    NpcId giver = kInvalidNpc;
+    // It used to be a bare `NpcId`, resting on [npc_pool.h] never-reclaim. That is the
+    // DEFAULT policy and not a property of the type: `set_recycling(true)` suspends it,
+    // and a recycled id is a REUSED id. The hole was silent rather than loud, exactly as
+    // it was for `Contract::giver` before the same migration: `quest_on_giver_died` fires
+    // only from the frame-top combat drain, so a giver killed by the MACRO sweep publishes
+    // no event, the slot goes to a newborn, and `quest_step`'s poll — then
+    // `!valid(id) || !alive(id)` — saw a living record at that index, kept the row, and
+    // paid an authored quest out to a stranger who never offered it. Which is the
+    // reference's own broken quest binding that contract.h opens by claiming this engine
+    // is immune to.
+    //
+    // `pool.handle_valid()` makes that unrepresentable: `kill()` bumps the generation
+    // whether or not the slot is reused, so one test answers "is this still the person I
+    // was holding?" for three distinct failures — an id past the high-water mark, a
+    // cleared alive bit, and a reclaimed slot. [tests/suite_quest.inl]
+    // `the_slot_is_recycled` is the witness, and it is the LAST of the three fields
+    // [src/app/main.cpp] gates `set_recycling(true)` on that lives in one module.
+    //
+    // Costs the save nothing: an `NpcHandle` is the same 32 bits an `NpcId` was, so
+    // `visit_quest_row`'s `ar.u32(p.giver)`, `kQuestRowWire = 14` and
+    // `sizeof(QuestProgress) == 16` are all byte-identical across this change.
+    NpcHandle giver = kInvalidHandle;
     std::uint8_t state = 0;     // QuestState
     // |z| already reached when this was accepted, so a Descend objective pays only for
     // a descent made afterwards. Stamped from the ledger by `quest_accept` for the
@@ -308,22 +316,35 @@ QuestId quest_offer(const NpcPool& pool, const QuestLog& log, NpcId giver, int f
 
 // Take a quest. Returns false when the id is invalid, the row is not eligible on this
 // floor (band, chain, or a state that is neither Unseen nor Orphaned), the giver is
-// `kInvalidNpc`, or the objective is a Descend whose depth the run has already reached —
-// all refusals, not errors.
+// `kInvalidNpc` or not a living record, or the objective is a Descend whose depth the run
+// has already reached — all refusals, not errors.
 //
-// It does NOT take the pool and so does not re-check that the giver is alive, matching
-// `contract_accept`'s shape: `quest_offer` already validated the body, and `quest_step`'s
-// liveness check is the guard that has to exist anyway, because a body can be lost to a
-// floor unload rather than to a death and only one of those publishes.
+// **The `giver` PARAMETER stays a bare `NpcId` while the STORED field is a handle**, for
+// contract.cpp's reason: callers hold an id (a proximity sweep, a floor bucket roster, the
+// same id they just passed to `quest_offer`, which hashes it), so they pass one, and the
+// (generation, id) pair is minted here — exactly once, at the point the field is written.
 //
-// That last clause is contract_accept's guard, ported for the same measured reason: the
+// **It DOES take the pool, and that is the change the handle forced.** The old signature
+// did not, matching `contract_accept`, which can afford to: its handle was already minted
+// by `contract_offer` and travels inside the `Contract` it is handed. A quest offer is
+// just a `QuestId`, so there is no struct to carry a handle in and the mint has nowhere
+// else to live. Passing the pool makes forgetting to mint unexpressible — the same
+// argument the LEDGER paragraph below makes for `baseline` — and it is what lets a giver
+// who died between offer and accept be REFUSED rather than minted from a corpse:
+// `pool.handle()` on a dead record returns the already-bumped generation, so accepting
+// one would write an Active row that `quest_step` orphans on the very next tick, billing
+// the run a `failed` for a job it never had. `quest_step`'s liveness poll still has to
+// exist regardless, because a body can be lost to a floor unload rather than to a death
+// and only one of those publishes.
+//
+// The Descend clause is contract_accept's guard, ported for the same measured reason: the
 // step skips a satisfied-at-accept Descend forever, `baseline` is stamped exactly once,
 // and `RunLedger::deepestFloor` never falls, so the row would sit Active until something
 // killed it and then count as a failure for work the player was never able to do.
 //
 // Takes the LEDGER for the same reason contract_accept does: stamping `baseline` here
 // makes forgetting to stamp it impossible to express.
-bool quest_accept(QuestLog& log, QuestId id, NpcId giver, int floorZ,
+bool quest_accept(QuestLog& log, const NpcPool& pool, QuestId id, NpcId giver, int floorZ,
                   const RunLedger& led);
 
 // ---------------------------------------------------------------------------
@@ -345,6 +366,13 @@ bool quest_accept(QuestLog& log, QuestId id, NpcId giver, int floorZ,
 // then the objective. A dead giver beats a dead clock because the errand stopped
 // existing before the clock mattered, and a row must not be billed as `expired` when
 // there was nobody left to deliver to.
+//
+// **The liveness step is `pool.handle_valid(p.giver)`, and it is THE recycling guard.**
+// One test for three distinct ways the person can stop being the person: an id past the
+// high-water mark, a cleared alive bit, and — the one a bare id could never see — a stale
+// GENERATION, i.e. the slot was reclaimed and handed to somebody else. Deaths in the macro
+// sweep publish no `NpcDied` event ([macro_sim.h]), so for those this poll is the ONLY
+// guard; `quest_on_giver_died` is a fast path, not the guarantee.
 //
 // **Fetch consumes the items**, for contract.cpp's reason: a courier job that let you
 // keep the cargo would pay twice for the same loot.
@@ -379,6 +407,18 @@ void quest_on_kill(QuestLog& log, std::uint8_t mobKind);
 // Carrying the remainder over would mean a row orphaned near expiry is effectively
 // already dead, which is a punishment for something the player did not do; carrying the
 // kill count over would mean a new person paying for work done for someone else.
+//
+// Takes a bare POOL ID, not a handle, because that is what the event ring carries
+// (`NpcDied.a`, drained at the frame top in [src/app/main.cpp]) — by the time the event is
+// read the record is already dead, so `pool.handle(who)` would mint the corpse's BUMPED
+// generation and match nothing. The comparison is therefore against the ID HALF of the
+// stored handle, `npc_handle_id(p.giver) == who`. It cannot become a wildcard: an id is
+// masked to kNpcPoolBits, so a `who` of `kInvalidNpc` matches no slot at all — and this
+// function refuses that value outright anyway.
+//
+// This is a fast path, not the guard, and the asymmetry is the reason: it fires only for a
+// death that publishes, i.e. the combat drain, never for a macro-sweep death.
+// `quest_step`'s `handle_valid` poll is what actually catches a dead giver.
 void quest_on_giver_died(QuestLog& log, NpcId who);
 
 // ---------------------------------------------------------------------------
@@ -429,6 +469,16 @@ int quest_active_count(const QuestLog& log);
 // MSVC build stays readable by the Clang build.
 //
 // Adding this block is a wire change: `kSaveVersion` must go 1 -> 2 in the same edit.
+//
+// **`giver` becoming an `NpcHandle` is NOT part of that wire change.** An `NpcHandle` is
+// the same 32 bits an `NpcId` was — the generation lives in the 12 bits a 20-bit id never
+// used ([npc_pool.h]) — so `visit_quest_row`'s `ar.u32(p.giver)` emits the identical four
+// bytes at the identical offset and both constants below are unmoved. The format this
+// block WILL have is therefore unaffected: no `kSaveVersion` bump is owed to the handle,
+// and the `kSaveVersion 1 -> 2` above is owed to the block's mere existence exactly as it
+// was before. One real consequence for the day the pool itself joins the format, and
+// [npc_pool.h] already states it from its own side: the generation column has to travel,
+// because a load that resets generations to 0 hands every stored handle a false match.
 
 inline constexpr std::size_t kQuestRowWire = 14;   // 3x4 + 2   (pad_ dropped)
 inline constexpr std::size_t kQuestLogWire =

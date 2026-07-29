@@ -162,6 +162,10 @@ private:
 // `pad_` is deliberately NOT written: it carries no meaning, and emitting it would put
 // two bytes of nothing per row into every save. That is why kQuestRowWire is 14 and
 // sizeof(QuestProgress) is 16.
+//
+// `p.giver` is an `NpcHandle`, which is the same `std::uint32_t` an `NpcId` was, so this
+// stays one `u32` at the same offset and the wire did not move when the field gained its
+// generation half ([quest.h] save banner).
 template <class Ar, class Row>
 void visit_quest_row(Ar& ar, Row& p) {
     ar.u32(p.remainingMs);
@@ -252,9 +256,13 @@ QuestId quest_offer(const NpcPool& pool, const QuestLog& log, NpcId giver, int f
     return pick;
 }
 
-bool quest_accept(QuestLog& log, QuestId id, NpcId giver, int floorZ,
+bool quest_accept(QuestLog& log, const NpcPool& pool, QuestId id, NpcId giver, int floorZ,
                   const RunLedger& led) {
-    if (giver == kInvalidNpc) return false;
+    // A living body, checked BEFORE anything is written, because the handle minted below
+    // is only meaningful for one: `pool.handle()` on a corpse returns the generation
+    // `kill()` already bumped, so the row would be Active for exactly one tick and then
+    // billed as `orphaned` for a job that was never takeable. A refusal, not an error.
+    if (giver == kInvalidNpc || !pool.valid(giver) || !pool.alive(giver)) return false;
     if (!quest_eligible(log, id, floorZ)) return false;
     const QuestDef& d = quest_def(id);
 
@@ -283,7 +291,11 @@ bool quest_accept(QuestLog& log, QuestId id, NpcId giver, int floorZ,
     QuestProgress& p = log.row[static_cast<std::size_t>(id) - 1];
     p = QuestProgress{};
     p.state = static_cast<std::uint8_t>(QuestState::Active);
-    p.giver = giver;
+    // Minted HERE and nowhere else: the bare id is what `quest_offer` hashed and what the
+    // caller holds, this is the (generation, id) pair that outlives the tick. `giver` is
+    // known live from the guard at the top, so `handle()` reads a real generation rather
+    // than the 0 an out-of-range id would return. [quest.h]
+    p.giver = pool.handle(giver);
     p.baseline = baseline;
     p.remainingMs = d.limitMs;
     return true;
@@ -342,7 +354,17 @@ std::int32_t quest_step(QuestLog& log, const NpcPool& pool, Inventory& inv,
         // can also be lost to a floor unload rather than to a death, and only one of
         // those publishes. Ordered ahead of the deadline so a row is never billed as
         // `expired` when there was nobody left to deliver to.
-        if (!pool.valid(p.giver) || !pool.alive(p.giver)) {
+        //
+        // **THE recycling guard.** `handle_valid` is one test for three distinct ways the
+        // person can stop being the person: an id past the high-water mark, a cleared
+        // alive bit, and — the one a bare id could never see — a stale GENERATION, i.e.
+        // the slot was reclaimed and handed to somebody else. `kill()` bumps the counter
+        // whether or not the slot is reused, so this covers a plain death too and the old
+        // `!valid(id) || !alive(id)` pair is strictly subsumed. Deaths in the macro sweep
+        // publish no NpcDied event ([macro_sim.h]), so for those this poll is the ONLY
+        // guard, and before the handle it was a poll that answered "somebody is alive at
+        // that index" when the question was "is my giver alive". [quest.h]
+        if (!pool.handle_valid(p.giver)) {
             p.state = static_cast<std::uint8_t>(QuestState::Orphaned);
             p.remainingMs = 0;
             p.progress = 0;
@@ -451,7 +473,19 @@ void quest_on_giver_died(QuestLog& log, NpcId who) {
     for (std::size_t i = 0; i < kQuestCount; ++i) {
         QuestProgress& p = log.row[i];
         if (p.state != static_cast<std::uint8_t>(QuestState::Active)) continue;
-        if (p.giver != who) continue;
+        // The ID HALF of the handle, because `who` is a bare pool id off the event ring
+        // and the record is ALREADY DEAD when this runs — `pool.handle(who)` would mint
+        // the corpse's bumped generation and match nothing. `npc_handle_id` masks to
+        // kNpcPoolBits, so a `who` of kInvalidNpc could never match a stored handle even
+        // without the early return above: never a wildcard.
+        //
+        // Coarser than `handle_valid`, and harmlessly so. The one case it over-matches is
+        // a row whose giver died silently (a macro sweep publishes no event) into a slot
+        // that was recycled, whose NEW occupant then dies in combat — and the verdict it
+        // reaches there, Orphaned, is the same one quest_step's handle_valid poll reaches
+        // for that row on the very next tick. It cannot pay a stranger, only release
+        // earlier.
+        if (npc_handle_id(p.giver) != who) continue;
         p.state = static_cast<std::uint8_t>(QuestState::Orphaned);
         p.remainingMs = 0;
         p.progress = 0;
