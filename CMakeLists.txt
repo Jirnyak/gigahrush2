@@ -298,10 +298,45 @@ if(GIGA_BUILD_TESTS)
     set_tests_properties(audit_findings PROPERTIES
         PASS_REGULAR_EXPRESSION "audit_test: 41 checks, 2 failures")
 
+    # THE COUNT IS PINNED HERE TOO — the same mechanism as audit_findings above, now on
+    # the target that carries 3,887 of the repo's 4,036 CHECK sites. Until this line
+    # existed the pin was on the 1% and the raw defect owned the other 99%: add_test()
+    # consumed the exit code alone, `main` ends `return g_fails == 0 ? 0 : 1`, and the
+    # tally the binary prints was read by NOBODY. So any coverage loss that did not
+    # fail an assertion was invisible — delete a call from the 81-line dispatch list in
+    # main() and that test simply never runs: exit 0, ctest GREEN, no diff to review
+    # anywhere near a test file.
+    #
+    # What this adds over the existing gates, precisely, because "nothing covered it"
+    # would be too strong: tools/check_source_rules.cmake already fails a
+    # tests/suite_*.inl whose `test_*_all()` entry point no tests/*.cpp calls, so 23 of
+    # the 81 dispatch lines were protected there. The other 58 are defined in this .cpp
+    # (test_full_loop 41 CHECK sites, test_mob_behaviour 39, test_floor_bucket_index 37,
+    # test_vendor 36, ... 888 sites across the 58) and no rule anywhere looked at them.
+    # Three more holes the tally closes and that guard cannot see: a suite whose entry
+    # point is not spelled `static` slips its regex (tests/suite_speech.inl declares
+    # `void test_speech_all()`, so its 81 sites are unguarded there); deleting a single
+    # CHECK inside a test body; and shrinking a loop bound so the same CHECK runs
+    # fewer times.
+    #
+    # OBSERVED, not derived: under ctest on 2026-07-29, Release, game_test printed
+    # `game_test: 132266 checks, 0 failures` in 446.54 s. Determinism is not assumed —
+    # the message of commit cb61632 quotes the identical 132266 from an independent
+    # standalone run of the same tree. NOTE the magnitude: this is an EXECUTION count,
+    # not the 3,887 static sites; the bulk of the CHECKs sit inside loops.
+    #
+    # THIS TEST GOES RED THE MOMENT YOU ADD OR REMOVE A CHECK, and on this file that is
+    # often. That is the tripwire, not a regression: run the exe, read its count line,
+    # put what it printed here, and say in the commit message what moved the number.
+    # Do not tune it to green without knowing why it moved — a count that drifted for a
+    # reason nobody wrote down is how this stops meaning anything. Deliberate friction
+    # on ~4k assertions is the price of coverage that cannot shrink in silence.
     add_executable(game_test tests/game_test.cpp)
     target_link_libraries(game_test PRIVATE giga_game)
     giga_target_flags(game_test OFF)
     add_test(NAME game_test COMMAND game_test)
+    set_tests_properties(game_test PROPERTIES
+        PASS_REGULAR_EXPRESSION "game_test: 132266 checks, 0 failures")
 
     # Text gate for the AGENTS.md rules that no compiler enforces on every host.
     # The load-bearing one is no-exceptions: MSVC's STL is unsupported under
