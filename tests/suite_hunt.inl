@@ -3,8 +3,8 @@
 // [hunt.h] is a rate-control design, so the assertion that matters is a
 // MEASUREMENT, not an opinion: run a real floor — real generator, real spawner, real
 // nav bake, real physics, real combat — for a simulated ten minutes at the shipping
-// 120 Hz tick, and count who is left. Everything else in this suite is a guard
-// around that number.
+// kSimHz tick ([core/tick.h]), and count who is left. Everything else in this suite is
+// a guard around that number.
 //
 // The floor under test is the composite the whole feature was deferred over, and it
 // is not a contrivance: the two halves genuinely co-occur. `floor_spec_for(15)`
@@ -16,10 +16,11 @@
 // owns the CHECK macro, so the include has to land after it, and the suite carries
 // its own #include of the system under test to keep that diff two lines.
 
+#include "core/tick.h"   // kSimDt / kSimHz — never a bare 1/120 ([core/tick.h])
 #include "game/hunt.h"
 
 static void test_hunt_all() {
-    const float dt = 1.0f / 120.0f;
+    const float dt = kSimDt;
 
     // The weakest kind in the table that can swing at all — SBORKA, 3 damage on a
     // 0.65 s cooldown. Chosen the same way test_faction_gates_hunting chooses, and
@@ -358,7 +359,14 @@ static void test_hunt_all() {
         // a player on the floor every monster within 20 m is pulled off the residents
         // entirely, so measuring without one measures pure predation and cannot
         // flatter the design.
-        const std::uint64_t kTenMinutes = 72000;   // 600 s at the 120 Hz sim step
+        // Ten minutes of SIM TIME, derived from the rate rather than retyped. The
+        // literal 72000 this used to be was 600 s only at 120 Hz; at the shipping
+        // kSimHz = 125 it was 9.6 minutes, so the headline "10 min" undersold the
+        // window by 24 s. `kMinute` also feeds the per-minute buckets below, which is
+        // the part that could not be fixed by halves: raising the total without it
+        // would index perMinute[10] and write off the end of the array.
+        const std::uint64_t kMinute = 60u * static_cast<std::uint64_t>(kSimHz);
+        const std::uint64_t kTenMinutes = 10u * kMinute;
         const std::uint32_t startAlive = pool.alive();
         std::uint32_t deaths = 0;
         std::uint32_t perMinute[10] = {};
@@ -373,7 +381,7 @@ static void test_hunt_all() {
             projectile_step(reg, pool, bus, stack, layer, dt, t);
             const std::uint32_t d = finalize_deaths(reg, pool, bus, t);
             deaths += d;
-            perMinute[static_cast<std::size_t>(t / 7200u)] += d;
+            perMinute[static_cast<std::size_t>(t / kMinute)] += d;
             // The bus ring holds one drain cycle (4096) and the game drains it every
             // tick; nothing drains it here, so drain it or the deaths past 4096 would
             // be counted as drops instead of published.
@@ -381,7 +389,9 @@ static void test_hunt_all() {
 
             // The cost driver, counted from the SHIPPING predicate rather than
             // estimated: prey pair-tests per tick are (licensed mobs) x (live bodies).
-            if (t % 600u == 0u) {
+            // Every 5 s of sim time. Expressed in kSimHz so the sample COUNT stays at
+            // 120 across a rate change — a bare 600 would have sampled every 4.8 s.
+            if (t % (5u * static_cast<std::uint64_t>(kSimHz)) == 0u) {
                 std::uint32_t h = 0;
                 for (auto m : reg.view<const MobRef>())
                     if (mob_hunts_npcs(

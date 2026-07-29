@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "core/jobs.h"
+#include "core/tick.h"   // kSimDt / kSimHz — never a bare 1/120 ([core/tick.h])
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "ecs/registry.h"
@@ -197,8 +198,11 @@ static void test_physics_lands_on_floor() {
     reg.emplace<AABB>(e, AABB{{0.2f, 0.2f, 0.4f}});
     reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
 
-    // Simulate ~3 seconds; the entity should fall and rest on the slab top.
-    for (int i = 0; i < 360; ++i) physics_step(reg, stack, 1.0f / 120.0f);
+    // Simulate 3 seconds; the entity should fall and rest on the slab top. Both the
+    // step and the tick count come from kSimHz, so this stays 3 real seconds if the
+    // rate moves again — 360 ticks of a hardcoded 1/120 was 2.88 s at the shipping
+    // 125 Hz, i.e. a shorter fall than the comment claimed.
+    for (int i = 0; i < 3 * kSimHz; ++i) physics_step(reg, stack, kSimDt);
 
     auto& out = reg.get<Transform>(e);
     float floorTop = 5.0f * kCellSize; // top surface of z-cell 4

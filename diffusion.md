@@ -79,7 +79,7 @@ Three distinct notions of "danger" must not be conflated:
 
 ## Where it runs
 
-`diffusion_step` runs on the **coarse macro tick**, not the 120 Hz render tick —
+`diffusion_step` runs on the **coarse macro tick**, not the 125 Hz sim tick —
 danger evolves on the order of the reference's `danger_field.ts` (~2×/s), not per
 frame. As a *cellular field* it belongs, like fluid/gas/heat, on the **GPU as an
 async-compute stencil** ([performance.md](performance.md) §The compute split); the

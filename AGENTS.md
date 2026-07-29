@@ -109,8 +109,8 @@ each one**. Correctness first; speed is a side effect of not backtracking.
   failure — CSV edited, generator not re-run — is invisible to the compiler, so the
   `source_rules` ctest compares each CSV's row count against the count the
   generated header declares (`kItemCount`, the `kMobKindCount` static_assert) and
-  fails on drift. These files are also why `/utf-8` is load-bearing on MSVC: they
-  carry Cyrillic name literals.
+  fails on drift. These files are also why `/utf-8` is load-bearing on MSVC — they
+  carry Cyrillic name literals; the measured byte counts live once, in §Build.
 - **The player is not special.** It is simply the entity that currently holds a
   `CameraTag` + `Controller`. Never hardcode a player singleton; systems operate
   on whatever entity owns the components.
@@ -134,7 +134,8 @@ each one**. Correctness first; speed is a side effect of not backtracking.
   society sim ([macrosim.md](macrosim.md)) must remain independently runnable and
   testable headless: it reads *up* into the action game (embodiment) but never
   depends on render, input, or the app shell. Don't wire it to the render/present
-  path or the 120 Hz tick; it has its own coarse clock.
+  path or the 125 Hz sim tick ([src/core/tick.h](src/core/tick.h) — `kSimHz`, the
+  one place the rate lives); it has its own coarse clock.
 
 ## Toroidal + dimensional invariants
 
@@ -208,11 +209,27 @@ function in the top-level `CMakeLists.txt`; vendored Dear ImGui lives in its own
 `giga_imgui` target with default warnings so the policy never has to be relaxed
 for third-party code. Treat warnings as errors in review. Shaders
 (`shaders/*.vert|frag`) compile to SPIR-V at build time via `glslc`; a GLSL error
-surfaces at build time. MSVC also gets `/utf-8`, for codepage independence rather
-than to fix anything today: measured on a CP1251 host, the emitted string bytes
-are identical with and without it, and the tree has no Cyrillic literals yet. It
-earns its place on a DBCS host, where a multi-byte comment character can swallow
-the following quote and break the parse.
+surfaces at build time. MSVC also gets `/utf-8`, and it is **load-bearing today**:
+the tree does carry Cyrillic literals. Measured by byte count on this CP1251 host
+(2026-07-29) — `src/game/item_table.cpp` **6,608** UTF-8 Cyrillic lead bytes,
+`src/game/mob_table.cpp` **644**, `src/game/faction.h` **39**; 25 tracked files
+under `src`/`tests`/`data` carry some, **~53k** lead bytes in total (`data/items.csv`
+alone is 39,288 — quote the per-file figures, not the aggregate, which moves with
+every content edit). The flag was originally added as codepage *insurance* and became
+mandatory only when those generated tables landed, so keep it for the current
+reason, not the original one; the full two-state history is in
+[tools/win/README.md](tools/win/README.md) §4 and is not repeated here. Do not
+re-litigate either end without measuring.
+
+**Count bytes (`0xD0`/`0xD1` leads); never conclude "no Cyrillic" from a text
+search.** That mistake is what put the false "no Cyrillic literals yet" claim in
+this file. Instruments differ on this host: `rg '[\x{0400}-\x{04FF}]'` does find
+them (446 / 69 / 5 matching lines in the three files above), while
+`grep -P '[\x{0400}-\x{04FF}]'` refuses the pattern outright — *"-P supports only
+unibyte and UTF-8 locales"*, exit 2 — printing no matches, which reads as "none
+found" unless you check the exit status. `/utf-8` also earns its place on a DBCS
+host, where a multi-byte comment character can swallow the following quote and
+break the parse.
 
 ## Workflow Checklist
 

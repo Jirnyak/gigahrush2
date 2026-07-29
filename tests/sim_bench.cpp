@@ -1,5 +1,7 @@
 // Honest crowd-simulation benchmark — "how many agents can actually walk a real
-// floor inside the 120 Hz tick budget?"
+// floor inside the sim tick budget?" The rate is kSimHz ([core/tick.h]), never a
+// number retyped here: a benchmark that measures a budget the game does not run at
+// reports headroom nobody has.
 //
 // This is deliberately NOT a synthetic micro-benchmark. It:
 //   1. generates a REAL floor with the shipping generator (generate_floor),
@@ -38,6 +40,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/tick.h"   // kSimDt / kSimHz — the tick lives in one place, not here
 #include "ecs/components.h"
 #include "ecs/registry.h"
 #include "game/floor_gen.h"
@@ -54,7 +57,7 @@ namespace {
 constexpr int kAgents = 16384;        // 2^14 — the per-floor target
 constexpr int kWarmup = 30;           // ticks to let gravity settle onto slabs
 constexpr int kMeasure = 200;         // timed ticks
-constexpr float kDt = 1.0f / 120.0f;  // the sim tick (kSimDt in main.cpp)
+constexpr float kDt = kSimDt;         // the sim tick itself ([core/tick.h])
 constexpr float kSpeed = 6.0f;        // Controller::moveSpeed, m/s
 const vec3 kHalf{0.4f, 0.4f, 0.9f};   // AABB::half — a person-sized box
 
@@ -171,8 +174,8 @@ double ms_per_tick(std::chrono::steady_clock::duration d, int ticks) {
 
 int main() {
     std::printf("=== gigahrush2 honest crowd benchmark ===\n");
-    std::printf("agents=%d  tick=%.4f ms (120 Hz)  warmup=%d measure=%d\n\n",
-                kAgents, kDt * 1000.0f, kWarmup, kMeasure);
+    std::printf("agents=%d  tick=%.4f ms (%d Hz)  warmup=%d measure=%d\n\n",
+                kAgents, kDt * 1000.0f, kSimHz, kWarmup, kMeasure);
 
     // --- Context: solidity of each floor kind ------------------------------
     std::printf("Floor census (fill of the 128^3 = %zu-cell grid):\n", kMacroCells);
@@ -287,7 +290,7 @@ int main() {
     }
 
     // --- Report ------------------------------------------------------------
-    const double budget = kDt * 1000.0;  // 8.333 ms
+    const double budget = kDt * 1000.0;  // 8.0 ms at kSimHz = 125, and exactly so
     auto project = [&](double ms) { return static_cast<long>(kAgents * budget / ms); };
 
     std::printf("\n--- Movement cost, %d wandering agents, Residential floor ---\n",
@@ -314,11 +317,12 @@ int main() {
         if (r.ms < best) { best = r.ms; bestT = r.threads; }
     }
     std::printf("\nVerdict: %d agents cost %.3f ms/tick single-thread (%.0f%% of the "
-                "8.33 ms budget);\n         best multicore %.3f ms/tick @ %d threads "
-                "(%.1fx).\n         Headroom for ~%ld wandering agents at 120 Hz, "
-                "~%ld at 60 Hz (best thread count).\n",
-                kAgents, refMs, 100.0 * refMs / budget, best, bestT, mirrorMs / best,
-                project(best), static_cast<long>(kAgents * 2 * budget / best));
+                "%.2f ms budget);\n         best multicore %.3f ms/tick @ %d threads "
+                "(%.1fx).\n         Headroom for ~%ld wandering agents at %d Hz, "
+                "~%ld at %.1f Hz (best thread count).\n",
+                kAgents, refMs, 100.0 * refMs / budget, budget, best, bestT,
+                mirrorMs / best, project(best), kSimHz,
+                static_cast<long>(kAgents * 2 * budget / best), kSimHz / 2.0);
     std::printf("\nReminder: this is crowd-vs-world collision only. No entity-entity\n"
                 "collision, no pathfinding/AI, no macro fields — those are not built\n"
                 "yet and will add to the per-tick cost on top of this baseline.\n");

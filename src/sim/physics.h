@@ -17,15 +17,20 @@ namespace giga {
 struct PhysicsParams {
     // Substeps keep fast movers from tunneling through thin sub-voxel walls.
     int maxSubsteps = 4;
-    // Seconds per substep cap. This is the last 1/120 in src/ and it stays a literal
-    // deliberately rather than becoming kSimDt, which is not an oversight: physics_step
-    // is called with a local dt of 1.0f / 120.0f by two test sites that predate the
-    // 125 Hz move (tests/game_test.cpp and tests/suite_hunt.inl). Tightening the cap to
-    // kSimDt (0.008) would make ceil(0.008333 / 0.008) == 2 there, doubling their
-    // substep count and silently changing what those tests measure. Migrate those dt
-    // literals first, then this becomes kSimDt in the same commit. At the live rate the
-    // cap is inert either way: an 8.0 ms tick is under the 8.333 ms cap, so the ceil()
-    // in physics.cpp:79 yields one substep.
+    // Seconds per substep cap. This is the last 1/120 in src/ code and it stays a
+    // literal deliberately rather than becoming kSimDt, which is not an oversight:
+    // FOUR test sites still call physics_step with a local dt of 1.0f / 120.0f that
+    // predates the 125 Hz move — tests/world_test.cpp:201 (inline literal at the
+    // call site), tests/suite_hunt.inl:22, tests/suite_packs.inl:354, and the
+    // wander-travel case in tests/game_test.cpp (five `const float dt = 1.0f/120.0f`
+    // live there; exactly one reaches physics_step, so grep the call, not the
+    // literal). The two .inl compile into game_test, so three of the four land in
+    // one binary. Tightening the cap to kSimDt (0.008) would make
+    // ceil(0.008333 / 0.008) == 2 there, doubling their substep count and
+    // silently changing what those tests measure. Migrate those dt literals first,
+    // then this becomes kSimDt in the same commit. At the live rate the cap is inert
+    // either way: an 8.0 ms tick is under the 8.333 ms cap, so the ceil() in
+    // physics.cpp:79 yields one substep.
     float maxStep = 1.0f / 120.0f;
 };
 

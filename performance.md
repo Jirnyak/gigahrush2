@@ -25,13 +25,18 @@ the split is deliberate:
 - **CPU → agents.** The player and the ~16k embodied NPCs/mobs on the live floor.
   Per tick: movement, swept-AABB collision against the sub-voxel masks
   ([physics.md](physics.md)), AI/steering, and the nav lookups baked at load.
-  This is **O(n) in live agents** and it is what the 8.33 ms (120 Hz) budget is
-  spent on. Measured (M2 Pro, honest crowd bench — `tests/sim_bench.cpp`): 16k
-  agents wandering with the *real* `physics_step` cost **10.5 ms single-thread
-  (126 % of budget → one core is not enough)** but **~1.5 ms across 8–12 threads**
-  (6.5×, knee at 8 = the 6 performance cores) — ~19 % of budget, headroom for
-  ~86k. So the agent tick MUST be threaded; once it is, 16k agents/floor is
-  comfortable.
+  This is **O(n) in live agents** and it is what the **8 ms (125 Hz)** budget is
+  spent on — exactly 8 ms, because `kSimHz = 125` makes the step an integer
+  number of milliseconds ([src/core/tick.h](src/core/tick.h)). Measured (M2 Pro,
+  honest crowd bench — `tests/sim_bench.cpp`): 16k agents wandering with the *real*
+  `physics_step` cost **10.5 ms single-thread (131 % of the 8 ms budget → one core
+  is not enough)** but **~1.5 ms across 8–12 threads** (6.5×, knee at 8 = the 6
+  performance cores) — ~19 % of budget. So the agent tick MUST be threaded; once it
+  is, 16k agents/floor is comfortable. **The agent-count headroom figure needs a
+  re-run before it is quoted again:** the retired "~86k" was projected against the
+  old 8.33 ms budget, and `tests/sim_bench.cpp` still derives its budget from a
+  hardcoded `1.0f / 120.0f`, so its printed projection reads ~4 % high until that
+  literal becomes `kSimDt`.
 - **GPU → fields.** Every *cellular* field — fluid, gas, heat, pressure, light,
   destruction propagation — is a dense stencil pass over the 128³ grid and runs
   as **async compute on the GPU**, not on the frame's CPU budget. The GPU is

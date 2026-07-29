@@ -18,6 +18,7 @@
 // the include has to land after it. It carries its own includes of the systems
 // under test so game_test.cpp's diff stays two lines.
 
+#include "core/tick.h"   // kSimDt / kSimHz — never a bare 1/120 ([core/tick.h])
 #include "game/floor_gen.h"
 #include "game/mob_spawn.h"
 #include "game/wander.h"
@@ -347,12 +348,17 @@ static void test_packs_all() {
         };
         const std::vector<std::vector<vec3>> before = snapshot();
 
-        // 3600 ticks = 30 s at the 120 Hz step. The async bake lands at ~3.7 s
-        // (~444 ticks), so this is eight times past the window a load-time capture
-        // could hide in, and it crosses two kPackEpochTicks boundaries — a pack has
-        // to re-agree on a destination twice without shedding anyone.
-        const float dt = 1.0f / 120.0f;
-        for (std::uint64_t t = 0; t < 3600; ++t) {
+        // 30 s of sim time, in ticks derived from the rate. The async bake lands at
+        // ~3.7 s (~463 ticks), so this is eight times past the window a load-time
+        // capture could hide in, and it opens exactly two kPackEpochTicks epochs — a
+        // pack has to re-agree on a destination twice without shedding anyone. That
+        // last property is why the bound is written against kSimHz and not as a
+        // literal: kPackEpochTicks is itself 15 * kSimHz ([wander.h]), so "30 s" is
+        // two epochs at ANY rate, while the 3600 this used to say was 28.8 s at the
+        // shipping 125 Hz — one epoch short of what the comment claimed.
+        const float dt = kSimDt;
+        const std::uint64_t kTicks = 30u * static_cast<std::uint64_t>(kSimHz);
+        for (std::uint64_t t = 0; t < kTicks; ++t) {
             wander_step(reg, stack.layer(layer).grid(), pool, coarse, fine, layer, t);
             physics_step(reg, stack, dt);
         }
@@ -389,9 +395,10 @@ static void test_packs_all() {
 
         const float controlDiameter = diameter(control);
         std::fprintf(stderr,
-                     "[packs] after 3600 ticks: packs>=2 = %zu, within 40 m = %zu, "
+                     "[packs] after %llu ticks: packs>=2 = %zu, within 40 m = %zu, "
                      "worst pack diameter = %.1f m, across-pack control = %.1f m\n",
-                     multi, tight, worstPack, controlDiameter);
+                     static_cast<unsigned long long>(kTicks), multi, tight, worstPack,
+                     controlDiameter);
 
         // >= 70% of multi-head packs still fit inside 40 m — two apartments wide, and
         // a fraction of the control spread.
