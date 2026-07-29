@@ -499,22 +499,37 @@ int main(int argc, char** argv) {
     // 101,000 unarmed, and over 250 macro ticks against a 60-slot reserve the population
     // holds at 3002 with 0 births refused instead of decaying to 2336 with 1197 refused.
     //
-    // DO NOT UNCOMMENT YET. A recycled id is a REUSED id, so every place that holds a
-    // bare NpcId ACROSS TIME is a stranger-transfer waiting to happen. Two are closed and
-    // THREE are still open — the count matters, because fixing one and declaring victory
-    // is how this ships:
-    //   DONE  MacroSim::Journey  — stamps the departing generation, compares on landing.
-    //   DONE  Contract::giver    — now an NpcHandle; contract_step polls handle_valid().
-    //                              Measured: with a bare id the job paid 700 rub to a
-    //                              newborn who never offered it; now it Fails instead.
-    //   OPEN  QuestProgress::giver — quest.cpp:345 polls `!pool.valid || !pool.alive`,
-    //                              the IDENTICAL defect with the identical single-call-site
-    //                              quest_on_giver_died. quest.h:229 says so itself.
-    //   OPEN  Relationship::target — written by macro_sim.cpp:151.
-    //   OPEN  FloorModule::candidate — compared at floor_stream.cpp:88.
-    // Arming this now would just move the bug from contracts to quests.
-    //
-    //   pool.set_recycling(true);
+    // ARMED. A recycled id is a REUSED id, so every place that holds a bare NpcId ACROSS
+    // TIME had to become generation-checked first. All of them now are, and the count is
+    // written out because "fix one and declare victory" is how this would have shipped
+    // broken — I made that mistake twice and was corrected twice:
+    //   DONE  MacroSim::Journey::id  — stamps the departing generation, compares on landing.
+    //   DONE  Contract::giver        — an NpcHandle; contract_step polls handle_valid().
+    //                                  Measured A/B: with a bare id the job paid 700 rub to
+    //                                  a newborn who never offered it and read Complete;
+    //                                  with the handle it pays 0 and Fails.
+    //   DONE  QuestProgress::giver   — the identical defect, same fix, quest.cpp now polls
+    //                                  handle_valid(p.giver).
+    //   DONE  Relationship::target   — the generation went into the dead `pad` field, so
+    //                                  rel_ (128 B/row, 128.0 MiB at capacity) gained
+    //                                  nothing. social_edge_target() returns kInvalidNpc for
+    //                                  a stale edge, so the line callers already wrote for
+    //                                  empty slots makes staleness safe by construction.
+    //   DONE  FloorModule::candidate — an NpcHandle in the same 32 bits (a 20-bit id leaves
+    //                                  room for the 12-bit generation). A stale designate
+    //                                  RE-DESIGNATES from the floor's live roster instead of
+    //                                  handing the camera to whoever inherited the slot.
+    //   SAFE  NpcRef::id — the sixth store [npc_pool.h] names, and the ONE that needed no
+    //                      change. Its lifetime is COUPLED, not merely short: the macro
+    //                      demographic sweep skips `pool.embodied(id)` before it can reach
+    //                      either kill() (macro_sim.cpp), so a macro death can never touch
+    //                      an embodied body; and the only other pool.kill() caller anywhere
+    //                      in src/ is combat.cpp, which kills the record at :138 and
+    //                      destroys the entity at :148 in the same loop. So no entity can
+    //                      outlive the record its NpcRef names. That is an argument from
+    //                      the call graph rather than a generation check — if a third
+    //                      pool.kill() caller ever appears, this line is what it invalidates.
+    pool.set_recycling(true);
     //
     // The demo seeds ~1,930 records into 2^20, so the reserve is not the binding
     // constraint at this size — this matters at design scale, not in the test bed.
@@ -1740,6 +1755,17 @@ int main(int argc, char** argv) {
                             macroSim.day(),
                             static_cast<unsigned long long>(macroStats.tick), feudHits,
                             relTick.kills, relTick.changes);
+                // The utility AI, and it reads ZERO on purpose while aiCfg.enabled is false
+                // — a dormant system that shows nothing is indistinguishable from a missing
+                // one, which is how the parked call rotted unnoticed for weeks. `ai/wander`
+                // is the single-writer split: those two must never both be non-zero for the
+                // same body on the same tick, and that is what suite_utilai measures. [ai.h]
+                ImGui::Text("ai %s | %u seen / %u replan / %u switch | own ai %u / wander %u"
+                            " | mem %u recall / %u filed / %u fled",
+                            aiCfg.enabled ? "ON" : "off (dormant)", aiTick.considered,
+                            aiTick.replanned, aiTick.switches, aiTick.aiOwned,
+                            aiTick.wanderOwned, aiTick.recalled, aiTick.remembered,
+                            aiTick.memoryFled);
             }
             // Nearest monster, by name. Doubles as the proof that the Cyrillic font
             // actually loaded: every one of the 69 names is Russian.
