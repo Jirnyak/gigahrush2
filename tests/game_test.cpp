@@ -4127,5 +4127,21 @@ int main() {
     test_stream_migration_reembodies();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
+
+    // Say what to do when the pin trips, because it WILL trip on every legitimate addition, and a
+    // bare number in CMakeLists.txt with no instructions beside it is a puzzle rather than a gate.
+    // Measured 2026-07-29: this pin was set at 132266 and was stale inside the hour - the craft,
+    // quest and speech suites landed and took the total to 134002. audit_test.cpp:102-109 already
+    // prints its equivalent, and that guidance is the only reason its own stale pin cost thirty
+    // seconds instead of an investigation.
+    if (g_fails == 0) {
+        std::printf(
+            "game_test: all checks passed. If ctest reports this target FAILED, the pinned count\n"
+            "           in CMakeLists.txt no longer matches the total above. A RISING count with\n"
+            "           zero failures means tests were ADDED, not that a guard broke: update the\n"
+            "           PASS_REGULAR_EXPRESSION to the number above and say so in the commit.\n"
+            "           A FALLING count is the case that matters - it means a suite stopped\n"
+            "           running, which is exactly what this pin exists to catch.\n");
+    }
     return g_fails == 0 ? 0 : 1;
 }
