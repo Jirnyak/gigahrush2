@@ -42,7 +42,7 @@ built.
 | Worldgen | [worldgen.md](worldgen.md) | Demo world modules: 3D maze + toroidal floor stack | built |
 | Floors | [floors.md](floors.md) | Floor **modules**, number↔slot indirection, rule-sets, one-live-floor streaming | built |
 | Elevators | [elevators.md](elevators.md) | Adjacent travel (load-on-demand) + planned 4×4×4 fast-travel lattice (= nav coarse-graph) | adjacent built |
-| Monsters | [monsters.md](monsters.md) | Global monster tables + per-floor weights | design |
+| Monsters | [monsters.md](monsters.md) | Global monster catalog (POD defs + aiFlags + tier scaling) + per-floor weights | catalog built (#13b); spawning pending |
 | Items / loot | [items.md](items.md) | Global item catalog (POD defs + use-effects) + loot tables | catalog built (#13a); loot pending |
 | NPCs | [npcs.md](npcs.md) | Macro population + local embodiment; player is an embodied record | pool + embodiment + streaming |
 | NPC AI | [ai.md](ai.md) | Utility brain: needs, 13-intent scorer + hysteresis, flee-field + wander steering, identity-stagger driver | needs (#12a) + scorer/selection (#12b) + stagger/steering/loop driver (#12c) built; crowd moves. `route_step` goal-seeking waits on #13 |

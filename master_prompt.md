@@ -663,10 +663,24 @@ Decomposed into **#13a** item_table → **#13b** mob_table → **#13c** loot tab
   def)` — which **closes the #12a digestion loop** (baked pending-pool deltas feed
   `needs_step`). `use` closures re-encoded as flat baked deltas; weapon *combat*
   stats deferred to a separate id-keyed registry with combat. `dPsi` stored,
-  not applied (no psi stat — stubbed-input stance). Reference schemas for #13b/#13c/
-  #13d (69-kind stat table, `aiFlags` taxonomy, loot mechanisms, design-vs-procedural
-  spawn formulas — the §4 V-shape count/tier CONFIRMED as the *design* path) are
-  extracted and in the session transcript.
+  not applied (no psi stat — stubbed-input stance). Reference schemas for #13c/
+  #13d (loot mechanisms, design-vs-procedural spawn formulas — the §4 V-shape
+  count/tier CONFIRMED as the *design* path) are extracted and in the session
+  transcript.
+
+- **#13b mob_table — DONE** ([monsters.md](monsters.md), `src/game/mob_table.{h,cpp}`,
+  `test_mob_table`). POD `MobDef` (name/hp/dmg/speed/attackRate/ranged/projSpeed/
+  `projType`/`aiFlags`/spawnW/minSamosbor/rare) + `MobAiFlag` bitmask (the ~52-flag
+  reference `aiFlags` union **compressed** into 18 structural behaviour families —
+  a flag exists once a consuming system reads it) + `ProjType` + a representative
+  **33-kind** catalog spanning every archetype (array-index-is-kind, **no** 0
+  sentinel — kind 0 is a real mob) + bounds-tolerant `mob_def(kind)` / `mob_kind
+  (name)` mirroring `item_def` + inline per-level scaling (`mob_scaled_hp/dmg/speed`,
+  the reference `rpg.ts` +12%/+10%/+2%-per-level curve, `Math.round`, no `<cmath>`).
+  Stats ported verbatim from `../gigahrush/src/entities/*.ts`; spawnW/rarity from
+  `monster_ecology.ts`. Table invariants asserted (`ranged ⇔ projSpeed>0`,
+  `speed==0 ⇒ AiRooted`). Mobs remain templates — #13d spawns per-floor ECS
+  entities (scaled by level) that vanish on de-embodiment.
 
 ### Standing follow-ups (fold in when the relevant increment lands)
 - **`floor_spec_for()` is currently monotonic (`floor % 7/5/3` pattern) and takes
