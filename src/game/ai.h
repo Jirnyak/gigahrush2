@@ -56,12 +56,24 @@
 // samosbor, and a last-writer-wins arrangement breaks silently the next time it
 // moves, while also paying for a write nobody reads).
 //
-// STATE OF THAT RULE, stated honestly rather than as an aspiration. The token
-// mechanism is complete and `wander_step`'s guard is proven from both sides by
-// `suite_utilai.inl`. `faction_feud_step` is the ONE live writer still outside it:
-// it is wired, it shares this file's exact scope, and it has no guard. So the rule
-// holds for the ai/wander pair TODAY and is not yet whole. Two callers' worth of
-// work, both one line, and neither may be skipped when `enabled` is set true.
+// STATE OF THAT RULE — CORRECTED, and the previous revision was wrong in a way worth
+// recording. It claimed the token mechanism was complete and that `wander_step`'s
+// guard was "proven from both sides by suite_utilai.inl", leaving only
+// `faction_feud_step` outstanding. In fact `ai_owns_motion` had NO caller anywhere in
+// `src/`: every reference to it lived inside `suite_utilai.inl`, which applies the
+// guard in its own harness. The suite therefore proved the RULE and not the WIRING,
+// while this header read as though the wiring existed — so unparking `ai_step` would
+// have produced exactly the vibration the whole design exists to prevent.
+//
+// Both call sites are real now: `src/game/wander.cpp` and
+// `src/game/faction_relations.cpp` each carry `if (ai_owns_motion(reg, e)) continue;`.
+// The mechanism is whole in the tree, not only in the test's model of it.
+//
+// Both guards are ADDITIVE while `ai_init` has no caller: no `AiBrain` means
+// `ai_owns_motion` returns false, so both passes are bit-for-bit what they were. That
+// is deliberate — the guards land BEFORE the AI is switched on, so the day `ai_step`
+// is unparked is a one-line change against arbitration that is already green, instead
+// of three interacting changes landing together.
 //
 // The token is `AiBrain::motion`. `ai_step` runs BEFORE `wander_step`, decides
 // per body whether it or wander steers this tick, and writes the token. Then:
@@ -81,9 +93,10 @@
 //      untouched (they have their own behaviour tables, [mob_behaviour.h]); the
 //      player keeps `controller_step`. So the foreign steering systems that need a
 //      guard are `wander_step` and `faction_feud_step` — two `continue`s, no more,
+//      and BOTH ARE IN PLACE as of this revision,
 //      because `investigate_step` is excluded by TYPE (it views `const MobRef`) and
-//      `controller_step` needs BOTH `Controller` and `CameraTag`. Only wander's is
-//      in place; see "STATE OF THAT RULE" above.
+//      `controller_step` needs BOTH `Controller` and `CameraTag`. See "STATE OF THAT
+//      RULE" above for how this claim was wrong before both guards were real.
 //
 // ===========================================================================
 // WHAT THE BRAIN ACTUALLY DECIDES

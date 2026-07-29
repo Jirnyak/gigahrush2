@@ -459,7 +459,16 @@ MacroStats MacroSim::step(NpcPool& pool, const MacroParams& params,
                 continue;
             }
             traveling_[j.id] = 0;
-            if (pool.alive(j.id) && !pool.embodied(j.id)) {
+            // `alive` alone stops being sufficient the moment the pool recycles: a
+            // traveller who died in transit can have had its slot handed to a newborn,
+            // and that newborn IS alive — so the journey would teleport a stranger to a
+            // dead traveller's destination. Comparing the generation is the ABA test.
+            //
+            // A no-op while recycling is off (a generation only advances when a slot is
+            // reused, and a dead record already fails pool.alive), which is why this
+            // lands BEFORE the arming line rather than with it.
+            if (pool.alive(j.id) && pool.generation(j.id) == j.gen &&
+                !pool.embodied(j.id)) {
                 // A journey landing IS the O(1) relabel set_floor() exists for: it
                 // splices the record out of its old floor bucket and into the new one.
                 pool.set_floor(j.id, static_cast<std::int16_t>(j.toFloor));
@@ -530,6 +539,9 @@ MacroStats MacroSim::step(NpcPool& pool, const MacroParams& params,
                 Journey j{};
                 j.id = id;
                 j.toFloor = dst;
+                // Stamp WHO is travelling, not only where to. A pure read of a recorded
+                // column, so it costs nothing and cannot affect determinism.
+                j.gen = pool.generation(id);
                 j.etaTenths = afterTenths + travelTenths;
                 journeys_.push_back(j);
                 traveling_[id] = 1;

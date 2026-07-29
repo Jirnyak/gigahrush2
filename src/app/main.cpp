@@ -491,6 +491,24 @@ int main(int argc, char** argv) {
     nav::AsyncBake nav;
     game::NpcPool pool;
     pool.init();
+    // SLOT RECYCLING IS DELIBERATELY NOT ARMED HERE, and the line is left in place
+    // rather than omitted so the gate travels with it. Armed, a dead slot returns to an
+    // intrusive free list and a birth stops being a one-way draw on a finite reserve:
+    // measured in suite_npcpool.inl, 101,000 births cost 1,000 slots armed against
+    // 101,000 unarmed, and over 250 macro ticks against a 60-slot reserve the population
+    // holds at 3002 with 0 births refused instead of decaying to 2336 with 1197 refused.
+    //
+    // DO NOT UNCOMMENT until Contract::giver is an NpcHandle. A recycled id is a REUSED
+    // id, and contract_on_giver_died fires only from the frame-top combat drain below —
+    // never for a macro-sweep death — so contract_step's liveness poll would see a
+    // recycled newborn as the living giver and silently transfer the job to a stranger.
+    // MacroSim::Journey's half of this is already fixed (it stamps the departing
+    // generation and compares it on landing).
+    //
+    //   pool.set_recycling(true);
+    //
+    // The demo seeds ~1,930 records into 2^20, so the reserve is not the binding
+    // constraint at this size — this matters at design scale, not in the test bed.
     // The macro society: the whole cold population — aging, old-age mortality,
     // births, bounded migration — advancing on its own coarse clock, decoupled from
     // the 125 Hz sim and from the render loop. This is the piece that makes the

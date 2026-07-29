@@ -6,6 +6,7 @@
 #include "core/math.h"
 #include "core/wrap.h"
 #include "ecs/components.h"
+#include "game/ai.h"       // ai_owns_motion — the single-writer guard for Velocity
 #include "game/embody.h"   // NpcRef
 #include "game/faction_relations.h"
 #include "game/hunt.h"
@@ -161,6 +162,19 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
     for (auto e : view) {
         Transform& tr = view.get<Transform>(e);
         if (tr.layer != layer) continue;
+        // THE SINGLE-WRITER GUARD ([ai.h]). Exactly one system may write a body's
+        // horizontal Velocity on a tick, and the token that decides it is
+        // AiBrain::motion: ai_step runs before this loop, claims the bodies it will
+        // steer, and this skips them. Without it, ai_step and this loop both write the
+        // same component every tick and the creature vibrates — a bug that reads as
+        // broken physics and is not.
+        //
+        // ADDITIVE TODAY, on purpose. A body with no AiBrain returns false, AiBrain is
+        // attached only by ai_init, and ai_init has no caller yet — so this is a null
+        // try_get and nothing else changes. That is what makes the AI's default-off real
+        // rather than aspirational, and it is why the guard lands BEFORE the AI is
+        // switched on instead of in the same commit.
+        if (ai_owns_motion(reg, e)) continue;
 
         // The player is steered by input, never by the flow field. wander_init
         // already refuses to GIVE the camera holder a target (see the CameraTag

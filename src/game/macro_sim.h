@@ -249,7 +249,11 @@ private:
     struct Journey {
         NpcId id;                 // the travelling record
         std::int16_t toFloor;     // destination LABEL (signed — floors descend)
-        std::uint16_t pad_;
+        std::uint16_t gen;        // pool generation of `id` when the journey STARTED.
+                                  // Takes over the unused pad_, so Journey is still
+                                  // exactly 16 B. A reused id is a DIFFERENT person, so
+                                  // landing has to test WHO travels, not just that the
+                                  // slot is alive ([npc_pool.h] handles).
         std::uint64_t etaTenths;  // coarse-clock tenth-day the journey lands
     };
     std::vector<Journey> journeys_;        // in-transit records (<= maxJourneys)

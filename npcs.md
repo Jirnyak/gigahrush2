@@ -76,10 +76,21 @@ O(1) and the arrays stay dense. Slots are **bump-allocated** from a monotonic
 high-water mark (`count()`); ~950k (`kNpcActiveTarget`) are populated at world
 start and the tail is a **reserve plast** of blanks for runtime spawns.
 
-**The dead are never reclaimed.** `kill()` clears the `NpcAlive` bit but keeps
-the slot and id forever; new NPCs always come from the reserve (bump the tail),
-never by reusing a dead slot. Procedural and authored NPCs share this one linear
-store, told apart only by the `NpcDesign` flag bit — never separate arrays.
+**The dead are never reclaimed BY DEFAULT.** `kill()` clears the `NpcAlive` bit but
+keeps the slot and id forever; new NPCs come from the reserve (bump the tail), not by
+reusing a dead slot. Procedural and authored NPCs share this one linear store, told
+apart only by the `NpcDesign` flag bit — never separate arrays.
+
+`NpcPool` now also has an **opt-in** `set_recycling(true)`, which threads a dead slot
+onto an intrusive FIFO free list so a birth stops being a one-way draw on a finite
+reserve. It is OFF in the shipping binary — `set_recycling` has no caller in `src/` —
+so the paragraph above still describes what actually runs, and `macrosim.md`'s
+"never reclaims" stays accurate. Two things must land before it can be armed, because
+a recycled id is a REUSED id and both of these store a bare `NpcId` across time:
+`MacroSim::Journey` now carries the departing generation (done), and
+`Contract::giver` still needs to become an `NpcHandle` (not done). Reuse is
+generation-tagged via `NpcHandle` / `handle_valid()`, which is the tool any code
+holding an id across ticks should be using.
 
 Each NPC row carries (`src/game/npc_pool.h`):
 
