@@ -1,4 +1,3 @@
 User-agent: *
 Allow: /
-
-Sitemap: https://jirnyak.github.io/gigahrush2/sitemap.xml
+Sitemap: https://Jirnyak.github.io/gigahrush2/sitemap.xml
