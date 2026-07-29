@@ -11,6 +11,7 @@
 #include "game/floor_stream.h"  // FloorStreamer, FloorRegistry, RideResult
 #include "game/item_table.h"  // kItemNames, kItemCount
 #include "game/mob_table.h"   // kMobNames, kMobKindCount
+#include "game/quest.h"       // QuestLog, quest_log_write, quest_log_read, kQuestLogWire
 #include "sim/physics.h"      // aabb_overlaps_solid — the solver's own predicate
 #include "world/types.h"      // kCellSize, kVoxelSize, wrap_macro
 #include "world/world.h"      // World::grid, for the placement probes
@@ -163,6 +164,9 @@ void visit_header(Ar& ar, H& h) {
     ar.u16(h.invBytes);
     ar.u32(h.payloadBytes);
     ar.u32(h.payloadCrc);
+    // Version 2 fields: quest table weak + strong check.
+    ar.u32(h.questCount);
+    ar.u32(h.questFingerprint);
 }
 
 template <class Ar, class L>
@@ -320,13 +324,15 @@ const char* save_error_text(SaveError e) {
 // a `SizeMismatch` rejection of a save this very build just wrote.
 static_assert(sizeof(SaveHeader) == kSaveHeaderWire,
               "SaveHeader happens to have no padding; if that changes, the wire size is "
-              "still 48 and only this assert needs relaxing");
+              "still 56 and only this assert needs relaxing");
 static_assert(kLedgerWire == 8 + 8 + 4 + 4 + 4 + 4 + 1);
 static_assert(kContractWire == 4 + 2 + 4 + 4 + 4 + 1 + 1 + 1);
 static_assert(kNeedsWire == 8 * 4 + 1);
 static_assert(kInventoryWire == 64 * 4);
-static_assert(kSaveFixedWire == 416);
-static_assert(save_bytes_for(0) == 464);
+// kSaveFixedWire now includes kQuestLogWire (308 B: 20 rows x 14 B + 8 + 20).
+static_assert(kSaveFixedWire == 724);
+// kSaveHeaderWire grew from 48 to 56 (questCount + questFingerprint).
+static_assert(save_bytes_for(0) == 780);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two
@@ -349,6 +355,8 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     visit_book(bw, st.book);
     visit_player(bw, st.player);
     for (const OpenedContainerKey& k : st.opened) visit_key(bw, k);
+    // Version 2: quest log appended after the opened-container list.
+    quest_log_write(st.quests, body);
 
     SaveHeader h{};
     h.magic = kSaveMagic;
@@ -363,6 +371,8 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     h.bookBytes = static_cast<std::uint16_t>(sizeof(ContractBook));
     h.needsBytes = static_cast<std::uint16_t>(sizeof(Needs));
     h.invBytes = static_cast<std::uint16_t>(sizeof(Inventory));
+    h.questCount = static_cast<std::uint32_t>(kQuestCount);
+    h.questFingerprint = quest_table_fingerprint();
     h.payloadBytes = static_cast<std::uint32_t>(body.size());
     h.payloadCrc = crc32(body.data(), body.size());
 
@@ -425,6 +435,12 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     if (crc32(bytes + kSaveHeaderWire, h.payloadBytes) != h.payloadCrc)
         return fail(SaveError::BadChecksum);
 
+    // Version 2 quest table checks (after CRC, before parsing).
+    if (h.questCount != static_cast<std::uint32_t>(kQuestCount))
+        return fail(SaveError::SizeMismatch);  // closest existing error for table drift
+    if (h.questFingerprint != quest_table_fingerprint())
+        return fail(SaveError::SizeMismatch);
+
     // Parse into a scratch copy and commit only on success: a half-applied load would
     // leave the game in a state no run has ever reached, which is harder to recover from
     // than simply not loading.
@@ -436,11 +452,19 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     tmp.opened.resize(static_cast<std::size_t>(h.openedCount));
     for (std::size_t i = 0; i < tmp.opened.size(); ++i) visit_key(r, tmp.opened[i]);
     if (!r.ok()) return fail(SaveError::TooShort);
+    // Version 2: parse quest log from the remaining bytes (exactly kQuestLogWire).
+    {
+        const std::size_t pos = r.at();
+        if (!quest_log_read(bytes + kSaveHeaderWire + pos,
+                            static_cast<std::size_t>(h.payloadBytes) - pos,
+                            tmp.quests))
+            return fail(SaveError::TooShort);
+    }
     // Every declared byte consumed and no more. A surviving remainder would mean the
     // wire constants and the visitors disagree, which the static_asserts above already
     // forbid — this is the runtime backstop for the case where they are edited together
     // and both are wrong.
-    if (r.at() != static_cast<std::size_t>(h.payloadBytes))
+    if (r.at() + kQuestLogWire != static_cast<std::size_t>(h.payloadBytes))
         return fail(SaveError::SizeMismatch);
 
     st = std::move(tmp);

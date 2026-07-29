@@ -48,6 +48,7 @@
 #include "game/extraction.h"  // RunLedger
 #include "game/inventory.h"   // Inventory
 #include "game/npc_pool.h"    // Needs
+#include "game/quest.h"       // QuestLog, kQuestLogWire, quest_table_fingerprint
 #include "world/level_stack.h"  // LayerId, and World via world/world.h
 
 namespace giga::game {
@@ -66,7 +67,9 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // reordered, a meaning changed. `save_read` refuses a version it does not recognise
 // rather than guessing, because the alternative is the failure this whole file exists
 // to prevent: a load that succeeds and is wrong.
-inline constexpr std::uint32_t kSaveVersion = 1u;
+// Version 2: QuestLog added to the payload (quest_log_write / quest_log_read after the
+// opened-container list). Version 1 saves are rejected; they predate quest persistence.
+inline constexpr std::uint32_t kSaveVersion = 2u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -139,20 +142,24 @@ const char* save_error_text(SaveError e);
 // samosbor phase enters this format, this field becomes load-bearing and the caller
 // must start comparing it — which it can, because it is written down.
 struct SaveHeader {
-    std::uint32_t magic = 0;            //  0
-    std::uint32_t version = 0;          //  4
-    std::uint32_t tickHz = 0;           //  8  giga::kSimHz at write time; advisory
-    std::uint32_t itemCount = 0;        // 12  kItemCount        (weak)
-    std::uint32_t mobKindCount = 0;     // 16  kMobKindCount     (weak)
-    std::uint32_t itemFingerprint = 0;  // 20  item name hash    (strong)
-    std::uint32_t mobFingerprint = 0;   // 24  mob name hash     (strong)
-    std::uint32_t openedCount = 0;      // 28  OpenedContainerKey records that follow
-    std::uint16_t ledgerBytes = 0;      // 32  sizeof(RunLedger) in the writing build
-    std::uint16_t bookBytes = 0;        // 34  sizeof(ContractBook)
-    std::uint16_t needsBytes = 0;       // 36  sizeof(Needs)
-    std::uint16_t invBytes = 0;         // 38  sizeof(Inventory)
-    std::uint32_t payloadBytes = 0;     // 40
-    std::uint32_t payloadCrc = 0;       // 44  CRC-32 of every byte after the header
+    std::uint32_t magic = 0;              //  0
+    std::uint32_t version = 0;            //  4
+    std::uint32_t tickHz = 0;             //  8  giga::kSimHz at write time; advisory
+    std::uint32_t itemCount = 0;          // 12  kItemCount        (weak)
+    std::uint32_t mobKindCount = 0;       // 16  kMobKindCount     (weak)
+    std::uint32_t itemFingerprint = 0;    // 20  item name hash    (strong)
+    std::uint32_t mobFingerprint = 0;     // 24  mob name hash     (strong)
+    std::uint32_t openedCount = 0;        // 28  OpenedContainerKey records that follow
+    std::uint16_t ledgerBytes = 0;        // 32  sizeof(RunLedger) in the writing build
+    std::uint16_t bookBytes = 0;          // 34  sizeof(ContractBook)
+    std::uint16_t needsBytes = 0;         // 36  sizeof(Needs)
+    std::uint16_t invBytes = 0;           // 38  sizeof(Inventory)
+    std::uint32_t payloadBytes = 0;       // 40
+    std::uint32_t payloadCrc = 0;         // 44  CRC-32 of every byte after the header
+    // Version 2 additions (bytes 48-55). Placed at the end so a version-1 reader that
+    // stops at byte 48 never tries to parse them.
+    std::uint32_t questCount = 0;         // 48  kQuestCount       (weak)
+    std::uint32_t questFingerprint = 0;   // 52  quest title hash  (strong)
 };
 
 // Wire sizes. These are the ON-DISK footprints, which are deliberately NOT the
@@ -160,7 +167,7 @@ struct SaveHeader {
 // byte and no host byte order ever reaches the file. That is what keeps a save written
 // by the MSVC build readable by the Clang build and vice versa, and it is why the
 // `*Bytes` header fields above are a drift ALARM rather than a layout description.
-inline constexpr std::size_t kSaveHeaderWire = 48;   // 8 x u32 + 4 x u16 + 2 x u32
+inline constexpr std::size_t kSaveHeaderWire = 56;   // v1: 48 B; v2 adds questCount+questFingerprint
 inline constexpr std::size_t kLedgerWire = 33;       // 2x8 + 4x4 + 1
 inline constexpr std::size_t kContractWire = 21;     // 4 + 2 + 3x4 + 3   (pad_ dropped)
 inline constexpr std::size_t kBookWire =
@@ -169,7 +176,8 @@ inline constexpr std::size_t kNeedsWire = 33;        // 8 floats + seeded
 inline constexpr std::size_t kInventoryWire = static_cast<std::size_t>(kInvSlots) * 4;
 inline constexpr std::size_t kPlayerWire = kNeedsWire + kInventoryWire + 4 + 4 + 4 + 3;
 inline constexpr std::size_t kOpenedKeyWire = 5;     // i16 floor + 3 x u8 cell
-inline constexpr std::size_t kSaveFixedWire = kLedgerWire + kBookWire + kPlayerWire;
+// kQuestLogWire is defined in quest.h.
+inline constexpr std::size_t kSaveFixedWire = kLedgerWire + kBookWire + kPlayerWire + kQuestLogWire;
 
 // Sanity ceiling on the opened-container list, so a corrupt header cannot ask for a
 // huge allocation before the checksum has had a chance to reject it. 64 crates per
@@ -279,6 +287,9 @@ struct SaveState {
     // resident floor's crates are live entities, so the ones from other floors exist
     // ONLY in this list — see `refresh_opened_containers`.
     std::vector<OpenedContainerKey> opened;
+    // Version 2: quest log persisted across F5/F9. Written after the opened-container
+    // list by quest_log_write; read back by quest_log_read. Exactly kQuestLogWire bytes.
+    QuestLog quests{};
 };
 
 // Serialize. `out` is cleared first and ends up exactly `save_bytes_for(opened.size())`
