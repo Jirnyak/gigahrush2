@@ -1213,4 +1213,197 @@ static void test_behaviours_all() {
         }
         CHECK(gatedHealthKinds == 0u);
     }
+
+    // ---- 14. Combat Integration: WallBrace defender incoming mitigation ------
+    {
+        Registry reg14;
+        NpcPool pool14;
+        pool14.init();
+
+        const vec3 bracedPos{111.0f, 101.0f, 3.0f};  // cell 55, 50, 1; wall is at 56, 50, 1
+        const vec3 openPos{101.0f, 111.0f, 3.0f};    // cell 50, 55, 1; open air
+
+        const Entity wallPan = spawn_at(reg14, layer, MobKind::Panelnik, bracedPos);
+        const Entity openPan = spawn_at(reg14, layer, MobKind::Panelnik, openPos);
+
+        // 10 raw Kinetic damage to braced vs open Panelnik
+        DamageResult rBraced = apply_damage(reg14, pool14, wallPan, 10, DamageChannel::Kinetic, entt::null, &grid);
+        DamageResult rOpen = apply_damage(reg14, pool14, openPan, 10, DamageChannel::Kinetic, entt::null, &grid);
+
+        // Braced takes round(10 * 0.58) = 6 damage. Open takes 10 damage.
+        CHECK(rBraced.applied == 6);
+        CHECK(rOpen.applied == 10);
+        CHECK(rBraced.applied < rOpen.applied);
+
+        // Edge case: 1 raw damage to braced Panelnik must floor at 1 (not 0)
+        const Entity wallPan2 = spawn_at(reg14, layer, MobKind::Panelnik, bracedPos);
+        DamageResult rChip = apply_damage(reg14, pool14, wallPan2, 1, DamageChannel::Kinetic, entt::null, &grid);
+        CHECK(rChip.applied == 1);
+    }
+
+    // ---- 15. Combat Integration: DeadEcho facing damage multiplier ----------
+    {
+        const vec3 playerPos{100.0f, 100.0f, 3.0f};
+
+        const MobDef& def = kMobTable[static_cast<std::size_t>(MobKind::Bezekhiy)];
+        const float baseDmg = static_cast<float>(mob_hp_at_level(def.dmg, 1));
+        const std::int16_t expectedBehind = static_cast<std::int16_t>(baseDmg * 1.55f);
+        const std::int16_t expectedFacing = static_cast<std::int16_t>(baseDmg * 0.72f);
+
+        // DeadEcho behind player at (98.5, 100, 3)
+        {
+            Registry regBehind;
+            NpcPool poolBehind;
+            poolBehind.init();
+            EventBus busBehind;
+            const Entity pEnt = spawn_viewer(regBehind, layer, playerPos);
+            regBehind.get<CameraTag>(pEnt).yaw = 0.0f;
+            regBehind.emplace<MobRef>(pEnt, MobRef{0, 1, 1000, 1000});
+
+            const vec3 behindPos{98.5f, 100.0f, 3.0f};
+            spawn_at(regBehind, layer, MobKind::Bezekhiy, behindPos);
+
+            std::uint32_t swings = mob_attack_step(regBehind, grid, poolBehind, busBehind, layer, 0.008f, 0);
+            CHECK(swings == 1u);
+            const MobRef& pMob = regBehind.get<MobRef>(pEnt);
+            CHECK(1000 - pMob.hp == expectedBehind);
+        }
+
+        // DeadEcho in front of player at (101.5, 100, 3)
+        {
+            Registry regFacing;
+            NpcPool poolFacing;
+            poolFacing.init();
+            EventBus busFacing;
+            const Entity pEnt = spawn_viewer(regFacing, layer, playerPos);
+            regFacing.get<CameraTag>(pEnt).yaw = 0.0f;
+            regFacing.emplace<MobRef>(pEnt, MobRef{0, 1, 1000, 1000});
+
+            const vec3 facingPos{101.5f, 100.0f, 3.0f};
+            spawn_at(regFacing, layer, MobKind::Bezekhiy, facingPos);
+
+            std::uint32_t swings = mob_attack_step(regFacing, grid, poolFacing, busFacing, layer, 0.008f, 0);
+            CHECK(swings == 1u);
+            const MobRef& pMob = regFacing.get<MobRef>(pEnt);
+            CHECK(1000 - pMob.hp == expectedFacing);
+        }
+
+        CHECK(expectedBehind > expectedFacing);
+    }
+
+    // ---- 16. Combat Integration: FractureSprint burst damage multiplier -----
+    {
+        const vec3 playerPos{100.0f, 100.0f, 3.0f};
+        const vec3 mobPos{101.5f, 100.0f, 3.0f};
+
+        const MobDef& def = kMobTable[static_cast<std::size_t>(MobKind::Treskotnik)];
+        const float baseDmg = static_cast<float>(mob_hp_at_level(def.dmg, 1));
+        const std::int16_t expectedSprint = static_cast<std::int16_t>(baseDmg * 1.45f);
+        const std::int16_t expectedNormal = static_cast<std::int16_t>(baseDmg * 1.00f);
+
+        // Sprint phase test
+        {
+            Registry regSprint;
+            NpcPool poolSprint;
+            poolSprint.init();
+            EventBus busSprint;
+            const Entity pEnt = spawn_viewer(regSprint, layer, playerPos);
+            regSprint.emplace<MobRef>(pEnt, MobRef{0, 1, 1000, 1000});
+
+            const Entity tresk = spawn_at(regSprint, layer, MobKind::Treskotnik, mobPos);
+            const std::uint32_t mobId = static_cast<std::uint32_t>(entt::to_integral(tresk));
+
+            std::uint64_t sprintTick = 0;
+            for (std::uint64_t t = 0; t < kFractureCycleTicks; ++t) {
+                if (burst_phase(MobBehaviour::FractureSprint, mobId, t, 1.5f) == BurstPhase::Sprint) {
+                    sprintTick = t;
+                    break;
+                }
+            }
+
+            std::uint32_t swings = mob_attack_step(regSprint, grid, poolSprint, busSprint, layer, 0.008f, sprintTick);
+            CHECK(swings == 1u);
+            const MobRef& pMob = regSprint.get<MobRef>(pEnt);
+            CHECK(1000 - pMob.hp == expectedSprint);
+        }
+
+        // Stagger phase test (normal 1.0x damage)
+        {
+            Registry regStagger;
+            NpcPool poolStagger;
+            poolStagger.init();
+            EventBus busStagger;
+            const Entity pEnt = spawn_viewer(regStagger, layer, playerPos);
+            regStagger.emplace<MobRef>(pEnt, MobRef{0, 1, 1000, 1000});
+
+            const Entity tresk = spawn_at(regStagger, layer, MobKind::Treskotnik, mobPos);
+            const std::uint32_t mobId = static_cast<std::uint32_t>(entt::to_integral(tresk));
+
+            std::uint64_t staggerTick = 0;
+            for (std::uint64_t t = 0; t < kFractureCycleTicks; ++t) {
+                if (burst_phase(MobBehaviour::FractureSprint, mobId, t, 1.5f) == BurstPhase::Stagger) {
+                    staggerTick = t;
+                    break;
+                }
+            }
+
+            std::uint32_t swings = mob_attack_step(regStagger, grid, poolStagger, busStagger, layer, 0.008f, staggerTick);
+            CHECK(swings == 1u);
+            const MobRef& pMob = regStagger.get<MobRef>(pEnt);
+            CHECK(1000 - pMob.hp == expectedNormal);
+        }
+
+        CHECK(expectedSprint > expectedNormal);
+    }
+
+    // ---- 17. Combat Integration: DebrisLurker precedence (no double mult) ---
+    {
+        const MobDef& def = kMobTable[static_cast<std::size_t>(MobKind::Rebar)];
+        const float baseDmg = static_cast<float>(mob_hp_at_level(def.dmg, 1));
+        const std::int16_t expectedCover = static_cast<std::int16_t>(baseDmg * 1.25f);
+        const std::int16_t expectedOpen = static_cast<std::int16_t>(baseDmg * 0.75f);
+
+        // DebrisLurker near wall (cover: 1.25x)
+        {
+            Registry regCover;
+            NpcPool poolCover;
+            poolCover.init();
+            EventBus busCover;
+
+            const vec3 playerPos{111.0f, 100.0f, 3.0f}; // distance 1.0m from mob
+            const Entity pEnt = spawn_viewer(regCover, layer, playerPos);
+            regCover.emplace<MobRef>(pEnt, MobRef{0, 1, 1000, 1000});
+
+            const vec3 bracedPos{111.0f, 101.0f, 3.0f}; // cell (55, 50, 1), wall at (56, 50, 1)
+            spawn_at(regCover, layer, MobKind::Rebar, bracedPos);
+
+            std::uint32_t swings = mob_attack_step(regCover, grid, poolCover, busCover, layer, 0.008f, 0);
+            CHECK(swings == 1u);
+            const MobRef& pMob = regCover.get<MobRef>(pEnt);
+            // 1.25x damage in cover (verifying it is NOT 1.25 * 1.20 = 1.50x!)
+            CHECK(1000 - pMob.hp == expectedCover);
+        }
+
+        // DebrisLurker in open (open: 0.75x)
+        {
+            Registry regOpen;
+            NpcPool poolOpen;
+            poolOpen.init();
+            EventBus busOpen;
+
+            const vec3 playerPos{101.0f, 110.0f, 3.0f};
+            const Entity pEnt = spawn_viewer(regOpen, layer, playerPos);
+            regOpen.emplace<MobRef>(pEnt, MobRef{0, 1, 1000, 1000});
+
+            const vec3 openPos{101.0f, 111.0f, 3.0f};
+            spawn_at(regOpen, layer, MobKind::Rebar, openPos);
+
+            std::uint32_t swings = mob_attack_step(regOpen, grid, poolOpen, busOpen, layer, 0.008f, 0);
+            CHECK(swings == 1u);
+            const MobRef& pMob = regOpen.get<MobRef>(pEnt);
+            CHECK(1000 - pMob.hp == expectedOpen);
+        }
+
+        CHECK(expectedCover > expectedOpen);
+    }
 }
