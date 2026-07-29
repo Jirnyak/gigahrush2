@@ -3,7 +3,7 @@
 // src/render after the 45-commit burst. Compiled as its own translation unit by
 // tests/audit_test.cpp — NOT included into game_test.cpp any more, because sharing an
 // exit code with ~45 real regression gates demoted all of them to stderr; read that
-// file's header for the WILL_FAIL contract. It still uses that file's CHECK macro and
+// file's header for the pinned-count contract. It still uses that file's CHECK macro and
 // its `using namespace giga::game`.
 //
 // EVERY TEST IN HERE THAT CURRENTLY FAILS IS A FINDING. They are written to fail
@@ -21,22 +21,22 @@
 //                          flew at double its authored speed and double gravity. Fixed
 //                          by the `SelfIntegrating` tag (components.h:77) plus
 //                          `entt::exclude<SelfIntegrating>` at physics.cpp:85, tagged at
-//                          both spawn sites (combat.cpp:452, :485).
+//                          both spawn sites (combat.cpp:498, :537).
 //   2. ms_timer_drift      CLOSED by the tick rate. kSimHz is 125, so
 //                          uint16(dt*1000+0.5) is exactly 8 ms and an authored duration
 //                          means what it says ([core/tick.h]).
-//   3. gun_kills_counted   CLOSED. combat.cpp:660-661 credits a lethal shot to
+//   3. gun_kills_counted   CLOSED. combat.cpp:834 credits a lethal shot to
 //                          PlayerMelee::kills — the counter the HUD prints and the one
 //                          that survives a body swap.
 //   4. ammo_has_a_source   CLOSED without touching the data. A weapon crate reserves
 //                          slot 0 for the cheapest affordable ammo
-//                          (container.cpp:154-190) and vendor_resupply walks Ammo last
-//                          (vendor.cpp:165-166). All 17 AMMO rows still carry
+//                          (container.cpp:187-212) and vendor_resupply walks Ammo last
+//                          (vendor.cpp:251-255). All 17 AMMO rows still carry
 //                          spawn_w_milli 0, which is exactly why the crate has to force
 //                          the slot instead of rolling for it.
 //   5. descend_not_free    **STILL RED, and unsatisfiable as written — the test is now
 //                          the defect.** The game side landed: `Contract::baseline` is
-//                          stamped inside contract_accept (contract.cpp:163-167) so the
+//                          stamped inside contract_accept (contract.cpp:172-224) so the
 //                          caller cannot forget it. But this test stamps the baseline
 //                          from `kNoDescentYet` (deepestFloor 0) and then steps against
 //                          a ledger saying -50, which reads as "descended from 0 to -50
@@ -49,16 +49,21 @@
 //                          measure (pass `led` to contract_accept and assert a job you
 //                          already satisfy pays nothing, ever), which is a call for
 //                          whoever owns the Descend lane, not a silent rewrite here.
-//                          Related, and NOT covered by any test: contract.h promises "a
-//                          job whose target is already behind you is refused at accept",
-//                          and contract_accept refuses nothing of the kind — it accepts
-//                          the job, stamps `want <= baseline`, and the slot can then
-//                          never complete or fail. Three of those brick the 3-slot book.
+//                          Related, and STILL not covered by any test: contract.h
+//                          promises "a job whose target is already behind you is refused
+//                          at accept". That refusal used to be prose only — the job was
+//                          accepted into a slot that could never complete or fail, and
+//                          three of those bricked the 3-slot book. **It is implemented
+//                          now** (commit 9611839, contract.cpp:206-208: a Descend offer
+//                          with `want <= baseline` is rejected outright). What is missing
+//                          is a witness, not the fix — no test drives contract_accept
+//                          with a ledger that has already passed the target, so nothing
+//                          would notice if that guard were deleted again.
 //   6. hunt_is_findable    CLOSED. contract_offer picked a Hunt kind uniformly over all
 //                          69 rows with no spawn-weight filter, so 11 of 318 live offers
 //                          named a monster that can never appear. Now guarded on the
 //                          same two row fields the spawn roster reads
-//                          (contract.cpp Hunt branch, mob_spawn.cpp:161-162).
+//                          (contract.cpp Hunt branch, mob_spawn.cpp:271).
 //   7. stack_max_respected CLOSED. loot.cpp:243-244 clamps a merged slot to stackMax.
 //
 // Currently GREEN (pins, not findings): budget_vs_demo_cap records the numbers behind
@@ -98,7 +103,7 @@ inline std::uint8_t a_biting_kind() {
 // ---------------------------------------------------------------------------
 // 1. Projectiles were integrated twice per tick — CLOSED, pinned from both sides
 // ---------------------------------------------------------------------------
-// `projectile_step` integrates position itself (combat.cpp:540-543: wrapf(pos + v*dt)
+// `projectile_step` integrates position itself (combat.cpp:694-696: wrapf(pos + v*dt)
 // on x/y and pos.z += v.z*dt). `physics_step` iterates `view<Transform, Velocity>`
 // and a Projectile carries both — plus an AABB — so the sweep used to move it a second
 // time and collide it. Two consequences, both player-visible:
@@ -112,7 +117,7 @@ inline std::uint8_t a_biting_kind() {
 //
 // The fix is one tag and one exclusion: `SelfIntegrating` (components.h:77),
 // `entt::exclude<SelfIntegrating>` at physics.cpp:85, and an `emplace` at both spawn
-// sites (combat.cpp:452 for a monster's lob, :485 for the player's flat shot). A tag in
+// sites (combat.cpp:498 for a monster's lob, :537 for the player's flat shot). A tag in
 // the CORE rather than a `Projectile` test inside physics_step, because `src/sim` may
 // not include `src/game` ([AGENTS.md] layering).
 //
@@ -151,7 +156,7 @@ static void projectile_once() {
         reg.emplace<Transform>(e, tr);
         reg.emplace<Velocity>(e, Velocity{vel});
         reg.emplace<AABB>(e, AABB{vec3{0.10f, 0.10f, 0.10f}});
-        // Exactly what combat.cpp:452 and :485 do. Without it this entity is not the
+        // Exactly what combat.cpp:498 and :537 do. Without it this entity is not the
         // thing the game ships and the measurement below is about a different object.
         if (tagged) reg.emplace<SelfIntegrating>(e);
         reg.emplace<Projectile>(e, Projectile{entt::null, 10, kProjTtlMs, 0, 1});
@@ -248,7 +253,7 @@ static void projectile_once() {
 // serialise, desync and replay, to compensate for an arithmetic problem the rate itself
 // could delete. Do NOT "improve" this by adding one.
 //
-// Why the test stays after passing. It reads kSimDt (kDt, :48) rather than restating a
+// Why the test stays after passing. It reads kSimDt (kDt, :86) rather than restating a
 // rate, and both bounds are written as kSimHz and 30 * kSimHz, so it measures whatever
 // the sim is configured to do instead of a number a human retyped. Both bounds pass with
 // ZERO margin — 125 <= 125 and 3750 <= 3750 — which is the useful part: reintroduce any
@@ -260,8 +265,12 @@ static void projectile_once() {
 // derives its boundary as `ceil(reloadMs / stepMs)` from the implementation rather than
 // from the spec, so it would pass under either rate and proves nothing about timing.
 //
-// Sites the fix reaches: combat.cpp:192, :509, :687, :806 and src/app/main.cpp:762 — all
-// fed kSimDt from the main loop, so all now convert to exactly 8.
+// Sites the fix reaches: combat.cpp:202 (mob_attack_step), :607 (slow_step), :657
+// (projectile_step), :862 (player_ranged_step), :990 (player_melee_step), plus the
+// `uint16(dt*1000+0.5)` in src/app/main.cpp's loop — all fed kSimDt, so all now convert
+// to exactly 8. Note FIVE sites in combat.cpp, not the four this list used to name:
+// player_melee_step acquired one after the list was written, which is the argument for
+// naming the function beside each number rather than the number alone.
 static void ms_timer_drift() {
     // 8 is the correct step at 125 Hz, not a quantisation loss. Stated so the arithmetic
     // the rest of this test depends on is visible at the top.
@@ -326,14 +335,18 @@ static void ms_timer_drift() {
 }
 
 // ---------------------------------------------------------------------------
-// 3. A firearm kill is counted nowhere
+// 3. A firearm kill was counted nowhere — CLOSED, now a pin
 // ---------------------------------------------------------------------------
-// `player_melee_step` credits a lethal swing (combat.cpp:758 `++pm.kills`).
-// `projectile_step` credits a HIT to PlayerRanged::hits (combat.cpp:562) and credits a
-// KILL to nothing — PlayerRanged has no kill field and PlayerMelee is not touched. The
-// HUD prints PlayerMelee::kills (src/app/main.cpp:1015-1017) and carries it across
-// possession, so it is the tally the player reads; shoot the whole floor dead and it
-// stays at zero.
+// What it caught: `player_melee_step` credited a lethal swing (combat.cpp:1042
+// `++pm.kills`) and `projectile_step` credited a HIT to PlayerRanged::hits
+// (combat.cpp:827) but credited a KILL to nothing — PlayerRanged has no kill field and
+// PlayerMelee was not touched. The HUD prints PlayerMelee::kills and carries it across
+// possession, so it is the tally the player reads; you could shoot a whole floor dead
+// and it stayed at zero.
+//
+// Fixed at combat.cpp:834, inside projectile_step's lethal branch:
+// `if (auto* pm = reg.try_get<PlayerMelee>(h.source)) ++pm->kills;` — the shot is
+// credited to the same counter the melee path uses, so one number covers both.
 //
 // Asserted on PlayerMelee::kills because that is the counter the HUD reads and the one
 // that survives a body swap. Any fix that lands the kill in a counter the HUD prints
@@ -386,8 +399,8 @@ static void gun_kills_counted() {
 
     CHECK(hits == 1);
     CHECK(reg.all_of<Dead>(mob));                            // it died
-    CHECK(reg.get<PlayerRanged>(shooter).hits == 1);         // the hit was credited
-    CHECK(reg.get<PlayerMelee>(shooter).kills == 1);         // the KILL was not
+    CHECK(reg.get<PlayerRanged>(shooter).hits == 1);         // the hit is credited
+    CHECK(reg.get<PlayerMelee>(shooter).kills == 1);         // and now so is the KILL
 }
 
 // ---------------------------------------------------------------------------
@@ -397,11 +410,14 @@ static void gun_kills_counted() {
 // `item_weight_on_floor` returns 0 for weight 0 (item_table.cpp:2276), and every
 // weighted roller in the game filters on it — so:
 //
-//   * `roll_container(WeaponCrate, ...)` admits Weapon|Ammo (container.cpp:125-128)
-//     and can only ever produce weapons. container.h:50 calls the kind "Ammo and a\n//     weapon" and the file header calls it "ammo and access"; neither can happen.
-//   * `vendor_stocks(Ammo)` is true (vendor.cpp:26) and `vendor_buy_price` prices it,
-//     but `vendor_resupply` — the ONLY buy path wired to a key (src/app/main.cpp:913)
-//     — walks Drink, Medicine and Food only (vendor.cpp:155-156).
+//   * `roll_container(WeaponCrate, ...)` admits Weapon|Ammo (container.cpp:98-100)
+//     and can only ever produce weapons. container.h:51 calls the kind "Ammo and a
+//     weapon" and the file header calls it "ammo and access"; neither can happen.
+//   * `vendor_stocks(Ammo)` is true (vendor.cpp:52) and `vendor_buy_price` prices it,
+//     but `vendor_resupply` — the ONLY buy path wired to a key (src/app/main.cpp:1255)
+//     — walked Drink, Medicine and Food only, so the promise and the one key-wired buy
+//     path disagreed. Ammo is in that list now, last (vendor.cpp:251-255); the two-step
+//     history, including the "fix" that picked the wrong row, is at vendor.cpp:227-236.
 //
 // So the only ammunition in the game is `drop_weapon_ammo`, bundled onto a firearm
 // that fell off a corpse. Loot a gun out of a crate, or buy your way back to strength
@@ -457,18 +473,19 @@ static void ammo_has_a_source() {
 // ---------------------------------------------------------------------------
 // 5. A Descend contract pays for a descent that happened before it existed
 // ---------------------------------------------------------------------------
-// `contract_step` reads `led.deepestFloor` (contract.cpp:234), which is the deepest
-// point of the whole SESSION, and `contract_accept` records no baseline. So a job to
-// reach -20, taken after any trip past -20, is already complete on the tick it is
-// accepted.
+// What it caught: `contract_step` reads `led.deepestFloor` (contract.cpp:298), which is
+// the deepest point of the whole SESSION, and `contract_accept` recorded no baseline. So
+// a job to reach -20, taken after any trip past -20, was already complete on the tick it
+// was accepted. `Contract::baseline` now closes that (contract.cpp:224, compared at
+// :314) — see the ledger entry above for why this test still cannot witness it.
 //
-// The repeat is the expensive half. `contract_accept` refuses a duplicate only while
-// the existing copy is ACTIVE (contract.cpp:151); once it is Complete the slot is
+// The repeat was the expensive half. `contract_accept` refuses a duplicate only while
+// the existing copy is ACTIVE (contract.cpp:214); once it is Complete the slot is
 // reusable, and `contract_offer` is deterministic in (giver, floor) — so the same body
 // re-offers the identical job every `kOverhearCooldownTicks` (2 s) and every E press
-// pays again, forever, without moving. Descend is 20% of all offers
-// (contract.cpp:56-101), and the reward is paid straight into `banked`, which is the
-// one number the whole extraction loop is scored on.
+// paid again, forever, without moving. Descend is 20% of all offers (contract.cpp:58-140
+// splits Fetch 45 / Hunt 35 / Descend 20 on `pick`), and the reward is paid straight
+// into `banked`, which is the one number the whole extraction loop is scored on.
 static void descend_not_free() {
     NpcPool pool;
     pool.init();
@@ -508,7 +525,7 @@ static void descend_not_free() {
 // contract.cpp's Hunt branch comments "a kind that lives at this depth, so the job is
 // findable" and then picked uniformly over all `kMobKindCount` rows with no
 // spawn-weight and no floorMask filter. `spawn_floor_mobs` skips any row with
-// `spawnWeightX10 == 0` (mob_spawn.cpp:162), and data/mobs.csv has THREE such rows —
+// `spawnWeightX10 == 0` (mob_spawn.cpp:271), and data/mobs.csv has THREE such rows —
 // CREATOR, PSEUDOLIFT and SCULPTURE, whose authored 0.05 weight the generator's
 // `int(round(0.05 * 10))` takes to 0 — all with dmg > 0, so the `md.dmg == 0` guard let
 // every one of them through. None can appear on any floor by any path, so a Hunt naming
@@ -590,7 +607,7 @@ static void hunt_is_findable() {
 // second one merged on top is not.
 //
 // Low damage on its own — ItemSlot::count is 16 bits, so nothing wraps — but it breaks
-// the invariant every other consumer assumes, and loot.h:225 states the opposite
+// the invariant every other consumer assumes, and loot.cpp:225 states the opposite
 // outright ("no silent discard, which is what makes 64 slots a real constraint").
 static void stack_max_respected() {
     LevelStack stack;
@@ -643,7 +660,8 @@ static void stack_max_respected() {
 // PIN (green): what kMobSpawnCap actually costs
 // ---------------------------------------------------------------------------
 // src/app/main.cpp:224-227 caps every floor's monster spawn at 600 and justifies it
-// with "the demo floors (|number| <= 4) are far below this anyway, so it is a guard\n// rail rather than a live limit". That comment predates commit 8e0a0d3, which moved
+// with "the demo floors (|number| <= 4) are far below this anyway, so it is a guard
+// rail rather than a live limit". That comment predates commit 8e0a0d3, which moved
 // the stack to {0, 1, 2, -8, -14, -26, -36, -50, 14, 30} to reach the mob ecology's
 // real habitat anchors. Six of those ten floors now ask for more than 600 heads, and
 // the four deepest all ask for over 800 — so from -14 downward every floor spawns the
