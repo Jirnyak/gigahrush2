@@ -26,6 +26,7 @@
 // `Inventory` have no implicit padding — 8x4+1+3 and 64x4 — so those two ARE compared
 // with memcmp.
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
 #include <type_traits>
 #include <vector>
@@ -1142,6 +1143,237 @@ void travel_drives_the_existing_elevator() {
     CHECK(pool.count() == 3u * pop);
 }
 
+// ---------------------------------------------------------------------------
+// FloorModule::candidate is a generation-checked handle, not a bare id
+// ---------------------------------------------------------------------------
+// WRONG HOME, STATED OUTRIGHT. This test belongs in game_test.cpp beside
+// `test_floor_stream` and `test_stream_migration_reembodies`, which is where the rest of
+// the streaming behaviour is pinned. It sits here because suite_saveload.inl is the only
+// suite the lane that wrote it owned, and a fresh suite_floorstream.inl would FAIL the
+// `source_rules` gate — which rejects any tests/suite_*.inl that no tests/*.cpp includes —
+// until game_test.cpp picked it up. Move it when that include lands. It is at least not a
+// stranger here: `travel_drives_the_existing_elevator` above already drives FloorStreamer.
+//
+// THE DEFECT. `FloorModule::candidate` is the record a module designates as the player on
+// a first load. It was written once when the crowd was seeded and compared as a BARE
+// NpcId on every later load — a reference held across the whole session, and the sixth of
+// the six bare-id stores [npc_pool.h] lists as blocking `set_recycling(true)`. Armed, the
+// designate can die in a macro sweep, its slot be handed to a newborn, and
+// `id == fm.candidate` then match a DIFFERENT person who reads as perfectly alive. The
+// camera attaches to the wrong creature and nothing logs it.
+//
+// It is worse than a wrong name. A recycled row is a BLANK row (`NpcPool::reset_row`), and
+// hp is NOT copied onto the entity — combat takes `&pool.hp(n->id)` straight from the
+// record (combat.cpp:91) and the HUD reads `pool.hp(...)` (main.cpp:1265) — so the
+// stranger the camera lands on has hp 0 and max_hp 0. The run would start dead.
+//
+// The death that matters here is also the one NOTHING reports: the macro sweep publishes
+// no NpcDied event, so there is no `*_on_designate_died` handler that could be wired.
+// Re-resolving at load time is the only thing that can see it.
+//
+// FOUR CASES, all four asserted, because a guard that refused everything would pass the
+// interesting one on its own and a guard that accepted everything would pass case 1:
+//   1. live designate   -> still gets the camera (behaviour unchanged)
+//   2. recycled slot    -> the newborn does NOT; the module re-designates from its roster
+//   3. plain death      -> the same re-designation with recycling OFF, the shipped config
+//   4. migrated away    -> nobody, exactly as before (not this lane's defect to change)
+//
+// MEASURED ON BOTH SIDES, not reasoned about. These same four cases were linked once
+// against the shipped floor_stream.cpp and once against a copy of it whose designate
+// resolution was reverted to the old unconditional bare id, everything else byte-identical
+// (Residential pop 420, designate id 210, seed 1234):
+//
+//   handle : 23 checks / 0 failures. Case 2 camera -> id 209, hp 100, age 24.
+//            Case 3 camera -> id 209. Case 4 camera -> none.
+//   bare id: 23 checks / 6 failures. Case 2 camera -> id 210, THE NEWBORN, hp 0, age 0 —
+//            the run starts with a dead body. Case 3 camera -> none at all: the designate
+//            died, the compare fell through, and the floor came up with nobody in it.
+//
+// Cases 1 and 4 read IDENTICALLY on both sides, which is the part that matters as much as
+// the failures: the guard discriminates, it does not simply refuse. sizeof(FloorModule)
+// was 48 B either way (module table 12,288 B) — the handle is the same word as the id.
+void candidate_slot_recycled() {
+    const std::uint32_t pop = floor_spec(FloorKind::Residential).population;
+
+    // `seed_floor_from_spec` designates `first + placed/2` — the middle-ish record, so it
+    // lands in an interior room rather than a corner (population.cpp). Seeded into a fresh
+    // pool `first` is 0, so the designate's id is pop/2 and every assertion below can name
+    // it without reaching into FloorStreamer's private module table.
+    const NpcId anchor = pop / 2u;
+
+    std::fprintf(stderr,
+                 "[floorstream] sizeof(FloorModule) = %u B holding a handle candidate "
+                 "(NpcId %u B, NpcHandle %u B — one word either way, so the struct did "
+                 "not move); the %d-entry module table is %u B\n",
+                 static_cast<unsigned>(sizeof(FloorModule)),
+                 static_cast<unsigned>(sizeof(NpcId)),
+                 static_cast<unsigned>(sizeof(NpcHandle)), kMaxModules,
+                 static_cast<unsigned>(sizeof(FloorModule) *
+                                       static_cast<std::size_t>(kMaxModules)));
+
+    { // ---- 1. a LIVE designate still gets the camera ------------------------------
+        Registry ecs;
+        NpcPool pool;
+        pool.init();
+        FloorRegistry reg;
+        LevelStack stack;
+        FloorStreamer stream;
+        stream.init(stack, /*keepRadius=*/0);
+        stream.add_module(reg, /*number=*/0, FloorKind::Residential, /*seed=*/1234u);
+        CHECK(stream.seed_all_modules(pool) == pop);
+        CHECK(pool.generation(anchor) == 0);   // never died, so the handle is current
+
+        NpcId playerId = kInvalidNpc;
+        const LoadResult r = stream.ensure_loaded(stack, reg, ecs, pool, 0, playerId);
+        CHECK(r.layer != kInvalidLayer);
+        CHECK(r.player != entt::null);
+        CHECK(playerId == anchor);             // the exact record the module designated
+        CHECK(pool.is_player(anchor));
+        CHECK(ecs.get<NpcRef>(r.player).id == anchor);
+    }
+
+    { // ---- 2. the designate's slot is RECYCLED into a newborn --------------------
+        Registry ecs;
+        NpcPool pool;
+        pool.init();
+        // Armed HERE and not in src/app/main.cpp, deliberately: a test is exactly where an
+        // unshipped policy belongs, and the guard has to be proven against the policy
+        // before the shipping pool turns it on.
+        pool.set_recycling(true);
+        CHECK(pool.recycling());
+        FloorRegistry reg;
+        LevelStack stack;
+        FloorStreamer stream;
+        stream.init(stack, /*keepRadius=*/0);
+        stream.add_module(reg, /*number=*/0, FloorKind::Residential, /*seed=*/1234u);
+        CHECK(stream.seed_all_modules(pool) == pop);
+        CHECK(pool.floor(anchor) == 0);
+
+        // The designate dies in the sweep. No event, no handler, no notification.
+        pool.kill(anchor);
+        CHECK(pool.generation(anchor) == 1);          // every handle minted from it: stale
+        CHECK(pool.floor(anchor) == kNoFloorLabel);   // a corpse is in no roster
+
+        // ...and the slot goes to a birth ON THIS FLOOR, which is what makes the ids
+        // collide in the first place: `reset_row` leaves a recycled slot on kNoFloorLabel,
+        // so a newborn is a resident only once something labels it — and a macro birth
+        // labels it with its mother's floor.
+        const NpcId newborn = pool.spawn();
+        CHECK(newborn == anchor);          // the ABA happened, not hypothetically
+        CHECK(pool.recycled() == 1);       // out of the free list, not off the tail
+        CHECK(pool.alive(newborn));        // and the stored id reads as LIVING again
+        pool.set_floor(newborn, 0);
+        CHECK(pool.floor_bucket(0).size() == pop);   // -1 corpse, +1 newborn
+
+        // The blank row a bare id would have handed the camera. hp lives in the record,
+        // not on the entity, so these ARE the numbers the player would have played with.
+        CHECK(pool.hp(newborn) == 0);
+        CHECK(pool.max_hp(newborn) == 0);
+        CHECK(pool.age(newborn) == 0);
+
+        NpcId playerId = kInvalidNpc;
+        const LoadResult r = stream.ensure_loaded(stack, reg, ecs, pool, 0, playerId);
+        CHECK(r.layer != kInvalidLayer);
+
+        std::fprintf(stderr,
+                     "[floorstream] designate id %u died in the macro sweep and its slot "
+                     "was recycled into a newborn (gen 0 -> %u); the camera went to id %u "
+                     "(hp %d, age %u), not to the newborn in slot %u (hp %d, age %u)\n",
+                     static_cast<unsigned>(anchor),
+                     static_cast<unsigned>(pool.generation(newborn)),
+                     static_cast<unsigned>(playerId),
+                     static_cast<int>(pool.hp(playerId)),
+                     static_cast<unsigned>(pool.age(playerId)),
+                     static_cast<unsigned>(newborn),
+                     static_cast<int>(pool.hp(newborn)),
+                     static_cast<unsigned>(pool.age(newborn)));
+
+        // THE FINDING: the stranger who inherited the slot is not handed the camera.
+        CHECK(playerId != newborn);
+        CHECK(!pool.is_player(newborn));
+        // ...and the player is not left unembodied either — the module re-designated from
+        // its live roster. Nearest id to the disqualified slot, ties to the lower id, so
+        // this is anchor-1 rather than "whatever the bucket happened to hold first".
+        CHECK(r.player != entt::null);
+        CHECK(playerId == anchor - 1u);
+        CHECK(pool.is_player(playerId));
+        CHECK(ecs.get<NpcRef>(r.player).id == playerId);
+        // A seeded, living resident of THIS floor, not a blank row.
+        CHECK(pool.floor(playerId) == 0);
+        CHECK(pool.alive(playerId));
+        CHECK(pool.hp(playerId) == 100);
+        CHECK(pool.age(playerId) >= 1);
+        // The newborn is still embodied, as an ordinary body: re-designation moves the
+        // camera, it does not evict anybody from the floor.
+        CHECK(pool.embodied(newborn));
+    }
+
+    { // ---- 3. a plain death, with recycling OFF (the shipped configuration) -------
+        // kill() bumps the generation whether or not the slot is ever handed out, so the
+        // handle also catches a designate who simply DIED. With a bare id the compare fell
+        // through and the load produced no player at all: the floor came up with nobody
+        // holding the camera.
+        //
+        // Reachable in src/app/main.cpp only if a macro tick lands between
+        // `seed_all_modules` and the first `ensure_loaded`; today those two lines are
+        // adjacent, so this half is a guard on the contract rather than a fix for a
+        // symptom anyone has seen.
+        Registry ecs;
+        NpcPool pool;
+        pool.init();
+        CHECK(!pool.recycling());
+        FloorRegistry reg;
+        LevelStack stack;
+        FloorStreamer stream;
+        stream.init(stack, /*keepRadius=*/0);
+        stream.add_module(reg, /*number=*/0, FloorKind::Residential, /*seed=*/1234u);
+        CHECK(stream.seed_all_modules(pool) == pop);
+
+        pool.kill(anchor);
+        CHECK(!pool.alive(anchor));
+        CHECK(pool.free_slots() == 0);   // not queued: the slot is retired, not reused
+        CHECK(pool.floor_bucket(0).size() == pop - 1u);
+
+        NpcId playerId = kInvalidNpc;
+        const LoadResult r = stream.ensure_loaded(stack, reg, ecs, pool, 0, playerId);
+        CHECK(r.player != entt::null);
+        CHECK(playerId == anchor - 1u);
+        CHECK(pool.is_player(playerId));
+        CHECK(pool.embodied(playerId));
+        CHECK(!pool.embodied(anchor));   // the corpse is embodied by nobody's mistake
+    }
+
+    { // ---- 4. a LIVE designate who moved OFF this floor -> nobody, as before -----
+        // Deliberately unchanged. The handle is VALID, so the designate resolves fine; it
+        // simply is not in this floor's roster to embody, and the loop never meets it. The
+        // load returns no player — exactly what the bare-id compare did. "The designate
+        // migrated" is a different question from "the designate is gone", and answering it
+        // here would be a behaviour change this lane did not measure.
+        Registry ecs;
+        NpcPool pool;
+        pool.init();
+        FloorRegistry reg;
+        LevelStack stack;
+        FloorStreamer stream;
+        stream.init(stack, /*keepRadius=*/0);
+        stream.add_module(reg, /*number=*/0, FloorKind::Residential, /*seed=*/1234u);
+        CHECK(stream.seed_all_modules(pool) == pop);
+
+        pool.set_floor(anchor, 1);   // a cold, unregistered floor: pure relabelling
+        CHECK(pool.alive(anchor));
+        CHECK(pool.floor_bucket(0).size() == pop - 1u);
+
+        NpcId playerId = kInvalidNpc;
+        const LoadResult r = stream.ensure_loaded(stack, reg, ecs, pool, 0, playerId);
+        CHECK(r.layer != kInvalidLayer);
+        CHECK(r.player == entt::null);
+        CHECK(playerId == kInvalidNpc);
+        // ...and the rest of the floor is embodied regardless — no player, full crowd.
+        CHECK(pool.embodied(0));
+        CHECK(!pool.embodied(anchor));
+    }
+}
+
 } // namespace saveload_test
 
 static void test_saveload_all() {
@@ -1160,4 +1392,5 @@ static void test_saveload_all() {
     saveload_test::placement_writes_the_body_or_nothing();
     saveload_test::snapshot_restores_the_row_not_the_body();
     saveload_test::travel_drives_the_existing_elevator();
+    saveload_test::candidate_slot_recycled();
 }

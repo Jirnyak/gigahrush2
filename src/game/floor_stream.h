@@ -67,12 +67,48 @@ struct FloorModule {
     // pool.floor_bucket(number). No frozen id range to remember — the label is the
     // membership, so a migration in/out of this floor is reflected on next load.
     bool seeded = false;
-    NpcId candidate = kInvalidNpc;        // the seed's player-candidate record
+
+    // The module's player-designate: the record `ensure_loaded` hands the camera to on
+    // the first ever load, before any player exists.
+    //
+    // An NpcHandle — (generation, id) — and NOT a bare NpcId, because this reference is
+    // held for the WHOLE SESSION: written once when the crowd is seeded, compared on a
+    // first load that may come hours later or never. That is exactly the shape slot
+    // recycling breaks, and [npc_pool.h] names this field as one of the six bare-id
+    // stores that have to move before `set_recycling(true)` may ship. Armed, the
+    // designate can die in a macro sweep, its slot be handed to a newborn, and a bare
+    // `id == candidate` then match a DIFFERENT person who reads as perfectly alive — the
+    // camera goes to a stranger, and nothing logs it. `pool.handle_valid` fails on the
+    // bumped generation whether or not the slot was reused, so it also catches a plain
+    // DEATH, which is worth catching today with recycling still off.
+    //
+    // FREE in space: an id is 20 bits (kNpcPoolBits) so the 12-bit generation shares the
+    // same 32-bit word — see the static_assert under this struct. sizeof(FloorModule)
+    // does not move, and neither does anything else's layout.
+    //
+    // FREE on the wire, because there is no wire: nothing serializes this struct. [save.h]
+    // excludes the NPC pool from the format outright (`seed_floor_population` reproduces
+    // it) and the module table is rebuilt by main's `add_module` calls, not loaded. The
+    // only field of a FloorModule that reaches a file is `number`/`kind`/`seed` as the nav
+    // cache's key ([nav_cache.h]), and this is not one of them. So no `kXxxWire`
+    // static_assert or byte count moves — and it would not anyway, NpcHandle being the
+    // same uint32 an `ar.u32(...)` already wrote.
+    NpcHandle candidate = kInvalidHandle; // the seed's player-designate (gen-checked)
 
     // Live set while loaded (empty when cold): the entities embodied for this
     // module, so unload folds exactly them back.
     std::vector<Entity> bodies;
 };
+
+// What makes `candidate` a free upgrade: a handle is the same WIDTH as the id it
+// replaced, so the field's offset and the struct's size are both unchanged. Assert the
+// widths and not `sizeof(FloorModule)` — that one also carries a std::vector's ABI, which
+// legitimately differs between toolchains, and pinning it here would fail for a reason
+// that is not a bug. [tests/suite_saveload.inl] candidate_slot_recycled prints the
+// measured figure for the host it runs on.
+static_assert(sizeof(NpcHandle) == sizeof(NpcId),
+              "FloorModule::candidate became a generation-checked handle IN PLACE: the "
+              "two must stay the same width or this struct's layout moves");
 
 // Result of a load: the resident layer, and — only when this load embodied the
 // player (the first ever load, before any player exists) — that new entity.
@@ -131,6 +167,13 @@ public:
     // it with a camera, and writes it back through `playerId` (+ LoadResult).
     // No-op returning the existing layer if already loaded; kInvalidLayer if
     // `number` maps to no registered module.
+    //
+    // The designate is resolved through `FloorModule::candidate`'s GENERATION, so a
+    // designate that died between seeding and this load is re-picked from the floor's
+    // current live roster instead of resolving to whoever inherited its slot. A
+    // designate that is alive but no longer a resident of this floor (migrated away),
+    // or one that is already embodied, still designates nobody — unchanged. See
+    // embody_crowd in the .cpp for the full rule and why each branch is what it is.
     LoadResult ensure_loaded(LevelStack& stack, FloorRegistry& reg, Registry& ecs,
                              NpcPool& pool, int number, NpcId& playerId);
 

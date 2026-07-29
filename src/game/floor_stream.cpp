@@ -8,6 +8,28 @@
 
 namespace giga::game {
 
+namespace {
+
+// Turn the id `seed_floor_from_spec` designated into the handle FloorModule stores.
+//
+// The kInvalidNpc branch is LOAD-BEARING, not a defensive nicety. `pool.handle(id)`
+// packs `id & kNpcIdMask`, so handing it kInvalidNpc (0xFFFFFFFF) masks down to id
+// 0xFFFFF — 1,048,575, a perfectly legal slot (kNpcPoolSize - 1) — and pairs it with
+// whatever generation that untouched slot reports, i.e. 0. The result is a handle that
+// is not kInvalidHandle and names a real row. `handle_valid` would call it stale (the id
+// is past count_), which is worse than wrong: the stale branch below would then run a
+// replacement scan and designate the floor's HIGHEST-id resident, silently converting
+// "this module has no designate" into "this module designates somebody". The two states
+// have to stay distinguishable, so the only handle meaning "nobody" is kInvalidHandle.
+//
+// seed_floor_from_spec returns kInvalidNpc when it placed nobody — a spec with
+// population 0, or a pool whose reserve is exhausted.
+NpcHandle mint_candidate(const NpcPool& pool, NpcId id) {
+    return id == kInvalidNpc ? kInvalidHandle : pool.handle(id);
+}
+
+} // namespace
+
 void FloorStreamer::init(LevelStack& stack, int keepRadius) {
     keepRadius_ = keepRadius < 0 ? 0 : keepRadius;
     // Peak residency during a ride = the kept window (2R+1) plus the destination
@@ -46,8 +68,9 @@ std::uint32_t FloorStreamer::seed_all_modules(NpcPool& pool) {
         FloorModule& fm = modules_[m];
         if (!fm.used || fm.seeded) continue;
         const FloorSpec& spec = floor_spec(fm.kind);
-        fm.candidate =
+        const NpcId cand =
             seed_floor_from_spec(pool, fm.number, spec, fm.seed ^ kPopSeedSalt);
+        fm.candidate = mint_candidate(pool, cand);
         fm.seeded = true;
     }
     return static_cast<std::uint32_t>(pool.count() - before);
@@ -80,12 +103,85 @@ void FloorStreamer::embody_crowd(Registry& ecs, NpcPool& pool, FloorModule& fm,
     // narrowing by modular wraparound. Correct by accident is not correct.
     const std::vector<NpcId> crowd =
         pool.floor_bucket(static_cast<std::int16_t>(fm.number));
+
+    // Resolve WHO gets the camera before embodying anybody, because a stale designate
+    // has to be replaced from a scan of the whole bucket and the loop below consumes it
+    // one record at a time. Only ever runs on a load with no player yet — one load per
+    // session — so every later load pays nothing at all for this.
+    //
+    // `fm.candidate` is a generation-checked handle, so there are four cases and each one
+    // is a different answer:
+    //
+    //   1. VALID handle -> the designate is still the same living person; use its id.
+    //      This is the only path that existed, and its behaviour is unchanged.
+    //   2. kInvalidHandle -> the module never designated anybody (population 0, or a
+    //      reserve-exhausted seed). Nobody gets the camera, exactly as the old
+    //      `id == kInvalidNpc` compare could never match. Kept distinguishable from
+    //      case 3 by mint_candidate above; conflating them designates a stranger.
+    //   3. STALE handle -> the record died (kill() bumps the generation whether or not
+    //      the slot is recycled). RE-DESIGNATE from the floor's current live roster:
+    //      leaving the player unembodied on the floor they are entering would be a
+    //      second bug, and resolving the bare id would hand the camera to whoever
+    //      inherited the slot.
+    //   4. VALID handle whose record is not in this bucket (migrated off the floor) or
+    //      is already embodied (standing on another floor) -> nobody, which is what
+    //      happens today: the loop simply never meets that id. Preserved on purpose —
+    //      "the designate lives somewhere else" is not this lane's defect, and a
+    //      migrated designate genuinely is not a resident to embody here.
+    //
+    // The replacement picks the live, non-embodied resident whose id is NEAREST the
+    // stale one, ties to the lower id. Both properties are deliberate:
+    //   * Nearest-id, not first-in-bucket: `floor_bucket`'s order is explicitly
+    //     unspecified (swap-remove churns it), so indexing it would make the player's
+    //     identity depend on the order deaths and migrations happened to splice the
+    //     roster. Nearest-id is a pure function of the SET, and the lower-id tie-break is
+    //     what keeps it single-valued — without it the two records either side of the
+    //     hole are equidistant and bucket order decides again.
+    //   * Nearest, not lowest, because ids are dealt to rooms round-robin
+    //     (population.cpp: `room = i % kRoomCount`), so an id next to the designate's is
+    //     a room next to the designate's room. That preserves the reason the designate
+    //     was `first + placed/2` in the first place — "lands in an interior room rather
+    //     than a corner" — where the lowest live id is room 0, a corner.
+    //
+    // The stale id's own SLOT is excluded from the scan. That is the assertion the
+    // generation check exists to make: the slot whose occupant changed is precisely the
+    // one the failed check just disqualified, and re-picking it would reproduce the bare-
+    // id outcome byte for byte — the newborn who took a dead resident's slot would get
+    // the camera anyway, and the check would be unobservable. It costs nothing in the
+    // shipping configuration, where recycling is off and a corpse is not in any bucket
+    // (kill() relabels it kNoFloorLabel). The one case it gives up on is a floor whose
+    // only live non-embodied resident IS that recycled slot, which then designates
+    // nobody — same as case 2, and a floor with one resident is not the scenario this
+    // guard is for.
+    //
+    // The replacement is stamped back into fm.candidate so the designation is decided
+    // once rather than re-derived against a roster that keeps moving.
+    NpcId designate = kInvalidNpc;
+    if (playerId == kInvalidNpc && fm.candidate != kInvalidHandle) {
+        const NpcId stale = npc_handle_id(fm.candidate);
+        if (pool.handle_valid(fm.candidate)) {
+            designate = stale;
+        } else {
+            std::uint32_t best = 0xFFFFFFFFu;
+            for (NpcId id : crowd) {
+                if (id == stale) continue;      // the disqualified slot — see above
+                if (pool.embodied(id)) continue;
+                const std::uint32_t d = id > stale ? id - stale : stale - id;
+                if (d < best || (d == best && id < designate)) {
+                    best = d;
+                    designate = id;
+                }
+            }
+            if (designate != kInvalidNpc) fm.candidate = pool.handle(designate);
+        }
+    }
+
     for (NpcId id : crowd) {
         // Bucket residents are alive by construction (kill/leave drop them). Skip
         // anyone already embodied — e.g. the player, labelled with this floor but
         // currently standing on another — which is what prevents a duplicate body.
         if (pool.embodied(id)) continue;
-        if (playerId == kInvalidNpc && id == fm.candidate) {
+        if (playerId == kInvalidNpc && id == designate) {
             Entity e = embody_as_player(ecs, pool, id, layer);
             playerId = id;
             outPlayer = e;
@@ -126,8 +222,8 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
         // the first reader — to inherit it. The label is signed all the way through
         // now (FloorRegistry kMinFloor -127 .. kMaxFloor +127, NpcPool::floor()
         // std::int16_t), so the cast has nothing left to do.
-        fm.candidate = seed_floor_from_spec(pool, fm.number, spec,
-                                            fm.seed ^ kPopSeedSalt);
+        fm.candidate = mint_candidate(
+            pool, seed_floor_from_spec(pool, fm.number, spec, fm.seed ^ kPopSeedSalt));
         // No firstId/count recorded any more: FloorModule dropped them because the
         // crowd IS pool.floor_bucket(number) once seed_floor_from_spec has labelled
         // every record it spawned. A frozen [firstId, count) range could not express a
