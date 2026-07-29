@@ -339,6 +339,71 @@ _giga_csv_vs_header("data/materials.csv" "shaders/material_surface.glsl"
     "kMaterialCsvRows[ \t]*=[ \t]*([0-9]+)" "material surface")
 
 # ---- Verdict ---------------------------------------------------------------
+# ---- Guard: every test suite must be compiled by somebody ------------------
+# A `tests/suite_*.inl` reaches a compiler only if some `tests/*.cpp` names it in
+# an `#include`, and it reaches ctest only if its `test_*_all()` entry point is
+# actually called. Neither is enforced by the build, and nothing else in this
+# file could notice: the globs above happily SCAN an .inl that no translation
+# unit parses, so a dead suite satisfies every rule here while asserting nothing.
+#
+# Not hypothetical, and the instance is worse than the WILL_FAIL defect that
+# prompted this audit. `tests/suite_navcache.inl` is 733 lines with 104 CHECK
+# sites and was born dead: commit 56c9c6a added src/game/nav_cache.cpp,
+# src/game/nav_cache.h and the suite, and did NOT touch tests/game_test.cpp, so
+# the `#include` was never written. That commit's subject says "pinned".
+# Meanwhile src/game/floor_stream.cpp calls nav_cache on every floor load. For
+# scale: WILL_FAIL at least caught 1 transition in 7; this caught 0 in 104.
+#
+# Needs no compiler, which is the point — it is a text rule that would have
+# failed the day 56c9c6a landed.
+#
+# ESCAPE HATCH, deliberately in-file rather than a central allowlist: a suite
+# still being written carries `giga-check: unwired-suite` plus a reason on some
+# line. Keeping the exemption next to the code means it is deleted by the same
+# edit that wires the suite up, instead of rotting in a list nobody re-reads —
+# which is the failure mode of every allowlist that only ever grows.
+file(GLOB GIGA_SUITE_FILES "${GIGA_ROOT}/tests/suite_*.inl")
+file(GLOB GIGA_TEST_TUS "${GIGA_ROOT}/tests/*.cpp")
+
+set(GIGA_TU_TEXT "")
+foreach(_tu IN LISTS GIGA_TEST_TUS)
+    file(READ "${_tu}" _tu_body)
+    string(APPEND GIGA_TU_TEXT "${_tu_body}")
+endforeach()
+
+foreach(_suite IN LISTS GIGA_SUITE_FILES)
+    get_filename_component(_suite_name "${_suite}" NAME)
+    file(RELATIVE_PATH _suite_rel "${GIGA_ROOT}" "${_suite}")
+    file(READ "${_suite}" _suite_body)
+
+    string(FIND "${_suite_body}" "giga-check: unwired-suite" _suite_exempt)
+    if(NOT _suite_exempt EQUAL -1)
+        message("unwired-suite-exempt=${_suite_rel}")
+        continue()
+    endif()
+
+    string(FIND "${GIGA_TU_TEXT}" "#include \"${_suite_name}\"" _suite_included)
+    if(_suite_included EQUAL -1)
+        list(APPEND GIGA_FAILURES
+            "${_suite_rel}:1: compiled by NOBODY — no tests/*.cpp contains #include \"${_suite_name}\", so every assertion in it is dead text. Add the include to the right test translation unit AND call its test_*_all() from that file's main. If it is still being written, put `giga-check: unwired-suite <reason>` in it and delete that line when you wire it up.")
+        continue()
+    endif()
+
+    # Included, so it compiles. Now check it is actually REACHED: an entry point
+    # nobody calls is the same defect one layer in, and the compiler is perfectly
+    # happy to build a static function that is never invoked.
+    string(REGEX MATCHALL "static void test_[A-Za-z0-9_]*_all\\(\\)" _entries "${_suite_body}")
+    foreach(_entry_decl IN LISTS _entries)
+        string(REGEX REPLACE "^static void " "" _entry "${_entry_decl}")
+        string(REGEX REPLACE "\\(\\)$" "" _entry "${_entry}")
+        string(FIND "${GIGA_TU_TEXT}" "${_entry}();" _entry_called)
+        if(_entry_called EQUAL -1)
+            list(APPEND GIGA_FAILURES
+                "${_suite_rel}:1: ${_entry}() is defined but never called from any tests/*.cpp — the suite is compiled and then skipped. Dispatch it from the relevant main().")
+        endif()
+    endforeach()
+endforeach()
+
 list(LENGTH GIGA_FAILURES GIGA_FAILURE_COUNT)
 if(GIGA_FAILURE_COUNT GREATER 0)
     message("GIGA_SOURCE_RULES=FAIL")
