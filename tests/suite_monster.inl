@@ -611,4 +611,71 @@ static void test_monster_all() {
         }
         CHECK(baitedNotGovnyak == 0u);
     }
+
+    // -----------------------------------------------------------------------
+    // 8. Environmental Hazards & Traps
+    // -----------------------------------------------------------------------
+    {
+        // 1) Verify hazard properties
+        const CellHazard hElec = get_cell_hazard(kMatElectricGrate);
+        CHECK(hElec.active);
+        CHECK(hElec.damage == 15);
+        CHECK(hElec.channel == DamageChannel::Energy);
+
+        const CellHazard hAcid = get_cell_hazard(kMatAcidPool);
+        CHECK(hAcid.active);
+        CHECK(hAcid.damage == 10);
+        CHECK(hAcid.channel == DamageChannel::Kinetic);
+
+        const CellHazard hFire = get_cell_hazard(kMatFireCell);
+        CHECK(hFire.active);
+        CHECK(hFire.damage == 20);
+        CHECK(hFire.channel == DamageChannel::Fire);
+
+        // 2) Verify ground monster taking hazard damage in wander_step
+        Registry reg;
+        MacroGrid grid;
+        NpcPool pool;
+        nav::CoarseGraph coarse;
+        nav::FineNav fine;
+        fine.flow.resize(kMacroCells, 0);
+
+        // Place electric grate cell at (5, 5, 5)
+        grid.set_cell(5, 5, 5, kMatElectricGrate);
+
+        const Entity mobG = reg.create();
+        const float px = 5.0f * kCellSize + 0.5f;
+        const float py = 5.0f * kCellSize + 0.5f;
+        const float pz = 5.0f * kCellSize + 0.5f;
+        const auto mobDef = mob_def(MobKind::Sborka);
+        reg.emplace<Transform>(mobG, Transform{vec3{px, py, pz}, 0});
+        reg.emplace<Velocity>(mobG, Velocity{vec3{0.0f, 0.0f, 0.0f}});
+        reg.emplace<WanderTarget>(mobG, WanderTarget{0, 0, 0});
+        reg.emplace<MobRef>(mobG, MobRef{static_cast<std::uint8_t>(MobKind::Sborka), 1,
+                                         static_cast<std::int16_t>(mobDef.hp),
+                                         static_cast<std::int16_t>(mobDef.hp)});
+        reg.emplace<MobCombat>(mobG, MobCombat{0, 0});
+
+        const std::int16_t initialHp = mobDef.hp;
+        wander_step(reg, grid, pool, coarse, fine, 0, 0);
+
+        const MobRef& mrAfter = reg.get<MobRef>(mobG);
+        CHECK(mrAfter.hp < initialHp);
+
+        // 3) Verify flying monster ignores floor hazard
+        const Entity mobF = reg.create();
+        const auto flyDef = mob_def(MobKind::Eye);
+        reg.emplace<Transform>(mobF, Transform{vec3{px, py, pz}, 0});
+        reg.emplace<Velocity>(mobF, Velocity{vec3{0.0f, 0.0f, 0.0f}});
+        reg.emplace<WanderTarget>(mobF, WanderTarget{0, 0, 0});
+        reg.emplace<MobRef>(mobF, MobRef{static_cast<std::uint8_t>(MobKind::Eye), 1,
+                                         static_cast<std::int16_t>(flyDef.hp),
+                                         static_cast<std::int16_t>(flyDef.hp)});
+        reg.emplace<MobCombat>(mobF, MobCombat{0, 0});
+
+        const std::int16_t flyHp = flyDef.hp;
+        wander_step(reg, grid, pool, coarse, fine, 0, 0);
+        const MobRef& mrFlyAfter = reg.get<MobRef>(mobF);
+        CHECK(mrFlyAfter.hp == flyHp);
+    }
 }

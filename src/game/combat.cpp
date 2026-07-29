@@ -241,8 +241,38 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
     };
     std::vector<Swing> queued;
 
+    struct HazardHit {
+        Entity mob;
+        std::int16_t dmg;
+        DamageChannel ch;
+    };
+    std::vector<HazardHit> hazardHits;
+
     for (auto e : reg.view<const MobRef, const Transform, MobCombat>()) {
         MobCombat& mc = reg.get<MobCombat>(e);
+
+        const Transform& tr = reg.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+
+        const MobRef& mr = reg.get<const MobRef>(e);
+        const MobDef& def = kMobTable[mr.kind];
+
+        // Environmental hazard check
+        if (!has_flag(def.aiFlags, AiFlag::Flying)) {
+            int cx = wrap_macro(static_cast<int>(tr.pos.x / kCellSize));
+            int cy = wrap_macro(static_cast<int>(tr.pos.y / kCellSize));
+            int cz = wrap_macro(static_cast<int>(tr.pos.z / kCellSize));
+            CellType cellType = grid.cell(cx, cy, cz);
+            CellType floorType = grid.cell(cx, cy, wrap_macro(cz - 1));
+            CellHazard hz = get_cell_hazard(cellType);
+            if (!hz.active) hz = get_cell_hazard(floorType);
+            if (hz.active) {
+                const std::uint32_t mobId = static_cast<std::uint32_t>(entt::to_integral(e));
+                if ((tick + mobId) % 16 == 0) {
+                    hazardHits.push_back(HazardHit{e, hz.damage, hz.channel});
+                }
+            }
+        }
 
         // THE single cooldown decrement. Every mob, every tick, exactly once —
         // whether or not it is in reach, whether or not there is a target.
@@ -264,12 +294,7 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
             static_cast<std::uint16_t>(mc.windupMs - elapsedMs);
         else mc.windupMs = 0;
 
-        const Transform& tr = reg.get<const Transform>(e);
-        if (tr.layer != layer) continue;
         if (mc.cooldownMs > 0) continue;
-
-        const MobRef& mr = reg.get<const MobRef>(e);
-        const MobDef& def = kMobTable[mr.kind];
 
         // A CONTROL shooter is a monster whose whole attack is its projectile's
         // effect, so it has to get past a damage gate that was written as if damage
@@ -434,6 +459,11 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
                 mc->cooldownMs = s.cd;
         }
     }
+
+    for (const auto& hit : hazardHits) {
+        apply_damage(reg, pool, hit.mob, hit.dmg, hit.ch, entt::null, &grid);
+    }
+
     (void)bus;
     return swings;
 }

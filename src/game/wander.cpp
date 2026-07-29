@@ -7,6 +7,7 @@
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "game/ai.h"       // ai_owns_motion — the single-writer guard for Velocity
+#include "game/combat.h"
 #include "game/embody.h"   // NpcRef
 #include "game/faction_relations.h"
 #include "game/hunt.h"
@@ -158,10 +159,34 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         break;
     }
 
+    struct HazardHit {
+        Entity mob;
+        std::int16_t dmg;
+        DamageChannel ch;
+    };
+    std::vector<HazardHit> hazardHits;
+
     auto view = reg.view<Transform, Velocity, WanderTarget>();
     for (auto e : view) {
         Transform& tr = view.get<Transform>(e);
         if (tr.layer != layer) continue;
+
+        if (reg.all_of<MobRef>(e)) {
+            const MobRef& mr = reg.get<const MobRef>(e);
+            const MobDef& md = kMobTable[mr.kind];
+            if (!has_flag(md.aiFlags, AiFlag::Flying)) {
+                int cx, cy, cz;
+                agent_cell(tr.pos, cx, cy, cz);
+                CellType cellType = grid.cell(cx, cy, cz);
+                CellType floorType = grid.cell(cx, cy, wrap_macro(cz - 1));
+                CellHazard hz = get_cell_hazard(cellType);
+                if (!hz.active) hz = get_cell_hazard(floorType);
+                if (hz.active) {
+                    hazardHits.push_back(HazardHit{e, hz.damage, hz.channel});
+                }
+            }
+        }
+
         // THE SINGLE-WRITER GUARD ([ai.h]). Exactly one system may write a body's
         // horizontal Velocity on a tick, and the token that decides it is
         // AiBrain::motion: ai_step runs before this loop, claims the bodies it will
@@ -424,6 +449,10 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         vel.v.x = dirX * speed;
         vel.v.y = dirY * speed;
         // z is left to gravity: this is locomotion, not flight.
+    }
+
+    for (const auto& hit : hazardHits) {
+        apply_damage(reg, pool, hit.mob, hit.dmg, hit.ch, entt::null, &grid);
     }
 }
 
