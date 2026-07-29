@@ -4,6 +4,7 @@
 #include "render/vk_device.h"
 
 #include <SDL3/SDL.h>
+#include <filesystem>
 
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
@@ -54,8 +55,11 @@ bool ImGuiLayer::init(VulkanDevice& dev, SDL_Window* window,
             "/System/Library/Fonts/Menlo.ttc",          // macOS
             "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
         };
-        for (const char* path : candidates)
-            if (io.Fonts->AddFontFromFileTTF(path, 15.0f, nullptr, cyr)) break;
+        for (const char* path : candidates) {
+            if (std::filesystem::exists(path)) {
+                if (io.Fonts->AddFontFromFileTTF(path, 15.0f, nullptr, cyr)) break;
+            }
+        }
     }
 
     if (!ImGui_ImplSDL3_InitForVulkan(window)) return false;
