@@ -337,10 +337,11 @@ void begin_floor_nav(const World& world, nav::AsyncBake& bake) {
 std::uint32_t finish_floor_nav(Registry& reg, LayerId layer, std::uint32_t seed,
                                const nav::AsyncBake& bake) {
     std::uint32_t n = game::wander_init(reg, layer, seed);
+    std::uint32_t aiCount = game::ai_init(reg, layer);
     std::fprintf(stderr,
-                 "[nav] bake coarse %.0f ms | fine %.0f ms | %u agents wandering "
+                 "[nav] bake coarse %.0f ms | fine %.0f ms | %u agents wandering | %u AI brains attached "
                  "(async, off the main thread)\n",
-                 bake.last_coarse_ms(), bake.last_fine_ms(), n);
+                 bake.last_coarse_ms(), bake.last_fine_ms(), n, aiCount);
     return n;
 }
 
@@ -657,6 +658,7 @@ int main(int argc, char** argv) {
                                               *currentSpec, kDoorSeed);
             doors.frozen = true;
             begin_floor_nav(stack.layer(l0), nav);
+            game::ai_init(reg, l0);
         }
     }
 
@@ -805,6 +807,7 @@ int main(int argc, char** argv) {
     // switch — but read the note at the ai_step call site first, because it also needs
     // ai_init to attach AiBrain and ai_release to clear the token safely.
     game::AiConfig aiCfg;
+    aiCfg.enabled = true;
     game::AiTick aiTick{};
     game::CraftingState crafting{};
     game::craft_init(crafting);
