@@ -398,12 +398,18 @@ MacroStats MacroSim::step(NpcPool& pool, const MacroParams& params,
             // Newborn: age 0, stature from age, inheriting the parent's floor label,
             // macro cell and faction so it belongs where people actually live.
             //
-            // It will NOT be embodied by FloorStreamer, and that is a wiring gap
-            // rather than a bug here: embody_crowd walks the module's fixed
-            // `[firstId, count)` range ([floor_stream.h]) and a newborn's id is at the
-            // pool tail, outside every module's range. Mortality IS visible on a
-            // floor's next load (embody_crowd skips the dead); births are not, until
-            // a per-floor roster replaces the fixed range.
+            // A NEWBORN IS EMBODIED ON THE FLOOR'S NEXT LOAD. This paragraph used to say
+            // the opposite — that embody_crowd walks a module's fixed `[firstId, count)`
+            // range, that a newborn's id is at the pool tail outside every range, and
+            // that births are therefore invisible "until a per-floor roster replaces the
+            // fixed range". That roster HAS replaced it: FloorModule dropped firstId and
+            // count, and floor_stream.cpp:109 states the crowd IS
+            // `pool.floor_bucket(number)`, which embody_crowd copies and walks. The
+            // `set_floor` three lines below puts the baby in the parent's bucket, which is
+            // exactly the membership embody_crowd reads.
+            //
+            // Mortality was already visible (embody_crowd skips the dead). Both directions
+            // of the demography now reach the player.
             ageDays_[baby] = 0;
             pool.age(baby) = 0;
             pool.sex(baby) = (hash3(t32, k, sBaby) & 1u) ? SexFemale : SexMale;

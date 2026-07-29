@@ -45,6 +45,7 @@
 #include "game/mob_spawn.h"
 #include "game/needs.h"
 #include "game/rumour.h"
+#include "game/speech.h"
 #include "game/samosbor.h"
 #include "game/contract.h"
 #include "game/vendor.h"
@@ -685,6 +686,18 @@ int main(int argc, char** argv) {
     char offerLine[200] = {};
     char rumourLine[160] = {};
     std::uint64_t rumourAt = 0;
+    // The murmur, next to the rumour and deliberately separate from it: a rumour is a
+    // FACT the player can go and check, speech is what the nearest body sounds like.
+    // Different clock, different colour, no shared state. rumour.h states its own rule in
+    // capitals — a rumour must be TRUE and CHECKABLE — which a bark is not, and that is
+    // why this is a sibling rather than an extension. [speech.h]
+    //
+    // A const char*, not a char buffer: kSpeechText holds static-duration literals, so
+    // there is nothing to copy and nothing to truncate.
+    const char* speechLine = nullptr;
+    game::SpeechSituation speechSit = game::SpeechSituation::Ambient;
+    game::SpeechMemory speechMem;
+    std::uint64_t speechAt = 0;
     game::NeedsTick needs{};   // last step's report, for the HUD
     int needsHpLost = 0;       // running total, so the HUD is not one tick
     std::uint32_t shots = 0;   // rounds the player has fired
@@ -1121,6 +1134,28 @@ int main(int argc, char** argv) {
                 // Without the cooldown, standing in a crowd would replace the line
                 // every frame and none of them would be readable — a flicker instead
                 // of information. [rumour.h]
+                // The crowd's own voice, on its own slower clock. It runs its OWN
+                // nearest_speaker sweep rather than sharing the rumour one below: the
+                // sweep is O(bodies on the layer) and fires at most once per 3 s, which
+                // is far cheaper than entangling two channels that must not tick
+                // together. [speech.h]
+                if (simTick - speechAt >= game::kSpeechCooldownTicks) {
+                    const game::NpcId talker = game::nearest_speaker(reg, activeLayer);
+                    if (talker != game::kInvalidNpc) {
+                        const game::SpeechContext sc =
+                            game::speech_context(reg, pool, talker, samosbor.phase);
+                        // The seed is the UTTERANCE COUNTER — the reference's
+                        // `repeatIndex: Math.floor(time)`. Identity is already folded in
+                        // by speech_line_index, so this is the only term that has to move
+                        // for the same body to say something new.
+                        speechLine = game::speech_say(
+                            speechMem, pool, talker, sc,
+                            static_cast<std::uint32_t>(simTick /
+                                                       game::kSpeechCooldownTicks),
+                            &speechSit);
+                        speechAt = simTick;
+                    }
+                }
                 if (simTick - rumourAt >= game::kOverhearCooldownTicks) {
                     const game::NpcId sp = game::nearest_speaker(reg, activeLayer);
                     if (sp != game::kInvalidNpc) {
@@ -1783,6 +1818,13 @@ int main(int argc, char** argv) {
             if (rumourLine[0])
                 ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.91f, 1.0f), "\"%s\"",
                                    rumourLine);
+            // Tan, NOT rumour's cyan, and prefixed with the situation so the two channels
+            // are distinguishable at a glance. #cca is the reference's own authored bark
+            // colour, and keeping them different is what stops a murmur from reading as a
+            // checkable fact. [speech.h]
+            if (speechLine != nullptr)
+                ImGui::TextColored(ImVec4(0.80f, 0.80f, 0.67f, 1.0f), "[%s] %s",
+                                   game::speech_situation_name(speechSit), speechLine);
             ImGui::Text("nav: %s  (last bake %.0f + %.0f ms, async)",
                         nav.baking() ? "BAKING - crowd idle"
                                      : (nav.ready() ? "ready" : "none"),
