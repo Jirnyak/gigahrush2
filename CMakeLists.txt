@@ -2,7 +2,14 @@
 # 3.21 (3.20 rejects CMAKE_CXX_STANDARD 23 outright), and $<TARGET_RUNTIME_DLLS>
 # — which stages SDL3.dll beside the exe on Windows — is also 3.21.
 cmake_minimum_required(VERSION 3.21)
-project(gigahrush2 LANGUAGES CXX)
+
+# C is enabled ONLY because libktx is a C library and its targets ask CMake for C
+# compiler features; without it the generate step dies with "No known features for C
+# compiler" AFTER a successful 321-second configure, which reads like a toolchain fault
+# rather than a missing language. No first-party source is C — every file under src/ is
+# C++23 — and giga_target_flags() only ever touches CXX targets, so this widens what CMake
+# may probe and nothing about how this engine is compiled.
+project(gigahrush2 LANGUAGES CXX C)
 
 # ---------------------------------------------------------------------------
 # gigahrush2 — universal voxel core engine.
@@ -122,6 +129,35 @@ FetchContent_Declare(imgui
     GIT_TAG v1.91.5 GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(imgui)
 
+# libktx — reads the KTX2 texture containers in data/textures/ and transcodes them.
+#
+# WHY A LIBRARY AND NOT A HAND-ROLLED READER. The committed maps are UASTC 4x4 with
+# supercompressionScheme 2 (Zstd), so a level is a zstd stream of UASTC blocks that has to
+# be inflated AND transcoded before the GPU can see it — the payload has
+# vkFormat = VK_FORMAT_UNDEFINED, so there is deliberately nothing to hand
+# VkImageCreateInfo until the transcode has happened. That transcode is a real
+# entropy-coded format conversion, not a memcpy, and writing it by hand would be a
+# thousand lines of someone else's already-tested work. See data/textures/README.md for the
+# measured container contract.
+#
+# The trade was made knowingly: UASTC+Zstd is 25.06 MiB in git for the six bound materials
+# against 32.00 MiB for the same six as raw BC7. The raw path needs no library at all, so if
+# this dependency ever becomes a problem, `tools/fetch_textures.py --format bc7` regenerates
+# a library-free pack and the loader keeps only its container parsing.
+#
+# Everything off but the transcoder: KTX_FEATURE_WRITE and the tools would pull in a writer
+# and a CLI this engine never calls, and the tests would add a target to every build.
+set(KTX_FEATURE_TESTS       OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_TOOLS       OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_STATIC_LIBRARY ON CACHE BOOL "" FORCE)
+set(KTX_FEATURE_WRITE       OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_DOC         OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_LOADTEST_APPS OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(ktx
+    GIT_REPOSITORY https://github.com/KhronosGroup/KTX-Software.git
+    GIT_TAG v4.4.0 GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(ktx)
+
 # ---- System dependencies --------------------------------------------------
 # Vulkan is always a system dependency: MoltenVK via Homebrew on macOS, the
 # LunarG SDK on Windows (set VULKAN_SDK). glslc ships with both.
@@ -227,8 +263,14 @@ add_dependencies(gigahrush2 giga_shaders)
 target_include_directories(gigahrush2 PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_definitions(gigahrush2 PRIVATE
     GIGA_SHADER_DIR="${_giga_spv_dir}")
+# ktx is linked to the EXE and deliberately not to giga_render or giga_game: the texture
+# loader lives in src/render, which is already the only layer allowed to see Vulkan, and
+# giga_core/giga_game must stay free of platform and third-party headers (AGENTS.md). Also
+# note the target name is lowercase `ktx`, not a KTX:: namespaced alias — KTX-Software
+# exports it unnamespaced when built as a subproject.
 target_link_libraries(gigahrush2 PRIVATE giga_game giga_core giga_imgui
-    SDL3::SDL3 Vulkan::Vulkan)
+    SDL3::SDL3 Vulkan::Vulkan ktx)
+target_include_directories(gigahrush2 PRIVATE ${ktx_SOURCE_DIR}/include)
 # RTTI is permitted in the app shell (ON) — only the core/game libs forbid it.
 giga_target_flags(gigahrush2 ON)
 
