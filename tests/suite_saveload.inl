@@ -195,10 +195,13 @@ void same_run(const SaveState& a, const SaveState& b) {
 void wire_layout() {
     // The format's footprint is arithmetic, not a measurement — a save whose length
     // depends on the compiler is a save that cannot cross hosts.
+    // Derived from the serializers, not measured from a run: 33 ledger + 79 book
+    // (3 x 21 + 16) + 304 player (33 needs + 256 inventory + 12 + 3) + 308 quest log
+    // (20 rows x 14 + 8 earned + 5 x 4 counters) = 724, plus the 56-byte header.
     static_assert(kSaveHeaderWire == 56);
-    static_assert(kSaveFixedWire == 941);
-    static_assert(save_bytes_for(0) == 997);
-    static_assert(save_bytes_for(3) == 997 + 15);
+    static_assert(kSaveFixedWire == 724);
+    static_assert(save_bytes_for(0) == 780);
+    static_assert(save_bytes_for(3) == 780 + 15);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -208,11 +211,11 @@ void wire_layout() {
     const SaveState st = busy_run();
     save_write(st, bytes);
     CHECK(bytes.size() == save_bytes_for(3));
-    // 1012 B for a full run with three emptied crates. Worth writing down: the reflex on
+    // 795 B for a full run with three emptied crates. Worth writing down: the reflex on
     // a save system is to assume megabytes, and the reason this one is tiny is that
     // geometry, monsters and 950k NPC rows are all reproducible from fixed seeds and so
     // are not in the file at all.
-    CHECK(bytes.size() == 1012);
+    CHECK(bytes.size() == 795);
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');

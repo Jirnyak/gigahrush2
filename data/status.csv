@@ -1,0 +1,7 @@
+id,name,duration_ms,alt_duration_ms,move_mult_e3,alt_move_mult_e3,aim_mult_e3,alt_aim_mult_e3,root_ms,melee_mult_e3,heal_mult_e3,water_drain_e3,gate_item,stacks
+zhelemish_skin,Кожа желемиша,180000,150000,820,820,1000,1000,0,700,550,45,,0
+paupsina_web,Паутина паупсины,4200,4200,540,220,1000,1000,650,1000,1000,0,,0
+spore_haze,Споровая мгла,4800,2200,1000,1000,1650,1180,0,1000,1000,0,ip4_gasmask,0
+govnyak_relief,Облегчение,70000,70000,1000,1000,1000,1000,0,1000,1000,0,,1
+govnyak_cough,Кашель,210000,210000,1000,1000,1000,1000,0,1000,1000,0,,1
+govnyak_debt,Долг говняка,480000,480000,1000,1000,1000,1000,0,1000,1000,0,,1

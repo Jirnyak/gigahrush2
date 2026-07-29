@@ -154,6 +154,24 @@ struct Projectile {
     // documented as possibly stale) and a shot's behaviour must not depend on
     // whether its owner survived the flight.
     std::uint8_t proj = 0;
+    // Which `DamageChannel` this shot delivers, stored as the raw u8 the enum is.
+    //
+    // Same defect, same fix, one field over: `RangedDef::channel` was write-only.
+    // The column exists in [ranged_table.h], the generator fills it from
+    // data/weapons_ranged.csv, and a search across src/ for a READER found NOTHING —
+    // so armour's `resist[5]`, the five psi-resist rows in data/items.csv and every
+    // per-channel column in [monster_traits.h] were being mitigated against a channel
+    // that only ever arrived as Kinetic.
+    //
+    // Carried on the projectile rather than looked up from the shooter at impact, for
+    // the reason `proj` above states: `source` is documented as possibly stale, and a
+    // shot's behaviour must not depend on whether its owner survived the flight.
+    //
+    // Kinetic on all 29 firearms TODAY and that is not a placeholder — the reference
+    // sets `damageType` on zero physical weapons ([ranged_table.h] records this), so a
+    // shotgun there deals Kinetic too. The channel that is genuinely authored is Psi,
+    // on the 18 rows of the reference's data/psi.ts.
+    std::uint8_t channel = static_cast<std::uint8_t>(DamageChannel::Kinetic);
 };
 
 // Fraction of gravity a player bullet obeys, in percent. The reference's NORMAL

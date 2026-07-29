@@ -41,10 +41,12 @@ void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
                       std::uint16_t projSpeedMmps, Entity source,
                       std::uint8_t projType);
 // The player's launch: an explicit direction, no lob compensation, flatter gravity.
+// `channel` is the DamageChannel the shot delivers, from RangedDef::channel.
 void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
                           const vec3& dir, std::int16_t dmg,
                           std::uint16_t projSpeedMmps, Entity source,
-                          std::uint8_t gravityPct, std::uint8_t team);
+                          std::uint8_t gravityPct, std::uint8_t team,
+                          std::uint8_t channel);
 
 } // namespace
 
@@ -513,7 +515,8 @@ void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
 void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
                           const vec3& dir, std::int16_t dmg,
                           std::uint16_t projSpeedMmps, Entity source,
-                          std::uint8_t gravityPct, std::uint8_t team) {
+                          std::uint8_t gravityPct, std::uint8_t team,
+                          std::uint8_t channel) {
     float speed = static_cast<float>(projSpeedMmps) * 0.001f * kCellSize;
     if (speed < 1.0f) speed = 12.0f;
     const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
@@ -542,7 +545,7 @@ void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
     // handing the player a bullet.
     reg.emplace<Projectile>(
         e, Projectile{source, dmg, kProjTtlMs, gravityPct, team,
-                      static_cast<std::uint8_t>(ProjType::Bullet)});
+                      static_cast<std::uint8_t>(ProjType::Bullet), channel});
 }
 
 } // namespace
@@ -673,6 +676,10 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         // entity is destroyed at the end of the resolution loop. Named `projType`
         // and not `proj` because `proj` above is the projectile ENTITY.
         std::uint8_t projType = 0;
+        // DamageChannel, carried for exactly the reason projType above is: phase 2 is
+        // where apply_damage runs, and the Projectile entity is destroyed at the end
+        // of the resolution loop, so the channel has to be read off it in phase 1.
+        std::uint8_t channel = static_cast<std::uint8_t>(DamageChannel::Kinetic);
     };
     std::vector<Hit> resolved;
 
@@ -714,7 +721,7 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
             const float hz = wrap_delta_f(tr.pos.z, victimPos.z, kWorldExtent);
             if (hx * hx + hy * hy + hz * hz <= kProjHitRadius * kProjHitRadius) {
                 resolved.push_back(
-                    Hit{e, p.dmg, p.source, true, entt::null, p.proj});
+                    Hit{e, p.dmg, p.source, true, entt::null, p.proj, p.channel});
                 continue;
             }
         }
@@ -741,7 +748,8 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                 const float hz = wrap_delta_f(tr.pos.z, mt.pos.z, kWorldExtent);
                 if (hx * hx + hy * hy + hz * hz > kProjHitRadius * kProjHitRadius)
                     continue;
-                resolved.push_back(Hit{e, p.dmg, p.source, false, m, p.proj});
+                resolved.push_back(Hit{e, p.dmg, p.source, false, m, p.proj,
+                                       p.channel});
                 struck = true;
                 break;
             }
@@ -772,7 +780,8 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                 if (hx * hx + hy * hy + hz * hz > kProjHitRadius * kProjHitRadius)
                     continue;
                 if (!mob_hostile_to(pool, reg.get<const NpcRef>(b).id)) continue;
-                resolved.push_back(Hit{e, p.dmg, p.source, false, b, p.proj});
+                resolved.push_back(Hit{e, p.dmg, p.source, false, b, p.proj,
+                                       p.channel});
                 struck = true;
                 break;
             }
@@ -811,13 +820,15 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         if (web && body != entt::null && reg.valid(body))
             landed = apply_slow(reg, body, kWebSlowScale, kWebSlowMs);
 
+        // `h.channel` and not `DamageChannel::Kinetic`: this is the line that makes
+        // armour's resist[5] mean anything on a shot. Both branches take it, because
+        // a channel is a property of the SHOT and not of what it happened to strike.
+        const DamageChannel ch = static_cast<DamageChannel>(h.channel);
         if (h.onVictim && victim != entt::null) {
-            DamageResult r = apply_damage(reg, pool, victim, h.dmg,
-                                          DamageChannel::Kinetic, h.source);
+            DamageResult r = apply_damage(reg, pool, victim, h.dmg, ch, h.source);
             if (r.hit) landed = true;
         } else if (h.other != entt::null && reg.valid(h.other)) {
-            DamageResult r = apply_damage(reg, pool, h.other, h.dmg,
-                                          DamageChannel::Kinetic, h.source);
+            DamageResult r = apply_damage(reg, pool, h.other, h.dmg, ch, h.source);
             if (r.hit) {
                 landed = true;
                 // Credit the shooter, the same way the melee path credits a swing.
@@ -949,9 +960,15 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
         const vec3 dir{fwd.x + rt.x * ox + ud.x * oy,
                        fwd.y + rt.y * ox + ud.y * oy,
                        fwd.z + rt.z * ox + ud.z * oy};
+        // `def->channel` and not a hardcoded Kinetic: the column exists in
+        // [ranged_table.h], the generator fills it from data/weapons_ranged.csv, and
+        // until this line NOTHING in src/ read it. Armour's resist[5], the psi-resist
+        // rows in data/items.csv and every per-channel column in [monster_traits.h]
+        // were all mitigating against a channel that only ever arrived as Kinetic.
         spawn_projectile_dir(reg, layer, eye, dir,
                              static_cast<std::int16_t>(def->dmg),
-                             def->projSpeedMmps, shooter, kPlayerGravityPct, 1);
+                             def->projSpeedMmps, shooter, kPlayerGravityPct, 1,
+                             def->channel);
     }
 
     // The shot is heard. ONE noise per trigger pull, not one per pellet: a shotgun
