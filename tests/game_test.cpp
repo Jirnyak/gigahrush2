@@ -88,6 +88,18 @@ int g_checks = 0;
 #include "suite_diffusion.inl"
 #include "suite_loottable.inl"
 #include "suite_utilai.inl"
+// Wired 2026-07-29. This suite existed for its whole life without being included by any
+// translation unit: commit 56c9c6a added src/game/nav_cache.{cpp,h} and tests/suite_navcache.inl
+// and never touched this file, so 733 lines and 104 CHECK sites were dead text while
+// src/game/floor_stream.cpp called nav_cache on every floor load. tools/check_source_rules.cmake
+// now fails on any suite_*.inl that no tests/*.cpp includes, so this cannot recur silently.
+#include "suite_navcache.inl"
+// Wave 6 — three ports from the TypeScript original. Same self-contained-includes
+// discipline as the wave-5 block above: each reaches for headers this file never needed
+// (game/craft.h, game/quest.h, game/speech.h and the generated tables behind them).
+#include "suite_craft.inl"
+#include "suite_quest.inl"
+#include "suite_speech.inl"
 static void test_inventory() {
     // Compile-time layout contract: a static_assert, not a CHECK. It is a fact
     // about the type, so it belongs to the build, not to a test run.
@@ -4101,6 +4113,12 @@ int main() {
     test_diffusion_all();
     test_loottable_all();
     test_utilai_all();
+    test_navcache_all();
+    // Wave 6: crafting (446 items carried 11 authored craft_* columns and no system),
+    // quests as a layer over contracts, and NPC speech.
+    test_craft_all();
+    test_quest_all();
+    test_speech_all();
     test_route_realfloor();
     test_streamed_nav();
     test_nav_cache_roundtrip();
