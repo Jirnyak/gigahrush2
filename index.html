@@ -3,33 +3,413 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>gigahrush2 — Official Technical Showcase</title>
-    <meta name="description" content="Next-gen C++23 voxel rendering pipeline for Gigahrush.">
-    <link href="https://fonts.googleapis.com/css2?family=Courier+New:wght@400;700;900&display=swap" rel="stylesheet">
+    <title>gigahrush2 | The Universal Voxel Core Engine</title>
+    <meta name="description" content="A native C++/Vulkan desktop voxel game engine with vector gravity, sweeping AABB physics, and zero-allocation runtime performance.">
+    
+    <!-- Premium Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    
     <style>
-        :root { --bg: #151515; --accent: #ff6600; }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { background: var(--bg); color: #f1f5f9; font-family: 'Courier New', sans-serif; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 2rem; overflow-x: hidden; }
-        .hero-box { max-width: 900px; width: 100%; text-align: center; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 3rem 2rem; backdrop-filter: blur(10px); box-shadow: 0 0 50px rgba(0,0,0,0.8), 0 0 30px var(--accent); }
-        h1 { font-size: 3.5rem; font-weight: 900; color: #fff; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 0.5rem; text-shadow: 0 0 20px var(--accent); }
-        .tag { display: inline-block; background: rgba(255,255,255,0.05); border: 1px solid var(--accent); color: var(--accent); font-weight: 700; padding: 0.4rem 1.2rem; border-radius: 4px; font-size: 0.85rem; margin-bottom: 1.5rem; letter-spacing: 1px; }
-        p.desc { font-size: 1.2rem; color: #94a3b8; max-width: 700px; margin: 0 auto 2.5rem; line-height: 1.6; }
-        .btn-group { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
-        .btn { padding: 1rem 2.2rem; background: var(--accent); color: #000; font-weight: 700; text-decoration: none; border-radius: 6px; font-size: 1rem; transition: all 0.3s; text-transform: uppercase; }
-        .btn:hover { background: #fff; box-shadow: 0 0 30px #fff; transform: translateY(-2px); }
-        .btn-sec { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,0.2); }
-        .btn-sec:hover { background: rgba(255,255,255,0.1); }
+        :root {
+            --bg-color: #050505;
+            --surface-color: rgba(255, 255, 255, 0.03);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --text-main: #e2e8f0;
+            --text-muted: #94a3b8;
+            --accent-glow: #00ff88;
+            --accent-glow-dim: rgba(0, 255, 136, 0.2);
+            --accent-secondary: #ff3366;
+            --glass-blur: blur(12px);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            background-image: 
+                radial-gradient(circle at 15% 50%, rgba(0, 255, 136, 0.05) 0%, transparent 50%),
+                radial-gradient(circle at 85% 30%, rgba(255, 51, 102, 0.05) 0%, transparent 50%);
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            min-height: 100vh;
+            overflow-x: hidden;
+            line-height: 1.6;
+        }
+
+        /* Abstract background grid for voxel feel */
+        .voxel-grid {
+            position: fixed;
+            top: 0; left: 0; width: 100vw; height: 100vh;
+            background-image: 
+                linear-gradient(var(--border-color) 1px, transparent 1px),
+                linear-gradient(90deg, var(--border-color) 1px, transparent 1px);
+            background-size: 40px 40px;
+            opacity: 0.15;
+            z-index: -1;
+            transform: perspective(500px) rotateX(60deg) translateY(-100px) translateZ(-200px);
+            animation: gridMove 20s linear infinite;
+        }
+
+        @keyframes gridMove {
+            0% { background-position: 0 0; }
+            100% { background-position: 0 40px; }
+        }
+
+        header {
+            padding: 2rem 5%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            background: rgba(5, 5, 5, 0.8);
+            backdrop-filter: var(--glass-blur);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .logo {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #fff;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .logo-dot {
+            width: 12px;
+            height: 12px;
+            background: var(--accent-glow);
+            box-shadow: 0 0 10px var(--accent-glow);
+            border-radius: 2px;
+        }
+
+        .nav-links a {
+            color: var(--text-muted);
+            text-decoration: none;
+            margin-left: 2rem;
+            font-size: 0.9rem;
+            transition: color 0.3s ease;
+            font-weight: 600;
+        }
+
+        .nav-links a:hover {
+            color: #fff;
+        }
+
+        main {
+            padding: 6rem 5% 4rem;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .hero {
+            text-align: center;
+            margin-bottom: 6rem;
+            animation: fadeInDown 1s ease-out;
+        }
+
+        .hero-badge {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            border-radius: 50px;
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--accent-glow);
+            margin-bottom: 2rem;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+
+        h1 {
+            font-size: clamp(3rem, 6vw, 5rem);
+            font-weight: 800;
+            line-height: 1.1;
+            margin-bottom: 1.5rem;
+            background: linear-gradient(to right, #fff, #a1a1aa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -2px;
+        }
+
+        .hero-desc {
+            font-size: 1.25rem;
+            color: var(--text-muted);
+            max-width: 700px;
+            margin: 0 auto 3rem;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+        }
+
+        .btn {
+            padding: 1rem 2.5rem;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 1rem;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .btn-primary {
+            background: #fff;
+            color: #000;
+            box-shadow: 0 0 20px rgba(255,255,255,0.2);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 0 30px rgba(255,255,255,0.4);
+        }
+
+        .btn-secondary {
+            background: var(--surface-color);
+            color: #fff;
+            border: 1px solid var(--border-color);
+            backdrop-filter: var(--glass-blur);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+
+        /* Glassmorphic Features Grid */
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            margin-top: 4rem;
+        }
+
+        .feature-card {
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 2.5rem;
+            backdrop-filter: var(--glass-blur);
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            position: relative;
+            overflow: hidden;
+            animation: fadeInUp 1s ease-out backwards;
+        }
+
+        .feature-card:nth-child(1) { animation-delay: 0.1s; }
+        .feature-card:nth-child(2) { animation-delay: 0.2s; }
+        .feature-card:nth-child(3) { animation-delay: 0.3s; }
+        .feature-card:nth-child(4) { animation-delay: 0.4s; }
+
+        .feature-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 2px;
+            background: linear-gradient(90deg, transparent, var(--accent-glow), transparent);
+            transform: translateX(-100%);
+            transition: transform 0.6s ease;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-10px);
+            background: rgba(255, 255, 255, 0.05);
+            border-color: rgba(255, 255, 255, 0.15);
+            box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+        }
+
+        .feature-card:hover::before {
+            transform: translateX(100%);
+        }
+
+        .feature-icon {
+            width: 50px;
+            height: 50px;
+            border-radius: 12px;
+            background: rgba(255,255,255,0.05);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            margin-bottom: 1.5rem;
+            color: var(--accent-glow);
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .feature-card:nth-child(even) .feature-icon {
+            color: var(--accent-secondary);
+        }
+
+        .feature-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: #fff;
+        }
+
+        .feature-desc {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            line-height: 1.6;
+        }
+
+        /* Tech Stack Section */
+        .tech-stack {
+            margin-top: 8rem;
+            text-align: center;
+            padding: 4rem;
+            background: var(--surface-color);
+            border-radius: 24px;
+            border: 1px solid var(--border-color);
+            backdrop-filter: var(--glass-blur);
+        }
+
+        .tech-stack h2 {
+            font-size: 2.5rem;
+            margin-bottom: 2rem;
+            color: #fff;
+        }
+
+        .code-block {
+            background: #0a0a0a;
+            border: 1px solid #222;
+            border-radius: 12px;
+            padding: 2rem;
+            text-align: left;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+            color: #a9b7c6;
+            overflow-x: auto;
+            position: relative;
+        }
+
+        .code-block::before {
+            content: 'CMake';
+            position: absolute;
+            top: 0; right: 0;
+            background: #222;
+            color: #888;
+            padding: 4px 12px;
+            border-bottom-left-radius: 8px;
+            font-size: 0.75rem;
+        }
+
+        .code-keyword { color: #cc7832; }
+        .code-string { color: #6a8759; }
+        .code-comment { color: #808080; }
+
+        footer {
+            text-align: center;
+            padding: 3rem 5%;
+            margin-top: 5rem;
+            border-top: 1px solid var(--border-color);
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        /* Animations */
+        @keyframes fadeInDown {
+            from { opacity: 0; transform: translateY(-30px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(30px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @media (max-width: 768px) {
+            .btn-group { flex-direction: column; }
+            .tech-stack { padding: 2rem; }
+            h1 { font-size: 2.5rem; }
+        }
     </style>
 </head>
 <body>
-    <div class="hero-box">
-        <h1>gigahrush2</h1>
-        <div class="tag">GIGAHRUSH 2 // C++23 OPENGL SAMOSBOR TACTICAL ENGINE</div>
-        <p class="desc">Next-gen C++23 voxel rendering pipeline for Gigahrush.</p>
-        <div class="btn-group">
-            <a href="https://github.com/Jirnyak/gigahrush2" class="btn" target="_blank">🚀 Open GitHub Repo</a>
-            <a href="https://github.com/Jirnyak/gigahrush2#readme" class="btn btn-sec" target="_blank">📖 Read Spec</a>
+    <div class="voxel-grid"></div>
+
+    <header>
+        <a href="#" class="logo">
+            <div class="logo-dot"></div>
+            gigahrush2
+        </a>
+        <nav class="nav-links">
+            <a href="https://github.com/Jirnyak/gigahrush2">GitHub</a>
+            <a href="https://github.com/Jirnyak/gigahrush2/blob/main/ARCHITECTURE.md">Architecture</a>
+        </nav>
+    </header>
+
+    <main>
+        <div class="hero">
+            <div class="hero-badge">C++23 • Vulkan • Zero-Allocation</div>
+            <h1>The Universal<br>Voxel Core Engine</h1>
+            <p class="hero-desc">
+                The substrate you build a voxel game on. Dense data model, vector gravity, swept-AABB physics, and an instanced cube Vulkan renderer. Built for 128³ macro worlds.
+            </p>
+            <div class="btn-group">
+                <a href="https://github.com/Jirnyak/gigahrush2" class="btn btn-primary">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                        <path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.008-.866-.013-1.7-2.782.603-3.369-1.34-3.369-1.34-.454-1.156-1.11-1.462-1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.831.092-.646.35-1.086.636-1.336-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0112 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.025 2.747-1.025.546 1.379.203 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.161 22 16.416 22 12c0-5.523-4.477-10-10-10z"/>
+                    </svg>
+                    View Source
+                </a>
+                <a href="https://github.com/Jirnyak/gigahrush2#readme" class="btn btn-secondary">Read Documentation</a>
+            </div>
         </div>
-    </div>
+
+        <div class="features">
+            <div class="feature-card">
+                <div class="feature-icon">⚡</div>
+                <h3 class="feature-title">Vulkan Rendering</h3>
+                <p class="feature-desc">Instanced cubes with surface culling keep instance counts proportional to visible area, rendering vast 128³ worlds efficiently via MoltenVK & SDL3.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🧊</div>
+                <h3 class="feature-title">Sub-Voxel Precision</h3>
+                <p class="feature-desc">Every macro cell holds an 8³ sub-voxel blocker mask. Swept-AABB physics allows collision to be fine-grained and incredibly cheap to query.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🌊</div>
+                <h3 class="feature-title">Vector Gravity & Fluids</h3>
+                <p class="feature-desc">Gravity is a 3D acceleration vector, not a static "down". Features deterministic mass-conserving cellular fluids as runtime typed fields.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🚀</div>
+                <h3 class="feature-title">Modern C++23 Core</h3>
+                <p class="feature-desc">High-concurrency chunk generation with coroutines, zero locks, and an EnTT-backed Universal ECS for decoupled entities and logic.</p>
+            </div>
+        </div>
+
+        <div class="tech-stack">
+            <h2>Start Building</h2>
+            <div class="code-block">
+<span class="code-comment"># Requires CMake ≥ 3.20, C++23 compiler</span>
+brew install sdl3 vulkan-headers vulkan-loader molten-vk shaderc
+
+<span class="code-keyword">cmake</span> -S . -B build -DCMAKE_BUILD_TYPE=Release
+<span class="code-keyword">cmake</span> --build build -j
+
+<span class="code-comment"># Run the demo engine</span>
+./build/gigahrush2
+            </div>
+        </div>
+    </main>
+
+    <footer>
+        <p>Built for the Open Source Community. True People's License v2.0.</p>
+        <p style="margin-top: 10px; color: #555;">gigahrush2 © 2026 Jirnyak & Adolf Petushkov</p>
+    </footer>
 </body>
 </html>
