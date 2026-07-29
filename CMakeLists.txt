@@ -310,7 +310,7 @@ if(GIGA_BUILD_TESTS)
     giga_target_flags(audit_test OFF)
     add_test(NAME audit_findings COMMAND audit_test)
     set_tests_properties(audit_findings PROPERTIES
-        PASS_REGULAR_EXPRESSION "audit_test: 41 checks, 2 failures")
+        PASS_REGULAR_EXPRESSION "audit_test: 62 checks, 0 failures")
 
     # THE COUNT IS PINNED HERE TOO — the same mechanism as audit_findings above, now on
     # the target that carries 3,887 of the repo's 4,036 CHECK sites. Until this line
@@ -350,7 +350,7 @@ if(GIGA_BUILD_TESTS)
     giga_target_flags(game_test OFF)
     add_test(NAME game_test COMMAND game_test)
     set_tests_properties(game_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "game_test: 132266 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "game_test: 134002 checks, 0 failures")
 
     # Text gate for the AGENTS.md rules that no compiler enforces on every host.
     # The load-bearing one is no-exceptions: MSVC's STL is unsupported under
