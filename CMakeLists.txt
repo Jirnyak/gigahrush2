@@ -244,10 +244,24 @@ endif()
 # ---- Tests ----------------------------------------------------------------
 if(GIGA_BUILD_TESTS)
     enable_testing()
+    # The count is pinned, for the reason spelled out at game_test below: add_test()
+    # reads the exit code and nothing else, main() returns 0 unless an assertion
+    # failed, so deleting one line from its 15-call dispatch list removed a whole
+    # engine-core test from the run and ctest stayed GREEN. Nothing else covers this
+    # file — the unwired-suite guard in tools/check_source_rules.cmake only inspects
+    # tests/suite_*.inl, and world_test.cpp defines all 15 of its tests inline.
+    #
+    # OBSERVED, not derived: under ctest on 2026-07-29 world_test printed
+    # `22609/22609 checks passed` (42.69 s, Release). The printed pair is
+    # (passed, total), so the literal pins the total AND demands zero failures in one
+    # regex. It is an EXECUTION count, not a site count: 108 CHECK sites, most inside
+    # loops — test_nearest_image's nest alone runs 37 x 33 times.
     add_executable(world_test tests/world_test.cpp)
     target_link_libraries(world_test PRIVATE giga_core)
     giga_target_flags(world_test OFF)
     add_test(NAME world_test COMMAND world_test)
+    set_tests_properties(world_test PROPERTIES
+        PASS_REGULAR_EXPRESSION "22609/22609 checks passed")
 
     # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
