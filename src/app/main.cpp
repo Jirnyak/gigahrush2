@@ -50,6 +50,7 @@
 #include "game/contract.h"
 #include "game/vendor.h"
 #include "game/craft.h"
+#include "game/quest.h"
 #include "game/container.h"
 #include "game/door.h"
 #include "game/combat.h"
@@ -766,6 +767,8 @@ int main(int argc, char** argv) {
     [[maybe_unused]] std::int32_t banked = 0;
     std::int32_t containerTake = 0;   // roubles pulled out of crates
     std::int32_t contractPaid = 0;    // roubles paid by finished jobs
+    game::QuestLog& quests = runState.quests;  // lives in SaveState; F5/F9 persists it
+    std::int32_t questPaid = 0;       // roubles paid by finished quests
     std::int32_t sold = 0;            // roubles taken for the haul
     std::int32_t spent = 0;           // roubles spent on supplies
     // Who buys on this floor. The dominant faction sets the sell rate, which gives the
@@ -1488,9 +1491,13 @@ int main(int argc, char** argv) {
                 // rather than a parallel accounting system. [contract.h]
                 if (reg.valid(player))
                     if (const auto* nrc = reg.try_get<game::NpcRef>(player))
-                        if (pool.valid(nrc->id))
+                        if (pool.valid(nrc->id)) {
                             contractPaid += game::contract_step(
                                 contracts, pool, pool.inventory(nrc->id), ledger);
+                            questPaid += game::quest_step(
+                                quests, pool, pool.inventory(nrc->id), ledger,
+                                static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f));
+                        }
                 // Eating and drinking sit beside healing and AFTER pickup_step, so a
                 // ration picked up this tick can be eaten this tick. Both refuse a
                 // full bar, so a mistimed press costs nothing; both also fill

@@ -64,30 +64,12 @@ constexpr std::uint32_t kSaltSocialJitter = 0x0777e13u;  // seed-affinity jitter
 // co-floor peer before giving up this tick.
 constexpr std::uint32_t kSocialCandidateTries = 8;
 
-// Half-width of the ID WINDOW a social probe searches for a co-floor peer.
+// Co-floor candidate selection for social edges.
 //
-// This replaces the branch's per-floor bucket index, which lived inside its NpcPool
-// and does not exist on this side (`floor_bucket` / `set_floor` are absent; the floor
-// column has one writer in seed_floor_from_spec and had zero readers before this
-// file). Rebuilding a roster per tick would put an O(n) counting sort back into a
-// pass whose whole point is being O(budget), so the probe exploits a documented
-// property of this tree instead: **a floor's crowd is one CONTIGUOUS id run.**
-// `seed_floor_from_spec` bump-allocates `spec.population` consecutive slots and
-// FloorStreamer remembers the range as `[firstId, firstId + count)` ([floor_stream.h]
-// — that invariant is what stops the population growing per visit), so id-adjacency
-// implies floor-adjacency for every seeded record.
-//
-// 512 sized against the widest floor in main.cpp's demo stack: Residential carries
-// 420 records, so a +/-512 window spans a whole floor's roster and then some. The
-// label is re-checked on every candidate, so a probe can never form a cross-floor
-// edge — a window that lands off the floor costs throughput, never correctness.
-//
-// Known limit, stated rather than hidden: a NEWBORN's id is at the pool tail among
-// other newborns from other floors, so its window is mixed and most of its eight
-// tries miss. Newborns therefore acquire edges more slowly than seeded records. The
-// clean fix is the same per-floor index the branch had, in NpcPool, where a floor
-// streamer would also want it.
-constexpr std::uint32_t kSocialProbeSpan = 512;
+// Uses NpcPool's per-floor bucket index (`pool.floor_bucket(label)`), which is kept
+// up-to-date by set_floor() and spawn()/kill(). Candidates are selected by hashing
+// into the floor's live roster vector.
+constexpr std::uint32_t kSocialProbeSpan = 0; // Deprecated by floor_bucket probe
 
 // Symmetric +/- jitter added to the faction-pair baseline when seeding a new edge, so
 // same-faction pairs do not all start at an identical affinity.
@@ -618,23 +600,18 @@ MacroStats MacroSim::step(NpcPool& pool, const MacroParams& params,
 
                 const std::int16_t label = pool.floor(id);
 
-                // Bounded probe over the id window around `id` (see kSocialProbeSpan
-                // for why a window stands in for a per-floor bucket here). Clamped to
-                // the pool rather than offset, so ids near either end stay in range.
-                const std::uint32_t lo =
-                    id > kSocialProbeSpan ? id - kSocialProbeSpan : 0u;
-                std::uint32_t hi = id + kSocialProbeSpan + 1u;
-                if (hi > total) hi = total;
-                const std::uint32_t span = hi - lo;
-                if (span < 2u) continue;  // no one else in reach
+                // Exact co-floor lookup via pool.floor_bucket(label)
+                const std::vector<NpcId>& bucket = pool.floor_bucket(label);
+                if (bucket.size() < 2u) continue;  // no one else on this floor
 
                 NpcId peer = kInvalidNpc;
+                const std::size_t bucketSize = bucket.size();
                 for (std::uint32_t attempt = 0; attempt < kSocialCandidateTries;
                      ++attempt) {
-                    const NpcId cand = lo + hash3(id, t32 + attempt, sPeer) % span;
+                    const std::size_t idx = hash3(id, t32 + attempt, sPeer) % bucketSize;
+                    const NpcId cand = bucket[idx];
                     if (cand == id) continue;
                     if (!pool.alive(cand) || pool.embodied(cand)) continue;
-                    if (pool.floor(cand) != label) continue;  // never cross-floor
                     peer = cand;
                     break;
                 }
