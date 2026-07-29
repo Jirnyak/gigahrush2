@@ -45,13 +45,17 @@ struct MobRef {
     std::uint8_t level;  // 1..12, from mob_level_for_floor
     std::int16_t hp;     // current, level-scaled
     std::int16_t maxHp;  // level-scaled base
-    std::uint8_t pack;   // spawn group, 1..255; 0 = never grouped
+    std::uint8_t pack = 0;   // spawn group, 1..255; 0 = never grouped
 };
 
 // `pack` is LAST on purpose. Several call sites write `MobRef{kind, level, hp,
 // maxHp}` and rely on the remainder zero-initialising; a field inserted before `hp`
 // would shift them silently — `pack` would take hp's value and maxHp would become
 // 0, which is a monster that is already dead. Pinned so it cannot happen quietly.
+// The `= 0` default member initializer makes that reliance EXPLICIT: it keeps the
+// four-field aggregate init well-formed and silences Clang's -Wmissing-field-
+// initializers (MSVC never warned, so the build-win-verified merge left it firing
+// on macOS) without changing a single byte — pack was already value-initialized.
 static_assert(offsetof(MobRef, hp) == 2,
               "MobRef{kind,level,hp,maxHp} call sites would shift");
 

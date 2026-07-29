@@ -14,11 +14,16 @@ namespace giga::game {
 
 namespace {
 
+// The full faction→row shorthand. Only C and P are referenced (the fallbacks and
+// the player-row copy below); L/K/S/W complete the symbolic set that names the
+// matrix's rows in one place, so they are kept and marked maybe_unused rather than
+// deleted piecemeal. (Clang -Wunused-const-variable flags them; MSVC did not, so
+// the build-win-verified merge left them firing on macOS.)
 constexpr std::uint8_t C = static_cast<std::uint8_t>(Faction::Citizens);
-constexpr std::uint8_t L = static_cast<std::uint8_t>(Faction::Liquidators);
-constexpr std::uint8_t K = static_cast<std::uint8_t>(Faction::Cultists);
-constexpr std::uint8_t S = static_cast<std::uint8_t>(Faction::Scientists);
-constexpr std::uint8_t W = static_cast<std::uint8_t>(Faction::Wild);
+[[maybe_unused]] constexpr std::uint8_t L = static_cast<std::uint8_t>(Faction::Liquidators);
+[[maybe_unused]] constexpr std::uint8_t K = static_cast<std::uint8_t>(Faction::Cultists);
+[[maybe_unused]] constexpr std::uint8_t S = static_cast<std::uint8_t>(Faction::Scientists);
+[[maybe_unused]] constexpr std::uint8_t W = static_cast<std::uint8_t>(Faction::Wild);
 constexpr std::uint8_t P = kFactionPlayerRow;
 
 std::int8_t clamp8(int v) {

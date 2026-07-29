@@ -81,6 +81,8 @@ int g_checks = 0;
 #include "suite_npcpool.inl"
 #include "suite_samosbor2.inl"
 #include "suite_faction2.inl"
+#include "suite_playercmd.inl"
+#include "suite_macrowire.inl"
 static void test_inventory() {
     // Compile-time layout contract: a static_assert, not a CHECK. It is a fact
     // about the type, so it belongs to the build, not to a test run.
@@ -3778,8 +3780,14 @@ static void test_streamed_nav_cache() {
 
 // ---- #10 macro tick ------------------------------------------------------
 
-// Spawn one controlled record for the macro-tick tests.
-static NpcId spawn_aged(NpcPool& pool, std::uint8_t age, std::uint16_t floor,
+// Spawn one controlled record for the macro-tick tests. [[maybe_unused]]: its only
+// callers are the #10/#12 macro-tick tests parked in tools/branch_port_pending/
+// branch_tests.inl during the nav-routing-diffusion merge (they compile against the
+// branch enum catalogs, not main's csv tables). MSVC does not warn on an unused
+// static, so the build-win-verified merge did not catch this; Clang -Wall does.
+// Keep the helper here beside the tests it serves rather than deleting it — it
+// returns to use the moment those tests are adapted back onto main's tables.
+[[maybe_unused]] static NpcId spawn_aged(NpcPool& pool, std::uint8_t age, std::uint16_t floor,
                         std::uint16_t faction) {
     NpcId id = pool.spawn();
     if (id == kInvalidNpc) return id;
@@ -4056,6 +4064,8 @@ int main() {
     test_npcpool_all();
     test_samosbor2_all();
     test_faction2_all();
+    test_playercmd_all();
+    test_macrowire_all();
     test_route_realfloor();
     test_streamed_nav();
     test_nav_cache_roundtrip();

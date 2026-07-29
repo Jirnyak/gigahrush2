@@ -55,6 +55,21 @@ physics — **the crowd now moves**. Goal-directed `route_step` steering waits o
 #13 content tables to give intents reachable target cells. Spec + built-state doc:
 **[ai.md](ai.md)**.
 
+**Also since (headless, `ctest`-green):** the **server-authoritative netcode seam
+began**. The owner's [netcode.md](netcode.md) directive (2026-07-29) lays multiplayer
+in at the engine level *now* — every session is client→server, single-player is a
+listen server over an in-process loopback (client proposes, server disposes).
+**Increment #1** landed the first seam: `src/game/player_command.{h,cpp}` — a
+versioned POD `PlayerCommand` (the client's per-tick *intent*: button bitmask +
+camera-local `wishDir` + absolute `yaw`/`pitch`) and the headless, server-side
+`apply_player_command`. The SDL input bridge (`src/input/input.{h,cpp}`) now
+*proposes* a command and the server *disposes* by applying it — the input layer no
+longer writes `CameraTag`/`Controller`/`Jump` directly (netcode.md rule #1), so
+authoritative input application is provably client-free (`tests/suite_playercmd.inl`
+runs the whole apply path in `game_test`, no SDL). Behaviour is byte-identical to
+the old direct write. Doc + roadmap: **[netcode.md](netcode.md)** (5 additive
+increments; #1 done, #2 `GameServer` next).
+
 ---
 
 ## 1. The vision (from the owner)
@@ -257,6 +272,7 @@ src/ecs      universal POD components (components.h) + EnTT alias      [giga_cor
 src/sim      physics, controller, camera, fluid, diffusion (*_step fns) [giga_core]
 src/game     GAME LAYER — NpcPool, inventory, event_bus, embody,
              floor_spec, floor_registry, floor_gen, floor_stream, nav_cache,
+             player_command (netcode client→server intent seam),
              population, elevator, macro_sim, faction, ai              [giga_game]
 src/render   Vulkan device/swapchain/renderer, cube_pass (world),
              body_pass (NPCs), imgui_layer                             [render]
@@ -486,6 +502,29 @@ faction-consistent, deterministic), and the **utility-AI needs layer**
 reserve decay = `rate·dt`, STR/AGI/INT attribute scaling, pending-pool digestion,
 clamp at 0, O(n) column sweep; 900k checks).
 
+**Netcode seam — began (headless, `ctest`-green; [netcode.md](netcode.md)).**
+Multiplayer laid in at the engine level from day one (owner directive, 2026-07-29):
+client proposes, server disposes; single-player is a listen server over an
+in-process loopback. Five additive increments; **#1 built:**
+
+- **Netcode #1 — `PlayerCommand` POD + input bridge routed through it (DONE
+  2026-07-29).** ✔ `src/game/player_command.{h,cpp}`: a versioned, `static_assert`ed
+  trivially-copyable / standard-layout POD (rule #5) carrying one tick of client
+  *intent* — a `Button` bitmask (jump / fly-toggle now; attack / use / interact /
+  elevator / eat / … reserved), camera-local `wishDir`, **absolute** `yaw`/`pitch`
+  (Source *usercmd* style), and `clientTick`. `apply_player_command(reg, avatar,
+  cmd, dt)` is the headless server-side writer: it **clamps pitch** (~±89° — the
+  client is never trusted with look range), flips fly on the toggle edge, gates jump
+  on walk mode, and writes to **one explicit avatar** (rule #4 — per-connection, not
+  global). The SDL bridge (`src/input/input.{h,cpp}`) now splits into
+  `build_command` (client: gather device state → command) + `apply_player_command`
+  (server: apply) and **no longer writes `CameraTag`/`Controller`/`Jump` directly**
+  (rule #1). Same-tick apply on the loopback ⇒ byte-identical feel. Proof it runs
+  client-free: `tests/suite_playercmd.inl` (7 tests: wire-safety + memcpy round-trip,
+  move/look write, server pitch clamp, jump-only-walking, fly-toggle-edge,
+  per-entity ownership, invalid-avatar no-op) exercises the whole apply path in
+  `game_test` with **no SDL**.
+
 ---
 
 ## 7. Remaining roadmap (tracked as tasks #10–#13)
@@ -498,9 +537,14 @@ macro tick #10 is now done** (demographic core #10a, bucket index #10b, migratio
 needs layer #12a, pure scorer + selection FSM #12b, and the stagger + steering +
 embody/loop driver #12c (2026-07-29): the visible crowd steers itself (flee field +
 per-agent wander), with goal-directed `route_step` steering deferred until **#13**
-content gives intents reachable targets. So the open work is **#13** content tables
-(then `route_step` goal-seeking lights up) and the MacroSim app-loop wiring. The
-floor-module epic (#6–#9) is **done**.
+content gives intents reachable targets. **The MacroSim app-loop wiring is now DONE
+(2026-07-29):** `macro.step()` runs in `main.cpp`'s fixed-step loop every
+`kMacroPeriodTicks` (250 ticks = 2 s), gated to floors mode, after
+`set_floors_from(registry)` turns migration on; a HUD "society:" line shows it, and
+`tests/suite_macrowire.inl` proves the step skips every embodied record against a real
+streamer-loaded floor (the on-screen crowd never ages while the cold society churns).
+So the open work is **#13** content tables (then `route_step` goal-seeking lights up).
+The floor-module epic (#6–#9) is **done**.
 
 ### #10 — Macro tick (demographic core + bucket index + migration + social BUILT 2026-07-28) ✔
 Coarse clock (own rate, **never** the 120 Hz tick — [macrosim.md](macrosim.md)).
@@ -723,6 +767,26 @@ Decomposed into **#13a** item_table → **#13b** mob_table → **#13c** loot tab
   `calculateMaxLootValue` soft-exp gate `weight*=exp(-(value/cap−1)·3)`, spawnW ×
   type-mult × tag-mult) is a SEPARATE reference system, deferred to NPC/container
   spawning (schema extracted, in transcript).
+
+### Netcode — server-authoritative seam (owner directive, [netcode.md](netcode.md))
+Laid in **additively**, each increment green; on the `LocalConnection` (loopback)
+the whole game runs exactly as today until the final mode-dispatch step. **#1 done
+(§6); #2–#5 open:**
+- **#1 — `PlayerCommand` POD + input routed through it (DONE 2026-07-29).** ✔ §6.
+- **#2 — `GameServer` (`giga_game`)** — owns the authoritative `Registry` /
+  `LevelStack` / `FloorStreamer` / `MacroSim` and a `tick(dt)` running the existing
+  system order, **extracted from `main.cpp`**; headless-constructible and
+  unit-testable with no client (server logic gains `game_test` coverage). The
+  natural next increment.
+- **#3 — `Connection` interface + `LocalConnection`** (loopback, zero serialization)
+  in `giga_game`: client reads the server `Registry` directly; `send(cmd)` hands the
+  struct straight over.
+- **#4 — `GameClient` (`src/app`)** — owns render + input, holds a `Connection`;
+  per-frame gather input → `build_command` → `send`; read view → render. (The input
+  bridge's `build_command` is already public for exactly this.)
+- **#5 — `main.cpp` mode dispatch** (`--dedicated` / `--connect <addr>` / default
+  listen) constructing server and/or client + the right `Connection`. Dedicated
+  server falls out for free (server builds with no GPU).
 
 ### Standing follow-ups (fold in when the relevant increment lands)
 - **`floor_spec_for()` is currently monotonic (`floor % 7/5/3` pattern) and takes
