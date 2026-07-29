@@ -100,6 +100,29 @@ public:
     ModuleId add_module(FloorRegistry& reg, int number, FloorKind kind,
                         std::uint32_t seed);
 
+    // Seed the COLD crowd of every registered module that has not been seeded yet,
+    // without loading geometry and without embodying anybody. Returns how many
+    // records were created.
+    //
+    // WHY THIS EXISTS. `ensure_loaded` seeds a module's crowd on its FIRST LOAD, which
+    // means the population only comes into existence where the player has already
+    // been. Measured before this: a fresh run had 420 records in the pool — one
+    // floor's worth — while the stack registers ten. Every macro pass in
+    // [macro_sim.h] operates on COLD records only (migration and the social sweep both
+    // skip `pool.embodied`), so with a single loaded floor every record was embodied
+    // and the macro society had literally nothing to work on: births, deaths,
+    // departures and arrivals were all structurally zero, not merely quiet.
+    //
+    // Calling this at startup is what makes "the world lives whether or not the player
+    // is looking" true rather than aspirational: the other nine floors are now
+    // populated, cold, and therefore eligible to age, die, give birth and migrate
+    // before anyone has ever visited them.
+    //
+    // Cheap: it is the same `seed_floor_from_spec` the first load would have run, just
+    // earlier, and it allocates no layer and touches no ECS. The demo stack costs
+    // ~4,200 records against a 2^20 pool.
+    std::uint32_t seed_all_modules(NpcPool& pool);
+
     // Load floor `number` if it is cold: allocate a physical layer, generate its
     // geometry, mark it resident, and embody its crowd (seeding the crowd once on
     // the first ever load). Records already embodied — e.g. the player standing on

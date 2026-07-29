@@ -351,7 +351,17 @@ _giga_csv_vs_header("data/materials.csv" "shaders/material_surface.glsl"
 # sites and was born dead: commit 56c9c6a added src/game/nav_cache.cpp,
 # src/game/nav_cache.h and the suite, and did NOT touch tests/game_test.cpp, so
 # the `#include` was never written. That commit's subject says "pinned".
-# Meanwhile src/game/floor_stream.cpp calls nav_cache on every floor load. For
+# CORRECTED 2026-07-29: an earlier version of this comment said "floor_stream.cpp
+# calls nav_cache on every floor load". That is FALSE and it was the whole
+# justification for the urgency. src/game/floor_stream.cpp gates the entire path
+# on `if (!navCacheDir_.empty())`, the only caller of set_nav_cache_dir
+# (src/game/floor_stream.h:95) anywhere in the tree is tests/game_test.cpp:3765,
+# src/app/main.cpp never sets it, and floor_stream.h:200 labels the field
+# `// empty = on-disk nav cache disabled`. The app uses a separate nav::AsyncBake
+# path instead. Accurately: nav_cache is reachable from production code and
+# enabled only by a test. The rule below is still worth having — 733 lines of
+# uncompiled assertions is a defect regardless of who calls the subject — but it
+# is a testing-integrity defect, not a live gameplay one. For
 # scale: WILL_FAIL at least caught 1 transition in 7; this caught 0 in 104.
 #
 # Needs no compiler, which is the point — it is a text rule that would have

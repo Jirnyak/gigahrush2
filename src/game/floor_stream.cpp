@@ -31,6 +31,28 @@ ModuleId FloorStreamer::add_module(FloorRegistry& reg, int number, FloorKind kin
     return m;
 }
 
+std::uint32_t FloorStreamer::seed_all_modules(NpcPool& pool) {
+    // Exactly the seeding half of ensure_loaded, hoisted so it can run before anybody
+    // has visited anything. No layer, no geometry, no ECS entity: the records are
+    // created COLD, which is the state every macro_sim pass requires (migration and the
+    // social sweep both skip pool.embodied, so an embodied record is invisible to them).
+    //
+    // `fm.candidate` is written here rather than discarded because ensure_loaded reads
+    // it to pick the module's player-designate on a first load, and that first load is
+    // no longer the thing that seeds. Dropping it would make floor 0's player selection
+    // depend on whether this ran.
+    const NpcId before = pool.count();
+    for (ModuleId m = 0; m < next_; ++m) {
+        FloorModule& fm = modules_[m];
+        if (!fm.used || fm.seeded) continue;
+        const FloorSpec& spec = floor_spec(fm.kind);
+        fm.candidate =
+            seed_floor_from_spec(pool, fm.number, spec, fm.seed ^ kPopSeedSalt);
+        fm.seeded = true;
+    }
+    return static_cast<std::uint32_t>(pool.count() - before);
+}
+
 LayerId FloorStreamer::alloc_slot() {
     if (freeSlots_.empty()) return kInvalidLayer;
     LayerId s = freeSlots_.back();

@@ -594,6 +594,24 @@ int main(int argc, char** argv) {
         // any renumber. In Maze mode this branch is never taken, so fewer than two
         // labels are registered and migration correctly stays off. [macro_sim.h]
         macroSim.set_floors_from(registry);
+        // POPULATE THE WHOLE BUILDING, not just the floor about to be loaded.
+        //
+        // Measured before this line existed: a fresh run held 420 records — one floor's
+        // worth — because `ensure_loaded` seeds a module's crowd on its FIRST LOAD, so
+        // the population only came into existence where the player had already been.
+        // That made every macro counter structurally zero rather than merely quiet:
+        // migration and the social sweep both skip `pool.embodied` ([macro_sim.h] works
+        // on COLD records only), and with a single loaded floor every existing record was
+        // embodied, so there were no eligible candidates at all.
+        //
+        // Seeding here gives the other nine floors a cold population that ages, dies,
+        // gives birth and migrates before anyone has ever visited them — which is the
+        // difference between a world that lives when unobserved and one that only exists
+        // where the camera has been. Costs ~4,200 records against a 2^20 pool and touches
+        // no layer, no geometry and no ECS entity.
+        const std::uint32_t seeded = streamer.seed_all_modules(pool);
+        std::fprintf(stderr, "[pop] seeded %u cold records across %u registered floors\n",
+                     seeded, macroSim.floor_count());
 
         game::NpcId playerId = game::kInvalidNpc;
         game::LoadResult start =
