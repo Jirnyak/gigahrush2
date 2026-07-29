@@ -35,7 +35,8 @@
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "ecs/registry.h"
-#include "game/ai.h"
+// NOTE: #include "game/ai.h" returns with the adapted utility AI --
+// see tools/branch_port_pending/README.md
 #include "game/embody.h"
 #include "game/elevator.h"
 #include "game/floor_registry.h"
@@ -906,8 +907,19 @@ int main(int argc, char** argv) {
                 // re-plans (identity-staggered) and steers each NON-player body's
                 // Velocity — BEFORE the controller/physics that integrate it, the
                 // same locomotion path as the player ([ai.md], [npcs.md]).
-                game::needs_step(reg, pool, kSimDt);
-                game::ai_step(reg, pool, danger, activeGrid, simNow, kSimDt);
+                // PARKED: game::needs_step(reg, pool, kSimDt);  <- branch 3-arg call
+                // main already steps the clock at line ~1043 with the layer-scoped
+                // 4-arg signature and keeps its NeedsTick report for the HUD. The branch
+                // call operated on its per-entity Needs COMPONENT; main keeps the
+                // survival clock in the pool row, because the elevator destroys the body
+                // and a component would reset the clock on every floor ride.
+                // PARKED: game::ai_step(reg, pool, danger, activeGrid, simNow, kSimDt);
+                // The utility-AI driver arrived in the branch merge and scores 13 intents
+                // per mob. It is parked with ai.{h,cpp} until it is adapted to main
+                // mob_table, and until the overlap with the steering main ALREADY has
+                // (wander_step flow-following, investigate_step noise, hunt prey
+                // selection) is resolved -- two systems both writing Velocity would
+                // fight each other every tick. tools/branch_port_pending/README.md
                 controller_step(reg, kSimDt);
                 // Steer the crowd BEFORE physics: wander writes horizontal
                 // velocity, physics integrates it and resolves collision.

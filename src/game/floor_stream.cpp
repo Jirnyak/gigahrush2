@@ -103,8 +103,11 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
         // std::int16_t), so the cast has nothing left to do.
         fm.candidate = seed_floor_from_spec(pool, fm.number, spec,
                                             fm.seed ^ kPopSeedSalt);
-        fm.firstId = before;
-        fm.count = pool.count() - before;
+        // No firstId/count recorded any more: FloorModule dropped them because the
+        // crowd IS pool.floor_bucket(number) once seed_floor_from_spec has labelled
+        // every record it spawned. A frozen [firstId, count) range could not express a
+        // record migrating in or out of this floor; the label can, and macro_sim
+        // migration is exactly that operation. `before` stays local for the count below.
         fm.seeded = true;
     }
 

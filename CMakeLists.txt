@@ -301,7 +301,9 @@ if(GIGA_BUILD_TESTS)
     # cannot use -fno-exceptions on MSVC (the STL is unsupported under
     # _HAS_EXCEPTIONS=0), so hand-rolling the flags per target is how that deviation
     # gets forgotten.
-    add_executable(macro_bench tests/macro_bench.cpp)
-    target_link_libraries(macro_bench PRIVATE giga_game)
-    giga_target_flags(macro_bench OFF)
+    # macro_bench is parked with macro_sim -- see tools/branch_port_pending/README.md.
+    # Restore these three lines together with src/game/macro_sim.{h,cpp}:
+    #   add_executable(macro_bench tests/macro_bench.cpp)
+    #   target_link_libraries(macro_bench PRIVATE giga_game)
+    #   giga_target_flags(macro_bench OFF)
 endif()

@@ -1,7 +1,8 @@
 #include "game/embody.h"
 
 #include "game/faction.h"
-#include "game/ai.h" // Needs + AiBrain — the embodied utility-AI transient state
+// NOTE: #include "game/ai.h" (AiBrain) goes back here when the utility AI is
+// adapted to main mob_table -- see tools/branch_port_pending/README.md
 
 namespace giga::game {
 
@@ -56,10 +57,13 @@ Entity embody(Registry& reg, NpcPool& pool, NpcId id, LayerId layer) {
     // hp/inventory stay canonical in the pool row ([npcs.md]). The player gets
     // them too (harmless: ai_step skips camera-holders), so a body-swap needs no
     // special case — the new body simply starts with a fresh, seeded set of needs.
-    Needs needs;
-    seed_needs(needs, id);
-    reg.emplace<Needs>(e, needs);
-    reg.emplace<AiBrain>(e, AiBrain{});
+    // PARKED, and this one is a design conflict rather than a missing include. The
+    // branch attached Needs as an ECS component here and seeded it per entity. main
+    // keeps the survival clock in the POOL ROW on purpose: the elevator fold_back ->
+    // embody_as_player DESTROYS the player body, so a component would silently reset
+    // the clock on every floor change -- a trip clock quietly becoming a floor clock.
+    // AiBrain (hysteresis/stagger) is legitimately per-entity and comes back with the
+    // adapted utility AI. See tools/branch_port_pending/README.md.
 
     pool.set_embodied(id, true);
     return e;

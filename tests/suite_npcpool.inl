@@ -49,16 +49,16 @@ static void test_npcpool_all() {
         pool.init();
         NpcId id = pool.spawn();
 
-        pool.floor(id) = -50;
+        pool.set_floor(id, -50);
         CHECK(pool.floor(id) == -50);
-        pool.floor(id) = 0;
+        pool.set_floor(id, 0);
         CHECK(pool.floor(id) == 0);
 
         // Every label FloorRegistry will accept, not just the demo stack's. Rolled up
         // into one CHECK so a width regression reports once instead of 255 times.
         bool allRoundTrip = true;
         for (int f = kMinFloor; f <= kMaxFloor; ++f) {
-            pool.floor(id) = static_cast<std::int16_t>(f);
+            pool.set_floor(id, static_cast<std::int16_t>(f));
             if (pool.floor(id) != f) allRoundTrip = false;
         }
         CHECK(allRoundTrip);

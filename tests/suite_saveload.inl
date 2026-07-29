@@ -991,7 +991,7 @@ void snapshot_restores_the_row_not_the_body() {
     pool.cx(id) = 11;
     pool.cy(id) = 22;
     pool.cz(id) = 1;
-    pool.floor(id) = 7;
+    pool.set_floor(id, 7);
 
     PlayerSnapshot snap{};
     snap.clock.food = 12.5f;

@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "game/inventory.h"
+#include "game/floor_registry.h"   // kMinFloor / kFloorSlots for bucket_slot()
 
 namespace giga::game {
 
