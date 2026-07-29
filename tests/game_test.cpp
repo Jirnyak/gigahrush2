@@ -71,6 +71,7 @@ int g_checks = 0;
 #include "suite_samosbor.inl"
 #include "suite_doors.inl"
 #include "suite_saveload.inl"
+#include "suite_macrosim.inl"
 #include "suite_behaviours.inl"
 #include "suite_samosborhud.inl"
 #include "suite_fluidrooms.inl"
@@ -4045,6 +4046,7 @@ int main() {
     test_samosbor_all();
     test_doors_all();
     test_saveload_all();
+    test_macrosim_all();
     test_behaviours_all();
     test_samosborhud_all();
     test_fluidrooms_all();
