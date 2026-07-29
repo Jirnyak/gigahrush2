@@ -26,24 +26,30 @@
 //     memory-bound. The measured number is printed by `test_diffusion_all`
 //     (tests/suite_diffusion.inl) on a real Residential floor, and THAT number — not
 //     a sentence here — is the claim.
-//   * MEASURED, and it is worse than this file used to guess: 17-24 ms per sweep
-//     (MSVC 19.44 /O2, Windows dev host, real Residential floor, 59.8% of cells open,
-//     13-16 ns per open cell). RE-MEASURED 2026-07-29 on the same host and it held:
-//     18.42-24.64 ms/sweep over three runs, 14.69-19.65 ns/open cell, bitset bake
-//     11.0-19.2 ms.
+//   * MEASURED, and it is worse than this file used to guess: EIGHT runs across two
+//     sessions on 2026-07-29 (MSVC 19.44 /O2 /GL, linked /LTCG, Windows dev host, real
+//     Residential floor, 59.8% of cells open) span 18.42-43.67 ms/sweep, 14.69-34.83 ns
+//     per open cell, and a bitset bake of 10.97-37.33 ms.
+//     DO NOT NARROW THAT BAND. An earlier draft of this comment claimed
+//     "18.42-24.64 ms/sweep over three runs" while the same session had already
+//     measured 27.09, and a review pass then measured 27.29, 27.56 and 43.67 from the
+//     same binary. The honest figure is a 2.4x band; a single number here would be a
+//     number about the box.
 //     The open-cell count is bit-deterministic at 1,253,822 of 2,097,152 across every
-//     run, which is what makes the ns/cell figure comparable at all.
+//     one of the eight runs, which is what makes the ns/cell figure comparable at all.
 //     AND THE SPREAD IS LOAD, NOT CODE: the SAME binary measured 74.79 ms/sweep
-//     (59.65 ns/open cell, bake 190 ms) on a fifth run while the host was under an
+//     (59.65 ns/open cell, bake 190 ms) on one run while the host was under an
 //     eight-way parallel build. A 4x swing with an identical instruction stream is why
 //     test_diffusion_all asserts work counts and merely PRINTS milliseconds — a
-//     wall-clock threshold here would be a test of the box.
+//     wall-clock threshold here would be a test of the box. Every figure above was
+//     taken on a host running that wave, so all of them are an UPPER bound: no
+//     quiet-host measurement of this loop exists yet.
 //     ONE TRAP for whoever measures next, because it cost a wrong headline: the release
 //     flags here carry /GL, and linking those objects WITHOUT /LTCG makes the linker
 //     discard the IL and fall back to per-object codegen. The identical sweep measured
 //     40.74 ms that way — 1.8x slow, with no warning louder than LNK4075. A timing run
 //     that skips /LTCG is measuring the link, not the loop.
-//     That is 2-3x a WHOLE 8 ms sim step, so a sweep is not something to drop on the
+//     That is 2-5x a WHOLE 8 ms sim step, so a sweep is not something to drop on the
 //     sim thread and forget. Two consequences, both load-bearing: the sweep is
 //     non-creating and reports `liveCells`, so a caller sweeps only while the floor
 //     actually holds danger (see diffusion_step and DiffusionDriver below); and the
@@ -270,7 +276,7 @@ float diffusion_add_at(World& world, vec3 pos, float amount,
 // If its bitset is empty, or `geomDirty` is set, this rebuilds it from world.grid()
 // first.
 //
-// THE QUIET-FLOOR GATE, which is what makes a 17-24 ms sweep affordable at all. The
+// THE QUIET-FLOOR GATE, which is what makes an 18-44 ms sweep affordable at all. The
 // return value is a complete answer to "is there any point sweeping again":
 //
 //   * `present == false` — this layer has no danger field, because nothing has ever
@@ -337,7 +343,7 @@ inline constexpr float kDangerUnit = 1.0f;
 // solver into a system, and it exists because the three things below are exactly the
 // things a call site gets wrong:
 //
-//   1. THE CADENCE. A sweep is 17-24 ms against an 8 ms step, so it cannot go per tick.
+//   1. THE CADENCE. A sweep is 18-44 ms against an 8 ms step, so it cannot go per tick.
 //   2. THE FLOOR TOKEN. `scratch.open` is walkability for ONE World. The camera rides an
 //      elevator, the active layer changes, and a sweep against the bitset of the floor
 //      you left diffuses danger through walls that exist and holds it out of doorways
@@ -357,7 +363,7 @@ struct DiffusionDriver {
     // evaporated, and in both cases no sweep can change a single cell.
     bool hot = false;
 
-    std::uint64_t sweeps = 0;   // sweeps actually performed, for a HUD or a test
+    std::uint64_t sweeps = 0;   // diffusion_step calls made, for a HUD or a test
     std::uint64_t deposits = 0; // sources that TOOK (one refused inside rock is not one)
     DiffusionStep last{};       // the most recent sweep's report; zeroed until the first
 };
@@ -396,8 +402,12 @@ float diffusion_driver_add_at(DiffusionDriver& driver, World& world, vec3 pos,
 void diffusion_driver_on_floor_built(DiffusionDriver& driver, World& world, LayerId layer,
                                      const std::string& field = kDangerField);
 
-// Call EVERY sim tick with the layer the sim is currently stepping. Returns true if a
-// sweep actually ran, which is the number a caller should report rather than assume.
+// Call EVERY sim tick with the layer the sim is currently stepping. Returns true if
+// diffusion_step was CALLED, which is the number a caller should report rather than
+// assume — and which is deliberately not quite "a sweep ran". A layer change forces one
+// call so that `last` describes the floor we are on, and on a floor with no danger field
+// that call takes the non-creating early-out and touches no cell. `driver.sweeps` counts
+// the same thing, so on a floor-hopping run it reads one high per floor entered.
 //
 // Named _tick rather than _step, breaking the `*_step` convention ([AGENTS.md] §ECS
 // Conventions) on purpose: `diffusion_step` is already the SWEEP, and one function

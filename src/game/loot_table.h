@@ -50,12 +50,30 @@
 //   Boss   170.7 -> 163.6  619.4 -> 588.2   2455.9 -> 2243.6  5435.3 -> 5051.3
 //
 // So the true range is **-10.2% to +4.4%**, worst at Light on floor -13. The shape is
-// worth understanding rather than memorising: the authored rows are cheap materials
-// (rebar 80, wire_coil 12) while the catalog under an E2/E3 cap can roll something far
-// dearer, so a substitution costs most on a ONE-roll tier at a high cap and averages out
-// across the five rolls of a Boss. It is always a discount, never a windfall, and it
-// never touches the depth ramp: a Boss still pays 31x more at -26 than at 0. 136 rows of
-// per-kind identity for a single-digit tax on income is the trade being made.
+// worth understanding rather than memorising: a substitution swaps what the FLOOR'S
+// CATALOG is worth per roll for what the authored row is worth. Measured over the shipped
+// items.csv, the catalog's mean roll is 34.1 rub at floor 0, 122.6 at -6, 484.8 at
+// -13/-20 and 1,079.8 at -26 (sum(w x value) / sum(w) over every row the floor leaves a
+// non-zero weight, which is exactly the distribution `drop_mob_loot` picks from). That
+// makes the LEFT column above auditable without re-running anything: catalog-only is just
+// `rolls_for_tier x drop_chance_for_tier x mean roll`, and at floor 0 it reproduces all
+// six cells exactly (Boss 5 x 1.00 x 34.13 = 170.7, Trash 1 x 0.12 x 34.13 = 4.1). Below
+// the hub it agrees to within 2%, usually a shade low, because there a roll can also
+// bundle ammo: NONE of `kRangedTable`'s 29 firearms keeps a non-zero catalog weight at
+// floor 0 — the cheapest, karkarov_pistol at 320 rub, decays to 0.13 and truncates to 0 —
+// so the hub is the one depth where `drop_weapon_ammo` can add nothing at all, and the
+// one depth where this arithmetic is exact. Most authored rows are cheap materials (rebar
+// 80, wire_coil 12), so under an E2/E3 cap the swap loses — most on a ONE-roll tier,
+// averaging out across a Boss's five.
+//
+// It is a discount on **28 of the 30 cells above**, -0.9% to -10.2%. It is NOT always a
+// discount, and the two exceptions are structural rather than noise: both are Elite, and
+// Elite's ten kinds author rebar 80 / psi_dust 120 / circuit_board 35 as their likely
+// rows, which at floor 0 sit at or above the 34.1-rub catalog mean the E0 cap of 90
+// leaves behind (+4.4%) — while at -26 Sculpture's 14,000-rouble psi splinter, authored
+// at a 10% chance, comes into band (+1.1%). Either way the depth ramp is untouched: a
+// Boss still pays 31x more at -26 than at 0. 136 rows of per-kind identity for a
+// single-digit move in income is the trade being made.
 //
 // -13 and -20 are identical because `economy_band` puts both in E2 — that is the band
 // table, not a copy-paste.
@@ -140,10 +158,18 @@ const MobLoot& mob_loot(std::uint8_t kind);
 //
 // Measured at floor 0 (cap 90): the splinter's factor is exp(-(14000/90 - 1) * 3) =
 // exp(-463.7), which underflows to exactly 0.0f in float — as do psi_mark (10,000) and
-// psi_order_seal (24,000). The dearest thing that can still land there is bottled_voice
-// / slime_sample_black / meat_rune / idol_chernobog at 200-250 rub and a per-roll chance
-// of 2e-4 to 8e-4. At floor -26 (cap 80,000) every authored row is in band and the
-// factor is 1.0. The deep floor pays and the hub does not, without a hard rule anywhere.
+// psi_order_seal (24,000). Those three are the WHOLE set that reaches exact zero: the
+// factor only underflows above roughly 3,200 rub (exp(-x) rounds to 0.0f for x > 103.97,
+// so v/90 > 35.7), and every other authored row keeps a non-zero chance there. The decay
+// makes the rest unfarmable rather than impossible — void_spike (1,500) at 3.9e-21,
+// shark_scale (1,000) at 6.7e-14, strange_clot (500) at 1.2e-6, ammo_energy (300) at
+// 9.1e-4. That last one is not rhetorical: a hub Robot hands over an energy cell once in
+// ~16,000 paying rolls, and tests/suite_loottable.inl block 5 measures it (6.4e-5 per
+// roll, expected 0.07 x 9.1e-4) instead of asserting it away. The dearest rows with a
+// chance worth naming are bottled_voice / slime_sample_black / meat_rune /
+// idol_chernobog at 200-250 rub, 1.4e-4 to 7.9e-4 per roll. At floor -26 (cap 80,000)
+// every authored row is in band and the factor is 1.0. The deep floor pays and the hub
+// does not, without a hard rule anywhere.
 //
 // There is deliberately **no second per-tier value ceiling.** One was prototyped and
 // dropped: main's own catalog path applies no per-tier value cap at all, so capping only

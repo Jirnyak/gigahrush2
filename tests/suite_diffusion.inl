@@ -669,6 +669,38 @@ static void test_diffusion_all() {
         // Floor `a`'s own danger survived the excursion untouched — the driver swept
         // another World, not this one. A World IS one layer, so this is structural.
         CHECK(diffusion_at(a, 64, 64, 64) > 0.0f);
+
+        { // ---- diffusion_arm: the design's ONE footgun, and its documented repair ----
+          // [sim/diffusion.h] names this hazard instead of hiding it: deposit through the
+          // bare diffusion_add and the gate never notices, so the danger sits there
+          // correct and FROZEN — not lost, not spreading — until something arms it. It is
+          // asserted here because nothing else in the tree calls diffusion_arm, and an
+          // escape hatch with no test is a promise, not a mechanism.
+            World d;
+            DiffusionDriver dd;
+            constexpr LayerId kLayerD = 11u;
+            diffusion_driver_on_floor_built(dd, d, kLayerD);
+
+            // Behind the driver's back, on purpose.
+            CHECK(diffusion_add(d, 64, 64, 64, kDangerUnit) == kDangerUnit);
+            CHECK(!dd.hot);           // the gate is still shut
+            CHECK(dd.deposits == 0u); // and the deposit was never counted
+            // Four cadence slots and the field does not move a cell. This is the frozen
+            // state the header warns about, stated as a work count.
+            for (std::uint64_t t = 25u; t <= 100u; t += 25u)
+                CHECK(!diffusion_tick(dd, d, kLayerD, t));
+            CHECK(dd.sweeps == 0u);
+            CHECK(diffusion_at(d, 64, 64, 64) == kDangerUnit); // untouched, not decayed
+
+            diffusion_arm(dd);
+            CHECK(dd.hot);
+            CHECK(diffusion_tick(dd, d, kLayerD, 125u));
+            CHECK(dd.sweeps == 1u);
+            CHECK(dd.last.present);
+            CHECK(dd.last.liveCells == 7u); // source plus its six open faces, exactly
+            CHECK(dd.hot);                  // live, so it keeps sweeping on its own now
+            CHECK(dd.deposits == 0u);       // arming is not a deposit
+        }
     }
 
     { // ---- measured cost, on a REAL floor's geometry ----

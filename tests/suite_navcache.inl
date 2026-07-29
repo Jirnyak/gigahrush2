@@ -657,7 +657,17 @@ void baked_round_trip_routes_identically() {
     CHECK(warmArrivals == coldArrivals);
     CHECK(warmTrace.size() == coldTrace.size());
     CHECK(!warmTrace.empty());
-    CHECK(std::memcmp(warmTrace.data(), coldTrace.data(), warmTrace.size()) == 0);
+    // Compared over the COMMON prefix, not over warmTrace's own length. CHECK records a
+    // failure and keeps going, so on the exact regression this test exists to catch — a
+    // warm nav that routes differently and therefore traces to a different LENGTH — an
+    // unclamped memcmp would read past the end of coldTrace and turn a named failure with
+    // a line number into an access violation without one. That is the same trade
+    // nav_cache.h makes when it refuses a half-baked write: fail legibly, not
+    // spectacularly. The length equality is still pinned by the CHECK above, so nothing
+    // is weakened; `common > 0` also keeps memcmp away from a null data() pointer.
+    const std::size_t common =
+        warmTrace.size() < coldTrace.size() ? warmTrace.size() : coldTrace.size();
+    CHECK(common > 0 && std::memcmp(warmTrace.data(), coldTrace.data(), common) == 0);
 
     // Re-encoding the DECODED nav reproduces the original bytes, so a cache that is read
     // and rewritten (the re-entry path) cannot drift over generations. Only the coarse

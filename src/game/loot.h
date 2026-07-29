@@ -32,24 +32,32 @@
 // against the tables this build actually ships, that is false at every depth, and by one
 // to two orders of magnitude at the bottom:
 //
-//   floor   heads/floor   rub/kill   all kills   24 crates   682 crates
-//   0            106          53.3       5,647       1,717       48,792
-//   -13          622         720.5     448,174      13,997      397,742
-//   -26        2,157       1,657.4   3,574,960      36,632    1,040,951
+//   floor   heads/floor   rub/kill   all kills   24 crates   42 crates
+//   0            106          53.3       5,647       1,717        3,003
+//   -13          622         720.5     448,174      13,997       24,495
+//   -26        2,157       1,657.4   3,574,960      36,632       64,106
 //
-// (heads = `mob_count_for_floor(z, danger 3, Ministry)`; rub/kill averaged over all 69
-// kinds at their own tier; a crate priced as the modal RoomStash, at `container_budget`'s
-// hard floor of 24 and its Residential ceiling of 682.) A floor's monsters carry 3x to
-// 98x what its crates do, depending on how many crates the geometry allows.
+// (heads = `mob_count_for_floor(z, danger 3, Ministry)`, re-derived from the shipped
+// curve: 106 / 622 / 2,157. rub/kill averaged over all 69 kinds at their own tier. A
+// crate priced as the modal RoomStash — 71.5 / 583.2 / 1,526.3 rub — times the only two
+// answers `container_budget` can give: its hard floor of 24, for the wide-stride kinds
+// (Commercial 16, Industrial 32, whose `rooms / 6` comes out at 10 and 2), and 42 for the
+// stride-8 kinds, Residential and Derelict, where 256 rooms / 6 = 42. main passes a cap
+// of 64, which never binds.) A floor's monsters carry 1.9x to 98x what its crates do:
+// nearly even on the hub, two orders of magnitude apart at the bottom. The crate column
+// is also OPTIMISTIC — it prices a crate off the whole-floor table (roomMask 0), while
+// the generator places crates in rooms and a room mask only ever removes candidates, so
+// the real gap is wider than 1.9x everywhere.
 //
 // **This is not caused by the loot table and must not be "fixed" here.** The table
-// LOWERED expected income by 3-10% ([loot_table.h] has the grid); the imbalance is a
+// moved expected income by -10.2% to +4.4% — a discount on 28 of the grid's 30 tier x
+// depth cells, a small gain on the other two ([loot_table.h] has it). The imbalance is a
 // head-count fact — `mob_count_for_floor` reaches 2,157 on floor -26 while
-// `container_budget` caps at 682 and bottoms out at 24. Nobody clears a floor, so what
-// the player feels is softer than the totals; but 22 kills at -26 already out-earn every
-// crate on a 24-crate floor, so the ratio does not save the claim either. Which loop the
-// game pays for is an owner-level balance decision, so it is recorded here with its
-// numbers rather than silently patched by a roller.
+// `container_budget` never exceeds 42 and bottoms out at 24. Nobody clears a floor, so
+// what the player feels is softer than the totals; but 22 kills at -26 already out-earn
+// every crate on a 24-crate floor and 39 do on a 42-crate one, so the ratio does not save
+// the claim either. Which loop the game pays for is an owner-level balance decision, so it
+// is recorded here with its numbers rather than silently patched by a roller.
 #pragma once
 
 #include <cstdint>
