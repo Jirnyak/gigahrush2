@@ -101,23 +101,45 @@ const uint kMatFamily[16] = uint[16](
     7u   // 15 rubble
 );
 
-// x = lognormal sigma reproducing the measured luminance CV,
-// y = the family's structural pitch in cycles per 2 m cell.
-const vec2 kMatSurface[16] = vec2[16](
-    vec2(0.00000,   0.00),  //  0 air / body sentinel
-    vec2(0.00000,   0.00),  //  1 concrete (maze)
-    vec2(0.00000,   0.00),  //  2 soil (maze)
-    vec2(0.00000,   0.00),  //  3 water marker (maze)
-    vec2(0.00000,   0.00),  //  4 tan slab (maze)
-    vec2(0.02999,   0.00),  //  5 extraction pad
-    vec2(0.00000,   0.00),  //  6 unused
-    vec2(0.02999,   0.00),  //  7 nav / hub pad
-    vec2(0.12946,   0.70),  //  8 plaster
-    vec2(0.10967,  20.00),  //  9 parquet
-    vec2(0.15105,  28.00),  // 10 shop shutter
-    vec2(0.07232,   4.00),  // 11 lino
-    vec2(0.22041,  13.00),  // 12 factory wall
-    vec2(0.19217,   8.00),  // 13 tread plate
-    vec2(0.42165,   1.30),  // 14 rust
-    vec2(0.42390,   6.00)   // 15 rubble
+// x = lognormal sigma reproducing measured luminance CV,
+// y = structural pitch in cycles per 2 m cell,
+// z = chroma_sigma (lognormal chroma width),
+// w = bump_scale (normal perturbation scale).
+const vec4 kMatSurface[16] = vec4[16](
+    vec4(0.00000,   0.00, 0.00000, 0.00000),  //  0 air / body sentinel
+    vec4(0.00000,   0.00, 0.00000, 0.00000),  //  1 concrete (maze)
+    vec4(0.00000,   0.00, 0.00000, 0.00000),  //  2 soil (maze)
+    vec4(0.00000,   0.00, 0.00000, 0.00000),  //  3 water marker (maze)
+    vec4(0.00000,   0.00, 0.00000, 0.00000),  //  4 tan slab (maze)
+    vec4(0.02999,   0.00, 0.00000, 0.02000),  //  5 extraction pad
+    vec4(0.00000,   0.00, 0.00000, 0.00000),  //  6 unused
+    vec4(0.02999,   0.00, 0.00000, 0.02000),  //  7 nav / hub pad
+    vec4(0.12946,   0.70, 0.08000, 0.12000),  //  8 plaster
+    vec4(0.10967,  20.00, 0.07000, 0.18000),  //  9 parquet
+    vec4(0.15105,  28.00, 0.05000, 0.40000),  // 10 shop shutter
+    vec4(0.07232,   4.00, 0.04000, 0.20000),  // 11 lino
+    vec4(0.22041,  13.00, 0.08000, 0.35000),  // 12 factory wall
+    vec4(0.19217,   8.00, 0.09000, 0.30000),  // 13 tread plate
+    vec4(0.42165,   1.30, 0.18000, 0.25000),  // 14 rust
+    vec4(0.42390,   6.00, 0.15000, 0.35000)   // 15 rubble
+);
+
+// RGB chroma tint axis per material id.
+const vec3 kMatChromaAxis[16] = vec3[16](
+    vec3(1.00000, 1.00000, 1.00000),  //  0 air / body sentinel
+    vec3(1.00000, 1.00000, 1.00000),  //  1 concrete (maze)
+    vec3(1.00000, 1.00000, 1.00000),  //  2 soil (maze)
+    vec3(1.00000, 1.00000, 1.00000),  //  3 water marker (maze)
+    vec3(1.00000, 1.00000, 1.00000),  //  4 tan slab (maze)
+    vec3(1.00000, 1.00000, 1.00000),  //  5 extraction pad
+    vec3(1.00000, 1.00000, 1.00000),  //  6 unused
+    vec3(1.00000, 1.00000, 1.00000),  //  7 nav / hub pad
+    vec3(1.10000, 1.00000, 0.70000),  //  8 plaster
+    vec3(1.15000, 0.95000, 0.75000),  //  9 parquet
+    vec3(0.90000, 0.95000, 1.10000),  // 10 shop shutter
+    vec3(0.95000, 1.05000, 0.90000),  // 11 lino
+    vec3(0.85000, 1.15000, 0.80000),  // 12 factory wall
+    vec3(1.15000, 0.85000, 0.65000),  // 13 tread plate
+    vec3(1.25000, 0.60000, 0.20000),  // 14 rust
+    vec3(1.10000, 0.90000, 0.70000)   // 15 rubble
 );

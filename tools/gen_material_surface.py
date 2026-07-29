@@ -83,7 +83,7 @@ FAM = {
 
 # One row per material id in src/world/materials.h, in id order.
 #
-#   (id, name, family, csv_id, authored_cv, note)
+#   (id, name, family, csv_id, authored_cv, pitch, chroma_sigma, chroma_axis, bump_scale, note)
 #
 # csv_id is the data/materials.csv row the amplitude is MEASURED from, or None when
 # the pack has no photograph of this material — the honest split materials.h already
@@ -95,43 +95,43 @@ FAM = {
 # is kCellSize = 2 m), so 20 means a 10 cm feature. It is authored, not measured: it
 # is a length, and the CSV measured colour.
 MATERIALS = [
-    (0, "air / body sentinel", "generic", None, 0.0, 0.0,
+    (0, "air / body sentinel", "generic", None, 0.0, 0.0, 0.0, (1.0, 1.0, 1.0), 0.00,
      "never drawn by the world pass; body.vert writes this id so bodies keep the "
      "pre-existing look exactly"),
-    (1, "concrete (maze)", "generic", None, 0.0, 0.0,
+    (1, "concrete (maze)", "generic", None, 0.0, 0.0, 0.0, (1.0, 1.0, 1.0), 0.00,
      "maze test bed — left on the legacy path so app/worldgen.cpp renders as it did"),
-    (2, "soil (maze)", "generic", None, 0.0, 0.0, "maze test bed"),
-    (3, "water marker (maze)", "generic", None, 0.0, 0.0, "maze test bed"),
-    (4, "tan slab (maze)", "generic", None, 0.0, 0.0, "maze test bed"),
-    (5, "extraction pad", "smooth", None, 0.03, 0.0,
+    (2, "soil (maze)", "generic", None, 0.0, 0.0, 0.0, (1.0, 1.0, 1.0), 0.00, "maze test bed"),
+    (3, "water marker (maze)", "generic", None, 0.0, 0.0, 0.0, (1.0, 1.0, 1.0), 0.00, "maze test bed"),
+    (4, "tan slab (maze)", "generic", None, 0.0, 0.0, 0.0, (1.0, 1.0, 1.0), 0.00, "maze test bed"),
+    (5, "extraction pad", "smooth", None, 0.03, 0.0, 0.0, (1.0, 1.0, 1.0), 0.02,
      "the bank must stay unmistakable (materials.h) — a painted plate, no seams, "
      "almost no mottle, so the emerald reads as signage and not as a surface"),
-    (6, "unused", "generic", None, 0.0, 0.0, "no generator writes this id"),
-    (7, "nav / hub pad", "smooth", None, 0.03, 0.0, "as the extraction pad"),
-    (8, "plaster", "plaster", None, 0.13, 0.7,
+    (6, "unused", "generic", None, 0.0, 0.0, 0.0, (1.0, 1.0, 1.0), 0.00, "no generator writes this id"),
+    (7, "nav / hub pad", "smooth", None, 0.03, 0.0, 0.0, (1.0, 1.0, 1.0), 0.02, "as the extraction pad"),
+    (8, "plaster", "plaster", None, 0.13, 0.7, 0.08, (1.10, 1.00, 0.70), 0.12,
      "AUTHORED: the pack has no plaster photograph. Dirty whitewash over precast "
      "panel — clearly mottled, not blotchy. Broad stain blobs at 0.7 cycles/cell "
      "(~2.9 m) give one apartment a different wall from the next"),
-    (9, "parquet", "plank", None, 0.11, 20.0,
+    (9, "parquet", "plank", None, 0.11, 20.0, 0.07, (1.15, 0.95, 0.75), 0.18,
      "AUTHORED: the pack has no wood photograph. Varnish is even within a board; "
      "the visible variation is board-to-board tone, which the plank family puts in "
      "structure rather than in noise. 20 cycles/cell = 10 cm boards"),
-    (10, "shop shutter", "ribbed", "painted_metal_shutter", None, 28.0,
+    (10, "shop shutter", "ribbed", "painted_metal_shutter", None, 28.0, 0.05, (0.90, 0.95, 1.10), 0.40,
      "roller-shutter slats, 28 cycles/cell = 7 cm"),
-    (11, "lino", "tile", "rubber_tiles", None, 4.0,
+    (11, "lino", "tile", "rubber_tiles", None, 4.0, 0.04, (0.95, 1.05, 0.90), 0.20,
      "the CSV role for this row is literally 'smooth dark waterproof rubber with "
      "seams' — the seams are the character, the mottle is nearly nil. 50 cm tiles"),
-    (12, "factory wall", "ribbed", "factory_wall", None, 13.0,
+    (12, "factory wall", "ribbed", "factory_wall", None, 13.0, 0.08, (0.85, 1.15, 0.80), 0.35,
      "green corrugated factory metal. Coarser corrugation than a shutter, 15 cm, "
      "which is what keeps it distinguishable from id 10 beyond its colour"),
-    (13, "tread plate", "tread", "metal_grate_rusty", None, 8.0,
+    (13, "tread plate", "tread", "metal_grate_rusty", None, 8.0, 0.09, (1.15, 0.85, 0.65), 0.30,
      "walkway grate. 8 cycles/cell = 25 cm studs, coarser than the ~3 cm of real "
      "chequer plate: at the range the headlamp lights, real pitch is sub-pixel mush"),
-    (14, "rust", "rust", "rusty_metal_03", None, 1.3,
+    (14, "rust", "rust", "rusty_metal_03", None, 1.3, 0.18, (1.25, 0.60, 0.20), 0.25,
      "render.md: real rust has long-range spatial correlation that FBM reproduces "
      "badly, so the patches come from a THRESHOLDED low-frequency field, not from "
      "another octave. 1.3 cycles/cell = ~1.5 m patches"),
-    (15, "rubble", "rubble", "rusty_corrugated_iron", None, 6.0,
+    (15, "rubble", "rubble", "rusty_corrugated_iron", None, 6.0, 0.15, (1.10, 0.90, 0.70), 0.35,
      "measured amplitude is a hair above rust (0.4437 vs 0.4411 CV) so amplitude "
      "alone cannot separate the two Derelict surfaces — the family does it: chunk "
      "plateaus at 33 cm read as debris where rust reads as staining"),
@@ -161,7 +161,7 @@ def main():
             die("MATERIALS is not in id order: entry %d declares id %d" % (i, m[0]))
 
     out = []
-    for mid, name, fam, csv_id, authored, pitch, note in MATERIALS:
+    for mid, name, fam, csv_id, authored, pitch, chroma_sigma, chroma_axis, bump_scale, note in MATERIALS:
         if fam not in FAM:
             die("material %d (%s) has unknown family %r" % (mid, name, fam))
         if csv_id is not None:
@@ -188,7 +188,9 @@ def main():
                 "would swing albedo by more than the lighting does" % (mid, name, sigma))
         out.append({
             "id": mid, "name": name, "fam": fam, "src": src,
-            "cv": cv, "sigma": sigma, "pitch": pitch, "note": note,
+            "cv": cv, "sigma": sigma, "pitch": pitch,
+            "chroma_sigma": chroma_sigma, "chroma_axis": chroma_axis, "bump_scale": bump_scale,
+            "note": note,
         })
 
     measured = sum(1 for m in out if m["src"] != "authored")
@@ -222,10 +224,18 @@ def main():
         fh.write(elements(out, ["%du" % FAM[m["fam"]] for m in out]))
         fh.write(");\n\n")
 
-        fh.write("// x = lognormal sigma reproducing the measured luminance CV,\n"
-                 "// y = the family's structural pitch in cycles per 2 m cell.\n")
-        fh.write("const vec2 kMatSurface[%d] = vec2[%d](\n" % (MAT_COUNT, MAT_COUNT))
-        fh.write(elements(out, ["vec2(%.5f, %6.2f)" % (m["sigma"], m["pitch"])
+        fh.write("// x = lognormal sigma reproducing measured luminance CV,\n"
+                 "// y = structural pitch in cycles per 2 m cell,\n"
+                 "// z = chroma_sigma (lognormal chroma width),\n"
+                 "// w = bump_scale (normal perturbation scale).\n")
+        fh.write("const vec4 kMatSurface[%d] = vec4[%d](\n" % (MAT_COUNT, MAT_COUNT))
+        fh.write(elements(out, ["vec4(%.5f, %6.2f, %.5f, %.5f)" % (m["sigma"], m["pitch"], m["chroma_sigma"], m["bump_scale"])
+                                for m in out]))
+        fh.write(");\n\n")
+
+        fh.write("// RGB chroma tint axis per material id.\n")
+        fh.write("const vec3 kMatChromaAxis[%d] = vec3[%d](\n" % (MAT_COUNT, MAT_COUNT))
+        fh.write(elements(out, ["vec3(%.5f, %.5f, %.5f)" % m["chroma_axis"]
                                 for m in out]))
         fh.write(");\n")
 

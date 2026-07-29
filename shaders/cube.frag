@@ -400,90 +400,124 @@ float surface(uint mat, vec2 uv, vec3 aw, float px, float g) {
     return 1.0;
 }
 
+// Surface height field for derivative normal perturbation across procedural surface families.
+float surface_height(uint fam, vec2 uv, float pitch, float g) {
+    if (fam == kFamRibbed) {
+        float rib = cos(uv.x * pitch * 6.2831853);
+        float trough = smoothstep(-0.2, -0.95, rib);
+        return rib - 0.5 * trough;
+    }
+    if (fam == kFamTread) {
+        vec2 q = uv * pitch;
+        q.x += 0.5 * floor(q.y);
+        vec2 f = fract(q) - 0.5;
+        float stud = 1.0 - smoothstep(0.28, 0.40, abs(f.x) + abs(f.y));
+        return stud * (1.0 + 0.3 * (f.x + f.y));
+    }
+    if (fam == kFamTile) {
+        vec2 q = uv * pitch;
+        vec2 e = abs(fract(q) - 0.5);
+        float grout = smoothstep(0.42, 0.5, max(e.x, e.y));
+        return -grout;
+    }
+    if (fam == kFamPlank) {
+        float row = floor(uv.y * pitch);
+        float along = uv.x * 5.0 + hash21(vec2(row, 7.0)) * 3.0;
+        float jAcross = smoothstep(0.42, 0.5, abs(fract(uv.y * pitch) - 0.5));
+        float jAlong = smoothstep(0.46, 0.5, abs(fract(along) - 0.5));
+        float streak = vnoise(vec2(uv.x * 40.0, uv.y * pitch * 8.0));
+        return -0.6 * jAcross - 0.4 * jAlong + 0.2 * streak;
+    }
+    if (fam == kFamPlaster) {
+        float stain = vnoise(uv * pitch);
+        return stain * 0.7 + g * 0.3 - 0.4 * seam(uv);
+    }
+    if (fam == kFamRust) {
+        float lo = vnoise(uv * pitch);
+        float hi = vnoise(uv * pitch * 2.85);
+        float mask = smoothstep(0.42, 0.62, lo * 0.65 + hi * 0.35);
+        return -mask + 0.3 * (g - 0.5) * mask;
+    }
+    if (fam == kFamRubble) {
+        float warp = vnoise(uv * 2.3);
+        vec2 q = uv * pitch + warp * 2.5;
+        float chunk = hash21(floor(q)) - 0.5;
+        vec2 e = abs(fract(q) - 0.5);
+        float crack = smoothstep(0.36, 0.5, max(e.x, e.y));
+        return chunk * (1.0 - crack) - 0.8 * crack;
+    }
+    if (fam == kFamGeneric) {
+        return -0.3 * seam(uv) + 0.1 * g;
+    }
+    return 0.0;
+}
+
+vec2 compute_grad_uv(uint fam, vec2 uv, float pitch, float g) {
+    float eps = 0.005;
+    float h0 = surface_height(fam, uv, pitch, g);
+    float hu = surface_height(fam, uv + vec2(eps, 0.0), pitch, g);
+    float hv = surface_height(fam, uv + vec2(0.0, eps), pitch, g);
+    return vec2(hu - h0, hv - h0) / eps;
+}
+
+vec3 apply_chroma(vec3 albedo, uint id, vec2 uv, float pitch) {
+    float chroma_sig = kMatSurface[id].z;
+    if (chroma_sig > 0.001) {
+        vec3 chroma_axis = kMatChromaAxis[id];
+        float n_chroma = vnoise(uv * pitch * 0.7 + vec2(17.3, 31.7));
+        float z_chroma = (n_chroma - 0.5) * kNormNoise;
+        vec3 chroma_mod = exp(z_chroma * chroma_sig * chroma_axis - 0.5 * chroma_sig * chroma_sig * chroma_axis * chroma_axis);
+        return albedo * chroma_mod;
+    }
+    return albedo;
+}
+
 void main() {
-    vec3 n = normalize(vNormal);
+    vec3 n_geom = normalize(vNormal);
 
     // Triplanar-by-dominant-axis UV: the cube faces are axis-aligned, so the two
     // world coordinates that are NOT the face normal are already a correct,
     // seamless, non-stretching parameterisation. No UV attribute needed, and it
     // stays continuous across neighbouring cells because it is world-space.
-    //
-    // WORLD-space is load-bearing, not incidental, and this is the line that makes
-    // run merging possible at all. The world pass emits one stretched box per merged
-    // run of cells (render/cube_merge.h), so a single primitive can be twenty cells
-    // long. Because uv is derived from vWorldPos it sweeps twenty cells' worth of
-    // pattern and the parquet planks and tread-plate lozenges keep their real pitch;
-    // re-express this in the cube-local [0,1] corner — the obvious "optimisation",
-    // since inPos is right there in the vertex stage — and every merged box smears
-    // its texture along the run. There is no per-instance scale left to correct for
-    // it with: those four bytes are now the span.
-    vec3 aw = abs(n);
+    vec3 aw = abs(n_geom);
     vec2 uv = aw.z > 0.5 ? vWorldPos.xy
             : (aw.x > 0.5 ? vWorldPos.yz : vWorldPos.xz);
     uv /= 2.0;                              // kCellSize: one unit == one cell
 
-    // Per-material surface. Brightness-only, so a surface keeps its cell-type hue and
-    // the faction/tier palette contract is untouched; multiplicative and strictly
-    // positive, so it cannot lift a fogged pixel off black.
-    //
-    // The shared two-octave grain is computed here rather than inside surface() so
-    // the expensive part stays out of the divergent branch — most families use it as
-    // their fine layer. `px` is how much uv moves per pixel, which is what lets the
-    // periodic families fade themselves out before they alias.
-    //
-    // BOTH are computed before the textured/procedural branch below, deliberately:
-    // fwidth() in divergent control flow has undefined results, and hoisting it is
-    // free where reasoning about quad uniformity is not. `g` is wasted on a textured
-    // pixel; deleting the whole procedural layer was MEASURED at +0.05 ms on this
-    // pass (see cube_pass.h), i.e. inside the noise, so that waste is not worth a
-    // second branch.
     float g = grain(uv);
     float px = max(fwidth(uv.x), fwidth(uv.y));
 
-#ifdef GIGA_ALBEDO_ARRAY
-    // THE SAMPLED ALBEDO REPLACES BOTH the per-material constant colour and the
-    // procedural surface, for the six materials that have a photograph. It does not
-    // modulate them, and that is arithmetic rather than taste:
-    //
-    //   * the constant in cube_pass.cpp kMaterial[10..15] IS the measured mean
-    //     albedo of this very photograph, so texture * constant would darken every
-    //     bound material by its own mean — the shutter's 0.50 grey would land at
-    //     0.25;
-    //   * kMatSurface[id].x is the lognormal sigma solved from the measured
-    //     luminance CV of that same photograph (data/materials.csv lum_std, via
-    //     tools/gen_material_surface.py). Multiplying two unit-mean factors that
-    //     each reproduce CV c gives CV sqrt((1+c*c)^2 - 1): rust 0.4411 -> 0.657,
-    //     tread 0.1940 -> 0.277, lino 0.0724 -> 0.1025. Keeping both would
-    //     over-contrast every bound material by exactly the amount the generator
-    //     was calibrated to produce ONCE.
-    //   * the families exist because there was no image (see the header comment
-    //     above `hash21`). Where the image exists it also carries the STRUCTURE the
-    //     generator had to author blind — real corrugation, real grate, real
-    //     corrosion edges — which was the weakest part of the procedural pass.
-    //
-    // NO pow() ON THE SAMPLE. The array is a *_SRGB format, so the sampler has
-    // already linearised each texel in hardware, before filtering. Applying
-    // kGamma here as well would darken mid-grey by roughly 2x — the classic failure
-    // this whole path is documented against in data/textures/README.md.
-    //
-    // vColor MEANS SOMETHING DIFFERENT ON THIS BRANCH, and cube_pass.cpp writes it
-    // to match: a LINEAR multiplier, exactly (1,1,1) unless the cell is fluid-
-    // tinted, in which case it is the linear ratio tinted/base. That is what keeps
-    // a flooded floor blue without the shader needing a per-material mean albedo it
-    // has no way to know.
     uint mid = min(vMat, kMatSurfaceCount - 1u);
+    uint fam = kMatFamily[mid];
+    float bump = kMatSurface[mid].w;
+
+    vec3 n = n_geom;
+    if (bump > 0.001) {
+        vec2 grad_uv = compute_grad_uv(fam, uv, kMatSurface[mid].y, g);
+        vec3 grad_world;
+        if (aw.z > 0.5) {
+            grad_world = vec3(-grad_uv.x * sign(n_geom.z), -grad_uv.y * sign(n_geom.z), 0.0);
+        } else if (aw.x > 0.5) {
+            grad_world = vec3(0.0, -grad_uv.x * sign(n_geom.x), -grad_uv.y * sign(n_geom.x));
+        } else {
+            grad_world = vec3(-grad_uv.x * sign(n_geom.y), 0.0, -grad_uv.y * sign(n_geom.y));
+        }
+        n = normalize(n_geom + bump * grad_world);
+    }
+
+#ifdef GIGA_ALBEDO_ARRAY
     vec3 albedo;
     if ((uint(pc.torus.z) & (1u << mid)) != 0u) {
         albedo = texture(uAlbedo, vec3(uv * kTexRepeat, float(mid))).rgb * vColor;
     } else {
         albedo = pow(vColor, vec3(kGamma));
         albedo *= surface(vMat, uv, aw, px, g);
+        albedo = apply_chroma(albedo, mid, uv, kMatSurface[mid].y);
     }
 #else
-    // Instance colours are authored as display-referred values; linearise once
-    // so the lighting arithmetic below is physically sane.
     vec3 albedo = pow(vColor, vec3(kGamma));
     albedo *= surface(vMat, uv, aw, px, g);
+    albedo = apply_chroma(albedo, mid, uv, kMatSurface[mid].y);
 #endif
 
     // Distance is computed per-fragment, not interpolated from the vertex stage.
