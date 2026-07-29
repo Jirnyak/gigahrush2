@@ -255,16 +255,46 @@ if(GIGA_BUILD_TESTS)
     # whether the seven known findings were outstanding or whether somebody had also
     # broken an unrelated regression test. That demoted ~45 real gates to stderr.
     #
-    # WILL_FAIL inverts the exit code: ctest is GREEN while the findings stand, and goes
-    # RED the moment the last one is fixed. That is the tripwire, not a regression —
-    # whoever closes a finding has to come here and say so. Rationale and the honest
-    # limitation (WILL_FAIL cannot tell an expected assertion failure from a crash) are
-    # documented at the top of tests/audit_test.cpp.
+    # THE COUNT IS PINNED, NOT THE EXIT CODE INVERTED — and the difference is the whole
+    # gate. This test used to carry WILL_FAIL TRUE, which inverts `main`'s
+    # `return g_fails == 0 ? 0 : 1`. That is one bit, "some check failed", never a count,
+    # and today six of the seven findings are CLOSED pins rather than live defects. So
+    # under WILL_FAIL, regressing any one of those six moved the failure count 2 -> 3,
+    # which is still non-zero, still inverted, and **ctest stayed GREEN**. Six tripwires
+    # that read like guards were not guards. The same hole swallowed a crash: die before
+    # the count line prints and the exit code is still non-zero, so that was green too
+    # (documented at tests/audit_test.cpp:26-28).
+    #
+    # PASS_REGULAR_EXPRESSION closes both. It matches the literal line `main` prints, so
+    # the test passes only when the run reached the end AND landed on exactly the expected
+    # tally — a regression moves a number and the regex misses; a crash never prints the
+    # line and the regex misses. It also overrides the exit-code check, which is what lets
+    # a target that legitimately exits 1 report green. WILL_FAIL is GONE rather than left
+    # alongside: CMake ignores it once a pass regex is set, so leaving it would read as if
+    # the inversion were still live.
+    #
+    # Both numbers are pinned on purpose. `failures` is the gate. `checks` catches the
+    # other way a tripwire stops tripping silently — delete a test from
+    # `test_audit_all()` and the failure count would not move while the coverage did.
+    # The cost is that adding a CHECK is a deliberate edit here, which is the intended
+    # friction for this file.
+    #
+    # OBSERVED, not derived: `build-win\audit_test.exe` printed
+    # `audit_test: 41 checks, 2 failures` on 2026-07-29. Both failures are finding 5
+    # (suite_audit.inl descend_not_free), which its own ledger entry documents as
+    # unsatisfiable as written — the test is the defect there, not the game.
+    #
+    # IF YOU CLOSE A FINDING (or add a check), this test goes RED. That is the tripwire
+    # firing, not a regression. Run the exe, read its count line, change the numbers
+    # below to what it printed, and NAME THE DEAD DEFECT IN YOUR COMMIT MESSAGE. Do not
+    # tune the number until green without reading why it moved: a count that drifted for
+    # a reason nobody wrote down is how this file stops meaning anything.
     add_executable(audit_test tests/audit_test.cpp)
     target_link_libraries(audit_test PRIVATE giga_game)
     giga_target_flags(audit_test OFF)
     add_test(NAME audit_findings COMMAND audit_test)
-    set_tests_properties(audit_findings PROPERTIES WILL_FAIL TRUE)
+    set_tests_properties(audit_findings PROPERTIES
+        PASS_REGULAR_EXPRESSION "audit_test: 41 checks, 2 failures")
 
     add_executable(game_test tests/game_test.cpp)
     target_link_libraries(game_test PRIVATE giga_game)
