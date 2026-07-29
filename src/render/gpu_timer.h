@@ -47,6 +47,14 @@
 // be emulated at a coarser granularity than a single draw call, so treat a
 // per-pass split there as suspect until it is cross-checked against the frame
 // total; the Windows/NVIDIA path is the one verified by measurement.
+//
+// AND THE INSTRUMENT MUST BE ABLE TO MEASURE ITSELF. GIGA_GPU_TIMER=0 disables
+// the whole module at init(), which is the only way to find out what the eight
+// timestamp writes and the query-pool reset cost per frame: a BOTTOM_OF_PIPE
+// timestamp is an ordering point the driver has to honour, and "it is probably
+// free" is an opinion. Same-binary A/B, like GIGA_CUBE_MAXRUN in cube_pass.cpp,
+// because a rebuild between two numbers is how a thermally-downclocked
+// "improvement" gets published.
 #pragma once
 
 #include <vulkan/vulkan.h>
@@ -108,6 +116,31 @@ public:
     }
     float frame_ms() const { return smoothed_[kGpuPassCount]; }
 
+    // WORST frame in the same window, and it is not redundant with the median.
+    //
+    // The median exists to be steady (see push_sample) and a median is *designed*
+    // to discard outliers: it takes 16 slow frames out of 31 to move it. That is
+    // the right default readout and the wrong tool for a stutter — a change that
+    // costs 5 ms on one frame in six does not move pass_ms() at all, and a
+    // one-frame-in-six hitch is exactly what a geometry or upload change
+    // introduces. The pair is the point: the median says what the frame usually
+    // costs, the peak says whether "usually" is the whole story. Free to compute
+    // — the window is already insertion-sorted to find the median, so the maximum
+    // is the last element of a buffer that has already been sorted.
+    float pass_ms_max(GpuPass p) const {
+        return peak_[static_cast<std::uint32_t>(p)];
+    }
+    float frame_ms_max() const { return peak_[kGpuPassCount]; }
+
+    // Samples thrown away since boot because vkGetQueryPoolResults answered
+    // VK_NOT_READY (or failed). collect() never stalls, so a dropped sample is
+    // the correct behaviour — but it USED TO BE SILENT, and a silent drop means
+    // the median on screen was computed over an older window than the reader
+    // thinks. A number that is not growing means the readout is live; one that is
+    // growing means every figure here is stale and a 0.05 ms delta means nothing.
+    // Read it before believing a small difference.
+    std::uint32_t dropped() const { return dropped_; }
+
     // Device facts, for the boot log and for anyone who wants to know how much
     // resolution the numbers actually have.
     float period_ns() const { return periodNs_; }
@@ -132,11 +165,14 @@ private:
     std::uint32_t active_ = 0; // slot currently being recorded
     bool pending_[kMaxFramesInFlight] = {};
 
-    // Ring of raw samples per channel + the median over the filled portion.
+    // Ring of raw samples per channel + the median and the maximum over the
+    // filled portion.
     float ring_[kChannels][kGpuTimerWindow] = {};
     std::uint32_t ringHead_ = 0;
     std::uint32_t ringCount_ = 0;
     float smoothed_[kChannels] = {};
+    float peak_[kChannels] = {};
+    std::uint32_t dropped_ = 0;
 
     void push_sample(const float ms[kChannels]);
 };

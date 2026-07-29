@@ -2,15 +2,26 @@
 
 #include "render/vk_device.h"
 
+#include <cstdlib>
+#include <cstring>
+
 namespace giga::gpu {
 
 namespace {
 
-// Median of the first `n` entries of `src`. Copies into a fixed stack buffer and
-// insertion-sorts it: n is 31, so this is ~240 compares once per frame, and it
-// allocates nothing (hot-path rule in AGENTS.md).
-float median_of(const float* src, std::uint32_t n) {
-    if (n == 0) return 0.0f;
+// Median AND maximum of the first `n` entries of `src`. Copies into a fixed stack
+// buffer and insertion-sorts it: n is 31, so this is ~240 compares once per
+// frame, and it allocates nothing (hot-path rule in AGENTS.md).
+//
+// Both statistics come out of the one sort because the maximum of a sorted buffer
+// is its last element — the peak channel therefore costs a single load, not a
+// second pass, which is why it was worth adding at all.
+void stats_of(const float* src, std::uint32_t n, float* median, float* peak) {
+    if (n == 0) {
+        *median = 0.0f;
+        *peak = 0.0f;
+        return;
+    }
     float buf[kGpuTimerWindow];
     if (n > kGpuTimerWindow) n = kGpuTimerWindow;
     for (std::uint32_t i = 0; i < n; ++i) buf[i] = src[i];
@@ -20,13 +31,39 @@ float median_of(const float* src, std::uint32_t n) {
         while (j > 0 && buf[j - 1] > v) { buf[j] = buf[j - 1]; --j; }
         buf[j] = v;
     }
-    return buf[n / 2];
+    *median = buf[n / 2];
+    *peak = buf[n - 1];
+}
+
+// GIGA_GPU_TIMER=0 (or "off"/"no") turns the whole module off. Anything else,
+// including the variable being absent, leaves it on: instrumentation is on by
+// default and the off switch exists only so its own cost can be measured.
+bool disabled_by_env() {
+    const char* e = std::getenv("GIGA_GPU_TIMER");
+    if (!e) return false;
+    return std::strcmp(e, "0") == 0 || std::strcmp(e, "off") == 0
+           || std::strcmp(e, "no") == 0;
 }
 
 } // namespace
 
 void GpuTimer::init(VulkanDevice& d) {
     dev_ = &d;
+
+    // Read once, before anything is created, so the disabled path records not one
+    // command and allocates not one query. Checked ahead of the capability probe
+    // deliberately: the log then says "you turned it off", never "your hardware
+    // cannot", which are two very different reasons for a HUD reading n/a.
+    if (disabled_by_env()) {
+        // ASCII only in the runtime string: this host's console is CP1251 and the
+        // em dash the rest of this file uses in comments comes out as mojibake.
+        std::fprintf(stderr,
+                     "[gpu-timer] GIGA_GPU_TIMER=0: per-pass GPU timing OFF by "
+                     "request (no query pool, no timestamp commands recorded); "
+                     "HUD will read n/a. Unset the variable to re-enable.\n");
+        supported_ = false;
+        return;
+    }
 
     // timestampPeriod is nanoseconds per tick and is NOT 1 everywhere. Measured
     // on this machine: 1.000 (RTX 3060 Laptop). Commonly reported elsewhere and
@@ -46,7 +83,7 @@ void GpuTimer::init(VulkanDevice& d) {
     if (validBits_ == 0 || periodNs_ <= 0.0f) {
         std::fprintf(stderr,
                      "[gpu-timer] unsupported on graphics family "
-                     "(validBits=%u period=%.3f ns, computeAndGraphics=%d) — "
+                     "(validBits=%u period=%.3f ns, computeAndGraphics=%d): "
                      "per-pass GPU timing disabled, HUD will read n/a\n",
                      validBits_, periodNs_, static_cast<int>(uniform));
         supported_ = false;
@@ -66,7 +103,7 @@ void GpuTimer::init(VulkanDevice& d) {
     const VkResult r = vkCreateQueryPool(d.device, &ci, nullptr, &pool_);
     if (r != VK_SUCCESS) {
         std::fprintf(stderr,
-                     "[gpu-timer] vkCreateQueryPool failed: %s — per-pass GPU "
+                     "[gpu-timer] vkCreateQueryPool failed: %s - per-pass GPU "
                      "timing disabled\n", vk_result_str(r));
         pool_ = VK_NULL_HANDLE;
         supported_ = false;
@@ -151,7 +188,14 @@ void GpuTimer::collect(std::uint32_t frameIndex) {
     const VkResult r = vkGetQueryPoolResults(
         dev_->device, pool_, base, kGpuMarksPerFrame, sizeof(raw), raw,
         sizeof(std::uint64_t), VK_QUERY_RESULT_64_BIT);
-    if (r != VK_SUCCESS) return; // VK_NOT_READY: drop the sample, never stall
+    if (r != VK_SUCCESS) {
+        // VK_NOT_READY: drop the sample, never stall — but COUNT it. A silent
+        // drop leaves the median on screen computed over an older window than the
+        // reader believes, and there was previously no way to tell that from a
+        // steady frame. See GpuTimer::dropped().
+        ++dropped_;
+        return;
+    }
 
     for (std::uint32_t i = 0; i < kGpuMarksPerFrame; ++i) raw[i] &= mask_;
 
@@ -177,12 +221,17 @@ void GpuTimer::collect(std::uint32_t frameIndex) {
 // outright: it takes 16 slow frames out of 31 to move it, which no transient
 // does. 31 frames is ~0.5 s at 60 Hz — long enough to be steady on screen,
 // short enough that a shader edit shows up as soon as the window is looked at.
+//
+// The window MAXIMUM is kept alongside it, from the same sort, precisely because
+// the median throws away the information a stutter lives in. Neither statistic is
+// sufficient alone: a median that did not move plus a peak that doubled is a
+// hitch, and a median that moved with the peak is a genuine cost change.
 void GpuTimer::push_sample(const float ms[kChannels]) {
     for (std::uint32_t c = 0; c < kChannels; ++c) ring_[c][ringHead_] = ms[c];
     ringHead_ = (ringHead_ + 1) % kGpuTimerWindow;
     if (ringCount_ < kGpuTimerWindow) ++ringCount_;
     for (std::uint32_t c = 0; c < kChannels; ++c)
-        smoothed_[c] = median_of(ring_[c], ringCount_);
+        stats_of(ring_[c], ringCount_, &smoothed_[c], &peak_[c]);
 }
 
 } // namespace giga::gpu
