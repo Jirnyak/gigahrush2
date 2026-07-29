@@ -23,6 +23,17 @@ namespace giga::game {
 
 namespace {
 
+bool adjacent_wall(const MacroGrid& grid, const vec3& pos) {
+    const int cx = static_cast<int>(pos.x / kCellSize);
+    const int cy = static_cast<int>(pos.y / kCellSize);
+    const int cz = static_cast<int>(pos.z / kCellSize);
+    if (cz < 0 || cz >= kMacroDim) return false;
+    return grid.cell(cx + 1, cy, cz) != kCellAir ||
+           grid.cell(cx - 1, cy, cz) != kCellAir ||
+           grid.cell(cx, cy + 1, cz) != kCellAir ||
+           grid.cell(cx, cy - 1, cz) != kCellAir;
+}
+
 // Percentage mitigation, clamped. A negative resist is a vulnerability, which is
 // why this does not clamp the low end at zero.
 std::int16_t mitigate(std::int16_t raw, std::int8_t resistPct) {
@@ -71,7 +82,8 @@ bool entity_health(const Registry& reg, const NpcPool& pool, Entity e,
 }
 
 DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
-                          std::int16_t raw, DamageChannel ch, Entity source) {
+                          std::int16_t raw, DamageChannel ch, Entity source,
+                          const MacroGrid* grid) {
     DamageResult out;
     if (!reg.valid(target) || raw <= 0) return out;
     if (reg.all_of<Dead>(target)) return out;  // already scheduled to die
@@ -82,6 +94,26 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
         std::size_t i = static_cast<std::size_t>(ch);
         if (i < kDamageChannels) dmg = mitigate(raw, a->resist[i]);
     }
+
+    // Defender behaviour incoming damage multiplier (e.g. WallBrace armour against walls)
+    if (grid && reg.all_of<MobRef>(target)) {
+        if (const MobRef* m = reg.try_get<MobRef>(target)) {
+            const MobDef& def = kMobTable[m->kind];
+            const auto beh = static_cast<MobBehaviour>(def.behaviour);
+            if (wall_query_needed(def.aiFlags, beh)) {
+                if (const Transform* tr = reg.try_get<Transform>(target)) {
+                    const bool nearWall = adjacent_wall(*grid, tr->pos);
+                    const float incMult = behaviour_incoming_mult(beh, nearWall);
+                    if (incMult != 1.0f) {
+                        int mitigated = static_cast<int>(static_cast<float>(dmg) * incMult + 0.5f);
+                        if (mitigated < 1 && dmg > 0) mitigated = 1;
+                        dmg = static_cast<std::int16_t>(mitigated);
+                    }
+                }
+            }
+        }
+    }
+
     out.blocked = static_cast<std::int16_t>(raw - dmg);
 
     // Where the HP lives depends on what the target is, and that is the only
@@ -152,22 +184,6 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
     return static_cast<std::uint32_t>(doomed.size());
 }
 
-// Is any of the four cardinal neighbours solid? Duplicated deliberately rather than
-// exported from wander.cpp: it is four lines, both callers want it inlined in a hot
-// loop, and a shared helper would drag a header dependency between two systems that
-// are otherwise independent. If a third caller appears, promote it then.
-namespace {
-bool adjacent_wall(const MacroGrid& grid, const vec3& pos) {
-    const int cx = static_cast<int>(pos.x / kCellSize);
-    const int cy = static_cast<int>(pos.y / kCellSize);
-    const int cz = static_cast<int>(pos.z / kCellSize);
-    if (cz < 0 || cz >= kMacroDim) return false;
-    return grid.cell(cx + 1, cy, cz) != kCellAir ||
-           grid.cell(cx - 1, cy, cz) != kCellAir ||
-           grid.cell(cx, cy + 1, cz) != kCellAir ||
-           grid.cell(cx, cy - 1, cz) != kCellAir;
-}
-} // namespace
 
 std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
                              NpcPool& pool, EventBus& bus,
@@ -177,9 +193,10 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
     // per-monster and cannot be hoisted the same way ([hunt.h]).
     Entity player = entt::null;
     vec3 playerPos{0, 0, 0};
+    float playerFwdX = 1.0f, playerFwdY = 0.0f;
+    bool havePlayer = false;
     for (auto e : reg.view<const CameraTag, const Transform>()) {
         const Transform& tr = reg.get<const Transform>(e);
-        if (tr.layer != layer) continue;
         // ...unless monsters do not consider that body prey.
         //
         // This is the first LIVE consumer of the faction matrix, and it needed one:
@@ -335,11 +352,30 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         // back. Combined with the matching speed bonus in wander.cpp, this makes a
         // corridor a genuinely worse place to be caught than an open room — level
         // design out of geometry that already exists. [mob_behaviour.h]
-        const bool nearWall = adjacent_wall(grid, tr.pos);
-        if (has_flag(def.aiFlags, AiFlag::WallBias))
-            dmg *= wall_bias_damage(def.aiFlags, nearWall);
+        // Wall-adjacency bias and precedence logic
         const auto beh = static_cast<MobBehaviour>(def.behaviour);
-        dmg *= behaviour_damage_mult(beh, nearWall);
+        const bool nearWall = wall_query_needed(def.aiFlags, beh)
+                                  ? adjacent_wall(grid, tr.pos)
+                                  : false;
+        if (behaviour_claims_damage(beh)) {
+            dmg *= behaviour_damage_mult(beh, nearWall);
+        } else if (has_flag(def.aiFlags, AiFlag::WallBias)) {
+            dmg *= wall_bias_damage(def.aiFlags, nearWall);
+        }
+
+        // Directional damage multiplier for DeadEcho (viewer facing)
+        if (victim == player && havePlayer) {
+            const float pdx = wrap_delta_f(playerPos.x, tr.pos.x, kWorldExtent);
+            const float pdy = wrap_delta_f(playerPos.y, tr.pos.y, kWorldExtent);
+            dmg *= facing_damage_mult(beh, playerFwdX, playerFwdY, pdx, pdy);
+        }
+
+        // Burst damage multiplier for FractureSprint (sprint phase)
+        const float dist = std::sqrt(d2);
+        const BurstPhase bp = burst_phase(
+            beh, static_cast<std::uint32_t>(entt::to_integral(e)), tick, dist);
+        dmg *= burst_damage_mult(bp);
+
         const std::int16_t raw = static_cast<std::int16_t>(dmg);
 
         // Melee first: if it can touch you, it touches you. Reach is in cells.
@@ -399,7 +435,7 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         // a target that is `Dead`, returns hit == false, and so leaves that mob's
         // cooldown unset exactly as the break did.
         DamageResult r = apply_damage(reg, pool, s.target, s.raw,
-                                      DamageChannel::Kinetic, s.mob);
+                                      DamageChannel::Kinetic, s.mob, &grid);
         if (r.hit) {
             ++swings;
             if (MobCombat* mc = reg.try_get<MobCombat>(s.mob))
@@ -828,10 +864,10 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         // a channel is a property of the SHOT and not of what it happened to strike.
         const DamageChannel ch = static_cast<DamageChannel>(h.channel);
         if (h.onVictim && victim != entt::null) {
-            DamageResult r = apply_damage(reg, pool, victim, h.dmg, ch, h.source);
+            DamageResult r = apply_damage(reg, pool, victim, h.dmg, ch, h.source, &grid);
             if (r.hit) landed = true;
         } else if (h.other != entt::null && reg.valid(h.other)) {
-            DamageResult r = apply_damage(reg, pool, h.other, h.dmg, ch, h.source);
+            DamageResult r = apply_damage(reg, pool, h.other, h.dmg, ch, h.source, &grid);
             if (r.hit) {
                 landed = true;
                 // Credit the shooter, the same way the melee path credits a swing.

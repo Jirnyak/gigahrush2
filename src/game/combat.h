@@ -319,7 +319,8 @@ struct DamageResult {
 // channel mitigation, clamps, and tags `Dead` on reaching zero. Does **not**
 // destroy the entity — see finalize_deaths.
 DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
-                          std::int16_t raw, DamageChannel ch, Entity source);
+                          std::int16_t raw, DamageChannel ch, Entity source,
+                          const MacroGrid* grid = nullptr);
 
 // THE death finalizer, and the only place an entity dies. Publishes one NpcDied
 // per death (payload: `a` = victim NpcId or kInvalidNpc for a mob, `b` = MobKind
