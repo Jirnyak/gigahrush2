@@ -40,8 +40,18 @@ layout(push_constant) uniform Push {
     vec4 sunDir;   // xyz = direction toward the fill light, w = fill strength
     vec4 camPos;   // xyz = camera world position, w = headlamp intensity
     vec4 fog;      // x = fog start, y = fog end, z = lamp radius, w = ambient
-    vec4 torus;    // x = wrap period (kWorldExtent); unused here, declared so the
-                   // block matches cube.vert exactly (shared pipeline layout)
+    vec4 torus;    // x = wrap period (kWorldExtent), read by cube.vert, not here.
+                   // y = the direct-light AO share, read at `aoDirect` below.
+                   // z = BITMASK of material ids that have a live photographic
+                   //     albedo layer. READ below under GIGA_ALBEDO_ARRAY, so this
+                   //     lane is NOT free: do not repurpose it. CubePass::record
+                   //     overwrites whatever the caller put there with what the
+                   //     loader actually decoded (see CubePush in
+                   //     render/cube_pass.h); body_pass leaves it 0 and compiles
+                   //     the plain module, which never reads it.
+                   // w free.
+                   // Declared in full either way so the block matches cube.vert
+                   // exactly (shared pipeline layout).
 } pc;
 
 layout(location = 0) out vec4 outColor;
@@ -91,8 +101,16 @@ const float kTexRepeat = 0.5;
 // ---------------------------------------------------------------------------
 // Procedural surface detail
 // ---------------------------------------------------------------------------
-// Generated, not sampled: there is no image decoder in the tree (deps are only
-// EnTT/ImGui/SDL3/Vulkan) and no texture to sample even if there were. More to
+// Generated, not sampled - and still the path for TEN of the sixteen materials,
+// which is why it is not deleted now that six of them are photographs.
+//
+// The claim that used to justify this whole section, "there is no image decoder in
+// the tree (deps are only EnTT/ImGui/SDL3/Vulkan) and no texture to sample even if
+// there were", is NO LONGER TRUE and is corrected here rather than left to mislead:
+// libktx is linked and src/render/vk_texture.cpp decodes the six maps in
+// data/textures, which ids 10..15 sample on the branch below. What keeps this layer
+// alive is the rest of that original argument, which the pack does not answer: ids
+// 1..9 have no photograph at all. More to
 // the point, a khrushchevka is up to 255 floors deep — a fixed atlas would give
 // every one of them the same six surfaces, while a position-hashed generator
 // gives every *apartment* its own. render.md:26 sanctions exactly this.

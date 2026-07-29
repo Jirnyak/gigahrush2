@@ -2,7 +2,7 @@
 // KTX2 / UASTC+zstd pack in data/textures.
 //
 // WHY THIS FILE EXISTS. Until it did, this engine had no image decoder at all —
-// shaders/cube.frag says so in its own comment ("Generated, not sampled: there is
+// shaders/cube.frag SAID so in its own comment ("Generated, not sampled: there is
 // no image decoder in the tree") — so the photographs committed under
 // data/textures were 25 MiB of bytes that nothing read. That is the repository's
 // recurring failure shape: a real asset with no system behind it.

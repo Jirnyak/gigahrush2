@@ -15,12 +15,19 @@ namespace {
 // The kInvalidNpc branch is LOAD-BEARING, not a defensive nicety. `pool.handle(id)`
 // packs `id & kNpcIdMask`, so handing it kInvalidNpc (0xFFFFFFFF) masks down to id
 // 0xFFFFF — 1,048,575, a perfectly legal slot (kNpcPoolSize - 1) — and pairs it with
-// whatever generation that untouched slot reports, i.e. 0. The result is a handle that
-// is not kInvalidHandle and names a real row. `handle_valid` would call it stale (the id
-// is past count_), which is worse than wrong: the stale branch below would then run a
-// replacement scan and designate the floor's HIGHEST-id resident, silently converting
-// "this module has no designate" into "this module designates somebody". The two states
-// have to stay distinguishable, so the only handle meaning "nobody" is kInvalidHandle.
+// whatever generation that slot reports. The result is a handle that is not
+// kInvalidHandle and names a real, in-range row, so no bounds check anywhere catches it.
+// Both answers `handle_valid` can then give are wrong, and the second is the worse one:
+//   * On a pool below the high-water mark it reads STALE (0xFFFFF >= count_), which routes
+//     into the replacement scan below and designates the floor's HIGHEST-id resident —
+//     silently converting "this module has no designate" into "it designates somebody".
+//   * Exhausted reserve is the case that actually PRODUCES kInvalidNpc here, and there
+//     count_ == kNpcPoolSize, so 0xFFFFF is in range, alive, and at whatever generation
+//     it holds. handle_valid can then answer TRUE and designate slot 1,048,575 — a total
+//     stranger, no scan involved and nothing anomalous to see.
+// The two states have to stay distinguishable, so the only handle meaning "nobody" is
+// kInvalidHandle. [tests/suite_saveload.inl] candidate_slot_recycled asserts the packing
+// arithmetic directly rather than leaving this paragraph as the only record of it.
 //
 // seed_floor_from_spec returns kInvalidNpc when it placed nobody — a spec with
 // population 0, or a pool whose reserve is exhausted.
@@ -147,12 +154,14 @@ void FloorStreamer::embody_crowd(Registry& ecs, NpcPool& pool, FloorModule& fm,
     // generation check exists to make: the slot whose occupant changed is precisely the
     // one the failed check just disqualified, and re-picking it would reproduce the bare-
     // id outcome byte for byte — the newborn who took a dead resident's slot would get
-    // the camera anyway, and the check would be unobservable. It costs nothing in the
-    // shipping configuration, where recycling is off and a corpse is not in any bucket
-    // (kill() relabels it kNoFloorLabel). The one case it gives up on is a floor whose
-    // only live non-embodied resident IS that recycled slot, which then designates
-    // nobody — same as case 2, and a floor with one resident is not the scenario this
-    // guard is for.
+    // the camera anyway, and the check would be unobservable. Recycling IS armed in the
+    // shipping build ([src/app/main.cpp] `pool.set_recycling(true)`), so this exclusion is
+    // live policy rather than insurance; with it disarmed it would cost nothing at all,
+    // since a corpse is then in no bucket (kill() relabels it kNoFloorLabel) and the
+    // skipped id could never come up. The one case it gives up on is a floor whose only
+    // live non-embodied resident IS that recycled slot, which then designates nobody —
+    // same as case 2, and a floor with one resident is not the scenario this guard is for.
+    // Asserted, not assumed: [tests/suite_saveload.inl] candidate_slot_recycled case 5.
     //
     // The replacement is stamped back into fm.candidate so the designation is decided
     // once rather than re-derived against a roster that keeps moving.

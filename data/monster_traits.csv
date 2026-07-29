@@ -1,0 +1,23 @@
+idx,id,resist_kinetic,resist_buckshot,resist_energy,resist_fire,resist_psi,terrain,wet_move,dry_move,wet_dmg,dry_dmg,wet_incoming,wet_regen_hps,vuln_channel,vuln_floor_pct,bait,ref
+0,SBORKA,0,0,0,0,0,ANY,1,1,1,1,1,0,,0,starch|sugar|stale|govnyak,monster_bait.ts:74 BAIT_TRAITS_BY_ECOLOGY_TAG.monster_sborka
+1,TVAR,0,0,0,0,0,ANY,1,1,1,1,1,0,,0,meat|govnyak,monster_bait.ts:75 BAIT_TRAITS_BY_ECOLOGY_TAG.monster_tvar
+2,POLZUN,0,0,0,0,0,ANY,1,1,1.35,1,1,0,,0,fungal|wet|govnyak,ai/monster.ts:5139 inPolzunKillCell 1.35 + monster_bait.ts:77
+18,PECHATEED,0,0,0,0,0,ANY,1,1,1,1,1,0,,0,document,monster_bait.ts:80 BAIT_TRAITS_BY_ECOLOGY_TAG.monster_pechateed
+19,TUBE_EEL,0,0,0,0,0,WET,1.45,0.72,1.18,0.78,1,0,,0,meat|wet|fungal|govnyak,ai/monster.ts:5107 waterStrider 1.45/0.72 + :5159 dmg 1.18/0.78
+22,KRYSNOZHKA,0,0,0,0,0,ANY,1,1,1,1,1,0,,0,meat|fungal|stale|govnyak,monster_bait.ts:71 BAIT_TRAITS_BY_ECOLOGY_TAG.monster_krysnozhka
+27,SLIMEVIK,0,0,0,0,0,ANY,1,1,1,1,1,0,,0,govnyak,monster_ecology.ts:125 BAIT_ATTRACTED_MONSTER_KINDS with no trait row
+29,ZHORNAYA_TVAR,0,0,0,0,0,ANY,1,1,1,1,1,0,,0,meat|food|stale|risky|govnyak,monster_bait.ts:76 BAIT_TRAITS_BY_ECOLOGY_TAG.monster_zhornaya_tvar
+33,OLGOY,0,0,0,0,0,WET,1.12,0.55,1.44,0.82,1,0,,0,meat|wet|risky|govnyak,ai/monster.ts:3464 olgoyTerrainMoveMult + :3468 olgoyTerrainDmgMult
+34,VODYANOY_KOSHMAR,0,0,0,0,0,WET,1.16,0.86,1,1,1,0,,0,,ai/monster.ts:5104 waterPressureLine 1.16/0.86
+37,CHERNOSLIZ,0,0,0,0,0,WET,1,0.46,1,1,1,0,,0,,ai/monster.ts:5089 blackWaterWake 1.0 on water / 0.46 off it
+42,BORSHCHEVIK,0,0,0,0,0,ANY,1,1,1,1,1,0,FIRE,44,,borshchevik.ts:265 max(base ceil(maxHp*0.44))
+45,PROTOKOLNIK,0,0,0,0,0,ANY,1,1,1,1,1,0,,0,document,monster_bait.ts:82 BAIT_TRAITS_BY_ECOLOGY_TAG.monster_protokolnik
+47,KONTORSHCHIK,0,0,0,0,0,ANY,1,1,1,1,1,0,,0,document,monster_bait.ts:81 BAIT_TRAITS_BY_ECOLOGY_TAG.monster_kontorshchik
+52,POMOYNY_ROY,0,0,0,0,0,ANY,1,1,1,1,1,0,,0,food|meat|fungal|stale|govnyak,monster_bait.ts:72 BAIT_TRAITS_BY_ECOLOGY_TAG.monster_pomoyny_roy
+55,LOTOCHNIK,0,0,0,0,0,WET,1.45,0.72,1.18,0.78,0.58,1.35,,0,,monster_traits.ts:104 drainArmor 0.58 + ai/monster.ts:286 wet regen 1.35/s
+57,ZAKALENNAYA_ARMATURA,72,32,32,32,0,ANY,1,1,1,1,1,0,,0,,monster_armor.ts:18 WEAK_DAMAGE_MULT 0.28 HEAVY_DAMAGE_MULT 0.68
+59,GREEN_DOG,0,0,0,0,0,ANY,1,1,1,1,1,0,,0,govnyak,monster_ecology.ts:126 BAIT_ATTRACTED_MONSTER_KINDS with no trait row
+60,SLIME_WOMAN,0,0,0,0,0,WET,1.48,0.86,1,1,1,0,,0,,ai/monster.ts:5110 slimeStrider 1.48 wet / 0.86 unlit dry
+63,FOG_SHARK,0,0,0,0,0,ANY,1,1,1,1,1,0,FIRE,100,,fog_shark.ts:61 max(base maxHp+1) — a guaranteed kill
+64,BLOOD_PLANT,0,0,0,0,0,ANY,1,1,1,1,1,0,FIRE,38,,blood_plant.ts:245 max(base ceil(maxHp*0.38))
+65,SWARM,0,0,0,0,0,ANY,1,1,1,1,1,0,FIRE,100,meat|fungal|stale|govnyak,swarm_nests.ts:439 max(base hp) + monster_bait.ts:73

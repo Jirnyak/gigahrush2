@@ -228,12 +228,17 @@ struct QuestProgress {
     // whether or not the slot is reused, so one test answers "is this still the person I
     // was holding?" for three distinct failures — an id past the high-water mark, a
     // cleared alive bit, and a reclaimed slot. [tests/suite_quest.inl]
-    // `the_slot_is_recycled` is the witness, and it is the LAST of the three fields
-    // [src/app/main.cpp] gates `set_recycling(true)` on that lives in one module.
+    // `the_slot_is_recycled` is the witness. It closes ONE of the bare-NpcId stores
+    // [src/app/main.cpp] gates `set_recycling(true)` on — **not the last one**, and that
+    // gate's own list is the count of record, not this header. Do not read a single
+    // closed field as permission to arm recycling; open the gate and read it.
     //
-    // Costs the save nothing: an `NpcHandle` is the same 32 bits an `NpcId` was, so
-    // `visit_quest_row`'s `ar.u32(p.giver)`, `kQuestRowWire = 14` and
-    // `sizeof(QuestProgress) == 16` are all byte-identical across this change.
+    // Costs the save nothing, and that is MEASURED rather than argued: an `NpcHandle` is
+    // the same 32 bits an `NpcId` was, so `visit_quest_row`'s `ar.u32(p.giver)` emits the
+    // identical bytes. One log with every field distinct serialises to the same 308 bytes
+    // with the same FNV-1a digest (0397A7BC) before and after this change, at
+    // `kQuestRowWire = 14`, `sizeof(QuestProgress) == 16` and `sizeof(QuestLog) == 352`;
+    // `quest_table_fingerprint()` is unmoved at 54E84EEA.
     NpcHandle giver = kInvalidHandle;
     std::uint8_t state = 0;     // QuestState
     // |z| already reached when this was accepted, so a Descend objective pays only for

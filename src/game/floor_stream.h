@@ -75,12 +75,15 @@ struct FloorModule {
     // held for the WHOLE SESSION: written once when the crowd is seeded, compared on a
     // first load that may come hours later or never. That is exactly the shape slot
     // recycling breaks, and [npc_pool.h] names this field as one of the six bare-id
-    // stores that have to move before `set_recycling(true)` may ship. Armed, the
-    // designate can die in a macro sweep, its slot be handed to a newborn, and a bare
-    // `id == candidate` then match a DIFFERENT person who reads as perfectly alive — the
-    // camera goes to a stranger, and nothing logs it. `pool.handle_valid` fails on the
-    // bumped generation whether or not the slot was reused, so it also catches a plain
-    // DEATH, which is worth catching today with recycling still off.
+    // stores that had to move before `set_recycling(true)` could ship. It HAS shipped:
+    // [src/app/main.cpp] now calls `pool.set_recycling(true)` and lists this field as one
+    // of the DONE prerequisites, so the paragraph below is the live configuration and not
+    // a future one. Armed, the designate can die in a macro sweep, its slot be handed to a
+    // newborn, and a bare `id == candidate` then match a DIFFERENT person who reads as
+    // perfectly alive — the camera goes to a stranger, and nothing logs it.
+    // `pool.handle_valid` fails on the bumped generation whether or not the slot was
+    // reused, so it catches a plain DEATH too, which is the half that would still matter
+    // if the flag were ever disarmed again.
     //
     // FREE in space: an id is 20 bits (kNpcPoolBits) so the 12-bit generation shares the
     // same 32-bit word — see the static_assert under this struct. sizeof(FloorModule)

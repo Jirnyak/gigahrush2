@@ -100,6 +100,16 @@ int g_checks = 0;
 #include "suite_craft.inl"
 #include "suite_quest.inl"
 #include "suite_speech.inl"
+// Wave 8 ports. tools/check_source_rules.cmake now FAILS on a suite no tests/*.cpp
+// includes, and it reported these as `unwired-suite-exempt` until they were wired — the
+// gate doing exactly the job it was added for, on the same day it was added.
+//
+// suite_economy.inl is ABSENT rather than unwired: I destroyed it. Stripping its exempt
+// marker with a script that split on CRLF against a file that was LF-only produced one
+// giant line, which matched and was removed, leaving 0 bytes — and it had never been
+// committed, so there was nothing to restore. The economy MODULE survived; only its tests
+// died. Being rewritten against the shipped module; the include returns with it.
+#include "suite_monster.inl"
 static void test_inventory() {
     // Compile-time layout contract: a static_assert, not a CHECK. It is a fact
     // about the type, so it belongs to the build, not to a test run.
@@ -4119,6 +4129,8 @@ int main() {
     test_craft_all();
     test_quest_all();
     test_speech_all();
+    // Wave 8: per-kind monster traits. test_economy_all() returns with its suite.
+    test_monster_all();
     test_route_realfloor();
     test_streamed_nav();
     test_nav_cache_roundtrip();
