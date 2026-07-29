@@ -62,6 +62,7 @@
 #include "game/wander.h"
 #include "game/npc_pool.h"
 #include "game/population.h"
+#include "game/macro_sim.h"
 #include "input/input.h"
 #include "render/body_pass.h"
 #include "render/cube_pass.h"
@@ -490,6 +491,28 @@ int main(int argc, char** argv) {
     nav::AsyncBake nav;
     game::NpcPool pool;
     pool.init();
+    // The macro society: the whole cold population — aging, old-age mortality,
+    // births, bounded migration — advancing on its own coarse clock, decoupled from
+    // the 125 Hz sim and from the render loop. This is the piece that makes the
+    // world live whether or not anyone is looking at it. [macrosim.md]
+    //
+    // Declared beside the pool because both live the whole session. `init()` must
+    // precede `set_floors_from`. The birth target latches on the FIRST `step()` and
+    // deliberately not here: main seeds the world between this line and the first
+    // macro tick, so latching now would read a living count of 0 and no birth would
+    // ever happen.
+    game::MacroSim macroSim;
+    game::MacroParams macroParams;  // targetPopulation 0 -> hold the seeded size
+    game::MacroStats macroStats{};  // last macro tick's tallies, for the HUD
+    macroSim.init();
+    // Who hates whom — and it MOVES. `relations_drain_deaths` bends this matrix by
+    // who killed whom, so ten dead citizens push the Citizens row across the
+    // hostility boundary and `faction_feud_step` turns the building's crowd on you.
+    // Until this line `kBaseFactionMatrix` had no caller anywhere in src/, which
+    // made six faction functions dead code. [faction_relations.h]
+    game::FactionRelations factionRel = game::kBaseFactionMatrix;
+    game::RelationTick relTick{};   // last drain's tallies, for the HUD
+    std::uint32_t feudHits = 0;     // running total of NPC-vs-NPC hits that landed
     // Transient event ring ([events.md]). Combat publishes deaths into it; it is
     // cleared once per frame, so a listener must consume within the frame or use
     // the opt-in log.
@@ -543,6 +566,14 @@ int main(int argc, char** argv) {
                 1337u ^ (static_cast<std::uint32_t>(f.number) * 0x9e3779b9u);
             streamer.add_module(registry, f.number, f.kind, fseed);
         }
+        // Migration destinations are the REGISTERED floor set, never a [lo,hi] band.
+        // This stack is legitimately sparse — {0,1,2,-8,-14,-26,-36,-50,14,30} — so a
+        // uniform draw over [-50,30] would send 71 of every 81 travellers to a floor
+        // that does not exist. Must run after the add_module loop above (the registry
+        // is the authoritative live set) and before the first `step()`. Re-call after
+        // any renumber. In Maze mode this branch is never taken, so fewer than two
+        // labels are registered and migration correctly stays off. [macro_sim.h]
+        macroSim.set_floors_from(registry);
 
         game::NpcId playerId = game::kInvalidNpc;
         game::LoadResult start =
@@ -696,6 +727,15 @@ int main(int argc, char** argv) {
             if (ev.a != game::kInvalidNpc)
                 game::contract_on_giver_died(contracts, ev.a);
         }
+        // Diplomacy reads the same ring, in the same frame-top drain, and for the same
+        // reason: one notion of death, not three. Deliberately here and NOT beside
+        // `finalize_deaths` in the substep — a frame can run several substeps, each
+        // publishing NpcDied, and a per-substep drain would re-read the earlier
+        // substeps' events and bill those kills again. `relations_drain_deaths` is only
+        // snapshot-bounded WITHIN one call. Draining once per frame, immediately before
+        // `bus.clear()`, is exactly the contract the header asks for and is
+        // double-count-free. [faction_relations.h]
+        relTick = game::relations_drain_deaths(factionRel, reg, pool, bus, simTick);
         bus.clear();
 
         // Hand over a finished nav bake. Cheap every frame; true only on the frame
@@ -966,6 +1006,21 @@ int main(int argc, char** argv) {
                 // every tick. [investigate.h]
                 heardMobs = game::investigate_step(reg, noiseField, pool, activeLayer,
                                             simTick);
+                // NPC-vs-NPC: bodies holding a staggered fight licence steer at their
+                // nearest enemy and swing when it is in reach. Placed AFTER wander_step
+                // and investigate_step so it overrides both for the licensed handful —
+                // the same override wander.cpp already performs internally on aggro —
+                // and BEFORE physics_step so reach is tested against pre-integration
+                // positions: a 1 cm error at a 1.35 m/s walk over one 8 ms step, three
+                // orders of magnitude inside the 1.9 m unarmed reach.
+                //
+                // A feud can never kill a crowd body — damage to anyone but the camera
+                // holder is floored at hp-1, because nothing in this game heals a
+                // resident and a lethal feud would be a one-way population drain with
+                // no counterplay. The camera holder IS killable: the player has
+                // healing, resupply and possession-on-death. [faction_relations.h]
+                feudHits += game::faction_feud_step(reg, pool, factionRel, activeLayer,
+                                                    simTick);
                 physics_step(reg, stack, kSimDt);
                 // Doors resolve AFTER physics for the same reason melee does: contact
                 // is tested by ADJACENCY against where bodies actually ended up this
@@ -1267,6 +1322,34 @@ int main(int argc, char** argv) {
                         player, game::PlayerMelee{0, kills});
                 }
                 ++simTick;
+                // THE MACRO CLOCK. kMacroPeriodTicks = kSimHz*2 = 250, which is
+                // exactly 2.000 s at 125 Hz — kSimStepMs is exactly 8 ms, so the
+                // period is lossless and cannot drift. Placed after ++simTick so the
+                // first fire is tick 250 and not tick 0, before the world is embodied.
+                // The coarse clock (tick_/dayTenths_) lives inside MacroSim, so main
+                // holds no accumulator of its own.
+                //
+                // The live `factionRel` is lent, never copied: the social pass is the
+                // only reader and it stays gated off while socialFormRatePerYear is 0
+                // (that pass demands a 128 MiB rel_ column — see [npc_pool.h] — and
+                // nothing renders the graph yet). Passing the real matrix now means
+                // that when social is switched on it reads the one true source of
+                // attitudes instead of a second, silently diverging copy. [macrosim.md]
+                if (simTick % game::kMacroPeriodTicks == 0) {
+                    macroStats = macroSim.step(pool, macroParams, &factionRel);
+                    // The world lives whether or not anyone is looking, and this line
+                    // is the proof: a headless run shows the population moving with no
+                    // HUD and no window. One line per macro tick, so ~30/minute.
+                    std::fprintf(stderr,
+                                 "[macro] tick=%llu day=%.1f living=%u births=%u "
+                                 "deaths=%u blocked=%u depart=%u arrive=%u "
+                                 "transit=%u reserve=%u\n",
+                                 static_cast<unsigned long long>(macroStats.tick),
+                                 macroSim.day(), macroStats.living, macroStats.births,
+                                 macroStats.deaths, macroStats.birthsBlocked,
+                                 macroStats.departures, macroStats.arrivals,
+                                 macroStats.inTransit, macroStats.reserveRemaining);
+                }
                 // Fluid only lives in the maze test bed (the floor modules seed no
                 // puddles yet); step it on the active layer there.
                 if (genMode == WorldGenMode::Maze && !fluidPaused &&
@@ -1425,6 +1508,23 @@ int main(int argc, char** argv) {
                 ImGui::Text("loot %d rub (%d/%d slots) | healed %d | band E%u",
                             carried, slots, game::kInvSlots, healed,
                             game::economy_band(currentFloor));
+                // The macro society, on screen. `living` is the WHOLE cold population,
+                // not the handful embodied on this floor, so this number moving is the
+                // visible proof that the world runs on its own clock. It updates once
+                // every kMacroPeriodTicks (2.000 s), so it deliberately does not track
+                // the frame.
+                ImGui::Text("society %u alive | +%u births / -%u deaths | %u in transit"
+                            "%s",
+                            macroStats.living, macroStats.births, macroStats.deaths,
+                            macroStats.inTransit,
+                            macroStats.birthsBlocked != 0
+                                ? "  (RESERVE FLOOR: births refused)"
+                                : "");
+                ImGui::Text("day %.1f | macro tick %llu | feud hits %u | "
+                            "relations %u kills / %u shifts",
+                            macroSim.day(),
+                            static_cast<unsigned long long>(macroStats.tick), feudHits,
+                            relTick.kills, relTick.changes);
             }
             // Nearest monster, by name. Doubles as the proof that the Cyrillic font
             // actually loaded: every one of the 69 names is Russian.
