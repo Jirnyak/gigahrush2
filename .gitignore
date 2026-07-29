@@ -39,3 +39,9 @@ __pycache__/
 
 # Save games written next to the exe by F5 ([app/main.cpp] kSavePath).
 *.sav
+
+# Scratch directory for the nav-cache round-trip tests (tests/game_test.cpp:3720, :3760).
+# The tests std::remove their own files, and an EMPTY directory does not dirty git status,
+# so this is insurance rather than a live fix: there is no remove_all, so a run that fails
+# part-way leaves a .bin behind with nothing ignoring it.
+navcache_test_tmp/
