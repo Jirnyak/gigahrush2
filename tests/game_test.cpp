@@ -17,6 +17,7 @@
 #include "game/floor_spec.h"
 #include "game/floor_stream.h"
 #include "game/inventory.h"
+#include "game/item_table.h"
 #include "game/macro_sim.h"
 #include "game/nav_cache.h"
 #include "game/npc_pool.h"
@@ -2202,6 +2203,134 @@ static void test_ai_step() {
     }
 }
 
+// #13a — the global item catalog: lookups, tags, resistances, and the
+// use-effect application that closes the eat/drink -> digestion loop ([items.md]).
+static void test_item_table() {
+    // Bounds-tolerant lookup: id 0 and any out-of-range id resolve to the inert
+    // "none" row rather than indexing past the catalog.
+    CHECK(item_def(ItemNone).type == ItemType::Misc);
+    CHECK(std::strcmp(item_def(ItemNone).name, "none") == 0);
+    CHECK(item_def(kItemCount).name == item_def(ItemNone).name);   // OOB -> none
+    CHECK(item_def(60000).name == item_def(ItemNone).name);
+
+    // Array-index-is-id: a known row reads back its authored fields.
+    CHECK(item_def(ItemAk47).type == ItemType::Weapon);
+    CHECK(std::strcmp(item_def(ItemAk47).name, "ak47") == 0);
+    CHECK(item_def(ItemAk47).value == 5500);
+
+    // String-key resolution round-trips; unknown / null -> none.
+    CHECK(item_id("bread") == ItemBread);
+    CHECK(item_id("ak47") == ItemAk47);
+    CHECK(item_id("artifact") == ItemArtifact);
+    CHECK(item_id("does_not_exist") == ItemNone);
+    CHECK(item_id(nullptr) == ItemNone);
+
+    // Tag bitmask.
+    CHECK(item_has_tag(item_def(ItemBread), TagFood));
+    CHECK(item_has_tag(item_def(ItemBread), TagConsumable));
+    CHECK(!item_has_tag(item_def(ItemBread), TagWeapon));
+    CHECK(item_has_tag(item_def(ItemArmorLight), TagArmor));
+
+    // Armor resist channels (percent per DamageType).
+    CHECK(item_def(ItemArmorLight).resist[DmgKinetic] == 20);
+    CHECK(item_def(ItemArmorLight).resist[DmgBuckshot] == 30);
+    CHECK(item_def(ItemArmorLight).resist[DmgFire] == 5);
+    CHECK(item_def(ItemArmorLight).resist[DmgEnergy] == 0);
+
+    // --- apply_use_effect ---------------------------------------------------
+    auto fresh = [](float food, float water, float sleep) {
+        Needs n;
+        n.v[NeedFood] = food;
+        n.v[NeedWater] = water;
+        n.v[NeedSleep] = sleep;
+        n.v[NeedPee] = 0.0f;
+        n.v[NeedPoo] = 0.0f;
+        n.pendingPee = 0.0f;
+        n.pendingPoo = 0.0f;
+        return n;
+    };
+
+    // Eating bread: +15 food, fills the digestion pools, hp untouched, consumed.
+    {
+        Needs n = fresh(50.0f, 50.0f, 50.0f);
+        std::int16_t hp = 100, maxHp = 100;
+        std::uint16_t out = apply_use_effect(n, hp, maxHp, item_def(ItemBread));
+        CHECK(out == 0);
+        CHECK(std::fabs(n.v[NeedFood] - 65.0f) < 1e-3f);
+        CHECK(std::fabs(n.pendingPoo - 10.5f) < 1e-3f);
+        CHECK(std::fabs(n.pendingPee - 4.5f) < 1e-3f);
+        CHECK(hp == 100);
+    }
+
+    // Drinking water: +25 water, +15 pending pee.
+    {
+        Needs n = fresh(50.0f, 50.0f, 50.0f);
+        std::int16_t hp = 100, maxHp = 100;
+        apply_use_effect(n, hp, maxHp, item_def(ItemWater));
+        CHECK(std::fabs(n.v[NeedWater] - 75.0f) < 1e-3f);
+        CHECK(std::fabs(n.pendingPee - 15.0f) < 1e-3f);
+    }
+
+    // Reserve clamps at 100 (canned_food is +30 onto 95).
+    {
+        Needs n = fresh(95.0f, 50.0f, 50.0f);
+        std::int16_t hp = 100, maxHp = 100;
+        apply_use_effect(n, hp, maxHp, item_def(ItemCannedFood));
+        CHECK(std::fabs(n.v[NeedFood] - 100.0f) < 1e-3f);
+    }
+
+    // Bandage heals hp; medkit then clamps at maxHp.
+    {
+        Needs n = fresh(50.0f, 50.0f, 50.0f);
+        std::int16_t hp = 50, maxHp = 100;
+        apply_use_effect(n, hp, maxHp, item_def(ItemBandage)); // +15
+        CHECK(hp == 65);
+        hp = 95;
+        apply_use_effect(n, hp, maxHp, item_def(ItemMedkit));  // +45 -> clamp 100
+        CHECK(hp == 100);
+    }
+
+    // Risky food (rawmeat): +18 food but -6 hp.
+    {
+        Needs n = fresh(50.0f, 50.0f, 50.0f);
+        std::int16_t hp = 50, maxHp = 100;
+        apply_use_effect(n, hp, maxHp, item_def(ItemRawMeat));
+        CHECK(std::fabs(n.v[NeedFood] - 68.0f) < 1e-3f);
+        CHECK(hp == 44);
+    }
+
+    // Sleeping pills trade food/water/hp for a big sleep restore.
+    {
+        Needs n = fresh(50.0f, 50.0f, 40.0f);
+        std::int16_t hp = 50, maxHp = 100;
+        apply_use_effect(n, hp, maxHp, item_def(ItemSleepingPills));
+        CHECK(std::fabs(n.v[NeedSleep] - 85.0f) < 1e-3f); // +45
+        CHECK(std::fabs(n.v[NeedWater] - 34.0f) < 1e-3f); // -16
+        CHECK(std::fabs(n.v[NeedFood] - 42.0f) < 1e-3f);  // -8
+        CHECK(hp == 46);                                  // -4
+    }
+
+    // Inert item (a weapon) has an all-zero use-effect: nothing changes.
+    {
+        Needs n = fresh(50.0f, 50.0f, 50.0f);
+        std::int16_t hp = 70, maxHp = 100;
+        std::uint16_t out = apply_use_effect(n, hp, maxHp, item_def(ItemAk47));
+        CHECK(out == 0);
+        CHECK(std::fabs(n.v[NeedFood] - 50.0f) < 1e-3f);
+        CHECK(hp == 70);
+    }
+
+    // psi_stim carries only dPsi; with no psi stat yet, needs + hp are untouched.
+    {
+        Needs n = fresh(50.0f, 50.0f, 50.0f);
+        std::int16_t hp = 70, maxHp = 100;
+        apply_use_effect(n, hp, maxHp, item_def(ItemPsiStim));
+        CHECK(std::fabs(n.v[NeedFood] - 50.0f) < 1e-3f);
+        CHECK(std::fabs(n.v[NeedWater] - 50.0f) < 1e-3f);
+        CHECK(hp == 70);
+    }
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -2246,6 +2375,7 @@ int main() {
     test_scorer();
     test_selection();
     test_ai_step();
+    test_item_table();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

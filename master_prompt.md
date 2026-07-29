@@ -649,9 +649,24 @@ verified increments:
 
 ### #13 — Content tables (`item_table` + `mob_table`)
 POD, data-driven ([items.md](items.md), [monsters.md](monsters.md)). Ref scale:
-~434 items (POD + tag bitmask + use-effect enum), ~90 monster kinds (aiFlags
-union), loot (spawnW + value-gate + depth caps), economy bands E0–E4. Mobs are
-**not** in `NpcPool` — they spawn per-floor from the mob table and vanish.
+~444 items (POD + tag bitmask + use-effect enum), **69** monster kinds (52-flag
+`aiFlags` union), loot (spawnW + value-gate + depth caps), economy bands E0–E4.
+Mobs are **not** in `NpcPool` — they spawn per-floor from the mob table and vanish.
+Decomposed into **#13a** item_table → **#13b** mob_table → **#13c** loot tables →
+**#13d** per-floor spawning → **#13e** use-effects + `route_step` goal steering.
+
+- **#13a item_table — DONE** ([items.md](items.md), `src/game/item_table.{h,cpp}`,
+  `test_item_table`). POD `ItemDef` (type/value/spawnW/stack/durability/`resist[5]`/
+  `tags` bitmask/science/contraband/deceptive/`UseEffect`) + `ItemType`/`DamageType`/
+  `ItemTag` enums + a representative 35-item catalog (array-index-is-id, 0 = none) +
+  `item_def(id)` / `item_id(name)` lookups + `apply_use_effect(needs, hp, maxHp,
+  def)` — which **closes the #12a digestion loop** (baked pending-pool deltas feed
+  `needs_step`). `use` closures re-encoded as flat baked deltas; weapon *combat*
+  stats deferred to a separate id-keyed registry with combat. `dPsi` stored,
+  not applied (no psi stat — stubbed-input stance). Reference schemas for #13b/#13c/
+  #13d (69-kind stat table, `aiFlags` taxonomy, loot mechanisms, design-vs-procedural
+  spawn formulas — the §4 V-shape count/tier CONFIRMED as the *design* path) are
+  extracted and in the session transcript.
 
 ### Standing follow-ups (fold in when the relevant increment lands)
 - **`floor_spec_for()` is currently monotonic (`floor % 7/5/3` pattern) and takes
