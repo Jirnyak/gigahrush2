@@ -28,11 +28,11 @@ of that, three more increments shipped **directly on `main`** (2026-07-28):
 routing API; **C.2b** — the bake wired into `FloorStreamer::ensure_loaded` (every
 live floor now bakes its `FloorNav` on load) + an opt-in disk cache; and
 **increment D** — `src/sim/diffusion` (the diffusion danger/scent field +
-`diffusion_gradient` flee vector). All built and tested. There is still **no
-runtime consumer** — the movement AI that calls `route_step` / `diffusion_gradient`
-is **#12** — so the running game looks unchanged and NPCs still stand still: the
-nav + flee fields are *ready*, not *visible*. New system docs: **[nav.md](nav.md)**,
-**[diffusion.md](diffusion.md)**.
+`diffusion_gradient` flee vector). All built and tested. The movement AI **#12** is
+now their runtime consumer: `ai_step` steers fleeing bodies down
+`diffusion_gradient`, so the **flee field is now visible** and the crowd moves.
+`route_step` still awaits a consumer — goal-directed nav needs #13's reachable
+targets. New system docs: **[nav.md](nav.md)**, **[diffusion.md](diffusion.md)**.
 
 **Also since (headless, `ctest`-green):** the **macro society** filled in and the
 **embodied brain began**. **#10d** landed the social layer — a 6×6 `Int8`
@@ -46,9 +46,14 @@ Needs layer** (`src/game/ai.{h,cpp}`, 2026-07-29): a SoA `Needs` component
 digesting a pending pool the eat intent will fill) advanced in one linear
 `needs_step` pass, with STR/AGI/INT attribute-scaled decay and deterministic
 per-id seeding — every rate/range/model **ported verbatim from the reference
-`needs.ts`**. The scorer (**#12b**) and stagger + baked-nav steering (**#12c**)
-build on this same component set and are still pending, so the crowd still stands
-still. Spec + built-state doc: **[ai.md](ai.md)**.
+`needs.ts`**. The pure scorer + selection FSM (**#12b**) and the stagger + steering
++ embody/loop driver (**#12c**) now build on this same component set: `score_intents`
+ranks 13 intents, `select_intent` applies argmax + hysteresis, and `ai_step`
+staggers re-plans per identity and steers each body (flee down the diffusion field,
+every other intent a per-agent wander) by writing horizontal `Velocity` into
+physics — **the crowd now moves**. Goal-directed `route_step` steering waits on the
+#13 content tables to give intents reachable target cells. Spec + built-state doc:
+**[ai.md](ai.md)**.
 
 ---
 
@@ -466,10 +471,13 @@ Work **one verified increment per turn, build green, stop green with a plan**
 (§9). Order below is the intended sequence, but note the owner pulled the **nav
 bake (#11 A/B/C) forward** ahead of #10 — that core is now built (§6). The **whole
 macro tick #10 is now done** (demographic core #10a, bucket index #10b, migration
-#10c, faction matrix + social pass #10d). So the open work is: **#12** movement AI
-— its **needs layer #12a is built** (2026-07-29), leaving the pure scorer **#12b**
-and the stagger + baked-nav steering + embody/loop wiring **#12c** — then content
-**#13**. The floor-module epic (#6–#9) is **done**.
+#10c, faction matrix + social pass #10d). **#12 movement AI is now built** —
+needs layer #12a, pure scorer + selection FSM #12b, and the stagger + steering +
+embody/loop driver #12c (2026-07-29): the visible crowd steers itself (flee field +
+per-agent wander), with goal-directed `route_step` steering deferred until **#13**
+content gives intents reachable targets. So the open work is **#13** content tables
+(then `route_step` goal-seeking lights up) and the MacroSim app-loop wiring. The
+floor-module epic (#6–#9) is **done**.
 
 ### #10 — Macro tick (demographic core + bucket index + migration + social BUILT 2026-07-28) ✔
 Coarse clock (own rate, **never** the 120 Hz tick — [macrosim.md](macrosim.md)).
@@ -614,22 +622,30 @@ verified increments:
   stored RNG. Every rate/range/model **ported verbatim from `needs.ts`**.
   `test_needs_decay`. Needs materialise on embodiment and fold with it (like every
   transient); restore-on-use is an intent *effect*, so it lands with #12b.
-- **#12b — pure scorer + selection FSM (pending).** `score(agent,world) → float[13]`,
-  one additive scorer per intent (`safety · combat · flee · toilet · drink · eat ·
-  sleep · work · heal · social · patrol · faction_assault · wander`), each clamped
-  0..100 — a pure, stateless, table-driven function (no cross-talk). Then argmax
-  with **hysteresis**: switch-margin ~7, emergency override ~58 for
-  safety/flee/combat/heal, growing stickiness ~+5→+12, re-plan every ~1.5–4.0 s.
-  Reads the #10d faction matrix (`faction_assault`) and `rel_` edges (`social`).
-  Frozen per-intent constants are re-extracted verbatim from the reference.
-- **#12c — stagger + steering + wiring (pending).** Identity-hash **time-based
-  stagger** (the reference's FNV-1a mix, finalised by `mix32` = our `hash_u32`) so
-  the crowd re-plans off-lockstep with zero scheduling RAM. Steering is a **baked
-  read**: `route_step(coarse, fine, from, to)` → `Controller::wishDir` for nav,
-  `diffusion_gradient` for flee — the *same* locomotion path as the player. Adds a
-  no-camera world-space path to `controller_step`, makes `embody()` attach
-  `Controller`+`Needs`+the brain FSM, and wires `needs_step`/`ai_step` into the
-  fixed-step loop. Then a crowd bench.
+- **#12b — pure scorer + selection FSM (DONE).** ✔ `score_intents(perception, needs,
+  out[13])`, one additive scorer per intent (`safety · combat · flee · toilet · drink
+  · eat · sleep · work · heal · social · patrol · faction_assault · wander`), each
+  clamped 0..100 — a pure, stateless function (no cross-talk) reading a `Perception`
+  snapshot; every input the engine can't yet supply sits at 0/none/−1 so its term
+  contributes 0 and the live ranking matches the reference exactly. Then
+  `select_intent(scores, current)`: argmax with **hysteresis** — switch-margin 7,
+  emergency override 58 for safety/flee/combat/heal, growing stickiness +5→+12 (fed
+  via `Perception.stickinessAmount`). Reads the #10d faction matrix
+  (`faction_assault`) and `rel_` edges (`social`). Frozen per-intent constants
+  re-extracted verbatim. `test_scorer` + `test_selection`.
+- **#12c — stagger + steering + wiring (DONE 2026-07-29).** ✔ `ai_step(reg, pool,
+  danger, grid, now, dt)`: iterates the live AI set, **skips camera-holders** (the
+  player), and per agent either re-plans or coasts against its `AiBrain.nextDecisionAt`
+  deadline — a **per-identity period** (1.5–4.0 s) from the stateless `channel_seed`
+  FNV-1a fold, so the crowd re-plans off-lockstep with only the one deadline float
+  (no wheel/queue). Steering writes **horizontal `Velocity`** straight into physics
+  (plain NPCs have no `Controller`/`CameraTag` — that's the player's input seam):
+  **flee** heads down `−diffusion_gradient(danger)`, every other intent roams a
+  deterministic per-agent `wander_heading`; `v.z` left to gravity. `embody()` attaches
+  `Needs`+`AiBrain`; the fixed-step loop runs `needs_step`→`ai_step`→`controller_step`
+  →`physics_step` with a monotonic `simNow`. `test_ai_step`. **Deferred:** full
+  `route_step` goal-seeking (fine flow fields target elevated lattice nodes a
+  gravity-bound walker can't reach) — lands with #13's reachable target cells.
 
 ### #13 — Content tables (`item_table` + `mob_table`)
 POD, data-driven ([items.md](items.md), [monsters.md](monsters.md)). Ref scale:
@@ -645,13 +661,14 @@ union), loot (spawnW + value-gate + depth caps), economy bands E0–E4. Mobs are
   (blood/scent fluid) is a *separate* runtime thing from the danger rating;
   **samosbor** = timed floor-wide maze-restructure event (7 theme variants, cooldown
   ~inverse to depth) + an L4D-style director with an anti-swamp valve.
-- **Embodied NPCs currently stand still** — expected: the **macro tick (#10) and
-  the nav/flee bakes (#11) are built**, and #12a gives the crowd *needs*, but the
-  brain does not yet **steer** — that is **#12b** (scorer) + **#12c** (stagger +
-  `route_step`/`diffusion_gradient` → `Controller::wishDir` + embody/loop wiring).
-  Off-screen life is already advancing on the macro clock. If the owner wants
-  visible motion sooner, #12c's steering slice (identity-hash stagger + physics
-  collision, wander only) can land ahead of the full #12b scorer.
+- **Embodied NPCs now move** — the **macro tick (#10)**, the **nav/flee bakes
+  (#11)**, and the **full brain (#12a needs + #12b scorer/FSM + #12c stagger/steering
+  driver)** are built: on the live floor each body scores 13 intents, commits one
+  with hysteresis, and steers by the flee field (flee) or a per-agent wander (all
+  else), writing horizontal `Velocity` into physics. Off-screen life advances on the
+  macro clock. **What's still flat:** intents have no *specific* destinations yet
+  (eat/sleep/toilet/combat all fall through to wander) — goal-directed `route_step`
+  steering lights up once **#13** content gives them reachable target cells.
 
 ---
 

@@ -2057,6 +2057,151 @@ static void test_selection() {
     CHECK(select_intent(s, IntentWork) == IntentEat);
 }
 
+// #12c — the per-frame steering driver (ai_step). A headless integration over a
+// bare World + embodied entities: the needs + brain ride embodiment, the stagger
+// re-plans on the deadline and ONLY then, flee steers down the baked danger
+// gradient while other intents roam a per-identity heading, and the player (the
+// camera-holder) is never touched. Every assertion is deterministic — the driver
+// is a pure function of the stable id + the world state.
+static void test_ai_step() {
+    const float dt = 1.0f / 120.0f;
+    MacroGrid grid; // all air; only read by the flee gradient (when danger != null)
+
+    // Build a comfortable, alive Citizen record standing in a given macro cell.
+    auto make_npc = [](NpcPool& pool, std::uint8_t cx, std::uint8_t cy,
+                       std::uint8_t cz) -> NpcId {
+        NpcId id = pool.spawn();
+        pool.set_floor(id, 0);
+        pool.height_mm(id) = 1800;
+        pool.faction(id) = FactionCitizen;
+        pool.hp(id) = 100;
+        pool.max_hp(id) = 100;
+        for (auto& s : pool.attrs(id)) s = 0;
+        pool.cx(id) = cx;
+        pool.cy(id) = cy;
+        pool.cz(id) = cz;
+        return id;
+    };
+
+    // --- Embodiment attaches the needs + brain (folded away with the entity). ---
+    {
+        NpcPool pool; pool.init();
+        Registry reg;
+        NpcId id = make_npc(pool, 10, 10, 1);
+        Entity e = embody(reg, pool, id, 0);
+        CHECK(reg.all_of<Needs>(e));
+        CHECK(reg.all_of<AiBrain>(e));
+        CHECK(reg.get<AiBrain>(e).currentIntent == kIntentNone); // no decision yet
+        CHECK(reg.get<AiBrain>(e).decisions == 0);
+    }
+
+    // --- One step commits an intent, staggers the next deadline into [1.5, 4.0]s,
+    //     and steers the body at walk speed horizontally (v.z left to gravity).
+    //     The player (camera-holder) is skipped entirely — no player special case,
+    //     just the presence of the CameraTag. ---
+    {
+        NpcPool pool; pool.init();
+        Registry reg;
+        NpcId a = make_npc(pool, 40, 40, 1);
+        Entity ea = embody(reg, pool, a, 0);
+        NpcId pid = make_npc(pool, 42, 42, 1);
+        Entity ep = embody_as_player(reg, pool, pid, 0);
+        reg.get<Velocity>(ep).v = vec3{9.0f, 9.0f, 9.0f}; // sentinel
+
+        ai_step(reg, pool, nullptr, grid, 0.0, dt); // fresh brains plan at now=0
+
+        const AiBrain& ba = reg.get<AiBrain>(ea);
+        CHECK(ba.currentIntent != kIntentNone);      // committed an intent
+        CHECK(ba.decisions == 1);                    // planned exactly once
+        CHECK(ba.nextDecisionAt >= kRethinkBaseSec); // staggered forward...
+        CHECK(ba.nextDecisionAt <=
+              kRethinkBaseSec + kRethinkSpreadSec + 1e-3f); // ...into [1.5, 4.0]
+
+        const Velocity& va = reg.get<Velocity>(ea);
+        const float sp = std::sqrt(va.v.x * va.v.x + va.v.y * va.v.y);
+        CHECK(std::fabs(sp - kNpcWalkSpeed) < 1e-3f); // roams at walk speed
+        CHECK(va.v.z == 0.0f);                        // gravity owns z (untouched)
+
+        // The player was skipped: brain untouched, velocity sentinel intact.
+        CHECK(reg.get<AiBrain>(ep).currentIntent == kIntentNone);
+        CHECK(reg.get<AiBrain>(ep).decisions == 0);
+        CHECK(reg.get<Velocity>(ep).v.x == 9.0f);
+        CHECK(reg.get<Velocity>(ep).v.z == 9.0f);
+    }
+
+    // --- Stagger: an agent past its deadline re-plans; before it, it coasts. ---
+    {
+        NpcPool pool; pool.init();
+        Registry reg;
+        NpcId a = make_npc(pool, 20, 20, 1);
+        Entity e = embody(reg, pool, a, 0);
+        ai_step(reg, pool, nullptr, grid, 0.0, dt); // plan #1 at t=0
+        const double deadline =
+            static_cast<double>(reg.get<AiBrain>(e).nextDecisionAt);
+        CHECK(reg.get<AiBrain>(e).decisions == 1);
+        ai_step(reg, pool, nullptr, grid, deadline - 0.5, dt); // still before it
+        CHECK(reg.get<AiBrain>(e).decisions == 1);             // did NOT re-plan
+        ai_step(reg, pool, nullptr, grid, deadline + 1e-3, dt); // now past it
+        CHECK(reg.get<AiBrain>(e).decisions == 2);              // re-planned
+    }
+
+    // --- Determinism + identity spread: the same id yields the same steer every
+    //     run; two different ids (very likely) roam different headings, so a
+    //     uniform crowd does not walk in lockstep. ---
+    {
+        auto run_first = [&](Velocity& out) {
+            NpcPool pool; pool.init();
+            Registry reg;
+            NpcId id = make_npc(pool, 30, 30, 1); // first spawn -> id 0 every run
+            Entity e = embody(reg, pool, id, 0);
+            ai_step(reg, pool, nullptr, grid, 0.0, dt);
+            out = reg.get<Velocity>(e);
+        };
+        Velocity v1{}, v2{};
+        run_first(v1);
+        run_first(v2);
+        CHECK(v1.v.x == v2.v.x && v1.v.y == v2.v.y); // identical -> deterministic
+
+        NpcPool pool; pool.init();
+        Registry reg;
+        NpcId a = make_npc(pool, 30, 30, 1); // id 0
+        NpcId b = make_npc(pool, 30, 30, 1); // id 1, same cell
+        Entity ea = embody(reg, pool, a, 0);
+        Entity eb = embody(reg, pool, b, 0);
+        ai_step(reg, pool, nullptr, grid, 0.0, dt);
+        const Velocity& va = reg.get<Velocity>(ea);
+        const Velocity& vb = reg.get<Velocity>(eb);
+        CHECK(va.v.x != vb.v.x || va.v.y != vb.v.y); // headings differ per identity
+    }
+
+    // --- Flee steers DOWN the danger gradient. A +x danger ramp saturating to 1.0
+    //     at the agent's cell makes flee the argmax AND clears the emergency band,
+    //     so the fresh brain commits flee; the body then steers -x (toward lower
+    //     danger), with no y component (the ramp is x-only). This is the baked
+    //     diffusion field driving locomotion end-to-end. ---
+    {
+        World world; // bare: all air, so the gradient is a clean central difference
+        Field<float>& d = world.fields().get_or_create<float>("danger", 0.0f);
+        for (int z = 0; z < kMacroDim; ++z)
+            for (int y = 0; y < kMacroDim; ++y)
+                for (int x = 0; x < kMacroDim; ++x)
+                    d.at(x, y, z) = clamp01(0.4f + 0.03f * static_cast<float>(x));
+        // At x=20 the ramp saturates to 1.0 (x=19 -> 0.97), so d/dx > 0 there and
+        // threat reads ~1.0 -> flee ~= 61 (>= the 58 emergency band).
+        NpcPool pool; pool.init();
+        Registry reg;
+        NpcId a = make_npc(pool, 20, 30, 30);
+        Entity e = embody(reg, pool, a, 0);
+        ai_step(reg, pool, &d, world.grid(), 0.0, dt);
+        CHECK(reg.get<AiBrain>(e).currentIntent == IntentFlee); // threat picked flee
+        const Velocity& v = reg.get<Velocity>(e);
+        CHECK(v.v.x < 0.0f);             // flees toward LOWER danger (-x)
+        CHECK(std::fabs(v.v.y) < 1e-3f); // pure x ramp -> no lateral component
+        CHECK(std::fabs(std::sqrt(v.v.x * v.v.x + v.v.y * v.v.y) - kNpcWalkSpeed) <
+              1e-3f);
+    }
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -2100,6 +2245,7 @@ int main() {
     test_needs_decay();
     test_scorer();
     test_selection();
+    test_ai_step();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

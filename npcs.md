@@ -168,22 +168,25 @@ invariant that keeps the 2²⁰ population from growing per visit.
   can hit *anyone* — including the NPC that fired it. No attacker/victim special
   cases; combat is isotropic, exactly like the player's. The player is not
   privileged ([ecs.md](ecs.md)).
-- **Embodied brain (#12 — [ai.md](ai.md); needs layer #12a BUILT).** On the live
-  floor each embodied NPC runs a **utility-AI**: 0..100 needs decay, a pure scorer
-  ranks 13 intents (eat/drink/toilet/sleep/flee/combat/social/patrol/wander/…),
-  argmax + hysteresis picks one, and steering follows the **baked** nav
-  ([nav.md](nav.md) `route_step`) or the flee field ([diffusion.md](diffusion.md))
-  by writing `Controller::wishDir` — the same locomotion path as the player.
-  Re-plan cadence is an identity-hash stagger, so the crowd spreads across frames
-  with zero scheduling RAM. **Built so far (#12a, [src/game/ai.h](src/game/ai.h)):**
+- **Embodied brain (#12 — [ai.md](ai.md); #12a/#12b/#12c BUILT — the crowd
+  moves).** On the live floor each embodied NPC runs a **utility-AI**: 0..100 needs
+  decay, a pure scorer ranks 13 intents (eat/drink/toilet/sleep/flee/combat/social/
+  patrol/wander/…), argmax + hysteresis picks one, and a per-frame driver steers the
+  body — flee heads down the flee field ([diffusion.md](diffusion.md)), every other
+  intent roams a deterministic per-identity heading — by writing horizontal
+  `Velocity` straight into physics, the same integrator the player reaches through
+  `Controller`. Re-plan cadence is an identity-hash stagger, so the crowd spreads
+  across frames with no scheduling queue. **#12a ([src/game/ai.h](src/game/ai.h)):**
   the `Needs` SoA component + its one-pass `needs_step` decay — food/water/sleep
   reserves fall (attribute-slowed by STR/AGI/INT), pee/poo pressures rise only by
   digesting a pending pool — materialised on embodiment and folded away with it,
-  like every other transient. **Also built (#12b):** the pure `score_intents`
-  ranking all 13 intents 0..100 and the `select_intent` argmax + hysteresis, both
-  ported verbatim and exercised headless — so the crowd now has drives *and* a
-  decision. Only the stagger + baked-nav steering + loop wiring (#12c) remain
-  before the crowd visibly moves.
+  like every other transient. **#12b:** the pure `score_intents` ranking all 13
+  intents 0..100 and the `select_intent` argmax + hysteresis, both ported verbatim.
+  **#12c:** `ai_step` — the stagger + steering driver — with `Needs`/`AiBrain`
+  attached on embodiment (the player carries them too; the driver just skips
+  camera-holders). All exercised headless. Goal-directed `route_step` steering
+  toward a specific target cell ([nav.md](nav.md)) waits on the #13 content tables
+  to give intents reachable goals.
 
 ## Baked, not searched
 

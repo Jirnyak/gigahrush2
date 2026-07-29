@@ -1,9 +1,16 @@
 #include "game/ai.h"
 
+#include <cmath>
 #include <cstddef>
 
-#include "game/embody.h"   // NpcRef — the embodied identity back to the pool row
-#include "game/npc_pool.h" // NpcPool::attrs (STR/AGI/INT reserve scaling)
+#include "core/math.h"       // vec3, normalize
+#include "ecs/components.h"  // Transform, Velocity, CameraTag
+#include "game/embody.h"     // NpcRef, kEmbodyCellSize — the pos<->cell mapping
+#include "game/npc_pool.h"   // NpcPool::attrs (STR/AGI/INT reserve scaling)
+#include "sim/diffusion.h"   // diffusion_gradient — the flee steering field
+#include "world/field.h"     // Field<float> (the "danger" field)
+#include "world/macro_grid.h" // MacroGrid (open/wall test for the gradient)
+#include "world/types.h"     // wrap_macro — toroidal cell wrap
 
 namespace giga::game {
 
@@ -87,6 +94,19 @@ inline float compute_threat_pressure(const Perception& p) {
     const float s =
         m + (p.cornered ? 0.15f : 0.0f) + (p.inShelter ? -0.18f : 0.0f);
     return clamp01f(s);
+}
+
+// --- #12c steering helpers --------------------------------------------------
+
+// A per-agent horizontal wander heading (unit vector). Deterministic from the
+// identity seed and the re-plan count, so it holds STEADY between re-plans (the
+// agent walks a straight leg) and re-rolls when `decisions` advances (it turns) —
+// all with zero stored heading state, exactly the stateless-hash stance the whole
+// AI uses ([core/rng.h]). hash2(idSeed, decisions) decorrelates the angle stream
+// from the score/cadence jitter channels.
+inline vec3 wander_heading(std::uint32_t idSeed, std::uint16_t decisions) {
+    const float angle = rand01(hash2(idSeed, decisions)) * 6.28318531f; // [0, 2pi)
+    return vec3{std::cos(angle), std::sin(angle), 0.0f};
 }
 
 } // namespace
@@ -255,6 +275,87 @@ std::uint8_t select_intent(const float scores[kIntentCount],
     // stickiness bonus from the scorer) by the switch margin.
     if (scores[best] > scores[current] + kSwitchMargin) return best;
     return current;
+}
+
+// --------------------------------------------------------------------------
+// #12c — the per-frame steering driver. Runs the pure #12b scorer/selection on
+// the embodied live-floor slice, staggered by identity, and turns the committed
+// intent into motion by writing Velocity. See ai.h for the contract.
+// --------------------------------------------------------------------------
+void ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
+             const MacroGrid& grid, double now, float dt) {
+    // One packed sweep over (NpcRef, Needs, AiBrain, Transform, Velocity), like
+    // needs_step. The player owns a CameraTag and is driven by input, so skip it
+    // (same "skip the camera-holder" filter the body pass uses) — there is no
+    // player special case, only the presence of the camera component.
+    auto view = reg.view<NpcRef, Needs, AiBrain, Transform, Velocity>();
+    for (auto e : view) {
+        if (reg.all_of<CameraTag>(e)) continue; // the player: input drives it
+
+        const NpcId id = view.get<NpcRef>(e).id;
+        const Needs& needs = view.get<Needs>(e);
+        AiBrain& brain = view.get<AiBrain>(e);
+        const Transform& tr = view.get<Transform>(e);
+        Velocity& vel = view.get<Velocity>(e);
+        const std::uint32_t idSeed = identity_seed(id);
+
+        // The macro cell the body stands in — the SAME pos->cell map fold_back
+        // uses (floor(pos / cell size)), wrapped onto the torus.
+        const int cx =
+            wrap_macro(static_cast<int>(std::floor(tr.pos.x / kEmbodyCellSize)));
+        const int cy =
+            wrap_macro(static_cast<int>(std::floor(tr.pos.y / kEmbodyCellSize)));
+        const int cz =
+            wrap_macro(static_cast<int>(std::floor(tr.pos.z / kEmbodyCellSize)));
+
+        // Re-plan only when this agent's identity-staggered deadline has passed,
+        // so the crowd's decisions spread across frames with zero scheduling RAM
+        // ([ai.md] §Scheduling). A fresh brain (nextDecisionAt 0) plans at once.
+        if (now >= static_cast<double>(brain.nextDecisionAt)) {
+            Perception p;
+            p.idSeed = idSeed;
+            p.faction = pool.faction(id);
+            p.hp = static_cast<float>(pool.hp(id));
+            p.maxHp = static_cast<float>(pool.max_hp(id));
+            p.danger = danger != nullptr ? danger->at(cx, cy, cz) : 0.0f;
+            p.currentIntent = brain.currentIntent;
+            p.stickinessAmount = stickiness_amount(brain.stateTimer);
+            // Every other Perception field stays at its stubbed default (#13), so
+            // its scorer term contributes 0 — the faithful-port invariant.
+
+            float scores[kIntentCount];
+            score_intents(p, needs, scores);
+            const std::uint8_t next = select_intent(scores, brain.currentIntent);
+            if (next != brain.currentIntent) {
+                brain.currentIntent = next;
+                brain.stateTimer = 0.0f; // committed to a new intent just now
+            }
+            ++brain.decisions; // advances the wander leg + telemetry
+            brain.nextDecisionAt = static_cast<float>(
+                now + static_cast<double>(kRethinkBaseSec) +
+                static_cast<double>(rand01(channel_seed(idSeed, kRethinkChannel))) *
+                    static_cast<double>(kRethinkSpreadSec));
+        }
+        brain.stateTimer += dt;
+
+        // --- Steering: write the horizontal Velocity; v.z is left to gravity ---
+        // Flee runs DOWN the baked danger gradient (agents move toward safety);
+        // every other intent roams the per-identity wander heading. When flee has
+        // no usable gradient (uniform/zero danger) it falls through to the roam so
+        // a fleeing agent still moves rather than freezing.
+        vec3 dir{0.0f, 0.0f, 0.0f};
+        if (brain.currentIntent == IntentFlee && danger != nullptr) {
+            const vec3 g = diffusion_gradient(*danger, grid, cx, cy, cz);
+            const vec3 away{-g.x, -g.y, 0.0f};
+            if (away.x * away.x + away.y * away.y > 1e-10f) dir = normalize(away);
+        }
+        if (dir.x == 0.0f && dir.y == 0.0f)
+            dir = wander_heading(idSeed, brain.decisions);
+
+        vel.v.x = dir.x * kNpcWalkSpeed;
+        vel.v.y = dir.y * kNpcWalkSpeed;
+        // vel.v.z intentionally untouched — physics_step owns it (gravity + jump).
+    }
 }
 
 } // namespace giga::game

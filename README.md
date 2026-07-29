@@ -45,7 +45,7 @@ built.
 | Monsters | [monsters.md](monsters.md) | Global monster tables + per-floor weights | design |
 | Items / loot | [items.md](items.md) | Global item catalog + loot tables | design |
 | NPCs | [npcs.md](npcs.md) | Macro population + local embodiment; player is an embodied record | pool + embodiment + streaming |
-| NPC AI | [ai.md](ai.md) | Utility brain: needs, 13-intent scorer + hysteresis, baked-nav steering | needs (#12a) + scorer/selection (#12b) built; steering + loop wiring (#12c) pending |
+| NPC AI | [ai.md](ai.md) | Utility brain: needs, 13-intent scorer + hysteresis, flee-field + wander steering, identity-stagger driver | needs (#12a) + scorer/selection (#12b) + stagger/steering/loop driver (#12c) built; crowd moves. `route_step` goal-seeking waits on #13 |
 | Events | [events.md](events.md) | Decoupled gameplay event bus (transient ring + optional log) | built |
 | Macrosim | [macrosim.md](macrosim.md) | Background global population / faction / social simulation | core built (headless); app-loop wiring pending |
 
@@ -125,7 +125,8 @@ embodiment, inventory, event bus, the floor modules (per-floor generator,
 `FloorRegistry`, one-live-floor streaming, elevator), the background **macro
 society tick** (columnar demographics, inter-floor migration, a faction matrix +
 social graph), and the embodied **utility-AI** (needs + a pure 13-intent scorer
-with argmax/hysteresis today; baked-nav steering next), with the mob / item
-tables still pending — live in `src/game` as
+with argmax/hysteresis, and an identity-staggered driver that steers the crowd by
+the flee field + per-agent wander; goal-directed `route_step` waits on the mob /
+item tables) — live in `src/game` as
 `giga_game`, which links `giga_core` and is likewise headless-testable
 (`game_test`).

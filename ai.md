@@ -1,7 +1,8 @@
 # AI — utility brain for embodied NPCs
 
-> **Status: needs layer (#12a) and the pure scorer + selection FSM (#12b) BUILT;
-> stagger + steering + embody/loop wiring (#12c) pending.** This is the
+> **Status: needs layer (#12a), the pure scorer + selection FSM (#12b), and the
+> stagger + steering + embody/loop driver (#12c) all BUILT — the visible crowd
+> now moves.** This is the
 > porting-target spec for the embodied NPC brain, captured from the reference
 > (`../gigahrush`: `needs.ts`, `npc_utility.ts`, `npc_fsm.ts`, and the pathfinding
 > steering). Exact per-intent scorer constants were **re-extracted verbatim** (the
@@ -15,13 +16,14 @@
 >
 > - **Code:** [src/game/ai.h](src/game/ai.h) / [.cpp](src/game/ai.cpp)
 > - **Tests:** [tests/game_test.cpp](tests/game_test.cpp) `test_needs_decay`,
->   `test_scorer`, `test_selection`
+>   `test_scorer`, `test_selection`, `test_ai_step`
 > - **Architecture:** [ARCHITECTURE.md](ARCHITECTURE.md) §L4
-> - Upstream of [controller.md](controller.md): the brain writes
->   `Controller::wishDir`; `controller_step` turns it into velocity, then
->   [physics.md](physics.md) integrates it. The brain is the *only* new seam — the
->   locomotion path is unchanged, so an embodied NPC steers through exactly the
->   same systems as the player ([npcs.md](npcs.md): the player is not privileged).
+> - Upstream of [physics.md](physics.md): a plain NPC has **no `Controller`/`CameraTag`**
+>   (those are the *player's* input seam), so the brain writes its horizontal
+>   `Velocity` directly and [physics.md](physics.md) integrates it — gravity still
+>   owns `v.z`. The player body carries the same `Needs`/`AiBrain` but `ai_step`
+>   **skips any camera-holder**, so player input drives the identical locomotion
+>   path with no privileged branch ([npcs.md](npcs.md): the player is not special).
 
 This is the system that finally makes the **visible crowd move** — wander, queue
 for a toilet, flee a threat, seek food, patrol, fight. It runs only on the
@@ -145,35 +147,67 @@ margin, and lets an emergency intent ≥ 58 preempt regardless. The frozen
 thresholds live as named constants in [ai.h](src/game/ai.h) (`kSwitchMargin`,
 `kEmergencyScore`, and the `stickiness_amount` curve / re-plan bounds the #12c
 driver consumes). The **AiBrain** component (current intent + `stateTimer` +
-`nextDecisionAt`) is defined here and folds with embodiment like `Needs`; the
-re-plan **cadence**, the identity **stagger**, and the **path-commitment guard**
-are the driver's job and land with #12c. Verified headless by `test_selection`
-(margin stick/switch, emergency preempt, emergency-below-score fallback,
-tie-break).
+`nextDecisionAt` + a `decisions` re-plan counter) is defined here and folds with
+embodiment like `Needs`. Verified headless by `test_selection` (margin
+stick/switch, emergency preempt, emergency-below-score fallback, tie-break); the
+re-plan **cadence** and the identity **stagger** are the driver's job — see §5.
 
-### 4. Steering — follow the baked nav, don't search
+### 4. Steering — read baked fields, don't search
 
-Once an intent picks a target cell, movement is a **read of baked data**, never a
+Once an intent picks a target, movement is a **read of baked data**, never a
 per-agent A\* in the hot path ([performance.md](performance.md): baked, not
 searched). The reference used an HPA\* region graph + subcell BFS + `followPath`
 lookahead string-pulling + a flow-field `next[]` gradient. gigahrush2 already has
 the better-afforded version baked ([nav.md](nav.md)): **`route_step(coarse, fine,
 from, to)`** = coarse next-hop → descend that node's flow field, an O(1) read per
-step. Flee/scent steering reads **`diffusion_gradient`** ([diffusion.md](diffusion.md),
-the flee intent's input, distinct from nav). The brain's output is just
-`Controller::wishDir` toward the next step — then [controller.md](controller.md) +
-[physics.md](physics.md) do the rest.
+step. Flee steering reads **`diffusion_gradient`** ([diffusion.md](diffusion.md),
+the flee intent's input, distinct from nav).
 
-## Scheduling — identity-hash stagger, zero per-NPC RAM
+**Built (#12c — [src/game/ai.cpp](src/game/ai.cpp) `ai_step`).** The driver
+resolves each agent's macro cell from its `Transform`, and steers by writing the
+horizontal `Velocity` at `kNpcWalkSpeed` (2 m/s — the reference
+`HUMANOID_BASE_MOVE_SPEED`; the player's `Controller` runs 7):
 
-The driver iterates **all** live AI entities every frame (no persistent stripe
-buffers). Whether an agent re-scores *this* frame is a **stateless hash of its
-identity and the clock** (the reference's FNV-1a mix, `HASH_OFFSET 2166136261 /
-HASH_PRIME 16777619`, finalised with a `mix32`) — the same stateless-hash trick as
-the macro tick ([macrosim.md](macrosim.md)) and worldgen ([core/rng.h](src/core/rng.h)).
-So the re-plan schedule costs **no scheduling memory at all**: no per-entity
-next-tick timestamp, no wheel, no queue — the phase falls out of the id. This is
-what lets the whole crowd's cadence spread smoothly across frames for free.
+- **Flee** reads `−diffusion_gradient(danger)` and heads down-field toward safety —
+  the baked flee field driving locomotion end-to-end. If the field is flat (or
+  absent) the agent falls through to roam.
+- **Every other intent roams** a deterministic per-identity `wander_heading`
+  (`rand01(hash2(id, decisions))·2π`), so the crowd disperses and each re-plan
+  turns onto a fresh leg — visible motion for every intent, no idle clumping.
+- `v.z` is **never touched** — gravity ([gravity.md](gravity.md)) owns the vertical
+  axis, so walkers stay grounded.
+
+**Deferred (needs #13):** full `route_step` path-following toward an intent's
+*target cell*. The baked fine flow fields aim at the elevated lattice nodes
+(`z ∈ {16,48,80,112}`, [nav.md](nav.md)), but a gravity-bound walker at the ground
+storey can't climb a shaft to reach one, so following them now would steer bodies
+into walls. Real targets — a food item, a toilet cell, a monster — arrive with the
+#13 content tables ([items.md](items.md) / [monsters.md](monsters.md)); once an
+intent has a reachable goal cell, `route_step` becomes its steering with **no
+change to the scorer or the FSM** (the same stubbed-input seam as §2). Until then
+flee-gradient + wander give the whole crowd honest, deterministic motion.
+
+### 5. Driver + scheduling — identity-hash stagger, no queue
+
+`ai_step(reg, pool, danger, grid, now, dt)` is the per-frame driver: it iterates
+**all** live AI entities every frame (no persistent stripe buffers, no scheduling
+wheel or queue), skips camera-holders, decays nothing (that's `needs_step`), and
+for each agent either **re-plans or coasts**, then applies §4 steering. Whether an
+agent re-plans *this* frame is a compare against its own `AiBrain.nextDecisionAt`
+deadline; when it fires, the driver re-scores, re-selects, bumps the `decisions`
+counter, and sets the next deadline to
+`now + 1.5 + rand01(channel_seed(id,"utility_rethink"))·2.5` — a **per-identity
+period** (1.5–4.0 s) drawn from a **stateless hash** (the FNV-1a `channel_seed`
+fold, the same stateless-hash trick as the macro tick
+[macrosim.md](macrosim.md) and worldgen [core/rng.h](src/core/rng.h)). So two
+agents spawned the same frame drift apart permanently and the crowd's cadence
+spreads smoothly across frames. The only scheduling state is that one `float`
+deadline riding in the FSM record that already folds with embodiment — no wheel,
+no queue, no side table. Verified headless by `test_ai_step` (embodiment attaches
+`Needs`/`AiBrain`; one step commits an intent, staggers into [1.5, 4.0] s, and
+steers at walk speed with `v.z` untouched; the player is skipped; same id →
+identical steer, different id → different heading; a saturating danger ramp
+selects flee and drives `−x`; the deadline gates re-planning).
 
 ## Data-oriented stance (how it ports, not just what it is)
 
@@ -186,19 +220,20 @@ what lets the whole crowd's cadence spread smoothly across frames for free.
 - **FSM state = the minimum** — current intent + commit time + path handle, a tiny
   per-entity record, not a class hierarchy. The reference parks it in module
   WeakMaps; the port puts it in an ECS component so it folds with embodiment.
-- **Steering = baked reads** — `route_step` / `diffusion_gradient`, O(1), no search
-  on the tick.
-- **Universal** — the player is just an embodied record too; giving an NPC a
-  `Controller` and this brain, or handing the camera to the player, are the same
-  seam ([npcs.md](npcs.md)). Combat is isotropic: an NPC that shoots spawns an
-  honest projectile that can hit anyone, the firer included.
+- **Steering = baked reads** — `diffusion_gradient` now, `route_step` once #13
+  gives reachable goals, O(1), no search on the tick.
+- **Universal** — the player is just an embodied record too; it carries the same
+  `Needs`/`AiBrain`, and the driver simply **skips camera-holders** so player input
+  drives the identical `Velocity`→physics path an NPC brain writes to
+  ([npcs.md](npcs.md)). Combat is isotropic: an NPC that shoots spawns an honest
+  projectile that can hit anyone, the firer included.
 
 ## Connections
 
 Consumes needs (this doc), the baked nav ([nav.md](nav.md)) and flee field
 ([diffusion.md](diffusion.md)), and the [faction matrix](macrosim.md) (#10d).
-Produces `Controller::wishDir` for [controller.md](controller.md) → drives the
-same [physics.md](physics.md) as the player. Runs on the embodied slice the
+Produces horizontal `Velocity` straight into [physics.md](physics.md) — the same
+integrator the player reaches through [controller.md](controller.md). Runs on the embodied slice the
 [macrosim.md](macrosim.md) macro tick hands to [floors.md](floors.md) streaming.
 Content it acts on (food/drink items, weapons, monster targets) comes from the
 #13 tables ([items.md](items.md) / [monsters.md](monsters.md)).

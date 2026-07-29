@@ -16,8 +16,11 @@
 //     `select_intent` argmax+hysteresis, ported verbatim from `npc_utility.ts`
 //     and `npc_fsm.ts` (every coefficient, pressure curve, the FNV/lowbias32
 //     identity jitter and the shipping FSM thresholds are the frozen table).
-// The stagger + baked-nav steering + embody/loop wiring (#12c) build on top of
-// this same component set.
+//   * #12c — `ai_step`, the per-frame driver that runs #12a+#12b on the embodied
+//     live-floor slice: an identity-hash STAGGER re-plans each agent on its own
+//     deadline, the committed intent STEERS the body (flee down the baked
+//     diffusion gradient, otherwise a per-identity wander heading), and the Needs
+//     + AiBrain components ride embodiment. Wired into the app's fixed-step loop.
 #pragma once
 
 #include <array>
@@ -26,6 +29,15 @@
 #include "core/rng.h"       // hash_u32 (== reference mix32), rand01 (== jitter01)
 #include "ecs/registry.h"
 #include "game/faction.h"   // FactionId / kFactionCount — the scorer's trait table
+
+// Forward decls for the steering driver's world inputs (#12c): ai_step reads the
+// baked diffusion "danger" field + the macro grid to flee down the gradient
+// ([diffusion.md]). Pointer/reference parameters need only the declaration, so
+// ai.h stays light — ai.cpp includes world/field.h + world/macro_grid.h.
+namespace giga {
+template <class T> class Field;
+class MacroGrid;
+} // namespace giga
 
 namespace giga::game {
 
@@ -300,11 +312,14 @@ struct Perception {
 // The reference parks this in module WeakMaps; the port makes it an ECS
 // component so it materialises on embodiment and folds away with it, like Needs.
 // currentIntent + stateTimer drive the switch-margin stickiness; nextDecisionAt
-// is the absolute sim-time deadline for the identity-staggered re-plan (#12c).
+// is the absolute sim-time deadline for the identity-staggered re-plan (#12c);
+// decisions counts re-plans, which also re-rolls the wander heading so an agent
+// walks a straight leg, then turns — with zero stored heading state.
 struct AiBrain {
     std::uint8_t currentIntent = kIntentNone;
-    float stateTimer = 0.0f;     // seconds committed to currentIntent
-    float nextDecisionAt = 0.0f; // absolute sim time of the next re-plan (#12c)
+    float stateTimer = 0.0f;         // seconds committed to currentIntent
+    float nextDecisionAt = 0.0f;     // absolute sim time of the next re-plan
+    std::uint16_t decisions = 0;     // re-plan count; also varies the wander leg
 };
 
 // --- Selection FSM thresholds (the SHIPPING values from npc_fsm.ts) ---------
@@ -320,6 +335,17 @@ inline constexpr float kRethinkSpreadSec = 2.5f; // + rand01*spread -> [1.5, 4.0
 inline constexpr float kStickBase = 5.0f;        // stickiness at t=0
 inline constexpr float kStickCap = 7.0f;         // max growth of the bonus
 inline constexpr float kStickPerSec = 0.18f;     // bonus growth per second held
+
+// The re-plan stagger's jitter channel (#12c): each agent's deadline spread is
+// rand01(channel_seed(idSeed, kRethinkChannel)) — a distinct hash stream from the
+// score jitter so the cadence phase is uncorrelated with the score nudges.
+inline constexpr const char* kRethinkChannel = "utility_rethink";
+
+// NPC walk speed in world units / second (reference HUMANOID_BASE_MOVE_SPEED
+// 2.0; the player Controller runs faster at 7.0). ai_step writes it straight into
+// the horizontal Velocity — no acceleration model yet; physics owns v.z (gravity).
+// A calmer speed than the player keeps the crowd readable. DATA, retune freely.
+inline constexpr float kNpcWalkSpeed = 2.0f;
 
 // The survival intents that may preempt the current one without the margin.
 inline bool intent_is_emergency(std::uint8_t intent) {
@@ -347,5 +373,30 @@ void score_intents(const Perception& p, const Needs& needs, float out[kIntentCou
 // already carries its stickiness bonus) by kSwitchMargin. Argmax ties favour the
 // lower index. Pass kIntentNone for a fresh agent (returns the raw argmax).
 std::uint8_t select_intent(const float scores[kIntentCount], std::uint8_t current);
+
+// ===========================================================================
+// #12c — the per-frame steering driver ([ai.md] §4).
+//
+// One packed sweep over the embodied, NON-PLAYER agents (the player owns the
+// CameraTag + Controller and is driven by input, not the brain — [npcs.md]), run
+// each fixed sim step from the app loop AFTER needs_step. For every agent it:
+//   1. RE-PLANS on the identity-staggered deadline only — builds a Perception
+//      from what the engine exposes today (id/faction/hp/danger + the current
+//      intent's stickiness), scores + selects, and schedules the next deadline in
+//      [kRethinkBaseSec, kRethinkBaseSec+kRethinkSpreadSec]. Agents past their
+//      deadline re-score; the rest coast, so the crowd spreads across frames with
+//      zero scheduling RAM.
+//   2. STEERS by writing the horizontal Velocity (v.z is left to gravity): flee
+//      runs down the baked diffusion `danger` gradient ([diffusion.md]); every
+//      other intent roams a per-identity wander heading until real targets exist
+//      (#13 gives eat/sleep/... their destinations and the baked nav route_step
+//      its steering role — deferred here because the flow fields target elevated
+//      lattice nodes a gravity-bound walker cannot yet reach).
+//
+// `danger` may be null (no diffusion field on this floor) -> threat reads 0 and
+// no one flees, exactly the stubbed-input stance of the scorer. Pure game-layer
+// over EnTT + NpcPool + the read-only world grid, so it is exercised headless.
+void ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
+             const MacroGrid& grid, double now, float dt);
 
 } // namespace giga::game
