@@ -278,6 +278,14 @@ std::int16_t use_best_heal(Registry& reg, NpcPool& pool, EventBus& bus,
     // Smallest heal that still covers the wound, else the largest we have. So a
     // full medkit is not spent on a scratch, and a scratch's worth of bandage is
     // not withheld when it is all there is.
+    //
+    // ONE KEY HERE, TWO IN `use_best_food` ([needs.h]) — do not "unify" them. That
+    // rule ranks HP cost ahead of fit because 4 of the 21 feeding rows charge
+    // `kRiskyFeedHpCost` = 6 HP, so ranking food on fit alone buys a tighter fit with
+    // health. Healing has no such key to add: all 12 `Heal` rows in `data/items.csv`
+    // leave `use_b` empty, so every candidate this loop can see is free. Copying the
+    // cost key over would be dead code; copying THIS loop into a consumable selector
+    // is how the defect got in.
     int best = -1;
     std::int16_t bestAmt = 0;
     for (int i = 0; i < kInvSlots; ++i) {

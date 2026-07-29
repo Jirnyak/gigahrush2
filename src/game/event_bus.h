@@ -25,6 +25,14 @@
 //     producer's event is provably never read is worse than no bus — it looks
 //     wired. The tally is two increments per publish and turns "does anything read
 //     this" into a HUD line. It is a COUNT, not a substitute for a real consumer.
+//   * AND EVERY TYPE NOW HAS ONE. The tally answers "is this producer firing"; it
+//     does not answer "did anything act on it", and the bullet above says so.
+//     `EventFeed` at the bottom of this header is the missing half: it renders
+//     every event of every type to a line and KEEPS it across `clear()`, so the
+//     three `ItemTransferred` producers are read on the tick they publish instead
+//     of being wiped unread. It is deliberately the weakest possible consumer —
+//     text on a screen — because a bus's job is to carry, and inventing gameplay
+//     reactions to justify each enumerator would be the tail wagging the dog.
 #pragma once
 
 #include <cstddef>
@@ -36,11 +44,25 @@ namespace giga::game {
 // Event kinds. Extend as gameplay systems need them; the tag is just a u16 so
 // the enum can grow without touching the POD layout.
 //
-// **Every value below has a real producer.** That was not true until 2026-07-29:
-// four of the seven (`NpcSpawned`, `NpcMigrated`, `RelationChanged`,
-// `FloorEntered`) were published by no code path at all, so the enum advertised
-// events the engine could not emit. The producer is now named per value, and
-// adding a value without naming its producer reintroduces exactly that lie.
+// **Every value below names its producer as a symbol you can grep.** Four of the
+// seven (`NpcSpawned`, `NpcMigrated`, `RelationChanged`, `FloorEntered`) were
+// published by no code path at all before 2026-07-29, so the enum advertised
+// events the engine could not emit. Adding a value without naming its producer
+// reintroduces exactly that lie.
+//
+// Three of the four are produced OUTSIDE this library — the arrival of a floor is
+// something only the app shell knows about — and all three go through the single
+// `publish_floor_arrival` below rather than through hand-written publishes at each
+// site. That is the audit handle: one definition, and its call sites ARE the
+// producer list for those three values. main.cpp has THREE arrival sites (the
+// first load, the keyboard ride, the `--shot` ride) and its own comments record
+// two separate bugs caused by fixing one of them and forgetting the others, which
+// is why the payload is assembled here and not there.
+//
+// The count itself is not guessed either: `NpcPool::count()` is documented as the
+// high-water mark of slots ever handed out and never decreases, so its delta
+// across a load IS the number of records that load seeded. `alive()` would be the
+// wrong figure — it falls when somebody dies.
 enum class EventType : std::uint16_t {
     None = 0,
     // A contiguous BATCH of pool records was seeded. Batch and not per-record,
@@ -50,9 +72,11 @@ enum class EventType : std::uint16_t {
     // per-record event would publish 420 entries for one Residential load,
     // outside any drain cycle, and the next `clear()` would wipe the lot unread.
     // `a` = first record id, `b` = how many, `c` = floor (see event_floor).
-    // Producer: the floor-load sites in main.cpp, from the `NpcPool::count()`
-    // delta across `ensure_loaded` — count() is documented as slots ever handed
-    // out, so its delta IS the number of records spawned.
+    // Producer: `publish_floor_arrival`, from the `NpcPool::count()` delta across
+    // the load. Suppressed when the delta is zero, which is every RE-entry to a
+    // floor — a module seeds its crowd exactly once ([floor_stream.h]) and every
+    // later visit re-embodies the same id range, so a per-visit NpcSpawned would
+    // report 420 fresh people who are the same 420 people.
     NpcSpawned,
     // `a` = victim NpcId or kInvalidNpc for a mob, `b` = MobKind or 0xFF,
     // `c` = killer ENTITY id (not a pool id — see relations_drain_deaths).
@@ -60,15 +84,23 @@ enum class EventType : std::uint16_t {
     NpcDied,
     // A record moved between floors. `a` = record id, `b` = from floor,
     // `c` = to floor (both signed-packed, see event_floor).
-    // Producer: the elevator ride sites in main.cpp. Note this is the RIDE and
-    // not a pool-row rewrite: `NpcPool::floor()` is written in exactly one place
-    // (population.cpp:111, at seed time) and never updated afterwards, so the
-    // row still names the floor the record was seeded on. Do not read the row to
-    // recover where somebody is; read this.
+    // Producer: `publish_floor_arrival`, when `fromFloor != toFloor`. Note this is
+    // the RIDE and not a pool-row rewrite: `NpcPool::floor()` is written in exactly
+    // one place (population.cpp:111, at seed time) and never updated afterwards, so
+    // the row still names the floor the record was seeded on. Do not read the row
+    // to recover where somebody is; read this.
     NpcMigrated,
     // Two matrix rows shifted. `a` = row A, `b` = row B, `c` = the new relation
     // value, zero-extended from int8 (recover with event_relation).
     // Producer: faction_relations.cpp `relations_drain_deaths`.
+    //
+    // That function is the only publisher and it is itself a CONSUMER of NpcDied,
+    // so this value is the one place the bus feeds itself. Which is also the trap
+    // worth naming: a producer that only runs when somebody calls it is not a
+    // producer until somebody does, and `relations_drain_deaths` had no caller
+    // outside its own suite — a live `FactionRelations` has to be owned by the app
+    // shell and drained beside the other NpcDied consumers, or this enumerator is
+    // reachable only from a test.
     RelationChanged,
     // An item moved between two inventories. `a` = from, `b` = to (either may be
     // kInvalidNpc for "the world"), `c` = item id.
@@ -76,7 +108,7 @@ enum class EventType : std::uint16_t {
     ItemTransferred,
     // The player / an embodied NPC entered a floor. `a` = floor (signed-packed,
     // see event_floor), `b` = LayerId, `c` = the entering record id.
-    // Producer: the floor-load and ride sites in main.cpp.
+    // Producer: `publish_floor_arrival`, unconditionally — every arrival is one.
     //
     // `b` is the storage SLOT and `a` is the logical label; they are different
     // concepts and the label is mutable ([floors.md]). A consumer that wants the
@@ -237,5 +269,81 @@ inline bool publish_floor_entered(EventBus& bus, std::int32_t floorNumber,
     return bus.publish(EventType::FloorEntered, pack_floor(floorNumber), layer,
                        npcId, tick);
 }
+
+// --- one floor arrival, one call --------------------------------------------
+//
+// Everything an arrival publishes: the crowd it seeded (NpcSpawned, only if the
+// pool actually grew), the ride that got you here (NpcMigrated, only if you came
+// from a different floor), and the arrival itself (FloorEntered, always). Returns
+// how many events were published, 1..3.
+//
+// This exists as ONE function because `src/app/main.cpp` has THREE arrival sites
+// and a documented history of fixing one and forgetting the rest — the rumour
+// reset and the door build were each shipped broken at the `--shot` site for that
+// exact reason, and both are commented in place. Three publishes copied to three
+// sites is nine chances to drift; this is one.
+//
+// `countBefore`/`countAfter` are `NpcPool::count()` either side of the load. It is
+// a HIGH-WATER MARK that never decreases, so `after - before` is the number of
+// records seeded and is 0 on every re-entry. `firstId` is derived as
+// `countBefore`, which is exact because the pool is a bump allocator that never
+// reclaims a slot ([npcs.md]).
+//
+// Pass `fromFloor == toFloor` for a load that is not a ride (the first one).
+std::uint32_t publish_floor_arrival(EventBus& bus, std::uint32_t countBefore,
+                                   std::uint32_t countAfter,
+                                   std::int32_t fromFloor, std::int32_t toFloor,
+                                   std::uint32_t layer, std::uint32_t npcId,
+                                   std::uint64_t tick);
+
+// --- the consumer -----------------------------------------------------------
+//
+// Render one event as a line of text. Returns false for a type it cannot render
+// (only `None`) or for a null/zero-length buffer, leaving `out` untouched.
+//
+// A switch and not a table of format strings: the payload slots mean different
+// things per type and two of them need `event_floor`/`event_relation` to be read
+// at all, so a table would either print the raw u32 (4294967246 for floor -50) or
+// need a per-type decoder beside it anyway.
+bool event_line(const Event& e, char* out, std::size_t cap);
+
+// The last few events, as text, held across `clear()`.
+//
+// This is what makes the bus observable. Reading `EventBus::events()` from the
+// HUD cannot work: the bus is transient and cleared once per FRAME while the sim
+// runs up to 8 fixed steps per frame, so the render pass would see whatever the
+// last step happened to leave — almost always nothing. So the feed is drained on
+// the sim's clock and keeps its lines until they are pushed out by newer ones.
+//
+// Fixed storage, no allocation, POD: 6 x 96 B of text + 6 x 8 B of ticks + two
+// cursors = 640 B. Sized for a HUD block that stays readable, not for history —
+// that is what `set_logging` is for.
+struct EventFeed {
+    static constexpr std::size_t kLines = 6;
+    static constexpr std::size_t kLineLen = 96;
+
+    char line[kLines][kLineLen] = {};
+    std::uint64_t at[kLines] = {};   // the sim tick each line was published on
+    std::size_t next = 0;            // ring cursor: the slot to overwrite next
+    std::size_t live = 0;            // how many slots hold a line, <= kLines
+};
+
+// Render this cycle's batch into `feed`. Returns how many lines were written.
+//
+// Call it LAST — after every other consumer and before `clear()` — because a
+// consumer may itself publish: `relations_drain_deaths` reads NpcDied and emits
+// RelationChanged, and draining the feed first would render the batch without it.
+//
+// A cycle with more than kLines events loses the oldest of them, on purpose: a
+// feed that dropped the NEWEST would freeze on screen during a firefight, which
+// is exactly when it has something to say.
+std::size_t feed_drain(EventFeed& feed, const EventBus& bus);
+
+// Line `i`, NEWEST first (i = 0 is the most recent). nullptr past `live`.
+const char* feed_line(const EventFeed& feed, std::size_t i);
+
+// The sim tick line `i` was published on, for a HUD that wants to fade old lines.
+// 0 past `live`.
+std::uint64_t feed_tick(const EventFeed& feed, std::size_t i);
 
 } // namespace giga::game

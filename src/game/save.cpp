@@ -5,11 +5,15 @@
 
 #include "core/tick.h"        // kSimHz — the one number the header must not guess
 #include "core/wrap.h"
-#include "ecs/components.h"   // Transform, Renderable
+#include "ecs/components.h"   // Transform, Velocity, AABB, Renderable
 #include "game/container.h"   // Container, kContainerSlots
+#include "game/embody.h"      // NpcRef, kEmbodyCellSize
+#include "game/floor_stream.h"  // FloorStreamer, FloorRegistry, RideResult
 #include "game/item_table.h"  // kItemNames, kItemCount
 #include "game/mob_table.h"   // kMobNames, kMobKindCount
-#include "world/types.h"      // kCellSize, wrap_macro
+#include "sim/physics.h"      // aabb_overlaps_solid — the solver's own predicate
+#include "world/types.h"      // kCellSize, kVoxelSize, wrap_macro
+#include "world/world.h"      // World::grid, for the placement probes
 
 namespace giga::game {
 
@@ -455,12 +459,11 @@ OpenedContainerKey container_key(int floorNumber, const vec3& pos) {
     // `(cell + 0.5) * kCellSize` in x/y and `cell * kCellSize + kContainerHalf.z` in z,
     // and kContainerHalf.z is 0.45 m inside a 2 m cell — so the truncation lands on the
     // spawning cell for every axis, with 0.55 m of margin on the tightest one.
-    k.cx = static_cast<std::uint8_t>(
-        wrap_macro(static_cast<int>(pos.x / kCellSize)));
-    k.cy = static_cast<std::uint8_t>(
-        wrap_macro(static_cast<int>(pos.y / kCellSize)));
-    k.cz = static_cast<std::uint8_t>(
-        wrap_macro(static_cast<int>(pos.z / kCellSize)));
+    //
+    // Through the shared helper rather than inline, so a crate's key and a restored
+    // body's cell cannot end up one cell apart over a difference in how two copies of
+    // this expression round.
+    macro_cell_of(pos, k.cx, k.cy, k.cz);
     return k;
 }
 
@@ -529,6 +532,256 @@ std::size_t apply_opened_containers(Registry& reg, LayerId layer, int floorNumbe
     // Load time is unbounded by contract ([performance.md]) and the sim tick never runs
     // this, so a hash set would buy nothing but a container to allocate.
     return hits;
+}
+
+// ---------------------------------------------------------------------------
+// Coming back to where you stood
+// ---------------------------------------------------------------------------
+
+// The hop ceiling must cover every label the registry can hold, or a deep travelling
+// load could stop short of the floor its own save named and report success.
+static_assert(kMaxLoadHops >= kFloorSlots,
+              "kMaxLoadHops is FloorRegistry::kFloorSlots; keep them together");
+// Placement puts a body at a cell centre by kCellSize; `embody` puts one there by
+// kEmbodyCellSize. They are the same 2 m today and the day they are not, a restored body
+// lands off the grid its floor was generated on.
+static_assert(kEmbodyCellSize == kCellSize,
+              "embody and placement must agree on the size of a macro cell");
+
+LoadTravel travel_to_saved_floor(LevelStack& stack, FloorRegistry& reg, Registry& ecs,
+                                 NpcPool& pool, FloorStreamer& streamer, Entity player,
+                                 int fromFloor, int targetFloor,
+                                 std::uint8_t arrivalZ) {
+    LoadTravel out;
+    out.floor = fromFloor;
+    out.player = player;
+    if (const Transform* tr = ecs.try_get<Transform>(player)) out.layer = tr->layer;
+
+    if (targetFloor == fromFloor) {
+        out.arrived = true;
+        return out;
+    }
+    // A save from a build whose stack carried a floor this one does not. Refused before
+    // anything moves: a load that travelled halfway and then stopped is harder to
+    // explain to the player than one that says it could not go at all.
+    if (reg.module_at(targetFloor) == kInvalidModule) return out;
+
+    for (int hop = 0; hop < kMaxLoadHops && out.floor != targetFloor; ++hop) {
+        const int dir = targetFloor > out.floor ? +1 : -1;
+        // The player's DURABLE record id, re-read each hop because every ride destroys
+        // the body and builds a new one. kInvalidNpc here would make `ensure_loaded`
+        // designate a NEW player on the destination floor — a second camera holder — so
+        // a body with no NpcRef stops the travel instead of riding it.
+        NpcId pid = kInvalidNpc;
+        if (const NpcRef* ref = ecs.try_get<NpcRef>(out.player)) pid = ref->id;
+        if (pid == kInvalidNpc) break;
+
+        const RideResult ride = streamer.travel(stack, reg, ecs, pool, out.player,
+                                               out.floor, dir, arrivalZ, pid);
+        if (!ride.moved) break;   // end of the stack, or the next floor would not load
+        out.player = ride.player;
+        out.layer = ride.layer;
+        out.floor = ride.floor;
+        out.moved = true;
+        ++out.hops;
+        // `next_labelled_floor` steps to the nearest LABEL beyond the current floor and
+        // the target is itself a label, so the target cannot be passed. Checked anyway:
+        // the loop condition tests equality, so an overshoot would ride to the end of
+        // the building before the hop ceiling stopped it.
+        if ((dir > 0 && out.floor > targetFloor) ||
+            (dir < 0 && out.floor < targetFloor))
+            break;
+    }
+    out.arrived = (out.floor == targetFloor);
+    return out;
+}
+
+void macro_cell_of(const vec3& pos, std::uint8_t& cx, std::uint8_t& cy,
+                   std::uint8_t& cz) {
+    cx = static_cast<std::uint8_t>(wrap_macro(static_cast<int>(pos.x / kCellSize)));
+    cy = static_cast<std::uint8_t>(wrap_macro(static_cast<int>(pos.y / kCellSize)));
+    cz = static_cast<std::uint8_t>(wrap_macro(static_cast<int>(pos.z / kCellSize)));
+}
+
+vec3 macro_cell_centre(std::uint8_t cx, std::uint8_t cy, std::uint8_t cz) {
+    return vec3{(static_cast<float>(cx) + 0.5f) * kCellSize,
+                (static_cast<float>(cy) + 0.5f) * kCellSize,
+                (static_cast<float>(cz) + 0.5f) * kCellSize};
+}
+
+namespace {
+
+// Half-extents `physics_step` would use for this entity. The fallback is the solver's
+// own (a 0.4 m cube) and NOT `AABB`'s default member of {0.4, 0.4, 0.9}: matching the
+// solver matters more than matching the struct, because a placement test more permissive
+// than the solver hands back a cell the body cannot actually occupy.
+vec3 half_extents_of(Registry& reg, Entity e) {
+    if (const AABB* b = reg.try_get<AABB>(e)) return b->half;
+    return vec3{0.4f, 0.4f, 0.4f};
+}
+
+// Does a body of `half` fit standing in this cell, and is there a floor under it?
+// Coordinates are raw (possibly out of range) cell indices; both axes wrap.
+void probe_cell(const World& world, const vec3& half, int cx, int cy, int cz,
+                bool& fits, bool& supported) {
+    const vec3 c = macro_cell_centre(static_cast<std::uint8_t>(wrap_macro(cx)),
+                                     static_cast<std::uint8_t>(wrap_macro(cy)),
+                                     static_cast<std::uint8_t>(wrap_macro(cz)));
+    fits = !aabb_overlaps_solid(world, c, half);
+    supported = false;
+    if (!fits) return;
+    // One sub-voxel (0.25 m) thick, the width of the body, directly under the feet: deep
+    // enough to find a slab, shallow enough not to see through a Derelict floor's
+    // collapsed hole to the storey below. The same predicate as above, so "supported"
+    // cannot disagree with "fits" about what solid means.
+    const vec3 footHalf{half.x, half.y, kVoxelSize * 0.5f};
+    const vec3 foot{c.x, c.y, c.z - half.z - kVoxelSize * 0.5f};
+    supported = aabb_overlaps_solid(world, foot, footHalf);
+}
+
+// The wire carries hp as std::int32_t and the pool row is std::int16_t, so the load side
+// is where that narrowing happens. Clamped rather than truncated: a forged save with
+// hp = 65636 would otherwise wrap to 100 and look plausible.
+std::int16_t clamp_i16(std::int32_t v) {
+    if (v < INT16_MIN) return static_cast<std::int16_t>(INT16_MIN);
+    if (v > INT16_MAX) return static_cast<std::int16_t>(INT16_MAX);
+    return static_cast<std::int16_t>(v);
+}
+
+} // namespace
+
+PlacedCell find_standable_cell(const World& world, const vec3& half, std::uint8_t cx,
+                               std::uint8_t cy, std::uint8_t cz, int radius) {
+    PlacedCell out;
+    out.cx = cx;
+    out.cy = cy;
+    out.cz = cz;
+
+    bool fits = false, supported = false;
+    probe_cell(world, half, cx, cy, cz, fits, supported);
+    if (fits) {
+        // The cell the caller asked for still holds a body. Support is reported and NOT
+        // required: a player who saved mid-jump or in fly mode was legitimately in the
+        // air, and moving them to the nearest floor would be a teleport to fix nothing.
+        out.ok = true;
+        out.supported = supported;
+        return out;
+    }
+    if (radius < 1) return out;
+    if (radius > kPlaceRadiusMax) radius = kPlaceRadiusMax;
+
+    // Two buckets, filled by one scan: the best cell with a floor under it, and the best
+    // cell without. The supported bucket wins whenever it has anything, because a body
+    // dropped into a shaft falls and lands while a body sealed in solid never moves
+    // again — so "no floor nearby" must not be reported as failure.
+    struct Best {
+        int ring = 0;
+        int adz = 0;
+        int planar = 0;
+        std::uint8_t cx = 0;
+        std::uint8_t cy = 0;
+        std::uint8_t cz = 0;
+        bool have = false;
+    };
+    Best best[2];
+    // Strictly better under (ring, |dz|, planar distance). STRICT, so the first
+    // candidate found at a given key keeps it and the scan order settles ties — which is
+    // what makes two loads of the same save place the body identically.
+    auto improves = [](const Best& b, int ring, int adz, int planar) {
+        if (!b.have) return true;
+        if (ring != b.ring) return ring < b.ring;
+        if (adz != b.adz) return adz < b.adz;
+        return planar < b.planar;
+    };
+
+    for (int dz = -radius; dz <= radius; ++dz) {
+        const int adz = dz < 0 ? -dz : dz;
+        for (int dy = -radius; dy <= radius; ++dy) {
+            const int ady = dy < 0 ? -dy : dy;
+            for (int dx = -radius; dx <= radius; ++dx) {
+                const int adx = dx < 0 ? -dx : dx;
+                int ring = adx > ady ? adx : ady;
+                if (adz > ring) ring = adz;
+                if (ring == 0) continue;   // the requested cell, already rejected above
+                const int planar = adx * adx + ady * ady;
+                const bool couldSup = improves(best[0], ring, adz, planar);
+                const bool couldFree = improves(best[1], ring, adz, planar);
+                // Skip the solidity test outright once neither bucket can improve. This
+                // is what keeps the default 17^3 = 4,913-cell neighbourhood cheap: once
+                // a ring-1 cell is found, only ring-1 cells are ever probed again.
+                if (!couldSup && !couldFree) continue;
+                probe_cell(world, half, cx + dx, cy + dy, cz + dz, fits, supported);
+                if (!fits) continue;
+                if (!(supported ? couldSup : couldFree)) continue;
+                Best& b = best[supported ? 0 : 1];
+                b.ring = ring;
+                b.adz = adz;
+                b.planar = planar;
+                b.cx = static_cast<std::uint8_t>(wrap_macro(cx + dx));
+                b.cy = static_cast<std::uint8_t>(wrap_macro(cy + dy));
+                b.cz = static_cast<std::uint8_t>(wrap_macro(cz + dz));
+                b.have = true;
+            }
+        }
+    }
+
+    const Best& pick = best[0].have ? best[0] : best[1];
+    // Nothing in the neighbourhood holds a body. `ok` stays false and the cell stays
+    // exactly as asked — see the header on why a plausible-looking substitute would be
+    // the worse answer.
+    if (!pick.have) return out;
+    out.cx = pick.cx;
+    out.cy = pick.cy;
+    out.cz = pick.cz;
+    out.rings = static_cast<std::uint8_t>(pick.ring);
+    out.ok = true;
+    out.moved = true;
+    out.supported = best[0].have;
+    return out;
+}
+
+PlacedCell place_body_at_cell(Registry& reg, const World& world, Entity body,
+                              std::uint8_t cx, std::uint8_t cy, std::uint8_t cz,
+                              int radius) {
+    PlacedCell out;
+    out.cx = cx;
+    out.cy = cy;
+    out.cz = cz;
+    Transform* tr = reg.try_get<Transform>(body);
+    if (!tr) return out;   // not an embodied body; there is nothing to place
+
+    out = find_standable_cell(world, half_extents_of(reg, body), cx, cy, cz, radius);
+    if (!out.ok) return out;   // refuse rather than plant a body inside a wall
+
+    tr->pos = macro_cell_centre(out.cx, out.cy, out.cz);
+    // Not tidiness: a load can land mid-fall, and physics resolves the next step from
+    // the NEW position — a carried-over 30 m/s would drive the body straight through the
+    // floor it was just placed on.
+    if (Velocity* v = reg.try_get<Velocity>(body)) v->v = vec3{0.0f, 0.0f, 0.0f};
+    return out;
+}
+
+PlacedCell place_body_safely(Registry& reg, const World& world, Entity body,
+                             int radius) {
+    PlacedCell out;
+    const Transform* tr = reg.try_get<Transform>(body);
+    if (!tr) return out;
+    std::uint8_t cx = 0, cy = 0, cz = 0;
+    macro_cell_of(tr->pos, cx, cy, cz);
+    return place_body_at_cell(reg, world, body, cx, cy, cz, radius);
+}
+
+void apply_player_snapshot(NpcPool& pool, NpcId id, const PlayerSnapshot& snap) {
+    if (!pool.valid(id)) return;
+    pool.needs(id) = snap.clock;
+    pool.inventory(id) = snap.inv;
+    pool.hp(id) = clamp_i16(snap.hp);
+    // See the header: a zero maximum would make `entity_health` report 0/0 and every
+    // heal a no-op, so a save that carries none leaves the row's own maximum alone.
+    if (snap.maxHp > 0) pool.max_hp(id) = clamp_i16(snap.maxHp);
+    // `floor` is deliberately not written — it is the seeding label, and nothing in the
+    // tree reads it. `cx/cy/cz` are not written either: placement moves the BODY and
+    // `fold_back` re-derives the row from that transform.
 }
 
 } // namespace giga::game

@@ -8,8 +8,9 @@
 #include "core/math.h"
 #include "core/wrap.h"        // wrap_delta_f — the census and the placement must agree
 #include "ecs/components.h"
-#include "game/floor_gen.h"  // floor_room_stride
+#include "game/floor_gen.h"  // floor_room_stride, floor_room_mask
 #include "game/wander.h"     // wander_init — a fog mob with no WanderTarget is a statue
+#include "sim/fluid.h"       // fluid_data/fluid_at — nothing stands in a sealed sump
 #include "world/macro_grid.h"
 #include "world/world.h"
 
@@ -46,6 +47,42 @@ constexpr int kPlaceTries = 24;
 // on exactly the floors that need the monsters most. Refusing to share would turn a
 // spatial change into a population regression.
 constexpr int kRoomTries = 24;
+
+// A cell a monster may be placed in: air, and not standing water.
+//
+// A sump's basin is sealed on all four sides by its kerb ([floor_gen.h] Standing
+// water), so a head placed there is a monster in a box: it can never reach the player,
+// the player can never reach it, and it counts against the floor's budget forever.
+// Today's basin cells are HALF-SOLID, so the air test already refuses them on type —
+// the water test states the rule rather than the accident, and it is the half that
+// survives a floor kind seeding an open pool, where the cell is plain air.
+//
+// `wet` is the layer's resolved fluid array (nullptr on a dry layer), fetched once per
+// spawn call rather than per candidate — a deep floor tests up to 98,304 candidates.
+bool placeable(const float* wet, const MacroGrid& g, int x, int y, int z) {
+    if (g.cell(x, y, z) != kCellAir) return false;
+    return fluid_at(wet, x, y, z) < kFluidMinFlow;
+}
+
+// A floor's spawn roster: the rows a weighted draw may pick, with prefix sums.
+//
+// One of these per ROOM KIND plus one unfiltered, built in a single 69-row pass. That
+// is 11 bit tests per surviving row — 759 in the worst case, over a permanently
+// cache-resident 2,484 B table, once per floor load — instead of rebuilding a roster
+// per pack, which at a deep floor's 4096-head budget would be 4096 x 69 row tests.
+struct Roster {
+    std::uint8_t kind[kMobKindCount];
+    std::uint32_t cum[kMobKindCount];
+    std::uint32_t n = 0;
+    std::uint32_t total = 0;
+};
+
+void roster_add(Roster& r, std::size_t row, std::uint32_t weight) {
+    r.total += weight;
+    r.kind[r.n] = static_cast<std::uint8_t>(row);
+    r.cum[r.n] = r.total;
+    ++r.n;
+}
 
 // Clamp a room-local coordinate into the interior, 1..span. The wall lattice sits
 // on local 0, so 0 is never a legal standing cell even when it happens to be air
@@ -198,6 +235,7 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
                                std::uint32_t seed, std::uint32_t cap,
                                FloorKind kind) {
     const MacroGrid& grid = world.grid();
+    const float* wet = fluid_data(world);  // resolved ONCE; see placeable
 
     std::uint32_t want =
         static_cast<std::uint32_t>(mob_count_for_floor(floorNumber, danger, theme));
@@ -208,24 +246,36 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
     const std::uint8_t floorBit =
         static_cast<std::uint8_t>(anchor_for_floor(floorNumber));
 
-    // Build the roster for this floor once: every row whose habitat includes this
+    // Build the rosters for this floor once: every row whose habitat includes this
     // floor's anchor and which can actually be rolled (weight > 0 excludes the
     // hand-placed kinds like CREATOR). This is the "per-floor weights over one
     // global table" contract — nothing here redefines a stat row.
-    std::uint8_t roster[kMobKindCount];
-    std::uint32_t cumWeight[kMobKindCount];
-    std::uint32_t rosterN = 0;
-    std::uint32_t total = 0;
+    //
+    // **`MobDef::roomMask` gets its first reader here.** All 69 rows author a `rooms`
+    // column and nothing in the tree had ever looked at one, so the whole ecology
+    // column was decoration. A room now draws only from the kinds authored to live in
+    // that kind of room.
+    //
+    // Slot kFloorRoomBits is the unfiltered roster, and it is a FALLBACK rather than a
+    // spare: the room filter empties the roster outright on real floors. Measured over
+    // data/mobs.csv against the six habitat anchors — bathroom is empty at Z-50, Z+14
+    // and Z+30; kitchen at Z-50; smoking at Z-26; hq at Z+14. A room whose roster came
+    // out empty would silently drop that pack, and a floor whose mix leans on such a
+    // bit would lose a slice of its whole population. So an empty room roster falls
+    // back to the floor's, exactly as samosbor_fog_roster relaxes rather than starving
+    // ([mob_spawn.h]).
+    Roster rosters[kFloorRoomBits + 1] = {};
     for (std::size_t i = 0; i < kMobKindCount; ++i) {
         const MobDef& m = kMobTable[i];
         if ((m.floorMask & floorBit) == 0) continue;
         if (m.spawnWeightX10 == 0) continue;
-        total += m.spawnWeightX10;
-        roster[rosterN] = static_cast<std::uint8_t>(i);
-        cumWeight[rosterN] = total;
-        ++rosterN;
+        roster_add(rosters[kFloorRoomBits], i, m.spawnWeightX10);
+        for (std::size_t b = 0; b < kFloorRoomBits; ++b)
+            if ((m.roomMask & (1u << b)) != 0)
+                roster_add(rosters[b], i, m.spawnWeightX10);
     }
-    if (rosterN == 0 || total == 0) return 0;
+    const Roster& floorRoster = rosters[kFloorRoomBits];
+    if (floorRoster.n == 0 || floorRoster.total == 0) return 0;
 
     // The room lattice, straight from the generator so the two can never disagree
     // about where a wall is. A room is the (stride-1)^2 interior at local 1..span.
@@ -276,12 +326,24 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
         std::uint8_t& roomUse = packsInRoom[static_cast<std::size_t>(room)];
         if (roomUse < 0xFFu) ++roomUse;
 
-        // 2. ONE kind for the whole room. Rolled from its own hash rather than from
-        //    `r` directly, so the room draw and the kind draw are not correlated.
-        const std::uint32_t pick = mix(r ^ 0x2545f491u) % total;
+        const int rx = room % roomsPerAxis;
+        const int ry = room / roomsPerAxis;
+
+        // 2. ONE kind for the whole room, drawn from THAT ROOM'S roster. Rolled from
+        //    its own hash rather than from `r` directly, so the room draw and the kind
+        //    draw are not correlated.
+        //
+        //    `floor_room_mask` is keyed on (kind, floorNumber, room) and on nothing
+        //    else, which is what lets the container spawner agree with this about what
+        //    room 5 is without either storing a tag ([floor_gen.h]).
+        const int bit =
+            floor_room_bit_index(floor_room_mask(kind, floorNumber, rx, ry));
+        const Roster& rs =
+            (bit >= 0 && rosters[bit].n != 0) ? rosters[bit] : floorRoster;
+        const std::uint32_t pick = mix(r ^ 0x2545f491u) % rs.total;
         std::uint32_t ri = 0;
-        while (ri + 1 < rosterN && pick >= cumWeight[ri]) ++ri;
-        const MobKind mobKind = static_cast<MobKind>(roster[ri]);
+        while (ri + 1 < rs.n && pick >= rs.cum[ri]) ++ri;
+        const MobKind mobKind = static_cast<MobKind>(rs.kind[ri]);
         const MobDef& def = mob_def(mobKind);
 
         // 3. How many heads, from the row's own authored band. Loner is forced to
@@ -299,9 +361,9 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
         if (heads > want - spawned) heads = want - spawned;
 
         // 4. The pack's anchor: a standable cell inside the room. floor_gen
-        //    guarantees a solid slab at z=0, so "air here" is sufficient.
-        const int x0 = (room % roomsPerAxis) * stride;
-        const int y0 = (room / roomsPerAxis) * stride;
+        //    guarantees a solid slab at z=0, so "air, and dry" is sufficient.
+        const int x0 = rx * stride;
+        const int y0 = ry * stride;
         int ax = 0, ay = 0;
         bool haveAnchor = false;
         for (int t = 0; t < kPlaceTries; ++t) {
@@ -311,7 +373,7 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
                  static_cast<int>((h >> 7) % static_cast<std::uint32_t>(span));
             ay = y0 + 1 +
                  static_cast<int>((h >> 19) % static_cast<std::uint32_t>(span));
-            if (grid.cell(ax, ay, kGroundZ) == kCellAir) { haveAnchor = true; break; }
+            if (placeable(wet, grid, ax, ay, kGroundZ)) { haveAnchor = true; break; }
         }
         if (!haveAnchor) continue;  // a room filled solid with rubble
 
@@ -344,7 +406,7 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
                     // rooms and undo the grouping this whole function exists for.
                     cx = x0 + clamp_local(ax - x0 + dx, span);
                     cy = y0 + clamp_local(ay - y0 + dy, span);
-                    if (grid.cell(cx, cy, kGroundZ) == kCellAir) {
+                    if (placeable(wet, grid, cx, cy, kGroundZ)) {
                         placed = true;
                         break;
                     }
@@ -538,6 +600,7 @@ FogTickReport samosbor_fog_tick_at(Registry& reg, const World& world,
     if (roster.n == 0 || roster.total == 0) return out;
 
     const MacroGrid& grid = world.grid();
+    const float* wet = fluid_data(world);  // resolved ONCE; see placeable
     const std::uint8_t level = mob_level_for_floor(floorNumber, danger);
     const float nearR2 = kThreatNearRadiusM * kThreatNearRadiusM;
     const float outerR2 = kThreatOuterRadiusM * kThreatOuterRadiusM;
@@ -587,7 +650,7 @@ FogTickReport samosbor_fog_tick_at(Registry& reg, const World& world,
                                       kThreatOuterRadiusCells);
             const int ty = wrap_macro(acy + static_cast<int>((h >> 19) % span) -
                                       kThreatOuterRadiusCells);
-            if (grid.cell(tx, ty, kGroundZ) != kCellAir) continue;
+            if (!placeable(wet, grid, tx, ty, kGroundZ)) continue;
 
             // The census's own arithmetic, on the exact position about to be
             // written. **This is the invariant that makes the budget terminate**:

@@ -30,10 +30,16 @@
 #include <type_traits>
 #include <vector>
 
+#include "core/tick.h"        // kSimDt — never a bare 1/120 ([core/tick.h])
 #include "game/container.h"
+#include "game/embody.h"
 #include "game/floor_gen.h"
 #include "game/floor_spec.h"
+#include "game/floor_stream.h"
+#include "game/npc_pool.h"
 #include "game/save.h"
+#include "sim/physics.h"
+#include "world/level_stack.h"
 #include "world/world.h"
 
 namespace saveload_test {
@@ -687,6 +693,455 @@ void ledger_is_pinned() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Placement — the half of "load restores your position" that can soft-lock
+// ---------------------------------------------------------------------------
+
+// The standard embodied player box: 0.4 m half-width, half-height from stature
+// ([embody.cpp] — a 1.75 m adult gives 0.875). Used by every placement test below so the
+// numbers in them are the numbers the game uses.
+const vec3 kBodyHalf{0.4f, 0.4f, body_half_height(static_cast<std::uint16_t>(1750))};
+
+// A wall CROSSING on a stride-8 lattice: both grid lines are solid there, it is not a
+// doorway (openings sit at offsets [2, stride-2], never 0) and it is nowhere near a
+// lattice lobby (those cover 13..19 around 16/48/80/112).
+constexpr std::uint8_t kWallX = 8;
+constexpr std::uint8_t kWallY = 8;
+// A room interior at the standing storey: x%8 and y%8 are both 7, so no wall line, and
+// Residential scatters no rubble.
+constexpr std::uint8_t kRoomX = 7;
+constexpr std::uint8_t kRoomY = 7;
+constexpr std::uint8_t kStandZ = 1;   // [population.cpp] kGroundZ, one cell above the slab
+
+// A Residential floor, the densest wall lattice in the table (stride 8).
+void gen_residential(World& w, int floorZ) {
+    generate_floor(w, floorZ, floor_spec(FloorKind::Residential), 1337u);
+}
+
+void cell_conventions() {
+    // A cell centre round-trips to its own cell. This is the whole contract between the
+    // save side (which writes a cell from a Transform) and the load side (which builds a
+    // Transform from a cell): break it and a restored body is one cell from where it was
+    // saved, forever, silently.
+    const std::uint8_t probes[] = {0, 1, 2, 40, 91, 127};
+    for (std::uint8_t c : probes) {
+        std::uint8_t cx = 0, cy = 0, cz = 0;
+        macro_cell_of(macro_cell_centre(c, c, c), cx, cy, cz);
+        CHECK(cx == c);
+        CHECK(cy == c);
+        CHECK(cz == c);
+    }
+    // ...and it is the same convention `embody` places a body by, derived here rather
+    // than restated: (cell + 0.5) * cell size.
+    const vec3 c = macro_cell_centre(40, 91, kStandZ);
+    CHECK(c.x == (40.0f + 0.5f) * kEmbodyCellSize);
+    CHECK(c.y == (91.0f + 0.5f) * kEmbodyCellSize);
+    CHECK(c.z == (1.0f + 0.5f) * kEmbodyCellSize);
+
+    // A crate's key uses the identical truncation, so the two cannot drift apart.
+    const vec3 crate{81.0f, 43.0f, 2.45f};
+    std::uint8_t kx = 0, ky = 0, kz = 0;
+    macro_cell_of(crate, kx, ky, kz);
+    const OpenedContainerKey k = container_key(7, crate);
+    CHECK(k.cx == kx);
+    CHECK(k.cy == ky);
+    CHECK(k.cz == kz);
+}
+
+void arrival_cell_is_often_a_wall() {
+    // WHY the placement helper exists at all, as a measurement rather than a worry.
+    //
+    // An elevator ride keeps x/y from the floor it left and sets z = kArrivalZ
+    // ([elevator.cpp]), and the wall lattices of two floor kinds do not align (strides
+    // 8 / 16 / 32). So the arrival column is frequently inside a full-height wall, and
+    // this counts how frequently on the densest kind.
+    //
+    // Derivation, from the generator's own table: 128^2 - 112^2 = 3840 of 16384 columns
+    // sit on a stride-8 wall line, and at cell z=2 `generate_floor` carves back the 512
+    // doorway columns (2 per room per storey, 256 rooms) and ~208 lattice-lobby columns
+    // while ADDING 64 elevator posts. So the count cannot exceed 3840 + 64 = 3904 and
+    // should land near 3200 — about one arrival in five.
+    World w;
+    gen_residential(w, 0);
+    int solidAtArrival = 0;
+    for (int y = 0; y < kMacroDim; ++y)
+        for (int x = 0; x < kMacroDim; ++x) {
+            const vec3 c = macro_cell_centre(static_cast<std::uint8_t>(x),
+                                             static_cast<std::uint8_t>(y), kArrivalZ);
+            if (aabb_overlaps_solid(w, c, kBodyHalf)) ++solidAtArrival;
+        }
+    CHECK(solidAtArrival > 2500);
+    CHECK(solidAtArrival <= 3904);
+    // And the ground storey the crowd actually stands on is cell z=1, not z=2: a body at
+    // z=1 has its feet 0.1 m above the slab, which is why "supported" resolves there.
+    // ([population.cpp] kGroundZ = 1.)
+    static_assert(kArrivalZ == 2);
+}
+
+void solid_cell_resolves_to_a_standable_neighbour() {
+    World w;
+    gen_residential(w, -26);
+
+    // A body cannot stand in a wall crossing, which is exactly the cell an elevator
+    // arrival can land on.
+    const vec3 wallCentre = macro_cell_centre(kWallX, kWallY, kArrivalZ);
+    CHECK(aabb_overlaps_solid(w, wallCentre, kBodyHalf));
+
+    const PlacedCell res = find_standable_cell(w, kBodyHalf, kWallX, kWallY, kArrivalZ);
+    CHECK(res.ok);
+    CHECK(res.moved);                 // it did not pretend the wall was fine
+    CHECK(res.rings == 1);            // and it did not wander: the next cell over
+    CHECK(res.supported);             // with a floor under the feet
+    // The ring-1 candidates with a floor under them are the four diagonals at z=1: the
+    // orthogonal neighbours at that z are all still on a wall line, and every candidate
+    // at z=2 has nothing but air beneath it (the slab is at z=0, so the standing cell is
+    // z=1). Which diagonal wins is a tie-break, so all four are accepted here; what is
+    // pinned is that the body ends up standing rather than hovering one cell up.
+    CHECK(res.cz == kStandZ);
+    CHECK(res.cx == 7 || res.cx == 9);
+    CHECK(res.cy == 7 || res.cy == 9);
+    // Verified independently against the solver's own predicate, not against the
+    // helper's own opinion of itself.
+    CHECK(!aabb_overlaps_solid(w, macro_cell_centre(res.cx, res.cy, res.cz), kBodyHalf));
+
+    // A cell that is already fine is returned untouched — no drift, no teleport.
+    const PlacedCell keep = find_standable_cell(w, kBodyHalf, kRoomX, kRoomY, kStandZ);
+    CHECK(keep.ok);
+    CHECK(!keep.moved);
+    CHECK(keep.rings == 0);
+    CHECK(keep.cx == kRoomX && keep.cy == kRoomY && keep.cz == kStandZ);
+    CHECK(keep.supported);
+
+    // Mid-air is NOT a failure and must not relocate anybody: a player who saved while
+    // flying was legitimately in the air, and physics will simply drop them. Cell z=2 in
+    // a room interior is air with air underneath it.
+    const PlacedCell air = find_standable_cell(w, kBodyHalf, kRoomX, kRoomY, kArrivalZ);
+    CHECK(air.ok);
+    CHECK(!air.moved);
+    CHECK(!air.supported);            // reported, not corrected
+    CHECK(air.cz == kArrivalZ);
+}
+
+void fully_solid_neighbourhood_fails_loudly() {
+    // The failure the brief asks for by name: everything within reach is solid. The
+    // helper must NOT hand back a plausible-looking cell, because a caller would
+    // teleport a body into it and that body would never move again.
+    World w;
+    const int cx = 60, cy = 60, cz = 60;
+    const int radius = 3;
+    // Fill a block one cell larger than the search, so nothing inside the neighbourhood
+    // is free. A default MacroGrid is all air, so only this block is solid.
+    for (int dz = -(radius + 1); dz <= radius + 1; ++dz)
+        for (int dy = -(radius + 1); dy <= radius + 1; ++dy)
+            for (int dx = -(radius + 1); dx <= radius + 1; ++dx)
+                w.grid().fill_cell(cx + dx, cy + dy, cz + dz, kMatConcrete);
+
+    const PlacedCell fail = find_standable_cell(
+        w, kBodyHalf, static_cast<std::uint8_t>(cx), static_cast<std::uint8_t>(cy),
+        static_cast<std::uint8_t>(cz), radius);
+    CHECK(!fail.ok);
+    CHECK(!fail.moved);
+    CHECK(fail.rings == 0);
+    // The cell handed back is the one asked for, UNCHANGED — and it is solid. That is
+    // the point: there is no safe answer to invent, so a caller that ignores `ok` gets
+    // the wall it asked about rather than a wall dressed up as a floor.
+    CHECK(fail.cx == static_cast<std::uint8_t>(cx));
+    CHECK(fail.cy == static_cast<std::uint8_t>(cy));
+    CHECK(fail.cz == static_cast<std::uint8_t>(cz));
+    CHECK(aabb_overlaps_solid(
+        w, macro_cell_centre(fail.cx, fail.cy, fail.cz), kBodyHalf));
+
+    // A wider search DOES find somewhere, so the refusal above was the radius talking
+    // and not the whole world — and where it lands is worth deriving, because it is the
+    // support preference in action. The block spans +-4 cells, so the nearest free cells
+    // are at ring 5; of those, the only ones with something solid under their feet sit
+    // directly on the block's top face (a cell beside the block has air below it, and one
+    // below the block has air below that). So the pick is straight up: same column, ring
+    // 5, standing on the roof of the obstruction.
+    const PlacedCell wider = find_standable_cell(
+        w, kBodyHalf, static_cast<std::uint8_t>(cx), static_cast<std::uint8_t>(cy),
+        static_cast<std::uint8_t>(cz), radius + 2);
+    CHECK(wider.ok);
+    CHECK(wider.moved);
+    CHECK(wider.rings == static_cast<std::uint8_t>(radius + 2));
+    CHECK(wider.supported);
+    CHECK(wider.cx == static_cast<std::uint8_t>(cx));
+    CHECK(wider.cy == static_cast<std::uint8_t>(cy));
+    CHECK(wider.cz == static_cast<std::uint8_t>(cz + radius + 2));
+    CHECK(!aabb_overlaps_solid(
+        w, macro_cell_centre(wider.cx, wider.cy, wider.cz), kBodyHalf));
+
+    // radius 0 asks "this cell or nothing" and gets nothing.
+    const PlacedCell strict = find_standable_cell(
+        w, kBodyHalf, static_cast<std::uint8_t>(cx), static_cast<std::uint8_t>(cy),
+        static_cast<std::uint8_t>(cz), 0);
+    CHECK(!strict.ok);
+}
+
+void a_body_in_solid_never_moves_again() {
+    // The claim the whole helper rests on, exercised against the real solver rather than
+    // asserted from `door.h`: `physics_step` resolves an overlap by backing out, and a
+    // body already inside solid has nowhere to back out to.
+    LevelStack stack;
+    const LayerId layer = stack.push_layer();
+    gen_residential(stack.layer(layer), -26);
+
+    Registry reg;
+    Entity e = reg.create();
+    Transform tr;
+    tr.pos = macro_cell_centre(kWallX, kWallY, kArrivalZ);   // the wall crossing, above
+    tr.layer = layer;
+    reg.emplace<Transform>(e, tr);
+    reg.emplace<Velocity>(e);
+    reg.emplace<AABB>(e, AABB{kBodyHalf});
+    reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
+
+    const vec3 before = reg.get<Transform>(e).pos;
+    for (int i = 0; i < kSimHz; ++i) physics_step(reg, stack, kSimDt);   // one second
+    const vec3 after = reg.get<Transform>(e).pos;
+    // Not "barely moved" — did not move at all. Every axis binary-searches back to zero
+    // and every velocity component is zeroed, every tick, forever.
+    CHECK(std::fabs(after.x - before.x) < 1e-6f);
+    CHECK(std::fabs(after.y - before.y) < 1e-6f);
+    CHECK(std::fabs(after.z - before.z) < 1e-6f);
+    CHECK(aabb_overlaps_solid(stack.layer(layer), after, kBodyHalf));
+
+    // Now the fix, through the entry point an arrival would call.
+    const PlacedCell moved = place_body_safely(reg, stack.layer(layer), e);
+    CHECK(moved.ok);
+    CHECK(moved.moved);
+    CHECK(moved.supported);
+    const vec3 placed = reg.get<Transform>(e).pos;
+    CHECK(placed.x == macro_cell_centre(moved.cx, moved.cy, moved.cz).x);
+    CHECK(placed.z == macro_cell_centre(moved.cx, moved.cy, moved.cz).z);
+    CHECK(!aabb_overlaps_solid(stack.layer(layer), placed, kBodyHalf));
+
+    // ...and a second of physics leaves it resting on the slab instead of frozen inside
+    // plaster. This is the assertion that says the body is playable again.
+    for (int i = 0; i < kSimHz; ++i) physics_step(reg, stack, kSimDt);
+    const vec3 rest = reg.get<Transform>(e).pos;
+    CHECK(!aabb_overlaps_solid(stack.layer(layer), rest, kBodyHalf));
+    CHECK(reg.get<GravityAffected>(e).grounded);
+    // It fell at most the 0.1 m gap between its feet and the slab, so it is still in the
+    // cell it was placed in — the placement is where you wake up, not a hint.
+    CHECK(std::fabs(rest.z - placed.z) < 0.2f);
+}
+
+void placement_writes_the_body_or_nothing() {
+    World w;
+    gen_residential(w, 0);
+
+    // Two room interiors on the stride-8 lattice (x%8 = 4 and 6), so both are air at the
+    // standing storey and neither is a lattice lobby (those cover 13..19 around
+    // 16/48/80/112) or an elevator post (x, y in {14, 18} around each shaft).
+    constexpr std::uint8_t kFromX = 20, kFromY = 20;
+    constexpr std::uint8_t kSavedX = 30, kSavedY = 30;
+
+    Registry reg;
+    Entity e = reg.create();
+    Transform tr;
+    tr.pos = macro_cell_centre(kFromX, kFromY, kStandZ);
+    tr.layer = 0;
+    reg.emplace<Transform>(e, tr);
+    // Falling fast, which is the state a load can land in.
+    reg.emplace<Velocity>(e, Velocity{vec3{0.0f, 0.0f, -30.0f}});
+    reg.emplace<AABB>(e, AABB{kBodyHalf});
+
+    // Restore to a saved cell that is fine: the body lands exactly there, and the fall
+    // is cancelled — a carried-over 30 m/s would drive it through the floor on the next
+    // step, from a position physics had not yet accepted.
+    const vec3 want = macro_cell_centre(kSavedX, kSavedY, kStandZ);
+    const PlacedCell ok = place_body_at_cell(reg, w, e, kSavedX, kSavedY, kStandZ);
+    CHECK(ok.ok);
+    CHECK(!ok.moved);
+    CHECK(reg.get<Transform>(e).pos.x == want.x);
+    CHECK(reg.get<Transform>(e).pos.y == want.y);
+    CHECK(reg.get<Transform>(e).pos.z == want.z);
+    CHECK(reg.get<Velocity>(e).v.z == 0.0f);
+
+    // A refusal must leave the body exactly where it was, not half-move it.
+    World solid;
+    for (int dz = 0; dz < 12; ++dz)
+        for (int dy = 0; dy < 12; ++dy)
+            for (int dx = 0; dx < 12; ++dx)
+                solid.grid().fill_cell(dx, dy, dz, kMatConcrete);
+    const vec3 held = reg.get<Transform>(e).pos;
+    const PlacedCell refused =
+        place_body_at_cell(reg, solid, e, 5, 5, 5, /*radius=*/3);
+    CHECK(!refused.ok);
+    CHECK(reg.get<Transform>(e).pos.x == held.x);
+    CHECK(reg.get<Transform>(e).pos.y == held.y);
+    CHECK(reg.get<Transform>(e).pos.z == held.z);
+
+    // An entity with no Transform is not a body: refused, and nothing is created.
+    Entity bare = reg.create();
+    CHECK(!place_body_safely(reg, w, bare).ok);
+    CHECK(!reg.all_of<Transform>(bare));
+    // A handle that names nothing at all does not walk off anything either.
+    CHECK(!place_body_safely(reg, w, entt::null).ok);
+}
+
+void snapshot_restores_the_row_not_the_body() {
+    NpcPool pool;
+    pool.init();
+    const NpcId id = pool.spawn();
+    pool.height_mm(id) = 1750;
+    pool.max_hp(id) = 100;
+    pool.hp(id) = 100;
+    pool.cx(id) = 11;
+    pool.cy(id) = 22;
+    pool.cz(id) = 1;
+    pool.floor(id) = 7;
+
+    PlayerSnapshot snap{};
+    snap.clock.food = 12.5f;
+    snap.clock.hpDebt = 0.25f;
+    snap.clock.seeded = 1;
+    snap.inv.slots[3] = ItemSlot{static_cast<ItemId>(42), 7};
+    snap.hp = 61;
+    snap.maxHp = 140;
+    snap.floorNumber = -26;
+    snap.cx = 90;
+    snap.cy = 91;
+    snap.cz = 3;
+
+    apply_player_snapshot(pool, id, snap);
+    CHECK(pool.needs(id).food == 12.5f);
+    CHECK(pool.needs(id).hpDebt == 0.25f);   // sub-1-HP attrition is not forgiven
+    CHECK(pool.needs(id).seeded == 1);
+    CHECK(pool.inventory(id).slots[3].item == static_cast<ItemId>(42));
+    CHECK(pool.inventory(id).slots[3].count == 7);
+    CHECK(pool.hp(id) == 61);
+    CHECK(pool.max_hp(id) == 140);           // main.cpp's inline restore dropped this
+    // The cell is NOT written here: placement moves the BODY, and `fold_back` re-derives
+    // the row from that transform. Writing both would give two answers to one question.
+    CHECK(pool.cx(id) == 11);
+    CHECK(pool.cy(id) == 22);
+    CHECK(pool.cz(id) == 1);
+    // Nor is the floor column: it is the seeding label ([population.cpp] is its only
+    // writer) and the save carries the player's floor separately for exactly that
+    // reason.
+    CHECK(pool.floor(id) == 7);
+
+    // A save that carries no maximum leaves the row's own alone, rather than pinning the
+    // player at 0/0 hp where every heal is a no-op.
+    PlayerSnapshot blank{};
+    blank.hp = 55;
+    apply_player_snapshot(pool, id, blank);
+    CHECK(pool.hp(id) == 55);
+    CHECK(pool.max_hp(id) == 140);
+
+    // The wire is int32 and the row is int16, so the narrowing is clamped, not wrapped:
+    // 65636 must not arrive as 100.
+    PlayerSnapshot forged{};
+    forged.hp = 65636;
+    forged.maxHp = 70000;
+    apply_player_snapshot(pool, id, forged);
+    CHECK(pool.hp(id) == 32767);
+    CHECK(pool.max_hp(id) == 32767);
+
+    // An invalid row is a no-op, not a write past the end of a column.
+    apply_player_snapshot(pool, pool.count() + 5u, snap);
+    CHECK(pool.hp(id) == 32767);
+}
+
+void travel_drives_the_existing_elevator() {
+    // The load side of floor travel: N labelled floors in one call, through
+    // `FloorStreamer::travel` — the same path `[` and `]` use. Mirrors
+    // test_floor_travel's setup in game_test.cpp deliberately; if that one changes shape
+    // this should too.
+    Registry ecs;
+    NpcPool pool;
+    pool.init();
+    FloorRegistry reg;
+    LevelStack stack;
+
+    FloorStreamer stream;
+    stream.init(stack, /*keepRadius=*/0);   // two recyclable physical layers
+    stream.add_module(reg, /*number=*/0, FloorKind::Residential, /*seed=*/1u);
+    stream.add_module(reg, /*number=*/-8, FloorKind::Residential, /*seed=*/2u);
+    stream.add_module(reg, /*number=*/-26, FloorKind::Residential, /*seed=*/3u);
+    const std::uint32_t pop = floor_spec(FloorKind::Residential).population;
+
+    NpcId playerId = kInvalidNpc;
+    LoadResult start = stream.ensure_loaded(stack, reg, ecs, pool, 0, playerId);
+    CHECK(start.player != entt::null);
+    CHECK(playerId != kInvalidNpc);
+    Entity player = start.player;
+    CHECK(pool.count() == pop);   // only floor 0 seeded so far
+
+    // Already there: no hops, no state touched, and `arrived` is true — which is what
+    // tells the caller it does NOT need to re-arm the floor.
+    const LoadTravel here = travel_to_saved_floor(stack, reg, ecs, pool, stream, player,
+                                                  0, 0);
+    CHECK(here.arrived);
+    CHECK(!here.moved);
+    CHECK(here.hops == 0);
+    CHECK(here.player == player);
+    CHECK(here.floor == 0);
+    CHECK(pool.count() == pop);
+
+    // A floor this build's stack does not have. Refused whole: a load that travelled
+    // halfway is harder to explain than one that says it could not go.
+    const LoadTravel nowhere = travel_to_saved_floor(stack, reg, ecs, pool, stream,
+                                                     player, 0, -99);
+    CHECK(!nowhere.moved);
+    CHECK(!nowhere.arrived);
+    CHECK(nowhere.floor == 0);
+    CHECK(nowhere.player == player);
+    CHECK(stream.loaded(reg, 0));
+    CHECK(pool.count() == pop);
+
+    // Two labelled floors down, in one call. The sparse gap is the point: 0 -> -26 is
+    // not -26 hops, and `from + dir` lands on nothing for most of this stack.
+    const LoadTravel deep = travel_to_saved_floor(stack, reg, ecs, pool, stream, player,
+                                                  0, -26);
+    CHECK(deep.arrived);
+    CHECK(deep.moved);
+    CHECK(deep.hops == 2);              // via -8, the nearest label on the way
+    CHECK(deep.floor == -26);
+    CHECK(deep.player != entt::null);
+    CHECK(deep.player != player);       // every ride rebuilds the body
+    player = deep.player;
+    // Same record throughout — the run is the record, not the entity.
+    CHECK(ecs.get<NpcRef>(player).id == playerId);
+    CHECK(pool.is_player(playerId));
+    CHECK(pool.embodied(playerId));
+    CHECK(ecs.get<Transform>(player).layer == deep.layer);
+    CHECK(deep.layer == reg.layer_at(-26));
+    // Only the destination is resident: keepRadius 0, so the two floors crossed folded
+    // back into the cold pool on the way through.
+    CHECK(stream.loaded(reg, -26));
+    CHECK(!stream.loaded(reg, 0));
+    CHECK(!stream.loaded(reg, -8));
+    // Each floor seeded its crowd exactly once, including the one only passed through.
+    CHECK(pool.count() == 3u * pop);
+
+    // And back up, to prove the direction is derived and not assumed.
+    const LoadTravel back = travel_to_saved_floor(stack, reg, ecs, pool, stream, player,
+                                                  -26, 0);
+    CHECK(back.arrived);
+    CHECK(back.hops == 2);
+    CHECK(back.floor == 0);
+    CHECK(pool.count() == 3u * pop);    // no per-visit growth on the return trip
+    CHECK(stream.loaded(reg, 0));
+    player = back.player;
+    CHECK(ecs.get<NpcRef>(player).id == playerId);
+    CHECK(ecs.get<Transform>(player).layer == back.layer);
+
+    // A body with no NpcRef cannot ride: `travel` would forward kInvalidNpc and
+    // `ensure_loaded` would designate a SECOND player on the destination floor.
+    Entity impostor = ecs.create();
+    ecs.emplace<Transform>(impostor, Transform{vec3{4.0f, 4.0f, 3.0f}, back.layer});
+    const LoadTravel refused = travel_to_saved_floor(stack, reg, ecs, pool, stream,
+                                                     impostor, 0, -8);
+    CHECK(!refused.moved);
+    CHECK(!refused.arrived);
+    CHECK(refused.floor == 0);
+    CHECK(!stream.loaded(reg, -8));
+    CHECK(pool.count() == 3u * pop);
+}
+
 } // namespace saveload_test
 
 static void test_saveload_all() {
@@ -697,4 +1152,12 @@ static void test_saveload_all() {
     saveload_test::keys_not_entity_ids();
     saveload_test::opened_crates_survive_a_restart();
     saveload_test::ledger_is_pinned();
+    saveload_test::cell_conventions();
+    saveload_test::arrival_cell_is_often_a_wall();
+    saveload_test::solid_cell_resolves_to_a_standable_neighbour();
+    saveload_test::fully_solid_neighbourhood_fails_loudly();
+    saveload_test::a_body_in_solid_never_moves_again();
+    saveload_test::placement_writes_the_body_or_nothing();
+    saveload_test::snapshot_restores_the_row_not_the_body();
+    saveload_test::travel_drives_the_existing_elevator();
 }

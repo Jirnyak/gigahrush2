@@ -66,6 +66,11 @@ int g_checks = 0;
 #include "suite_samosbor.inl"
 #include "suite_doors.inl"
 #include "suite_saveload.inl"
+#include "suite_behaviours.inl"
+#include "suite_samosborhud.inl"
+#include "suite_fluidrooms.inl"
+#include "suite_eventsweb.inl"
+#include "suite_needs2.inl"
 #include "suite_vendorammo.inl"
 #include "suite_npcpool.inl"
 #include "suite_samosbor2.inl"
@@ -3553,6 +3558,11 @@ int main() {
     test_samosbor_all();
     test_doors_all();
     test_saveload_all();
+    test_behaviours_all();
+    test_samosborhud_all();
+    test_fluidrooms_all();
+    test_eventsweb_all();
+    test_needs2_all();
     test_vendorammo_all();
     test_npcpool_all();
     test_samosbor2_all();

@@ -38,7 +38,8 @@ std::int16_t mitigate(std::int16_t raw, std::int8_t resistPct) {
 // Declared here because mob_attack_step launches shots and sits above it.
 void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
                       const vec3& to, std::int16_t dmg,
-                      std::uint16_t projSpeedMmps, Entity source);
+                      std::uint16_t projSpeedMmps, Entity source,
+                      std::uint8_t projType);
 // The player's launch: an explicit direction, no lob compensation, flatter gravity.
 void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
                           const vec3& dir, std::int16_t dmg,
@@ -225,6 +226,7 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         vec3 from;           // launch origin, captured while the view was alive
         vec3 to;             // aim point, captured with it
         std::uint16_t projSpeedMmps;
+        std::uint8_t proj;   // ProjType, copied off the row so the launch can read it
     };
     std::vector<Swing> queued;
 
@@ -257,7 +259,22 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
 
         const MobRef& mr = reg.get<const MobRef>(e);
         const MobDef& def = kMobTable[mr.kind];
-        if (def.dmg == 0) continue;  // PAUPSINA and friends do not hit
+
+        // A CONTROL shooter is a monster whose whole attack is its projectile's
+        // effect, so it has to get past a damage gate that was written as if damage
+        // were the only thing an attack could deliver.
+        //
+        // "PAUPSINA and friends" had no friends: measured on data/mobs.csv, PAUPSINA
+        // is the ONLY row of 69 with dmg == 0, and it is exactly the one row carrying
+        // proj_type WEB. So this early-out was not filtering harmless monsters — it
+        // was the single reason the web-spitter never attacked at all. Its entire
+        // ranged kit (11.5-cell range, 3.4-cell dead zone, 0.48 s telegraph,
+        // 9.5 cells/s shot) was unreachable code, and the CSV's own role text says
+        // what it was for: control, not health.
+        const bool control =
+            static_cast<ProjType>(def.projType) != ProjType::Bullet &&
+            def.shotRangeMm != 0;
+        if (def.dmg == 0 && !control) continue;
 
         // Who this one is swinging at. The camera holder wins whenever it is inside
         // kHuntRadius, so a monster with the player in the room never turns on the
@@ -299,7 +316,19 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
 
         // Damage scales with the mob's level on the same curve as its HP, so a
         // deep-floor elite hits as hard as it is tough.
-        float dmg = static_cast<float>(mob_hp_at_level(def.dmg, mr.level));
+        //
+        // ZERO STAYS ZERO, and that guard is load-bearing rather than defensive.
+        // `mob_hp_at_level` clamps its result to a minimum of 1 ([mob_table.cpp]),
+        // which is right for HP — a monster spawning with 0 HP is dead on arrival —
+        // and wrong for damage, because a kind authored at 0 damage is authored that
+        // way ON PURPOSE. PAUPSINA is the one: a web-spitter whose shot is control,
+        // not damage. Routed through the HP curve it came out at 1, so the only
+        // projectile in the game meant to leave you unharmed was quietly chewing a
+        // point of health per hit. Reusing a curve named for one stat on another
+        // carries that stat's floor along with it.
+        float dmg = def.dmg == 0
+                        ? 0.0f
+                        : static_cast<float>(mob_hp_at_level(def.dmg, mr.level));
         // Wall-adjacency bias: the four carriers hit harder with a wall at their
         // back. Combined with the matching speed bonus in wander.cpp, this makes a
         // corridor a genuinely worse place to be caught than an open room — level
@@ -309,11 +338,18 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         const std::int16_t raw = static_cast<std::int16_t>(dmg);
 
         // Melee first: if it can touch you, it touches you. Reach is in cells.
+        //
+        // `raw > 0` guards the branch rather than the function, so every one of the 68
+        // damaging kinds behaves bit-for-bit as before while a control shooter does not
+        // queue a swing that `apply_damage` would refuse anyway. Without the guard it
+        // would queue a 0-damage swing every tick forever: apply_damage returns
+        // hit == false for raw <= 0, so the cooldown is never set and the swing is
+        // re-queued on the next pass.
         const float reach = static_cast<float>(def.meleeReachMm) * 0.001f * kCellSize;
-        if (d2 <= reach * reach) {
+        if (raw > 0 && d2 <= reach * reach) {
             mc.windupMs = 0;   // contact cancels a shot it was lining up
             queued.push_back(Swing{e, victim, raw, def.attackCdMs, false, tr.pos,
-                                   victimPos, 0});
+                                   victimPos, 0, def.projType});
             continue;
         }
 
@@ -338,14 +374,14 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         // windupDone, or a kind with no authored windup: the shot leaves now.
 
         queued.push_back(Swing{e, victim, raw, def.attackCdMs, true, tr.pos,
-                               victimPos, def.projSpeedMmps});
+                               victimPos, def.projSpeedMmps, def.projType});
     }
 
     std::uint32_t swings = 0;
     for (const Swing& s : queued) {
         if (s.ranged) {
             spawn_projectile(reg, layer, s.from, s.to, s.raw,
-                             s.projSpeedMmps, s.mob);
+                             s.projSpeedMmps, s.mob, s.proj);
             ++swings;
             if (MobCombat* mc = reg.try_get<MobCombat>(s.mob))
                 mc->cooldownMs = s.cd;
@@ -434,7 +470,8 @@ namespace {
 // at the target's height after dist/speed seconds.
 void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
                       const vec3& to, std::int16_t dmg,
-                      std::uint16_t projSpeedMmps, Entity source) {
+                      std::uint16_t projSpeedMmps, Entity source,
+                      std::uint8_t projType) {
     // Table speed is cells/s in fixed point; a cell is kCellSize metres.
     float speed = static_cast<float>(projSpeedMmps) * 0.001f * kCellSize;
     if (speed < 1.0f) speed = 12.0f;   // a ranged kind with no authored speed
@@ -459,12 +496,18 @@ void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
     reg.emplace<AABB>(e, AABB{vec3{0.10f, 0.10f, 0.10f}});
     // projectile_step owns this entity's motion; keep physics_step off it.
     reg.emplace<SelfIntegrating>(e);
-    // Hot white-yellow: a shot must read against both the monster palette (the red
-    // axis) and the faction one, so it is brighter than anything else in the frame.
-    reg.emplace<Renderable>(e, Renderable{vec3{1.00f, 0.95f, 0.70f}});
+    // Hot white-yellow for a bullet; a web is a pale grey-green so the one shot in
+    // the game that does not hurt you does not look like the ones that do. The render
+    // layer is a pure skin ([AGENTS.md]) so this changes pixels and nothing else —
+    // but a control projectile that is visually indistinguishable from a lethal one
+    // teaches the player the wrong thing about what just hit them.
+    const bool web = static_cast<ProjType>(projType) == ProjType::Web;
+    reg.emplace<Renderable>(e, Renderable{web ? vec3{0.72f, 0.86f, 0.74f}
+                                              : vec3{1.00f, 0.95f, 0.70f}});
     // gravityPct 100, team 0: a monster shot, fully compensated, and it may only
     // damage the camera holder.
-    reg.emplace<Projectile>(e, Projectile{source, dmg, kProjTtlMs, 100, 0});
+    reg.emplace<Projectile>(
+        e, Projectile{source, dmg, kProjTtlMs, 100, 0, projType});
 }
 
 void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
@@ -493,10 +536,106 @@ void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
     // projectile_step owns this entity's motion; keep physics_step off it.
     reg.emplace<SelfIntegrating>(e);
     reg.emplace<Renderable>(e, Renderable{vec3{1.00f, 0.95f, 0.70f}});
-    reg.emplace<Projectile>(e, Projectile{source, dmg, kProjTtlMs, gravityPct, team});
+    // ProjType::Bullet, and passed rather than defaulted: no ranged WEAPON in
+    // data/weapons_ranged.csv fires anything but a bullet, and spelling it means the
+    // day one does, the compiler asks about this call site instead of silently
+    // handing the player a bullet.
+    reg.emplace<Projectile>(
+        e, Projectile{source, dmg, kProjTtlMs, gravityPct, team,
+                      static_cast<std::uint8_t>(ProjType::Bullet)});
 }
 
 } // namespace
+
+// **Never call this from inside a live view.** The first web in a session runs
+// `reg.emplace<Slowed>`, which creates a component storage and can reallocate the
+// registry's pool container — dangling any view still being iterated. That is the
+// documented crash `mob_attack_step` was split in two to avoid, and it is why the
+// one caller (`projectile_step`) applies it in its resolution phase, over a
+// std::vector, after every view is closed.
+bool apply_slow(Registry& reg, Entity target, float scale, std::uint16_t ms) {
+    if (!reg.valid(target) || ms == 0) return false;
+    if (scale < 0.0f) scale = 0.0f;
+    if (scale >= 1.0f) return false;   // not a slow
+
+    // The cap comes from the victim's own top speed, resolved once here. See the
+    // header for why a resident (neither component) is refused instead of guessed.
+    float base = 0.0f;
+    if (const MobRef* m = reg.try_get<MobRef>(target)) {
+        base = static_cast<float>(kMobTable[m->kind].speedMmps) * 0.001f * kCellSize;
+    } else if (const Controller* c = reg.try_get<Controller>(target)) {
+        base = c->moveSpeed;
+    }
+    if (base <= 0.0f) return false;    // immobile, or nothing to slow
+
+    const float cap = base * scale;
+    if (Slowed* s = reg.try_get<Slowed>(target)) {
+        // Refresh, never compound: the stronger cap and the longer remainder. An
+        // expired-but-still-attached component (ttlMs == 0, see slow_step) has no
+        // claim on either, so it is overwritten outright.
+        if (s->ttlMs == 0) {
+            s->maxSpeed = cap;
+            s->ttlMs = ms;
+        } else {
+            if (cap < s->maxSpeed) s->maxSpeed = cap;
+            if (ms > s->ttlMs) s->ttlMs = ms;
+        }
+        return true;
+    }
+    reg.emplace<Slowed>(target, Slowed{cap, ms});
+    return true;
+}
+
+float slow_scale(const Registry& reg, Entity e) {
+    if (!reg.valid(e)) return 1.0f;
+    const Slowed* s = reg.try_get<Slowed>(e);
+    if (!s || s->ttlMs == 0 || s->maxSpeed <= 0.0f) return 1.0f;
+    // Reported against the same authority the cap was derived from, so the number the
+    // HUD prints is the fraction of the body's OWN speed and not of some global.
+    float base = 0.0f;
+    if (const MobRef* m = reg.try_get<MobRef>(e))
+        base = static_cast<float>(kMobTable[m->kind].speedMmps) * 0.001f * kCellSize;
+    else if (const Controller* c = reg.try_get<Controller>(e))
+        base = c->moveSpeed;
+    if (base <= 0.0f) return 1.0f;
+    const float f = s->maxSpeed / base;
+    return f < 1.0f ? f : 1.0f;
+}
+
+std::uint32_t slow_step(Registry& reg, LayerId layer, float dt) {
+    const std::uint16_t elapsedMs =
+        static_cast<std::uint16_t>(dt * 1000.0f + 0.5f);
+
+    std::uint32_t live = 0;
+    for (auto e : reg.view<Slowed, Transform, Velocity>()) {
+        Slowed& s = reg.get<Slowed>(e);
+        if (s.ttlMs == 0) continue;   // expired and inert ([combat.h] Slowed)
+
+        // THE single decrement, at the top and BEFORE the layer test — the same rule
+        // and the same reason as the mob cooldown above: a timer that only runs on the
+        // live layer is a timer that stops when you leave the room. Two seconds of web
+        // has to be two seconds of wall clock.
+        if (s.ttlMs > elapsedMs) s.ttlMs =
+            static_cast<std::uint16_t>(s.ttlMs - elapsedMs);
+        else s.ttlMs = 0;
+        if (s.ttlMs == 0) continue;   // last tick of the effect; let it go
+
+        if (reg.get<Transform>(e).layer != layer) continue;
+        ++live;
+
+        // Clamp, do not scale. Idempotent, so a crowd body whose velocity is only
+        // rewritten every kWanderPeriod ticks is not multiplied down to zero in
+        // between ([combat.h] Slowed).
+        Velocity& v = reg.get<Velocity>(e);
+        const float sp2 = v.v.x * v.v.x + v.v.y * v.v.y;
+        if (sp2 <= s.maxSpeed * s.maxSpeed) continue;
+        const float k = s.maxSpeed / std::sqrt(sp2);
+        v.v.x *= k;
+        v.v.y *= k;
+        // z untouched: a slow is not reduced gravity.
+    }
+    return live;
+}
 
 std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                               const LevelStack& stack, LayerId layer, float dt,
@@ -529,6 +668,11 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         // shot. One field rather than two, because phase 2 does the same thing with
         // either — apply_damage does not care what it is pointed at.
         Entity other = entt::null;
+        // ProjType, carried through phase 2 because that is where the effect lands.
+        // Read off the Projectile in phase 1 rather than looked up again later: the
+        // entity is destroyed at the end of the resolution loop. Named `projType`
+        // and not `proj` because `proj` above is the projectile ENTITY.
+        std::uint8_t projType = 0;
     };
     std::vector<Hit> resolved;
 
@@ -569,7 +713,8 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
             const float hy = wrap_delta_f(tr.pos.y, victimPos.y, kWorldExtent);
             const float hz = wrap_delta_f(tr.pos.z, victimPos.z, kWorldExtent);
             if (hx * hx + hy * hy + hz * hz <= kProjHitRadius * kProjHitRadius) {
-                resolved.push_back(Hit{e, p.dmg, p.source, true});
+                resolved.push_back(
+                    Hit{e, p.dmg, p.source, true, entt::null, p.proj});
                 continue;
             }
         }
@@ -596,7 +741,7 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                 const float hz = wrap_delta_f(tr.pos.z, mt.pos.z, kWorldExtent);
                 if (hx * hx + hy * hy + hz * hz > kProjHitRadius * kProjHitRadius)
                     continue;
-                resolved.push_back(Hit{e, p.dmg, p.source, false, m});
+                resolved.push_back(Hit{e, p.dmg, p.source, false, m, p.proj});
                 struck = true;
                 break;
             }
@@ -627,7 +772,7 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                 if (hx * hx + hy * hy + hz * hz > kProjHitRadius * kProjHitRadius)
                     continue;
                 if (!mob_hostile_to(pool, reg.get<const NpcRef>(b).id)) continue;
-                resolved.push_back(Hit{e, p.dmg, p.source, false, b});
+                resolved.push_back(Hit{e, p.dmg, p.source, false, b, p.proj});
                 struck = true;
                 break;
             }
@@ -647,15 +792,34 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
 
     std::uint32_t hits = 0;
     for (const Hit& h : resolved) {
+        // What a WEB shot delivers, and the ONLY reader of `MobDef::projType` in the
+        // tree. A web carries dmg 0 (its one authored row is the only zero-damage row
+        // in data/mobs.csv), so `apply_damage` would refuse it and the shot would
+        // land as nothing at all — the slow IS the hit, and it is counted as one so
+        // the HUD's hit tally does not report a web-spitter as permanently missing.
+        //
+        // Applied before apply_damage rather than after, because apply_damage may tag
+        // `Dead`, and slowing a corpse is a wasted 8 bytes on an entity that is about
+        // to be destroyed. A web cannot itself be lethal, so ordering costs nothing.
+        //
+        // `landed` and not `++hits` in two places: a shot must count once whatever it
+        // delivered, or a future WEB row with nonzero damage would report two hits for
+        // one projectile and quietly inflate the tally the HUD prints.
+        bool landed = false;
+        const bool web = static_cast<ProjType>(h.projType) == ProjType::Web;
+        const Entity body = h.onVictim ? victim : h.other;
+        if (web && body != entt::null && reg.valid(body))
+            landed = apply_slow(reg, body, kWebSlowScale, kWebSlowMs);
+
         if (h.onVictim && victim != entt::null) {
             DamageResult r = apply_damage(reg, pool, victim, h.dmg,
                                           DamageChannel::Kinetic, h.source);
-            if (r.hit) ++hits;
+            if (r.hit) landed = true;
         } else if (h.other != entt::null && reg.valid(h.other)) {
             DamageResult r = apply_damage(reg, pool, h.other, h.dmg,
                                           DamageChannel::Kinetic, h.source);
             if (r.hit) {
-                ++hits;
+                landed = true;
                 // Credit the shooter, the same way the melee path credits a swing.
                 // Only a player carries PlayerRanged, so this quietly does nothing for
                 // the monster-shot-hit-a-resident case and needs no team test.
@@ -671,6 +835,7 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                 }
             }
         }
+        if (landed) ++hits;
         if (reg.valid(h.proj)) reg.destroy(h.proj);
     }
     (void)bus;

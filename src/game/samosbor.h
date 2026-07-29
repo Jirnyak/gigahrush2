@@ -235,11 +235,57 @@ extern const std::array<SamosborVariantDef, kSamosborVariantCount> kSamosborVari
 // pointer-free and trivially serializable — same split as `kMobNames`.
 extern const std::array<const char*, kSamosborVariantCount> kSamosborVariantNames;
 
+// Russian DISPLAY names, ported verbatim from the reference's
+// `SAMOSBOR_VARIANTS[].displayName` (`src/data/samosbor_variants.ts:272, 291, 309,
+// 327, 349, 380, 404`). Parallel to `kSamosborVariantNames`, which stays the stable
+// ASCII id — the two do different jobs, and collapsing them is how a save file ends
+// up holding a localised string.
+//
+// Ported and not translated, because a translation would lose the content: "Типовой
+// (ГОСТ-С)" is a state-standard joke about a routine event and "Озоновый пробой" is
+// the electrical-breakdown term, neither of which "classic" or "electric" recovers.
+//
+// PLAYER-VISIBLE, and that is the whole reason they exist. `src/app/main.cpp` printed
+// `kSamosborVariantNames` — "maronary" — on a HUD whose item, monster and faction
+// names all come out of the Russian content tables, so the one word naming the event
+// the player was standing inside was the only Latin word on the line.
+extern const std::array<const char*, kSamosborVariantCount> kSamosborVariantNamesRu;
+
+// One clause each on what the variant actually DOES, for the crowd to repeat
+// ([rumour.h] `RumourKind::Variant`).
+//
+// **AUTHORED here, not ported**, and the distinction matters because the line above
+// is the opposite. The reference does carry per-variant prose — `warningLines` and
+// `gameplaySignal` in the same table — but at 60..120 characters each it does not fit
+// a 160-byte rumour that already spends 41 bytes on a display name. Each clause is a
+// compression of the effect `samosbor.md` documents for that variant, i.e. the same
+// source the `SamosborVariant` enum comment above cites. A summary of shipped design,
+// not an invention, and not a port either.
+extern const std::array<const char*, kSamosborVariantCount> kSamosborVariantEffectRu;
+
 inline const SamosborVariantDef& samosbor_variant_def(SamosborVariant v) {
     return kSamosborVariants[static_cast<std::size_t>(v)];
 }
 inline const char* samosbor_variant_name(SamosborVariant v) {
     return kSamosborVariantNames[static_cast<std::size_t>(v)];
+}
+
+// BOUNDS-CLAMPED, unlike the three accessors above, and that is not tidiness.
+// `SamosborState::variant` is a raw `std::uint8_t` that a truncated save, a memset or
+// a `SamosborState{}` written by hand can put outside 0..6 — `samosbor_step` already
+// carries a `default:` branch for precisely that on the phase byte, so the failure is
+// treated as reachable elsewhere in this file. These two are read once per FRAME by
+// the HUD, and an out-of-range index is a read past a 7-pointer array handed straight
+// to `snprintf("%s")`. One compare is cheaper than that class of crash, and the
+// existing unclamped accessors stay as they are because their callers pass an enum
+// they just built.
+inline const char* samosbor_variant_name_ru(SamosborVariant v) {
+    const std::size_t i = static_cast<std::size_t>(v);
+    return kSamosborVariantNamesRu[i < kSamosborVariantCount ? i : 0u];
+}
+inline const char* samosbor_variant_effect_ru(SamosborVariant v) {
+    const std::size_t i = static_cast<std::size_t>(v);
+    return kSamosborVariantEffectRu[i < kSamosborVariantCount ? i : 0u];
 }
 
 // Sum of the authored weights: 60+20+16+14+4+3+4. Classic is 60/121 = 49.6% of
@@ -340,12 +386,21 @@ const char* samosbor_phase_name(SamosborPhase p);
 //
 //     anchor   roster   allowed at count 0 / 1 / 2 / 3 / 4 / 7
 //   ---------------------------------------------------------------
-//      -50       15        0    0    2    8   13   15
-//      -36       28        0    4   11   16   21   28
-//      -26       41        1   11   25   30   35   41
+//      -50       16        0    0    3    9   14   16
+//      -36       29        0    4   12   17   22   29
+//      -26       42        1   11   26   31   36   42
 //        0       42        0   12   31   38   40   42
 //      +14       23        0   10   21   23   23   23
 //      +30       26        0    2   13   22   26   26
+//
+// RE-MEASURED 2026-07-29, and the top three rows MOVED -- which is the whole reason a
+// table like this carries a date. They used to read 15 / 28 / 41 with a 2 in the -50
+// count-2 column, because SCULPTURE was quantized out of the generated table (see
+// below). It no longer is. Its mask is exactly ZMinus26|ZMinus36|ZMinus50 with
+// minSamosbor 2 (`mob_table.cpp` idx 53), so those three anchors each gained one
+// roster slot and one more allowed kind at every count >= 2. The three roster totals
+// and the whole -50 row are pinned by `test_samosbor2_all`; the -36 / -26 interior
+// columns are the old sweep plus that single row, not a fresh sweep.
 //
 // So a per-floor `count` means every floor you walk onto has an **empty** fog
 // roster on five of the six anchors, and at |z| = 50 — the floor that is in
@@ -353,15 +408,19 @@ const char* samosbor_phase_name(SamosborPhase p);
 // balance nudge, it is the whole subsystem producing nothing. Run-scoped `count`
 // plus the relaxation rule on `samosbor_fog_roster` is what makes the column live.
 //
-// **Read the table, not the CSV, and here is the row that proves it.** SCULPTURE
-// (`data/mobs.csv` idx 53) is authored at spawn weight 0.05, which the generator
-// stores as `spawnWeightX10 = int(round(0.05 * 10)) = round(0.5)`. Python rounds
-// half to EVEN, so that is **0** — the same value `spawnWeightX10 == 0` uses to mean
-// "hand-placed, never rolled". SCULPTURE is therefore unrollable by every spawner in
-// the tree, `spawn_floor_mobs` included, and the numbers above are one lower at
-// ZMinus50 / ZMinus36 / ZMinus26 than a CSV-side count gives. Not this file's bug to
-// fix (the fix is the fixed-point scale or the generator's rounding, plus a
-// regenerate) but it IS the reason a habitat count derived from the CSV is wrong.
+// **The row that used to prove "read the table, not the CSV" now proves the
+// generator was fixed.** SCULPTURE (`data/mobs.csv` idx 53) is authored at spawn
+// weight 0.05. A naive `int(round(0.05 * 10))` is `round(0.5)`, and Python rounds
+// half to EVEN, so it stored as 0 -- the same value `spawnWeightX10 == 0` uses to
+// mean "hand-placed, never rolled". The row cost a table slot, a name and a
+// behaviour and was unrollable by every spawner in the tree, `spawn_floor_mobs`
+// included. `tools/gen_mob_table.py` now routes the column through `fixed_nonzero`,
+// which floors a non-zero authored weight at one quantum, and the generated table
+// carries `spawnWeightX10 == 1` (pinned by `test_samosbor2_all`). Kept as a comment
+// because the TRAP is generic and the CSV gives no hint it fired: any authored value
+// under half a quantum vanishes into the "never rolled" sentinel. [mob_spawn.h] still
+// cites this as a live rounding accident on `samosbor_fog_roster` and is now wrong
+// there; that file is not this lane's to edit.
 struct SamosborState {
     std::uint32_t phaseMs = 0;       // time left in the current phase
     std::uint32_t phaseTotalMs = 0;  // what it started at, for HUD fill bars
@@ -393,6 +452,41 @@ static_assert(std::is_trivially_copyable_v<SamosborState>);
 // `samosbor_fog_tick` ([mob_spawn.h]) — the fog population exists only between
 // `activeBegan` and `activeEnded`, and `warningBegan` is the safety net that
 // enforces it from the other side.
+//
+// **AND THAT IS THE ONLY CONSUMER THEY SHOULD EVER HAVE.** Measured 2026-07-29, before
+// this lane wired the spawner: `src/app/main.cpp` read exactly two of the ten fields,
+// `cycleEnded` into a HUD counter and `sealed` into the unsheltered damage call, and
+// `samosbor_fog_tick` had no call site in `src/` at all. The other eight fields were
+// never purposeless; six of them (`from`, `to`, `variant`, `steps`, `changed`, and the
+// three edges) are the contract that function is written against, so the fog spawner,
+// its density back-off, its `minSamosbor` roster unlock and its
+// despawn-on-`activeEnded` were written, tested, and unreachable from a running game.
+// The fix was one line at the call site, not a change here.
+//
+// **THAT ONE LINE HAS A TRAP IN IT, AND IT IS A ONE-KEYWORD MISTAKE.** The obvious
+// shape for a caller is `if (samosbor_active(st)) samosbor_fog_tick(...)`, and it turns
+// the spawner into an unbounded population leak. `activeEnded` is delivered on the tick
+// `samosbor_step` moves the phase to Aftermath, so on the ONE tick that carries the
+// despawn edge `samosbor_active(st)` is already false and the guard drops it. The heads
+// are then never removed by anything, and the next cycle adds its own on top. The call
+// must be UNCONDITIONAL: every gate the tick needs is inside it, including the
+// not-Active early-out (which runs *after* the cleanup, deliberately) and the invalid
+// anchor no-op. `test_samosborhud_all` drives two complete cycles both ways and pins
+// the difference, because the guarded form is the version that looks correct.
+//
+// The size of the leak, measured rather than adjectival: the fog tops the population up
+// to `samosbor_threat_target` (7, or 10 on a high-risk floor) inside the 40 m census
+// bubble every `kFogSpawnPeriodTicks` (2 s), and a stationary player therefore
+// saturates at 7 and stops. A player who keeps walking retires the bubble every ~13 s
+// at 6 m/s, so a 15-minute Active phase at |z| = 50 refills it ~68 times: on the order
+// of 470 heads per cycle, against an authored floor budget of 194, with the shared
+// 4096-entity pool ~9 cycles away. Removed in full at `activeEnded`; kept in full if
+// the guard swallows it.
+//
+// **A HUD must not read these either.** A readout wants the LEVEL (what phase is it,
+// how long is left) and reconstructing that from edges costs a latch that can disagree
+// with the clock. `samosbor_beat` / `samosbor_alarm` below are the level-shaped
+// reading, and they need none of these fields.
 struct SamosborTransition {
     std::uint8_t from = 0;        // SamosborPhase at entry
     std::uint8_t to = 0;          // SamosborPhase at exit
@@ -488,6 +582,142 @@ inline bool samosbor_active(const SamosborState& st) {
 
 // 0..1 progress through the current phase, for HUD bars and telegraphs.
 float samosbor_phase01(const SamosborState& st);
+
+// ---------------------------------------------------------------------------
+// The beat — what the clock is telling the player RIGHT NOW
+// ---------------------------------------------------------------------------
+
+// The samosbor is the central clock of the game and until now the player's entire
+// information about it was one debug line reading `samosbor warning classic 43%`. The
+// 30 s warning window is the single most consequential decision in the loop — shelter,
+// run, shut a door, drop the haul, or take the hit — and it was being delivered in the
+// same weight of text as the frame time.
+//
+// **A HUD READS LEVEL, NOT EDGE, which is why nothing here takes a
+// SamosborTransition.** This lane was briefed to give `warningBegan` / `activeBegan` /
+// `activeEnded` a HUD consumer. They should not have one, and the reason is worth
+// stating once: an edge obliges its reader to keep a latch, and a latch in
+// `src/app/main.cpp` is a fourth copy of the clock that can disagree with the other
+// three. Every beat below is recovered from `SamosborState` alone — `phase`, `phaseMs`,
+// `phaseTotalMs`, `sealed`, `variant`, `count` — which is exactly the information the
+// edge carried, minus the bookkeeping. Consequences, all of them load-bearing: the
+// banner cannot go stale, cannot be missed by a frame that skipped a tick or by
+// `samosbor_step`'s four-crossing clamp, survives a save/load with no extra field, and
+// costs the call site ONE inserted line instead of a declaration plus an update plus a
+// draw.
+//
+// The edge flags are not dead and must not be deleted. They have exactly one consumer
+// that genuinely needs them — `samosbor_fog_tick` ([mob_spawn.h]), which creates and
+// destroys entities and so must act once per crossing, not once per frame. That is the
+// dividing line: **a side effect needs the edge, a readout needs the level.**
+enum class SamosborBeat : std::uint8_t {
+    None = 0,   // nothing worth an alarm line
+    Warning,    // the decision window is open
+    Impact,     // the fog just arrived
+    Seal,       // the one-shot unsheltered cost just resolved
+    Clear,      // aftermath: the fog is leaving and its mobs are gone
+    Count
+};
+
+// How long the three edge-shaped beats stay up. Warning is deliberately NOT in this
+// list: it holds for its whole 30 s window (see `samosbor_beat`).
+//
+// AUTHORED, and the only constraint that is structural rather than taste is the
+// static_assert below — a Clear window longer than the Aftermath phase would be a
+// banner the phase cannot outlive, so it would silently truncate instead of expiring.
+inline constexpr std::uint32_t kSamosborBeatImpactMs = 4u * 1000u;
+inline constexpr std::uint32_t kSamosborBeatSealMs = 3u * 1000u;
+inline constexpr std::uint32_t kSamosborBeatClearMs = 4u * 1000u;
+static_assert(kSamosborBeatClearMs < kSamosborAftermathMs,
+              "the Clear banner must expire inside the Aftermath phase, not with it");
+static_assert(kSamosborBeatImpactMs < kSamosborDurationFloorMs,
+              "the Impact banner must expire inside even the shortest Active phase");
+
+// Pulse cadence for the alarm colour. 1 Hz normally; 4 Hz over the last 5 s of the
+// WARNING window only, which is the one place in the cycle where the rate carries
+// information — the player has 5 s left to be somewhere else.
+inline constexpr std::uint32_t kSamosborBeatPulseMs = 1000u;
+inline constexpr std::uint32_t kSamosborBeatFastPulseMs = 5u * 1000u;
+inline constexpr std::uint32_t kSamosborBeatFastPulsePeriodMs = 250u;
+static_assert(kSamosborBeatFastPulseMs < kSamosborWarningMs,
+              "the fast pulse is the TAIL of the warning window, not the whole of it");
+
+// Minimum `cap` for `samosbor_beat_text`. 160 to match `rumour_text`, which is the
+// other Russian one-liner on the same HUD.
+//
+// MEASURED, not guessed. The longest beat is Warning at 121 bytes: 73 bytes of literal
+// after the three conversions are removed, plus 41 for the longest display name
+// ("Красный биологический"), plus 2 for the seconds and 5 for a saturated `count`. The
+// rest are 98 (Impact), 47 (Seal) and 58 (Clear). 160 leaves 38 bytes of margin, which
+// is one more display name's worth if a variant is ever renamed.
+inline constexpr std::size_t kSamosborBeatTextCap = 160;
+
+// What beat the clock is on. Pure, no allocation, one switch plus at most one table
+// lookup — cheap enough that `samosbor_beat_text` and `samosbor_beat_pulse01` each
+// call it rather than making the caller thread a result through.
+SamosborBeat samosbor_beat(const SamosborState& st);
+
+// Render the current beat into `out` as a Russian alarm line. False when the beat is
+// `None` (and then `out` is untouched, so a caller can hold the previous line if it
+// wants to) or when `cap < kSamosborBeatTextCap`.
+//
+// Bounded, no allocation, no exceptions. The numbers in it are the real ones: the
+// warning counts DOWN with `phaseMs`, the impact line states the whole Active
+// duration, and the seal line prints `samosbor_unsheltered_pressure().hpDamage` rather
+// than a hardcoded 4 — so the one-shot cost is taught to the player from the same
+// constant the damage is billed from.
+bool samosbor_beat_text(const SamosborState& st, char* out, std::size_t cap);
+
+// 0..1 alarm pulse, for a colour or an alpha. 0 when there is no beat.
+//
+// Derived from `phaseMs` rather than from a caller-side timer, which is what keeps the
+// whole beat system stateless: the pulse is a triangle wave on the countdown itself, so
+// it is frame-rate independent, identical on a replay, and correct after a load. A
+// triangle and not a sine on purpose — a linear ramp reads as an alarm lamp, a sine
+// reads as breathing — and it also means no <cmath> in a header that has none.
+float samosbor_beat_pulse01(const SamosborState& st);
+
+// The whole alarm as ONE value, so the call site is ONE inserted line.
+//
+// **This exists for a call-site reason, not a logic one, and the reason is worth a
+// paragraph because it is the difference between the beat shipping and the beat sitting
+// in this file unread.** Delivered as `samosbor_beat_text` + `samosbor_beat_pulse01` the
+// banner costs the caller a 160-byte buffer declaration, a call, a branch and a draw --
+// four lines threaded into an existing HUD block, which is exactly the shape of change
+// that gets deferred. Bundled, it is:
+//
+//     if (const auto a_ = samosbor_alarm(st); a_.on)
+//         ImGui::TextColored(col, "%s", a_.text);
+//
+// one line, no buffer at the call site, no latch, nothing to keep in sync.
+//
+// **The array is BY VALUE and that is the whole design.** The tempting signature is
+// `const char* samosbor_alarm(...)`, and every implementation of it is wrong here: a
+// `static` buffer is not reentrant and lies on a replay, and a pointer to anything local
+// dangles. 168 bytes copied once per HUD frame is ~10 KB/s at 60 Hz, against a function
+// that already runs one `snprintf` -- the copy is not the cost, the `snprintf` is, and
+// that happens either way.
+//
+// `pulse` rides along rather than being a second call because the colour and the text
+// must describe the SAME beat. Two calls cannot actually disagree inside one frame, but
+// they can be reordered around a `samosbor_step` by a later edit, and then the banner
+// reads Warning while the colour pulses at the Impact rate. One call, one answer.
+//
+// `text` is empty and `pulse` is 0 when the beat is `None`, so `on` is the only test a
+// caller needs. Pure, no allocation, no exceptions, no RTTI.
+struct SamosborAlarm {
+    char text[kSamosborBeatTextCap] = {};  // NUL-terminated Russian line; empty when off
+    float pulse = 0.0f;                    // samosbor_beat_pulse01, 0..1
+    std::uint8_t beat = 0;                 // SamosborBeat
+    bool on = false;                       // beat != None, i.e. `text` has content
+};
+// No size assert: this is a HUD value, never serialized and never inside a size-gated
+// blob, so pinning its padding would add a failure mode and buy nothing. Trivial
+// copyability IS pinned, because "returned by value, holds no pointer" is the property
+// the paragraph above argues for and a later member could quietly break it.
+static_assert(std::is_trivially_copyable_v<SamosborAlarm>);
+
+SamosborAlarm samosbor_alarm(const SamosborState& st);
 
 // ---------------------------------------------------------------------------
 // Unsheltered pressure

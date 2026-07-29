@@ -204,15 +204,17 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
             const MobRef& mr = reg.get<const MobRef>(e);
             const MobDef& md = kMobTable[mr.kind];
             const MobBehaviour beh = static_cast<MobBehaviour>(md.behaviour);
-            // Two kinds notice you far later than everyone else, which is the only
-            // reason walking past a monster is ever possible. [mob_behaviour.h]
+            // Ten kinds have their own sight range instead of the flat 20 m: three
+            // notice you far LATER (2.15 to 7.5 m), which is the only reason walking
+            // past a monster is ever possible, and six notice you EARLIER (23 to
+            // 30 m). Both directions are authored. [mob_behaviour.h]
             const float radius = behaviour_aggro_radius(beh, kAggroRadius);
 
             // Pick the chase target. The camera holder first and at its full aggro
             // radius; only a monster with nobody better, and holding this epoch's
-            // hunting licence, drops to the crowd — and then only inside kHuntRadius,
-            // which is never larger than the smallest aggro radius, so the player can
-            // never lose a monster to a resident standing further away.
+            // hunting licence, drops to the crowd — and then only inside
+            // min(kHuntRadius, its own radius), so the player can never lose a monster
+            // to a resident standing further away than it can see the player.
             //
             // The prey scan runs inside this view's iteration and that is safe for one
             // stated reason: `nearest_prey` takes a const Registry and reads only
@@ -228,7 +230,18 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                 if (ax * ax + ay * ay + az * az < radius * radius) chasing = true;
             }
             if (!chasing && mob_hunts_npcs(id, tick)) {
-                const Prey pr = nearest_prey(reg, pool, layer, tr.pos, kHuntRadius);
+                // Clamped to the mob's OWN sight radius, not left at the flat 6 m.
+                // [hunt.h] states "the player wins inside kHuntRadius" as a strict
+                // rule, and justifies it by kHuntRadius never exceeding the smallest
+                // behaviour radius — which was true only while that smallest value
+                // was CloseReveal's 6.0. LurkingFurniture is 2.15 ([mob_behaviour.h]),
+                // so without this clamp a dormant Ковер would ignore the camera holder
+                // standing 3 m away and go and eat a resident at 5 m: the rule
+                // inverted, for the one kind whose whole design is not noticing you.
+                // Derived from the radius rather than re-stated, so the next short
+                // behaviour cannot reintroduce it.
+                const float preyRadius = radius < kHuntRadius ? radius : kHuntRadius;
+                const Prey pr = nearest_prey(reg, pool, layer, tr.pos, preyRadius);
                 if (pr.e != entt::null) {
                     ax = wrap_delta_f(tr.pos.x, pr.pos.x, kWorldExtent);
                     ay = wrap_delta_f(tr.pos.y, pr.pos.y, kWorldExtent);
@@ -273,14 +286,26 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                     if (tl < 0.05f) { tx = ax; ty = ay; tl = len; }
                     float sp = static_cast<float>(md.speedMmps) *
                                0.001f * kCellSize;
-                    // Wall-adjacency bias: the four carriers move faster
-                    // hugging a wall and slower in the open, which makes
-                    // corridors and doorways genuinely worse places to be
-                    // caught than open rooms. Free level design, extracted from
-                    // geometry that already exists. [mob_behaviour.h]
-                    if (has_flag(md.aiFlags, AiFlag::WallBias))
-                        sp *= wall_bias_speed(md.aiFlags,
-                                              adjacent_wall(grid, tr.pos));
+                    // Wall-adjacency pace. The four AiFlag::WallBias carriers move
+                    // faster hugging a wall and slower in the open, which makes
+                    // corridors and doorways genuinely worse places to be caught
+                    // than open rooms — free level design, extracted from geometry
+                    // that already exists. Two BEHAVIOURS read the same query with
+                    // their own numbers (Арматура x1.22/x0.68, Панельник
+                    // x1.02/x0.90) and TAKE PRECEDENCE over the flag rather than
+                    // stacking with it: Арматура carries both, and multiplying
+                    // would give it 1.44 where the reference gives 1.22.
+                    // [mob_behaviour.h]
+                    //
+                    // One gate, one query. `wall_query_needed` is true for 5 of the
+                    // 69 kinds, so the four cardinal cell reads stay off the other
+                    // 64 — wave 2 added the query for exactly one more kind.
+                    if (wall_query_needed(md.aiFlags, beh)) {
+                        const bool wall = adjacent_wall(grid, tr.pos);
+                        const MoveMult bm = behaviour_move_mult(beh, wall);
+                        sp *= bm.claimed ? bm.mult
+                                         : wall_bias_speed(md.aiFlags, wall);
+                    }
                     vel.v.x = tx / tl * sp;
                     vel.v.y = ty / tl * sp;
                 }

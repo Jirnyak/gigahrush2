@@ -91,8 +91,12 @@ float advertised(ItemId id, Appetite want) {
     return a > 0.0f ? a : 0.0f;
 }
 
-// `use_best_heal`'s selection rule, generalised over the bar being filled: the
-// smallest portion that still covers the deficit, else the largest there is.
+// `use_best_heal`'s selection rule generalised over the bar being filled, plus one
+// key it does not have: HP cost outranks fit. Full argument and numbers in
+// [needs.h]; the short version is that ranking on fit alone forces the eat key onto
+// experimental_concentrate at a 31-point deficit — 6 HP for 8 food points, 100 s of
+// clock — and onto zhelemish_raw / infected_mushroom on a pure slot-index tie with
+// rawmeat / soup_cube, where the tighter fit is worth exactly nothing.
 ConsumeResult use_best_for(Registry& reg, NpcPool& pool, EventBus& bus,
                            LayerId layer, Appetite want, std::uint64_t tick) {
     ConsumeResult out;
@@ -109,13 +113,25 @@ ConsumeResult use_best_for(Registry& reg, NpcPool& pool, EventBus& bus,
     Inventory& inv = pool.inventory(me.id);
     int best = -1;
     float bestAmt = 0.0f;
+    bool bestFree = false;
     for (int i = 0; i < kInvSlots; ++i) {
         const ItemSlot& s = inv.slots[i];
         if (s.item == kInvalidItem || s.count == 0) continue;
         const float amt = advertised(s.item, want);
         if (amt <= 0.0f) continue;
+        // `noCost`, not `free`: a local named `free` hides ::free and MSVC /W4 reports
+        // that as C4459 in a build that must stay warning-clean.
+        const bool noCost = consumable_hp_cost(s.item) == 0;
 
-        if (best < 0) { best = i; bestAmt = amt; continue; }
+        if (best < 0) { best = i; bestAmt = amt; bestFree = noCost; continue; }
+        // PRIMARY KEY: a free candidate wins outright and a costly one cannot
+        // displace it, so fit is only ever compared within one cost class.
+        if (noCost != bestFree) {
+            if (noCost) { best = i; bestAmt = amt; bestFree = true; }
+            continue;
+        }
+        // SECONDARY KEY: smallest that covers, else largest. Strict comparisons, so
+        // a tie in `amt` stays with the lower slot index.
         const bool bestCovers = bestAmt >= missing;
         const bool thisCovers = amt >= missing;
         if (thisCovers && (!bestCovers || amt < bestAmt)) { best = i; bestAmt = amt; }
@@ -289,6 +305,15 @@ bool item_hydrates(ItemId id) {
     }
 }
 
+std::int16_t consumable_hp_cost(ItemId id) {
+    if (!item_valid(id)) return 0;
+    switch (static_cast<UseEffect>(item_def(id).useEffect)) {
+        case UseEffect::FeedRisky:     return kRiskyFeedHpCost;
+        case UseEffect::SleepingPills: return kSleepingPillsHpCost;
+        default:                       return 0;
+    }
+}
+
 ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp) {
     ConsumeResult out;
     if (!item_valid(item)) return out;
@@ -299,7 +324,10 @@ ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp) {
 
     float pooShare = 0.0f;
     float peeShare = 0.0f;
-    std::int16_t cost = 0;
+    // ONE source for the cost, because `use_best_for` now ranks on it: a switch here
+    // and a second switch there would drift, and the drift would be invisible —
+    // selection would keep calling a row free while eating it charged 6 HP.
+    const std::int16_t cost = consumable_hp_cost(item);
 
     switch (eff) {
         case UseEffect::Feed:
@@ -322,7 +350,6 @@ ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp) {
             out.food = top_up(n.food, a);
             pooShare = kRiskyPooShare;
             peeShare = kRiskyPeeShare;
-            cost = kRiskyFeedHpCost;
             break;
 
         case UseEffect::Drink:
@@ -343,7 +370,6 @@ ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp) {
             out.sleep = top_up(n.sleep, a);
             n.water = clamp_need(n.water - kSleepingPillsWaterCost);
             n.food  = clamp_need(n.food  - kSleepingPillsFoodCost);
-            cost = kSleepingPillsHpCost;
             break;
 
         default:

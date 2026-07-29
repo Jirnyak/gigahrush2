@@ -135,6 +135,19 @@ inline constexpr float kRiskyPooShare = 1.0f;   // riskyFeed(v) -> pendingPoo +=
 inline constexpr float kRiskyPeeShare = 0.4f;   //              -> pendingPee += v*0.4
 inline constexpr float kDrinkPeeShare = 0.6f;   // drink(v)     -> pendingPee += v*0.6
 
+// BOTH DIGEST RATES BEAT THEIR OWN STEADY-STATE INFLOW, which is why a player who
+// only replaces what they drain never accumulates a permanent backlog. Drinking at
+// exactly `kWaterDrainPerSec` queues 0.12 * 0.6 = 0.072 pee/s against 0.10 of
+// metering capacity — 39 % headroom. Eating at `kFoodDrainPerSec` queues
+// 0.08 * 0.7 = 0.056 poo/s against 0.06 — 7 % headroom. The bowel margin is thin
+// enough that raising `kFoodDrainPerSec` past 0.0857 inverts it and turns poo into a
+// debt no amount of walking can pay, so it is asserted here rather than left to be
+// discovered later as "the toilet stopped helping".
+static_assert(kPeeDigestPerSec > kWaterDrainPerSec * kDrinkPeeShare,
+              "pee must meter out faster than continuous drinking queues it");
+static_assert(kPooDigestPerSec > kFoodDrainPerSec * kFeedPooShare,
+              "poo must meter out faster than continuous eating queues it");
+
 // **THE ONE APPROXIMATION IN THIS FILE.** The reference authors a per-item HP cost
 // for risky food in the CSV's `use_b`: 8 (infected_mushroom), 6 (zhelemish_raw),
 // 5 (experimental_concentrate), 6 (sand_spoiled_ration). `ItemDef` stops at `useA`
@@ -262,9 +275,57 @@ struct ConsumeResult {
 // bills the full 40 points of digestion — it went through you either way.
 ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp);
 
-// `use_best_heal`'s rule on the other bars: the smallest portion that still covers
-// the deficit, falling back to the largest available. Consumes one unit, charges any
-// HP cost through `apply_damage`, publishes `ItemTransferred`.
+// The HP `apply_consumable` will charge for `id`, BEFORE the hp-1 survivability floor
+// is applied. 0 for all 17 clean Feed/FeedPsi rows and all 8 Drink/DrinkStim rows;
+// `kRiskyFeedHpCost` for the 4 FeedRisky rows; `kSleepingPillsHpCost` for the one
+// pill. Public because it is the PRIMARY key of the selection rule below, so a test
+// can assert that rule directly instead of inferring it from an outcome.
+std::int16_t consumable_hp_cost(ItemId id);
+
+// SELECTION IS TWO-KEY: HP COST FIRST, FIT SECOND.
+//
+//   1. Anything `consumable_hp_cost` reports 0 for beats anything it charges for,
+//      whatever the fit.
+//   2. Within one cost class: the smallest portion that still covers the deficit,
+//      else the largest available — `use_best_heal`'s rule ([loot.h]).
+//   3. Ties in magnitude go to the lowest slot index.
+//
+// Key 1 is NOT in `use_best_heal` and the divergence is deliberate, not drift: all 12
+// `Heal` rows in `data/items.csv` leave `use_b` empty, so healing has no cost to rank
+// on, while 4 of the 21 feeding rows charge `kRiskyFeedHpCost` = 6 HP.
+//
+// WHY FIT CANNOT BE THE PRIMARY KEY. `useA` over the 21 feeding rows, sorted, R =
+// FeedRisky: 4R 6 8 10 10R 12 12R 15 16 18 20 20 22 24 25 26 28 30 32R 35 40. Rank on
+// fit alone and the eat key is FORCED onto a risky row wherever a risky `useA` is the
+// smallest that covers, and pays 6 HP for it:
+//
+//   deficit 31  -> experimental_concentrate (32, 6 HP) over liquidator_ration (40,
+//                  0 HP). The tighter fit is worth 8 food points = 100 s of clock at
+//                  `kFoodDrainPerSec`, bought for 6 % of a 100 HP bar.
+//   deficit 10  -> zhelemish_raw (10) TIES rawmeat (10), and wins on slot index only.
+//   deficit 12  -> infected_mushroom (12) TIES soup_cube (12), likewise.
+//
+// The ties settle it: identical food, 6 HP more, plus 3.0 more points of queued bowel
+// (`kRiskyPooShare` 1.0 against `kFeedPooShare` 0.7) = 50 s more of poo climbing at
+// `kPooDigestPerSec` — and which one you get is decided by pickup order. Both risky
+// rows in those ties carry spawn weight 1000, exactly matching their clean twins, so
+// it is not a rare shape. Scarcity points the same way: 13.0 % of feeding drops by
+// spawn weight are risky (2,220 of 17,020 milli), the 16 clean Feed rows are 1..22 RUB
+// trash, and HP has exactly one restore path in this build — 12 `Heal` rows at 10..140
+// RUB, median 39, for 8..60 points. Paying the scarce resource to save 1..8 points of
+// the abundant one is backwards.
+//
+// A LEXICOGRAPHIC key, not a weighted one, because no measured HP-per-food-point
+// exchange rate exists to weight with. And it does not make risky food unreachable,
+// which would be the opposite bug: with only `infected_mushroom` in the bag at 0 food,
+// 12 points for 6 HP beats 0.3 HP/s forever, and key 1 still picks it because it is
+// the only class present. What key 1 actually buys is DEFERRAL — the key is repeatable
+// on every press, so eating the free rows first costs nothing and keeps the 6 HP
+// unspent until the bag holds nothing else. Deferral is free on the pressure axis too:
+// clean food queues 0.7 poo per food point at any portion size, risky queues 1.0.
+//
+// Consumes one unit, charges any HP cost through `apply_damage` on
+// `kAttritionChannel`, publishes `ItemTransferred`.
 // Call site: beside `use_best_heal`, after `pickup_step`, on an input edge.
 ConsumeResult use_best_food(Registry& reg, NpcPool& pool, EventBus& bus,
                            LayerId layer, std::uint64_t tick);

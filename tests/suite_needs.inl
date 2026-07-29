@@ -7,6 +7,13 @@
 // minutes-to-damage they produce — at build time where it can, by running the real
 // clock where it cannot. Retune 0.12 and this file goes red with the number it now
 // produces.
+//
+// `use_best()` CHANGED CONTRACT and the old one is documented on it rather than
+// deleted, because it was green: it asserted that the eat key spends
+// kRiskyFeedHpCost = 6 HP to buy a tighter portion fit, which is what ranking
+// consumables on fit alone does with data/items.csv's four FeedRisky rows. The rule and
+// the arithmetic that replaced it are in [needs.h]; the count over every deficit the
+// bar can hold is in suite_needs2.inl.
 #include "game/needs.h"
 #include "game/elevator.h"
 #include "game/floor_registry.h"
@@ -110,7 +117,14 @@ ItemId first_with_effect(UseEffect eff) {
     return kInvalidItem;
 }
 
-void extremes_for(bool hydrating, ItemId& small, ItemId& large) {
+// Which cost class a lookup is over. `consumable_hp_cost` is the discriminator, so
+// the test states the selection rule's primary key in the same terms the rule uses.
+enum class Cost : std::uint8_t { Any, Free, Charged };
+
+// Extremes of useA over the rows serving one appetite, restricted to a cost class. No
+// item id is hardcoded in this file — the table is the source ([AGENTS.md]) — so a CSV
+// retune moves the test with it instead of quietly invalidating it.
+void extremes_for(bool hydrating, Cost cls, ItemId& small, ItemId& large) {
     small = kInvalidItem;
     large = kInvalidItem;
     std::int16_t lo = 0, hi = 0;
@@ -119,6 +133,11 @@ void extremes_for(bool hydrating, ItemId& small, ItemId& large) {
         if (hydrating ? !item_hydrates(id) : !item_feeds(id)) continue;
         const std::int16_t a = item_def(id).useA;
         if (a <= 0) continue;
+        // `noCost`, not `free`: a local named `free` hides ::free, which MSVC /W4
+        // reports as C4459.
+        const bool noCost = consumable_hp_cost(id) == 0;
+        if (cls == Cost::Free && !noCost) continue;
+        if (cls == Cost::Charged && noCost) continue;
         if (small == kInvalidItem || a < lo) { small = id; lo = a; }
         if (large == kInvalidItem || a > hi) { large = id; hi = a; }
     }
@@ -530,6 +549,26 @@ void consumption() {
         CHECK(r.hpCost == kSleepingPillsHpCost);
     }
 
+    // `consumable_hp_cost` is the PRIMARY key of the selection rule, so it has to agree
+    // with what `apply_consumable` actually charges for EVERY row in the table, not for
+    // the three rows the cases above happen to use. Disagreement would be invisible at
+    // runtime: selection would keep calling a row free while eating it took 6 HP.
+    int charged = 0;
+    for (std::size_t i = 0; i < kItemCount; ++i) {
+        const ItemId id = static_cast<ItemId>(i + 1);
+        Needs probe = full_clock();
+        probe.food = 0.0f;
+        probe.water = 0.0f;
+        probe.sleep = 0.0f;
+        // hp 1000 so the hp-1 survivability floor cannot mask a mismatch.
+        const ConsumeResult pr = apply_consumable(probe, id, 1000);
+        CHECK(pr.hpCost == (pr.used ? consumable_hp_cost(id) : 0));
+        if (consumable_hp_cost(id) > 0) ++charged;
+    }
+    // 4 FeedRisky at kRiskyFeedHpCost + 1 SleepingPills at kSleepingPillsHpCost. A
+    // sixth row would be a cost path the selection rule has never been exercised on.
+    CHECK(charged == 5);
+
     // Nothing else touches the clock.
     Needs junk = full_clock();
     CHECK(!apply_consumable(junk, kInvalidItem, 100).used);
@@ -537,61 +576,171 @@ void consumption() {
     CHECK(junk.food == kNeedMax && junk.water == kNeedMax);
 }
 
+// THE SELECTION CONTRACT, in prose before code, because this function previously
+// asserted the OPPOSITE of it and was green for it:
+//
+//   1. HP COST OUTRANKS FIT. Anything `consumable_hp_cost` reports 0 for is chosen
+//      over anything it charges for, however much better the costly one fits.
+//   2. Within one cost class: the smallest portion that still covers the deficit,
+//      else the largest available — `use_best_heal`'s rule ([loot.h]).
+//   3. Ties in useA go to the lowest slot index.
+//
+// WHAT THE OLD ASSERTIONS ENCODED. `extremes_for(Cost::Any)` over the 21 feeding rows
+// returns sand_spoiled_ration (useA 4, FeedRisky) as the smallest and
+// liquidator_ration (useA 40, Feed) as the largest — the globally smallest feeding row
+// in the table is a risky one. So the previously-green `r1.item == small` at a 4-point
+// deficit was asserting that the eat key pays kRiskyFeedHpCost = 6 HP to restore 4
+// food points (50 s of clock at kFoodDrainPerSec) while a 0 HP ration sits in the next
+// slot. The old test never looked at HP at all, which is exactly how a 6-for-4 trade
+// stayed green for a whole integration. HP is now checked in every case below.
+//
+// KEY 1 IS NOT FREE, and the cost is stated here rather than hidden: at a small
+// deficit it burns a bigger item and queues more digestion than the tight risky fit
+// would. Case B measures both sides of that trade. What decides it is that the
+// pathological shape needs sand_spoiled_ration, whose spawn weight is 0 — no run can
+// hand you one, because `drop_mob_loot` skips weight-0 rows — while case C's shape
+// (220 and 1000 milli) is reachable on any floor with a MEDICAL or STORAGE room.
 void use_best() {
-    ItemId small = kInvalidItem, large = kInvalidItem;
-    extremes_for(/*hydrating=*/false, small, large);
-    CHECK(small != kInvalidItem && item_def(large).useA > item_def(small).useA);
+    ItemId anySmall = kInvalidItem, anyLarge = kInvalidItem;
+    ItemId freeSmall = kInvalidItem, freeLarge = kInvalidItem;
+    ItemId riskySmall = kInvalidItem, riskyLarge = kInvalidItem;
+    extremes_for(/*hydrating=*/false, Cost::Any, anySmall, anyLarge);
+    extremes_for(/*hydrating=*/false, Cost::Free, freeSmall, freeLarge);
+    extremes_for(/*hydrating=*/false, Cost::Charged, riskySmall, riskyLarge);
+    CHECK(freeSmall != kInvalidItem && riskySmall != kInvalidItem);
+
+    // The two table facts that make key 1 load-bearing rather than theoretical:
+    // the globally tightest feeding row is a charged one (4 against the free 6), and
+    // the largest charged row still fits a deep deficit better than any free row
+    // (32 against 40). Both are why fit-first reaches for HP.
+    CHECK(anySmall == riskySmall);
+    CHECK(item_def(riskySmall).useA < item_def(freeSmall).useA);
+    CHECK(item_def(riskyLarge).useA < item_def(freeLarge).useA);
+    CHECK(anyLarge == freeLarge);
+    CHECK(consumable_hp_cost(riskySmall) == kRiskyFeedHpCost);
+    CHECK(consumable_hp_cost(riskyLarge) == kRiskyFeedHpCost);
+    CHECK(consumable_hp_cost(freeSmall) == 0 && consumable_hp_cost(freeLarge) == 0);
 
     Rig rig;
     rig.build(100);
     rig.needs() = full_clock();
     Inventory& inv = rig.pool.inventory(rig.id);
-    inv.slots[0] = ItemSlot{small, 1};
-    inv.slots[1] = ItemSlot{large, 1};
+    inv.slots[0] = ItemSlot{riskySmall, 1};
+    inv.slots[1] = ItemSlot{freeLarge, 1};
 
-    // Full: nothing is spent. A ration is not burned on an appetite you do not have.
+    // A — full: nothing is spent. A ration is not burned on an appetite you do not have.
     CHECK(!use_best_food(rig.reg, rig.pool, rig.bus, 0, 1u).used);
-    CHECK(inv.slots[0].item == small && inv.slots[1].item == large);
+    CHECK(inv.slots[0].item == riskySmall && inv.slots[1].item == freeLarge);
+    CHECK(rig.pool.hp(rig.id) == 100);
 
-    // A small deficit spends the small item and leaves the big one alone.
-    rig.needs().food = kNeedMax - static_cast<float>(item_def(small).useA);
+    // B — THE CASE THAT FLIPPED. The charged row fits the deficit EXACTLY and is still
+    // not chosen. Ledger for a 4-point deficit holding {4 charged, 40 free}:
+    //   charged: +4 food, 6 HP,  4.0 poo + 1.6 pee queued, keeps the 40-point ration
+    //   free:    +4 food, 0 HP, 28.0 poo + 12.0 pee queued, keeps the charged row
+    // So key 1 trades 36 wasted food points and 24 extra points of bowel for 6 % of a
+    // 100 HP bar. It is the right way round because HP has exactly one restore path in
+    // this build (12 `Heal` rows at 10..140 RUB) while the 16 clean Feed rows are 1..22
+    // RUB trash, and because the deferral is only ever deferral: the key is repeatable,
+    // so the 6 HP is still available on the next press once the free rows are gone
+    // (case F).
+    const float riskyA = static_cast<float>(item_def(riskySmall).useA);
+    rig.needs().food = kNeedMax - riskyA;
     const ConsumeResult r1 = use_best_food(rig.reg, rig.pool, rig.bus, 0, 2u);
-    CHECK(r1.used && r1.item == small);
+    CHECK(r1.used && r1.item == freeLarge);
+    CHECK(r1.hpCost == 0);
+    CHECK(rig.pool.hp(rig.id) == 100);          // was 94 under fit-first ranking
     CHECK(approx(rig.needs().food, kNeedMax, 1e-3f));
-    CHECK(inv.slots[0].item == kInvalidItem);   // consumed
-    CHECK(inv.slots[1].item == large);          // NOT wasted
+    CHECK(inv.slots[0].item == riskySmall);     // the 6 HP stays unspent
+    CHECK(inv.slots[1].item == kInvalidItem);   // the free ration is what got eaten
 
-    // A deficit nothing covers falls back to the largest available.
-    inv.slots[0] = ItemSlot{small, 1};
-    rig.needs().food = 5.0f;
+    // C — the band a real run reaches, because both rows actually spawn: a 31-point
+    // deficit holding {32 charged, 40 free}. The charged row fits to within 1 point,
+    // the free one overshoots by 9 — and 9 food points is 112 s of clock at
+    // kFoodDrainPerSec. Fit-first spent 6 HP to buy those 112 s.
+    inv.clear();
+    inv.slots[0] = ItemSlot{riskyLarge, 1};
+    inv.slots[1] = ItemSlot{freeLarge, 1};
+    const std::int16_t hpBeforeC = rig.pool.hp(rig.id);
+    rig.needs().food = kNeedMax - static_cast<float>(item_def(riskyLarge).useA) + 1.0f;
     const ConsumeResult r2 = use_best_food(rig.reg, rig.pool, rig.bus, 0, 3u);
-    CHECK(r2.used && r2.item == large);
-    CHECK(inv.slots[1].item == kInvalidItem);
+    CHECK(r2.used && r2.item == freeLarge);
+    CHECK(r2.hpCost == 0 && rig.pool.hp(rig.id) == hpBeforeC);
+    CHECK(inv.slots[0].item == riskyLarge);     // still in the bag, still unpaid for
 
-    // Same rule on the other bar, and food is not a candidate for it.
+    // D — key 2 inside the free class: smallest that COVERS, so a 40-point ration is
+    // not spent on a 6-point hole. The big one sits in the LOWER slot on purpose — a
+    // lowest-index bias would pass a version of this test that put it second.
+    inv.clear();
+    inv.slots[0] = ItemSlot{freeLarge, 1};
+    inv.slots[1] = ItemSlot{freeSmall, 1};
+    rig.needs().food = kNeedMax - static_cast<float>(item_def(freeSmall).useA);
+    const ConsumeResult r3 = use_best_food(rig.reg, rig.pool, rig.bus, 0, 4u);
+    CHECK(r3.used && r3.item == freeSmall);
+    CHECK(inv.slots[0].item == freeLarge);      // NOT wasted
+    CHECK(approx(rig.needs().food, kNeedMax, 1e-3f));
+
+    // E — key 2's fallback: a deficit nothing covers takes the largest FREE row.
+    inv.clear();
+    inv.slots[0] = ItemSlot{freeSmall, 1};
+    inv.slots[1] = ItemSlot{freeLarge, 1};
+    rig.needs().food = 1.0f;                    // 99 short; neither row covers it
+    const ConsumeResult r4 = use_best_food(rig.reg, rig.pool, rig.bus, 0, 5u);
+    CHECK(r4.used && r4.item == freeLarge);
+    CHECK(inv.slots[0].item == freeSmall);
+
+    // F — CHARGED FOOD STAYS REACHABLE. Key 1 that refused to eat it must not become
+    // "never eats it", which would be the opposite defect: with only infected_mushroom
+    // in the bag at 0 food, 12 points for 6 HP beats 0.3 HP/s forever. So when the
+    // charged class is the ONLY class present it is chosen, and the HP really is billed
+    // through apply_damage rather than reported and forgotten.
+    inv.clear();
+    inv.slots[0] = ItemSlot{riskySmall, 1};
+    const std::int16_t hpBeforeF = rig.pool.hp(rig.id);
+    rig.needs().food = 0.0f;
+    const ConsumeResult r5 = use_best_food(rig.reg, rig.pool, rig.bus, 0, 6u);
+    CHECK(r5.used && r5.item == riskySmall);
+    CHECK(r5.hpCost == kRiskyFeedHpCost);
+    CHECK(rig.pool.hp(rig.id) == hpBeforeF - kRiskyFeedHpCost);
+    CHECK(rig.needs().food > 0.0f);             // ...and it still feeds you
+    CHECK(!rig.reg.all_of<Dead>(rig.body));     // a meal is never lethal
+
+    // G — the other bar. Key 1 is INERT on drinks and that is the fact that makes the
+    // divergence from use_best_heal safe: not one of the 8 hydrating rows charges HP,
+    // so the drink path is still pure key 2 and nothing about it changed.
+    ItemId chargedDrinkSmall = kInvalidItem, chargedDrinkLarge = kInvalidItem;
+    extremes_for(/*hydrating=*/true, Cost::Charged, chargedDrinkSmall,
+                 chargedDrinkLarge);
+    CHECK(chargedDrinkSmall == kInvalidItem && chargedDrinkLarge == kInvalidItem);
+
     ItemId smallDrink = kInvalidItem, largeDrink = kInvalidItem;
-    extremes_for(/*hydrating=*/true, smallDrink, largeDrink);
+    extremes_for(/*hydrating=*/true, Cost::Any, smallDrink, largeDrink);
     CHECK(smallDrink != kInvalidItem && largeDrink != kInvalidItem);
+    CHECK(item_def(largeDrink).useA > item_def(smallDrink).useA);
     inv.clear();
     inv.slots[0] = ItemSlot{smallDrink, 2};
-    inv.slots[1] = ItemSlot{large, 1};          // food, must be ignored
+    inv.slots[1] = ItemSlot{freeLarge, 1};      // food, must be ignored
     rig.needs().water = kNeedMax - static_cast<float>(item_def(smallDrink).useA);
-    const ConsumeResult r3 = use_best_drink(rig.reg, rig.pool, rig.bus, 0, 4u);
-    CHECK(r3.used && r3.item == smallDrink && r3.water > 0.0f);
+    const ConsumeResult r6 = use_best_drink(rig.reg, rig.pool, rig.bus, 0, 7u);
+    CHECK(r6.used && r6.item == smallDrink && r6.water > 0.0f);
     CHECK(inv.slots[0].count == 1);             // one unit off a stack
-    CHECK(inv.slots[1].item == large);          // the food was not drunk
-
-    // Every use publishes ItemTransferred, the way a spent bandage does.
-    CHECK(rig.bus.size() == 3);
-    CHECK(rig.bus.events()[0].type == EventType::ItemTransferred);
-    CHECK(rig.bus.events()[0].a == rig.id && rig.bus.events()[0].c == small);
+    CHECK(inv.slots[1].item == freeLarge);      // the food was not drunk
 
     // Nothing edible left: an honest false, not a silent no-op that claims success.
     inv.clear();
     rig.needs().food = 1.0f;
-    CHECK(!use_best_food(rig.reg, rig.pool, rig.bus, 0, 5u).used);
+    CHECK(!use_best_food(rig.reg, rig.pool, rig.bus, 0, 8u).used);
     // No camera holder on the layer means nobody to feed.
-    CHECK(!use_best_food(rig.reg, rig.pool, rig.bus, 99, 6u).used);
+    CHECK(!use_best_food(rig.reg, rig.pool, rig.bus, 99, 9u).used);
+
+    // Every use publishes ItemTransferred, the way a spent bandage does — six uses,
+    // six events, and the charged one is billed as ITSELF rather than as the free row
+    // that was declined. apply_damage publishes nothing (only finalize_deaths does),
+    // so case F's 6 HP adds no event.
+    CHECK(rig.bus.size() == 6);
+    CHECK(rig.bus.events()[0].type == EventType::ItemTransferred);
+    CHECK(rig.bus.events()[0].a == rig.id && rig.bus.events()[0].c == freeLarge);
+    CHECK(rig.bus.events()[4].c == riskySmall);
+    CHECK(rig.bus.events()[5].c == smallDrink);
 }
 
 void pressure() {

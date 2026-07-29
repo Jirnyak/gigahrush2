@@ -5,10 +5,13 @@
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "game/embody.h"   // NpcRef
+#include "game/floor_gen.h" // floor_room_mask — the crate's contents follow the ROOM
 #include "game/npc_pool.h"
+#include "sim/fluid.h"     // fluid_at, kFluidMinFlow — a crate does not float
 #include "world/lattice.h"
 #include "world/materials.h"
 #include "world/types.h"
+#include "world/world.h"
 
 namespace giga::game {
 
@@ -76,47 +79,17 @@ bool standable(const MacroGrid& g, int x, int y, int z) {
     return g.cell(x, y, z - 1) != kCellAir;
 }
 
-} // namespace
-
-std::uint32_t container_budget(FloorKind kind) {
-    // Scaled on the room count, thinned — and then FLOORED, which is the correction
-    // that matters.
-    //
-    // Rooms alone gave a Residential warren (stride 8, 256 rooms) about 40 crates and
-    // an Industrial pillar plate (stride 32, 16 rooms) about 6 — and after
-    // standability filtering that landed at **3 crates on an entire 128x128 floor**,
-    // measured in the running game. Three is not an economy; it is a rounding error
-    // the player will never walk into. An open-plan floor has few ROOMS and just as
-    // much FLOOR, so the room count is the wrong denominator there.
-    //
-    // Scaling on rooms rather than on depth stays deliberate: a deeper floor should be
-    // RICHER, not fuller, and conflating the two turns the bottom of the building into
-    // a supermarket. The floor is a floor, not a depth bonus.
-    const int stride = floor_room_stride(kind);
-    const int rooms = (kMacroDim / stride) * (kMacroDim / stride);
-    std::uint32_t n = static_cast<std::uint32_t>(rooms) / 6u;
-    if (n < kContainerFloorMin) n = kContainerFloorMin;
-    return n;
-}
-
-Container roll_container(ContainerKind kind, int floorZ, std::uint32_t seed) {
-    Container c;
-    c.kind = static_cast<std::uint8_t>(kind);
-
-    // THE rule: the floor's band sets the ceiling, the kind takes a fixed share of it.
-    // A public box on floor -50 is still a public box.
-    const std::int32_t bandCap = kLootValueCap[economy_band(floorZ)];
-    const std::int32_t cap =
-        bandCap * kContainerCapPct[static_cast<std::size_t>(kind)] / 100;
-
-    // Candidate items: anything that can appear on this floor at all, then filtered to
-    // what fits under this container's share. Weighted by the same depth-gated spawn
-    // weight the mob-drop path uses, so one item table drives both.
-    std::vector<ItemId> pool;
-    std::vector<std::uint32_t> cum;
+// Candidates for one container: every item that can appear on this floor, in this
+// ROOM, under this container kind's share of the band cap. Returns the cumulative
+// weight total; `pool`/`cum` are parallel and must come in empty.
+//
+// Split out of roll_container because it is now called TWICE — see the fallback there.
+std::uint32_t build_pool(ContainerKind kind, int floorZ, std::int32_t cap,
+                         std::uint16_t roomMask, std::vector<ItemId>& pool,
+                         std::vector<std::uint32_t>& cum) {
     std::uint32_t total = 0;
     for (ItemId id = 1; id <= kItemCount; ++id) {
-        const std::uint32_t w = item_weight_on_floor(id, floorZ, 0);
+        const std::uint32_t w = item_weight_on_floor(id, floorZ, roomMask);
         if (w == 0) continue;
         const ItemDef& d = item_def(id);
         if (d.value > cap) continue;
@@ -137,6 +110,50 @@ Container roll_container(ContainerKind kind, int floorZ, std::uint32_t seed) {
         total += w;
         pool.push_back(id);
         cum.push_back(total);
+    }
+    return total;
+}
+
+// Roll one container's contents against a specific ROOM.
+//
+// **The fallback is the whole difficulty of this function, and it is measured.**
+// `item_weight_on_floor` returns 0 when the room mask does not match, and the
+// container kind then filters by CATEGORY on top, so the two masks intersect and the
+// intersection is empty far more often than either alone. Candidate counts, over
+// data/items.csv with the real depth decay and the real per-kind value share:
+//
+//              PublicBox  RoomStash  Safe  WeaponCrate      (floor 0 / floor -26)
+//   unmasked      13/46     112/344  234/355     6/64
+//   Corridor       0/0         3/11    8/11      0/1
+//   Bathroom       3/8        18/24   23/24      0/0
+//   Living         0/1        24/38   34/38      1/3
+//   Hq             0/7         9/98   47/101     0/31
+//
+// A PublicBox in a CORRIDOR has ZERO legal items at every depth — and container.h
+// documents a public box as exactly a corridor-and-lobby fixture, so the strict filter
+// would empty the one placement the kind exists for. So: try the room, and fall back to
+// the floor's whole table when the room has nothing to offer THIS kind. The taxonomy
+// shapes what a room holds; it never gets to make a room hold nothing.
+Container roll_in_room(ContainerKind kind, int floorZ, std::uint32_t seed,
+                       std::uint16_t roomMask) {
+    Container c;
+    c.kind = static_cast<std::uint8_t>(kind);
+
+    // THE rule: the floor's band sets the ceiling, the kind takes a fixed share of it.
+    // A public box on floor -50 is still a public box.
+    const std::int32_t bandCap = kLootValueCap[economy_band(floorZ)];
+    const std::int32_t cap =
+        bandCap * kContainerCapPct[static_cast<std::size_t>(kind)] / 100;
+
+    // Candidate items, weighted by the same depth-gated spawn weight the mob-drop path
+    // uses, so one item table drives both.
+    std::vector<ItemId> pool;
+    std::vector<std::uint32_t> cum;
+    std::uint32_t total = build_pool(kind, floorZ, cap, roomMask, pool, cum);
+    if (total == 0 && roomMask != 0) {
+        pool.clear();
+        cum.clear();
+        total = build_pool(kind, floorZ, cap, 0, pool, cum);
     }
     if (total == 0) return c;   // nothing legal here; an empty container is honest
 
@@ -162,6 +179,11 @@ Container roll_container(ContainerKind kind, int floorZ, std::uint32_t seed) {
     // each other stops being a pure function of its seed. So the ammo is the commonest
     // kind, which fits the commonest guns, and the mob-drop path already bundles
     // matched ammo with a dropped weapon ([loot.h drop_weapon_ammo]).
+    //
+    // Deliberately NOT room-filtered. All 17 ammo rows carry an empty `spawn_rooms`
+    // column (they never spawn randomly, so no room was ever authored for them), so a
+    // room mask here would refuse every one of them and put the "gun with nothing to
+    // load it" bug straight back.
     int firstSlot = 0;
     if (kind == ContainerKind::WeaponCrate) {
         // The CHEAPEST ammo that still fits this crate's value share, not merely the
@@ -210,6 +232,37 @@ Container roll_container(ContainerKind kind, int floorZ, std::uint32_t seed) {
     return c;
 }
 
+} // namespace
+
+std::uint32_t container_budget(FloorKind kind) {
+    // Scaled on the room count, thinned — and then FLOORED, which is the correction
+    // that matters.
+    //
+    // Rooms alone gave a Residential warren (stride 8, 256 rooms) about 40 crates and
+    // an Industrial pillar plate (stride 32, 16 rooms) about 6 — and after
+    // standability filtering that landed at **3 crates on an entire 128x128 floor**,
+    // measured in the running game. Three is not an economy; it is a rounding error
+    // the player will never walk into. An open-plan floor has few ROOMS and just as
+    // much FLOOR, so the room count is the wrong denominator there.
+    //
+    // Scaling on rooms rather than on depth stays deliberate: a deeper floor should be
+    // RICHER, not fuller, and conflating the two turns the bottom of the building into
+    // a supermarket. The floor is a floor, not a depth bonus.
+    const int stride = floor_room_stride(kind);
+    const int rooms = (kMacroDim / stride) * (kMacroDim / stride);
+    std::uint32_t n = static_cast<std::uint32_t>(rooms) / 6u;
+    if (n < kContainerFloorMin) n = kContainerFloorMin;
+    return n;
+}
+
+Container roll_container(ContainerKind kind, int floorZ, std::uint32_t seed) {
+    // Room-agnostic entry point, kept exactly as it was for the callers that have no
+    // room to name: the tests that pin the value cap, and any future consumer that
+    // rolls a crate outside the floor lattice. Mask 0 means "the whole floor table",
+    // which is the behaviour every call site had before the taxonomy existed.
+    return roll_in_room(kind, floorZ, seed, 0);
+}
+
 std::uint32_t spawn_floor_containers(Registry& reg, const World& world,
                                      int floorNumber, FloorKind kind, LayerId layer,
                                      std::uint32_t seed, std::uint32_t cap) {
@@ -242,6 +295,19 @@ std::uint32_t spawn_floor_containers(Registry& reg, const World& world,
         // Never on the extraction pad: the bank is a landmark, and a crate sitting on
         // it makes the one cell the player needs to find harder to read.
         if (g.cell(cx, cy, cz - 1) == kMatExtract) continue;
+        // Never in standing water. Today's basins are half-solid cells, so `standable`
+        // above already refuses them on TYPE — this states the rule rather than the
+        // accident, and it is the half that survives a floor kind seeding an open pool,
+        // where the cell would be air over a solid slab and pass every test above. A
+        // crate in a kerbed sump is loot the player can see across the room and never
+        // reach. One array index: the field is resolved by name once per call.
+        if (fluid_at(world, cx, cy, cz) >= kFluidMinFlow) continue;
+
+        // What ROOM this is. The one caller that knows both the geometry kind and the
+        // floor label, which is exactly the key floor_room_mask is defined on — so the
+        // mob spawner reading the same room gets the same answer without either of them
+        // storing it.
+        const std::uint16_t roomMask = floor_room_mask(kind, floorNumber, rx, ry);
 
         Entity e = reg.create();
         Transform tr;
@@ -253,8 +319,8 @@ std::uint32_t spawn_floor_containers(Registry& reg, const World& world,
         reg.emplace<AABB>(e, AABB{kContainerHalf});
         reg.emplace<Renderable>(e, Renderable{kShutColour});
         reg.emplace<Container>(
-            e, roll_container(pick_kind(kind, mix(h ^ 0x5bf03635u)), floorNumber,
-                              mix(h ^ 0xc2b2ae35u)));
+            e, roll_in_room(pick_kind(kind, mix(h ^ 0x5bf03635u)), floorNumber,
+                            mix(h ^ 0xc2b2ae35u), roomMask));
         ++made;
     }
     return made;

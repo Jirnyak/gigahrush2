@@ -48,9 +48,15 @@
 #include "game/extraction.h"  // RunLedger
 #include "game/inventory.h"   // Inventory
 #include "game/npc_pool.h"    // Needs
-#include "world/level_stack.h"
+#include "world/level_stack.h"  // LayerId, and World via world/world.h
 
 namespace giga::game {
+
+// Referenced only as `T&` parameters below, so a declaration is enough and this file
+// does not have to pull in the whole streaming stack ([AGENTS.md] headers minimal).
+// `save.cpp` includes game/floor_stream.h, which defines both.
+class FloorRegistry;
+class FloorStreamer;
 
 // On-disk bytes spell "GH2S". Written little-endian byte by byte, so the four
 // leading bytes of a save file are readable in a hex dump on any host.
@@ -203,8 +209,17 @@ inline constexpr std::size_t save_bytes_for(std::size_t openedCount) {
 // own, so the cell key ships and the collision is measured rather than hidden.
 //
 // The floor is the signed FLOOR NUMBER, never a `LayerId` (a recycled storage slot,
-// [floors.md]) and never `NpcPool::floor()` — that column is a `std::uint16_t` and
-// stores floor -50 as 65486, so it cannot round-trip a negative label at all.
+// [floors.md]) and never `NpcPool::floor()`.
+//
+// **Corrected 2026-07-29:** the reason given here used to be that `NpcPool::floor()` is
+// a `std::uint16_t` storing floor -50 as 65486. That is no longer true — the column is
+// `std::int16_t` today ([npc_pool.h], widened with the demo stack's negative labels as
+// the stated reason), so a negative label round-trips through it fine. The live reason
+// is different and stronger: that column is written in exactly ONE place,
+// `seed_floor_from_spec` ([population.cpp]), and read in NONE. Nothing updates it when
+// the player travels — `ride_elevator` writes `pool.cz` and nothing else — so it names
+// the floor a record was SEEDED on, not the floor its body is standing on. For the
+// player those two diverge on the first elevator ride.
 struct OpenedContainerKey {
     std::int16_t floor = 0;     // in-game floor number, [-127, 127]
     std::uint8_t cx = 0;        // macro cell, already wrapped onto [0, 128)
@@ -240,10 +255,14 @@ struct PlayerSnapshot {
     std::int32_t hp = 0;        // also pool-row state, also unreproducible
     std::int32_t maxHp = 0;
     // The SIGNED floor the player stood on. Saved separately and explicitly because
-    // there is no way to recover it from anything else in the pool: `NpcPool::floor()`
-    // is unsigned, and `LayerId` is a storage slot that means nothing across a restart.
+    // there is no way to recover it from anything else: `NpcPool::floor()` is the
+    // SEEDING label and is never updated by travel (see the correction above), and
+    // `LayerId` is a recycled storage slot that means nothing across a restart.
     std::int32_t floorNumber = 0;
-    std::uint8_t cx = 0;        // macro cell within that floor
+    // The macro cell within that floor, by the same truncate-and-wrap `macro_cell_of`
+    // below performs. Written by the save side from the live `Transform`, consumed by
+    // `place_body_at_cell` on the way back in — one convention, stated once.
+    std::uint8_t cx = 0;
     std::uint8_t cy = 0;
     std::uint8_t cz = 0;
     std::uint8_t pad_ = 0;
@@ -309,5 +328,239 @@ std::size_t refresh_opened_containers(Registry& reg, LayerId layer, int floorNum
 std::size_t apply_opened_containers(Registry& reg, LayerId layer, int floorNumber,
                                     const OpenedContainerKey* keys, std::size_t n,
                                     const vec3* openedColour = nullptr);
+
+// ---------------------------------------------------------------------------
+// Coming back to where you stood
+// ---------------------------------------------------------------------------
+// The format has carried `floorNumber` + cx/cy/cz since v1 and the game did nothing
+// with either: a load restored the RUN and left the body standing where it already was,
+// reporting "loaded N rub (saved on floor -26, you are on 0)". Everything below is what
+// the app shell needs to close that gap, split into two halves that fail independently.
+//
+//   * TRAVEL — `travel_to_saved_floor` drives the EXISTING elevator path
+//     (`FloorStreamer::travel`) once per labelled floor until it arrives. It is a
+//     driver, not a second travel path: nothing here generates a floor, embodies a
+//     crowd or touches a `LayerId`. That matters because the streamer's bookkeeping
+//     (adopting the freshly-embodied player body into the destination module, then
+//     `keep_only` folding the departed crowd back) is easy to get subtly wrong and
+//     already correct in one place.
+//   * PLACEMENT — `place_body_at_cell` puts the body in the saved cell, or in the
+//     nearest cell it actually fits in, or refuses. See the soft-lock note there.
+//
+// **THE ORDERING CONSTRAINT, because it is not optional.** `nav::AsyncBake` hands a raw
+// pointer to the live `MacroGrid` to a worker for a measured ~1.9 s + ~1.8 s and its
+// contract is "do not mutate or regenerate that World until ready()" ([nav_async.h]).
+// Travel regenerates floors, so the caller MUST NOT start a travelling load while a
+// bake is in flight — check `nav.baking()` and retry next frame. This is not
+// theoretical: `FloorStreamer::init(stack, keepRadius=0)` reserves exactly
+// `2*0 + 2 = 2` recyclable layers, so hop 1 generates into the free slot (safe, the
+// bake is reading the floor being left) and then frees the departed slot — which is
+// the slot hop 2 allocates and regenerates, the very grid the worker is still reading.
+// A single hop is safe; two are not. `AsyncBake::start()` joins, so re-arming the floor
+// AFTER arrival is always safe; it is the hops in between that have no guard.
+//
+// Then the arrival sequence, in this order and for these reasons:
+//   1. `refresh_floor_containers` — the destination floor has no crates until the app
+//      spawns them, and they must exist before step 2 can re-open any.
+//   2. `apply_opened_containers` — with the loaded key set.
+//   3. `refresh_floor_mobs` — a streamed-in floor has no monsters either.
+//   4. `door_build` — AFTER generation, BEFORE the bake, because it leaves every door
+//      Open so the grid the worker reads is the all-open geometry the bake must assume
+//      ([door.h]). Note `door_build` clears `DoorSet::frozen` itself, so the freeze has
+//      to be re-applied after it, never before.
+//   5. `doors.frozen = true`, then `begin_floor_nav`.
+//   6. placement — last, and independent of all of the above: it reads solidity and
+//      writes one `Transform`. Doing it before `door_build` would still be correct
+//      today (door frames are recolours, not solidity changes) but would silently stop
+//      being correct the day a door is built Shut.
+
+// The arrival storey an elevator ride drops the player on. Cell z=2 is air on the ground
+// storey of every kind: `generate_floor` lays the slab at cell z=0 and the storey's air
+// band is [1, storey), and the shallowest storey in the table is Residential's 4
+// ([floor_gen.cpp] kGeom). Named here because `main.cpp` passes the bare literal 2 at
+// both of its travel sites and a load is the third — three spellings of one number is
+// how it drifts.
+inline constexpr std::uint8_t kArrivalZ = 2;
+
+// Hop ceiling for the loop below. Equal to FloorRegistry's kFloorSlots (255 labels), so
+// even a pathological stack cannot spin: every hop crosses at least one label and no
+// label is visited twice. `save.cpp` static_asserts this against the real constant.
+inline constexpr int kMaxLoadHops = 255;
+
+// Where driving the elevator to a saved floor ended up.
+//
+// `moved` and `arrived` are separate on purpose, and the caller must honour the
+// difference: a load that crossed three floors and then hit the end of the stack has
+// `moved == true, arrived == false`, and the floor it is standing on still needs its
+// crates, its monsters, its doors and its nav bake — an intermediate hop gets none of
+// those. Treating "did not arrive" as "nothing happened" would leave the player on a
+// live floor with no monsters and no navigation.
+struct LoadTravel {
+    int floor = 0;                // where the player actually ended up
+    Entity player = entt::null;   // the CURRENT player entity: a ride rebuilds the body
+    LayerId layer = kInvalidLayer;
+    std::uint8_t hops = 0;        // labelled floors crossed
+    bool moved = false;           // the floor changed, so the caller must re-arm it
+    bool arrived = false;         // ...and it is the floor the save named
+};
+
+// Ride from `fromFloor` to `targetFloor`, one labelled floor per hop, through
+// `FloorStreamer::travel`. No-op (arrived, zero hops) when already there.
+//
+// Refuses without touching anything when `targetFloor` maps to no registered module —
+// a save from a build whose stack had a floor this one does not — and when `player`
+// carries no `NpcRef`. That second guard is not paranoia: `travel` forwards the player's
+// record id to `ensure_loaded`, and with `kInvalidNpc` that call DESIGNATES A NEW PLAYER
+// on the destination floor, i.e. a second camera holder.
+//
+// Rides one labelled floor at a time rather than jumping, because `next_labelled_floor`
+// is what makes a sparse stack legal ({0,1,2,-8,-26,-50,14,30} is a valid building) and
+// the destination of a ride has to be a floor the streamer has actually loaded.
+LoadTravel travel_to_saved_floor(LevelStack& stack, FloorRegistry& reg, Registry& ecs,
+                                 NpcPool& pool, FloorStreamer& streamer, Entity player,
+                                 int fromFloor, int targetFloor,
+                                 std::uint8_t arrivalZ = kArrivalZ);
+
+// ---------------------------------------------------------------------------
+// Placement — a body in solid geometry never moves again
+// ---------------------------------------------------------------------------
+// `physics_step` resolves a swept AABB by backing out of the overlap, so a body that is
+// ALREADY inside solid has nowhere to back out to: `sweep_axis` binary-searches to zero
+// on all three axes and zeroes all three velocity components, every tick, forever. Fly
+// mode does not help — `controller_step` writes velocity and physics still collides
+// ([controller.cpp], [physics.cpp]). This is the same failure `door_set` refuses to
+// cause when it will not shut a door on a body ([door.h]), and it is a soft-lock rather
+// than a squeeze: nothing in the tree can free the player again.
+//
+// **The saved cell is not the dangerous case, and this is worth being exact about.**
+// `generate_floor` is a pure function of (seed, number, kind) and clears to air first,
+// so the same build rebuilds the floor bit-for-bit and a cell the player stood in comes
+// back air. What is dangerous is the ARRIVAL cell of an elevator ride, which is
+// `(cx, cy)` from the floor you LEFT and `z = kArrivalZ`: the wall lattices of two floor
+// kinds do not align (strides 8 / 16 / 32), so the arrival column is frequently inside
+// a full-height wall. Counted from the generator's own table for the densest case,
+// Residential: 128^2 - 112^2 = 3840 of 16384 columns (23.4%) sit on a wall line, and at
+// cell z=2 the generator carves back only the 512 doorway columns and ~208 lattice-lobby
+// columns while ADDING 64 elevator posts — so on the order of 3200 columns, about ONE
+// ARRIVAL IN FIVE, is solid. Both of `main.cpp`'s travel sites can already do this
+// today; the load path is simply the third caller that must not.
+//
+// The other live case is a save written by an EARLIER build: geometry is not
+// fingerprinted (only the item and mob tables are), so retuning a `kGeom` row or a seed
+// constant moves walls under a valid save. That one no purity argument covers.
+
+// Search radius, in macro cells, when the requested cell is unusable. 8 cells = 16 m is
+// one Residential room pitch ([floor_gen.cpp] stride 8), i.e. "somewhere in this room or
+// the next one" rather than "somewhere on this floor". Bounded because an unbounded
+// search would happily relocate the player across the building, and being wrong about
+// WHERE you woke up is worse than being told the load could not place you.
+inline constexpr int kPlaceRadius = 8;
+
+// Hard ceiling on the radius a caller may ask for. (2*24+1)^3 = 117,649 candidate cells
+// is already 24x the default's 4,913; past that the "nearest" cell stops being anywhere
+// near you and the cost stops being free.
+inline constexpr int kPlaceRadiusMax = 24;
+
+// Where a body may actually stand, and how far that is from where it was asked to.
+struct PlacedCell {
+    std::uint8_t cx = 0;
+    std::uint8_t cy = 0;
+    std::uint8_t cz = 0;
+    std::uint8_t rings = 0;   // Chebyshev distance in cells from the requested cell
+    bool ok = false;          // false: no cell in the neighbourhood fits a body at all
+    bool moved = false;       // the requested cell was solid; this is a substitute
+    bool supported = false;   // something solid under the feet (see below)
+};
+
+// The macro cell a body at `pos` occupies: truncate, then wrap. `pos` is expected to be
+// already normalized into [0, kWorldExtent) — `physics_step` does that every step — so
+// the truncation never sees a negative. Shared by `container_key` and by the save side's
+// `PlayerSnapshot`, which is the point: two spellings of this would put a restored body
+// one cell from where it was saved.
+void macro_cell_of(const vec3& pos, std::uint8_t& cx, std::uint8_t& cy,
+                   std::uint8_t& cz);
+
+// The world-space centre of a macro cell — exactly where `embody` places a body standing
+// in it ([embody.cpp]), so a placed body and an embodied one are in the same place.
+vec3 macro_cell_centre(std::uint8_t cx, std::uint8_t cy, std::uint8_t cz);
+
+// The nearest cell a body of half-extents `half` fits in, starting at (cx, cy, cz).
+//
+// Three outcomes, and the third is the one the caller must not ignore:
+//
+//   1. the requested cell fits -> it is returned unchanged (`rings == 0`,
+//      `moved == false`). Support is REPORTED but not required here: a player who saved
+//      mid-jump or in fly mode was legitimately in mid-air, and relocating them to the
+//      nearest floor would be a 16 m teleport to fix a non-problem. Physics simply drops
+//      them, which is what would have happened anyway.
+//   2. it does not fit -> the nearest cell that does, preferring one with a floor under
+//      it, is returned with `moved == true`. Ties break on the smallest ring, then the
+//      smallest vertical displacement (crossing a storey is a longer walk back than
+//      stepping sideways — a Residential storey is 4 cells), then the smallest planar
+//      distance. Deterministic, so two runs of the same load place you identically.
+//   3. NOTHING in the neighbourhood fits -> `ok == false` and the requested cell is
+//      returned UNCHANGED. That is deliberate: there is no safe cell to invent, so the
+//      helper reports failure loudly instead of handing back a cell inside a wall that
+//      a caller would then teleport a body into. A caller that ignores `ok` reproduces
+//      the exact soft-lock this function exists to prevent, which is why the returned
+//      cell is the input rather than a plausible-looking substitute.
+//
+// "Fits" is `aabb_overlaps_solid` at the cell centre — the SAME predicate `physics_step`
+// resolves against, not a cheaper cell-type or mask-is-full test. That is what makes the
+// answer exact for any stature: the seeder's tallest adult is 1.87 m in a 2 m cell
+// ([population.cpp] height_for_age, 1750 +- 120 mm), which fits inside one cell with
+// 6.5 cm to spare, but the clamp allows 2.2 m and a mask test would quietly get that
+// body wrong. "Supported" is the same predicate on a one-voxel-thick slab directly under
+// the feet, which is why a cell over a collapsed Derelict slab (12% of them are missing)
+// is passed over in favour of one with a floor.
+PlacedCell find_standable_cell(const World& world, const vec3& half, std::uint8_t cx,
+                               std::uint8_t cy, std::uint8_t cz,
+                               int radius = kPlaceRadius);
+
+// Move `body` to (cx, cy, cz) or to the nearest cell it fits in, and stop it dead.
+//
+// On failure (`!ok`) the body is NOT moved at all — the caller keeps a body wherever it
+// already was, which may be wrong but is at least somewhere physics has already
+// accepted. Uses the body's own `AABB`, falling back to the 0.4 m cube `physics_step`
+// itself assumes for an entity without one, so the test can never be more permissive
+// than the solver.
+//
+// Zeroing `Velocity` is not tidiness: a load can land while the body is falling, and
+// physics resolves the next step from the NEW position — a carried-over 30 m/s would
+// drive it straight through the floor it was just placed on. Nothing else is written:
+// `fold_back` re-derives the cold row's cell from this transform ([embody.cpp]) and the
+// save side reads the transform too, so the pool row cannot drift from the body.
+PlacedCell place_body_at_cell(Registry& reg, const World& world, Entity body,
+                              std::uint8_t cx, std::uint8_t cy, std::uint8_t cz,
+                              int radius = kPlaceRadius);
+
+// Same, for a body that is already somewhere: resolve the cell it is standing in. This
+// is what an elevator arrival needs — `ride_elevator` keeps x/y from the floor you left
+// and sets z = arrivalZ, which is the ~1-in-5 wall case measured above.
+PlacedCell place_body_safely(Registry& reg, const World& world, Entity body,
+                             int radius = kPlaceRadius);
+
+// Write the snapshot's unreproducible state back into a pool row.
+//
+// The ROW, not the body, and that is the whole reason this is one call: `needs_step`
+// reads the clock from the row rather than from the entity precisely so it survives the
+// body swap an elevator ride performs ([needs.h]), and hp/inventory are canonical there
+// too ([embody.h]). So it does not matter whether the body has been rebuilt yet — nothing
+// this writes is read by `embody`, which only reads stature, and stature is not in the
+// save.
+//
+// **What the caller must do after it: `sync_armour(reg, pool, player)`.** The restored
+// inventory changes what the body is wearing, and `Armour` is a component copied off the
+// equipped item — `combat.h` says in as many words "call after anything that changes the
+// inventory". A load is the largest inventory change there is, and the load path did not
+// do this before, so a restored run kept the vest it was wearing at the moment of the
+// keypress.
+//
+// `maxHp` is restored only when the save carries a positive one. A v1 save written by a
+// live player always does, but a default-constructed `SaveState` carries 0, and writing
+// 0 into the row would make `entity_health` report 0/0 and every heal a no-op — worse
+// than leaving the record's own maximum alone. Both values are clamped into the row's
+// `std::int16_t`, which is narrower than the wire's `std::int32_t`.
+void apply_player_snapshot(NpcPool& pool, NpcId id, const PlayerSnapshot& snap);
 
 } // namespace giga::game

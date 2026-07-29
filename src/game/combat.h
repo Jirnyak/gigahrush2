@@ -82,6 +82,37 @@ struct MobCombat {
     std::uint16_t windupMs = 0;
 };
 
+// A temporary cap on how fast a body may move horizontally, in m/s.
+//
+// **A CAP and not a multiplier, and that is the load-bearing decision.** The
+// obvious shape — scale `Velocity` by 0.45 every tick — compounds catastrophically
+// for anything that is not the camera holder. `controller_step` rewrites the
+// player's x/y from `moveSpeed` every single tick, so a repeated multiply is
+// harmless there; `wander_step` writes a crowd body's velocity only on its own
+// stagger slot, once every `kWanderPeriod` (8) ticks, and leaves it alone in
+// between. Multiplying a resident's velocity every tick would give it 0.45^8 =
+// 0.0017 of its speed within one period — a freeze, not a slow. Clamping is
+// idempotent, so the same enforcement pass is safe against both writers.
+//
+// The cap is therefore resolved ONCE, at the moment the effect lands, from the
+// victim's own authority: a monster's table speed, or a Controller's `moveSpeed`.
+// It composes with exhaustion for free and in the right direction — needs already
+// scales `moveSpeed` down every tick ([needs.h]) and a clamp is an upper bound, so
+// whichever of the two is slower wins with no coordination between them.
+//
+// An expired effect is left ATTACHED with `ttlMs == 0` rather than removed, and
+// that is a crash avoidance rather than laziness: `slow_step` finds expiry while
+// iterating a view that includes `Slowed`, and erasing the component there is the
+// same reallocate-the-storage hazard the two-phase split in `mob_attack_step`
+// exists to prevent. The alternative — collect the expired into a vector and erase
+// after — allocates every tick in the hot path for a component almost nothing
+// carries. An inert 8-byte component is the cheaper honest answer; `slow_scale`
+// and `slow_step` both read `ttlMs == 0` as "not slowed".
+struct Slowed {
+    float maxSpeed = 0.0f;     // horizontal cap, m/s
+    std::uint16_t ttlMs = 0;   // remaining; 0 = expired and inert, never removed
+};
+
 // A monster's shot in flight. Not a mob and not an alife record — it exists for a
 // fraction of a second and then hits something, hits the floor, or times out.
 //
@@ -110,6 +141,19 @@ struct Projectile {
     // keeps that from being an accident. faction_relations.h is available if a richer
     // answer is ever wanted.
     std::uint8_t team = 0;
+    // What KIND of shot this is: a `ProjType` ([mob_table.h]), stored as the same
+    // raw u8 `MobDef::projType` is so this header does not have to include the mob
+    // table. 0 = Bullet, 1 = Web.
+    //
+    // It exists because `MobDef::projType` was write-only: the enum, the field and
+    // 69 generated rows were there, and a search across src/ for a READER found
+    // nothing. 68 of the rows are blank (Bullet) and exactly one is WEB, so the one
+    // authored row behaved identically to the other 68 — which reads as implemented
+    // and is not. Carried on the projectile rather than looked up from the shooter
+    // at impact, because the shooter may already be dead by then (`source` is
+    // documented as possibly stale) and a shot's behaviour must not depend on
+    // whether its owner survived the flight.
+    std::uint8_t proj = 0;
 };
 
 // Fraction of gravity a player bullet obeys, in percent. The reference's NORMAL
@@ -166,6 +210,64 @@ inline constexpr float kMeleeReachSlack = 0.9f;   // metres
 inline constexpr float kProjGravity = 6.0f;        // m/s^2
 inline constexpr std::uint16_t kProjTtlMs = 4000;
 inline constexpr float kProjHitRadius = 0.75f;     // metres
+
+// What a WEB shot does instead of damage. Both numbers are read off the one
+// authored WEB row rather than picked, and the row is unusually explicit about its
+// own design — `data/mobs.csv` gives PAUPSINA `dmg = 0` and describes it as a
+// control monster that "does not chew health, but makes a bad corridor into a
+// sticky trap". It is the ONLY row in the file with zero damage.
+//
+// 0.45: the player walks 6.0 m/s and PAUPSINA moves 2250 mmps x 2 m = 4.5 m/s, so
+// 6.0 x 0.45 = 2.70 m/s. Unwebbed you outrun it (6.0 > 4.5); webbed you cannot
+// (2.70 < 4.5) and have to deal with it. That threshold is the entire mechanic, and
+// any scale above 0.75 puts it back on the wrong side of 4.5 and makes the web
+// cosmetic.
+//
+// 2500 ms: just under the kind's own 2650 ms attack cooldown, so a landed web holds
+// until it can fire again and a second hit refreshes rather than stacks — the hold
+// is continuous while you stay in the band and ends ~150 ms after you leave it.
+inline constexpr float kWebSlowScale = 0.45f;
+inline constexpr std::uint16_t kWebSlowMs = 2500;
+
+// Put a horizontal speed cap on `target` at `scale` of its own top speed, for
+// `ms`. Returns false when the effect could not be resolved.
+//
+// The cap is derived from whichever authority the target actually has: `MobRef` ->
+// the kind's table speed, else `Controller` -> `moveSpeed`. A body with neither is
+// REFUSED rather than guessed at, and the refusal is deliberate. The remaining
+// case is an embodied resident, whose walk speed is a constant private to
+// wander.cpp; copying 1.35 m/s in here would be a second definition of a number
+// with one owner, and a copy that silently disagrees is worse than a false return.
+//
+// It is also unreachable today, by arithmetic rather than by hope: the only web
+// source is PAUPSINA, whose minimum shot range is 3400 mm x 2 m = 6.8 m, while
+// crowd prey is only ever selected inside `kHuntRadius` = 6.0 m ([hunt.h]). Every
+// resident it could target is inside its own dead zone, so a web can only ever land
+// on the camera holder — which always carries a Controller.
+//
+// Refreshing takes the STRONGER cap and the LONGER remaining time, never the
+// product: two webs must not compound to 0.20 and pin a player in place, because
+// the drop below the spitter's own 4.5 m/s is already the whole effect and anything
+// past it only removes the player's options.
+bool apply_slow(Registry& reg, Entity target, float scale, std::uint16_t ms);
+
+// The multiplier `e` is currently moving under, as a fraction of the cap's own
+// base. 1.0 when nothing is slowing it. For the HUD; `slow_step` does the
+// enforcing.
+float slow_scale(const Registry& reg, Entity e);
+
+// Age every slow on `layer` and enforce the survivors' caps on Velocity. Returns
+// how many bodies are still slowed after the pass.
+//
+// Call it AFTER everything that writes velocity (`controller_step`, `wander_step`,
+// `investigate_step`) and BEFORE `physics_step`, so the cap applies to the velocity
+// that actually gets integrated. Costs one view iteration over a component almost
+// nothing carries — it early-outs on an empty storage.
+//
+// Only x/y are clamped. Scaling z would make a webbed body FALL slower, which is
+// not what a movement slow means and would quietly break gravity for anything
+// caught in mid-air.
+std::uint32_t slow_step(Registry& reg, LayerId layer, float dt);
 
 // The best melee weapon in an inventory, or kInvalidItem for bare hands. "Best"
 // is highest damage — reach and speed are not traded off, because with no stamina
@@ -253,6 +355,11 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
 // Gravity is what makes a ranged monster miss: a shot fired level from chest height
 // reaches the floor in well under a second, so distance is bought with arc. The
 // launch adds a vertical rate proportional to range for exactly that reason.
+//
+// A WEB shot (`Projectile::proj == ProjType::Web`) applies `apply_slow` to whatever
+// it hits INSTEAD of damage, and is counted as a hit for it. That is the only place
+// `projType` is read, and reading it is why the field exists at all — before this,
+// the one authored WEB row spat a bullet with the other 68.
 std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                               const LevelStack& stack, LayerId layer, float dt,
                               std::uint64_t tick);

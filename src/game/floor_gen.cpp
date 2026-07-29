@@ -1,8 +1,11 @@
 #include "game/floor_gen.h"
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 
+#include "sim/fluid.h"  // kFluidField — one name for the liquid field, four consumers
+#include "world/field.h"
 #include "world/materials.h"
 #include "world/lattice.h"
 #include "world/types.h"
@@ -60,6 +63,8 @@ struct FloorGeom {
     int gapPct;    // % of wall cells knocked out (0 = intact ... high = maze/decay)
     int holePct;   // % of slab cells missing (collapsed floors, vertical holes)
     int rubblePct; // % of interior air cells filled with a debris block
+    int sumps;     // walled pools of standing water on the ground storey (0 = dry)
+    int sumpR;     // basin half-width in cells; the water patch is (2R+1)^2
     CellType wall; // material id for this kind's walls  ([voxels.md])
     CellType slab; // material id for this kind's floor/ceiling slabs
 };
@@ -71,12 +76,21 @@ struct FloorGeom {
 // measured off real photographs where a real material exists (data/materials.csv)
 // and authored where none does; see kMaterial in render/cube_pass.cpp.
 //
-//                         storey stride doorH pillars gap hole rubble  wall  slab
+// The `sumps`/`sumpR` pair is what makes the cellular fluid sim reachable in the
+// shipped mode at all (see `Standing water` in [floor_gen.h]). Only the two kinds
+// whose fiction carries plumbing get water: an Industrial plate has burst process
+// pipes and containment bunds (4 basins of 5x5 = 100 cells), a Derelict floor has
+// flooded sumps in a half-collapsed warren (12 basins of 3x3 = 108 cells). A
+// Residential warren and a Commercial hall stay dry, and that is load-bearing rather
+// than thematic: fluid_step does not create the field it cannot find, so those two
+// kinds pay one hash lookup per step instead of 8 MiB.
+//
+//                         storey stride doorH pillars gap hole rubble sump sumpR  wall  slab
 constexpr FloorGeom kGeom[] = {
-    /* Residential */ {  4,  8, 2, false,  0,  0, 0, kMatPlaster,     kMatParquet },
-    /* Commercial  */ {  8, 16, 3, false,  0,  0, 0, kMatShopShutter, kMatLino    },
-    /* Industrial  */ { 16, 32, 5, true,   0,  0, 2, kMatFactoryWall, kMatTread   },
-    /* Derelict    */ {  4,  8, 2, false, 38, 12, 9, kMatRust,        kMatRubble  },
+    /* Residential */ {  4,  8, 2, false,  0,  0, 0,  0, 0, kMatPlaster,     kMatParquet },
+    /* Commercial  */ {  8, 16, 3, false,  0,  0, 0,  0, 0, kMatShopShutter, kMatLino    },
+    /* Industrial  */ { 16, 32, 5, true,   0,  0, 2,  4, 2, kMatFactoryWall, kMatTread   },
+    /* Derelict    */ {  4,  8, 2, false, 38, 12, 9, 12, 1, kMatRust,        kMatRubble  },
 };
 static_assert(sizeof(kGeom) / sizeof(kGeom[0]) ==
                   static_cast<std::size_t>(FloorKind::Count),
@@ -118,6 +132,46 @@ int doorway_slot(std::uint32_t fseed, int storey, int rx, int ry, int axis,
     return 2 + (span > 0 ? static_cast<int>(h % static_cast<unsigned>(span)) : 0);
 }
 
+// --- the fixed lattice's footprint -----------------------------------------
+// Hoisted out of generate_floor because the sump seeder has to stay OFF it, and two
+// copies of "3" is how a basin ends up half inside an elevator lobby.
+constexpr int kShaftR = 1; // 3x3 shaft column, punched to air through slabs
+constexpr int kLobbyR = 3; // 7x7 lobby, walls opened per storey (slab kept)
+
+// Splitmix32 finalizer. The same avalanche doorway_slot uses, exposed once because
+// the room taxonomy and the sump placement both need a PURE hash rather than a draw
+// from `rng` — see the note on doorway_slot for why replaying the shared xorshift
+// stream couples a consumer to the order every other loop consumes numbers in.
+std::uint32_t mix32(std::uint32_t h) {
+    h ^= h >> 16;
+    h *= 0x7FEB352Du;
+    h ^= h >> 15;
+    h *= 0x846CA68Bu;
+    h ^= h >> 16;
+    return h;
+}
+
+// Toroidal separation on one axis, 0 .. kMacroDim/2. Both operands are already
+// normalized, which is what wrap_delta assumes.
+int axis_gap(int a, int b) {
+    const int d = wrap_delta(a, b, kMacroDim);
+    return d < 0 ? -d : d;
+}
+
+// Would a square of half-width `r` centred on (cx, cy) touch any of the 16 lattice
+// columns' 7x7 lobby footprints? Two axis-aligned squares overlap exactly when they
+// overlap on BOTH axes, so this is one gap test per axis per column — 16 columns,
+// checked at floor generation, a handful of sumps.
+bool overlaps_lattice(int cx, int cy, int r) {
+    const int reach = kLobbyR + r;
+    for (int ny = 0; ny < kLatticeDim; ++ny)
+        for (int nx = 0; nx < kLatticeDim; ++nx)
+            if (axis_gap(cx, lattice_coord(nx)) <= reach &&
+                axis_gap(cy, lattice_coord(ny)) <= reach)
+                return true;
+    return false;
+}
+
 // Visit every doorway of a floor: fn(cx, cy, cz, h, axis).
 //
 // ONE definition, two callers — generate_floor punches these cells and
@@ -150,9 +204,263 @@ void for_each_doorway(const FloorGeom& geom, std::uint32_t fseed, Fn&& fn) {
     }
 }
 
+// --- room taxonomy ----------------------------------------------------------
+// One weighted row per FloorKind: which RoomBits this kind's lattice produces and in
+// what proportion. The theming lives here, never as a branch in floor_room_mask.
+//
+// The weights are NOT free, and the constraint is measured rather than aesthetic. The
+// filter these bits drive returns weight 0 on a mismatch, so a room whose bit matches
+// little in a table generates little — and each bit's real pool is small. Measured on
+// data/mobs.csv against the six habitat anchors, average heads per pack by room bit at
+// anchor Z0: storage 4.72, common 4.21, corridor 3.74, production 1.42, bathroom 1.22,
+// smoking 1.00, against 3.84 for the unfiltered roster. So a Derelict mix leaning on
+// bathrooms would quietly shrink every pack on the floor by a third. Each row below
+// therefore leans on the bits its fiction shares with the content tables:
+//
+//   Residential  living/kitchen/bathroom/common/corridor/storage — an apartment
+//   Commercial   office/common/storage/hq/smoking/medical        — a ministry floor
+//   Industrial   production/storage/corridor/smoking             — a works
+//   Derelict     the residential warren gone to storage and rot
+struct RoomMix { RoomBit bit; std::uint8_t w; };
+
+constexpr RoomMix kRoomsResidential[] = {
+    {RoomBit::Living, 30},   {RoomBit::Kitchen, 16}, {RoomBit::Bathroom, 12},
+    {RoomBit::Common, 14},   {RoomBit::Corridor, 10}, {RoomBit::Storage, 18},
+};
+constexpr RoomMix kRoomsCommercial[] = {
+    {RoomBit::Office, 34},   {RoomBit::Common, 16},  {RoomBit::Storage, 16},
+    {RoomBit::Hq, 10},       {RoomBit::Smoking, 8},  {RoomBit::Medical, 16},
+};
+constexpr RoomMix kRoomsIndustrial[] = {
+    {RoomBit::Production, 44}, {RoomBit::Storage, 26}, {RoomBit::Corridor, 16},
+    {RoomBit::Smoking, 14},
+};
+constexpr RoomMix kRoomsDerelict[] = {
+    {RoomBit::Storage, 30},  {RoomBit::Corridor, 26}, {RoomBit::Common, 24},
+    {RoomBit::Production, 14}, {RoomBit::Bathroom, 6},
+};
+
+struct RoomMixRow { const RoomMix* tab; std::uint8_t n; };
+
+template <std::size_t N>
+constexpr RoomMixRow room_row(const RoomMix (&a)[N]) {
+    return {a, static_cast<std::uint8_t>(N)};
+}
+
+constexpr RoomMixRow kRoomMix[] = {
+    room_row(kRoomsResidential), room_row(kRoomsCommercial),
+    room_row(kRoomsIndustrial),  room_row(kRoomsDerelict),
+};
+static_assert(sizeof(kRoomMix) / sizeof(kRoomMix[0]) ==
+                  static_cast<std::size_t>(FloorKind::Count),
+              "room-mix table must have exactly one row per FloorKind");
+static_assert(static_cast<std::uint16_t>(RoomBit::Hq) == (1u << 10),
+              "kFloorRoomBits assumes Hq is the highest RoomBit");
+
+// --- standing water ---------------------------------------------------------
+// Z of the water: the ground storey's first air cell, one above the slab floor_gen
+// lays at z=0. The same cell containers stand on and mobs are placed in
+// (`kGroundZ` in container.cpp / mob_spawn.cpp), because that is the one storey the
+// game actually puts a body on.
+constexpr int kSumpZ = 1;
+
+// Draws per sump before it is dropped. A draw can fail the lattice test or collide with
+// a basin already placed, and the valid area is most of a room: for Industrial
+// (stride 32, basin outer 3) the centre is confined to a 25x25 local window of which a
+// 13x13 block is lobby, so a single draw fails with p = 0.27 and eight draws with
+// p = 3e-5. Simulated over the exact hash for five (seed, number) pairs per kind, all
+// 4 Industrial and all 12 Derelict basins placed every time.
+constexpr int kSumpTries = 8;
+
+// Most basins one kind may ask for. A fixed array rather than a vector: the collision
+// test is O(placed) over at most this many, and the clamp is what keeps a future row
+// edit from writing past the end of it.
+constexpr int kSumpMax = 32;
+
+// Seed this floor's standing water. Runs LAST in generate_floor, after the lattice, so
+// nothing can carve through a basin wall afterwards.
+void seed_floor_sumps(World& world, const FloorGeom& geom, std::uint32_t fseed) {
+    Field<float>* wet = world.fields().find<float>(kFluidField);
+    if (geom.sumps <= 0) {
+        // A recycled World slot keeps its FIELDS — generate_floor clears the grid and
+        // nothing else — so a dry kind moving into a slot a flooded one just left has
+        // to wipe the water. Without this the floor stops being a pure function of
+        // (seed, number, kind): the puddles would be wherever the previous tenant's
+        // last fluid_step happened to leave them, which is a function of how long the
+        // player stood on that floor.
+        if (wet != nullptr) wet->fill(0.0f);
+        return;
+    }
+    if (wet == nullptr)
+        wet = &world.fields().get_or_create<float>(kFluidField, 0.0f);
+    else
+        wet->fill(0.0f);
+
+    MacroGrid& g = world.grid();
+    const int r = geom.sumpR;
+    const int outer = r + 1;  // the kerb ring sits at Chebyshev radius r+1
+    const int stride = geom.stride;
+    const int perAxis = kMacroDim / stride;
+
+    // The basin's outer square must fit strictly inside the room interior, local
+    // [1, stride-1]. A kerb cell ON a wall line would be indistinguishable from wall,
+    // and a kerb cell in a DOORWAY would be worse than cosmetic: door.cpp enumerates
+    // the openings from floor_doorways() and would place a leaf inside a cell this
+    // function had just filled solid.
+    const int loLocal = 1 + outer;
+    const int hiLocal = stride - 1 - outer;
+    if (hiLocal < loLocal) return;  // this kind's rooms are too small to hold a basin
+    const int span = hiLocal - loLocal + 1;
+
+    // The OUTFALL carries double its share and the rest of the basin is scaled down to
+    // match, so the total is exactly `inner * kFloorSumpLevel` and the solver has real
+    // work to do. Authoring the SETTLED level and deriving the seed is the right way
+    // round: the settled number is the one a consumer, a test and an eye can see.
+    //
+    // Seeding a basin already level would be cheaper and would prove nothing — the
+    // solver would find no gradient and this whole lane would ship a field nobody
+    // stepped. Seeding it all in one cell is the other extreme and costs too much:
+    // every moving step invalidates the cube pass's instance cache at 28.6 ms a rebuild
+    // ([render/cube_pass.h]), so settle time is frame time. Measured on fluid.cpp's
+    // exact transfer rule against the 0.5 basin capacity below — doubled outfall: 27
+    // steps for a 3x3 and 41 for a 5x5, mass conserved exactly and the settled level
+    // 0.400000 per cell in both. All-in-the-outfall was 50 and 105 for the same shape.
+    const int inner = (2 * r + 1) * (2 * r + 1);
+    const float unit = kFloorSumpLevel * static_cast<float>(inner) /
+                       static_cast<float>(inner + 1);
+
+    // Centres already placed. Two basins that overlap are not two basins: the second
+    // one's kerb is written straight over the first one's water cell, leaving a SOLID
+    // cell holding liquid whose outward neighbours still have capacity — so the pool
+    // drains out into the room and the containment this whole shape exists for is gone.
+    // Found by simulating the placement hash rather than by playing: it happens on
+    // stride 8, where a room offers only 3x3 centres, so two sumps drawing the same room
+    // always collide. Measured 1 collision across 5 seeds before this test existed.
+    int placedX[kSumpMax] = {};
+    int placedY[kSumpMax] = {};
+    int placedN = 0;
+    const int wantSumps = geom.sumps > kSumpMax ? kSumpMax : geom.sumps;
+
+    for (int s = 0; s < wantSumps; ++s) {
+        for (int t = 0; t < kSumpTries; ++t) {
+            const std::uint32_t h =
+                mix32(fseed ^ (static_cast<std::uint32_t>(s) * 0x9E3779B9u) ^
+                      (static_cast<std::uint32_t>(t) * 0x27220A95u));
+            // Four disjoint byte fields, so the room draw and the in-room offset are
+            // independent rather than two views of the same bits.
+            const int rx =
+                static_cast<int>((h & 0xFFu) % static_cast<std::uint32_t>(perAxis));
+            const int ry = static_cast<int>(((h >> 8) & 0xFFu) %
+                                            static_cast<std::uint32_t>(perAxis));
+            const int cx = rx * stride + loLocal +
+                           static_cast<int>(((h >> 16) & 0xFFu) %
+                                            static_cast<std::uint32_t>(span));
+            const int cy = ry * stride + loLocal +
+                           static_cast<int>(((h >> 24) & 0xFFu) %
+                                            static_cast<std::uint32_t>(span));
+            if (overlaps_lattice(cx, cy, outer)) continue;
+            // Two squares of half-width `outer` share a cell exactly when both axis
+            // gaps are <= 2*outer; touching kerbs (gap 2*outer+1) are both solid wall
+            // and harmless, so only real overlap is refused.
+            bool collides = false;
+            for (int j = 0; j < placedN && !collides; ++j)
+                collides = axis_gap(cx, placedX[j]) <= 2 * outer &&
+                           axis_gap(cy, placedY[j]) <= 2 * outer;
+            if (collides) continue;
+            placedX[placedN] = cx;
+            placedY[placedN] = cy;
+            ++placedN;
+
+            for (int dy = -outer; dy <= outer; ++dy)
+                for (int dx = -outer; dx <= outer; ++dx) {
+                    const int x = wrap_macro(cx + dx);
+                    const int y = wrap_macro(cy + dy);
+                    const bool ring = dx < -r || dx > r || dy < -r || dy > r;
+                    // The basin FLOOR, unconditionally. A Derelict floor drops 12% of
+                    // its slab cells, and a sump over a hole is not a sump: the water
+                    // falls straight through, and because Z wraps "below" the ground
+                    // storey is the TOP one, so it would drain into a storey the
+                    // player is not on and never settle anywhere.
+                    g.fill_cell(x, y, 0, geom.slab);
+                    if (ring) {
+                        g.fill_cell(x, y, kSumpZ, geom.wall);
+                        continue;
+                    }
+                    // **The basin cell is PARTIALLY carved, and that is what makes the
+                    // liquid visible at all.** cube_pass emits only cells whose
+                    // sub-mask is non-empty (`is_visible_surface`), so fluid sitting in
+                    // an AIR cell tints nothing — which is also why the maze test bed's
+                    // two seeded puddles have never rendered. A half-solid cell is
+                    // drawn, is tinted by the field, and still holds 0.5 of a unit.
+                    //
+                    // HALF, not one layer, and the number comes off the jump arc rather
+                    // than off the look: the kerb's top face is at 4.0 m, so a body that
+                    // falls in through a Derelict slab hole has to climb out. `Jump`
+                    // gives 5.0 m/s against 9.81 m/s^2 = a 1.27 m apex
+                    // ([ecs/components.h], [world/gravity.h]). Four solid sub-layers put
+                    // the basin floor at 3.0 m — a 1.0 m step out, inside the arc. One
+                    // layer would have looked better (0.875 capacity, a deeper blue) and
+                    // made a 1.75 m pit that soft-locks whoever lands in it.
+                    //
+                    // One sub-voxel Z layer is exactly 64 bits = one mask word
+                    // (`sub_bit` packs sx + sy*8 + sz*64), so "keep the bottom half" is
+                    // words[0..3] and clear words[4..7]. Nothing else in the tree writes
+                    // a partial mask yet; `capacity_frac` in fluid.cpp was written for
+                    // exactly this and had never been exercised.
+                    g.fill_cell(x, y, kSumpZ, geom.slab);
+                    SubMask& m = g.mask(x, y, kSumpZ);
+                    for (std::size_t wi = kSubMaskWords / 2; wi < kSubMaskWords; ++wi)
+                        m.words[wi] = 0;
+                    wet->at(x, y, kSumpZ) = unit;
+                }
+            wet->at(cx, cy, kSumpZ) = unit * 2.0f;  // the outfall
+            break;
+        }
+    }
+}
+
 } // namespace
 
 int floor_room_stride(FloorKind kind) { return geom_for(kind).stride; }
+
+std::uint32_t floor_sump_cells(FloorKind kind) {
+    const FloorGeom& geom = geom_for(kind);
+    if (geom.sumps <= 0) return 0;
+    // The same clamp the seeder applies, or the exported ceiling would be a number no
+    // floor can reach.
+    const int n = geom.sumps > kSumpMax ? kSumpMax : geom.sumps;
+    const int inner = 2 * geom.sumpR + 1;
+    return static_cast<std::uint32_t>(n * inner * inner);
+}
+
+int floor_room_bit_index(std::uint16_t mask) {
+    if (mask == 0) return -1;
+    const int i = std::countr_zero(mask);
+    return i < static_cast<int>(kFloorRoomBits) ? i : -1;
+}
+
+std::uint16_t floor_room_mask(FloorKind kind, int number, int rx, int ry) {
+    std::size_t k = static_cast<std::size_t>(kind);
+    if (k >= static_cast<std::size_t>(FloorKind::Count)) k = 0;
+    const RoomMixRow& row = kRoomMix[k];
+
+    // A pure hash of the room's identity, with each input on its own odd multiplier so
+    // a floor's rooms decorrelate from its neighbour's at the same (rx, ry).
+    const std::uint32_t h =
+        mix32(static_cast<std::uint32_t>(k) * 0x9E3779B9u ^
+              static_cast<std::uint32_t>(number) * 0x85EBCA6Bu ^
+              static_cast<std::uint32_t>(rx) * 0x27220A95u ^
+              static_cast<std::uint32_t>(ry) * 0x165667B1u);
+
+    std::uint32_t total = 0;
+    for (std::uint8_t i = 0; i < row.n; ++i) total += row.tab[i].w;
+    std::uint32_t pick = total ? h % total : 0u;
+    for (std::uint8_t i = 0; i < row.n; ++i) {
+        if (pick < row.tab[i].w) return static_cast<std::uint16_t>(row.tab[i].bit);
+        pick -= row.tab[i].w;
+    }
+    return static_cast<std::uint16_t>(row.tab[0].bit);
+}
 
 std::uint32_t floor_doorways(int number, const FloorSpec& spec, unsigned seed,
                              std::vector<Doorway>& out) {
@@ -261,8 +569,9 @@ void generate_floor(World& world, int number, const FloorSpec& spec,
     // 3x3 shaft through every slab, then open a 7x7 lobby in each storey's air
     // band while KEEPING the slab, so the shaft always joins the room graph and
     // there is a floor to stand on.
-    constexpr int kShaftR = 1; // 3x3 shaft column, punched to air through slabs
-    constexpr int kLobbyR = 3; // 7x7 lobby, walls opened per storey (slab kept)
+    // kShaftR / kLobbyR live at file scope now: the sump seeder below has to stay
+    // clear of this footprint, and a second literal 3 is how a basin ends up half
+    // inside an elevator lobby.
     for (int ny = 0; ny < kLatticeDim; ++ny)
         for (int nx = 0; nx < kLatticeDim; ++nx) {
             const int cx = lattice_coord(nx);
@@ -330,6 +639,13 @@ void generate_floor(World& world, int number, const FloorSpec& spec,
                         g.fill_cell(wrap_macro(cx + sx * 2),
                                     wrap_macro(cy + sy * 2), z, kHubPad);
         }
+
+    // Standing water, LAST. It writes solid kerb cells and re-lays slab under its own
+    // footprint, so it has to run after every carving pass — the lattice included —
+    // or a shaft would be punched through a basin wall and drain it. It also wipes the
+    // field on a dry kind, which is the recycled-slot correctness half; see
+    // seed_floor_sumps.
+    seed_floor_sumps(world, geom, floor_seed(seed, number));
 
     (void)spec.population; // geometry ignores population; the seeder consumes it
 }

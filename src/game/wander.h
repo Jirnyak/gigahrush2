@@ -106,9 +106,18 @@ std::uint32_t wander_init(Registry& reg, LayerId layer, std::uint32_t seed);
 // step up a storey, and stairwell/elevator traversal is not wired yet. They
 // repath instead of grinding into the ceiling, which is honest but does mean the
 // crowd currently explores only what is reachable on its own storey.
-// `grid` is read only for the wall-adjacency test AiFlag::WallBias needs: four
-// cardinal cell reads, and only for a mob already aggroed and already in its
-// stagger slot — so 4 reads for roughly 1/8 of the hostiles per pass.
+// `grid` is read only for the wall-adjacency test, which now serves both
+// AiFlag::WallBias and the two behaviours that read the same query with their own
+// numbers (DebrisLurker, WallBrace — [mob_behaviour.h]). `wall_query_needed` gates
+// it to 5 of the 69 kinds (Тварь, Шовник, Арматура, Бетоноед, Панельник), and only
+// for a mob already aggroed and already in its stagger slot — so 4 cell reads for
+// roughly 1/8 of those kinds' heads per pass, and zero for the other 64 kinds.
+//
+// Not applied on the WANDER path, only on the pursuit path, which is a divergence
+// from the reference worth knowing: there `monsterMoveMult` scales all monster
+// movement. Extending it here would change four kinds' idle pace and would put the
+// grid query on every hostile every visit rather than on aggroed ones, so it waits
+// for a reason better than symmetry.
 // `pool` is read to resolve a body's faction: monsters do not hunt a body they do
 // not consider prey ([faction_relations.h] kMobVsFaction). That applies to the
 // camera holder and — since monsters now pursue the crowd as well — to every
