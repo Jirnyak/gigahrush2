@@ -19,6 +19,7 @@
 #include "game/inventory.h"
 #include "game/item_table.h"
 #include "game/macro_sim.h"
+#include "game/mob_table.h"
 #include "game/nav_cache.h"
 #include "game/npc_pool.h"
 #include "game/population.h"
@@ -2331,6 +2332,79 @@ static void test_item_table() {
     }
 }
 
+static void test_mob_table() {
+    // Bounds-tolerant lookup: any kind >= kMobKindCount resolves to the inert
+    // "none" row (hp 1, immobile) rather than indexing past the catalog.
+    CHECK(std::strcmp(mob_def(kMobKindCount).name, "none") == 0);
+    CHECK(mob_def(kMobKindCount).hp == 1);
+    CHECK(mob_def(kMobKindCount).speed == 0.0f);
+    CHECK(mob_def(60000).name == mob_def(kMobKindCount).name);   // OOB -> none
+
+    // Array-index-is-id: known rows read back their authored fields. Kind 0 is a
+    // real mob (the weakest), NOT a sentinel.
+    CHECK(std::strcmp(mob_def(MobSborka).name, "sborka") == 0);
+    CHECK(mob_def(MobSborka).hp == 8);
+    CHECK(std::strcmp(mob_def(MobGnome).name, "gnome") == 0);
+    CHECK(mob_def(MobGnome).hp == 25);
+    CHECK(mob_def(MobGnome).dmg == 8);
+    CHECK(std::fabs(mob_def(MobGnome).speed - 2.8f) < 1e-3f);
+    CHECK(mob_def(MobBetonnik).hp == 1000);
+    CHECK(mob_def(MobBetonnik).rare);
+
+    // String-key resolution round-trips; unknown / null -> kMobKindCount.
+    CHECK(mob_kind("sborka") == MobSborka);
+    CHECK(mob_kind("gnome") == MobGnome);
+    CHECK(mob_kind("betonnik") == MobBetonnik);
+    CHECK(mob_kind("does_not_exist") == kMobKindCount);
+    CHECK(mob_kind(nullptr) == kMobKindCount);
+
+    // Behaviour tags (aiFlags bitmask).
+    CHECK(mob_has_flag(mob_def(MobGnome), AiMelee));
+    CHECK(!mob_has_flag(mob_def(MobGnome), AiFlying));
+    CHECK(mob_has_flag(mob_def(MobEye), AiFlying));
+    CHECK(mob_has_flag(mob_def(MobEye), AiRanged));
+    CHECK(mob_has_flag(mob_def(MobSpirit), AiPhasing));
+    CHECK(mob_has_flag(mob_def(MobBorshchevik), AiRooted));
+    CHECK(mob_has_flag(mob_def(MobBetonnik), AiBoss) == false); // betonnik is armored melee, not tagged boss
+    CHECK(mob_has_flag(mob_def(MobHerald), AiBoss));
+
+    // Ranged kinds carry a projectile; melee kinds do not.
+    CHECK(mob_def(MobEye).ranged);
+    CHECK(std::fabs(mob_def(MobEye).projSpeed - 8.0f) < 1e-3f);
+    CHECK(!mob_def(MobZombie).ranged);
+    CHECK(mob_def(MobPaupsina).projType == ProjWeb);
+
+    // Table-wide invariants: every row is a valid template.
+    for (std::uint16_t k = 0; k < kMobKindCount; ++k) {
+        const MobDef& d = mob_def(k);
+        CHECK(d.name != nullptr);
+        CHECK(d.hp >= 1);
+        // ranged <=> has a projectile speed (the two must never disagree).
+        CHECK(d.ranged == (d.projSpeed > 0.0f));
+        // speed 0 means immobile -> must be a rooted turret/plant.
+        if (d.speed == 0.0f) CHECK(mob_has_flag(d, AiRooted));
+    }
+
+    // --- per-level stat scaling (reference rpg.ts, verbatim) -----------------
+    // Level 1 (and any level <= 1 via clamp) == base, no scaling.
+    CHECK(mob_scaled_hp(100, 1) == 100);
+    CHECK(mob_scaled_hp(100, 0) == 100);   // clamp
+    CHECK(mob_scaled_hp(100, -5) == 100);  // clamp
+    CHECK(mob_scaled_dmg(100, 1) == 100);
+    CHECK(std::fabs(mob_scaled_speed(2.0f, 1) - 2.0f) < 1e-4f);
+
+    // Level 2: hp +12%, dmg +10%, speed +2% (Math.round semantics).
+    CHECK(mob_scaled_hp(100, 2) == 112);   // 112.0
+    CHECK(mob_scaled_hp(50, 2) == 56);     // 56.0
+    CHECK(mob_scaled_dmg(100, 2) == 110);  // 110.0
+    CHECK(mob_scaled_dmg(35, 2) == 39);    // 38.5 -> round up
+    CHECK(std::fabs(mob_scaled_speed(1.0f, 2) - 1.02f) < 1e-4f);
+
+    // Level 3 compounds linearly off base (not multiplicatively).
+    CHECK(mob_scaled_hp(100, 3) == 124);   // 100*(1+0.24)
+    CHECK(std::fabs(mob_scaled_speed(2.0f, 3) - 2.08f) < 1e-4f);
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -2376,6 +2450,7 @@ int main() {
     test_selection();
     test_ai_step();
     test_item_table();
+    test_mob_table();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
