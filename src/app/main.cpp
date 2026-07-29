@@ -35,8 +35,7 @@
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "ecs/registry.h"
-// NOTE: #include "game/ai.h" returns with the adapted utility AI --
-// see tools/branch_port_pending/README.md
+#include "game/ai.h"       // the utility AI — adapted, wired, and dormant by default
 #include "game/embody.h"
 #include "game/elevator.h"
 #include "game/floor_registry.h"
@@ -763,6 +762,12 @@ int main(int argc, char** argv) {
     // This is the first reader the nine authored craft_* columns in data/items.csv have
     // ever had: 446 items carried them and item_table.h:17 said in as many words
     // "crafting is not implemented".
+    // The utility AI's config and last-tick report. `enabled` defaults FALSE ([ai.h]):
+    // the system is wired, tested and dormant, and flipping this one bool is the whole
+    // switch — but read the note at the ai_step call site first, because it also needs
+    // ai_init to attach AiBrain and ai_release to clear the token safely.
+    game::AiConfig aiCfg;
+    game::AiTick aiTick{};
     game::CraftingState crafting{};
     game::craft_init(crafting);
     std::uint32_t crafted = 0, scrapped = 0, recipesLearned = 0;
@@ -1032,13 +1037,34 @@ int main(int argc, char** argv) {
                 // call operated on its per-entity Needs COMPONENT; main keeps the
                 // survival clock in the pool row, because the elevator destroys the body
                 // and a component would reset the clock on every floor ride.
-                // PARKED: game::ai_step(reg, pool, danger, activeGrid, simNow, kSimDt);
-                // The utility-AI driver arrived in the branch merge and scores 13 intents
-                // per mob. It is parked with ai.{h,cpp} until it is adapted to main
-                // mob_table, and until the overlap with the steering main ALREADY has
-                // (wander_step flow-following, investigate_step noise, hunt prey
-                // selection) is resolved -- two systems both writing Velocity would
-                // fight each other every tick. tools/branch_port_pending/README.md
+                // THE UTILITY AI, UNPARKED — and dormant, which is not the same as absent.
+                //
+                // It sat commented out because two systems writing Velocity fight every
+                // tick. That is now settled by a TOKEN rather than by hope: `AiBrain::motion`
+                // decides per body, and both foreign writers — wander_step and
+                // faction_feud_step — carry `if (ai_owns_motion(reg, e)) continue;`.
+                // MEASURED over 200 ticks x 24 bodies: ai_step wrote Velocity 2400 times,
+                // wander_step 300, and BOTH in one tick ZERO times; wander wrote 0 times
+                // while the token was held and 600 once delegated. [ai.h]
+                //
+                // `aiCfg.enabled` is FALSE, so this is one branch per tick — ai.cpp returns
+                // before it even takes the view. The call is live anyway, deliberately: it
+                // makes the wiring real instead of a comment, it consumes `danger` and
+                // `activeGrid` (which were live C4189 warnings for exactly as long as this
+                // stayed parked), and it reduces switching the AI on to editing ONE bool
+                // rather than re-deriving a call signature months from now.
+                //
+                // Before flipping it: `ai_init` must attach AiBrain to the floor's bodies
+                // (see the load path), and `ai_release` must run when clearing the flag on a
+                // live floor — the token is persistent state, so a body left holding
+                // MotionOwner::Ai would be skipped by wander_step forever and stand still.
+                // NOTE the `activeLayer` argument: the parked call was
+                // `ai_step(reg, pool, danger, activeGrid, simNow, kSimDt)` against an older
+                // SIX-argument signature with no layer, so it would not even have compiled
+                // if anyone had uncommented it. That is what "parked until adapted" was
+                // really hiding — a commented-out call is not a call, and nothing checks it.
+                aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
+                                       kSimDt, aiCfg);
                 controller_step(reg, kSimDt);
                 // Steer the crowd BEFORE physics: wander writes horizontal
                 // velocity, physics integrates it and resolves collision.
