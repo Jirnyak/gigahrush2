@@ -40,6 +40,16 @@ __pycache__/
 # Save games written next to the exe by F5 ([app/main.cpp] kSavePath).
 *.sav
 
+# Golden dumps written by the render-parity harness. A visual-parity check for
+# cube_pass has to prove not a single pixel moved, which means dumping the cell-class
+# and instance buffers before a change and diffing them after — 8 MB and 15 MB
+# respectively, generated, with no reader in src/ or tests/. They are measurement
+# output, not fixtures: regenerate them, never commit them. Named explicitly rather
+# than as *.bin, because the nav-cache blobs are also .bin and that rule already has
+# its own directory entry below.
+/golden_cellclass.bin
+/golden_instances.bin
+
 # Scratch directory for the nav-cache round-trip tests (tests/game_test.cpp:3720, :3760).
 # The tests std::remove their own files, and an EMPTY directory does not dirty git status,
 # so this is insurance rather than a live fix: there is no remove_all, so a run that fails
