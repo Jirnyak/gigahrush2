@@ -117,8 +117,18 @@ Contract contract_offer(const NpcPool& pool, NpcId giver, int floorZ,
 // Render an offer as a Russian sentence. `out` must be at least 200 bytes.
 bool contract_text(const Contract& c, char* out, std::size_t cap);
 
-// Take an offer into the book. Returns false when the book is full or the offer is
-// invalid — a refusal, not an error.
+// Take an offer into the book. Returns false when the book is full, the offer is invalid,
+// the exact job is already held from the same giver, or the offer is a Descend whose target
+// is already behind the run's deepest point — all refusals, not errors.
+//
+// That last clause was promised by a comment inside contract_step and implemented nowhere.
+// The result was a slot the player could not clear by playing: the step skips it forever on
+// `want <= baseline`, `baseline` is stamped exactly once, and `RunLedger::deepestFloor` never
+// falls, so Complete was permanently unreachable. It did still fail eventually — when the
+// giver died — incrementing `failed` for work the player never had a way to do. Three of
+// those brick the three-slot book, and any player walking back up the stack collects them in
+// normal play.
+//
 // Takes the LEDGER, and that is deliberate rather than convenient.
 //
 // A Descend job must pay only for a descent made after it was taken, which means

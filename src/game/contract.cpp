@@ -172,6 +172,42 @@ bool contract_text(const Contract& c, char* out, std::size_t cap) {
 bool contract_accept(ContractBook& book, const Contract& offer,
                      const RunLedger& led) {
     if (offer.giver == kInvalidNpc) return false;
+
+    // Stamped from the ledger rather than by the caller, so it cannot be forgotten. |z|
+    // because depth is bidirectional; clamped to a byte because the stack is bounded at
+    // +/-127. Hoisted above both loops because it does not depend on the slot AND because
+    // the refusal below has to compare against the exact value that would be written —
+    // recomputing it differently there is how this guard would go subtly wrong.
+    const int already = led.deepestFloor < 0 ? -led.deepestFloor : led.deepestFloor;
+    const std::uint8_t baseline = static_cast<std::uint8_t>(already > 127 ? 127 : already);
+
+    // A Descend job whose target is already behind you is REFUSED here.
+    //
+    // contract_step's own comment promised exactly this ("A job whose target is already
+    // behind you is refused at accept rather than paid") and nothing implemented it, so
+    // the job was accepted into a slot it could never leave by playing. contract_step
+    // skips it forever on `want <= c.baseline`, `baseline` is written exactly once, and
+    // `RunLedger::deepestFloor` only ever rises — so Complete is permanently unreachable.
+    // The slot is not unfailable, which is worth stating precisely: contract_on_giver_died
+    // and contract_step's liveness check both still fire, so it clears eventually as a
+    // FAILURE for a job the player was never able to complete, and it increments
+    // book.failed on the way out. Unclearable by play, not unclearable.
+    //
+    // This is normal-play reachable, not abuse: an offer targets currentFloor -/+ (8 + h%16),
+    // so any player who has already been deeper than the offering floor by that margin —
+    // i.e. anyone walking back up — is handed a dead job. With three slots, three of those
+    // brick the book.
+    //
+    // Refusing at accept rather than filtering at offer time is deliberate: the offer is
+    // generated from (floor, hash) with no ledger in scope, and an offer list that silently
+    // changes with the player's history would make the same giver on the same floor show
+    // different work for reasons the player cannot see. A refusal is legible; a vanishing
+    // offer is not.
+    if (offer.kind == static_cast<std::uint8_t>(ObjectiveKind::Descend)) {
+        const int want = offer.target < 0 ? -offer.target : offer.target;
+        if (want <= static_cast<int>(baseline)) return false;
+    }
+
     for (int i = 0; i < kMaxContracts; ++i) {
         const Contract& s = book.slot[i];
         // Already holding this exact job from this exact person.
@@ -185,12 +221,7 @@ bool contract_accept(ContractBook& book, const Contract& offer,
         if (s.state == static_cast<std::uint8_t>(ContractState::Active)) continue;
         s = offer;
         s.state = static_cast<std::uint8_t>(ContractState::Active);
-        s.progress = 0;
-        // Stamped here, not by the caller, so it cannot be forgotten. |z| because depth
-        // is bidirectional; clamped to a byte because the stack is bounded at +/-127.
-        const int already =
-            led.deepestFloor < 0 ? -led.deepestFloor : led.deepestFloor;
-        s.baseline = static_cast<std::uint8_t>(already > 127 ? 127 : already);
+        s.baseline = baseline;
         s.progress = 0;
         return true;
     }
@@ -276,7 +307,9 @@ std::int32_t contract_step(ContractBook& book, const NpcPool& pool, Inventory& i
                 //
                 // `baseline` is stamped at accept time ([contract.h]), so a Descend job
                 // now requires progress beyond that point. A job whose target is already
-                // behind you is refused at accept rather than paid.
+                // behind you is refused by contract_accept and never reaches this loop —
+                // that refusal is implemented now; this comment used to promise it while
+                // nothing did it, which left slots that could not be cleared by playing.
                 if (reached < want) { c.progress = reached; continue; }
                 if (want <= c.baseline) continue;   // nothing was actually descended
                 c.progress = reached;

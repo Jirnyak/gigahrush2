@@ -11,10 +11,14 @@
 //     (position/state persist in the row), free the physical slot, and evict it.
 //
 // The load-bearing subtlety (master_prompt #9): re-entering a floor must
-// re-embody the SAME records, never seed new ones — otherwise the population
-// grows every visit. Each module therefore seeds its crowd exactly ONCE into a
-// contiguous pool id range [firstId, firstId+count); every later load
-// re-embodies that same range, whose positions were frozen back on the way out.
+// re-embody records, never seed new ones — otherwise the population grows every
+// visit. Each module therefore seeds its crowd exactly ONCE, labelling every
+// seeded record with the floor's number; every later load re-embodies whoever is
+// CURRENTLY labelled with that number (pool.floor_bucket — the per-floor index in
+// npc_pool.h), whose positions were frozen back on the way out. Keying on the
+// live label rather than a frozen id range is what lets the macro sim migrate a
+// resident between floors (master_prompt #10b) and have the destination
+// re-embody them on arrival.
 //
 // FloorRegistry owns the number <-> module <-> layer indirection; this owns the
 // module *content* (how to build it, and the cold crowd it re-materializes) plus
@@ -23,6 +27,8 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
+#include <string>
 #include <vector>
 
 #include "ecs/registry.h"        // giga::Registry, giga::Entity, entt::null
@@ -31,8 +37,21 @@
 #include "game/floor_spec.h"     // giga::game::FloorKind
 #include "game/npc_pool.h"       // giga::game::NpcPool, NpcId
 #include "world/level_stack.h"   // giga::LevelStack, LayerId
+#include "world/nav.h"           // giga::nav::CoarseGraph, FineNav
 
 namespace giga::game {
+
+// The baked navigation for one live floor: the coarse next-hop graph (L1) and
+// the 64 per-node flow fields + nearest-node field (L2). Baked once when a floor
+// is streamed in (ensure_loaded) from its freshly regenerated geometry, and
+// freed when it is evicted, so nav is resident ONLY for live floors (~130 MiB
+// each — performance.md "bake at load, tick in O(1)"; RAM is the generous
+// budget, the tick is the scarce one). The movement AI (#12) steers by querying
+// this with nav::route_step — no per-agent search on the tick.
+struct FloorNav {
+    nav::CoarseGraph coarse;
+    nav::FineNav fine;
+};
 
 // Per-module streaming content, one entry per ModuleId. The FloorRegistry holds
 // the (mutable) number label and the (streamed) residency; this holds the fixed
@@ -43,11 +62,11 @@ struct FloorModule {
     FloorKind kind = FloorKind::Residential;
     std::uint32_t seed = 0;               // base seed; geometry + population derive
 
-    // The cold crowd: the contiguous pool id range this module seeded ONCE. Every
-    // load re-embodies exactly this range, so population never grows per visit.
+    // The cold crowd is seeded ONCE (the first load), which labels every seeded
+    // record with this floor's number; from then on the crowd IS whoever is in
+    // pool.floor_bucket(number). No frozen id range to remember — the label is the
+    // membership, so a migration in/out of this floor is reflected on next load.
     bool seeded = false;
-    NpcId firstId = kInvalidNpc;
-    std::uint32_t count = 0;
     NpcId candidate = kInvalidNpc;        // the seed's player-candidate record
 
     // Live set while loaded (empty when cold): the entities embodied for this
@@ -69,6 +88,11 @@ public:
     // plus the just-loaded destination before the trailing floor is pruned), so
     // exactly that many layers are pushed onto `stack`. Call once, before use.
     void init(LevelStack& stack, int keepRadius = 0);
+
+    // Opt in to on-disk nav memoization (C.2b): baked nav is read from / written
+    // to `dir` keyed on each floor's (number, kind, seed). Empty (the default)
+    // disables it — every load bakes from scratch. Set once, before loading.
+    void set_nav_cache_dir(const std::string& dir) { navCacheDir_ = dir; }
 
     // Register a floor module: assign `number -> module` in `reg` and record how
     // to build it. Does NOT load it. Returns the new ModuleId, or kInvalidModule
@@ -121,6 +145,11 @@ public:
         return reg.layer_at(number) != kInvalidLayer;
     }
 
+    // The baked navigation for floor `number`, or nullptr when that floor is not
+    // currently resident (nav lives only while the floor is loaded — ensure_loaded
+    // bakes it, unload frees it). The pointer stays valid until `number` unloads.
+    const FloorNav* nav_at(const FloorRegistry& reg, int number) const;
+
     int keep_radius() const { return keepRadius_; }
 
 private:
@@ -137,9 +166,15 @@ private:
                       NpcId& playerId, Entity& outPlayer);
 
     FloorModule modules_[kMaxModules];
+    // Per-module baked nav, resident only while the module is loaded. Heap-held
+    // because each FineNav is ~130 MiB — keeping them out of line keeps the
+    // FloorStreamer object (a stack local in app + tests) tiny. ensure_loaded
+    // bakes into nav_[m]; unload resets it back to null.
+    std::unique_ptr<FloorNav> nav_[kMaxModules];
     ModuleId next_ = 0; // bump allocator for ModuleId
     std::vector<LayerId> freeSlots_;
     int keepRadius_ = 0;
+    std::string navCacheDir_; // empty = on-disk nav cache disabled
 };
 
 } // namespace giga::game

@@ -11,6 +11,7 @@
 #include "ecs/components.h"
 #include "ecs/registry.h"
 #include "sim/camera.h"
+#include "sim/diffusion.h"
 #include "sim/fluid.h"
 #include "sim/physics.h"
 #include "world/field.h"
@@ -232,6 +233,109 @@ static void test_fluid_conserves_mass() {
     CHECK(before > 9.9 && before < 10.1);
 }
 
+// The diffusion danger/scent field (increment D): a source spreads to its open
+// neighbours, wraps across the torus seam, is blocked by walls (no flux), yields
+// a flee gradient, steps deterministically, and decays toward zero without a
+// source. It is stepped like fluid but is NOT mass-conserving (it evaporates).
+static void test_diffusion() {
+    auto total = [](const Field<float>& f) {
+        double s = 0;
+        for (float v : f.data()) s += v;
+        return s;
+    };
+
+    // 1) One step spreads a central spike symmetrically to its 6 neighbours, and
+    //    total mass drops (evaporation) but stays positive.
+    {
+        World w; // all air
+        auto& f = w.fields().get_or_create<float>("danger", 0.0f);
+        f.at(64, 64, 64) = 100.0f;
+        const double before = total(f);
+        diffusion_step(w);
+        CHECK(f.at(64, 64, 64) < 100.0f);
+        const float nb = f.at(65, 64, 64);
+        CHECK(nb > 0.0f);
+        CHECK(f.at(63, 64, 64) == nb); // symmetric on every face
+        CHECK(f.at(64, 65, 64) == nb);
+        CHECK(f.at(64, 63, 64) == nb);
+        CHECK(f.at(64, 64, 65) == nb);
+        CHECK(f.at(64, 64, 63) == nb);
+        const double after = total(f);
+        CHECK(after < before && after > 0.0);
+    }
+
+    // 2) Periodic on the torus: a spike at x=0 leaks across the seam to x=127.
+    {
+        World w;
+        auto& f = w.fields().get_or_create<float>("danger", 0.0f);
+        f.at(0, 10, 10) = 50.0f;
+        diffusion_step(w);
+        CHECK(f.at(127, 10, 10) > 0.0f); // wrapped -x neighbour received flux
+    }
+
+    // 3) Walls block flux (no-flux boundary): a fully-solid neighbour receives
+    //    nothing and holds nothing, while the open neighbours still take their
+    //    share.
+    {
+        World w;
+        w.grid().fill_cell(65, 64, 64, 1); // wall the +x neighbour of the source
+        auto& f = w.fields().get_or_create<float>("danger", 0.0f);
+        f.at(64, 64, 64) = 100.0f;
+        diffusion_step(w);
+        CHECK(f.at(65, 64, 64) == 0.0f); // wall holds nothing
+        CHECK(f.at(63, 64, 64) > 0.0f);  // the open -x side still receives
+    }
+
+    // 4) Flee gradient: after diffusing a spike, danger falls with distance, so at
+    //    a cell on the +x side the gradient points back toward the source (-x) and
+    //    an agent flees along -gradient (+x, away). Symmetric axes read ~0.
+    {
+        World w;
+        auto& f = w.fields().get_or_create<float>("danger", 0.0f);
+        f.at(64, 64, 64) = 100.0f;
+        for (int s = 0; s < 8; ++s) diffusion_step(w);
+        const vec3 grad = diffusion_gradient(f, w.grid(), 68, 64, 64);
+        CHECK(grad.x < 0.0f);                       // danger increases toward -x
+        CHECK(grad.y < 1e-6f && grad.y > -1e-6f);   // symmetric off-axis
+        CHECK(grad.z < 1e-6f && grad.z > -1e-6f);
+    }
+
+    // 5) Deterministic: two identical seedings step bit-identically.
+    {
+        World a, b;
+        auto seed = [](World& w) {
+            auto& f = w.fields().get_or_create<float>("danger", 0.0f);
+            f.at(64, 64, 64) = 100.0f;
+            f.at(20, 30, 40) = 40.0f;
+        };
+        seed(a);
+        seed(b);
+        for (int s = 0; s < 16; ++s) { diffusion_step(a); diffusion_step(b); }
+        const Field<float>* fa = a.fields().find<float>("danger");
+        const Field<float>* fb = b.fields().find<float>("danger");
+        CHECK(fa != nullptr && fb != nullptr);
+        CHECK(fa->data().size() == fb->data().size());
+        CHECK(std::memcmp(fa->data().data(), fb->data().data(),
+                          fa->data().size() * sizeof(float)) == 0);
+    }
+
+    // 6) Stable + decaying: with no fresh source the total never grows and trends
+    //    well below the initial mass (evaporation wins; no blow-up).
+    {
+        World w;
+        auto& f = w.fields().get_or_create<float>("danger", 0.0f);
+        f.at(64, 64, 64) = 10.0f;
+        double prev = 1e30;
+        for (int s = 0; s < 50; ++s) {
+            diffusion_step(w);
+            const double t = total(f);
+            CHECK(t <= prev + 1e-3); // monotone non-increasing (stability + decay)
+            prev = t;
+        }
+        CHECK(prev < 10.0); // decayed below where it started
+    }
+}
+
 static void test_camera_component_is_movable() {
     Registry reg;
     // No camera yet.
@@ -347,11 +451,85 @@ static void test_nav_fine() {
         CHECK(follow(0, c[0], c[1], c[2]) == expect);
     }
 
-    // Deterministic: a second bake is bit-identical (schedule-invariant).
+    // Nearest-node field (C.2): every node's own cell is its own anchor, and a
+    // cell well inside a Voronoi band resolves to that band's node. Bands are
+    // [i*32,(i+1)*32) with centres {16,48,80,112}, so (20,52,84) -> node (0,1,2).
+    for (int id = 0; id < kNodes; ++id) {
+        const LatticeNode n = lattice_unpack(id);
+        CHECK(f.nearest_node(lattice_coord(n.ix), lattice_coord(n.iy),
+                             lattice_coord(n.iz)) == id);
+    }
+    CHECK(f.nearest_node(20, 52, 84) == lattice_id(0, 1, 2));
+    // Consistency: descending your own nearest anchor's field is a legal step.
+    CHECK(f.at(f.nearest_node(20, 52, 84), 20, 52, 84) != kFlowNone);
+
+    // Deterministic: a second bake is bit-identical (schedule-invariant), for
+    // both the flow fields and the (single-threaded) nearest-node field.
     FineNav f2;
     bake_fine(air, f2);
     CHECK(f.flow.size() == f2.flow.size());
     CHECK(std::memcmp(f.flow.data(), f2.flow.data(), f.flow.size()) == 0);
+    CHECK(f.nearest.size() == f2.nearest.size());
+    CHECK(std::memcmp(f.nearest.data(), f2.nearest.data(), f.nearest.size()) == 0);
+}
+
+// route_step (master_prompt #11 C.2): the O(1) tick query that composes the
+// nearest-node field + coarse reachability + a flow field into one step. On open
+// air the route is a straight wrapped-Manhattan descent to the target's anchor.
+static void test_route_step() {
+    using namespace nav;
+    MacroGrid air;
+    FineNav f;
+    bake_fine(air, f);
+    CoarseGraph g{};
+    bake_coarse(air, g);
+
+    // Standing on the destination cell: arrived, no step.
+    CHECK(route_step(g, f, ivec3{40, 40, 40}, ivec3{40, 40, 40}) == kFlowArrived);
+
+    // Follow route_step from node 0's centre to node 63's centre. Every step
+    // descends field 63 (the destination's anchor), so the walk is a shortest
+    // wrapped path and arrives in exactly the wrapped-Manhattan cell count.
+    const ivec3 to{112, 112, 112}; // node 63 centre (== lattice_id(3,3,3))
+    int cx = 16, cy = 16, cz = 16, steps = 0; // node 0 centre
+    for (; steps <= 4 * kMacroDim; ++steps) {
+        const std::uint8_t d = route_step(g, f, ivec3{cx, cy, cz}, to);
+        CHECK(d != kFlowNone); // open air is fully reachable
+        if (d == kFlowArrived) break;
+        cx = wrap_macro(cx + kNavDir[d][0]);
+        cy = wrap_macro(cy + kNavDir[d][1]);
+        cz = wrap_macro(cz + kNavDir[d][2]);
+    }
+    CHECK(cx == 112 && cy == 112 && cz == 112);
+    CHECK(steps == 3 * 32); // |112-16| wraps to 32 per axis, over three axes
+
+    // Unreachable: a fully-solid target is claimed by no anchor, so there is no
+    // field to it -> kFlowNone. Symmetrically, routing FROM inside solid fails.
+    MacroGrid walled;
+    walled.fill_cell(0, 0, 0, 1);
+    FineNav fw;
+    bake_fine(walled, fw);
+    CoarseGraph gw{};
+    bake_coarse(walled, gw);
+    CHECK(fw.nearest_node(0, 0, 0) == kFlowNone);
+    CHECK(route_step(gw, fw, ivec3{16, 16, 16}, ivec3{0, 0, 0}) == kFlowNone);
+    CHECK(route_step(gw, fw, ivec3{0, 0, 0}, ivec3{16, 16, 16}) == kFlowNone);
+
+    // Coarse-unreachable branch: wall node 0's centre in on all 6 faces so its
+    // air pocket is a disconnected component. Its anchor still claims its own
+    // cell, but nothing reaches it, so routing to it returns kFlowNone via the
+    // O(1) coarse reachability guard — a different path than "target in solid".
+    MacroGrid isolated;
+    for (int d = 0; d < 6; ++d)
+        isolated.fill_cell(16 + kNavDir[d][0], 16 + kNavDir[d][1],
+                           16 + kNavDir[d][2], 1);
+    FineNav fi;
+    bake_fine(isolated, fi);
+    CoarseGraph gi{};
+    bake_coarse(isolated, gi);
+    CHECK(fi.nearest_node(16, 16, 16) == 0);  // node 0 still owns its own cell
+    CHECK(gi.dist[1][0] == kUnreachable);     // but it is cut off from the rest
+    CHECK(route_step(gi, fi, ivec3{48, 48, 48}, ivec3{16, 16, 16}) == kFlowNone);
 }
 
 int main() {
@@ -364,10 +542,12 @@ int main() {
     test_aabb_overlap();
     test_physics_lands_on_floor();
     test_fluid_conserves_mass();
+    test_diffusion();
     test_camera_component_is_movable();
     test_parallel_for();
     test_nav_coarse();
     test_nav_fine();
+    test_route_step();
 
     std::printf("%d/%d checks passed\n", g_checks - g_fails, g_checks);
     if (g_fails) {

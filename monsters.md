@@ -1,12 +1,17 @@
-# Monsters — Global monster tables
+# Monsters — Global monster catalog
 
-> **Status: the table and the per-floor budgets are BUILT
-> ([src/game/mob_table.h](src/game/mob_table.h)); spawning is not.** It lives in
-> `giga_game` (`src/game/`), never `src/app/` — [AGENTS.md](AGENTS.md) requires
-> gameplay macro-systems to link `giga_core` without SDL/Vulkan/ImGui so they stay
-> headless-testable via `game_test`. Built on the ECS ([ecs.md](ecs.md)) and fields
-> ([fields.md](fields.md)).
-
+> **Status: catalog BUILT and generated from data; per-floor budgets BUILT; spawning
+> BUILT and room-aware.** It lives in `giga_game` (`src/game/`), never `src/app/` -
+> [AGENTS.md](AGENTS.md) requires gameplay macro-systems to link `giga_core` without
+> SDL/Vulkan/ImGui so they stay headless-testable via `game_test`. Built on the ECS
+> ([ecs.md](ecs.md)) and fields ([fields.md](fields.md)), on top of the item catalog
+> ([items.md](items.md)).
+>
+> - **Code:** [src/game/mob_table.h](src/game/mob_table.h) /
+>   [.cpp](src/game/mob_table.cpp) (generated) - spawning:
+>   [src/game/mob_spawn.h](src/game/mob_spawn.h)
+> - **Tests:** [tests/game_test.cpp](tests/game_test.cpp) `test_mob_table`,
+>   `test_mob_spawn`, `test_mob_budget_v_shape` (headless, link `giga_game` only)
 Monster definitions are a **single global table** shared by every floor. A floor
 never redefines a monster — it only adjusts *how likely* each one is to appear
 via its rule-set ([floors.md](floors.md)).
@@ -131,17 +136,24 @@ architecture, not bodies in it.
   other entity — no special-case monster mover.
 - **Respawn** does not exist in the reference and is forbidden by its
   `ecology.md`; a killed monster is gone for the visit.
-
 ## Global vs. local (the boundary)
 
 | Global | Per-floor (rule-set) |
 |--------|----------------------|
-| Monster stat/behavior definitions | Spawn-weight multipliers |
-| Base spawn weights | Population-matrix tweaks |
-| Loot-table associations | Optional floor-only additions |
+| Monster stat/behaviour definitions (built) | Spawn-weight multipliers |
+| Base spawn weights + rarity gate | Count / tier (depth + danger) |
+| aiFlags behaviour families | Optional floor-only nudges |
+
+## Loot on death (built, #13c)
+
+Each kind's death drops are **data**, in a parallel `MobLoot` table keyed by the
+same `MobKind` ([loot_table.h](src/game/loot_table.h), [items.md](items.md)):
+`rareDrops` (first-hit-single, player-kill-gated) + `lootTable` (independent
+rolls, cap 3, on three kinds). `roll_mob_loot(kind, seed, killerIsPlayer)` decides
+the drops deterministically; #13d spawns them as ground entities.
 
 ## Connections
 
-Drops loot from [items.md](items.md). Population governed by
-[macrosim.md](macrosim.md) / [npcs.md](npcs.md). Weight modifiers come from
-[floors.md](floors.md). Runs on [ecs.md](ecs.md) systems.
+Drops loot from [items.md](items.md) via [loot_table.h](src/game/loot_table.h).
+Population governed by [macrosim.md](macrosim.md) / [npcs.md](npcs.md). Weight
+modifiers come from [floors.md](floors.md). Runs on [ecs.md](ecs.md) systems.

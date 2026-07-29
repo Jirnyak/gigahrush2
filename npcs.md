@@ -143,20 +143,50 @@ Seeding lives in [src/game/population.h](src/game/population.h):
 floor's apartment lattice with deterministic demographics and **returns the record
 chosen as the player candidate** — which becomes the player only once
 `embody_as_player` flips its bit. The floor streamer ([floors.md](floors.md))
-calls a seeder **once** per module and remembers the resulting contiguous
-`[firstId, count)` id range, so every later visit re-embodies the **same**
-records rather than growing the population — the streaming invariant.
+calls a seeder **once** per module, which labels every seeded record with the
+floor's number; every later visit re-embodies whoever is **currently** in that
+floor's `pool.floor_bucket(number)` (the per-floor inverted index, #10b), so the
+roster is live — a macro migration onto/off the floor is honoured — while the
+head-count stays steady because seeding is once-only. This is the streaming
+invariant that keeps the 2²⁰ population from growing per visit.
 
 ## Behaviour — migration, trade, honest projectiles
 
-- **Migration & trade between floors.** The macro tick moves NPCs across the
-  floor stack and runs aggregate trade/economy — the world keeps living when the
-  player isn't watching ([macrosim.md](macrosim.md)).
+- **Migration & trade between floors.** The macro tick moves NPCs across the floor
+  stack — **built** as a budgeted-cursor journey pass (#10c): a bounded ring-scan
+  starts multi-tick inter-floor journeys that relabel cold records on arrival
+  (through the per-floor bucket index), so any floor's roster is live the next time
+  it loads. Aggregate trade/economy is still pending ([macrosim.md](macrosim.md)).
+- **Relationships grow off-screen.** A second budgeted-cursor pass (#10d-ii,
+  [macrosim.md](macrosim.md)) lazily fills each NPC's 16-slot `rel_` block with
+  edges to co-floor peers, seeded from the [faction matrix](macrosim.md) (#10d-i)
+  so acquaintances start faction-consistent (Citizens warm, Wild cold). The graph
+  is thus already populated when the crowd embodies — the #12 `social` intent
+  ([ai.md](ai.md)) has real edges to act on rather than a world of strangers.
 - **Embodied NPCs are ordinary entities.** An embodied NPC that shoots simply
   **spawns a projectile entity** that flies under [physics.md](physics.md) and
   can hit *anyone* — including the NPC that fired it. No attacker/victim special
   cases; combat is isotropic, exactly like the player's. The player is not
   privileged ([ecs.md](ecs.md)).
+- **Embodied brain (#12 — [ai.md](ai.md); #12a/#12b/#12c BUILT — the crowd
+  moves).** On the live floor each embodied NPC runs a **utility-AI**: 0..100 needs
+  decay, a pure scorer ranks 13 intents (eat/drink/toilet/sleep/flee/combat/social/
+  patrol/wander/…), argmax + hysteresis picks one, and a per-frame driver steers the
+  body — flee heads down the flee field ([diffusion.md](diffusion.md)), every other
+  intent roams a deterministic per-identity heading — by writing horizontal
+  `Velocity` straight into physics, the same integrator the player reaches through
+  `Controller`. Re-plan cadence is an identity-hash stagger, so the crowd spreads
+  across frames with no scheduling queue. **#12a ([src/game/ai.h](src/game/ai.h)):**
+  the `Needs` SoA component + its one-pass `needs_step` decay — food/water/sleep
+  reserves fall (attribute-slowed by STR/AGI/INT), pee/poo pressures rise only by
+  digesting a pending pool — materialised on embodiment and folded away with it,
+  like every other transient. **#12b:** the pure `score_intents` ranking all 13
+  intents 0..100 and the `select_intent` argmax + hysteresis, both ported verbatim.
+  **#12c:** `ai_step` — the stagger + steering driver — with `Needs`/`AiBrain`
+  attached on embodiment (the player carries them too; the driver just skips
+  camera-holders). All exercised headless. Goal-directed `route_step` steering
+  toward a specific target cell ([nav.md](nav.md)) waits on the #13 content tables
+  to give intents reachable goals.
 
 ## Baked, not searched
 

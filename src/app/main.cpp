@@ -35,6 +35,7 @@
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "ecs/registry.h"
+#include "game/ai.h"
 #include "game/embody.h"
 #include "game/elevator.h"
 #include "game/floor_registry.h"
@@ -588,6 +589,10 @@ int main(int argc, char** argv) {
     bool paused = false; // Esc pause menu: freezes the sim + frees the cursor
     bool fluidPaused = false;
     float simAccum = 0.0f;
+    // Monotonic sim-time (seconds), advanced one kSimDt per fixed step. The AI
+    // re-plan stagger ([ai.md] #12c) schedules each agent's next decision against
+    // an absolute deadline on this clock; it is frozen with the sim while paused.
+    double simNow = 0.0;
     std::uint64_t prevTicks = SDL_GetPerformanceCounter();
     const double freq = static_cast<double>(SDL_GetPerformanceFrequency());
 
@@ -880,6 +885,13 @@ int main(int argc, char** argv) {
             simAccum = 0.0f;
         } else {
             simAccum += frameDt;
+            // The embodied AI steers against the live floor's baked danger field
+            // ([diffusion.md]); it is null when the floor seeds none -> threat reads
+            // 0 and no one flees, the scorer's stubbed-input stance ([ai.md]).
+            // Fetched once per frame: the fixed loop below never (re)creates it.
+            World& activeWorld = stack.layer(activeLayer);
+            const Field<float>* danger = activeWorld.fields().find<float>("danger");
+            const MacroGrid& activeGrid = activeWorld.grid();
             int guard = 0;
             while (simAccum >= kSimDt && guard++ < 8) {
                 // Age the noise field ONCE per tick, at the top ([noise.h]). Everything
@@ -890,6 +902,12 @@ int main(int argc, char** argv) {
                 game::noise_step(noiseField,
                                  static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f));
                 input.apply(reg, kSimDt);
+                // Embodied crowd (#12): needs decay, then the utility brain
+                // re-plans (identity-staggered) and steers each NON-player body's
+                // Velocity — BEFORE the controller/physics that integrate it, the
+                // same locomotion path as the player ([ai.md], [npcs.md]).
+                game::needs_step(reg, pool, kSimDt);
+                game::ai_step(reg, pool, danger, activeGrid, simNow, kSimDt);
                 controller_step(reg, kSimDt);
                 // Steer the crowd BEFORE physics: wander writes horizontal
                 // velocity, physics integrates it and resolves collision.
@@ -1241,13 +1259,14 @@ int main(int argc, char** argv) {
                 // puddles yet); step it on the active layer there.
                 if (genMode == WorldGenMode::Maze && !fluidPaused &&
                     ++fluidCounter >= fluidStepEvery) {
-                    fluid_step(stack.layer(activeLayer));
+                    fluid_step(activeWorld);
                     fluidCounter = 0;
                     // Fluid tints cell colours, so the cached instance list is
                     // stale. This is the one place the cache rebuilds regularly —
                     // and only in maze mode, where fluid exists.
                     cubePass.invalidate();
                 }
+                simNow += kSimDt;
                 simAccum -= kSimDt;
             }
         }

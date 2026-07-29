@@ -12,20 +12,48 @@
 > file disagrees with those, those win for engine contracts; this file wins for
 > "what state is the game layer in and what's next."
 
-Last updated: **2026-07-28**. Status confirmed by the project owner in-game this
-day: **the game builds, runs, and holds > 60 FPS** on Apple M2 Pro (MoltenVK);
+Last updated: **2026-07-29**. Status confirmed by the project owner in-game on
+2026-07-28: **the game builds, runs, and holds > 60 FPS** on Apple M2 Pro (MoltenVK);
 floors render as visually distinct modules and the faction-tinted crowd is
 visible; **one-live-floor streaming** works (elevator `[` / `]` loads the
 destination on demand and folds the floor left behind — the owner saw distinct
 floors swap in with their crowds, no duplicate player); `Esc` opens the pause
 menu.
 
-**Since then (headless, `ctest`-green, NOT yet visible in-game):** the whole
-**navigation bake** landed — the fixed 4×4×4 lattice, the L1 coarse graph, and
-the L2 flow fields (§7 #11, increments **A/B/C**). It is built and tested but
-**deliberately wired to no consumer** (movement AI is #12), so the running game
-looks unchanged and NPCs still stand still. Shipped on branch `nav-lattice-bake`,
-open for review as **PR #1 → main**.
+**Since then (headless, `ctest`-green):** the whole **navigation + flee stack**
+landed. **PR #1** merged the bake foundation to `main` — the fixed 4×4×4 lattice,
+the L1 coarse graph, and the L2 flow fields (§7 #11, increments **A/B/C**). On top
+of that, three more increments shipped **directly on `main`** (2026-07-28):
+**C.2** — the nearest-node field + the O(1) `route_step(coarse, fine, from, to)`
+routing API; **C.2b** — the bake wired into `FloorStreamer::ensure_loaded` (every
+live floor now bakes its `FloorNav` on load) + an opt-in disk cache; and
+**increment D** — `src/sim/diffusion` (the diffusion danger/scent field +
+`diffusion_gradient` flee vector). All built and tested. The movement AI **#12** is
+now their runtime consumer: `ai_step` steers fleeing bodies down
+`diffusion_gradient`, so the **flee field is now visible** and the crowd moves.
+`route_step` still awaits a consumer — goal-directed nav needs #13's reachable
+targets. New system docs: **[nav.md](nav.md)**, **[diffusion.md](diffusion.md)**.
+
+**Also since (headless, `ctest`-green):** the **macro society** filled in and the
+**embodied brain began**. **#10d** landed the social layer — a 6×6 `Int8`
+**faction relation matrix** (`src/game/faction.{h,cpp}`, ported base seed,
+`hostile()`/`friendly()` at ∓50 thresholds) owned by `MacroSim`, plus a second
+budgeted-cursor **social pass** that lazily forms each NPC's 16-slot `rel_` edges
+toward co-floor peers, faction-seeded — so an embodying crowd already has real
+relationships to act on. Then **#12 began** with **increment #12a — the utility-AI
+Needs layer** (`src/game/ai.{h,cpp}`, 2026-07-29): a SoA `Needs` component
+(food/water/sleep *reserves* that decay, pee/poo *pressures* that rise **only** by
+digesting a pending pool the eat intent will fill) advanced in one linear
+`needs_step` pass, with STR/AGI/INT attribute-scaled decay and deterministic
+per-id seeding — every rate/range/model **ported verbatim from the reference
+`needs.ts`**. The pure scorer + selection FSM (**#12b**) and the stagger + steering
++ embody/loop driver (**#12c**) now build on this same component set: `score_intents`
+ranks 13 intents, `select_intent` applies argmax + hysteresis, and `ai_step`
+staggers re-plans per identity and steers each body (flee down the diffusion field,
+every other intent a per-agent wander) by writing horizontal `Velocity` into
+physics — **the crowd now moves**. Goal-directed `route_step` steering waits on the
+#13 content tables to give intents reachable target cells. Spec + built-state doc:
+**[ai.md](ai.md)**.
 
 ---
 
@@ -226,10 +254,10 @@ src/world    macro grid + 8³ sub-voxel masks, typed fields, vector gravity,
              LevelStack (W), world types/constants (types.h), the 4×4×4
              nav lattice (lattice.h) + baked nav (nav.{h,cpp})        [giga_core]
 src/ecs      universal POD components (components.h) + EnTT alias      [giga_core]
-src/sim      physics, controller, camera, fluid  (*_step free fns)    [giga_core]
+src/sim      physics, controller, camera, fluid, diffusion (*_step fns) [giga_core]
 src/game     GAME LAYER — NpcPool, inventory, event_bus, embody,
-             floor_spec, floor_registry, floor_gen, floor_stream,
-             population, elevator                                      [giga_game]
+             floor_spec, floor_registry, floor_gen, floor_stream, nav_cache,
+             population, elevator, macro_sim, faction, ai              [giga_game]
 src/render   Vulkan device/swapchain/renderer, cube_pass (world),
              body_pass (NPCs), imgui_layer                             [render]
 src/input    SDL3 → ECS input bridge
@@ -260,14 +288,18 @@ tests        world_test (core), game_test (game layer) — both headless;
 - `game/elevator.{h,cpp}` — `ride_elevator`: the real inter-floor travel (§6, #8).
 - `game/floor_stream.{h,cpp}` — `FloorStreamer`: one-live-floor streaming (§6,
   #9). `add_module` / `ensure_loaded` / `unload` / `keep_only` / `travel`. Owns
-  each module's build recipe + its cold `[firstId, count)` crowd range and a
-  free-list of recyclable `LevelStack` slots (`init(stack, keepRadius=0)`).
+  each module's build recipe; its cold crowd is whoever is currently labelled with
+  the floor's number (`pool.floor_bucket`, #10b — seeded once, membership live),
+  not a fixed id range. Holds a free-list of recyclable `LevelStack` slots
+  (`init(stack, keepRadius=0)`).
 - `app/main.cpp` — window/Vulkan bring-up, the floor stack setup, the fixed-step
   sim loop (1/120 s, frozen while paused), the render loop, HUD, the **pause
   menu** overlay, and event handling incl. `[` / `]` (via `streamer.travel`) and
   `Esc` (toggles pause + frees the cursor).
 
-**Core nav / bake files (new — the §7 #11 bake, `giga_core`, no consumer yet):**
+**Core nav / bake + field files (§7 #11 bake + increment D; `giga_core` except
+`nav_cache`; baked into streaming, but the runtime consumer is #12 — see
+[nav.md](nav.md) / [diffusion.md](diffusion.md)):**
 
 - `core/jobs.h` — header-only `parallel_for(n, body, threads=0)`, the bake-time
   job system. Parallelize **across** independent units (never inside one BFS);
@@ -281,13 +313,26 @@ tests        world_test (core), game_test (game layer) — both headless;
   64 parallel wrapped BFS → Floyd-Warshall all-pairs `dist` + `next` (O(1) query
   `coarse_next(g, from, to)`). `bake_fine(grid, FineNav&)` = 64 flow fields
   (128 MiB; `FineNav::at(node,x,y,z)` → a step direction `0..5` into `kNavDir`, or
-  `kFlowArrived` / `kFlowNone`). Bake-time only; **not wired into `ensure_loaded`**.
+  `kFlowArrived` / `kFlowNone`) **plus a 2 MiB nearest-node field** (`nearest_node`,
+  one multi-source BFS = geodesic Voronoi anchor per cell). `route_step(coarse,
+  fine, from, to)` is the O(1)/tick entry from ANY cell: target's nearest anchor →
+  coarse reachability guard → descend that anchor's flow field. **Wired into
+  `FloorStreamer::ensure_loaded`** (C.2b): each live floor holds a `FloorNav`
+  (`nav_at(number)`), baked on load and freed on unload, with an opt-in disk cache
+  (`set_nav_cache_dir`, `game/nav_cache.{h,cpp}`, keyed on `(number,kind,seed)`).
+- `sim/diffusion.{h,cpp}` — the diffusion danger/scent field (increment D).
+  `diffusion_step(world, params)` = double-buffered toroidal heat-equation relax +
+  evaporate over a named `float` field (default `"danger"`), no-flux at walls;
+  stable at `rate·6 ≤ 1` (default 0.15). `diffusion_gradient(f, grid, x,y,z)` =
+  the flee vector (agents flee along −gradient). Runs on the macro tick, not the
+  120 Hz tick. The flee/scent input to #12, distinct from nav and from
+  `FloorSpec.hostility`. See [diffusion.md](diffusion.md).
 
 **Key components** (`ecs/components.h`, all POD): `Transform{vec3 pos; LayerId
 layer}`, `Velocity`, `AABB{half}`, `GravityAffected{scale,grounded}`,
 `Jump{impulse,wants_jump}`, `CameraTag{yaw,pitch,fovY=1.2,eyeOffset}`,
 `Controller{moveSpeed,wishDir,fly}`, `Renderable{color}`. Game-layer `NpcRef{id}`
-lives in `embody.h`.
+lives in `embody.h`; the embodied-only `Needs` block (#12a) lives in `ai.h`.
 
 ---
 
@@ -343,19 +388,21 @@ cellular fluid, Vulkan renderer (instanced cube pass + ImGui), demo worldgen
   live** by default (`init(stack, keepRadius=0)` reserves `2*keepRadius+2`
   recyclable slots). `add_module(reg, number, kind, seed)` registers a module's
   identity + build recipe without loading; `ensure_loaded` seeds the crowd
-  **once** into a contiguous `[firstId, count)` cold-pool range, allocates a slot,
-  `generate_floor`s the geometry, and embodies the crowd — skipping records
-  already embodied elsewhere (so the player is never duplicated; the first ever
-  load designates the player). `unload` / `keep_only` `fold_back` the whole crowd
-  and free the slot. `travel` loads the destination on demand → `ride_elevator` →
-  adopts the fresh player body → prunes to the kept window. **Invariant:**
-  re-entry re-embodies the SAME id range and geometry regenerates bit-for-bit, so
-  `pool.count()` never grows per visit. `main.cpp` (default `floors` mode) now
-  registers the 5 modules and `ensure_loaded`s **only floor 0** at startup;
-  `[` / `]` = `streamer.travel`. **Owner-confirmed in-game** (distinct floors swap
-  in with their crowds; no duplicate player). *Roster caveat:* the fixed id range
-  is a pre-migration simplification — #10 swaps it for a per-floor bucket index
-  over `pool.floor(id)` so migrants are captured.
+  **once** (labelling each seeded record with the floor number), allocates a slot,
+  `generate_floor`s the geometry, and embodies the crowd — **whoever is currently
+  in `pool.floor_bucket(number)`** (#10b) — skipping records already embodied
+  elsewhere (so the player is never duplicated; the first ever load designates the
+  player). `unload` / `keep_only` `fold_back` the whole crowd and free the slot.
+  `travel` loads the destination on demand → `ride_elevator` → adopts the fresh
+  player body → prunes to the kept window. **Invariant:** re-entry re-embodies the
+  floor's *current roster* and geometry regenerates bit-for-bit, and since seeding
+  is once-only, `pool.count()` never grows per visit. `main.cpp` (default `floors`
+  mode) now registers the 5 modules and `ensure_loaded`s **only floor 0** at
+  startup; `[` / `]` = `streamer.travel`. **Owner-confirmed in-game** (distinct
+  floors swap in with their crowds; no duplicate player). *Migration-ready (#10b,
+  done):* the roster is a maintained per-floor bucket index over `pool.floor(id)`,
+  so a macro relabel migrates residents between floors and the destination
+  re-embodies them.
 - **Pause menu (owner-requested UX).** `Esc` no longer quits — it toggles a
   centered ImGui **"Menu"** overlay (Resume / Quit) and **frees the cursor**
   (relative mouse mode off) so the OS window can be moved/minimized; the sim
@@ -363,8 +410,11 @@ cellular fluid, Vulkan renderer (instanced cube pass + ImGui), demo worldgen
   through the menu. The single-button layout is deliberately extensible for future
   items (settings, save/load, character sheet).
 
-**Navigation bake — built (headless, `ctest`-green; the §7 #11 increments
-A/B/C; NOT wired to an in-game consumer — nothing visible changed yet):**
+**Navigation + flee stack — built (headless, `ctest`-green; §7 #11 increments
+A/B/C/C.2/C.2b + increment D; full docs [nav.md](nav.md) / [diffusion.md](diffusion.md)).
+The nav is now baked into floor streaming, but no runtime consumer steers by it
+yet (movement AI is #12), so nothing visible changed — the fields are *ready*, not
+*visible*:**
 
 - **A — L0 carve.** `src/world/lattice.h` (the fixed 4×4×4 lattice) + `floor_gen`
   now carves the 64 nodes (shaft through the full height — Z wraps, so top links
@@ -379,8 +429,27 @@ A/B/C; NOT wired to an in-game consumer — nothing visible changed yet):**
   `Threads::Threads` is now a `giga_core` dependency.
 - **C — L2 flow fields.** `bake_fine` / `FineNav`: 64 dense flow fields, 1 B/cell
   = the step direction toward each node (**128 MiB/floor**). The field is a BFS
-  parent chain, so descent strictly shortens and always arrives. Route (once #12
-  consumes it) = coarse `next`-hop → descend that node's field, O(1)/tick.
+  parent chain, so descent strictly shortens and always arrives.
+- **C.2 — routing glue.** `bake_fine` also paints a **nearest-node field**
+  (`uint16 nearest[128³]`, +2 MiB — a geodesic Voronoi anchor per open cell,
+  `FineNav::nearest_node`), and **`route_step(coarse, fine, from, to)`** composes
+  the two layers into the O(1)/tick entry from ANY cell (target's nearest anchor →
+  coarse reachability guard → follow `next`-hop / descend that anchor's flow
+  field; returns a `kNavDir` byte, `kFlowArrived`, or `kFlowNone`). L2 is now
+  ≈ **130 MiB/floor**. Details: [nav.md](nav.md).
+- **C.2b — wired into streaming + disk cache.** `FloorStreamer::ensure_loaded`
+  now bakes a per-module `FloorNav{CoarseGraph, FineNav}` right after
+  `generate_floor` (heap-held `unique_ptr`, freed on `unload`, retrieved via
+  `nav_at(reg, number)`). **Opt-in** disk memoization — `set_nav_cache_dir(dir)`
+  (empty = off, the default) + `game/nav_cache.{h,cpp}` (versioned blob keyed on
+  `(number, kind, seed)`, `-fno-exceptions`-clean) — skips the re-bake on
+  re-entry. This is the reference's impossible-in-a-browser optimization.
+- **D — diffusion danger/scent field.** `src/sim/diffusion.{h,cpp}`:
+  `diffusion_step` (double-buffered, toroidal, **no-flux walls**, evaporating;
+  explicit-stable at `rate·6 ≤ 1`, default 0.15) + `diffusion_gradient` (the
+  per-cell flee vector — agents flee along −gradient). The flee/scent field #12
+  steers by; deliberately **not** pathfinding and distinct from the authored
+  `FloorSpec.hostility` rating. Details: [diffusion.md](diffusion.md).
 - **Honest crowd bench** (`tests/sim_bench.cpp`) — see §8; it's what motivated the
   job system (the agent tick must be threaded to fit 16k/floor in budget).
 - **Connectivity caveat (honest, documented).** The carve guarantees **vertical**
@@ -395,10 +464,27 @@ A/B/C; NOT wired to an in-game consumer — nothing visible changed yet):**
 relationships, design flag, event bus (transient/overflow/log), attribute block,
 height→body, embody/foldback, player-is-a-record, population seed, floor_spec,
 seed_from_spec, floor_registry, floor_gen, elevator, floor_stream, floor_travel,
-**nav coarse + fine on a real floor** (full connectivity; every node routes home
-without crossing solid; determinism). `world_test` covers the core, **plus
-`parallel_for`, the all-air coarse no-seam bake, and the all-air fine flow-field
-bake** (follow == exact wrapped-Manhattan; bit-identical re-bake = determinism).
+**nav coarse + fine on a real floor** (`test_nav_realfloor` / `test_nav_fine_realfloor`
+— full connectivity; every node routes home without crossing solid; determinism),
+**routing** (`test_route_realfloor` — `route_step` reaches iff coarse-reachable),
+and **streaming + disk cache** (`test_streamed_nav`, `test_nav_cache_roundtrip`,
+`test_streamed_nav_cache` — bake-on-load is bit-identical to standalone, freed on
+unload, cache round-trips + rejects wrong seed/kind, read path proven by a
+sentinel). `world_test` covers the core, **plus `test_parallel_for`, the all-air
+coarse no-seam bake (`test_nav_coarse`), the all-air fine flow-field bake
+(`test_nav_fine`)** (follow == exact wrapped-Manhattan; bit-identical re-bake =
+determinism), **and the diffusion field (`test_diffusion`** — symmetric spread,
+torus periodicity, wall block, flee-gradient sign, determinism, monotone decay).
+
+**Macro + brain tests (`game_test`):** the demographic tick (aging / mortality /
+births / determinism / embodied-skip, #10a), the per-floor bucket index +
+migration (#10b/#10c), the **faction matrix** (`test_faction_matrix` — base seed,
+`hostile()`/`friendly()` thresholds, `nudge` clamp) and the **budgeted social
+pass** (`test_macro_social` / `…_determinism` — edges form only when enabled,
+faction-consistent, deterministic), and the **utility-AI needs layer**
+(`test_needs_decay`, #12a — seed determinism + per-need bands + fresh-gut pools,
+reserve decay = `rate·dt`, STR/AGI/INT attribute scaling, pending-pool digestion,
+clamp at 0, O(n) column sweep; 900k checks).
 
 ---
 
@@ -406,37 +492,92 @@ bake** (follow == exact wrapped-Manhattan; bit-identical re-bake = determinism).
 
 Work **one verified increment per turn, build green, stop green with a plan**
 (§9). Order below is the intended sequence, but note the owner pulled the **nav
-bake (#11 A/B/C) forward** ahead of #10 — that core is now built (§6). So the
-open work is: **#10** macro tick, **#11 C.2** (the nav glue + wiring into
-streaming), **#12** movement AI (now unblocked by the flow fields), then content
-**#13**. The floor-module epic (#6–#9) is **done**.
+bake (#11 A/B/C) forward** ahead of #10 — that core is now built (§6). The **whole
+macro tick #10 is now done** (demographic core #10a, bucket index #10b, migration
+#10c, faction matrix + social pass #10d). **#12 movement AI is now built** —
+needs layer #12a, pure scorer + selection FSM #12b, and the stagger + steering +
+embody/loop driver #12c (2026-07-29): the visible crowd steers itself (flee field +
+per-agent wander), with goal-directed `route_step` steering deferred until **#13**
+content gives intents reachable targets. So the open work is **#13** content tables
+(then `route_step` goal-seeking lights up) and the MacroSim app-loop wiring. The
+floor-module epic (#6–#9) is **done**.
 
-### #10 — Macro tick skeleton
-Coarse clock (own rate, **never** the 120 Hz tick — [macrosim.md](macrosim.md)) +
-a **columnar full-sweep** aging pass over the pool arrays; bench at 1M. Later:
-budgeted-cursor passes (migration/social, ~64 records/tick). This is where the
-**off-screen population comes alive**; the ref proved 2²⁰ is viable *only if the
-macro tick stays columnar* (its own 1M target was retired because per-record
-object graphs — not typed columns — dominated cost; gigahrush2 avoids that with
-inline names + inline inventory in SoA).
+### #10 — Macro tick (demographic core + bucket index + migration + social BUILT 2026-07-28) ✔
+Coarse clock (own rate, **never** the 120 Hz tick — [macrosim.md](macrosim.md)).
+This is where the **off-screen population comes alive**; the ref proved 2²⁰ is
+viable *only if the macro tick stays columnar* (its own 1M target was retired
+because per-record object graphs — not typed columns — dominated cost; gigahrush2
+avoids that with inline names + inline inventory in SoA).
 
-**Also fold in here:** swap `FloorStreamer`'s fixed `[firstId, count)` roster for
-a maintained **per-floor bucket index** over `pool.floor(id)`, so a floor
-re-embodies whoever is *currently* labelled with its number — otherwise migration
-(which moves records between floors) is invisible to streaming.
+- **#10a — columnar demographic full-sweep (DONE 2026-07-28).** ✔
+  `src/game/macro_sim.{h,cpp}`: one O(n) sweep = aging (fractional-year
+  accumulator, macro-owned) + old-age mortality (data-driven quadratic curve) +
+  reserve-drawn births (fertile adults reservoir-sampled in the same pass,
+  catch-up toward `targetPopulation`, newborns inherit a parent's floor/cell/
+  faction). Skips embodied/player records (micro sim owns them). Fully
+  deterministic via stateless `(id,tick,salt)` hashing (`src/core/rng.h`, new
+  shared primitive). **Bench: ~2.8 ms / 1,048,576 records, ~373 M rec/s**
+  (`macro_bench`). 5 tests in `game_test` (aging, mortality, births, determinism,
+  embodied-skip). Divergence from ref: aging+births is a **new capability** — the
+  TS society only decays; affordable here because it's headless on a coarse clock.
+- **#10b — per-floor bucket index (DONE 2026-07-28).** ✔ A maintained **inverted
+  index** over `pool.floor(id)`, living inside `NpcPool` (`floorBuckets_[label]` +
+  `slotInBucket_[id]`): `set_floor`/`kill` splice a record between rosters in O(1)
+  via swap-remove (no linear bucket scan, unlike the ref's `floorIndex`).
+  `FloorStreamer` now embodies `pool.floor_bucket(number)` — whoever is *currently*
+  labelled with the floor — instead of a fixed `[firstId, count)` range, so a macro
+  relabel migrates residents and the destination re-embodies them; seeding stays
+  once-only so the head-count is still steady. Direct `floor()=` removed pool-wide
+  (would desync the index). Index is derived state (rebuilt empty in `init`, not
+  serialized). Sweep cost unchanged (3.0 ms/1M — the sweep touches no buckets). 2
+  new tests (`test_floor_bucket_index`, `test_stream_migration_reembodies`) +
+  `test_macro_skips_embodied` now registered.
+- **#10c — budgeted-cursor migration (DONE 2026-07-28).** ✔ A persistent ring
+  cursor (`migCursor_`) visits ~64 cold records/tick (the ref's `RECORDS_PER_TICK`),
+  deterministically rolls a departure, and starts a **multi-tick journey** to a
+  destination floor in the configured band with an ETA `(base + perFloor·|Δ|)×jitter`
+  (ref shape). Journeys are macro-owned (`std::vector<Journey>`, external to the
+  pool); due ones **land as an O(1) `set_floor` relabel** — the #10b bucket index's
+  first client — while dead / embodied-mid-transit records forfeit theirs. Off unless
+  a floor band is set (`floorHi>floorLo`), so the demographic bench/tests are
+  unaffected; **+0.05 ms/tick** at 1M even under a heavy 65536-rec budget
+  (`macro_bench` two-phase). 2 new tests (`test_macro_migration`, `…_determinism`).
+  Deferred: route/danger destination gating (no route metadata ported yet) and
+  live-floor arrival materialization (a streaming concern).
+- **#10d-i — faction relation matrix (DONE 2026-07-28).** ✔ `src/game/faction.{h,cpp}`:
+  a row-major **6×6 `Int8` attitude table** (`FactionId` = 6 kinds; `kFactionCount`),
+  default-seeded to a **ported base matrix**, clamped to `[-127,127]` (−128 avoided).
+  `hostile()` / `friendly()` classify a cell at the ∓50 thresholds; `nudge` /
+  `nudge_mutual` / `set` mutate with clamping; `reset_to_base` restores the seed.
+  Owned by `MacroSim` (`factions()`), so it is *society state*, read by both the
+  #12 `faction_assault` intent and the social pass below. `test_faction_matrix`.
+- **#10d-ii — budgeted-cursor social pass (DONE 2026-07-28).** ✔ A **second**
+  persistent ring cursor (`socCursor_`, independent of migration's), visiting
+  `socialRecordsPerTick≈64` cold records/tick, that lazily **forms** per-NPC
+  relationship edges (the 16-slot `rel_` block, [npcs.md](npcs.md)) toward co-floor
+  peers, the initial attitude **seeded from the faction matrix** so acquaintances
+  start faction-consistent (Citizens warm, Wild cold). **OFF unless
+  `socialFormRatePerYear > 0`**, so the demographic/migration bench + tests are
+  byte-for-byte unaffected; `MacroStats.socialEdges` reports edges formed.
+  Deterministic via the same stateless `(id,tick,salt)` hashing.
+  `test_macro_social` / `test_macro_social_determinism`. The #12 `social` intent
+  now has a populated graph to act on rather than a world of strangers. *Deferred:*
+  relationship **decay/drift** of existing edges and economy dynamics (per-floor
+  commodity stock) — event-driven, on the same tables, when content (#13) lands.
 
-### #11 — Baked nav / flow / distance fields (`src/world/nav`) — A/B/C BUILT 2026-07-28 (headless green)
-The core is **done**: L0 carve (A), L1 coarse graph + core job system (B), L2
-flow fields (C) — all built and `ctest`-green (§6), all **bake-time-only with no
-consumer wired**. **What remains before #12 can eat it:**
-- **C.2 (near-term):** a *nearest-node field* (per cell: closest lattice node +
-  the flow toward it) so an agent enters the route from **any** cell, and a route
-  API `route_step(coarse, fine, fromCell, toCell)` = nearest node to the target →
-  `coarse_next` chain → descend that node's `FineNav`.
-- **Wiring:** call the bake from `FloorStreamer::ensure_loaded` (freeze → bake →
-  resume), with **disk memoization** — geometry is a pure `fn(seed, number)` so
-  the bake is too; skip re-bake on re-entry.
-- **Dirty local re-bake:** the cheap in-play patch for destructibility (below).
+### #11 — Baked nav / flow / distance fields (`src/world/nav`) — A→D BUILT 2026-07-28 (headless green)
+The stack is **done**: L0 carve (A), L1 coarse graph + core job system (B), L2
+flow fields (C), the nearest-node field + `route_step` (C.2), the wiring into
+streaming + disk cache (C.2b), and the diffusion flee/scent field (D) — all built
+and `ctest`-green (§6; docs [nav.md](nav.md) / [diffusion.md](diffusion.md)). The
+nav is now **fully consumable**: a live floor bakes its `FloorNav` on load and #12
+can call `route_step` from any cell + read `diffusion_gradient`. **What remains:**
+- **C.2 / C.2b (DONE 2026-07-28):** ✔ nearest-node field (geodesic Voronoi anchor
+  per cell) + `route_step(coarse, fine, from, to)`; ✔ bake wired into
+  `FloorStreamer::ensure_loaded` (freeze → bake → resume), per-floor `FloorNav`
+  freed on unload, opt-in disk memoization keyed on `(number,kind,seed)`.
+- **Dirty local re-bake:** the cheap in-play patch for destructibility (below) —
+  still the one unbuilt piece of the bake story.
 
 Design rules below stay authoritative; the full built API is captured in agent
 memory `torus-nav-baking`. **Original design (owner + reference-audit):**
@@ -448,7 +589,7 @@ memory `torus-nav-baking`. **Original design (owner + reference-audit):**
   never re-bake structure per tick (bake at boundaries, hysteresis at the
   consumer); the toroidal `wrap_delta` heuristic is for A\* ordering **only**,
   never as a path metric (it lies at the antipode).
-- **Layers (L0/L1/L2 all BUILT — §6; the nearest-node field is C.2, still to do).**
+- **Layers (L0/L1/L2 + the nearest-node field all BUILT — §6; C.2/C.2b done).**
   L0 geometry = carve the 64 nodes + their real connectivity. L1 coarse = 64-node
   all-pairs next-hop, edge weights from real wrapped BFS through geometry. L2 fine
   = **64 flow fields** (one per node, 1 B/cell, dist fits `uint8` since max 6-conn
@@ -456,7 +597,9 @@ memory `torus-nav-baking`. **Original design (owner + reference-audit):**
   descend that node's flow field. This is the reference's
   wished-for "64-anchor flow field" it couldn't afford in a 536 MB browser — we
   can (infinite RAM). Flee/scent = a **diffusion field** on the macro tick (like
-  `src/sim/fluid`, periodic on the torus), not pathfinding.
+  `src/sim/fluid`, periodic on the torus), not pathfinding — **BUILT 2026-07-28**
+  as `src/sim/diffusion.{h,cpp}` (increment D): `diffusion_step` (double-buffered,
+  toroidal, no-flux walls, evaporating) + `diffusion_gradient` (the flee vector).
 - **Multithreaded bake** (owner's golden rule, sharpened 2026-07-28 — **two
   regimes, don't conflate**): baking happens **only at loads** (every floor
   transition/elevator is a load-on-demand; the post-`samosbor` stitch; initial
@@ -469,9 +612,9 @@ memory `torus-nav-baking`. **Original design (owner + reference-audit):**
   exactly one thread). Geometry is a pure `fn(seed, number)`, so the whole bake is
   **memoizable to disk** (unlimited) and skipped on re-entry — something the
   browser reference could never do.
-- **Bake boundaries (two regimes)** *(design target — the call site is the "Wiring"
-  item above, not yet in `ensure_loaded`):* the **full** bake runs only at floor
-  load (`FloorStreamer::ensure_loaded`) and the post-`samosbor` stitch. Between them,
+- **Bake boundaries (two regimes)** *(the full bake is now wired into
+  `ensure_loaded` — C.2b):* the **full** bake runs only at floor load
+  (`FloorStreamer::ensure_loaded`) and the post-`samosbor` stitch. Between them,
   in-play destructibility gets a **dirty local re-bake** — patch only the mutated
   region, cheap and approximate, no freeze; accept-stale at the edges until the
   next full bake makes it exact ([performance.md](performance.md) §Two regimes).
@@ -481,16 +624,105 @@ memory `torus-nav-baking`. **Original design (owner + reference-audit):**
   `constexpr`, dependency-free). *(Fast-travel **elevator** hookup to the lattice
   — teleport between unlocked nodes — is still a standing follow-up, unbuilt.)*
 
-### #12 — Utility-AI for embodied NPCs
+### #12 — Utility-AI for embodied NPCs (`src/game/ai.{h,cpp}`, [ai.md](ai.md))
 13 intents scored 0–100, argmax + hysteresis, **identity-hash stagger** (zero
-per-NPC scheduling RAM). This is what finally makes the **visible crowd move**
-(wander, flee, seek). Needs #11.
+per-NPC scheduling RAM), steering the **baked** nav — this is what finally makes
+the **visible crowd move** (wander, flee, seek). Runs only on the embodied slice
+of the live floor; the cold pool stays the macro tick's job. Split into three
+verified increments:
+
+- **#12a — Needs layer (DONE 2026-07-29).** ✔ `src/game/ai.{h,cpp}`: a SoA `Needs`
+  ECS component — `float[kNeedCount]` of 0..100 drives (food/water/sleep
+  **reserves** that decay toward crisis; pee/poo **pressures** that rise toward
+  failure) plus two `pending` digestion pools — advanced by one linear
+  `needs_step(reg, pool, dt)` sweep over the packed column (O(n), no per-object
+  dispatch). Reserves decay unconditionally, each **attribute-slowed** by the
+  reference formula `rate /= (1 + 0.1·stat)` (STR→food, AGI→water, INT→sleep, read
+  from the record's generic 8-slot attr block); pressures rise **only** by
+  digesting their pending pool (fresh guts hold flat until the eat intent fills
+  them). `seed_needs(needs, id)` deterministically seeds a fresh body from its
+  stable id (stateless `hash3`, per-need bands) — reproducible embodiment, zero
+  stored RNG. Every rate/range/model **ported verbatim from `needs.ts`**.
+  `test_needs_decay`. Needs materialise on embodiment and fold with it (like every
+  transient); restore-on-use is an intent *effect*, so it lands with #12b.
+- **#12b — pure scorer + selection FSM (DONE).** ✔ `score_intents(perception, needs,
+  out[13])`, one additive scorer per intent (`safety · combat · flee · toilet · drink
+  · eat · sleep · work · heal · social · patrol · faction_assault · wander`), each
+  clamped 0..100 — a pure, stateless function (no cross-talk) reading a `Perception`
+  snapshot; every input the engine can't yet supply sits at 0/none/−1 so its term
+  contributes 0 and the live ranking matches the reference exactly. Then
+  `select_intent(scores, current)`: argmax with **hysteresis** — switch-margin 7,
+  emergency override 58 for safety/flee/combat/heal, growing stickiness +5→+12 (fed
+  via `Perception.stickinessAmount`). Reads the #10d faction matrix
+  (`faction_assault`) and `rel_` edges (`social`). Frozen per-intent constants
+  re-extracted verbatim. `test_scorer` + `test_selection`.
+- **#12c — stagger + steering + wiring (DONE 2026-07-29).** ✔ `ai_step(reg, pool,
+  danger, grid, now, dt)`: iterates the live AI set, **skips camera-holders** (the
+  player), and per agent either re-plans or coasts against its `AiBrain.nextDecisionAt`
+  deadline — a **per-identity period** (1.5–4.0 s) from the stateless `channel_seed`
+  FNV-1a fold, so the crowd re-plans off-lockstep with only the one deadline float
+  (no wheel/queue). Steering writes **horizontal `Velocity`** straight into physics
+  (plain NPCs have no `Controller`/`CameraTag` — that's the player's input seam):
+  **flee** heads down `−diffusion_gradient(danger)`, every other intent roams a
+  deterministic per-agent `wander_heading`; `v.z` left to gravity. `embody()` attaches
+  `Needs`+`AiBrain`; the fixed-step loop runs `needs_step`→`ai_step`→`controller_step`
+  →`physics_step` with a monotonic `simNow`. `test_ai_step`. **Deferred:** full
+  `route_step` goal-seeking (fine flow fields target elevated lattice nodes a
+  gravity-bound walker can't reach) — lands with #13's reachable target cells.
 
 ### #13 — Content tables (`item_table` + `mob_table`)
 POD, data-driven ([items.md](items.md), [monsters.md](monsters.md)). Ref scale:
-~434 items (POD + tag bitmask + use-effect enum), ~90 monster kinds (aiFlags
-union), loot (spawnW + value-gate + depth caps), economy bands E0–E4. Mobs are
-**not** in `NpcPool` — they spawn per-floor from the mob table and vanish.
+~444 items (POD + tag bitmask + use-effect enum), **69** monster kinds (52-flag
+`aiFlags` union), loot (spawnW + value-gate + depth caps), economy bands E0–E4.
+Mobs are **not** in `NpcPool` — they spawn per-floor from the mob table and vanish.
+Decomposed into **#13a** item_table → **#13b** mob_table → **#13c** loot tables →
+**#13d** per-floor spawning → **#13e** use-effects + `route_step` goal steering.
+
+- **#13a item_table — DONE** ([items.md](items.md), `src/game/item_table.{h,cpp}`,
+  `test_item_table`). POD `ItemDef` (type/value/spawnW/stack/durability/`resist[5]`/
+  `tags` bitmask/science/contraband/deceptive/`UseEffect`) + `ItemType`/`DamageType`/
+  `ItemTag` enums + a representative 35-item catalog (array-index-is-id, 0 = none) +
+  `item_def(id)` / `item_id(name)` lookups + `apply_use_effect(needs, hp, maxHp,
+  def)` — which **closes the #12a digestion loop** (baked pending-pool deltas feed
+  `needs_step`). `use` closures re-encoded as flat baked deltas; weapon *combat*
+  stats deferred to a separate id-keyed registry with combat. `dPsi` stored,
+  not applied (no psi stat — stubbed-input stance). Reference schemas for #13c/
+  #13d (loot mechanisms, design-vs-procedural spawn formulas — the §4 V-shape
+  count/tier CONFIRMED as the *design* path) are extracted and in the session
+  transcript.
+
+- **#13b mob_table — DONE** ([monsters.md](monsters.md), `src/game/mob_table.{h,cpp}`,
+  `test_mob_table`). POD `MobDef` (name/hp/dmg/speed/attackRate/ranged/projSpeed/
+  `projType`/`aiFlags`/spawnW/minSamosbor/rare) + `MobAiFlag` bitmask (the ~52-flag
+  reference `aiFlags` union **compressed** into 18 structural behaviour families —
+  a flag exists once a consuming system reads it) + `ProjType` + a representative
+  **33-kind** catalog spanning every archetype (array-index-is-kind, **no** 0
+  sentinel — kind 0 is a real mob) + bounds-tolerant `mob_def(kind)` / `mob_kind
+  (name)` mirroring `item_def` + inline per-level scaling (`mob_scaled_hp/dmg/speed`,
+  the reference `rpg.ts` +12%/+10%/+2%-per-level curve, `Math.round`, no `<cmath>`).
+  Stats ported verbatim from `../gigahrush/src/entities/*.ts`; spawnW/rarity from
+  `monster_ecology.ts`. Table invariants asserted (`ranged ⇔ projSpeed>0`,
+  `speed==0 ⇒ AiRooted`). Mobs remain templates — #13d spawns per-floor ECS
+  entities (scaled by level) that vanish on de-embodiment.
+
+- **#13c loot tables — DONE** ([items.md](items.md), [monsters.md](monsters.md),
+  `src/game/loot_table.{h,cpp}`, `test_loot_table`). Two death-drop mechanisms
+  ported from `monster_ecology.ts`+`procedural_loot.ts`, keyed by `MobKind` into
+  a parallel `MobLoot` table: **`rareDrops`** (first-hit-single — walk in order,
+  first passing `chance` drops one item, stop; player-kill-gated) present on every
+  kind, and **`lootTable`** (independent per-entry rolls, uniform `[min,max]`
+  count, shuffle + **cap 3**; any death) on the 3 reference kinds (gnome/zombie/
+  `betonnik`←betonoed). `roll_mob_loot(kind, seed, killerIsPlayer)` → fixed-cap
+  (`≤4`) `LootResult`, **deterministic from seed, no stored RNG state** — a local
+  draw counter over giga's splitmix `hash2`/`rand01` ([core/rng.h]) SUBSTITUTES
+  the reference stateful xorshift32 (different program → no shared replay; port the
+  semantics, use the native mixer). Reference item keys outside this engine's item
+  span mapped to nearest id by role (documented per row). Verified statistically
+  (200k seeds/kind hit the reference chances; first-hit-single proven — never two
+  rares). The **value-gated procedural pool** (NPC/container/merchant loadouts —
+  `calculateMaxLootValue` soft-exp gate `weight*=exp(-(value/cap−1)·3)`, spawnW ×
+  type-mult × tag-mult) is a SEPARATE reference system, deferred to NPC/container
+  spawning (schema extracted, in transcript).
 
 ### Standing follow-ups (fold in when the relevant increment lands)
 - **`floor_spec_for()` is currently monotonic (`floor % 7/5/3` pattern) and takes
@@ -500,10 +732,14 @@ union), loot (spawnW + value-gate + depth caps), economy bands E0–E4. Mobs are
   (blood/scent fluid) is a *separate* runtime thing from the danger rating;
   **samosbor** = timed floor-wide maze-restructure event (7 theme variants, cooldown
   ~inverse to depth) + an L4D-style director with an anti-swamp valve.
-- **NPCs currently stand still** — this is expected: no AI/macro-tick yet. Life
-  arrives with #10 (cold pop) + #11→#12 (embodied movement). If the owner wants
-  motion sooner, a minimal real `wander` locomotion slice (identity-hash stagger +
-  physics collision) can jump the queue as the foundation #12 later drives.
+- **Embodied NPCs now move** — the **macro tick (#10)**, the **nav/flee bakes
+  (#11)**, and the **full brain (#12a needs + #12b scorer/FSM + #12c stagger/steering
+  driver)** are built: on the live floor each body scores 13 intents, commits one
+  with hysteresis, and steers by the flee field (flee) or a per-agent wander (all
+  else), writing horizontal `Velocity` into physics. Off-screen life advances on the
+  macro clock. **What's still flat:** intents have no *specific* destinations yet
+  (eat/sleep/toilet/combat all fall through to wander) — goal-directed `route_step`
+  steering lights up once **#13** content gives them reachable target cells.
 
 ---
 
@@ -607,6 +843,7 @@ files on the macOS host: `gigahrush2-architecture.md`,
 `floor-module-architecture.md` (incl. the V-shape danger formulas + elevator note),
 `population-roadmap.md` (the #6–#13 ledger), `player-is-alife-record.md`,
 `build-constraints.md`, `torus-nav-baking.md` (the full nav-bake design + the
-built L0/L1/L2 API + the connectivity caveat). If you are a fresh agent without
-that memory, **this file plus AGENTS.md + ARCHITECTURE.md are sufficient** to
-continue.
+built L0/L1/L2 + C.2/C.2b API, the diffusion field, and the connectivity caveat).
+If you are a fresh agent without that memory, **this file plus AGENTS.md +
+ARCHITECTURE.md are sufficient** to continue — and for the two newest subsystems,
+their own docs [nav.md](nav.md) and [diffusion.md](diffusion.md).

@@ -55,11 +55,14 @@ floor** (like the reference's fast-elevator cabins), so a player always knows
 where the hubs are, and fast-travel between the same node on different floors is
 positionally stable.
 
-The same 64 nodes are **also the coarse graph for navigation.** The lattice is a
-cyclic `(Z/4)³` torus graph (each node has 6 wrapped neighbours), which is exactly
-what lets baked pathfinding avoid the reference's spanning-tree "seam" bug on the
-3-torus — a tree cut over a torus produces 240-step antipode detours. See the nav
-bake design in `master_prompt.md` §7 (#11) / agent memory `torus-nav-baking`.
+The same 64 nodes are **also the coarse graph for navigation** — and that half is
+**built** ([nav.md](nav.md)). The lattice is a cyclic `(Z/4)³` torus graph (each
+node has 6 wrapped neighbours), which is exactly what lets the baked pathfinding
+avoid the reference's spanning-tree "seam" bug on the 3-torus — a tree cut over a
+torus produces 240-step antipode detours. The bake (coarse graph + 64 flow fields
++ `route_step`) already runs on every floor load; only the *fast-travel teleport*
+between nodes (this section) is still unbuilt. Full design + history:
+[nav.md](nav.md), `master_prompt.md` §7 (#11), agent memory `torus-nav-baking`.
 
 ## Transition mechanics
 
@@ -85,10 +88,11 @@ bake design in `master_prompt.md` §7 (#11) / agent memory `torus-nav-baking`.
   and whether the set persists across a `samosbor` world-wipe.
 - Gravity/rule changes on arrival ([gravity.md](gravity.md),
   [floors.md](floors.md) rule-set).
-- The **baked navigation** over the lattice (`master_prompt.md` §7 #11).
+- The **fast-travel teleport** itself (node → unlocked `(number, node)`). Note the
+  **baked navigation** over the same lattice is already done ([nav.md](nav.md)).
 
 ## Connections
 
-Drives navigation over [world.md](world.md); resolves through the
-[floors.md](floors.md) registry. Moves entities' `Transform::layer`
-([ecs.md](ecs.md)).
+Shares its 64-node lattice with the baked [nav.md](nav.md) coarse graph; moves
+along [world.md](world.md) `W`; resolves through the [floors.md](floors.md)
+registry. Moves entities' `Transform::layer` ([ecs.md](ecs.md)).

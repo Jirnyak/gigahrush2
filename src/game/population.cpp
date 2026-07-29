@@ -108,11 +108,15 @@ NpcId seed_floor_from_spec(NpcPool& pool, int floor, const FloorSpec& spec,
         pool.cy(id) = static_cast<std::uint8_t>(ry * kRoomStride + oy);
         pool.cz(id) = static_cast<std::uint8_t>(kGroundZ);
 
+<<<<<<< HEAD
         // The label is signed end to end: `floor` is an int (FloorRegistry's range is
         // kMinFloor -127 .. kMaxFloor +127) and the column is std::int16_t, so a
         // descending floor round-trips. It used to arrive here as std::uint16_t, i.e.
         // floor -50 already wrecked into 65486 before the store.
-        pool.floor(id) = static_cast<std::int16_t>(floor);
+        pool.set_floor(id, static_cast<std::int16_t>(floor));
+=======
+        pool.set_floor(id, floor);
+>>>>>>> origin/nav-routing-diffusion
 
         // Demographics: age from the spec window, sex, height from age.
         std::uint8_t age =

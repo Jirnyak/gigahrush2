@@ -1,6 +1,7 @@
 #include "game/embody.h"
 
 #include "game/faction.h"
+#include "game/ai.h" // Needs + AiBrain — the embodied utility-AI transient state
 
 namespace giga::game {
 
@@ -48,6 +49,17 @@ Entity embody(Registry& reg, NpcPool& pool, NpcId id, LayerId layer) {
     // (the body pass reads it; the sim never does), so the whole embodied crowd
     // is visible out of the box.
     reg.emplace<Renderable>(e, Renderable{faction_color(pool.faction(id), id)});
+
+    // Utility-AI transient state ([ai.md]): 0..100 needs seeded deterministically
+    // from the stable id, and an empty hysteresis/stagger brain. Both materialise
+    // on embodiment and fold away with the entity, like Transform/Velocity —
+    // hp/inventory stay canonical in the pool row ([npcs.md]). The player gets
+    // them too (harmless: ai_step skips camera-holders), so a body-swap needs no
+    // special case — the new body simply starts with a fresh, seeded set of needs.
+    Needs needs;
+    seed_needs(needs, id);
+    reg.emplace<Needs>(e, needs);
+    reg.emplace<AiBrain>(e, AiBrain{});
 
     pool.set_embodied(id, true);
     return e;

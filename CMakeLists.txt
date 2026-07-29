@@ -290,4 +290,18 @@ if(GIGA_BUILD_TESTS)
     add_executable(sim_bench tests/sim_bench.cpp)
     target_link_libraries(sim_bench PRIVATE giga_game Threads::Threads)
     giga_target_flags(sim_bench OFF)
+
+    # Macro-society benchmark: advance the FULL 2^20 population one coarse tick at a
+    # time and report ms/tick. Like sim_bench an executable, not a ctest -- it is a
+    # measurement tool, and a benchmark that fails the build on a slow machine is a
+    # benchmark nobody runs.
+    #
+    # Uses giga_target_flags() rather than the branch raw if(NOT MSVC)
+    # target_compile_options: the helper is the one place that knows this project
+    # cannot use -fno-exceptions on MSVC (the STL is unsupported under
+    # _HAS_EXCEPTIONS=0), so hand-rolling the flags per target is how that deviation
+    # gets forgotten.
+    add_executable(macro_bench tests/macro_bench.cpp)
+    target_link_libraries(macro_bench PRIVATE giga_game)
+    giga_target_flags(macro_bench OFF)
 endif()

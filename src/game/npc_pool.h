@@ -56,6 +56,15 @@ static_assert(kNpcActiveTarget < kNpcPoolSize,
 using NpcId = std::uint32_t;
 inline constexpr NpcId kInvalidNpc = 0xFFFFFFFFu;
 
+// Sentinel floor label meaning "not currently on any floor": a record between
+// spawn() and its first set_floor(), or a killed one. Never a real floor number,
+// so it indexes no bucket in the per-floor index below.
+// "on no floor": a spawned-but-unplaced record, or a corpse. INT16_MIN and not the
+// branch 0xFFFF, because labels are SIGNED and 0xFFFF read back as int16 is -1 --
+// which is a LEGAL floor (FloorRegistry allows -127..127). A sentinel that collides
+// with real data is not a sentinel.
+inline constexpr std::int16_t kNoFloorLabel = -32768;
+
 inline constexpr int kNameLen = 24;   // inline fixed-width, no heap strings
 inline constexpr int kRelSlots = 16;  // fixed relationship capacity per NPC
 
@@ -105,6 +114,18 @@ struct Needs {
 };
 static_assert(sizeof(Needs) == 36, "Needs must stay a tight 36-byte row");
 static_assert(alignof(Needs) == 4);
+
+// Semantics of Relationship::affinity — the per-NPC social graph ([macrosim.md]
+// #10d-ii), which the macro social pass grows and the embodied utility-AI
+// ([ai.md] #12) reads. Ported from the reference's demos social store: a signed
+// valence clamped to [-127,127], classified hostile at or below -64 and friendly
+// at or above 64. This is a SEPARATE store from the faction matrix (faction.h),
+// which has its own narrower ±50 thresholds — do not conflate the two. There is
+// no affinity sentinel: an empty edge is `target == kInvalidNpc`, so -128 is free.
+inline constexpr std::int16_t kRelAffinityMin = -127;
+inline constexpr std::int16_t kRelAffinityMax =  127;
+inline constexpr std::int16_t kRelHostile     =  -64;
+inline constexpr std::int16_t kRelFriendly    =   64;
 
 // Per-NPC flag bits packed into one byte.
 enum NpcFlag : std::uint8_t {
@@ -252,6 +273,7 @@ public:
     std::uint16_t& faction(NpcId id) { return faction_[id]; }
     std::int16_t&  hp(NpcId id)      { return hp_[id]; }
     std::int16_t&  max_hp(NpcId id)  { return maxHp_[id]; }
+
     // SIGNED, and that is load-bearing: the building descends, so the demo stack's
     // labels are {0,1,2,-8,-14,-26,-36,-50,14,30} and FloorRegistry's legal range is
     // kMinFloor -127 .. kMaxFloor +127. As std::uint16_t this column stored floor -50
@@ -260,10 +282,36 @@ public:
     // pool.floor(id), replacing FloorStreamer's fixed [firstId, count) roster) is
     // exactly the reader that would have hit it. int16_t, not int32_t, so the column
     // stays 2 B/row — the fix costs nothing.
-    std::int16_t&  floor(NpcId id)   { return floor_[id]; }
+    // READ-ONLY on purpose. main originally exposed `std::int16_t& floor(NpcId)` to
+    // fix the signedness below, and the branch added the per-floor bucket index that a
+    // writable reference silently desyncs. Both halves were right: the column stays
+    // SIGNED, and every write goes through set_floor() so the index cannot rot. The
+    // read accessor lives just below, next to set_floor.
+
     std::uint8_t&  cx(NpcId id)      { return cx_[id]; }
     std::uint8_t&  cy(NpcId id)      { return cy_[id]; }
     std::uint8_t&  cz(NpcId id)      { return cz_[id]; }
+
+    // Floor LABEL (logical, not a storage slot — floors.md). READ with floor();
+    // WRITE with set_floor(), which also maintains the per-floor bucket index so a
+    // migration (a change of label) is visible to whoever enumerates a floor's
+    // residents. Direct assignment is intentionally not offered — it would desync
+    // the index.
+    // SIGNED, and that is load-bearing: the building DESCENDS, so the demo stack
+    // labels are {0,1,2,-8,-14,-26,-36,-50,14,30} and FloorRegistry legal range is
+    // kMinFloor -127 .. kMaxFloor +127. Returned as std::uint16_t this read floor -50
+    // back as 65486 and floor -127 as 65409. Nothing in src/ read it until the
+    // per-floor bucket index arrived, which is exactly the consumer that would have
+    // hit it. int16_t, not int32_t, so the column stays 2 B/row -- the fix is free.
+    std::int16_t floor(NpcId id) const { return floor_[id]; }
+    void set_floor(NpcId id, std::int16_t label);
+
+    // Live roster of a floor: the ids CURRENTLY labelled `label`, alive only
+    // (spawn/kill/set_floor keep it tight). This is what floor streaming embodies
+    // when a floor loads ([floors.md]); a floor nobody is on returns a stable
+    // shared empty vector. Order is unspecified — swap-remove churns it — so
+    // callers must treat it as a set, not a sequence.
+    const std::vector<NpcId>& floor_bucket(std::int16_t label) const;
 
     // Character-sheet fields (same struct the future creation screen writes to).
     // age/sex/level/attrs are LIVE columns: sized by spawn(), so a reference from one
@@ -320,8 +368,34 @@ private:
     std::vector<std::array<char, kNameLen>> surname_;   // DEMAND
     std::vector<std::array<Relationship, kRelSlots>> rel_; // DEMAND — 128 B/row
     std::vector<Inventory> inv_;
+
     std::vector<Needs> needs_;   // survival clock ([needs.h]); 36 B/row
     std::uint32_t alive_ = 0;
+
+
+    // Per-floor inverted index over floor_: the live roster of ids on each floor.
+    // slotInBucket_[id] is id's position inside its bucket, so set_floor()/kill() splice
+    // in O(1) via swap-remove instead of a linear roster scan on every cold move, which
+    // is the hot spot macrosim.md calls out. DERIVED state (rebuildable from floor_ plus
+    // the alive bit), so it is not part of the serialized rectangle; init() clears it and
+    // spawn/set_floor/kill keep it.
+    //
+    // INDEXED BY (label - kMinFloor), NOT by the raw label. The branch version indexed
+    // floorBuckets_[label] directly, which only worked because its labels were UNSIGNED:
+    // floor -50 arrived as 65486, so the top-level index quietly resized to 65487
+    // vectors-of-vectors, and a genuinely signed -50 would have been a negative
+    // subscript. Normalising makes the whole legal range exactly kFloorSlots = 255
+    // buckets and costs one add. [floor_registry.h]
+    std::vector<std::vector<NpcId>> floorBuckets_;
+    std::vector<std::uint32_t> slotInBucket_;
+
+    // label -> bucket slot, or -1 for the sentinel / out of range.
+    static int bucket_slot(std::int16_t label) {
+        if (label == kNoFloorLabel) return -1;
+        const int i = static_cast<int>(label) - kMinFloor;
+        return (i >= 0 && i < kFloorSlots) ? i : -1;
+    }
+
 };
 
 } // namespace giga::game

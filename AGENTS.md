@@ -7,16 +7,21 @@
 > (floors, quests, NPCs, items, combat) is layered on top as **modules** and ECS
 > systems. Keep the engine core game-agnostic.
 >
-> **⚠ Output discipline — not a token budget.** Superseded 2026-07-28 by the
-> owner's standing mandate in [master_prompt.md](master_prompt.md) §1.4: *tokens
-> are unlimited — do not economize.* What stays banned is churn, not depth: do
-> not re-read files already in context, restate large blocks, or emit change-log
-> prose; stop exploring once you can act; prefer the smallest surgical edit that
-> solves the task. What is explicitly **not** capped: reading a doc the task
-> actually touches, research depth, subagent fan-out, and verification. Handing a
-> build, a launch, or a visual glance to the human is division of labour — they
-> own the runtime loop — not a saving measure.
-
+> **Tokens are unlimited - maximize; do NOT economize.** The owner standing mandate
+> ([master_prompt.md](master_prompt.md) SS1.4): pour everything into the result.
+> Explore deeply, read widely, fan out **many subagents** for read-only research and
+> parallel isolated work, and verify thoroughly - never cut a corner or skip a check
+> to save tokens. Spend freely on getting it *right*.
+>
+> What is explicitly **not** capped: reading a doc the task actually touches, research
+> depth, subagent fan-out, and verification.
+>
+> What stays banned is churn, not depth: do not re-read files already in context, do
+> not restate large blocks, do not emit change-log prose, stop exploring once you can
+> act, and still make the smallest *surgical* edit that solves the task - slow is fast,
+> a tight diff is easier to verify, not cheaper. Handing a build, a launch or a visual
+> glance to the human is division of labour - they own the runtime loop - not a saving
+> measure.
 ## Working Method — *slow is fast*
 
 Do migrations and large refactors **inline, in small steps, building green after

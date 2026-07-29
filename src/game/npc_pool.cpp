@@ -1,5 +1,7 @@
 #include "game/npc_pool.h"
 
+#include "game/floor_registry.h"   // kMinFloor / kFloorSlots for the bucket index
+
 #include <cstring>
 
 namespace giga::game {
@@ -80,6 +82,13 @@ void NpcPool::init() {
 
     count_ = 0;
     alive_ = 0;
+
+    // The per-floor index is DERIVED state, rebuilt from empty. Fixed at kFloorSlots
+    // (255) because that is the entire legal label range; slotInBucket_ is one wide
+    // column indexed by id.
+    floorBuckets_.assign(static_cast<std::size_t>(kFloorSlots),
+                         std::vector<NpcId>{});
+    slotInBucket_.assign(kNpcPoolSize, 0u);
 }
 
 void NpcPool::grow_live_columns(std::uint32_t rows) {
@@ -105,6 +114,10 @@ NpcId NpcPool::spawn() {
     // below count_ are never handed back out — new NPCs always bump the tail.)
     flags_[id] = NpcAlive;
     ++alive_;
+    // Not on any floor until set_floor() places it, so it sits in no bucket and the
+    // invariant (floor_[id] == label <-> id in bucket[label]) holds from birth. The
+    // zeroed tail would otherwise read floor 0, which is a REAL floor.
+    floor_[id] = kNoFloorLabel;
     return id;
 }
 
@@ -122,6 +135,48 @@ void NpcPool::kill(NpcId id) {
     flags_[id] &=
         static_cast<std::uint8_t>(~(NpcAlive | NpcEmbodied | NpcPlayer));
     if (alive_) --alive_;
+    // ...and a corpse is on no floor: drop it from its bucket so a floor roster stays a
+    // clean list of the living, which is what streaming enumerates.
+    set_floor(id, kNoFloorLabel);
+}
+
+// O(1) relabel with the index kept in step. This is the operation macro_sim migration
+// needs: a journey landing is a label change, and the reference implementation's linear
+// roster scan on every cold move is the hot spot macrosim.md calls out.
+void NpcPool::set_floor(NpcId id, std::int16_t label) {
+    if (!valid(id)) return;
+    const std::int16_t old = floor_[id];
+    if (old == label) return;
+
+    // Splice out of the old bucket in O(1): overwrite this id's slot with the bucket's
+    // last id, repoint that id's recorded slot, then pop the tail.
+    const int oldSlot = bucket_slot(old);
+    if (oldSlot >= 0) {
+        std::vector<NpcId>& b = floorBuckets_[static_cast<std::size_t>(oldSlot)];
+        const std::uint32_t sl = slotInBucket_[id];
+        if (sl < b.size()) {
+            const NpcId moved = b.back();
+            b[sl] = moved;
+            slotInBucket_[moved] = sl;
+            b.pop_back();
+        }
+    }
+
+    floor_[id] = label;
+
+    const int newSlot = bucket_slot(label);
+    if (newSlot >= 0) {
+        std::vector<NpcId>& b = floorBuckets_[static_cast<std::size_t>(newSlot)];
+        slotInBucket_[id] = static_cast<std::uint32_t>(b.size());
+        b.push_back(id);
+    }
+}
+
+const std::vector<NpcId>& NpcPool::floor_bucket(std::int16_t label) const {
+    static const std::vector<NpcId> kEmpty;
+    const int slot = bucket_slot(label);
+    if (slot < 0) return kEmpty;
+    return floorBuckets_[static_cast<std::size_t>(slot)];
 }
 
 std::array<Relationship, kRelSlots>& NpcPool::relations(NpcId id) {

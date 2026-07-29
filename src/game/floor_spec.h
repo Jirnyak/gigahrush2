@@ -48,11 +48,52 @@ struct FloorSpec {
 // catalog (stable for the process lifetime).
 const FloorSpec& floor_spec(FloorKind kind);
 
-// Pick a rule-set for a floor NUMBER. Deterministic and reproducible so a stack
-// of floors gets a varied-but-stable character without a hand-authored row per
-// number: mostly populated floors, the odd dangerous one. Floor number is the
-// mutable in-game label, not a storage slot ([floors.md]); this is a stopgap
-// until the real per-module registry assigns specs explicitly.
-const FloorSpec& floor_spec_for(std::uint16_t floor);
+// Pick a rule-set for a SIGNED floor NUMBER (0 = hub; + up / − down). The KIND
+// half of the V-shape ([floors.md] §danger, master_prompt §4): symmetric about
+// the hub (a floor and its mirror share a character), the hub always safe, the
+// deep extremes trending derelict. Deterministic — reproduces exactly across
+// runs. Floor number is the mutable in-game label, not a storage slot; a stopgap
+// until the per-module registry assigns specs explicitly. (danger / count / tier
+// are the OTHER half — floor_danger / floor_mob_count / floor_mob_tier below.)
+const FloorSpec& floor_spec_for(int floor);
+
+// ---------------------------------------------------------------------------
+// The V-shape spawn math (master_prompt §4, memory `floor-module-architecture`).
+//
+// Monster COUNT and TIER rise with DEPTH away from the hub and with a per-floor
+// DANGER rating; ported VERBATIM from the reference population model
+// (`population_profiles.ts` + `procedural_floors.ts`, extracted 2026-07-29). All
+// pure functions of the signed floor number + the floor's character (its
+// FloorSpec), so a whole stack gets a faithful danger gradient with NO
+// hand-authored per-floor table — the universal, data-oriented path.
+// ---------------------------------------------------------------------------
+
+// The per-floor LIVE monster budget — this engine's analog of the reference's
+// DEFAULT_ACTIVE_ACTOR_SOFT_LIMIT (4096, sized for the whole active region),
+// rescaled for a SINGLE live floor's O(n) tick ([performance.md]). Data — retune.
+inline constexpr int kMobSoftCap = 384;
+
+// Depth scalar 0..1 for a signed floor number (0 = hub). The reference keys off
+// route-z (roof +50 … hub 0 … void −50) at ~2 z per floor, so |floor|/25 ==
+// |z|/50 (reference populationDepth01). Drives both share (count) and tier.
+float floor_depth01(int floor);
+
+// Danger rating 1..5, ported from the procedural routeDangerScore: a V about the
+// hub, ASYMMETRIC — descending (−) is deadlier than ascending (+). Feeds count
+// (as a multiplier) and tier (as an additive term + a floor).
+int floor_danger(int floor);
+
+// Target LIVE monster count for a floor of character `spec`: the confirmed
+// V-shape — kMobSoftCap · share(depth) · dangerTerm · kindMult, where share is
+// the reference's stretched-exponential monster share, dangerTerm = 1+0.06·
+// (danger−1), and kindMult = 0.7+hostility folds the floor's own character (safe
+// Residential sparse → deadly Derelict dense). Clamped to [0, kMobSoftCap].
+int floor_mob_count(int floor, const FloorSpec& spec);
+
+// Monster tier/level 1..12 for a floor: clamp(round(1 + 8·depth + 0.55·
+// (danger−1)), 1, 12) then floored at `danger` (reference populationLevelForRouteZ
+// + the design max(danger, baseLevel)). Scales a mob's base stats through the
+// mob_scaled_* helpers ([monsters.md]).
+int floor_mob_tier(int floor);
 
 } // namespace giga::game

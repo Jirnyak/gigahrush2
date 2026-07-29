@@ -35,16 +35,19 @@ built.
 | Controller | [controller.md](controller.md) | Input intent → velocity, walk vs. fly | built |
 | Camera | [camera.md](camera.md) | View/proj derived from the `CameraTag` entity | built |
 | Fluid | [fluid.md](fluid.md) | Deterministic mass-conserving cellular liquid | built |
+| Diffusion | [diffusion.md](diffusion.md) | Danger/scent field — spreads & fades, flee gradient | built |
+| Navigation | [nav.md](nav.md) | Baked 4×4×4 lattice, coarse graph + 64 flow fields, `route_step`, disk cache | built (no consumer yet) |
 | Rendering | [render.md](render.md) | Vulkan backend modules + instanced cube pass | built |
 | Performance | [performance.md](performance.md) | Resource model, dense-over-sparse, bake-at-load, O(n) tick | principle |
 | Worldgen | [worldgen.md](worldgen.md) | Demo world modules: 3D maze + toroidal floor stack | built |
 | Floors | [floors.md](floors.md) | Floor **modules**, number↔slot indirection, rule-sets, one-live-floor streaming | built |
 | Elevators | [elevators.md](elevators.md) | Adjacent travel (load-on-demand) + planned 4×4×4 fast-travel lattice (= nav coarse-graph) | adjacent built |
-| Monsters | [monsters.md](monsters.md) | Global monster tables + per-floor weights | design |
-| Items / loot | [items.md](items.md) | Global item catalog + loot tables | design |
+| Monsters | [monsters.md](monsters.md) | Global monster catalog (POD defs + aiFlags + tier scaling) + per-floor weights | catalog built (#13b); spawning pending |
+| Items / loot | [items.md](items.md) | Global item catalog (POD defs + use-effects) + monster death-drop loot tables | catalog + loot tables built (#13a/#13c); procedural pool pending |
 | NPCs | [npcs.md](npcs.md) | Macro population + local embodiment; player is an embodied record | pool + embodiment + streaming |
+| NPC AI | [ai.md](ai.md) | Utility brain: needs, 13-intent scorer + hysteresis, flee-field + wander steering, identity-stagger driver | needs (#12a) + scorer/selection (#12b) + stagger/steering/loop driver (#12c) built; crowd moves. `route_step` goal-seeking waits on #13 |
 | Events | [events.md](events.md) | Decoupled gameplay event bus (transient ring + optional log) | built |
-| Macrosim | [macrosim.md](macrosim.md) | Background global population/faction simulation | design |
+| Macrosim | [macrosim.md](macrosim.md) | Background global population / faction / social simulation | core built (headless); app-loop wiring pending |
 
 ## What the core is
 
@@ -100,11 +103,14 @@ the pause menu (Resume / Quit).
 ## Layout
 
 ```
-src/core     dependency-free math + toroidal wrap helpers
-src/world    macro grid, sub-voxel masks, typed fields, gravity, level stack
+src/core     dependency-free math + toroidal wrap helpers + bake-time job system
+src/world    macro grid, sub-voxel masks, typed fields, gravity, level stack,
+             the 4×4×4 nav lattice + baked navigation (nav)
 src/ecs      universal components + EnTT registry alias
-src/sim      physics, controller, camera, fluid systems
-src/game     game layer: NPC pool + embodiment, floor modules, streaming, elevator
+src/sim      physics, controller, camera, fluid, diffusion (danger/scent) systems
+src/game     game layer: NPC pool + embodiment, floor modules, streaming, elevator,
+             nav disk cache, macro society tick (demographics + migration +
+             faction + social), utility-AI needs + intent scorer
 src/render   Vulkan device/swapchain/renderer, cube pass + NPC body pass, ImGui layer
 src/input    SDL3 -> ECS input bridge
 src/app      window + main loop + demo worldgen
@@ -116,6 +122,11 @@ The core simulation (`src/world`, `src/sim`, `src/ecs`) links as `giga_core`
 with **no** SDL/Vulkan/ImGui dependency, so it is testable headless and
 embeddable in a different host. The gameplay macro-systems — NPC pool +
 embodiment, inventory, event bus, the floor modules (per-floor generator,
-`FloorRegistry`, one-live-floor streaming, elevator), and — pending — the mob
-table — live in `src/game` as `giga_game`, which links `giga_core` and is
-likewise headless-testable (`game_test`).
+`FloorRegistry`, one-live-floor streaming, elevator), the background **macro
+society tick** (columnar demographics, inter-floor migration, a faction matrix +
+social graph), and the embodied **utility-AI** (needs + a pure 13-intent scorer
+with argmax/hysteresis, and an identity-staggered driver that steers the crowd by
+the flee field + per-agent wander; goal-directed `route_step` waits on the mob /
+item tables) — live in `src/game` as
+`giga_game`, which links `giga_core` and is likewise headless-testable
+(`game_test`).

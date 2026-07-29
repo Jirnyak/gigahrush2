@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "core/math.h" // ivec3 (route_step cell coordinates)
 #include "world/lattice.h"
 #include "world/types.h"
 
@@ -81,12 +82,23 @@ inline constexpr int kNavDir[6][3] = {
 inline constexpr std::uint8_t kFlowArrived = 6;   // this cell IS the node
 inline constexpr std::uint8_t kFlowNone = 0xFFu;  // wall, or unreachable void
 
-// The 64 baked flow fields. 64 * 128^3 * 1 B = 128 MiB, resident per live floor
-// — affordable by design (performance.md: RAM/disk are the generous budgets,
-// the CPU tick is the scarce one). This is exactly the reference's abandoned
-// "64-anchor packed flow fields", abandoned only for a browser's memory ceiling.
+// The 64 baked flow fields (128 MiB) plus a 2 MiB nearest-node field, ~130 MiB
+// resident per live floor — affordable by design (performance.md: RAM/disk are
+// the generous budgets, the CPU tick is the scarce one). This is exactly the
+// reference's abandoned "64-anchor packed flow fields", abandoned only for a
+// browser's memory ceiling.
 struct FineNav {
     std::vector<std::uint8_t> flow; // node-major: flow[node*kMacroCells + cell]
+
+    // Nearest-node field: for every cell, the lattice node whose wrapped-geodesic
+    // flood reached it first (its Voronoi anchor on the real geometry), or
+    // kFlowNone in solid / unreachable void. 128^3 * 1 B = 2 MiB. This is what
+    // lets an agent standing at ANY cell enter the route: its nearest anchor is
+    // the flow field to descend. Baked by one deterministic multi-source BFS in
+    // bake_fine, over the SAME walkability as the flow fields — so a cell's
+    // nearest anchor is always reachable from it, i.e. at(nearest_node(c), c) is
+    // never kFlowNone. Cell-indexed (NOT node-major): one entry per macro cell.
+    std::vector<std::uint8_t> nearest;
 
     // Flow byte at a cell for routing toward `node`. Coordinates are wrapped, so
     // callers can pass raw (possibly out-of-range) cell indices.
@@ -94,13 +106,40 @@ struct FineNav {
         return flow[static_cast<std::size_t>(node) * kMacroCells +
                     macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z))];
     }
+
+    // The nearest lattice node to a cell (its Voronoi anchor), or kFlowNone if the
+    // cell is solid / unreachable. Coordinates are wrapped.
+    std::uint8_t nearest_node(int x, int y, int z) const {
+        return nearest[macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z))];
+    }
 };
 
 // Bake all 64 flow fields from the floor geometry: one wrapped BFS per node,
 // parallel ACROSS nodes — each owns a disjoint 2M-cell slice, so the run is
 // race-free and bit-identical regardless of scheduling. Allocates ~128 MiB into
-// out.flow. Bake-time only (floor load / post-samosbor), never on the tick.
+// out.flow; then a single deterministic multi-source BFS fills the 2 MiB
+// out.nearest. Bake-time only (floor load / post-samosbor), never on the tick.
 void bake_fine(const MacroGrid& grid, FineNav& out);
+
+// --- Routing: enter the baked nav from any cell -----------------------------
+//
+// route_step is the O(1)/tick query the movement AI (#12) calls: "I am at cell
+// `from` and want to reach cell `to` — which of the 6 unit steps do I take now?"
+// It composes the two baked layers: the destination's nearest ANCHOR (via the
+// nearest-node field) selects which of the 64 flow fields to descend, and the
+// coarse all-pairs table answers reachability in O(1). The returned byte is a
+// step dir 0..5 (index into kNavDir), kFlowArrived once `from` sits on the target
+// anchor's own cell, or kFlowNone when `to` is unreachable from `from` (different
+// components, or either endpoint inside solid).
+//
+// The anchor residual: because only the 64 fixed anchors carry flow fields, a
+// `to` that is not itself an anchor cell is reached only up to its nearest anchor
+// (<= one lattice half-spacing, 16 cells away); the final short leg is the
+// caller's local approach. Targets that matter for nav (hubs, POIs) can sit ON
+// anchors. Cells are macro-grid coordinates (wrapped internally), not world-space
+// metres — the caller converts a Transform.pos with floor()/kCellSize first.
+std::uint8_t route_step(const CoarseGraph& coarse, const FineNav& fine,
+                        ivec3 from, ivec3 to);
 
 } // namespace nav
 } // namespace giga
