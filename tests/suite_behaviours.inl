@@ -58,6 +58,7 @@ inline Entity spawn_at(Registry& reg, LayerId layer, MobKind k, const vec3& pos)
     reg.emplace<Transform>(e, tr);
     reg.emplace<Velocity>(e, Velocity{});
     reg.emplace<MobRef>(e, MobRef{static_cast<std::uint8_t>(k), 1, 100, 100});
+    reg.emplace<MobCombat>(e, MobCombat{0, 0});
     return e;
 }
 
@@ -1294,7 +1295,7 @@ static void test_behaviours_all() {
     // ---- 16. Combat Integration: FractureSprint burst damage multiplier -----
     {
         const vec3 playerPos{100.0f, 100.0f, 3.0f};
-        const vec3 mobPos{101.5f, 100.0f, 3.0f};
+        const vec3 mobPos{100.8f, 100.0f, 3.0f};
 
         const MobDef& def = kMobTable[static_cast<std::size_t>(MobKind::Treskotnik)];
         const float baseDmg = static_cast<float>(mob_hp_at_level(def.dmg, 1));
@@ -1374,7 +1375,7 @@ static void test_behaviours_all() {
             const Entity pEnt = spawn_viewer(regCover, layer, playerPos);
             regCover.emplace<MobRef>(pEnt, MobRef{0, 1, 1000, 1000});
 
-            const vec3 bracedPos{111.0f, 101.0f, 3.0f}; // cell (55, 50, 1), wall at (56, 50, 1)
+            const vec3 bracedPos{111.0f, 100.8f, 3.0f}; // cell (55, 50, 1), wall at (56, 50, 1)
             spawn_at(regCover, layer, MobKind::Rebar, bracedPos);
 
             std::uint32_t swings = mob_attack_step(regCover, grid, poolCover, busCover, layer, 0.008f, 0);
@@ -1395,7 +1396,7 @@ static void test_behaviours_all() {
             const Entity pEnt = spawn_viewer(regOpen, layer, playerPos);
             regOpen.emplace<MobRef>(pEnt, MobRef{0, 1, 1000, 1000});
 
-            const vec3 openPos{101.0f, 111.0f, 3.0f};
+            const vec3 openPos{101.0f, 110.8f, 3.0f};
             spawn_at(regOpen, layer, MobKind::Rebar, openPos);
 
             std::uint32_t swings = mob_attack_step(regOpen, grid, poolOpen, busOpen, layer, 0.008f, 0);
