@@ -5,14 +5,14 @@
 # GIGAH|RUSH 2 — 3D Deep Samosbor
 
 [![License](https://img.shields.io/badge/License-True%20People's%20v2.0-red?style=for-the-badge)](LICENSE.md)
-[![Engine](https://img.shields.io/badge/Engine-Unity-black?style=for-the-badge&logo=unity)]()
-[![Platform](https://img.shields.io/badge/Platform-PC%20%2F%20Linux-blue?style=for-the-badge&logo=steam)]()
-[![Open Source](https://img.shields.io/badge/Open%20Source-❤️%20Forever-brightgreen?style=for-the-badge)]()
-[![Stars](https://img.shields.io/github/stars/Jirnyak/gigahrush2?style=for-the-badge&color=gold)]()
+[![Engine](https://img.shields.io/badge/Engine-Custom%20C%2B%2B23%20%2F%20OpenGL-blue?style=for-the-badge&logo=cplusplus)]()
+[![Shaders](https://img.shields.io/badge/Shaders-GLSL-green?style=for-the-badge&logo=opengl)]()
+[![Build](https://img.shields.io/badge/Build-CMake-orange?style=for-the-badge&logo=cmake)]()
+[![Platform](https://img.shields.io/badge/Platform-PC%20%2F%20Linux-blue?style=for-the-badge)]()
 
-> **The sequel in full 3D — volumetric lighting, blast door physics, atmospheric contamination, and procedural horror.**
+> **The sequel in full 3D built on a custom C++ / OpenGL engine — volumetric lighting, GLSL shaders, interactive blast door physics, atmospheric contamination, and procedural concrete horror.**
 
-[🎮 Download](#) &nbsp;·&nbsp; [🐛 Report Bug](../../issues) &nbsp;·&nbsp; [🤝 Contribute](#)
+[🎮 Build & Play](#) &nbsp;·&nbsp; [🐛 Report Bug](../../issues) &nbsp;·&nbsp; [🤝 Contribute](#)
 
 </div>
 
