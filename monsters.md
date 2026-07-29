@@ -86,8 +86,16 @@ level) that vanish when the floor de-embodies.
 | Base spawn weights + rarity gate | Count / tier (depth + danger) |
 | aiFlags behaviour families | Optional floor-only nudges |
 
+## Loot on death (built, #13c)
+
+Each kind's death drops are **data**, in a parallel `MobLoot` table keyed by the
+same `MobKind` ([loot_table.h](src/game/loot_table.h), [items.md](items.md)):
+`rareDrops` (first-hit-single, player-kill-gated) + `lootTable` (independent
+rolls, cap 3, on three kinds). `roll_mob_loot(kind, seed, killerIsPlayer)` decides
+the drops deterministically; #13d spawns them as ground entities.
+
 ## Connections
 
-Drops loot from [items.md](items.md). Population governed by
-[macrosim.md](macrosim.md) / [npcs.md](npcs.md). Weight modifiers come from
-[floors.md](floors.md). Runs on [ecs.md](ecs.md) systems.
+Drops loot from [items.md](items.md) via [loot_table.h](src/game/loot_table.h).
+Population governed by [macrosim.md](macrosim.md) / [npcs.md](npcs.md). Weight
+modifiers come from [floors.md](floors.md). Runs on [ecs.md](ecs.md) systems.

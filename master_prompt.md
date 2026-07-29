@@ -682,6 +682,25 @@ Decomposed into **#13a** item_table → **#13b** mob_table → **#13c** loot tab
   `speed==0 ⇒ AiRooted`). Mobs remain templates — #13d spawns per-floor ECS
   entities (scaled by level) that vanish on de-embodiment.
 
+- **#13c loot tables — DONE** ([items.md](items.md), [monsters.md](monsters.md),
+  `src/game/loot_table.{h,cpp}`, `test_loot_table`). Two death-drop mechanisms
+  ported from `monster_ecology.ts`+`procedural_loot.ts`, keyed by `MobKind` into
+  a parallel `MobLoot` table: **`rareDrops`** (first-hit-single — walk in order,
+  first passing `chance` drops one item, stop; player-kill-gated) present on every
+  kind, and **`lootTable`** (independent per-entry rolls, uniform `[min,max]`
+  count, shuffle + **cap 3**; any death) on the 3 reference kinds (gnome/zombie/
+  `betonnik`←betonoed). `roll_mob_loot(kind, seed, killerIsPlayer)` → fixed-cap
+  (`≤4`) `LootResult`, **deterministic from seed, no stored RNG state** — a local
+  draw counter over giga's splitmix `hash2`/`rand01` ([core/rng.h]) SUBSTITUTES
+  the reference stateful xorshift32 (different program → no shared replay; port the
+  semantics, use the native mixer). Reference item keys outside this engine's item
+  span mapped to nearest id by role (documented per row). Verified statistically
+  (200k seeds/kind hit the reference chances; first-hit-single proven — never two
+  rares). The **value-gated procedural pool** (NPC/container/merchant loadouts —
+  `calculateMaxLootValue` soft-exp gate `weight*=exp(-(value/cap−1)·3)`, spawnW ×
+  type-mult × tag-mult) is a SEPARATE reference system, deferred to NPC/container
+  spawning (schema extracted, in transcript).
+
 ### Standing follow-ups (fold in when the relevant increment lands)
 - **`floor_spec_for()` is currently monotonic (`floor % 7/5/3` pattern) and takes
   `uint16_t`.** Retune to **signed int + V-shape** danger (§4) when the mob/danger

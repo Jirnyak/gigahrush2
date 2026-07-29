@@ -1,13 +1,16 @@
 # Items & Loot — Global item catalog & loot tables
 
-> **Status: item catalog built (#13a); loot tables pending (#13c).** Game layer
-> (`src/game/`, the `giga_game` library), on top of the inventory
-> ([inventory.h](src/game/inventory.h)) and the embodied needs ([ai.md](ai.md)).
+> **Status: item catalog + monster death-drop loot tables built (#13a/#13c);
+> value-gated procedural pool pending.** Game layer (`src/game/`, the `giga_game`
+> library), on top of the inventory ([inventory.h](src/game/inventory.h)) and the
+> embodied needs ([ai.md](ai.md)).
 >
 > - **Code:** [src/game/item_table.h](src/game/item_table.h) /
->   [.cpp](src/game/item_table.cpp)
-> - **Tests:** [tests/game_test.cpp](tests/game_test.cpp) `test_item_table`
->   (headless, links `giga_game` only)
+>   [.cpp](src/game/item_table.cpp) · loot:
+>   [src/game/loot_table.h](src/game/loot_table.h) /
+>   [.cpp](src/game/loot_table.cpp)
+> - **Tests:** [tests/game_test.cpp](tests/game_test.cpp) `test_item_table` +
+>   `test_loot_table` (headless, links `giga_game` only)
 
 Item definitions and loot tables are **global**, shared by every floor. Floors
 adjust drop likelihood through their rule-set ([floors.md](floors.md)); they do
@@ -63,26 +66,53 @@ eating here *closes the digestion loop the needs system already models*. `dPsi`
 is stored but not applied (no psi stat yet — the same stubbed-input stance as the
 scorer). It returns the id the item transforms into (`0` = fully consumed).
 
-## Model — loot (planned, #13c)
+## Monster death-drop loot tables (built)
 
-- **Two death-drop mechanisms** (reference-confirmed): a `rareDrops` list present
-  on ~every monster kind (first-hit single roll), and a richer `lootTable`
-  (independent per-entry rolls, capped at 3 stacks) on only a few kinds. Both key
-  drops by item id into this catalog.
+Ported from the reference (`monster_ecology.ts` + `procedural_loot.ts`), keyed by
+`MobKind` ([monsters.md](monsters.md)) into flat POD rows exactly as the mob
+catalog keys stats — loot is **data, never a code branch**. Two independent
+mechanisms:
+
+- **`rareDrops`** — a short list on ~every mob kind, rolled **first-hit-single**:
+  walk the list in order, the first entry whose `chance` passes drops one item,
+  then stop (so earlier entries are favoured and **at most one** rare ever drops).
+  The caller gates this to **player kills** (the reference `killerIsPlayer` rule).
+- **`lootTable`** — a richer list on **only three** kinds (`gnome`, `zombie`, and
+  `betonnik`, the last inheriting the reference `betonoed` table). Rolled
+  **independently** per entry, each dropping a uniform `[minCount,maxCount]`; the
+  surviving hits are shuffled and **capped at 3 stacks**. Fires on **any** death.
+
+`roll_mob_loot(kind, seed, killerIsPlayer)` returns a fixed-capacity (`≤4`)
+`LootResult` and is **deterministic from `seed`** (mixed from sim-time + entity
+id at the kill site) with **no stored RNG state** — a local draw counter over
+giga's native splitmix mixer ([core/rng.h](src/core/rng.h)) substitutes the
+reference's stateful xorshift32 while porting every loot semantic verbatim (draw
+order, first-hit rare, independent loot rolls, count ranges, shuffle + cap).
+
+Reference item keys outside this engine's representative item catalog are mapped
+to the **nearest existing id by role** (documented per row in
+[loot_table.cpp](src/game/loot_table.cpp)) rather than dropped, so loot
+*presence* and *rate* stay faithful while the exact SKU sharpens as the catalog
+grows toward the reference's ~444 items.
+
+## Model — value-gated procedural pool (planned)
+
 - **Value-gated procedural pool** for NPC/container/merchant loot — a soft
-  exponential gate on `value` over the whole catalog, weighted by `spawnW`, item
-  type multipliers and `tags`.
+  exponential gate on `value` over the whole catalog (`weight *= exp(-(value/cap −
+  1)·3)` above the cap), weighted by `spawnW`, item-type multipliers and `tags`.
+  Lands with NPC/container spawning (it is a separate reference system from the
+  monster death drops above).
 - **Per-floor drop weights** — a floor rule-set supplies **multipliers** over
   global loot weights, never new item definitions.
 - **Loot on the ground** is an ordinary entity with a `Transform` + inventory
-  ([ecs.md](ecs.md)).
+  ([ecs.md](ecs.md)) — spawned by #13d from a `LootResult`.
 
 ## Global vs. local
 
 | Global | Per-floor (rule-set) |
 |--------|----------------------|
 | Item definitions (built) | Loot-weight multipliers |
-| Loot table contents | Floor-specific rare-drop nudges |
+| Death-drop tables (built) | Floor-specific rare-drop nudges |
 
 ## Connections
 
