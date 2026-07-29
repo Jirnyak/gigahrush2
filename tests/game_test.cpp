@@ -18,6 +18,7 @@
 #include "game/floor_stream.h"
 #include "game/inventory.h"
 #include "game/item_table.h"
+#include "game/loot_table.h"
 #include "game/macro_sim.h"
 #include "game/mob_table.h"
 #include "game/nav_cache.h"
@@ -2405,6 +2406,132 @@ static void test_mob_table() {
     CHECK(std::fabs(mob_scaled_speed(2.0f, 3) - 2.08f) < 1e-4f);
 }
 
+static void test_loot_table() {
+    // Bounds-tolerant spec lookup: OOB kind -> empty (no rare, no loot).
+    CHECK(mob_loot(kMobKindCount).rareCount == 0);
+    CHECK(mob_loot(kMobKindCount).lootCount == 0);
+    // Only three kinds carry a lootTable (reference); most carry rareDrops only.
+    CHECK(mob_loot(MobGnome).lootCount == 2);
+    CHECK(mob_loot(MobZombie).lootCount == 2);
+    CHECK(mob_loot(MobBetonnik).lootCount == 2);
+    CHECK(mob_loot(MobSborka).lootCount == 0);
+    CHECK(mob_loot(MobSborka).rareCount == 1);
+
+    // Determinism: identical (kind, seed, killer) -> identical result.
+    {
+        LootResult a = roll_mob_loot(MobGnome, 0xC0FFEEu, true);
+        LootResult b = roll_mob_loot(MobGnome, 0xC0FFEEu, true);
+        CHECK(a.count == b.count);
+        bool same = true;
+        for (int i = 0; i < a.count; ++i)
+            same = same && a.drops[i].itemId == b.drops[i].itemId &&
+                   a.drops[i].count == b.drops[i].count;
+        CHECK(same);
+    }
+
+    // Sweep invariants over many kinds x seeds: never exceed the cap, every id is
+    // a real item (never the none sentinel), loot-only (non-player) never exceeds
+    // the 3-stack lootTable cap.
+    for (std::uint16_t k = 0; k < kMobKindCount; ++k) {
+        for (std::uint32_t s = 1; s <= 3000; ++s) {
+            LootResult r = roll_mob_loot(k, s, (s & 1u) != 0);
+            CHECK(r.count <= kMaxLootDrops);
+            for (int i = 0; i < r.count; ++i) {
+                CHECK(r.drops[i].itemId != ItemNone);
+                CHECK(r.drops[i].itemId < kItemCount);
+                CHECK(r.drops[i].count >= 1);
+            }
+        }
+        // Non-player kill on a lootTable kind: at most 3 stacks, all from loot.
+        LootResult lo = roll_mob_loot(MobGnome, k + 7u, false);
+        CHECK(lo.count <= 3);
+    }
+
+    const int N = 200000;
+    const double dN = static_cast<double>(N);
+    const float tol = 0.02f;
+
+    // --- rareDrops: single-entry kind, PLAYER kill. Rate ~= its chance, and the
+    // only item that can drop is the mapped one; non-player kills drop NOTHING
+    // (Sborka has no lootTable). --------------------------------------------
+    {
+        int dropsPlayer = 0, dropsNonPlayer = 0, wrongItem = 0;
+        for (std::uint32_t s = 1; s <= static_cast<std::uint32_t>(N); ++s) {
+            LootResult rp = roll_mob_loot(MobSborka, s, true);
+            LootResult rn = roll_mob_loot(MobSborka, s, false);
+            dropsNonPlayer += rn.count;
+            if (rp.count > 0) {
+                ++dropsPlayer;
+                if (rp.drops[0].itemId != ItemScrapMetal) ++wrongItem;
+            }
+        }
+        CHECK(dropsNonPlayer == 0);                            // gated off without player
+        CHECK(wrongItem == 0);                                 // only the mapped rare id
+        CHECK(std::fabs(static_cast<double>(dropsPlayer) / dN - 0.03) < tol);
+    }
+
+    // --- rareDrops: two-entry kind (Rebar: rebar 0.08 then wire_coil 0.04),
+    // first-hit-single. Rebar ~= 0.08; wire_coil ~= (1-0.08)*0.04 = 0.0368. -----
+    {
+        int rebar = 0, wire = 0, both = 0;
+        for (std::uint32_t s = 1; s <= static_cast<std::uint32_t>(N); ++s) {
+            LootResult r = roll_mob_loot(MobRebar, s, true);
+            bool hasRebar = false, hasWire = false;
+            for (int i = 0; i < r.count; ++i) {
+                if (r.drops[i].itemId == ItemRebar) hasRebar = true;
+                if (r.drops[i].itemId == ItemWireCoil) hasWire = true;
+            }
+            if (hasRebar) ++rebar;
+            if (hasWire) ++wire;
+            if (hasRebar && hasWire) ++both;
+        }
+        CHECK(both == 0);  // first-hit-single: at most ONE rare item, never both
+        CHECK(std::fabs(static_cast<double>(rebar) / dN - 0.08) < tol);
+        CHECK(std::fabs(static_cast<double>(wire) / dN - 0.0368) < tol);
+    }
+
+    // --- lootTable: Gnome (non-player, so ONLY the lootTable rolls). wire_coil
+    // ~=0.35 (count 1..2), metal_sheet ~=0.15 (count 1); rebar (rare-only) never
+    // appears on a non-player kill. --------------------------------------------
+    {
+        int wire = 0, sheet = 0, rebar = 0, wireCountBad = 0, sheetCountBad = 0;
+        for (std::uint32_t s = 1; s <= static_cast<std::uint32_t>(N); ++s) {
+            LootResult r = roll_mob_loot(MobGnome, s, false);
+            for (int i = 0; i < r.count; ++i) {
+                if (r.drops[i].itemId == ItemWireCoil) {
+                    ++wire;
+                    if (r.drops[i].count < 1 || r.drops[i].count > 2) ++wireCountBad;
+                } else if (r.drops[i].itemId == ItemMetalSheet) {
+                    ++sheet;
+                    if (r.drops[i].count != 1) ++sheetCountBad;
+                } else if (r.drops[i].itemId == ItemRebar) {
+                    ++rebar;
+                }
+            }
+        }
+        CHECK(rebar == 0);          // rare-only item, gated off without a player kill
+        CHECK(wireCountBad == 0);
+        CHECK(sheetCountBad == 0);
+        CHECK(std::fabs(static_cast<double>(wire) / dN - 0.35) < tol);
+        CHECK(std::fabs(static_cast<double>(sheet) / dN - 0.15) < tol);
+    }
+
+    // --- lootTable: Betonnik (the mapped betonoed table). rawmeat ~=0.25 (1..2),
+    // metal_sheet ~=0.10 (1). ---------------------------------------------------
+    {
+        int meat = 0, sheet = 0;
+        for (std::uint32_t s = 1; s <= static_cast<std::uint32_t>(N); ++s) {
+            LootResult r = roll_mob_loot(MobBetonnik, s, false);
+            for (int i = 0; i < r.count; ++i) {
+                if (r.drops[i].itemId == ItemRawMeat) ++meat;
+                else if (r.drops[i].itemId == ItemMetalSheet) ++sheet;
+            }
+        }
+        CHECK(std::fabs(static_cast<double>(meat) / dN - 0.25) < tol);
+        CHECK(std::fabs(static_cast<double>(sheet) / dN - 0.10) < tol);
+    }
+}
+
 int main() {
     test_inventory();
     test_pool_basics();
@@ -2451,6 +2578,7 @@ int main() {
     test_ai_step();
     test_item_table();
     test_mob_table();
+    test_loot_table();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
