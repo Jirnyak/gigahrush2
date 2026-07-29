@@ -6,6 +6,7 @@
 #include <cstring>
 #include <vector>
 
+#include "core/tick.h"   // kSimDt / kSimHz — never a bare 1/120 ([core/tick.h])
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "ecs/registry.h"
@@ -81,6 +82,12 @@ int g_checks = 0;
 #include "suite_npcpool.inl"
 #include "suite_samosbor2.inl"
 #include "suite_faction2.inl"
+// Wave 5. Each of these carries its own #includes rather than leaning on the prelude
+// above, because they reach for headers this file never needed: sim/diffusion.h,
+// game/ai.h, game/loot_table.h, game/needs.h, world/field.h.
+#include "suite_diffusion.inl"
+#include "suite_loottable.inl"
+#include "suite_utilai.inl"
 static void test_inventory() {
     // Compile-time layout contract: a static_assert, not a CHECK. It is a fact
     // about the type, so it belongs to the build, not to a test run.
@@ -1349,10 +1356,11 @@ static void test_wander_moves_the_crowd() {
     }
     CHECK(agents.size() == wandering);
 
-    // Run a second of sim. kWanderPeriod = 8, so every agent gets ~15 steering
-    // passes in this window.
-    const float dt = 1.0f / 120.0f;
-    for (std::uint64_t t = 0; t < 120; ++t) {
+    // Run a second of sim — kSimHz ticks, by definition of the rate, so this stays one
+    // real second if the rate moves. kWanderPeriod = 8, so every agent gets ~15
+    // steering passes in this window.
+    const float dt = kSimDt;
+    for (std::uint64_t t = 0; t < static_cast<std::uint64_t>(kSimHz); ++t) {
         wander_step(reg, stack.layer(layer).grid(), pool, coarse, fine, layer, t);
         physics_step(reg, stack, dt);
     }
@@ -1509,7 +1517,9 @@ static void test_melee_cooldown_and_reach() {
 
     const std::uint8_t kind = static_cast<std::uint8_t>(MobKind::Tvar);
     const MobDef& def = kMobTable[kind];
-    const float dt = 1.0f / 120.0f;
+    const float dt = kSimDt;
+    // Converted the same way combat.cpp converts it, deliberately, rather than read
+    // from kSimStepMs: that is what makes this measure the game's own arithmetic.
     const std::uint16_t step = static_cast<std::uint16_t>(dt * 1000.0f + 0.5f);
 
     // Far mob: must never land a hit, but its cooldown must still run down.
@@ -1978,7 +1988,7 @@ static void test_ranged_windup_and_deadzone() {
         return e;
     };
 
-    const float dt = 1.0f / 120.0f;
+    const float dt = kSimDt;
     const std::uint16_t step = static_cast<std::uint16_t>(dt * 1000.0f + 0.5f);
 
     // Inside the band. The first pass must NOT fire — it starts the telegraph.
@@ -2498,7 +2508,7 @@ static void test_ranged_table() {
 
     // 3. THE SELF-HIT ARITHMETIC, asserted rather than trusted.
     //    A shot born at the shooter with only +0.6 z, from a makarov at 22 cells/s,
-    //    advances one 120 Hz step and lands INSIDE kProjHitRadius of its own shooter.
+    //    advances one kSimHz step and lands INSIDE kProjHitRadius of its own shooter.
     //    That is why kMuzzleForward exists, and this is the calculation that proves
     //    the naive placement was fatal — for the player AND for all 13 ranged monster
     //    kinds, which would each have killed themselves on their first shot.
@@ -2510,7 +2520,7 @@ static void test_ranged_table() {
         CHECK(mak != nullptr);
         const float speed =
             static_cast<float>(mak->projSpeedMmps) * 0.001f * kCellSize;  // 44 m/s
-        const float step = speed / 120.0f;                                // 0.367 m
+        const float step = speed * kSimDt;                                // 0.352 m
         const float naive = step * step + 0.6f * 0.6f;
         CHECK(naive < kProjHitRadius * kProjHitRadius);   // the bug, quantified
         // And with the muzzle offset it is clear of the shooter immediately.
@@ -2623,7 +2633,7 @@ static void test_player_shoots() {
     reg.emplace<Transform>(mob, mt);
     reg.emplace<MobRef>(mob, MobRef{0, 1, 500, 500});
 
-    const float dt = 1.0f / 120.0f;
+    const float dt = kSimDt;
 
     // First call with the trigger down must RELOAD, not fire: the magazine starts
     // empty and a gun that fired on an empty chamber would be free ammo.
@@ -2747,7 +2757,7 @@ static void test_faction_gates_hunting() {
     const MobDef& md = kMobTable[kind];
     CHECK(md.dmg > 0);
 
-    const float dt = 1.0f / 120.0f;
+    const float dt = kSimDt;
 
     auto trial = [&](Faction f) -> std::int16_t {
         Registry r;
@@ -3776,23 +3786,11 @@ static void test_streamed_nav_cache() {
     std::remove(path.c_str());
 }
 
-// ---- #10 macro tick ------------------------------------------------------
-
-// Spawn one controlled record for the macro-tick tests.
-static NpcId spawn_aged(NpcPool& pool, std::uint8_t age, std::uint16_t floor,
-                        std::uint16_t faction) {
-    NpcId id = pool.spawn();
-    if (id == kInvalidNpc) return id;
-    pool.age(id) = age;
-    pool.set_floor(id, floor);
-    pool.faction(id) = faction;
-    pool.sex(id) = SexFemale;
-    pool.height_mm(id) = 1700;
-    pool.max_hp(id) = 100;
-    pool.hp(id) = 100;
-    pool.level(id) = 1;
-    return id;
-}
+// The "#10 macro tick" section that stood here is gone: its tests moved into
+// tests/suite_macrosim.inl, which carries its own seeding helpers. Its `spawn_aged`
+// helper stayed behind with no caller and was a live C4505 — and its `floor`
+// parameter was std::uint16_t against a std::int16_t label, so it could not have
+// seeded a negative floor correctly anyway.
 
 
 
@@ -3803,7 +3801,14 @@ static NpcId spawn_aged(NpcPool& pool, std::uint8_t age, std::uint16_t floor,
 
 // Linear membership probe — the bucket is a set with unspecified order, so tests
 // ask "is id in this floor's roster?" rather than assuming a position.
-static bool bucket_has(const NpcPool& pool, std::uint16_t label, NpcId id) {
+// std::int16_t, matching floor_bucket. It was std::uint16_t, which left the probe
+// unable to even ASK about half the range that matters: this stack runs down to -50,
+// and a negative label only survived a uint16_t parameter by modular wraparound.
+// That is the same defect that once wrote the demo stack's negative floors into the
+// pool as garbage (floor -50 stored as 65486), so a probe that could not express a
+// negative floor was the wrong instrument for the one invariant this section calls
+// load-bearing.
+static bool bucket_has(const NpcPool& pool, std::int16_t label, NpcId id) {
     for (NpcId x : pool.floor_bucket(label))
         if (x == id) return true;
     return false;
@@ -3859,6 +3864,41 @@ static void test_floor_bucket_index() {
     pool.set_floor(a, kNoFloorLabel);
     CHECK(pool.floor_bucket(5).empty());
     CHECK(pool.floor(a) == kNoFloorLabel);
+
+    // NEGATIVE FLOORS. Every label above is positive (5, 8, 3, 9), which left this
+    // "load-bearing" invariant untested across the exact half of the range where the
+    // historical corruption lived: the demo stack is {0,1,2,-8,-14,-26,-36,-50,14,30},
+    // so the majority of its floors are negative, and floor -50 was once stored as
+    // 65486. A round trip through the bucket index is what would have caught that.
+    NpcPool p3;
+    p3.init();
+    NpcId d = p3.spawn();
+    NpcId e = p3.spawn();
+    p3.set_floor(d, -50);
+    p3.set_floor(e, -50);
+    CHECK(p3.floor(d) == -50);
+    CHECK(p3.floor_bucket(-50).size() == 2);
+    CHECK(bucket_has(p3, -50, d));
+    CHECK(bucket_has(p3, -50, e));
+    // -50 and +50 must be DIFFERENT buckets. This is the assertion that fails if any
+    // part of the path still widens a label through uint16_t: under the old cast,
+    // -50 arrived as 65486 and the sign was carried by accident rather than by type.
+    CHECK(p3.floor_bucket(50).empty());
+    CHECK(!bucket_has(p3, 50, d));
+    // Negative -> negative and negative -> positive relabels, which is what a macro
+    // migration actually does across this stack.
+    p3.set_floor(d, -8);
+    CHECK(p3.floor_bucket(-50).size() == 1);
+    CHECK(p3.floor_bucket(-8).size() == 1);
+    CHECK(bucket_has(p3, -8, d));
+    p3.set_floor(d, 30);
+    CHECK(p3.floor_bucket(-8).empty());
+    CHECK(bucket_has(p3, 30, d));
+    // The extremes of the signed label range round-trip (FloorRegistry kMinFloor
+    // -127 .. kMaxFloor +127).
+    p3.set_floor(e, -127);
+    CHECK(p3.floor(e) == -127);
+    CHECK(bucket_has(p3, -127, e));
 
     // Stress the swap-remove bookkeeping: fill a bucket, pull every other id out
     // to another floor, and confirm both rosters stay exact and unique.
@@ -4056,6 +4096,11 @@ int main() {
     test_npcpool_all();
     test_samosbor2_all();
     test_faction2_all();
+    // Wave 5: diffusion (was dead code on main), the reconciled loot table, and the
+    // utility AI's Velocity-ownership arbitration.
+    test_diffusion_all();
+    test_loottable_all();
+    test_utilai_all();
     test_route_realfloor();
     test_streamed_nav();
     test_nav_cache_roundtrip();
