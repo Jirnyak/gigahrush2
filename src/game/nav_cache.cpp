@@ -1,7 +1,9 @@
 #include "game/nav_cache.h"
 
+#include <algorithm>   // sort (LRU order over a directory listing)
+#include <chrono>      // file_time_type::clock::now — the LRU stamp
 #include <cstdio>      // snprintf (formatting) + fopen/fread/fwrite/fclose/remove
-#include <filesystem>  // create_directories / file_size — error_code overloads only
+#include <filesystem>  // create_directories / file_size / rename — error_code overloads
 #include <system_error>
 
 namespace giga::game {
@@ -185,6 +187,17 @@ static_assert(kNavCoarseWire == 13056, "768 + 8192 + 4096 at kNodes = 64");
 static_assert(kNavFineWire == 134217728u, "64 flow fields x 128^3 bytes = 128 MiB");
 static_assert(kNavNearestWire == 2097152u, "one anchor byte per cell = 2 MiB");
 static_assert(kNavCacheHeaderWire == 11u * 4u + 8u, "11 x u32/i32 + 1 x u64");
+// The three lengths a reader can accept, and the budget derived from the largest. Pinned
+// as literals because they are quoted as measured figures in this file's header, in
+// [tests/suite_navcache.inl] and in the sweep's own arithmetic — if the format moves, every
+// one of those numbers is wrong and this is where it is noticed.
+static_assert(kNavCacheCoarseOnlyWire == 13108u, "52 + 13,056");
+static_assert(kNavCacheFineOnlyWire == 136314932u, "52 + 128 MiB + 2 MiB");
+static_assert(kNavCacheFullWire == 136327988u, "52 + 13,056 + 128 MiB + 2 MiB");
+static_assert(kNavCacheFineBudgetBytes == 545311952ull, "4 full entries");
+static_assert(kNavCacheMaxCoarseStubs > 255,
+              "the stub cap must exceed kFloorSlots, or one world's own floors evict each "
+              "other's coarse graphs — which is the one section that is never worth losing");
 static_assert(nav::kUnreachable == 0xFFFFu,
               "the sentinel is serialized verbatim, so it is part of the format");
 // The two fine sections are one bake product ([world/nav.h] `bake_fine` fills both), so
@@ -309,6 +322,209 @@ bool write_exact(std::FILE* f, const void* src, std::size_t n) {
     return std::fwrite(src, 1, n, f) == n;
 }
 
+// ---------------------------------------------------------------------------
+// Bounding the directory
+// ---------------------------------------------------------------------------
+
+// Write `path` by way of `path + ".tmp"` plus a rename, so an interrupted write cannot
+// destroy the good file that was already there. Three pieces rather than one buffer
+// because the caller's 130 MiB goes straight from its vectors to the file and is never
+// concatenated first — the same reason `write_prologue` exists.
+bool write_atomic(const std::string& path, const std::uint8_t* a, std::size_t an,
+                  const std::uint8_t* b, std::size_t bn, const std::uint8_t* c,
+                  std::size_t cn) {
+    const std::string tmp = path + ".tmp";
+    std::FILE* f = std::fopen(tmp.c_str(), "wb");
+    if (!f) return false;
+
+    bool ok = write_exact(f, a, an);
+    if (ok && bn != 0) ok = write_exact(f, b, bn);
+    if (ok && cn != 0) ok = write_exact(f, c, cn);
+    // fclose's status, not only fwrite's: the tail of the last chunk can still be sitting
+    // in the stdio buffer, so a full disk surfaces HERE. The previous in-place writer
+    // discarded this return and could report a successful save of a short file.
+    if (std::fclose(f) != 0) ok = false;
+    if (!ok) {
+        std::remove(tmp.c_str());
+        return false;
+    }
+
+    std::error_code ec;
+    std::filesystem::rename(tmp, path, ec); // replaces an existing regular file
+    if (ec) {
+        std::remove(tmp.c_str());
+        return false;
+    }
+    return true;
+}
+
+// The directory a cache file lives in. A bare filename means the working directory, which
+// is what game_test's relative paths use.
+std::string parent_dir_of(const std::string& path) {
+    const std::filesystem::path p(path);
+    if (!p.has_parent_path()) return std::string(".");
+    const std::string d = p.parent_path().string();
+    return d.empty() ? std::string(".") : d;
+}
+
+// One owned file, as a sweep sees it.
+struct DirEntry {
+    std::string name;
+    NavCacheKey key{};
+    std::uint64_t bytes = 0;
+    std::filesystem::file_time_type stamp{};
+    bool fine = false;   // carries the 136 MB half
+    bool coarse = false; // carries the 13 KB half
+    bool junk = false;   // no reader can ever get anything out of it
+    bool gone = false;   // removed by this sweep
+};
+
+// Is this file ours? The name grammar (round-trip validated in `nav_cache_parse_name`),
+// plus the one extra spelling `write_atomic` produces. A `.tmp` is ours AND is junk by
+// construction: it is either mid-write or abandoned, and nothing ever reads it by that
+// name.
+bool owned_name(const std::string& name, NavCacheKey& key, bool& isTemp) {
+    isTemp = false;
+    const std::size_t n = name.size();
+    if (n > 4 && name[n - 4] == '.' && name[n - 3] == 't' && name[n - 2] == 'm' &&
+        name[n - 1] == 'p') {
+        isTemp = true;
+        return nav_cache_parse_name(std::string(name.data(), n - 4), key);
+    }
+    return nav_cache_parse_name(name, key);
+}
+
+// What a file carries, decided by the SAME rules the reader applies: `check_header` is
+// called with the key the file's own header declares, so its key test is a tautology while
+// every other rule (magic, version, shape, section-vs-length agreement) is enforced here
+// by the one function that defines it. No second copy of the policy to drift.
+//
+// A length that disagrees with the header's own declaration is the truncation signature —
+// a crash mid-write, or a leftover from the pre-rename writer. It is junk, because no
+// future read of it can succeed: `load_nav_cache*` rejects it on the exact-length check
+// forever, so the bytes are pure waste and reclaiming them is free.
+//
+// "Junk" means unreadable BY THIS BUILD, deliberately: a wrong `kNavCacheVersion` or a
+// different lattice/grid shape lands here too, and both are files this build will refuse on
+// every future read while they sit on disk. Reclaiming them is the whole point of a version
+// bump. Nothing is lost either way — every entry is a pure function of three numbers.
+void classify_entry(const std::string& path, DirEntry& e) {
+    e.junk = true;
+    std::FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return;
+    std::uint8_t hbuf[kNavCacheHeaderWire] = {};
+    const bool got = read_exact(f, hbuf, sizeof(hbuf));
+    std::fclose(f);
+    if (!got) return;
+
+    Header h{};
+    Reader hr(hbuf, sizeof(hbuf));
+    visit_header(hr, h);
+    if (!hr.ok()) return;
+
+    Layout lay;
+    const NavCacheKey self{static_cast<int>(h.number),
+                           static_cast<FloorKind>(static_cast<std::uint8_t>(h.kind)),
+                           h.seed};
+    if (check_header(h, self, lay) != NavCacheError::None) return;
+    if (e.bytes != static_cast<std::uint64_t>(lay.total)) return;
+    if (!lay.hasCoarse && !lay.hasFine) return; // header-only: nothing for any reader
+
+    e.coarse = lay.hasCoarse;
+    e.fine = lay.hasFine;
+    e.junk = false;
+}
+
+// Enumerate `dir`, skipping everything that is not ours. False only when the directory
+// cannot be opened at all — a missing cache dir is the ordinary cold start, not an error.
+//
+// The explicit `increment(ec)` loop is not stylistic: range-for over a
+// `directory_iterator` advances through `operator++`, which reports failure by an
+// exception this tree does not have. On a mid-walk failure the scan keeps what it has,
+// which under-counts and therefore under-evicts — the safe direction.
+bool scan_dir(const std::string& dir, std::vector<DirEntry>& out) {
+    std::error_code ec;
+    std::filesystem::directory_iterator it(
+        dir, std::filesystem::directory_options::skip_permission_denied, ec);
+    if (ec) return false;
+
+    const std::filesystem::directory_iterator end;
+    for (; it != end; it.increment(ec)) {
+        if (ec) break;
+        const std::filesystem::directory_entry& de = *it;
+
+        std::error_code fec;
+        if (!de.is_regular_file(fec) || fec) continue;
+        const std::string name = de.path().filename().string();
+
+        DirEntry e;
+        bool isTemp = false;
+        if (!owned_name(name, e.key, isTemp)) continue; // somebody else's file
+        e.name = name;
+
+        const std::uintmax_t sz = de.file_size(fec);
+        if (fec) continue;
+        e.bytes = static_cast<std::uint64_t>(sz);
+        e.stamp = de.last_write_time(fec);
+        if (fec) e.stamp = std::filesystem::file_time_type{};
+
+        if (isTemp) e.junk = true;
+        else classify_entry(dir + "/" + name, e);
+        out.push_back(e);
+    }
+    return true;
+}
+
+// LRU order: oldest first, ties by name so the victim is deterministic and a test can
+// assert WHICH entry went rather than only how many.
+bool older_first(const DirEntry& a, const DirEntry& b) {
+    if (a.stamp != b.stamp) return a.stamp < b.stamp;
+    return a.name < b.name;
+}
+
+NavCacheUsage tally(const std::vector<DirEntry>& v) {
+    NavCacheUsage u;
+    for (const DirEntry& e : v) {
+        if (e.gone) continue;
+        ++u.files;
+        u.bytes += e.bytes;
+        if (e.junk) {
+            ++u.junkFiles;
+        } else if (e.fine) {
+            ++u.fineFiles;
+            u.fineBytes += e.bytes;
+        } else {
+            ++u.coarseFiles;
+        }
+    }
+    return u;
+}
+
+// Rewrite a full entry as its coarse section alone, preserving its LRU stamp — being
+// evicted is not the same as being used, and a downgraded entry that looked freshly used
+// would corrupt the next sweep's ordering.
+//
+// False when the coarse half will not decode: a fine-only blob (no coarse section), a key
+// whose header disagrees with its filename, or bit rot the CRC catches. The caller then
+// deletes the file, which is right — an entry that can give a reader nothing is not worth
+// 13 KB either.
+bool downgrade_to_coarse(const std::string& path, const NavCacheKey& key,
+                         std::filesystem::file_time_type stamp) {
+    nav::CoarseGraph g{};
+    if (!load_nav_cache_sections(path, key.number, key.kind, key.seed, &g, nullptr,
+                                 nullptr))
+        return false;
+
+    std::vector<std::uint8_t> stub;
+    nav_cache_write(key, &g, nullptr, stub);
+    if (stub.size() != kNavCacheCoarseOnlyWire) return false;
+    if (!write_atomic(path, stub.data(), stub.size(), nullptr, 0, nullptr, 0)) return false;
+
+    std::error_code ec;
+    std::filesystem::last_write_time(path, stamp, ec); // best effort: LRU only
+    return true;
+}
+
 } // namespace
 
 const char* nav_cache_error_text(NavCacheError e) {
@@ -343,6 +559,76 @@ std::string nav_cache_name(const NavCacheKey& key) {
 
 std::string nav_cache_name(int number, FloorKind kind, std::uint32_t seed) {
     return nav_cache_name(NavCacheKey{number, kind, seed});
+}
+
+bool nav_cache_parse_name(const std::string& name, NavCacheKey& out) {
+    const char* p = name.c_str();
+    const std::size_t n = name.size();
+    std::size_t at = 0;
+
+    // `at <= n` holds at every call, so `n - at` never wraps.
+    auto eat = [&](const char* lit, std::size_t len) {
+        if (n - at < len) return false;
+        for (std::size_t i = 0; i < len; ++i)
+            if (p[at + i] != lit[i]) return false;
+        at += len;
+        return true;
+    };
+
+    if (!eat("nav_f", 5)) return false;
+
+    // The floor number, signed. Bounded during the digit walk so a 40-digit name cannot
+    // overflow its way to a plausible key — signed overflow would be undefined, and this
+    // function's whole job is to be trustworthy enough to delete a file on.
+    bool neg = false;
+    if (at < n && p[at] == '-') {
+        neg = true;
+        ++at;
+    }
+    const std::size_t numAt = at;
+    std::int64_t num = 0;
+    while (at < n && p[at] >= '0' && p[at] <= '9') {
+        num = num * 10 + static_cast<std::int64_t>(p[at] - '0');
+        if (num > 2147483648LL) return false;
+        ++at;
+    }
+    if (at == numAt) return false;                 // "nav_f_k0_..." has no number
+    if (!neg && num > 2147483647LL) return false;  // +2^31 is not an int
+
+    if (!eat("_k", 2)) return false;
+    const std::size_t kindAt = at;
+    std::uint32_t kind = 0;
+    while (at < n && p[at] >= '0' && p[at] <= '9') {
+        kind = kind * 10u + static_cast<std::uint32_t>(p[at] - '0');
+        if (kind > 255u) return false; // FloorKind is std::uint8_t ([game/floor_spec.h])
+        ++at;
+    }
+    if (at == kindAt) return false;
+
+    if (!eat("_s", 2)) return false;
+    if (n - at < 8) return false;
+    std::uint32_t seed = 0;
+    for (std::size_t i = 0; i < 8; ++i) {
+        const char c = p[at + i];
+        std::uint32_t d = 0;
+        if (c >= '0' && c <= '9') d = static_cast<std::uint32_t>(c - '0');
+        else if (c >= 'a' && c <= 'f') d = static_cast<std::uint32_t>(c - 'a') + 10u;
+        else return false; // %08x writes lower case, so an upper-case digit is not ours
+        seed = (seed << 4) | d;
+    }
+    at += 8;
+
+    if (!eat(".bin", 4)) return false;
+    if (at != n) return false; // trailing anything: not ours
+
+    const NavCacheKey key{neg ? static_cast<int>(-num) : static_cast<int>(num),
+                          static_cast<FloorKind>(static_cast<std::uint8_t>(kind)), seed};
+    // The entire safety argument, in one line: a name is ours only if we would have
+    // written exactly it. A leading '+', a short seed field, upper-case hex and "-0" all
+    // survive the grammar above and all die here.
+    if (nav_cache_name(key) != name) return false;
+    out = key;
+    return true;
 }
 
 std::size_t nav_cache_bytes(std::uint32_t sections) {
@@ -423,9 +709,9 @@ bool nav_cache_read(const std::uint8_t* bytes, std::size_t n, const NavCacheKey&
 
 bool save_nav_cache(const std::string& path, int number, FloorKind kind,
                     std::uint32_t seed, const nav::CoarseGraph& coarse,
-                    const nav::FineNav& fine) {
-    // Checked before a file exists, so a mid-bake nav does not truncate the previous
-    // good cache for this key.
+                    const nav::FineNav& fine, const NavCachePolicy& policy) {
+    // Checked before a file exists, so a mid-bake nav does not touch the previous good
+    // cache for this key.
     if (!fine_is_complete(fine)) return false;
 
     // Best-effort parent-dir creation via the error_code overload (never throws, so it is
@@ -437,32 +723,48 @@ bool save_nav_cache(const std::string& path, int number, FloorKind kind,
         std::filesystem::create_directories(p.parent_path(), ec);
     }
 
-    std::FILE* f = std::fopen(path.c_str(), "wb");
-    if (!f) return false;
-
     // 13,108 bytes, not 136,327,988: the two big sections go straight from the caller's
     // vectors to the file. A `nav_cache_write` into a buffer would have doubled the peak
     // footprint of a 130 MiB nav for no gain.
+    const NavCacheKey key{number, kind, seed};
     std::vector<std::uint8_t> prologue;
-    write_prologue(NavCacheKey{number, kind, seed}, kNavSectionAll, &coarse,
-                   kNavCacheHeaderWire + kNavCoarseWire, prologue);
+    write_prologue(key, kNavSectionAll, &coarse, kNavCacheHeaderWire + kNavCoarseWire,
+                   prologue);
 
-    const bool ok = write_exact(f, prologue.data(), prologue.size()) &&
-                    write_exact(f, fine.flow.data(), fine.flow.size()) &&
-                    write_exact(f, fine.nearest.data(), fine.nearest.size());
-    std::fclose(f);
-    if (!ok) std::remove(path.c_str()); // no truncated file left behind
-    return ok;
+    // Temp-then-rename, so a write interrupted by a crash no longer destroys the good file
+    // that was there — and its leftover is reclaimed by the sweep below on the next save,
+    // instead of occupying 136 MB that nothing would ever read again.
+    if (!write_atomic(path, prologue.data(), prologue.size(), fine.flow.data(),
+                      fine.flow.size(), fine.nearest.data(), fine.nearest.size()))
+        return false;
+
+    // The directory just grew by 136 MB, so bound it here rather than hoping a caller
+    // remembers to. `key` is pinned: the sweep must never evict the floor whose nav the
+    // caller is loading at this instant.
+    nav_cache_evict(parent_dir_of(path), policy, &key);
+    return true;
 }
 
 bool load_nav_cache(const std::string& path, int number, FloorKind kind,
                     std::uint32_t seed, nav::CoarseGraph& coarse, nav::FineNav& fine,
                     NavCacheError* err) {
+    // One implementation, both contracts: asking for both halves is exactly the old
+    // whole-nav read, `MissingSection` on a coarse-only blob included.
+    return load_nav_cache_sections(path, number, kind, seed, &coarse, &fine, err);
+}
+
+bool load_nav_cache_sections(const std::string& path, int number, FloorKind kind,
+                             std::uint32_t seed, nav::CoarseGraph* coarse,
+                             nav::FineNav* fine, NavCacheError* err) {
     if (err) *err = NavCacheError::None;
     auto fail = [err](NavCacheError e) {
         if (err) *err = e;
         return false;
     };
+
+    // Asking for nothing is a caller bug rather than a cheap validation: reporting on a
+    // file without decoding it is what `nav_cache_usage` does.
+    if (coarse == nullptr && fine == nullptr) return fail(NavCacheError::MissingSection);
 
     std::FILE* f = std::fopen(path.c_str(), "rb");
     if (!f) return fail(NavCacheError::NoFile); // the ordinary cold-start miss
@@ -487,9 +789,10 @@ bool load_nav_cache(const std::string& path, int number, FloorKind kind,
         std::fclose(f);
         return fail(bad);
     }
-    // This wrapper's contract is a whole nav; a coarse-only blob is a legal format but
-    // not an answer to this call. The buffer API is where section picking lives.
-    if (!lay.hasCoarse || !lay.hasFine) {
+    // Only what was asked for. A coarse-only blob is a legal format and a perfectly good
+    // answer to a `(&coarse, nullptr)` call — that is what an evicted entry is — while it
+    // is still `MissingSection` to anyone who wanted the flow fields.
+    if ((coarse != nullptr && !lay.hasCoarse) || (fine != nullptr && !lay.hasFine)) {
         std::fclose(f);
         return fail(NavCacheError::MissingSection);
     }
@@ -507,34 +810,154 @@ bool load_nav_cache(const std::string& path, int number, FloorKind kind,
 
     // Decode the coarse graph into a LOCAL, so a later I/O failure cannot leave the
     // caller holding half a graph. 13 KB on the stack of a load path is free.
-    std::vector<std::uint8_t> cbuf;
-    cbuf.resize(kNavCoarseWire);
-    if (!read_exact(f, cbuf.data(), cbuf.size())) {
-        std::fclose(f);
-        return fail(NavCacheError::TooShort);
-    }
-    if (crc32(cbuf.data(), cbuf.size()) != h.coarseCrc) {
-        std::fclose(f);
-        return fail(NavCacheError::BadChecksum);
-    }
+    //
+    // Read and checksummed whenever the blob CARRIES one, even for a caller that only
+    // wants the flow fields: it is 13,056 bytes, it is the format's only content check,
+    // and reading it is also what advances the file position to `fineAt` — so this path
+    // needs no seek, and there is no offset arithmetic to get wrong.
     nav::CoarseGraph decoded{};
-    Reader br(cbuf.data(), cbuf.size());
-    visit_coarse(br, decoded);
+    if (lay.hasCoarse) {
+        std::vector<std::uint8_t> cbuf;
+        cbuf.resize(kNavCoarseWire);
+        if (!read_exact(f, cbuf.data(), cbuf.size())) {
+            std::fclose(f);
+            return fail(NavCacheError::TooShort);
+        }
+        if (crc32(cbuf.data(), cbuf.size()) != h.coarseCrc) {
+            std::fclose(f);
+            return fail(NavCacheError::BadChecksum);
+        }
+        Reader br(cbuf.data(), cbuf.size());
+        visit_coarse(br, decoded);
+    }
 
     // Now the 130 MiB, read straight into the caller's vectors — the whole reason this
     // wrapper exists rather than a `nav_cache_read` over a file-sized buffer. If the
     // medium fails here (it cannot be truncation: the length matched above) `fine` is
     // left unspecified and `coarse` untouched; the caller re-bakes, which overwrites
-    // both.
-    fine.flow.assign(kNavFineWire, 0u);
-    fine.nearest.assign(kNavNearestWire, 0u);
-    const bool ok = read_exact(f, fine.flow.data(), fine.flow.size()) &&
-                    read_exact(f, fine.nearest.data(), fine.nearest.size());
+    // both. A coarse-only caller never reaches this and never allocates it.
+    bool ok = true;
+    if (fine != nullptr) {
+        fine->flow.assign(kNavFineWire, 0u);
+        fine->nearest.assign(kNavNearestWire, 0u);
+        ok = read_exact(f, fine->flow.data(), fine->flow.size()) &&
+             read_exact(f, fine->nearest.data(), fine->nearest.size());
+    }
     std::fclose(f);
     if (!ok) return fail(NavCacheError::TooShort);
 
-    coarse = decoded;
+    if (coarse != nullptr) *coarse = decoded;
+
+    // A hit is a USE, and this is the clock `nav_cache_evict` orders victims by. mtime and
+    // not atime because NTFS disables last-access updates by default, so atime would rank
+    // a floor the player just visited alongside one they have never opened. Best effort: a
+    // read-only cache directory still serves hits, it just stops re-ordering them.
+    std::error_code tec;
+    std::filesystem::last_write_time(path, std::filesystem::file_time_type::clock::now(),
+                                     tec);
     return true;
+}
+
+NavCacheUsage nav_cache_usage(const std::string& dir) {
+    std::vector<DirEntry> files;
+    scan_dir(dir, files); // a missing directory reports an empty, all-zero usage
+    return tally(files);
+}
+
+NavCacheSweep nav_cache_evict(const std::string& dir, const NavCachePolicy& policy,
+                              const NavCacheKey* keep) {
+    NavCacheSweep sw;
+    std::vector<DirEntry> files;
+    if (!scan_dir(dir, files)) return sw; // no such directory: nothing to bound
+    sw.before = tally(files);
+
+    // Oldest first, so "the first candidate in the list" IS the least-recently-used one
+    // and no pass has to re-derive the order.
+    std::sort(files.begin(), files.end(), older_first);
+
+    const auto pinned = [keep](const DirEntry& e) {
+        return keep != nullptr && e.key.number == keep->number &&
+               e.key.kind == keep->kind && e.key.seed == keep->seed;
+    };
+    const auto drop = [&](DirEntry& e) {
+        std::remove((dir + "/" + e.name).c_str());
+        e.gone = true;
+        sw.bytesReclaimed += e.bytes;
+    };
+
+    // Running totals rather than a re-tally per iteration: the pathological case for the
+    // stub cap is thousands of entries, and an O(n^2) sweep on a load path is exactly the
+    // kind of thing that gets discovered as a stall much later.
+    std::uint64_t fineBytes = sw.before.fineBytes;
+    int stubs = sw.before.coarseFiles;
+
+    // 1. Junk, unconditionally and BEFORE any LRU decision — so a file truncated by the
+    //    crash that just happened cannot cost a good entry its fine half. Not pinned-
+    //    exempt: an unreadable file is of no use to the pinning caller either, and this is
+    //    the only path that ever reclaims a leftover `.tmp` or a pre-rename corpse.
+    for (DirEntry& e : files) {
+        if (e.gone || !e.junk) continue;
+        drop(e);
+        ++sw.junkRemoved;
+    }
+
+    // 2. The fine budget, LRU, by DOWNGRADE rather than delete: 136,327,988 -> 13,108 B
+    //    keeps the section that replaces about half the bake for 0.0096 % of the bytes.
+    while (fineBytes > policy.fineBudgetBytes) {
+        DirEntry* victim = nullptr;
+        for (DirEntry& e : files) {
+            if (e.gone || e.junk || !e.fine || pinned(e)) continue;
+            victim = &e;
+            break;
+        }
+        if (victim == nullptr) {
+            // Only the pinned entry is left and it is still over budget. Reported, not
+            // hidden: a bound that silently gives up is worse than a bound that says so.
+            sw.overBudget = true;
+            break;
+        }
+        const std::uint64_t was = victim->bytes;
+        if (downgrade_to_coarse(dir + "/" + victim->name, victim->key, victim->stamp)) {
+            victim->bytes = static_cast<std::uint64_t>(kNavCacheCoarseOnlyWire);
+            victim->fine = false;
+            victim->coarse = true;
+            sw.bytesReclaimed += was - victim->bytes;
+            ++sw.downgraded;
+            ++stubs;
+        } else {
+            // Its coarse half will not decode, so it is junk in the one sense that matters
+            // — no reader can get anything out of it — and it is counted as such.
+            drop(*victim);
+            ++sw.junkRemoved;
+        }
+        fineBytes -= was;
+    }
+
+    // 3. The stub cap. Reached only past maxCoarseStubs (512 > the 255 legal floor labels),
+    //    and it is what makes the total bounded in the SEED axis rather than only in the
+    //    floor axis.
+    while (stubs > policy.maxCoarseStubs) {
+        DirEntry* victim = nullptr;
+        for (DirEntry& e : files) {
+            if (e.gone || e.junk || e.fine || pinned(e)) continue;
+            victim = &e;
+            break;
+        }
+        if (victim == nullptr) {
+            sw.overBudget = true;
+            break;
+        }
+        drop(*victim);
+        ++sw.stubsRemoved;
+        --stubs;
+    }
+
+    // Re-measured from the filesystem, not derived from the loops above, so a sweep cannot
+    // report a bound it did not actually achieve.
+    std::vector<DirEntry> post;
+    scan_dir(dir, post);
+    sw.after = tally(post);
+    return sw;
 }
 
 } // namespace giga::game

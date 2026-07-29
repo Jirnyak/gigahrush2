@@ -296,7 +296,8 @@ if(GIGA_BUILD_TESTS)
     # friction for this file.
     #
     # OBSERVED, not derived: `build-win\audit_test.exe` printed
-    # `audit_test: 41 checks, 2 failures` on 2026-07-29. Both failures are finding 5
+    # `audit_test: 62 checks, 0 failures` on 2026-07-29 - it was 41 checks / 2 failures earlier the
+    # same day, and both of those failures were finding 5
     # (suite_audit.inl descend_not_free), which its own ledger entry documents as
     # unsatisfiable as written — the test is the defect there, not the game.
     #
@@ -308,6 +309,12 @@ if(GIGA_BUILD_TESTS)
     add_executable(audit_test tests/audit_test.cpp)
     target_link_libraries(audit_test PRIVATE giga_game)
     giga_target_flags(audit_test OFF)
+    # RE-CONFIGURE AFTER CHANGING ANY PIN BELOW. set_tests_properties is baked into
+    # build-win/CTestTestfile.cmake when cmake CONFIGURES, so editing this file and then running
+    # ctest directly still matches the OLD regex - ctest never reads CMakeLists.txt. Measured
+    # 2026-07-29: a corrected pin appeared to fail twice for exactly this reason, and the obvious
+    # wrong conclusion was that the NEW number was also wrong. Run tools\win\build.bat (it
+    # configures first) or `cmake -S . -B build-win` before trusting a ctest verdict on a pin.
     add_test(NAME audit_findings COMMAND audit_test)
     set_tests_properties(audit_findings PROPERTIES
         PASS_REGULAR_EXPRESSION "audit_test: 62 checks, 0 failures")
@@ -334,7 +341,8 @@ if(GIGA_BUILD_TESTS)
     # fewer times.
     #
     # OBSERVED, not derived: under ctest on 2026-07-29, Release, game_test printed
-    # `game_test: 132266 checks, 0 failures` in 446.54 s. Determinism is not assumed —
+    # `game_test: 134002 checks, 0 failures` - it read 132266 earlier the same day, before the
+    # craft, quest and speech suites landed. Determinism is not assumed —
     # the message of commit cb61632 quotes the identical 132266 from an independent
     # standalone run of the same tree. NOTE the magnitude: this is an EXECUTION count,
     # not the 3,887 static sites; the bulk of the CHECKs sit inside loops.

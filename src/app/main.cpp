@@ -500,12 +500,20 @@ int main(int argc, char** argv) {
     // 101,000 unarmed, and over 250 macro ticks against a 60-slot reserve the population
     // holds at 3002 with 0 births refused instead of decaying to 2336 with 1197 refused.
     //
-    // DO NOT UNCOMMENT until Contract::giver is an NpcHandle. A recycled id is a REUSED
-    // id, and contract_on_giver_died fires only from the frame-top combat drain below —
-    // never for a macro-sweep death — so contract_step's liveness poll would see a
-    // recycled newborn as the living giver and silently transfer the job to a stranger.
-    // MacroSim::Journey's half of this is already fixed (it stamps the departing
-    // generation and compares it on landing).
+    // DO NOT UNCOMMENT YET. A recycled id is a REUSED id, so every place that holds a
+    // bare NpcId ACROSS TIME is a stranger-transfer waiting to happen. Two are closed and
+    // THREE are still open — the count matters, because fixing one and declaring victory
+    // is how this ships:
+    //   DONE  MacroSim::Journey  — stamps the departing generation, compares on landing.
+    //   DONE  Contract::giver    — now an NpcHandle; contract_step polls handle_valid().
+    //                              Measured: with a bare id the job paid 700 rub to a
+    //                              newborn who never offered it; now it Fails instead.
+    //   OPEN  QuestProgress::giver — quest.cpp:345 polls `!pool.valid || !pool.alive`,
+    //                              the IDENTICAL defect with the identical single-call-site
+    //                              quest_on_giver_died. quest.h:229 says so itself.
+    //   OPEN  Relationship::target — written by macro_sim.cpp:151.
+    //   OPEN  FloorModule::candidate — compared at floor_stream.cpp:88.
+    // Arming this now would just move the bug from contracts to quests.
     //
     //   pool.set_recycling(true);
     //

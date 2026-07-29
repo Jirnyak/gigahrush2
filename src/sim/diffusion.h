@@ -19,42 +19,102 @@
 //
 // COST, at the real kMacroDim = 128 (all figures exact, not rounded):
 //   * 2,097,152 cells. One float field = 8,388,608 B = 8.00 MiB.
-//   * The reused back buffer is another 8.00 MiB and the walkability bitset 256 KiB,
-//     so one diffused field costs 16.25 MiB resident per layer. Against the 128 MiB
-//     [world/nav.h] already spends on flow fields that is a 12.7% add.
-//   * A sweep touches 8 MiB in + 8 MiB out and ~42 M arithmetic ops, so it is
-//     memory-bound. The measured number is printed by `test_diffusion_all`
-//     (tests/suite_diffusion.inl) on a real Residential floor, and THAT number — not
-//     a sentence here — is the claim.
-//   * MEASURED, and it is worse than this file used to guess: EIGHT runs across two
-//     sessions on 2026-07-29 (MSVC 19.44 /O2 /GL, linked /LTCG, Windows dev host, real
-//     Residential floor, 59.8% of cells open) span 18.42-43.67 ms/sweep, 14.69-34.83 ns
-//     per open cell, and a bitset bake of 10.97-37.33 ms.
-//     DO NOT NARROW THAT BAND. An earlier draft of this comment claimed
-//     "18.42-24.64 ms/sweep over three runs" while the same session had already
-//     measured 27.09, and a review pass then measured 27.29, 27.56 and 43.67 from the
-//     same binary. The honest figure is a 2.4x band; a single number here would be a
-//     number about the box.
+//   * The reused back buffer is another 8.00 MiB, the walkability bitset 256 KiB and
+//     the non-zero-group bitset 4 KiB, so one diffused field costs
+//     8,388,608 + 8,388,608 + 262,144 + 4,096 = 17,043,456 B = 16.254 MiB resident per
+//     layer. Against the 128 MiB [world/nav.h] already spends on flow fields that is a
+//     12.7% add. (The 4 KiB is new as of the zero-group skip; it is 0.02% of the total
+//     and is spelled out only because this block claims exact figures.)
+//   * A sweep touches 8 MiB in + 8 MiB out, so at full work it is memory-bound. The
+//     measured numbers are printed by `test_diffusion_all` (tests/suite_diffusion.inl)
+//     on a real Residential floor, and THOSE numbers — not a sentence here — are the
+//     claim.
+//   * MEASURED, and there are now TWO figures because the sweep's cost is
+//     data-dependent. A 64-cell run of the field whose whole read neighbourhood is
+//     bitwise zero is proved to be zero instead of computed ([sim/diffusion.cpp]), and
+//     a real floor is almost entirely quiet — the suite's own scenario ends with 4,957
+//     non-zero cells against 1,253,822 open ones, 0.40%. So, as test_diffusion_all
+//     prints them (its own instrument: unpinned wall clock, THIRTEEN runs on 2026-07-29
+//     at varying host load — DO NOT NARROW EITHER BAND):
+//       - SPARSE (a few sources; the normal state): 0.88-8.13 ms/sweep,
+//         0.70-6.48 ns per open cell, 0.44-4.1% of one core at 5 sweeps/s.
+//       - SATURATED (every open cell above minLevel, nothing skippable):
+//         5.59-39.76 ms/sweep, 4.46-31.71 ns per open cell, 2.8-19.9% of one core.
+//         THIS is the pair of numbers a budget must be built on.
+//     The top of each band came from the run whose bitset bake also read 57.84 ms
+//     against 8.94 ms on the quietest run, which is how you tell it was the host and
+//     not the code: the bake is a fixed 128 MiB walk and cannot get 6x harder.
+//     WIDENED DOWNWARD by an independent verification run of the same tree, and that
+//     matters more than the number: the floor first published here was 1.78 / 9.85 ms
+//     from nine runs, and four further runs the same day printed 0.88-3.20 ms sparse and
+//     5.59-12.13 ms saturated — BELOW it. A band that excludes a same-host measurement
+//     invites the next reader to diagnose the code when they are looking at the host.
+//     If a run lands outside this band, widen it and say so; do not treat it as a
+//     regression without an interleaved same-binary A/B.
+//   * THE TRUE UPPER BOUND, which is a different question from "saturated" and was
+//     open until it was measured: the figures above saturate the field on a REAL floor,
+//     which is only 59.8% open, so 1,253,822 cells do the stencil. The adversarial
+//     geometry is a 100%-open world with every one of 2,097,152 cells above minLevel.
+//     Measured (min-of-36 interleaved wall clock, four runs): 7.24-10.25 ms/sweep at
+//     3.45-4.89 ns per open cell. Per cell that is CHEAPER than the mixed real floor
+//     (fewer partly-solid bitset words), but 1.67x the cells, so the absolute worst
+//     sweep this code can be handed is ~7-10 ms — a WHOLE 8 ms sim step. That is the
+//     ceiling the cadence gate and the off-thread plan below exist for, and it is still
+//     1.57-1.78x faster than the per-cell form it replaced, so the bound moved down.
+//   * THE SPEEDUP, measured the only way that survives this host: one binary with BOTH
+//     the shipping sweep and a verbatim copy of the per-cell sweep it replaced on
+//     2026-07-29, blocks alternating REF/NEW so load cannot land on one arm, timed on
+//     thread cycles (which exclude the cycles the thread was descheduled for). Four
+//     runs of 11 blocks of 5 sweeps: medians 11.23x, 10.01x, 10.65x, 10.11x, so ~10x on
+//     a sparse field. REF 12.13-52.90 ms/sweep (9.67-42.19 ns/open cell), NEW
+//     1.17-4.97 ms (0.94-3.96 ns). Quote the MEDIAN ratio, not the min-vs-min one:
+//     contention inflates a 1.4 ms arm by a far larger fraction than a 14 ms arm, so
+//     min/min reads as low as 4.5x on a busy host and is an artefact.
+//     Every one of those 220 sweeps, plus 490 more from earlier wall-clock runs,
+//     produced a BIT-IDENTICAL 8.00 MiB field (memcmp) and bit-equal
+//     total / liveCells / openCells. Pinned and cycle-timed, the same algorithm reads
+//     33.8 -> 2.19 ns/cell sparse (15.4x) and 13.4 -> 7.1 ns/cell saturated (1.86x) —
+//     so the worst case is still faster than what it replaced, never a regression.
+//     The per-form table and the two experiments that did NOT pay are in
+//     [sim/diffusion.cpp].
 //     The open-cell count is bit-deterministic at 1,253,822 of 2,097,152 across every
-//     one of the eight runs, which is what makes the ns/cell figure comparable at all.
-//     AND THE SPREAD IS LOAD, NOT CODE: the SAME binary measured 74.79 ms/sweep
-//     (59.65 ns/open cell, bake 190 ms) on one run while the host was under an
-//     eight-way parallel build. A 4x swing with an identical instruction stream is why
-//     test_diffusion_all asserts work counts and merely PRINTS milliseconds — a
-//     wall-clock threshold here would be a test of the box. Every figure above was
-//     taken on a host running that wave, so all of them are an UPPER bound: no
-//     quiet-host measurement of this loop exists yet.
+//     run ever taken, which is what makes any ns/cell figure comparable at all.
+//     REPRODUCED INDEPENDENTLY on 2026-07-29 against a reference arm rebuilt from the
+//     pre-change file rather than the copy the optimising run used, so the reference is
+//     not shared with the claim it checks. Five runs, min-of-36 interleaved thread
+//     cycles: 10.06-12.09x sparse, 1.88-1.95x saturated on the real floor, 1.57-1.78x on
+//     the 100%-open adversarial geometry — every arm above 1.0, i.e. no data shape found
+//     that regresses. 460 A/B pairs across 21 scenarios compared BIT-IDENTICAL in all
+//     2,097,152 cells and in all four DiffusionStep members: the real floor sparse and
+//     saturated, all-open saturated, 128 single-source positions covering every 64-cell
+//     run edge and every torus seam, 50%-random walls, direct field writes INSIDE solid
+//     rock (which diffusion_add refuses but tests/world_test.cpp does by hand), and six
+//     parameter extremes including rate above the clamp, keep == 0, and a NEGATIVE
+//     minLevel — the last of these being the only way the field can hold -0.0f, which is
+//     exactly why PASS 1's zero test is a memcmp and not a `!= 0.0f`.
+//   * DO NOT QUOTE A SINGLE MILLISECOND FIGURE HERE. The wall-clock cost of this loop
+//     on this host spans more than 4x with an IDENTICAL instruction stream. Two
+//     independent causes, both measured:
+//       - LOAD. The same binary measured 74.79 ms/sweep under an eight-way parallel
+//         build against 18-27 ms otherwise.
+//       - CORE PLACEMENT. This is a hybrid CPU. The same binary, same data, measured
+//         20.9-30.5 ms/sweep unpinned and 10.4-13.6 ms pinned to one P-core with
+//         SetThreadAffinityMask. An earlier draft of this comment reported a
+//         "2.4x band, 18.42-43.67 ms" as a property of the code; roughly half of that
+//         band was the scheduler moving the thread between a P-core and an E-core.
+//     That is why test_diffusion_all asserts work counts and merely PRINTS
+//     milliseconds — a wall-clock threshold here would be a test of the box.
 //     ONE TRAP for whoever measures next, because it cost a wrong headline: the release
 //     flags here carry /GL, and linking those objects WITHOUT /LTCG makes the linker
 //     discard the IL and fall back to per-object codegen. The identical sweep measured
 //     40.74 ms that way — 1.8x slow, with no warning louder than LNK4075. A timing run
 //     that skips /LTCG is measuring the link, not the loop.
-//     That is 2-5x a WHOLE 8 ms sim step, so a sweep is not something to drop on the
-//     sim thread and forget. Two consequences, both load-bearing: the sweep is
-//     non-creating and reports `liveCells`, so a caller sweeps only while the floor
-//     actually holds danger (see diffusion_step and DiffusionDriver below); and the
-//     eventual home for this is off the sim thread — the async pattern
-//     [world/nav_async.h] already uses for the bake, or the GPU.
+//   * Saturated, a sweep is still a large fraction of a WHOLE 8 ms sim step, so it is
+//     not something to drop on the sim thread and forget. Two consequences, both
+//     load-bearing: the sweep is non-creating and reports `liveCells`, so a caller
+//     sweeps only while the floor actually holds danger (see diffusion_step and
+//     DiffusionDriver below); and the eventual home for this is off the sim thread — the
+//     async pattern [world/nav_async.h] already uses for the bake, or the GPU.
 //
 // WHERE IT RUNS. On a coarse cadence, not every sim tick: kDiffusionSweepTicks below.
 // The sim tick is 125 Hz and one step is exactly 8 ms ([core/tick.h] — 125, not the
@@ -150,10 +210,19 @@ struct DiffusionStep {
     bool present = false;        // the field existed; false = nothing to diffuse
     float total = 0.0f;          // summed level AFTER the sweep
     std::uint32_t liveCells = 0; // cells >= minLevel after the sweep
-    // Cells that took the OPEN branch and did the 6-neighbour arithmetic. This is the
-    // sweep's WORK COUNT, and it is reported rather than assumed because a solid cell
-    // costs one store while an open cell costs ~20 ops — "ms per sweep" is
-    // uninterpretable without it. A test asserts this, never a wall-clock figure.
+    // OPEN cells this sweep was responsible for: the popcount of the walkability
+    // bitset. Reported rather than assumed because a solid cell costs one store while
+    // an open cell costs a 6-neighbour stencil, so "ms per sweep" is uninterpretable
+    // without it — it is the DENOMINATOR every ns/cell figure in this file divides by,
+    // and a test asserts it, never a wall-clock figure.
+    //
+    // NOT a count of executed arithmetic, and it stopped being one when the zero-group
+    // skip landed ([sim/diffusion.cpp]): a run of 64 open cells whose whole read
+    // neighbourhood is zero is proved to be 0 instead of computed. The two numbers were
+    // identical while the sweep visited every open cell, and the value here has not
+    // changed — the CLAIM has. Anything that wants real executed work must time the
+    // saturated case, which is what test_diffusion_all now prints alongside the sparse
+    // one, precisely so this member is never mistaken for a cost.
     std::uint32_t openCells = 0;
 };
 
@@ -177,12 +246,28 @@ struct DiffusionStep {
 //      per cell instead is 2,097,152 bits = 262,144 B = 256 KiB, which is L2-resident
 //      on any target machine. Same answer, ~500x less memory in play.
 //
+//   3. THE NON-ZERO GROUP BITSET, 4 KiB — one bit per 64-cell run of the field, set
+//      when that run holds anything at all. The sweep derives it from the field at the
+//      top of EVERY sweep and uses it to skip whole 64-cell runs whose entire 7-run
+//      read neighbourhood is bitwise zero: those cells provably compute to exactly
+//      0.0f, so writing 0 over them is bit-identical. Measured 15.4x on the suite's own
+//      scenario (0.2% of open cells non-zero) and 1.86x in the saturated worst case
+//      where nothing is skippable — the proof and both figures live in
+//      [sim/diffusion.cpp]. It is DERIVED INSIDE the sweep and never cached across one,
+//      which is exactly what makes it hazard-free where `open` needs four documented
+//      invalidation valves; a caller has nothing to remember about it.
+//
 // Geometry is static between bakes ([performance.md] §Two regimes: full re-bake at
 // load and after self-assembly, never per tick), so the bitset is built at those
 // boundaries and read on every sweep — the same bake-once/read-O(1) shape as nav.
 struct DiffusionScratch {
     std::vector<float> back;         // 8.00 MiB, sized on first sweep, then reused
     std::vector<std::uint64_t> open; // 256 KiB walkability bitset, 1 = cell is open
+
+    // 4 KiB, one bit per 64-cell run: 1 = that run of the field is not all zero. Sized
+    // and REWRITTEN by every sweep, so it is pure scratch — nothing outside
+    // diffusion_step may read it and no valve can make it stale.
+    std::vector<std::uint64_t> hotGroups;
 
     // Set when geometry moved and the bitset has not caught up. The next sweep
     // rebuilds instead of diffusing through a wall that now exists. This is the blunt
@@ -276,7 +361,8 @@ float diffusion_add_at(World& world, vec3 pos, float amount,
 // If its bitset is empty, or `geomDirty` is set, this rebuilds it from world.grid()
 // first.
 //
-// THE QUIET-FLOOR GATE, which is what makes an 18-44 ms sweep affordable at all. The
+// THE QUIET-FLOOR GATE, which is what makes a milliseconds-scale sweep affordable at
+// all. The
 // return value is a complete answer to "is there any point sweeping again":
 //
 //   * `present == false` — this layer has no danger field, because nothing has ever
@@ -285,7 +371,7 @@ float diffusion_add_at(World& world, vec3 pos, float amount,
 //   * `liveCells == 0` — the field exists but has fully evaporated. Nothing will
 //     change until the next diffusion_add, so a caller should STOP sweeping and
 //     resume when it next deposits. Skipping this is the difference between paying
-//     20 ms every 200 ms forever and paying it only while a floor is actually hot.
+//     a sweep every 200 ms forever and paying it only while a floor is actually hot.
 //
 // A caller that ignores both still gets correct results, just at full price.
 DiffusionStep diffusion_step(World& world, DiffusionScratch& scratch,
@@ -343,13 +429,14 @@ inline constexpr float kDangerUnit = 1.0f;
 // solver into a system, and it exists because the three things below are exactly the
 // things a call site gets wrong:
 //
-//   1. THE CADENCE. A sweep is 18-44 ms against an 8 ms step, so it cannot go per tick.
+//   1. THE CADENCE. A saturated sweep is a large fraction of the whole 8 ms step (the
+//      measured band is at the top of this file), so it cannot go per tick.
 //   2. THE FLOOR TOKEN. `scratch.open` is walkability for ONE World. The camera rides an
 //      elevator, the active layer changes, and a sweep against the bitset of the floor
 //      you left diffuses danger through walls that exist and holds it out of doorways
 //      that do not.
-//   3. THE QUIET GATE. Without it, a floor nobody has bled on pays 20 ms every 200 ms
-//      forever. With it, it pays nothing at all — not "one string hash", nothing: the
+//   3. THE QUIET GATE. Without it, a floor nobody has bled on pays a sweep every
+//      200 ms forever. With it, it pays nothing at all — not "one string hash", nothing: the
 //      sweep is not called.
 struct DiffusionDriver {
     DiffusionScratch scratch;
@@ -379,7 +466,7 @@ inline void diffusion_arm(DiffusionDriver& driver) { driver.hot = true; }
 // Deposit through the driver: diffusion_add, plus arming the gate so the next cadence
 // tick resumes sweeping. THE entry point for a producer — a corpse, a gunshot, a
 // scream. Returns what diffusion_add returned (0 when the source was refused inside
-// rock), and a refused source arms nothing, because waking a 20 ms sweep to rediscover
+// rock), and a refused source arms nothing, because waking a whole sweep to rediscover
 // that the floor is still empty is the one cost the gate exists to avoid.
 float diffusion_driver_add(DiffusionDriver& driver, World& world, int x, int y, int z,
                            float amount, const std::string& field = kDangerField);

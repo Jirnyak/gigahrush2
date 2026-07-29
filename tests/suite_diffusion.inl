@@ -20,8 +20,20 @@
 // measures and PRINTS milliseconds, and asserts nothing about them: a wall-clock
 // threshold is a test that fails on a loaded CI box and passes on a fast one, which
 // tells you about the box and not about the code. What it does assert is that the work
-// actually happened — that the bitset was built, that the sweep took the OPEN branch on
-// exactly as many cells as the bitset says are open, and that the field existed.
+// actually happened — that the bitset was built, that the sweep reported exactly as many
+// open cells as the bitset holds, and that the field existed.
+//
+// That block prints TWO figures, and the second one is not decoration. The sweep proves
+// that a 64-cell run of the field whose whole read neighbourhood is bitwise zero
+// computes to zero, and writes 0 over it instead ([sim/diffusion.cpp]) — so its cost
+// depends on how much danger is actually in flight. A sparse floor (the normal state,
+// and the only thing this file used to time) is ~3x cheaper per open cell than a
+// saturated one. Timing only the sparse case would publish a number that quietly
+// assumed the floor was quiet, so the SATURATED case is measured too and pinned with
+// liveCells == openCells, which is the work count that proves nothing was skipped.
+// A separate block above it fires one source at every run / row / plane / seam boundary
+// and checks all six faces exactly, because a wrong neighbourhood in that skip would
+// not corrupt a total — it would silently stop danger crossing one boundary.
 //
 // The toroidal assertions deserve a note. In this engine z DOES wrap: [world.md] says
 // "x/y/z wrap (torus); W does not", and Field::at / MacroGrid::mask apply wrap_macro to
@@ -703,6 +715,50 @@ static void test_diffusion_all() {
         }
     }
 
+    { // ---- the zero-group skip must not blind the stencil at a run boundary ----
+        // The sweep PROVES a 64-cell run of the field is all zero — own run plus the
+        // seven runs any of its cells can read from — and writes 0 over it instead of
+        // computing it ([sim/diffusion.cpp]). That is sound only while the "is anything
+        // near me" test covers every run a cell reads: its own, the two x-adjacent runs
+        // in its row, and the same run index in the +-y and +-z neighbour ROWS. An
+        // off-by-one there would corrupt nothing and shift no total — it would make
+        // danger silently fail to CROSS one boundary, which is exactly the class of bug
+        // a mass-conservation check cannot see. So: one source, six faces, at every
+        // coordinate where a run, a row, a plane or the torus seam changes.
+        constexpr int kSkipProbes[][3] = {
+            {0, 0, 0},       // all three axes on the wrap seam; run 0, bit 0
+            {63, 64, 64},    // last cell of run 0 — +x must reach into run 1
+            {64, 64, 64},    // first cell of run 1 — -x must reach back into run 0
+            {127, 127, 127}, // last cell of the last run, row and plane: everything wraps
+            {1, 0, 127},     // interior x against a row seam and a plane seam
+            {64, 127, 0},    // a run boundary against both a row and a plane seam
+        };
+        const float probeFace = 0.15f * 0.98f; // rate * keep into each of the six faces
+        for (const auto& p : kSkipProbes) {
+            World w; // all air, so every one of the six faces is open
+            DiffusionScratch sc;
+            diffusion_refresh_walkable(w.grid(), sc);
+            CHECK(diffusion_add(w, p[0], p[1], p[2], 1.0f) == 1.0f);
+            const DiffusionStep st = diffusion_step(w, sc);
+            Field<float>* fp = w.fields().find<float>(kDangerField);
+            CHECK(fp != nullptr);
+            if (fp == nullptr) return;
+            for (int ax = 0; ax < 3; ++ax)
+                for (int s = -1; s <= 1; s += 2) {
+                    int q[3] = {p[0], p[1], p[2]};
+                    q[ax] += s;
+                    CHECK(std::fabs(fp->at(q[0], q[1], q[2]) - probeFace) < 1e-6f);
+                }
+            // Source plus exactly six faces — no more (the skip did not leak a seventh
+            // cell) and no fewer (it did not swallow one).
+            CHECK(st.liveCells == 7u);
+            CHECK(st.openCells == static_cast<std::uint32_t>(kMacroCells));
+            // The run bitset is scratch the sweep sizes itself: one bit per 64-cell run,
+            // 2,097,152 / 64 = 32,768 runs = 512 words = 4 KiB.
+            CHECK(sc.hotGroups.size() == 512u);
+        }
+    }
+
     { // ---- measured cost, on a REAL floor's geometry ----
         // Synthetic all-air is the wrong thing to time: real geometry is part solid, and
         // solid cells take the cheap branch. So this uses the shipping generator.
@@ -736,7 +792,9 @@ static void test_diffusion_all() {
                                   lattice_coord(2), 1.0f) > 0.0f)
                     ++seeded;
         CHECK(seeded == 16u); // 4x4 shaft centres on one lattice storey, all air
-        CHECK(w.fields().find<float>(kDangerField) != nullptr);
+        Field<float>* fp = w.fields().find<float>(kDangerField);
+        CHECK(fp != nullptr);
+        if (fp == nullptr) return; // the saturated block below writes through it
 
         constexpr int kSweeps = 10;
         DiffusionStep last;
@@ -746,10 +804,12 @@ static void test_diffusion_all() {
         const double perSweepMs =
             std::chrono::duration<double, std::milli>(t1 - t0).count() / kSweeps;
 
-        // WORK COUNTS — these are the assertions. The sweep took the open branch on
-        // exactly as many cells as the bitset says are open, on ten consecutive sweeps
-        // with no rebuild in between, so the timing below measured a real sweep over
-        // real geometry and not an early-out.
+        // WORK COUNTS — these are the assertions. The sweep reported exactly as many
+        // open cells as the bitset holds, on ten consecutive sweeps with no rebuild in
+        // between, so this ran over real geometry and not an early-out. What it does NOT
+        // prove any more is that every one of those cells did the arithmetic: the sweep
+        // proves zero runs are zero. The saturated block further down is where full work
+        // is pinned, by liveCells == openCells.
         CHECK(last.present);
         CHECK(last.openCells == static_cast<std::uint32_t>(openCells));
         CHECK(openCells > 0u && openCells < kMacroCells); // a real floor is part solid
@@ -758,28 +818,65 @@ static void test_diffusion_all() {
         CHECK(sc.walkable_ready());
         CHECK(sc.open.size() == (kMacroCells + 63) / 64); // 32,768 words = 256 KiB
         CHECK(sc.back.size() == kMacroCells);             // one 8.00 MiB back buffer
+        CHECK(sc.hotGroups.size() == 512u);               // 32,768 run bits = 4 KiB
         CHECK(!sc.geomDirty);
+        // The sparse figure above is the CHEAP case and it must be labelled as one: only
+        // a few thousand of the 1.25 M open cells hold anything, so the sweep proves
+        // most 64-cell runs are zero rather than computing them ([sim/diffusion.cpp]).
+        // Asserted rather than assumed, because it is the premise of the two-figure
+        // print below: a sparse field is one where live is a tiny fraction of open.
+        CHECK(last.liveCells * 20u < static_cast<std::uint32_t>(openCells));
+
+        // ---- and the SATURATED worst case, which is the number a budget needs ----
+        // Every open cell above minLevel, so no run is skippable and the sweep does the
+        // full 6-neighbour stencil on all 1.25 M of them. Measuring only the sparse case
+        // would publish a figure that quietly depends on the floor being quiet.
+        //
+        // fill() writes walls too; the untimed sweep below pins them back to 0 and is
+        // also what makes the timed run start from a settled state. keep = 0.98 and 10
+        // sweeps leave every cell at >= 0.98^11 = 0.80, far above minLevel, so nothing
+        // becomes skippable part-way through the measurement.
+        fp->fill(1.0f);
+        diffusion_step(w, sc);
+        const auto s0 = clock::now();
+        DiffusionStep sat;
+        for (int i = 0; i < kSweeps; ++i) sat = diffusion_step(w, sc);
+        const auto s1 = clock::now();
+        const double satSweepMs =
+            std::chrono::duration<double, std::milli>(s1 - s0).count() / kSweeps;
+        // THE WORK COUNT that makes the saturated timing meaningful: every open cell is
+        // live, so not one run could be skipped and the figure below is full work. This
+        // is the assertion, not the milliseconds.
+        CHECK(sat.liveCells == sat.openCells);
+        CHECK(sat.openCells == static_cast<std::uint32_t>(openCells));
+        CHECK(sat.total > 0.0f);
 
         // The affordability claim, printed with the numbers it rests on so it can be
         // re-derived instead of believed. kDiffusionSweepsPerSec = 5, so the tick cost
         // is 5 * perSweep milliseconds per wall-clock second, against a 1000 ms budget
-        // of one core.
+        // of one core. BOTH cases are printed: a single number here would be a claim
+        // about how quiet the floor happened to be.
+        const double den = static_cast<double>(openCells ? openCells : 1u);
         const double perSecondMs =
             perSweepMs * static_cast<double>(kDiffusionSweepsPerSec);
-        const double nsPerOpenCell =
-            perSweepMs * 1e6 / static_cast<double>(openCells ? openCells : 1u);
-        std::printf("  diffusion: %u cells, field 8.00 MiB + scratch 8.00 MiB + bitset "
-                    "256 KiB = 16.25 MiB/layer\n",
+        const double satPerSecondMs =
+            satSweepMs * static_cast<double>(kDiffusionSweepsPerSec);
+        std::printf("  diffusion: %u cells, field 8.00 MiB + scratch 8.00 MiB + walkable "
+                    "256 KiB + run bits 4 KiB = 16.254 MiB/layer\n",
                     static_cast<unsigned>(kMacroCells));
-        std::printf("  diffusion: %.2f ms/sweep on a real Residential floor (%u of %u "
-                    "cells open, %.1f%%, %.2f ns/open cell); bitset bake %.2f ms\n",
-                    perSweepMs, static_cast<unsigned>(openCells),
-                    static_cast<unsigned>(kMacroCells),
-                    100.0 * static_cast<double>(openCells) /
-                        static_cast<double>(kMacroCells),
-                    nsPerOpenCell, bakeMs);
-        std::printf("  diffusion: at %d sweeps/s that is %.2f ms per wall-clock second = "
-                    "%.2f%% of one core (sim step budget is %d ms)\n",
-                    kDiffusionSweepsPerSec, perSecondMs, perSecondMs / 10.0, kSimStepMs);
+        std::printf("  diffusion: %u of %u cells open (%.1f%%); bitset bake %.2f ms\n",
+                    static_cast<unsigned>(openCells),
+                    static_cast<unsigned>(kMacroCells), 100.0 * den /
+                        static_cast<double>(kMacroCells), bakeMs);
+        std::printf("  diffusion: SPARSE  (%u live) %.2f ms/sweep = %.2f ns/open cell; "
+                    "at %d sweeps/s %.2f ms/s = %.2f%% of one core\n",
+                    last.liveCells, perSweepMs, perSweepMs * 1e6 / den,
+                    kDiffusionSweepsPerSec, perSecondMs, perSecondMs / 10.0);
+        std::printf("  diffusion: SATURATED (%u live, nothing skippable) %.2f ms/sweep = "
+                    "%.2f ns/open cell; at %d sweeps/s %.2f ms/s = %.2f%% of one core "
+                    "(sim step budget is %d ms)\n",
+                    sat.liveCells, satSweepMs, satSweepMs * 1e6 / den,
+                    kDiffusionSweepsPerSec, satPerSecondMs, satPerSecondMs / 10.0,
+                    kSimStepMs);
     }
 }

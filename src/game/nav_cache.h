@@ -23,14 +23,46 @@
 //     same `bake_fine` pass. Travels WITH the flow field and never alone, because
 //     `nav::route_step` composes the two and either one on its own routes nobody.
 //
-// THE MEMORY BOUND IS THE SECTION MASK, and there is nothing else here that bounds
-// anything. A caller that only wants reachability answers reads `kNavSectionCoarse`
-// alone and pays 13,108 bytes instead of 136,327,988 — a factor of 10,400 — and
-// `nav_cache_bytes` lets it reject a file by length before it reads a byte. There is no
-// eviction of any kind: nothing here enumerates, ages out, or size-caps a cache
-// directory, so a long-lived stack grows on disk without limit. That is a real gap, not
-// a design choice; it is called out rather than implied so nobody reads the section mask
-// as a disk-space policy.
+// THE MEMORY BOUND IS THE SECTION MASK; THE DISK BOUND IS `NavCachePolicy`. A caller
+// that only wants reachability answers reads `kNavSectionCoarse` alone and pays 13,108
+// bytes instead of 136,327,988 — a factor of 10,400 — and `nav_cache_bytes` lets it
+// reject a file by length before it reads a byte.
+//
+// The disk side used to have no bound at all, which was stated here as a known gap: the
+// key space is (number, kind, seed), so growth was unbounded not in floors — 255 legal
+// labels ([game/floor_registry.h] kFloorSlots) is only 34.7 GB of it — but in SEEDS. One
+// re-rolled world orphaned every previous file forever, and nothing here enumerated, aged
+// out or size-capped anything. `nav_cache_evict` closes it, and `save_nav_cache` calls it
+// after every successful write, so the bound holds without the caller opting in:
+//
+//   * the FINE half is an LRU byte budget (`fineBudgetBytes`, default 4 full entries =
+//     545,311,952 B). Over budget, the least-recently-used entry is not deleted but
+//     DOWNGRADED to its coarse section — 136,327,988 B -> 13,108 B.
+//   * the COARSE half survives eviction, capped only by a stub count
+//     (`maxCoarseStubs`, default 512 > the 255 legal labels, so one world keeps every
+//     floor's coarse graph). Deleting a 13 KB section that replaces ~1.9 s of BFS in
+//     order to reclaim 0.0096 % of a full entry is the one trade this module must never
+//     make.
+//
+// MEASURED, over main.cpp's ten-floor demo stack, every floor visited once: 1,363,279,880
+// B (1.27 GiB) before, 545,390,600 B (0.51 GiB) after — 4 full entries plus 6 coarse
+// stubs. The bound is O(1) in stack depth and in seed churn, not O(n): the hard ceiling
+// for ANY number of distinct keys is 545,311,952 + 512 x 13,108 = 552,023,248 B
+// (0.514 GiB).
+//
+// WHY THE FINE HALF IS STILL PERSISTED AT ALL, since it is 99.99 % of the bytes: because
+// re-baking it costs an order of magnitude more than reading it back. TWO SEPARATE
+// MEASUREMENTS, kept separate on purpose — conflating them is how a doc comment starts
+// lying. (1) The bake: coarse ~1.9 s + fine ~1.8 s on a 20-thread machine, the figure
+// [world/nav_async.h] and [app/main.cpp] both carry; nothing here re-timed it, and
+// main.cpp's `[nav] bake coarse %.0f ms | fine %.0f ms` line is where a live number comes
+// from. (2) The medium, timed on this host 2026-07-29 over one 136,327,988 B file:
+// 277 ms to write it FlushFileBuffers'd (493 MB/s) and 91 ms to read it back page-cache-
+// warm (1503 MB/s). The break-even the reader must clear is 128 MiB / 1.8 s = 74.6 MB/s,
+// so the read clears it by ~20x and even the conservative write figure clears it by ~6x.
+// A cold-cache read is slower than 91 ms and untested here. So the fine half earns its
+// place while it is the recently-used one, and stops earning it the moment it is not —
+// which is exactly what the LRU tail expresses.
 //
 // TWO LAYERS, and the lower one does NO FILE I/O. `nav_cache_write` / `nav_cache_read`
 // move bytes only — main's rule, not this file's preference ([game/save.h]: "`giga_game`
@@ -109,6 +141,46 @@ inline constexpr std::size_t kNavFineWire =
     static_cast<std::size_t>(nav::kNodes) * kMacroCells; // 134,217,728 B = 128 MiB
 inline constexpr std::size_t kNavNearestWire = kMacroCells; // 2,097,152 B = 2 MiB
 
+// The three blob lengths a reader can ever accept, named because the eviction sweep
+// classifies a file by comparing its length on disk against the one its own header
+// declares — any other length is a file no reader will ever get anything out of (a crash
+// mid-write, a leftover temp), and reclaiming it is free. Kept as constants rather than
+// `nav_cache_bytes(mask)` calls so they are usable in a static_assert.
+inline constexpr std::size_t kNavCacheCoarseOnlyWire =
+    kNavCacheHeaderWire + kNavCoarseWire; //      13,108 B
+inline constexpr std::size_t kNavCacheFineOnlyWire =
+    kNavCacheHeaderWire + kNavFineWire + kNavNearestWire; // 136,314,932 B
+inline constexpr std::size_t kNavCacheFullWire =
+    kNavCacheCoarseOnlyWire + kNavFineWire + kNavNearestWire; // 136,327,988 B
+
+// --- The disk bound ----------------------------------------------------------------
+//
+// FOUR full entries, not "as many as fit". The app keeps exactly ONE floor live
+// (`FloorStreamer::init(stack, keepRadius=0)`), so a cached fine field only ever pays off
+// on RE-ENTRY, and the re-entry a player actually performs is a turn-around: ride down N
+// floors, come back up. Four covers a four-deep excursion at 0.51 GiB; the demo stack's
+// ten floors would cost 1.27 GiB to hold whole, for hits nobody on a linear descent
+// collects. Raise it and the recovered work is one ~1.8 s FINE bake per extra depth of
+// backtrack — only the fine half, because the coarse stub survives eviction either way.
+// That is the honest way to price the next 136 MB.
+inline constexpr int kNavCacheFullEntries = 4;
+inline constexpr std::uint64_t kNavCacheFineBudgetBytes =
+    static_cast<std::uint64_t>(kNavCacheFullEntries) * kNavCacheFullWire; // 545,311,952
+
+// 512 coarse stubs = 6,711,296 B = 1.23 % of the fine budget, and 512 > kFloorSlots
+// (255), so a single world's every legal floor label keeps its coarse graph forever and
+// this cap only bites across re-seeded worlds. It exists so the total is bounded in the
+// SEED axis too, not because 13 KB is expensive.
+inline constexpr int kNavCacheMaxCoarseStubs = 512;
+
+// What a sweep is allowed to keep. A struct rather than two scalar parameters because the
+// two halves of a blob are priced 10,400x apart and a call site that passed them in the
+// wrong order would compile.
+struct NavCachePolicy {
+    std::uint64_t fineBudgetBytes = kNavCacheFineBudgetBytes;
+    int maxCoarseStubs = kNavCacheMaxCoarseStubs;
+};
+
 // The three numbers a floor's geometry — and therefore its nav — is a pure function of.
 // Grouped into a struct because they travel together through every call here and because
 // getting their ORDER wrong at a call site with three scalar parameters is a bug that
@@ -151,6 +223,14 @@ std::string nav_cache_name(const NavCacheKey& key);
 // game_test.cpp both call it that way and a rename there is another lane's edit.
 std::string nav_cache_name(int number, FloorKind kind, std::uint32_t seed);
 
+// The inverse, and the ONLY thing that decides whether a file in a cache directory belongs
+// to this module. Returns false for any name `nav_cache_name` could not have produced,
+// because it is ROUND-TRIP validated: the parsed key is re-formatted and compared to the
+// input, so "nav_f+3_k2_s162e.bin" and "NAV_F3_K2_S0000162E.BIN" are both refused rather
+// than tolerated. The sweep deletes files, so the ownership test has to be exact in the
+// direction that matters — a name it does not recognise is never touched.
+bool nav_cache_parse_name(const std::string& name, NavCacheKey& out);
+
 // Exact blob size for a section set, so an app can size a buffer or reject a file by
 // length before reading a byte of it. 0 for an empty section set.
 std::size_t nav_cache_bytes(std::uint32_t sections);
@@ -184,24 +264,39 @@ bool nav_cache_read(const std::uint8_t* bytes, std::size_t n, const NavCacheKey&
                     nav::CoarseGraph* coarse, nav::FineNav* fine,
                     NavCacheError* err = nullptr);
 
-// --- The two path-taking wrappers: the only file I/O in this file ------------------
+// --- The path-taking wrappers: the only file I/O in this file ----------------------
 //
-// `FloorStreamer::ensure_loaded` calls these, so their signatures are a contract with
-// another lane's file and are deliberately unchanged from the pre-merge version. They
-// are thin: the whole format lives above, and these add exactly a `std::fopen`, the
-// parent-directory creation, and the chunking that keeps a 130 MiB nav from being
-// duplicated in RAM on its way to or from disk.
+// `FloorStreamer::ensure_loaded` calls the first two, so their signatures are a contract
+// with another lane's file: the six leading parameters are unchanged, and the policy
+// argument is defaulted precisely so that call site keeps compiling untouched. They are
+// thin: the whole format lives above, and these add exactly a `std::fopen`, the
+// parent-directory creation, the chunking that keeps a 130 MiB nav from being duplicated
+// in RAM on its way to or from disk, and the directory bound described at the top.
 //
 // Both are `-fno-exceptions`-clean: C stdio plus the `std::error_code` overload of
 // `std::filesystem::create_directories`, which is specified not to throw.
 
-// Write a full (coarse + fine + nearest) cache to `path`, creating parent directories.
-// Returns false on any I/O failure and leaves no truncated file behind — a failed write
-// just means the next load re-bakes. Refuses a `fine` that is not fully baked, for the
-// reason `nav_cache_write` gives.
+// Write a full (coarse + fine + nearest) cache to `path`, creating parent directories,
+// then bound `path`'s directory under `policy` — the entry just written is pinned, so the
+// sweep can never evict the floor the caller is about to use. Returns false on any I/O
+// failure. Refuses a `fine` that is not fully baked, for the reason `nav_cache_write`
+// gives.
+//
+// The bytes land in `path + ".tmp"` and are renamed over `path`, so an interrupted write
+// no longer destroys the previous good cache for this key: the old file is intact until
+// the new one is complete. That is a strict improvement on the earlier in-place `"wb"`,
+// which truncated the good copy on its first byte, and it is the reason the sweep treats a
+// `.tmp` leftover as reclaimable junk rather than as a stranger's file.
+//
+// ONE CONDITION ON THE BOUND, stated because it is invisible otherwise: `path`'s basename
+// must be the `nav_cache_name` of the same key, which is what `FloorStreamer` (the only
+// production caller) passes. An invented filename is not recognised by the sweep — by the
+// same rule that keeps it from deleting a stranger's file — so such an entry is neither
+// counted nor evicted, and nothing bounds it.
 bool save_nav_cache(const std::string& path, int number, FloorKind kind,
                     std::uint32_t seed, const nav::CoarseGraph& coarse,
-                    const nav::FineNav& fine);
+                    const nav::FineNav& fine,
+                    const NavCachePolicy& policy = NavCachePolicy{});
 
 // Read a full cache from `path` into `coarse`/`fine`. Returns false — leaving BOTH
 // outputs untouched — when the file is missing, truncated, corrupt, or its header does
@@ -211,6 +306,74 @@ bool save_nav_cache(const std::string& path, int number, FloorKind kind,
 bool load_nav_cache(const std::string& path, int number, FloorKind kind,
                     std::uint32_t seed, nav::CoarseGraph& coarse, nav::FineNav& fine,
                     NavCacheError* err = nullptr);
+
+// The same read, section-picked: pass nullptr for a half you do not want. This is what
+// makes an evicted (downgraded) entry worth keeping — after eviction a file carries only
+// its coarse section, `load_nav_cache` above correctly refuses it with `MissingSection`,
+// and this returns the 13 KB graph that replaces ~1.9 s of the ~3.7 s bake. A caller that
+// wants that saving asks for `(&coarse, nullptr)`, gets `true`, and bakes only the fine
+// half.
+//
+// It also fixes at the FILE layer the limit `nav_cache_read` has at the buffer layer,
+// which [tests/suite_navcache.inl] pins: the buffer reader checks `n < total` before it
+// checks sections, so pulling the 13 KB graph out of a full blob needs all 136 MB
+// resident. Here it is a 52-byte header plus a 13,056-byte body read, whatever the file's
+// total length.
+//
+// Both outputs null is a caller bug, refused as `MissingSection` — validating a file
+// without reading it is what `nav_cache_usage` is for. `load_nav_cache` is exactly this
+// with both halves requested.
+bool load_nav_cache_sections(const std::string& path, int number, FloorKind kind,
+                             std::uint32_t seed, nav::CoarseGraph* coarse,
+                             nav::FineNav* fine, NavCacheError* err = nullptr);
+
+// --- The directory bound -----------------------------------------------------------
+//
+// Measured state of one cache directory. Every field is counted from the filesystem, not
+// from bookkeeping, so a sweep's `after` is an observation rather than an assertion about
+// itself. Files whose names this module could not have written are not counted, not
+// touched, and not reported: they are somebody else's.
+struct NavCacheUsage {
+    int files = 0;               // owned cache files present
+    int fineFiles = 0;           // carrying the 136 MB fine half
+    int coarseFiles = 0;         // coarse-only stubs (13,108 B)
+    int junkFiles = 0;           // owned, but no reader can use it (truncated / .tmp)
+    std::uint64_t bytes = 0;     // total, including junk
+    std::uint64_t fineBytes = 0; // total of the fineFiles, the budgeted quantity
+};
+NavCacheUsage nav_cache_usage(const std::string& dir);
+
+// What one sweep did. `overBudget` means the policy could not be met — the only way that
+// happens is a budget smaller than the single pinned entry, which is reported rather than
+// hidden because silently ignoring your own bound is how a bound rots.
+struct NavCacheSweep {
+    NavCacheUsage before{};
+    NavCacheUsage after{};
+    int junkRemoved = 0;   // unreadable length: reclaimed unconditionally, before any LRU
+    int downgraded = 0;    // full -> coarse-only, the ordinary eviction
+    int stubsRemoved = 0;  // coarse stubs deleted, only past maxCoarseStubs
+    std::uint64_t bytesReclaimed = 0;
+    bool overBudget = false;
+};
+
+// Bring `dir` within `policy`. Ordinary eviction DOWNGRADES the least-recently-used full
+// entry to its coarse section instead of deleting it — 136,327,988 B -> 13,108 B, keeping
+// the half that is 10,400x cheaper per second of bake it replaces. `keep` (optional) is
+// never chosen as a victim.
+//
+// "Recently used" is the file's mtime, which `load_nav_cache*` re-stamps on every hit, so
+// this is a real LRU and not write-order: NTFS disables last-ACCESS updates by default, so
+// atime cannot carry it. Ties break by filename ascending, which makes the victim
+// deterministic and therefore testable. A downgraded entry keeps its original stamp, so
+// being evicted is not mistaken for being used.
+//
+// Safe to call on a directory that does not exist (does nothing), and idempotent: a second
+// sweep under the same policy removes nothing. Deleting a cache entry is always safe —
+// every one of them is a pure function of three numbers and re-bakeable at any time — so
+// the failure this guards against is not data loss but wasted work.
+NavCacheSweep nav_cache_evict(const std::string& dir,
+                              const NavCachePolicy& policy = NavCachePolicy{},
+                              const NavCacheKey* keep = nullptr);
 
 // -- WHAT THE INTEGRITY CHECK DOES AND DOES NOT COVER, stated rather than implied ------
 //

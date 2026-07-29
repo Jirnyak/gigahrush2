@@ -1,6 +1,8 @@
 #include "sim/diffusion.h"
 
 #include <algorithm>
+#include <bit>     // std::countr_zero, std::popcount — the sweep's bit iteration
+#include <cstring> // std::memcmp, std::memset — the group zero test and the group clear
 
 #include "world/macro_grid.h" // giga::MacroGrid, SubMask
 #include "world/types.h"      // kMacroCells, kMacroDim, kCellSize, macro_index, wrap_macro
@@ -11,19 +13,82 @@ namespace {
 // Words in the walkability bitset: 2,097,152 bits = 32,768 uint64 = 256 KiB.
 constexpr std::size_t kOpenWords = (kMacroCells + 63) / 64;
 
+// Flat strides. x is contiguous, y is one row, z is one plane — 512 B and 64 KiB
+// respectively at kMacroDim = 128, so a plane-ordered sweep keeps the three live z
+// planes (192 KiB) inside L2 and the +-z probes are the only ones that travel.
+constexpr std::size_t kRow = static_cast<std::size_t>(kMacroDim);
+constexpr std::size_t kPlane = kRow * kRow;
+constexpr std::size_t kSpan = kPlane * kRow;
+
+// The wrap offsets in the sweep are derived from these three, so if the flat layout in
+// world/types.h ever stops being x + y*N + z*N*N the sweep must not silently start
+// diffusing into the wrong cells.
+static_assert(kSpan == kMacroCells,
+              "macro_index must stay x + y*kMacroDim + z*kMacroDim^2");
+
+// One 64-cell GROUP is one word of the walkability bitset, and the sweep is organised
+// around it: kWordsPerRow groups tile a row exactly. That tiling is the whole reason
+// the row-blocked loop below is allowed to resolve each neighbour row's bitset word
+// ONCE per row — every row, and every neighbour row, starts on a word boundary only
+// because kMacroDim divides by 64.
+constexpr std::size_t kWordsPerRow = kRow / 64;
+static_assert(kRow % 64 == 0,
+              "a row must be a whole number of walkability words: the sweep resolves "
+              "the six neighbour word pairs once per row, which needs every row (and "
+              "every +-kRow / +-kPlane neighbour row) to start on a word boundary");
+static_assert(kWordsPerRow * 64 == kRow, "kWordsPerRow tiles a row exactly");
+
 // One bit per macro cell, indexed by the same flat macro_index the field uses.
 inline bool bit_open(const std::uint64_t* words, std::size_t i) {
     return ((words[i >> 6] >> (i & 63)) & 1ull) != 0ull;
 }
 
-// NOT DONE, and recorded so the next agent does not redo the experiment: replacing the
-// per-neighbour branch below with a branchless `float(bit) * (src[n] - c)` multiply is
-// bit-identical (a walled neighbour contributes +-0.0, which changes no float sum) but
-// measured NO faster. Six interleaved A/B pairs on this host, medians 34.6 ms branchy vs
-// 35.5 ms branchless — indistinguishable. An earlier non-interleaved pair suggested
-// 24 ms vs 17 ms, which was machine load drifting between the two runs, not the code.
-// If someone profiles this properly, the thing to measure first is the +-z neighbour
-// reads (64 KiB apart in an 8 MiB buffer), not the branches.
+// One group's worth of zeroes, for the "is this group entirely 0" memcmp below.
+// memcmp rather than a float scan on purpose: it asks the BITWISE question, and
+// "all 256 bytes are zero" is the precondition the skip's proof needs (it rules out
+// -0.0f, denormals and NaN in one test, where `!= 0.0f` would let -0.0f through).
+alignas(64) constexpr float kZeroGroup[64] = {};
+
+// Words in the non-zero-group bitset: one bit per 64-cell group.
+constexpr std::size_t kGroupWords = (kOpenWords + 63) / 64;
+
+// WHY THE SWEEP IS SHAPED THE WAY IT IS, measured rather than reasoned. Same binary,
+// every form interleaved round-robin so machine load cannot land on one arm, timed with
+// QueryThreadCycleTime (which excludes the cycles this thread was descheduled for) and
+// quoted as min-of-11-rounds. 12th-gen i7-12700H, MSVC 19.44 /O2 /Ob2 /GL, linked
+// /LTCG, real Residential floor, 1,253,822 of 2,097,152 cells open (59.8%). Each form's
+// whole 8.00 MiB output was memcmp'd against the per-cell form's, and all four
+// DiffusionStep members compared, so every figure below is for a BIT-IDENTICAL result:
+//
+//   form                                        sparse field     saturated field
+//   per-cell, six wrap conditionals per cell    33.8 ns/cell     13.4 ns/cell
+//   row-blocked + set-bit iteration              17.5  (1.93x)    6.6  (2.02x)
+//   + the zero-group skip                         2.19 (15.4x)    7.1  (1.86x)
+//
+// "sparse" is the suite's own scenario — 16 sources, 0.2% of open cells non-zero, which
+// is also what every published ms/sweep figure for this file was measured on. Because
+// the skip is data-dependent, the SATURATED column (every open cell at 1.0, nothing
+// skippable) is measured too and is the number a budget must be built on: the skip's
+// worst case is 8% slower than not having it and still 1.86x faster than the per-cell
+// form, so it is never a regression against what shipped.
+//
+// TWO experiments that did NOT pay, recorded so nobody redoes them:
+//   * `__restrict` on the three base pointers alone: 0.97x, i.e. nothing. Aliasing
+//     between the field vector and the scratch back buffer was never the problem.
+//   * Branchless neighbour terms — `float(bit) * (src[n] - c)`, or the equivalent
+//     AND of the term's bits with a 0/-1 mask. Bit-identical (a walled neighbour
+//     contributes +-0.0f, and acc is never -0.0f because it starts +0.0f and x-x is
+//     +0.0f) and measurably SLOWER: 1.34x against the row-blocked form's 1.93x. The
+//     six neighbour branches predict well enough that removing them costs more in
+//     extra work than it saves in mispredicts. This confirms the earlier interleaved
+//     A/B that reached the same conclusion from the per-cell form.
+//
+// AND THE HEADLINE CORRECTION, because it is worth more than any of the above: the
+// 18-44 ms band this file used to quote is mostly the SCHEDULER, not the loop. The
+// identical binary, unpinned, measured 20.9-30.5 ms/sweep; pinned to one P-core with
+// SetThreadAffinityMask it measured 10.4-13.6 ms. A sweep that lands on an E-core, or
+// on a P-core at a de-boosted clock, is ~2x the same sweep on a boosted P-core. That is
+// why test_diffusion_all asserts work counts and merely PRINTS milliseconds.
 
 // A cell participates unless it is FULLY solid — the same coarse walkability
 // [world/nav.h] bakes against and [sim/physics.h] collides against. A wall holds no
@@ -149,9 +214,15 @@ DiffusionStep diffusion_step(World& world, DiffusionScratch& scratch,
         diffusion_refresh_walkable(world.grid(), scratch);
     if (scratch.back.size() != kMacroCells) scratch.back.resize(kMacroCells);
 
-    const std::vector<float>& src = f.data();
-    std::vector<float>& dst = scratch.back;
-    const std::uint64_t* open = scratch.open.data();
+    if (scratch.hotGroups.size() != kGroupWords) scratch.hotGroups.resize(kGroupWords);
+
+    // Raw pointers, and __restrict because these two buffers genuinely cannot alias:
+    // one is the Field's vector, the other the scratch's, and the swap happens after
+    // the loop. Measured worth nothing on its own (0.97x) — kept only because it is
+    // free and true, not as an optimisation.
+    const float* __restrict src = f.data().data();
+    float* __restrict dst = scratch.back.data();
+    const std::uint64_t* __restrict open = scratch.open.data();
 
     // Clamped, not rejected: there is no exception to raise ([AGENTS.md]) and a rate
     // above 1/6 makes the explicit 6-neighbour stencil unstable, so the checkerboard
@@ -159,79 +230,189 @@ DiffusionStep diffusion_step(World& world, DiffusionScratch& scratch,
     // typo into "spreads a little slower than asked".
     const float rate = std::clamp(params.rate, 0.0f, kDiffusionMaxRate);
     const float keep = 1.0f - std::clamp(params.decay, 0.0f, 1.0f);
+    const float minLevel = params.minLevel;
 
-    // Flat strides. x is contiguous, y is one row, z is one plane — 512 B and 64 KiB
-    // respectively at kMacroDim = 128, so a plane-ordered sweep keeps the three live z
-    // planes (192 KiB) inside L2 and the +-z probes are the only ones that travel.
-    constexpr std::size_t kRow = static_cast<std::size_t>(kMacroDim);
-    constexpr std::size_t kPlane = kRow * kRow;
-    constexpr std::size_t kSpan = kPlane * kRow;
-    // The wrap offsets below are derived from these three, so if the flat layout in
-    // world/types.h ever stops being x + y*N + z*N*N the sweep must not silently start
-    // diffusing into the wrong cells.
-    static_assert(kSpan == kMacroCells,
-                  "macro_index must stay x + y*kMacroDim + z*kMacroDim^2");
+    // ---- PASS 1: which 64-cell groups hold anything at all -----------------
+    //
+    // THE SKIP THIS BUYS, and its proof. If a group's 256 bytes are bitwise zero, and
+    // so are the seven groups any of its cells can read from (the two x-adjacent groups
+    // in the row, and the same group index in the +-y and +-z neighbour ROWS), then
+    // every cell in it has c == +0.0f and every neighbour term is (+0.0f - +0.0f) ==
+    // +0.0f. So acc == +0.0f, next == (+0.0f + rate*+0.0f) * keep == +0.0f for ANY
+    // finite rate and keep — including keep == 0 — and the clamp cannot turn +0.0f into
+    // anything else. Writing 0.0f over the whole group is therefore BIT-IDENTICAL to
+    // computing it, `total` is unchanged (adding +0.0 to a double is a no-op) and
+    // `live` is unchanged. Solid cells in the group were going to be zeroed anyway.
+    //
+    // WHY IT IS WORTH A WHOLE 8.00 MiB READ: a real floor is almost entirely quiet. The
+    // suite's own scenario has 2,592 non-zero cells against 1,253,822 open ones —
+    // 0.2%. Diffusion is a LOCAL stencil, so danger never occupies more than the L1
+    // ball its deposits have had time to reach; there is no state in which a floor is
+    // uniformly hot for long, because `keep` is pulling every cell down at the same
+    // time. Measured 15.4x on that scenario, and 1.86x — still faster than the
+    // per-cell form it replaced — when every open cell is above minLevel.
+    //
+    // AND IT HAS NO INVALIDATION HAZARD, which is the whole reason it is a pass and not
+    // a cached set. It is derived from `src` inside the sweep that uses it, so unlike
+    // scratch.open there is no geometry-moved / floor-changed / deposit-behind-my-back
+    // case: nothing can make it stale, and diffusion_add needs to know nothing about it.
+    std::uint64_t* __restrict hot = scratch.hotGroups.data();
+    std::memset(hot, 0, kGroupWords * sizeof(std::uint64_t));
+    for (std::size_t g = 0; g < kOpenWords; ++g)
+        if (std::memcmp(src + g * 64u, kZeroGroup, sizeof(kZeroGroup)) != 0)
+            hot[g >> 6] |= 1ull << (g & 63);
+    const auto group_hot = [hot](std::size_t g) {
+        return ((hot[g >> 6] >> (g & 63)) & 1ull) != 0ull;
+    };
 
     // DOUBLE accumulator for a float field, on purpose. Summing up to 2,097,152 floats
     // in float loses precision as the running total grows past the individual terms — a
     // widely spread field is exactly the case where `total` matters and exactly the
     // case where a float sum is worst. One double register costs nothing against
-    // 16 MiB of memory traffic.
+    // 16 MiB of memory traffic. It stays a single ORDERED chain rather than four
+    // partial sums: splitting it was measured at 1.31x against the row-blocked form's
+    // 1.93x, i.e. the chain is not the bottleneck, so there is no reason to pay a
+    // different `total` for it.
     double total = 0.0;
     std::uint32_t live = 0;
-    std::uint32_t openSwept = 0;
 
-    for (int z = 0; z < kMacroDim; ++z)
+    // The work count is the popcount of the walkability bitset, which is exactly the
+    // set of cells this sweep is responsible for. Counting it here rather than
+    // incrementing per cell keeps the inner loop free of a dependency on it; the two
+    // are equal by construction because every open cell is either computed or proved
+    // to be 0 by the skip above.
+    std::size_t openSwept = 0;
+    for (std::size_t g = 0; g < kOpenWords; ++g)
+        openSwept += static_cast<std::size_t>(std::popcount(open[g]));
+
+    // ---- PASS 2: the sweep, one ROW at a time ------------------------------
+    //
+    // The per-cell form recomputed six wrap conditionals, six bitset word addresses and
+    // six shifted bit tests for EVERY cell. All of that is loop-invariant along x: a
+    // row's four out-of-row neighbour rows are fixed by (y, z), and each 64-cell group
+    // reads exactly one word from each of them. So the row prologue resolves the four
+    // offsets and the row bases once, the group prologue loads the four neighbour words
+    // once, and the body is register-only bit tests over a contiguous row.
+    for (int z = 0; z < kMacroDim; ++z) {
+        // ALL THREE axes wrap ([world.md]). Hoisted to the plane and the row, where the
+        // wrap is a property of the coordinate rather than of the cell.
+        const std::size_t zm = (z == 0) ? (kSpan - kPlane) : (std::size_t(0) - kPlane);
+        const std::size_t zp =
+            (z == kMacroDim - 1) ? (std::size_t(0) - (kSpan - kPlane)) : kPlane;
         for (int y = 0; y < kMacroDim; ++y) {
-            std::size_t i = macro_index(0, y, z);
-            for (int x = 0; x < kMacroDim; ++x, ++i) {
-                if (!bit_open(open, i)) {
-                    dst[i] = 0.0f; // a wall holds nothing, and exchanges nothing
-                    continue;
-                }
-                ++openSwept;
+            const std::size_t ym = (y == 0) ? (kPlane - kRow) : (std::size_t(0) - kRow);
+            const std::size_t yp =
+                (y == kMacroDim - 1) ? (std::size_t(0) - (kPlane - kRow)) : kRow;
+            const std::size_t i0 = macro_index(0, y, z);
+            const std::size_t w0 = i0 >> 6;
+            const std::size_t wym = (i0 + ym) >> 6, wyp = (i0 + yp) >> 6;
+            const std::size_t wzm = (i0 + zm) >> 6, wzp = (i0 + zp) >> 6;
+            const float* __restrict rs = src + i0;
+            const float* __restrict rym = src + i0 + ym;
+            const float* __restrict ryp = src + i0 + yp;
+            const float* __restrict rzm = src + i0 + zm;
+            const float* __restrict rzp = src + i0 + zp;
+            float* __restrict rd = dst + i0;
 
-                // The six wrapped face neighbours as flat offsets. ALL THREE axes wrap
-                // ([world.md]); the branch is taken only on the two boundary planes of
-                // each axis, so it predicts perfectly and this stays a single add.
-                const std::size_t nb[6] = {
-                    (x == 0) ? i + (kRow - 1) : i - 1,
-                    (x == kMacroDim - 1) ? i - (kRow - 1) : i + 1,
-                    (y == 0) ? i + (kPlane - kRow) : i - kRow,
-                    (y == kMacroDim - 1) ? i - (kPlane - kRow) : i + kRow,
-                    (z == 0) ? i + (kSpan - kPlane) : i - kPlane,
-                    (z == kMacroDim - 1) ? i - (kSpan - kPlane) : i + kPlane,
-                };
-
-                const float c = src[i];
-                // Discrete Laplacian over the OPEN neighbours only. Each open pair
-                // (a, b) exchanges rate*(b - a) and rate*(a - b), which is symmetric,
-                // so the sum over the field is preserved exactly; a walled neighbour
-                // contributes to neither side, which is precisely a no-flux boundary.
-                // Total mass is therefore multiplied by `keep` and by nothing else —
-                // the property test_diffusion_all pins.
+            // The two cells of each 64-cell group whose x neighbour leaves the group:
+            // their walkability bit lives in another word and their index may wrap the
+            // row, so they take the general path. 2 of 64 cells.
+            //
+            // CALLED IN x ORDER, before and after the group body, and that is not
+            // cosmetic: `total` is one ordered chain of double adds, so visiting bit 63
+            // before bits 1..62 would change its last bits. Cells in x order means the
+            // sequence of adds is the open cells in increasing x, exactly as the
+            // per-cell form did them, which is what makes `total` bit-identical by
+            // construction rather than by luck.
+            const auto edge_cell = [&](int x) {
+                const std::size_t i = i0 + static_cast<std::size_t>(x);
+                if (!bit_open(open, i)) return; // a wall; the group memset already did it
+                const int xm = (x == 0) ? (kMacroDim - 1) : (x - 1);
+                const int xp = (x == kMacroDim - 1) ? 0 : (x + 1);
+                const float c = rs[x];
                 float acc = 0.0f;
-                for (const std::size_t n : nb)
-                    if (bit_open(open, n)) acc += src[n] - c;
-
+                if (bit_open(open, i0 + static_cast<std::size_t>(xm))) acc += rs[xm] - c;
+                if (bit_open(open, i0 + static_cast<std::size_t>(xp))) acc += rs[xp] - c;
+                if (bit_open(open, i + ym)) acc += rym[x] - c;
+                if (bit_open(open, i + yp)) acc += ryp[x] - c;
+                if (bit_open(open, i + zm)) acc += rzm[x] - c;
+                if (bit_open(open, i + zp)) acc += rzp[x] - c;
                 float next = (c + rate * acc) * keep;
-                // Clamps residue AND any small negative excursion, so the field cannot
-                // accumulate a tail of denormals that costs time and means nothing.
-                if (next < params.minLevel) next = 0.0f;
-                dst[i] = next;
+                if (next < minLevel) next = 0.0f;
+                rd[x] = next;
                 total += static_cast<double>(next);
-                // next is either exactly 0 or >= minLevel after the clamp above, so
-                // this IS the "cells >= minLevel" count the header promises.
                 if (next > 0.0f) ++live;
+            };
+
+            for (std::size_t g = 0; g < kWordsPerRow; ++g) {
+                const std::uint64_t self = open[w0 + g];
+                const int xg = static_cast<int>(g) * 64;
+                // Zero the whole group up front — 256 B, two stores — so the body never
+                // needs an else-branch for a solid cell and the two skips below are one
+                // `continue` each. A wall holds nothing and exchanges nothing.
+                std::memset(rd + xg, 0, 64u * sizeof(float));
+                // Wholly solid — 8,192 of the 32,768 groups on the Residential floor
+                // test_diffusion_all times, because floor_gen's storey slabs make whole
+                // z planes solid and a solid plane is 256 whole groups.
+                if (self == 0ull) continue;
+                if (!group_hot(w0 + g) &&
+                    !group_hot(w0 + (g + kWordsPerRow - 1) % kWordsPerRow) &&
+                    !group_hot(w0 + (g + 1) % kWordsPerRow) && !group_hot(wym + g) &&
+                    !group_hot(wyp + g) && !group_hot(wzm + g) && !group_hot(wzp + g))
+                    continue; // provably all zero — see the PASS 1 proof above
+                const std::uint64_t mym = open[wym + g], myp = open[wyp + g];
+                const std::uint64_t mzm = open[wzm + g], mzp = open[wzp + g];
+
+                edge_cell(xg); // x order: bit 0, then bits 1..62, then bit 63
+
+                // Bits 1..62: iterate the SET bits rather than all 64 positions, so a
+                // solid cell costs one `blsr` and no branch at all. 40% of this floor
+                // is solid, so that is 40% of the iterations gone. countr_zero yields
+                // the lowest set bit first, so this too runs in increasing x.
+                std::uint64_t m = self & 0x7FFFFFFFFFFFFFFEull;
+                while (m != 0ull) {
+                    const int b = std::countr_zero(m);
+                    m &= m - 1ull;
+                    const int x = xg + b;
+                    const float c = rs[x];
+                    // Discrete Laplacian over the OPEN neighbours only, in the same
+                    // order and with the same float operations as the per-cell form it
+                    // replaced. Each open pair (a, b) exchanges rate*(b - a) and
+                    // rate*(a - b), which is symmetric, so the sum over the field is
+                    // preserved exactly; a walled neighbour contributes to neither
+                    // side, which is precisely a no-flux boundary. Total mass is
+                    // therefore multiplied by `keep` and by nothing else — the property
+                    // test_diffusion_all pins.
+                    float acc = 0.0f;
+                    if ((self >> (b - 1)) & 1ull) acc += rs[x - 1] - c;
+                    if ((self >> (b + 1)) & 1ull) acc += rs[x + 1] - c;
+                    if ((mym >> b) & 1ull) acc += rym[x] - c;
+                    if ((myp >> b) & 1ull) acc += ryp[x] - c;
+                    if ((mzm >> b) & 1ull) acc += rzm[x] - c;
+                    if ((mzp >> b) & 1ull) acc += rzp[x] - c;
+                    float next = (c + rate * acc) * keep;
+                    // Clamps residue AND any small negative excursion, so the field
+                    // cannot accumulate a tail of denormals that costs time and means
+                    // nothing.
+                    if (next < minLevel) next = 0.0f;
+                    rd[x] = next;
+                    total += static_cast<double>(next);
+                    // next is either exactly 0 or >= minLevel after the clamp above, so
+                    // this IS the "cells >= minLevel" count the header promises.
+                    if (next > 0.0f) ++live;
+                }
+
+                edge_cell(xg + 63);
             }
         }
+    }
 
     // Swap rather than copy: the old field data becomes next sweep's scratch, so the
     // 8.00 MiB pair is allocated once for the lifetime of the World.
     f.data().swap(scratch.back);
     out.total = static_cast<float>(total);
     out.liveCells = live;
-    out.openCells = openSwept;
+    out.openCells = static_cast<std::uint32_t>(openSwept);
     return out;
 }
 

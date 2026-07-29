@@ -92,15 +92,15 @@ Contract contract_offer(const NpcPool& pool, NpcId giver, int floorZ,
         // `spawnWeightX10` of 0 is never rolled, and a `floorMask` naming no habitat
         // anchor matches no floor. Fail either for every floor and the kind cannot appear
         // by any path — the quest that can never complete this branch claims to avoid.
-        // `dmg > 0` does not exclude them: all three offenders hit hard. Measured on the
-        // live offer stream (512 bodies x the 10 shipped floors, seed 0x9E37 exactly as
-        // src/app/main.cpp:844-845 passes it), 11 of 318 Hunt offers named one —
-        // CREATOR 3, PSEUDOLIFT 4, SCULPTURE 4 (0.05 authored weight, which the
-        // generator's round() takes to 0). 307 survive, over 19 distinct kinds on the
-        // leanest floor, so this costs variety nothing. The floorMask half is vacuous
-        // against today's CSV (0 of 69 rows) and is here because `mask()` in
-        // tools/gen_mob_table.py emits 0 for an empty `floors_z` cell — one blank cell
-        // reintroduces the bug.
+        // `dmg > 0` does not exclude them: both offenders hit hard (44 and 24). MEASURED
+        // on the live offer stream (512 bodies x the 10 shipped floors, seed 0x9E37 as
+        // src/app/main.cpp:844-845 passes it) with only the filter below removed: 318
+        // Hunt offers, 7 naming one — CREATOR 3 (idx 13), PSEUDOLIFT 4 (idx 31), both a
+        // literal 0 in data/mobs.csv; 311 survive, over 19 distinct kinds on the leanest
+        // floor. An older 11 / 307 also named SCULPTURE, whose 0.05 went to 0.1 in
+        // bd4db77 — right for that CSV, stale for this one. The floorMask half is vacuous
+        // today (0 of 69 rows) and is here because `mask()` in tools/gen_mob_table.py
+        // emits 0 for an empty `floors_z` cell — one blank cell reintroduces the bug.
         //
         // GLOBAL rather than per-floor, deliberately. `contract_on_kill`
         // (src/app/main.cpp:593) has no floor gate — a Hunt counts the kind wherever it
@@ -134,13 +134,16 @@ Contract contract_offer(const NpcPool& pool, NpcId giver, int floorZ,
                    (static_cast<std::int32_t>(economy_band(deeper)) + 1);
     }
 
-    c.giver = giver;
+    // Minted HERE and nowhere else: the id above fed the hash, this is the (generation,
+    // id) pair that outlives the tick. `giver` is known valid (:46), so `handle()` reads a
+    // real generation rather than the 0 an out-of-range id would return. [contract.h]
+    c.giver = pool.handle(giver);
     c.state = static_cast<std::uint8_t>(ContractState::Offered);
     return c;
 }
 
 bool contract_text(const Contract& c, char* out, std::size_t cap) {
-    if (c.giver == kInvalidNpc || !out || cap < 200) return false;
+    if (c.giver == kInvalidHandle || !out || cap < 200) return false;
     switch (static_cast<ObjectiveKind>(c.kind)) {
         case ObjectiveKind::Fetch:
             std::snprintf(out, cap,
@@ -171,7 +174,7 @@ bool contract_text(const Contract& c, char* out, std::size_t cap) {
 
 bool contract_accept(ContractBook& book, const Contract& offer,
                      const RunLedger& led) {
-    if (offer.giver == kInvalidNpc) return false;
+    if (offer.giver == kInvalidHandle) return false;
 
     // Stamped from the ledger rather than by the caller, so it cannot be forgotten. |z|
     // because depth is bidirectional; clamped to a byte because the stack is bounded at
@@ -242,9 +245,19 @@ void contract_on_giver_died(ContractBook& book, NpcId who) {
     for (int i = 0; i < kMaxContracts; ++i) {
         Contract& c = book.slot[i];
         if (c.state != static_cast<std::uint8_t>(ContractState::Active)) continue;
-        if (c.giver != who) continue;
-        // Nobody left to pay you. Quietly paying anyway would make the giver
-        // decorative, and the whole point of a stable NpcId is that the person is real.
+        // The ID HALF of the handle, because `who` is a bare pool id off the event ring
+        // and the record is ALREADY DEAD when this runs — `pool.handle(who)` would mint
+        // the corpse's bumped generation and match nothing. `npc_handle_id` masks to
+        // kNpcPoolBits, so a `who` of kInvalidNpc matches no slot: never a wildcard.
+        //
+        // Coarser than `handle_valid`, and harmlessly so. The one case it over-matches is
+        // a job whose giver died silently (a macro sweep publishes no event) into a slot
+        // that was recycled, whose NEW occupant then dies in combat — and the verdict it
+        // reaches there, Failed, is the same one contract_step's handle_valid poll reaches
+        // for that job on the very next tick. It cannot pay a stranger, only fail earlier.
+        if (npc_handle_id(c.giver) != who) continue;
+        // Nobody left to pay you. Quietly paying anyway would make the giver decorative,
+        // and the whole point of a generation-tagged handle is that the person is real.
         c.state = static_cast<std::uint8_t>(ContractState::Failed);
         ++book.failed;
     }
@@ -252,7 +265,6 @@ void contract_on_giver_died(ContractBook& book, NpcId who) {
 
 std::int32_t contract_step(ContractBook& book, const NpcPool& pool, Inventory& inv,
                           RunLedger& led) {
-    NpcPool& p = const_cast<NpcPool&>(pool);
     std::int32_t paid = 0;
 
     for (int i = 0; i < kMaxContracts; ++i) {
@@ -262,7 +274,17 @@ std::int32_t contract_step(ContractBook& book, const NpcPool& pool, Inventory& i
         // A giver who died between ticks fails the job. Checked here as well as on the
         // death event, because a body can also be lost to a floor unload rather than to
         // a death, and only one of those publishes.
-        if (!p.valid(c.giver) || !p.alive(c.giver)) {
+        //
+        // **THE recycling guard.** `handle_valid` is one test for three distinct ways the
+        // person can stop being the person: an id past the high-water mark, a cleared
+        // alive bit, and — the one a bare id could never see — a stale GENERATION, i.e.
+        // the slot was reclaimed and handed to somebody else. `kill()` bumps the counter
+        // whether or not the slot is reused, so this covers a plain death too and the old
+        // `valid() || alive()` pair is strictly subsumed. Deaths in the macro sweep publish
+        // no NpcDied event ([macro_sim.h]), so for those this poll is the ONLY guard, and
+        // before the handle it was a poll that answered "somebody is alive at that index"
+        // when the question was "is my giver alive". [contract.h]
+        if (!pool.handle_valid(c.giver)) {
             c.state = static_cast<std::uint8_t>(ContractState::Failed);
             ++book.failed;
             continue;

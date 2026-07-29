@@ -11,6 +11,16 @@
 // spending 28.6 ms of a 43.6 ms frame scanning 2,097,152 cells that had not
 // changed. Callers must invalidate() when the world mutates.
 //
+// A rebuild has two halves and they cost differently, which is the thing to know
+// before touching either. classify() turns the 134 MB sub-voxel grid into one
+// classification word per cell; it is shared by both frame slots, so the FIRST
+// rebuild after an invalidate() pays it and the second does not. build_instances()
+// then merges runs out of that and writes the vertex buffer, and both slots pay
+// that. Measured on the real floor-0 geometry (472,545 instances), the classify half
+// was ~80% of a first rebuild — which is the whole of the 4x first-vs-second gap a
+// --shot run prints — so it is the half that is threaded, and prebuild() exists to
+// move it off the frame entirely.
+//
 // Two things keep the instance count down, and they compose:
 //   - surface culling: cells fully surrounded by solid neighbours are skipped, so
 //     the count follows visible surface area rather than world volume;
@@ -151,6 +161,29 @@ public:
     // is not optional bookkeeping.
     void invalidate();
 
+    // Do the expensive, frame-slot-independent half of a rebuild NOW against
+    // `world`, instead of leaving it to the next record().
+    //
+    // OPTIONAL and idempotent: skipping it changes nothing but when the work
+    // happens. It exists because "when" is most of the cost in practice. The
+    // classification is ~80% of a first rebuild and is shared by both frame slots,
+    // and the caller that invalidates is a floor change — which is also where
+    // main.cpp starts the async nav bake, and that bake pegs every core through the
+    // same parallel_for this uses. Frame 0 therefore does the single most expensive
+    // CPU work of the whole floor transition at the one moment the machine is most
+    // contended: measured in-game at 818 ms for a first rebuild whose work costs
+    // ~120 ms uncontended, against 205 ms for the second rebuild of the identical
+    // instance count.
+    //
+    // CALL IT AFTER THE LAST GRID MUTATION of the arrival (door_build carves cells)
+    // and after the invalidate() for that arrival, or the classification it produces
+    // is stale or discarded. Call it BEFORE the bake starts, which is the whole
+    // point.
+    //
+    // Safe before init() (no-op: the scratch is not sized yet) and safe to call
+    // twice.
+    void prebuild(const World& world);
+
     std::uint32_t last_instance_count() const { return lastInstanceCount_; }
 
 private:
@@ -183,8 +216,25 @@ private:
     // Shared across frame slots and rebuilt only on invalidate(), so the SECOND
     // frame slot's refill is merge-plus-write and skips the grid sweep entirely.
     // That is what keeps an elevator ride from paying the whole cost twice.
+    //
+    // It is also the entire explanation of the asymmetry a --shot run prints, which
+    // read as a mystery until it was measured: "rebuild slot 0: 472545 instances in
+    // 817.96 ms" followed by "rebuild slot 1: 472545 instances in 204.69 ms" is not
+    // one-off allocation, buffer growth or first-touch page faults on the instance
+    // buffer — the instance buffer is sized for the worst case in init() and written
+    // through a raw pointer with no push_back anywhere, and the measured cost of
+    // faulting in its 15.1 MB of fresh pages is ~7 ms. The 4x is classify(), which
+    // slot 0 runs and slot 1 skips, and nothing else.
     std::vector<std::uint32_t> cellClass_;
     bool classValid_ = false;
+    // The two intermediates classify() derives cellClass_ from: one bit per macro
+    // cell for "fully solid" and for "not empty", 256 KB each. Members rather than
+    // locals of classify() for two reasons — the class promises above that its
+    // scratch is allocated in init() and never in a frame, and a rebuild is not
+    // always rare (maze mode's fluid step invalidates ~31 times a second, and each
+    // one used to allocate, zero and free 512 KB here).
+    std::vector<std::uint64_t> occFull_;
+    std::vector<std::uint64_t> occNonEmpty_;
     // Run-merge scratch: one bit per cell marking cells already swallowed by an
     // earlier run. Needed because runs may go along y or z while the scan walks x.
     std::vector<std::uint64_t> claimed_;
@@ -197,9 +247,18 @@ private:
     // without a second build in the comparison.
     int maxRun_ = 0;
 
-    // Recompute cellClass_ from `world`. One sequential sweep of the sub-voxel
-    // masks into two 256 KB occupancy bitmaps, then one sweep turning those into
-    // per-cell AO masks.
+    // Threads classify() splits its two grid sweeps across. 0 = every hardware thread
+    // (the default), 1 = the serial sweep, i.e. the pre-threading pass in this same
+    // binary. Read once at init from GIGA_CUBE_THREADS, alongside GIGA_CUBE_MAXRUN and
+    // for the same reason: the threading win is a property of the machine rather than
+    // of the code, and it is measured in the shipped binary, not argued about. The
+    // numbers and the reason this is a knob at all are in cube_pass.cpp init().
+    int classifyThreads_ = 0;
+
+    // Recompute cellClass_ from `world`. One sweep of the sub-voxel masks into the
+    // two 256 KB occupancy bitmaps, then one sweep turning those into per-cell AO
+    // masks. Both are split over z slabs across classifyThreads_ threads; the output
+    // is bit-identical to the serial sweep either way.
     void classify(const World& world);
     // Fill one instance buffer from cellClass_. Returns the instance count.
     std::uint32_t build_instances(std::uint32_t frameIndex, const World& world);
