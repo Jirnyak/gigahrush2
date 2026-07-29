@@ -655,10 +655,15 @@ int main(int argc, char** argv) {
     std::uint32_t kills = 0;       // carried across possession
     bool attackHeld = false;
     bool healWanted = false;
+    bool eatWanted = false;       // G, consumed by one sim step
+    bool drinkWanted = false;     // T, consumed by one sim step
     bool sellWanted = false;      // B, consumed by one sim step
     bool buyWanted = false;       // R, consumed by one sim step       // set by H, consumed by one sim step
     std::int32_t loot = 0;         // roubles swept up this run
     std::int32_t healed = 0;
+    float ateFood = 0.0f;      // food points that LANDED, for the HUD
+    float drankWater = 0.0f;
+    std::int32_t consumeHpCost = 0;   // HP paid for risky food, running total
     int fluidStepEvery = 4; // sim steps between fluid updates
     int fluidCounter = 0;
 
@@ -795,6 +800,18 @@ int main(int argc, char** argv) {
                     e.key.scancode == SDL_SCANCODE_H) {
                     healWanted = true;
                 }
+                // G eats, T drinks. Recorded as INTENT for the same reason H is: the
+                // event loop has no `activeLayer` in scope, and consuming an item
+                // mutates a pool row, which belongs on the sim clock. Until this
+                // existed `use_best_food` and `use_best_drink` had ZERO call sites,
+                // so food/water/sleep fell monotonically and every run was a
+                // fixed-length death timer with no way to restore a reserve.
+                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
+                    e.key.scancode == SDL_SCANCODE_G)
+                    eatWanted = true;
+                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
+                    e.key.scancode == SDL_SCANCODE_T)
+                    drinkWanted = true;
                 // Q works the nearest door. Recorded as intent for the same reason
                 // as the trades below: a door moves solid geometry, so it belongs on
                 // the sim's clock, not the window's, and the event loop has no
@@ -1166,6 +1183,36 @@ int main(int argc, char** argv) {
                         if (pool.valid(nrc->id))
                             contractPaid += game::contract_step(
                                 contracts, pool, pool.inventory(nrc->id), ledger);
+                // Eating and drinking sit beside healing and AFTER pickup_step, so a
+                // ration picked up this tick can be eaten this tick. Both refuse a
+                // full bar, so a mistimed press costs nothing; both also fill
+                // pendingPee / pendingPoo, which is the ONLY producer the pressure
+                // metering has. [needs.h]
+                //
+                // hpCost is routed through apply_damage rather than dropped:
+                // `apply_consumable` deliberately does NOT touch HP and reports the
+                // cost for the caller to bill ([needs.h]), clamped so bad food
+                // floors at 1 HP. Discarding it would make risky food free, and a
+                // gamble with no downside is not a gamble.
+                if (eatWanted || drinkWanted) {
+                    game::ConsumeResult cr{};
+                    if (eatWanted) {
+                        cr = game::use_best_food(reg, pool, bus, activeLayer,
+                                                 simTick);
+                        ateFood += cr.food;
+                        eatWanted = false;
+                    } else {
+                        cr = game::use_best_drink(reg, pool, bus, activeLayer,
+                                                  simTick);
+                        drankWater += cr.water;
+                        drinkWanted = false;
+                    }
+                    if (cr.used && cr.hpCost > 0 && reg.valid(player)) {
+                        game::apply_damage(reg, pool, player, cr.hpCost,
+                                           game::DamageChannel::Kinetic, player);
+                        consumeHpCost += cr.hpCost;
+                    }
+                }
                 if (healWanted) {
                     healed += game::use_best_heal(reg, pool, bus, activeLayer,
                                                   simTick);
@@ -1462,6 +1509,12 @@ int main(int argc, char** argv) {
                                 nd.food, nd.water, nd.sleep, toDmg / 60.0f);
                 ImGui::Text("pressure pee %.0f poo %.0f | speed x%.2f | starved %d hp",
                             nd.pee, nd.poo, needs.speedScale, needsHpLost);
+                // The PENDING queues, not just the bars: pee/poo have no autonomous
+                // growth, so without the queue on screen the pressure numbers look
+                // frozen when they are in fact many minutes of metering from 100.
+                ImGui::Text("ate %.0f food %.0f water | pending pee %.0f poo %.0f | risky -%d hp",
+                            ateFood, drankWater, nd.pendingPee, nd.pendingPoo,
+                            consumeHpCost);
             }
             {
                 int active = 0;
@@ -1508,7 +1561,7 @@ int main(int argc, char** argv) {
             }
             ImGui::TextUnformatted(
                 "WASD move | mouse look | Tab toggle look | Space jump | "
-                "F fly | Q door | F5/F9 save/load | [ / ] floor down/up | Esc menu");
+                "F fly | Q door | G eat | T drink | F5/F9 save/load | [ / ] floor | Esc menu");
             ImGui::End();
         }
 
