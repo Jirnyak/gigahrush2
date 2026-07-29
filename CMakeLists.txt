@@ -74,7 +74,10 @@ endif()
 # FetchContent subproject, which would push /GL (or -flto) through all of SDL3
 # and Dear ImGui — slow to build and a less-tested compile path for platform C.
 include(CheckIPOSupported)
-check_ipo_supported(RESULT _giga_ipo OUTPUT _giga_ipo_msg)
+set(_giga_ipo FALSE)
+if(NOT MSVC)
+    check_ipo_supported(RESULT _giga_ipo OUTPUT _giga_ipo_msg)
+endif()
 
 # ---- Per-target policy -----------------------------------------------------
 # One place instead of five near-identical if(MSVC) blocks. Applies our warning
