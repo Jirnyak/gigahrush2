@@ -197,23 +197,15 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
     bool havePlayer = false;
     for (auto e : reg.view<const CameraTag, const Transform>()) {
         const Transform& tr = reg.get<const Transform>(e);
-        // ...unless monsters do not consider that body prey.
-        //
-        // This is the first LIVE consumer of the faction matrix, and it needed one:
-        // an audit found `FactionRelations` had zero readers outside its own tests, so
-        // the 36 bytes were being maintained for nobody. `kMobVsFaction` puts Cultists
-        // at +50 — the one society monsters leave alone, which is the reference's
-        // fiction rather than a balance knob.
-        //
-        // Because the player IS an embodied record ([npcs.md]) and death hands you
-        // whichever body `possess_a_survivor` finds, this turns into a real mechanic
-        // with no extra machinery: sometimes you come back as a cultist and the floor
-        // stops hunting you. The HUD prints your faction so it is legible rather than
-        // mysterious.
+        if (tr.layer != layer) continue;
         if (const NpcRef* nr = reg.try_get<NpcRef>(e))
             if (!mob_hostile_to(pool, nr->id)) continue;
         player = e;
         playerPos = tr.pos;
+        const CameraTag& cam = reg.get<const CameraTag>(e);
+        playerFwdX = std::cos(cam.yaw);
+        playerFwdY = std::sin(cam.yaw);
+        havePlayer = true;
         break;
     }
 
