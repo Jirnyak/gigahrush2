@@ -35,8 +35,7 @@
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "ecs/registry.h"
-// NOTE: #include "game/ai.h" returns with the adapted utility AI --
-// see tools/branch_port_pending/README.md
+#include "game/ai.h"       // the utility AI — adapted, wired, and dormant by default
 #include "game/embody.h"
 #include "game/elevator.h"
 #include "game/floor_registry.h"
@@ -46,9 +45,11 @@
 #include "game/mob_spawn.h"
 #include "game/needs.h"
 #include "game/rumour.h"
+#include "game/speech.h"
 #include "game/samosbor.h"
 #include "game/contract.h"
 #include "game/vendor.h"
+#include "game/craft.h"
 #include "game/container.h"
 #include "game/door.h"
 #include "game/combat.h"
@@ -63,6 +64,7 @@
 #include "game/wander.h"
 #include "game/npc_pool.h"
 #include "game/population.h"
+#include "game/macro_sim.h"
 #include "input/input.h"
 #include "render/body_pass.h"
 #include "render/cube_pass.h"
@@ -491,22 +493,69 @@ int main(int argc, char** argv) {
     nav::AsyncBake nav;
     game::NpcPool pool;
     pool.init();
-    // The coarse society tick ([macro_sim.h]). It advances the WHOLE cold
-    // population — aging, old-age mortality, replacement births, bounded migration —
-    // on its own 2 s clock (kMacroPeriodTicks = 250 sim ticks), decoupled from the
-    // 125 Hz sim. It is SAFE to run alongside the live floor because step() skips
-    // every embodied record (the on-screen crowd and the player), so it can only
-    // evolve the folded-back cold society, never age the body you are looking through
-    // or desync the active floor. set_floors_from(registry) below turns migration on;
-    // the social pass stays off (no matrix handed over, socialFormRatePerYear 0), so
-    // the 128 B/row rel_ column is never materialized. Default params: targetPopulation
-    // 0 latches the seeded living count on the first step, so the demo society holds
-    // its size rather than chasing the 2^20 design target.
-    game::MacroSim macro;
-    macro.init();
-    game::MacroParams macroParams;   // defaults; DATA, not code (macro_sim.h)
-    std::uint64_t macroTickAt = 0;    // simTick of the last macro step, for cadence
-    game::MacroStats macroStats;      // last step's tallies, for the HUD
+    // SLOT RECYCLING IS DELIBERATELY NOT ARMED HERE, and the line is left in place
+    // rather than omitted so the gate travels with it. Armed, a dead slot returns to an
+    // intrusive free list and a birth stops being a one-way draw on a finite reserve:
+    // measured in suite_npcpool.inl, 101,000 births cost 1,000 slots armed against
+    // 101,000 unarmed, and over 250 macro ticks against a 60-slot reserve the population
+    // holds at 3002 with 0 births refused instead of decaying to 2336 with 1197 refused.
+    //
+    // ARMED. A recycled id is a REUSED id, so every place that holds a bare NpcId ACROSS
+    // TIME had to become generation-checked first. All of them now are, and the count is
+    // written out because "fix one and declare victory" is how this would have shipped
+    // broken — I made that mistake twice and was corrected twice:
+    //   DONE  MacroSim::Journey::id  — stamps the departing generation, compares on landing.
+    //   DONE  Contract::giver        — an NpcHandle; contract_step polls handle_valid().
+    //                                  Measured A/B: with a bare id the job paid 700 rub to
+    //                                  a newborn who never offered it and read Complete;
+    //                                  with the handle it pays 0 and Fails.
+    //   DONE  QuestProgress::giver   — the identical defect, same fix, quest.cpp now polls
+    //                                  handle_valid(p.giver).
+    //   DONE  Relationship::target   — the generation went into the dead `pad` field, so
+    //                                  rel_ (128 B/row, 128.0 MiB at capacity) gained
+    //                                  nothing. social_edge_target() returns kInvalidNpc for
+    //                                  a stale edge, so the line callers already wrote for
+    //                                  empty slots makes staleness safe by construction.
+    //   DONE  FloorModule::candidate — an NpcHandle in the same 32 bits (a 20-bit id leaves
+    //                                  room for the 12-bit generation). A stale designate
+    //                                  RE-DESIGNATES from the floor's live roster instead of
+    //                                  handing the camera to whoever inherited the slot.
+    //   SAFE  NpcRef::id — the sixth store [npc_pool.h] names, and the ONE that needed no
+    //                      change. Its lifetime is COUPLED, not merely short: the macro
+    //                      demographic sweep skips `pool.embodied(id)` before it can reach
+    //                      either kill() (macro_sim.cpp), so a macro death can never touch
+    //                      an embodied body; and the only other pool.kill() caller anywhere
+    //                      in src/ is combat.cpp, which kills the record at :138 and
+    //                      destroys the entity at :148 in the same loop. So no entity can
+    //                      outlive the record its NpcRef names. That is an argument from
+    //                      the call graph rather than a generation check — if a third
+    //                      pool.kill() caller ever appears, this line is what it invalidates.
+    pool.set_recycling(true);
+    //
+    // The demo seeds ~1,930 records into 2^20, so the reserve is not the binding
+    // constraint at this size — this matters at design scale, not in the test bed.
+    // The macro society: the whole cold population — aging, old-age mortality,
+    // births, bounded migration — advancing on its own coarse clock, decoupled from
+    // the 125 Hz sim and from the render loop. This is the piece that makes the
+    // world live whether or not anyone is looking at it. [macrosim.md]
+    //
+    // Declared beside the pool because both live the whole session. `init()` must
+    // precede `set_floors_from`. The birth target latches on the FIRST `step()` and
+    // deliberately not here: main seeds the world between this line and the first
+    // macro tick, so latching now would read a living count of 0 and no birth would
+    // ever happen.
+    game::MacroSim macroSim;
+    game::MacroParams macroParams;  // targetPopulation 0 -> hold the seeded size
+    game::MacroStats macroStats{};  // last macro tick's tallies, for the HUD
+    macroSim.init();
+    // Who hates whom — and it MOVES. `relations_drain_deaths` bends this matrix by
+    // who killed whom, so ten dead citizens push the Citizens row across the
+    // hostility boundary and `faction_feud_step` turns the building's crowd on you.
+    // Until this line `kBaseFactionMatrix` had no caller anywhere in src/, which
+    // made six faction functions dead code. [faction_relations.h]
+    game::FactionRelations factionRel = game::kBaseFactionMatrix;
+    game::RelationTick relTick{};   // last drain's tallies, for the HUD
+    std::uint32_t feudHits = 0;     // running total of NPC-vs-NPC hits that landed
     // Transient event ring ([events.md]). Combat publishes deaths into it; it is
     // cleared once per frame, so a listener must consume within the frame or use
     // the opt-in log.
@@ -560,12 +609,32 @@ int main(int argc, char** argv) {
                 1337u ^ (static_cast<std::uint32_t>(f.number) * 0x9e3779b9u);
             streamer.add_module(registry, f.number, f.kind, fseed);
         }
-        // Hand the macro tick the floor labels a migrating record may be sent to —
-        // the registry's live set, read in index space so the sparse, signed demo
-        // stack ({0,1,2,3,4}) costs nothing ([macro_sim.h] set_floors_from). Migration
-        // stays off until at least two labels are registered, which the loop above
-        // guarantees. Called AFTER the module loop so every floor is registered first.
-        macro.set_floors_from(registry);
+        // Migration destinations are the REGISTERED floor set, never a [lo,hi] band.
+        // This stack is legitimately sparse — {0,1,2,-8,-14,-26,-36,-50,14,30} — so a
+        // uniform draw over [-50,30] would send 71 of every 81 travellers to a floor
+        // that does not exist. Must run after the add_module loop above (the registry
+        // is the authoritative live set) and before the first `step()`. Re-call after
+        // any renumber. In Maze mode this branch is never taken, so fewer than two
+        // labels are registered and migration correctly stays off. [macro_sim.h]
+        macroSim.set_floors_from(registry);
+        // POPULATE THE WHOLE BUILDING, not just the floor about to be loaded.
+        //
+        // Measured before this line existed: a fresh run held 420 records — one floor's
+        // worth — because `ensure_loaded` seeds a module's crowd on its FIRST LOAD, so
+        // the population only came into existence where the player had already been.
+        // That made every macro counter structurally zero rather than merely quiet:
+        // migration and the social sweep both skip `pool.embodied` ([macro_sim.h] works
+        // on COLD records only), and with a single loaded floor every existing record was
+        // embodied, so there were no eligible candidates at all.
+        //
+        // Seeding here gives the other nine floors a cold population that ages, dies,
+        // gives birth and migrates before anyone has ever visited them — which is the
+        // difference between a world that lives when unobserved and one that only exists
+        // where the camera has been. Costs ~4,200 records against a 2^20 pool and touches
+        // no layer, no geometry and no ECS entity.
+        const std::uint32_t seeded = streamer.seed_all_modules(pool);
+        std::fprintf(stderr, "[pop] seeded %u cold records across %u registered floors\n",
+                     seeded, macroSim.floor_count());
 
         game::NpcId playerId = game::kInvalidNpc;
         game::LoadResult start =
@@ -662,6 +731,18 @@ int main(int argc, char** argv) {
     char offerLine[200] = {};
     char rumourLine[160] = {};
     std::uint64_t rumourAt = 0;
+    // The murmur, next to the rumour and deliberately separate from it: a rumour is a
+    // FACT the player can go and check, speech is what the nearest body sounds like.
+    // Different clock, different colour, no shared state. rumour.h states its own rule in
+    // capitals — a rumour must be TRUE and CHECKABLE — which a bark is not, and that is
+    // why this is a sibling rather than an extension. [speech.h]
+    //
+    // A const char*, not a char buffer: kSpeechText holds static-duration literals, so
+    // there is nothing to copy and nothing to truncate.
+    const char* speechLine = nullptr;
+    game::SpeechSituation speechSit = game::SpeechSituation::Ambient;
+    game::SpeechMemory speechMem;
+    std::uint64_t speechAt = 0;
     game::NeedsTick needs{};   // last step's report, for the HUD
     int needsHpLost = 0;       // running total, so the HUD is not one tick
     // [[maybe_unused]]: superseded by PlayerRanged::shots (read straight from the
@@ -699,6 +780,24 @@ int main(int argc, char** argv) {
     bool drinkWanted = false;     // T, consumed by one sim step
     bool sellWanted = false;      // B, consumed by one sim step
     bool buyWanted = false;       // R, consumed by one sim step       // set by H, consumed by one sim step
+    bool craftWanted = false;     // C, consumed by one sim step
+    bool scrapWanted = false;     // X, consumed by one sim step
+    // Run state, not world state, so it lives beside the ledger. CraftingState is a
+    // 96-byte POD ([craft.h]) — nothing to own, nothing to free. craft_init zeroes the
+    // material bank, sets tier 0 and marks the nine default-known recipes.
+    //
+    // This is the first reader the nine authored craft_* columns in data/items.csv have
+    // ever had: 446 items carried them and item_table.h:17 said in as many words
+    // "crafting is not implemented".
+    // The utility AI's config and last-tick report. `enabled` defaults FALSE ([ai.h]):
+    // the system is wired, tested and dormant, and flipping this one bool is the whole
+    // switch — but read the note at the ai_step call site first, because it also needs
+    // ai_init to attach AiBrain and ai_release to clear the token safely.
+    game::AiConfig aiCfg;
+    game::AiTick aiTick{};
+    game::CraftingState crafting{};
+    game::craft_init(crafting);
+    std::uint32_t crafted = 0, scrapped = 0, recipesLearned = 0;
     // [[maybe_unused]]: the HUD prints `carried` (live inventory value), not this
     // run-total, after the branch merge — but `loot += ...` wraps the container/pickup
     // hooks that actually move the roubles, so the accumulator is kept. Clang warns,
@@ -734,6 +833,15 @@ int main(int argc, char** argv) {
             if (ev.a != game::kInvalidNpc)
                 game::contract_on_giver_died(contracts, ev.a);
         }
+        // Diplomacy reads the same ring, in the same frame-top drain, and for the same
+        // reason: one notion of death, not three. Deliberately here and NOT beside
+        // `finalize_deaths` in the substep — a frame can run several substeps, each
+        // publishing NpcDied, and a per-substep drain would re-read the earlier
+        // substeps' events and bill those kills again. `relations_drain_deaths` is only
+        // snapshot-bounded WITHIN one call. Draining once per frame, immediately before
+        // `bus.clear()`, is exactly the contract the header asks for and is
+        // double-count-free. [faction_relations.h]
+        relTick = game::relations_drain_deaths(factionRel, reg, pool, bus, simTick);
         bus.clear();
 
         // Hand over a finished nav bake. Cheap every frame; true only on the frame
@@ -880,6 +988,15 @@ int main(int argc, char** argv) {
                 if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
                     e.key.scancode == SDL_SCANCODE_R)
                     buyWanted = true;
+                // C crafts (or reads a blueprint), X strips the cheapest junk in the bag.
+                // Both keys were free: an rg for SDL_SCANCODE_C and _X across src/ found
+                // nothing, and G eats / T drinks already.
+                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
+                    e.key.scancode == SDL_SCANCODE_C)
+                    craftWanted = true;
+                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
+                    e.key.scancode == SDL_SCANCODE_X)
+                    scrapWanted = true;
                 // E takes the job on offer. The only interaction bind in the game, and
                 // it exists because a contract is the one thing the player has to
                 // actively agree to — everything else is walked into.
@@ -956,13 +1073,34 @@ int main(int argc, char** argv) {
                 // call operated on its per-entity Needs COMPONENT; main keeps the
                 // survival clock in the pool row, because the elevator destroys the body
                 // and a component would reset the clock on every floor ride.
-                // PARKED: game::ai_step(reg, pool, danger, activeGrid, simNow, kSimDt);
-                // The utility-AI driver arrived in the branch merge and scores 13 intents
-                // per mob. It is parked with ai.{h,cpp} until it is adapted to main
-                // mob_table, and until the overlap with the steering main ALREADY has
-                // (wander_step flow-following, investigate_step noise, hunt prey
-                // selection) is resolved -- two systems both writing Velocity would
-                // fight each other every tick. tools/branch_port_pending/README.md
+                // THE UTILITY AI, UNPARKED — and dormant, which is not the same as absent.
+                //
+                // It sat commented out because two systems writing Velocity fight every
+                // tick. That is now settled by a TOKEN rather than by hope: `AiBrain::motion`
+                // decides per body, and both foreign writers — wander_step and
+                // faction_feud_step — carry `if (ai_owns_motion(reg, e)) continue;`.
+                // MEASURED over 200 ticks x 24 bodies: ai_step wrote Velocity 2400 times,
+                // wander_step 300, and BOTH in one tick ZERO times; wander wrote 0 times
+                // while the token was held and 600 once delegated. [ai.h]
+                //
+                // `aiCfg.enabled` is FALSE, so this is one branch per tick — ai.cpp returns
+                // before it even takes the view. The call is live anyway, deliberately: it
+                // makes the wiring real instead of a comment, it consumes `danger` and
+                // `activeGrid` (which were live C4189 warnings for exactly as long as this
+                // stayed parked), and it reduces switching the AI on to editing ONE bool
+                // rather than re-deriving a call signature months from now.
+                //
+                // Before flipping it: `ai_init` must attach AiBrain to the floor's bodies
+                // (see the load path), and `ai_release` must run when clearing the flag on a
+                // live floor — the token is persistent state, so a body left holding
+                // MotionOwner::Ai would be skipped by wander_step forever and stand still.
+                // NOTE the `activeLayer` argument: the parked call was
+                // `ai_step(reg, pool, danger, activeGrid, simNow, kSimDt)` against an older
+                // SIX-argument signature with no layer, so it would not even have compiled
+                // if anyone had uncommented it. That is what "parked until adapted" was
+                // really hiding — a commented-out call is not a call, and nothing checks it.
+                aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
+                                       kSimDt, aiCfg);
                 controller_step(reg, kSimDt);
                 // Steer the crowd BEFORE physics: wander writes horizontal
                 // velocity, physics integrates it and resolves collision.
@@ -1009,6 +1147,21 @@ int main(int argc, char** argv) {
                 // every tick. [investigate.h]
                 heardMobs = game::investigate_step(reg, noiseField, pool, activeLayer,
                                             simTick);
+                // NPC-vs-NPC: bodies holding a staggered fight licence steer at their
+                // nearest enemy and swing when it is in reach. Placed AFTER wander_step
+                // and investigate_step so it overrides both for the licensed handful —
+                // the same override wander.cpp already performs internally on aggro —
+                // and BEFORE physics_step so reach is tested against pre-integration
+                // positions: a 1 cm error at a 1.35 m/s walk over one 8 ms step, three
+                // orders of magnitude inside the 1.9 m unarmed reach.
+                //
+                // A feud can never kill a crowd body — damage to anyone but the camera
+                // holder is floored at hp-1, because nothing in this game heals a
+                // resident and a lethal feud would be a one-way population drain with
+                // no counterplay. The camera holder IS killable: the player has
+                // healing, resupply and possession-on-death. [faction_relations.h]
+                feudHits += game::faction_feud_step(reg, pool, factionRel, activeLayer,
+                                                    simTick);
                 physics_step(reg, stack, kSimDt);
                 // Doors resolve AFTER physics for the same reason melee does: contact
                 // is tested by ADJACENCY against where bodies actually ended up this
@@ -1069,6 +1222,28 @@ int main(int argc, char** argv) {
                 // Without the cooldown, standing in a crowd would replace the line
                 // every frame and none of them would be readable — a flicker instead
                 // of information. [rumour.h]
+                // The crowd's own voice, on its own slower clock. It runs its OWN
+                // nearest_speaker sweep rather than sharing the rumour one below: the
+                // sweep is O(bodies on the layer) and fires at most once per 3 s, which
+                // is far cheaper than entangling two channels that must not tick
+                // together. [speech.h]
+                if (simTick - speechAt >= game::kSpeechCooldownTicks) {
+                    const game::NpcId talker = game::nearest_speaker(reg, activeLayer);
+                    if (talker != game::kInvalidNpc) {
+                        const game::SpeechContext sc =
+                            game::speech_context(reg, pool, talker, samosbor.phase);
+                        // The seed is the UTTERANCE COUNTER — the reference's
+                        // `repeatIndex: Math.floor(time)`. Identity is already folded in
+                        // by speech_line_index, so this is the only term that has to move
+                        // for the same body to say something new.
+                        speechLine = game::speech_say(
+                            speechMem, pool, talker, sc,
+                            static_cast<std::uint32_t>(simTick /
+                                                       game::kSpeechCooldownTicks),
+                            &speechSit);
+                        speechAt = simTick;
+                    }
+                }
                 if (simTick - rumourAt >= game::kOverhearCooldownTicks) {
                     const game::NpcId sp = game::nearest_speaker(reg, activeLayer);
                     if (sp != game::kInvalidNpc) {
@@ -1247,6 +1422,66 @@ int main(int argc, char** argv) {
                     sellWanted = false;
                     buyWanted = false;
                 }
+                // CRAFTING. The extraction pad is the only bench in the game today, and
+                // that is a measured limitation rather than a placeholder: 259 of the 446
+                // recipes (22 `Any` + 237 Workbench) are reachable there, and the other
+                // 187 (92 lathe / 77 lab / 18 net_terminal) wait on station placement in
+                // floor_gen. Off the pad the player has bare hands, which satisfies the
+                // 22 `Any` recipes and nothing else. Disassembly is workbench-only by the
+                // reference's rule, so it is pad-only too. [craft.h]
+                if ((craftWanted || scrapWanted) && reg.valid(player)) {
+                    const Transform& ct = reg.get<Transform>(player);
+                    const game::CraftStation bench =
+                        game::on_extraction_pad(stack.layer(activeLayer).grid(), ct.pos)
+                            ? game::CraftStation::Workbench
+                            : game::CraftStation::Any;
+                    bool invChanged = false;
+                    if (const auto* nrk = reg.try_get<game::NpcRef>(player))
+                        if (pool.valid(nrk->id)) {
+                            game::Inventory& ci = pool.inventory(nrk->id);
+                            if (craftWanted) {
+                                // A blueprint in the bag beats building something:
+                                // reading it is the ONLY way the tier rises, so a folder
+                                // is worth more as knowledge than as loot.
+                                const game::LearnResult lr =
+                                    game::craft_learn_from_carried(crafting, ci);
+                                recipesLearned += lr.learned;
+                                if (lr.consumed) invChanged = true;
+                                if (lr.learned == 0) {
+                                    // kInvalidItem is a safe argument here: craft_item
+                                    // answers UnknownItem rather than indexing on it.
+                                    const game::ItemId pick =
+                                        game::craft_best_available(crafting, ci, bench);
+                                    if (game::craft_item(crafting, ci, pick, bench).fail ==
+                                        game::CraftFail::None) {
+                                        ++crafted;
+                                        invChanged = true;
+                                    }
+                                }
+                            }
+                            if (scrapWanted) {
+                                const int slot = game::craft_scrap_slot(ci);
+                                // rollKey is uint32_t and simTick is uint64_t, so the
+                                // narrowing is explicit. Truncation is harmless and in
+                                // fact wanted: this only salts the 50% schematic roll, so
+                                // the low bits are the entropy and wrapping every ~4.3e9
+                                // ticks (~1.1 sim years at 125 Hz) changes nothing.
+                                if (game::craft_disassemble(
+                                        crafting, ci, slot, bench,
+                                        static_cast<std::uint32_t>(simTick))
+                                        .fail == game::CraftFail::None) {
+                                    ++scrapped;
+                                    invChanged = true;
+                                }
+                            }
+                        }
+                    // combat.h: "call after anything that changes the inventory". Crafting
+                    // a better vest changes what equipped_armour resolves to, so skipping
+                    // this would leave the body wearing the old one.
+                    if (invChanged) game::sync_armour(reg, pool, player);
+                    craftWanted = false;
+                    scrapWanted = false;
+                }
                 // Contracts advance and pay AFTER the extraction step, so a Fetch
                 // job completes at the pad — the same moment the loop's own payoff
                 // lands, which is what makes the errand feel like part of the trip
@@ -1310,18 +1545,33 @@ int main(int argc, char** argv) {
                         player, game::PlayerMelee{0, kills});
                 }
                 ++simTick;
-                // The coarse society tick, on its own 2 s clock ([macro_sim.h]
-                // kMacroPeriodTicks). Same cadence idiom as the rumour/save lines
-                // above: fire when at least one period has elapsed since the last
-                // step, latching simTick so cadence never drifts. Floors mode only —
-                // the maze test bed has no registered floor set (set_floors_from was
-                // not called there) and is not a society. step() skips embodied
-                // records, so this evolves ONLY the cold, folded-back population; the
-                // live crowd and the player are the micro sim's to age and kill.
-                if (genMode != WorldGenMode::Maze &&
-                    simTick - macroTickAt >= game::kMacroPeriodTicks) {
-                    macroStats = macro.step(pool, macroParams);
-                    macroTickAt = simTick;
+                // THE MACRO CLOCK. kMacroPeriodTicks = kSimHz*2 = 250, which is
+                // exactly 2.000 s at 125 Hz — kSimStepMs is exactly 8 ms, so the
+                // period is lossless and cannot drift. Placed after ++simTick so the
+                // first fire is tick 250 and not tick 0, before the world is embodied.
+                // The coarse clock (tick_/dayTenths_) lives inside MacroSim, so main
+                // holds no accumulator of its own.
+                //
+                // The live `factionRel` is lent, never copied: the social pass is the
+                // only reader and it stays gated off while socialFormRatePerYear is 0
+                // (that pass demands a 128 MiB rel_ column — see [npc_pool.h] — and
+                // nothing renders the graph yet). Passing the real matrix now means
+                // that when social is switched on it reads the one true source of
+                // attitudes instead of a second, silently diverging copy. [macrosim.md]
+                if (genMode != WorldGenMode::Maze && simTick % game::kMacroPeriodTicks == 0) {
+                    macroStats = macroSim.step(pool, macroParams, &factionRel);
+                    // The world lives whether or not anyone is looking, and this line
+                    // is the proof: a headless run shows the population moving with no
+                    // HUD and no window. One line per macro tick, so ~30/minute.
+                    std::fprintf(stderr,
+                                 "[macro] tick=%llu day=%.1f living=%u births=%u "
+                                 "deaths=%u blocked=%u depart=%u arrive=%u "
+                                 "transit=%u reserve=%u\n",
+                                 static_cast<unsigned long long>(macroStats.tick),
+                                 macroSim.day(), macroStats.living, macroStats.births,
+                                 macroStats.deaths, macroStats.birthsBlocked,
+                                 macroStats.departures, macroStats.arrivals,
+                                 macroStats.inTransit, macroStats.reserveRemaining);
                 }
                 // Fluid only lives in the maze test bed (the floor modules seed no
                 // puddles yet); step it on the active layer there.
@@ -1362,16 +1612,32 @@ int main(int argc, char** argv) {
             // Three decimals, not two: the body and HUD passes land in the single
             // microseconds, and printing those as "0.00" reads as "not measured"
             // — the exact false-confidence this whole module exists to remove.
-            if (renderer.timer.supported())
+            if (renderer.timer.supported()) {
                 ImGui::Text("gpu: world %.3f | bodies %.3f | hud %.3f | "
                             "frame %.3f ms",
                             renderer.timer.pass_ms(gpu::GpuPass::World),
                             renderer.timer.pass_ms(gpu::GpuPass::Bodies),
                             renderer.timer.pass_ms(gpu::GpuPass::Hud),
                             renderer.timer.frame_ms());
-            else
+                // The median above is DESIGNED to hide spikes — it takes 16 slow frames
+                // out of 31 to move it — so it cannot see a hitch. This line is the WORST
+                // frame in the same window. A peak that moved while the median did not is
+                // a stutter; both moving together is a real cost change. `drop` must stay
+                // at 0: a growing value means every figure above is computed over a stale
+                // window and none of them mean anything. [gpu_timer.h]
+                ImGui::Text("gpu peak: world %.3f | bodies %.3f | hud %.3f | "
+                            "frame %.3f ms | drop %u",
+                            renderer.timer.pass_ms_max(gpu::GpuPass::World),
+                            renderer.timer.pass_ms_max(gpu::GpuPass::Bodies),
+                            renderer.timer.pass_ms_max(gpu::GpuPass::Hud),
+                            renderer.timer.frame_ms_max(), renderer.timer.dropped());
+            } else {
+                // Deliberately no longer "queue family writes no timestamps": supported()
+                // is now ALSO false when the timer was switched off with GIGA_GPU_TIMER=0,
+                // and blaming the queue family in that case would be a lie.
                 ImGui::TextUnformatted(
-                    "gpu: n/a (queue family writes no timestamps)");
+                    "gpu: n/a (no timestamps, or GIGA_GPU_TIMER=0)");
+            }
             auto& tr = reg.get<Transform>(player);
             auto& ctl = reg.get<Controller>(player);
             auto& ga = reg.get<GravityAffected>(player);
@@ -1481,6 +1747,46 @@ int main(int argc, char** argv) {
                 ImGui::Text("loot %d rub (%d/%d slots) | healed %d | band E%u",
                             carried, slots, game::kInvSlots, healed,
                             game::economy_band(currentFloor));
+                // Crafting, on screen: C builds or reads, X strips. `bank` is the 9-axis
+                // material vector summed, because nine numbers on the HUD would be noise
+                // — the per-axis detail is what the craft menu is for when one exists.
+                // Tier only rises by reading a blueprint, so it is the one number here
+                // that reports progression rather than activity.
+                std::uint32_t bankTotal = 0;
+                for (std::size_t mi = 0; mi < game::kCraftMaterials; ++mi)
+                    bankTotal += crafting.mat[mi];
+                ImGui::Text("craft T%u | %u made / %u stripped / %u learned | %u units "
+                            "banked  (C build, X strip)",
+                            static_cast<unsigned>(crafting.tier), crafted, scrapped,
+                            recipesLearned, bankTotal);
+                // The macro society, on screen. `living` is the WHOLE cold population,
+                // not the handful embodied on this floor, so this number moving is the
+                // visible proof that the world runs on its own clock. It updates once
+                // every kMacroPeriodTicks (2.000 s), so it deliberately does not track
+                // the frame.
+                ImGui::Text("society %u alive | +%u births / -%u deaths | %u in transit"
+                            "%s",
+                            macroStats.living, macroStats.births, macroStats.deaths,
+                            macroStats.inTransit,
+                            macroStats.birthsBlocked != 0
+                                ? "  (RESERVE FLOOR: births refused)"
+                                : "");
+                ImGui::Text("day %.1f | macro tick %llu | feud hits %u | "
+                            "relations %u kills / %u shifts",
+                            macroSim.day(),
+                            static_cast<unsigned long long>(macroStats.tick), feudHits,
+                            relTick.kills, relTick.changes);
+                // The utility AI, and it reads ZERO on purpose while aiCfg.enabled is false
+                // — a dormant system that shows nothing is indistinguishable from a missing
+                // one, which is how the parked call rotted unnoticed for weeks. `ai/wander`
+                // is the single-writer split: those two must never both be non-zero for the
+                // same body on the same tick, and that is what suite_utilai measures. [ai.h]
+                ImGui::Text("ai %s | %u seen / %u replan / %u switch | own ai %u / wander %u"
+                            " | mem %u recall / %u filed / %u fled",
+                            aiCfg.enabled ? "ON" : "off (dormant)", aiTick.considered,
+                            aiTick.replanned, aiTick.switches, aiTick.aiOwned,
+                            aiTick.wanderOwned, aiTick.recalled, aiTick.remembered,
+                            aiTick.memoryFled);
             }
             // Nearest monster, by name. Doubles as the proof that the Cyrillic font
             // actually loaded: every one of the 69 names is Russian.
@@ -1627,6 +1933,13 @@ int main(int argc, char** argv) {
             if (rumourLine[0])
                 ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.91f, 1.0f), "\"%s\"",
                                    rumourLine);
+            // Tan, NOT rumour's cyan, and prefixed with the situation so the two channels
+            // are distinguishable at a glance. #cca is the reference's own authored bark
+            // colour, and keeping them different is what stops a murmur from reading as a
+            // checkable fact. [speech.h]
+            if (speechLine != nullptr)
+                ImGui::TextColored(ImVec4(0.80f, 0.80f, 0.67f, 1.0f), "[%s] %s",
+                                   game::speech_situation_name(speechSit), speechLine);
             ImGui::Text("nav: %s  (last bake %.0f + %.0f ms, async)",
                         nav.baking() ? "BAKING - crowd idle"
                                      : (nav.ready() ? "ready" : "none"),
@@ -1643,13 +1956,13 @@ int main(int argc, char** argv) {
                         currentSpec ? currentSpec->name : "maze",
                         currentSpec ? currentSpec->population : 64u);
             // The coarse society tick's last report ([macro_sim.h]). Off in maze mode
-            // (no registered floor set). `macro.tick()` is 0 until the first step
+            // (no registered floor set). `macroSim.tick()` is 0 until the first step
             // lands ~2 s in, so this reads "warming up" rather than a row of zeroes
             // that looks broken. births/deaths are this step's tallies; in-transit is
             // the live migration backlog; reserve is the birth headroom the pool will
             // never reclaim (the design-scale wall lives here, macro_sim.h banner).
             if (genMode != WorldGenMode::Maze) {
-                if (macro.tick() == 0)
+                if (macroSim.tick() == 0)
                     ImGui::Text("society: warming up (first macro tick at %.1f s)",
                                 static_cast<float>(game::kMacroPeriodTicks) *
                                     kSimDt);
@@ -1660,7 +1973,7 @@ int main(int argc, char** argv) {
                                 macroStats.deaths, macroStats.inTransit,
                                 macroStats.reserveRemaining,
                                 static_cast<unsigned long long>(macroStats.tick),
-                                macro.day());
+                                macroSim.day());
             }
             if (genMode == WorldGenMode::Maze) {
                 ImGui::Checkbox("pause fluid", &fluidPaused);
@@ -1831,8 +2144,23 @@ int main(int argc, char** argv) {
                                      renderer.timer.frame_ms(),
                                      cubePass.last_instance_count(),
                                      bodyPass.last_instance_count());
-                    else
-                        std::fprintf(stderr, "gpu-ms: n/a (no timestamps)\n");
+                    // The peak beside the median, for the same reason the HUD carries
+                    // both: an unattended capture that records only a median cannot
+                    // distinguish "this got slower" from "this got spikier", and a
+                    // non-zero drop count invalidates every median in the line above.
+                    if (renderer.timer.supported())
+                        std::fprintf(stderr,
+                                     "gpu-ms-peak: world %.3f bodies %.3f hud %.3f "
+                                     "frame %.3f  (dropped %u)\n",
+                                     renderer.timer.pass_ms_max(gpu::GpuPass::World),
+                                     renderer.timer.pass_ms_max(gpu::GpuPass::Bodies),
+                                     renderer.timer.pass_ms_max(gpu::GpuPass::Hud),
+                                     renderer.timer.frame_ms_max(),
+                                     renderer.timer.dropped());
+                    if (!renderer.timer.supported())
+                        std::fprintf(stderr,
+                                     "gpu-ms: n/a (no timestamps, or "
+                                     "GIGA_GPU_TIMER=0)\n");
                     running = false;
                 }
             }

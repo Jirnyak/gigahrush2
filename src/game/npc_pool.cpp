@@ -80,8 +80,23 @@ void NpcPool::init() {
     drop_column(surname_);
     drop_column(rel_);
 
+    // gen_ is LIVE and nextFree_ is DEMAND, so both start at zero bytes like the rest of
+    // their class. Dropping gen_ here means a re-init()ed pool starts every slot at
+    // generation 0 again — correct, because init() also resets count_, so no handle
+    // minted against the old pool can pass handle_valid() by id anyway once the new pool
+    // has fewer rows, and a caller holding handles across an init() has already lost.
+    drop_column(gen_);
+    drop_column(nextFree_);
+
     count_ = 0;
     alive_ = 0;
+    freeHead_ = kInvalidNpc;
+    freeTail_ = kInvalidNpc;
+    freeCount_ = 0;
+    recycled_ = 0;
+    // recycle_ is deliberately NOT reset: it is a policy the owner of the pool set, not
+    // state the table accumulated, and silently disarming it inside init() would make
+    // `pool.set_recycling(true); pool.init();` a no-op that looks like it worked.
 
     // The per-floor index is DERIVED state, rebuilt from empty. Fixed at kFloorSlots
     // (255) because that is the entire legal label range; slotInBucket_ is one wide
@@ -96,6 +111,7 @@ void NpcPool::grow_live_columns(std::uint32_t rows) {
     grow_column(sex_, rows);
     grow_column(level_, rows);
     grow_column(attr_, rows);
+    grow_column(gen_, rows);
     // A DEMAND column joins the per-spawn growth set once something has materialized
     // it. That is what keeps relations() / set_name() from resizing after their first
     // call, so spawn() stays the ONLY operation that can invalidate a reference the
@@ -104,14 +120,152 @@ void NpcPool::grow_live_columns(std::uint32_t rows) {
     if (!name_.empty()) grow_column(name_, rows);
     if (!surname_.empty()) grow_column(surname_, rows);
     if (!rel_.empty()) grow_column(rel_, rows);
+    if (!nextFree_.empty()) grow_column(nextFree_, rows);
+}
+
+void NpcPool::set_recycling(bool on) {
+    // Idempotent: a redundant arm/disarm costs nothing, so a caller may arm defensively
+    // (on load, at the top of a session) without thinking about whether it already did.
+    // This return is NOT what stops a double-enqueue — do not read it as the guarantee.
+    // The queue's uniqueness comes from rebuild_free_list() RESETTING the list before it
+    // scans, so even a repeated rebuild re-derives the same set; deleting that reset
+    // because this line looks like it covers the case is the way to break it.
+    if (on == recycle_) return;
+    recycle_ = on;
+    if (on) {
+        // Arming is the MIRROR of disarming: disarming drops the queue, so arming has to
+        // re-derive it or the two are asymmetric and slots leak. Every dead slot below the
+        // high-water mark is reclaimable — the alive bit is the whole truth about that —
+        // so re-derive rather than require the caller to arm before the first death.
+        // Without this, `pool.init(); seed(); ...deaths...; set_recycling(true);` keeps
+        // the wall it was armed to close, and reserve_remaining() reports slots spawn()
+        // will never hand out.
+        rebuild_free_list();
+        return;
+    }
+    // Disarming forgets the queue rather than leaving it to be drained by a pool that no
+    // longer recycles. That keeps `free_slots() > 0` equivalent to "recycling is on", so
+    // reserve_remaining() never promises a slot spawn() will refuse to hand out.
+    freeHead_ = kInvalidNpc;
+    freeTail_ = kInvalidNpc;
+    freeCount_ = 0;
+}
+
+void NpcPool::rebuild_free_list() {
+    // Ascending id, so the order is a pure function of the alive bits and nothing else —
+    // no address, no hash, no container iteration order. That is the same determinism
+    // property kill order has ([npc_pool.h] "Slot recycling"), which is why a rebuilt
+    // queue is safe to hand to a society whose every decision is `hash(id, tick, salt)`.
+    //
+    // Starts from an EMPTY queue by contract (only the OFF->ON transition calls this),
+    // but clears anyway: a rebuild that appended to a stale list would duplicate slots,
+    // and this is one branch, not a hot path.
+    freeHead_ = kInvalidNpc;
+    freeTail_ = kInvalidNpc;
+    freeCount_ = 0;
+    // Load-bearing, not a fast path: a pool whose init() has never run has an EMPTY
+    // flags_ column, and count_ == 0 is the only thing that stops the scan below from
+    // indexing it. `set_recycling(true)` before `init()` is legal (init() deliberately
+    // does not reset recycle_), so this case is reachable.
+    if (count_ == 0u) return;
+    for (NpcId id = 0; id < count_; ++id) {
+        if (flags_[id] & NpcAlive) continue;
+        push_free(id);
+    }
+}
+
+void NpcPool::push_free(NpcId id) {
+    // First recycled death materializes the link column. Sized to count_ (never id + 1)
+    // for the same reason relations() is: growth is a property of how many records exist,
+    // not of which one happened to die first.
+    grow_column(nextFree_, count_ ? count_ : 1u);
+    nextFree_[id] = kInvalidNpc;
+    if (freeTail_ == kInvalidNpc) freeHead_ = id;   // list was empty
+    else                         nextFree_[freeTail_] = id;
+    freeTail_ = id;
+    ++freeCount_;
+}
+
+NpcId NpcPool::pop_free() {
+    if (freeCount_ == 0u) return kInvalidNpc;
+    const NpcId id = freeHead_;
+    freeHead_ = nextFree_[id];
+    if (freeHead_ == kInvalidNpc) freeTail_ = kInvalidNpc;  // list is now empty
+    nextFree_[id] = kInvalidNpc;
+    --freeCount_;
+    return id;
+}
+
+// Blank a row so a reused slot is indistinguishable from a virgin one. Every column the
+// pool owns is listed here ON PURPOSE — an omission is not a compile error, it is a
+// corpse's inventory turning up inside a newborn, or a dead man's relationship edges
+// deciding who a child likes. The order follows the header's column list so the two can
+// be diffed by eye.
+void NpcPool::reset_row(NpcId id) {
+    // Floor membership FIRST, and through set_floor(), because the bucket index is the
+    // one piece of state a direct write cannot fix: kill() already evicted the record, so
+    // this is normally a no-op, but a record whose alive bit was cleared without going
+    // through kill() can still be sitting in a roster, and reviving it into a second
+    // bucket entry would corrupt the index for an unrelated id.
+    if (floor_[id] != kNoFloorLabel) set_floor(id, kNoFloorLabel);
+    slotInBucket_[id] = 0u;
+
+    // EAGER columns.
+    flags_[id] = 0;
+    faction_[id] = 0;
+    hp_[id] = 0;
+    maxHp_[id] = 0;
+    cx_[id] = 0;
+    cy_[id] = 0;
+    cz_[id] = 0;
+    heightMm_[id] = 0;
+    inv_[id] = Inventory{};
+    // Needs{} is NOT all-zero in meaning: `seeded == 0` is "clock never rolled", which is
+    // what a fresh body must read as rather than "starving and dehydrated" ([needs.h]).
+    needs_[id] = Needs{};
+
+    // LIVE columns. Sized to cover count_ and id < count_, so the bounds are structural;
+    // the guards are here because a reset that silently skipped a row would be worse than
+    // a crash and this is the cheapest place to be sure.
+    if (id < age_.size()) age_[id] = 0;
+    if (id < sex_.size()) sex_[id] = SexUnset;
+    if (id < level_.size()) level_[id] = 0;
+    if (id < attr_.size()) attr_[id] = std::array<std::uint8_t, kAttrSlots>{};
+    // gen_ is deliberately NOT reset — it is the whole point of the generation counter.
+
+    // DEMAND columns: only if something materialized them.
+    if (id < name_.size()) name_[id].fill('\0');
+    if (id < surname_.size()) surname_[id].fill('\0');
+    if (id < rel_.size()) {
+        // Per-element assignment, not a memset: an empty edge is `target == kInvalidNpc`
+        // (Relationship's NSDMI), and 16 zeroed edges would read as sixteen relationships
+        // with NPC 0 — exactly the distinction test_relationships pins.
+        for (Relationship& r : rel_[id]) r = Relationship{};
+    }
 }
 
 NpcId NpcPool::spawn() {
+    // Recycled slots first. This is the whole reason the free list exists: the tail is a
+    // finite draw (98,576 slots at design size) and deaths refill the queue forever, so a
+    // long society run holds its population here instead of decaying once the plast is
+    // gone. The pop is O(1) and takes the OLDEST death, so the id sequence is a pure
+    // function of the kill order and two identical runs stay bit-identical.
+    if (recycle_ && freeCount_ != 0u) {
+        const NpcId id = pop_free();
+        ++recycled_;
+        // Blank every column BEFORE the alive bit goes on, so no reader can ever observe
+        // a live record still carrying the previous occupant's row.
+        reset_row(id);
+        flags_[id] = NpcAlive;
+        ++alive_;
+        floor_[id] = kNoFloorLabel;
+        return id;
+    }
+
     if (count_ >= kNpcPoolSize) return kInvalidNpc; // reserve exhausted
     NpcId id = count_++;
     grow_live_columns(count_);
-    // Slot came from the zeroed tail; just light the ALIVE bit. (Killed slots
-    // below count_ are never handed back out — new NPCs always bump the tail.)
+    // Slot came from the zeroed tail; just light the ALIVE bit.
     flags_[id] = NpcAlive;
     ++alive_;
     // Not on any floor until set_floor() places it, so it sits in no bucket and the
@@ -123,7 +277,17 @@ NpcId NpcPool::spawn() {
 
 void NpcPool::kill(NpcId id) {
     if (!valid(id)) return;
-    // Dead but not reclaimed: clear ALIVE (and EMBODIED), keep the slot & id.
+    // IDEMPOTENT, and this guard is the fix for a live bookkeeping bug: the body below
+    // used to run unconditionally with `if (alive_) --alive_;` at the end, so killing an
+    // already-dead id decremented the counter a SECOND time. `count()` stayed right and
+    // `alive(id)` stayed right, so nothing looked wrong — `alive()` just drifted below the
+    // truth, permanently and by exactly the number of double-kills. Two callers can
+    // legitimately race to the same corpse (`finalize_deaths` on an entity whose record a
+    // macro sweep already retired, a mob death resolved twice in one frame), and with
+    // recycling armed the old code was worse than a wrong HUD number: a second kill would
+    // queue the same slot twice, and the free list would then hand one id to two records.
+    if (!(flags_[id] & NpcAlive)) return;
+    // Dead: clear ALIVE (and EMBODIED), keep the slot & id.
     //
     // **NpcPlayer must be cleared here too, and leaving it out was a live bug.**
     // `finalize_deaths` calls kill() and then destroys the entity — it never routes
@@ -134,10 +298,25 @@ void NpcPool::kill(NpcId id) {
     // whole session, and nothing would have complained.
     flags_[id] &=
         static_cast<std::uint8_t>(~(NpcAlive | NpcEmbodied | NpcPlayer));
-    if (alive_) --alive_;
+    // Unconditional, because the guard above already proved this record was counted. The
+    // old `if (alive_)` clamp looked safe and was the thing hiding the drift: it made the
+    // counter saturate at 0 instead of underflowing, so the bug produced plausible small
+    // numbers rather than a 4-billion one that someone would have noticed.
+    --alive_;
     // ...and a corpse is on no floor: drop it from its bucket so a floor roster stays a
     // clean list of the living, which is what streaming enumerates.
     set_floor(id, kNoFloorLabel);
+
+    // Every handle minted while this record lived is now stale, whether or not the slot
+    // is ever reused. Bumped before the slot is queued so a spawn() that pops it
+    // immediately cannot hand out a handle that still matches the corpse's. The counter
+    // skips kInvalidGen so no live handle can ever equal kInvalidHandle.
+    if (id < gen_.size()) {
+        const std::uint16_t next = static_cast<std::uint16_t>(gen_[id] + 1u);
+        gen_[id] = next >= kInvalidGen ? static_cast<std::uint16_t>(0) : next;
+    }
+
+    if (recycle_) push_free(id);
 }
 
 // O(1) relabel with the index kept in step. This is the operation macro_sim migration
@@ -212,7 +391,8 @@ std::size_t NpcPool::resident_bytes() const {
            column_bytes(cy_) + column_bytes(cz_) + column_bytes(heightMm_) +
            column_bytes(inv_) + column_bytes(needs_) + column_bytes(age_) +
            column_bytes(sex_) + column_bytes(level_) + column_bytes(attr_) +
-           column_bytes(name_) + column_bytes(surname_) + column_bytes(rel_);
+           column_bytes(name_) + column_bytes(surname_) + column_bytes(rel_) +
+           column_bytes(gen_) + column_bytes(nextFree_);
 }
 
 } // namespace giga::game

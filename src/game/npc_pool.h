@@ -11,8 +11,20 @@
 //     is O(1), the arrays are dense and cache-friendly.
 //   * Slots are bump-allocated. ~950k are populated at world start; the tail is
 //     a RESERVE plast of blanks used for runtime spawns / replacements.
-//   * The dead are never reclaimed — a killed NPC keeps its slot (its ALIVE bit
-//     is cleared) and stays in the table. New NPCs always come from the reserve.
+//   * The dead are never reclaimed BY DEFAULT — a killed NPC keeps its slot (its
+//     ALIVE bit is cleared) and stays in the table, so every id anything ever stored
+//     keeps naming the same person forever. New NPCs come from the reserve.
+//   * OPT-IN SLOT RECYCLING (`set_recycling(true)`) suspends that policy for one
+//     pool: kill() queues the slot and spawn() prefers the queue over bumping the
+//     tail. It exists because "never reclaim" is a HARD WALL at design size, not a
+//     preference — 950,000 records in a 2^20 pool leave a 98,576-slot reserve, and
+//     demographic replacement births drain it in ~2.9 simulated years, after which
+//     the population can only decay ([macro_sim.h] banner, which names this pool
+//     change as the fix). It is OFF by default because a recycled id is a REUSED id
+//     and six places in src/ store a bare NpcId across time — Relationship::target,
+//     NpcRef::id, Contract::giver, FloorModule::candidate, MacroSim::Journey::id,
+//     RelationEdge::id — so each has to move to the generation-checked handle below
+//     before the shipping pool may flip it on. See "Slot recycling" further down.
 //   * Both procedural and authored ("design") NPCs share this one linear store,
 //     distinguished only by a flag bit, never by living in different arrays.
 //   * Columns are allocated by DEMAND, not uniformly. The ROW LAYOUT below is
@@ -53,9 +65,54 @@ static_assert(kNpcActiveTarget < kNpcPoolSize,
               "slot, so every runtime spawn comes from kNpcPoolSize - "
               "kNpcActiveTarget ([npcs.md])");
 
-// A stable NPC handle == its index into the pool. Never reused once allocated.
+// A stable NPC handle == its index into the pool. Never reused once allocated —
+// unless the pool is recycling, in which case an id names one record at a time and
+// NpcHandle below is what stays unique.
 using NpcId = std::uint32_t;
 inline constexpr NpcId kInvalidNpc = 0xFFFFFFFFu;
+
+// ---------------------------------------------------------------------------
+// Generation-tagged handles — how a reused id stays distinguishable
+// ---------------------------------------------------------------------------
+// An id is 20 bits (kNpcPoolBits) inside a 32-bit word, so 12 bits are already spare
+// and NO save format has to move to make room: [save.h] serializes the player's ROW
+// (needs / inventory / hp / floor / cell), never an id, and states in as many words
+// that the pool itself is not in the format because it is reproduced by
+// `seed_floor_population`. So the generation column is free of the wire.
+//
+// gen_ is bumped by kill(), NOT by reuse, which is the stronger of the two: a handle
+// minted while a record was alive goes stale the instant that record dies, whether or
+// not the slot is ever handed out again. `handle_valid` is therefore one test that
+// answers "is this still the person I was holding?" for callers that never learn about
+// the death — quests, relationship edges, in-flight journeys.
+//
+// 0xFFF is RESERVED as an impossible generation so that no live handle can collide
+// with kInvalidHandle: id 0xFFFFF is a legal id (1,048,575 == kNpcPoolSize-1), and
+// packed with gen 0xFFF it would be exactly 0xFFFFFFFF. The counter cycles 0..0xFFE,
+// i.e. 4,095 deaths per slot before an ABA collision becomes possible again — which is
+// a real limit and is stated rather than hidden: at the modelled design-scale churn
+// (~4.9%/yr of 950k, spread over 2^20 slots) a single slot is reused on the order of
+// once per 20 simulated years, so the counter wraps after ~80,000 simulated years.
+inline constexpr std::uint32_t kNpcGenBits = 32u - kNpcPoolBits;          // 12
+inline constexpr std::uint32_t kNpcGenMask = (1u << kNpcGenBits) - 1u;    // 0xFFF
+inline constexpr std::uint16_t kInvalidGen = static_cast<std::uint16_t>(kNpcGenMask);
+
+// (generation, id) packed into one word. Distinct type name, same width as NpcId, so a
+// caller that stores a handle where an id used to live pays nothing.
+using NpcHandle = std::uint32_t;
+inline constexpr NpcHandle kInvalidHandle = 0xFFFFFFFFu;
+
+inline constexpr NpcHandle npc_handle(NpcId id, std::uint16_t gen) {
+    return (static_cast<NpcHandle>(gen & kNpcGenMask) << kNpcPoolBits) |
+           (id & kNpcIdMask);
+}
+inline constexpr NpcId npc_handle_id(NpcHandle h) { return h & kNpcIdMask; }
+inline constexpr std::uint16_t npc_handle_gen(NpcHandle h) {
+    return static_cast<std::uint16_t>((h >> kNpcPoolBits) & kNpcGenMask);
+}
+static_assert(npc_handle(kNpcPoolSize - 1u, kInvalidGen) == kInvalidHandle,
+              "kInvalidHandle must be the one packing the live counter never mints, "
+              "which is what makes 0xFFF a reserved generation and not a usable one");
 
 // Sentinel floor label meaning "not currently on any floor": a record between
 // spawn() and its first set_floor(), or a killed one. Never a real floor number,
@@ -154,7 +211,11 @@ enum NpcSex : std::uint8_t { SexUnset = 0, SexMale = 1, SexFemale = 2 };
 //
 // Measured row widths: inv_ 256, rel_ 128, needs_ 36, name_ 24, surname_ 24, attr_ 8,
 // faction_/hp_/maxHp_/floor_/heightMm_ 2 each, flags_/cx_/cy_/cz_/age_/sex_/level_ 1
-// each = 493 B. Of that, 187 B/row = 187.0 MiB belonged to columns with NO reader
+// each = 493 B when this policy was written. Slot recycling added two more: gen_ 2 B
+// (LIVE) and nextFree_ 4 B (DEMAND, and only when recycling is actually on), for 499 B
+// at the widest. NEITHER is EAGER, so the 306 B/row resident figure below is unchanged
+// and the whole comparison still holds. Of the original 493, 187 B/row = 187.0 MiB
+// belonged to columns with NO reader
 // anywhere in src/: rel_ 128 (no reader at all — Relationship is written nowhere),
 // name_ + surname_ 48 (set_name has no caller in src/), and attr_/age_/sex_/level_ 11
 // (written by seed_floor_from_spec, read by nothing).
@@ -166,19 +227,21 @@ enum NpcSex : std::uint8_t { SexUnset = 0, SexMale = 1, SexFemale = 2 };
 //            they keep the old "sized once at init(), never resized" contract and a
 //            reference into them is stable for the pool's whole life. 306 B/row =
 //            306.0 MiB.
-//   LIVE   — age_, sex_, level_, attr_. Written for every seeded record by
-//            seed_floor_from_spec, so they track count_ and are grown inside
-//            spawn(). 11 B/row: the demo stack's 1,930 records need 21.2 KB of rows
-//            and allocate 44.0 KiB (11 B x the kNpcLazyChunk floor of 4096) instead
-//            of 11.0 MiB. They still reach 11.0 MiB at the 950k target.
-//   DEMAND — rel_, name_, surname_. Zero cost until something actually calls
-//            relations() / set_name(); the shipping game never does, so it pays 0 B
-//            for all three (176 B/row = 176.0 MiB saved outright). On first touch
-//            the column materializes and then JOINS the LIVE set, so relations()
-//            itself never resizes afterwards.
+//   LIVE   — age_, sex_, level_, attr_, gen_. The first four are written for every
+//            seeded record by seed_floor_from_spec; gen_ is written by kill(). All
+//            track count_ and are grown inside spawn(). 13 B/row: the demo stack's
+//            1,930 records need 25.1 KB of rows and allocate 52.0 KiB (13 B x the
+//            kNpcLazyChunk floor of 4096) instead of 13.0 MiB. They still reach
+//            13.0 MiB at the 950k target.
+//   DEMAND — rel_, name_, surname_, nextFree_. Zero cost until something actually
+//            calls relations() / set_name(), or until a recycling pool takes its first
+//            death; the shipping game does none of the three, so it pays 0 B for all
+//            four (180 B/row = 180.0 MiB saved outright). On first touch the column
+//            materializes and then JOINS the LIVE set, so relations() itself never
+//            resizes afterwards.
 //
 // New resident footprint after init(): 306.0 MiB (was 493.0 MiB), and the demo stack
-// adds 44.0 KiB of LIVE columns rather than 11.0 MiB. resident_bytes() reports the
+// adds 52.0 KiB of LIVE columns rather than 13.0 MiB. resident_bytes() reports the
 // live figure so this is checkable at runtime, not only on paper. 256 of the
 // remaining 306 B/row is inv_, which stays EAGER because loot / containers / vendor /
 // needs all read it — it is the obvious next 256.0 MiB, not this lane's.
@@ -189,11 +252,50 @@ enum NpcSex : std::uint8_t { SexUnset = 0, SexMale = 1, SexFemale = 2 };
 // spawn — the existing pattern (`auto& a = pool.attrs(id);` then write, per seeded
 // record) is safe because it never does.
 //
-// Verbatim serialization ([npcs.md] "the tables serialize verbatim") is not yet
-// implemented anywhere in src/ — there is no save/load path. When one lands it must
-// either materialize the DEMAND/LIVE columns to kNpcPoolSize first or write each
-// column's row count into the header; dumping a short column as if it were full is
-// the one way this change can bite.
+// Verbatim serialization ([npcs.md] "the tables serialize verbatim") is still not
+// implemented: [save.h] carries the player's ROW and states outright that the pool is
+// excluded because `seed_floor_population` reproduces it. When the pool does join the
+// format it must either materialize the DEMAND/LIVE columns to kNpcPoolSize first or
+// write each column's row count into the header; dumping a short column as if it were
+// full is the one way this change can bite. **Two additions for that day:** gen_ has to
+// travel (a save that resets generations hands every stored handle a false match), and
+// the free list has to travel or be rebuilt from the alive bits — a save that forgets
+// which slots were queued silently reverts the pool to never-reclaim.
+// ---------------------------------------------------------------------------
+//
+// ---------------------------------------------------------------------------
+// Slot recycling
+//
+// OFF by default; `set_recycling(true)` arms it for one pool. Three properties, and
+// each one is a requirement rather than a nicety:
+//
+//   * O(1) both ways, no scanning. The free list is INTRUSIVE — a singly-linked FIFO
+//     threaded through nextFree_ (one uint32 per row, DEMAND, so a non-recycling pool
+//     pays nothing). kill() appends at freeTail_, spawn() pops freeHead_. No compaction
+//     pass, no reallocation churn, and no free-slot search over 2^20 flag bytes.
+//   * FIFO, not LIFO, and the order is EXACTLY the recorded kill order. Determinism is
+//     the constraint that picks this: [suite_macrosim.inl] folds every column of two
+//     independently-built pools into one FNV-1a digest and requires them equal, and a
+//     free list ordered by anything except the sequence of kill() calls (an address, a
+//     hash, a set iteration) would make the ids handed to newborns differ between two
+//     identical runs — and since every macro decision is `hash(id, tick, salt)`, a
+//     different id is a different society. FIFO over LIFO on top of that because
+//     oldest-death-first maximizes the time before an id is reused, which is exactly
+//     the window in which a stale reference is detectable.
+//     There are exactly TWO orders, and both are pure functions of recorded state:
+//     kill order for every death taken while armed, and ASCENDING ID for the one-time
+//     rebuild `set_recycling(true)` performs over the alive bits (see set_recycling).
+//     Neither reads an address, a hash or a container's iteration order, so two
+//     identical runs stay bit-identical under either.
+//   * A recycled row is a BLANK row. spawn() resets every column the pool owns before
+//     handing the slot back — including the lazily-grown ones, where "reset" is not
+//     memset: an empty rel_ row is 16 x `target == kInvalidNpc`, not 16 zeros, and a
+//     blank needs_ row is `seeded == 0` rather than a starving body. Missing one column
+//     would resurrect a corpse's inventory or its survival clock inside a newborn.
+//
+// What recycling does NOT fix, stated because a caller has to care: the six bare-NpcId
+// stores listed at the top of this file. `handle()` + `handle_valid()` is the tool for
+// them and it is not yet used by any of them.
 // ---------------------------------------------------------------------------
 
 // Growth floor for a lazily-sized column. 4096 rows costs 512 KB for rel_ (the
@@ -219,12 +321,56 @@ public:
     // ("Column allocation policy" above), which is where the other 187.0 MiB went.
     void init();
 
-    // Bump-allocate the next blank slot from the reserve. Returns kInvalidNpc if
-    // the pool is exhausted. The new NPC is marked ALIVE, everything else zeroed.
+    // Take the next blank slot. Returns kInvalidNpc only when there is genuinely
+    // nothing left. The new NPC is marked ALIVE, everything else blank.
+    //
+    // Prefers a RECYCLED slot (the oldest death first) over bumping the tail whenever
+    // the free list is non-empty, because the tail is finite and the free list is not:
+    // at design size the reserve is 98,576 slots and demographic replacement drains it
+    // in ~2.9 simulated years, after which a tail-only allocator can never grant another
+    // birth ([macro_sim.h] banner). With recycling off the free list is always empty and
+    // this is the same bump allocator it always was.
     NpcId spawn();
 
-    // Mark an NPC dead. The slot is NOT reclaimed; the id stays valid forever.
+    // Mark an NPC dead. IDEMPOTENT: killing an already-dead id does nothing at all.
+    // That is load-bearing, not defensive — see the .cpp for the alive_ drift it stops.
+    //
+    // The slot is not reclaimed unless recycling is armed; the id stays a valid index
+    // either way, and its GENERATION is bumped either way, so a handle minted while the
+    // record was alive reads as stale from here on.
     void kill(NpcId id);
+
+    // Arm / disarm slot recycling for this pool. Off by default (see "Slot recycling").
+    //
+    // Disarming DROPS the pending free list: those slots go back to the never-reclaimed
+    // policy rather than lingering as a queue nothing will drain, which keeps one
+    // invariant true — `free_slots() > 0` implies recycling is on — and keeps
+    // reserve_remaining() honest about what spawn() can actually hand out.
+    //
+    // ARMING REBUILDS the queue from the ALIVE BITS: every dead slot below the
+    // high-water mark is enqueued in ascending id order. Without that, arming is
+    // asymmetric with disarming and silently loses slots — a pool armed AFTER its first
+    // death (or a pool whose rows came back from a load) would report a reserve it can
+    // never hand out, which is the never-reclaim wall reappearing under a flag that says
+    // it is closed. Ascending id is a pure function of recorded state, so it is as
+    // deterministic as kill order; see "Slot recycling" for the two orders side by side.
+    // This is also the "rebuilt from the alive bits" half of the save-format note in
+    // "Column allocation policy": with it, a load calls set_recycling(true) and the free
+    // list does NOT have to travel in the save.
+    //
+    // Idempotent: set_recycling(true) on an already-armed pool does nothing, so it
+    // cannot double-enqueue a slot that is already queued.
+    void set_recycling(bool on);
+    bool recycling() const { return recycle_; }
+
+    // Slots queued for reuse right now (dead, and spawn() will hand them back).
+    std::uint32_t free_slots() const { return freeCount_; }
+
+    // Cumulative slots handed out FROM the free list rather than from the tail. The
+    // number that makes recycling checkable from outside: `count() + recycled()` is the
+    // total number of records the pool has ever created, which is what
+    // `count()` alone meant before recycling existed.
+    std::uint32_t recycled() const { return recycled_; }
 
     bool valid(NpcId id) const { return id < count_; }
     bool alive(NpcId id) const { return flags_[id] & NpcAlive; }
@@ -244,6 +390,30 @@ public:
         else    flags_[id] &= static_cast<std::uint8_t>(~NpcPlayer);
     }
 
+    // How many records this slot has held, mod 4095. 0 until its first death. Exposed
+    // for tests and for anything packing its own handle; gameplay code wants
+    // handle()/handle_valid() instead of comparing this by hand.
+    std::uint16_t generation(NpcId id) const {
+        return id < gen_.size() ? gen_[id] : static_cast<std::uint16_t>(0);
+    }
+
+    // A handle naming whoever occupies `id` right now. Store this instead of a bare
+    // NpcId anywhere the reference can outlive the record: a contract giver, a
+    // relationship edge, an in-flight journey, a quest target. With recycling off it is
+    // still strictly better than an id, because it also detects a plain DEATH.
+    NpcHandle handle(NpcId id) const { return npc_handle(id, generation(id)); }
+
+    // True iff `h` still names the living record it was minted from. False for a handle
+    // whose record died (kill() bumped the generation), for one whose slot was recycled
+    // into somebody else, for kInvalidHandle, and for an id past the high-water mark.
+    bool handle_valid(NpcHandle h) const {
+        if (h == kInvalidHandle) return false;
+        const NpcId id = npc_handle_id(h);
+        if (id >= count_) return false;
+        if (npc_handle_gen(h) != generation(id)) return false;
+        return (flags_[id] & NpcAlive) != 0;
+    }
+
     // Copy a name/surname into the fixed-width inline field, truncating and
     // null-terminating as needed.
     void set_name(NpcId id, const char* first, const char* last);
@@ -260,7 +430,16 @@ public:
     // exact either way.
     std::uint32_t alive() const { return alive_; }
     std::uint32_t capacity() const { return kNpcPoolSize; }
-    std::uint32_t reserve_remaining() const { return kNpcPoolSize - count_; }
+
+    // Slots spawn() can still hand out: the untouched tail PLUS the recycling queue.
+    // That definition is what closes the birth wall, because it is the number
+    // `MacroSim` gates births on (`room = reserve_remaining() - reserveFloor`) — with a
+    // tail-only figure a recycling pool would still refuse every birth the moment the
+    // plast ran dry, and the recycled slots would sit there unused. Identical to the old
+    // `kNpcPoolSize - count_` whenever recycling is off, since the queue is then empty.
+    std::uint32_t reserve_remaining() const {
+        return (kNpcPoolSize - count_) + freeCount_;
+    }
 
     // Bytes the SoA columns currently hold, summed over vector capacities. Exists so
     // the allocation policy above is a measurement rather than a comment: 306.0 MiB
@@ -349,6 +528,23 @@ private:
     // makes spawn() the single reference-invalidating operation.
     void grow_live_columns(std::uint32_t rows);
 
+    // Blank every column the pool owns for `id`, so a recycled slot cannot resurrect a
+    // corpse's inventory, clock, name, relationships or floor membership.
+    void reset_row(NpcId id);
+
+    // Append / pop the intrusive FIFO free list. Append is kill order, which is what
+    // makes reuse deterministic; pop takes the oldest death.
+    void push_free(NpcId id);
+    NpcId pop_free();
+
+    // Re-derive the whole queue from the alive bits: every dead slot below count_, in
+    // ascending id order. Called on the OFF->ON transition of set_recycling() and
+    // nowhere else today, but it does NOT rely on that: it RESETS the list before
+    // scanning, so it is safe to run against a non-empty queue and cannot duplicate a
+    // slot. Keep the reset if a second caller ever appears — the call-site restriction
+    // is a convention, the reset is the invariant. O(count_) once, off any hot path.
+    void rebuild_free_list();
+
     std::uint32_t count_ = 0;  // bump pointer / high-water mark
 
     // Parallel SoA arrays. EAGER: kNpcPoolSize long after init(). LIVE/DEMAND: see
@@ -372,6 +568,24 @@ private:
 
     std::vector<Needs> needs_;   // survival clock ([needs.h]); 36 B/row
     std::uint32_t alive_ = 0;
+
+    // LIVE — reuse counter per slot, bumped by kill(). 2 B/row (2.0 MiB at capacity,
+    // 13.0 MiB of LIVE columns at the 950k target). Unconditional rather than gated on
+    // recycling, because a handle to a DEAD record is worth detecting in either mode and
+    // the column is the cheapest in the table bar the flag byte.
+    std::vector<std::uint16_t> gen_;
+
+    // DEMAND — the intrusive free list's link column, materialized by the first
+    // recycled kill(). A non-recycling pool never allocates it. Only entries for slots
+    // that have actually been pushed are ever read (push writes the link before it is
+    // reachable), so the zero-fill a resize leaves behind is never mistaken for a link
+    // to record 0.
+    std::vector<NpcId> nextFree_;
+    NpcId freeHead_ = kInvalidNpc;
+    NpcId freeTail_ = kInvalidNpc;
+    std::uint32_t freeCount_ = 0;   // queued right now
+    std::uint32_t recycled_ = 0;    // cumulative reuses
+    bool recycle_ = false;          // off by default; see "Slot recycling"
 
 
     // Per-floor inverted index over floor_: the live roster of ids on each floor.

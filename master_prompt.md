@@ -105,11 +105,11 @@ processes:
 
 - **Macro-population (2²⁰) = a separate process** — the social/economic society
   sim ([macrosim.md](macrosim.md)) on its own coarse clock; it never touches the
-  8.33 ms frame.
+  8 ms sim step.
 - **The active floor = the real-time process** — it materializes ~16k of those
   records (residents + mobs) as embodied agents and simulates them live, with
   real-time geometry rebuilds, full destructibility, fluids, heat, and gases —
-  **all of it through cells.** The split that makes this hold 120 Hz: **CPU runs
+  **all of it through cells.** The split that makes this hold 125 Hz: **CPU runs
   the agents, the GPU runs every cellular field** (fluid/gas/heat/pressure/light/
   destruction as async-compute stencils), and heavy bakes happen **only at special
   moments** (loads, post-samosbor) — with a cheap approximate **dirty local
@@ -211,7 +211,7 @@ A future agent will trip on these; obey them:
   but **not** SDL/Vulkan/ImGui, headless-testable via `game_test`. No platform
   includes there.
 - **Macrosim is a background module** with its own coarse clock — never wired to
-  the 120 Hz tick or the present path. It reads *up* into the action game
+  the 125 Hz sim tick or the present path. It reads *up* into the action game
   (embodiment) but never depends on render/input/app.
 - **Toroidal invariants:** x/y/z **wrap** (`wrap_macro`/`wrapi`/`wrap_delta`);
   positions wrap into `[0, kWorldExtent)` each physics step. **W (the level stack)
@@ -309,8 +309,8 @@ tests        world_test (core), game_test (game layer) — both headless;
   not a fixed id range. Holds a free-list of recyclable `LevelStack` slots
   (`init(stack, keepRadius=0)`).
 - `app/main.cpp` — window/Vulkan bring-up, the floor stack setup, the fixed-step
-  sim loop (1/120 s, frozen while paused), the render loop, HUD, the **pause
-  menu** overlay, and event handling incl. `[` / `]` (via `streamer.travel`) and
+  sim loop (`kSimDt` = 1/125 s, frozen while paused), the render loop, HUD, the
+  **pause menu** overlay, and event handling incl. `[` / `]` (via `streamer.travel`) and
   `Esc` (toggles pause + frees the cursor).
 
 **Core nav / bake + field files (§7 #11 bake + increment D; `giga_core` except
@@ -341,7 +341,7 @@ tests        world_test (core), game_test (game layer) — both headless;
   evaporate over a named `float` field (default `"danger"`), no-flux at walls;
   stable at `rate·6 ≤ 1` (default 0.15). `diffusion_gradient(f, grid, x,y,z)` =
   the flee vector (agents flee along −gradient). Runs on the macro tick, not the
-  120 Hz tick. The flee/scent input to #12, distinct from nav and from
+  125 Hz sim tick. The flee/scent input to #12, distinct from nav and from
   `FloorSpec.hostility`. See [diffusion.md](diffusion.md).
 
 **Key components** (`ecs/components.h`, all POD): `Transform{vec3 pos; LayerId
@@ -547,7 +547,7 @@ So the open work is **#13** content tables (then `route_step` goal-seeking light
 The floor-module epic (#6–#9) is **done**.
 
 ### #10 — Macro tick (demographic core + bucket index + migration + social BUILT 2026-07-28) ✔
-Coarse clock (own rate, **never** the 120 Hz tick — [macrosim.md](macrosim.md)).
+Coarse clock (own rate, **never** the 125 Hz sim tick — [macrosim.md](macrosim.md)).
 This is where the **off-screen population comes alive**; the ref proved 2²⁰ is
 viable *only if the macro tick stays columnar* (its own 1M target was retired
 because per-record object graphs — not typed columns — dominated cost; gigahrush2
@@ -725,7 +725,8 @@ Decomposed into **#13a** item_table → **#13b** mob_table → **#13c** loot tab
 - **#13a item_table — DONE** ([items.md](items.md), `src/game/item_table.{h,cpp}`,
   `test_item_table`). POD `ItemDef` (type/value/spawnW/stack/durability/`resist[5]`/
   `tags` bitmask/science/contraband/deceptive/`UseEffect`) + `ItemType`/`DamageType`/
-  `ItemTag` enums + a representative 35-item catalog (array-index-is-id, 0 = none) +
+  `ItemTag` enums + the **full 446-item** catalog generated from `data/items.csv`
+  (`kItemCount = 446` in `item_table.h`; array-index-is-id, 0 = none) +
   `item_def(id)` / `item_id(name)` lookups + `apply_use_effect(needs, hp, maxHp,
   def)` — which **closes the #12a digestion loop** (baked pending-pool deltas feed
   `needs_step`). `use` closures re-encoded as flat baked deltas; weapon *combat*
@@ -739,8 +740,9 @@ Decomposed into **#13a** item_table → **#13b** mob_table → **#13c** loot tab
   `test_mob_table`). POD `MobDef` (name/hp/dmg/speed/attackRate/ranged/projSpeed/
   `projType`/`aiFlags`/spawnW/minSamosbor/rare) + `MobAiFlag` bitmask (the ~52-flag
   reference `aiFlags` union **compressed** into 18 structural behaviour families —
-  a flag exists once a consuming system reads it) + `ProjType` + a representative
-  **33-kind** catalog spanning every archetype (array-index-is-kind, **no** 0
+  a flag exists once a consuming system reads it) + `ProjType` + the **full 69-kind**
+  catalog generated from `data/mobs.csv` (`static_assert(kMobKindCount == 69)` in
+  `mob_table.h`; array-index-is-kind, **no** 0
   sentinel — kind 0 is a real mob) + bounds-tolerant `mob_def(kind)` / `mob_kind
   (name)` mirroring `item_def` + inline per-level scaling (`mob_scaled_hp/dmg/speed`,
   the reference `rpg.ts` +12%/+10%/+2%-per-level curve, `Math.round`, no `<cmath>`).
@@ -821,8 +823,11 @@ the whole game runs exactly as today until the final mode-dispatch step. **#1 do
   [performance.md](performance.md) §Active-floor sizing.
 - **Honest crowd bench** (`tests/sim_bench.cpp`, M2 Pro): 16k agents on a real
   Residential floor wandering with the *real* `physics_step` = **10.5 ms/tick
-  single-thread (126 % of the 8.33 ms budget)** but **~1.5 ms across 8–12 threads**
-  (6.5×, knee at 8 = 6 perf cores) → ~19 % of budget, ~86k-agent headroom.
+  single-thread (131 % of the 8 ms budget)** but **~1.5 ms across 8–12 threads**
+  (6.5×, knee at 8 = 6 perf cores) → ~19 % of budget. The agent-count headroom
+  (once quoted as ~86k) is **unstated pending a re-run**: it was projected against
+  the retired 8.33 ms budget, and `sim_bench.cpp` still builds its budget from a
+  hardcoded `1.0f / 120.0f`, so its own printout reads ~4 % high.
   Collision-vs-world only (no entity-entity, AI, or fields yet). Conclusion: the
   agent tick MUST be threaded (motivates the #11 job-system); 16k/floor then fits.
 - **Pool:** `kNpcPoolBits=20`, `kNpcPoolSize=1,048,576`, `kNpcActiveTarget≈950k`,
@@ -838,8 +843,15 @@ the whole game runs exactly as today until the final mode-dispatch step. **#1 do
   `kNavDir` (same `−x,+x,−y,+y,−z,+z` order; `reverse(d)==d^1`), `kFlowArrived=6`,
   `kFlowNone=0xFF` (wall/unreachable). Bake pegs all cores; deterministic
   (bit-identical re-bake) because each of the 64 BFS writes a disjoint slice.
-- **Sim loop:** fixed `kSimDt = 1/120 s`; fluid steps every 4 sim steps (maze mode
-  only); fog `kWorldExtent*0.30 .. 0.50`.
+- **Sim loop:** fixed `kSimDt = 1/125 s` — `kSimHz = 125` and `kSimStepMs = 8`
+  **exactly**, all three in [src/core/tick.h](src/core/tick.h), which is the only
+  place the rate may be written. 125 rather than 120 because every timer in the game
+  is integer milliseconds: at 1/120 the `dt*1000+0.5` conversion truncated 8.833 to
+  **8**, so a second of sim took 125 ticks and every authored cooldown/reload/
+  telegraph/samosbor phase ran **4.17 % slow**. A `static_assert` pins
+  `kSimStepMs * kSimHz == 1000`. Never write a bare `1/120` or `1/125`; use the
+  constants. Fluid steps every 4 sim steps (maze mode only); fog
+  `kWorldExtent*0.30 .. 0.50`.
 - **Demo floors** (`main.cpp`): `{0 Residential(hub), 1 Commercial, 2 Industrial,
   3 Derelict, 4 Residential}`, registered as modules; only floor 0 is embodied at
   startup (streaming). `FloorStreamer.init(stack, keepRadius=0)` reserves

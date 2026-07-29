@@ -1,0 +1,22 @@
+diff --git a/src/game/floor_stream.cpp b/src/game/floor_stream.cpp
+index 8f0c72c..2704646 100644
+--- a/src/game/floor_stream.cpp
++++ b/src/game/floor_stream.cpp
+@@ -91,7 +91,6 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
+     // population never grows per visit (master_prompt #9).
+     if (!fm.seeded) {
+         const FloorSpec& spec = floor_spec(fm.kind);
+-        NpcId before = pool.count();
+         // fm.number goes through UNCAST. This used to be
+         // static_cast<std::uint16_t>(fm.number), which is the exact line that wrote
+         // the demo stack's negative labels into the pool as garbage: floor -50 became
+@@ -107,7 +106,8 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
+         // crowd IS pool.floor_bucket(number) once seed_floor_from_spec has labelled
+         // every record it spawned. A frozen [firstId, count) range could not express a
+         // record migrating in or out of this floor; the label can, and macro_sim
+-        // migration is exactly that operation. `before` stays local for the count below.
++        // migration is exactly that operation. (The old `NpcId before = pool.count()`
++        // that fed the dropped count is gone with it.)
+         fm.seeded = true;
+     }
+ 

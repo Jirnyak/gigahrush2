@@ -2,7 +2,14 @@
 # 3.21 (3.20 rejects CMAKE_CXX_STANDARD 23 outright), and $<TARGET_RUNTIME_DLLS>
 # — which stages SDL3.dll beside the exe on Windows — is also 3.21.
 cmake_minimum_required(VERSION 3.21)
-project(gigahrush2 LANGUAGES CXX)
+
+# C is enabled ONLY because libktx is a C library and its targets ask CMake for C
+# compiler features; without it the generate step dies with "No known features for C
+# compiler" AFTER a successful 321-second configure, which reads like a toolchain fault
+# rather than a missing language. No first-party source is C — every file under src/ is
+# C++23 — and giga_target_flags() only ever touches CXX targets, so this widens what CMake
+# may probe and nothing about how this engine is compiled.
+project(gigahrush2 LANGUAGES CXX C)
 
 # ---------------------------------------------------------------------------
 # gigahrush2 — universal voxel core engine.
@@ -122,6 +129,35 @@ FetchContent_Declare(imgui
     GIT_TAG v1.91.5 GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(imgui)
 
+# libktx — reads the KTX2 texture containers in data/textures/ and transcodes them.
+#
+# WHY A LIBRARY AND NOT A HAND-ROLLED READER. The committed maps are UASTC 4x4 with
+# supercompressionScheme 2 (Zstd), so a level is a zstd stream of UASTC blocks that has to
+# be inflated AND transcoded before the GPU can see it — the payload has
+# vkFormat = VK_FORMAT_UNDEFINED, so there is deliberately nothing to hand
+# VkImageCreateInfo until the transcode has happened. That transcode is a real
+# entropy-coded format conversion, not a memcpy, and writing it by hand would be a
+# thousand lines of someone else's already-tested work. See data/textures/README.md for the
+# measured container contract.
+#
+# The trade was made knowingly: UASTC+Zstd is 25.06 MiB in git for the six bound materials
+# against 32.00 MiB for the same six as raw BC7. The raw path needs no library at all, so if
+# this dependency ever becomes a problem, `tools/fetch_textures.py --format bc7` regenerates
+# a library-free pack and the loader keeps only its container parsing.
+#
+# Everything off but the transcoder: KTX_FEATURE_WRITE and the tools would pull in a writer
+# and a CLI this engine never calls, and the tests would add a target to every build.
+set(KTX_FEATURE_TESTS       OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_TOOLS       OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_STATIC_LIBRARY ON CACHE BOOL "" FORCE)
+set(KTX_FEATURE_WRITE       OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_DOC         OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_LOADTEST_APPS OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(ktx
+    GIT_REPOSITORY https://github.com/KhronosGroup/KTX-Software.git
+    GIT_TAG v4.4.0 GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(ktx)
+
 # ---- System dependencies --------------------------------------------------
 # Vulkan is always a system dependency: MoltenVK via Homebrew on macOS, the
 # LunarG SDK on Windows (set VULKAN_SDK). glslc ships with both.
@@ -204,6 +240,36 @@ foreach(_sh cube.vert cube.frag body.vert)
         COMMENT "glslc ${_sh}")
     list(APPEND _giga_spv_files ${_giga_spv_dir}/${_sh}.spv)
 endforeach()
+
+# cube.frag compiled a SECOND time, with -DGIGA_ALBEDO_ARRAY, into cube_tex.frag.spv.
+#
+# ONE SOURCE, TWO VARIANTS, and the split is deliberate. The world pass samples the six
+# photographic albedo maps through a sampler2DArray; the body pass shares the same
+# fragment source and must NOT, because bodies carry material id 0 and there is no
+# texture for them. A single variant would force every body draw to bind a descriptor
+# set it never reads — and this engine's two pipeline layouts are push-constant only
+# today, which is the property the render audit measured and liked.
+#
+# Compiling one file twice rather than forking it into cube_tex.frag keeps the surface
+# maths in ONE place. That matters here specifically: the procedural surface is
+# calibrated per material to a MEASURED luminance CV from data/materials.csv, so a
+# forked copy would drift from the generator that produces material_surface.glsl and
+# nothing would catch it.
+#
+# NOT part of the foreach above, because that loop's OUTPUT is derived from its input
+# name and this one deliberately differs. `cube_pass.cpp` fails LOUDLY at init if this
+# .spv is missing and names this block in the error — which is how it was found: a
+# missing shader is otherwise a RUNTIME failure behind a perfectly green build, the exact
+# trap AGENTS.md warns about for new shaders.
+add_custom_command(
+    OUTPUT ${_giga_spv_dir}/cube_tex.frag.spv
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O -DGIGA_ALBEDO_ARRAY
+        ${CMAKE_SOURCE_DIR}/shaders/cube.frag
+        -o ${_giga_spv_dir}/cube_tex.frag.spv
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/cube.frag ${_giga_glsl_includes}
+    COMMENT "glslc cube.frag -DGIGA_ALBEDO_ARRAY -> cube_tex.frag.spv")
+list(APPEND _giga_spv_files ${_giga_spv_dir}/cube_tex.frag.spv)
+
 add_custom_target(giga_shaders DEPENDS ${_giga_spv_files})
 
 # ---- Rendering + app shell ------------------------------------------------
@@ -227,8 +293,14 @@ add_dependencies(gigahrush2 giga_shaders)
 target_include_directories(gigahrush2 PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_definitions(gigahrush2 PRIVATE
     GIGA_SHADER_DIR="${_giga_spv_dir}")
+# ktx is linked to the EXE and deliberately not to giga_render or giga_game: the texture
+# loader lives in src/render, which is already the only layer allowed to see Vulkan, and
+# giga_core/giga_game must stay free of platform and third-party headers (AGENTS.md). Also
+# note the target name is lowercase `ktx`, not a KTX:: namespaced alias — KTX-Software
+# exports it unnamespaced when built as a subproject.
 target_link_libraries(gigahrush2 PRIVATE giga_game giga_core giga_imgui
-    SDL3::SDL3 Vulkan::Vulkan)
+    SDL3::SDL3 Vulkan::Vulkan ktx)
+target_include_directories(gigahrush2 PRIVATE ${ktx_SOURCE_DIR}/include)
 # RTTI is permitted in the app shell (ON) — only the core/game libs forbid it.
 giga_target_flags(gigahrush2 ON)
 
@@ -244,10 +316,24 @@ endif()
 # ---- Tests ----------------------------------------------------------------
 if(GIGA_BUILD_TESTS)
     enable_testing()
+    # The count is pinned, for the reason spelled out at game_test below: add_test()
+    # reads the exit code and nothing else, main() returns 0 unless an assertion
+    # failed, so deleting one line from its 15-call dispatch list removed a whole
+    # engine-core test from the run and ctest stayed GREEN. Nothing else covers this
+    # file — the unwired-suite guard in tools/check_source_rules.cmake only inspects
+    # tests/suite_*.inl, and world_test.cpp defines all 15 of its tests inline.
+    #
+    # OBSERVED, not derived: under ctest on 2026-07-29 world_test printed
+    # `22609/22609 checks passed` (42.69 s, Release). The printed pair is
+    # (passed, total), so the literal pins the total AND demands zero failures in one
+    # regex. It is an EXECUTION count, not a site count: 108 CHECK sites, most inside
+    # loops — test_nearest_image's nest alone runs 37 x 33 times.
     add_executable(world_test tests/world_test.cpp)
     target_link_libraries(world_test PRIVATE giga_core)
     giga_target_flags(world_test OFF)
     add_test(NAME world_test COMMAND world_test)
+    set_tests_properties(world_test PROPERTIES
+        PASS_REGULAR_EXPRESSION "22609/22609 checks passed")
 
     # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
@@ -255,21 +341,96 @@ if(GIGA_BUILD_TESTS)
     # whether the seven known findings were outstanding or whether somebody had also
     # broken an unrelated regression test. That demoted ~45 real gates to stderr.
     #
-    # WILL_FAIL inverts the exit code: ctest is GREEN while the findings stand, and goes
-    # RED the moment the last one is fixed. That is the tripwire, not a regression —
-    # whoever closes a finding has to come here and say so. Rationale and the honest
-    # limitation (WILL_FAIL cannot tell an expected assertion failure from a crash) are
-    # documented at the top of tests/audit_test.cpp.
+    # THE COUNT IS PINNED, NOT THE EXIT CODE INVERTED — and the difference is the whole
+    # gate. This test used to carry WILL_FAIL TRUE, which inverts `main`'s
+    # `return g_fails == 0 ? 0 : 1`. That is one bit, "some check failed", never a count,
+    # and today six of the seven findings are CLOSED pins rather than live defects. So
+    # under WILL_FAIL, regressing any one of those six moved the failure count 2 -> 3,
+    # which is still non-zero, still inverted, and **ctest stayed GREEN**. Six tripwires
+    # that read like guards were not guards. The same hole swallowed a crash: die before
+    # the count line prints and the exit code is still non-zero, so that was green too
+    # (spelled out in the header of tests/audit_test.cpp — named, not cited by line,
+    # because the commit that closed this hole rewrote that header and moved the very
+    # lines the old pointer named).
+    #
+    # PASS_REGULAR_EXPRESSION closes both. It matches the literal line `main` prints, so
+    # the test passes only when the run reached the end AND landed on exactly the expected
+    # tally — a regression moves a number and the regex misses; a crash never prints the
+    # line and the regex misses. It also overrides the exit-code check, which is what lets
+    # a target that legitimately exits 1 report green. WILL_FAIL is GONE rather than left
+    # alongside: CMake ignores it once a pass regex is set, so leaving it would read as if
+    # the inversion were still live.
+    #
+    # Both numbers are pinned on purpose. `failures` is the gate. `checks` catches the
+    # other way a tripwire stops tripping silently — delete a test from
+    # `test_audit_all()` and the failure count would not move while the coverage did.
+    # The cost is that adding a CHECK is a deliberate edit here, which is the intended
+    # friction for this file.
+    #
+    # OBSERVED, not derived: `build-win\audit_test.exe` printed
+    # `audit_test: 62 checks, 0 failures` on 2026-07-29 - it was 41 checks / 2 failures earlier the
+    # same day, and both of those failures were finding 5
+    # (suite_audit.inl descend_not_free), which its own ledger entry documents as
+    # unsatisfiable as written — the test is the defect there, not the game.
+    #
+    # IF YOU CLOSE A FINDING (or add a check), this test goes RED. That is the tripwire
+    # firing, not a regression. Run the exe, read its count line, change the numbers
+    # below to what it printed, and NAME THE DEAD DEFECT IN YOUR COMMIT MESSAGE. Do not
+    # tune the number until green without reading why it moved: a count that drifted for
+    # a reason nobody wrote down is how this file stops meaning anything.
     add_executable(audit_test tests/audit_test.cpp)
     target_link_libraries(audit_test PRIVATE giga_game)
     giga_target_flags(audit_test OFF)
+    # RE-CONFIGURE AFTER CHANGING ANY PIN BELOW. set_tests_properties is baked into
+    # build-win/CTestTestfile.cmake when cmake CONFIGURES, so editing this file and then running
+    # ctest directly still matches the OLD regex - ctest never reads CMakeLists.txt. Measured
+    # 2026-07-29: a corrected pin appeared to fail twice for exactly this reason, and the obvious
+    # wrong conclusion was that the NEW number was also wrong. Run tools\win\build.bat (it
+    # configures first) or `cmake -S . -B build-win` before trusting a ctest verdict on a pin.
     add_test(NAME audit_findings COMMAND audit_test)
-    set_tests_properties(audit_findings PROPERTIES WILL_FAIL TRUE)
+    set_tests_properties(audit_findings PROPERTIES
+        PASS_REGULAR_EXPRESSION "audit_test: 62 checks, 0 failures")
 
+    # THE COUNT IS PINNED HERE TOO — the same mechanism as audit_findings above, now on
+    # the target that carries 3,887 of the repo's 4,036 CHECK sites. Until this line
+    # existed the pin was on the 1% and the raw defect owned the other 99%: add_test()
+    # consumed the exit code alone, `main` ends `return g_fails == 0 ? 0 : 1`, and the
+    # tally the binary prints was read by NOBODY. So any coverage loss that did not
+    # fail an assertion was invisible — delete a call from the 81-line dispatch list in
+    # main() and that test simply never runs: exit 0, ctest GREEN, no diff to review
+    # anywhere near a test file.
+    #
+    # What this adds over the existing gates, precisely, because "nothing covered it"
+    # would be too strong: tools/check_source_rules.cmake already fails a
+    # tests/suite_*.inl whose `test_*_all()` entry point no tests/*.cpp calls, so 23 of
+    # the 81 dispatch lines were protected there. The other 58 are defined in this .cpp
+    # (test_full_loop 41 CHECK sites, test_mob_behaviour 39, test_floor_bucket_index 37,
+    # test_vendor 36, ... 888 sites across the 58) and no rule anywhere looked at them.
+    # Three more holes the tally closes and that guard cannot see: a suite whose entry
+    # point is not spelled `static` slips its regex (tests/suite_speech.inl declares
+    # `void test_speech_all()`, so its 81 sites are unguarded there); deleting a single
+    # CHECK inside a test body; and shrinking a loop bound so the same CHECK runs
+    # fewer times.
+    #
+    # OBSERVED, not derived: under ctest on 2026-07-29, Release, game_test printed
+    # `game_test: 134002 checks, 0 failures` - it read 132266 earlier the same day, before the
+    # craft, quest and speech suites landed. Determinism is not assumed —
+    # the message of commit cb61632 quotes the identical 132266 from an independent
+    # standalone run of the same tree. NOTE the magnitude: this is an EXECUTION count,
+    # not the 3,887 static sites; the bulk of the CHECKs sit inside loops.
+    #
+    # THIS TEST GOES RED THE MOMENT YOU ADD OR REMOVE A CHECK, and on this file that is
+    # often. That is the tripwire, not a regression: run the exe, read its count line,
+    # put what it printed here, and say in the commit message what moved the number.
+    # Do not tune it to green without knowing why it moved — a count that drifted for a
+    # reason nobody wrote down is how this stops meaning anything. Deliberate friction
+    # on ~4k assertions is the price of coverage that cannot shrink in silence.
     add_executable(game_test tests/game_test.cpp)
     target_link_libraries(game_test PRIVATE giga_game)
     giga_target_flags(game_test OFF)
     add_test(NAME game_test COMMAND game_test)
+    set_tests_properties(game_test PROPERTIES
+        PASS_REGULAR_EXPRESSION "game_test: 146394 checks, 0 failures")
 
     # Text gate for the AGENTS.md rules that no compiler enforces on every host.
     # The load-bearing one is no-exceptions: MSVC's STL is unsupported under
@@ -279,9 +440,29 @@ if(GIGA_BUILD_TESTS)
     # invariant that giga_core and giga_game never include SDL/Vulkan/ImGui.
     # Rationale, known limits and the `giga-check: allow` escape hatch live in
     # tools/check_source_rules.cmake. Needs no build, so it is cheap and runs first.
+    #
+    # Pinned to its last printed line instead of its exit code — but as a FLOOR, not an
+    # exact count, and that difference is deliberate rather than lazy.
+    # `files_scanned=N` is the final statement of the script and is reached only after
+    # the zero-violations verdict, so matching it proves the run completed AND found
+    # nothing: any violation raises FATAL_ERROR and the line is never printed. The
+    # three-digit class then puts a floor of 100 under the scanned set, which upgrades
+    # the script's own `EQUAL 0` guard — a broken glob that silently scans four files is
+    # green today and red here. OBSERVED 2026-07-29: `files_scanned=167`.
+    #
+    # An exact count would be WRONG here, unlike game_test. src/ is GLOB_RECURSE with
+    # CONFIGURE_DEPENDS, so every new .cpp in the engine moves this number for reasons
+    # that have nothing to do with source rules, and the only available fix would be to
+    # retype the number — training precisely the reflex the audit_findings comment above
+    # warns against, on a test where the drift is meaningless. The work an exact count
+    # would do is already done, and done better, inside the script: the guard that
+    # cross-checks every C++-shaped file under src/ and tests/ against the scanned set
+    # names the file that went blind instead of just reporting that a total moved.
     add_test(NAME source_rules
         COMMAND ${CMAKE_COMMAND} -DGIGA_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_source_rules.cmake)
+    set_tests_properties(source_rules PROPERTIES
+        PASS_REGULAR_EXPRESSION "files_scanned=[0-9][0-9][0-9]")
 
     # Honest crowd benchmark: real floor + 16k wandering agents + real physics.
     # An executable, not a ctest (it measures, it doesn't pass/fail). Runs at the

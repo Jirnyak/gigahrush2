@@ -1,0 +1,25 @@
+source_id,kind,unlock_item,consume,recipe_items,text_ru
+default_survival_basics,default,,0,bread|water|bandage|wet_rag_bundle|knife|pipe|chalk|note|ammo_9mm,Что умеет любой кто дожил до второго дня.
+item_blueprint_t1_folder,item,blueprint_t1_folder,1,duct_tape|fuse|door_kit|flashlight,Папка Т1: простые схемы для полки света и двери.
+item_blueprint_t2_folder,item,blueprint_t2_folder,1,circuit_board|fog_detector|unpeople_detector|water_filter_regulator,Папка Т2: приборы фильтр и мокрая электроника.
+item_blueprint_t3_folder,item,blueprint_t3_folder,1,psi_stabilizer|ammo_energy|radio_headset_liquidator|gravity_beam_emitter,Папка Т3: глубокие схемы которые лучше читать при закрытой двери.
+item_weapon_blueprint_t2,item,weapon_blueprint_t2,1,chizh3_shotgun|breach_charge|ammo_12g_chemical,Оружейная схема: ствол заряд и химическая дробь.
+item_homemade_ammo_instruction,item,homemade_ammo_instruction,0,homemade_9mm|ammo_9mm|homemade_pistol,Инструкция по кустарным патронам: грязно но работает.
+item_track_diagram_scrap,item,track_diagram_scrap,0,rail_signal_lamp|rail_spike_pack|track_diagram_scrap,Обрывок депо: рельсовая мелочь и сигнальная лампа.
+item_frozen_item_shard,item,frozen_item_shard,1,frozen_slime_core|psi_phase,Осколок оттаял в схему: холодная проба и фазовый след.
+item_junior_tech_case,item,junior_tech_case,0,sound_emitter|radio_jammer,Корпус показывает куда ставить пищалку и глушилку.
+item_relay_diagram,item,relay_diagram,1,wire_coil|rail_signal_lamp|relay_diagram,Схема реле: провод сигнальная лампа и порядок контактов.
+note_workbench_basics,note,,0,duct_tape|wire_coil,Записка верстака: трубу режь ровно изоленту не жалей.
+note_medpost_bandage_sheet,note,,0,bandage|sterile_bandage,Памятка медпункта: бинт сухой руки чистые спор потом.
+quest_barni_range_cleanup,quest,,0,homemade_9mm,Сержант Баринов показал как перебрать кустарный 9мм без лишней гордости.
+quest_yakov_field_lab,quest,,0,psi_stabilizer,Яков оставил сухую лабораторную схему стабилизатора.
+quest_idol_ministry_registration,quest,,0,blank_form|seal_wax,Министерское окно показало как не испортить бланк и сургуч.
+quest_idol_liquidator_field_report,quest,,0,ammo_9mm|gasmask_filter,Ликвидаторы показали полевой порядок: патрон отдельно фильтр сухим.
+quest_idol_hell_contact_handoff,quest,,0,holy_water|meat_rune,Никанор объяснил где вода а где мясная руна.
+npc_mechanic_tool_lesson,npc,,0,wrench|fuse|door_kit,Слесарь показывает одну рабочую схему из своей практики.
+npc_scientist_lab_lesson,npc,,0,empty_sample_jar|sterile_swab|psi_stabilizer,Лаборатория учит одной схеме: аккуратно без лишней поэзии.
+npc_liquidator_ammo_lesson,npc,,0,gasmask_filter|ammo_9mm|breach_charge,Ликвидатор коротко объясняет одну полевую схему.
+npc_black_market_weapon_lesson,npc,,0,homemade_9mm|radio_jammer|homemade_pistol,Кладовщик шепчет одну рыночную схему без расписки.
+terminal_floor_archive_scrap_schemes,terminal,,0,track_diagram_scrap|relay_diagram|chalk|lift_scheme,Архив выдал схемы маршрута мела и рельсового обрывка.
+terminal_dispatch_net_relay,terminal,,0,relay_diagram|circuit_board|field_radio_battery,Диспетчерский кэш отдал релейную схему плату и батарею.
+floor_recipe_billboard_basics,floor,,0,duct_tape|wire_coil|fuse,Доска верстака: изолента провод и предохранитель идут первыми.

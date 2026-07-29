@@ -137,7 +137,8 @@ core. Data-oriented gameplay state (the NPC pool, inventory, the event bus
 not scattered through `src/app`.
 
 [app/main.cpp](src/app/main.cpp) wires SDL3 + Vulkan + ECS and runs a
-fixed-timestep sim (120 Hz) against an uncapped render loop with a HUD.
+fixed-timestep sim (125 Hz — `kSimHz` in [src/core/tick.h](src/core/tick.h), an
+exactly-8 ms step) against an uncapped render loop with a HUD.
 [worldgen.cpp](src/app/worldgen.cpp) builds demo worlds (a connected 3D maze and
 a toroidal khrushchevka floor stack) to exercise the core — see
 [worldgen.md](worldgen.md). Real game generators replace it.
@@ -161,7 +162,7 @@ simulation remains.
 
 ```
 poll SDL events ──► input (feed HUD, accumulate deltas)
-while (accumulator ≥ dt):          # fixed 120 Hz
+while (accumulator ≥ dt):          # fixed 125 Hz (kSimDt, 8 ms exactly)
     input.apply       → write intent onto active camera entity
     controller_step   → intent → velocity
     physics_step      → integrate + collide vs sub-voxel masks

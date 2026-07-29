@@ -186,6 +186,62 @@ static void test_behaviours_all() {
         CHECK(mob_def(MobKind::Sborka).behaviour ==
               static_cast<std::uint8_t>(MobBehaviour::Plain));
 
+        // Wave 3's four carriers, and that each is mobile enough to observe.
+        const MobDef& tresk = mob_def(MobKind::Treskotnik);
+        CHECK(tresk.behaviour == static_cast<std::uint8_t>(MobBehaviour::FractureSprint));
+        CHECK(!has_flag(tresk.aiFlags, AiFlag::Immobile));
+        // Its authored speed is what makes the reference's `max(speed*3.25, 7.5)` floor
+        // dead arithmetic — 2.75 * 3.25 = 8.9375 cells/s clears 7.5, so the floor is not
+        // ported. Pinned so a CSV retune below 2.31 cells/s surfaces here rather than
+        // silently making a Трескотник sprint slower than the reference allows.
+        CHECK(tresk.speedMmps == 2750);
+        CHECK(static_cast<float>(tresk.speedMmps) * 0.001f * kFractureSprintMult > 7.5f);
+        // It also carries no wall flag and is not a wall behaviour, so the burst
+        // multiplier and the wall-adjacency pace can never both apply to it.
+        CHECK(!has_flag(tresk.aiFlags, AiFlag::WallBias));
+        CHECK(!wall_query_needed(tresk.aiFlags,
+                                 static_cast<MobBehaviour>(tresk.behaviour)));
+
+        const MobDef& paup = mob_def(MobKind::Paupsina);
+        CHECK(paup.behaviour == static_cast<std::uint8_t>(MobBehaviour::WebSpitter));
+        CHECK(!has_flag(paup.aiFlags, AiFlag::Immobile));
+        // THE reason the standoff matters: the only row of 69 with zero damage, whose
+        // shot has a dead zone it was walking straight into. Both halves pinned — a
+        // future CSV that gave it damage would change what the behaviour is for.
+        CHECK(paup.dmg == 0);
+        CHECK(paup.minRangeMm == 3400);          // PAUPSINA_WEB_MIN_RANGE
+        CHECK(paup.shotRangeMm == 11500);        // PAUPSINA_WEB_SHOT_RANGE
+        // The standoff must sit between the dead zone and the shot range or the kind
+        // holds a distance from which it cannot shoot — the one thing that would make
+        // 7.25 the wrong number rather than merely a tuned one.
+        //
+        // A UNIT CAVEAT worth stating exactly once, because it is not this lane's to
+        // fix and it changes what these two lines mean. Table ranges are authored in
+        // CELLS and combat.cpp converts them through kCellSize (`minRangeMm * 0.001 *
+        // kCellSize` = 6.8 m); the ported detect/standoff radii in [mob_behaviour.h] do
+        // NOT convert — `kAggroRadius = 20.0f` metres comes straight off the
+        // reference's `MONSTER_DETECT = 20` TILES, so every radius in that file is half
+        // the authored world distance. The band below is asserted in engine metres,
+        // which is the stricter of the two readings: 6.8 < 7.25 < 23.0 holds there, and
+        // 3.4 < 7.25 < 11.5 holds in the reference's own units, so the standoff is
+        // inside the usable band either way and the caveat cannot silently invalidate
+        // it. See the report on kAggroRadius.
+        CHECK(kWebStandoff > static_cast<float>(paup.minRangeMm) * 0.001f * kCellSize);
+        CHECK(kWebStandoff < static_cast<float>(paup.shotRangeMm) * 0.001f * kCellSize);
+
+        CHECK(mob_def(MobKind::Olgoy).behaviour ==
+              static_cast<std::uint8_t>(MobBehaviour::MeatWorm));
+        CHECK(!has_flag(mob_def(MobKind::Olgoy).aiFlags, AiFlag::Immobile));
+        CHECK(mob_def(MobKind::LozhnyyDukh).behaviour ==
+              static_cast<std::uint8_t>(MobBehaviour::FalsePhase));
+        CHECK(!has_flag(mob_def(MobKind::LozhnyyDukh).aiFlags, AiFlag::Immobile));
+
+        // Безэхий, for the facing-damage block. Its 9 damage and 7.5 m sight are what
+        // make x1.55-from-behind the entire kind rather than a bonus.
+        const MobDef& bez = mob_def(MobKind::Bezekhiy);
+        CHECK(bez.behaviour == static_cast<std::uint8_t>(MobBehaviour::DeadEcho));
+        CHECK(bez.dmg == 9);
+
         // The three radii that are correct and unobservable, stated as a fact about
         // the DATA rather than as a caveat in a comment: all three sit on speed-0
         // rows, so wander_init skips them and no velocity test can reach them.
@@ -214,7 +270,25 @@ static void test_behaviours_all() {
                                behaviour_move_mult(b, false).claimed;
             const bool hits = behaviour_damage_mult(b, true) != 1.0f ||
                               behaviour_damage_mult(b, false) != 1.0f;
-            const bool any = steers || sees || freezes || paces || hits;
+            // Wave 3's two. `faces` is probed from BOTH sides because 0.72 and 1.55
+            // both differ from 1.0, so either alone would be enough and neither alone
+            // would catch a branch that stopped varying.
+            const bool faces =
+                facing_damage_mult(b, 1.0f, 0.0f, -1.0f, 0.0f) != 1.0f ||
+                facing_damage_mult(b, 1.0f, 0.0f, 1.0f, 0.0f) != 1.0f;
+            const bool bursts = burst_phase(b, 42u, 0u, 1.0f) != BurstPhase::Idle;
+            // Wave 4's three. `reaches` is probed against a base the override must
+            // differ from, so it cannot be satisfied by the pass-through branch;
+            // `hurts` is probed with hp < maxHp AND hp == maxHp for the same reason
+            // `faces` is probed from both sides.
+            const bool reaches = behaviour_melee_reach(b, 1200u, true) !=
+                                     behaviour_melee_reach(b, 1200u, false);
+            const bool soaks = behaviour_incoming_mult(b, true) != 1.0f ||
+                               behaviour_incoming_mult(b, false) != 1.0f;
+            const bool hurts = behaviour_hurt_move_mult(b, 50, 100) != 1.0f ||
+                               behaviour_hurt_move_mult(b, 100, 100) != 1.0f;
+            const bool any = steers || sees || freezes || paces || hits || faces ||
+                             bursts || reaches || soaks || hurts;
 
             // The declared list must be exactly the measured one. This is the
             // assertion that fails if someone adds a case to a dispatcher and forgets
@@ -222,6 +296,28 @@ static void test_behaviours_all() {
             CHECK(behaviour_is_dispatched(b) == any);
             // ...and nothing on the dead list may be answered by anything.
             if (behaviour_is_dead(b)) CHECK(!any);
+
+            // "Answered" is not "reaches the player", and this is the assertion that
+            // keeps the two from drifting apart silently. Four of the ten hooks above
+            // have a caller in src/ today: `behaviour_aggro_radius` (wander_step AND
+            // investigate_step), `pursuit_offset`, `frozen_by_gaze` and
+            // `behaviour_move_mult` (all wander_step). SIX DO NOT —
+            // `behaviour_damage_mult` has had zero callers since wave 2, wave 3's
+            // `facing_damage_mult` / `burst_damage_mult` / `burst_speed_mult` join it,
+            // and so do wave 4's `behaviour_melee_reach` / `behaviour_incoming_mult` /
+            // `behaviour_hurt_move_mult`. combat.cpp applies `wall_bias_damage` and
+            // nothing else; wander_step applies the pace pair and nothing else.
+            //
+            // Wave 3 asserted this as "no behaviour is answered ONLY by an unwired
+            // function", which held because every answered enumerator also had a live
+            // radius or pace. CrowdShove breaks that: `behaviour_hurt_move_mult` is its
+            // only answer. So the assertion becomes a NAMED SET rather than a blanket
+            // ban — the honest form, because it still fails the moment a SECOND
+            // behaviour lands with no reachable half, and it fails again (loudly, here)
+            // the day CrowdShove is wired and stops belonging in the set.
+            const bool reachable = steers || sees || freezes || paces;
+            const bool unreachableOnly = any && !reachable;
+            CHECK(unreachableOnly == (b == MobBehaviour::CrowdShove));
 
             if (behaviour_is_dead(b)) ++dead;
             else if (any) ++answered;
@@ -233,12 +329,18 @@ static void test_behaviours_all() {
                      static_cast<std::size_t>(MobBehaviour::Count), answered, dead,
                      neither);
         // Hard counts, not ">= 1". Wave 1 answered 5 and left 42 reading as Plain;
-        // wave 2 answers 15. A future wave that lands a behaviour must move these
-        // numbers deliberately rather than drift past them.
+        // wave 2 answers 15; wave 3 answers 19; wave 4 answers 20. A future wave that
+        // lands a behaviour must move these numbers deliberately rather than drift past
+        // them.
+        //
+        // Wave 4 moves the count by ONE and adds three dispatchers, which is not a
+        // contradiction and is the reason this file counts ENUMERATORS rather than
+        // functions: two of the three answer for WallBrace, which wave 2 already
+        // counted for its pace. Depth does not move this number; breadth does.
         static_assert(static_cast<std::size_t>(MobBehaviour::Count) == 47u);
-        CHECK(answered == 15u);
+        CHECK(answered == 20u);
         CHECK(dead == 4u);
-        CHECK(neither == 28u);   // 27 blocked, plus Plain itself
+        CHECK(neither == 23u);   // 22 blocked, plus Plain itself
         // Plain is not "answered" by anything and is not dead: it IS the default.
         CHECK(!behaviour_is_dispatched(MobBehaviour::Plain));
         CHECK(!behaviour_is_dead(MobBehaviour::Plain));
@@ -265,6 +367,17 @@ static void test_behaviours_all() {
         // Wave 1's two are untouched.
         CHECK(behaviour_aggro_radius(MobBehaviour::DeadEcho, 20.0f) == 7.5f);
         CHECK(behaviour_aggro_radius(MobBehaviour::CloseReveal, 20.0f) == 6.0f);
+        // Wave 3's three, which came from the reference's SECOND detect site rather
+        // than from `monsterDetectSq` — see the wave 3 note in [mob_behaviour.h].
+        CHECK(behaviour_aggro_radius(MobBehaviour::FractureSprint, 20.0f) == 18.0f);
+        CHECK(behaviour_aggro_radius(MobBehaviour::MeatWorm, 20.0f) == 24.0f);
+        CHECK(behaviour_aggro_radius(MobBehaviour::FalsePhase, 20.0f) == 24.0f);
+        // FractureSprint SHRINKS, like GarbageSurround did. Asserted as a relation and
+        // not just as a value, because "18" alone would still read as correct if
+        // kAggroRadius were ever tuned below it and the kind quietly became a
+        // long-sighted one.
+        CHECK(behaviour_aggro_radius(MobBehaviour::FractureSprint, kAggroRadius) <
+              kAggroRadius);
 
         // The pace pair, and that a behaviour without one does not claim.
         CHECK(behaviour_move_mult(MobBehaviour::DebrisLurker, true).claimed);
@@ -277,6 +390,39 @@ static void test_behaviours_all() {
         CHECK(behaviour_damage_mult(MobBehaviour::DebrisLurker, true) == 1.25f);
         CHECK(behaviour_damage_mult(MobBehaviour::DebrisLurker, false) == 0.75f);
         CHECK(behaviour_damage_mult(MobBehaviour::Plain, true) == 1.0f);
+
+        // The DAMAGE claim, wave 4's counterpart to `MoveMult::claimed`. Checked against
+        // what `behaviour_damage_mult` actually returns, for all 47, so a case added to
+        // one and not the other fails here rather than in the game as a compounded
+        // multiplier.
+        for (std::size_t i = 0; i < static_cast<std::size_t>(MobBehaviour::Count); ++i) {
+            const MobBehaviour b = static_cast<MobBehaviour>(i);
+            const bool varies = behaviour_damage_mult(b, true) != 1.0f ||
+                                behaviour_damage_mult(b, false) != 1.0f;
+            CHECK(behaviour_claims_damage(b) == varies);
+        }
+        // THE number the claim exists to prevent, spelled out because 1.25 and 1.5 are
+        // both plausible in a log line: Арматура carries DebrisLurker AND the WallBias
+        // flag, so a caller that applied both would give it 1.5 in cover where the
+        // reference gives 1.25.
+        CHECK(near_eq(kDebrisCoverDamage * kWallBiasDamage, 1.5f));
+        CHECK(!near_eq(kDebrisCoverDamage, kDebrisCoverDamage * kWallBiasDamage, 0.01f));
+        CHECK(behaviour_claims_damage(MobBehaviour::DebrisLurker));
+        // ...and the pace and the damage claims agree about WHO claims, which is the
+        // invariant that keeps the two precedence rules from diverging: exactly the
+        // behaviours that own the pace may own the damage, and DebrisLurker is the one
+        // that owns both. WallBrace owns the pace and has no outgoing multiplier at all.
+        CHECK(!behaviour_claims_damage(MobBehaviour::WallBrace));
+        CHECK(behaviour_move_mult(MobBehaviour::WallBrace, true).claimed);
+        for (std::size_t i = 0; i < static_cast<std::size_t>(MobBehaviour::Count); ++i) {
+            const MobBehaviour b = static_cast<MobBehaviour>(i);
+            if (!behaviour_claims_damage(b)) continue;
+            // A behaviour may not claim the damage without also claiming the pace: the
+            // caller reaches both through the same `wall_query_needed` gate, so a
+            // damage-only claimant would be queried for a wall it never uses.
+            CHECK(behaviour_move_mult(b, true).claimed);
+            CHECK(wall_query_needed(0u, b));
+        }
 
         // The gate: 5 of 69 kinds, and it is the flag OR the behaviour.
         const std::uint32_t wb = static_cast<std::uint32_t>(AiFlag::WallBias);
@@ -373,6 +519,16 @@ static void test_behaviours_all() {
         CHECK(!near_eq(coverR, kDebrisCoverSpeed * kWallBiasSpeedNear, 0.01f));
         CHECK(!near_eq(openR, kWallBiasSpeedOpen, 0.01f));
         // ...and the flag path is UNCHANGED for the four kinds that only carry it.
+        //
+        // THESE TWO ASSERT A KNOWN DIVERGENCE FROM THE REFERENCE, pinned deliberately
+        // rather than left to be rediscovered. `monsterMoveMult` has a TVAR case,
+        // `adjacentWall ? 1.12 : 0.96`, and it returns BEFORE the `wallBias` branch — so
+        // the reference never hands Тварь the 1.18 / 0.92 measured here. It is not
+        // fixable from mob_behaviour.cpp: `wall_bias_speed` takes flags, the override is
+        // keyed on the KIND, and Тварь's behaviour column is `Plain`. Spawn weight 6.2,
+        // the second-highest row in the catalog. Asserted as the CURRENT behaviour so
+        // the day someone routes the kind through here, this fails and points at the
+        // reason instead of at a mystery.
         CHECK(near_eq(coverT, kWallBiasSpeedNear));
         CHECK(near_eq(openT, kWallBiasSpeedOpen));
         // The spread is the point of the kind: 1.22 vs 0.68 is a 1.79x swing on where
@@ -511,6 +667,14 @@ static void test_behaviours_all() {
             {MobKind::Lishennyy, 28.0f, true, "LightFollower 30 m"},
             // Notice you LATER. A Plain mob at 16 m chases; Помойный Рой does not.
             {MobKind::PomoynyRoy, 16.0f, false, "GarbageSurround 13 m"},
+            // Wave 3. Two more that notice you earlier...
+            {MobKind::Olgoy, 22.0f, true, "MeatWorm 24 m"},
+            {MobKind::LozhnyyDukh, 22.0f, true, "FalsePhase 24 m"},
+            // ...and the one that notices you LATER, which is the wave's headline: at
+            // 19 m a Сборка is already coming and a Трескотник is not. It is 19 and not
+            // 18.5 because the shrink is 2 m and a test that only just resolves the
+            // difference is a test that a float change can flip.
+            {MobKind::Treskotnik, 19.0f, false, "FractureSprint 18 m"},
         };
 
         for (const Case& c : cases) {
@@ -535,5 +699,518 @@ static void test_behaviours_all() {
             CHECK((sv > 0.0f) == c.shouldChase);
             CHECK((cv > 0.0f) == !c.shouldChase);
         }
+    }
+
+    // ---- 8. WebSpitter: the first monster in the tree that BACKS AWAY ---------
+    // Measured as a SIGN, not a speed. Every other steer in this file is tangential, so
+    // no assertion on |v| could tell a standoff from a fast approach; the claim is that
+    // the radial component reverses across 7.25 m, and the control proves the reversal
+    // belongs to the behaviour rather than to the distance.
+    //
+    // Laid out along +y, away from the arena's one wall and its neighbours, so the
+    // block shares no cell with the wall-pace blocks above.
+    {
+        Registry reg;
+        spawn_viewer(reg, layer, viewerAt);
+        const vec3 nearAt{viewerAt.x, viewerAt.y + 3.0f, viewerAt.z};        // inside
+        const vec3 holdAt{viewerAt.x, viewerAt.y + kWebStandoff, viewerAt.z};// exactly on
+        const vec3 farAt{viewerAt.x, viewerAt.y + 12.0f, viewerAt.z};        // outside
+        const Entity nearWeb = spawn_at(reg, layer, MobKind::Paupsina, nearAt);
+        const Entity holdWeb = spawn_at(reg, layer, MobKind::Paupsina, holdAt);
+        const Entity farWeb = spawn_at(reg, layer, MobKind::Paupsina, farAt);
+        const Entity nearPlain = spawn_at(reg, layer, MobKind::Sborka, nearAt);
+        const Entity farPlain = spawn_at(reg, layer, MobKind::Sborka, farAt);
+        CHECK(wander_init(reg, layer, 11u) == 5u);
+
+        for (std::uint64_t t = 0; t < kWanderPeriod; ++t)
+            wander_step(reg, grid, pool, coarse, fine, layer, t);
+
+        const vec3 nv = reg.get<const Velocity>(nearWeb).v;
+        const vec3 hv = reg.get<const Velocity>(holdWeb).v;
+        const vec3 fv = reg.get<const Velocity>(farWeb).v;
+        const vec3 npv = reg.get<const Velocity>(nearPlain).v;
+        const vec3 fpv = reg.get<const Velocity>(farPlain).v;
+        std::fprintf(stderr,
+                     "[behaviours] WebSpitter standoff %.2f m: at 3 m v.y = %+.3f, at "
+                     "%.2f m v.y = %+.3f, at 12 m v.y = %+.3f | Plain at 3 m %+.3f, at "
+                     "12 m %+.3f (+y is away from the viewer)\n",
+                     kWebStandoff, nv.y, kWebStandoff, hv.y, fv.y, npv.y, fpv.y);
+
+        // The viewer is at lower y, so v.y > 0 is retreat and v.y < 0 is approach.
+        CHECK(nv.y > 0.0f);    // inside the standoff: it backs off
+        CHECK(fv.y < 0.0f);    // outside it: it still closes
+        // ...and a Plain mob closes from BOTH, so neither sign is a property of the
+        // distance. This is the pair that makes the block a measurement of the
+        // behaviour rather than of the geometry.
+        CHECK(npv.y < 0.0f);
+        CHECK(fpv.y < 0.0f);
+
+        // Standing exactly on the standoff, the radial term cancels EXACTLY and the
+        // whole speed budget goes tangential — the orbit the header's arithmetic
+        // predicts. Exact equality is legitimate here and not luck: 7.25 and the
+        // normalised (0, -1) approach are both binary-exact, so ty is 0.0f by
+        // construction rather than by rounding.
+        const float webSp = table_speed(MobKind::Paupsina);
+        CHECK(hv.y == 0.0f);
+        CHECK(near_eq(std::fabs(hv.x), webSp));
+        // The tangential term is present at every distance, or the "strafing" half of
+        // the claim is unproven and the mob merely walks in and out on a line.
+        CHECK(std::fabs(nv.x) > 0.0f);
+        CHECK(std::fabs(fv.x) > 0.0f);
+        // No pace multiplier: WebSpitter claims none, so all three move at the table
+        // speed and only their DIRECTION differs from a Plain mob's.
+        CHECK(near_eq(flat_speed(reg.get<const Velocity>(nearWeb)), webSp));
+        CHECK(near_eq(flat_speed(reg.get<const Velocity>(farWeb)), webSp));
+        CHECK(!behaviour_move_mult(MobBehaviour::WebSpitter, true).claimed);
+
+        // Both halves of the offset, at the function level, so a sign flip in either is
+        // attributable. dir is the normalised approach; the radial term must oppose it.
+        const PursuitOffset even = pursuit_offset(MobBehaviour::WebSpitter, 4u, 0u,
+                                                  1.0f, 0.0f);
+        const PursuitOffset odd = pursuit_offset(MobBehaviour::WebSpitter, 5u, 0u,
+                                                 1.0f, 0.0f);
+        CHECK(near_eq(even.x, -kWebStandoff));
+        CHECK(near_eq(odd.x, -kWebStandoff));
+        // The two id parities take opposite sides, which is what keeps a group from
+        // stacking into one orbit lane.
+        CHECK(near_eq(even.y, -kWebStrafeSide));
+        CHECK(near_eq(odd.y, kWebStrafeSide));
+        CHECK(even.y * odd.y < 0.0f);
+        // Degenerate approach must not divide by zero, same contract as the flank.
+        const PursuitOffset zero = pursuit_offset(MobBehaviour::WebSpitter, 4u, 0u,
+                                                  0.0f, 0.0f);
+        CHECK(zero.x == 0.0f && zero.y == 0.0f);
+    }
+
+    // ---- 9. FractureSprint: a three-timer cycle with no timer ----------------
+    // Pure-function block, and the reason is stated rather than assumed: nothing in
+    // src/ calls `burst_phase` yet, so there is no velocity to measure. What CAN be
+    // proven without a caller is that the cycle is the authored one, that it is
+    // deterministic, that carriers are off lockstep, and that it costs a Трескотник
+    // ground rather than giving it a free 3.25x.
+    {
+        CHECK(burst_phase(MobBehaviour::Plain, 7u, 0u, 1.0f) == BurstPhase::Idle);
+        // The range gate: at the boundary it winds up, one millimetre past it does not.
+        CHECK(burst_phase(MobBehaviour::FractureSprint, 7u, 0u, kFractureRange) !=
+              BurstPhase::Idle);
+        CHECK(burst_phase(MobBehaviour::FractureSprint, 7u, 0u,
+                          kFractureRange + 0.001f) == BurstPhase::Idle);
+        // Which means a Трескотник closing from its own 18 m sight is an ordinary
+        // monster for the first 10.5 m of it.
+        CHECK(burst_phase(MobBehaviour::FractureSprint, 7u, 0u, 18.0f) ==
+              BurstPhase::Idle);
+
+        // Walk one full cycle for one identity and count. The counts are compared
+        // against the DERIVED tick constants, not against 43/77/168, so a kSimHz change
+        // moves both sides together — the failure [wander.h] documents (a duration
+        // authored in seconds, stored in ticks, and silently rescaled) cannot land here.
+        std::uint64_t win = 0, spr = 0, stag = 0, idle = 0;
+        for (std::uint64_t t = 0; t < kFractureCycleTicks; ++t) {
+            switch (burst_phase(MobBehaviour::FractureSprint, 7u, t, 2.0f)) {
+                case BurstPhase::Windup:  ++win;  break;
+                case BurstPhase::Sprint:  ++spr;  break;
+                case BurstPhase::Stagger: ++stag; break;
+                case BurstPhase::Idle:    ++idle; break;
+            }
+        }
+        std::fprintf(stderr,
+                     "[behaviours] FractureSprint cycle %llu ticks = %.3f s: windup "
+                     "%llu, sprint %llu, stagger %llu, idle %llu\n",
+                     static_cast<unsigned long long>(kFractureCycleTicks),
+                     static_cast<double>(kFractureCycleTicks) /
+                         static_cast<double>(kSimHz),
+                     static_cast<unsigned long long>(win),
+                     static_cast<unsigned long long>(spr),
+                     static_cast<unsigned long long>(stag),
+                     static_cast<unsigned long long>(idle));
+        CHECK(win == kFractureWindupTicks);
+        CHECK(spr == kFractureSprintTicks);
+        CHECK(stag == kFractureStaggerTicks);
+        CHECK(idle == 0u);   // in range, every tick belongs to some phase
+        // The cycle is the authored 2.32 s to within the tick quantisation, which at
+        // 125 Hz is 8 ms. Asserted as a bound and not as an equality: three
+        // truncations cannot land on 2.32 exactly and pretending they do would be the
+        // brittle version of this check.
+        const float cycleSec =
+            static_cast<float>(kFractureCycleTicks) / static_cast<float>(kSimHz);
+        const float authored =
+            kFractureWindupSec + kFractureSprintSec + kFractureStaggerSec;
+        CHECK(std::fabs(cycleSec - authored) < 3.0f / static_cast<float>(kSimHz));
+
+        // Deterministic: the same (id, tick) is the same phase, always. This is the
+        // property that lets two systems read the cycle without sharing state.
+        for (std::uint64_t t = 0; t < 64u; ++t)
+            CHECK(burst_phase(MobBehaviour::FractureSprint, 7u, t, 2.0f) ==
+                  burst_phase(MobBehaviour::FractureSprint, 7u, t, 2.0f));
+        // ...and periodic, so it cannot drift over a long session.
+        CHECK(burst_phase(MobBehaviour::FractureSprint, 7u, 5u, 2.0f) ==
+              burst_phase(MobBehaviour::FractureSprint, 7u, 5u + kFractureCycleTicks,
+                          2.0f));
+        CHECK(burst_phase(MobBehaviour::FractureSprint, 7u, 5u, 2.0f) ==
+              burst_phase(MobBehaviour::FractureSprint, 7u,
+                          5u + kFractureCycleTicks * 4096u, 2.0f));
+
+        // Off lockstep. Counted over 64 identities on one tick rather than asserted for
+        // one pair: a single pair could disagree by luck, and what the mechanic needs is
+        // that a PACK does not sprint together. Anything above one phase present is a
+        // pass; the count is printed so a hash that degenerated to a constant is
+        // visible rather than merely failing.
+        std::size_t phaseSeen[4] = {0, 0, 0, 0};
+        for (std::uint32_t id = 0; id < 64u; ++id)
+            ++phaseSeen[static_cast<std::size_t>(
+                burst_phase(MobBehaviour::FractureSprint, id, 500u, 2.0f))];
+        std::fprintf(stderr,
+                     "[behaviours] ...64 identities on one tick: idle %zu, windup %zu, "
+                     "sprint %zu, stagger %zu\n",
+                     phaseSeen[0], phaseSeen[1], phaseSeen[2], phaseSeen[3]);
+        CHECK(phaseSeen[0] == 0u);   // all in range, so none idle
+        CHECK(phaseSeen[1] > 0u);
+        CHECK(phaseSeen[2] > 0u);
+        CHECK(phaseSeen[3] > 0u);
+
+        // The multipliers, and the fact that the two frozen phases really are zero.
+        CHECK(burst_speed_mult(BurstPhase::Idle) == 1.0f);
+        CHECK(burst_speed_mult(BurstPhase::Windup) == 0.0f);
+        CHECK(burst_speed_mult(BurstPhase::Sprint) == kFractureSprintMult);
+        CHECK(burst_speed_mult(BurstPhase::Stagger) == 0.0f);
+        CHECK(burst_damage_mult(BurstPhase::Sprint) == kFractureBurstDamage);
+        CHECK(burst_damage_mult(BurstPhase::Idle) == 1.0f);
+        CHECK(burst_damage_mult(BurstPhase::Windup) == 1.0f);
+        CHECK(burst_damage_mult(BurstPhase::Stagger) == 1.0f);
+
+        // THE balance claim, and it is the opposite of what "x3.25" suggests: averaged
+        // over the cycle a Трескотник covers LESS ground than it does today, because it
+        // spends 73% of the cycle frozen. The kind gets scarier and slower at once,
+        // which is the whole design — it is 18 HP and dies to one clean burst.
+        float sum = 0.0f;
+        for (std::uint64_t t = 0; t < kFractureCycleTicks; ++t)
+            sum += burst_speed_mult(
+                burst_phase(MobBehaviour::FractureSprint, 7u, t, 2.0f));
+        const float meanMult = sum / static_cast<float>(kFractureCycleTicks);
+        std::fprintf(stderr,
+                     "[behaviours] ...mean speed over one cycle: x%.4f (frozen %.0f%% "
+                     "of it)\n",
+                     meanMult,
+                     100.0 * static_cast<double>(kFractureWindupTicks +
+                                                 kFractureStaggerTicks) /
+                         static_cast<double>(kFractureCycleTicks));
+        CHECK(meanMult < 1.0f);
+        CHECK(meanMult > 0.5f);   // and not so slow that it never arrives
+        // Out of range it is exactly unmodified — the 68 other kinds and every
+        // approaching Трескотник must be bit-for-bit what they are today.
+        CHECK(burst_speed_mult(burst_phase(MobBehaviour::FractureSprint, 7u, 500u,
+                                          40.0f)) == 1.0f);
+        CHECK(burst_speed_mult(burst_phase(MobBehaviour::Plain, 7u, 500u, 1.0f)) ==
+              1.0f);
+    }
+
+    // ---- 10. DeadEcho: a facing turned into a stat ---------------------------
+    // Pure-function block for the same stated reason as block 9 — combat.cpp applies
+    // neither this nor `behaviour_damage_mult`, so there is no damage number to
+    // measure. The invariant against `frozen_by_gaze` is the part that could not be
+    // written as a comment.
+    {
+        // Behind the viewer: the delta from viewer to monster opposes the forward.
+        CHECK(facing_damage_mult(MobBehaviour::DeadEcho, 1.0f, 0.0f, -1.0f, 0.0f) ==
+              kDeadEchoBackDamage);
+        // In front of it: the weak branch.
+        CHECK(facing_damage_mult(MobBehaviour::DeadEcho, 1.0f, 0.0f, 1.0f, 0.0f) ==
+              kDeadEchoFacedDamage);
+        // The threshold is -0.18 and it is inclusive, matching the reference's `<=`.
+        // Both sides of it, because an off-by-one-comparison here is invisible at any
+        // other angle.
+        CHECK(facing_damage_mult(MobBehaviour::DeadEcho, 1.0f, 0.0f, kDeadEchoBackDot,
+                                 -std::sqrt(1.0f - kDeadEchoBackDot *
+                                                       kDeadEchoBackDot)) ==
+              kDeadEchoBackDamage);
+        CHECK(facing_damage_mult(MobBehaviour::DeadEcho, 1.0f, 0.0f,
+                                 kDeadEchoBackDot + 0.01f,
+                                 -std::sqrt(1.0f - kDeadEchoBackDot *
+                                                       kDeadEchoBackDot)) ==
+              kDeadEchoFacedDamage);
+        // Standing on top of it counts as FACING it, so being caught never also hands
+        // out the bonus. The reference's facingDotTo returns 1 below 0.001 m.
+        CHECK(facing_damage_mult(MobBehaviour::DeadEcho, 1.0f, 0.0f, 0.0f, 0.0f) ==
+              kDeadEchoFacedDamage);
+        // Distance is deliberately NOT a term: the multiplier is about facing only, and
+        // the 7.5 m radius is what bounds it. A long delta with the same bearing gives
+        // the same answer, which is what makes it safe to call from a combat pass that
+        // has already decided the monster is in reach.
+        CHECK(facing_damage_mult(MobBehaviour::DeadEcho, 1.0f, 0.0f, -40.0f, 0.0f) ==
+              kDeadEchoBackDamage);
+        // Every other behaviour is untouched, all 47 checked rather than a sample.
+        for (std::size_t i = 0; i < static_cast<std::size_t>(MobBehaviour::Count); ++i) {
+            const MobBehaviour b = static_cast<MobBehaviour>(i);
+            if (b == MobBehaviour::DeadEcho) continue;
+            CHECK(facing_damage_mult(b, 1.0f, 0.0f, -1.0f, 0.0f) == 1.0f);
+        }
+        // The straddle that makes it the kind's whole design rather than a bonus: one
+        // branch above 1.0 and one below, so looking at Безэхий is a real defence and
+        // not merely the absence of a buff.
+        //
+        // `static_assert`, not CHECK, and the reason is a WARNING rather than taste:
+        // both operands are `inline constexpr`, so `if (!(...))` inside CHECK is a
+        // constant condition and MSVC raises C4127 under the `/W4` that
+        // `giga_target_flags` applies to game_test. These two lines were the file's only
+        // two warnings on the Windows build; wave 4 would have added five more of the
+        // same shape, so the whole class is converted rather than suppressed. A claim
+        // about two constants belongs at compile time anyway.
+        static_assert(kDeadEchoBackDamage > 1.0f,
+                      "back-turned must be a real bonus, not merely no penalty");
+        static_assert(kDeadEchoFacedDamage < 1.0f,
+                      "facing it must be a real defence, not merely no bonus");
+
+        // THE cross-check. `frozen_by_gaze` and `facing_damage_mult` read the identical
+        // two vectors, so a caller that got one convention backwards would still
+        // compile and still look plausible. Swept over the full circle: a monster the
+        // viewer is looking at (the freeze cone) can NEVER be in the back-turned band,
+        // and the two bands cannot overlap for any bearing.
+        std::size_t frozenCount = 0, backCount = 0;
+        for (int deg = 0; deg < 360; ++deg) {
+            const float a = static_cast<float>(deg) * 3.14159265f / 180.0f;
+            const float dx = std::cos(a) * 10.0f;   // 10 m out, inside kGazeRange
+            const float dy = std::sin(a) * 10.0f;
+            const bool frozen = frozen_by_gaze(MobBehaviour::WeepingAngel, 1.0f, 0.0f,
+                                               dx, dy);
+            const bool back = facing_damage_mult(MobBehaviour::DeadEcho, 1.0f, 0.0f, dx,
+                                                dy) == kDeadEchoBackDamage;
+            CHECK(!(frozen && back));
+            if (frozen) ++frozenCount;
+            if (back) ++backCount;
+        }
+        std::fprintf(stderr,
+                     "[behaviours] facing bands over 360 bearings: gaze-freeze %zu, "
+                     "DeadEcho back-turned %zu, overlap 0\n",
+                     frozenCount, backCount);
+        // Both bands must be non-empty or the disjointness above is vacuous. The
+        // freeze cone is +/-45 deg (91 of 360) and the back band is everything past
+        // 100.4 deg (159 of 360); asserted as ranges so the numbers are checked
+        // without being copied.
+        CHECK(frozenCount > 80u && frozenCount < 100u);
+        CHECK(backCount > 140u && backCount < 180u);
+    }
+
+    // ---- 11. WallBrace reach: the half of the kind the CSV column is missing --
+    // Pure-function block, same stated reason as 9 and 10: combat.cpp computes `reach`
+    // from `def.meleeReachMm` directly, so there is no swing to measure until the
+    // handoff lands. What CAN be proven is the part a caller cannot get wrong by
+    // accident — that the unbraced branch is bit-for-bit the arithmetic combat.cpp
+    // already does, and that the braced branch is outside the table's whole range.
+    {
+        const MobDef& pan = mob_def(MobKind::Panelnik);
+        const MobBehaviour wb = MobBehaviour::WallBrace;
+
+        // The OPEN branch must equal what combat.cpp computes today, to the bit. This is
+        // the assertion that makes the handoff safe: replacing that line with this call
+        // changes nothing for 68 kinds and nothing for an unbraced Панельник.
+        const float asCombatDoesIt =
+            static_cast<float>(pan.meleeReachMm) * 0.001f * kCellSize;
+        CHECK(behaviour_melee_reach(wb, pan.meleeReachMm, false) == asCombatDoesIt);
+        // ...and so must every other behaviour, in BOTH wall states — a reach override
+        // that leaked onto another enumerator would be a silent buff to a live kind.
+        for (std::size_t i = 0; i < static_cast<std::size_t>(MobBehaviour::Count); ++i) {
+            const MobBehaviour b = static_cast<MobBehaviour>(i);
+            if (b == wb) continue;
+            CHECK(behaviour_melee_reach(b, pan.meleeReachMm, true) == asCombatDoesIt);
+            CHECK(behaviour_melee_reach(b, pan.meleeReachMm, false) == asCombatDoesIt);
+        }
+
+        const float braced = behaviour_melee_reach(wb, pan.meleeReachMm, true);
+        const float open = behaviour_melee_reach(wb, pan.meleeReachMm, false);
+        std::fprintf(stderr,
+                     "[behaviours] WallBrace reach: braced %.3f m, open %.3f m (x%.4f)\n",
+                     braced, open, braced / open);
+
+        // The authored pair, in metres, via kCellSize so a cell-size change moves both.
+        CHECK(near_eq(braced, kWallBraceReachCells * kCellSize));
+        CHECK(braced > open);
+        // 1.75 / 1.16 = 1.5086. Asserted as a ratio, not a difference, because the
+        // ratio is the mechanic and it survives a CSV retune of the open half.
+        CHECK(near_eq(braced / open, kWallBraceReachCells /
+                                         (static_cast<float>(pan.meleeReachMm) * 0.001f),
+                      1e-3f));
+
+        // THE claim that makes it a mechanic rather than a number: braced, Панельник
+        // out-reaches every row in the table, and unbraced it is beaten by nearly all of
+        // them. Both halves are computed by SCANNING kMobTable rather than by copying
+        // Тварь's 1.55, so a CSV that authored a longer reach surfaces here.
+        std::uint16_t widest = 0;
+        std::size_t shorterThanPanelnik = 0;
+        for (std::size_t k = 0; k < kMobKindCount; ++k) {
+            if (kMobTable[k].meleeReachMm > widest) widest = kMobTable[k].meleeReachMm;
+            if (kMobTable[k].meleeReachMm < pan.meleeReachMm) ++shorterThanPanelnik;
+        }
+        const float widestM = static_cast<float>(widest) * 0.001f * kCellSize;
+        std::fprintf(stderr,
+                     "[behaviours] ...widest authored reach %.3f m; %zu of %zu rows are "
+                     "SHORTER than an unbraced Панельник\n",
+                     widestM, shorterThanPanelnik, kMobKindCount);
+        CHECK(braced > widestM);
+        // And 1750 really is outside the column's documented 1050..1550, i.e. this could
+        // never have been a CSV edit — the row correctly carries the unbraced value.
+        CHECK(kWallBraceReachCells * 1000.0f > static_cast<float>(widest));
+        // Only Рой (1.05) is shorter, so "shorter than a Сборка" is not rhetoric.
+        CHECK(shorterThanPanelnik == 1u);
+
+        // The wall query the two new hooks ride on is ALREADY gated correctly for the
+        // combat caller, and this is the assertion behind that claim: switching
+        // combat.cpp's `has_flag(def.aiFlags, WallBias)` branch to `wall_query_needed`
+        // adds the four cell reads for exactly one kind.
+        std::size_t flagOnly = 0, gated = 0;
+        for (std::size_t k = 0; k < kMobKindCount; ++k) {
+            const MobBehaviour b = static_cast<MobBehaviour>(kMobTable[k].behaviour);
+            if (has_flag(kMobTable[k].aiFlags, AiFlag::WallBias)) ++flagOnly;
+            if (wall_query_needed(kMobTable[k].aiFlags, b)) ++gated;
+        }
+        std::fprintf(stderr,
+                     "[behaviours] ...combat wall query: %zu kinds today, %zu after the "
+                     "gate widens\n",
+                     flagOnly, gated);
+        CHECK(flagOnly == 4u);
+        CHECK(gated == 5u);
+    }
+
+    // ---- 12. WallBrace armour: the first INCOMING multiplier in the file -----
+    {
+        const MobBehaviour wb = MobBehaviour::WallBrace;
+        CHECK(behaviour_incoming_mult(wb, true) == kWallBraceIncoming);
+        CHECK(behaviour_incoming_mult(wb, false) == 1.0f);
+        // Armour, not a penalty: the braced value must be BELOW 1 and the open value
+        // exactly 1. A sign error here would hand the player's shots a bonus against a
+        // braced Панельник, which reads as the mechanic working while inverting it.
+        // Compile-time, per the C4127 note in block 10.
+        static_assert(kWallBraceIncoming < 1.0f, "braced must REDUCE incoming damage");
+        static_assert(kWallBraceIncoming > 0.0f, "braced must not be immunity");
+        // No other behaviour has incoming armour — all 47 checked, both wall states.
+        for (std::size_t i = 0; i < static_cast<std::size_t>(MobBehaviour::Count); ++i) {
+            const MobBehaviour b = static_cast<MobBehaviour>(i);
+            if (b == wb) continue;
+            CHECK(behaviour_incoming_mult(b, true) == 1.0f);
+            CHECK(behaviour_incoming_mult(b, false) == 1.0f);
+        }
+
+        // WHY the integer floor is the caller's and not this function's, asserted rather
+        // than asserted-in-a-comment: the reference wraps every use in
+        // `Math.max(1, Math.round(dmg * 0.58))`. Truncating a 1-point hit through this
+        // multiplier gives ZERO, i.e. a braced Панельник would be immune to chip damage
+        // and the swing would be re-queued forever — the same failure combat.cpp already
+        // documents for a 0-damage swing (`apply_damage` returns hit == false, the
+        // cooldown is never set). So the handoff MUST floor at 1.
+        static_assert(static_cast<int>(1.0f * kWallBraceIncoming) == 0,
+                      "a 1-point hit truncates to ZERO through this multiplier: the "
+                      "caller must floor at 1 or a braced Панельник is chip-immune");
+        static_assert(static_cast<int>(2.0f * kWallBraceIncoming) == 1,
+                      "and a 2-point hit does not, so the floor binds only at the edge");
+
+        // The braced state is coherent across all three dimensions at once, which is the
+        // claim that Панельник is now a complete kind: braced it is faster, longer and
+        // tougher; open it is slower, shorter and unarmoured. Asserted together because
+        // any one of the three passing alone would still leave a kind that reads wrong.
+        CHECK(behaviour_move_mult(wb, true).mult > behaviour_move_mult(wb, false).mult);
+        CHECK(behaviour_melee_reach(wb, 1160u, true) >
+              behaviour_melee_reach(wb, 1160u, false));
+        CHECK(behaviour_incoming_mult(wb, true) < behaviour_incoming_mult(wb, false));
+        // ...and that the open state is not a penalty on top of the table row: an
+        // unbraced Панельник gets exactly its authored reach and no armour, so the CSV
+        // row remains the honest description of the weak half. Written with the SAME
+        // arithmetic the function uses rather than as the literal 1.160f — `1160 *
+        // 0.001f` and `1.160f` are not the same float, and an exact comparison between
+        // them would be testing the rounding of a decimal literal, not the behaviour.
+        CHECK(behaviour_melee_reach(wb, 1160u, false) == 1160.0f * 0.001f * kCellSize);
+        CHECK(behaviour_incoming_mult(wb, false) == 1.0f);
+    }
+
+    // ---- 13. CrowdShove: the mob's own health, which nothing had read --------
+    {
+        const MobBehaviour cs = MobBehaviour::CrowdShove;
+        const MobDef& dikiy = mob_def(MobKind::DikiyMertvyak);
+        CHECK(dikiy.behaviour == static_cast<std::uint8_t>(cs));
+        // Neither a wall flag nor a wall behaviour, which is what makes the precedence
+        // question below structural rather than a tuning accident.
+        CHECK(!has_flag(dikiy.aiFlags, AiFlag::WallBias));
+        CHECK(!wall_query_needed(dikiy.aiFlags, cs));
+        // Fragile and fast — 22 HP at 2.55 cells/s — so "hurt once and it stops
+        // committing" is the whole shape of the kind. Pinned because a CSV that gave it
+        // 200 HP would make a 4% slow meaningless.
+        CHECK(dikiy.hp == 22);
+        CHECK(dikiy.packMode == static_cast<std::uint8_t>(MobPackMode::Crowd));
+
+        // Untouched is EXACTLY 1.0, so a fresh Дикий Мертвяк is bit-for-bit what it is
+        // today. The reference computes `1 + min(1.2, charge) * 0.18` with charge 0.
+        CHECK(behaviour_hurt_move_mult(cs, 22, 22) == 1.0f);
+        // One point of damage is enough — the reference's predicate is `hp < startHp`,
+        // not a fraction, so there is no threshold to tune and none is invented here.
+        CHECK(behaviour_hurt_move_mult(cs, 21, 22) == kCrowdShoveHurtSpeed);
+        CHECK(behaviour_hurt_move_mult(cs, 1, 22) == kCrowdShoveHurtSpeed);
+        // Compile-time, per the C4127 note in block 10. A hurt runner must be SLOWER;
+        // the reference's undamaged branch is `1 + 0 * 0.18`, so 0.96 is the only value
+        // here that is not 1.0 and its direction is the whole mechanic.
+        static_assert(kCrowdShoveHurtSpeed < 1.0f, "being hurt must cost pace");
+
+        // Degenerate rows return 1.0 rather than dividing, clamping, or inventing a
+        // speed-up. A mob with maxHp 0 is a spawn bug ([mob_spawn.h] pins the field
+        // order precisely because that bug is possible) and slowing it would hide it.
+        CHECK(behaviour_hurt_move_mult(cs, 0, 0) == 1.0f);
+        CHECK(behaviour_hurt_move_mult(cs, 10, -5) == 1.0f);
+        // Over-healed is not "hurt": hp > maxHp falls through to 1.0.
+        CHECK(behaviour_hurt_move_mult(cs, 30, 22) == 1.0f);
+        // Dead is still "hurt" — no special case, because a corpse is not this
+        // function's problem and a branch for it would be untestable dead code.
+        CHECK(behaviour_hurt_move_mult(cs, 0, 22) == kCrowdShoveHurtSpeed);
+
+        // Every other behaviour is untouched at both health states, all 47 checked.
+        for (std::size_t i = 0; i < static_cast<std::size_t>(MobBehaviour::Count); ++i) {
+            const MobBehaviour b = static_cast<MobBehaviour>(i);
+            if (b == cs) continue;
+            CHECK(behaviour_hurt_move_mult(b, 1, 100) == 1.0f);
+            CHECK(behaviour_hurt_move_mult(b, 100, 100) == 1.0f);
+        }
+
+        // THE precedence assertion, and the reason it is a loop over all 47 rather than
+        // one line about Дикий Мертвяк: there are now TWO pace multipliers, and the day a
+        // behaviour is authored with both a wall pace and a health pace, a caller that
+        // multiplies them would silently produce 1.22 * 0.96 where the reference gives
+        // one or the other. No enumerator may answer both.
+        std::size_t bothPaces = 0;
+        for (std::size_t i = 0; i < static_cast<std::size_t>(MobBehaviour::Count); ++i) {
+            const MobBehaviour b = static_cast<MobBehaviour>(i);
+            const bool wallPace = behaviour_move_mult(b, true).claimed ||
+                                  behaviour_move_mult(b, false).claimed;
+            const bool healthPace = behaviour_hurt_move_mult(b, 1, 100) != 1.0f ||
+                                    behaviour_hurt_move_mult(b, 100, 100) != 1.0f;
+            if (wallPace && healthPace) ++bothPaces;
+        }
+        std::fprintf(stderr,
+                     "[behaviours] CrowdShove hurt pace x%.4f; %zu enumerators answer "
+                     "BOTH a wall pace and a health pace\n",
+                     kCrowdShoveHurtSpeed, bothPaces);
+        CHECK(bothPaces == 0u);
+        // Same question for the BURST pace, because the handoff puts both multiplies on
+        // the same `sp` two lines apart: no enumerator may answer both a burst phase and
+        // a health pace, or a hurt Трескотник would be 3.25 * 0.96. Swept over a whole
+        // cycle so a phase that is only non-neutral for part of it still counts.
+        std::size_t burstAndHurt = 0;
+        for (std::size_t i = 0; i < static_cast<std::size_t>(MobBehaviour::Count); ++i) {
+            const MobBehaviour b = static_cast<MobBehaviour>(i);
+            const bool healthPace = behaviour_hurt_move_mult(b, 1, 100) != 1.0f;
+            if (!healthPace) continue;
+            bool burstPace = false;
+            for (std::uint64_t t = 0; t < kFractureCycleTicks; ++t)
+                if (burst_speed_mult(burst_phase(b, 42u, t, 1.0f)) != 1.0f)
+                    burstPace = true;
+            if (burstPace) ++burstAndHurt;
+        }
+        CHECK(burstAndHurt == 0u);
+        // ...and no kind in the table carries a health pace behind the wall gate, which
+        // is the same claim measured against the DATA instead of the enum: if it ever
+        // does, wander_step would run the four cell reads and then apply the health
+        // multiplier on top of the wall one.
+        std::size_t gatedHealthKinds = 0;
+        for (std::size_t k = 0; k < kMobKindCount; ++k) {
+            const MobBehaviour b = static_cast<MobBehaviour>(kMobTable[k].behaviour);
+            if (!wall_query_needed(kMobTable[k].aiFlags, b)) continue;
+            if (behaviour_hurt_move_mult(b, 1, 100) != 1.0f) ++gatedHealthKinds;
+        }
+        CHECK(gatedHealthKinds == 0u);
     }
 }

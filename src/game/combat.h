@@ -165,9 +165,11 @@ inline constexpr std::uint8_t kPlayerGravityPct = 40;
 //
 // NOT cosmetic — without it the player shoots himself on the first frame, and the
 // arithmetic is decisive: a shot spawned at the body with only +0.6 z, fired from a
-// makarov at 44 m/s, advances 0.37 m in one 120 Hz step, giving
-// d^2 = 0.37^2 + 0.6^2 = 0.497 against kProjHitRadius^2 = 0.5625. It hits. The
-// reference uses 0.85 cells; this is that.
+// makarov at 44 m/s, advances 0.352 m in one 125 Hz step (kSimDt = 8 ms exactly,
+// [core/tick.h]), giving d^2 = 0.352^2 + 0.6^2 = 0.484 against
+// kProjHitRadius^2 = 0.5625. It hits — and the shorter 125 Hz step makes it hit
+// HARDER than the 0.497 this comment recorded at 120 Hz. The reference uses
+// 0.85 cells; this is that.
 inline constexpr float kMuzzleForward = 1.7f;
 
 // The camera holder's firearm state. A sibling of PlayerMelee rather than an
@@ -205,8 +207,8 @@ inline constexpr float kMeleeReachSlack = 0.9f;   // metres
 // Projectile constants. Gravity is lighter than the world's so a shot arcs
 // readably instead of dropping like a stone; the TTL is a hard backstop so a
 // shot fired into open space cannot live forever; the hit radius is generous
-// because a 10 cm box at 20 m/s would tunnel clean through a body between two
-// 120 Hz steps.
+// because a 10 cm box at 20 m/s advances 16 cm per 125 Hz step (0.008 s) and so
+// would tunnel clean through a body between two of them.
 inline constexpr float kProjGravity = 6.0f;        // m/s^2
 inline constexpr std::uint16_t kProjTtlMs = 4000;
 inline constexpr float kProjHitRadius = 0.75f;     // metres

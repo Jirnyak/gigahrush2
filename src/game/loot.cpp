@@ -7,6 +7,7 @@
 #include "ecs/components.h"
 #include "game/combat.h"   // Dead, MobRef window
 #include "game/embody.h"
+#include "game/loot_table.h"  // roll_kind_drop — the per-kind identity half of a roll
 #include "game/mob_spawn.h"  // MobRef
 #include "game/mob_table.h"
 #include "game/ranged_table.h"
@@ -73,38 +74,58 @@ std::int32_t inventory_value(const Inventory& inv) {
 std::uint32_t drop_mob_loot(Registry& reg, LayerId layer, const vec3& pos,
                             std::uint8_t mobKind, std::uint8_t mobTier,
                             int floorNumber, std::uint32_t seed) {
-    (void)mobKind;  // per-kind loot tables do not exist in the reference (66/69)
-
     const std::uint32_t rolls = rolls_for_tier(mobTier);
     const std::uint32_t chance = drop_chance_for_tier(mobTier);
 
-    // Build the floor's droppable set once per corpse. Room mask 0 = "anywhere",
-    // because a monster carries what it carries regardless of which room it died in.
-    // Cumulative weights, so the pick is one scan.
+    // The floor's droppable set, the FALLBACK half of each roll. Room mask 0 =
+    // "anywhere", because a monster carries what it carries regardless of which room it
+    // died in. Cumulative weights, so the pick is one scan.
+    //
+    // **Built lazily, on the first roll the authored table does not answer.** Scanning
+    // 446 rows through `item_weight_on_floor` (a divide + an `exp` past the band cap) is
+    // the most expensive thing in this function, and a Trash corpse fails its single 12%
+    // roll seven times out of eight — so on the common path it is now not built at all.
     std::vector<ItemId> pool;
     std::vector<std::uint32_t> cum;
     std::uint32_t total = 0;
-    pool.reserve(64);
-    cum.reserve(64);
-    for (std::size_t i = 0; i < kItemCount; ++i) {
-        const ItemId id = static_cast<ItemId>(i + 1);
-        const std::uint32_t w = item_weight_on_floor(id, floorNumber, 0);
-        if (w == 0) continue;
-        total += w;
-        pool.push_back(id);
-        cum.push_back(total);
-    }
-    if (total == 0) return 0;
+    bool poolBuilt = false;
 
     std::uint32_t made = 0;
     for (std::uint32_t r = 0; r < rolls; ++r) {
         std::uint32_t h = mix(seed ^ (r * 0x9e3779b9u));
         if ((h % 100u) >= chance) continue;
 
-        const std::uint32_t pick = mix(h) % total;
-        std::size_t k = 0;
-        while (k + 1 < pool.size() && pick >= cum[k]) ++k;
-        const ItemId id = pool[k];
+        // ---- WHAT falls. The tier envelope above already decided HOW MUCH. -------
+        // The mob's own authored row gets first refusal ([loot_table.h]): 136 reference
+        // rows across all 69 kinds, so a dead Rebar leaves rebar and a dead Robot leaves
+        // a circuit board instead of both drawing the same anonymous catalog sample.
+        // A hit SUBSTITUTES for the catalog pick rather than adding to it, which is why
+        // the per-kill item count — and therefore the whole economy — is unchanged.
+        // A miss (and every kind at every depth can miss) falls through to the catalog,
+        // exactly as every kind did before the table existed.
+        KindDrop kd = roll_kind_drop(mobKind, floorNumber, mix(h ^ 0x10071ee7u));
+        if (kd.item == kInvalidItem) {
+            if (!poolBuilt) {
+                poolBuilt = true;
+                pool.reserve(64);
+                cum.reserve(64);
+                for (std::size_t i = 0; i < kItemCount; ++i) {
+                    const ItemId cid = static_cast<ItemId>(i + 1);
+                    const std::uint32_t w = item_weight_on_floor(cid, floorNumber, 0);
+                    if (w == 0) continue;
+                    total += w;
+                    pool.push_back(cid);
+                    cum.push_back(total);
+                }
+            }
+            if (total == 0) continue;   // nothing legal on this floor; the roll is void
+            const std::uint32_t pick = mix(h) % total;
+            std::size_t k = 0;
+            while (k + 1 < pool.size() && pick >= cum[k]) ++k;
+            kd.item = pool[k];
+            kd.count = 1;
+        }
+        const ItemId id = kd.item;
 
         // Scatter slightly so multiple drops from one corpse are separately
         // visible rather than one box hiding the others.
@@ -121,11 +142,25 @@ std::uint32_t drop_mob_loot(Registry& reg, LayerId layer, const vec3& pos,
         reg.emplace<AABB>(e, AABB{kPickupHalf});
         reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
         reg.emplace<Renderable>(e, Renderable{kPickupColor});
-        reg.emplace<Pickup>(e, Pickup{id, 1});
+        // Never over the item's own stack cap: a single pickup carrying more than an
+        // inventory slot may legally hold is silently truncated by pickup_step. The
+        // authored counts are 1..2 and every count-bearing row stacks well past that, so
+        // this is the rule stated rather than a bug fixed.
+        const std::uint8_t cap = item_def(id).stackMax;
+        if (kd.count < 1) kd.count = 1;
+        if (cap && kd.count > cap) kd.count = cap;
+        reg.emplace<Pickup>(e, Pickup{id, kd.count});
         ++made;
         // A gun without bullets is a paperweight. Bundle its ammo at the moment it
-        // drops, because the loot roller CANNOT produce ammo any other way — every
-        // AMMO row has spawn weight 0. [loot.h drop_weapon_ammo]
+        // drops, because the CATALOG roller cannot produce ammo any other way — all 17
+        // AMMO rows have spawn weight 0. [loot.h drop_weapon_ammo]
+        //
+        // Runs on the authored item too, unconditionally, and that is deliberate rather
+        // than sloppy: it is a no-op for every row the table can produce. Measured — the
+        // five WEAPON-category authored items are rebar, pipe and the three psi clots, and
+        // none of the five appears in `kRangedTable`, so `ranged_for_item` answers nullptr
+        // for all of them. One call site covers both halves of the roll; a guard would
+        // only encode which half we are in.
         made += drop_weapon_ammo(reg, layer, tr.pos, id, seed ^ (j * 0x2545F491u));
     }
     return made;

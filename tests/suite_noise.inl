@@ -579,12 +579,16 @@ static void test_noise_cost() {
             e, MobRef{static_cast<std::uint8_t>(MobKind::Zombie), 1, 40, 40});
     }
 
-    const int kTicks = 12000;   // 100 s of sim at 120 Hz
+    // 100 s of sim, derived from the rate. The literal 12000 this used to be was 100 s
+    // only at 120 Hz — and worse, the loop below ages the field by a hardcoded 8 ms,
+    // which is the 125 Hz step, so the window was really 96 s and disagreed with both
+    // its own comment and its own dt.
+    const int kTicks = 100 * kSimHz;
     std::uint32_t sink = 0;
 
     const std::clock_t q0 = std::clock();
     for (int t = 0; t < kTicks; ++t) {
-        noise_step(f, 8);
+        noise_step(f, kSimStepMs);
         sink += investigate_step(reg, f, pool, 0, static_cast<std::uint64_t>(t));
     }
     const std::clock_t q1 = std::clock();
@@ -615,9 +619,9 @@ static void test_noise_cost() {
                 "worst case (%zu records live) %.3f us  [%u steers]\n",
                 kMobs, quietUs, kNoiseCap, loudUs, sink);
     CHECK(sink > 0);
-    // The quiet path must be genuinely free, not merely cheap. 5 us at 120 Hz would
-    // be 0.06% of a tick; asserting a loose ceiling still catches the regression that
-    // matters (someone removing the quiet() early-out).
+    // The quiet path must be genuinely free, not merely cheap. 5 us is 0.06% of an
+    // 8 ms tick; asserting a loose ceiling still catches the regression that matters
+    // (someone removing the quiet() early-out).
     CHECK(quietUs < 5.0);
 }
 

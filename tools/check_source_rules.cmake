@@ -38,6 +38,14 @@
 # not parsed. A banned token inside a block comment or a string will be flagged;
 # that is a deliberate false-positive-over-false-negative choice. Use the escape
 # hatch.
+#
+# ONE known FALSE NEGATIVE, which is the opposite bias and so worth naming: the
+# line is truncated at the FIRST `//`, including a `//` inside a string literal.
+# `const char* u = "http://x"; throw y;` therefore hides its `throw`. Checked
+# 2026-07-29 — no line in src/ or tests/ has a banned token after a `://`, so this
+# is latent, not live. Fixing it means not truncating on `://`, or parsing string
+# literals; do not "fix" it by deleting the truncation, which would flag every
+# doc comment in the tree.
 
 cmake_minimum_required(VERSION 3.20)
 
@@ -112,20 +120,31 @@ macro(_giga_scan _list_var _regex _message)
 endmacro()
 
 # ---- File sets -------------------------------------------------------------
+# EXTENSIONS: .cpp, .h AND .inl. The .inl arrived late and was the biggest hole
+# this gate ever had. tests/*.inl is not a marginal file type here — it is where
+# the bulk of the test code lives: measured 2026-07-29, 18 files, ~530 KB, 10468
+# lines, every one of them compiled into game_test via #include and NONE of them
+# scanned. Every rule below was bypassed there, including the no-exceptions rule
+# that MSVC cannot enforce, which is the whole reason this script exists. So the
+# rule for the file sets is: match by C++ *translation content*, not by the
+# habitual extension pair. A new extension (.ipp, .hpp, .tcc) belongs in every
+# glob here on the day it lands, not after the next audit finds it.
+#
 # giga_core: the headless, dependency-free simulation substrate.
 file(GLOB_RECURSE GIGA_CORE_FILES
-    "${GIGA_ROOT}/src/world/*.cpp" "${GIGA_ROOT}/src/world/*.h"
-    "${GIGA_ROOT}/src/sim/*.cpp"   "${GIGA_ROOT}/src/sim/*.h"
-    "${GIGA_ROOT}/src/ecs/*.cpp"   "${GIGA_ROOT}/src/ecs/*.h"
-    "${GIGA_ROOT}/src/core/*.cpp"  "${GIGA_ROOT}/src/core/*.h")
+    "${GIGA_ROOT}/src/world/*.cpp" "${GIGA_ROOT}/src/world/*.h" "${GIGA_ROOT}/src/world/*.inl"
+    "${GIGA_ROOT}/src/sim/*.cpp"   "${GIGA_ROOT}/src/sim/*.h"   "${GIGA_ROOT}/src/sim/*.inl"
+    "${GIGA_ROOT}/src/ecs/*.cpp"   "${GIGA_ROOT}/src/ecs/*.h"   "${GIGA_ROOT}/src/ecs/*.inl"
+    "${GIGA_ROOT}/src/core/*.cpp"  "${GIGA_ROOT}/src/core/*.h"  "${GIGA_ROOT}/src/core/*.inl")
 
 # giga_game: the game layer. Links core, must stay headless-testable.
 file(GLOB_RECURSE GIGA_GAME_FILES
-    "${GIGA_ROOT}/src/game/*.cpp" "${GIGA_ROOT}/src/game/*.h")
+    "${GIGA_ROOT}/src/game/*.cpp" "${GIGA_ROOT}/src/game/*.h"
+    "${GIGA_ROOT}/src/game/*.inl")
 
 file(GLOB_RECURSE GIGA_ALL_FILES
-    "${GIGA_ROOT}/src/*.cpp" "${GIGA_ROOT}/src/*.h"
-    "${GIGA_ROOT}/tests/*.cpp" "${GIGA_ROOT}/tests/*.h")
+    "${GIGA_ROOT}/src/*.cpp" "${GIGA_ROOT}/src/*.h" "${GIGA_ROOT}/src/*.inl"
+    "${GIGA_ROOT}/tests/*.cpp" "${GIGA_ROOT}/tests/*.h" "${GIGA_ROOT}/tests/*.inl")
 
 list(LENGTH GIGA_ALL_FILES GIGA_FILES_SCANNED)
 if(GIGA_FILES_SCANNED EQUAL 0)
@@ -134,6 +153,75 @@ if(GIGA_FILES_SCANNED EQUAL 0)
         "Wrong GIGA_ROOT, or the layout moved — a check that silently sees "
         "nothing is worse than no check.")
 endif()
+
+# ---- Guard: no C++ file may sit outside the scanned set --------------------
+# The .inl hole was silent for as long as it existed: nothing here objected to
+# 18 files of unscanned C++, because the gate only ever knew about the two
+# extensions somebody typed in 2026-07-28. Fixing the instance (.inl above) does
+# not fix the class, so this fails the check the moment a C++ file with any other
+# conventional extension appears under src/ or tests/ and is therefore invisible
+# to a rule that ought to see it.
+#
+# THREE file sets need guarding, not one. GIGA_ALL_FILES drives rules 1-3 and 6;
+# GIGA_CORE_FILES and GIGA_GAME_FILES drive the layering rules 4 and 5. Guarding
+# only GIGA_ALL_FILES rebuilds the same hole one level down: add `.ipp` to
+# GIGA_ALL_FILES alone and the guard goes quiet while the layering rules stay
+# blind to every `.ipp` under src/world and src/game. So each of the three sets
+# is cross-checked separately, and the finding names the set that is blind.
+#
+# The extension list is POSITIVE and lives here ONCE — only C++-shaped
+# extensions — so adding docs, CSVs or scripts under tests/ cannot trip it, and
+# there is no second copy of the list to forget. Copy-pasted extension lists are
+# what produced the .inl hole; one list plus a loop is the fix for the class.
+#
+# Do NOT add upper-case spellings (.H, .CPP). Measured 2026-07-29 on this
+# Windows host: cmsys::Glob is case-INSENSITIVE here, so `*.h` already matches
+# `UPPER.H`, and adding `*.H` would match the same file twice — doubling
+# files_scanned and scanning every line twice. Whether the macOS host globs
+# case-sensitively was NOT measured; if it does, a `Foo.H` there is invisible to
+# both the scan and this guard. No such file exists in the tree today.
+#
+# Measured 2026-07-29, src/ and tests/ contain exactly three extensions —
+# .cpp, .h, .inl — and all three are globbed above, so this guard is silent
+# today by construction. When it does fire, the fix is one glob pattern in the
+# File sets block above, never deleting the guard.
+set(GIGA_CXX_EXTS cpp cc cxx c++ h hpp hh hxx inl ipp tcc ixx cppm)
+
+# _giga_cxx_candidates(<out-var> <dir>...)
+# Every C++-shaped file under the given repo-relative dirs, recursively.
+macro(_giga_cxx_candidates _out)
+    set(_giga_pats "")
+    foreach(_giga_dir IN ITEMS ${ARGN})
+        foreach(_giga_ext IN LISTS GIGA_CXX_EXTS)
+            list(APPEND _giga_pats "${GIGA_ROOT}/${_giga_dir}/*.${_giga_ext}")
+        endforeach()
+    endforeach()
+    file(GLOB_RECURSE ${_out} ${_giga_pats})
+endmacro()
+
+# _giga_require_covered(<candidates-var> <scanned-var> <set-name> <what-it-drives>)
+macro(_giga_require_covered _cands _scanned _set_name _what)
+    foreach(_cand IN LISTS ${_cands})
+        list(FIND ${_scanned} "${_cand}" _in_scan)
+        if(_in_scan LESS 0)
+            file(RELATIVE_PATH _rel "${GIGA_ROOT}" "${_cand}")
+            list(APPEND GIGA_FAILURES
+                "${_rel}:1: this C++ file is invisible to ${_set_name} (${_what}) — its extension is missing from that glob in the File sets block of tools/check_source_rules.cmake. That is how tests/*.inl bypassed every rule (throw, catch, try, dynamic_cast, typeid, GLM/Eigen, BOM) for its entire life. Add the extension to EVERY glob in that block plus GIGA_CXX_EXTS, then re-run.")
+        endif()
+    endforeach()
+endmacro()
+
+_giga_cxx_candidates(GIGA_TU_CANDIDATES src tests)
+_giga_require_covered(GIGA_TU_CANDIDATES GIGA_ALL_FILES "GIGA_ALL_FILES"
+    "the no-exceptions, no-RTTI, GLM/Eigen and BOM rules")
+
+_giga_cxx_candidates(GIGA_CORE_CANDIDATES src/world src/sim src/ecs src/core)
+_giga_require_covered(GIGA_CORE_CANDIDATES GIGA_CORE_FILES "GIGA_CORE_FILES"
+    "the giga_core no-platform-header rule")
+
+_giga_cxx_candidates(GIGA_GAME_CANDIDATES src/game)
+_giga_require_covered(GIGA_GAME_CANDIDATES GIGA_GAME_FILES "GIGA_GAME_FILES"
+    "the giga_game headless rule")
 
 # ---- Rule 1: no exceptions (the one MSVC cannot enforce) --------------------
 _giga_scan(GIGA_ALL_FILES "${GIGA_TOKEN_LHS}throw${GIGA_TOKEN_RHS}"
@@ -171,8 +259,8 @@ _giga_scan(GIGA_GAME_FILES "include[ \t]*[<\"](SDL3?/|vulkan/|imgui|GLFW/)"
 # expecting a bare prefix. Same measurement found 82 source files with 0 invalid
 # UTF-8 sequences and 0 BOMs — this rule is what keeps that true.
 file(GLOB_RECURSE GIGA_BOM_FILES
-    "${GIGA_ROOT}/src/*.cpp" "${GIGA_ROOT}/src/*.h"
-    "${GIGA_ROOT}/tests/*.cpp" "${GIGA_ROOT}/tests/*.h"
+    "${GIGA_ROOT}/src/*.cpp" "${GIGA_ROOT}/src/*.h" "${GIGA_ROOT}/src/*.inl"
+    "${GIGA_ROOT}/tests/*.cpp" "${GIGA_ROOT}/tests/*.h" "${GIGA_ROOT}/tests/*.inl"
     "${GIGA_ROOT}/shaders/*.vert" "${GIGA_ROOT}/shaders/*.frag"
     "${GIGA_ROOT}/shaders/*.comp" "${GIGA_ROOT}/shaders/*.glsl")
 foreach(_file IN LISTS GIGA_BOM_FILES)
@@ -251,6 +339,88 @@ _giga_csv_vs_header("data/materials.csv" "shaders/material_surface.glsl"
     "kMaterialCsvRows[ \t]*=[ \t]*([0-9]+)" "material surface")
 
 # ---- Verdict ---------------------------------------------------------------
+# ---- Guard: every test suite must be compiled by somebody ------------------
+# A `tests/suite_*.inl` reaches a compiler only if some `tests/*.cpp` names it in
+# an `#include`, and it reaches ctest only if its `test_*_all()` entry point is
+# actually called. Neither is enforced by the build, and nothing else in this
+# file could notice: the globs above happily SCAN an .inl that no translation
+# unit parses, so a dead suite satisfies every rule here while asserting nothing.
+#
+# Not hypothetical, and the instance is worse than the WILL_FAIL defect that
+# prompted this audit. `tests/suite_navcache.inl` is 733 lines with 104 CHECK
+# sites and was born dead: commit 56c9c6a added src/game/nav_cache.cpp,
+# src/game/nav_cache.h and the suite, and did NOT touch tests/game_test.cpp, so
+# the `#include` was never written. That commit's subject says "pinned".
+# CORRECTED 2026-07-29: an earlier version of this comment said "floor_stream.cpp
+# calls nav_cache on every floor load". That is FALSE and it was the whole
+# justification for the urgency. src/game/floor_stream.cpp gates the entire path
+# on `if (!navCacheDir_.empty())`, the only caller of set_nav_cache_dir
+# (src/game/floor_stream.h:95) anywhere in the tree is tests/game_test.cpp:3765,
+# src/app/main.cpp never sets it, and floor_stream.h:200 labels the field
+# `// empty = on-disk nav cache disabled`. The app uses a separate nav::AsyncBake
+# path instead. Accurately: nav_cache is reachable from production code and
+# enabled only by a test. The rule below is still worth having — 733 lines of
+# uncompiled assertions is a defect regardless of who calls the subject — but it
+# is a testing-integrity defect, not a live gameplay one. For
+# scale: WILL_FAIL at least caught 1 transition in 7; this caught 0 in 104.
+#
+# Needs no compiler, which is the point — it is a text rule that would have
+# failed the day 56c9c6a landed.
+#
+# ESCAPE HATCH, deliberately in-file rather than a central allowlist: a suite
+# still being written carries `giga-check: unwired-suite` plus a reason on some
+# line. Keeping the exemption next to the code means it is deleted by the same
+# edit that wires the suite up, instead of rotting in a list nobody re-reads —
+# which is the failure mode of every allowlist that only ever grows.
+file(GLOB GIGA_SUITE_FILES "${GIGA_ROOT}/tests/suite_*.inl")
+file(GLOB GIGA_TEST_TUS "${GIGA_ROOT}/tests/*.cpp")
+
+set(GIGA_TU_TEXT "")
+foreach(_tu IN LISTS GIGA_TEST_TUS)
+    file(READ "${_tu}" _tu_body)
+    string(APPEND GIGA_TU_TEXT "${_tu_body}")
+endforeach()
+
+foreach(_suite IN LISTS GIGA_SUITE_FILES)
+    get_filename_component(_suite_name "${_suite}" NAME)
+    file(RELATIVE_PATH _suite_rel "${GIGA_ROOT}" "${_suite}")
+    file(READ "${_suite}" _suite_body)
+
+    string(FIND "${_suite_body}" "giga-check: unwired-suite" _suite_exempt)
+    if(NOT _suite_exempt EQUAL -1)
+        message("unwired-suite-exempt=${_suite_rel}")
+        continue()
+    endif()
+
+    string(FIND "${GIGA_TU_TEXT}" "#include \"${_suite_name}\"" _suite_included)
+    if(_suite_included EQUAL -1)
+        list(APPEND GIGA_FAILURES
+            "${_suite_rel}:1: compiled by NOBODY — no tests/*.cpp contains #include \"${_suite_name}\", so every assertion in it is dead text. Add the include to the right test translation unit AND call its test_*_all() from that file's main. If it is still being written, put `giga-check: unwired-suite <reason>` in it and delete that line when you wire it up.")
+        continue()
+    endif()
+
+    # Included, so it compiles. Now check it is actually REACHED: an entry point
+    # nobody calls is the same defect one layer in, and the compiler is perfectly
+    # happy to build a static function that is never invoked.
+    # Match on `void ` alone, which subsumes `static void ` - do NOT require `static`.
+    # Measured 2026-07-29: 22 of the 23 entry points are `static void`, and exactly one is bare
+    # `void` (tests/suite_speech.inl:612 `void test_speech_all()`). Requiring `static` made that
+    # one suite's 81 CHECK sites invisible to the dispatch half of this guard, which is the same
+    # class of defect the guard exists to catch - a check that silently sees nothing. Found by an
+    # agent auditing the guard rather than by the guard itself, which is the argument for auditing
+    # new gates instead of trusting them because they are new.
+    string(REGEX MATCHALL "void test_[A-Za-z0-9_]*_all\\(\\)" _entries "${_suite_body}")
+    foreach(_entry_decl IN LISTS _entries)
+        string(REGEX REPLACE "^void " "" _entry "${_entry_decl}")
+        string(REGEX REPLACE "\\(\\)$" "" _entry "${_entry}")
+        string(FIND "${GIGA_TU_TEXT}" "${_entry}();" _entry_called)
+        if(_entry_called EQUAL -1)
+            list(APPEND GIGA_FAILURES
+                "${_suite_rel}:1: ${_entry}() is defined but never called from any tests/*.cpp — the suite is compiled and then skipped. Dispatch it from the relevant main().")
+        endif()
+    endforeach()
+endforeach()
+
 list(LENGTH GIGA_FAILURES GIGA_FAILURE_COUNT)
 if(GIGA_FAILURE_COUNT GREATER 0)
     message("GIGA_SOURCE_RULES=FAIL")

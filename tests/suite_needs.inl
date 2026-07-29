@@ -14,6 +14,7 @@
 // consumables on fit alone does with data/items.csv's four FeedRisky rows. The rule and
 // the arithmetic that replaced it are in [needs.h]; the count over every deficit the
 // bar can hold is in suite_needs2.inl.
+#include "core/tick.h"   // kSimDt / kSimHz — never a bare 1/120 ([core/tick.h])
 #include "game/needs.h"
 #include "game/elevator.h"
 #include "game/floor_registry.h"
@@ -63,8 +64,8 @@ struct Rig {
     Needs& needs() { return pool.needs(id); }
 };
 
-constexpr float kRefPeriod = 0.25f;         // the reference's own needs period
-constexpr float kSimStep = 1.0f / 120.0f;   // the real sim tick
+constexpr float kRefPeriod = 0.25f;   // the reference's own needs period
+constexpr float kSimStep = kSimDt;    // the real sim tick itself ([core/tick.h])
 
 // Outer brackets around the measured windows, wide enough that the build-time asserts
 // are brackets rather than coincidences. balance.md rounds the same figures to
@@ -250,13 +251,15 @@ void survival_window() {
     sWorst.sleep = kStartSleepLo;
     CHECK(approx(minutes_until_failed(sWorst, NeedSleep), 20.0f, 0.02f));
 
-    // dt-independence: the same answer at the 120 Hz sim step as at 0.25 s, or the
-    // window is an artefact of whatever dt the loop happens to use.
+    // dt-independence: the same answer at the sim step as at 0.25 s, or the window is
+    // an artefact of whatever dt the loop happens to use. Both loops must cover the
+    // SAME 60 s, so the tick count is kSimHz * 60 rather than a literal that only
+    // meant 60 s while the rate was 120.
     Needs a = full_clock();
     Needs b = full_clock();
-    for (int i = 0; i < 120 * 60; ++i) needs_advance(a, kSimStep);
+    for (int i = 0; i < kSimHz * 60; ++i) needs_advance(a, kSimStep);
     for (int i = 0; i < 4 * 60; ++i) needs_advance(b, kRefPeriod);
-    // 0.05 of a point out of 100, not tighter: 7200 float subtractions of 0.00067 from
+    // 0.05 of a point out of 100, not tighter: 7500 float subtractions of 0.00067 from
     // ~100 accumulate a rounding bias of up to ulp(100)/2 * steps ~= 0.027. A genuinely
     // dt-dependent bug (draining per step instead of per second) would be 30x off, so
     // this bound still catches the thing it is here to catch. Do not tighten it.
@@ -333,7 +336,7 @@ void attrition() {
     Rig rig;
     rig.build(100);
 
-    // Fractional banking. 0.5 HP/s at the 120 Hz step is 0.0042 HP — truncate that to
+    // Fractional banking. 0.5 HP/s at the 125 Hz step is 0.0040 HP — truncate that to
     // an int every step and dehydration costs literally nothing, forever. So one
     // second must cost 0 whole HP with the fraction visibly banked, and 21 s must
     // cost 10.
@@ -392,7 +395,7 @@ void attrition() {
     rig.needs().water = 0.0f;
     rig.needs().food = 0.0f;      // 0.8 HP/s -> 3 HP gone inside 5 s
     bool sawLethal = false;
-    for (int i = 0; i < 120 * 10 && !sawLethal; ++i)
+    for (int i = 0; i < kSimHz * 10 && !sawLethal; ++i)
         sawLethal = needs_step(rig.reg, rig.pool, 0, kSimStep).lethal;
     CHECK(sawLethal);
     CHECK(rig.pool.hp(rig.id) == 0);

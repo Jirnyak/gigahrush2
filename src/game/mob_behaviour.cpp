@@ -2,6 +2,14 @@
 
 #include <cmath>
 
+// kCellSize — `behaviour_melee_reach` converts cells to metres, which is the ONE unit
+// conversion in this file. Every other constant here is already in metres because it
+// came from the reference's tile-based detect radii; the melee column is authored in
+// cells like the table it lives in. Included in the .cpp and not the header, per
+// [AGENTS.md] "Headers minimal", and it is a `giga_core` header so the layering rule is
+// satisfied ([tools/check_source_rules.cmake] gates the reverse direction only).
+#include "world/types.h"
+
 namespace giga::game {
 
 namespace {
@@ -25,6 +33,26 @@ constexpr float kRing[8][2] = {
     { 0.0000000f, -1.0000000f},
     { 0.7071068f, -0.7071068f},
 };
+
+// splitmix64-style scrambler, the same one wander.cpp and investigate.cpp carry.
+// Duplicated rather than shared for the reason [investigate.cpp] states about its own
+// copy, but with the OPPOSITE requirement: those two must land in the same stagger
+// slot, so they must compute the identical hash. This one must NOT — it offsets the
+// burst cycle, and if it agreed with the stagger hash then the phase a Трескотник
+// sprints in would be locked to the phase it is visited in.
+std::uint32_t mix(std::uint32_t x) {
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// The salt is what makes it a different hash rather than a different call to the same
+// one. Any nonzero constant works; this one is FNV-1a's offset basis, used here for
+// nothing but its bit pattern.
+constexpr std::uint32_t kBurstSalt = 0x811c9dc5u;
 
 } // namespace
 
@@ -52,6 +80,27 @@ PursuitOffset pursuit_offset(MobBehaviour b, std::uint32_t mobId,
             const float s = (mobId & 1u) ? 1.0f : -1.0f;
             return {-dirY * kFlankPerp * s, dirX * kFlankPerp * s};
         }
+        case MobBehaviour::WebSpitter: {
+            if (dirX == 0.0f && dirY == 0.0f) return {};
+            // The reference's `away` vector is target -> monster, i.e. -dir, and its
+            // goal cell is `monster + away*stepAway + perp(away)*side*stepSide`. In the
+            // victim's frame that is `victim + away*(dist + stepAway) + perp*...`; the
+            // constant kWebStandoff replaces `dist + stepAway`, which is what turns a
+            // per-frame chase of a recomputed cell into a fixed orbit radius. See the
+            // arithmetic in [mob_behaviour.h] — the radial term is negative, so this is
+            // the one offset in this file that can make a monster retreat.
+            //
+            // `id % 2`, verbatim. Note it is the opposite sense to GreenDogPack's
+            // `mobId & 1` (even takes +1 here, -1 there): both are the reference's own
+            // rule for their own kind, and neither is a normalisation of the other.
+            const float s = (mobId % 2u == 0u) ? 1.0f : -1.0f;
+            const float awayX = -dirX;
+            const float awayY = -dirY;
+            // Perpendicular is (-awayY, +awayX), matching the reference's sign so the
+            // two halves of the population circle the same way round it does.
+            return {awayX * kWebStandoff - awayY * s * kWebStrafeSide,
+                    awayY * kWebStandoff + awayX * s * kWebStrafeSide};
+        }
         default:
             return {};
     }
@@ -75,8 +124,11 @@ float behaviour_aggro_radius(MobBehaviour b, float defaultRadius) {
         case MobBehaviour::RootedPlant:      return 7.5f;
         case MobBehaviour::RootHive:         return 8.25f;
         case MobBehaviour::GarbageSurround:  return 13.0f;
+        case MobBehaviour::FractureSprint:   return 18.0f;  // wave 3
         case MobBehaviour::OfficeField:      return 23.0f;
         case MobBehaviour::DocumentHunter:   return 24.0f;
+        case MobBehaviour::MeatWorm:         return 24.0f;  // wave 3; 30 m if bleeding
+        case MobBehaviour::FalsePhase:       return 24.0f;  // wave 3
         case MobBehaviour::ProtocolPressure: return 26.0f;
         case MobBehaviour::DocumentScent:    return 28.0f;
         case MobBehaviour::LightFollower:    return 30.0f;
@@ -92,6 +144,59 @@ bool frozen_by_gaze(MobBehaviour b, float fwdX, float fwdY, float dx, float dy) 
     const float inv = 1.0f / std::sqrt(d2);
     const float dot = (dx * inv) * fwdX + (dy * inv) * fwdY;
     return dot >= kGazeCosHalfAngle;
+}
+
+float facing_damage_mult(MobBehaviour b, float fwdX, float fwdY, float dx, float dy) {
+    if (b != MobBehaviour::DeadEcho) return 1.0f;
+    const float d2 = dx * dx + dy * dy;
+    // The reference's `facingDotTo` returns 1 below a 0.001 m separation — standing on
+    // top of a monster counts as facing it — so a degenerate delta must NOT award the
+    // 1.55. Getting this edge backwards would hand the bonus to exactly the case where
+    // the player has already been caught.
+    if (d2 < 1e-6f) return kDeadEchoFacedDamage;
+    const float inv = 1.0f / std::sqrt(d2);
+    const float dot = (dx * inv) * fwdX + (dy * inv) * fwdY;
+    return dot <= kDeadEchoBackDot ? kDeadEchoBackDamage : kDeadEchoFacedDamage;
+}
+
+BurstPhase burst_phase(MobBehaviour b, std::uint32_t mobId, std::uint64_t tick,
+                       float dist) {
+    if (b != MobBehaviour::FractureSprint) return BurstPhase::Idle;
+    // Out of lunging range it is an ordinary monster closing at its table speed. The
+    // gate is `>` so that exactly kFractureRange still winds up, matching the
+    // reference's `distSq <= RANGE*RANGE`.
+    if (!(dist <= kFractureRange)) return BurstPhase::Idle;
+    // Negative or NaN distances cannot reach here: `!(dist <= range)` is false only for
+    // a real value in [-inf, range], and a negative distance would be a caller bug
+    // rather than a state this can repair. NaN takes the Idle branch, which is the safe
+    // one — a NaN speed multiplier would poison Velocity for good.
+
+    // Per-identity phase offset, so a pack does not sprint in unison. The offset is a
+    // whole number of ticks inside one cycle, so the cycle length is exact.
+    const std::uint64_t offset =
+        static_cast<std::uint64_t>(mix(mobId ^ kBurstSalt)) % kFractureCycleTicks;
+    const std::uint64_t t = (tick + offset) % kFractureCycleTicks;
+    if (t < kFractureWindupTicks) return BurstPhase::Windup;
+    if (t < kFractureWindupTicks + kFractureSprintTicks) return BurstPhase::Sprint;
+    return BurstPhase::Stagger;
+}
+
+float burst_speed_mult(BurstPhase p) {
+    switch (p) {
+        case BurstPhase::Windup:  return 0.0f;
+        case BurstPhase::Sprint:  return kFractureSprintMult;
+        case BurstPhase::Stagger: return 0.0f;
+        case BurstPhase::Idle:    break;
+    }
+    return 1.0f;
+}
+
+float burst_damage_mult(BurstPhase p) {
+    // Only the sprint hits harder. A staggered Трескотник in reach still swings for its
+    // authored damage rather than for nothing: the reference holds its attack cooldown
+    // at 0.25 s during the stagger instead of zeroing the hit, and a cooldown is the
+    // caller's to own.
+    return p == BurstPhase::Sprint ? kFractureBurstDamage : 1.0f;
 }
 
 float wall_bias_speed(std::uint32_t aiFlags, bool adjacentWall) {
@@ -127,9 +232,50 @@ float behaviour_damage_mult(MobBehaviour b, bool adjacentWall) {
     }
 }
 
+bool behaviour_claims_damage(MobBehaviour b) {
+    // Deliberately the SAME case list as `behaviour_damage_mult`'s, and hand-written
+    // rather than derived from it by probing both wall states — a derived version would
+    // reproduce the `!= 1.0f` test this predicate exists to replace. The suite compares
+    // the two against each other instead, which catches a case added to one and not the
+    // other.
+    //
+    // WallBrace is absent on purpose: it claims the pace, the reach and the incoming
+    // damage, and it has no OUTGOING multiplier in the reference at all
+    // (`monsterDmgMult` has no PANELNIK case). Its bruiser half is the reach, not a
+    // damage number, and inventing one would be the kind of symmetry that reads as
+    // parity and is not.
+    return b == MobBehaviour::DebrisLurker;
+}
+
 bool wall_query_needed(std::uint32_t aiFlags, MobBehaviour b) {
     if (aiFlags & static_cast<std::uint32_t>(AiFlag::WallBias)) return true;
     return b == MobBehaviour::DebrisLurker || b == MobBehaviour::WallBrace;
+}
+
+float behaviour_melee_reach(MobBehaviour b, std::uint16_t baseReachMm,
+                            bool adjacentWall) {
+    // Cells -> metres, the same conversion combat.cpp does inline. Done here for BOTH
+    // branches so the override cannot end up in the other unit; the braced value is
+    // authored in cells like the column it replaces, not in metres like the sight radii.
+    if (b == MobBehaviour::WallBrace && adjacentWall)
+        return kWallBraceReachCells * kCellSize;
+    return static_cast<float>(baseReachMm) * 0.001f * kCellSize;
+}
+
+float behaviour_incoming_mult(MobBehaviour b, bool adjacentWall) {
+    // Unbraced returns exactly 1.0 rather than a small penalty: the reference gives an
+    // open-floor Панельник no armour at all, and its open-floor weakness is already
+    // spent on the shorter reach and the slower pace.
+    return (b == MobBehaviour::WallBrace && adjacentWall) ? kWallBraceIncoming : 1.0f;
+}
+
+float behaviour_hurt_move_mult(MobBehaviour b, std::int16_t hp, std::int16_t maxHp) {
+    if (b != MobBehaviour::CrowdShove) return 1.0f;
+    // A mob with no maximum is a spawn bug; slowing it would hide that. Note this also
+    // covers the `hp > maxHp` case (an over-healed or mis-spawned row) by falling
+    // through to 1.0 rather than by clamping, so nothing here can invent a speed-up.
+    if (maxHp <= 0) return 1.0f;
+    return hp < maxHp ? kCrowdShoveHurtSpeed : 1.0f;
 }
 
 bool behaviour_is_dead(MobBehaviour b) {
@@ -156,7 +302,7 @@ bool behaviour_is_dead(MobBehaviour b) {
 }
 
 bool behaviour_is_dispatched(MobBehaviour b) {
-    // The declared inverse of `behaviour_is_dead`, and NOT its negation: 27
+    // The declared inverse of `behaviour_is_dead`, and NOT its negation: 23
     // enumerators are neither dead nor dispatched — authored, portable, and each
     // waiting on one named piece (the roadmap block in [mob_behaviour.h]).
     //
@@ -185,6 +331,19 @@ bool behaviour_is_dispatched(MobBehaviour b) {
         case MobBehaviour::ProtocolPressure:
         case MobBehaviour::DocumentScent:
         case MobBehaviour::LightFollower:
+        // Wave 3 — the three radii that were never in `monsterDetectSq`...
+        case MobBehaviour::MeatWorm:
+        case MobBehaviour::FalsePhase:
+        // ...FractureSprint, which gets that treatment AND its burst cycle...
+        case MobBehaviour::FractureSprint:
+        // ...and the standoff, the first offset here with a negative radial term.
+        case MobBehaviour::WebSpitter:
+        // Wave 4 — the mob's own health as a pace input. THE ONE ENTRY on this list
+        // whose every answer comes from a function with no caller in src/, so it is
+        // answered here and still indistinguishable from Plain in the running game.
+        // WallBrace also gains two dimensions in wave 4 (reach, incoming damage) but
+        // was already on this list for its live pace, so the count moves by one.
+        case MobBehaviour::CrowdShove:
             return true;
         default:
             return false;

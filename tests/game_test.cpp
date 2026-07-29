@@ -6,6 +6,7 @@
 #include <cstring>
 #include <vector>
 
+#include "core/tick.h"   // kSimDt / kSimHz — never a bare 1/120 ([core/tick.h])
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "ecs/registry.h"
@@ -81,6 +82,34 @@ int g_checks = 0;
 #include "suite_npcpool.inl"
 #include "suite_samosbor2.inl"
 #include "suite_faction2.inl"
+// Wave 5. Each of these carries its own #includes rather than leaning on the prelude
+// above, because they reach for headers this file never needed: sim/diffusion.h,
+// game/ai.h, game/loot_table.h, game/needs.h, world/field.h.
+#include "suite_diffusion.inl"
+#include "suite_loottable.inl"
+#include "suite_utilai.inl"
+// Wired 2026-07-29. This suite existed for its whole life without being included by any
+// translation unit: commit 56c9c6a added src/game/nav_cache.{cpp,h} and tests/suite_navcache.inl
+// and never touched this file, so 733 lines and 104 CHECK sites were dead text while
+// src/game/floor_stream.cpp called nav_cache on every floor load. tools/check_source_rules.cmake
+// now fails on any suite_*.inl that no tests/*.cpp includes, so this cannot recur silently.
+#include "suite_navcache.inl"
+// Wave 6 — three ports from the TypeScript original. Same self-contained-includes
+// discipline as the wave-5 block above: each reaches for headers this file never needed
+// (game/craft.h, game/quest.h, game/speech.h and the generated tables behind them).
+#include "suite_craft.inl"
+#include "suite_quest.inl"
+#include "suite_speech.inl"
+// Wave 8 ports. tools/check_source_rules.cmake now FAILS on a suite no tests/*.cpp
+// includes, and it reported these as `unwired-suite-exempt` until they were wired — the
+// gate doing exactly the job it was added for, on the same day it was added.
+//
+// suite_economy.inl is ABSENT rather than unwired: I destroyed it. Stripping its exempt
+// marker with a script that split on CRLF against a file that was LF-only produced one
+// giant line, which matched and was removed, leaving 0 bytes — and it had never been
+// committed, so there was nothing to restore. The economy MODULE survived; only its tests
+// died. Being rewritten against the shipped module; the include returns with it.
+#include "suite_monster.inl"
 #include "suite_playercmd.inl"
 #include "suite_macrowire.inl"
 static void test_inventory() {
@@ -1351,10 +1380,11 @@ static void test_wander_moves_the_crowd() {
     }
     CHECK(agents.size() == wandering);
 
-    // Run a second of sim. kWanderPeriod = 8, so every agent gets ~15 steering
-    // passes in this window.
-    const float dt = 1.0f / 120.0f;
-    for (std::uint64_t t = 0; t < 120; ++t) {
+    // Run a second of sim — kSimHz ticks, by definition of the rate, so this stays one
+    // real second if the rate moves. kWanderPeriod = 8, so every agent gets ~15
+    // steering passes in this window.
+    const float dt = kSimDt;
+    for (std::uint64_t t = 0; t < static_cast<std::uint64_t>(kSimHz); ++t) {
         wander_step(reg, stack.layer(layer).grid(), pool, coarse, fine, layer, t);
         physics_step(reg, stack, dt);
     }
@@ -1511,7 +1541,9 @@ static void test_melee_cooldown_and_reach() {
 
     const std::uint8_t kind = static_cast<std::uint8_t>(MobKind::Tvar);
     const MobDef& def = kMobTable[kind];
-    const float dt = 1.0f / 120.0f;
+    const float dt = kSimDt;
+    // Converted the same way combat.cpp converts it, deliberately, rather than read
+    // from kSimStepMs: that is what makes this measure the game's own arithmetic.
     const std::uint16_t step = static_cast<std::uint16_t>(dt * 1000.0f + 0.5f);
 
     // Far mob: must never land a hit, but its cooldown must still run down.
@@ -1980,7 +2012,7 @@ static void test_ranged_windup_and_deadzone() {
         return e;
     };
 
-    const float dt = 1.0f / 120.0f;
+    const float dt = kSimDt;
     const std::uint16_t step = static_cast<std::uint16_t>(dt * 1000.0f + 0.5f);
 
     // Inside the band. The first pass must NOT fire — it starts the telegraph.
@@ -2500,7 +2532,7 @@ static void test_ranged_table() {
 
     // 3. THE SELF-HIT ARITHMETIC, asserted rather than trusted.
     //    A shot born at the shooter with only +0.6 z, from a makarov at 22 cells/s,
-    //    advances one 120 Hz step and lands INSIDE kProjHitRadius of its own shooter.
+    //    advances one kSimHz step and lands INSIDE kProjHitRadius of its own shooter.
     //    That is why kMuzzleForward exists, and this is the calculation that proves
     //    the naive placement was fatal — for the player AND for all 13 ranged monster
     //    kinds, which would each have killed themselves on their first shot.
@@ -2512,7 +2544,7 @@ static void test_ranged_table() {
         CHECK(mak != nullptr);
         const float speed =
             static_cast<float>(mak->projSpeedMmps) * 0.001f * kCellSize;  // 44 m/s
-        const float step = speed / 120.0f;                                // 0.367 m
+        const float step = speed * kSimDt;                                // 0.352 m
         const float naive = step * step + 0.6f * 0.6f;
         CHECK(naive < kProjHitRadius * kProjHitRadius);   // the bug, quantified
         // And with the muzzle offset it is clear of the shooter immediately.
@@ -2625,7 +2657,7 @@ static void test_player_shoots() {
     reg.emplace<Transform>(mob, mt);
     reg.emplace<MobRef>(mob, MobRef{0, 1, 500, 500});
 
-    const float dt = 1.0f / 120.0f;
+    const float dt = kSimDt;
 
     // First call with the trigger down must RELOAD, not fire: the magazine starts
     // empty and a gun that fired on an empty chamber would be free ammo.
@@ -2749,7 +2781,7 @@ static void test_faction_gates_hunting() {
     const MobDef& md = kMobTable[kind];
     CHECK(md.dmg > 0);
 
-    const float dt = 1.0f / 120.0f;
+    const float dt = kSimDt;
 
     auto trial = [&](Faction f) -> std::int16_t {
         Registry r;
@@ -3778,29 +3810,11 @@ static void test_streamed_nav_cache() {
     std::remove(path.c_str());
 }
 
-// ---- #10 macro tick ------------------------------------------------------
-
-// Spawn one controlled record for the macro-tick tests. [[maybe_unused]]: its only
-// callers are the #10/#12 macro-tick tests parked in tools/branch_port_pending/
-// branch_tests.inl during the nav-routing-diffusion merge (they compile against the
-// branch enum catalogs, not main's csv tables). MSVC does not warn on an unused
-// static, so the build-win-verified merge did not catch this; Clang -Wall does.
-// Keep the helper here beside the tests it serves rather than deleting it — it
-// returns to use the moment those tests are adapted back onto main's tables.
-[[maybe_unused]] static NpcId spawn_aged(NpcPool& pool, std::uint8_t age, std::uint16_t floor,
-                        std::uint16_t faction) {
-    NpcId id = pool.spawn();
-    if (id == kInvalidNpc) return id;
-    pool.age(id) = age;
-    pool.set_floor(id, floor);
-    pool.faction(id) = faction;
-    pool.sex(id) = SexFemale;
-    pool.height_mm(id) = 1700;
-    pool.max_hp(id) = 100;
-    pool.hp(id) = 100;
-    pool.level(id) = 1;
-    return id;
-}
+// The "#10 macro tick" section that stood here is gone: its tests moved into
+// tests/suite_macrosim.inl, which carries its own seeding helpers. Its `spawn_aged`
+// helper stayed behind with no caller and was a live C4505 — and its `floor`
+// parameter was std::uint16_t against a std::int16_t label, so it could not have
+// seeded a negative floor correctly anyway.
 
 
 
@@ -3811,7 +3825,14 @@ static void test_streamed_nav_cache() {
 
 // Linear membership probe — the bucket is a set with unspecified order, so tests
 // ask "is id in this floor's roster?" rather than assuming a position.
-static bool bucket_has(const NpcPool& pool, std::uint16_t label, NpcId id) {
+// std::int16_t, matching floor_bucket. It was std::uint16_t, which left the probe
+// unable to even ASK about half the range that matters: this stack runs down to -50,
+// and a negative label only survived a uint16_t parameter by modular wraparound.
+// That is the same defect that once wrote the demo stack's negative floors into the
+// pool as garbage (floor -50 stored as 65486), so a probe that could not express a
+// negative floor was the wrong instrument for the one invariant this section calls
+// load-bearing.
+static bool bucket_has(const NpcPool& pool, std::int16_t label, NpcId id) {
     for (NpcId x : pool.floor_bucket(label))
         if (x == id) return true;
     return false;
@@ -3867,6 +3888,41 @@ static void test_floor_bucket_index() {
     pool.set_floor(a, kNoFloorLabel);
     CHECK(pool.floor_bucket(5).empty());
     CHECK(pool.floor(a) == kNoFloorLabel);
+
+    // NEGATIVE FLOORS. Every label above is positive (5, 8, 3, 9), which left this
+    // "load-bearing" invariant untested across the exact half of the range where the
+    // historical corruption lived: the demo stack is {0,1,2,-8,-14,-26,-36,-50,14,30},
+    // so the majority of its floors are negative, and floor -50 was once stored as
+    // 65486. A round trip through the bucket index is what would have caught that.
+    NpcPool p3;
+    p3.init();
+    NpcId d = p3.spawn();
+    NpcId e = p3.spawn();
+    p3.set_floor(d, -50);
+    p3.set_floor(e, -50);
+    CHECK(p3.floor(d) == -50);
+    CHECK(p3.floor_bucket(-50).size() == 2);
+    CHECK(bucket_has(p3, -50, d));
+    CHECK(bucket_has(p3, -50, e));
+    // -50 and +50 must be DIFFERENT buckets. This is the assertion that fails if any
+    // part of the path still widens a label through uint16_t: under the old cast,
+    // -50 arrived as 65486 and the sign was carried by accident rather than by type.
+    CHECK(p3.floor_bucket(50).empty());
+    CHECK(!bucket_has(p3, 50, d));
+    // Negative -> negative and negative -> positive relabels, which is what a macro
+    // migration actually does across this stack.
+    p3.set_floor(d, -8);
+    CHECK(p3.floor_bucket(-50).size() == 1);
+    CHECK(p3.floor_bucket(-8).size() == 1);
+    CHECK(bucket_has(p3, -8, d));
+    p3.set_floor(d, 30);
+    CHECK(p3.floor_bucket(-8).empty());
+    CHECK(bucket_has(p3, 30, d));
+    // The extremes of the signed label range round-trip (FloorRegistry kMinFloor
+    // -127 .. kMaxFloor +127).
+    p3.set_floor(e, -127);
+    CHECK(p3.floor(e) == -127);
+    CHECK(bucket_has(p3, -127, e));
 
     // Stress the swap-remove bookkeeping: fill a bucket, pull every other id out
     // to another floor, and confirm both rosters stay exact and unique.
@@ -4064,6 +4120,19 @@ int main() {
     test_npcpool_all();
     test_samosbor2_all();
     test_faction2_all();
+    // Wave 5: diffusion (was dead code on main), the reconciled loot table, and the
+    // utility AI's Velocity-ownership arbitration.
+    test_diffusion_all();
+    test_loottable_all();
+    test_utilai_all();
+    test_navcache_all();
+    // Wave 6: crafting (446 items carried 11 authored craft_* columns and no system),
+    // quests as a layer over contracts, and NPC speech.
+    test_craft_all();
+    test_quest_all();
+    test_speech_all();
+    // Wave 8: per-kind monster traits. test_economy_all() returns with its suite.
+    test_monster_all();
     test_playercmd_all();
     test_macrowire_all();
     test_route_realfloor();
@@ -4074,5 +4143,21 @@ int main() {
     test_stream_migration_reembodies();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
+
+    // Say what to do when the pin trips, because it WILL trip on every legitimate addition, and a
+    // bare number in CMakeLists.txt with no instructions beside it is a puzzle rather than a gate.
+    // Measured 2026-07-29: this pin was set at 132266 and was stale inside the hour - the craft,
+    // quest and speech suites landed and took the total to 134002. audit_test.cpp:102-109 already
+    // prints its equivalent, and that guidance is the only reason its own stale pin cost thirty
+    // seconds instead of an investigation.
+    if (g_fails == 0) {
+        std::printf(
+            "game_test: all checks passed. If ctest reports this target FAILED, the pinned count\n"
+            "           in CMakeLists.txt no longer matches the total above. A RISING count with\n"
+            "           zero failures means tests were ADDED, not that a guard broke: update the\n"
+            "           PASS_REGULAR_EXPRESSION to the number above and say so in the commit.\n"
+            "           A FALLING count is the case that matters - it means a suite stopped\n"
+            "           running, which is exactly what this pin exists to catch.\n");
+    }
     return g_fails == 0 ? 0 : 1;
 }

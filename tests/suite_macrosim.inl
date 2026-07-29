@@ -1,7 +1,7 @@
 // Macro society tick tests ([macro_sim.h]). Included into game_test.cpp, so it uses
 // that file's CHECK macro and its `using namespace giga::game`.
 //
-// Four properties are load-bearing and each gets its own block:
+// Five properties are load-bearing and each gets its own block:
 //
 // 1. THE POPULATION IS STATIONARY. The branch this was ported from had an OPEN-LOOP
 //    birth rate plus a catch-up of 1% of the deficit PER TICK. Modelled from main.cpp's
@@ -27,6 +27,13 @@
 //    unsigned, where floor -50 reads back as 65486. Migration is the FIRST writer of
 //    that column outside seeding, so it is the first thing that could reintroduce the
 //    wrap.
+//
+// 5. A RELATIONSHIP EDGE IS A GENERATION-CHECKED REFERENCE. `Relationship::target` is a
+//    bare NpcId held across ticks and this module is its only writer, so with slot
+//    recycling armed an edge outlives the person it names and then resolves to whoever
+//    inherited the slot. Block 8 recycles a target's slot into a newborn and requires the
+//    edge to be DROPPED — including the A/B against the predicate that shipped before it,
+//    which still reads the newborn as alive.
 //
 // Memory note: an NpcPool is 306.0 MiB of EAGER columns after init(), so the
 // determinism block holds ~612 MiB while two are alive. That is deliberate and scoped.
@@ -409,6 +416,7 @@ static void test_macrosim_all() {
         int coldOnPure = 0;
         int negativeOnMixed = 0;
         int total = 0;
+        int staleEdges = 0;
         bool wellFormed = true;
         for (NpcId id = 0; id < pool.count(); ++id) {
             const std::array<Relationship, kRelSlots>& row = pool.relations(id);
@@ -417,6 +425,11 @@ static void test_macrosim_all() {
                 const NpcId tgt = row[si].target;
                 if (tgt == kInvalidNpc) continue;
                 ++total;
+                // Mortality is off and this pool never recycles, so every edge here must
+                // resolve. Counted rather than assumed: it is the false-POSITIVE half of
+                // the generation check (block 8 is the false-negative half), measured
+                // against a four-figure graph instead of one hand-built edge.
+                if (!social_edge_live(pool, row[si])) ++staleEdges;
                 if (tgt == id) wellFormed = false;                       // no self-edge
                 if (tgt >= pool.count()) wellFormed = false;             // no dangling
                 if (pool.floor(tgt) != pool.floor(id)) wellFormed = false; // co-floor
@@ -433,15 +446,16 @@ static void test_macrosim_all() {
         }
         CHECK(wellFormed);
         CHECK(total > 0);
+        CHECK(staleEdges == 0);   // nobody died, so the check must clear all of them
         // Citizen+Citizen is base +50 with +/-40 of jitter, so the WHOLE range is
         // positive: a single cold edge on the pure floor means the faction seed is not
         // being read, which is the one bug this block exists to catch.
         CHECK(coldOnPure == 0);
         CHECK(warmOnPure > 0);
         CHECK(negativeOnMixed > 0);
-        std::printf("    macrosim: %d edges — pure-Citizen floor %d warm / %d cold, "
-                    "Citizen+Wild floor %d hostile-leaning\n",
-                    total, warmOnPure, coldOnPure, negativeOnMixed);
+        std::printf("    macrosim: %d edges (%d stale) — pure-Citizen floor %d warm / "
+                    "%d cold, Citizen+Wild floor %d hostile-leaning\n",
+                    total, staleEdges, warmOnPure, coldOnPure, negativeOnMixed);
     }
 
     { // ---- 6. the reserve floor stops births, and SAYS it stopped them ----
@@ -498,5 +512,170 @@ static void test_macrosim_all() {
         CHECK(sim.floor_count() == 3u);     // {0, 30, 127}; -128 is below kMinFloor
         sim.set_floors(nullptr, 9u);
         CHECK(sim.floor_count() == 0u);     // and migration is off again
+    }
+
+    { // ---- 8. a RECYCLED relationship target is DROPPED, not followed ----
+        // The ABA in the social graph, and the reason Relationship::pad is now the
+        // target's pool generation. `Relationship::target` is a bare NpcId held across
+        // ticks; with `set_recycling(true)` a slot outlives its occupant, so an edge to a
+        // dead man silently becomes an edge to the newborn who inherited his id — a
+        // friendship with a stranger, or hostility toward somebody who has done nothing.
+        // Same shape as `giver_slot_recycled` ([suite_audit.inl] finding 8), on the pass
+        // that writes the graph instead of on the one that pays out.
+        //
+        // Recycling is armed HERE and not in the shipping pool, deliberately: a test is
+        // exactly where an unshipped policy belongs, and the guard has to be proven
+        // against the policy before src/app/main.cpp turns it on.
+        //
+        // TWO RECORDS ON ONE FLOOR, so the probe cannot wander: the only peer either can
+        // draw is the other one. That makes this a witness rather than a sampler — the
+        // edge under test is the only edge the pass can possibly form from `a`.
+        static_assert(sizeof(Relationship) == 8,
+                      "the generation went into the existing pad, so the widest column "
+                      "in the pool did not grow by a byte");
+
+        FactionRelations rel = kBaseFactionMatrix;
+        NpcPool pool;
+        pool.init();
+        pool.set_recycling(true);
+        CHECK(pool.recycling());
+        CHECK(seed_floor_population(pool, 0, 2u, 8801u) != kInvalidNpc);
+        CHECK(pool.count() == 2u);
+        const NpcId a = 0;
+        const NpcId b = 1;
+        CHECK(pool.floor(a) == 0 && pool.floor(b) == 0);
+
+        MacroSim sim;
+        sim.init();
+        MacroParams p{};
+        p.maxAge = 255;                   // nobody reaches the ceiling
+        p.mortalityPeak = 0.0f;           // and no curve death either, so the ONLY thing
+                                          //   that ever enters the free list is my kill
+        p.socialRecordsPerTick = 8;       // > count(), so both records are visited
+        p.socialFormRatePerYear = 60.0f;  // 60*7/365 = 1.15 -> every visit attempts
+
+        std::uint32_t edges = 0;
+        for (int t = 0; t < 8; ++t) {
+            const MacroStats st = sim.step(pool, p, &rel);
+            CHECK(st.deaths == 0u);
+            CHECK(st.births == 0u);
+            CHECK(st.socialStaleDropped == 0u);   // nothing is stale yet
+            edges += st.socialEdges;
+        }
+        CHECK(edges > 0u);                 // the pass really wrote the graph
+        CHECK(pool.free_slots() == 0u);    // ...and the queue is empty, so the kill below
+        CHECK(pool.recycled() == 0u);      //    is the next slot spawn() hands out
+
+        // Whichever slot the pass chose for a's edge to b. Taken BY VALUE: relations()
+        // hands out a reference into a lazily-grown column and spawn() may resize it
+        // ([npc_pool.h] reference-lifetime rule).
+        int slot = -1;
+        for (int s = 0; s < kRelSlots; ++s) {
+            if (pool.relations(a)[static_cast<std::size_t>(s)].target == b) slot = s;
+        }
+        CHECK(slot >= 0);
+        const Relationship edge = pool.relations(a)[static_cast<std::size_t>(slot)];
+        CHECK(social_edge_live(pool, edge));
+        CHECK(social_edge_target(pool, edge) == b);
+        const std::uint16_t stampedGen = npc_handle_gen(social_edge_handle(edge));
+        CHECK(stampedGen == pool.generation(b));
+
+        // ---- b dies the way NOTHING reports: in a sweep, with no event published ----
+        pool.kill(b);
+        CHECK(!social_edge_live(pool, edge));   // death alone already invalidates it
+        const NpcId newborn = pool.spawn();
+        CHECK(newborn == b);                    // the ABA happened, not hypothetically
+        CHECK(pool.recycled() == 1u);           // out of the free list, not off the tail
+        CHECK(pool.alive(newborn));             // and the stored id reads as LIVING again
+
+        // THE A/B, on one state instead of two builds: the predicate this code used
+        // before the stamp says FOLLOW, the generation-checked one says DROP.
+        const bool bareIdWouldFollow = pool.valid(edge.target) && pool.alive(edge.target);
+        CHECK(bareIdWouldFollow);                                // the bug, reproduced
+        CHECK(!social_edge_live(pool, edge));                    // the fix
+        CHECK(social_edge_target(pool, edge) == kInvalidNpc);     // reads as ABSENT
+        CHECK(pool.generation(newborn) != stampedGen);            // what an id cannot see
+        CHECK(edge.target == newborn);          // ...and the raw field DOES still match,
+                                                //    which is exactly why it is not enough
+        // The guard DISCRIMINATES rather than refusing everything: an edge minted from
+        // the newborn — same slot, current generation — is live. Without this the
+        // assertions above would also pass against a predicate that always said "stale".
+        Relationship fresh{};
+        social_edge_set(fresh, pool, newborn, static_cast<std::int16_t>(7));
+        CHECK(social_edge_live(pool, fresh));
+        CHECK(social_edge_target(pool, fresh) == newborn);
+        social_edge_clear(fresh);
+        CHECK(fresh.target == kInvalidNpc);     // a blank edge, not eight zero bytes
+        CHECK(social_edge_target(pool, fresh) == kInvalidNpc);
+
+        std::printf("    macrosim: edge %u->%u formed at gen %u; the slot was recycled "
+                    "into a newborn at gen %u — a bare id still reads alive=%d "
+                    "(affinity %d would have been followed), the stamp drops it\n",
+                    static_cast<unsigned>(a), static_cast<unsigned>(b),
+                    static_cast<unsigned>(stampedGen),
+                    static_cast<unsigned>(pool.generation(newborn)),
+                    bareIdWouldFollow ? 1 : 0, static_cast<int>(edge.affinity));
+
+        // ---- and the pass RECLAIMS the stale slot instead of trusting it ----
+        // The newborn rejoins the floor, so it is a legal peer again. Unfixed, a's scan
+        // would find `target == b`, answer "already acquainted", and never form an edge
+        // to the person actually standing there — permanently, since nothing revisits an
+        // existing edge.
+        pool.set_floor(newborn, 0);
+        std::uint32_t dropped = 0;
+        std::uint32_t edges2 = 0;
+        for (int t = 0; t < 8; ++t) {
+            const MacroStats st = sim.step(pool, p, &rel);
+            dropped += st.socialStaleDropped;
+            edges2 += st.socialEdges;
+        }
+        CHECK(dropped > 0u);   // the stale edge was DROPPED, and the drop is reported
+        CHECK(edges2 > 0u);    // ...and replaced by a real edge to the person there now
+
+        // a's row: exactly ONE slot naming that id, live, at the newborn's generation.
+        // Two would mean the stale edge was left behind as a duplicate target — the
+        // invariant block 5 checks and the one a plain first-empty policy would break.
+        int naming = 0;
+        int liveToNewborn = 0;
+        for (int s = 0; s < kRelSlots; ++s) {
+            const Relationship& e = pool.relations(a)[static_cast<std::size_t>(s)];
+            if (e.target != newborn) continue;
+            ++naming;
+            if (!social_edge_live(pool, e)) continue;
+            ++liveToNewborn;
+            CHECK(npc_handle_gen(social_edge_handle(e)) == pool.generation(newborn));
+        }
+        CHECK(naming == 1);
+        CHECK(liveToNewborn == 1);
+
+        // Nothing anywhere in the pool is left resolving to a stranger.
+        int total = 0;
+        int stale = 0;
+        bool allSound = true;
+        for (NpcId id = 0; id < pool.count(); ++id) {
+            for (int s = 0; s < kRelSlots; ++s) {
+                const Relationship& e = pool.relations(id)[static_cast<std::size_t>(s)];
+                if (e.target == kInvalidNpc) continue;
+                ++total;
+                const NpcId tgt = social_edge_target(pool, e);
+                if (tgt == kInvalidNpc) { ++stale; continue; }  // correctly absent
+                if (tgt == id) allSound = false;                // no self-edge
+                if (!pool.alive(tgt)) allSound = false;
+                if (pool.generation(tgt) != npc_handle_gen(social_edge_handle(e)))
+                    allSound = false;
+            }
+        }
+        CHECK(allSound);
+        CHECK(total > 0);
+        std::printf("    macrosim: %u stale edge(s) reclaimed, %u re-formed; %d edge(s) "
+                    "held, %d still stale, every live one generation-matched; "
+                    "Relationship %u B (%u B id + %u B affinity + %u B gen), rel_ %u B/row"
+                    " unchanged\n",
+                    dropped, edges2, total, stale,
+                    static_cast<unsigned>(sizeof(Relationship)),
+                    static_cast<unsigned>(sizeof(NpcId)),
+                    static_cast<unsigned>(sizeof(std::int16_t)),
+                    static_cast<unsigned>(sizeof(std::uint16_t)),
+                    static_cast<unsigned>(sizeof(Relationship) * kRelSlots));
     }
 }

@@ -12,9 +12,24 @@
 // only authored plot NPCs get stable registry ids. Its half-fix compares
 // `persistentNpcId === 'alife:' + giverId` across two overlapping id spaces, so it can
 // match an unrelated NPC; and a `giverPlotNpcId` rebinding field is read on load and
-// written nowhere. Here `NpcPool` never reclaims a slot and id == slot forever
-// ([npcs.md]), so a `NpcId` written into a contract points at that person for the rest
-// of the run. There is no rebinding code because there is nothing to rebind.
+// written nowhere. Ours is a GENERATION-TAGGED HANDLE, which is the one id space in
+// which that mismatch cannot be expressed: `giver` is an `NpcHandle` = (generation, id)
+// packed into one uint32 ([npc_pool.h]), minted by `pool.handle()` at offer time and
+// tested with `pool.handle_valid()` on every step. `kill()` bumps the generation, so a
+// handle goes stale the instant that record dies — whether or not its slot is ever
+// handed to somebody else. There is still no rebinding code, and now there is a reason
+// rather than an assumption.
+//
+// **This field is what was blocking `pool.set_recycling(true)` in [src/app/main.cpp].**
+// It used to be a bare `NpcId`, resting on "the pool never reclaims a slot and id ==
+// slot forever" — true when it was written, and no longer true once the intrusive free
+// list landed ([npc_pool.h] "Slot recycling"). The hole that left was silent rather than
+// loud: `contract_on_giver_died` fires only from the frame-top combat drain, never for a
+// macro-sweep death, so a giver killed by the macro tick left an ACTIVE job whose id was
+// then handed to a newborn — and `contract_step`'s liveness poll saw a living record at
+// that id, kept the job, and paid it out to a person who never offered it. The
+// generation test makes that unrepresentable; [tests/suite_audit.inl]
+// `giver_slot_recycled` is its witness.
 //
 // **No interaction verb, and that is not a compromise.** The game has no talk key, no
 // NPC targeting and no dialogue tree. Rather than build three systems to deliver one
@@ -66,7 +81,10 @@ enum class ContractState : std::uint8_t {
 // already satisfy pays instantly, and re-accepting pays again. An audit measured 900
 // roubles on accept and 900 more on re-accept with the player never moving.
 struct Contract {
-    NpcId giver = kInvalidNpc;   // stable for the whole run; see the header
+    // (generation, id), NOT a bare id — see the header. Costs the save nothing: an
+    // NpcHandle is the same 32 bits an NpcId was, so [save.cpp] `visit_contract`'s
+    // `ar.u32(c.giver)` and `kContractWire = 21` are byte-identical across this change.
+    NpcHandle giver = kInvalidHandle;
     std::uint16_t subject = 0;   // ItemId for Fetch, MobKind for Hunt, unused for Descend
     std::int32_t target = 0;     // count, or the floor for Descend
     std::int32_t progress = 0;
@@ -98,19 +116,27 @@ struct ContractBook {
 // the same job, so walking away and coming back does not reroll it into something
 // better. That is what makes an offer feel like a decision rather than a slot pull.
 //
-// Returns state Offered, or a contract with `giver == kInvalidNpc` when this body has
+// Returns state Offered, or a contract with `giver == kInvalidHandle` when this body has
 // nothing to ask (which is most of them; a floor where everyone wants something is a
 // job board, not a building).
+//
+// **The parameter stays a bare `NpcId` while the stored field is a handle, and that is
+// deliberate.** The determinism above is `hash(id, floorZ, seed)`; the id is 20 bits of
+// the handle and the generation is the other 12, so hashing a handle instead would
+// change every offer in the game and would additionally make a body's job change when an
+// UNRELATED record in its slot's history died. Callers hold an id (a proximity sweep, a
+// bucket roster), so they pass one; `contract_offer` mints the handle exactly once, at
+// the point it writes the field.
 //
 // **Guaranteed completable, and that guarantee is the whole reason this returns a
 // refusal so often.** A Fetch names only items `item_weight_on_floor` can produce at
 // this depth, and a Hunt names only a kind the spawn roster can actually roll —
 // `spawnWeightX10 != 0` and a non-empty `floorMask`, the same two row fields
-// `spawn_floor_mobs` filters on. An audit measured 11 of 318 live Hunt offers naming
-// CREATOR, PSEUDOLIFT or SCULPTURE, all three weight 0 and all three with dmg > 0 so the
-// only guard in place waved them through: an errand whose target does not exist. The
-// habitat half is deliberately global rather than per-floor — see contract.cpp for the
-// measurement that made per-floor the worse option.
+// `spawn_floor_mobs` filters on. An audit measured 7 of 318 live Hunt offers naming
+// CREATOR or PSEUDOLIFT, both weight 0 and both with dmg > 0 so the only guard in place
+// waved them through: an errand whose target does not exist. The habitat half is
+// deliberately global rather than per-floor — see contract.cpp for the measurement that
+// made per-floor the worse option.
 Contract contract_offer(const NpcPool& pool, NpcId giver, int floorZ,
                         std::uint32_t seed);
 
@@ -157,6 +183,16 @@ void contract_on_kill(ContractBook& book, std::uint8_t mobKind);
 
 // A giver died. Their open contracts fail — nobody is left to pay you, and quietly
 // paying anyway would make the giver decorative.
+//
+// Takes a bare POOL ID, not a handle, because that is what the event ring carries
+// (`NpcDied.a`, drained at the frame top in [src/app/main.cpp]) — by the time the event
+// is read the record is already dead, so `pool.handle(id)` would mint the corpse's NEW
+// generation and match nothing. The comparison is therefore against the ID HALF of the
+// stored handle, `npc_handle_id(c.giver) == who`. It cannot become a wildcard: an id is
+// masked to kNpcPoolBits, so a `who` of `kInvalidNpc` matches no slot at all.
+//
+// This is a fast path, not the guard. `contract_step`'s `handle_valid` poll is what
+// actually catches a dead giver — including the macro-sweep deaths that publish no event.
 void contract_on_giver_died(ContractBook& book, NpcId who);
 
 } // namespace giga::game

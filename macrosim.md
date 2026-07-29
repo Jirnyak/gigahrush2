@@ -22,7 +22,7 @@ no player. Its focus is **social and economic**: the whole **2²⁰** population
 migrates between floors, relationships shift, factions and trade evolve — a living
 society sim that happens to share a world with the action game in front of it. The
 action game **materializes ~16k of those records** on the active floor as embodied
-agents ([npcs.md](npcs.md)); the macro process never touches the 8.33 ms frame.
+agents ([npcs.md](npcs.md)); the macro process never touches the 8 ms sim step.
 
 Because it links only `giga_game` → `giga_core` (no SDL/Vulkan/ImGui), the whole
 macro simulation is **headless-testable and headless-runnable**: you can spin up
@@ -31,8 +31,9 @@ society without ever opening the 3D game. Treat it like a separate product that
 plugs in:
 
 - **Own tick, own clock.** The macro tick runs at its own coarse cadence,
-  decoupled from the 120 Hz sim tick and the render loop — it keeps advancing
-  whether or not anything is embodied or drawn (same sim→render one-way stance as
+  decoupled from the 125 Hz sim tick ([src/core/tick.h](src/core/tick.h)) and the
+  render loop — it keeps advancing whether or not anything is embodied or drawn
+  (same sim→render one-way stance as
   [render.md](render.md): the society is real, the 3D view is just a window).
 - **Own data.** It owns the NPC pool, relationships, faction/economy state — all
   flat SoA it can serialize and replay independently.
@@ -76,7 +77,7 @@ regimes).
 over the pool's SoA rows — the whole society advances in a single linear pass, no
 per-NPC search. Measured on the full **1,048,576-record** pool: **~2.8 ms/tick,
 ~373 M records/sec** (`macro_bench`, Release -O3), so the background society can
-advance often and still never touch the 8.33 ms frame.
+advance often and still never touch the 8 ms sim step.
 
 One sweep, three data-driven demographic events (all knobs live in `MacroParams`,
 never in code branches):

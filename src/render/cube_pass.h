@@ -11,6 +11,16 @@
 // spending 28.6 ms of a 43.6 ms frame scanning 2,097,152 cells that had not
 // changed. Callers must invalidate() when the world mutates.
 //
+// A rebuild has two halves and they cost differently, which is the thing to know
+// before touching either. classify() turns the 134 MB sub-voxel grid into one
+// classification word per cell; it is shared by both frame slots, so the FIRST
+// rebuild after an invalidate() pays it and the second does not. build_instances()
+// then merges runs out of that and writes the vertex buffer, and both slots pay
+// that. Measured on the real floor-0 geometry (472,545 instances), the classify half
+// was ~80% of a first rebuild — which is the whole of the 4x first-vs-second gap a
+// --shot run prints — so it is the half that is threaded, and prebuild() exists to
+// move it off the frame entirely.
+//
 // Two things keep the instance count down, and they compose:
 //   - surface culling: cells fully surrounded by solid neighbours are skipped, so
 //     the count follows visible surface area rather than world volume;
@@ -30,6 +40,7 @@
 #include "core/math.h"
 #include "render/vk_buffer.h"
 #include "render/vk_renderer.h"
+#include "render/vk_texture.h"
 
 namespace giga {
 class World;
@@ -61,6 +72,25 @@ struct CubeInstance {
     // seam budget rather than a storage limit.
     std::uint8_t span[3];
     std::uint8_t spanW;
+    // TWO MEANINGS, selected by whether this instance's material has a
+    // photographic albedo layer (see texMask_ below):
+    //
+    //   no texture  the material's DISPLAY-REFERRED albedo, fluid tint already
+    //               mixed in. cube.frag linearises it with pow(kGamma) and
+    //               multiplies the procedural surface into it. Unchanged since the
+    //               pass was written, and this is what every material used to do.
+    //   textured    a LINEAR multiplier on the sampled texel, exactly {1,1,1}
+    //               unless the cell is fluid-tinted, in which case it is the
+    //               per-channel ratio linear(tinted)/linear(base).
+    //
+    // The second case exists because the fluid tint is applied on the CPU and the
+    // shader cannot recover it: `color` is the only per-instance lane cube.frag
+    // sees, `spanW` is the last spare byte and cube.vert would have to be edited
+    // to forward it. Writing the ratio keeps a flooded floor blue without giving
+    // the shader a per-material mean albedo it has no way to know. No cell type
+    // that is currently textured is ever flooded — the "fluid" field is only
+    // created by app/worldgen.cpp's maze bed, which writes materials 1..4 — so
+    // this path is correct-by-construction rather than exercised today.
     vec3 color;
     // Two things in one uint32, because there was no room for a second.
     //
@@ -120,7 +150,18 @@ struct CubePush {
     vec4 fog;       // x = fog start dist, y = fog end dist (fades to black),
                     // z = headlamp radius (m), w = ambient scale
     vec4 torus;     // x = wrap period (kWorldExtent), y = AO strength 0..1,
-                    // z,w free
+                    // z = OUTPUT ONLY, w free
+                    //
+                    // z is the bitmask of material ids that have a live
+                    // photographic albedo layer, as a float — 16 bits, so every
+                    // value is exact in float32. CubePass::record OVERWRITES
+                    // whatever the caller put there with what the loader actually
+                    // decoded, so main.cpp does not have to know about textures
+                    // and body_pass (which shares this block and this fragment
+                    // source) keeps the 0 it already writes, i.e. the procedural
+                    // path. It rides in a dead lane because this block is
+                    // EXACTLY the 128-byte guaranteed maximum, per the note
+                    // below: there was nowhere else for it to go.
 };
 static_assert(sizeof(CubePush) == 128,
               "CubePush must not exceed the 128-byte guaranteed push-constant "
@@ -151,12 +192,58 @@ public:
     // is not optional bookkeeping.
     void invalidate();
 
+    // Do the expensive, frame-slot-independent half of a rebuild NOW against
+    // `world`, instead of leaving it to the next record().
+    //
+    // OPTIONAL and idempotent: skipping it changes nothing but when the work
+    // happens. It exists because "when" is most of the cost in practice. The
+    // classification is ~80% of a first rebuild and is shared by both frame slots,
+    // and the caller that invalidates is a floor change — which is also where
+    // main.cpp starts the async nav bake, and that bake pegs every core through the
+    // same parallel_for this uses. Frame 0 therefore does the single most expensive
+    // CPU work of the whole floor transition at the one moment the machine is most
+    // contended: measured in-game at 818 ms for a first rebuild whose work costs
+    // ~120 ms uncontended, against 205 ms for the second rebuild of the identical
+    // instance count.
+    //
+    // CALL IT AFTER THE LAST GRID MUTATION of the arrival (door_build carves cells)
+    // and after the invalidate() for that arrival, or the classification it produces
+    // is stale or discarded. Call it BEFORE the bake starts, which is the whole
+    // point.
+    //
+    // Safe before init() (no-op: the scratch is not sized yet) and safe to call
+    // twice.
+    void prebuild(const World& world);
+
     std::uint32_t last_instance_count() const { return lastInstanceCount_; }
+
+    // Bit i set == material id i is being drawn from a real photograph rather
+    // than from the procedural surface. 0 means the whole pass fell back, which is
+    // exactly how it rendered before data/textures had a reader.
+    std::uint32_t textured_materials() const { return texMask_; }
 
 private:
     VulkanDevice* dev_ = nullptr;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
+
+    // The photographic albedo maps, one array layer per material id.
+    //
+    // WHY IT LIVES HERE and not in the renderer: this is the only pass that has a
+    // material id to index it with. body_pass writes material 0 for every body and
+    // shares cube.frag, which is why the sampler is behind a #ifdef there — see
+    // the header comment in shaders/cube.frag.
+    VulkanTextureArray albedo_;
+    // Which materials actually decoded. Written once at init, pushed to the
+    // shader every frame in CubePush::torus.z, and consulted by build_instances()
+    // to decide what `CubeInstance::color` means for a cell. A material whose file
+    // was missing or rejected is absent here and keeps its procedural surface, so
+    // a load failure degrades one material instead of the frame.
+    std::uint32_t texMask_ = 0;
+    // True when the textured pipeline (cube_tex.frag.spv + a sampler descriptor)
+    // is the one that was created. False makes this pass bit-identical to the
+    // pre-texture renderer: cube.frag.spv, no descriptor set, torus.z == 0.
+    bool textured_ = false;
 
     VulkanBuffer cubeVerts_;  // static per-vertex mesh (pos + normal)
     std::uint32_t vertexCount_ = 0;
@@ -183,8 +270,25 @@ private:
     // Shared across frame slots and rebuilt only on invalidate(), so the SECOND
     // frame slot's refill is merge-plus-write and skips the grid sweep entirely.
     // That is what keeps an elevator ride from paying the whole cost twice.
+    //
+    // It is also the entire explanation of the asymmetry a --shot run prints, which
+    // read as a mystery until it was measured: "rebuild slot 0: 472545 instances in
+    // 817.96 ms" followed by "rebuild slot 1: 472545 instances in 204.69 ms" is not
+    // one-off allocation, buffer growth or first-touch page faults on the instance
+    // buffer — the instance buffer is sized for the worst case in init() and written
+    // through a raw pointer with no push_back anywhere, and the measured cost of
+    // faulting in its 15.1 MB of fresh pages is ~7 ms. The 4x is classify(), which
+    // slot 0 runs and slot 1 skips, and nothing else.
     std::vector<std::uint32_t> cellClass_;
     bool classValid_ = false;
+    // The two intermediates classify() derives cellClass_ from: one bit per macro
+    // cell for "fully solid" and for "not empty", 256 KB each. Members rather than
+    // locals of classify() for two reasons — the class promises above that its
+    // scratch is allocated in init() and never in a frame, and a rebuild is not
+    // always rare (maze mode's fluid step invalidates ~31 times a second, and each
+    // one used to allocate, zero and free 512 KB here).
+    std::vector<std::uint64_t> occFull_;
+    std::vector<std::uint64_t> occNonEmpty_;
     // Run-merge scratch: one bit per cell marking cells already swallowed by an
     // earlier run. Needed because runs may go along y or z while the scan walks x.
     std::vector<std::uint64_t> claimed_;
@@ -197,15 +301,30 @@ private:
     // without a second build in the comparison.
     int maxRun_ = 0;
 
-    // Recompute cellClass_ from `world`. One sequential sweep of the sub-voxel
-    // masks into two 256 KB occupancy bitmaps, then one sweep turning those into
-    // per-cell AO masks.
+    // Threads classify() splits its two grid sweeps across. 0 = every hardware thread
+    // (the default), 1 = the serial sweep, i.e. the pre-threading pass in this same
+    // binary. Read once at init from GIGA_CUBE_THREADS, alongside GIGA_CUBE_MAXRUN and
+    // for the same reason: the threading win is a property of the machine rather than
+    // of the code, and it is measured in the shipped binary, not argued about. The
+    // numbers and the reason this is a knob at all are in cube_pass.cpp init().
+    int classifyThreads_ = 0;
+
+    // Recompute cellClass_ from `world`. One sweep of the sub-voxel masks into the
+    // two 256 KB occupancy bitmaps, then one sweep turning those into per-cell AO
+    // masks. Both are split over z slabs across classifyThreads_ threads; the output
+    // is bit-identical to the serial sweep either way.
     void classify(const World& world);
     // Fill one instance buffer from cellClass_. Returns the instance count.
     std::uint32_t build_instances(std::uint32_t frameIndex, const World& world);
 
     bool create_pipeline(VkRenderPass renderPass, const char* shaderDir);
     bool create_cube_mesh();
+    // Decode data/textures into albedo_ and set texMask_/textured_. Never fails
+    // the pass: a device that cannot sample a block format, a missing directory or
+    // a rejected file all report loudly and leave this pass on the procedural
+    // path. Must run BEFORE create_pipeline(), which needs to know which fragment
+    // module and which descriptor set layout to build with.
+    void load_material_textures();
 };
 
 } // namespace giga::gpu

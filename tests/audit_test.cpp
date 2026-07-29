@@ -1,7 +1,7 @@
 // Audit findings, as their own ctest target.
 //
-// WHY THIS FILE EXISTS AND WHY ITS TEST IS EXPECTED TO FAIL
-// --------------------------------------------------------
+// WHY THIS FILE EXISTS, AND WHY CTEST PINS THE COUNT IT PRINTS
+// -----------------------------------------------------------
 // tests/suite_audit.inl is a deliberately RED suite: one test per defect found by
 // reading src/game and src/render, each written to fail against HEAD and to pass once
 // the named defect is fixed, so the fix has a witness and the regression has a
@@ -13,19 +13,21 @@
 // demoted from a gate to a line of stderr for a human to diff by hand, and
 // master_prompt.md's "ctest-green" became false.
 //
-// So the tripwires live here instead, with their own counters and their own main, and
-// CMakeLists marks the `audit_findings` test WILL_FAIL. Consequences worth knowing:
+// So the tripwires live here instead, with their own counters and their own main. The
+// exit code below is still one bit, which is why ctest does NOT read it.
 //
-//   * While findings stand, this target exits non-zero, WILL_FAIL inverts that, and
-//     ctest is GREEN. game_test is a clean regression gate again.
-//   * The moment somebody fixes the last finding, this target exits 0, WILL_FAIL
-//     inverts THAT, and ctest goes RED. That is intentional: it forces whoever closed
-//     the finding to come here, delete the fixed test or drop WILL_FAIL, and state in
-//     the commit which defect is gone. A tripwire that silently stops tripping is
-//     worthless.
-//   * Honest limitation: WILL_FAIL cannot tell "failed the assertion I expected" from
-//     "crashed on startup". If this target ever segfaults, ctest still reports green.
-//     Read the count line it prints before trusting the colour.
+// This target used to be marked WILL_FAIL, and that inherited the exact defect it was
+// meant to cure — one level up. WILL_FAIL inverts `g_fails == 0 ? 0 : 1`, i.e. it
+// tests "count > 0", never the count. Six of the seven findings are CLOSED pins today,
+// so regressing one of them moved the tally 2 -> 3: still non-zero, still inverted,
+// still GREEN. Six guards that read as guards guarded nothing. And a crash before the
+// count line prints also exits non-zero, so that was green too.
+//
+// CMakeLists.txt now pins the printed count with PASS_REGULAR_EXPRESSION instead. The
+// test passes only if the run reached the end AND printed exactly the expected tally,
+// so a regression that moves either number goes RED, and so does a crash — the line
+// never gets printed. Change a check count and you must update the regex there and say
+// in the commit which defect died. Read that comment before touching either number.
 //
 // Include block mirrors game_test.cpp because suite_audit.inl was written against that
 // translation unit's headers, its CHECK macro, and `using namespace giga::game`.
@@ -93,13 +95,20 @@ int g_checks = 0;
 
 int main() {
     test_audit_all();
+    // THE gate line. CMakeLists.txt pins this exact text with
+    // PASS_REGULAR_EXPRESSION, so ctest fails if either number moves and fails if this
+    // line is never reached at all. Do not reword it without updating that regex.
     std::printf("audit_test: %d checks, %d failures\n", g_checks, g_fails);
     if (g_fails == 0) {
         std::printf(
             "audit_test: every finding is GREEN. ctest will now report this target as\n"
-            "            FAILED because CMakeLists marks it WILL_FAIL. That is the\n"
-            "            tripwire firing, not a regression: remove the fixed tests or\n"
-            "            drop WILL_FAIL, and say in the commit which defect is closed.\n");
+            "            FAILED, because CMakeLists.txt pins a non-zero failure count.\n"
+            "            That is the tripwire firing, not a regression: update the\n"
+            "            PASS_REGULAR_EXPRESSION to the count above, and say in the\n"
+            "            commit which defect is closed.\n");
     }
+    // Kept honest but unread: ctest checks the printed count, not this. A pass regex
+    // overrides the exit code, which is what lets a target with live findings exit 1
+    // and still report green.
     return g_fails == 0 ? 0 : 1;
 }

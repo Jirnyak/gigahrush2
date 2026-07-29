@@ -18,8 +18,11 @@ imgui.ini
 # Screenshot proofs. `gigahrush2 --shot out.png` writes into the working
 # directory, so every capture the debug tool exists to produce (render/
 # screenshot.h) is a 2-4 MB file that `git add -A` would otherwise sweep in.
-# Safe as a blanket rule: this engine has no image assets and no image decoder
-# to read them with — surfaces are generated, not sampled (render.md).
+# Still safe as a blanket rule, but no longer because the engine is imageless:
+# data/textures/ now carries 16 committed BC7/KTX2 albedo maps (see its README).
+# Those are .ktx2, so this rule does not touch them — but it WOULD silently
+# swallow a .png asset, so add a negation here before committing one.
+# The fetch tool's download cache is already covered by `.cache/` above.
 *.png
 
 # Claude Code personal/local settings (not shared)
@@ -36,3 +39,19 @@ __pycache__/
 
 # Save games written next to the exe by F5 ([app/main.cpp] kSavePath).
 *.sav
+
+# Golden dumps written by the render-parity harness. A visual-parity check for
+# cube_pass has to prove not a single pixel moved, which means dumping the cell-class
+# and instance buffers before a change and diffing them after — 8 MB and 15 MB
+# respectively, generated, with no reader in src/ or tests/. They are measurement
+# output, not fixtures: regenerate them, never commit them. Named explicitly rather
+# than as *.bin, because the nav-cache blobs are also .bin and that rule already has
+# its own directory entry below.
+/golden_cellclass.bin
+/golden_instances.bin
+
+# Scratch directory for the nav-cache round-trip tests (tests/game_test.cpp:3720, :3760).
+# The tests std::remove their own files, and an EMPTY directory does not dirty git status,
+# so this is insurance rather than a live fix: there is no remove_all, so a run that fails
+# part-way leaves a .bin behind with nothing ignoring it.
+navcache_test_tmp/
