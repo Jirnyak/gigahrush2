@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Fetch the 16 CC0 Poly Haven albedo maps and bake them to BC7 / KTX2.
+"""Fetch the 16 CC0 Poly Haven albedo maps and bake them to KTX2.
 
     python tools/fetch_textures.py                 # fetch + compress everything missing
+    python tools/fetch_textures.py --format bc7    # the un-supercompressed variant
     python tools/fetch_textures.py --only rubber_tiles,metal_plate
     python tools/fetch_textures.py --force         # re-download and re-encode
     python tools/fetch_textures.py --list-tools    # just report what is installed
@@ -17,45 +18,75 @@ committed `lin_r/lin_g/lin_b`, we did not get the image the CSV describes, and t
 material is rejected rather than compressed. Measured 2026-07-29: the check
 reproduces all three channels to the full four decimal places the CSV carries.
 
-Output is `data/textures/<id>.ktx2`: BC7, full mip chain, one file per material.
+Output is `data/textures/<id>.ktx2`, one file per material, full 12-level mip
+chain, in whichever encoding `--format` selects.
 
-WHY BC7 AND NOT SOMETHING SUPERCOMPRESSED
------------------------------------------
-The engine's rule is that disk and GPU are unlimited and the CPU tick is sacred
-(AGENTS.md, performance.md). A BC7 payload is uploaded to Vulkan verbatim -- no
-transcode, no CPU work at load beyond a memcpy. Basis Universal (ETC1S/UASTC) is
-smaller on disk but must be transcoded on the CPU at load and needs libktx linked
-into the engine; that trades the resource we do not have for one we do. So: raw
-BC7 blocks, `supercompressionScheme = 0`, `vkFormat = VK_FORMAT_BC7_SRGB_BLOCK`.
+THE THREE FORMATS, AND WHAT EACH ACTUALLY COST (all 16 files, measured 2026-07-29)
+---------------------------------------------------------------------------------
+`--format uastc` -- **the default, and what is committed.** UASTC LDR 4x4 + zstd
+    18. `vkFormat = VK_FORMAT_UNDEFINED`, DFD colorModel 166 (UASTC),
+    `supercompressionScheme = 2` (Zstandard). 67,330,048 B = **64.21 MiB**.
+    The payload is NOT a GPU format: a loader must inflate it and transcode UASTC
+    to a real block format before upload. That costs load-time CPU and a libktx
+    dependency the engine does not have yet.
+`--format bc7` -- raw BC7 blocks, `VK_FORMAT_BC7_SRGB_BLOCK` (146),
+    `supercompressionScheme = 0`. 89,487,104 B = **85.34 MiB**. Uploaded to Vulkan
+    verbatim: no transcode, no libktx, a memcpy at load. This is what the pack
+    shipped as until the owner chose supercompression.
+`--format etc1s` -- ETC1S/BasisLZ, `supercompressionScheme = 1`. 11,034,999 B =
+    **10.52 MiB**, and it is the *only* setting here that gets the pack under
+    25 MiB. It pays for that in fidelity: mip 0 loses 10-19 dB of PSNR against BC7
+    (metal_grate_rusty 43.55 -> 33.28, rubber_tiles 59.72 -> 40.74) and its SSIM on
+    the busiest map falls 0.98403 -> 0.85330, which is visible blocking rather than
+    a softer texture. Offered as a measured option, not as a recommendation.
 
-WHY _SRGB AND NOT _UNORM
------------------------
+Supercompression is a smaller win here than it looks from the container name,
+because UASTC LDR is *also* 8 bits/texel before zstd -- zstd only removes what
+entropy coding can find in photographic noise, which on the busiest map in this
+pack is 11%. Adding UASTC RDO (`--uastc-rdo-l`) trades fidelity for
+compressibility and reaches 44.40 MiB at lambda 1.0; it is off by default because
+the per-map numbers in `--help` show it costs 1.5-8 dB for it. Nothing in the
+UASTC family reaches 15-25 MiB on 16 2K maps. See data/textures/README.md.
+
+WHY sRGB AND NOT UNORM
+----------------------
 A Poly Haven diffuse map is a display-referred photograph: the byte values are
-sRGB-encoded. Declaring `BC7_SRGB_BLOCK` makes the sampler hardware linearise on
-every fetch, for free, with correct filtering. Declaring `BC7_UNORM_BLOCK` would
-push that onto the shader, which would then have to `pow()` after filtering --
-i.e. filter in the wrong space. The container therefore says sRGB and the shader
-must **not** gamma-correct the sampled albedo again. See data/textures/README.md.
+sRGB-encoded. Every format here therefore declares the sRGB transfer function --
+`BC7_SRGB_BLOCK` for `--format bc7`, DFD `transferFunction = 2` for the
+supercompressed pair (which have no `vkFormat` to carry it, so a loader must
+transcode to an `_SRGB` target to get the same behaviour). That makes the sampler
+hardware linearise on every fetch, for free, with correct filtering. A UNORM
+target would push it onto the shader, which would then `pow()` *after* filtering
+-- i.e. filter in the wrong space. The shader must **not** gamma-correct the
+sampled albedo again. See data/textures/README.md.
 
 MIP CHAIN IS BUILT IN LINEAR LIGHT, BY US, ON PURPOSE
 ----------------------------------------------------
-Compressonator can generate mips itself, but it filters in the source's encoded
-(non-linear) space. Measured on `blue_metal_plate` (2026-07-29): its chain loses
-9.2% of the image's mean linear luminance by mip 8 -- a systematic darkening with
-distance. `tools/measure_materials.py` already refuses that same mistake for the
+Both encoders can generate mips themselves and both do it wrong for this data.
+Measured on `blue_metal_plate` (2026-07-29): Compressonator's chain *loses* 9.2%
+of the image's mean linear luminance by mip 8, and `ktx create --generate-mipmap
+--mipmap-filter box` *gains* 2.45% by mip 8 and 3.99% by mip 11 -- opposite signs,
+same disease, a monotonic drift with distance that comes from resampling in the
+wrong space. `tools/measure_materials.py` already refuses that same mistake for the
 same reason. So this script decodes to float, converts sRGB -> linear, box-filters
 2x2 in linear light (a box filter over a power-of-two square is exact and
-mean-preserving), re-encodes each level to sRGB bytes, and hands Compressonator
-one level at a time with mip generation switched off.
+mean-preserving), re-encodes each level to sRGB bytes, and feeds the encoder the
+finished chain: Compressonator one level at a time with mip generation off, and
+`ktx create` all 12 levels as 12 input files. Decoded back out of the shipped
+containers the chain is flat to 0.54% (rubber_tiles) / 0.77% (blue_metal_plate)
+with no trend -- the source chain itself measures 0.46% / 0.54%, so essentially
+all of what remains is the source, not the encoder.
 
-THE ENCODER IS A REAL BC7 ENCODER, NOT A FALLBACK
--------------------------------------------------
-BC7 has 8 block modes and a partition search; hand-rolling it badly is worse than
-not doing it. This script requires an external encoder and **fails loudly** if it
-cannot find one -- it will never quietly write uncompressed RGBA and call it done.
-Note that `ktx create` (KTX-Software) cannot do this job: it encodes ASTC,
-ETC1S/BasisLZ and UASTC only, so it is used here for *validation* if present, not
-for compression. See `--list-tools`.
+THE ENCODERS ARE REAL ENCODERS, NOT A FALLBACK
+----------------------------------------------
+This script requires an external encoder for whatever `--format` asks for and
+**fails loudly** if it cannot find one -- it will never quietly write uncompressed
+pixels and call it done, and `check_ktx2` re-reads its own output to prove the
+container declares the encoding that was requested. Note the split: `ktx create`
+cannot emit raw BC7 blocks (it does ASTC, ETC1S/BasisLZ and UASTC), and
+Compressonator cannot write a supercompressed KTX2, so `--format bc7` needs
+Compressonator while `uastc`/`etc1s` need KTX-Software. `ktx validate` is the
+validator for all three. See `--list-tools`.
 """
 
 import argparse
@@ -416,8 +447,19 @@ def ktx_create(ktx, chain, out, fmt, args, tmpdir, verbose):
            "--assign-tf", "srgb",
            "--assign-primaries", "bt709",
            "--assign-texcoord-origin", "top-left",
-           "--levels", str(len(chain)),
-           "--threads", str(args.threads)]
+           "--levels", str(len(chain))]
+    # --threads is passed ONLY when the caller asked for a specific count. `ktx
+    # create` echoes its own arguments into the KTXwriterScParams key, so baking
+    # this machine's core count into the container would move every level offset
+    # and rewrite all 16 committed files whenever the pack is regenerated on a
+    # different box. Left off, the encoder still defaults to hardware_concurrency.
+    # Measured 2026-07-29 on rubber_tiles: two runs with the flag off give the same
+    # md5; a run with --threads 4 gives the same *payload* (sha256 over the level
+    # data, 3,092,957 B) and differs only by the 12 bytes the flag adds to the KVD.
+    # So thread count does not reach the encoded blocks -- which is the reason to
+    # expect (not yet proof of) identical bytes from another host on 4.4.2.
+    if args.threads is not None:
+        cmd += ["--threads", str(args.threads)]
     if fmt == "uastc":
         cmd += ["--encode", "uastc", "--uastc-quality", str(args.uastc_quality)]
         if args.uastc_rdo_l is not None:
@@ -704,7 +746,8 @@ def process(row, comp, ktx, args, tmproot):
         blocks = []
         for i, lvl in enumerate(chain):
             data, err = encode_level(comp, lvl, lvl.shape[1], lvl.shape[0],
-                                     tmpdir, i, args.quality, args.threads, args.verbose)
+                                     tmpdir, i, args.quality, args.bc7_threads,
+                                     args.verbose)
             if err:
                 rec["note"] = err
                 return rec
@@ -784,8 +827,12 @@ def main():
                     help="--format etc1s only: BasisLZ quality level.")
     ap.add_argument("--clevel", type=int, default=2, metavar="0-6",
                     help="--format etc1s only: BasisLZ compression effort.")
-    ap.add_argument("--threads", type=int, default=max(2, (os.cpu_count() or 8)),
-                    help="encoder threads (Compressonator caps at 128)")
+    ap.add_argument("--threads", type=int, default=None,
+                    help="encoder threads. Unset means each encoder's own default "
+                         "(Compressonator: this host's core count, capped at 128; "
+                         "`ktx create`: hardware_concurrency). Leave it unset for "
+                         "uastc/etc1s -- see ktx_create() for why passing it "
+                         "changes the output bytes.")
     ap.add_argument("--compressonator", default=None, help="path to compressonatorcli")
     ap.add_argument("--ktx", default=None,
                     help="path to KTX-Software 'ktx': the encoder for --format "
@@ -795,6 +842,9 @@ def main():
     ap.add_argument("--list-tools", action="store_true", help="report tools and exit")
     ap.add_argument("-v", "--verbose", action="store_true", help="per-mip-level detail")
     args = ap.parse_args()
+    # Compressonator's -NumThreads has no "use the default" spelling, so the BC7
+    # path resolves it here; the uastc/etc1s path deliberately leaves it unset.
+    args.bc7_threads = args.threads or max(2, os.cpu_count() or 8)
 
     comp = find_tool(CANDIDATE_COMPRESSORS, args.compressonator, "COMPRESSONATOR")
     ktx = find_tool(CANDIDATE_KTX, args.ktx, "KTX_TOOL")
@@ -836,15 +886,15 @@ def main():
     sys.stderr.write("fetch_textures: %d material(s) from %s\n"
                      % (len(rows), os.path.relpath(MANIFEST, REPO)))
     if args.format == "bc7":
-        settings = "BC7, -Quality %g" % args.quality
+        settings = "BC7, -Quality %g, %d threads" % (args.quality, args.bc7_threads)
     elif args.format == "uastc":
-        settings = "UASTC 4x4 + zstd %d, --uastc-quality %d, RDO %s" % (
+        settings = "UASTC 4x4 + zstd %d, --uastc-quality %d, RDO %s, %s threads" % (
             args.zstd, args.uastc_quality,
-            "off" if args.uastc_rdo_l is None else "lambda %g" % args.uastc_rdo_l)
+            "off" if args.uastc_rdo_l is None else "lambda %g" % args.uastc_rdo_l,
+            args.threads if args.threads is not None else "encoder-default")
     else:
         settings = "ETC1S/BasisLZ, qlevel %d clevel %d" % (args.qlevel, args.clevel)
-    sys.stderr.write("  format    %s -- %s, %d threads\n"
-                     % (args.format, settings, args.threads))
+    sys.stderr.write("  format    %s -- %s\n" % (args.format, settings))
     sys.stderr.write("  encoder   %s\n" % (encoder or "(none -- verify only)"))
     sys.stderr.write("  validator %s\n" % (ktx or "(none -- structural self-check only)"))
 
