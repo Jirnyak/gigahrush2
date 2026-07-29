@@ -263,7 +263,9 @@ if(GIGA_BUILD_TESTS)
     # which is still non-zero, still inverted, and **ctest stayed GREEN**. Six tripwires
     # that read like guards were not guards. The same hole swallowed a crash: die before
     # the count line prints and the exit code is still non-zero, so that was green too
-    # (documented at tests/audit_test.cpp:26-28).
+    # (spelled out in the header of tests/audit_test.cpp — named, not cited by line,
+    # because the commit that closed this hole rewrote that header and moved the very
+    # lines the old pointer named).
     #
     # PASS_REGULAR_EXPRESSION closes both. It matches the literal line `main` prints, so
     # the test passes only when the run reached the end AND landed on exactly the expected
