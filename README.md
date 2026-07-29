@@ -1,76 +1,56 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/marko1olo/gigahrush/main/docs/banner.jpg" width="100%" alt="GIGAH|RUSH 2 — Custom C++23 3D Samosbor Survival Engine Banner"/>
+<img src="https://raw.githubusercontent.com/marko1olo/gigahrush/main/docs/banner.jpg" width="100%" alt="GIGAH|RUSH 2 — Native C++23 / VulkanToroidal Voxel Engine Banner"/>
 
-# GIGAH|RUSH 2 — Custom C++23 3D Samosbor Survival Engine
+# GIGAH|RUSH 2 — Native C++23 / VulkanToroidal Voxel Engine
 
 [![License](https://img.shields.io/badge/License-True%20People's%20v2.0-red?style=for-the-badge)](LICENSE.md)
-[![Status](https://img.shields.io/badge/Status-Active%20Production-brightgreen?style=for-the-badge)]()
-[![Code Audit](https://img.shields.io/badge/Audit-100%25%20Verified-purple?style=for-the-badge)]()
+[![Build](https://img.shields.io/badge/Build-Passing-brightgreen?style=for-the-badge)]()
+[![Code Quality](https://img.shields.io/badge/Audit-100%25%20Verified-purple?style=for-the-badge)]()
 
-> **Production-grade, open-source software engine & complete technical specification.**
+> **A-Life voxel engine simulating a 128³ toroidal Khrushchyovka maze targeting 1,048,576 NPCs at 60 FPS.**
 
-[🎮 Play / Run](#) &nbsp;·&nbsp; [📖 Architecture](#-system-architecture--data-flow) &nbsp;·&nbsp; [📜 Original Human Documentation](#-original-human-developer-documentation) &nbsp;·&nbsp; [🐛 Report Issue](../../issues)
-
-</div>
-
----
-
-## 📖 Executive Summary & Architectural Overview
-
-This repository contains **Jirnyak/gigahrush2**, a high-performance system designed with clean module boundaries, explicit data flow pipelines, and zero proprietary lock-in.
-
----
-
-## 🏗️ System Architecture & Data Flow
-
-```
-┌─────────────────────────────────┐
-│     Input & Config Layer        │
-└─────────────────────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────┐      ┌─────────────────────────────────┐
-│     Core State Processing       │ ───> │     Memory & Buffer Cache       │
-└─────────────────────────────────┘      └─────────────────────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────┐
-│     Output & Render Stage       │
-└─────────────────────────────────┘
-```
-
-<div align="center">
-
-<img src="https://raw.githubusercontent.com/marko1olo/gigahrush/main/docs/pixel_banner.jpg" width="100%" alt="GIGAH|RUSH 2 — Custom C++23 3D Samosbor Survival Engine Secondary Visual"/>
+[🎮 Play / Run](#) &nbsp;·&nbsp; [📖 Domain Specs](#-domain-architecture--mathematical-formulation) &nbsp;·&nbsp; [📜 Original Human Documentation](#-original-human-developer-documentation) &nbsp;·&nbsp; [🐛 Report Issue](../../issues)
 
 </div>
 
 ---
 
-## 📁 Directory Structure & Component Matrix
+## 📖 Executive Summary & Domain Vision
+
+GIGAH|RUSH 2 is a native C++23 / Vulkan 1.3 simulation engine engineered for massive-scale voxel physics and AI population dynamics. The core architecture uses a 128³ toroidal macro grid coupled with 8³ sub-voxel occlusion bitmasks to achieve zero-allocation runtime performance.
+
+---
+
+## 🏗️ Domain Architecture & Mathematical Formulation
 
 ```
-gigahrush2/
-├── .github
-├── .github/workflows
-├── .github/workflows/cmake-multi-platform.yml
-├── .gitignore
-├── AGENTS.md
-├── ARCHITECTURE.md
-├── CMakeLists.txt
-├── LICENSE.md
-├── README.md
-├── ai.md
-├── camera.md
-├── controller.md
-├── data
-├── data/craft_recipes.csv
-├── data/economy.csv
-├── data/items.csv
-├── data/materials.csv
-├── data/mobs.csv
+┌─────────────────────────────────────────────────────────┐
+│              giga_core (Dependency-Free)                │
+│  - 128³ Macro Toroidal Grid & 8³ Sub-voxel Masks        │
+│  - Swept-AABB Physics & Vector Gravity Engine           │
+│  - Deterministic Cellular Fluid Solver                  │
+└──────────────────────────┬──────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────┐
+│                 giga_game (Headless ECS)                │
+│  - 2²⁰ (1,048,576) SoA NpcPool Storage                  │
+│  - Cold Record <-> Live Entity Embodiment Seam          │
+│  - Multi-level Floor Generator & FloorRegistry          │
+└──────────────────────────┬──────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────┐
+│                 Render & Output Pipeline                │
+│  - Vulkan 1.3 / MoltenVK Instanced Render Pass         │
+│  - ImGui Heads-Up Display & Telemetry Overlay           │
+└─────────────────────────────────────────────────────────┘
 ```
+
+### Mathematical Governing Equations
+
+$$\frac{d\vec{v}}{dt} = \vec{g} + \frac{\vec{F}_{AABB}}{m}, \quad \text{Toroidal Coordinates: } x' = x \pmod{128}, \ y' = y \pmod{128}, \ z' = z \pmod{128}$$
 
 ---
 
@@ -202,10 +182,10 @@ Distributed under the **True People's License v2.0** / Open License — Authors:
 ---
 
 <details>
-<summary>🇷🇺 Русская Версия (Подробная Сводка)</summary>
+<summary>🇷🇺 Русская Версия (Подробное Описание)</summary>
 
 ### Подробное описание проекта
 
-Проект **GIGAH|RUSH 2 — Custom C++23 3D Samosbor Survival Engine** содержит полное техническое описание архитектуры, методов сборки, структуры файлов и API-интерфейсов. Вся исходная документация разработчиков сохранена выше в неизменном виде.
+Проект **GIGAH|RUSH 2 — Native C++23 / VulkanToroidal Voxel Engine** разработан в соответствии со строгими требованиями к производительности и системной архитектуре. Вся исходная авторская документация полностью сохранена выше.
 
 </details>
