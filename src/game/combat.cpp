@@ -335,8 +335,11 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         // back. Combined with the matching speed bonus in wander.cpp, this makes a
         // corridor a genuinely worse place to be caught than an open room — level
         // design out of geometry that already exists. [mob_behaviour.h]
+        const bool nearWall = adjacent_wall(grid, tr.pos);
         if (has_flag(def.aiFlags, AiFlag::WallBias))
-            dmg *= wall_bias_damage(def.aiFlags, adjacent_wall(grid, tr.pos));
+            dmg *= wall_bias_damage(def.aiFlags, nearWall);
+        const auto beh = static_cast<MobBehaviour>(def.behaviour);
+        dmg *= behaviour_damage_mult(beh, nearWall);
         const std::int16_t raw = static_cast<std::int16_t>(dmg);
 
         // Melee first: if it can touch you, it touches you. Reach is in cells.
@@ -347,7 +350,7 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         // would queue a 0-damage swing every tick forever: apply_damage returns
         // hit == false for raw <= 0, so the cooldown is never set and the swing is
         // re-queued on the next pass.
-        const float reach = static_cast<float>(def.meleeReachMm) * 0.001f * kCellSize;
+        const float reach = behaviour_melee_reach(beh, def.meleeReachMm, nearWall);
         if (raw > 0 && d2 <= reach * reach) {
             mc.windupMs = 0;   // contact cancels a shot it was lining up
             queued.push_back(Swing{e, victim, raw, def.attackCdMs, false, tr.pos,

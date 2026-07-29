@@ -320,6 +320,9 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                         sp *= bm.claimed ? bm.mult
                                          : wall_bias_speed(md.aiFlags, wall);
                     }
+                    const game::BurstPhase bp = game::burst_phase(beh, id, tick, len);
+                    sp *= game::burst_speed_mult(bp);
+                    sp *= game::behaviour_hurt_move_mult(beh, mr.hp, mr.maxHp);
                     vel.v.x = tx / tl * sp;
                     vel.v.y = ty / tl * sp;
                 }
