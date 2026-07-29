@@ -1542,16 +1542,32 @@ int main(int argc, char** argv) {
             // Three decimals, not two: the body and HUD passes land in the single
             // microseconds, and printing those as "0.00" reads as "not measured"
             // — the exact false-confidence this whole module exists to remove.
-            if (renderer.timer.supported())
+            if (renderer.timer.supported()) {
                 ImGui::Text("gpu: world %.3f | bodies %.3f | hud %.3f | "
                             "frame %.3f ms",
                             renderer.timer.pass_ms(gpu::GpuPass::World),
                             renderer.timer.pass_ms(gpu::GpuPass::Bodies),
                             renderer.timer.pass_ms(gpu::GpuPass::Hud),
                             renderer.timer.frame_ms());
-            else
+                // The median above is DESIGNED to hide spikes — it takes 16 slow frames
+                // out of 31 to move it — so it cannot see a hitch. This line is the WORST
+                // frame in the same window. A peak that moved while the median did not is
+                // a stutter; both moving together is a real cost change. `drop` must stay
+                // at 0: a growing value means every figure above is computed over a stale
+                // window and none of them mean anything. [gpu_timer.h]
+                ImGui::Text("gpu peak: world %.3f | bodies %.3f | hud %.3f | "
+                            "frame %.3f ms | drop %u",
+                            renderer.timer.pass_ms_max(gpu::GpuPass::World),
+                            renderer.timer.pass_ms_max(gpu::GpuPass::Bodies),
+                            renderer.timer.pass_ms_max(gpu::GpuPass::Hud),
+                            renderer.timer.frame_ms_max(), renderer.timer.dropped());
+            } else {
+                // Deliberately no longer "queue family writes no timestamps": supported()
+                // is now ALSO false when the timer was switched off with GIGA_GPU_TIMER=0,
+                // and blaming the queue family in that case would be a lie.
                 ImGui::TextUnformatted(
-                    "gpu: n/a (queue family writes no timestamps)");
+                    "gpu: n/a (no timestamps, or GIGA_GPU_TIMER=0)");
+            }
             auto& tr = reg.get<Transform>(player);
             auto& ctl = reg.get<Controller>(player);
             auto& ga = reg.get<GravityAffected>(player);
@@ -2027,8 +2043,23 @@ int main(int argc, char** argv) {
                                      renderer.timer.frame_ms(),
                                      cubePass.last_instance_count(),
                                      bodyPass.last_instance_count());
-                    else
-                        std::fprintf(stderr, "gpu-ms: n/a (no timestamps)\n");
+                    // The peak beside the median, for the same reason the HUD carries
+                    // both: an unattended capture that records only a median cannot
+                    // distinguish "this got slower" from "this got spikier", and a
+                    // non-zero drop count invalidates every median in the line above.
+                    if (renderer.timer.supported())
+                        std::fprintf(stderr,
+                                     "gpu-ms-peak: world %.3f bodies %.3f hud %.3f "
+                                     "frame %.3f  (dropped %u)\n",
+                                     renderer.timer.pass_ms_max(gpu::GpuPass::World),
+                                     renderer.timer.pass_ms_max(gpu::GpuPass::Bodies),
+                                     renderer.timer.pass_ms_max(gpu::GpuPass::Hud),
+                                     renderer.timer.frame_ms_max(),
+                                     renderer.timer.dropped());
+                    if (!renderer.timer.supported())
+                        std::fprintf(stderr,
+                                     "gpu-ms: n/a (no timestamps, or "
+                                     "GIGA_GPU_TIMER=0)\n");
                     running = false;
                 }
             }
