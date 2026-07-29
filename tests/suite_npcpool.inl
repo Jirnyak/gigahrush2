@@ -471,9 +471,13 @@ static void test_npcpool_all() {
         CHECK(pool.alive() == 10u);
         CHECK(pool.recycled() == 4u);
 
-        // Arming an ALREADY-armed pool is a no-op. A second rebuild would enqueue queued
-        // slots again and hand one id to two records — the same corruption the kill()
-        // guard stops, reached from the other direction.
+        // Arming an ALREADY-armed pool is a no-op, so a caller may arm defensively.
+        // Stated precisely, because it is easy to overclaim: these three lines pass
+        // whether or not set_recycling() early-returns, because rebuild_free_list()
+        // RESETS the queue before it scans and so re-derives the same set. What they pin
+        // is the OBSERVABLE contract (a redundant arm changes nothing); the reset inside
+        // rebuild_free_list is what makes that true, and the round trip below is what
+        // would catch its loss.
         pool.kill(3u);
         CHECK(pool.free_slots() == 1u);
         pool.set_recycling(true);

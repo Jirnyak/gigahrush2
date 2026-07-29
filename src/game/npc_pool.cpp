@@ -124,9 +124,12 @@ void NpcPool::grow_live_columns(std::uint32_t rows) {
 }
 
 void NpcPool::set_recycling(bool on) {
-    // Idempotent, and that is what makes the rebuild below safe: a second
-    // set_recycling(true) must not re-enqueue slots that are already queued, which would
-    // hand one id to two live records — the same corruption the kill() guard stops.
+    // Idempotent: a redundant arm/disarm costs nothing, so a caller may arm defensively
+    // (on load, at the top of a session) without thinking about whether it already did.
+    // This return is NOT what stops a double-enqueue — do not read it as the guarantee.
+    // The queue's uniqueness comes from rebuild_free_list() RESETTING the list before it
+    // scans, so even a repeated rebuild re-derives the same set; deleting that reset
+    // because this line looks like it covers the case is the way to break it.
     if (on == recycle_) return;
     recycle_ = on;
     if (on) {

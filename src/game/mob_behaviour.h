@@ -618,15 +618,19 @@ bool behaviour_is_dead(MobBehaviour b);
 // after wave 3, 15 after wave 2 and 5 after wave 1.
 //
 // "Answered by this file" is NOT the same as "reaching the player", and wave 3 is
-// where the two came apart far enough to need saying. Of the 20, sixteen are live
+// where the two came apart far enough to need saying. Of the 20, NINETEEN are live
 // today — `behaviour_aggro_radius` is called by both `wander_step` and
 // `investigate_step`, `pursuit_offset` and `behaviour_move_mult` by `wander_step`,
-// `frozen_by_gaze` by `wander_step`. FOUR answer only inside this suite, because
-// every function that would apply them has no caller in `src/` at all:
-// `behaviour_damage_mult` (DebrisLurker's damage half, unwired since wave 2),
+// `frozen_by_gaze` by `wander_step`. Exactly ONE — CrowdShove — answers only inside
+// this suite, and the reason is that SEVEN dispatchers here have no caller in `src/`
+// at all: `behaviour_damage_mult` (DebrisLurker's damage half, unwired since wave 2),
 // `facing_damage_mult` (DeadEcho), `burst_damage_mult` + `burst_speed_mult`
 // (FractureSprint) and wave 4's `behaviour_melee_reach` / `behaviour_incoming_mult`
-// (WallBrace) / `behaviour_hurt_move_mult` (CrowdShove).
+// (WallBrace) / `behaviour_hurt_move_mult` (CrowdShove). Those seven answer for FIVE
+// kinds, and four of the five are also answered by a live radius or pace — so the
+// count of unwired FUNCTIONS (seven) and of unreachable ENUMERATORS (one) are
+// different numbers, and an earlier revision of this paragraph conflated them.
+// `test_behaviours_all` asserts the enumerator count, which is the authority here.
 //
 // DebrisLurker, DeadEcho, FractureSprint and WallBrace are each independently answered
 // by a LIVE radius or pace, so they are half-live rather than inert. **CrowdShove is
@@ -823,7 +827,9 @@ bool behaviour_is_dispatched(MobBehaviour b);
 //     either. It is the last free input at the dispatch site.
 //
 // And a wiring audit, which turned out to matter more than another radius. Of the nine
-// dispatchers here, FOUR have never had a caller anywhere in `src/`:
+// dispatchers that existed BEFORE wave 4, FOUR had never had a caller anywhere in
+// `src/` — and wave 4's own three land unwired as well, so the live total is SEVEN (the
+// roadmap block above lists all seven and the shape each one needs):
 //
 //   `behaviour_damage_mult`  unwired since wave 2 — the file says so.
 //   `facing_damage_mult`     unwired since wave 3 — the file says so.

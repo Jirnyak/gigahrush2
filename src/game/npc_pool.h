@@ -539,8 +539,10 @@ private:
 
     // Re-derive the whole queue from the alive bits: every dead slot below count_, in
     // ascending id order. Called on the OFF->ON transition of set_recycling() and
-    // nowhere else, so it can never run against a non-empty queue and duplicate a slot.
-    // O(count_) once, off any hot path.
+    // nowhere else today, but it does NOT rely on that: it RESETS the list before
+    // scanning, so it is safe to run against a non-empty queue and cannot duplicate a
+    // slot. Keep the reset if a second caller ever appears — the call-site restriction
+    // is a convention, the reset is the invariant. O(count_) once, off any hot path.
     void rebuild_free_list();
 
     std::uint32_t count_ = 0;  // bump pointer / high-water mark
