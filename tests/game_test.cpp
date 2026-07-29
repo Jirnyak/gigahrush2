@@ -403,13 +403,56 @@ static void test_floor_spec() {
     CHECK(res.population > der.population);
     CHECK(res.hostility < der.hostility);
 
-    // floor_spec_for is a pure, in-range mapping from floor number to rule-set.
-    CHECK(floor_spec_for(0).kind == FloorKind::Residential);
-    CHECK(floor_spec_for(6).kind == FloorKind::Derelict); // 6 % 7 == 6
-    CHECK(&floor_spec_for(5) == &floor_spec_for(5));       // deterministic
-    for (std::uint16_t f = 0; f < 64; ++f)
+    // floor_spec_for is a pure, in-range mapping from a SIGNED floor number to a
+    // rule-set, symmetric about the hub (a floor and its mirror share a kind).
+    CHECK(floor_spec_for(0).kind == FloorKind::Residential); // hub always safe
+    CHECK(floor_spec_for(6).kind == FloorKind::Derelict);    // 6 % 7 == 6
+    CHECK(floor_spec_for(-6).kind == floor_spec_for(6).kind); // mirror symmetry
+    CHECK(floor_spec_for(24).kind == FloorKind::Derelict);   // deep extreme wrecked
+    CHECK(&floor_spec_for(5) == &floor_spec_for(5));          // deterministic
+    for (int f = -64; f <= 64; ++f)
         CHECK(static_cast<int>(floor_spec_for(f).kind) <
               static_cast<int>(FloorKind::Count));
+
+    // --- The V-shape spawn math (#13d-i, master_prompt §4) ------------------
+    // depth: 0 at the hub, saturates to 1 at |floor| >= 25, symmetric in sign.
+    CHECK(floor_depth01(0) == 0.0f);
+    CHECK(floor_depth01(25) == 1.0f);
+    CHECK(floor_depth01(-25) == 1.0f);
+    CHECK(floor_depth01(50) == 1.0f);               // clamped past the extreme
+    CHECK(floor_depth01(12) == floor_depth01(-12)); // symmetric magnitude
+    CHECK(floor_depth01(8) > floor_depth01(4));     // monotone in |floor|
+
+    // danger: hub safe (1), rises with depth, DESCENDING deadlier than ascending.
+    // Anchored to the reference's hand-authored design danger (hub 1, roof 2, void 5).
+    CHECK(floor_danger(0) == 1);
+    CHECK(floor_danger(25) == 2);                // roof anchor
+    CHECK(floor_danger(-25) == 5);               // void anchor
+    CHECK(floor_danger(-8) > floor_danger(8));   // down deadlier at equal depth
+    CHECK(floor_danger(-20) > floor_danger(-4)); // deeper = more dangerous
+    for (int f = -40; f <= 40; ++f) {
+        const int d = floor_danger(f);
+        CHECK(d >= 1 && d <= 5);
+    }
+
+    // count: always within the live budget; sparse near the hub, dense deep; a
+    // hostile floor is never sparser than a safe one at the same depth.
+    for (int f = -40; f <= 40; ++f) {
+        const int c = floor_mob_count(f, floor_spec_for(f));
+        CHECK(c >= 0 && c <= kMobSoftCap);
+    }
+    CHECK(floor_mob_count(0, res) < floor_mob_count(24, der));   // hub << deep
+    CHECK(floor_mob_count(24, der) >= floor_mob_count(24, res)); // hostile denser
+    CHECK(floor_mob_count(-25, der) == kMobSoftCap);             // extreme saturates
+
+    // tier: 1 at the hub, rises with depth, clamped [1,12], never below danger.
+    CHECK(floor_mob_tier(0) == 1);
+    CHECK(floor_mob_tier(24) > floor_mob_tier(0));
+    for (int f = -40; f <= 40; ++f) {
+        const int t = floor_mob_tier(f);
+        CHECK(t >= 1 && t <= 12);
+        CHECK(t >= floor_danger(f)); // design floor: level floored at danger
+    }
 }
 
 static void test_seed_from_spec() {
