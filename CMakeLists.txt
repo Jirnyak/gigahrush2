@@ -360,9 +360,29 @@ if(GIGA_BUILD_TESTS)
     # invariant that giga_core and giga_game never include SDL/Vulkan/ImGui.
     # Rationale, known limits and the `giga-check: allow` escape hatch live in
     # tools/check_source_rules.cmake. Needs no build, so it is cheap and runs first.
+    #
+    # Pinned to its last printed line instead of its exit code — but as a FLOOR, not an
+    # exact count, and that difference is deliberate rather than lazy.
+    # `files_scanned=N` is the final statement of the script and is reached only after
+    # the zero-violations verdict, so matching it proves the run completed AND found
+    # nothing: any violation raises FATAL_ERROR and the line is never printed. The
+    # three-digit class then puts a floor of 100 under the scanned set, which upgrades
+    # the script's own `EQUAL 0` guard — a broken glob that silently scans four files is
+    # green today and red here. OBSERVED 2026-07-29: `files_scanned=167`.
+    #
+    # An exact count would be WRONG here, unlike game_test. src/ is GLOB_RECURSE with
+    # CONFIGURE_DEPENDS, so every new .cpp in the engine moves this number for reasons
+    # that have nothing to do with source rules, and the only available fix would be to
+    # retype the number — training precisely the reflex the audit_findings comment above
+    # warns against, on a test where the drift is meaningless. The work an exact count
+    # would do is already done, and done better, inside the script: the guard that
+    # cross-checks every C++-shaped file under src/ and tests/ against the scanned set
+    # names the file that went blind instead of just reporting that a total moved.
     add_test(NAME source_rules
         COMMAND ${CMAKE_COMMAND} -DGIGA_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_source_rules.cmake)
+    set_tests_properties(source_rules PROPERTIES
+        PASS_REGULAR_EXPRESSION "files_scanned=[0-9][0-9][0-9]")
 
     # Honest crowd benchmark: real floor + 16k wandering agents + real physics.
     # An executable, not a ctest (it measures, it doesn't pass/fail). Runs at the
