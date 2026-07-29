@@ -1,5 +1,8 @@
 <div align="center">
 
+![GIGAHRUSH2 Banner](https://raw.githubusercontent.com/marko1olo/gigahrush/main/docs/banner.jpg)
+
+
 # GIGAH|RUSH 2 — Next-Gen C++23 OpenGL Voxel Pipeline
 
 [![C++23](https://img.shields.io/badge/Standard-C%2B%2B23-blue?style=for-the-badge)][][![Voxel Engine](https://img.shields.io/badge/Engine-Voxel%20Render-orange?style=for-the-badge)]()
