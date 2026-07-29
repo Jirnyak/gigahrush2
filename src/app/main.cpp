@@ -48,6 +48,7 @@
 #include "game/samosbor.h"
 #include "game/contract.h"
 #include "game/vendor.h"
+#include "game/craft.h"
 #include "game/container.h"
 #include "game/door.h"
 #include "game/combat.h"
@@ -714,6 +715,18 @@ int main(int argc, char** argv) {
     bool drinkWanted = false;     // T, consumed by one sim step
     bool sellWanted = false;      // B, consumed by one sim step
     bool buyWanted = false;       // R, consumed by one sim step       // set by H, consumed by one sim step
+    bool craftWanted = false;     // C, consumed by one sim step
+    bool scrapWanted = false;     // X, consumed by one sim step
+    // Run state, not world state, so it lives beside the ledger. CraftingState is a
+    // 96-byte POD ([craft.h]) — nothing to own, nothing to free. craft_init zeroes the
+    // material bank, sets tier 0 and marks the nine default-known recipes.
+    //
+    // This is the first reader the nine authored craft_* columns in data/items.csv have
+    // ever had: 446 items carried them and item_table.h:17 said in as many words
+    // "crafting is not implemented".
+    game::CraftingState crafting{};
+    game::craft_init(crafting);
+    std::uint32_t crafted = 0, scrapped = 0, recipesLearned = 0;
     std::int32_t loot = 0;         // roubles swept up this run
     std::int32_t healed = 0;
     float ateFood = 0.0f;      // food points that LANDED, for the HUD
@@ -900,6 +913,15 @@ int main(int argc, char** argv) {
                 if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
                     e.key.scancode == SDL_SCANCODE_R)
                     buyWanted = true;
+                // C crafts (or reads a blueprint), X strips the cheapest junk in the bag.
+                // Both keys were free: an rg for SDL_SCANCODE_C and _X across src/ found
+                // nothing, and G eats / T drinks already.
+                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
+                    e.key.scancode == SDL_SCANCODE_C)
+                    craftWanted = true;
+                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
+                    e.key.scancode == SDL_SCANCODE_X)
+                    scrapWanted = true;
                 // E takes the job on offer. The only interaction bind in the game, and
                 // it exists because a contract is the one thing the player has to
                 // actively agree to — everything else is walked into.
@@ -1277,6 +1299,66 @@ int main(int argc, char** argv) {
                     sellWanted = false;
                     buyWanted = false;
                 }
+                // CRAFTING. The extraction pad is the only bench in the game today, and
+                // that is a measured limitation rather than a placeholder: 259 of the 446
+                // recipes (22 `Any` + 237 Workbench) are reachable there, and the other
+                // 187 (92 lathe / 77 lab / 18 net_terminal) wait on station placement in
+                // floor_gen. Off the pad the player has bare hands, which satisfies the
+                // 22 `Any` recipes and nothing else. Disassembly is workbench-only by the
+                // reference's rule, so it is pad-only too. [craft.h]
+                if ((craftWanted || scrapWanted) && reg.valid(player)) {
+                    const Transform& ct = reg.get<Transform>(player);
+                    const game::CraftStation bench =
+                        game::on_extraction_pad(stack.layer(activeLayer).grid(), ct.pos)
+                            ? game::CraftStation::Workbench
+                            : game::CraftStation::Any;
+                    bool invChanged = false;
+                    if (const auto* nrk = reg.try_get<game::NpcRef>(player))
+                        if (pool.valid(nrk->id)) {
+                            game::Inventory& ci = pool.inventory(nrk->id);
+                            if (craftWanted) {
+                                // A blueprint in the bag beats building something:
+                                // reading it is the ONLY way the tier rises, so a folder
+                                // is worth more as knowledge than as loot.
+                                const game::LearnResult lr =
+                                    game::craft_learn_from_carried(crafting, ci);
+                                recipesLearned += lr.learned;
+                                if (lr.consumed) invChanged = true;
+                                if (lr.learned == 0) {
+                                    // kInvalidItem is a safe argument here: craft_item
+                                    // answers UnknownItem rather than indexing on it.
+                                    const game::ItemId pick =
+                                        game::craft_best_available(crafting, ci, bench);
+                                    if (game::craft_item(crafting, ci, pick, bench).fail ==
+                                        game::CraftFail::None) {
+                                        ++crafted;
+                                        invChanged = true;
+                                    }
+                                }
+                            }
+                            if (scrapWanted) {
+                                const int slot = game::craft_scrap_slot(ci);
+                                // rollKey is uint32_t and simTick is uint64_t, so the
+                                // narrowing is explicit. Truncation is harmless and in
+                                // fact wanted: this only salts the 50% schematic roll, so
+                                // the low bits are the entropy and wrapping every ~4.3e9
+                                // ticks (~1.1 sim years at 125 Hz) changes nothing.
+                                if (game::craft_disassemble(
+                                        crafting, ci, slot, bench,
+                                        static_cast<std::uint32_t>(simTick))
+                                        .fail == game::CraftFail::None) {
+                                    ++scrapped;
+                                    invChanged = true;
+                                }
+                            }
+                        }
+                    // combat.h: "call after anything that changes the inventory". Crafting
+                    // a better vest changes what equipped_armour resolves to, so skipping
+                    // this would leave the body wearing the old one.
+                    if (invChanged) game::sync_armour(reg, pool, player);
+                    craftWanted = false;
+                    scrapWanted = false;
+                }
                 // Contracts advance and pay AFTER the extraction step, so a Fetch
                 // job completes at the pad — the same moment the loop's own payoff
                 // lands, which is what makes the errand feel like part of the trip
@@ -1526,6 +1608,18 @@ int main(int argc, char** argv) {
                 ImGui::Text("loot %d rub (%d/%d slots) | healed %d | band E%u",
                             carried, slots, game::kInvSlots, healed,
                             game::economy_band(currentFloor));
+                // Crafting, on screen: C builds or reads, X strips. `bank` is the 9-axis
+                // material vector summed, because nine numbers on the HUD would be noise
+                // — the per-axis detail is what the craft menu is for when one exists.
+                // Tier only rises by reading a blueprint, so it is the one number here
+                // that reports progression rather than activity.
+                std::uint32_t bankTotal = 0;
+                for (std::size_t mi = 0; mi < game::kCraftMaterials; ++mi)
+                    bankTotal += crafting.mat[mi];
+                ImGui::Text("craft T%u | %u made / %u stripped / %u learned | %u units "
+                            "banked  (C build, X strip)",
+                            static_cast<unsigned>(crafting.tier), crafted, scrapped,
+                            recipesLearned, bankTotal);
                 // The macro society, on screen. `living` is the WHOLE cold population,
                 // not the handful embodied on this floor, so this number moving is the
                 // visible proof that the world runs on its own clock. It updates once
