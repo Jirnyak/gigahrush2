@@ -12,7 +12,10 @@
 // may start a multi-tick JOURNEY, which lands as an O(1) `pool.floor(id) =` relabel
 // once the coarse clock crosses its ETA. A second bounded SOCIAL pass then lazily
 // forms per-NPC relationship edges toward co-floor peers, each seeded from the
-// caller's live FactionRelations matrix ([faction_relations.h]).
+// caller's live FactionRelations matrix ([faction_relations.h]) and each stamped with
+// its target's pool GENERATION, so an edge that outlives the person it names reads as
+// stale instead of resolving to whoever inherited the slot (see "A relationship edge is
+// a GENERATION-CHECKED reference" below).
 //
 // Determinism is a hard requirement: same (initial pool, params, step count) ->
 // same evolution. Every per-record decision is a STATELESS hash of (id, tick, salt),
@@ -86,6 +89,75 @@ inline constexpr std::uint32_t kMacroPeriodTicks = static_cast<std::uint32_t>(kS
 // conflate the two, they have different ranges and different meanings.
 inline constexpr std::int16_t kSocialAffinityMin = -127;
 inline constexpr std::int16_t kSocialAffinityMax =  127;
+
+// ---------------------------------------------------------------------------
+// A relationship edge is a GENERATION-CHECKED reference, and the generation lives in
+// Relationship::pad.
+//
+// `Relationship::target` ([npc_pool.h]) is a bare NpcId held ACROSS TICKS, and the
+// social pass below is its only writer in src/. A bare id is a SLOT NUMBER, so the
+// moment the pool recycles (`set_recycling(true)`, still unarmed in src/app/main.cpp)
+// an edge outlives the person it names and then silently points at whoever inherited
+// the slot: a friendship becomes a friendship with a stranger, and a hostile edge
+// becomes hostility toward a newborn who has done nothing. Identical in shape to the
+// ABA `Contract::giver` and `MacroSim::Journey` already closed.
+//
+// THE FIX IS THE JOURNEY FIX — spare bits before a wider struct. Relationship is
+// 4 (target) + 2 (affinity) + 2 (pad) = 8 B, pinned by a static_assert in
+// [npc_pool.h] because rel_ is the widest column in the pool (128 B/row, 128.0 MiB at
+// full capacity), so growing it is not on the table. `pad` was dead weight — NSDMI 0,
+// blanked by reset_row, read nowhere — so it becomes the target's pool GENERATION as
+// of the instant the edge was formed. sizeof(Relationship) is 8 before and 8 after,
+// and rel_ does not gain a byte, which is what keeps the social pass affordable enough
+// to stay switchable.
+//
+// A whole NpcHandle would also have FIT (NpcHandle is the same 32 bits as NpcId), and
+// it is deliberately NOT what happens here: the field is declared `NpcId target` in a
+// header this module does not own, tests/ assigns and compares it as a bare id in four
+// places, and a packed handle would make every one of those comparisons quietly wrong
+// the first time a generation is non-zero. A generation FIELD beside the id keeps
+// `target` meaning exactly what its type says.
+//
+// READERS MUST VALIDATE, and `social_edge_target` is the whole reader API: it returns
+// kInvalidNpc for an empty slot AND for a stale one, so "if (t == kInvalidNpc)
+// continue;" — the line a caller already wrote for empty slots — makes a stale edge
+// take the path an absent edge takes. Dropping a stale edge is correct; following one
+// is the bug. There is no reader in src/ yet (#12's `social` intent is the first one
+// due), which is exactly why the accessor lands with the writer rather than after it.
+// ---------------------------------------------------------------------------
+
+// The (generation, id) pair an edge really holds, or kInvalidHandle for an empty slot.
+// Never `npc_handle(kInvalidNpc, ...)`: that masks 0xFFFFFFFF down to the legal id
+// 0xFFFFF and would validate against a real record.
+inline NpcHandle social_edge_handle(const Relationship& e) {
+    return e.target == kInvalidNpc ? kInvalidHandle : npc_handle(e.target, e.pad);
+}
+
+// True iff the edge still names the LIVING record it was formed against. False for an
+// empty slot, for a target that has died — kill() bumps the generation whether or not
+// the slot is ever handed out again — and for a slot recycled into somebody else.
+inline bool social_edge_live(const NpcPool& pool, const Relationship& e) {
+    return pool.handle_valid(social_edge_handle(e));
+}
+
+// The id a reader may follow, or kInvalidNpc when there is nobody to follow.
+inline NpcId social_edge_target(const NpcPool& pool, const Relationship& e) {
+    return social_edge_live(pool, e) ? e.target : kInvalidNpc;
+}
+
+// Blank a slot. An empty edge is `target == kInvalidNpc`, NOT eight zeroed bytes —
+// zeros read as a relationship with NPC 0 ([npc_pool.h] reset_row says so too).
+inline void social_edge_clear(Relationship& e) { e = Relationship{}; }
+
+// Form / overwrite an edge, stamping WHO it points at and not merely where. The
+// generation is read once, at write time, and never refreshed: that is what makes the
+// later comparison an ABA test rather than a liveness test.
+inline void social_edge_set(Relationship& e, const NpcPool& pool, NpcId target,
+                            std::int16_t affinity) {
+    e.target = target;
+    e.affinity = affinity;
+    e.pad = pool.generation(target);
+}
 
 // Tunable knobs for the macro tick — DATA, not code branches. All rates are per
 // simulated YEAR; step() scales them by daysPerTick/365, so the same params describe
@@ -167,6 +239,11 @@ struct MacroStats {
     std::uint32_t arrivals = 0;    // journeys that LANDED (relabelled) this tick
     std::uint32_t inTransit = 0;   // journeys still pending after this tick
     std::uint32_t socialEdges = 0; // relationship edges FORMED this tick
+    // Stale edges RECLAIMED this tick — slots whose target had died or been recycled
+    // into somebody else, overwritten instead of trusted. Reported for the same reason
+    // `birthsBlocked` is: a graph quietly dropping edges and a graph quietly following
+    // strangers look identical from the outside unless the number is published.
+    std::uint32_t socialStaleDropped = 0;
     std::uint32_t reserveRemaining = 0; // pool slots left after this tick
     std::uint32_t target = 0;      // the living target actually in force
     std::uint64_t tick = 0;        // macro ticks elapsed (after this step)

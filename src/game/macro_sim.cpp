@@ -134,31 +134,55 @@ int faction_affinity(const FactionRelations& fr, const NpcPool& pool, NpcId a,
 }
 
 // Ensure record `a` holds a relationship edge toward `b`, seeded from the pair's
-// faction baseline plus deterministic jitter. Slot policy = existing -> first-empty ->
-// evict-weakest (min |affinity|). Returns true iff a NEW edge was created: an
-// already-present edge is left untouched, because nothing off-screen raises the
-// combat/quest events that drive drift and there is no baseline pull-back — this pass
-// only GROWS the graph.
+// faction baseline plus deterministic jitter. Slot policy, in order: a STALE edge that
+// names b's id (the ABA slot) -> first empty -> first stale -> evict the weakest LIVE
+// edge (min |affinity|). Returns true iff a NEW edge was created and adds every stale
+// slot it reclaims to `dropped`, so a drop is a published number rather than a silent
+// overwrite. An already-present LIVE edge is left untouched, because nothing off-screen
+// raises the combat/quest events that drive drift and there is no baseline pull-back —
+// this pass only GROWS the graph.
+//
+// STALENESS IS NOT A SPECIAL CASE HERE, IT IS WHY THE SCAN ORDER CHANGED. The scan used
+// to ask `row[si].target == b` first and stop. Under recycling that is a SLOT
+// comparison, not a person comparison: if a's row holds a dead man's edge and `b` is
+// the newborn who inherited his id, the old scan answered "already acquainted",
+// returned false, and left the corpse's affinity standing in for a stranger —
+// permanently, because nothing ever revisits an existing edge. So a stale slot must not
+// answer that question, must not be evictable by an affinity it no longer means, and
+// must be reusable. Reclaiming the ABA slot FIRST is what keeps a row free of duplicate
+// targets (one stale + one live edge to the same id is exactly the duplicate
+// [suite_macrosim.inl] block 5 forbids), and preferring a genuinely empty slot over any
+// other stale one is what keeps the slot a fresh edge lands in bit-identical for every
+// pool that never recycles.
 //
 // One-directional on purpose: it writes a's row and not b's, so "acquaintance" is
 // asymmetric until b's own probe happens to draw a. Two writes would double the
 // DEMAND-column traffic for a symmetry the reference does not have.
 bool form_edge(NpcPool& pool, const FactionRelations& fr, NpcId a, NpcId b,
-               std::uint32_t jitterSalt) {
+               std::uint32_t jitterSalt, std::uint32_t& dropped) {
     // First call in the process materializes rel_ — 128 B/row, the widest column in
     // the pool ([npc_pool.h] "Column allocation policy"). Reached only when the
     // caller asked for the social pass AND handed over a matrix.
     std::array<Relationship, kRelSlots>& row = pool.relations(a);
+    int aba = -1;         // stale slot naming b's id — a stranger wearing b's number
     int firstEmpty = -1;
+    int firstStale = -1;
     int weakest = 0;
     int weakestMag = 0x7fffffff;
     for (int s = 0; s < kRelSlots; ++s) {
         const std::size_t si = static_cast<std::size_t>(s);
-        if (row[si].target == b) return false;  // already acquainted — leave it
         if (row[si].target == kInvalidNpc) {
             if (firstEmpty < 0) firstEmpty = s;  // remember, but keep scanning for b
             continue;                            // empty slots are not evictable
         }
+        if (!social_edge_live(pool, row[si])) {
+            // A corpse's edge, or a stranger's once the slot was recycled. Not an
+            // acquaintance and not weighed against live edges by affinity.
+            if (aba < 0 && row[si].target == b) aba = s;
+            if (firstStale < 0) firstStale = s;
+            continue;
+        }
+        if (row[si].target == b) return false;  // already acquainted — leave it
         const int mag = row[si].affinity < 0 ? -static_cast<int>(row[si].affinity)
                                              : static_cast<int>(row[si].affinity);
         if (mag < weakestMag) {
@@ -166,18 +190,26 @@ bool form_edge(NpcPool& pool, const FactionRelations& fr, NpcId a, NpcId b,
             weakest = s;
         }
     }
-    const std::size_t slot =
-        static_cast<std::size_t>(firstEmpty >= 0 ? firstEmpty : weakest);
+    int pick = weakest;          // every slot live: evict the least-invested one
+    bool reclaim = false;
+    if (aba >= 0)             { pick = aba;        reclaim = true; }
+    else if (firstEmpty >= 0) { pick = firstEmpty; }
+    else if (firstStale >= 0) { pick = firstStale; reclaim = true; }
+    if (reclaim) ++dropped;
+    const std::size_t slot = static_cast<std::size_t>(pick);
 
     const int base = faction_affinity(fr, pool, a, b);
+    // The JITTER HASH STILL EATS THE BARE ID. `b` feeds hash3 as an id, exactly as
+    // before, so every affinity this pass has ever produced is reproduced bit-for-bit;
+    // the generation is stamped afterwards, by social_edge_set, and enters no hash.
+    // Feeding a handle in here would have re-rolled every edge in the game.
     const std::uint32_t range = static_cast<std::uint32_t>(2 * kSocialSeedJitter + 1);
     const int jit =
         static_cast<int>(hash3(a, b, jitterSalt) % range) - kSocialSeedJitter;
     int val = base + jit;
     if (val < kSocialAffinityMin) val = kSocialAffinityMin;
     if (val > kSocialAffinityMax) val = kSocialAffinityMax;
-    row[slot].target = b;
-    row[slot].affinity = static_cast<std::int16_t>(val);
+    social_edge_set(row[slot], pool, b, static_cast<std::int16_t>(val));
     return true;
 }
 
@@ -562,7 +594,14 @@ MacroStats MacroSim::step(NpcPool& pool, const MacroParams& params,
     // O(budget), not O(n). It reads POST-migration labels, so "co-floor" means the
     // roster after this tick's arrivals. Only grows the graph; event-driven drift
     // lands with the systems that raise those events (combat, quests).
+    //
+    // Every edge it writes carries its target's GENERATION (form_edge -> social_edge_set),
+    // so a visited record also reclaims the edges it holds toward people who have since
+    // died or whose slot has been recycled into somebody else. That reclamation is the
+    // only place stale edges are ever removed — a reader must still validate, because a
+    // record's own probe may not come round for many ticks ([macro_sim.h]).
     std::uint32_t socialEdges = 0;
+    std::uint32_t socialStale = 0;
     if (factions != nullptr && params.socialFormRatePerYear > 0.0f &&
         params.socialRecordsPerTick > 0u) {
         const float formProb = params.socialFormRatePerYear * yearFrac;
@@ -602,7 +641,7 @@ MacroStats MacroSim::step(NpcPool& pool, const MacroParams& params,
                 if (peer == kInvalidNpc) continue;
 
                 if (form_edge(pool, *factions, id, peer,
-                              kSaltSocialJitter ^ params.seed ^ t32)) {
+                              kSaltSocialJitter ^ params.seed ^ t32, socialStale)) {
                     ++socialEdges;
                 }
             }
@@ -620,6 +659,7 @@ MacroStats MacroSim::step(NpcPool& pool, const MacroParams& params,
     stats_.arrivals = arrivals;
     stats_.inTransit = static_cast<std::uint32_t>(journeys_.size());
     stats_.socialEdges = socialEdges;
+    stats_.socialStaleDropped = socialStale;
     stats_.reserveRemaining = pool.reserve_remaining();
     stats_.target = target;
     stats_.tick = tick_;
