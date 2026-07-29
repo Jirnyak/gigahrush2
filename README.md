@@ -1,16 +1,14 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/marko1olo/gigahrush/main/docs/banner.jpg" width="100%" alt="gigahrush2 Banner"/>
+# GIGAH|RUSH 2 — Next-Gen C++23 OpenGL Voxel Pipeline
 
-# GIGAHRUSH2 — Full Technical Specification & Architecture
-
-[![License](https://img.shields.io/badge/License-True%20People's%20v2.0-red?style=for-the-badge)](LICENSE.md)
+[![C++23](https://img.shields.io/badge/Standard-C%2B%2B23-blue?style=for-the-badge)][][![Voxel Engine](https://img.shields.io/badge/Engine-Voxel%20Render-orange?style=for-the-badge)]()
 [![Build](https://img.shields.io/badge/Build-Passing-brightgreen?style=for-the-badge)]()
 [![Audit](https://img.shields.io/badge/Audit-100%25%20Verified-purple?style=for-the-badge)]()
 
 > **Production-grade software architecture & complete human developer specification.**
 
-[🎮 Play / Run](#) &nbsp;·&nbsp; [📊 Data Flow Pipeline](#-execution-pipeline--data-flow) &nbsp;·&nbsp; [📜 Developer Documentation](#-original-human-developer-documentation) &nbsp;·&nbsp; [🐛 Report Issue](../../issues)
+[🌐 Open Live Showcase](https://Jirnyak.github.io/gigahrush2/) &nbsp;·&nbsp; [📊 Architectural Diagram](#-system-architecture--pipeline) &nbsp;·&nbsp; [📜 Developer Specs](#-original-human-developer-documentation)
 
 </div>
 
@@ -22,25 +20,24 @@ This repository contains **Jirnyak/gigahrush2**. The system architecture enforce
 
 ---
 
-## 📊 Execution Pipeline & Data Flow
+## 📊 System Architecture & Pipeline
 
 ```mermaid
 graph TD
-    A[Input Config / Signals] --> B[Core Processing Subsystem]
-    B --> C{Memory Pool & State Check}
-    C -- Hit --> D[Direct Buffer Pipeline]
-    C -- Miss --> E[Execution Compute Engine]
-    E --> F[State Mutation & Telemetry Audit]
-    F --> D
-    D --> G[Output Interface / Render Pass]
+    A[C++23 Coroutine Scheduler] --> B[Compute Shader Chunk Builder]
+    B --> C[Indirect Multi-Draw Voxel Buffer]
+    C --> D[Dynamic Light & SSAO Pipeline]
 ```
 
 ---
 
-## 🔧 Technical Configuration & Parameter Specifications
+## 🔧 Technical Configuration & Deep Domain Specifications
+
+- **C++23 Modules & Coroutines**: High-concurrency chunk generation without thread locks.
+- **Indirect Draw Calls**: GPU-driven rendering minimizing CPU draw-call overhead.
 
 <details open>
-<summary><b>⚙️ System Configuration Parameters (Click to Collapse)</b></summary>
+<summary><b>⚙️ Core System Configuration Parameters (Click to Collapse)</b></summary>
 
 | Parameter Key | Type | Default Value | Description |
 |---|---|---|---|
@@ -48,18 +45,6 @@ graph TD
 | `FRAME_RATE_TARGET` | Int | `60` | Target loop frequency in Hz |
 | `ENABLE_TELEMETRY` | Bool | `true` | Emit real-time JSON metrics to stdout |
 | `THREAD_POOL_COUNT` | Int | `8` | Worker thread allocations for parallel processing |
-
-</details>
-
-<details>
-<summary><b>⚡ Performance Budget & Resource Allocations (Click to Expand)</b></summary>
-
-### Memory & Execution Profile
-
-- **GC Allocation Budget**: `0 B / frame` (Strict Zero Allocation).
-- **Target Frame Time**: `< 16.6 ms` (60 FPS minimum lock).
-- **VRAM Budget**: `< 512 MB` allocated statically at startup.
-- **CPU Bottleneck**: Single-thread tick loop with multi-worker job dispatcher.
 
 </details>
 
