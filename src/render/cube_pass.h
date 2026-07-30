@@ -221,28 +221,27 @@ public:
     // than from the procedural surface. 0 means the whole pass fell back, which is
     // exactly how it rendered before data/textures had a reader.
     std::uint32_t textured_materials() const { return texMask_; }
+    std::uint32_t normal_materials() const { return normalMask_; }
+    std::uint32_t roughness_materials() const { return roughnessMask_; }
 
 private:
     VulkanDevice* dev_ = nullptr;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
 
-    // The photographic albedo maps, one array layer per material id.
-    //
-    // WHY IT LIVES HERE and not in the renderer: this is the only pass that has a
-    // material id to index it with. body_pass writes material 0 for every body and
-    // shares cube.frag, which is why the sampler is behind a #ifdef there — see
-    // the header comment in shaders/cube.frag.
+    // Combined Descriptor Set (Set 0) for Albedo, Normal, and Roughness arrays
+    VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
+    VkDescriptorSet descriptorSet_ = VK_NULL_HANDLE;
+
+    // The photographic material maps, one array layer per material id.
     VulkanTextureArray albedo_;
-    // Which materials actually decoded. Written once at init, pushed to the
-    // shader every frame in CubePush::torus.z, and consulted by build_instances()
-    // to decide what `CubeInstance::color` means for a cell. A material whose file
-    // was missing or rejected is absent here and keeps its procedural surface, so
-    // a load failure degrades one material instead of the frame.
+    VulkanTextureArray normal_;
+    VulkanTextureArray roughness_;
+
     std::uint32_t texMask_ = 0;
-    // True when the textured pipeline (cube_tex.frag.spv + a sampler descriptor)
-    // is the one that was created. False makes this pass bit-identical to the
-    // pre-texture renderer: cube.frag.spv, no descriptor set, torus.z == 0.
+    std::uint32_t normalMask_ = 0;
+    std::uint32_t roughnessMask_ = 0;
     bool textured_ = false;
 
     VulkanBuffer cubeVerts_;  // static per-vertex mesh (pos + normal)

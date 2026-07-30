@@ -107,6 +107,9 @@ constexpr vec3 kMaterial[kMatCount] = {
     /* 13 tread plate   measured*/ {0.52f, 0.33f, 0.20f}, // metal_grate_rusty
     /* 14 rust          measured*/ {0.53f, 0.34f, 0.10f}, // rusty_metal_03
     /* 15 rubble        measured*/ {0.35f, 0.17f, 0.11f}, // rusty_corrugated_iron
+    /* 16 electric grate        */ {0.85f, 0.80f, 0.20f}, // yellow-sparking electrical grate
+    /* 17 acid pool             */ {0.20f, 0.85f, 0.15f}, // glowing acid green
+    /* 18 fire cell             */ {0.90f, 0.30f, 0.05f}, // fiery orange-red
 };
 static_assert(sizeof(kMaterial) / sizeof(kMaterial[0]) == kMatCount,
               "one albedo row per material id in world/materials.h");
@@ -536,57 +539,125 @@ void CubePass::load_material_textures() {
     const char* dir = std::getenv("GIGA_TEXTURE_DIR");
     if (dir == nullptr || *dir == '\0') dir = GIGA_TEXTURE_DIR;
 
-    if (!albedo_.init(*dev_, kMatCount, kAlbedoDim, kAlbedoDim, kAlbedoMips)) {
+    if (!albedo_.init(*dev_, kMatCount, kAlbedoDim, kAlbedoDim, kAlbedoMips, false)) {
         std::fprintf(stderr,
                      "[cube] albedo array could not be created — every material "
                      "renders with the procedural surface\n");
         albedo_.destroy();
         return;
     }
-
-    for (const MaterialMap& m : kMaterialMaps) {
-        const std::string path = join(dir, m.file);
-        if (albedo_.load_layer(m.id, path.c_str()))
-            texMask_ |= 1u << m.id;
+    if (!normal_.init(*dev_, kMatCount, kAlbedoDim, kAlbedoDim, kAlbedoMips, true)) {
+        std::fprintf(stderr, "[cube] normal map array could not be created\n");
+    }
+    if (!roughness_.init(*dev_, kMatCount, kAlbedoDim, kAlbedoDim, kAlbedoMips, true)) {
+        std::fprintf(stderr, "[cube] roughness map array could not be created\n");
     }
 
-    // Nothing loaded is almost always a path problem, and it is the one case where
-    // keeping the textured pipeline would buy nothing at all: an image whose every
-    // layer is undefined, a descriptor nothing samples, and a second .spv to find.
+    for (const MaterialMap& m : kMaterialMaps) {
+        const std::string path_albedo = join(dir, m.file);
+        if (albedo_.load_layer(m.id, path_albedo.c_str()))
+            texMask_ |= 1u << m.id;
+
+        std::string stem = m.file;
+        if (stem.size() >= 5 && stem.compare(stem.size() - 5, 5, ".ktx2") == 0)
+            stem.erase(stem.size() - 5);
+
+        const std::string path_normal = join(dir, stem + "_normal.ktx2");
+        if (normal_.load_layer(m.id, path_normal.c_str()))
+            normalMask_ |= 1u << m.id;
+
+        const std::string path_roughness = join(dir, stem + "_roughness.ktx2");
+        if (roughness_.load_layer(m.id, path_roughness.c_str()))
+            roughnessMask_ |= 1u << m.id;
+    }
+
     if (texMask_ == 0) {
         std::fprintf(stderr,
                      "[cube] ERROR: 0 of %d albedo maps loaded from '%s'. The "
-                     "world renders with the procedural surface only. Check that "
-                     "GIGA_TEXTURE_DIR points at data/textures and read the "
-                     "per-file errors above.\n",
+                     "world renders with the procedural surface only.\n",
                      kMaterialMapCount, dir);
         albedo_.destroy();
+        normal_.destroy();
+        roughness_.destroy();
         return;
     }
+
     if (!albedo_.finish()) {
-        std::fprintf(stderr,
-                     "[cube] ERROR: albedo array could not be made readable; "
-                     "falling back to the procedural surface\n");
+        std::fprintf(stderr, "[cube] ERROR: albedo array finish failed\n");
         albedo_.destroy();
+        normal_.destroy();
+        roughness_.destroy();
         texMask_ = 0;
         return;
     }
+    normal_.finish();
+    roughness_.finish();
+
+    // Descriptor Set Layout with 3 combined image samplers
+    VkDescriptorSetLayoutBinding bindings[3]{};
+    for (uint32_t i = 0; i < 3; ++i) {
+        bindings[i].binding = i;
+        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
+
+    VkDescriptorSetLayoutCreateInfo li{};
+    li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    li.bindingCount = 3;
+    li.pBindings = bindings;
+    if (vkCreateDescriptorSetLayout(dev_->device, &li, nullptr, &descriptorSetLayout_) != VK_SUCCESS)
+        return;
+
+    VkDescriptorPoolSize ps{};
+    ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    ps.descriptorCount = 3;
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = 1;
+    pi.poolSizeCount = 1;
+    pi.pPoolSizes = &ps;
+    if (vkCreateDescriptorPool(dev_->device, &pi, nullptr, &descriptorPool_) != VK_SUCCESS)
+        return;
+
+    VkDescriptorSetAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    ai.descriptorPool = descriptorPool_;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &descriptorSetLayout_;
+    if (vkAllocateDescriptorSets(dev_->device, &ai, &descriptorSet_) != VK_SUCCESS)
+        return;
+
+    VkDescriptorImageInfo imageInfos[3]{};
+    imageInfos[0].sampler = albedo_.sampler();
+    imageInfos[0].imageView = albedo_.view();
+    imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    imageInfos[1].sampler = normal_.sampler();
+    imageInfos[1].imageView = normal_.view();
+    imageInfos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    imageInfos[2].sampler = roughness_.sampler();
+    imageInfos[2].imageView = roughness_.view();
+    imageInfos[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet writes[3]{};
+    for (uint32_t b = 0; b < 3; ++b) {
+        writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[b].dstSet = descriptorSet_;
+        writes[b].dstBinding = b;
+        writes[b].descriptorCount = 1;
+        writes[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[b].pImageInfo = &imageInfos[b];
+    }
+    vkUpdateDescriptorSets(dev_->device, 3, writes, 0, nullptr);
+
     textured_ = albedo_.ready();
     std::fprintf(stderr,
-                 "[cube] albedo: %u/%d materials from photographs (%s, %.2f MiB "
-                 "device memory, mask 0x%04x) in %.0f ms decode + %.0f ms upload\n",
-                 albedo_.layers_loaded(), kMaterialMapCount,
-                 albedo_.format_name(),
-                 static_cast<double>(albedo_.device_bytes()) / (1024.0 * 1024.0),
-                 texMask_, albedo_.decode_ms(), albedo_.upload_ms());
-    if (albedo_.layers_loaded() < static_cast<std::uint32_t>(kMaterialMapCount))
-        std::fprintf(stderr,
-                     "[cube] WARNING: %d of %d albedo maps FAILED to load and "
-                     "those materials keep the procedural surface — see the "
-                     "errors above\n",
-                     kMaterialMapCount
-                         - static_cast<int>(albedo_.layers_loaded()),
-                     kMaterialMapCount);
+                 "[cube] albedo: %u/%d materials (mask 0x%04x), normal: %u/%d (mask 0x%04x), roughness: %u/%d (mask 0x%04x)\n",
+                 albedo_.layers_loaded(), kMaterialMapCount, texMask_,
+                 normal_.layers_loaded(), kMaterialMapCount, normalMask_,
+                 roughness_.layers_loaded(), kMaterialMapCount, roughnessMask_);
 }
 
 bool CubePass::create_pipeline(VkRenderPass renderPass, const char* shaderDir) {
@@ -712,7 +783,7 @@ bool CubePass::create_pipeline(VkRenderPass renderPass, const char* shaderDir) {
     // the shader does not use is legal but pointless; a shader that uses a set the
     // layout does not declare is invalid, which is the whole reason for the two
     // modules.
-    const VkDescriptorSetLayout setLayout = albedo_.set_layout();
+    const VkDescriptorSetLayout setLayout = descriptorSetLayout_;
     if (textured_) {
         lci.setLayoutCount = 1;
         lci.pSetLayouts = &setLayout;
@@ -925,17 +996,15 @@ void CubePass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
     if (textured_) {
-        const VkDescriptorSet set = albedo_.descriptor_set();
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0,
-                                1, &set, 0, nullptr);
+                                1, &descriptorSet_, 0, nullptr);
     }
-    // torus.z is this pass's output lane, not the caller's input: whatever main.cpp
-    // put there is replaced by the set of materials that actually decoded. Copying
-    // 128 bytes on the stack once per frame is the price of main.cpp not having to
-    // know textures exist, and of body_pass — which shares this block AND this
-    // fragment source — keeping the 0 that selects the procedural path.
     CubePush p = push;
     p.torus.z = static_cast<float>(texMask_);
+    std::uint32_t packedMasks = (normalMask_ & 0xFFFFu) | ((roughnessMask_ & 0xFFFFu) << 16);
+    float packedF;
+    std::memcpy(&packedF, &packedMasks, sizeof(packedF));
+    p.torus.w = packedF;
     vkCmdPushConstants(cmd, layout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(CubePush), &p);
@@ -951,14 +1020,15 @@ void CubePass::destroy() {
     cubeVerts_.destroy(*dev_);
     if (pipeline_) { vkDestroyPipeline(dev_->device, pipeline_, nullptr); pipeline_ = VK_NULL_HANDLE; }
     if (layout_) { vkDestroyPipelineLayout(dev_->device, layout_, nullptr); layout_ = VK_NULL_HANDLE; }
-    // LAST, after the pipeline layout that names its descriptor set layout is
-    // already gone. Vulkan permits the other order — a pipeline layout keeps its
-    // own reference — but destroying dependents first is the ordering that stays
-    // correct if this pass ever holds two pipelines. Idempotent, so the early-bail
-    // paths in load_material_textures() that already called it cost nothing here.
+    if (descriptorSetLayout_) { vkDestroyDescriptorSetLayout(dev_->device, descriptorSetLayout_, nullptr); descriptorSetLayout_ = VK_NULL_HANDLE; }
+    if (descriptorPool_) { vkDestroyDescriptorPool(dev_->device, descriptorPool_, nullptr); descriptorPool_ = VK_NULL_HANDLE; descriptorSet_ = VK_NULL_HANDLE; }
+    roughness_.destroy();
+    normal_.destroy();
     albedo_.destroy();
     textured_ = false;
     texMask_ = 0;
+    normalMask_ = 0;
+    roughnessMask_ = 0;
 }
 
 } // namespace giga::gpu

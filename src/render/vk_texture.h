@@ -69,7 +69,7 @@ public:
     // the device's image limits, or if any Vulkan call fails — each with the
     // reason on stderr.
     bool init(VulkanDevice& dev, std::uint32_t layers, std::uint32_t width,
-              std::uint32_t height, std::uint32_t mips);
+              std::uint32_t height, std::uint32_t mips, bool unorm = false);
 
     // Decode `path` and upload its complete mip chain into `layer`.
     //
@@ -95,6 +95,8 @@ public:
     // sampler when this is false.
     bool ready() const { return ready_; }
 
+    VkImageView view() const { return view_; }
+    VkSampler sampler() const { return sampler_; }
     VkDescriptorSetLayout set_layout() const { return setLayout_; }
     VkDescriptorSet descriptor_set() const { return set_; }
     VkFormat format() const { return format_; }
@@ -138,6 +140,7 @@ private:
     // core-purity rule is about giga_core, but a decoder header has no business
     // in a Vulkan interface either).
     int target_ = 0;
+    bool unorm_ = false;
 
     std::uint32_t layers_ = 0;
     std::uint32_t width_ = 0;

@@ -65,7 +65,7 @@ The section below contains **100% of the true, un-truncated, original human deve
 
 ---
 
-# gigahrush2
+### gigahrush2
 
 A universal voxel **core engine** — the substrate you build a voxel game on,
 not a game itself. It gives you a large simulated world, the physics and data

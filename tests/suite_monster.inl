@@ -661,6 +661,7 @@ static void test_monster_all() {
 
         const MobRef& mrAfter = reg.get<MobRef>(mobG);
         CHECK(mrAfter.hp < initialHp);
+        reg.destroy(mobG);
 
         // 3) Verify flying monster ignores floor hazard
         const Entity mobF = reg.create();

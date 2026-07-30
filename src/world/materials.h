@@ -74,9 +74,14 @@ inline constexpr CellType kMatTread = 13;       // Industrial slab   (measured)
 inline constexpr CellType kMatRust = 14;        // Derelict wall     (measured)
 inline constexpr CellType kMatRubble = 15;      // Derelict slab     (measured)
 
+// --- Environmental hazards --------------------------------------------------
+inline constexpr CellType kMatElectricGrate = 16; // Electrical floor grate
+inline constexpr CellType kMatAcidPool     = 17; // Acid pool
+inline constexpr CellType kMatFireCell     = 18; // Fire cell / burning floor
+
 // One past the last id in use. The colour table is sized from this, so adding a
 // material without extending the table fails the build rather than rendering as
 // an unremarkable default.
-inline constexpr CellType kMatCount = 16;
+inline constexpr CellType kMatCount = 19;
 
 } // namespace giga

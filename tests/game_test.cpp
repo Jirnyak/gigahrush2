@@ -39,6 +39,7 @@
 #include "game/npc_pool.h"
 #include "game/wander.h"
 #include "game/population.h"
+#include "game/rpg.h"
 
 #include "sim/physics.h"
 #include "world/lattice.h"
@@ -105,6 +106,7 @@ int g_checks = 0;
 #include "suite_playercmd.inl"
 #include "suite_macrowire.inl"
 #include "suite_status.inl"
+#include "suite_rpg.inl"
 static void test_inventory() {
     // Compile-time layout contract: a static_assert, not a CHECK. It is a fact
     // about the type, so it belongs to the build, not to a test run.
@@ -4130,6 +4132,7 @@ int main() {
     test_playercmd_all();
     test_macrowire_all();
     test_status_all();
+    test_rpg_all();
     test_route_realfloor();
     test_streamed_nav();
     test_nav_cache_roundtrip();

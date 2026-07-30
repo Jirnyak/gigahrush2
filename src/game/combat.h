@@ -42,6 +42,7 @@
 #include "game/npc_pool.h"
 #include "world/level_stack.h"
 #include "world/macro_grid.h"
+#include "world/materials.h"
 
 namespace giga::game {
 
@@ -52,6 +53,37 @@ enum class DamageChannel : std::uint8_t {
 };
 inline constexpr std::size_t kDamageChannels =
     static_cast<std::size_t>(DamageChannel::Count);
+
+// Environmental hazard query for cell materials.
+struct CellHazard {
+    std::int16_t damage = 0;
+    DamageChannel channel = DamageChannel::Kinetic;
+    bool active = false;
+};
+
+inline CellHazard get_cell_hazard(CellType t) {
+    CellHazard h;
+    switch (t) {
+        case kMatElectricGrate:
+            h.damage = 15;
+            h.channel = DamageChannel::Energy;
+            h.active = true;
+            break;
+        case kMatAcidPool:
+            h.damage = 10;
+            h.channel = DamageChannel::Kinetic;
+            h.active = true;
+            break;
+        case kMatFireCell:
+            h.damage = 20;
+            h.channel = DamageChannel::Fire;
+            h.active = true;
+            break;
+        default:
+            break;
+    }
+    return h;
+}
 
 // Flat percentage mitigation per channel, 0..100, clamped on use. Absent means no
 // armour at all, which is the common case — the reference authors only four.

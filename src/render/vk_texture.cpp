@@ -32,9 +32,13 @@ struct Target {
 // transcode is a re-wrap where BC7 costs a measured mean -1.84 dB
 // (data/textures/README.md, per-map table). If BC ever stops being universal the
 // order is the only thing that has to change.
-constexpr Target kTargets[] = {
+constexpr Target kTargetsSrgb[] = {
     {VK_FORMAT_BC7_SRGB_BLOCK, KTX_TTF_BC7_RGBA, "BC7_SRGB_BLOCK"},
     {VK_FORMAT_ASTC_4x4_SRGB_BLOCK, KTX_TTF_ASTC_4x4_RGBA, "ASTC_4x4_SRGB_BLOCK"},
+};
+constexpr Target kTargetsUnorm[] = {
+    {VK_FORMAT_BC7_UNORM_BLOCK, KTX_TTF_BC7_RGBA, "BC7_UNORM_BLOCK"},
+    {VK_FORMAT_ASTC_4x4_UNORM_BLOCK, KTX_TTF_ASTC_4x4_RGBA, "ASTC_4x4_UNORM_BLOCK"},
 };
 
 // Third copy of this eight-line search in src/render (vk_buffer.cpp and
@@ -228,7 +232,9 @@ VkDeviceSize chain_bytes(std::uint32_t width, std::uint32_t height,
 }
 
 const char* VulkanTextureArray::format_name() const {
-    for (const Target& t : kTargets)
+    for (const Target& t : kTargetsSrgb)
+        if (t.format == format_) return t.name;
+    for (const Target& t : kTargetsUnorm)
         if (t.format == format_) return t.name;
     return "UNDEFINED";
 }
@@ -240,7 +246,9 @@ bool VulkanTextureArray::choose_format() {
     constexpr VkFormatFeatureFlags kNeed =
         VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT
         | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
-    for (const Target& t : kTargets) {
+    const Target* targets = unorm_ ? kTargetsUnorm : kTargetsSrgb;
+    for (std::size_t i = 0; i < 2; ++i) {
+        const Target& t = targets[i];
         VkFormatProperties fp{};
         vkGetPhysicalDeviceFormatProperties(dev_->physical, t.format, &fp);
         if ((fp.optimalTilingFeatures & kNeed) != kNeed) continue;
@@ -266,10 +274,10 @@ bool VulkanTextureArray::choose_format() {
         return true;
     }
     std::fprintf(stderr,
-                 "[tex] ERROR: this device samples neither BC7_SRGB nor "
-                 "ASTC_4x4_SRGB with linear filtering, so the UASTC pack in "
-                 "data/textures cannot be transcoded to anything it can read. "
-                 "Falling back to the procedural surface.\n");
+                 "[tex] ERROR: this device samples neither BC7 nor "
+                 "ASTC_4x4 (%s) with linear filtering. "
+                 "Falling back to the procedural surface.\n",
+                 unorm_ ? "UNORM" : "SRGB");
     return false;
 }
 
@@ -528,12 +536,13 @@ bool VulkanTextureArray::copy_staged_levels(std::uint32_t layer,
 
 bool VulkanTextureArray::init(VulkanDevice& dev, std::uint32_t layers,
                               std::uint32_t width, std::uint32_t height,
-                              std::uint32_t mips) {
+                              std::uint32_t mips, bool unorm) {
     dev_ = &dev;
     layers_ = layers;
     width_ = width;
     height_ = height;
     mips_ = mips;
+    unorm_ = unorm;
     if (layers_ == 0 || mips_ == 0 || mips_ > 32 || width_ == 0 || height_ == 0) {
         std::fprintf(stderr,
                      "[tex] ERROR: bad array shape %ux%u x%u layers x%u mips\n",
