@@ -1,0 +1,131 @@
+#version 450
+
+// cull.comp — GPU Compute Frustum & Distance Culling Pass.
+//
+// Tests prop bounding boxes against 6 view-frustum planes derived from the VP matrix,
+// distance fog cull radius, and toroidal minimal-image camera relative placement.
+// Visible prop instances are written to an output SSBO and indirect draw commands
+// (VkDrawIndexedIndirectCommand) are populated with 0-CPU-overhead.
+
+layout (local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// Per-instance attributes (matches PropInstance in src/render/prop_mesh.h, 32 B)
+struct PropInstance {
+    vec3  origin;      // World position / base centre (12 B)
+    float yaw;         // Rotation angle in radians (4 B)
+    vec3  color;       // RGB albedo multiplier (12 B)
+    uint  packedFlags; // matId(8), emissive(8), flags(8), animPhase(8) (4 B)
+};
+
+// VkDrawIndexedIndirectCommand layout (20 B)
+struct VkDrawIndexedIndirectCommand {
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int  vertexOffset;
+    uint firstInstance;
+};
+
+// Push constants layout (128 bytes guaranteed Vulkan maximum)
+layout(push_constant) uniform CullPush {
+    mat4  viewProj;      // 64B: View-Projection matrix
+    vec4  camPos;        // 16B: xyz = camera pos, w = fogEnd radius
+    vec4  boxMinExt;     // 16B: xyz = AABB min relative to origin, w = torusPeriod
+    vec4  boxMaxParams;  // 16B: xyz = AABB max relative to origin, w = float(vertexOffset)
+    uint  objectCount;   //  4B: total input instances
+    uint  indexCount;    //  4B: index count for mesh
+    uint  firstIndex;    //  4B: first index offset
+    uint  firstInstance; //  4B: base instance offset
+} push;
+
+layout(std430, binding = 0) readonly buffer InputInstances {
+    PropInstance instances[];
+} inInst;
+
+layout(std430, binding = 1) writeonly buffer OutputInstances {
+    PropInstance instances[];
+} outInst;
+
+layout(std430, binding = 2) buffer IndirectCommand {
+    VkDrawIndexedIndirectCommand cmd;
+} outCmd;
+
+void main() {
+    uint gID = gl_GlobalInvocationID.x;
+
+    // Thread 0 initializes draw command static params
+    if (gID == 0) {
+        outCmd.cmd.indexCount    = push.indexCount;
+        outCmd.cmd.firstIndex    = push.firstIndex;
+        outCmd.cmd.vertexOffset  = int(push.boxMaxParams.w);
+        outCmd.cmd.firstInstance = push.firstInstance;
+    }
+
+    if (gID >= push.objectCount) return;
+
+    PropInstance inst = inInst.instances[gID];
+
+    // 1. Toroidal position snap relative to camera
+    vec3 camPos = push.camPos.xyz;
+    vec3 relPos = inst.origin - camPos;
+    float period = push.boxMinExt.w;
+    if (period > 0.0) {
+        relPos.x -= period * floor(relPos.x / period + 0.5);
+        relPos.y -= period * floor(relPos.y / period + 0.5);
+        relPos.z -= period * floor(relPos.z / period + 0.5);
+    }
+
+    // 2. Fog distance check (fogEnd in push.camPos.w)
+    float distSq = dot(relPos, relPos);
+    float fogEnd = push.camPos.w;
+    if (fogEnd > 0.0 && distSq > fogEnd * fogEnd) {
+        return; // Culled by distance fog
+    }
+
+    vec3 worldPos = camPos + relPos;
+
+    // 3. Extract 6 view frustum planes from VP matrix (column-major in GLSL)
+    vec4 r0 = vec4(push.viewProj[0][0], push.viewProj[1][0], push.viewProj[2][0], push.viewProj[3][0]);
+    vec4 r1 = vec4(push.viewProj[0][1], push.viewProj[1][1], push.viewProj[2][1], push.viewProj[3][1]);
+    vec4 r2 = vec4(push.viewProj[0][2], push.viewProj[1][2], push.viewProj[2][2], push.viewProj[3][2]);
+    vec4 r3 = vec4(push.viewProj[0][3], push.viewProj[1][3], push.viewProj[2][3], push.viewProj[3][3]);
+
+    vec4 planes[6];
+    planes[0] = r3 + r0; // Left
+    planes[1] = r3 - r0; // Right
+    planes[2] = r3 + r1; // Bottom
+    planes[3] = r3 - r1; // Top
+    planes[4] = r2;      // Near (Vulkan depth [0, 1])
+    planes[5] = r3 - r2; // Far
+
+    // 4. Frustum AABB test
+    vec3 boxMin = push.boxMinExt.xyz;
+    vec3 boxMax = push.boxMaxParams.xyz;
+    vec3 center = worldPos + (boxMin + boxMax) * 0.5;
+    vec3 extents = (boxMax - boxMin) * 0.5;
+
+    bool visible = true;
+    for (int i = 0; i < 6; ++i) {
+        vec3 n = planes[i].xyz;
+        float d = planes[i].w;
+        float len = length(n);
+        if (len > 0.0) {
+            n /= len;
+            d /= len;
+        }
+
+        float radius = extents.x * abs(n.x) + extents.y * abs(n.y) + extents.z * abs(n.z);
+        float dist = dot(n, center) + d;
+        if (dist + radius < 0.0) {
+            visible = false;
+            break;
+        }
+    }
+
+    if (!visible) return;
+
+    // 5. Append to culled instance output buffer & atomically increment instanceCount
+    uint outIdx = atomicAdd(outCmd.cmd.instanceCount, 1);
+    inst.origin = worldPos; // Store toroidal pre-wrapped origin
+    outInst.instances[outIdx] = inst;
+}

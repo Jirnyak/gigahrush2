@@ -265,6 +265,16 @@ add_custom_command(
     COMMENT "glslc particles.comp -> particles.comp.spv")
 list(APPEND _giga_spv_files ${_giga_spv_dir}/particles.comp.spv)
 
+# GPU compute prop frustum culling shader.
+add_custom_command(
+    OUTPUT ${_giga_spv_dir}/cull.comp.spv
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0
+        ${CMAKE_SOURCE_DIR}/shaders/cull.comp
+        -o ${_giga_spv_dir}/cull.comp.spv
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/cull.comp
+    COMMENT "glslc cull.comp -> cull.comp.spv")
+list(APPEND _giga_spv_files ${_giga_spv_dir}/cull.comp.spv)
+
 # prop_tex.frag — triplanar KTX2 texture variant for prop pass.
 add_custom_command(
     OUTPUT ${_giga_spv_dir}/prop_tex.frag.spv
