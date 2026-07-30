@@ -1535,7 +1535,7 @@ static void test_death_goes_through_one_finalizer() {
     CHECK(!again.hit && again.applied == 0);
 
     CHECK(finalize_deaths(reg, pool, bus, /*tick=*/7u) == 1);
-    CHECK(!reg.valid(e));         // now it is gone
+    CHECK(reg.all_of<Corpse>(e));         // now it rests as a persistent corpse
     CHECK(!pool.alive(id));       // and the record is dead
     CHECK(pool.valid(id));        // but its id stays valid forever ([npcs.md])
 
@@ -1759,9 +1759,9 @@ static void test_loot_drops_before_the_corpse_is_gone() {
     const std::uint32_t dropped = loot_dead_mobs(reg, 0, /*floor=*/0, 1234u);
     CHECK(dropped > 0);           // a boss always pays out
 
-    // Only NOW is the corpse destroyed, and the loot outlives it.
+    // The corpse persists on floor for looting, and loot is placed.
     CHECK(finalize_deaths(reg, pool, bus, 1u) == 1);
-    CHECK(!reg.valid(boss));
+    CHECK(reg.all_of<Corpse>(boss));
     std::uint32_t onFloor = 0;
     for (auto e : reg.view<const Pickup>()) { (void)e; ++onFloor; }
     CHECK(onFloor == dropped);

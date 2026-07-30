@@ -154,7 +154,7 @@ static void test_hunt_all() {
         CHECK(finalize_deaths(reg, pool, bus, t) == 1);
         // ...and only now. NpcPool::kill was reached, the slot was NOT reclaimed, and
         // exactly one NpcDied names the victim and the killer.
-        CHECK(!reg.valid(body));
+        CHECK(reg.all_of<Corpse>(body));
         CHECK(!pool.alive(victimId));
         CHECK(pool.valid(victimId));                // an id stays valid forever
         CHECK(pool.alive() == aliveBefore - 1u);
