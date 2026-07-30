@@ -705,6 +705,9 @@ int main(int argc, char** argv) {
     game::DoorTick doorTick{};      // last step's report, for the HUD
     std::uint32_t doorsBuilt = 0;   // on this floor, so the HUD can say "0 doors"
     bool doorWanted = false;        // Q, consumed by one sim step
+    bool interactWanted = false;    // E, consumed by one sim step (Terminal / ControlPanel interact)
+    char elevDiagLine[160] = {};
+    std::uint64_t elevDiagAt = 0;
     // One seed for every floor's doors. door_build is deterministic in it, so a floor
     // gets the same doors on every visit, the same way its mobs and crates do.
     constexpr unsigned kDoorSeed = 0xD00D5u;
@@ -1170,6 +1173,7 @@ int main(int argc, char** argv) {
                 // contract_accept refuses the same. [quest.h, contract.h]
                 if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
                     e.key.scancode == SDL_SCANCODE_E) {
+                    interactWanted = true;
                     if (game::contract_accept(contracts, offer, ledger)) {
                         offer = game::Contract{};
                         offerLine[0] = 0;
@@ -1354,6 +1358,27 @@ int main(int argc, char** argv) {
                         game::door_toggle_near(stack.layer(activeLayer), doors, reg,
                                                activeLayer,
                                                reg.get<Transform>(player).pos);
+                }
+                if (interactWanted) {
+                    interactWanted = false;
+                    if (reg.valid(player) && propPass.ready()) {
+                        const vec3 ppos = reg.get<Transform>(player).pos;
+                        std::vector<vec3> terms = propPass.get_terminal_positions();
+                        game::TerminalInteractResult tres = game::embody_interact_terminal(
+                            reg, stack.layer(activeLayer), doors, activeLayer, ppos, 4.0f, terms);
+                        if (tres.interacted) {
+                            std::snprintf(elevDiagLine, sizeof(elevDiagLine),
+                                          "ELEVATOR DIAGNOSTIC: FLOOR %d TERMINAL LINKED | DOORS %s (%u TOGGLED)",
+                                          currentFloor, tres.doorsLocked ? "LOCKED" : "UNLOCKED", tres.doorsToggled);
+                            elevDiagAt = simTick;
+                            if (particlePass.ready()) {
+                                particlePass.emit_burst(tres.propPos + vec3{0.0f, 1.0f, 0.0f},
+                                                        vec3{0.0f, 1.0f, 0.0f}, vec3{0.35f, 0.85f, 1.0f},
+                                                        gpu::GpuParticleKind::ElecArc,
+                                                        64, 5.5f, 0.6f, 0.15f, 180.0f);
+                            }
+                        }
+                    }
                 }
                 // Melee resolves AFTER physics, so reach is tested against where
                 // bodies actually ended up this step rather than where they
@@ -2228,6 +2253,8 @@ int main(int argc, char** argv) {
                 ImGui::Text("duty here %.1f%% | cycles %u | fog x%.2f | took %d hp",
                             game::samosbor_duty01(currentFloor) * 100.0f,
                             samosborCycles, fogScale, samosborDamage);
+                if (elevDiagLine[0] && simTick - elevDiagAt < 8u * kSimHz)
+                    ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "%s", elevDiagLine);
             }
             {
                 const game::Needs& nd = [&]() -> const game::Needs& {
@@ -2400,17 +2427,15 @@ int main(int argc, char** argv) {
             push.sunDir = vec4{0.4f, 0.3f, 0.85f, kFillStrength};
             push.camPos = vec4{camMat.eye.x, camMat.eye.y, camMat.eye.z,
                                kLampIntensity};
-            // Fog fades to black between 0.30 and 0.50 of the torus period. The
-            // end (kWorldExtent/2 = 64 cells) is the minimal-image radius, so
-            // the wrap seam is always hidden inside full-black fog.
             const float fogScale = samosbor_fog_scale(samosbor);
+            const float samosborPulse = std::clamp((1.0f - fogScale) / (1.0f - kSamosborFogSqueeze), 0.0f, 1.0f);
             push.fog = vec4{kWorldExtent * 0.30f * fogScale,
                             kWorldExtent * 0.50f * fogScale,
                             kLampRadius, kAmbient};
             // The wrap period, so cube.vert can place each cell at its nearest
             // toroidal image itself. Instance origins are absolute, which is what
             // makes the cube pass's instance cache possible.
-            push.torus = vec4{kWorldExtent, kAoDirect, 0.0f, currentTimeSec};
+            push.torus = vec4{kWorldExtent, kAoDirect, samosborPulse, currentTimeSec};
             // Each pass is bracketed by GPU timestamps as well as by the CPU
             // clock: the two answer different questions and need opposite fixes.
             // The CPU figure is time spent building instance data on this thread;
