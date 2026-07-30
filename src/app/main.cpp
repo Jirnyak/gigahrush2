@@ -1731,15 +1731,16 @@ int main(int argc, char** argv) {
                     const game::CraftStation bench =
                         game::on_extraction_pad(stack.layer(activeLayer).grid(), ct.pos)
                             ? game::CraftStation::Workbench
-                            : game::CraftStation::Any;
+                            : game::CraftStation::NetTerminal;
                     bool invChanged = false;
                     if (const auto* nrk = reg.try_get<game::NpcRef>(player))
                         if (pool.valid(nrk->id)) {
                             game::Inventory& ci = pool.inventory(nrk->id);
                             if (craftWanted) {
-                                // A blueprint in the bag beats building something:
-                                // reading it is the ONLY way the tier rises, so a folder
-                                // is worth more as knowledge than as loot.
+                                if (particlePass.ready()) {
+                                    particlePass.emit_burst(ct.pos + vec3{0.0f, 1.2f, 0.0f}, vec3{0.0f, 1.0f, 0.0f},
+                                                            vec3{0.20f, 0.90f, 1.00f}, gpu::GpuParticleKind::ElecArc, 16, 4.0f, 1.2f, 0.25f, 90.0f);
+                                }
                                 const game::LearnResult lr =
                                     game::craft_learn_from_carried(crafting, ci);
                                 recipesLearned += lr.learned;
