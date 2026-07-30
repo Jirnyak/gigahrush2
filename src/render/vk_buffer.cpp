@@ -130,7 +130,10 @@ bool VulkanBuffer::create_device_local(const VulkanDevice& dev,
         vkFreeMemory(dev.device, stagingMem, nullptr);
         return false;
     }
-    std::memcpy(map, data, static_cast<std::size_t>(bytes));
+    if (data)
+        std::memcpy(map, data, static_cast<std::size_t>(bytes));
+    else
+        std::memset(map, 0, static_cast<std::size_t>(bytes));
     vkUnmapMemory(dev.device, stagingMem);
 
     if (!make_buffer(dev, bytes, usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,

@@ -76,6 +76,7 @@
 #include "render/gpu_timer.h"
 #include "render/gpu_light_grid.h"
 #include "render/gpu_particle_pass.h"
+#include "render/gpu_cull_pass.h"
 #include "render/imgui_layer.h"
 #include "render/vk_device.h"
 #include "render/vk_renderer.h"
@@ -572,6 +573,11 @@ int main(int argc, char** argv) {
     gpu::GpuParticlePass particlePass;
     if (!particlePass.init(&device, renderer.renderPass, 0, GIGA_SHADER_DIR, lightGrid.descriptor_set_layout())) {
         std::fprintf(stderr, "[particle] pass init failed (continuing without particles)\n");
+    }
+
+    gpu::GpuCullPass cullPass;
+    if (!cullPass.init(&device, GIGA_SHADER_DIR)) {
+        std::fprintf(stderr, "[cull] pass init failed (continuing without GPU culling)\n");
     }
 
     gpu::PropPlacer propPlacer;
@@ -1110,6 +1116,12 @@ int main(int argc, char** argv) {
                             std::uint32_t fseed = 1337u ^ (static_cast<std::uint32_t>(currentFloor) * 0x9e3779b9u);
                             propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);
                         }
+                        // ride_elevator keeps x/y and plants z=kArrivalZ. ~1-in-5
+                        // Residential columns are solid at that z, so without this
+                        // the body freezes in a wall forever (physics backs out
+                        // every tick). F9 already calls place_body_at_cell;
+                        // keyboard/--shot did not. [save.h]
+                        game::place_body_safely(reg, stack.layer(nl), player);
                     }
                 }
 
@@ -2417,6 +2429,11 @@ int main(int argc, char** argv) {
             }
 
             if (particlePass.ready()) {
+                particlePass.emit_burst(camMat.eye + vec3{0.0f, 0.5f, 0.0f},
+                                        vec3{0.0f, 0.2f, 0.0f},
+                                        vec3{0.85f, 0.80f, 0.70f},
+                                        gpu::GpuParticleKind::DustMote,
+                                        3, 0.8f, 4.0f, 0.15f, 180.0f);
                 particlePass.record_compute(cmd, kSimDt, currentTimeSec, camMat.eye);
             }
 
@@ -2554,6 +2571,10 @@ int main(int argc, char** argv) {
                         // stale — it would match the new floor's layer id and be heard
                         // there. [noise.h]
                         game::noise_clear(noiseField);
+                        // Same place_body_safely as the keyboard ride path. Two travel
+                        // sites; a fix that touches only one leaves --shot soft-locked
+                        // in a wall. [save.h]
+                        game::place_body_safely(reg, stack.layer(nl), player);
                     }
                     ++shotRideDone;
                 }

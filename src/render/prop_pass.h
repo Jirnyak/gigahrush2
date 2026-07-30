@@ -56,6 +56,19 @@ public:
 
     uint32_t last_draw_count() const { return lastDrawCount_; }
 
+    std::vector<vec3> get_terminal_positions() const {
+        std::vector<vec3> positions;
+        const auto& terminals = cpuInst_[static_cast<std::size_t>(PropShape::Terminal)];
+        for (const auto& inst : terminals) {
+            positions.push_back(inst.origin);
+        }
+        const auto& panels = cpuInst_[static_cast<std::size_t>(PropShape::ControlPanel)];
+        for (const auto& inst : panels) {
+            positions.push_back(inst.origin);
+        }
+        return positions;
+    }
+
 private:
     bool create_pipeline(VkPipelineLayout layout, VkRenderPass rp,
                          const char* shaderDir);

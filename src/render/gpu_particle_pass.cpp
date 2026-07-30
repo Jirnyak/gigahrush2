@@ -245,15 +245,19 @@ bool GpuParticlePass::create_graphics_pipeline(VkRenderPass rp,
     layoutci.pushConstantRangeCount = 1;
     layoutci.pPushConstantRanges    = &pcRange;
 
+    // The setLayouts array MUST outlive the vkCreatePipelineLayout call.
+    // Keep it in the outer scope; the if-block only decides whether to populate it.
     VkDescriptorSetLayout dummySet0 = VK_NULL_HANDLE;
+    VkDescriptorSetLayout setLayouts[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
     if (lightGridSetLayout_ != VK_NULL_HANDLE) {
         VkDescriptorSetLayoutCreateInfo li{};
         li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         vkCreateDescriptorSetLayout(d, &li, nullptr, &dummySet0);
 
-        VkDescriptorSetLayout setLayouts[2] = { dummySet0, lightGridSetLayout_ };
+        setLayouts[0] = dummySet0;
+        setLayouts[1] = lightGridSetLayout_;
         layoutci.setLayoutCount = 2;
-        layoutci.pSetLayouts = setLayouts;
+        layoutci.pSetLayouts    = setLayouts;
     } else {
         layoutci.setLayoutCount = 0;
     }
