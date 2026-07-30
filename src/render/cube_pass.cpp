@@ -562,11 +562,11 @@ void CubePass::load_material_textures() {
         if (stem.size() >= 5 && stem.compare(stem.size() - 5, 5, ".ktx2") == 0)
             stem.erase(stem.size() - 5);
 
-        const std::string path_normal = join(dir, stem + "_normal.ktx2");
+        const std::string path_normal = join(dir, (stem + "_normal.ktx2").c_str());
         if (normal_.load_layer(m.id, path_normal.c_str()))
             normalMask_ |= 1u << m.id;
 
-        const std::string path_roughness = join(dir, stem + "_roughness.ktx2");
+        const std::string path_roughness = join(dir, (stem + "_roughness.ktx2").c_str());
         if (roughness_.load_layer(m.id, path_roughness.c_str()))
             roughnessMask_ |= 1u << m.id;
     }
