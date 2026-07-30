@@ -270,13 +270,12 @@ float surface(uint mat, vec2 uv, vec3 aw, float px, float g) {
     float pitch = kMatSurface[id].y;   // cycles per 2 m cell
 
     if (fam == kFamGeneric) {
-        // The pre-existing surface, arithmetic unchanged: floors get busier detail
-        // than walls (scuffs, grit), walls read as paint over panel joins. Kept
-        // literal rather than re-expressed through mottle() so the maze test bed and
-        // the crowd — body.vert writes material 0, which lands here — render exactly
-        // as they did before the families existed.
-        float amount = aw.z > 0.5 ? 0.26 : 0.17;
-        return ((1.0 - amount * 0.5) + amount * g) * (1.0 - 0.28 * seam(uv));
+        // Floors (aw.y > 0.7): smooth poured concrete/linoleum/earth mottle, NO brick/panel seams!
+        // Walls (aw.y <= 0.7): paint mottle over precast panel joins.
+        float isFloor = step(0.7, aw.y);
+        float amount = mix(0.17, 0.26, isFloor);
+        float s = mix(seam(uv), 0.0, isFloor);
+        return ((1.0 - amount * 0.5) + amount * g) * (1.0 - 0.28 * s);
     }
 
     if (fam == kFamSmooth) {

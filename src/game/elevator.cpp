@@ -1,6 +1,7 @@
 #include "game/elevator.h"
 
 #include "ecs/components.h"
+#include "game/combat.h"   // PlayerRanged, PlayerMelee — live on the body, not the pool
 #include "game/embody.h"
 
 namespace giga::game {
@@ -35,6 +36,19 @@ RideResult ride_elevator(Registry& reg, NpcPool& pool,
     bool fly = false;
     if (auto* ctl = reg.try_get<Controller>(player)) fly = ctl->fly;
 
+    // Firearm + melee state live on the BODY, not the pool row. fold_back destroys
+    // the entity, so without this capture every elevator ride zeroes magCount —
+    // reload had already debited inventory into the magazine, so one full mag is
+    // deleted per floor change. Same hole as camera/fly, different component.
+    // Melee kills tally has the same lifetime; main.cpp already re-stamps it on
+    // death-possession, but a ride is not a death and never hit that path.
+    const bool hadRanged = reg.all_of<PlayerRanged>(player);
+    PlayerRanged ranged{};
+    if (hadRanged) ranged = reg.get<PlayerRanged>(player);
+    const bool hadMelee = reg.all_of<PlayerMelee>(player);
+    PlayerMelee melee{};
+    if (hadMelee) melee = reg.get<PlayerMelee>(player);
+
     // Fold back on the departed floor (writes the record's macro cell from the
     // live transform, then destroys the entity), relocate to the arrival storey
     // keeping x/y, and re-embody as player on the destination layer.
@@ -54,6 +68,11 @@ RideResult ride_elevator(Registry& reg, NpcPool& pool,
         cam->fovY = fovY;
     }
     if (auto* ctl = reg.try_get<Controller>(ne)) ctl->fly = fly;
+
+    // Restore combat state only if it was present — do not invent a fresh
+    // PlayerRanged on a body that never fired (lazy attach stays lazy).
+    if (hadRanged) reg.emplace_or_replace<PlayerRanged>(ne, ranged);
+    if (hadMelee) reg.emplace_or_replace<PlayerMelee>(ne, melee);
 
     r.player = ne;
     r.layer = dstLayer;
