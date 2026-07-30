@@ -223,6 +223,12 @@ struct DoorTick {
     std::uint32_t opened = 0;     // doors pushed open (non-destructive)
     std::uint32_t broken = 0;     // doors destroyed this tick
     std::uint8_t lastKind = 0xFF; // MobKind of the last breaker; 0xFF = not a mob
+    // World-space centre of the last broken / force-opened door this tick.
+    // Valid only when broken > 0 or opened > 0, respectively. The render
+    // layer reads these for debris particles and noise without touching the
+    // DoorSet or breaking the game-render boundary.
+    vec3 lastBreakPos{0, 0, 0};
+    vec3 lastOpenPos{0, 0, 0};
 };
 
 // One pass: let whoever is standing against a shut door do something about it.

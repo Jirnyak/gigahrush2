@@ -716,6 +716,7 @@ int main(int argc, char** argv) {
     game::FactionRelations factionRel = game::kBaseFactionMatrix;
     game::RelationTick relTick{};   // last drain's tallies, for the HUD
     std::uint32_t feudHits = 0;     // running total of NPC-vs-NPC hits that landed
+    std::uint32_t prevFeudHits = 0; // snapshot for detecting distant combat flashes
     // Transient event ring ([events.md]). Combat publishes deaths into it; it is
     // cleared once per frame, so a listener must consume within the frame or use
     // the opt-in log.
@@ -1451,6 +1452,33 @@ int main(int argc, char** argv) {
                 // shut — door_step early-outs on doors.shut == 0. [door.h]
                 doorTick = game::door_step(reg, stack.layer(activeLayer), doors,
                                            activeLayer, kSimDt, simTick);
+                // Door VFX: debris + noise on monster break / force-open.
+                // doorTick carries the world pos of the last event this tick.
+                if (doorTick.broken > 0 && particlePass.ready()) {
+                    // Heavy debris burst — door splintering
+                    particlePass.emit_burst(
+                        doorTick.lastBreakPos, vec3{0.0f, 0.8f, 0.0f},
+                        vec3{0.85f, 0.55f, 0.25f},
+                        gpu::GpuParticleKind::Spark,
+                        40, 4.5f, 1.2f, 0.18f, 200.0f);
+                    // Loud crash — audible across a wide radius
+                    game::NoiseProfile np{18.0f, 3500, 4,
+                                           game::NoiseSource::Door};
+                    game::noise_publish(noiseField, activeLayer,
+                                        doorTick.lastBreakPos, np, 0);
+                }
+                if (doorTick.opened > 0 && particlePass.ready()) {
+                    // Light dust puff — door pushed open
+                    particlePass.emit_burst(
+                        doorTick.lastOpenPos, vec3{0.0f, 0.5f, 0.0f},
+                        vec3{0.55f, 0.50f, 0.40f},
+                        gpu::GpuParticleKind::DustMote,
+                        16, 2.0f, 0.6f, 0.10f, 90.0f);
+                    game::NoiseProfile np{8.0f, 800, 2,
+                                           game::NoiseSource::Door};
+                    game::noise_publish(noiseField, activeLayer,
+                                        doorTick.lastOpenPos, np, 0);
+                }
                 // Q, consumed once. The player works a door with a keypress; leaning
                 // on one is how MONSTERS open it, and door_step skips the camera
                 // holder precisely so the two cannot be confused.
@@ -1520,11 +1548,11 @@ int main(int argc, char** argv) {
                 // button, because there is no weapon-selection UI yet and adding a
                 // second bind for a system with no way to choose a weapon would be a
                 // control for a choice the player cannot make.
-                //
-                // `player_ranged_step` is called unconditionally so its cooldown and
-                // reload timers advance even on ticks the trigger is not held —
-                // gating the whole call on `attackHeld` would freeze a reload the
-                // moment you let go.
+                // Snapshot player HP before combat for damage-taken VFX.
+                std::int16_t preHp = 0, preMax = 0;
+                if (reg.valid(player))
+                    game::entity_health(reg, pool, player, preHp, preMax);
+
                 bool haveGun = false;
                 if (reg.valid(player))
                     if (const auto* nrg = reg.try_get<game::NpcRef>(player))
@@ -1535,8 +1563,9 @@ int main(int argc, char** argv) {
                 shots += game::player_ranged_step(reg, pool, activeLayer,
                                                   haveGun && attackHeld && !paused,
                                                   kSimDt, simTick, &noiseField);
-                game::player_melee_step(reg, pool, bus, activeLayer, kSimDt,
-                                        !haveGun && attackHeld && !paused, simTick);
+                bool meleeHit = game::player_melee_step(
+                    reg, pool, bus, activeLayer, kSimDt,
+                    !haveGun && attackHeld && !paused, simTick);
                 meleeHits += game::mob_attack_step(reg,
                                    stack.layer(activeLayer).grid(),
                                    pool, bus, activeLayer,
@@ -1545,7 +1574,49 @@ int main(int argc, char** argv) {
                 // projectile never lands on the frame it is fired.
                 meleeHits += game::projectile_step(
                     reg, pool, bus, stack, activeLayer, kSimDt, simTick);
-                // The survival clock is a damage source, so it goes LAST among
+
+                // ── Combat VFX ─────────────────────────────────────────
+                if (reg.valid(player) && particlePass.ready()) {
+                    const vec3 ppos = reg.get<Transform>(player).pos;
+
+                    // Player MELEE HIT — big orange-white sparks burst
+                    if (meleeHit) {
+                        particlePass.emit_burst(
+                            ppos + vec3{0.0f, 1.2f, 0.0f},
+                            vec3{0.0f, 1.0f, 0.0f},
+                            vec3{1.0f, 0.75f, 0.30f},
+                            gpu::GpuParticleKind::Spark,
+                            48, 6.0f, 1.0f, 0.22f, 240.0f);
+                    }
+
+                    // Player TOOK DAMAGE — red blood/spark burst
+                    std::int16_t postHp = 0, postMax = 0;
+                    game::entity_health(reg, pool, player, postHp, postMax);
+                    if (postHp < preHp && preHp > 0) {
+                        particlePass.emit_burst(
+                            ppos + vec3{0.0f, 1.0f, 0.0f},
+                            vec3{0.0f, 0.8f, 0.0f},
+                            vec3{0.85f, 0.12f, 0.08f},
+                            gpu::GpuParticleKind::Spark,
+                            32, 4.0f, 0.8f, 0.16f, 180.0f);
+                    }
+
+                    // Distant FACTION COMBAT flashes — brief light pulse
+                    if (feudHits > prevFeudHits) {
+                        // Distant flash: offset from player, warm orange
+                        vec3 flashOff{
+                            static_cast<float>((simTick * 7u) % 61u) - 30.0f,
+                            2.0f,
+                            static_cast<float>((simTick * 13u) % 61u) - 30.0f};
+                        particlePass.emit_burst(
+                            ppos + flashOff,
+                            vec3{0.0f, 0.5f, 0.0f},
+                            vec3{1.0f, 0.65f, 0.20f},
+                            gpu::GpuParticleKind::Spark,
+                            12, 3.0f, 0.5f, 0.10f, 120.0f);
+                    }
+                    prevFeudHits = feudHits;
+                }
                 // them and still before finalize_deaths: a monster's blow lands
                 // first, and if that already killed you apply_damage refuses the
                 // target, so you cannot be billed for starving after you are dead.
@@ -2613,11 +2684,56 @@ int main(int argc, char** argv) {
             }
 
             if (particlePass.ready()) {
+                // Ambient dust: ever-present, subtle. 3 per frame at low speed.
                 particlePass.emit_burst(camMat.eye + vec3{0.0f, 0.5f, 0.0f},
                                         vec3{0.0f, 0.2f, 0.0f},
                                         vec3{0.85f, 0.80f, 0.70f},
                                         gpu::GpuParticleKind::DustMote,
                                         3, 0.8f, 4.0f, 0.15f, 180.0f);
+
+                // Samosbor alarm atmospheric particles: variant-specific.
+                // During an active alarm the environment REACTS — the building
+                // bleeds, sparks, drips or spores according to what's coming.
+                const game::SamosborAlarm alarmNow = game::samosbor_alarm(samosbor);
+                if (alarmNow.pulse > 0.05f) {
+                    vec3 aOff{
+                        static_cast<float>((simTick * 11u) % 41u) - 20.0f,
+                        static_cast<float>((simTick * 3u) % 7u) - 1.0f,
+                        static_cast<float>((simTick * 17u) % 41u) - 20.0f};
+                    switch (static_cast<game::SamosborVariant>(samosbor.variant)) {
+                        case game::SamosborVariant::Electric:
+                            particlePass.emit_burst(
+                                camMat.eye + aOff, vec3{0.0f, 1.0f, 0.0f},
+                                vec3{0.70f, 0.85f, 1.0f},
+                                gpu::GpuParticleKind::ElecArc,
+                                8, 5.0f, 0.4f, 0.12f, 160.0f);
+                            break;
+                        case game::SamosborVariant::Wet:
+                            particlePass.emit_burst(
+                                camMat.eye + aOff + vec3{0, 3, 0},
+                                vec3{0.0f, -1.0f, 0.0f},
+                                vec3{0.20f, 0.55f, 0.65f},
+                                gpu::GpuParticleKind::AcidDrip,
+                                6, 3.0f, 1.5f, 0.08f, 90.0f);
+                            break;
+                        case game::SamosborVariant::Meat:
+                            particlePass.emit_burst(
+                                camMat.eye + aOff, vec3{0.0f, 0.3f, 0.0f},
+                                vec3{0.55f, 0.85f, 0.25f},
+                                gpu::GpuParticleKind::BioSpore,
+                                5, 1.5f, 2.5f, 0.20f, 120.0f);
+                            break;
+                        default:
+                            // Other variants: generic alarm smoke
+                            particlePass.emit_burst(
+                                camMat.eye + aOff, vec3{0.0f, 0.5f, 0.0f},
+                                vec3{0.60f, 0.45f, 0.35f},
+                                gpu::GpuParticleKind::Smoke,
+                                4, 1.0f, 3.0f, 0.25f, 100.0f);
+                            break;
+                    }
+                }
+
                 particlePass.record_compute(cmd, kSimDt, currentTimeSec, camMat.eye);
             }
 

@@ -307,6 +307,11 @@ DoorTick door_step(Registry& reg, World& world, DoorSet& doors, LayerId layer,
                     ++doors.broken;
                     ++out.broken;
                     out.lastKind = mr->kind;
+                    out.lastBreakPos = vec3{
+                        (static_cast<float>(d.cx) + 0.5f) * kCellSize,
+                        (static_cast<float>(d.cy) + 0.5f) * kCellSize,
+                        (static_cast<float>(d.cz) +
+                         static_cast<float>(d.h) * 0.5f) * kCellSize};
                 }
                 continue;
             }
@@ -326,6 +331,11 @@ DoorTick door_step(Registry& reg, World& world, DoorSet& doors, LayerId layer,
             d.state = static_cast<std::uint8_t>(DoorState::Open);
             if (doors.shut) --doors.shut;
             ++out.opened;
+            out.lastOpenPos = vec3{
+                (static_cast<float>(d.cx) + 0.5f) * kCellSize,
+                (static_cast<float>(d.cy) + 0.5f) * kCellSize,
+                (static_cast<float>(d.cz) +
+                 static_cast<float>(d.h) * 0.5f) * kCellSize};
         } else {
             d.forceMs = static_cast<std::uint16_t>(ms);
         }
