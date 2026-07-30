@@ -54,6 +54,7 @@
 #include "game/container.h"
 #include "game/door.h"
 #include "game/combat.h"
+#include "game/rpg.h"
 #include "game/extraction.h"
 #include "game/save.h"
 #include "game/faction_relations.h"
@@ -69,6 +70,7 @@
 #include "input/input.h"
 #include "render/body_pass.h"
 #include "render/cube_pass.h"
+#include "render/prop_pass.h"
 #include "render/gpu_timer.h"
 #include "render/imgui_layer.h"
 #include "render/vk_device.h"
@@ -470,6 +472,80 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // GPU-instanced arbitrary prop meshes (cylinders, arches, barrels, pipes).
+    // Shares CubePass's pipeline layout and cube.frag so props receive identical
+    // PBR lighting, fog, and material shading as the voxel world.
+    gpu::PropPass propPass;
+    if (!propPass.init(&device, cubePass.pipeline_layout(),
+                       renderer.renderPass, GIGA_SHADER_DIR)) {
+        std::fprintf(stderr, "[prop] pass init failed (continuing without props)\n");
+        // Non-fatal: the game runs fine without props.
+    }
+
+    // Populate initial decorative props. These are placed relative to world
+    // origin (0,0,0) and visible once the first floor is generated nearby.
+    // In a full game, a prop placement pass would populate these from world
+    // data (room type, samosbor wave, etc.); here they demonstrate all shapes.
+    if (propPass.ready()) {
+        // Concrete pillars lining a corridor along X
+        for (int i = 0; i < 6; ++i) {
+            gpu::PropInstance col{};
+            col.origin = {static_cast<float>(8 + i * 10), 0.0f, 8.0f};
+            col.yaw    = 0.0f;
+            col.color  = {0.48f, 0.46f, 0.44f};
+            col.matId  = 2; // kMatConcrete
+            propPass.add_instance(gpu::PropShape::Cylinder, col);
+            col.origin.z = -8.0f;  // opposite side of corridor
+            propPass.add_instance(gpu::PropShape::Cylinder, col);
+        }
+        // Rusty industrial barrels clustered near a wall
+        for (int i = 0; i < 5; ++i) {
+            gpu::PropInstance bar{};
+            bar.origin = {static_cast<float>(20 + i * 3), 0.0f,
+                          static_cast<float>(14 + (i & 1) * 2)};
+            bar.yaw    = static_cast<float>(i) * 0.7f;
+            bar.color  = {0.32f, 0.18f, 0.10f};
+            bar.matId  = 5; // kMatRustyMetal
+            propPass.add_instance(gpu::PropShape::Barrel, bar);
+        }
+        // Archways framing a room entrance
+        for (int i = 0; i < 2; ++i) {
+            gpu::PropInstance arch{};
+            arch.origin = {static_cast<float>(40 + i * 16), 0.0f, 0.0f};
+            arch.yaw    = 1.5707963f; // 90°
+            arch.color  = {0.42f, 0.40f, 0.38f};
+            arch.matId  = 2;
+            propPass.add_instance(gpu::PropShape::Arch, arch);
+        }
+        // Horizontal pipes running along ceiling level
+        for (int i = 0; i < 4; ++i) {
+            gpu::PropInstance pipe{};
+            pipe.origin = {static_cast<float>(i * 12), 1.8f, 4.0f};
+            pipe.yaw    = 0.0f;
+            pipe.color  = {0.25f, 0.30f, 0.28f};
+            pipe.matId  = 4; // kMatGrate
+            propPass.add_instance(gpu::PropShape::Pipe, pipe);
+        }
+        // Half-cylinder alcove walls
+        for (int i = 0; i < 3; ++i) {
+            gpu::PropInstance hc{};
+            hc.origin = {static_cast<float>(6 + i * 14), 0.0f, -12.0f};
+            hc.yaw    = 3.14159f; // face into corridor
+            hc.color  = {0.38f, 0.36f, 0.34f};
+            hc.matId  = 2;
+            propPass.add_instance(gpu::PropShape::HalfCylinder, hc);
+        }
+        // Stair steps forming a short flight
+        for (int i = 0; i < 4; ++i) {
+            gpu::PropInstance step{};
+            step.origin = {static_cast<float>(50 + i * 2), static_cast<float>(i) * 0.25f, 0.0f};
+            step.yaw    = 0.0f;
+            step.color  = {0.44f, 0.42f, 0.40f};
+            step.matId  = 2;
+            propPass.add_instance(gpu::PropShape::StairStep, step);
+        }
+    }
+
     gpu::ImGuiLayer hud;
     if (!hud.init(device, window, renderer.renderPass,
                   static_cast<std::uint32_t>(renderer.swap().images.size()))) {
@@ -787,6 +863,12 @@ int main(int argc, char** argv) {
     game::VendorKind vendorKind = game::VendorKind::Citizen;
     std::uint32_t deaths = 0;
     std::uint32_t kills = 0;       // carried across possession
+    // The character sheet, carried across possession for the same reason `kills`
+    // is: a death takes the body, not the person's progression. Seeded level 1 so
+    // the very first embodiment (which happens below, before any death) has
+    // something valid to fall back to; embody_as_player overwrites it with the
+    // record's own rolled build.
+    game::RpgStats carriedRpg = game::fresh_rpg(1);
     bool attackHeld = false;
     bool healWanted = false;
     bool eatWanted = false;       // G, consumed by one sim step
@@ -1312,6 +1394,14 @@ int main(int argc, char** argv) {
                 if (reg.valid(player))
                     if (const auto* nr0 = reg.try_get<game::NpcRef>(player))
                         deadRow = nr0->id;
+                // The character sheet, for the same reason and at the same point:
+                // after the death point there is no component left to read, and a
+                // fresh body would otherwise arrive at level 1. `finalize_deaths`
+                // may also LEVEL this up on the killing blow, so the snapshot is
+                // taken before it runs and re-taken below when the body survives.
+                if (reg.valid(player))
+                    if (const auto* rs0 = reg.try_get<game::RpgStats>(player))
+                        carriedRpg = *rs0;
                 game::loot_dead_mobs(reg, activeLayer, currentFloor,
                                      static_cast<std::uint32_t>(simTick));
                 // ONE death point per tick, after everything that can deal damage
@@ -1578,11 +1668,26 @@ int main(int argc, char** argv) {
                         game::record_death(ledger, pool.inventory(deadRow));
                     // The PlayerMelee component dies with the body; the tally of
                     // what that person killed does not.
+                    //
+                    // Neither does the character sheet. `embody_as_player` rolls a
+                    // fresh RpgStats from the new record, which is right for a
+                    // possession but wrong across a DEATH — losing every level to a
+                    // bad corridor is not the reference's rule, and the kill tally
+                    // beside it already survives for the same reason. Captured
+                    // before the possess (the old body is already gone by then, so
+                    // this reads the value saved off at the top of the death path).
                     player = possess_a_survivor(reg, pool, activeLayer);
                     if (player == entt::null) { running = false; break; }
                     aim_player(reg, player);
                     reg.emplace_or_replace<game::PlayerMelee>(
                         player, game::PlayerMelee{0, kills});
+                    reg.emplace_or_replace<game::RpgStats>(player, carriedRpg);
+                } else if (const auto* rsLive = reg.try_get<game::RpgStats>(player)) {
+                    // The body SURVIVED the tick. Refresh the snapshot, because
+                    // finalize_deaths above may have just awarded XP and levelled it
+                    // — without this, a level earned by the killing blow would be
+                    // rolled back by the next death.
+                    carriedRpg = *rsLive;
                 }
                 ++simTick;
                 // THE MACRO CLOCK. kMacroPeriodTicks = kSimHz*2 = 250, which is
@@ -1695,6 +1800,24 @@ int main(int argc, char** argv) {
                     kills = pm->kills;
             ImGui::Text("hits taken: %u | deaths: %u | kills: %u", meleeHits,
                         deaths, kills);
+            // Character sheet. ASCII only, like every other printf/ImGui string in
+            // this file — the Windows console is CP1251 and Cyrillic here mojibakes.
+            if (reg.valid(player))
+                if (const auto* rs = reg.try_get<game::RpgStats>(player)) {
+                    const std::uint32_t need =
+                        rs->level < game::kRpgLevelCap
+                            ? game::xp_for_level(
+                                  static_cast<std::uint8_t>(rs->level + 1))
+                            : 0u;
+                    if (need > 0)
+                        ImGui::Text("LVL %u  XP %u / %u", rs->level, rs->xp, need);
+                    else
+                        ImGui::Text("LVL %u  (MAX)", rs->level);
+                    ImGui::Text("STR %u  AGI %u  INT %u%s",
+                                rs->attr[0], rs->attr[1], rs->attr[2],
+                                rs->attrPoints > 0 ? "   [+pts]" : "");
+                    ImGui::Text("PSI %u / %u", rs->psi, game::max_psi(*rs));
+                }
             {
                 std::int32_t carried = 0;
                 int slots = 0;
@@ -2102,6 +2225,9 @@ int main(int argc, char** argv) {
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Bodies);
             bodyPass.record(cmd, renderer.currentFrame, reg, activeLayer, push);
             renderer.timer.pass_end(cmd, gpu::GpuPass::Bodies);
+            // Props: GPU-instanced arbitrary-mesh pass, same depth buffer.
+            if (propPass.ready())
+                propPass.record(cmd, renderer.currentFrame, push);
             std::uint64_t t2 = SDL_GetPerformanceCounter();
             cubeMs = static_cast<float>((t1 - t0) / freq * 1000.0);
             bodyMs = static_cast<float>((t2 - t1) / freq * 1000.0);
@@ -2225,6 +2351,7 @@ int main(int argc, char** argv) {
 
     // --- teardown (reverse order) -----------------------------------------
     hud.destroy();
+    propPass.destroy();
     bodyPass.destroy();
     cubePass.destroy();
     renderer.destroy();
