@@ -584,8 +584,85 @@ static void descend_not_free() {
 }
 
 // ---------------------------------------------------------------------------
+// 5b. Two Descend jobs to the same |target| must not both sit Active — CLOSED
+// ---------------------------------------------------------------------------
+// contract_accept used to dedupe only on (giver, kind, subject). Descend stores its
+// depth in `target` and pays against |target|, so two Active slots aimed at the same
+// absolute depth — different givers, opposite signs, or a second baseline stamp —
+// both Complete on one walk and double-pay. Three slots, three givers, one descent:
+// that is the brick. The accept seam now refuses any second Descend whose |target|
+// collides with an Active one, regardless of giver or sign.
+static void descend_same_target_once() {
+    NpcPool pool;
+    pool.init();
+    const NpcId a = pool.spawn();
+    const NpcId b = pool.spawn();
+    CHECK(pool.alive(a) && pool.alive(b));
+
+    RunLedger led{};             // deepestFloor 0
+    ContractBook book{};
+    Inventory inv{};
+
+    Contract jobA{};
+    jobA.giver = pool.handle(a);
+    jobA.kind = static_cast<std::uint8_t>(ObjectiveKind::Descend);
+    jobA.target = -20;
+    jobA.reward = 900;
+    jobA.state = static_cast<std::uint8_t>(ContractState::Offered);
+
+    Contract jobB = jobA;
+    jobB.giver = pool.handle(b);
+    jobB.target = -20;           // same absolute depth, other person
+    jobB.reward = 1100;          // different purse so a double-pay is visible as 2000
+
+    Contract jobRoof = jobA;
+    jobRoof.giver = pool.handle(b);
+    jobRoof.target = 20;         // opposite sign, same |target|
+
+    // (a) first accept lands; second same-|target| from another giver is refused.
+    CHECK(contract_accept(book, jobA, led));
+    CHECK(book.slot[0].state == static_cast<std::uint8_t>(ContractState::Active));
+    CHECK(!contract_accept(book, jobB, led));
+    CHECK(book.slot[1].state != static_cast<std::uint8_t>(ContractState::Active));
+
+    // (b) opposite-sign same |target| is also refused — payout is absolute.
+    CHECK(!contract_accept(book, jobRoof, led));
+
+    // (c) one descent pays exactly once, from the single Active slot.
+    led.deepestFloor = -20;
+    const std::int32_t paid = contract_step(book, pool, inv, led);
+    std::fprintf(stderr,
+                 "[audit] contracts: two givers offered Descend(|20|); book held one "
+                 "Active slot and paid %d rub (want 900, not 2000)\n",
+                 paid);
+    CHECK(paid == 900);
+    CHECK(led.banked == 900);
+    CHECK(book.completed == 1);
+    CHECK(book.failed == 0);
+
+    // (d) a DIFFERENT depth still accepts into a free slot — the guard is per-|target|,
+    //     not a blanket "one Descend ever".
+    Contract jobDeep = jobA;
+    jobDeep.giver = pool.handle(b);
+    jobDeep.target = -40;
+    jobDeep.reward = 1800;
+    // After (c) slot 0 is Complete, so the book has a free (non-Active) slot again —
+    // accept reuses it, so slot 0 becomes Active with the deeper job. The pin is that
+    // accept returns true and exactly one Active Descend(|40|) sits in the book.
+    CHECK(contract_accept(book, jobDeep, led));
+    int activeDeep = 0;
+    for (int i = 0; i < kMaxContracts; ++i)
+        if (book.slot[i].state == static_cast<std::uint8_t>(ContractState::Active) &&
+            book.slot[i].kind == static_cast<std::uint8_t>(ObjectiveKind::Descend) &&
+            (book.slot[i].target == -40 || book.slot[i].target == 40))
+            ++activeDeep;
+    CHECK(activeDeep == 1);
+}
+
+// ---------------------------------------------------------------------------
 // 8. A recycled slot silently transferred a contract to a stranger — CLOSED
 // ---------------------------------------------------------------------------
+
 // `Contract::giver` was a bare `NpcId`, and contract.h justified that with "NpcPool never
 // reclaims a slot and id == slot forever". That was true when it was written and stopped
 // being true when the intrusive free list landed ([npc_pool.h] "Slot recycling"): armed,
@@ -875,6 +952,7 @@ static void test_audit_all() {
     audit_test::gun_kills_counted();
     audit_test::ammo_has_a_source();
     audit_test::descend_not_free();
+    audit_test::descend_same_target_once();
     audit_test::giver_slot_recycled();
     audit_test::hunt_is_findable();
     audit_test::stack_max_respected();

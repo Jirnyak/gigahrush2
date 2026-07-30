@@ -213,11 +213,30 @@ bool contract_accept(ContractBook& book, const Contract& offer,
 
     for (int i = 0; i < kMaxContracts; ++i) {
         const Contract& s = book.slot[i];
+        if (s.state != static_cast<std::uint8_t>(ContractState::Active)) continue;
+
         // Already holding this exact job from this exact person.
-        if (s.state == static_cast<std::uint8_t>(ContractState::Active) &&
-            s.giver == offer.giver && s.kind == offer.kind &&
-            s.subject == offer.subject)
+        // `target` is part of identity: two Hunts for the same kind with different
+        // counts, or two Fetches for the same item with different counts, are not
+        // the same job — and without it a second offer would be refused forever
+        // after the first was taken, even when the numbers differed.
+        if (s.giver == offer.giver && s.kind == offer.kind &&
+            s.subject == offer.subject && s.target == offer.target)
             return false;
+
+        // Descend is special: payout is against |deepestFloor| and |target|, so a job
+        // to -20 and a job to +20 are the SAME depth objective, and two jobs to the
+        // same |target| from different givers (or the same giver under a second
+        // baseline stamp) would both Complete on one descent and double-pay.
+        // Three slots, three givers, one walk downstairs — that is the brick.
+        // Refuse any second Active Descend whose absolute target collides, regardless
+        // of giver, sign, or the baseline that would be stamped this accept.
+        if (offer.kind == static_cast<std::uint8_t>(ObjectiveKind::Descend) &&
+            s.kind == static_cast<std::uint8_t>(ObjectiveKind::Descend)) {
+            const int haveWant = s.target < 0 ? -s.target : s.target;
+            const int offerWant = offer.target < 0 ? -offer.target : offer.target;
+            if (haveWant == offerWant) return false;
+        }
     }
     for (int i = 0; i < kMaxContracts; ++i) {
         Contract& s = book.slot[i];
