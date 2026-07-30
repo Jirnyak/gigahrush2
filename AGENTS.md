@@ -86,6 +86,7 @@ each one**. Correctness first; speed is a side effect of not backtracking.
   shell. Distance fog fades to **black** (not blue) at the `kWorldExtent/2`
   render radius, which is exactly the minimal-image radius, so the wrap seam is
   always hidden. Keep `fog end ≤ kWorldExtent/2` and the clear colour black.
+- **Strict Data-Oriented Design (DOD) & ECS Paradigm.** All gameplay features and engine subsystems must follow strict DOD/ECS principles: POD components (zero behavior/virtual functions), pure logic systems iterating over EnTT views (`reg.view<A, B>()`), dense contiguous memory buffers (SoA / flat arrays), zero per-frame hot-path allocations, and linear O(1)/O(N) tick complexity.
 - **Performance first.** Favour better algorithms, contiguous (SoA) data,
   EnTT views over pointer chasing. Do not allocate per-frame in hot paths.
 - **Native game; CPU is the only scarce resource.** This is a native C++/Vulkan
