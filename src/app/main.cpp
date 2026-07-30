@@ -977,13 +977,30 @@ int main(int argc, char** argv) {
         for (std::uint32_t i = 0; i < bus.size(); ++i) {
             const game::Event& ev = bus.events()[i];
             if (ev.type != game::EventType::NpcDied) continue;
-            // `b` is the mob kind, 0xFF when the dead thing was not a monster.
-            if (ev.b != 0xFFu)
-                game::contract_on_kill(contracts, static_cast<std::uint8_t>(ev.b));
-            // `a` is the pool id, kInvalidNpc when the dead thing had no record. A
-            // monster has no record, so this only ever fires for a real person.
-            if (ev.a != game::kInvalidNpc)
-                game::contract_on_giver_died(contracts, ev.a);
+            if (ev.type == game::EventType::NpcDied) {
+                // `b` is the mob kind, 0xFF when the dead thing was not a monster.
+                if (ev.b != 0xFFu)
+                    game::contract_on_kill(contracts, static_cast<std::uint8_t>(ev.b));
+                // `a` is the pool id, kInvalidNpc when the dead thing had no record.
+                if (ev.a != game::kInvalidNpc)
+                    game::contract_on_giver_died(contracts, ev.a);
+
+                if (particlePass.ready()) {
+                    vec3 deathPos = camMat.eye;
+                    if (ev.a != game::kInvalidNpc && pool.valid(ev.a) && pool.embodied(ev.a)) {
+                        entt::entity victimEnt = pool.entity(ev.a);
+                        if (reg.valid(victimEnt) && reg.all_of<Transform>(victimEnt)) {
+                            deathPos = reg.get<Transform>(victimEnt).pos;
+                        }
+                    }
+                    particlePass.emit_burst(deathPos + vec3{0.0f, 0.8f, 0.0f},
+                                            vec3{0.0f, 1.5f, 0.0f},
+                                            vec3{0.95f, 0.20f, 0.15f},
+                                            gpu::GpuParticleKind::Spark,
+                                            48, 5.0f, 1.5f, 0.25f, 180.0f);
+                    particlePass.emit_destruction_burst(deathPos + vec3{0.0f, 0.5f, 0.0f}, 1, 32);
+                }
+            }
         }
         // Diplomacy reads the same ring, in the same frame-top drain, and for the same
         // reason: one notion of death, not three. Deliberately here and NOT beside
