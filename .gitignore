@@ -24,6 +24,9 @@ imgui.ini
 # swallow a .png asset, so add a negation here before committing one.
 # The fetch tool's download cache is already covered by `.cache/` above.
 *.png
+!assets/*.png
+!docs/*.png
+
 
 # Claude Code personal/local settings (not shared)
 .claude/settings.local.json
