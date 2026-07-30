@@ -65,6 +65,7 @@ void GpuCullPass::destroy() noexcept {
 
     if (pipeline_)       { vkDestroyPipeline(d, pipeline_, nullptr); pipeline_ = VK_NULL_HANDLE; }
     if (pipelineLayout_) { vkDestroyPipelineLayout(d, pipelineLayout_, nullptr); pipelineLayout_ = VK_NULL_HANDLE; }
+    if (descPool_)       { vkDestroyDescriptorPool(d, descPool_, nullptr); descPool_ = VK_NULL_HANDLE; }
     if (descSetLayout_)  { vkDestroyDescriptorSetLayout(d, descSetLayout_, nullptr); descSetLayout_ = VK_NULL_HANDLE; }
 }
 
@@ -88,6 +89,27 @@ bool GpuCullPass::create_descriptor_set_layout() noexcept {
     dslci.pBindings    = bindings;
 
     VK_TRY(vkCreateDescriptorSetLayout(d, &dslci, nullptr, &descSetLayout_));
+
+    VkDescriptorPoolSize poolSize{};
+    poolSize.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    poolSize.descriptorCount = 64 * 3;
+
+    VkDescriptorPoolCreateInfo poolci{};
+    poolci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolci.maxSets       = 64;
+    poolci.poolSizeCount = 1;
+    poolci.pPoolSizes    = &poolSize;
+
+    VK_TRY(vkCreateDescriptorPool(d, &poolci, nullptr, &descPool_));
+
+    std::vector<VkDescriptorSetLayout> layouts(64, descSetLayout_);
+    VkDescriptorSetAllocateInfo alloci{};
+    alloci.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    alloci.descriptorPool     = descPool_;
+    alloci.descriptorSetCount = 64;
+    alloci.pSetLayouts        = layouts.data();
+
+    VK_TRY(vkAllocateDescriptorSets(d, &alloci, descSets_.data()));
     return true;
 }
 
@@ -163,8 +185,30 @@ void GpuCullPass::record_cull(VkCommandBuffer cmd,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          0, 1, &mb1, 0, nullptr, 0, nullptr);
 
-    // 2. Bind compute pipeline
+    // 2. Bind compute pipeline and update/bind descriptor set
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
+
+    VkDescriptorSet set = descSets_[setHead_ % descSets_.size()];
+    ++setHead_;
+
+    VkDescriptorBufferInfo b0{srcInstanceBuf, 0, VK_WHOLE_SIZE};
+    VkDescriptorBufferInfo b1{outCulledInstanceBuf, 0, VK_WHOLE_SIZE};
+    VkDescriptorBufferInfo b2{outIndirectBuf, 0, VK_WHOLE_SIZE};
+
+    VkWriteDescriptorSet writes[3]{};
+    for (uint32_t i = 0; i < 3; ++i) {
+        writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet          = set;
+        writes[i].dstBinding      = i;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    }
+    writes[0].pBufferInfo = &b0;
+    writes[1].pBufferInfo = &b1;
+    writes[2].pBufferInfo = &b2;
+
+    vkUpdateDescriptorSets(dev_->device, 3, writes, 0, nullptr);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout_, 0, 1, &set, 0, nullptr);
 
     // 3. Prepare Push Constants
     CullPush push{};

@@ -516,7 +516,38 @@ void EnvDetail::populate(const giga::MacroGrid& grid, PropPass& pass,
         place_structural(grid, pass, x, y, z, cfg, s ^ 0x44444444u);
     }
 
-    std::fprintf(stderr, "[envdetail] populate: %u props placed\n", totalPlaced_);
+    // Generate catenary wire clutter hanging between adjacent wall terminals & control panels
+    auto termPositions = pass.get_terminal_positions();
+    for (std::size_t i = 0; i < termPositions.size(); ++i) {
+        for (std::size_t j = i + 1; j < std::min(termPositions.size(), i + 6); ++j) {
+            float dx = termPositions[i].x - termPositions[j].x;
+            float dy = termPositions[i].y - termPositions[j].y;
+            float dz = termPositions[i].z - termPositions[j].z;
+            float distSq = dx * dx + dy * dy + dz * dz;
+            if (distSq > 4.0f && distSq < 144.0f) { // between 2m and 12m apart
+                vec3 start = termPositions[i] + vec3{0.0f, 1.2f, 0.0f};
+                vec3 end   = termPositions[j] + vec3{0.0f, 1.2f, 0.0f};
+                vec3 p0 = start;
+                constexpr int kWireSegments = 8;
+                for (int k = 1; k <= kWireSegments; ++k) {
+                    float t = static_cast<float>(k) / static_cast<float>(kWireSegments);
+                    vec3 p1 = {
+                        start.x + (end.x - start.x) * t,
+                        start.y + (end.y - start.y) * t - 0.65f * 4.0f * t * (1.0f - t),
+                        start.z + (end.z - start.z) * t
+                    };
+                    vec3 mid = (p0 + p1) * 0.5f;
+                    vec3 delta = p1 - p0;
+                    float yaw = std::atan2(delta.x, delta.z);
+                    pass.add_instance(PropShape::Pipe, make_inst(mid, yaw, vec3{0.18f, 0.16f, 0.14f}, 14, 0, 0, 0));
+                    p0 = p1;
+                }
+                totalPlaced_ += kWireSegments;
+            }
+        }
+    }
+
+    std::fprintf(stderr, "[envdetail] populate: %u props placed (including catenary wire clutter)\n", totalPlaced_);
 }
 
 } // namespace giga::gpu

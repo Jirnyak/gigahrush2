@@ -2015,8 +2015,11 @@ int main(int argc, char** argv) {
                         tr.pos.z, tr.layer);
             ImGui::Text("mode %s%s", ctl.fly ? "fly" : "walk",
                         ga.grounded ? " (grounded)" : "");
-            ImGui::Text("instances drawn: %u / %zu cells",
-                        cubePass.last_instance_count(), kMacroCells);
+            ImGui::Text("instances drawn: %u / %zu cells | props %u | cull %s | particles %s",
+                        cubePass.last_instance_count(), kMacroCells,
+                        propPass.last_draw_count(),
+                        cullPass.ready() ? "GPU-ready" : "off",
+                        particlePass.ready() ? "on" : "off");
             std::int16_t php = 0, pmax = 0;
             if (game::entity_health(reg, pool, player, php, pmax))
                 ImGui::Text("HP %d / %d%s", php, pmax, php <= 0 ? "  DEAD" : "");
@@ -2585,14 +2588,19 @@ int main(int argc, char** argv) {
                 if (shotFramesSeen == shotFrames) {
                     gpu::capture_request(device, renderer, shotCap);
                 } else if (shotFramesSeen > shotFrames) {
+                }
+                // Two frames, because the copy is recorded INSIDE end_frame — the
+                // only window in which the swapchain image legally belongs to the
+                // application. Request on the target frame, save on the next.
+                // [screenshot.h]
+                if (shotFramesSeen == shotFrames) {
+                    gpu::capture_request(device, renderer, shotCap);
+                } else if (shotFramesSeen > shotFrames) {
                     const bool ok =
                         gpu::capture_save(device, renderer, shotCap, shotPath);
                     std::fprintf(stderr, "shot: %s -> %s (floor %d, %d frames)\n",
                                  ok ? "saved" : "FAILED", shotPath, currentFloor,
                                  shotFramesSeen);
-                    // The same GPU figures the HUD is showing, on stderr, so an
-                    // unattended capture leaves a machine-readable measurement
-                    // beside the pixels instead of only a number to squint at.
                     if (renderer.timer.supported())
                         std::fprintf(stderr,
                                      "gpu-ms: world %.3f bodies %.3f hud %.3f "
@@ -2629,6 +2637,7 @@ int main(int argc, char** argv) {
     // --- teardown (reverse order) -----------------------------------------
     hud.destroy();
     particlePass.destroy();
+    cullPass.destroy();
     propPass.destroy();
     bodyPass.destroy();
     cubePass.destroy();

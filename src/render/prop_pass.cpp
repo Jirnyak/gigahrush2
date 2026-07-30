@@ -75,7 +75,7 @@ bool PropPass::init(VulkanDevice* dev, VkPipelineLayout pipelineLayout,
             std::snprintf(label, sizeof(label), "prop-inst-s%d-f%d", s, f);
             if (!instBufs_[s][f].create_host_visible(
                     *dev_, kInstBufBytes,
-                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, label))
+                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, label))
                 return false;
         }
     }

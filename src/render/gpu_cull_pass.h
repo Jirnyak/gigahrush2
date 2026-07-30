@@ -84,6 +84,9 @@ private:
     VkDescriptorSetLayout descSetLayout_  = VK_NULL_HANDLE;
     VkPipelineLayout      pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline            pipeline_       = VK_NULL_HANDLE;
+    VkDescriptorPool      descPool_       = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, 64> descSets_{};
+    uint32_t              setHead_        = 0;
 };
 
 } // namespace giga::gpu

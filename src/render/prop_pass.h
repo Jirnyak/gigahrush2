@@ -55,6 +55,9 @@ public:
     bool ready() const { return pipeline_ != VK_NULL_HANDLE; }
 
     uint32_t last_draw_count() const { return lastDrawCount_; }
+    uint32_t instance_count(int s) const { return static_cast<uint32_t>(cpuInst_[s].size()); }
+    VkBuffer instance_buffer(int s, uint32_t f) const { return instBufs_[s][f].buffer; }
+    const PropMesh& mesh(int s) const { return meshes_[s]; }
 
     std::vector<vec3> get_terminal_positions() const {
         std::vector<vec3> positions;
