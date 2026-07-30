@@ -2634,14 +2634,6 @@ int main(int argc, char** argv) {
                 if (shotFramesSeen == shotFrames) {
                     gpu::capture_request(device, renderer, shotCap);
                 } else if (shotFramesSeen > shotFrames) {
-                }
-                // Two frames, because the copy is recorded INSIDE end_frame — the
-                // only window in which the swapchain image legally belongs to the
-                // application. Request on the target frame, save on the next.
-                // [screenshot.h]
-                if (shotFramesSeen == shotFrames) {
-                    gpu::capture_request(device, renderer, shotCap);
-                } else if (shotFramesSeen > shotFrames) {
                     const bool ok =
                         gpu::capture_save(device, renderer, shotCap, shotPath);
                     std::fprintf(stderr, "shot: %s -> %s (floor %d, %d frames)\n",
