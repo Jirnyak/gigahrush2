@@ -230,7 +230,12 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
                 float dz = wrap_delta_f(camPos.z, pos.z, kWorldExtent);
                 if (dx * dx + dy * dy + dz * dz > 36.0f * 36.0f) continue;
 
-                grid.add_light(pos + vec3{0.0f, -0.2f, 0.0f}, 12.0f, vec3{1.00f, 0.88f, 0.65f}, 1.8f);
+                // Khrushchevka unstable power grid flickering (pure deterministic DOD math)
+                float flick = std::sin(timeSec * 12.0f + pos.x * 1.7f + pos.z * 2.3f) * 0.18f;
+                float microFlick = (std::fmod(timeSec * 47.0f + pos.x * 3.1f + pos.z * 5.7f, 1.0f) < 0.07f) ? -0.50f : 0.0f;
+                float intensity = std::max(0.2f, 1.8f + flick + microFlick);
+
+                grid.add_light(pos + vec3{0.0f, -0.2f, 0.0f}, 12.0f, vec3{1.00f, 0.88f, 0.65f}, intensity);
             }
         };
         collect_lamps(gpu::PropShape::BareBulb);
