@@ -415,12 +415,11 @@ if(GIGA_BUILD_TESTS)
     # friction for this file.
     #
     # OBSERVED, not derived: `build-win\audit_test.exe` printed
-    # `audit_test: 140 checks, 0 failures` on 2026-07-30 — was 62/0 before
-    # descend_same_target_once (12 new CHECKs) closed the double-pay hole where two
-    # Active Descend jobs to the same |target| from different givers both completed
-    # on one walk. Earlier history: 41 checks / 2 failures on 2026-07-29 were finding 5
-    # (suite_audit.inl descend_not_free), which its own ledger entry documents as
-    # unsatisfiable as written — the test is the defect there, not the game.
+    # `audit_test: 149 checks, 0 failures` on 2026-07-30 — was 140/0 before
+    # travel_arrival_not_in_wall (9 new CHECKs) closed the elevator soft-lock where
+    # keyboard/--shot kept x/y and planted z=kArrivalZ inside a solid column.
+    # Earlier: 140 after descend_same_target_once (12 CHECKs); 41/2 on 2026-07-29
+    # was finding 5 (descend_not_free) — the test was the defect, not the game.
     #
     # IF YOU CLOSE A FINDING (or add a check), this test goes RED. That is the tripwire
     # firing, not a regression. Run the exe, read its count line, change the numbers
@@ -438,7 +437,7 @@ if(GIGA_BUILD_TESTS)
     # configures first) or `cmake -S . -B build-win` before trusting a ctest verdict on a pin.
     add_test(NAME audit_findings COMMAND audit_test)
     set_tests_properties(audit_findings PROPERTIES
-        PASS_REGULAR_EXPRESSION "audit_test: 140 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "audit_test: 149 checks, 0 failures")
 
     # THE COUNT IS PINNED HERE TOO — the same mechanism as audit_findings above, now on
     # the target that carries 3,887 of the repo's 4,036 CHECK sites. Until this line

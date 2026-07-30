@@ -101,12 +101,23 @@
 //                          refresh_opened_containers / apply_opened_containers the
 //                          same way F5/F9 already did. This pin is the destroy+
 //                          respawn seam those sites share — no entity id in the key.
+//  10. travel_arrival_not_in_wall
+//                          CLOSED. ride_elevator keeps x/y and sets z=arrivalZ
+//                          (kArrivalZ=2). ~1-in-5 Residential columns are solid at
+//                          that z ([save.h]). place_body_safely is implemented and
+//                          unit-tested; F9 called place_body_at_cell; keyboard and
+//                          --shot did not. Without the call the body freezes in a
+//                          wall forever (physics backs out to zero every tick). Pin
+//                          witnesses wall landing → place_body_safely → free of
+//                          solid, velocity zeroed — the seam main.cpp now runs.
 //
 // Currently GREEN (pins, not findings): budget_vs_demo_cap records the numbers behind
 // the kMobSpawnCap claim in src/app/main.cpp so the report's arithmetic is machine-
 // checked rather than asserted in prose. ms_timer_drift joined it once core/tick.h
 // moved the sim to 125 Hz — read its own comment for why it stays in the file.
 // travel_keeps_opened_crates pins the travel-time crate capture/apply seam.
+// travel_arrival_not_in_wall pins the post-ride place_body_safely seam.
+
 //
 // A word on why this index matters more than it looks. This file's whole value rests on
 // red meaning "a real defect is live right now". An entry that stays red after its fix,
@@ -1039,6 +1050,78 @@ static void travel_keeps_opened_crates() {
     CHECK(hits == openNow);
 }
 
+// ---------------------------------------------------------------------------
+// PIN (green): elevator arrival is not left inside a wall
+// ---------------------------------------------------------------------------
+// ride_elevator keeps x/y from the departed floor and plants z = kArrivalZ
+// ([elevator.cpp]). Wall lattices of two floor kinds do not align, so ~1-in-5
+// Residential columns at z=2 are solid ([save.h] measurement). place_body_safely
+// resolves the body's current cell to a standable neighbour and zeroes Velocity.
+//
+// F9 already called place_body_at_cell. Keyboard [ ] and --shot did not — the
+// body froze forever (physics backs out of solid every tick). Both travel sites
+// in main.cpp now call place_body_safely after the arrival seam.
+//
+// This pin is the seam without the streamer: body planted in a known wall cell
+// with residual velocity → place_body_safely → free of solid, velocity zero.
+// suite_saveload already unit-tests the helper; this is the audit ledger witness
+// that the travel path must keep calling it.
+static void travel_arrival_not_in_wall() {
+    // Same wall-crossing convention as suite_saveload: stride-8 lattice, not a
+    // doorway, not a lobby. At kArrivalZ the cell is solid on Residential.
+    constexpr std::uint8_t kWallX = 8;
+    constexpr std::uint8_t kWallY = 8;
+    const vec3 kBodyHalf{0.4f, 0.4f,
+                         body_half_height(static_cast<std::uint16_t>(1750))};
+
+    LevelStack stack;
+    const LayerId layer = stack.push_layer();
+    // Generate into the live layer — same shape suite_saveload uses. place_body_safely
+    // reads the World the body stands in.
+    generate_floor(stack.layer(layer), /*floorZ=*/-26,
+                   floor_spec(FloorKind::Residential), 1337u);
+
+    const vec3 wallCentre = macro_cell_centre(kWallX, kWallY, kArrivalZ);
+    CHECK(aabb_overlaps_solid(stack.layer(layer), wallCentre, kBodyHalf));
+
+
+    Registry reg;
+    Entity e = reg.create();
+    Transform tr;
+    tr.pos = wallCentre;
+    tr.layer = layer;
+    reg.emplace<Transform>(e, tr);
+    reg.emplace<Velocity>(e, Velocity{vec3{12.0f, -3.0f, 4.0f}});
+    reg.emplace<AABB>(e, AABB{kBodyHalf});
+
+    // Premise: without the call, the body is inside solid with leftover speed —
+    // the soft-lock ride_elevator alone produces.
+    CHECK(aabb_overlaps_solid(stack.layer(layer),
+                              reg.get<Transform>(e).pos, kBodyHalf));
+    CHECK(reg.get<Velocity>(e).v.x != 0.0f);
+
+    const PlacedCell placed = place_body_safely(reg, stack.layer(layer), e);
+    CHECK(placed.ok);
+    CHECK(placed.moved);
+    CHECK(!aabb_overlaps_solid(stack.layer(layer),
+                               reg.get<Transform>(e).pos, kBodyHalf));
+    // Zeroing Velocity is not tidiness: a carried-over fall drives the body
+    // through the floor it was just placed on. [save.h]
+    CHECK(reg.get<Velocity>(e).v.x == 0.0f);
+    CHECK(reg.get<Velocity>(e).v.y == 0.0f);
+    CHECK(reg.get<Velocity>(e).v.z == 0.0f);
+
+    std::fprintf(stderr,
+                 "[audit] travel arrival: wall (%u,%u,%u) -> standable "
+                 "(%u,%u,%u) rings=%d supported=%d\n",
+                 static_cast<unsigned>(kWallX), static_cast<unsigned>(kWallY),
+                 static_cast<unsigned>(kArrivalZ),
+                 static_cast<unsigned>(placed.cx),
+                 static_cast<unsigned>(placed.cy),
+                 static_cast<unsigned>(placed.cz), placed.rings,
+                 placed.supported ? 1 : 0);
+}
+
 } // namespace audit_test
 
 static void test_audit_all() {
@@ -1053,4 +1136,6 @@ static void test_audit_all() {
     audit_test::stack_max_respected();
     audit_test::budget_vs_demo_cap();
     audit_test::travel_keeps_opened_crates();
+    audit_test::travel_arrival_not_in_wall();
 }
+
