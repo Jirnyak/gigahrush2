@@ -183,6 +183,22 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
             }
         }
     }
+
+    // 5. Flying Tracer & Plasma Projectile Light Emitters
+    for (auto e : reg.view<const game::Projectile, const Transform>()) {
+        const Transform& tr = reg.get<const Transform>(e);
+        if (tr.layer != activeLayer) continue;
+        const game::Projectile& proj = reg.get<const game::Projectile>(e);
+        if (proj.ttlMs == 0) continue;
+
+        float dx = wrap_delta_f(camPos.x, tr.pos.x, kWorldExtent);
+        float dy = camPos.y - tr.pos.y;
+        float dz = wrap_delta_f(camPos.z, tr.pos.z, kWorldExtent);
+        if (dx * dx + dy * dy + dz * dz < 48.0f * 48.0f) {
+            vec3 pcol = (proj.team == 1) ? vec3{1.0f, 0.85f, 0.40f} : vec3{0.95f, 0.20f, 0.40f};
+            grid.add_light(tr.pos, 10.0f, pcol, 2.5f);
+        }
+    }
 }
 
 // The player's unencumbered walk speed. Named here because the survival clock now
