@@ -73,7 +73,8 @@ vec4 march_volumetric_fog(
     vec3 gridMin,
     vec3 gridExt,
     vec3 cellSize,
-    float timeSec
+    float timeSec,
+    float samosborPulse
 ) {
     const int kNumSteps = 12;
     float jitter = ign_jitter(fragCoord);
@@ -81,7 +82,8 @@ vec4 march_volumetric_fog(
 
     vec3 inscatter = vec3(0.0);
     float transmittance = 1.0;
-    const float kAbsorption = 0.035; // Fog extinction coefficient per metre
+    // Dynamic extinction scaling when Samosbor hazard strikes (samosbor.pulse)
+    float kAbsorption = 0.035 * (1.0 + clamp(samosborPulse, 0.0, 1.0) * 3.5);
 
     uvec3 gridDim = uvec3(uint(gridExt.x), uint(gridExt.y), uint(gridExt.z));
 
@@ -162,6 +164,30 @@ vec4 march_volumetric_fog(
     }
 
     return vec4(inscatter, transmittance);
+}
+
+// 13-parameter overload for backwards compatibility when samosborPulse is omitted
+vec4 march_volumetric_fog(
+    vec3 rayOrigin,
+    vec3 rayDir,
+    float maxDist,
+    vec2 fragCoord,
+    vec3 headlampPos,
+    float headlampIntensity,
+    float headlampRadius,
+    vec3 fillDir,
+    float fillStrength,
+    vec3 gridMin,
+    vec3 gridExt,
+    vec3 cellSize,
+    float timeSec
+) {
+    return march_volumetric_fog(
+        rayOrigin, rayDir, maxDist, fragCoord,
+        headlampPos, headlampIntensity, headlampRadius,
+        fillDir, fillStrength, gridMin, gridExt, cellSize,
+        timeSec, 0.0
+    );
 }
 
 #endif // VOLUMETRIC_FOG_GLSL

@@ -154,7 +154,7 @@ float hash11(float p) {
     return fract(p);
 }
 
-float compute_animated_emissive(float baseEmissive, uint mat_id, vec3 worldPos, float phaseRad, float timeSec) {
+float compute_animated_emissive(float baseEmissive, uint mat_id, vec3 worldPos, float phaseRad, float timeSec, float samosborPulse) {
     if (baseEmissive < 0.001) return 0.0;
 
     // Case A: High-frequency electrical flicker (for lamps / cabinets / bright lights)
@@ -177,6 +177,10 @@ float compute_animated_emissive(float baseEmissive, uint mat_id, vec3 worldPos, 
         float scanline = sin(vWorldPos.y * 120.0 + timeSec * 15.0) * 0.20 + 0.80;
         float staticNoise = hash11(floor(vWorldPos.y * 80.0) + floor(timeSec * 35.0 + phaseRad)) * 0.25;
         float oscWave = exp(-180.0 * pow(fract(vWorldPos.x * 2.0) - (0.5 + 0.3 * sin(vWorldPos.z * 10.0 + timeSec * 6.0)), 2.0));
+
+        // Dynamically scale CRT oscilloscope noise and wave distortion during Samosbor hazard (samosbor.pulse)
+        staticNoise *= (1.0 + samosborPulse * 4.5);
+        oscWave *= (1.0 + samosborPulse * 3.0 * (0.5 + 0.5 * sin(timeSec * 40.0)));
         return baseEmissive * (scanline + staticNoise + oscWave * 2.5);
     }
 
@@ -261,7 +265,10 @@ void main() {
 
     vec3 lit = albedo * (amb * ao + vec3(lamp + fill) * aoDirect) + vec3(spec) * aoDirect;
 
-    // Volumetric fog raymarching with 3D light grid lookup
+    float timeSec = pc.torus.w;
+    float samosborPulse = pc.torus.z > 0.0 ? pc.torus.z : clamp((1.0 - pc.fog.x / (128.0 * 0.30 * 2.0)) / 0.66, 0.0, 1.0);
+
+    // Volumetric fog raymarching with 3D light grid lookup and Samosbor pulse scaling
     vec3 gridMin = pc.camPos.xyz - vec3(32.0, 16.0, 32.0);
     vec4 fogVol = march_volumetric_fog(
         pc.camPos.xyz,
@@ -276,13 +283,13 @@ void main() {
         gridMin,
         vec3(32.0, 16.0, 32.0),
         vec3(2.0, 2.0, 2.0),
-        pc.torus.w
+        timeSec,
+        samosborPulse
     );
     lit = lit * fogVol.a + fogVol.rgb;
 
-    // Emissive term with time-based animation
-    float timeSec = pc.torus.w;
-    float animEmissive = compute_animated_emissive(vEmissive, vMat, vWorldPos, vAnimPhase, timeSec);
+    // Emissive term with time-based animation and Samosbor pulse scaling
+    float animEmissive = compute_animated_emissive(vEmissive, vMat, vWorldPos, vAnimPhase, timeSec, samosborPulse);
 
     if (animEmissive > 0.001) {
         vec3 emitCol = pow(vColor, vec3(kGamma));

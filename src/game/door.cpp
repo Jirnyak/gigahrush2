@@ -200,6 +200,15 @@ std::uint32_t door_shut_all(World& world, DoorSet& doors, const Registry& reg,
     return n;
 }
 
+std::uint32_t door_toggle_locks(World& world, DoorSet& doors, const Registry& reg,
+                                LayerId layer) {
+    std::uint32_t n = 0;
+    const bool wantShut = (doors.shut == 0);
+    for (std::uint32_t i = 0; i < doors.doors.size(); ++i)
+        if (door_set(world, doors, reg, layer, i, wantShut)) ++n;
+    return n;
+}
+
 DoorTick door_step(Registry& reg, World& world, DoorSet& doors, LayerId layer,
                    float dt, std::uint64_t tick) {
     DoorTick out;

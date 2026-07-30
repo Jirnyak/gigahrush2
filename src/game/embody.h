@@ -21,8 +21,11 @@
 //     macro cell and clears NpcEmbodied, freezing it where it stood.
 #pragma once
 
+#include <vector>
+
 #include "ecs/components.h"
 #include "ecs/registry.h"
+#include "game/door.h"
 #include "game/npc_pool.h"
 
 namespace giga::game {
@@ -66,5 +69,17 @@ Entity embody_as_player(Registry& reg, NpcPool& pool, NpcId id, LayerId layer);
 // writes the macro cell (and clears NpcEmbodied / NpcPlayer), then destroys the
 // entity. Leaves the record otherwise intact and frozen in the cold pool.
 void fold_back(Registry& reg, NpcPool& pool, NpcId id, Entity e);
+
+struct TerminalInteractResult {
+    bool interacted = false;
+    vec3 propPos{0.0f, 0.0f, 0.0f};
+    bool doorsLocked = false;
+    std::uint32_t doorsToggled = 0;
+};
+
+// Player interaction logic when near Terminal or ControlPanel props.
+TerminalInteractResult embody_interact_terminal(Registry& reg, World& world, DoorSet& doors,
+                                                LayerId layer, const vec3& playerPos,
+                                                float reachM, const std::vector<vec3>& terminalPositions);
 
 } // namespace giga::game

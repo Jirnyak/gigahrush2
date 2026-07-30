@@ -208,6 +208,10 @@ std::uint32_t door_toggle_near(World& world, DoorSet& doors, const Registry& reg
 std::uint32_t door_shut_all(World& world, DoorSet& doors, const Registry& reg,
                             LayerId layer);
 
+// Toggle door locks across the floor layer (closing/locking all open doors or opening all shut doors).
+std::uint32_t door_toggle_locks(World& world, DoorSet& doors, const Registry& reg,
+                                LayerId layer);
+
 // What one door pass resolved. All zero on the overwhelmingly common tick.
 struct DoorTick {
     std::uint32_t pressing = 0;   // bodies in contact with a shut door

@@ -5,6 +5,8 @@
 // NOTE: #include "game/ai.h" (AiBrain) goes back here when the utility AI is
 // adapted to main mob_table -- see tools/branch_port_pending/README.md
 
+#include "core/wrap.h"
+
 namespace giga::game {
 
 namespace {
@@ -115,6 +117,35 @@ void fold_back(Registry& reg, NpcPool& pool, NpcId id, Entity e) {
         pool.set_player(id, false);
     }
     if (reg.valid(e)) reg.destroy(e);
+}
+
+TerminalInteractResult embody_interact_terminal(Registry& reg, World& world, DoorSet& doors,
+                                                LayerId layer, const vec3& playerPos,
+                                                float reachM, const std::vector<vec3>& terminalPositions) {
+    TerminalInteractResult res;
+    float bestD2 = reachM * reachM;
+    vec3 bestPos{};
+    bool found = false;
+
+    for (const vec3& pos : terminalPositions) {
+        float dx = wrap_delta_f(playerPos.x, pos.x, kWorldExtent);
+        float dy = playerPos.y - pos.y;
+        float dz = wrap_delta_f(playerPos.z, pos.z, kWorldExtent);
+        float d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < bestD2) {
+            bestD2 = d2;
+            bestPos = pos;
+            found = true;
+        }
+    }
+
+    if (found) {
+        res.interacted = true;
+        res.propPos = bestPos;
+        res.doorsToggled = door_toggle_locks(world, doors, reg, layer);
+        res.doorsLocked = (doors.shut > 0);
+    }
+    return res;
 }
 
 } // namespace giga::game
