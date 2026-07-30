@@ -32,9 +32,22 @@ layout(push_constant) uniform GridPush {
     vec4 params;    // x = uTime, y = maxLightsPerCell (15), z = activeLightCount, w = reserved
 } pc;
 
-float dist_sq_point_aabb(vec3 p, vec3 bMin, vec3 bMax) {
-    vec3 d = max(vec3(0.0), max(bMin - p, p - bMax));
-    return dot(d, d);
+// Toroidal wrap helper for 128m world extent
+float wrap_delta(float a, float b, float L) {
+    float d = b - a;
+    return d - L * floor((d + L * 0.5) / L);
+}
+
+float dist_sq_point_aabb_toroidal(vec3 p, vec3 bMin, vec3 bMax, float L) {
+    vec3 cCenter = (bMin + bMax) * 0.5;
+    vec3 cHalf   = (bMax - bMin) * 0.5;
+
+    float dx = wrap_delta(cCenter.x, p.x, L);
+    float dy = p.y - cCenter.y;
+    float dz = wrap_delta(cCenter.z, p.z, L);
+
+    vec3 delta = max(vec3(0.0), abs(vec3(dx, dy, dz)) - cHalf);
+    return dot(delta, delta);
 }
 
 void main() {
@@ -64,7 +77,7 @@ void main() {
         if (intensity <= 0.001) continue;
 
         vec3 lightPos = light.posRadius.xyz;
-        float dSq = dist_sq_point_aabb(lightPos, cellMin, cellMax);
+        float dSq = dist_sq_point_aabb_toroidal(lightPos, cellMin, cellMax, 128.0);
 
         if (dSq <= radius * radius) {
             if (foundCount < 15u) {

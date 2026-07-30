@@ -128,7 +128,12 @@ vec4 march_volumetric_fog(
                 uint lightIdx = cell.lightIndices[k];
                 PointLight pt = uPointLights[lightIdx];
 
-                vec3 toPt = pt.posRadius.xyz - p;
+                vec3 toPt;
+                toPt.x = pt.posRadius.x - p.x;
+                toPt.x -= 128.0 * floor((toPt.x + 64.0) / 128.0);
+                toPt.y = pt.posRadius.y - p.y;
+                toPt.z = pt.posRadius.z - p.z;
+                toPt.z -= 128.0 * floor((toPt.z + 64.0) / 128.0);
                 float dPtSq = dot(toPt, toPt);
                 float radius = pt.posRadius.w;
 
