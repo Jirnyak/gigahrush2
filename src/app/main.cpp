@@ -245,6 +245,366 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
     }
 }
 
+static bool contains_icase(const char* haystack, const char* needle) {
+    if (!haystack || !needle || !*needle) return true;
+    for (; *haystack; ++haystack) {
+        const char* h = haystack;
+        const char* n = needle;
+        while (*h && *n && (std::tolower(static_cast<unsigned char>(*h)) == std::tolower(static_cast<unsigned char>(*n)))) {
+            ++h; ++n;
+        }
+        if (!*n) return true;
+    }
+    return false;
+}
+
+static void DrawCraftingWindowUI(bool* p_open, game::CraftingState& crafting, 
+                          game::Inventory& inv, game::CraftStation currentStation, 
+                          std::uint64_t simTick, Registry& reg, Entity player,
+                          game::NpcPool& pool, std::uint32_t& outCrafted, 
+                          std::uint32_t& outScrapped, std::uint32_t& outLearned) 
+{
+    if (!p_open || !*p_open) return;
+
+    ImGui::SetNextWindowSize(ImVec2(820, 560), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Workbench & Crafting Studio", p_open)) {
+        ImGui::End();
+        return;
+    }
+
+    static int selectedRecipeId = 1;
+    static int craftQty = 1;
+    static char recipeFilter[64] = "";
+    static bool showOnlyKnown = false;
+
+    const char* stationNames[] = { "Bare Hands (Any)", "Workbench", "Lathe", "Lab", "Net Terminal" };
+    const char* matNames[] = { "Mech", "Elec", "Cons", "Bio", "Chem", "Metal", "Cyber", "Psi", "Meta" };
+
+    ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "Station: %s | Cert Tier: T%u",
+                       stationNames[static_cast<std::size_t>(currentStation)], crafting.tier);
+    ImGui::Separator();
+
+    ImGui::Text("Material Bank:");
+    ImGui::SameLine();
+    for (std::size_t i = 0; i < game::kCraftMaterials; ++i) {
+        ImGui::Text("%s: %u", matNames[i], crafting.mat[i]);
+        if (i < game::kCraftMaterials - 1) ImGui::SameLine();
+    }
+    ImGui::Separator();
+
+    if (ImGui::BeginTabBar("CraftingTabs")) {
+        if (ImGui::BeginTabItem("Craft Items")) {
+            ImGui::BeginChild("RecipeListPane", ImVec2(340, 320), true);
+            ImGui::InputText("Filter", recipeFilter, sizeof(recipeFilter));
+            ImGui::Checkbox("Known Only", &showOnlyKnown);
+
+            ImGui::Separator();
+            if (ImGui::BeginListBox("##Recipes", ImVec2(-FLT_MIN, -FLT_MIN))) {
+                for (game::ItemId id = 1; id <= game::kCraftRecipeCount; ++id) {
+                    const bool isKnown = game::craft_known(crafting, id);
+                    if (showOnlyKnown && !isKnown) continue;
+
+                    const char* name = game::item_name(id);
+                    if (recipeFilter[0] != '\0' && !contains_icase(name, recipeFilter)) continue;
+
+                    const game::CraftFail fail = game::craft_check(crafting, inv, id, currentStation);
+
+                    char label[128];
+                    snprintf(label, sizeof(label), "%s [%s]%s", 
+                             name, isKnown ? "Learned" : "Locked", 
+                             fail == game::CraftFail::None ? " *" : "");
+
+                    bool isSelected = (selectedRecipeId == static_cast<int>(id));
+                    if (ImGui::Selectable(label, isSelected)) {
+                        selectedRecipeId = static_cast<int>(id);
+                    }
+                    if (isSelected) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndListBox();
+            }
+            ImGui::EndChild();
+
+            ImGui::SameLine();
+
+            ImGui::BeginChild("RecipeDetailPane", ImVec2(0, 320), true);
+            if (selectedRecipeId >= 1 && selectedRecipeId <= static_cast<int>(game::kCraftRecipeCount)) {
+                const auto id = static_cast<game::ItemId>(selectedRecipeId);
+                const game::CraftRecipe& rec = game::craft_recipe(id);
+                const char* itemName = game::item_name(id);
+                const bool known = game::craft_known(crafting, id);
+                const game::CraftFail checkResult = game::craft_check(crafting, inv, id, currentStation);
+
+                ImGui::TextColored(ImVec4(1.0f, 0.9f, 0.4f, 1.0f), "%s", itemName);
+                ImGui::Text("Required Tier: T%u | Required Bench: %s", rec.tier, stationNames[rec.station]);
+                ImGui::Text("Knowledge Status: %s", known ? "Learned" : "Not Learned");
+                ImGui::Separator();
+
+                std::uint32_t missing[game::kCraftMaterials] = {};
+                game::craft_missing(crafting, id, missing);
+
+                ImGui::Text("Required Components:");
+                if (ImGui::BeginTable("CompTable", 4, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg)) {
+                    ImGui::TableSetupColumn("Material");
+                    ImGui::TableSetupColumn("Required");
+                    ImGui::TableSetupColumn("In Bank");
+                    ImGui::TableSetupColumn("Shortfall");
+                    ImGui::TableHeadersRow();
+
+                    for (std::size_t i = 0; i < game::kCraftMaterials; ++i) {
+                        if (rec.comp[i] == 0) continue;
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0); ImGui::Text("%s", matNames[i]);
+                        ImGui::TableSetColumnIndex(1); ImGui::Text("%u", rec.comp[i]);
+                        ImGui::TableSetColumnIndex(2); ImGui::Text("%u", crafting.mat[i]);
+                        ImGui::TableSetColumnIndex(3);
+                        if (missing[i] > 0) {
+                            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "-%u", missing[i]);
+                        } else {
+                            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "OK");
+                        }
+                    }
+                    ImGui::EndTable();
+                }
+
+                ImGui::Separator();
+                ImGui::SliderInt("Quantity", &craftQty, 1, 10);
+
+                const bool canCraft = (checkResult == game::CraftFail::None);
+                if (!canCraft) ImGui::BeginDisabled();
+
+                if (ImGui::Button("Craft Item(s)", ImVec2(160, 32))) {
+                    for (int q = 0; q < craftQty; ++q) {
+                        game::CraftResult res = game::craft_item(crafting, inv, id, currentStation);
+                        if (res.fail == game::CraftFail::None) {
+                            outCrafted++;
+                            game::sync_armour(reg, pool, player);
+                        } else {
+                            break;
+                        }
+                    }
+                }
+
+                if (!canCraft) {
+                    ImGui::EndDisabled();
+                    ImGui::SameLine();
+                    ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "[%s]", game::craft_fail_text(checkResult));
+                }
+            }
+            ImGui::EndChild();
+
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Disassemble Inventory")) {
+            ImGui::Text("Disassemble items into base materials (Requires Workbench).");
+            if (currentStation != game::CraftStation::Workbench) {
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "WARNING: Requires a Workbench!");
+            }
+            ImGui::Separator();
+
+            if (ImGui::BeginTable("DisassemblyTable", 5, ImGuiTableFlags_ScrollY | ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg, ImVec2(0, 350))) {
+                ImGui::TableSetupColumn("Slot", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+                ImGui::TableSetupColumn("Item Name");
+                ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+                ImGui::TableSetupColumn("Est. Value");
+                ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 120.0f);
+                ImGui::TableHeadersRow();
+
+                for (int slot = 0; slot < game::kInvSlots; ++slot) {
+                    const game::ItemSlot& s = inv.slots[slot];
+                    if (!game::item_valid(s.item) || s.count == 0) continue;
+
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0); ImGui::Text("#%d", slot);
+                    ImGui::TableSetColumnIndex(1); ImGui::Text("%s", game::item_name(s.item));
+                    ImGui::TableSetColumnIndex(2); ImGui::Text("%u", s.count);
+                    ImGui::TableSetColumnIndex(3); ImGui::Text("%d rub", game::item_def(s.item).value);
+                    ImGui::TableSetColumnIndex(4);
+
+                    char btnId[32];
+                    snprintf(btnId, sizeof(btnId), "Scrap##%d", slot);
+
+                    const bool canDis = (currentStation == game::CraftStation::Workbench);
+                    if (!canDis) ImGui::BeginDisabled();
+
+                    if (ImGui::Button(btnId)) {
+                        game::DisassembleResult dres = game::craft_disassemble(
+                            crafting, inv, slot, currentStation, static_cast<std::uint32_t>(simTick));
+                        if (dres.fail == game::CraftFail::None) {
+                            outScrapped++;
+                            if (dres.learned) outLearned++;
+                            game::sync_armour(reg, pool, player);
+                        }
+                    }
+
+                    if (!canDis) ImGui::EndDisabled();
+                }
+                ImGui::EndTable();
+            }
+
+            ImGui::EndTabItem();
+        }
+
+        ImGui::EndTabBar();
+    }
+
+    ImGui::End();
+}
+
+static void DrawVendorWindowUI(bool* p_open, game::Inventory& inv, game::RunLedger& ledger, 
+                        game::VendorKind vendorKind, bool isOnPad, std::int32_t& outSold, std::int32_t& outSpent) 
+{
+    if (!p_open || !*p_open) return;
+
+    ImGui::SetNextWindowSize(ImVec2(800, 560), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Trader Supply & Exchange", p_open)) {
+        ImGui::End();
+        return;
+    }
+
+    const char* vendorNames[] = { "Civil Citizen Trader (Buy 1.15x / Sell 0.85x)",
+                                 "Scientist Outpost (Buy 1.15x / Sell 0.92x)",
+                                 "Wild Zone Scavenger (Buy 1.15x / Sell 0.72x)" };
+
+    ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "Vendor: %s", vendorNames[static_cast<std::size_t>(vendorKind)]);
+    ImGui::Text("Account Balance: %lld roubles", static_cast<long long>(ledger.banked));
+    
+    if (!isOnPad) {
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "[OFF EXTRACTION PAD] Walk to the Extraction Pad to trade.");
+        ImGui::End();
+        return;
+    }
+    ImGui::Separator();
+
+    if (ImGui::BeginTabBar("VendorTabs")) {
+        if (ImGui::BeginTabItem("Buy Supplies")) {
+            static char buyFilter[64] = "";
+            static int buyQty = 1;
+            ImGui::InputText("Search Stock", buyFilter, sizeof(buyFilter));
+            ImGui::SliderInt("Quantity to Buy", &buyQty, 1, 50);
+
+            if (ImGui::Button("Quick Resupply Package (600 rub)", ImVec2(240, 28))) {
+                outSpent += game::vendor_resupply(inv, ledger, 600);
+            }
+            ImGui::SameLine();
+
+            const game::ItemId ammoForGun = game::vendor_ammo_for(inv);
+            if (ammoForGun != game::kInvalidItem) {
+                char ammoBtnText[128];
+                snprintf(ammoBtnText, sizeof(ammoBtnText), "Buy Ammo for Gun (%s)", game::item_name(ammoForGun));
+                if (ImGui::Button(ammoBtnText, ImVec2(240, 28))) {
+                    outSpent += (game::vendor_buy(inv, ledger, ammoForGun, buyQty) * game::vendor_buy_price(ammoForGun));
+                }
+            }
+
+            ImGui::Separator();
+
+            if (ImGui::BeginTable("ShopCatalogTable", 5, ImGuiTableFlags_ScrollY | ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg, ImVec2(0, 340))) {
+                ImGui::TableSetupColumn("Item Name");
+                ImGui::TableSetupColumn("Category", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+                ImGui::TableSetupColumn("Stack Max", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                ImGui::TableSetupColumn("Unit Price", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+                ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+                ImGui::TableHeadersRow();
+
+                for (game::ItemId id = 1; id <= game::kItemCount; ++id) {
+                    if (!game::vendor_stocks_item(id)) continue;
+
+                    const char* itemName = game::item_name(id);
+                    if (buyFilter[0] != '\0' && !contains_icase(itemName, buyFilter)) continue;
+
+                    const std::int32_t price = game::vendor_buy_price(id);
+                    const std::int32_t totalPrice = price * buyQty;
+                    const bool canAfford = (ledger.banked >= totalPrice);
+
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0); ImGui::Text("%s", itemName);
+                    ImGui::TableSetColumnIndex(1); ImGui::Text("Cat #%d", game::item_def(id).category);
+                    ImGui::TableSetColumnIndex(2); ImGui::Text("%u", game::item_def(id).stackMax);
+                    ImGui::TableSetColumnIndex(3); ImGui::Text("%d rub", price);
+                    ImGui::TableSetColumnIndex(4);
+
+                    char buyBtnLabel[32];
+                    snprintf(buyBtnLabel, sizeof(buyBtnLabel), "Buy##%d", id);
+
+                    if (!canAfford) ImGui::BeginDisabled();
+                    if (ImGui::Button(buyBtnLabel)) {
+                        std::uint32_t bought = game::vendor_buy(inv, ledger, id, static_cast<std::uint32_t>(buyQty));
+                        outSpent += (bought * price);
+                    }
+                    if (!canAfford) ImGui::EndDisabled();
+                }
+                ImGui::EndTable();
+            }
+
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Sell Inventory")) {
+            if (ImGui::Button("Sell All Haul / Trash (Auto Cap)", ImVec2(240, 28))) {
+                outSold += game::vendor_sell_all(inv, ledger, vendorKind);
+            }
+            ImGui::Separator();
+
+            if (ImGui::BeginTable("SellInventoryTable", 6, ImGuiTableFlags_ScrollY | ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg, ImVec2(0, 360))) {
+                ImGui::TableSetupColumn("Slot", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+                ImGui::TableSetupColumn("Item Name");
+                ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+                ImGui::TableSetupColumn("Unit Value", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+                ImGui::TableSetupColumn("Total Value", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+                ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 140.0f);
+                ImGui::TableHeadersRow();
+
+                for (int slot = 0; slot < game::kInvSlots; ++slot) {
+                    game::ItemSlot& s = inv.slots[slot];
+                    if (!game::item_valid(s.item) || s.count == 0) continue;
+
+                    const std::int32_t unitSell = game::vendor_sell_price(s.item, vendorKind);
+                    const std::int32_t totalSell = unitSell * s.count;
+
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0); ImGui::Text("#%d", slot);
+                    ImGui::TableSetColumnIndex(1); ImGui::Text("%s", game::item_name(s.item));
+                    ImGui::TableSetColumnIndex(2); ImGui::Text("%u", s.count);
+                    ImGui::TableSetColumnIndex(3); ImGui::Text("%d rub", unitSell);
+                    ImGui::TableSetColumnIndex(4); ImGui::Text("%d rub", totalSell);
+                    ImGui::TableSetColumnIndex(5);
+
+                    char sellOneLabel[32], sellAllLabel[32];
+                    snprintf(sellOneLabel, sizeof(sellOneLabel), "Sell 1##%d", slot);
+                    snprintf(sellAllLabel, sizeof(sellAllLabel), "Sell Stack##%d", slot);
+
+                    const bool canSell = (unitSell > 0);
+                    if (!canSell) ImGui::BeginDisabled();
+
+                    if (ImGui::Button(sellOneLabel)) {
+                        ledger.banked += unitSell;
+                        outSold += unitSell;
+                        s.count--;
+                        if (s.count == 0) s.item = game::kInvalidItem;
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button(sellAllLabel)) {
+                        ledger.banked += totalSell;
+                        outSold += totalSell;
+                        s.count = 0;
+                        s.item = game::kInvalidItem;
+                    }
+
+                    if (!canSell) ImGui::EndDisabled();
+                }
+                ImGui::EndTable();
+            }
+
+            ImGui::EndTabItem();
+        }
+
+        ImGui::EndTabBar();
+    }
+
+    ImGui::End();
+}
+
 // The player's unencumbered walk speed. Named here because the survival clock now
 // scales it every tick, so the base value has to live somewhere that is not the
 // Controller it overwrites — otherwise the first exhausted tick would halve the
@@ -1058,6 +1418,8 @@ int main(int argc, char** argv) {
     bool buyWanted = false;       // R, consumed by one sim step       // set by H, consumed by one sim step
     bool craftWanted = false;     // C, consumed by one sim step
     bool scrapWanted = false;     // X, consumed by one sim step
+    bool showCraftingWindow = false;
+    bool showVendorWindow = false;
     // Run state, not world state, so it lives beside the ledger. CraftingState is a
     // 96-byte POD ([craft.h]) — nothing to own, nothing to free. craft_init zeroes the
     // material bank, sets tier 0 and marks the nine default-known recipes.
@@ -1313,8 +1675,16 @@ int main(int argc, char** argv) {
                 // has no `activeLayer` in scope, and more importantly a trade is a
                 // world mutation and belongs on the sim's clock, not the window's.
                 if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
-                    e.key.scancode == SDL_SCANCODE_B)
+                    e.key.scancode == SDL_SCANCODE_B) {
                     sellWanted = true;
+                    showVendorWindow = !showVendorWindow;
+                    if (showVendorWindow) input.set_mouselook(false);
+                }
+                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
+                    e.key.scancode == SDL_SCANCODE_V) {
+                    showVendorWindow = !showVendorWindow;
+                    if (showVendorWindow) input.set_mouselook(false);
+                }
                 if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
                     e.key.scancode == SDL_SCANCODE_R)
                     buyWanted = true;
@@ -1322,8 +1692,11 @@ int main(int argc, char** argv) {
                 // Both keys were free: an rg for SDL_SCANCODE_C and _X across src/ found
                 // nothing, and G eats / T drinks already.
                 if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
-                    e.key.scancode == SDL_SCANCODE_C)
+                    e.key.scancode == SDL_SCANCODE_C) {
                     craftWanted = true;
+                    showCraftingWindow = !showCraftingWindow;
+                    if (showCraftingWindow) input.set_mouselook(false);
+                }
                 if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
                     e.key.scancode == SDL_SCANCODE_X)
                     scrapWanted = true;
@@ -2884,6 +3257,41 @@ int main(int argc, char** argv) {
                 "WASD move | mouse look | Tab toggle look | Space jump | "
                 "F fly | Q door | G eat | T drink | F5/F9 save/load | [ / ] floor | Esc menu");
             ImGui::End();
+        }
+
+        // --- Interactive ImGui Crafting Workbench & Trader Windows ---
+        if (showCraftingWindow && reg.valid(player)) {
+            const Transform& ct = reg.get<Transform>(player);
+            bool nearTerm = false;
+            if (propPass.ready()) {
+                for (const vec3& tp : propPass.get_terminal_positions()) {
+                    float dx = tp.x - ct.pos.x, dy = tp.y - ct.pos.y, dz = tp.z - ct.pos.z;
+                    if (dx * dx + dy * dy + dz * dz < 16.0f) { nearTerm = true; break; }
+                }
+            }
+            const game::CraftStation bench =
+                game::on_extraction_pad(stack.layer(activeLayer).grid(), ct.pos)
+                    ? game::CraftStation::Workbench
+                    : (nearTerm ? game::CraftStation::NetTerminal : game::CraftStation::Any);
+
+            if (const auto* nrk = reg.try_get<game::NpcRef>(player)) {
+                if (pool.valid(nrk->id)) {
+                    DrawCraftingWindowUI(&showCraftingWindow, crafting, pool.inventory(nrk->id), 
+                                         bench, simTick, reg, player, pool, 
+                                         crafted, scrapped, recipesLearned);
+                }
+            }
+        }
+
+        if (showVendorWindow && reg.valid(player)) {
+            const Transform& vt = reg.get<Transform>(player);
+            const bool isOnPad = game::on_extraction_pad(stack.layer(activeLayer).grid(), vt.pos);
+            if (const auto* nrv = reg.try_get<game::NpcRef>(player)) {
+                if (pool.valid(nrv->id)) {
+                    DrawVendorWindowUI(&showVendorWindow, pool.inventory(nrv->id), ledger, 
+                                       vendorKind, isOnPad, sold, spent);
+                }
+            }
         }
 
         // ── Contextual interaction prompt ──────────────────────────────

@@ -140,10 +140,25 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
     if (after < 0) after = 0;
     *hp = after;
 
-    // The applied value is what HP actually lost — clamped at zero, so an
-    // overkill hit reports the overkill it could use, not the swing that was
-    // authored. This is the number a kill feed or a threat model must use.
     out.applied = static_cast<std::int16_t>(before - after);
+
+    // Directional knockback impulse on hit (DOD DOD-compliant pure math)
+    if (out.applied > 0 && reg.all_of<Velocity, Transform>(target)) {
+        vec3 hitDir{0.0f, 0.0f, 0.0f};
+        if (reg.valid(source) && reg.all_of<Transform>(source)) {
+            const vec3& srcPos = reg.get<Transform>(source).pos;
+            const vec3& tgtPos = reg.get<Transform>(target).pos;
+            hitDir = vec3{tgtPos.x - srcPos.x, 0.0f, tgtPos.z - srcPos.z};
+            float lenSq = hitDir.x * hitDir.x + hitDir.z * hitDir.z;
+            if (lenSq > 0.001f) {
+                float invLen = 1.0f / std::sqrt(lenSq);
+                hitDir.x *= invLen; hitDir.z *= invLen;
+            }
+        }
+        auto& vel = reg.get<Velocity>(target);
+        vel.v.x += hitDir.x * 2.5f;
+        vel.v.z += hitDir.z * 2.5f;
+    }
     out.lethal = (after == 0 && before > 0);
 
     if (out.lethal)
