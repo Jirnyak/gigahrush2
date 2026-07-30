@@ -986,12 +986,11 @@ int main(int argc, char** argv) {
                     game::contract_on_giver_died(contracts, ev.a);
 
                 if (particlePass.ready()) {
-                    vec3 deathPos = camMat.eye;
-                    if (ev.a != game::kInvalidNpc && pool.valid(ev.a) && pool.embodied(ev.a)) {
-                        entt::entity victimEnt = pool.entity(ev.a);
-                        if (reg.valid(victimEnt) && reg.all_of<Transform>(victimEnt)) {
-                            deathPos = reg.get<Transform>(victimEnt).pos;
-                        }
+                    vec3 deathPos = reg.valid(player) ? reg.get<Transform>(player).pos : vec3{64.0f, 4.0f, 64.0f};
+                    if (ev.a != game::kInvalidNpc) {
+                        reg.view<game::NpcRef, Transform>().each([&](entt::entity, const game::NpcRef& nr, const Transform& tr) {
+                            if (nr.id == ev.a) deathPos = tr.pos;
+                        });
                     }
                     particlePass.emit_burst(deathPos + vec3{0.0f, 0.8f, 0.0f},
                                             vec3{0.0f, 1.5f, 0.0f},
