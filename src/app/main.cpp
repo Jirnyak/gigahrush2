@@ -108,8 +108,8 @@ constexpr int kWinH = 720;
 // world flattens back into an evenly-lit mosaic.
 constexpr float kLampIntensity = 2.2f;  // camPos.w
 constexpr float kLampRadius = 14.0f;    // fog.z, metres (7 macro cells)
-constexpr float kFillStrength = 0.10f;  // sunDir.w, weak non-black backstop
-constexpr float kAmbient = 0.35f;       // fog.w, scales the hemispheric term
+constexpr float kFillStrength = 0.02f;  // sunDir.w, dark subterranean backstop
+constexpr float kAmbient = 0.06f;       // fog.w, scales the atmospheric hemispheric term
 // How much of the DIRECT light (headlamp + fill) baked AO is allowed to occlude.
 // Ambient is always fully occluded; this is the share of the lamp, and it is a dial
 // because occluding a direct light is not physical — it is a legibility choice. At
