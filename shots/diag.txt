@@ -1,0 +1,102 @@
+exe exists=True size=1218048
+data src=C:\hades\gigahrush2\data exists=True
+created junction C:\hades\gigahrush2\build-win\Release\data -> C:\hades\gigahrush2\data
+shaders: release=False root=True
+assets: release=False root=True
+cmd=C:\hades\gigahrush2\build-win\Release\gigahrush2.exe --shot C:\hades\gigahrush2\shots\shot_travel.png --frames 900 --ride 2
+cwd=C:\hades\gigahrush2\build-win\Release
+exit=0 elapsed=39.2s
+png exists=True size=2765798
+stderr_len=24129 stdout_len=0
+--- matches 'shot:' (1) ---
+shot: saved -> C:\hades\gigahrush2\shots\shot_travel.png (floor -14, 901 frames)
+--- matches 'floor' (2) ---
+[pop] seeded 1930 cold records across 10 registered floors
+shot: saved -> C:\hades\gigahrush2\shots\shot_travel.png (floor -14, 901 frames)
+--- matches 'FAILED' (3) ---
+[tex] ERROR data/textures/rubber_tiles_roughness.ktx2: File open failed.
+[tex] ERROR data/textures/rusty_metal_03_roughness.ktx2: File open failed.
+[tex] ERROR data/textures/rusty_corrugated_iron_roughness.ktx2: File open failed.
+--- matches '[pop]' (1) ---
+[pop] seeded 1930 cold records across 10 registered floors
+--- matches '[nav]' (2) ---
+[nav] bake coarse 2400 ms | fine 2662 ms | 536 agents wandering | 0 AI brains attached (async, off the main thread)
+[nav] bake coarse 2652 ms | fine 3536 ms | 458 agents wandering | 40 AI brains attached (async, off the main thread)
+--- matches 'gpu-ms' (2) ---
+gpu-ms: world 1.590 bodies 0.035 hud 0.013 frame 1.941  (instances 45661, bodies 632)
+gpu-ms-peak: world 1.603 bodies 0.040 hud 0.016 frame 1.961  (dropped 0)
+--- matches 'error' (3) ---
+[tex] ERROR data/textures/rubber_tiles_roughness.ktx2: File open failed.
+[tex] ERROR data/textures/rusty_metal_03_roughness.ktx2: File open failed.
+[tex] ERROR data/textures/rusty_corrugated_iron_roughness.ktx2: File open failed.
+--- matches 'ERROR' (3) ---
+[tex] ERROR data/textures/rubber_tiles_roughness.ktx2: File open failed.
+[tex] ERROR data/textures/rusty_metal_03_roughness.ktx2: File open failed.
+[tex] ERROR data/textures/rusty_corrugated_iron_roughness.ktx2: File open failed.
+--- STDERR TAIL ---
+[vk-mem] prop-cmd-s19-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s20-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s20-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s20-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s20-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s20-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s20-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s21-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s21-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s21-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s21-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s21-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s21-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s22-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s22-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s22-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s22-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s22-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s22-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s23-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s23-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s23-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s23-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s23-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s23-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s24-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s24-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s24-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s24-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s24-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s24-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[prop] pass ready: 25 shapes, 2 frames in flight
+[vk-mem] particle-state: 0.62 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] particle-verts: 3.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] particle-draw-cmd: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] particle-emit-ring: 0.03 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[particle] buffers ok: state=640.0 KiB verts=3072.0 KiB
+[particle] compute pipeline ready
+[particle] graphics pipeline ready
+[particle] init complete: 8192 slots
+[cull] pass ready (frustum & distance culling pipeline ok)
+[pop] seeded 1930 cold records across 10 registered floors
+[cube] rebuild slot 0: 472545 instances in 1490.62 ms
+[cube] rebuild slot 1: 472545 instances in 28.59 ms
+[macro] tick=1 day=7.0 living=1930 births=1 deaths=1 blocked=0 depart=0 arrive=0 transit=0 reserve=1046646
+[nav] bake coarse 2400 ms | fine 2662 ms | 536 agents wandering | 0 AI brains attached (async, off the main thread)
+[macro] tick=2 day=14.0 living=1930 births=2 deaths=2 blocked=0 depart=0 arrive=0 transit=0 reserve=1046646
+[macro] tick=3 day=21.0 living=1930 births=0 deaths=0 blocked=0 depart=0 arrive=0 transit=0 reserve=1046646
+[cube] rebuild slot 0: 653343 instances in 57.41 ms
+[cube] rebuild slot 1: 653343 instances in 37.30 ms
+[macro] tick=4 day=28.0 living=1930 births=1 deaths=1 blocked=0 depart=0 arrive=0 transit=0 reserve=1046646
+[macro] tick=5 day=35.0 living=1930 births=0 deaths=0 blocked=0 depart=1 arrive=0 transit=1 reserve=1046646
+[macro] tick=6 day=42.0 living=1930 births=2 deaths=2 blocked=0 depart=0 arrive=0 transit=1 reserve=1046646
+[nav] bake coarse 2652 ms | fine 3536 ms | 458 agents wandering | 40 AI brains attached (async, off the main thread)
+[macro] tick=7 day=49.0 living=1930 births=0 deaths=0 blocked=0 depart=1 arrive=1 transit=1 reserve=1046646
+[cube] rebuild slot 0: 45661 instances in 25.25 ms
+[cube] rebuild slot 1: 45661 instances in 8.44 ms
+shot: saved -> C:\hades\gigahrush2\shots\shot_travel.png (floor -14, 901 frames)
+gpu-ms: world 1.590 bodies 0.035 hud 0.013 frame 1.941  (instances 45661, bodies 632)
+gpu-ms-peak: world 1.603 bodies 0.040 hud 0.016 frame 1.961  (dropped 0)
+PNG (1280, 720) mode=RGB
+  sample (640,360)=(26, 22, 19)
+  sample (320,360)=(29, 24, 20)
+  sample (960,360)=(26, 23, 20)
+  sample (640,180)=(25, 26, 20)
+  sample (640,540)=(29, 26, 22)

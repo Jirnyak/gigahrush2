@@ -1456,10 +1456,34 @@ int main(int argc, char** argv) {
                 // holder precisely so the two cannot be confused.
                 if (doorWanted) {
                     doorWanted = false;
-                    if (reg.valid(player))
-                        game::door_toggle_near(stack.layer(activeLayer), doors, reg,
-                                               activeLayer,
-                                               reg.get<Transform>(player).pos);
+                    if (reg.valid(player)) {
+                        const vec3 ppos = reg.get<Transform>(player).pos;
+                        std::uint32_t toggled = game::door_toggle_near(
+                            stack.layer(activeLayer), doors, reg,
+                            activeLayer, ppos);
+                        if (toggled != game::kNoDoor) {
+                            // Reconstruct door world position for particle/sound
+                            const game::Door& d = doors.doors[toggled];
+                            vec3 doorPos{
+                                (static_cast<float>(d.cx) + 0.5f) * kCellSize,
+                                (static_cast<float>(d.cy) + 0.5f) * kCellSize,
+                                (static_cast<float>(d.cz) +
+                                 static_cast<float>(d.h) * 0.5f) * kCellSize};
+                            // Dust puff from door frame impact
+                            if (particlePass.ready()) {
+                                particlePass.emit_burst(
+                                    doorPos, vec3{0.0f, 0.6f, 0.0f},
+                                    vec3{0.65f, 0.55f, 0.40f},
+                                    gpu::GpuParticleKind::DustMote,
+                                    20, 2.5f, 0.8f, 0.12f, 120.0f);
+                            }
+                            // Slam noise so mobs hear it
+                            game::NoiseProfile np{10.0f, 1200, 2,
+                                                   game::NoiseSource::Door};
+                            game::noise_publish(noiseField, activeLayer,
+                                                doorPos, np, 0);
+                        }
+                    }
                 }
                 if (interactWanted) {
                     interactWanted = false;
@@ -2500,6 +2524,55 @@ int main(int argc, char** argv) {
                 "WASD move | mouse look | Tab toggle look | Space jump | "
                 "F fly | Q door | G eat | T drink | F5/F9 save/load | [ / ] floor | Esc menu");
             ImGui::End();
+        }
+
+        // ── Contextual interaction prompt ──────────────────────────────
+        // A centered bottom-screen hint that appears when the player is
+        // close enough to interact with a door or terminal. Rendered as a
+        // borderless auto-sized ImGui window so it floats cleanly.
+        if (showHud && !paused && reg.valid(player)) {
+            const vec3 ppos = reg.get<Transform>(player).pos;
+            const char* promptText = nullptr;
+
+            // Door proximity (same indexed search door_toggle_near uses)
+            std::uint32_t nearDoor = game::door_query_near(doors, ppos);
+            if (nearDoor != game::kNoDoor) {
+                bool isDoorShut = doors.doors[nearDoor].state ==
+                    static_cast<std::uint8_t>(game::DoorState::Shut);
+                promptText = isDoorShut ? "[Q]  OPEN DOOR" : "[Q]  CLOSE DOOR";
+            }
+
+            // Terminal proximity (linear scan of placed terminals, usually < 20)
+            if (!promptText && propPass.ready()) {
+                std::vector<vec3> terms = propPass.get_terminal_positions();
+                for (const vec3& tp : terms) {
+                    const float dx = ppos.x - tp.x;
+                    const float dy = ppos.y - tp.y;
+                    const float dz = ppos.z - tp.z;
+                    if (dx * dx + dy * dy + dz * dz < 4.0f * 4.0f) {
+                        promptText = "[E]  TERMINAL";
+                        break;
+                    }
+                }
+            }
+
+            if (promptText) {
+                ImGuiIO& io = ImGui::GetIO();
+                ImGui::SetNextWindowPos(
+                    ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.78f),
+                    ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+                ImGui::SetNextWindowBgAlpha(0.55f);
+                ImGui::Begin("##interact_prompt", nullptr,
+                             ImGuiWindowFlags_NoDecoration |
+                                 ImGuiWindowFlags_AlwaysAutoResize |
+                                 ImGuiWindowFlags_NoSavedSettings |
+                                 ImGuiWindowFlags_NoFocusOnAppearing |
+                                 ImGuiWindowFlags_NoNav |
+                                 ImGuiWindowFlags_NoMove);
+                ImGui::TextColored(ImVec4(1.0f, 0.92f, 0.55f, 1.0f),
+                                   "%s", promptText);
+                ImGui::End();
+            }
         }
 
         // Pause menu (Esc). A proper, extensible overlay: the sim is frozen and

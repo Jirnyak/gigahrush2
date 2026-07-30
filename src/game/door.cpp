@@ -192,6 +192,39 @@ std::uint32_t door_toggle_near(World& world, DoorSet& doors, const Registry& reg
     return door_set(world, doors, reg, layer, best, wantShut) ? best : kNoDoor;
 }
 
+std::uint32_t door_query_near(const DoorSet& doors, const vec3& pos) {
+    if (doors.doors.empty()) return kNoDoor;
+    int cx, cy, cz;
+    agent_cell(pos, cx, cy, cz);
+    std::uint32_t best = kNoDoor;
+    float bestD2 = kDoorReach * kDoorReach;
+    for (int dz = -1; dz <= 1; ++dz)
+        for (int dy = -2; dy <= 2; ++dy)
+            for (int dx = -2; dx <= 2; ++dx) {
+                const std::uint32_t id = doors.at(cx + dx, cy + dy, cz + dz);
+                if (id == kNoDoor) continue;
+                const Door& d = doors.doors[id];
+                if (d.state == static_cast<std::uint8_t>(DoorState::Broken))
+                    continue;
+                const float ex = wrap_delta_f(
+                    pos.x, (static_cast<float>(d.cx) + 0.5f) * kCellSize,
+                    kWorldExtent);
+                const float ey = wrap_delta_f(
+                    pos.y, (static_cast<float>(d.cy) + 0.5f) * kCellSize,
+                    kWorldExtent);
+                const float ez = wrap_delta_f(
+                    pos.z,
+                    (static_cast<float>(d.cz) + static_cast<float>(d.h) * 0.5f) *
+                        kCellSize,
+                    kWorldExtent);
+                const float d2 = ex * ex + ey * ey + ez * ez;
+                if (d2 >= bestD2) continue;
+                bestD2 = d2;
+                best = id;
+            }
+    return best;
+}
+
 std::uint32_t door_shut_all(World& world, DoorSet& doors, const Registry& reg,
                             LayerId layer) {
     std::uint32_t n = 0;

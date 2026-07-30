@@ -203,6 +203,11 @@ bool door_set(World& world, DoorSet& doors, const Registry& reg, LayerId layer,
 std::uint32_t door_toggle_near(World& world, DoorSet& doors, const Registry& reg,
                                LayerId layer, const vec3& pos);
 
+// Read-only query: return the nearest workable door within kDoorReach of `pos`,
+// or kNoDoor when nothing is in range. Same cell-indexed O(75) search as
+// door_toggle_near but mutates nothing — safe for per-frame HUD prompts.
+std::uint32_t door_query_near(const DoorSet& doors, const vec3& pos);
+
 // Shut every door that will accept it. For a capture, a test, or a future
 // "lock-down" event; returns how many closed.
 std::uint32_t door_shut_all(World& world, DoorSet& doors, const Registry& reg,

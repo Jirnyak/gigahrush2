@@ -1,0 +1,29 @@
+exe exists=True size=1219584
+data present at C:\hades\gigahrush2\build-win\Release\data
+cmd=C:\hades\gigahrush2\build-win\Release\gigahrush2.exe --shot C:\hades\gigahrush2\shots\shot_f9_save.png --frames 900 --ride 2 --action save
+exit=0 elapsed=38.9s png=True size=2765798
+sav after save: exists=True size=780
+shot_f9_save_stderr.txt len=24170
+  | [tex] ERROR data/textures/rubber_tiles_roughness.ktx2: File open failed.
+  | [tex] ERROR data/textures/rusty_metal_03_roughness.ktx2: File open failed.
+  | [tex] ERROR data/textures/rusty_corrugated_iron_roughness.ktx2: File open failed.
+  | [pop] seeded 1930 cold records across 10 registered floors
+  | [nav] bake coarse 2590 ms | fine 2655 ms | 536 agents wandering | 0 AI brains attached (async, off the main thread)
+  | [nav] bake coarse 3062 ms | fine 3586 ms | 458 agents wandering | 40 AI brains attached (async, off the main thread)
+  | [save] saved: floor -14, 0 rub, 0 crates
+  | shot: saved -> C:\hades\gigahrush2\shots\shot_f9_save.png (floor -14, 901 frames)
+cmd=C:\hades\gigahrush2\build-win\Release\gigahrush2.exe --shot C:\hades\gigahrush2\shots\shot_f9_load.png --frames 900 --ride 0 --action load
+exit=0 elapsed=37.2s png=True size=2765798
+shot_f9_load_stderr.txt len=24108
+  | [tex] ERROR data/textures/rubber_tiles_roughness.ktx2: File open failed.
+  | [tex] ERROR data/textures/rusty_metal_03_roughness.ktx2: File open failed.
+  | [tex] ERROR data/textures/rusty_corrugated_iron_roughness.ktx2: File open failed.
+  | [pop] seeded 1930 cold records across 10 registered floors
+  | [nav] bake coarse 3261 ms | fine 3326 ms | 536 agents wandering | 0 AI brains attached (async, off the main thread)
+  | [load] loaded: floor -14 @44,35,2, 0 rub, 0 crates
+  | [nav] bake coarse 2814 ms | fine 2499 ms | 769 agents wandering | 151 AI brains attached (async, off the main thread)
+  | shot: saved -> C:\hades\gigahrush2\shots\shot_f9_load.png (floor -14, 901 frames)
+save capture: shot: saved -> C:\hades\gigahrush2\shots\shot_f9_save.png (floor -14, 901 frames)
+load capture: shot: saved -> C:\hades\gigahrush2\shots\shot_f9_load.png (floor -14, 901 frames)
+has_save_line=True has_load_line=True save_floor=-14 load_floor=-14
+PROOF=GREEN
