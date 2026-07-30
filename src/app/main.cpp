@@ -1379,8 +1379,29 @@ int main(int argc, char** argv) {
                         auto& cam = reg.get<CameraTag>(player);
                         cam.yaw += 0.015f;
                     }
-                    if (shotAction == "attack") attackHeld = true;
-                    else if (shotAction == "interact") interactWanted = true;
+                    // attack stays held every tick (like LMB); interact is
+                    // one-shot-per-tick like E. save/load fire ONCE after all
+                    // --ride hops have landed so the snapshot is the deep floor,
+                    // not the hub. shotFramesSeen is presented-frame count and
+                    // lags sim ticks; rides fire at presented % 420 == 0.
+                    if (shotAction == "attack") {
+                        attackHeld = true;
+                    } else if (shotAction == "interact") {
+                        interactWanted = true;
+                    } else if (!shotActionConsumed &&
+                               (shotAction == "save" || shotAction == "load") &&
+                               shotRideDone >= shotRide &&
+                               shotFramesSeen >= 30) {
+                        // Wait for async nav bake so loadWanted is not stuck
+                        // retrying while baking (load path already retries).
+                        if (shotAction == "save") {
+                            saveWanted = true;
+                            shotActionConsumed = true;
+                        } else if (!nav.baking()) {
+                            loadWanted = true;
+                            shotActionConsumed = true;
+                        }
+                    }
                 }
                 game::wander_step(reg, stack.layer(activeLayer).grid(), pool,
                                   nav.coarse(),
@@ -1639,6 +1660,9 @@ int main(int argc, char** argv) {
                             std::snprintf(saveLine, sizeof(saveLine),
                                           "SAVE FAILED: could not write %s", kSavePath);
                         saveLineAt = simTick;
+                        // Headless --shot proof: HUD is invisible in captures
+                        // without a human; stderr is the audit trail. [save.h]
+                        std::fprintf(stderr, "[save] %s\n", saveLine);
                     }
                 }
                 // F9 full load: run + floor + cell + armour. APIs live in save.h;
@@ -1802,6 +1826,8 @@ int main(int argc, char** argv) {
                             }
                         }
                         saveLineAt = simTick;
+                        // Same headless proof trail as save. [save.h]
+                        std::fprintf(stderr, "[load] %s\n", saveLine);
                     }
                 }
                 // The pad is the shop, and only the pad. A vendor reachable from

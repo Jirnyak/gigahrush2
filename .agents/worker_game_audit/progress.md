@@ -13,24 +13,30 @@
 - [x] Real gameplay: `--shot shot_travel.png --frames 900 --ride 2` → floor -14, PNG 2.7MiB, exit 0
 - [x] game_test 213879 checks / 0 fail; audit_test 149 checks / 0 fail (travel arrival GREEN)
 - [x] place_body_safely on BOTH keyboard (~1140) and --shot ride (~2626)
+- [x] SAV1: wire `--action save|load` one-shot after rides + stderr `[save]`/`[load]`
+- [x] SAV1 Release rebuild (vcvars64, `/m:1` after parallel cl Permission denied)
+- [x] SAV1 two-phase real proof PROOF=GREEN (f9_diag.txt):
+  - phase1 ride2 save → floor -14, sav 780B, shot_f9_save.png
+  - phase2 ride0 load → `[load] loaded: floor -14 @44,35,2`, shot_f9_load.png floor -14
 
 ## In flight
 - [ ] push origin main (no force; auth flaky)
 - [ ] FOR1 forensic src/game next defect
-- [ ] TEX1 optional: 3 missing roughness ktx2 (non-fatal)
+- [ ] TEX1 blocked: 3 missing roughness ktx2 — no sources, do not mock
 
 ## Do not
-- stage/commit prop_*, gpu_*, shaders, embody, foreign main hunks
+- stage/commit prop_*, gpu_*, shaders, embody, foreign main hunks, env_detail/prop_placer WIP
 - git add -A / force-push
-- commit shots/*.png binaries or _*_test_out.txt junk unless asked
+- commit shots/*.png binaries or large stderr dumps unless pathspec-asked
+- mock missing ktx2 textures
 
-## Cycle report (2026-07-30 ~21:15)
-цикл SHOT1+PBS1 | closed: truncated shot block, real ride proof floor-14, suites green |
-wip: push | new: FOR1 forensic, TEX1 roughness assets | blockers: origin push auth may fail
+## Cycle report (2026-07-30 ~22:20)
+цикл SAV1 | closed: --action save|load harness, two-phase F9 gameplay PROOF=GREEN floor-14 |
+wip: pathspec commit + push | new: FOR1 forensic | blockers: TEX1 no roughness sources; foreign render WIP dirty
 
 ## Architect answers (handoff)
-- **Least confident:** PNG proves floor travel + live scene, not a pixel-level “body not in wall” assertion; place_body_safely has no stderr line when it relocates. Audit pin covers the algorithm.
-- **Biggest missing:** FOR1 — no new RED ledger item; content thin (CNT1); 3 roughness textures missing.
-- **Don’t realize:** handoff assumed WT-only place_body + ahead 17; live was clean WT, place_body already HEAD, only SHOT1 corruption on HEAD. Release needs `data` junction for textures.
-- **Implemented not gameplay-proven before this cycle:** place_body_safely on --shot (now proven via ride→floor-14+PNG). GpuCullPass foreign — do not touch.
-- **Next execute:** pathspec commit docs → push → FOR1 hunt in src/game.
+- **Least confident:** load proof asserts floor + cell via stderr/shot line, not pixel body-vs-wall; PNG body placement not automated.
+- **Biggest missing:** FOR1 — no new RED ledger item; TEX1 assets absent; CNT1 content thin.
+- **Don’t realize:** cmd.exe redirects for gigahrush2 often fail silently — use Python Popen cwd=Release; findstr `[load]` is regex (brackets); load must wait `!nav.baking()` or one-shot never fires during hub bake.
+- **Implemented not gameplay-proven before this cycle:** F9 full load was code-complete (7709b3e) but unproven headless — now SAV1 PROOF=GREEN. NetTerminal craft still unit-level DECLINED. TEX1 blocked.
+- **Next execute:** pathspec commit main.cpp + docs → push → FOR1 hunt in src/game.
