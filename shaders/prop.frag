@@ -212,7 +212,7 @@ void main() {
     float phase = (1.0 - g_scat * g_scat) / pow(max(1.0 + g_scat * g_scat - 2.0 * g_scat * cosTheta, 1e-4), 1.5);
 
     float r = pc.fog.z;
-    float att = 1.0 / (1.0 + (d * d) / (r * r));
+    float att = 1.0 / (1.0 + (d * d) / max(r * r, 1e-4));
 
     // Calibrated material roughness & Blinn-Phong specular
     float roughness = compute_prop_roughness(vMat, g);
