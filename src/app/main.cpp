@@ -1797,10 +1797,17 @@ int main(int argc, char** argv) {
                 // reference's rule, so it is pad-only too. [craft.h]
                 if ((craftWanted || scrapWanted) && reg.valid(player)) {
                     const Transform& ct = reg.get<Transform>(player);
+                    bool nearTerm = false;
+                    if (propPass.ready()) {
+                        for (const vec3& tp : propPass.get_terminal_positions()) {
+                            float dx = tp.x - ct.pos.x, dy = tp.y - ct.pos.y, dz = tp.z - ct.pos.z;
+                            if (dx * dx + dy * dy + dz * dz < 16.0f) { nearTerm = true; break; }
+                        }
+                    }
                     const game::CraftStation bench =
                         game::on_extraction_pad(stack.layer(activeLayer).grid(), ct.pos)
                             ? game::CraftStation::Workbench
-                            : game::CraftStation::NetTerminal;
+                            : (nearTerm ? game::CraftStation::NetTerminal : game::CraftStation::Any);
                     bool invChanged = false;
                     if (const auto* nrk = reg.try_get<game::NpcRef>(player))
                         if (pool.valid(nrk->id)) {
