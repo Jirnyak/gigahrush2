@@ -1,42 +1,39 @@
-# BRIEFING — 2026-07-30T02:28:05Z
+# BRIEFING — 2026-07-30T11:35:00Z
 
 ## Mission
-Implement remaining MobBehaviour dispatchers in `src/game/combat.h` and `src/game/combat.cpp`, update integration tests in `tests/suite_behaviours.inl`, verify GPU Texture Sampling Pipeline, and run build/test suite.
+Milestone 1 & 3: Implement/verify 25 PropShape mesh generators, Vulkan instanced rendering in prop_pass, procedural prop placement refactoring in prop_placer, and floor transition populating in main.cpp.
 
 ## 🔒 My Identity
 - Archetype: Implementer / QA / Specialist
 - Roles: implementer, qa, specialist
 - Working directory: C:\hades\gigahrush2\.agents\worker_m1_1
-- Original parent: 598c629e-4438-4246-9083-4459562fdc95
-- Milestone: M1 & M2
+- Original parent: 061b5f73-4c33-4ff9-9b30-9a4ec05ba62f
+- Milestone: M1 & M3
 
 ## 🔒 Key Constraints
 - NO CHEATING: All implementations must be genuine. No hardcoded test results, facade implementations, or circumventing tasks.
-- Modify source code files directly using proper file editing tools.
-- Minimal change principle: only modify what is necessary.
+- SINGLE-COMPILER OWNER RULE: MUST NOT execute tools\win\build.bat, cmake, ninja, glslc, or ctest. Code changes directly in source files.
+- Maintain clean, zero-GC C++23 engine code (`/GR-`, `-fno-exceptions`, `ENTT_NOEXCEPTION`).
 
 ## Current Parent
-- Conversation ID: 598c629e-4438-4246-9083-4459562fdc95
-- Updated: 2026-07-30T02:28:05Z
+- Conversation ID: 061b5f73-4c33-4ff9-9b30-9a4ec05ba62f
+- Updated: 2026-07-30T11:35:00Z
 
 ## Task Summary
 - **What to build**:
-  1. `apply_damage` signature in `combat.h` / `combat.cpp` accepting `const MacroGrid* grid = nullptr`.
-  2. Defender incoming damage multiplier (`behaviour_incoming_mult`) in `apply_damage` for `WallBrace` (floored at 1 if raw > 0).
-  3. Update `mob_attack_step` in `combat.cpp`: capture player camera yaw, gate `adjacent_wall` with `wall_query_needed`, check `behaviour_claims_damage`, apply `facing_damage_mult` for `DeadEcho`, apply `burst_damage_mult` for `FractureSprint`.
-  4. Pass `&grid` in `projectile_step` and queued swing execution.
-  5. Add integration test assertions in `tests/suite_behaviours.inl` for `WallBrace`, `DeadEcho`, `FractureSprint`.
-  6. Confirm GPU Texture Sampling Pipeline builds cleanly.
-  7. Run `tools\win\build.bat Release` and `ctest --test-dir build-win -C Release`.
-- **Success criteria**: 100% green pass rate across all 4 test targets (`world_test`, `audit_test`, `game_test`, `source_rules`).
+  1. Prop Mesh (`src/render/prop_mesh.h`, `src/render/prop_mesh.cpp`): Ensure all 25 `PropShape` procedural mesh generators are fully implemented with clean parametric geometry, accurate normals, clean UVs, and CCW triangles.
+  2. Prop Pass (`src/render/prop_pass.h`, `src/render/prop_pass.cpp`): Ensure all 25 shapes initialized, per-frame instance buffers allocated, vertex attributes match `PropInstance` (32 bytes), dynamic draw calls recorded per shape in `record()`, clean Vulkan resource management.
+  3. Prop Placer (`src/render/prop_placer.h`, `src/render/prop_placer.cpp`): Spatial hash diversification across rules, fix FloodLamp precedence bug, fix AcidPool material check, fix pipe sub-type selection & Valve spawns, extend placement rules to use all 25 shapes, retain deterministic hash placement.
+  4. App Main (`src/app/main.cpp`): Ensure `propPlacer.populate` called on automated `--shot --ride` floor transitions & keyboard floor transitions.
+- **Success criteria**: All 25 shapes properly generated, rendered, placed, and floor transitions populated.
 
 ## Change Tracker
 - **Files modified**: TBD
-- **Build status**: TBD
+- **Build status**: Pending Orchestrator Build
 - **Pending issues**: None
 
 ## Quality Status
-- **Build/test result**: TBD
+- **Build/test result**: Pending Orchestrator
 - **Tests added/modified**: TBD
 
 ## Loaded Skills

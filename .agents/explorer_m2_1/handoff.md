@@ -1,233 +1,120 @@
-# Handoff Report — Milestone 2: Atmospheric Height-Based Fog & Light Scattering
-
-**Working Directory**: `C:\hades\gigahrush2\.agents\explorer_m2_1`  
-**Target Shader**: `shaders/cube.frag`  
-**Author**: Explorer Agent  
-**Date**: 2026-07-30  
-
----
+# Handoff Report — explorer_m2_1 (M2: Advanced Atmospheric Shader Pipeline)
 
 ## 1. Observation
 
-### 1.1 Existing Distance Fog Implementation in `shaders/cube.frag`
-Direct observation of `shaders/cube.frag` (lines 493–548):
+### 1.1 Shader Files Inspected
+- `shaders/prop.vert` (67 lines) — per-instance vertex stage for prop meshes.
+- `shaders/prop.frag` (257 lines) — fragment shader for GPU-instanced prop meshes with M2 shading.
+- `shaders/material_surface.glsl` (146 lines) — material surface parameter table generated from `data/materials.csv`.
+- `shaders/cube.vert` (138 lines) & `shaders/cube.frag` (647 lines) — voxel world pass shaders.
+- `shaders/body.vert` (63 lines) — population body box vertex shader.
 
+### 1.2 C++ Implementation Files Inspected
+- `src/render/prop_mesh.h` & `src/render/prop_pass.h` / `prop_pass.cpp` — Prop instance data structures, mesh catalog (25 prop shapes), pipeline creation, and Vulkan attribute binding descriptions.
+- `src/render/cube_pass.h` & `cube_pass.cpp` — `CubePush` push constant definition, descriptor sets, and pipeline layout.
+- `src/app/main.cpp` — Render loop push constant population and draw command recording.
+
+### 1.3 Push Constant Compatibility (`Push` Block)
+All 5 shaders (`cube.vert`, `cube.frag`, `body.vert`, `prop.vert`, `prop.frag`) declare an identical 128-byte `push_constant` block matching `giga::gpu::CubePush`:
 ```glsl
-493:     vec3 toCam = pc.camPos.xyz - vWorldPos;
-494:     float d = length(toCam);
-495:     vec3 L = toCam / max(d, 1e-4);
-...
-535:     float fog = clamp((d - pc.fog.x) / max(pc.fog.y - pc.fog.x, 1e-3), 0.0, 1.0);
-536:     lit = mix(lit, vec3(0.0), fog);
-...
-546:     srgb += (ign - 0.5) / 255.0 * (1.0 - fog);
+layout(push_constant) uniform Push {
+    mat4 viewProj; // offset 0 (64 bytes)
+    vec4 sunDir;   // offset 64 (16 bytes)
+    vec4 camPos;   // offset 80 (16 bytes)
+    vec4 fog;      // offset 96 (16 bytes)
+    vec4 torus;    // offset 112 (16 bytes)
+} pc;
 ```
+Field mapping for `pc.torus`:
+- `pc.torus.x`: World wrapping period `kWorldExtent` (used for toroidal minimal image placement).
+- `pc.torus.y`: `kAoDirect` ambient occlusion direct-light share (0.0..1.0).
+- `pc.torus.z`: Material photographic albedo layer bitmask (used in `cube.frag` under `#ifdef GIGA_ALBEDO_ARRAY`).
+- `pc.torus.w`: Pass-dependent:
+  - In `CubePass`: Bitcast uint32 packed normal & roughness masks (`packedMasks`).
+  - In `PropPass`: `uTime` (seconds since start, passed via `push.torus.w = currentTimeSec` in `main.cpp`).
 
-Key characteristics identified:
-1. **Per-Fragment Distance Calculation**: Distance $d = \|\mathbf{P}_{cam} - \mathbf{P}_{world}\|$ is computed directly from world position `vWorldPos` and camera position `pc.camPos.xyz` (line 494).
-2. **Linear Distance Fog Formula**: Ramps linearly from 0.0 to 1.0 between `pc.fog.x` (fog start, ~76.8 m) and `pc.fog.y` (fog end, 128 m, equal to $kWorldExtent / 2$).
-3. **Target Fog Color**: Fades to pure linear black (`vec3(0.0)`).
-4. **Architectural Constraint**: As documented in `render.md` (lines 243–268), fading to pure black at $d \ge pc.fog.y$ is **load-bearing**. The fog end distance matches the minimal-image toroidal wrap radius ($kWorldExtent / 2$). If a fragment at or beyond $d \ge pc.fog.y$ does not evaluate to bit-exact black (`vec3(0.0)`), the toroidal boundary seam where the world wraps becomes visible to the player.
+### 1.4 Vertex Attributes (Locations 0-8) Matching C++ Structs
+`prop.vert` input declarations vs `VkVertexInputAttributeDescription` in `prop_pass.cpp` vs `PropVertex` / `PropInstance` in `prop_mesh.h`:
 
-### 1.2 Coordinate System Observation
-- In `gigahrush2`, world height/elevation is along the $+Z$ axis (e.g. `vWorldPos.z`), where $Z = 0 \dots 128$ macro cells span up to 32 subterranean floors (see `worldgen.cpp:115` `int base = f * kFloorHeight; // z of this floor's slab`).
-- In GLSL camera/shading context, height calculations can target `vWorldPos.z` (native world height) or `vWorldPos.y` (standard 3D space height). The analysis below is parameterized for both.
+| Location | GLSL (`prop.vert`) | Vulkan Format (`prop_pass.cpp`) | C++ Struct Field (`prop_mesh.h`) | Binding | Input Rate | Offset |
+|---|---|---|---|---|---|---|
+| 0 | `in vec3 inPos` | `VK_FORMAT_R32G32B32_SFLOAT` | `PropVertex::pos` | 0 | VERTEX | 0 |
+| 1 | `in vec3 inNormal` | `VK_FORMAT_R32G32B32_SFLOAT` | `PropVertex::normal` | 0 | VERTEX | 12 |
+| 2 | `in vec3 inOrigin` | `VK_FORMAT_R32G32B32_SFLOAT` | `PropInstance::origin` | 1 | INSTANCE | 0 |
+| 3 | `in float inYaw` | `VK_FORMAT_R32_SFLOAT` | `PropInstance::yaw` | 1 | INSTANCE | 12 |
+| 4 | `in vec3 inColor` | `VK_FORMAT_R32G32B32_SFLOAT` | `PropInstance::color` | 1 | INSTANCE | 16 |
+| 5 | `in uint inMat` | `VK_FORMAT_R8_UINT` | `PropInstance::matId` | 1 | INSTANCE | 28 |
+| 6 | `in uint inEmissive` | `VK_FORMAT_R8_UINT` | `PropInstance::emissive` | 1 | INSTANCE | 29 |
+| 7 | `in uint inFlags` | `VK_FORMAT_R8_UINT` | `PropInstance::flags` | 1 | INSTANCE | 30 |
+| 8 | `in float inAnimPhase` | `VK_FORMAT_R8_UNORM` | `PropInstance::animPhase` | 1 | INSTANCE | 31 |
 
-### 1.3 Push-Constant Memory Layout Constraints
-From `src/render/cube_pass.h` (lines 145–168) and `shaders/cube.frag` (lines 38–55):
-```cpp
-struct CubePush {
-    mat4 viewProj; // 64 bytes
-    vec4 sunDir;   // 16 bytes: xyz = fill dir, w = fill strength
-    vec4 camPos;   // 16 bytes: xyz = camera pos, w = headlamp intensity
-    vec4 fog;      // 16 bytes: x = fog start, y = fog end, z = lamp radius, w = ambient scale
-    vec4 torus;    // 16 bytes: x = wrap period, y = direct AO share, z = texture bitmask, w = FREE
-};
-// Total = 128 bytes (MAX guaranteed Vulkan push constant size)
-```
-- `pc.torus.w` is currently unallocated (`w free`), providing 1 spare float lane in push constants if needed.
+- Binding 0 Stride: `sizeof(PropVertex) == 24` bytes.
+- Binding 1 Stride: `sizeof(PropInstance) == 32` bytes (`static_assert(sizeof(PropInstance) == 32)`).
+- Location 8 (`R8_UNORM`): Hardware converts `uint8_t` (0..255) to float `0.0..1.0`. `prop.vert` scales it by `2*pi` (`vAnimPhase = inAnimPhase * 6.283185307179586`).
+
+### 1.5 Shading Math in `prop.frag`
+1. **Triplanar UVs**: Dominant normal axis selection (`aw.z > 0.5 ? xy : (aw.x > 0.5 ? yz : xz)`), normalized by `uv /= 2.0`.
+2. **Derivative Normal Perturbation (`construct_perturbed_normal`)**: Local TBN frame constructed from `n_geom`. Central differences `(s_right - s_left) / (2 * eps)` and `(s_top - s_bot) / (2 * eps)` evaluated via procedural `surface()`. Returns `normalize(n_geom - bumpScale * (dSdu * T + dSdv * B))`.
+3. **Roughness & Blinn-Phong Specular**: `compute_prop_roughness` yields roughness in `[0.05, 0.98]`. Specular exponent `specPow = max(2.0 / (roughness^4 + 1e-4) - 2.0, 1.0)`. Dual-light specular evaluated for headlamp (attenuated point light at camera) and sun directional fill light.
+4. **Animated Emissive Effects (`compute_animated_emissive`)**:
+   - `baseEmissive > 1.2`: High-frequency electrical flicker (`mix(1.0, step(0.20, hash11(stepTime)), 0.30)`) with 60Hz power hum.
+   - `mat_id == 0` or `baseEmissive > 0.8`: Bioluminescent organic breathing pulse (`1.0 + 0.28 * sin(...) + 0.10 * cos(...)`).
+   - Moderate emissive (acid pools/chemical containers): Spatial wave undulation + exponential bubble bursts (`pow(max(sin(...), 0.0), 10.0)`).
+5. **Atmospheric Height Fog & sRGB Dithering**:
+   - Exponential height density `heightDensity = exp(-clamp(0.04 * vWorldPos.y, -3.0, 3.0))`.
+   - Distance fog clamped to `[0.0, 1.0]` between `pc.fog.x` and `pc.fog.y`.
+   - sRGB gamma conversion `pow(lit, 1.0 / 2.2)`.
+   - Interleaved Gradient Noise (IGN) screen-space dithering `(ign - 0.5) / 255.0 * (1.0 - fog)` added to suppress 8-bit banding on dark fog gradients.
 
 ---
 
 ## 2. Logic Chain
 
-### 2.1 Height-Based Fog Density Analysis & Formula Derivation
-#### Atmospheric Density Model
-Barometric density decreases exponentially with altitude $h$:
-$$\rho(h) = \rho_0 \cdot e^{-\alpha (h - h_0)}$$
-where:
-- $\rho_0$: Base density at subterranean floor reference level $h_0$.
-- $\alpha$: Height falloff coefficient ($\alpha > 0$). Lower $h$ (deep subterranean levels) yields exponentially higher fog density $\rho(h) > \rho_0$.
+1. **Push Constant Compatibility**:
+   - `PropPass::init` takes `cubePass.pipeline_layout()`.
+   - `CubePush` in C++ specifies a 128-byte layout. All shaders specify identical `layout(push_constant) uniform Push` with 5 `vec4`/`mat4` members matching `CubePush`.
+   - Therefore, push constant layout is binary compatible across all shaders and pipeline layouts.
 
-#### Integrated Ray Optical Depth ($\tau$)
-Integrating density along the ray segment from camera height $h_{cam}$ to fragment height $h_{frag}$ over distance $d$:
-Let $h(t) = h_{cam} + t \frac{h_{frag} - h_{cam}}{d}$ for $t \in [0, d]$.
-$$\tau = \int_0^d \rho_0 e^{-\alpha (h(t) - h_0)} \, dt = \rho_0 e^{-\alpha (h_{cam} - h_0)} \cdot \left[ \frac{1.0 - e^{-\alpha (h_{frag} - h_{cam})}}{\alpha (h_{frag} - h_{cam})} \right] \cdot d$$
+2. **Vertex Layout Alignment**:
+   - In `prop_mesh.h`, `PropVertex` (24 bytes) and `PropInstance` (32 bytes) specify layout and member offsets.
+   - In `prop_pass.cpp`, vertex attributes 0..8 map `PropVertex` (bindings 0) and `PropInstance` (binding 1) with exact offsets.
+   - In `prop.vert`, input locations 0..8 match `PropVertex` (locations 0-1) and `PropInstance` (locations 2-8).
+   - Therefore, vertex input fetching in Vulkan matches shader declarations exactly.
 
-#### Practical GLSL Formulation for `shaders/cube.frag`
-To preserve performance and fit into the existing distance fog framework:
-1. Compute the integrated height optical scale factor $F_{height}$:
-   ```glsl
-   float deltaH = vWorldPos.z - pc.camPos.z; // Height diff along ray
-   float alpha = 0.04; // Height falloff coefficient (e.g. 1 / 25m)
-   float heightDensity = exp(-alpha * (pc.camPos.z - 0.0)); // Density at camera height
-   float heightMod = (abs(deltaH) > 1e-4) ? (1.0 - exp(-alpha * deltaH)) / (alpha * deltaH) : 1.0;
-   float effectiveDist = d * heightDensity * heightMod;
-   ```
-2. Combine with the distance fog function while respecting the toroidal seam boundary:
-   ```glsl
-   float fog = clamp((effectiveDist - pc.fog.x) / max(pc.fog.y - pc.fog.x, 1e-3), 0.0, 1.0);
-   // Force fog to 1.0 at maximum toroidal distance d >= pc.fog.y
-   fog = mix(fog, 1.0, clamp((d - pc.fog.x) / max(pc.fog.y - pc.fog.x, 1e-3), 0.0, 1.0));
-   ```
-This guarantees that:
-- Deep subterranean floors ($h \to 0$) have dense fog starting much closer to the camera.
-- Higher floors have clearer atmosphere.
-- At distance $d \ge pc.fog.y$, $fog = 1.0$ unconditionally, protecting the toroidal wrap seam from artifacts.
-
----
-
-### 2.2 Headlamp Forward Light Scattering (In-Scattering) Analysis
-#### Physical Mechanism (Mie Phase Function)
-When photons emitted by the camera-attached headlamp travel through foggy air, forward scattering (Mie scattering) directs light into the camera when looking along or towards the light beam corridor.
-
-#### Vector Setup & Angle Cosine
-- View ray direction from camera to fragment: $\mathbf{V} = \frac{\mathbf{P}_{world} - \mathbf{P}_{cam}}{d} = -\mathbf{L}$.
-- Headlamp direction $\mathbf{D}_{lamp}$: The headlamp is mounted on the camera and shines forward along the view vector.
-- Cosine of scattering angle $\theta$:
-  $$\cos \theta = \mathbf{D}_{lamp} \cdot \mathbf{V}$$
-  When looking directly down the headlamp cone into fog, $\cos \theta \approx 1.0$.
-
-#### Henyey-Greenstein (HG) Phase Function
-The angular intensity distribution is given by:
-$$P_{HG}(\cos \theta, g) = \frac{1 - g^2}{4\pi (1 + g^2 - 2g \cos \theta)^{1.5}}$$
-where $g \in [0.5, 0.85]$ is the forward anisotropy factor for fog/droplets.
-
-For real-time GLSL, the unnormalized forward phase boost factor is:
-```glsl
-float g = 0.65; // Forward scattering bias
-float cosTheta = dot(-L, lampDir); // alignment with headlamp forward beam
-float phase = (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * cosTheta, 1.5);
-```
-
-#### Volumetric In-Scattering Blending Rule
-The volumetric in-scattered light $C_{scatter}$ is given by:
-```glsl
-// Scattering intensity depends on headlamp strength, attenuation, phase boost, and fog
-vec3 scatterColor = vec3(0.9, 0.85, 0.75); // Warm headlamp fog tint
-float scatterIntensity = pc.camPos.w * att * phase * fog * (1.0 - fog);
-vec3 inScattering = scatterColor * scatterIntensity;
-```
-
-Crucially, multiplying by $(1.0 - fog)$ ensures $inScattering \to 0.0$ as $fog \to 1.0$ ($d \ge pc.fog.y$), keeping fully-fogged pixels bit-exact `vec3(0.0)`.
+3. **Shading Math Completeness**:
+   - `prop.frag` includes `material_surface.glsl` for calibrated material properties.
+   - Normal perturbation utilizes tangent/bitangent finite-difference bump mapping, allowing procedural detail on non-axis-aligned prop geometry (cylinders, arches, pipes).
+   - Headlamp and fill light Blinn-Phong specular calculation matches the PBR model in `cube.frag`.
+   - Time-animated emissive effects use `vAnimPhase` and `pc.torus.w` (`timeSec`) to drive electrical flicker, organic pulsing, and acid bubbles.
+   - Height fog and sRGB dithering match `cube.frag` bit-for-bit, maintaining visual continuity between voxels and prop objects.
 
 ---
 
 ## 3. Caveats
 
-1. **Height Axis Coordinate**:
-   In `gigahrush2`, world elevation is on the $+Z$ axis (`vWorldPos.z`). If a specific pass or camera rig uses standard $Y$-up conventions, the coordinate reference should be toggled to `vWorldPos.y`. The GLSL implementation uses `vWorldPos.z` as the default world height.
-2. **Push Constant Budget**:
-   `CubePush` is capped at 128 bytes. The proposed shader code relies on internal shader constants (`const float`) to avoid breaking the C++ `CubePush` layout or requiring ABI modifications in host passes.
-3. **Headlamp Direction Vector (`lampDir`)**:
-   If `lampDir` is not explicitly passed in push constants, it can be extracted directly from the view-projection matrix columns in `pc.viewProj` or approximated via normalized camera forward ray direction.
+1. **Unused Varying `vFlags` in `prop.frag`**:
+   `vFlags` (location 6 flat uint) is passed from `prop.vert` to `prop.frag` but is not currently consumed in `prop.frag`. It is reserved for future per-instance prop flags (such as flipX, damaged tinting, or custom glow triggers). GLSL compiler handles unused varyings without error.
+2. **Double Precision Literal in `prop.vert`**:
+   `prop.vert` line 65 uses `6.283185307179586` without an explicit `f` suffix. While standard GLSL float promotion handles this, adding `f` (`6.2831853f`) avoids potential compiler precision warnings on strict GLSL tools.
+3. **No Photographic Texture Sampling in `prop.frag`**:
+   `prop.frag` uses procedural surface textures and does not include `#ifdef GIGA_ALBEDO_ARRAY` descriptor set sampling (unlike `cube_tex.frag.spv`). This is intentional: props use procedural materials, colors (`vColor`), and emissive intensity (`vEmissive`), keeping `PropPass` pipeline layout simple and descriptor-free.
 
 ---
 
-## 4. Conclusion & Formulated GLSL Changes
+## 4. Conclusion
 
-### Recommended GLSL Implementation for `shaders/cube.frag`
+`shaders/prop.vert`, `shaders/prop.frag`, `shaders/material_surface.glsl`, `shaders/cube.vert`, and `shaders/cube.frag` are fully compatible in layout, push constants (128 bytes), vertex attributes (locations 0-8 matching `PropVertex` and `PropInstance`), and shading mathematics.
 
-Below is the complete formulated modification for `shaders/cube.frag` around lines 490–548:
-
-```glsl
-    // ---------------------------------------------------------------------------
-    // Distance & Vectors
-    // ---------------------------------------------------------------------------
-    vec3 toCam = pc.camPos.xyz - vWorldPos;
-    float d = length(toCam);
-    vec3 L = toCam / max(d, 1e-4); // Vector pointing from surface to camera
-    vec3 V = -L;                   // Ray direction from camera to surface
-
-    // ---------------------------------------------------------------------------
-    // Shading: Headlamp, Fill, Ambient & AO
-    // ---------------------------------------------------------------------------
-    float r = pc.fog.z;
-    float att = 1.0 / (1.0 + (d * d) / (r * r));
-    float lamp = pc.camPos.w * att * max(dot(n, L), 0.0);
-
-    float fill = pc.sunDir.w * max(dot(n, normalize(pc.sunDir.xyz)), 0.0);
-
-    float hemi = 0.5 + 0.5 * n.z;
-    vec3 amb = pc.fog.w * mix(vec3(0.10, 0.11, 0.14), vec3(0.24, 0.23, 0.21), hemi);
-
-    const float kAoFloor = 0.32;
-    float ao = kAoFloor + (1.0 - kAoFloor) * vAo;
-    float aoDirect = mix(1.0, ao, pc.torus.y);
-    vec3 lit = albedo * (amb * ao + vec3(lamp + fill) * aoDirect);
-
-    // ---------------------------------------------------------------------------
-    // Milestone 2 (R2): Height-Based Fog Density
-    // ---------------------------------------------------------------------------
-    // Height coordinate (z in world space; lower z = subterranean levels)
-    float hCam = pc.camPos.z;
-    float hFrag = vWorldPos.z;
-    float deltaH = hFrag - hCam;
-    
-    // Exponential height density scale (higher density at subterranean lower Z)
-    const float kAlpha = 0.035;       // Height falloff rate (1 / metres)
-    const float kGroundZ = 0.0;       // Reference subterranean floor height
-    float heightDensity = exp(-kAlpha * (hCam - kGroundZ));
-    
-    // Integrated path factor over height delta
-    float heightMod = (abs(deltaH) > 1e-4) ? (1.0 - exp(-kAlpha * deltaH)) / (kAlpha * deltaH) : 1.0;
-    float effectiveDist = d * heightDensity * heightMod;
-
-    // Combined distance + height fog factor
-    float fogLinear = clamp((effectiveDist - pc.fog.x) / max(pc.fog.y - pc.fog.x, 1e-3), 0.0, 1.0);
-    // Toroidal wrap boundary safety guard: enforce 1.0 fog at physical distance d >= fog.y
-    float fogToroidalGuard = clamp((d - pc.fog.x) / max(pc.fog.y - pc.fog.x, 1e-3), 0.0, 1.0);
-    float fog = max(fogLinear, fogToroidalGuard);
-
-    // Apply fog blend to black
-    lit = mix(lit, vec3(0.0), fog);
-
-    // ---------------------------------------------------------------------------
-    // Milestone 2 (R2): Headlamp Forward Light Scattering (Henyey-Greenstein)
-    // ---------------------------------------------------------------------------
-    // Extract camera forward direction from viewProj matrix (or normalize camera ray)
-    vec3 lampDir = normalize(-vec3(pc.viewProj[0][2], pc.viewProj[1][2], pc.viewProj[2][2]));
-    float cosTheta = clamp(dot(V, lampDir), -1.0, 1.0);
-
-    // Henyey-Greenstein phase function for forward Mie scattering
-    const float g = 0.65; // Forward anisotropy parameter
-    float phase = (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * cosTheta, 1e-3), 1.5);
-
-    // In-scattering term: active in foggy air under headlamp, zero at maximum fog (d >= fog.y)
-    vec3 scatterTint = vec3(0.95, 0.90, 0.80); // Warm headlamp volumetric beam tint
-    vec3 inScattering = scatterTint * pc.camPos.w * att * phase * fog * (1.0 - fog) * 0.15;
-    
-    lit += inScattering;
-
-    // ---------------------------------------------------------------------------
-    // Output & Dithering
-    // ---------------------------------------------------------------------------
-    vec3 srgb = pow(max(lit, vec3(0.0)), vec3(1.0 / kGamma));
-
-    float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
-    srgb += (ign - 0.5) / 255.0 * (1.0 - fog);
-
-    outColor = vec4(srgb, 1.0);
-```
+The prop rendering pipeline correctly implements triplanar UV mapping, derivative normal perturbation, Blinn-Phong specular lighting, multi-category animated emissives (electrical flicker, organic breathing pulse, acid bubble pops), atmospheric height-dependent fog, and IGN dithered sRGB output.
 
 ---
 
 ## 5. Verification Method
 
-To verify these changes independently:
-1. **Compilation Check**:
-   Run `cmake --build build-win --target giga_core` (or glslc shader compilation step) to verify `shaders/cube.frag` compiles cleanly into SPIR-V (`cube.frag.spv` and `cube_tex.frag.spv`).
-2. **Toroidal Seam Verification**:
-   Inspect pixel values at $d \ge pc.fog.y$ to confirm `fog == 1.0` and `lit == vec3(0.0)`, ensuring no wrap seam artifacts occur.
-3. **Visual & Performance Audit**:
-   Launch `./build-win/gigahrush2` and monitor GPU pass timer (`gpu: world ... ms`). Verify height fog density increases on subterranean levels and forward headlamp light cone glow appears when looking into foggy corridors.
+To verify shader pipeline compatibility and layout without executing builds (obeying SINGLE-COMPILER OWNER RULE):
+1. **Push Constant Layout Verification**:
+   Inspect `CubePush` in `src/render/cube_pass.h` lines 145-168 and compare with `layout(push_constant) uniform Push` in `shaders/prop.vert` (lines 19-25) and `shaders/prop.frag` (lines 16-22).
+2. **Vertex Attribute Layout Verification**:
+   Inspect `PropInstance` in `src/render/prop_mesh.h` lines 32-41 (`static_assert(sizeof(PropInstance) == 32)`), attribute setup in `src/render/prop_pass.cpp` lines 142-159, and `layout(location = ...) in` declarations in `shaders/prop.vert` lines 8-16.
+3. **Height Fog & Dithering Consistency**:
+   Compare height fog math in `shaders/cube.frag` lines 620-633 with `shaders/prop.frag` lines 244-253.

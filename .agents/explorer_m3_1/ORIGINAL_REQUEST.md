@@ -1,21 +1,22 @@
-## 2026-07-30T05:16:39Z
-Your working directory: C:\hades\gigahrush2\.agents\explorer_m3_1
-Project directory: C:\hades\gigahrush2
-Scope document: C:\hades\gigahrush2\.agents\orchestrator_5\PROJECT.md
+## 2026-07-30T07:31:49Z
+<USER_REQUEST>
+You are an Explorer agent working on Milestone 3 (R3: Procedural Prop Placement System).
+Your working directory is: C:\hades\gigahrush2\.agents\explorer_m3_1
+The root project directory is: C:\hades\gigahrush2
 
-Task: Investigate Milestone 3 (R3: MacroSim Bench Target Registration) and Milestone 4 (CTest Gate & Test Pins).
-Specifically:
-1. Inspect `tools/branch_port_pending/macro_bench.cpp` and `CMakeLists.txt`.
-2. Determine how `macro_bench` should be registered as a CMake executable target in `CMakeLists.txt`.
-3. Check the current test targets (`world_test`, `audit_test`, `game_test`, `source_rules`) and test assertion count pins in `CMakeLists.txt`.
-4. Inspect `tools\check_source_rules.cmake` and `tools\win\build.bat`.
-5. Provide precise recommendations for registering `macro_bench` and handling test pins in `C:\hades\gigahrush2\.agents\explorer_m3_1\handoff.md`.
+TASK:
+1. Examine `src/render/prop_placer.h` and `src/render/prop_placer.cpp`.
+2. Check `MacroGrid` layout in `src/world/macro_grid.h` and material definitions in `src/world/materials.h`.
+3. Verify `PropPlacer::populate`:
+   - Deterministic spatial hash implementation (`spatial_hash`).
+   - Scanning rules for ceiling pipes/conduits, floor grates/drainage, wall cabinets/consoles, flood lamps, anomalous zones (crystals, acid pools, fungal columns), structural support beams, and corner storage crates.
+   - Check cell coordinate bounds, macro grid wrapping, array indexing safety, and proper property initialization on `PropInstance` (color, matId, emissive, flags, animPhase).
+4. Check for any edge cases, missing placement categories, potential out-of-bounds accesses, or performance bugs.
+5. Write a comprehensive report to `C:\hades\gigahrush2\.agents\explorer_m3_1\handoff.md`.
+6. Send a summary message back to the Lead Orchestrator with the status and file path of your report.
 
-## 2026-07-30T05:23:55Z
-Task Details:
-1. Examine `tools/branch_port_pending/macro_bench.cpp` in `C:\hades\gigahrush2`.
-2. Inspect `CMakeLists.txt` to see how other tool and benchmark targets are registered (e.g. `add_executable`, include directories, linked libraries, compile definitions).
-3. Determine the exact CMake additions needed in `CMakeLists.txt` to register `tools/branch_port_pending/macro_bench.cpp` as the `macro_bench` target.
-4. Verify if any missing header includes, library dependencies, or C++23 features are needed for `macro_bench.cpp` to compile cleanly.
-5. Write your complete analysis and recommended fix strategy to `C:\hades\gigahrush2\.agents\explorer_m3_1\handoff.md`.
-6. Send a message to parent when finished.
+CONSTRAINTS:
+- You are read-only for source files. Write only to `C:\hades\gigahrush2\.agents\explorer_m3_1\`.
+- DO NOT execute builds or test runner commands (SINGLE-COMPILER OWNER RULE).
+
+</USER_REQUEST>

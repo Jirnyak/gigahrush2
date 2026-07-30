@@ -1,177 +1,228 @@
-# Handoff Report: Milestone 3 (R3: MacroSim 2^20 Benchmark Registration)
+# Explorer Handoff Report — Milestone 3 (R3: Procedural Prop Placement System Audit)
 
-**Working Directory**: `C:\hades\gigahrush2\.agents\explorer_m3_1`  
-**Project Directory**: `C:\hades\gigahrush2`  
+**Agent Archetype**: Explorer (`explorer_m3_1`)  
+**Working Directory**: `C:\hades\gigahrush2\.agents\explorer_m3_1\`  
+**Target Project**: `C:\hades\gigahrush2`  
+**Date**: 2026-07-30  
 
 ---
 
 ## 1. Observation
 
-### 1.1 Source Location & File Status
-- **Source File**: `tests/macro_bench.cpp` (ported from `tools/branch_port_pending/macro_bench.cpp`).
-- **Branch Port Status**: `tools/branch_port_pending/macro_bench.cpp` was relocated to `tests/macro_bench.cpp` when `src/game/macro_sim` was brought onto `main`. `tools/branch_port_pending/README.md` documents:
-  > "They live under tools/ because src/game is GLOB_RECURSE-compiled, so anything left in the source tree is in the build whether it works or not. Each needs its branch API references rewritten against main tables, then moves back to src/game/."
-  `macro_bench.cpp` has already been fully ported and placed in `tests/macro_bench.cpp`.
+Direct code examination was performed on the procedural prop placement system and related world/rendering components. Key file paths, line ranges, and verbatim logic snippets are documented below:
 
-- **Source File Header & Purpose** (`tests/macro_bench.cpp` lines 1–12):
-  ```cpp
-  // Macro-tick benchmark — advance the FULL 2^20 population and report ms/tick.
-  // ...
-  // Headless: links giga_game + giga_core only, no SDL/Vulkan. An executable, not
-  // a ctest — it measures, it does not pass/fail.
-  ```
-
-### 1.2 Include Headers & Dependencies in `tests/macro_bench.cpp`
-Lines 13–22 of `tests/macro_bench.cpp`:
+### A. Spatial Hashing & Randomization
+* **File**: `src/render/prop_placer.cpp` (Lines 17–24)
 ```cpp
-#include <chrono>
-#include <cstdint>
-#include <cstdio>
-
-#include "game/faction_relations.h"
-#include "game/macro_sim.h"
-#include "game/npc_pool.h"
-
-using namespace giga;
-using namespace giga::game;
+inline std::uint32_t spatial_hash(int x, int y, int z, std::uint32_t seed) {
+    std::uint32_t h = static_cast<std::uint32_t>(x) * 73856093u ^
+                      static_cast<std::uint32_t>(y) * 19349663u ^
+                      static_cast<std::uint32_t>(z) * 83492791u ^ seed;
+    h = (h ^ (h >> 16)) * 0x45d9f3bu;
+    h = (h ^ (h >> 16)) * 0x45d9f3bu;
+    return h ^ (h >> 16);
+}
 ```
-- **Standard Library Includes**: `<chrono>`, `<cstdint>`, `<cstdio>`. All are part of C++23 standard library.
-- **Engine Game Layer Includes**:
-  - `"game/faction_relations.h"` (provides `FactionRelations` and `kBaseFactionMatrix`)
-  - `"game/macro_sim.h"` (provides `MacroSim`, `MacroParams`, `MacroStats`)
-  - `"game/npc_pool.h"` (provides `NpcPool`, `kNpcActiveTarget`, `kInvalidNpc`, `NpcId`)
 
-### 1.3 CMake Registration Pattern & Existing Target Definition (`CMakeLists.txt`)
-- **Global Compiler & Standard Setup** (`CMakeLists.txt` lines 35–37, 65–66):
-  ```cmake
-  set(CMAKE_CXX_STANDARD 23)
-  set(CMAKE_CXX_STANDARD_REQUIRED ON)
-  set(CMAKE_CXX_EXTENSIONS OFF)
-  ...
-  add_compile_options(/utf-8 /permissive- /Zc:__cplusplus /MP)
-  add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
-  ```
+### B. Single-Seed Random Sampling Across Rules
+* **File**: `src/render/prop_placer.cpp` (Lines 89–224)
+```cpp
+std::uint32_t rng = spatial_hash(x, y, z, seed);
+// Rule 1: Ceiling Pipes
+if (solidAbove && (rng % 100 < kCfg.pipeCeilingChancePct)) { ... }
+// Rule 2: Floor Grates
+if (solidBelow && (rng % 100 < kCfg.grateFloorChancePct)) { ... }
+// Rule 3: Wall Cabinets
+if (solidBelow && (solidWest || solidEast || solidNorth || solidSouth) && (rng % 100 < kCfg.wallCabinetChancePct)) { ... }
+// Rule 4: Lights
+if (solidAbove && (nOpen >= 3 || (x % 8 == 0 && z % 8 == 0 && (rng % 100 < kCfg.lightChancePct)))) { ... }
+// Rule 5: Anomaly
+if (solidBelow && (isAnomalyMat || (rng % 1000 < kCfg.anomalyChancePermil))) { ... }
+// Rule 6: Support Beams
+if (solidBelow && solidAbove && (x % 8 == 0) && (z % 8 == 0) && (rng % 100 < kCfg.supportBeamChancePct)) { ... }
+// Rule 7: Storage Crates
+if (solidBelow && (nOpen <= 2) && (solidWest || solidEast) && (solidNorth || solidSouth) && (rng % 100 < kCfg.crateCornerChancePct)) { ... }
+```
 
-- **Target Flag Helper Function** (`CMakeLists.txt` lines 94–118):
-  ```cmake
-  function(giga_target_flags tgt rtti)
-      if(MSVC)
-          target_compile_options(${tgt} PRIVATE /W4 /EHsc /wd4100)
-          if(NOT rtti)
-              target_compile_options(${tgt} PRIVATE /GR-)
-          endif()
-      else()
-          target_compile_options(${tgt} PRIVATE -Wall -Wextra -Wno-unused-parameter)
-          if(NOT rtti)
-              target_compile_options(${tgt} PRIVATE -fno-rtti -fno-exceptions)
-          endif()
-      endif()
-      ...
-  endfunction()
-  ```
+### C. Pipe Selection Chained Else-If Branching
+* **File**: `src/render/prop_placer.cpp` (Lines 103–110)
+```cpp
+PropShape shape = PropShape::Pipe;
+if (nOpen >= 3) {
+    shape = PropShape::PipeTee;
+} else if ((rng % 10) == 0) {
+    shape = PropShape::PipeElbow;
+} else if ((rng % 12) == 0) {
+    shape = PropShape::Valve;
+}
+```
 
-- **Core & Game Library Targets** (`CMakeLists.txt` lines 209–224):
-  ```cmake
-  add_library(giga_core STATIC ${GIGA_CORE_SOURCES})
-  target_include_directories(giga_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
-  target_link_libraries(giga_core PUBLIC EnTT::EnTT Threads::Threads)
-  
-  add_library(giga_game STATIC ${GIGA_GAME_SOURCES})
-  target_include_directories(giga_game PUBLIC ${CMAKE_SOURCE_DIR}/src)
-  target_link_libraries(giga_game PUBLIC giga_core)
-  ```
+### D. Anomaly Shape Selection & Acid Disc Assignment
+* **File**: `src/render/prop_placer.cpp` (Lines 184–193)
+```cpp
+PropShape shape = PropShape::CrystalCluster;
+if (below == kMatAcidPool || (rng & 1)) {
+    shape            = PropShape::AcidPool;
+    crystal.color    = kCfg.acidCol;
+    crystal.emissive = 140;
+} else if (solidAbove && (rng % 100 < 30)) {
+    shape            = PropShape::FungalColumn;
+    crystal.color    = kCfg.fungalCol;
+    crystal.emissive = 160;
+}
+```
 
-- **Existing `macro_bench` Registration** (`CMakeLists.txt` lines 480–493):
-  ```cmake
-  # Macro-society benchmark: advance the FULL 2^20 population one coarse tick at a
-  # time and report ms/tick. Like sim_bench an executable, not a ctest -- it is a
-  # measurement tool, and a benchmark that fails the build on a slow machine is a
-  # benchmark nobody runs.
-  #
-  # Uses giga_target_flags() rather than the branch raw if(NOT MSVC)
-  # target_compile_options: the helper is the one place that knows this project
-  # cannot use -fno-exceptions on MSVC (the STL is unsupported under
-  # _HAS_EXCEPTIONS=0), so hand-rolling the flags per target is how that deviation
-  # gets forgotten.
-  add_executable(macro_bench tests/macro_bench.cpp)
-  target_link_libraries(macro_bench PRIVATE giga_game)
-  giga_target_flags(macro_bench OFF)
-  ```
+### E. Hardware/Buffer Instance Hard Cap
+* **File**: `src/render/prop_pass.h` (Line 28) & `src/render/prop_pass.cpp` (Lines 242–247)
+```cpp
+// prop_pass.h
+static constexpr int kMaxPropInstances = 4096; // per shape per frame
+
+// prop_pass.cpp
+void PropPass::add_instance(PropShape shape, const PropInstance& inst) {
+    int s = static_cast<int>(shape);
+    if (s < 0 || s >= kPropShapeCount) return;
+    if (static_cast<int>(cpuInst_[s].size()) < kMaxPropInstances)
+        cpuInst_[s].push_back(inst);
+}
+```
+
+### F. Toroidal Grid Coordinate Wrapping
+* **File**: `src/world/macro_grid.h` (Lines 68–81) & `src/core/wrap.h` (Lines 8–11)
+```cpp
+// macro_grid.h
+CellType cell(int x, int y, int z) const {
+    return types_[macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z))];
+}
+
+// wrap.h
+inline constexpr int wrapi(int v, int size) {
+    int m = v % size;
+    return m < 0 ? m + size : m;
+}
+```
+
+### G. Application Level Integration (`main.cpp`)
+* **File**: `src/app/main.cpp` (Lines 688–691 & 1013–1016)
+```cpp
+// Keyboard ride path (lines 1013-1016):
+if (propPass.ready()) {
+    std::uint32_t fseed = 1337u ^ (static_cast<std::uint32_t>(currentFloor) * 0x9e3779b9u);
+    propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);
+}
+```
+* **Contrast with `--shot` ride path** (`src/app/main.cpp` Lines 2260–2295): `propPlacer.populate` is **missing** during automated multi-floor floor transitions.
 
 ---
 
 ## 2. Logic Chain
 
-1. **Observation**: `macro_bench.cpp` is located in `tests/macro_bench.cpp` and `CMakeLists.txt` lines 490–492 contains:
-   ```cmake
-   add_executable(macro_bench tests/macro_bench.cpp)
-   target_link_libraries(macro_bench PRIVATE giga_game)
-   giga_target_flags(macro_bench OFF)
-   ```
-   - **Reasoning**: The source file was moved out of `tools/branch_port_pending` into `tests/macro_bench.cpp` as part of porting the macro-sim to `main`. `tools/` is intentionally excluded from CMake `GLOB_RECURSE` compilation, whereas `tests/` is where executable benchmarks (`sim_bench`, `macro_bench`) and test binaries (`world_test`, `audit_test`, `game_test`) are defined.
-   - **Deduction**: The `macro_bench` target is ALREADY registered in `CMakeLists.txt`.
+From the observations above, the logic step-by-step leads to the following conclusions:
 
-2. **Observation**: `tests/macro_bench.cpp` includes `"game/faction_relations.h"`, `"game/macro_sim.h"`, and `"game/npc_pool.h"`.
-   - **Reasoning**: `giga_game` includes `src/` in its `PUBLIC` target include directories (`target_include_directories(giga_game PUBLIC ${CMAKE_SOURCE_DIR}/src)`). Therefore, linking `giga_game` transitively provides access to all `game/*` and `core/*` headers under `src/`.
-   - **Deduction**: No additional `target_include_directories` or include paths are needed for `macro_bench`.
+1. **Cell Array Bounds & Toroidal Safety**:
+   - `grid.cell(x, y - 1, z)`, `grid.cell(x + 1, y, z)`, etc. invoke `wrap_macro()`, which calls `wrapi(c, 128)`. Negative coordinates wrap around correctly (e.g. `-1` -> `127`). Out-of-bounds array access cannot occur during cell lookups.
+   - However, `spatial_hash(x, y, z, seed)` takes raw integer coordinates. Inside `populate()`, loop bounds are strictly `0 <= x, y, z < 128`, so inputs match wrapped bounds. But if an external system queries wrapped coordinates, `spatial_hash(-1, 0, 0, seed)` evaluates `uint32_t(-1)` (`0xFFFFFFFF`), yielding a different hash than `spatial_hash(127, 0, 0, seed)`.
 
-3. **Observation**: `macro_bench.cpp` uses standard C++ headers (`<chrono>`, `<cstdint>`, `<cstdio>`), lambda functions, `std::chrono::duration`, and auto type deduction.
-   - **Reasoning**: `CMakeLists.txt` enforces `CMAKE_CXX_STANDARD 23` globally for all targets.
-   - **Deduction**: All C++23 features used in `macro_bench.cpp` are supported by the project toolchain configuration. No extra compile options or definitions are required.
+2. **Un-diversified Cell Hash (`rng`) and Prop Stacking**:
+   - A single `uint32_t rng` is generated per cell `(x, y, z)`.
+   - Every rule tests `(rng % 100 < Chance)`. When `rng % 100` produces a small integer (e.g. 5), ALL rules with thresholds > 5 evaluate to `true` for that cell.
+   - A single open cell can therefore spawn a ceiling Pipe, a floor Grate, a wall Cabinet, a FloodLamp, a Crystal Cluster, a Support Beam, and a Storage Crate simultaneously at `(wx, wy, wz)`, causing severe 3D mesh clipping and visual clutter.
 
-4. **Observation**: `giga_target_flags(macro_bench OFF)` is called on the target.
-   - **Reasoning**: This helper sets warning level `/W4 /EHsc` on MSVC (or `-Wall -Wextra -Wno-unused-parameter` on GCC/Clang) and disables RTTI (`/GR-` or `-fno-rtti`). The `OFF` argument indicates RTTI is disabled for this executable, which matches `giga_core` and `giga_game` rules.
-   - **Deduction**: `macro_bench` matches the project target flag policy.
+3. **Operator Precedence Bug in Flood Lamp Placement**:
+   - In Rule 4, the condition is `solidAbove && (nOpen >= 3 || (x % 8 == 0 && z % 8 == 0 && (rng % 100 < kCfg.lightChancePct)))`.
+   - Due to operator precedence, `nOpen >= 3` bypasses the `(rng % 100 < lightChancePct)` probability test. Every single intersection cell (`nOpen >= 3`) with a ceiling will ALWAYS spawn a `FloodLamp` (100% rate).
+
+4. **Pipe Sub-Type Probability Coupling**:
+   - In Rule 1, `else if ((rng % 10) == 0)` precedes `else if ((rng % 12) == 0)`.
+   - When `rng % 60 == 0`, the `PipeElbow` branch consumes the execution flow, preventing `Valve` from ever spawning when `rng % 60 == 0`.
+
+5. **Spurious Acid Disc Spawns on Normal Flooring**:
+   - In Rule 5, `if (below == kMatAcidPool || (rng & 1))` executes when `(rng & 1)` is non-zero (50% probability).
+   - This places `AcidPool` prop discs on standard concrete, dirt, or parquet floors even when no acid material (`kMatAcidPool`) exists below. Furthermore, `FungalColumn` is starved of spawns because `(rng & 1)` steals 50% of candidate anomaly cells.
+
+6. **Instance Limit Truncation (`kMaxPropInstances`)**:
+   - Each shape vector is capped at 4,096 instances per frame.
+   - For a 128x128x128 grid (2,097,152 cells), 35% pipe chance and 100% intersection lamp rate generate >10,000 instances.
+   - `PropPass::add_instance` silently drops instances exceeding 4,096. Props populate only the lower grid indices (e.g. x=0..60) while the remainder of the world remains empty.
+
+7. **Integration Gap in `--shot --ride` Mode**:
+   - Interactive keypress floor change (`[` or `]`) triggers `propPlacer.populate()`.
+   - `--shot --ride N` automated floor traversal (`main.cpp:2260-2295`) missing `propPlacer.populate()`, leaving subsequent floors without props during automated testing/screenshots.
+
+8. **Unused Mesh Catalogue Shapes**:
+   - 9 shapes defined in `PropShape` (`Cylinder`, `HalfCylinder`, `Arch`, `Barrel`, `StairStep`, `Railing`, `LockerUnit`, `BenchSlab`, `SecurityCamera`) are never referenced or spawned in `prop_placer.cpp`.
 
 ---
 
 ## 3. Caveats
 
-- **Source File Path Clarification**: If a task specifically looks for `tools/branch_port_pending/macro_bench.cpp`, note that the file was already ported to `tests/macro_bench.cpp` on `main`. Attempting to register `tools/branch_port_pending/macro_bench.cpp` directly would fail because that file no longer exists in `tools/branch_port_pending/`.
-- **Benchmark vs Test Distinction**: `macro_bench` is an executable benchmark tool, NOT a `add_test()` target. It is deliberately omitted from CTest so slow performance runs do not cause false test failures on low-spec hardware.
+- **Read-Only Inspection**: All findings were derived strictly from code analysis without running code or modifying source files.
+- **Single-Compiler Owner Rule**: No build or test execution was initiated.
+- **Shader Pipelines**: Vulkan SPIR-V shader files (`prop.vert.spv`, `prop.frag.spv`, `cube.frag.spv`) were not dynamically inspected at runtime, though vertex attribute alignments (`sizeof(PropInstance) == 32`) were verified via `static_assert`.
 
 ---
 
-## 4. Conclusion & Recommended Fix Strategy
+## 4. Conclusion
 
-### Assessment
-- **Registration Status**: `macro_bench` is **already fully registered** in `CMakeLists.txt` at lines 490–492:
-  ```cmake
-  add_executable(macro_bench tests/macro_bench.cpp)
-  target_link_libraries(macro_bench PRIVATE giga_game)
-  giga_target_flags(macro_bench OFF)
-  ```
-- **Dependencies & Headers**: All required headers (`<chrono>`, `<cstdint>`, `<cstdio>`, `"game/faction_relations.h"`, `"game/macro_sim.h"`, `"game/npc_pool.h"`) and libraries (`giga_game`) are properly linked and present.
-- **C++23 & Flags**: Global C++23 configuration and `giga_target_flags(macro_bench OFF)` ensure zero-warning, no-RTTI clean compilation.
+The Procedural Prop Placement System (`PropPlacer`) demonstrates solid memory safety and toroidal bounds handling via `MacroGrid`. However, it suffers from 6 critical logic and integration defects:
 
-### Action Plan
-1. **No CMake Edit Required**: No changes to `CMakeLists.txt` are needed since `macro_bench` is already correctly registered.
-2. **Build Target**: To build `macro_bench.exe`, run:
-   ```cmd
-   cmake --build build-win --target macro_bench
-   ```
-3. **Execution**: To run the 2^20 population benchmark:
-   ```cmd
-   build-win\macro_bench.exe
-   ```
+1. **Multi-Prop Stacking**: Shared `rng % 100` across independent rules causes multiple props to spawn in identical voxel cells.
+2. **Intersection Light Over-spawning**: Logical `||` operator bug forces 100% FloodLamp spawn rates at all 3/4-way intersections.
+3. **Spurious Acid Pool Spawns**: Non-acid floor cells receive `AcidPool` prop discs due to `(rng & 1)` fallback logic.
+4. **Pipe Sub-type Coupling**: Chained `else if` on modulo values suppresses `Valve` spawns on `rng % 60 == 0`.
+5. **Instance Cap Truncation**: 4,096 instance limit per shape causes prop truncation across large levels.
+6. **Integration Gap**: Missing `propPlacer.populate()` in `main.cpp` `--shot --ride` code path.
 
 ---
 
 ## 5. Verification Method
 
-- **Verify CMake Registration**:
-  Inspect `CMakeLists.txt` lines 490–492 using `view_file` to confirm the presence of:
-  ```cmake
-  add_executable(macro_bench tests/macro_bench.cpp)
-  target_link_libraries(macro_bench PRIVATE giga_game)
-  giga_target_flags(macro_bench OFF)
-  ```
+To independently verify these findings:
 
-- **Verify Target Build**:
-  Execute Ninja / CMake build command:
-  ```cmd
-  cmake --build build-win --target macro_bench
-  ```
+1. **Multi-Prop Stacking Inspection**:
+   - Inspect `src/render/prop_placer.cpp:89-224`. Confirm that `rng` is initialized once at line 89 and used without re-hashing across all 7 rule checks.
 
-- **Verify Executable Output**:
-  Run `build-win\macro_bench.exe` and confirm stdout reports demographic, migration, and social pass benchmarks for the 2^20 population (e.g. `macro_bench[demographic]: pool=... ms/tick`).
+2. **Intersection Light Bug Inspection**:
+   - Inspect `src/render/prop_placer.cpp:159`. Confirm expression `nOpen >= 3 || (x % 8 == 0 && z % 8 == 0 && (rng % 100 < kCfg.lightChancePct))`.
+
+3. **Acid Pool Floor Check Inspection**:
+   - Inspect `src/render/prop_placer.cpp:185`. Confirm `if (below == kMatAcidPool || (rng & 1))` triggers `AcidPool` shape assignment regardless of `below` material.
+
+4. **Instance Cap Inspection**:
+   - Inspect `src/render/prop_pass.h:28` (`kMaxPropInstances = 4096`) and `src/render/prop_pass.cpp:245` (`cpuInst_[s].size() < kMaxPropInstances`).
+
+5. **`main.cpp` Integration Inspection**:
+   - Search for `propPlacer.populate` in `src/app/main.cpp`. Confirm presence at lines 690 and 1015 (keyboard ride path) and absence in lines 2260–2295 (`--shot` ride path).
+
+---
+
+### Proposed Refactoring & Fixes (For Implementer Reference)
+
+```cpp
+// 1. Advance / diversify hash per rule check:
+inline uint32_t next_rng(uint32_t h) {
+    return (h ^ (h >> 16)) * 0x45d9f3bu;
+}
+
+// 2. Fix Light Intersection Precedence:
+if (solidAbove && (rng % 100 < kCfg.lightChancePct) && (nOpen >= 3 || (x % 8 == 0 && z % 8 == 0)))
+
+// 3. Fix Acid Pool Floor Material Check:
+if (below == kMatAcidPool) {
+    shape = PropShape::AcidPool;
+    crystal.color = kCfg.acidCol;
+    crystal.emissive = 140;
+} else if (solidAbove && (rng % 100 < 30)) {
+    shape = PropShape::FungalColumn;
+    crystal.color = kCfg.fungalCol;
+    crystal.emissive = 160;
+} else {
+    shape = PropShape::CrystalCluster;
+}
+
+// 4. Add propPlacer.populate() to main.cpp --shot ride path:
+if (propPass.ready()) {
+    std::uint32_t fseed = 1337u ^ (static_cast<std::uint32_t>(currentFloor) * 0x9e3779b9u);
+    propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);
+}
+```

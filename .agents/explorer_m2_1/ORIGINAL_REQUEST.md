@@ -1,18 +1,25 @@
-## 2026-07-30T02:26:57Z
-You are an Explorer agent for Milestone 2 (M2: GPU Texture Sampling Pipeline Wire-up) of Gigahrush2.
-Your working directory is `C:\hades\gigahrush2\.agents\explorer_m2_1`. Please create this folder if needed for your metadata.
+## 2026-07-30T07:31:49Z
+<USER_REQUEST>
+You are an Explorer agent working on Milestone 2 (R2: Advanced Atmospheric Shader Pipeline).
+Your working directory is: C:\hades\gigahrush2\.agents\explorer_m2_1
+The root project directory is: C:\hades\gigahrush2
 
-Objective:
-Investigate GPU Texture Sampling Pipeline wire-up for 6 KTX2 texture maps in `data/textures/` into Vulkan material descriptors in `src/render/cube_pass.cpp` and `shaders/cube.frag`.
-Specifically:
-1. List all 6 KTX2 texture maps in `data/textures/` (albedo, normal, roughness, metallic, AO, emissive, etc.) and check how texture loading / KTX2 parsing is handled in the renderer.
-2. Examine `src/render/cube_pass.cpp` to understand Vulkan pipeline creation, Descriptor Set Layout, Descriptor Pool, Descriptor Sets, image views, samplers, and texture binding logic.
-3. Examine `shaders/cube.frag` (and any vertex shader / GLSL sources) to check binding locations, sampler declarations, uniform layout, and material sampling in GLSL.
-4. Check if shader compilation (GLSL to SPIR-V) is required as part of the build step or if offline compilation tools exist (`tools/win/build.bat` or CMake).
+TASK:
+1. Examine `shaders/prop.vert` and `shaders/prop.frag`.
+2. Check `shaders/material_surface.glsl` and `shaders/cube.vert` / `cube.frag` for layout & push constant compatibility (`viewProj`, `sunDir`, `camPos`, `fog`, `torus`).
+3. Verify vertex attributes (locations 0-8) match `PropVertex` (pos, normal) and `PropInstance` (origin, yaw, color, matId, emissive, flags, animPhase).
+4. Verify shading math in `prop.frag`:
+   - Triplanar UV generation from world position.
+   - Procedural surface textures & derivative normal perturbation (`construct_perturbed_normal`).
+   - Roughness & Blinn-Phong specular lighting.
+   - Animated emissive effects (`compute_animated_emissive` for flicker, crystals, acid pools).
+   - Atmospheric height fog & sRGB conversion with IGN dithering.
+5. Check if GLSL syntax is valid, GLSL compiler warnings might occur, or if anything is missing.
+6. Write a comprehensive report to `C:\hades\gigahrush2\.agents\explorer_m2_1\handoff.md`.
+7. Send a summary message back to the Lead Orchestrator with the status and file path of your report.
 
-Requirements:
-- Read-only analysis. Do NOT modify source files.
-- Write your comprehensive investigation report to `C:\hades\gigahrush2\.agents\explorer_m2_1\handoff.md`.
-- Include exact file paths, line numbers, descriptor bindings, GLSL code snippets, Vulkan API calls needed, and build considerations.
-- Update your `progress.md` in `C:\hades\gigahrush2\.agents\explorer_m2_1\progress.md` with timestamps.
-- When complete, send a message back to parent orchestrator.
+CONSTRAINTS:
+- You are read-only for source files. Write only to `C:\hades\gigahrush2\.agents\explorer_m2_1\`.
+- DO NOT execute builds or test runner commands (SINGLE-COMPILER OWNER RULE).
+
+</USER_REQUEST>

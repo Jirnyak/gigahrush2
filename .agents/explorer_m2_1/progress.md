@@ -1,9 +1,14 @@
-# Progress Log
+# Progress Log - explorer_m2_1
 
-Last visited: 2026-07-30T05:25:00Z
+Last visited: 2026-07-30T07:35:35Z
 
-- Initialized BRIEFING.md and ORIGINAL_REQUEST.md.
-- Analyzed `shaders/cube.frag`, `shaders/cube.vert`, `src/render/cube_pass.h`, `src/render/cube_pass.cpp`, `render.md`.
-- Formulated height-based exponential density model and Henyey-Greenstein headlamp forward light scattering GLSL changes.
-- Completed 5-component handoff report in `handoff.md`.
-- Ready to send completion message to parent agent.
+## Status
+- [x] Initialized ORIGINAL_REQUEST.md, BRIEFING.md, and progress.md
+- [x] List shader directory and search for relevant C++ struct definitions
+- [x] Examine `shaders/prop.vert` and `shaders/prop.frag`
+- [x] Check `shaders/material_surface.glsl`, `shaders/cube.vert`, `shaders/cube.frag`
+- [x] Compare vertex attributes (locations 0-8) with C++ definitions (`PropVertex`, `PropInstance`)
+- [x] Compare push constants (`viewProj`, `sunDir`, `camPos`, `fog`, `torus`) across shaders and C++ PushConstants struct
+- [x] Verify shading math in `prop.frag` (Triplanar, procedural surface, derivative perturbation, Blinn-Phong, animated emissive, height fog, sRGB dither)
+- [x] Synthesize findings into `handoff.md`
+- [x] Send summary message to Lead Orchestrator

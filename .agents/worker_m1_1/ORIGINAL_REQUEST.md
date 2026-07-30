@@ -33,3 +33,32 @@ Requirements:
 - Write your completion report and handoff to `C:\hades\gigahrush2\.agents\worker_m1_1\handoff.md`. Include exact diffs, build output, and ctest stdout log.
 - Update your `progress.md` in `C:\hades\gigahrush2\.agents\worker_m1_1\progress.md` with timestamps.
 - When complete, send a message back to parent orchestrator.
+
+## 2026-07-30T11:35:00Z
+You are a Worker agent working on Milestone 1 & 3 (R1: Prop Mesh & Vulkan GPU Instancing, R3: Procedural Prop Placement System).
+Your working directory is: C:\hades\gigahrush2\.agents\worker_m1_1
+The root project directory is: C:\hades\gigahrush2
+
+MANDATORY INTEGRITY WARNING:
+DO NOT CHEAT. All implementations must be genuine. DO NOT hardcode test results, create dummy/facade implementations, or circumvent the intended task. A Forensic Auditor will independently verify your work. Integrity violations WILL be detected and your work WILL be rejected.
+
+CONCURRENCY & COMPILATION CONSTRAINTS:
+1. SINGLE-COMPILER OWNER RULE: You MUST NOT execute tools\win\build.bat, cmake, ninja, glslc, or ctest. Implement the code changes directly in the source files. The Lead Orchestrator will execute the build and test suite sequentially.
+2. Maintain clean, zero-GC C++23 engine code. No exceptions, no RTTI (`/GR-`, `-fno-exceptions`, `ENTT_NOEXCEPTION`).
+
+TASKS:
+1. Examine `src/render/prop_mesh.h` and `src/render/prop_mesh.cpp`.
+   Ensure all 25 `PropShape` procedural mesh generators (`Cylinder`, `HalfCylinder`, `Arch`, `Barrel`, `StairStep`, `Pipe`, `PipeElbow`, `PipeTee`, `Valve`, `Grate`, `RoundGrate`, `CabinetBox`, `ControlPanel`, `Railing`, `SupportBeam`, `CrateBox`, `CrateLong`, `LockerUnit`, `BenchSlab`, `Terminal`, `SecurityCamera`, `FloodLamp`, `FungalColumn`, `CrystalCluster`, `AcidPool`) are fully implemented with clean parametric geometry, accurate smooth/flat normals, clean UVs, and CCW triangle indices.
+2. Examine `src/render/prop_pass.h` and `src/render/prop_pass.cpp`.
+   Ensure all 25 shapes are initialized, instance buffers allocated per frame in flight (`kMaxFramesInFlight`), per-instance vertex attribute bindings match `PropInstance` (32 bytes), dynamic draw calls recorded per shape in `record()`, and zero-warning Vulkan resource management.
+3. Refactor `src/render/prop_placer.h` and `src/render/prop_placer.cpp`:
+   - Advanced/diversify spatial hash across rules (`next_rng` or separate hash seeds per rule) to prevent multi-prop stacking in the same cell.
+   - Fix FloodLamp operator precedence bug: `if (solidAbove && (rng % 100 < kCfg.lightChancePct) && (nOpen >= 3 || (x % 8 == 0 && z % 8 == 0)))`.
+   - Fix AcidPool floor material check: assign `AcidPool` only when `below == kMatAcidPool`; assign `FungalColumn` when `solidAbove && (rng % 100 < 30)`; default to `CrystalCluster`.
+   - Fix pipe sub-type selection to avoid modulo coupling and allow `Valve` spawns.
+   - Extend placement rules to utilize all 25 `PropShape` enum values (including `Cylinder`, `HalfCylinder`, `Arch`, `Barrel`, `StairStep`, `Railing`, `LockerUnit`, `BenchSlab`, `SecurityCamera`).
+   - Retain 100% deterministic spatial hash placement across seeds.
+4. Update `src/app/main.cpp`:
+   - Ensure `propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);` is called during automated `--shot --ride` floor transitions (around line 2260-2295) as well as keyboard floor transitions.
+5. Write your handoff report to `C:\hades\gigahrush2\.agents\worker_m1_1\handoff.md`.
+6. Send a message to the Lead Orchestrator summarizing your changes and referencing the report path.

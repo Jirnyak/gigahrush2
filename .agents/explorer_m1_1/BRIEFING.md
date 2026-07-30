@@ -1,39 +1,40 @@
-# BRIEFING — 2026-07-30T02:27:50Z
+# BRIEFING — 2026-07-30T11:34:35+04:00
 
 ## Mission
-Investigate existing mob behaviour dispatchers and test coverage in Gigahrush2 (`src/game/combat.cpp`, `src/game/mob_behaviour.h`, `tests/suite_behaviours.inl`) for Milestone 1.
+Investigate prop_mesh.h/cpp and prop_pass.h/cpp for Milestone 1 (R1: Procedural Prop Mesh Generators & GPU Instancing). Verify 25 PropShapes and Vulkan rendering pipeline.
 
 ## 🔒 My Identity
-- Archetype: Explorer agent
-- Roles: Read-only investigator & analyst
-- Working directory: `C:\hades\gigahrush2\.agents\explorer_m1_1`
-- Original parent: 598c629e-4438-4246-9083-4459562fdc95
-- Milestone: M1 MobBehaviour Dispatchers & Test Coverage
+- Archetype: explorer
+- Roles: Explorer agent
+- Working directory: C:\hades\gigahrush2\.agents\explorer_m1_1
+- Original parent: 061b5f73-4c33-4ff9-9b30-9a4ec05ba62f
+- Milestone: Milestone 1 (R1)
 
 ## 🔒 Key Constraints
-- Read-only investigation — do NOT implement or modify source files in `src/` or `tests/`.
-- Produce detailed handoff.md report with exact line numbers, code diff proposals, test assertion additions, and risk assessment.
-- Update progress.md with timestamp heartbeats.
-- Send results back to parent orchestrator via send_message.
+- Read-only investigation — do NOT implement or modify source files
+- Write only to C:\hades\gigahrush2\.agents\explorer_m1_1\
+- DO NOT execute builds or test runner commands (SINGLE-COMPILER OWNER RULE)
 
 ## Current Parent
-- Conversation ID: 598c629e-4438-4246-9083-4459562fdc95
-- Updated: 2026-07-30T02:27:50Z
+- Conversation ID: 061b5f73-4c33-4ff9-9b30-9a4ec05ba62f
+- Updated: 2026-07-30T11:34:35+04:00
 
 ## Investigation State
-- **Explored paths**: `src/game/mob_behaviour.h`, `src/game/mob_behaviour.cpp`, `src/game/combat.h`, `src/game/combat.cpp`, `src/game/wander.cpp`, `tests/suite_behaviours.inl`
+- **Explored paths**: src/render/prop_mesh.h, src/render/prop_mesh.cpp, src/render/prop_pass.h, src/render/prop_pass.cpp, shaders/prop.vert, shaders/prop.frag, src/render/prop_placer.h, src/render/prop_placer.cpp, tests/suite_props.inl
 - **Key findings**:
-  1. `burst_speed_mult`, `behaviour_hurt_move_mult`, and `behaviour_melee_reach` are already live in `wander.cpp` & `combat.cpp`.
-  2. `behaviour_damage_mult` is partially wired in `combat.cpp:342`, but missing `behaviour_claims_damage` check (causing `DebrisLurker` double multiplication bug in cover).
-  3. `behaviour_incoming_mult`, `facing_damage_mult`, and `burst_damage_mult` are unwired (0 callers in `src/`).
-  4. Exact code changes for `combat.h` and `combat.cpp` plus 3 new combat integration test blocks for `suite_behaviours.inl` documented in `handoff.md`.
-- **Unexplored areas**: None for Milestone 1 scope.
+  - All 25 `PropShape` enum values are defined and handled in `build_prop_mesh`.
+  - Vulkan device buffer management and vertex attribute bindings in `PropPass` match shader declarations and struct memory layouts.
+  - Critical defect found in `PipeElbow` (collapses to 2D flat shape in Z=0 plane).
+  - Severe defects found in `ControlPanel` (inverted top normal), `SecurityCamera` & `FloodLamp` (inverted Y normals), `Railing` (leftover stub and un-translated duplicate posts at x=0), and `CrystalCluster` (un-translated base caps at origin).
+  - Moderate defects found in `StairStep` (degenerate quads & unnormalized normal), `FungalColumn` (stepped ring discontinuities), `CrateBox` (duplicate face), and `Valve` (skewed spoke offsets).
+- **Unexplored areas**: None within scope.
 
 ## Key Decisions Made
-- Completed read-only investigation and synthesized findings into 5-component `handoff.md`.
+- Completed thorough line-by-line inspection of all 25 shape generators and Vulkan pipeline logic.
+- Compiled findings into handoff.md.
 
 ## Artifact Index
-- `C:\hades\gigahrush2\.agents\explorer_m1_1\ORIGINAL_REQUEST.md` — Original request text
-- `C:\hades\gigahrush2\.agents\explorer_m1_1\BRIEFING.md` — State index
-- `C:\hades\gigahrush2\.agents\explorer_m1_1\progress.md` — Liveness log
-- `C:\hades\gigahrush2\.agents\explorer_m1_1\handoff.md` — Complete Handoff Investigation Report
+- C:\hades\gigahrush2\.agents\explorer_m1_1\ORIGINAL_REQUEST.md — Original request
+- C:\hades\gigahrush2\.agents\explorer_m1_1\BRIEFING.md — Working memory briefing
+- C:\hades\gigahrush2\.agents\explorer_m1_1\progress.md — Heartbeat progress
+- C:\hades\gigahrush2\.agents\explorer_m1_1\handoff.md — Comprehensive Handoff Report

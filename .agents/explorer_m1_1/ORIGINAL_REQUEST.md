@@ -1,23 +1,19 @@
-## 2026-07-30T02:26:57Z
+## 2026-07-30T07:31:38Z
+You are an Explorer agent working on Milestone 1 (R1: Procedural Prop Mesh Generators & GPU Instancing).
+Your working directory is: C:\hades\gigahrush2\.agents\explorer_m1_1
+The root project directory is: C:\hades\gigahrush2
 
-<USER_REQUEST>
-You are an Explorer agent for Milestone 1 (M1: MobBehaviour Dispatchers & Test Coverage) of Gigahrush2.
-Your working directory is `C:\hades\gigahrush2\.agents\explorer_m1_1`. Please create this folder if needed for your metadata.
+TASK:
+1. Examine `src/render/prop_mesh.h` and `src/render/prop_mesh.cpp`.
+   Verify all 25 `PropShape` procedural mesh generators:
+   Cylinder, HalfCylinder, Arch, Barrel, StairStep, Pipe, PipeElbow, PipeTee, Valve, Grate, RoundGrate, CabinetBox, ControlPanel, Railing, SupportBeam, CrateBox, CrateLong, LockerUnit, BenchSlab, Terminal, SecurityCamera, FloodLamp, FungalColumn, CrystalCluster, AcidPool.
+   Check if any shape builders are missing, incomplete, stubbed, or have incorrect normal/vertex/index calculations.
+2. Examine `src/render/prop_pass.h` and `src/render/prop_pass.cpp`.
+   Verify Vulkan device buffer management, per-instance vertex binding attributes matching `PropInstance` layout, per-shape draw recording (`record()`), and buffer memory allocation.
+3. Check for any bugs, unhandled shapes, array bounds mismatches, or missing Vulkan state setup.
+4. Write a comprehensive report to `C:\hades\gigahrush2\.agents\explorer_m1_1\handoff.md`.
+5. Send a summary message back to the Lead Orchestrator with the status and file path of your report.
 
-Objective:
-Investigate existing mob behaviour dispatchers in `src/game/combat.cpp`, `src/game/mob_behaviour.hpp`, and test coverage in `tests/suite_behaviours.inl`.
-Specifically:
-1. Examine how existing behaviour multipliers (`burst_speed_mult`, `behaviour_hurt_move_mult`, `behaviour_damage_mult`, `behaviour_melee_reach`) are dispatched.
-2. Determine exact logic and locations for wiring remaining dispatchers:
-   - `behaviour_incoming_mult` (defender mitigation in `apply_damage` in `src/game/combat.cpp`)
-   - `facing_damage_mult` (directional damage multiplier based on attacker/defender facing)
-   - `burst_damage_mult` (burst damage multiplier during burst attack state)
-3. Inspect `tests/suite_behaviours.inl` and check what explicit unit test assertions exist and what new assertions must be added to achieve 100% complete behaviour test coverage.
-
-Requirements:
-- Read-only analysis. Do NOT modify source files.
-- Write your comprehensive investigation report to `C:\hades\gigahrush2\.agents\explorer_m1_1\handoff.md`.
-- Include exact file paths, line numbers, proposed code changes, test assertion additions, and risk assessment.
-- Update your `progress.md` in `C:\hades\gigahrush2\.agents\explorer_m1_1\progress.md` with timestamps.
-- When complete, send a message back to parent orchestrator.
-</USER_REQUEST>
+CONSTRAINTS:
+- You are read-only for source files. Write only to `C:\hades\gigahrush2\.agents\explorer_m1_1\`.
+- DO NOT execute builds or test runner commands (SINGLE-COMPILER OWNER RULE).
