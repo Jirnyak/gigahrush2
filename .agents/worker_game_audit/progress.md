@@ -18,25 +18,38 @@
 - [x] SAV1 two-phase real proof PROOF=GREEN (f9_diag.txt):
   - phase1 ride2 save → floor -14, sav 780B, shot_f9_save.png
   - phase2 ride0 load → `[load] loaded: floor -14 @44,35,2`, shot_f9_load.png floor -14
+- [x] FOR1: elevator capture/restore PlayerRanged+PlayerMelee already on HEAD (`9cbb7fb`)
+- [x] FOR1: test_elevator pins already on HEAD (`b6cd6c5`) — mag/weapon/shots/hits/kills survive rides
+- [x] FOR1: clean game_test RC=0 **213917 checks, 0 failures** (pid 39996, dt≈350s, 2026-07-31)
+- [x] FOR1: CMake pin 213899 → 213917
+- [x] FOR1: BACKLOG + progress CLOSED Russian/architect notes
 
 ## In flight
-- [ ] push origin main (no force; auth flaky)
-- [ ] FOR1 forensic src/game next defect
+- [ ] push origin main (no force; auth flaky historically)
 - [ ] TEX1 blocked: 3 missing roughness ktx2 — no sources, do not mock
+- [ ] CNT1 content thin (status.csv ~6 rows)
+- [ ] optional RPG1 RpgStats across elevator; optional MAGSHOT HUD mag across --ride
 
 ## Do not
-- stage/commit prop_*, gpu_*, shaders, embody, foreign main hunks, env_detail/prop_placer WIP
+- stage/commit prop_*, gpu_*, shaders, embody, foreign main/combat/door/loot hunks, env_detail/prop_placer WIP
 - git add -A / force-push
 - commit shots/*.png binaries or large stderr dumps unless pathspec-asked
 - mock missing ktx2 textures
+- touch cube.frag*, cube_pass.cpp, floor_gen.cpp
 
-## Cycle report (2026-07-30 ~22:20)
+## Cycle report (2026-07-31 ~01:24) — FOR1 CLOSED
+цикл FOR1/MAG1 | closed: mag+melee survive elevator body-swap; unit GREEN 213917/0;
+CMake pin 213917; docs CLOSED | code already on HEAD mislabeled commits 9cbb7fb/b6cd6c5 |
+wip: pathspec commit pin+docs + push | residual OPEN: TEX1 no mock; CNT1; RPG1 optional;
+MAGSHOT optional | blockers: foreign WT dirty main/combat/door/loot — not staged
+
+## Cycle report (2026-07-30 ~22:20) — SAV1
 цикл SAV1 | closed: --action save|load harness, two-phase F9 gameplay PROOF=GREEN floor-14 |
-wip: pathspec commit + push | new: FOR1 forensic | blockers: TEX1 no roughness sources; foreign render WIP dirty
+wip was: pathspec commit + push + FOR1 | FOR1 now CLOSED this cycle
 
-## Architect answers (handoff)
-- **Least confident:** load proof asserts floor + cell via stderr/shot line, not pixel body-vs-wall; PNG body placement not automated.
-- **Biggest missing:** FOR1 — no new RED ledger item; TEX1 assets absent; CNT1 content thin.
-- **Don’t realize:** cmd.exe redirects for gigahrush2 often fail silently — use Python Popen cwd=Release; findstr `[load]` is regex (brackets); load must wait `!nav.baking()` or one-shot never fires during hub bake.
-- **Implemented not gameplay-proven before this cycle:** F9 full load was code-complete (7709b3e) but unproven headless — now SAV1 PROOF=GREEN. NetTerminal craft still unit-level DECLINED. TEX1 blocked.
-- **Next execute:** pathspec commit main.cpp + docs → push → FOR1 hunt in src/game.
+## Architect answers (FOR1 close)
+- **Least confident:** Real-game HUD mag across live `--ride` not shot this cycle; RpgStats still re-rolls on embody; foreign main may hide ride hooks.
+- **Biggest missing (pre-close):** Docs OPEN + pin lag 213899 vs binary 213917 + uncommitted process. Fixed this cycle.
+- **Don't realize:** Fix+tests already on main under wrong commit titles — status hid elevator (HEAD match). cmd redirects empty — Python file fds. Pin is 213917 not handoff 213899.
+- **Implemented-not-integrated:** craft not in F5; NetTerminal craft DECLINED unit-only; TEX1 blocked; RpgStats=RPG1 optional; F9/SAV1 already PROOF=GREEN.
+- **Next execute:** pathspec commit CMakeLists.txt + .agents/worker_game_audit/{BACKLOG,progress}.md → push origin main no-force → TEX1/CNT1 or PAR1 if main free.
