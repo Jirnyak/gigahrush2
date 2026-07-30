@@ -544,7 +544,183 @@ int main(int argc, char** argv) {
             step.matId  = 2;
             propPass.add_instance(gpu::PropShape::StairStep, step);
         }
+
+        // ── Phase 2 demo: mechanical props ────────────────────────────────────
+        // Pipe elbows connecting vertical and horizontal runs
+        for (int i = 0; i < 4; ++i) {
+            gpu::PropInstance el{};
+            el.origin = {static_cast<float>(60 + i * 4), 1.5f, 0.0f};
+            el.yaw    = static_cast<float>(i) * 1.5707963f;
+            el.color  = {0.22f, 0.25f, 0.24f};
+            el.matId  = 4;
+            propPass.add_instance(gpu::PropShape::PipeElbow, el);
+        }
+        // Handwheel valves on wall pipes
+        for (int i = 0; i < 3; ++i) {
+            gpu::PropInstance val{};
+            val.origin   = {static_cast<float>(70 + i * 5), 1.2f, 2.0f};
+            val.yaw      = 0.0f;
+            val.color    = {0.30f, 0.25f, 0.20f};
+            val.matId    = 5;
+            val.emissive = 0;
+            val.flags    = 0;
+            propPass.add_instance(gpu::PropShape::Valve, val);
+        }
+        // Floor grates over cable channels
+        for (int i = 0; i < 5; ++i) {
+            gpu::PropInstance gr{};
+            gr.origin = {static_cast<float>(i * 6), 0.0f, 18.0f};
+            gr.yaw    = 0.0f;
+            gr.color  = {0.28f, 0.30f, 0.28f};
+            gr.matId  = 4;
+            propPass.add_instance(gpu::PropShape::Grate, gr);
+        }
+        // Round ventilation grates on wall
+        for (int i = 0; i < 3; ++i) {
+            gpu::PropInstance rg{};
+            rg.origin = {static_cast<float>(80 + i * 6), 1.0f, -0.5f};
+            rg.yaw    = 1.5707963f;
+            rg.color  = {0.25f, 0.25f, 0.25f};
+            rg.matId  = 4;
+            propPass.add_instance(gpu::PropShape::RoundGrate, rg);
+        }
+        // Electrical cabinets along a wall
+        for (int i = 0; i < 4; ++i) {
+            gpu::PropInstance cab{};
+            cab.origin = {static_cast<float>(90 + i * 1), 0.0f, -0.5f};
+            cab.yaw    = 0.0f;
+            cab.color  = {0.35f, 0.38f, 0.35f};
+            cab.matId  = 2;
+            propPass.add_instance(gpu::PropShape::CabinetBox, cab);
+        }
+        // Control panel console
+        {
+            gpu::PropInstance cp{};
+            cp.origin = {100.0f, 0.0f, 5.0f};
+            cp.yaw    = 3.14159f;
+            cp.color  = {0.25f, 0.28f, 0.30f};
+            cp.matId  = 3;
+            propPass.add_instance(gpu::PropShape::ControlPanel, cp);
+        }
+        // Railings along a walkway edge
+        for (int i = 0; i < 6; ++i) {
+            gpu::PropInstance rl{};
+            rl.origin = {static_cast<float>(i * 2), 1.0f, 20.0f};
+            rl.yaw    = 0.0f;
+            rl.color  = {0.30f, 0.30f, 0.30f};
+            rl.matId  = 3;
+            propPass.add_instance(gpu::PropShape::Railing, rl);
+        }
+
+        // ── Phase 3 demo: living world props ──────────────────────────────────
+        // Overhead support beams
+        for (int i = 0; i < 5; ++i) {
+            gpu::PropInstance sb{};
+            sb.origin = {static_cast<float>(i * 8), 2.2f, -5.0f};
+            sb.yaw    = 1.5707963f;
+            sb.color  = {0.20f, 0.22f, 0.24f};
+            sb.matId  = 3;
+            propPass.add_instance(gpu::PropShape::SupportBeam, sb);
+        }
+        // Crate cluster
+        for (int i = 0; i < 5; ++i) {
+            gpu::PropInstance cr{};
+            cr.origin = {static_cast<float>(30 + (i % 3) * 1), 0.0f, 25.0f + (i / 3) * 1.0f};
+            cr.yaw    = static_cast<float>(i) * 0.4f;
+            cr.color  = {0.35f, 0.28f, 0.18f};
+            cr.matId  = 2;
+            propPass.add_instance(gpu::PropShape::CrateBox, cr);
+        }
+        // Long weapons crates
+        for (int i = 0; i < 3; ++i) {
+            gpu::PropInstance lc{};
+            lc.origin = {static_cast<float>(38 + i * 3), 0.0f, 24.0f};
+            lc.yaw    = 0.0f;
+            lc.color  = {0.22f, 0.30f, 0.20f}; // military green
+            lc.matId  = 2;
+            propPass.add_instance(gpu::PropShape::CrateLong, lc);
+        }
+        // Locker row
+        for (int i = 0; i < 5; ++i) {
+            gpu::PropInstance lk{};
+            lk.origin = {static_cast<float>(110 + i), 0.0f, 0.0f};
+            lk.yaw    = 0.0f;
+            lk.color  = {0.28f, 0.35f, 0.38f};
+            lk.matId  = 3;
+            propPass.add_instance(gpu::PropShape::LockerUnit, lk);
+        }
+        // Benches
+        for (int i = 0; i < 3; ++i) {
+            gpu::PropInstance bn{};
+            bn.origin = {static_cast<float>(i * 5), 0.0f, 22.0f};
+            bn.yaw    = 0.0f;
+            bn.color  = {0.35f, 0.32f, 0.28f};
+            bn.matId  = 2;
+            propPass.add_instance(gpu::PropShape::BenchSlab, bn);
+        }
+        // Computer terminals
+        for (int i = 0; i < 3; ++i) {
+            gpu::PropInstance tm{};
+            tm.origin = {static_cast<float>(116 + i * 2), 0.0f, 2.0f};
+            tm.yaw    = 3.14159f;
+            tm.color  = {0.18f, 0.22f, 0.20f};
+            tm.matId  = 3;
+            propPass.add_instance(gpu::PropShape::Terminal, tm);
+        }
+        // Security cameras on ceiling brackets
+        for (int i = 0; i < 4; ++i) {
+            gpu::PropInstance sc{};
+            sc.origin = {static_cast<float>(i * 15), 2.5f, 0.0f};
+            sc.yaw    = static_cast<float>(i) * 1.5707963f;
+            sc.color  = {0.18f, 0.18f, 0.18f};
+            sc.matId  = 3;
+            propPass.add_instance(gpu::PropShape::SecurityCamera, sc);
+        }
+        // Flood lamps lighting the scene
+        for (int i = 0; i < 6; ++i) {
+            gpu::PropInstance fl{};
+            fl.origin   = {static_cast<float>(i * 12 + 5), 0.0f, -3.0f};
+            fl.yaw      = 0.0f;
+            fl.color    = {0.90f, 0.85f, 0.70f}; // warm tungsten
+            fl.matId    = 0;
+            fl.emissive = 200; // bright emissive
+            propPass.add_instance(gpu::PropShape::FloodLamp, fl);
+        }
+
+        // ── Phase 4 demo: organic / anomalous ─────────────────────────────────
+        // Fungal columns in an anomalous zone
+        for (int i = 0; i < 4; ++i) {
+            gpu::PropInstance fc{};
+            fc.origin   = {static_cast<float>(130 + i * 4), 0.0f, 5.0f};
+            fc.yaw      = static_cast<float>(i) * 1.1f;
+            fc.color    = {0.22f, 0.38f, 0.16f}; // sickly green
+            fc.matId    = 0;
+            fc.emissive = 40; // faint bioluminescence
+            propPass.add_instance(gpu::PropShape::FungalColumn, fc);
+        }
+        // Crystal cluster formations
+        for (int i = 0; i < 5; ++i) {
+            gpu::PropInstance cc{};
+            cc.origin   = {static_cast<float>(145 + i * 3), 0.0f,
+                           static_cast<float>(i % 2) * 3.0f};
+            cc.yaw      = static_cast<float>(i) * 0.8f;
+            cc.color    = {0.55f, 0.25f, 0.85f}; // purple crystal
+            cc.matId    = 0;
+            cc.emissive = 180; // strongly emissive
+            propPass.add_instance(gpu::PropShape::CrystalCluster, cc);
+        }
+        // Acid pools on floor
+        for (int i = 0; i < 3; ++i) {
+            gpu::PropInstance ap{};
+            ap.origin   = {static_cast<float>(160 + i * 6), 0.0f, 0.0f};
+            ap.yaw      = 0.0f;
+            ap.color    = {0.20f, 0.70f, 0.10f}; // toxic green
+            ap.matId    = 0;
+            ap.emissive = 60;
+            propPass.add_instance(gpu::PropShape::AcidPool, ap);
+        }
     }
+
 
     gpu::ImGuiLayer hud;
     if (!hud.init(device, window, renderer.renderPass,
@@ -988,6 +1164,19 @@ int main(int argc, char** argv) {
                     game::NpcId pid = reg.valid(player)
                                           ? reg.get<game::NpcRef>(player).id
                                           : game::kInvalidNpc;
+                    // Opened crates are world state, not a free respawn. Capture the
+                    // leaving floor BEFORE travel: the streamer may recycle the LayerId
+                    // and refresh_floor_containers destroys every crate on the arrival
+                    // slot. Without this, loot → leave → return refills every emptied
+                    // box. F5 already does the same; travel was the missing call site.
+                    // [save.h]
+                    {
+                        const LayerId leaveLayer =
+                            reg.valid(player) ? reg.get<Transform>(player).layer
+                                              : static_cast<LayerId>(0);
+                        game::refresh_opened_containers(reg, leaveLayer, currentFloor,
+                                                        runState.opened);
+                    }
                     game::RideResult ride = streamer.travel(
                         stack, registry, reg, pool, player, currentFloor, dir,
                         /*arrivalZ=*/2, pid);
@@ -1030,6 +1219,12 @@ int main(int argc, char** argv) {
                         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
                         refresh_floor_containers(reg, stack.layer(nl),
                                                  currentFloor, nl);
+                        // Re-empty crates already looted on a prior visit to this
+                        // floor. Deterministic spawn would otherwise refill them —
+                        // the brick this pair closes. Same seam as F9 apply. [save.h]
+                        game::apply_opened_containers(
+                            reg, nl, currentFloor, runState.opened.data(),
+                            runState.opened.size());
                         // Doors before the bake, frozen for its duration. [door.h]
                         if (currentSpec)
                             doorsBuilt = game::door_build(
@@ -1039,6 +1234,7 @@ int main(int argc, char** argv) {
                         begin_floor_nav(stack.layer(nl), nav);
                     }
                 }
+
             }
             // While the pause menu is up, ignore all look/move input: ImGui owns
             // the cursor and the game is frozen.

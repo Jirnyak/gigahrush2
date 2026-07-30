@@ -224,6 +224,10 @@ public:
     std::uint32_t normal_materials() const { return normalMask_; }
     std::uint32_t roughness_materials() const { return roughnessMask_; }
 
+    // Borrowed by passes that share the same push-constant block (PropPass,
+    // any future pass that needs the same CubePush layout).
+    VkPipelineLayout pipeline_layout() const { return layout_; }
+
 private:
     VulkanDevice* dev_ = nullptr;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;

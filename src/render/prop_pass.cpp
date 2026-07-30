@@ -4,10 +4,14 @@
 #include "render/vk_device.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
+
+#include "core/math.h"
+
 
 namespace giga::gpu {
 
@@ -243,29 +247,42 @@ void PropPass::record(VkCommandBuffer cmd, uint32_t frameIndex,
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
 
-    // Push constants carry over from CubePass inside the same render pass.
-    // Re-push them here so PropPass can be called stand-alone in tests or
-    // after a pipeline bind that cleared them.
-    // Find the layout from cube_pass via the stored pipelineLayout in the
-    // pipeline — but we don't store the layout handle separately. We can
-    // look it up via vkGetPipelineLayout... which doesn't exist in Vulkan.
-    // The correct pattern is for the caller to bind push constants once and
-    // for all passes to share the same layout. Since body_pass creates its own
-    // layout from the same CubePush range, the constants are already bound.
-    // We leave re-push out here; callers bind once per frame. ✓
+    // Extract camera position and fog radius from push constants for culling.
+    const vec3  camPos   = {push.camPos.x, push.camPos.y, push.camPos.z};
+    const float fogEnd   = push.fog.y;
+    const float fogEndSq = fogEnd * fogEnd;
+    const float period   = push.torus.x;
 
     lastDrawCount_ = 0;
     for (int s = 0; s < kPropShapeCount; ++s) {
-        const auto& inst = cpuInst_[s];
-        if (inst.empty()) continue;
+        const auto& src = cpuInst_[s];
+        if (src.empty()) continue;
 
-        uint32_t count = static_cast<uint32_t>(inst.size());
-
-        // Upload instance data to this frame's buffer
+        // CPU frustum/fog cull: skip instances that are completely fogged out.
+        // This keeps GPU draw calls proportional to visible props, not total count.
+        // Also enforces the kMaxPropInstances hard cap per shape per frame.
         auto& buf = instBufs_[s][frameIndex];
-        std::memcpy(buf.mapped, inst.data(), count * sizeof(PropInstance));
+        auto* dst = static_cast<PropInstance*>(buf.mapped);
+        uint32_t count = 0;
 
-        // Bind vertex + instance buffers
+        for (const auto& inst : src) {
+            float dx = inst.origin.x - camPos.x;
+            float dy = inst.origin.y - camPos.y;
+            float dz = inst.origin.z - camPos.z;
+
+            // Wrap each component to nearest image
+            dx -= period * std::floor(dx / period + 0.5f);
+            dy -= period * std::floor(dy / period + 0.5f);
+            dz -= period * std::floor(dz / period + 0.5f);
+            float distSq = dx * dx + dy * dy + dz * dz;
+            if (distSq > fogEndSq) continue; // entirely fogged to black
+
+            dst[count++] = inst;
+            if (count >= static_cast<uint32_t>(kMaxPropInstances)) break;
+        }
+        if (count == 0) continue;
+
+        // Bind vertex + instance buffers and draw
         VkBuffer     bufs[2] = {meshes_[s].vertexBuffer, buf.buffer};
         VkDeviceSize offs[2] = {0, 0};
         vkCmdBindVertexBuffers(cmd, 0, 2, bufs, offs);
@@ -277,3 +294,4 @@ void PropPass::record(VkCommandBuffer cmd, uint32_t frameIndex,
 }
 
 } // namespace giga::gpu
+

@@ -34,7 +34,9 @@ struct PropInstance {
     float   yaw;       // rotation around local Y, radians
     vec3    color;     // display-referred RGB (cube.frag gamma-expands it)
     uint8_t matId;     // material id (0-30), same encoding as CubeInstance
-    uint8_t pad[3];    // keep struct 32 bytes for alignment
+    uint8_t emissive;  // 0-255 -> 0.0-2.0 emissive multiplier (crystals/lamps)
+    uint8_t flags;     // bit0=flipX, bit1=damaged(tint darker), bit2=glow pulse
+    uint8_t animPhase; // 0-255 mapped 0-2pi: valve spin, lamp flicker phase
 };
 static_assert(sizeof(PropInstance) == 32, "PropInstance size mismatch");
 
