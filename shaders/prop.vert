@@ -15,9 +15,7 @@ layout(location = 2) in vec3  inOrigin;    // per-instance world base
 layout(location = 3) in float inYaw;       // per-instance Y rotation (radians)
 layout(location = 4) in vec3  inColor;     // per-instance base colour
 layout(location = 5) in uint  inMat;       // per-instance material id (0-30)
-// Note: emissive/flags/animPhase are in the instance struct bytes
-// immediately after matId but not exposed as vertex attributes yet —
-// they will be wired via a future UBO once the shader variant is split.
+layout(location = 6) in uint  inEmissive;  // per-instance emissive byte (0-255)
 
 // Shared push-constant block — must match cube.vert / body.vert EXACTLY.
 layout(push_constant) uniform Push {
@@ -33,7 +31,9 @@ layout(location = 0) out vec3  vNormal;
 layout(location = 1) out vec3  vColor;
 layout(location = 2) out vec3  vWorldPos;
 layout(location = 3) out float vAo;
-layout(location = 4) flat out uint vMat;
+layout(location = 4) flat out uint  vMat;
+layout(location = 5) flat out float vEmissive;
+
 
 // Nearest toroidal image — matches core/wrap.h wrap_delta_f() and cube.vert.
 vec3 nearest_image(vec3 absPos, vec3 cam, float p) {
@@ -69,4 +69,8 @@ void main() {
 
     // Flat material id for the const-array surface lookup in cube.frag.
     vMat = inMat;
+
+    // Emissive multiplier 0.0 .. 2.0 (mapped from byte 0..255)
+    vEmissive = float(inEmissive) / 255.0 * 2.0;
 }
+

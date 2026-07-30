@@ -89,13 +89,13 @@ bool PropPass::init(VulkanDevice* dev, VkPipelineLayout pipelineLayout,
 bool PropPass::create_pipeline(VkPipelineLayout layout, VkRenderPass rp,
                                const char* shaderDir) {
     std::vector<char> vsrc, fsrc;
-    if (!read_file(join(shaderDir, "prop.vert.spv"), vsrc))    return false;
+    if (!read_file(join(shaderDir, "prop.vert.spv"), vsrc)) return false;
 
-    // Reuse the textured fragment variant when available, fall back to plain
-    std::string fpath = join(shaderDir, "cube_tex.frag.spv");
+    // prop.frag.spv has full emissive support; fall back to cube.frag.spv if not built yet
+    std::string fpath = join(shaderDir, "prop.frag.spv");
     if (!read_file(fpath, fsrc)) {
-        std::fprintf(stderr, "[prop] cube_tex.frag.spv not found, "
-                     "trying cube.frag.spv\n");
+        std::fprintf(stderr, "[prop] prop.frag.spv not found, "
+                     "falling back to cube.frag.spv\n");
         if (!read_file(join(shaderDir, "cube.frag.spv"), fsrc))
             return false;
     }
@@ -128,25 +128,27 @@ bool PropPass::create_pipeline(VkPipelineLayout layout, VkRenderPass rp,
     bindings[1].inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
 
     // Attribute layout must match prop.vert exactly:
-    //  loc 0 = inPos    (binding 0, PropVertex::pos)
-    //  loc 1 = inNormal (binding 0, PropVertex::normal)
-    //  loc 2 = inOrigin (binding 1, PropInstance::origin)
-    //  loc 3 = inYaw    (binding 1, PropInstance::yaw)
-    //  loc 4 = inColor  (binding 1, PropInstance::color)
-    //  loc 5 = inMat    (binding 1, PropInstance::matId as uint)
-    VkVertexInputAttributeDescription attrs[6]{};
-    attrs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT,  offsetof(PropVertex,   pos)};
-    attrs[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT,  offsetof(PropVertex,   normal)};
-    attrs[2] = {2, 1, VK_FORMAT_R32G32B32_SFLOAT,  offsetof(PropInstance, origin)};
-    attrs[3] = {3, 1, VK_FORMAT_R32_SFLOAT,         offsetof(PropInstance, yaw)};
-    attrs[4] = {4, 1, VK_FORMAT_R32G32B32_SFLOAT,  offsetof(PropInstance, color)};
-    attrs[5] = {5, 1, VK_FORMAT_R8_UINT,            offsetof(PropInstance, matId)};
+    //  loc 0 = inPos      (binding 0, PropVertex::pos)
+    //  loc 1 = inNormal   (binding 0, PropVertex::normal)
+    //  loc 2 = inOrigin   (binding 1, PropInstance::origin)
+    //  loc 3 = inYaw      (binding 1, PropInstance::yaw)
+    //  loc 4 = inColor    (binding 1, PropInstance::color)
+    //  loc 5 = inMat      (binding 1, PropInstance::matId  as R8_UINT)
+    //  loc 6 = inEmissive (binding 1, PropInstance::emissive as R8_UINT)
+    VkVertexInputAttributeDescription attrs[7]{};
+    attrs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(PropVertex,   pos)};
+    attrs[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(PropVertex,   normal)};
+    attrs[2] = {2, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(PropInstance, origin)};
+    attrs[3] = {3, 1, VK_FORMAT_R32_SFLOAT,        offsetof(PropInstance, yaw)};
+    attrs[4] = {4, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(PropInstance, color)};
+    attrs[5] = {5, 1, VK_FORMAT_R8_UINT,           offsetof(PropInstance, matId)};
+    attrs[6] = {6, 1, VK_FORMAT_R8_UINT,           offsetof(PropInstance, emissive)};
 
     VkPipelineVertexInputStateCreateInfo vi{};
     vi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vi.vertexBindingDescriptionCount   = 2;
     vi.pVertexBindingDescriptions      = bindings;
-    vi.vertexAttributeDescriptionCount = 6;
+    vi.vertexAttributeDescriptionCount = 7;
     vi.pVertexAttributeDescriptions    = attrs;
 
     VkPipelineInputAssemblyStateCreateInfo ia{};
