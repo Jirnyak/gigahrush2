@@ -491,6 +491,7 @@ int main(int argc, char** argv) {
     float customYaw = 0.8f, customPitch = -0.5f;
     bool shotOrbit = false;
     std::string shotAction;
+    bool shotActionConsumed = false; // one-shot save/load; attack stays held
     bool showHud = true;
 
     for (int i = 1; i < argc; ++i) {

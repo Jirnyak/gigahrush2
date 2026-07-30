@@ -581,11 +581,12 @@ void main() {
 #endif
 
     float specPow = max(2.0 / (roughness * roughness * roughness * roughness + 1e-4) - 2.0, 1.0);
-    float specIntensity = (1.0 - roughness) * 0.5;
+    float specIntensity = (1.0 - roughness) * 0.15;
     float spec = 0.0;
     if (dot(n, L) > 0.0) {
-        float NdotL = max(dot(n, L), 0.0);
-        spec = pow(NdotL, specPow) * specIntensity * att * pc.camPos.w;
+        vec3 H = normalize(L + viewDir);
+        float NdotH = max(dot(n, H), 0.0);
+        spec = pow(NdotH, specPow) * specIntensity * att * pc.camPos.w;
     }
 
     float lampDirect = pc.camPos.w * att * max(dot(n, L), 0.0);
@@ -654,7 +655,9 @@ void main() {
     float fog = clamp((effectiveDist - pc.fog.x) / max(pc.fog.y - pc.fog.x, 1e-3), 0.0, 1.0);
     lit = mix(lit, vec3(0.0), fog);
 
-    vec3 srgb = pow(max(lit, vec3(0.0)), vec3(1.0 / kGamma));
+    // Filmic Reinhard tonemap to compress highlights and prevent white overexposure blowout:
+    vec3 mapped = lit / (lit + vec3(0.90));
+    vec3 srgb = pow(max(mapped, vec3(0.0)), vec3(1.0 / kGamma));
 
     // A long mid-grey-to-black ramp over ~51 m into an 8-bit target bands badly,
     // and the fade to black *is* the aesthetic here. One LSB of interleaved
