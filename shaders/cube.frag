@@ -49,7 +49,7 @@ layout(push_constant) uniform Push {
                    //     loader actually decoded (see CubePush in
                    //     render/cube_pass.h); body_pass leaves it 0 and compiles
                    //     the plain module, which never reads it.
-                   // w free.
+                   // w = packed normal (lower 16 bits) and roughness (upper 16 bits) map layer masks.
                    // Declared in full either way so the block matches cube.vert
                    // exactly (shared pipeline layout).
 } pc;
@@ -84,6 +84,8 @@ const float kGamma = 2.2;
 // material whose file was missing or corrupt takes the procedural branch below
 // rather than sampling undefined memory.
 layout(set = 0, binding = 0) uniform sampler2DArray uAlbedo;
+layout(set = 0, binding = 1) uniform sampler2DArray uNormal;
+layout(set = 0, binding = 2) uniform sampler2DArray uRoughness;
 
 // Texture repeats per 2 m cell. 0.5 == one photograph per 4 m (two cells), and
 // both halves of that choice are stated because NOBODY HAS SEEN A FRAME OF IT:
@@ -506,6 +508,33 @@ void main() {
     }
 
 #ifdef GIGA_ALBEDO_ARRAY
+    uint packedMasks = floatBitsToUint(pc.torus.w);
+    uint normalMask = packedMasks & 0xFFFFu;
+    uint roughnessMask = (packedMasks >> 16u) & 0xFFFFu;
+
+    if (normalMask != 0u && (normalMask & (1u << mid)) != 0u) {
+        vec3 mapN = texture(uNormal, vec3(uv * kTexRepeat, float(mid))).xyz * 2.0 - 1.0;
+        vec3 dp1 = dFdx(vWorldPos);
+        vec3 dp2 = dFdy(vWorldPos);
+        vec2 duv1 = dFdx(uv * kTexRepeat);
+        vec2 duv2 = dFdy(uv * kTexRepeat);
+
+        vec3 N = normalize(n_geom);
+        vec3 dp2perp = cross(dp2, N);
+        vec3 dp1perp = cross(N, dp1);
+
+        vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+        vec3 B = dp2perp * duv1.y + dp1perp * duv2.y;
+
+        float invmax = inversesqrt(max(max(dot(T, T), dot(B, B)), 1e-8));
+        mat3 TBN = mat3(T * invmax, B * invmax, N);
+
+        vec3 n_surf = normalize(TBN * mapN);
+        n = n_surf;
+    }
+#endif
+
+#ifdef GIGA_ALBEDO_ARRAY
     vec3 albedo;
     if ((uint(pc.torus.z) & (1u << mid)) != 0u) {
         albedo = texture(uAlbedo, vec3(uv * kTexRepeat, float(mid))).rgb * vColor;
@@ -540,6 +569,22 @@ void main() {
 
     float r = pc.fog.z;
     float att = 1.0 / (1.0 + (d * d) / (r * r));
+
+    float roughness = 0.5;
+#ifdef GIGA_ALBEDO_ARRAY
+    if (roughnessMask != 0u && (roughnessMask & (1u << mid)) != 0u) {
+        roughness = texture(uRoughness, vec3(uv * kTexRepeat, float(mid))).r;
+    }
+#endif
+
+    float specPow = max(2.0 / (roughness * roughness * roughness * roughness + 1e-4) - 2.0, 1.0);
+    float specIntensity = (1.0 - roughness) * 0.5;
+    float spec = 0.0;
+    if (dot(n, L) > 0.0) {
+        float NdotL = max(dot(n, L), 0.0);
+        spec = pow(NdotL, specPow) * specIntensity * att * pc.camPos.w;
+    }
+
     float lampDirect = pc.camPos.w * att * max(dot(n, L), 0.0);
     float lampScatter = pc.camPos.w * att * phase * 0.25;
     float lamp = lampDirect + lampScatter;
@@ -568,7 +613,7 @@ void main() {
     const float kAoFloor = 0.32;
     float ao = kAoFloor + (1.0 - kAoFloor) * vAo;
     float aoDirect = mix(1.0, ao, pc.torus.y);
-    vec3 lit = albedo * (amb * ao + vec3(lamp + fill) * aoDirect);
+    vec3 lit = albedo * (amb * ao + vec3(lamp + fill) * aoDirect) + vec3(spec) * aoDirect;
 
     // Height-based fog density using world-space position vWorldPos.y
     // (exponential density increase at lower y / subterranean floor levels).
