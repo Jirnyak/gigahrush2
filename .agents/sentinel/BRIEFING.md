@@ -17,10 +17,11 @@ Monitor orchestration of Gigahrush2 C++23/Vulkan graphics enhancement (PBR specu
 ## User Context
 - **Last user request**: Detailed Subagent Charter & Execution Mandate (graphics PBR/fog/normal maps, Samosbor HUD, Utility AI, MacroSim bench, CTest gate).
 - **Pending clarifications**: none
-- **Delivered results**: Appended to ORIGINAL_REQUEST.md, background crons task-25 (progress) and task-27 (liveness) scheduled, actively monitoring orchestrator_6.
+- **Delivered results**: Appended to ORIGINAL_REQUEST.md, cron progress sweep 1 complete (M3 complete, M2 compiling SPIR-V/building, M1 implementing UNORM KTX2 descriptors).
 
 ## Project Status
-- **Phase**: in progress (Orchestrator orchestrator_6 active, M3 complete, M1/M2 workers active)
+- **Phase**: in progress (Orchestrator orchestrator_6 active, M3 complete, M1 & M2 worker implementations active)
+
 
 ## Victory Audit Status
 - **Triggered**: no
