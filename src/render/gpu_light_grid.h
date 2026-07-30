@@ -57,6 +57,7 @@ public:
     // Zero-allocation point light collection
     void add_light(const vec3& pos, float radius, const vec3& color, float intensity) noexcept;
     void clear_lights() noexcept;
+    void sort_lights_by_distance(const vec3& camPos) noexcept;
 
     // Record compute dispatch (3D spatial grid binning) & pipeline memory barrier.
     // Must execute outside active render pass on current_cmd().

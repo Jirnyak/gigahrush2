@@ -209,8 +209,25 @@ void GpuLightGrid::add_light(const vec3& pos, float radius, const vec3& color, f
     pt.colorIntensity = vec4{color.x, color.y, color.z, intensity};
 }
 
+void GpuLightGrid::sort_lights_by_distance(const vec3& camPos) noexcept {
+    if (stagingLightCount_ <= 1) return;
+    std::sort(stagingLights_, stagingLights_ + stagingLightCount_,
+              [&camPos](const GpuPointLight& a, const GpuPointLight& b) {
+                  float dxa = a.posRadius.x - camPos.x;
+                  float dya = a.posRadius.y - camPos.y;
+                  float dza = a.posRadius.z - camPos.z;
+                  float dxb = b.posRadius.x - camPos.x;
+                  float dyb = b.posRadius.y - camPos.y;
+                  float dzb = b.posRadius.z - camPos.z;
+                  return (dxa * dxa + dya * dya + dza * dza) < (dxb * dxb + dyb * dyb + dzb * dzb);
+              });
+}
+
 void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const vec3& camPos) noexcept {
     if (!ready() || !lightMapped_) return;
+
+    // Sort active point lights by distance to camera so nearest lights take priority
+    sort_lights_by_distance(camPos);
 
     // Upload light count and point lights array to persistent mapped memory
     uint32_t header[4] = {stagingLightCount_, 0, 0, 0};
