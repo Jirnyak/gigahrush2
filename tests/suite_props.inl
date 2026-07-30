@@ -33,10 +33,10 @@ inline const PropPassInspector& inspect(const PropPass& pass) {
 
 } // namespace
 
-// 1. Explicit coverage for all 25 PropShape enum values
+// 1. Explicit coverage for all 29 PropShape enum values
 static void test_prop_shape_enum_coverage() {
-    static_assert(kPropShapeCount == 25, "kPropShapeCount must be 25");
-    static_assert(static_cast<uint8_t>(PropShape::kCount) == 25, "PropShape::kCount must be 25");
+    static_assert(kPropShapeCount == 29, "kPropShapeCount must be 29");
+    static_assert(static_cast<uint8_t>(PropShape::kCount) == 29, "PropShape::kCount must be 29");
 
     static_assert(static_cast<uint8_t>(PropShape::Cylinder) == 0, "PropShape::Cylinder must be 0");
     static_assert(static_cast<uint8_t>(PropShape::HalfCylinder) == 1, "PropShape::HalfCylinder must be 1");
@@ -63,6 +63,10 @@ static void test_prop_shape_enum_coverage() {
     static_assert(static_cast<uint8_t>(PropShape::FungalColumn) == 22, "PropShape::FungalColumn must be 22");
     static_assert(static_cast<uint8_t>(PropShape::CrystalCluster) == 23, "PropShape::CrystalCluster must be 23");
     static_assert(static_cast<uint8_t>(PropShape::AcidPool) == 24, "PropShape::AcidPool must be 24");
+    static_assert(static_cast<uint8_t>(PropShape::Radiator) == 25, "PropShape::Radiator must be 25");
+    static_assert(static_cast<uint8_t>(PropShape::DermatinDoor) == 26, "PropShape::DermatinDoor must be 26");
+    static_assert(static_cast<uint8_t>(PropShape::ElectricalShield) == 27, "PropShape::ElectricalShield must be 27");
+    static_assert(static_cast<uint8_t>(PropShape::BareBulb) == 28, "PropShape::BareBulb must be 28");
 
     // Runtime loop check using non-constant local variables
     for (int s = 0; s < kPropShapeCount; ++s) {

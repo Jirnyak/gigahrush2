@@ -85,6 +85,10 @@ enum class PropShape : uint8_t {
     FungalColumn = 22,// mushroom-encrusted column r≈0.35 with organic bumps
     CrystalCluster = 23,// cluster of 5 tapered prism crystals
     AcidPool     = 24,// flat acid pool disk r=0.8 with edge bubbles
+    Radiator     = 25,// cast-iron accordion radiator (чугунная батарея М-140)
+    DermatinDoor = 26,// padded vinyl apartment door (дерматиновая дверь)
+    ElectricalShield = 27,// stairwell electrical distribution box (электрощиток ЩЭ)
+    BareBulb     = 28,// incandescent bulb hanging on wire ("лампочка Ильича")
     kCount
 };
 

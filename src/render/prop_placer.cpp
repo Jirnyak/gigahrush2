@@ -157,45 +157,80 @@ void PropPlacer::populate(const MacroGrid& grid, PropPass& propPass, std::uint32
                     floorOccupied = true;
                 }
 
-                // 3. Wall Devices (CabinetBox, ControlPanel, Terminal, LockerUnit)
+                // 3. Wall Devices & Soviet Props (CabinetBox, Terminal, Radiator, ElectricalShield)
                 std::uint32_t rngWall = spatial_hash(x, y, z, seed ^ kSaltWall);
-                if (solidBelow && (solidWest || solidEast || solidNorth || solidSouth) && !wallOccupied && (rngWall % 100 < kCfg.wallCabinetChancePct)) {
-                    PropInstance cab{};
-                    cab.origin    = {wx, wy, wz};
-                    cab.color     = kCfg.cabColor;
-                    cab.matId     = 3;
-                    cab.animPhase = static_cast<std::uint8_t>(rngWall & 0xFFu);
+                if (solidBelow && (solidWest || solidEast || solidNorth || solidSouth) && !wallOccupied) {
+                    float yawVal = 0.0f;
+                    if (solidWest)        yawVal = 0.0f;
+                    else if (solidEast)   yawVal = kPi;
+                    else if (solidSouth)  yawVal = kHalfPi;
+                    else if (solidNorth)  yawVal = kHalfPi * 3.0f;
 
-                    // Orient cabinet away from solid wall face
-                    if (solidWest)        cab.yaw = 0.0f;
-                    else if (solidEast)   cab.yaw = kPi;
-                    else if (solidSouth)  cab.yaw = kHalfPi;
-                    else if (solidNorth)  cab.yaw = kHalfPi * 3.0f;
-
-                    PropShape shape = PropShape::CabinetBox;
-                    std::uint32_t wsel = rngWall % 4;
-                    if (wsel == 0)      shape = PropShape::CabinetBox;
-                    else if (wsel == 1) shape = PropShape::ControlPanel;
-                    else if (wsel == 2) shape = PropShape::Terminal;
-                    else                shape = PropShape::LockerUnit;
-
-                    propPass.add_instance(shape, cab);
-                    totalPlaced_++;
-                    wallOccupied = true;
+                    std::uint32_t wsel = rngWall % 100;
+                    if (wsel < 15) {
+                        // Cast-iron accordion radiator under windows / on walls
+                        PropInstance rad{};
+                        rad.origin    = {wx, wy + 0.05f, wz};
+                        rad.yaw       = yawVal;
+                        rad.color     = {0.80f, 0.78f, 0.74f}; // Aged radiator off-white enamel
+                        rad.matId     = 4;
+                        rad.animPhase = static_cast<std::uint8_t>(rngWall & 0xFFu);
+                        propPass.add_instance(PropShape::Radiator, rad);
+                        totalPlaced_++;
+                        wallOccupied = true;
+                    } else if (wsel < 25) {
+                        // Stairwell electrical distribution shield (ЩЭ)
+                        PropInstance es{};
+                        es.origin    = {wx, wy + 0.40f, wz};
+                        es.yaw       = yawVal;
+                        es.color     = {0.35f, 0.38f, 0.40f};
+                        es.matId     = 4;
+                        es.emissive  = 120;
+                        es.animPhase = static_cast<std::uint8_t>(rngWall & 0xFFu);
+                        propPass.add_instance(PropShape::ElectricalShield, es);
+                        totalPlaced_++;
+                        wallOccupied = true;
+                    } else if (wsel < 35) {
+                        // Standard terminal / control panel
+                        PropInstance cab{};
+                        cab.origin    = {wx, wy, wz};
+                        cab.yaw       = yawVal;
+                        cab.color     = kCfg.cabColor;
+                        cab.matId     = 3;
+                        cab.animPhase = static_cast<std::uint8_t>(rngWall & 0xFFu);
+                        propPass.add_instance(PropShape::Terminal, cab);
+                        totalPlaced_++;
+                        wallOccupied = true;
+                    }
                 }
 
-                // 4. Lights & Security Cameras (FloodLamp, SecurityCamera)
-                std::uint32_t rngLight = spatial_hash(x, y, z, seed ^ kSaltLight);
-                if (solidAbove && !ceilingOccupied && (rngLight % 100 < kCfg.lightChancePct) && (nOpen >= 3 || (x % 8 == 0 && z % 8 == 0))) {
-                    PropInstance lamp{};
-                    lamp.origin    = {wx, wy + 1.70f, wz};
-                    lamp.yaw       = static_cast<float>(rngLight % 4) * kHalfPi;
-                    lamp.color     = (rngLight & 1) ? kCfg.warmLampCol : kCfg.coolLampCol;
-                    lamp.matId     = 0;
-                    lamp.emissive  = 240; // High light intensity
-                    lamp.animPhase = static_cast<std::uint8_t>(rngLight & 0xFFu); // Flicker phase
+                // 3b. Doorway padded vinyl/dermatin door (Дерматиновая дверь)
+                const bool isDoorway = ((solidWest && solidEast && !solidNorth && !solidSouth) || (!solidWest && !solidEast && solidNorth && solidSouth));
+                if (solidBelow && isDoorway && !floorOccupied && (rngWall % 100 < 35)) {
+                    PropInstance door{};
+                    door.origin    = {wx, wy, wz};
+                    door.yaw       = (solidWest && solidEast) ? 0.0f : kHalfPi;
+                    door.color     = {0.28f, 0.14f, 0.08f}; // Dark burgundy / brown padded vinyl tint
+                    door.matId     = 2;
+                    door.animPhase = static_cast<std::uint8_t>(rngWall & 0xFFu);
+                    propPass.add_instance(PropShape::DermatinDoor, door);
+                    totalPlaced_++;
+                    floorOccupied = true;
+                }
 
-                    propPass.add_instance(PropShape::FloodLamp, lamp);
+                // 4. Lights & Incandescent Bulbs ("Лампочка Ильича на патроне")
+                std::uint32_t rngLight = spatial_hash(x, y, z, seed ^ kSaltLight);
+                if (solidAbove && !ceilingOccupied && (rngLight % 100 < kCfg.lightChancePct)) {
+                    PropInstance lamp{};
+                    lamp.origin    = {wx, wy + 1.55f, wz};
+                    lamp.yaw       = static_cast<float>(rngLight % 4) * kHalfPi;
+                    lamp.color     = {1.00f, 0.78f, 0.45f}; // Warm 2700K tungsten amber light
+                    lamp.matId     = 0;
+                    lamp.emissive  = 250; // Emissive filament
+                    lamp.animPhase = static_cast<std::uint8_t>(rngLight & 0xFFu); // Mains flicker phase
+
+                    PropShape lightShape = (rngLight & 1) ? PropShape::BareBulb : PropShape::FloodLamp;
+                    propPass.add_instance(lightShape, lamp);
                     totalPlaced_++;
                     ceilingOccupied = true;
                 }

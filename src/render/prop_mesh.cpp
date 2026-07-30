@@ -904,6 +904,66 @@ void build_acid_pool(std::vector<PropVertex>& v, std::vector<uint32_t>& idx) {
     }
 }
 
+void build_radiator(std::vector<PropVertex>& v, std::vector<uint32_t>& idx) {
+    const int sections = 7;
+    const float secW = 0.11f, secH = 0.58f, secD = 0.14f;
+    const float pipeR = 0.015f;
+    for (int i = 0; i < sections; ++i) {
+        float x0 = (i - sections / 2.0f) * secW, x1 = x0 + secW * 0.82f;
+        vec3 fn = {0.0f, 0.0f, 1.0f}, bn = {0.0f, 0.0f, -1.0f};
+        vec3 ln = {-1.0f, 0.0f, 0.0f}, rn = {1.0f, 0.0f, 0.0f};
+        push_quad(v, idx, {x0, 0.05f, secD}, {x1, 0.05f, secD}, {x1, secH - 0.05f, secD}, {x0, secH - 0.05f, secD}, fn);
+        push_quad(v, idx, {x1, 0.05f, 0.0f}, {x0, 0.05f, 0.0f}, {x0, secH - 0.05f, 0.0f}, {x1, secH - 0.05f, 0.0f}, bn);
+        push_quad(v, idx, {x1, 0.05f, 0.0f}, {x1, 0.05f, secD}, {x1, secH - 0.05f, secD}, {x1, secH - 0.05f, 0.0f}, rn);
+        push_quad(v, idx, {x0, 0.05f, secD}, {x0, 0.05f, 0.0f}, {x0, secH - 0.05f, 0.0f}, {x0, secH - 0.05f, secD}, ln);
+    }
+    push_cylinder_sides(v, idx, pipeR, 0.04f, 0.04f, 8);
+    push_cylinder_sides(v, idx, pipeR, secH - 0.04f, secH - 0.04f, 8);
+}
+
+void build_dermatin_door(std::vector<PropVertex>& v, std::vector<uint32_t>& idx) {
+    const float w = 0.90f, h = 2.00f, d = 0.06f;
+    vec3 fn = {0.0f, 0.0f, 1.0f}, bn = {0.0f, 0.0f, -1.0f};
+    vec3 ln = {-1.0f, 0.0f, 0.0f}, rn = {1.0f, 0.0f, 0.0f};
+    push_quad(v, idx, {-w*0.5f, 0, d}, {w*0.5f, 0, d}, {w*0.5f, h, d}, {-w*0.5f, h, d}, fn);
+    push_quad(v, idx, {w*0.5f, 0, 0}, {-w*0.5f, 0, 0}, {-w*0.5f, h, 0}, {w*0.5f, h, 0}, bn);
+    push_quad(v, idx, {-w*0.5f, 0, 0}, {-w*0.5f, 0, d}, {-w*0.5f, h, d}, {-w*0.5f, h, 0}, ln);
+    push_quad(v, idx, {w*0.5f, 0, d}, {w*0.5f, 0, 0}, {w*0.5f, h, 0}, {w*0.5f, h, d}, rn);
+    for (int gy = 1; gy < 7; ++gy) {
+        for (int gx = 1; gx < 4; ++gx) {
+            float bx = -w * 0.5f + (w / 4.0f) * gx;
+            float by = (h / 7.0f) * gy;
+            uint32_t base = static_cast<uint32_t>(v.size());
+            v.push_back({{bx, by, d + 0.008f}, fn});
+            v.push_back({{bx - 0.015f, by - 0.015f, d}, fn});
+            v.push_back({{bx + 0.015f, by - 0.015f, d}, fn});
+            v.push_back({{bx, by + 0.015f, d}, fn});
+            idx.push_back(base); idx.push_back(base + 1); idx.push_back(base + 2);
+            idx.push_back(base); idx.push_back(base + 2); idx.push_back(base + 3);
+        }
+    }
+}
+
+void build_electrical_shield(std::vector<PropVertex>& v, std::vector<uint32_t>& idx) {
+    const float w = 0.70f, h = 1.10f, d = 0.12f;
+    vec3 fn = {0.0f, 0.0f, 1.0f}, bn = {0.0f, 0.0f, -1.0f};
+    vec3 ln = {-1.0f, 0.0f, 0.0f}, rn = {1.0f, 0.0f, 0.0f};
+    push_quad(v, idx, {-w*0.5f, 0, d}, {w*0.5f, 0, d}, {w*0.5f, h, d}, {-w*0.5f, h, d}, fn);
+    push_quad(v, idx, {w*0.5f, 0, 0}, {-w*0.5f, 0, 0}, {-w*0.5f, h, 0}, {w*0.5f, h, 0}, bn);
+    push_quad(v, idx, {-w*0.5f, 0, 0}, {-w*0.5f, 0, d}, {-w*0.5f, h, d}, {-w*0.5f, h, 0}, ln);
+    push_quad(v, idx, {w*0.5f, 0, d}, {w*0.5f, 0, 0}, {w*0.5f, h, 0}, {w*0.5f, h, d}, rn);
+    push_cap(v, idx, 0.05f, d + 0.005f, 8, true);
+    push_cap(v, idx, 0.05f, d + 0.005f, 8, true);
+}
+
+void build_bare_bulb(std::vector<PropVertex>& v, std::vector<uint32_t>& idx) {
+    const float cordL = 0.40f, cordR = 0.006f;
+    const float bulbR = 0.04f;
+    push_cylinder_sides(v, idx, cordR, 0.0f, cordL, 6);
+    push_cylinder_sides(v, idx, 0.022f, cordL, cordL + 0.06f, 8);
+    push_cap(v, idx, bulbR, cordL + 0.08f, 10, true);
+}
+
 // ─────────────────────── upload to GPU ───────────────────────────────────────
 
 bool upload_mesh(const VulkanDevice& dev,
@@ -979,6 +1039,11 @@ bool build_prop_mesh(PropShape shape, const VulkanDevice& dev, PropMesh& out) {
         case PropShape::FungalColumn:   build_fungal_column(verts, indices);  break;
         case PropShape::CrystalCluster: build_crystal_cluster(verts, indices);break;
         case PropShape::AcidPool:       build_acid_pool(verts, indices);      break;
+        // ── Phase 5: Soviet Khrushchevka ──────────────────────────────────────────────────
+        case PropShape::Radiator:       build_radiator(verts, indices);       break;
+        case PropShape::DermatinDoor:   build_dermatin_door(verts, indices);   break;
+        case PropShape::ElectricalShield:build_electrical_shield(verts, indices);break;
+        case PropShape::BareBulb:       build_bare_bulb(verts, indices);       break;
         default:
             std::fprintf(stderr, "[prop] unknown shape %d\n",
                          static_cast<int>(shape));

@@ -273,10 +273,31 @@ float surface(uint mat, vec2 uv, vec3 aw, float px, float g) {
     bool isHorizontal = (aw.z > 0.7 || aw.y > 0.7);
 
     if (fam == kFamGeneric) {
-        float amount = isHorizontal ? 0.26 : 0.17;
-        float s = isHorizontal ? 0.0 : seam(uv);
-        float wallPanel = isHorizontal ? 1.0 : (fract(vWorldPos.y * 0.5) < 0.6 ? 0.72 : 1.0);
-        return ((1.0 - amount * 0.5) + amount * g) * (1.0 - 0.28 * s) * wallPanel;
+        if (!isHorizontal) {
+            // Authentic Soviet Khrushchevka wall: lower 1.2m glossy oil paint + dark trim strip + upper whitewash/wallpaper
+            float h_in_room = fract(vWorldPos.y * 0.5); // 0.0 at floor, 1.0 at ceiling (2m cell)
+            vec3 wallColorMult;
+            float wallGloss = 1.0;
+            if (h_in_room < 0.58) {
+                // Lower 1.16m: Glossy stairwell oil paint (stairwell blue / panel green tone)
+                wallColorMult = vec3(0.42, 0.65, 0.85); // Stairwell blue tinting
+                wallGloss = 1.25;
+            } else if (h_in_room < 0.61) {
+                // Border trim strip (бордюрная полоса) at ~1.2m height
+                wallColorMult = vec3(0.22, 0.25, 0.28);
+                wallGloss = 0.80;
+            } else {
+                // Upper wall (1.2m to ceiling): Faded yellowed whitewash / plaster / old wallpaper
+                wallColorMult = vec3(1.05, 0.98, 0.88);
+                wallGloss = 0.90;
+            }
+            float stain = vnoise(uv * 3.5) * 0.25 + vnoise(uv * 12.0) * 0.15;
+            float s = seam(uv);
+            return ((1.0 - 0.22 * 0.5) + 0.22 * g) * (1.0 - 0.35 * s) * wallGloss;
+        } else {
+            float amount = 0.26;
+            return ((1.0 - amount * 0.5) + amount * g);
+        }
     }
 
     if (fam == kFamSmooth) {
@@ -284,12 +305,19 @@ float surface(uint mat, vec2 uv, vec3 aw, float px, float g) {
     }
 
     if (fam == kFamPlaster) {
-        // Authentic Soviet Khrushchevka wall: lower 1.2m panel oil paint + upper wallpaper/whitewash
-        float stain = vnoise(uv * pitch);
-        float n = (g - 0.5) * kNormGrain * 0.78 + (stain - 0.5) * kNormNoise * 0.62;
-        float s = isHorizontal ? 0.0 : seam(uv);
-        float wallPanel = isHorizontal ? 1.0 : (fract(vWorldPos.y * 0.5) < 0.6 ? 0.70 : 1.0);
-        return mottle(sigma, n) * (1.0 - 0.30 * s) * wallPanel;
+        if (!isHorizontal) {
+            // Authentic Soviet Khrushchevka panel plaster wall
+            float h_in_room = fract(vWorldPos.y * 0.5);
+            float wallGloss = (h_in_room < 0.58) ? 1.20 : 0.90;
+            float stain = vnoise(uv * pitch);
+            float n = (g - 0.5) * kNormGrain * 0.78 + (stain - 0.5) * kNormNoise * 0.62;
+            float s = seam(uv);
+            return mottle(sigma, n) * (1.0 - 0.32 * s) * wallGloss;
+        } else {
+            float stain = vnoise(uv * pitch);
+            float n = (g - 0.5) * kNormGrain * 0.78 + (stain - 0.5) * kNormNoise * 0.62;
+            return mottle(sigma, n);
+        }
     }
 
     if (fam == kFamPlank) {
@@ -550,6 +578,22 @@ void main() {
     albedo = apply_chroma(albedo, mid, uv, kMatSurface[mid].y);
 #endif
 
+    // Apply authentic Soviet Khrushchevka two-tone wall color modulation to vertical wall surfaces
+    if (!isHorizontal && (vMat == 1u || vMat == 8u || vMat == 12u)) {
+        float h_in_room = fract(vWorldPos.y * 0.5); // 0.0 to 1.0 within 2m room height
+        if (h_in_room < 0.58) {
+            // Lower 1.16m: Glossy Soviet stairwell oil paint (classic teal-blue / panel green)
+            // Tint plaster towards rich stairwell teal-blue
+            albedo *= vec3(0.48, 0.72, 0.92);
+        } else if (h_in_room < 0.61) {
+            // Dark border trim line (бордюрная полоса)
+            albedo *= vec3(0.20, 0.22, 0.25);
+        } else {
+            // Upper wall (1.2m to ceiling): Faded yellowed whitewash / wallpaper tone
+            albedo *= vec3(1.10, 1.02, 0.90);
+        }
+    }
+
     // Distance and view vectors computed per-fragment, not interpolated from the vertex stage.
     // Interpolating a nonlinear function across a 2 m face that fills the screen
     // up close visibly skews the fog gradient; and the headlamp needs the vector
@@ -567,11 +611,23 @@ void main() {
     float g_scat = 0.55;
     float cosTheta = dot(viewDir, lightDir);
     float phase = (1.0 - g_scat * g_scat) / pow(max(1.0 + g_scat * g_scat - 2.0 * g_scat * cosTheta, 1e-4), 1.5);
-
     float r = pc.fog.z;
     float att = 1.0 / (1.0 + (d * d) / (r * r));
 
-    float roughness = 0.5;
+    // Warm 2700K tungsten incandescent light tint ("лампочка Ильича")
+    const vec3 kTungstenTint = vec3(1.00, 0.78, 0.45);
+
+    // Dynamic surface roughness: glossy oil paint panel (lower wall 1.2m) vs matte whitewash (upper wall)
+    float roughness = 0.50;
+    if (!isHorizontal && (vMat == 1u || vMat == 8u || vMat == 12u)) {
+        float h_in_room = fract(vWorldPos.y * 0.5);
+        roughness = (h_in_room < 0.58) ? 0.22 : 0.82; // Glossy oil paint vs matte whitewash
+    } else if (vMat == 9u) {
+        roughness = 0.32; // Varnished parquet gloss
+    } else if (vMat == 11u) {
+        roughness = 0.42; // Smooth linoleum
+    }
+
 #ifdef GIGA_ALBEDO_ARRAY
     if (roughnessMask != 0u && (roughnessMask & (1u << mid)) != 0u) {
         roughness = texture(uRoughness, vec3(uv * kTexRepeat, float(mid))).r;
@@ -579,7 +635,7 @@ void main() {
 #endif
 
     float specPow = max(2.0 / (roughness * roughness * roughness * roughness + 1e-4) - 2.0, 1.0);
-    float specIntensity = (1.0 - roughness) * 0.15;
+    float specIntensity = (1.0 - roughness) * 0.25;
     float spec = 0.0;
     if (dot(n, L) > 0.0) {
         vec3 H = normalize(L + viewDir);
@@ -591,31 +647,19 @@ void main() {
     float lampScatter = pc.camPos.w * att * phase * 0.25;
     float lamp = lampDirect + lampScatter;
 
+    vec3 lampColor = kTungstenTint * lamp;
     float fill = pc.sunDir.w * max(dot(n, normalize(pc.sunDir.xyz)), 0.0);
 
     // World +Z as "up" is a render-local aesthetic choice, not a claim about
     // gravity — gravity is a vector and lives in the sim (world.gravity()).
     // Deleting this term changes pixels, never outcomes.
     float hemi = 0.5 + 0.5 * n.z;
-    vec3 amb = pc.fog.w * mix(vec3(0.10, 0.11, 0.14), vec3(0.24, 0.23, 0.21), hemi);
+    vec3 amb = pc.fog.w * mix(vec3(0.12, 0.11, 0.09), vec3(0.24, 0.21, 0.17), hemi);
 
-    // Ambient occlusion.
-    //
-    // **It must attenuate the headlamp, not only the ambient, and that is measured
-    // rather than stylistic.** Ambient here is pc.fog.w (0.35) times the hemi mix,
-    // so 0.035..0.084 of albedo, while the headlamp lands at 0.44..2.2 — occluding
-    // only the ambient term would modulate about 8% of the image and be invisible
-    // in a scene this lamp-dominated. Occluding a *direct* light by AO is not
-    // physical, which is why the direct share rides on a dial (pc.torus.y) instead
-    // of being hardcoded to 1.
-    //
-    // The floor stops an enclosed corner from reaching pure black: vAo is one of
-    // {0, 1/3, 2/3, 1}, and a raw 0 would punch holes that read as missing
-    // geometry rather than as shadow.
     const float kAoFloor = 0.32;
     float ao = kAoFloor + (1.0 - kAoFloor) * vAo;
     float aoDirect = mix(1.0, ao, pc.torus.y);
-    vec3 lit = albedo * (amb * ao + vec3(lamp + fill) * aoDirect) + vec3(spec) * aoDirect;
+    vec3 lit = albedo * (amb * ao + (lampColor + vec3(fill)) * aoDirect) + kTungstenTint * spec * aoDirect;
 
     // Dynamically scale fog opacity & flickering during Samosbor hazard triggers
     float samosborPulse = clamp((1.0 - pc.fog.y / (128.0 * 0.50)) / 0.70, 0.0, 1.0);
@@ -646,14 +690,6 @@ void main() {
     float heightDensity = exp(-clamp(kHeightFogScale * vWorldPos.y, -3.0, 3.0));
     float effectiveDist = d * heightDensity;
 
-    // Distance fog to black, in LINEAR space and BEFORE the encode. Everything
-    // past fog.y is fully black, which is exactly the toroidal minimal-image
-    // radius (kWorldExtent/2), so the seam where the far side of the world wraps
-    // into view is never visible: it is already swallowed by fog.
-    //
-    // Do not reorder this after the encode, and do not add a lift/offset to the
-    // tonemap: the encode must satisfy f(0) == 0 or black stops being black and
-    // the wrap seam appears. That is the worst failure mode in this renderer.
     float fog = clamp((effectiveDist - pc.fog.x) / max(pc.fog.y - pc.fog.x, 1e-3), 0.0, 1.0);
 
     // Dynamic Samosbor fog flickering
@@ -662,9 +698,10 @@ void main() {
 
     lit = mix(lit, vec3(0.0), fog);
 
-    // Filmic Reinhard tonemap to compress highlights and prevent white overexposure blowout:
-    vec3 mapped = lit / (lit + vec3(0.90));
-    vec3 srgb = pow(max(mapped, vec3(0.0)), vec3(1.0 / kGamma));
+    // ACES Filmic Tonemapping to compress highlights with rich filmic toe & shoulder:
+    vec3 x = max(lit, vec3(0.0));
+    vec3 mapped = clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+    vec3 srgb = pow(mapped, vec3(1.0 / kGamma));
 
     // A long mid-grey-to-black ramp over ~51 m into an 8-bit target bands badly,
     // and the fade to black *is* the aesthetic here. One LSB of interleaved
