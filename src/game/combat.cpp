@@ -13,6 +13,7 @@
 #include "game/mob_behaviour.h"
 #include "game/mob_table.h"
 #include "game/ranged_table.h"
+#include "game/rpg.h"      // RpgStats, xp_for_monster_kill, award_xp
 #include "game/weapon_table.h"
 #include "sim/camera.h"   // camera_forward
 #include "world/macro_grid.h"
@@ -171,7 +172,43 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
             // dangle. This is the whole reason the pool never reclaims.
             if (pool.valid(n->id)) pool.kill(n->id);
         }
-        if (const MobRef* m = reg.try_get<MobRef>(e)) kind = m->kind;
+        std::uint8_t victimLevel = 1;
+        if (const MobRef* m = reg.try_get<MobRef>(e)) {
+            kind = m->kind;
+            victimLevel = m->level;
+        } else if (victim != kInvalidNpc && pool.valid(victim)) {
+            victimLevel = pool.level(victim);
+        }
+
+        // XP to the killer, and this is the ONE place it is awarded.
+        //
+        // Here rather than off the NpcDied event for two reasons. The event carries
+        // the mob KIND but not the victim's LEVEL, and XP scales with level — a
+        // consumer would have to re-derive it after the entity is gone. And a frame
+        // can run several sim substeps, each calling finalize_deaths, while the bus
+        // is drained once per frame; billing XP from the drain would either
+        // double-count or need its own dedup. Crediting at the single death point
+        // inherits the property this function already guarantees: one death, once.
+        //
+        // Only a killer carrying RpgStats is credited, so monster-on-monster and
+        // monster-on-civilian kills cost nothing — the component IS the licence.
+        if (reg.valid(d.killer) && d.killer != e) {
+            if (RpgStats* kr = reg.try_get<RpgStats>(d.killer)) {
+                const std::uint32_t gain =
+                    kind != 0xFFu
+                        ? xp_for_monster_kill(static_cast<MobKind>(kind), victimLevel)
+                        : xp_for_npc_kill(victimLevel);
+                // The killer's HP lives in its pool row when it has one ([npcs.md]
+                // and this file's header note on split storage), so a level-up's
+                // max-HP growth is credited there. A killer with no record keeps
+                // the level and the point and simply has no HP to raise.
+                const NpcRef* kn = reg.try_get<NpcRef>(d.killer);
+                if (kn != nullptr && pool.valid(kn->id))
+                    award_xp(*kr, gain, &pool.hp(kn->id), &pool.max_hp(kn->id));
+                else
+                    award_xp(*kr, gain);
+            }
+        }
 
         // Published BEFORE the entity goes away, so a listener can still read it.
         // Everything that must react to a death reacts to this, never to noticing
