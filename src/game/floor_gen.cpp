@@ -486,7 +486,8 @@ void generate_floor(World& world, int number, const FloorSpec& spec,
     const CellType kSlab = geom.slab;
     const CellType kWall = geom.wall;
     constexpr CellType kHubPad = kMatHubPad;
-    Rng rng(floor_seed(seed, number));
+    const std::uint32_t fseed = floor_seed(seed, number);
+    Rng rng(fseed);
 
     const int storey = geom.storey;
     const int stride = geom.stride;

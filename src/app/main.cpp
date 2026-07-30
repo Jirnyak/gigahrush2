@@ -128,7 +128,8 @@ constexpr float kSamosborFogSqueeze = 0.34f;
 
 static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
                                  float timeSec, const game::SamosborState& samosbor,
-                                 const Registry& reg, LayerId activeLayer) {
+                                 const Registry& reg, LayerId activeLayer,
+                                 const game::NoiseField* noiseField = nullptr) {
     grid.clear_lights();
 
     // 1. Player Headlamp
@@ -198,6 +199,21 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
         if (dx * dx + dy * dy + dz * dz < 48.0f * 48.0f) {
             vec3 pcol = (proj.team == 1) ? vec3{1.0f, 0.85f, 0.40f} : vec3{0.95f, 0.20f, 0.40f};
             grid.add_light(tr.pos, 10.0f, pcol, 2.5f);
+        }
+    }
+
+    // 6. Loud Game Noise Events (game::loudest_heard) -> Point Light Modulation in GpuLightGrid
+    if (noiseField && !noiseField->quiet()) {
+        float noiseDist = 0.0f;
+        const game::Noise* loud = game::loudest_heard(*noiseField, activeLayer, camPos, 1.0f, 1, 0, &noiseDist);
+        if (loud && loud->severity >= 1) {
+            vec3 npos{loud->x, loud->y, loud->z};
+            float lifeFrac = (loud->lifeMs > 0) ? (static_cast<float>(loud->ttlMs) / static_cast<float>(loud->lifeMs)) : 1.0f;
+            float pulse = std::sin(timeSec * 30.0f + static_cast<float>(loud->id)) * 0.35f + 0.65f;
+            float intensity = (static_cast<float>(loud->severity) * 2.0f) * lifeFrac * pulse;
+            grid.add_light(npos + vec3{0.0f, 0.8f, 0.0f}, loud->radius * 0.8f, vec3{1.0f, 0.70f, 0.30f}, intensity);
+            float acousticFlicker = 1.0f + 0.50f * (static_cast<float>(loud->severity) / 5.0f) * std::sin(timeSec * 40.0f);
+            grid.add_light(camPos + vec3{0.0f, 1.0f, 0.0f}, 14.0f, vec3{0.90f, 0.80f, 0.50f}, 1.5f * acousticFlicker);
         }
     }
 }
@@ -1457,12 +1473,17 @@ int main(int argc, char** argv) {
                                           "ELEVATOR DIAGNOSTIC: FLOOR %d TERMINAL LINKED | DOORS %s (%u TOGGLED)",
                                           currentFloor, tres.doorsLocked ? "LOCKED" : "UNLOCKED", tres.doorsToggled);
                             elevDiagAt = simTick;
+                            std::fprintf(stderr, "[gameplay] Terminal/ControlPanel interact: doors %s (%u toggled) | ElecArc burst emitted at (%.1f, %.1f, %.1f)\n",
+                                         tres.doorsLocked ? "LOCKED" : "UNLOCKED", tres.doorsToggled,
+                                         tres.propPos.x, tres.propPos.y, tres.propPos.z);
                             if (particlePass.ready()) {
                                 particlePass.emit_burst(tres.propPos + vec3{0.0f, 1.0f, 0.0f},
                                                         vec3{0.0f, 1.0f, 0.0f}, vec3{0.35f, 0.85f, 1.0f},
                                                         gpu::GpuParticleKind::ElecArc,
                                                         64, 5.5f, 0.6f, 0.15f, 180.0f);
                             }
+                            game::NoiseProfile np{12.0f, 2000, 3, game::NoiseSource::Door};
+                            game::noise_publish(noiseField, activeLayer, tres.propPos, np, 0);
                         }
                     }
                 }
@@ -2514,7 +2535,7 @@ int main(int argc, char** argv) {
             float currentTimeSec = static_cast<float>(SDL_GetTicks()) / 1000.0f;
 
             if (lightGrid.ready()) {
-                collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, samosbor, reg, activeLayer);
+                collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, samosbor, reg, activeLayer, &noiseField);
                 lightGrid.update_and_dispatch(cmd, currentTimeSec, camMat.eye);
             }
 
