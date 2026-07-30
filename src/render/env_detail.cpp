@@ -291,12 +291,12 @@ void EnvDetail::place_ceiling(const giga::MacroGrid& grid, PropPass& pass,
                       rng01(s) * 6.28f, col, 7, em, 0, ph));
         ++totalPlaced_;
     }
-    // Beam
+    // Ceiling cable tray / grate
     if (pct_roll(s, cfg.beamCeilingPct)) {
         float yaw = (rng01(s) > 0.5f) ? 0.0f : 1.5708f;
-        pass.add_instance(PropShape::SupportBeam,
-            make_inst({wp.x, wp.y + cs * 0.80f, wp.z},
-                      yaw, cfg.metalCol, 12, 0, 0, 0));
+        pass.add_instance(PropShape::Grate,
+            make_inst({wp.x, wp.y + cs * 0.95f, wp.z},
+                      yaw, cfg.grateCol, 12, 0, 0, 0));
         ++totalPlaced_;
     }
     // Railing / round grate vent
@@ -459,29 +459,21 @@ void EnvDetail::place_structural(const giga::MacroGrid& grid, PropPass& pass,
                                    std::uint32_t seed) const noexcept {
     std::uint32_t s = seed ^ 0xFEEDu;
 
-    // Support beams span full cell height — only where ceiling + floor solid
-    if (has_solid_above(grid, x, y, z) && has_solid_below(grid, x, y, z)) {
-        if (pct_roll(s, cfg.supportBeamPct)) {
-            float yaw = (rng01(s) > 0.5f) ? 0.0f : 1.5708f;
-            pass.add_instance(PropShape::SupportBeam,
-                make_inst(cell_world(x, y, z), yaw, cfg.metalCol, 12, 0));
+    // Corner Support Pillars — ONLY at room wall corners (has_solid_above + has_solid_below + has_solid_side)
+    if (has_solid_above(grid, x, y, z) && has_solid_below(grid, x, y, z) && has_solid_side(grid, x, y, z)) {
+        if (pct_roll(s, cfg.pillarPct)) {
+            bool arch = rng01(s) > 0.7f;
+            PropShape shape = arch ? PropShape::Arch : PropShape::Cylinder;
+            std::uint8_t em = static_cast<std::uint8_t>(5.0f * cfg.emissiveScale);
+            pass.add_instance(shape,
+                make_inst(cell_world(x, y, z), rng01(s) * 6.28f,
+                          cfg.metalCol, 12, em, 0, 0));
             ++totalPlaced_;
         }
     }
 
-    // Pillars (vertical cylinders)
-    if (pct_roll(s, cfg.pillarPct)) {
-        bool arch = rng01(s) > 0.7f;
-        PropShape shape = arch ? PropShape::Arch : PropShape::Cylinder;
-        std::uint8_t em = static_cast<std::uint8_t>(5.0f * cfg.emissiveScale);
-        pass.add_instance(shape,
-            make_inst(cell_world(x, y, z), rng01(s) * 6.28f,
-                      cfg.metalCol, 12, em, 0, 0));
-        ++totalPlaced_;
-    }
-
-    // Pipe elbow / tee junctions at intersections
-    if (pct_roll(s, 8)) {
+    // Wall-mounted pipe junctions
+    if (has_solid_side(grid, x, y, z) && pct_roll(s, 8)) {
         bool isTee = rng01(s) > 0.6f;
         PropShape shape = isTee ? PropShape::PipeTee : PropShape::PipeElbow;
         pass.add_instance(shape,
@@ -516,70 +508,7 @@ void EnvDetail::populate(const giga::MacroGrid& grid, PropPass& pass,
         place_structural(grid, pass, x, y, z, cfg, s ^ 0x44444444u);
     }
 
-    // Generate multi-strand catenary wire bundles & hanging lamps between terminals
-    auto termPositions = pass.get_terminal_positions();
-    for (std::size_t i = 0; i < termPositions.size(); ++i) {
-        for (std::size_t j = i + 1; j < std::min(termPositions.size(), i + 6); ++j) {
-            float dx = termPositions[i].x - termPositions[j].x;
-            float dy = termPositions[i].y - termPositions[j].y;
-            float dz = termPositions[i].z - termPositions[j].z;
-            float distSq = dx * dx + dy * dy + dz * dz;
-            if (distSq > 4.0f && distSq < 144.0f) { // between 2m and 12m apart
-                vec3 start = termPositions[i] + vec3{0.0f, 1.2f, 0.0f};
-                vec3 end   = termPositions[j] + vec3{0.0f, 1.2f, 0.0f};
-
-                // Place conduit junction fittings at cable anchor endpoints
-                pass.add_instance(PropShape::PipeTee, make_inst(start, 0.0f, vec3{0.35f, 0.38f, 0.40f}, 14, 0, 0, 0));
-                pass.add_instance(PropShape::PipeTee, make_inst(end, 0.0f, vec3{0.35f, 0.38f, 0.40f}, 14, 0, 0, 0));
-                totalPlaced_ += 2;
-
-                // 3 distinct drooping strands per harness bundle (sag 0.40m, 0.65m, 0.90m)
-                static const float sags[3] = {0.40f, 0.65f, 0.90f};
-                static const vec3 offsets[3] = {
-                    vec3{0.00f, 0.00f, 0.00f},
-                    vec3{0.06f, 0.04f, -0.05f},
-                    vec3{-0.06f, -0.04f, 0.05f}
-                };
-                static const vec3 wireCols[3] = {
-                    vec3{0.14f, 0.14f, 0.16f}, // main heavy power cable
-                    vec3{0.25f, 0.12f, 0.10f}, // red high-voltage feed
-                    vec3{0.10f, 0.18f, 0.22f}  // blue signal line
-                };
-
-                constexpr int kWireSegments = 10;
-                for (int strand = 0; strand < 3; ++strand) {
-                    vec3 sStart = start + offsets[strand];
-                    vec3 sEnd   = end   + offsets[strand];
-                    vec3 p0 = sStart;
-                    float sag = sags[strand];
-
-                    for (int k = 1; k <= kWireSegments; ++k) {
-                        float t = static_cast<float>(k) / static_cast<float>(kWireSegments);
-                        vec3 p1 = {
-                            sStart.x + (sEnd.x - sStart.x) * t,
-                            sStart.y + (sEnd.y - sStart.y) * t - sag * 4.0f * t * (1.0f - t),
-                            sStart.z + (sEnd.z - sStart.z) * t
-                        };
-                        vec3 mid = (p0 + p1) * 0.5f;
-                        vec3 delta = p1 - p0;
-                        float yaw = std::atan2(delta.x, delta.z);
-                        pass.add_instance(PropShape::Pipe, make_inst(mid, yaw, wireCols[strand], 14, 0, 0, 0));
-                        p0 = p1;
-                    }
-                    totalPlaced_ += kWireSegments;
-                }
-
-                // Hang an industrial overhead lamp at the lowest midpoint of every 2nd wire span
-                if ((i + j) % 2 == 0) {
-                    vec3 midPoint = (start + end) * 0.5f - vec3{0.0f, 0.65f, 0.0f};
-                    pass.add_instance(PropShape::FloodLamp, make_inst(midPoint, 0.0f, vec3{1.00f, 0.85f, 0.60f}, 14, 180, 0, 0));
-                    ++totalPlaced_;
-                }
-            }
-        }
-    }
-
-    std::fprintf(stderr, "[envdetail] populate: %u props placed (including catenary wire clutter)\n", totalPlaced_);
+    std::fprintf(stderr, "[envdetail] populate: %u props placed\n", totalPlaced_);
 }
 
 } // namespace giga::gpu

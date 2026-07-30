@@ -108,11 +108,12 @@ void PropPlacer::populate(const MacroGrid& grid, PropPass& propPass, std::uint32
                 bool floorOccupied   = false;
                 bool wallOccupied    = false;
 
-                // 1. Ceiling Pipes & Conduit (Pipe, PipeTee, PipeElbow, Valve)
+                // 1. Ceiling Pipes & Conduit (Pipe, PipeTee, PipeElbow, Valve) — ONLY along wall cornices
                 std::uint32_t rngPipe = spatial_hash(x, y, z, seed ^ kSaltPipe);
-                if (solidAbove && !ceilingOccupied && (rngPipe % 100 < kCfg.pipeCeilingChancePct)) {
+                bool hasWall = (solidWest || solidEast || solidNorth || solidSouth);
+                if (solidAbove && hasWall && !ceilingOccupied && (rngPipe % 100 < kCfg.pipeCeilingChancePct)) {
                     PropInstance pipe{};
-                    pipe.origin    = {wx, wy + 1.70f, wz};
+                    pipe.origin    = {wx, wy + 1.95f, wz};
                     pipe.yaw       = (!solidWest && !solidEast) ? 0.0f : kHalfPi;
                     pipe.color     = kCfg.pipeColor;
                     pipe.matId     = 4;
@@ -246,22 +247,10 @@ void PropPlacer::populate(const MacroGrid& grid, PropPass& propPass, std::uint32
                     floorOccupied = true;
                 }
 
-                // 6. Structural Beams, Pillars & Archways (SupportBeam, Cylinder, HalfCylinder, Arch)
-                std::uint32_t rngBeam = spatial_hash(x, y, z, seed ^ kSaltBeam);
-                if (solidBelow && solidAbove && (x % 8 == 0) && (z % 8 == 0) && (rngBeam % 100 < kCfg.supportBeamChancePct)) {
-                    PropInstance beam{};
-                    beam.origin    = {wx, wy, wz};
-                    beam.yaw       = static_cast<float>(rngBeam % 4) * kHalfPi;
-                    beam.color     = kCfg.beamColor;
-                    beam.matId     = 4;
-                    beam.animPhase = static_cast<std::uint8_t>(rngBeam & 0xFFu);
-
-                    propPass.add_instance(PropShape::SupportBeam, beam);
-                    totalPlaced_++;
-                }
-
+                // 6. Corner Structural Pillars & Archways (Cylinder, Arch) — ONLY at room corners
                 std::uint32_t rngPillar = spatial_hash(x, y, z, seed ^ kSaltPillar);
-                if (solidBelow && solidAbove && !floorOccupied && (x % 6 == 0) && (z % 6 == 0) && (rngPillar % 100 < 25)) {
+                bool isCorner = ((solidWest || solidEast) && (solidNorth || solidSouth));
+                if (solidBelow && solidAbove && isCorner && !floorOccupied && (rngPillar % 100 < 15)) {
                     PropInstance pillar{};
                     pillar.origin    = {wx, wy, wz};
                     pillar.yaw       = 0.0f;
