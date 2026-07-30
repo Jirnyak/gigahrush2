@@ -64,16 +64,19 @@ public:
     void set_use_gpu_culling(bool enable) { useGpuCulling_ = enable; }
     bool use_gpu_culling() const { return useGpuCulling_; }
 
-    std::vector<vec3> get_terminal_positions() const {
+    std::vector<vec3> get_prop_positions(PropShape shape) const {
         std::vector<vec3> positions;
-        const auto& terminals = cpuInst_[static_cast<std::size_t>(PropShape::Terminal)];
-        for (const auto& inst : terminals) {
+        const auto& insts = cpuInst_[static_cast<std::size_t>(shape)];
+        for (const auto& inst : insts) {
             positions.push_back(inst.origin);
         }
-        const auto& panels = cpuInst_[static_cast<std::size_t>(PropShape::ControlPanel)];
-        for (const auto& inst : panels) {
-            positions.push_back(inst.origin);
-        }
+        return positions;
+    }
+
+    std::vector<vec3> get_terminal_positions() const {
+        std::vector<vec3> positions = get_prop_positions(PropShape::Terminal);
+        std::vector<vec3> panels = get_prop_positions(PropShape::ControlPanel);
+        positions.insert(positions.end(), panels.begin(), panels.end());
         return positions;
     }
 

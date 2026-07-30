@@ -482,6 +482,50 @@ Entity possess_a_survivor(Registry& reg, game::NpcPool& pool, LayerId layer) {
     return chosen;
 }
 
+Entity possess_nearest_survivor(Registry& reg, game::NpcPool& pool, LayerId layer, const vec3& playerPos, float reachM) {
+    Entity chosen = entt::null;
+    game::NpcId chosenId = game::kInvalidNpc;
+    float bestD2 = reachM * reachM;
+
+    for (auto e : reg.view<const game::NpcRef, const Transform>()) {
+        if (reg.get<const Transform>(e).layer != layer) continue;
+        if (reg.all_of<CameraTag>(e)) continue;      // already the player
+        const game::NpcId id = reg.get<const game::NpcRef>(e).id;
+        if (!pool.valid(id) || !pool.alive(id)) continue;
+
+        const vec3& pos = reg.get<const Transform>(e).pos;
+        float dx = wrap_delta_f(playerPos.x, pos.x, kWorldExtent);
+        float dy = playerPos.y - pos.y;
+        float dz = wrap_delta_f(playerPos.z, pos.z, kWorldExtent);
+        float d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < bestD2) {
+            bestD2 = d2;
+            chosen = e;
+            chosenId = id;
+        }
+    }
+    if (chosen == entt::null) return entt::null;
+
+    // Detach camera & controller from current player body
+    for (auto e : reg.view<CameraTag, const game::NpcRef>()) {
+        if (reg.get<const Transform>(e).layer != layer) continue;
+        const game::NpcId oldId = reg.get<const game::NpcRef>(e).id;
+        reg.remove<CameraTag>(e);
+        reg.remove<Controller>(e);
+        pool.set_player(oldId, false);
+        break;
+    }
+
+    CameraTag cam;
+    cam.eyeOffset =
+        vec3{0.0f, 0.0f, game::body_eye_height(pool.height_mm(chosenId))};
+    reg.emplace<CameraTag>(chosen, cam);
+    reg.emplace<Controller>(chosen, Controller{7.0f, {0, 0, 0}, false});
+    pool.set_player(chosenId, true);
+    std::fprintf(stderr, "[gameplay] Voluntarily possessed resident #%u\n", chosenId);
+    return chosen;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -748,7 +792,8 @@ int main(int argc, char** argv) {
     game::DoorTick doorTick{};      // last step's report, for the HUD
     std::uint32_t doorsBuilt = 0;   // on this floor, so the HUD can say "0 doors"
     bool doorWanted = false;        // Q, consumed by one sim step
-    bool interactWanted = false;    // E, consumed by one sim step (Terminal / ControlPanel interact)
+    bool interactWanted = false;    // E, consumed by one sim step (Terminal / ControlPanel / Relief interact)
+    bool possessWanted = false;     // P, consumed by one sim step (Voluntary Mind Projection / Body Swap)
     char elevDiagLine[160] = {};
     std::uint64_t elevDiagAt = 0;
     // One seed for every floor's doors. door_build is deterministic in it, so a floor
@@ -1215,6 +1260,10 @@ int main(int argc, char** argv) {
                 if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
                     e.key.scancode == SDL_SCANCODE_Q)
                     doorWanted = true;
+                // P projects mind into the nearest living NPC resident.
+                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
+                    e.key.scancode == SDL_SCANCODE_P)
+                    possessWanted = true;
                 // F5 saves the run, F9 loads it.
                 if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
                     e.key.scancode == SDL_SCANCODE_F5)
@@ -1515,27 +1564,80 @@ int main(int argc, char** argv) {
                 }
                 if (interactWanted) {
                     interactWanted = false;
-                    if (reg.valid(player) && propPass.ready()) {
+                    if (reg.valid(player)) {
                         const vec3 ppos = reg.get<Transform>(player).pos;
-                        std::vector<vec3> terms = propPass.get_terminal_positions();
-                        game::TerminalInteractResult tres = game::embody_interact_terminal(
-                            reg, stack.layer(activeLayer), doors, activeLayer, ppos, 4.0f, terms);
-                        if (tres.interacted) {
-                            std::snprintf(elevDiagLine, sizeof(elevDiagLine),
-                                          "ELEVATOR DIAGNOSTIC: FLOOR %d TERMINAL LINKED | DOORS %s (%u TOGGLED)",
-                                          currentFloor, tres.doorsLocked ? "LOCKED" : "UNLOCKED", tres.doorsToggled);
-                            elevDiagAt = simTick;
-                            std::fprintf(stderr, "[gameplay] Terminal/ControlPanel interact: doors %s (%u toggled) | ElecArc burst emitted at (%.1f, %.1f, %.1f)\n",
-                                         tres.doorsLocked ? "LOCKED" : "UNLOCKED", tres.doorsToggled,
-                                         tres.propPos.x, tres.propPos.y, tres.propPos.z);
-                            if (particlePass.ready()) {
-                                particlePass.emit_burst(tres.propPos + vec3{0.0f, 1.0f, 0.0f},
-                                                        vec3{0.0f, 1.0f, 0.0f}, vec3{0.35f, 0.85f, 1.0f},
-                                                        gpu::GpuParticleKind::ElecArc,
-                                                        64, 5.5f, 0.6f, 0.15f, 180.0f);
+                        bool interactedTerminal = false;
+                        if (propPass.ready()) {
+                            std::vector<vec3> terms = propPass.get_terminal_positions();
+                            game::TerminalInteractResult tres = game::embody_interact_terminal(
+                                reg, stack.layer(activeLayer), doors, activeLayer, ppos, 4.0f, terms);
+                            if (tres.interacted) {
+                                interactedTerminal = true;
+                                std::snprintf(elevDiagLine, sizeof(elevDiagLine),
+                                              "ELEVATOR DIAGNOSTIC: FLOOR %d TERMINAL LINKED | DOORS %s (%u TOGGLED)",
+                                              currentFloor, tres.doorsLocked ? "LOCKED" : "UNLOCKED", tres.doorsToggled);
+                                elevDiagAt = simTick;
+                                std::fprintf(stderr, "[gameplay] Terminal/ControlPanel interact: doors %s (%u toggled) | ElecArc burst emitted at (%.1f, %.1f, %.1f)\n",
+                                             tres.doorsLocked ? "LOCKED" : "UNLOCKED", tres.doorsToggled,
+                                             tres.propPos.x, tres.propPos.y, tres.propPos.z);
+                                if (particlePass.ready()) {
+                                    particlePass.emit_burst(tres.propPos + vec3{0.0f, 1.0f, 0.0f},
+                                                            vec3{0.0f, 1.0f, 0.0f}, vec3{0.35f, 0.85f, 1.0f},
+                                                            gpu::GpuParticleKind::ElecArc,
+                                                            64, 5.5f, 0.6f, 0.15f, 180.0f);
+                                }
+                                game::NoiseProfile np{12.0f, 2000, 3, game::NoiseSource::Door};
+                                game::noise_publish(noiseField, activeLayer, tres.propPos, np, 0);
                             }
-                            game::NoiseProfile np{12.0f, 2000, 3, game::NoiseSource::Door};
-                            game::noise_publish(noiseField, activeLayer, tres.propPos, np, 0);
+                        }
+                        // Non-terminal interact: relieve bladder and bowel pressure
+                        if (!interactedTerminal) {
+                            if (const auto* nrg = reg.try_get<game::NpcRef>(player)) {
+                                if (pool.valid(nrg->id)) {
+                                    game::ReliefResult rr = game::relieve_needs(pool.needs(nrg->id), 100.0f, 100.0f);
+                                    if (rr.pee > 0.0f || rr.poo > 0.0f) {
+                                        std::snprintf(elevDiagLine, sizeof(elevDiagLine),
+                                                      "PHYSIOLOGICAL RELIEF: CLEARED BLADDER (%.0f) & BOWEL (%.0f) PRESSURE",
+                                                      rr.pee, rr.poo);
+                                        elevDiagAt = simTick;
+                                        if (particlePass.ready()) {
+                                            particlePass.emit_burst(ppos + vec3{0.0f, 0.5f, 0.0f},
+                                                                    vec3{0.0f, -0.5f, 0.0f},
+                                                                    vec3{0.40f, 0.70f, 0.60f},
+                                                                    gpu::GpuParticleKind::DustMote,
+                                                                    16, 1.5f, 0.5f, 0.10f, 90.0f);
+                                        }
+                                        game::NoiseProfile np{5.0f, 500, 1, game::NoiseSource::Door};
+                                        game::noise_publish(noiseField, activeLayer, ppos, np, 0);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (possessWanted) {
+                    possessWanted = false;
+                    if (reg.valid(player)) {
+                        const vec3 ppos = reg.get<Transform>(player).pos;
+                        Entity newPlayer = possess_nearest_survivor(reg, pool, activeLayer, ppos, 8.0f);
+                        if (newPlayer != entt::null) {
+                            player = newPlayer;
+                            const vec3 newPos = reg.get<Transform>(player).pos;
+                            const auto* nr = reg.try_get<game::NpcRef>(player);
+                            const game::NpcId newId = nr ? nr->id : 0;
+                            std::snprintf(elevDiagLine, sizeof(elevDiagLine),
+                                          "MIND PROJECTION: POSSESSED RESIDENT BODY #%u AT (%.1f, %.1f)",
+                                          newId, newPos.x, newPos.z);
+                            elevDiagAt = simTick;
+                            if (particlePass.ready()) {
+                                particlePass.emit_burst(newPos + vec3{0.0f, 1.0f, 0.0f},
+                                                        vec3{0.0f, 1.0f, 0.0f},
+                                                        vec3{0.30f, 0.95f, 0.85f},
+                                                        gpu::GpuParticleKind::BioSpore,
+                                                        48, 4.0f, 1.0f, 0.20f, 200.0f);
+                            }
+                            game::NoiseProfile np{15.0f, 1500, 3, game::NoiseSource::Door};
+                            game::noise_publish(noiseField, activeLayer, newPos, np, 0);
                         }
                     }
                 }
@@ -2613,16 +2715,60 @@ int main(int argc, char** argv) {
                 promptText = isDoorShut ? "[Q]  OPEN DOOR" : "[Q]  CLOSE DOOR";
             }
 
-            // Terminal proximity (linear scan of placed terminals, usually < 20)
+            // Terminal proximity
             if (!promptText && propPass.ready()) {
                 std::vector<vec3> terms = propPass.get_terminal_positions();
                 for (const vec3& tp : terms) {
-                    const float dx = ppos.x - tp.x;
+                    const float dx = wrap_delta_f(ppos.x, tp.x, kWorldExtent);
                     const float dy = ppos.y - tp.y;
-                    const float dz = ppos.z - tp.z;
+                    const float dz = wrap_delta_f(ppos.z, tp.z, kWorldExtent);
                     if (dx * dx + dy * dy + dz * dz < 4.0f * 4.0f) {
-                        promptText = "[E]  TERMINAL";
+                        promptText = "[E]  TERMINAL (DOOR LOCKS)";
                         break;
+                    }
+                }
+            }
+
+            // Radiator / Plumbing proximity
+            if (!promptText && propPass.ready()) {
+                std::vector<vec3> rads = propPass.get_prop_positions(gpu::PropShape::Radiator);
+                for (const vec3& rp : rads) {
+                    const float dx = wrap_delta_f(ppos.x, rp.x, kWorldExtent);
+                    const float dy = ppos.y - rp.y;
+                    const float dz = wrap_delta_f(ppos.z, rp.z, kWorldExtent);
+                    if (dx * dx + dy * dy + dz * dz < 3.0f * 3.0f) {
+                        promptText = "[E]  RELIEVE (RADIATOR)";
+                        break;
+                    }
+                }
+            }
+
+            // Nearby resident for body possession (P key)
+            if (!promptText) {
+                for (auto npcEnt : reg.view<const game::NpcRef, const Transform>()) {
+                    if (reg.get<const Transform>(npcEnt).layer != activeLayer) continue;
+                    if (reg.all_of<CameraTag>(npcEnt)) continue; // skip self
+                    const game::NpcId id = reg.get<const game::NpcRef>(npcEnt).id;
+                    if (!pool.valid(id) || !pool.alive(id)) continue;
+                    const vec3& npos = reg.get<const Transform>(npcEnt).pos;
+                    const float dx = wrap_delta_f(ppos.x, npos.x, kWorldExtent);
+                    const float dy = ppos.y - npos.y;
+                    const float dz = wrap_delta_f(ppos.z, npos.z, kWorldExtent);
+                    if (dx * dx + dy * dy + dz * dz < 6.0f * 6.0f) {
+                        promptText = "[P]  POSSESS SURVIVOR";
+                        break;
+                    }
+                }
+            }
+
+            // Bladder/Bowel pressure relief fallback
+            if (!promptText) {
+                if (const auto* nrg = reg.try_get<game::NpcRef>(player)) {
+                    if (pool.valid(nrg->id)) {
+                        const auto& nd = pool.needs(nrg->id);
+                        if (nd.pee >= 30.0f || nd.poo >= 30.0f) {
+                            promptText = "[E]  RELIEVE BLADDER/BOWEL";
+                        }
                     }
                 }
             }
