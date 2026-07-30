@@ -98,11 +98,13 @@ MATERIALS = [
     (0, "air / body sentinel", "generic", None, 0.0, 0.0, 0.0, (1.0, 1.0, 1.0), 0.00,
      "never drawn by the world pass; body.vert writes this id so bodies keep the "
      "pre-existing look exactly"),
-    (1, "concrete (maze)", "generic", None, 0.0, 0.0, 0.0, (1.0, 1.0, 1.0), 0.00,
-     "maze test bed — left on the legacy path so app/worldgen.cpp renders as it did"),
-    (2, "soil (maze)", "generic", None, 0.0, 0.0, 0.0, (1.0, 1.0, 1.0), 0.00, "maze test bed"),
+    (1, "concrete (maze)", "smooth", None, 0.08, 1.0, 0.03, (1.00, 1.00, 1.00), 0.04,
+     "poured smooth concrete floor — smooth family, no panel seams"),
+    (2, "soil (maze)", "smooth", None, 0.22, 0.8, 0.12, (1.15, 0.90, 0.65), 0.10,
+     "organic earth / soil mottle floor — smooth family, no panel seams"),
     (3, "water marker (maze)", "generic", None, 0.0, 0.0, 0.0, (1.0, 1.0, 1.0), 0.00, "maze test bed"),
-    (4, "tan slab (maze)", "generic", None, 0.0, 0.0, 0.0, (1.0, 1.0, 1.0), 0.00, "maze test bed"),
+    (4, "tan slab (maze)", "smooth", None, 0.06, 1.0, 0.04, (1.05, 0.95, 0.85), 0.03,
+     "poured smooth tan concrete slab floor — smooth family, no panel seams"),
     (5, "extraction pad", "smooth", None, 0.03, 0.0, 0.0, (1.0, 1.0, 1.0), 0.02,
      "the bank must stay unmistakable (materials.h) — a painted plate, no seams, "
      "almost no mottle, so the emerald reads as signage and not as a surface"),

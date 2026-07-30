@@ -25,15 +25,15 @@ const uint kMaterialCsvRows = 16u;
 //   0 air / body sentinel  generic  authored                 CV 0.0000
 //     never drawn by the world pass; body.vert writes this id so bodies
 //     keep the pre-existing look exactly
-//   1 concrete (maze)      generic  authored                 CV 0.0000
-//     maze test bed — left on the legacy path so app/worldgen.cpp renders
-//     as it did
-//   2 soil (maze)          generic  authored                 CV 0.0000
-//     maze test bed
+//   1 concrete (maze)      smooth   authored                 CV 0.0800
+//     poured smooth concrete floor — smooth family, no panel seams
+//   2 soil (maze)          smooth   authored                 CV 0.2200
+//     organic earth / soil mottle floor — smooth family, no panel seams
 //   3 water marker (maze)  generic  authored                 CV 0.0000
 //     maze test bed
-//   4 tan slab (maze)      generic  authored                 CV 0.0000
-//     maze test bed
+//   4 tan slab (maze)      smooth   authored                 CV 0.0600
+//     poured smooth tan concrete slab floor — smooth family, no panel
+//     seams
 //   5 extraction pad       smooth   authored                 CV 0.0300
 //     the bank must stay unmistakable (materials.h) — a painted plate, no
 //     seams, almost no mottle, so the emerald reads as signage and not as
@@ -84,10 +84,10 @@ const uint kMatSurfaceCount = 16u;
 
 const uint kMatFamily[16] = uint[16](
     0u,  //  0 air / body sentinel
-    0u,  //  1 concrete (maze)
-    0u,  //  2 soil (maze)
+    8u,  //  1 concrete (maze)
+    8u,  //  2 soil (maze)
     0u,  //  3 water marker (maze)
-    0u,  //  4 tan slab (maze)
+    8u,  //  4 tan slab (maze)
     8u,  //  5 extraction pad
     0u,  //  6 unused
     8u,  //  7 nav / hub pad
@@ -107,10 +107,10 @@ const uint kMatFamily[16] = uint[16](
 // w = bump_scale (normal perturbation scale).
 const vec4 kMatSurface[16] = vec4[16](
     vec4(0.00000,   0.00, 0.00000, 0.00000),  //  0 air / body sentinel
-    vec4(0.00000,   0.00, 0.00000, 0.00000),  //  1 concrete (maze)
-    vec4(0.00000,   0.00, 0.00000, 0.00000),  //  2 soil (maze)
+    vec4(0.07987,   1.00, 0.03000, 0.04000),  //  1 concrete (maze)
+    vec4(0.21741,   0.80, 0.12000, 0.10000),  //  2 soil (maze)
     vec4(0.00000,   0.00, 0.00000, 0.00000),  //  3 water marker (maze)
-    vec4(0.00000,   0.00, 0.00000, 0.00000),  //  4 tan slab (maze)
+    vec4(0.05995,   1.00, 0.04000, 0.03000),  //  4 tan slab (maze)
     vec4(0.02999,   0.00, 0.00000, 0.02000),  //  5 extraction pad
     vec4(0.00000,   0.00, 0.00000, 0.00000),  //  6 unused
     vec4(0.02999,   0.00, 0.00000, 0.02000),  //  7 nav / hub pad
@@ -128,9 +128,9 @@ const vec4 kMatSurface[16] = vec4[16](
 const vec3 kMatChromaAxis[16] = vec3[16](
     vec3(1.00000, 1.00000, 1.00000),  //  0 air / body sentinel
     vec3(1.00000, 1.00000, 1.00000),  //  1 concrete (maze)
-    vec3(1.00000, 1.00000, 1.00000),  //  2 soil (maze)
+    vec3(1.15000, 0.90000, 0.65000),  //  2 soil (maze)
     vec3(1.00000, 1.00000, 1.00000),  //  3 water marker (maze)
-    vec3(1.00000, 1.00000, 1.00000),  //  4 tan slab (maze)
+    vec3(1.05000, 0.95000, 0.85000),  //  4 tan slab (maze)
     vec3(1.00000, 1.00000, 1.00000),  //  5 extraction pad
     vec3(1.00000, 1.00000, 1.00000),  //  6 unused
     vec3(1.00000, 1.00000, 1.00000),  //  7 nav / hub pad
