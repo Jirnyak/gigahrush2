@@ -510,7 +510,33 @@ void generate_floor(World& world, int number, const FloorSpec& spec,
         for (int y = 0; y < kMacroDim; ++y)
             for (int x = 0; x < kMacroDim; ++x) {
                 if (geom.holePct && rng.below(100) < geom.holePct) continue;
-                g.fill_cell(x, y, base, kSlab);
+                CellType cellSlab = kSlab;
+                const std::uint32_t slabHash = mix32(fseed ^ (static_cast<std::uint32_t>(x) * 0x165667B1u) ^
+                                                     (static_cast<std::uint32_t>(y) * 0x27220A95u) ^
+                                                     (static_cast<std::uint32_t>(base) * 0x9E3779B9u));
+                const int slabPick = static_cast<int>(slabHash % 100u);
+                if (spec.kind == FloorKind::Residential) {
+                    // Parquet wood planks (75%), linoleum/rubber (15%), poured smooth concrete (10%)
+                    if (slabPick < 75) cellSlab = kMatParquet;
+                    else if (slabPick < 90) cellSlab = kMatLino;
+                    else cellSlab = kMatConcrete;
+                } else if (spec.kind == FloorKind::Commercial) {
+                    // Linoleum/rubber tile (70%), parquet (15%), smooth concrete (15%)
+                    if (slabPick < 70) cellSlab = kMatLino;
+                    else if (slabPick < 85) cellSlab = kMatParquet;
+                    else cellSlab = kMatConcrete;
+                } else if (spec.kind == FloorKind::Industrial) {
+                    // Tread plate (65%), poured smooth concrete (25%), tan slab (10%)
+                    if (slabPick < 65) cellSlab = kMatTread;
+                    else if (slabPick < 90) cellSlab = kMatConcrete;
+                    else cellSlab = kMatSlabTan;
+                } else if (spec.kind == FloorKind::Derelict) {
+                    // Rubble (60%), organic earth / soil (25%), concrete (15%)
+                    if (slabPick < 60) cellSlab = kMatRubble;
+                    else if (slabPick < 85) cellSlab = kMatSoil;
+                    else cellSlab = kMatConcrete;
+                }
+                g.fill_cell(x, y, base, cellSlab);
             }
 
         // Interior partitions: full-height walls on the room lattice. In pillar
@@ -525,7 +551,33 @@ void generate_floor(World& world, int number, const FloorSpec& spec,
                     const bool wall = geom.pillars ? (onX && onY) : (onX || onY);
                     if (!wall) continue;
                     if (geom.gapPct && rng.below(100) < geom.gapPct) continue;
-                    g.fill_cell(x, y, z, kWall);
+                    CellType cellWall = kWall;
+                    const std::uint32_t wallHash = mix32(fseed ^ (static_cast<std::uint32_t>(x) * 0x9E3779B9u) ^
+                                                         (static_cast<std::uint32_t>(y) * 0x85EBCA6Bu) ^
+                                                         (static_cast<std::uint32_t>(z) * 0x7FEB352Du));
+                    const int wallPick = static_cast<int>(wallHash % 100u);
+                    if (spec.kind == FloorKind::Residential) {
+                        // Plaster whitewash (70%), shutter/tile (15%), smooth concrete (15%)
+                        if (wallPick < 70) cellWall = kMatPlaster;
+                        else if (wallPick < 85) cellWall = kMatShopShutter;
+                        else cellWall = kMatConcrete;
+                    } else if (spec.kind == FloorKind::Commercial) {
+                        // Shutter/tile (50%), plaster (35%), factory concrete (15%)
+                        if (wallPick < 50) cellWall = kMatShopShutter;
+                        else if (wallPick < 85) cellWall = kMatPlaster;
+                        else cellWall = kMatFactoryWall;
+                    } else if (spec.kind == FloorKind::Industrial) {
+                        // Factory concrete (60%), smooth concrete (25%), shutter (15%)
+                        if (wallPick < 60) cellWall = kMatFactoryWall;
+                        else if (wallPick < 85) cellWall = kMatConcrete;
+                        else cellWall = kMatShopShutter;
+                    } else if (spec.kind == FloorKind::Derelict) {
+                        // Weathered rust (55%), plaster (25%), concrete (20%)
+                        if (wallPick < 55) cellWall = kMatRust;
+                        else if (wallPick < 80) cellWall = kMatPlaster;
+                        else cellWall = kMatConcrete;
+                    }
+                    g.fill_cell(x, y, z, cellWall);
                 }
 
         // Rubble: scatter debris blocks in interior air just above the slab
