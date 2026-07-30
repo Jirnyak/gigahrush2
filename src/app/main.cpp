@@ -2445,6 +2445,16 @@ int main(int argc, char** argv) {
                     game::NpcId pid = reg.valid(player)
                                           ? reg.get<game::NpcRef>(player).id
                                           : game::kInvalidNpc;
+                    // Same capture as the keyboard ride path. Two travel sites;
+                    // without this, --shot loot -> ride -> return refills crates.
+                    // [save.h]
+                    {
+                        const LayerId leaveLayer =
+                            reg.valid(player) ? reg.get<Transform>(player).layer
+                                              : static_cast<LayerId>(0);
+                        game::refresh_opened_containers(reg, leaveLayer, currentFloor,
+                                                        runState.opened);
+                    }
                     game::RideResult r = streamer.travel(
                         stack, registry, reg, pool, player, currentFloor, -1,
                         /*arrivalZ=*/2, pid);
@@ -2470,6 +2480,11 @@ int main(int argc, char** argv) {
                         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
                         refresh_floor_containers(reg, stack.layer(nl),
                                                  currentFloor, nl);
+                        // Re-empty crates already looted on a prior visit.
+                        // Same seam as keyboard ride + F9 apply. [save.h]
+                        game::apply_opened_containers(
+                            reg, nl, currentFloor, runState.opened.data(),
+                            runState.opened.size());
                         // Doors before the bake, frozen for its duration. [door.h]
                         // This is the SECOND travel site — see the note below; a fix
                         // that touches only the keyboard path leaves --shot without

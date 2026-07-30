@@ -43,6 +43,7 @@
 #include "game/contract.h"
 #include "game/vendor.h"
 #include "game/container.h"
+#include "game/save.h"
 #include "game/combat.h"
 #include "game/embody.h"
 #include "game/elevator.h"

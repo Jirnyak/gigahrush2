@@ -91,10 +91,22 @@
 //                          (Complete) not 3 (Failed), failed 0 not 1, completed 1 not 0.
 //                          Against the handle body, 62 checks / 0 failures.
 //
+//   9. travel_keeps_opened_crates
+//                          CLOSED. refresh_floor_containers destroys every crate on
+//                          the arrival LayerId and respawns from a deterministic seed
+//                          (main.cpp 0xC0FFEE ^ floor*0x9e3779b9). Without capture
+//                          BEFORE streamer.travel and apply AFTER the respawn, loot
+//                          -> elevator -> return refills every emptied box. Both
+//                          travel sites (keyboard [ ] and --shot) now call
+//                          refresh_opened_containers / apply_opened_containers the
+//                          same way F5/F9 already did. This pin is the destroy+
+//                          respawn seam those sites share — no entity id in the key.
+//
 // Currently GREEN (pins, not findings): budget_vs_demo_cap records the numbers behind
 // the kMobSpawnCap claim in src/app/main.cpp so the report's arithmetic is machine-
 // checked rather than asserted in prose. ms_timer_drift joined it once core/tick.h
 // moved the sim to 125 Hz — read its own comment for why it stays in the file.
+// travel_keeps_opened_crates pins the travel-time crate capture/apply seam.
 //
 // A word on why this index matters more than it looks. This file's whole value rests on
 // red meaning "a real defect is live right now". An entry that stays red after its fix,
@@ -944,6 +956,89 @@ static void budget_vs_demo_cap() {
     CHECK(mob_count_for_floor(-36, dInd, theme_for_kind(FloorKind::Industrial)) > 800);
 }
 
+// ---------------------------------------------------------------------------
+// PIN (green): travel destroy+respawn keeps looted crates empty
+// ---------------------------------------------------------------------------
+// main.cpp refresh_floor_containers tears down every Container on the arrival layer and
+// re-rolls spawn_floor_containers with seed 0xC0FFEE ^ floor*0x9e3779b9. That is correct
+// for a first visit. A RETURN visit must re-empty crates whose OpenedContainerKey was
+// captured on the way out — otherwise loot → elevator → return is a free refill.
+//
+// The keyboard [ ] path and the --shot ride path both do:
+//   refresh_opened_containers(leaveLayer, floor)   // BEFORE streamer.travel
+//   ... travel + refresh_floor_containers ...
+//   apply_opened_containers(nl, floor, keys)       // AFTER respawn
+// This pin is that seam without the streamer: spawn → open → capture → destroy →
+// respawn same seed → apply → assert empty. saveload's opened_crates_survive_a_restart
+// covers the F5/F9 byte round-trip; this one covers the in-memory travel path.
+static void travel_keeps_opened_crates() {
+    World w;
+    const int floorZ = -3;
+    const FloorKind kind = FloorKind::Residential;
+    // Same seed formula main.cpp refresh_floor_containers uses.
+    const std::uint32_t seed =
+        0xC0FFEEu ^ static_cast<std::uint32_t>(floorZ) * 0x9e3779b9u;
+    generate_floor(w, floorZ, floor_spec(kind), 1337u);
+
+    Registry reg;
+    const LayerId layer = 0;
+    const std::uint32_t made =
+        spawn_floor_containers(reg, w, floorZ, kind, layer, seed, /*cap=*/64u);
+    CHECK(made > 4u);
+
+    int openedByHand = 0;
+    int i = 0;
+    for (auto e : reg.view<Container, const Transform>()) {
+        if ((i++ % 3) != 0) continue;
+        Container& c = reg.get<Container>(e);
+        for (int s = 0; s < kContainerSlots; ++s) {
+            c.item[s] = kInvalidItem;
+            c.count[s] = 0;
+        }
+        c.opened = true;
+        ++openedByHand;
+    }
+    CHECK(openedByHand > 1);
+
+    std::vector<OpenedContainerKey> opened;
+    // Foreign-floor key must survive a floor-scoped refresh (travel only rewrites the
+    // floor being left).
+    opened.push_back(OpenedContainerKey{2, 66, 66, 1, 0});
+    const std::size_t fromFloor =
+        refresh_opened_containers(reg, layer, floorZ, opened);
+    CHECK(fromFloor == static_cast<std::size_t>(openedByHand));
+    CHECK(opened.size() == 1u + fromFloor);
+    CHECK(opened[0].floor == 2);
+
+    // Tear down — the streamer recycles LayerId; refresh_floor_containers does this.
+    std::vector<Entity> dead;
+    for (auto e : reg.view<const Container, const Transform>())
+        if (reg.get<const Transform>(e).layer == layer) dead.push_back(e);
+    CHECK(!dead.empty());
+    for (Entity e : dead) reg.destroy(e);
+
+    const std::uint32_t remade =
+        spawn_floor_containers(reg, w, floorZ, kind, layer, seed, /*cap=*/64u);
+    CHECK(remade == made);
+
+    // Without apply, every remade crate is full again — the refill bug.
+    const std::size_t hits = apply_opened_containers(
+        reg, layer, floorZ, opened.data(), opened.size());
+    CHECK(hits >= static_cast<std::size_t>(openedByHand));
+
+    std::size_t openNow = 0;
+    for (auto e : reg.view<const Container, const Transform>()) {
+        const Transform& t = reg.get<const Transform>(e);
+        if (t.layer != layer) continue;
+        const Container& c = reg.get<const Container>(e);
+        if (!c.opened) continue;
+        ++openNow;
+        for (int s = 0; s < kContainerSlots; ++s) CHECK(c.item[s] == kInvalidItem);
+    }
+    CHECK(openNow >= static_cast<std::size_t>(openedByHand));
+    CHECK(hits == openNow);
+}
+
 } // namespace audit_test
 
 static void test_audit_all() {
@@ -957,4 +1052,5 @@ static void test_audit_all() {
     audit_test::hunt_is_findable();
     audit_test::stack_max_respected();
     audit_test::budget_vs_demo_cap();
+    audit_test::travel_keeps_opened_crates();
 }
