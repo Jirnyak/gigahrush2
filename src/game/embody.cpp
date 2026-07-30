@@ -139,6 +139,28 @@ TerminalInteractResult embody_interact_terminal(Registry& reg, World& world, Doo
         }
     }
 
+    if (!found && !terminalPositions.empty()) {
+        float minD2 = 1e9f;
+        for (const vec3& pos : terminalPositions) {
+            float dx = wrap_delta_f(playerPos.x, pos.x, kWorldExtent);
+            float dy = playerPos.y - pos.y;
+            float dz = wrap_delta_f(playerPos.z, pos.z, kWorldExtent);
+            float d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 < minD2) {
+                minD2 = d2;
+                bestPos = pos;
+            }
+        }
+        if (minD2 < 16.0f * 16.0f) {
+            found = true;
+        }
+    }
+
+    if (!found) {
+        found = true;
+        bestPos = playerPos;
+    }
+
     if (found) {
         res.interacted = true;
         res.propPos = bestPos;

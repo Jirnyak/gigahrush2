@@ -262,6 +262,7 @@ float resolved(float px, float freq) {
 }
 
 // The brightness multiplier for one material's surface. `g` is the shared two-octave
+// The brightness multiplier for one material's surface. `g` is the shared two-octave
 // grain, `px` the screen-space rate of change of uv, `aw` the absolute face normal.
 float surface(uint mat, vec2 uv, vec3 aw, float px, float g) {
     uint id = min(mat, kMatSurfaceCount - 1u);
@@ -269,32 +270,28 @@ float surface(uint mat, vec2 uv, vec3 aw, float px, float g) {
     float sigma = kMatSurface[id].x;
     float pitch = kMatSurface[id].y;   // cycles per 2 m cell
 
+    bool isHorizontal = (aw.z > 0.7 || aw.y > 0.7);
+
     if (fam == kFamGeneric) {
-        // Floors (aw.y > 0.7): smooth poured concrete/linoleum/earth mottle, NO brick/panel seams!
-        // Walls (aw.y <= 0.7): paint mottle over precast panel joins.
-        float isFloor = step(0.7, aw.y);
-        float amount = mix(0.17, 0.26, isFloor);
-        float s = mix(seam(uv), 0.0, isFloor);
+        // Floors (aw.z > 0.7 || aw.y > 0.7): smooth poured concrete/linoleum/earth mottle, NO panel seams!
+        // Walls: paint mottle over precast panel joins.
+        float amount = isHorizontal ? 0.26 : 0.17;
+        float s = isHorizontal ? 0.0 : seam(uv);
         return ((1.0 - amount * 0.5) + amount * g) * (1.0 - 0.28 * s);
     }
 
     if (fam == kFamSmooth) {
-        // A painted marker plate: mottle only, no seam. A gameplay pad has to read as
-        // signage rather than as a surface (materials.h: the bank must be
-        // unmistakable), so nothing is allowed to break it into panels.
+        // A painted marker plate or smooth concrete/soil floor: mottle only, no seam.
         return mottle(sigma, (g - 0.5) * kNormGrain);
     }
 
     if (fam == kFamPlaster) {
-        // Fine even mottle plus broad damp/dirt staining, over the precast panel
-        // join. Weights 0.78/0.62 sum to 1 in quadrature, so splitting the measured
-        // amplitude across two scales does not exceed it. The broad layer is what
-        // gives one apartment a different wall from the next instead of 255 floors
-        // of the same whitewash.
+        // Fine even mottle plus broad damp/dirt staining. On horizontal floors, no panel seam.
         float stain = vnoise(uv * pitch);
         float n = (g - 0.5) * kNormGrain * 0.78
                 + (stain - 0.5) * kNormNoise * 0.62;
-        return mottle(sigma, n) * (1.0 - 0.30 * seam(uv));
+        float s = isHorizontal ? 0.0 : seam(uv);
+        return mottle(sigma, n) * (1.0 - 0.30 * s);
     }
 
     if (fam == kFamPlank) {
@@ -405,7 +402,7 @@ float surface(uint mat, vec2 uv, vec3 aw, float px, float g) {
 }
 
 // Surface height field for derivative normal perturbation across procedural surface families.
-float surface_height(uint fam, vec2 uv, float pitch, float g) {
+float surface_height(uint fam, vec2 uv, float pitch, float g, bool isHorizontal) {
     if (fam == kFamRibbed) {
         float rib = cos(uv.x * pitch * 6.2831853);
         float trough = smoothstep(-0.2, -0.95, rib);
@@ -434,7 +431,8 @@ float surface_height(uint fam, vec2 uv, float pitch, float g) {
     }
     if (fam == kFamPlaster) {
         float stain = vnoise(uv * pitch);
-        return stain * 0.7 + g * 0.3 - 0.4 * seam(uv);
+        float s = isHorizontal ? 0.0 : seam(uv);
+        return stain * 0.7 + g * 0.3 - 0.4 * s;
     }
     if (fam == kFamRust) {
         float lo = vnoise(uv * pitch);
@@ -451,16 +449,17 @@ float surface_height(uint fam, vec2 uv, float pitch, float g) {
         return chunk * (1.0 - crack) - 0.8 * crack;
     }
     if (fam == kFamGeneric) {
-        return -0.3 * seam(uv) + 0.1 * g;
+        float s = isHorizontal ? 0.0 : seam(uv);
+        return -0.3 * s + 0.1 * g;
     }
     return 0.0;
 }
 
-vec2 compute_grad_uv(uint fam, vec2 uv, float pitch, float g) {
+vec2 compute_grad_uv(uint fam, vec2 uv, float pitch, float g, bool isHorizontal) {
     float eps = 0.005;
-    float h0 = surface_height(fam, uv, pitch, g);
-    float hu = surface_height(fam, uv + vec2(eps, 0.0), pitch, g);
-    float hv = surface_height(fam, uv + vec2(0.0, eps), pitch, g);
+    float h0 = surface_height(fam, uv, pitch, g, isHorizontal);
+    float hu = surface_height(fam, uv + vec2(eps, 0.0), pitch, g, isHorizontal);
+    float hv = surface_height(fam, uv + vec2(0.0, eps), pitch, g, isHorizontal);
     return vec2(hu - h0, hv - h0) / eps;
 }
 
@@ -495,9 +494,11 @@ void main() {
     uint fam = kMatFamily[mid];
     float bump = kMatSurface[mid].w;
 
+    bool isHorizontal = (aw.z > 0.7 || aw.y > 0.7);
+
     vec3 n = n_geom;
     if (bump > 0.001) {
-        vec2 grad_uv = compute_grad_uv(fam, uv, kMatSurface[mid].y, g);
+        vec2 grad_uv = compute_grad_uv(fam, uv, kMatSurface[mid].y, g, isHorizontal);
         vec3 grad_world;
         if (aw.z > 0.5) {
             grad_world = vec3(-grad_uv.x * sign(n_geom.z), -grad_uv.y * sign(n_geom.z), 0.0);
@@ -618,7 +619,10 @@ void main() {
     float aoDirect = mix(1.0, ao, pc.torus.y);
     vec3 lit = albedo * (amb * ao + vec3(lamp + fill) * aoDirect) + vec3(spec) * aoDirect;
 
-    // Volumetric fog raymarching with 3D light grid lookup
+    // Dynamically scale fog opacity & flickering during Samosbor hazard triggers
+    float samosborPulse = clamp((1.0 - pc.fog.y / (128.0 * 0.50)) / 0.70, 0.0, 1.0);
+
+    // Volumetric fog raymarching with 3D light grid lookup and Samosbor pulse scaling
     vec3 gridMin = pc.camPos.xyz - vec3(32.0, 16.0, 32.0);
     vec4 fogVol = march_volumetric_fog(
         pc.camPos.xyz,
@@ -633,7 +637,8 @@ void main() {
         gridMin,
         vec3(32.0, 16.0, 32.0),
         vec3(2.0, 2.0, 2.0),
-        pc.torus.w
+        pc.torus.w,
+        samosborPulse
     );
     lit = lit * fogVol.a + fogVol.rgb;
 
@@ -652,6 +657,11 @@ void main() {
     // tonemap: the encode must satisfy f(0) == 0 or black stops being black and
     // the wrap seam appears. That is the worst failure mode in this renderer.
     float fog = clamp((effectiveDist - pc.fog.x) / max(pc.fog.y - pc.fog.x, 1e-3), 0.0, 1.0);
+
+    // Dynamic Samosbor fog flickering
+    float fogFlicker = 1.0 + samosborPulse * 0.35 * sin(pc.torus.w * 22.0 + vWorldPos.x * 0.4 + vWorldPos.y * 0.3);
+    fog = clamp(fog * fogFlicker, 0.0, 1.0);
+
     lit = mix(lit, vec3(0.0), fog);
 
     // Filmic Reinhard tonemap to compress highlights and prevent white overexposure blowout:
