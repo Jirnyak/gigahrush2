@@ -485,6 +485,13 @@ int main(int argc, char** argv) {
     int shotFramesSeen = 0;
     int shotRideDone = 0;
     gpu::Capture shotCap{};
+    bool hasCustomPos = false;
+    vec3 customPos{89.0f, 71.0f, 2.9f};
+    bool hasCustomAng = false;
+    float customYaw = 0.8f, customPitch = -0.5f;
+    bool shotOrbit = false;
+    std::string shotAction;
+
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "maze") genMode = WorldGenMode::Maze;
@@ -492,6 +499,16 @@ int main(int argc, char** argv) {
         else if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
         else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
         else if (a == "--ride" && i + 1 < argc) shotRide = std::atoi(argv[++i]);
+        else if (a == "--pos" && i + 3 < argc) {
+            customPos.x = static_cast<float>(std::atof(argv[++i]));
+            customPos.y = static_cast<float>(std::atof(argv[++i]));
+            customPos.z = static_cast<float>(std::atof(argv[++i]));
+            hasCustomPos = true;
+        }
+        else if (a == "--yaw" && i + 1 < argc) { customYaw = static_cast<float>(std::atof(argv[++i])); hasCustomAng = true; }
+        else if (a == "--pitch" && i + 1 < argc) { customPitch = static_cast<float>(std::atof(argv[++i])); hasCustomAng = true; }
+        else if (a == "--orbit") { shotOrbit = true; }
+        else if (a == "--action" && i + 1 < argc) { shotAction = argv[++i]; }
     }
 
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -774,6 +791,12 @@ int main(int argc, char** argv) {
         currentSpec = spec_for_floor(0);
         if (player != entt::null) {
             aim_player(reg, player);
+            if (hasCustomPos) reg.get<Transform>(player).pos = customPos;
+            if (hasCustomAng) {
+                auto& cam = reg.get<CameraTag>(player);
+                cam.yaw = customYaw;
+                cam.pitch = customPitch;
+            }
             LayerId l0 = reg.get<Transform>(player).layer;
             refresh_floor_mobs(reg, stack.layer(l0), 0, l0);
             refresh_floor_containers(reg, stack.layer(l0), 0, l0);
@@ -1345,6 +1368,14 @@ int main(int argc, char** argv) {
                 if (reg.valid(player))
                     if (auto* ctl_ = reg.try_get<Controller>(player))
                         ctl_->moveSpeed = kPlayerWalkSpeed * needs.speedScale;
+                if (shotPath) {
+                    if (shotOrbit && reg.valid(player)) {
+                        auto& cam = reg.get<CameraTag>(player);
+                        cam.yaw += 0.015f;
+                    }
+                    if (shotAction == "attack") attackHeld = true;
+                    else if (shotAction == "interact") interactWanted = true;
+                }
                 game::wander_step(reg, stack.layer(activeLayer).grid(), pool,
                                   nav.coarse(),
                                   nav.fine(), activeLayer, simTick);
