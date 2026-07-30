@@ -727,6 +727,24 @@ static void test_elevator() {
     reg.get<CameraTag>(p).pitch = -0.321f;
     reg.get<Controller>(p).fly = true;
 
+    // FOR1 / MAG1: firearm + melee live on the BODY, not the pool row. fold_back
+    // destroys the entity; without capture/restore every ride zeroes magCount
+    // (ammo already debited from inventory into the magazine) and drops kills.
+    // embody_as_player must NOT invent these — lazy attach stays lazy.
+    CHECK(!reg.all_of<PlayerRanged>(p));
+    CHECK(!reg.all_of<PlayerMelee>(p));
+    {
+        PlayerRanged pr{};
+        pr.cooldownMs = 0;
+        pr.reloadMs = 0;
+        pr.magCount = 12;
+        pr.weapon = static_cast<ItemId>(7); // sentinel gun id; not table-looked-up
+        pr.shots = 7;
+        pr.hits = 3;
+        reg.emplace<PlayerRanged>(p, pr);
+        reg.emplace<PlayerMelee>(p, PlayerMelee{/*cooldownMs=*/0, /*kills=*/99});
+    }
+
     // Ride up: floor 0 -> 1. Same record, now embodied on layer 1.
     RideResult up = ride_elevator(reg, pool, registry, p, /*from=*/0, /*dir=*/+1,
                                   /*arrivalZ=*/2);
@@ -751,6 +769,14 @@ static void test_elevator() {
     auto approx = [](float a, float b) { return (a - b) * (a - b) < 1e-8f; };
     CHECK(approx(reg.get<CameraTag>(p).yaw, 1.234f));
     CHECK(approx(reg.get<CameraTag>(p).pitch, -0.321f));
+    // Combat state must survive the body swap (FOR1 pin).
+    CHECK(reg.all_of<PlayerRanged>(p));
+    CHECK(reg.get<PlayerRanged>(p).magCount == 12);
+    CHECK(reg.get<PlayerRanged>(p).weapon == static_cast<ItemId>(7));
+    CHECK(reg.get<PlayerRanged>(p).shots == 7);
+    CHECK(reg.get<PlayerRanged>(p).hits == 3);
+    CHECK(reg.all_of<PlayerMelee>(p));
+    CHECK(reg.get<PlayerMelee>(p).kills == 99);
 
     // Ride up again: floor 2 is not loaded -> no-op, player untouched.
     RideResult none = ride_elevator(reg, pool, registry, p, /*from=*/1,
@@ -760,8 +786,13 @@ static void test_elevator() {
     CHECK(none.player == p);
     CHECK(reg.valid(p));
     CHECK(reg.get<Transform>(p).layer == l1);
+    // No-op must not strip combat components either.
+    CHECK(reg.all_of<PlayerRanged>(p));
+    CHECK(reg.get<PlayerRanged>(p).magCount == 12);
+    CHECK(reg.all_of<PlayerMelee>(p));
+    CHECK(reg.get<PlayerMelee>(p).kills == 99);
 
-    // Ride back down: floor 1 -> 0.
+    // Ride back down: floor 1 -> 0. Second fold_back must keep mag/kills too.
     RideResult down = ride_elevator(reg, pool, registry, p, /*from=*/1,
                                     /*dir=*/-1, /*arrivalZ=*/2);
     CHECK(down.moved);
@@ -771,6 +802,13 @@ static void test_elevator() {
     CHECK(reg.get<NpcRef>(p).id == id);
     CHECK(reg.get<Transform>(p).layer == l0);
     CHECK(pool.is_player(id));
+    CHECK(reg.all_of<PlayerRanged>(p));
+    CHECK(reg.get<PlayerRanged>(p).magCount == 12);
+    CHECK(reg.get<PlayerRanged>(p).weapon == static_cast<ItemId>(7));
+    CHECK(reg.get<PlayerRanged>(p).shots == 7);
+    CHECK(reg.get<PlayerRanged>(p).hits == 3);
+    CHECK(reg.all_of<PlayerMelee>(p));
+    CHECK(reg.get<PlayerMelee>(p).kills == 99);
 }
 
 // Count records whose id is in [lo, hi) that are currently live ECS entities

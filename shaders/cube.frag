@@ -270,7 +270,7 @@ float surface(uint mat, vec2 uv, vec3 aw, float px, float g) {
     float sigma = kMatSurface[id].x;
     float pitch = kMatSurface[id].y;   // cycles per 2 m cell
 
-    bool isHorizontal = (aw.z > 0.7 || aw.y > 0.7);
+    bool isHorizontal = (abs(aw.y) > 0.7);
 
     if (fam == kFamGeneric) {
         if (!isHorizontal) {
@@ -520,7 +520,7 @@ void main() {
     uint fam = kMatFamily[mid];
     float bump = kMatSurface[mid].w;
 
-    bool isHorizontal = (aw.z > 0.7 || aw.y > 0.7);
+    bool isHorizontal = (aw.y > 0.7);
 
     vec3 n = n_geom;
     if (bump > 0.001) {
@@ -578,55 +578,74 @@ void main() {
     albedo = apply_chroma(albedo, mid, uv, kMatSurface[mid].y);
 #endif
 
-    // Apply authentic Soviet Khrushchevka two-tone wall color modulation to vertical wall surfaces
-    if (!isHorizontal && (vMat == 1u || vMat == 8u || vMat == 12u)) {
-        float h_in_room = fract(vWorldPos.y * 0.5); // 0.0 to 1.0 within 2m room height
+    // Authentic Soviet Khrushchevka Surface System:
+    // 1. ALL vertical walls (!isHorizontal): Lower 1.16m Glossy Soviet Stairwell Oil Paint + Trim Stripe + Upper Whitewash
+    // 2. ALL ceilings (n_geom.y < -0.5): Aged Soviet Whitewash / Plaster
+    // 3. ALL floors (n_geom.y > 0.5): Soviet Terrazzo Concrete / Linoleum / Oak Parquet
+    float roughness = 0.50;
+
+    if (!isHorizontal) {
+        float h_in_room = fract(vWorldPos.y * 0.5); // 0.0 to 1.0 within 2m room cell
         if (h_in_room < 0.58) {
-            // Lower 1.16m: Glossy Soviet stairwell oil paint (classic teal-blue / panel green)
-            // Tint plaster towards rich stairwell teal-blue
-            albedo *= vec3(0.48, 0.72, 0.92);
+            // Lower 1.16m: Glossy Soviet Stairwell Teal-Blue Oil Paint ("масляная краска")
+            // Linearized sRGB vec3(0.20, 0.46, 0.68) -> vec3(0.035, 0.18, 0.42)
+            vec3 oilPaintColor = vec3(0.035, 0.18, 0.42);
+            float streak = vnoise(vec2(uv.x * 12.0, uv.y * 3.0));
+            albedo = oilPaintColor * (0.90 + 0.20 * streak);
+            roughness = 0.20; // High specular gloss for wet/oil paint
         } else if (h_in_room < 0.61) {
-            // Dark border trim line (бордюрная полоса)
-            albedo *= vec3(0.20, 0.22, 0.25);
+            // Dark Border Trim Line (бордюрная полоса)
+            albedo = vec3(0.01, 0.012, 0.015);
+            roughness = 0.50;
         } else {
-            // Upper wall (1.2m to ceiling): Faded yellowed whitewash / wallpaper tone
-            albedo *= vec3(1.10, 1.02, 0.90);
+            // Upper Wall (1.2m to ceiling): Faded Yellowed Whitewash / Plaster ("пожелтевшая побелка")
+            // Linearized sRGB vec3(0.85, 0.82, 0.72) -> vec3(0.68, 0.63, 0.48)
+            vec3 whitewashColor = vec3(0.68, 0.63, 0.48);
+            float stain = vnoise(uv * 4.0);
+            float s = seam(uv);
+            albedo = whitewashColor * (0.90 + 0.20 * stain) * (1.0 - 0.28 * s);
+            roughness = 0.85; // Matte plaster
+        }
+    } else if (n_geom.y < -0.5) {
+        // ALL Ceilings: Aged Soviet Whitewash / Concrete Plaster (Dirty off-white)
+        // Linearized sRGB vec3(0.80, 0.77, 0.72) -> vec3(0.60, 0.55, 0.48)
+        vec3 ceilingWhitewash = vec3(0.60, 0.55, 0.48);
+        float stain = vnoise(uv * 3.0);
+        albedo = ceilingWhitewash * (0.88 + 0.24 * stain);
+        roughness = 0.90; // Matte whitewash
+    } else if (n_geom.y > 0.5) {
+        // ALL Floors: Soviet Terrazzo Concrete / Linoleum / Oak Parquet
+        if (vMat == 9u) {
+            // Soviet Oak Parquet
+            albedo = vec3(0.10, 0.04, 0.012);
+            roughness = 0.35;
+        } else if (vMat == 11u) {
+            // Soviet Linoleum
+            albedo = vec3(0.055, 0.018, 0.012);
+            roughness = 0.45;
+        } else {
+            // Soviet Terrazzo Concrete Floor
+            vec3 terrazzoCol = vec3(0.065, 0.060, 0.055);
+            float grain = vnoise(uv * 10.0);
+            albedo = terrazzoCol * (0.90 + 0.20 * grain);
+            roughness = 0.65;
         }
     }
 
-    // Distance and view vectors computed per-fragment, not interpolated from the vertex stage.
-    // Interpolating a nonlinear function across a 2 m face that fills the screen
-    // up close visibly skews the fog gradient; and the headlamp needs the vector
-    // anyway, so this is free.
     vec3 toCam = pc.camPos.xyz - vWorldPos;
     float d = length(toCam);
     vec3 L = toCam / max(d, 1e-4);
 
-    // Camera view direction vector (from camera to fragment) and light direction vector (from headlamp to fragment)
     vec3 viewDir = -L;
     vec3 lightDir = normalize(vWorldPos - pc.camPos.xyz);
 
-    // Headlamp forward scattering based on camera view direction vector, light/headlamp direction vector,
-    // and Henyey-Greenstein phase function (forward scattering boost when looking towards light source).
     float g_scat = 0.55;
     float cosTheta = dot(viewDir, lightDir);
     float phase = (1.0 - g_scat * g_scat) / pow(max(1.0 + g_scat * g_scat - 2.0 * g_scat * cosTheta, 1e-4), 1.5);
     float r = pc.fog.z;
     float att = 1.0 / (1.0 + (d * d) / (r * r));
 
-    // Warm 2700K tungsten incandescent light tint ("лампочка Ильича")
     const vec3 kTungstenTint = vec3(1.00, 0.78, 0.45);
-
-    // Dynamic surface roughness: glossy oil paint panel (lower wall 1.2m) vs matte whitewash (upper wall)
-    float roughness = 0.50;
-    if (!isHorizontal && (vMat == 1u || vMat == 8u || vMat == 12u)) {
-        float h_in_room = fract(vWorldPos.y * 0.5);
-        roughness = (h_in_room < 0.58) ? 0.22 : 0.82; // Glossy oil paint vs matte whitewash
-    } else if (vMat == 9u) {
-        roughness = 0.32; // Varnished parquet gloss
-    } else if (vMat == 11u) {
-        roughness = 0.42; // Smooth linoleum
-    }
 
 #ifdef GIGA_ALBEDO_ARRAY
     if (roughnessMask != 0u && (roughnessMask & (1u << mid)) != 0u) {

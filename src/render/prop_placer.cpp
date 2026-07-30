@@ -183,9 +183,9 @@ void PropPlacer::populate(const MacroGrid& grid, PropPass& propPass, std::uint32
                         PropInstance es{};
                         es.origin    = {wx, wy + 0.40f, wz};
                         es.yaw       = yawVal;
-                        es.color     = {0.35f, 0.38f, 0.40f};
+                        es.color     = {0.18f, 0.20f, 0.22f}; // Dark industrial steel box
                         es.matId     = 4;
-                        es.emissive  = 120;
+                        es.emissive  = 0;   // Non-emissive steel body
                         es.animPhase = static_cast<std::uint8_t>(rngWall & 0xFFu);
                         propPass.add_instance(PropShape::ElectricalShield, es);
                         totalPlaced_++;
