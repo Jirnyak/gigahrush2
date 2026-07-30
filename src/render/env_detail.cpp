@@ -1,690 +1,522 @@
-// env_detail.cpp — Environment Detail Biome Placement Implementation
+// env_detail.cpp — Biome classification & procedural prop placement.
 //
-// Biome classification algorithm:
-//   1. Count material neighbours in a 3x3x3 cube around each air cell.
-//   2. Weight kMatAcidPool / kMatWaterMark -> Anomalous/Organic.
-//   3. Deep floors (y < 32) bias towards Organic and Anomalous.
-//   4. Apply spatial-hash XOR to break checkerboard and add natural variation.
-//   5. Propagate biome blobs: if >4 neighbours share a biome, adopt it.
+// classify() makes two passes over the 128^3 grid:
+//   Pass 1: Per-cell material census determines initial biome vote.
+//   Pass 2: 3x3x3 neighbourhood smoothing suppresses single-cell noise.
 //
-// Placement is then driven entirely by the per-biome BiomePropConfig table.
-// Zero heap allocations in the hot loop. No exceptions, no RTTI.
-//
+// populate() iterates over air cells, queries BiomeMap, and places props
+// through PropPass::add_instance() using the per-biome BiomePropConfig.
+// All randomness is deterministic from `seed ^ cell_index`.
+
 #include "render/env_detail.h"
+#include "render/prop_pass.h"   // PropPass, PropShape, PropInstance
 
 #include <cmath>
 #include <cstdio>
-#include <numbers>
-
-#include "world/materials.h"
 
 namespace giga::gpu {
 
-namespace {
+// ── static config tables ──────────────────────────────────────────────────────
 
-constexpr float kTwoPi  = 6.283185307179586f;
-constexpr float kHalfPi = 1.5707963267948966f;
-constexpr float kPi     = std::numbers::pi_v<float>;
-constexpr float kCell   = kCellSize;
-
-// Distinct salt constants for each rule category — no cross-rule RNG correlation
-constexpr std::uint32_t kSaltClassify = 0xF1F1F1F1u;
-constexpr std::uint32_t kSaltCeiling  = 0xA0A0A0A0u;
-constexpr std::uint32_t kSaltFloor    = 0xB1B1B1B1u;
-constexpr std::uint32_t kSaltWall     = 0xC2C2C2C2u;
-constexpr std::uint32_t kSaltStruct   = 0xD3D3D3D3u;
-constexpr std::uint32_t kSaltSubA     = 0x0F0F0F0Fu;
-constexpr std::uint32_t kSaltSubB     = 0x1E1E1E1Eu;
-constexpr std::uint32_t kSaltSubC     = 0x2D2D2D2Du;
-constexpr std::uint32_t kSaltSubD     = 0x3C3C3C3Cu;
-
-} // namespace
-
-// ────────────────────────── biome config table ──────────────────────────────
-
-// Industrial: dense machinery, pipes, lights, cabinets
-static BiomePropConfig make_industrial() {
-    BiomePropConfig c;
-    c.pipeCeilingPct  = 45;
-    c.lampCeilingPct  = 18;
-    c.grateFloorPct   = 20;
-    c.cabinetWallPct  = 18;
-    c.terminalWallPct = 8;
-    c.cameraWallPct   = 10;
-    c.supportBeamPct  = 50;
-    c.crateCornerPct  = 22;
-    c.pipeCol         = {0.22f, 0.25f, 0.28f};
-    c.emissiveScale   = 1.0f;
-    return c;
-}
-
-// Residential: lockers, benches, terminals, fewer machines
-static BiomePropConfig make_residential() {
-    BiomePropConfig c;
-    c.pipeCeilingPct  = 20;
-    c.lampCeilingPct  = 30;
-    c.grateFloorPct   = 8;
-    c.benchWallPct    = 22;
-    c.lockerWallPct   = 25;
-    c.terminalWallPct = 15;
-    c.cameraWallPct   = 12;
-    c.cabinetWallPct  = 8;
-    c.crateCornerPct  = 10;
-    c.supportBeamPct  = 20;
-    c.warmLampCol     = {1.00f, 0.92f, 0.76f};
-    c.woodenCol       = {0.55f, 0.36f, 0.22f};
-    c.emissiveScale   = 1.1f;
-    return c;
-}
-
-// Organic: fungal columns, crystal clusters, bioluminescence, minimal tech
-static BiomePropConfig make_organic() {
-    BiomePropConfig c;
-    c.pipeCeilingPct  = 8;
-    c.lampCeilingPct  = 5;
-    c.grateFloorPct   = 4;
-    c.cabinetWallPct  = 2;
-    c.terminalWallPct = 0;
-    c.fungalWallPpm   = 40;
-    c.crystalFloorPpm = 50;
-    c.acidFloorPpm    = 15;
-    c.crateCornerPct  = 4;
-    c.supportBeamPct  = 10;
-    c.pillarPct       = 35;
-    c.crystalCol      = {0.60f, 0.12f, 0.98f};
-    c.fungalCol       = {0.38f, 0.78f, 0.28f};
-    c.emissiveScale   = 1.4f;
-    return c;
-}
-
-// Anomalous: acid drips, glowing cracks, crystals, deformed infrastructure
-static BiomePropConfig make_anomalous() {
-    BiomePropConfig c;
-    c.pipeCeilingPct  = 25;
-    c.lampCeilingPct  = 12;
-    c.grateFloorPct   = 5;
-    c.acidFloorPpm    = 80;
-    c.crystalFloorPpm = 60;
-    c.cabinetWallPct  = 3;
-    c.cameraWallPct   = 3;
-    c.supportBeamPct  = 15;
-    c.crystalCol      = {0.90f, 0.08f, 0.85f};
-    c.acidCol         = {0.10f, 0.98f, 0.18f};
-    c.emissiveScale   = 1.8f;
-    c.rustCol         = {0.65f, 0.38f, 0.08f};
-    return c;
-}
-
-// Derelict: few lights (dim), heavy rust, broken railings, collapsed state
-static BiomePropConfig make_derelict() {
-    BiomePropConfig c;
-    c.pipeCeilingPct  = 30;
-    c.lampCeilingPct  = 6;
-    c.grateFloorPct   = 18;
-    c.cabinetWallPct  = 5;
-    c.cameraWallPct   = 2;
-    c.crateCornerPct  = 28;
-    c.supportBeamPct  = 45;
-    c.pipeCol         = {0.40f, 0.30f, 0.20f};
-    c.grateCol        = {0.28f, 0.22f, 0.18f};
-    c.rustCol         = {0.55f, 0.30f, 0.10f};
-    c.warmLampCol     = {0.80f, 0.70f, 0.50f};
-    c.emissiveScale   = 0.35f;  // very dim — most lights broken
-    return c;
-}
-
-// Static per-biome config table
-const std::array<BiomePropConfig, kBiomeCount> EnvDetail::kBiomeConfigs = {
-    make_industrial(),
-    make_residential(),
-    make_organic(),
-    make_anomalous(),
-    make_derelict(),
+const BiomePropConfig EnvDetail::kConfigs[kBiomeCount] = {
+    // Industrial
+    {
+        .pipeCeilingPct   = 45, .lampCeilingPct   = 22, .beamCeilingPct  = 18,
+        .grateFloorPct    = 25, .crateCornerPct   = 20, .benchWallPct    = 12,
+        .crystalFloorPpm  = 0,  .acidFloorPpm     = 0,
+        .cabinetWallPct   = 18, .lockerWallPct    = 12, .cameraWallPct   = 10,
+        .terminalWallPct  = 6,  .fungalWallPpm    = 0,
+        .supportBeamPct   = 55, .pillarPct        = 25,
+        .pipeCol    = {0.28f, 0.30f, 0.32f},
+        .rustCol    = {0.52f, 0.28f, 0.14f},
+        .grateCol   = {0.30f, 0.32f, 0.34f},
+        .warmLampCol= {0.90f, 0.82f, 0.68f},
+        .coolLampCol= {0.75f, 0.88f, 1.00f},
+        .crystalCol = {0.70f, 0.15f, 0.95f},
+        .acidCol    = {0.15f, 0.85f, 0.25f},
+        .fungalCol  = {0.40f, 0.75f, 0.30f},
+        .metalCol   = {0.38f, 0.40f, 0.44f},
+        .woodenCol  = {0.50f, 0.32f, 0.20f},
+        .terminalCol= {0.22f, 0.24f, 0.28f},
+        .emissiveScale = 1.0f,
+    },
+    // Residential
+    {
+        .pipeCeilingPct   = 20, .lampCeilingPct   = 35, .beamCeilingPct  = 5,
+        .grateFloorPct    = 5,  .crateCornerPct   = 10, .benchWallPct    = 22,
+        .crystalFloorPpm  = 0,  .acidFloorPpm     = 0,
+        .cabinetWallPct   = 8,  .lockerWallPct    = 20, .cameraWallPct   = 4,
+        .terminalWallPct  = 2,  .fungalWallPpm    = 0,
+        .supportBeamPct   = 15, .pillarPct        = 10,
+        .pipeCol    = {0.72f, 0.70f, 0.65f},
+        .rustCol    = {0.60f, 0.42f, 0.30f},
+        .grateCol   = {0.55f, 0.52f, 0.48f},
+        .warmLampCol= {1.00f, 0.95f, 0.80f},
+        .coolLampCol= {0.90f, 0.90f, 0.95f},
+        .crystalCol = {0.70f, 0.15f, 0.95f},
+        .acidCol    = {0.15f, 0.85f, 0.25f},
+        .fungalCol  = {0.50f, 0.80f, 0.40f},
+        .metalCol   = {0.62f, 0.58f, 0.54f},
+        .woodenCol  = {0.62f, 0.45f, 0.28f},
+        .terminalCol= {0.30f, 0.28f, 0.32f},
+        .emissiveScale = 0.75f,
+    },
+    // Organic
+    {
+        .pipeCeilingPct   = 10, .lampCeilingPct   = 5,  .beamCeilingPct  = 8,
+        .grateFloorPct    = 2,  .crateCornerPct   = 3,  .benchWallPct    = 2,
+        .crystalFloorPpm  = 30, .acidFloorPpm     = 15,
+        .cabinetWallPct   = 2,  .lockerWallPct    = 2,  .cameraWallPct   = 1,
+        .terminalWallPct  = 1,  .fungalWallPpm    = 60,
+        .supportBeamPct   = 20, .pillarPct        = 15,
+        .pipeCol    = {0.30f, 0.45f, 0.28f},
+        .rustCol    = {0.40f, 0.55f, 0.30f},
+        .grateCol   = {0.28f, 0.38f, 0.22f},
+        .warmLampCol= {0.60f, 0.90f, 0.50f},
+        .coolLampCol= {0.40f, 0.85f, 0.70f},
+        .crystalCol = {0.25f, 0.95f, 0.45f},
+        .acidCol    = {0.10f, 0.95f, 0.20f},
+        .fungalCol  = {0.40f, 0.75f, 0.30f},
+        .metalCol   = {0.32f, 0.42f, 0.28f},
+        .woodenCol  = {0.40f, 0.60f, 0.30f},
+        .terminalCol= {0.20f, 0.30f, 0.20f},
+        .emissiveScale = 1.4f,
+    },
+    // Anomalous
+    {
+        .pipeCeilingPct   = 30, .lampCeilingPct   = 8,  .beamCeilingPct  = 12,
+        .grateFloorPct    = 20, .crateCornerPct   = 8,  .benchWallPct    = 4,
+        .crystalFloorPpm  = 80, .acidFloorPpm     = 25,
+        .cabinetWallPct   = 12, .lockerWallPct    = 5,  .cameraWallPct   = 15,
+        .terminalWallPct  = 18, .fungalWallPpm    = 20,
+        .supportBeamPct   = 30, .pillarPct        = 18,
+        .pipeCol    = {0.55f, 0.20f, 0.65f},
+        .rustCol    = {0.70f, 0.25f, 0.40f},
+        .grateCol   = {0.40f, 0.15f, 0.55f},
+        .warmLampCol= {0.95f, 0.40f, 0.80f},
+        .coolLampCol= {0.60f, 0.20f, 1.00f},
+        .crystalCol = {0.90f, 0.10f, 1.00f},
+        .acidCol    = {0.60f, 0.95f, 0.10f},
+        .fungalCol  = {0.70f, 0.30f, 0.90f},
+        .metalCol   = {0.45f, 0.20f, 0.55f},
+        .woodenCol  = {0.30f, 0.15f, 0.40f},
+        .terminalCol= {0.25f, 0.10f, 0.35f},
+        .emissiveScale = 2.0f,
+    },
+    // Derelict
+    {
+        .pipeCeilingPct   = 25, .lampCeilingPct   = 8,  .beamCeilingPct  = 6,
+        .grateFloorPct    = 10, .crateCornerPct   = 6,  .benchWallPct    = 3,
+        .crystalFloorPpm  = 5,  .acidFloorPpm     = 8,
+        .cabinetWallPct   = 4,  .lockerWallPct    = 4,  .cameraWallPct   = 2,
+        .terminalWallPct  = 1,  .fungalWallPpm    = 15,
+        .supportBeamPct   = 25, .pillarPct        = 8,
+        .pipeCol    = {0.35f, 0.30f, 0.28f},
+        .rustCol    = {0.58f, 0.32f, 0.18f},
+        .grateCol   = {0.28f, 0.25f, 0.22f},
+        .warmLampCol= {0.70f, 0.55f, 0.38f},
+        .coolLampCol= {0.55f, 0.62f, 0.70f},
+        .crystalCol = {0.50f, 0.12f, 0.70f},
+        .acidCol    = {0.10f, 0.60f, 0.18f},
+        .fungalCol  = {0.35f, 0.55f, 0.22f},
+        .metalCol   = {0.28f, 0.26f, 0.24f},
+        .woodenCol  = {0.38f, 0.25f, 0.15f},
+        .terminalCol= {0.18f, 0.16f, 0.14f},
+        .emissiveScale = 0.45f,
+    },
 };
 
-// ────────────────────────── helpers ──────────────────────────────────────────
+// ── RNG ───────────────────────────────────────────────────────────────────────
 
-/*static*/ std::uint32_t
-EnvDetail::spatial_hash(int x, int y, int z, std::uint32_t seed) noexcept {
-    std::uint32_t h = static_cast<std::uint32_t>(x) * 73856093u ^
-                      static_cast<std::uint32_t>(y) * 19349663u ^
-                      static_cast<std::uint32_t>(z) * 83492791u ^ seed;
-    h = (h ^ (h >> 16)) * 0x45d9f3bu;
-    h = (h ^ (h >> 16)) * 0x45d9f3bu;
-    return h ^ (h >> 16);
+/*static*/ std::uint32_t EnvDetail::spatial_hash(int x, int y, int z,
+                                                   std::uint32_t seed) noexcept {
+    std::uint32_t h = seed ^ (static_cast<std::uint32_t>(x) * 2654435761u)
+                            ^ (static_cast<std::uint32_t>(y) * 2246822519u)
+                            ^ (static_cast<std::uint32_t>(z) * 3266489917u);
+    h ^= h >> 16;
+    h *= 0x45d9f3bu;
+    h ^= h >> 16;
+    return h;
 }
 
-// ────────────────────────── biome classification ──────────────────────────────
-
-/*static*/ Biome
-EnvDetail::classify_cell(const MacroGrid& grid, int x, int y, int z,
-                          std::uint32_t seed) noexcept {
-    // Count weighted material indicators in 3×3×3 neighbourhood
-    int cntAcid    = 0;
-    int cntFungal  = 0;  // kMatWaterMark or mould-hinting mats
-    int cntSolid   = 0;
-    int cntAir     = 0;
-
-    for (int dz = -1; dz <= 1; ++dz) {
-        for (int dy = -1; dy <= 1; ++dy) {
-            for (int dx = -1; dx <= 1; ++dx) {
-                CellType m = grid.cell(x+dx, y+dy, z+dz);
-                if (m == kCellAir)            { cntAir++;    continue; }
-                cntSolid++;
-                if (m == kMatAcidPool)        cntAcid    += 3;
-                if (m == kMatWaterMark)       cntFungal  += 2;
-                if (m == kMatElectricGrate)   cntAcid    += 1;
-            }
-        }
-    }
-
-    // Depth heuristic: lower y = more organic / anomalous pressure
-    int depth = kMacroDim - 1 - y;   // 0 at top, 127 at bottom
-    int depthBias = depth / 20;       // 0..6
-
-    // Spatial noise for variety
-    std::uint32_t rng = spatial_hash(x, y, z, seed ^ kSaltClassify);
-    int noise = static_cast<int>(rng % 10);  // 0..9
-
-    // Scoring: highest score wins biome
-    int scoreIndustrial  = 20 + noise;
-    int scoreResidential = 10 + noise / 2;
-    int scoreOrganic     = cntFungal * 4 + depthBias * 3 + noise;
-    int scoreAnomalous   = cntAcid   * 5 + depthBias * 2 + noise / 2;
-    int scoreDerelict    = (cntSolid > 20 ? 15 : 0) + noise;
-
-    // Override: acid pool cells near lots of acid material -> Anomalous
-    CellType below = grid.cell(x, y-1, z);
-    if (below == kMatAcidPool)    scoreAnomalous += 40;
-    if (below == kMatWaterMark)   scoreOrganic   += 30;
-
-    // Structural features -> Industrial
-    if (cntAir < 5 && cntSolid > 22)  scoreDerelict  += 20;
-    if (y > kMacroDim - 20)           scoreResidential += 15; // near surface = residential
-
-    // Pick winner
-    int best = scoreIndustrial;
-    Biome winner = Biome::Industrial;
-    if (scoreResidential > best) { best = scoreResidential; winner = Biome::Residential; }
-    if (scoreOrganic     > best) { best = scoreOrganic;     winner = Biome::Organic;     }
-    if (scoreAnomalous   > best) { best = scoreAnomalous;   winner = Biome::Anomalous;   }
-    if (scoreDerelict    > best) {                           winner = Biome::Derelict;    }
-
-    return winner;
+static inline float rng01(std::uint32_t& s) noexcept {
+    s ^= s << 13; s ^= s >> 17; s ^= s << 5;
+    return static_cast<float>(s & 0x00FFFFFFu) * (1.0f / 16777216.0f);
 }
 
-void EnvDetail::classify(const MacroGrid& grid, std::uint32_t seed) noexcept {
-    // Pass 1: classify each air cell
-    for (int z = 0; z < kMacroDim; ++z) {
-        for (int y = 0; y < kMacroDim; ++y) {
-            for (int x = 0; x < kMacroDim; ++x) {
-                if (grid.cell(x, y, z) != kCellAir) {
-                    biomeMap_.set(x, y, z, Biome::Industrial); // solid = doesn't matter
-                    continue;
-                }
-                Biome b = classify_cell(grid, x, y, z, seed);
-                biomeMap_.set(x, y, z, b);
-            }
-        }
-    }
-
-    // Pass 2: biome blob propagation — smooth out salt-and-pepper noise.
-    // An air cell with >=4 same-biome air neighbours adopts that biome.
-    // Single pass forward sweep is cheap and enough for visual continuity.
-    for (int z = 1; z < kMacroDim-1; ++z) {
-        for (int y = 1; y < kMacroDim-1; ++y) {
-            for (int x = 1; x < kMacroDim-1; ++x) {
-                if (grid.cell(x, y, z) != kCellAir) continue;
-                // Count neighbours per biome
-                int votes[kBiomeCount] = {};
-                for (int dz = -1; dz <= 1; ++dz) {
-                    for (int dy = -1; dy <= 1; ++dy) {
-                        for (int dx = -1; dx <= 1; ++dx) {
-                            if (dx == 0 && dy == 0 && dz == 0) continue;
-                            if (grid.cell(x+dx, y+dy, z+dz) == kCellAir) {
-                                int bi = static_cast<int>(biomeMap_.at(x+dx, y+dy, z+dz));
-                                if (bi < kBiomeCount) votes[bi]++;
-                            }
-                        }
-                    }
-                }
-                int myBiome = static_cast<int>(biomeMap_.at(x, y, z));
-                // Find dominant neighbour biome
-                int bestVotes = 0;
-                int bestBiome = myBiome;
-                for (int b = 0; b < kBiomeCount; ++b) {
-                    if (votes[b] > bestVotes) { bestVotes = votes[b]; bestBiome = b; }
-                }
-                // If majority (>=14 of 26 neighbours) agree and disagree with us, adopt
-                if (bestVotes >= 14 && bestBiome != myBiome) {
-                    biomeMap_.set(x, y, z, static_cast<Biome>(bestBiome));
-                }
-            }
-        }
-    }
-
-    // Log biome stats
-    int counts[kBiomeCount] = {};
-    for (int z = 0; z < kMacroDim; ++z)
-        for (int y = 0; y < kMacroDim; ++y)
-            for (int x = 0; x < kMacroDim; ++x)
-                if (grid.cell(x, y, z) == kCellAir)
-                    counts[static_cast<int>(biomeMap_.at(x, y, z))]++;
-
-    std::fprintf(stderr,
-        "[env_detail] biome classification done: "
-        "Industrial=%d Residential=%d Organic=%d Anomalous=%d Derelict=%d\n",
-        counts[0], counts[1], counts[2], counts[3], counts[4]);
+static inline bool pct_roll(std::uint32_t& s, std::uint32_t pct) noexcept {
+    return (s % 100u) < pct;
 }
 
-// ────────────────────────── placement helpers ─────────────────────────────────
+static inline bool ppm_roll(std::uint32_t& s, std::uint32_t ppm) noexcept {
+    return (s % 1000u) < ppm;
+}
 
-void EnvDetail::place_ceiling_props(const MacroGrid& grid, PropPass& pass,
-                                     int x, int y, int z,
-                                     const BiomePropConfig& cfg,
-                                     std::uint32_t seed) const noexcept {
-    float wx = static_cast<float>(x) * kCell;
-    float wy = static_cast<float>(y) * kCell;
-    float wz = static_cast<float>(z) * kCell;
+// ── classify: pass 1 ──────────────────────────────────────────────────────────
 
-    bool solidAbove = is_solid(grid.cell(x, y+1, z));
-    if (!solidAbove) return;
+/*static*/ Biome EnvDetail::classify_cell(const giga::MacroGrid& grid,
+                                            int x, int y, int z,
+                                            std::uint32_t seed) noexcept {
+    // Score each candidate biome from material census in 3x3x3 neighbourhood
+    int score[kBiomeCount] = {};
 
-    // Determine open directions
-    bool openW = !is_solid(grid.cell(x-1, y, z));
-    bool openE = !is_solid(grid.cell(x+1, y, z));
-    bool openN = !is_solid(grid.cell(x, y, z+1));
-    bool openS = !is_solid(grid.cell(x, y, z-1));
-    int nOpen = (openW?1:0) + (openE?1:0) + (openN?1:0) + (openS?1:0);
+    // Electric/acid hazards → Anomalous
+    for (int dz = -1; dz <= 1; ++dz)
+    for (int dy = -1; dy <= 1; ++dy)
+    for (int dx = -1; dx <= 1; ++dx) {
+        giga::CellType t = grid.cell(x+dx, y+dy, z+dz);
+        if (t == giga::kMatElectricGrate || t == giga::kMatAcidPool)
+            score[static_cast<int>(Biome::Anomalous)] += 3;
+        else if (t == giga::kMatFactoryWall || t == giga::kMatTread)
+            score[static_cast<int>(Biome::Industrial)] += 1;
+        else if (t == giga::kMatPlaster || t == giga::kMatParquet)
+            score[static_cast<int>(Biome::Residential)] += 1;
+        else if (t == giga::kMatRust || t == giga::kMatRubble)
+            score[static_cast<int>(Biome::Derelict)] += 1;
+    }
 
-    bool ceilOccupied = false;
+    // Organic: high y (upper floors) + no metal materials
+    if (y > giga::kMacroDim * 3 / 4)
+        score[static_cast<int>(Biome::Organic)] += 2;
 
-    // Pipes
-    std::uint32_t rngPipe = spatial_hash(x, y, z, seed ^ kSaltCeiling);
-    if (!ceilOccupied && (rngPipe % 100 < cfg.pipeCeilingPct)) {
-        PropInstance pi{};
-        pi.origin    = {wx, wy + 1.70f, wz};
-        pi.yaw       = (!openW && !openE) ? 0.0f : kHalfPi;
-        pi.color     = cfg.pipeCol;
-        pi.matId     = 4;
-        pi.animPhase = static_cast<std::uint8_t>(rngPipe & 0xFFu);
+    // Spatial hash salt: add noise to avoid large uniform regions
+    std::uint32_t h = spatial_hash(x >> 3, y >> 3, z >> 3, seed);
+    score[h % kBiomeCount] += 1;
 
-        PropShape shape = PropShape::Pipe;
-        std::uint32_t sub = spatial_hash(x, y, z, seed ^ kSaltSubA);
-        if (nOpen >= 3)          shape = PropShape::PipeTee;
-        else if (sub % 5 == 0)  shape = PropShape::PipeElbow;
-        else if (sub % 5 == 1)  shape = PropShape::Valve;
+    // Pick highest score
+    int best = 0;
+    for (int i = 1; i < kBiomeCount; ++i)
+        if (score[i] > score[best]) best = i;
 
-        pass.add_instance(shape, pi);
+    return static_cast<Biome>(best);
+}
+
+void EnvDetail::classify(const giga::MacroGrid& grid, std::uint32_t seed) noexcept {
+    const int N = giga::kMacroDim;
+    // Pass 1: per-cell classification
+    for (int z = 0; z < N; ++z)
+    for (int y = 0; y < N; ++y)
+    for (int x = 0; x < N; ++x) {
+        if (grid.cell(x, y, z) != giga::kCellAir) continue; // only classify air
+        biomeMap_.set(x, y, z, classify_cell(grid, x, y, z, seed));
+    }
+
+    // Pass 2: 3x3x3 majority smoothing
+    BiomeMap tmp = biomeMap_;
+    for (int z = 1; z < N-1; ++z)
+    for (int y = 1; y < N-1; ++y)
+    for (int x = 1; x < N-1; ++x) {
+        if (grid.cell(x, y, z) != giga::kCellAir) continue;
+        int votes[kBiomeCount] = {};
+        for (int dz = -1; dz <= 1; ++dz)
+        for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx)
+            votes[static_cast<int>(tmp.at(x+dx, y+dy, z+dz))]++;
+        int best = 0;
+        for (int i = 1; i < kBiomeCount; ++i)
+            if (votes[i] > votes[best]) best = i;
+        biomeMap_.set(x, y, z, static_cast<Biome>(best));
+    }
+
+    std::fprintf(stderr, "[envdetail] classify done\n");
+}
+
+// ── helpers: check solid neighbours ──────────────────────────────────────────
+
+static bool has_solid_above(const giga::MacroGrid& g, int x, int y, int z) {
+    return g.cell(x, y+1, z) != giga::kCellAir;
+}
+static bool has_solid_below(const giga::MacroGrid& g, int x, int y, int z) {
+    return g.cell(x, y-1, z) != giga::kCellAir;
+}
+static bool has_solid_side(const giga::MacroGrid& g, int x, int y, int z) {
+    return g.cell(x+1,y,z) != giga::kCellAir || g.cell(x-1,y,z) != giga::kCellAir
+        || g.cell(x,y,z+1) != giga::kCellAir || g.cell(x,y,z-1) != giga::kCellAir;
+}
+
+// ── place helpers ──────────────────────────────────────────────────────────────
+
+static vec3 cell_world(int x, int y, int z) {
+    const float cs = giga::kCellSize;
+    return {x * cs, y * cs, z * cs};
+}
+
+static PropInstance make_inst(vec3 org, float yaw, vec3 col,
+                               std::uint8_t mat, std::uint8_t emissive,
+                               std::uint8_t flags = 0, std::uint8_t phase = 0) {
+    PropInstance pi;
+    pi.origin    = org;
+    pi.yaw       = yaw;
+    pi.color     = col;
+    pi.matId     = mat;
+    pi.emissive  = emissive;
+    pi.flags     = flags;
+    pi.animPhase = phase;
+    return pi;
+}
+
+// ── populate: ceiling props ────────────────────────────────────────────────────
+
+void EnvDetail::place_ceiling(const giga::MacroGrid& grid, PropPass& pass,
+                               int x, int y, int z,
+                               const BiomePropConfig& cfg,
+                               std::uint32_t seed) const noexcept {
+    if (!has_solid_above(grid, x, y, z)) return;
+
+    std::uint32_t s = seed;
+    const float cs  = giga::kCellSize;
+    vec3 wp = cell_world(x, y, z);
+
+    // Pipe ceiling
+    if (pct_roll(s, cfg.pipeCeilingPct)) {
+        float yaw = rng01(s) * 3.14159f;
+        std::uint8_t em = static_cast<std::uint8_t>(
+            30.0f * cfg.emissiveScale);
+        pass.add_instance(PropShape::Pipe,
+            make_inst({wp.x, wp.y + cs * 0.85f, wp.z},
+                      yaw, cfg.pipeCol, 12, em, 0,
+                      static_cast<std::uint8_t>(s & 0xFF)));
         ++totalPlaced_;
-        ceilOccupied = true;
     }
-
-    // Flood lamps
-    std::uint32_t rngLamp = spatial_hash(x, y, z, seed ^ (kSaltCeiling ^ kSaltSubB));
-    if (!ceilOccupied && (rngLamp % 100 < cfg.lampCeilingPct) &&
-        (nOpen >= 3 || (x % 6 == 0 && z % 6 == 0))) {
-        PropInstance li{};
-        li.origin    = {wx, wy + 1.70f, wz};
-        li.yaw       = static_cast<float>(rngLamp % 4) * kHalfPi;
-        li.color     = (rngLamp & 1) ? cfg.warmLampCol : cfg.coolLampCol;
-        li.matId     = 0;
-        li.emissive  = static_cast<std::uint8_t>(std::min(255.0f, 240.0f * cfg.emissiveScale));
-        li.animPhase = static_cast<std::uint8_t>(rngLamp & 0xFFu);
-
-        pass.add_instance(PropShape::FloodLamp, li);
+    // Lamp
+    if (pct_roll(s, cfg.lampCeilingPct)) {
+        bool warm    = rng01(s) > 0.5f;
+        vec3 col     = warm ? cfg.warmLampCol : cfg.coolLampCol;
+        std::uint8_t em = static_cast<std::uint8_t>(
+            180.0f * cfg.emissiveScale);
+        std::uint8_t ph = static_cast<std::uint8_t>(
+            rng01(s) * 255.0f);
+        pass.add_instance(PropShape::FloodLamp,
+            make_inst({wp.x, wp.y + cs * 0.88f, wp.z},
+                      rng01(s) * 6.28f, col, 7, em, 0, ph));
         ++totalPlaced_;
-        ceilOccupied = true;
     }
-
-    // Support beams (full-room span)
-    std::uint32_t rngBeam = spatial_hash(x, y, z, seed ^ kSaltStruct);
-    if (!ceilOccupied && (x % 8 == 0) && (z % 8 == 0) &&
-        is_solid(grid.cell(x, y-1, z)) &&
-        (rngBeam % 100 < cfg.beamCeilingPct)) {
-        PropInstance bi{};
-        bi.origin    = {wx, wy, wz};
-        bi.yaw       = static_cast<float>(rngBeam % 2) * kHalfPi;
-        bi.color     = cfg.metalCol;
-        bi.matId     = 4;
-        bi.animPhase = static_cast<std::uint8_t>(rngBeam & 0xFFu);
-
-        pass.add_instance(PropShape::SupportBeam, bi);
+    // Beam
+    if (pct_roll(s, cfg.beamCeilingPct)) {
+        float yaw = (rng01(s) > 0.5f) ? 0.0f : 1.5708f;
+        pass.add_instance(PropShape::SupportBeam,
+            make_inst({wp.x, wp.y + cs * 0.80f, wp.z},
+                      yaw, cfg.metalCol, 12, 0, 0, 0));
         ++totalPlaced_;
-        (void)ceilOccupied; // beam doesn't block lamp
+    }
+    // Railing / round grate vent
+    if (pct_roll(s, 8)) {
+        pass.add_instance(PropShape::RoundGrate,
+            make_inst({wp.x, wp.y + cs * 0.88f, wp.z},
+                      rng01(s) * 6.28f, cfg.grateCol, 9, 5, 0, 0));
+        ++totalPlaced_;
     }
 }
 
-void EnvDetail::place_floor_props(const MacroGrid& grid, PropPass& pass,
+// ── populate: floor props ──────────────────────────────────────────────────────
+
+void EnvDetail::place_floor(const giga::MacroGrid& grid, PropPass& pass,
+                              int x, int y, int z,
+                              const BiomePropConfig& cfg,
+                              std::uint32_t seed) const noexcept {
+    if (!has_solid_below(grid, x, y, z)) return;
+
+    std::uint32_t s = seed ^ 0xABCDu;
+    vec3 wp = cell_world(x, y, z);
+
+    // Grate floor
+    if (pct_roll(s, cfg.grateFloorPct)) {
+        pass.add_instance(PropShape::Grate,
+            make_inst(wp, rng01(s) * 1.5708f, cfg.grateCol, 9,
+                      static_cast<std::uint8_t>(10.0f * cfg.emissiveScale)));
+        ++totalPlaced_;
+    }
+    // Crate corner
+    if (pct_roll(s, cfg.crateCornerPct)) {
+        bool longCrate = rng01(s) > 0.65f;
+        PropShape shape = longCrate ? PropShape::CrateLong : PropShape::CrateBox;
+        float yaw = static_cast<float>(static_cast<int>(rng01(s) * 4.0f)) * 1.5708f;
+        pass.add_instance(shape,
+            make_inst(wp, yaw, cfg.metalCol, 14, 0, 0, 0));
+        ++totalPlaced_;
+    }
+    // Crystal floor (Organic/Anomalous)
+    if (ppm_roll(s, cfg.crystalFloorPpm)) {
+        std::uint8_t em = static_cast<std::uint8_t>(220.0f * cfg.emissiveScale);
+        pass.add_instance(PropShape::CrystalCluster,
+            make_inst(wp, rng01(s) * 6.28f, cfg.crystalCol, 0, em, 0,
+                      static_cast<std::uint8_t>(s & 0xFF)));
+        ++totalPlaced_;
+    }
+    // Acid pool
+    if (ppm_roll(s, cfg.acidFloorPpm)) {
+        std::uint8_t em = static_cast<std::uint8_t>(180.0f * cfg.emissiveScale);
+        pass.add_instance(PropShape::AcidPool,
+            make_inst(wp, 0.0f, cfg.acidCol, 0, em, 0,
+                      static_cast<std::uint8_t>(s & 0xFF)));
+        ++totalPlaced_;
+    }
+    // Barrel
+    if (pct_roll(s, 12)) {
+        pass.add_instance(PropShape::Barrel,
+            make_inst(wp, rng01(s) * 6.28f, cfg.rustCol, 14, 0, 0, 0));
+        ++totalPlaced_;
+    }
+    // Bench
+    if (pct_roll(s, cfg.benchWallPct)) {
+        pass.add_instance(PropShape::BenchSlab,
+            make_inst(wp, rng01(s) * 6.28f, cfg.woodenCol, 9, 0, 0, 0));
+        ++totalPlaced_;
+    }
+    // Stair step at floor level
+    if (pct_roll(s, 5)) {
+        pass.add_instance(PropShape::StairStep,
+            make_inst(wp, static_cast<float>(s & 3u) * 1.5708f,
+                      cfg.metalCol, 12, 0, 0, 0));
+        ++totalPlaced_;
+    }
+}
+
+// ── populate: wall props ───────────────────────────────────────────────────────
+
+void EnvDetail::place_walls(const giga::MacroGrid& grid, PropPass& pass,
+                              int x, int y, int z,
+                              const BiomePropConfig& cfg,
+                              std::uint32_t seed) const noexcept {
+    if (!has_solid_side(grid, x, y, z)) return;
+
+    std::uint32_t s = seed ^ 0xDEADu;
+    vec3 wp = cell_world(x, y, z);
+    const float cs = giga::kCellSize;
+
+    // Electrical cabinet
+    if (pct_roll(s, cfg.cabinetWallPct)) {
+        float yaw = static_cast<float>(s & 3u) * 1.5708f;
+        std::uint8_t em = static_cast<std::uint8_t>(8.0f * cfg.emissiveScale);
+        pass.add_instance(PropShape::CabinetBox,
+            make_inst(wp, yaw, cfg.terminalCol, 12, em, 0, 0));
+        ++totalPlaced_;
+    }
+    // Locker
+    if (pct_roll(s, cfg.lockerWallPct)) {
+        float yaw = static_cast<float>(s & 3u) * 1.5708f;
+        pass.add_instance(PropShape::LockerUnit,
+            make_inst(wp, yaw, cfg.metalCol, 9, 0, 0, 0));
+        ++totalPlaced_;
+    }
+    // Security camera
+    if (pct_roll(s, cfg.cameraWallPct)) {
+        float yaw = rng01(s) * 6.28f;
+        std::uint8_t em = static_cast<std::uint8_t>(18.0f * cfg.emissiveScale);
+        pass.add_instance(PropShape::SecurityCamera,
+            make_inst({wp.x, wp.y + cs * 0.75f, wp.z},
+                      yaw, cfg.metalCol, 12, em, 0,
+                      static_cast<std::uint8_t>(s & 0xFF)));
+        ++totalPlaced_;
+    }
+    // Terminal
+    if (pct_roll(s, cfg.terminalWallPct)) {
+        float yaw = static_cast<float>(s & 3u) * 1.5708f;
+        std::uint8_t em = static_cast<std::uint8_t>(35.0f * cfg.emissiveScale);
+        pass.add_instance(PropShape::Terminal,
+            make_inst(wp, yaw, cfg.terminalCol, 7, em, 0,
+                      static_cast<std::uint8_t>(rng01(s) * 255.0f)));
+        ++totalPlaced_;
+    }
+    // Fungal wall
+    if (ppm_roll(s, cfg.fungalWallPpm)) {
+        float yaw = rng01(s) * 6.28f;
+        std::uint8_t em = static_cast<std::uint8_t>(60.0f * cfg.emissiveScale);
+        pass.add_instance(PropShape::FungalColumn,
+            make_inst(wp, yaw, cfg.fungalCol, 0, em, 0,
+                      static_cast<std::uint8_t>(rng01(s) * 255.0f)));
+        ++totalPlaced_;
+    }
+    // Control panel
+    if (pct_roll(s, 6)) {
+        pass.add_instance(PropShape::ControlPanel,
+            make_inst(wp, static_cast<float>(s & 3u) * 1.5708f,
+                      cfg.terminalCol, 12,
+                      static_cast<std::uint8_t>(20.0f * cfg.emissiveScale)));
+        ++totalPlaced_;
+    }
+    // Valve on wall pipe
+    if (pct_roll(s, 10)) {
+        std::uint8_t ph = static_cast<std::uint8_t>(rng01(s) * 255.0f);
+        pass.add_instance(PropShape::Valve,
+            make_inst(wp, rng01(s) * 6.28f, cfg.rustCol, 14, 5, 0, ph));
+        ++totalPlaced_;
+    }
+    // Railing on elevated walkways
+    if (pct_roll(s, 8)) {
+        pass.add_instance(PropShape::Railing,
+            make_inst(wp, static_cast<float>(s & 3u) * 1.5708f,
+                      cfg.metalCol, 12, 0, 0, 0));
+        ++totalPlaced_;
+    }
+}
+
+// ── populate: structural props ────────────────────────────────────────────────
+
+void EnvDetail::place_structural(const giga::MacroGrid& grid, PropPass& pass,
                                    int x, int y, int z,
                                    const BiomePropConfig& cfg,
                                    std::uint32_t seed) const noexcept {
-    float wx = static_cast<float>(x) * kCell;
-    float wy = static_cast<float>(y) * kCell;
-    float wz = static_cast<float>(z) * kCell;
+    std::uint32_t s = seed ^ 0xFEEDu;
 
-    CellType below = grid.cell(x, y-1, z);
-    if (!is_solid(below)) return;
-
-    bool openW = !is_solid(grid.cell(x-1, y, z));
-    bool openE = !is_solid(grid.cell(x+1, y, z));
-    bool openN = !is_solid(grid.cell(x, y, z+1));
-    bool openS = !is_solid(grid.cell(x, y, z-1));
-    int nOpen = (openW?1:0) + (openE?1:0) + (openN?1:0) + (openS?1:0);
-
-    bool floorOccupied = false;
-
-    // Grates
-    std::uint32_t rngGrate = spatial_hash(x, y, z, seed ^ kSaltFloor);
-    if (!floorOccupied && (below == kMatElectricGrate || (rngGrate % 100 < cfg.grateFloorPct))) {
-        PropInstance gi{};
-        gi.origin = {wx, wy + 0.01f, wz};
-        gi.yaw    = (!openW && !openE) ? 0.0f : kHalfPi;
-        gi.color  = cfg.grateCol;
-        gi.matId  = 4;
-        gi.animPhase = static_cast<std::uint8_t>(rngGrate & 0xFFu);
-
-        PropShape shape = (rngGrate & 2) ? PropShape::RoundGrate : PropShape::Grate;
-        if (below == kMatElectricGrate) {
-            gi.color   = {0.30f, 0.65f, 0.95f};
-            gi.emissive = static_cast<std::uint8_t>(140.0f * cfg.emissiveScale);
-            gi.flags   = 0x04;
-            shape      = PropShape::Grate;
+    // Support beams span full cell height — only where ceiling + floor solid
+    if (has_solid_above(grid, x, y, z) && has_solid_below(grid, x, y, z)) {
+        if (pct_roll(s, cfg.supportBeamPct)) {
+            float yaw = (rng01(s) > 0.5f) ? 0.0f : 1.5708f;
+            pass.add_instance(PropShape::SupportBeam,
+                make_inst(cell_world(x, y, z), yaw, cfg.metalCol, 12, 0));
+            ++totalPlaced_;
         }
-
-        pass.add_instance(shape, gi);
-        ++totalPlaced_;
-        floorOccupied = true;
     }
 
-    // Acid pools (material or per-mille chance)
-    std::uint32_t rngAcid = spatial_hash(x, y, z, seed ^ (kSaltFloor ^ kSaltSubA));
-    if (!floorOccupied && (below == kMatAcidPool || (rngAcid % 1000 < cfg.acidFloorPpm))) {
-        PropInstance ai{};
-        ai.origin    = {wx, wy + 0.01f, wz};
-        ai.yaw       = static_cast<float>(rngAcid % 360) * (kPi / 180.0f);
-        ai.color     = cfg.acidCol;
-        ai.matId     = 0;
-        ai.emissive  = static_cast<std::uint8_t>(140.0f * cfg.emissiveScale);
-        ai.flags     = 0x04;
-        ai.animPhase = static_cast<std::uint8_t>(rngAcid & 0xFFu);
-
-        pass.add_instance(PropShape::AcidPool, ai);
+    // Pillars (vertical cylinders)
+    if (pct_roll(s, cfg.pillarPct)) {
+        bool arch = rng01(s) > 0.7f;
+        PropShape shape = arch ? PropShape::Arch : PropShape::Cylinder;
+        std::uint8_t em = static_cast<std::uint8_t>(5.0f * cfg.emissiveScale);
+        pass.add_instance(shape,
+            make_inst(cell_world(x, y, z), rng01(s) * 6.28f,
+                      cfg.metalCol, 12, em, 0, 0));
         ++totalPlaced_;
-        floorOccupied = true;
     }
 
-    // Crystal clusters
-    std::uint32_t rngCrystal = spatial_hash(x, y, z, seed ^ (kSaltFloor ^ kSaltSubB));
-    if (!floorOccupied && (rngCrystal % 1000 < cfg.crystalFloorPpm)) {
-        PropInstance ci{};
-        ci.origin    = {wx, wy + 0.01f, wz};
-        ci.yaw       = static_cast<float>(rngCrystal % 360) * (kPi / 180.0f);
-        ci.color     = cfg.crystalCol;
-        ci.matId     = 0;
-        ci.emissive  = static_cast<std::uint8_t>(200.0f * cfg.emissiveScale);
-        ci.flags     = 0x04;
-        ci.animPhase = static_cast<std::uint8_t>(rngCrystal & 0xFFu);
-
-        pass.add_instance(PropShape::CrystalCluster, ci);
-        ++totalPlaced_;
-        floorOccupied = true;
-    }
-
-    // Crates in corners (nOpen <= 2, both x-wall and z-wall present)
-    std::uint32_t rngCrate = spatial_hash(x, y, z, seed ^ (kSaltFloor ^ kSaltSubC));
-    bool hasXwall = (is_solid(grid.cell(x-1,y,z)) || is_solid(grid.cell(x+1,y,z)));
-    bool hasZwall = (is_solid(grid.cell(x,y,z-1)) || is_solid(grid.cell(x,y,z+1)));
-    if (!floorOccupied && hasXwall && hasZwall && nOpen <= 2 && (rngCrate % 100 < cfg.crateCornerPct)) {
-        PropInstance cr{};
-        cr.origin    = {wx, wy + 0.01f, wz};
-        cr.yaw       = static_cast<float>(rngCrate % 360) * (kPi / 180.0f);
-        cr.color     = cfg.woodenCol;
-        cr.matId     = 2;
-        cr.animPhase = static_cast<std::uint8_t>(rngCrate & 0xFFu);
-
-        PropShape shape = PropShape::CrateBox;
-        std::uint32_t csel = rngCrate % 5;
-        if (csel == 0)      shape = PropShape::CrateLong;
-        else if (csel == 1) { shape = PropShape::Barrel;    cr.color = {0.40f, 0.28f, 0.18f}; }
-        else if (csel == 2) { shape = PropShape::StairStep; cr.color = {0.40f, 0.40f, 0.42f}; cr.matId = 1; }
-
-        pass.add_instance(shape, cr);
-        ++totalPlaced_;
-        floorOccupied = true;
-    }
-
-    // Benches along walls
-    std::uint32_t rngBench = spatial_hash(x, y, z, seed ^ (kSaltFloor ^ kSaltSubD));
-    bool solidWall = (is_solid(grid.cell(x-1,y,z)) || is_solid(grid.cell(x+1,y,z)) ||
-                      is_solid(grid.cell(x,y,z-1)) || is_solid(grid.cell(x,y,z+1)));
-    if (!floorOccupied && solidWall && (rngBench % 100 < cfg.benchWallPct)) {
-        PropInstance bn{};
-        bn.origin = {wx, wy + 0.01f, wz};
-        if      (is_solid(grid.cell(x-1,y,z))) bn.yaw = 0.0f;
-        else if (is_solid(grid.cell(x+1,y,z))) bn.yaw = kPi;
-        else if (is_solid(grid.cell(x,y,z-1))) bn.yaw = kHalfPi;
-        else                                    bn.yaw = kHalfPi * 3.0f;
-        bn.color  = cfg.woodenCol;
-        bn.matId  = 2;
-        bn.animPhase = static_cast<std::uint8_t>(rngBench & 0xFFu);
-
-        pass.add_instance(PropShape::BenchSlab, bn);
-        ++totalPlaced_;
-        floorOccupied = true;
-    }
-
-    // Railings on open ledges
-    std::uint32_t rngRail = spatial_hash(x, y, z, seed ^ (kSaltFloor ^ 0xF0F0F0F0u));
-    if (!floorOccupied && !is_solid(grid.cell(x, y+1, z)) && nOpen >= 2 && (rngRail % 100 < 8)) {
-        PropInstance rl{};
-        rl.origin = {wx, wy + 0.01f, wz};
-        rl.yaw    = (!openW && !openE) ? 0.0f : kHalfPi;
-        rl.color  = cfg.metalCol;
-        rl.matId  = 4;
-        rl.animPhase = static_cast<std::uint8_t>(rngRail & 0xFFu);
-        pass.add_instance(PropShape::Railing, rl);
+    // Pipe elbow / tee junctions at intersections
+    if (pct_roll(s, 8)) {
+        bool isTee = rng01(s) > 0.6f;
+        PropShape shape = isTee ? PropShape::PipeTee : PropShape::PipeElbow;
+        pass.add_instance(shape,
+            make_inst(cell_world(x, y, z), rng01(s) * 6.28f,
+                      cfg.pipeCol, 12,
+                      static_cast<std::uint8_t>(8.0f * cfg.emissiveScale)));
         ++totalPlaced_;
     }
 }
 
-void EnvDetail::place_wall_props(const MacroGrid& grid, PropPass& pass,
-                                  int x, int y, int z,
-                                  const BiomePropConfig& cfg,
-                                  std::uint32_t seed) const noexcept {
-    float wx = static_cast<float>(x) * kCell;
-    float wy = static_cast<float>(y) * kCell;
-    float wz = static_cast<float>(z) * kCell;
+// ── populate: main loop ────────────────────────────────────────────────────────
 
-    bool solidBelow = is_solid(grid.cell(x, y-1, z));
-    if (!solidBelow) return;
-
-    bool solidW = is_solid(grid.cell(x-1, y, z));
-    bool solidE = is_solid(grid.cell(x+1, y, z));
-    bool solidN = is_solid(grid.cell(x, y, z+1));
-    bool solidS = is_solid(grid.cell(x, y, z-1));
-    if (!solidW && !solidE && !solidN && !solidS) return;
-
-    bool wallOccupied = false;
-
-    auto face_yaw = [&]() -> float {
-        if      (solidW) return 0.0f;
-        else if (solidE) return kPi;
-        else if (solidS) return kHalfPi;
-        else             return kHalfPi * 3.0f;
-    };
-
-    // Cabinets / control panels
-    std::uint32_t rngCab = spatial_hash(x, y, z, seed ^ kSaltWall);
-    if (!wallOccupied && (rngCab % 100 < cfg.cabinetWallPct)) {
-        PropInstance ci{};
-        ci.origin = {wx, wy, wz};
-        ci.yaw    = face_yaw();
-        ci.color  = cfg.metalCol;
-        ci.matId  = 3;
-        ci.animPhase = static_cast<std::uint8_t>(rngCab & 0xFFu);
-
-        PropShape shape = PropShape::CabinetBox;
-        std::uint32_t wsel = rngCab % 3;
-        if (wsel == 1) shape = PropShape::ControlPanel;
-        else if (wsel == 2) { shape = PropShape::CabinetBox; ci.emissive = static_cast<std::uint8_t>(80.0f * cfg.emissiveScale); }
-
-        pass.add_instance(shape, ci);
-        ++totalPlaced_;
-        wallOccupied = true;
-    }
-
-    // Lockers
-    std::uint32_t rngLocker = spatial_hash(x, y, z, seed ^ (kSaltWall ^ kSaltSubA));
-    if (!wallOccupied && (rngLocker % 100 < cfg.lockerWallPct)) {
-        PropInstance li{};
-        li.origin = {wx, wy, wz};
-        li.yaw    = face_yaw();
-        li.color  = cfg.metalCol;
-        li.matId  = 3;
-        li.animPhase = static_cast<std::uint8_t>(rngLocker & 0xFFu);
-
-        pass.add_instance(PropShape::LockerUnit, li);
-        ++totalPlaced_;
-        wallOccupied = true;
-    }
-
-    // Terminals
-    std::uint32_t rngTerm = spatial_hash(x, y, z, seed ^ (kSaltWall ^ kSaltSubB));
-    if (!wallOccupied && (rngTerm % 100 < cfg.terminalWallPct)) {
-        PropInstance ti{};
-        ti.origin   = {wx, wy, wz};
-        ti.yaw      = face_yaw();
-        ti.color    = cfg.terminalCol;
-        ti.matId    = 3;
-        ti.emissive = static_cast<std::uint8_t>(60.0f * cfg.emissiveScale);
-        ti.animPhase = static_cast<std::uint8_t>(rngTerm & 0xFFu);
-
-        pass.add_instance(PropShape::Terminal, ti);
-        ++totalPlaced_;
-        wallOccupied = true;
-    }
-
-    // Security cameras (upper wall position)
-    std::uint32_t rngCam = spatial_hash(x, y, z, seed ^ (kSaltWall ^ kSaltSubC));
-    if (!wallOccupied && is_solid(grid.cell(x, y+1, z)) &&
-        (rngCam % 100 < cfg.cameraWallPct)) {
-        PropInstance cam{};
-        cam.origin   = {wx, wy + 1.50f, wz};
-        cam.yaw      = face_yaw();
-        cam.color    = {0.40f, 0.42f, 0.45f};
-        cam.matId    = 4;
-        cam.emissive = static_cast<std::uint8_t>(120.0f * cfg.emissiveScale);
-        cam.animPhase = static_cast<std::uint8_t>(rngCam & 0xFFu);
-
-        pass.add_instance(PropShape::SecurityCamera, cam);
-        ++totalPlaced_;
-        wallOccupied = true;
-    }
-
-    // Fungal wall growth (organic biome special)
-    std::uint32_t rngFung = spatial_hash(x, y, z, seed ^ (kSaltWall ^ kSaltSubD));
-    if (!wallOccupied && (rngFung % 1000 < cfg.fungalWallPpm)) {
-        PropInstance fi{};
-        fi.origin   = {wx, wy + 0.01f, wz};
-        fi.yaw      = static_cast<float>(rngFung % 360) * (kPi / 180.0f);
-        fi.color    = cfg.fungalCol;
-        fi.matId    = 0;
-        fi.emissive = static_cast<std::uint8_t>(160.0f * cfg.emissiveScale);
-        fi.flags    = 0x04;
-        fi.animPhase = static_cast<std::uint8_t>(rngFung & 0xFFu);
-
-        pass.add_instance(PropShape::FungalColumn, fi);
-        ++totalPlaced_;
-    }
-}
-
-void EnvDetail::place_structural(const MacroGrid& grid, PropPass& pass,
-                                  int x, int y, int z,
-                                  const BiomePropConfig& cfg,
-                                  std::uint32_t seed) const noexcept {
-    float wx = static_cast<float>(x) * kCell;
-    float wy = static_cast<float>(y) * kCell;
-    float wz = static_cast<float>(z) * kCell;
-
-    bool solidBelow = is_solid(grid.cell(x, y-1, z));
-    bool solidAbove = is_solid(grid.cell(x, y+1, z));
-
-    std::uint32_t rngStruct = spatial_hash(x, y, z, seed ^ kSaltStruct);
-
-    // H-beam pillars at grid intersections
-    if (solidBelow && solidAbove && (x % 8 == 0) && (z % 8 == 0) &&
-        (rngStruct % 100 < cfg.supportBeamPct)) {
-        PropInstance bi{};
-        bi.origin = {wx, wy, wz};
-        bi.yaw    = static_cast<float>(rngStruct % 4) * kHalfPi;
-        bi.color  = cfg.metalCol;
-        bi.matId  = 4;
-        bi.animPhase = static_cast<std::uint8_t>(rngStruct & 0xFFu);
-        pass.add_instance(PropShape::SupportBeam, bi);
-        ++totalPlaced_;
-    }
-
-    // Cylinder pillars at coarser grid
-    std::uint32_t rngPillar = spatial_hash(x, y, z, seed ^ (kSaltStruct ^ kSaltSubA));
-    if (solidBelow && solidAbove && (x % 6 == 0) && (z % 6 == 0) &&
-        (rngPillar % 100 < cfg.pillarPct)) {
-        PropInstance pi{};
-        pi.origin = {wx, wy, wz};
-        pi.yaw    = 0.0f;
-        pi.color  = {0.35f, 0.35f, 0.38f};
-        pi.matId  = 1;
-        pi.animPhase = static_cast<std::uint8_t>(rngPillar & 0xFFu);
-        pass.add_instance(PropShape::Cylinder, pi);
-        ++totalPlaced_;
-    }
-
-    // Archways in tight corridors (wall on both X or both Z sides)
-    bool solidW = is_solid(grid.cell(x-1, y, z));
-    bool solidE = is_solid(grid.cell(x+1, y, z));
-    bool solidN = is_solid(grid.cell(x, y, z+1));
-    bool solidS = is_solid(grid.cell(x, y, z-1));
-
-    std::uint32_t rngArch = spatial_hash(x, y, z, seed ^ (kSaltStruct ^ kSaltSubB));
-    bool xCorridor = (solidW && solidE && !solidN && !solidS);
-    bool zCorridor = (!solidW && !solidE && solidN && solidS);
-    if (solidBelow && solidAbove && (xCorridor || zCorridor) && (rngArch % 100 < 15)) {
-        PropInstance ai{};
-        ai.origin = {wx, wy, wz};
-        ai.yaw    = xCorridor ? kHalfPi : 0.0f;
-        ai.color  = {0.40f, 0.38f, 0.35f};
-        ai.matId  = 1;
-        ai.animPhase = static_cast<std::uint8_t>(rngArch & 0xFFu);
-        pass.add_instance(PropShape::Arch, ai);
-        ++totalPlaced_;
-    }
-}
-
-// ────────────────────────── main populate ────────────────────────────────────
-
-void EnvDetail::populate(const MacroGrid& grid, PropPass& propPass,
+void EnvDetail::populate(const giga::MacroGrid& grid, PropPass& pass,
                           std::uint32_t seed) const noexcept {
     totalPlaced_ = 0;
+    const int N  = giga::kMacroDim;
 
-    for (int z = 0; z < kMacroDim; ++z) {
-        for (int y = 0; y < kMacroDim; ++y) {
-            for (int x = 0; x < kMacroDim; ++x) {
-                if (grid.cell(x, y, z) != kCellAir) continue;
+    pass.clear_instances();
 
-                Biome b = biomeMap_.at(x, y, z);
-                const BiomePropConfig& cfg =
-                    kBiomeConfigs[static_cast<int>(b)];
+    for (int z = 0; z < N; ++z)
+    for (int y = 0; y < N; ++y)
+    for (int x = 0; x < N; ++x) {
+        if (grid.cell(x, y, z) != giga::kCellAir) continue;
 
-                place_ceiling_props (grid, propPass, x, y, z, cfg, seed);
-                place_floor_props   (grid, propPass, x, y, z, cfg, seed);
-                place_wall_props    (grid, propPass, x, y, z, cfg, seed);
-                place_structural    (grid, propPass, x, y, z, cfg, seed);
-            }
-        }
+        Biome   b   = biomeMap_.at(x, y, z);
+        const BiomePropConfig& cfg = kConfigs[static_cast<int>(b)];
+        std::uint32_t s = spatial_hash(x, y, z, seed);
+
+        place_ceiling   (grid, pass, x, y, z, cfg, s ^ 0x11111111u);
+        place_floor     (grid, pass, x, y, z, cfg, s ^ 0x22222222u);
+        place_walls     (grid, pass, x, y, z, cfg, s ^ 0x33333333u);
+        place_structural(grid, pass, x, y, z, cfg, s ^ 0x44444444u);
     }
 
-    std::fprintf(stderr, "[env_detail] populate done: %u props total\n",
-                 totalPlaced_);
+    std::fprintf(stderr, "[envdetail] populate: %u props placed\n", totalPlaced_);
 }
 
 } // namespace giga::gpu

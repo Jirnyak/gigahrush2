@@ -288,12 +288,19 @@ void VulkanRenderer::begin_render_pass(float r, float g, float b) {
     vkCmdSetScissor(c, 0, 1, &sc);
 }
 
-bool VulkanRenderer::begin_frame(SDL_Window* window, float r, float g, float b) {
+bool VulkanRenderer::begin_frame_cmd(SDL_Window* window) {
     if (!acquire_frame(window)) return false;
-    // Between vkBeginCommandBuffer and vkCmdBeginRenderPass: vkCmdResetQueryPool
-    // is invalid inside a render pass instance.
     timer.frame_begin(cmd[currentFrame], currentFrame);
+    return true;
+}
+
+void VulkanRenderer::begin_pass(float r, float g, float b) {
     begin_render_pass(r, g, b);
+}
+
+bool VulkanRenderer::begin_frame(SDL_Window* window, float r, float g, float b) {
+    if (!begin_frame_cmd(window)) return false;
+    begin_pass(r, g, b);
     return true;
 }
 

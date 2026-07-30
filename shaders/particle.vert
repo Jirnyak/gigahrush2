@@ -18,6 +18,7 @@ layout(location = 2) in vec2 inUV;         // -1..+1 billboard corner
 layout(location = 0) out vec4  vColorAlpha;
 layout(location = 1) out vec2  vUV;
 layout(location = 2) out float vFog;
+layout(location = 3) out vec3  vWorldPos;
 
 layout(push_constant) uniform Push {
     mat4  viewProj;
@@ -40,6 +41,7 @@ void main() {
 
     vColorAlpha = inColorAlpha;
     vUV         = inUV;
+    vWorldPos   = corner;
 
     // Fog factor (linear)
     float d = length(worldCenter - pc.camPos.xyz);

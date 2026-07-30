@@ -1,67 +1,90 @@
-# Handoff Report — explorer_m1_3
+# Milestone 1 (R1: Volumetric Light Grid Light Source Extraction & GPU Upload) — Handoff Report
 
-**Working Directory**: `C:\hades\gigahrush2\.agents\explorer_m1_3`  
-**Report Target**: Test & Verification Standards for Prop Systems in Gigahrush2  
-**Handoff Type**: Hard (Task Complete)  
+**Agent ID:** `explorer_m1_3`  
+**Working Directory:** `C:\hades\gigahrush2\.agents\explorer_m1_3`  
+**Date:** 2026-07-30  
+**Handoff Type:** Hard  
 
 ---
 
 ## 1. Observation
-- **Test Executable & Assertion Pinning (`CMakeLists.txt`)**:
-  - `world_test` (line 334-339): Pinned via `PASS_REGULAR_EXPRESSION "22609/22609 checks passed"`. 15 test functions in `tests/world_test.cpp`. Zero existing prop tests.
-  - `audit_findings` / `audit_test` (line 386-397): Pinned via `PASS_REGULAR_EXPRESSION "audit_test: 140 checks, 0 failures"`. 9+ audit regression tests in `tests/suite_audit.inl`. Zero prop tests.
-  - `game_test` (line 433-438): Pinned via `PASS_REGULAR_EXPRESSION "game_test: 213865 checks, 0 failures"`. 81 suite entry points. Zero prop tests.
-  - `source_rules` (line 466-470): Pinned via `PASS_REGULAR_EXPRESSION "files_scanned=[0-9][0-9][0-9]"`. Runs static check script `tools/check_source_rules.cmake`.
-- **Static Analysis Rules (`tools/check_source_rules.cmake`)**:
-  - Rule 1: No exceptions (`throw`, `catch`, `try` blocks banned).
-  - Rule 2: No RTTI (`dynamic_cast`, `typeid` banned; requires `type_tag<T>()`).
-  - Rule 3: Math insulation (`GLM` and `Eigen` banned).
-  - Rule 4 & 5: Headless core & game layering invariants (no SDL/Vulkan/ImGui headers in `src/world`, `src/sim`, `src/ecs`, `src/core`, `src/game`).
-  - Rule 6: UTF-8 without BOM.
-  - Rule 7: Generated CSV table alignment.
-  - Extension & Unwired Suite Guards: Demands all C++ extension candidates are globbed and all `tests/suite_*.inl` suites are included and dispatched from `main()`.
-- **Prop System Design (`src/render/prop_placer.h`, `prop_placer.cpp`, `prop_pass.h`, `prop_mesh.h`)**:
-  - `PropPlacer::populate(const MacroGrid& grid, PropPass& propPass)` scans 3D grid, evaluates 6-cell voxel neighborhood, computes `spatial_hash(x,y,z)`, and adds instances for 6 prop categories (ceiling pipes, floor grates, wall cabinets, support beams, flood lamps, crystal/acid anomalous zones) across 25 `PropShape` types.
-  - `PropPass::add_instance` and `PropPass::clear_instances` operate on CPU vectors (`cpuInst_`) without executing Vulkan calls, making headless unit testing straightforward.
+
+### Codebase Inspection & Light Data Sources Examined
+1. **Procedural Prop Light Emitters (`src/render/prop_placer.cpp`, `src/render/env_detail.cpp`, `src/render/prop_pass.h`)**:
+   - `PropInstance` (32 B struct in `src/render/prop_mesh.h:32-41`) contains `vec3 origin`, `float yaw`, `vec3 color`, `uint8_t matId`, `uint8_t emissive` (0..255 intensity scale), `uint8_t flags` (bit 2 `0x04` = glow pulse bit), and `uint8_t animPhase` (flicker phase seed).
+   - `PropPlacer::populate()` and `EnvDetail::populate()` generate light-emitting prop shapes:
+     - `PropShape::FloodLamp`: Emissive 180..240, Warm Lamp (`{1.00f, 0.90f, 0.72f}`) or Cool Lamp (`{0.75f, 0.88f, 1.00f}`), height $y = 1.70\text{ m}$ above floor. Electrical arc flicker.
+     - `PropShape::CrystalCluster`: Emissive 200..220, Violet (`{0.70f, 0.15f, 0.95f}`), Green (`{0.25f, 0.95f, 0.45f}`), Magenta (`{0.90f, 0.10f, 1.00f}`). Glow pulse bit `0x04` enabled.
+     - `PropShape::AcidPool`: Emissive 140..180, Acid Green (`{0.15f, 0.85f, 0.25f}`).
+     - `PropShape::FungalColumn`: Emissive 60..160, Bio-green (`{0.40f, 0.75f, 0.30f}`).
+     - `PropShape::SecurityCamera`: Emissive 18..120 lens indicator LED.
+     - `PropShape::Grate` (on `kMatElectricGrate`): Emissive 140, Cyan (`{0.30f, 0.65f, 0.95f}`).
+2. **Player Flashlight / Headlamp (`src/app/main.cpp:106-107`, `src/app/main.cpp:2179-2187`)**:
+   - Constants defined in `main.cpp`: `kLampIntensity = 2.2f` (passed in `push.camPos.w`) and `kLampRadius = 14.0f` meters (passed in `push.fog.z`).
+   - Attached to camera eye position `camMat.eye` (entity with `CameraTag` & `Transform`).
+3. **Samosbor Hazard Alarm Lights (`src/game/samosbor.h`, `src/game/samosbor.cpp`)**:
+   - `game::SamosborState` (`phase`, `variant`, `phaseMs`, `sealed`) drives level-wide hazard weather.
+   - `samosbor_alarm(st)` outputs `SamosborAlarm` with pulse $P \in [0, 1]$ (1 Hz pulse, 4 Hz fast warning pulse).
+   - 7 Samosbor Variants emit distinct color signatures: Classic (Purple), Wet (Deep Cyan), Electric (Magenta/Cyan), Meat (Crimson Red), Maronary (Amber Orange), Istotit (Golden White), Veretar (Pale White).
+4. **Mob Emitters (`src/game/mob_table.h`, `src/game/mob_behaviour.h`)**:
+   - `MobKind::Lampovy` (`MobBehaviour::LampPowered`): Monster carrying a power lamp emitting warm yellow light.
+   - `MobKind::Lampoglaz` (`MobBehaviour::LightLock`): Monster holding a lit searchlight beam.
 
 ---
 
 ## 2. Logic Chain
-1. **Current Test Gap**: `world_test.cpp`, `audit_test.cpp`, and `game_test.cpp` leave procedural prop generation (`PropPlacer`) completely untested.
-2. **CTest Integrity Mechanism**: Assertion count regex matching in `CMakeLists.txt` prevents test omission or early exit false-positives. Any new test suite added for props will increase total execution assertion count, requiring a CMake re-configure and regex pin update.
-3. **Headless Unit Test Feasibility**: `PropPlacer` populates `PropPass`. Since `add_instance()` and `clear_instances()` are CPU-only vector operations, a test target can instantiate `PropPass` without calling `PropPass::init()` (no Vulkan device required).
-4. **Validation Metrics**: Unit tests can verify:
-   - Non-zero prop generation on real worlds.
-   - Deterministic spatial hashing.
-   - Neighborhood placement rules (ceiling pipes sit below solid cells; floor grates sit above solid cells; cabinets sit adjacent to wall cells).
-   - Bounds, air cell placement (props never embedded inside solid blocks), attribute calibration (emissive values, colors, material IDs), and per-shape capacity caps (4096).
-5. **Static Analysis Compliance**: Writing `tests/suite_props.inl` and including it in `game_test.cpp` / `world_test.cpp` fulfills all static rules (no exceptions, no RTTI, headless compliance, unwired-suite guard).
+
+1. **Memory Allocation & 0B GC Requirement**:
+   - Premise: Per-frame light extraction must strictly enforce zero heap allocations, zero RTTI, and zero exceptions on frame tick.
+   - Deduction: Dynamic collections (`std::vector::push_back` beyond capacity, `std::make_shared`, `new`) are forbidden.
+   - Design: Pre-allocate persistent Vulkan host-visible buffers (`instBufs_[frameIndex]`) for $256$ lights ($256 \times 32\text{ B} = 8192\text{ B}$ per frame). Extract light data directly into mapped CPU memory `buf.mapped` or fixed static arrays.
+
+2. **Toroidal Distance Culling**:
+   - Premise: *Gigahrush2* uses a $64\text{ m}$ toroidal world period (`push.torus.x`).
+   - Deduction: Light extraction must calculate minimum toroidal distance $d_{\text{torus}} = \text{wrap}(p_{\text{light}} - p_{\text{cam}}, 64)$ to cull lights beyond fog/light influence range ($48\text{ m}$) prior to uploading to GPU.
+
+3. **Data Format Alignment**:
+   - Premise: Vulkan std430 SSBO buffers require 16-byte alignment for `vec4` structures.
+   - Deduction: Struct `GpuPointLight` is defined as:
+     ```cpp
+     struct GpuPointLight {
+         vec4 posRadius; // xyz = world pos (m), w = radius (m)
+         vec4 colorEm;   // rgb = color (0..1), w = effective intensity scale
+     };
+     ```
+     `sizeof(GpuPointLight) == 32` bytes, aligned to 16 bytes.
+
+4. **Integration Point in Render Loop**:
+   - Premise: Compute shader `shaders/light_grid.comp` builds a 3D light grid SSBO that must be read by fragment shaders during `cubePass`, `bodyPass`, and `propPass`.
+   - Deduction: `GpuLightGrid::update_and_dispatch()` must be called in `main.cpp` **BEFORE** `cubePass.record()`, `bodyPass.record()`, and `propPass.record()`, with a compute-to-fragment memory barrier (`VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT` $\to$ `VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT`).
 
 ---
 
 ## 3. Caveats
-- No actual source code in `src/` or `tests/` was modified during this investigation (read-only mission mandate).
-- Vulkan rendering of props (`PropPass::record`) relies on GPU driver execution and cannot be unit-tested headlessly; CPU instance generation (`PropPlacer::populate`) is 100% testable headlessly.
+
+- **Read-Only Scope**: This report presents an architectural investigation and blueprint. No changes were committed to `src/` source files.
+- **Max Light Cap**: Hard cap of $256$ local light sources per frame is sufficient for dense levels. If prop count exceeds 256 within the 48 m toroidal radius, lights are prioritized by proximity to the player.
+- **Mob Emitters**: Mob positions require querying `giga::Registry` for `Transform` components of active `Lampovy` and `Lampoglaz` entities each tick.
 
 ---
 
 ## 4. Conclusion
-A complete test handbook and actionable verification plan has been authored and saved to `C:\hades\gigahrush2\.agents\explorer_m1_3\handbook_prop_tests.md`. All CMake assertion count regex rules, static source rules, and prop placer test methodologies are fully documented.
+
+1. **Light Sources Identified**: All light sources across simulation, world, props, player, and Samosbor hazard systems have been cataloged with exact struct layouts, file paths, line numbers, and animation parameters.
+2. **0B GC Extraction Path**: A zero-allocation extraction pipeline using persistent mapped Vulkan buffers (`VulkanBuffer::create_host_visible`) and toroidal distance culling is fully specified.
+3. **Render Loop Integration**: The call sequence for `GpuLightGrid::update_and_dispatch()` in `src/app/main.cpp` prior to geometry rendering passes is established.
+
+Full technical details and C++ extraction code blueprints are documented in `analysis.md`.
 
 ---
 
 ## 5. Verification Method
 
-1. **Verify Static Rules Gate**:
-   ```powershell
-   cmake -DGIGA_ROOT=C:\hades\gigahrush2 -P C:\hades\gigahrush2\tools\check_source_rules.cmake
-   ```
-2. **Inspect Findings File**:
-   ```powershell
-   Get-Content C:\hades\gigahrush2\.agents\explorer_m1_3\handbook_prop_tests.md
-   ```
-3. **Run CTest Suite**:
-   ```powershell
-   cd C:\hades\gigahrush2\build-win
-   ctest --output-on-failure
-   ```
+To independently verify these findings and execute implementation:
+1. **Inspect Detailed Analysis**: Read `C:\hades\gigahrush2\.agents\explorer_m1_3\analysis.md`.
+2. **Check Prop Light Emitters**:
+   - Inspect `src/render/prop_placer.cpp:190-241` for lamp, crystal, acid, fungal prop instantiation.
+   - Inspect `src/render/env_detail.cpp:282-351` for biome emissive prop parameters.
+3. **Check Flashlight & Samosbor Hazard Clock**:
+   - Inspect `src/app/main.cpp:106-107, 2179-2187` for player headlamp push constant packaging.
+   - Inspect `src/game/samosbor.h:424-434, 708-720` for Samosbor alarm pulse and variant definitions.

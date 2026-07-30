@@ -40,7 +40,8 @@ struct BodyInstance {
 
 class BodyPass {
 public:
-    bool init(VulkanDevice& dev, VkRenderPass renderPass, const char* shaderDir);
+    bool init(VulkanDevice& dev, VkRenderPass renderPass, const char* shaderDir,
+              VkDescriptorSetLayout lightGridSetLayout = VK_NULL_HANDLE);
     void destroy();
 
     // Rebuild the instance list from every drawable entity on `layer` into this
@@ -48,12 +49,14 @@ public:
     // CameraTag (the viewer's own body) are skipped so first-person stays clear;
     // bodies whose centre is past the fog radius (push.fog.y) are culled.
     void record(VkCommandBuffer cmd, std::uint32_t frameIndex,
-                const Registry& reg, LayerId layer, const CubePush& push);
+                const Registry& reg, LayerId layer, const CubePush& push,
+                VkDescriptorSet lightGridSet = VK_NULL_HANDLE);
 
     std::uint32_t last_instance_count() const { return lastInstanceCount_; }
 
 private:
     VulkanDevice* dev_ = nullptr;
+    VkDescriptorSetLayout lightGridSetLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
 

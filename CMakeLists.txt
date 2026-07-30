@@ -232,7 +232,7 @@ set(_giga_spv_files "")
 # leaves the stale .spv in place, and the change looks like it did nothing. Kept an
 # explicit list rather than a GLOB — a stray .glsl should not silently start forcing
 # every shader to recompile.
-set(_giga_glsl_includes ${CMAKE_SOURCE_DIR}/shaders/material_surface.glsl)
+set(_giga_glsl_includes ${CMAKE_SOURCE_DIR}/shaders/material_surface.glsl ${CMAKE_SOURCE_DIR}/shaders/volumetric_fog.glsl)
 foreach(_sh cube.vert cube.frag body.vert prop.vert prop.frag particle.vert particle.frag)
     add_custom_command(
         OUTPUT ${_giga_spv_dir}/${_sh}.spv
@@ -243,6 +243,16 @@ foreach(_sh cube.vert cube.frag body.vert prop.vert prop.frag particle.vert part
         COMMENT "glslc ${_sh}")
     list(APPEND _giga_spv_files ${_giga_spv_dir}/${_sh}.spv)
 endforeach()
+
+# GPU compute volumetric light grid shader.
+add_custom_command(
+    OUTPUT ${_giga_spv_dir}/light_grid.comp.spv
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0
+        ${CMAKE_SOURCE_DIR}/shaders/light_grid.comp
+        -o ${_giga_spv_dir}/light_grid.comp.spv
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/light_grid.comp
+    COMMENT "glslc light_grid.comp -> light_grid.comp.spv")
+list(APPEND _giga_spv_files ${_giga_spv_dir}/light_grid.comp.spv)
 
 # GPU compute particle shader — requires glslc with compute stage support.
 # particles.comp uses atomicAdd (layout qualifier, GLSL 4.30+) and SSBO.

@@ -1,19 +1,15 @@
-## 2026-07-30T07:31:38Z
-You are an Explorer agent working on Milestone 1 (R1: Procedural Prop Mesh Generators & GPU Instancing).
-Your working directory is: C:\hades\gigahrush2\.agents\explorer_m1_1
-The root project directory is: C:\hades\gigahrush2
+## 2026-07-30T12:58:27Z
+You are Explorer 1 for Milestone 1 (R1: GPU Compute Volumetric Light Grid & Fog).
+Your working directory is `C:\hades\gigahrush2\.agents\explorer_m1_1`.
+The project workspace is `C:\hades\gigahrush2`.
 
-TASK:
-1. Examine `src/render/prop_mesh.h` and `src/render/prop_mesh.cpp`.
-   Verify all 25 `PropShape` procedural mesh generators:
-   Cylinder, HalfCylinder, Arch, Barrel, StairStep, Pipe, PipeElbow, PipeTee, Valve, Grate, RoundGrate, CabinetBox, ControlPanel, Railing, SupportBeam, CrateBox, CrateLong, LockerUnit, BenchSlab, Terminal, SecurityCamera, FloodLamp, FungalColumn, CrystalCluster, AcidPool.
-   Check if any shape builders are missing, incomplete, stubbed, or have incorrect normal/vertex/index calculations.
-2. Examine `src/render/prop_pass.h` and `src/render/prop_pass.cpp`.
-   Verify Vulkan device buffer management, per-instance vertex binding attributes matching `PropInstance` layout, per-shape draw recording (`record()`), and buffer memory allocation.
-3. Check for any bugs, unhandled shapes, array bounds mismatches, or missing Vulkan state setup.
-4. Write a comprehensive report to `C:\hades\gigahrush2\.agents\explorer_m1_1\handoff.md`.
-5. Send a summary message back to the Lead Orchestrator with the status and file path of your report.
+Objective:
+Investigate `src/render/` to understand Vulkan device management (`VulkanDevice`), descriptor set allocation, buffer creation (SSBO / Uniform), compute pipeline dispatches, and render pass integration for the new `GpuLightGrid` (`src/render/gpu_light_grid.h/.cpp`).
 
-CONSTRAINTS:
-- You are read-only for source files. Write only to `C:\hades\gigahrush2\.agents\explorer_m1_1\`.
-- DO NOT execute builds or test runner commands (SINGLE-COMPILER OWNER RULE).
+Specific Tasks:
+1. Examine `src/render/vulkan_device.h/.cpp`, `src/render/render_pass.h/.cpp`, `src/render/particle_pass.h/.cpp`, `src/render/prop_pass.h/.cpp`, and related render files.
+2. Determine how compute pipelines are initialized and executed in the engine architecture.
+3. Plan the Vulkan buffer creation, descriptor sets, and pipeline layout for `gpu_light_grid.h/.cpp` (3D light grid SSBO storing local point/emissive lights).
+4. Verify 0B heap allocation requirements (zero dynamic allocations on hot frame loops).
+5. Document your findings and detailed architectural recommendations in `C:\hades\gigahrush2\.agents\explorer_m1_1\analysis.md` and `C:\hades\gigahrush2\.agents\explorer_m1_1\handoff.md`.
+6. Communicate your completion and key findings back to the Project Orchestrator via send_message.

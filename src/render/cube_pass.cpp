@@ -444,8 +444,9 @@ bool make_module(VkDevice dev, const std::vector<char>& spv, VkShaderModule* m) 
 } // namespace
 
 bool CubePass::init(VulkanDevice& dev, VkRenderPass renderPass,
-                    const char* shaderDir) {
+                    const char* shaderDir, VkDescriptorSetLayout lightGridSetLayout) {
     dev_ = &dev;
+    lightGridSetLayout_ = lightGridSetLayout;
     if (!create_cube_mesh()) return false;
     // BEFORE the pipeline: it decides which fragment module is compiled in and
     // whether the pipeline layout carries a sampler descriptor.
@@ -778,19 +779,36 @@ bool CubePass::create_pipeline(VkRenderPass renderPass, const char* shaderDir) {
     lci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     lci.pushConstantRangeCount = 1;
     lci.pPushConstantRanges = &pcr;
-    // Set 0 = the albedo array's combined image sampler, and ONLY when the
-    // textured module is the one being compiled in. A layout that declares a set
-    // the shader does not use is legal but pointless; a shader that uses a set the
-    // layout does not declare is invalid, which is the whole reason for the two
-    // modules.
-    const VkDescriptorSetLayout setLayout = descriptorSetLayout_;
-    if (textured_) {
-        lci.setLayoutCount = 1;
-        lci.pSetLayouts = &setLayout;
+    VkDescriptorSetLayout dummySet0 = VK_NULL_HANDLE;
+    if (!textured_ && lightGridSetLayout_ != VK_NULL_HANDLE) {
+        VkDescriptorSetLayoutCreateInfo li{};
+        li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        vkCreateDescriptorSetLayout(dev_->device, &li, nullptr, &dummySet0);
     }
+
+    VkDescriptorSetLayout setLayouts[2]{};
+    uint32_t setCount = 0;
+    if (textured_) {
+        setLayouts[0] = descriptorSetLayout_;
+        setCount = 1;
+    } else if (dummySet0 != VK_NULL_HANDLE) {
+        setLayouts[0] = dummySet0;
+        setCount = 1;
+    }
+
+    if (lightGridSetLayout_ != VK_NULL_HANDLE) {
+        setLayouts[1] = lightGridSetLayout_;
+        setCount = 2;
+    }
+
+    lci.setLayoutCount = setCount;
+    lci.pSetLayouts = (setCount > 0) ? setLayouts : nullptr;
 
     bool ok = vkCreatePipelineLayout(dev_->device, &lci, nullptr, &layout_)
               == VK_SUCCESS;
+    if (dummySet0 != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(dev_->device, dummySet0, nullptr);
+    }
     if (ok) {
         VkGraphicsPipelineCreateInfo gp{};
         gp.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -969,7 +987,8 @@ std::uint32_t CubePass::build_instances(std::uint32_t frameIndex,
 }
 
 void CubePass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
-                      const World& world, const CubePush& push) {
+                const World& world, const CubePush& push,
+                VkDescriptorSet lightGridSet) {
     // A different World object is a guaranteed content change; the same object
     // with mutated contents is not detectable here, which is why invalidate()
     // exists (floor streaming recycles World objects in place).
@@ -998,6 +1017,10 @@ void CubePass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
     if (textured_) {
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0,
                                 1, &descriptorSet_, 0, nullptr);
+    }
+    if (lightGridSet != VK_NULL_HANDLE) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 1,
+                                1, &lightGridSet, 0, nullptr);
     }
     CubePush p = push;
     p.torus.z = static_cast<float>(texMask_);

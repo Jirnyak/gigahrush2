@@ -49,7 +49,7 @@ public:
     // the prop pass is drawn inside the same render-pass subpass so they carry
     // over without a re-push).
     void record(VkCommandBuffer cmd, uint32_t frameIndex,
-                const CubePush& push);
+                const CubePush& push, VkDescriptorSet lightGridSet = VK_NULL_HANDLE);
 
     void destroy();
     bool ready() const { return pipeline_ != VK_NULL_HANDLE; }

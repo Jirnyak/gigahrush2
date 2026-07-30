@@ -1,0 +1,84 @@
+#version 450
+// light_grid.comp — GPU compute shader for 3D volumetric light grid binning.
+
+layout(local_size_x = 8, local_size_y = 4, local_size_z = 8) in;
+
+struct PointLight {
+    vec4 posRadius;      // xyz = world position (m), w = radius (m)
+    vec4 colorIntensity; // rgb = linear color (0..1), w = effective intensity
+};
+
+struct LightGridCell {
+    uint count;            // number of intersecting lights (max 15)
+    uint lightIndices[15]; // indices into uPointLights array
+};
+
+layout(set = 0, binding = 0, std430) readonly buffer PointLightBuffer {
+    uint uPointLightCount;
+    uint uReserved0;
+    uint uReserved1;
+    uint uReserved2;
+    PointLight uPointLights[];
+};
+
+layout(set = 0, binding = 1, std430) writeonly buffer LightGridBuffer {
+    LightGridCell uGridCells[];
+};
+
+layout(push_constant) uniform GridPush {
+    vec4 camPos;    // xyz = camera world position, w = max range (48.0m)
+    vec4 gridMin;   // xyz = 3D grid min corner in world space, w = cell size x/z (2.0m)
+    vec4 gridExt;   // x = gridDimX (32), y = gridDimY (16), z = gridDimZ (32), w = cell size y (2.0m)
+    vec4 params;    // x = uTime, y = maxLightsPerCell (15), z = activeLightCount, w = reserved
+} pc;
+
+float dist_sq_point_aabb(vec3 p, vec3 bMin, vec3 bMax) {
+    vec3 d = max(vec3(0.0), max(bMin - p, p - bMax));
+    return dot(d, d);
+}
+
+void main() {
+    uvec3 cellIdx = gl_GlobalInvocationID;
+    uvec3 gridDim = uvec3(uint(pc.gridExt.x), uint(pc.gridExt.y), uint(pc.gridExt.z));
+
+    if (cellIdx.x >= gridDim.x || cellIdx.y >= gridDim.y || cellIdx.z >= gridDim.z) {
+        return;
+    }
+
+    uint flatCellIndex = cellIdx.x + cellIdx.y * gridDim.x + cellIdx.z * (gridDim.x * gridDim.y);
+
+    vec3 cellSize = vec3(pc.gridMin.w, pc.gridExt.w, pc.gridMin.w);
+    vec3 cellMin = pc.gridMin.xyz + vec3(cellIdx) * cellSize;
+    vec3 cellMax = cellMin + cellSize;
+
+    uint activeCount = min(uPointLightCount, uint(pc.params.z));
+    uint foundCount = 0u;
+    uint indices[15];
+
+    for (uint i = 0u; i < activeCount; ++i) {
+        PointLight light = uPointLights[i];
+        float radius = light.posRadius.w;
+        if (radius <= 0.0) continue;
+
+        float intensity = light.colorIntensity.w;
+        if (intensity <= 0.001) continue;
+
+        vec3 lightPos = light.posRadius.xyz;
+        float dSq = dist_sq_point_aabb(lightPos, cellMin, cellMax);
+
+        if (dSq <= radius * radius) {
+            if (foundCount < 15u) {
+                indices[foundCount] = i;
+                foundCount++;
+            }
+        }
+    }
+
+    LightGridCell cell;
+    cell.count = foundCount;
+    for (uint k = 0u; k < 15u; ++k) {
+        cell.lightIndices[k] = (k < foundCount) ? indices[k] : 0u;
+    }
+
+    uGridCells[flatCellIndex] = cell;
+}

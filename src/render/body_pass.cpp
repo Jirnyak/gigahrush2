@@ -80,8 +80,9 @@ bool make_module(VkDevice dev, const std::vector<char>& spv, VkShaderModule* m) 
 } // namespace
 
 bool BodyPass::init(VulkanDevice& dev, VkRenderPass renderPass,
-                    const char* shaderDir) {
+                    const char* shaderDir, VkDescriptorSetLayout lightGridSetLayout) {
     dev_ = &dev;
+    lightGridSetLayout_ = lightGridSetLayout;
     if (!create_cube_mesh()) return false;
     if (!create_pipeline(renderPass, shaderDir)) return false;
 
@@ -203,8 +204,22 @@ bool BodyPass::create_pipeline(VkRenderPass renderPass, const char* shaderDir) {
     lci.pushConstantRangeCount = 1;
     lci.pPushConstantRanges = &pcr;
 
+    VkDescriptorSetLayout dummySet0 = VK_NULL_HANDLE;
+    if (lightGridSetLayout_ != VK_NULL_HANDLE) {
+        VkDescriptorSetLayoutCreateInfo li{};
+        li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        vkCreateDescriptorSetLayout(dev_->device, &li, nullptr, &dummySet0);
+
+        VkDescriptorSetLayout setLayouts[2] = { dummySet0, lightGridSetLayout_ };
+        lci.setLayoutCount = 2;
+        lci.pSetLayouts = setLayouts;
+    }
+
     bool ok = vkCreatePipelineLayout(dev_->device, &lci, nullptr, &layout_)
               == VK_SUCCESS;
+    if (dummySet0 != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(dev_->device, dummySet0, nullptr);
+    }
     if (ok) {
         VkGraphicsPipelineCreateInfo gp{};
         gp.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -232,7 +247,8 @@ bool BodyPass::create_pipeline(VkRenderPass renderPass, const char* shaderDir) {
 }
 
 void BodyPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
-                      const Registry& reg, LayerId layer, const CubePush& push) {
+                      const Registry& reg, LayerId layer, const CubePush& push,
+                      VkDescriptorSet lightGridSet) {
     const vec3 camPos{push.camPos.x, push.camPos.y, push.camPos.z};
     const float fogEnd = push.fog.y;
     const float fogEndSq = fogEnd * fogEnd;
@@ -270,6 +286,9 @@ void BodyPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
     if (count == 0) return;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
+    if (lightGridSet != VK_NULL_HANDLE) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 1, 1, &lightGridSet, 0, nullptr);
+    }
     vkCmdPushConstants(cmd, layout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(CubePush), &push);

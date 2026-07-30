@@ -1,12 +1,14 @@
-# Progress Log - worker_m1
+# Progress Tracking — Worker M1
 
-Last visited: 2026-07-30T02:15:00Z
+Last visited: 2026-07-30T13:08:05Z
 
-- [x] Initialized ORIGINAL_REQUEST.md and BRIEFING.md
-- [ ] Step 1: Update `tools/gen_material_surface.py` with per-material chroma_sigma, chroma_axis, bump_scale
-- [ ] Step 2: Regenerate `shaders/material_surface.glsl`
-- [ ] Step 3: Update `shaders/cube.frag` with mean-preserving lognormal vector RGB chroma modulation & derivative normal perturbation
-- [ ] Step 4: Verify GLSL compilation with `glslc` (both default and `GIGA_ALBEDO_ARRAY`)
-- [ ] Step 5: Verify `check_source_rules.cmake` passes
-- [ ] Step 6: Build with `tools\win\build.bat Release` and run `ctest`
-- [ ] Step 7: Produce `handoff.md` and send message to parent agent
+- [x] Read Explorer handoff reports (`explorer_m1_1`, `explorer_m1_2`, `explorer_m1_3`).
+- [x] Implement `shaders/light_grid.comp` (3D grid compute shader).
+- [x] Implement `shaders/volumetric_fog.glsl` (shared raymarching header with IGN & Henyey-Greenstein).
+- [x] Integrate GLSL raymarching in `shaders/cube.frag`, `shaders/prop.frag`, `shaders/particle.vert`, `shaders/particle.frag`.
+- [x] Implement `src/render/gpu_light_grid.h` and `src/render/gpu_light_grid.cpp`.
+- [x] Update Vulkan renderer & pass pipeline layouts (`CubePass`, `BodyPass`, `PropPass`, `GpuParticlePass`) for Set 1 light grid descriptor set.
+- [x] Integrate compute dispatch & light collection into `src/app/main.cpp`.
+- [x] Build with MSVC `-W4 /permissive-` (0 warnings, 0 errors).
+- [x] Run `ctest` and verify all 4 tests pass.
+- [x] Write handoff report `C:\hades\gigahrush2\.agents\worker_m1\handoff.md`.

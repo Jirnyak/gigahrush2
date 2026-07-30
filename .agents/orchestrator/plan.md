@@ -1,45 +1,52 @@
-# Project Plan: Gigahrush2 Procedural Prop Swarm & Graphics Pipeline
+# Master Project Plan: GigaHrush2 Engine & Content Expansion
 
 ## Architecture Overview
-Gigahrush2 C++23 / Vulkan Engine Enterprise Graphics System & Procedural Prop Swarm.
-Core requirements focus on 25 procedural prop mesh generators, GPU-instanced prop rendering pass, advanced atmospheric vertex & fragment shaders, macro-grid procedural prop placement engine, and comprehensive unit test assertion coverage.
+GigaHrush2: High-performance Vulkan / C++23 engine expansion featuring GPU Compute volumetric light grid, GPU voxel destruction & particle debris cascade, procedural wire clutter & interactive props, and GPU Multi-Draw Indirect (MDI) frustum & occlusion culling.
 
 ## Milestones
 
 | # | Milestone Name | Scope | Dependencies | Status |
 |---|----------------|-------|--------------|--------|
-| 1 | R1: Procedural Prop Mesh Generators & GPU Instancing | `src/render/prop_mesh.cpp` & `prop_pass.cpp` (25 shape generators, Vulkan vertex/instance buffers, pipeline setup, dynamic draw calls) | None | DONE |
-| 2 | R2: Advanced Atmospheric Shader Pipeline | `shaders/prop.vert` & `shaders/prop.frag` (Toroidal wrap, triplanar mapping, derivative normal perturbation, roughness/specular lighting, animated emissive, height fog, sRGB output) | M1 | DONE |
-| 3 | R3: Procedural Prop Placement System | `src/render/prop_placer.cpp` (Deterministic spatial hashing, macro cell scanning, rule-based prop placement for ceiling/floor/wall/anomaly/support/corner clutter) | M1, M2 | DONE |
-| 4 | R4: Test Coverage, Build, Source Rules & Forensic Audit | `tests/suite_props.inl` & `CMakeLists.txt` (Full assertion coverage across all 25 shapes, attribute validity, determinism, capacity limits, regex check count update, source rules check, build clean, 100% CTest pass, Forensic Auditor CLEAN verdict) | M1, M2, M3 | DONE |
+| 1 | R1: GPU Compute Volumetric Light Grid & Fog | `shaders/light_grid.comp`, `src/render/gpu_light_grid.h/.cpp`, raymarching light attenuation & fog in `cube.frag`, `prop.frag`, `particle.frag` | None | PLANNED |
+| 2 | R2: GPU Voxel Destruction & Debris Particle Cascade | Trigger GPU compute event on voxel destruction/carving, pushing debris into `GpuParticlePass` ring buffer with physics & albedos | M1 | PLANNED |
+| 3 | R3: Procedural Wire Clutter & Soviet Cyberpunk Props | `PropShape` / `EnvDetail` expanded with wire catenary curves (GPU ribbon meshes), CRT monitors with animated noise shaders, elevator switches, warning signs | M1 | PLANNED |
+| 4 | R4: GPU Multi-Draw Indirect (MDI) & Frustum Culling | `shaders/cull.comp`, `src/render/gpu_cull_pass.h/.cpp` for frustum & Hi-Z depth buffer occlusion culling, 0-CPU-overhead indirect draw buffers | M1, M3 | PLANNED |
+| 5 | R5: Final Verification, Build Clean, 0B GC & Forensic Audit | Full clean MSVC C++23 `-W4 /permissive-` build, glslc shader compilation zero errors/warnings, CTest pass, 0B GC verification, VulkanDevice integration check, and Forensic Audit CLEAN verdict | M1, M2, M3, M4 | PLANNED |
 
 ## Detailed Milestone Descriptions
 
-### Milestone 1: Procedural Prop Mesh Generators & GPU Instancing (R1)
-- Verified and refined all 25 procedural shape generators in `src/render/prop_mesh.cpp` (Cylinder, HalfCylinder, Arch, Barrel, StairStep, Pipe, PipeElbow, PipeTee, Valve, Grate, RoundGrate, CabinetBox, ControlPanel, Railing, SupportBeam, CrateBox, CrateLong, LockerUnit, BenchSlab, Terminal, SecurityCamera, FloodLamp, FungalColumn, CrystalCluster, AcidPool).
-- Vertex and index creation is robust, smooth/flat normals calculated properly, UV/normal attributes align with vertex input layout.
-- `prop_pass.cpp` handles device buffer creation, per-instance vertex binding (32 bytes `PropInstance`), per-shape draw calls, and zero-warning memory lifecycle.
+### Milestone 1: GPU Compute Volumetric Light Grid & Fog (R1)
+- Implement `shaders/light_grid.comp` to compute/update 3D light grid SSBO for local point/emissive lights.
+- Create `src/render/gpu_light_grid.h` and `src/render/gpu_light_grid.cpp` to manage Vulkan resources, buffers, and compute dispatches.
+- Implement raymarching light attenuation & volumetric fog density in `cube.frag`, `prop.frag`, and `particle.frag`.
 
-### Milestone 2: Advanced Atmospheric Shader Pipeline (R2)
-- `shaders/prop.vert`: Per-instance attributes (locations 0-8), Y-axis rotation matrix, toroidal wrap minimal-image transformation (`nearest_image`), push constants matching `cube.vert` exactly.
-- `shaders/prop.frag`: Material surface textures via `material_surface.glsl`, triplanar projection, procedural derivative normal perturbing, material-calibrated roughness & Blinn-Phong specular, time-animated emissive (flicker, breathing pulse, acid pop), atmospheric height fog, Henyey-Greenstein light scattering, sRGB gamma correction, and IGN dithering.
+### Milestone 2: GPU Voxel Destruction & Debris Particle Cascade (R2)
+- Integrate voxel destruction events with GPU compute dispatch.
+- Push debris particles directly into `GpuParticlePass` ring buffer.
+- Include realistic physical velocities and material-derived albedos (concrete dust, rust flakes, glass shards).
 
-### Milestone 3: Procedural Prop Placement System (R3)
-- `src/render/prop_placer.cpp`: Scans 128^3 toroidal `MacroGrid` cells.
-- Applies rule-based placement for ceiling conduit/pipes, floor grates/drainage, wall cabinets/panels, flood lamps, anomalous zones (crystals, acid pools, fungal columns), structural support beams, and corner storage crates.
-- Uses salt-differentiated 3D spatial hashing (`spatial_hash`). Cell bounds, matrix wrapping, and proper material/emissive attributes verified.
+### Milestone 3: Procedural Wire Clutter & Soviet Cyberpunk Interactive Props (R3)
+- Expand `PropShape` and `EnvDetail` with procedural catenary wire curve generators (GPU ribbon meshes).
+- Implement CRT monitor props with animated GLSL noise shaders.
+- Implement working elevator switches and illuminated warning signs.
 
-### Milestone 4: Test Suite Assertion Coverage, Build, Source Rules & Forensic Audit (R4)
-- `tests/suite_props.inl`: Comprehensive unit assertions covering all 25 shapes, placer non-null, determinism across seeds, placement rules, bounds checking, attribute struct layout (`sizeof(PropInstance) == 32`), and capacity limits.
-- `CMakeLists.txt`: Updated `PASS_REGULAR_EXPRESSION` for `world_test` to match `44176/44176 checks passed`.
-- `tools/check_source_rules.cmake` returns PASS (no exceptions, no RTTI, core dependency-free).
-- Full clean Release build and 100% pass across all CTest targets verified.
-- Forensic Auditor integrity verification: `VERDICT: CLEAN`.
+### Milestone 4: GPU Multi-Draw Indirect (MDI) & Frustum Culling (R4)
+- Implement `shaders/cull.comp` for prop bounds testing against view frustum and Hi-Z depth buffer.
+- Create `src/render/gpu_cull_pass.h` and `src/render/gpu_cull_pass.cpp`.
+- Populate indirect draw command buffers for 0-CPU-overhead rendering.
+
+### Milestone 5: Verification & Forensic Audit (R5)
+- Verify `glslc` shader compilation with 0 errors / 0 warnings.
+- Verify MSVC C++23 build under `-W4 /permissive-` with 0 warnings.
+- Verify `gigahrush2.exe` builds and links cleanly.
+- Verify 0B heap allocations on hot render loops.
+- Pass Forensic Auditor integrity checks with `VERDICT: CLEAN`.
 
 ## Acceptance Criteria
-1. All 25 prop shapes generated cleanly with valid geometry, normals, and index buffers — VERIFIED.
-2. `prop.vert` and `prop.frag` compile cleanly to SPIR-V via `glslc` with atmospheric fog and lighting effects — VERIFIED.
-3. `PropPlacer::populate` places props deterministically without out-of-bounds access — VERIFIED.
-4. `suite_props.inl` tests pass 100% with exact check count registered in `CMakeLists.txt` — VERIFIED.
-5. `tools\win\build.bat Release` builds with 0 warnings and all CTest targets pass — VERIFIED.
-6. Forensic Auditor reports CLEAN verdict with zero integrity violations — VERIFIED.
+1. R1: Volumetric light grid SSBO compute pass and fragment shader raymarching implemented and verified.
+2. R2: Voxel destruction debris cascade feeding `GpuParticlePass` ring buffer with material albedos and physics.
+3. R3: Wire catenaries, CRT noise shaders, elevator switches, and warning signs fully functional.
+4. R4: MDI frustum and Hi-Z culling compute pass delivering indirect draw commands with 0 CPU overhead.
+5. All shadaers compile via `glslc` with 0 errors/warnings.
+6. MSVC build clean (0 warnings), `gigahrush2.exe` executable generated.
+7. Forensic Auditor returns CLEAN verdict with zero integrity violations.

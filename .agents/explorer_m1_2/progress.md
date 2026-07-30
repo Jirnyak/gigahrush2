@@ -1,13 +1,13 @@
-# Progress Log - explorer_m1_2
+# Progress Log — explorer_m1_2
 
-Last visited: 2026-07-30T06:44:42Z
+Last visited: 2026-07-30T12:59:58Z
 
-## Tasks
-- [x] Initialize ORIGINAL_REQUEST.md, BRIEFING.md, progress.md
-- [x] Find and view prop shading and rendering pipeline files: `shaders/prop.frag`, `shaders/prop.vert`, `src/render/prop_pass.h/.cpp`, `src/render/prop_mesh.h/.cpp`, and related renderers/shaders.
-- [x] Analyze Vulkan GPU instancing setup (vertex buffers, instance attributes, push constants, descriptor sets, SSBOs).
-- [x] Inspect fragment and vertex shaders for current prop shading logic.
-- [x] Design GLSL shader extensions for Milestone 2 / R2 (normal perturbing, roughness variation, animated emissive pulse/flicker).
-- [x] Specify instance vertex layout / push constant / SSBO struct format.
-- [x] Write `handbook_prop_shading.md` and `handoff.md`.
-- [x] Send summary report to parent orchestrator via `send_message`.
+## Status
+- [x] Step 0: Initialized briefing and request logs for Milestone 1 R1.
+- [x] Step 1: Inspect `shaders/` files (`cube.frag`, `prop.frag`, `particle.frag`, `cube.vert`, `material_surface.glsl`, etc.) and push constants / UBO headers.
+- [x] Step 2: Analyze current lighting, fog, camera position, view matrices, push constants/UBO layouts across shaders.
+- [x] Step 3: Design `shaders/light_grid.comp` compute shader layout (3D grid dimensions, cell packing, point light attributes, compute workgroup layout).
+- [x] Step 4: Design raymarching volumetric fog & light attenuation integration into `cube.frag`, `prop.frag`, and `particle.frag`.
+- [x] Step 5: Test and ensure `glslc` compatibility & compilation.
+- [x] Step 6: Create `analysis.md` and `handoff.md`.
+- [x] Step 7: Send completion message to parent orchestrator.

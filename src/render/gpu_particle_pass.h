@@ -28,7 +28,6 @@
 // because the field semantics differ.
 #pragma once
 
-#include <array>
 #include <cstdint>
 
 #include <vulkan/vulkan.h>
@@ -109,7 +108,7 @@ public:
     // `shaderDir` must contain particles.comp.spv, particle.vert.spv, particle.frag.spv.
     // `renderPass` / `subpass` are the graphics render pass this draw lives in.
     bool init(VulkanDevice* dev, VkRenderPass renderPass, uint32_t subpass,
-              const char* shaderDir);
+              const char* shaderDir, VkDescriptorSetLayout lightGridSetLayout = VK_NULL_HANDLE);
 
     // Write a one-shot burst of particles into the emit ring buffer.
     // Returns the number of events that fit (limited by kMaxEmitEvents / frame).
@@ -130,7 +129,8 @@ public:
 
     // Record indirect draw inside the active render pass.
     // `push` must already be bound by the caller (or call bind_draw_push()).
-    void record_draw(VkCommandBuffer cmd, const ParticleDrawPush& push) noexcept;
+    void record_draw(VkCommandBuffer cmd, const ParticleDrawPush& push,
+                     VkDescriptorSet lightGridSet = VK_NULL_HANDLE) noexcept;
 
     void destroy() noexcept;
     bool ready() const noexcept { return computePipeline_ != VK_NULL_HANDLE; }
@@ -164,6 +164,7 @@ private:
     VkDescriptorSet       computeDescSet_    = VK_NULL_HANDLE;
 
     // ── Graphics pipeline ──────────────────────────────────────────────────────
+    VkDescriptorSetLayout lightGridSetLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout      drawLayout_        = VK_NULL_HANDLE;
     VkPipeline            drawPipeline_      = VK_NULL_HANDLE;
 

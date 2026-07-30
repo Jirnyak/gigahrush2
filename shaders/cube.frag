@@ -35,6 +35,9 @@ layout(location = 4) flat in uint vMat;
 // tools/gen_material_surface.py. Provides kMatFamily[] and kMatSurface[].
 #include "material_surface.glsl"
 
+#define GIGA_VOLUMETRIC_GRID_BINDINGS
+#include "volumetric_fog.glsl"
+
 layout(push_constant) uniform Push {
     mat4 viewProj;
     vec4 sunDir;   // xyz = direction toward the fill light, w = fill strength
@@ -614,6 +617,25 @@ void main() {
     float ao = kAoFloor + (1.0 - kAoFloor) * vAo;
     float aoDirect = mix(1.0, ao, pc.torus.y);
     vec3 lit = albedo * (amb * ao + vec3(lamp + fill) * aoDirect) + vec3(spec) * aoDirect;
+
+    // Volumetric fog raymarching with 3D light grid lookup
+    vec3 gridMin = pc.camPos.xyz - vec3(32.0, 16.0, 32.0);
+    vec4 fogVol = march_volumetric_fog(
+        pc.camPos.xyz,
+        normalize(vWorldPos - pc.camPos.xyz),
+        min(d, pc.fog.y),
+        gl_FragCoord.xy,
+        pc.camPos.xyz,
+        pc.camPos.w,
+        pc.fog.z,
+        pc.sunDir.xyz,
+        pc.sunDir.w,
+        gridMin,
+        vec3(32.0, 16.0, 32.0),
+        vec3(2.0, 2.0, 2.0),
+        pc.torus.w
+    );
+    lit = lit * fogVol.a + fogVol.rgb;
 
     // Height-based fog density using world-space position vWorldPos.y
     // (exponential density increase at lower y / subterranean floor levels).

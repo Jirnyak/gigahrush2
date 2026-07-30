@@ -170,7 +170,7 @@ static_assert(sizeof(CubePush) == 128,
 class CubePass {
 public:
     bool init(VulkanDevice& dev, VkRenderPass renderPass,
-              const char* shaderDir);
+              const char* shaderDir, VkDescriptorSetLayout lightGridSetLayout = VK_NULL_HANDLE);
     void destroy();
 
     // Record the instanced draw into `cmd`. The instance list is CACHED: it is
@@ -183,7 +183,8 @@ public:
     // shift happens per-vertex in cube.vert from push.camPos. That is what makes
     // the cache possible at all — it removes the camera from the instance data.
     void record(VkCommandBuffer cmd, std::uint32_t frameIndex,
-                const World& world, const CubePush& push);
+                const World& world, const CubePush& push,
+                VkDescriptorSet lightGridSet = VK_NULL_HANDLE);
 
     // Mark the cached instance list stale. Call after anything that changes what
     // the pass would emit: floor (re)generation or streaming, a fluid step, or
@@ -235,6 +236,7 @@ private:
 
     // Combined Descriptor Set (Set 0) for Albedo, Normal, and Roughness arrays
     VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout lightGridSetLayout_  = VK_NULL_HANDLE;
     VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
     VkDescriptorSet descriptorSet_ = VK_NULL_HANDLE;
 

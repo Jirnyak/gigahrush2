@@ -68,8 +68,6 @@ bool make_shader(VkDevice dev, const std::vector<char>& spv, VkShaderModule* m) 
 // ── buffer allocation ─────────────────────────────────────────────────────────
 
 bool GpuParticlePass::alloc_buffers() noexcept {
-    VkDevice d = dev_->device;
-
     // Particle state — DEVICE_LOCAL, compute read/write
     // 80 bytes per particle (Particle struct in shader, padded to 80 B)
     constexpr VkDeviceSize kParticleBytes = kMaxGpuParticles * 80ull;
@@ -244,10 +242,27 @@ bool GpuParticlePass::create_graphics_pipeline(VkRenderPass rp,
 
     VkPipelineLayoutCreateInfo layoutci{};
     layoutci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutci.setLayoutCount         = 0;
     layoutci.pushConstantRangeCount = 1;
     layoutci.pPushConstantRanges    = &pcRange;
-    VK_TRY(vkCreatePipelineLayout(d, &layoutci, nullptr, &drawLayout_));
+
+    VkDescriptorSetLayout dummySet0 = VK_NULL_HANDLE;
+    if (lightGridSetLayout_ != VK_NULL_HANDLE) {
+        VkDescriptorSetLayoutCreateInfo li{};
+        li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        vkCreateDescriptorSetLayout(d, &li, nullptr, &dummySet0);
+
+        VkDescriptorSetLayout setLayouts[2] = { dummySet0, lightGridSetLayout_ };
+        layoutci.setLayoutCount = 2;
+        layoutci.pSetLayouts = setLayouts;
+    } else {
+        layoutci.setLayoutCount = 0;
+    }
+
+    VkResult layoutRes = vkCreatePipelineLayout(d, &layoutci, nullptr, &drawLayout_);
+    if (dummySet0 != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(d, dummySet0, nullptr);
+    }
+    VK_TRY(layoutRes);
 
     // Load shaders
     std::vector<char> vertSpv, fragSpv;
@@ -374,8 +389,10 @@ bool GpuParticlePass::create_graphics_pipeline(VkRenderPass rp,
 // ── init ──────────────────────────────────────────────────────────────────────
 
 bool GpuParticlePass::init(VulkanDevice* dev, VkRenderPass renderPass,
-                            uint32_t subpass, const char* shaderDir) {
+                            uint32_t subpass, const char* shaderDir,
+                            VkDescriptorSetLayout lightGridSetLayout) {
     dev_ = dev;
+    lightGridSetLayout_ = lightGridSetLayout;
     if (!alloc_buffers())          return false;
     if (!create_descriptor_sets()) return false;
     if (!create_compute_pipeline(shaderDir))              return false;
@@ -513,8 +530,12 @@ void GpuParticlePass::record_compute(VkCommandBuffer cmd,
 // ── record draw ───────────────────────────────────────────────────────────────
 
 void GpuParticlePass::record_draw(VkCommandBuffer cmd,
-                                   const ParticleDrawPush& push) noexcept {
+                                   const ParticleDrawPush& push,
+                                   VkDescriptorSet lightGridSet) noexcept {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawPipeline_);
+    if (lightGridSet != VK_NULL_HANDLE) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawLayout_, 1, 1, &lightGridSet, 0, nullptr);
+    }
     vkCmdPushConstants(cmd, drawLayout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(push), &push);

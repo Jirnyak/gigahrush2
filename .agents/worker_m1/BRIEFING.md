@@ -1,47 +1,55 @@
-# BRIEFING — 2026-07-30T02:14:31Z
+# BRIEFING — 2026-07-30T13:07:55Z
 
 ## Mission
-Implement Milestone 1 (R1): Procedural Surface Material & Normal Noise Deepening for Gigahrush2 C++23/Vulkan Engine.
+Implement Milestone 1: GPU Compute Volumetric Light Grid & Fog (`shaders/light_grid.comp`, `src/render/gpu_light_grid.h/.cpp`, GLSL raymarching in `shaders/cube.frag`, `shaders/prop.frag`, `shaders/particle.frag`, and main application integration).
 
 ## 🔒 My Identity
-- Archetype: worker_m1
+- Archetype: implementer, qa, specialist
 - Roles: implementer, qa, specialist
 - Working directory: C:\hades\gigahrush2\.agents\worker_m1
-- Original parent: ba7e9b23-02ce-40fc-8e1b-191281ef7d31
+- Original parent: e6255fe7-26bc-48bd-99e3-c248be912493
 - Milestone: Milestone 1 (R1)
 
 ## 🔒 Key Constraints
-- NO CHEATING: Genuine implementation, no hardcoded test results or dummy facade.
-- Follow minimal change principle.
-- UTF-8 clean, zero GLSL/C++ warnings.
-- Passing `check_source_rules.cmake` (`GIGA_SOURCE_RULES=PASS`).
-- Passing full build & 4/4 CTest targets.
+- Genuine implementation required (no hardcoded outputs, no facades).
+- 0B heap allocation on hot render loops.
+- std430 packing: `GpuPointLight` (32 B), `GpuGridCell` (64 B).
+- Grid dimensions: $32 \times 16 \times 32$ cells.
+- Workgroup size: `(8, 4, 8)`.
+- MSVC `-W4 /permissive-` 0 warnings compile.
+- `glslc` 0 errors 0 warnings shader compile.
+- All `ctest` tests must pass.
 
 ## Current Parent
-- Conversation ID: ba7e9b23-02ce-40fc-8e1b-191281ef7d31
-- Updated: 2026-07-30T02:14:31Z
+- Conversation ID: e6255fe7-26bc-48bd-99e3-c248be912493
+- Updated: 2026-07-30T13:07:55Z
 
 ## Task Summary
-- **What to build**:
-  1. Update `tools/gen_material_surface.py` to add `chroma_sigma`, `chroma_axis`, and `bump_scale` parameters per material.
-  2. Run `tools/gen_material_surface.py` to regenerate `shaders/material_surface.glsl`.
-  3. Update `shaders/cube.frag` to compute mean-preserving lognormal vector RGB chroma modulation on albedo and derivative normal perturbing on face normal `n` for lighting.
-  4. Verify shader compilation with zero warnings via `glslc`.
-  5. Run `cmake -DGIGA_ROOT=C:/hades/gigahrush2 -P tools/check_source_rules.cmake` -> `GIGA_SOURCE_RULES=PASS`.
-  6. Run `tools\win\build.bat Release` and `ctest` to ensure 100% green pass.
-  7. Write `C:\hades\gigahrush2\.agents\worker_m1\handoff.md`.
+- **What to build**: `shaders/light_grid.comp`, `shaders/volumetric_fog.glsl`, `src/render/gpu_light_grid.h`, `src/render/gpu_light_grid.cpp`, raymarching integration in `cube.frag`, `prop.frag`, `particle.frag`, and `main.cpp` render loop integration.
+- **Success criteria**: Functional 3D light grid compute pass & volumetric fog raymarching with 0 errors/warnings and 0B heap allocations in hot loop.
+- **Interface contracts**: Vulkan descriptor set 1, std430 SSBO buffers.
+- **Code layout**: `src/render/`, `shaders/`, `src/app/`.
+
+## Key Decisions Made
+- Use host-visible mapped SSBO for point lights (256 max) and device-local SSBO for 3D grid cells ($32 \times 16 \times 32$).
+- Interleaved Gradient Noise (IGN) jittering with Henyey-Greenstein scattering for volumetric fog raymarching.
+- Insert explicit buffer memory barrier (`VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT` to `VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT`).
 
 ## Change Tracker
-- **Files modified**: None yet
-- **Build status**: Pending
+- **Files modified**: `shaders/light_grid.comp`, `shaders/volumetric_fog.glsl`, `shaders/cube.frag`, `shaders/prop.frag`, `shaders/particle.vert`, `shaders/particle.frag`, `src/render/gpu_light_grid.h`, `src/render/gpu_light_grid.cpp`, `src/render/cube_pass.h/.cpp`, `src/render/body_pass.h/.cpp`, `src/render/prop_pass.h/.cpp`, `src/render/gpu_particle_pass.h/.cpp`, `src/render/vk_renderer.h/.cpp`, `src/app/main.cpp`, `CMakeLists.txt`.
+- **Build status**: PASS (0 warnings, 0 errors)
 - **Pending issues**: None
 
 ## Quality Status
-- **Build/test result**: Pending
-- **Lint status**: Clean
+- **Build/test result**: 100% tests passed (4/4 passed)
+- **Lint status**: Clean MSVC `-W4 /permissive-` compilation
+- **Tests added/modified**: `world_test`, `audit_findings`, `game_test`, `source_rules` all passing
 
 ## Loaded Skills
 - None
 
-## Key Decisions Made
-- Follow mathematical derivations in `C:\hades\gigahrush2\.agents\explorer_m1_next\analysis.md`.
+## Artifact Index
+- `C:\hades\gigahrush2\.agents\worker_m1\ORIGINAL_REQUEST.md`
+- `C:\hades\gigahrush2\.agents\worker_m1\BRIEFING.md`
+- `C:\hades\gigahrush2\.agents\worker_m1\progress.md`
+- `C:\hades\gigahrush2\.agents\worker_m1\handoff.md`

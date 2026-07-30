@@ -54,6 +54,11 @@ struct VulkanRenderer {
     bool init(VulkanDevice& dev, SDL_Window* window);
     void destroy();
 
+    // Begins command buffer recording for the frame without starting the render pass.
+    bool begin_frame_cmd(SDL_Window* window);
+    // Begins the render pass with the given clear colour.
+    void begin_pass(float r, float g, float b);
+
     // Begins the frame + render pass with the given clear colour. Returns false
     // if the frame was skipped (e.g. swapchain out of date / minimized).
     bool begin_frame(SDL_Window* window, float r, float g, float b);
