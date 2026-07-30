@@ -491,6 +491,7 @@ int main(int argc, char** argv) {
     float customYaw = 0.8f, customPitch = -0.5f;
     bool shotOrbit = false;
     std::string shotAction;
+    bool showHud = true;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -499,6 +500,7 @@ int main(int argc, char** argv) {
         else if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
         else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
         else if (a == "--ride" && i + 1 < argc) shotRide = std::atoi(argv[++i]);
+        else if (a == "--no-hud" || a == "--nohud") showHud = false;
         else if (a == "--pos" && i + 3 < argc) {
             customPos.x = static_cast<float>(std::atof(argv[++i]));
             customPos.y = static_cast<float>(std::atof(argv[++i]));
@@ -1062,6 +1064,9 @@ int main(int argc, char** argv) {
                     paused = !paused;
                     input.set_mouselook(!paused);
                     SDL_SetWindowRelativeMouseMode(window, !paused);
+                }
+                if (e.key.scancode == SDL_SCANCODE_H || e.key.scancode == SDL_SCANCODE_F1) {
+                    showHud = !showHud;
                 }
                 if (!paused && e.key.scancode == SDL_SCANCODE_TAB) {
                     bool on = !input.mouselook();
@@ -2020,6 +2025,7 @@ int main(int argc, char** argv) {
         CameraMatrices camMat = compute_camera(reg, aspect);
 
         hud.begin_frame();
+        if (showHud)
         {
             ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
             ImGui::Begin("gigahrush2");
