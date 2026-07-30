@@ -219,35 +219,34 @@ void build_stair_step(std::vector<PropVertex>& v, std::vector<uint32_t>& idx) {
     // Top surface is sloped: front edge at y=0, back edge at y=0.25
     const float w = 2.0f, d = 0.40f, rh = 0.25f;
     // Top (sloped) face
+    vec3 slopeN = {0.0f, 0.847998f, -0.529998f};
     push_quad(v, idx,
               {0.0f, 0.0f, 0.0f}, {w, 0.0f, 0.0f},
-              {w, rh, d},         {0.0f, rh, d},
-              {0.0f, 1.0f, -0.53f}); // approx slope normal normalised
+              {w, rh, d},         {0.0f, rh, d}, slopeN);
     // Bottom face
     push_quad(v, idx,
               {0.0f, 0.0f, d}, {w, 0.0f, d},
               {w, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f},
               {0.0f, -1.0f, 0.0f});
-    // Front face (z=0)
-    push_quad(v, idx,
-              {w, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f},
-              {0.0f, 0.0f, 0.0f}, {w, 0.0f, 0.0f},
-              {0.0f, 0.0f, -1.0f});
     // Back face (z=d)
     push_quad(v, idx,
-              {0.0f, rh, d}, {w, rh, d},
-              {w, 0.0f, d}, {0.0f, 0.0f, d},
+              {0.0f, 0.0f, d}, {w, 0.0f, d},
+              {w, rh, d},      {0.0f, rh, d},
               {0.0f, 0.0f, 1.0f});
-    // Left face (x=0)
-    push_quad(v, idx,
-              {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, d},
-              {0.0f, rh, d}, {0.0f, 0.0f, 0.0f},
-              {-1.0f, 0.0f, 0.0f});
-    // Right face (x=w)
-    push_quad(v, idx,
-              {w, 0.0f, d}, {w, 0.0f, 0.0f},
-              {w, 0.0f, 0.0f}, {w, 0.0f, d},
-              {1.0f, 0.0f, 0.0f});
+    // Left face (x=0 triangle)
+    uint32_t lbase = static_cast<uint32_t>(v.size());
+    vec3 ln = {-1.0f, 0.0f, 0.0f};
+    v.push_back({{0.0f, 0.0f, 0.0f}, ln});
+    v.push_back({{0.0f, 0.0f, d},    ln});
+    v.push_back({{0.0f, rh, d},      ln});
+    idx.push_back(lbase); idx.push_back(lbase + 1); idx.push_back(lbase + 2);
+    // Right face (x=w triangle)
+    uint32_t rbase = static_cast<uint32_t>(v.size());
+    vec3 rn = {1.0f, 0.0f, 0.0f};
+    v.push_back({{w, 0.0f, 0.0f}, rn});
+    v.push_back({{w, rh, d},      rn});
+    v.push_back({{w, 0.0f, d},    rn});
+    idx.push_back(rbase); idx.push_back(rbase + 1); idx.push_back(rbase + 2);
 }
 
 void build_pipe(std::vector<PropVertex>& v, std::vector<uint32_t>& idx) {
@@ -300,34 +299,30 @@ void build_pipe_elbow(std::vector<PropVertex>& v, std::vector<uint32_t>& idx) {
     const float rSec = 0.15f, rBend = 0.30f;
     const int sweepSegs = 8, circSegs = 8;
     for (int si = 0; si < sweepSegs; ++si) {
-        float sa0 = (kPi * 0.5f) * si       / sweepSegs; // sweep angle
+        float sa0 = (kPi * 0.5f) * si       / sweepSegs;
         float sa1 = (kPi * 0.5f) * (si + 1) / sweepSegs;
-        // Centre of tube cross-section on the bend arc
-        vec3 C0 = {rBend * std::cos(sa0), rBend * std::sin(sa0), 0.0f};
-        vec3 C1 = {rBend * std::cos(sa1), rBend * std::sin(sa1), 0.0f};
-        // Tangent along sweep
-        vec3 T0 = {-std::sin(sa0), std::cos(sa0), 0.0f};
-        vec3 T1 = {-std::sin(sa1), std::cos(sa1), 0.0f};
-        // Radial (outward from bend centre)
-        vec3 R0 = {std::cos(sa0), std::sin(sa0), 0.0f};
-        vec3 R1 = {std::cos(sa1), std::sin(sa1), 0.0f};
+        float csa0 = std::cos(sa0), ssa0 = std::sin(sa0);
+        float csa1 = std::cos(sa1), ssa1 = std::sin(sa1);
+        vec3 C0 = {rBend * csa0, rBend * ssa0, 0.0f};
+        vec3 C1 = {rBend * csa1, rBend * ssa1, 0.0f};
+        vec3 R0 = {csa0, ssa0, 0.0f};
+        vec3 R1 = {csa1, ssa1, 0.0f};
         for (int ci = 0; ci < circSegs; ++ci) {
             float ca0 = 2.0f * kPi * ci       / circSegs;
             float ca1 = 2.0f * kPi * (ci + 1) / circSegs;
-            // Tube cross-section sampled at both sweep angles and both circle angles
-            auto pos = [&](vec3 C, vec3 R, vec3 T, float ca) -> vec3 {
-                return {C.x + rSec * (std::cos(ca) * R.x),
-                        C.y + rSec * std::sin(ca),
-                        C.z + rSec * (std::cos(ca) * R.z)};
+            auto pos = [&](vec3 C, vec3 R, float ca) -> vec3 {
+                return {C.x + rSec * std::cos(ca) * R.x,
+                        C.y + rSec * std::cos(ca) * R.y,
+                        C.z + rSec * std::sin(ca)};
             };
             auto nrm = [&](vec3 R, float ca) -> vec3 {
-                return {std::cos(ca) * R.x, std::sin(ca), std::cos(ca) * R.z};
+                return {std::cos(ca) * R.x, std::cos(ca) * R.y, std::sin(ca)};
             };
             uint32_t base = static_cast<uint32_t>(v.size());
-            v.push_back({pos(C0,R0,T0,ca0), nrm(R0,ca0)});
-            v.push_back({pos(C1,R1,T1,ca0), nrm(R1,ca0)});
-            v.push_back({pos(C1,R1,T1,ca1), nrm(R1,ca1)});
-            v.push_back({pos(C0,R0,T0,ca1), nrm(R0,ca1)});
+            v.push_back({pos(C0,R0,ca0), nrm(R0,ca0)});
+            v.push_back({pos(C1,R1,ca0), nrm(R1,ca0)});
+            v.push_back({pos(C1,R1,ca1), nrm(R1,ca1)});
+            v.push_back({pos(C0,R0,ca1), nrm(R0,ca1)});
             idx.push_back(base);   idx.push_back(base+1); idx.push_back(base+2);
             idx.push_back(base);   idx.push_back(base+2); idx.push_back(base+3);
         }
@@ -395,21 +390,25 @@ void build_valve(std::vector<PropVertex>& v, std::vector<uint32_t>& idx) {
             idx.push_back(base); idx.push_back(base+2); idx.push_back(base+3);
         }
     }
-    // Spokes: thin cylinders from hub to rim
+    // Spokes: thin cylinders from hub to rim, correctly aligned in XZ plane
     for (int s = 0; s < spokes; ++s) {
         float a = 2.0f * kPi * s / spokes;
         float cx = std::cos(a), cz = std::sin(a);
-        // spoke from hub edge to rim inner edge, 4-sided prism
         for (int ci = 0; ci < 4; ++ci) {
             float ba = kPi * 0.5f * ci;
             float ba1 = kPi * 0.5f * (ci + 1);
-            vec3 n = {std::cos(ba) * (-cz), std::sin(ba), std::cos(ba) * cx};
+            vec3 n = {-std::cos(ba) * cz, std::sin(ba), std::cos(ba) * cx};
             uint32_t base = static_cast<uint32_t>(v.size());
             float r0 = rHub, r1 = rRim - rimThick;
-            v.push_back({{cx * r0 + rSpoke * std::cos(ba),  rSpoke * std::sin(ba),  cz * r0}, n});
-            v.push_back({{cx * r1 + rSpoke * std::cos(ba),  rSpoke * std::sin(ba),  cz * r1}, n});
-            v.push_back({{cx * r1 + rSpoke * std::cos(ba1), rSpoke * std::sin(ba1), cz * r1}, n});
-            v.push_back({{cx * r0 + rSpoke * std::cos(ba1), rSpoke * std::sin(ba1), cz * r0}, n});
+            auto spoke_v = [&](float r, float b_ang) -> vec3 {
+                return {cx * r - rSpoke * std::cos(b_ang) * cz,
+                        rSpoke * std::sin(b_ang),
+                        cz * r + rSpoke * std::cos(b_ang) * cx};
+            };
+            v.push_back({spoke_v(r0, ba),  n});
+            v.push_back({spoke_v(r1, ba),  n});
+            v.push_back({spoke_v(r1, ba1), n});
+            v.push_back({spoke_v(r0, ba1), n});
             idx.push_back(base); idx.push_back(base+1); idx.push_back(base+2);
             idx.push_back(base); idx.push_back(base+2); idx.push_back(base+3);
         }
@@ -517,10 +516,8 @@ void build_cabinet_box(std::vector<PropVertex>& v, std::vector<uint32_t>& idx) {
 // Angled control console: 1.2 × 1.0 × 0.4 m with sloped top surface
 void build_control_panel(std::vector<PropVertex>& v, std::vector<uint32_t>& idx) {
     const float w = 1.2f, h = 1.0f, hFront = 0.7f, d = 0.4f;
-    // Sloped top
-    vec3 slopeN = {0.0f, d, h - hFront};
-    float slopeLen = std::sqrt(slopeN.y * slopeN.y + slopeN.z * slopeN.z);
-    slopeN = {0, slopeN.y / slopeLen, slopeN.z / slopeLen};
+    // Sloped top face normal facing outward towards -z
+    vec3 slopeN = {0.0f, 0.8f, -0.6f};
     push_quad(v, idx, {0,hFront,0}, {w,hFront,0}, {w,h,d}, {0,h,d}, slopeN);
     // Front face (vertical)
     push_quad(v, idx, {0,0,0}, {w,0,0}, {w,hFront,0}, {0,hFront,0}, {0,0,-1});
@@ -533,26 +530,44 @@ void build_control_panel(std::vector<PropVertex>& v, std::vector<uint32_t>& idx)
     push_quad(v, idx, {0,0,d}, {w,0,d}, {w,0,0}, {0,0,0}, {0,-1,0});
 }
 
-// Handrail segment: 2m long — top bar + 2 vertical posts + 2 diagonal braces
+// Handrail segment: 2m long — top bar + 2 vertical posts
 void build_railing(std::vector<PropVertex>& v, std::vector<uint32_t>& idx) {
     const float len = 2.0f, h = 1.0f, r = 0.03f;
-    // Top horizontal bar (along X)
-    push_cylinder_sides(v, idx, r, h, h, 8, 0.0f, 2.0f * kPi);  // degenerate
-    // Use a box bar instead (simpler)
-    float hw = r;
-    // Top bar as a thin box
-    push_quad(v, idx, {0,h-hw,0}, {len,h-hw,0}, {len,h+hw,0}, {0,h+hw,0}, {0,0,-1});
-    push_quad(v, idx, {0,h+hw,0}, {len,h+hw,0}, {len,h+hw,hw*2}, {0,h+hw,hw*2}, {0,1,0});
-    push_quad(v, idx, {0,h-hw,hw*2}, {len,h-hw,hw*2}, {len,h+hw,hw*2}, {0,h+hw,hw*2}, {0,0,1});
-    // Two vertical posts
+    const int segs = 8;
+    // Top horizontal bar (cylinder along X)
+    for (int i = 0; i < segs; ++i) {
+        float a0 = 2.0f * kPi * i       / segs;
+        float a1 = 2.0f * kPi * (i + 1) / segs;
+        float c0 = std::cos(a0), s0 = std::sin(a0);
+        float c1 = std::cos(a1), s1 = std::sin(a1);
+        vec3 n0 = {0.0f, c0, s0};
+        vec3 n1 = {0.0f, c1, s1};
+        uint32_t base = static_cast<uint32_t>(v.size());
+        v.push_back({{0.0f, h + r * c0, r * s0}, n0});
+        v.push_back({{len,  h + r * c0, r * s0}, n0});
+        v.push_back({{len,  h + r * c1, r * s1}, n1});
+        v.push_back({{0.0f, h + r * c1, r * s1}, n1});
+        idx.push_back(base); idx.push_back(base+1); idx.push_back(base+2);
+        idx.push_back(base); idx.push_back(base+2); idx.push_back(base+3);
+    }
+    // Two vertical posts (cylinders along Y)
     for (int p = 0; p < 2; ++p) {
-        float x = p == 0 ? 0.0f : len;
-        push_cylinder_sides(v, idx, r, 0.0f, h, 8);
-        // Translate: inline would need offset; approximate with box post
-        push_quad(v, idx, {x-hw,0,-hw}, {x+hw,0,-hw}, {x+hw,h,-hw}, {x-hw,h,-hw}, {0,0,-1});
-        push_quad(v, idx, {x-hw,0,hw}, {x-hw,h,hw}, {x+hw,h,hw}, {x+hw,0,hw}, {0,0,1});
-        push_quad(v, idx, {x-hw,0,-hw}, {x-hw,h,-hw}, {x-hw,h,hw}, {x-hw,0,hw}, {-1,0,0});
-        push_quad(v, idx, {x+hw,0,hw}, {x+hw,h,hw}, {x+hw,h,-hw}, {x+hw,0,-hw}, {1,0,0});
+        float px = (p == 0) ? 0.0f : len;
+        for (int i = 0; i < segs; ++i) {
+            float a0 = 2.0f * kPi * i       / segs;
+            float a1 = 2.0f * kPi * (i + 1) / segs;
+            float c0 = std::cos(a0), s0 = std::sin(a0);
+            float c1 = std::cos(a1), s1 = std::sin(a1);
+            vec3 n0 = {c0, 0.0f, s0};
+            vec3 n1 = {c1, 0.0f, s1};
+            uint32_t base = static_cast<uint32_t>(v.size());
+            v.push_back({{px + r * c0, 0.0f, r * s0}, n0});
+            v.push_back({{px + r * c0, h,    r * s0}, n0});
+            v.push_back({{px + r * c1, h,    r * s1}, n1});
+            v.push_back({{px + r * c1, 0.0f, r * s1}, n1});
+            idx.push_back(base); idx.push_back(base+1); idx.push_back(base+2);
+            idx.push_back(base); idx.push_back(base+2); idx.push_back(base+3);
+        }
     }
 }
 
@@ -575,23 +590,32 @@ void build_support_beam(std::vector<PropVertex>& v, std::vector<uint32_t>& idx) 
 
 // Storage crate 0.6×0.6×0.6 with chamfered edges
 void build_crate_box(std::vector<PropVertex>& v, std::vector<uint32_t>& idx) {
-    const float s = 0.6f, ch = 0.04f; // size, chamfer
-    // 6 main faces (slightly inset by chamfer)
+    const float s = 0.6f, ch = 0.04f;
     float a = ch, b = s - ch;
+    // 6 main faces
     push_quad(v, idx, {a,0,a},{b,0,a},{b,0,b},{a,0,b}, {0,-1,0});
     push_quad(v, idx, {a,s,a},{a,s,b},{b,s,b},{b,s,a}, {0,1,0});
     push_quad(v, idx, {0,a,a},{0,b,a},{0,b,b},{0,a,b}, {-1,0,0});
     push_quad(v, idx, {s,a,a},{s,a,b},{s,b,b},{s,b,a}, {1,0,0});
     push_quad(v, idx, {a,a,0},{b,a,0},{b,b,0},{a,b,0}, {0,0,-1});
     push_quad(v, idx, {a,a,s},{a,b,s},{b,b,s},{b,a,s}, {0,0,1});
-    // 12 chamfer edges (simplified as quads, diagonal normals)
-    // Bottom edges
-    push_quad(v, idx, {a,0,a},{a,a,0},{b,a,0},{b,0,a}, {0,-0.707f,-0.707f});
-    push_quad(v, idx, {a,0,b},{b,0,b},{b,a,s},{a,a,s}, {0,-0.707f,0.707f});
-    push_quad(v, idx, {0,a,a},{0,a,b},{0,b,b},{0,b,a}, {-0.707f,0,-0.0f}); // just reuse full face
-    // Top edges (mirrored)
+
+    // 12 chamfer edges
+    // Bottom 4
+    push_quad(v, idx, {a,0,a},{b,0,a},{b,a,0},{a,a,0}, {0,-0.707f,-0.707f});
+    push_quad(v, idx, {a,a,s},{b,a,s},{b,0,b},{a,0,b}, {0,-0.707f,0.707f});
+    push_quad(v, idx, {0,a,a},{a,0,a},{a,0,b},{0,a,b}, {-0.707f,-0.707f,0});
+    push_quad(v, idx, {b,0,a},{s,a,a},{s,a,b},{b,0,b}, {0.707f,-0.707f,0});
+    // Top 4
     push_quad(v, idx, {a,s,a},{b,s,a},{b,b,0},{a,b,0}, {0,0.707f,-0.707f});
-    push_quad(v, idx, {a,s,b},{a,b,s},{b,b,s},{b,s,b}, {0,0.707f,0.707f});
+    push_quad(v, idx, {a,b,s},{b,b,s},{b,s,b},{a,s,b}, {0,0.707f,0.707f});
+    push_quad(v, idx, {0,b,a},{a,s,a},{a,s,b},{0,b,b}, {-0.707f,0.707f,0});
+    push_quad(v, idx, {b,s,a},{s,b,a},{s,b,b},{b,s,b}, {0.707f,0.707f,0});
+    // Vertical 4
+    push_quad(v, idx, {0,a,a},{a,a,0},{a,b,0},{0,b,a}, {-0.707f,0,-0.707f});
+    push_quad(v, idx, {s,b,a},{b,b,0},{b,a,0},{s,a,a}, {0.707f,0,-0.707f});
+    push_quad(v, idx, {0,b,b},{a,b,s},{a,a,s},{0,a,b}, {-0.707f,0,0.707f});
+    push_quad(v, idx, {s,a,b},{b,a,s},{b,b,s},{s,b,b}, {0.707f,0,0.707f});
 }
 
 // Long crate 2×0.6×0.6
@@ -669,7 +693,7 @@ void build_security_camera(std::vector<PropVertex>& v, std::vector<uint32_t>& id
     const float bw=0.05f, ba=0.20f, bb=0.15f;
     push_quad(v, idx, {-bw,0,-bw},{bw,0,-bw},{bw,ba,-bw},{-bw,ba,-bw}, {0,0,-1});
     push_quad(v, idx, {-bw,ba,-bw},{bw,ba,-bw},{bw,ba,bb},{-bw,ba,bb}, {0,1,0});
-    // Dome (half-sphere approximation using hemisphere of cylinder caps)
+    // Dome
     const float dr = 0.09f;
     const int dsegs = 10, drings = 5;
     vec3 dc = {0.0f, ba + dr * 0.3f, bb * 0.5f};
@@ -681,10 +705,10 @@ void build_security_camera(std::vector<PropVertex>& v, std::vector<uint32_t>& id
         for (int si = 0; si < dsegs; ++si) {
             float a0 = 2.0f * kPi * si       / dsegs;
             float a1 = 2.0f * kPi * (si + 1) / dsegs;
-            vec3 n00 = {std::cos(a0)*std::cos(phi0), std::sin(phi0), std::sin(a0)*std::cos(phi0)};
-            vec3 n10 = {std::cos(a1)*std::cos(phi0), std::sin(phi0), std::sin(a1)*std::cos(phi0)};
-            vec3 n01 = {std::cos(a0)*std::cos(phi1), std::sin(phi1), std::sin(a0)*std::cos(phi1)};
-            vec3 n11 = {std::cos(a1)*std::cos(phi1), std::sin(phi1), std::sin(a1)*std::cos(phi1)};
+            vec3 n00 = {std::cos(a0)*std::cos(phi0), -std::sin(phi0), std::sin(a0)*std::cos(phi0)};
+            vec3 n10 = {std::cos(a1)*std::cos(phi0), -std::sin(phi0), std::sin(a1)*std::cos(phi0)};
+            vec3 n01 = {std::cos(a0)*std::cos(phi1), -std::sin(phi1), std::sin(a0)*std::cos(phi1)};
+            vec3 n11 = {std::cos(a1)*std::cos(phi1), -std::sin(phi1), std::sin(a1)*std::cos(phi1)};
             uint32_t base = static_cast<uint32_t>(v.size());
             v.push_back({{dc.x+r0*std::cos(a0), dc.y+y0, dc.z+r0*std::sin(a0)}, n00});
             v.push_back({{dc.x+r0*std::cos(a1), dc.y+y0, dc.z+r0*std::sin(a1)}, n10});
@@ -707,8 +731,8 @@ void build_flood_lamp(std::vector<PropVertex>& v, std::vector<uint32_t>& idx) {
         float a0 = 2.0f * kPi * i       / segs;
         float a1 = 2.0f * kPi * (i + 1) / segs;
         float c0=std::cos(a0), s0=std::sin(a0), c1=std::cos(a1), s1=std::sin(a1);
-        // Slope normal: points outward+downward for opening cone
-        vec3 n = {(c0+c1)*0.5f*0.7f, -0.7f, (s0+s1)*0.5f*0.7f};
+        // Slope normal: points outward+upward for opening cone
+        vec3 n = {(c0+c1)*0.5f*0.7f, 0.7f, (s0+s1)*0.5f*0.7f};
         uint32_t base = static_cast<uint32_t>(v.size());
         v.push_back({{rBase*c0, stemH+coneH, rBase*s0}, n});
         v.push_back({{rBase*c1, stemH+coneH, rBase*s1}, n});
@@ -727,19 +751,27 @@ void build_flood_lamp(std::vector<PropVertex>& v, std::vector<uint32_t>& idx) {
 void build_fungal_column(std::vector<PropVertex>& v, std::vector<uint32_t>& idx) {
     const float h = 2.0f;
     const int segs = 12, rings = 8;
-    // Main column with radius variation
+    // Main column with continuous radius interpolation (no ring gaps)
     for (int ri = 0; ri < rings; ++ri) {
         float y0 = h * ri       / rings;
         float y1 = h * (ri + 1) / rings;
-        // Organic radius variation: each ring section uses the average of its
-        // top and bottom radii so the column gently bulges and narrows.
         float r0 = 0.30f + 0.06f * std::sin(y0 * 3.7f + 1.2f);
-        // Use r1 as the top-ring radius to compute a per-ring representative,
-        // but push_cylinder_sides takes one radius (smooth column interpolation
-        // comes from using individual sections with similar radii).
         float r1 = 0.30f + 0.06f * std::sin(y1 * 3.7f + 1.2f);
-        float rAvg = (r0 + r1) * 0.5f;
-        push_cylinder_sides(v, idx, rAvg, y0, y1, segs);
+        for (int i = 0; i < segs; ++i) {
+            float a0 = 2.0f * kPi * i       / segs;
+            float a1 = 2.0f * kPi * (i + 1) / segs;
+            float c0 = std::cos(a0), s0 = std::sin(a0);
+            float c1 = std::cos(a1), s1 = std::sin(a1);
+            vec3 n0 = {c0, 0.0f, s0};
+            vec3 n1 = {c1, 0.0f, s1};
+            uint32_t base = static_cast<uint32_t>(v.size());
+            v.push_back({{r0 * c0, y0, r0 * s0}, n0});
+            v.push_back({{r1 * c0, y1, r1 * s0}, n0});
+            v.push_back({{r1 * c1, y1, r1 * s1}, n1});
+            v.push_back({{r0 * c1, y0, r0 * s1}, n1});
+            idx.push_back(base);     idx.push_back(base + 1); idx.push_back(base + 2);
+            idx.push_back(base);     idx.push_back(base + 2); idx.push_back(base + 3);
+        }
     }
 
     // Mushroom caps: 4 bumps at staggered heights (half-spheres)
@@ -804,8 +836,19 @@ void build_crystal_cluster(std::vector<PropVertex>& v, std::vector<uint32_t>& id
             v.push_back({{cr.x,           cr.h,   cr.z           }, n});
             idx.push_back(base); idx.push_back(base+1); idx.push_back(base+2);
         }
-        // Base cap
-        push_cap(v, idx, cr.r, 0.0f, sides, /*faceUp=*/false);
+        // Base cap centered at crystal offset (cr.x, cr.z)
+        uint32_t centre = static_cast<uint32_t>(v.size());
+        vec3 bot_n = {0.0f, -1.0f, 0.0f};
+        v.push_back({{cr.x, 0.0f, cr.z}, bot_n});
+        for (int i = 0; i <= sides; ++i) {
+            float a = 2.0f * kPi * i / sides + cr.yaw;
+            v.push_back({{cr.x + cr.r * std::cos(a), 0.0f, cr.z + cr.r * std::sin(a)}, bot_n});
+        }
+        for (int i = 0; i < sides; ++i) {
+            uint32_t a = centre + 1 + i;
+            uint32_t b = centre + 1 + i + 1;
+            idx.push_back(centre); idx.push_back(b); idx.push_back(a);
+        }
     }
 }
 

@@ -4,10 +4,6 @@
 // Binding 0 (per-vertex):   PropVertex   — local pos + normal
 // Binding 1 (per-instance): PropInstance — world origin, yaw, color,
 //                            matId, emissive, flags, animPhase
-//
-// Outputs match cube.frag varyings exactly so props share the full
-// PBR shading path (PBR normal mapping, height fog, headlamp scattering,
-// dithering). No extra fragment permutations needed.
 
 layout(location = 0) in vec3  inPos;       // per-vertex, prop-local space
 layout(location = 1) in vec3  inNormal;    // per-vertex, prop-local space
@@ -16,6 +12,8 @@ layout(location = 3) in float inYaw;       // per-instance Y rotation (radians)
 layout(location = 4) in vec3  inColor;     // per-instance base colour
 layout(location = 5) in uint  inMat;       // per-instance material id (0-30)
 layout(location = 6) in uint  inEmissive;  // per-instance emissive byte (0-255)
+layout(location = 7) in uint  inFlags;     // per-instance flags bitfield
+layout(location = 8) in float inAnimPhase; // per-instance anim phase (R8_UNORM -> 0.0..1.0)
 
 // Shared push-constant block — must match cube.vert / body.vert EXACTLY.
 layout(push_constant) uniform Push {
@@ -23,8 +21,7 @@ layout(push_constant) uniform Push {
     vec4 sunDir;   // xyz = fill-light direction, w = fill strength
     vec4 camPos;   // xyz = camera world pos, w = headlamp intensity
     vec4 fog;      // x = fog start, y = fog end, z = lamp radius, w = ambient
-    vec4 torus;    // x = wrap period (kWorldExtent)
-                   // y = AO direct share, z = tex mask, w = normal/roughness mask
+    vec4 torus;    // x = wrap period (kWorldExtent), y = AO direct share, z = tex mask, w = uTime
 } pc;
 
 layout(location = 0) out vec3  vNormal;
@@ -33,7 +30,8 @@ layout(location = 2) out vec3  vWorldPos;
 layout(location = 3) out float vAo;
 layout(location = 4) flat out uint  vMat;
 layout(location = 5) flat out float vEmissive;
-
+layout(location = 6) flat out uint  vFlags;
+layout(location = 7) flat out float vAnimPhase;
 
 // Nearest toroidal image — matches core/wrap.h wrap_delta_f() and cube.vert.
 vec3 nearest_image(vec3 absPos, vec3 cam, float p) {
@@ -54,23 +52,15 @@ void main() {
     vec3 localPos    = rot * inPos;
     vec3 localNormal = rot * inNormal;
 
-    // Place at the nearest toroidal image so props across the seam appear
-    // in front of the player instead of at the wrap boundary.
     vec3 world = nearest_image(inOrigin + localPos, pc.camPos.xyz, pc.torus.x);
     gl_Position = pc.viewProj * vec4(world, 1.0);
 
-    vNormal   = localNormal;
-    vColor    = inColor;
-    vWorldPos = world;
-
-    // Props have no baked AO — they sit on top of the voxel world.
-    // vAo=1.0 keeps the (kAoFloor + (1-kAoFloor)*vAo) term at full brightness.
-    vAo = 1.0;
-
-    // Flat material id for the const-array surface lookup in cube.frag.
-    vMat = inMat;
-
-    // Emissive multiplier 0.0 .. 2.0 (mapped from byte 0..255)
-    vEmissive = float(inEmissive) / 255.0 * 2.0;
+    vNormal    = localNormal;
+    vColor     = inColor;
+    vWorldPos  = world;
+    vAo        = 1.0;
+    vMat       = inMat;
+    vEmissive  = float(inEmissive) / 255.0 * 2.0;
+    vFlags     = inFlags;
+    vAnimPhase = inAnimPhase * 6.283185307179586; // Map 0..1 to 0..2pi
 }
-

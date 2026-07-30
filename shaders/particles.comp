@@ -1,0 +1,276 @@
+#version 450
+// particles.comp — GPU-native particle physics & billboard generation.
+//
+// Architecture: one invocation per particle slot (maxParticles = 8192).
+//
+//   Storage Buffer 0 (DEVICE_LOCAL): Particle state array — position, velocity,
+//     color, lifetime, kind. Written and read exclusively by this shader.
+//     CPU never reads it back.
+//
+//   Storage Buffer 1 (HOST_VISIBLE, mapped): EmitEvent ring buffer.
+//     CPU writes new particle spawn descriptors here. Shader consumes them
+//     during the emit phase and fills dead slots (lifetime <= 0).
+//
+//   Storage Buffer 2 (DEVICE_LOCAL): VkDrawIndirectCommand.
+//     Cleared by a transfer at frame start, then atomicAdd increments
+//     vertexCount as live particles are confirmed. Graphics pass reads it
+//     as an indirect draw argument — zero CPU readback.
+//
+//   Storage Buffer 3 (DEVICE_LOCAL): Billboard vertex output.
+//     This shader writes 6 vertices per live particle (two triangles, a
+//     billboard quad). The vertex shader in particle.vert reads these
+//     directly; no CPU involvement.
+//
+// Per-kind physics constants (gravity, drag, turbulence):
+//   0 = Spark:    g=9.8 down, drag=0.85/s, hot bright fade-out, 0.3-0.8s
+//   1 = Smoke:    g=0.3 up,   drag=0.4/s,  grows + fades, 2-5s
+//   2 = AcidDrip: g=9.8 down, no drag,     green glow, splats at low vel
+//   3 = BioSpore: g=0.1 down, drag=0.2/s,  sine lateral drift, 3-8s
+//   4 = DustMote: g=0.01,     drag=0.05/s, brownian noise, 5-15s
+//   5 = ElecArc:  no motion,  1 frame flash
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// ── particle state (DEVICE_LOCAL, RW) ────────────────────────────────────────
+
+struct Particle {
+    vec3  pos;          // world-space position
+    float lifetime;     // seconds remaining; <= 0 means dead slot
+    vec3  vel;          // world-space velocity m/s
+    float maxLifetime;  // initial lifetime for alpha normalization
+    vec3  color;        // linear RGB
+    float size;         // billboard radius (m)
+    uint  kind;         // ParticleKind enum (0-5)
+    float spin;         // angular velocity (rad/s) — also used as noise seed
+    float angle;        // current rotation angle (rad)
+    float pad;          // explicit padding — struct must be 80 bytes
+};
+
+// ── emit event (HOST_VISIBLE, read-only in shader) ───────────────────────────
+
+struct EmitEvent {
+    vec3  pos;
+    float speed;
+    vec3  dir;          // unit direction
+    float lifetime;
+    vec3  color;
+    float size;
+    uint  kind;
+    float spreadCos;    // cos(half-angle) of emission cone
+    uint  pad0;
+    uint  pad1;
+};
+
+// ── billboard vertex written by this shader ───────────────────────────────────
+
+struct BillVertex {
+    vec4 posSize;   // xyz = world pos of corner, w = size (for frag soft-circle)
+    vec4 colorAlpha;// rgb = color, a = alpha 0-1
+    vec2 uv;        // -1..+1 for soft-circle SDF
+    vec2 pad;
+};
+
+// ── indirect draw command ─────────────────────────────────────────────────────
+
+struct DrawIndirectCmd {
+    uint vertexCount;
+    uint instanceCount;
+    uint firstVertex;
+    uint firstInstance;
+};
+
+// ── bindings ──────────────────────────────────────────────────────────────────
+
+layout(set = 0, binding = 0) buffer ParticleStateSSBO  { Particle   particles[]; };
+layout(set = 0, binding = 1) buffer EmitEventSSBO       { EmitEvent  events[]; };
+layout(set = 0, binding = 2) buffer DrawCmdSSBO         { DrawIndirectCmd drawCmd; };
+layout(set = 0, binding = 3) buffer VertexOutputSSBO    { BillVertex verts[]; };
+
+layout(push_constant) uniform PushConstants {
+    float dt;
+    float time;
+    uint  maxParticles;
+    uint  emitCount;       // number of valid EmitEvents this frame
+    uint  emitRingHead;    // ring buffer read head (CPU-side monotonic counter & maxParticles)
+    float camX, camY, camZ;// camera world position (for per-particle distance sort skip)
+    float fogStart, fogEnd;
+} pc;
+
+// ── xorshift32 per-thread RNG (no heap, no global state) ─────────────────────
+
+uint g_rng;
+
+void rng_seed(uint s) { g_rng = s ^ 0xDEADBEEFu; if (g_rng == 0u) g_rng = 1u; }
+
+float rng_f() {
+    g_rng ^= g_rng << 13;
+    g_rng ^= g_rng >> 17;
+    g_rng ^= g_rng << 5;
+    return float(g_rng & 0x00FFFFFFu) * (1.0 / 16777216.0);
+}
+
+vec3 rng_in_cone(vec3 dir, float spreadCos) {
+    // Uniform cone sampling: rejection-free
+    float cosA = mix(spreadCos, 1.0, rng_f());
+    float sinA = sqrt(max(0.0, 1.0 - cosA * cosA));
+    float phi   = rng_f() * 6.2831853;
+
+    vec3 up    = abs(dir.y) < 0.99 ? vec3(0,1,0) : vec3(1,0,0);
+    vec3 right = normalize(cross(up, dir));
+    vec3 fwd2  = cross(dir, right);
+    return cosA * dir + sinA * (cos(phi) * right + sin(phi) * fwd2);
+}
+
+// ── per-kind physics ──────────────────────────────────────────────────────────
+
+const float kGravity = 9.8;
+
+void physics_spark(inout Particle p) {
+    p.vel.y    -= kGravity * pc.dt;
+    p.vel      *= max(0.0, 1.0 - 0.85 * pc.dt);
+    p.pos      += p.vel * pc.dt;
+    p.size     *= max(0.0, 1.0 - 0.6 * pc.dt);
+}
+
+void physics_smoke(inout Particle p) {
+    float drift = sin(p.spin + p.lifetime * 1.7) * 0.05;
+    p.vel.x    += drift * pc.dt;
+    p.vel.y    += 0.3 * pc.dt;          // rises
+    p.vel      *= max(0.0, 1.0 - 0.4 * pc.dt);
+    p.pos      += p.vel * pc.dt;
+    p.size     += 0.04 * pc.dt;         // grows as it rises
+    p.angle    += p.spin * pc.dt;
+}
+
+void physics_acid(inout Particle p) {
+    p.vel.y    -= kGravity * pc.dt;
+    p.pos      += p.vel * pc.dt;
+    // Splat: shrink rapidly when downward velocity is high
+    if (p.vel.y < -8.0) p.size *= max(0.0, 1.0 - 4.0 * pc.dt);
+}
+
+void physics_spore(inout Particle p) {
+    float age  = p.maxLifetime - p.lifetime;
+    p.vel.x   += sin(age * 2.3 + p.spin) * 0.03 * pc.dt;
+    p.vel.y   += cos(age * 1.7 + p.angle) * 0.015 * pc.dt;
+    p.vel.y   -= 0.1 * pc.dt;
+    p.vel     *= max(0.0, 1.0 - 0.2 * pc.dt);
+    p.pos     += p.vel * pc.dt;
+}
+
+void physics_dust(inout Particle p) {
+    float age  = p.maxLifetime - p.lifetime;
+    float nx   = sin(age * 7.3  + p.spin)          * 0.12;
+    float ny   = cos(age * 5.7  + p.angle) * 0.3   * 0.12;
+    float nz   = sin(age * 11.1 + p.spin * 0.7)    * 0.12;
+    p.vel.x   += nx * pc.dt;
+    p.vel.y   += ny * pc.dt;
+    p.vel.z   += nz * pc.dt;
+    p.vel     *= max(0.0, 1.0 - 0.05 * pc.dt);
+    p.pos     += p.vel * pc.dt;
+}
+
+// ── alpha curve per kind ──────────────────────────────────────────────────────
+
+float particle_alpha(Particle p) {
+    float t = clamp(p.lifetime / max(p.maxLifetime, 0.001), 0.0, 1.0);
+    switch (p.kind) {
+        case 0u: return t * t;                                          // Spark: fast fade
+        case 1u: return clamp(min(t * 3.0, (1.0-t) * 2.0) * 0.6,      // Smoke: ramp-peak
+                     0.0, 1.0);
+        case 2u: return t * 0.9;                                        // AcidDrip: linear
+        case 3u: return sin(t * 3.14159) * 0.7;                        // BioSpore: bell
+        case 4u: return sin(t * 3.14159) * 0.25;                       // DustMote: dim bell
+        case 5u: return t * 1.5;                                        // ElecArc: overbright
+        default: return t;
+    }
+}
+
+// ── main ──────────────────────────────────────────────────────────────────────
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.maxParticles) return;
+
+    rng_seed(idx ^ uint(pc.time * 1000.0) ^ 0xCAFEBABEu);
+
+    Particle p = particles[idx];
+
+    // ── Phase 1: Update existing particle ─────────────────────────────────────
+    if (p.lifetime > 0.0) {
+        p.lifetime -= pc.dt;
+
+        if (p.lifetime > 0.0) {
+            switch (p.kind) {
+                case 0u: physics_spark(p); break;
+                case 1u: physics_smoke(p); break;
+                case 2u: physics_acid (p); break;
+                case 3u: physics_spore(p); break;
+                case 4u: physics_dust (p); break;
+                // case 5 (ElecArc): no motion needed
+                default: break;
+            }
+            // Guard: clamp size to avoid degenerate geometry
+            p.size = max(0.001, p.size);
+        }
+    }
+
+    // ── Phase 2: Fill dead slot from emit ring buffer ─────────────────────────
+    // Each thread independently checks if its slot is dead and if there is a
+    // matching emit event for this frame. Uses the thread index as a mod-match
+    // to spread emit events across available dead slots without atomics on the
+    // state buffer (the DrawCmd atomic is the only one we need).
+    if (p.lifetime <= 0.0 && pc.emitCount > 0u) {
+        // Simple mapping: dead slot idx picks up emit event [idx % emitCount]
+        uint evIdx = (pc.emitRingHead + idx) % max(pc.emitCount, 1u);
+        if (evIdx < pc.emitCount) {
+            EmitEvent ev = events[evIdx];
+            vec3 dir = rng_in_cone(normalize(ev.dir), ev.spreadCos);
+            float spd = ev.speed * (0.7 + 0.6 * rng_f());
+            p.pos         = ev.pos;
+            p.vel         = dir * spd;
+            p.color       = ev.color;
+            p.lifetime    = ev.lifetime * (0.6 + 0.8 * rng_f());
+            p.maxLifetime = p.lifetime;
+            p.size        = ev.size * (0.5 + rng_f());
+            p.spin        = (rng_f() - 0.5) * 4.0;
+            p.angle       = rng_f() * 6.2831853;
+            p.kind        = ev.kind;
+            p.pad         = 0.0;
+        }
+    }
+
+    // Write updated state back to VRAM
+    particles[idx] = p;
+
+    // ── Phase 3: Emit billboard geometry ─────────────────────────────────────
+    if (p.lifetime <= 0.0) return;
+
+    float alpha = particle_alpha(p);
+    if (alpha < 0.004) return; // cull near-transparent particles
+
+    // Allocate 6 vertices atomically in the output buffer
+    uint baseVert = atomicAdd(drawCmd.vertexCount, 6u);
+    if (baseVert + 6u > pc.maxParticles * 6u) return; // out of vertex budget
+
+    // Billboard: two UV corners [-1,-1]..[+1,+1] — vertex shader expands using cam vectors
+    // We store the world position + size; particle.vert does the view-aligned expansion.
+    // Encoding: posSize.xyz = world pos, posSize.w = half-size * sign(corner.x)
+    // UV.xy = [-1,-1], [-1,+1], [+1,-1], [+1,-1], [-1,+1], [+1,+1]
+    const vec2 uvs[6] = vec2[6](
+        vec2(-1,-1), vec2(-1,+1), vec2(+1,-1),
+        vec2(+1,-1), vec2(-1,+1), vec2(+1,+1)
+    );
+
+    vec4 colorAlpha = vec4(p.color, alpha);
+    float hs = p.size; // half-size; shader uses this to expand corners
+
+    for (int i = 0; i < 6; ++i) {
+        BillVertex bv;
+        bv.posSize   = vec4(p.pos, hs);
+        bv.colorAlpha = colorAlpha;
+        bv.uv         = uvs[i];
+        bv.pad        = vec2(0.0);
+        verts[baseVert + uint(i)] = bv;
+    }
+}

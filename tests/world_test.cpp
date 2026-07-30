@@ -40,6 +40,9 @@ int g_checks = 0;
 
 #define CHECK_NEAR(a, b, eps) CHECK(std::fabs((a) - (b)) <= (eps))
 
+#include "suite_props.inl"
+
+
 static void test_wrap() {
     CHECK(wrapi(0, 128) == 0);
     CHECK(wrapi(128, 128) == 0);
@@ -552,6 +555,7 @@ int main() {
     test_nav_coarse();
     test_nav_fine();
     test_route_step();
+    test_props_all();
 
     std::printf("%d/%d checks passed\n", g_checks - g_fails, g_checks);
     if (g_fails) {

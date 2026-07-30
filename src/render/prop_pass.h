@@ -60,8 +60,9 @@ private:
     bool create_pipeline(VkPipelineLayout layout, VkRenderPass rp,
                          const char* shaderDir);
 
-    VulkanDevice* dev_ = nullptr;
-    VkPipeline    pipeline_ = VK_NULL_HANDLE;
+    VulkanDevice*    dev_ = nullptr;
+    VkPipelineLayout layout_ = VK_NULL_HANDLE;
+    VkPipeline       pipeline_ = VK_NULL_HANDLE;
 
     std::array<PropMesh, kPropShapeCount> meshes_;
 

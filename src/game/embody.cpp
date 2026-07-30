@@ -1,6 +1,7 @@
 #include "game/embody.h"
 
 #include "game/faction.h"
+#include "game/rpg.h"      // RpgStats, random_rpg
 // NOTE: #include "game/ai.h" (AiBrain) goes back here when the utility AI is
 // adapted to main mob_table -- see tools/branch_port_pending/README.md
 
@@ -79,6 +80,17 @@ Entity embody_as_player(Registry& reg, NpcPool& pool, NpcId id, LayerId layer) {
     cam.eyeOffset = vec3{0.0f, 0.0f, body_eye_height(pool.height_mm(id))};
     reg.emplace<CameraTag>(e, cam);
     reg.emplace<Controller>(e, Controller{7.0f, {0, 0, 0}, false});
+
+    // Character sheet. Rolled from the record's own level, so possessing a
+    // level-7 resident gives you a level-7 build rather than a fresh one, and the
+    // roll is deterministic in the record id — re-embodying the SAME person after
+    // an elevator ride reproduces their exact str/agi/int rather than rerolling a
+    // new personality onto them.
+    //
+    // emplace_or_replace, not emplace: a caller that preserves progression across
+    // a body swap (main.cpp does this for the kill tally) overwrites this
+    // immediately afterwards, and the body is freshly built here in either case.
+    reg.emplace_or_replace<RpgStats>(e, random_rpg(pool.level(id), id));
 
     pool.set_player(id, true);
     return e;

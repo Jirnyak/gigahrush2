@@ -233,7 +233,7 @@ set(_giga_spv_files "")
 # explicit list rather than a GLOB — a stray .glsl should not silently start forcing
 # every shader to recompile.
 set(_giga_glsl_includes ${CMAKE_SOURCE_DIR}/shaders/material_surface.glsl)
-foreach(_sh cube.vert cube.frag body.vert prop.vert prop.frag)
+foreach(_sh cube.vert cube.frag body.vert prop.vert prop.frag particle.vert particle.frag)
     add_custom_command(
         OUTPUT ${_giga_spv_dir}/${_sh}.spv
         COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O
@@ -243,6 +243,27 @@ foreach(_sh cube.vert cube.frag body.vert prop.vert prop.frag)
         COMMENT "glslc ${_sh}")
     list(APPEND _giga_spv_files ${_giga_spv_dir}/${_sh}.spv)
 endforeach()
+
+# GPU compute particle shader — requires glslc with compute stage support.
+# particles.comp uses atomicAdd (layout qualifier, GLSL 4.30+) and SSBO.
+add_custom_command(
+    OUTPUT ${_giga_spv_dir}/particles.comp.spv
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0
+        ${CMAKE_SOURCE_DIR}/shaders/particles.comp
+        -o ${_giga_spv_dir}/particles.comp.spv
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/particles.comp
+    COMMENT "glslc particles.comp -> particles.comp.spv")
+list(APPEND _giga_spv_files ${_giga_spv_dir}/particles.comp.spv)
+
+# prop_tex.frag — triplanar KTX2 texture variant for prop pass.
+add_custom_command(
+    OUTPUT ${_giga_spv_dir}/prop_tex.frag.spv
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O -DGIGA_PROP_ALBEDO_ARRAY
+        ${CMAKE_SOURCE_DIR}/shaders/prop_tex.frag
+        -o ${_giga_spv_dir}/prop_tex.frag.spv
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/prop_tex.frag ${_giga_glsl_includes}
+    COMMENT "glslc prop_tex.frag -DGIGA_PROP_ALBEDO_ARRAY -> prop_tex.frag.spv")
+list(APPEND _giga_spv_files ${_giga_spv_dir}/prop_tex.frag.spv)
 
 # cube.frag compiled a SECOND time, with -DGIGA_ALBEDO_ARRAY, into cube_tex.frag.spv.
 #
@@ -331,12 +352,15 @@ if(GIGA_BUILD_TESTS)
     # (passed, total), so the literal pins the total AND demands zero failures in one
     # regex. It is an EXECUTION count, not a site count: 108 CHECK sites, most inside
     # loops — test_nearest_image's nest alone runs 37 x 33 times.
-    add_executable(world_test tests/world_test.cpp)
-    target_link_libraries(world_test PRIVATE giga_core)
+    add_executable(world_test tests/world_test.cpp src/render/prop_placer.cpp src/render/prop_pass.cpp src/render/prop_mesh.cpp src/render/vk_buffer.cpp src/render/vk_common.cpp)
+    target_link_libraries(world_test PRIVATE giga_core Vulkan::Vulkan)
+
+
+
     giga_target_flags(world_test OFF)
     add_test(NAME world_test COMMAND world_test)
     set_tests_properties(world_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "22609/22609 checks passed")
+        PASS_REGULAR_EXPRESSION "44176/44176 checks passed")
 
     # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
@@ -435,7 +459,7 @@ if(GIGA_BUILD_TESTS)
     giga_target_flags(game_test OFF)
     add_test(NAME game_test COMMAND game_test)
     set_tests_properties(game_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "game_test: 213865 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "game_test: 213879 checks, 0 failures")
 
     # Text gate for the AGENTS.md rules that no compiler enforces on every host.
     # The load-bearing one is no-exceptions: MSVC's STL is unsupported under

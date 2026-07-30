@@ -55,6 +55,7 @@ bool make_module(VkDevice dev, const std::vector<char>& spv, VkShaderModule* m) 
 bool PropPass::init(VulkanDevice* dev, VkPipelineLayout pipelineLayout,
                     VkRenderPass renderPass, const char* shaderDir) {
     dev_ = dev;
+    layout_ = pipelineLayout;
 
     // Build and upload each prop mesh
     for (int s = 0; s < kPropShapeCount; ++s) {
@@ -64,10 +65,11 @@ bool PropPass::init(VulkanDevice* dev, VkPipelineLayout pipelineLayout,
         }
     }
 
-    // Allocate per-shape × per-frame instance buffers (host-visible)
+    // Reserve CPU instance memory & allocate per-shape × per-frame instance buffers
     constexpr VkDeviceSize kInstBufBytes =
         static_cast<VkDeviceSize>(kMaxPropInstances) * sizeof(PropInstance);
     for (int s = 0; s < kPropShapeCount; ++s) {
+        cpuInst_[s].reserve(kMaxPropInstances);
         for (int f = 0; f < kMaxFramesInFlight; ++f) {
             char label[64];
             std::snprintf(label, sizeof(label), "prop-inst-s%d-f%d", s, f);
@@ -133,9 +135,11 @@ bool PropPass::create_pipeline(VkPipelineLayout layout, VkRenderPass rp,
     //  loc 2 = inOrigin   (binding 1, PropInstance::origin)
     //  loc 3 = inYaw      (binding 1, PropInstance::yaw)
     //  loc 4 = inColor    (binding 1, PropInstance::color)
-    //  loc 5 = inMat      (binding 1, PropInstance::matId  as R8_UINT)
-    //  loc 6 = inEmissive (binding 1, PropInstance::emissive as R8_UINT)
-    VkVertexInputAttributeDescription attrs[7]{};
+    //  loc 5 = inMat      (binding 1, PropInstance::matId     as R8_UINT)
+    //  loc 6 = inEmissive (binding 1, PropInstance::emissive  as R8_UINT)
+    //  loc 7 = inFlags    (binding 1, PropInstance::flags     as R8_UINT)
+    //  loc 8 = inAnimPhase(binding 1, PropInstance::animPhase as R8_UNORM)
+    VkVertexInputAttributeDescription attrs[9]{};
     attrs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(PropVertex,   pos)};
     attrs[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(PropVertex,   normal)};
     attrs[2] = {2, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(PropInstance, origin)};
@@ -143,12 +147,14 @@ bool PropPass::create_pipeline(VkPipelineLayout layout, VkRenderPass rp,
     attrs[4] = {4, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(PropInstance, color)};
     attrs[5] = {5, 1, VK_FORMAT_R8_UINT,           offsetof(PropInstance, matId)};
     attrs[6] = {6, 1, VK_FORMAT_R8_UINT,           offsetof(PropInstance, emissive)};
+    attrs[7] = {7, 1, VK_FORMAT_R8_UINT,           offsetof(PropInstance, flags)};
+    attrs[8] = {8, 1, VK_FORMAT_R8_UNORM,          offsetof(PropInstance, animPhase)};
 
     VkPipelineVertexInputStateCreateInfo vi{};
     vi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vi.vertexBindingDescriptionCount   = 2;
     vi.pVertexBindingDescriptions      = bindings;
-    vi.vertexAttributeDescriptionCount = 7;
+    vi.vertexAttributeDescriptionCount = 9;
     vi.pVertexAttributeDescriptions    = attrs;
 
     VkPipelineInputAssemblyStateCreateInfo ia{};
@@ -227,6 +233,7 @@ void PropPass::destroy() {
         vkDestroyPipeline(dev_->device, pipeline_, nullptr);
         pipeline_ = VK_NULL_HANDLE;
     }
+    layout_ = VK_NULL_HANDLE;
     dev_ = nullptr;
 }
 
@@ -248,6 +255,11 @@ void PropPass::record(VkCommandBuffer cmd, uint32_t frameIndex,
     if (!pipeline_) return;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
+    if (layout_ != VK_NULL_HANDLE) {
+        vkCmdPushConstants(cmd, layout_,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(CubePush), &push);
+    }
 
     // Extract camera position and fog radius from push constants for culling.
     const vec3  camPos   = {push.camPos.x, push.camPos.y, push.camPos.z};

@@ -150,7 +150,7 @@ struct CubePush {
     vec4 fog;       // x = fog start dist, y = fog end dist (fades to black),
                     // z = headlamp radius (m), w = ambient scale
     vec4 torus;     // x = wrap period (kWorldExtent), y = AO strength 0..1,
-                    // z = OUTPUT ONLY, w free
+                    // z = OUTPUT ONLY, w = uTime (seconds) for animated emissives
                     //
                     // z is the bitmask of material ids that have a live
                     // photographic albedo layer, as a float — 16 bits, so every

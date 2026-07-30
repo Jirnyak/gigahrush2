@@ -1,26 +1,15 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// prop.frag — fragment shader for GPU-instanced prop meshes.
-//
-// Extends cube.frag shading with:
-//   emissive  per-instance brightness multiplier packed in the instance struct.
-//             Crystals, flood-lamps and acid pools glow based on their emissive byte.
-//             Value 0 -> no emission, 255 -> 2.0x emissive (white overexposed).
-//
-// Prop surfaces are PROCEDURAL ONLY (no photographic atlas): props are the
-// second visual layer above the voxel world and are small enough that at any
-// distance the headlamp still reaches, the voxel surface families would look
-// identical. Instead, the matId controls roughness and surface character without
-// needing per-prop texture arrays.
+// prop.frag — fragment shader for GPU-instanced prop meshes with Milestone 2 shading.
 
 layout(location = 0) in vec3  vNormal;
 layout(location = 1) in vec3  vColor;
 layout(location = 2) in vec3  vWorldPos;
 layout(location = 3) in float vAo;
 layout(location = 4) flat in uint vMat;
-// Emissive packed as 0-255 → 0.0-2.0 by prop.vert via flat interpolation.
-// Passed from per-instance data through the vertex stage.
 layout(location = 5) flat in float vEmissive;
+layout(location = 6) flat in uint  vFlags;
+layout(location = 7) flat in float vAnimPhase;
 
 #include "material_surface.glsl"
 
@@ -29,37 +18,38 @@ layout(push_constant) uniform Push {
     vec4 sunDir;
     vec4 camPos;
     vec4 fog;
-    vec4 torus;
+    vec4 torus; // w = uTime (seconds)
 } pc;
 
 layout(location = 0) out vec4 outColor;
 
 const float kGamma = 2.2;
 
-// ── Shared procedural surface utilities (verbatim from cube.frag) ──────────
-
 float hash21(vec2 p) {
     vec3 q = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
     q += dot(q, q.yzx + 33.33);
     return fract((q.x + q.y) * q.z);
 }
+
 float vnoise(vec2 p) {
-    vec2 i = floor(p); vec2 f = fract(p);
+    vec2 i = floor(p);
+    vec2 f = fract(p);
     f = f * f * (3.0 - 2.0 * f);
-    float a = hash21(i), b = hash21(i + vec2(1,0));
-    float c = hash21(i + vec2(0,1)), dd = hash21(i + vec2(1,1));
-    return mix(mix(a,b,f.x), mix(c,dd,f.x), f.y);
+    float a = hash21(i);
+    float b = hash21(i + vec2(1.0, 0.0));
+    float c = hash21(i + vec2(0.0, 1.0));
+    float d = hash21(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
+
 float grain(vec2 uv) {
     return vnoise(uv * 26.0) * 0.62 + vnoise(uv * 97.0) * 0.38;
 }
-float seam(vec2 uv) {
-    vec2 e = abs(fract(uv) - 0.5);
-    return smoothstep(0.44, 0.5, max(e.x, e.y));
-}
+
 float mottle(float sigma, float n) {
     return exp(sigma * n - 0.5 * sigma * sigma);
 }
+
 float resolved(float px, float freq) {
     return clamp(1.0 - px * freq * 2.2, 0.0, 1.0);
 }
@@ -74,18 +64,16 @@ const uint kFamRust    = 6u;
 const uint kFamRubble  = 7u;
 const uint kFamSmooth  = 8u;
 
-const float kNormGrain = 6.413, kNormNoise = 4.665, kNormHash = 3.465;
-const float kNormMask  = 2.293, kMeanMask  = 0.4497;
+const float kNormGrain = 6.413;
+const float kNormMask  = 2.293;
+const float kMeanMask  = 0.4497;
 const float kNormRib   = 1.4145;
-const float kNormStud  = 2.518, kMeanStud  = 0.2331;
-const float kNormShade = 2.448;
 
 float surface(uint id, vec2 uv, vec3 aw, float px, float g) {
     uint fam   = kMatFamily[min(id, kMatSurfaceCount - 1u)];
     float amp  = kMatSurface[min(id, kMatSurfaceCount - 1u)].x;
     float pitch= kMatSurface[min(id, kMatSurfaceCount - 1u)].y;
 
-    // For metal/smooth props (matId 3-5), use a smooth family regardless
     if (fam == kFamSmooth || id >= 3u) {
         float n = (g - 0.5) * kNormGrain;
         return mottle(amp * 0.5, n);
@@ -104,9 +92,87 @@ float surface(uint id, vec2 uv, vec3 aw, float px, float g) {
         float z = (mask - kMeanMask) * kNormMask;
         return mottle(amp, z);
     }
-    // Default: generic grain
     float n = (g - 0.5) * kNormGrain;
     return mottle(amp, n);
+}
+
+// Derivative Normal Perturbation & Bump Mapping
+vec3 construct_perturbed_normal(vec3 n_geom, uint mat_id, vec2 uv, vec3 aw, float px, float g_center) {
+    uint mid = min(mat_id, kMatSurfaceCount - 1u);
+    float bumpScale = kMatSurface[mid].w;
+
+    if (bumpScale < 0.001) {
+        return n_geom;
+    }
+
+    vec3 up = abs(n_geom.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 T = normalize(cross(up, n_geom));
+    vec3 B = cross(n_geom, T);
+
+    const float eps = 0.002;
+    float s_right = surface(mat_id, uv + vec2(eps, 0.0), aw, px, grain(uv + vec2(eps, 0.0)));
+    float s_left  = surface(mat_id, uv - vec2(eps, 0.0), aw, px, grain(uv - vec2(eps, 0.0)));
+    float s_top   = surface(mat_id, uv + vec2(0.0, eps), aw, px, grain(uv + vec2(0.0, eps)));
+    float s_bot   = surface(mat_id, uv - vec2(0.0, eps), aw, px, grain(uv - vec2(0.0, eps)));
+
+    float dSdu = (s_right - s_left) / (2.0 * eps);
+    float dSdv = (s_top - s_bot)   / (2.0 * eps);
+
+    vec3 n_perturbed = n_geom - bumpScale * (dSdu * T + dSdv * B);
+    return normalize(n_perturbed);
+}
+
+// Material-Driven Roughness & Specular Variation
+float compute_prop_roughness(uint mat_id, float g_noise) {
+    uint mid = min(mat_id, kMatSurfaceCount - 1u);
+    uint fam = kMatFamily[mid];
+    float sigma = kMatSurface[mid].x;
+
+    float baseRoughness = 0.50;
+    if (fam == kFamSmooth || mat_id >= 3u) {
+        baseRoughness = 0.22 + sigma * 1.5;
+    } else if (fam == kFamRibbed) {
+        baseRoughness = 0.42 + sigma;
+    } else if (fam == kFamRust || fam == kFamRubble) {
+        baseRoughness = 0.82 + sigma * 0.3;
+    } else if (fam == kFamPlaster || fam == kFamPlank) {
+        baseRoughness = 0.65;
+    }
+
+    float microVariation = (g_noise - 0.5) * 0.18;
+    return clamp(baseRoughness + microVariation, 0.05, 0.98);
+}
+
+// Animated Emissive Effects
+float hash11(float p) {
+    p = fract(p * 0.1031);
+    p *= p + 33.33;
+    p *= p + p;
+    return fract(p);
+}
+
+float compute_animated_emissive(float baseEmissive, uint mat_id, vec3 worldPos, float phaseRad, float timeSec) {
+    if (baseEmissive < 0.001) return 0.0;
+
+    // Case A: High-frequency electrical flicker (for lamps / cabinets / bright lights)
+    if (baseEmissive > 1.2) {
+        float stepTime = floor(timeSec * 22.0 + phaseRad * 3.0);
+        float stochasticFlicker = mix(1.0, step(0.20, hash11(stepTime)), 0.30);
+        float hum = 1.0 + 0.06 * sin(timeSec * 60.0 * 6.2831853 + phaseRad);
+        return baseEmissive * stochasticFlicker * hum;
+    }
+
+    // Case B: Bioluminescent Crystal / Organic Breathing Pulse
+    if (mat_id == 0u || baseEmissive > 0.8) {
+        float breathe = 1.0 + 0.28 * sin(timeSec * 2.2 + phaseRad)
+                            + 0.10 * cos(timeSec * 4.3 + phaseRad * 1.7);
+        return baseEmissive * max(breathe, 0.05);
+    }
+
+    // Case C: Acid Pool Chemical Undulation & Bubble Bursts
+    float spatialWave = sin(timeSec * 3.2 + worldPos.x * 3.5 + worldPos.z * 3.5 + phaseRad);
+    float bubblePop   = pow(max(sin(timeSec * 7.5 + phaseRad * 2.5), 0.0), 10.0) * 1.5;
+    return baseEmissive * (0.80 + 0.25 * spatialWave + bubblePop);
 }
 
 void main() {
@@ -122,40 +188,60 @@ void main() {
     float px = max(fwidth(uv.x), fwidth(uv.y));
     uint  mid = min(vMat, kMatSurfaceCount - 1u);
 
-    // Procedural albedo — no texture array needed for props
+    // Apply procedural derivative normal perturbation
+    vec3 n_shading = construct_perturbed_normal(n_geom, vMat, uv, aw, px, g);
+
+    // Procedural albedo
     vec3 albedo = pow(vColor, vec3(kGamma));
     albedo *= surface(vMat, uv, aw, px, g);
 
-    // ── Lighting (identical to cube.frag) ─────────────────────────────────
+    // Lighting vectors
     vec3 toCam = pc.camPos.xyz - vWorldPos;
     float d = length(toCam);
     vec3 L = toCam / max(d, 1e-4);
 
+    vec3 viewDir = -L;
+    vec3 lightDir = normalize(vWorldPos - pc.camPos.xyz);
+
+    // Headlamp forward light scattering (Henyey-Greenstein phase function)
+    float g_scat = 0.55;
+    float cosTheta = dot(viewDir, lightDir);
+    float phase = (1.0 - g_scat * g_scat) / pow(max(1.0 + g_scat * g_scat - 2.0 * g_scat * cosTheta, 1e-4), 1.5);
+
     float r = pc.fog.z;
     float att = 1.0 / (1.0 + (d * d) / (r * r));
 
-    // HG forward scatter
-    float g_scat   = 0.55;
-    float cosTheta = dot(-L, L);    // effectively dot(viewDir, lightDir)=1 when aligned
-    cosTheta = dot(normalize(vWorldPos - pc.camPos.xyz), -L);
-    float phase = (1.0 - g_scat * g_scat) /
-                  pow(max(1.0 + g_scat * g_scat - 2.0 * g_scat * cosTheta, 1e-4), 1.5);
-
-    float roughness   = 0.4 + 0.2 * float(vMat & 3u);  // 0.4-1.0 based on matId
+    // Calibrated material roughness & Blinn-Phong specular
+    float roughness = compute_prop_roughness(vMat, g);
     float specPow     = max(2.0 / (roughness * roughness * roughness * roughness + 1e-4) - 2.0, 1.0);
     float specIntensity = (1.0 - roughness) * 0.5;
     float spec = 0.0;
-    if (dot(n_geom, L) > 0.0) {
-        spec = pow(max(dot(n_geom, L), 0.0), specPow) * specIntensity * att * pc.camPos.w;
+    vec3 V = L; // View vector towards camera
+    if (dot(n_shading, L) > 0.0) {
+        vec3 H = normalize(L + V);
+        spec += pow(max(dot(n_shading, H), 0.0), specPow) * specIntensity * att * pc.camPos.w;
+    }
+    vec3 Lsun = normalize(pc.sunDir.xyz);
+    if (pc.sunDir.w > 0.0 && dot(n_shading, Lsun) > 0.0) {
+        vec3 Hsun = normalize(Lsun + V);
+        spec += pow(max(dot(n_shading, Hsun), 0.0), specPow) * specIntensity * pc.sunDir.w;
+    }
+    // Metallic Anisotropic Specular Highlight for Pipes & Industrial Metal
+    if (vMat == 4u || vMat == 3u) {
+        vec3 T = abs(n_shading.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+        vec3 anisotropicH = cross(n_shading, T);
+        float anisoDot = dot(anisotropicH, L);
+        float anisoSpec = pow(max(1.0 - anisoDot * anisoDot, 0.0), specPow * 0.5) * specIntensity * 1.2;
+        spec += anisoSpec * att * pc.camPos.w;
     }
 
-    float lampDirect  = pc.camPos.w * att * max(dot(n_geom, L), 0.0);
+    float lampDirect  = pc.camPos.w * att * max(dot(n_shading, L), 0.0);
     float lampScatter = pc.camPos.w * att * phase * 0.25;
     float lamp = lampDirect + lampScatter;
 
-    float fill = pc.sunDir.w * max(dot(n_geom, normalize(pc.sunDir.xyz)), 0.0);
+    float fill = pc.sunDir.w * max(dot(n_shading, normalize(pc.sunDir.xyz)), 0.0);
 
-    float hemi = 0.5 + 0.5 * n_geom.z;
+    float hemi = 0.5 + 0.5 * n_shading.z;
     vec3 amb = pc.fog.w * mix(vec3(0.10, 0.11, 0.14), vec3(0.24, 0.23, 0.21), hemi);
 
     const float kAoFloor = 0.32;
@@ -164,28 +250,31 @@ void main() {
 
     vec3 lit = albedo * (amb * ao + vec3(lamp + fill) * aoDirect) + vec3(spec) * aoDirect;
 
-    // ── Emissive term ─────────────────────────────────────────────────────
-    // vEmissive: 0.0 = dark prop, 2.0 = fully saturated glow.
-    // Emissive is ADDED in linear space BEFORE fog so it fades with distance.
-    // Coloured by the prop's own albedo tint to keep crystal/acid palette.
-    if (vEmissive > 0.001) {
-        // Emissive glow: self-illuminated albedo colour, pulsed slightly by world-pos
-        // to make bioluminescent props flicker naturally without CPU animation.
-        float pulse = 1.0 + 0.08 * sin(vWorldPos.y * 7.3 + vWorldPos.x * 3.1);
-        vec3 emitCol = pow(vColor, vec3(kGamma));       // already linear
-        lit += emitCol * vEmissive * pulse;
+    // Emissive term with time-based animation
+    float timeSec = pc.torus.w;
+    float animEmissive = compute_animated_emissive(vEmissive, vMat, vWorldPos, vAnimPhase, timeSec);
+
+    if (animEmissive > 0.001) {
+        vec3 emitCol = pow(vColor, vec3(kGamma));
+        lit += emitCol * animEmissive;
     }
 
-    // ── Fog ──────────────────────────────────────────────────────────────
+    // Atmospheric height-based fog (increases at lower vertical/Z levels)
     const float kHeightFogScale = 0.04;
-    float heightDensity = exp(-clamp(kHeightFogScale * vWorldPos.y, -3.0, 3.0));
+    float heightPos = min(vWorldPos.y, vWorldPos.z);
+    float heightDensity = exp(-clamp(kHeightFogScale * heightPos, -3.0, 3.0));
     float effectiveDist = d * heightDensity;
     float fog = clamp((effectiveDist - pc.fog.x) / max(pc.fog.y - pc.fog.x, 1e-3), 0.0, 1.0);
+
+    // Enforce fog = 1.0 at max toroidal distance pc.fog.y to protect wrap seam
+    if (d >= pc.fog.y) {
+        fog = 1.0;
+    }
+
     lit = mix(lit, vec3(0.0), fog);
 
     vec3 srgb = pow(max(lit, vec3(0.0)), vec3(1.0 / kGamma));
 
-    // IGN dithering
     float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
     srgb += (ign - 0.5) / 255.0 * (1.0 - fog);
 

@@ -421,6 +421,95 @@ static void test_rpg_random_build() {
     CHECK(static_cast<int>(capped.attr[0]) + capped.attr[1] + capped.attr[2] == 254);
 }
 
+// ---- Integration: XP actually lands on a real kill -------------------------
+//
+// Everything above tests the formulas in isolation. This tests the WIRING, which
+// is the part that can be complete and still dead: `rpg.h` existed, compiled and
+// passed its whole suite while nothing in src/ read it. The check is therefore not
+// "does award_xp work" but "does killing a monster reach award_xp at all".
+static void test_rpg_kill_awards_xp() {
+    Registry reg;
+    NpcPool pool;
+    pool.init();
+    EventBus bus;
+    bus.init();
+
+    const LayerId layer = 0;
+
+    // The killer, carrying a character sheet. No pool row: this isolates the XP
+    // path from the HP-in-the-pool path, which the branch below covers.
+    const Entity killer = reg.create();
+    reg.emplace<Transform>(killer, Transform{vec3{10.0f, 10.0f, 4.0f}, layer});
+    reg.emplace<RpgStats>(killer, fresh_rpg(1));
+
+    // A Tvar, level 1: authored base 50 XP, and 50 < 100 so ONE kill must bank XP
+    // without levelling — the level-up branch is exercised separately below.
+    const Entity mob = reg.create();
+    reg.emplace<Transform>(mob, Transform{vec3{11.0f, 10.0f, 4.0f}, layer});
+    reg.emplace<MobRef>(mob, MobRef{static_cast<std::uint8_t>(MobKind::Tvar), 1,
+                                    10, 10});
+    reg.emplace<Dead>(mob, Dead{killer, 0});
+
+    CHECK(reg.get<RpgStats>(killer).xp == 0);
+    const std::uint32_t finalized = finalize_deaths(reg, pool, bus, 1);
+    CHECK(finalized == 1);
+
+    // THE assertion: the kill reached award_xp.
+    const RpgStats& after = reg.get<RpgStats>(killer);
+    CHECK(after.xp == xp_for_monster_kill(MobKind::Tvar, 1));
+    CHECK(after.xp == 50);
+    CHECK(after.level == 1);              // 50 < the 100 needed for level 2
+    CHECK(after.attrPoints == 0);
+
+    // A second Tvar takes the total to 100, which IS the level-2 threshold — so the
+    // level-up path fires through the wiring too, not just through award_xp directly.
+    const Entity mob2 = reg.create();
+    reg.emplace<Transform>(mob2, Transform{vec3{11.0f, 10.0f, 4.0f}, layer});
+    reg.emplace<MobRef>(mob2, MobRef{static_cast<std::uint8_t>(MobKind::Tvar), 1,
+                                     10, 10});
+    reg.emplace<Dead>(mob2, Dead{killer, 0});
+    finalize_deaths(reg, pool, bus, 2);
+
+    const RpgStats& after2 = reg.get<RpgStats>(killer);
+    CHECK(after2.level == 2);
+    CHECK(after2.attrPoints == 1);        // the level granted a spendable point
+    CHECK(after2.xp == 0);                // 100 consumed exactly
+
+    // A killer with NO RpgStats must not crash and must not be credited — this is
+    // what keeps monster-on-monster kills free. The component is the licence.
+    const Entity plainKiller = reg.create();
+    reg.emplace<Transform>(plainKiller, Transform{vec3{20.0f, 20.0f, 4.0f}, layer});
+    const Entity mob3 = reg.create();
+    reg.emplace<Transform>(mob3, Transform{vec3{21.0f, 20.0f, 4.0f}, layer});
+    reg.emplace<MobRef>(mob3, MobRef{static_cast<std::uint8_t>(MobKind::Tvar), 1,
+                                     10, 10});
+    reg.emplace<Dead>(mob3, Dead{plainKiller, 0});
+    CHECK(finalize_deaths(reg, pool, bus, 3) == 1);
+    CHECK(!reg.any_of<RpgStats>(plainKiller));
+
+    // An unknown/invalid killer (entt::null — the shooter died mid-flight, which
+    // [combat.h] documents as possible) must also be a safe no-op.
+    const Entity mob4 = reg.create();
+    reg.emplace<Transform>(mob4, Transform{vec3{30.0f, 30.0f, 4.0f}, layer});
+    reg.emplace<MobRef>(mob4, MobRef{static_cast<std::uint8_t>(MobKind::Sborka), 1,
+                                     10, 10});
+    reg.emplace<Dead>(mob4, Dead{entt::null, 0});
+    CHECK(finalize_deaths(reg, pool, bus, 4) == 1);
+
+    // Level SCALES the award through the wiring: a level-5 Tvar is worth 94, not 50.
+    const Entity killer2 = reg.create();
+    reg.emplace<Transform>(killer2, Transform{vec3{40.0f, 40.0f, 4.0f}, layer});
+    reg.emplace<RpgStats>(killer2, fresh_rpg(1));
+    const Entity mob5 = reg.create();
+    reg.emplace<Transform>(mob5, Transform{vec3{41.0f, 40.0f, 4.0f}, layer});
+    reg.emplace<MobRef>(mob5, MobRef{static_cast<std::uint8_t>(MobKind::Tvar), 5,
+                                     10, 10});
+    reg.emplace<Dead>(mob5, Dead{killer2, 0});
+    finalize_deaths(reg, pool, bus, 5);
+    CHECK(reg.get<RpgStats>(killer2).xp == 94);
+    CHECK(reg.get<RpgStats>(killer2).xp == xp_for_monster_kill(MobKind::Tvar, 5));
+}
+
 static void test_rpg_all() {
     test_rpg_curve();
     test_rpg_derived();
@@ -428,4 +517,5 @@ static void test_rpg_all() {
     test_rpg_xp_sources();
     test_rpg_award_and_spend();
     test_rpg_random_build();
+    test_rpg_kill_awards_xp();
 }

@@ -71,6 +71,8 @@
 #include "render/body_pass.h"
 #include "render/cube_pass.h"
 #include "render/prop_pass.h"
+#include "render/prop_placer.h"
+
 #include "render/gpu_timer.h"
 #include "render/imgui_layer.h"
 #include "render/vk_device.h"
@@ -476,6 +478,8 @@ int main(int argc, char** argv) {
     // Shares CubePass's pipeline layout and cube.frag so props receive identical
     // PBR lighting, fog, and material shading as the voxel world.
     gpu::PropPass propPass;
+    gpu::PropPlacer propPlacer;
+
     if (!propPass.init(&device, cubePass.pipeline_layout(),
                        renderer.renderPass, GIGA_SHADER_DIR)) {
         std::fprintf(stderr, "[prop] pass init failed (continuing without props)\n");
@@ -486,240 +490,7 @@ int main(int argc, char** argv) {
     // origin (0,0,0) and visible once the first floor is generated nearby.
     // In a full game, a prop placement pass would populate these from world
     // data (room type, samosbor wave, etc.); here they demonstrate all shapes.
-    if (propPass.ready()) {
-        // Concrete pillars lining a corridor along X
-        for (int i = 0; i < 6; ++i) {
-            gpu::PropInstance col{};
-            col.origin = {static_cast<float>(8 + i * 10), 0.0f, 8.0f};
-            col.yaw    = 0.0f;
-            col.color  = {0.48f, 0.46f, 0.44f};
-            col.matId  = 2; // kMatConcrete
-            propPass.add_instance(gpu::PropShape::Cylinder, col);
-            col.origin.z = -8.0f;  // opposite side of corridor
-            propPass.add_instance(gpu::PropShape::Cylinder, col);
-        }
-        // Rusty industrial barrels clustered near a wall
-        for (int i = 0; i < 5; ++i) {
-            gpu::PropInstance bar{};
-            bar.origin = {static_cast<float>(20 + i * 3), 0.0f,
-                          static_cast<float>(14 + (i & 1) * 2)};
-            bar.yaw    = static_cast<float>(i) * 0.7f;
-            bar.color  = {0.32f, 0.18f, 0.10f};
-            bar.matId  = 5; // kMatRustyMetal
-            propPass.add_instance(gpu::PropShape::Barrel, bar);
-        }
-        // Archways framing a room entrance
-        for (int i = 0; i < 2; ++i) {
-            gpu::PropInstance arch{};
-            arch.origin = {static_cast<float>(40 + i * 16), 0.0f, 0.0f};
-            arch.yaw    = 1.5707963f; // 90°
-            arch.color  = {0.42f, 0.40f, 0.38f};
-            arch.matId  = 2;
-            propPass.add_instance(gpu::PropShape::Arch, arch);
-        }
-        // Horizontal pipes running along ceiling level
-        for (int i = 0; i < 4; ++i) {
-            gpu::PropInstance pipe{};
-            pipe.origin = {static_cast<float>(i * 12), 1.8f, 4.0f};
-            pipe.yaw    = 0.0f;
-            pipe.color  = {0.25f, 0.30f, 0.28f};
-            pipe.matId  = 4; // kMatGrate
-            propPass.add_instance(gpu::PropShape::Pipe, pipe);
-        }
-        // Half-cylinder alcove walls
-        for (int i = 0; i < 3; ++i) {
-            gpu::PropInstance hc{};
-            hc.origin = {static_cast<float>(6 + i * 14), 0.0f, -12.0f};
-            hc.yaw    = 3.14159f; // face into corridor
-            hc.color  = {0.38f, 0.36f, 0.34f};
-            hc.matId  = 2;
-            propPass.add_instance(gpu::PropShape::HalfCylinder, hc);
-        }
-        // Stair steps forming a short flight
-        for (int i = 0; i < 4; ++i) {
-            gpu::PropInstance step{};
-            step.origin = {static_cast<float>(50 + i * 2), static_cast<float>(i) * 0.25f, 0.0f};
-            step.yaw    = 0.0f;
-            step.color  = {0.44f, 0.42f, 0.40f};
-            step.matId  = 2;
-            propPass.add_instance(gpu::PropShape::StairStep, step);
-        }
-
-        // ── Phase 2 demo: mechanical props ────────────────────────────────────
-        // Pipe elbows connecting vertical and horizontal runs
-        for (int i = 0; i < 4; ++i) {
-            gpu::PropInstance el{};
-            el.origin = {static_cast<float>(60 + i * 4), 1.5f, 0.0f};
-            el.yaw    = static_cast<float>(i) * 1.5707963f;
-            el.color  = {0.22f, 0.25f, 0.24f};
-            el.matId  = 4;
-            propPass.add_instance(gpu::PropShape::PipeElbow, el);
-        }
-        // Handwheel valves on wall pipes
-        for (int i = 0; i < 3; ++i) {
-            gpu::PropInstance val{};
-            val.origin   = {static_cast<float>(70 + i * 5), 1.2f, 2.0f};
-            val.yaw      = 0.0f;
-            val.color    = {0.30f, 0.25f, 0.20f};
-            val.matId    = 5;
-            val.emissive = 0;
-            val.flags    = 0;
-            propPass.add_instance(gpu::PropShape::Valve, val);
-        }
-        // Floor grates over cable channels
-        for (int i = 0; i < 5; ++i) {
-            gpu::PropInstance gr{};
-            gr.origin = {static_cast<float>(i * 6), 0.0f, 18.0f};
-            gr.yaw    = 0.0f;
-            gr.color  = {0.28f, 0.30f, 0.28f};
-            gr.matId  = 4;
-            propPass.add_instance(gpu::PropShape::Grate, gr);
-        }
-        // Round ventilation grates on wall
-        for (int i = 0; i < 3; ++i) {
-            gpu::PropInstance rg{};
-            rg.origin = {static_cast<float>(80 + i * 6), 1.0f, -0.5f};
-            rg.yaw    = 1.5707963f;
-            rg.color  = {0.25f, 0.25f, 0.25f};
-            rg.matId  = 4;
-            propPass.add_instance(gpu::PropShape::RoundGrate, rg);
-        }
-        // Electrical cabinets along a wall
-        for (int i = 0; i < 4; ++i) {
-            gpu::PropInstance cab{};
-            cab.origin = {static_cast<float>(90 + i * 1), 0.0f, -0.5f};
-            cab.yaw    = 0.0f;
-            cab.color  = {0.35f, 0.38f, 0.35f};
-            cab.matId  = 2;
-            propPass.add_instance(gpu::PropShape::CabinetBox, cab);
-        }
-        // Control panel console
-        {
-            gpu::PropInstance cp{};
-            cp.origin = {100.0f, 0.0f, 5.0f};
-            cp.yaw    = 3.14159f;
-            cp.color  = {0.25f, 0.28f, 0.30f};
-            cp.matId  = 3;
-            propPass.add_instance(gpu::PropShape::ControlPanel, cp);
-        }
-        // Railings along a walkway edge
-        for (int i = 0; i < 6; ++i) {
-            gpu::PropInstance rl{};
-            rl.origin = {static_cast<float>(i * 2), 1.0f, 20.0f};
-            rl.yaw    = 0.0f;
-            rl.color  = {0.30f, 0.30f, 0.30f};
-            rl.matId  = 3;
-            propPass.add_instance(gpu::PropShape::Railing, rl);
-        }
-
-        // ── Phase 3 demo: living world props ──────────────────────────────────
-        // Overhead support beams
-        for (int i = 0; i < 5; ++i) {
-            gpu::PropInstance sb{};
-            sb.origin = {static_cast<float>(i * 8), 2.2f, -5.0f};
-            sb.yaw    = 1.5707963f;
-            sb.color  = {0.20f, 0.22f, 0.24f};
-            sb.matId  = 3;
-            propPass.add_instance(gpu::PropShape::SupportBeam, sb);
-        }
-        // Crate cluster
-        for (int i = 0; i < 5; ++i) {
-            gpu::PropInstance cr{};
-            cr.origin = {static_cast<float>(30 + (i % 3) * 1), 0.0f, 25.0f + (i / 3) * 1.0f};
-            cr.yaw    = static_cast<float>(i) * 0.4f;
-            cr.color  = {0.35f, 0.28f, 0.18f};
-            cr.matId  = 2;
-            propPass.add_instance(gpu::PropShape::CrateBox, cr);
-        }
-        // Long weapons crates
-        for (int i = 0; i < 3; ++i) {
-            gpu::PropInstance lc{};
-            lc.origin = {static_cast<float>(38 + i * 3), 0.0f, 24.0f};
-            lc.yaw    = 0.0f;
-            lc.color  = {0.22f, 0.30f, 0.20f}; // military green
-            lc.matId  = 2;
-            propPass.add_instance(gpu::PropShape::CrateLong, lc);
-        }
-        // Locker row
-        for (int i = 0; i < 5; ++i) {
-            gpu::PropInstance lk{};
-            lk.origin = {static_cast<float>(110 + i), 0.0f, 0.0f};
-            lk.yaw    = 0.0f;
-            lk.color  = {0.28f, 0.35f, 0.38f};
-            lk.matId  = 3;
-            propPass.add_instance(gpu::PropShape::LockerUnit, lk);
-        }
-        // Benches
-        for (int i = 0; i < 3; ++i) {
-            gpu::PropInstance bn{};
-            bn.origin = {static_cast<float>(i * 5), 0.0f, 22.0f};
-            bn.yaw    = 0.0f;
-            bn.color  = {0.35f, 0.32f, 0.28f};
-            bn.matId  = 2;
-            propPass.add_instance(gpu::PropShape::BenchSlab, bn);
-        }
-        // Computer terminals
-        for (int i = 0; i < 3; ++i) {
-            gpu::PropInstance tm{};
-            tm.origin = {static_cast<float>(116 + i * 2), 0.0f, 2.0f};
-            tm.yaw    = 3.14159f;
-            tm.color  = {0.18f, 0.22f, 0.20f};
-            tm.matId  = 3;
-            propPass.add_instance(gpu::PropShape::Terminal, tm);
-        }
-        // Security cameras on ceiling brackets
-        for (int i = 0; i < 4; ++i) {
-            gpu::PropInstance sc{};
-            sc.origin = {static_cast<float>(i * 15), 2.5f, 0.0f};
-            sc.yaw    = static_cast<float>(i) * 1.5707963f;
-            sc.color  = {0.18f, 0.18f, 0.18f};
-            sc.matId  = 3;
-            propPass.add_instance(gpu::PropShape::SecurityCamera, sc);
-        }
-        // Flood lamps lighting the scene
-        for (int i = 0; i < 6; ++i) {
-            gpu::PropInstance fl{};
-            fl.origin   = {static_cast<float>(i * 12 + 5), 0.0f, -3.0f};
-            fl.yaw      = 0.0f;
-            fl.color    = {0.90f, 0.85f, 0.70f}; // warm tungsten
-            fl.matId    = 0;
-            fl.emissive = 200; // bright emissive
-            propPass.add_instance(gpu::PropShape::FloodLamp, fl);
-        }
-
-        // ── Phase 4 demo: organic / anomalous ─────────────────────────────────
-        // Fungal columns in an anomalous zone
-        for (int i = 0; i < 4; ++i) {
-            gpu::PropInstance fc{};
-            fc.origin   = {static_cast<float>(130 + i * 4), 0.0f, 5.0f};
-            fc.yaw      = static_cast<float>(i) * 1.1f;
-            fc.color    = {0.22f, 0.38f, 0.16f}; // sickly green
-            fc.matId    = 0;
-            fc.emissive = 40; // faint bioluminescence
-            propPass.add_instance(gpu::PropShape::FungalColumn, fc);
-        }
-        // Crystal cluster formations
-        for (int i = 0; i < 5; ++i) {
-            gpu::PropInstance cc{};
-            cc.origin   = {static_cast<float>(145 + i * 3), 0.0f,
-                           static_cast<float>(i % 2) * 3.0f};
-            cc.yaw      = static_cast<float>(i) * 0.8f;
-            cc.color    = {0.55f, 0.25f, 0.85f}; // purple crystal
-            cc.matId    = 0;
-            cc.emissive = 180; // strongly emissive
-            propPass.add_instance(gpu::PropShape::CrystalCluster, cc);
-        }
-        // Acid pools on floor
-        for (int i = 0; i < 3; ++i) {
-            gpu::PropInstance ap{};
-            ap.origin   = {static_cast<float>(160 + i * 6), 0.0f, 0.0f};
-            ap.yaw      = 0.0f;
-            ap.color    = {0.20f, 0.70f, 0.10f}; // toxic green
-            ap.matId    = 0;
-            ap.emissive = 60;
-            propPass.add_instance(gpu::PropShape::AcidPool, ap);
-        }
-    }
+    // Procedural props are populated dynamically from floor macro grids upon level generation and floor streaming.
 
 
     gpu::ImGuiLayer hud;
@@ -851,6 +622,9 @@ int main(int argc, char** argv) {
         LayerId ground = stack.push_layer();
         generate_demo_world(stack.layer(ground), 1337u, genMode);
         player = setup_maze(pool, reg, ground);
+        if (propPass.ready()) {
+            propPlacer.populate(stack.layer(ground).grid(), propPass, 1337u);
+        }
     } else {
         // Register every floor MODULE (number -> module + build recipe), then
         // load ONLY floor 0. The rest stay cold until the elevator enters them,
@@ -911,6 +685,10 @@ int main(int argc, char** argv) {
             doors.frozen = true;
             begin_floor_nav(stack.layer(l0), nav);
             game::ai_init(reg, l0);
+            if (propPass.ready()) {
+                std::uint32_t fseed = 1337u ^ (static_cast<std::uint32_t>(currentFloor) * 0x9e3779b9u);
+                propPlacer.populate(stack.layer(l0).grid(), propPass, fseed);
+            }
         }
     }
 
@@ -1232,6 +1010,10 @@ int main(int argc, char** argv) {
                                 *currentSpec, kDoorSeed);
                         doors.frozen = true;
                         begin_floor_nav(stack.layer(nl), nav);
+                        if (propPass.ready()) {
+                            std::uint32_t fseed = 1337u ^ (static_cast<std::uint32_t>(currentFloor) * 0x9e3779b9u);
+                            propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);
+                        }
                     }
                 }
 
@@ -2406,7 +2188,8 @@ int main(int argc, char** argv) {
             // The wrap period, so cube.vert can place each cell at its nearest
             // toroidal image itself. Instance origins are absolute, which is what
             // makes the cube pass's instance cache possible.
-            push.torus = vec4{kWorldExtent, kAoDirect, 0.0f, 0.0f};
+            float currentTimeSec = static_cast<float>(SDL_GetTicks()) / 1000.0f;
+            push.torus = vec4{kWorldExtent, kAoDirect, 0.0f, currentTimeSec};
             // Each pass is bracketed by GPU timestamps as well as by the CPU
             // clock: the two answer different questions and need opposite fixes.
             // The CPU figure is time spent building instance data on this thread;
@@ -2496,6 +2279,10 @@ int main(int argc, char** argv) {
                         doors.frozen = true;
                         begin_floor_nav(stack.layer(nl), nav);
                         cubePass.invalidate();
+                        if (propPass.ready()) {
+                            std::uint32_t fseed = 1337u ^ (static_cast<std::uint32_t>(currentFloor) * 0x9e3779b9u);
+                            propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);
+                        }
                         // Same clear as the keyboard ride path. There are TWO travel
                         // sites and the first fix only touched one, so a --shot
                         // capture kept reporting a rumour about the floor it started
