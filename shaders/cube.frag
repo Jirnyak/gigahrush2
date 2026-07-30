@@ -261,6 +261,55 @@ float resolved(float px, float freq) {
     return clamp(1.0 - px * freq * 2.2, 0.0, 1.0);
 }
 
+// --- Procedural Soviet Architectural Surface Generators ----------------------
+
+// Procedural Soviet Paper Wallpaper (Советские бумажные обои)
+vec3 soviet_wallpaper(vec2 uv, uint pat, vec3 baseCol) {
+    vec2 tileUv = uv * 5.0; // 5 pattern repeats per 2m cell
+    vec2 f = fract(tileUv);
+    float p = 0.0;
+    if (pat == 0u) {
+        // Floral Diamond Ornaments (Цветочный ромб)
+        vec2 d = abs(f - 0.5);
+        float diamond = step(d.x + d.y, 0.38);
+        float dotCenter = step(length(f - 0.5), 0.12);
+        p = max(diamond * 0.35, dotCenter * 0.75);
+    } else if (pat == 1u) {
+        // Vintage Vertical Satin Stripe (Обои в полоску)
+        float stripe = step(fract(uv.x * 6.0), 0.40);
+        p = stripe * 0.30;
+    } else {
+        // Linen Weave (Тканевый узор)
+        float weave = sin(uv.x * 35.0) * sin(uv.y * 35.0) * 0.5 + 0.5;
+        p = weave * 0.20;
+    }
+    vec3 accentCol = baseCol * 1.35 + vec3(0.04, 0.03, 0.01);
+    return mix(baseCol, accentCol, p);
+}
+
+// Procedural Soviet 15x15 cm Glazed Ceramic Tiles (Кафельная плитка 15х15 см)
+vec3 soviet_tiles(vec2 uv, vec3 tileCol) {
+    vec2 tileUv = uv * 13.33; // 13.33 tiles per 2m cell = 15 cm square tiles
+    vec2 f = fract(tileUv);
+    float grout = step(f.x, 0.06) + step(f.y, 0.06);
+    grout = clamp(grout, 0.0, 1.0);
+    float sheen = 0.88 + 0.20 * vnoise(tileUv * 2.0);
+    vec3 darkGrout = vec3(0.015, 0.015, 0.015);
+    return mix(tileCol * sheen, darkGrout, grout);
+}
+
+// Procedural Soviet Red Brickwork (Красный кирпич)
+vec3 soviet_bricks(vec2 uv, vec3 brickCol) {
+    vec2 bUv = uv * vec2(8.0, 16.0);
+    if (mod(floor(bUv.y), 2.0) > 0.5) bUv.x += 0.5;
+    vec2 f = fract(bUv);
+    float mortar = step(f.x, 0.08) + step(f.y, 0.10);
+    mortar = clamp(mortar, 0.0, 1.0);
+    float noiseG = vnoise(bUv * 3.0);
+    vec3 mortarCol = vec3(0.12, 0.11, 0.10);
+    return mix(brickCol * (0.85 + 0.30 * noiseG), mortarCol, mortar);
+}
+
 // The brightness multiplier for one material's surface. `g` is the shared two-octave
 // The brightness multiplier for one material's surface. `g` is the shared two-octave
 // grain, `px` the screen-space rate of change of uv, `aw` the absolute face normal.
@@ -578,51 +627,140 @@ void main() {
     albedo = apply_chroma(albedo, mid, uv, kMatSurface[mid].y);
 #endif
 
-    // Authentic Soviet Khrushchevka Surface System:
-    // 1. ALL vertical walls (!isHorizontal): Lower 1.16m Glossy Soviet Stairwell Oil Paint + Trim Stripe + Upper Whitewash
-    // 2. ALL ceilings (n_geom.y < -0.5): Aged Soviet Whitewash / Plaster
-    // 3. ALL floors (n_geom.y > 0.5): Soviet Terrazzo Concrete / Linoleum / Oak Parquet
+    // --- AUTHENTIC SOVIET ARCHITECTURAL BIOME SYSTEM (BY CELL MATERIAL & ROOM LOCATION) ---
     float roughness = 0.50;
 
+    // Hash room coordinates for per-room wallpaper/color variations
+    uint roomHash = uint(abs(sin(dot(floor(vWorldPos.xz * 0.1), vec2(12.9898, 78.233))) * 43758.5453));
+
     if (!isHorizontal) {
-        float h_in_room = fract(vWorldPos.y * 0.5); // 0.0 to 1.0 within 2m room cell
-        if (h_in_room < 0.58) {
-            // Lower 1.16m: Glossy Soviet Stairwell Teal-Blue Oil Paint ("масляная краска")
-            // Linearized sRGB vec3(0.20, 0.46, 0.68) -> vec3(0.035, 0.18, 0.42)
-            vec3 oilPaintColor = vec3(0.035, 0.18, 0.42);
-            float streak = vnoise(vec2(uv.x * 12.0, uv.y * 3.0));
-            albedo = oilPaintColor * (0.90 + 0.20 * streak);
-            roughness = 0.20; // High specular gloss for wet/oil paint
-        } else if (h_in_room < 0.61) {
-            // Dark Border Trim Line (бордюрная полоса)
-            albedo = vec3(0.01, 0.012, 0.015);
-            roughness = 0.50;
-        } else {
-            // Upper Wall (1.2m to ceiling): Faded Yellowed Whitewash / Plaster ("пожелтевшая побелка")
-            // Linearized sRGB vec3(0.85, 0.82, 0.72) -> vec3(0.68, 0.63, 0.48)
-            vec3 whitewashColor = vec3(0.68, 0.63, 0.48);
-            float stain = vnoise(uv * 4.0);
+        // --- VERTICAL WALL SURFACES ---
+        if (vMat == 8u) {
+            // kMatPlaster (8): Soviet Apartment Living Room / Bedroom (Советские бумажные обои)
+            uint wallpaperPattern = roomHash % 3u;
+            vec3 basePaperCol;
+            if (wallpaperPattern == 0u) {
+                basePaperCol = vec3(0.52, 0.44, 0.28); // Golden Beige Floral
+            } else if (wallpaperPattern == 1u) {
+                basePaperCol = vec3(0.24, 0.32, 0.18); // Olive Vintage Stripe
+            } else {
+                basePaperCol = vec3(0.42, 0.26, 0.16); // Terracotta Fabric
+            }
+            vec3 wallpaper = soviet_wallpaper(uv, wallpaperPattern, basePaperCol);
+            float stain = vnoise(uv * 3.5);
             float s = seam(uv);
-            albedo = whitewashColor * (0.90 + 0.20 * stain) * (1.0 - 0.28 * s);
-            roughness = 0.85; // Matte plaster
+            
+            // Floor baseboard (плинтус) at bottom 0.08m
+            float h_in_room = fract(vWorldPos.y * 0.5);
+            if (h_in_room < 0.04) {
+                albedo = vec3(0.04, 0.015, 0.008); // Dark Wooden Baseboard
+                roughness = 0.40;
+            } else {
+                albedo = wallpaper * (0.88 + 0.24 * stain) * (1.0 - 0.25 * s);
+                roughness = 0.82; // Matte paper wallpaper
+            }
+        } else if (vMat == 11u) {
+            // kMatLino (11): Soviet Kitchen / Bathroom (Советская квадратная кафельная плитка 15х15 см)
+            float h_in_room = fract(vWorldPos.y * 0.5);
+            if (h_in_room < 0.70) {
+                // Lower 1.4m: 15x15 cm Glazed Ceramic Wall Tiles
+                vec3 tileCol = (roomHash % 2u == 0u) ? vec3(0.35, 0.48, 0.40) /* Pale Green Tile */
+                                                     : vec3(0.55, 0.55, 0.50) /* White/Cream Tile */;
+                albedo = soviet_tiles(uv, tileCol);
+                roughness = 0.18; // Glazed ceramic shine
+            } else {
+                // Upper Wall: Enamel paint
+                albedo = vec3(0.50, 0.48, 0.42) * (0.90 + 0.20 * vnoise(uv * 3.0));
+                roughness = 0.60;
+            }
+        } else if (vMat == 2u) {
+            // kMatSoil (2): Underground Basement / Cellar (Красный сырой кирпич)
+            vec3 brickCol = vec3(0.20, 0.065, 0.035);
+            albedo = soviet_bricks(uv, brickCol);
+            roughness = 0.85;
+        } else if (vMat == 10u) {
+            // kMatShopShutter (10): Soviet Store / Utility Enamel Wall
+            albedo = vec3(0.28, 0.27, 0.24) * (0.88 + 0.24 * vnoise(uv * 2.0));
+            roughness = 0.40;
+        } else if (vMat == 12u || vMat == 14u) {
+            // kMatFactoryWall (12) / kMatRust (14): Raw Soviet Concrete Panel / Industrial Shaft
+            float seamN = seam(uv);
+            vec3 concreteCol = vec3(0.18, 0.175, 0.17);
+            albedo = concreteCol * (0.85 + 0.30 * vnoise(uv * 4.0)) * (1.0 - 0.40 * seamN);
+            roughness = 0.75;
+        } else if (vMat == 6u) {
+            // kMatDoor (6): Padded Vinyl/Leatherette Apartment Door Casing ("Дерматиновая обшивка")
+            vec3 leatherCol = vec3(0.045, 0.020, 0.012);
+            float diamond = sin(uv.x * 20.0 + uv.y * 20.0) * sin(uv.x * 20.0 - uv.y * 20.0);
+            albedo = leatherCol * (0.90 + 0.25 * diamond);
+            roughness = 0.30;
+        } else {
+            // kMatConcrete (1) / Default: Classic Soviet 2-Tone Stairwell Oil Paint Paneling
+            float h_in_room = fract(vWorldPos.y * 0.5); // 0.0 to 1.0 within 2m room cell
+            if (h_in_room < 0.58) {
+                // Lower 1.16m: Glossy Soviet Stairwell Oil Paint (3 Color Variants per stairwell)
+                uint colVar = roomHash % 3u;
+                vec3 oilPaintColor;
+                if (colVar == 0u) oilPaintColor = vec3(0.035, 0.18, 0.42);      // Stairwell Teal-Blue
+                else if (colVar == 1u) oilPaintColor = vec3(0.020, 0.16, 0.075);  // Hospital/School Green
+                else oilPaintColor = vec3(0.18, 0.045, 0.022);                   // Terracotta Maroon
+                
+                float streak = vnoise(vec2(uv.x * 12.0, uv.y * 3.0));
+                albedo = oilPaintColor * (0.90 + 0.20 * streak);
+                roughness = 0.20; // High specular gloss for oil paint
+            } else if (h_in_room < 0.61) {
+                // Dark Border Trim Line (бордюрная полоса)
+                albedo = vec3(0.01, 0.012, 0.015);
+                roughness = 0.50;
+            } else {
+                // Upper Wall (1.2m to ceiling): Faded Yellowed Whitewash / Plaster ("пожелтевшая побелка")
+                vec3 whitewashColor = vec3(0.68, 0.63, 0.48);
+                float stain = vnoise(uv * 4.0);
+                float s = seam(uv);
+                albedo = whitewashColor * (0.90 + 0.20 * stain) * (1.0 - 0.28 * s);
+                roughness = 0.85; // Matte plaster
+            }
         }
     } else if (n_geom.y < -0.5) {
-        // ALL Ceilings: Aged Soviet Whitewash / Concrete Plaster (Dirty off-white)
-        // Linearized sRGB vec3(0.80, 0.77, 0.72) -> vec3(0.60, 0.55, 0.48)
-        vec3 ceilingWhitewash = vec3(0.60, 0.55, 0.48);
-        float stain = vnoise(uv * 3.0);
-        albedo = ceilingWhitewash * (0.88 + 0.24 * stain);
-        roughness = 0.90; // Matte whitewash
+        // --- CEILING SURFACES ---
+        if (vMat == 8u || vMat == 9u) {
+            // Apartment Ceiling: Pure White Plaster Ceiling
+            vec3 ceilingWhite = vec3(0.68, 0.66, 0.62);
+            float stain = vnoise(uv * 3.0);
+            albedo = ceilingWhite * (0.92 + 0.16 * stain);
+            roughness = 0.80;
+        } else {
+            // Public / Stairwell Ceiling: Aged Soviet Whitewash
+            vec3 ceilingWhitewash = vec3(0.60, 0.55, 0.48);
+            float stain = vnoise(uv * 3.0);
+            albedo = ceilingWhitewash * (0.88 + 0.24 * stain);
+            roughness = 0.90;
+        }
     } else if (n_geom.y > 0.5) {
-        // ALL Floors: Soviet Terrazzo Concrete / Linoleum / Oak Parquet
-        if (vMat == 9u) {
-            // Soviet Oak Parquet
-            albedo = vec3(0.10, 0.04, 0.012);
-            roughness = 0.35;
+        // --- FLOOR SURFACES ---
+        if (vMat == 9u || vMat == 8u) {
+            // Soviet Oak Parquet ("Дубовый паркет ёлочкой")
+            vec3 oakParquet = vec3(0.12, 0.05, 0.015);
+            float plank = sin(uv.x * 16.0 + uv.y * 16.0) * sin(uv.x * 16.0 - uv.y * 16.0);
+            albedo = oakParquet * (0.88 + 0.24 * plank);
+            roughness = 0.30;
         } else if (vMat == 11u) {
-            // Soviet Linoleum
-            albedo = vec3(0.055, 0.018, 0.012);
-            roughness = 0.45;
+            // Soviet Linoleum ("Советский линолеум")
+            vec3 linoleumCol = vec3(0.055, 0.018, 0.012);
+            float tileP = step(fract(uv.x * 4.0), 0.5) == step(fract(uv.y * 4.0), 0.5) ? 1.0 : 0.85;
+            albedo = linoleumCol * tileP;
+            roughness = 0.40;
+        } else if (vMat == 13u) {
+            // Industrial Steel Tread Plate ("Стальной рифленый настил")
+            vec3 treadCol = vec3(0.08, 0.075, 0.07);
+            float treadP = sin(uv.x * 30.0) * sin(uv.y * 30.0);
+            albedo = treadCol * (0.90 + 0.20 * treadP);
+            roughness = 0.40;
+        } else if (vMat == 2u) {
+            // Basement Damp Dirt Soil Floor
+            vec3 soilCol = vec3(0.03, 0.025, 0.018);
+            albedo = soilCol * (0.85 + 0.30 * vnoise(uv * 6.0));
+            roughness = 0.90;
         } else {
             // Soviet Terrazzo Concrete Floor
             vec3 terrazzoCol = vec3(0.065, 0.060, 0.055);
