@@ -168,6 +168,21 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
             grid.add_light(tr.pos + vec3{0.0f, 1.5f, 0.0f}, 16.0f, vec3{0.70f, 0.95f, 1.0f}, 2.8f);
         }
     }
+
+    // 4. Emissive Loot Containers & Supply Crates
+    for (auto e : reg.view<const game::Container, const Transform>()) {
+        const Transform& tr = reg.get<const Transform>(e);
+        if (tr.layer != activeLayer) continue;
+        const game::Container& cnt = reg.get<const game::Container>(e);
+        if (!cnt.opened) {
+            float dx = wrap_delta_f(camPos.x, tr.pos.x, kWorldExtent);
+            float dy = camPos.y - tr.pos.y;
+            float dz = wrap_delta_f(camPos.z, tr.pos.z, kWorldExtent);
+            if (dx * dx + dy * dy + dz * dz < 32.0f * 32.0f) {
+                grid.add_light(tr.pos + vec3{0.0f, 0.5f, 0.0f}, 6.0f, vec3{0.30f, 0.90f, 0.50f}, 1.2f);
+            }
+        }
+    }
 }
 
 // The player's unencumbered walk speed. Named here because the survival clock now
