@@ -273,25 +273,23 @@ float surface(uint mat, vec2 uv, vec3 aw, float px, float g) {
     bool isHorizontal = (aw.z > 0.7 || aw.y > 0.7);
 
     if (fam == kFamGeneric) {
-        // Floors (aw.z > 0.7 || aw.y > 0.7): smooth poured concrete/linoleum/earth mottle, NO panel seams!
-        // Walls: paint mottle over precast panel joins.
         float amount = isHorizontal ? 0.26 : 0.17;
         float s = isHorizontal ? 0.0 : seam(uv);
-        return ((1.0 - amount * 0.5) + amount * g) * (1.0 - 0.28 * s);
+        float wallPanel = isHorizontal ? 1.0 : (fract(vWorldPos.y * 0.5) < 0.6 ? 0.72 : 1.0);
+        return ((1.0 - amount * 0.5) + amount * g) * (1.0 - 0.28 * s) * wallPanel;
     }
 
     if (fam == kFamSmooth) {
-        // A painted marker plate or smooth concrete/soil floor: mottle only, no seam.
         return mottle(sigma, (g - 0.5) * kNormGrain);
     }
 
     if (fam == kFamPlaster) {
-        // Fine even mottle plus broad damp/dirt staining. On horizontal floors, no panel seam.
+        // Authentic Soviet Khrushchevka wall: lower 1.2m panel oil paint + upper wallpaper/whitewash
         float stain = vnoise(uv * pitch);
-        float n = (g - 0.5) * kNormGrain * 0.78
-                + (stain - 0.5) * kNormNoise * 0.62;
+        float n = (g - 0.5) * kNormGrain * 0.78 + (stain - 0.5) * kNormNoise * 0.62;
         float s = isHorizontal ? 0.0 : seam(uv);
-        return mottle(sigma, n) * (1.0 - 0.30 * s);
+        float wallPanel = isHorizontal ? 1.0 : (fract(vWorldPos.y * 0.5) < 0.6 ? 0.70 : 1.0);
+        return mottle(sigma, n) * (1.0 - 0.30 * s) * wallPanel;
     }
 
     if (fam == kFamPlank) {

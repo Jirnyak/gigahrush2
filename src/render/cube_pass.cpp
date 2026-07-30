@@ -70,46 +70,25 @@ void build_unit_cube(std::vector<CubeVertex>& out) {
 // saturated than anyone guesses.
 constexpr vec3 kMaterial[kMatCount] = {
     /*  0 air, never drawn      */ {0.00f, 0.00f, 0.00f},
-    /*  1 concrete (maze)       */ {0.45f, 0.42f, 0.40f},
-    /*  2 soil (maze)           */ {0.30f, 0.55f, 0.25f},
-    /*  3 water marker (maze)   */ {0.20f, 0.35f, 0.80f},
-    /*  4 tan slab (maze)       */ {0.70f, 0.60f, 0.35f},
-    /*  5 extraction pad        */ {0.10f, 0.85f, 0.42f}, // the bank: saturated
-                                                         // emerald, unmistakable
-                                                         // against a palette of
-                                                         // rust, tan and grey —
-                                                         // and NOT red, which is
-                                                         // reserved for danger
-                                                         // ([faction.h])
-    /*  6 door leaf + frame     */ {0.20f, 0.31f, 0.58f}, // painted steel, the
-                                                         // stairwell blue every
-                                                         // khrushchevka entrance
-                                                         // door is primed in. The
-                                                         // one hue no interior
-                                                         // material uses: the
-                                                         // palette is plaster,
-                                                         // parquet, greys, greens
-                                                         // and four browns, and
-                                                         // red is danger
-                                                         // ([faction.h]), emerald
-                                                         // the bank, cyan the nav
-                                                         // pad. Family 0 (flat) in
-                                                         // material_surface.glsl,
-                                                         // so it reads as paint
-                                                         // against mottled plaster
+    /*  1 concrete (maze)       */ {0.30f, 0.30f, 0.28f}, // aged Soviet panel concrete
+    /*  2 soil (maze)           */ {0.24f, 0.36f, 0.18f}, // dark earth / soil
+    /*  3 water marker (maze)   */ {0.18f, 0.28f, 0.55f},
+    /*  4 tan slab (maze)       */ {0.36f, 0.30f, 0.22f}, // muted Soviet floor slab
+    /*  5 extraction pad        */ {0.10f, 0.85f, 0.42f}, // emerald bank
+    /*  6 door leaf + frame     */ {0.16f, 0.24f, 0.42f}, // Soviet stairwell blue entrance door
     /*  7 nav / hub pad         */ {0.00f, 0.80f, 0.95f},
-    // --- khrushchevka ---
-    /*  8 plaster    authored   */ {0.72f, 0.69f, 0.62f}, // dirty warm whitewash
-    /*  9 parquet    authored   */ {0.52f, 0.36f, 0.19f}, // dark varnished wood
-    /* 10 shop shutter  measured*/ {0.50f, 0.52f, 0.53f}, // painted_metal_shutter
-    /* 11 lino          measured*/ {0.13f, 0.13f, 0.15f}, // rubber_tiles, near-black
-    /* 12 factory wall  measured*/ {0.39f, 0.46f, 0.30f}, // factory_wall, green paint
-    /* 13 tread plate   measured*/ {0.52f, 0.33f, 0.20f}, // metal_grate_rusty
-    /* 14 rust          measured*/ {0.53f, 0.34f, 0.10f}, // rusty_metal_03
-    /* 15 rubble        measured*/ {0.35f, 0.17f, 0.11f}, // rusty_corrugated_iron
-    /* 16 electric grate        */ {0.85f, 0.80f, 0.20f}, // yellow-sparking electrical grate
-    /* 17 acid pool             */ {0.20f, 0.85f, 0.15f}, // glowing acid green
-    /* 18 fire cell             */ {0.90f, 0.30f, 0.05f}, // fiery orange-red
+    // --- authentic Soviet Khrushchevka palette ---
+    /*  8 plaster    authored   */ {0.48f, 0.44f, 0.38f}, // aged Soviet plaster / wallpaper
+    /*  9 parquet    authored   */ {0.32f, 0.20f, 0.10f}, // rich Soviet varnished oak parquet
+    /* 10 shop shutter  measured*/ {0.38f, 0.40f, 0.42f}, // painted metal shutter
+    /* 11 lino          measured*/ {0.26f, 0.16f, 0.12f}, // Soviet maroon/brown linoleum
+    /* 12 factory wall  measured*/ {0.22f, 0.30f, 0.22f}, // Soviet panel green
+    /* 13 tread plate   measured*/ {0.38f, 0.24f, 0.15f}, // rusty metal tread
+    /* 14 rust          measured*/ {0.40f, 0.20f, 0.08f}, // dark oxidized rust
+    /* 15 rubble        measured*/ {0.22f, 0.18f, 0.14f}, // dark concrete rubble / soil
+    /* 16 electric grate        */ {0.85f, 0.70f, 0.15f},
+    /* 17 acid pool             */ {0.15f, 0.75f, 0.12f},
+    /* 18 fire cell             */ {0.85f, 0.25f, 0.04f},
 };
 static_assert(sizeof(kMaterial) / sizeof(kMaterial[0]) == kMatCount,
               "one albedo row per material id in world/materials.h");
