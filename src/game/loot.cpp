@@ -387,34 +387,30 @@ CorpseLootResult loot_corpse_interact(Registry& reg, NpcPool& pool, EventBus& bu
     if (self == entt::null || !pool.valid(selfId)) return res;
 
     Inventory& inv = pool.inventory(selfId);
-    for (auto it = corpse.lootSlots.begin(); it != corpse.lootSlots.end(); ) {
-        if (!item_valid(it->item) || it->count == 0) {
-            it = corpse.lootSlots.erase(it);
-            continue;
-        }
-        const ItemDef& def = item_def(it->item);
-        int slot = -1;
+    for (std::size_t i = 0; i < kMaxCorpseSlots; ++i) {
+        ItemSlot& slotItem = corpse.lootSlots[i];
+        if (!item_valid(slotItem.item) || slotItem.count == 0) continue;
+        const ItemDef& def = item_def(slotItem.item);
+        int targetSlot = -1;
         if (def.stackMax > 1) {
-            for (int i = 0; i < kInvSlots; ++i)
-                if (inv.slots[i].item == it->item &&
-                    inv.slots[i].count < def.stackMax) { slot = i; break; }
+            for (int s = 0; s < kInvSlots; ++s)
+                if (inv.slots[s].item == slotItem.item &&
+                    inv.slots[s].count < def.stackMax) { targetSlot = s; break; }
         }
-        if (slot < 0) slot = inv.first_free();
-        if (slot >= 0) {
-            if (inv.slots[slot].item == it->item) {
-                inv.slots[slot].count = static_cast<std::uint16_t>(inv.slots[slot].count + it->count);
-                if (def.stackMax && inv.slots[slot].count > def.stackMax)
-                    inv.slots[slot].count = def.stackMax;
+        if (targetSlot < 0) targetSlot = inv.first_free();
+        if (targetSlot >= 0) {
+            if (inv.slots[targetSlot].item == slotItem.item) {
+                inv.slots[targetSlot].count = static_cast<std::uint16_t>(inv.slots[targetSlot].count + slotItem.count);
+                if (def.stackMax && inv.slots[targetSlot].count > def.stackMax)
+                    inv.slots[targetSlot].count = def.stackMax;
             } else {
-                inv.slots[slot].item = it->item;
-                inv.slots[slot].count = it->count;
+                inv.slots[targetSlot].item = slotItem.item;
+                inv.slots[targetSlot].count = slotItem.count;
             }
-            res.roublesGained += def.value * static_cast<std::int32_t>(it->count);
+            res.roublesGained += def.value * static_cast<std::int32_t>(slotItem.count);
             res.itemsTaken++;
-            bus.publish(EventType::ItemTransferred, kInvalidNpc, selfId, it->item, tick);
-            it = corpse.lootSlots.erase(it);
-        } else {
-            ++it; // inventory full
+            bus.publish(EventType::ItemTransferred, kInvalidNpc, selfId, slotItem.item, tick);
+            slotItem = {}; // Clear looted slot
         }
     }
 

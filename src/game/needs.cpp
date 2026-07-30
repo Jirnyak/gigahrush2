@@ -235,7 +235,11 @@ float needs_seconds_to_damage(const Needs& n) {
 }
 
 float needs_speed_scale(const Needs& n) {
-    return n.sleep < kSleepExhaustedAt ? kSleepExhaustedSpeedScale : 1.0f;
+    float scale = 1.0f;
+    if (n.sleep < kSleepExhaustedAt) scale *= kSleepExhaustedSpeedScale; // 0.5f exhaustion penalty
+    if (n.food <= 0.0f)              scale *= 0.75f; // 25% starvation penalty
+    if (n.water <= 0.0f)             scale *= 0.65f; // 35% dehydration penalty
+    return scale;
 }
 
 NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt) {

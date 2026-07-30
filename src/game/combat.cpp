@@ -12,6 +12,7 @@
 #include "game/faction_relations.h"
 #include "game/mob_behaviour.h"
 #include "game/mob_table.h"
+#include "game/monster_traits.h"
 #include "game/ranged_table.h"
 #include "game/rpg.h"      // RpgStats, xp_for_monster_kill, award_xp
 #include "game/weapon_table.h"
@@ -91,9 +92,15 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
 
     // Mitigation happens exactly once, here. Nothing downstream sees `raw`.
     std::int16_t dmg = raw;
+
+    // Counterplay Vulnerability Floor (e.g. Fire vs Plant/Shark/Swarm monsters)
+    if (const MobRef* m = reg.try_get<MobRef>(target)) {
+        dmg = trait_counterplay_damage(m->kind, static_cast<std::uint8_t>(ch), dmg, m->maxHp);
+    }
+
     if (const Armour* a = reg.try_get<Armour>(target)) {
         std::size_t i = static_cast<std::size_t>(ch);
-        if (i < kDamageChannels) dmg = mitigate(raw, a->resist[i]);
+        if (i < kDamageChannels) dmg = mitigate(dmg, a->resist[i]);
     }
 
     // Defender behaviour incoming damage multiplier (e.g. WallBrace armour against walls)

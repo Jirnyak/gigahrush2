@@ -43,6 +43,7 @@
 #include "game/floor_stream.h"
 #include "game/macro_sim.h"
 #include "game/mob_spawn.h"
+#include "game/monster_traits.h"
 #include "game/needs.h"
 #include "game/rumour.h"
 #include "game/speech.h"
@@ -62,6 +63,7 @@
 #include "game/weapon_table.h"
 #include "game/event_bus.h"
 #include "game/investigate.h"
+#include "sim/fluid.h"
 #include "game/noise.h"
 #include "game/wander.h"
 #include "game/npc_pool.h"
@@ -434,11 +436,20 @@ std::uint32_t refresh_floor_mobs(Registry& reg, const World& world, int floorNum
     // `df->kind` twice, deliberately: the theme drives the head-count multiplier and
     // the kind drives the ROOM PITCH that packs are placed by. theme_for_kind is not
     // invertible, so the spawner cannot recover the second from the first.
-    return game::spawn_floor_mobs(
+    std::uint32_t count = game::spawn_floor_mobs(
         reg, world, floorNumber, game::danger_for_hostility(spec.hostility),
         game::theme_for_kind(df->kind), layer,
         /*seed=*/0xB0B5EEDu ^ static_cast<std::uint32_t>(floorNumber) * 0x9e3779b9u,
         kMobSpawnCap, df->kind);
+
+    // Sync Armour components for all spawned mobs according to monster_traits
+    for (auto e : reg.view<const game::MobRef, const Transform>()) {
+        if (reg.get<const Transform>(e).layer == layer) {
+            const game::MobRef& m = reg.get<const game::MobRef>(e);
+            game::sync_monster_armour(reg, e, m.kind);
+        }
+    }
+    return count;
 }
 
 // Kick off this floor's navigation bake on a worker thread.
@@ -1485,7 +1496,6 @@ int main(int argc, char** argv) {
                                shotRideDone >= shotRide &&
                                shotFramesSeen >= 30) {
                         // Wait for async nav bake so loadWanted is not stuck
-                        // retrying while baking (load path already retries).
                         if (shotAction == "save") {
                             saveWanted = true;
                             shotActionConsumed = true;
@@ -1498,13 +1508,104 @@ int main(int argc, char** argv) {
                 game::wander_step(reg, stack.layer(activeLayer).grid(), pool,
                                   nav.coarse(),
                                   nav.fine(), activeLayer, simTick);
+
+                // Footstep noise generation while walking or running
+                if (reg.valid(player)) {
+                    const auto& vel = reg.get<Velocity>(player);
+                    const float speedSq = vel.v.x * vel.v.x + vel.v.z * vel.v.z;
+                    if (speedSq > 0.5f && (simTick % 28 == 0)) {
+                        const vec3& ppos = reg.get<Transform>(player).pos;
+                        game::NoiseProfile footstepNoise{6.0f, 400, 1, game::NoiseSource::Footstep};
+                        game::noise_publish(noiseField, activeLayer, ppos, footstepNoise,
+                                            static_cast<std::uint32_t>(entt::to_integral(player)));
+                    }
+                }
+
                 // Sound overrides sight's absence: a mob with no visible prey that
                 // heard something recently walks at the sound instead of at a random
                 // lattice node. Purely additive on top of wander_step and it returns
                 // before touching an entity when the field is quiet, which is almost
                 // every tick. [investigate.h]
-                heardMobs = game::investigate_step(reg, noiseField, pool, activeLayer,
-                                            simTick);
+                heardMobs = game::investigate_step(reg, noiseField, pool, activeLayer, simTick);
+
+                // --- PER-TICK SPECIAL MONSTER TRAITS & ABILITIES ---
+                for (auto me_ : reg.view<game::MobRef, Transform, Velocity>()) {
+                    Transform& tr = reg.get<Transform>(me_);
+                    if (tr.layer != activeLayer) continue;
+                    game::MobRef& mr = reg.get<game::MobRef>(me_);
+                    const auto kind = static_cast<game::MobKind>(mr.kind);
+
+                    // 1. Wet Regeneration (Lotochnik, etc.)
+                    const float regenRate = game::trait_wet_regen_hps(mr.kind);
+                    if (regenRate > 0.0f && (simTick % 16 == 0)) {
+                        const float* fluidData = giga::fluid_data(stack.layer(activeLayer));
+                        if (game::pos_wet(fluidData, tr.pos)) {
+                            mr.hp = std::min<std::int16_t>(mr.maxHp, mr.hp + static_cast<std::int16_t>(regenRate * 0.13f + 0.5f));
+                            if (particlePass.ready()) {
+                                particlePass.emit_burst(tr.pos + vec3{0.0f, 0.5f, 0.0f}, vec3{0.0f, 0.5f, 0.0f},
+                                                        vec3{0.20f, 0.85f, 0.40f}, gpu::GpuParticleKind::BioSpore,
+                                                        6, 1.2f, 0.4f, 0.10f, 60.0f);
+                            }
+                        }
+                    }
+
+                    // 2. Lampoglaz Flash Blinding Ability
+                    if (kind == game::MobKind::Lampoglaz) {
+                        if ((simTick + entt::to_integral(me_)) % 250 == 0) {
+                            if (particlePass.ready()) {
+                                particlePass.emit_burst(tr.pos + vec3{0.0f, 1.5f, 0.0f}, vec3{0.0f, 1.0f, 0.0f},
+                                                        vec3{0.70f, 0.95f, 1.00f}, gpu::GpuParticleKind::Spark,
+                                                        36, 5.0f, 1.2f, 0.20f, 360.0f);
+                            }
+                            game::NoiseProfile flashNoise{14.0f, 1800, 2, game::NoiseSource::Door};
+                            game::noise_publish(noiseField, activeLayer, tr.pos, flashNoise, static_cast<std::uint32_t>(entt::to_integral(me_)));
+                            if (reg.valid(player)) {
+                                const vec3& ppos = reg.get<Transform>(player).pos;
+                                float dx = wrap_delta_f(tr.pos.x, ppos.x, kWorldExtent);
+                                float dy = tr.pos.y - ppos.y;
+                                float dz = wrap_delta_f(tr.pos.z, ppos.z, kWorldExtent);
+                                if (dx*dx + dy*dy + dz*dz < 14.0f * 14.0f) {
+                                    game::apply_slow(reg, player, 0.40f, 1200);
+                                }
+                            }
+                        }
+                    }
+
+                    // 3. SporeCarpet / Meat-Spore Acid Cloud Hazard Pass
+                    if (kind == game::MobKind::SporeCarpet) {
+                        if ((simTick + entt::to_integral(me_)) % 40 == 0) {
+                            if (particlePass.ready()) {
+                                particlePass.emit_burst(tr.pos + vec3{0.0f, 0.3f, 0.0f}, vec3{0.0f, 0.4f, 0.0f},
+                                                        vec3{0.45f, 0.85f, 0.25f}, gpu::GpuParticleKind::BioSpore,
+                                                        16, 2.2f, 0.5f, 0.15f, 120.0f);
+                            }
+                            if (reg.valid(player)) {
+                                const vec3& ppos = reg.get<Transform>(player).pos;
+                                float dx = wrap_delta_f(tr.pos.x, ppos.x, kWorldExtent);
+                                float dy = tr.pos.y - ppos.y;
+                                float dz = wrap_delta_f(tr.pos.z, ppos.z, kWorldExtent);
+                                if (dx*dx + dy*dy + dz*dz < 2.15f * 2.15f) {
+                                    game::apply_damage(reg, pool, player, 4, game::DamageChannel::Fire, me_, &activeGrid);
+                                }
+                            }
+                        }
+                    }
+
+                    // 4. Stalker / TonkayaTen Cloaking Tint Modulation
+                    if (kind == game::MobKind::TonkayaTen || kind == game::MobKind::GlubinnayaTen) {
+                        if (Renderable* rend = reg.try_get<Renderable>(me_)) {
+                            const Velocity& vel = reg.get<Velocity>(me_);
+                            const float spd = std::sqrt(vel.v.x * vel.v.x + vel.v.z * vel.v.z);
+                            const float alpha = (spd > 0.5f) ? 0.85f : 0.15f;
+                            rend->color = vec3{0.20f * alpha, 0.30f * alpha, 0.40f * alpha};
+                            if (alpha < 0.30f && (simTick % 50 == 0) && particlePass.ready()) {
+                                particlePass.emit_burst(tr.pos + vec3{0.0f, 1.0f, 0.0f}, vec3{0.0f, 0.2f, 0.0f},
+                                                        vec3{0.30f, 0.60f, 0.90f}, gpu::GpuParticleKind::DustMote,
+                                                        4, 1.0f, 0.3f, 0.08f, 90.0f);
+                            }
+                        }
+                    }
+                }
                 // NPC-vs-NPC: bodies holding a staggered fight licence steer at their
                 // nearest enemy and swing when it is in reach. Placed AFTER wander_step
                 // and investigate_step so it overrides both for the licensed handful —

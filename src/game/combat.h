@@ -54,20 +54,34 @@ inline std::uint64_t cell_key(int x, int y, int z) {
            (static_cast<std::uint64_t>(z & 0xFFFF));
 }
 
-// Tracks destroyed electrical shields and localized power outages.
+inline constexpr std::size_t kMaxDestroyedShields = 128;
+
+// Tracks destroyed electrical shields and localized power outages (Pure POD).
 struct PowerGridState {
-    std::unordered_set<std::uint64_t> destroyedShields;
+    std::uint64_t destroyedShieldKeys[kMaxDestroyedShields] = {};
+    std::uint32_t count = 0;
 
     void destroy_shield(int cx, int cy, int cz) {
-        destroyedShields.insert(cell_key(cx, cy, cz));
+        std::uint64_t k = cell_key(cx, cy, cz);
+        for (std::uint32_t i = 0; i < count; ++i) {
+            if (destroyedShieldKeys[i] == k) return;
+        }
+        if (count < kMaxDestroyedShields) {
+            destroyedShieldKeys[count++] = k;
+        }
     }
 
     bool is_shield_destroyed(int cx, int cy, int cz) const {
-        return destroyedShields.count(cell_key(cx, cy, cz)) > 0;
+        std::uint64_t k = cell_key(cx, cy, cz);
+        for (std::uint32_t i = 0; i < count; ++i) {
+            if (destroyedShieldKeys[i] == k) return true;
+        }
+        return false;
     }
 
     bool is_power_cut(const vec3& pos) const {
-        for (std::uint64_t k : destroyedShields) {
+        for (std::uint32_t i = 0; i < count; ++i) {
+            std::uint64_t k = destroyedShieldKeys[i];
             int sx = static_cast<int>((k >> 32) & 0xFFFF);
             int sy = static_cast<int>((k >> 16) & 0xFFFF);
             int sz = static_cast<int>(k & 0xFFFF);
@@ -82,6 +96,7 @@ struct PowerGridState {
         return false;
     }
 };
+static_assert(std::is_trivially_copyable_v<PowerGridState>, "PowerGridState must stay a pure POD struct");
 
 // Five channels, matching the reference's armour model and the `resist[5]` vector
 // carried by armour items.
@@ -141,13 +156,17 @@ struct Dead {
     std::uint8_t channel = 0;
 };
 
-// Persistent corpse lying on the ground after death, available for tactical looting.
+inline constexpr std::size_t kMaxCorpseSlots = 4;
+
+// Persistent corpse lying on the ground after death, available for tactical looting (Pure POD).
 struct Corpse {
-    std::uint8_t mobKind = 0xFF;  // 0xFF for NPC record, or MobKind
+    ItemSlot lootSlots[kMaxCorpseSlots] = {};
     std::uint32_t deathTick = 0;
+    std::uint8_t mobKind = 0xFF;  // 0xFF for NPC record, or MobKind
+    std::uint8_t slotCount = 0;
     bool searched = false;
-    std::vector<ItemSlot> lootSlots; // Items remaining on the body
 };
+static_assert(std::is_trivially_copyable_v<Corpse>, "Corpse component must stay a pure POD struct");
 
 // Per-instance melee state. Separate from MobRef because MobRef is the spawn
 // record (what this monster IS) and this is combat state (what it is DOING).
