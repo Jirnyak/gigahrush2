@@ -2440,6 +2440,29 @@ int main(int argc, char** argv) {
                 particlePass.record_compute(cmd, kSimDt, currentTimeSec, camMat.eye);
             }
 
+            if (cullPass.ready() && propPass.ready()) {
+                propPass.set_use_gpu_culling(true);
+                const mat4 vp = mat4_mul(camMat.proj, camMat.view);
+                const uint32_t fIdx = renderer.currentFrame;
+                const float fogEnd = kWorldExtent * 0.50f * samosbor_fog_scale(samosbor);
+                const float torusPeriod = kWorldExtent;
+                for (int s = 0; s < gpu::kPropShapeCount; ++s) {
+                    uint32_t count = propPass.instance_count(s);
+                    if (count == 0) continue;
+                    vec3 bMin{-1.0f, -1.0f, -1.0f}, bMax{1.0f, 2.0f, 1.0f};
+                    gpu::GpuCullPass::get_shape_aabb(static_cast<gpu::PropShape>(s), bMin, bMax);
+                    cullPass.record_cull(
+                        cmd, vp, camMat.eye, fogEnd, torusPeriod,
+                        propPass.instance_buffer(s, fIdx), count,
+                        propPass.mesh(s).indexCount, 0, 0, 0,
+                        bMin, bMax,
+                        propPass.culled_instance_buffer(s, fIdx),
+                        propPass.indirect_cmd_buffer(s, fIdx));
+                }
+            } else if (propPass.ready()) {
+                propPass.set_use_gpu_culling(false);
+            }
+
             renderer.begin_pass(0.0f, 0.0f, 0.0f);
 
             gpu::CubePush push{};

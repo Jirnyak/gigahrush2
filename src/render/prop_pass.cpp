@@ -77,6 +77,18 @@ bool PropPass::init(VulkanDevice* dev, VkPipelineLayout pipelineLayout,
                     *dev_, kInstBufBytes,
                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, label))
                 return false;
+
+            std::snprintf(label, sizeof(label), "prop-cull-s%d-f%d", s, f);
+            if (!culledInstBufs_[s][f].create_host_visible(
+                    *dev_, kInstBufBytes,
+                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, label))
+                return false;
+
+            std::snprintf(label, sizeof(label), "prop-cmd-s%d-f%d", s, f);
+            if (!indirectCmdBufs_[s][f].create_host_visible(
+                    *dev_, 32ull,
+                    VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, label))
+                return false;
         }
     }
 
@@ -226,8 +238,11 @@ void PropPass::destroy() {
     if (!dev_) return;
     for (int s = 0; s < kPropShapeCount; ++s) {
         meshes_[s].destroy(dev_->device);
-        for (int f = 0; f < kMaxFramesInFlight; ++f)
+        for (int f = 0; f < kMaxFramesInFlight; ++f) {
             instBufs_[s][f].destroy(*dev_);
+            culledInstBufs_[s][f].destroy(*dev_);
+            indirectCmdBufs_[s][f].destroy(*dev_);
+        }
     }
     if (pipeline_) {
         vkDestroyPipeline(dev_->device, pipeline_, nullptr);
@@ -275,9 +290,23 @@ void PropPass::record(VkCommandBuffer cmd, uint32_t frameIndex,
         const auto& src = cpuInst_[s];
         if (src.empty()) continue;
 
-        // CPU frustum/fog cull: skip instances that are completely fogged out.
-        // This keeps GPU draw calls proportional to visible props, not total count.
-        // Also enforces the kMaxPropInstances hard cap per shape per frame.
+        if (useGpuCulling_) {
+            auto& buf = instBufs_[s][frameIndex];
+            uint32_t uploadCount = std::min(static_cast<uint32_t>(src.size()), static_cast<uint32_t>(kMaxPropInstances));
+            std::memcpy(buf.mapped, src.data(), uploadCount * sizeof(PropInstance));
+
+            // GPU Multi-Draw Indirect (MDI) path: instances were culled by cull.comp SSBO shader into culledInstBufs_
+            // and the indirect draw command was populated in indirectCmdBufs_.
+            VkBuffer     bufs[2] = {meshes_[s].vertexBuffer, culledInstBufs_[s][frameIndex].buffer};
+            VkDeviceSize offs[2] = {0, 0};
+            vkCmdBindVertexBuffers(cmd, 0, 2, bufs, offs);
+            vkCmdBindIndexBuffer(cmd, meshes_[s].indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexedIndirect(cmd, indirectCmdBufs_[s][frameIndex].buffer, 0, 1, sizeof(VkDrawIndexedIndirectCommand));
+            lastDrawCount_ += uploadCount;
+            continue;
+        }
+
+        // CPU frustum/fog cull fallback
         auto& buf = instBufs_[s][frameIndex];
         auto* dst = static_cast<PropInstance*>(buf.mapped);
         uint32_t count = 0;

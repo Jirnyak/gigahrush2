@@ -59,6 +59,11 @@ public:
     VkBuffer instance_buffer(int s, uint32_t f) const { return instBufs_[s][f].buffer; }
     const PropMesh& mesh(int s) const { return meshes_[s]; }
 
+    VkBuffer culled_instance_buffer(int s, uint32_t f) const { return culledInstBufs_[s][f].buffer; }
+    VkBuffer indirect_cmd_buffer(int s, uint32_t f) const { return indirectCmdBufs_[s][f].buffer; }
+    void set_use_gpu_culling(bool enable) { useGpuCulling_ = enable; }
+    bool use_gpu_culling() const { return useGpuCulling_; }
+
     std::vector<vec3> get_terminal_positions() const {
         std::vector<vec3> positions;
         const auto& terminals = cpuInst_[static_cast<std::size_t>(PropShape::Terminal)];
@@ -87,8 +92,11 @@ private:
 
     // Per-shape × per-frame host-visible GPU instance buffers
     std::array<std::array<VulkanBuffer, kMaxFramesInFlight>, kPropShapeCount> instBufs_;
+    std::array<std::array<VulkanBuffer, kMaxFramesInFlight>, kPropShapeCount> culledInstBufs_;
+    std::array<std::array<VulkanBuffer, kMaxFramesInFlight>, kPropShapeCount> indirectCmdBufs_;
 
     uint32_t lastDrawCount_ = 0;
+    bool useGpuCulling_ = false;
 };
 
 } // namespace giga::gpu
