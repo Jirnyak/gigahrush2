@@ -172,7 +172,15 @@ float compute_animated_emissive(float baseEmissive, uint mat_id, vec3 worldPos, 
         return baseEmissive * max(breathe, 0.05);
     }
 
-    // Case C: Acid Pool Chemical Undulation & Bubble Bursts
+    // Case C: CRT Screen / Terminal & Control Panel Oscilloscope Scanlines
+    if (mat_id == 12u || mat_id == 19u) {
+        float scanline = sin(vWorldPos.y * 120.0 + timeSec * 15.0) * 0.20 + 0.80;
+        float staticNoise = hash11(floor(vWorldPos.y * 80.0) + floor(timeSec * 35.0 + phaseRad)) * 0.25;
+        float oscWave = exp(-180.0 * pow(fract(vWorldPos.x * 2.0) - (0.5 + 0.3 * sin(vWorldPos.z * 10.0 + timeSec * 6.0)), 2.0));
+        return baseEmissive * (scanline + staticNoise + oscWave * 2.5);
+    }
+
+    // Case D: Acid Pool Chemical Undulation & Bubble Bursts
     float spatialWave = sin(timeSec * 3.2 + worldPos.x * 3.5 + worldPos.z * 3.5 + phaseRad);
     float bubblePop   = pow(max(sin(timeSec * 7.5 + phaseRad * 2.5), 0.0), 10.0) * 1.5;
     return baseEmissive * (0.80 + 0.25 * spatialWave + bubblePop);

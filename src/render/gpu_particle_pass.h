@@ -118,6 +118,9 @@ public:
                         float lifetime, float size,
                         float spreadDeg = 45.0f) noexcept;
 
+    // Helper for voxel block/wall destruction: spawns material-derived particle debris.
+    uint32_t emit_destruction_burst(vec3 pos, std::uint16_t matId, int count = 32) noexcept;
+
     // Continuous emitter: call every frame with dt.
     uint32_t emit(const GpuEmitEvent& templ, float rate, float dt) noexcept;
 

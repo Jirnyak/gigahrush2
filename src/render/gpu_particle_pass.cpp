@@ -437,6 +437,47 @@ uint32_t GpuParticlePass::emit_burst(vec3 pos, vec3 dir, vec3 color,
     return static_cast<uint32_t>(spawned);
 }
 
+uint32_t GpuParticlePass::emit_destruction_burst(vec3 pos, std::uint16_t matId, int count) noexcept {
+    vec3 col{0.65f, 0.62f, 0.58f};
+    GpuParticleKind kind = GpuParticleKind::DustMote;
+    float speed = 4.5f;
+    float lifetime = 1.8f;
+
+    switch (matId) {
+        case 1:  // kMatConcrete
+            col = vec3{0.65f, 0.65f, 0.65f};
+            kind = GpuParticleKind::DustMote;
+            break;
+        case 6:  // kMatDoor / metal
+        case 13: // kMatGrate / metal_grate_rusty
+        case 14: // rusty_metal_03
+        case 15: // rusty_corrugated_iron
+            col = vec3{0.85f, 0.45f, 0.15f};
+            kind = GpuParticleKind::Spark;
+            speed = 7.0f;
+            break;
+        case 5:  // kMatExtract (emerald)
+        case 7:  // kMatHubPad (cyan)
+            col = vec3{0.20f, 0.85f, 0.95f};
+            kind = GpuParticleKind::ElecArc;
+            speed = 6.0f;
+            break;
+        case 0:  // Crystal / Organic
+            col = vec3{0.35f, 0.85f, 0.45f};
+            kind = GpuParticleKind::BioSpore;
+            speed = 3.0f;
+            break;
+        default:
+            col = vec3{0.70f, 0.65f, 0.55f};
+            kind = GpuParticleKind::Smoke;
+            break;
+    }
+
+    uint32_t n1 = emit_burst(pos, vec3{0.0f, 1.0f, 0.0f}, col, kind, count / 2, speed, lifetime, 0.25f, 90.0f);
+    uint32_t n2 = emit_burst(pos, vec3{0.0f, 0.5f, 0.0f}, col * 0.7f, GpuParticleKind::DustMote, count / 2, speed * 0.5f, lifetime * 1.5f, 0.40f, 120.0f);
+    return n1 + n2;
+}
+
 uint32_t GpuParticlePass::emit(const GpuEmitEvent& templ,
                                 float rate, float dt) noexcept {
     if (!emitBuf_.mapped) return 0;

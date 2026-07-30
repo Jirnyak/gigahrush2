@@ -75,6 +75,7 @@
 
 #include "render/gpu_timer.h"
 #include "render/gpu_light_grid.h"
+#include "render/gpu_particle_pass.h"
 #include "render/imgui_layer.h"
 #include "render/vk_device.h"
 #include "render/vk_renderer.h"
@@ -531,19 +532,27 @@ int main(int argc, char** argv) {
     // Shares CubePass's pipeline layout and cube.frag so props receive identical
     // PBR lighting, fog, and material shading as the voxel world.
     gpu::PropPass propPass;
-    gpu::PropPlacer propPlacer;
-
     if (!propPass.init(&device, cubePass.pipeline_layout(),
                        renderer.renderPass, GIGA_SHADER_DIR)) {
         std::fprintf(stderr, "[prop] pass init failed (continuing without props)\n");
         // Non-fatal: the game runs fine without props.
     }
 
+    gpu::GpuParticlePass particlePass;
+    if (!particlePass.init(&device, renderer.renderPass, 0, GIGA_SHADER_DIR, lightGrid.descriptor_set_layout())) {
+        std::fprintf(stderr, "[particle] pass init failed (continuing without particles)\n");
+    }
+
+    gpu::PropPlacer propPlacer;
+
     // Populate initial decorative props. These are placed relative to world
     // origin (0,0,0) and visible once the first floor is generated nearby.
     // In a full game, a prop placement pass would populate these from world
     // data (room type, samosbor wave, etc.); here they demonstrate all shapes.
-    // Procedural props are populated dynamically from floor macro grids upon level generation and floor streaming.
+    if (particlePass.ready()) {
+        particlePass.emit_burst(vec3{64.0f, 4.0f, 64.0f}, vec3{0.0f, 1.0f, 0.0f}, vec3{0.85f, 0.80f, 0.70f}, gpu::GpuParticleKind::DustMote, 128, 2.0f, 8.0f, 0.35f, 180.0f);
+        particlePass.emit_destruction_burst(vec3{64.0f, 2.0f, 64.0f}, 1, 64);
+    }
 
 
     gpu::ImGuiLayer hud;
@@ -1511,52 +1520,168 @@ int main(int argc, char** argv) {
                         saveLineAt = simTick;
                     }
                 }
+                // F9 full load: run + floor + cell + armour. APIs live in save.h;
+                // this was the only call site that still did a partial field copy and
+                // admitted it would not restore position. [save.h]
                 if (loadWanted) {
-                    loadWanted = false;
-                    game::SaveState in;
-                    game::SaveError err = game::SaveError::None;
-                    if (!read_run(in, kSavePath, err)) {
-                        // No file and a refused file need different words: one is a
-                        // first run, the other is a save the build can no longer read.
-                        if (err == game::SaveError::None)
-                            std::snprintf(saveLine, sizeof(saveLine),
-                                          "no save file (%s)", kSavePath);
-                        else
-                            std::snprintf(saveLine, sizeof(saveLine),
-                                          "load refused: %s",
-                                          game::save_error_text(err));
+                    // Travel regenerates Worlds; AsyncBake holds a raw MacroGrid* for
+                    // ~seconds. Multi-hop while baking frees the slot the worker still
+                    // reads — refuse and retry next frame. [save.h, nav_async.h]
+                    if (nav.baking()) {
+                        // leave loadWanted set; quiet until the bake ends
                     } else {
-                        // `ledger` and `contracts` are references INTO runState, so this
-                        // one assignment republishes both without touching a use site.
-                        runState = in;
-                        const game::NpcRef* nrl = reg.valid(player)
-                                                      ? reg.try_get<game::NpcRef>(player)
-                                                      : nullptr;
-                        if (nrl && pool.valid(nrl->id)) {
-                            pool.needs(nrl->id) = runState.player.clock;
-                            pool.inventory(nrl->id) = runState.player.inv;
-                            pool.hp(nrl->id) =
-                                static_cast<std::int16_t>(runState.player.hp);
+                        loadWanted = false;
+                        game::SaveState in;
+                        game::SaveError err = game::SaveError::None;
+                        if (!read_run(in, kSavePath, err)) {
+                            // No file and a refused file need different words: one is a
+                            // first run, the other is a save the build can no longer read.
+                            if (err == game::SaveError::None)
+                                std::snprintf(saveLine, sizeof(saveLine),
+                                              "no save file (%s)", kSavePath);
+                            else
+                                std::snprintf(saveLine, sizeof(saveLine),
+                                              "load refused: %s",
+                                              game::save_error_text(err));
+                        } else {
+                            // `ledger` and `contracts` are references INTO runState, so
+                            // this one assignment republishes both without touching a
+                            // use site.
+                            runState = in;
+                            const int savedFloor = runState.player.floorNumber;
+                            const std::uint8_t scx = runState.player.cx;
+                            const std::uint8_t scy = runState.player.cy;
+                            const std::uint8_t scz = runState.player.cz;
+
+                            bool floorMoved = false;
+                            bool arrived = (savedFloor == currentFloor);
+                            bool travelRefused = false;
+                            std::size_t reopened = 0;
+
+                            if (savedFloor != currentFloor) {
+                                const game::LoadTravel lt = game::travel_to_saved_floor(
+                                    stack, registry, reg, pool, streamer, player,
+                                    currentFloor, savedFloor, game::kArrivalZ);
+                                if (lt.moved) {
+                                    player = lt.player;
+                                    currentFloor = lt.floor;
+                                    floorMoved = true;
+                                    arrived = lt.arrived;
+                                    // Same post-ride bookkeeping as keyboard / --shot.
+                                    game::record_floor(ledger, currentFloor);
+                                    samosbor = game::samosbor_new_game(sbRng);
+                                    rumourLine[0] = 0;
+                                    rumourAt = 0;
+                                    game::noise_clear(noiseField);
+                                    currentSpec = spec_for_floor(currentFloor);
+                                    cubePass.invalidate();
+                                    const LayerId nl =
+                                        reg.valid(player)
+                                            ? reg.get<Transform>(player).layer
+                                            : activeLayer;
+                                    activeLayer = nl;
+                                    // Arrival order is load-path law, not a suggestion:
+                                    // containers before re-open, mobs, doors, freeze,
+                                    // bake, then placement. [save.h]
+                                    refresh_floor_containers(reg, stack.layer(nl),
+                                                             currentFloor, nl);
+                                    reopened = game::apply_opened_containers(
+                                        reg, nl, currentFloor, runState.opened.data(),
+                                        runState.opened.size());
+                                    refresh_floor_mobs(reg, stack.layer(nl),
+                                                       currentFloor, nl);
+                                    if (currentSpec)
+                                        doorsBuilt = game::door_build(
+                                            stack.layer(nl), doors, currentFloor,
+                                            *currentSpec, kDoorSeed);
+                                    doors.frozen = true;
+                                    begin_floor_nav(stack.layer(nl), nav);
+                                    if (propPass.ready()) {
+                                        std::uint32_t fseed =
+                                            1337u ^
+                                            (static_cast<std::uint32_t>(currentFloor) *
+                                             0x9e3779b9u);
+                                        propPlacer.populate(stack.layer(nl).grid(),
+                                                            propPass, fseed);
+                                    }
+                                } else {
+                                    // Unknown floor label or missing NpcRef — run
+                                    // still restores in place; body stays put.
+                                    travelRefused = true;
+                                    arrived = false;
+                                }
+                            }
+
+                            // Pool row first: needs/inv/hp/maxHp survive a body swap
+                            // and must land before armour is re-derived from inv.
+                            const game::NpcRef* nrl =
+                                reg.valid(player) ? reg.try_get<game::NpcRef>(player)
+                                                  : nullptr;
+                            if (nrl && pool.valid(nrl->id)) {
+                                game::apply_player_snapshot(pool, nrl->id,
+                                                            runState.player);
+                                game::sync_armour(reg, pool, player);
+                            }
+
+                            // Same-floor load never rebuilt crates; re-empty looted
+                            // ones against the live layer. Cross-floor already did.
+                            if (!floorMoved) {
+                                reopened = game::apply_opened_containers(
+                                    reg, activeLayer, currentFloor,
+                                    runState.opened.data(), runState.opened.size());
+                            }
+
+                            game::PlacedCell placed{};
+                            if (reg.valid(player)) {
+                                const LayerId pl = reg.get<Transform>(player).layer;
+                                activeLayer = pl;
+                                placed = game::place_body_at_cell(
+                                    reg, stack.layer(pl), player, scx, scy, scz);
+                                aim_player(reg, player);
+                            }
+
+                            // Honest HUD: refuse / partial ride / place slip / ok.
+                            if (travelRefused) {
+                                std::snprintf(
+                                    saveLine, sizeof(saveLine),
+                                    "loaded %u rub; floor %d unreachable (on %d)",
+                                    static_cast<unsigned>(ledger.banked), savedFloor,
+                                    currentFloor);
+                            } else if (!arrived) {
+                                std::snprintf(
+                                    saveLine, sizeof(saveLine),
+                                    "loaded %u rub; rode to %d (saved %d), %s",
+                                    static_cast<unsigned>(ledger.banked), currentFloor,
+                                    savedFloor,
+                                    placed.ok
+                                        ? (placed.moved ? "placed nearby" : "placed")
+                                        : "place refused");
+                            } else if (!placed.ok) {
+                                std::snprintf(
+                                    saveLine, sizeof(saveLine),
+                                    "loaded %u rub floor %d; place refused, %u crates",
+                                    static_cast<unsigned>(ledger.banked), currentFloor,
+                                    static_cast<unsigned>(reopened));
+                            } else if (placed.moved) {
+                                std::snprintf(
+                                    saveLine, sizeof(saveLine),
+                                    "loaded: floor %d, %u rub, placed nearby, %u crates",
+                                    currentFloor,
+                                    static_cast<unsigned>(ledger.banked),
+                                    static_cast<unsigned>(reopened));
+                            } else {
+                                std::snprintf(
+                                    saveLine, sizeof(saveLine),
+                                    "loaded: floor %d @%u,%u,%u, %u rub, %u crates",
+                                    currentFloor, static_cast<unsigned>(scx),
+                                    static_cast<unsigned>(scy),
+                                    static_cast<unsigned>(scz),
+                                    static_cast<unsigned>(ledger.banked),
+                                    static_cast<unsigned>(reopened));
+                            }
                         }
-                        const std::size_t re = game::apply_opened_containers(
-                            reg, activeLayer, currentFloor, runState.opened.data(),
-                            runState.opened.size());
-                        // Honest about the one thing this does NOT do: it restores the
-                        // run, not the position. Travelling to the saved floor means
-                        // driving the elevator and re-baking nav, so a load on the wrong
-                        // floor says so instead of pretending.
-                        if (runState.player.floorNumber != currentFloor)
-                            std::snprintf(saveLine, sizeof(saveLine),
-                                          "loaded %u rub (saved on floor %d, you are on %d)",
-                                          static_cast<unsigned>(ledger.banked),
-                                          runState.player.floorNumber, currentFloor);
-                        else
-                            std::snprintf(saveLine, sizeof(saveLine),
-                                          "loaded: %u rub, %u crates re-opened",
-                                          static_cast<unsigned>(ledger.banked),
-                                          static_cast<unsigned>(re));
+                        saveLineAt = simTick;
                     }
-                    saveLineAt = simTick;
                 }
                 // The pad is the shop, and only the pad. A vendor reachable from
                 // anywhere would make the walk home pointless, and the walk home IS
@@ -2232,6 +2357,10 @@ int main(int argc, char** argv) {
                 lightGrid.update_and_dispatch(cmd, currentTimeSec, camMat.eye);
             }
 
+            if (particlePass.ready()) {
+                particlePass.record_compute(cmd, kSimDt, currentTimeSec, camMat.eye);
+            }
+
             renderer.begin_pass(0.0f, 0.0f, 0.0f);
 
             gpu::CubePush push{};
@@ -2267,6 +2396,18 @@ int main(int argc, char** argv) {
             // Props: GPU-instanced arbitrary-mesh pass, same depth buffer.
             if (propPass.ready())
                 propPass.record(cmd, renderer.currentFrame, push, lightGrid.descriptor_set());
+            if (particlePass.ready()) {
+                gpu::ParticleDrawPush particlePush{};
+                mat4 vp = mat4_mul(camMat.proj, camMat.view);
+                std::memcpy(particlePush.viewProj, &vp, sizeof(vp));
+                particlePush.camPos = camMat.eye;
+                particlePush.camRight = vec3{camMat.view.m[0], camMat.view.m[4], camMat.view.m[8]};
+                particlePush.camUp = vec3{camMat.view.m[1], camMat.view.m[5], camMat.view.m[9]};
+                particlePush.fogStart = kWorldExtent * 0.30f * fogScale;
+                particlePush.fogEnd = kWorldExtent * 0.50f * fogScale;
+                particlePass.record_draw(cmd, particlePush, lightGrid.descriptor_set());
+            }
+
             std::uint64_t t2 = SDL_GetPerformanceCounter();
             cubeMs = static_cast<float>((t1 - t0) / freq * 1000.0);
             bodyMs = static_cast<float>((t2 - t1) / freq * 1000.0);
@@ -2409,6 +2550,7 @@ int main(int argc, char** argv) {
 
     // --- teardown (reverse order) -----------------------------------------
     hud.destroy();
+    particlePass.destroy();
     propPass.destroy();
     bodyPass.destroy();
     cubePass.destroy();
