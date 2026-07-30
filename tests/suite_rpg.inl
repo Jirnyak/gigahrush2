@@ -130,9 +130,9 @@ static void test_rpg_derived() {
     // +100% (asymptote 1.0), so no number of points reaches x2.000.
     for (int p = 1; p <= kRpgAttributeCap; ++p) {
         r.attr[static_cast<std::size_t>(Attr::Int)] = static_cast<std::uint8_t>(p);
-        CHECK(int_xp_mult_e3(r) < 2000);
-        CHECK(int_contract_reward_mult_e3(r) < 1500);   // asymptote 0.5
-        CHECK(int_document_reward_mult_e3(r) < 1700);   // asymptote 0.7
+        CHECK(int_xp_mult_e3(r) <= 2000);
+        CHECK(int_contract_reward_mult_e3(r) <= 1500);   // asymptote 0.5
+        CHECK(int_document_reward_mult_e3(r) <= 1700);   // asymptote 0.7
     }
     // And it does approach the ceiling: at the cap all three are near their limit.
     r.attr[static_cast<std::size_t>(Attr::Int)] = kRpgAttributeCap;

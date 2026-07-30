@@ -636,9 +636,10 @@ static void test_monster_all() {
         Registry reg;
         MacroGrid grid;
         NpcPool pool;
-        nav::CoarseGraph coarse;
+        nav::CoarseGraph coarse{};
         nav::FineNav fine;
-        fine.flow.resize(kMacroCells, 0);
+        fine.flow.resize(nav::kNodes * kMacroCells, 0);
+        fine.nearest.resize(kMacroCells, 0);
 
         // Place electric grate cell at (5, 5, 5)
         grid.set_cell(5, 5, 5, kMatElectricGrate);
