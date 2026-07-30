@@ -216,7 +216,37 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
         bus.publish(EventType::NpcDied, victim, kind,
                     static_cast<std::uint32_t>(entt::to_integral(d.killer)), tick);
 
-        reg.destroy(e);
+        // Player / camera holder entities are destroyed for body swapping
+        if (reg.all_of<CameraTag>(e)) {
+            reg.destroy(e);
+            continue;
+        }
+
+        // Convert NPC/mob entity to a persistent fallen Corpse on the floor
+        if (reg.valid(e)) {
+            reg.remove<MobRef>(e);
+            if (reg.all_of<MobCombat>(e)) reg.remove<MobCombat>(e);
+            if (reg.all_of<Velocity>(e)) reg.remove<Velocity>(e);
+            reg.remove<Dead>(e);
+
+            if (auto* aabb = reg.try_get<AABB>(e)) {
+                const float h = aabb->half.y;
+                aabb->half.y = 0.18f;                     // Flatten on ground
+                aabb->half.z = std::max(h * 0.75f, 0.55f); // Extend along floor
+            }
+            if (auto* tr = reg.try_get<Transform>(e)) {
+                tr->pos.y -= 0.45f; // Place flush on floor surface
+            }
+            if (auto* rend = reg.try_get<Renderable>(e)) {
+                // Darken & desaturate tint to read as a cold fallen body
+                rend->color = vec3{rend->color.x * 0.35f, rend->color.y * 0.35f, rend->color.z * 0.40f};
+            }
+
+            Corpse corpse;
+            corpse.mobKind = static_cast<std::uint8_t>(kind);
+            corpse.deathTick = static_cast<std::uint32_t>(tick);
+            reg.emplace<Corpse>(e, std::move(corpse));
+        }
     }
     return static_cast<std::uint32_t>(doomed.size());
 }

@@ -37,6 +37,8 @@
 #include "game/event_bus.h"
 #include "game/inventory.h"
 #include "game/item_table.h"
+#include <unordered_set>
+
 #include "game/noise.h"          // NoiseField, for the gunshot and the body fall
 #include "game/ranged_table.h"   // ItemId, for the equipped-loadout helpers
 #include "game/npc_pool.h"
@@ -45,6 +47,41 @@
 #include "world/materials.h"
 
 namespace giga::game {
+
+inline std::uint64_t cell_key(int x, int y, int z) {
+    return (static_cast<std::uint64_t>(x & 0xFFFF) << 32) |
+           (static_cast<std::uint64_t>(y & 0xFFFF) << 16) |
+           (static_cast<std::uint64_t>(z & 0xFFFF));
+}
+
+// Tracks destroyed electrical shields and localized power outages.
+struct PowerGridState {
+    std::unordered_set<std::uint64_t> destroyedShields;
+
+    void destroy_shield(int cx, int cy, int cz) {
+        destroyedShields.insert(cell_key(cx, cy, cz));
+    }
+
+    bool is_shield_destroyed(int cx, int cy, int cz) const {
+        return destroyedShields.count(cell_key(cx, cy, cz)) > 0;
+    }
+
+    bool is_power_cut(const vec3& pos) const {
+        for (std::uint64_t k : destroyedShields) {
+            int sx = static_cast<int>((k >> 32) & 0xFFFF);
+            int sy = static_cast<int>((k >> 16) & 0xFFFF);
+            int sz = static_cast<int>(k & 0xFFFF);
+            vec3 shieldPos{sx * 2.0f, sy * 2.0f + 0.40f, sz * 2.0f};
+            float dx = pos.x - shieldPos.x;
+            float dy = pos.y - shieldPos.y;
+            float dz = pos.z - shieldPos.z;
+            if (dx * dx + dy * dy + dz * dz <= 12.0f * 12.0f) {
+                return true;
+            }
+        }
+        return false;
+    }
+};
 
 // Five channels, matching the reference's armour model and the `resist[5]` vector
 // carried by armour items.
@@ -102,6 +139,14 @@ struct Armour {
 struct Dead {
     Entity killer = entt::null;
     std::uint8_t channel = 0;
+};
+
+// Persistent corpse lying on the ground after death, available for tactical looting.
+struct Corpse {
+    std::uint8_t mobKind = 0xFF;  // 0xFF for NPC record, or MobKind
+    std::uint32_t deathTick = 0;
+    bool searched = false;
+    std::vector<ItemSlot> lootSlots; // Items remaining on the body
 };
 
 // Per-instance melee state. Separate from MobRef because MobRef is the spawn

@@ -129,7 +129,9 @@ constexpr float kSamosborFogSqueeze = 0.34f;
 static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
                                  float timeSec, const game::SamosborState& samosbor,
                                  const Registry& reg, LayerId activeLayer,
-                                 const game::NoiseField* noiseField = nullptr) {
+                                 const game::NoiseField* noiseField = nullptr,
+                                 const game::PowerGridState* powerGrid = nullptr,
+                                 const gpu::PropPass* propPass = nullptr) {
     grid.clear_lights();
 
     // 1. Player Headlamp
@@ -215,6 +217,24 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
             float acousticFlicker = 1.0f + 0.50f * (static_cast<float>(loud->severity) / 5.0f) * std::sin(timeSec * 40.0f);
             grid.add_light(camPos + vec3{0.0f, 1.0f, 0.0f}, 14.0f, vec3{0.90f, 0.80f, 0.50f}, 1.5f * acousticFlicker);
         }
+    }
+
+    // 7. Ceiling Light Bulbs & Flood Lamps (Suppressed when ElectricalShield is destroyed)
+    if (propPass && propPass->ready()) {
+        auto collect_lamps = [&](gpu::PropShape shape) {
+            for (const vec3& pos : propPass->get_prop_positions(shape)) {
+                if (powerGrid && powerGrid->is_power_cut(pos)) continue; // Local power cut!
+
+                float dx = wrap_delta_f(camPos.x, pos.x, kWorldExtent);
+                float dy = camPos.y - pos.y;
+                float dz = wrap_delta_f(camPos.z, pos.z, kWorldExtent);
+                if (dx * dx + dy * dy + dz * dz > 36.0f * 36.0f) continue;
+
+                grid.add_light(pos + vec3{0.0f, -0.2f, 0.0f}, 12.0f, vec3{1.00f, 0.88f, 0.65f}, 1.8f);
+            }
+        };
+        collect_lamps(gpu::PropShape::BareBulb);
+        collect_lamps(gpu::PropShape::FloodLamp);
     }
 }
 
@@ -796,6 +816,7 @@ int main(int argc, char** argv) {
     bool possessWanted = false;     // P, consumed by one sim step (Voluntary Mind Projection / Body Swap)
     char elevDiagLine[160] = {};
     std::uint64_t elevDiagAt = 0;
+    game::PowerGridState powerGrid{};
     // One seed for every floor's doors. door_build is deterministic in it, so a floor
     // gets the same doors on every visit, the same way its mobs and crates do.
     constexpr unsigned kDoorSeed = 0xD00D5u;
@@ -1535,9 +1556,13 @@ int main(int argc, char** argv) {
                     doorWanted = false;
                     if (reg.valid(player)) {
                         const vec3 ppos = reg.get<Transform>(player).pos;
+                        const game::Inventory* pInv = nullptr;
+                        if (const auto* nr = reg.try_get<game::NpcRef>(player)) {
+                            if (pool.valid(nr->id)) pInv = &pool.inventory(nr->id);
+                        }
                         std::uint32_t toggled = game::door_toggle_near(
                             stack.layer(activeLayer), doors, reg,
-                            activeLayer, ppos);
+                            activeLayer, ppos, pInv);
                         if (toggled != game::kNoDoor) {
                             // Reconstruct door world position for particle/sound
                             const game::Door& d = doors.doors[toggled];
@@ -1566,13 +1591,35 @@ int main(int argc, char** argv) {
                     interactWanted = false;
                     if (reg.valid(player)) {
                         const vec3 ppos = reg.get<Transform>(player).pos;
-                        bool interactedTerminal = false;
-                        if (propPass.ready()) {
+                        bool handled = false;
+
+                        // 1. Try Corpse Looting / Inspection
+                        game::CorpseLootResult clr = game::loot_corpse_interact(
+                            reg, pool, bus, activeLayer, ppos, 2.2f, simTick);
+                        if (clr.foundCorpse) {
+                            handled = true;
+                            std::snprintf(elevDiagLine, sizeof(elevDiagLine),
+                                          "CORPSE LOOTED: TAKEN %u ITEMS (+%d RUB)",
+                                          clr.itemsTaken, clr.roublesGained);
+                            elevDiagAt = simTick;
+                            if (particlePass.ready()) {
+                                particlePass.emit_burst(ppos + vec3{0.0f, 0.4f, 0.0f},
+                                                        vec3{0.0f, 0.4f, 0.0f},
+                                                        vec3{1.0f, 0.86f, 0.42f},
+                                                        gpu::GpuParticleKind::DustMote,
+                                                        20, 2.0f, 0.5f, 0.12f, 120.0f);
+                            }
+                            game::NoiseProfile np{6.0f, 600, 1, game::NoiseSource::Door};
+                            game::noise_publish(noiseField, activeLayer, ppos, np, 0);
+                        }
+
+                        // 2. Terminal / ControlPanel interaction
+                        if (!handled && propPass.ready()) {
                             std::vector<vec3> terms = propPass.get_terminal_positions();
                             game::TerminalInteractResult tres = game::embody_interact_terminal(
                                 reg, stack.layer(activeLayer), doors, activeLayer, ppos, 4.0f, terms);
                             if (tres.interacted) {
-                                interactedTerminal = true;
+                                handled = true;
                                 std::snprintf(elevDiagLine, sizeof(elevDiagLine),
                                               "ELEVATOR DIAGNOSTIC: FLOOR %d TERMINAL LINKED | DOORS %s (%u TOGGLED)",
                                               currentFloor, tres.doorsLocked ? "LOCKED" : "UNLOCKED", tres.doorsToggled);
@@ -1590,8 +1637,42 @@ int main(int argc, char** argv) {
                                 game::noise_publish(noiseField, activeLayer, tres.propPos, np, 0);
                             }
                         }
-                        // Non-terminal interact: relieve bladder and bowel pressure
-                        if (!interactedTerminal) {
+
+                        // 3. ElectricalShield interaction / power cut sabotage
+                        if (!handled && propPass.ready()) {
+                            std::vector<vec3> shields = propPass.get_prop_positions(gpu::PropShape::ElectricalShield);
+                            for (const vec3& sp : shields) {
+                                float dx = wrap_delta_f(ppos.x, sp.x, kWorldExtent);
+                                float dy = ppos.y - sp.y;
+                                float dz = wrap_delta_f(ppos.z, sp.z, kWorldExtent);
+                                if (dx * dx + dy * dy + dz * dz < 3.5f * 3.5f) {
+                                    int scx = static_cast<int>(sp.x / kCellSize);
+                                    int scy = static_cast<int>(sp.y / kCellSize);
+                                    int scz = static_cast<int>(sp.z / kCellSize);
+                                    if (!powerGrid.is_shield_destroyed(scx, scy, scz)) {
+                                        handled = true;
+                                        powerGrid.destroy_shield(scx, scy, scz);
+                                        std::snprintf(elevDiagLine, sizeof(elevDiagLine),
+                                                      "POWER GRID SABOTAGE: ELECTRICAL SHIELD DESTROYED AT (%.1f, %.1f)",
+                                                      sp.x, sp.z);
+                                        elevDiagAt = simTick;
+                                        if (particlePass.ready()) {
+                                            particlePass.emit_burst(sp + vec3{0.0f, 0.4f, 0.0f},
+                                                                    vec3{0.0f, 1.0f, 0.0f},
+                                                                    vec3{0.35f, 0.85f, 1.00f},
+                                                                    gpu::GpuParticleKind::ElecArc,
+                                                                    64, 6.0f, 0.9f, 0.20f, 250.0f);
+                                        }
+                                        game::NoiseProfile np{16.0f, 2500, 3, game::NoiseSource::Door};
+                                        game::noise_publish(noiseField, activeLayer, sp, np, 0);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        // 3. Physiological relief fallback
+                        if (!handled) {
                             if (const auto* nrg = reg.try_get<game::NpcRef>(player)) {
                                 if (pool.valid(nrg->id)) {
                                     game::ReliefResult rr = game::relieve_needs(pool.needs(nrg->id), 100.0f, 100.0f);
@@ -2710,9 +2791,22 @@ int main(int argc, char** argv) {
             // Door proximity (same indexed search door_toggle_near uses)
             std::uint32_t nearDoor = game::door_query_near(doors, ppos);
             if (nearDoor != game::kNoDoor) {
-                bool isDoorShut = doors.doors[nearDoor].state ==
-                    static_cast<std::uint8_t>(game::DoorState::Shut);
-                promptText = isDoorShut ? "[Q]  OPEN DOOR" : "[Q]  CLOSE DOOR";
+                const game::Door& d = doors.doors[nearDoor];
+                const bool isShutOrLocked = (d.state == static_cast<std::uint8_t>(game::DoorState::Shut) ||
+                                             d.state == static_cast<std::uint8_t>(game::DoorState::Locked));
+
+                if (isShutOrLocked && d.keycardTier > 0) {
+                    const game::Inventory* pInv = nullptr;
+                    if (const auto* nr = reg.try_get<game::NpcRef>(player)) {
+                        if (pool.valid(nr->id)) pInv = &pool.inventory(nr->id);
+                    }
+                    const bool hasCard = pInv && game::inventory_has_keycard(*pInv, d.keycardTier);
+                    promptText = hasCard ? "[Q]  UNLOCK DOOR" : "[Q]  KEYCARD REQUIRED";
+                } else if (isShutOrLocked) {
+                    promptText = "[Q]  OPEN DOOR";
+                } else {
+                    promptText = "[Q]  CLOSE DOOR";
+                }
             }
 
             // Terminal proximity
@@ -2729,15 +2823,35 @@ int main(int argc, char** argv) {
                 }
             }
 
-            // Radiator / Plumbing proximity
+            // ElectricalShield proximity (sabotage / power cut)
             if (!promptText && propPass.ready()) {
-                std::vector<vec3> rads = propPass.get_prop_positions(gpu::PropShape::Radiator);
-                for (const vec3& rp : rads) {
-                    const float dx = wrap_delta_f(ppos.x, rp.x, kWorldExtent);
-                    const float dy = ppos.y - rp.y;
-                    const float dz = wrap_delta_f(ppos.z, rp.z, kWorldExtent);
-                    if (dx * dx + dy * dy + dz * dz < 3.0f * 3.0f) {
-                        promptText = "[E]  RELIEVE (RADIATOR)";
+                std::vector<vec3> shields = propPass.get_prop_positions(gpu::PropShape::ElectricalShield);
+                for (const vec3& sp : shields) {
+                    const float dx = wrap_delta_f(ppos.x, sp.x, kWorldExtent);
+                    const float dy = ppos.y - sp.y;
+                    const float dz = wrap_delta_f(ppos.z, sp.z, kWorldExtent);
+                    if (dx * dx + dy * dy + dz * dz < 3.5f * 3.5f) {
+                        int scx = static_cast<int>(sp.x / kCellSize);
+                        int scy = static_cast<int>(sp.y / kCellSize);
+                        int scz = static_cast<int>(sp.z / kCellSize);
+                        if (!powerGrid.is_shield_destroyed(scx, scy, scz)) {
+                            promptText = "[E]  SABOTAGE ELECTRICAL SHIELD";
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Corpse proximity (manual tactical loot)
+            if (!promptText) {
+                for (auto cEnt : reg.view<const game::Corpse, const Transform>()) {
+                    if (reg.get<const Transform>(cEnt).layer != activeLayer) continue;
+                    const vec3& cpos = reg.get<const Transform>(cEnt).pos;
+                    const float dx = wrap_delta_f(ppos.x, cpos.x, kWorldExtent);
+                    const float dy = ppos.y - cpos.y;
+                    const float dz = wrap_delta_f(ppos.z, cpos.z, kWorldExtent);
+                    if (dx * dx + dy * dy + dz * dz < 2.2f * 2.2f) {
+                        promptText = "[E]  LOOT CORPSE";
                         break;
                     }
                 }
@@ -2825,7 +2939,7 @@ int main(int argc, char** argv) {
             float currentTimeSec = static_cast<float>(SDL_GetTicks()) / 1000.0f;
 
             if (lightGrid.ready()) {
-                collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, samosbor, reg, activeLayer, &noiseField);
+                collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, samosbor, reg, activeLayer, &noiseField, &powerGrid, &propPass);
                 lightGrid.update_and_dispatch(cmd, currentTimeSec, camMat.eye);
             }
 

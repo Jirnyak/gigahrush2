@@ -5,6 +5,7 @@
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "game/floor_gen.h"   // Doorway, floor_doorways
+#include "game/item_table.h"
 #include "game/mob_spawn.h"   // MobRef
 #include "game/mob_table.h"
 #include "world/materials.h"
@@ -152,8 +153,23 @@ bool door_set(World& world, DoorSet& doors, const Registry& reg, LayerId layer,
     return true;
 }
 
+bool inventory_has_keycard(const Inventory& inv, std::uint8_t requiredTier) {
+    if (requiredTier == 0) return true;
+    for (int i = 0; i < kInvSlots; ++i) {
+        const ItemSlot& slot = inv.slots[i];
+        if (slot.item == kInvalidItem || slot.count == 0) continue;
+        if (!item_valid(slot.item)) continue;
+        const ItemDef& def = item_def(slot.item);
+        if (def.category == static_cast<std::uint8_t>(ItemCategory::Key)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::uint32_t door_toggle_near(World& world, DoorSet& doors, const Registry& reg,
-                               LayerId layer, const vec3& pos) {
+                               LayerId layer, const vec3& pos,
+                               const Inventory* playerInv) {
     if (doors.frozen || doors.doors.empty()) return kNoDoor;
     int cx, cy, cz;
     agent_cell(pos, cx, cy, cz);
@@ -187,8 +203,20 @@ std::uint32_t door_toggle_near(World& world, DoorSet& doors, const Registry& reg
                 best = id;
             }
     if (best == kNoDoor) return kNoDoor;
+
+    Door& targetDoor = doors.doors[best];
+    const bool isShutOrLocked = (targetDoor.state == static_cast<std::uint8_t>(DoorState::Shut) ||
+                                 targetDoor.state == static_cast<std::uint8_t>(DoorState::Locked));
+
+    // Security Keycard check when attempting to open a locked/shut security door
+    if (isShutOrLocked && targetDoor.keycardTier > 0) {
+        if (!playerInv || !inventory_has_keycard(*playerInv, targetDoor.keycardTier)) {
+            return kNoDoor; // Access denied: missing required keycard
+        }
+    }
+
     const bool wantShut =
-        doors.doors[best].state == static_cast<std::uint8_t>(DoorState::Open);
+        targetDoor.state == static_cast<std::uint8_t>(DoorState::Open);
     return door_set(world, doors, reg, layer, best, wantShut) ? best : kNoDoor;
 }
 

@@ -63,6 +63,7 @@
 #include "core/math.h"
 #include "ecs/registry.h"
 #include "game/floor_spec.h"
+#include "game/inventory.h"
 #include "world/level_stack.h"  // LayerId
 #include "world/types.h"
 
@@ -75,7 +76,15 @@ namespace giga::game {
 enum class DoorState : std::uint8_t {
     Open = 0,  // cells are air; the baked state, and what the bake assumes
     Shut,      // cells are solid kMatDoor: blocks movement, blocks a monster
+    Locked,    // solid cell; requires keycard in inventory to toggle open
     Broken,    // destroyed. Air forever — a shut door is a spent resource
+};
+
+enum class KeycardTier : std::uint8_t {
+    None = 0,
+    Red = 1,     // Red Keycard (Level 1 Security)
+    Blue = 2,    // Blue Keycard (Level 2 Security)
+    Master = 3,  // Master Keycard (Bypasses all tiers)
 };
 
 // Structural HP of one door.
@@ -116,7 +125,8 @@ struct Door {
     std::uint8_t cy = 0;    // leaf column, Y
     std::uint8_t cz = 0;    // BOTTOM leaf cell, Z
     std::uint8_t h = 0;     // leaf height in cells
-    std::uint8_t axis = 0;  // Doorway::axis — which wall line holds it
+    std::uint8_t axis : 2 = 0;        // Doorway::axis (0 or 1)
+    std::uint8_t keycardTier : 6 = 0; // Keycard access tier (0=None, 1=Red, 2=Blue, 3=Master)
     std::uint8_t state = static_cast<std::uint8_t>(DoorState::Open);
     std::int16_t hp = kDoorHp;
     // Damage below one whole HP, in milli-HP. Lets a 1.1 dmg/s monster make
@@ -194,6 +204,9 @@ std::uint32_t door_build(World& world, DoorSet& doors, int number,
 bool door_set(World& world, DoorSet& doors, const Registry& reg, LayerId layer,
               std::uint32_t id, bool shut);
 
+// Helper: checks if player inventory satisfies door's keycard requirement
+bool inventory_has_keycard(const Inventory& inv, std::uint8_t requiredTier);
+
 // Toggle the nearest workable door within kDoorReach of `pos`. Returns the door id
 // on success, or kNoDoor when nothing is in range or the toggle was refused.
 //
@@ -201,7 +214,8 @@ bool door_set(World& world, DoorSet& doors, const Registry& reg, LayerId layer,
 // rather than walking the door list: 75 indexed loads instead of 16 k, and it is
 // the same O(1) lookup the tick uses.
 std::uint32_t door_toggle_near(World& world, DoorSet& doors, const Registry& reg,
-                               LayerId layer, const vec3& pos);
+                               LayerId layer, const vec3& pos,
+                               const Inventory* playerInv = nullptr);
 
 // Read-only query: return the nearest workable door within kDoorReach of `pos`,
 // or kNoDoor when nothing is in range. Same cell-indexed O(75) search as

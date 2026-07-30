@@ -145,4 +145,15 @@ std::uint32_t drop_weapon_ammo(Registry& reg, LayerId layer, const vec3& pos,
 // Total rouble value of an inventory. For the HUD and the extraction score.
 std::int32_t inventory_value(const Inventory& inv);
 
+// Inspect and manually loot items from a nearby persistent corpse on interaction.
+struct CorpseLootResult {
+    bool foundCorpse = false;
+    std::int32_t roublesGained = 0;
+    std::uint32_t itemsTaken = 0;
+};
+
+CorpseLootResult loot_corpse_interact(Registry& reg, NpcPool& pool, EventBus& bus,
+                                       LayerId layer, const vec3& playerPos,
+                                       float maxReach, std::uint64_t tick);
+
 } // namespace giga::game

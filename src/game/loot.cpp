@@ -349,4 +349,76 @@ std::int16_t use_best_heal(Registry& reg, NpcPool& pool, EventBus& bus,
     return healed;
 }
 
+CorpseLootResult loot_corpse_interact(Registry& reg, NpcPool& pool, EventBus& bus,
+                                       LayerId layer, const vec3& playerPos,
+                                       float maxReach, std::uint64_t tick) {
+    CorpseLootResult res{};
+    Entity targetCorpse = entt::null;
+    float minDistSq = maxReach * maxReach;
+
+    for (auto e : reg.view<const Corpse, const Transform>()) {
+        const Transform& tr = reg.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+        float dx = wrap_delta_f(playerPos.x, tr.pos.x, kWorldExtent);
+        float dy = playerPos.y - tr.pos.y;
+        float dz = wrap_delta_f(playerPos.z, tr.pos.z, kWorldExtent);
+        float distSq = dx * dx + dy * dy + dz * dz;
+        if (distSq < minDistSq) {
+            minDistSq = distSq;
+            targetCorpse = e;
+        }
+    }
+
+    if (targetCorpse == entt::null) return res;
+    res.foundCorpse = true;
+
+    auto& corpse = reg.get<Corpse>(targetCorpse);
+    corpse.searched = true;
+
+    Entity self = entt::null;
+    NpcId selfId = kInvalidNpc;
+    for (auto e : reg.view<const CameraTag, const Transform, const NpcRef>()) {
+        if (reg.get<const Transform>(e).layer == layer) {
+            self = e;
+            selfId = reg.get<const NpcRef>(e).id;
+            break;
+        }
+    }
+    if (self == entt::null || !pool.valid(selfId)) return res;
+
+    Inventory& inv = pool.inventory(selfId);
+    for (auto it = corpse.lootSlots.begin(); it != corpse.lootSlots.end(); ) {
+        if (!item_valid(it->item) || it->count == 0) {
+            it = corpse.lootSlots.erase(it);
+            continue;
+        }
+        const ItemDef& def = item_def(it->item);
+        int slot = -1;
+        if (def.stackMax > 1) {
+            for (int i = 0; i < kInvSlots; ++i)
+                if (inv.slots[i].item == it->item &&
+                    inv.slots[i].count < def.stackMax) { slot = i; break; }
+        }
+        if (slot < 0) slot = inv.first_free();
+        if (slot >= 0) {
+            if (inv.slots[slot].item == it->item) {
+                inv.slots[slot].count = static_cast<std::uint16_t>(inv.slots[slot].count + it->count);
+                if (def.stackMax && inv.slots[slot].count > def.stackMax)
+                    inv.slots[slot].count = def.stackMax;
+            } else {
+                inv.slots[slot].item = it->item;
+                inv.slots[slot].count = it->count;
+            }
+            res.roublesGained += def.value * static_cast<std::int32_t>(it->count);
+            res.itemsTaken++;
+            bus.publish(EventType::ItemTransferred, kInvalidNpc, selfId, it->item, tick);
+            it = corpse.lootSlots.erase(it);
+        } else {
+            ++it; // inventory full
+        }
+    }
+
+    return res;
+}
+
 } // namespace giga::game
