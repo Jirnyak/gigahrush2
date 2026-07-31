@@ -1,7 +1,7 @@
 # BACKLOG — worker_game_audit
 
 Lane: game audit + save/travel seams + content port. NOT render/prop.
-Updated: 2026-07-31 ~17:20 Samara
+Updated: 2026-07-31 ~17:25 Samara
 
 ## CLOSED this session
 | ID | Item | Proof | Commit |
@@ -19,7 +19,7 @@ Updated: 2026-07-31 ~17:20 Samara
 | CORPSHOT | Real-game kill→corpse→E→CORPSE LOOTED proof + --action corp harness | **PROOF=GREEN** shots/corp_diag.txt: attack d=29→0, corpse in reach once, CORPSE LOOTED TAKEN 1 ITEMS (+35 RUB); HUD kills:2 loot 35 rub; shot_corp.png; one-press interact (no spam) | c61e04b |
 | STATUS | StatusSet wired into main tick + SporeCarpet + WEB dual-apply; slow_step before physics; --action status harness | **PROOF=GREEN** shots/status_diag.txt: APPLY zh+web move_e3=180 rooted=1; tick 180→443→820 as web expires; melee_e3=700; shot_status.png | 538e139 |
 | CARVE | Combat proposes CarveProposalQueue POD; app drains via carve_sphere behind !doors.frozen; melee wall ray + bullet wall hit; --action wall harness | **PROOF=GREEN** shots/carve_diag.txt: fly=0 d=6.32→2.00; [carve] COMBAT removed=8/3/1 power=44 r=0.55; shot_carve.png 2.7MiB | this commit |
-| RPG1 | Elevator body-swap preserves RpgStats (xp/psi/level/attrPoints/attr[3]). Capture before fold_back, emplace_or_replace after embody_as_player. embody.cpp untouched. | **unit GREEN:** game_test **219387 checks, 0 failures**; test_elevator mutates sheet (xp=777…) and pins up+down rides | this commit |
+| RPG1 | Elevator body-swap preserves RpgStats (xp/psi/level/attrPoints/attr[3]). Capture before fold_back, emplace_or_replace after embody_as_player. embody.cpp untouched. | **unit GREEN:** game_test **219387 checks, 0 failures**; test_elevator mutates sheet (xp=777…) and pins up+down rides | **08be4ee** |
 
 ## OPEN / next (priority)
 | Pri | ID | Item | Pathspec | Notes |
@@ -309,7 +309,21 @@ Proof:
   pathspec: src/game/elevator.cpp tests/game_test.cpp CMakeLists.txt BACKLOG.md
 ```
 Unit pin is primary (FOR1 was unit-proven the same way). embody.cpp untouched.
-Next OPEN: MAGSHOT optional or re-PAR1 after foreign main; keep pull/push loop.
+Pushed: **08be4ee** main→origin/main (a3d7277..08be4ee).
+
+## RE-PAR1 2026-07-31 ~17:25 — post-RPG1 travel seam re-grep (read-only)
+```
+main.cpp lines=4860 bytes=280456 (unchanged size class)
+place_body_safely @1952 (keyboard do_ride) + @4798 (--shot travel)  GREEN
+ai_release        @1877 (keyboard leave)  + @4723 (--shot leave)     GREEN
+combatCarves / playerStatus / status_step / ctl->fly=false / shotAction intact
+elevator.cpp: hadRanged=3 hadMelee=3 hadRpg=3 emplace_or_replace=4 (FOR1+MAG1+RPG1)
+No main.cpp edit. No hole.
+```
+MAGSHOT deferred: unit pin owns mag body-swap (FOR1/MAG1); HUD already prints
+`%u/%u mag` from PlayerRanged@3865. Real-game --ride HUD screenshot = optional polish.
+Next OPEN: idle pull/push; re-PAR1 after next foreign main thrash; stay off src/render/**.
+
 
 
 
