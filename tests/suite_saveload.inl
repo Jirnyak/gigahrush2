@@ -146,6 +146,14 @@ SaveState busy_run() {
     st.opened.push_back(OpenedContainerKey{-3, 18, 42, 1, 0});
     st.opened.push_back(OpenedContainerKey{-3, 114, 6, 1, 0});
     st.opened.push_back(OpenedContainerKey{2, 66, 66, 1, 0});
+
+    // Version 3: two carves, every field distinct, one on a negative floor and one
+    // with a non-round centre — a float that survives the wire exactly because f32
+    // writes bits, not text.
+    st.carves.push_back(CarveRecord{-26, 300, 25.125f, 21.125f, 21.125f, 1.5f,
+                                    0xC0FFEE42u, 1024});
+    st.carves.push_back(CarveRecord{2, 0xFFFF, 0.0f, 11.125f, 11.125f, 0.5f,
+                                    77u, 512});
     return st;
 }
 
@@ -190,6 +198,22 @@ void same_run(const SaveState& a, const SaveState& b) {
     const std::size_t nk = a.opened.size() < b.opened.size() ? a.opened.size()
                                                              : b.opened.size();
     for (std::size_t i = 0; i < nk; ++i) CHECK(same_container(a.opened[i], b.opened[i]));
+
+    // Version 3: the carve log round-trips field for field. Floats compared exactly:
+    // the wire carries their bits, so any difference is a serializer bug, not epsilon.
+    CHECK(a.carves.size() == b.carves.size());
+    const std::size_t nc = a.carves.size() < b.carves.size() ? a.carves.size()
+                                                             : b.carves.size();
+    for (std::size_t i = 0; i < nc; ++i) {
+        const CarveRecord& x = a.carves[i];
+        const CarveRecord& y = b.carves[i];
+        CHECK(x.floor == y.floor);
+        CHECK(x.power == y.power);
+        CHECK(x.x == y.x && x.y == y.y && x.z == y.z);
+        CHECK(x.radius == y.radius);
+        CHECK(x.seed == y.seed);
+        CHECK(x.detachLimit == y.detachLimit);
+    }
 }
 
 void wire_layout() {
@@ -197,11 +221,13 @@ void wire_layout() {
     // depends on the compiler is a save that cannot cross hosts.
     // Derived from the serializers, not measured from a run: 33 ledger + 79 book
     // (3 x 21 + 16) + 304 player (33 needs + 256 inventory + 12 + 3) + 308 quest log
-    // (20 rows x 14 + 8 earned + 5 x 4 counters) = 724, plus the 56-byte header.
-    static_assert(kSaveHeaderWire == 56);
+    // (20 rows x 14 + 8 earned + 5 x 4 counters) = 724, plus the 60-byte header
+    // (48 v1 + 8 v2 quest checks + 4 v3 carveCount).
+    static_assert(kSaveHeaderWire == 60);
     static_assert(kSaveFixedWire == 724);
-    static_assert(save_bytes_for(0) == 780);
-    static_assert(save_bytes_for(3) == 780 + 15);
+    static_assert(save_bytes_for(0) == 784);
+    static_assert(save_bytes_for(3) == 784 + 15);
+    static_assert(save_bytes_for(3, 2) == 784 + 15 + 2 * 28);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -210,12 +236,12 @@ void wire_layout() {
 
     const SaveState st = busy_run();
     save_write(st, bytes);
-    CHECK(bytes.size() == save_bytes_for(3));
-    // 795 B for a full run with three emptied crates. Worth writing down: the reflex on
-    // a save system is to assume megabytes, and the reason this one is tiny is that
-    // geometry, monsters and 950k NPC rows are all reproducible from fixed seeds and so
-    // are not in the file at all.
-    CHECK(bytes.size() == 795);
+    CHECK(bytes.size() == save_bytes_for(3, 2));
+    // 855 B for a full run with three emptied crates and two carves. Worth writing
+    // down: the reflex on a save system is to assume megabytes, and the reason this
+    // one is tiny is that geometry, monsters and 950k NPC rows are all reproducible
+    // from fixed seeds — and destroyed geometry is 28 bytes of OP, not masks.
+    CHECK(bytes.size() == 855);
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');
@@ -247,7 +273,8 @@ void wire_layout() {
     CHECK(h.itemCount == static_cast<std::uint32_t>(kItemCount));
     CHECK(h.mobKindCount == static_cast<std::uint32_t>(kMobKindCount));
     CHECK(h.openedCount == 3u);
-    CHECK(h.payloadBytes == kSaveFixedWire + 3u * kOpenedKeyWire);
+    CHECK(h.carveCount == 2u);
+    CHECK(h.payloadBytes == kSaveFixedWire + 3u * kOpenedKeyWire + 2u * kCarveWire);
 
     // A save written by the 120 Hz build STILL LOADS, and this is deliberate rather
     // than an oversight. Nothing currently in the payload is tick-derived — the clock is
@@ -305,6 +332,7 @@ void round_trip() {
     CHECK(save_read(z.data(), z.size(), zback, &err));
     CHECK(err == SaveError::None);
     CHECK(zback.opened.empty());
+    CHECK(zback.carves.empty());
     same_run(fresh, zback);
 
     // The signed floor survives, which is the point of storing it at all. `NpcPool`'s
@@ -315,6 +343,51 @@ void round_trip() {
     CHECK(dst.player.floorNumber == -50);
     CHECK(dst.ledger.deepestFloor == -50);
     CHECK(dst.opened[0].floor == -3);
+    CHECK(dst.carves[0].floor == -26); // the carve log keeps its signed floor too
+}
+
+// Version 3's whole point: destroyed geometry is reproduced from the LOG, never
+// stored as masks. Two worlds with identical genesis; carve one live (recording each
+// op); replay the log over the other; the grids must agree bit for bit. Then replay
+// again and require zero removals — the idempotence that lets the same-floor F9 path
+// call carve_replay unconditionally.
+void carved_geometry_survives_a_restart() {
+    auto genesis = [](giga::World& w) {
+        // An anchored 8x8x2-cell slab (8192 sub-voxels, far over any detach limit).
+        for (int x = 8; x < 16; ++x)
+            for (int y = 8; y < 16; ++y)
+                for (int z = 4; z < 6; ++z)
+                    w.grid().fill_cell(x, y, z, giga::kMatConcrete);
+    };
+    giga::World live, restart;
+    genesis(live);
+    genesis(restart);
+
+    giga::CarveScratch scratch;
+    giga::CarveResult res;
+    std::vector<CarveRecord> log;
+    // Two blasts, the second overlapping the first's crater: each op rolled against
+    // the state the previous one left, so the replay must honour log order.
+    const giga::CarveOp ops[2] = {
+        {24.5f, 24.5f, 11.0f, 1.25f, 400, 0xAB12u, 512},
+        {25.0f, 24.0f, 10.5f, 1.0f, 300, 0xCD34u, 512},
+    };
+    for (const giga::CarveOp& op : ops) {
+        CHECK(giga::carve_sphere(live, op, scratch, res) > 0);
+        log.push_back(CarveRecord{7, op.power, op.x, op.y, op.z, op.radius,
+                                  op.seed, op.detachLimit});
+    }
+    // A record for ANOTHER floor must not touch this world's replay.
+    log.push_back(CarveRecord{-9, 0xFFFF, 24.5f, 24.5f, 11.0f, 2.0f, 1u, 512});
+
+    CHECK(carve_replay(restart, log.data(), log.size(), 7, scratch, res) > 0);
+    CHECK(std::memcmp(live.grid().masks().data(), restart.grid().masks().data(),
+                      live.grid().masks().size() * sizeof(giga::SubMask)) == 0);
+    CHECK(std::memcmp(live.grid().types().data(), restart.grid().types().data(),
+                      live.grid().types().size() * sizeof(giga::CellType)) == 0);
+    // Idempotent: everything the ops would remove is already gone, and every
+    // survivor fails the identical hash roll it failed the first time.
+    CHECK(carve_replay(restart, log.data(), log.size(), 7, scratch, res) == 0);
 }
 
 // Independent FNV-1a over a list of names, so the expected fingerprint is derived by
@@ -1483,6 +1556,7 @@ void candidate_slot_recycled() {
 static void test_saveload_all() {
     saveload_test::wire_layout();
     saveload_test::round_trip();
+    saveload_test::carved_geometry_survives_a_restart();
     saveload_test::weak_check_vs_strong_check();
     saveload_test::rejects_the_rest();
     saveload_test::keys_not_entity_ids();

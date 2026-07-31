@@ -484,7 +484,10 @@ if(GIGA_BUILD_TESTS)
         # 215869 -> 215969 on 2026-07-31: suite_keybind.inl landed (the keybinding
         # table behind the de-hardcoded keys) plus the console request-row checks
         # in suite_console.inl.
-        PASS_REGULAR_EXPRESSION "game_test: 215978 checks, 0 failures")
+    # 215978 -> 216040 (+62) on 2026-07-31: save format v3 (carve log) — wire pins,
+    # busy_run carries two CarveRecords through every round-trip pass, and the new
+    # carved_geometry_survives_a_restart replay/idempotence test.
+        PASS_REGULAR_EXPRESSION "game_test: 216040 checks, 0 failures")
 
     # Text gate for the AGENTS.md rules that no compiler enforces on every host.
     # The load-bearing one is no-exceptions: MSVC's STL is unsupported under

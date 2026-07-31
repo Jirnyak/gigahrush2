@@ -1758,6 +1758,12 @@ int main(int argc, char** argv) {
         if (currentSpec)
             doorsBuilt = game::door_build(stack.layer(nl), doors, currentFloor,
                                           *currentSpec, kDoorSeed);
+        // Replay this floor's slice of the carve log over the fresh geometry —
+        // holes survive a plain elevator round trip, not just F5/F9. After
+        // doors, before the bake, so nav bakes the carved world. [save.h]
+        game::carve_replay(stack.layer(nl), runState.carves.data(),
+                           runState.carves.size(), currentFloor, carveScratch,
+                           carveResult);
         doors.frozen = true;
         begin_floor_nav(stack.layer(nl), nav);
         if (propPass.ready()) {
@@ -2391,6 +2397,22 @@ int main(int argc, char** argv) {
                         carve_sphere(stack.layer(activeLayer), op,
                                      carveScratch, carveResult);
                     if (removed > 0) {
+                        // The run's carve log ([save.h]): replayed on every
+                        // floor rebuild and carried by the save. Only ops that
+                        // removed something are worth 28 bytes. Capped loudly,
+                        // never silently — a truncated log replays wrong
+                        // geometry.
+                        if (runState.carves.size() <
+                            static_cast<std::size_t>(game::kMaxCarveOps))
+                            runState.carves.push_back(game::CarveRecord{
+                                static_cast<std::int16_t>(currentFloor),
+                                op.power, op.x, op.y, op.z, op.radius, op.seed,
+                                op.detachLimit});
+                        else
+                            std::fprintf(
+                                stderr,
+                                "[carve] log full (%u); op NOT recorded\n",
+                                game::kMaxCarveOps);
                         // One rebuild of the cached instance list; partial
                         // cells keep drawing as full cubes until emptied (the
                         // renderer's existing cell-resolution stance).
@@ -2872,6 +2894,12 @@ int main(int argc, char** argv) {
                                         doorsBuilt = game::door_build(
                                             stack.layer(nl), doors, currentFloor,
                                             *currentSpec, kDoorSeed);
+                                    // Carve replay: the loaded log's slice for
+                                    // this floor, before the bake. [save.h]
+                                    game::carve_replay(
+                                        stack.layer(nl), runState.carves.data(),
+                                        runState.carves.size(), currentFloor,
+                                        carveScratch, carveResult);
                                     doors.frozen = true;
                                     begin_floor_nav(stack.layer(nl), nav);
                                     if (propPass.ready()) {
@@ -2907,6 +2935,19 @@ int main(int argc, char** argv) {
                                 reopened = game::apply_opened_containers(
                                     reg, activeLayer, currentFloor,
                                     runState.opened.data(), runState.opened.size());
+                                // Same-floor carve replay: covers the fresh-boot
+                                // case (floor was built with an empty log before
+                                // the file was read); idempotent mid-session —
+                                // an op already applied removes nothing. What it
+                                // cannot do is UN-carve holes made after the
+                                // save point; those heal on the next floor
+                                // rebuild. [save.h]
+                                if (game::carve_replay(
+                                        stack.layer(activeLayer),
+                                        runState.carves.data(),
+                                        runState.carves.size(), currentFloor,
+                                        carveScratch, carveResult) > 0)
+                                    cubePass.invalidate();
                             }
 
                             game::PlacedCell placed{};
@@ -4088,6 +4129,12 @@ int main(int argc, char** argv) {
                             doorsBuilt = game::door_build(
                                 stack.layer(nl), doors, currentFloor,
                                 *currentSpec, kDoorSeed);
+                        // Same carve replay as the keyboard ride path — two
+                        // travel sites, one law. [save.h]
+                        game::carve_replay(stack.layer(nl),
+                                           runState.carves.data(),
+                                           runState.carves.size(), currentFloor,
+                                           carveScratch, carveResult);
                         doors.frozen = true;
                         begin_floor_nav(stack.layer(nl), nav);
                         cubePass.invalidate();
