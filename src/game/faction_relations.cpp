@@ -9,6 +9,8 @@
 #include "game/combat.h"        // Dead, apply_damage, entity_health, kMeleeReachSlack
 #include "game/embody.h"        // NpcRef
 #include "game/weapon_table.h"  // MeleeDef, melee_for_item, unarmed_melee
+#include "game/ranged_table.h"  // RangedDef, ranged_for_item, equipped_ranged
+#include "game/noise.h"         // NoiseProfile, NoiseSource, noise_publish
 #include "world/types.h"        // kCellSize, kWorldExtent
 
 namespace giga::game {
@@ -268,28 +270,47 @@ std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
                                 kFeudRadius);
         if (foe.e == entt::null) continue;   // nobody to fight; wander keeps steering
 
-        // What it is swinging with. Residents seed with empty inventories today, so
-        // this is unarmed (3 damage, 0.5 cells, 340 ms) for the whole crowd — but it
-        // reads the inventory rather than assuming that, so the day a Liquidator
-        // spawns holding an axe the brawl gets harder with no change here.
+        // Ranged weapon evaluation first
+        const ItemId gunId = equipped_ranged(pool.inventory(selfId));
+        const RangedDef* rdef = ranged_for_item(gunId);
+
         const MeleeDef* w = melee_for_item(equipped_melee(pool.inventory(selfId)));
         if (!w) w = &unarmed_melee();
-        // Reach is authored in cells; the slack is the body-size allowance every
-        // melee attack in the game gets ([combat.h] kMeleeReachSlack).
-        const float reach =
-            static_cast<float>(w->reachMm) * 0.001f * kCellSize + kMeleeReachSlack;
 
         const float dx = wrap_delta_f(tr.pos.x, foe.pos.x, kWorldExtent);
         const float dy = wrap_delta_f(tr.pos.y, foe.pos.y, kWorldExtent);
         const float dz = wrap_delta_f(tr.pos.z, foe.pos.z, kWorldExtent);
         const float d2 = dx * dx + dy * dy + dz * dz;
+
+        // If holding a firearm and within range, fire a projectile
+        if (rdef) {
+            const float effRange = static_cast<float>(rdef->projSpeedMmps) * 0.001f * kCellSize * 0.75f;
+            if (d2 <= effRange * effRange) {
+                Velocity& vel = view.get<Velocity>(e);
+                vel.v.x = 0.0f; vel.v.y = 0.0f;
+
+                std::uint32_t visitsPerShot = static_cast<std::uint32_t>(rdef->cooldownMs) /
+                    (kFeudPeriod * static_cast<std::uint32_t>(kSimStepMs));
+                if (visitsPerShot == 0) visitsPerShot = 1;
+
+                const std::uint64_t off = static_cast<std::uint64_t>(mix(id ^ 0x5f1e3a9bu) % visitsPerShot);
+                if ((visit + off) % visitsPerShot == 0) {
+                    vec3 dir{dx, dy, dz};
+                    spawn_projectile_dir(reg, layer, tr.pos, dir, 
+                                         static_cast<std::int16_t>(rdef->dmg), 
+                                         static_cast<std::uint16_t>(rdef->projSpeedMmps), e, 
+                                         100, /*team*/ 0, rdef->channel);
+                }
+                continue;
+            }
+        }
+
+        // Melee reach check
+        const float reach = static_cast<float>(w->reachMm) * 0.001f * kCellSize + kMeleeReachSlack;
         const bool inReach = d2 <= reach * reach;
 
         Velocity& vel = view.get<Velocity>(e);
         if (inReach) {
-            // Stand and fight. Zeroing rather than leaving last pass's velocity
-            // matters: without it a brawler keeps shoving its victim across the room
-            // and the pair drifts out of the room they started the fight in.
             vel.v.x = 0.0f;
             vel.v.y = 0.0f;
         } else {
@@ -299,15 +320,9 @@ std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
                 vel.v.x = dx * inv * kFeudWalkSpeed;
                 vel.v.y = dy * inv * kFeudWalkSpeed;
             }
-            // z is left to gravity: this is locomotion, not flight.
-            continue;   // out of reach: closing is this visit's whole action
+            continue;   // out of reach
         }
 
-        // The swing cadence, quantised to visits so it needs no per-body timer.
-        // One swing every `visitsPerSwing` visits, offset by identity so the floor
-        // does not swing in lockstep. Unarmed: 340 / (8 x 8 ms) = 5 visits = 320 ms,
-        // within 6% of the authored 340 — and derived from kSimStepMs, so it cannot
-        // drift if the tick rate moves.
         std::uint32_t visitsPerSwing =
             static_cast<std::uint32_t>(w->cooldownMs) /
             (kFeudPeriod * static_cast<std::uint32_t>(kSimStepMs));
@@ -317,21 +332,11 @@ std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
         if ((visit + off) % visitsPerSwing != 0) continue;   // between swings
 
         std::int16_t raw = static_cast<std::int16_t>(w->dmg);
-        // **A feud never kills a crowd body, and never pushes one below
-        // kFeudMinHpPct of its maximum.** Nothing in the game heals a resident
-        // ([needs.h] advances only the camera holder's row), so damage to the crowd is
-        // permanent and [hunt.h] already spends the whole crowd-lethality budget on
-        // predation, measured. Clamping rather than skipping is the same shape
-        // apply_consumable uses to keep questionable food non-lethal.
-        //
-        // The camera holder is exempt: the player has heals, resupply and
-        // possession-on-death, none of which a resident has.
-        //
-        // A brawler standing over an already-beaten body does nothing further and
-        // does NOT go looking for a fresh one. That is deliberate and it is the bound:
-        // one licensed body can spoil at most one victim per window, so the worst case
-        // is ~6.5 half-health residents at a time rather than a floor of them.
-        if (!reg.all_of<CameraTag>(foe.e)) {
+
+        // Allow unclamped fatal damage for hostile faction feuds (Liquidators vs Cultists/Wild)
+        const bool isFatalFeud = (rel_row(pool, selfId) != rel_row(pool, foe.id));
+
+        if (!reg.all_of<CameraTag>(foe.e) && !isFatalFeud) {
             std::int16_t hp = 0, maxHp = 0;
             if (!entity_health(reg, pool, foe.e, hp, maxHp)) continue;
             std::int16_t floorHp =

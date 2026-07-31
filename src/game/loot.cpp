@@ -60,7 +60,97 @@ std::uint32_t drop_chance_for_tier(std::uint8_t tier) {
     }
 }
 
+// Ammo count bundled with a firearm — same rule as drop_weapon_ammo, pure data.
+// Returns 0 if weapon is not ranged.
+std::uint16_t weapon_ammo_count(ItemId weapon, std::uint32_t seed) {
+    const RangedDef* def = ranged_for_item(weapon);
+    if (!def) return 0;
+    const std::uint32_t h = mix(seed ^ 0xA11A3300u);
+    std::uint16_t count;
+    if (def->pellets > 1)
+        count = static_cast<std::uint16_t>(4u + (h % 8u));
+    else {
+        const std::uint16_t base = def->magazine > 10 ? def->magazine : 10;
+        count = static_cast<std::uint16_t>(base + (h % 20u));
+    }
+    const std::uint8_t cap = item_def(def->ammo).stackMax;
+    if (cap && count > cap) count = cap;
+    return count;
+}
+
+// Append one ItemSlot into a fixed POD buffer. Returns false if full.
+bool push_slot(ItemSlot* out, std::uint8_t cap, std::uint8_t& n,
+               ItemId id, std::uint16_t count) {
+    if (!out || n >= cap || id == kInvalidItem || count == 0) return false;
+    if (count > 0xFFFFu) count = 0xFFFFu;
+    out[n++] = ItemSlot{id, count};
+    return true;
+}
+
 } // namespace
+
+std::uint32_t roll_mob_loot_slots(std::uint8_t mobKind, std::uint8_t mobTier,
+                                  int floorNumber, std::uint32_t seed,
+                                  ItemSlot* outSlots, std::uint8_t outCap) {
+    if (!outSlots || outCap == 0) return 0;
+
+    const std::uint32_t rolls = rolls_for_tier(mobTier);
+    const std::uint32_t chance = drop_chance_for_tier(mobTier);
+
+    std::vector<ItemId> pool;
+    std::vector<std::uint32_t> cum;
+    std::uint32_t total = 0;
+    bool poolBuilt = false;
+
+    std::uint8_t filled = 0;
+    for (std::uint32_t r = 0; r < rolls; ++r) {
+        if (filled >= outCap) break;
+        std::uint32_t h = mix(seed ^ (r * 0x9e3779b9u));
+        if ((h % 100u) >= chance) continue;
+
+        KindDrop kd = roll_kind_drop(mobKind, floorNumber, mix(h ^ 0x10071ee7u));
+        if (kd.item == kInvalidItem) {
+            if (!poolBuilt) {
+                poolBuilt = true;
+                pool.reserve(64);
+                cum.reserve(64);
+                for (std::size_t i = 0; i < kItemCount; ++i) {
+                    const ItemId cid = static_cast<ItemId>(i + 1);
+                    const std::uint32_t w = item_weight_on_floor(cid, floorNumber, 0);
+                    if (w == 0) continue;
+                    total += w;
+                    pool.push_back(cid);
+                    cum.push_back(total);
+                }
+            }
+            if (total == 0) continue;
+            const std::uint32_t pick = mix(h) % total;
+            std::size_t k = 0;
+            while (k + 1 < pool.size() && pick >= cum[k]) ++k;
+            kd.item = pool[k];
+            kd.count = 1;
+        }
+        const ItemId id = kd.item;
+        const std::uint8_t cap = item_def(id).stackMax;
+        if (kd.count < 1) kd.count = 1;
+        if (cap && kd.count > cap) kd.count = cap;
+
+        if (!push_slot(outSlots, outCap, filled, id,
+                       static_cast<std::uint16_t>(kd.count)))
+            break;
+
+        // Firearm → append ammo ItemSlot (mirror drop_weapon_ammo), no floor entity.
+        const std::uint32_t j = mix(h ^ 0x51ed270bu);
+        if (const RangedDef* rdef = ranged_for_item(id)) {
+            const std::uint16_t ac =
+                weapon_ammo_count(id, seed ^ (j * 0x2545F491u));
+            if (ac > 0)
+                push_slot(outSlots, outCap, filled, rdef->ammo, ac);
+        }
+    }
+    return filled;
+}
+
 
 std::int32_t inventory_value(const Inventory& inv) {
     std::int32_t total = 0;
@@ -204,24 +294,38 @@ std::uint32_t drop_weapon_ammo(Registry& reg, LayerId layer, const vec3& pos,
 
 std::uint32_t loot_dead_mobs(Registry& reg, LayerId layer, int floorNumber,
                              std::uint32_t seed) {
-    // Every mob that is dead but not yet finalized. Snapshot first: drop_mob_loot
-    // creates entities, which would invalidate a live view.
-    struct Corpse { vec3 pos; std::uint8_t kind, tier; std::uint32_t key; };
-    std::vector<Corpse> corpses;
+    // CORP1: stage loot onto the Dead entity as POD CorpseLootPending.
+    // finalize_deaths moves it into Corpse.lootSlots. No floor Pickup spawn —
+    // that was the double-drop defect (empty corpse + gold boxes on the floor).
+    //
+    // Snapshot entity ids first: emplace_or_replace can reallocate component
+    // storage and invalidate a live view iterator.
+    std::vector<Entity> dead;
     for (auto e : reg.view<const Dead, const MobRef, const Transform>()) {
-        const Transform& tr = reg.get<const Transform>(e);
-        if (tr.layer != layer) continue;
-        const MobRef& m = reg.get<const MobRef>(e);
-        corpses.push_back(Corpse{tr.pos, m.kind, kMobTable[m.kind].tier,
-                                 static_cast<std::uint32_t>(entt::to_integral(e))});
+        if (reg.get<const Transform>(e).layer != layer) continue;
+        // Already staged this death window — do not re-roll.
+        if (reg.all_of<CorpseLootPending>(e)) continue;
+        dead.push_back(e);
     }
 
-    std::uint32_t made = 0;
-    for (const Corpse& c : corpses)
-        made += drop_mob_loot(reg, layer, c.pos, c.kind, c.tier, floorNumber,
-                              seed ^ c.key);
-    return made;
+    std::uint32_t staged = 0;
+    for (Entity e : dead) {
+        if (!reg.valid(e) || !reg.all_of<MobRef>(e)) continue;
+        const MobRef& m = reg.get<const MobRef>(e);
+        const std::uint8_t tier = kMobTable[m.kind].tier;
+        const std::uint32_t key =
+            static_cast<std::uint32_t>(entt::to_integral(e));
+
+        CorpseLootPending pending{};
+        pending.slotCount = static_cast<std::uint8_t>(roll_mob_loot_slots(
+            m.kind, tier, floorNumber, seed ^ key, pending.slots,
+            static_cast<std::uint8_t>(kMaxCorpseSlots)));
+        staged += pending.slotCount;
+        reg.emplace_or_replace<CorpseLootPending>(e, pending);
+    }
+    return staged;
 }
+
 
 std::int32_t pickup_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId layer,
                          std::uint64_t tick) {

@@ -47,20 +47,6 @@ std::int16_t mitigate(std::int16_t raw, std::int8_t resistPct) {
     return static_cast<std::int16_t>(out);
 }
 
-// Defined further down, beside projectile_step where the flight logic lives.
-// Declared here because mob_attack_step launches shots and sits above it.
-void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
-                      const vec3& to, std::int16_t dmg,
-                      std::uint16_t projSpeedMmps, Entity source,
-                      std::uint8_t projType);
-// The player's launch: an explicit direction, no lob compensation, flatter gravity.
-// `channel` is the DamageChannel the shot delivers, from RangedDef::channel.
-void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
-                          const vec3& dir, std::int16_t dmg,
-                          std::uint16_t projSpeedMmps, Entity source,
-                          std::uint8_t gravityPct, std::uint8_t team,
-                          std::uint8_t channel);
-
 } // namespace
 
 bool entity_health(const Registry& reg, const NpcPool& pool, Entity e,
@@ -264,11 +250,25 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
                 rend->color = vec3{rend->color.x * 0.35f, rend->color.y * 0.35f, rend->color.z * 0.40f};
             }
 
+            // CORP1: move staged loot (CorpseLootPending) into the persistent
+            // Corpse. loot_dead_mobs rolls pure data in the Dead window; this is
+            // the only place Corpse is born (defect 2). No floor Pickup path.
             Corpse corpse;
             corpse.mobKind = static_cast<std::uint8_t>(kind);
             corpse.deathTick = static_cast<std::uint32_t>(tick);
-            reg.emplace<Corpse>(e, std::move(corpse));
+            if (const CorpseLootPending* pend = reg.try_get<CorpseLootPending>(e)) {
+                const std::uint8_t n =
+                    pend->slotCount < static_cast<std::uint8_t>(kMaxCorpseSlots)
+                        ? pend->slotCount
+                        : static_cast<std::uint8_t>(kMaxCorpseSlots);
+                for (std::uint8_t i = 0; i < n; ++i)
+                    corpse.lootSlots[i] = pend->slots[i];
+                corpse.slotCount = n;
+                reg.remove<CorpseLootPending>(e);
+            }
+            reg.emplace<Corpse>(e, corpse);
         }
+
     }
     return static_cast<std::uint32_t>(doomed.size());
 }
@@ -611,8 +611,6 @@ void sync_armour(Registry& reg, NpcPool& pool, Entity e) {
     reg.emplace_or_replace<Armour>(e, a);
 }
 
-namespace {
-
 // Launch a shot from `from` toward `to`.
 //
 // Aimed with a gravity-compensated lob, which is the most important asymmetry in
@@ -697,8 +695,6 @@ void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
         e, Projectile{source, dmg, kProjTtlMs, gravityPct, team,
                       static_cast<std::uint8_t>(ProjType::Bullet), channel});
 }
-
-} // namespace
 
 // **Never call this from inside a live view.** The first web in a session runs
 // `reg.emplace<Slowed>`, which creates a component storage and can reallocate the

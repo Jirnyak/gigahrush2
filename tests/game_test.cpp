@@ -1722,9 +1722,10 @@ static void test_economy_bands_gate_by_depth() {
     CHECK(item_weight_on_floor(kInvalidItem, 0, 0) == 0);
 }
 
-// Loot must drop in the window between "died" and "destroyed" — the reason the
-// Dead tag exists at all. The reference's P0 was culling an entity before its loot
-// hook ran; this asserts the ordering that makes that impossible.
+// CORP1: loot stages in the Dead window onto CorpseLootPending, then moves into
+// the persistent Corpse at finalize_deaths. No floor Pickups from the kill —
+// the player loots via loot_corpse_interact. The Dead tag still exists so the
+// entity cannot be culled before the loot hook runs.
 static void test_loot_drops_before_the_corpse_is_gone() {
     World w;
     generate_floor(w, 0, floor_spec(FloorKind::Residential), 5u);
@@ -1756,27 +1757,59 @@ static void test_loot_drops_before_the_corpse_is_gone() {
     CHECK(r.lethal);
     CHECK(reg.valid(boss));       // tagged, not gone — this is the window
 
-    const std::uint32_t dropped = loot_dead_mobs(reg, 0, /*floor=*/0, 1234u);
-    CHECK(dropped > 0);           // a boss always pays out
+    const std::uint32_t staged = loot_dead_mobs(reg, 0, /*floor=*/0, 1234u);
+    CHECK(staged > 0);            // a boss always pays out
+    CHECK(reg.all_of<CorpseLootPending>(boss));
+    CHECK(reg.get<CorpseLootPending>(boss).slotCount == staged);
+    // Staging must not scatter floor Pickups (no double-drop).
+    {
+        std::uint32_t onFloor = 0;
+        for (auto e : reg.view<const Pickup>()) { (void)e; ++onFloor; }
+        CHECK(onFloor == 0);
+    }
 
-    // The corpse persists on floor for looting, and loot is placed.
+    // finalize moves pending → Corpse.lootSlots and the body stays on the floor.
     CHECK(finalize_deaths(reg, pool, bus, 1u) == 1);
+    CHECK(reg.valid(boss));
     CHECK(reg.all_of<Corpse>(boss));
-    std::uint32_t onFloor = 0;
-    for (auto e : reg.view<const Pickup>()) { (void)e; ++onFloor; }
-    CHECK(onFloor == dropped);
+    CHECK(!reg.all_of<CorpseLootPending>(boss));
+    const Corpse& corpse = reg.get<Corpse>(boss);
+    CHECK(corpse.slotCount > 0);
+    CHECK(corpse.slotCount == staged);
+    std::uint32_t filled = 0;
+    for (std::size_t i = 0; i < kMaxCorpseSlots; ++i) {
+        if (item_valid(corpse.lootSlots[i].item) && corpse.lootSlots[i].count > 0)
+            ++filled;
+    }
+    CHECK(filled == staged);
+    {
+        std::uint32_t onFloor = 0;
+        for (auto e : reg.view<const Pickup>()) { (void)e; ++onFloor; }
+        CHECK(onFloor == 0);
+    }
 
-    // Sweeping it up moves value into the pool row, which is canonical and folds
-    // back on floor exit.
+    // Interact drains Corpse slots into the pool-row inventory (canonical).
     CHECK(inventory_value(pool.inventory(pid)) == 0);
-    const std::int32_t gained = pickup_step(reg, pool, bus, 0, 2u);
-    CHECK(gained >= 0);
-    CHECK(inventory_value(pool.inventory(pid)) == gained);
-    // Everything in reach is gone from the floor.
-    std::uint32_t left = 0;
-    for (auto e : reg.view<const Pickup>()) { (void)e; ++left; }
-    CHECK(left < dropped || dropped == 0);
+    const CorpseLootResult lr =
+        loot_corpse_interact(reg, pool, bus, 0, ppos, /*maxReach=*/3.0f, 2u);
+    CHECK(lr.foundCorpse);
+    CHECK(lr.itemsTaken > 0);
+    CHECK(lr.itemsTaken == staged);
+    CHECK(reg.get<Corpse>(boss).searched);
+    CHECK(inventory_value(pool.inventory(pid)) == lr.roublesGained);
+    CHECK(lr.roublesGained > 0);
+    // Slots cleared after a successful take.
+    {
+        std::uint32_t left = 0;
+        const Corpse& c = reg.get<Corpse>(boss);
+        for (std::size_t i = 0; i < kMaxCorpseSlots; ++i) {
+            if (item_valid(c.lootSlots[i].item) && c.lootSlots[i].count > 0)
+                ++left;
+        }
+        CHECK(left == 0);
+    }
 }
+
 
 // Healing: use the smallest item that covers the wound, and report what landed.
 static void test_heal_picks_the_right_item() {

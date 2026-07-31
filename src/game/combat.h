@@ -156,7 +156,23 @@ struct Dead {
     std::uint8_t channel = 0;
 };
 
-inline constexpr std::size_t kMaxCorpseSlots = 4;
+// Fixed corpse inventory. 8 slots covers Boss (5 rolls @ 100%) plus a bundled
+// ammo pack when a firearm pays — still a pure POD array, no heap, no vector.
+inline constexpr std::size_t kMaxCorpseSlots = 8;
+
+// Staged mob loot on a Dead entity, filled by loot_dead_mobs in the Dead window
+// and consumed by finalize_deaths when the entity becomes a persistent Corpse.
+//
+// **Why a separate component and not Corpse early:** finalize is the only place
+// that may emplace Corpse (defect 2 — one death finalizer). Staging as data on
+// the still-Dead entity keeps the systems pure: loot writes data, finalize
+// moves data, interact reads data. No floor Pickup double-drop.
+struct CorpseLootPending {
+    ItemSlot slots[kMaxCorpseSlots] = {};
+    std::uint8_t slotCount = 0;
+};
+static_assert(std::is_trivially_copyable_v<CorpseLootPending>,
+              "CorpseLootPending must stay a pure POD struct");
 
 // Persistent corpse lying on the ground after death, available for tactical looting (Pure POD).
 struct Corpse {
@@ -167,6 +183,7 @@ struct Corpse {
     bool searched = false;
 };
 static_assert(std::is_trivially_copyable_v<Corpse>, "Corpse component must stay a pure POD struct");
+
 
 // Per-instance melee state. Separate from MobRef because MobRef is the spawn
 // record (what this monster IS) and this is combat state (what it is DOING).
@@ -458,6 +475,17 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
 std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
                              NpcPool& pool, EventBus& bus,
                              LayerId layer, float dt, std::uint64_t tick);
+
+void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
+                      const vec3& to, std::int16_t dmg,
+                      std::uint16_t projSpeedMmps, Entity source,
+                      std::uint8_t projType);
+
+void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
+                          const vec3& dir, std::int16_t dmg,
+                          std::uint16_t projSpeedMmps, Entity source,
+                          std::uint8_t gravityPct = 100, std::uint8_t team = 0,
+                          std::uint8_t channel = 0);
 
 // Advance every shot in flight: integrate under gravity, stop on solid geometry,
 // damage what it touches on contact, expire on TTL. Destroys spent projectiles.

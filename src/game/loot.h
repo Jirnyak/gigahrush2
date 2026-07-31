@@ -84,20 +84,26 @@ struct Pickup {
 // the tension this game is going for.
 inline constexpr float kPickupReach = 1.8f;
 
-// Drop the spoils of every mob that is tagged Dead but not yet destroyed.
+// Stage the spoils of every mob that is tagged Dead but not yet finalized.
 //
 // **Call this between the damage systems and finalize_deaths.** That window — the
 // gap between "hp hit zero" and "the entity is gone" — is precisely what the `Dead`
 // tag exists to create ([combat.h] defect 2): the reference's P0 was that an entity
 // could be culled before its loot hook ran, and this is the shape that makes it
-// impossible. Reading position from the corpse also means the death event does not
-// have to carry one.
+// impossible.
 //
-// Returns how many pickups were created (0 is normal and common).
+// CORP1: does NOT spawn floor Pickups. Rolls into a POD `CorpseLootPending` on the
+// dead entity; `finalize_deaths` moves those slots onto the persistent `Corpse`.
+// Player loots via `loot_corpse_interact`. No double-drop.
+//
+// Returns how many item slots were staged across all corpses (0 is normal and common).
 std::uint32_t loot_dead_mobs(Registry& reg, LayerId layer, int floorNumber,
                              std::uint32_t seed);
 
-// Drop one mob's spoils at `pos`.
+// Drop one mob's spoils as floor Pickups at `pos`.
+//
+// Kept for any non-corpse caller (debug, scripted drops). Production death path uses
+// `loot_dead_mobs` → CorpseLootPending → Corpse.lootSlots instead.
 //
 // `mobTier` sets the envelope — how many rolls and how likely each is to pay. Each
 // paying roll then asks `roll_kind_drop(mobKind, ...)` ([loot_table.h]) for the mob's own
@@ -108,6 +114,14 @@ std::uint32_t loot_dead_mobs(Registry& reg, LayerId layer, int floorNumber,
 std::uint32_t drop_mob_loot(Registry& reg, LayerId layer, const vec3& pos,
                             std::uint8_t mobKind, std::uint8_t mobTier,
                             int floorNumber, std::uint32_t seed);
+
+// Roll mob loot into a fixed POD slot buffer (same rolls/chance/kind/catalog/ammo
+// rules as drop_mob_loot). Returns how many slots were filled (capped at outCap).
+// No entities created — pure data for Corpse / CorpseLootPending.
+std::uint32_t roll_mob_loot_slots(std::uint8_t mobKind, std::uint8_t mobTier,
+                                  int floorNumber, std::uint32_t seed,
+                                  ItemSlot* outSlots, std::uint8_t outCap);
+
 
 // Sweep up every pickup within kPickupReach of the camera holder into its pool-row
 // inventory (canonical, folds back on floor exit — [npcs.md]). Stacks where the

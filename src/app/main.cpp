@@ -1978,6 +1978,21 @@ int main(int argc, char** argv) {
                             }
                         }
                     }
+
+                    // 5. Monster Attack Windup Telegraph Particles & Visual Charge
+                    if (const game::MobCombat* mc = reg.try_get<game::MobCombat>(me_)) {
+                        const game::MobDef& mdef = game::kMobTable[mr.kind];
+                        if (mc->windupMs > 0 && mdef.windupMs > 0) {
+                            float progress = 1.0f - (static_cast<float>(mc->windupMs) / static_cast<float>(mdef.windupMs));
+                            vec3 chargeColor{1.0f, 0.40f + 0.50f * progress, 0.10f};
+                            if (particlePass.ready() && (simTick % 3 == 0)) {
+                                particlePass.emit_burst(tr.pos + vec3{0.0f, 1.2f, 0.0f}, vec3{0.0f, 1.2f, 0.0f},
+                                                        chargeColor, gpu::GpuParticleKind::Spark,
+                                                        static_cast<int>(4 + 10 * progress), 2.0f + 3.0f * progress,
+                                                        0.3f, 0.12f, 180.0f);
+                            }
+                        }
+                    }
                 }
                 // NPC-vs-NPC: bodies holding a staggered fight licence steer at their
                 // nearest enemy and swing when it is in reach. Placed AFTER wander_step
