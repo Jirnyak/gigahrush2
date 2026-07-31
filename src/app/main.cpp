@@ -881,22 +881,40 @@ const game::FloorSpec* spec_for_floor(int number) {
 // below this anyway, so it is a guard rail rather than a live limit.
 constexpr std::uint32_t kMobSpawnCap = 600;
 
-// Where a run lives on disk: a DIRECTORY, because the save is modular like the
-// game is ([game/save.h] v5). `run.sav` carries the run; each visited floor is
-// its own `floor_<N>.sav`, written when the player leaves it and read back
-// whenever that floor is built again. `giga_game` does no file I/O by design —
-// it links giga_core and nothing platform-shaped ([AGENTS.md]) — so every fopen
-// is HERE and the formats are over there.
-constexpr const char* kSaveDir = "gigahrush2_save";
-constexpr const char* kSavePath = "gigahrush2_save/run.sav";
+// Where a run lives on disk: a DIRECTORY PER SLOT, because the save is modular
+// like the game is ([game/save.h]) and the main menu picks SLOTS, not files.
+// `gigahrush2_save/slot<N>/run.sav` carries the run; each visited floor is its
+// own `floor_<F>.sav` beside it, written when the player leaves that floor and
+// read back whenever the floor is built again. `giga_game` does no file I/O by
+// design — it links giga_core and nothing platform-shaped ([AGENTS.md]) — so
+// every fopen is HERE and the formats are over there.
+constexpr int kMaxSaveSlots = 8;
+int g_saveSlot = 1;
 
+void slot_dir_path(char* out, std::size_t cap, int slot) {
+    std::snprintf(out, cap, "gigahrush2_save/slot%d", slot);
+}
+void run_save_path(char* out, std::size_t cap) {
+    std::snprintf(out, cap, "gigahrush2_save/slot%d/run.sav", g_saveSlot);
+}
 void floor_save_path(int floor, char* out, std::size_t cap) {
-    std::snprintf(out, cap, "%s/floor_%d.sav", kSaveDir, floor);
+    std::snprintf(out, cap, "gigahrush2_save/slot%d/floor_%d.sav", g_saveSlot,
+                  floor);
+}
+bool slot_occupied(int slot) {
+    char p[128];
+    std::snprintf(p, sizeof p, "gigahrush2_save/slot%d/run.sav", slot);
+    if (std::FILE* f = std::fopen(p, "rb")) {
+        std::fclose(f);
+        return true;
+    }
+    return false;
 }
 
 bool write_bytes_file(const std::vector<std::uint8_t>& bytes, const char* path) {
-    std::error_code ec; // error_code overload: the app builds -fno-exceptions
-    std::filesystem::create_directories(kSaveDir, ec);
+    std::error_code ec; // error_code overloads: the app builds -fno-exceptions
+    std::filesystem::create_directories(
+        std::filesystem::path(path).parent_path(), ec);
     std::FILE* f = std::fopen(path, "wb");
     if (!f) return false;
     const std::size_t n = std::fwrite(bytes.data(), 1, bytes.size(), f);
@@ -1596,16 +1614,25 @@ int main(int argc, char** argv) {
     // sim's clock, not the window's.
     bool saveWanted = false;
     bool loadWanted = false;
-    // An autosave game CONTINUES: a run on disk arms an F9 on the first frames
-    // (the load path itself waits out the initial nav bake). To start over,
-    // delete the gigahrush2_save/ directory. --shot captures opt out so a stray
-    // save directory can never alter a deterministic capture.
-    if (!shotPath) {
-        if (std::FILE* f = std::fopen(kSavePath, "rb")) {
-            std::fclose(f);
-            loadWanted = true;
-        }
+    // THE MAIN MENU — a separate app SCREEN, not a pause overlay. The world
+    // behind it is built but frozen; the run starts (or a slot loads) only when
+    // a menu row says so, which is also what makes a full v6 world restore
+    // safe: it happens before the player has touched anything. --shot captures
+    // skip the menu and start Playing directly, so a stray save directory can
+    // never alter a deterministic capture.
+    enum class AppScreen : std::uint8_t { Menu, Playing };
+    AppScreen screen = shotPath ? AppScreen::Playing : AppScreen::Menu;
+    int menuScreenPage = 0; // 0 root, 1 load slots, 2 new-game slots, 3 settings
+    if (screen == AppScreen::Menu) {
+        input.set_mouselook(false);
+        SDL_SetWindowRelativeMouseMode(window, false);
     }
+    auto menu_start_playing = [&]() {
+        screen = AppScreen::Playing;
+        menuScreenPage = 0;
+        input.set_mouselook(true);
+        SDL_SetWindowRelativeMouseMode(window, true);
+    };
     // What the last save or load actually said. A save that fails silently is a save the
     // player only finds out about by losing a run.
     char saveLine[96] = {};
@@ -1774,8 +1801,15 @@ int main(int argc, char** argv) {
             wrap_macro(static_cast<int>(sp.z / kCellSize)));
         // REFRESH, not append and not clear. [save.h]
         game::refresh_opened_containers(reg, pl, currentFloor, runState.opened);
+        // v6: the macro world travels whole — pool table, macro clock, faction
+        // matrix. The society you come back to is the one you left. [save.h]
+        pool.save_rows(runState.poolBlob);
+        macroSim.save_state(runState.macroBlob);
+        runState.factions = factionRel;
         write_floor_file(stack.layer(pl), currentFloor);
-        return write_run(runState, kSavePath);
+        char runPath[128];
+        run_save_path(runPath, sizeof runPath);
+        return write_run(runState, runPath);
     };
 
     // One ride, either shape: the elevator keys ([ / ]) pass a DIRECTION, the
@@ -1984,7 +2018,8 @@ int main(int argc, char** argv) {
                     // can always close what it opened. This gate also stops a
                     // vendor-filter keystroke from eating rations, which the old
                     // chain happily did.
-                    if (kb && (!typing || (kb->flags & game::kBindTyping)) &&
+                    if (screen == AppScreen::Playing && kb &&
+                        (!typing || (kb->flags & game::kBindTyping)) &&
                         (!paused || (kb->flags & game::kBindAlways)))
                         exec_command(kb->command);
                 }
@@ -2028,7 +2063,7 @@ int main(int argc, char** argv) {
                 return (reqs & game::request_bit(r)) != 0;
             };
             if (has(ConsoleRequest::Quit)) running = false;
-            if (has(ConsoleRequest::Menu)) {
+            if (has(ConsoleRequest::Menu) && screen == AppScreen::Playing) {
                 // Pausing frees the cursor so the menu is clickable and the OS
                 // window can be moved / minimised; leaving re-arms mouselook.
                 paused = !paused;
@@ -2118,7 +2153,7 @@ int main(int argc, char** argv) {
         // --- fixed-step simulation ----------------------------------------
         // Frozen while the pause menu is up; drop accumulated time so resuming
         // does not fast-forward the missed interval.
-        if (paused) {
+        if (paused || screen == AppScreen::Menu) {
             simAccum = 0.0f;
         } else {
             simAccum += frameDt;
@@ -2873,9 +2908,12 @@ int main(int argc, char** argv) {
                                       currentFloor,
                                       static_cast<unsigned>(ledger.banked),
                                       static_cast<unsigned>(runState.opened.size()));
-                    else
+                    else {
+                        char runPath[128];
+                        run_save_path(runPath, sizeof runPath);
                         std::snprintf(saveLine, sizeof(saveLine),
-                                      "SAVE FAILED: could not write %s", kSavePath);
+                                      "SAVE FAILED: could not write %s", runPath);
+                    }
                     saveLineAt = simTick;
                     // Headless --shot proof: HUD is invisible in captures
                     // without a human; stderr is the audit trail. [save.h]
@@ -2892,18 +2930,24 @@ int main(int argc, char** argv) {
                         // leave loadWanted set; quiet until the bake ends
                     } else {
                         loadWanted = false;
+                        char runPath[128];
+                        run_save_path(runPath, sizeof runPath);
                         game::SaveState in;
                         game::SaveError err = game::SaveError::None;
-                        if (!read_run(in, kSavePath, err)) {
+                        if (!read_run(in, runPath, err)) {
                             // No file and a refused file need different words: one is a
                             // first run, the other is a save the build can no longer read.
                             if (err == game::SaveError::None)
                                 std::snprintf(saveLine, sizeof(saveLine),
-                                              "no save file (%s)", kSavePath);
+                                              "no save file (%s)", runPath);
                             else
                                 std::snprintf(saveLine, sizeof(saveLine),
                                               "load refused: %s",
                                               game::save_error_text(err));
+                        } else if (!spec_for_floor(in.player.floorNumber)) {
+                            std::snprintf(saveLine, sizeof(saveLine),
+                                          "load refused: floor %d is not registered",
+                                          in.player.floorNumber);
                         } else {
                             // `ledger` and `contracts` are references INTO runState, so
                             // this one assignment republishes both without touching a
@@ -2914,152 +2958,121 @@ int main(int argc, char** argv) {
                             const std::uint8_t scy = runState.player.cy;
                             const std::uint8_t scz = runState.player.cz;
 
-                            bool floorMoved = false;
-                            bool arrived = (savedFloor == currentFloor);
-                            bool travelRefused = false;
-                            std::size_t reopened = 0;
-
-                            if (savedFloor != currentFloor) {
-                                const game::LoadTravel lt = game::travel_to_saved_floor(
-                                    stack, registry, reg, pool, streamer, player,
-                                    currentFloor, savedFloor, game::kArrivalZ);
-                                if (lt.moved) {
-                                    player = lt.player;
-                                    currentFloor = lt.floor;
-                                    floorMoved = true;
-                                    arrived = lt.arrived;
-                                    // Same post-ride bookkeeping as keyboard / --shot.
-                                    game::record_floor(ledger, currentFloor);
-                                    samosbor = game::samosbor_new_game(sbRng);
-                                    rumourLine[0] = 0;
-                                    rumourAt = 0;
-                                    game::noise_clear(noiseField);
-                                    currentSpec = spec_for_floor(currentFloor);
-                                    cubePass.invalidate();
-                                    const LayerId nl =
-                                        reg.valid(player)
-                                            ? reg.get<Transform>(player).layer
-                                            : activeLayer;
-                                    activeLayer = nl;
-                                    // Arrival order is load-path law, not a suggestion:
-                                    // containers before re-open, mobs, doors, freeze,
-                                    // bake, then placement. [save.h]
-                                    refresh_floor_containers(reg, stack.layer(nl),
-                                                             currentFloor, nl);
-                                    reopened = game::apply_opened_containers(
-                                        reg, nl, currentFloor, runState.opened.data(),
-                                        runState.opened.size());
-                                    refresh_floor_mobs(reg, stack.layer(nl),
-                                                       currentFloor, nl);
-                                    // The floor's own file, BEFORE door_build so
-                                    // the fresh DoorSet re-stamps its leaves —
-                                    // the same law as every other arrival.
-                                    // [save.h]
-                                    apply_floor_file(stack.layer(nl),
-                                                     currentFloor);
-                                    if (currentSpec)
-                                        doorsBuilt = game::door_build(
-                                            stack.layer(nl), doors, currentFloor,
-                                            *currentSpec, kDoorSeed);
-                                    doors.frozen = true;
-                                    begin_floor_nav(stack.layer(nl), nav);
-                                    if (propPass.ready()) {
-                                        std::uint32_t fseed =
-                                            1337u ^
-                                            (static_cast<std::uint32_t>(currentFloor) *
-                                             0x9e3779b9u);
-                                        propPlacer.populate(stack.layer(nl).grid(),
-                                                            propPass, fseed);
-                                    }
-                                } else {
-                                    // Unknown floor label or missing NpcRef — run
-                                    // still restores in place; body stays put.
-                                    travelRefused = true;
-                                    arrived = false;
-                                }
+                            // FULL WORLD RESTORE, boot-shaped ([save.h] v6): fold
+                            // and evict the resident floor, blank the pool, load
+                            // the saved SOCIETY, then build the saved floor and
+                            // embody from the restored rows. No body survives the
+                            // transition, so no body can hold a stale id — the
+                            // same reason the main menu loads before anything is
+                            // embodied.
+                            streamer.unload(stack, registry, reg, pool,
+                                            currentFloor);
+                            pool.init();
+                            if (!runState.poolBlob.empty() &&
+                                pool.load_rows(runState.poolBlob.data(),
+                                               runState.poolBlob.size())) {
+                                // The macro clock and the society's attitudes
+                                // come with it.
+                                if (!runState.macroBlob.empty() &&
+                                    !macroSim.load_state(
+                                        runState.macroBlob.data(),
+                                        runState.macroBlob.size()))
+                                    std::fprintf(stderr,
+                                                 "[load] macro blob refused; "
+                                                 "clock restarts\n");
+                                macroSim.set_floors_from(registry);
+                                factionRel = runState.factions;
+                            } else {
+                                // A save without a society (or a refused blob):
+                                // reseed from scratch and say so — the run state
+                                // still loads.
+                                std::fprintf(stderr,
+                                             "[load] pool blob refused; "
+                                             "reseeding society\n");
+                                streamer.seed_all_modules(pool);
                             }
-
-                            // Pool row first: needs/inv/hp/maxHp survive a body swap
-                            // and must land before armour is re-derived from inv.
-                            const game::NpcRef* nrl =
-                                reg.valid(player) ? reg.try_get<game::NpcRef>(player)
-                                                  : nullptr;
-                            if (nrl && pool.valid(nrl->id)) {
-                                game::apply_player_snapshot(pool, nrl->id,
+                            // The restored player ROW is the one that carries the
+                            // NpcPlayer bit; the snapshot then reasserts the
+                            // authoritative clock/bag/hp on top of it.
+                            game::NpcId pid = game::kInvalidNpc;
+                            for (game::NpcId i = 0; i < pool.count(); ++i)
+                                if (pool.is_player(i) && pool.alive(i)) {
+                                    pid = i;
+                                    break;
+                                }
+                            const game::LoadResult lr = streamer.ensure_loaded(
+                                stack, registry, reg, pool, savedFloor, pid);
+                            currentFloor = savedFloor;
+                            currentSpec = spec_for_floor(currentFloor);
+                            const LayerId nl = lr.layer;
+                            activeLayer = nl;
+                            player = pid != game::kInvalidNpc
+                                         ? game::embody_as_player(reg, pool, pid,
+                                                                  nl)
+                                         : lr.player;
+                            if (pid != game::kInvalidNpc) {
+                                game::apply_player_snapshot(pool, pid,
                                                             runState.player);
                                 game::sync_armour(reg, pool, player);
                             }
-
-                            // Same-floor load never rebuilt crates; re-empty looted
-                            // ones against the live layer. Cross-floor already did.
-                            if (!floorMoved) {
-                                reopened = game::apply_opened_containers(
-                                    reg, activeLayer, currentFloor,
-                                    runState.opened.data(), runState.opened.size());
-                                // The floor's own file stamps the saved grid
-                                // back VERBATIM — including un-carving holes
-                                // made after the save, which no replay could.
-                                // door_build after it re-stamps door leaves so
-                                // the DoorSet and the restored cells agree
-                                // (doors reset on load, same as cross-floor).
-                                if (apply_floor_file(stack.layer(activeLayer),
-                                                     currentFloor)) {
-                                    if (currentSpec)
-                                        doorsBuilt = game::door_build(
-                                            stack.layer(activeLayer), doors,
-                                            currentFloor, *currentSpec,
-                                            kDoorSeed);
-                                    cubePass.invalidate();
-                                }
+                            // Per-floor clocks and channels reset, same as any
+                            // arrival.
+                            samosbor = game::samosbor_new_game(sbRng);
+                            rumourLine[0] = 0;
+                            rumourAt = 0;
+                            game::noise_clear(noiseField);
+                            // Arrival order is load-path law: containers before
+                            // re-open, mobs, floor file, doors, freeze, bake,
+                            // then placement. [save.h]
+                            refresh_floor_containers(reg, stack.layer(nl),
+                                                     currentFloor, nl);
+                            const std::size_t reopened =
+                                game::apply_opened_containers(
+                                    reg, nl, currentFloor,
+                                    runState.opened.data(),
+                                    runState.opened.size());
+                            refresh_floor_mobs(reg, stack.layer(nl), currentFloor,
+                                               nl);
+                            apply_floor_file(stack.layer(nl), currentFloor);
+                            if (currentSpec)
+                                doorsBuilt = game::door_build(
+                                    stack.layer(nl), doors, currentFloor,
+                                    *currentSpec, kDoorSeed);
+                            doors.frozen = true;
+                            begin_floor_nav(stack.layer(nl), nav);
+                            if (propPass.ready()) {
+                                std::uint32_t fseed =
+                                    1337u ^
+                                    (static_cast<std::uint32_t>(currentFloor) *
+                                     0x9e3779b9u);
+                                propPlacer.populate(stack.layer(nl).grid(),
+                                                    propPass, fseed);
                             }
+                            cubePass.invalidate();
 
                             game::PlacedCell placed{};
                             if (reg.valid(player)) {
-                                const LayerId pl = reg.get<Transform>(player).layer;
-                                activeLayer = pl;
                                 placed = game::place_body_at_cell(
-                                    reg, stack.layer(pl), player, scx, scy, scz);
+                                    reg, stack.layer(nl), player, scx, scy, scz);
                                 aim_player(reg, player);
                             }
 
-                            // Honest HUD: refuse / partial ride / place slip / ok.
-                            if (travelRefused) {
-                                std::snprintf(
-                                    saveLine, sizeof(saveLine),
-                                    "loaded %u rub; floor %d unreachable (on %d)",
-                                    static_cast<unsigned>(ledger.banked), savedFloor,
-                                    currentFloor);
-                            } else if (!arrived) {
-                                std::snprintf(
-                                    saveLine, sizeof(saveLine),
-                                    "loaded %u rub; rode to %d (saved %d), %s",
-                                    static_cast<unsigned>(ledger.banked), currentFloor,
-                                    savedFloor,
-                                    placed.ok
-                                        ? (placed.moved ? "placed nearby" : "placed")
-                                        : "place refused");
-                            } else if (!placed.ok) {
+                            // Honest HUD: place slip / ok, with the society size.
+                            if (!placed.ok) {
                                 std::snprintf(
                                     saveLine, sizeof(saveLine),
                                     "loaded %u rub floor %d; place refused, %u crates",
                                     static_cast<unsigned>(ledger.banked), currentFloor,
                                     static_cast<unsigned>(reopened));
-                            } else if (placed.moved) {
-                                std::snprintf(
-                                    saveLine, sizeof(saveLine),
-                                    "loaded: floor %d, %u rub, placed nearby, %u crates",
-                                    currentFloor,
-                                    static_cast<unsigned>(ledger.banked),
-                                    static_cast<unsigned>(reopened));
                             } else {
                                 std::snprintf(
                                     saveLine, sizeof(saveLine),
-                                    "loaded: floor %d @%u,%u,%u, %u rub, %u crates",
+                                    "loaded: floor %d @%u,%u,%u, %u rub, %u alive",
                                     currentFloor, static_cast<unsigned>(scx),
                                     static_cast<unsigned>(scy),
                                     static_cast<unsigned>(scz),
                                     static_cast<unsigned>(ledger.banked),
-                                    static_cast<unsigned>(reopened));
+                                    static_cast<unsigned>(pool.alive()));
                             }
                         }
                         saveLineAt = simTick;
@@ -3900,6 +3913,87 @@ int main(int argc, char** argv) {
                                    "%s", promptText);
                 ImGui::End();
             }
+        }
+
+        // MAIN MENU — the boot screen. Extensible BY DATA like the pause menu:
+        // each entry is a row, each sub-screen a page. The character-creation
+        // screen ([npcs.md]: the player IS an NPC row, so creation is an editor
+        // over the same char-sheet columns the pool serializes) plugs in as one
+        // more page here when it lands. Labels are ASCII — the default ImGui
+        // font ships no Cyrillic glyphs.
+        if (screen == AppScreen::Menu) {
+            ImGuiIO& io = ImGui::GetIO();
+            ImGui::SetNextWindowPos(
+                ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+            ImGui::Begin("##mainmenu", nullptr,
+                         ImGuiWindowFlags_AlwaysAutoResize |
+                             ImGuiWindowFlags_NoCollapse |
+                             ImGuiWindowFlags_NoMove |
+                             ImGuiWindowFlags_NoTitleBar |
+                             ImGuiWindowFlags_NoSavedSettings);
+            const ImVec2 btn(240.0f, 0.0f);
+            if (menuScreenPage == 0) {
+                ImGui::TextUnformatted("G I G A H R U S H  2");
+                ImGui::Separator();
+                if (ImGui::Button("New Game", btn)) menuScreenPage = 2;
+                if (ImGui::Button("Load Game", btn)) menuScreenPage = 1;
+                if (ImGui::Button("Settings", btn)) menuScreenPage = 3;
+                ImGui::Spacing();
+                if (ImGui::Button("Quit", btn)) running = false;
+            } else if (menuScreenPage == 1) {
+                ImGui::TextUnformatted("Load Game");
+                ImGui::Separator();
+                bool any = false;
+                for (int s = 1; s <= kMaxSaveSlots; ++s) {
+                    if (!slot_occupied(s)) continue;
+                    any = true;
+                    char label[32];
+                    std::snprintf(label, sizeof label, "Slot %d", s);
+                    if (ImGui::Button(label, btn)) {
+                        // The load itself runs on the sim clock next frame —
+                        // and BEFORE the player has touched anything, which is
+                        // what makes the full v6 world restore safe.
+                        g_saveSlot = s;
+                        loadWanted = true;
+                        menu_start_playing();
+                    }
+                }
+                if (!any) ImGui::TextUnformatted("(no saves yet)");
+                ImGui::Spacing();
+                if (ImGui::Button("Back", btn)) menuScreenPage = 0;
+            } else if (menuScreenPage == 2) {
+                ImGui::TextUnformatted("New Game - pick a slot");
+                ImGui::Separator();
+                for (int s = 1; s <= kMaxSaveSlots; ++s) {
+                    char label[48];
+                    std::snprintf(label, sizeof label, "Slot %d%s", s,
+                                  slot_occupied(s) ? "  (overwrite)" : "");
+                    if (ImGui::Button(label, btn)) {
+                        g_saveSlot = s;
+                        // A new game clears its slot's directory: stale floor
+                        // files from the previous run in this slot must not
+                        // leak into a fresh one. Player-directed, labelled.
+                        char dir[128];
+                        slot_dir_path(dir, sizeof dir, s);
+                        std::error_code ec;
+                        std::filesystem::remove_all(dir, ec);
+                        menu_start_playing();
+                    }
+                }
+                ImGui::Spacing();
+                if (ImGui::Button("Back", btn)) menuScreenPage = 0;
+            } else {
+                ImGui::TextUnformatted("Settings");
+                ImGui::Separator();
+                ImGui::TextUnformatted(
+                    "Key bindings: pause menu (Esc in game), persisted.");
+                ImGui::TextUnformatted(
+                    "Character creation lands here as its own page.");
+                ImGui::Spacing();
+                if (ImGui::Button("Back", btn)) menuScreenPage = 0;
+            }
+            ImGui::End();
         }
 
         // Pause menu (Esc). Extensible BY DATA: a main-page item is a label plus

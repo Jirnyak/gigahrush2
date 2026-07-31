@@ -65,23 +65,20 @@ struct Room {
 };
 
 void split_room(int x, int y, int w, int h, std::uint32_t& rng, std::vector<Room>& out_rooms) {
-    if (w < 8 || h < 8) {
+    if (w <= 16 || h <= 16) {
         out_rooms.push_back({x, y, w, h});
         return;
     }
     
-    bool split_horiz = (rng = rng * 1664525 + 1013904223) % 2 == 0;
-    if (w >= h * 1.5) split_horiz = false;
-    else if (h >= w * 1.5) split_horiz = true;
-    
-    if (split_horiz) {
-        int split_y = y + 3 + ((rng = rng * 1664525 + 1013904223) % (h - 5));
-        split_room(x, y, w, split_y - y, rng, out_rooms);
-        split_room(x, split_y, w, y + h - split_y, rng, out_rooms);
-    } else {
+    // Split alternating
+    if (w > h) {
         int split_x = x + 3 + ((rng = rng * 1664525 + 1013904223) % (w - 5));
         split_room(x, y, split_x - x, h, rng, out_rooms);
         split_room(split_x, y, x + w - split_x, h, rng, out_rooms);
+    } else {
+        int split_y = y + 3 + ((rng = rng * 1664525 + 1013904223) % (h - 5));
+        split_room(x, y, w, split_y - y, rng, out_rooms);
+        split_room(x, split_y, w, y + h - split_y, rng, out_rooms);
     }
 }
 
@@ -224,9 +221,9 @@ void generate_padic_floor(World& world, int number, const FloorSpec& spec, unsig
             }
             
             // Clear lobbies 
-            for (int f = 0; f < kMacroDim / 3; ++f) {
-                const int base = f * 3;
+            for (int base = 0; base < kMacroDim; base += 3) {
                 for (int z = base + 1; z < base + 3; ++z) {
+                    if (z >= kMacroDim) continue;
                     for (int dy = -kLobbyR; dy <= kLobbyR; ++dy) {
                         for (int dx = -kLobbyR; dx <= kLobbyR; ++dx) {
                             g.clear_cell(wrap_macro(cx + dx), wrap_macro(cy + dy), z);

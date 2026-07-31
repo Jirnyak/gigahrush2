@@ -395,4 +395,199 @@ std::size_t NpcPool::resident_bytes() const {
            column_bytes(gen_) + column_bytes(nextFree_);
 }
 
+// ---------------------------------------------------------------------------
+// Wholesale serialization ([save.h] v6) — the flat table, written flat.
+// ---------------------------------------------------------------------------
+namespace {
+
+// Local little-endian byte plumbing, same discipline as save.cpp's Writer /
+// Reader (which are deliberately file-local there): no struct memcpy ever
+// reaches the wire, so padding and host byte order cannot either.
+void put_u8(std::vector<std::uint8_t>& o, std::uint8_t v) { o.push_back(v); }
+void put_u16(std::vector<std::uint8_t>& o, std::uint16_t v) {
+    o.push_back(static_cast<std::uint8_t>(v & 0xFFu));
+    o.push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFu));
+}
+void put_u32(std::vector<std::uint8_t>& o, std::uint32_t v) {
+    for (int i = 0; i < 4; ++i)
+        o.push_back(static_cast<std::uint8_t>((v >> (i * 8)) & 0xFFu));
+}
+void put_i16(std::vector<std::uint8_t>& o, std::int16_t v) {
+    put_u16(o, static_cast<std::uint16_t>(v));
+}
+void put_f32(std::vector<std::uint8_t>& o, float v) {
+    std::uint32_t b = 0;
+    std::memcpy(&b, &v, sizeof b);
+    put_u32(o, b);
+}
+
+struct ByteReader {
+    const std::uint8_t* p;
+    std::size_t n;
+    std::size_t at = 0;
+    bool ok = true;
+    std::uint8_t u8() {
+        if (at >= n) { ok = false; return 0; }
+        return p[at++];
+    }
+    std::uint16_t u16() {
+        const std::uint32_t a = u8(), b = u8();
+        return static_cast<std::uint16_t>(a | (b << 8));
+    }
+    std::uint32_t u32() {
+        std::uint32_t v = 0;
+        for (int i = 0; i < 4; ++i) v |= static_cast<std::uint32_t>(u8()) << (i * 8);
+        return v;
+    }
+    std::int16_t i16() { return static_cast<std::int16_t>(u16()); }
+    float f32() {
+        const std::uint32_t b = u32();
+        float v = 0;
+        std::memcpy(&v, &b, sizeof v);
+        return v;
+    }
+};
+
+// Fixed per-row wire width: 27 B of demographic columns (flags 1 + faction 2 +
+// hp/maxHp/floor 6 + cell 3 + height 2 + age/sex/level 3 + attrs 8 + gen 2) +
+// 33 B needs + 256 B inventory; names add 2 x kNameLen when present.
+inline constexpr std::size_t kPoolRowWire = 27 + 33 + 256;
+inline constexpr std::size_t kPoolHeadWire = 4 + 4 + 1 + 1;
+
+} // namespace
+
+void NpcPool::save_rows(std::vector<std::uint8_t>& out) const {
+    out.clear();
+    const bool names = !name_.empty();
+    out.reserve(kPoolHeadWire +
+                static_cast<std::size_t>(count_) *
+                    (kPoolRowWire + (names ? 2 * kNameLen : 0)));
+    put_u32(out, count_);
+    put_u32(out, recycled_);
+    put_u8(out, recycle_ ? 1 : 0);
+    put_u8(out, names ? 1 : 0);
+    for (NpcId id = 0; id < count_; ++id) {
+        // Embodiment is a property of a BODY, and bodies never survive a save.
+        put_u8(out, flags_[id] & static_cast<std::uint8_t>(~NpcEmbodied));
+        put_u16(out, faction_[id]);
+        put_i16(out, hp_[id]);
+        put_i16(out, maxHp_[id]);
+        put_i16(out, floor_[id]);
+        put_u8(out, cx_[id]);
+        put_u8(out, cy_[id]);
+        put_u8(out, cz_[id]);
+        put_u16(out, heightMm_[id]);
+        put_u8(out, id < age_.size() ? age_[id] : 0);
+        put_u8(out, id < sex_.size() ? sex_[id] : SexUnset);
+        put_u8(out, id < level_.size() ? level_[id] : 0);
+        const std::array<std::uint8_t, kAttrSlots> blank{};
+        const auto& a = id < attr_.size() ? attr_[id] : blank;
+        for (std::uint8_t v : a) put_u8(out, v);
+        put_u16(out, id < gen_.size() ? gen_[id] : 0);
+        const Needs& nd = needs_[id];
+        put_f32(out, nd.food);
+        put_f32(out, nd.water);
+        put_f32(out, nd.sleep);
+        put_f32(out, nd.pee);
+        put_f32(out, nd.poo);
+        put_f32(out, nd.pendingPee);
+        put_f32(out, nd.pendingPoo);
+        put_f32(out, nd.hpDebt);
+        put_u8(out, nd.seeded);
+        const Inventory& inv = inv_[id];
+        for (int s = 0; s < kInvSlots; ++s) {
+            put_u16(out, inv.slots[s].item);
+            put_u16(out, inv.slots[s].count);
+        }
+        if (names) {
+            for (char c : name_[id])
+                put_u8(out, static_cast<std::uint8_t>(c));
+            for (char c : surname_[id])
+                put_u8(out, static_cast<std::uint8_t>(c));
+        }
+    }
+}
+
+bool NpcPool::load_rows(const std::uint8_t* bytes, std::size_t n) {
+    if (!bytes || n < kPoolHeadWire) return false;
+    if (count_ != 0) return false; // contract: a freshly init()ed pool
+    ByteReader r{bytes, n};
+    const std::uint32_t count = r.u32();
+    const std::uint32_t recycled = r.u32();
+    const bool recycle = r.u8() != 0;
+    const bool names = r.u8() != 0;
+    if (count > kNpcPoolSize) return false;
+    const std::size_t want =
+        kPoolHeadWire + static_cast<std::size_t>(count) *
+                            (kPoolRowWire + (names ? 2 * kNameLen : 0));
+    if (n != want) return false;
+
+    count_ = count;
+    grow_live_columns(count_);
+    if (names) {
+        grow_column(name_, count_);
+        grow_column(surname_, count_);
+    }
+    alive_ = 0;
+    recycled_ = recycled;
+    for (NpcId id = 0; id < count_; ++id) {
+        const std::uint8_t fl =
+            r.u8() & static_cast<std::uint8_t>(~NpcEmbodied);
+        flags_[id] = fl;
+        faction_[id] = r.u16();
+        hp_[id] = r.i16();
+        maxHp_[id] = r.i16();
+        const std::int16_t label = r.i16();
+        cx_[id] = r.u8();
+        cy_[id] = r.u8();
+        cz_[id] = r.u8();
+        heightMm_[id] = r.u16();
+        age_[id] = r.u8();
+        sex_[id] = r.u8();
+        level_[id] = r.u8();
+        for (std::uint8_t& v : attr_[id]) v = r.u8();
+        gen_[id] = r.u16();
+        Needs& nd = needs_[id];
+        nd.food = r.f32();
+        nd.water = r.f32();
+        nd.sleep = r.f32();
+        nd.pee = r.f32();
+        nd.poo = r.f32();
+        nd.pendingPee = r.f32();
+        nd.pendingPoo = r.f32();
+        nd.hpDebt = r.f32();
+        nd.seeded = r.u8();
+        Inventory& inv = inv_[id];
+        for (int s = 0; s < kInvSlots; ++s) {
+            inv.slots[s].item = r.u16();
+            inv.slots[s].count = r.u16();
+        }
+        if (names) {
+            for (char& c : name_[id]) c = static_cast<char>(r.u8());
+            for (char& c : surname_[id]) c = static_cast<char>(r.u8());
+        }
+        // The bucket index is DERIVED state: alive rows join their floor's
+        // roster (the exact insert set_floor performs); dead rows keep their
+        // label but stay out, matching what kill() left behind.
+        if (fl & NpcAlive) {
+            ++alive_;
+            const int slot = bucket_slot(label);
+            if (slot >= 0) {
+                std::vector<NpcId>& b =
+                    floorBuckets_[static_cast<std::size_t>(slot)];
+                slotInBucket_[id] = static_cast<std::uint32_t>(b.size());
+                b.push_back(id);
+            }
+            floor_[id] = label;
+        } else {
+            floor_[id] = label;
+        }
+    }
+    if (!r.ok || r.at != n) return false;
+    // Re-arm recycling THROUGH the public path: the OFF->ON transition is what
+    // rebuilds the free list from the alive bits, per its own contract.
+    if (recycle) set_recycling(true);
+    return true;
+}
+
 } // namespace giga::game

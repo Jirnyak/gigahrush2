@@ -446,6 +446,20 @@ public:
     // right after init(), and it only moves when a LIVE/DEMAND column grows.
     std::size_t resident_bytes() const;
 
+    // --- wholesale serialization ([save.h] v6) ------------------------------
+    // Verbatim little-endian dump of rows [0, count()) — the "tables serialize
+    // verbatim" contract [npcs.md] finally cashed in. NpcEmbodied is masked off
+    // on write: bodies never survive a save, so the flag must not either.
+    // rel_ does not travel — nothing in src/ writes or reads a Relationship
+    // yet; the day one does, the blob gains a section and a version bump.
+    void save_rows(std::vector<std::uint8_t>& out) const;
+
+    // Restore onto a freshly init()ed pool. Rebuilds the alive count and the
+    // floor bucket index from the rows. False on malformed input (re-init the
+    // pool before retrying). Call set_recycling(true) afterwards if the run
+    // recycles: the free list rebuilds from the alive bits, by design.
+    bool load_rows(const std::uint8_t* bytes, std::size_t n);
+
     // Field accessors (SoA rows). Callers index by NpcId — an id from spawn(), i.e.
     // id < count(). That was already the contract (nothing bounds-checks) and the
     // LIVE columns now depend on it: they are only sized to cover count().

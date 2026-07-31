@@ -51,6 +51,7 @@
 #include "ecs/registry.h"
 #include "game/contract.h"    // ContractBook, Contract
 #include "game/extraction.h"  // RunLedger
+#include "game/faction_relations.h" // FactionRelations, kRelFactionCount
 #include "game/inventory.h"   // Inventory
 #include "game/npc_pool.h"    // Needs
 #include "game/quest.h"       // QuestLog, kQuestLogWire, quest_table_fingerprint
@@ -83,8 +84,14 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // the same code path. run.sav itself carries only the run: ledger, contracts,
 // player, opened crates, quests. Loading touches exactly two files — run.sav and
 // the active floor's — and every other floor loads from its own file only when the
-// player actually goes there. Versions 3/4 are rejected, per the standing rule.
-inline constexpr std::uint32_t kSaveVersion = 5u;
+// player actually goes there.
+// Version 6: THE MACRO WORLD travels too — the whole NpcPool table (verbatim flat
+// columns, [npc_pool.h] save_rows), the MacroSim clock/cursors/journeys
+// ([macro_sim.h] save_state) and the live FactionRelations matrix. The society you
+// return to is the one you left, not a reseed. Restored from the MAIN MENU, before
+// anything is embodied, so no body can hold a stale id. Earlier versions are
+// rejected, per the standing rule.
+inline constexpr std::uint32_t kSaveVersion = 6u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -177,6 +184,10 @@ struct SaveHeader {
     // the fields left with it.)
     std::uint32_t questCount = 0;         // 48  kQuestCount       (weak)
     std::uint32_t questFingerprint = 0;   // 52  quest title hash  (strong)
+    // Version 6 additions: byte lengths of the pool and macro-sim blobs that ride
+    // between the opened-container list and the faction matrix.
+    std::uint32_t poolBytes = 0;          // 56
+    std::uint32_t macroBytes = 0;         // 60
 };
 
 // Wire sizes. These are the ON-DISK footprints, which are deliberately NOT the
@@ -184,7 +195,7 @@ struct SaveHeader {
 // byte and no host byte order ever reaches the file. That is what keeps a save written
 // by the MSVC build readable by the Clang build and vice versa, and it is why the
 // `*Bytes` header fields above are a drift ALARM rather than a layout description.
-inline constexpr std::size_t kSaveHeaderWire = 56;   // 48 v1; +8 v2 quest checks
+inline constexpr std::size_t kSaveHeaderWire = 64;   // 48 v1; +8 v2 quests; +8 v6 pool/macro
 inline constexpr std::size_t kLedgerWire = 33;       // 2x8 + 4x4 + 1
 inline constexpr std::size_t kContractWire = 21;     // 4 + 2 + 3x4 + 3   (pad_ dropped)
 inline constexpr std::size_t kBookWire =
@@ -201,6 +212,13 @@ inline constexpr std::size_t kSaveFixedWire = kLedgerWire + kBookWire + kPlayerW
 // floor ([main.cpp] refresh_floor_containers cap) x 255 floor labels is 16,320; this
 // is four times that.
 inline constexpr std::uint32_t kMaxOpenedKeys = 65536u;
+// Ceilings for the v6 blobs, again before the CRC has vouched: the pool's honest
+// worst case is 2^20 rows x ~364 B ≈ 382 MB; macro state is a fraction of that.
+inline constexpr std::uint32_t kMaxPoolBytes = 512u * 1024u * 1024u;
+inline constexpr std::uint32_t kMaxMacroBytes = 64u * 1024u * 1024u;
+// The faction matrix rides fixed-size: 36 signed bytes ([faction_relations.h]).
+inline constexpr std::size_t kFactionWire =
+    kRelFactionCount * kRelFactionCount;
 
 // Ceiling on a floor file's snapshot blob before its checksum has vouched for the
 // header. The honest worst case is a checkerboard floor: 2 M mask-state runs (5 B
@@ -208,9 +226,12 @@ inline constexpr std::uint32_t kMaxOpenedKeys = 65536u;
 // bounds that with slack while still refusing a corrupt header asking for gigabytes.
 inline constexpr std::uint32_t kMaxSnapBytes = 256u * 1024u * 1024u;
 
-// Exact byte count `save_write` will produce for `openedCount` opened crates.
-inline constexpr std::size_t save_bytes_for(std::size_t openedCount) {
-    return kSaveHeaderWire + kSaveFixedWire + openedCount * kOpenedKeyWire;
+// Exact byte count `save_write` will produce for the given section sizes.
+inline constexpr std::size_t save_bytes_for(std::size_t openedCount,
+                                            std::size_t poolBytes = 0,
+                                            std::size_t macroBytes = 0) {
+    return kSaveHeaderWire + kSaveFixedWire + kFactionWire +
+           openedCount * kOpenedKeyWire + poolBytes + macroBytes;
 }
 
 // ---------------------------------------------------------------------------
@@ -336,9 +357,16 @@ struct SaveState {
     // resident floor's crates are live entities, so the ones from other floors exist
     // ONLY in this list — see `refresh_opened_containers`.
     std::vector<OpenedContainerKey> opened;
-    // Version 2: quest log persisted across F5/F9. Written after the carve log by
+    // Version 2: quest log persisted across F5/F9. Written last by
     // quest_log_write; read back by quest_log_read. Exactly kQuestLogWire bytes.
     QuestLog quests{};
+    // Version 6: the macro world. poolBlob is NpcPool::save_rows' verbatim table,
+    // macroBlob is MacroSim::save_state, and factions is the LIVE relations
+    // matrix (36 POD bytes). Restored at the earliest possible point — from the
+    // MAIN MENU, before anything is embodied — so no body can hold a stale id.
+    std::vector<std::uint8_t> poolBlob;
+    std::vector<std::uint8_t> macroBlob;
+    FactionRelations factions = kBaseFactionMatrix;
 };
 
 // ---------------------------------------------------------------------------

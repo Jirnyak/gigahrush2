@@ -644,4 +644,105 @@ MacroStats MacroSim::step(NpcPool& pool, const MacroParams& params,
     return stats_;
 }
 
+// ---------------------------------------------------------------------------
+// Wholesale state travel ([save.h] v6)
+// ---------------------------------------------------------------------------
+namespace {
+
+void ms_u8(std::vector<std::uint8_t>& o, std::uint8_t v) { o.push_back(v); }
+void ms_u16(std::vector<std::uint8_t>& o, std::uint16_t v) {
+    o.push_back(static_cast<std::uint8_t>(v & 0xFFu));
+    o.push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFu));
+}
+void ms_u32(std::vector<std::uint8_t>& o, std::uint32_t v) {
+    for (int i = 0; i < 4; ++i)
+        o.push_back(static_cast<std::uint8_t>((v >> (i * 8)) & 0xFFu));
+}
+void ms_u64(std::vector<std::uint8_t>& o, std::uint64_t v) {
+    for (int i = 0; i < 8; ++i)
+        o.push_back(static_cast<std::uint8_t>((v >> (i * 8)) & 0xFFu));
+}
+
+struct MsReader {
+    const std::uint8_t* p;
+    std::size_t n;
+    std::size_t at = 0;
+    bool ok = true;
+    std::uint8_t u8() {
+        if (at >= n) { ok = false; return 0; }
+        return p[at++];
+    }
+    std::uint16_t u16() {
+        const std::uint32_t a = u8(), b = u8();
+        return static_cast<std::uint16_t>(a | (b << 8));
+    }
+    std::uint32_t u32() {
+        std::uint32_t v = 0;
+        for (int i = 0; i < 4; ++i) v |= static_cast<std::uint32_t>(u8()) << (i * 8);
+        return v;
+    }
+    std::uint64_t u64() {
+        std::uint64_t v = 0;
+        for (int i = 0; i < 8; ++i) v |= static_cast<std::uint64_t>(u8()) << (i * 8);
+        return v;
+    }
+};
+
+} // namespace
+
+void MacroSim::save_state(std::vector<std::uint8_t>& out) const {
+    out.clear();
+    ms_u64(out, tick_);
+    ms_u64(out, dayTenths_);
+    ms_u32(out, migCursor_);
+    ms_u32(out, socCursor_);
+    ms_u32(out, static_cast<std::uint32_t>(ageDays_.size()));
+    for (std::uint16_t v : ageDays_) ms_u16(out, v);
+    ms_u32(out, static_cast<std::uint32_t>(traveling_.size()));
+    for (std::uint8_t v : traveling_) ms_u8(out, v);
+    ms_u32(out, static_cast<std::uint32_t>(journeys_.size()));
+    for (const Journey& j : journeys_) {
+        ms_u32(out, j.id);
+        ms_u16(out, static_cast<std::uint16_t>(j.toFloor));
+        ms_u16(out, j.gen);
+        ms_u64(out, j.etaTenths);
+    }
+}
+
+bool MacroSim::load_state(const std::uint8_t* bytes, std::size_t n) {
+    if (!bytes || n < 8 + 8 + 4 + 4 + 4) return false;
+    MsReader r{bytes, n};
+    const std::uint64_t tick = r.u64();
+    const std::uint64_t dayTenths = r.u64();
+    const std::uint32_t mig = r.u32();
+    const std::uint32_t soc = r.u32();
+    const std::uint32_t ages = r.u32();
+    if (ages > kNpcPoolSize) return false;
+    std::vector<std::uint16_t> ageDays(ages);
+    for (std::uint32_t i = 0; i < ages; ++i) ageDays[i] = r.u16();
+    const std::uint32_t trav = r.u32();
+    if (!r.ok || trav > kNpcPoolSize) return false;
+    std::vector<std::uint8_t> traveling(trav);
+    for (std::uint32_t i = 0; i < trav; ++i) traveling[i] = r.u8();
+    const std::uint32_t jn = r.u32();
+    if (!r.ok || jn > kNpcPoolSize) return false;
+    std::vector<Journey> journeys(jn);
+    for (std::uint32_t i = 0; i < jn; ++i) {
+        journeys[i].id = r.u32();
+        journeys[i].toFloor = static_cast<std::int16_t>(r.u16());
+        journeys[i].gen = r.u16();
+        journeys[i].etaTenths = r.u64();
+    }
+    if (!r.ok || r.at != n) return false;
+    tick_ = tick;
+    dayTenths_ = dayTenths;
+    migCursor_ = mig;
+    socCursor_ = soc;
+    ageDays_ = std::move(ageDays);
+    traveling_ = std::move(traveling);
+    journeys_ = std::move(journeys);
+    stats_ = MacroStats{};
+    return true;
+}
+
 } // namespace giga::game

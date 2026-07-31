@@ -37,6 +37,7 @@
 #include "game/floor_gen.h"
 #include "game/floor_spec.h"
 #include "game/floor_stream.h"
+#include "game/macro_sim.h"
 #include "game/npc_pool.h"
 #include "game/save.h"
 #include "sim/physics.h"
@@ -146,6 +147,11 @@ SaveState busy_run() {
     st.opened.push_back(OpenedContainerKey{-3, 18, 42, 1, 0});
     st.opened.push_back(OpenedContainerKey{-3, 114, 6, 1, 0});
     st.opened.push_back(OpenedContainerKey{2, 66, 66, 1, 0});
+
+    // Version 6: a matrix that has drifted from base — a grudge the save must
+    // remember. (The pool/macro blobs stay empty here so the wire pins stay
+    // arithmetic; macro_world_round_trips covers them with real objects.)
+    st.factions.add_mutual(0, 4, +30);
     return st;
 }
 
@@ -190,6 +196,12 @@ void same_run(const SaveState& a, const SaveState& b) {
     const std::size_t nk = a.opened.size() < b.opened.size() ? a.opened.size()
                                                              : b.opened.size();
     for (std::size_t i = 0; i < nk; ++i) CHECK(same_container(a.opened[i], b.opened[i]));
+
+    // Version 6: the macro-world sections. The blobs travel verbatim; the matrix
+    // is 36 POD bytes and must carry its runtime drift, not reset to base.
+    CHECK(a.poolBlob == b.poolBlob);
+    CHECK(a.macroBlob == b.macroBlob);
+    CHECK(std::memcmp(a.factions.v, b.factions.v, sizeof(a.factions.v)) == 0);
 }
 
 void wire_layout() {
@@ -197,11 +209,14 @@ void wire_layout() {
     // depends on the compiler is a save that cannot cross hosts.
     // Derived from the serializers, not measured from a run: 33 ledger + 79 book
     // (3 x 21 + 16) + 304 player (33 needs + 256 inventory + 12 + 3) + 308 quest log
-    // (20 rows x 14 + 8 earned + 5 x 4 counters) = 724, plus the 56-byte header.
-    static_assert(kSaveHeaderWire == 56);
+    // (20 rows x 14 + 8 earned + 5 x 4 counters) = 724, plus the fixed 36-byte
+    // faction matrix and the 64-byte header (48 v1 + 8 v2 quests + 8 v6 blobs).
+    static_assert(kSaveHeaderWire == 64);
     static_assert(kSaveFixedWire == 724);
-    static_assert(save_bytes_for(0) == 780);
-    static_assert(save_bytes_for(3) == 780 + 15);
+    static_assert(kFactionWire == 36);
+    static_assert(save_bytes_for(0) == 824);
+    static_assert(save_bytes_for(3) == 824 + 15);
+    static_assert(save_bytes_for(3, 100, 50) == 824 + 15 + 150);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -211,12 +226,10 @@ void wire_layout() {
     const SaveState st = busy_run();
     save_write(st, bytes);
     CHECK(bytes.size() == save_bytes_for(3));
-    // 795 B for a full run with three emptied crates. Worth writing down: the
-    // reflex on a save system is to assume megabytes, and the reason run.sav is
-    // tiny is that monsters and 950k NPC rows are reproducible from fixed seeds —
-    // and GEOMETRY lives in the per-floor files ([save.h] modular layout), never
-    // here.
-    CHECK(bytes.size() == 795);
+    // 839 B for a full run with three emptied crates and no macro blobs (those are
+    // variable-size and pinned by macro_world_round_trips). GEOMETRY lives in the
+    // per-floor files ([save.h] modular layout), never here.
+    CHECK(bytes.size() == 839);
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');
@@ -248,7 +261,9 @@ void wire_layout() {
     CHECK(h.itemCount == static_cast<std::uint32_t>(kItemCount));
     CHECK(h.mobKindCount == static_cast<std::uint32_t>(kMobKindCount));
     CHECK(h.openedCount == 3u);
-    CHECK(h.payloadBytes == kSaveFixedWire + 3u * kOpenedKeyWire);
+    CHECK(h.poolBytes == 0u);
+    CHECK(h.macroBytes == 0u);
+    CHECK(h.payloadBytes == kSaveFixedWire + kFactionWire + 3u * kOpenedKeyWire);
 
     // A save written by the 120 Hz build STILL LOADS, and this is deliberate rather
     // than an oversight. Nothing currently in the payload is tick-derived — the clock is
@@ -316,6 +331,95 @@ void round_trip() {
     CHECK(dst.player.floorNumber == -50);
     CHECK(dst.ledger.deepestFloor == -50);
     CHECK(dst.opened[0].floor == -3);
+}
+
+// Version 6: the macro world is a flat table, so it saves flat. A small society
+// with every column exercised round-trips through NpcPool::save_rows/load_rows —
+// including a dead row's generation, the player flag, names, and the rebuilt floor
+// buckets — and the MacroSim clock/journeys through save_state/load_state.
+void macro_world_round_trips() {
+    NpcPool pool;
+    pool.init();
+    for (std::uint32_t i = 0; i < 5; ++i) {
+        const NpcId id = pool.spawn();
+        CHECK(id == i);
+        pool.faction(id) = static_cast<std::uint16_t>(i % kFactionCount);
+        pool.hp(id) = static_cast<std::int16_t>(40 + i);
+        pool.max_hp(id) = static_cast<std::int16_t>(100 + i);
+        pool.set_floor(id, (i % 2) ? -8 : 0);
+        pool.cx(id) = static_cast<std::uint8_t>(10 + i);
+        pool.cy(id) = static_cast<std::uint8_t>(20 + i);
+        pool.cz(id) = static_cast<std::uint8_t>(1 + i);
+        pool.height_mm(id) = static_cast<std::uint16_t>(1600 + 10 * i);
+        pool.age(id) = static_cast<std::uint8_t>(20 + i);
+        pool.sex(id) = static_cast<std::uint8_t>(1 + i % 2);
+        pool.level(id) = static_cast<std::uint8_t>(i);
+        pool.attrs(id)[3] = static_cast<std::uint8_t>(7 + i);
+        pool.needs(id).food = 10.0f * static_cast<float>(i) + 0.25f;
+        pool.needs(id).seeded = 1;
+        pool.inventory(id).slots[0] =
+            ItemSlot{static_cast<ItemId>(1 + i), static_cast<std::uint16_t>(2)};
+        pool.set_name(id, "Вася", "Пупкин");
+    }
+    pool.set_player(3, true);
+    pool.kill(2); // a dead row whose bumped generation must travel
+
+    std::vector<std::uint8_t> blob;
+    pool.save_rows(blob);
+    NpcPool back;
+    back.init();
+    CHECK(back.load_rows(blob.data(), blob.size()));
+    CHECK(back.count() == pool.count());
+    CHECK(back.alive() == pool.alive());
+    for (NpcId id = 0; id < pool.count(); ++id) {
+        CHECK(back.alive(id) == pool.alive(id));
+        CHECK(back.is_player(id) == pool.is_player(id));
+        CHECK(!back.embodied(id)); // bodies never survive a save
+        CHECK(back.faction(id) == pool.faction(id));
+        CHECK(back.hp(id) == pool.hp(id));
+        CHECK(back.max_hp(id) == pool.max_hp(id));
+        CHECK(back.floor(id) == pool.floor(id));
+        CHECK(back.cx(id) == pool.cx(id));
+        CHECK(back.age(id) == pool.age(id));
+        CHECK(back.sex(id) == pool.sex(id));
+        CHECK(back.level(id) == pool.level(id));
+        CHECK(back.attrs(id)[3] == pool.attrs(id)[3]);
+        CHECK(back.height_mm(id) == pool.height_mm(id));
+        CHECK(back.generation(id) == pool.generation(id));
+        CHECK(back.needs(id).food == pool.needs(id).food);
+        CHECK(back.needs(id).seeded == pool.needs(id).seeded);
+        CHECK(std::memcmp(&back.inventory(id), &pool.inventory(id),
+                          sizeof(Inventory)) == 0);
+        CHECK(std::memcmp(back.name(id).data(), pool.name(id).data(),
+                          back.name(id).size()) == 0);
+        CHECK(std::memcmp(back.surname(id).data(), pool.surname(id).data(),
+                          back.surname(id).size()) == 0);
+    }
+    // The floor bucket index was REBUILT, not copied: rosters agree as sets.
+    CHECK(back.floor_bucket(0).size() == pool.floor_bucket(0).size());
+    CHECK(back.floor_bucket(-8).size() == pool.floor_bucket(-8).size());
+    // A second load onto a used pool is refused (the contract is a fresh init).
+    CHECK(!back.load_rows(blob.data(), blob.size()));
+    // Truncation is refused before anything is written.
+    NpcPool third;
+    third.init();
+    CHECK(!third.load_rows(blob.data(), blob.size() - 1));
+
+    // MacroSim: step once so the clock and cursors are non-trivial, then travel.
+    MacroSim ms;
+    ms.init();
+    const std::int16_t labels[2] = {0, -8};
+    ms.set_floors(labels, 2);
+    ms.step(pool, MacroParams{});
+    std::vector<std::uint8_t> mblob;
+    ms.save_state(mblob);
+    MacroSim ms2;
+    ms2.init();
+    CHECK(ms2.load_state(mblob.data(), mblob.size()));
+    CHECK(ms2.tick() == ms.tick());
+    CHECK(ms2.day_tenths() == ms.day_tenths());
+    CHECK(ms2.in_transit() == ms.in_transit());
+    CHECK(!ms2.load_state(mblob.data(), mblob.size() - 1));
 }
 
 // The modular save's whole point: a floor FILE is state, stamped back verbatim, so
@@ -1566,6 +1670,7 @@ void candidate_slot_recycled() {
 static void test_saveload_all() {
     saveload_test::wire_layout();
     saveload_test::round_trip();
+    saveload_test::macro_world_round_trips();
     saveload_test::floor_file_round_trips();
     saveload_test::weak_check_vs_strong_check();
     saveload_test::rejects_the_rest();

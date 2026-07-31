@@ -177,6 +177,9 @@ void visit_header(Ar& ar, H& h) {
     // Version 2 fields: quest table weak + strong check.
     ar.u32(h.questCount);
     ar.u32(h.questFingerprint);
+    // Version 6 fields: macro-world blob lengths.
+    ar.u32(h.poolBytes);
+    ar.u32(h.macroBytes);
 }
 
 template <class Ar, class L>
@@ -334,14 +337,17 @@ const char* save_error_text(SaveError e) {
 // a `SizeMismatch` rejection of a save this very build just wrote.
 static_assert(sizeof(SaveHeader) == kSaveHeaderWire,
               "SaveHeader happens to have no padding; if that changes, the wire size is "
-              "still 56 and only this assert needs relaxing");
+              "still 64 and only this assert needs relaxing");
 static_assert(kLedgerWire == 8 + 8 + 4 + 4 + 4 + 4 + 1);
 static_assert(kContractWire == 4 + 2 + 4 + 4 + 4 + 1 + 1 + 1);
 static_assert(kNeedsWire == 8 * 4 + 1);
 static_assert(kInventoryWire == 64 * 4);
 // kSaveFixedWire now includes kQuestLogWire (308 B: 20 rows x 14 B + 8 + 20).
 static_assert(kSaveFixedWire == 724);
-static_assert(save_bytes_for(0) == 780);
+static_assert(kFactionWire == 36);
+// header 64 + fixed 724 + faction 36 = 824 for an empty run.
+static_assert(save_bytes_for(0) == 824);
+static_assert(save_bytes_for(0, 100, 50) == 824 + 150);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two
@@ -364,6 +370,11 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     visit_book(bw, st.book);
     visit_player(bw, st.player);
     for (const OpenedContainerKey& k : st.opened) visit_key(bw, k);
+    // Version 6: the macro world — pool table, macro-sim state, faction matrix.
+    body.insert(body.end(), st.poolBlob.begin(), st.poolBlob.end());
+    body.insert(body.end(), st.macroBlob.begin(), st.macroBlob.end());
+    for (std::size_t i = 0; i < kFactionWire; ++i)
+        bw.u8(static_cast<std::uint8_t>(st.factions.v[i]));
     // Version 2: quest log appended last. Geometry never rides in run.sav — it
     // lives in the per-floor files ([save.h] modular layout).
     quest_log_write(st.quests, body);
@@ -377,6 +388,8 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     h.itemFingerprint = item_table_fingerprint();
     h.mobFingerprint = mob_table_fingerprint();
     h.openedCount = static_cast<std::uint32_t>(st.opened.size());
+    h.poolBytes = static_cast<std::uint32_t>(st.poolBlob.size());
+    h.macroBytes = static_cast<std::uint32_t>(st.macroBlob.size());
     h.ledgerBytes = static_cast<std::uint16_t>(sizeof(RunLedger));
     h.bookBytes = static_cast<std::uint16_t>(sizeof(ContractBook));
     h.needsBytes = static_cast<std::uint16_t>(sizeof(Needs));
@@ -436,8 +449,13 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     // cannot ask for a large allocation on the strength of numbers the checksum has not
     // vouched for yet.
     if (h.openedCount > kMaxOpenedKeys) return fail(SaveError::SizeMismatch);
+    if (h.poolBytes > kMaxPoolBytes) return fail(SaveError::SizeMismatch);
+    if (h.macroBytes > kMaxMacroBytes) return fail(SaveError::SizeMismatch);
     const std::size_t want =
-        kSaveFixedWire + static_cast<std::size_t>(h.openedCount) * kOpenedKeyWire;
+        kSaveFixedWire + kFactionWire +
+        static_cast<std::size_t>(h.openedCount) * kOpenedKeyWire +
+        static_cast<std::size_t>(h.poolBytes) +
+        static_cast<std::size_t>(h.macroBytes);
     if (static_cast<std::size_t>(h.payloadBytes) != want)
         return fail(SaveError::SizeMismatch);
     if (n - kSaveHeaderWire < static_cast<std::size_t>(h.payloadBytes))
@@ -461,6 +479,22 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     visit_player(r, tmp.player);
     tmp.opened.resize(static_cast<std::size_t>(h.openedCount));
     for (std::size_t i = 0; i < tmp.opened.size(); ++i) visit_key(r, tmp.opened[i]);
+    // Version 6: the macro blobs, verbatim (decoded by their owners against live
+    // objects, which a parse must not require), then the faction matrix.
+    {
+        const std::uint8_t* pool = bytes + kSaveHeaderWire + r.at();
+        r.skip(static_cast<std::size_t>(h.poolBytes));
+        const std::uint8_t* macro = bytes + kSaveHeaderWire + r.at();
+        r.skip(static_cast<std::size_t>(h.macroBytes));
+        if (!r.ok()) return fail(SaveError::TooShort);
+        tmp.poolBlob.assign(pool, pool + h.poolBytes);
+        tmp.macroBlob.assign(macro, macro + h.macroBytes);
+        for (std::size_t i = 0; i < kFactionWire; ++i) {
+            std::uint8_t b = 0;
+            r.u8(b);
+            tmp.factions.v[i] = static_cast<std::int8_t>(b);
+        }
+    }
     if (!r.ok()) return fail(SaveError::TooShort);
     // Version 2: parse quest log from the remaining bytes (exactly kQuestLogWire).
     {

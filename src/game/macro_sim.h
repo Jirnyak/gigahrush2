@@ -298,6 +298,15 @@ public:
     MacroStats step(NpcPool& pool, const MacroParams& params,
                     const FactionRelations* factions = nullptr);
 
+    // --- wholesale state travel ([save.h] v6) -------------------------------
+    // Everything step() mutates that cannot be re-derived: the coarse clock,
+    // both ring cursors, the per-record age fraction, the traveling bits and
+    // the in-flight journeys. floors_/floorIdx_ do NOT travel — rebuild with
+    // set_floors_from() after load, exactly like at boot. stats_ is a per-tick
+    // report and regenerates on the next step.
+    void save_state(std::vector<std::uint8_t>& out) const;
+    bool load_state(const std::uint8_t* bytes, std::size_t n);
+
     const MacroStats& stats() const { return stats_; }
     std::uint64_t tick() const { return tick_; }
     std::uint64_t day_tenths() const { return dayTenths_; }

@@ -481,11 +481,12 @@ if(GIGA_BUILD_TESTS)
     giga_target_flags(game_test OFF)
     add_test(NAME game_test COMMAND game_test)
     set_tests_properties(game_test PROPERTIES
-    # 219292 -> 219235 (-57) on 2026-07-31: save v5, the MODULAR layout — the v3/v4
-    # carve-log and embedded-snapshot suites left with their formats; geometry now
-    # rides per-floor files, pinned by floor_file_round_trips (carve, write, carve
-    # again, stamp a twin: bit-identical to the save moment; five rejection gates).
-        PASS_REGULAR_EXPRESSION "game_test: 219235 checks, 0 failures")
+    # 219235 -> 219364 (+129) on 2026-07-31: save v6 — the macro world travels.
+    # macro_world_round_trips exercises NpcPool::save_rows/load_rows column by
+    # column (dead row's generation, player flag, names, rebuilt buckets) and the
+    # MacroSim clock/journeys; wire pins moved to the 64-byte header + the fixed
+    # 36-byte faction matrix.
+        PASS_REGULAR_EXPRESSION "game_test: 219364 checks, 0 failures")
 
     # Text gate for the AGENTS.md rules that no compiler enforces on every host.
     # The load-bearing one is no-exceptions: MSVC's STL is unsupported under
