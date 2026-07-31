@@ -1704,8 +1704,14 @@ int main(int argc, char** argv) {
     // switch — but read the note at the ai_step call site first, because it also needs
     // ai_init to attach AiBrain and ai_release to clear the token safely.
     game::AiConfig aiCfg;
-    aiCfg.enabled = true;
+    aiCfg.enabled = true;   // utility AI live; brains attached in finish_floor_nav
+    aiCfg.memory = true;    // second axis: needs a real AiMemory* at ai_step
+    // Demand column owned HERE ([ai.h] "No global state"). Id-indexed so an
+    // elevator fold keeps the row: the cold NpcId is the key, not the body.
+    // Passed to every ai_step; null would be bit-for-bit the pre-memory pass.
+    game::AiMemory aiMem;
     game::AiTick aiTick{};
+    std::uint64_t lastAimemLogTick = ~0ull;
     game::CraftingState crafting{};
     game::craft_init(crafting);
     std::uint32_t crafted = 0, scrapped = 0, recipesLearned = 0;
@@ -1862,6 +1868,19 @@ int main(int argc, char** argv) {
             // stamps it back. A transition is a load screen; I/O is
             // sanctioned here. [save.h]
             write_floor_file(stack.layer(leaveLayer), currentFloor);
+            // AIMEM: clear MotionOwner::Ai on the leaving floor before the
+            // streamer recycles the layer. unload() also releases; this is the
+            // keyboard/--shot leave seam so a ride without an immediate unload
+            // still cannot strand tokens. Idempotent. [ai.h]
+            {
+                const std::uint32_t released =
+                    game::ai_release(reg, leaveLayer);
+                std::fprintf(stderr,
+                             "[aimem] LEAVE floor=%d layer=%u released=%u "
+                             "mem_rows=%u\n",
+                             currentFloor, static_cast<unsigned>(leaveLayer),
+                             released, aiMem.rows());
+            }
         }
         game::RideResult ride =
             absolute ? streamer.teleport(stack, registry, reg, pool, player,
@@ -2300,24 +2319,38 @@ int main(int argc, char** argv) {
                 // wander_step 300, and BOTH in one tick ZERO times; wander wrote 0 times
                 // while the token was held and 600 once delegated. [ai.h]
                 //
-                // `aiCfg.enabled` is FALSE, so this is one branch per tick — ai.cpp returns
-                // before it even takes the view. The call is live anyway, deliberately: it
-                // makes the wiring real instead of a comment, it consumes `danger` and
-                // `activeGrid` (which were live C4189 warnings for exactly as long as this
-                // stayed parked), and it reduces switching the AI on to editing ONE bool
-                // rather than re-deriving a call signature months from now.
-                //
-                // Before flipping it: `ai_init` must attach AiBrain to the floor's bodies
-                // (see the load path), and `ai_release` must run when clearing the flag on a
-                // live floor — the token is persistent state, so a body left holding
-                // MotionOwner::Ai would be skipped by wander_step forever and stand still.
+                // `aiCfg.enabled` is TRUE and `aiMem` is passed every tick. Memory is the
+                // demand column owned above; null would disable recall/record bit-for-bit.
+                // `ai_init` attaches brains in finish_floor_nav; `ai_release` runs on floor
+                // leave (do_ride + --shot travel) and again inside FloorStreamer::unload.
+                // Clearing enabled mid-run without release would strand MotionOwner::Ai
+                // and freeze bodies under wander_step — that trap is what AIMEM closes.
                 // NOTE the `activeLayer` argument: the parked call was
                 // `ai_step(reg, pool, danger, activeGrid, simNow, kSimDt)` against an older
                 // SIX-argument signature with no layer, so it would not even have compiled
                 // if anyone had uncommented it. That is what "parked until adapted" was
                 // really hiding — a commented-out call is not a call, and nothing checks it.
                 aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
-                                       kSimDt, aiCfg);
+                                       kSimDt, aiCfg, &aiMem);
+                // AIMEM proof trail: once nav has brains and AI is on, emit a
+                // compact stderr pulse so a --shot harness can assert the store
+                // is live (rows/writes/recalled) without parsing the HUD.
+                if (aiCfg.enabled && (lastAimemLogTick == ~0ull ||
+                                     simTick - lastAimemLogTick >= 60ull)) {
+                    lastAimemLogTick = simTick;
+                    std::fprintf(stderr,
+                                 "[aimem] STEP tick=%llu layer=%u seen=%u replan=%u "
+                                 "own_ai=%u own_wander=%u recall=%u filed=%u fled=%u "
+                                 "rows=%u writes=%u coal=%u evict=%u bytes=%zu\n",
+                                 static_cast<unsigned long long>(simTick),
+                                 static_cast<unsigned>(activeLayer),
+                                 aiTick.considered, aiTick.replanned,
+                                 aiTick.aiOwned, aiTick.wanderOwned,
+                                 aiTick.recalled, aiTick.remembered,
+                                 aiTick.memoryFled, aiMem.rows(),
+                                 aiMem.writes(), aiMem.coalesced(),
+                                 aiMem.evictions(), aiMem.resident_bytes());
+                }
                 controller_step(reg, kSimDt);
                 // Steer the crowd BEFORE physics: wander writes horizontal
                 // velocity, physics integrates it and resolves collision.
@@ -4682,6 +4715,19 @@ int main(int argc, char** argv) {
                         // Same departure floor-file write as the keyboard
                         // path — two travel sites, one law. [save.h]
                         write_floor_file(stack.layer(leaveLayer), currentFloor);
+                        // Same AIMEM leave release as do_ride. Two travel
+                        // sites; a fix that touches only one proves nothing
+                        // under --shot --ride. [ai.h]
+                        {
+                            const std::uint32_t released =
+                                game::ai_release(reg, leaveLayer);
+                            std::fprintf(stderr,
+                                         "[aimem] LEAVE floor=%d layer=%u "
+                                         "released=%u mem_rows=%u\n",
+                                         currentFloor,
+                                         static_cast<unsigned>(leaveLayer),
+                                         released, aiMem.rows());
+                        }
                     }
                     game::RideResult r = streamer.travel(
                         stack, registry, reg, pool, player, currentFloor, -1,

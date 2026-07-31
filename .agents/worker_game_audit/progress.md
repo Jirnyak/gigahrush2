@@ -91,3 +91,21 @@ pin superseded by CORP1 pin 215499 this cycle
 - **Don't realize:** mults stack (zh×web); Slowed CAP + StatusSet coexist.
 - **Implemented-not-integrated:** combat→carve; AiMemory floor-leave release.
 - **Next execute:** commit pathspec → pull --rebase → push → CARVE (off render).
+
+## Cycle AIMEM 2026-07-31 (game/app domain — parallel to Zhirnyak padic/render)
+
+**Domain split:** Zhirnyak owns `src/render/**` + padic + door seed + `--floor`. This agent owns game/app AI/combat/status/corps wiring. No cross-touch.
+
+**Done:**
+- `game::AiMemory aiMem` owned in main (no global); `aiCfg.memory = true`
+- `ai_step(..., &aiMem)` every sim tick; periodic `[aimem] STEP` stderr (seen/replan/rows/writes/coal)
+- `ai_release` on: keyboard `do_ride` leave, `--shot` travel leave, `FloorStreamer::unload` before fold_back
+- Proof harness `shots/_run_aimem_proof.py`: 900 frames `--ride 1`
+- **PROOF=GREEN** exit=0 max_seen=419 STEP=37 LEAVE=1 RELEASE=1 brains attached after async nav bake; mem_rows=4096 writes>=2 coal>=8 PNG ok
+- Note: released=0 on leave is correct when brains never held MotionOwner::Ai (own_ai=0); contract still fires; memory column survives floor fold via NpcId
+
+**Files:** src/app/main.cpp, src/game/floor_stream.cpp, shots/_run_aimem_proof.py, BACKLOG, progress
+
+**Not touched:** src/render/**, shaders/**
+
+**Next (this agent, non-render):** TEX1 missing ktx2 roughness (logged in aimem stderr), CNT1 status.csv thin, scan unintegrated game systems; step-assist is physics — coordinate if needed. Zhirnyak continues padic tails (RAM sandwich, step 0.25, door tick load).

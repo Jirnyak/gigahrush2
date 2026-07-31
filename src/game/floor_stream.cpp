@@ -1,6 +1,9 @@
 #include "game/floor_stream.h"
 
+#include <cstdio>
+
 #include "ecs/components.h"   // giga::Transform
+#include "game/ai.h"          // ai_release on unload (MotionOwner token)
 #include "game/embody.h"      // embody, embody_as_player, fold_back, NpcRef
 #include "game/floor_gen.h"   // generate_floor
 #include "game/nav_cache.h"   // nav_cache_name, save/load_nav_cache
@@ -296,6 +299,19 @@ void FloorStreamer::unload(LevelStack& stack, FloorRegistry& reg, Registry& ecs,
     FloorModule& fm = modules_[m];
     LayerId layer = reg.layer_of(m);
     if (layer == kInvalidLayer) return; // already cold
+
+    // Hand MotionOwner::Ai tokens back BEFORE fold_back destroys the bodies.
+    // fold_back destroys the entity (AiBrain dies with it), but ai_release is the
+    // documented unload contract ([ai.h]): if a body were kept alive across a
+    // layer recycle without destroy, wander_step would skip it forever. Cheap,
+    // idempotent, and the stderr line is the gameplay proof AIMEM needs.
+    {
+        const std::uint32_t released = ai_release(ecs, layer);
+        std::fprintf(stderr,
+                     "[aimem] RELEASE floor=%d layer=%u bodies=%u released=%u\n",
+                     number, static_cast<unsigned>(layer),
+                     static_cast<unsigned>(fm.bodies.size()), released);
+    }
 
     // Fold every live body back into its cold record (position persists in the
     // row). A handle may already be invalid — e.g. the player's old body, which a

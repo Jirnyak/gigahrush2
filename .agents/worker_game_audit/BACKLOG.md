@@ -23,7 +23,7 @@ Updated: 2026-07-31 ~16:10 Samara
 ## OPEN / next (priority)
 | Pri | ID | Item | Pathspec | Notes |
 |-----|----|------|----------|-------|
-| P1 | AIMEM | AiMemory tested; ai_release on floor leave / pass to ai_step may be incomplete | src/game/ai* + floor_stream | check embody/fold_back release |
+| P1 | AIMEM | AiMemory tested; ai_release on floor leave / pass to ai_step wired in main+floor_stream; proven GREEN 2026-07-31| src/game/ai* + floor_stream | check embody/fold_back release |
 | P2 | TEX1 | 3 missing roughness ktx2 (rubber_tiles / rusty_metal_03 / rusty_corrugated_iron) | data/textures | non-fatal; albedo+normal OK; roughness mask 0x3400 (3/6); **no mock ktx2** |
 | P2 | CNT1 | Content expand status/craft from old giga | data/*.csv + tables | thin: status.csv (~6 rows); port real rows from C:\hades\gigahrush |
 | P2 | PAR1 | Re-grep travel sites after every main.cpp foreign commit | src/app/main.cpp read-only unless hole | line drift from light-grid/loot-emissive; WT often foreign-dirty |
@@ -152,3 +152,9 @@ Design: combat NEVER mutates grid — only proposes; app owns carve_sphere (same
 ```
 
 Feature without gameplay = DECLINED. CARVE CLOSED 2026-07-31 ~16:10 — real-game proof GREEN.
+
+
+## CLOSED 2026-07-31 AIMEM
+- AiMemory owned in main; passed to ai_step
+- ai_release on do_ride leave, --shot travel, FloorStreamer::unload
+- Proof: shots/_run_aimem_proof.py PROOF=GREEN max_seen=419 LEAVE+RELEASE mem_rows=4096
