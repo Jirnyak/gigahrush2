@@ -25,6 +25,7 @@
 // Pure game-layer + core: no SDL/Vulkan/ImGui, headless-testable in game_test.
 #pragma once
 
+#include <vector>
 #include "game/floor_spec.h" // FloorKind, FloorSpec
 
 namespace giga {
@@ -51,5 +52,9 @@ bool register_padic_floor(FloorCatalog& cat);
 // floor_gen.cpp's generator table.
 void generate_padic_floor(World& world, int number, const FloorSpec& spec,
                           unsigned seed);
+
+// Retrieve doorway locations for the Padic geometry (called by floor_doorways).
+struct Doorway;
+std::uint32_t padic_doorways(int number, unsigned seed, std::vector<Doorway>& out);
 
 } // namespace giga::game

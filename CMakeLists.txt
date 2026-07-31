@@ -481,10 +481,10 @@ if(GIGA_BUILD_TESTS)
     giga_target_flags(game_test OFF)
     add_test(NAME game_test COMMAND game_test)
     set_tests_properties(game_test PROPERTIES
-    # 216040 -> 219276 (+3236) on 2026-07-31: merged origin/main's loot track
-    # (CORP1 corpse interact + loottable truth suites) on top of the carve-log v3
-    # count. Measured from ./build/game_test after the merge, 0 failures.
-        PASS_REGULAR_EXPRESSION "game_test: 219276 checks, 0 failures")
+    # 219276 -> 219292 (+16) on 2026-07-31: save v4 — the active-floor snapshot
+    # (wire pins moved to the 64-byte header, plus floor_snapshot_uncarves: carve,
+    # F5, carve again, stamp back, bit-identical grid).
+        PASS_REGULAR_EXPRESSION "game_test: 219292 checks, 0 failures")
 
     # Text gate for the AGENTS.md rules that no compiler enforces on every host.
     # The load-bearing one is no-exceptions: MSVC's STL is unsupported under

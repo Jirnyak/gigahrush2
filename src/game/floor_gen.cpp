@@ -474,6 +474,10 @@ std::uint16_t floor_room_mask(FloorKind kind, int number, int rx, int ry) {
 
 std::uint32_t floor_doorways(int number, const FloorSpec& spec, unsigned seed,
                              std::vector<Doorway>& out) {
+    if (spec.kind == FloorKind::Padic) {
+        return padic_doorways(number, seed, out);
+    }
+    
     std::uint32_t n = 0;
     for_each_doorway(
         geom_for(spec.kind), floor_seed(seed, number),

@@ -4,6 +4,7 @@
 #include "world/lattice.h"
 #include "world/types.h"
 #include "world/world.h"
+#include "game/floor_gen.h"
 #include <vector>
 
 namespace giga::game {
@@ -84,6 +85,23 @@ void split_room(int x, int y, int w, int h, std::uint32_t& rng, std::vector<Room
     }
 }
 
+
+template <class Fn>
+void for_each_padic_doorway(unsigned seed, int number, Fn&& fn) {
+    std::uint32_t rng = seed ^ 0x7AD1C;
+    for (int z = 0; z < kMacroDim; z += 3) {
+        std::vector<Room> rooms;
+        split_room(0, 0, 128, 60, rng, rooms);
+        split_room(0, 68, 128, 128 - 68, rng, rooms);
+        
+        for (const auto& r : rooms) {
+            fn(wrap_macro(r.x + r.w / 2), wrap_macro(r.y), z, 2, 1);
+            fn(wrap_macro(r.x + r.w / 2), wrap_macro(r.y + r.h - 1), z, 2, 1);
+            fn(wrap_macro(r.x), wrap_macro(r.y + r.h / 2), z, 2, 0);
+            fn(wrap_macro(r.x + r.w - 1), wrap_macro(r.y + r.h / 2), z, 2, 0);
+        }
+    }
+}
 void draw_thin_wall_x(MacroGrid& g, int mx, int my, int base_z, int length) {
     for (int l = 0; l < length; ++l) {
         int x = wrap_macro(mx + l);
@@ -256,6 +274,22 @@ void generate_padic_floor(World& world, int number, const FloorSpec& spec, unsig
     }
 
     (void)spec.population;
+}
+
+
+std::uint32_t padic_doorways(int number, unsigned seed, std::vector<Doorway>& out) {
+    std::uint32_t n = 0;
+    for_each_padic_doorway(seed, number, [&](int cx, int cy, int cz, int h, int axis) {
+        out.push_back(Doorway{
+            static_cast<std::uint8_t>(cx),
+            static_cast<std::uint8_t>(cy),
+            static_cast<std::uint8_t>(cz),
+            static_cast<std::uint8_t>(h),
+            static_cast<std::uint8_t>(axis)
+        });
+        ++n;
+    });
+    return n;
 }
 
 } // namespace giga::game

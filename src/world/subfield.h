@@ -31,6 +31,7 @@
 // path ([jirnyak.md] §3: no allocation inside Tick()). reserve_pages() lets a
 // generator prepay.
 #pragma once
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -122,6 +123,15 @@ public:
     }
 
     void reserve_pages(std::size_t n) { pages_.reserve(n); }
+
+    // Return EVERY cell to uniform and release the pages. For wholesale state
+    // replacement (a floor snapshot stamping over a live world) — not a per-tick
+    // operation.
+    void clear() {
+        std::fill(pageOf_.begin(), pageOf_.end(), kNoPage);
+        pages_.clear();
+        free_.clear();
+    }
 
     // --- budget introspection ----------------------------------------------
     std::size_t pages_in_use() const { return pages_.size() - free_.size(); }

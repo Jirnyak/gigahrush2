@@ -2805,6 +2805,12 @@ int main(int argc, char** argv) {
                         // every save; clearing would forget the other nine. [save.h]
                         game::refresh_opened_containers(reg, activeLayer, currentFloor,
                                                         runState.opened);
+                        // v4: the resident floor's exact grid, verbatim. This is
+                        // what lets a same-floor F9 UN-carve — state, not
+                        // history. Non-resident floors stay op-log territory.
+                        // [save.h]
+                        game::snapshot_floor(stack.layer(activeLayer),
+                                             currentFloor, runState.floorSnap);
                         if (write_run(runState, kSavePath))
                             std::snprintf(saveLine, sizeof(saveLine),
                                           "saved: floor %d, %u rub, %u crates",
@@ -2890,12 +2896,27 @@ int main(int argc, char** argv) {
                                         runState.opened.size());
                                     refresh_floor_mobs(reg, stack.layer(nl),
                                                        currentFloor, nl);
+                                    // v4: stamp the saved grid back BEFORE
+                                    // door_build, so the fresh DoorSet re-stamps
+                                    // its leaves over the frozen door state.
+                                    // A decode failure is CRC-vouched bytes with
+                                    // a writer bug — loud, and the carve replay
+                                    // below still restores the holes. [save.h]
+                                    if (!runState.floorSnap.empty() &&
+                                        !game::apply_floor_snapshot(
+                                            stack.layer(nl),
+                                            runState.floorSnap.data(),
+                                            runState.floorSnap.size()))
+                                        std::fprintf(stderr,
+                                                     "[load] floor snapshot "
+                                                     "refused; carve log only\n");
                                     if (currentSpec)
                                         doorsBuilt = game::door_build(
                                             stack.layer(nl), doors, currentFloor,
                                             *currentSpec, kDoorSeed);
-                                    // Carve replay: the loaded log's slice for
-                                    // this floor, before the bake. [save.h]
+                                    // Carve replay: idempotent over the snapshot,
+                                    // and the whole story if it was refused.
+                                    // [save.h]
                                     game::carve_replay(
                                         stack.layer(nl), runState.carves.data(),
                                         runState.carves.size(), currentFloor,
@@ -2935,19 +2956,36 @@ int main(int argc, char** argv) {
                                 reopened = game::apply_opened_containers(
                                     reg, activeLayer, currentFloor,
                                     runState.opened.data(), runState.opened.size());
-                                // Same-floor carve replay: covers the fresh-boot
-                                // case (floor was built with an empty log before
-                                // the file was read); idempotent mid-session —
-                                // an op already applied removes nothing. What it
-                                // cannot do is UN-carve holes made after the
-                                // save point; those heal on the next floor
-                                // rebuild. [save.h]
-                                if (game::carve_replay(
+                                // v4: the snapshot stamps the saved grid back
+                                // VERBATIM — including un-carving holes made
+                                // after the F5, which no op replay can do.
+                                // door_build after it re-stamps door leaves so
+                                // the DoorSet and the restored cells agree
+                                // (doors reset on load, same as cross-floor).
+                                bool stamped = false;
+                                if (!runState.floorSnap.empty()) {
+                                    stamped = game::apply_floor_snapshot(
                                         stack.layer(activeLayer),
-                                        runState.carves.data(),
-                                        runState.carves.size(), currentFloor,
-                                        carveScratch, carveResult) > 0)
-                                    cubePass.invalidate();
+                                        runState.floorSnap.data(),
+                                        runState.floorSnap.size());
+                                    if (!stamped)
+                                        std::fprintf(stderr,
+                                                     "[load] floor snapshot "
+                                                     "refused; carve log only\n");
+                                    else if (currentSpec)
+                                        doorsBuilt = game::door_build(
+                                            stack.layer(activeLayer), doors,
+                                            currentFloor, *currentSpec,
+                                            kDoorSeed);
+                                }
+                                // Fresh-boot fallback and corrupt-snapshot
+                                // salvage; idempotent over the snapshot. [save.h]
+                                const std::int32_t rem = game::carve_replay(
+                                    stack.layer(activeLayer),
+                                    runState.carves.data(),
+                                    runState.carves.size(), currentFloor,
+                                    carveScratch, carveResult);
+                                if (stamped || rem > 0) cubePass.invalidate();
                             }
 
                             game::PlacedCell placed{};

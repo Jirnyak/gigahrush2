@@ -138,6 +138,16 @@ public:
         std::memcpy(&v, &bits, sizeof(v));
     }
 
+    // Jump over `k` bytes handled out-of-band (the snapshot blob, the quest log).
+    void skip(std::size_t k) {
+        if (n_ - at_ < k) {
+            ok_ = false;
+            at_ = n_;
+            return;
+        }
+        at_ += k;
+    }
+
     bool ok() const { return ok_; }
     std::size_t at() const { return at_; }
 
@@ -169,6 +179,8 @@ void visit_header(Ar& ar, H& h) {
     ar.u32(h.questFingerprint);
     // Version 3 field: carve log length.
     ar.u32(h.carveCount);
+    // Version 4 field: active-floor snapshot blob length.
+    ar.u32(h.snapBytes);
 }
 
 template <class Ar, class L>
@@ -340,7 +352,7 @@ const char* save_error_text(SaveError e) {
 // a `SizeMismatch` rejection of a save this very build just wrote.
 static_assert(sizeof(SaveHeader) == kSaveHeaderWire,
               "SaveHeader happens to have no padding; if that changes, the wire size is "
-              "still 60 and only this assert needs relaxing");
+              "still 64 and only this assert needs relaxing");
 static_assert(kLedgerWire == 8 + 8 + 4 + 4 + 4 + 4 + 1);
 static_assert(kContractWire == 4 + 2 + 4 + 4 + 4 + 1 + 1 + 1);
 static_assert(kNeedsWire == 8 * 4 + 1);
@@ -348,9 +360,10 @@ static_assert(kInventoryWire == 64 * 4);
 static_assert(kCarveWire == 2 + 2 + 4 * 4 + 4 + 4);
 // kSaveFixedWire now includes kQuestLogWire (308 B: 20 rows x 14 B + 8 + 20).
 static_assert(kSaveFixedWire == 724);
-// kSaveHeaderWire grew 48 -> 56 (v2 quest checks) -> 60 (v3 carveCount).
-static_assert(save_bytes_for(0) == 784);
-static_assert(save_bytes_for(0, 2) == 784 + 2 * kCarveWire);
+// kSaveHeaderWire grew 48 -> 56 (v2) -> 60 (v3) -> 64 (v4 snapBytes).
+static_assert(save_bytes_for(0) == 788);
+static_assert(save_bytes_for(0, 2) == 788 + 2 * kCarveWire);
+static_assert(save_bytes_for(0, 0, 100) == 788 + 100);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two
@@ -377,6 +390,8 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     // Version 3: the carve log, between the opened list and the quest log so the
     // Reader flows straight through it and the quest log stays the tail.
     for (const CarveRecord& c : st.carves) visit_carve(bw, c);
+    // Version 4: the active-floor snapshot blob, verbatim (already encoded).
+    body.insert(body.end(), st.floorSnap.begin(), st.floorSnap.end());
     // Version 2: quest log appended last.
     quest_log_write(st.quests, body);
 
@@ -390,6 +405,7 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     h.mobFingerprint = mob_table_fingerprint();
     h.openedCount = static_cast<std::uint32_t>(st.opened.size());
     h.carveCount = static_cast<std::uint32_t>(st.carves.size());
+    h.snapBytes = static_cast<std::uint32_t>(st.floorSnap.size());
     h.ledgerBytes = static_cast<std::uint16_t>(sizeof(RunLedger));
     h.bookBytes = static_cast<std::uint16_t>(sizeof(ContractBook));
     h.needsBytes = static_cast<std::uint16_t>(sizeof(Needs));
@@ -450,9 +466,11 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     // vouched for yet.
     if (h.openedCount > kMaxOpenedKeys) return fail(SaveError::SizeMismatch);
     if (h.carveCount > kMaxCarveOps) return fail(SaveError::SizeMismatch);
+    if (h.snapBytes > kMaxSnapBytes) return fail(SaveError::SizeMismatch);
     const std::size_t want =
         kSaveFixedWire + static_cast<std::size_t>(h.openedCount) * kOpenedKeyWire +
-        static_cast<std::size_t>(h.carveCount) * kCarveWire;
+        static_cast<std::size_t>(h.carveCount) * kCarveWire +
+        static_cast<std::size_t>(h.snapBytes);
     if (static_cast<std::size_t>(h.payloadBytes) != want)
         return fail(SaveError::SizeMismatch);
     if (n - kSaveHeaderWire < static_cast<std::size_t>(h.payloadBytes))
@@ -480,6 +498,14 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     tmp.carves.resize(static_cast<std::size_t>(h.carveCount));
     for (std::size_t i = 0; i < tmp.carves.size(); ++i) visit_carve(r, tmp.carves[i]);
     if (!r.ok()) return fail(SaveError::TooShort);
+    // Version 4: the snapshot blob, copied verbatim — apply_floor_snapshot decodes
+    // it against a live World, which a parse must not require.
+    {
+        const std::uint8_t* snap = bytes + kSaveHeaderWire + r.at();
+        r.skip(static_cast<std::size_t>(h.snapBytes));
+        if (!r.ok()) return fail(SaveError::TooShort);
+        tmp.floorSnap.assign(snap, snap + h.snapBytes);
+    }
     // Version 2: parse quest log from the remaining bytes (exactly kQuestLogWire).
     {
         const std::size_t pos = r.at();
@@ -821,6 +847,179 @@ PlacedCell place_body_safely(Registry& reg, const World& world, Entity body,
     std::uint8_t cx = 0, cy = 0, cz = 0;
     macro_cell_of(tr->pos, cx, cy, cz);
     return place_body_at_cell(reg, world, body, cx, cy, cz, radius);
+}
+
+// ---------------------------------------------------------------------------
+// The active-floor snapshot codec
+// ---------------------------------------------------------------------------
+// Layout (all little-endian, via the same Writer/Reader as the rest of the file):
+//   i32  floor
+//   u32  typeRuns;   typeRuns  x (u16 value, u32 len)   — cell types, RLE
+//   u32  stateRuns;  stateRuns x (u8 state, u32 len)    — 0 empty / 1 full / 2 mixed
+//   u32  mixedCount; mixedCount x 8 x u64               — raw masks, cell order
+//   u32  pageCount;  pageCount x (u32 cell, 512 x u16)  — sub-material pages
+// A generated floor is overwhelmingly uniform (air, full wall, full slab), so the
+// two RLE streams collapse to a few thousand runs and the mixed masks are only the
+// carved/stair cells — single-digit MB against the raw 138 MB.
+
+std::size_t snapshot_floor(const World& w, int floorNumber,
+                           std::vector<std::uint8_t>& out) {
+    out.clear();
+    Writer wr(out);
+    wr.i32(static_cast<std::int32_t>(floorNumber));
+
+    const std::vector<CellType>& types = w.grid().types();
+    const std::vector<SubMask>& masks = w.grid().masks();
+
+    // Pass 1 over types: count runs, then emit. Two passes beat buffering runs.
+    auto emit_type_runs = [&](bool countOnly, std::uint32_t& runs) {
+        runs = 0;
+        std::size_t i = 0;
+        while (i < kMacroCells) {
+            const CellType v = types[i];
+            std::size_t j = i + 1;
+            while (j < kMacroCells && types[j] == v) ++j;
+            if (!countOnly) {
+                wr.u16(v);
+                wr.u32(static_cast<std::uint32_t>(j - i));
+            }
+            ++runs;
+            i = j;
+        }
+    };
+    std::uint32_t typeRuns = 0;
+    emit_type_runs(true, typeRuns);
+    wr.u32(typeRuns);
+    emit_type_runs(false, typeRuns);
+
+    auto state_of = [&](std::size_t i) -> std::uint8_t {
+        if (masks[i].empty()) return 0;
+        return masks[i].full() ? 1 : 2;
+    };
+    auto emit_state_runs = [&](bool countOnly, std::uint32_t& runs,
+                               std::uint32_t& mixed) {
+        runs = 0;
+        mixed = 0;
+        std::size_t i = 0;
+        while (i < kMacroCells) {
+            const std::uint8_t s = state_of(i);
+            std::size_t j = i + 1;
+            while (j < kMacroCells && state_of(j) == s) ++j;
+            if (s == 2) mixed += static_cast<std::uint32_t>(j - i);
+            if (!countOnly) {
+                wr.u8(s);
+                wr.u32(static_cast<std::uint32_t>(j - i));
+            }
+            ++runs;
+            i = j;
+        }
+    };
+    std::uint32_t stateRuns = 0, mixedCount = 0;
+    emit_state_runs(true, stateRuns, mixedCount);
+    wr.u32(stateRuns);
+    emit_state_runs(false, stateRuns, mixedCount);
+
+    wr.u32(mixedCount);
+    for (std::size_t i = 0; i < kMacroCells; ++i) {
+        if (state_of(i) != 2) continue;
+        for (std::size_t k2 = 0; k2 < kSubMaskWords; ++k2)
+            wr.u64(masks[i].words[k2]);
+    }
+
+    const SubField<CellType>* mats =
+        w.subfields().find<CellType>(kSubMaterialName);
+    std::uint32_t pageCount = 0;
+    if (mats)
+        for (std::size_t i = 0; i < kMacroCells; ++i)
+            if (mats->paged(i)) ++pageCount;
+    wr.u32(pageCount);
+    if (mats) {
+        for (std::size_t i = 0; i < kMacroCells; ++i) {
+            const CellType* pg = mats->page(i);
+            if (!pg) continue;
+            wr.u32(static_cast<std::uint32_t>(i));
+            for (int b = 0; b < kSubVoxels; ++b) wr.u16(pg[b]);
+        }
+    }
+    return out.size();
+}
+
+bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
+                          std::int32_t* floorOut) {
+    if (!bytes || n == 0) return false;
+    Reader r(bytes, n);
+    std::int32_t floor = 0;
+    r.i32(floor);
+    if (floorOut) *floorOut = floor;
+
+    std::vector<CellType>& types = w.grid().types_mut();
+    std::vector<SubMask>& masks = w.grid().masks_mut();
+
+    std::uint32_t typeRuns = 0;
+    r.u32(typeRuns);
+    std::size_t at = 0;
+    for (std::uint32_t k2 = 0; k2 < typeRuns && r.ok(); ++k2) {
+        std::uint16_t v = 0;
+        std::uint32_t len = 0;
+        r.u16(v);
+        r.u32(len);
+        if (at + len > kMacroCells) return false;
+        for (std::uint32_t j = 0; j < len; ++j) types[at + j] = v;
+        at += len;
+    }
+    if (!r.ok() || at != kMacroCells) return false;
+
+    std::uint32_t stateRuns = 0;
+    r.u32(stateRuns);
+    // Mixed cells are flagged and filled from the raw stream afterwards, in the
+    // same cell order the writer walked.
+    std::vector<std::uint32_t> mixedCells;
+    at = 0;
+    for (std::uint32_t k2 = 0; k2 < stateRuns && r.ok(); ++k2) {
+        std::uint8_t s = 0;
+        std::uint32_t len = 0;
+        r.u8(s);
+        r.u32(len);
+        if (s > 2 || at + len > kMacroCells) return false;
+        for (std::uint32_t j = 0; j < len; ++j) {
+            if (s == 0) masks[at + j].clear_all();
+            else if (s == 1) masks[at + j].set_all();
+            else mixedCells.push_back(static_cast<std::uint32_t>(at + j));
+        }
+        at += len;
+    }
+    if (!r.ok() || at != kMacroCells) return false;
+
+    std::uint32_t mixedCount = 0;
+    r.u32(mixedCount);
+    if (mixedCount != mixedCells.size()) return false;
+    for (std::uint32_t mc : mixedCells) {
+        for (std::size_t k2 = 0; k2 < kSubMaskWords; ++k2)
+            r.u64(masks[mc].words[k2]);
+        // An all-zero or all-one "mixed" mask would desync state_of on the next
+        // snapshot; refuse rather than normalise silently.
+        if (masks[mc].empty() || masks[mc].full()) return false;
+    }
+    if (!r.ok()) return false;
+
+    std::uint32_t pageCount = 0;
+    r.u32(pageCount);
+    SubField<CellType>& mats =
+        w.subfields().get_or_create<CellType>(kSubMaterialName);
+    mats.clear();
+    for (std::uint32_t p = 0; p < pageCount && r.ok(); ++p) {
+        std::uint32_t cell = 0;
+        r.u32(cell);
+        if (cell >= kMacroCells) return false;
+        CellType* pg = mats.ensure_page(cell, types[cell]);
+        for (int b = 0; b < kSubVoxels; ++b) {
+            std::uint16_t v = 0;
+            r.u16(v);
+            pg[b] = v;
+        }
+    }
+    // Every byte consumed, none left over — same discipline as save_read.
+    return r.ok() && r.at() == n;
 }
 
 std::int32_t carve_replay(World& w, const CarveRecord* ops, std::size_t n,

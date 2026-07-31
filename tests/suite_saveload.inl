@@ -221,13 +221,14 @@ void wire_layout() {
     // depends on the compiler is a save that cannot cross hosts.
     // Derived from the serializers, not measured from a run: 33 ledger + 79 book
     // (3 x 21 + 16) + 304 player (33 needs + 256 inventory + 12 + 3) + 308 quest log
-    // (20 rows x 14 + 8 earned + 5 x 4 counters) = 724, plus the 60-byte header
-    // (48 v1 + 8 v2 quest checks + 4 v3 carveCount).
-    static_assert(kSaveHeaderWire == 60);
+    // (20 rows x 14 + 8 earned + 5 x 4 counters) = 724, plus the 64-byte header
+    // (48 v1 + 8 v2 quest checks + 4 v3 carveCount + 4 v4 snapBytes).
+    static_assert(kSaveHeaderWire == 64);
     static_assert(kSaveFixedWire == 724);
-    static_assert(save_bytes_for(0) == 784);
-    static_assert(save_bytes_for(3) == 784 + 15);
-    static_assert(save_bytes_for(3, 2) == 784 + 15 + 2 * 28);
+    static_assert(save_bytes_for(0) == 788);
+    static_assert(save_bytes_for(3) == 788 + 15);
+    static_assert(save_bytes_for(3, 2) == 788 + 15 + 2 * 28);
+    static_assert(save_bytes_for(3, 2, 100) == 788 + 15 + 2 * 28 + 100);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -237,11 +238,13 @@ void wire_layout() {
     const SaveState st = busy_run();
     save_write(st, bytes);
     CHECK(bytes.size() == save_bytes_for(3, 2));
-    // 855 B for a full run with three emptied crates and two carves. Worth writing
-    // down: the reflex on a save system is to assume megabytes, and the reason this
-    // one is tiny is that geometry, monsters and 950k NPC rows are all reproducible
-    // from fixed seeds — and destroyed geometry is 28 bytes of OP, not masks.
-    CHECK(bytes.size() == 855);
+    // 859 B for a full run with three emptied crates and two carves (no floor
+    // snapshot in busy_run — it is variable-size and pinned by its own test).
+    // Worth writing down: the reflex on a save system is to assume megabytes, and
+    // the reason this one is tiny is that geometry, monsters and 950k NPC rows are
+    // all reproducible from fixed seeds; the resident floor's exact grid, when a
+    // run saves one, RLE-collapses to single-digit MB ([save.h] snapshot codec).
+    CHECK(bytes.size() == 859);
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');
@@ -274,6 +277,7 @@ void wire_layout() {
     CHECK(h.mobKindCount == static_cast<std::uint32_t>(kMobKindCount));
     CHECK(h.openedCount == 3u);
     CHECK(h.carveCount == 2u);
+    CHECK(h.snapBytes == 0u);
     CHECK(h.payloadBytes == kSaveFixedWire + 3u * kOpenedKeyWire + 2u * kCarveWire);
 
     // A save written by the 120 Hz build STILL LOADS, and this is deliberate rather
@@ -388,6 +392,68 @@ void carved_geometry_survives_a_restart() {
     // Idempotent: everything the ops would remove is already gone, and every
     // survivor fails the identical hash roll it failed the first time.
     CHECK(carve_replay(restart, log.data(), log.size(), 7, scratch, res) == 0);
+}
+
+// Version 4: the snapshot is STATE, so it can do the one thing the op log cannot —
+// un-carve. Carve, snapshot (the F5), carve AGAIN (the post-save hole), stamp the
+// snapshot back (the F9): the grid must be bit-identical to the F5 moment, extra
+// hole gone. Layered sub-materials ride along, and the blob round-trips through the
+// full save file.
+void floor_snapshot_uncarves() {
+    giga::World w;
+    for (int x = 8; x < 16; ++x)
+        for (int y = 8; y < 16; ++y)
+            for (int z = 4; z < 6; ++z)
+                w.grid().fill_cell(x, y, z, giga::kMatConcrete);
+    // A painted coat so the sub-material pages have something to prove.
+    for (int sz = 0; sz < 8; ++sz)
+        for (int sy = 0; sy < 8; ++sy)
+            giga::set_sub_material(w, 10, 10, 5, 0, sy, sz, giga::kMatPlaster);
+
+    giga::CarveScratch scratch;
+    giga::CarveResult res;
+    const giga::CarveOp first{24.5f, 24.5f, 11.0f, 1.25f, 400, 0xAB12u, 512};
+    CHECK(giga::carve_sphere(w, first, scratch, res) > 0);
+
+    // The F5. Then keep the raw arrays for the bit-identity claim below.
+    SaveState st;
+    CHECK(snapshot_floor(w, -26, st.floorSnap) > 0);
+    const std::vector<giga::CellType> typesAtSave = w.grid().types();
+    const std::vector<giga::SubMask> masksAtSave = w.grid().masks();
+
+    // The post-save damage a replay could never undo.
+    const giga::CarveOp second{27.0f, 24.5f, 11.0f, 1.0f, 0xFFFF, 0x9999u, 512};
+    CHECK(giga::carve_sphere(w, second, scratch, res) > 0);
+    CHECK(std::memcmp(masksAtSave.data(), w.grid().masks().data(),
+                      masksAtSave.size() * sizeof(giga::SubMask)) != 0);
+
+    // Through the FILE, not just the struct: write, read, then stamp.
+    std::vector<std::uint8_t> bytes;
+    save_write(st, bytes);
+    SaveState back;
+    SaveError err = SaveError::Count;
+    CHECK(save_read(bytes.data(), bytes.size(), back, &err));
+    CHECK(err == SaveError::None);
+    CHECK(back.floorSnap == st.floorSnap);
+
+    std::int32_t snapFloor = 0;
+    CHECK(apply_floor_snapshot(w, back.floorSnap.data(), back.floorSnap.size(),
+                               &snapFloor));
+    CHECK(snapFloor == -26);
+    CHECK(std::memcmp(typesAtSave.data(), w.grid().types().data(),
+                      typesAtSave.size() * sizeof(giga::CellType)) == 0);
+    CHECK(std::memcmp(masksAtSave.data(), w.grid().masks().data(),
+                      masksAtSave.size() * sizeof(giga::SubMask)) == 0);
+    // The painted coat survived the round trip at sub-voxel resolution.
+    CHECK(giga::sub_material_at(w, 10, 10, 5, 0, 3, 3) == giga::kMatPlaster);
+    CHECK(giga::sub_material_at(w, 10, 10, 5, 1, 3, 3) == giga::kMatConcrete);
+
+    // Garbage is refused, not half-applied silently: truncating the blob or
+    // flipping its floor-run arithmetic must return false.
+    std::vector<std::uint8_t> cut(st.floorSnap.begin(),
+                                  st.floorSnap.end() - 8);
+    CHECK(!apply_floor_snapshot(w, cut.data(), cut.size()));
+    CHECK(!apply_floor_snapshot(w, nullptr, 0));
 }
 
 // Independent FNV-1a over a list of names, so the expected fingerprint is derived by
@@ -1557,6 +1623,7 @@ static void test_saveload_all() {
     saveload_test::wire_layout();
     saveload_test::round_trip();
     saveload_test::carved_geometry_survives_a_restart();
+    saveload_test::floor_snapshot_uncarves();
     saveload_test::weak_check_vs_strong_check();
     saveload_test::rejects_the_rest();
     saveload_test::keys_not_entity_ids();

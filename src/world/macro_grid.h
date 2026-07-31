@@ -94,6 +94,12 @@ public:
     const std::vector<CellType>& types() const { return types_; }
     const std::vector<SubMask>& masks() const { return masks_; }
 
+    // Mutable raw access for wholesale state restore (a floor snapshot stamping
+    // the grid back, [game/save.h]). Bulk writers only — per-cell mutation goes
+    // through the toroidal accessors above.
+    std::vector<CellType>& types_mut() { return types_; }
+    std::vector<SubMask>& masks_mut() { return masks_; }
+
 private:
     std::vector<CellType> types_;
     std::vector<SubMask> masks_;
