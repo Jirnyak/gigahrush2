@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -880,21 +881,74 @@ const game::FloorSpec* spec_for_floor(int number) {
 // below this anyway, so it is a guard rail rather than a live limit.
 constexpr std::uint32_t kMobSpawnCap = 600;
 
-// Where a run lives on disk. `giga_game` does no file I/O by design — it links
-// giga_core and nothing platform-shaped ([AGENTS.md]) — so the fopen is HERE and the
-// format is over there ([game/save.h]). save_write/save_read take a byte buffer and
-// never touch a FILE*, which is also what makes them testable headlessly.
-constexpr const char* kSavePath = "gigahrush2.sav";
+// Where a run lives on disk: a DIRECTORY, because the save is modular like the
+// game is ([game/save.h] v5). `run.sav` carries the run; each visited floor is
+// its own `floor_<N>.sav`, written when the player leaves it and read back
+// whenever that floor is built again. `giga_game` does no file I/O by design —
+// it links giga_core and nothing platform-shaped ([AGENTS.md]) — so every fopen
+// is HERE and the formats are over there.
+constexpr const char* kSaveDir = "gigahrush2_save";
+constexpr const char* kSavePath = "gigahrush2_save/run.sav";
 
-bool write_run(const game::SaveState& st, const char* path) {
-    std::vector<std::uint8_t> bytes;
-    game::save_write(st, bytes);
+void floor_save_path(int floor, char* out, std::size_t cap) {
+    std::snprintf(out, cap, "%s/floor_%d.sav", kSaveDir, floor);
+}
+
+bool write_bytes_file(const std::vector<std::uint8_t>& bytes, const char* path) {
+    std::error_code ec; // error_code overload: the app builds -fno-exceptions
+    std::filesystem::create_directories(kSaveDir, ec);
     std::FILE* f = std::fopen(path, "wb");
     if (!f) return false;
     const std::size_t n = std::fwrite(bytes.data(), 1, bytes.size(), f);
     const bool ok = (n == bytes.size());
     std::fclose(f);
     return ok;
+}
+
+bool read_bytes_file(std::vector<std::uint8_t>& bytes, const char* path) {
+    std::FILE* f = std::fopen(path, "rb");
+    if (!f) return false;
+    bytes.clear();
+    std::uint8_t chunk[4096];
+    for (;;) {
+        const std::size_t got = std::fread(chunk, 1, sizeof(chunk), f);
+        if (got == 0) break;
+        bytes.insert(bytes.end(), chunk, chunk + got);
+    }
+    std::fclose(f);
+    return true;
+}
+
+bool write_run(const game::SaveState& st, const char* path) {
+    std::vector<std::uint8_t> bytes;
+    game::save_write(st, bytes);
+    return write_bytes_file(bytes, path);
+}
+
+// Persist one floor's exact grid to its own file. A floor transition is a load
+// screen, so this is sanctioned I/O ([jirnyak.md] §6).
+bool write_floor_file(const World& w, int floor) {
+    std::vector<std::uint8_t> bytes;
+    game::floor_file_write(w, floor, bytes);
+    char path[128];
+    floor_save_path(floor, path, sizeof path);
+    return write_bytes_file(bytes, path);
+}
+
+// Stamp a floor's saved state over its freshly generated geometry, if a file
+// exists. Absent file = pristine floor; a REFUSED file is said out loud.
+bool apply_floor_file(World& w, int floor) {
+    char path[128];
+    floor_save_path(floor, path, sizeof path);
+    std::vector<std::uint8_t> bytes;
+    if (!read_bytes_file(bytes, path)) return false;
+    game::SaveError err = game::SaveError::None;
+    if (!game::floor_file_read(bytes.data(), bytes.size(), w, nullptr, &err)) {
+        std::fprintf(stderr, "[save] %s refused: %s (floor regenerates pristine)\n",
+                     path, game::save_error_text(err));
+        return false;
+    }
+    return true;
 }
 
 // False when there is no save, when it cannot be read, or when the format refuses it.
@@ -1542,6 +1596,16 @@ int main(int argc, char** argv) {
     // sim's clock, not the window's.
     bool saveWanted = false;
     bool loadWanted = false;
+    // An autosave game CONTINUES: a run on disk arms an F9 on the first frames
+    // (the load path itself waits out the initial nav bake). To start over,
+    // delete the gigahrush2_save/ directory. --shot captures opt out so a stray
+    // save directory can never alter a deterministic capture.
+    if (!shotPath) {
+        if (std::FILE* f = std::fopen(kSavePath, "rb")) {
+            std::fclose(f);
+            loadWanted = true;
+        }
+    }
     // What the last save or load actually said. A save that fails silently is a save the
     // player only finds out about by losing a run.
     char saveLine[96] = {};
@@ -1686,6 +1750,34 @@ int main(int argc, char** argv) {
         if (showConsole && msg[0]) consoleLog.push_back(msg);
     };
 
+    // THE save, one law: run.sav (the run) + the resident floor's own file
+    // (its geometry). F5 calls it, and so does the autosave at the end of
+    // every ride — a transition is a load screen, where I/O belongs. [save.h]
+    auto save_run_now = [&]() -> bool {
+        const game::NpcRef* nr =
+            reg.valid(player) ? reg.try_get<game::NpcRef>(player) : nullptr;
+        if (!nr || !pool.valid(nr->id)) return false;
+        const vec3& sp = reg.get<Transform>(player).pos;
+        const LayerId pl = reg.get<Transform>(player).layer;
+        runState.player.clock = pool.needs(nr->id);
+        runState.player.inv = pool.inventory(nr->id);
+        runState.player.hp = pool.hp(nr->id);
+        runState.player.maxHp = pool.max_hp(nr->id);
+        // The SIGNED floor, explicitly: NpcPool::floor() is the seeding label
+        // and LayerId is a recycled storage slot. [save.h]
+        runState.player.floorNumber = currentFloor;
+        runState.player.cx = static_cast<std::uint8_t>(
+            wrap_macro(static_cast<int>(sp.x / kCellSize)));
+        runState.player.cy = static_cast<std::uint8_t>(
+            wrap_macro(static_cast<int>(sp.y / kCellSize)));
+        runState.player.cz = static_cast<std::uint8_t>(
+            wrap_macro(static_cast<int>(sp.z / kCellSize)));
+        // REFRESH, not append and not clear. [save.h]
+        game::refresh_opened_containers(reg, pl, currentFloor, runState.opened);
+        write_floor_file(stack.layer(pl), currentFloor);
+        return write_run(runState, kSavePath);
+    };
+
     // One ride, either shape: the elevator keys ([ / ]) pass a DIRECTION, the
     // console teleport passes an ABSOLUTE registered floor. Everything after
     // the streamer call — the arrival refresh of mobs/containers/doors/nav/
@@ -1706,6 +1798,11 @@ int main(int argc, char** argv) {
                                            : static_cast<LayerId>(0);
             game::refresh_opened_containers(reg, leaveLayer, currentFloor,
                                             runState.opened);
+            // The departing floor's exact grid goes to its own file — this is
+            // THE geometry persistence: the next visit (or the next run)
+            // stamps it back. A transition is a load screen; I/O is
+            // sanctioned here. [save.h]
+            write_floor_file(stack.layer(leaveLayer), currentFloor);
         }
         game::RideResult ride =
             absolute ? streamer.teleport(stack, registry, reg, pool, player,
@@ -1754,16 +1851,14 @@ int main(int argc, char** argv) {
         game::apply_opened_containers(reg, nl, currentFloor,
                                       runState.opened.data(),
                                       runState.opened.size());
+        // The floor's own file, if this floor was ever visited: stamp its saved
+        // state over the fresh generation BEFORE doors, so door_build re-stamps
+        // its leaves and the nav bake below sees the real geometry. [save.h]
+        apply_floor_file(stack.layer(nl), currentFloor);
         // Doors before the bake, frozen for its duration. [door.h]
         if (currentSpec)
             doorsBuilt = game::door_build(stack.layer(nl), doors, currentFloor,
                                           *currentSpec, kDoorSeed);
-        // Replay this floor's slice of the carve log over the fresh geometry —
-        // holes survive a plain elevator round trip, not just F5/F9. After
-        // doors, before the bake, so nav bakes the carved world. [save.h]
-        game::carve_replay(stack.layer(nl), runState.carves.data(),
-                           runState.carves.size(), currentFloor, carveScratch,
-                           carveResult);
         doors.frozen = true;
         begin_floor_nav(stack.layer(nl), nav);
         if (propPass.ready()) {
@@ -1776,6 +1871,10 @@ int main(int argc, char** argv) {
         // wall forever (physics backs out every tick). F9 already calls
         // place_body_at_cell; keyboard/--shot did not. [save.h]
         game::place_body_safely(reg, stack.layer(nl), player);
+        // AUTOSAVE: every floor transition checkpoints the run, so a crash
+        // costs at most the current floor's progress. The departed floor's
+        // file is already on disk (written above, before travel).
+        save_run_now();
         return true;
     };
 
@@ -2397,25 +2496,11 @@ int main(int argc, char** argv) {
                         carve_sphere(stack.layer(activeLayer), op,
                                      carveScratch, carveResult);
                     if (removed > 0) {
-                        // The run's carve log ([save.h]): replayed on every
-                        // floor rebuild and carried by the save. Only ops that
-                        // removed something are worth 28 bytes. Capped loudly,
-                        // never silently — a truncated log replays wrong
-                        // geometry.
-                        if (runState.carves.size() <
-                            static_cast<std::size_t>(game::kMaxCarveOps))
-                            runState.carves.push_back(game::CarveRecord{
-                                static_cast<std::int16_t>(currentFloor),
-                                op.power, op.x, op.y, op.z, op.radius, op.seed,
-                                op.detachLimit});
-                        else
-                            std::fprintf(
-                                stderr,
-                                "[carve] log full (%u); op NOT recorded\n",
-                                game::kMaxCarveOps);
+                        // No log, no bookkeeping: geometry persistence is the
+                        // floor's own file, written when the player leaves
+                        // ([save.h] modular layout) or on F5.
                         // One rebuild of the cached instance list; partial
-                        // cells keep drawing as full cubes until emptied (the
-                        // renderer's existing cell-resolution stance).
+                        // cells render their actual sub-voxel bits.
                         cubePass.invalidate();
                         // DEBRIS HANDOFF: simulation is done with these
                         // voxels. The particle pass fakes their fall, grouped
@@ -2780,51 +2865,21 @@ int main(int argc, char** argv) {
                 // clock beside the other intent flags rather than in the event loop.
                 if (saveWanted) {
                     saveWanted = false;
-                    const game::NpcRef* nrs = reg.valid(player)
-                                                  ? reg.try_get<game::NpcRef>(player)
-                                                  : nullptr;
-                    if (nrs && pool.valid(nrs->id)) {
-                        const vec3& sp = reg.get<Transform>(player).pos;
-                        runState.player.clock = pool.needs(nrs->id);
-                        runState.player.inv = pool.inventory(nrs->id);
-                        runState.player.hp = pool.hp(nrs->id);
-                        runState.player.maxHp = pool.max_hp(nrs->id);
-                        // The SIGNED floor, explicitly: NpcPool::floor() is unsigned
-                        // (floor -50 stores as 65486) and LayerId is a storage slot that
-                        // means nothing across a restart. [save.h]
-                        runState.player.floorNumber = currentFloor;
-                        runState.player.cx = static_cast<std::uint8_t>(
-                            wrap_macro(static_cast<int>(sp.x / kCellSize)));
-                        runState.player.cy = static_cast<std::uint8_t>(
-                            wrap_macro(static_cast<int>(sp.y / kCellSize)));
-                        runState.player.cz = static_cast<std::uint8_t>(
-                            wrap_macro(static_cast<int>(sp.z / kCellSize)));
-                        // REFRESH, not append and not clear: only one floor is ever
-                        // resident, so every other floor's opened crates exist nowhere
-                        // but in this list. Appending would duplicate the live floor on
-                        // every save; clearing would forget the other nine. [save.h]
-                        game::refresh_opened_containers(reg, activeLayer, currentFloor,
-                                                        runState.opened);
-                        // v4: the resident floor's exact grid, verbatim. This is
-                        // what lets a same-floor F9 UN-carve — state, not
-                        // history. Non-resident floors stay op-log territory.
-                        // [save.h]
-                        game::snapshot_floor(stack.layer(activeLayer),
-                                             currentFloor, runState.floorSnap);
-                        if (write_run(runState, kSavePath))
-                            std::snprintf(saveLine, sizeof(saveLine),
-                                          "saved: floor %d, %u rub, %u crates",
-                                          currentFloor,
-                                          static_cast<unsigned>(ledger.banked),
-                                          static_cast<unsigned>(runState.opened.size()));
-                        else
-                            std::snprintf(saveLine, sizeof(saveLine),
-                                          "SAVE FAILED: could not write %s", kSavePath);
-                        saveLineAt = simTick;
-                        // Headless --shot proof: HUD is invisible in captures
-                        // without a human; stderr is the audit trail. [save.h]
-                        std::fprintf(stderr, "[save] %s\n", saveLine);
-                    }
+                    // The same one-law save the transition autosave uses:
+                    // run.sav + the resident floor's own file. [save.h]
+                    if (save_run_now())
+                        std::snprintf(saveLine, sizeof(saveLine),
+                                      "saved: floor %d, %u rub, %u crates",
+                                      currentFloor,
+                                      static_cast<unsigned>(ledger.banked),
+                                      static_cast<unsigned>(runState.opened.size()));
+                    else
+                        std::snprintf(saveLine, sizeof(saveLine),
+                                      "SAVE FAILED: could not write %s", kSavePath);
+                    saveLineAt = simTick;
+                    // Headless --shot proof: HUD is invisible in captures
+                    // without a human; stderr is the audit trail. [save.h]
+                    std::fprintf(stderr, "[save] %s\n", saveLine);
                 }
                 // F9 full load: run + floor + cell + armour. APIs live in save.h;
                 // this was the only call site that still did a partial field copy and
@@ -2896,31 +2951,16 @@ int main(int argc, char** argv) {
                                         runState.opened.size());
                                     refresh_floor_mobs(reg, stack.layer(nl),
                                                        currentFloor, nl);
-                                    // v4: stamp the saved grid back BEFORE
-                                    // door_build, so the fresh DoorSet re-stamps
-                                    // its leaves over the frozen door state.
-                                    // A decode failure is CRC-vouched bytes with
-                                    // a writer bug — loud, and the carve replay
-                                    // below still restores the holes. [save.h]
-                                    if (!runState.floorSnap.empty() &&
-                                        !game::apply_floor_snapshot(
-                                            stack.layer(nl),
-                                            runState.floorSnap.data(),
-                                            runState.floorSnap.size()))
-                                        std::fprintf(stderr,
-                                                     "[load] floor snapshot "
-                                                     "refused; carve log only\n");
+                                    // The floor's own file, BEFORE door_build so
+                                    // the fresh DoorSet re-stamps its leaves —
+                                    // the same law as every other arrival.
+                                    // [save.h]
+                                    apply_floor_file(stack.layer(nl),
+                                                     currentFloor);
                                     if (currentSpec)
                                         doorsBuilt = game::door_build(
                                             stack.layer(nl), doors, currentFloor,
                                             *currentSpec, kDoorSeed);
-                                    // Carve replay: idempotent over the snapshot,
-                                    // and the whole story if it was refused.
-                                    // [save.h]
-                                    game::carve_replay(
-                                        stack.layer(nl), runState.carves.data(),
-                                        runState.carves.size(), currentFloor,
-                                        carveScratch, carveResult);
                                     doors.frozen = true;
                                     begin_floor_nav(stack.layer(nl), nav);
                                     if (propPass.ready()) {
@@ -2956,36 +2996,21 @@ int main(int argc, char** argv) {
                                 reopened = game::apply_opened_containers(
                                     reg, activeLayer, currentFloor,
                                     runState.opened.data(), runState.opened.size());
-                                // v4: the snapshot stamps the saved grid back
-                                // VERBATIM — including un-carving holes made
-                                // after the F5, which no op replay can do.
+                                // The floor's own file stamps the saved grid
+                                // back VERBATIM — including un-carving holes
+                                // made after the save, which no replay could.
                                 // door_build after it re-stamps door leaves so
                                 // the DoorSet and the restored cells agree
                                 // (doors reset on load, same as cross-floor).
-                                bool stamped = false;
-                                if (!runState.floorSnap.empty()) {
-                                    stamped = game::apply_floor_snapshot(
-                                        stack.layer(activeLayer),
-                                        runState.floorSnap.data(),
-                                        runState.floorSnap.size());
-                                    if (!stamped)
-                                        std::fprintf(stderr,
-                                                     "[load] floor snapshot "
-                                                     "refused; carve log only\n");
-                                    else if (currentSpec)
+                                if (apply_floor_file(stack.layer(activeLayer),
+                                                     currentFloor)) {
+                                    if (currentSpec)
                                         doorsBuilt = game::door_build(
                                             stack.layer(activeLayer), doors,
                                             currentFloor, *currentSpec,
                                             kDoorSeed);
+                                    cubePass.invalidate();
                                 }
-                                // Fresh-boot fallback and corrupt-snapshot
-                                // salvage; idempotent over the snapshot. [save.h]
-                                const std::int32_t rem = game::carve_replay(
-                                    stack.layer(activeLayer),
-                                    runState.carves.data(),
-                                    runState.carves.size(), currentFloor,
-                                    carveScratch, carveResult);
-                                if (stamped || rem > 0) cubePass.invalidate();
                             }
 
                             game::PlacedCell placed{};
@@ -4128,6 +4153,9 @@ int main(int argc, char** argv) {
                                               : static_cast<LayerId>(0);
                         game::refresh_opened_containers(reg, leaveLayer, currentFloor,
                                                         runState.opened);
+                        // Same departure floor-file write as the keyboard
+                        // path — two travel sites, one law. [save.h]
+                        write_floor_file(stack.layer(leaveLayer), currentFloor);
                     }
                     game::RideResult r = streamer.travel(
                         stack, registry, reg, pool, player, currentFloor, -1,
@@ -4159,23 +4187,21 @@ int main(int argc, char** argv) {
                         game::apply_opened_containers(
                             reg, nl, currentFloor, runState.opened.data(),
                             runState.opened.size());
-                        // Doors before the bake, frozen for its duration. [door.h]
-                        // This is the SECOND travel site — see the note below; a fix
-                        // that touches only the keyboard path leaves --shot without
-                        // doors and the capture then proves nothing about them.
+                        // Arrival floor file BEFORE doors, then doors before
+                        // the bake, frozen for its duration — the same law as
+                        // the keyboard ride path. This is the SECOND travel
+                        // site; a fix that touches only one path leaves --shot
+                        // proving nothing. [save.h, door.h]
+                        apply_floor_file(stack.layer(nl), currentFloor);
                         if (currentSpec)
                             doorsBuilt = game::door_build(
                                 stack.layer(nl), doors, currentFloor,
                                 *currentSpec, kDoorSeed);
-                        // Same carve replay as the keyboard ride path — two
-                        // travel sites, one law. [save.h]
-                        game::carve_replay(stack.layer(nl),
-                                           runState.carves.data(),
-                                           runState.carves.size(), currentFloor,
-                                           carveScratch, carveResult);
                         doors.frozen = true;
                         begin_floor_nav(stack.layer(nl), nav);
                         cubePass.invalidate();
+                        // Same transition autosave as the keyboard path.
+                        save_run_now();
                         if (propPass.ready()) {
                             std::uint32_t fseed = 1337u ^ (static_cast<std::uint32_t>(currentFloor) * 0x9e3779b9u);
                             propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);

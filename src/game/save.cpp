@@ -177,10 +177,6 @@ void visit_header(Ar& ar, H& h) {
     // Version 2 fields: quest table weak + strong check.
     ar.u32(h.questCount);
     ar.u32(h.questFingerprint);
-    // Version 3 field: carve log length.
-    ar.u32(h.carveCount);
-    // Version 4 field: active-floor snapshot blob length.
-    ar.u32(h.snapBytes);
 }
 
 template <class Ar, class L>
@@ -264,20 +260,6 @@ void visit_key(Ar& ar, K& k) {
     ar.u8(k.cz);
 }
 
-// Version 3: one executed carve. Every field the op needs to replay, nothing more —
-// the seed is what makes the probabilistic rolls reproduce ([destruct.md]).
-template <class Ar, class C>
-void visit_carve(Ar& ar, C& c) {
-    ar.i16(c.floor);
-    ar.u16(c.power);
-    ar.f32(c.x);
-    ar.f32(c.y);
-    ar.f32(c.z);
-    ar.f32(c.radius);
-    ar.u32(c.seed);
-    ar.i32(c.detachLimit);
-}
-
 // CRC-32 (reflected 0xEDB88320), computed bit-serially rather than from a table.
 // 8 shifts per byte over a ~3.6 KB save is a few microseconds — a lookup table would be
 // 1 KB of static data and a first-use question, to save nothing measurable on a
@@ -352,18 +334,14 @@ const char* save_error_text(SaveError e) {
 // a `SizeMismatch` rejection of a save this very build just wrote.
 static_assert(sizeof(SaveHeader) == kSaveHeaderWire,
               "SaveHeader happens to have no padding; if that changes, the wire size is "
-              "still 64 and only this assert needs relaxing");
+              "still 56 and only this assert needs relaxing");
 static_assert(kLedgerWire == 8 + 8 + 4 + 4 + 4 + 4 + 1);
 static_assert(kContractWire == 4 + 2 + 4 + 4 + 4 + 1 + 1 + 1);
 static_assert(kNeedsWire == 8 * 4 + 1);
 static_assert(kInventoryWire == 64 * 4);
-static_assert(kCarveWire == 2 + 2 + 4 * 4 + 4 + 4);
 // kSaveFixedWire now includes kQuestLogWire (308 B: 20 rows x 14 B + 8 + 20).
 static_assert(kSaveFixedWire == 724);
-// kSaveHeaderWire grew 48 -> 56 (v2) -> 60 (v3) -> 64 (v4 snapBytes).
-static_assert(save_bytes_for(0) == 788);
-static_assert(save_bytes_for(0, 2) == 788 + 2 * kCarveWire);
-static_assert(save_bytes_for(0, 0, 100) == 788 + 100);
+static_assert(save_bytes_for(0) == 780);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two
@@ -380,19 +358,14 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     // Payload first: the header carries the payload's length and checksum, so it cannot
     // be written until the payload exists.
     std::vector<std::uint8_t> body;
-    body.reserve(kSaveFixedWire + st.opened.size() * kOpenedKeyWire +
-                 st.carves.size() * kCarveWire);
+    body.reserve(kSaveFixedWire + st.opened.size() * kOpenedKeyWire);
     Writer bw(body);
     visit_ledger(bw, st.ledger);
     visit_book(bw, st.book);
     visit_player(bw, st.player);
     for (const OpenedContainerKey& k : st.opened) visit_key(bw, k);
-    // Version 3: the carve log, between the opened list and the quest log so the
-    // Reader flows straight through it and the quest log stays the tail.
-    for (const CarveRecord& c : st.carves) visit_carve(bw, c);
-    // Version 4: the active-floor snapshot blob, verbatim (already encoded).
-    body.insert(body.end(), st.floorSnap.begin(), st.floorSnap.end());
-    // Version 2: quest log appended last.
+    // Version 2: quest log appended last. Geometry never rides in run.sav — it
+    // lives in the per-floor files ([save.h] modular layout).
     quest_log_write(st.quests, body);
 
     SaveHeader h{};
@@ -404,8 +377,6 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     h.itemFingerprint = item_table_fingerprint();
     h.mobFingerprint = mob_table_fingerprint();
     h.openedCount = static_cast<std::uint32_t>(st.opened.size());
-    h.carveCount = static_cast<std::uint32_t>(st.carves.size());
-    h.snapBytes = static_cast<std::uint32_t>(st.floorSnap.size());
     h.ledgerBytes = static_cast<std::uint16_t>(sizeof(RunLedger));
     h.bookBytes = static_cast<std::uint16_t>(sizeof(ContractBook));
     h.needsBytes = static_cast<std::uint16_t>(sizeof(Needs));
@@ -465,12 +436,8 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     // cannot ask for a large allocation on the strength of numbers the checksum has not
     // vouched for yet.
     if (h.openedCount > kMaxOpenedKeys) return fail(SaveError::SizeMismatch);
-    if (h.carveCount > kMaxCarveOps) return fail(SaveError::SizeMismatch);
-    if (h.snapBytes > kMaxSnapBytes) return fail(SaveError::SizeMismatch);
     const std::size_t want =
-        kSaveFixedWire + static_cast<std::size_t>(h.openedCount) * kOpenedKeyWire +
-        static_cast<std::size_t>(h.carveCount) * kCarveWire +
-        static_cast<std::size_t>(h.snapBytes);
+        kSaveFixedWire + static_cast<std::size_t>(h.openedCount) * kOpenedKeyWire;
     if (static_cast<std::size_t>(h.payloadBytes) != want)
         return fail(SaveError::SizeMismatch);
     if (n - kSaveHeaderWire < static_cast<std::size_t>(h.payloadBytes))
@@ -494,18 +461,7 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     visit_player(r, tmp.player);
     tmp.opened.resize(static_cast<std::size_t>(h.openedCount));
     for (std::size_t i = 0; i < tmp.opened.size(); ++i) visit_key(r, tmp.opened[i]);
-    // Version 3: carve log between the opened list and the quest log.
-    tmp.carves.resize(static_cast<std::size_t>(h.carveCount));
-    for (std::size_t i = 0; i < tmp.carves.size(); ++i) visit_carve(r, tmp.carves[i]);
     if (!r.ok()) return fail(SaveError::TooShort);
-    // Version 4: the snapshot blob, copied verbatim — apply_floor_snapshot decodes
-    // it against a live World, which a parse must not require.
-    {
-        const std::uint8_t* snap = bytes + kSaveHeaderWire + r.at();
-        r.skip(static_cast<std::size_t>(h.snapBytes));
-        if (!r.ok()) return fail(SaveError::TooShort);
-        tmp.floorSnap.assign(snap, snap + h.snapBytes);
-    }
     // Version 2: parse quest log from the remaining bytes (exactly kQuestLogWire).
     {
         const std::size_t pos = r.at();
@@ -1022,24 +978,44 @@ bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
     return r.ok() && r.at() == n;
 }
 
-std::int32_t carve_replay(World& w, const CarveRecord* ops, std::size_t n,
-                          int floorNumber, CarveScratch& scratch,
-                          CarveResult& out) {
-    std::int32_t removed = 0;
-    for (std::size_t i = 0; i < n; ++i) {
-        const CarveRecord& c = ops[i];
-        if (static_cast<int>(c.floor) != floorNumber) continue;
-        CarveOp op;
-        op.x = c.x;
-        op.y = c.y;
-        op.z = c.z;
-        op.radius = c.radius;
-        op.power = c.power;
-        op.seed = c.seed;
-        op.detachLimit = c.detachLimit;
-        removed += carve_sphere(w, op, scratch, out);
-    }
-    return removed;
+void floor_file_write(const World& w, int floorNumber,
+                      std::vector<std::uint8_t>& out) {
+    std::vector<std::uint8_t> blob;
+    snapshot_floor(w, floorNumber, blob);
+    out.clear();
+    out.reserve(kFloorHeaderWire + blob.size());
+    Writer wr(out);
+    wr.u32(kFloorMagic);
+    wr.u32(kFloorFileVersion);
+    wr.u32(static_cast<std::uint32_t>(blob.size()));
+    wr.u32(crc32(blob.data(), blob.size()));
+    out.insert(out.end(), blob.begin(), blob.end());
+}
+
+bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
+                     std::int32_t* floorOut, SaveError* err) {
+    if (err) *err = SaveError::None;
+    auto fail = [err](SaveError e) {
+        if (err) *err = e;
+        return false;
+    };
+    if (!bytes || n < kFloorHeaderWire) return fail(SaveError::TooShort);
+    Reader r(bytes, kFloorHeaderWire);
+    std::uint32_t magic = 0, version = 0, blobBytes = 0, crc = 0;
+    r.u32(magic);
+    r.u32(version);
+    r.u32(blobBytes);
+    r.u32(crc);
+    if (magic != kFloorMagic) return fail(SaveError::BadMagic);
+    if (version != kFloorFileVersion) return fail(SaveError::BadVersion);
+    if (blobBytes > kMaxSnapBytes) return fail(SaveError::SizeMismatch);
+    if (n - kFloorHeaderWire != static_cast<std::size_t>(blobBytes))
+        return fail(SaveError::SizeMismatch);
+    if (crc32(bytes + kFloorHeaderWire, blobBytes) != crc)
+        return fail(SaveError::BadChecksum);
+    if (!apply_floor_snapshot(w, bytes + kFloorHeaderWire, blobBytes, floorOut))
+        return fail(SaveError::SizeMismatch);
+    return true;
 }
 
 void apply_player_snapshot(NpcPool& pool, NpcId id, const PlayerSnapshot& snap) {

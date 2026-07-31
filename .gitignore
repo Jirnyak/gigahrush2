@@ -58,3 +58,4 @@ __pycache__/
 # so this is insurance rather than a live fix: there is no remove_all, so a run that fails
 # part-way leaves a .bin behind with nothing ignoring it.
 navcache_test_tmp/
+gigahrush2_save/

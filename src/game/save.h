@@ -75,18 +75,16 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // to prevent: a load that succeeds and is wrong.
 // Version 2: QuestLog added to the payload (quest_log_write / quest_log_read after the
 // opened-container list). Version 1 saves are rejected; they predate quest persistence.
-// Version 3: the CARVE LOG — every destruction op the run performed ([destruct.md]),
-// written between the opened-container list and the quest log. A floor is still
-// regenerated from three numbers, and the holes are then replayed over it
-// deterministically (the op carries its seed), so carved geometry on NON-resident
-// floors costs 28 bytes per blast instead of 134 MB of masks.
-// Version 4: the ACTIVE-FLOOR SNAPSHOT — the resident floor's exact grid (types,
-// masks, sub-material pages), RLE-encoded, written after the carve log. Disk is
-// explicitly free at save points ([jirnyak.md] §6), and a snapshot is the only thing
-// that can UN-carve: a same-floor F9 stamps the saved grid back verbatim instead of
-// hoping a replay can reverse time. The log still earns its keep for every floor that
-// is NOT resident. Version 3 saves are rejected, per the standing version rule.
-inline constexpr std::uint32_t kSaveVersion = 4u;
+// Version 3 carried a carve-op log and version 4 an embedded active-floor snapshot;
+// BOTH are gone in version 5, replaced by the MODULAR layout the game actually is:
+// geometry lives in per-floor files (floor_file_write/read below, one `floor_<N>.sav`
+// per visited floor in the save directory), written when the player LEAVES a floor
+// and stamped back whenever a floor is (re)built — an elevator ride and an F9 are
+// the same code path. run.sav itself carries only the run: ledger, contracts,
+// player, opened crates, quests. Loading touches exactly two files — run.sav and
+// the active floor's — and every other floor loads from its own file only when the
+// player actually goes there. Versions 3/4 are rejected, per the standing rule.
+inline constexpr std::uint32_t kSaveVersion = 5u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -174,15 +172,11 @@ struct SaveHeader {
     std::uint32_t payloadBytes = 0;       // 40
     std::uint32_t payloadCrc = 0;         // 44  CRC-32 of every byte after the header
     // Version 2 additions (bytes 48-55). Placed at the end so a version-1 reader that
-    // stops at byte 48 never tries to parse them.
+    // stops at byte 48 never tries to parse them. (Versions 3/4 briefly appended
+    // carveCount/snapBytes here; version 5 moved geometry into per-floor files and
+    // the fields left with it.)
     std::uint32_t questCount = 0;         // 48  kQuestCount       (weak)
     std::uint32_t questFingerprint = 0;   // 52  quest title hash  (strong)
-    // Version 3 addition (bytes 56-59): how many CarveRecord rows follow the
-    // opened-container list. Same end-placement rule as version 2's fields.
-    std::uint32_t carveCount = 0;         // 56
-    // Version 4 addition (bytes 60-63): byte length of the active-floor snapshot
-    // blob between the carve log and the quest log. 0 = no snapshot in this save.
-    std::uint32_t snapBytes = 0;          // 60
 };
 
 // Wire sizes. These are the ON-DISK footprints, which are deliberately NOT the
@@ -190,7 +184,7 @@ struct SaveHeader {
 // byte and no host byte order ever reaches the file. That is what keeps a save written
 // by the MSVC build readable by the Clang build and vice versa, and it is why the
 // `*Bytes` header fields above are a drift ALARM rather than a layout description.
-inline constexpr std::size_t kSaveHeaderWire = 64;   // 48 v1; +8 v2 quests; +4 v3 carves; +4 v4 snapshot
+inline constexpr std::size_t kSaveHeaderWire = 56;   // 48 v1; +8 v2 quest checks
 inline constexpr std::size_t kLedgerWire = 33;       // 2x8 + 4x4 + 1
 inline constexpr std::size_t kContractWire = 21;     // 4 + 2 + 3x4 + 3   (pad_ dropped)
 inline constexpr std::size_t kBookWire =
@@ -199,7 +193,6 @@ inline constexpr std::size_t kNeedsWire = 33;        // 8 floats + seeded
 inline constexpr std::size_t kInventoryWire = static_cast<std::size_t>(kInvSlots) * 4;
 inline constexpr std::size_t kPlayerWire = kNeedsWire + kInventoryWire + 4 + 4 + 4 + 3;
 inline constexpr std::size_t kOpenedKeyWire = 5;     // i16 floor + 3 x u8 cell
-inline constexpr std::size_t kCarveWire = 28;        // i16+u16 + 4 x f32 + u32 + i32
 // kQuestLogWire is defined in quest.h.
 inline constexpr std::size_t kSaveFixedWire = kLedgerWire + kBookWire + kPlayerWire + kQuestLogWire;
 
@@ -208,23 +201,16 @@ inline constexpr std::size_t kSaveFixedWire = kLedgerWire + kBookWire + kPlayerW
 // floor ([main.cpp] refresh_floor_containers cap) x 255 floor labels is 16,320; this
 // is four times that.
 inline constexpr std::uint32_t kMaxOpenedKeys = 65536u;
-// Same ceiling for the carve log: 65k blasts is ~1.8 MB of records and far beyond any
-// run; the app stops RECORDING (with a stderr warning, never silently) at this count
-// rather than dropping old ops, because a truncated log replays wrong geometry.
-inline constexpr std::uint32_t kMaxCarveOps = 65536u;
 
-// Ceiling on the snapshot blob before the checksum has vouched for the header. The
-// honest worst case is a checkerboard floor: 2 M mask-state runs (5 B each) + 2 M
-// mixed masks (64 B each) + full type runs — ~150 MB. A quarter GiB bounds that with
-// slack while still refusing a corrupt header asking for gigabytes.
+// Ceiling on a floor file's snapshot blob before its checksum has vouched for the
+// header. The honest worst case is a checkerboard floor: 2 M mask-state runs (5 B
+// each) + 2 M mixed masks (64 B each) + full type runs — ~150 MB. A quarter GiB
+// bounds that with slack while still refusing a corrupt header asking for gigabytes.
 inline constexpr std::uint32_t kMaxSnapBytes = 256u * 1024u * 1024u;
 
-// Exact byte count `save_write` will produce for the given list sizes.
-inline constexpr std::size_t save_bytes_for(std::size_t openedCount,
-                                            std::size_t carveCount = 0,
-                                            std::size_t snapBytes = 0) {
-    return kSaveHeaderWire + kSaveFixedWire + openedCount * kOpenedKeyWire +
-           carveCount * kCarveWire + snapBytes;
+// Exact byte count `save_write` will produce for `openedCount` opened crates.
+inline constexpr std::size_t save_bytes_for(std::size_t openedCount) {
+    return kSaveHeaderWire + kSaveFixedWire + openedCount * kOpenedKeyWire;
 }
 
 // ---------------------------------------------------------------------------
@@ -283,32 +269,30 @@ inline bool same_container(const OpenedContainerKey& a, const OpenedContainerKey
 OpenedContainerKey container_key(int floorNumber, const vec3& pos);
 
 // ---------------------------------------------------------------------------
-// The carve log — destroyed geometry as ops, not masks
+// Per-floor state files — the modular half of the save
 // ---------------------------------------------------------------------------
-// One executed sphere carve ([world/destruct.h] CarveOp), stamped with the SIGNED
-// floor number it hit (never a LayerId — same rule as OpenedContainerKey). The op is
-// deterministic in its own fields (the seed rides along), so replaying the log over a
-// regenerated floor reproduces the holes bit-for-bit; that is why the log is what
-// travels instead of the 134 MB of masks. Only ops that actually removed something are
-// worth recording.
-struct CarveRecord {
-    std::int16_t floor = 0;
-    std::uint16_t power = 0;
-    float x = 0, y = 0, z = 0;      // centre, world metres
-    float radius = 0;               // metres
-    std::uint32_t seed = 0;
-    std::int32_t detachLimit = 0;
-};
+// One `floor_<N>.sav` per visited floor, in the app's save directory. Written when
+// the player LEAVES a floor (a floor transition is a load screen, so disk I/O is
+// sanctioned there, [jirnyak.md] §6) and on a manual save for the resident floor;
+// stamped over the freshly generated geometry whenever that floor is built again —
+// an elevator revisit and an F9 arrival are the same code path, and a floor whose
+// file does not exist simply generates pristine. run.sav never carries geometry.
+//
+// Wire: u32 magic "GH2F" | u32 version | u32 blobBytes | u32 crc32(blob) | blob,
+// where blob is exactly what snapshot_floor() produces (it embeds the floor number).
+inline constexpr std::uint32_t kFloorMagic = 0x46324847u; // 'G','H','2','F'
+inline constexpr std::uint32_t kFloorFileVersion = 1u;
+inline constexpr std::size_t kFloorHeaderWire = 16;
 
-// Replay every logged op for `floorNumber` against a (freshly generated) World, in
-// original log order — order matters, because each op rolled against the world state
-// the previous ones left. Idempotent: an op already applied finds its voxels gone and
-// removes nothing, so the same-floor F9 path may call this unconditionally. Call it
-// AFTER door_build and BEFORE the nav bake starts, so nav bakes the carved geometry
-// and the AsyncBake freeze is never violated. Returns total sub-voxels removed.
-std::int32_t carve_replay(World& w, const CarveRecord* ops, std::size_t n,
-                          int floorNumber, CarveScratch& scratch,
-                          CarveResult& out);
+// Encode the World into a complete floor file (header + CRC + snapshot blob).
+void floor_file_write(const World& w, int floorNumber,
+                      std::vector<std::uint8_t>& out);
+
+// Validate a floor file and stamp it onto `w`. False on any rejection (magic,
+// version, size, CRC, malformed blob) — the caller keeps the generated floor and,
+// where it can, says so out loud. `floorOut` reports the floor the blob claims.
+bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
+                     std::int32_t* floorOut = nullptr, SaveError* err = nullptr);
 
 // ---------------------------------------------------------------------------
 // What travels
@@ -355,16 +339,6 @@ struct SaveState {
     // Version 2: quest log persisted across F5/F9. Written after the carve log by
     // quest_log_write; read back by quest_log_read. Exactly kQuestLogWire bytes.
     QuestLog quests{};
-    // Version 3: the run's carve log, append-only, ALL floors ([destruct.md]). The app
-    // owns the live copy (every executed carve appends here) and replays the matching
-    // floor's slice on every floor (re)build — which also fixes holes vanishing on a
-    // plain elevator round trip, not just across F5/F9.
-    std::vector<CarveRecord> carves;
-    // Version 4: the ACTIVE floor's exact grid at save time, as the encoded blob
-    // snapshot_floor() produces. Empty = none (a fresh run, or a save written before
-    // any geometry mattered). Applied verbatim by apply_floor_snapshot() at load —
-    // the one mechanism that can UN-carve, because it is state, not history.
-    std::vector<std::uint8_t> floorSnap;
 };
 
 // ---------------------------------------------------------------------------
