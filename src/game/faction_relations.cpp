@@ -333,10 +333,14 @@ std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
 
         std::int16_t raw = static_cast<std::int16_t>(w->dmg);
 
-        // Allow unclamped fatal damage for hostile faction feuds (Liquidators vs Cultists/Wild)
-        const bool isFatalFeud = (rel_row(pool, selfId) != rel_row(pool, foe.id));
-
-        if (!reg.all_of<CameraTag>(foe.e) && !isFatalFeud) {
+        // Feud blows never kill NPCs. kFeudMinHpPct floors residual HP so a
+        // licensed window cannot silently multiply the predation rate [hunt.h].
+        // CameraTag (the player) is exempt — the player is not a feud body.
+        //
+        // Do NOT skip the floor for "different faction rows": every feud pair is
+        // cross-faction by definition, so that guard voided the clamp entirely
+        // (suite_faction2 floor assertions).
+        if (!reg.all_of<CameraTag>(foe.e)) {
             std::int16_t hp = 0, maxHp = 0;
             if (!entity_health(reg, pool, foe.e, hp, maxHp)) continue;
             std::int16_t floorHp =
@@ -346,6 +350,7 @@ std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
             if (raw > hp - floorHp) raw = static_cast<std::int16_t>(hp - floorHp);
         }
         if (raw <= 0) continue;
+
 
         queued.push_back(Swing{e, foe.e, raw});
     }

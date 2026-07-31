@@ -476,9 +476,9 @@ CorpseLootResult loot_corpse_interact(Registry& reg, NpcPool& pool, EventBus& bu
     if (targetCorpse == entt::null) return res;
     res.foundCorpse = true;
 
-    auto& corpse = reg.get<Corpse>(targetCorpse);
-    corpse.searched = true;
-
+    // Resolve the player BEFORE marking searched or touching slots. A missing
+    // CameraTag/NpcRef must not brick the corpse (searched=true with loot still
+    // inside) or destroy items the player never absorbed.
     Entity self = entt::null;
     NpcId selfId = kInvalidNpc;
     for (auto e : reg.view<const CameraTag, const Transform, const NpcRef>()) {
@@ -490,35 +490,72 @@ CorpseLootResult loot_corpse_interact(Registry& reg, NpcPool& pool, EventBus& bu
     }
     if (self == entt::null || !pool.valid(selfId)) return res;
 
+    auto& corpse = reg.get<Corpse>(targetCorpse);
+    // Player reached the body and is about to rifle it — mark searched even if
+    // the inventory is full and nothing moves (they looked; loot stays for later).
+    corpse.searched = true;
+
     Inventory& inv = pool.inventory(selfId);
     for (std::size_t i = 0; i < kMaxCorpseSlots; ++i) {
         ItemSlot& slotItem = corpse.lootSlots[i];
         if (!item_valid(slotItem.item) || slotItem.count == 0) continue;
         const ItemDef& def = item_def(slotItem.item);
-        int targetSlot = -1;
-        if (def.stackMax > 1) {
-            for (int s = 0; s < kInvSlots; ++s)
-                if (inv.slots[s].item == slotItem.item &&
-                    inv.slots[s].count < def.stackMax) { targetSlot = s; break; }
-        }
-        if (targetSlot < 0) targetSlot = inv.first_free();
-        if (targetSlot >= 0) {
-            if (inv.slots[targetSlot].item == slotItem.item) {
-                inv.slots[targetSlot].count = static_cast<std::uint16_t>(inv.slots[targetSlot].count + slotItem.count);
-                if (def.stackMax && inv.slots[targetSlot].count > def.stackMax)
-                    inv.slots[targetSlot].count = def.stackMax;
-            } else {
-                inv.slots[targetSlot].item = slotItem.item;
-                inv.slots[targetSlot].count = slotItem.count;
+
+        // Drain this corpse slot across as many inventory slots as needed.
+        // Remainder stays on the corpse when the pack is full or a stack caps —
+        // never clamp-and-discard (that was silent item loss).
+        while (slotItem.count > 0 && item_valid(slotItem.item)) {
+            int targetSlot = -1;
+            if (def.stackMax > 1) {
+                for (int s = 0; s < kInvSlots; ++s) {
+                    if (inv.slots[s].item == slotItem.item &&
+                        inv.slots[s].count < def.stackMax) {
+                        targetSlot = s;
+                        break;
+                    }
+                }
             }
-            res.roublesGained += def.value * static_cast<std::int32_t>(slotItem.count);
+            if (targetSlot < 0) targetSlot = inv.first_free();
+            if (targetSlot < 0) break;  // inventory full: leave remainder on corpse
+
+            std::uint16_t moved = 0;
+            if (inv.slots[targetSlot].item == slotItem.item) {
+                const std::uint16_t space = static_cast<std::uint16_t>(
+                    def.stackMax > inv.slots[targetSlot].count
+                        ? def.stackMax - inv.slots[targetSlot].count
+                        : 0);
+                if (space == 0) break;
+                moved = slotItem.count < space ? slotItem.count : space;
+                inv.slots[targetSlot].count = static_cast<std::uint16_t>(
+                    inv.slots[targetSlot].count + moved);
+            } else {
+                // Fresh slot: take up to stackMax, leave the rest on the corpse.
+                moved = slotItem.count;
+                if (def.stackMax && moved > def.stackMax)
+                    moved = def.stackMax;
+                inv.slots[targetSlot].item = slotItem.item;
+                inv.slots[targetSlot].count = moved;
+            }
+
+            slotItem.count = static_cast<std::uint16_t>(slotItem.count - moved);
+            res.roublesGained += def.value * static_cast<std::int32_t>(moved);
             res.itemsTaken++;
-            bus.publish(EventType::ItemTransferred, kInvalidNpc, selfId, slotItem.item, tick);
-            slotItem = {}; // Clear looted slot
+            bus.publish(EventType::ItemTransferred, kInvalidNpc, selfId,
+                        slotItem.item, tick);
+            if (slotItem.count == 0) slotItem = {};
         }
     }
 
+    // Keep slotCount honest: count filled slots after the drain pass.
+    std::uint8_t filled = 0;
+    for (std::size_t i = 0; i < kMaxCorpseSlots; ++i) {
+        if (item_valid(corpse.lootSlots[i].item) && corpse.lootSlots[i].count > 0)
+            ++filled;
+    }
+    corpse.slotCount = filled;
+
     return res;
 }
+
 
 } // namespace giga::game

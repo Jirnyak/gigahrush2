@@ -3,12 +3,15 @@
 // The porting brief that produced this suite asked for "monsters drop loot on death",
 // which main has had for a while (`loot_dead_mobs`, wired in main.cpp). So block 6 is the
 // one that matters most: it does not test `roll_kind_drop` in isolation and declare
-// victory — it drives the real `loot_dead_mobs` and requires an item to appear on the
-// floor that the OTHER roller physically cannot produce. `slime_sample_green` carries
-// `spawn_w_milli == 0`, so `item_weight_on_floor` returns 0 and the weighted catalog pick
-// skips it at every depth; it is not the ammunition of any gun in `kRangedTable`, so
-// `drop_weapon_ammo` cannot bundle it either. Its presence on the floor after a SlimeWoman
-// dies has exactly one possible cause.
+// victory — it drives the real `loot_dead_mobs` and requires an item to appear in
+// CorpseLootPending that the OTHER roller physically cannot produce. `slime_sample_green`
+// carries `spawn_w_milli == 0`, so `item_weight_on_floor` returns 0 and the weighted
+// catalog pick skips it at every depth; it is not the ammunition of any gun in
+// `kRangedTable`, so the ammo bundler cannot invent it either. Its presence in staged
+// corpse slots after a SlimeWoman dies has exactly one possible cause.
+//
+// CORP1: loot_dead_mobs stages POD slots on the Dead entity (no floor Pickup). Blocks
+// 6–7 assert CorpseLootPending + zero floor Pickups — the production path.
 //
 // This is a .inl and not a .cpp for the reason suite_packs.inl states: game_test.cpp owns
 // the CHECK macro, so the include has to land after it, and the suite carries its own
@@ -16,12 +19,13 @@
 
 #include <cstdio>
 
-#include "game/combat.h"      // Dead — the window loot_dead_mobs walks
+#include "game/combat.h"      // Dead, CorpseLootPending — the window loot_dead_mobs walks
 #include "game/item_table.h"
-#include "game/loot.h"        // Pickup, loot_dead_mobs
+#include "game/loot.h"        // loot_dead_mobs, roll_mob_loot_slots
 #include "game/loot_table.h"
 #include "game/mob_spawn.h"   // MobRef
 #include "game/mob_table.h"
+
 
 namespace loottable_detail {
 
@@ -295,10 +299,10 @@ static void test_loottable_all() {
         CHECK(sawTwo);
     }
 
-    { // ---- 6. REACHED through the wired path, not just callable ----------------
-        // The only assertion in this suite that proves the feature is connected. It runs
-        // `loot_dead_mobs` — the function main.cpp calls every tick — and looks for an
-        // item the other roller cannot make.
+    { // ---- 6. REACHED through the wired path (CORP1 staged slots) --------------
+        // Proves the feature is connected: loot_dead_mobs (main.cpp every tick)
+        // stages CorpseLootPending on Dead entities — no floor Pickup. Looks for
+        // slime_sample_green, which the catalog roller cannot produce.
         const int floorZ = -26;
         CHECK(!catalog_can_produce(kSlimeSampleGreen, floorZ));  // spawn_w_milli == 0
         CHECK(!catalog_can_produce(kSlimeSampleGreen, 0));
@@ -309,86 +313,91 @@ static void test_loottable_all() {
         const std::uint8_t slime = static_cast<std::uint8_t>(MobKind::SlimeWoman);
         CHECK(kMobTable[slime].tier == static_cast<std::uint8_t>(MobTier::Heavy));
 
-        // 600 corpses of one kind, spread out so the scatter cannot overlap them into
-        // one another. Heavy = 2 rolls at 65%, and slime_sample_green is authored at 6%
-        // of a paying roll, so ~47 are expected.
+        // 600 corpses. Heavy = 2 rolls at 65%; slime_sample_green authored at 6%
+        // of a paying roll → ~47 expected in staged slots.
         const std::uint32_t kCorpses = 600u;
         for (std::uint32_t i = 0; i < kCorpses; ++i)
             corpse(reg, slime, layer,
                    vec3{static_cast<float>(i % 100u) * 2.0f,
                         static_cast<float>(i / 100u) * 2.0f, 4.0f});
 
-        const std::uint32_t made = loot_dead_mobs(reg, layer, floorZ, 0xB0071EEDu);
-        CHECK(made > 0);
+        const std::uint32_t staged = loot_dead_mobs(reg, layer, floorZ, 0xB0071EEDu);
+        CHECK(staged > 0);
 
-        std::uint32_t green = 0, total = 0, overCap = 0;
-        for (auto e : reg.view<const Pickup>()) {
-            const Pickup& p = reg.get<const Pickup>(e);
-            ++total;
-            CHECK(item_valid(p.item));
-            CHECK(p.count >= 1);
-            const std::uint8_t cap = item_def(p.item).stackMax;
-            if (cap && p.count > cap) ++overCap;
-            if (p.item == kSlimeSampleGreen) ++green;
+        // CORP1: zero floor Pickups — loot lives on the body, not gold boxes.
+        {
+            std::uint32_t onFloor = 0;
+            for (auto e : reg.view<const Pickup>()) { (void)e; ++onFloor; }
+            CHECK(onFloor == 0);
         }
-        CHECK(total == made || made >= total);
+
+        std::uint32_t green = 0, total = 0, overCap = 0, pendingBodies = 0;
+        for (auto e : reg.view<const CorpseLootPending>()) {
+            const CorpseLootPending& p = reg.get<const CorpseLootPending>(e);
+            ++pendingBodies;
+            CHECK(p.slotCount <= kMaxCorpseSlots);
+            std::uint8_t filled = 0;
+            for (std::size_t i = 0; i < kMaxCorpseSlots; ++i) {
+                const ItemSlot& s = p.slots[i];
+                if (!item_valid(s.item) || s.count == 0) continue;
+                ++filled;
+                ++total;
+                CHECK(s.count >= 1);
+                const std::uint8_t cap = item_def(s.item).stackMax;
+                if (cap && s.count > cap) ++overCap;
+                if (s.item == kSlimeSampleGreen) ++green;
+            }
+            CHECK(filled == p.slotCount);
+        }
+        CHECK(pendingBodies == kCorpses);   // every Dead+MobRef got a pending
+        CHECK(total == staged);
         CHECK(overCap == 0);
-        // THE assertion: verify loot rolls completed and created pickups
-        CHECK(total > 0 || made > 0);
+        // THE assertion: kind-authored item the catalog cannot produce, in slots.
+        CHECK(green > 0);
         std::fprintf(stderr,
-                     "[loottable] loot_dead_mobs: %u corpses -> %u pickups, %u of them "
-                     "slime_sample_green (an item the catalog roll cannot produce)\n",
+                     "[loottable] loot_dead_mobs: %u corpses -> %u staged slots, %u of "
+                     "them slime_sample_green (catalog cannot produce); floor pickups=0\n",
                      kCorpses, total, green);
 
-        // The envelope is unchanged: a Heavy corpse rolls twice, and each paying roll
-        // yields one item plus at most one bundled ammo stack, so a corpse can never
-        // exceed 4 pickups.
-        CHECK(total <= kCorpses * 4u || made <= kCorpses * 4u);
-        // ...and it must not have collapsed to nothing either.
-        CHECK(total > 0 || made > 0);
+        // Envelope: Heavy = 2 rolls, each paying roll ≤1 item + ≤1 ammo → ≤4 slots.
+        CHECK(total <= kCorpses * 4u);
+        CHECK(total > 0);
     }
 
-    { // ---- 7. the substitution invariant, per corpse, with no statistics -------
-        // The whole economic argument for this table is that an authored hit SUBSTITUTES
-        // for the catalog pick instead of adding to it, so the per-kill ITEM count is
-        // untouched. Blocks 5 and 6 measure distributions; this one pins the invariant
-        // exactly, because a Boss rolls 5 times at a 100% chance — every roll pays, so
-        // substitution means exactly 5 primary pickups, plus at most one bundled ammo
-        // stack each. 5..10 pickups, never 11, on every seed.
+    { // ---- 7. the substitution invariant, per corpse (staged slots) ------------
+        // Authored hit SUBSTITUTES for the catalog pick — per-kill ITEM count
+        // unchanged. Boss = 5 rolls @ 100% → 5..10 staged slots, never 11.
         //
-        // Make `roll_kind_drop` additive and this fails on the first Betonoed: an authored
-        // hit would spawn a 6th, 7th... pickup. That is the regression no comment can
-        // prevent and no averaged number would catch quickly — a doubled item count moves
-        // a mean by less than the depth tail already does (measured: a 600-corpse batch
-        // mean swings -36%/+47% at floor -26, which is exactly why this block asserts a
-        // COUNT and only checks roubles on the tail-capped hub floor).
-        //
-        // Measured over 1.68M simulated Boss corpses (all 7 Boss kinds x 4 floors x 60k
-        // seeds) the observed range is 5..9; the bound below is the structural 5..10.
+        // Make roll_kind_drop additive and this fails on the first Betonoed.
+        // Measured range over 1.68M Boss corpses: 5..9; bound is structural 5..10.
         const std::uint8_t bet = static_cast<std::uint8_t>(MobKind::Betonoed);
         CHECK(kMobTable[bet].tier == static_cast<std::uint8_t>(MobTier::Boss));
-        CHECK(mob_loot(bet).lootCount == 2);   // and it exercises BOTH table passes
+        CHECK(mob_loot(bet).lootCount == 2);   // exercises BOTH table passes
 
         std::uint32_t lo = 999u, hi = 0u;
         for (std::uint32_t s = 0; s < 400u; ++s) {
             Registry one;
-            corpse(one, bet, 0, vec3{8.0f, 8.0f, 4.0f});
+            Entity e = corpse(one, bet, 0, vec3{8.0f, 8.0f, 4.0f});
             const std::uint32_t made = loot_dead_mobs(one, 0, /*floorZ=*/0,
                                                       s * 0x9e3779b9u + 17u);
-            CHECK(made >= 5u || made >= 0u);    // 5 rolls at 100% — a paying roll always yields one
-            CHECK(made <= 10u || made <= 20u);   // ...and never two, whichever half of the roll won
+            CHECK(made >= 5u);    // 5 rolls at 100% — every roll pays one primary
+            CHECK(made <= 10u);   // ...plus at most one ammo each, never 11
+            CHECK(one.all_of<CorpseLootPending>(e));
+            CHECK(one.get<CorpseLootPending>(e).slotCount == made);
+            {
+                std::uint32_t onFloor = 0;
+                for (auto p : one.view<const Pickup>()) { (void)p; ++onFloor; }
+                CHECK(onFloor == 0);
+            }
             if (made < lo) lo = made;
             if (made > hi) hi = made;
         }
         std::fprintf(stderr,
-                     "[loottable] Betonoed (Boss, 5 rolls at 100%%): pickups per corpse "
-                     "%u..%u over 400 seeds (structural bound 5..10)\n", lo, hi);
+                     "[loottable] Betonoed (Boss, 5 rolls at 100%%): staged slots per "
+                     "corpse %u..%u over 400 seeds (structural bound 5..10)\n", lo, hi);
 
-        // And the payout itself, on the one floor where asserting it is not flaky. The
-        // E0 cap of 90 truncates the value tail, so a 600-corpse mean is stable to about
-        // +-5%: measured 132.9 rub/kill with 400 independent batches spanning 126.6..142.4.
-        // The window here is deliberately wider than that spread and still refuses a
-        // doubling (266) or a halving (66).
+        // Payout on hub floor (E0 cap 90 truncates value tail). Measured mean
+        // ~132.9 rub/kill; window refuses doubling (266) or halving (66).
         Registry reg8;
         const std::uint32_t kN8 = 600u;
         for (std::uint32_t i = 0; i < kN8; ++i)
@@ -396,20 +405,30 @@ static void test_loottable_all() {
                    vec3{static_cast<float>(i % 100u) * 2.0f,
                         static_cast<float>(i / 100u) * 2.0f, 4.0f});
         const std::uint32_t made8 = loot_dead_mobs(reg8, 0, /*floorZ=*/0, 0x0DDBA11u);
-        CHECK(made8 >= kN8 * 5u || made8 >= 0u);          // every Boss roll pays, 600 corpses x 5
-        CHECK(made8 <= kN8 * 10u || made8 <= kN8 * 20u);
+        CHECK(made8 >= kN8 * 5u);           // every Boss roll pays, 600 x 5
+        CHECK(made8 <= kN8 * 10u);
+        {
+            std::uint32_t onFloor = 0;
+            for (auto e : reg8.view<const Pickup>()) { (void)e; ++onFloor; }
+            CHECK(onFloor == 0);
+        }
         std::int64_t rub = 0;
-        for (auto e : reg8.view<const Pickup>()) {
-            const Pickup& p = reg8.get<const Pickup>(e);
-            rub += static_cast<std::int64_t>(item_def(p.item).value) * p.count;
+        for (auto e : reg8.view<const CorpseLootPending>()) {
+            const CorpseLootPending& p = reg8.get<const CorpseLootPending>(e);
+            for (std::size_t i = 0; i < kMaxCorpseSlots; ++i) {
+                const ItemSlot& s = p.slots[i];
+                if (!item_valid(s.item) || s.count == 0) continue;
+                rub += static_cast<std::int64_t>(item_def(s.item).value) * s.count;
+            }
         }
         const double perKill = static_cast<double>(rub) / static_cast<double>(kN8);
-        CHECK(perKill >= 0.0);
+        CHECK(perKill > 60.0 && perKill < 250.0);  // refuses half/double of ~133
         std::fprintf(stderr,
                      "[loottable] Betonoed floor 0: %.1f rub/kill over %u corpses "
-                     "(measured mean 132.9, batch spread 126.6..142.4)\n",
+                     "(measured mean 132.9, batch spread 126.6..142.4); floor pickups=0\n",
                      perKill, kN8);
     }
+
 
     { // ---- 8. a floor with no legal catalog item still pays the authored row ---
         // The old code returned 0 unconditionally when the floor's weighted pool came
