@@ -62,6 +62,7 @@
 #include "game/container.h"
 #include "game/door.h"
 #include "game/combat.h"
+#include "game/status.h"
 #include "game/rpg.h"
 #include "game/extraction.h"
 #include "game/save.h"
@@ -1678,6 +1679,10 @@ int main(int argc, char** argv) {
     // after warmup ([world/destruct.h]).
     CarveScratch carveScratch;
     CarveResult carveResult;
+    // Combat → geometry seam ([combat.h]): bullets/melee propose, sim disposes
+    // below behind the same doors.frozen gate as the console carve row.
+    game::CarveProposalQueue combatCarves;
+
     bool healWanted = false;
     bool eatWanted = false;       // G, consumed by one sim step
     bool drinkWanted = false;     // T, consumed by one sim step
@@ -1709,6 +1714,12 @@ int main(int argc, char** argv) {
     // hooks that actually move the roubles, so the accumulator is kept. Clang warns,
     // MSVC did not.
     [[maybe_unused]] std::int32_t loot = 0;         // roubles swept up this run
+    // Content-layer statuses (zhelemish / web / spore / govnyak). Slowed is the
+    // velocity CAP in combat.h; this is the authored table that decides what
+    // lands and for how long. Main-owned: Inventory is POD and status must not
+    // reach into it — gate checks happen at apply sites below.
+    game::StatusSet playerStatus{};
+    std::uint64_t lastStatusLogTick = ~0ull;
     std::int32_t healed = 0;
     float ateFood = 0.0f;      // food points that LANDED, for the HUD
     float drankWater = 0.0f;
@@ -2203,7 +2214,73 @@ int main(int argc, char** argv) {
                 } else {
                     input.apply(reg, kSimDt);
                 }
+                // CARVE wall proof locomotion: input.apply clears wishDir from
+                // keyboard (no keys in --shot), so face+walk MUST land after
+                // apply and BEFORE controller_step consumes wishDir. The later
+                // shotAction=="wall" block only holds attackHeld + logs.
+                if (shotPath && shotAction == "wall" && reg.valid(player) &&
+                    shotFramesSeen >= 30 && !doors.frozen) {
+                    const Transform& ptr = reg.get<Transform>(player);
+                    const MacroGrid& g = stack.layer(activeLayer).grid();
+                    const float cx = ptr.pos.x;
+                    const float cy = ptr.pos.y;
+                    const float cz = ptr.pos.z;
+                    const float eyeZ = cz + 0.7f;
+                    float bestD2 = 1.0e12f;
+                    float bestDx = 0.0f, bestDy = 0.0f;
+                    // Wider ring than melee reach so open-room spawns still
+                    // find a wall; walk closes the gap (kPlayerWalkSpeed).
+                    for (int pass = 0; pass < 2 && bestD2 >= 1.0e12f; ++pass) {
+                        const float sampleZ =
+                            pass == 0 ? eyeZ : (eyeZ - kCellSize);
+                        const int gz =
+                            static_cast<int>(sampleZ / kCellSize);
+                        if (gz < 0 || gz >= kMacroDim) continue;
+                        for (int ox = -8; ox <= 8; ++ox) {
+                            for (int oy = -8; oy <= 8; ++oy) {
+                                if (ox == 0 && oy == 0) continue;
+                                const float px =
+                                    cx + static_cast<float>(ox) * kCellSize;
+                                const float py =
+                                    cy + static_cast<float>(oy) * kCellSize;
+                                const int gx = wrap_macro(
+                                    static_cast<int>(px / kCellSize));
+                                const int gy = wrap_macro(
+                                    static_cast<int>(py / kCellSize));
+                                if (g.cell(gx, gy, wrap_macro(gz)) ==
+                                    kCellAir)
+                                    continue;
+                                const float dx =
+                                    wrap_delta_f(cx, px, kWorldExtent);
+                                const float dy =
+                                    wrap_delta_f(cy, py, kWorldExtent);
+                                const float d2 = dx * dx + dy * dy;
+                                if (d2 < bestD2) {
+                                    bestD2 = d2;
+                                    bestDx = dx;
+                                    bestDy = dy;
+                                }
+                            }
+                        }
+                    }
+                    if (bestD2 < 1.0e12f) {
+                        auto& cam = reg.get<CameraTag>(player);
+                        // camera_forward / walk fwd: yaw=atan2(dy,dx) (Z-up).
+                        cam.yaw = std::atan2(bestDy, bestDx);
+                        cam.pitch = 0.0f;
+                        if (auto* ctl = reg.try_get<Controller>(player)) {
+                            // aim_player starts fly=true; wall walk needs ground
+                            // locomotion so collision/wish actually close gap.
+                            ctl->fly = false;
+                            // Always walk forward while out of unarmed reach
+                            // (~1.9 m). wishDir.x is camera-local forward.
+                            if (bestD2 > 1.2f * 1.2f)
+                                ctl->wishDir = {1.0f, 0.0f, 0.0f};
+                        }
+                    }
+                }
                 // Embodied crowd (#12): needs decay, then the utility brain
+
                 // re-plans (identity-staggered) and steers each NON-player body's
                 // Velocity — BEFORE the controller/physics that integrate it, the
                 // same locomotion path as the player ([ai.md], [npcs.md]).
@@ -2274,9 +2351,55 @@ int main(int argc, char** argv) {
                 // drains is a death spiral with no decision in it. Applied to the
                 // live Controller each tick rather than baked into it, so recovering
                 // sleep restores the speed with nothing to remember. [needs.h]
-                if (reg.valid(player))
-                    if (auto* ctl_ = reg.try_get<Controller>(player))
-                        ctl_->moveSpeed = kPlayerWalkSpeed * needs.speedScale;
+                // Status content layer: age slots, then fold move mult into the
+                // Controller before controller_step's writers are overridden next
+                // tick. Root forces moveSpeed 0 (Paupsina leading window).
+                // Needs exhaustion and status multiply — both bite.
+                if (reg.valid(player)) {
+                    const std::uint32_t dtMs =
+                        static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f);
+                    game::status_step(playerStatus, dtMs);
+                    if (auto* ctl_ = reg.try_get<Controller>(player)) {
+                        float sm = game::status_move_mult_e3(playerStatus) / 1000.0f;
+                        if (game::status_is_rooted(playerStatus))
+                            sm = 0.0f;
+                        ctl_->moveSpeed =
+                            kPlayerWalkSpeed * needs.speedScale * sm;
+                    }
+                    // Periodic proof trail while anything is up.
+                    if (lastStatusLogTick != simTick && (simTick % 60u) == 0u) {
+                        const bool any =
+                            game::status_active(playerStatus,
+                                                game::StatusId::ZhelemishSkin) ||
+                            game::status_active(playerStatus,
+                                                game::StatusId::PaupsinaWeb) ||
+                            game::status_active(playerStatus,
+                                                game::StatusId::SporeHaze) ||
+                            game::status_active(playerStatus,
+                                                game::StatusId::GovnyakRelief) ||
+                            game::status_active(playerStatus,
+                                                game::StatusId::GovnyakCough) ||
+                            game::status_active(playerStatus,
+                                                game::StatusId::GovnyakDebt);
+                        if (any) {
+                            lastStatusLogTick = simTick;
+                            std::fprintf(
+                                stderr,
+                                "[status] tick move_e3=%u aim_e3=%u melee_e3=%u "
+                                "rooted=%d zh=%u web=%u spore=%u\n",
+                                game::status_move_mult_e3(playerStatus),
+                                game::status_aim_mult_e3(playerStatus),
+                                game::status_melee_mult_e3(playerStatus),
+                                game::status_is_rooted(playerStatus) ? 1 : 0,
+                                playerStatus.remainMs[static_cast<std::size_t>(
+                                    game::StatusId::ZhelemishSkin)],
+                                playerStatus.remainMs[static_cast<std::size_t>(
+                                    game::StatusId::PaupsinaWeb)],
+                                playerStatus.remainMs[static_cast<std::size_t>(
+                                    game::StatusId::SporeHaze)]);
+                        }
+                    }
+                }
                 if (shotPath) {
                     if (shotOrbit && reg.valid(player)) {
                         auto& cam = reg.get<CameraTag>(player);
@@ -2291,7 +2414,161 @@ int main(int argc, char** argv) {
                         attackHeld = true;
                     } else if (shotAction == "interact") {
                         interactWanted = true;
+                    } else if (shotAction == "corp" && reg.valid(player) &&
+                               shotFramesSeen >= 30) {
+                        // CORPSHOT: face nearest live mob, hold attack
+                        // (real player_melee_step), then once a Corpse is in
+                        // loot reach press E (real loot_corpse_interact).
+                        // Automates facing/phase only — no fake loot path.
+                        const vec3 ppos = reg.get<Transform>(player).pos;
+                        bool corpseNear = false;
+                        for (auto cEnt :
+                             reg.view<const game::Corpse, const Transform>()) {
+                            if (reg.get<const Transform>(cEnt).layer !=
+                                activeLayer)
+                                continue;
+                            const vec3& cpos =
+                                reg.get<const Transform>(cEnt).pos;
+                            const float dx =
+                                wrap_delta_f(ppos.x, cpos.x, kWorldExtent);
+                            const float dy = ppos.y - cpos.y;
+                            const float dz =
+                                wrap_delta_f(ppos.z, cpos.z, kWorldExtent);
+                            if (dx * dx + dy * dy + dz * dz < 2.2f * 2.2f) {
+                                corpseNear = true;
+                                break;
+                            }
+                        }
+                        // One real E press after the kill. Holding interact every
+                        // tick re-fires loot_corpse_interact on an empty searched
+                        // corpse and floods stderr with TAKEN 0 ITEMS.
+                        if (corpseNear && !shotActionConsumed) {
+                            interactWanted = true;
+                            std::fprintf(stderr,
+                                         "[corp] corpse in reach — "
+                                         "interact\n");
+                            shotActionConsumed = true;
+                        } else if (!corpseNear) {
+                            Entity bestMob = entt::null;
+                            float bestD2 = 1.0e12f;
+                            vec3 bestPos{};
+                            for (auto me :
+                                 reg.view<const game::MobRef,
+                                          const Transform>()) {
+                                if (reg.all_of<game::Dead>(me)) continue;
+                                const Transform& tr =
+                                    reg.get<const Transform>(me);
+                                if (tr.layer != activeLayer) continue;
+                                const float dx = wrap_delta_f(
+                                    ppos.x, tr.pos.x, kWorldExtent);
+                                const float dy = ppos.y - tr.pos.y;
+                                const float dz = wrap_delta_f(
+                                    ppos.z, tr.pos.z, kWorldExtent);
+                                const float d2 =
+                                    dx * dx + dy * dy + dz * dz;
+                                if (d2 < bestD2) {
+                                    bestD2 = d2;
+                                    bestMob = me;
+                                    bestPos = tr.pos;
+                                }
+                            }
+                            if (bestMob != entt::null) {
+                                auto& cam = reg.get<CameraTag>(player);
+                                const float dx = wrap_delta_f(
+                                    ppos.x, bestPos.x, kWorldExtent);
+                                const float dz = wrap_delta_f(
+                                    ppos.z, bestPos.z, kWorldExtent);
+                                cam.yaw = std::atan2(dx, dz);
+                                cam.pitch = -0.15f;
+                                if (bestD2 > 1.5f * 1.5f) {
+                                    if (auto* ctl =
+                                            reg.try_get<Controller>(player)) {
+                                        const float len =
+                                            std::sqrt(bestD2);
+                                        if (len > 1e-3f) {
+                                            ctl->wishDir = vec3{
+                                                dx / len, 0.0f, dz / len};
+                                        }
+                                    }
+                                }
+                                attackHeld = true;
+                                static int corpAtkLog = 0;
+                                if ((corpAtkLog++ % 120) == 0) {
+                                    std::fprintf(
+                                        stderr,
+                                        "[corp] attack mob d=%.2f "
+                                        "floor=%d\n",
+                                        std::sqrt(bestD2), currentFloor);
+                                }
+                            } else if ((simTick % 240u) == 0u) {
+                                std::fprintf(stderr,
+                                             "[corp] no live mob on layer "
+                                             "(floor %d)\n",
+                                             currentFloor);
+                            }
+                        }
+                    } else if (shotAction == "wall" && reg.valid(player) &&
+                               shotFramesSeen >= 30 && !doors.frozen) {
+                        // Face+walk owned by early block (post-input.apply,
+                        // pre-controller_step). Here: hold melee + log only.
+                        attackHeld = true;
+                        static int wallLog = 0;
+                        if ((wallLog++ % 120) == 0) {
+                            const Transform& ptr = reg.get<Transform>(player);
+                            const MacroGrid& g =
+                                stack.layer(activeLayer).grid();
+                            const float cx = ptr.pos.x;
+                            const float cy = ptr.pos.y;
+                            const float cz = ptr.pos.z;
+                            const float eyeZ = cz + 0.7f;
+                            float bestD2 = 1.0e12f;
+                            for (int pass = 0; pass < 2 && bestD2 >= 1.0e12f;
+                                 ++pass) {
+                                const float sampleZ =
+                                    pass == 0 ? eyeZ : (eyeZ - kCellSize);
+                                const int gz =
+                                    static_cast<int>(sampleZ / kCellSize);
+                                if (gz < 0 || gz >= kMacroDim) continue;
+                                for (int ox = -8; ox <= 8; ++ox) {
+                                    for (int oy = -8; oy <= 8; ++oy) {
+                                        if (ox == 0 && oy == 0) continue;
+                                        const float px =
+                                            cx + static_cast<float>(ox) *
+                                                     kCellSize;
+                                        const float py =
+                                            cy + static_cast<float>(oy) *
+                                                     kCellSize;
+                                        const int gx = wrap_macro(
+                                            static_cast<int>(px / kCellSize));
+                                        const int gy = wrap_macro(
+                                            static_cast<int>(py / kCellSize));
+                                        if (g.cell(gx, gy, wrap_macro(gz)) ==
+                                            kCellAir)
+                                            continue;
+                                        const float dx = wrap_delta_f(
+                                            cx, px, kWorldExtent);
+                                        const float dy = wrap_delta_f(
+                                            cy, py, kWorldExtent);
+                                        const float d2 = dx * dx + dy * dy;
+                                        if (d2 < bestD2) bestD2 = d2;
+                                    }
+                                }
+                            }
+                            const bool fly =
+                                reg.all_of<Controller>(player)
+                                    ? reg.get<Controller>(player).fly
+                                    : false;
+                            std::fprintf(
+                                stderr,
+                                "[wall] melee toward solid d=%.2f "
+                                "floor=%d frozen=%d fly=%d\n",
+                                bestD2 < 1.0e12f ? std::sqrt(bestD2)
+                                                 : -1.0f,
+                                currentFloor,
+                                doors.frozen ? 1 : 0, fly ? 1 : 0);
+                        }
                     } else if (!shotActionConsumed && shotAction == "carve" &&
+
                                shotFramesSeen >= 30 && !doors.frozen) {
                         // One demolition charge ahead of the camera, once the
                         // nav bake has landed — the same request path the
@@ -2299,6 +2576,29 @@ int main(int argc, char** argv) {
                         // exercises the real seam ([world/destruct.h]).
                         consoleCtx.carveRadius = 1.5f;
                         consoleCtx.carvePower = 0xFFFF;
+                        shotActionConsumed = true;
+                    } else if (!shotActionConsumed && shotAction == "status" &&
+
+                               shotFramesSeen >= 30) {
+                        // STATUS proof: land two authored rows so move_e3 drops
+                        // below 1000 and rooted becomes true for Paupsina's
+                        // leading window. Real status_apply path, not a mock.
+                        game::status_apply(playerStatus,
+                                           game::StatusId::ZhelemishSkin,
+                                           /*useAlt=*/false);
+                        game::status_apply(playerStatus,
+                                           game::StatusId::PaupsinaWeb,
+                                           /*useAlt=*/false);
+                        std::fprintf(
+                            stderr,
+                            "[status] APPLY zh+web move_e3=%u rooted=%d "
+                            "zh_ms=%u web_ms=%u\n",
+                            game::status_move_mult_e3(playerStatus),
+                            game::status_is_rooted(playerStatus) ? 1 : 0,
+                            playerStatus.remainMs[static_cast<std::size_t>(
+                                game::StatusId::ZhelemishSkin)],
+                            playerStatus.remainMs[static_cast<std::size_t>(
+                                game::StatusId::PaupsinaWeb)]);
                         shotActionConsumed = true;
                     } else if (!shotActionConsumed &&
                                (shotAction == "save" || shotAction == "load") &&
@@ -2395,6 +2695,31 @@ int main(int argc, char** argv) {
                                 float dz = wrap_delta_f(tr.pos.z, ppos.z, kWorldExtent);
                                 if (dx*dx + dy*dy + dz*dz < 2.15f * 2.15f) {
                                     game::apply_damage(reg, pool, player, 4, game::DamageChannel::Fire, me_, &activeGrid);
+                                    // Content layer: SporeHaze. Gate = ip4_gasmask
+                                    // present in inventory (alt column shortens).
+                                    bool hasGasmask = false;
+                                    if (const auto* nr =
+                                            reg.try_get<game::NpcRef>(player)) {
+                                        if (pool.valid(nr->id)) {
+                                            const game::Inventory& inv =
+                                                pool.inventory(nr->id);
+                                            const game::ItemId gate =
+                                                game::status_def(
+                                                    game::StatusId::SporeHaze)
+                                                    .gateItem;
+                                            if (gate != 0) {
+                                                for (const auto& sl : inv.slots) {
+                                                    if (sl.item == gate) {
+                                                        hasGasmask = true;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    game::status_apply(playerStatus,
+                                                       game::StatusId::SporeHaze,
+                                                       hasGasmask);
                                 }
                             }
                         }
@@ -2445,6 +2770,10 @@ int main(int argc, char** argv) {
                 // healing, resupply and possession-on-death. [faction_relations.h]
                 feudHits += game::faction_feud_step(reg, pool, factionRel, activeLayer,
                                                     simTick);
+                // Slowed CAP enforcement: after every velocity writer
+                // (controller / wander / investigate / feud), before integrate.
+                // Was defined in combat.cpp and never called — dead path until now.
+                game::slow_step(reg, activeLayer, kSimDt);
                 physics_step(reg, stack, kSimDt);
                 // Doors resolve AFTER physics for the same reason melee does: contact
                 // is tested by ADJACENCY against where bodies actually ended up this
@@ -2593,6 +2922,17 @@ int main(int argc, char** argv) {
                                           "CORPSE LOOTED: TAKEN %u ITEMS (+%d RUB)",
                                           clr.itemsTaken, clr.roublesGained);
                             elevDiagAt = simTick;
+                            // Headless --shot audit trail (HUD is invisible in captures).
+                            // Log once per interact edge — not every sim tick.
+                            static std::uint64_t lastCorpseLootLogTick = ~0ull;
+                            if (lastCorpseLootLogTick != simTick) {
+                                lastCorpseLootLogTick = simTick;
+                                std::fprintf(stderr,
+                                             "[corp] CORPSE LOOTED: TAKEN %u ITEMS "
+                                             "(+%d RUB) floor=%d\n",
+                                             clr.itemsTaken, clr.roublesGained,
+                                             currentFloor);
+                            }
                             if (particlePass.ready()) {
                                 particlePass.emit_burst(ppos + vec3{0.0f, 0.4f, 0.0f},
                                                         vec3{0.0f, 0.4f, 0.0f},
@@ -2734,12 +3074,16 @@ int main(int argc, char** argv) {
                             haveGun = game::equipped_ranged(
                                           pool.inventory(nrg->id)) !=
                                       game::kInvalidItem;
+                // Combat carves: clear, fill during melee/projectiles, dispose
+                // same step if !doors.frozen (v1 drops proposals during bake).
+                combatCarves.clear();
                 shots += game::player_ranged_step(reg, pool, activeLayer,
                                                   haveGun && attackHeld && !paused,
                                                   kSimDt, simTick, &noiseField);
                 bool meleeHit = game::player_melee_step(
                     reg, pool, bus, activeLayer, kSimDt,
-                    !haveGun && attackHeld && !paused, simTick);
+                    !haveGun && attackHeld && !paused, simTick,
+                    &stack.layer(activeLayer).grid(), &combatCarves);
                 meleeHits += game::mob_attack_step(reg,
                                    stack.layer(activeLayer).grid(),
                                    pool, bus, activeLayer,
@@ -2747,7 +3091,54 @@ int main(int argc, char** argv) {
                 // Shots resolve AFTER the pass that launched them, so a
                 // projectile never lands on the frame it is fired.
                 meleeHits += game::projectile_step(
-                    reg, pool, bus, stack, activeLayer, kSimDt, simTick);
+                    reg, pool, bus, stack, activeLayer, kSimDt, simTick,
+                    &playerStatus, player, &combatCarves);
+                // Drain combat carve proposals through the same carve_sphere
+                // path the console uses. Frozen bake: drop (v1); console keeps
+                // pending via carveRadius until bake lands.
+                if (!doors.frozen && combatCarves.count > 0) {
+                    bool anyRemoved = false;
+                    for (std::uint8_t ci = 0; ci < combatCarves.count; ++ci) {
+                        const game::CarveProposal& pr = combatCarves.items[ci];
+                        CarveOp op;
+                        op.x = pr.x;
+                        op.y = pr.y;
+                        op.z = pr.z;
+                        op.radius = pr.radius;
+                        op.power = pr.power;
+                        op.seed = pr.seed;
+                        const std::int32_t removed =
+                            carve_sphere(stack.layer(activeLayer), op,
+                                         carveScratch, carveResult);
+                        if (removed > 0) {
+                            anyRemoved = true;
+                            std::fprintf(stderr,
+                                         "[carve] COMBAT removed=%d power=%u "
+                                         "r=%.2f at (%.1f,%.1f,%.1f)\n",
+                                         removed,
+                                         static_cast<unsigned>(pr.power),
+                                         pr.radius, pr.x, pr.y, pr.z);
+                            if (particlePass.ready()) {
+                                std::uint32_t byMat[kMatCount] = {};
+                                for (const auto& v : carveResult.destroyed)
+                                    if (v.mat < kMatCount) ++byMat[v.mat];
+                                for (const auto& v : carveResult.detached)
+                                    if (v.mat < kMatCount) ++byMat[v.mat];
+                                const vec3 at{op.x, op.y, op.z};
+                                for (std::uint16_t m = 1; m < kMatCount; ++m)
+                                    if (byMat[m])
+                                        particlePass.emit_destruction_burst(
+                                            at, m,
+                                            static_cast<int>(
+                                                8 +
+                                                std::min(byMat[m] / 4u, 56u)));
+                            }
+                        }
+                    }
+                    if (anyRemoved) cubePass.invalidate();
+                    combatCarves.clear();
+                }
+
 
                 // ── Combat VFX ─────────────────────────────────────────
                 if (reg.valid(player) && particlePass.ready()) {
@@ -3377,6 +3768,18 @@ int main(int argc, char** argv) {
             std::int16_t php = 0, pmax = 0;
             if (game::entity_health(reg, pool, player, php, pmax))
                 ImGui::Text("HP %d / %d%s", php, pmax, php <= 0 ? "  DEAD" : "");
+            {
+                const std::uint16_t mv = game::status_move_mult_e3(playerStatus);
+                const bool rooted = game::status_is_rooted(playerStatus);
+                if (mv != 1000 || rooted ||
+                    game::status_active(playerStatus, game::StatusId::SporeHaze) ||
+                    game::status_active(playerStatus, game::StatusId::ZhelemishSkin) ||
+                    game::status_active(playerStatus, game::StatusId::PaupsinaWeb)) {
+                    ImGui::Text("status move_e3=%u aim_e3=%u rooted=%d",
+                                mv, game::status_aim_mult_e3(playerStatus),
+                                rooted ? 1 : 0);
+                }
+            }
             if (reg.valid(player))
                 if (const auto* pm = reg.try_get<game::PlayerMelee>(player))
                     kills = pm->kills;
@@ -3868,16 +4271,22 @@ int main(int argc, char** argv) {
                 }
             }
 
-            // Corpse proximity (manual tactical loot)
+            // Corpse proximity (manual tactical loot). Skip bodies already
+            // rifled with nothing left — LOOT CORPSE on an empty searched
+            // corpse is a lie the player already resolved with E.
             if (!promptText) {
                 for (auto cEnt : reg.view<const game::Corpse, const Transform>()) {
                     if (reg.get<const Transform>(cEnt).layer != activeLayer) continue;
+                    const auto& corpse = reg.get<const game::Corpse>(cEnt);
+                    if (corpse.searched && corpse.slotCount == 0) continue;
                     const vec3& cpos = reg.get<const Transform>(cEnt).pos;
                     const float dx = wrap_delta_f(ppos.x, cpos.x, kWorldExtent);
                     const float dy = ppos.y - cpos.y;
                     const float dz = wrap_delta_f(ppos.z, cpos.z, kWorldExtent);
                     if (dx * dx + dy * dy + dz * dz < 2.2f * 2.2f) {
-                        set_prompt("interact", "LOOT CORPSE");
+                        set_prompt("interact",
+                                   corpse.searched ? "LOOT CORPSE (REMAINDER)"
+                                                   : "LOOT CORPSE");
                         break;
                     }
                 }

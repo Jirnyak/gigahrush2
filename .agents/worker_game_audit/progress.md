@@ -22,29 +22,61 @@
 - [x] game_test GREEN **215499 checks, 0 failures** (was 2 faction failures pre-FEUD1)
 - [x] CMake pin 213917 → **215499**
 - [x] CORP1/FEUD1: BACKLOG + progress CLOSED + architect notes
+- [x] CORPSHOT: --action corp harness (face/walk/melee → one E on corpse)
+- [x] CORPSHOT: stderr [corp] CORPSE LOOTED once per interact edge
+- [x] CORPSHOT: empty searched corpse prompt skip / REMAINDER label
+- [x] CORPSHOT real-game PROOF=GREEN (corp_diag.txt; TAKEN 1 ITEMS +35 RUB; kills:2)
+- [x] STATUS: StatusSet playerStatus in main; status_step + moveSpeed fold + root
+- [x] STATUS: slow_step before physics_step
+- [x] STATUS: SporeCarpet → SporeHaze (gasmask gate scan)
+- [x] STATUS: WEB projectile dual-apply PaupsinaWeb (combat.cpp braces)
+- [x] STATUS: --action status + [status] APPLY/tick stderr
+- [x] STATUS real-game PROOF=GREEN (status_diag.txt; move_e3=180 rooted=1 → 820)
+- [x] CARVE: CarveProposalQueue POD in combat.h; wall/melee/bullet enqueue
+- [x] CARVE: main drain carve_sphere + [carve] COMBAT stderr
+- [x] CARVE: --action wall early fly=false + wishDir post-input.apply
+- [x] CARVE real-game PROOF=GREEN (carve_diag.txt; removed=8 power=44 r=0.55; d=6.32->2.00 fly=0)
 
 ## In flight
-- [ ] pathspec commit CORP1+FEUD1+pin+docs (no shaders)
-- [ ] pull --no-rebase origin main + push origin main (no force)
-- [ ] CORPSHOT: real-game corpse loot kill→body→E interact proof (optional proof-class upgrade)
+- [ ] pathspec commit CARVE + docs (main.cpp, combat.h/cpp, shots/_run_carve_proof.py, BACKLOG, progress) — no shaders, no scratch
+- [ ] pull --ff-only origin main + push origin main (no force)
+- [ ] AIMEM: ai_release on floor leave / memory seam audit
 - [ ] TEX1 blocked: 3 missing roughness ktx2 — no sources, do not mock
 - [ ] CNT1 content thin (status.csv ~6 rows) — port from old gigahrush
 - [ ] optional RPG1 RpgStats across elevator; optional MAGSHOT HUD mag across --ride
+
 
 ## Do not
 - stage/commit prop_*, gpu_*, shaders/** (cube*.spv FOREIGN dirt), embody XP path
 - git add -A / force-push
 - commit shots/*.png binaries or large stderr dumps unless pathspec-asked
 - mock missing ktx2 textures
-- touch cube_pass.cpp, floor_gen.cpp, render/gpu_*
-- **ALLOWED this cycle pathspec:** src/game/loot.cpp, src/game/faction_relations.cpp, tests/suite_loottable.inl, CMakeLists.txt, .agents/worker_game_audit/BACKLOG.md, .agents/worker_game_audit/progress.md
+- touch cube_pass.cpp, floor_gen.cpp, render/gpu_* / sub_mesh (Zhirnyak)
+- commit scratch _patch_* / _scan_* / shot_*_stderr.txt
+- **ALLOWED this cycle pathspec:** src/app/main.cpp, src/game/combat.h, src/game/combat.cpp, shots/_run_carve_proof.py, .agents/worker_game_audit/BACKLOG.md, .agents/worker_game_audit/progress.md
+
+## Cycle report (2026-07-31 ~16:10) — CARVE CLOSED
+→ CARVE | closed: combat proposals → carve_sphere; --action wall PROOF=GREEN;
+[carve] COMBAT removed=8 power=44 r=0.55; fly=0 d=6.32→2.00; shot_carve.png |
+runner shots/_run_carve_proof.py 1200f ride0 | residual OPEN: AIMEM P1, TEX1, CNT1 |
+blockers: shaders/** dirty foreign — never stage; stay off src/render/** (Zhirnyak)
+
+## Cycle report (2026-07-31 ~15:07) — STATUS CLOSED
+цикл STATUS | closed: StatusSet in main tick; SporeHaze on SporeCarpet; WEB→PaupsinaWeb;
+slow_step live; --action status PROOF=GREEN move_e3=180 rooted=1 → 443 → 820 |
+runner shots/_run_status_proof.py 480f ride0 | melee_e3=700 under ZhelemishSkin |
+wip: pathspec commit + pull + push | residual OPEN: CARVE P1, AIMEM P1, TEX1, CNT1 |
+blockers: shaders/** dirty foreign — never stage; stay off src/render/** (Zhirnyak)
+
+## Cycle report (2026-07-31 ~14:46) — CORPSHOT CLOSED
+цикл CORPSHOT | closed: --action corp real kill→corpse→E→loot; PROOF=GREEN;
+TAKEN 1 ITEMS (+35 RUB); one-press interact (spam fixed); empty-searched prompt truth |
+runner shots/_run_corp_proof.py 2400f ride0 | HUD kills:2 loot 35 rub | commit c61e04b
 
 ## Cycle report (2026-07-31 ~10:10) — CORP1 + FEUD1 CLOSED
 цикл CORP1/FEUD1 | closed: corpse interact no item-loss; loottable asserts staged not floor;
 feud HP floor restored; unit GREEN 215499/0; CMake pin 215499; docs CLOSED |
-core pipeline already on main f4695b1; residual quality+pin+docs this commit |
-wip: pathspec commit + pull + push | residual OPEN: CORPSHOT real-game; TEX1 no mock; CNT1;
-RPG1/MAGSHOT optional | blockers: shaders/** dirty foreign — never stage
+core pipeline already on main f4695b1; residual quality+pin+docs prior
 
 ## Cycle report (2026-07-31 ~01:24) — FOR1 CLOSED
 цикл FOR1/MAG1 | closed: mag+melee survive elevator body-swap; unit was 213917/0 |
@@ -53,9 +85,9 @@ pin superseded by CORP1 pin 215499 this cycle
 ## Cycle report (2026-07-30 ~22:20) — SAV1
 цикл SAV1 | closed: --action save|load harness, two-phase F9 gameplay PROOF=GREEN floor-14
 
-## Architect answers (CORP1 close)
-- **Least confident:** Real-game corpse interact never shot this cycle — only unit pin. Feud clamp vs suite green; live NPC-vs-NPC never-kill not playtested.
-- **Biggest missing (pre-close):** Docs OPEN + uncommitted polish + pin in WT only. Fixed this cycle.
-- **Don't realize:** CORP1 core wired since f4695b1; residual is interact harden + suite truth + FEUD1 + pin + docs + push. Shader spv = FOREIGN. game_test buffers ~6 min.
-- **Implemented-not-integrated:** CORP1 path fully wired. CORPSHOT open for gameplay proof class. drop_mob_loot debug-only for kill path.
-- **Next execute:** commit pathspec → pull → push → CORPSHOT / CNT1 / TEX1 (no mocks).
+## Architect answers (STATUS close)
+- **Least confident:** SporeHaze gate `gate != 0`; WEB only on playerEntity hit.
+- **Biggest missing:** AIMEM floor-leave; TEX1; CNT1. (CARVE CLOSED)
+- **Don't realize:** mults stack (zh×web); Slowed CAP + StatusSet coexist.
+- **Implemented-not-integrated:** combat→carve; AiMemory floor-leave release.
+- **Next execute:** commit pathspec → pull --rebase → push → CARVE (off render).

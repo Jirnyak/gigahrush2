@@ -35,6 +35,7 @@
 #include "ecs/components.h"
 #include "ecs/registry.h"
 #include "game/event_bus.h"
+#include "game/status.h"
 #include "game/inventory.h"
 #include "game/item_table.h"
 #include <unordered_set>
@@ -513,9 +514,67 @@ void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
 // it hits INSTEAD of damage, and is counted as a hit for it. That is the only place
 // `projType` is read, and reading it is why the field exists at all — before this,
 // the one authored WEB row spat a bullet with the other 68.
+// Combat → geometry destruction seam ([world/destruct.h]).
+//
+// Combat NEVER mutates the grid. It proposes spheres (position, radius, power,
+// seed); the app drains them on the sim clock behind the same doors.frozen gate
+// the console `carve` row already uses. That is the whole design: one dispose
+// path, many proposers (console, bullet impact, melee wall swing).
+//
+// Bounded POD ring, no heap — a shotgun pellet fan can enqueue several impacts
+// in one step without allocating on the hot path.
+inline constexpr std::size_t kMaxCarveProposals = 16;
+
+struct CarveProposal {
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    float radius = 0.0f;       // metres
+    std::uint16_t power = 0;   // hardness scale ([material_props.h])
+    std::uint32_t seed = 0;
+};
+static_assert(std::is_trivially_copyable_v<CarveProposal>,
+              "CarveProposal must stay a pure POD struct");
+
+struct CarveProposalQueue {
+    CarveProposal items[kMaxCarveProposals] = {};
+    std::uint8_t count = 0;
+
+    void clear() { count = 0; }
+
+    bool push(float x, float y, float z, float radius, std::uint16_t power,
+              std::uint32_t seed) {
+        if (count >= kMaxCarveProposals) return false;
+        if (radius <= 0.0f || power == 0) return false;
+        if (radius > 8.0f) radius = 8.0f; // one carve, not a demolition service
+        items[count++] = CarveProposal{x, y, z, radius, power, seed};
+        return true;
+    }
+};
+static_assert(std::is_trivially_copyable_v<CarveProposalQueue>,
+              "CarveProposalQueue must stay a pure POD struct");
+
+// Map weapon damage onto the hardness scale. Concrete = 256; a fist (dmg 3)
+// chips plaster/soil; a heavy pipe approaches a full concrete sub-voxel.
+// Clamped so authored damage never invents explosive-grade power.
+inline std::uint16_t carve_power_from_dmg(std::int16_t dmg) {
+    if (dmg < 0) dmg = 0;
+    int p = 32 + static_cast<int>(dmg) * 4;
+    if (p > 512) p = 512;
+    return static_cast<std::uint16_t>(p);
+}
+
+// Bullet pockmark radius (metres). Small on purpose: a round scars a wall, it
+// does not open a door-sized hole. Melee uses a larger chip.
+inline constexpr float kBulletCarveRadius = 0.35f;
+inline constexpr float kMeleeCarveRadius = 0.55f;
+
 std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                               const LevelStack& stack, LayerId layer, float dt,
-                              std::uint64_t tick);
+                              std::uint64_t tick,
+                              StatusSet* playerStatus = nullptr,
+                              Entity playerEntity = entt::null,
+                              CarveProposalQueue* carves = nullptr);
 
 // The camera holder swings at whatever monster is in front of it.
 //
@@ -546,8 +605,13 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
                                  bool wantFire, float dt, std::uint64_t tick,
                                  NoiseField* noise = nullptr);
 
+// Optional `grid` + `carves`: when a swing finds no monster in the facing cone,
+// probe the cell the camera is looking at and propose a wall chip. Without both
+// pointers the function is bit-for-bit the pre-CARVE path (tests compile unchanged).
 bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId layer,
-                       float dt, bool wantsAttack, std::uint64_t tick);
+                       float dt, bool wantsAttack, std::uint64_t tick,
+                       const MacroGrid* grid = nullptr,
+                       CarveProposalQueue* carves = nullptr);
 
 // Current/maximum HP of an entity, wherever its HP lives. Returns false if it
 // holds none. For HUD and tests.
