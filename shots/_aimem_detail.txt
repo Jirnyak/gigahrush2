@@ -1,0 +1,407 @@
+
+===== src/app/main.cpp:2304 ai_step call =====
+2264|                        }
+2265|                    }
+2266|                }
+2267|                // Embodied crowd (#12): needs decay, then the utility brain
+2268|
+2269|                // re-plans (identity-staggered) and steers each NON-player body's
+2270|                // Velocity — BEFORE the controller/physics that integrate it, the
+2271|                // same locomotion path as the player ([ai.md], [npcs.md]).
+2272|                // PARKED: game::needs_step(reg, pool, kSimDt);  <- branch 3-arg call
+2273|                // main already steps the clock at line ~1043 with the layer-scoped
+2274|                // 4-arg signature and keeps its NeedsTick report for the HUD. The branch
+2275|                // call operated on its per-entity Needs COMPONENT; main keeps the
+2276|                // survival clock in the pool row, because the elevator destroys the body
+2277|                // and a component would reset the clock on every floor ride.
+2278|                // THE UTILITY AI, UNPARKED — and dormant, which is not the same as absent.
+2279|                //
+2280|                // It sat commented out because two systems writing Velocity fight every
+2281|                // tick. That is now settled by a TOKEN rather than by hope: `AiBrain::motion`
+2282|                // decides per body, and both foreign writers — wander_step and
+2283|                // faction_feud_step — carry `if (ai_owns_motion(reg, e)) continue;`.
+2284|                // MEASURED over 200 ticks x 24 bodies: ai_step wrote Velocity 2400 times,
+2285|                // wander_step 300, and BOTH in one tick ZERO times; wander wrote 0 times
+2286|                // while the token was held and 600 once delegated. [ai.h]
+2287|                //
+2288|                // `aiCfg.enabled` is FALSE, so this is one branch per tick — ai.cpp returns
+2289|                // before it even takes the view. The call is live anyway, deliberately: it
+2290|                // makes the wiring real instead of a comment, it consumes `danger` and
+2291|                // `activeGrid` (which were live C4189 warnings for exactly as long as this
+2292|                // stayed parked), and it reduces switching the AI on to editing ONE bool
+2293|                // rather than re-deriving a call signature months from now.
+2294|                //
+2295|                // Before flipping it: `ai_init` must attach AiBrain to the floor's bodies
+2296|                // (see the load path), and `ai_release` must run when clearing the flag on a
+2297|                // live floor — the token is persistent state, so a body left holding
+2298|                // MotionOwner::Ai would be skipped by wander_step forever and stand still.
+2299|                // NOTE the `activeLayer` argument: the parked call was
+2300|                // `ai_step(reg, pool, danger, activeGrid, simNow, kSimDt)` against an older
+2301|                // SIX-argument signature with no layer, so it would not even have compiled
+2302|                // if anyone had uncommented it. That is what "parked until adapted" was
+2303|                // really hiding — a commented-out call is not a call, and nothing checks it.
+2304|                aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
+2305|                                       kSimDt, aiCfg);
+2306|                controller_step(reg, kSimDt);
+2307|                // Steer the crowd BEFORE physics: wander writes horizontal
+2308|                // velocity, physics integrates it and resolves collision.
+2309|                // Samosbor advances HERE — after controller_step, before
+2310|                // wander_step — for the three reasons in [samosbor.h]: the seal can
+2311|                // kill and must precede finalize_deaths by a whole tick; behaviour
+2312|                // systems must never read a stale phase; and anything spawned on a
+2313|                // transition needs physics in the same tick.
+2314|                {
+2315|                    const game::SamosborTransition tr_ =
+2316|                        game::samosbor_step(samosbor,
+2317|                                            static_cast<std::uint32_t>(
+2318|                                                kSimDt * 1000.0f + 0.5f),
+2319|                                            currentFloor, sbRng);
+2320|                    if (tr_.cycleEnded) ++samosborCycles;
+2321|                    // The seal is ONE SHOT, not a per-tick drain. Modelled as a DoT a
+2322|                    // 15-minute samosbor at |z|=50 would deal 3600 damage instead of
+2323|                    // 4 — the correction that mattered most in the port.
+2324|                    if (tr_.sealed && reg.valid(player)) {
+2325|                        // No shelter model yet, so everyone is caught outside. That is
+2326|                        // the honest placeholder: the cost is real and small, and it
+2327|                        // starts meaning something the day shelter exists.
+2328|                        const game::DamageResult dr_ = game::apply_damage(
+2329|                            reg, pool, player, game::kSamosborUnshelteredHp,
+
+===== src/app/main.cpp:1060 ai_init/release/mem =====
+1055|// Called once the bake has landed: hand the new floor's inhabitants somewhere to
+1056|// walk. Separate from begin_floor_nav because it can only run after the swap.
+1057|std::uint32_t finish_floor_nav(Registry& reg, LayerId layer, std::uint32_t seed,
+1058|                               const nav::AsyncBake& bake) {
+1059|    std::uint32_t n = game::wander_init(reg, layer, seed);
+1060|    std::uint32_t aiCount = game::ai_init(reg, layer);
+1061|    std::fprintf(stderr,
+1062|                 "[nav] bake coarse %.0f ms | fine %.0f ms | %u agents wandering | %u AI brains attached "
+1063|                 "(async, off the main thread)\n",
+1064|                 bake.last_coarse_ms(), bake.last_fine_ms(), n, aiCount);
+1065|    return n;
+1066|}
+1067|
+1068|// Wake up in someone else's body.
+1069|//
+1070|// There is no player singleton: the player IS whichever entity holds a CameraTag
+1071|// plus a Controller ([npcs.md], embody.h). So death is not a special case needing
+1072|// a save-game — it is losing those two components and gaining them somewhere else.
+1073|// This picks a living resident already embodied on the floor and hangs the camera
+1074|// on it. The building carries on; you are just someone new in it.
+1075|//
+
+===== ALL CALL SITES ai_init/ai_release/AiMemory =====
+src\app\main.cpp:1060:std::uint32_t aiCount = game::ai_init(reg, layer);
+src\app\main.cpp:1505:game::ai_init(reg, l0);
+src\game\ai.cpp:532:std::uint32_t ai_init(Registry& reg, LayerId layer) {
+src\game\ai.cpp:553:std::uint32_t ai_release(Registry& reg, LayerId layer) {
+src\game\ai.cpp:572:const AiConfig& cfg, AiMemory* mem) {
+src\game\ai.h:861:std::uint32_t ai_init(Registry& reg, LayerId layer);
+src\game\ai.h:870:std::uint32_t ai_release(Registry& reg, LayerId layer);
+src\game\ai.h:914:const AiConfig& cfg = {}, AiMemory* mem = nullptr);
+src\render\vk_buffer.cpp:124:&staging, &stagingMem, nullptr))
+src\render\vk_renderer.cpp:131:VK_TRY(vkAllocateMemory(dev->device, &ai, nullptr, &depthMemory));
+src\render\vk_texture.cpp:445:VK_TRY(vkAllocateMemory(dev_->device, &ai, nullptr, &stagingMem_));
+
+===== src/game/floor_stream.cpp:4 floor leave-ish =====
+1|#include "game/floor_stream.h"
+2|
+3|#include "ecs/components.h"   // giga::Transform
+4|#include "game/embody.h"      // embody, embody_as_player, fold_back, NpcRef
+5|#include "game/floor_gen.h"   // generate_floor
+6|#include "game/nav_cache.h"   // nav_cache_name, save/load_nav_cache
+7|#include "game/population.h"  // seed_floor_from_spec
+8|
+9|namespace giga::game {
+10|
+11|namespace {
+12|
+13|// Turn the id `seed_floor_from_spec` designated into the handle FloorModule stores.
+14|//
+15|// The kInvalidNpc branch is LOAD-BEARING, not a defensive nicety. `pool.handle(id)`
+16|// packs `id & kNpcIdMask`, so handing it kInvalidNpc (0xFFFFFFFF) masks down to id
+17|// 0xFFFFF — 1,048,575, a perfectly legal slot (kNpcPoolSize - 1) — and pairs it with
+18|// whatever generation that slot reports. The result is a handle that is not
+19|// kInvalidHandle and names a real, in-range row, so no bounds check anywhere catches it.
+20|// Both answers `handle_valid` can then give are wrong, and the second is the worse one:
+21|//   * On a pool below the high-water mark it reads STALE (0xFFFFF >= count_), which routes
+22|//     into the replacement scan below and designates the floor's HIGHEST-id resident —
+23|//     silently converting "this module has no designate" into "it designates somebody".
+24|//   * Exhausted reserve is the case that actually PRODUCES kInvalidNpc here, and there
+
+===== src/game/ai.cpp:553 ai_release impl =====
+551|}
+552|
+553|std::uint32_t ai_release(Registry& reg, LayerId layer) {
+554|    std::uint32_t n = 0;
+555|    auto view = reg.view<AiBrain, const Transform>();
+556|    for (auto e : view) {
+557|        if (view.get<const Transform>(e).layer != layer) continue;
+558|        AiBrain& b = view.get<AiBrain>(e);
+559|        if (b.motion == static_cast<std::uint8_t>(MotionOwner::Wander)) continue;
+560|        b.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
+561|        ++n;
+562|    }
+563|    return n;
+564|}
+565|
+566|// --------------------------------------------------------------------------
+567|// ai_step — arbitration first, steering second. See ai.h for the contract, and
+568|// the file header for the ownership rule this enforces.
+569|// --------------------------------------------------------------------------
+570|AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
+571|               const MacroGrid& grid, LayerId layer, double now, float dt,
+572|               const AiConfig& cfg, AiMemory* mem) {
+573|    AiTick out;
+574|    // Dormant by default. Returning before the sweep means a disabled AI costs
+575|    // one branch, and it means nothing can be left half-arbitrated: the token is
+576|    // only ever written below. Clearing `enabled` on a running floor needs
+577|    // `ai_release` — see ai.h.
+578|    if (!cfg.enabled) return out;
+579|
+580|    // Null store OR the config axis off => bit-for-bit the pre-memory pass: no
+581|    // recall, no record, no allocation. The store is the real switch; the flag is
+582|    // what lets one store be measured on and off with nothing else different.
+583|    const bool useMem = (mem != nullptr) && cfg.memory;
+
+===== src/game/ai.cpp:532 ai_init impl =====
+530|// ai_init / ai_release — attaching and releasing the arbitration token.
+531|// --------------------------------------------------------------------------
+532|std::uint32_t ai_init(Registry& reg, LayerId layer) {
+533|    // Two phases, and it is a crash fix rather than a style choice, the same one
+534|    // `wander_init` documents: `emplace<AiBrain>` on the FIRST body creates that
+535|    // component's storage, and creating a storage can reallocate the registry's
+536|    // pool container and dangle the view being iterated. Phase 1 only reads;
+537|    // phase 2 writes once the view is gone. Runs at floor load, not on the tick.
+538|    std::vector<Entity> fresh;
+539|
+540|    auto view = reg.view<const NpcRef, const Transform>();
+541|    for (auto e : view) {
+542|        if (view.get<const Transform>(e).layer != layer) continue;
+543|        if (reg.all_of<AiBrain>(e)) continue;   // already has a brain
+544|        if (reg.all_of<CameraTag>(e)) continue; // the player: controller_step owns it
+545|        if (reg.all_of<MobRef>(e)) continue;    // mobs keep wander/investigate
+546|        fresh.push_back(e);
+547|    }
+548|
+549|    for (Entity e : fresh) reg.emplace<AiBrain>(e);
+550|    return static_cast<std::uint32_t>(fresh.size());
+551|}
+552|
+553|std::uint32_t ai_release(Registry& reg, LayerId layer) {
+554|    std::uint32_t n = 0;
+555|    auto view = reg.view<AiBrain, const Transform>();
+556|    for (auto e : view) {
+557|        if (view.get<const Transform>(e).layer != layer) continue;
+558|        AiBrain& b = view.get<AiBrain>(e);
+559|        if (b.motion == static_cast<std::uint8_t>(MotionOwner::Wander)) continue;
+560|        b.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
+561|        ++n;
+562|    }
+
+===== src/game/ai.h:870 ai_release decl =====
+865|//
+866|// This exists because disabling `ai_step` mid-run is otherwise a trap: the token
+867|// is persistent state, so a body left holding `MotionOwner::Ai` would be skipped
+868|// by `wander_step` forever and stand still. Call this when clearing
+869|// `AiConfig::enabled`, or on unload.
+870|std::uint32_t ai_release(Registry& reg, LayerId layer);
+871|
+872|// One arbitration + steering pass over the embodied NPC bodies on `layer`.
+873|//
+874|// MUST RUN BEFORE `wander_step`, and that ordering is part of the contract, not
+875|// a preference: the token this writes is read by wander on the SAME tick, so a
+876|// body handed back mid-tick is steered by wander immediately instead of coasting
+877|// for a frame.
+878|//
+879|// Per body: re-plan if its identity-staggered deadline has passed (build a
+880|// Perception, score, select, reschedule), then set the token, then — if it owns
+881|// the body — write horizontal Velocity from the negated diffusion danger
+882|// gradient. `v.z` is left to gravity, exactly as wander does.
+883|//
+884|// `danger` may be null (the floor seeded no diffusion field) -> threat reads 0,
+885|// nobody flees, every body delegates to wander, and the pass is a no-op on
+886|// Velocity. That is the scorer's stubbed-input stance, not a special case.
+887|//
+888|// `mem` may be null, and null is bit-for-bit the behaviour before memory existed:
+889|// nothing is recalled, nothing is recorded, no allocation happens. When it is
+890|// supplied the pass gains three things:
+
+===== src/game/ai.h:72 ai_init decl =====
+67|//
+68|// Both call sites are real now: `src/game/wander.cpp` and
+69|// `src/game/faction_relations.cpp` each carry `if (ai_owns_motion(reg, e)) continue;`.
+70|// The mechanism is whole in the tree, not only in the test's model of it.
+71|//
+72|// Both guards are ADDITIVE while `ai_init` has no caller: no `AiBrain` means
+73|// `ai_owns_motion` returns false, so both passes are bit-for-bit what they were. That
+74|// is deliberate — the guards land BEFORE the AI is switched on, so the day `ai_step`
+75|// is unparked is a one-line change against arbitration that is already green, instead
+76|// of three interacting changes landing together.
+77|//
+78|// The token is `AiBrain::motion`. `ai_step` runs BEFORE `wander_step`, decides
+79|// per body whether it or wander steers this tick, and writes the token. Then:
+80|//
+81|//   * `ai_step` writes Velocity iff `motion == MotionOwner::Ai`;
+82|//   * `wander_step` skips a body iff `ai_owns_motion(reg, e)` — one line.
+83|//
+84|// Two properties make this safe to land:
+85|//
+86|//   1. NO `AiBrain` COMPONENT => `ai_owns_motion` is false => wander_step
+87|//      behaves EXACTLY as it does today. `AiBrain` is attached only by
+88|//      `ai_init`, so if `ai_init` is never called the guard is a load of a null
+89|//      pointer and nothing else changes. That is what makes default-off real
+90|//      rather than aspirational.
+91|//   2. SCOPE IS EMBODIED NPC BODIES: `NpcRef` and NOT `MobRef` and NOT
+92|//      `CameraTag`. Mobs keep the existing wander/investigate arbitration
+
+===== src/game/ai.h:565 AiMemory class =====
+555|//
+556|// Owned and passed explicitly ([AGENTS.md] "No global state"), id-indexed and
+557|// dense, so iteration order can never depend on a hash container and two
+558|// identical runs produce byte-identical rows. `row()` on an unallocated id is
+559|// legal and returns the blank.
+560|//
+561|// REFERENCE LIFETIME, the one trap: `remember()` may grow the vector, so a
+562|// reference from `row()` dies at the next `remember()`. Exactly the rule
+563|// [npc_pool.h] states for `attrs()`/`relations()` across a `spawn()`.
+564|// ---------------------------------------------------------------------------
+565|class AiMemory {
+566|public:
+567|    // File a trace. Returns true if it landed (it always does, unless the kind is
+568|    // MemNone). Three-stage placement, all of it a fixed 8-slot scan:
+569|    //   1. COALESCE an existing live trace with the same (kind, payload) —
+570|    //      refresh `seenAt`, keep the STRONGER strength. This is what stops a body
+571|    //      standing in a hot cell for 200 ticks from filling all 8 slots with the
+572|    //      same fact, and it is the reference's `existing.severity = max(...)`,
+573|    //      `existing.lastAt = event.time` shape from room_memory.ts.
+574|    //   2. else take the first EMPTY or EXPIRED slot (lowest index).
+575|    //   3. else EVICT the weakest by (strength + freshness), ties to lower index.
+576|    bool remember(NpcId id, std::uint8_t kind, std::uint32_t payload,
+577|                  float strength01, double now);
+578|
+579|    // Read a row. Blank (all MemNone) for an id that has never remembered.
+580|    const MemoryRow& row(NpcId id) const {
+581|        return id < rows_.size() ? rows_[id] : kBlankMemoryRow;
+582|    }
+583|
+584|    // Non-expired traces in `id`'s row at `now`. Telemetry and tests; O(kMemSlots).
+585|    std::uint32_t live_traces(NpcId id, double now) const;
+586|
+587|    // Drop every trace for one record (death, or an explicit forget). Cheap and
+588|    // allocation-free; does NOT shrink the column.
+589|    void forget(NpcId id);
+590|
+591|    // Rows the column currently covers. 0 until the first remember().
+592|    std::uint32_t rows() const { return static_cast<std::uint32_t>(rows_.size()); }
+593|
+594|    // Bytes held, summed over vector capacity — the same measurement
+595|    // `NpcPool::resident_bytes()` reports, so the footprint claim in the file
+596|    // banner is checkable at runtime instead of only on paper.
+597|    std::size_t resident_bytes() const {
+598|        return rows_.capacity() * sizeof(MemoryRow);
+599|    }
+600|
+601|    // Cumulative traces written / coalesced. Distinguishing the two is what
+602|    // proves the ring is not just churning.
+603|    std::uint32_t writes() const { return writes_; }
+604|    std::uint32_t coalesced() const { return coalesced_; }
+605|    std::uint32_t evictions() const { return evictions_; }
+
+===== TEST HITS =====
+tests\suite_utilai.inl:23:// Blocks 9-15 cover MEMORY (`AiMemory`, [ai.h] banner). Same standard: the point
+tests\suite_utilai.inl:155:inline std::uint32_t digest_memory(const AiMemory& mem, NpcId id,
+tests\suite_utilai.inl:334:CHECK(ai_init(reg, kLayer) == static_cast<std::uint32_t>(kBodies));
+tests\suite_utilai.inl:455:CHECK(ai_init(reg, kLayer) == static_cast<std::uint32_t>(2 * kGroup));
+tests\suite_utilai.inl:591:CHECK(ai_init(reg, kLayer) == 1u);
+tests\suite_utilai.inl:616:// makes the wander.cpp edit additive: with ai_init never called, every
+tests\suite_utilai.inl:641:CHECK(ai_init(reg, kLayer) == 1u);
+tests\suite_utilai.inl:687:// ai_release is the answer to "enabled was cleared mid-run": without it a
+tests\suite_utilai.inl:695:CHECK(ai_release(reg, kLayer) == 1u);
+tests\suite_utilai.inl:697:CHECK(ai_release(reg, kLayer) == 0u);   // idempotent
+tests\suite_utilai.inl:728:ai_init(reg, kLayer);
+tests\suite_utilai.inl:788:AiMemory mem;
+tests\suite_utilai.inl:834:AiMemory ring;
+tests\suite_utilai.inl:855:AiMemory aging;
+tests\suite_utilai.inl:874:AiMemory guard;
+tests\suite_utilai.inl:884:AiMemory forgetful;
+tests\suite_utilai.inl:910:AiMemory mem;
+tests\suite_utilai.inl:968:AiMemory seamMem;
+tests\suite_utilai.inl:1007:AiMemory store;
+tests\suite_utilai.inl:1016:CHECK(ai_init(reg, kLayer) == static_cast<std::uint32_t>(kBodies));
+tests\suite_utilai.inl:1024:AiMemory* memPtr = (arm == 0) ? nullptr : &store;
+tests\suite_utilai.inl:1098:AiMemory mem;
+tests\suite_utilai.inl:1212:AiMemory mem;
+tests\suite_utilai.inl:1238:CHECK(ai_init(reg, kLayer) == static_cast<std::uint32_t>(3 * kGroup));
+tests\suite_utilai.inl:1284:CHECK(ai_init(reg2, kLayer) == static_cast<std::uint32_t>(kGroup));
+tests\suite_utilai.inl:1334:// ai_release still hands every token back with memory live, so clearing
+tests\suite_utilai.inl:1336:CHECK(ai_release(reg, kLayer) == static_cast<std::uint32_t>(2 * kGroup));
+tests\suite_utilai.inl:1337:CHECK(ai_release(reg, kLayer) == 0u);
+tests\suite_utilai.inl:1349:AiMemory mem;
+tests\suite_utilai.inl:1413:AiMemory mem;
+tests\suite_utilai.inl:1422:ai_init(reg, kLayer);
+tests\suite_utilai.inl:1496:AiMemory mem;
+tests\suite_utilai.inl:1500:CHECK(ai_init(reg, kLayer) == 1u);
+tests\suite_utilai.inl:1516:CHECK(ai_init(reg, kLayer) == 1u);          // a brand-new brain...
+SUITE tests\suite_utilai.inl
+  11://             whether `ai_step` wrote it and whether `wander_step` wrote it, and
+  23:// Blocks 9-15 cover MEMORY (`AiMemory`, [ai.h] banner). Same standard: the point
+  66:// is. The disjointness above covers `ai_step` and `wander_step` only.
+  93:// `wander_step` reads one flow byte and `ai_step` reads a float field and a
+  98:// dir*speed, `ai_step` writes dir*kFleeSpeed. So "x still equals kSentX" is an
+  155:inline std::uint32_t digest_memory(const AiMemory& mem, NpcId id,
+  334:CHECK(ai_init(reg, kLayer) == static_cast<std::uint32_t>(kBodies));
+  347:ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+  399:// The probe, each tick, in the SHIPPING order (ai_step before wander_step,
+  401://     arm sentinels -> ai_step   -> record who moved  (aiWrote)
+  455:CHECK(ai_init(reg, kLayer) == static_cast<std::uint32_t>(2 * kGroup));
+  470:ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+  507:"[utilai] %d ticks x %d bodies: ai_step wrote Velocity %u "
+  528:ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+  591:CHECK(ai_init(reg, kLayer) == 1u);
+  601:ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt);
+  616:// makes the wander.cpp edit additive: with ai_init never called, every
+  641:CHECK(ai_init(reg, kLayer) == 1u);
+  647:ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+  653:// which is why ai_step must run before wander_step: the handback is
+  658:const AiTick t2 = ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+  675:ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+  682:const AiTick t3 = ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+  687:// ai_release is the answer to "enabled was cleared mid-run": without it a
+  693:ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+  695:CHECK(ai_release(reg, kLayer) == 1u);
+  697:CHECK(ai_release(reg, kLayer) == 0u);   // idempotent
+  728:ai_init(reg, kLayer);
+  734:ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+  788:AiMemory mem;
+  834:AiMemory ring;
+  855:AiMemory aging;
+  874:AiMemory guard;
+  884:AiMemory forgetful;
+  910:AiMemory mem;
+  968:AiMemory seamMem;
+  1007:AiMemory store;
+  1016:CHECK(ai_init(reg, kLayer) == static_cast<std::uint32_t>(kBodies));
+  1024:AiMemory* memPtr = (arm == 0) ? nullptr : &store;
+  1029:const AiTick tick = ai_step(reg, pool, &danger, grid, kLayer, now,
+  1056:ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg, memPtr);
+  1098:AiMemory mem;
+  1212:AiMemory mem;
+  1238:CHECK(ai_init(reg, kLayer) == static_cast<std::uint32_t>(3 * kGroup));
+  1245:const AiTick t1 = ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg, &mem);
+  1284:CHECK(ai_init(reg2, kLayer) == static_cast<std::uint32_t>(kGroup));
+  1287:ai_step(reg2, pool2, &danger, grid, kLayer, 0.0, kSimDt, cfg, nullptr);
+  1305:ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg, &mem);
+  1324:"[utilai] memory ON, %d ticks x %d bodies: ai_step wrote "
+  1334:// ai_release still hands every token back with memory live, so clearing
+  1336:CHECK(ai_release(reg, kLayer) == static_cast<std::uint32_t>(2 * kGroup));
+  1337:CHECK(ai_release(reg, kLayer) == 0u);
+  1349:AiMemory mem;
+  1413:AiMemory mem;
+  1422:ai_init(reg, kLayer);
+  1436:ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg, &mem);
+  1496:AiMemory mem;
+  1500:CHECK(ai_init(reg, kLayer) == 1u);
+  1504:ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg, &mem);
+  1516:CHECK(ai_init(reg, kLayer) == 1u);          // a brand-new brain...
+  1522:const AiTick after = ai_step(reg, pool, &danger, grid, kLayer,

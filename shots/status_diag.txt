@@ -1,0 +1,28 @@
+exe exists=True size=1400832
+data present at C:\hades\gigahrush2\build-win\Release\data
+cmd=C:\hades\gigahrush2\build-win\Release\gigahrush2.exe --shot C:\hades\gigahrush2\shots\shot_status.png --frames 480 --ride 0 --action status
+exit=0 elapsed=16.6s png=True size=2765798
+stderr len=27847
+  | [tex] ERROR data/textures/rubber_tiles_roughness.ktx2: File open failed.
+  | [tex] ERROR data/textures/rusty_metal_03_roughness.ktx2: File open failed.
+  | [tex] ERROR data/textures/rusty_corrugated_iron_roughness.ktx2: File open failed.
+  | [status] APPLY zh+web move_e3=180 rooted=1 zh_ms=180000 web_ms=4200
+  | [status] tick move_e3=180 aim_e3=1000 melee_e3=700 rooted=1 zh=179912 web=4112 spore=0
+  | [status] tick move_e3=180 aim_e3=1000 melee_e3=700 rooted=1 zh=179432 web=3632 spore=0
+  | [status] tick move_e3=443 aim_e3=1000 melee_e3=700 rooted=0 zh=178952 web=3152 spore=0
+  | [status] tick move_e3=443 aim_e3=1000 melee_e3=700 rooted=0 zh=178472 web=2672 spore=0
+  | [status] tick move_e3=443 aim_e3=1000 melee_e3=700 rooted=0 zh=177992 web=2192 spore=0
+  | [status] tick move_e3=443 aim_e3=1000 melee_e3=700 rooted=0 zh=177512 web=1712 spore=0
+  | [status] tick move_e3=443 aim_e3=1000 melee_e3=700 rooted=0 zh=177032 web=1232 spore=0
+  | [status] tick move_e3=443 aim_e3=1000 melee_e3=700 rooted=0 zh=176552 web=752 spore=0
+  | [status] tick move_e3=443 aim_e3=1000 melee_e3=700 rooted=0 zh=176072 web=272 spore=0
+  | [status] tick move_e3=820 aim_e3=1000 melee_e3=700 rooted=0 zh=175592 web=0 spore=0
+  | [status] tick move_e3=820 aim_e3=1000 melee_e3=700 rooted=0 zh=175112 web=0 spore=0
+  | [status] tick move_e3=820 aim_e3=1000 melee_e3=700 rooted=0 zh=174632 web=0 spore=0
+  | [status] tick move_e3=820 aim_e3=1000 melee_e3=700 rooted=0 zh=174152 web=0 spore=0
+  | [status] tick move_e3=820 aim_e3=1000 melee_e3=700 rooted=0 zh=173672 web=0 spore=0
+  | [status] tick move_e3=820 aim_e3=1000 melee_e3=700 rooted=0 zh=173192 web=0 spore=0
+  | [status] tick move_e3=820 aim_e3=1000 melee_e3=700 rooted=0 zh=172712 web=0 spore=0
+  | shot: saved -> C:\hades\gigahrush2\shots\shot_status.png (floor 0, 481 frames)
+has_apply=True has_tick=True move_ok=True rooted_ok=True has_png=True
+PROOF=GREEN

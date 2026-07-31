@@ -1,0 +1,358 @@
+==== AGENTS DIFF ====
+diff --git a/AGENTS.md b/AGENTS.md
+index 1d8998f..911aed5 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -241,3 +241,8 @@ break the parse.
+    changed a documented contract; do not document trivial edits.
+ 5. Do not create stand-alone notes / changelogs / "summary of changes" markdown.
+    Documentation lives in the per-system docs orchestrated by the README.
++
++
++[CRITICAL: SCREENSHOT COMPRESSION & HTTP 413 PREVENTION]
++NEVER attempt to open, read, or send raw PNG/BMP image files larger than 500KB directly into vision prompts. Doing so triggers HTTP 413 Payload Too Large / Length Limit Exceeded and crashes the API.
++BEFORE analyzing any screenshot or UI render, always run a Python script with PIL to downscale/compress it to 1280x720 JPEG (<150KB) at quality=80. Read only the compressed JPEG file for visual analysis.
+==== MAIN DIFF ====
+diff --git a/src/app/main.cpp b/src/app/main.cpp
+index b0f3d90..cf7c61f 100644
+--- a/src/app/main.cpp
++++ b/src/app/main.cpp
+@@ -2241,6 +2241,99 @@ int main(int argc, char** argv) {
+                         attackHeld = true;
+                     } else if (shotAction == "interact") {
+                         interactWanted = true;
++                    } else if (shotAction == "corp" && reg.valid(player) &&
++                               shotFramesSeen >= 30) {
++                        // CORPSHOT: face nearest live mob, hold attack
++                        // (real player_melee_step), then once a Corpse is in
++                        // loot reach press E (real loot_corpse_interact).
++                        // Automates facing/phase only тАФ no fake loot path.
++                        const vec3 ppos = reg.get<Transform>(player).pos;
++                        bool corpseNear = false;
++                        for (auto cEnt :
++                             reg.view<const game::Corpse, const Transform>()) {
++                            if (reg.get<const Transform>(cEnt).layer !=
++                                activeLayer)
++                                continue;
++                            const vec3& cpos =
++                                reg.get<const Transform>(cEnt).pos;
++                            const float dx =
++                                wrap_delta_f(ppos.x, cpos.x, kWorldExtent);
++                            const float dy = ppos.y - cpos.y;
++                            const float dz =
++                                wrap_delta_f(ppos.z, cpos.z, kWorldExtent);
++                            if (dx * dx + dy * dy + dz * dz < 2.2f * 2.2f) {
++                                corpseNear = true;
++                                break;
++                            }
++                        }
++                        // One real E press after the kill. Holding interact every
++                        // tick re-fires loot_corpse_interact on an empty searched
++                        // corpse and floods stderr with TAKEN 0 ITEMS.
++                        if (corpseNear && !shotActionConsumed) {
++                            interactWanted = true;
++                            std::fprintf(stderr,
++                                         "[corp] corpse in reach тАФ "
++                                         "interact\n");
++                            shotActionConsumed = true;
++                        } else if (!corpseNear) {
++                            Entity bestMob = entt::null;
++                            float bestD2 = 1.0e12f;
++                            vec3 bestPos{};
++                            for (auto me :
++                                 reg.view<const game::MobRef,
++                                          const Transform>()) {
++                                if (reg.all_of<game::Dead>(me)) continue;
++                                const Transform& tr =
++                                    reg.get<const Transform>(me);
++                                if (tr.layer != activeLayer) continue;
++                                const float dx = wrap_delta_f(
++                                    ppos.x, tr.pos.x, kWorldExtent);
++                                const float dy = ppos.y - tr.pos.y;
++                                const float dz = wrap_delta_f(
++                                    ppos.z, tr.pos.z, kWorldExtent);
++                                const float d2 =
++                                    dx * dx + dy * dy + dz * dz;
++                                if (d2 < bestD2) {
++                                    bestD2 = d2;
++                                    bestMob = me;
++                                    bestPos = tr.pos;
++                                }
++                            }
++                            if (bestMob != entt::null) {
++                                auto& cam = reg.get<CameraTag>(player);
++                                const float dx = wrap_delta_f(
++                                    ppos.x, bestPos.x, kWorldExtent);
++                                const float dz = wrap_delta_f(
++                                    ppos.z, bestPos.z, kWorldExtent);
++                                cam.yaw = std::atan2(dx, dz);
++                                cam.pitch = -0.15f;
++                                if (bestD2 > 1.5f * 1.5f) {
++                                    if (auto* ctl =
++                                            reg.try_get<Controller>(player)) {
++                                        const float len =
++                                            std::sqrt(bestD2);
++                                        if (len > 1e-3f) {
++                                            ctl->wishDir = vec3{
++                                                dx / len, 0.0f, dz / len};
++                                        }
++                                    }
++                                }
++                                attackHeld = true;
++                                static int corpAtkLog = 0;
++                                if ((corpAtkLog++ % 120) == 0) {
++                                    std::fprintf(
++                                        stderr,
++                                        "[corp] attack mob d=%.2f "
++                                        "floor=%d\n",
++                                        std::sqrt(bestD2), currentFloor);
++                                }
++                            } else if ((simTick % 240u) == 0u) {
++                                std::fprintf(stderr,
++                                             "[corp] no live mob on layer "
++                                             "(floor %d)\n",
++                                             currentFloor);
++                            }
++                        }
+                     } else if (!shotActionConsumed && shotAction == "carve" &&
+                                shotFramesSeen >= 30 && !doors.frozen) {
+                         // One demolition charge ahead of the camera, once the
+@@ -2543,6 +2636,17 @@ int main(int argc, char** argv) {
+                                           "CORPSE LOOTED: TAKEN %u ITEMS (+%d RUB)",
+                                           clr.itemsTaken, clr.roublesGained);
+                             elevDiagAt = simTick;
++                            // Headless --shot audit trail (HUD is invisible in captures).
++                            // Log once per interact edge тАФ not every sim tick.
++                            static std::uint64_t lastCorpseLootLogTick = ~0ull;
++                            if (lastCorpseLootLogTick != simTick) {
++                                lastCorpseLootLogTick = simTick;
++                                std::fprintf(stderr,
++                                             "[corp] CORPSE LOOTED: TAKEN %u ITEMS "
++                                             "(+%d RUB) floor=%d\n",
++                                             clr.itemsTaken, clr.roublesGained,
++                                             currentFloor);
++                            }
+                             if (particlePass.ready()) {
+                                 particlePass.emit_burst(ppos + vec3{0.0f, 0.4f, 0.0f},
+                                                         vec3{0.0f, 0.4f, 0.0f},
+@@ -3838,16 +3942,22 @@ int main(int argc, char** argv) {
+                 }
+             }
+ 
+-            // Corpse proximity (manual tactical loot)
++            // Corpse proximity (manual tactical loot). Skip bodies already
++            // rifled with nothing left тАФ LOOT CORPSE on an empty searched
++            // corpse is a lie the player already resolved with E.
+             if (!promptText) {
+                 for (auto cEnt : reg.view<const game::Corpse, const Transform>()) {
+                     if (reg.get<const Transform>(cEnt).layer != activeLayer) continue;
++                    const auto& corpse = reg.get<const game::Corpse>(cEnt);
++                    if (corpse.searched && corpse.slotCount == 0) continue;
+                     const vec3& cpos = reg.get<const Transform>(cEnt).pos;
+                     const float dx = wrap_delta_f(ppos.x, cpos.x, kWorldExtent);
+                     const float dy = ppos.y - cpos.y;
+                     const float dz = wrap_delta_f(ppos.z, cpos.z, kWorldExtent);
+                     if (dx * dx + dy * dy + dz * dz < 2.2f * 2.2f) {
+-                        set_prompt("interact", "LOOT CORPSE");
++                        set_prompt("interact",
++                                   corpse.searched ? "LOOT CORPSE (REMAINDER)"
++                                                   : "LOOT CORPSE");
+                         break;
+                     }
+                 }
+==== GITIGNORE ====
+# Build output
+/build/
+/build-win/
+/out/
+
+# CMake FetchContent caches live under build/, but guard the source tree too.
+_deps/
+
+# Editor / OS cruft
+.DS_Store
+*.swp
+compile_commands.json
+.cache/
+
+# ImGui runtime state
+imgui.ini
+
+# Screenshot proofs. `gigahrush2 --shot out.png` writes into the working
+# directory, so every capture the debug tool exists to produce (render/
+# screenshot.h) is a 2-4 MB file that `git add -A` would otherwise sweep in.
+# Still safe as a blanket rule, but no longer because the engine is imageless:
+# data/textures/ now carries 16 committed BC7/KTX2 albedo maps (see its README).
+# Those are .ktx2, so this rule does not touch them вЂ” but it WOULD silently
+# swallow a .png asset, so add a negation here before committing one.
+# The fetch tool's download cache is already covered by `.cache/` above.
+*.png
+!assets/*.png
+!docs/*.png
+
+
+# Claude Code personal/local settings (not shared)
+.claude/settings.local.json
+
+# Agent worktrees. These are live git worktrees of THIS repository, so `git add -A`
+# sees each one as an embedded repo and commits a gitlink that points nowhere for
+# anybody else. Committed two by accident in 107b6fa; removed in the next commit.
+.claude/worktrees/
+
+# Python bytecode from the table generators.
+tools/__pycache__/
+__pycache__/
+
+# Save games written next to the exe by F5 ([app/main.cpp] kSavePath).
+*.sav
+
+# Golden dumps written by the render-parity harness. A visual-parity check for
+# cube_pass has to prove not a single pixel moved, which means dumping the cell-class
+# and instance buffers before a change and diffing them after вЂ” 8 MB and 15 MB
+# respectively, generated, with no reader in src/ or tests/. They are measurement
+# output, not fixtures: regenerate them, never commit them. Named explicitly rather
+# than as *.bin, because the nav-cache blobs are also .bin and that rule already has
+# its own directory entry below.
+/golden_cellclass.bin
+/golden_instances.bin
+
+# Scratch directory for the nav-cache round-trip tests (tests/game_test.cpp:3720, :3760).
+# The tests std::remove their own files, and an EMPTY directory does not dirty git status,
+# so this is insurance rather than a live fix: there is no remove_all, so a run that fails
+# part-way leaves a .bin behind with nothing ignoring it.
+navcache_test_tmp/
+gigahrush2_save/
+==== AGENTS MENTIONS ====
+27:Do migrations and large refactors **inline, in small steps, building green after
+46:- **Keep the build green at every step.** Run the build after each edit. Prefer
+51:- **When you must stop, stop GREEN**, and leave a precise written plan so the
+64:  green. A green Windows build is necessary, never sufficient for the *compiler*.
+101:- **Data-driven by default.** Adding a cell type / field / monster / loot entry
+246:[CRITICAL: SCREENSHOT COMPRESSION & HTTP 413 PREVENTION]
+248:BEFORE analyzing any screenshot or UI render, always run a Python script with PIL to downscale/compress it to 1280x720 JPEG (<150KB) at quality=80. Read only the compressed JPEG file for visual analysis.
+==== README ====
+<div align="center">
+
+# GIGAH|RUSH 2 вЂ” Next-Gen C++23 OpenGL Voxel Pipeline
+
+[![C++23](https://img.shields.io/badge/Standard-C%2B%2B23-blue?style=for-the-badge)]()
+[![OpenGL](https://img.shields.io/badge/Render-OpenGL%204.6-red?style=for-the-badge)]()
+[![Build](https://img.shields.io/badge/Build-Passing-brightgreen?style=for-the-badge)]()
+[![Audit](https://img.shields.io/badge/Audit-100%25%20Verified-purple?style=for-the-badge)]()
+[![Zero Alloc](https://img.shields.io/badge/Runtime-Zero%20Allocation-00ff88?style=for-the-badge)]()
+
+> **Production-grade next-gen voxel rendering engine вЂ” C++23, OpenGL 4.6, zero-allocation runtime.**
+
+[рџЊђ Live Showcase](https://Jirnyak.github.io/gigahrush2/) &nbsp;В·&nbsp; [рџ“Љ Architecture](#-system-architecture--pipeline)
+
+</div>
+
+---
+<p align="center">
+  <a href="https://twitter.com/intent/tweet?text=Check%20out%20gigahrush2%20on%20GitHub!&url=https%3A%2F%2FJirnyak.github.io%2Fgigahrush2%2F"><img src="https://img.shields.io/badge/Share-Twitter%2FX-1DA1F2?style=for-the-badge&logo=x" alt="Share on X"/></a> &nbsp;
+  <a href="https://news.ycombinator.com/submitlink?u=https%3A%2F%2FJirnyak.github.io%2Fgigahrush2%2F&t=Check%20out%20gigahrush2%20on%20GitHub!"><img src="https://img.shields.io/badge/Submit-Hacker%20News-FF6600?style=for-the-badge&logo=y-combinator" alt="Submit to HN"/></a> &nbsp;
+  <a href="https://reddit.com/submit?url=https%3A%2F%2FJirnyak.github.io%2Fgigahrush2%2F&title=Check%20out%20gigahrush2%20on%20GitHub!"><img src="https://img.shields.io/badge/Post-Reddit-FF4500?style=for-the-badge&logo=reddit" alt="Post on Reddit"/></a>
+</p>
+
+---
+
+## рџЋЁ Engine Gallery
+
+<div align="center">
+
+<img src="assets/illust_chunks.jpg" width="100%" alt="OpenGL voxel chunk grid streaming with LOD and wireframe debug"/>
+
+*OpenGL 4.6 voxel chunk streaming вЂ” LOD system, GPU instancing, real-time chunk generation*
+
+</div>
+
+---
+
+<div align="center">
+<table>
+<tr>
+==== ARCH ====
+# Architecture вЂ” gigahrush2
+
+The layered design source of truth. [AGENTS.md](AGENTS.md) holds contributor
+rules; [README.md](README.md) orchestrates the per-system docs. This document
+describes *how the pieces fit*, not every function.
+
+## The one-sentence model
+
+A **monolithic 128Ві macro grid** of typed cells (each cell ~2 m), wrapped as a
+**torus** on all three spatial axes; every cell subdivides into an **8Ві
+sub-voxel** blocker mask; arbitrary **typed scalar fields** overlay the grid at
+runtime; a **4th coordinate W** stacks whole worlds into a **level stack**;
+entities live in a shared **EnTT** registry and are moved by **systems**
+(physics, controller, camera, fluid); a minimal **Vulkan** backend draws the
+visible surface as instanced cubes.
+
+## Resource model вЂ” the frame for everything
+
+This is a **native C++/Vulkan desktop game**. That fixes the cost model:
+
+- **Disk unlimited** в†’ save whole worlds verbatim (all cells + objects),
+  persisted as the player explores (Dwarf Fortress / Minecraft style).
+- **GPU unlimited вЂ” draw *and* compute** в†’ full dynamic lighting/shadows and
+  generous overdraw, *plus* every cellular field (fluid/gas/heat/pressure/light)
+  runs here as async compute. The GPU is the field engine, not just the renderer.
+- **RAM ~8 GB** в†’ generous but finite; the one budget that bounds the dense model.
+- **CPU is the bottleneck вЂ” it runs the agents** в†’ the player + ~16k embodied
+  NPCs/mobs (movement, collision, AI). The agent tick must stay **O(n)** in live
+  agents; fields are off-CPU (see the compute split below).
+- **Load time unbounded** в†’ do all heavy precomputation (BFS/nav, light maps) at
+  load and bake it into flat memory; the tick only does O(1) lookups.
+
+The consequences вЂ” **dense over sparse**, **bake at load, tick in O(n)**, the
+**CPU-agents / GPU-fields compute split**, **two regimes of re-bake** (ideal at
+load/self-assembly, cheap dirty-local for in-play destruction), and the fixed
+**N = 128 active floor** вЂ” are detailed in [performance.md](performance.md) and
+drive every layer below.
+
+## Layers
+
+==== HANDOFF ====
+29:   - All interactive elements (terminals, doors, destructible electrical shields, crafting stations, trader shops, corpse looting) must be fully functional in-game.
+35:   - Every UI / rendering task requires 4-state screenshot proof: **Mobile Light**, **Mobile Dark**, **PC Light**, **PC Dark** (or 2D/3D viewport equivalents).
+36:   - Always copy screenshot files to `<appDataDir>\brain\<conversation-id>\<filename>.png` and inspect with `view_file` before showing the user.
+52:- [src/game/faction_relations.cpp](file:///C:/hades/gigahrush2/src/game/faction_relations.cpp) — ALife ranged firefights, gunshot noise events, and persistent corpse spawning.
+53:- [src/game/loot.cpp](file:///C:/hades/gigahrush2/src/game/loot.cpp) & [src/game/loot.h](file:///C:/hades/gigahrush2/src/game/loot.h) — Corpse inspection and itemized looting.
+54:- [tests/game_test.cpp](file:///C:/hades/gigahrush2/tests/game_test.cpp) — Combat, loot, crafting, and power grid test coverage.
+63:2. **Execute Interactive Smoke Screenshots**:
+64:   - Run `gigahrush2.exe --shot C:\Temp\shot.png --no-hud` from `build-win\Release`.
+65:   - Copy screenshot to session artifacts directory and inspect visually.
+82:# 3. Capture real-game screenshot
+83:.\build-win\Release\gigahrush2.exe --shot C:\Temp\shot_gameplay.png --no-hud
+85:# 4. Copy screenshot to session artifacts
+86:Copy-Item -Path "C:\Temp\shot_gameplay.png" -Destination "$env:USERPROFILE\.gemini\antigravity\brain\<conversation-id>\shot_gameplay.png" -Force
+==== PORCELAIN ====
+ M AGENTS.md
+ M src/app/main.cpp
+?? _patch_corp.py
+?? _scan_atk.py
+?? _scan_atk.txt
+?? _scan_corp.py
+?? _scan_corp.txt
+?? _scan_shot.py
+?? _scan_shot_out.txt
+?? shots/_run_corp_proof.py
+?? shots/corp_diag.txt
+?? shots/shot_corp_compressed.jpg
+?? shots/shot_corp_stderr.txt
+?? shots/shot_corp_stdout.txt
+?? shots/shot_corp_view.jpg
+==== LS ROOT SCRATCH ====
+_patch_corp.py
+_scan_atk.py
+_scan_corp.py
+_scan_shot.py
+_scan_atk.txt
+_scan_corp.txt
+_scan_shot_out.txt
+scratch.cpp
+scratch2.cpp
+shot_crafting_ui.png
+shot_gameplay_tactical.png
+shot_monster_traits.png
+prop_render_proof.png

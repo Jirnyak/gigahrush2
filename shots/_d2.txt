@@ -1,0 +1,74 @@
+﻿.agents/worker_game_audit/BACKLOG.md
+.agents/worker_game_audit/BRIEFING.md
+.agents/worker_game_audit/ORIGINAL_REQUEST.md
+.agents/worker_game_audit/_main_diff.txt
+.agents/worker_game_audit/handoff.md
+.agents/worker_game_audit/progress.md
+b52cbd6 feat(save): v5 тАФ modular per-floor save files, autosave on every transition
+92f8305 feat(save): v4 тАФ active-floor snapshot; state beats history, same-floor F9 un-carves
+278e775 Merge remote-tracking branch 'origin/main' into netcode
+c0fbf5a feat(save): format v3 тАФ the carve log; destroyed geometry survives restarts and rides
+3c04a2d feat(world): universal destruction тАФ probabilistic carve, sparse sub-voxel fields, detach handoff
+d9b9762 feat(input): de-hardcode all keys тАФ keybind table over console commands, extensible pause menu
+7d243ca fix(loot): CORP1 corpse interact + loottable truth; feud HP floor; pin 215499
+b6f8f8d feat(shaders): update frag shader and loot table test suites
+f4695b1 feat(combat): implement faction relations, loot tables, and combat mechanics
+89bbc14 feat(gameplay): POD component refactoring & active monster traits integration
+05d710d feat(gameplay): persistent corpses & tactical looting, keycard security doors, electrical shield power-cut sabotage
+36b60c3 fix(test): FOR1/MAG1 close - pin game_test 213917, backlog CLOSED
+b6cd6c5 fix(render): resolve isHorizontal normal classification bug and enforce universal 2-tone Khrushchevka surface system
+f80098d feat(shot): --action save|load one-shot harness; F9 two-phase PROOF=GREEN
+104a097 docs(audit): SHOT1/PBS1 closed тАФ real --shot ride proof floor-14
+b52cbd6 feat(save): v5 тАФ modular per-floor save files, autosave on every transition
+ .gitignore               |   1 +
+ CMakeLists.txt           |   9 +-
+ destruct.md              |  47 ++++----
+ src/app/main.cpp         | 286 ++++++++++++++++++++++++++---------------------
+ src/game/save.cpp        | 112 ++++++++-----------
+ src/game/save.h          | 116 ++++++++-----------
+ tests/suite_saveload.inl | 203 ++++++++++++---------------------
+ 7 files changed, 350 insertions(+), 424 deletions(-)
+7d243ca fix(loot): CORP1 corpse interact + loottable truth; feud HP floor; pin 215499
+36b60c3 fix(test): FOR1/MAG1 close - pin game_test 213917, backlog CLOSED
+f80098d feat(shot): --action save|load one-shot harness; F9 two-phase PROOF=GREEN
+104a097 docs(audit): SHOT1/PBS1 closed тАФ real --shot ride proof floor-14
+361162b docs(worker_game_audit): BACKLOG + progress after F9 full load close
+shots/_run_f9_proof.py
+shots/_run_shot.py
+shots/_run_shot_console.txt
+shots/diag.txt
+shots/f9_diag.txt
+shots/shot_f9_load_stderr.txt
+shots/shot_f9_load_stdout.txt
+shots/shot_f9_save_stderr.txt
+shots/shot_f9_save_stdout.txt
+shots/shot_travel_done.txt
+shots/shot_travel_stderr.txt
+shots/shot_travel_stdout.txt
+2636:                                          "CORPSE LOOTED: TAKEN %u ITEMS (+%d RUB)",
+2645:                                             "[corp] CORPSE LOOTED: TAKEN %u ITEMS "
+3946:            // rifled with nothing left тАФ LOOT CORPSE on an empty searched
+3959:                                   corpse.searched ? "LOOT CORPSE (REMAINDER)"
+3960:                                                   : "LOOT CORPSE");
+  | [macro] tick=14 day=98.0 living=1940 births=1 deaths=1 blocked=0 depart=0 arrive=0 transit=0 reserve=1046636
+  | [macro] tick=15 day=105.0 living=1940 births=1 deaths=1 blocked=0 depart=0 arrive=0 transit=0 reserve=1046636
+  | [macro] tick=16 day=112.0 living=1940 births=1 deaths=1 blocked=0 depart=0 arrive=0 transit=0 reserve=1046636
+  | [macro] tick=17 day=119.0 living=1940 births=0 deaths=0 blocked=0 depart=0 arrive=0 transit=0 reserve=1046636
+  | [macro] tick=18 day=126.0 living=1940 births=1 deaths=1 blocked=0 depart=0 arrive=0 transit=0 reserve=1046636
+  | [macro] tick=19 day=133.0 living=1939 births=1 deaths=1 blocked=0 depart=0 arrive=0 transit=0 reserve=1046637
+  | [macro] tick=20 day=140.0 living=1939 births=0 deaths=0 blocked=0 depart=0 arrive=0 transit=0 reserve=1046637
+  | shot: saved -> C:\hades\gigahrush2\shots\shot_corp.png (floor 0, 2401 frames)
+has_attack=True has_corpse_reach=True has_loot=True has_png=True no_mob=False
+PROOF=GREEN
+host, where a multi-byte comment character can swallow the following quote and
+break the parse.
+
+## Workflow Checklist
+
+1. Make the smallest change that solves the problem.
+2. Build clean (no warnings) and run `ctest`.
+3. New shader тЖТ confirm it compiles (glslc runs in the build).
+4. Update the relevant system `.md` **only** if you added a real subsystem or
+   changed a documented contract; do not document trivial edits.
+5. Do not create stand-alone notes / changelogs / "summary of changes" markdown.
+   Documentation lives in the per-system docs orchestrated by the README.

@@ -1,0 +1,56 @@
+exe exists=True size=1382912
+data present at C:\hades\gigahrush2\build-win\Release\data
+cmd=C:\hades\gigahrush2\build-win\Release\gigahrush2.exe --shot C:\hades\gigahrush2\shots\shot_corp.png --frames 2400 --ride 0 --action corp
+exit=0 elapsed=48.0s png=True size=2765798
+stderr len=28951
+  | [tex] ERROR data/textures/rubber_tiles_roughness.ktx2: File open failed.
+  | [tex] ERROR data/textures/rusty_metal_03_roughness.ktx2: File open failed.
+  | [tex] ERROR data/textures/rusty_corrugated_iron_roughness.ktx2: File open failed.
+  | [pop] seeded 1940 cold records across 11 registered floors
+  | [corp] attack mob d=29.53 floor=0
+  | [corp] attack mob d=29.53 floor=0
+  | [macro] tick=1 day=7.0 living=1940 births=0 deaths=0 blocked=0 depart=1 arrive=0 transit=1 reserve=1046636
+  | [corp] attack mob d=29.53 floor=0
+  | [corp] attack mob d=29.53 floor=0
+  | [macro] tick=2 day=14.0 living=1940 births=2 deaths=2 blocked=0 depart=1 arrive=0 transit=2 reserve=1046636
+  | [nav] bake coarse 2216 ms | fine 2300 ms | 536 agents wandering | 0 AI brains attached (async, off the main thread)
+  | [corp] attack mob d=29.15 floor=0
+  | [corp] attack mob d=27.77 floor=0
+  | [macro] tick=3 day=21.0 living=1940 births=1 deaths=1 blocked=0 depart=1 arrive=0 transit=3 reserve=1046636
+  | [corp] attack mob d=26.94 floor=0
+  | [corp] attack mob d=25.38 floor=0
+  | [macro] tick=4 day=28.0 living=1940 births=0 deaths=0 blocked=0 depart=0 arrive=1 transit=2 reserve=1046636
+  | [corp] attack mob d=24.06 floor=0
+  | [corp] attack mob d=22.59 floor=0
+  | [macro] tick=5 day=35.0 living=1940 births=0 deaths=0 blocked=0 depart=1 arrive=2 transit=1 reserve=1046636
+  | [corp] attack mob d=21.66 floor=0
+  | [corp] attack mob d=20.81 floor=0
+  | [macro] tick=6 day=42.0 living=1940 births=1 deaths=1 blocked=0 depart=0 arrive=1 transit=0 reserve=1046636
+  | [corp] attack mob d=20.05 floor=0
+  | [corp] attack mob d=16.74 floor=0
+  | [macro] tick=7 day=49.0 living=1940 births=0 deaths=0 blocked=0 depart=1 arrive=0 transit=1 reserve=1046636
+  | [corp] attack mob d=13.82 floor=0
+  | [corp] attack mob d=10.60 floor=0
+  | [corp] attack mob d=9.86 floor=0
+  | [macro] tick=8 day=56.0 living=1940 births=1 deaths=1 blocked=0 depart=0 arrive=1 transit=0 reserve=1046636
+  | [corp] attack mob d=6.73 floor=0
+  | [corp] attack mob d=2.02 floor=0
+  | [macro] tick=9 day=63.0 living=1940 births=0 deaths=0 blocked=0 depart=0 arrive=0 transit=0 reserve=1046636
+  | [corp] attack mob d=0.04 floor=0
+  | [corp] attack mob d=0.14 floor=0
+  | [macro] tick=10 day=70.0 living=1940 births=1 deaths=1 blocked=0 depart=0 arrive=0 transit=0 reserve=1046636
+  | [corp] corpse in reach — interact
+  | [corp] CORPSE LOOTED: TAKEN 1 ITEMS (+35 RUB) floor=0
+  | [macro] tick=11 day=77.0 living=1940 births=2 deaths=2 blocked=0 depart=0 arrive=0 transit=0 reserve=1046636
+  | [macro] tick=12 day=84.0 living=1940 births=2 deaths=2 blocked=0 depart=0 arrive=0 transit=0 reserve=1046636
+  | [macro] tick=13 day=91.0 living=1940 births=0 deaths=0 blocked=0 depart=0 arrive=0 transit=0 reserve=1046636
+  | [macro] tick=14 day=98.0 living=1940 births=1 deaths=1 blocked=0 depart=0 arrive=0 transit=0 reserve=1046636
+  | [macro] tick=15 day=105.0 living=1940 births=1 deaths=1 blocked=0 depart=0 arrive=0 transit=0 reserve=1046636
+  | [macro] tick=16 day=112.0 living=1940 births=1 deaths=1 blocked=0 depart=0 arrive=0 transit=0 reserve=1046636
+  | [macro] tick=17 day=119.0 living=1940 births=0 deaths=0 blocked=0 depart=0 arrive=0 transit=0 reserve=1046636
+  | [macro] tick=18 day=126.0 living=1940 births=1 deaths=1 blocked=0 depart=0 arrive=0 transit=0 reserve=1046636
+  | [macro] tick=19 day=133.0 living=1939 births=1 deaths=1 blocked=0 depart=0 arrive=0 transit=0 reserve=1046637
+  | [macro] tick=20 day=140.0 living=1939 births=0 deaths=0 blocked=0 depart=0 arrive=0 transit=0 reserve=1046637
+  | shot: saved -> C:\hades\gigahrush2\shots\shot_corp.png (floor 0, 2401 frames)
+has_attack=True has_corpse_reach=True has_loot=True has_png=True no_mob=False
+PROOF=GREEN

@@ -1,0 +1,177 @@
+main hits: 96
+142:                                 const Registry& reg, LayerId activeLayer,
+171:        if (tr.layer != activeLayer) continue;
+190:        if (tr.layer != activeLayer) continue;
+205:        if (tr.layer != activeLayer) continue;
+221:        const game::Noise* loud = game::loudest_heard(*noiseField, activeLayer, camPos, 1.0f, 1, 0, &noiseDist);
+1051:void begin_floor_nav(const World& world, nav::AsyncBake& bake) {
+1056:// walk. Separate from begin_floor_nav because it can only run after the swap.
+1057:std::uint32_t finish_floor_nav(Registry& reg, LayerId layer, std::uint32_t seed,
+1504:            begin_floor_nav(stack.layer(l0), nav);
+1539:    // [[maybe_unused]]: its only consumer is the PARKED ai_step call below (ai.cpp
+1541:    // it is advanced correctly every tick, ready for ai_step's return. MSVC did not
+1690:    // switch — but read the note at the ai_step call site first, because it also needs
+1691:    // ai_init to attach AiBrain and ai_release to clear the token safely.
+1692:    game::AiConfig aiCfg;
+1693:    aiCfg.enabled = true;
+1908:        begin_floor_nav(stack.layer(nl), nav);
+1992:            finish_floor_nav(reg, l, 0xA11FEu, nav);
+2162:        LayerId activeLayer = reg.get<Transform>(player).layer;
+2175:            World& activeWorld = stack.layer(activeLayer);
+2177:            // ai_step call below (line ~920). ai.cpp sits in tools/branch_port_pending/
+2209:                    const MacroGrid& g = stack.layer(activeLayer).grid();
+2284:                // MEASURED over 200 ticks x 24 bodies: ai_step wrote Velocity 2400 times,
+2288:                // `aiCfg.enabled` is FALSE, so this is one branch per tick — ai.cpp returns
+2296:                // (see the load path), and `ai_release` must run when clearing the flag on a
+2299:                // NOTE the `activeLayer` argument: the parked call was
+2300:                // `ai_step(reg, pool, danger, activeGrid, simNow, kSimDt)` against an older
+2304:                aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
+2305:                                       kSimDt, aiCfg);
+2413:                                activeLayer)
+2446:                                if (tr.layer != activeLayer) continue;
+2504:                                stack.layer(activeLayer).grid();
+2602:                game::wander_step(reg, stack.layer(activeLayer).grid(), pool,
+2604:                                  nav.fine(), activeLayer, simTick);
+2613:                        game::noise_publish(noiseField, activeLayer, ppos, footstepNoise,
+2623:                heardMobs = game::investigate_step(reg, noiseField, pool, activeLayer, simTick);
+2628:                    if (tr.layer != activeLayer) continue;
+2635:                        const float* fluidData = giga::fluid_data(stack.layer(activeLayer));
+2655:                            game::noise_publish(noiseField, activeLayer, tr.pos, flashNoise, static_cast<std::uint32_t>(entt::to_integral(me_)));
+2756:                feudHits += game::faction_feud_step(reg, pool, factionRel, activeLayer,
+2761:                game::slow_step(reg, activeLayer, kSimDt);
+2767:                doorTick = game::door_step(reg, stack.layer(activeLayer), doors,
+2768:                                           activeLayer, kSimDt, simTick);
+2781:                    game::noise_publish(noiseField, activeLayer,
+2793:                    game::noise_publish(noiseField, activeLayer,
+2808:                            stack.layer(activeLayer), doors, reg,
+2809:                            activeLayer, ppos, pInv);
+2829:                            game::noise_publish(noiseField, activeLayer,
+2860:                        carve_sphere(stack.layer(activeLayer), op,
+2891:                        game::noise_publish(noiseField, activeLayer,
+2903:                            reg, pool, bus, activeLayer, ppos, 2.2f, simTick);
+2929:                            game::noise_publish(noiseField, activeLayer, ppos, np, 0);
+2936:                                reg, stack.layer(activeLayer), doors, activeLayer, ppos, 4.0f, terms);
+2953:                                game::noise_publish(noiseField, activeLayer, tres.propPos, np, 0);
+2983:                                        game::noise_publish(noiseField, activeLayer, sp, np, 0);
+3008:                                        game::noise_publish(noiseField, activeLayer, ppos, np, 0);
+3019:                        Entity newPlayer = possess_nearest_survivor(reg, pool, activeLayer, ppos, 8.0f);
+3037:                            game::noise_publish(noiseField, activeLayer, newPos, np, 0);
+3065:                shots += game::player_ranged_step(reg, pool, activeLayer,
+3069:                    reg, pool, bus, activeLayer, kSimDt,
+3071:                    &stack.layer(activeLayer).grid(), &combatCarves);
+3073:                                   stack.layer(activeLayer).grid(),
+3074:                                   pool, bus, activeLayer,
+3079:                    reg, pool, bus, stack, activeLayer, kSimDt, simTick,
+3096:                            carve_sphere(stack.layer(activeLayer), op,
+3184:                    const game::NpcId talker = game::nearest_speaker(reg, activeLayer);
+3201:                    const game::NpcId sp = game::nearest_speaker(reg, activeLayer);
+3204:                            reg, pool, sp, activeLayer, currentFloor);
+3232:                needs = game::needs_step(reg, pool, activeLayer, kSimDt);
+3253:                game::loot_dead_mobs(reg, activeLayer, currentFloor,
+3263:                    game::loot_containers_step(reg, pool, activeLayer, &noiseField);
+3270:                    game::pickup_step(reg, pool, bus, activeLayer, simTick);
+3283:                            stack.layer(activeLayer).grid(), ptr_.pos)) {
+3399:                            activeLayer = nl;
+3433:                            begin_floor_nav(stack.layer(nl), nav);
+3479:                    if (game::on_extraction_pad(stack.layer(activeLayer).grid(),
+3512:                        game::on_extraction_pad(stack.layer(activeLayer).grid(), ct.pos)
+3590:                        cr = game::use_best_food(reg, pool, bus, activeLayer,
+3595:                        cr = game::use_best_drink(reg, pool, bus, activeLayer,
+3607:                    healed += game::use_best_heal(reg, pool, bus, activeLayer,
+3631:                    player = possess_a_survivor(reg, pool, activeLayer);
+3851:                    if (game::on_extraction_pad(stack.layer(activeLayer).grid(),
+3861:                        if (reg.get<const Transform>(ce).layer != activeLayer) continue;
+3910:                // The utility AI, and it reads ZERO on purpose while aiCfg.enabled is false
+3917:                            aiCfg.enabled ? "ON" : "off (dormant)", aiTick.considered,
+3932:                        if (t.layer != activeLayer) continue;
+3960:                    ? game::loudest_heard(noiseField, activeLayer,
+4097:                        game::count_layer_mobs(reg, activeLayer));
+4163:                game::on_extraction_pad(stack.layer(activeLayer).grid(), ct.pos)
+4178:            const bool isOnPad = game::on_extraction_pad(stack.layer(activeLayer).grid(), vt.pos);
+4262:                    if (reg.get<const Transform>(cEnt).layer != activeLayer) continue;
+4281:                    if (reg.get<const Transform>(npcEnt).layer != activeLayer) continue;
+4503:                collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, samosbor, reg, activeLayer, &noiseField, &powerGrid, &propPass);
+4607:                            stack.layer(activeLayer), push, lightGrid.descriptor_set());
+4612:            bodyPass.record(cmd, renderer.currentFrame, reg, activeLayer, push, lightGrid.descriptor_set());
+4684:                        activeLayer = nl;
+4704:                        begin_floor_nav(stack.layer(nl), nav);
+
+===== LEAVE SITES =====
+
+--- src/game/floor_stream.cpp (16 hits) ---
+4:#include "game/embody.h"      // embody, embody_as_player, fold_back, NpcRef
+42:    // Peak residency during a ride = the kept window (2R+1) plus the destination
+189:        // Bucket residents are alive by construction (kill/leave drop them). Skip
+258:    // fields + nearest-node field, ~130 MiB, all freed again in unload. With a
+285:void FloorStreamer::unload(LevelStack& stack, FloorRegistry& reg, Registry& ecs,
+295:    // ride destroyed when it moved the player to another floor — and fold_back is
+301:        if (id != kInvalidNpc) fold_back(ecs, pool, id, e);
+319:    // ride handed this slot straight back, generate_floor rewrote the geometry around
+328:    // invalidates the iterator. The CameraTag holder is exempt — unload() is public
+363:        if (d > keepRadius_) unload(stack, reg, ecs, pool, fm.number);
+404:    RideResult ride = ride_elevator(ecs, pool, reg, player, fromFloor,
+406:    if (!ride.moved) return ride;
+408:    // The ride built a fresh player body on the destination; adopt it into the
+409:    // destination module so a later unload folds it, then prune to the kept window
+412:    if (dm != kInvalidModule) modules_[dm].bodies.push_back(ride.player);
+414:    return ride;
+
+--- src/game/floor_stream.h (10 hits) ---
+35:#include "game/elevator.h"       // giga::game::RideResult, ride_elevator
+102:    // module, so unload folds exactly them back.
+126:    // through. Peak residency during a ride is 2*keepRadius + 2 (the kept window
+186:    void unload(LevelStack& stack, FloorRegistry& reg, Registry& ecs,
+190:    // radius], so at rest only the kept window stays live. Never unloads the
+197:    // ride_elevator, and adopts its freshly-embodied player body into the
+198:    // destination module so a later unload folds it correctly. Returns a no-op
+214:    // player across (ride_elevator with the resolved delta — the same fold/
+231:    // bakes it, unload frees it). The pointer stays valid until `number` unloads.
+253:    // bakes into nav_[m]; unload resets it back to null.
+
+--- src/game/elevator.cpp (7 hits) ---
+9:RideResult ride_elevator(Registry& reg, NpcPool& pool,
+18:    // ride leaves no half-folded state.
+29:    // controller, so without this the ride would reset the head and drop fly.
+39:    // Firearm + melee state live on the BODY, not the pool row. fold_back destroys
+40:    // the entity, so without this capture every elevator ride zeroes magCount —
+44:    // death-possession, but a ride is not a death and never hit that path.
+55:    fold_back(reg, pool, id, player);
+
+--- src/game/embody.cpp (3 hits) ---
+65:    // keeps the survival clock in the POOL ROW on purpose: the elevator fold_back ->
+89:    // an elevator ride reproduces their exact str/agi/int rather than rerolling a
+101:void fold_back(Registry& reg, NpcPool& pool, NpcId id, Entity e) {
+
+--- src/game/ai.h (21 hits) ---
+27://                        shares wander's stagger phase to override it.
+72:// Both guards are ADDITIVE while `ai_init` has no caller: no `AiBrain` means
+88://      `ai_init`, so if `ai_init` is never called the guard is a load of a null
+130:// would reset the survival clock every floor ride). This file only READS that
+139:// MEMORY (`AiMemory`) — the second thing the brain has, and the reason a crowd
+148:// exactly the reason [needs.h] gives for the survival clock: an elevator ride
+172:// AND IT IS A **DEMAND** COLUMN. `AiMemory` starts with an EMPTY vector and
+287:// materialises on `ai_init` and folds away with the entity, like Velocity.
+316:// `ai_init` never called, every existing steerer is bit-for-bit unchanged.
+554:// AiMemory — the DEMAND column.
+565:class AiMemory {
+673:MemoryRecall ai_recall(const AiMemory& mem, NpcId id, int cx, int cy, int cz,
+719:    // -- memory (AiMemory), zero when the body remembers nothing --
+749:// The switch margin is the FSM override 7, NOT the npc_utility default 8; using
+822:// no effect at all unless `ai_step` is handed an `AiMemory`, so the REAL off
+861:std::uint32_t ai_init(Registry& reg, LayerId layer);
+869:// `AiConfig::enabled`, or on unload.
+870:std::uint32_t ai_release(Registry& reg, LayerId layer);
+914:               const AiConfig& cfg = {}, AiMemory* mem = nullptr);
+929:bool ai_remember_cell(AiMemory& mem, NpcId id, std::uint8_t kind, int cx, int cy,
+931:bool ai_remember_actor(AiMemory& mem, NpcId id, std::uint8_t kind, NpcId who,
+
+===== BACKLOG AIMEM =====
+6:## CLOSED this session
+Traceback (most recent call last):
+  File "C:\hades\gigahrush2\shots\_scan_aimem3.py", line 41, in <module>
+    print(f"{i}:{l}")
+    ~~~~~^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\encodings\cp1251.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2192' in position 37: character maps to <undefined>

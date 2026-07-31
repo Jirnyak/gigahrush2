@@ -1,0 +1,160 @@
+=== danger ===
+2176:            // [[maybe_unused]]: danger + activeGrid are the arguments to the PARKED
+2181:            [[maybe_unused]] const Field<float>* danger = activeWorld.fields().find<float>("danger");
+2300:                // `ai_step(reg, pool, danger, activeGrid, simNow, kSimDt)` against an older
+2304:                aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
+
+=== shot action handling ===
+1174:    std::string shotAction;
+1175:    bool shotActionConsumed = false; // one-shot save/load; attack stays held
+1195:        else if (a == "--action" && i + 1 < argc) { shotAction = argv[++i]; }
+2205:                // shotAction=="wall" block only holds attackHeld + logs.
+2206:                if (shotPath && shotAction == "wall" && reg.valid(player) &&
+2398:                    if (shotAction == "attack") {
+2400:                    } else if (shotAction == "interact") {
+2402:                    } else if (shotAction == "corp" && reg.valid(player) &&
+2430:                        if (corpseNear && !shotActionConsumed) {
+2435:                            shotActionConsumed = true;
+2495:                    } else if (shotAction == "wall" && reg.valid(player) &&
+2555:                    } else if (!shotActionConsumed && shotAction == "carve" &&
+2564:                        shotActionConsumed = true;
+2565:                    } else if (!shotActionConsumed && shotAction == "status" &&
+2587:                        shotActionConsumed = true;
+2588:                    } else if (!shotActionConsumed &&
+2589:                               (shotAction == "save" || shotAction == "load") &&
+2593:                        if (shotAction == "save") {
+2595:                            shotActionConsumed = true;
+2598:                            shotActionConsumed = true;
+
+=== existing shot harnesses ===
+_run_carve_proof.py 3882
+_run_corp_proof.py 3613
+_run_f9_proof.py 5401
+_run_shot.py 4760
+_run_status_proof.py 3929
+
+=== build-win exe ===
+C:\hades\gigahrush2\build-win\Release\gigahrush2.exe 1406464 1785499738.4823782
+C:\hades\gigahrush2\build-win\Release\game_test.exe 1658368
+
+=== progress.md tail ===
+- touch cube_pass.cpp, floor_gen.cpp, render/gpu_* / sub_mesh (Zhirnyak)
+- commit scratch _patch_* / _scan_* / shot_*_stderr.txt
+- **ALLOWED this cycle pathspec:** src/app/main.cpp, src/game/combat.h, src/game/combat.cpp, shots/_run_carve_proof.py, .agents/worker_game_audit/BACKLOG.md, .agents/worker_game_audit/progress.md
+
+## Cycle report (2026-07-31 ~16:10) — CARVE CLOSED
+→ CARVE | closed: combat proposals → carve_sphere; --action wall PROOF=GREEN;
+[carve] COMBAT removed=8 power=44 r=0.55; fly=0 d=6.32→2.00; shot_carve.png |
+runner shots/_run_carve_proof.py 1200f ride0 | residual OPEN: AIMEM P1, TEX1, CNT1 |
+blockers: shaders/** dirty foreign — never stage; stay off src/render/** (Zhirnyak)
+
+## Cycle report (2026-07-31 ~15:07) — STATUS CLOSED
+цикл STATUS | closed: StatusSet in main tick; SporeHaze on SporeCarpet; WEB→PaupsinaWeb;
+slow_step live; --action status PROOF=GREEN move_e3=180 rooted=1 → 443 → 820 |
+runner shots/_run_status_proof.py 480f ride0 | melee_e3=700 under ZhelemishSkin |
+wip: pathspec commit + pull + push | residual OPEN: CARVE P1, AIMEM P1, TEX1, CNT1 |
+blockers: shaders/** dirty foreign — never stage; stay off src/render/** (Zhirnyak)
+
+## Cycle report (2026-07-31 ~14:46) — CORPSHOT CLOSED
+цикл CORPSHOT | closed: --action corp real kill→corpse→E→loot; PROOF=GREEN;
+TAKEN 1 ITEMS (+35 RUB); one-press interact (spam fixed); empty-searched prompt truth |
+runner shots/_run_corp_proof.py 2400f ride0 | HUD kills:2 loot 35 rub | commit c61e04b
+
+## Cycle report (2026-07-31 ~10:10) — CORP1 + FEUD1 CLOSED
+цикл CORP1/FEUD1 | closed: corpse interact no item-loss; loottable asserts staged not floor;
+feud HP floor restored; unit GREEN 215499/0; CMake pin 215499; docs CLOSED |
+core pipeline already on main f4695b1; residual quality+pin+docs prior
+
+## Cycle report (2026-07-31 ~01:24) — FOR1 CLOSED
+цикл FOR1/MAG1 | closed: mag+melee survive elevator body-swap; unit was 213917/0 |
+pin superseded by CORP1 pin 215499 this cycle
+
+## Cycle report (2026-07-30 ~22:20) — SAV1
+цикл SAV1 | closed: --action save|load harness, two-phase F9 gameplay PROOF=GREEN floor-14
+
+## Architect answers (STATUS close)
+- **Least confident:** SporeHaze gate `gate != 0`; WEB only on playerEntity hit.
+- **Biggest missing:** AIMEM floor-leave; TEX1; CNT1. (CARVE CLOSED)
+- **Don't realize:** mults stack (zh×web); Slowed CAP + StatusSet coexist.
+- **Implemented-not-integrated:** combat→carve; AiMemory floor-leave release.
+- **Next execute:** commit pathspec → pull --rebase → push → CARVE (off render).
+
+=== BACKLOG lines 1-40 ===
+1:# BACKLOG — worker_game_audit
+2:
+3:Lane: game audit + save/travel seams + content port. NOT render/prop.
+4:Updated: 2026-07-31 ~16:10 Samara
+5:
+6:## CLOSED this session
+7:| ID | Item | Proof | Commit |
+8:|----|------|-------|--------|
+9:| CORP1 | Corpse loot staging: Dead→CorpseLootPending→Corpse; interact no item-loss (stack merge / inv-full leave remainder); suite asserts staged not floor | **unit GREEN:** game_test **215499 checks, 0 failures**; loottable 600 corpses → 833 staged slots, 39 slime_sample_green, floor pickups=0; Betonoed 5..10 slots, rub/kill ~137.3 (window 60..250); interact harden in loot.cpp (resolve player before searched; stackMax partial move; recompute slotCount) | prior |
+10:| FEUD1 | Restore kFeudMinHpPct clamp (isFatalFeud voided it for every feud pair) | suite_faction2.inl floor CHECKs green: citizen bottoms at 50% HP; frail maxHP=2 bottoms at 1; never Dead from feud | prior |
+11:| FOR1 / MAG1 | Elevator body-swap preserves PlayerRanged + PlayerMelee (magCount, weapon, shots, hits, kills). Capture before fold_back, emplace_or_replace after embody_as_player; lazy-absent stays absent. | unit GREEN prior: 213917/0; pins in test_elevator | prior (9cbb7fb / b6cd6c5 + pin docs) |
+12:| SAV1 | `--action save\|load` one-shot shot harness + stderr `[save]`/`[load]` audit trail | two-phase real game PROOF=GREEN floor -14 (shots/f9_diag.txt) | prior cycle |
+13:| SHOT1 | Truncated duplicate `--shot` capture block removed | main.cpp; Release rebuild GREEN | 0f7086c |
+14:| PBS1 | place_body_safely after floor travel (keyboard + --shot --ride) | shot_travel.png floor -14, 901 frames, exit 0 | prior |
+15:| F9 | Full F9 load path | gameplay-proven via SAV1 | 7709b3e + SAV1 |
+16:| T1 | Travel capture/apply parity keyboard + --shot | both sites call place_body_safely | 702265d |
+17:| A1-9 | suite_audit ledger pins | audit_test 149 checks, 0 failures | various |
+18:| GT | game_test pin | **215499 checks, 0 failures** (was 213917; +checks from loottable truth + suite growth) | prior |
+19:| CORPSHOT | Real-game kill→corpse→E→CORPSE LOOTED proof + --action corp harness | **PROOF=GREEN** shots/corp_diag.txt: attack d=29→0, corpse in reach once, CORPSE LOOTED TAKEN 1 ITEMS (+35 RUB); HUD kills:2 loot 35 rub; shot_corp.png; one-press interact (no spam) | c61e04b |
+20:| STATUS | StatusSet wired into main tick + SporeCarpet + WEB dual-apply; slow_step before physics; --action status harness | **PROOF=GREEN** shots/status_diag.txt: APPLY zh+web move_e3=180 rooted=1; tick 180→443→820 as web expires; melee_e3=700; shot_status.png | 538e139 |
+21:| CARVE | Combat proposes CarveProposalQueue POD; app drains via carve_sphere behind !doors.frozen; melee wall ray + bullet wall hit; --action wall harness | **PROOF=GREEN** shots/carve_diag.txt: fly=0 d=6.32→2.00; [carve] COMBAT removed=8/3/1 power=44 r=0.55; shot_carve.png 2.7MiB | this commit |
+22:
+23:## OPEN / next (priority)
+24:| Pri | ID | Item | Pathspec | Notes |
+25:|-----|----|------|----------|-------|
+26:| P1 | AIMEM | AiMemory tested; ai_release on floor leave / pass to ai_step may be incomplete | src/game/ai* + floor_stream | check embody/fold_back release |
+27:| P2 | TEX1 | 3 missing roughness ktx2 (rubber_tiles / rusty_metal_03 / rusty_corrugated_iron) | data/textures | non-fatal; albedo+normal OK; roughness mask 0x3400 (3/6); **no mock ktx2** |
+28:| P2 | CNT1 | Content expand status/craft from old giga | data/*.csv + tables | thin: status.csv (~6 rows); port real rows from C:\hades\gigahrush |
+29:| P2 | PAR1 | Re-grep travel sites after every main.cpp foreign commit | src/app/main.cpp read-only unless hole | line drift from light-grid/loot-emissive; WT often foreign-dirty |
+30:| P3 | RPG1 | Optional: preserve RpgStats across elevator (embody re-rolls today) | src/game/elevator.cpp + embody | NOT FOR1 regression — known residual |
+31:| P3 | MAGSHOT | Optional: real-game HUD mag line across --ride | main.cpp foreign-aware | unit pin owns body-swap |
+32:| P3 | M4 | worker_m4 leftovers if unowned | .agents/worker_m4* peek | only src/game scope |
+33:| P3 | SHOTLOG | optional stderr when place_body_safely relocates body | main.cpp | proof today is floor+PNG+audit |
+34:
+35:## LOCKED — do not touch
+36:- src/render/env_detail.* gpu_particle_pass.* gpu_light_grid.* GpuCullPass (foreign WIP)
+37:- shaders/**  (cube.frag.spv / cube_tex.frag.spv often dirty FOREIGN — never stage)
+38:- main.cpp propPlacer / light-grid sites (surgical save hunks only if needed)
+39:- .agents/** other lanes; root ORIGINAL_REQUEST.md if foreign
+40:- embody.cpp XP path
+41:- cube_pass.cpp, floor_gen.cpp, shots binaries unless pathspec-asked
+42:- force-push; git add -A
+43:- **Zhirnyak render lane:** stay off src/render/** (sub_mesh / cube_merge / cube_pass)
+44:
+45:## Safe zones
+46:- lane docs under .agents/worker_game_audit/**
+47:- src/game/** except embody if foreign-dirty (loot.cpp, combat.cpp, status* OK this cycle)
+48:- data/** content CSV
+49:- tests/suite_loottable.inl, suite_audit.inl + pins in CMake
+50:- save/load/travel if main.cpp free of foreign WIP
+
+=== ai.cpp remember/recall sites ===
+63:// `rememberedThreat` (this file's memory column) are live today; the rest are 0,
+67:// The remembered channel is scaled by kMemThreatWeight for the same reason the
+78:    m = maxf(m, unitish(p.rememberedThreat) * kMemThreatWeight);
+121:// flow ([AGENTS.md] "Data-driven by default"). MemDanger / MemHurt / MemFoe are
+167:    // and currently only supplier, so a body that remembers nothing scores exactly
+311:bool AiMemory::remember(NpcId id, std::uint8_t kind, std::uint32_t payload,
+391:bool ai_remember_cell(AiMemory& mem, NpcId id, std::uint8_t kind, int cx, int cy,
+397:    return mem.remember(
+403:bool ai_remember_actor(AiMemory& mem, NpcId id, std::uint8_t kind, NpcId who,
+407:    return mem.remember(id, kind, who & kNpcIdMask, strength01, now);
+416:    // remembered danger cell, so three marks in a corridor agree and one mark
+426:        // by hand rather than through `remember` (which refuses an out-of-range
+465:        if (kind == MemDanger || kind == MemHurt) {
+496:    p.rememberedThreat = r.threat;
+513:    // A remembered site is an affordance for exactly ONE intent, and the mapping
+583:    const bool useMem = (mem != nullptr) && cfg.memory;
+633:        if (useMem && hpNow < brain.lastHp) {
+639:            if (ai_remember_cell(*mem, id, MemHurt, cx, cy, cz, frac, now))
+640:                ++out.remembered;
+652:        if (useMem && (wantReplan || brain.currentIntent == IntentFlee)) {
+655:            ++out.recalled;
+718:            if (useMem) {
+720:                if (sev >= kMemDangerRecordUnit &&
+721:                    ai_remember_cell(*mem, id, MemDanger, cx, cy, cz, sev, now))
+722:                    ++out.remembered;
+769:        if (viaMemory) ++out.memoryFled;

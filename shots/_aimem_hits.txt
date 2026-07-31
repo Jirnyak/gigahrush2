@@ -1,0 +1,128 @@
+src\app\main.cpp:13:// (streaming, floor_stream.h / master_prompt #9). `[` and `]` ride down/up a
+src\app\main.cpp:50:#include "game/floor_stream.h"
+src\app\main.cpp:1397:// floor folds into the cold pool (floor_stream.h, master_prompt #9). This is
+src\app\main.cpp:1539:// [[maybe_unused]]: its only consumer is the PARKED ai_step call below (ai.cpp
+src\app\main.cpp:1541:// it is advanced correctly every tick, ready for ai_step's return. MSVC did not
+src\app\main.cpp:1690:// switch — but read the note at the ai_step call site first, because it also needs
+src\app\main.cpp:1691:// ai_init to attach AiBrain and ai_release to clear the token safely.
+src\app\main.cpp:2177:// ai_step call below (line ~920). ai.cpp sits in tools/branch_port_pending/
+src\app\main.cpp:2281:// tick. That is now settled by a TOKEN rather than by hope: `AiBrain::motion`
+src\app\main.cpp:2284:// MEASURED over 200 ticks x 24 bodies: ai_step wrote Velocity 2400 times,
+src\app\main.cpp:2295:// Before flipping it: `ai_init` must attach AiBrain to the floor's bodies
+src\app\main.cpp:2296:// (see the load path), and `ai_release` must run when clearing the flag on a
+src\app\main.cpp:2300:// `ai_step(reg, pool, danger, activeGrid, simNow, kSimDt)` against an older
+src\app\main.cpp:2304:aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
+src\game\ai.cpp:102:// crisis — and the substitute is LOCAL. Nothing is written back: `ai_step`
+src\game\ai.cpp:103:// mutates no shared state but its own AiBrain and Velocity, which is what keeps
+src\game\ai.cpp:298:void AiMemory::ensure(NpcId id) {
+src\game\ai.cpp:311:bool AiMemory::remember(NpcId id, std::uint8_t kind, std::uint32_t payload,
+src\game\ai.cpp:373:std::uint32_t AiMemory::live_traces(NpcId id, double now) const {
+src\game\ai.cpp:386:void AiMemory::forget(NpcId id) {
+src\game\ai.cpp:391:bool ai_remember_cell(AiMemory& mem, NpcId id, std::uint8_t kind, int cx, int cy,
+src\game\ai.cpp:403:bool ai_remember_actor(AiMemory& mem, NpcId id, std::uint8_t kind, NpcId who,
+src\game\ai.cpp:410:MemoryRecall ai_recall(const AiMemory& mem, NpcId id, int cx, int cy, int cz,
+src\game\ai.cpp:530:// ai_init / ai_release — attaching and releasing the arbitration token.
+src\game\ai.cpp:534:// `wander_init` documents: `emplace<AiBrain>` on the FIRST body creates that
+src\game\ai.cpp:543:if (reg.all_of<AiBrain>(e)) continue;   // already has a brain
+src\game\ai.cpp:549:for (Entity e : fresh) reg.emplace<AiBrain>(e);
+src\game\ai.cpp:553:std::uint32_t ai_release(Registry& reg, LayerId layer) {
+src\game\ai.cpp:555:auto view = reg.view<AiBrain, const Transform>();
+src\game\ai.cpp:558:AiBrain& b = view.get<AiBrain>(e);
+src\game\ai.cpp:567:// ai_step — arbitration first, steering second. See ai.h for the contract, and
+src\game\ai.cpp:570:AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
+src\game\ai.cpp:572:const AiConfig& cfg, AiMemory* mem) {
+src\game\ai.cpp:577:// `ai_release` — see ai.h.
+src\game\ai.cpp:593:auto view = reg.view<AiBrain, const NpcRef, const Transform, Velocity>();
+src\game\ai.cpp:598:AiBrain& brain = view.get<AiBrain>(e);
+src\game\ai.cpp:617:// The macro cell the body stands in — the same pos->cell map fold_back
+src\game\ai.cpp:628:// whose cell is the fact. `AiBrain::lastHp` is what makes that detectable
+src\game\ai.cpp:732:// wander runs — which is why ai_step must run first.
+src\game\ai.h:65:// while this header read as though the wiring existed — so unparking `ai_step` would
+src\game\ai.h:72:// Both guards are ADDITIVE while `ai_init` has no caller: no `AiBrain` means
+src\game\ai.h:74:// is deliberate — the guards land BEFORE the AI is switched on, so the day `ai_step`
+src\game\ai.h:78:// The token is `AiBrain::motion`. `ai_step` runs BEFORE `wander_step`, decides
+src\game\ai.h:81://   * `ai_step` writes Velocity iff `motion == MotionOwner::Ai`;
+src\game\ai.h:86://   1. NO `AiBrain` COMPONENT => `ai_owns_motion` is false => wander_step
+src\game\ai.h:87://      behaves EXACTLY as it does today. `AiBrain` is attached only by
+src\game\ai.h:139:// MEMORY (`AiMemory`) — the second thing the brain has, and the reason a crowd
+src\game\ai.h:151:// floor -8 still knows it after riding to -14 and back. `AiBrain` stays on the
+src\game\ai.h:172:// AND IT IS A **DEMAND** COLUMN. `AiMemory` starts with an EMPTY vector and
+src\game\ai.h:197:// WHAT WRITES IT. Two recorders are LIVE inside `ai_step` and need no other
+src\game\ai.h:256:// "no committed intent yet" sentinel for AiBrain::currentIntent.
+src\game\ai.h:275:// `Wander` is 0 so a zero-initialised `AiBrain` delegates: the failure mode of
+src\game\ai.h:280:Ai = 1,     // ai_step writes it; wander_step must skip the body
+src\game\ai.h:284:// AiBrain — the whole per-body brain state, and it is deliberately tiny.
+src\game\ai.h:292:struct AiBrain {
+src\game\ai.h:297:// The HP this body had when `ai_step` last visited it, so a DROP is
+src\game\ai.h:310:static_assert(sizeof(AiBrain) == 16, "the whole brain is 16 bytes per body");
+src\game\ai.h:315:// A body with no AiBrain returns false, which is what makes this additive: with
+src\game\ai.h:318:const AiBrain* b = reg.try_get<AiBrain>(e);
+src\game\ai.h:495:// `seenAt` is absolute sim SECONDS on the same clock as `AiBrain::nextDecisionAt`
+src\game\ai.h:496:// and `ai_step`'s `now`, stored as a float for the same reason that field does —
+src\game\ai.h:554:// AiMemory — the DEMAND column.
+src\game\ai.h:565:class AiMemory {
+src\game\ai.h:673:MemoryRecall ai_recall(const AiMemory& mem, NpcId id, int cx, int cy, int cz,
+src\game\ai.h:695:// -- per-body state from AiBrain, set by the driver --
+src\game\ai.h:719:// -- memory (AiMemory), zero when the body remembers nothing --
+src\game\ai.h:822:// no effect at all unless `ai_step` is handed an `AiMemory`, so the REAL off
+src\game\ai.h:832:// What one `ai_step` did. Returned rather than only published so a HUD or a test
+src\game\ai.h:838:std::uint32_t aiOwned = 0;    // bodies ai_step steered (wander skipped them)
+src\game\ai.h:847:// Attach an `AiBrain` to every embodied NPC body on `layer` that lacks one, and
+src\game\ai.h:851:// Explicit rather than lazy inside `ai_step` for two reasons. (1) Emplacing a
+src\game\ai.h:855:// than a comment. (2) It keeps `ai_step` a single allocation-free sweep, so the
+src\game\ai.h:863:// Hand every AiBrain on `layer` back to `MotionOwner::Wander` and return how
+src\game\ai.h:866:// This exists because disabling `ai_step` mid-run is otherwise a trap: the token
+src\game\ai.h:870:std::uint32_t ai_release(Registry& reg, LayerId layer);
+src\game\ai.h:901://     and `AiBrain::lastHp` is what detects it with no event bus.
+src\game\ai.h:912:AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
+src\game\ai.h:914:const AiConfig& cfg = {}, AiMemory* mem = nullptr);
+src\game\ai.h:922:// seconds — the same clock `ai_step` is given.
+src\game\ai.h:925:// are filed by `ai_step` itself. MemFood / MemWater / MemRest / MemToilet /
+src\game\ai.h:929:bool ai_remember_cell(AiMemory& mem, NpcId id, std::uint8_t kind, int cx, int cy,
+src\game\ai.h:931:bool ai_remember_actor(AiMemory& mem, NpcId id, std::uint8_t kind, NpcId who,
+src\game\elevator.cpp:39:// Firearm + melee state live on the BODY, not the pool row. fold_back destroys
+src\game\elevator.cpp:55:fold_back(reg, pool, id, player);
+src\game\embody.cpp:5:// NOTE: #include "game/ai.h" (AiBrain) goes back here when the utility AI is
+src\game\embody.cpp:61:// them too (harmless: ai_step skips camera-holders), so a body-swap needs no
+src\game\embody.cpp:65:// keeps the survival clock in the POOL ROW on purpose: the elevator fold_back ->
+src\game\embody.cpp:68:// AiBrain (hysteresis/stagger) is legitimately per-entity and comes back with the
+src\game\embody.cpp:101:void fold_back(Registry& reg, NpcPool& pool, NpcId id, Entity e) {
+src\game\embody.h:20://     ECS-owned state — position — folds back. `fold_back` writes the record's
+src\game\embody.h:35:// (faction, relations, stats) and fold_back knows which row to write. The
+src\game\embody.h:71:void fold_back(Registry& reg, NpcPool& pool, NpcId id, Entity e);
+src\game\event_bus.h:71:// crowd in one bump-allocated range ([floor_stream.h] firstId/count). A
+src\game\event_bus.h:77:// floor — a module seeds its crowd exactly once ([floor_stream.h]) and every
+src\game\faction_relations.cpp:247:// Additive today: no AiBrain means false, ai_init has no caller yet, so this is a
+src\game\floor_stream.cpp:1:#include "game/floor_stream.h"
+src\game\floor_stream.cpp:4:#include "game/embody.h"      // embody, embody_as_player, fold_back, NpcRef
+src\game\floor_stream.cpp:295:// ride destroyed when it moved the player to another floor — and fold_back is
+src\game\floor_stream.cpp:301:if (id != kInvalidNpc) fold_back(ecs, pool, id, e);
+src\game\macro_sim.cpp:420:// count, and floor_stream.cpp:109 states the crowd IS
+src\game\needs.h:15:// deciding argument is the elevator: riding one calls `fold_back` then
+src\game\npc_pool.cpp:294:// through `fold_back`, which is the only other place the player bit is cleared.
+src\game\npc_pool.h:152:// player's body and builds a new one (`fold_back` -> `embody_as_player`,
+src\game\save.cpp:11:#include "game/floor_stream.h"  // FloorStreamer, FloorRegistry, RideResult
+src\game\save.cpp:1065:// `fold_back` re-derives the row from that transform.
+src\game\save.h:27://     crowd exactly once ([floor_stream.h]). The one row carrying state nothing can
+src\game\save.h:65:// `save.cpp` includes game/floor_stream.h, which defines both.
+src\game\save.h:325:// here too: the elevator's `fold_back` -> `embody_as_player` DESTROYS the player's body
+src\game\save.h:418:// resident ([floor_stream.h] keeps a single World live). Every other floor's opened set
+src\game\save.h:640:// `fold_back` re-derives the cold row's cell from this transform ([embody.cpp]) and the
+src\game\speech.cpp:10:#include "game/ai.h"         // IntentId / kIntentNone / AiBrain — the committed decision
+src\game\speech.cpp:165:for (auto e : reg.view<const NpcRef, const AiBrain>()) {
+src\game\speech.cpp:167:c.intent = reg.get<const AiBrain>(e).currentIntent;
+src\game\speech.cpp:214:// 5b. ...and from the raw reserves when there is no brain to ask. `ai_step` is
+src\game\speech.h:205:// `AiBrain::currentIntent` (an `IntentId`) or `kIntentNone`. speech.cpp
+src\game\speech.h:218:// columns, the committed intent is an `AiBrain` on the embodied entity, and the phase is
+src\game\speech.h:223:// sweep — never per body per tick. A speaker with no `AiBrain` (brain dormant, or a
+src\game\speech.h:241:// thresholds that could disagree. The raw-reserve fallback exists because `ai_step` is
+src\game\wander.cpp:192:// AiBrain::motion: ai_step runs before this loop, claims the bodies it will
+src\game\wander.cpp:193:// steer, and this skips them. Without it, ai_step and this loop both write the
+src\game\wander.cpp:197:// ADDITIVE TODAY, on purpose. A body with no AiBrain returns false, AiBrain is
+src\sim\cellular.cpp:861:// cannot see a recycled slot ([game/floor_stream.cpp] free_slot / alloc_slot hand
+src\sim\cellular.h:403:// ([game/floor_stream.cpp] free_slot / alloc_slot), `generate_floor` clears the GRID
+src\sim\diffusion.cpp:502:// cannot see a recycled slot ([game/floor_stream.cpp] free_slot / alloc_slot hand the
+src\sim\diffusion.h:315:// ([game/floor_stream.cpp] free_slot / alloc_slot), `generate_floor` clears the GRID
+src\sim\diffusion.h:318:// it — the same class of bug [game/floor_stream.cpp] documents having shipped with
+
+TOTAL=126
