@@ -1,7 +1,7 @@
 # BACKLOG — worker_game_audit
 
 Lane: game audit + save/travel seams + content port. NOT render/prop.
-Updated: 2026-07-31 ~17:00 Samara
+Updated: 2026-07-31 ~17:05 Samara
 
 ## CLOSED this session
 | ID | Item | Proof | Commit |
@@ -30,8 +30,8 @@ Updated: 2026-07-31 ~17:00 Samara
 
 | P3 | RPG1 | Optional: preserve RpgStats across elevator (embody re-rolls today) | src/game/elevator.cpp + embody | NOT FOR1 regression — known residual |
 | P3 | MAGSHOT | Optional: real-game HUD mag line across --ride | main.cpp foreign-aware | unit pin owns body-swap |
-| P3 | M4 | worker_m4 leftovers if unowned | .agents/worker_m4* peek | only src/game scope |
-| P3 | SHOTLOG | optional stderr when place_body_safely relocates body | main.cpp | proof today is floor+PNG+audit |
+| P3 | M4 | CLOSED peek — Milestone 4 already CLOSED (suite_props / world_test) | .agents/worker_m4* | no leftover game work |
+| P3 | SHOTLOG | CLOSED 2026-07-31 — [place] MOVE/REFUSE in place_body_at_cell | src/game/save.cpp | see CLOSED SHOTLOG |
 | P2 | PADIC | CLOSED 2026-07-31 — floor4 stress GREEN (AI+tex+shot) | main harness + src/game | see CLOSED PADIC; Zhirnyak owns mesher stripes |
 
 ## LOCKED — do not touch
@@ -255,7 +255,35 @@ Scope: game-agent exercises padic as engine stress sample (doors/AI/travel/tex l
 **Does NOT thrash src/render/** — stripes/ghost/UV remain Zhirnyak. Evidence JPEGs for him:
   shots/shot_padic_play.jpg (this run) + prior shots/shot_padic.jpg
 No main.cpp / src/game code change this close — harness-only proof.
-Next OPEN: P3 optional (RPG1/MAGSHOT/M4/SHOTLOG) or re-PAR1 after foreign main; keep pull/push loop.
+Next OPEN: P3 optional (RPG1/MAGSHOT) or re-PAR1 after foreign main; keep pull/push loop.
+
+## CLOSED 2026-07-31 SHOTLOG — place_body_at_cell stderr on relocate/refuse
+```
+Wire (src/game/save.cpp place_body_at_cell):
+  #include <cstdio>
+  after find_standable_cell:
+    !out.ok  → fprintf stderr "[place] REFUSE body req=(cx,cy,cz) r=N (no standable cell)"
+    out.moved → fprintf stderr "[place] MOVE body (cx,cy,cz)->(nx,ny,nz) rings=R supp=0|1"
+  Quiet on common path (ok && !moved) — interactive play stays clean.
+  place_body_safely calls place_body_at_cell → both travel PBS sites + F9 load covered.
+  NOT in main.cpp (central seam, no foreign thrash).
+
+Binary proof:
+  giga_game.lib + gigahrush2.exe contain "[place] MOVE" / "[place] REFUSE" / "no standable cell"
+  (strings linked into Release after rebuild of save.cpp)
+
+Live travel proof:
+  runner: python shots/_run_shotlog_proof.py
+  exe: --shot shots/shot_place.png --frames 480 --ride 2
+  exit=0 elapsed=26.2s png=2.7MiB jpg=127972
+  PROOF=GREEN_QUIET
+  floors: 0 → -8 (shot: saved floor -8, 481 frames)
+  [aimem] LEAVE+RELEASE on hop; travel PBS path ran
+  place_lines=0 MOVE=0 REFUSE=0  ← landing cell already standable (event-driven quiet OK)
+```
+Event-driven by design: log fires only when placement relocates or refuses.
+GREEN_QUIET after real travel + binary string presence = CLOSED.
+Next OPEN: RPG1 / MAGSHOT optional or re-PAR1 after foreign main.
 
 
 

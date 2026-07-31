@@ -1,5 +1,6 @@
 #include "game/save.h"
 
+#include <cstdio>
 #include <cstring>
 #include <utility>
 
@@ -819,7 +820,24 @@ PlacedCell place_body_at_cell(Registry& reg, const World& world, Entity body,
     if (!tr) return out;   // not an embodied body; there is nothing to place
 
     out = find_standable_cell(world, half_extents_of(reg, body), cx, cy, cz, radius);
-    if (!out.ok) return out;   // refuse rather than plant a body inside a wall
+    // SHOTLOG: headless --shot harnesses cannot see a soft-lock; emit when the
+    // requested cell was solid (relocated) or nothing nearby fits (refused).
+    // Quiet on the common path (ok && !moved) so interactive play stays clean.
+    if (!out.ok) {
+        std::fprintf(stderr,
+                     "[place] REFUSE body req=(%u,%u,%u) r=%d (no standable cell)\n",
+                     static_cast<unsigned>(cx), static_cast<unsigned>(cy),
+                     static_cast<unsigned>(cz), radius);
+        return out;   // refuse rather than plant a body inside a wall
+    }
+    if (out.moved) {
+        std::fprintf(stderr,
+                     "[place] MOVE body (%u,%u,%u)->(%u,%u,%u) rings=%u supp=%d\n",
+                     static_cast<unsigned>(cx), static_cast<unsigned>(cy),
+                     static_cast<unsigned>(cz), static_cast<unsigned>(out.cx),
+                     static_cast<unsigned>(out.cy), static_cast<unsigned>(out.cz),
+                     static_cast<unsigned>(out.rings), out.supported ? 1 : 0);
+    }
 
     tr->pos = macro_cell_centre(out.cx, out.cy, out.cz);
     // Not tidiness: a load can land mid-fall, and physics resolves the next step from
@@ -828,6 +846,7 @@ PlacedCell place_body_at_cell(Registry& reg, const World& world, Entity body,
     if (Velocity* v = reg.try_get<Velocity>(body)) v->v = vec3{0.0f, 0.0f, 0.0f};
     return out;
 }
+
 
 PlacedCell place_body_safely(Registry& reg, const World& world, Entity body,
                              int radius) {
