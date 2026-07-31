@@ -15,10 +15,12 @@
 #include "sim/diffusion.h"
 #include "sim/fluid.h"
 #include "sim/physics.h"
+#include "world/destruct.h"
 #include "world/field.h"
 #include "world/level_stack.h"
 #include "world/macro_grid.h"
 #include "world/nav.h"
+#include "world/subfield.h"
 #include "world/world.h"
 
 using namespace giga;
@@ -40,6 +42,7 @@ int g_checks = 0;
 
 #define CHECK_NEAR(a, b, eps) CHECK(std::fabs((a) - (b)) <= (eps))
 
+#include "suite_destruct.inl"
 #include "suite_props.inl"
 
 
@@ -555,6 +558,7 @@ int main() {
     test_nav_coarse();
     test_nav_fine();
     test_route_step();
+    test_destruct_all();
     test_props_all();
 
     std::printf("%d/%d checks passed\n", g_checks - g_fails, g_checks);

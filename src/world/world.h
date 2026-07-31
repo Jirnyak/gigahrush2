@@ -7,6 +7,7 @@
 #include "world/field.h"
 #include "world/gravity.h"
 #include "world/macro_grid.h"
+#include "world/subfield.h"
 
 namespace giga {
 
@@ -18,12 +19,19 @@ public:
     FieldRegistry& fields() { return fields_; }
     const FieldRegistry& fields() const { return fields_; }
 
+    // Sparse sub-voxel-resolution fields ([subfield.h]): same registry idea as
+    // fields(), one atom finer. The canonical resident is "sub_material"
+    // ([destruct.h]), created lazily by whatever first paints a mixed cell.
+    SubFieldRegistry& subfields() { return subfields_; }
+    const SubFieldRegistry& subfields() const { return subfields_; }
+
     GravityField& gravity() { return gravity_; }
     const GravityField& gravity() const { return gravity_; }
 
 private:
     MacroGrid grid_;
     FieldRegistry fields_;
+    SubFieldRegistry subfields_;
     GravityField gravity_;
 };
 

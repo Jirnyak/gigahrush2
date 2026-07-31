@@ -10,10 +10,13 @@
 // **What is deliberately NOT in here, and why each one is free:**
 //
 //   * **Geometry.** `generate_floor` is a pure function of (seed, floor number,
-//     spec.kind) and clears to air first ([floor_gen.cpp]), and there is zero runtime
-//     voxel mutation in the whole tree — every `set_cell`/`fill_cell`/`clear_cell`
-//     caller lives in `floor_gen.cpp` or `app/worldgen.cpp`. A floor is reproducible
-//     from three numbers, so saving 2 MB of cells per floor would be saving a cache.
+//     spec.kind) and clears to air first ([floor_gen.cpp]). Runtime mutation now
+//     exists in exactly two forms, both excused: doors ([door.cpp]) rebuild their
+//     state from the DoorSet on load, and carves ([world/destruct.h]) are
+//     deterministic ops — the honest fix when destruction persistence matters is
+//     saving the tiny carve-op log and replaying it over the regenerated floor,
+//     never saving the 134 MB of masks. Until that log exists, a carved hole heals
+//     on reload; known, accepted, documented ([destruct.md]).
 //   * **Monsters.** They are destroyed on unload and re-rolled deterministically per
 //     (floor, seed) on entry ([monsters.md]). A monster has no macro existence to
 //     persist.

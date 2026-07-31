@@ -58,6 +58,16 @@ That is the real budget wall ([performance.md](performance.md) §The compute
 split). Fields live on the macro grid; the 8³ sub-voxel layer stays a *sparse*
 occupancy mask, never a second dense simulation field.
 
+**The sanctioned exception: `SubField<T>`** (`world/subfield.h`,
+[destruct.md](destruct.md)). When a field genuinely needs the 0.25 m atom —
+per-sub-voxel *materials* are the canonical case — it goes through the paged
+sparse registry `world.subfields()`, never a hand-rolled dense array. Uniform
+cells cost nothing beyond an 8 MB page table; a mixed cell costs one 8³ page;
+and the worst case degrades *exactly* to the dense bound above (2 GiB for a
+`uint16` field), linearly, with flat-vector storage and two-load reads the
+whole way. Dense-at-sub-res stays forbidden; sparse-with-a-dense-ceiling is
+the engine's shape for it.
+
 **Blood/urine/stains** are the canonical example. The 2D reference lazily
 allocated a 16×16 RGBA buffer per painted cell (sparse — it ran in a browser).
 Here the elegant form is a **dense field on the _macro_ grid** (128³): uniform,

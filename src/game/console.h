@@ -83,6 +83,13 @@ struct ConsoleContext {
     // kNoRequest by the app once handled.
     int requestFloor = kNoRequest;
 
+    // Out: a pending sphere carve ([world/destruct.h]) — the command proposes
+    // size and power only; the app aims it from the camera and performs it on
+    // the sim clock, never while a nav bake owns the grid (it stays queued
+    // until the bake lands). radius in metres; <= 0 means none pending.
+    float carveRadius = 0.0f;
+    std::uint32_t carvePower = 0;
+
     // Out: one-shot action requests (ConsoleRequest bits). The app drains them
     // once per frame with take_requests() at its safe point.
     std::uint32_t requestBits = 0;

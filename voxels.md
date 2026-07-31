@@ -63,8 +63,20 @@ Add a cell type → pick an id and add a colour row in the cube pass. No engine
 branch. Carving detail = clearing/setting sub-voxel bits; physics picks it up
 for free because collision reads the same masks.
 
+## Destruction
+
+Carving is no longer hypothetical: [destruct.md](destruct.md) is the ONE
+universal way sub-voxels leave the grid at runtime — probabilistic
+hardness-vs-power rolls per material ([world/material_props.h]), layered
+per-sub-voxel materials via the sparse `SubField` registry
+([world/subfield.h]), and a bounded connectivity sweep that deletes loose
+components and hands them to the renderer as debris. Physics picks every hole
+up for free (collision reads the same masks); baked overlays are repaid via
+`CarveResult::dirtyCells`.
+
 ## Connections
 
 Consumed by [physics.md](physics.md) (swept-AABB vs. masks),
 [fluid.md](fluid.md) (downward-flow blocking), and the renderer. Overlaid by
-runtime [fields.md](fields.md).
+runtime [fields.md](fields.md). Mutated at runtime only through
+[destruct.md](destruct.md) and doors ([game/door.h]).

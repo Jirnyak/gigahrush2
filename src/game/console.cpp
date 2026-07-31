@@ -377,6 +377,45 @@ std::uint32_t complete_ride(const ConsoleContext&, int argIndex,
     return n;
 }
 
+// --- carve [radius] [power] -------------------------------------------------
+// The universal destruction op ([world/destruct.h]) as a console row. The
+// command only PROPOSES a sphere (radius, power); the app aims it ahead of the
+// camera and performs it at its safe point — the same client-proposes/
+// server-disposes seam every other world mutation rides.
+
+bool cmd_carve(ConsoleContext& ctx, int argc, const char* const* argv,
+               char* out, std::size_t cap) {
+    float radius = 1.0f;
+    long power = 256; // one certain concrete voxel per roll at the centre
+    if (argc >= 2) {
+        char* end = nullptr;
+        radius = std::strtof(argv[1], &end);
+        if (end == argv[1] || !(radius > 0.0f)) {
+            if (out && cap)
+                std::snprintf(out, cap, "carve: '%s' is not a radius (metres)",
+                              argv[1]);
+            return false;
+        }
+    }
+    if (argc >= 3) {
+        char* end = nullptr;
+        power = std::strtol(argv[2], &end, 10);
+        if (end == argv[2] || power <= 0 || power > 0xFFFF) {
+            if (out && cap)
+                std::snprintf(out, cap,
+                              "carve: '%s' is not a power (1..65535)", argv[2]);
+            return false;
+        }
+    }
+    if (radius > 8.0f) radius = 8.0f; // one carve, not a demolition service
+    ctx.carveRadius = radius;
+    ctx.carvePower = static_cast<std::uint32_t>(power);
+    if (out && cap)
+        std::snprintf(out, cap, "carve: r=%.2f m, power=%ld — queued", radius,
+                      power);
+    return true;
+}
+
 } // namespace
 
 bool console_register_defaults(Console& con) {
@@ -396,6 +435,9 @@ bool console_register_defaults(Console& con) {
                    complete_teleport});
     ok &= con.add({"ride", "ride <up|down>", "ride one floor up or down",
                    cmd_ride, complete_ride});
+    ok &= con.add({"carve", "carve [radius] [power]",
+                   "blast a sphere out of the world ahead of the camera",
+                   cmd_carve, nullptr});
     // Every request row shares one handler — argv[0] selects the bit.
     for (const RequestRow& row : kRequestRows)
         ok &= con.add({row.name, row.name, row.help, cmd_request, nullptr});

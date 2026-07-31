@@ -94,6 +94,7 @@
 #include "sim/controller.h"
 #include "sim/fluid.h"
 #include "sim/physics.h"
+#include "world/destruct.h"
 #include "world/level_stack.h"
 #include "world/nav.h"
 #include "world/nav_async.h"
@@ -1568,6 +1569,10 @@ int main(int argc, char** argv) {
     // record's own rolled build.
     game::RpgStats carriedRpg = game::fresh_rpg(1);
     bool attackHeld = false;
+    // Carve scratch + result, reused across ops so a carve allocates nothing
+    // after warmup ([world/destruct.h]).
+    CarveScratch carveScratch;
+    CarveResult carveResult;
     bool healWanted = false;
     bool eatWanted = false;       // G, consumed by one sim step
     bool drinkWanted = false;     // T, consumed by one sim step
@@ -2346,6 +2351,65 @@ int main(int argc, char** argv) {
                             game::noise_publish(noiseField, activeLayer,
                                                 doorPos, np, 0);
                         }
+                    }
+                }
+                // Universal destruction ([world/destruct.h]): the console/tools
+                // PROPOSED a sphere; the sim disposes here, on its own clock,
+                // and never while a nav bake owns the grid — the same freeze
+                // doors honour, and the request stays queued (not dropped)
+                // until the bake lands. Collision is live off the mutated
+                // masks; every baked overlay's debt is exactly
+                // carveResult.dirtyCells, and nav stays stale until the next
+                // full bake — the accepted door.cpp debt, no new rule.
+                if (consoleCtx.carveRadius > 0.0f && !doors.frozen &&
+                    reg.valid(player)) {
+                    const vec3 ppos = reg.get<Transform>(player).pos;
+                    const auto& camTag = reg.get<CameraTag>(player);
+                    const vec3 fwd = camera_forward(camTag.yaw, camTag.pitch);
+                    const float reach = 1.0f + consoleCtx.carveRadius;
+                    CarveOp op;
+                    op.x = ppos.x + fwd.x * reach;
+                    op.y = ppos.y + fwd.y * reach;
+                    op.z = ppos.z + fwd.z * reach;
+                    op.radius = consoleCtx.carveRadius;
+                    op.power =
+                        static_cast<std::uint16_t>(consoleCtx.carvePower);
+                    // Seed = sim tick: the op replays bit-identically from the
+                    // command stream, and the next swing is a fresh roll.
+                    op.seed = static_cast<std::uint32_t>(simTick);
+                    consoleCtx.carveRadius = 0.0f;
+                    const std::int32_t removed =
+                        carve_sphere(stack.layer(activeLayer), op,
+                                     carveScratch, carveResult);
+                    if (removed > 0) {
+                        // One rebuild of the cached instance list; partial
+                        // cells keep drawing as full cubes until emptied (the
+                        // renderer's existing cell-resolution stance).
+                        cubePass.invalidate();
+                        // DEBRIS HANDOFF: simulation is done with these
+                        // voxels. The particle pass fakes their fall, grouped
+                        // by material so a big carve is a handful of emit
+                        // events, not thousands ([gpu_particle_pass.h]).
+                        if (particlePass.ready()) {
+                            std::uint32_t byMat[kMatCount] = {};
+                            for (const auto& v : carveResult.destroyed)
+                                if (v.mat < kMatCount) ++byMat[v.mat];
+                            for (const auto& v : carveResult.detached)
+                                if (v.mat < kMatCount) ++byMat[v.mat];
+                            const vec3 at{op.x, op.y, op.z};
+                            for (std::uint16_t m = 1; m < kMatCount; ++m)
+                                if (byMat[m])
+                                    particlePass.emit_destruction_burst(
+                                        at, m,
+                                        static_cast<int>(
+                                            8 + std::min(byMat[m] / 4u, 56u)));
+                        }
+                        // A blast is the loudest thing after gunfire: let the
+                        // crowd hear it.
+                        game::NoiseProfile np{18.0f, 2200, 4,
+                                              game::NoiseSource::WeaponFire};
+                        game::noise_publish(noiseField, activeLayer,
+                                            vec3{op.x, op.y, op.z}, np, 0);
                     }
                 }
                 if (interactWanted) {
