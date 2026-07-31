@@ -1,7 +1,7 @@
 # BACKLOG — worker_game_audit
 
 Lane: game audit + save/travel seams + content port. NOT render/prop.
-Updated: 2026-07-31 ~10:10 Samara
+Updated: 2026-07-31 ~14:46 Samara
 
 ## CLOSED this session
 | ID | Item | Proof | Commit |
@@ -15,12 +15,15 @@ Updated: 2026-07-31 ~10:10 Samara
 | F9 | Full F9 load path | gameplay-proven via SAV1 | 7709b3e + SAV1 |
 | T1 | Travel capture/apply parity keyboard + --shot | both sites call place_body_safely | 702265d |
 | A1-9 | suite_audit ledger pins | audit_test 149 checks, 0 failures | various |
-| GT | game_test pin | **215499 checks, 0 failures** (was 213917; +checks from loottable truth + suite growth) | this commit |
+| GT | game_test pin | **215499 checks, 0 failures** (was 213917; +checks from loottable truth + suite growth) | prior |
+| CORPSHOT | Real-game kill→corpse→E→CORPSE LOOTED proof + --action corp harness | **PROOF=GREEN** shots/corp_diag.txt: attack d=29→0, corpse in reach once, CORPSE LOOTED TAKEN 1 ITEMS (+35 RUB); HUD kills:2 loot 35 rub; shot_corp.png; one-press interact (no spam) | this commit |
 
 ## OPEN / next (priority)
 | Pri | ID | Item | Pathspec | Notes |
 |-----|----|------|----------|-------|
-| P1 | CORPSHOT | Real-game corpse loot proof: kill mob → body has loot (no gold floor carpet) → E interact → CORPSE LOOTED / inv gain; shot under shots/ | main harness + shots/ | unit pin load-bearing; shot = proof class upgrade. Feature-without-gameplay DECLINED for full close until shot or explicit defer |
+| P0 | STATUS | StatusSet/status_step never called from main tick — data/status.csv + suite exist, combat never applies | src/game/status*.cpp + main.cpp | code-without-gameplay; wire apply on damage + status_step on tick; real-game proof |
+| P1 | CARVE | carve_sphere console/--action carve only — weapons/combat do not call destruct | src/game/destruct* + combat | PARTIAL; need combat hit → carve or explicit weapon carve |
+| P1 | AIMEM | AiMemory tested; ai_release on floor leave / pass to ai_step may be incomplete | src/game/ai* + floor_stream | check embody/fold_back release |
 | P2 | TEX1 | 3 missing roughness ktx2 (rubber_tiles / rusty_metal_03 / rusty_corrugated_iron) | data/textures | non-fatal; albedo+normal OK; roughness mask 0x3400 (3/6); **no mock ktx2** |
 | P2 | CNT1 | Content expand status/craft from old giga | data/*.csv + tables | thin: status.csv (~6 rows); port real rows from C:\hades\gigahrush |
 | P2 | PAR1 | Re-grep travel sites after every main.cpp foreign commit | src/app/main.cpp read-only unless hole | line drift from light-grid/loot-emissive; WT often foreign-dirty |
@@ -71,7 +74,7 @@ Exe: C:\hades\gigahrush2\build-win\Release\game_test.exe
 CMake pin: 213917 → 215499 (checks added from suite tighten + growth, 0 failures)
 FOREIGN dirty not staged: shaders/cube.frag.spv, shaders/cube_tex.frag.spv
 ```
-Feature without unit pin = DECLINED. Real-game corpse shot is proof-class upgrade (CORPSHOT OPEN).
+Feature without unit pin = DECLINED. CORPSHOT CLOSED 2026-07-31 ~14:46 — real-game proof GREEN.
 
 ## Gameplay proof (FOR1 / MAG1) — 2026-07-31 ~01:14
 ```
@@ -92,9 +95,21 @@ phase2: --ride 0 --action load → floor -14 @44,35,2, shot_f9_load.png
 --shot shot_travel.png --frames 900 --ride 2 → floor -14, PNG ~2.7 MiB, exit 0
 ```
 
-## Architect answers (CORP1 close cycle)
-- **Least confident:** Real-game corpse interact never shot this cycle — only unit pin. Feud clamp correct vs suite but live NPC-vs-NPC never-kill not playtested.
-- **Biggest missing before close:** Docs not written; commit not made; push not done; pin edited in WT while user saw GREEN locally and remote had none of residual polish.
-- **Don't realize:** CORP1 core already integrated on main since f4695b1 (main.cpp calls loot_dead_mobs then finalize_deaths; interact calls loot_corpse_interact). Residual = quality + pin + docs + push. Shader .spv dirt is FOREIGN — never stage. game_test MSVC fully buffers stdout until exit (~6 min, ~215k checks).
-- **Implemented-not-integrated:** CORP1 path NONE (wired). Optional gaps: real-game HUD/screenshot proof of corpse loot (CORPSHOT); drop_mob_loot still exists as debug/floor path (non-prod for kill loot).
-- **Next execute:** pathspec commit → pull --no-rebase → push origin main → CORPSHOT if time → TEX1/CNT1 content port from old gigahrush (no mock ktx2).
+## Gameplay proof (CORPSHOT) — 2026-07-31 ~14:46
+```
+runner: python C:\hades\gigahrush2\shots\_run_corp_proof.py
+exe: build-win/Release/gigahrush2.exe --shot shots/shot_corp.png --frames 2400 --ride 0 --action corp
+exit=0 elapsed=48.0s png=2.7MiB
+stderr: [corp] attack mob d=29.53→0.04 → corpse in reach — interact (ONCE)
+        [corp] CORPSE LOOTED: TAKEN 1 ITEMS (+35 RUB) floor=0  (once; spam fixed)
+HUD shot_corp_view.jpg: kills:2 | loot 35 rub (1/64) | [E] LOOT CORPSE | HP 70
+Harness: face nearest MobRef, wishDir walk-in, attackHeld; one E on Corpse≤2.2m
+Empty searched corpses no longer keep LOOT CORPSE prompt forever
+```
+
+## Architect answers (CORPSHOT close cycle)
+- **Least confident:** Status effects (StatusSet) still never tick in main — highest remaining code-without-gameplay. Carve still console-only.
+- **Biggest missing:** STATUS/CARVE/AIMEM integration proofs; TEX1 roughness sources; CNT1 content depth.
+- **Don't realize:** Empty corpse loot (TAKEN 0) can be a real roll, not a pipeline bug — second CORPSHOT run took 1 item/+35 RUB. CORP1 unit pin already closed; CORPSHOT was the gameplay proof class.
+- **Implemented-not-integrated:** StatusSet/status_step; combat→carve; optional AiMemory floor-leave release; drop_mob_loot debug path.
+- **Next execute:** pathspec commit CORPSHOT → pull --ff-only → push origin main → STATUS wire or CARVE combat path → real-game proof.

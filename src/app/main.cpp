@@ -2276,6 +2276,99 @@ int main(int argc, char** argv) {
                         attackHeld = true;
                     } else if (shotAction == "interact") {
                         interactWanted = true;
+                    } else if (shotAction == "corp" && reg.valid(player) &&
+                               shotFramesSeen >= 30) {
+                        // CORPSHOT: face nearest live mob, hold attack
+                        // (real player_melee_step), then once a Corpse is in
+                        // loot reach press E (real loot_corpse_interact).
+                        // Automates facing/phase only — no fake loot path.
+                        const vec3 ppos = reg.get<Transform>(player).pos;
+                        bool corpseNear = false;
+                        for (auto cEnt :
+                             reg.view<const game::Corpse, const Transform>()) {
+                            if (reg.get<const Transform>(cEnt).layer !=
+                                activeLayer)
+                                continue;
+                            const vec3& cpos =
+                                reg.get<const Transform>(cEnt).pos;
+                            const float dx =
+                                wrap_delta_f(ppos.x, cpos.x, kWorldExtent);
+                            const float dy = ppos.y - cpos.y;
+                            const float dz =
+                                wrap_delta_f(ppos.z, cpos.z, kWorldExtent);
+                            if (dx * dx + dy * dy + dz * dz < 2.2f * 2.2f) {
+                                corpseNear = true;
+                                break;
+                            }
+                        }
+                        // One real E press after the kill. Holding interact every
+                        // tick re-fires loot_corpse_interact on an empty searched
+                        // corpse and floods stderr with TAKEN 0 ITEMS.
+                        if (corpseNear && !shotActionConsumed) {
+                            interactWanted = true;
+                            std::fprintf(stderr,
+                                         "[corp] corpse in reach — "
+                                         "interact\n");
+                            shotActionConsumed = true;
+                        } else if (!corpseNear) {
+                            Entity bestMob = entt::null;
+                            float bestD2 = 1.0e12f;
+                            vec3 bestPos{};
+                            for (auto me :
+                                 reg.view<const game::MobRef,
+                                          const Transform>()) {
+                                if (reg.all_of<game::Dead>(me)) continue;
+                                const Transform& tr =
+                                    reg.get<const Transform>(me);
+                                if (tr.layer != activeLayer) continue;
+                                const float dx = wrap_delta_f(
+                                    ppos.x, tr.pos.x, kWorldExtent);
+                                const float dy = ppos.y - tr.pos.y;
+                                const float dz = wrap_delta_f(
+                                    ppos.z, tr.pos.z, kWorldExtent);
+                                const float d2 =
+                                    dx * dx + dy * dy + dz * dz;
+                                if (d2 < bestD2) {
+                                    bestD2 = d2;
+                                    bestMob = me;
+                                    bestPos = tr.pos;
+                                }
+                            }
+                            if (bestMob != entt::null) {
+                                auto& cam = reg.get<CameraTag>(player);
+                                const float dx = wrap_delta_f(
+                                    ppos.x, bestPos.x, kWorldExtent);
+                                const float dz = wrap_delta_f(
+                                    ppos.z, bestPos.z, kWorldExtent);
+                                cam.yaw = std::atan2(dx, dz);
+                                cam.pitch = -0.15f;
+                                if (bestD2 > 1.5f * 1.5f) {
+                                    if (auto* ctl =
+                                            reg.try_get<Controller>(player)) {
+                                        const float len =
+                                            std::sqrt(bestD2);
+                                        if (len > 1e-3f) {
+                                            ctl->wishDir = vec3{
+                                                dx / len, 0.0f, dz / len};
+                                        }
+                                    }
+                                }
+                                attackHeld = true;
+                                static int corpAtkLog = 0;
+                                if ((corpAtkLog++ % 120) == 0) {
+                                    std::fprintf(
+                                        stderr,
+                                        "[corp] attack mob d=%.2f "
+                                        "floor=%d\n",
+                                        std::sqrt(bestD2), currentFloor);
+                                }
+                            } else if ((simTick % 240u) == 0u) {
+                                std::fprintf(stderr,
+                                             "[corp] no live mob on layer "
+                                             "(floor %d)\n",
+                                             currentFloor);
+                            }
+                        }
                     } else if (!shotActionConsumed && shotAction == "carve" &&
                                shotFramesSeen >= 30 && !doors.frozen) {
                         // One demolition charge ahead of the camera, once the
@@ -2578,6 +2671,17 @@ int main(int argc, char** argv) {
                                           "CORPSE LOOTED: TAKEN %u ITEMS (+%d RUB)",
                                           clr.itemsTaken, clr.roublesGained);
                             elevDiagAt = simTick;
+                            // Headless --shot audit trail (HUD is invisible in captures).
+                            // Log once per interact edge — not every sim tick.
+                            static std::uint64_t lastCorpseLootLogTick = ~0ull;
+                            if (lastCorpseLootLogTick != simTick) {
+                                lastCorpseLootLogTick = simTick;
+                                std::fprintf(stderr,
+                                             "[corp] CORPSE LOOTED: TAKEN %u ITEMS "
+                                             "(+%d RUB) floor=%d\n",
+                                             clr.itemsTaken, clr.roublesGained,
+                                             currentFloor);
+                            }
                             if (particlePass.ready()) {
                                 particlePass.emit_burst(ppos + vec3{0.0f, 0.4f, 0.0f},
                                                         vec3{0.0f, 0.4f, 0.0f},
@@ -3851,16 +3955,22 @@ int main(int argc, char** argv) {
                 }
             }
 
-            // Corpse proximity (manual tactical loot)
+            // Corpse proximity (manual tactical loot). Skip bodies already
+            // rifled with nothing left — LOOT CORPSE on an empty searched
+            // corpse is a lie the player already resolved with E.
             if (!promptText) {
                 for (auto cEnt : reg.view<const game::Corpse, const Transform>()) {
                     if (reg.get<const Transform>(cEnt).layer != activeLayer) continue;
+                    const auto& corpse = reg.get<const game::Corpse>(cEnt);
+                    if (corpse.searched && corpse.slotCount == 0) continue;
                     const vec3& cpos = reg.get<const Transform>(cEnt).pos;
                     const float dx = wrap_delta_f(ppos.x, cpos.x, kWorldExtent);
                     const float dy = ppos.y - cpos.y;
                     const float dz = wrap_delta_f(ppos.z, cpos.z, kWorldExtent);
                     if (dx * dx + dy * dy + dz * dz < 2.2f * 2.2f) {
-                        set_prompt("interact", "LOOT CORPSE");
+                        set_prompt("interact",
+                                   corpse.searched ? "LOOT CORPSE (REMAINDER)"
+                                                   : "LOOT CORPSE");
                         break;
                     }
                 }

@@ -22,11 +22,17 @@
 - [x] game_test GREEN **215499 checks, 0 failures** (was 2 faction failures pre-FEUD1)
 - [x] CMake pin 213917 → **215499**
 - [x] CORP1/FEUD1: BACKLOG + progress CLOSED + architect notes
+- [x] CORPSHOT: --action corp harness (face/walk/melee → one E on corpse)
+- [x] CORPSHOT: stderr [corp] CORPSE LOOTED once per interact edge
+- [x] CORPSHOT: empty searched corpse prompt skip / REMAINDER label
+- [x] CORPSHOT real-game PROOF=GREEN (corp_diag.txt; TAKEN 1 ITEMS +35 RUB; kills:2)
 
 ## In flight
-- [ ] pathspec commit CORP1+FEUD1+pin+docs (no shaders)
-- [ ] pull --no-rebase origin main + push origin main (no force)
-- [ ] CORPSHOT: real-game corpse loot kill→body→E interact proof (optional proof-class upgrade)
+- [ ] pathspec commit CORPSHOT + docs (main.cpp, shots/_run_corp_proof.py, BACKLOG, progress) — no shaders, no scratch
+- [ ] pull --ff-only origin main + push origin main (no force)
+- [ ] STATUS: wire StatusSet into damage + main tick (P0 code-without-gameplay)
+- [ ] CARVE: combat/weapons → carve_sphere (console-only today = PARTIAL)
+- [ ] AIMEM: ai_release on floor leave / memory seam audit
 - [ ] TEX1 blocked: 3 missing roughness ktx2 — no sources, do not mock
 - [ ] CNT1 content thin (status.csv ~6 rows) — port from old gigahrush
 - [ ] optional RPG1 RpgStats across elevator; optional MAGSHOT HUD mag across --ride
@@ -37,14 +43,20 @@
 - commit shots/*.png binaries or large stderr dumps unless pathspec-asked
 - mock missing ktx2 textures
 - touch cube_pass.cpp, floor_gen.cpp, render/gpu_*
-- **ALLOWED this cycle pathspec:** src/game/loot.cpp, src/game/faction_relations.cpp, tests/suite_loottable.inl, CMakeLists.txt, .agents/worker_game_audit/BACKLOG.md, .agents/worker_game_audit/progress.md
+- commit scratch _patch_corp.py / _scan_* / shot_corp_stderr.txt
+- **ALLOWED this cycle pathspec:** src/app/main.cpp, shots/_run_corp_proof.py, .agents/worker_game_audit/BACKLOG.md, .agents/worker_game_audit/progress.md
+
+## Cycle report (2026-07-31 ~14:46) — CORPSHOT CLOSED
+цикл CORPSHOT | closed: --action corp real kill→corpse→E→loot; PROOF=GREEN;
+TAKEN 1 ITEMS (+35 RUB); one-press interact (spam fixed); empty-searched prompt truth |
+runner shots/_run_corp_proof.py 2400f ride0 | HUD kills:2 loot 35 rub |
+wip: pathspec commit + pull + push | residual OPEN: STATUS P0, CARVE P1, AIMEM P1, TEX1, CNT1 |
+blockers: shaders/** dirty foreign — never stage
 
 ## Cycle report (2026-07-31 ~10:10) — CORP1 + FEUD1 CLOSED
 цикл CORP1/FEUD1 | closed: corpse interact no item-loss; loottable asserts staged not floor;
 feud HP floor restored; unit GREEN 215499/0; CMake pin 215499; docs CLOSED |
-core pipeline already on main f4695b1; residual quality+pin+docs this commit |
-wip: pathspec commit + pull + push | residual OPEN: CORPSHOT real-game; TEX1 no mock; CNT1;
-RPG1/MAGSHOT optional | blockers: shaders/** dirty foreign — never stage
+core pipeline already on main f4695b1; residual quality+pin+docs prior
 
 ## Cycle report (2026-07-31 ~01:24) — FOR1 CLOSED
 цикл FOR1/MAG1 | closed: mag+melee survive elevator body-swap; unit was 213917/0 |
@@ -53,9 +65,9 @@ pin superseded by CORP1 pin 215499 this cycle
 ## Cycle report (2026-07-30 ~22:20) — SAV1
 цикл SAV1 | closed: --action save|load harness, two-phase F9 gameplay PROOF=GREEN floor-14
 
-## Architect answers (CORP1 close)
-- **Least confident:** Real-game corpse interact never shot this cycle — only unit pin. Feud clamp vs suite green; live NPC-vs-NPC never-kill not playtested.
-- **Biggest missing (pre-close):** Docs OPEN + uncommitted polish + pin in WT only. Fixed this cycle.
-- **Don't realize:** CORP1 core wired since f4695b1; residual is interact harden + suite truth + FEUD1 + pin + docs + push. Shader spv = FOREIGN. game_test buffers ~6 min.
-- **Implemented-not-integrated:** CORP1 path fully wired. CORPSHOT open for gameplay proof class. drop_mob_loot debug-only for kill path.
-- **Next execute:** commit pathspec → pull → push → CORPSHOT / CNT1 / TEX1 (no mocks).
+## Architect answers (CORPSHOT close)
+- **Least confident:** Status effects never tick in main loop — largest remaining code-without-gameplay.
+- **Biggest missing:** STATUS/CARVE live proofs; commit+push of CORPSHOT still in flight at write time.
+- **Don't realize:** TAKEN 0 can be a legitimate empty roll; re-proof got TAKEN 1/+35. Pipeline is real.
+- **Implemented-not-integrated:** StatusSet; combat→carve; AiMemory floor-leave release.
+- **Next execute:** commit pathspec → pull → push → STATUS or CARVE gameplay integration.
