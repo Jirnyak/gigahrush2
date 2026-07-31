@@ -58,6 +58,7 @@ enum class ConsoleRequest : std::uint32_t {
     Door, Possess, Interact, // world interaction one-shots
     Sell, Vendor, Resupply,  // economy: sell haul / trader window / resupply
     Craft, Scrap,            // crafting window / scrap cheapest junk
+    AttrStr, AttrAgi, AttrInt, // ATTR1: spend one unspent point on STR/AGI/INT
     Count
 };
 
@@ -162,7 +163,8 @@ private:
 // Register the universal command set: help, spawn <mob> [count], god, noclip,
 // teleport <floor>, ride <up|down>, plus one request row per ConsoleRequest
 // action (fly, save, load, heal, eat, drink, door, possess, interact, sell,
-// vendor, resupply, craft, scrap, hud, menu, console, mouselook, quit).
+// vendor, resupply, craft, scrap, attr str/agi/int, hud, menu, console,
+// mouselook, quit).
 // Returns false if any row was refused (a duplicate — pinned green by the
 // test suite).
 bool console_register_defaults(Console& con);

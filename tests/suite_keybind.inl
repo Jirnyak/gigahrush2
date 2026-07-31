@@ -31,6 +31,10 @@ static void test_keybind_registry_rules() {
     CHECK(defaults.find("menu") != nullptr);
     CHECK(defaults.find("floor_up") != nullptr);
     CHECK(defaults.find("jump") != nullptr);
+    CHECK(defaults.find("attr_str") != nullptr);
+    CHECK(defaults.find("attr_agi") != nullptr);
+    CHECK(defaults.find("attr_int") != nullptr);
+    CHECK(defaults.find("attr_str")->scancode == scan::k1);
 }
 
 static void test_keybind_defaults_resolve_in_console() {

@@ -122,6 +122,10 @@ bool keybind_register_defaults(KeybindTable& t) {
     ok &= t.add({"resupply", "resupply", scan::kR, 0});
     ok &= t.add({"craft", "craft", scan::kC, 0});
     ok &= t.add({"scrap", "scrap", scan::kX, 0});
+    // ATTR1: spend one unspent attribute point (console `attr str|agi|int`).
+    ok &= t.add({"attr_str", "attr str", scan::k1, 0});
+    ok &= t.add({"attr_agi", "attr agi", scan::k2, 0});
+    ok &= t.add({"attr_int", "attr int", scan::k3, 0});
     // Run persistence.
     ok &= t.add({"save", "save", scan::kF5, 0});
     ok &= t.add({"load", "load", scan::kF9, 0});

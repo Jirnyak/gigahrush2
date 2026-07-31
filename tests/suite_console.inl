@@ -47,6 +47,7 @@ static void test_console_registry_rules() {
     CHECK(defaults.find("save") != nullptr);
     CHECK(defaults.find("menu") != nullptr);
     CHECK(defaults.find("interact") != nullptr);
+    CHECK(defaults.find("attr") != nullptr);
 }
 
 static void test_console_requests() {
@@ -72,6 +73,19 @@ static void test_console_requests() {
                                   request_bit(ConsoleRequest::Save) |
                                   request_bit(ConsoleRequest::Menu)));
     CHECK(ctx.requestBits == 0);
+    CHECK(ctx.take_requests() == 0);
+
+    // ATTR1: multi-word attr <str|agi|int> sets one bit each; bare/unknown refused.
+    // Kept AFTER the fly|save|menu accumulation so that intermediate clears do
+    // not poison the three-bit weld above.
+    CHECK(con.exec(ctx, "attr str", out, sizeof out));
+    CHECK(ctx.take_requests() == request_bit(ConsoleRequest::AttrStr));
+    CHECK(con.exec(ctx, "attr agi", out, sizeof out));
+    CHECK(ctx.take_requests() == request_bit(ConsoleRequest::AttrAgi));
+    CHECK(con.exec(ctx, "attr int", out, sizeof out));
+    CHECK(ctx.take_requests() == request_bit(ConsoleRequest::AttrInt));
+    CHECK(!con.exec(ctx, "attr", out, sizeof out));
+    CHECK(!con.exec(ctx, "attr luck", out, sizeof out));
     CHECK(ctx.take_requests() == 0);
 
     // ride <up|down> -> one direction bit; anything else refused, bits clean.

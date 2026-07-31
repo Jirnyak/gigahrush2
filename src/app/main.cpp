@@ -19,6 +19,7 @@
 // gigahrush2.keys. Defaults: WASD move, mouse look (hold right mouse / Tab),
 // Space jump, F fly, Q door, E interact, [ / ] floor travel, ~ console.
 #include <SDL3/SDL.h>
+#include <algorithm>
 #include <SDL3/SDL_vulkan.h>
 
 #include <cmath>
@@ -2171,6 +2172,38 @@ int main(int argc, char** argv) {
                 showCraftingWindow = !showCraftingWindow;
                 if (showCraftingWindow) input.set_mouselook(false);
             }
+            // ATTR1: spend one unspent point. HP ptrs from the pool row so
+            // STR immediately credits max-HP the same way award_xp does.
+            if ((has(ConsoleRequest::AttrStr) || has(ConsoleRequest::AttrAgi) ||
+                 has(ConsoleRequest::AttrInt)) &&
+                reg.valid(player)) {
+                if (auto* rs = reg.try_get<game::RpgStats>(player)) {
+                    std::int16_t* hp = nullptr;
+                    std::int16_t* maxHp = nullptr;
+                    if (const game::NpcRef* nr =
+                            reg.try_get<game::NpcRef>(player)) {
+                        if (pool.valid(nr->id)) {
+                            hp = &pool.hp(nr->id);
+                            maxHp = &pool.max_hp(nr->id);
+                        }
+                    }
+                    game::Attr which = game::Attr::Str;
+                    const char* tag = "str";
+                    if (has(ConsoleRequest::AttrAgi)) {
+                        which = game::Attr::Agi;
+                        tag = "agi";
+                    } else if (has(ConsoleRequest::AttrInt)) {
+                        which = game::Attr::Int;
+                        tag = "int";
+                    }
+                    const bool ok = game::spend_attr_point(*rs, which, hp, maxHp);
+                    std::fprintf(stderr,
+                                 "[attr] spend %s ok=%d pts_left=%u "
+                                 "str=%u agi=%u int=%u\n",
+                                 tag, ok ? 1 : 0, rs->attrPoints,
+                                 rs->attr[0], rs->attr[1], rs->attr[2]);
+                }
+            }
             // Interact takes the job on offer — contract first, then quest if
             // no contract is pending. Both clear on take so a second press is
             // harmless. Quest accept refuses a dead giver or a chain gate;
@@ -2237,7 +2270,9 @@ int main(int argc, char** argv) {
                 // keyboard (no keys in --shot), so face+walk MUST land after
                 // apply and BEFORE controller_step consumes wishDir. The later
                 // shotAction=="wall" block only holds attackHeld + logs.
-                if (shotPath && shotAction == "wall" && reg.valid(player) &&
+                if (shotPath &&
+                    (shotAction == "wall" || shotAction == "rpgcmbt") &&
+                    reg.valid(player) &&
                     shotFramesSeen >= 30 && !doors.frozen) {
                     const Transform& ptr = reg.get<Transform>(player);
                     const MacroGrid& g = stack.layer(activeLayer).grid();
@@ -2398,6 +2433,12 @@ int main(int argc, char** argv) {
                             sm = 0.0f;
                         ctl_->moveSpeed =
                             kPlayerWalkSpeed * needs.speedScale * sm;
+                        // AGIMV: AGI multiplies walk speed (linear +1%/pt).
+                        if (const game::RpgStats* rs =
+                                reg.try_get<game::RpgStats>(player)) {
+                            ctl_->moveSpeed *=
+                                game::agi_move_speed_mult_e3(*rs) / 1000.0f;
+                        }
                     }
                     // Periodic proof trail while anything is up.
                     if (lastStatusLogTick != simTick && (simTick % 60u) == 0u) {
@@ -2443,7 +2484,41 @@ int main(int argc, char** argv) {
                     // --ride hops have landed so the snapshot is the deep floor,
                     // not the hub. shotFramesSeen is presented-frame count and
                     // lags sim ticks; rides fire at presented % 420 == 0.
-                    if (shotAction == "attack") {
+                    if (shotAction == "rpgcmbt" && reg.valid(player)) {
+                        // RPGCMBT-SHOT: force a loud sheet so scaled melee
+                        // is visible in stderr + HUD (random_rpg is modest).
+                        static bool rpgcmbtSheet = false;
+                        if (!rpgcmbtSheet) {
+                            game::RpgStats sheet = game::fresh_rpg(10);
+                            sheet.attr[0] = 20;  // STR
+                            sheet.attr[1] = 20;  // AGI
+                            sheet.attr[2] = 5;   // INT
+                            sheet.attrPoints = 3;
+                            sheet.psi = game::max_psi(sheet);
+                            reg.emplace_or_replace<game::RpgStats>(player,
+                                                                   sheet);
+                            // Credit STR max-HP onto the pool row.
+                            if (const game::NpcRef* nr =
+                                    reg.try_get<game::NpcRef>(player)) {
+                                if (pool.valid(nr->id)) {
+                                    const std::int16_t mh =
+                                        static_cast<std::int16_t>(
+                                            game::max_hp(sheet));
+                                    pool.max_hp(nr->id) = mh;
+                                    if (pool.hp(nr->id) < mh)
+                                        pool.hp(nr->id) = mh;
+                                }
+                            }
+                            rpgcmbtSheet = true;
+                            std::fprintf(stderr,
+                                         "[rpgcmbt] forced sheet "
+                                         "lvl=%u str=%u agi=%u int=%u\n",
+                                         sheet.level, sheet.attr[0],
+                                         sheet.attr[1], sheet.attr[2]);
+                        }
+                        // Hold attack every tick (same as wall/attack).
+                        attackHeld = true;
+                    } else if (shotAction == "attack") {
                         attackHeld = true;
                     } else if (shotAction == "interact") {
                         interactWanted = true;
@@ -3865,12 +3940,25 @@ int main(int argc, char** argv) {
                                         prs ? prs->magCount : 0, rd->magazine,
                                         prs ? prs->shots : 0, prs ? prs->hits : 0);
                     }
-                    ImGui::Text("weapon: %s (%u dmg) | armour: %s",
-                                wpn == game::kInvalidItem ? "fists"
-                                                          : game::item_name(wpn),
-                                md->dmg,
+                    {
+                        // rs above is scoped to the character-sheet if; re-fetch
+                        // here so melee HUD shows RPG-scaled damage (RPGCMBT).
+                        std::uint16_t shownDmg = md->dmg;
+                        if (const auto* rsHud =
+                                reg.try_get<game::RpgStats>(player)) {
+                            const std::int16_t scaled = game::melee_damage(
+                                *rsHud, wpn,
+                                static_cast<std::int16_t>(md->dmg));
+                            shownDmg = static_cast<std::uint16_t>(
+                                scaled > 1 ? scaled : std::int16_t{1});
+                        }
+                        ImGui::Text("weapon: %s (%u dmg) | armour: %s",
+                                    wpn == game::kInvalidItem ? "fists"
+                                                              : game::item_name(wpn),
+                                    shownDmg,
                                 arm == game::kInvalidItem ? "none"
                                                           : game::item_name(arm));
+                    }
                 }
                 {
                     const float share = game::risk_share(ledger, carried);

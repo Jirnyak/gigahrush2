@@ -1,4 +1,5 @@
 #include "game/combat.h"
+#include <cstdio>
 
 #include <cmath>
 #include <vector>
@@ -1229,6 +1230,17 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
         const std::uint32_t cd =
             (static_cast<std::uint32_t>(wp->cooldownMs) * agiE3 * strE3) / 1000000u;
         swingCd = static_cast<std::uint16_t>(cd > 65535u ? 65535u : (cd < 1u ? 1u : cd));
+        static int rpgcmbtLog = 0;
+        if ((rpgcmbtLog++ % 30) == 0) {
+            std::fprintf(stderr,
+                         "[rpgcmbt] melee dmg=%d cd=%u str=%u agi=%u "
+                         "lvl=%u weapon=%u\n",
+                         static_cast<int>(swingDmg), swingCd,
+                         static_cast<unsigned>(rs->attr[0]),
+                         static_cast<unsigned>(rs->attr[1]),
+                         static_cast<unsigned>(rs->level),
+                         static_cast<unsigned>(heldWeapon));
+        }
     }
     const float reach =
         static_cast<float>(wp->reachMm) * 0.001f * kCellSize + kMeleeReachSlack;

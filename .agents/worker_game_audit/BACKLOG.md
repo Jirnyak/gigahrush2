@@ -1,11 +1,15 @@
 # BACKLOG — worker_game_audit
 
 Lane: game audit + save/travel seams + content port. NOT render/prop.
-Updated: 2026-07-31 ~17:25 Samara
+Updated: 2026-07-31 ~19:28 Samara
 
 ## CLOSED this session
 | ID | Item | Proof | Commit |
 |----|------|-------|--------|
+| ATTR1 | spend_attr_point via keys 1/2/3 → KeybindTable attr_str/agi/int → console "attr str|agi|int" → ConsoleRequest → main drain | **unit GREEN:** game_test **219426 checks, 0 failures**; suite_console attr bits + suite_keybind k1/k2/k3 | this commit |
+| AGIMV | agi_move_speed_mult_e3 multiplies ctl_->moveSpeed after base assign | live in main tick; unit pin rides ATTR1 count | this commit |
+| RPGCMBT-SHOT | --action rpgcmbt forces fresh_rpg(10) STR=20 AGI=20 + attackHeld + [rpgcmbt] log + HUD melee_damage | **PROOF=GREEN** shot_rpgcmbt.png 2.7MiB jpg=103373; [rpgcmbt] forced sheet + melee dmg=12 cd=242 str=20 agi=20 | this commit |
+| RPGCMBT | wire RPG melee/ranged formulas into combat | **unit GREEN:** 219409 checks, 0 failures; test_rpg_combat_wire | **79f860a** |
 | CORP1 | Corpse loot staging: Dead→CorpseLootPending→Corpse; interact no item-loss (stack merge / inv-full leave remainder); suite asserts staged not floor | **unit GREEN:** game_test **215499 checks, 0 failures**; loottable 600 corpses → 833 staged slots, 39 slime_sample_green, floor pickups=0; Betonoed 5..10 slots, rub/kill ~137.3 (window 60..250); interact harden in loot.cpp (resolve player before searched; stackMax partial move; recompute slotCount) | prior |
 | FEUD1 | Restore kFeudMinHpPct clamp (isFatalFeud voided it for every feud pair) | suite_faction2.inl floor CHECKs green: citizen bottoms at 50% HP; frail maxHP=2 bottoms at 1; never Dead from feud | prior |
 | FOR1 / MAG1 | Elevator body-swap preserves PlayerRanged + PlayerMelee (magCount, weapon, shots, hits, kills). Capture before fold_back, emplace_or_replace after embody_as_player; lazy-absent stays absent. | unit GREEN prior: 213917/0; pins in test_elevator | prior (9cbb7fb / b6cd6c5 + pin docs) |
@@ -24,7 +28,9 @@ Updated: 2026-07-31 ~17:25 Samara
 ## OPEN / next (priority)
 | Pri | ID | Item | Pathspec | Notes |
 |-----|----|------|----------|-------|
+| P1 | SAVRPG | F5/F9 persist RpgStats + craft known-bits; bump kSaveVersion | src/game/save.* + tests | NEXT after ATTR1 |
 | P1 | AIMEM | CLOSED 2026-07-31 — AiMemory floor-leave release GREEN | src/game/ai* + floor_stream | see CLOSED AIMEM |
+
 | P2 | TEX1 | CLOSED 2026-07-31 — 3 roughness ktx2 shipped; live load 6/6 | data/textures | see CLOSED TEX1 |
 | P2 | CNT1 | CLOSED 2026-07-31 — status+craft reference parity (no missing rows) | data/*.csv + tables | see CLOSED CNT1 |
 | P2 | PAR1 | CLOSED 2026-07-31 — both travel sites still call place_body_safely + ai_release | src/app/main.cpp read-only | see CLOSED PAR1; re-run after foreign main.cpp |
@@ -341,15 +347,54 @@ Next OPEN: idle pull/push; re-PAR1 after next foreign main thrash; stay off src/
 - XP-on-kill already wired via `award_xp` in `finalize_deaths`.
 - Voluntary possess still naked (no sheet) — separate follow-up.
 
-### NOT this commit (next OPEN)
-1. **ATTR1** — `spend_attr_point` zero callers from main; HUD teases points; keys 1/2/3 needed.
-2. **AGIMV** — `agi_move_speed_mult_e3` unused on walk.
-3. **SAVRPG** — F5/F9 drops RpgStats + craft known-bits.
-4. **RPGCMBT-SHOT** — live `--action attack` proof with forced high STR + `[rpgcmbt]` log line
-   (scale is currently silent; HUD weapon dmg still prints table raw).
-5. MAGSHOT still deferred.
+### Follow-ups (ATTR1 / AGIMV / RPGCMBT-SHOT CLOSED this commit)
+1. ~~**ATTR1**~~ CLOSED — keys 1/2/3 → attr_str/agi/int → cmd_attr → drain spend_attr_point
+2. ~~**AGIMV**~~ CLOSED — agi_move_speed_mult_e3 on ctl_->moveSpeed
+3. **SAVRPG** — F5/F9 drops RpgStats + craft known-bits (NEXT)
+4. ~~**RPGCMBT-SHOT**~~ CLOSED — `--action rpgcmbt` live proof GREEN
+5. MAGSHOT still deferred
 
 ### Critique notes (subagent)
 - Ranged *damage* still raw `def->dmg` (no gun-dmg formula in rpg.h) — OK defer.
 - Same-tick death+kill can drop XP from carriedRpg snapshot — latent, not this pin.
+
+## CLOSED 2026-07-31 ATTR1 + AGIMV + RPGCMBT-SHOT
+```
+ATTR1 wire:
+  keybind.h: scan::k1=30 k2=31 k3=32 (SDL_SCANCODE_1/2/3)
+  keybind.cpp: attr_str/agi/int → "attr str|agi|int"
+  console.h: ConsoleRequest::AttrStr/Agi/Int
+  console.cpp: cmd_attr + complete_attr (multi-word, not kRequestRows)
+  main.cpp: drain AttrStr/Agi/Int → spend_attr_point(Str/Agi/Int)
+  suite_console: attr bits AFTER fly|save|menu drain (order load-bearing)
+  suite_keybind: attr_str/agi/int + k1 scancode
+
+AGIMV wire:
+  main.cpp: after base moveSpeed assign, *= agi_move_speed_mult_e3 / 1000
+
+RPGCMBT-SHOT wire:
+  main.cpp: --action rpgcmbt → fresh_rpg(10) STR=20 AGI=20 + attackHeld
+  combat.cpp: rate-limited [rpgcmbt] melee log (dmg/cd/str/agi/lvl/weapon)
+  main HUD: shownDmg via melee_damage(*rsHud, wpn, md->dmg) re-fetch (rs scoped)
+
+Proof:
+  exe: build-win/Release/game_test.exe
+  SUM: game_test: 219426 checks, 0 failures  EXIT=0
+  CMake pin: 219409 → 219426 (+17 ATTR1 console/keybind)
+  live: gigahrush2.exe --shot shots/shot_rpgcmbt.png --frames 900 --ride 0 --action rpgcmbt
+  exit=0 elapsed=23.9s png=2.7MiB jpg=103373
+  stderr: [rpgcmbt] forced sheet lvl=10 str=20 agi=20 int=5
+          [rpgcmbt] melee dmg=12 cd=242 str=20 agi=20 lvl=10 weapon=0  (x26 lines)
+  PROOF=GREEN
+
+pathspec:
+  src/game/keybind.h src/game/keybind.cpp
+  src/game/console.h src/game/console.cpp
+  src/game/combat.cpp src/app/main.cpp
+  tests/suite_console.inl tests/suite_keybind.inl
+  CMakeLists.txt .agents/worker_game_audit/BACKLOG.md
+
+Next OPEN: SAVRPG (F5/F9 RpgStats + craft known-bits, bump kSaveVersion)
+```
+
 

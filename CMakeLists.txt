@@ -493,7 +493,9 @@ if(GIGA_BUILD_TESTS)
     # shafts) changed the geometry that geometry-dependent loops iterate over.
     # 219370 -> 219387 (+17) on 2026-07-31: RPG1 — RpgStats survives elevator
     # body-swap (up + down ride pins in test_elevator; mutation xp=777 etc.).
-        PASS_REGULAR_EXPRESSION "game_test: 219409 checks, 0 failures")
+    # 219409 -> 219425 (+16) on 2026-07-31: ATTR1 keybind/console spend +
+    # AGIMV move mult live; suite_console +attr bits, suite_keybind +4; measured 219426.
+        PASS_REGULAR_EXPRESSION "game_test: 219426 checks, 0 failures")
 
     # Text gate for the AGENTS.md rules that no compiler enforces on every host.
     # The load-bearing one is no-exceptions: MSVC's STL is unsupported under
