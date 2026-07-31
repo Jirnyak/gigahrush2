@@ -6,7 +6,9 @@ Updated: 2026-08-01 ~00:45 Samara
 ## CLOSED this session
 | ID | Item | Proof | Commit |
 |----|------|-------|--------|
+| SAVSTAT | F5/F9 persist StatusSet active effects; kSaveVersion 8->9; wire +42 status (892/992/1007) | **unit GREEN:** game_test **219711 checks, 0 failures** (+90 saveload) | this commit |
 | MELEEGRID | player_melee_step forwards grid to apply_damage so WallBrace (Panelnik) soaks player melee like projectiles/mob swings | **unit GREEN:** game_test **219621 checks, 0 failures** (+6 MELEEGRID braced/open) | this commit |
+
 | POSRPG | voluntary P-possess carries RpgStats+kills+shots/hits via transfer_player_progression; mag stays on abandoned body | **unit GREEN:** game_test **219615 checks, 0 failures** (+29 possess transfer) | this commit |
 | SAVMAG | F5/F9 persist PlayerRanged + melee kills; kSaveVersion 7->8; wire +21 combat (850/950/965) | **unit GREEN:** game_test **219586 checks, 0 failures** (+40 saveload) | this commit |
 | SAVRPG | F5/F9 persist RpgStats + CraftingState; kSaveVersion 6->7; wire 829/929/944 | **unit GREEN:** game_test **219546 checks, 0 failures** (+120 saveload) | this commit |
@@ -41,7 +43,9 @@ Updated: 2026-08-01 ~00:45 Samara
 | P3 | RPG1 | CLOSED 2026-07-31 — RpgStats survives elevator body-swap | src/game/elevator.cpp | see CLOSED RPG1; embody LOCKED |
 | P3 | POSRPG | CLOSED 2026-08-01 — voluntary possess carries RpgStats+kills+shots/hits | src/game/combat.* + main possess | see CLOSED POSRPG |
 | P3 | MELEEGRID | CLOSED 2026-08-01 — player_melee forwards grid (WallBrace soak) | src/game/combat.cpp + suite_behaviours §18 | see CLOSED MELEEGRID |
+| P3 | SAVSTAT | CLOSED 2026-08-01 — F5/F9 persist StatusSet (kSaveVersion 9) | save.h/cpp + main F5/F9 + suite_saveload | see CLOSED SAVSTAT |
 | P3 | MAGSHOT | Optional: real-game HUD mag line across --ride | main.cpp foreign-aware | unit pin owns body-swap |
+
 | P3 | M4 | CLOSED peek — Milestone 4 already CLOSED (suite_props / world_test) | .agents/worker_m4* | no leftover game work |
 | P3 | SHOTLOG | CLOSED 2026-07-31 — [place] MOVE/REFUSE in place_body_at_cell | src/game/save.cpp | see CLOSED SHOTLOG |
 | P2 | PADIC | CLOSED 2026-07-31 — floor4 stress GREEN (AI+tex+shot) | main harness + src/game | see CLOSED PADIC; Zhirnyak owns mesher stripes |
@@ -357,8 +361,10 @@ Next OPEN: idle pull/push; re-PAR1 after next foreign main thrash; stay off src/
 2. ~~**AGIMV**~~ CLOSED — agi_move_speed_mult_e3 on ctl_->moveSpeed
 3. ~~**SAVRPG**~~ CLOSED — kSaveVersion 7, RpgStats+CraftingState on F5/F9
 3b. ~~**SAVMAG**~~ CLOSED — kSaveVersion 8, PlayerRanged+kills on F5/F9
+3c. ~~**SAVSTAT**~~ CLOSED — kSaveVersion 9, StatusSet on F5/F9
 4. ~~**RPGCMBT-SHOT**~~ CLOSED — `--action rpgcmbt` live proof GREEN
 5. MAGSHOT still deferred
+
 
 ### Critique notes (subagent)
 - Ranged *damage* still raw `def->dmg` (no gun-dmg formula in rpg.h) — OK defer.
@@ -475,3 +481,16 @@ pathspec: src/game/combat.cpp tests/suite_behaviours.inl
           CMakeLists.txt .agents/worker_game_audit/BACKLOG.md
 ```
 Next OPEN: MAGSHOT deferred; stay off src/render/**.
+
+## CLOSED 2026-08-01 SAVSTAT -- F5/F9 StatusSet active status effects
+```
+kSaveVersion 8 -> 9
+wire: visit_status field-by-field (NOT sizeof)
+  6xu32 remainMs + 6xu16 intensityE3 + 6xu8 alt = kStatusWire 42
+kSaveFixedWire 850 -> 892; empty 992; busy 3-opened 1007
+F5: runState.status = playerStatus; F9: playerStatus = runState.status
+suite_saveload busy/same/wire; game_test 219711 (was 219621; +90)
+Core 1c3c204; this commit tests+CMake+docs
+pathspec: tests/suite_saveload.inl CMakeLists.txt BACKLOG.md progress.md
+```
+Next OPEN: MAGSHOT deferred (SAVSTAT CLOSED); stay off src/render/**

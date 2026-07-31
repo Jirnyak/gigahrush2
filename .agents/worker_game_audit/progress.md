@@ -1,5 +1,12 @@
 # progress.md — worker_game_audit
 
+## Cycle report (2026-08-01 ~03:04) - SAVSTAT CLOSED
+- [x] SAVSTAT: F5/F9 StatusSet persist (kSaveVersion 9, +42 wire)
+- [x] suite_saveload busy_run/same_run/wire_layout pins
+- [x] game_test GREEN **219711 checks, 0 failures** (was 219621; +90)
+- [x] CMake pin 219621 -> 219711
+- [x] BACKLOG CLOSED table + SAVSTAT section; pathspec commit
+
 ## Checked
 - [x] Restore session; git status; light-grid unlocked main.cpp
 - [x] Wire full F9 load in src/app/main.cpp (save.h contract)

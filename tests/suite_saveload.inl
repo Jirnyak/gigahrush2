@@ -177,6 +177,12 @@ SaveState busy_run() {
     st.ranged.hits = 11u;
     st.kills = 99u;
 
+    // Version 9 / SAVSTAT: non-default status timers so a dropped StatusSet
+    // section cannot hide behind zero defaults (F5 mid-haze must round-trip).
+    st.status.remainMs[0] = 12345u;
+    st.status.intensityE3[3] = 1500u;
+    st.status.alt[1] = 1u;
+
     // Two floors' worth of emptied crates, one of them below the hub — the negative
     // floor is the case a `std::uint16_t` floor column could not express at all.
     st.opened.push_back(OpenedContainerKey{-3, 18, 42, 1, 0});
@@ -251,6 +257,13 @@ void same_run(const SaveState& a, const SaveState& b) {
     CHECK(a.ranged.hits == b.ranged.hits);
     CHECK(a.kills == b.kills);
 
+    // Version 9 / SAVSTAT: live status effects round-trip field-by-field.
+    for (std::size_t i = 0; i < kStatusCount; ++i) {
+        CHECK(a.status.remainMs[i] == b.status.remainMs[i]);
+        CHECK(a.status.intensityE3[i] == b.status.intensityE3[i]);
+        CHECK(a.status.alt[i] == b.status.alt[i]);
+    }
+
     CHECK(a.opened.size() == b.opened.size());
     const std::size_t nk = a.opened.size() < b.opened.size() ? a.opened.size()
                                                              : b.opened.size();
@@ -268,18 +281,19 @@ void wire_layout() {
     // depends on the compiler is a save that cannot cross hosts.
     // Derived from the serializers, not measured from a run: 33 ledger + 79 book
     // (3 x 21 + 16) + 304 player (33 needs + 256 inventory + 12 + 3) + 12 rpg +
-    // 93 craft + 21 combat (hasRanged+ranged+kills) + 308 quest log = 850,
+    // 93 craft + 21 combat (hasRanged+ranged+kills) + 42 status + 308 quest log = 892,
     // plus the fixed 36-byte faction matrix and the 64-byte header.
     static_assert(kSaveHeaderWire == 64);
     static_assert(kRpgWire == 12);
     static_assert(kCraftingWire == 93);
     static_assert(kRangedWire == 16);
     static_assert(kCombatSaveWire == 21);
-    static_assert(kSaveFixedWire == 850);
+    static_assert(kStatusWire == 42);
+    static_assert(kSaveFixedWire == 892);
     static_assert(kFactionWire == 36);
-    static_assert(save_bytes_for(0) == 950);
-    static_assert(save_bytes_for(3) == 950 + 15);
-    static_assert(save_bytes_for(3, 100, 50) == 950 + 15 + 150);
+    static_assert(save_bytes_for(0) == 992);
+    static_assert(save_bytes_for(3) == 992 + 15);
+    static_assert(save_bytes_for(3, 100, 50) == 992 + 15 + 150);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -289,10 +303,10 @@ void wire_layout() {
     const SaveState st = busy_run();
     save_write(st, bytes);
     CHECK(bytes.size() == save_bytes_for(3));
-    // 965 B for a full run with three emptied crates and no macro blobs (those are
+    // 1007 B for a full run with three emptied crates and no macro blobs (those are
     // variable-size and pinned by macro_world_round_trips). GEOMETRY lives in the
-    // per-floor files ([save.h] modular layout), never here. v7 was 944; +21 SAVMAG.
-    CHECK(bytes.size() == 965);
+    // per-floor files ([save.h] modular layout), never here. v8 was 965; +42 SAVSTAT.
+    CHECK(bytes.size() == 1007);
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');
