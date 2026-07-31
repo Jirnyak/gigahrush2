@@ -24,7 +24,7 @@ Updated: 2026-07-31 ~16:10 Samara
 | Pri | ID | Item | Pathspec | Notes |
 |-----|----|------|----------|-------|
 | P1 | AIMEM | AiMemory tested; ai_release on floor leave / pass to ai_step wired in main+floor_stream; proven GREEN 2026-07-31| src/game/ai* + floor_stream | check embody/fold_back release |
-| P2 | TEX1 | 3 missing roughness ktx2 (rubber_tiles / rusty_metal_03 / rusty_corrugated_iron) | data/textures | non-fatal; albedo+normal OK; roughness mask 0x3400 (3/6); **no mock ktx2** |
+| P2 | TEX1 | CLOSED 2026-07-31 — 3 roughness ktx2 shipped; live load 6/6 | data/textures | see CLOSED TEX1 below |
 | P2 | CNT1 | Content expand status/craft from old giga | data/*.csv + tables | thin: status.csv (~6 rows); port real rows from C:\hades\gigahrush |
 | P2 | PAR1 | Re-grep travel sites after every main.cpp foreign commit | src/app/main.cpp read-only unless hole | line drift from light-grid/loot-emissive; WT often foreign-dirty |
 | P3 | RPG1 | Optional: preserve RpgStats across elevator (embody re-rolls today) | src/game/elevator.cpp + embody | NOT FOR1 regression — known residual |
@@ -164,3 +164,14 @@ Feature without gameplay = DECLINED. CARVE CLOSED 2026-07-31 ~16:10 — real-gam
 - shots/shot_padic.jpg 137KB floor 4 (cwd=repo root; textures load; 3 roughness missing TEX1)
 - stripes with albedo loaded => UV/mesher more likely than missing ktx2 alone
 - game-agent does NOT thrash src/render/**; evidence only
+
+## CLOSED 2026-07-31 TEX1
+- Generated via `python tools/fetch_textures.py --map roughness --only rubber_tiles,rusty_metal_03,rusty_corrugated_iron`
+- Pure-Python BC7 path (no external ktx/Compressonator required); rubber_tiles used cached Poly Haven Rough jpg; rusty_* procedural fallback where Rough cache missing
+- Files: rubber_tiles_roughness.ktx2, rusty_metal_03_roughness.ktx2, rusty_corrugated_iron_roughness.ktx2 (each 5592928 B BC7_UNORM 2048x12)
+- PROOF=GREEN: `gigahrush2.exe --shot shots/shot_tex1.png --frames 120 --floor 0` from repo root
+  - NO `[tex] ERROR` for the three missing names
+  - `[cube] albedo: 6/6 ... normal: 6/6 ... roughness: 6/6 (mask 0xfc00)` (was roughness 3/6 mask 0x3400)
+  - stderr: shots/shot_tex1_stderr.txt
+- Not a mock: real KTX2 BC7 containers decoded+uploaded by engine
+
