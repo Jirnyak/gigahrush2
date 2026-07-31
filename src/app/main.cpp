@@ -1831,6 +1831,14 @@ int main(int argc, char** argv) {
             wrap_macro(static_cast<int>(sp.y / kCellSize)));
         runState.player.cz = static_cast<std::uint8_t>(
             wrap_macro(static_cast<int>(sp.z / kCellSize)));
+        // Version 7: character sheet + crafting bank. Prefer the live entity
+        // component; fall back to the death-surviving carried snapshot so a
+        // mid-death F5 still banks progression. [save.h] SAVRPG
+        if (const game::RpgStats* rs = reg.try_get<game::RpgStats>(player))
+            runState.rpg = *rs;
+        else
+            runState.rpg = carriedRpg;
+        runState.craft = crafting;
         // REFRESH, not append and not clear. [save.h]
         game::refresh_opened_containers(reg, pl, currentFloor, runState.opened);
         // v6: the macro world travels whole — pool table, macro clock, faction
@@ -3529,6 +3537,15 @@ int main(int argc, char** argv) {
                                                             runState.player);
                                 game::sync_armour(reg, pool, player);
                             }
+                            // Version 7: stamp the sheet onto the body and the
+                            // death-surviving carried snapshot, then restore the
+                            // crafting bank. embody_as_player may have rolled a
+                            // fresh sheet from the record — overwrite it. [save.h]
+                            carriedRpg = runState.rpg;
+                            if (reg.valid(player))
+                                reg.emplace_or_replace<game::RpgStats>(
+                                    player, runState.rpg);
+                            crafting = runState.craft;
                             // Per-floor clocks and channels reset, same as any
                             // arrival.
                             samosbor = game::samosbor_new_game(sbRng);

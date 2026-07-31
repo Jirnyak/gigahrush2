@@ -55,6 +55,8 @@
 #include "game/inventory.h"   // Inventory
 #include "game/npc_pool.h"    // Needs
 #include "game/quest.h"       // QuestLog, kQuestLogWire, quest_table_fingerprint
+#include "game/rpg.h"         // RpgStats
+#include "game/craft.h"       // CraftingState, kCraftingWire, craft_write/read
 #include "world/destruct.h"   // CarveOp, CarveScratch, CarveResult, carve_sphere
 #include "world/level_stack.h"  // LayerId, and World via world/world.h
 
@@ -91,7 +93,11 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // return to is the one you left, not a reseed. Restored from the MAIN MENU, before
 // anything is embodied, so no body can hold a stale id. Earlier versions are
 // rejected, per the standing rule.
-inline constexpr std::uint32_t kSaveVersion = 6u;
+// Version 7: the character sheet and the crafting bank travel too — RpgStats
+// (level/xp/attrs/psi) and CraftingState (known-recipe bits + material bank +
+// tier). F5/F9 no longer drop progression. craft_write/craft_read own the craft
+// codec ([craft.h]); the RPG fields are written little-endian field by field.
+inline constexpr std::uint32_t kSaveVersion = 7u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -203,9 +209,15 @@ inline constexpr std::size_t kBookWire =
 inline constexpr std::size_t kNeedsWire = 33;        // 8 floats + seeded
 inline constexpr std::size_t kInventoryWire = static_cast<std::size_t>(kInvSlots) * 4;
 inline constexpr std::size_t kPlayerWire = kNeedsWire + kInventoryWire + 4 + 4 + 4 + 3;
-inline constexpr std::size_t kOpenedKeyWire = 5;     // i16 floor + 3 x u8 cell
+// Version 7: RpgStats wire — field-by-field LE, NOT sizeof (pad_ is written so the
+// footprint stays 12 and matches the POD layout without host padding surprises).
+inline constexpr std::size_t kRpgWire = 4 + 2 + 1 + 1 + 3 + 1;  // 12
+static_assert(kRpgWire == 12);
+// kCraftingWire (93) is defined in craft.h next to craft_write/craft_read.
 // kQuestLogWire is defined in quest.h.
-inline constexpr std::size_t kSaveFixedWire = kLedgerWire + kBookWire + kPlayerWire + kQuestLogWire;
+inline constexpr std::size_t kOpenedKeyWire = 5;     // i16 floor + 3 x u8 cell
+inline constexpr std::size_t kSaveFixedWire =
+    kLedgerWire + kBookWire + kPlayerWire + kRpgWire + kCraftingWire + kQuestLogWire;
 
 // Sanity ceiling on the opened-container list, so a corrupt header cannot ask for a
 // huge allocation before the checksum has had a chance to reject it. 64 crates per
@@ -353,6 +365,13 @@ struct SaveState {
     RunLedger ledger{};
     ContractBook book{};
     PlayerSnapshot player{};
+    // Version 7: character sheet. Lives on the player entity at runtime
+    // ([rpg.h]); captured into the run on F5 and stamped back on F9. Default is
+    // a zeroed POD — main seeds a real sheet via fresh_rpg / embody.
+    RpgStats rpg{};
+    // Version 7: crafting bank + known-recipe bits + tier ([craft.h]). Run state
+    // beside the ledger in main; craft_write/craft_read own the 93-byte codec.
+    CraftingState craft{};
     // Every crate emptied anywhere in the building, not just on the live floor. Only the
     // resident floor's crates are live entities, so the ones from other floors exist
     // ONLY in this list — see `refresh_opened_containers`.

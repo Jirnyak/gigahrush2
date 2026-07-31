@@ -6,6 +6,7 @@ Updated: 2026-07-31 ~19:28 Samara
 ## CLOSED this session
 | ID | Item | Proof | Commit |
 |----|------|-------|--------|
+| SAVRPG | F5/F9 persist RpgStats + CraftingState; kSaveVersion 6->7; wire 829/929/944 | **unit GREEN:** game_test **219546 checks, 0 failures** (+120 saveload) | this commit |
 | ATTR1 | spend_attr_point via keys 1/2/3 → KeybindTable attr_str/agi/int → console "attr str|agi|int" → ConsoleRequest → main drain | **unit GREEN:** game_test **219426 checks, 0 failures**; suite_console attr bits + suite_keybind k1/k2/k3 | this commit |
 | AGIMV | agi_move_speed_mult_e3 multiplies ctl_->moveSpeed after base assign | live in main tick; unit pin rides ATTR1 count | this commit |
 | RPGCMBT-SHOT | --action rpgcmbt forces fresh_rpg(10) STR=20 AGI=20 + attackHeld + [rpgcmbt] log + HUD melee_damage | **PROOF=GREEN** shot_rpgcmbt.png 2.7MiB jpg=103373; [rpgcmbt] forced sheet + melee dmg=12 cd=242 str=20 agi=20 | this commit |
@@ -28,7 +29,6 @@ Updated: 2026-07-31 ~19:28 Samara
 ## OPEN / next (priority)
 | Pri | ID | Item | Pathspec | Notes |
 |-----|----|------|----------|-------|
-| P1 | SAVRPG | F5/F9 persist RpgStats + craft known-bits; bump kSaveVersion | src/game/save.* + tests | NEXT after ATTR1 |
 | P1 | AIMEM | CLOSED 2026-07-31 — AiMemory floor-leave release GREEN | src/game/ai* + floor_stream | see CLOSED AIMEM |
 
 | P2 | TEX1 | CLOSED 2026-07-31 — 3 roughness ktx2 shipped; live load 6/6 | data/textures | see CLOSED TEX1 |
@@ -350,7 +350,7 @@ Next OPEN: idle pull/push; re-PAR1 after next foreign main thrash; stay off src/
 ### Follow-ups (ATTR1 / AGIMV / RPGCMBT-SHOT CLOSED this commit)
 1. ~~**ATTR1**~~ CLOSED — keys 1/2/3 → attr_str/agi/int → cmd_attr → drain spend_attr_point
 2. ~~**AGIMV**~~ CLOSED — agi_move_speed_mult_e3 on ctl_->moveSpeed
-3. **SAVRPG** — F5/F9 drops RpgStats + craft known-bits (NEXT)
+3. ~~**SAVRPG**~~ CLOSED — kSaveVersion 7, RpgStats+CraftingState on F5/F9
 4. ~~**RPGCMBT-SHOT**~~ CLOSED — `--action rpgcmbt` live proof GREEN
 5. MAGSHOT still deferred
 
@@ -394,7 +394,20 @@ pathspec:
   tests/suite_console.inl tests/suite_keybind.inl
   CMakeLists.txt .agents/worker_game_audit/BACKLOG.md
 
-Next OPEN: SAVRPG (F5/F9 RpgStats + craft known-bits, bump kSaveVersion)
+Next OPEN: MAGSHOT deferred (SAVRPG CLOSED)
 ```
 
+## CLOSED 2026-07-31 SAVRPG — F5/F9 RpgStats + CraftingState
+```
+kSaveVersion 6 -> 7
+wire: visit_rpg (12 B) after player; craft_write/craft_read (93 B) after rpg
+kSaveFixedWire 724 -> 829; empty 929; busy 3-opened 944
+F5: runState.rpg = try_get else carriedRpg; runState.craft = crafting
+F9: carriedRpg = runState.rpg; emplace_or_replace; crafting = runState.craft
+suite_saveload: busy_run fills rpg+craft; same_run field CHECKs; wire_layout pins
+game_test: 219546 checks, 0 failures (was 219426; +120)
+pathspec: src/game/save.h src/game/save.cpp src/app/main.cpp
+          tests/suite_saveload.inl CMakeLists.txt BACKLOG.md
+```
+Next OPEN: MAGSHOT deferred; stay off src/render/**.
 

@@ -13,6 +13,8 @@
 #include "game/item_table.h"  // kItemNames, kItemCount
 #include "game/mob_table.h"   // kMobNames, kMobKindCount
 #include "game/quest.h"       // QuestLog, quest_log_write, quest_log_read, kQuestLogWire
+#include "game/craft.h"       // craft_write, craft_read, kCraftingWire
+#include "game/rpg.h"         // RpgStats (visit_rpg)
 #include "sim/physics.h"      // aabb_overlaps_solid — the solver's own predicate
 #include "world/types.h"      // kCellSize, kVoxelSize, wrap_macro
 #include "world/world.h"      // World::grid, for the placement probes
@@ -256,6 +258,20 @@ void visit_player(Ar& ar, P& p) {
     ar.u8(p.cz);
 }
 
+// Version 7: RpgStats field-by-field. pad_ is written so the wire is exactly
+// kRpgWire (12) and a future non-zero pad cannot silently drop.
+template <class Ar, class R>
+void visit_rpg(Ar& ar, R& r) {
+    ar.u32(r.xp);
+    ar.u16(r.psi);
+    ar.u8(r.level);
+    ar.u8(r.attrPoints);
+    ar.u8(r.attr[0]);
+    ar.u8(r.attr[1]);
+    ar.u8(r.attr[2]);
+    ar.u8(r.pad_);
+}
+
 template <class Ar, class K>
 void visit_key(Ar& ar, K& k) {
     ar.i16(k.floor);
@@ -343,12 +359,16 @@ static_assert(kLedgerWire == 8 + 8 + 4 + 4 + 4 + 4 + 1);
 static_assert(kContractWire == 4 + 2 + 4 + 4 + 4 + 1 + 1 + 1);
 static_assert(kNeedsWire == 8 * 4 + 1);
 static_assert(kInventoryWire == 64 * 4);
-// kSaveFixedWire now includes kQuestLogWire (308 B: 20 rows x 14 B + 8 + 20).
-static_assert(kSaveFixedWire == 724);
+// kSaveFixedWire: ledger+book+player + v7 rpg(12)+craft(93) + quest log.
+// Was 724 in v6; +12 +93 = 829 in v7.
+static_assert(kRpgWire == 12);
+static_assert(kCraftingWire == 93);
+static_assert(kSaveFixedWire == 724 + 12 + 93);  // 829
+static_assert(kSaveFixedWire == 829);
 static_assert(kFactionWire == 36);
-// header 64 + fixed 724 + faction 36 = 824 for an empty run.
-static_assert(save_bytes_for(0) == 824);
-static_assert(save_bytes_for(0, 100, 50) == 824 + 150);
+// header 64 + fixed 829 + faction 36 = 929 for an empty run.
+static_assert(save_bytes_for(0) == 929);
+static_assert(save_bytes_for(0, 100, 50) == 929 + 150);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two
@@ -370,6 +390,13 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     visit_ledger(bw, st.ledger);
     visit_book(bw, st.book);
     visit_player(bw, st.player);
+    // Version 7: character sheet + crafting bank (fixed-size, in kSaveFixedWire).
+    visit_rpg(bw, st.rpg);
+    {
+        const std::size_t at = body.size();
+        body.resize(at + kCraftingWire);
+        craft_write(st.craft, body.data() + at);
+    }
     for (const OpenedContainerKey& k : st.opened) visit_key(bw, k);
     // Version 6: the macro world — pool table, macro-sim state, faction matrix.
     body.insert(body.end(), st.poolBlob.begin(), st.poolBlob.end());
@@ -478,6 +505,16 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     visit_ledger(r, tmp.ledger);
     visit_book(r, tmp.book);
     visit_player(r, tmp.player);
+    // Version 7: character sheet + crafting bank.
+    visit_rpg(r, tmp.rpg);
+    {
+        const std::size_t pos = r.at();
+        if (static_cast<std::size_t>(h.payloadBytes) < pos + kCraftingWire)
+            return fail(SaveError::TooShort);
+        if (!craft_read(bytes + kSaveHeaderWire + pos, kCraftingWire, tmp.craft))
+            return fail(SaveError::TooShort);
+        r.skip(kCraftingWire);
+    }
     tmp.opened.resize(static_cast<std::size_t>(h.openedCount));
     for (std::size_t i = 0; i < tmp.opened.size(); ++i) visit_key(r, tmp.opened[i]);
     // Version 6: the macro blobs, verbatim (decoded by their owners against live

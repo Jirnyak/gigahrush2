@@ -40,6 +40,8 @@
 #include "game/macro_sim.h"
 #include "game/npc_pool.h"
 #include "game/save.h"
+#include "game/craft.h"   // craft_init, craft_learn (SAVRPG pin)
+#include "game/rpg.h"     // fresh_rpg, RpgStats (SAVRPG pin)
 #include "sim/physics.h"
 #include "world/level_stack.h"
 #include "world/world.h"
@@ -142,6 +144,27 @@ SaveState busy_run() {
     st.player.cy = 91;
     st.player.cz = 1;
 
+    // Version 7 / SAVRPG: a non-default sheet and a mutated craft bank so a
+    // dropped field cannot hide behind fresh_rpg(1) / craft_init defaults.
+    st.rpg = fresh_rpg(10);
+    st.rpg.xp = 12345u;
+    st.rpg.psi = 77u;
+    st.rpg.attrPoints = 3u;
+    st.rpg.attr[0] = 20u;  // STR
+    st.rpg.attr[1] = 15u;  // AGI
+    st.rpg.attr[2] = 8u;   // INT
+    craft_init(st.craft);
+    st.craft.mat[0] = 111u;
+    st.craft.mat[3] = 222u;
+    st.craft.mat[8] = 333u;
+    st.craft.tier = 2u;
+    // Flip one non-default discoverable bit if the table has room past defaults.
+    // craft_learn no-ops on already-known / non-discoverable; the mat/tier pins
+    // still catch a dropped craft section even if learn is a no-op.
+    for (ItemId id = 1; id <= kCraftRecipeCount; ++id) {
+        if (craft_learn(st.craft, id)) break;
+    }
+
     // Two floors' worth of emptied crates, one of them below the hub — the negative
     // floor is the case a `std::uint16_t` floor column could not express at all.
     st.opened.push_back(OpenedContainerKey{-3, 18, 42, 1, 0});
@@ -192,6 +215,20 @@ void same_run(const SaveState& a, const SaveState& b) {
     CHECK(a.player.cy == b.player.cy);
     CHECK(a.player.cz == b.player.cz);
 
+    // Version 7 / SAVRPG: sheet + craft bank.
+    CHECK(a.rpg.xp == b.rpg.xp);
+    CHECK(a.rpg.psi == b.rpg.psi);
+    CHECK(a.rpg.level == b.rpg.level);
+    CHECK(a.rpg.attrPoints == b.rpg.attrPoints);
+    CHECK(a.rpg.attr[0] == b.rpg.attr[0]);
+    CHECK(a.rpg.attr[1] == b.rpg.attr[1]);
+    CHECK(a.rpg.attr[2] == b.rpg.attr[2]);
+    CHECK(a.craft.tier == b.craft.tier);
+    for (std::size_t w = 0; w < kCraftKnownWords; ++w)
+        CHECK(a.craft.known[w] == b.craft.known[w]);
+    for (std::size_t i = 0; i < kCraftMaterials; ++i)
+        CHECK(a.craft.mat[i] == b.craft.mat[i]);
+
     CHECK(a.opened.size() == b.opened.size());
     const std::size_t nk = a.opened.size() < b.opened.size() ? a.opened.size()
                                                              : b.opened.size();
@@ -208,15 +245,17 @@ void wire_layout() {
     // The format's footprint is arithmetic, not a measurement — a save whose length
     // depends on the compiler is a save that cannot cross hosts.
     // Derived from the serializers, not measured from a run: 33 ledger + 79 book
-    // (3 x 21 + 16) + 304 player (33 needs + 256 inventory + 12 + 3) + 308 quest log
-    // (20 rows x 14 + 8 earned + 5 x 4 counters) = 724, plus the fixed 36-byte
-    // faction matrix and the 64-byte header (48 v1 + 8 v2 quests + 8 v6 blobs).
+    // (3 x 21 + 16) + 304 player (33 needs + 256 inventory + 12 + 3) + 12 rpg +
+    // 93 craft + 308 quest log = 829, plus the fixed 36-byte faction matrix and
+    // the 64-byte header (48 v1 + 8 v2 quests + 8 v6 blobs).
     static_assert(kSaveHeaderWire == 64);
-    static_assert(kSaveFixedWire == 724);
+    static_assert(kRpgWire == 12);
+    static_assert(kCraftingWire == 93);
+    static_assert(kSaveFixedWire == 829);
     static_assert(kFactionWire == 36);
-    static_assert(save_bytes_for(0) == 824);
-    static_assert(save_bytes_for(3) == 824 + 15);
-    static_assert(save_bytes_for(3, 100, 50) == 824 + 15 + 150);
+    static_assert(save_bytes_for(0) == 929);
+    static_assert(save_bytes_for(3) == 929 + 15);
+    static_assert(save_bytes_for(3, 100, 50) == 929 + 15 + 150);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -226,10 +265,10 @@ void wire_layout() {
     const SaveState st = busy_run();
     save_write(st, bytes);
     CHECK(bytes.size() == save_bytes_for(3));
-    // 839 B for a full run with three emptied crates and no macro blobs (those are
+    // 944 B for a full run with three emptied crates and no macro blobs (those are
     // variable-size and pinned by macro_world_round_trips). GEOMETRY lives in the
-    // per-floor files ([save.h] modular layout), never here.
-    CHECK(bytes.size() == 839);
+    // per-floor files ([save.h] modular layout), never here. v6 was 839; +12 +93.
+    CHECK(bytes.size() == 944);
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');
