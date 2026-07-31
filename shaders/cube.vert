@@ -10,9 +10,11 @@ layout(location = 0) in vec3 inPos;      // per-vertex, cube-local [0,1]
 layout(location = 1) in vec3 inNormal;   // per-vertex face normal
 
 layout(location = 2) in vec3 inOrigin;   // per-instance ABSOLUTE grid origin (min corner)
-// Per-instance extent in CELLS along x/y/z; (1,1,1) is a single cell. .w unused.
-// This is the four bytes that used to be a float `scale` written as the constant
-// kCellSize by every instance the pass ever emitted.
+// Per-instance extent in SUB-VOXELS (eighths of a cell) along x/y/z: a full
+// cell is (8,8,8), a merged 8-cell run is 64, and a single carved sub-voxel is
+// (1,1,1) — one unit system for the macro optimisation and the honest 0.25 m
+// atom ([destruct.md]). .w unused. These are the four bytes that used to be a
+// float `scale` written as the constant kCellSize by every instance.
 layout(location = 3) in uvec4 inSpan;
 layout(location = 4) in vec3 inColor;    // per-instance base colour
 // Bits 0..26 = 3x3x3 occupancy mask (AO), bits 27..31 = material id. Two fields in
@@ -46,13 +48,14 @@ layout(location = 3) out float vAo;
 // Same shared-varying contract as vAo — body.vert declares and writes this too.
 layout(location = 4) flat out uint vMat;
 
-// One macro cell in metres (world/types.h kCellSize). Hardcoded here for the same
-// reason cube.frag hardcodes it to normalise its uv: every lane of the 128-byte
-// push-constant block that could have carried it is either in use or reserved, and
-// the two shaders that need it are the two that already agree on it. If this ever
-// stops matching kCellSize, merged boxes get the wrong length and the world stops
-// being watertight — a very visible failure, not a silent one.
-const float kCellSize = 2.0;
+// One SUB-voxel in metres (world/types.h kVoxelSize = kCellSize / 8) — the unit
+// of inSpan. Hardcoded here for the same reason cube.frag hardcodes kCellSize to
+// normalise its uv: every lane of the 128-byte push-constant block that could
+// have carried it is either in use or reserved, and the shaders that need it
+// already agree on it. If this ever stops matching kVoxelSize, merged boxes get
+// the wrong length and the world stops being watertight — a very visible
+// failure, not a silent one.
+const float kSpanUnit = 0.25;
 
 // Nearest toroidal image of an absolute world position, relative to the camera.
 //
@@ -125,7 +128,7 @@ void main() {
     // bound and suite_greedy.inl measures it.
     // `halfExt`, not `half`: GLSL reserves `half` for a future scalar type and a
     // declaration using it is rejected outright.
-    vec3 extent = vec3(inSpan.xyz) * kCellSize;
+    vec3 extent = vec3(inSpan.xyz) * kSpanUnit;
     vec3 halfExt = 0.5 * extent;
     vec3 centre = nearest_image(inOrigin + halfExt, pc.camPos.xyz, pc.torus.x);
     vec3 world = centre - halfExt + inPos * extent;

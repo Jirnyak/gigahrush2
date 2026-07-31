@@ -124,6 +124,20 @@ inline constexpr std::uint32_t kSurfaceFlag = ao_bit(0, 0, 0);
 static_assert((kSurfaceFlag & kMergeBits) == 0,
               "the surface flag must not collide with an observable bit");
 
+// "This visible cell is PARTIAL — draw its actual sub-voxel bits, not a full
+// box." Parked on another bit no shader reads (the +x single-axis face offset,
+// one of the six kAoReadBits excludes). A partial cell deliberately does NOT
+// carry kSurfaceFlag, which is what keeps it out of the run merge below with
+// zero changes to the scan: run_length breaks on a missing surface flag, and
+// the outer loop never starts a run there. The sub-voxel pass in
+// CubePass::build_instances is the only reader. Cleared before upload, like
+// kSurfaceFlag.
+inline constexpr std::uint32_t kPartialFlag = ao_bit(1, 0, 0);
+static_assert((kPartialFlag & kMergeBits) == 0,
+              "the partial flag must not collide with an observable bit");
+static_assert(kPartialFlag != kSurfaceFlag,
+              "the two classification flags need distinct dead bits");
+
 // Distance in bit positions between the -1 and +1 planes of `axis`: the bit index
 // is a base-3 digit string, so the axis's digit is worth 3^axis and stepping it
 // from -1 to +1 is two of those.

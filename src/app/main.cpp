@@ -2136,6 +2136,15 @@ int main(int argc, char** argv) {
                         attackHeld = true;
                     } else if (shotAction == "interact") {
                         interactWanted = true;
+                    } else if (!shotActionConsumed && shotAction == "carve" &&
+                               shotFramesSeen >= 30 && !doors.frozen) {
+                        // One demolition charge ahead of the camera, once the
+                        // nav bake has landed — the same request path the
+                        // console `carve` row sets, so the screenshot
+                        // exercises the real seam ([world/destruct.h]).
+                        consoleCtx.carveRadius = 1.5f;
+                        consoleCtx.carvePower = 0xFFFF;
+                        shotActionConsumed = true;
                     } else if (!shotActionConsumed &&
                                (shotAction == "save" || shotAction == "load") &&
                                shotRideDone >= shotRide &&

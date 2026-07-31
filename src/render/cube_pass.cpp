@@ -13,7 +13,9 @@
 #include <vector>
 
 #include "core/jobs.h" // parallel_for — classify() is bake work, not tick work
+#include "world/destruct.h" // kSubMaterialName — per-sub-voxel materials
 #include "world/materials.h"
+#include "world/subfield.h"
 #include "world/world.h"
 
 namespace giga::gpu {
@@ -883,8 +885,15 @@ void CubePass::classify(const World& world) {
                     out[i] = 0;
                     continue;
                 }
-                out[i] = kSurfaceFlag | ao_mask(occ, n)
+                // Full cells join the run merge; PARTIAL cells (some bits
+                // carved or never set) are flagged for the sub-voxel pass in
+                // build_instances instead — the world's atom is the 0.25 m
+                // sub-voxel, and a half-carved wall must read as one
+                // ([destruct.md]). The AO neighbourhood is shared either way.
+                const std::uint32_t base = ao_mask(occ, n)
                        | (surface_id(types[i]) << kMatIdShift);
+                out[i] = OccBits::get(occ.full, i) ? (base | kSurfaceFlag)
+                                                   : (base | kPartialFlag);
             }
         }
     }, classifyThreads_);
@@ -928,6 +937,24 @@ std::uint32_t CubePass::build_instances(std::uint32_t frameIndex,
         return types[a] == types[b] && tint(a) == tint(b);
     };
 
+    // Final instance colour for (material, tint) — shared by the cell-run and
+    // sub-voxel emitters below so the two paths cannot drift.
+    //
+    // A textured material's mean albedo already arrives in the sampled texel,
+    // so shipping it again in `color` would darken the photograph by its own
+    // mean. What ships instead is the linear tint ratio — {1,1,1} when dry.
+    // See the two-meanings note on CubeInstance::color.
+    auto colour_final = [&](CellType ct, float t) -> vec3 {
+        const vec3 base = type_color(ct);
+        vec3 col = base;
+        if (t > 0.0f)
+            col = vec3{lerp(base.x, 0.15f, t), lerp(base.y, 0.35f, t),
+                       lerp(base.z, 0.85f, t)};
+        if (ct < kMatCount && ((texMask_ >> ct) & 1u) != 0u)
+            col = t > 0.0f ? tint_multiplier(base, col) : vec3{1.0f, 1.0f, 1.0f};
+        return col;
+    };
+
     auto* dst = static_cast<CubeInstance*>(instances_[frameIndex].mapped);
     auto emit = [&](std::size_t i, int x, int y, int z,
                     const std::uint8_t span[3]) {
@@ -935,34 +962,141 @@ std::uint32_t CubePass::build_instances(std::uint32_t frameIndex,
         inst.origin = vec3{static_cast<float>(x) * kCellSize,
                            static_cast<float>(y) * kCellSize,
                            static_cast<float>(z) * kCellSize};
-        inst.span[0] = span[0];
-        inst.span[1] = span[1];
-        inst.span[2] = span[2];
+        // CubeInstance spans are in SUB-VOXELS (cube.vert multiplies by
+        // kVoxelSize): a run of N cells is 8N eighths, max 8*8=64, well inside
+        // the uint8 lane. One unit system for full cells and carved bits both.
+        inst.span[0] = static_cast<std::uint8_t>(span[0] * kSubDim);
+        inst.span[1] = static_cast<std::uint8_t>(span[1] * kSubDim);
+        inst.span[2] = static_cast<std::uint8_t>(span[2] * kSubDim);
         inst.spanW = 0;
-        const CellType ct = types[i];
-        const vec3 base = type_color(ct);
-        const float t = tint(i);
-        vec3 col = base;
-        if (t > 0.0f)
-            col = vec3{lerp(base.x, 0.15f, t), lerp(base.y, 0.35f, t),
-                       lerp(base.z, 0.85f, t)};
-        // A textured material's mean albedo already arrives in the sampled texel,
-        // so shipping it again in `color` would darken the photograph by its own
-        // mean. What ships instead is the linear tint ratio — {1,1,1} when dry.
-        // See the two-meanings note on CubeInstance::color.
-        if (ct < kMatCount && ((texMask_ >> ct) & 1u) != 0u)
-            col = t > 0.0f ? tint_multiplier(base, col) : vec3{1.0f, 1.0f, 1.0f};
-        inst.color = col;
+        inst.color = colour_final(types[i], tint(i));
         // The fluid tint above deliberately does NOT change the surface family: a
         // flooded parquet floor is still parquet, wet. Tint is colour, family is
-        // material. The surface flag comes off before upload — it lives on the
-        // never-read centre bit of the mask and means nothing to the shader.
-        inst.occ = cellClass_[i] & ~kSurfaceFlag;
+        // material. The classification flags come off before upload — they live
+        // on never-read bits of the mask and mean nothing to the shader.
+        inst.occ = cellClass_[i] & ~(kSurfaceFlag | kPartialFlag);
         ++dst;
     };
 
-    return merge_surface_runs(cellClass_.data(), claimed_.data(), maxRun_,
-                              instanceCapacity_, same_colour, emit);
+    std::uint32_t boxes =
+        merge_surface_runs(cellClass_.data(), claimed_.data(), maxRun_,
+                           instanceCapacity_, same_colour, emit);
+
+    // --- the sub-voxel pass ----------------------------------------------
+    // Full cells above are an OPTIMISATION: one stretched box per merged run.
+    // A PARTIAL cell (kPartialFlag) is rendered honestly from its actual bits
+    // — the world's atom is the 0.25 m sub-voxel ([destruct.md]). Per cell:
+    // greedy x-runs of solid same-material sub-voxels, emitted only if some
+    // voxel in the run is exposed, where "exposed" is judged at sub
+    // resolution against the cell's own mask and the three axis neighbours'
+    // masks (a FULL neighbour occludes outright, an empty one exposes).
+    // Materials come per sub-voxel from the "sub_material" overlay when the
+    // cell is mixed ([world/subfield.h]); AO reuses the parent cell's
+    // neighbourhood mask — coarse, but smooth and free.
+    const SubMask* masks = g.masks().data();
+    const SubField<CellType>* subMats =
+        world.subfields().find<CellType>(kSubMaterialName);
+    std::uint32_t dropped = 0;
+    for (std::size_t i = 0; i < kMacroCells; ++i) {
+        const std::uint32_t cls = cellClass_[i];
+        if (!(cls & kPartialFlag)) continue;
+        const int x = static_cast<int>(i) & (kMacroDim - 1);
+        const int y = (static_cast<int>(i) >> 7) & (kMacroDim - 1);
+        const int z = static_cast<int>(i) >> 14;
+        const SubMask& m = masks[i];
+        // The six face-neighbour masks, wrapped once per cell.
+        const int xl = x == 0 ? kMacroDim - 1 : x - 1;
+        const int xh = x == kMacroDim - 1 ? 0 : x + 1;
+        const int yl = y == 0 ? kMacroDim - 1 : y - 1;
+        const int yh = y == kMacroDim - 1 ? 0 : y + 1;
+        const int zl = z == 0 ? kMacroDim - 1 : z - 1;
+        const int zh = z == kMacroDim - 1 ? 0 : z + 1;
+        const SubMask& nxh = masks[macro_index(xh, y, z)];
+        const SubMask& nxl = masks[macro_index(xl, y, z)];
+        const SubMask& nyh = masks[macro_index(x, yh, z)];
+        const SubMask& nyl = masks[macro_index(x, yl, z)];
+        const SubMask& nzh = masks[macro_index(x, y, zh)];
+        const SubMask& nzl = masks[macro_index(x, y, zl)];
+        auto exposed = [&](int sx, int sy, int sz) -> bool {
+            if (sx + 1 < kSubDim ? !m.test(sub_bit(sx + 1, sy, sz))
+                                 : !nxh.test(sub_bit(0, sy, sz)))
+                return true;
+            if (sx > 0 ? !m.test(sub_bit(sx - 1, sy, sz))
+                       : !nxl.test(sub_bit(kSubDim - 1, sy, sz)))
+                return true;
+            if (sy + 1 < kSubDim ? !m.test(sub_bit(sx, sy + 1, sz))
+                                 : !nyh.test(sub_bit(sx, 0, sz)))
+                return true;
+            if (sy > 0 ? !m.test(sub_bit(sx, sy - 1, sz))
+                       : !nyl.test(sub_bit(sx, kSubDim - 1, sz)))
+                return true;
+            if (sz + 1 < kSubDim ? !m.test(sub_bit(sx, sy, sz + 1))
+                                 : !nzh.test(sub_bit(sx, sy, 0)))
+                return true;
+            if (sz > 0 ? !m.test(sub_bit(sx, sy, sz - 1))
+                       : !nzl.test(sub_bit(sx, sy, kSubDim - 1)))
+                return true;
+            return false;
+        };
+        const CellType cellMat = types[i];
+        const CellType* page = subMats ? subMats->page(i) : nullptr;
+        auto mat_of = [&](int bit) -> CellType {
+            return page ? page[bit] : cellMat;
+        };
+        const float t = tint(i);
+        const std::uint32_t aoBits = cls & kAoReadBits;
+        for (int sz = 0; sz < kSubDim; ++sz) {
+            for (int sy = 0; sy < kSubDim; ++sy) {
+                int sx = 0;
+                while (sx < kSubDim) {
+                    if (!m.test(sub_bit(sx, sy, sz))) {
+                        ++sx;
+                        continue;
+                    }
+                    const CellType mat = mat_of(sub_bit(sx, sy, sz));
+                    int end = sx;
+                    bool anyExposed = exposed(sx, sy, sz);
+                    while (end + 1 < kSubDim &&
+                           m.test(sub_bit(end + 1, sy, sz)) &&
+                           mat_of(sub_bit(end + 1, sy, sz)) == mat) {
+                        ++end;
+                        anyExposed = anyExposed || exposed(end, sy, sz);
+                    }
+                    if (anyExposed) {
+                        if (boxes >= instanceCapacity_) {
+                            ++dropped;
+                        } else {
+                            CubeInstance& inst = *dst;
+                            inst.origin = vec3{
+                                static_cast<float>(x * kSubDim + sx) *
+                                    kVoxelSize,
+                                static_cast<float>(y * kSubDim + sy) *
+                                    kVoxelSize,
+                                static_cast<float>(z * kSubDim + sz) *
+                                    kVoxelSize};
+                            inst.span[0] =
+                                static_cast<std::uint8_t>(end - sx + 1);
+                            inst.span[1] = 1;
+                            inst.span[2] = 1;
+                            inst.spanW = 0;
+                            inst.color = colour_final(mat, t);
+                            inst.occ =
+                                aoBits | (surface_id(mat) << kMatIdShift);
+                            ++dst;
+                            ++boxes;
+                        }
+                    }
+                    sx = end + 1;
+                }
+            }
+        }
+    }
+    // No silent caps: a truncated build is a visible bug, so say so.
+    if (dropped > 0)
+        std::fprintf(stderr,
+                     "[cube] instance capacity hit: %u sub-voxel runs dropped\n",
+                     dropped);
+    return boxes;
 }
 
 void CubePass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,

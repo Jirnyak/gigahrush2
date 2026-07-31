@@ -72,7 +72,9 @@ per-sub-voxel materials via the sparse `SubField` registry
 ([world/subfield.h]), and a bounded connectivity sweep that deletes loose
 components and hands them to the renderer as debris. Physics picks every hole
 up for free (collision reads the same masks); baked overlays are repaid via
-`CarveResult::dirtyCells`.
+`CarveResult::dirtyCells`. The renderer draws the holes honestly too: full
+cells stay one merged box (the macro optimisation), partial cells render
+their actual bits as 0.25 m sub-voxel runs ([destruct.md] §Рендер).
 
 ## Connections
 

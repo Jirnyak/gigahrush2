@@ -57,19 +57,19 @@ struct CubeInstance {
     // cube.vert, which is what makes this buffer cacheable across frames. A box
     // whose run crosses the wrap legitimately extends past kWorldExtent.
     vec3 origin;
-    // Extent in CELLS along x, y, z. {1,1,1} is a single cell; a merged run has
-    // exactly one entry > 1 (see render/cube_merge.h). The fourth byte is the
-    // remainder of what used to be a `float scale` written unconditionally as
-    // kCellSize by every instance ever emitted — four bytes of per-instance
-    // constant, which is exactly the lane a merged pass needed and the reason the
-    // merge cost zero extra bytes per instance. Uploaded as
+    // Extent in SUB-VOXELS (eighths of a cell) along x, y, z: a full cell is
+    // (8,8,8), a merged kMaxRunCells run is 64, a single carved 0.25 m voxel is
+    // (1,1,1). One unit system serves both the macro-cell optimisation and the
+    // honest sub-voxel pass ([destruct.md]) with the same four bytes — those
+    // four are the remainder of what used to be a `float scale` written
+    // unconditionally as kCellSize by every instance ever emitted. Uploaded as
     // VK_FORMAT_R8G8B8A8_UINT and read as a uvec4; cube.vert multiplies by
-    // kCellSize itself, the same 2.0 m that cube.frag already hardcodes to
-    // normalise its world-space uv.
+    // kSpanUnit = 0.25 m (kVoxelSize).
     //
-    // uint8 caps a run at 255 cells against a 128-cell grid, so the type is not
-    // the binding constraint — cube_merge.h kMaxRunCells is, and it is a toroidal
-    // seam budget rather than a storage limit.
+    // uint8 caps a span at 255 eighths against a max of 64 from the merge cap
+    // (8 cells x 8), so the type is not the binding constraint —
+    // cube_merge.h kMaxRunCells is, and it is a toroidal seam budget rather
+    // than a storage limit.
     std::uint8_t span[3];
     std::uint8_t spanW;
     // TWO MEANINGS, selected by whether this instance's material has a
