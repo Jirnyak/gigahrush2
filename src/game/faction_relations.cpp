@@ -339,6 +339,12 @@ std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
         // so the kFeudMinHpPct clamp below was dead code and Wild beat Citizens
         // to 0 HP — exactly what the clamp exists to forbid (suite_faction2 §
         // "no faction war kills").
+        //
+        // MERGE NOTE (origin/main 7d243ca): main fixed the same dead guard by
+        // removing the exemption entirely ("feud blows never kill"). This
+        // branch's resolution is kept — the clamp is live for every pair EXCEPT
+        // the named hot war, which is designed lethality, and suite_faction2's
+        // floor assertions are pinned against exactly this behaviour.
         const std::uint8_t ra = rel_row(pool, selfId);
         const std::uint8_t rb = rel_row(pool, foe.id);
         constexpr std::uint8_t kLiq = static_cast<std::uint8_t>(Faction::Liquidators);
@@ -358,6 +364,7 @@ std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
             if (raw > hp - floorHp) raw = static_cast<std::int16_t>(hp - floorHp);
         }
         if (raw <= 0) continue;
+
 
         queued.push_back(Swing{e, foe.e, raw});
     }

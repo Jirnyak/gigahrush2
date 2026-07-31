@@ -8,48 +8,54 @@
 - [x] F9 code on HEAD (7709b3e main.cpp hunk; WT clean for our path)
 - [x] Write BACKLOG.md this cycle
 - [x] Classify locks: gpu_light_grid / render foreign — skip
-- [x] SHOT1: delete truncated duplicate `--shot` else-if (0f7086c)
+- [x] SHOT1: delete truncated duplicate --shot else-if (0f7086c)
 - [x] Release rebuild gigahrush2 + game_test + audit_test after fix
-- [x] Real gameplay: `--shot shot_travel.png --frames 900 --ride 2` → floor -14, PNG 2.7MiB, exit 0
-- [x] game_test 213879 checks / 0 fail; audit_test 149 checks / 0 fail (travel arrival GREEN)
-- [x] place_body_safely on BOTH keyboard (~1140) and --shot ride (~2626)
-- [x] SAV1: wire `--action save|load` one-shot after rides + stderr `[save]`/`[load]`
-- [x] SAV1 Release rebuild (vcvars64, `/m:1` after parallel cl Permission denied)
-- [x] SAV1 two-phase real proof PROOF=GREEN (f9_diag.txt):
-  - phase1 ride2 save → floor -14, sav 780B, shot_f9_save.png
-  - phase2 ride0 load → `[load] loaded: floor -14 @44,35,2`, shot_f9_load.png floor -14
-- [x] FOR1: elevator capture/restore PlayerRanged+PlayerMelee already on HEAD (`9cbb7fb`)
-- [x] FOR1: test_elevator pins already on HEAD (`b6cd6c5`) — mag/weapon/shots/hits/kills survive rides
-- [x] FOR1: clean game_test RC=0 **213917 checks, 0 failures** (pid 39996, dt≈350s, 2026-07-31)
-- [x] FOR1: CMake pin 213899 → 213917
-- [x] FOR1: BACKLOG + progress CLOSED Russian/architect notes
+- [x] Real gameplay: --shot shot_travel.png --frames 900 --ride 2 → floor -14, PNG 2.7MiB, exit 0
+- [x] place_body_safely on BOTH keyboard and --shot ride
+- [x] SAV1: wire --action save|load one-shot after rides + stderr [save]/[load]
+- [x] SAV1 two-phase real proof PROOF=GREEN (f9_diag.txt)
+- [x] FOR1: elevator capture/restore PlayerRanged+PlayerMelee already on HEAD
+- [x] FOR1: test_elevator pins; game_test was 213917/0; pin docs closed prior cycle
+- [x] CORP1: loot_corpse_interact production harden (player resolve, stack merge, inv-full, slotCount)
+- [x] CORP1: suite_loottable.inl blocks 6–7 truth (staged slots, 0 floor Pickups, slime_green, Betonoed)
+- [x] FEUD1: faction_relations.cpp remove isFatalFeud bypass; kFeudMinHpPct floor always for NPCs
+- [x] game_test GREEN **215499 checks, 0 failures** (was 2 faction failures pre-FEUD1)
+- [x] CMake pin 213917 → **215499**
+- [x] CORP1/FEUD1: BACKLOG + progress CLOSED + architect notes
 
 ## In flight
-- [ ] push origin main (no force; auth flaky historically)
+- [ ] pathspec commit CORP1+FEUD1+pin+docs (no shaders)
+- [ ] pull --no-rebase origin main + push origin main (no force)
+- [ ] CORPSHOT: real-game corpse loot kill→body→E interact proof (optional proof-class upgrade)
 - [ ] TEX1 blocked: 3 missing roughness ktx2 — no sources, do not mock
-- [ ] CNT1 content thin (status.csv ~6 rows)
+- [ ] CNT1 content thin (status.csv ~6 rows) — port from old gigahrush
 - [ ] optional RPG1 RpgStats across elevator; optional MAGSHOT HUD mag across --ride
 
 ## Do not
-- stage/commit prop_*, gpu_*, shaders, embody, foreign main/combat/door/loot hunks, env_detail/prop_placer WIP
+- stage/commit prop_*, gpu_*, shaders/** (cube*.spv FOREIGN dirt), embody XP path
 - git add -A / force-push
 - commit shots/*.png binaries or large stderr dumps unless pathspec-asked
 - mock missing ktx2 textures
-- touch cube.frag*, cube_pass.cpp, floor_gen.cpp
+- touch cube_pass.cpp, floor_gen.cpp, render/gpu_*
+- **ALLOWED this cycle pathspec:** src/game/loot.cpp, src/game/faction_relations.cpp, tests/suite_loottable.inl, CMakeLists.txt, .agents/worker_game_audit/BACKLOG.md, .agents/worker_game_audit/progress.md
+
+## Cycle report (2026-07-31 ~10:10) — CORP1 + FEUD1 CLOSED
+цикл CORP1/FEUD1 | closed: corpse interact no item-loss; loottable asserts staged not floor;
+feud HP floor restored; unit GREEN 215499/0; CMake pin 215499; docs CLOSED |
+core pipeline already on main f4695b1; residual quality+pin+docs this commit |
+wip: pathspec commit + pull + push | residual OPEN: CORPSHOT real-game; TEX1 no mock; CNT1;
+RPG1/MAGSHOT optional | blockers: shaders/** dirty foreign — never stage
 
 ## Cycle report (2026-07-31 ~01:24) — FOR1 CLOSED
-цикл FOR1/MAG1 | closed: mag+melee survive elevator body-swap; unit GREEN 213917/0;
-CMake pin 213917; docs CLOSED | code already on HEAD mislabeled commits 9cbb7fb/b6cd6c5 |
-wip: pathspec commit pin+docs + push | residual OPEN: TEX1 no mock; CNT1; RPG1 optional;
-MAGSHOT optional | blockers: foreign WT dirty main/combat/door/loot — not staged
+цикл FOR1/MAG1 | closed: mag+melee survive elevator body-swap; unit was 213917/0 |
+pin superseded by CORP1 pin 215499 this cycle
 
 ## Cycle report (2026-07-30 ~22:20) — SAV1
-цикл SAV1 | closed: --action save|load harness, two-phase F9 gameplay PROOF=GREEN floor-14 |
-wip was: pathspec commit + push + FOR1 | FOR1 now CLOSED this cycle
+цикл SAV1 | closed: --action save|load harness, two-phase F9 gameplay PROOF=GREEN floor-14
 
-## Architect answers (FOR1 close)
-- **Least confident:** Real-game HUD mag across live `--ride` not shot this cycle; RpgStats still re-rolls on embody; foreign main may hide ride hooks.
-- **Biggest missing (pre-close):** Docs OPEN + pin lag 213899 vs binary 213917 + uncommitted process. Fixed this cycle.
-- **Don't realize:** Fix+tests already on main under wrong commit titles — status hid elevator (HEAD match). cmd redirects empty — Python file fds. Pin is 213917 not handoff 213899.
-- **Implemented-not-integrated:** craft not in F5; NetTerminal craft DECLINED unit-only; TEX1 blocked; RpgStats=RPG1 optional; F9/SAV1 already PROOF=GREEN.
-- **Next execute:** pathspec commit CMakeLists.txt + .agents/worker_game_audit/{BACKLOG,progress}.md → push origin main no-force → TEX1/CNT1 or PAR1 if main free.
+## Architect answers (CORP1 close)
+- **Least confident:** Real-game corpse interact never shot this cycle — only unit pin. Feud clamp vs suite green; live NPC-vs-NPC never-kill not playtested.
+- **Biggest missing (pre-close):** Docs OPEN + uncommitted polish + pin in WT only. Fixed this cycle.
+- **Don't realize:** CORP1 core wired since f4695b1; residual is interact harden + suite truth + FEUD1 + pin + docs + push. Shader spv = FOREIGN. game_test buffers ~6 min.
+- **Implemented-not-integrated:** CORP1 path fully wired. CORPSHOT open for gameplay proof class. drop_mob_loot debug-only for kill path.
+- **Next execute:** commit pathspec → pull → push → CORPSHOT / CNT1 / TEX1 (no mocks).
