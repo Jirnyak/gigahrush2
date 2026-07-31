@@ -1319,4 +1319,45 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
 }
 
 
+
+// POSRPG: see combat.h. Live-to-live hop — old body stays in the world.
+void transfer_player_progression(Registry& reg, Entity from, Entity to) {
+    if (from == to) return;
+    if (!reg.valid(from) || !reg.valid(to)) return;
+
+    if (const RpgStats* rs = reg.try_get<RpgStats>(from)) {
+        reg.emplace_or_replace<RpgStats>(to, *rs);
+    }
+
+    std::uint32_t kills = 0;
+    if (PlayerMelee* pm = reg.try_get<PlayerMelee>(from)) {
+        kills = pm->kills;
+        pm->kills = 0;
+    }
+    // Always stamp melee when there was a tally OR the source carried the
+    // component (so a zero-kill fighter still gets a clean PlayerMelee on the
+    // new body rather than waiting for the first swing to lazy-attach).
+    if (kills != 0 || reg.all_of<PlayerMelee>(from)) {
+        reg.emplace_or_replace<PlayerMelee>(to, PlayerMelee{/*cooldownMs=*/0, kills});
+    }
+
+    if (PlayerRanged* pr = reg.try_get<PlayerRanged>(from)) {
+        const std::uint32_t shots = pr->shots;
+        const std::uint32_t hits = pr->hits;
+        pr->shots = 0;
+        pr->hits = 0;
+        // Mag/weapon/cooldowns remain on `from`. Move only the cumulative
+        // counters; do not invent PlayerRanged on a body that never fired and
+        // has nothing to carry (lazy attach stays lazy).
+        if (shots == 0 && hits == 0 && !reg.all_of<PlayerRanged>(to))
+            return; // kills/rpg already handled above
+        PlayerRanged dst{};
+        if (PlayerRanged* existing = reg.try_get<PlayerRanged>(to))
+            dst = *existing;
+        dst.shots = shots;
+        dst.hits = hits;
+        reg.emplace_or_replace<PlayerRanged>(to, dst);
+    }
+}
+
 } // namespace giga::game

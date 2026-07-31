@@ -1128,10 +1128,14 @@ Entity possess_nearest_survivor(Registry& reg, game::NpcPool& pool, LayerId laye
     }
     if (chosen == entt::null) return entt::null;
 
-    // Detach camera & controller from current player body
+    // Detach camera & controller from current player body. Keep the old entity
+    // handle so POSRPG can move person-progression onto the new body — the old
+    // body stays alive in the world (unlike death / elevator fold_back).
+    Entity oldPlayer = entt::null;
     for (auto e : reg.view<CameraTag, const game::NpcRef>()) {
         if (reg.get<const Transform>(e).layer != layer) continue;
         const game::NpcId oldId = reg.get<const game::NpcRef>(e).id;
+        oldPlayer = e;
         reg.remove<CameraTag>(e);
         reg.remove<Controller>(e);
         pool.set_player(oldId, false);
@@ -1144,6 +1148,10 @@ Entity possess_nearest_survivor(Registry& reg, game::NpcPool& pool, LayerId laye
     reg.emplace<CameraTag>(chosen, cam);
     reg.emplace<Controller>(chosen, Controller{7.0f, {0, 0, 0}, false});
     pool.set_player(chosenId, true);
+    // POSRPG: RpgStats + kill tally + cumulative shots/hits follow the mind.
+    // Chambered mag stays on oldPlayer (physical). [combat.h]
+    if (oldPlayer != entt::null)
+        game::transfer_player_progression(reg, oldPlayer, chosen);
     std::fprintf(stderr, "[gameplay] Voluntarily possessed resident #%u\n", chosenId);
     return chosen;
 }
@@ -3162,6 +3170,16 @@ int main(int argc, char** argv) {
                         Entity newPlayer = possess_nearest_survivor(reg, pool, activeLayer, ppos, 8.0f);
                         if (newPlayer != entt::null) {
                             player = newPlayer;
+                            // POSRPG: keep the run-local snapshots honest so a later
+                            // death path / F5 save does not restore the pre-hop sheet
+                            // or a stale kill tally. transfer_player_progression
+                            // already stamped the components on the new body.
+                            if (const auto* pm =
+                                    reg.try_get<game::PlayerMelee>(player))
+                                kills = pm->kills;
+                            if (const auto* rs =
+                                    reg.try_get<game::RpgStats>(player))
+                                carriedRpg = *rs;
                             const vec3 newPos = reg.get<Transform>(player).pos;
                             const auto* nr = reg.try_get<game::NpcRef>(player);
                             const game::NpcId newId = nr ? nr->id : 0;
@@ -3789,12 +3807,12 @@ int main(int argc, char** argv) {
                     // what that person killed does not.
                     //
                     // Neither does the character sheet. `embody_as_player` rolls a
-                    // fresh RpgStats from the new record, which is right for a
-                    // possession but wrong across a DEATH — losing every level to a
-                    // bad corridor is not the reference's rule, and the kill tally
-                    // beside it already survives for the same reason. Captured
-                    // before the possess (the old body is already gone by then, so
-                    // this reads the value saved off at the top of the death path).
+                    // fresh RpgStats from the new record — wrong across a DEATH
+                    // (losing every level to a bad corridor is not the reference's
+                    // rule) and wrong across voluntary possession too (POSRPG
+                    // stamps via transfer_player_progression). Death cannot call
+                    // that helper: the old body is already gone, so this reads the
+                    // value saved off at the top of the death path (carriedRpg).
                     player = possess_a_survivor(reg, pool, activeLayer);
                     if (player == entt::null) { running = false; break; }
                     aim_player(reg, player);

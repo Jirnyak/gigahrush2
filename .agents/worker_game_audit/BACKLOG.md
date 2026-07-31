@@ -1,11 +1,12 @@
 # BACKLOG — worker_game_audit
 
 Lane: game audit + save/travel seams + content port. NOT render/prop.
-Updated: 2026-07-31 ~19:28 Samara
+Updated: 2026-08-01 ~00:45 Samara
 
 ## CLOSED this session
 | ID | Item | Proof | Commit |
 |----|------|-------|--------|
+| POSRPG | voluntary P-possess carries RpgStats+kills+shots/hits via transfer_player_progression; mag stays on abandoned body | **unit GREEN:** game_test **219615 checks, 0 failures** (+29 possess transfer) | this commit |
 | SAVMAG | F5/F9 persist PlayerRanged + melee kills; kSaveVersion 7->8; wire +21 combat (850/950/965) | **unit GREEN:** game_test **219586 checks, 0 failures** (+40 saveload) | this commit |
 | SAVRPG | F5/F9 persist RpgStats + CraftingState; kSaveVersion 6->7; wire 829/929/944 | **unit GREEN:** game_test **219546 checks, 0 failures** (+120 saveload) | this commit |
 | ATTR1 | spend_attr_point via keys 1/2/3 → KeybindTable attr_str/agi/int → console "attr str|agi|int" → ConsoleRequest → main drain | **unit GREEN:** game_test **219426 checks, 0 failures**; suite_console attr bits + suite_keybind k1/k2/k3 | this commit |
@@ -37,6 +38,7 @@ Updated: 2026-07-31 ~19:28 Samara
 | P2 | PAR1 | CLOSED 2026-07-31 — both travel sites still call place_body_safely + ai_release | src/app/main.cpp read-only | see CLOSED PAR1; re-run after foreign main.cpp |
 
 | P3 | RPG1 | CLOSED 2026-07-31 — RpgStats survives elevator body-swap | src/game/elevator.cpp | see CLOSED RPG1; embody LOCKED |
+| P3 | POSRPG | CLOSED 2026-08-01 — voluntary possess carries RpgStats+kills+shots/hits | src/game/combat.* + main possess | see CLOSED POSRPG |
 | P3 | MAGSHOT | Optional: real-game HUD mag line across --ride | main.cpp foreign-aware | unit pin owns body-swap |
 | P3 | M4 | CLOSED peek — Milestone 4 already CLOSED (suite_props / world_test) | .agents/worker_m4* | no leftover game work |
 | P3 | SHOTLOG | CLOSED 2026-07-31 — [place] MOVE/REFUSE in place_body_at_cell | src/game/save.cpp | see CLOSED SHOTLOG |
@@ -411,7 +413,7 @@ game_test: 219546 checks, 0 failures (was 219426; +120)
 pathspec: src/game/save.h src/game/save.cpp src/app/main.cpp
           tests/suite_saveload.inl CMakeLists.txt BACKLOG.md
 ```
-Next OPEN: MAGSHOT deferred / POSRPG deferred; stay off src/render/**.
+Next OPEN: MAGSHOT deferred (POSRPG CLOSED); stay off src/render/**.
 
 ## CLOSED 2026-07-31 SAVMAG — F5/F9 PlayerRanged + melee kills
 ```
@@ -427,4 +429,32 @@ game_test: 219586 checks, 0 failures (was 219546; +40)
 pathspec: src/game/save.h src/game/save.cpp src/app/main.cpp
           tests/suite_saveload.inl CMakeLists.txt BACKLOG.md
 ```
-Next OPEN: MAGSHOT deferred / POSRPG deferred; stay off src/render/**.
+Next OPEN: MAGSHOT deferred (POSRPG CLOSED); stay off src/render/**.
+
+## CLOSED 2026-08-01 POSRPG — voluntary possess carries progression
+```
+Hole: possess_nearest_survivor was camera-only (CameraTag/Controller swap).
+Death path and elevator already kept RpgStats + kills (+ shots/hits); P-key hop
+dropped the person sheet and reset kill/shot tallies on the new body.
+
+transfer_player_progression(reg, from, to) in combat.cpp:
+  * RpgStats: COPY from -> to
+  * PlayerMelee::kills: MOVE (zero from, stamp to)
+  * PlayerRanged shots/hits: MOVE; mag/weapon/cooldowns STAY on from
+  * lazy: no empty PlayerRanged invented on to when shots=hits=0 and to has none
+  * no-op if from==to or invalid handles
+
+Wire:
+  possess_nearest_survivor: after set_player, transfer(oldPlayer, chosen)
+  possessWanted site: refresh local kills + carriedRpg after hop
+  death comment: fresh sheet wrong for death AND voluntary possess
+
+test_rpg_possess_transfer in suite_rpg.inl (~29 CHECKs):
+  two NPCs, mutate sheet/kills/ranged, transfer, pin sheet/kills moved,
+  mag stays, shots/hits moved, idempotent + null no-op
+
+game_test: 219615 checks, 0 failures (was 219586; +29)
+pathspec: src/game/combat.h src/game/combat.cpp src/app/main.cpp
+          tests/suite_rpg.inl CMakeLists.txt BACKLOG.md
+```
+Next OPEN: MAGSHOT deferred (POSRPG CLOSED); stay off src/render/**.

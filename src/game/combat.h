@@ -43,6 +43,7 @@
 #include "game/noise.h"          // NoiseField, for the gunshot and the body fall
 #include "game/ranged_table.h"   // ItemId, for the equipped-loadout helpers
 #include "game/npc_pool.h"
+#include "game/rpg.h"      // RpgStats (POSRPG transfer)
 #include "world/level_stack.h"
 #include "world/macro_grid.h"
 #include "world/materials.h"
@@ -332,6 +333,22 @@ struct PlayerMelee {
     std::uint16_t cooldownMs = 0;
     std::uint32_t kills = 0;       // cumulative, survives possession
 };
+
+// POSRPG — move person-progression across a live-to-live camera hop.
+//
+// Death possession (main.cpp) and the elevator ride already capture/restore
+// their own way (old body is destroyed). Voluntary possess only swaps
+// CameraTag/Controller, so without this stamp the new body has no RpgStats
+// (ordinary embody never attaches one), lazy PlayerMelee starts kills at 0,
+// and cumulative shots/hits on PlayerRanged are wiped on first fire.
+//
+// Rules:
+//   * RpgStats: copy from -> to (person sheet follows the mind).
+//   * PlayerMelee::kills: MOVE (zero on from, stamp on to).
+//   * PlayerRanged shots/hits: MOVE into a lazy component on to; mag/weapon/
+//     cooldowns stay on from (physical chamber belongs to the abandoned body).
+//   * Does nothing when from==to or either handle is invalid.
+void transfer_player_progression(Registry& reg, Entity from, Entity to);
 
 // Cosine of the half-angle you must be facing the target within. 0.35 is roughly
 // a 70-degree half-cone: generous enough not to feel like pixel-hunting in a dark

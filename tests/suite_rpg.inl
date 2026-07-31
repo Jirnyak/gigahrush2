@@ -735,6 +735,90 @@ static void test_rpg_combat_wire() {
     }
 }
 
+// POSRPG: voluntary camera-hop must carry person-progression the way death
+// and the elevator already do. transfer_player_progression is the shared stamp
+// (main.cpp possess_nearest_survivor calls it after the CameraTag swap).
+static void test_rpg_possess_transfer() {
+    Registry reg;
+    NpcPool pool;
+    pool.init();
+    const LayerId layer = 0;
+
+    const NpcId idA = pool.spawn();
+    const NpcId idB = pool.spawn();
+    CHECK(idA != kInvalidNpc);
+    CHECK(idB != kInvalidNpc);
+    pool.cx(idA) = 10; pool.cy(idA) = 10; pool.cz(idA) = 1;
+    pool.height_mm(idA) = 1750;
+    pool.cx(idB) = 12; pool.cy(idB) = 10; pool.cz(idB) = 1;
+    pool.height_mm(idB) = 1700;
+
+    // Player body (has RpgStats via embody_as_player) + ordinary resident
+    // (no RpgStats — ordinary embody never attaches one).
+    Entity from = embody_as_player(reg, pool, idA, layer);
+    Entity to = embody(reg, pool, idB, layer);
+    CHECK(from != entt::null);
+    CHECK(to != entt::null);
+    CHECK(reg.all_of<RpgStats>(from));
+    CHECK(!reg.all_of<RpgStats>(to));
+    CHECK(!reg.all_of<PlayerMelee>(from));
+    CHECK(!reg.all_of<PlayerRanged>(from));
+
+    {
+        RpgStats& rs = reg.get<RpgStats>(from);
+        rs.xp = 777u;
+        rs.psi = 42;
+        rs.level = 5;
+        rs.attrPoints = 3;
+        rs.attr[static_cast<std::size_t>(Attr::Str)] = 11;
+        rs.attr[static_cast<std::size_t>(Attr::Agi)] = 9;
+        rs.attr[static_cast<std::size_t>(Attr::Int)] = 7;
+    }
+    reg.emplace<PlayerMelee>(from, PlayerMelee{/*cooldownMs=*/0, /*kills=*/99});
+    {
+        PlayerRanged pr{};
+        pr.magCount = 12;
+        pr.weapon = static_cast<ItemId>(7);
+        pr.shots = 7;
+        pr.hits = 3;
+        reg.emplace<PlayerRanged>(from, pr);
+    }
+
+    transfer_player_progression(reg, from, to);
+
+    // Sheet landed on the destination (NPC body never had one before).
+    CHECK(reg.all_of<RpgStats>(to));
+    CHECK(reg.get<RpgStats>(to).xp == 777u);
+    CHECK(reg.get<RpgStats>(to).psi == 42);
+    CHECK(reg.get<RpgStats>(to).level == 5);
+    CHECK(reg.get<RpgStats>(to).attrPoints == 3);
+    CHECK(reg.get<RpgStats>(to).attr[static_cast<std::size_t>(Attr::Str)] == 11);
+    CHECK(reg.get<RpgStats>(to).attr[static_cast<std::size_t>(Attr::Agi)] == 9);
+    CHECK(reg.get<RpgStats>(to).attr[static_cast<std::size_t>(Attr::Int)] == 7);
+
+    // Kills MOVED.
+    CHECK(reg.all_of<PlayerMelee>(to));
+    CHECK(reg.get<PlayerMelee>(to).kills == 99);
+    CHECK(reg.get<PlayerMelee>(from).kills == 0);
+
+    // Cumulative shots/hits MOVED; chambered mag STAYS on the abandoned body.
+    CHECK(reg.all_of<PlayerRanged>(to));
+    CHECK(reg.get<PlayerRanged>(to).shots == 7);
+    CHECK(reg.get<PlayerRanged>(to).hits == 3);
+    CHECK(reg.get<PlayerRanged>(to).magCount == 0);
+    CHECK(reg.get<PlayerRanged>(to).weapon == static_cast<ItemId>(0));
+    CHECK(reg.get<PlayerRanged>(from).magCount == 12);
+    CHECK(reg.get<PlayerRanged>(from).weapon == static_cast<ItemId>(7));
+    CHECK(reg.get<PlayerRanged>(from).shots == 0);
+    CHECK(reg.get<PlayerRanged>(from).hits == 0);
+
+    // Idempotent no-op on same entity; invalid handles do not crash.
+    transfer_player_progression(reg, to, to);
+    CHECK(reg.get<PlayerMelee>(to).kills == 99);
+    transfer_player_progression(reg, entt::null, to);
+    transfer_player_progression(reg, to, entt::null);
+}
+
 static void test_rpg_all() {
     test_rpg_curve();
     test_rpg_derived();
@@ -744,4 +828,5 @@ static void test_rpg_all() {
     test_rpg_random_build();
     test_rpg_kill_awards_xp();
     test_rpg_combat_wire();
+    test_rpg_possess_transfer();
 }
