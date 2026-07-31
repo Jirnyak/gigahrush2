@@ -494,3 +494,17 @@ Core 1c3c204; this commit tests+CMake+docs
 pathspec: tests/suite_saveload.inl CMakeLists.txt BACKLOG.md progress.md
 ```
 Next OPEN: MAGSHOT deferred (SAVSTAT CLOSED); stay off src/render/**
+
+## RE-PAR1 2026-08-01 ~03:08 — post-SAVSTAT travel seam re-grep (read-only)
+```
+main.cpp lines=5016 bytes=289705
+place_body_safely @1985 (keyboard do_ride) + @4954 (--shot travel)  GREEN
+ai_release        @1910 (keyboard leave)  + @4879 (--shot leave)     GREEN
+SAVSTAT F5/F9: runState.status = playerStatus @1865; load @3599       GREEN
+combatCarves / playerStatus / status_step / ctl->fly=false @2360 intact
+elevator.cpp: hadRanged=3 hadMelee=3 hadRpg=3 emplace_or_replace=4
+HUD mag already live: ImGui gun line %u/%u mag @4005 (PlayerRanged)
+No main.cpp edit. No hole.
+```
+MAGSHOT remains optional polish (unit pin owns mag body-swap FOR1/MAG1).
+Open lane queue empty of required defects; stay off src/render/**.

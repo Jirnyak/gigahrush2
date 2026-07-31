@@ -1,5 +1,12 @@
 # progress.md — worker_game_audit
 
+## Cycle report (2026-08-01 ~03:08) - re-PAR1 GREEN (post-SAVSTAT)
+- [x] SAVSTAT pushed **6e36b09** (tests+CMake+docs; core was 1c3c204)
+- [x] re-PAR1: PBS @1985/@4954 + ai_release @1910/@4879 GREEN
+- [x] SAVSTAT F5@1865 / F9@3599 status wire intact; kSaveVersion=9
+- [x] MAGSHOT deferred optional (HUD mag already @4005)
+- [ ] idle: pull/push loop; re-PAR1 after next foreign main thrash
+
 ## Cycle report (2026-08-01 ~03:04) - SAVSTAT CLOSED
 - [x] SAVSTAT: F5/F9 StatusSet persist (kSaveVersion 9, +42 wire)
 - [x] suite_saveload busy_run/same_run/wire_layout pins
