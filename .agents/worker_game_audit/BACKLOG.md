@@ -1,7 +1,7 @@
 # BACKLOG — worker_game_audit
 
 Lane: game audit + save/travel seams + content port. NOT render/prop.
-Updated: 2026-07-31 ~16:52 Samara
+Updated: 2026-07-31 ~16:56 Samara
 
 ## CLOSED this session
 | ID | Item | Proof | Commit |
@@ -26,7 +26,8 @@ Updated: 2026-07-31 ~16:52 Samara
 | P1 | AIMEM | CLOSED 2026-07-31 — AiMemory floor-leave release GREEN | src/game/ai* + floor_stream | see CLOSED AIMEM |
 | P2 | TEX1 | CLOSED 2026-07-31 — 3 roughness ktx2 shipped; live load 6/6 | data/textures | see CLOSED TEX1 |
 | P2 | CNT1 | CLOSED 2026-07-31 — status+craft reference parity (no missing rows) | data/*.csv + tables | see CLOSED CNT1 |
-| P2 | PAR1 | Re-grep travel sites after every main.cpp foreign commit | src/app/main.cpp read-only unless hole | line drift from light-grid/loot-emissive; WT often foreign-dirty |
+| P2 | PAR1 | CLOSED 2026-07-31 — both travel sites still call place_body_safely + ai_release | src/app/main.cpp read-only | see CLOSED PAR1; re-run after foreign main.cpp |
+
 | P3 | RPG1 | Optional: preserve RpgStats across elevator (embody re-rolls today) | src/game/elevator.cpp + embody | NOT FOR1 regression — known residual |
 | P3 | MAGSHOT | Optional: real-game HUD mag line across --ride | main.cpp foreign-aware | unit pin owns body-swap |
 | P3 | M4 | worker_m4 leftovers if unowned | .agents/worker_m4* peek | only src/game scope |
@@ -198,5 +199,38 @@ Audit vs C:\hades\gigahrush (old giga). **No CSV rows missing to port.** Inventi
 ### Verdict
 CNT1 was "port real rows from old giga". Real rows already ported; GH2 is at/above reference. No code change. Proof = static parity audit (this section + shots/_probe_cnt1.py / _probe_cnt1b.py).
 Next OPEN: PAR1 (travel re-grep) or PADIC gameplay stress.
+
+## CLOSED 2026-07-31 PAR1 — travel seam re-grep after foreign main.cpp
+Read-only audit of `src/app/main.cpp` (4860 lines / 274719 B) via `shots/_probe_par1.py`.
+**No hole. No code change.**
+
+### place_body_safely — both travel sites intact
+| Site | Line | Path |
+|------|------|------|
+| keyboard `do_ride` lambda | **1952** | after propPlacer.populate; before save_run_now; return true |
+| `--shot` travel (`--ride` / `--floor`) | **4798** | after noise_clear; comment at 4795 explicitly "Same place_body_safely as the keyboard ride path" |
+
+### ai_release — both leave sites intact
+| Site | Line | Path |
+|------|------|------|
+| keyboard `do_ride` leave | **1877** | `game::ai_release(reg, leaveLayer)` before unload |
+| `--shot` travel leave | **4723** | same AIMEM leave release under `--shot --ride` |
+| FloorStreamer::unload | comment 2324–2325 | documents third release site inside streamer |
+
+### Other seams still wired (no regression)
+- `do_ride` lambda @1851; keyboard +/- @2144/2146; `--floor` absolute hop @4694
+- `combatCarves` queue + drain behind `!doors.frozen` @1684/3112–3172
+- `playerStatus` / `status_step` / `--action status` intact
+- `ctl->fly=false` @2293 (wall harness)
+- `shotAction` wall/corp/status/save/load all present
+
+### Foreign activity present but non-destructive to travel
+- propPlacer ×7, light-grid ×20, GpuCull ×2 keywords in main.cpp
+- Travel PBS + ai_release sites untouched by foreign WIP
+
+### Verdict
+PAR1 = re-grep after foreign main commits. Both PBS sites + both ai_release sites GREEN. No main.cpp edit. Re-run after next foreign main thrash.
+Next OPEN: **PADIC** gameplay stress (`--floor 4`, doors/AI, stay off `src/render/**`).
+
 
 
