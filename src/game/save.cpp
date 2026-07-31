@@ -284,6 +284,16 @@ void visit_ranged(Ar& ar, R& r) {
     ar.u32(r.hits);
 }
 
+// Version 9 / SAVSTAT: StatusSet field-by-field. Order is remainMs then
+// intensityE3 then alt for each of the six slots — NOT interleaved per-slot
+// structs, so a future field can append without shifting the existing wire.
+template <class Ar, class S>
+void visit_status(Ar& ar, S& s) {
+    for (std::size_t i = 0; i < kStatusCount; ++i) ar.u32(s.remainMs[i]);
+    for (std::size_t i = 0; i < kStatusCount; ++i) ar.u16(s.intensityE3[i]);
+    for (std::size_t i = 0; i < kStatusCount; ++i) ar.u8(s.alt[i]);
+}
+
 template <class Ar, class K>
 void visit_key(Ar& ar, K& k) {
     ar.i16(k.floor);
@@ -372,17 +382,18 @@ static_assert(kContractWire == 4 + 2 + 4 + 4 + 4 + 1 + 1 + 1);
 static_assert(kNeedsWire == 8 * 4 + 1);
 static_assert(kInventoryWire == 64 * 4);
 // kSaveFixedWire: ledger+book+player + v7 rpg(12)+craft(93) + v8 combat(21)
-// + quest log. Was 829 in v7; +21 = 850 in v8.
+// + v9 status(42) + quest log. Was 850 in v8; +42 = 892 in v9.
 static_assert(kRpgWire == 12);
 static_assert(kCraftingWire == 93);
 static_assert(kRangedWire == 16);
 static_assert(kCombatSaveWire == 21);
-static_assert(kSaveFixedWire == 829 + 21);  // 850
-static_assert(kSaveFixedWire == 850);
+static_assert(kStatusWire == 42);
+static_assert(kSaveFixedWire == 850 + 42);  // 892
+static_assert(kSaveFixedWire == 892);
 static_assert(kFactionWire == 36);
-// header 64 + fixed 850 + faction 36 = 950 for an empty run.
-static_assert(save_bytes_for(0) == 950);
-static_assert(save_bytes_for(0, 100, 50) == 950 + 150);
+// header 64 + fixed 892 + faction 36 = 992 for an empty run.
+static_assert(save_bytes_for(0) == 992);
+static_assert(save_bytes_for(0, 100, 50) == 992 + 150);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two
@@ -415,6 +426,8 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     bw.u8(st.hasRanged);
     visit_ranged(bw, st.ranged);
     bw.u32(st.kills);
+    // Version 9 / SAVSTAT: live status effects.
+    visit_status(bw, st.status);
     for (const OpenedContainerKey& k : st.opened) visit_key(bw, k);
     // Version 6: the macro world — pool table, macro-sim state, faction matrix.
     body.insert(body.end(), st.poolBlob.begin(), st.poolBlob.end());
@@ -537,6 +550,8 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     r.u8(tmp.hasRanged);
     visit_ranged(r, tmp.ranged);
     r.u32(tmp.kills);
+    // Version 9 / SAVSTAT: live status effects.
+    visit_status(r, tmp.status);
     tmp.opened.resize(static_cast<std::size_t>(h.openedCount));
     for (std::size_t i = 0; i < tmp.opened.size(); ++i) visit_key(r, tmp.opened[i]);
     // Version 6: the macro blobs, verbatim (decoded by their owners against live

@@ -58,6 +58,7 @@
 #include "game/rpg.h"         // RpgStats
 #include "game/craft.h"       // CraftingState, kCraftingWire, craft_write/read
 #include "game/combat.h"      // PlayerRanged (SAVMAG v8)
+#include "game/status.h"      // StatusSet (SAVSTAT v9)
 #include "world/destruct.h"   // CarveOp, CarveScratch, CarveResult, carve_sphere
 #include "world/level_stack.h"  // LayerId, and World via world/world.h
 
@@ -102,7 +103,11 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // PlayerRanged (mag/weapon/shots/hits + transient cooldowns) and melee kills.
 // Ammo already debited into the magazine must not vanish on F9; kills already
 // survive death-possession and the elevator. [combat.h] SAVMAG
-inline constexpr std::uint32_t kSaveVersion = 8u;
+// Version 9: live status effects travel too — StatusSet (remainMs/intensityE3/alt
+// for all six authored statuses). F5 mid-haze must not wipe the timers on F9;
+// a loaded body keeps the same move/aim/melee mults it saved under. [status.h]
+// SAVSTAT
+inline constexpr std::uint32_t kSaveVersion = 9u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -229,10 +234,15 @@ static_assert(kRangedWire == 16);
 inline constexpr std::size_t kCombatSaveWire =
     1 + kRangedWire + 4;  // hasRanged + ranged + kills = 21
 static_assert(kCombatSaveWire == 21);
+// Version 9 / SAVSTAT: StatusSet field-by-field (NOT sizeof — host padding).
+// 6 x u32 remainMs + 6 x u16 intensityE3 + 6 x u8 alt = 24+12+6 = 42.
+inline constexpr std::size_t kStatusWire =
+    kStatusCount * 4 + kStatusCount * 2 + kStatusCount * 1;  // 42
+static_assert(kStatusWire == 42);
 inline constexpr std::size_t kOpenedKeyWire = 5;     // i16 floor + 3 x u8 cell
 inline constexpr std::size_t kSaveFixedWire =
     kLedgerWire + kBookWire + kPlayerWire + kRpgWire + kCraftingWire +
-    kCombatSaveWire + kQuestLogWire;
+    kCombatSaveWire + kStatusWire + kQuestLogWire;
 
 // Sanity ceiling on the opened-container list, so a corrupt header cannot ask for a
 // huge allocation before the checksum has had a chance to reject it. 64 crates per
@@ -393,6 +403,9 @@ struct SaveState {
     std::uint8_t hasRanged = 0;
     PlayerRanged ranged{};
     std::uint32_t kills = 0;
+    // Version 9 / SAVSTAT: live status effects. Local `playerStatus` in main —
+    // not an ECS component — so capture/restore is a direct assignment.
+    StatusSet status{};
     // Every crate emptied anywhere in the building, not just on the live floor. Only the
     // resident floor's crates are live entities, so the ones from other floors exist
     // ONLY in this list — see `refresh_opened_containers`.

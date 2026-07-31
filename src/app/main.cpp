@@ -1859,6 +1859,10 @@ int main(int argc, char** argv) {
             runState.ranged = game::PlayerRanged{};
         }
         runState.kills = kills;
+        // Version 9 / SAVSTAT: live status effects. Local person-state — not an
+        // ECS component — so capture is a direct assignment. F5 mid-haze must
+        // not wipe timers on F9. [status.h]
+        runState.status = playerStatus;
         // REFRESH, not append and not clear. [save.h]
         game::refresh_opened_containers(reg, pl, currentFloor, runState.opened);
         // v6: the macro world travels whole — pool table, macro clock, faction
@@ -3589,6 +3593,10 @@ int main(int argc, char** argv) {
                                     reg.emplace_or_replace<game::PlayerMelee>(
                                         player, game::PlayerMelee{0, runState.kills});
                             }
+                            // Version 9 / SAVSTAT: restore live status effects so
+                            // F9 mid-haze keeps the same move/aim/melee mults.
+                            // Local person-state — direct assignment. [status.h]
+                            playerStatus = runState.status;
                             // Per-floor clocks and channels reset, same as any
                             // arrival.
                             samosbor = game::samosbor_new_game(sbRng);
