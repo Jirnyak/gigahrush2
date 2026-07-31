@@ -1,7 +1,7 @@
 # BACKLOG — worker_game_audit
 
 Lane: game audit + save/travel seams + content port. NOT render/prop.
-Updated: 2026-07-31 ~16:56 Samara
+Updated: 2026-07-31 ~17:00 Samara
 
 ## CLOSED this session
 | ID | Item | Proof | Commit |
@@ -32,7 +32,7 @@ Updated: 2026-07-31 ~16:56 Samara
 | P3 | MAGSHOT | Optional: real-game HUD mag line across --ride | main.cpp foreign-aware | unit pin owns body-swap |
 | P3 | M4 | worker_m4 leftovers if unowned | .agents/worker_m4* peek | only src/game scope |
 | P3 | SHOTLOG | optional stderr when place_body_safely relocates body | main.cpp | proof today is floor+PNG+audit |
-| P2 | PADIC | Padic floor gameplay stress outside src/render/** (--floor 4 doors/AI) | main harness + src/game | Zhirnyak owns mesher stripes; game-agent exercises module |
+| P2 | PADIC | CLOSED 2026-07-31 — floor4 stress GREEN (AI+tex+shot) | main harness + src/game | see CLOSED PADIC; Zhirnyak owns mesher stripes |
 
 ## LOCKED — do not touch
 - src/render/env_detail.* gpu_particle_pass.* gpu_light_grid.* GpuCullPass (foreign WIP)
@@ -231,6 +231,32 @@ Read-only audit of `src/app/main.cpp` (4860 lines / 274719 B) via `shots/_probe_
 ### Verdict
 PAR1 = re-grep after foreign main commits. Both PBS sites + both ai_release sites GREEN. No main.cpp edit. Re-run after next foreign main thrash.
 Next OPEN: **PADIC** gameplay stress (`--floor 4`, doors/AI, stay off `src/render/**`).
+
+## CLOSED 2026-07-31 PADIC — floor-module gameplay stress (off render)
+```
+runner: python C:\hades\gigahrush2\shots\_run_padic_proof.py
+exe: build-win/Release/gigahrush2.exe --shot shots/shot_padic_play.png --frames 480 --floor 4 --action attack
+cwd: repo root (textures resolve)
+exit=0 elapsed=43.3s png=2.7MiB jpg=137117
+PROOF=GREEN
+
+stderr highlights:
+  [cube] albedo: 6/6 ... normal: 6/6 ... roughness: 6/6 (mask 0xfc00)  ← TEX1 still holds on padic
+  [aimem] STEP ... seen=419 (floor0 warmup) then LEAVE+RELEASE on hop
+  [nav] bake ... 10 AI brains attached on floor 4 (161 agents wandering)
+  [aimem] STEP tick=1020+ layer=0 seen=10 (padic AI live)
+  shot: saved -> shot_padic_play.png (floor 4, 481 frames)
+  floor autosave header refuse on stale slot (expected regenerate pristine) — non-fatal
+
+Gates:
+  floor4=True  tex_ok=True  ai_ok=True  brains=2  max_seen=419  tex_err=0  png_ok=True
+```
+Scope: game-agent exercises padic as engine stress sample (doors/AI/travel/tex load).
+**Does NOT thrash src/render/** — stripes/ghost/UV remain Zhirnyak. Evidence JPEGs for him:
+  shots/shot_padic_play.jpg (this run) + prior shots/shot_padic.jpg
+No main.cpp / src/game code change this close — harness-only proof.
+Next OPEN: P3 optional (RPG1/MAGSHOT/M4/SHOTLOG) or re-PAR1 after foreign main; keep pull/push loop.
+
 
 
 
