@@ -1309,8 +1309,9 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
 
     // Same damage path, same Dead tag, same finalizer as a mob's swing. There is
     // deliberately no second way for something to die.
+    // MELEEGRID: forward grid so WallBrace soaks player melee (mobs/projectiles already do).
     DamageResult r = apply_damage(reg, pool, best, swingDmg,
-                                  DamageChannel::Kinetic, self);
+                                  DamageChannel::Kinetic, self, grid);
     pm.cooldownMs = swingCd;
     if (r.lethal) ++pm.kills;
     (void)bus;

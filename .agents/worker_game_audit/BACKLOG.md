@@ -6,6 +6,7 @@ Updated: 2026-08-01 ~00:45 Samara
 ## CLOSED this session
 | ID | Item | Proof | Commit |
 |----|------|-------|--------|
+| MELEEGRID | player_melee_step forwards grid to apply_damage so WallBrace (Panelnik) soaks player melee like projectiles/mob swings | **unit GREEN:** game_test **219621 checks, 0 failures** (+6 MELEEGRID braced/open) | this commit |
 | POSRPG | voluntary P-possess carries RpgStats+kills+shots/hits via transfer_player_progression; mag stays on abandoned body | **unit GREEN:** game_test **219615 checks, 0 failures** (+29 possess transfer) | this commit |
 | SAVMAG | F5/F9 persist PlayerRanged + melee kills; kSaveVersion 7->8; wire +21 combat (850/950/965) | **unit GREEN:** game_test **219586 checks, 0 failures** (+40 saveload) | this commit |
 | SAVRPG | F5/F9 persist RpgStats + CraftingState; kSaveVersion 6->7; wire 829/929/944 | **unit GREEN:** game_test **219546 checks, 0 failures** (+120 saveload) | this commit |
@@ -39,6 +40,7 @@ Updated: 2026-08-01 ~00:45 Samara
 
 | P3 | RPG1 | CLOSED 2026-07-31 — RpgStats survives elevator body-swap | src/game/elevator.cpp | see CLOSED RPG1; embody LOCKED |
 | P3 | POSRPG | CLOSED 2026-08-01 — voluntary possess carries RpgStats+kills+shots/hits | src/game/combat.* + main possess | see CLOSED POSRPG |
+| P3 | MELEEGRID | CLOSED 2026-08-01 — player_melee forwards grid (WallBrace soak) | src/game/combat.cpp + suite_behaviours §18 | see CLOSED MELEEGRID |
 | P3 | MAGSHOT | Optional: real-game HUD mag line across --ride | main.cpp foreign-aware | unit pin owns body-swap |
 | P3 | M4 | CLOSED peek — Milestone 4 already CLOSED (suite_props / world_test) | .agents/worker_m4* | no leftover game work |
 | P3 | SHOTLOG | CLOSED 2026-07-31 — [place] MOVE/REFUSE in place_body_at_cell | src/game/save.cpp | see CLOSED SHOTLOG |
@@ -413,7 +415,7 @@ game_test: 219546 checks, 0 failures (was 219426; +120)
 pathspec: src/game/save.h src/game/save.cpp src/app/main.cpp
           tests/suite_saveload.inl CMakeLists.txt BACKLOG.md
 ```
-Next OPEN: MAGSHOT deferred (POSRPG CLOSED); stay off src/render/**.
+Next OPEN: MAGSHOT deferred (MELEEGRID CLOSED); stay off src/render/**.
 
 ## CLOSED 2026-07-31 SAVMAG — F5/F9 PlayerRanged + melee kills
 ```
@@ -429,7 +431,7 @@ game_test: 219586 checks, 0 failures (was 219546; +40)
 pathspec: src/game/save.h src/game/save.cpp src/app/main.cpp
           tests/suite_saveload.inl CMakeLists.txt BACKLOG.md
 ```
-Next OPEN: MAGSHOT deferred (POSRPG CLOSED); stay off src/render/**.
+Next OPEN: MAGSHOT deferred (MELEEGRID CLOSED); stay off src/render/**.
 
 ## CLOSED 2026-08-01 POSRPG — voluntary possess carries progression
 ```
@@ -457,4 +459,19 @@ game_test: 219615 checks, 0 failures (was 219586; +29)
 pathspec: src/game/combat.h src/game/combat.cpp src/app/main.cpp
           tests/suite_rpg.inl CMakeLists.txt BACKLOG.md
 ```
-Next OPEN: MAGSHOT deferred (POSRPG CLOSED); stay off src/render/**.
+Next OPEN: MAGSHOT deferred (MELEEGRID CLOSED); stay off src/render/**.
+
+## CLOSED 2026-08-01 MELEEGRID — player_melee forwards grid (WallBrace)
+```
+Hole: player_melee_step had MacroGrid* for wall-chip carves but forgot to pass
+      it into apply_damage. WallBrace (Panelnik) soaked bullets (projectile_step)
+      and mob swings (mob_attack_step) but took full fist damage from the player.
+Fix:  apply_damage(..., self, grid);  // was missing 7th arg
+Pin:  suite_behaviours §18 MELEEGRID
+      braced: player 109.2,100 → pan 110,100 (wall 56,50); fist 3 → applied 2 @ x0.58
+      open:   player 100,109.2 → pan 100,110; applied == 3
+game_test: 219621 checks, 0 failures (was 219615; +6)
+pathspec: src/game/combat.cpp tests/suite_behaviours.inl
+          CMakeLists.txt .agents/worker_game_audit/BACKLOG.md
+```
+Next OPEN: MAGSHOT deferred; stay off src/render/**.
