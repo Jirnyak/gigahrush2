@@ -35,6 +35,7 @@
 #include "ecs/components.h"
 #include "ecs/registry.h"
 #include "game/event_bus.h"
+#include "game/status.h"
 #include "game/inventory.h"
 #include "game/item_table.h"
 #include <unordered_set>
@@ -515,7 +516,9 @@ void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
 // the one authored WEB row spat a bullet with the other 68.
 std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                               const LevelStack& stack, LayerId layer, float dt,
-                              std::uint64_t tick);
+                              std::uint64_t tick,
+                              StatusSet* playerStatus = nullptr,
+                              Entity playerEntity = entt::null);
 
 // The camera holder swings at whatever monster is in front of it.
 //

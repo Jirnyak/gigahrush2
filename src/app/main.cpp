@@ -62,6 +62,7 @@
 #include "game/container.h"
 #include "game/door.h"
 #include "game/combat.h"
+#include "game/status.h"
 #include "game/rpg.h"
 #include "game/extraction.h"
 #include "game/save.h"
@@ -1695,6 +1696,12 @@ int main(int argc, char** argv) {
     // hooks that actually move the roubles, so the accumulator is kept. Clang warns,
     // MSVC did not.
     [[maybe_unused]] std::int32_t loot = 0;         // roubles swept up this run
+    // Content-layer statuses (zhelemish / web / spore / govnyak). Slowed is the
+    // velocity CAP in combat.h; this is the authored table that decides what
+    // lands and for how long. Main-owned: Inventory is POD and status must not
+    // reach into it — gate checks happen at apply sites below.
+    game::StatusSet playerStatus{};
+    std::uint64_t lastStatusLogTick = ~0ull;
     std::int32_t healed = 0;
     float ateFood = 0.0f;      // food points that LANDED, for the HUD
     float drankWater = 0.0f;
@@ -2259,9 +2266,55 @@ int main(int argc, char** argv) {
                 // drains is a death spiral with no decision in it. Applied to the
                 // live Controller each tick rather than baked into it, so recovering
                 // sleep restores the speed with nothing to remember. [needs.h]
-                if (reg.valid(player))
-                    if (auto* ctl_ = reg.try_get<Controller>(player))
-                        ctl_->moveSpeed = kPlayerWalkSpeed * needs.speedScale;
+                // Status content layer: age slots, then fold move mult into the
+                // Controller before controller_step's writers are overridden next
+                // tick. Root forces moveSpeed 0 (Paupsina leading window).
+                // Needs exhaustion and status multiply — both bite.
+                if (reg.valid(player)) {
+                    const std::uint32_t dtMs =
+                        static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f);
+                    game::status_step(playerStatus, dtMs);
+                    if (auto* ctl_ = reg.try_get<Controller>(player)) {
+                        float sm = game::status_move_mult_e3(playerStatus) / 1000.0f;
+                        if (game::status_is_rooted(playerStatus))
+                            sm = 0.0f;
+                        ctl_->moveSpeed =
+                            kPlayerWalkSpeed * needs.speedScale * sm;
+                    }
+                    // Periodic proof trail while anything is up.
+                    if (lastStatusLogTick != simTick && (simTick % 60u) == 0u) {
+                        const bool any =
+                            game::status_active(playerStatus,
+                                                game::StatusId::ZhelemishSkin) ||
+                            game::status_active(playerStatus,
+                                                game::StatusId::PaupsinaWeb) ||
+                            game::status_active(playerStatus,
+                                                game::StatusId::SporeHaze) ||
+                            game::status_active(playerStatus,
+                                                game::StatusId::GovnyakRelief) ||
+                            game::status_active(playerStatus,
+                                                game::StatusId::GovnyakCough) ||
+                            game::status_active(playerStatus,
+                                                game::StatusId::GovnyakDebt);
+                        if (any) {
+                            lastStatusLogTick = simTick;
+                            std::fprintf(
+                                stderr,
+                                "[status] tick move_e3=%u aim_e3=%u melee_e3=%u "
+                                "rooted=%d zh=%u web=%u spore=%u\n",
+                                game::status_move_mult_e3(playerStatus),
+                                game::status_aim_mult_e3(playerStatus),
+                                game::status_melee_mult_e3(playerStatus),
+                                game::status_is_rooted(playerStatus) ? 1 : 0,
+                                playerStatus.remainMs[static_cast<std::size_t>(
+                                    game::StatusId::ZhelemishSkin)],
+                                playerStatus.remainMs[static_cast<std::size_t>(
+                                    game::StatusId::PaupsinaWeb)],
+                                playerStatus.remainMs[static_cast<std::size_t>(
+                                    game::StatusId::SporeHaze)]);
+                        }
+                    }
+                }
                 if (shotPath) {
                     if (shotOrbit && reg.valid(player)) {
                         auto& cam = reg.get<CameraTag>(player);
@@ -2378,6 +2431,28 @@ int main(int argc, char** argv) {
                         consoleCtx.carveRadius = 1.5f;
                         consoleCtx.carvePower = 0xFFFF;
                         shotActionConsumed = true;
+                    } else if (!shotActionConsumed && shotAction == "status" &&
+                               shotFramesSeen >= 30) {
+                        // STATUS proof: land two authored rows so move_e3 drops
+                        // below 1000 and rooted becomes true for Paupsina's
+                        // leading window. Real status_apply path, not a mock.
+                        game::status_apply(playerStatus,
+                                           game::StatusId::ZhelemishSkin,
+                                           /*useAlt=*/false);
+                        game::status_apply(playerStatus,
+                                           game::StatusId::PaupsinaWeb,
+                                           /*useAlt=*/false);
+                        std::fprintf(
+                            stderr,
+                            "[status] APPLY zh+web move_e3=%u rooted=%d "
+                            "zh_ms=%u web_ms=%u\n",
+                            game::status_move_mult_e3(playerStatus),
+                            game::status_is_rooted(playerStatus) ? 1 : 0,
+                            playerStatus.remainMs[static_cast<std::size_t>(
+                                game::StatusId::ZhelemishSkin)],
+                            playerStatus.remainMs[static_cast<std::size_t>(
+                                game::StatusId::PaupsinaWeb)]);
+                        shotActionConsumed = true;
                     } else if (!shotActionConsumed &&
                                (shotAction == "save" || shotAction == "load") &&
                                shotRideDone >= shotRide &&
@@ -2473,6 +2548,31 @@ int main(int argc, char** argv) {
                                 float dz = wrap_delta_f(tr.pos.z, ppos.z, kWorldExtent);
                                 if (dx*dx + dy*dy + dz*dz < 2.15f * 2.15f) {
                                     game::apply_damage(reg, pool, player, 4, game::DamageChannel::Fire, me_, &activeGrid);
+                                    // Content layer: SporeHaze. Gate = ip4_gasmask
+                                    // present in inventory (alt column shortens).
+                                    bool hasGasmask = false;
+                                    if (const auto* nr =
+                                            reg.try_get<game::NpcRef>(player)) {
+                                        if (pool.valid(nr->id)) {
+                                            const game::Inventory& inv =
+                                                pool.inventory(nr->id);
+                                            const game::ItemId gate =
+                                                game::status_def(
+                                                    game::StatusId::SporeHaze)
+                                                    .gateItem;
+                                            if (gate != 0) {
+                                                for (const auto& sl : inv.slots) {
+                                                    if (sl.item == gate) {
+                                                        hasGasmask = true;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    game::status_apply(playerStatus,
+                                                       game::StatusId::SporeHaze,
+                                                       hasGasmask);
                                 }
                             }
                         }
@@ -2523,6 +2623,10 @@ int main(int argc, char** argv) {
                 // healing, resupply and possession-on-death. [faction_relations.h]
                 feudHits += game::faction_feud_step(reg, pool, factionRel, activeLayer,
                                                     simTick);
+                // Slowed CAP enforcement: after every velocity writer
+                // (controller / wander / investigate / feud), before integrate.
+                // Was defined in combat.cpp and never called — dead path until now.
+                game::slow_step(reg, activeLayer, kSimDt);
                 physics_step(reg, stack, kSimDt);
                 // Doors resolve AFTER physics for the same reason melee does: contact
                 // is tested by ADJACENCY against where bodies actually ended up this
@@ -2836,7 +2940,8 @@ int main(int argc, char** argv) {
                 // Shots resolve AFTER the pass that launched them, so a
                 // projectile never lands on the frame it is fired.
                 meleeHits += game::projectile_step(
-                    reg, pool, bus, stack, activeLayer, kSimDt, simTick);
+                    reg, pool, bus, stack, activeLayer, kSimDt, simTick,
+                    &playerStatus, player);
 
                 // ── Combat VFX ─────────────────────────────────────────
                 if (reg.valid(player) && particlePass.ready()) {
@@ -3464,6 +3569,18 @@ int main(int argc, char** argv) {
             std::int16_t php = 0, pmax = 0;
             if (game::entity_health(reg, pool, player, php, pmax))
                 ImGui::Text("HP %d / %d%s", php, pmax, php <= 0 ? "  DEAD" : "");
+            {
+                const std::uint16_t mv = game::status_move_mult_e3(playerStatus);
+                const bool rooted = game::status_is_rooted(playerStatus);
+                if (mv != 1000 || rooted ||
+                    game::status_active(playerStatus, game::StatusId::SporeHaze) ||
+                    game::status_active(playerStatus, game::StatusId::ZhelemishSkin) ||
+                    game::status_active(playerStatus, game::StatusId::PaupsinaWeb)) {
+                    ImGui::Text("status move_e3=%u aim_e3=%u rooted=%d",
+                                mv, game::status_aim_mult_e3(playerStatus),
+                                rooted ? 1 : 0);
+                }
+            }
             if (reg.valid(player))
                 if (const auto* pm = reg.try_get<game::PlayerMelee>(player))
                     kills = pm->kills;

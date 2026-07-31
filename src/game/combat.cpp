@@ -789,7 +789,8 @@ std::uint32_t slow_step(Registry& reg, LayerId layer, float dt) {
 
 std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                               const LevelStack& stack, LayerId layer, float dt,
-                              std::uint64_t tick) {
+                              std::uint64_t tick, StatusSet* playerStatus,
+                              Entity playerEntity) {
     if (!stack.valid(layer)) return 0;
     const MacroGrid& grid = stack.layer(layer).grid();
 
@@ -964,8 +965,15 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         bool landed = false;
         const bool web = static_cast<ProjType>(h.projType) == ProjType::Web;
         const Entity body = h.onVictim ? victim : h.other;
-        if (web && body != entt::null && reg.valid(body))
+        if (web && body != entt::null && reg.valid(body)) {
             landed = apply_slow(reg, body, kWebSlowScale, kWebSlowMs);
+            // Content layer: Slowed is the velocity CAP; PaupsinaWeb is the
+            // authored row (root window + move 540/220). Both coexist.
+            if (landed && playerStatus && body == playerEntity) {
+                status_apply(*playerStatus, StatusId::PaupsinaWeb,
+                             /*useAlt=*/false);
+            }
+        }
 
         // `h.channel` and not `DamageChannel::Kinetic`: this is the line that makes
         // armour's resist[5] mean anything on a shot. Both branches take it, because

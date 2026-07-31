@@ -26,11 +26,16 @@
 - [x] CORPSHOT: stderr [corp] CORPSE LOOTED once per interact edge
 - [x] CORPSHOT: empty searched corpse prompt skip / REMAINDER label
 - [x] CORPSHOT real-game PROOF=GREEN (corp_diag.txt; TAKEN 1 ITEMS +35 RUB; kills:2)
+- [x] STATUS: StatusSet playerStatus in main; status_step + moveSpeed fold + root
+- [x] STATUS: slow_step before physics_step
+- [x] STATUS: SporeCarpet → SporeHaze (gasmask gate scan)
+- [x] STATUS: WEB projectile dual-apply PaupsinaWeb (combat.cpp braces)
+- [x] STATUS: --action status + [status] APPLY/tick stderr
+- [x] STATUS real-game PROOF=GREEN (status_diag.txt; move_e3=180 rooted=1 → 820)
 
 ## In flight
-- [ ] pathspec commit CORPSHOT + docs (main.cpp, shots/_run_corp_proof.py, BACKLOG, progress) — no shaders, no scratch
-- [ ] pull --ff-only origin main + push origin main (no force)
-- [ ] STATUS: wire StatusSet into damage + main tick (P0 code-without-gameplay)
+- [ ] pathspec commit STATUS + docs (main.cpp, combat.h/cpp, shots/_run_status_proof.py, BACKLOG, progress) — no shaders, no scratch
+- [ ] pull --rebase origin main + push origin main (no force)
 - [ ] CARVE: combat/weapons → carve_sphere (console-only today = PARTIAL)
 - [ ] AIMEM: ai_release on floor leave / memory seam audit
 - [ ] TEX1 blocked: 3 missing roughness ktx2 — no sources, do not mock
@@ -42,16 +47,21 @@
 - git add -A / force-push
 - commit shots/*.png binaries or large stderr dumps unless pathspec-asked
 - mock missing ktx2 textures
-- touch cube_pass.cpp, floor_gen.cpp, render/gpu_*
-- commit scratch _patch_corp.py / _scan_* / shot_corp_stderr.txt
-- **ALLOWED this cycle pathspec:** src/app/main.cpp, shots/_run_corp_proof.py, .agents/worker_game_audit/BACKLOG.md, .agents/worker_game_audit/progress.md
+- touch cube_pass.cpp, floor_gen.cpp, render/gpu_* / sub_mesh (Zhirnyak)
+- commit scratch _patch_* / _scan_* / shot_*_stderr.txt
+- **ALLOWED this cycle pathspec:** src/app/main.cpp, src/game/combat.h, src/game/combat.cpp, shots/_run_status_proof.py, .agents/worker_game_audit/BACKLOG.md, .agents/worker_game_audit/progress.md
+
+## Cycle report (2026-07-31 ~15:07) — STATUS CLOSED
+цикл STATUS | closed: StatusSet in main tick; SporeHaze on SporeCarpet; WEB→PaupsinaWeb;
+slow_step live; --action status PROOF=GREEN move_e3=180 rooted=1 → 443 → 820 |
+runner shots/_run_status_proof.py 480f ride0 | melee_e3=700 under ZhelemishSkin |
+wip: pathspec commit + pull + push | residual OPEN: CARVE P1, AIMEM P1, TEX1, CNT1 |
+blockers: shaders/** dirty foreign — never stage; stay off src/render/** (Zhirnyak)
 
 ## Cycle report (2026-07-31 ~14:46) — CORPSHOT CLOSED
 цикл CORPSHOT | closed: --action corp real kill→corpse→E→loot; PROOF=GREEN;
 TAKEN 1 ITEMS (+35 RUB); one-press interact (spam fixed); empty-searched prompt truth |
-runner shots/_run_corp_proof.py 2400f ride0 | HUD kills:2 loot 35 rub |
-wip: pathspec commit + pull + push | residual OPEN: STATUS P0, CARVE P1, AIMEM P1, TEX1, CNT1 |
-blockers: shaders/** dirty foreign — never stage
+runner shots/_run_corp_proof.py 2400f ride0 | HUD kills:2 loot 35 rub | commit c61e04b
 
 ## Cycle report (2026-07-31 ~10:10) — CORP1 + FEUD1 CLOSED
 цикл CORP1/FEUD1 | closed: corpse interact no item-loss; loottable asserts staged not floor;
@@ -65,9 +75,9 @@ pin superseded by CORP1 pin 215499 this cycle
 ## Cycle report (2026-07-30 ~22:20) — SAV1
 цикл SAV1 | closed: --action save|load harness, two-phase F9 gameplay PROOF=GREEN floor-14
 
-## Architect answers (CORPSHOT close)
-- **Least confident:** Status effects never tick in main loop — largest remaining code-without-gameplay.
-- **Biggest missing:** STATUS/CARVE live proofs; commit+push of CORPSHOT still in flight at write time.
-- **Don't realize:** TAKEN 0 can be a legitimate empty roll; re-proof got TAKEN 1/+35. Pipeline is real.
-- **Implemented-not-integrated:** StatusSet; combat→carve; AiMemory floor-leave release.
-- **Next execute:** commit pathspec → pull → push → STATUS or CARVE gameplay integration.
+## Architect answers (STATUS close)
+- **Least confident:** SporeHaze gate `gate != 0`; WEB only on playerEntity hit.
+- **Biggest missing:** CARVE combat path; AIMEM floor-leave; TEX1; CNT1.
+- **Don't realize:** mults stack (zh×web); Slowed CAP + StatusSet coexist.
+- **Implemented-not-integrated:** combat→carve; AiMemory floor-leave release.
+- **Next execute:** commit pathspec → pull --rebase → push → CARVE (off render).

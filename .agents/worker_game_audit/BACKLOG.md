@@ -1,13 +1,13 @@
 # BACKLOG — worker_game_audit
 
 Lane: game audit + save/travel seams + content port. NOT render/prop.
-Updated: 2026-07-31 ~14:46 Samara
+Updated: 2026-07-31 ~15:07 Samara
 
 ## CLOSED this session
 | ID | Item | Proof | Commit |
 |----|------|-------|--------|
-| CORP1 | Corpse loot staging: Dead→CorpseLootPending→Corpse; interact no item-loss (stack merge / inv-full leave remainder); suite asserts staged not floor | **unit GREEN:** game_test **215499 checks, 0 failures**; loottable 600 corpses → 833 staged slots, 39 slime_sample_green, floor pickups=0; Betonoed 5..10 slots, rub/kill ~137.3 (window 60..250); interact harden in loot.cpp (resolve player before searched; stackMax partial move; recompute slotCount) | this commit |
-| FEUD1 | Restore kFeudMinHpPct clamp (isFatalFeud voided it for every feud pair) | suite_faction2.inl floor CHECKs green: citizen bottoms at 50% HP; frail maxHP=2 bottoms at 1; never Dead from feud | same commit |
+| CORP1 | Corpse loot staging: Dead→CorpseLootPending→Corpse; interact no item-loss (stack merge / inv-full leave remainder); suite asserts staged not floor | **unit GREEN:** game_test **215499 checks, 0 failures**; loottable 600 corpses → 833 staged slots, 39 slime_sample_green, floor pickups=0; Betonoed 5..10 slots, rub/kill ~137.3 (window 60..250); interact harden in loot.cpp (resolve player before searched; stackMax partial move; recompute slotCount) | prior |
+| FEUD1 | Restore kFeudMinHpPct clamp (isFatalFeud voided it for every feud pair) | suite_faction2.inl floor CHECKs green: citizen bottoms at 50% HP; frail maxHP=2 bottoms at 1; never Dead from feud | prior |
 | FOR1 / MAG1 | Elevator body-swap preserves PlayerRanged + PlayerMelee (magCount, weapon, shots, hits, kills). Capture before fold_back, emplace_or_replace after embody_as_player; lazy-absent stays absent. | unit GREEN prior: 213917/0; pins in test_elevator | prior (9cbb7fb / b6cd6c5 + pin docs) |
 | SAV1 | `--action save\|load` one-shot shot harness + stderr `[save]`/`[load]` audit trail | two-phase real game PROOF=GREEN floor -14 (shots/f9_diag.txt) | prior cycle |
 | SHOT1 | Truncated duplicate `--shot` capture block removed | main.cpp; Release rebuild GREEN | 0f7086c |
@@ -16,12 +16,12 @@ Updated: 2026-07-31 ~14:46 Samara
 | T1 | Travel capture/apply parity keyboard + --shot | both sites call place_body_safely | 702265d |
 | A1-9 | suite_audit ledger pins | audit_test 149 checks, 0 failures | various |
 | GT | game_test pin | **215499 checks, 0 failures** (was 213917; +checks from loottable truth + suite growth) | prior |
-| CORPSHOT | Real-game kill→corpse→E→CORPSE LOOTED proof + --action corp harness | **PROOF=GREEN** shots/corp_diag.txt: attack d=29→0, corpse in reach once, CORPSE LOOTED TAKEN 1 ITEMS (+35 RUB); HUD kills:2 loot 35 rub; shot_corp.png; one-press interact (no spam) | this commit |
+| CORPSHOT | Real-game kill→corpse→E→CORPSE LOOTED proof + --action corp harness | **PROOF=GREEN** shots/corp_diag.txt: attack d=29→0, corpse in reach once, CORPSE LOOTED TAKEN 1 ITEMS (+35 RUB); HUD kills:2 loot 35 rub; shot_corp.png; one-press interact (no spam) | c61e04b |
+| STATUS | StatusSet wired into main tick + SporeCarpet + WEB dual-apply; slow_step before physics; --action status harness | **PROOF=GREEN** shots/status_diag.txt: APPLY zh+web move_e3=180 rooted=1; tick 180→443→820 as web expires; melee_e3=700; shot_status.png | this commit |
 
 ## OPEN / next (priority)
 | Pri | ID | Item | Pathspec | Notes |
 |-----|----|------|----------|-------|
-| P0 | STATUS | StatusSet/status_step never called from main tick — data/status.csv + suite exist, combat never applies | src/game/status*.cpp + main.cpp | code-without-gameplay; wire apply on damage + status_step on tick; real-game proof |
 | P1 | CARVE | carve_sphere console/--action carve only — weapons/combat do not call destruct | src/game/destruct* + combat | PARTIAL; need combat hit → carve or explicit weapon carve |
 | P1 | AIMEM | AiMemory tested; ai_release on floor leave / pass to ai_step may be incomplete | src/game/ai* + floor_stream | check embody/fold_back release |
 | P2 | TEX1 | 3 missing roughness ktx2 (rubber_tiles / rusty_metal_03 / rusty_corrugated_iron) | data/textures | non-fatal; albedo+normal OK; roughness mask 0x3400 (3/6); **no mock ktx2** |
@@ -40,10 +40,11 @@ Updated: 2026-07-31 ~14:46 Samara
 - embody.cpp XP path
 - cube_pass.cpp, floor_gen.cpp, shots binaries unless pathspec-asked
 - force-push; git add -A
+- **Zhirnyak render lane:** stay off src/render/** (sub_mesh / cube_merge / cube_pass)
 
 ## Safe zones
 - lane docs under .agents/worker_game_audit/**
-- src/game/** except embody if foreign-dirty (loot.cpp, faction_relations.cpp OK this cycle)
+- src/game/** except embody if foreign-dirty (loot.cpp, combat.cpp, status* OK this cycle)
 - data/** content CSV
 - tests/suite_loottable.inl, suite_audit.inl + pins in CMake
 - save/load/travel if main.cpp free of foreign WIP
@@ -75,6 +76,7 @@ CMake pin: 213917 → 215499 (checks added from suite tighten + growth, 0 failur
 FOREIGN dirty not staged: shaders/cube.frag.spv, shaders/cube_tex.frag.spv
 ```
 Feature without unit pin = DECLINED. CORPSHOT CLOSED 2026-07-31 ~14:46 — real-game proof GREEN.
+STATUS CLOSED 2026-07-31 ~15:07 — real-game proof GREEN.
 
 ## Gameplay proof (FOR1 / MAG1) — 2026-07-31 ~01:14
 ```
@@ -107,9 +109,26 @@ Harness: face nearest MobRef, wishDir walk-in, attackHeld; one E on Corpse≤2.2
 Empty searched corpses no longer keep LOOT CORPSE prompt forever
 ```
 
-## Architect answers (CORPSHOT close cycle)
-- **Least confident:** Status effects (StatusSet) still never tick in main — highest remaining code-without-gameplay. Carve still console-only.
-- **Biggest missing:** STATUS/CARVE/AIMEM integration proofs; TEX1 roughness sources; CNT1 content depth.
-- **Don't realize:** Empty corpse loot (TAKEN 0) can be a real roll, not a pipeline bug — second CORPSHOT run took 1 item/+35 RUB. CORP1 unit pin already closed; CORPSHOT was the gameplay proof class.
-- **Implemented-not-integrated:** StatusSet/status_step; combat→carve; optional AiMemory floor-leave release; drop_mob_loot debug path.
-- **Next execute:** pathspec commit CORPSHOT → pull --ff-only → push origin main → STATUS wire or CARVE combat path → real-game proof.
+## Gameplay proof (STATUS) — 2026-07-31 ~15:07
+```
+runner: python C:\hades\gigahrush2\shots\_run_status_proof.py
+exe: build-win/Release/gigahrush2.exe --shot shots/shot_status.png --frames 480 --ride 0 --action status
+exit=0 elapsed=16.6s png=2.7MiB jpg=108881
+stderr: [status] APPLY zh+web move_e3=180 rooted=1 zh_ms=180000 web_ms=4200
+        [status] tick move_e3=180→443→820 as web root expires then web ends
+        melee_e3=700 (ZhelemishSkin) while zh active; aim_e3=1000
+Wire:
+  main: StatusSet playerStatus; status_step each tick; moveSpeed *= mult / root→0
+  main: slow_step before physics_step
+  main: SporeCarpet hazard → status_apply SporeHaze (gate=ip4_gasmask scan)
+  main: --action status applies ZhelemishSkin + PaupsinaWeb once
+  combat: projectile_step optional StatusSet* + Entity; WEB dual-apply PaupsinaWeb
+  HUD: status move_e3 / aim_e3 / rooted when any of zh/web/spore active
+```
+
+## Architect answers (STATUS close cycle)
+- **Least confident:** SporeHaze gasmask gate uses `gate != 0` not kInvalidItem — OK if ItemId 0 is never a real gate. WEB dual-apply only when body==playerEntity (player hit by web).
+- **Biggest missing:** CARVE still console-only; AIMEM floor-leave; TEX1 roughness; CNT1 status.csv thin.
+- **Don't realize:** move_e3 stacks multiplicatively (zh 820 × web 540 = 443; with root → 180 path). Slowed CAP and StatusSet mults coexist by design.
+- **Implemented-not-integrated:** combat→carve; optional AiMemory floor-leave release; drop_mob_loot debug path.
+- **Next execute:** pathspec commit STATUS → pull --rebase → push origin main → CARVE combat path (stay off src/render/** — Zhirnyak submesh).
