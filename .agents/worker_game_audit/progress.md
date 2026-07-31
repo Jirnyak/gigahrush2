@@ -32,15 +32,19 @@
 - [x] STATUS: WEB projectile dual-apply PaupsinaWeb (combat.cpp braces)
 - [x] STATUS: --action status + [status] APPLY/tick stderr
 - [x] STATUS real-game PROOF=GREEN (status_diag.txt; move_e3=180 rooted=1 → 820)
+- [x] CARVE: CarveProposalQueue POD in combat.h; wall/melee/bullet enqueue
+- [x] CARVE: main drain carve_sphere + [carve] COMBAT stderr
+- [x] CARVE: --action wall early fly=false + wishDir post-input.apply
+- [x] CARVE real-game PROOF=GREEN (carve_diag.txt; removed=8 power=44 r=0.55; d=6.32->2.00 fly=0)
 
 ## In flight
-- [ ] pathspec commit STATUS + docs (main.cpp, combat.h/cpp, shots/_run_status_proof.py, BACKLOG, progress) — no shaders, no scratch
-- [ ] pull --rebase origin main + push origin main (no force)
-- [ ] CARVE: combat/weapons → carve_sphere (console-only today = PARTIAL)
+- [ ] pathspec commit CARVE + docs (main.cpp, combat.h/cpp, shots/_run_carve_proof.py, BACKLOG, progress) — no shaders, no scratch
+- [ ] pull --ff-only origin main + push origin main (no force)
 - [ ] AIMEM: ai_release on floor leave / memory seam audit
 - [ ] TEX1 blocked: 3 missing roughness ktx2 — no sources, do not mock
 - [ ] CNT1 content thin (status.csv ~6 rows) — port from old gigahrush
 - [ ] optional RPG1 RpgStats across elevator; optional MAGSHOT HUD mag across --ride
+
 
 ## Do not
 - stage/commit prop_*, gpu_*, shaders/** (cube*.spv FOREIGN dirt), embody XP path
@@ -49,7 +53,13 @@
 - mock missing ktx2 textures
 - touch cube_pass.cpp, floor_gen.cpp, render/gpu_* / sub_mesh (Zhirnyak)
 - commit scratch _patch_* / _scan_* / shot_*_stderr.txt
-- **ALLOWED this cycle pathspec:** src/app/main.cpp, src/game/combat.h, src/game/combat.cpp, shots/_run_status_proof.py, .agents/worker_game_audit/BACKLOG.md, .agents/worker_game_audit/progress.md
+- **ALLOWED this cycle pathspec:** src/app/main.cpp, src/game/combat.h, src/game/combat.cpp, shots/_run_carve_proof.py, .agents/worker_game_audit/BACKLOG.md, .agents/worker_game_audit/progress.md
+
+## Cycle report (2026-07-31 ~16:10) — CARVE CLOSED
+→ CARVE | closed: combat proposals → carve_sphere; --action wall PROOF=GREEN;
+[carve] COMBAT removed=8 power=44 r=0.55; fly=0 d=6.32→2.00; shot_carve.png |
+runner shots/_run_carve_proof.py 1200f ride0 | residual OPEN: AIMEM P1, TEX1, CNT1 |
+blockers: shaders/** dirty foreign — never stage; stay off src/render/** (Zhirnyak)
 
 ## Cycle report (2026-07-31 ~15:07) — STATUS CLOSED
 цикл STATUS | closed: StatusSet in main tick; SporeHaze on SporeCarpet; WEB→PaupsinaWeb;
@@ -77,7 +87,7 @@ pin superseded by CORP1 pin 215499 this cycle
 
 ## Architect answers (STATUS close)
 - **Least confident:** SporeHaze gate `gate != 0`; WEB only on playerEntity hit.
-- **Biggest missing:** CARVE combat path; AIMEM floor-leave; TEX1; CNT1.
+- **Biggest missing:** AIMEM floor-leave; TEX1; CNT1. (CARVE CLOSED)
 - **Don't realize:** mults stack (zh×web); Slowed CAP + StatusSet coexist.
 - **Implemented-not-integrated:** combat→carve; AiMemory floor-leave release.
 - **Next execute:** commit pathspec → pull --rebase → push → CARVE (off render).

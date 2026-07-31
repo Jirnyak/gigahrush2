@@ -1,7 +1,7 @@
 # BACKLOG — worker_game_audit
 
 Lane: game audit + save/travel seams + content port. NOT render/prop.
-Updated: 2026-07-31 ~15:07 Samara
+Updated: 2026-07-31 ~16:10 Samara
 
 ## CLOSED this session
 | ID | Item | Proof | Commit |
@@ -17,12 +17,12 @@ Updated: 2026-07-31 ~15:07 Samara
 | A1-9 | suite_audit ledger pins | audit_test 149 checks, 0 failures | various |
 | GT | game_test pin | **215499 checks, 0 failures** (was 213917; +checks from loottable truth + suite growth) | prior |
 | CORPSHOT | Real-game kill→corpse→E→CORPSE LOOTED proof + --action corp harness | **PROOF=GREEN** shots/corp_diag.txt: attack d=29→0, corpse in reach once, CORPSE LOOTED TAKEN 1 ITEMS (+35 RUB); HUD kills:2 loot 35 rub; shot_corp.png; one-press interact (no spam) | c61e04b |
-| STATUS | StatusSet wired into main tick + SporeCarpet + WEB dual-apply; slow_step before physics; --action status harness | **PROOF=GREEN** shots/status_diag.txt: APPLY zh+web move_e3=180 rooted=1; tick 180→443→820 as web expires; melee_e3=700; shot_status.png | this commit |
+| STATUS | StatusSet wired into main tick + SporeCarpet + WEB dual-apply; slow_step before physics; --action status harness | **PROOF=GREEN** shots/status_diag.txt: APPLY zh+web move_e3=180 rooted=1; tick 180→443→820 as web expires; melee_e3=700; shot_status.png | 538e139 |
+| CARVE | Combat proposes CarveProposalQueue POD; app drains via carve_sphere behind !doors.frozen; melee wall ray + bullet wall hit; --action wall harness | **PROOF=GREEN** shots/carve_diag.txt: fly=0 d=6.32→2.00; [carve] COMBAT removed=8/3/1 power=44 r=0.55; shot_carve.png 2.7MiB | this commit |
 
 ## OPEN / next (priority)
 | Pri | ID | Item | Pathspec | Notes |
 |-----|----|------|----------|-------|
-| P1 | CARVE | carve_sphere console/--action carve only — weapons/combat do not call destruct | src/game/destruct* + combat | PARTIAL; need combat hit → carve or explicit weapon carve |
 | P1 | AIMEM | AiMemory tested; ai_release on floor leave / pass to ai_step may be incomplete | src/game/ai* + floor_stream | check embody/fold_back release |
 | P2 | TEX1 | 3 missing roughness ktx2 (rubber_tiles / rusty_metal_03 / rusty_corrugated_iron) | data/textures | non-fatal; albedo+normal OK; roughness mask 0x3400 (3/6); **no mock ktx2** |
 | P2 | CNT1 | Content expand status/craft from old giga | data/*.csv + tables | thin: status.csv (~6 rows); port real rows from C:\hades\gigahrush |
@@ -126,9 +126,29 @@ Wire:
   HUD: status move_e3 / aim_e3 / rooted when any of zh/web/spore active
 ```
 
-## Architect answers (STATUS close cycle)
-- **Least confident:** SporeHaze gasmask gate uses `gate != 0` not kInvalidItem — OK if ItemId 0 is never a real gate. WEB dual-apply only when body==playerEntity (player hit by web).
-- **Biggest missing:** CARVE still console-only; AIMEM floor-leave; TEX1 roughness; CNT1 status.csv thin.
-- **Don't realize:** move_e3 stacks multiplicatively (zh 820 × web 540 = 443; with root → 180 path). Slowed CAP and StatusSet mults coexist by design.
-- **Implemented-not-integrated:** combat→carve; optional AiMemory floor-leave release; drop_mob_loot debug path.
-- **Next execute:** pathspec commit STATUS → pull --rebase → push origin main → CARVE combat path (stay off src/render/** — Zhirnyak submesh).
+## Architect answers (CARVE close cycle)
+- **Least confident:** melee wall ray uses 8 steps along camera_forward within reach; solid contact may miss thin props.
+- **Biggest missing:** AIMEM floor-leave release; TEX1 roughness; CNT1 status.csv thin.
+- **Don't realize:** aim_player starts fly=true — wall walk proof MUST force ctl->fly=false or gap never closes.
+- **Implemented-not-integrated:** optional AiMemory floor-leave release; drop_mob_loot debug path.
+- **Next execute:** pathspec commit CARVE → pull --ff-only → push origin main → AIMEM (stay off src/render/** — Zhirnyak).
+
+## Gameplay proof (CARVE) — 2026-07-31 ~16:10
+```
+runner: python C:\hades\gigahrush2\shots\_run_carve_proof.py
+exe: build-win/Release/gigahrush2.exe --shot shots/shot_carve.png --frames 1200 --ride 0 --action wall
+exit=0 elapsed=33.2s png=2.7MiB jpg=111027
+stderr: [wall] melee toward solid d=6.32 floor=0 frozen=0 fly=0
+        [carve] COMBAT removed=8 power=44 r=0.55 at (88.0,66.0,3.0)
+        [wall] melee toward solid d=2.00 ... (closed gap)
+        [carve] COMBAT removed=1/3/1 power=44 r=0.55 (follow-up hits)
+Wire:
+  combat.h: CarveProposal / CarveProposalQueue POD; carve_power_from_dmg
+  combat.cpp: Hit.onWall+impactPos; projectile wall enqueue; player_melee wall ray 8-step
+  main: combatCarves queue; drain carve_sphere behind !doors.frozen; [carve] COMBAT log
+  main: --action wall early face+wishDir AFTER input.apply BEFORE controller_step; ctl->fly=false
+  harness: shots/_run_carve_proof.py GREEN iff [carve] COMBAT removed>0 + PNG
+Design: combat NEVER mutates grid — only proposes; app owns carve_sphere (same as console)
+```
+
+Feature without gameplay = DECLINED. CARVE CLOSED 2026-07-31 ~16:10 — real-game proof GREEN.

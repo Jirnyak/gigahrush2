@@ -1665,6 +1665,10 @@ int main(int argc, char** argv) {
     // after warmup ([world/destruct.h]).
     CarveScratch carveScratch;
     CarveResult carveResult;
+    // Combat → geometry seam ([combat.h]): bullets/melee propose, sim disposes
+    // below behind the same doors.frozen gate as the console carve row.
+    game::CarveProposalQueue combatCarves;
+
     bool healWanted = false;
     bool eatWanted = false;       // G, consumed by one sim step
     bool drinkWanted = false;     // T, consumed by one sim step
@@ -2195,7 +2199,73 @@ int main(int argc, char** argv) {
                 } else {
                     input.apply(reg, kSimDt);
                 }
+                // CARVE wall proof locomotion: input.apply clears wishDir from
+                // keyboard (no keys in --shot), so face+walk MUST land after
+                // apply and BEFORE controller_step consumes wishDir. The later
+                // shotAction=="wall" block only holds attackHeld + logs.
+                if (shotPath && shotAction == "wall" && reg.valid(player) &&
+                    shotFramesSeen >= 30 && !doors.frozen) {
+                    const Transform& ptr = reg.get<Transform>(player);
+                    const MacroGrid& g = stack.layer(activeLayer).grid();
+                    const float cx = ptr.pos.x;
+                    const float cy = ptr.pos.y;
+                    const float cz = ptr.pos.z;
+                    const float eyeZ = cz + 0.7f;
+                    float bestD2 = 1.0e12f;
+                    float bestDx = 0.0f, bestDy = 0.0f;
+                    // Wider ring than melee reach so open-room spawns still
+                    // find a wall; walk closes the gap (kPlayerWalkSpeed).
+                    for (int pass = 0; pass < 2 && bestD2 >= 1.0e12f; ++pass) {
+                        const float sampleZ =
+                            pass == 0 ? eyeZ : (eyeZ - kCellSize);
+                        const int gz =
+                            static_cast<int>(sampleZ / kCellSize);
+                        if (gz < 0 || gz >= kMacroDim) continue;
+                        for (int ox = -8; ox <= 8; ++ox) {
+                            for (int oy = -8; oy <= 8; ++oy) {
+                                if (ox == 0 && oy == 0) continue;
+                                const float px =
+                                    cx + static_cast<float>(ox) * kCellSize;
+                                const float py =
+                                    cy + static_cast<float>(oy) * kCellSize;
+                                const int gx = wrap_macro(
+                                    static_cast<int>(px / kCellSize));
+                                const int gy = wrap_macro(
+                                    static_cast<int>(py / kCellSize));
+                                if (g.cell(gx, gy, wrap_macro(gz)) ==
+                                    kCellAir)
+                                    continue;
+                                const float dx =
+                                    wrap_delta_f(cx, px, kWorldExtent);
+                                const float dy =
+                                    wrap_delta_f(cy, py, kWorldExtent);
+                                const float d2 = dx * dx + dy * dy;
+                                if (d2 < bestD2) {
+                                    bestD2 = d2;
+                                    bestDx = dx;
+                                    bestDy = dy;
+                                }
+                            }
+                        }
+                    }
+                    if (bestD2 < 1.0e12f) {
+                        auto& cam = reg.get<CameraTag>(player);
+                        // camera_forward / walk fwd: yaw=atan2(dy,dx) (Z-up).
+                        cam.yaw = std::atan2(bestDy, bestDx);
+                        cam.pitch = 0.0f;
+                        if (auto* ctl = reg.try_get<Controller>(player)) {
+                            // aim_player starts fly=true; wall walk needs ground
+                            // locomotion so collision/wish actually close gap.
+                            ctl->fly = false;
+                            // Always walk forward while out of unarmed reach
+                            // (~1.9 m). wishDir.x is camera-local forward.
+                            if (bestD2 > 1.2f * 1.2f)
+                                ctl->wishDir = {1.0f, 0.0f, 0.0f};
+                        }
+                    }
+                }
                 // Embodied crowd (#12): needs decay, then the utility brain
+
                 // re-plans (identity-staggered) and steers each NON-player body's
                 // Velocity — BEFORE the controller/physics that integrate it, the
                 // same locomotion path as the player ([ai.md], [npcs.md]).
@@ -2422,7 +2492,68 @@ int main(int argc, char** argv) {
                                              currentFloor);
                             }
                         }
+                    } else if (shotAction == "wall" && reg.valid(player) &&
+                               shotFramesSeen >= 30 && !doors.frozen) {
+                        // Face+walk owned by early block (post-input.apply,
+                        // pre-controller_step). Here: hold melee + log only.
+                        attackHeld = true;
+                        static int wallLog = 0;
+                        if ((wallLog++ % 120) == 0) {
+                            const Transform& ptr = reg.get<Transform>(player);
+                            const MacroGrid& g =
+                                stack.layer(activeLayer).grid();
+                            const float cx = ptr.pos.x;
+                            const float cy = ptr.pos.y;
+                            const float cz = ptr.pos.z;
+                            const float eyeZ = cz + 0.7f;
+                            float bestD2 = 1.0e12f;
+                            for (int pass = 0; pass < 2 && bestD2 >= 1.0e12f;
+                                 ++pass) {
+                                const float sampleZ =
+                                    pass == 0 ? eyeZ : (eyeZ - kCellSize);
+                                const int gz =
+                                    static_cast<int>(sampleZ / kCellSize);
+                                if (gz < 0 || gz >= kMacroDim) continue;
+                                for (int ox = -8; ox <= 8; ++ox) {
+                                    for (int oy = -8; oy <= 8; ++oy) {
+                                        if (ox == 0 && oy == 0) continue;
+                                        const float px =
+                                            cx + static_cast<float>(ox) *
+                                                     kCellSize;
+                                        const float py =
+                                            cy + static_cast<float>(oy) *
+                                                     kCellSize;
+                                        const int gx = wrap_macro(
+                                            static_cast<int>(px / kCellSize));
+                                        const int gy = wrap_macro(
+                                            static_cast<int>(py / kCellSize));
+                                        if (g.cell(gx, gy, wrap_macro(gz)) ==
+                                            kCellAir)
+                                            continue;
+                                        const float dx = wrap_delta_f(
+                                            cx, px, kWorldExtent);
+                                        const float dy = wrap_delta_f(
+                                            cy, py, kWorldExtent);
+                                        const float d2 = dx * dx + dy * dy;
+                                        if (d2 < bestD2) bestD2 = d2;
+                                    }
+                                }
+                            }
+                            const bool fly =
+                                reg.all_of<Controller>(player)
+                                    ? reg.get<Controller>(player).fly
+                                    : false;
+                            std::fprintf(
+                                stderr,
+                                "[wall] melee toward solid d=%.2f "
+                                "floor=%d frozen=%d fly=%d\n",
+                                bestD2 < 1.0e12f ? std::sqrt(bestD2)
+                                                 : -1.0f,
+                                currentFloor,
+                                doors.frozen ? 1 : 0, fly ? 1 : 0);
+                        }
                     } else if (!shotActionConsumed && shotAction == "carve" &&
+
                                shotFramesSeen >= 30 && !doors.frozen) {
                         // One demolition charge ahead of the camera, once the
                         // nav bake has landed — the same request path the
@@ -2432,6 +2563,7 @@ int main(int argc, char** argv) {
                         consoleCtx.carvePower = 0xFFFF;
                         shotActionConsumed = true;
                     } else if (!shotActionConsumed && shotAction == "status" &&
+
                                shotFramesSeen >= 30) {
                         // STATUS proof: land two authored rows so move_e3 drops
                         // below 1000 and rooted becomes true for Paupsina's
@@ -2927,12 +3059,16 @@ int main(int argc, char** argv) {
                             haveGun = game::equipped_ranged(
                                           pool.inventory(nrg->id)) !=
                                       game::kInvalidItem;
+                // Combat carves: clear, fill during melee/projectiles, dispose
+                // same step if !doors.frozen (v1 drops proposals during bake).
+                combatCarves.clear();
                 shots += game::player_ranged_step(reg, pool, activeLayer,
                                                   haveGun && attackHeld && !paused,
                                                   kSimDt, simTick, &noiseField);
                 bool meleeHit = game::player_melee_step(
                     reg, pool, bus, activeLayer, kSimDt,
-                    !haveGun && attackHeld && !paused, simTick);
+                    !haveGun && attackHeld && !paused, simTick,
+                    &stack.layer(activeLayer).grid(), &combatCarves);
                 meleeHits += game::mob_attack_step(reg,
                                    stack.layer(activeLayer).grid(),
                                    pool, bus, activeLayer,
@@ -2941,7 +3077,53 @@ int main(int argc, char** argv) {
                 // projectile never lands on the frame it is fired.
                 meleeHits += game::projectile_step(
                     reg, pool, bus, stack, activeLayer, kSimDt, simTick,
-                    &playerStatus, player);
+                    &playerStatus, player, &combatCarves);
+                // Drain combat carve proposals through the same carve_sphere
+                // path the console uses. Frozen bake: drop (v1); console keeps
+                // pending via carveRadius until bake lands.
+                if (!doors.frozen && combatCarves.count > 0) {
+                    bool anyRemoved = false;
+                    for (std::uint8_t ci = 0; ci < combatCarves.count; ++ci) {
+                        const game::CarveProposal& pr = combatCarves.items[ci];
+                        CarveOp op;
+                        op.x = pr.x;
+                        op.y = pr.y;
+                        op.z = pr.z;
+                        op.radius = pr.radius;
+                        op.power = pr.power;
+                        op.seed = pr.seed;
+                        const std::int32_t removed =
+                            carve_sphere(stack.layer(activeLayer), op,
+                                         carveScratch, carveResult);
+                        if (removed > 0) {
+                            anyRemoved = true;
+                            std::fprintf(stderr,
+                                         "[carve] COMBAT removed=%d power=%u "
+                                         "r=%.2f at (%.1f,%.1f,%.1f)\n",
+                                         removed,
+                                         static_cast<unsigned>(pr.power),
+                                         pr.radius, pr.x, pr.y, pr.z);
+                            if (particlePass.ready()) {
+                                std::uint32_t byMat[kMatCount] = {};
+                                for (const auto& v : carveResult.destroyed)
+                                    if (v.mat < kMatCount) ++byMat[v.mat];
+                                for (const auto& v : carveResult.detached)
+                                    if (v.mat < kMatCount) ++byMat[v.mat];
+                                const vec3 at{op.x, op.y, op.z};
+                                for (std::uint16_t m = 1; m < kMatCount; ++m)
+                                    if (byMat[m])
+                                        particlePass.emit_destruction_burst(
+                                            at, m,
+                                            static_cast<int>(
+                                                8 +
+                                                std::min(byMat[m] / 4u, 56u)));
+                            }
+                        }
+                    }
+                    if (anyRemoved) cubePass.invalidate();
+                    combatCarves.clear();
+                }
+
 
                 // ── Combat VFX ─────────────────────────────────────────
                 if (reg.valid(player) && particlePass.ready()) {

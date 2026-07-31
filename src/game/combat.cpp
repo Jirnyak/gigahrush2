@@ -790,7 +790,8 @@ std::uint32_t slow_step(Registry& reg, LayerId layer, float dt) {
 std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                               const LevelStack& stack, LayerId layer, float dt,
                               std::uint64_t tick, StatusSet* playerStatus,
-                              Entity playerEntity) {
+                              Entity playerEntity,
+                              CarveProposalQueue* carves) {
     if (!stack.valid(layer)) return 0;
     const MacroGrid& grid = stack.layer(layer).grid();
 
@@ -828,6 +829,11 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         // where apply_damage runs, and the Projectile entity is destroyed at the end
         // of the resolution loop, so the channel has to be read off it in phase 1.
         std::uint8_t channel = static_cast<std::uint8_t>(DamageChannel::Kinetic);
+        // Wall impact: solid geometry stopped the shot. impactPos is the contact
+        // point (projectile position at the stop). onWall is mutually exclusive
+        // with onVictim/other — a body hit never also carves the wall behind it.
+        bool onWall = false;
+        vec3 impactPos{0, 0, 0};
     };
     std::vector<Hit> resolved;
 
@@ -939,13 +945,22 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         // Solid geometry stops it. Cell-level rather than sub-voxel on purpose: a
         // shot clipping the corner of a wall should stop, and the sub-voxel mask
         // would let it slip through a half-carved cell that reads as solid.
+        // Carry p.dmg so phase 2 can propose a wall chip (carve_power_from_dmg);
+        // body damage is still skipped via onWall (no onVictim/other).
         const int cx = wrap_macro(static_cast<int>(tr.pos.x / kCellSize));
         const int cy = wrap_macro(static_cast<int>(tr.pos.y / kCellSize));
         const int cz = static_cast<int>(tr.pos.z / kCellSize);
         if (cz < 0 || cz >= kMacroDim ||
-            grid.cell(cx, cy, wrap_macro(cz)) != kCellAir)
-            resolved.push_back(Hit{e, 0, p.source, false});
+            grid.cell(cx, cy, wrap_macro(cz)) != kCellAir) {
+            Hit h{e, p.dmg, p.source, false};
+            h.onWall = true;
+            h.impactPos = tr.pos;
+            h.projType = p.proj;
+            h.channel = p.channel;
+            resolved.push_back(h);
+        }
     }
+
 
     std::uint32_t hits = 0;
     for (const Hit& h : resolved) {
@@ -1001,13 +1016,25 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                 }
             }
         }
+        // Wall chip: combat proposes, app disposes via carve_sphere ([destruct.h]).
+        // WEB is control, not demolition — skip. Power from weapon dmg (not 0).
+        if (h.onWall && carves && !web && h.dmg > 0) {
+            const std::uint16_t pow = carve_power_from_dmg(h.dmg);
+            if (carves->push(h.impactPos.x, h.impactPos.y, h.impactPos.z,
+                             kBulletCarveRadius, pow,
+                             static_cast<std::uint32_t>(tick) * 0x9e3779b9u ^
+                                 static_cast<std::uint32_t>(
+                                     entt::to_integral(h.proj)))) {
+                landed = true;
+            }
+        }
         if (landed) ++hits;
         if (reg.valid(h.proj)) reg.destroy(h.proj);
     }
     (void)bus;
-    (void)tick;
     return hits;
 }
+
 
 std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
                                  bool wantFire, float dt, std::uint64_t tick,
@@ -1144,7 +1171,8 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
 }
 
 bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId layer,
-                       float dt, bool wantsAttack, std::uint64_t tick) {
+                       float dt, bool wantsAttack, std::uint64_t tick,
+                       const MacroGrid* grid, CarveProposalQueue* carves) {
     Entity self = entt::null;
     for (auto e : reg.view<const CameraTag, const Transform>()) {
         if (reg.get<const Transform>(e).layer != layer) continue;
@@ -1203,7 +1231,43 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
         bestD2 = d2;
         best = e;
     }
-    if (best == entt::null) return false;
+    if (best == entt::null) {
+        // Wall chip: no monster in the cone — probe solid cells along the look
+        // ray and propose a carve. Without grid+carves this is bit-for-bit the
+        // pre-CARVE miss (return false, no cooldown burn on empty air).
+        if (grid && carves) {
+            const vec3 eye{me.pos.x + cam.eyeOffset.x,
+                           me.pos.y + cam.eyeOffset.y,
+                           me.pos.z + cam.eyeOffset.z};
+            bool hitWall = false;
+            vec3 hitAt{};
+            constexpr int kSteps = 8;
+            for (int i = 1; i <= kSteps; ++i) {
+                const float t = reach * (static_cast<float>(i) / kSteps);
+                const vec3 p{eye.x + fwd.x * t, eye.y + fwd.y * t,
+                             eye.z + fwd.z * t};
+                const int cx = wrap_macro(static_cast<int>(p.x / kCellSize));
+                const int cy = wrap_macro(static_cast<int>(p.y / kCellSize));
+                const int cz = static_cast<int>(p.z / kCellSize);
+                if (cz < 0 || cz >= kMacroDim) continue;
+                if (grid->cell(cx, cy, wrap_macro(cz)) != kCellAir) {
+                    hitWall = true;
+                    hitAt = p;
+                    break;
+                }
+            }
+            if (hitWall) {
+                carves->push(hitAt.x, hitAt.y, hitAt.z, kMeleeCarveRadius,
+                             carve_power_from_dmg(
+                                 static_cast<std::int16_t>(wp->dmg)),
+                             static_cast<std::uint32_t>(tick));
+                pm.cooldownMs = wp->cooldownMs;
+                (void)bus;
+                return true;
+            }
+        }
+        return false;
+    }
 
     // Same damage path, same Dead tag, same finalizer as a mob's swing. There is
     // deliberately no second way for something to die.
@@ -1216,5 +1280,6 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
     (void)tick;
     return r.hit;
 }
+
 
 } // namespace giga::game
