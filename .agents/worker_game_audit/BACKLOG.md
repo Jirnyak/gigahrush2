@@ -158,3 +158,9 @@ Feature without gameplay = DECLINED. CARVE CLOSED 2026-07-31 ~16:10 — real-gam
 - AiMemory owned in main; passed to ai_step
 - ai_release on do_ride leave, --shot travel, FloorStreamer::unload
 - Proof: shots/_run_aimem_proof.py PROOF=GREEN max_seen=419 LEAVE+RELEASE mem_rows=4096
+
+## NOTE 2026-07-31 ~16:38 padic visual package for Zhirnyak
+- NOTE_TO_ZHIRNYAK.md updated with stripes/ghost/white-dots + shot paths
+- shots/shot_padic.jpg 137KB floor 4 (cwd=repo root; textures load; 3 roughness missing TEX1)
+- stripes with albedo loaded => UV/mesher more likely than missing ktx2 alone
+- game-agent does NOT thrash src/render/**; evidence only
