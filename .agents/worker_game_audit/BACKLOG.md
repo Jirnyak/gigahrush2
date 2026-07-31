@@ -6,6 +6,7 @@ Updated: 2026-07-31 ~19:28 Samara
 ## CLOSED this session
 | ID | Item | Proof | Commit |
 |----|------|-------|--------|
+| SAVMAG | F5/F9 persist PlayerRanged + melee kills; kSaveVersion 7->8; wire +21 combat (850/950/965) | **unit GREEN:** game_test **219586 checks, 0 failures** (+40 saveload) | this commit |
 | SAVRPG | F5/F9 persist RpgStats + CraftingState; kSaveVersion 6->7; wire 829/929/944 | **unit GREEN:** game_test **219546 checks, 0 failures** (+120 saveload) | this commit |
 | ATTR1 | spend_attr_point via keys 1/2/3 → KeybindTable attr_str/agi/int → console "attr str|agi|int" → ConsoleRequest → main drain | **unit GREEN:** game_test **219426 checks, 0 failures**; suite_console attr bits + suite_keybind k1/k2/k3 | this commit |
 | AGIMV | agi_move_speed_mult_e3 multiplies ctl_->moveSpeed after base assign | live in main tick; unit pin rides ATTR1 count | this commit |
@@ -351,6 +352,7 @@ Next OPEN: idle pull/push; re-PAR1 after next foreign main thrash; stay off src/
 1. ~~**ATTR1**~~ CLOSED — keys 1/2/3 → attr_str/agi/int → cmd_attr → drain spend_attr_point
 2. ~~**AGIMV**~~ CLOSED — agi_move_speed_mult_e3 on ctl_->moveSpeed
 3. ~~**SAVRPG**~~ CLOSED — kSaveVersion 7, RpgStats+CraftingState on F5/F9
+3b. ~~**SAVMAG**~~ CLOSED — kSaveVersion 8, PlayerRanged+kills on F5/F9
 4. ~~**RPGCMBT-SHOT**~~ CLOSED — `--action rpgcmbt` live proof GREEN
 5. MAGSHOT still deferred
 
@@ -394,7 +396,7 @@ pathspec:
   tests/suite_console.inl tests/suite_keybind.inl
   CMakeLists.txt .agents/worker_game_audit/BACKLOG.md
 
-Next OPEN: MAGSHOT deferred (SAVRPG CLOSED)
+Next OPEN: MAGSHOT deferred (SAVMAG CLOSED)
 ```
 
 ## CLOSED 2026-07-31 SAVRPG — F5/F9 RpgStats + CraftingState
@@ -409,5 +411,20 @@ game_test: 219546 checks, 0 failures (was 219426; +120)
 pathspec: src/game/save.h src/game/save.cpp src/app/main.cpp
           tests/suite_saveload.inl CMakeLists.txt BACKLOG.md
 ```
-Next OPEN: MAGSHOT deferred; stay off src/render/**.
+Next OPEN: MAGSHOT deferred / POSRPG deferred; stay off src/render/**.
 
+## CLOSED 2026-07-31 SAVMAG — F5/F9 PlayerRanged + melee kills
+```
+kSaveVersion 7 -> 8
+wire: hasRanged u8 + visit_ranged (16 B) + kills u32 = kCombatSaveWire 21
+  after craft; before opened keys
+kSaveFixedWire 829 -> 850; empty 950; busy 3-opened 965
+F5: hasRanged from try_get<PlayerRanged>; kills from local tally
+F9: hasRanged -> emplace PlayerRanged; kills -> PlayerMelee{0,kills} + local
+hasRanged keeps lazy-attach honest (elevator rule — no invented chamber)
+suite_saveload: busy_run non-default mag/kills; same_run 8 CHECKs; wire_layout
+game_test: 219586 checks, 0 failures (was 219546; +40)
+pathspec: src/game/save.h src/game/save.cpp src/app/main.cpp
+          tests/suite_saveload.inl CMakeLists.txt BACKLOG.md
+```
+Next OPEN: MAGSHOT deferred / POSRPG deferred; stay off src/render/**.

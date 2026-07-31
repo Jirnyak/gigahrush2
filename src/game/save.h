@@ -57,6 +57,7 @@
 #include "game/quest.h"       // QuestLog, kQuestLogWire, quest_table_fingerprint
 #include "game/rpg.h"         // RpgStats
 #include "game/craft.h"       // CraftingState, kCraftingWire, craft_write/read
+#include "game/combat.h"      // PlayerRanged (SAVMAG v8)
 #include "world/destruct.h"   // CarveOp, CarveScratch, CarveResult, carve_sphere
 #include "world/level_stack.h"  // LayerId, and World via world/world.h
 
@@ -97,7 +98,11 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // (level/xp/attrs/psi) and CraftingState (known-recipe bits + material bank +
 // tier). F5/F9 no longer drop progression. craft_write/craft_read own the craft
 // codec ([craft.h]); the RPG fields are written little-endian field by field.
-inline constexpr std::uint32_t kSaveVersion = 7u;
+// Version 8: chambered firearm state and the cumulative kill tally travel too —
+// PlayerRanged (mag/weapon/shots/hits + transient cooldowns) and melee kills.
+// Ammo already debited into the magazine must not vanish on F9; kills already
+// survive death-possession and the elevator. [combat.h] SAVMAG
+inline constexpr std::uint32_t kSaveVersion = 8u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -215,9 +220,19 @@ inline constexpr std::size_t kRpgWire = 4 + 2 + 1 + 1 + 3 + 1;  // 12
 static_assert(kRpgWire == 12);
 // kCraftingWire (93) is defined in craft.h next to craft_write/craft_read.
 // kQuestLogWire is defined in quest.h.
+// Version 8 / SAVMAG: PlayerRanged field-by-field (NOT sizeof — host padding)
+// + presence flag + cumulative melee kills. Cooldowns ride so a mid-reload F5
+// does not free-fire on F9; hasRanged keeps lazy-attach honest (elevator rule).
+inline constexpr std::size_t kRangedWire =
+    2 + 2 + 2 + 2 + 4 + 4;  // cd, reload, mag, weapon, shots, hits = 16
+static_assert(kRangedWire == 16);
+inline constexpr std::size_t kCombatSaveWire =
+    1 + kRangedWire + 4;  // hasRanged + ranged + kills = 21
+static_assert(kCombatSaveWire == 21);
 inline constexpr std::size_t kOpenedKeyWire = 5;     // i16 floor + 3 x u8 cell
 inline constexpr std::size_t kSaveFixedWire =
-    kLedgerWire + kBookWire + kPlayerWire + kRpgWire + kCraftingWire + kQuestLogWire;
+    kLedgerWire + kBookWire + kPlayerWire + kRpgWire + kCraftingWire +
+    kCombatSaveWire + kQuestLogWire;
 
 // Sanity ceiling on the opened-container list, so a corrupt header cannot ask for a
 // huge allocation before the checksum has had a chance to reject it. 64 crates per
@@ -372,6 +387,12 @@ struct SaveState {
     // Version 7: crafting bank + known-recipe bits + tier ([craft.h]). Run state
     // beside the ledger in main; craft_write/craft_read own the 93-byte codec.
     CraftingState craft{};
+    // Version 8 / SAVMAG: chambered firearm + kill tally. hasRanged mirrors the
+    // elevator's lazy-attach rule — do not invent PlayerRanged on a body that
+    // never fired. kills is the cumulative melee tally (local `kills` in main).
+    std::uint8_t hasRanged = 0;
+    PlayerRanged ranged{};
+    std::uint32_t kills = 0;
     // Every crate emptied anywhere in the building, not just on the live floor. Only the
     // resident floor's crates are live entities, so the ones from other floors exist
     // ONLY in this list — see `refresh_opened_containers`.

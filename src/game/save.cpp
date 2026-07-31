@@ -15,6 +15,7 @@
 #include "game/quest.h"       // QuestLog, quest_log_write, quest_log_read, kQuestLogWire
 #include "game/craft.h"       // craft_write, craft_read, kCraftingWire
 #include "game/rpg.h"         // RpgStats (visit_rpg)
+#include "game/combat.h"      // PlayerRanged (visit_ranged / SAVMAG)
 #include "sim/physics.h"      // aabb_overlaps_solid — the solver's own predicate
 #include "world/types.h"      // kCellSize, kVoxelSize, wrap_macro
 #include "world/world.h"      // World::grid, for the placement probes
@@ -272,6 +273,17 @@ void visit_rpg(Ar& ar, R& r) {
     ar.u8(r.pad_);
 }
 
+// Version 8 / SAVMAG: PlayerRanged field-by-field. weapon is ItemId = u16.
+template <class Ar, class R>
+void visit_ranged(Ar& ar, R& r) {
+    ar.u16(r.cooldownMs);
+    ar.u16(r.reloadMs);
+    ar.u16(r.magCount);
+    ar.u16(r.weapon);
+    ar.u32(r.shots);
+    ar.u32(r.hits);
+}
+
 template <class Ar, class K>
 void visit_key(Ar& ar, K& k) {
     ar.i16(k.floor);
@@ -359,16 +371,18 @@ static_assert(kLedgerWire == 8 + 8 + 4 + 4 + 4 + 4 + 1);
 static_assert(kContractWire == 4 + 2 + 4 + 4 + 4 + 1 + 1 + 1);
 static_assert(kNeedsWire == 8 * 4 + 1);
 static_assert(kInventoryWire == 64 * 4);
-// kSaveFixedWire: ledger+book+player + v7 rpg(12)+craft(93) + quest log.
-// Was 724 in v6; +12 +93 = 829 in v7.
+// kSaveFixedWire: ledger+book+player + v7 rpg(12)+craft(93) + v8 combat(21)
+// + quest log. Was 829 in v7; +21 = 850 in v8.
 static_assert(kRpgWire == 12);
 static_assert(kCraftingWire == 93);
-static_assert(kSaveFixedWire == 724 + 12 + 93);  // 829
-static_assert(kSaveFixedWire == 829);
+static_assert(kRangedWire == 16);
+static_assert(kCombatSaveWire == 21);
+static_assert(kSaveFixedWire == 829 + 21);  // 850
+static_assert(kSaveFixedWire == 850);
 static_assert(kFactionWire == 36);
-// header 64 + fixed 829 + faction 36 = 929 for an empty run.
-static_assert(save_bytes_for(0) == 929);
-static_assert(save_bytes_for(0, 100, 50) == 929 + 150);
+// header 64 + fixed 850 + faction 36 = 950 for an empty run.
+static_assert(save_bytes_for(0) == 950);
+static_assert(save_bytes_for(0, 100, 50) == 950 + 150);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two
@@ -397,6 +411,10 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
         body.resize(at + kCraftingWire);
         craft_write(st.craft, body.data() + at);
     }
+    // Version 8 / SAVMAG: firearm chamber + kill tally.
+    bw.u8(st.hasRanged);
+    visit_ranged(bw, st.ranged);
+    bw.u32(st.kills);
     for (const OpenedContainerKey& k : st.opened) visit_key(bw, k);
     // Version 6: the macro world — pool table, macro-sim state, faction matrix.
     body.insert(body.end(), st.poolBlob.begin(), st.poolBlob.end());
@@ -515,6 +533,10 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
             return fail(SaveError::TooShort);
         r.skip(kCraftingWire);
     }
+    // Version 8 / SAVMAG: firearm chamber + kill tally.
+    r.u8(tmp.hasRanged);
+    visit_ranged(r, tmp.ranged);
+    r.u32(tmp.kills);
     tmp.opened.resize(static_cast<std::size_t>(h.openedCount));
     for (std::size_t i = 0; i < tmp.opened.size(); ++i) visit_key(r, tmp.opened[i]);
     // Version 6: the macro blobs, verbatim (decoded by their owners against live

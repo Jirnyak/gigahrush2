@@ -42,6 +42,7 @@
 #include "game/save.h"
 #include "game/craft.h"   // craft_init, craft_learn (SAVRPG pin)
 #include "game/rpg.h"     // fresh_rpg, RpgStats (SAVRPG pin)
+#include "game/combat.h"  // PlayerRanged (SAVMAG pin)
 #include "sim/physics.h"
 #include "world/level_stack.h"
 #include "world/world.h"
@@ -165,6 +166,17 @@ SaveState busy_run() {
         if (craft_learn(st.craft, id)) break;
     }
 
+    // Version 8 / SAVMAG: non-default chamber + kills so a dropped combat
+    // section cannot hide behind zero defaults.
+    st.hasRanged = 1;
+    st.ranged.cooldownMs = 120u;
+    st.ranged.reloadMs = 450u;
+    st.ranged.magCount = 7u;
+    st.ranged.weapon = 1;       // any non-zero ItemId; table drift is separate
+    st.ranged.shots = 42u;
+    st.ranged.hits = 11u;
+    st.kills = 99u;
+
     // Two floors' worth of emptied crates, one of them below the hub — the negative
     // floor is the case a `std::uint16_t` floor column could not express at all.
     st.opened.push_back(OpenedContainerKey{-3, 18, 42, 1, 0});
@@ -229,6 +241,16 @@ void same_run(const SaveState& a, const SaveState& b) {
     for (std::size_t i = 0; i < kCraftMaterials; ++i)
         CHECK(a.craft.mat[i] == b.craft.mat[i]);
 
+    // Version 8 / SAVMAG: chambered firearm + kill tally.
+    CHECK(a.hasRanged == b.hasRanged);
+    CHECK(a.ranged.cooldownMs == b.ranged.cooldownMs);
+    CHECK(a.ranged.reloadMs == b.ranged.reloadMs);
+    CHECK(a.ranged.magCount == b.ranged.magCount);
+    CHECK(a.ranged.weapon == b.ranged.weapon);
+    CHECK(a.ranged.shots == b.ranged.shots);
+    CHECK(a.ranged.hits == b.ranged.hits);
+    CHECK(a.kills == b.kills);
+
     CHECK(a.opened.size() == b.opened.size());
     const std::size_t nk = a.opened.size() < b.opened.size() ? a.opened.size()
                                                              : b.opened.size();
@@ -246,16 +268,18 @@ void wire_layout() {
     // depends on the compiler is a save that cannot cross hosts.
     // Derived from the serializers, not measured from a run: 33 ledger + 79 book
     // (3 x 21 + 16) + 304 player (33 needs + 256 inventory + 12 + 3) + 12 rpg +
-    // 93 craft + 308 quest log = 829, plus the fixed 36-byte faction matrix and
-    // the 64-byte header (48 v1 + 8 v2 quests + 8 v6 blobs).
+    // 93 craft + 21 combat (hasRanged+ranged+kills) + 308 quest log = 850,
+    // plus the fixed 36-byte faction matrix and the 64-byte header.
     static_assert(kSaveHeaderWire == 64);
     static_assert(kRpgWire == 12);
     static_assert(kCraftingWire == 93);
-    static_assert(kSaveFixedWire == 829);
+    static_assert(kRangedWire == 16);
+    static_assert(kCombatSaveWire == 21);
+    static_assert(kSaveFixedWire == 850);
     static_assert(kFactionWire == 36);
-    static_assert(save_bytes_for(0) == 929);
-    static_assert(save_bytes_for(3) == 929 + 15);
-    static_assert(save_bytes_for(3, 100, 50) == 929 + 15 + 150);
+    static_assert(save_bytes_for(0) == 950);
+    static_assert(save_bytes_for(3) == 950 + 15);
+    static_assert(save_bytes_for(3, 100, 50) == 950 + 15 + 150);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -265,10 +289,10 @@ void wire_layout() {
     const SaveState st = busy_run();
     save_write(st, bytes);
     CHECK(bytes.size() == save_bytes_for(3));
-    // 944 B for a full run with three emptied crates and no macro blobs (those are
+    // 965 B for a full run with three emptied crates and no macro blobs (those are
     // variable-size and pinned by macro_world_round_trips). GEOMETRY lives in the
-    // per-floor files ([save.h] modular layout), never here. v6 was 839; +12 +93.
-    CHECK(bytes.size() == 944);
+    // per-floor files ([save.h] modular layout), never here. v7 was 944; +21 SAVMAG.
+    CHECK(bytes.size() == 965);
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');

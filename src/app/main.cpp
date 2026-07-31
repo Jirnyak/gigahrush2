@@ -1839,6 +1839,18 @@ int main(int argc, char** argv) {
         else
             runState.rpg = carriedRpg;
         runState.craft = crafting;
+        // Version 8 / SAVMAG: chambered mag + kill tally. Lazy-attach stays
+        // lazy — only mark hasRanged when the body actually carries the
+        // component (elevator rule). kills is the person-state local that
+        // death-possession already stamps onto a new body.
+        if (const game::PlayerRanged* pr = reg.try_get<game::PlayerRanged>(player)) {
+            runState.hasRanged = 1;
+            runState.ranged = *pr;
+        } else {
+            runState.hasRanged = 0;
+            runState.ranged = game::PlayerRanged{};
+        }
+        runState.kills = kills;
         // REFRESH, not append and not clear. [save.h]
         game::refresh_opened_containers(reg, pl, currentFloor, runState.opened);
         // v6: the macro world travels whole — pool table, macro clock, faction
@@ -3546,6 +3558,19 @@ int main(int argc, char** argv) {
                                 reg.emplace_or_replace<game::RpgStats>(
                                     player, runState.rpg);
                             crafting = runState.craft;
+                            // Version 8 / SAVMAG: restore chambered mag (lazy)
+                            // and the cumulative kill tally so F9 does not free
+                            // the ammo already debited into the magazine, and
+                            // does not zero the HUD kills line. [combat.h]
+                            kills = runState.kills;
+                            if (reg.valid(player)) {
+                                if (runState.hasRanged)
+                                    reg.emplace_or_replace<game::PlayerRanged>(
+                                        player, runState.ranged);
+                                if (runState.kills != 0u)
+                                    reg.emplace_or_replace<game::PlayerMelee>(
+                                        player, game::PlayerMelee{0, runState.kills});
+                            }
                             // Per-floor clocks and channels reset, same as any
                             // arrival.
                             samosbor = game::samosbor_new_game(sbRng);
