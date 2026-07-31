@@ -3,6 +3,7 @@
 #include "ecs/components.h"
 #include "game/combat.h"   // PlayerRanged, PlayerMelee — live on the body, not the pool
 #include "game/embody.h"
+#include "game/rpg.h"      // RpgStats — XP/attrs/psi live on the body, not the pool
 
 namespace giga::game {
 
@@ -49,6 +50,15 @@ RideResult ride_elevator(Registry& reg, NpcPool& pool,
     PlayerMelee melee{};
     if (hadMelee) melee = reg.get<PlayerMelee>(player);
 
+    // RpgStats is the same class of defect as PlayerRanged (RPG1). embody_as_player
+    // always re-rolls via random_rpg(level, id) — deterministic base sheet for the
+    // record, but mid-run XP, spent attr points, and current psi are wiped. Death
+    // possession already captures/restores the sheet in main.cpp (carriedRpg);
+    // a ride is not a death and never hit that path. Capture before fold_back.
+    const bool hadRpg = reg.all_of<RpgStats>(player);
+    RpgStats rpg{};
+    if (hadRpg) rpg = reg.get<RpgStats>(player);
+
     // Fold back on the departed floor (writes the record's macro cell from the
     // live transform, then destroys the entity), relocate to the arrival storey
     // keeping x/y, and re-embody as player on the destination layer.
@@ -73,6 +83,10 @@ RideResult ride_elevator(Registry& reg, NpcPool& pool,
     // PlayerRanged on a body that never fired (lazy attach stays lazy).
     if (hadRanged) reg.emplace_or_replace<PlayerRanged>(ne, ranged);
     if (hadMelee) reg.emplace_or_replace<PlayerMelee>(ne, melee);
+    // Character sheet: overwrite the random_rpg roll from embody_as_player with
+    // the pre-ride progression. embody always attaches RpgStats, so this is
+    // emplace_or_replace rather than a lazy-absent guard (unlike combat).
+    if (hadRpg) reg.emplace_or_replace<RpgStats>(ne, rpg);
 
     r.player = ne;
     r.layer = dstLayer;

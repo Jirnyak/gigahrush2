@@ -748,6 +748,22 @@ static void test_elevator() {
         reg.emplace<PlayerMelee>(p, PlayerMelee{/*cooldownMs=*/0, /*kills=*/99});
     }
 
+    // RPG1: character sheet lives on the BODY. embody_as_player re-rolls via
+    // random_rpg(level, id) — deterministic base attrs, but mid-run XP / spent
+    // attr points / current psi are wiped unless captured like PlayerRanged.
+    // Mutate away from the fresh roll so a silent re-roll cannot pass the pin.
+    CHECK(reg.all_of<RpgStats>(p)); // embody_as_player always attaches
+    {
+        RpgStats& rs = reg.get<RpgStats>(p);
+        rs.xp = 777u;
+        rs.psi = 42;
+        rs.level = 5;
+        rs.attrPoints = 3;
+        rs.attr[static_cast<std::size_t>(Attr::Str)] = 11;
+        rs.attr[static_cast<std::size_t>(Attr::Agi)] = 9;
+        rs.attr[static_cast<std::size_t>(Attr::Int)] = 7;
+    }
+
     // Ride up: floor 0 -> 1. Same record, now embodied on layer 1.
     RideResult up = ride_elevator(reg, pool, registry, p, /*from=*/0, /*dir=*/+1,
                                   /*arrivalZ=*/2);
@@ -780,6 +796,16 @@ static void test_elevator() {
     CHECK(reg.get<PlayerRanged>(p).hits == 3);
     CHECK(reg.all_of<PlayerMelee>(p));
     CHECK(reg.get<PlayerMelee>(p).kills == 99);
+    // RPG1 pin: mid-run progression must survive the body swap. Without the
+    // elevator capture, embody_as_player's random_rpg would wipe xp/psi/attrs.
+    CHECK(reg.all_of<RpgStats>(p));
+    CHECK(reg.get<RpgStats>(p).xp == 777u);
+    CHECK(reg.get<RpgStats>(p).psi == 42);
+    CHECK(reg.get<RpgStats>(p).level == 5);
+    CHECK(reg.get<RpgStats>(p).attrPoints == 3);
+    CHECK(reg.get<RpgStats>(p).attr[static_cast<std::size_t>(Attr::Str)] == 11);
+    CHECK(reg.get<RpgStats>(p).attr[static_cast<std::size_t>(Attr::Agi)] == 9);
+    CHECK(reg.get<RpgStats>(p).attr[static_cast<std::size_t>(Attr::Int)] == 7);
 
     // Ride up again: floor 2 is not loaded -> no-op, player untouched.
     RideResult none = ride_elevator(reg, pool, registry, p, /*from=*/1,
@@ -812,6 +838,15 @@ static void test_elevator() {
     CHECK(reg.get<PlayerRanged>(p).hits == 3);
     CHECK(reg.all_of<PlayerMelee>(p));
     CHECK(reg.get<PlayerMelee>(p).kills == 99);
+    // RPG1 pin on second body-swap (down ride): sheet must survive both folds.
+    CHECK(reg.all_of<RpgStats>(p));
+    CHECK(reg.get<RpgStats>(p).xp == 777u);
+    CHECK(reg.get<RpgStats>(p).psi == 42);
+    CHECK(reg.get<RpgStats>(p).level == 5);
+    CHECK(reg.get<RpgStats>(p).attrPoints == 3);
+    CHECK(reg.get<RpgStats>(p).attr[static_cast<std::size_t>(Attr::Str)] == 11);
+    CHECK(reg.get<RpgStats>(p).attr[static_cast<std::size_t>(Attr::Agi)] == 9);
+    CHECK(reg.get<RpgStats>(p).attr[static_cast<std::size_t>(Attr::Int)] == 7);
 }
 
 // Count records whose id is in [lo, hi) that are currently live ECS entities

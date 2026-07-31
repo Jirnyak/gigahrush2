@@ -1,7 +1,7 @@
 # BACKLOG — worker_game_audit
 
 Lane: game audit + save/travel seams + content port. NOT render/prop.
-Updated: 2026-07-31 ~17:05 Samara
+Updated: 2026-07-31 ~17:20 Samara
 
 ## CLOSED this session
 | ID | Item | Proof | Commit |
@@ -19,6 +19,7 @@ Updated: 2026-07-31 ~17:05 Samara
 | CORPSHOT | Real-game kill→corpse→E→CORPSE LOOTED proof + --action corp harness | **PROOF=GREEN** shots/corp_diag.txt: attack d=29→0, corpse in reach once, CORPSE LOOTED TAKEN 1 ITEMS (+35 RUB); HUD kills:2 loot 35 rub; shot_corp.png; one-press interact (no spam) | c61e04b |
 | STATUS | StatusSet wired into main tick + SporeCarpet + WEB dual-apply; slow_step before physics; --action status harness | **PROOF=GREEN** shots/status_diag.txt: APPLY zh+web move_e3=180 rooted=1; tick 180→443→820 as web expires; melee_e3=700; shot_status.png | 538e139 |
 | CARVE | Combat proposes CarveProposalQueue POD; app drains via carve_sphere behind !doors.frozen; melee wall ray + bullet wall hit; --action wall harness | **PROOF=GREEN** shots/carve_diag.txt: fly=0 d=6.32→2.00; [carve] COMBAT removed=8/3/1 power=44 r=0.55; shot_carve.png 2.7MiB | this commit |
+| RPG1 | Elevator body-swap preserves RpgStats (xp/psi/level/attrPoints/attr[3]). Capture before fold_back, emplace_or_replace after embody_as_player. embody.cpp untouched. | **unit GREEN:** game_test **219387 checks, 0 failures**; test_elevator mutates sheet (xp=777…) and pins up+down rides | this commit |
 
 ## OPEN / next (priority)
 | Pri | ID | Item | Pathspec | Notes |
@@ -28,7 +29,7 @@ Updated: 2026-07-31 ~17:05 Samara
 | P2 | CNT1 | CLOSED 2026-07-31 — status+craft reference parity (no missing rows) | data/*.csv + tables | see CLOSED CNT1 |
 | P2 | PAR1 | CLOSED 2026-07-31 — both travel sites still call place_body_safely + ai_release | src/app/main.cpp read-only | see CLOSED PAR1; re-run after foreign main.cpp |
 
-| P3 | RPG1 | Optional: preserve RpgStats across elevator (embody re-rolls today) | src/game/elevator.cpp + embody | NOT FOR1 regression — known residual |
+| P3 | RPG1 | CLOSED 2026-07-31 — RpgStats survives elevator body-swap | src/game/elevator.cpp | see CLOSED RPG1; embody LOCKED |
 | P3 | MAGSHOT | Optional: real-game HUD mag line across --ride | main.cpp foreign-aware | unit pin owns body-swap |
 | P3 | M4 | CLOSED peek — Milestone 4 already CLOSED (suite_props / world_test) | .agents/worker_m4* | no leftover game work |
 | P3 | SHOTLOG | CLOSED 2026-07-31 — [place] MOVE/REFUSE in place_body_at_cell | src/game/save.cpp | see CLOSED SHOTLOG |
@@ -283,7 +284,32 @@ Live travel proof:
 ```
 Event-driven by design: log fires only when placement relocates or refuses.
 GREEN_QUIET after real travel + binary string presence = CLOSED.
-Next OPEN: RPG1 / MAGSHOT optional or re-PAR1 after foreign main.
+
+## CLOSED 2026-07-31 RPG1 — RpgStats survives elevator body-swap
+```
+Defect: same class as FOR1/MAG1. RpgStats lives on the BODY not the pool.
+  embody_as_player always emplace_or_replace random_rpg(level, id) — deterministic
+  BASE sheet for (level,id), but mid-run XP / spent attrs / psi are WIPED on every ride.
+  Death possession already captures/restores via carriedRpg in main.cpp; ride is not death.
+
+Fix (elevator.cpp only — embody.cpp LOCKED):
+  #include "game/rpg.h"
+  before fold_back: hadRpg + capture RpgStats rpg
+  after embody_as_player (after melee restore): if (hadRpg) emplace_or_replace<RpgStats>(ne, rpg)
+
+Unit pin (tests/game_test.cpp test_elevator):
+  before ride: mutate xp=777 psi=42 level=5 attrPoints=3 Str=11 Agi=9 Int=7
+  after UP ride: CHECK all fields
+  after DOWN ride: CHECK all fields again (second fold must keep sheet)
+
+Proof:
+  exe: build-win/Release/game_test.exe
+  SUM: game_test: 219387 checks, 0 failures  EXIT=0
+  CMake pin: 219370 → 219387 (+17 RPG1 up+down CHECKs)
+  pathspec: src/game/elevator.cpp tests/game_test.cpp CMakeLists.txt BACKLOG.md
+```
+Unit pin is primary (FOR1 was unit-proven the same way). embody.cpp untouched.
+Next OPEN: MAGSHOT optional or re-PAR1 after foreign main; keep pull/push loop.
 
 
 
