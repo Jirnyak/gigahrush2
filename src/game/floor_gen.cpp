@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "game/floors/padic/padic.h" // generate_padic_floor — the module's row below
 #include "sim/fluid.h"  // kFluidField — one name for the liquid field, four consumers
 #include "world/field.h"
 #include "world/materials.h"
@@ -91,6 +92,7 @@ constexpr FloorGeom kGeom[] = {
     /* Commercial  */ {  8, 16, 3, false,  0,  0, 0,  0, 0, kMatShopShutter, kMatLino    },
     /* Industrial  */ { 16, 32, 5, true,   0,  0, 2,  4, 2, kMatFactoryWall, kMatTread   },
     /* Derelict    */ {  4,  8, 2, false, 38, 12, 9, 12, 1, kMatRust,        kMatRubble  },
+    /* Padic       */ {  2,  4, 1, false, 50, 25, 20, 0, 0, kMatRust,        kMatRubble  },
 };
 static_assert(sizeof(kGeom) / sizeof(kGeom[0]) ==
                   static_cast<std::size_t>(FloorKind::Count),
@@ -239,6 +241,13 @@ constexpr RoomMix kRoomsDerelict[] = {
     {RoomBit::Storage, 30},  {RoomBit::Corridor, 26}, {RoomBit::Common, 24},
     {RoomBit::Production, 14}, {RoomBit::Bathroom, 6},
 };
+// Four bits, not two: the taxonomy invariant (suite_fluidrooms §5) is that every
+// kind's authored bits all appear on a floor, with 4 as the floor — a kind
+// narrower than that starves the per-room item/mob filters of variety.
+constexpr RoomMix kRoomsPadic[] = {
+    {RoomBit::Corridor, 34}, {RoomBit::Storage, 30},
+    {RoomBit::Common, 20},   {RoomBit::Production, 16},
+};
 
 struct RoomMixRow { const RoomMix* tab; std::uint8_t n; };
 
@@ -250,6 +259,7 @@ constexpr RoomMixRow room_row(const RoomMix (&a)[N]) {
 constexpr RoomMixRow kRoomMix[] = {
     room_row(kRoomsResidential), room_row(kRoomsCommercial),
     room_row(kRoomsIndustrial),  room_row(kRoomsDerelict),
+    room_row(kRoomsPadic),
 };
 static_assert(sizeof(kRoomMix) / sizeof(kRoomMix[0]) ==
                   static_cast<std::size_t>(FloorKind::Count),
@@ -478,8 +488,8 @@ std::uint32_t floor_doorways(int number, const FloorSpec& spec, unsigned seed,
     return n;
 }
 
-void generate_floor(World& world, int number, const FloorSpec& spec,
-                    unsigned seed) {
+void generate_default_floor(World& world, int number, const FloorSpec& spec,
+                            unsigned seed) {
     MacroGrid& g = world.grid();
     const FloorGeom& geom = geom_for(spec.kind);
     // Per-kind materials, from the table above.
@@ -691,6 +701,29 @@ void generate_floor(World& world, int number, const FloorSpec& spec,
     seed_floor_sumps(world, geom, floor_seed(seed, number));
 
     (void)spec.population; // geometry ignores population; the seeder consumes it
+}
+
+// ---------------------------------------------------------------------------
+// Floor Generator Dispatch
+// ---------------------------------------------------------------------------
+using FloorGeneratorFunc = void (*)(World&, int, const FloorSpec&, unsigned);
+
+constexpr FloorGeneratorFunc kGenerators[] = {
+    generate_default_floor, // Residential
+    generate_default_floor, // Commercial
+    generate_default_floor, // Industrial
+    generate_default_floor, // Derelict
+    generate_padic_floor,   // Padic
+};
+static_assert(sizeof(kGenerators) / sizeof(kGenerators[0]) ==
+                  static_cast<std::size_t>(FloorKind::Count),
+              "generator table must have exactly one row per FloorKind");
+
+void generate_floor(World& world, int number, const FloorSpec& spec,
+                    unsigned seed) {
+    std::size_t k = static_cast<std::size_t>(spec.kind);
+    if (k >= static_cast<std::size_t>(FloorKind::Count)) k = 0;
+    kGenerators[k](world, number, spec, seed);
 }
 
 } // namespace giga::game

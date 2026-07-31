@@ -75,6 +75,7 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
     DamageResult out;
     if (!reg.valid(target) || raw <= 0) return out;
     if (reg.all_of<Dead>(target)) return out;  // already scheduled to die
+    if (reg.all_of<GodMode>(target)) return out; // console god mode: untouchable
 
     // Mitigation happens exactly once, here. Nothing downstream sees `raw`.
     std::int16_t dmg = raw;

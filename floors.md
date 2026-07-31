@@ -81,6 +81,18 @@ balance centralized while letting each floor feel distinct.
 A floor module is **not** one fat struct — it is the intersection of small,
 orthogonal pieces, so identity, content, and residency stay decoupled:
 
+- **`FloorCatalog`** ([src/game/floor_catalog.h](src/game/floor_catalog.h)) is
+  the index ABOVE the registry: "any number → a floor definition", total over
+  `[-127, 127]`. Two row kinds with fixed precedence: **explicit claims**
+  ("number 4 is padic") and **patterns** ("every `|n| % 5 == 4` is industrial" —
+  the defaults, first-registered-match wins). An explicit claim always beats
+  every pattern, and a SECOND claim on one number is **refused at registration
+  and recorded** — `tests/suite_floorcatalog.inl` pins the default catalog
+  collision-free, so two modules can never silently share a number. The padic
+  module's claim on **4** (where the pattern chain says Industrial) is the
+  standing proof of the precedence rule. `build_default_floor_catalog` =
+  `floor_spec_for`'s V-shape chain as pattern rows + every module folder's
+  claims; the app registers a `FloorStreamer` module for each claim.
 - **`FloorRegistry`** ([src/game/floor_registry.h](src/game/floor_registry.h))
   owns only the mapping. `assign(number, module)` / `clear_number(number)` move
   the mutable label; `set_resident(module, layer)` / `evict(module)` track where
@@ -98,11 +110,38 @@ orthogonal pieces, so identity, content, and residency stay decoupled:
   rule-set catalog (population, faction mix, hostility, age window) — the "local
   modifiers" of the boundary above. `generate_floor`
   ([src/game/floor_gen.h](src/game/floor_gen.h)) turns `(seed, number, spec)` into
-  the module's whole 128³ interior as a **pure function**, so a recycled `World`
-  regenerates bit-for-bit and nothing has to be persisted floor-to-floor.
+  the module's whole 128³ interior. 
+  
+  > **Load-time Generation Freedom:** `generate_floor` is a **pure function**, so a 
+  > recycled `World` regenerates bit-for-bit and nothing has to be persisted. 
+  > However, because it runs **only at load time** (which is unbounded), you are 
+  > completely free to use **arbitrarily complex, branching, O(N³) algorithms** here 
+  > (fractals, cellular automata, standalone Python-like generators). As long as it 
+  > outputs a dense 128³ 3D geometry array at the end, it strictly obeys the engine's 
+  > rule of "bake at load, tick in O(N)".
 
 The `World` itself stays a plain engine substrate in a `LevelStack` slot; the
 module system above never subclasses or wraps it.
+
+## Module folders — one directory per floor
+
+**The folder is the module.** Everything specific to a floor lives under
+`src/game/floors/<name>/` and nowhere else — its geometry generator, special
+loot, carvers, story NPCs, quests, events, interactive objects — plus a
+`<name>.h` manifest that states the module's kind and its explicit floor-number
+claim. First resident: [src/game/floors/padic/](src/game/floors/padic/)
+(`padic.h` manifest, `padic_gen.cpp` geometry, `padic_module.cpp` registration —
+claims number **4**).
+
+**Modularity beats DRY here, deliberately.** A floor folder spells its content
+out in full even where it repeats another folder's pattern, so modules stay
+independently editable, deletable, and copy-pasteable as templates — no shared
+"floor utils" layer to tangle them. A module touches exactly two things outside
+its folder, both data rows: one registration call in
+`build_default_floor_catalog` ([floor_catalog.cpp](src/game/floor_catalog.cpp))
+and one generator row in `floor_gen.cpp`'s per-kind dispatch table. Delete the
+folder + those two rows and the floor is gone cleanly. CMake globs
+`src/game/*.cpp` recursively, so a new folder needs no build edit.
 
 ## Streaming — one live floor at a time
 

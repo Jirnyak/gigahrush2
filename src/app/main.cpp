@@ -13,8 +13,11 @@
 // (streaming, floor_stream.h / master_prompt #9). `[` and `]` ride down/up a
 // floor. `gigahrush2 maze` selects the single-world labyrinth test bed instead.
 //
-// Controls: WASD move, mouse look (hold right mouse / press Tab to toggle),
-// Space jump, F toggles fly, Q works the nearest door, [ / ] change floor, Esc quits.
+// Controls are DATA, not code: every key lives in the KeybindTable
+// ([keybind.h]) as a row mapping a scancode to a console command
+// ([console.h]), rebindable in the pause menu (Esc) and persisted to
+// gigahrush2.keys. Defaults: WASD move, mouse look (hold right mouse / Tab),
+// Space jump, F fly, Q door, E interact, [ / ] floor travel, ~ console.
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 
@@ -38,6 +41,9 @@
 #include "game/ai.h"       // the utility AI — adapted, wired, and dormant by default
 #include "game/embody.h"
 #include "game/elevator.h"
+#include "game/console.h"
+#include "game/keybind.h"
+#include "game/floor_catalog.h"
 #include "game/floor_registry.h"
 #include "game/floor_spec.h"
 #include "game/floor_stream.h"
@@ -605,6 +611,131 @@ static void DrawVendorWindowUI(bool* p_open, game::Inventory& inv, game::RunLedg
     ImGui::End();
 }
 
+// ── Debug console overlay (~) ──────────────────────────────────────────────
+// Thin ImGui shell over game::Console ([console.h]): parsing, the command
+// table, and contextual completion are HEADLESS game code (tested in
+// game_test); this only draws a log, one input line, Tab completion and
+// Up/Down history. The '`'/'~' chars are filtered so the toggle key never
+// types into its own console.
+struct ConsoleUiRefs {
+    game::Console* con;
+    const game::ConsoleContext* ctx;
+    std::vector<std::string>* log;
+    std::vector<std::string>* history;
+    int* histPos;
+};
+
+static int ConsoleInputCallback(ImGuiInputTextCallbackData* data) {
+    ConsoleUiRefs& ui = *static_cast<ConsoleUiRefs*>(data->UserData);
+    if (data->EventFlag == ImGuiInputTextFlags_CallbackCharFilter)
+        return (data->EventChar == '`' || data->EventChar == '~') ? 1 : 0;
+    if (data->EventFlag == ImGuiInputTextFlags_CallbackCompletion) {
+        const char* cands[16];
+        const std::uint32_t n = ui.con->complete(*ui.ctx, data->Buf, cands, 16);
+        if (n == 0) return 0;
+        // The word under completion starts after the last space — the same
+        // split rule Console::complete used to produce the candidates.
+        int ws = data->BufTextLen;
+        while (ws > 0 && data->Buf[ws - 1] != ' ' && data->Buf[ws - 1] != '\t')
+            --ws;
+        // Longest common prefix of the candidates; with one candidate that is
+        // the whole token and a trailing space arms the next argument.
+        char lcp[128];
+        std::snprintf(lcp, sizeof lcp, "%s", cands[0]);
+        for (std::uint32_t i = 1; i < n; ++i) {
+            std::size_t j = 0;
+            while (lcp[j] && cands[i][j] == lcp[j]) ++j;
+            lcp[j] = '\0';
+        }
+        data->DeleteChars(ws, data->BufTextLen - ws);
+        data->InsertChars(ws, lcp);
+        if (n == 1) data->InsertChars(data->CursorPos, " ");
+        if (n > 1) { // ambiguous: show the choices like a shell would
+            std::string listed;
+            for (std::uint32_t i = 0; i < n; ++i) {
+                listed += cands[i];
+                listed += ' ';
+            }
+            ui.log->push_back(listed);
+        }
+        return 0;
+    }
+    if (data->EventFlag == ImGuiInputTextFlags_CallbackHistory) {
+        if (ui.history->empty()) return 0;
+        int& pos = *ui.histPos;
+        if (data->EventKey == ImGuiKey_UpArrow) {
+            if (pos < 0) pos = static_cast<int>(ui.history->size()) - 1;
+            else if (pos > 0) --pos;
+        } else if (data->EventKey == ImGuiKey_DownArrow) {
+            if (pos >= 0 && pos < static_cast<int>(ui.history->size()) - 1) ++pos;
+            else pos = -1;
+        }
+        data->DeleteChars(0, data->BufTextLen);
+        if (pos >= 0) data->InsertChars(0, (*ui.history)[pos].c_str());
+        return 0;
+    }
+    return 0;
+}
+
+static void DrawConsoleUI(bool* p_open, bool* p_focus, char* inputBuf,
+                          std::size_t inputCap, game::Console& con,
+                          game::ConsoleContext& ctx,
+                          std::vector<std::string>& log,
+                          std::vector<std::string>& history, int& histPos) {
+    if (!*p_open) return;
+    const ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, io.DisplaySize.y * 0.45f));
+    if (!ImGui::Begin("Console", p_open,
+                      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                          ImGuiWindowFlags_NoCollapse)) {
+        ImGui::End();
+        return;
+    }
+    const float footer =
+        ImGui::GetStyle().ItemSpacing.y + ImGui::GetFrameHeightWithSpacing();
+    ImGui::BeginChild("##console_log", ImVec2(0, -footer), true,
+                      ImGuiWindowFlags_HorizontalScrollbar);
+    for (const std::string& s : log) ImGui::TextUnformatted(s.c_str());
+    if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.0f)
+        ImGui::SetScrollHereY(1.0f);
+    ImGui::EndChild();
+
+    ConsoleUiRefs ui{&con, &ctx, &log, &history, &histPos};
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    const ImGuiInputTextFlags flags =
+        ImGuiInputTextFlags_EnterReturnsTrue |
+        ImGuiInputTextFlags_CallbackCompletion |
+        ImGuiInputTextFlags_CallbackHistory |
+        ImGuiInputTextFlags_CallbackCharFilter;
+    if (*p_focus) {
+        ImGui::SetKeyboardFocusHere();
+        *p_focus = false;
+    }
+    if (ImGui::InputText("##console_in", inputBuf, inputCap, flags,
+                         ConsoleInputCallback, &ui)) {
+        if (inputBuf[0]) {
+            log.push_back(std::string("> ") + inputBuf);
+            char outMsg[256];
+            con.exec(ctx, inputBuf, outMsg, sizeof outMsg);
+            if (outMsg[0]) log.push_back(outMsg);
+            // `help` lists the registry itself, so a new command's usage/help
+            // shows up here with no console edit — the table IS the docs.
+            if (std::strcmp(inputBuf, "help") == 0) {
+                for (std::size_t i = 0; i < con.count(); ++i) {
+                    const game::ConsoleCommand& c = con.at(i);
+                    log.push_back(std::string("  ") + c.usage + " — " + c.help);
+                }
+            }
+            history.push_back(inputBuf);
+            histPos = -1;
+            inputBuf[0] = '\0';
+        }
+        *p_focus = true; // stay in the input line for the next command
+    }
+    ImGui::End();
+}
+
 // The player's unencumbered walk speed. Named here because the survival clock now
 // scales it every tick, so the base value has to live somewhere that is not the
 // Controller it overwrites — otherwise the first exhausted tick would halve the
@@ -652,6 +783,30 @@ constexpr DemoFloor kDemoFloors[] = {
     {30, game::FloorKind::Residential},  // anchor ZPlus30
 };
 
+// The floor catalog — the data-driven "ANY number -> a floor" index
+// ([floor_catalog.h]). The pattern rows (the modulo V-shape defaults) and every
+// module folder's explicit claim (the padic module claims 4) come from
+// build_default_floor_catalog; the demo rows above are layered on as this app's
+// own claims. Built once. A refused claim — two floors on one number — logs
+// loudly here and is RED in tests/suite_floorcatalog.inl, so a duplicate can
+// never silently shadow a module.
+const game::FloorCatalog& floor_catalog() {
+    static game::FloorCatalog cat;
+    static const bool ok = [] {
+        bool good = game::build_default_floor_catalog(cat);
+        for (const DemoFloor& f : kDemoFloors)
+            good &= cat.claim(f.number, {"demo", f.kind});
+        if (!good)
+            std::fprintf(stderr,
+                         "[floors] catalog claim REFUSED: %d conflicts, first at "
+                         "floor %d — two modules on one number\n",
+                         cat.conflicts(), cat.first_conflict());
+        return good;
+    }();
+    (void)ok;
+    return cat;
+}
+
 // How far the world has closed in, as a multiplier on the fog range.
 //
 // The fog is the only visual a samosbor has right now. It ramps IN over the first
@@ -675,7 +830,7 @@ float samosbor_fog_scale(const game::SamosborState& st) {
 }
 
 // Point the fresh player's camera somewhere interesting and start in fly mode
-// (F toggles) so the view is free to explore.
+// (the `fly` bind toggles) so the view is free to explore.
 void aim_player(Registry& reg, Entity player) {
     auto& cam = reg.get<CameraTag>(player);
     cam.yaw = 0.8f;
@@ -707,16 +862,15 @@ Entity setup_maze(game::NpcPool& pool, Registry& reg, LayerId layer) {
     return player;
 }
 
-// Look up the rule-set for a demo floor by its in-game number.
-const game::FloorSpec* spec_for_floor(int number) {
-    for (const DemoFloor& f : kDemoFloors)
-        if (f.number == number) return &game::floor_spec(f.kind);
-    return nullptr;
+// Kind / rule-set for ANY floor number, resolved through the catalog: an
+// explicit claim when one exists, else the pattern defaults. TOTAL — pick any
+// number and there is a floor there ([floor_catalog.h]), which is what lets
+// teleport and streaming stop caring whether a number was hand-listed.
+game::FloorKind kind_for_floor(int number) {
+    return floor_catalog().resolve(number).kind;
 }
-const DemoFloor* demo_floor(int number) {
-    for (const DemoFloor& f : kDemoFloors)
-        if (f.number == number) return &f;
-    return nullptr;
+const game::FloorSpec* spec_for_floor(int number) {
+    return &game::floor_spec(kind_for_floor(number));
 }
 
 // Ceiling on how many monsters one floor may add. The V-shape budget saturates
@@ -779,10 +933,8 @@ std::uint32_t refresh_floor_containers(Registry& reg, const World& world,
         if (reg.get<const Transform>(e).layer == layer) old_.push_back(e);
     for (Entity e : old_) reg.destroy(e);
 
-    const DemoFloor* df = demo_floor(floorNumber);
-    if (!df) return 0;
     return game::spawn_floor_containers(
-        reg, world, floorNumber, df->kind, layer,
+        reg, world, floorNumber, kind_for_floor(floorNumber), layer,
         /*seed=*/0xC0FFEEu ^ static_cast<std::uint32_t>(floorNumber) * 0x9e3779b9u,
         /*cap=*/64);
 }
@@ -790,17 +942,16 @@ std::uint32_t refresh_floor_containers(Registry& reg, const World& world,
 std::uint32_t refresh_floor_mobs(Registry& reg, const World& world, int floorNumber,
                                  LayerId layer) {
     game::despawn_layer_mobs(reg, layer);
-    const DemoFloor* df = demo_floor(floorNumber);
-    if (!df) return 0;
-    const game::FloorSpec& spec = game::floor_spec(df->kind);
-    // `df->kind` twice, deliberately: the theme drives the head-count multiplier and
+    const game::FloorKind kind = kind_for_floor(floorNumber);
+    const game::FloorSpec& spec = game::floor_spec(kind);
+    // `kind` twice, deliberately: the theme drives the head-count multiplier and
     // the kind drives the ROOM PITCH that packs are placed by. theme_for_kind is not
     // invertible, so the spawner cannot recover the second from the first.
     std::uint32_t count = game::spawn_floor_mobs(
         reg, world, floorNumber, game::danger_for_hostility(spec.hostility),
-        game::theme_for_kind(df->kind), layer,
+        game::theme_for_kind(kind), layer,
         /*seed=*/0xB0B5EEDu ^ static_cast<std::uint32_t>(floorNumber) * 0x9e3779b9u,
-        kMobSpawnCap, df->kind);
+        kMobSpawnCap, kind);
 
     // Sync Armour components for all spawned mobs according to monster_traits
     for (auto e : reg.view<const game::MobRef, const Transform>()) {
@@ -1212,11 +1363,17 @@ int main(int argc, char** argv) {
         // and leaving a floor folds its crowd back — re-entry re-embodies the same
         // records, so the population never grows per visit.
         streamer.init(stack, /*keepRadius=*/0);
-        for (const DemoFloor& f : kDemoFloors) {
+        // The registered building = the catalog's EXPLICIT CLAIMS: the demo rows
+        // plus every module folder's own number (padic's 4 arrives here without
+        // this file naming it). Pattern floors stay unregistered defaults until
+        // something claims or streams them.
+        for (int f = game::kMinFloor; f <= game::kMaxFloor; ++f) {
+            const game::FloorDef* def = floor_catalog().claimed(f);
+            if (!def) continue;
             // Vary the seed per floor so same-kind floors still differ.
             std::uint32_t fseed =
-                1337u ^ (static_cast<std::uint32_t>(f.number) * 0x9e3779b9u);
-            streamer.add_module(registry, f.number, f.kind, fseed);
+                1337u ^ (static_cast<std::uint32_t>(f) * 0x9e3779b9u);
+            streamer.add_module(registry, f, def->kind, fseed);
         }
         // Migration destinations are the REGISTERED floor set, never a [lo,hi] band.
         // This stack is legitimately sparse — {0,1,2,-8,-14,-26,-36,-50,14,30} — so a
@@ -1449,10 +1606,182 @@ int main(int argc, char** argv) {
     int fluidStepEvery = 4; // sim steps between fluid updates
     int fluidCounter = 0;
 
+    // ── Debug console (~) ───────────────────────────────────────────────
+    // The registry + default commands are game code ([console.h]); the app owns
+    // only the overlay state and the two seams: the per-frame context refresh
+    // and the teleport REQUEST (client proposes, server disposes — the app
+    // performs the ride at the top of a frame, never mid-draw).
+    game::Console console;
+    if (!game::console_register_defaults(console))
+        std::fprintf(stderr, "[console] duplicate default command REFUSED\n");
+    game::ConsoleContext consoleCtx;
+    bool showConsole = false;
+    bool consoleFocus = false;
+    char consoleInput[256] = {};
+    std::vector<std::string> consoleLog;
+    std::vector<std::string> consoleHistory;
+    int consoleHistPos = -1;
+    int pendingTeleport = game::ConsoleContext::kNoRequest;
+
+    // ── Key bindings ────────────────────────────────────────────────────
+    // Keys are DATA: a KeybindTable row maps a scancode to a console command
+    // ([keybind.h]), so the event loop below does one lookup per keydown and
+    // the old per-key `if` chain is gone. The table parses/serializes bytes;
+    // the fopen lives HERE, the same split save.h uses.
+    game::KeybindTable binds;
+    if (!game::keybind_register_defaults(binds))
+        std::fprintf(stderr, "[keybind] duplicate default bind REFUSED\n");
+    constexpr const char* kBindsPath = "gigahrush2.keys";
+    {
+        std::FILE* f = std::fopen(kBindsPath, "rb");
+        if (f) {
+            char text[4096];
+            const std::size_t n = std::fread(text, 1, sizeof text - 1, f);
+            text[n] = '\0';
+            std::fclose(f);
+            binds.parse(text);
+        }
+    }
+    input.set_move_binds(game::keybind_move_binds(binds));
+    auto save_binds = [&]() {
+        char text[4096];
+        const std::size_t n = binds.serialize(text, sizeof text);
+        std::FILE* f = std::fopen(kBindsPath, "wb");
+        if (!f) return;
+        std::fwrite(text, 1, n, f);
+        std::fclose(f);
+    };
+    // The pause menu's rebind capture: index of the row waiting for a key, -1
+    // when idle. menuPage 0 = main items, 1 = the key-binding editor.
+    int rebindCapture = -1;
+    int menuPage = 0;
+    // The display name of an action's current key, for menu rows and HUD
+    // prompts — so a rebind renames every hint with no further edit.
+    auto bind_key = [&](const char* action) -> const char* {
+        const game::KeyBind* kb = binds.find(action);
+        const char* name =
+            kb ? SDL_GetScancodeName(static_cast<SDL_Scancode>(kb->scancode))
+               : "";
+        return (name && *name) ? name : "?";
+    };
+    // The commands a key/menu row dispatches read the SAME context the typed
+    // console does; player/floor move under it, so it is re-pointed each frame.
+    auto refresh_console_ctx = [&]() {
+        consoleCtx.ecs = &reg;
+        consoleCtx.pool = &pool;
+        consoleCtx.stack = &stack;
+        consoleCtx.floors = &registry;
+        consoleCtx.catalog = &floor_catalog();
+        consoleCtx.player = player;
+        consoleCtx.currentFloor = currentFloor;
+    };
+    auto exec_command = [&](const char* line) {
+        char msg[256];
+        console.exec(consoleCtx, line, msg, sizeof msg);
+        if (showConsole && msg[0]) consoleLog.push_back(msg);
+    };
+
+    // One ride, either shape: the elevator keys ([ / ]) pass a DIRECTION, the
+    // console teleport passes an ABSOLUTE registered floor. Everything after
+    // the streamer call — the arrival refresh of mobs/containers/doors/nav/
+    // props and the per-floor clocks — is identical, which is exactly why it
+    // lives here once instead of twice.
+    auto do_ride = [&](bool absolute, int target) -> bool {
+        // Pass the player's durable record id so the destination crowd skips it
+        // instead of spawning a second player.
+        game::NpcId pid = reg.valid(player) ? reg.get<game::NpcRef>(player).id
+                                            : game::kInvalidNpc;
+        // Opened crates are world state, not a free respawn. Capture the
+        // leaving floor BEFORE travel: the streamer may recycle the LayerId and
+        // refresh_floor_containers destroys every crate on the arrival slot.
+        // Without this, loot → leave → return refills every emptied box. [save.h]
+        {
+            const LayerId leaveLayer = reg.valid(player)
+                                           ? reg.get<Transform>(player).layer
+                                           : static_cast<LayerId>(0);
+            game::refresh_opened_containers(reg, leaveLayer, currentFloor,
+                                            runState.opened);
+        }
+        game::RideResult ride =
+            absolute ? streamer.teleport(stack, registry, reg, pool, player,
+                                         currentFloor, target, /*arrivalZ=*/2,
+                                         pid)
+                     : streamer.travel(stack, registry, reg, pool, player,
+                                       currentFloor, target, /*arrivalZ=*/2,
+                                       pid);
+        if (!ride.moved) return false;
+        player = ride.player;
+        currentFloor = ride.floor;
+        // Deepest point reached, for the run score. |z|, because depth is
+        // bidirectional: the roof is as far from safety as the basement.
+        // [extraction.h]
+        game::record_floor(ledger, currentFloor);
+        // A new floor gets its own clock at its own depth. Not carried over:
+        // the cooldown is a function of |z|, so inheriting a 30-minute surface
+        // gap into the void would silently cancel the entire depth gradient.
+        samosbor = game::samosbor_new_game(sbRng);
+        // A rumour is about a FLOOR, so carrying one across a ride makes it
+        // false. Caught on a capture: the line read "самосбор здесь часто
+        // (17.2%)" while the HUD's own duty for the floor underfoot said 35.0%
+        // — the number was true of the floor the speaker was standing on, two
+        // rides ago. The whole premise of this system is that a rumour is
+        // checkable, so a stale one is worse than none. [rumour.h]
+        rumourLine[0] = 0;
+        rumourAt = 0;
+        // A gunshot on the floor you just left must not be audible to the crowd
+        // on the one you arrived at. The streamer RECYCLES LayerId slots, so a
+        // surviving record would not merely be stale — it would match the new
+        // floor's layer id and be heard there. [noise.h]
+        game::noise_clear(noiseField);
+        currentSpec = spec_for_floor(currentFloor);
+        // Streaming recycles World objects in place, so the cube pass cannot
+        // detect the new geometry by identity.
+        cubePass.invalidate();
+        // Mobs belong to the floor, not to the player: the departed layer's are
+        // destroyed and the arrival's are spawned fresh (deterministically, so
+        // a floor looks the same every visit).
+        LayerId nl = reg.get<Transform>(player).layer;
+        refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
+        refresh_floor_containers(reg, stack.layer(nl), currentFloor, nl);
+        // Re-empty crates already looted on a prior visit to this floor.
+        // Deterministic spawn would otherwise refill them — the brick this pair
+        // closes. Same seam as F9 apply. [save.h]
+        game::apply_opened_containers(reg, nl, currentFloor,
+                                      runState.opened.data(),
+                                      runState.opened.size());
+        // Doors before the bake, frozen for its duration. [door.h]
+        if (currentSpec)
+            doorsBuilt = game::door_build(stack.layer(nl), doors, currentFloor,
+                                          *currentSpec, kDoorSeed);
+        doors.frozen = true;
+        begin_floor_nav(stack.layer(nl), nav);
+        if (propPass.ready()) {
+            std::uint32_t fseed =
+                1337u ^ (static_cast<std::uint32_t>(currentFloor) * 0x9e3779b9u);
+            propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);
+        }
+        // ride_elevator keeps x/y and plants z=kArrivalZ. ~1-in-5 Residential
+        // columns are solid at that z, so without this the body freezes in a
+        // wall forever (physics backs out every tick). F9 already calls
+        // place_body_at_cell; keyboard/--shot did not. [save.h]
+        game::place_body_safely(reg, stack.layer(nl), player);
+        return true;
+    };
+
     while (running) {
         std::uint64_t now = SDL_GetPerformanceCounter();
         float frameDt = static_cast<float>((now - prevTicks) / freq);
         prevTicks = now;
+
+        // A console teleport is executed HERE, at the top of a frame, never in
+        // the ImGui callback that requested it: mid-draw the frame's layer and
+        // camera state are already committed, and yanking the world under them
+        // is exactly the class of bug the request seam exists to prevent.
+        if (pendingTeleport != game::ConsoleContext::kNoRequest) {
+            const int dst = pendingTeleport;
+            pendingTeleport = game::ConsoleContext::kNoRequest;
+            do_ride(/*absolute=*/true, dst);
+        }
 
         // Events are transient by design ([events.md]): whatever was published
         // last frame has had its chance to be consumed. Clearing here rather than
@@ -1514,212 +1843,45 @@ int main(int argc, char** argv) {
         if (frameDt > 0.1f) frameDt = 0.1f; // clamp after a stall
 
         // --- events --------------------------------------------------------
+        // Keydown dispatch is ONE table lookup ([keybind.h]): the row's console
+        // command runs through the same registry a typed line uses, and its
+        // effect lands as a request bit drained after this loop. The old per-key
+        // `if` chain is gone — adding a key action is a KeybindTable row plus a
+        // ConsoleCommand row, no app edit.
+        refresh_console_ctx();
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             hud.process_event(e);
             if (e.type == SDL_EVENT_QUIT) running = false;
             if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat) {
-                // Esc toggles the pause menu (it no longer quits directly — quit
-                // is a button in that menu). Pausing frees the mouse cursor so the
-                // menu is clickable and the OS window can be moved / minimised.
-                if (e.key.scancode == SDL_SCANCODE_ESCAPE) {
-                    paused = !paused;
-                    input.set_mouselook(!paused);
-                    SDL_SetWindowRelativeMouseMode(window, !paused);
+                if (rebindCapture >= 0) {
+                    // The menu is listening: this key becomes the row's binding
+                    // (Esc cancels). Saved immediately — a rebind the app then
+                    // crashes on would otherwise be lost.
+                    if (e.key.scancode != SDL_SCANCODE_ESCAPE)
+                        binds.rebind(binds.at(static_cast<std::size_t>(rebindCapture)).action,
+                                     static_cast<std::uint16_t>(e.key.scancode));
+                    rebindCapture = -1;
+                    save_binds();
+                    input.set_move_binds(game::keybind_move_binds(binds));
+                } else {
+                    const bool typing = ImGui::GetIO().WantTextInput;
+                    const game::KeyBind* kb = binds.find_scancode(
+                        static_cast<std::uint16_t>(e.key.scancode));
+                    // Plain rows fire only in live play; kBindAlways rows (menu,
+                    // console, hud) fire while paused, kBindTyping rows even
+                    // while a text field owns the keyboard — so the toggle key
+                    // can always close what it opened. This gate also stops a
+                    // vendor-filter keystroke from eating rations, which the old
+                    // chain happily did.
+                    if (kb && (!typing || (kb->flags & game::kBindTyping)) &&
+                        (!paused || (kb->flags & game::kBindAlways)))
+                        exec_command(kb->command);
                 }
-                if (e.key.scancode == SDL_SCANCODE_H || e.key.scancode == SDL_SCANCODE_F1) {
-                    showHud = !showHud;
-                }
-                if (!paused && e.key.scancode == SDL_SCANCODE_TAB) {
-                    bool on = !input.mouselook();
-                    input.set_mouselook(on);
-                    SDL_SetWindowRelativeMouseMode(window, on);
-                }
-                // Floor travel (#8/#9): [ down a floor, ] up a floor. Streams the
-                // destination in on demand and folds the departed floor's crowd
-                // back into the cold pool, so only ONE floor is ever live. Resolved
-                // by floor NUMBER through the FloorRegistry. Cell z=2 is air on
-                // every kind's ground storey; the player keeps x/y and fly frees
-                // them if boxed in. No-op at the ends of the stack (no module).
-                if (!paused && (e.key.scancode == SDL_SCANCODE_LEFTBRACKET ||
-                                e.key.scancode == SDL_SCANCODE_RIGHTBRACKET)) {
-                    const int dir =
-                        e.key.scancode == SDL_SCANCODE_RIGHTBRACKET ? +1 : -1;
-                    // Pass the player's durable record id so the destination crowd
-                    // skips it instead of spawning a second player.
-                    game::NpcId pid = reg.valid(player)
-                                          ? reg.get<game::NpcRef>(player).id
-                                          : game::kInvalidNpc;
-                    // Opened crates are world state, not a free respawn. Capture the
-                    // leaving floor BEFORE travel: the streamer may recycle the LayerId
-                    // and refresh_floor_containers destroys every crate on the arrival
-                    // slot. Without this, loot → leave → return refills every emptied
-                    // box. F5 already does the same; travel was the missing call site.
-                    // [save.h]
-                    {
-                        const LayerId leaveLayer =
-                            reg.valid(player) ? reg.get<Transform>(player).layer
-                                              : static_cast<LayerId>(0);
-                        game::refresh_opened_containers(reg, leaveLayer, currentFloor,
-                                                        runState.opened);
-                    }
-                    game::RideResult ride = streamer.travel(
-                        stack, registry, reg, pool, player, currentFloor, dir,
-                        /*arrivalZ=*/2, pid);
-                    if (ride.moved) {
-                        player = ride.player;
-                        currentFloor = ride.floor;
-                        // Deepest point reached, for the run score. |z|, because
-                        // depth is bidirectional: the roof is as far from safety as
-                        // the basement. [extraction.h]
-                        game::record_floor(ledger, currentFloor);
-                        // A new floor gets its own clock at its own depth. Not
-                        // carried over: the cooldown is a function of |z|, so
-                        // inheriting a 30-minute surface gap into the void would
-                        // silently cancel the entire depth gradient.
-                        samosbor = game::samosbor_new_game(sbRng);
-                        // A rumour is about a FLOOR, so carrying one across a ride
-                        // makes it false. Caught on a capture: the line read
-                        // "самосбор здесь часто (17.2%)" while the HUD's own duty for
-                        // the floor underfoot said 35.0% — the number was true of the
-                        // floor the speaker was standing on, two rides ago. The whole
-                        // premise of this system is that a rumour is checkable, so a
-                        // stale one is worse than none. [rumour.h]
-                        rumourLine[0] = 0;
-                        rumourAt = 0;
-                        // A gunshot on the floor you just left must not be audible to
-                        // the crowd on the one you arrived at. The streamer RECYCLES
-                        // LayerId slots, so a surviving record would not merely be
-                        // stale — it would match the new floor's layer id and be heard
-                        // there. [noise.h]
-                        game::noise_clear(noiseField);
-                        currentSpec = spec_for_floor(currentFloor);
-                        // Streaming recycles World objects in place, so the cube
-                        // pass cannot detect the new geometry by identity.
-                        cubePass.invalidate();
-                        // Mobs belong to the floor, not to the player: the
-                        // departed layer's are destroyed and the arrival's are
-                        // spawned fresh (deterministically, so a floor looks the
-                        // same every visit).
-                        LayerId nl = reg.get<Transform>(player).layer;
-                        refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
-                        refresh_floor_containers(reg, stack.layer(nl),
-                                                 currentFloor, nl);
-                        // Re-empty crates already looted on a prior visit to this
-                        // floor. Deterministic spawn would otherwise refill them —
-                        // the brick this pair closes. Same seam as F9 apply. [save.h]
-                        game::apply_opened_containers(
-                            reg, nl, currentFloor, runState.opened.data(),
-                            runState.opened.size());
-                        // Doors before the bake, frozen for its duration. [door.h]
-                        if (currentSpec)
-                            doorsBuilt = game::door_build(
-                                stack.layer(nl), doors, currentFloor,
-                                *currentSpec, kDoorSeed);
-                        doors.frozen = true;
-                        begin_floor_nav(stack.layer(nl), nav);
-                        if (propPass.ready()) {
-                            std::uint32_t fseed = 1337u ^ (static_cast<std::uint32_t>(currentFloor) * 0x9e3779b9u);
-                            propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);
-                        }
-                        // ride_elevator keeps x/y and plants z=kArrivalZ. ~1-in-5
-                        // Residential columns are solid at that z, so without this
-                        // the body freezes in a wall forever (physics backs out
-                        // every tick). F9 already calls place_body_at_cell;
-                        // keyboard/--shot did not. [save.h]
-                        game::place_body_safely(reg, stack.layer(nl), player);
-                    }
-                }
-
             }
             // While the pause menu is up, ignore all look/move input: ImGui owns
             // the cursor and the game is frozen.
             if (!paused) {
-                // Hold right mouse button to look, release to free the cursor.
-                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
-                    e.key.scancode == SDL_SCANCODE_H) {
-                    healWanted = true;
-                }
-                // G eats, T drinks. Recorded as INTENT for the same reason H is: the
-                // event loop has no `activeLayer` in scope, and consuming an item
-                // mutates a pool row, which belongs on the sim clock. Until this
-                // existed `use_best_food` and `use_best_drink` had ZERO call sites,
-                // so food/water/sleep fell monotonically and every run was a
-                // fixed-length death timer with no way to restore a reserve.
-                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
-                    e.key.scancode == SDL_SCANCODE_G)
-                    eatWanted = true;
-                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
-                    e.key.scancode == SDL_SCANCODE_T)
-                    drinkWanted = true;
-                // Q works the nearest door. Recorded as intent for the same reason
-                // as the trades below: a door moves solid geometry, so it belongs on
-                // the sim's clock, not the window's, and the event loop has no
-                // `activeLayer` in scope.
-                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
-                    e.key.scancode == SDL_SCANCODE_Q)
-                    doorWanted = true;
-                // P projects mind into the nearest living NPC resident.
-                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
-                    e.key.scancode == SDL_SCANCODE_P)
-                    possessWanted = true;
-                // F5 saves the run, F9 loads it.
-                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
-                    e.key.scancode == SDL_SCANCODE_F5)
-                    saveWanted = true;
-                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
-                    e.key.scancode == SDL_SCANCODE_F9)
-                    loadWanted = true;
-                // B sells the haul, R re-supplies. Recorded as INTENT here and acted
-                // on in the sim loop, the same shape `healWanted` uses — the event loop
-                // has no `activeLayer` in scope, and more importantly a trade is a
-                // world mutation and belongs on the sim's clock, not the window's.
-                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
-                    e.key.scancode == SDL_SCANCODE_B) {
-                    sellWanted = true;
-                    showVendorWindow = !showVendorWindow;
-                    if (showVendorWindow) input.set_mouselook(false);
-                }
-                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
-                    e.key.scancode == SDL_SCANCODE_V) {
-                    showVendorWindow = !showVendorWindow;
-                    if (showVendorWindow) input.set_mouselook(false);
-                }
-                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
-                    e.key.scancode == SDL_SCANCODE_R)
-                    buyWanted = true;
-                // C crafts (or reads a blueprint), X strips the cheapest junk in the bag.
-                // Both keys were free: an rg for SDL_SCANCODE_C and _X across src/ found
-                // nothing, and G eats / T drinks already.
-                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
-                    e.key.scancode == SDL_SCANCODE_C) {
-                    craftWanted = true;
-                    showCraftingWindow = !showCraftingWindow;
-                    if (showCraftingWindow) input.set_mouselook(false);
-                }
-                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
-                    e.key.scancode == SDL_SCANCODE_X)
-                    scrapWanted = true;
-                // E takes the job on offer — contract first, then quest if no
-                // contract is pending. Both clear on take so a second press is
-                // harmless. Quest accept refuses a dead giver or a chain gate;
-                // contract_accept refuses the same. [quest.h, contract.h]
-                if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
-                    e.key.scancode == SDL_SCANCODE_E) {
-                    interactWanted = true;
-                    if (game::contract_accept(contracts, offer, ledger)) {
-                        offer = game::Contract{};
-                        offerLine[0] = 0;
-                    } else if (game::quest_valid(questOffer) &&
-                               questOfferGiver != game::kInvalidNpc &&
-                               game::quest_accept(quests, pool, questOffer,
-                                                  questOfferGiver,
-                                                  currentFloor, ledger)) {
-                        questOffer = game::kInvalidQuest;
-                        questOfferGiver = game::kInvalidNpc;
-                        questOfferLine[0] = 0;
-                    }
-                }
                 if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
                     e.button.button == SDL_BUTTON_LEFT) {
                     attackHeld = true;
@@ -1741,6 +1903,102 @@ int main(int argc, char** argv) {
                 // relevant when look is off — relative mode hides the cursor).
                 if (input.mouselook() || !ImGui::GetIO().WantCaptureMouse)
                     input.handle_event(e);
+            }
+        }
+
+        // --- console requests ---------------------------------------------
+        // Drain the one-shot request bits ([console.h]) that bound keys, menu
+        // buttons and typed console lines all set. The app performs each effect
+        // HERE, at its safe point — the same client-proposes/server-disposes
+        // seam the floor teleport rides.
+        {
+            using game::ConsoleRequest;
+            const std::uint32_t reqs = consoleCtx.take_requests();
+            auto has = [&](ConsoleRequest r) {
+                return (reqs & game::request_bit(r)) != 0;
+            };
+            if (has(ConsoleRequest::Quit)) running = false;
+            if (has(ConsoleRequest::Menu)) {
+                // Pausing frees the cursor so the menu is clickable and the OS
+                // window can be moved / minimised; leaving re-arms mouselook.
+                paused = !paused;
+                if (!paused) {
+                    menuPage = 0;
+                    rebindCapture = -1;
+                }
+                input.set_mouselook(!paused);
+                SDL_SetWindowRelativeMouseMode(window, !paused);
+            }
+            if (has(ConsoleRequest::Hud)) showHud = !showHud;
+            if (has(ConsoleRequest::Console)) {
+                // Opening frees the cursor so the input line is clickable; the
+                // '`' char itself is filtered in the InputText callback so the
+                // toggle never types into its own console.
+                showConsole = !showConsole;
+                consoleFocus = showConsole;
+                if (showConsole) {
+                    input.set_mouselook(false);
+                    SDL_SetWindowRelativeMouseMode(window, false);
+                }
+            }
+            if (has(ConsoleRequest::Mouselook) && !paused) {
+                const bool on = !input.mouselook();
+                input.set_mouselook(on);
+                SDL_SetWindowRelativeMouseMode(window, on);
+            }
+            // Floor travel (#8/#9): streams the destination in on demand and
+            // folds the departed floor's crowd back into the cold pool, so only
+            // ONE floor is ever live. The whole depart/arrive sequence is shared
+            // with the console teleport — see do_ride above the loop.
+            if (has(ConsoleRequest::FloorDown) && !paused)
+                do_ride(/*absolute=*/false, -1);
+            if (has(ConsoleRequest::FloorUp) && !paused)
+                do_ride(/*absolute=*/false, +1);
+            // Fly stays a PlayerCommand button: the bridge queues the edge and
+            // the server flips the state ([netcode-seam]).
+            if (has(ConsoleRequest::Fly) && !paused) input.queue_fly_toggle();
+            // Survival / persistence / trade one-shots are recorded as INTENT
+            // and acted on in the sim loop, exactly as before: they mutate pool
+            // rows or world state, which belongs on the sim's clock, not the
+            // window's. (Set even while paused so a menu button lands on the
+            // first tick after resume rather than vanishing.)
+            if (has(ConsoleRequest::Heal)) healWanted = true;
+            if (has(ConsoleRequest::Eat)) eatWanted = true;
+            if (has(ConsoleRequest::Drink)) drinkWanted = true;
+            if (has(ConsoleRequest::Door)) doorWanted = true;
+            if (has(ConsoleRequest::Possess)) possessWanted = true;
+            if (has(ConsoleRequest::Save)) saveWanted = true;
+            if (has(ConsoleRequest::Load)) loadWanted = true;
+            if (has(ConsoleRequest::Sell)) sellWanted = true;
+            if (has(ConsoleRequest::Resupply)) buyWanted = true;
+            if (has(ConsoleRequest::Scrap)) scrapWanted = true;
+            if (has(ConsoleRequest::Vendor)) {
+                showVendorWindow = !showVendorWindow;
+                if (showVendorWindow) input.set_mouselook(false);
+            }
+            if (has(ConsoleRequest::Craft)) {
+                craftWanted = true;
+                showCraftingWindow = !showCraftingWindow;
+                if (showCraftingWindow) input.set_mouselook(false);
+            }
+            // Interact takes the job on offer — contract first, then quest if
+            // no contract is pending. Both clear on take so a second press is
+            // harmless. Quest accept refuses a dead giver or a chain gate;
+            // contract_accept refuses the same. [quest.h, contract.h]
+            if (has(ConsoleRequest::Interact)) {
+                interactWanted = true;
+                if (game::contract_accept(contracts, offer, ledger)) {
+                    offer = game::Contract{};
+                    offerLine[0] = 0;
+                } else if (game::quest_valid(questOffer) &&
+                           questOfferGiver != game::kInvalidNpc &&
+                           game::quest_accept(quests, pool, questOffer,
+                                              questOfferGiver, currentFloor,
+                                              ledger)) {
+                    questOffer = game::kInvalidQuest;
+                    questOfferGiver = game::kInvalidNpc;
+                    questOfferLine[0] = 0;
+                }
             }
         }
 
@@ -1775,7 +2033,16 @@ int main(int argc, char** argv) {
                 // tick N+1 rather than racing the pass that fired it.
                 game::noise_step(noiseField,
                                  static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f));
-                input.apply(reg, kSimDt);
+                // While the console input line owns the keyboard, WASD is text,
+                // not movement: skip the bridge and park the intent so the body
+                // does not glide on the last pre-console wishDir.
+                if (showConsole && ImGui::GetIO().WantTextInput) {
+                    if (reg.valid(player))
+                        if (auto* c = reg.try_get<Controller>(player))
+                            c->wishDir = vec3{0, 0, 0};
+                } else {
+                    input.apply(reg, kSimDt);
+                }
                 // Embodied crowd (#12): needs decay, then the utility brain
                 // re-plans (identity-staggered) and steers each NON-player body's
                 // Velocity — BEFORE the controller/physics that integrate it, the
@@ -3275,6 +3542,21 @@ int main(int argc, char** argv) {
         }
 
         // --- Interactive ImGui Crafting Workbench & Trader Windows ---
+        // ── Debug console (~) ──────────────────────────────────────────
+        // Context is refreshed every frame (player/floor move under it), the
+        // window draws whenever open — paused or not — and a teleport request
+        // is carried out at the top of the NEXT frame (see do_ride).
+        if (showConsole) {
+            refresh_console_ctx();
+            DrawConsoleUI(&showConsole, &consoleFocus, consoleInput,
+                          sizeof consoleInput, console, consoleCtx, consoleLog,
+                          consoleHistory, consoleHistPos);
+            if (consoleCtx.requestFloor != game::ConsoleContext::kNoRequest) {
+                pendingTeleport = consoleCtx.requestFloor;
+                consoleCtx.requestFloor = game::ConsoleContext::kNoRequest;
+            }
+        }
+
         if (showCraftingWindow && reg.valid(player)) {
             const Transform& ct = reg.get<Transform>(player);
             bool nearTerm = false;
@@ -3316,6 +3598,14 @@ int main(int argc, char** argv) {
         if (showHud && !paused && reg.valid(player)) {
             const vec3 ppos = reg.get<Transform>(player).pos;
             const char* promptText = nullptr;
+            // Prompts name the BOUND key, not a literal: rebind `door` in the
+            // menu and every hint follows.
+            char promptBuf[96];
+            auto set_prompt = [&](const char* action, const char* what) {
+                std::snprintf(promptBuf, sizeof promptBuf, "[%s]  %s",
+                              bind_key(action), what);
+                promptText = promptBuf;
+            };
 
             // Door proximity (same indexed search door_toggle_near uses)
             std::uint32_t nearDoor = game::door_query_near(doors, ppos);
@@ -3330,11 +3620,11 @@ int main(int argc, char** argv) {
                         if (pool.valid(nr->id)) pInv = &pool.inventory(nr->id);
                     }
                     const bool hasCard = pInv && game::inventory_has_keycard(*pInv, d.keycardTier);
-                    promptText = hasCard ? "[Q]  UNLOCK DOOR" : "[Q]  KEYCARD REQUIRED";
+                    set_prompt("door", hasCard ? "UNLOCK DOOR" : "KEYCARD REQUIRED");
                 } else if (isShutOrLocked) {
-                    promptText = "[Q]  OPEN DOOR";
+                    set_prompt("door", "OPEN DOOR");
                 } else {
-                    promptText = "[Q]  CLOSE DOOR";
+                    set_prompt("door", "CLOSE DOOR");
                 }
             }
 
@@ -3346,7 +3636,7 @@ int main(int argc, char** argv) {
                     const float dy = ppos.y - tp.y;
                     const float dz = wrap_delta_f(ppos.z, tp.z, kWorldExtent);
                     if (dx * dx + dy * dy + dz * dz < 4.0f * 4.0f) {
-                        promptText = "[E]  TERMINAL (DOOR LOCKS)";
+                        set_prompt("interact", "TERMINAL (DOOR LOCKS)");
                         break;
                     }
                 }
@@ -3364,7 +3654,7 @@ int main(int argc, char** argv) {
                         int scy = static_cast<int>(sp.y / kCellSize);
                         int scz = static_cast<int>(sp.z / kCellSize);
                         if (!powerGrid.is_shield_destroyed(scx, scy, scz)) {
-                            promptText = "[E]  SABOTAGE ELECTRICAL SHIELD";
+                            set_prompt("interact", "SABOTAGE ELECTRICAL SHIELD");
                             break;
                         }
                     }
@@ -3380,7 +3670,7 @@ int main(int argc, char** argv) {
                     const float dy = ppos.y - cpos.y;
                     const float dz = wrap_delta_f(ppos.z, cpos.z, kWorldExtent);
                     if (dx * dx + dy * dy + dz * dz < 2.2f * 2.2f) {
-                        promptText = "[E]  LOOT CORPSE";
+                        set_prompt("interact", "LOOT CORPSE");
                         break;
                     }
                 }
@@ -3398,7 +3688,7 @@ int main(int argc, char** argv) {
                     const float dy = ppos.y - npos.y;
                     const float dz = wrap_delta_f(ppos.z, npos.z, kWorldExtent);
                     if (dx * dx + dy * dy + dz * dz < 6.0f * 6.0f) {
-                        promptText = "[P]  POSSESS SURVIVOR";
+                        set_prompt("possess", "POSSESS SURVIVOR");
                         break;
                     }
                 }
@@ -3410,7 +3700,7 @@ int main(int argc, char** argv) {
                     if (pool.valid(nrg->id)) {
                         const auto& nd = pool.needs(nrg->id);
                         if (nd.pee >= 30.0f || nd.poo >= 30.0f) {
-                            promptText = "[E]  RELIEVE BLADDER/BOWEL";
+                            set_prompt("interact", "RELIEVE BLADDER/BOWEL");
                         }
                     }
                 }
@@ -3435,10 +3725,12 @@ int main(int argc, char** argv) {
             }
         }
 
-        // Pause menu (Esc). A proper, extensible overlay: the sim is frozen and
-        // the cursor is free, so this is the home for quit and future items
-        // (settings, save/load, floor jump). Labels are ASCII — the default ImGui
-        // font ships no Cyrillic glyphs.
+        // Pause menu (Esc). Extensible BY DATA: a main-page item is a label plus
+        // a console line, so the same row already works from the keyboard and
+        // the typed console, and a future option (settings, floor jump, ...) is
+        // one table entry — never a new handler. The Key Bindings page edits the
+        // KeybindTable live and persists it. Labels are ASCII — the default
+        // ImGui font ships no Cyrillic glyphs.
         if (paused) {
             ImGuiIO& io = ImGui::GetIO();
             ImGui::SetNextWindowPos(
@@ -3448,17 +3740,77 @@ int main(int argc, char** argv) {
                          ImGuiWindowFlags_AlwaysAutoResize |
                              ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove |
                              ImGuiWindowFlags_NoSavedSettings);
-            ImGui::TextUnformatted("Paused");
-            ImGui::Separator();
             const ImVec2 btn(220.0f, 0.0f);
-            if (ImGui::Button("Resume", btn)) {
-                paused = false;
-                input.set_mouselook(true);
-                SDL_SetWindowRelativeMouseMode(window, true);
+            if (menuPage == 0) {
+                ImGui::TextUnformatted("Paused");
+                ImGui::Separator();
+                struct MenuItem {
+                    const char* label;
+                    const char* command; // a console row — the menu adds nothing
+                };
+                static constexpr MenuItem kItems[] = {
+                    {"Resume", "menu"},
+                    {"Save Game", "save"},
+                    {"Load Game", "load"},
+                };
+                refresh_console_ctx();
+                for (const MenuItem& item : kItems)
+                    if (ImGui::Button(item.label, btn)) exec_command(item.command);
+                if (ImGui::Button("Key Bindings", btn)) menuPage = 1;
+                ImGui::Spacing();
+                if (ImGui::Button("Quit", btn)) exec_command("quit");
+            } else {
+                ImGui::TextUnformatted("Key Bindings");
+                ImGui::Separator();
+                ImGui::BeginChild("##bind_rows", ImVec2(420.0f, 360.0f), true);
+                if (ImGui::BeginTable("##binds", 3,
+                                      ImGuiTableFlags_RowBg |
+                                          ImGuiTableFlags_SizingStretchProp)) {
+                    ImGui::TableSetupColumn("Action");
+                    ImGui::TableSetupColumn("Key");
+                    ImGui::TableSetupColumn("##rebind",
+                                            ImGuiTableColumnFlags_WidthFixed,
+                                            80.0f);
+                    for (std::size_t i = 0; i < binds.count(); ++i) {
+                        const game::KeyBind& b = binds.at(i);
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextUnformatted(b.action);
+                        ImGui::TableSetColumnIndex(1);
+                        if (rebindCapture == static_cast<int>(i)) {
+                            ImGui::TextColored(ImVec4(1.0f, 0.9f, 0.4f, 1.0f),
+                                               "press a key...");
+                        } else {
+                            const char* keyName = SDL_GetScancodeName(
+                                static_cast<SDL_Scancode>(b.scancode));
+                            ImGui::Text("%s", (keyName && *keyName) ? keyName : "?");
+                            if (binds.conflicts(b.action) > 0) {
+                                ImGui::SameLine();
+                                ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
+                                                   "(conflict)");
+                            }
+                        }
+                        ImGui::TableSetColumnIndex(2);
+                        char rebindId[48];
+                        std::snprintf(rebindId, sizeof rebindId, "Rebind##%zu", i);
+                        if (ImGui::Button(rebindId))
+                            rebindCapture = static_cast<int>(i);
+                    }
+                    ImGui::EndTable();
+                }
+                ImGui::EndChild();
+                if (ImGui::Button("Reset Defaults", btn)) {
+                    binds.clear();
+                    game::keybind_register_defaults(binds);
+                    save_binds();
+                    input.set_move_binds(game::keybind_move_binds(binds));
+                    rebindCapture = -1;
+                }
+                if (ImGui::Button("Back", btn)) {
+                    menuPage = 0;
+                    rebindCapture = -1;
+                }
             }
-            // --- future menu items go here (settings, save/load, floor jump) ---
-            ImGui::Spacing();
-            if (ImGui::Button("Quit", btn)) running = false;
             ImGui::End();
         }
 

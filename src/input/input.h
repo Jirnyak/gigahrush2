@@ -14,6 +14,7 @@
 #pragma once
 
 #include "ecs/registry.h"
+#include "game/keybind.h"
 #include "game/player_command.h"
 
 union SDL_Event;
@@ -26,6 +27,15 @@ public:
     // ImGui HUD.
     void set_mouselook(bool on) { mouselook_ = on; }
     bool mouselook() const { return mouselook_; }
+
+    // The held movement keys, from the keybinding table ([keybind.h]). The app
+    // pushes a fresh set after any rebind; defaults are WASD + E/Q + Space.
+    void set_move_binds(const game::MoveBinds& b) { binds_ = b; }
+
+    // Queue a fly-toggle edge for the next command. Called by the app when the
+    // `fly` console request fires, so the toggle still crosses the client →
+    // server seam as a PlayerCommand button instead of a component write.
+    void queue_fly_toggle() { toggleFlyEdge_ = true; }
 
     // Accumulate a single SDL event (mouse motion, mouse buttons, key edges).
     void handle_event(const SDL_Event& e);
@@ -51,6 +61,7 @@ private:
     float sensitivity_ = 0.0025f;
     bool jumpEdge_ = false;
     bool toggleFlyEdge_ = false;
+    game::MoveBinds binds_{}; // scancodes for the held keys, rebindable
 };
 
 } // namespace giga

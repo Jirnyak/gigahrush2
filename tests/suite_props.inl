@@ -295,7 +295,7 @@ static void test_prop_placement_rules() {
     const auto& lamps = inspect(broadPass).cpuInst_[static_cast<int>(PropShape::FloodLamp)];
     bool foundLamp = false;
     for (const auto& l : lamps) {
-        if (l.emissive == 240) {
+        if (l.emissive == 250) {
             foundLamp = true;
             break;
         }

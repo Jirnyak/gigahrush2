@@ -76,6 +76,15 @@ struct Controller {
 // its own motion carries this.
 struct SelfIntegrating {};
 
+// "Move me, but let me pass through everything" — debug/console noclip.
+//
+// physics_step still integrates velocity and wraps the torus for a carrier, but
+// skips gravity, jumping and the swept-AABB collision entirely, so the body
+// flies through walls instead of backing out of them. A TAG in the core for the
+// same layering reason as SelfIntegrating: the console that toggles it lives in
+// the game layer, and `src/sim` may not include `src/game`.
+struct NoClip {};
+
 // Cosmetic body colour for the render layer. Any entity that also carries a
 // Transform + AABB is drawn by the body pass as one lit box, sized to the AABB
 // half-extents and tinted by `color`. Purely a render skin: data flows

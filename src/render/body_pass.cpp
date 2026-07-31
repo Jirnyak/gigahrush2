@@ -205,12 +205,14 @@ bool BodyPass::create_pipeline(VkRenderPass renderPass, const char* shaderDir) {
     lci.pPushConstantRanges = &pcr;
 
     VkDescriptorSetLayout dummySet0 = VK_NULL_HANDLE;
+    VkDescriptorSetLayout setLayouts[2] = {};
     if (lightGridSetLayout_ != VK_NULL_HANDLE) {
         VkDescriptorSetLayoutCreateInfo li{};
         li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         vkCreateDescriptorSetLayout(dev_->device, &li, nullptr, &dummySet0);
 
-        VkDescriptorSetLayout setLayouts[2] = { dummySet0, lightGridSetLayout_ };
+        setLayouts[0] = dummySet0;
+        setLayouts[1] = lightGridSetLayout_;
         lci.setLayoutCount = 2;
         lci.pSetLayouts = setLayouts;
     }

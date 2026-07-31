@@ -107,6 +107,9 @@ int g_checks = 0;
 #include "suite_macrowire.inl"
 #include "suite_status.inl"
 #include "suite_rpg.inl"
+#include "suite_floorcatalog.inl"
+#include "suite_console.inl"
+#include "suite_keybind.inl"
 static void test_inventory() {
     // Compile-time layout contract: a static_assert, not a CHECK. It is a fact
     // about the type, so it belongs to the build, not to a test run.
@@ -4204,6 +4207,9 @@ int main() {
     test_macrowire_all();
     test_status_all();
     test_rpg_all();
+    test_floorcatalog_all();
+    test_console_all();
+    test_keybind_all();
     test_route_realfloor();
     test_streamed_nav();
     test_nav_cache_roundtrip();

@@ -1,0 +1,55 @@
+// PADIC floor module — the 4D spectrum fractal floor, as a self-contained folder.
+//
+// THE FOLDER IS THE MODULE ([floors.md] §Module folders). Everything specific to
+// this floor lives under src/game/floors/padic/ and nowhere else:
+//
+//   padic.h          — this manifest: the module's name, kind, explicit floor
+//                      number, and its catalog registration.
+//   padic_gen.cpp    — the 128^3 geometry generator (tiered slab fractal).
+//   padic_module.cpp — the registration + everything non-geometry the floor
+//                      ships (special loot, carvers, story NPCs, quests, events,
+//                      interactive objects — added HERE as the module grows).
+//
+// Modularity beats DRY on purpose: a floor folder spells its content out in
+// full even where it repeats another folder's pattern, so modules stay
+// independently editable, deletable, and copy-pasteable as templates. The only
+// things a module touches outside its folder are (a) one registration call from
+// build_default_floor_catalog and (b) one generator row in floor_gen.cpp's
+// per-kind dispatch — both data rows, not branches.
+//
+// The module CLAIMS floor number 4 explicitly. The default pattern chain would
+// make 4 Industrial (4 % 5 == 4), so this claim is the standing proof that an
+// explicit number beats a pattern ([floor_catalog.h]); the padic patterns
+// (|n| >= 25, |n| % 11 == 10) still hand the kind out elsewhere as defaults.
+//
+// Pure game-layer + core: no SDL/Vulkan/ImGui, headless-testable in game_test.
+#pragma once
+
+#include "game/floor_spec.h" // FloorKind, FloorSpec
+
+namespace giga {
+class World;
+}
+
+namespace giga::game {
+
+class FloorCatalog;
+
+// The number this module claims outright. A claim, not a pattern: exactly one
+// module may hold it, and a second claimant is a refused registration + a red
+// test ([suite_floorcatalog.inl]).
+inline constexpr int kPadicFloorNumber = 4;
+
+// Register the module's catalog rows (currently: the claim on number 4).
+// Returns false if the claim was refused — another module took the number.
+bool register_padic_floor(FloorCatalog& cat);
+
+// The geometry: tiered 1/8-thick slabs every 4 cells over the whole torus, plus
+// the mandatory 4x4x4 elevator lattice ([torus-nav-baking]). Deterministic in
+// (number, seed); clears the grid first like every floor generator
+// ([floor_gen.h] generate_floor contract). Dispatched by kind from
+// floor_gen.cpp's generator table.
+void generate_padic_floor(World& world, int number, const FloorSpec& spec,
+                          unsigned seed);
+
+} // namespace giga::game

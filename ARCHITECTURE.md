@@ -124,7 +124,17 @@ removed. Data flows sim → render, never back (see [render.md](render.md)).
   around the camera (seamless wrap, no edge), fogs to black at the
   `kWorldExtent/2` render radius, and the ImGui HUD layer.
 - **input/** — SDL3 events → ECS components (yaw/pitch/wishDir/jump) on the
-  active camera entity. Writes components, not a hardcoded player.
+  active camera entity. Writes components, not a hardcoded player. Held
+  movement keys come from the keybinding table's axis rows, not constants.
+- **keys are data** — every pressed action lives in the **KeybindTable**
+  ([src/game/keybind.h](src/game/keybind.h)): a row maps a scancode to a
+  **console command line**, the app's event loop does one lookup per keydown,
+  and the effect lands as a `ConsoleRequest` bit the app drains at its safe
+  frame point (the same client-proposes/server-disposes seam as the console
+  teleport). Bound keys, pause-menu buttons and typed console lines all drive
+  the same command rows. Rebinding is a pause-menu page; bindings persist to
+  `gigahrush2.keys` (the table parses/serializes bytes, the app owns the file
+  I/O — the save.h split).
 
 ## L4 — App & game layer
 
@@ -178,8 +188,12 @@ render                → cube pass (instanced) + ImGui HUD
 | A new cell type | Assign an id + a colour row in the cube pass | Engine `if` chains |
 | A new world quantity (temperature, light) | `fields().get_or_create<T>("name")` | New struct field on the grid |
 | Regional/inverted gravity | Install a `GravityField::region` fn | Branch in physics |
-| A new floor | Register a module + assign a floor number | Hardcode a layer index |
+| A new floor | A folder under `src/game/floors/<name>/` + a catalog claim or pattern ([floors.md](floors.md)) | Hardcode a layer index |
+| A floor for a whole class of numbers | A pattern row in the floor catalog ("every even", modulo) — an explicit claim overrides it | An `if` chain on the number |
 | A new monster / loot | One row in the global table + per-floor weight | Per-floor spawn code |
+| A new console command | One `ConsoleCommand` row ([src/game/console.h](src/game/console.h)); args complete from live tables | Key-handler `if`s in the app |
+| A new key action | A `KeyBind` row (scancode → console line, [src/game/keybind.h](src/game/keybind.h)) + its command row | A scancode `if` in the event loop |
+| A new pause-menu item | A `MenuItem` row in main.cpp (label + console line) | A new ImGui handler with its own logic |
 
 ## Determinism
 

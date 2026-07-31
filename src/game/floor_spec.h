@@ -26,6 +26,7 @@ enum class FloorKind : std::uint8_t {
     Commercial,  // mixed crowd, moderate density and danger
     Industrial,  // sparse, working-age adults
     Derelict,    // near-empty and dangerous (high monster weight)
+    Padic,       // 4D spectrum fractal geometry
     Count,
 };
 

@@ -212,6 +212,19 @@ Entity emplace_mob(Registry& reg, LayerId layer, MobKind kind, const MobDef& def
 
 } // namespace
 
+Entity spawn_mob_at(Registry& reg, LayerId layer, MobKind kind,
+                    std::uint8_t level, int cx, int cy, std::uint32_t salt) {
+    if (static_cast<std::size_t>(kind) >= kMobKindCount) return entt::null;
+    const MobDef& def = mob_def(kind);
+    const std::uint8_t lv = level < 1 ? 1 : (level > 12 ? 12 : level);
+    // Same scramble family the pack placer feeds emplace_mob, so two console
+    // spawns in a row do not share colour jitter or swing in lockstep.
+    const std::uint32_t headHash =
+        (salt ^ 0x9e3779b9u) * 0x85ebca6bu + static_cast<std::uint32_t>(kind);
+    return emplace_mob(reg, layer, kind, def, lv, cx, cy, headHash,
+                       /*packId=*/0);
+}
+
 FloorTheme theme_for_kind(FloorKind kind) {
     switch (kind) {
         case FloorKind::Residential: return FloorTheme::Living;

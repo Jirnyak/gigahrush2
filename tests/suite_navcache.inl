@@ -618,7 +618,7 @@ void names_round_trip() {
             }
         }
     }
-    CHECK(g_tally.namesRoundTripped == 360); // 15 numbers x 4 kinds x 6 seeds
+    CHECK(g_tally.namesRoundTripped == 450); // 15 numbers x 5 kinds x 6 seeds
 
     // Every near miss is DISOWNED. Each line is a spelling that would let the sweep delete
     // a file this module did not write, which is why they are enumerated rather than
@@ -1255,7 +1255,7 @@ void report() {
 
     // The disk side, counted separately so neither layer's figures can drift into the
     // other's. Every one of these is a count or a byte total; nothing here is a clock.
-    CHECK(g_tally.namesRoundTripped == 360);
+    CHECK(g_tally.namesRoundTripped == 450);
     CHECK(g_tally.namesRefused == 20);
     CHECK(g_tally.fileHits > 0);
     CHECK(g_tally.fileRefusals > 0);

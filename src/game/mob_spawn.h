@@ -99,6 +99,15 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
                                std::uint32_t seed, std::uint32_t cap = 0,
                                FloorKind kind = FloorKind::Residential);
 
+// Spawn ONE mob of `kind` at macro cell (cx, cy) on `layer` — the console's
+// `spawn` command and any scripted encounter. Same emplace path as the floor
+// spawner (full component set: physics, combat, staggered cooldown), so a
+// console-spawned monster is indistinguishable from an authored one. `level` is
+// clamped 1..12; `salt` staggers colour + initial cooldown between calls.
+// Returns the entity (never null for a valid kind; entt::null otherwise).
+Entity spawn_mob_at(Registry& reg, LayerId layer, MobKind kind,
+                    std::uint8_t level, int cx, int cy, std::uint32_t salt);
+
 // Destroy every mob on `layer`. Called when a floor is unloaded — mobs do not
 // fold back into anything, they simply cease to exist ([monsters.md]).
 std::uint32_t despawn_layer_mobs(Registry& reg, LayerId layer);

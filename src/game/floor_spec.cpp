@@ -28,6 +28,7 @@ constexpr FloorSpec kCatalog[] = {
     {FloorKind::Commercial,  "Commercial",  260, {3, 2, 1, 2, 2}, 0.20f, 14, 80},
     {FloorKind::Industrial,  "Industrial",  150, {2, 4, 0, 2, 1}, 0.35f, 18, 65},
     {FloorKind::Derelict,    "Derelict",     40, {1, 0, 4, 0, 3}, 0.90f, 16, 70},
+    {FloorKind::Padic,       "Padic",        10, {0, 0, 1, 0, 9}, 1.00f, 20, 80},
 };
 static_assert(sizeof(kCatalog) / sizeof(kCatalog[0]) ==
                   static_cast<std::size_t>(FloorKind::Count),
@@ -61,7 +62,9 @@ const FloorSpec& floor_spec_for(int floor) {
     const int a = floor < 0 ? -floor : floor;
     FloorKind kind;
     if (a == 0)            kind = FloorKind::Residential; // hub: always safe
+    else if (a >= 25)      kind = FloorKind::Padic;       // 4d spectrum extreme
     else if (a >= 20)      kind = FloorKind::Derelict;    // deep extremes: wrecked
+    else if (a % 11 == 10) kind = FloorKind::Padic;
     else if (a % 7 == 6)   kind = FloorKind::Derelict;
     else if (a % 5 == 4)   kind = FloorKind::Industrial;
     else if (a % 3 == 2)   kind = FloorKind::Commercial;

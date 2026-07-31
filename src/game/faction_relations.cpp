@@ -333,8 +333,20 @@ std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
 
         std::int16_t raw = static_cast<std::int16_t>(w->dmg);
 
-        // Allow unclamped fatal damage for hostile faction feuds (Liquidators vs Cultists/Wild)
-        const bool isFatalFeud = (rel_row(pool, selfId) != rel_row(pool, foe.id));
+        // Allow unclamped fatal damage ONLY for the named hot war — Liquidators
+        // vs Cultists/Wild. This used to test `rel_row(a) != rel_row(b)`, which
+        // is true of EVERY feud pair (a feud is cross-faction by construction),
+        // so the kFeudMinHpPct clamp below was dead code and Wild beat Citizens
+        // to 0 HP — exactly what the clamp exists to forbid (suite_faction2 §
+        // "no faction war kills").
+        const std::uint8_t ra = rel_row(pool, selfId);
+        const std::uint8_t rb = rel_row(pool, foe.id);
+        constexpr std::uint8_t kLiq = static_cast<std::uint8_t>(Faction::Liquidators);
+        constexpr std::uint8_t kCul = static_cast<std::uint8_t>(Faction::Cultists);
+        constexpr std::uint8_t kWld = static_cast<std::uint8_t>(Faction::Wild);
+        const bool isFatalFeud =
+            (ra == kLiq && (rb == kCul || rb == kWld)) ||
+            (rb == kLiq && (ra == kCul || ra == kWld));
 
         if (!reg.all_of<CameraTag>(foe.e) && !isFatalFeud) {
             std::int16_t hp = 0, maxHp = 0;

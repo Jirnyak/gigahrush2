@@ -146,7 +146,7 @@ def main():
             "EXPECTED_ROWS here AND MobKind/kMobKindCount in mob_table.h"
             % (EXPECTED_ROWS, len(rows)))
 
-    out, names, used_behaviours = [], [], set()
+    out, names, tokens, used_behaviours = [], [], [], set()
     for i, r in enumerate(rows):
         if int(r["idx"]) != i:
             die("row %d has idx %s — the CSV must stay in enum order" % (i, r["idx"]))
@@ -216,6 +216,10 @@ def main():
                 pmax=fixed(r["pack_max"], 1, "pack_max", i, 0, 16),
                 pspread=fixed(r["pack_spread"], 1, "pack_spread", i, 0, 10)))
         names.append("    %s," % cpp_string(r["name_ru"]))
+        # Latin console token: the CSV id lowercased. ASCII by construction (the
+        # id column doubles as the enumerator map key), so a console can match it
+        # without any Cyrillic input; parallel to kMobTable like kMobNames.
+        tokens.append("    %s," % cpp_string(r["id"].lower()))
 
     # An enumerator no row uses is dead weight in a jump table — and far more
     # often a sign the CSV column drifted from the enum than a real gap.
@@ -231,6 +235,9 @@ def main():
         fh.write("\n}};\n\n")
         fh.write("const std::array<const char*, kMobKindCount> kMobNames = {{\n")
         fh.write("\n".join(names))
+        fh.write("\n}};\n\n")
+        fh.write("const std::array<const char*, kMobKindCount> kMobTokens = {{\n")
+        fh.write("\n".join(tokens))
         fh.write("\n}};\n\n")
         fh.write(FOOTER)
 

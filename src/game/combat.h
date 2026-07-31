@@ -148,6 +148,14 @@ struct Armour {
     std::int8_t resist[kDamageChannels] = {};
 };
 
+// "Damage does not touch me" — debug/console god mode.
+//
+// Checked in exactly one place, the top of apply_damage, because apply_damage is
+// THE damage entry point (defect (1) above): melee, projectiles, hazards and
+// faction feuds all funnel through it, so one tag test covers every source
+// without a second leak-prone guard anywhere else. The console toggles it.
+struct GodMode {};
+
 // Set by apply_damage when a target's HP reaches zero. Nothing else may set it,
 // and it does not mean the entity is gone — only that it is scheduled to die at
 // the next finalize_deaths.

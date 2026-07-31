@@ -90,6 +90,17 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
             if (!stack.valid(tr.layer)) continue;
             World& w = stack.layer(tr.layer);
 
+            // Noclip: integrate + wrap, nothing else. No gravity, no jump, no
+            // sweep — the body passes through geometry by design (debug console
+            // toggles the tag; [components.h NoClip]).
+            if (reg.all_of<NoClip>(e)) {
+                tr.pos += vel.v * h;
+                tr.pos.x = wrapf(tr.pos.x, kWorldExtent);
+                tr.pos.y = wrapf(tr.pos.y, kWorldExtent);
+                tr.pos.z = wrapf(tr.pos.z, kWorldExtent);
+                continue;
+            }
+
             vec3 half = reg.all_of<AABB>(e) ? reg.get<AABB>(e).half
                                             : vec3{0.4f, 0.4f, 0.4f};
 

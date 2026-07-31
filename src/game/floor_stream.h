@@ -209,6 +209,18 @@ public:
                       NpcPool& pool, Entity player, int fromFloor, int dir,
                       std::uint8_t arrivalZ, NpcId& playerId);
 
+    // Jump straight to floor `toFloor` — the console's teleport, and the shared
+    // tail travel() resolves into. Loads the destination on demand, moves the
+    // player across (ride_elevator with the resolved delta — the same fold/
+    // re-embody path, so nothing about the body's state is lost), adopts the
+    // fresh body into the destination module, and prunes back to the kept
+    // window. No-op RideResult when `toFloor` == `fromFloor` or maps to no
+    // registered module. Unlike travel(), `toFloor` is an ABSOLUTE label — any
+    // registered floor, not the adjacent one.
+    RideResult teleport(LevelStack& stack, FloorRegistry& reg, Registry& ecs,
+                        NpcPool& pool, Entity player, int fromFloor, int toFloor,
+                        std::uint8_t arrivalZ, NpcId& playerId);
+
     // True when floor `number` currently has a resident layer.
     bool loaded(const FloorRegistry& reg, int number) const {
         return reg.layer_at(number) != kInvalidLayer;

@@ -198,6 +198,20 @@ inline const char* mob_name(MobKind k) {
     return kMobNames[static_cast<std::size_t>(k)];
 }
 
+// Latin console tokens, parallel to kMobTable: the CSV `id` column lowercased
+// ("sborka", "tvar", ...). ASCII by construction, so the debug console can name
+// any monster without Cyrillic input; generated like kMobNames — edit the CSV.
+extern const std::array<const char*, kMobKindCount> kMobTokens;
+
+inline const char* mob_token(MobKind k) {
+    return kMobTokens[static_cast<std::size_t>(k)];
+}
+
+// Resolve a console token back to its row, case-insensitively (ASCII only — the
+// tokens are). Returns MobKind::Count when nothing matches. Linear over 69 rows:
+// this runs on a typed command, never on the tick.
+MobKind mob_kind_from_token(const char* token);
+
 // ---------------------------------------------------------------------------
 // Per-floor budgets — the V-shape
 // ---------------------------------------------------------------------------

@@ -377,26 +377,40 @@ RideResult FloorStreamer::travel(LevelStack& stack, FloorRegistry& reg,
     // is legal (floor numbers are mutable labels, not indices) and `+dir` lands on
     // nothing for most of one. [floor_registry.h next_labelled_floor]
     const int dstFloor = next_labelled_floor(reg, fromFloor, dir);
-    if (dstFloor == fromFloor) return r;                     // end of the stack
-    if (reg.module_at(dstFloor) == kInvalidModule) return r; // no such floor -> no-op
+    if (dstFloor == fromFloor) return r; // end of the stack
+    return teleport(stack, reg, ecs, pool, player, fromFloor, dstFloor, arrivalZ,
+                    playerId);
+}
+
+RideResult FloorStreamer::teleport(LevelStack& stack, FloorRegistry& reg,
+                                   Registry& ecs, NpcPool& pool, Entity player,
+                                   int fromFloor, int toFloor,
+                                   std::uint8_t arrivalZ, NpcId& playerId) {
+    RideResult r;
+    r.player = player;
+    r.floor = fromFloor;
+    if (auto* tr = ecs.try_get<Transform>(player)) r.layer = tr->layer;
+
+    if (toFloor == fromFloor) return r;                     // already there
+    if (reg.module_at(toFloor) == kInvalidModule) return r; // no such floor -> no-op
 
     // Load the destination on demand. playerId is valid here, so its crowd is
     // embodied as plain bodies and the player (embodied on the source) is skipped;
     // then the elevator moves the player across.
-    ensure_loaded(stack, reg, ecs, pool, dstFloor, playerId);
+    ensure_loaded(stack, reg, ecs, pool, toFloor, playerId);
     // Hand the elevator the resolved delta so it agrees with the module that
-    // was just loaded. Passing the raw dir would move the player to a floor
+    // was just loaded. Passing a raw direction would move the player to a floor
     // whose geometry is not resident.
     RideResult ride = ride_elevator(ecs, pool, reg, player, fromFloor,
-                                    dstFloor - fromFloor, arrivalZ);
+                                    toFloor - fromFloor, arrivalZ);
     if (!ride.moved) return ride;
 
     // The ride built a fresh player body on the destination; adopt it into the
     // destination module so a later unload folds it, then prune to the kept window
     // — which folds the whole departed crowd back into the cold pool.
-    ModuleId dm = reg.module_at(dstFloor);
+    ModuleId dm = reg.module_at(toFloor);
     if (dm != kInvalidModule) modules_[dm].bodies.push_back(ride.player);
-    keep_only(stack, reg, ecs, pool, dstFloor);
+    keep_only(stack, reg, ecs, pool, toFloor);
     return ride;
 }
 
