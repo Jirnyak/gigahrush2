@@ -1,7 +1,7 @@
 # BACKLOG — worker_game_audit
 
 Lane: game audit + save/travel seams + content port. NOT render/prop.
-Updated: 2026-07-31 ~16:10 Samara
+Updated: 2026-07-31 ~16:52 Samara
 
 ## CLOSED this session
 | ID | Item | Proof | Commit |
@@ -23,14 +23,15 @@ Updated: 2026-07-31 ~16:10 Samara
 ## OPEN / next (priority)
 | Pri | ID | Item | Pathspec | Notes |
 |-----|----|------|----------|-------|
-| P1 | AIMEM | AiMemory tested; ai_release on floor leave / pass to ai_step wired in main+floor_stream; proven GREEN 2026-07-31| src/game/ai* + floor_stream | check embody/fold_back release |
-| P2 | TEX1 | CLOSED 2026-07-31 — 3 roughness ktx2 shipped; live load 6/6 | data/textures | see CLOSED TEX1 below |
-| P2 | CNT1 | Content expand status/craft from old giga | data/*.csv + tables | thin: status.csv (~6 rows); port real rows from C:\hades\gigahrush |
+| P1 | AIMEM | CLOSED 2026-07-31 — AiMemory floor-leave release GREEN | src/game/ai* + floor_stream | see CLOSED AIMEM |
+| P2 | TEX1 | CLOSED 2026-07-31 — 3 roughness ktx2 shipped; live load 6/6 | data/textures | see CLOSED TEX1 |
+| P2 | CNT1 | CLOSED 2026-07-31 — status+craft reference parity (no missing rows) | data/*.csv + tables | see CLOSED CNT1 |
 | P2 | PAR1 | Re-grep travel sites after every main.cpp foreign commit | src/app/main.cpp read-only unless hole | line drift from light-grid/loot-emissive; WT often foreign-dirty |
 | P3 | RPG1 | Optional: preserve RpgStats across elevator (embody re-rolls today) | src/game/elevator.cpp + embody | NOT FOR1 regression — known residual |
 | P3 | MAGSHOT | Optional: real-game HUD mag line across --ride | main.cpp foreign-aware | unit pin owns body-swap |
 | P3 | M4 | worker_m4 leftovers if unowned | .agents/worker_m4* peek | only src/game scope |
 | P3 | SHOTLOG | optional stderr when place_body_safely relocates body | main.cpp | proof today is floor+PNG+audit |
+| P2 | PADIC | Padic floor gameplay stress outside src/render/** (--floor 4 doors/AI) | main harness + src/game | Zhirnyak owns mesher stripes; game-agent exercises module |
 
 ## LOCKED — do not touch
 - src/render/env_detail.* gpu_particle_pass.* gpu_light_grid.* GpuCullPass (foreign WIP)
@@ -174,4 +175,28 @@ Feature without gameplay = DECLINED. CARVE CLOSED 2026-07-31 ~16:10 — real-gam
   - `[cube] albedo: 6/6 ... normal: 6/6 ... roughness: 6/6 (mask 0xfc00)` (was roughness 3/6 mask 0x3400)
   - stderr: shots/shot_tex1_stderr.txt
 - Not a mock: real KTX2 BC7 containers decoded+uploaded by engine
+
+## CLOSED 2026-07-31 CNT1 — reference content parity (no invent)
+Audit vs C:\hades\gigahrush (old giga). **No CSV rows missing to port.** Inventing statuses/recipes = DECLINED.
+
+### Status (6/6 design-complete)
+- old `systems/status.ts` + `govnyak.ts`: exactly 6 PlayerStatusId
+  - zhelemish_skin, paupsina_web, spore_haze, govnyak_relief, govnyak_cough, govnyak_debt
+- GH2 `data/status.csv` + `kStatusCount=6` + `gen_status_table.py EXPECTED_ROWS=6` match
+- govnyak duration caps old: relief=70s cough=210s debt=480s → CSV 70000/210000/480000 ms exact
+- STATUS gameplay wire already PROOF=GREEN (prior); enum append-only — no expansion without new authored content
+
+### Craft (superset of old sources)
+- old `craft_recipe_sources.ts`: **23** source ids; GH2 `craft_recipes.csv`: **24** (= 23 + `default_survival_basics`)
+- DIFF sources: only OLD=[] ; only GH2=[default_survival_basics] ; common=23
+- old source recipeIds unique **40**; GH2 learnable items **46** (= 40 + default set bread/water/bandage/wet_rag_bundle/knife/pipe/chalk/note/ammo_9mm — chalk+ammo already in both)
+- only OLD source-recipes missing from GH2 items: **[]** (empty)
+- only GH2 extras vs old source refs: bread, knife, note, pipe, water, wet_rag_bundle (the default_survival_basics set — intentional)
+- `kCraftSourceCount=24`, `kCraftRecipeCount=kItemCount=446`, suite_craft + gen_craft_table EXPECTED_SOURCE_ROWS=24 already pin
+- craft recipes are per-item generated from items.csv composition (old CRAFT_RECIPES same model) — not a thin 24-row recipe list
+
+### Verdict
+CNT1 was "port real rows from old giga". Real rows already ported; GH2 is at/above reference. No code change. Proof = static parity audit (this section + shots/_probe_cnt1.py / _probe_cnt1b.py).
+Next OPEN: PAR1 (travel re-grep) or PADIC gameplay stress.
+
 
