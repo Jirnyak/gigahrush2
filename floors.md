@@ -133,6 +133,23 @@ claim. First resident: [src/game/floors/padic/](src/game/floors/padic/)
 (`padic.h` manifest, `padic_gen.cpp` geometry, `padic_module.cpp` registration —
 claims number **4**).
 
+The padic geometry (rebuilt 2026-07-31 to the owner's sketch) is the dormitory
+tower: 3-cell (6 m) storeys whose top cell carries a **two-slab sandwich** —
+sub-layer 6 is the storey's plaster ceiling, sub-layer 7 the next storey's
+lino/parquet floor, one `sub_material` page per sandwich cell (~700 MB RAM and
+a correspondingly large floor save per resident padic floor — an accepted
+cost); 2-cell corridors along the elevator lattice lines so every lobby is a
+crossing; BSP apartment blocks (solid apartment walls, doored rooms, the two
+smallest rooms lino); two-flight stair shafts (11 steps + landing = 12 risers a
+flight, 24 per storey, 2/8-thick sloped slabs, vertically continuous, some
+flights buried in rubble); bar grates over corridor voids; ragged per-storey
+floor holes. **One floor, one seed:** door_build derives its doorway list from
+`streamer.floor_seed_of()` — the exact seed the geometry was generated from —
+never from a parallel constant (the deleted `kDoorSeed` kept ~5% of padic's
+doors, the ones that matched by coincidence). A `--shot x.png --floor 4` run is
+the standing proof (--floor rides the console-teleport seam, so it reaches
+floors --ride's descent-only hops cannot).
+
 **Modularity beats DRY here, deliberately.** A floor folder spells its content
 out in full even where it repeats another folder's pattern, so modules stay
 independently editable, deletable, and copy-pasteable as templates — no shared

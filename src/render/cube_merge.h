@@ -192,9 +192,16 @@ inline void claim_set(std::uint64_t* claimed, std::size_t i) {
 // material id) and `same` is a predicate on flat cell indices deciding whether two
 // cells' *colour inputs* agree — cell type and fluid amount, which the render pass
 // owns and this header deliberately does not.
+//
+// `flag` selects which population is being merged: kSurfaceFlag for full-cell runs
+// (the merge below), kPartialFlag for the sub-voxel pass's stretch of identical
+// partial cells. Both populations need the SAME AO-exactness conditions —
+// kMergeBits agreement plus ao_axis_symmetric — which is why this is one function
+// with a flag rather than two that could drift.
 template <class SameFn>
 int run_length(const std::uint32_t* occ, const std::uint64_t* claimed, int x, int y,
-               int z, int axis, int maxRun, SameFn&& same) {
+               int z, int axis, int maxRun, SameFn&& same,
+               std::uint32_t flag = kSurfaceFlag) {
     const std::size_t i0 = macro_index(x, y, z);
     const std::uint32_t k0 = occ[i0];
     if (!ao_axis_symmetric(k0, axis)) return 1;
@@ -206,7 +213,7 @@ int run_length(const std::uint32_t* occ, const std::uint64_t* claimed, int x, in
         if (i == i0) break; // wrapped the whole grid; never cover a cell twice
         if (claim_test(claimed, i)) break;
         const std::uint32_t k = occ[i];
-        if (!(k & kSurfaceFlag)) break;
+        if (!(k & flag)) break;
         if (((k ^ k0) & kMergeBits) != 0) break;
         if (!same(i0, i)) break;
         ++len;

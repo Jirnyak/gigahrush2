@@ -1,6 +1,7 @@
 #include "render/cube_pass.h"
 
 #include "render/cube_merge.h"
+#include "render/sub_mesh.h"
 #include "render/vk_common.h"
 #include "render/vk_device.h"
 
@@ -10,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "core/jobs.h" // parallel_for — classify() is bake work, not tick work
@@ -394,6 +396,19 @@ std::uint32_t ao_mask(const OccBits& o, const Nbr& n) {
     return m;
 }
 
+// FNV-1a 64 folded over 64-bit words — the bucket key for shape-class
+// interning. Word-wise, not byte-wise: the padic floor hashes ~700 MB of pages
+// here and the byte loop was most of a second. A collision costs a memcmp
+// against a wrong representative, never a wrong merge.
+std::uint64_t fnv1a_words(const std::uint64_t* w, std::size_t n,
+                          std::uint64_t h) {
+    for (std::size_t i = 0; i < n; ++i) {
+        h ^= w[i];
+        h *= 1099511628211ull;
+    }
+    return h;
+}
+
 std::string join(const char* dir, const char* file) {
     std::string s = dir;
     if (!s.empty() && s.back() != '/') s += '/';
@@ -452,6 +467,7 @@ bool CubePass::init(VulkanDevice& dev, VkRenderPass renderPass,
     // in maze mode fluid invalidates ~31 times a second — and because the header
     // already promised this scratch was allocated once.
     cellClass_.assign(kMacroCells, 0u);
+    shapeClass_.assign(kMacroCells, 0u);
     claimed_.assign(kClaimWords, 0ull);
     occFull_.assign(kOccWordsPerSlab * kMacroDim, 0ull);
     occNonEmpty_.assign(kOccWordsPerSlab * kMacroDim, 0ull);
@@ -897,6 +913,55 @@ void CubePass::classify(const World& world) {
             }
         }
     }, classifyThreads_);
+
+    // Shape classes for the partial-cell stretch: cells whose (mask, page)
+    // bytes are identical get one id, verified by memcmp against the class
+    // representative — the hash only picks the bucket, so the merge stays
+    // exact. One sequential sweep; the padic floor's ~700k paged cells hash in
+    // one pass here instead of re-comparing 1 KB pages per run_length probe.
+    {
+        const SubField<CellType>* subMats =
+            world.subfields().find<CellType>(kSubMaterialName);
+        std::unordered_map<std::uint64_t,
+                           std::vector<std::pair<std::size_t, std::uint32_t>>>
+            interned;
+        std::uint32_t nextClass = 1;
+        auto page_of = [&](std::size_t i) -> const CellType* {
+            return subMats ? subMats->page(i) : nullptr;
+        };
+        static_assert(sizeof(CellType) * kSubVoxels % 8 == 0,
+                      "pages must hash as whole 64-bit words");
+        for (std::size_t i = 0; i < kMacroCells; ++i) {
+            if (!(out[i] & kPartialFlag)) {
+                shapeClass_[i] = 0;
+                continue;
+            }
+            const CellType* pg = page_of(i);
+            std::uint64_t h = fnv1a_words(masks[i].words, kSubMaskWords,
+                                          14695981039346656037ull);
+            if (pg)
+                h = fnv1a_words(reinterpret_cast<const std::uint64_t*>(pg),
+                                sizeof(CellType) * kSubVoxels / 8, h);
+            auto& bucket = interned[h];
+            std::uint32_t id = 0;
+            for (const auto& [rep, repId] : bucket) {
+                if (std::memcmp(&masks[i], &masks[rep], sizeof(SubMask)) != 0)
+                    continue;
+                const CellType* rp = page_of(rep);
+                if ((pg == nullptr) != (rp == nullptr)) continue;
+                if (pg && std::memcmp(pg, rp, sizeof(CellType) * kSubVoxels) != 0)
+                    continue;
+                id = repId;
+                break;
+            }
+            if (id == 0) {
+                id = nextClass++;
+                bucket.emplace_back(i, id);
+            }
+            shapeClass_[i] = id;
+        }
+        shapeClassCount_ = nextClass - 1;
+    }
     classValid_ = true;
 }
 
@@ -985,108 +1050,197 @@ std::uint32_t CubePass::build_instances(std::uint32_t frameIndex,
     // --- the sub-voxel pass ----------------------------------------------
     // Full cells above are an OPTIMISATION: one stretched box per merged run.
     // A PARTIAL cell (kPartialFlag) is rendered honestly from its actual bits
-    // — the world's atom is the 0.25 m sub-voxel ([destruct.md]). Per cell:
-    // greedy x-runs of solid same-material sub-voxels, emitted only if some
-    // voxel in the run is exposed, where "exposed" is judged at sub
-    // resolution against the cell's own mask and the three axis neighbours'
-    // masks (a FULL neighbour occludes outright, an empty one exposes).
-    // Materials come per sub-voxel from the "sub_material" overlay when the
-    // cell is mixed ([world/subfield.h]); AO reuses the parent cell's
+    // — the world's atom is the 0.25 m sub-voxel ([destruct.md]). Two levels
+    // of merging keep that honesty affordable (the padic floor's thin walls
+    // and slabs demanded 25.7 M x-runs of this pass before they existed —
+    // 12x the whole instance buffer):
+    //
+    //   1. IN-CELL: greedy 3D boxes over the 8^3 mask (render/sub_mesh.h). A
+    //      1-sub-voxel floor slab is ONE box instead of 8 x-runs; a thin wall
+    //      perpendicular to X is ONE box instead of 64.
+    //   2. ACROSS CELLS: runs of byte-identical partial cells stretch along
+    //      one axis through the same run_length() the full-cell merge uses,
+    //      under the same AO-exactness conditions (kMergeBits agreement +
+    //      ao_axis_symmetric) plus mask identity, so the merge stays invisible
+    //      by the same argument. A box that spans the whole cell along the run
+    //      axis becomes one stretched instance; one that does not is emitted
+    //      per cell. Cells carrying a per-sub-voxel material page
+    //      ([world/subfield.h]) never stretch — the safe default for carved
+    //      geometry, which is rare and local.
+    //
+    // A box is emitted only if some voxel of it is exposed, judged at sub
+    // resolution against the owning cell's six neighbour masks — per CELL of a
+    // stretched run, because two identical cells can differ in what their
+    // perpendicular neighbours hide. AO reuses the parent cell's
     // neighbourhood mask — coarse, but smooth and free.
     const SubMask* masks = g.masks().data();
     const SubField<CellType>* subMats =
         world.subfields().find<CellType>(kSubMaterialName);
     std::uint32_t dropped = 0;
-    for (std::size_t i = 0; i < kMacroCells; ++i) {
-        const std::uint32_t cls = cellClass_[i];
-        if (!(cls & kPartialFlag)) continue;
-        const int x = static_cast<int>(i) & (kMacroDim - 1);
-        const int y = (static_cast<int>(i) >> 7) & (kMacroDim - 1);
-        const int z = static_cast<int>(i) >> 14;
-        const SubMask& m = masks[i];
-        // The six face-neighbour masks, wrapped once per cell.
+    // The six face-neighbour masks of one cell, for sub-resolution exposure.
+    struct CellNbr {
+        const SubMask *m, *xl, *xh, *yl, *yh, *zl, *zh;
+    };
+    auto cell_nbr = [&](int x, int y, int z) -> CellNbr {
         const int xl = x == 0 ? kMacroDim - 1 : x - 1;
         const int xh = x == kMacroDim - 1 ? 0 : x + 1;
         const int yl = y == 0 ? kMacroDim - 1 : y - 1;
         const int yh = y == kMacroDim - 1 ? 0 : y + 1;
         const int zl = z == 0 ? kMacroDim - 1 : z - 1;
         const int zh = z == kMacroDim - 1 ? 0 : z + 1;
-        const SubMask& nxh = masks[macro_index(xh, y, z)];
-        const SubMask& nxl = masks[macro_index(xl, y, z)];
-        const SubMask& nyh = masks[macro_index(x, yh, z)];
-        const SubMask& nyl = masks[macro_index(x, yl, z)];
-        const SubMask& nzh = masks[macro_index(x, y, zh)];
-        const SubMask& nzl = masks[macro_index(x, y, zl)];
-        auto exposed = [&](int sx, int sy, int sz) -> bool {
-            if (sx + 1 < kSubDim ? !m.test(sub_bit(sx + 1, sy, sz))
-                                 : !nxh.test(sub_bit(0, sy, sz)))
-                return true;
-            if (sx > 0 ? !m.test(sub_bit(sx - 1, sy, sz))
-                       : !nxl.test(sub_bit(kSubDim - 1, sy, sz)))
-                return true;
-            if (sy + 1 < kSubDim ? !m.test(sub_bit(sx, sy + 1, sz))
-                                 : !nyh.test(sub_bit(sx, 0, sz)))
-                return true;
-            if (sy > 0 ? !m.test(sub_bit(sx, sy - 1, sz))
-                       : !nyl.test(sub_bit(sx, kSubDim - 1, sz)))
-                return true;
-            if (sz + 1 < kSubDim ? !m.test(sub_bit(sx, sy, sz + 1))
-                                 : !nzh.test(sub_bit(sx, sy, 0)))
-                return true;
-            if (sz > 0 ? !m.test(sub_bit(sx, sy, sz - 1))
-                       : !nzl.test(sub_bit(sx, sy, kSubDim - 1)))
-                return true;
-            return false;
-        };
+        return CellNbr{&masks[macro_index(x, y, z)],
+                       &masks[macro_index(xl, y, z)],
+                       &masks[macro_index(xh, y, z)],
+                       &masks[macro_index(x, yl, z)],
+                       &masks[macro_index(x, yh, z)],
+                       &masks[macro_index(x, y, zl)],
+                       &masks[macro_index(x, y, zh)]};
+    };
+    auto voxel_exposed = [](const CellNbr& n, int sx, int sy, int sz) -> bool {
+        if (sx + 1 < kSubDim ? !n.m->test(sub_bit(sx + 1, sy, sz))
+                             : !n.xh->test(sub_bit(0, sy, sz)))
+            return true;
+        if (sx > 0 ? !n.m->test(sub_bit(sx - 1, sy, sz))
+                   : !n.xl->test(sub_bit(kSubDim - 1, sy, sz)))
+            return true;
+        if (sy + 1 < kSubDim ? !n.m->test(sub_bit(sx, sy + 1, sz))
+                             : !n.yh->test(sub_bit(sx, 0, sz)))
+            return true;
+        if (sy > 0 ? !n.m->test(sub_bit(sx, sy - 1, sz))
+                   : !n.yl->test(sub_bit(sx, kSubDim - 1, sz)))
+            return true;
+        if (sz + 1 < kSubDim ? !n.m->test(sub_bit(sx, sy, sz + 1))
+                             : !n.zh->test(sub_bit(sx, sy, 0)))
+            return true;
+        if (sz > 0 ? !n.m->test(sub_bit(sx, sy, sz - 1))
+                   : !n.zl->test(sub_bit(sx, sy, kSubDim - 1)))
+            return true;
+        return false;
+    };
+    // A solid box's interior voxels are occluded by the box itself, so only
+    // its boundary voxels can be exposed.
+    auto box_exposed = [&](const CellNbr& n, const SubBox& b) -> bool {
+        const int x1 = b.x0 + b.dx - 1, y1 = b.y0 + b.dy - 1,
+                  z1 = b.z0 + b.dz - 1;
+        for (int sz = b.z0; sz <= z1; ++sz)
+            for (int sy = b.y0; sy <= y1; ++sy)
+                for (int sx = b.x0; sx <= x1; ++sx) {
+                    const bool boundary = sx == b.x0 || sx == x1 ||
+                                          sy == b.y0 || sy == y1 ||
+                                          sz == b.z0 || sz == z1;
+                    if (boundary && voxel_exposed(n, sx, sy, sz)) return true;
+                }
+        return false;
+    };
+    // Boxes memoised per shape class: cells with identical (mask, page) bytes
+    // mesh identically, and the padic floor has ~300k runs over a few thousand
+    // classes — meshing per RUN was 1.2 s of cold page reads, meshing per CLASS
+    // is noise. For unpaged cells the memo's box materials are a placeholder
+    // (the representative's cell type); emit substitutes the actual cell type,
+    // which is uniform across an unpaged cell by definition.
+    std::vector<std::vector<SubBox>> meshMemo(
+        static_cast<std::size_t>(shapeClassCount_) + 1);
+    for (std::size_t i = 0; i < kMacroCells; ++i) {
+        const std::uint32_t cls = cellClass_[i];
+        if (!(cls & kPartialFlag)) continue;
+        if (claim_test(claimed_.data(), i)) continue; // swallowed by a stretch
+        const int x = static_cast<int>(i) & (kMacroDim - 1);
+        const int y = (static_cast<int>(i) >> 7) & (kMacroDim - 1);
+        const int z = static_cast<int>(i) >> 14;
         const CellType cellMat = types[i];
         const CellType* page = subMats ? subMats->page(i) : nullptr;
-        auto mat_of = [&](int bit) -> CellType {
-            return page ? page[bit] : cellMat;
+
+        // Cross-cell stretch: the longest run of identical partial cells along
+        // the best axis. Identity is (mask, page) bytes — compared as interned
+        // shape-class ids (see classify()) — plus the colour inputs; run_length
+        // adds the AO conditions the full-cell merge proved. Identical pages
+        // merge because the padic sandwich ([floors/padic]) writes the SAME
+        // plaster-ceiling/lino-floor page into every slab cell of a storey —
+        // refusing those would put ~600k cells back to per-cell boxes.
+        auto same_partial = [&](std::size_t a, std::size_t b) {
+            return shapeClass_[a] == shapeClass_[b] && types[a] == types[b] &&
+                   tint(a) == tint(b);
         };
+        // A stretched span is kSubDim * cells in the uint8 lane, so the
+        // stretch cap is tighter than the macro merge's when GIGA_CUBE_MAXRUN
+        // is cranked past 31 for an A/B run.
+        const int maxStretch = std::min(maxRun_, 255 / kSubDim);
+        int bestAxis = 0, bestLen = 1;
+        for (int axis = 0; axis < 3; ++axis) {
+            const int len =
+                run_length(cellClass_.data(), claimed_.data(), x, y, z,
+                           axis, maxStretch, same_partial, kPartialFlag);
+            if (len > bestLen) { bestLen = len; bestAxis = axis; }
+        }
+        int c[3] = {x, y, z};
+        for (int k = 0; k < bestLen; ++k) {
+            claim_set(claimed_.data(), macro_index(c[0], c[1], c[2]));
+            c[bestAxis] = wrap_macro(c[bestAxis] + 1);
+        }
+        // Every cell of the run has these masks by the memcmp above, so the
+        // exposure sets are per cell but the boxes are meshed once.
+        CellNbr nbrs[kMacroDim]; // maxRun_ is clamped to kMacroDim at init
+        c[0] = x; c[1] = y; c[2] = z;
+        for (int k = 0; k < bestLen; ++k) {
+            nbrs[k] = cell_nbr(c[0], c[1], c[2]);
+            c[bestAxis] = wrap_macro(c[bestAxis] + 1);
+        }
+
+        std::vector<SubBox>& cellBoxes = meshMemo[shapeClass_[i]];
+        if (cellBoxes.empty()) {
+            auto mat_of = [&](int bit) -> CellType {
+                return page ? page[bit] : cellMat;
+            };
+            mesh_sub_boxes(masks[i], mat_of,
+                           [&](const SubBox& b) { cellBoxes.push_back(b); });
+        }
+
         const float t = tint(i);
         const std::uint32_t aoBits = cls & kAoReadBits;
-        for (int sz = 0; sz < kSubDim; ++sz) {
-            for (int sy = 0; sy < kSubDim; ++sy) {
-                int sx = 0;
-                while (sx < kSubDim) {
-                    if (!m.test(sub_bit(sx, sy, sz))) {
-                        ++sx;
-                        continue;
-                    }
-                    const CellType mat = mat_of(sub_bit(sx, sy, sz));
-                    int end = sx;
-                    bool anyExposed = exposed(sx, sy, sz);
-                    while (end + 1 < kSubDim &&
-                           m.test(sub_bit(end + 1, sy, sz)) &&
-                           mat_of(sub_bit(end + 1, sy, sz)) == mat) {
-                        ++end;
-                        anyExposed = anyExposed || exposed(end, sy, sz);
-                    }
-                    if (anyExposed) {
-                        if (boxes >= instanceCapacity_) {
-                            ++dropped;
-                        } else {
-                            CubeInstance& inst = *dst;
-                            inst.origin = vec3{
-                                static_cast<float>(x * kSubDim + sx) *
-                                    kVoxelSize,
-                                static_cast<float>(y * kSubDim + sy) *
-                                    kVoxelSize,
-                                static_cast<float>(z * kSubDim + sz) *
-                                    kVoxelSize};
-                            inst.span[0] =
-                                static_cast<std::uint8_t>(end - sx + 1);
-                            inst.span[1] = 1;
-                            inst.span[2] = 1;
-                            inst.spanW = 0;
-                            inst.color = colour_final(mat, t);
-                            inst.occ =
-                                aoBits | (surface_id(mat) << kMatIdShift);
-                            ++dst;
-                            ++boxes;
-                        }
-                    }
-                    sx = end + 1;
+        auto emit_sub = [&](int cx, int cy, int cz, const SubBox& b,
+                            int stretched) {
+            if (boxes >= instanceCapacity_) {
+                ++dropped;
+                return;
+            }
+            CubeInstance& inst = *dst;
+            inst.origin =
+                vec3{static_cast<float>(cx * kSubDim + b.x0) * kVoxelSize,
+                     static_cast<float>(cy * kSubDim + b.y0) * kVoxelSize,
+                     static_cast<float>(cz * kSubDim + b.z0) * kVoxelSize};
+            inst.span[0] = b.dx;
+            inst.span[1] = b.dy;
+            inst.span[2] = b.dz;
+            if (stretched > 1)
+                inst.span[bestAxis] =
+                    static_cast<std::uint8_t>(kSubDim * stretched);
+            inst.spanW = 0;
+            inst.color = colour_final(b.mat, t);
+            inst.occ = aoBits | (surface_id(b.mat) << kMatIdShift);
+            ++dst;
+            ++boxes;
+        };
+        for (const SubBox& memoBox : cellBoxes) {
+            SubBox b = memoBox;
+            if (!page) b.mat = cellMat; // memo carries the representative's type
+            const int origin[3] = {b.x0, b.y0, b.z0};
+            const int extent[3] = {b.dx, b.dy, b.dz};
+            const bool spans = origin[bestAxis] == 0 &&
+                               extent[bestAxis] == kSubDim;
+            if (bestLen > 1 && spans) {
+                // One stretched instance for the whole run; internal faces
+                // between copies are solid-on-solid by mask identity, so
+                // exposure can only come from a face some copy shows.
+                bool any = false;
+                for (int k = 0; k < bestLen && !any; ++k)
+                    any = box_exposed(nbrs[k], b);
+                if (any) emit_sub(x, y, z, b, bestLen);
+            } else {
+                c[0] = x; c[1] = y; c[2] = z;
+                for (int k = 0; k < bestLen; ++k) {
+                    if (box_exposed(nbrs[k], b))
+                        emit_sub(c[0], c[1], c[2], b, 1);
+                    c[bestAxis] = wrap_macro(c[bestAxis] + 1);
                 }
             }
         }

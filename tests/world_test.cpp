@@ -44,6 +44,7 @@ int g_checks = 0;
 
 #include "suite_destruct.inl"
 #include "suite_props.inl"
+#include "suite_submesh.inl"
 
 
 static void test_wrap() {
@@ -560,6 +561,7 @@ int main() {
     test_route_step();
     test_destruct_all();
     test_props_all();
+    test_submesh_all();
 
     std::printf("%d/%d checks passed\n", g_checks - g_fails, g_checks);
     if (g_fails) {

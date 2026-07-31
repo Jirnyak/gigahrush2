@@ -45,11 +45,17 @@ inline constexpr int kPadicFloorNumber = 4;
 // Returns false if the claim was refused — another module took the number.
 bool register_padic_floor(FloorCatalog& cat);
 
-// The geometry: tiered 1/8-thick slabs every 4 cells over the whole torus, plus
-// the mandatory 4x4x4 elevator lattice ([torus-nav-baking]). Deterministic in
-// (number, seed); clears the grid first like every floor generator
-// ([floor_gen.h] generate_floor contract). Dispatched by kind from
-// floor_gen.cpp's generator table.
+// The geometry: the dormitory tower (см. схему владельца, 2026-07-31) — 3-cell
+// storeys with a two-slab ceiling/floor sandwich, 2-cell corridors along the
+// lattice lines, BSP apartment blocks with room doors, real two-flight stair
+// shafts (11 steps + landing = 12 risers per flight), bar grates, ragged floor
+// holes, plus the mandatory 4x4x4 elevator lattice ([torus-nav-baking]). The
+// plan is a pure function of (number, seed) — safe because the app has ONE
+// seed per floor (streamer.floor_seed_of), which door_build now uses too; the
+// short-lived separate "door seed" put walls and doors in two different
+// buildings. Clears the grid (and stale sub-material pages) first like every
+// floor generator ([floor_gen.h] generate_floor contract). Dispatched by kind
+// from floor_gen.cpp's generator table.
 void generate_padic_floor(World& world, int number, const FloorSpec& spec,
                           unsigned seed);
 

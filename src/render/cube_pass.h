@@ -285,6 +285,16 @@ private:
     // faulting in its 15.1 MB of fresh pages is ~7 ms. The 4x is classify(), which
     // slot 0 runs and slot 1 skips, and nothing else.
     std::vector<std::uint32_t> cellClass_;
+    // Shape class of every PARTIAL cell: cells with byte-identical (sub-mask,
+    // sub-material page) pairs share a class id; 0 = not partial. Built by
+    // classify() in one pass and INTERNED EXACTLY (memcmp against the class
+    // representative, the hash is only a bucket key). It exists because the
+    // sub-voxel stretch used to compare 64 B of mask plus 1 KB of page per
+    // run_length step — on the padic floor's ~700k paged sandwich cells that
+    // was tens of GB of DRAM traffic and a 1.5 s rebuild; comparing interned
+    // ids is the same exactness at none of the bandwidth.
+    std::vector<std::uint32_t> shapeClass_;
+    std::uint32_t shapeClassCount_ = 0; // ids are 1..count; 0 = not partial
     bool classValid_ = false;
     // The two intermediates classify() derives cellClass_ from: one bit per macro
     // cell for "fully solid" and for "not empty", 256 KB each. Members rather than

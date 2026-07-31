@@ -1162,6 +1162,11 @@ int main(int argc, char** argv) {
     const char* shotPath = nullptr;
     int shotFrames = 600;    // ~10 s at 60 Hz: long enough for the first nav bake
     int shotRide = 0;        // floors to descend before capturing
+    // --floor N: ride straight to a labelled floor (up OR down — --ride only
+    // descends, which made the padic floor at +4 unreachable in a --shot
+    // proof). Uses the console teleport seam, so it exercises the real ride.
+    int shotFloor = 0;
+    bool shotFloorWanted = false;
     int shotFramesSeen = 0;
     int shotRideDone = 0;
     gpu::Capture shotCap{};
@@ -1181,6 +1186,10 @@ int main(int argc, char** argv) {
         else if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
         else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
         else if (a == "--ride" && i + 1 < argc) shotRide = std::atoi(argv[++i]);
+        else if (a == "--floor" && i + 1 < argc) {
+            shotFloor = std::atoi(argv[++i]);
+            shotFloorWanted = true;
+        }
         else if (a == "--no-hud" || a == "--nohud") showHud = false;
         else if (a == "--pos" && i + 3 < argc) {
             customPos.x = static_cast<float>(std::atof(argv[++i]));
@@ -1417,9 +1426,13 @@ int main(int argc, char** argv) {
     char elevDiagLine[160] = {};
     std::uint64_t elevDiagAt = 0;
     game::PowerGridState powerGrid{};
-    // One seed for every floor's doors. door_build is deterministic in it, so a floor
-    // gets the same doors on every visit, the same way its mobs and crates do.
-    constexpr unsigned kDoorSeed = 0xD00D5u;
+    // Doors derive from THE FLOOR'S OWN SEED — streamer.floor_seed_of(), the same
+    // value its geometry was generated from. There used to be a separate
+    // kDoorSeed constant here, and it was a bug factory, not a knob: door_build
+    // asks the grid whether each doorway is still an architectural opening, and
+    // with the doorway list derived from a DIFFERENT seed than the walls, the
+    // padic floor kept only the ~5% of doors that matched by coincidence
+    // (measured: 1302 of ~26k). One floor, one seed, every consumer.
 
     Entity player = entt::null;
 
@@ -1498,7 +1511,8 @@ int main(int argc, char** argv) {
             // that must not be mutated until ready(). [door.h]
             if (currentSpec)
                 doorsBuilt = game::door_build(stack.layer(l0), doors, 0,
-                                              *currentSpec, kDoorSeed);
+                                              *currentSpec,
+                                              streamer.floor_seed_of(registry, 0));
             doors.frozen = true;
             begin_floor_nav(stack.layer(l0), nav);
             game::ai_init(reg, l0);
@@ -1891,8 +1905,9 @@ int main(int argc, char** argv) {
         apply_floor_file(stack.layer(nl), currentFloor);
         // Doors before the bake, frozen for its duration. [door.h]
         if (currentSpec)
-            doorsBuilt = game::door_build(stack.layer(nl), doors, currentFloor,
-                                          *currentSpec, kDoorSeed);
+            doorsBuilt = game::door_build(
+                stack.layer(nl), doors, currentFloor, *currentSpec,
+                streamer.floor_seed_of(registry, currentFloor));
         doors.frozen = true;
         begin_floor_nav(stack.layer(nl), nav);
         if (propPass.ready()) {
@@ -3037,7 +3052,9 @@ int main(int argc, char** argv) {
                             if (currentSpec)
                                 doorsBuilt = game::door_build(
                                     stack.layer(nl), doors, currentFloor,
-                                    *currentSpec, kDoorSeed);
+                                    *currentSpec,
+                                    streamer.floor_seed_of(registry,
+                                                           currentFloor));
                             doors.frozen = true;
                             begin_floor_nav(stack.layer(nl), nav);
                             if (propPass.ready()) {
@@ -4232,6 +4249,12 @@ int main(int argc, char** argv) {
             // and photograph a world with no crowd in it.
             if (shotPath) {
                 ++shotFramesSeen;
+                // --floor: one absolute hop through the console-teleport seam,
+                // at the same cadence rides use (the nav bake needs its ~5 s).
+                if (shotFloorWanted && shotFramesSeen % 420 == 0) {
+                    shotFloorWanted = false;
+                    pendingTeleport = shotFloor;
+                }
                 if (shotRideDone < shotRide && shotFramesSeen % 420 == 0) {
                     // One floor down every ~7 s: long enough for the async nav bake
                     // (measured 2.5 s + 2.4 s) to finish before the next ride.
@@ -4290,7 +4313,8 @@ int main(int argc, char** argv) {
                         if (currentSpec)
                             doorsBuilt = game::door_build(
                                 stack.layer(nl), doors, currentFloor,
-                                *currentSpec, kDoorSeed);
+                                *currentSpec,
+                                streamer.floor_seed_of(registry, currentFloor));
                         doors.frozen = true;
                         begin_floor_nav(stack.layer(nl), nav);
                         cubePass.invalidate();

@@ -162,6 +162,16 @@ public:
     // ~4,200 records against a 2^20 pool.
     std::uint32_t seed_all_modules(NpcPool& pool);
 
+    // THE seed of floor `number` — the one its module was registered with and
+    // its geometry was generated from. Everything that must agree with the
+    // generator (door_build via floor_doorways, nav cache keys, population)
+    // derives from THIS value, never from a second constant: a parallel "door
+    // seed" put the doorway plan and the wall plan in two different buildings,
+    // and 95% of the padic floor's doors silently failed door_build's
+    // grid-agreement check. Returns 0 for an unregistered number — callers on
+    // the ride/load paths always hold a registered floor.
+    std::uint32_t floor_seed_of(const FloorRegistry& reg, int number) const;
+
     // Load floor `number` if it is cold: allocate a physical layer, generate its
     // geometry, mark it resident, and embody its crowd (seeding the crowd once on
     // the first ever load). Records already embodied — e.g. the player standing on

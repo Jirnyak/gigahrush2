@@ -51,11 +51,30 @@ sparse mask. See [performance.md](performance.md).
 
 ## Rendering
 
-The **cube pass** walks the grid once per frame, **surface-culls** cells whose
+The **cube pass** walks the grid once per rebuild, **surface-culls** cells whose
 six neighbours are all solid (interior cells emit nothing), and issues a single
 **instanced draw** — one instance per visible cell, coloured by `CellType` and
 tinted by the `fluid` field. Instance count scales with visible *area*, not
 volume. See [render.md](render.md).
+
+**Partial cells are meshed, not enumerated.** A cell whose mask is not full
+renders its actual bits through two composed merges
+([render/sub_mesh.h], [render/cube_pass.cpp]): greedy **3D boxes** inside the
+8³ mask (a 1-sub-voxel floor slab is ONE box, a 2-sub-voxel-thick wall is ONE
+box regardless of orientation), then runs of **byte-identical partial cells**
+stretch along one axis under the same AO-exactness conditions as the full-cell
+merge (`run_length` with `kPartialFlag`). This is what lets a floor built
+almost entirely at sub-voxel resolution — the padic module's thin walls and
+slabs on 43 stacked levels — fit the 2,097,152-instance buffer with room to
+spare: measured on the real padic floor, 23.6 M dropped x-runs (whole regions
+invisible) became 68,625 instances, total, no drops.
+
+**The most expensive pattern in the game, per cell drawn, is the 2D
+checkerboard** (the padic grate: `(sx+sy)%2` on one sub-layer). Every solid
+voxel is isolated, so no mesher can merge it — 32 boxes per cell, forever. A
+3D checkerboard would be 256. It survives because grate cells are few
+(~200/level); do not build large surfaces out of it. Stripes (1×8 bars) look
+like a grate and merge to ~4 boxes.
 
 ## Data-driven extension
 
@@ -74,7 +93,10 @@ components and hands them to the renderer as debris. Physics picks every hole
 up for free (collision reads the same masks); baked overlays are repaid via
 `CarveResult::dirtyCells`. The renderer draws the holes honestly too: full
 cells stay one merged box (the macro optimisation), partial cells render
-their actual bits as 0.25 m sub-voxel runs ([destruct.md] §Рендер).
+their actual bits as greedy 3D boxes of 0.25 m sub-voxels (§Rendering above;
+[destruct.md] §Рендер). Cells carrying a per-sub-voxel material page never
+stretch across cell boundaries — carved geometry is rare and local, so the
+safe default costs nothing measurable.
 
 ## Connections
 

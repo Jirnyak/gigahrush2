@@ -60,6 +60,13 @@ ModuleId FloorStreamer::add_module(FloorRegistry& reg, int number, FloorKind kin
     return m;
 }
 
+std::uint32_t FloorStreamer::floor_seed_of(const FloorRegistry& reg,
+                                           int number) const {
+    const ModuleId m = reg.module_at(number);
+    if (m == kInvalidModule) return 0;
+    return modules_[m].seed;
+}
+
 std::uint32_t FloorStreamer::seed_all_modules(NpcPool& pool) {
     // Exactly the seeding half of ensure_loaded, hoisted so it can run before anybody
     // has visited anything. No layer, no geometry, no ECS entity: the records are

@@ -382,8 +382,10 @@ if(GIGA_BUILD_TESTS)
     # 38712 -> 39331 (+619) on 2026-07-31: suite_destruct.inl landed — SubField
     # paging/collapse, carve_roll statistics (a 4096-iteration loop dominates
     # the delta), carve_at/carve_sphere geometry, layering, seam and detach.
+    # 39331 -> 39659 (+328) on 2026-07-31: suite_submesh.inl — greedy 3D
+    # sub-voxel meshing (exact cover on 64 random masks dominates the delta).
     set_tests_properties(world_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "39331/39331 checks passed")
+        PASS_REGULAR_EXPRESSION "39659/39659 checks passed")
 
     # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
@@ -486,7 +488,10 @@ if(GIGA_BUILD_TESTS)
     # column (dead row's generation, player flag, names, rebuilt buckets) and the
     # MacroSim clock/journeys; wire pins moved to the 64-byte header + the fixed
     # 36-byte faction matrix.
-        PASS_REGULAR_EXPRESSION "game_test: 219364 checks, 0 failures")
+    # 219364 -> 219370 (+6) on 2026-07-31: the padic generator rewrite (dormitory
+    # tower — 3-cell storeys, two-slab sandwich, BSP apartments, real stair
+    # shafts) changed the geometry that geometry-dependent loops iterate over.
+        PASS_REGULAR_EXPRESSION "game_test: 219370 checks, 0 failures")
 
     # Text gate for the AGENTS.md rules that no compiler enforces on every host.
     # The load-bearing one is no-exceptions: MSVC's STL is unsupported under
