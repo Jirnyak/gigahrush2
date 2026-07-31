@@ -732,19 +732,19 @@ void main() {
             roughness = 0.90;
         }
     } else if (n_geom.y > 0.5) {
-        // --- FLOOR SURFACES ---
+        // --- FLOOR SURFACES (AUTHENTIC SOVIET MATERIALS: NO RED/GREEN STRIPS, NO BRICK/TILE FLOOR SEAMS) ---
         if (vMat == 9u || vMat == 8u) {
-            // Soviet Oak Parquet ("Дубовый паркет ёлочкой")
-            vec3 oakParquet = vec3(0.018, 0.008, 0.002);
+            // Soviet Varnished Oak Parquet ("Дубовый паркет ёлочкой")
+            vec3 oakParquet = vec3(0.022, 0.010, 0.003);
             float plank = sin(uv.x * 16.0 + uv.y * 16.0) * sin(uv.x * 16.0 - uv.y * 16.0);
             albedo = oakParquet * (0.88 + 0.24 * plank);
-            roughness = 0.30;
+            roughness = 0.28;
         } else if (vMat == 11u) {
-            // Soviet Linoleum ("Советский линолеум")
-            vec3 linoleumCol = vec3(0.012, 0.005, 0.003);
-            float tileP = step(fract(uv.x * 4.0), 0.5) == step(fract(uv.y * 4.0), 0.5) ? 1.0 : 0.85;
-            albedo = linoleumCol * tileP;
-            roughness = 0.40;
+            // Soviet Maroon/Brown Linoleum ("Советский коричнево-бордовый линолеум")
+            vec3 linoleumCol = vec3(0.016, 0.007, 0.004);
+            float linoNoise = vnoise(uv * 5.0);
+            albedo = linoleumCol * (0.90 + 0.20 * linoNoise);
+            roughness = 0.38;
         } else if (vMat == 13u) {
             // Industrial Steel Tread Plate ("Стальной рифленый настил")
             vec3 treadCol = vec3(0.015, 0.014, 0.013);
@@ -752,16 +752,16 @@ void main() {
             albedo = treadCol * (0.90 + 0.20 * treadP);
             roughness = 0.40;
         } else if (vMat == 2u) {
-            // Basement Damp Dirt Soil Floor
-            vec3 soilCol = vec3(0.008, 0.006, 0.004);
+            // Basement Damp Dirt Soil Floor ("Сырой грунт / подвал")
+            vec3 soilCol = vec3(0.009, 0.007, 0.005);
             albedo = soilCol * (0.85 + 0.30 * vnoise(uv * 6.0));
             roughness = 0.90;
         } else {
-            // Soviet Terrazzo Concrete Floor
-            vec3 terrazzoCol = vec3(0.015, 0.014, 0.013);
-            float grain = vnoise(uv * 10.0);
-            albedo = terrazzoCol * (0.90 + 0.20 * grain);
-            roughness = 0.65;
+            // Soviet Terrazzo Concrete Floor ("Бетонный мозаичный пол терраццо")
+            vec3 terrazzoCol = vec3(0.018, 0.016, 0.014);
+            float grain = vnoise(uv * 12.0);
+            albedo = terrazzoCol * (0.88 + 0.24 * grain);
+            roughness = 0.60;
         }
     }
 
