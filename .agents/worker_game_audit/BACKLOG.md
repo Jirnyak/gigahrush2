@@ -324,7 +324,32 @@ MAGSHOT deferred: unit pin owns mag body-swap (FOR1/MAG1); HUD already prints
 `%u/%u mag` from PlayerRanged@3865. Real-game --ride HUD screenshot = optional polish.
 Next OPEN: idle pull/push; re-PAR1 after next foreign main thrash; stay off src/render/**.
 
+## RPGCMBT CLOSED (2026-07-31) — combat formulas live
 
+**Commit target:** combat.cpp + suite_rpg.inl + CMake pin 219409
 
+### What shipped
+- `player_melee_step`: when body has `RpgStats`, damage = `melee_damage(*rs, heldWeapon, wp->dmg)`;
+  CD = `(base * agi_attack_speed_mult_e3 * str_heavy_weapon_speed_mult_e3) / 1e6` clamped [1,65535].
+- `player_ranged_step`: spread *= `agi_ranged_spread_mult_e3/1000`; CD *= `agi_attack_speed_mult_e3/1000`.
+- **Identity path:** no `RpgStats` → raw table dmg/CD/spread (keeps `test_player_shoots` green).
+- Unit pin `test_rpg_combat_wire` in `suite_rpg.inl`: bare fists no-RPG, high STR/AGI melee,
+  ranged no-RPG, high-AGI ranged CD. **game_test: 219409 checks, 0 failures** (was 219387, +22).
 
+### Live spawn
+- `embody_as_player` attaches `random_rpg` — primary boot path has sheet.
+- XP-on-kill already wired via `award_xp` in `finalize_deaths`.
+- Voluntary possess still naked (no sheet) — separate follow-up.
+
+### NOT this commit (next OPEN)
+1. **ATTR1** — `spend_attr_point` zero callers from main; HUD teases points; keys 1/2/3 needed.
+2. **AGIMV** — `agi_move_speed_mult_e3` unused on walk.
+3. **SAVRPG** — F5/F9 drops RpgStats + craft known-bits.
+4. **RPGCMBT-SHOT** — live `--action attack` proof with forced high STR + `[rpgcmbt]` log line
+   (scale is currently silent; HUD weapon dmg still prints table raw).
+5. MAGSHOT still deferred.
+
+### Critique notes (subagent)
+- Ranged *damage* still raw `def->dmg` (no gun-dmg formula in rpg.h) — OK defer.
+- Same-tick death+kill can drop XP from carriedRpg snapshot — latent, not this pin.
 

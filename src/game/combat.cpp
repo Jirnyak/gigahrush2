@@ -1112,7 +1112,11 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
     // reference is 2.5D, so jittering yaw alone was correct there; in true 3D it
     // would put a shotgun's pellets in a dead-flat horizontal line, which reads as a
     // bug rather than as a spread.
-    const float spread = static_cast<float>(def->spreadE4) * 1e-4f;
+    // RPGCMBT: AGI tightens the cone (agi_ranged_spread_mult_e3 < 1000).
+    float spread = static_cast<float>(def->spreadE4) * 1e-4f;
+    if (const RpgStats* rs = reg.try_get<RpgStats>(shooter)) {
+        spread *= static_cast<float>(agi_ranged_spread_mult_e3(*rs)) / 1000.0f;
+    }
     // Any two vectors perpendicular to fwd. Guarding on |fwd.z| rather than fwd.x
     // keeps the cross product well-conditioned when looking straight up or down.
     vec3 up = (fwd.z > 0.9f || fwd.z < -0.9f) ? vec3{1, 0, 0} : vec3{0, 0, 1};
@@ -1165,7 +1169,15 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
     // ONE round per shot regardless of pellet count — a shotgun blast costs one shell
     // and produces up to twelve projectiles. The reference's rule.
     --pr.magCount;
-    pr.cooldownMs = def->cooldownMs;
+    // RPGCMBT: AGI shortens firearm cooldown (same inverse mult as melee).
+    std::uint16_t rcd = def->cooldownMs;
+    if (const RpgStats* rs = reg.try_get<RpgStats>(shooter)) {
+        const std::uint32_t cd =
+            (static_cast<std::uint32_t>(def->cooldownMs) *
+             agi_attack_speed_mult_e3(*rs)) / 1000u;
+        rcd = static_cast<std::uint16_t>(cd > 65535u ? 65535u : (cd < 1u ? 1u : cd));
+    }
+    pr.cooldownMs = rcd;
     ++pr.shots;
     return 1;
 }
@@ -1197,12 +1209,27 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
 
     // Whatever is in hand. A found rebar hits eight times as hard as a fist and
     // reaches four times as far — which is the entire point of picking loot up.
+    // RPGCMBT: STR/level scale damage via melee_damage(); AGI shortens cooldown;
+    // STR also speeds heavy weapons (cd >= kHeavyWeaponCooldownMs). Without a
+    // RpgStats component the raw table values are used (identity mults).
     const MeleeDef* wp = &unarmed_melee();
+    ItemId heldWeapon = 0;  // 0 = bare hands sentinel [item_table.h]
     if (const NpcRef* n = reg.try_get<NpcRef>(self))
         if (pool.valid(n->id)) {
-            const ItemId held = equipped_melee(pool.inventory(n->id));
-            if (const MeleeDef* m = melee_for_item(held)) wp = m;
+            heldWeapon = equipped_melee(pool.inventory(n->id));
+            if (const MeleeDef* m = melee_for_item(heldWeapon)) wp = m;
         }
+    std::int16_t swingDmg = static_cast<std::int16_t>(wp->dmg);
+    std::uint16_t swingCd = wp->cooldownMs;
+    if (const RpgStats* rs = reg.try_get<RpgStats>(self)) {
+        swingDmg = melee_damage(*rs, heldWeapon, static_cast<std::int16_t>(wp->dmg));
+        // Combine AGI attack-speed and STR heavy-weapon speed as e3 mults.
+        const std::uint32_t agiE3 = agi_attack_speed_mult_e3(*rs);
+        const std::uint32_t strE3 = str_heavy_weapon_speed_mult_e3(*rs, wp->cooldownMs);
+        const std::uint32_t cd =
+            (static_cast<std::uint32_t>(wp->cooldownMs) * agiE3 * strE3) / 1000000u;
+        swingCd = static_cast<std::uint16_t>(cd > 65535u ? 65535u : (cd < 1u ? 1u : cd));
+    }
     const float reach =
         static_cast<float>(wp->reachMm) * 0.001f * kCellSize + kMeleeReachSlack;
 
@@ -1258,10 +1285,9 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
             }
             if (hitWall) {
                 carves->push(hitAt.x, hitAt.y, hitAt.z, kMeleeCarveRadius,
-                             carve_power_from_dmg(
-                                 static_cast<std::int16_t>(wp->dmg)),
+                             carve_power_from_dmg(swingDmg),
                              static_cast<std::uint32_t>(tick));
-                pm.cooldownMs = wp->cooldownMs;
+                pm.cooldownMs = swingCd;
                 (void)bus;
                 return true;
             }
@@ -1271,10 +1297,9 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
 
     // Same damage path, same Dead tag, same finalizer as a mob's swing. There is
     // deliberately no second way for something to die.
-    DamageResult r = apply_damage(reg, pool, best,
-                                  static_cast<std::int16_t>(wp->dmg),
+    DamageResult r = apply_damage(reg, pool, best, swingDmg,
                                   DamageChannel::Kinetic, self);
-    pm.cooldownMs = wp->cooldownMs;
+    pm.cooldownMs = swingCd;
     if (r.lethal) ++pm.kills;
     (void)bus;
     (void)tick;
