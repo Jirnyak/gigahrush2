@@ -376,29 +376,29 @@ void stamp_stair(MacroGrid& g, SubField<CellType>& sm, const PlanStair& st,
             const int SX = 5 + 2 * (i - 1) + dx;
             for (int SY = 0; SY < 8; ++SY)
                 for (int L = i - 2; L < i; ++L)
-                    put_sub(g, sm, X, Y, b, SX, SY, L, kMatTread);
+                    put_sub(g, sm, X, Y, b, SX, SY, L, kMatConcrete);
         }
     }
     // Mid landing: both rows, level 12 top, 2/8 thick.
     for (int SX = 27; SX < 32; ++SX)
         for (int SY = 0; SY < 16; ++SY)
             for (int L = 10; L < 12; ++L)
-                put_sub(g, sm, X, Y, b, SX, SY, L, kMatTread);
+                put_sub(g, sm, X, Y, b, SX, SY, L, kMatConcrete);
     // Flight B (row Y+1, sub rows 8..15), rising -x from the mid landing.
     for (int k = 1; k <= 11; ++k) {
         for (int dx = 0; dx < 2; ++dx) {
             const int SX = 27 - 2 * k + dx;
             for (int SY = 8; SY < 16; ++SY)
                 for (int L = 10 + k; L < 12 + k; ++L)
-                    put_sub(g, sm, X, Y, b, SX, SY, L, kMatTread);
+                    put_sub(g, sm, X, Y, b, SX, SY, L, kMatConcrete);
         }
     }
     // Entry strip: the shared landing at the shaft mouth — this storey's slab
     // at b+2 is the level-24 arrival of THIS storey's climb and the departure
     // landing of the storey above. Concrete both layers: uniform, no page.
     for (int row = 0; row < 2; ++row) {
-        put_bits(g, sm, X, Y + row, b + 2, kCeilW, kEntryX04, kMatTread);
-        put_bits(g, sm, X, Y + row, b + 2, kFloorW, kEntryX04, kMatTread);
+        put_bits(g, sm, X, Y + row, b + 2, kCeilW, kEntryX04, kMatConcrete);
+        put_bits(g, sm, X, Y + row, b + 2, kFloorW, kEntryX04, kMatConcrete);
     }
     // Procedural blockage: ~1 flight in 7 is buried. A 2 m stepped rubble mound
     // over the middle steps — impassable without carving through it.
