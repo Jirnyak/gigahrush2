@@ -40,6 +40,7 @@
 #include "game/floors/padic/padic.h"
 
 #include "game/floor_gen.h"
+#include "sim/fluid.h"
 #include "world/destruct.h" // kSubMaterialName
 #include "world/lattice.h"
 #include "world/materials.h"
@@ -598,6 +599,47 @@ void generate_padic_floor(World& world, int number, const FloorSpec& spec,
         }
 
     stamp_lattice(g, sm, number);
+
+    // Seed water and gas fluids in staircases and elevator shafts
+    Field<float>* wet = world.fields().find<float>(kFluidField);
+    if (wet == nullptr) wet = &world.fields().get_or_create<float>(kFluidField, 0.0f);
+    else wet->fill(0.0f);
+
+    Field<float>* gas = world.fields().find<float>(kGasField);
+    if (gas == nullptr) gas = &world.fields().get_or_create<float>(kGasField, 0.0f);
+    else gas->fill(0.0f);
+
+    // Seed water in lattice elevator pit (z=0..2) and stair landing sumps
+    for (int ny = 0; ny < kLatticeDim; ++ny) {
+        for (int nx = 0; nx < kLatticeDim; ++nx) {
+            int cx = lattice_coord(nx);
+            int cy = lattice_coord(ny);
+            for (int z = 0; z <= 2; ++z) {
+                std::size_t idx = macro_index(wrap_macro(cx), wrap_macro(cy), z);
+                wet->data()[idx] = 0.8f;
+            }
+        }
+    }
+    for (const PlanStair& st : p.stairs) {
+        for (int row = 0; row < 2; ++row) {
+            for (int dx = 0; dx < 4; ++dx) {
+                std::size_t idx = macro_index(wrap_macro(st.x + dx), wrap_macro(st.y + row), 1);
+                wet->data()[idx] = 0.5f;
+            }
+        }
+    }
+
+    // Seed buoyant gas in elevator shafts (z=3..15)
+    for (int ny = 0; ny < kLatticeDim; ++ny) {
+        for (int nx = 0; nx < kLatticeDim; ++nx) {
+            int cx = lattice_coord(nx);
+            int cy = lattice_coord(ny);
+            for (int z = 3; z <= 15; ++z) {
+                std::size_t idx = macro_index(wrap_macro(cx), wrap_macro(cy), z);
+                gas->data()[idx] = 0.6f;
+            }
+        }
+    }
 
     (void)spec.population; // geometry ignores population; the seeder consumes it
 }
