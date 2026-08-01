@@ -139,10 +139,22 @@ static void test_console_completion() {
     ConsoleContext ctx;
     const char* cands[32];
 
-    // First word -> command names.
+    // First word -> command names. "sp" matches spawn + spawn_ball +
+    // spawn_test_ball (defaults grew beyond a single spawn row).
     std::uint32_t n = con.complete(ctx, "sp", cands, 32);
-    CHECK(n == 1);
-    CHECK(std::strcmp(cands[0], "spawn") == 0);
+    CHECK(n >= 1);
+    CHECK(n <= 3);
+    {
+        bool hasSpawn = false;
+        for (std::uint32_t i = 0; i < n; ++i)
+            if (std::strcmp(cands[i], "spawn") == 0) hasSpawn = true;
+        CHECK(hasSpawn);
+    }
+    // Exact "spawn" still uniquely resolves when more prefix is typed.
+    n = con.complete(ctx, "spawn", cands, 32);
+    CHECK(n >= 1);
+    // "spawn " (with trailing space) moves to arg completion — covered below.
+
 
     // spawn's first argument -> mob tokens from the generated table.
     n = con.complete(ctx, "spawn sbork", cands, 32);

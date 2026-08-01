@@ -16,15 +16,25 @@
 
 namespace {
 
-// seed_wall_interactables walks AIR cells with a SOLID cell below (floor),
-// then rolls spatial_hash for Terminal (2%) / ElectricalShield (1%). Paint a
-// solid floor slab under an air band so the walk finds candidates. No PropPass.
+// seed_wall_interactables walks AIR cells with a SOLID cell below (floor) AND
+// at least one solid W/E/N/S neighbor (wall), then rolls spatial_hash for
+// Terminal (wsel 25-34) / ElectricalShield (15-24). Paint a floor slab and
+// alternating wall columns at yFloor+1 so every other cell is air with solid
+// west+east neighbors (~half the band × 20% device rate). No PropPass.
 static void paint_floor_band(World& world, int x0, int x1, int yFloor, int z0, int z1) {
-    for (int z = z0; z < z1; ++z)
-        for (int x = x0; x < x1; ++x)
-            world.grid().fill_cell(x, yFloor, z, kMatConcrete);
-    // air above stays kCellAir (default) — that is the candidate band at yFloor+1.
+    const int yAir = yFloor + 1;
+    for (int z = z0; z < z1; ++z) {
+        for (int x = x0; x < x1; ++x) {
+            world.grid().fill_cell(x, yFloor, z, kMatConcrete); // floor
+            // Even offset from x0 → wall column; odd → air corridor cell.
+            if (((x - x0) & 1) == 0)
+                world.grid().fill_cell(x, yAir, z, kMatConcrete);
+        }
+    }
 }
+
+
+
 
 static int count_kind(const Registry& reg, LayerId layer, game::Interactable::Kind k) {
     int n = 0;
