@@ -77,9 +77,11 @@ struct TerminalInteractResult {
     std::uint32_t doorsToggled = 0;
 };
 
-// Player interaction logic when near Terminal or ControlPanel props.
+// Apply terminal door-lock toggle at a known Terminal world position.
+// Caller must already have verified proximity (prefer find_nearest_interactable /
+// interaction_step — zero heap). Returns interacted=true and toggles locks.
+// [jirnyak.md] §18 — no fake hit when no terminal is in reach.
 TerminalInteractResult embody_interact_terminal(Registry& reg, World& world, DoorSet& doors,
-                                                LayerId layer, const vec3& playerPos,
-                                                float reachM, const std::vector<vec3>& terminalPositions);
+                                                LayerId layer, const vec3& terminalPos);
 
 } // namespace giga::game

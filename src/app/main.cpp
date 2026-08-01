@@ -3265,64 +3265,63 @@ int main(int argc, char** argv) {
                             game::noise_publish(noiseField, activeLayer, ppos, np, 0);
                         }
 
-                        // 2. Terminal / ControlPanel interaction — ECS collect, not PropPass.
+                        // 2. Terminal / ControlPanel — zero-heap nearest Interactable
+                        // ([jirnyak.md] §18 interaction_step). No vector collect,
+                        // no fake hit when nothing is in reach.
                         if (!handled && activeLayer != kInvalidLayer) {
-                            std::vector<vec3> terms;
-                            game::collect_interactable_positions(
-                                reg, activeLayer, game::Interactable::Kind::Terminal, terms);
-                            game::TerminalInteractResult tres = game::embody_interact_terminal(
-                                reg, stack.layer(activeLayer), doors, activeLayer, ppos, 4.0f, terms);
-                            if (tres.interacted) {
-                                handled = true;
-                                std::snprintf(elevDiagLine, sizeof(elevDiagLine),
-                                              "ELEVATOR DIAGNOSTIC: FLOOR %d TERMINAL LINKED | DOORS %s (%u TOGGLED)",
-                                              currentFloor, tres.doorsLocked ? "LOCKED" : "UNLOCKED", tres.doorsToggled);
-                                elevDiagAt = simTick;
-                                std::fprintf(stderr, "[gameplay] Terminal/ControlPanel interact: doors %s (%u toggled) | ElecArc burst emitted at (%.1f, %.1f, %.1f)\n",
-                                             tres.doorsLocked ? "LOCKED" : "UNLOCKED", tres.doorsToggled,
-                                             tres.propPos.x, tres.propPos.y, tres.propPos.z);
-                                if (particlePass.ready()) {
-                                    particlePass.emit_burst(tres.propPos + vec3{0.0f, 1.0f, 0.0f},
-                                                            vec3{0.0f, 1.0f, 0.0f}, vec3{0.35f, 0.85f, 1.0f},
-                                                            gpu::GpuParticleKind::ElecArc,
-                                                            64, 5.5f, 0.6f, 0.15f, 180.0f);
+                            game::InteractionHit termHit = game::find_nearest_interactable(
+                                reg, player, game::Interactable::Kind::Terminal, 4.0f);
+                            if (termHit.hit) {
+                                game::TerminalInteractResult tres =
+                                    game::embody_interact_terminal(
+                                        reg, stack.layer(activeLayer), doors,
+                                        activeLayer, termHit.pos);
+                                if (tres.interacted) {
+                                    handled = true;
+                                    std::snprintf(elevDiagLine, sizeof(elevDiagLine),
+                                                  "ELEVATOR DIAGNOSTIC: FLOOR %d TERMINAL LINKED | DOORS %s (%u TOGGLED)",
+                                                  currentFloor, tres.doorsLocked ? "LOCKED" : "UNLOCKED", tres.doorsToggled);
+                                    elevDiagAt = simTick;
+                                    std::fprintf(stderr, "[gameplay] Terminal/ControlPanel interact: doors %s (%u toggled) | ElecArc burst emitted at (%.1f, %.1f, %.1f)\n",
+                                                 tres.doorsLocked ? "LOCKED" : "UNLOCKED", tres.doorsToggled,
+                                                 tres.propPos.x, tres.propPos.y, tres.propPos.z);
+                                    if (particlePass.ready()) {
+                                        particlePass.emit_burst(tres.propPos + vec3{0.0f, 1.0f, 0.0f},
+                                                                vec3{0.0f, 1.0f, 0.0f}, vec3{0.35f, 0.85f, 1.0f},
+                                                                gpu::GpuParticleKind::ElecArc,
+                                                                64, 5.5f, 0.6f, 0.15f, 180.0f);
+                                    }
+                                    game::NoiseProfile np{12.0f, 2000, 3, game::NoiseSource::Door};
+                                    game::noise_publish(noiseField, activeLayer, tres.propPos, np, 0);
                                 }
-                                game::NoiseProfile np{12.0f, 2000, 3, game::NoiseSource::Door};
-                                game::noise_publish(noiseField, activeLayer, tres.propPos, np, 0);
                             }
                         }
 
-                        // 3. ElectricalShield interaction / power cut sabotage — ECS.
+                        // 3. ElectricalShield sabotage — zero-heap nearest.
                         if (!handled && activeLayer != kInvalidLayer) {
-                            std::vector<vec3> shields;
-                            game::collect_interactable_positions(
-                                reg, activeLayer, game::Interactable::Kind::ElectricalShield, shields);
-                            for (const vec3& sp : shields) {
-                                float dx = wrap_delta_f(ppos.x, sp.x, kWorldExtent);
-                                float dy = ppos.y - sp.y;
-                                float dz = wrap_delta_f(ppos.z, sp.z, kWorldExtent);
-                                if (dx * dx + dy * dy + dz * dz < 3.5f * 3.5f) {
-                                    int scx = static_cast<int>(sp.x / kCellSize);
-                                    int scy = static_cast<int>(sp.y / kCellSize);
-                                    int scz = static_cast<int>(sp.z / kCellSize);
-                                    if (!powerGrid.is_shield_destroyed(scx, scy, scz)) {
-                                        handled = true;
-                                        powerGrid.destroy_shield(scx, scy, scz);
-                                        std::snprintf(elevDiagLine, sizeof(elevDiagLine),
-                                                      "POWER GRID SABOTAGE: ELECTRICAL SHIELD DESTROYED AT (%.1f, %.1f)",
-                                                      sp.x, sp.z);
-                                        elevDiagAt = simTick;
-                                        if (particlePass.ready()) {
-                                            particlePass.emit_burst(sp + vec3{0.0f, 0.4f, 0.0f},
-                                                                    vec3{0.0f, 1.0f, 0.0f},
-                                                                    vec3{0.35f, 0.85f, 1.00f},
-                                                                    gpu::GpuParticleKind::ElecArc,
-                                                                    64, 6.0f, 0.9f, 0.20f, 250.0f);
-                                        }
-                                        game::NoiseProfile np{16.0f, 2500, 3, game::NoiseSource::Door};
-                                        game::noise_publish(noiseField, activeLayer, sp, np, 0);
-                                        break;
+                            game::InteractionHit shieldHit = game::find_nearest_interactable(
+                                reg, player, game::Interactable::Kind::ElectricalShield, 3.5f);
+                            if (shieldHit.hit) {
+                                const vec3& sp = shieldHit.pos;
+                                int scx = static_cast<int>(sp.x / kCellSize);
+                                int scy = static_cast<int>(sp.y / kCellSize);
+                                int scz = static_cast<int>(sp.z / kCellSize);
+                                if (!powerGrid.is_shield_destroyed(scx, scy, scz)) {
+                                    handled = true;
+                                    powerGrid.destroy_shield(scx, scy, scz);
+                                    std::snprintf(elevDiagLine, sizeof(elevDiagLine),
+                                                  "POWER GRID SABOTAGE: ELECTRICAL SHIELD DESTROYED AT (%.1f, %.1f)",
+                                                  sp.x, sp.z);
+                                    elevDiagAt = simTick;
+                                    if (particlePass.ready()) {
+                                        particlePass.emit_burst(sp + vec3{0.0f, 0.4f, 0.0f},
+                                                                vec3{0.0f, 1.0f, 0.0f},
+                                                                vec3{0.35f, 0.85f, 1.00f},
+                                                                gpu::GpuParticleKind::ElecArc,
+                                                                64, 6.0f, 0.9f, 0.20f, 250.0f);
                                     }
+                                    game::NoiseProfile np{16.0f, 2500, 3, game::NoiseSource::Door};
+                                    game::noise_publish(noiseField, activeLayer, sp, np, 0);
                                 }
                             }
                         }
@@ -3903,16 +3902,11 @@ int main(int argc, char** argv) {
                 // reference's rule, so it is pad-only too. [craft.h]
                 if ((craftWanted || scrapWanted) && reg.valid(player)) {
                     const Transform& ct = reg.get<Transform>(player);
-                    bool nearTerm = false;
-                    {
-                        std::vector<vec3> termRecs;
-                        game::collect_interactable_positions(
-                            reg, activeLayer, game::Interactable::Kind::Terminal, termRecs);
-                        for (const vec3& tp : termRecs) {
-                            float dx = tp.x - ct.pos.x, dy = tp.y - ct.pos.y, dz = tp.z - ct.pos.z;
-                            if (dx * dx + dy * dy + dz * dz < 16.0f) { nearTerm = true; break; }
-                        }
-                    }
+                    // Zero-heap nearest Terminal (4 m = sqrt(16)). [jirnyak.md] §18
+                    const bool nearTerm =
+                        game::find_nearest_interactable(
+                            reg, player, game::Interactable::Kind::Terminal, 4.0f)
+                            .hit;
                     const game::CraftStation bench =
                         game::on_extraction_pad(stack.layer(activeLayer).grid(), ct.pos)
                             ? game::CraftStation::Workbench
@@ -4575,16 +4569,11 @@ int main(int argc, char** argv) {
 
         if (showCraftingWindow && reg.valid(player)) {
             const Transform& ct = reg.get<Transform>(player);
-            bool nearTerm = false;
-            {
-                std::vector<vec3> termRecs;
-                game::collect_interactable_positions(
-                    reg, activeLayer, game::Interactable::Kind::Terminal, termRecs);
-                for (const vec3& tp : termRecs) {
-                    float dx = tp.x - ct.pos.x, dy = tp.y - ct.pos.y, dz = tp.z - ct.pos.z;
-                    if (dx * dx + dy * dy + dz * dz < 16.0f) { nearTerm = true; break; }
-                }
-            }
+            // Zero-heap nearest Terminal ([jirnyak.md] section 18) -- same reach as craft hot path.
+            const bool nearTerm =
+                game::find_nearest_interactable(
+                    reg, player, static_cast<int>(game::Interactable::Kind::Terminal), 4.0f)
+                    .hit;
             const game::CraftStation bench =
                 game::on_extraction_pad(stack.layer(activeLayer).grid(), ct.pos)
                     ? game::CraftStation::Workbench
@@ -4647,39 +4636,27 @@ int main(int argc, char** argv) {
                 }
             }
 
-            // Terminal proximity — ECS collect, not PropPass ([jirnyak.md] §18).
+            // Terminal proximity -- zero-heap find_nearest ([jirnyak.md] section 18).
             if (!promptText && activeLayer != kInvalidLayer) {
-                std::vector<vec3> terms;
-                game::collect_interactable_positions(
-                    reg, activeLayer, game::Interactable::Kind::Terminal, terms);
-                for (const vec3& tp : terms) {
-                    const float dx = wrap_delta_f(ppos.x, tp.x, kWorldExtent);
-                    const float dy = ppos.y - tp.y;
-                    const float dz = wrap_delta_f(ppos.z, tp.z, kWorldExtent);
-                    if (dx * dx + dy * dy + dz * dz < 4.0f * 4.0f) {
-                        set_prompt("interact", "TERMINAL (DOOR LOCKS)");
-                        break;
-                    }
+                const game::InteractionHit termHit = game::find_nearest_interactable(
+                    reg, player, static_cast<int>(game::Interactable::Kind::Terminal), 4.0f);
+                if (termHit.hit) {
+                    set_prompt("interact", "TERMINAL (DOOR LOCKS)");
                 }
             }
 
-            // ElectricalShield proximity (sabotage / power cut) — ECS collect.
+            // ElectricalShield proximity -- zero-heap find_nearest ([jirnyak.md] section 18).
             if (!promptText && activeLayer != kInvalidLayer) {
-                std::vector<vec3> shields;
-                game::collect_interactable_positions(
-                    reg, activeLayer, game::Interactable::Kind::ElectricalShield, shields);
-                for (const vec3& sp : shields) {
-                    const float dx = wrap_delta_f(ppos.x, sp.x, kWorldExtent);
-                    const float dy = ppos.y - sp.y;
-                    const float dz = wrap_delta_f(ppos.z, sp.z, kWorldExtent);
-                    if (dx * dx + dy * dy + dz * dz < 3.5f * 3.5f) {
-                        int scx = static_cast<int>(sp.x / kCellSize);
-                        int scy = static_cast<int>(sp.y / kCellSize);
-                        int scz = static_cast<int>(sp.z / kCellSize);
-                        if (!powerGrid.is_shield_destroyed(scx, scy, scz)) {
-                            set_prompt("interact", "SABOTAGE ELECTRICAL SHIELD");
-                            break;
-                        }
+                const game::InteractionHit shieldHit = game::find_nearest_interactable(
+                    reg, player,
+                    static_cast<int>(game::Interactable::Kind::ElectricalShield), 3.5f);
+                if (shieldHit.hit) {
+                    const vec3& sp = shieldHit.pos;
+                    int scx = static_cast<int>(sp.x / kCellSize);
+                    int scy = static_cast<int>(sp.y / kCellSize);
+                    int scz = static_cast<int>(sp.z / kCellSize);
+                    if (!powerGrid.is_shield_destroyed(scx, scy, scz)) {
+                        set_prompt("interact", "SABOTAGE ELECTRICAL SHIELD");
                     }
                 }
             }

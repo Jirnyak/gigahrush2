@@ -4,6 +4,7 @@
 
 #include "game/floors/padic/padic.h"
 #include "game/prop_system.h"
+#include "game/embody.h"  // TerminalInteractResult / embody_interact_terminal
 #include "world/world.h"
 #include "world/types.h"
 #include "world/materials.h"
@@ -282,6 +283,86 @@ static void test_prop_ragdoll_step_damps_angular() {
     CHECK(!reg.all_of<AngularVelocity>(e));
 }
 
+
+// --- [jirnyak.md] section 18: terminal interact must not fake-hit ---------------
+
+static Entity make_actor_at(Registry& reg, LayerId layer, const vec3& pos) {
+    const Entity e = reg.create();
+    Transform t{};
+    t.pos = pos;
+    t.layer = layer;
+    reg.emplace<Transform>(e, t);
+    return e;
+}
+
+static Entity make_terminal_at(Registry& reg, LayerId layer, const vec3& pos) {
+    const Entity e = reg.create();
+    Transform t{};
+    t.pos = pos;
+    t.layer = layer;
+    reg.emplace<Transform>(e, t);
+    game::Interactable ia{};
+    ia.kind = game::Interactable::Kind::Terminal;
+    reg.emplace<game::Interactable>(e, ia);
+    return e;
+}
+
+static void test_find_nearest_terminal_respects_reach() {
+    Registry reg;
+    const LayerId layer = 1;
+    const Entity actor = make_actor_at(reg, layer, vec3{10.0f, 2.0f, 10.0f});
+    make_terminal_at(reg, layer, vec3{20.0f, 2.0f, 10.0f}); // 10 m away
+
+    // Out of 4 m reach -> miss.
+    {
+        const game::InteractionHit hit = game::find_nearest_interactable(
+            reg, actor, static_cast<int>(game::Interactable::Kind::Terminal), 4.0f);
+        CHECK(!hit.hit);
+    }
+    // Within 12 m reach -> hit.
+    {
+        const game::InteractionHit hit = game::find_nearest_interactable(
+            reg, actor, static_cast<int>(game::Interactable::Kind::Terminal), 12.0f);
+        CHECK(hit.hit);
+        CHECK(hit.kind == game::Interactable::Kind::Terminal);
+        CHECK(hit.pos.x == 20.0f);
+    }
+    // interaction_step uses same nearest path (any kind).
+    {
+        const game::InteractionHit hit = game::interaction_step(reg, actor, 4.0f);
+        CHECK(!hit.hit);
+        const game::InteractionHit hit2 = game::interaction_step(reg, actor, 12.0f);
+        CHECK(hit2.hit);
+    }
+}
+
+static void test_embody_interact_terminal_applies_at_given_pos() {
+    // embody_interact_terminal no longer searches: caller gates proximity.
+    // Calling it always reports interacted=true at the supplied terminalPos
+    // (door toggle count depends on DoorSet contents -- empty set -> 0).
+    Registry reg;
+    World world;
+    game::DoorSet doors{};
+    const LayerId layer = 1;
+    const vec3 termPos{5.0f, 1.0f, 5.0f};
+
+    const game::TerminalInteractResult res =
+        game::embody_interact_terminal(reg, world, doors, layer, termPos);
+    CHECK(res.interacted);
+    CHECK(res.propPos.x == termPos.x);
+    CHECK(res.propPos.y == termPos.y);
+    CHECK(res.propPos.z == termPos.z);
+    CHECK(res.doorsToggled == 0u);
+
+    // Miss path for live E-key: find_nearest returns !hit when nothing in reach,
+    // so main must NOT call embody_interact_terminal. That contract is what
+    // killed the old always-true fake hit at playerPos.
+    const Entity actor = make_actor_at(reg, layer, vec3{0.0f, 1.0f, 0.0f});
+    const game::InteractionHit miss = game::find_nearest_interactable(
+        reg, actor, static_cast<int>(game::Interactable::Kind::Terminal), 4.0f);
+    CHECK(!miss.hit);
+}
+
 void test_props_game_all() {
     test_wall_interactables_seed_and_collect();
     test_wall_interactables_clear_is_layer_scoped();
@@ -289,4 +370,6 @@ void test_props_game_all() {
     test_spawn_prop_anchor_and_detach_on_air();
     test_anchor_validate_skips_solid_support();
     test_prop_ragdoll_step_damps_angular();
+    test_find_nearest_terminal_respects_reach();
+    test_embody_interact_terminal_applies_at_given_pos();
 }

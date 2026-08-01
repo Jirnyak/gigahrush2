@@ -120,53 +120,14 @@ void fold_back(Registry& reg, NpcPool& pool, NpcId id, Entity e) {
 }
 
 TerminalInteractResult embody_interact_terminal(Registry& reg, World& world, DoorSet& doors,
-                                                LayerId layer, const vec3& playerPos,
-                                                float reachM, const std::vector<vec3>& terminalPositions) {
+                                                LayerId layer, const vec3& terminalPos) {
+    // Proximity is the caller's job (find_nearest_interactable / interaction_step).
+    // This only applies the terminal effect — never invent a hit at playerPos.
     TerminalInteractResult res;
-    float bestD2 = reachM * reachM;
-    vec3 bestPos{};
-    bool found = false;
-
-    for (const vec3& pos : terminalPositions) {
-        float dx = wrap_delta_f(playerPos.x, pos.x, kWorldExtent);
-        float dy = playerPos.y - pos.y;
-        float dz = wrap_delta_f(playerPos.z, pos.z, kWorldExtent);
-        float d2 = dx * dx + dy * dy + dz * dz;
-        if (d2 < bestD2) {
-            bestD2 = d2;
-            bestPos = pos;
-            found = true;
-        }
-    }
-
-    if (!found && !terminalPositions.empty()) {
-        float minD2 = 1e9f;
-        for (const vec3& pos : terminalPositions) {
-            float dx = wrap_delta_f(playerPos.x, pos.x, kWorldExtent);
-            float dy = playerPos.y - pos.y;
-            float dz = wrap_delta_f(playerPos.z, pos.z, kWorldExtent);
-            float d2 = dx * dx + dy * dy + dz * dz;
-            if (d2 < minD2) {
-                minD2 = d2;
-                bestPos = pos;
-            }
-        }
-        if (minD2 < 16.0f * 16.0f) {
-            found = true;
-        }
-    }
-
-    if (!found) {
-        found = true;
-        bestPos = playerPos;
-    }
-
-    if (found) {
-        res.interacted = true;
-        res.propPos = bestPos;
-        res.doorsToggled = door_toggle_locks(world, doors, reg, layer);
-        res.doorsLocked = (doors.shut > 0);
-    }
+    res.interacted = true;
+    res.propPos = terminalPos;
+    res.doorsToggled = door_toggle_locks(world, doors, reg, layer);
+    res.doorsLocked = (doors.shut > 0);
     return res;
 }
 
