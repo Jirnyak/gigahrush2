@@ -7,6 +7,7 @@
 #include "game/embody.h"   // NpcRef
 #include "game/floor_gen.h" // floor_room_mask — the crate's contents follow the ROOM
 #include "game/npc_pool.h"
+#include "game/prop_system.h"
 #include "sim/fluid.h"     // fluid_at, kFluidMinFlow — a crate does not float
 #include "world/lattice.h"
 #include "world/materials.h"
@@ -318,6 +319,9 @@ std::uint32_t spawn_floor_containers(Registry& reg, const World& world,
         reg.emplace<Transform>(e, tr);
         reg.emplace<AABB>(e, AABB{kContainerHalf});
         reg.emplace<Renderable>(e, Renderable{kShutColour});
+        // Connect to physical prop system for gravity/destruction
+        reg.emplace<SubVoxelAnchor>(e, SubVoxelAnchor{cx, cy, cz, 4, 4, 0, 0});
+        reg.emplace<PropFallMode>(e, PropFallMode::SimpleFall);
         reg.emplace<Container>(
             e, roll_in_room(pick_kind(kind, mix(h ^ 0x5bf03635u)), floorNumber,
                             mix(h ^ 0xc2b2ae35u), roomMask));

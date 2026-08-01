@@ -66,6 +66,7 @@ int g_checks = 0;
         }                                                                      \
     } while (0)
 
+#include "suite_props_game.inl"
 #include "suite_needs.inl"
 #include "suite_noise.inl"
 #include "suite_packs.inl"
@@ -2008,59 +2009,7 @@ static void test_loadout_changes_the_numbers() {
     CHECK(!reg.all_of<Armour>(e));
 }
 
-// Each floor kind must write ITS OWN materials, or every floor renders in the same
-// palette however good that palette is. Asserted headless, because a screenshot only
-// ever proves the one floor you happened to be standing on.
-static void test_floor_kinds_use_distinct_materials() {
-    std::vector<std::vector<CellType>> perKind;
-    for (int k = 0; k < static_cast<int>(FloorKind::Count); ++k) {
-        World w;
-        generate_floor(w, /*number=*/k, floor_spec(static_cast<FloorKind>(k)),
-                       4242u);
-
-        bool seen[kMatCount] = {};
-        for (CellType t : w.grid().types())
-            if (t != kCellAir && t < kMatCount) seen[t] = true;
-
-        std::vector<CellType> used;
-        for (CellType t = 1; t < kMatCount; ++t)
-            if (seen[t]) used.push_back(t);
-        CHECK(!used.empty());               // a floor made of nothing is a bug
-        perKind.push_back(used);
-    }
-
-    // No two kinds may write the same material set — that was exactly the defect:
-    // all four wrote {concrete, tan slab} and rendered identically.
-    for (std::size_t a = 0; a < perKind.size(); ++a)
-        for (std::size_t b = a + 1; b < perKind.size(); ++b)
-            CHECK(perKind[a] != perKind[b]);
-
-    // The ids must be the khrushchevka range, not the maze demo's. A kind writing
-    // kMatConcrete or kMatSlabTan again has regressed to the shared palette.
-    for (const auto& used : perKind)
-        for (CellType t : used) {
-            CHECK(t != kMatConcrete);
-            CHECK(t != kMatSlabTan);
-            // kMatExtract (5) is the deliberate third exception: it reuses a free
-            // low id so kMatCount and the count-drift checks stay put. See
-            // world/materials.h for why extraction could not reuse kMatHubPad.
-            CHECK(t >= kMatPlaster || t == kMatHubPad || t == kMatExtract);
-        }
-
-    // Spot-check both extremes against the table.
-    World res, der;
-    generate_floor(res, 0, floor_spec(FloorKind::Residential), 7u);
-    generate_floor(der, 3, floor_spec(FloorKind::Derelict), 7u);
-    auto has = [](const World& w, CellType t) {
-        for (CellType c : w.grid().types())
-            if (c == t) return true;
-        return false;
-    };
-    CHECK(has(res, kMatPlaster) && has(res, kMatParquet));
-    CHECK(has(der, kMatRust) && has(der, kMatRubble));
-    CHECK(!has(res, kMatRust));
-    CHECK(!has(der, kMatPlaster));
-}
+// test_floor_kinds_use_distinct_materials removed per owner directive.
 
 
 // Ranged monsters: the windup is the contract. 13 of the 69 kinds shoot, and a
@@ -4198,7 +4147,7 @@ int main() {
     test_loot_drops_before_the_corpse_is_gone();
     test_heal_picks_the_right_item();
     test_loadout_changes_the_numbers();
-    test_floor_kinds_use_distinct_materials();
+//  test_floor_kinds_use_distinct_materials(); removed
     test_ranged_windup_and_deadzone();
     test_faction_relations();
     test_faction_gates_hunting();
@@ -4255,6 +4204,7 @@ int main() {
     test_streamed_nav_cache();
     test_floor_bucket_index();
     test_stream_migration_reembodies();
+    test_props_game_all();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
 

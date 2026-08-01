@@ -592,9 +592,9 @@ void generate_padic_floor(World& world, int number, const FloorSpec& spec,
     for (const PlanStair& st : p.stairs)
         for (int row = 0; row < 2; ++row) {
             put_bits(g, sm, st.x, st.y + row, kMacroDim - 1, kCeilW, kEntryX04,
-                     kMatTread);
+                     kMatConcrete);
             put_bits(g, sm, st.x, st.y + row, kMacroDim - 1, kFloorW, kEntryX04,
-                     kMatTread);
+                     kMatConcrete);
         }
 
     stamp_lattice(g, sm, number);

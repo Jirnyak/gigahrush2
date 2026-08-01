@@ -394,38 +394,6 @@ static void test_prop_capacity_limits() {
     }
 }
 
-#include "game/floors/padic/padic.h"
-#include "game/prop_system.h"
-#include "world/world.h"
-#include "ecs/components.h"
-
-static void test_padic_props_exam() {
-    giga::World world;
-    giga::Registry reg;
-    giga::game::EventBus bus;
-
-    // Generate padic floor geometry
-    giga::game::FloorSpec spec{};
-    spec.kind = giga::game::FloorKind::Padic;
-    giga::game::generate_padic_floor(world, 4, spec, 12345u);
-
-    // Seed props & test balls
-    std::uint32_t count = giga::game::seed_padic_props(reg, world, 4, 12345u, bus);
-    CHECK(count > 0);
-
-    // Verify Type A (free rolling) and Type B (anchored) & ceiling lamps exist
-    auto viewAnchored = reg.view<giga::game::SubVoxelAnchor>();
-    CHECK(viewAnchored.size() > 0);
-
-    auto viewRolling = reg.view<giga::game::AngularVelocity>();
-    CHECK(viewRolling.size() > 0);
-
-    // Test detachment validation
-    std::vector<std::uint64_t> dirtyCells;
-    dirtyCells.push_back(giga::cell_key(16 + 13, 16 + 1, 2));
-    giga::game::anchor_validate_step(reg, world, bus, dirtyCells);
-}
-
 void test_props_all() {
     test_prop_shape_enum_coverage();
     test_prop_instance_layout();
@@ -435,5 +403,4 @@ void test_props_all() {
     test_prop_bounds_and_air();
     test_prop_attribute_validity();
     test_prop_capacity_limits();
-    test_padic_props_exam();
 }

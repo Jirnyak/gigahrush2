@@ -69,7 +69,7 @@ constexpr std::uint32_t kSocialCandidateTries = 8;
 // Uses NpcPool's per-floor bucket index (`pool.floor_bucket(label)`), which is kept
 // up-to-date by set_floor() and spawn()/kill(). Candidates are selected by hashing
 // into the floor's live roster vector.
-constexpr std::uint32_t kSocialProbeSpan = 0; // Deprecated by floor_bucket probe
+
 
 // Symmetric +/- jitter added to the faction-pair baseline when seeding a new edge, so
 // same-faction pairs do not all start at an identical affinity.

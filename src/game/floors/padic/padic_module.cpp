@@ -32,46 +32,20 @@ std::uint32_t seed_padic_props(Registry& reg, const World& world, int number, un
                     int by = 16 + bj * 32 + 2;
                     int sx = bx + 13;
                     
-                    // Stairwell ceiling lightbulb:
-                    vec3 bulbPos{static_cast<float>(sx * 2.0f + 1.0f), static_cast<float>((b + 2) * 2.0f + 1.75f), static_cast<float>((by + 1) * 2.0f + 1.0f)};
+                    // Corridor ceiling lightbulb:
+                    vec3 bulbPos{static_cast<float>(sx * 2.0f + 1.0f), static_cast<float>((by - 1) * 2.0f + 1.0f), static_cast<float>((b + 2) * 2.0f + 1.75f)};
                     SubVoxelAnchor lightAnchor;
                     lightAnchor.cx = wrap_macro(sx);
-                    lightAnchor.cy = wrap_macro(by + 1);
+                    lightAnchor.cy = wrap_macro(by - 1);
                     lightAnchor.cz = static_cast<int>(b + 2);
                     lightAnchor.subX = 4;
-                    lightAnchor.subY = 7; // Ceiling
-                    lightAnchor.subZ = 4;
+                    lightAnchor.subY = 4; 
+                    lightAnchor.subZ = 6; // Ceiling is sz=6
                     
                     Entity lamp = spawn_prop(reg, world, bulbPos, lightAnchor, Interactable::Kind::LightBulb, PropFallMode::RagdollRoll, vec3{1.0f, 0.95f, 0.7f}, 12);
                     if (lamp != entt::null) {
                         ++count;
                     }
-                    
-                    // Type B: Anchored test ball on wall
-                    vec3 ballBPos{static_cast<float>(sx * 2.0f + 0.5f), static_cast<float>(b * 2.0f + 1.0f), static_cast<float>((by + 1) * 2.0f + 0.5f)};
-                    SubVoxelAnchor ballAnchorB;
-                    ballAnchorB.cx = wrap_macro(sx);
-                    ballAnchorB.cy = wrap_macro(by + 1);
-                    ballAnchorB.cz = static_cast<int>(b);
-                    ballAnchorB.subX = 2;
-                    ballAnchorB.subY = 4;
-                    ballAnchorB.subZ = 2;
-                    
-                    Entity ballB = spawn_prop(reg, world, ballBPos, ballAnchorB, Interactable::Kind::Terminal, PropFallMode::RagdollRoll, vec3{0.2f, 0.9f, 0.2f}, 5);
-                    if (ballB != entt::null) {
-                        ++count;
-                    }
-                    
-                    // Type A: Free-rolling test ball on stair landing
-                    Entity ballA = reg.create();
-                    vec3 ballAPos{static_cast<float>(sx * 2.0f + 2.0f), static_cast<float>(b * 2.0f + 0.5f), static_cast<float>((by + 1) * 2.0f + 2.0f)};
-                    reg.emplace<Transform>(ballA, ballAPos, static_cast<LayerId>(0));
-                    reg.emplace<GravityAffected>(ballA);
-                    reg.emplace<Velocity>(ballA, vec3{0.5f, 0.0f, 0.5f});
-                    reg.emplace<AngularVelocity>(ballA, vec3{1.0f, 0.0f, 1.0f});
-                    reg.emplace<Rotation>(ballA);
-                    reg.emplace<Renderable>(ballA, vec3{0.9f, 0.2f, 0.2f});
-                    ++count;
                 }
             }
         }
