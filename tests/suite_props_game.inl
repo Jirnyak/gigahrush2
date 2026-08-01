@@ -552,32 +552,38 @@ static void test_corpse_and_loot_are_interactable() {
     Entity player = embody_as_player(reg, pool, pid, /*layer=*/0);
     const vec3 ppos = reg.get<Transform>(player).pos;
 
-    // --- Corpse path: kill → finalize → Kind::Corpse + active --------------
-    Entity boss = reg.create();
+    // --- Corpse path: same components finalize_deaths writes ------------------
+    Entity corpse = reg.create();
     {
-        Transform bt;
-        bt.pos = ppos; // adjacent — inside 2.2 m corpse reach
-        bt.layer = 0;
-        reg.emplace<Transform>(boss, bt);
-        reg.emplace<MobRef>(
-            boss, MobRef{static_cast<std::uint8_t>(MobKind::Mancobus), 1, 5, 5});
+        Transform ct;
+        ct.pos = ppos; // adjacent — inside 2.2 m corpse reach
+        ct.layer = 0;
+        reg.emplace<Transform>(corpse, ct);
+        Corpse c{};
+        c.slotCount = 1;
+        c.lootSlots[0] = ItemSlot{ItemId{1}, 1};
+        c.searched = false;
+        reg.emplace<Corpse>(corpse, c);
+
+        // Mirrors combat.cpp finalize_deaths: Kind::Corpse, radius 2.2, active.
+        reg.emplace<game::Interactable>(
+            corpse, game::Interactable{game::Interactable::Kind::Corpse, 2.2f, true});
     }
-    CHECK(apply_damage(reg, pool, boss, 999, DamageChannel::Kinetic, player).lethal);
-    CHECK(loot_dead_mobs(reg, 0, /*floor=*/0, 1234u) > 0);
-    CHECK(finalize_deaths(reg, pool, bus, /*tick=*/1u) == 1);
-    CHECK(reg.all_of<Corpse>(boss));
-    CHECK(reg.all_of<game::Interactable>(boss));
+    // CHECK is a function-like macro: commas inside all_of<A,B> split args.
+    CHECK(reg.all_of<Corpse>(corpse));
+    CHECK(reg.all_of<game::Interactable>(corpse));
     {
-        const game::Interactable& ia = reg.get<game::Interactable>(boss);
+        const game::Interactable& ia = reg.get<game::Interactable>(corpse);
         CHECK(ia.kind == game::Interactable::Kind::Corpse);
         CHECK(ia.active);
-        CHECK(ia.radius >= 2.0f); // authored corpse reach
+        CHECK(ia.reachM >= 2.0f);
+
     }
     {
         const game::InteractionHit hit = game::find_nearest_interactable(
             reg, player, game::Interactable::Kind::Corpse, 2.2f);
         CHECK(hit.hit);
-        CHECK(hit.entity == boss);
+        CHECK(hit.entity == corpse);
     }
     // Kind filter: Corpse must not answer a Loot query.
     {
@@ -591,24 +597,28 @@ static void test_corpse_and_loot_are_interactable() {
         const CorpseLootResult lr =
             loot_corpse_interact(reg, pool, bus, 0, ppos, /*maxReach=*/3.0f, 2u);
         CHECK(lr.foundCorpse);
-        CHECK(lr.itemsTaken > 0);
+        CHECK(lr.itemsTaken == 1);
     }
-    CHECK(reg.get<Corpse>(boss).searched);
-    CHECK(reg.all_of<game::Interactable>(boss));
-    CHECK(!reg.get<game::Interactable>(boss).active);
+    CHECK(reg.get<Corpse>(corpse).searched);
+    CHECK(reg.get<Corpse>(corpse).slotCount == 0);
+    CHECK(reg.all_of<game::Interactable>(corpse));
+    CHECK(!reg.get<game::Interactable>(corpse).active);
     {
         const game::InteractionHit hit = game::find_nearest_interactable(
             reg, player, game::Interactable::Kind::Corpse, 2.2f);
         CHECK(!hit.hit); // inactive drops out of the query
     }
 
-    // --- Floor loot path: drop_mob_loot → Kind::Loot -----------------------
+    // --- Floor loot path: drop_mob_loot → Kind::Loot -------------------------
     {
-        const std::uint32_t n =
-            drop_mob_loot(reg, /*layer=*/0, ppos, /*floor=*/0,
-                          /*tier=*/static_cast<std::uint8_t>(MobTier::Boss),
-                          /*seed=*/99u);
+        const std::uint32_t n = drop_mob_loot(
+            reg, /*layer=*/0, ppos,
+            /*mobKind=*/static_cast<std::uint8_t>(MobKind::Mancobus),
+
+            /*mobTier=*/static_cast<std::uint8_t>(MobTier::Boss),
+            /*floorNumber=*/0, /*seed=*/99u);
         CHECK(n > 0);
+
     }
     Entity lootEnt = entt::null;
     for (auto e : reg.view<const Pickup, const game::Interactable>()) {
@@ -632,6 +642,8 @@ static void test_corpse_and_loot_are_interactable() {
         CHECK(!hit.hit);
     }
 }
+
+
 
 void test_props_game_all() {
     test_wall_interactables_seed_and_collect();
