@@ -11,8 +11,10 @@ A **monolithic 128³ macro grid** of typed cells (each cell ~2 m), wrapped as a
 sub-voxel** blocker mask; arbitrary **typed scalar fields** overlay the grid at
 runtime; a **4th coordinate W** stacks whole worlds into a **level stack**;
 entities live in a shared **EnTT** registry and are moved by **systems**
-(physics, controller, camera, fluid); a minimal **Vulkan** backend draws the
-visible surface as instanced cubes.
+(physics, controller, camera, fluid); a **Vulkan** backend **raymarches** the
+voxel world per pixel (two-level DDA over a GPU mirror of the same masks
+physics collides against, with honest depth) and rasterizes bodies/props/
+particles over it.
 
 ## Resource model — the frame for everything
 
@@ -119,10 +121,16 @@ draw and to feed input in, but the game runs to completion headless with L3
 removed. Data flows sim → render, never back (see [render.md](render.md)).
 
 - **render/** — [render.md](render.md): device/swapchain/renderer bring-up plus
-  the instanced **cube pass** ([voxels.md](voxels.md)) that surface-culls the
-  grid to one draw call, places every cell at its **nearest toroidal image**
-  around the camera (seamless wrap, no edge), fogs to black at the
-  `kWorldExtent/2` render radius, and the ImGui HUD layer.
+  the **voxel mirror** ([src/render/voxel_mirror.h](src/render/voxel_mirror.h))
+  — a one-way sim→GPU copy of masks/types/sub-materials/class/fluid kept fresh
+  by the existing dirty seams (carve `dirtyCells`, door `dirtyCells`, arrival
+  re-uploads) — and the **raymarch pass**
+  ([src/render/raymarch_pass.h](src/render/raymarch_pass.h)) that DDA-marches it
+  per pixel, writes honest `gl_FragDepth`, places everything at its **nearest
+  toroidal image** around the camera (seamless wrap), and fogs to black at the
+  `kWorldExtent/2` render radius. Destruction costs the renderer 64 B per dirty
+  cell — there is no remesh. Body/prop/particle raster passes share the depth
+  buffer; ImGui HUD on top.
 - **input/** — SDL3 events → ECS components (yaw/pitch/wishDir/jump) on the
   active camera entity. Writes components, not a hardcoded player. Held
   movement keys come from the keybinding table's axis rows, not constants.
@@ -178,14 +186,15 @@ while (accumulator ≥ dt):          # fixed 125 Hz (kSimDt, 8 ms exactly)
     physics_step      → integrate + collide vs sub-voxel masks
     fluid_step        → (throttled) cellular liquid
 compute_camera        → view/proj from CameraTag entity
-render                → cube pass (instanced) + ImGui HUD
+render                → mirror flush (dirty cells → GPU) → raymarch world
+                        → body/prop/particle passes → ImGui HUD
 ```
 
 ## Data-driven extension points
 
 | Want | Do | Not |
 |------|-----|-----|
-| A new cell type | Assign an id + a colour row in the cube pass | Engine `if` chains |
+| A new cell type | Assign an id + an albedo row in the material table (feeds the raymarcher's UBO) | Engine `if` chains |
 | A new world quantity (temperature, light) | `fields().get_or_create<T>("name")` | New struct field on the grid |
 | Regional/inverted gravity | Install a `GravityField::region` fn | Branch in physics |
 | A new floor | A folder under `src/game/floors/<name>/` + a catalog claim or pattern ([floors.md](floors.md)) | Hardcode a layer index |
@@ -199,3 +208,120 @@ render                → cube pass (instanced) + ImGui HUD
 
 Within a single build, same seed → same world (worldgen and fluid are
 deterministic). Cross-build / cross-platform float identity is a non-goal.
+
+## Манифест игры (владелец, 2026-08-01)
+
+Как игра выглядит в финале; каждый пункт — контракт поверх слоёв выше.
+Принцип над всем: **максимум контекста, минимум систем** — каждая
+формула (урон, спавн, лут, квесты) переиспользует базовые системы;
+эмерджентность рождается из их пересечений, не из новых механизмов.
+
+1. **Один активный этаж.** Вся живая игра — на одном 128³-торе (1024³
+   разрушаемых атомов-субвокселей). Геометрия этажа — отдельный
+   модуль ([floors.md](floors.md)), любая сколь угодно сложная структура,
+   заполняющая тор. Переход между этажами — всегда загрузка.
+2. **Макропопуляция — ИСТОЧНИК ИСТИНЫ.** Холодная таблица всего
+   населения (~2²⁰ строк), ВСЕ NPC включая игрока; ролевые строки
+   (имя/фамилия/инвентарь/уровень/атрибуты/отношения/перки/характер/
+   жильё, расширяемо). **Игрок = NPC** с камерой на голове (`NpcPlayer`-бит,
+   `possess` пересаживает). Фоном — холодная социально-экономическая
+   симуляция миграций и отношений ([macrosim.md](macrosim.md)).
+3. **Цикл воплощения.** Загрузка этажа: генерация геометрии → болванки
+   NPC/мобов по дизайну модуля → контекстное data-driven воплощение строк
+   макропопуляции в них. Уход с этажа / сейв → fold-back всех воплощённых
+   обратно в пул. Константа: ≤ 16k воплощённых на этаже. Синхронизация
+   макро↔этаж прямо в живой симуляции допустима, если ≤ O(n) —
+   осторожно: макропопуляция — миллион строк.
+4. **Карта путей, комнаты-зоны, лифты, самосбор.** После генерации —
+   запекание навигации по 1024³-геометрии с учётом торических швов
+   ([nav.md](nav.md)); горячий тик читает её за O(1). **Комнаты — поля на
+   128³**: зоны интереса для AI по нуждам (туалеты, кухни, цеха, курилки),
+   жилые — неразрушимые гермоубежища (персистентные маски гермостен/
+   дверей/лифтов переживают и самосбор, и разрушение); зоны **контекстно
+   привязываемы к id** (логово конкретного моба, любимая комната NPC) —
+   субстрат эмерджентных социальных сценариев (два NPC назначают свидание
+   в зоне и реально идут туда; вечеринки; NPC навещает место — всё через
+   одну систему зон + макро-планы); у монстров — свои
+   зоны (логова: таскают трупы, отступают). **Лифты**: 4×4 фиксированных
+   fast-travel + 4×4 случайных процедурных «вниз» + 4×4 «вверх» — столбы во
+   всю высоту с интеракцией меню перехода; **сетка fast-travel одинакова и
+   симметрична на всех этажах** — пространственный ориентир для игрока.
+   **Самосбор — центральная кризис-механика, GPU-first**: сирена → волны
+   в реалтайме разъедают и заращивают мир на уровне субвокселей (стена
+   зарастает проходом, пол исчезает — реальная опасность для всех; NPC бегут
+   к гермодверям). Архитектура: волна = **целочисленный клеточный
+   автомат-стенсил на GPU** поверх зеркала масок (без флоатов и атомик-
+   гонок → бит-точно на любом GPU → реплей от (seed, tick) без пересылки
+   масок); GPU **предлагает** компактный op-list, CPU-истина **применяет**
+   его к маскам и перезаливает dirty через существующий шов зеркала (тот
+   же client-proposes/server-disposes); волна читает поле гермозащиты и не
+   трогает персистентные зоны. После волны: затронутое помечено → модуль
+   этажа генерит свежую геометрию и сшивает на место → полное перепекание
+   (regime-1 из [performance.md](performance.md)) → игра продолжается с
+   последствиями.
+5. **RPG и бой.** 8 атрибутов (степень двойки для хранения): сила (+1%
+   ближний урон), ловкость (скорость перезарядки; ближнее оружие = магазин
+   на 1 — единая система), интеллект (+1% пси-урон, +1% XP), харизма (цены,
+   +1 отношения, награды контрактов), сила воли (+1% пси — симметрично
+   живучести), выносливость (+1 кг веса), живучесть (+1% HP), скорость (+1%
+   хода).
+   Уровень = +1 очко атрибута, каждый второй — +1 перк. **Перки — референс
+   Fallout/Underrail**: от чистых статов до событий и изменений мира от
+   носителя; гейтятся любым числом игры (атрибут/уровень/карма/…) или
+   безусловны. База: 8 очков атрибутов + 1 перк, HP 100. **Пси — сильное и
+   редкое (РЕШЕНО)**: пул 100 симметрично HP; пси-удар — 10 урона за 1 пси,
+   гейм-ченджеры ~100 = полный бар, плавная градация между. Реген пси —
+   ТОЛЬКО при полном сне, очень медленно (~1%/с при max сне — аналогично
+   HP-от-еды) плюс предметы (антидепрессанты и пр.).
+   Атрибуты влияют контекстно везде (нужды, проверки в интеракциях,
+   требования экипировки). **Бой**: типы урона × типы брони — сейчас РАБОЧИЙ
+   СКЕЛЕТ на существующих пяти резистах (kinetic/buckshot/energy/fire/psi),
+   баланс и расширение — потом (% сопротивления; только топ-броня
+   универсальна, остальная ситуативна).
+   Монстры — без инвентаря/атрибутов, чисто таблица (hp/урон/скорость/типы).
+   **Урон рушит мир**: тип урона × материал = вероятность сноса субвокселя
+   (расширение carve-ролла [destruct.md](destruct.md); у материала НЕТ HP —
+   очередь из автомата лишь царапает краску). **Инвентарь** 8×8 + вес (50 кг
+   база) + слоты оружие/броня/пси/инструменты (заряд/прочность — фонарик).
+   **Нужды тикают У ВСЕХ воплощённых** — держатель камеры ничем не особенный
+   (тот же закон, что «игрок не специален»).
+   **Снаряды — честная баллистика в торе**, никаких friendly-fire-исключений;
+   граната скачет по вокселям, осколки бьют и владельца. Смерть — дроп
+   инвентаря на этаж (маркеры сюжетных квестов переживают смерть
+   квестодателя на дропе). **Смерть игрока (РЕШЕНО)**: главное меню
+   (можно грузиться) ИЛИ переселение в случайного NPC макропопуляции
+   (твой труп с лутом остаётся на этаже); респавнов НЕТ. XP — за убийства
+   (таблицы + контекст уровня) и квесты (линейная сюжетная цепочка +
+   процедурные квесты/ивенты). |absN| этажа = уровень опасности → монстры,
+   лут, уровень жителей.
+6. **Технические константы цели.** **16k воплощённых — КОНСТАНТА**, на
+   которую ориентируется вся игра; 1024³ разрушаемый живой изотропный
+   этаж — техническая цель. **Запекать на загрузке — МНОГОПОТОЧНО**: всё,
+   что можно генерить/запекать параллельно с последующей сшивкой — делать
+   так (результат статичен, синхронизации нет — бесплатная скорость
+   загрузки; без фанатизма, но по умолчанию — да).
+
+Старый прототип `/Users/jirnyak/Mirror/gigahrush` — справочник решений
+(интеракторы навешиваются на пропы/фичи этапом генерации, сшивка
+самосбора, квесты) — но не образец кода.
+
+### Конфликты и зазоры манифест ↔ код (сверено 2026-08-01)
+
+| Манифест | Сегодня в коде | Статус |
+|---|---|---|
+| 8 атрибутов | `Attr{Str,Agi,Int}` ([rpg.h](src/game/rpg.h)); пул УЖЕ держит 8 слотов (3..7 свободны, засеяны) | **КОНФЛИКТ**: расширить enum + `RpgStats.attr[8]` (12→16 Б), пересадить производные (сейчас STR→HP+melee, AGI→move+attack+spread, INT→psi+xp+награды), сейв-версия |
+| Пси | `kBasePsi = 100`, +1/уровень, max от INT +1% | **РЕШЕНО**: пул 100 остаётся; владелец max-пси — воля +1% (не INT); INT% → пси-урон; реген только при полном сне ~1%/с + предметы |
+| Перки (Fallout/Underrail: статы → события → мир) | нет системы (XP-кривая и очки атрибутов есть) | **GAP**: таблица + гейты + эффекты-модификаторы + хуки через событийную шину ([events.md](events.md)) |
+| Типы урона/брони | в данных УЖЕ 5 резистов: kinetic/buckshot/energy/fire/psi (items.csv), `damageType` частично в combat | **ПОЧТИ**: сверить номенклатуру (колющий=kinetic? дробящий=buckshot?) и довести до боя |
+| Тип урона × материал | carve: один скаляр power vs hardness | **GAP**: колонки типов в [material_props.h](src/world/material_props.h) — data-driven, без HP |
+| Инвентарь 8×8 + слоты | `kInvSlots = 64 = 8×8`, `equip_slot` в items.csv | **СОВПАДАЕТ** ✓ |
+| Вес (50 кг + выносливость) | в items.csv нет колонки веса, системы нет | **GAP** (CSV + генератор + гейт) |
+| Нужды еда/вода/туалет/сон | `Needs{food,water,sleep,pee,poo}` + needs_step | **ЧАСТИЧНО**: структура ✓, но тикает только у держателя камеры — РЕШЕНО: тик у ВСЕХ воплощённых (O(n) по этажу) |
+| Игрок = NPC, possess | `NpcPlayer`-бит, `possess` | **СОВПАДАЕТ** ✓ |
+| Макропопуляция = источник истины, fold-back | streamer/embody/fold-back, сейв несёт пул verbatim | **СОВПАДАЕТ** ✓ |
+| Комнаты-зоны как поля 128³ | комнаты в floor_gen, `spawn_rooms` в лут-таблице; зонального поля для AI-нужд нет | **ЧАСТИЧНО** |
+| Гермо-комнаты неразрушимые | механизм `kHardnessUnbreakable` есть; жилых гермозон нет | **ЧАСТИЧНО** |
+| Лифты 4×4 fast + 4×4↓ + 4×4↑ столбами | hub-пады на z-уровнях {16,48,80,112} + extract-пады + [/]-ride | **КОНФЛИКТ раскладки** (см. [elevators.md](elevators.md)) |
+| Самосбор-перестройка + сшивка + ребейк | сирена/туман/duty/варианты есть; волновой перестройки геометрии НЕТ | **GAP, дизайн ЗАФИКСИРОВАН** (GPU-стенсил + op-list → CPU-истина; см. манифест п.4) |
+| Баллистика снарядов | `projectile_step` + carve от попаданий | **СОВПАДАЕТ** ✓ (гранаты — проверить) |
+| Квесты: линейка + процедурные | quests.csv + suite_quest; процедурные/ивенты частично ([events.md](events.md)) | **ЧАСТИЧНО** |
