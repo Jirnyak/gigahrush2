@@ -1,5 +1,0 @@
-feat(shotlog): [place] MOVE/REFUSE stderr in place_body_at_cell
-
-Central seam in save.cpp covers both travel PBS sites + F9 load.
-Quiet when landing already standable. Live --ride 2 proof GREEN_QUIET
-floor 0->-8; binary strings linked in Release exe.

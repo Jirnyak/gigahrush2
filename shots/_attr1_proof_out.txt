@@ -1,4 +1,0 @@
-=== game_test ===
-exit=0 elapsed=359.3s
-game_test: all checks passed. If ctest reports this target FAILED, the pinned count
-SKIP shot — tests not green

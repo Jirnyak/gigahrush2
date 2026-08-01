@@ -1,5 +1,0 @@
-docs(audit): RE-PAR1 post-MAGSHOT travel seams still green (11/11)
-
-Read-only re-grep after MAGSHOT close: place_body_safely×2, ai_release×2,
-floor_stream release, elevator mag/rpg restore, QKILL+MAGSHOT harness present.
-No code change. OPEN queue empty.

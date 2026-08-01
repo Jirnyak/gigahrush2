@@ -1,6 +1,0 @@
-RPGCMBT: wire RPG melee/ranged formulas into combat (+22 checks)
-
-player_melee_step uses melee_damage + AGI/STR CD mults when RpgStats present;
-player_ranged_step scales spread/CD by AGI. Identity path keeps table values
-when the body has no sheet. test_rpg_combat_wire pins bare/high-attr paths.
-game_test pin 219387 -> 219409. Live proof shot + ATTR1/AGIMV/SAVRPG next.

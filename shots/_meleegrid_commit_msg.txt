@@ -1,8 +1,0 @@
-MELEEGRID: player_melee_step forwards grid so WallBrace soaks fists
-
-player_melee_step already took MacroGrid* for wall-chip carves but forgot
-to pass it into apply_damage. WallBrace (Panelnik) soaked projectiles and
-mob swings; player fists hit for full damage. One-arg fix + suite_behaviours
-section 18 (braced applied=2 @ x0.58, open applied=3).
-
-game_test: 219621 checks, 0 failures (was 219615; +6)
