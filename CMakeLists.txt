@@ -517,7 +517,7 @@ if(GIGA_BUILD_TESTS)
     # suite_props_game wall-device floor band; console "sp" now matches 3 cmds.
     # 221529 -> 221678 (+149) on 2026-08-01: death inventory spill into Corpse
     # then same-cell Containers (jirnyak §19) + suite_rpg death-spill CHECKs.
-        PASS_REGULAR_EXPRESSION "game_test: 221678 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "game_test: 221694 checks, 0 failures")
 
 
     # Text gate for the AGENTS.md rules that no compiler enforces on every host.
