@@ -129,3 +129,20 @@ pin superseded by CORP1 pin 215499 this cycle
 - API+unit tests already in quest.cpp / suite_quest.inl; OPEN backlog empty.
 - gigahrush2 Debug+Release build OK after verify.
 - CMake pin remains 219716 checks, 0 failures.
+
+## 2026-08-01 MAGSHOT + setvbuf
+
+- Shipped optional live harness `--action mag`: stamps distinctive PlayerRanged
+  (mag=7, shots=42, hits=13) + gun/ammo; logs FORCE/RIDE/FINAL; PROOF=GREEN after
+  `--ride 1` hop (floor -8, 901 frames). Elevator MAG1 unit pin unchanged.
+- game_test main: unbuffered stdout/stderr via setvbuf (_IONBF) for redirected runs.
+- Files: src/app/main.cpp, tests/game_test.cpp, BACKLOG.md, progress.md
+- Proof:
+```
+[mag] FORCE gun=4 name=<gun> mag=7/30 shots=42 hits=13
+[mag] RIDE done=0 has=1 mag=7 weapon=4 shots=42 hits=13 ok=1
+[mag] RIDE done=1 has=1 mag=7 weapon=4 shots=42 hits=13 ok=1
+shot: saved -> shots/shot_mag.png (floor -8, 901 frames)
+[mag] FINAL has=1 mag=7 weapon=4 shots=42 hits=13 rideDone=1
+[mag] PROOF=GREEN
+```

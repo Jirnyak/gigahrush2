@@ -44,7 +44,7 @@ Updated: 2026-08-01 ~00:45 Samara
 | P3 | POSRPG | CLOSED 2026-08-01 — voluntary possess carries RpgStats+kills+shots/hits | src/game/combat.* + main possess | see CLOSED POSRPG |
 | P3 | MELEEGRID | CLOSED 2026-08-01 — player_melee forwards grid (WallBrace soak) | src/game/combat.cpp + suite_behaviours §18 | see CLOSED MELEEGRID |
 | P3 | SAVSTAT | CLOSED 2026-08-01 — F5/F9 persist StatusSet (kSaveVersion 9) | save.h/cpp + main F5/F9 + suite_saveload | see CLOSED SAVSTAT |
-| P3 | MAGSHOT | Optional: real-game HUD mag line across --ride | main.cpp foreign-aware | unit pin owns body-swap |
+| P3 | MAGSHOT | **CLOSED 2026-08-01** live `--action mag` PROOF=GREEN (mag=7/shots=42/hits=13 across ride) | main.cpp harness | unit pin + live |
 
 | P3 | M4 | CLOSED peek — Milestone 4 already CLOSED (suite_props / world_test) | .agents/worker_m4* | no leftover game work |
 | P3 | SHOTLOG | CLOSED 2026-07-31 — [place] MOVE/REFUSE in place_body_at_cell | src/game/save.cpp | see CLOSED SHOTLOG |
@@ -363,7 +363,7 @@ Next OPEN: idle pull/push; re-PAR1 after next foreign main thrash; stay off src/
 3b. ~~**SAVMAG**~~ CLOSED — kSaveVersion 8, PlayerRanged+kills on F5/F9
 3c. ~~**SAVSTAT**~~ CLOSED — kSaveVersion 9, StatusSet on F5/F9
 4. ~~**RPGCMBT-SHOT**~~ CLOSED — `--action rpgcmbt` live proof GREEN
-5. MAGSHOT still deferred
+5. MAGSHOT CLOSED 2026-08-01 (live harness)
 
 
 ### Critique notes (subagent)
@@ -406,7 +406,7 @@ pathspec:
   tests/suite_console.inl tests/suite_keybind.inl
   CMakeLists.txt .agents/worker_game_audit/BACKLOG.md
 
-Next OPEN: MAGSHOT deferred (SAVMAG CLOSED)
+Next OPEN: idle (MAGSHOT CLOSED 2026-08-01)
 ```
 
 ## CLOSED 2026-07-31 SAVRPG — F5/F9 RpgStats + CraftingState
@@ -421,7 +421,7 @@ game_test: 219546 checks, 0 failures (was 219426; +120)
 pathspec: src/game/save.h src/game/save.cpp src/app/main.cpp
           tests/suite_saveload.inl CMakeLists.txt BACKLOG.md
 ```
-Next OPEN: MAGSHOT deferred (MELEEGRID CLOSED); stay off src/render/**.
+Next OPEN: idle (MAGSHOT CLOSED 2026-08-01); stay off src/render/**.
 
 ## CLOSED 2026-07-31 SAVMAG — F5/F9 PlayerRanged + melee kills
 ```
@@ -437,7 +437,7 @@ game_test: 219586 checks, 0 failures (was 219546; +40)
 pathspec: src/game/save.h src/game/save.cpp src/app/main.cpp
           tests/suite_saveload.inl CMakeLists.txt BACKLOG.md
 ```
-Next OPEN: MAGSHOT deferred (MELEEGRID CLOSED); stay off src/render/**.
+Next OPEN: idle (MAGSHOT CLOSED 2026-08-01); stay off src/render/**.
 
 ## CLOSED 2026-08-01 POSRPG — voluntary possess carries progression
 ```
@@ -465,7 +465,7 @@ game_test: 219615 checks, 0 failures (was 219586; +29)
 pathspec: src/game/combat.h src/game/combat.cpp src/app/main.cpp
           tests/suite_rpg.inl CMakeLists.txt BACKLOG.md
 ```
-Next OPEN: MAGSHOT deferred (MELEEGRID CLOSED); stay off src/render/**.
+Next OPEN: idle (MAGSHOT CLOSED 2026-08-01); stay off src/render/**.
 
 ## CLOSED 2026-08-01 MELEEGRID — player_melee forwards grid (WallBrace)
 ```
@@ -508,3 +508,36 @@ No main.cpp edit. No hole.
 ```
 MAGSHOT remains optional polish (unit pin owns mag body-swap FOR1/MAG1).
 Open lane queue empty of required defects; stay off src/render/**.
+
+## CLOSED 2026-08-01 MAGSHOT + setvbuf QoL
+
+### MAGSHOT — live PlayerRanged mag stamp across --ride
+- Harness: `main.cpp` `--action mag` under `--shot`
+  - Forces first single-pellet gun (magazine>=8, dmg>=20) + ammo into pool inventory
+  - Stamps `PlayerRanged{magCount=7, weapon=gun, shots=42, hits=13}` once
+  - Logs `[mag] FORCE`, `[mag] RIDE done=N ... ok=0|1` on each ride boundary,
+    and `[mag] FINAL` + `PROOF=GREEN|RED` at capture
+- Unit pin already owns pure body-swap (elevator FOR1/MAG1 / magCount==12);
+  this is the live HUD/path proof that the same component survives a real hop
+- No pin change (harness-only; no new CHECKs)
+
+### Live proof (Release gigahrush2.exe, cwd repo root)
+```
+[mag] FORCE gun=4 name=<gun> mag=7/30 shots=42 hits=13
+[mag] RIDE done=0 has=1 mag=7 weapon=4 shots=42 hits=13 ok=1
+[mag] RIDE done=1 has=1 mag=7 weapon=4 shots=42 hits=13 ok=1
+shot: saved -> shots/shot_mag.png (floor -8, 901 frames)
+[mag] FINAL has=1 mag=7 weapon=4 shots=42 hits=13 rideDone=1
+[mag] PROOF=GREEN
+```
+Command: `gigahrush2.exe --shot shots/shot_mag.png --frames 900 --ride 1 --action mag`
+(rc=0, ~31s, png ~2.7 MiB)
+
+### setvbuf QoL
+- `tests/game_test.cpp` `main()`: `setvbuf(stdout/stderr, nullptr, _IONBF, 0)`
+  so redirected long runs show progress instead of looking hung on first suite
+
+### Verdict
+MAGSHOT CLOSED. OPEN required queue still empty. Stay off `src/render/**`.
+Next OPEN: idle pull/push / re-PAR1 after foreign main; no invent.
+
