@@ -1,3 +1,0 @@
-User-agent: *
-Allow: /
-Sitemap: https://Jirnyak.github.io/gigahrush2/sitemap.xml
