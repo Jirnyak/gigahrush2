@@ -1,13 +1,14 @@
 #include "game/console.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
-#include "ecs/components.h"      // Transform, Controller, NoClip
+#include "ecs/components.h"      // Transform, Controller, NoClip, Velocity, AABB
 #include "game/combat.h"         // GodMode
-#include "game/prop_system.h"    // AngularVelocity, SubVoxelAnchor
 #include "game/floor_registry.h" // registered-floor enumeration for teleport
+
 #include "game/floor_spec.h"     // floor_mob_tier — spawn at the floor's level
 #include "game/mob_spawn.h"      // spawn_mob_at
 #include "game/mob_table.h"      // kMobTokens, mob_kind_from_token
@@ -459,12 +460,14 @@ bool cmd_carve(ConsoleContext& ctx, int argc, const char* const* argv,
 }
 
 // --- spawn_ball -------------------------------------------------------------
-// Spawn a free-rolling test ball (Type A) at player position for testing physics.
+// Free body on the live physics/render path: Transform + AABB + Renderable
+// (BodyPass) and Transform + Velocity + GravityAffected (physics_step).
+// No AngularVelocity/Rotation — nothing integrates or draws them yet.
 bool cmd_spawn_ball(ConsoleContext& ctx, int argc, const char* const* argv,
                     char* out, std::size_t cap) {
     (void)argc;
     (void)argv;
-    if (!ctx.ecs || ctx.player == entt::null) {
+    if (!ctx.ecs || ctx.player == entt::null || !ctx.ecs->valid(ctx.player)) {
         if (out && cap) put(out, cap, "spawn_ball: player or ecs missing");
         return false;
     }
@@ -473,20 +476,30 @@ bool cmd_spawn_ball(ConsoleContext& ctx, int argc, const char* const* argv,
         if (out && cap) put(out, cap, "spawn_ball: player has no transform");
         return false;
     }
-    vec3 spawnPos = tr->pos + vec3{1.0f, 0.5f, 0.0f};
+    // 2 m ahead of look yaw (Z-up), +0.8 m up so it drops into view clear of
+    // the player's own AABB instead of embedding in a wall at the feet.
+    vec3 offset{2.0f, 0.0f, 0.8f};
+    if (const auto* cam = ctx.ecs->try_get<CameraTag>(ctx.player)) {
+        const float c = std::cos(cam->yaw);
+        const float s = std::sin(cam->yaw);
+        offset = vec3{c * 2.0f, s * 2.0f, 0.8f};
+    }
+    const vec3 spawnPos = tr->pos + offset;
 
-    Entity ballA = ctx.ecs->create();
-    ctx.ecs->emplace<Transform>(ballA, spawnPos, tr->layer);
-    ctx.ecs->emplace<AABB>(ballA, vec3{0.4f, 0.4f, 0.4f});
-    ctx.ecs->emplace<GravityAffected>(ballA);
-    ctx.ecs->emplace<Velocity>(ballA, vec3{0.5f, 0.0f, 0.5f});
-    ctx.ecs->emplace<AngularVelocity>(ballA, vec3{1.0f, 0.0f, 1.0f});
-    ctx.ecs->emplace<Rotation>(ballA);
-    ctx.ecs->emplace<Renderable>(ballA, vec3{0.95f, 0.2f, 0.15f});
+    Entity ball = ctx.ecs->create();
+    ctx.ecs->emplace<Transform>(ball, Transform{spawnPos, tr->layer});
+    ctx.ecs->emplace<AABB>(ball, AABB{vec3{0.35f, 0.35f, 0.35f}});
+    ctx.ecs->emplace<GravityAffected>(ball);
+    // Canonical form — same as combat.cpp projectiles. Bare vec3 is not the
+    // house style and has been a footgun when aggregate paren-init drifts.
+    ctx.ecs->emplace<Velocity>(ball, Velocity{vec3{offset.x * 0.5f, offset.y * 0.5f, 0.0f}});
+    ctx.ecs->emplace<Renderable>(ball, Renderable{vec3{0.95f, 0.15f, 0.10f}});
 
     if (out && cap)
-        std::snprintf(out, cap, "spawn_ball: spawned rolling test ball (Type A) at (%.1f, %.1f, %.1f)",
-                      spawnPos.x, spawnPos.y, spawnPos.z);
+        std::snprintf(out, cap,
+                      "spawn_ball: body at (%.1f, %.1f, %.1f) layer %u",
+                      spawnPos.x, spawnPos.y, spawnPos.z,
+                      static_cast<unsigned>(tr->layer));
     return true;
 }
 

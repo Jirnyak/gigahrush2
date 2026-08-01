@@ -46,15 +46,23 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
     else if (mode == PropFallMode::RagdollRoll) {
         reg.remove<SubVoxelAnchor>(prop);
         reg.emplace_or_replace<GravityAffected>(prop);
-        reg.emplace_or_replace<Velocity>(prop, impulse);
-        reg.emplace_or_replace<AngularVelocity>(prop, vec3{impulse.z, impulse.x, 2.0f});
+        // Canonical Velocity{vec3} form (combat.cpp). AngularVelocity/Rotation
+        // stay attached for the planned ragdoll step; physics_step only reads V.
+        reg.emplace_or_replace<Velocity>(prop, Velocity{impulse});
+        reg.emplace_or_replace<AngularVelocity>(prop, AngularVelocity{vec3{impulse.z, impulse.x, 2.0f}});
         reg.emplace_or_replace<Rotation>(prop);
+        // BodyPass needs AABB — without it a detached prop is invisible.
+        if (!reg.all_of<AABB>(prop))
+            reg.emplace<AABB>(prop, AABB{vec3{0.2f, 0.2f, 0.2f}});
     } 
     else {
         reg.remove<SubVoxelAnchor>(prop);
         reg.emplace_or_replace<GravityAffected>(prop);
-        reg.emplace_or_replace<Velocity>(prop, vec3{0.0f, -0.5f, 0.0f});
+        reg.emplace_or_replace<Velocity>(prop, Velocity{vec3{0.0f, 0.0f, -0.5f}});
+        if (!reg.all_of<AABB>(prop))
+            reg.emplace<AABB>(prop, AABB{vec3{0.2f, 0.2f, 0.2f}});
     }
+
 }
 
 bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& projVel, 

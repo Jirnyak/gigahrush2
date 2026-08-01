@@ -10,6 +10,7 @@
 // Included from game_test.cpp like every suite; uses its CHECK.
 
 #include "game/console.h"
+#include "game/prop_system.h" // AngularVelocity, Rotation — spawn_ball must NOT attach these
 
 static bool consoletest_ran = false;
 static bool consoletest_cmd(ConsoleContext&, int argc, const char* const* argv,
@@ -48,6 +49,8 @@ static void test_console_registry_rules() {
     CHECK(defaults.find("menu") != nullptr);
     CHECK(defaults.find("interact") != nullptr);
     CHECK(defaults.find("attr") != nullptr);
+    CHECK(defaults.find("spawn_ball") != nullptr);
+    CHECK(defaults.find("spawn_test_ball") != nullptr);
 }
 
 static void test_console_requests() {
@@ -229,6 +232,71 @@ static void test_console_spawn_god_noclip() {
     CHECK(!con.exec(bare, "god", out, sizeof out));
 }
 
+// spawn_ball must land on the LIVE BodyPass + physics_step path:
+// Transform + AABB + Renderable (drawn) and Velocity + GravityAffected (moves).
+// No AngularVelocity/Rotation — nothing integrates or draws those yet.
+static void test_console_spawn_ball() {
+    Registry ecs;
+    Entity player = ecs.create();
+    Transform tr;
+    tr.pos = vec3{64.0f, 64.0f, 8.0f};
+    tr.layer = 0;
+    ecs.emplace<Transform>(player, tr);
+    // yaw=0 → forward +X (cos0=1, sin0=0); ball spawns 2 m ahead + 0.8 m up.
+    CameraTag cam{};
+    cam.yaw = 0.0f;
+    ecs.emplace<CameraTag>(player, cam);
+
+    Console con;
+    CHECK(console_register_defaults(con));
+    ConsoleContext ctx;
+    ctx.ecs = &ecs;
+    ctx.player = player;
+    char out[192];
+
+    // Count BodyPass-visible entities (Transform+AABB+Renderable) by hand —
+    // multi-type EnTT views have no size(), and commas inside CHECK() break
+    // the macro.
+    auto count_bodies = [&]() -> int {
+        int n = 0;
+        for (auto e : ecs.view<Transform, AABB, Renderable>()) {
+            (void)e;
+            ++n;
+        }
+        return n;
+    };
+    const int before = count_bodies();
+    CHECK(con.exec(ctx, "spawn_ball", out, sizeof out));
+    CHECK(count_bodies() == before + 1);
+
+    // The new body is the only entity with Velocity that is not the player.
+    Entity ball = entt::null;
+    for (auto e : ecs.view<Velocity, AABB, Renderable, Transform>()) {
+        if (e == player) continue;
+        ball = e;
+        break;
+    }
+    CHECK(ball != entt::null);
+    CHECK(ecs.all_of<GravityAffected>(ball));
+    // Dead components must NOT be attached — they are not integrated or drawn.
+    CHECK(!ecs.all_of<AngularVelocity>(ball));
+    CHECK(!ecs.all_of<Rotation>(ball));
+
+    const auto& btr = ecs.get<Transform>(ball);
+    CHECK(btr.layer == tr.layer);
+    // 2 m ahead on +X, +0.8 m up (Z-up).
+    CHECK(std::fabs(btr.pos.x - 66.0f) < 0.01f);
+    CHECK(std::fabs(btr.pos.y - 64.0f) < 0.01f);
+    CHECK(std::fabs(btr.pos.z - 8.8f) < 0.01f);
+
+    // Bare context refuses without crashing.
+    ConsoleContext bare;
+    CHECK(!con.exec(bare, "spawn_ball", out, sizeof out));
+    // Alias shares the same handler.
+    CHECK(con.exec(ctx, "spawn_test_ball", out, sizeof out));
+    CHECK(count_bodies() == before + 2);
+}
+
 static void test_console_teleport_request() {
     Console con;
     CHECK(console_register_defaults(con));
@@ -262,5 +330,6 @@ static void test_console_all() {
     test_console_mob_tokens();
     test_console_completion();
     test_console_spawn_god_noclip();
+    test_console_spawn_ball();
     test_console_teleport_request();
 }
