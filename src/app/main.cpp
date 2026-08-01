@@ -3269,35 +3269,43 @@ int main(int argc, char** argv) {
                         const vec3 ppos = reg.get<Transform>(player).pos;
                         bool handled = false;
 
-                        // 1. Try Corpse Looting / Inspection
-                        game::CorpseLootResult clr = game::loot_corpse_interact(
-                            reg, pool, bus, activeLayer, ppos, 2.2f, simTick);
-                        if (clr.foundCorpse) {
-                            handled = true;
-                            std::snprintf(elevDiagLine, sizeof(elevDiagLine),
-                                          "CORPSE LOOTED: TAKEN %u ITEMS (+%d RUB)",
-                                          clr.itemsTaken, clr.roublesGained);
-                            elevDiagAt = simTick;
-                            // Headless --shot audit trail (HUD is invisible in captures).
-                            // Log once per interact edge — not every sim tick.
-                            static std::uint64_t lastCorpseLootLogTick = ~0ull;
-                            if (lastCorpseLootLogTick != simTick) {
-                                lastCorpseLootLogTick = simTick;
-                                std::fprintf(stderr,
-                                             "[corp] CORPSE LOOTED: TAKEN %u ITEMS "
-                                             "(+%d RUB) floor=%d\n",
-                                             clr.itemsTaken, clr.roublesGained,
-                                             currentFloor);
+                        // 1. Corpse loot — gate on §18 find_nearest Kind::Corpse,
+                        // then specialized loot_corpse_interact backend.
+                        {
+                            const game::InteractionHit corpseHit =
+                                game::find_nearest_interactable(
+                                    reg, player, game::Interactable::Kind::Corpse, 2.2f);
+                            if (corpseHit.hit) {
+                                game::CorpseLootResult clr = game::loot_corpse_interact(
+                                    reg, pool, bus, activeLayer, ppos, 2.2f, simTick);
+                                if (clr.foundCorpse) {
+                                    handled = true;
+                                    std::snprintf(elevDiagLine, sizeof(elevDiagLine),
+                                                  "CORPSE LOOTED: TAKEN %u ITEMS (+%d RUB)",
+                                                  clr.itemsTaken, clr.roublesGained);
+                                    elevDiagAt = simTick;
+                                    // Headless --shot audit trail (HUD is invisible in captures).
+                                    // Log once per interact edge — not every sim tick.
+                                    static std::uint64_t lastCorpseLootLogTick = ~0ull;
+                                    if (lastCorpseLootLogTick != simTick) {
+                                        lastCorpseLootLogTick = simTick;
+                                        std::fprintf(stderr,
+                                                     "[corp] CORPSE LOOTED: TAKEN %u ITEMS "
+                                                     "(+%d RUB) floor=%d\n",
+                                                     clr.itemsTaken, clr.roublesGained,
+                                                     currentFloor);
+                                    }
+                                    if (particlePass.ready()) {
+                                        particlePass.emit_burst(ppos + vec3{0.0f, 0.4f, 0.0f},
+                                                                vec3{0.0f, 0.4f, 0.0f},
+                                                                vec3{1.0f, 0.86f, 0.42f},
+                                                                gpu::GpuParticleKind::DustMote,
+                                                                20, 2.0f, 0.5f, 0.12f, 120.0f);
+                                    }
+                                    game::NoiseProfile np{6.0f, 600, 1, game::NoiseSource::Door};
+                                    game::noise_publish(noiseField, activeLayer, ppos, np, 0);
+                                }
                             }
-                            if (particlePass.ready()) {
-                                particlePass.emit_burst(ppos + vec3{0.0f, 0.4f, 0.0f},
-                                                        vec3{0.0f, 0.4f, 0.0f},
-                                                        vec3{1.0f, 0.86f, 0.42f},
-                                                        gpu::GpuParticleKind::DustMote,
-                                                        20, 2.0f, 0.5f, 0.12f, 120.0f);
-                            }
-                            game::NoiseProfile np{6.0f, 600, 1, game::NoiseSource::Door};
-                            game::noise_publish(noiseField, activeLayer, ppos, np, 0);
                         }
 
                         // 2. Terminal / ControlPanel — zero-heap nearest Interactable
@@ -4697,23 +4705,21 @@ int main(int argc, char** argv) {
                 }
             }
 
-            // Corpse proximity (manual tactical loot). Skip bodies already
-            // rifled with nothing left — LOOT CORPSE on an empty searched
-            // corpse is a lie the player already resolved with E.
-            if (!promptText) {
-                for (auto cEnt : reg.view<const game::Corpse, const Transform>()) {
-                    if (reg.get<const Transform>(cEnt).layer != activeLayer) continue;
-                    const auto& corpse = reg.get<const game::Corpse>(cEnt);
-                    if (corpse.searched && corpse.slotCount == 0) continue;
-                    const vec3& cpos = reg.get<const Transform>(cEnt).pos;
-                    const float dx = wrap_delta_f(ppos.x, cpos.x, kWorldExtent);
-                    const float dy = ppos.y - cpos.y;
-                    const float dz = wrap_delta_f(ppos.z, cpos.z, kWorldExtent);
-                    if (dx * dx + dy * dy + dz * dz < 2.2f * 2.2f) {
+            // Corpse proximity — §18 find_nearest Kind::Corpse. Empty searched
+            // corpses deactivate Interactable in loot_corpse_interact, so they
+            // drop out of the query without a manual Corpse view scan.
+            if (!promptText && activeLayer != kInvalidLayer) {
+                const game::InteractionHit corpseHit =
+                    game::find_nearest_interactable(
+                        reg, player, game::Interactable::Kind::Corpse, 2.2f);
+                if (corpseHit.hit && reg.valid(corpseHit.entity)) {
+                    if (const game::Corpse* corpse =
+                            reg.try_get<game::Corpse>(corpseHit.entity)) {
                         set_prompt("interact",
-                                   corpse.searched ? "LOOT CORPSE (REMAINDER)"
-                                                   : "LOOT CORPSE");
-                        break;
+                                   corpse->searched ? "LOOT CORPSE (REMAINDER)"
+                                                    : "LOOT CORPSE");
+                    } else {
+                        set_prompt("interact", "LOOT CORPSE");
                     }
                 }
             }
@@ -5035,8 +5041,13 @@ int main(int argc, char** argv) {
                 // whose anchors no longer have solid support. [jirnyak.md] §18
                 game::anchor_validate_step(reg, stack.layer(activeLayer), bus,
                                            doors.dirtyCells);
+                // Same field-rebake debt carve pays: doors mutate occupancy
+                // masks the danger/scent fields sample. [lazy_baker.h]
+                lazyBaker.request_rebake(stack.layer(activeLayer),
+                                         doors.dirtyCells);
                 doors.dirtyCells.clear();
             }
+
             if (!stainDirty.empty()) {
                 voxelMirror.mark_dirty(stainDirty.data(), stainDirty.size());
                 stainDirty.clear();

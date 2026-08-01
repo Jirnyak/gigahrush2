@@ -13,6 +13,8 @@
 #include "game/inventory.h" // Inventory — spill NPC bag into Corpse / cell containers
 #include "game/loot.h"      // Pickup — floor overflow when corpse + cell containers full
 #include "game/mob_spawn.h"
+#include "game/prop_system.h" // Interactable::Kind::Corpse — §18 interaction tag
+
 
 #include "game/faction_relations.h"
 #include "game/mob_behaviour.h"
@@ -358,6 +360,11 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
 
 
             reg.emplace<Corpse>(e, corpse);
+            // [jirnyak.md] §18: corpses are Interactable::Kind::Corpse so the
+            // unified find_nearest_interactable path can see them. Backend loot
+            // remains loot_corpse_interact (specialized Corpse view).
+            reg.emplace_or_replace<Interactable>(
+                e, Interactable{Interactable::Kind::Corpse, 2.2f, true});
 
         }
 
@@ -365,6 +372,7 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
     }
     return static_cast<std::uint32_t>(doomed.size());
 }
+
 
 
 std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,

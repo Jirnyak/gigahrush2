@@ -10,8 +10,10 @@
 #include "game/loot_table.h"  // roll_kind_drop — the per-kind identity half of a roll
 #include "game/mob_spawn.h"  // MobRef
 #include "game/mob_table.h"
+#include "game/prop_system.h" // Interactable::Kind::Loot — §18 interaction tag
 #include "game/ranged_table.h"
 #include "world/types.h"
+
 
 namespace giga::game {
 
@@ -240,7 +242,12 @@ std::uint32_t drop_mob_loot(Registry& reg, LayerId layer, const vec3& pos,
         if (kd.count < 1) kd.count = 1;
         if (cap && kd.count > cap) kd.count = cap;
         reg.emplace<Pickup>(e, Pickup{id, kd.count});
+        // [jirnyak.md] §18: floor loot is Interactable::Kind::Loot so HUD/E
+        // can route through find_nearest_interactable. Backend remains pickup_step.
+        reg.emplace<Interactable>(
+            e, Interactable{Interactable::Kind::Loot, kPickupReach, true});
         ++made;
+
         // A gun without bullets is a paperweight. Bundle its ammo at the moment it
         // drops, because the CATALOG roller cannot produce ammo any other way — all 17
         // AMMO rows have spawn weight 0. [loot.h drop_weapon_ammo]
@@ -289,8 +296,12 @@ std::uint32_t drop_weapon_ammo(Registry& reg, LayerId layer, const vec3& pos,
     reg.emplace<Renderable>(e, Renderable{kPickupColor});
     reg.emplace<Pickup>(e, Pickup{def->ammo, static_cast<std::uint8_t>(
                                                  count > 255 ? 255 : count)});
+    // [jirnyak.md] §18: ammo bundles are floor Loot interactables too.
+    reg.emplace<Interactable>(
+        e, Interactable{Interactable::Kind::Loot, kPickupReach, true});
     return 1;
 }
+
 
 std::uint32_t loot_dead_mobs(Registry& reg, LayerId layer, int floorNumber,
                              std::uint32_t seed) {
@@ -554,8 +565,16 @@ CorpseLootResult loot_corpse_interact(Registry& reg, NpcPool& pool, EventBus& bu
     }
     corpse.slotCount = filled;
 
+    // [jirnyak.md] §18: empty searched corpse drops out of the interact set so
+    // find_nearest_interactable / HUD stop advertising LOOT CORPSE.
+    if (corpse.searched && corpse.slotCount == 0) {
+        if (Interactable* ia = reg.try_get<Interactable>(targetCorpse))
+            ia->active = false;
+    }
+
     return res;
 }
+
 
 
 } // namespace giga::game
