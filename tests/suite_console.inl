@@ -10,7 +10,7 @@
 // Included from game_test.cpp like every suite; uses its CHECK.
 
 #include "game/console.h"
-#include "game/prop_system.h" // AngularVelocity, Rotation — spawn_ball must NOT attach these
+#include "ecs/components.h" // AngularVelocity, Rotation (core) — spawn_ball must NOT attach these
 
 static bool consoletest_ran = false;
 static bool consoletest_cmd(ConsoleContext&, int argc, const char* const* argv,
@@ -233,8 +233,10 @@ static void test_console_spawn_god_noclip() {
 }
 
 // spawn_ball must land on the LIVE BodyPass + physics_step path:
-// Transform + AABB + Renderable (drawn) and Velocity + GravityAffected (moves).
-// No AngularVelocity/Rotation — nothing integrates or draws those yet.
+// Transform + AABB + Renderable (drawn by BodyPass) and Velocity +
+// GravityAffected (moved by physics_step). AngularVelocity/Rotation are
+// integrated by physics_step when present, but spawn_ball does not attach
+// them — tumbling is for RagdollRoll props, not the debug ball.
 static void test_console_spawn_ball() {
     Registry ecs;
     Entity player = ecs.create();
@@ -278,7 +280,7 @@ static void test_console_spawn_ball() {
     }
     CHECK(ball != entt::null);
     CHECK(ecs.all_of<GravityAffected>(ball));
-    // Dead components must NOT be attached — they are not integrated or drawn.
+    // spawn_ball must NOT attach angular components (RagdollRoll props do).
     CHECK(!ecs.all_of<AngularVelocity>(ball));
     CHECK(!ecs.all_of<Rotation>(ball));
 

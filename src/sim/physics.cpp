@@ -204,8 +204,26 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
             tr.pos.x = wrapf(tr.pos.x, kWorldExtent);
             tr.pos.y = wrapf(tr.pos.y, kWorldExtent);
             tr.pos.z = wrapf(tr.pos.z, kWorldExtent);
+
+            // Ragdoll / tumbling: integrate angular velocity into Euler rotation
+            // when both components are present ([jirnyak.md] §18). BodyPass is
+            // still axis-aligned, so this is state for PropPass / future draw;
+            // damp spin on ground contact so tumbling props settle.
+            if (auto* ang = reg.try_get<AngularVelocity>(e)) {
+                if (auto* rot = reg.try_get<Rotation>(e)) {
+                    rot->euler.x += ang->w.x * h;
+                    rot->euler.y += ang->w.y * h;
+                    rot->euler.z += ang->w.z * h;
+                    if (g && g->grounded) {
+                        ang->w.x *= 0.85f;
+                        ang->w.y *= 0.85f;
+                        ang->w.z *= 0.85f;
+                    }
+                }
+            }
         }
     }
 }
+
 
 } // namespace giga

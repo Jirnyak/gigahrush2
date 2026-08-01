@@ -47,10 +47,11 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
         reg.remove<SubVoxelAnchor>(prop);
         reg.emplace_or_replace<GravityAffected>(prop);
         // Canonical Velocity{vec3} form (combat.cpp). AngularVelocity/Rotation
-        // stay attached for the planned ragdoll step; physics_step only reads V.
+        // (core components) are integrated by physics_step each substep.
         reg.emplace_or_replace<Velocity>(prop, Velocity{impulse});
         reg.emplace_or_replace<AngularVelocity>(prop, AngularVelocity{vec3{impulse.z, impulse.x, 2.0f}});
         reg.emplace_or_replace<Rotation>(prop);
+
         // BodyPass needs AABB — without it a detached prop is invisible.
         if (!reg.all_of<AABB>(prop))
             reg.emplace<AABB>(prop, AABB{vec3{0.2f, 0.2f, 0.2f}});

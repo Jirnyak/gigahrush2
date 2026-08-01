@@ -28,10 +28,11 @@ struct Interactable {
     bool active = true;
 };
 
-struct AngularVelocity { vec3 w{0.0f, 0.0f, 0.0f}; };
-struct Rotation        { vec3 euler{0.0f, 0.0f, 0.0f}; };
+// AngularVelocity + Rotation live in ecs/components.h (core) so physics_step
+// can integrate them without src/sim including src/game. [jirnyak.md] §18.
 
 struct DebrisSpawnEvent {
+
     vec3 pos;
     vec3 impulse;
     vec3 color;

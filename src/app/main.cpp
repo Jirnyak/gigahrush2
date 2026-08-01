@@ -72,6 +72,7 @@
 #include "game/loot.h"
 #include "game/weapon_table.h"
 #include "game/event_bus.h"
+#include "game/floors/padic/padic.h"
 #include "game/investigate.h"
 #include "sim/fluid.h"
 #include "game/noise.h"
@@ -1042,6 +1043,16 @@ std::uint32_t refresh_floor_mobs(Registry& reg, const World& world, int floorNum
     return count;
 }
 
+// Padic-only interactive props (ceiling lightbulbs with RagdollRoll).
+// No-op on every other floor. Seed must be streamer.floor_seed_of so the
+// plan matches generate_padic_floor / door_build ([padic.h] §18).
+std::uint32_t refresh_floor_props(Registry& reg, const World& world,
+                                  int floorNumber, unsigned seed,
+                                  game::EventBus& bus) {
+    if (kind_for_floor(floorNumber) != game::FloorKind::Padic) return 0;
+    return game::seed_padic_props(reg, world, floorNumber, seed, bus);
+}
+
 // Kick off this floor's navigation bake on a worker thread.
 //
 // This used to block: coarse ~1.9 s + fine ~1.8 s, measured, so every elevator ride
@@ -1564,6 +1575,8 @@ int main(int argc, char** argv) {
             LayerId l0 = reg.get<Transform>(player).layer;
             refresh_floor_mobs(reg, stack.layer(l0), 0, l0);
             refresh_floor_containers(reg, stack.layer(l0), 0, l0);
+            refresh_floor_props(reg, stack.layer(l0), 0,
+                               streamer.floor_seed_of(registry, 0), bus);
             // Doors BEFORE the bake, and frozen for its duration: door_build leaves
             // every door open so the bake sees all-open geometry (an upper bound on
             // connectivity), and AsyncBake holds a raw pointer to the live MacroGrid
@@ -2016,12 +2029,14 @@ int main(int argc, char** argv) {
         LayerId nl = reg.get<Transform>(player).layer;
         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
         refresh_floor_containers(reg, stack.layer(nl), currentFloor, nl);
+        refresh_floor_props(reg, stack.layer(nl), currentFloor,
+                           streamer.floor_seed_of(registry, currentFloor), bus);
         // Re-empty crates already looted on a prior visit to this floor.
         // Deterministic spawn would otherwise refill them — the brick this pair
         // closes. Same seam as F9 apply. [save.h]
         game::apply_opened_containers(reg, nl, currentFloor,
-                                      runState.opened.data(),
-                                      runState.opened.size());
+                                       runState.opened.data(),
+                                       runState.opened.size());
         // The floor's own file, if this floor was ever visited: stamp its saved
         // state over the fresh generation BEFORE doors, so door_build re-stamps
         // its leaves and the nav bake below sees the real geometry. [save.h]
@@ -3779,6 +3794,10 @@ int main(int argc, char** argv) {
                                     runState.opened.size());
                             refresh_floor_mobs(reg, stack.layer(nl), currentFloor,
                                                nl);
+                            refresh_floor_props(
+                                reg, stack.layer(nl), currentFloor,
+                                streamer.floor_seed_of(registry, currentFloor),
+                                bus);
                             apply_floor_file(stack.layer(nl), currentFloor);
                             if (currentSpec)
                                 doorsBuilt = game::door_build(
@@ -5101,6 +5120,9 @@ int main(int argc, char** argv) {
                         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
                         refresh_floor_containers(reg, stack.layer(nl),
                                                  currentFloor, nl);
+                        refresh_floor_props(
+                            reg, stack.layer(nl), currentFloor,
+                            streamer.floor_seed_of(registry, currentFloor), bus);
                         // Re-empty crates already looted on a prior visit.
                         // Same seam as keyboard ride + F9 apply. [save.h]
                         game::apply_opened_containers(

@@ -462,7 +462,9 @@ bool cmd_carve(ConsoleContext& ctx, int argc, const char* const* argv,
 // --- spawn_ball -------------------------------------------------------------
 // Free body on the live physics/render path: Transform + AABB + Renderable
 // (BodyPass) and Transform + Velocity + GravityAffected (physics_step).
-// No AngularVelocity/Rotation — nothing integrates or draws them yet.
+// AngularVelocity/Rotation are integrated by physics_step when present, but
+// spawn_ball does not attach them — tumbling is for RagdollRoll props.
+
 bool cmd_spawn_ball(ConsoleContext& ctx, int argc, const char* const* argv,
                     char* out, std::size_t cap) {
     (void)argc;
