@@ -145,9 +145,12 @@ bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& 
 
 // Validate SubVoxelAnchor props against MacroGrid after geometry mutation.
 // `dirtyCells` is CarveResult::dirtyCells / DoorSet::dirtyCells — flat
-// macro_index keys (uint32), NOT a packed xyz64. [jirnyak.md] §18.
-void anchor_validate_step(Registry& reg, const World& world, EventBus& bus,
-                          const std::vector<std::uint32_t>& dirtyCells);
+// macro_index keys (uint32), NOT a packed xyz64. Returns how many props
+// detached (StaticPropTag → DynamicBodyTag) so the caller can rebuild the
+// static PropPass skin. [jirnyak.md] §18.
+std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& bus,
+                                   const std::vector<std::uint32_t>& dirtyCells);
+
 
 // Zero-alloc nearest Interactable query for the interact key path.
 // Scans reg.view<Transform, Interactable> on the player's Transform.layer.

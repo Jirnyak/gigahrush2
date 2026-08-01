@@ -3259,9 +3259,14 @@ int main(int argc, char** argv) {
                                             vec3{op.x, op.y, op.z}, np, 0);
                         // Props anchored to carved cells fall / ragdoll
                         // ([jirnyak.md] §18). dirtyCells = flat macro_index.
-                        game::anchor_validate_step(reg, stack.layer(activeLayer),
-                                                   bus, carveResult.dirtyCells);
+                        // Rebuild PropPass static skin when any prop detached —
+                        // otherwise the GPU still draws the old furniture pose.
+                        if (game::anchor_validate_step(reg, stack.layer(activeLayer),
+                                                       bus, carveResult.dirtyCells) > 0) {
+                            merge_ecs_prop_meshes(reg, activeLayer, propPass);
+                        }
                     }
+
                 }
                 if (interactWanted) {
                     interactWanted = false;

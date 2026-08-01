@@ -158,10 +158,10 @@ bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& 
     return false;
 }
 
-void anchor_validate_step(Registry& reg, const World& world, EventBus& bus,
-                         const std::vector<std::uint32_t>& dirtyCells)
+std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& bus,
+                                   const std::vector<std::uint32_t>& dirtyCells)
 {
-    if (dirtyCells.empty()) return;
+    if (dirtyCells.empty()) return 0;
 
     // dirtyCells are flat macro_index keys (CarveResult / DoorSet contract).
     static thread_local std::unordered_set<std::uint32_t> dirtySet;
@@ -198,7 +198,9 @@ void anchor_validate_step(Registry& reg, const World& world, EventBus& bus,
         detach_single_prop(reg, item.entity, item.mode, item.impulse, item.pos,
                            item.color, item.meshKind, bus);
     }
+    return static_cast<std::uint32_t>(detached.size());
 }
+
 
 Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
                   const SubVoxelAnchor& anchor, Interactable::Kind kind,
