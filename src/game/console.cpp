@@ -477,11 +477,12 @@ bool cmd_spawn_ball(ConsoleContext& ctx, int argc, const char* const* argv,
 
     Entity ballA = ctx.ecs->create();
     ctx.ecs->emplace<Transform>(ballA, spawnPos, tr->layer);
+    ctx.ecs->emplace<AABB>(ballA, vec3{0.4f, 0.4f, 0.4f});
     ctx.ecs->emplace<GravityAffected>(ballA);
     ctx.ecs->emplace<Velocity>(ballA, vec3{0.5f, 0.0f, 0.5f});
     ctx.ecs->emplace<AngularVelocity>(ballA, vec3{1.0f, 0.0f, 1.0f});
     ctx.ecs->emplace<Rotation>(ballA);
-    ctx.ecs->emplace<Renderable>(ballA, vec3{0.9f, 0.2f, 0.2f});
+    ctx.ecs->emplace<Renderable>(ballA, vec3{0.95f, 0.2f, 0.15f});
 
     if (out && cap)
         std::snprintf(out, cap, "spawn_ball: spawned rolling test ball (Type A) at (%.1f, %.1f, %.1f)",
