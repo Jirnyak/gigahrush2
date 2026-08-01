@@ -28,7 +28,9 @@
 #include "game/mob_table.h"
 #include "game/item_table.h"
 #include "game/loot.h"
+#include "game/prop_system.h"
 #include "game/ranged_table.h"
+
 #include "game/weapon_table.h"
 #include "game/mob_spawn.h"
 #include "game/floor_stream.h"

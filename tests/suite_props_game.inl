@@ -536,6 +536,103 @@ static void test_collect_static_prop_mesh_instances_shapes() {
     }
 }
 
+// [jirnyak.md] §18 — corpses and floor loot carry Interactable so HUD/E and
+// find_nearest_interactable share one query path. Kind filter must not leak
+// across Corpse vs Loot, and an empty searched corpse deactivates.
+static void test_corpse_and_loot_are_interactable() {
+    Registry reg;
+    NpcPool pool;
+    pool.init();
+    EventBus bus;
+    bus.init();
+
+    NpcId pid = pool.spawn();
+    pool.hp(pid) = 500;
+    pool.max_hp(pid) = 500;
+    Entity player = embody_as_player(reg, pool, pid, /*layer=*/0);
+    const vec3 ppos = reg.get<Transform>(player).pos;
+
+    // --- Corpse path: kill → finalize → Kind::Corpse + active --------------
+    Entity boss = reg.create();
+    {
+        Transform bt;
+        bt.pos = ppos; // adjacent — inside 2.2 m corpse reach
+        bt.layer = 0;
+        reg.emplace<Transform>(boss, bt);
+        reg.emplace<MobRef>(
+            boss, MobRef{static_cast<std::uint8_t>(MobKind::Mancobus), 1, 5, 5});
+    }
+    CHECK(apply_damage(reg, pool, boss, 999, DamageChannel::Kinetic, player).lethal);
+    CHECK(loot_dead_mobs(reg, 0, /*floor=*/0, 1234u) > 0);
+    CHECK(finalize_deaths(reg, pool, bus, /*tick=*/1u) == 1);
+    CHECK(reg.all_of<Corpse>(boss));
+    CHECK(reg.all_of<game::Interactable>(boss));
+    {
+        const game::Interactable& ia = reg.get<game::Interactable>(boss);
+        CHECK(ia.kind == game::Interactable::Kind::Corpse);
+        CHECK(ia.active);
+        CHECK(ia.radius >= 2.0f); // authored corpse reach
+    }
+    {
+        const game::InteractionHit hit = game::find_nearest_interactable(
+            reg, player, game::Interactable::Kind::Corpse, 2.2f);
+        CHECK(hit.hit);
+        CHECK(hit.entity == boss);
+    }
+    // Kind filter: Corpse must not answer a Loot query.
+    {
+        const game::InteractionHit hit = game::find_nearest_interactable(
+            reg, player, game::Interactable::Kind::Loot, 2.2f);
+        CHECK(!hit.hit);
+    }
+
+    // Drain corpse loot → empty searched corpse deactivates Interactable.
+    {
+        const CorpseLootResult lr =
+            loot_corpse_interact(reg, pool, bus, 0, ppos, /*maxReach=*/3.0f, 2u);
+        CHECK(lr.foundCorpse);
+        CHECK(lr.itemsTaken > 0);
+    }
+    CHECK(reg.get<Corpse>(boss).searched);
+    CHECK(reg.all_of<game::Interactable>(boss));
+    CHECK(!reg.get<game::Interactable>(boss).active);
+    {
+        const game::InteractionHit hit = game::find_nearest_interactable(
+            reg, player, game::Interactable::Kind::Corpse, 2.2f);
+        CHECK(!hit.hit); // inactive drops out of the query
+    }
+
+    // --- Floor loot path: drop_mob_loot → Kind::Loot -----------------------
+    {
+        const std::uint32_t n =
+            drop_mob_loot(reg, /*layer=*/0, ppos, /*floor=*/0,
+                          /*tier=*/static_cast<std::uint8_t>(MobTier::Boss),
+                          /*seed=*/99u);
+        CHECK(n > 0);
+    }
+    Entity lootEnt = entt::null;
+    for (auto e : reg.view<const Pickup, const game::Interactable>()) {
+        const game::Interactable& ia = reg.get<const game::Interactable>(e);
+        if (ia.kind == game::Interactable::Kind::Loot && ia.active) {
+            lootEnt = e;
+            break;
+        }
+    }
+    CHECK(lootEnt != entt::null);
+    {
+        const game::InteractionHit hit = game::find_nearest_interactable(
+            reg, player, game::Interactable::Kind::Loot, 3.0f);
+        CHECK(hit.hit);
+        CHECK(hit.entity == lootEnt);
+    }
+    // Kind filter: Loot must not answer a Corpse query (corpse already inactive).
+    {
+        const game::InteractionHit hit = game::find_nearest_interactable(
+            reg, player, game::Interactable::Kind::Corpse, 3.0f);
+        CHECK(!hit.hit);
+    }
+}
+
 void test_props_game_all() {
     test_wall_interactables_seed_and_collect();
     test_wall_interactables_clear_is_layer_scoped();
@@ -548,4 +645,7 @@ void test_props_game_all() {
     test_find_nearest_terminal_respects_reach();
     test_embody_interact_terminal_applies_at_given_pos();
     test_collect_static_prop_mesh_instances_shapes();
+    test_corpse_and_loot_are_interactable();
 }
+
+
