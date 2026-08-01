@@ -148,8 +148,7 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
                                  float timeSec, const game::SamosborState& samosbor,
                                  const Registry& reg, LayerId activeLayer,
                                  const game::NoiseField* noiseField = nullptr,
-                                 const game::PowerGridState* powerGrid = nullptr,
-                                 const gpu::PropPass* propPass = nullptr) {
+                                 const game::PowerGridState* powerGrid = nullptr) {
     grid.clear_lights();
 
     // 1. Player Headlamp
@@ -237,27 +236,32 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
         }
     }
 
-    // 7. Ceiling Light Bulbs & Flood Lamps (Suppressed when ElectricalShield is destroyed)
-    if (propPass && propPass->ready()) {
-        auto collect_lamps = [&](gpu::PropShape shape) {
-            for (const vec3& pos : propPass->get_prop_positions(shape)) {
-                if (powerGrid && powerGrid->is_power_cut(pos)) continue; // Local power cut!
+    // 7. Ceiling Light Bulbs (ECS LightBulb Interactables — never propPass).
+    // Seeded by seed_ceiling_lights to match PropPlacer BareBulb/FloodLamp cells.
+    // Suppressed when local ElectricalShield power is cut. [jirnyak.md] §18.
+    {
+        auto lampView = reg.view<const Transform, const game::Interactable>();
+        for (auto e : lampView) {
+            const Transform& tr = lampView.get<const Transform>(e);
+            if (tr.layer != activeLayer) continue;
+            const game::Interactable& ia = lampView.get<const game::Interactable>(e);
+            if (!ia.active || ia.kind != game::Interactable::Kind::LightBulb) continue;
 
-                float dx = wrap_delta_f(camPos.x, pos.x, kWorldExtent);
-                float dy = camPos.y - pos.y;
-                float dz = wrap_delta_f(camPos.z, pos.z, kWorldExtent);
-                if (dx * dx + dy * dy + dz * dz > 36.0f * 36.0f) continue;
+            const vec3& pos = tr.pos;
+            if (powerGrid && powerGrid->is_power_cut(pos)) continue; // Local power cut!
 
-                // Khrushchevka unstable power grid flickering (pure deterministic DOD math)
-                float flick = std::sin(timeSec * 12.0f + pos.x * 1.7f + pos.z * 2.3f) * 0.18f;
-                float microFlick = (std::fmod(timeSec * 47.0f + pos.x * 3.1f + pos.z * 5.7f, 1.0f) < 0.07f) ? -0.50f : 0.0f;
-                float intensity = std::max(0.2f, 1.8f + flick + microFlick);
+            float dx = wrap_delta_f(camPos.x, pos.x, kWorldExtent);
+            float dy = camPos.y - pos.y;
+            float dz = wrap_delta_f(camPos.z, pos.z, kWorldExtent);
+            if (dx * dx + dy * dy + dz * dz > 36.0f * 36.0f) continue;
 
-                grid.add_light(pos + vec3{0.0f, -0.2f, 0.0f}, 12.0f, vec3{1.00f, 0.88f, 0.65f}, intensity);
-            }
-        };
-        collect_lamps(gpu::PropShape::BareBulb);
-        collect_lamps(gpu::PropShape::FloodLamp);
+            // Khrushchevka unstable power grid flickering (pure deterministic DOD math)
+            float flick = std::sin(timeSec * 12.0f + pos.x * 1.7f + pos.z * 2.3f) * 0.18f;
+            float microFlick = (std::fmod(timeSec * 47.0f + pos.x * 3.1f + pos.z * 5.7f, 1.0f) < 0.07f) ? -0.50f : 0.0f;
+            float intensity = std::max(0.2f, 1.8f + flick + microFlick);
+
+            grid.add_light(pos + vec3{0.0f, -0.2f, 0.0f}, 12.0f, vec3{1.00f, 0.88f, 0.65f}, intensity);
+        }
     }
 }
 
@@ -1056,6 +1060,10 @@ std::uint32_t refresh_floor_props(Registry& reg, const World& world,
     const std::uint32_t wallSeed =
         1337u ^ (static_cast<std::uint32_t>(floorNumber) * 0x9e3779b9u);
     std::uint32_t count = game::seed_wall_interactables(reg, world, layer, wallSeed);
+    // Ceiling BareBulb/FloodLamp cosmetics are still PropPlacer-driven, but
+    // LightBulb Interactables live in ECS so lighting/HUD never read propPass
+    // ([jirnyak.md] §18 — last get_prop_positions sim path).
+    count += game::seed_ceiling_lights(reg, world, layer, wallSeed);
     if (kind_for_floor(floorNumber) == game::FloorKind::Padic)
         count += game::seed_padic_props(reg, world, layer, floorNumber, padicSeed, bus);
     return count;
@@ -4907,7 +4915,7 @@ int main(int argc, char** argv) {
             float currentTimeSec = static_cast<float>(SDL_GetTicks()) / 1000.0f;
 
             if (lightGrid.ready()) {
-                collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, samosbor, reg, activeLayer, &noiseField, &powerGrid, &propPass);
+                collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, samosbor, reg, activeLayer, &noiseField, &powerGrid);
                 lightGrid.update_and_dispatch(cmd, currentTimeSec, camMat.eye);
             }
 

@@ -87,6 +87,13 @@ std::uint32_t clear_layer_props(Registry& reg, LayerId layer);
 std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
                                       LayerId layer, std::uint32_t seed);
 
+// Seed LightBulb Interactables from MacroGrid ceiling-lamp rules matching
+// gpu::PropPlacer (kSaltLight, lightChancePct=25, solidAbove). Positions match
+// BareBulb/FloodLamp cosmetics so lighting/HUD can query ECS instead of
+// propPass.get_prop_positions(). [jirnyak.md] §18 Sim→Render invariant.
+std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
+                                  LayerId layer, std::uint32_t seed);
+
 // Collect world positions of active Interactables of `kind` on `layer`.
 // Replaces propPass.get_terminal_positions() / get_prop_positions for sim+HUD.
 // Prefer interaction_step / find_nearest_interactable in the hot path — this

@@ -16,6 +16,11 @@ constexpr float kWorldExtentLocal = 256.0f; // 128 * 2.0m
 // Must match gpu::PropPlacer kSaltWall so ECS interactables land on the same
 // cells as the GPU cosmetic Terminal / ElectricalShield instances.
 constexpr std::uint32_t kSaltWall = 0x33333333u;
+// Must match gpu::PropPlacer kSaltLight so ECS LightBulbs land on the
+// same cells as BareBulb / FloodLamp GPU cosmetics.
+constexpr std::uint32_t kSaltLight = 0x44444444u;
+// Must match PropPlacerConfig::lightChancePct.
+constexpr std::uint32_t kLightChancePct = 25u;
 
 static inline int wrap_macro_local(int c) {
     return (c % kMacroDimLocal + kMacroDimLocal) % kMacroDimLocal;
@@ -288,6 +293,54 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
 
                 Entity e = spawn_prop(reg, world, vec3{wx, wy, wz}, anchor, kind,
                                       PropFallMode::SimpleFall, color, 0, layer);
+                if (e != entt::null) ++count;
+            }
+        }
+    }
+    return count;
+}
+
+
+std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
+                                  LayerId layer, std::uint32_t seed)
+{
+    const MacroGrid& grid = world.grid();
+    std::uint32_t count = 0;
+    constexpr float kCell = kCellSize;
+
+    // Mirror PropPlacer::populate light branch:
+    //   solidAbove && (rngLight % 100 < lightChancePct)
+    //   origin = {wx, wy + 1.55f, wz}
+    // Anchor into the solid ceiling cell (Y+1) so spawn_prop solid() and
+    // anchor_validate_step stay honest — lamp falls when ceiling is carved.
+    for (int z = 0; z < kMacroDimLocal; ++z) {
+        for (int y = 0; y < kMacroDimLocal; ++y) {
+            for (int x = 0; x < kMacroDimLocal; ++x) {
+                if (grid.cell(x, y, z) != kCellAir) continue;
+
+                const CellType above = grid.cell(x, y + 1, z);
+                if (!is_solid_cell(above)) continue;
+
+                const std::uint32_t rngLight = spatial_hash(x, y, z, seed ^ kSaltLight);
+                if ((rngLight % 100u) >= kLightChancePct) continue;
+
+                const float wx = static_cast<float>(x) * kCell;
+                const float wy = static_cast<float>(y) * kCell + 1.55f;
+                const float wz = static_cast<float>(z) * kCell;
+
+                SubVoxelAnchor anchor;
+                anchor.cx   = x;
+                anchor.cy   = wrap_macro_local(y + 1);
+                anchor.cz   = z;
+                anchor.subX = 4;
+                anchor.subY = 0; // bottom of ceiling cell
+                anchor.subZ = 4;
+                anchor.face = 2; // ceiling
+
+                Entity e = spawn_prop(reg, world, vec3{wx, wy, wz}, anchor,
+                                      Interactable::Kind::LightBulb,
+                                      PropFallMode::RagdollRoll,
+                                      vec3{1.00f, 0.78f, 0.45f}, 0, layer);
                 if (e != entt::null) ++count;
             }
         }

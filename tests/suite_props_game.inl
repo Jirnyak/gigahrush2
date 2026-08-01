@@ -46,6 +46,20 @@ static int count_kind(const Registry& reg, LayerId layer, game::Interactable::Ki
     return n;
 }
 
+
+// seed_ceiling_lights walks AIR cells with a SOLID cell above (ceiling) and
+// rolls spatial_hash(kSaltLight) with lightChancePct=25. Paint a ceiling slab
+// over an air band so ~25% of cells spawn LightBulb — no PropPass.
+static void paint_ceiling_band(World& world, int x0, int x1, int yAir, int z0, int z1) {
+    const int yCeil = yAir + 1;
+    for (int z = z0; z < z1; ++z) {
+        for (int x = x0; x < x1; ++x) {
+            // Ensure the air cell stays air (default) and ceiling is solid.
+            world.grid().fill_cell(x, yCeil, z, kMatConcrete);
+        }
+    }
+}
+
 } // namespace
 
 static void test_wall_interactables_seed_and_collect() {
@@ -127,6 +141,75 @@ static void test_wall_interactables_clear_is_layer_scoped() {
     game::collect_interactable_positions(reg, layerB, game::Interactable::Kind::ElectricalShield,
                                          stillThere);
     CHECK(static_cast<int>(stillThere.size()) == static_cast<int>(nB));
+}
+
+
+static void test_ceiling_lights_seed_and_collect() {
+    // [jirnyak.md] §18 — ceiling lamps are ECS LightBulb Interactables.
+    // Lighting / HUD must use collect_interactable_positions, never
+    // propPass.get_prop_positions(BareBulb|FloodLamp).
+    Registry reg;
+    World world;
+    const LayerId layer = 5;
+    const unsigned seed = 0xB11B11u;
+
+    paint_ceiling_band(world, /*x0*/2, /*x1*/80, /*yAir*/8, /*z0*/2, /*z1*/80);
+
+    const std::uint32_t n = game::seed_ceiling_lights(reg, world, layer, seed);
+    CHECK(n > 0);
+
+    const int bulbs = count_kind(reg, layer, game::Interactable::Kind::LightBulb);
+    CHECK(bulbs == static_cast<int>(n));
+
+    std::vector<vec3> lampPos;
+    game::collect_interactable_positions(reg, layer, game::Interactable::Kind::LightBulb, lampPos);
+    CHECK(static_cast<int>(lampPos.size()) == bulbs);
+
+    for (const vec3& p : lampPos) {
+        CHECK(std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z));
+        // PropPlacer origin y = yAir*kCell + 1.55; yAir=8, kCell=2 → 16+1.55=17.55
+        CHECK(p.y > 16.0f && p.y < 19.0f);
+    }
+
+    auto view = reg.view<const game::Interactable, const Transform>();
+    for (auto e : view) {
+        if (view.get<const game::Interactable>(e).kind != game::Interactable::Kind::LightBulb)
+            continue;
+        CHECK(view.get<const Transform>(e).layer == layer);
+        CHECK(reg.all_of<game::SubVoxelAnchor>(e));
+        CHECK(reg.all_of<game::StaticPropTag>(e));
+        CHECK(reg.all_of<game::PropMeshTag>(e));
+    }
+
+    // Layer-scoped clear drops the lamps.
+    CHECK(game::clear_layer_props(reg, layer) == n);
+    CHECK(count_kind(reg, layer, game::Interactable::Kind::LightBulb) == 0);
+}
+
+static void test_ceiling_lights_do_not_collide_with_wall_devices() {
+    // Same seed+grid: wall devices need solidBelow+wall; ceiling lamps need
+    // solidAbove. A floor+ceiling sandwich must produce both families without
+    // double-counting kinds.
+    Registry reg;
+    World world;
+    const LayerId layer = 6;
+    const unsigned seed = 0xCE11u;
+
+    // Floor at y=5, air at y=6, ceiling at y=7. Wall columns on even x at y=6.
+    paint_floor_band(world, 2, 70, /*yFloor*/5, 2, 70);
+    // paint_floor_band already fills even-x wall columns at yAir=6; add ceiling.
+    paint_ceiling_band(world, 2, 70, /*yAir*/6, 2, 70);
+
+    const std::uint32_t nWall = game::seed_wall_interactables(reg, world, layer, seed);
+    const std::uint32_t nLamp = game::seed_ceiling_lights(reg, world, layer, seed);
+    CHECK(nWall > 0);
+    CHECK(nLamp > 0);
+
+    CHECK(count_kind(reg, layer, game::Interactable::Kind::Terminal) +
+              count_kind(reg, layer, game::Interactable::Kind::ElectricalShield) ==
+          static_cast<int>(nWall));
+    CHECK(count_kind(reg, layer, game::Interactable::Kind::LightBulb) ==
+          static_cast<int>(nLamp));
 }
 
 static void test_padic_props_seed_tags_layer() {
@@ -376,6 +459,8 @@ static void test_embody_interact_terminal_applies_at_given_pos() {
 void test_props_game_all() {
     test_wall_interactables_seed_and_collect();
     test_wall_interactables_clear_is_layer_scoped();
+    test_ceiling_lights_seed_and_collect();
+    test_ceiling_lights_do_not_collide_with_wall_devices();
     test_padic_props_seed_tags_layer();
     test_spawn_prop_anchor_and_detach_on_air();
     test_anchor_validate_skips_solid_support();

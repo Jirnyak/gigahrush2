@@ -517,7 +517,10 @@ if(GIGA_BUILD_TESTS)
     # suite_props_game wall-device floor band; console "sp" now matches 3 cmds.
     # 221529 -> 221678 (+149) on 2026-08-01: death inventory spill into Corpse
     # then same-cell Containers (jirnyak §19) + suite_rpg death-spill CHECKs.
-        PASS_REGULAR_EXPRESSION "game_test: 221694 checks, 0 failures")
+    # 221694 -> 230925 (+9231) on 2026-08-01: Section 18 ceiling LightBulb ECS seed
+    # (seed_ceiling_lights + collect for lighting; suite_props_game ceiling tests;
+    # main collect_scene_lights no longer reads propPass.get_prop_positions).
+        PASS_REGULAR_EXPRESSION "game_test: 230925 checks, 0 failures")
 
 
     # Text gate for the AGENTS.md rules that no compiler enforces on every host.
