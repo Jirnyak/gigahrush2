@@ -1,9 +1,13 @@
-# Rendering — Vulkan backend & cube pass
+# Rendering — Vulkan backend & raymarched world
 
 A minimal-but-real **Vulkan** backend (MoltenVK on macOS, LunarG on Windows) that
-opens an SDL3 window and draws the visible world as **instanced cubes** under a
-camera-carried headlamp, with a Dear ImGui HUD. This is L3 — platform side,
-outside `giga_core`.
+opens an SDL3 window and **raymarches the voxel world per pixel** — a two-level
+DDA over the GPU **voxel mirror** of the same sub-voxel masks physics collides
+against — under a camera-carried headlamp, with raster passes (bodies, props,
+particles) over the honest depth it writes, and a Dear ImGui HUD. This is L3 —
+platform side, outside `giga_core`. The instanced-cube mesher this file used to
+describe was deleted 2026-08-01: there is no instance list, no remesh, and a
+carve costs the renderer 64 B per dirty cell.
 
 ## Render is a pure shell — the load-bearing principle
 
@@ -27,10 +31,12 @@ This is why we can lean hard on procedural/shader generation for *look* without
 risk: the shader is downstream of truth, never the source of it.
 
 - **Code:** [src/render/](src/render) — `vk_device`, `vk_swapchain`,
-  `vk_renderer`, `vk_buffer`, `vk_common`, `cube_pass`, `imgui_layer`,
-  `gpu_timer`
-- **Shaders:** [shaders/cube.vert](shaders/cube.vert),
-  [shaders/cube.frag](shaders/cube.frag) → SPIR-V via `glslc` at build time
+  `vk_renderer`, `vk_buffer`, `vk_common`, `voxel_mirror`, `raymarch_pass`,
+  `cube_pass` (material textures + shared layout), `imgui_layer`, `gpu_timer`
+- **Shaders:** [shaders/raymarch.vert](shaders/raymarch.vert),
+  [shaders/raymarch.frag](shaders/raymarch.frag) (world),
+  [shaders/cube.frag](shaders/cube.frag) (bodies — same shading source the
+  marcher ports) → SPIR-V via `glslc` at build time
 - **Architecture:** [ARCHITECTURE.md](ARCHITECTURE.md) §L3
 
 ## Modules
@@ -40,50 +46,47 @@ risk: the shader is downstream of truth, never the source of it.
 | `vk_device` | Instance, physical/logical device, queues, allocation helpers |
 | `vk_swapchain` | Swapchain + image views, recreatable on resize, FIFO vsync |
 | `vk_renderer` | Depth buffer, render pass, framebuffers, per-frame sync, acquire/submit/present. **Draw-agnostic**: `begin_frame` opens the pass, callers record, `end_frame` presents |
-| `vk_buffer` | Device-local (staged) buffers for static geometry; persistently-mapped host-visible buffers for per-frame instance data |
-| `cube_pass` | The instanced-cube pipeline that draws the world |
+| `vk_buffer` | Device-local buffers (staged or empty-for-mirrors); persistently-mapped host-visible buffers |
+| `voxel_mirror` | One-way sim→GPU copy of masks/types/sub-materials/class/fluid, kept fresh by the carve/door dirty seams + arrival re-uploads; `--mirror-verify` readback harness |
+| `raymarch_pass` | The fullscreen two-level DDA that draws the world and writes honest `gl_FragDepth` |
+| `cube_pass` | What survives of the mesher: the photographic material arrays + the shared `CubePush` pipeline layout the prop pass borrows |
 | `imgui_layer` | Dear ImGui SDL3 + Vulkan overlay, own descriptor pool |
 | `gpu_timer` | `VK_QUERY_TYPE_TIMESTAMP` brackets around each pass; the only honest cost number in the renderer |
 
 Frame lifecycle is double-buffered (`kMaxFramesInFlight = 2`) with
 out-of-date/resize handling driving swapchain recreation.
 
-## Cube pass
+## The raymarched world
 
-Each frame it walks the macro grid, **surface-culls** cells whose six neighbours
-are all solid, and emits one instance per visible cell — position, colour (by
-`CellType`), and a tint from the `fluid` field. A single instanced draw covers
-the whole visible surface, so instance count scales with visible *area*, not
-world volume. See [voxels.md](voxels.md).
-
-Note the *scan* itself is **O(N³)** — the pass visits every cell each frame to
-decide visibility, even though only the surface is drawn. That per-frame walk, not
-the draw, is what gates active-floor size: at N = 256 it is 16.8 M cells × 60 fps.
-It is the first thing to break as N grows, so lifting N past 128 needs a chunked /
-dirty-region mesher ([performance.md](performance.md) §Active-floor sizing). At
-N = 128 it is a comfortable 2.1 M-cell walk.
+Each frame the mirror flushes this frame's dirty cells (64 B masks + type +
+class + page bytes per cell, run-merged copies through a 12 MiB staging window),
+then one fullscreen triangle DDA-marches the grid per pixel: macro steps skip
+empty cells by a 1-byte class fetch, fully-solid cells hit at the entry face
+with no mask read, and only boundary cells walk their 8³ bits. The hit's
+material is the per-sub-voxel `sub_material` page when the cell is mixed, else
+its `CellType` — the same `sub_material_at` contract the sim uses. Fog caps the
+ray at `kWorldExtent/2` (64 cells), which bounds the worst case. **There is no
+per-frame relationship between world mutation and render cost**: the old
+invalidate()-and-rescan cycle (28–205 ms per geometry change) is gone.
 
 ## Toroidal (minimal-image) placement
 
 The world wraps ([physics.md](physics.md) wraps entity positions), so rendering
 must wrap too or the far side of the torus shows through as background
-clear-colour right where the player is about to walk. `record` takes the camera
-world position and places each cell not at its absolute grid origin but at the
-**tile-copy nearest the camera** (period `kWorldExtent`): snap the camera to its
-tile, then shift each cell by whole periods into the `[-half, +half)` window
-around it. The player always sees a full shell of world around them and the seam
-is invisible — an endless lattice, the way a corridor that loops on itself reads
-as infinite. Cheap: it is a per-axis compare/add on the origin already being
-written, no extra instances.
+clear-colour right where the player is about to walk. The **marcher gets this by
+construction**: rays walk camera-relative distance and wrap only the cell INDEX
+(power-of-two AND), so every hit is automatically the nearest toroidal image.
+The raster passes (bodies, props) keep the explicit `nearest_image` shift in
+their vertex shaders (period `kWorldExtent`): snap the camera to its tile, then
+shift each instance by whole periods into the `[-half, +half)` window around it.
+The player always sees a full shell of world around them and the seam is
+invisible — an endless lattice, the way a corridor that loops on itself reads
+as infinite.
 
-> This replaces the reference game's "treadmill" trick (shift the whole map back
-> toward centre near an edge). With a real torus we don't move content — we just
-> pick the nearest image of each cell. No teleport seam, works on all three axes.
-
-**Golden rule of this pass: always draw the world *around the camera*.** Never
-draw it at fixed absolute coordinates. Every present/future pass (transparent
-props, particles, procedural detail) must place geometry via the same
-minimal-image rule so the camera sits at the centre of a full, seamless shell.
+**Golden rule: always draw the world *around the camera*.** Never draw it at
+fixed absolute coordinates. Every present/future pass must place geometry via
+the same minimal-image rule so the camera sits at the centre of a full,
+seamless shell.
 
 ## Surfaces are generated, not sampled
 
@@ -192,13 +195,12 @@ The table is **generated**: `tools/gen_material_surface.py` reads
   CMake cannot see through a `#include`, so without that entry a change to the table
   leaves a stale `.spv` and looks like a no-op.
 
-**The material id reaches the shader for free.** `CubeInstance::occ` needs 27 bits
-for the AO mask and a `uint32` has 32, so the id rides in bits 27..31: no new vertex
-attribute, no new byte, `sizeof(CubeInstance)` still 32, `CubePush` still 128.
-`cube.frag` reads it as a `flat uint` at location 4 — which, exactly like `vAo`,
-**both** vertex stages must declare and write. `body.vert` writes `0` (the air id,
-which the world pass never draws), whose family is `generic`, so the crowd renders
-exactly as it did.
+**The material id reaches the shader per sub-voxel.** The marcher reads it
+straight from the mirror — `sub_material` page when the cell is mixed, else the
+cell's `CellType` — and looks the albedo up in its material UBO
+(`material_albedo_table`). `body.vert` writes material id `0` (the air id,
+which the world never draws), whose family is `generic`, so the crowd renders
+exactly as it always did.
 
 ## Shading model — the light is the one you carry
 

@@ -233,7 +233,7 @@ set(_giga_spv_files "")
 # explicit list rather than a GLOB — a stray .glsl should not silently start forcing
 # every shader to recompile.
 set(_giga_glsl_includes ${CMAKE_SOURCE_DIR}/shaders/material_surface.glsl ${CMAKE_SOURCE_DIR}/shaders/volumetric_fog.glsl)
-foreach(_sh cube.vert cube.frag body.vert prop.vert prop.frag particle.vert particle.frag raymarch.vert raymarch.frag)
+foreach(_sh cube.frag body.vert prop.vert prop.frag particle.vert particle.frag raymarch.vert raymarch.frag)
     add_custom_command(
         OUTPUT ${_giga_spv_dir}/${_sh}.spv
         COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O
@@ -394,10 +394,11 @@ if(GIGA_BUILD_TESTS)
     # 38712 -> 39331 (+619) on 2026-07-31: suite_destruct.inl landed — SubField
     # paging/collapse, carve_roll statistics (a 4096-iteration loop dominates
     # the delta), carve_at/carve_sphere geometry, layering, seam and detach.
-    # 39331 -> 39659 (+328) on 2026-07-31: suite_submesh.inl — greedy 3D
-    # sub-voxel meshing (exact cover on 64 random masks dominates the delta).
+    # 39659 -> 39331 (-328) on 2026-08-01: suite_submesh.inl DELETED with the
+    # cube mesher — the raymarcher reads masks directly, there is no greedy
+    # meshing left to pin.
     set_tests_properties(world_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "39659/39659 checks passed")
+        PASS_REGULAR_EXPRESSION "39331/39331 checks passed")
 
     # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while

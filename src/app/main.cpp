@@ -1263,7 +1263,7 @@ int main(int argc, char** argv) {
     }
 
     gpu::CubePass cubePass;
-    if (!cubePass.init(device, renderer.renderPass, GIGA_SHADER_DIR, lightGrid.descriptor_set_layout())) {
+    if (!cubePass.init(device, lightGrid.descriptor_set_layout())) {
         std::fprintf(stderr, "Cube pass init failed\n");
         lightGrid.destroy();
         renderer.destroy();
@@ -2004,9 +2004,6 @@ int main(int argc, char** argv) {
         // floor's layer id and be heard there. [noise.h]
         game::noise_clear(noiseField);
         currentSpec = spec_for_floor(currentFloor);
-        // Streaming recycles World objects in place, so the cube pass cannot
-        // detect the new geometry by identity.
-        cubePass.invalidate();
         // Mobs belong to the floor, not to the player: the departed layer's are
         // destroyed and the arrival's are spawned fresh (deterministically, so
         // a floor looks the same every visit).
@@ -3079,11 +3076,8 @@ int main(int argc, char** argv) {
                         // No log, no bookkeeping: geometry persistence is the
                         // floor's own file, written when the player leaves
                         // ([save.h] modular layout) or on F5.
-                        // One rebuild of the cached instance list; partial
-                        // cells render their actual sub-voxel bits.
-                        cubePass.invalidate();
                         // The GPU mirror pays only the dirty cells — the whole
-                        // point of the raymarch migration's stage 1.
+                        // point of the raymarch migration.
                         voxelMirror.mark_dirty(carveResult.dirtyCells.data(),
                                                carveResult.dirtyCells.size());
                         // DEBRIS HANDOFF: simulation is done with these
@@ -3312,7 +3306,6 @@ int main(int argc, char** argv) {
                 // path the console uses. Frozen bake: drop (v1); console keeps
                 // pending via carveRadius until bake lands.
                 if (!doors.frozen && combatCarves.count > 0) {
-                    bool anyRemoved = false;
                     for (std::uint8_t ci = 0; ci < combatCarves.count; ++ci) {
                         const game::CarveProposal& pr = combatCarves.items[ci];
                         CarveOp op;
@@ -3326,7 +3319,6 @@ int main(int argc, char** argv) {
                             carve_sphere(stack.layer(activeLayer), op,
                                          carveScratch, carveResult);
                         if (removed > 0) {
-                            anyRemoved = true;
                             voxelMirror.mark_dirty(
                                 carveResult.dirtyCells.data(),
                                 carveResult.dirtyCells.size());
@@ -3353,7 +3345,6 @@ int main(int argc, char** argv) {
                             }
                         }
                     }
-                    if (anyRemoved) cubePass.invalidate();
                     combatCarves.clear();
                 }
 
@@ -3700,7 +3691,6 @@ int main(int argc, char** argv) {
                                 propPlacer.populate(stack.layer(nl).grid(),
                                                     propPass, fseed);
                             }
-                            cubePass.invalidate();
                             voxelMirror.upload_all(stack.layer(nl));
                             if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
 
@@ -4012,8 +4002,7 @@ int main(int argc, char** argv) {
                         tr.pos.z, tr.layer);
             ImGui::Text("mode %s%s", ctl.fly ? "fly" : "walk",
                         ga.grounded ? " (grounded)" : "");
-            ImGui::Text("instances drawn: %u / %zu cells | props %u | cull %s | particles %s",
-                        cubePass.last_instance_count(), kMacroCells,
+            ImGui::Text("props %u | cull %s | particles %s",
                         propPass.last_draw_count(),
                         cullPass.ready() ? "GPU-ready" : "off",
                         particlePass.ready() ? "on" : "off");
@@ -5021,7 +5010,6 @@ int main(int argc, char** argv) {
                                 streamer.floor_seed_of(registry, currentFloor));
                         doors.frozen = true;
                         begin_floor_nav(stack.layer(nl), nav);
-                        cubePass.invalidate();
                         voxelMirror.upload_all(stack.layer(nl));
                         if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
                         // Same transition autosave as the keyboard path.
@@ -5065,12 +5053,11 @@ int main(int argc, char** argv) {
                     if (renderer.timer.supported())
                         std::fprintf(stderr,
                                      "gpu-ms: world %.3f bodies %.3f hud %.3f "
-                                     "frame %.3f  (instances %u, bodies %u)\n",
+                                     "frame %.3f  (bodies %u)\n",
                                      renderer.timer.pass_ms(gpu::GpuPass::World),
                                      renderer.timer.pass_ms(gpu::GpuPass::Bodies),
                                      renderer.timer.pass_ms(gpu::GpuPass::Hud),
                                      renderer.timer.frame_ms(),
-                                     cubePass.last_instance_count(),
                                      bodyPass.last_instance_count());
                     // The peak beside the median, for the same reason the HUD carries
                     // both: an unattended capture that records only a median cannot

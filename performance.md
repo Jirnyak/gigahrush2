@@ -160,24 +160,11 @@ single N³ the *active* floor should be. **N = 128.** The table (per live floor,
 
 **What breaks first, in order:**
 
-1. **The renderer's O(N³) surface scan** — *was* the first wall, and is no longer
-   per-frame. The cube pass now **caches** its instance list and rebuilds only on
-   invalidate() (floor generation/streaming, a fluid step), so the scan is O(N³)
-   *per geometry change*, not per frame ([render.md](render.md)).
-
-   Measured at N = 128 on an RTX 3060, 717,638 instances, before and after:
-
-   | | frame | of which cube-pass CPU |
-   |---|---|---|
-   | rebuilt every frame | 43.6 ms (22.9 fps) | **28.6 ms** |
-   | cached | 16.3 ms (61.3 fps) | 0.01 ms |
-
-   65% of the frame was rescanning 2,097,152 cells that had not changed. What
-   made the cache possible was moving the toroidal nearest-image shift out of the
-   instance build and into `cube.vert`: while instance origins depended on the
-   camera, no frame's buffer could be reused. A chunked / dirty-region mesher is
-   still the answer for N = 256, where one rebuild is 16.8 M cells — but it now
-   buys rebuild latency, not steady-state frame rate.
+1. **The renderer's O(N³) surface scan** — GONE as of 2026-08-01: the raymarch
+   migration deleted the mesher entirely. The world is drawn per pixel from the
+   GPU voxel mirror, so render cost scales with resolution and ray length (the
+   fog radius), not with N³ per frame; world mutation costs 64 B per dirty cell
+   of upload. The N-walls that remain are the ones below.
 2. **Sub-voxel mask RAM.** 138 MB → 1.11 GB going 128 → 256. Fine for *one* live
    floor; fatal if several were resident.
 3. *(not GPU fields)* — a dense macro field even at 256³ is 67 MB and a few GPU
