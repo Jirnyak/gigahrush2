@@ -309,6 +309,8 @@ static Entity make_terminal_at(Registry& reg, LayerId layer, const vec3& pos) {
 
 static void test_find_nearest_terminal_respects_reach() {
     Registry reg;
+    EventBus bus;
+    bus.init();
     const LayerId layer = 1;
     const Entity actor = make_actor_at(reg, layer, vec3{10.0f, 2.0f, 10.0f});
     make_terminal_at(reg, layer, vec3{20.0f, 2.0f, 10.0f}); // 10 m away
@@ -316,23 +318,31 @@ static void test_find_nearest_terminal_respects_reach() {
     // Out of 4 m reach -> miss.
     {
         const game::InteractionHit hit = game::find_nearest_interactable(
-            reg, actor, static_cast<int>(game::Interactable::Kind::Terminal), 4.0f);
+            reg, actor, game::Interactable::Kind::Terminal, 4.0f);
         CHECK(!hit.hit);
     }
-    // Within 12 m reach -> hit.
+    // Within 12 m reach -> hit (caller-supplied reach).
     {
         const game::InteractionHit hit = game::find_nearest_interactable(
-            reg, actor, static_cast<int>(game::Interactable::Kind::Terminal), 12.0f);
+            reg, actor, game::Interactable::Kind::Terminal, 12.0f);
         CHECK(hit.hit);
-        CHECK(hit.kind == game::Interactable::Kind::Terminal);
         CHECK(hit.pos.x == 20.0f);
+        CHECK(hit.pos.z == 10.0f);
     }
-    // interaction_step uses same nearest path (any kind).
+    // interaction_step hardcodes ~3 m reach (prop_system.cpp) — still a miss at 10 m.
     {
-        const game::InteractionHit hit = game::interaction_step(reg, actor, 4.0f);
-        CHECK(!hit.hit);
-        const game::InteractionHit hit2 = game::interaction_step(reg, actor, 12.0f);
-        CHECK(hit2.hit);
+        game::InteractionHit out{};
+        CHECK(!game::interaction_step(reg, actor, game::Interactable::Kind::Terminal, bus, &out));
+        CHECK(!out.hit);
+    }
+    // Walk into the default step reach: 2 m from the terminal -> hit.
+    {
+        reg.get<Transform>(actor).pos = vec3{18.0f, 2.0f, 10.0f};
+        game::InteractionHit out{};
+        CHECK(game::interaction_step(reg, actor, game::Interactable::Kind::Terminal, bus, &out));
+        CHECK(out.hit);
+        CHECK(out.pos.x == 20.0f);
+        CHECK(out.pos.z == 10.0f);
     }
 }
 
@@ -359,7 +369,7 @@ static void test_embody_interact_terminal_applies_at_given_pos() {
     // killed the old always-true fake hit at playerPos.
     const Entity actor = make_actor_at(reg, layer, vec3{0.0f, 1.0f, 0.0f});
     const game::InteractionHit miss = game::find_nearest_interactable(
-        reg, actor, static_cast<int>(game::Interactable::Kind::Terminal), 4.0f);
+        reg, actor, game::Interactable::Kind::Terminal, 4.0f);
     CHECK(!miss.hit);
 }
 

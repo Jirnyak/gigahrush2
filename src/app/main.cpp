@@ -4572,7 +4572,7 @@ int main(int argc, char** argv) {
             // Zero-heap nearest Terminal ([jirnyak.md] section 18) -- same reach as craft hot path.
             const bool nearTerm =
                 game::find_nearest_interactable(
-                    reg, player, static_cast<int>(game::Interactable::Kind::Terminal), 4.0f)
+                    reg, player, game::Interactable::Kind::Terminal, 4.0f)
                     .hit;
             const game::CraftStation bench =
                 game::on_extraction_pad(stack.layer(activeLayer).grid(), ct.pos)
@@ -4639,7 +4639,7 @@ int main(int argc, char** argv) {
             // Terminal proximity -- zero-heap find_nearest ([jirnyak.md] section 18).
             if (!promptText && activeLayer != kInvalidLayer) {
                 const game::InteractionHit termHit = game::find_nearest_interactable(
-                    reg, player, static_cast<int>(game::Interactable::Kind::Terminal), 4.0f);
+                    reg, player, game::Interactable::Kind::Terminal, 4.0f);
                 if (termHit.hit) {
                     set_prompt("interact", "TERMINAL (DOOR LOCKS)");
                 }
@@ -4649,7 +4649,7 @@ int main(int argc, char** argv) {
             if (!promptText && activeLayer != kInvalidLayer) {
                 const game::InteractionHit shieldHit = game::find_nearest_interactable(
                     reg, player,
-                    static_cast<int>(game::Interactable::Kind::ElectricalShield), 3.5f);
+                    game::Interactable::Kind::ElectricalShield, 3.5f);
                 if (shieldHit.hit) {
                     const vec3& sp = shieldHit.pos;
                     int scx = static_cast<int>(sp.x / kCellSize);
