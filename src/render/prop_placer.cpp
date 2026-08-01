@@ -27,15 +27,12 @@ inline bool is_solid(CellType type) {
 }
 
 struct PropSpawnConfig {
-    std::uint32_t pipeCeilingChancePct = 35;
     std::uint32_t grateFloorChancePct   = 15;
     std::uint32_t wallCabinetChancePct = 12;
     std::uint32_t lightChancePct       = 25;
     std::uint32_t anomalyChancePermil  = 15;
-    std::uint32_t supportBeamChancePct = 40;
     std::uint32_t crateCornerChancePct = 18;
 
-    vec3 pipeColor    = {0.25f, 0.28f, 0.30f};
     vec3 grateColor   = {0.30f, 0.30f, 0.32f};
     vec3 cabColor     = {0.32f, 0.35f, 0.38f};
     vec3 warmLampCol  = {1.00f, 0.90f, 0.72f};
@@ -50,7 +47,6 @@ struct PropSpawnConfig {
 constexpr PropSpawnConfig kCfg{};
 
 // Distinct seeds per rule to diversify spatial hash across placement rules
-constexpr std::uint32_t kSaltPipe     = 0x11111111u;
 constexpr std::uint32_t kSaltGrate    = 0x22222222u;
 constexpr std::uint32_t kSaltWall     = 0x33333333u;
 constexpr std::uint32_t kSaltLight    = 0x44444444u;
@@ -105,32 +101,6 @@ void PropPlacer::populate(const MacroGrid& grid, PropPass& propPass, std::uint32
                 bool ceilingOccupied = false;
                 bool floorOccupied   = false;
                 bool wallOccupied    = false;
-
-                // 1. Ceiling Pipes & Conduit (Pipe, PipeTee, PipeElbow, Valve) — ONLY along wall cornices
-                std::uint32_t rngPipe = spatial_hash(x, y, z, seed ^ kSaltPipe);
-                bool hasWall = (solidWest || solidEast || solidNorth || solidSouth);
-                if (solidAbove && hasWall && !ceilingOccupied && (rngPipe % 100 < kCfg.pipeCeilingChancePct)) {
-                    PropInstance pipe{};
-                    pipe.origin    = {wx, wy + 1.95f, wz};
-                    pipe.yaw       = (!solidWest && !solidEast) ? 0.0f : kHalfPi;
-                    pipe.color     = kCfg.pipeColor;
-                    pipe.matId     = 4;
-                    pipe.animPhase = static_cast<std::uint8_t>(rngPipe & 0xFFu);
-
-                    PropShape shape = PropShape::Pipe;
-                    std::uint32_t rngSub = spatial_hash(x, y, z, seed ^ 0x0f0f0f0fu);
-                    if (nOpen >= 3) {
-                        shape = PropShape::PipeTee;
-                    } else if ((rngSub % 6) == 0) {
-                        shape = PropShape::PipeElbow;
-                    } else if ((rngSub % 6) == 1) {
-                        shape = PropShape::Valve;
-                    }
-
-                    propPass.add_instance(shape, pipe);
-                    totalPlaced_++;
-                    ceilingOccupied = true;
-                }
 
                 // 2. Floor Grates & Drainage (Grate, RoundGrate)
                 std::uint32_t rngGrate = spatial_hash(x, y, z, seed ^ kSaltGrate);
@@ -200,20 +170,6 @@ void PropPlacer::populate(const MacroGrid& grid, PropPass& propPass, std::uint32
                         totalPlaced_++;
                         wallOccupied = true;
                     }
-                }
-
-                // 3b. Doorway padded vinyl/dermatin door (Дерматиновая дверь)
-                const bool isDoorway = ((solidWest && solidEast && !solidNorth && !solidSouth) || (!solidWest && !solidEast && solidNorth && solidSouth));
-                if (solidBelow && isDoorway && !floorOccupied && (rngWall % 100 < 35)) {
-                    PropInstance door{};
-                    door.origin    = {wx, wy, wz};
-                    door.yaw       = (solidWest && solidEast) ? 0.0f : kHalfPi;
-                    door.color     = {0.28f, 0.14f, 0.08f}; // Dark burgundy / brown padded vinyl tint
-                    door.matId     = 2;
-                    door.animPhase = static_cast<std::uint8_t>(rngWall & 0xFFu);
-                    propPass.add_instance(PropShape::DermatinDoor, door);
-                    totalPlaced_++;
-                    floorOccupied = true;
                 }
 
                 // 4. Lights & Incandescent Bulbs ("Лампочка Ильича на патроне")
