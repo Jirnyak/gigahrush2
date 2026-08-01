@@ -3531,14 +3531,18 @@ int main(int argc, char** argv) {
                                                 std::min(byMat[m] / 4u, 56u)));
                             }
                             // Detach props whose anchor cells were carved.
-                            // [jirnyak.md] §18
-                            game::anchor_validate_step(
-                                reg, stack.layer(activeLayer), bus,
-                                carveResult.dirtyCells);
+                            // Rebuild PropPass static skin on any detach so the
+                            // GPU drops the old furniture pose. [jirnyak.md] §18
+                            if (game::anchor_validate_step(
+                                    reg, stack.layer(activeLayer), bus,
+                                    carveResult.dirtyCells) > 0) {
+                                merge_ecs_prop_meshes(reg, activeLayer, propPass);
+                            }
                         }
                     }
                     combatCarves.clear();
                 }
+
 
 
                 // ── Combat VFX ─────────────────────────────────────────
