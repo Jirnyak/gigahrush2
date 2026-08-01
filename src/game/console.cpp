@@ -6,6 +6,7 @@
 
 #include "ecs/components.h"      // Transform, Controller, NoClip
 #include "game/combat.h"         // GodMode
+#include "game/prop_system.h"    // AngularVelocity, SubVoxelAnchor
 #include "game/floor_registry.h" // registered-floor enumeration for teleport
 #include "game/floor_spec.h"     // floor_mob_tier — spawn at the floor's level
 #include "game/mob_spawn.h"      // spawn_mob_at
@@ -457,6 +458,37 @@ bool cmd_carve(ConsoleContext& ctx, int argc, const char* const* argv,
     return true;
 }
 
+// --- spawn_ball -------------------------------------------------------------
+// Spawn a free-rolling test ball (Type A) at player position for testing physics.
+bool cmd_spawn_ball(ConsoleContext& ctx, int argc, const char* const* argv,
+                    char* out, std::size_t cap) {
+    (void)argc;
+    (void)argv;
+    if (!ctx.ecs || ctx.player == entt::null) {
+        if (out && cap) put(out, cap, "spawn_ball: player or ecs missing");
+        return false;
+    }
+    const auto* tr = ctx.ecs->try_get<Transform>(ctx.player);
+    if (!tr) {
+        if (out && cap) put(out, cap, "spawn_ball: player has no transform");
+        return false;
+    }
+    vec3 spawnPos = tr->pos + vec3{1.0f, 0.5f, 0.0f};
+
+    Entity ballA = ctx.ecs->create();
+    ctx.ecs->emplace<Transform>(ballA, spawnPos, tr->layer);
+    ctx.ecs->emplace<GravityAffected>(ballA);
+    ctx.ecs->emplace<Velocity>(ballA, vec3{0.5f, 0.0f, 0.5f});
+    ctx.ecs->emplace<AngularVelocity>(ballA, vec3{1.0f, 0.0f, 1.0f});
+    ctx.ecs->emplace<Rotation>(ballA);
+    ctx.ecs->emplace<Renderable>(ballA, vec3{0.9f, 0.2f, 0.2f});
+
+    if (out && cap)
+        std::snprintf(out, cap, "spawn_ball: spawned rolling test ball (Type A) at (%.1f, %.1f, %.1f)",
+                      spawnPos.x, spawnPos.y, spawnPos.z);
+    return true;
+}
+
 } // namespace
 
 bool console_register_defaults(Console& con) {
@@ -479,6 +511,12 @@ bool console_register_defaults(Console& con) {
     ok &= con.add({"carve", "carve [radius] [power]",
                    "blast a sphere out of the world ahead of the camera",
                    cmd_carve, nullptr});
+    ok &= con.add({"spawn_ball", "spawn_ball",
+                   "spawn a rolling test ball (Type A) beside player",
+                   cmd_spawn_ball, nullptr});
+    ok &= con.add({"spawn_test_ball", "spawn_test_ball",
+                   "alias for spawn_ball",
+                   cmd_spawn_ball, nullptr});
     // Every request row shares one handler — argv[0] selects the bit.
     for (const RequestRow& row : kRequestRows)
         ok &= con.add({row.name, row.name, row.help, cmd_request, nullptr});
