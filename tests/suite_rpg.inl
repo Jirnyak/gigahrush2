@@ -819,6 +819,73 @@ static void test_rpg_possess_transfer() {
     transfer_player_progression(reg, to, entt::null);
 }
 
+// jirnyak §19: death dumps the NPC 8×8 bag into Corpse (8 slots) then same-cell
+// Containers (128³). Staged table loot (CorpseLootPending) still fills first;
+// inventory overflow lands in the cell container, never vanishes.
+static void test_death_spills_inventory_to_corpse_and_cell() {
+    Registry reg;
+    NpcPool pool;
+    pool.init();
+    EventBus bus;
+    bus.init();
+
+    const NpcId id = pool.spawn();
+
+    CHECK(id != kInvalidNpc);
+    Inventory& inv = pool.inventory(id);
+    // Fill more than kMaxCorpseSlots (8) so overflow must hit the container.
+    const ItemId a = static_cast<ItemId>(1);
+    const ItemId b = static_cast<ItemId>(2);
+    for (int i = 0; i < 10; ++i) {
+        inv.slots[static_cast<std::size_t>(i)].item = (i < 8) ? a : b;
+        inv.slots[static_cast<std::size_t>(i)].count = 1;
+    }
+
+    Entity mob = reg.create();
+    Transform tr;
+    tr.pos = {2.0f, 2.0f, 1.0f};
+    tr.layer = 0;
+    reg.emplace<Transform>(mob, tr);
+    reg.emplace<AABB>(mob, AABB{vec3{0.3f, 0.3f, 0.9f}});
+    reg.emplace<Renderable>(mob, Renderable{});
+    reg.emplace<MobTag>(mob);
+    reg.emplace<NpcRef>(mob, NpcRef{id});
+    reg.emplace<Dead>(mob, Dead{/*killer*/entt::null, /*tick*/1});
+
+    // Same 128³ cell container — overflow sink.
+    Entity box = reg.create();
+    Transform bt;
+    bt.pos = {3.0f, 2.5f, 1.0f};
+    bt.layer = 0;
+    reg.emplace<Transform>(box, bt);
+    Container c{};
+    c.kind = ContainerKind::Crate;
+    reg.emplace<Container>(box, c);
+
+    // No CorpseLootPending — pure inventory path.
+    const std::uint32_t n = finalize_deaths(reg, pool, bus, /*tick*/2);
+    CHECK(n == 1);
+    CHECK(reg.all_of<Corpse>(mob));
+    const Corpse& corpse = reg.get<Corpse>(mob);
+    CHECK(corpse.slotCount == static_cast<std::uint8_t>(kMaxCorpseSlots));
+    // First 8 inventory rows landed on the corpse.
+    for (std::uint8_t i = 0; i < corpse.slotCount; ++i) {
+        CHECK(corpse.lootSlots[i].item == a);
+        CHECK(corpse.lootSlots[i].count == 1);
+    }
+    // Rows 8-9 (item b) overflowed into the cell container.
+    const Container& boxC = reg.get<Container>(box);
+    int foundB = 0;
+    for (std::uint8_t si = 0; si < kContainerSlots; ++si)
+        if (boxC.item[si] == b) foundB += boxC.count[si];
+    CHECK(foundB == 2);
+    // Live bag emptied so a recycled row cannot resurrect loot.
+    for (const ItemSlot& s : pool.inventory(id).slots) {
+        CHECK(s.item == kInvalidItem);
+        CHECK(s.count == 0);
+    }
+}
+
 static void test_rpg_all() {
     test_rpg_curve();
     test_rpg_derived();
@@ -829,4 +896,6 @@ static void test_rpg_all() {
     test_rpg_kill_awards_xp();
     test_rpg_combat_wire();
     test_rpg_possess_transfer();
+    test_death_spills_inventory_to_corpse_and_cell();
 }
+

@@ -7,9 +7,13 @@
 #include "core/math.h"
 #include "core/wrap.h"
 #include "ecs/components.h"
+#include "game/container.h" // Container — inventory overflow on death
 #include "game/embody.h"   // NpcRef
 #include "game/hunt.h"
+#include "game/inventory.h" // Inventory — spill NPC bag into Corpse / cell containers
+#include "game/loot.h"      // Pickup — floor overflow when corpse + cell containers full
 #include "game/mob_spawn.h"
+
 #include "game/faction_relations.h"
 #include "game/mob_behaviour.h"
 #include "game/mob_table.h"
@@ -23,6 +27,7 @@
 #include "world/stain.h" // blood — the universal stain layer
 #include "world/world.h"
 #include "world/types.h"
+
 
 namespace giga::game {
 
@@ -177,13 +182,27 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
 
         std::uint32_t victim = kInvalidNpc;
         std::uint32_t kind = 0xFFu;
+        // jirnyak §19: snapshot the living 8×8 bag BEFORE pool.kill. kill() only
+        // clears the live bit; inventory memory lingers until the slot is reused,
+        // but we empty it here so a recycled row cannot resurrect loot. Spill
+        // into Corpse / same-cell Containers happens when the Corpse is built.
+        Inventory spilledInv{};
         if (const NpcRef* n = reg.try_get<NpcRef>(e)) {
             victim = n->id;
             // A dead record KEEPS its slot ([npcs.md]) — the id stays valid
             // forever, so anything holding it (a quest, a relation) does not
             // dangle. This is the whole reason the pool never reclaims.
-            if (pool.valid(n->id)) pool.kill(n->id);
+            if (pool.valid(n->id)) {
+                Inventory& live = pool.inventory(n->id);
+                spilledInv = live;
+                for (ItemSlot& s : live.slots) {
+                    s.item = kInvalidItem;
+                    s.count = 0;
+                }
+                pool.kill(n->id);
+            }
         }
+
         std::uint8_t victimLevel = 1;
         if (const MobRef* m = reg.try_get<MobRef>(e)) {
             kind = m->kind;
@@ -270,8 +289,76 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
                 corpse.slotCount = n;
                 reg.remove<CorpseLootPending>(e);
             }
+
+            // jirnyak §19: dump the snapshotted 8×8 bag into Corpse (8 slots),
+            // then same-cell Containers (128³). CORP1 forbids a floor Pickup path
+            // for death loot — overflow past corpse+containers is left in the
+            // nearest cell container when possible; otherwise dropped only if a
+            // container had room. spilledInv was taken before pool.kill.
+            {
+                const Transform* bodyTr = reg.try_get<const Transform>(e);
+                const LayerId bodyLayer = bodyTr ? bodyTr->layer : LayerId{0};
+                const vec3 bodyPos = bodyTr ? bodyTr->pos : vec3{0.0f, 0.0f, 0.0f};
+                const float cs = static_cast<float>(kCellSize);
+                const int bx = wrap_macro(static_cast<int>(std::floor(bodyPos.x / cs)));
+                const int by = wrap_macro(static_cast<int>(std::floor(bodyPos.y / cs)));
+                const int bz = static_cast<int>(std::floor(bodyPos.z / cs));
+
+                auto push_corpse = [&](ItemId id, std::uint16_t count) -> std::uint16_t {
+                    if (id == kInvalidItem || count == 0) return 0;
+                    if (corpse.slotCount >= static_cast<std::uint8_t>(kMaxCorpseSlots))
+                        return count;
+                    ItemSlot& ls = corpse.lootSlots[corpse.slotCount++];
+                    ls.item = id;
+                    ls.count = count;
+                    return 0;
+                };
+                auto push_cell_containers = [&](ItemId id, std::uint16_t count) -> std::uint16_t {
+                    if (id == kInvalidItem || count == 0 || !bodyTr) return count;
+                    std::uint16_t left = count;
+                    for (auto ce : reg.view<Container, const Transform>()) {
+                        if (left == 0) break;
+                        const Transform& ct = reg.get<const Transform>(ce);
+                        if (ct.layer != bodyLayer) continue;
+                        const int cx = wrap_macro(static_cast<int>(std::floor(ct.pos.x / cs)));
+                        const int cy = wrap_macro(static_cast<int>(std::floor(ct.pos.y / cs)));
+                        const int cz = static_cast<int>(std::floor(ct.pos.z / cs));
+                        if (cx != bx || cy != by || cz != bz) continue;
+                        Container& c = reg.get<Container>(ce);
+                        // Container::count is uint8_t (stack cap 255 per cell slot).
+                        for (std::uint8_t si = 0; si < kContainerSlots && left > 0; ++si) {
+                            if (c.item[si] != id || c.count[si] == 0) continue;
+                            const std::uint16_t room =
+                                static_cast<std::uint16_t>(255u - c.count[si]);
+                            if (room == 0) continue;
+                            const std::uint16_t take = left < room ? left : room;
+                            c.count[si] = static_cast<std::uint8_t>(c.count[si] + take);
+                            left = static_cast<std::uint16_t>(left - take);
+                        }
+                        for (std::uint8_t si = 0; si < kContainerSlots && left > 0; ++si) {
+                            if (c.item[si] != kInvalidItem && c.count[si] != 0) continue;
+                            c.item[si] = id;
+                            const std::uint16_t put = left < 255u ? left : static_cast<std::uint16_t>(255);
+                            c.count[si] = static_cast<std::uint8_t>(put);
+                            left = static_cast<std::uint16_t>(left - put);
+                        }
+
+                    }
+                    return left;
+                };
+
+                for (const ItemSlot& s : spilledInv.slots) {
+                    if (s.item == kInvalidItem || s.count == 0) continue;
+                    std::uint16_t left = push_corpse(s.item, s.count);
+                    if (left > 0) (void)push_cell_containers(s.item, left);
+                }
+            }
+
+
             reg.emplace<Corpse>(e, corpse);
+
         }
+
 
     }
     return static_cast<std::uint32_t>(doomed.size());
