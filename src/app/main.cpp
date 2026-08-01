@@ -2617,6 +2617,84 @@ int main(int argc, char** argv) {
                         }
                         // Hold attack every tick (same as wall/attack).
                         attackHeld = true;
+                    } else if (shotAction == "mag" && reg.valid(player)) {
+                        // MAGSHOT: live proof that PlayerRanged.magCount survives
+                        // elevator body-swap under --shot --ride. Unit pin owns the
+                        // pure seam (test_elevator FOR1/MAG1); this stamps a
+                        // distinctive partial mag + gun so the HUD gun line and
+                        // stderr can show the same count after each hop.
+                        static bool magForced = false;
+                        static int magLastRideLog = -1;
+                        static std::uint16_t magStamp = 7;
+                        static game::ItemId magGun = game::kInvalidItem;
+                        if (!magForced) {
+                            game::ItemId gun = game::kInvalidItem;
+                            for (game::ItemId i = 1; i <= game::kItemCount; ++i) {
+                                if (const game::RangedDef* d =
+                                        game::ranged_for_item(i)) {
+                                    if (d->pellets == 1 && d->magazine >= 8 &&
+                                        d->dmg >= 20) {
+                                        gun = i;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (gun == game::kInvalidItem) {
+                                std::fprintf(stderr, "[mag] FORCE FAIL no gun\n");
+                                magForced = true;
+                            } else if (const game::NpcRef* nr =
+                                           reg.try_get<game::NpcRef>(player)) {
+                                if (pool.valid(nr->id)) {
+                                    const game::RangedDef& def =
+                                        *game::ranged_for_item(gun);
+                                    game::Inventory& inv = pool.inventory(nr->id);
+                                    inv.slots[0] = game::ItemSlot{gun, 1};
+                                    inv.slots[1] = game::ItemSlot{def.ammo, 30};
+                                    game::PlayerRanged pr{};
+                                    pr.cooldownMs = 0;
+                                    pr.reloadMs = 0;
+                                    pr.magCount = magStamp;
+                                    pr.weapon = gun;
+                                    pr.shots = 42;
+                                    pr.hits = 13;
+                                    reg.emplace_or_replace<game::PlayerRanged>(
+                                        player, pr);
+                                    magGun = gun;
+                                    magForced = true;
+                                    std::fprintf(stderr,
+                                                 "[mag] FORCE gun=%u name=%s "
+                                                 "mag=%u/%u shots=%u hits=%u\n",
+                                                 static_cast<unsigned>(gun),
+                                                 game::item_name(gun),
+                                                 static_cast<unsigned>(pr.magCount),
+                                                 static_cast<unsigned>(def.magazine),
+                                                 pr.shots, pr.hits);
+                                }
+                            }
+                        }
+                        // Log once per completed ride (and once at force with done=0).
+                        if (magForced && shotRideDone != magLastRideLog) {
+                            magLastRideLog = shotRideDone;
+                            const game::PlayerRanged* pr =
+                                reg.try_get<game::PlayerRanged>(player);
+                            const unsigned mag =
+                                pr ? static_cast<unsigned>(pr->magCount) : 0u;
+                            const unsigned wpn =
+                                pr ? static_cast<unsigned>(pr->weapon) : 0u;
+                            const unsigned sh = pr ? pr->shots : 0u;
+                            const unsigned hi = pr ? pr->hits : 0u;
+                            const int ok =
+                                (pr && pr->magCount == magStamp &&
+                                 pr->weapon == magGun && pr->shots == 42u &&
+                                 pr->hits == 13u)
+                                    ? 1
+                                    : 0;
+                            std::fprintf(stderr,
+                                         "[mag] RIDE done=%d has=%d mag=%u "
+                                         "weapon=%u shots=%u hits=%u ok=%d\n",
+                                         shotRideDone, pr ? 1 : 0, mag, wpn, sh,
+                                         hi, ok);
+                        }
                     } else if (shotAction == "attack") {
                         attackHeld = true;
                     } else if (shotAction == "interact") {
@@ -5074,6 +5152,23 @@ int main(int argc, char** argv) {
                     std::fprintf(stderr, "shot: %s -> %s (floor %d, %d frames)\n",
                                  ok ? "saved" : "FAILED", shotPath, currentFloor,
                                  shotFramesSeen);
+                    if (shotAction == "mag" && reg.valid(player)) {
+                        const game::PlayerRanged* pr =
+                            reg.try_get<game::PlayerRanged>(player);
+                        std::fprintf(stderr,
+                                     "[mag] FINAL has=%d mag=%u weapon=%u "
+                                     "shots=%u hits=%u rideDone=%d\n",
+                                     pr ? 1 : 0,
+                                     pr ? static_cast<unsigned>(pr->magCount) : 0u,
+                                     pr ? static_cast<unsigned>(pr->weapon) : 0u,
+                                     pr ? pr->shots : 0u, pr ? pr->hits : 0u,
+                                     shotRideDone);
+                        if (pr && pr->magCount == 7u && pr->shots == 42u &&
+                            pr->hits == 13u)
+                            std::fprintf(stderr, "[mag] PROOF=GREEN\n");
+                        else
+                            std::fprintf(stderr, "[mag] PROOF=RED\n");
+                    }
                     if (renderer.timer.supported())
                         std::fprintf(stderr,
                                      "gpu-ms: world %.3f bodies %.3f hud %.3f "

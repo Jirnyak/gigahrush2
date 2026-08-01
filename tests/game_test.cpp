@@ -4156,6 +4156,10 @@ static void test_stream_migration_reembodies() {
 
 
 int main() {
+    // Unbuffered stdio so redirected CI/agent runs show suite progress live
+    // instead of looking hung at the first long suite (npcpool/samosbor2).
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
     test_inventory();
     test_pool_basics();
     test_pool_death_keeps_slot();
