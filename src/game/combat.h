@@ -540,7 +540,7 @@ void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
 //
 // Bounded POD ring, no heap — a shotgun pellet fan can enqueue several impacts
 // in one step without allocating on the hot path.
-inline constexpr std::size_t kMaxCarveProposals = 16;
+inline constexpr std::size_t kMaxCarveProposals = 128;
 
 struct CarveProposal {
     float x = 0.0f;
