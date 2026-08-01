@@ -154,22 +154,38 @@
 ## 18. ЕДИНАЯ СИСТЕМА ПРОПОВ И ИНТЕРАКЦИЙ (SUB-VOXEL ANCHOR & INTERACTABLE)
 
 - **КОНЦЕПЦИЯ "КОНСТРУКТОР ЛЕГО" (МАНДАТ КЛАУСА ШВАБА / ИРНЯКА):** Гигахрущ — это буквально конструктор ЛЕГО. Весь активный этаж физически собирается из вокселей, пропов (`SubVoxelAnchor`) и интерактивов в единую модель, а затем существует и симулируется как **ЕДИНЫЙ МЕХАНИЗМ**. Никаких "висящих" в воздухе одиночных объектов или оторванных элементов!
+- **ЛИКВИДАЦИЯ НАРУШЕНИЯ ИНВАРИАНТА Sim -> Render (ФАКТ №2 КЛАУСА ШВАБА):**
+  - **Текущий баг:** `src/render/prop_placer.cpp` генерирует пропы (терминалы, щитки) напрямую в GPU-буфер `propPass` без сущностей в ECS `Registry`. В `main.cpp` нажатие `[E]` вытягивает позиции терминалов из Vulkan через `propPass.get_terminal_positions()`. Это критическое нарушение инварианта "Render is a pure shell; sim never depends on it".
+  - **Решение (ФАКТ №3):** 
+    1. **Перенести генерацию пропов в Game (`src/game/floors/`):** Пропы спавнятся как ECS-сущности в `giga::Registry` с компонентами `<Transform, SubVoxelAnchor, Interactable, PropMeshTag>`. `propPass` в Vulkan становится пассивным скином, итерирующим `reg.view<Transform, PropMeshTag>()`.
+    2. **POD-компоненты в `src/ecs/components.h`:**
+       ```cpp
+       struct SubVoxelAnchor {
+           int cx = 0, cy = 0, cz = 0; // макро-ячейка 128^3
+           std::uint8_t subX = 0, subY = 0, subZ = 0; // суб-воксель (0..7)
+           std::uint8_t face = 0; // 0=Floor, 1=WallNorth, 2=WallSouth...
+       };
+       struct Interactable {
+           enum class Kind : std::uint8_t { Terminal, ElectricalShield, Door, Corpse, Loot } kind;
+           float reachM = 3.0f;
+           bool active = true;
+       };
+       ```
+    3. **Валидация привязки (`anchor_validate_step`):** Системы проверяют `reg.view<Transform, SubVoxelAnchor>()` против `MacroGrid`. Если субоксель становится `kCellAir`, проп падает (`DynamicBodyTag` + `GravityAffected`) или распадается на обломки.
+    4. **Чистая `interaction_step()`:** В `src/game/` создается `interaction_step(Registry& reg, World& world, EventBus& bus, Entity player)`, которая итерирует view `<Transform, Interactable>` без распределений памяти `std::vector` в кадре.
 - **ОБРАБОТКА `World::carve` И `anchor_step()`:** `World::carve` при вырезании стены просто возвращает список измененных координат `dirtyCells`. Система `anchor_step()` в слое `giga_game` прогоняет этот список по EnTT-реестру и роняет отвалившиеся пропы.
 - **ПОДВОДНЫЙ КАМЕНЬ №4: ПЕРЕКЛЮЧЕНИЕ РЕНДЕРА (PropPass -> BodyPass):**
   - **Проблема:** Статичные пропы отрисовываются через GPU-батч `PropPass` (в `src/render/`), а падающие физические объекты — через `BodyPass`.
   - **Опасность:** При потере якоря проп **НЕ ДОЛЖЕН УДАЛЯТЬСЯ И СОЗДАВАТЬСЯ ЗАНОВО В ПАМЯТИ**!
   - **Как правильно:** Когда проп отрывается от стены и начинает падать, он просто меняет ECS-тег со `StaticPropTag` на `DynamicBodyTag`, и рендерер подхватывает его движение автоматически без пересоздания сущности в памяти!
+- **ФИЗИКА ПАДАЮЩИХ ПРОПОВ (ПРОП-РАГДОЛЛЫ):**
+  - **Проблема:** Флаг `bool isRagdoll` — это фикция. Без угловой скорости и вращения оторвавшийся проп не сможет физично кувыркаться в 3D пространстве.
+  - **Решение:** 
+    1. **POD-компоненты вращения:** `struct AngularVelocity { vec3 w; };` и `struct Rotation { quat q; };`.
+    2. **Функция `prop_ragdoll_step(reg, dt)`:** Выделенная функция в `src/game/`, итерирующая `reg.view<Transform, DynamicBodyTag, Velocity, AngularVelocity>()`. При отрыве от стены пропу задаются случайные угловые импульсы `AngularVelocity` для реального 3D-кувыркания при падении.
+    3. **Сохранение DOD/ECS:** Полная интеграция с EnTT views без использования `virtual` функций и RTTI.
 - **СТРОГАЙШИЙ ЗАПРЕТ НА НОВЫЕ ФИЧИ:** Категорически ЗАПРЕЩЕНО добавлять любые новые геймплейные фичи! Единственное исключение: воксельная геометрия этажей (падики/подъезды), модели НПЦ/оружия, HP и SubVoxelAnchor.
 - **СНОС И ОЧИСТКА НАКОПЛЕННОГО МУСОРА:** Старые фичи, вылезающие визуальными багами на скриншотах, НЕЛЬЗЯ ЧИНИТЬ. Их нужно бескомпромиссно СНОСИТЬ И УДАЛЯТЬ из кодовой базы.
-- **СУБ-ВОКСЕЛЬНЫЙ ЯКОРЬ (`SubVoxelAnchor`):** Запрещен спавн пропов по сырым `vec3 pos` без привязки к сетке. Любой объект в мире монтируется к твердому суб-вокселю `0.25м` (`SubVoxelAnchor { uint16_t sub_x, sub_y, sub_z; vec3 offset; vec3 rotation; }`).
-- **КОМПОЗИЦИЯ ИНТЕРАКТИВОВ (`Interactable`):** Взаимодействие создается исключительно через POD-компонент композиции:
-  ```cpp
-  struct Interactable {
-      const char* prompt; // Текст HUD (например: "[E] ТЕРМИНАЛ")
-      void (*on_interact)(Registry& reg, Entity prop, Entity player); // Прямой указатель на функцию
-  };
-  ```
-- **ОЧИСТКА `main.cpp`:** Строго запрещены длинные цепочки `if-else` в `main.cpp` для взаимодействия с дверями, терминалами, трупами и лутом. При нажатии `[E]` вызывается `interaction_step(reg, player)`, которая сразу берет `on_interact` у сущности под прицелом и задействует его без перебора.
 
 ---
 
