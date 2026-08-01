@@ -7,6 +7,7 @@
 #include "ecs/registry.h"
 #include "game/event_bus.h"
 #include "world/world.h"
+#include "world/level_stack.h"
 
 namespace giga::game {
 

@@ -28,6 +28,7 @@
 #include <vector>
 #include "game/floor_spec.h" // FloorKind, FloorSpec
 #include "ecs/registry.h"
+#include "world/level_stack.h"
 #include "game/event_bus.h"
 
 namespace giga {

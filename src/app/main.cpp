@@ -3260,12 +3260,9 @@ int main(int argc, char** argv) {
 
                         // 2. Terminal / ControlPanel interaction — ECS collect, not PropPass.
                         if (!handled && activeLayer != kInvalidLayer) {
-                            std::vector<game::PropRecord> termRecs;
-                            game::collect_props_of_kind(reg, activeLayer,
-                                                        Interactable::Kind::Terminal, termRecs);
                             std::vector<vec3> terms;
-                            terms.reserve(termRecs.size());
-                            for (const auto& rec : termRecs) terms.push_back(rec.pos);
+                            game::collect_interactable_positions(
+                                reg, activeLayer, Interactable::Kind::Terminal, terms);
                             game::TerminalInteractResult tres = game::embody_interact_terminal(
                                 reg, stack.layer(activeLayer), doors, activeLayer, ppos, 4.0f, terms);
                             if (tres.interacted) {
@@ -3290,12 +3287,10 @@ int main(int argc, char** argv) {
 
                         // 3. ElectricalShield interaction / power cut sabotage — ECS.
                         if (!handled && activeLayer != kInvalidLayer) {
-                            std::vector<game::PropRecord> shields;
-                            game::collect_props_of_kind(reg, activeLayer,
-                                                        Interactable::Kind::ElectricalShield,
-                                                        shields);
-                            for (const auto& rec : shields) {
-                                const vec3& sp = rec.pos;
+                            std::vector<vec3> shields;
+                            game::collect_interactable_positions(
+                                reg, activeLayer, Interactable::Kind::ElectricalShield, shields);
+                            for (const vec3& sp : shields) {
                                 float dx = wrap_delta_f(ppos.x, sp.x, kWorldExtent);
                                 float dy = ppos.y - sp.y;
                                 float dz = wrap_delta_f(ppos.z, sp.z, kWorldExtent);
@@ -3898,11 +3893,10 @@ int main(int argc, char** argv) {
                     const Transform& ct = reg.get<Transform>(player);
                     bool nearTerm = false;
                     {
-                        std::vector<game::PropRecord> termRecs;
-                        game::collect_props_of_kind(reg, activeLayer,
-                                                    Interactable::Kind::Terminal, termRecs);
-                        for (const auto& rec : termRecs) {
-                            const vec3& tp = rec.pos;
+                        std::vector<vec3> termRecs;
+                        game::collect_interactable_positions(
+                            reg, activeLayer, Interactable::Kind::Terminal, termRecs);
+                        for (const vec3& tp : termRecs) {
                             float dx = tp.x - ct.pos.x, dy = tp.y - ct.pos.y, dz = tp.z - ct.pos.z;
                             if (dx * dx + dy * dy + dz * dz < 16.0f) { nearTerm = true; break; }
                         }
@@ -4571,11 +4565,10 @@ int main(int argc, char** argv) {
             const Transform& ct = reg.get<Transform>(player);
             bool nearTerm = false;
             {
-                std::vector<game::PropRecord> termRecs;
-                game::collect_props_of_kind(reg, activeLayer,
-                                            Interactable::Kind::Terminal, termRecs);
-                for (const auto& rec : termRecs) {
-                    const vec3& tp = rec.pos;
+                std::vector<vec3> termRecs;
+                game::collect_interactable_positions(
+                    reg, activeLayer, Interactable::Kind::Terminal, termRecs);
+                for (const vec3& tp : termRecs) {
                     float dx = tp.x - ct.pos.x, dy = tp.y - ct.pos.y, dz = tp.z - ct.pos.z;
                     if (dx * dx + dy * dy + dz * dz < 16.0f) { nearTerm = true; break; }
                 }
@@ -4642,9 +4635,11 @@ int main(int argc, char** argv) {
                 }
             }
 
-            // Terminal proximity
-            if (!promptText && propPass.ready()) {
-                std::vector<vec3> terms = propPass.get_terminal_positions();
+            // Terminal proximity — ECS collect, not PropPass ([jirnyak.md] §18).
+            if (!promptText && activeLayer != kInvalidLayer) {
+                std::vector<vec3> terms;
+                game::collect_interactable_positions(
+                    reg, activeLayer, Interactable::Kind::Terminal, terms);
                 for (const vec3& tp : terms) {
                     const float dx = wrap_delta_f(ppos.x, tp.x, kWorldExtent);
                     const float dy = ppos.y - tp.y;
@@ -4656,9 +4651,11 @@ int main(int argc, char** argv) {
                 }
             }
 
-            // ElectricalShield proximity (sabotage / power cut)
-            if (!promptText && propPass.ready()) {
-                std::vector<vec3> shields = propPass.get_prop_positions(gpu::PropShape::ElectricalShield);
+            // ElectricalShield proximity (sabotage / power cut) — ECS collect.
+            if (!promptText && activeLayer != kInvalidLayer) {
+                std::vector<vec3> shields;
+                game::collect_interactable_positions(
+                    reg, activeLayer, Interactable::Kind::ElectricalShield, shields);
                 for (const vec3& sp : shields) {
                     const float dx = wrap_delta_f(ppos.x, sp.x, kWorldExtent);
                     const float dy = ppos.y - sp.y;
