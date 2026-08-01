@@ -520,7 +520,11 @@ if(GIGA_BUILD_TESTS)
     # 221694 -> 230925 (+9231) on 2026-08-01: Section 18 ceiling LightBulb ECS seed
     # (seed_ceiling_lights + collect for lighting; suite_props_game ceiling tests;
     # main collect_scene_lights no longer reads propPass.get_prop_positions).
-        PASS_REGULAR_EXPRESSION "game_test: 230925 checks, 0 failures")
+    # 230925 -> 230985 (+60) on 2026-08-01: Section 18 PropPass passive skin —
+    # PropMesh + collect_static_prop_mesh_instances; Terminal/Shield/BareBulb/FloodLamp
+    # GPU instances from ECS (merge_ecs_prop_meshes after propPlacer.populate);
+    # suite_props_game shape collect CHECKs.
+        PASS_REGULAR_EXPRESSION "game_test: 230985 checks, 0 failures")
 
 
     # Text gate for the AGENTS.md rules that no compiler enforces on every host.
