@@ -515,7 +515,9 @@ if(GIGA_BUILD_TESTS)
     # 219626 -> 221529 (+1903) on 2026-08-01: Section 18 physics/console/keybind
     # expansion — suite_physics + suite_console completion/spawn_ball coverage +
     # suite_props_game wall-device floor band; console "sp" now matches 3 cmds.
-        PASS_REGULAR_EXPRESSION "game_test: 221529 checks, 0 failures")
+    # 221529 -> 221678 (+149) on 2026-08-01: death inventory spill into Corpse
+    # then same-cell Containers (jirnyak §19) + suite_rpg death-spill CHECKs.
+        PASS_REGULAR_EXPRESSION "game_test: 221678 checks, 0 failures")
 
 
     # Text gate for the AGENTS.md rules that no compiler enforces on every host.
