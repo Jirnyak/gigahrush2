@@ -3262,7 +3262,7 @@ int main(int argc, char** argv) {
                         if (!handled && activeLayer != kInvalidLayer) {
                             std::vector<vec3> terms;
                             game::collect_interactable_positions(
-                                reg, activeLayer, Interactable::Kind::Terminal, terms);
+                                reg, activeLayer, game::Interactable::Kind::Terminal, terms);
                             game::TerminalInteractResult tres = game::embody_interact_terminal(
                                 reg, stack.layer(activeLayer), doors, activeLayer, ppos, 4.0f, terms);
                             if (tres.interacted) {
@@ -3289,7 +3289,7 @@ int main(int argc, char** argv) {
                         if (!handled && activeLayer != kInvalidLayer) {
                             std::vector<vec3> shields;
                             game::collect_interactable_positions(
-                                reg, activeLayer, Interactable::Kind::ElectricalShield, shields);
+                                reg, activeLayer, game::Interactable::Kind::ElectricalShield, shields);
                             for (const vec3& sp : shields) {
                                 float dx = wrap_delta_f(ppos.x, sp.x, kWorldExtent);
                                 float dy = ppos.y - sp.y;
@@ -3895,7 +3895,7 @@ int main(int argc, char** argv) {
                     {
                         std::vector<vec3> termRecs;
                         game::collect_interactable_positions(
-                            reg, activeLayer, Interactable::Kind::Terminal, termRecs);
+                            reg, activeLayer, game::Interactable::Kind::Terminal, termRecs);
                         for (const vec3& tp : termRecs) {
                             float dx = tp.x - ct.pos.x, dy = tp.y - ct.pos.y, dz = tp.z - ct.pos.z;
                             if (dx * dx + dy * dy + dz * dz < 16.0f) { nearTerm = true; break; }
@@ -4567,7 +4567,7 @@ int main(int argc, char** argv) {
             {
                 std::vector<vec3> termRecs;
                 game::collect_interactable_positions(
-                    reg, activeLayer, Interactable::Kind::Terminal, termRecs);
+                    reg, activeLayer, game::Interactable::Kind::Terminal, termRecs);
                 for (const vec3& tp : termRecs) {
                     float dx = tp.x - ct.pos.x, dy = tp.y - ct.pos.y, dz = tp.z - ct.pos.z;
                     if (dx * dx + dy * dy + dz * dz < 16.0f) { nearTerm = true; break; }
@@ -4639,7 +4639,7 @@ int main(int argc, char** argv) {
             if (!promptText && activeLayer != kInvalidLayer) {
                 std::vector<vec3> terms;
                 game::collect_interactable_positions(
-                    reg, activeLayer, Interactable::Kind::Terminal, terms);
+                    reg, activeLayer, game::Interactable::Kind::Terminal, terms);
                 for (const vec3& tp : terms) {
                     const float dx = wrap_delta_f(ppos.x, tp.x, kWorldExtent);
                     const float dy = ppos.y - tp.y;
@@ -4655,7 +4655,7 @@ int main(int argc, char** argv) {
             if (!promptText && activeLayer != kInvalidLayer) {
                 std::vector<vec3> shields;
                 game::collect_interactable_positions(
-                    reg, activeLayer, Interactable::Kind::ElectricalShield, shields);
+                    reg, activeLayer, game::Interactable::Kind::ElectricalShield, shields);
                 for (const vec3& sp : shields) {
                     const float dx = wrap_delta_f(ppos.x, sp.x, kWorldExtent);
                     const float dy = ppos.y - sp.y;

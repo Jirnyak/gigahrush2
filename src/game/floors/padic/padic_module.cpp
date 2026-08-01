@@ -44,7 +44,7 @@ std::uint32_t seed_padic_props(Registry& reg, const World& world, LayerId layer,
                     lightAnchor.subZ = 6; // Ceiling is sz=6
                     
                     Entity lamp = spawn_prop(reg, world, bulbPos, lightAnchor,
-                                             Interactable::Kind::LightBulb,
+                                             game::Interactable::Kind::LightBulb,
                                              PropFallMode::RagdollRoll,
                                              vec3{1.0f, 0.95f, 0.7f}, 12, layer);
                     if (lamp != entt::null) {

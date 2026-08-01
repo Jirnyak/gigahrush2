@@ -23,11 +23,11 @@ static void paint_floor_band(World& world, int x0, int x1, int yFloor, int z0, i
     // air above stays kCellAir (default) — that is the candidate band at yFloor+1.
 }
 
-static int count_kind(const Registry& reg, LayerId layer, Interactable::Kind k) {
+static int count_kind(const Registry& reg, LayerId layer, game::Interactable::Kind k) {
     int n = 0;
-    auto view = reg.view<const Interactable, const Transform>();
+    auto view = reg.view<const game::Interactable, const Transform>();
     for (auto e : view) {
-        if (view.get<const Interactable>(e).kind != k) continue;
+        if (view.get<const game::Interactable>(e).kind != k) continue;
         if (view.get<const Transform>(e).layer != layer) continue;
         ++n;
     }
@@ -49,16 +49,16 @@ static void test_wall_interactables_seed_and_collect() {
     const std::uint32_t n = game::seed_wall_interactables(reg, world, layer, seed);
     CHECK(n > 0);
 
-    const int terms = count_kind(reg, layer, Interactable::Kind::Terminal);
-    const int shields = count_kind(reg, layer, Interactable::Kind::ElectricalShield);
+    const int terms = count_kind(reg, layer, game::Interactable::Kind::Terminal);
+    const int shields = count_kind(reg, layer, game::Interactable::Kind::ElectricalShield);
     CHECK(terms + shields == static_cast<int>(n));
     CHECK(terms > 0);
     CHECK(shields > 0);
 
     // collect_interactable_positions is the sim/HUD path — must see the same set.
     std::vector<vec3> termPos, shieldPos;
-    game::collect_interactable_positions(reg, layer, Interactable::Kind::Terminal, termPos);
-    game::collect_interactable_positions(reg, layer, Interactable::Kind::ElectricalShield,
+    game::collect_interactable_positions(reg, layer, game::Interactable::Kind::Terminal, termPos);
+    game::collect_interactable_positions(reg, layer, game::Interactable::Kind::ElectricalShield,
                                          shieldPos);
     CHECK(static_cast<int>(termPos.size()) == terms);
     CHECK(static_cast<int>(shieldPos.size()) == shields);
@@ -73,12 +73,12 @@ static void test_wall_interactables_seed_and_collect() {
     }
 
     // Entities carry Transform.layer so a recycled LayerId slot can be cleared.
-    auto view = reg.view<const Interactable, const Transform>();
+    auto view = reg.view<const game::Interactable, const Transform>();
     for (auto e : view) {
         const auto& t = view.get<const Transform>(e);
-        const auto& i = view.get<const Interactable>(e);
-        if (i.kind == Interactable::Kind::Terminal ||
-            i.kind == Interactable::Kind::ElectricalShield) {
+        const auto& i = view.get<const game::Interactable>(e);
+        if (i.kind == game::Interactable::Kind::Terminal ||
+            i.kind == game::Interactable::Kind::ElectricalShield) {
             CHECK(t.layer == layer);
         }
     }
@@ -101,18 +101,18 @@ static void test_wall_interactables_clear_is_layer_scoped() {
     // clear_layer_props only destroys entities tagged with the given layer.
     const std::uint32_t cleared = game::clear_layer_props(reg, layerA);
     CHECK(cleared == nA);
-    CHECK(count_kind(reg, layerA, Interactable::Kind::Terminal) == 0);
-    CHECK(count_kind(reg, layerA, Interactable::Kind::ElectricalShield) == 0);
-    CHECK(count_kind(reg, layerB, Interactable::Kind::Terminal) +
-              count_kind(reg, layerB, Interactable::Kind::ElectricalShield) ==
+    CHECK(count_kind(reg, layerA, game::Interactable::Kind::Terminal) == 0);
+    CHECK(count_kind(reg, layerA, game::Interactable::Kind::ElectricalShield) == 0);
+    CHECK(count_kind(reg, layerB, game::Interactable::Kind::Terminal) +
+              count_kind(reg, layerB, game::Interactable::Kind::ElectricalShield) ==
           static_cast<int>(nB));
 
     std::vector<vec3> emptyTerms;
-    game::collect_interactable_positions(reg, layerA, Interactable::Kind::Terminal, emptyTerms);
+    game::collect_interactable_positions(reg, layerA, game::Interactable::Kind::Terminal, emptyTerms);
     CHECK(emptyTerms.empty());
     std::vector<vec3> stillThere;
-    game::collect_interactable_positions(reg, layerB, Interactable::Kind::Terminal, stillThere);
-    game::collect_interactable_positions(reg, layerB, Interactable::Kind::ElectricalShield,
+    game::collect_interactable_positions(reg, layerB, game::Interactable::Kind::Terminal, stillThere);
+    game::collect_interactable_positions(reg, layerB, game::Interactable::Kind::ElectricalShield,
                                          stillThere);
     CHECK(static_cast<int>(stillThere.size()) == static_cast<int>(nB));
 }
@@ -129,7 +129,7 @@ static void test_padic_props_seed_tags_layer() {
     const std::uint32_t n =
         game::seed_padic_props(reg, world, layer, /*number=*/4, /*seed=*/0x0BAD1Cu, bus);
     if (n > 0) {
-        auto view = reg.view<const Interactable, const Transform>();
+        auto view = reg.view<const game::Interactable, const Transform>();
         int tagged = 0;
         for (auto e : view) {
             if (view.get<const Transform>(e).layer == layer) ++tagged;
