@@ -35,6 +35,13 @@ struct VulkanBuffer {
                              VkDeviceSize bytes, VkBufferUsageFlags usage,
                              const char* label = "device-local buffer");
 
+    // DEVICE_LOCAL buffer with no initial contents — for mirrors filled by
+    // their own staging paths (render/voxel_mirror.h). Caller supplies the
+    // full usage set (transfer bits included); nothing is implied.
+    bool create_device_local_empty(const VulkanDevice& dev, VkDeviceSize bytes,
+                                   VkBufferUsageFlags usage,
+                                   const char* label = "device-local buffer");
+
     // Persistently-mapped HOST_VISIBLE|HOST_COHERENT buffer of `bytes`.
     bool create_host_visible(const VulkanDevice& dev, VkDeviceSize bytes,
                              VkBufferUsageFlags usage,

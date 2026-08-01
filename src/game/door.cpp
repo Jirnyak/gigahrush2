@@ -53,13 +53,20 @@ bool leaf_occupied(const Door& d, const Registry& reg, LayerId layer) {
     return false;
 }
 
-void fill_leaf(MacroGrid& g, const Door& d) {
-    for (int z = 0; z < d.h; ++z)
+void fill_leaf(MacroGrid& g, DoorSet& doors, const Door& d) {
+    for (int z = 0; z < d.h; ++z) {
         g.fill_cell(d.cx, d.cy, d.cz + z, kMatDoor);
+        doors.dirtyCells.push_back(macro_index(
+            wrap_macro(d.cx), wrap_macro(d.cy), wrap_macro(d.cz + z)));
+    }
 }
 
-void clear_leaf(MacroGrid& g, const Door& d) {
-    for (int z = 0; z < d.h; ++z) g.clear_cell(d.cx, d.cy, d.cz + z);
+void clear_leaf(MacroGrid& g, DoorSet& doors, const Door& d) {
+    for (int z = 0; z < d.h; ++z) {
+        g.clear_cell(d.cx, d.cy, d.cz + z);
+        doors.dirtyCells.push_back(macro_index(
+            wrap_macro(d.cx), wrap_macro(d.cy), wrap_macro(d.cz + z)));
+    }
 }
 
 } // namespace
@@ -139,11 +146,11 @@ bool door_set(World& world, DoorSet& doors, const Registry& reg, LayerId layer,
 
     if (shut) {
         if (leaf_occupied(d, reg, layer)) return false;   // would seal a body in
-        fill_leaf(world.grid(), d);
+        fill_leaf(world.grid(), doors, d);
         d.state = static_cast<std::uint8_t>(DoorState::Shut);
         ++doors.shut;
     } else {
-        clear_leaf(world.grid(), d);
+        clear_leaf(world.grid(), doors, d);
         d.state = static_cast<std::uint8_t>(DoorState::Open);
         if (doors.shut) --doors.shut;
     }
@@ -329,7 +336,7 @@ DoorTick door_step(Registry& reg, World& world, DoorSet& doors, LayerId layer,
                 d.chipMilli = static_cast<std::uint16_t>(acc);
                 d.lastTick = now;
                 if (d.hp <= 0) {
-                    clear_leaf(g, d);
+                    clear_leaf(g, doors, d);
                     d.state = static_cast<std::uint8_t>(DoorState::Broken);
                     if (doors.shut) --doors.shut;
                     ++doors.broken;
@@ -355,7 +362,7 @@ DoorTick door_step(Registry& reg, World& world, DoorSet& doors, LayerId layer,
             static_cast<std::uint32_t>(dt * 1000.0f + 0.5f);
         if (ms >= kDoorForceMs) {
             d.forceMs = 0;
-            clear_leaf(g, d);
+            clear_leaf(g, doors, d);
             d.state = static_cast<std::uint8_t>(DoorState::Open);
             if (doors.shut) --doors.shut;
             ++out.opened;

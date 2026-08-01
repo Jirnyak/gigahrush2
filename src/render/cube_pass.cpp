@@ -103,6 +103,15 @@ vec3 type_color(CellType t) {
     return t < kMatCount ? kMaterial[t] : vec3{0.75f, 0.75f, 0.78f};
 }
 
+} // namespace
+
+const vec3* material_albedo_table(std::uint32_t* count) {
+    *count = kMatCount;
+    return kMaterial;
+}
+
+namespace {
+
 // --- photographic albedo ----------------------------------------------------
 // The SECOND per-material table in this file, deliberately next to the first:
 // which photograph in data/textures is a material's real albedo. Six rows,

@@ -173,6 +173,15 @@ public:
               const char* shaderDir, VkDescriptorSetLayout lightGridSetLayout = VK_NULL_HANDLE);
     void destroy();
 
+    // The photographic albedo/normal/roughness arrays this pass loaded, for
+    // passes that shade with the same model (render/raymarch_pass.h). Layout
+    // is 3 combined image samplers, bindings 0..2, fragment stage. Masks come
+    // from the textured_materials()/normal_materials()/roughness_materials()
+    // getters below.
+    VkDescriptorSetLayout texture_set_layout() const { return descriptorSetLayout_; }
+    VkDescriptorSet texture_descriptor_set() const { return descriptorSet_; }
+    bool textured() const { return textured_; }
+
     // Record the instanced draw into `cmd`. The instance list is CACHED: it is
     // rebuilt from `world` only when this pass is dirty (a different World, or an
     // explicit invalidate()), not every frame. Rebuilding it per frame cost
@@ -228,7 +237,6 @@ public:
     // Borrowed by passes that share the same push-constant block (PropPass,
     // any future pass that needs the same CubePush layout).
     VkPipelineLayout pipeline_layout() const { return layout_; }
-
 private:
     VulkanDevice* dev_ = nullptr;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
@@ -341,5 +349,11 @@ private:
     // module and which descriptor set layout to build with.
     void load_material_textures();
 };
+
+// The per-material display-referred albedo table (what CubeInstance::color
+// carries for an untinted cell), for passes that shade the same world without
+// instances — the raymarch pass feeds it into its material UBO. `*count`
+// receives kMatCount.
+const vec3* material_albedo_table(std::uint32_t* count);
 
 } // namespace giga::gpu

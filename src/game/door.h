@@ -157,6 +157,13 @@ struct DoorSet {
     // ordering rule in the header comment.
     bool frozen = false;
 
+    // Macro cells whose masks this system changed since the app last drained
+    // the list (shut, open, force-open, break). The same handoff contract as
+    // CarveResult::dirtyCells ([world/destruct.h]): door.cpp only appends; the
+    // app owes its consumers (the GPU voxel mirror) one drain + clear() per
+    // frame. Bounded by real door events, so it stays tiny.
+    std::vector<std::uint32_t> dirtyCells;
+
     bool empty() const { return doors.empty(); }
 
     // Door occupying a cell, or kNoDoor. Wraps, so raw cell indices are fine.

@@ -233,7 +233,7 @@ set(_giga_spv_files "")
 # explicit list rather than a GLOB — a stray .glsl should not silently start forcing
 # every shader to recompile.
 set(_giga_glsl_includes ${CMAKE_SOURCE_DIR}/shaders/material_surface.glsl ${CMAKE_SOURCE_DIR}/shaders/volumetric_fog.glsl)
-foreach(_sh cube.vert cube.frag body.vert prop.vert prop.frag particle.vert particle.frag)
+foreach(_sh cube.vert cube.frag body.vert prop.vert prop.frag particle.vert particle.frag raymarch.vert raymarch.frag)
     add_custom_command(
         OUTPUT ${_giga_spv_dir}/${_sh}.spv
         COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O
@@ -313,6 +313,18 @@ add_custom_command(
     DEPENDS ${CMAKE_SOURCE_DIR}/shaders/cube.frag ${_giga_glsl_includes}
     COMMENT "glslc cube.frag -DGIGA_ALBEDO_ARRAY -> cube_tex.frag.spv")
 list(APPEND _giga_spv_files ${_giga_spv_dir}/cube_tex.frag.spv)
+
+# raymarch.frag compiled a SECOND time, same scheme and same reason as
+# cube_tex.frag.spv above: the textured module statically uses the sampler
+# arrays, the procedural fallback must not declare them.
+add_custom_command(
+    OUTPUT ${_giga_spv_dir}/raymarch_tex.frag.spv
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O -DGIGA_ALBEDO_ARRAY
+        ${CMAKE_SOURCE_DIR}/shaders/raymarch.frag
+        -o ${_giga_spv_dir}/raymarch_tex.frag.spv
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/raymarch.frag ${_giga_glsl_includes}
+    COMMENT "glslc raymarch.frag -DGIGA_ALBEDO_ARRAY -> raymarch_tex.frag.spv")
+list(APPEND _giga_spv_files ${_giga_spv_dir}/raymarch_tex.frag.spv)
 
 add_custom_target(giga_shaders DEPENDS ${_giga_spv_files})
 
@@ -495,7 +507,7 @@ if(GIGA_BUILD_TESTS)
     # body-swap (up + down ride pins in test_elevator; mutation xp=777 etc.).
     # 219409 -> 219425 (+16) on 2026-07-31: ATTR1 keybind/console spend +
     # AGIMV move mult live; suite_console +attr bits, suite_keybind +4; measured 219546 (SAVRPG +120 saveload CHECKs).
-        PASS_REGULAR_EXPRESSION "game_test: 219711 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "game_test: 219716 checks, 0 failures")
 
     # Text gate for the AGENTS.md rules that no compiler enforces on every host.
     # The load-bearing one is no-exceptions: MSVC's STL is unsupported under

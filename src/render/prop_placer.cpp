@@ -10,7 +10,6 @@ namespace giga::gpu {
 
 namespace {
 
-constexpr float kTwoPi = 6.283185307179586f;
 constexpr float kHalfPi = 1.5707963267948966f;
 constexpr float kPi = 3.141592653589793f;
 
@@ -56,7 +55,6 @@ constexpr std::uint32_t kSaltGrate    = 0x22222222u;
 constexpr std::uint32_t kSaltWall     = 0x33333333u;
 constexpr std::uint32_t kSaltLight    = 0x44444444u;
 constexpr std::uint32_t kSaltAnomaly  = 0x55555555u;
-constexpr std::uint32_t kSaltBeam     = 0x66666666u;
 constexpr std::uint32_t kSaltCrate    = 0x77777777u;
 constexpr std::uint32_t kSaltPillar   = 0x88888888u;
 constexpr std::uint32_t kSaltRailing  = 0x99999999u;

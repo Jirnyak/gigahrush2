@@ -202,10 +202,19 @@ static void test_shut_door_blocks_a_body() {
 
     Registry reg;
     CHECK(!aabb_overlaps_solid(w, leaf, half));            // open: walkable
+    CHECK(doors.dirtyCells.empty());                       // nothing published yet
     CHECK(door_set(w, doors, reg, layer, pick, true));
     CHECK(doors.shut == 1);
     CHECK(aabb_overlaps_solid(w, leaf, half));             // shut: solid
+    // The mask-edit handoff seam ([door.h] dirtyCells): shutting published one
+    // entry per leaf cell — the same contract carve keeps with its consumers.
+    CHECK(doors.dirtyCells.size() == static_cast<std::size_t>(probe.h));
+    CHECK(doors.dirtyCells[0] ==
+          macro_index(wrap_macro(probe.cx), wrap_macro(probe.cy),
+                      wrap_macro(probe.cz)));
+    doors.dirtyCells.clear();                              // the app's drain
     CHECK(!door_set(w, doors, reg, layer, pick, true));    // already shut
+    CHECK(doors.dirtyCells.empty());                       // a refusal publishes nothing
 
     // Walk a body at the shut leaf and let physics resolve it: it must not cross.
     Entity body = reg.create();
@@ -223,6 +232,8 @@ static void test_shut_door_blocks_a_body() {
     // Open it and the same walk goes through.
     CHECK(door_set(w, doors, reg, layer, pick, false));
     CHECK(doors.shut == 0);
+    CHECK(doors.dirtyCells.size() == static_cast<std::size_t>(probe.h));
+    doors.dirtyCells.clear();
     CHECK(!aabb_overlaps_solid(w, leaf, half));
     for (int i = 0; i < 240; ++i) {
         reg.get<Velocity>(body).v = vec3{4.0f, 0.0f, 0.0f};

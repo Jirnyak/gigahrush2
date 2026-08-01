@@ -185,6 +185,16 @@ bool VulkanBuffer::create_device_local(const VulkanDevice& dev,
     return ok;
 }
 
+bool VulkanBuffer::create_device_local_empty(const VulkanDevice& dev,
+                                             VkDeviceSize bytes,
+                                             VkBufferUsageFlags usage,
+                                             const char* label) {
+    size = bytes;
+    mapped = nullptr;
+    return make_buffer(dev, bytes, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                       &buffer, &memory, label);
+}
+
 bool VulkanBuffer::create_host_visible(const VulkanDevice& dev,
                                        VkDeviceSize bytes,
                                        VkBufferUsageFlags usage,

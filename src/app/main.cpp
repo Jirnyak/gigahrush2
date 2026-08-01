@@ -92,6 +92,8 @@
 #include "render/vk_device.h"
 #include "render/vk_renderer.h"
 #include "render/vk_swapchain.h"
+#include "render/voxel_mirror.h"
+#include "render/raymarch_pass.h"
 #include "render/screenshot.h"
 #include "sim/camera.h"
 #include "sim/controller.h"
@@ -1188,6 +1190,11 @@ int main(int argc, char** argv) {
     std::string shotAction;
     bool shotActionConsumed = false; // one-shot save/load; attack stays held
     bool showHud = true;
+    // --mirror-verify: after every wholesale upload and every ~300 frames, read
+    // the GPU voxel mirror back and memcmp it against the CPU grid. Diagnostic
+    // (queue-idles); the proof harness for the raymarch migration's stage 1.
+    bool mirrorVerify = false;
+    std::uint32_t mirrorFrame = 0;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -1201,6 +1208,7 @@ int main(int argc, char** argv) {
             shotFloorWanted = true;
         }
         else if (a == "--no-hud" || a == "--nohud") showHud = false;
+        else if (a == "--mirror-verify") mirrorVerify = true;
         else if (a == "--pos" && i + 3 < argc) {
             customPos.x = static_cast<float>(std::atof(argv[++i]));
             customPos.y = static_cast<float>(std::atof(argv[++i]));
@@ -1265,11 +1273,47 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // GPU mirror of the active floor's voxel truth ([render/voxel_mirror.h]) —
+    // stage 1 of the raymarch migration. No pass consumes it yet; it becomes
+    // the raymarcher's world in stage 2, so its plumbing boots with the rest.
+    gpu::VoxelMirror voxelMirror;
+    if (!voxelMirror.init(device)) {
+        std::fprintf(stderr, "Voxel mirror init failed\n");
+        cubePass.destroy();
+        lightGrid.destroy();
+        renderer.destroy();
+        device.destroy();
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
+
+    // The world renderer: a fullscreen two-level DDA over the mirror
+    // ([render/raymarch_pass.h]). CubePass stays alive as the texture-array
+    // owner and the body/prop pipeline-layout donor until the mesher deletion
+    // lands; its record() is no longer called, so invalidate() is free.
+    gpu::RaymarchPass raymarchPass;
+    if (!raymarchPass.init(device, renderer.renderPass, GIGA_SHADER_DIR,
+                           voxelMirror, cubePass,
+                           lightGrid.descriptor_set_layout())) {
+        std::fprintf(stderr, "Raymarch pass init failed\n");
+        voxelMirror.destroy();
+        cubePass.destroy();
+        lightGrid.destroy();
+        renderer.destroy();
+        device.destroy();
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
+
     // Draws the population: one instanced, lit box per embodied entity, sharing
     // the world pass's render pass + depth so bodies and voxels occlude cleanly.
     gpu::BodyPass bodyPass;
     if (!bodyPass.init(device, renderer.renderPass, GIGA_SHADER_DIR, lightGrid.descriptor_set_layout())) {
         std::fprintf(stderr, "Body pass init failed\n");
+        raymarchPass.destroy();
+        voxelMirror.destroy();
         cubePass.destroy();
         lightGrid.destroy();
         renderer.destroy();
@@ -1316,6 +1360,8 @@ int main(int argc, char** argv) {
                   static_cast<std::uint32_t>(renderer.swap().images.size()))) {
         std::fprintf(stderr, "ImGui init failed\n");
         bodyPass.destroy();
+        raymarchPass.destroy();
+        voxelMirror.destroy();
         cubePass.destroy();
         renderer.destroy();
         device.destroy();
@@ -1537,12 +1583,23 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "population seeding failed to embody a player\n");
         hud.destroy();
         bodyPass.destroy();
+        raymarchPass.destroy();
+        voxelMirror.destroy();
         cubePass.destroy();
         renderer.destroy();
         device.destroy();
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
+    }
+
+    // The mirror's first full snapshot: whichever mode built the initial world,
+    // its geometry (doors included) is final by here. Arrival sites re-upload;
+    // carve and doors stream dirty cells from their existing seams.
+    {
+        World& w0 = stack.layer(reg.get<Transform>(player).layer);
+        voxelMirror.upload_all(w0);
+        if (mirrorVerify) voxelMirror.verify(w0);
     }
 
     InputState input;
@@ -1973,6 +2030,10 @@ int main(int argc, char** argv) {
                 streamer.floor_seed_of(registry, currentFloor));
         doors.frozen = true;
         begin_floor_nav(stack.layer(nl), nav);
+        // Arrival geometry is final (floor file + doors stamped): re-snapshot
+        // the GPU voxel mirror for the recycled World object.
+        voxelMirror.upload_all(stack.layer(nl));
+        if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
         if (propPass.ready()) {
             std::uint32_t fseed =
                 1337u ^ (static_cast<std::uint32_t>(currentFloor) * 0x9e3779b9u);
@@ -3021,6 +3082,10 @@ int main(int argc, char** argv) {
                         // One rebuild of the cached instance list; partial
                         // cells render their actual sub-voxel bits.
                         cubePass.invalidate();
+                        // The GPU mirror pays only the dirty cells — the whole
+                        // point of the raymarch migration's stage 1.
+                        voxelMirror.mark_dirty(carveResult.dirtyCells.data(),
+                                               carveResult.dirtyCells.size());
                         // DEBRIS HANDOFF: simulation is done with these
                         // voxels. The particle pass fakes their fall, grouped
                         // by material so a big carve is a handful of emit
@@ -3262,6 +3327,9 @@ int main(int argc, char** argv) {
                                          carveScratch, carveResult);
                         if (removed > 0) {
                             anyRemoved = true;
+                            voxelMirror.mark_dirty(
+                                carveResult.dirtyCells.data(),
+                                carveResult.dirtyCells.size());
                             std::fprintf(stderr,
                                          "[carve] COMBAT removed=%d power=%u "
                                          "r=%.2f at (%.1f,%.1f,%.1f)\n",
@@ -3633,6 +3701,8 @@ int main(int argc, char** argv) {
                                                     propPass, fseed);
                             }
                             cubePass.invalidate();
+                            voxelMirror.upload_all(stack.layer(nl));
+                            if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
 
                             game::PlacedCell placed{};
                             if (reg.valid(player)) {
@@ -3869,10 +3939,9 @@ int main(int argc, char** argv) {
                     ++fluidCounter >= fluidStepEvery) {
                     fluid_step(activeWorld);
                     fluidCounter = 0;
-                    // Fluid tints cell colours, so the cached instance list is
-                    // stale. This is the one place the cache rebuilds regularly —
-                    // and only in maze mode, where fluid exists.
-                    cubePass.invalidate();
+                    // The marcher tints from the mirrored fluid field; one
+                    // 8 MiB re-mirror per step, no instance rebuild anywhere.
+                    voxelMirror.mark_fluid_dirty();
                 }
                 simNow += kSimDt;
                 simAccum -= kSimDt;
@@ -3893,6 +3962,13 @@ int main(int argc, char** argv) {
             ImGui::Text("%.1f FPS (%.2f ms)", frameDt > 0 ? 1.0f / frameDt : 0.0f,
                         frameDt * 1000.0f);
             ImGui::Text("cpu record: cube %.2f ms | body %.2f ms", cubeMs, bodyMs);
+            ImGui::Text("mirror: dirty %u | up %u cells %.1f KiB | pages %u%s",
+                        voxelMirror.dirty_backlog(),
+                        voxelMirror.last_flush_cells(),
+                        static_cast<double>(voxelMirror.last_flush_bytes()) /
+                            1024.0,
+                        voxelMirror.pages_in_pool(),
+                        voxelMirror.page_overflowed() ? " OVERFLOW" : "");
             // Real GPU time, per pass, from timestamp queries — NOT the frame
             // time above. The frame time is wall-clock around sim + crowd + HUD
             // + the FIFO present wait, so it sits pinned at the vsync period
@@ -4787,6 +4863,18 @@ int main(int argc, char** argv) {
                 propPass.set_use_gpu_culling(false);
             }
 
+            // Voxel-mirror upkeep, outside the render pass: doors publish
+            // their mask edits the same way carve does ([game/door.h]
+            // dirtyCells) — drain once per frame, then record this frame's
+            // dirty-cell copies.
+            if (!doors.dirtyCells.empty()) {
+                voxelMirror.mark_dirty(doors.dirtyCells.data(),
+                                       doors.dirtyCells.size());
+                doors.dirtyCells.clear();
+            }
+            voxelMirror.flush(cmd, renderer.currentFrame,
+                              stack.layer(activeLayer));
+
             renderer.begin_pass(0.0f, 0.0f, 0.0f);
 
             gpu::CubePush push{};
@@ -4809,8 +4897,8 @@ int main(int argc, char** argv) {
             // the GPU figure is what the hardware then spent rasterising it.
             std::uint64_t t0 = SDL_GetPerformanceCounter();
             renderer.timer.pass_begin(cmd, gpu::GpuPass::World);
-            cubePass.record(cmd, renderer.currentFrame,
-                            stack.layer(activeLayer), push, lightGrid.descriptor_set());
+            raymarchPass.record(cmd, renderer.currentFrame, push,
+                                lightGrid.descriptor_set());
             renderer.timer.pass_end(cmd, gpu::GpuPass::World);
             std::uint64_t t1 = SDL_GetPerformanceCounter();
             // Draw the embodied population on the active layer (shared depth).
@@ -4839,6 +4927,11 @@ int main(int argc, char** argv) {
             hud.render(cmd);
             renderer.timer.pass_end(cmd, gpu::GpuPass::Hud);
             renderer.end_frame(window);
+
+            // --mirror-verify heartbeat: prove the incremental dirty path (not
+            // just the wholesale uploads) against the CPU truth, ~every 5 s.
+            if (mirrorVerify && (++mirrorFrame % 300u) == 0u)
+                voxelMirror.verify(stack.layer(activeLayer));
 
             // --shot: count presented frames, then capture and quit. Counted here
             // rather than in the event loop so a skipped frame (swapchain out of
@@ -4929,6 +5022,8 @@ int main(int argc, char** argv) {
                         doors.frozen = true;
                         begin_floor_nav(stack.layer(nl), nav);
                         cubePass.invalidate();
+                        voxelMirror.upload_all(stack.layer(nl));
+                        if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
                         // Same transition autosave as the keyboard path.
                         save_run_now();
                         if (propPass.ready()) {
@@ -5006,6 +5101,8 @@ int main(int argc, char** argv) {
     cullPass.destroy();
     propPass.destroy();
     bodyPass.destroy();
+    raymarchPass.destroy();
+    voxelMirror.destroy();
     cubePass.destroy();
     lightGrid.destroy();
     renderer.destroy();

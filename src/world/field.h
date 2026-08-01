@@ -89,6 +89,15 @@ public:
         if (it->second->tag != type_tag<T>()) return nullptr;
         return static_cast<Field<T>*>(it->second->ptr);
     }
+    // Const twin, mirroring SubFieldRegistry — read-only consumers (the GPU
+    // voxel mirror) take a const World&.
+    template <class T>
+    const Field<T>* find(const std::string& name) const {
+        auto it = fields_.find(name);
+        if (it == fields_.end()) return nullptr;
+        if (it->second->tag != type_tag<T>()) return nullptr;
+        return static_cast<const Field<T>*>(it->second->ptr);
+    }
 
     bool exists(const std::string& name) const {
         return fields_.count(name) != 0;

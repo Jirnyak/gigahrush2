@@ -77,6 +77,16 @@ public:
         return p == kNoPage ? nullptr : pages_[p].v;
     }
 
+    // Raw flat access for GPU mirrors and serializers — the MacroGrid::types()
+    // precedent. pages_data() is the pool as one contiguous T array, slot i at
+    // offset i * kSubVoxels; free-listed slots hold stale bytes but nothing in
+    // page_table() references them.
+    const std::uint32_t* page_table() const { return pageOf_.data(); }
+    const T* pages_data() const {
+        return pages_.empty() ? nullptr : pages_.front().v;
+    }
+    std::size_t page_count() const { return pages_.size(); }
+
     // --- mutation (rare-event path, never per-tick) -------------------------
     // Page the cell if it is not already, filling every sub-voxel with `base`,
     // and return the page. This is the ONLY allocation site.
@@ -145,6 +155,9 @@ private:
     struct Page {
         T v[kSubVoxels];
     };
+    static_assert(sizeof(Page) == sizeof(T) * kSubVoxels,
+                  "pages must stay tight: pages_data() exposes the pool as one "
+                  "contiguous T array with slot stride kSubVoxels");
     std::vector<std::uint32_t> pageOf_;
     std::vector<Page> pages_;
     std::vector<std::uint32_t> free_;
