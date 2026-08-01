@@ -820,8 +820,14 @@ static void test_rpg_possess_transfer() {
 }
 
 // jirnyak §19: death dumps the NPC 8×8 bag into Corpse (8 slots) then same-cell
-// Containers (128³). Staged table loot (CorpseLootPending) still fills first;
-// inventory overflow lands in the cell container, never vanishes.
+// Containers (kCellSize grid on the torus). Staged table loot (CorpseLootPending)
+// still fills first; inventory overflow lands in the cell container.
+//
+// finalize_deaths does not require a tag beyond Dead + optional NpcRef/MobRef —
+// MobTag is not a component in this codebase. Container::kind is a raw u8
+// holding a ContainerKind value (no Crate enumerator; RoomStash is fine).
+// Body Y is lowered by 0.45f when the Corpse is built, so the overflow box must
+// share the post-flatten cell, not merely the pre-death one.
 static void test_death_spills_inventory_to_corpse_and_cell() {
     Registry reg;
     NpcPool pool;
@@ -830,7 +836,6 @@ static void test_death_spills_inventory_to_corpse_and_cell() {
     bus.init();
 
     const NpcId id = pool.spawn();
-
     CHECK(id != kInvalidNpc);
     Inventory& inv = pool.inventory(id);
     // Fill more than kMaxCorpseSlots (8) so overflow must hit the container.
@@ -841,25 +846,25 @@ static void test_death_spills_inventory_to_corpse_and_cell() {
         inv.slots[static_cast<std::size_t>(i)].count = 1;
     }
 
+    // Place the body so that after finalize's y -= 0.45f both body and box sit
+    // in macro cell (1,1,0): floor((2.5-0.45)/2) == floor(2.8/2) == 1.
     Entity mob = reg.create();
     Transform tr;
-    tr.pos = {2.0f, 2.0f, 1.0f};
+    tr.pos = {2.5f, 2.5f, 1.0f};
     tr.layer = 0;
     reg.emplace<Transform>(mob, tr);
     reg.emplace<AABB>(mob, AABB{vec3{0.3f, 0.3f, 0.9f}});
     reg.emplace<Renderable>(mob, Renderable{});
-    reg.emplace<MobTag>(mob);
     reg.emplace<NpcRef>(mob, NpcRef{id});
-    reg.emplace<Dead>(mob, Dead{/*killer*/entt::null, /*tick*/1});
+    reg.emplace<Dead>(mob, Dead{/*killer*/entt::null, /*channel*/0});
 
-    // Same 128³ cell container — overflow sink.
     Entity box = reg.create();
     Transform bt;
-    bt.pos = {3.0f, 2.5f, 1.0f};
+    bt.pos = {2.8f, 2.8f, 1.0f};
     bt.layer = 0;
     reg.emplace<Transform>(box, bt);
     Container c{};
-    c.kind = ContainerKind::Crate;
+    c.kind = static_cast<std::uint8_t>(ContainerKind::RoomStash);
     reg.emplace<Container>(box, c);
 
     // No CorpseLootPending — pure inventory path.
@@ -877,7 +882,7 @@ static void test_death_spills_inventory_to_corpse_and_cell() {
     const Container& boxC = reg.get<Container>(box);
     int foundB = 0;
     for (std::uint8_t si = 0; si < kContainerSlots; ++si)
-        if (boxC.item[si] == b) foundB += boxC.count[si];
+        if (boxC.item[si] == b) foundB += static_cast<int>(boxC.count[si]);
     CHECK(foundB == 2);
     // Live bag emptied so a recycled row cannot resurrect loot.
     for (const ItemSlot& s : pool.inventory(id).slots) {
@@ -885,6 +890,7 @@ static void test_death_spills_inventory_to_corpse_and_cell() {
         CHECK(s.count == 0);
     }
 }
+
 
 static void test_rpg_all() {
     test_rpg_curve();

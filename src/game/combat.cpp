@@ -255,10 +255,12 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
 
         // Convert NPC/mob entity to a persistent fallen Corpse on the floor
         if (reg.valid(e)) {
-            reg.remove<MobRef>(e);
+            // Pure NPC deaths carry NpcRef only — MobRef is optional.
+            if (reg.all_of<MobRef>(e)) reg.remove<MobRef>(e);
             if (reg.all_of<MobCombat>(e)) reg.remove<MobCombat>(e);
             if (reg.all_of<Velocity>(e)) reg.remove<Velocity>(e);
             reg.remove<Dead>(e);
+
 
             if (auto* aabb = reg.try_get<AABB>(e)) {
                 const float h = aabb->half.y;
