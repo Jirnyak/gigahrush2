@@ -5,11 +5,14 @@
 #include "game/floors/padic/padic.h"
 #include "game/prop_system.h"
 #include "world/world.h"
+#include "world/types.h"
 #include "world/materials.h"
 #include "ecs/components.h"
 #include "game/event_bus.h"
 
 #include <cmath>
+#include <cstdint>
+#include <vector>
 
 namespace {
 
@@ -142,8 +145,140 @@ static void test_padic_props_seed_tags_layer() {
     }
 }
 
+// --- [jirnyak.md] section 18: spawn / anchor validate / ragdoll settle ---------
+
+static void test_spawn_prop_anchor_and_detach_on_air() {
+    Registry reg;
+    World world;
+    EventBus bus;
+    bus.init();
+    const LayerId layer = 2;
+
+    // Solid support cell the prop is anchored to.
+    world.grid().fill_cell(10, 4, 10, kMatConcrete);
+
+    game::SubVoxelAnchor anchor{};
+    anchor.cx = 10;
+    anchor.cy = 4;
+    anchor.cz = 10;
+    anchor.subX = 0;
+    anchor.subY = 0;
+    anchor.subZ = 0;
+    anchor.face = 0;
+
+    const vec3 pos{10.5f, 5.25f, 10.5f};
+    const auto e = game::spawn_prop(reg, world, pos, anchor,
+                                    game::Interactable::Kind::LightBulb,
+                                    game::PropFallMode::RagdollRoll,
+                                    vec3{0.9f, 0.85f, 0.4f},
+                                    /*meshKind*/0, layer);
+    CHECK(reg.valid(e));
+    // CHECK is a function-like macro: commas inside all_of<A,B> split args.
+    // Probe each type on its own line.
+    CHECK(reg.all_of<game::StaticPropTag>(e));
+    CHECK(reg.all_of<game::SubVoxelAnchor>(e));
+    CHECK(reg.all_of<Transform>(e));
+    CHECK(reg.all_of<game::Interactable>(e));
+    CHECK(reg.all_of<game::PropMeshTag>(e));
+    CHECK(!reg.all_of<Velocity>(e));
+    CHECK(!reg.all_of<AngularVelocity>(e));
+    CHECK(!reg.all_of<game::DynamicBodyTag>(e));
+
+    const auto& a = reg.get<game::SubVoxelAnchor>(e);
+    CHECK(a.cx == 10);
+    CHECK(a.cy == 4);
+    CHECK(a.cz == 10);
+    CHECK(reg.get<Transform>(e).layer == layer);
+    CHECK(reg.get<game::Interactable>(e).kind ==
+          game::Interactable::Kind::LightBulb);
+
+    // Carve the anchor cell -> dirty list -> prop detaches into ragdoll.
+    world.grid().clear_cell(10, 4, 10);
+    const std::vector<std::uint32_t> dirty{
+        static_cast<std::uint32_t>(macro_index(10, 4, 10))};
+    bus.clear();
+    game::anchor_validate_step(reg, world, bus, dirty);
+
+    CHECK(!reg.all_of<game::StaticPropTag>(e));
+    CHECK(!reg.all_of<game::SubVoxelAnchor>(e));
+    CHECK(reg.all_of<game::DynamicBodyTag>(e));
+    CHECK(reg.all_of<Velocity>(e));
+    CHECK(reg.all_of<AngularVelocity>(e));
+    CHECK(reg.all_of<Rotation>(e));
+    {
+        const std::uint32_t n = bus.cycle_count(EventType::PropDetached);
+        CHECK(n > 0u);
+    }
+}
+
+static void test_anchor_validate_skips_solid_support() {
+    Registry reg;
+    World world;
+    EventBus bus;
+    bus.init();
+    const LayerId layer = 1;
+
+    world.grid().fill_cell(3, 2, 3, kMatConcrete);
+
+    game::SubVoxelAnchor anchor{};
+    anchor.cx = 3;
+    anchor.cy = 2;
+    anchor.cz = 3;
+
+    const auto e = game::spawn_prop(reg, world, vec3{3.5f, 3.25f, 3.5f}, anchor,
+                                    game::Interactable::Kind::Terminal,
+                                    game::PropFallMode::SimpleFall,
+                                    vec3{0.5f, 0.5f, 0.5f},
+                                    /*meshKind*/0, layer);
+    CHECK(reg.valid(e));
+    CHECK(reg.all_of<game::StaticPropTag>(e));
+    CHECK(reg.all_of<game::SubVoxelAnchor>(e));
+
+    // Dirty the cell but leave it solid -- prop stays anchored.
+    const std::vector<std::uint32_t> dirty{
+        static_cast<std::uint32_t>(macro_index(3, 2, 3))};
+    bus.clear();
+    game::anchor_validate_step(reg, world, bus, dirty);
+    CHECK(reg.all_of<game::StaticPropTag>(e));
+    CHECK(reg.all_of<game::SubVoxelAnchor>(e));
+    CHECK(!reg.all_of<Velocity>(e));
+    {
+        const std::uint32_t n = bus.cycle_count(EventType::PropDetached);
+        CHECK(n == 0u);
+    }
+}
+
+static void test_prop_ragdoll_step_damps_angular() {
+    Registry reg;
+    const auto e = reg.create();
+    reg.emplace<game::DynamicBodyTag>(e);
+    reg.emplace<AngularVelocity>(e, AngularVelocity{vec3{10.0f, -8.0f, 4.0f}});
+    reg.emplace<Rotation>(e, Rotation{});
+    reg.emplace<Velocity>(e, Velocity{});
+
+    // High angular speed -> active ragdoll path (exp damping).
+    const float dt = 1.0f / 60.0f;
+    const vec3 before = reg.get<AngularVelocity>(e).w;
+    game::prop_ragdoll_step(reg, dt);
+    const vec3 after = reg.get<AngularVelocity>(e).w;
+    const float bl = std::sqrt(before.x * before.x + before.y * before.y +
+                               before.z * before.z);
+    const float al = std::sqrt(after.x * after.x + after.y * after.y +
+                               after.z * after.z);
+    CHECK(al < bl);
+    CHECK(al > 0.0f);
+
+    // Near-rest: small omega should be zeroed and AngularVelocity removed.
+    reg.get<AngularVelocity>(e).w = vec3{0.001f, 0.0f, 0.0f};
+    game::prop_ragdoll_step(reg, dt);
+    CHECK(!reg.all_of<AngularVelocity>(e));
+}
+
 void test_props_game_all() {
     test_wall_interactables_seed_and_collect();
     test_wall_interactables_clear_is_layer_scoped();
     test_padic_props_seed_tags_layer();
+    test_spawn_prop_anchor_and_detach_on_air();
+    test_anchor_validate_skips_solid_support();
+    test_prop_ragdoll_step_damps_angular();
 }

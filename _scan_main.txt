@@ -1,0 +1,9 @@
+count 'carve_sphere': 3
+count 'noise_publish': 11
+count 'physics_step': 2
+count 'dirtyCells': 13
+count 'refresh_floor_props': 5
+count 'anchor_validate': 0
+count 'prop_ragdoll': 0
+count 'game::noise_publish': 11
+count 'world::carve': 0

@@ -1,0 +1,36 @@
+1051: std::uint32_t refresh_floor_props(Registry& reg, const World& world,
+1587:             refresh_floor_props(reg, stack.layer(l0), 0, l0,
+1774:     // same debt CarveResult::dirtyCells carries, drained into the mirror below.
+2041:         refresh_floor_props(reg, stack.layer(nl), currentFloor, nl,
+2940:                         game::noise_publish(noiseField, activeLayer, ppos, footstepNoise,
+2982:                             game::noise_publish(noiseField, activeLayer, tr.pos, flashNoise, static_cast<std::uint32_t>(entt::to_integral(me_)));
+3074:                 // and BEFORE physics_step so reach is tested against pre-integration
+3089:                 physics_step(reg, stack, kSimDt);
+3108:                     game::noise_publish(noiseField, activeLayer,
+3120:                     game::noise_publish(noiseField, activeLayer,
+3156:                             game::noise_publish(noiseField, activeLayer,
+3167:                 // carveResult.dirtyCells, and nav stays stale until the next
+3187:                         carve_sphere(stack.layer(activeLayer), op,
+3190:                         lazyBaker.request_rebake(stack.layer(activeLayer), carveResult.dirtyCells);
+3196:                         voxelMirror.mark_dirty(carveResult.dirtyCells.data(),
+3197:                                                carveResult.dirtyCells.size());
+3220:                         game::noise_publish(noiseField, activeLayer,
+3258:                             game::noise_publish(noiseField, activeLayer, ppos, np, 0);
+3284:                                 game::noise_publish(noiseField, activeLayer, tres.propPos, np, 0);
+3316:                                         game::noise_publish(noiseField, activeLayer, sp, np, 0);
+3352:                                         game::noise_publish(noiseField, activeLayer, ppos, np, 0);
+3391:                             game::noise_publish(noiseField, activeLayer, newPos, np, 0);
+3437:                 // Drain combat carve proposals through the same carve_sphere
+3451:                             carve_sphere(stack.layer(activeLayer), op,
+3454:                             lazyBaker.request_rebake(stack.layer(activeLayer), carveResult.dirtyCells);
+3456:                                 carveResult.dirtyCells.data(),
+3457:                                 carveResult.dirtyCells.size());
+3810:                             refresh_floor_props(
+5004:             // dirtyCells) — drain once per frame, then record this frame's
+5006:             if (!doors.dirtyCells.empty()) {
+5007:                 voxelMirror.mark_dirty(doors.dirtyCells.data(),
+5008:                                        doors.dirtyCells.size());
+5009:                 doors.dirtyCells.clear();
+5146:                         refresh_floor_props(
+
+total_hits=34

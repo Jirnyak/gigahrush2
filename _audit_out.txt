@@ -1,1 +1,196 @@
-test123
+TEST audit_test.cpp 5137
+TEST game_test.cpp 193778
+TEST macro_bench.cpp 4176
+TEST sim_bench.cpp 15362
+TEST suite_audit.inl 62903
+TEST suite_behaviours.inl 85214
+TEST suite_console.inl 13929
+TEST suite_craft.inl 46156
+TEST suite_destruct.inl 15215
+TEST suite_diffusion.inl 49922
+TEST suite_doors.inl 21584
+TEST suite_economy.inl 39680
+TEST suite_eventsweb.inl 22952
+TEST suite_faction2.inl 27770
+TEST suite_floorcatalog.inl 3857
+TEST suite_fluidrooms.inl 24507
+TEST suite_hunt.inl 21894
+TEST suite_keybind.inl 5939
+TEST suite_loottable.inl 24500
+TEST suite_macrosim.inl 34322
+TEST suite_macrowire.inl 10219
+TEST suite_monster.inl 37591
+TEST suite_navcache.inl 71694
+TEST suite_needs.inl 44124
+TEST suite_needs2.inl 20590
+TEST suite_noise.inl 29604
+TEST suite_npcpool.inl 49337
+TEST suite_packs.inl 28364
+TEST suite_playercmd.inl 7148
+TEST suite_props.inl 16389
+TEST suite_props_game.inl 6366
+TEST suite_quest.inl 52306
+TEST suite_rpg.inl 34645
+TEST suite_samosbor.inl 31617
+TEST suite_samosbor2.inl 33856
+TEST suite_samosborhud.inl 46203
+TEST suite_saveload.inl 88257
+TEST suite_speech.inl 27324
+TEST suite_status.inl 10053
+TEST suite_utilai.inl 76586
+TEST suite_vendorammo.inl 19006
+TEST world_test.cpp 27409
+=== game_test.cpp ===
+3: #include <cmath>
+4: #include <cstdio>
+5: #include <cmath>
+6: #include <cstring>
+7: #include <vector>
+9: #include "core/tick.h"   // kSimDt / kSimHz — never a bare 1/120 ([core/tick.h])
+10: #include "core/wrap.h"
+11: #include "ecs/components.h"
+12: #include "ecs/registry.h"
+13: #include "game/contract.h"
+14: #include "game/vendor.h"
+15: #include "game/container.h"
+16: #include "game/combat.h"
+17: #include "game/embody.h"
+18: #include "game/elevator.h"
+19: #include "game/event_bus.h"
+20: #include "game/faction.h"
+21: #include "game/floor_gen.h"
+22: #include "game/floor_registry.h"
+23: #include "game/extraction.h"
+24: #include "game/faction.h"
+25: #include "game/faction_relations.h"
+26: #include "game/floor_spec.h"
+27: #include "game/mob_behaviour.h"
+28: #include "game/mob_table.h"
+29: #include "game/item_table.h"
+30: #include "game/loot.h"
+31: #include "game/ranged_table.h"
+32: #include "game/weapon_table.h"
+33: #include "game/mob_spawn.h"
+34: #include "game/floor_stream.h"
+35: #include "game/inventory.h"
+36: #include "game/item_table.h"
+37: #include "game/mob_table.h"
+38: #include "game/nav_cache.h"
+39: #include "game/npc_pool.h"
+40: #include "game/wander.h"
+41: #include "game/population.h"
+42: #include "game/rpg.h"
+44: #include "sim/physics.h"
+45: #include "world/lattice.h"
+46: #include "world/materials.h"
+47: #include "world/level_stack.h"
+48: #include "world/nav.h"
+49: #include "world/world.h"
+69: #include "suite_props_game.inl"
+70: #include "suite_needs.inl"
+71: #include "suite_noise.inl"
+72: #include "suite_packs.inl"
+73: #include "suite_hunt.inl"
+74: #include "suite_samosbor.inl"
+75: #include "suite_doors.inl"
+76: #include "suite_saveload.inl"
+77: #include "suite_macrosim.inl"
+78: #include "suite_behaviours.inl"
+79: #include "suite_samosborhud.inl"
+80: #include "suite_fluidrooms.inl"
+81: #include "suite_eventsweb.inl"
+82: #include "suite_needs2.inl"
+83: #include "suite_vendorammo.inl"
+84: #include "suite_npcpool.inl"
+85: #include "suite_samosbor2.inl"
+86: #include "suite_faction2.inl"
+87: // Wave 5. Each of these carries its own #includes rather than leaning on the prelude
+90: #include "suite_diffusion.inl"
+91: #include "suite_loottable.inl"
+92: #include "suite_utilai.inl"
+94: // translation unit: commit 56c9c6a added src/game/nav_cache.{cpp,h} and tests/suite_navcache.inl
+97: // now fails on any suite_*.inl that no tests/*.cpp includes, so this cannot recur silently.
+98: #include "suite_navcache.inl"
+102: #include "suite_craft.inl"
+103: #include "suite_quest.inl"
+104: #include "suite_speech.inl"
+105: #include "suite_economy.inl"
+106: #include "suite_monster.inl"
+107: #include "suite_playercmd.inl"
+108: #include "suite_macrowire.inl"
+109: #include "suite_status.inl"
+110: #include "suite_rpg.inl"
+111: #include "suite_floorcatalog.inl"
+112: #include "suite_console.inl"
+113: #include "suite_keybind.inl"
+3867: // tests/suite_macrosim.inl, which carries its own seeding helpers. Its `spawn_aged`
+4107: int main() {
+=== src\ecs\components.h ===
+103: // src/sim may not include src/game. The game attaches these on RagdollRoll
+104: // detach; physics_step advances Rotation from AngularVelocity each substep.
+106: // Rotation is Euler (radians, XYZ) for now: core/math.h has no quat type yet.
+108: struct AngularVelocity {
+112: struct Rotation {
+=== suite_console tail/reg ===
+6: // a CSV row or a registered floor shows up with no console edit; cross-floor
+24: static void test_console_registry_rules() {
+36:     // The default set registers clean — and stays clean when someone adds a
+39:     CHECK(console_register_defaults(defaults));
+56: static void test_console_requests() {
+63:     CHECK(console_register_defaults(con));
+110: static void test_console_exec_and_parse() {
+125: static void test_console_mob_tokens() {
+136: static void test_console_completion() {
+138:     CHECK(console_register_defaults(con));
+155:     // empty context completes to nothing and a wired one to what is registered.
+169: static void test_console_spawn_god_noclip() {
+181:     CHECK(console_register_defaults(con));
+240: static void test_console_spawn_ball() {
+253:     CHECK(console_register_defaults(con));
+302: static void test_console_teleport_request() {
+304:     CHECK(console_register_defaults(con));
+312:     // A registered floor becomes a REQUEST — the console never moves the world
+318:     // Unregistered floors and non-numbers are refused, request untouched.
+328: static void test_console_all() {
+SUITE suite_audit.inl lines=1142 has_static_void=13
+SUITE suite_behaviours.inl lines=1481 has_static_void=1
+SUITE suite_console.inl lines=338 has_static_void=9
+SUITE suite_craft.inl lines=909 has_static_void=1
+SUITE suite_destruct.inl lines=337 has_static_void=7
+SUITE suite_diffusion.inl lines=883 has_static_void=1
+SUITE suite_doors.inl lines=449 has_static_void=5
+SUITE suite_economy.inl lines=773 has_static_void=1
+SUITE suite_eventsweb.inl lines=469 has_static_void=1
+SUITE suite_faction2.inl lines=546 has_static_void=1
+SUITE suite_floorcatalog.inl lines=83 has_static_void=5
+SUITE suite_fluidrooms.inl lines=467 has_static_void=1
+SUITE suite_hunt.inl lines=453 has_static_void=1
+SUITE suite_keybind.inl lines=152 has_static_void=7
+SUITE suite_loottable.inl lines=450 has_static_void=1
+SUITE suite_macrosim.inl lines=682 has_static_void=1
+SUITE suite_macrowire.inl lines=186 has_static_void=1
+SUITE suite_monster.inl lines=684 has_static_void=1
+SUITE suite_navcache.inl lines=1317 has_static_void=1
+SUITE suite_needs.inl lines=915 has_static_void=1
+SUITE suite_needs2.inl lines=391 has_static_void=1
+SUITE suite_noise.inl lines=639 has_static_void=10
+SUITE suite_npcpool.inl lines=980 has_static_void=1
+SUITE suite_packs.inl lines=523 has_static_void=1
+SUITE suite_playercmd.inl lines=175 has_static_void=8
+SUITE suite_props.inl lines=407 has_static_void=8
+SUITE suite_props_game.inl lines=150 has_static_void=4
+SUITE suite_quest.inl lines=1059 has_static_void=1
+SUITE suite_rpg.inl lines=833 has_static_void=10
+SUITE suite_samosbor.inl lines=600 has_static_void=1
+SUITE suite_samosbor2.inl lines=640 has_static_void=1
+SUITE suite_samosborhud.inl lines=838 has_static_void=1
+SUITE suite_saveload.inl lines=1767 has_static_void=1
+SUITE suite_speech.inl lines=622 has_static_void=0
+SUITE suite_status.inl lines=205 has_static_void=1
+SUITE suite_utilai.inl lines=1534 has_static_void=1
+SUITE suite_vendorammo.inl lines=394 has_static_void=1
+world.h: ['src\\world\\world.h', '.claude\\worktrees\\wf_821f642e-b6b-6\\src\\world\\world.h', '.claude\\worktrees\\wf_821f642e-b6b-4\\src\\world\\world.h', '.claude\\worktrees\\wf_821f642e-b6b-3\\src\\world\\world.h', '.claude\\worktrees\\wf_821f642e-b6b-1\\src\\world\\world.h', '.claude\\worktrees\\wf_62669060-027-6\\src\\world\\world.h', '.claude\\worktrees\\wf_62669060-027-5\\src\\world\\world.h', '.claude\\worktrees\\wf_62669060-027-4\\src\\world\\world.h', '.claude\\worktrees\\wf_62669060-027-3\\src\\world\\world.h', '.claude\\worktrees\\wf_62669060-027-2\\src\\world\\world.h', '.claude\\worktrees\\wf_62669060-027-1\\src\\world\\world.h', '.claude\\worktrees\\wf_2525238f-d4a-4\\src\\world\\world.h', '.claude\\worktrees\\wf_2525238f-d4a-3\\src\\world\\world.h', '.claude\\worktrees\\wf_2525238f-d4a-2\\src\\world\\world.h', '.claude\\worktrees\\wf_2525238f-d4a-1\\src\\world\\world.h', '.claude\\worktrees\\wf_11a09683-7af-8\\src\\world\\world.h', '.claude\\worktrees\\wf_11a09683-7af-7\\src\\world\\world.h', '.claude\\worktrees\\wf_11a09683-7af-6\\src\\world\\world.h', '.claude\\worktrees\\wf_11a09683-7af-5\\src\\world\\world.h', '.claude\\worktrees\\wf_11a09683-7af-4\\src\\world\\world.h', '.claude\\worktrees\\wf_11a09683-7af-3\\src\\world\\world.h', '.claude\\worktrees\\wf_11a09683-7af-2\\src\\world\\world.h', '.claude\\worktrees\\wf_11a09683-7af-1\\src\\world\\world.h', '.claude\\worktrees\\agent-packs\\src\\world\\world.h', '.claude\\worktrees\\agent-aeed0be081e8d72b0\\src\\world\\world.h', '.claude\\worktrees\\agent-abb370ae2c46d5a3a\\src\\world\\world.h', '.claude\\worktrees\\agent-aa984c861c4bf8fa1\\src\\world\\world.h', '.claude\\worktrees\\agent-a9e46e1c099a5e82a\\src\\world\\world.h', '.claude\\worktrees\\agent-a961fd54bbdeb6917\\src\\world\\world.h', '.claude\\worktrees\\agent-a78ddbee4b42dfb9d\\src\\world\\world.h', '.claude\\worktrees\\agent-a48760c14348b44fc\\src\\world\\world.h']
+PropDetached in src\game\event_bus.h
+  119:     PropDetached,
+  123: // static_assert is what keeps this honest: add a value past PropDetached and the
+  126: static_assert(static_cast<std::size_t>(EventType::PropDetached) + 1 ==

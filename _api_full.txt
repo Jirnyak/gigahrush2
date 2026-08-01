@@ -1,0 +1,701 @@
+=== prop_system.h ===
+#pragma once
+#include <cstdint>
+#include <vector>
+#include <unordered_set>
+#include <cmath>
+#include "core/math.h"
+#include "ecs/registry.h"
+#include "game/event_bus.h"
+#include "world/world.h"
+#include "world/level_stack.h"
+
+namespace giga::game {
+
+enum class PropFallMode : std::uint8_t {
+    SimpleFall,  // 1. Падение AABB на CPU (тяжелые щитки, терминалы)
+    RagdollRoll, // 2. Вращение/кувыркание на CPU (лампы, ведра, стулья)
+    GpuHandoff   // 3. Передача в GPU-частицы и мгновенный destroy сущности
+};
+
+struct SubVoxelAnchor {
+    int cx = 0, cy = 0, cz = 0;                  // Координаты макро-ячейки (128³)
+    std::uint8_t subX = 0, subY = 0, subZ = 0;   // Локальный субоксель (0..7)
+    std::uint8_t face = 0;                       // Опора: 0=Floor, 1=WallNorth, 2=Ceiling...
+};
+
+struct Interactable {
+    enum class Kind : std::uint8_t { Terminal, ElectricalShield, LightBulb, Corpse, Loot } kind;
+    float reachM = 2.5f;
+    bool active = true;
+};
+
+// Empty filter tags ([jirnyak.md] §18). Static anchored props carry StaticPropTag
+// + PropMeshTag; on detach the entity keeps identity and swaps StaticPropTag ->
+// DynamicBodyTag so BodyPass/PropPass can filter without recreate.
+struct StaticPropTag {};
+struct DynamicBodyTag {};
+struct PropMeshTag {};
+
+// AngularVelocity + Rotation live in ecs/components.h (core) so physics_step
+// can integrate them without src/sim including src/game. [jirnyak.md] §18.
+
+struct DebrisSpawnEvent {
+
+    vec3 pos;
+    vec3 impulse;
+    vec3 color;
+    std::uint32_t meshKind;
+};
+
+struct PendingDetachedProp {
+    Entity entity;
+    PropFallMode mode;
+    vec3 pos;
+    vec3 impulse;
+    vec3 color;
+    std::uint32_t meshKind;
+};
+
+// Nearest active Interactable of `kind` on the player's layer, if within reach.
+// Zero heap traffic — pure view scan. [jirnyak.md] §18 interaction_step.
+struct InteractionHit {
+    Entity entity = entt::null;
+    vec3 pos{0.0f, 0.0f, 0.0f};
+    float distSq = 0.0f;
+    bool hit = false;
+};
+
+// ── Публичный API ───────────────────────────────────────────────────────────────
+
+// Spawn a static anchored prop. `layer` is stamped on Transform so multi-layer
+// streamer slots do not leak props across floors. [jirnyak.md] §18.
+Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
+                  const SubVoxelAnchor& anchor, Interactable::Kind kind,
+                  PropFallMode fallMode, const vec3& color, std::uint32_t meshKind,
+                  LayerId layer = 0);
+
+// Destroy every SubVoxelAnchor prop on `layer` (terminals, shields, bulbs…).
+// Call before reseeding a recycled LayerId slot — same contract as
+// despawn_layer_mobs / refresh_floor_containers. [jirnyak.md] §18.
+std::uint32_t clear_layer_props(Registry& reg, LayerId layer);
+
+// Seed Terminal + ElectricalShield Interactables by scanning MacroGrid with the
+// same spatial_hash / wall-device rules as gpu::PropPlacer (kSaltWall branch).
+// Positions match propPass cosmetics when both use the same seed
+// (1337u ^ floor*0x9e3779b9). Returns count successfully spawned.
+// [jirnyak.md] §18 — sim must not read propPass.get_terminal_positions().
+std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
+                                      LayerId layer, std::uint32_t seed);
+
+// Collect world positions of active Interactables of `kind` on `layer`.
+// Replaces propPass.get_terminal_positions() / get_prop_positions for sim+HUD.
+// Prefer interaction_step / find_nearest_interactable in the hot path — this
+// helper is for callers that still need a flat list (craft proximity, HUD).
+std::uint32_t collect_interactable_positions(const Registry& reg, LayerId layer,
+                                             Interactable::Kind kind,
+                                             std::vector<vec3>& out);
+
+bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& projVel,
+                                float projHitRadius, EventBus& bus);
+
+// Validate SubVoxelAnchor props against MacroGrid after geometry mutation.
+// `dirtyCells` is CarveResult::dirtyCells / DoorSet::dirtyCells — flat
+// macro_index keys (uint32), NOT a packed xyz64. [jirnyak.md] §18.
+void anchor_validate_step(Registry& reg, const World& world, EventBus& bus,
+                          const std::vector<std::uint32_t>& dirtyCells);
+
+// Zero-alloc nearest Interactable query for the interact key path.
+// Scans reg.view<Transform, Interactable> on the player's Transform.layer.
+InteractionHit find_nearest_interactable(const Registry& reg, Entity player,
+                                         Interactable::Kind kind, float reachM);
+
+// Convenience: find nearest of `kind` and return true if within reach.
+// No std::vector — call from the sim tick freely. [jirnyak.md] §18.
+bool interaction_step(Registry& reg, Entity player, Interactable::Kind kind,
+                      EventBus& bus, InteractionHit* outHit = nullptr);
+
+// Advance ragdoll spin bookkeeping for DynamicBodyTag props. Angular integration
+// itself lives in physics_step; this is the game-side settle / impulse helper.
+void prop_ragdoll_step(Registry& reg, float dt);
+
+bool prop_interact_step(Registry& reg, Entity player, Interactable::Kind targetKind,
+                        EventBus& bus);
+
+} // namespace giga::game
+
+=== prop_system.cpp (selected) ===
+1|#include "game/prop_system.h"
+2|#include "ecs/components.h"
+3|#include "world/macro_grid.h"
+4|#include "world/materials.h"
+5|#include "world/types.h"
+6|#include "world/world.h"
+7|#include <vector>
+8|#include <unordered_set>
+9|#include <cmath>
+10|
+11|namespace giga::game {
+12|
+13|constexpr int kMacroDimLocal = 128;
+14|constexpr float kWorldExtentLocal = 256.0f; // 128 * 2.0m
+15|
+16|// Must match gpu::PropPlacer kSaltWall so ECS interactables land on the same
+17|// cells as the GPU cosmetic Terminal / ElectricalShield instances.
+18|constexpr std::uint32_t kSaltWall = 0x33333333u;
+19|
+20|static inline int wrap_macro_local(int c) {
+21|    return (c % kMacroDimLocal + kMacroDimLocal) % kMacroDimLocal;
+22|}
+23|
+24|static inline int wrap_delta_i(int a, int b, int dim) {
+25|    int d = (a - b) % dim;
+26|    if (d > dim / 2) d -= dim;
+27|    if (d < -dim / 2) d += dim;
+28|    return d;
+29|}
+30|
+31|static inline float wrap_delta_f_local(float a, float b, float extent) {
+32|    float d = std::fmod(a - b, extent);
+33|    if (d > extent * 0.5f) d -= extent;
+34|    if (d < -extent * 0.5f) d += extent;
+35|    return d;
+36|}
+37|
+38|// Same spatial_hash as render/prop_placer.cpp (must stay bit-identical).
+39|static inline std::uint32_t spatial_hash(int x, int y, int z, std::uint32_t seed) {
+40|    std::uint32_t h = static_cast<std::uint32_t>(x) * 73856093u ^
+41|                      static_cast<std::uint32_t>(y) * 19349663u ^
+42|                      static_cast<std::uint32_t>(z) * 83492791u ^ seed;
+43|    h = (h ^ (h >> 16)) * 0x45d9f3bu;
+44|    h = (h ^ (h >> 16)) * 0x45d9f3bu;
+45|    return h ^ (h >> 16);
+46|}
+47|
+48|static inline bool is_solid_cell(CellType type) {
+49|    return type != kCellAir;
+50|}
+51|
+52|// Swap StaticPropTag -> DynamicBodyTag without destroying the entity
+53|// ([jirnyak.md] §18 — PropPass/BodyPass filter, no recreate).
+54|static void mark_dynamic(Registry& reg, Entity prop) {
+55|    if (reg.all_of<StaticPropTag>(prop))
+56|        reg.remove<StaticPropTag>(prop);
+57|    reg.emplace_or_replace<DynamicBodyTag>(prop);
+58|}
+59|
+60|static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
+61|                               const vec3& impulse, const vec3& pos, const vec3& color,
+62|                               std::uint32_t meshKind, EventBus& bus)
+63|{
+64|    (void)meshKind;
+65|    (void)color;
+66|    if (mode == PropFallMode::GpuHandoff) {
+67|        bus.publish(EventType::ItemTransferred, static_cast<uint32_t>(pos.x),
+68|                    static_cast<uint32_t>(pos.y), static_cast<uint32_t>(pos.z), 0);
+69|        reg.destroy(prop);
+70|        return;
+71|    }
+72|
+73|    // Keep entity identity; drop anchor and flip the static/dynamic tag pair.
+74|    if (reg.all_of<SubVoxelAnchor>(prop))
+75|        reg.remove<SubVoxelAnchor>(prop);
+76|    mark_dynamic(reg, prop);
+77|    reg.emplace_or_replace<GravityAffected>(prop);
+78|
+79|    if (mode == PropFallMode::RagdollRoll) {
+80|        // Canonical Velocity{vec3} form (combat.cpp). AngularVelocity/Rotation
+81|        // (core components) are integrated by physics_step each substep.
+82|        reg.emplace_or_replace<Velocity>(prop, Velocity{impulse});
+83|        reg.emplace_or_replace<AngularVelocity>(prop, AngularVelocity{vec3{impulse.z, impulse.x, 2.0f}});
+84|        reg.emplace_or_replace<Rotation>(prop);
+85|    } else {
+86|        reg.emplace_or_replace<Velocity>(prop, Velocity{vec3{0.0f, 0.0f, -0.5f}});
+87|    }
+88|
+89|    // BodyPass needs AABB — without it a detached prop is invisible.
+90|    if (!reg.all_of<AABB>(prop))
+91|        reg.emplace<AABB>(prop, AABB{vec3{0.2f, 0.2f, 0.2f}});
+92|}
+93|
+94|bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& projVel,
+95|                                float projHitRadius, EventBus& bus)
+96|{
+97|    const float radiusSq = projHitRadius * projHitRadius;
+98|    const int pcx = wrap_macro_local(static_cast<int>(projPos.x / kCellSize));
+99|    const int pcy = wrap_macro_local(static_cast<int>(projPos.y / kCellSize));
+100|    const int pcz = wrap_macro_local(static_cast<int>(projPos.z / kCellSize));
+101|
+102|    Entity hitEntity = entt::null;
+103|    PropFallMode hitMode = PropFallMode::SimpleFall;
+104|    vec3 hitPos{0.0f, 0.0f, 0.0f};
+105|    vec3 hitColor{0.8f, 0.8f, 0.8f};
+106|
+107|    auto view = reg.view<Transform, SubVoxelAnchor, PropFallMode>();
+108|    for (auto entity : view) {
+109|        const auto& anchor = view.get<SubVoxelAnchor>(entity);
+110|
+111|        if (std::abs(wrap_delta_i(anchor.cx, pcx, kMacroDimLocal)) > 1 ||
+112|            std::abs(wrap_delta_i(anchor.cy, pcy, kMacroDimLocal)) > 1 ||
+113|            std::abs(wrap_delta_i(anchor.cz, pcz, kMacroDimLocal)) > 1)
+114|        {
+115|            continue;
+116|        }
+117|
+118|        const auto& tr = view.get<Transform>(entity);
+119|        const float dx = wrap_delta_f_local(projPos.x, tr.pos.x, kWorldExtentLocal);
+120|        const float dy = wrap_delta_f_local(projPos.y, tr.pos.y, kWorldExtentLocal);
+121|        const float dz = wrap_delta_f_local(projPos.z, tr.pos.z, kWorldExtentLocal);
+122|
+123|        if (dx * dx + dy * dy + dz * dz <= radiusSq) {
+124|            hitEntity = entity;
+125|            hitMode = view.get<PropFallMode>(entity);
+126|            hitPos = tr.pos;
+127|            hitColor = reg.all_of<Renderable>(entity) ? reg.get<Renderable>(entity).color : vec3{0.8f, 0.8f, 0.8f};
+128|            break;
+129|        }
+130|    }
+131|
+132|    if (hitEntity != entt::null) {
+133|        vec3 impulse = normalize(projVel) * 3.0f + vec3{0.0f, 1.0f, 0.0f};
+134|        detach_single_prop(reg, hitEntity, hitMode, impulse, hitPos, hitColor, 0, bus);
+135|        return true;
+136|    }
+137|    return false;
+138|}
+139|
+140|void anchor_validate_step(Registry& reg, const World& world, EventBus& bus,
+141|                         const std::vector<std::uint32_t>& dirtyCells)
+142|{
+143|    if (dirtyCells.empty()) return;
+144|
+145|    // dirtyCells are flat macro_index keys (CarveResult / DoorSet contract).
+146|    static thread_local std::unordered_set<std::uint32_t> dirtySet;
+147|    dirtySet.clear();
+148|    dirtySet.insert(dirtyCells.begin(), dirtyCells.end());
+149|
+150|    static thread_local std::vector<PendingDetachedProp> detached;
+151|    detached.clear();
+152|
+153|    auto view = reg.view<Transform, SubVoxelAnchor, PropFallMode>();
+154|    for (auto entity : view) {
+155|        const auto& anchor = view.get<SubVoxelAnchor>(entity);
+156|
+157|        const int cx = wrap_macro_local(anchor.cx);
+158|        const int cy = wrap_macro_local(anchor.cy);
+159|        const int cz = wrap_macro_local(anchor.cz);
+160|        const std::uint32_t key =
+161|            static_cast<std::uint32_t>(macro_index(cx, cy, cz));
+162|
+163|        if (!dirtySet.contains(key)) continue;
+164|
+165|        // Anchor support lost when the sub-voxel is no longer solid.
+166|        if (!world.grid().solid(cx, cy, cz, anchor.subX, anchor.subY, anchor.subZ)) {
+167|            const auto& tr = view.get<Transform>(entity);
+168|            vec3 col = reg.all_of<Renderable>(entity)
+169|                           ? reg.get<Renderable>(entity).color
+170|                           : vec3{0.8f, 0.8f, 0.8f};
+171|            detached.push_back({entity, view.get<PropFallMode>(entity), tr.pos,
+172|                                vec3{0.0f, 1.0f, 0.0f}, col, 0});
+173|        }
+174|    }
+175|
+176|    for (const auto& item : detached) {
+177|        detach_single_prop(reg, item.entity, item.mode, item.impulse, item.pos,
+178|                           item.color, item.meshKind, bus);
+179|    }
+180|}
+181|
+182|Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
+183|                  const SubVoxelAnchor& anchor, Interactable::Kind kind,
+184|                  PropFallMode fallMode, const vec3& color, std::uint32_t meshKind,
+185|                  LayerId layer)
+186|{
+187|    (void)meshKind;
+188|    int cx = wrap_macro_local(anchor.cx);
+189|    int cy = wrap_macro_local(anchor.cy);
+190|    int cz = wrap_macro_local(anchor.cz);
+191|
+192|    if (!world.grid().solid(cx, cy, cz, anchor.subX, anchor.subY, anchor.subZ)) {
+193|        return entt::null;
+194|    }
+195|
+196|    Entity prop = reg.create();
+197|    reg.emplace<Transform>(prop, worldPos, layer);
+198|    reg.emplace<SubVoxelAnchor>(prop, SubVoxelAnchor{cx, cy, cz, anchor.subX,
+199|                                                     anchor.subY, anchor.subZ,
+200|                                                     anchor.face});
+201|    reg.emplace<Interactable>(prop, kind, 2.5f, true);
+202|    reg.emplace<PropFallMode>(prop, fallMode);
+203|    reg.emplace<Renderable>(prop, color);
+204|    // Static anchored + mesh-filter tags ([jirnyak.md] §18). Detach swaps
+205|    // StaticPropTag -> DynamicBodyTag without destroying the entity.
+206|    reg.emplace<StaticPropTag>(prop);
+207|    reg.emplace<PropMeshTag>(prop);
+208|
+209|    return prop;
+210|}
+211|
+212|std::uint32_t clear_layer_props(Registry& reg, LayerId layer) {
+213|    std::vector<Entity> old_;
+214|    // SubVoxelAnchor marks every static prop (terminals, shields, padic bulbs).
+215|    // Detached ragdolls lose the anchor and are left alone — they belong to the
+216|    // live sim, not the floor roster.
+217|    auto view = reg.view<const SubVoxelAnchor, const Transform>();
+218|    for (auto e : view) {
+219|        if (view.get<const Transform>(e).layer == layer)
+220|            old_.push_back(e);
+221|    }
+222|    for (Entity e : old_) reg.destroy(e);
+223|    return static_cast<std::uint32_t>(old_.size());
+224|}
+225|
+226|std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
+227|                                      LayerId layer, std::uint32_t seed)
+228|{
+229|    const MacroGrid& grid = world.grid();
+230|    std::uint32_t count = 0;
+231|    constexpr float kCell = kCellSize;
+232|
+233|    // Mirror PropPlacer::populate wall-device branch (wsel bands 15-25 shield,
+234|    // 25-35 terminal). Floor support = solidBelow on Y (same convention as
+235|    // prop_placer). Anchor sub-voxels point into the solid floor cell so
+236|    // spawn_prop's solid() check and anchor_validate_step stay honest.
+237|    for (int z = 0; z < kMacroDimLocal; ++z) {
+238|        for (int y = 0; y < kMacroDimLocal; ++y) {
+239|            for (int x = 0; x < kMacroDimLocal; ++x) {
+240|                if (grid.cell(x, y, z) != kCellAir) continue;
+241|
+242|                const CellType below = grid.cell(x, y - 1, z);
+243|                if (!is_solid_cell(below)) continue;
+244|
+245|                const bool solidWest  = is_solid_cell(grid.cell(x - 1, y, z));
+246|                const bool solidEast  = is_solid_cell(grid.cell(x + 1, y, z));
+247|                const bool solidNorth = is_solid_cell(grid.cell(x, y, z + 1));
+248|                const bool solidSouth = is_solid_cell(grid.cell(x, y, z - 1));
+249|                if (!(solidWest || solidEast || solidNorth || solidSouth)) continue;
+250|
+251|                const std::uint32_t rngWall = spatial_hash(x, y, z, seed ^ kSaltWall);
+252|                const std::uint32_t wsel = rngWall % 100;
+253|
+254|                Interactable::Kind kind;
+255|                float yOff;
+256|                vec3 color;
+257|                std::uint8_t face = 1; // wall
+258|                if (wsel >= 15 && wsel < 25) {
+259|                    kind  = Interactable::Kind::ElectricalShield;
+260|                    yOff  = 0.40f;
+261|                    color = {0.18f, 0.20f, 0.22f};
+262|                } else if (wsel >= 25 && wsel < 35) {
+263|                    kind  = Interactable::Kind::Terminal;
+264|                    yOff  = 0.0f;
+265|                    color = {0.32f, 0.35f, 0.38f};
+266|                } else {
+267|                    continue; // radiator / empty — no Interactable
+268|                }
+269|
+270|                const float wx = static_cast<float>(x) * kCell;
+271|                const float wy = static_cast<float>(y) * kCell + yOff;
+272|                const float wz = static_cast<float>(z) * kCell;
+273|
+274|                // Anchor into the solid floor cell under the air cell (Y-1).
+275|                SubVoxelAnchor anchor;
+276|                anchor.cx   = x;
+277|                anchor.cy   = wrap_macro_local(y - 1);
+278|                anchor.cz   = z;
+279|                anchor.subX = 4;
+280|                anchor.subY = 7; // top of floor cell
+281|                anchor.subZ = 4;
+282|                anchor.face = face;
+283|
+284|                Entity e = spawn_prop(reg, world, vec3{wx, wy, wz}, anchor, kind,
+285|                                      PropFallMode::SimpleFall, color, 0, layer);
+286|                if (e != entt::null) ++count;
+287|            }
+288|        }
+289|    }
+290|    return count;
+291|}
+292|
+293|std::uint32_t collect_interactable_positions(const Registry& reg, LayerId layer,
+294|                                             Interactable::Kind kind,
+295|                                             std::vector<vec3>& out)
+296|{
+297|    std::uint32_t n = 0;
+298|    auto view = reg.view<const Transform, const Interactable>();
+299|    for (auto e : view) {
+300|        const auto& tr = view.get<const Transform>(e);
+301|        if (tr.layer != layer) continue;
+302|        const auto& ia = view.get<const Interactable>(e);
+303|        if (!ia.active || ia.kind != kind) continue;
+304|        out.push_back(tr.pos);
+305|        ++n;
+306|    }
+307|    return n;
+308|}
+309|
+310|InteractionHit find_nearest_interactable(const Registry& reg, Entity player,
+311|                                         Interactable::Kind kind, float reachM)
+312|{
+313|    InteractionHit hit{};
+314|    if (!reg.valid(player) || !reg.all_of<Transform>(player)) return hit;
+315|
+316|    const auto& ptr = reg.get<Transform>(player);
+317|    const LayerId layer = ptr.layer;
+318|    const vec3 ppos = ptr.pos;
+319|    const float reachSq = reachM * reachM;
+320|    float best = reachSq;
+321|
+322|    auto view = reg.view<const Transform, const Interactable>();
+323|    for (auto e : view) {
+324|        const auto& tr = view.get<const Transform>(e);
+325|        if (tr.layer != layer) continue;
+326|        const auto& ia = view.get<const Interactable>(e);
+327|        if (!ia.active || ia.kind != kind) continue;
+328|
+329|        const float dx = wrap_delta_f_local(ppos.x, tr.pos.x, kWorldExtentLocal);
+330|        const float dy = ppos.y - tr.pos.y;
+331|        const float dz = wrap_delta_f_local(ppos.z, tr.pos.z, kWorldExtentLocal);
+332|        const float d2 = dx * dx + dy * dy + dz * dz;
+333|        if (d2 < best) {
+334|            best = d2;
+335|            hit.entity = e;
+336|            hit.pos = tr.pos;
+337|            hit.distSq = d2;
+338|            hit.hit = true;
+339|        }
+340|    }
+341|    return hit;
+342|}
+343|
+344|bool interaction_step(Registry& reg, Entity player, Interactable::Kind kind,
+345|                      EventBus& bus, InteractionHit* outHit)
+346|{
+347|    (void)bus;
+348|    const float reach = (reg.valid(player) && reg.all_of<Transform>(player))
+349|                            ? 3.0f
+350|                            : 0.0f;
+351|    InteractionHit hit = find_nearest_interactable(reg, player, kind, reach);
+352|    if (outHit) *outHit = hit;
+353|    return hit.hit;
+354|}
+355|
+356|void prop_ragdoll_step(Registry& reg, float dt)
+357|{
+358|    (void)dt;
+359|    // Angular integration is owned by physics_step (core). Here we only
+360|    // settle spin on grounded DynamicBodyTag props so tumbling debris stops
+361|    // spinning after landing ([jirnyak.md] §18 prop_ragdoll).
+362|    auto view = reg.view<DynamicBodyTag, AngularVelocity, GravityAffected>();
+363|    for (auto e : view) {
+364|        const auto& g = view.get<GravityAffected>(e);
+365|        if (!g.grounded) continue;
+366|        auto& ang = view.get<AngularVelocity>(e);
+367|        ang.w.x *= 0.85f;
+368|        ang.w.y *= 0.85f;
+369|        ang.w.z *= 0.85f;
+370|        const float w2 = ang.w.x * ang.w.x + ang.w.y * ang.w.y + ang.w.z * ang.w.z;
+371|        if (w2 < 1e-4f) {
+372|            ang.w = vec3{0.0f, 0.0f, 0.0f};
+373|        }
+374|    }
+375|}
+376|
+377|bool prop_interact_step(Registry& reg, Entity player, Interactable::Kind targetKind,
+378|                        EventBus& bus) {
+379|    return interaction_step(reg, player, targetKind, bus, nullptr);
+380|}
+381|
+382|} // namespace giga::game
+=== event_bus.h PropDetached region ===
+6|//   * TRANSIENT by default. Events are published into a fixed-capacity ring and
+7|//     live exactly one drain cycle: a producer pushes this tick, every consumer
+8|//     reads the batch, then clear() wipes it. Nothing accumulates, no allocation
+14|//     the bus can mirror every published event into an append-only log. Off by
+16|//   * OVERFLOW DROPS, LOUDLY. If more than `kCapacity` events are published in a
+17|//     single cycle the surplus is dropped and counted (`dropped()`), never
+18|//     grown — a bounded ring must stay bounded. The count surfaces the tuning
+20|//   * EVERY PUBLISHED TYPE IS COUNTED. `cycle_count`/`total_count` keep a per-type
+21|//     tally so a published event always has at least one reader. Added because an
+22|//     audit found `ItemTransferred` published from three sites (loot.cpp x2,
+23|//     needs.cpp) and consumed by NOTHING: the only drain in the game filtered on
+25|//     producer's event is provably never read is worse than no bus — it looks
+26|//     wired. The tally is two increments per publish and turns "does anything read
+32|//     three `ItemTransferred` producers are read on the tick they publish instead
+33|//     of being wiped unread. It is deliberately the weakest possible consumer —
+49|// published by no code path at all before 2026-07-29, so the enum advertised
+55|// `publish_floor_arrival` below rather than through hand-written publishes at each
+60|// is why the payload is assembled here and not there.
+62|// The count itself is not guessed either: `NpcPool::count()` is documented as the
+66|enum class EventType : std::uint16_t {
+71|    // crowd in one bump-allocated range ([floor_stream.h] firstId/count). A
+72|    // per-record event would publish 420 entries for one Residential load,
+73|    // outside any drain cycle, and the next `clear()` would wipe the lot unread.
+75|    // Producer: `publish_floor_arrival`, from the `NpcPool::count()` delta across
+82|    // `c` = killer ENTITY id (not a pool id — see relations_drain_deaths).
+87|    // Producer: `publish_floor_arrival`, when `fromFloor != toFloor`. Note this is
+90|    // the row still names the floor the record was seeded on. Do not read the row
+91|    // to recover where somebody is; read this.
+95|    // Producer: faction_relations.cpp `relations_drain_deaths`.
+97|    // That function is the only publisher and it is itself a CONSUMER of NpcDied,
+100|    // producer until somebody does, and `relations_drain_deaths` had no caller
+102|    // shell and drained beside the other NpcDied consumers, or this enumerator is
+111|    // Producer: `publish_floor_arrival`, unconditionally — every arrival is one.
+115|    // floor must read `a`.
+119|    PropDetached,
+122|// How many EventType values there are, for the per-type tally arrays. The
+123|// static_assert is what keeps this honest: add a value past PropDetached and the
+124|// build stops here rather than silently dropping it out of every count.
+125|inline constexpr std::size_t kEventTypeCount = 8;
+126|static_assert(static_cast<std::size_t>(EventType::PropDetached) + 1 ==
+127|                  kEventTypeCount,
+128|              "kEventTypeCount must cover every EventType value");
+131|// generic payload whose meaning depends on `type` (documented per kind at the
+134|struct Event {
+135|    EventType type = EventType::None;
+143|class EventBus {
+145|    // Ring capacity for a single drain cycle. Sized once at init(); the surplus
+149|    // Allocate the ring once. Idempotent; also resets counters and the log.
+153|    // the ring is already full. Mirrors into the log if logging is on.
+154|    bool publish(const Event& e);
+156|    // Convenience overload — build + publish without a temporary at call sites.
+157|    bool publish(EventType type, std::uint32_t a = 0, std::uint32_t b = 0,
+160|    // The events published this cycle, in publish order. Valid until clear().
+163|    // to kCapacity and nothing ever resizes it. That is what makes publishing
+164|    // from INSIDE a drain loop safe — a consumer that reacts to an event by
+165|    // publishing another (relations_drain_deaths does exactly this) cannot
+166|    // invalidate the pointer it is reading through. Snapshot `size()` before such
+167|    // a loop or the new events join the batch being drained.
+169|    std::size_t size() const { return size_; }
+172|    // Drop this cycle's batch. Call once after all consumers have read it.
+175|    // per-cycle counter would hide a slow leak behind a zero.
+178|        for (std::size_t i = 0; i < kEventTypeCount; ++i) cycle_[i] = 0;
+184|    // How many of `t` were published in the current cycle (reset by clear()).
+185|    std::uint32_t cycle_count(EventType t) const {
+187|        return i < kEventTypeCount ? cycle_[i] : 0u;
+190|    // How many of `t` have been published since init(). Never reset by clear(),
+192|    // firing at all", which a per-cycle count cannot.
+193|    std::uint64_t total_count(EventType t) const {
+195|        return i < kEventTypeCount ? total_[i] : 0u;
+199|    // published event is also appended here and kept across clear() calls.
+209|    // Per-type tallies. `cycle_` is this drain cycle, `total_` is since init().
+210|    // Both are indexed by the EventType value, which is why kEventTypeCount is
+212|    std::uint32_t cycle_[kEventTypeCount] = {};
+213|    std::uint64_t total_[kEventTypeCount] = {};
+218|// --- signed payload in an unsigned slot -------------------------------------
+222|// place it is spelled, because getting it wrong is silent: reading a raw slot
+244|// --- typed publish helpers --------------------------------------------------
+246|// Thin, inline, and worth existing for one reason only: they put the payload
+249|// their producers predate this and already carry the contract in a comment.
+251|// One floor's crowd was seeded. `count` is the delta in NpcPool::count().
+252|inline bool publish_npc_spawned(EventBus& bus, std::uint32_t firstId,
+253|                                std::uint32_t count, std::int32_t floorNumber,
+255|    return bus.publish(EventType::NpcSpawned, firstId, count,
+260|inline bool publish_npc_migrated(EventBus& bus, std::uint32_t npcId,
+263|    return bus.publish(EventType::NpcMigrated, npcId, pack_floor(fromFloor),
+269|inline bool publish_floor_entered(EventBus& bus, std::int32_t floorNumber,
+272|    return bus.publish(EventType::FloorEntered, pack_floor(floorNumber), layer,
+278|// Everything an arrival publishes: the crowd it seeded (NpcSpawned, only if the
+281|// how many events were published, 1..3.
+286|// exact reason, and both are commented in place. Three publishes copied to three
+289|// `countBefore`/`countAfter` are `NpcPool::count()` either side of the load. It is
+292|// `countBefore`, which is exact because the pool is a bump allocator that never
+296|std::uint32_t publish_floor_arrival(EventBus& bus, std::uint32_t countBefore,
+297|                                   std::uint32_t countAfter,
+307|// A switch and not a table of format strings: the payload slots mean different
+308|// things per type and two of them need `event_floor`/`event_relation` to be read
+318|// last step happened to leave — almost always nothing. So the feed is drained on
+322|// cursors = 640 B. Sized for a HUD block that stays readable, not for history —
+324|struct EventFeed {
+329|    std::uint64_t at[kLines] = {};   // the sim tick each line was published on
+337|// consumer may itself publish: `relations_drain_deaths` reads NpcDied and emits
+338|// RelationChanged, and draining the feed first would render the batch without it.
+343|std::size_t feed_drain(EventFeed& feed, const EventBus& bus);
+348|// The sim tick line `i` was published on, for a HUD that wants to fade old lines.
+=== tags in src/game/prop_system.h ===
+20|struct SubVoxelAnchor {
+26|struct Interactable {
+32|// Empty filter tags ([jirnyak.md] §18). Static anchored props carry StaticPropTag
+33|// + PropMeshTag; on detach the entity keeps identity and swaps StaticPropTag ->
+34|// DynamicBodyTag so BodyPass/PropPass can filter without recreate.
+35|struct StaticPropTag {};
+36|struct DynamicBodyTag {};
+59|// Nearest active Interactable of `kind` on the player's layer, if within reach.
+73|                  const SubVoxelAnchor& anchor, Interactable::Kind kind,
+77|// Destroy every SubVoxelAnchor prop on `layer` (terminals, shields, bulbs…).
+82|// Seed Terminal + ElectricalShield Interactables by scanning MacroGrid with the
+90|// Collect world positions of active Interactables of `kind` on `layer`.
+95|                                             Interactable::Kind kind,
+101|// Validate SubVoxelAnchor props against MacroGrid after geometry mutation.
+107|// Zero-alloc nearest Interactable query for the interact key path.
+108|// Scans reg.view<Transform, Interactable> on the player's Transform.layer.
+110|                                         Interactable::Kind kind, float reachM);
+114|bool interaction_step(Registry& reg, Entity player, Interactable::Kind kind,
+117|// Advance ragdoll spin bookkeeping for DynamicBodyTag props. Angular integration
+121|bool prop_interact_step(Registry& reg, Entity player, Interactable::Kind targetKind,
+=== Interactable in src\game\prop_system.h ===
+21|    int cx = 0, cy = 0, cz = 0;                  // Координаты макро-ячейки (128³)
+22|    std::uint8_t subX = 0, subY = 0, subZ = 0;   // Локальный субоксель (0..7)
+23|    std::uint8_t face = 0;                       // Опора: 0=Floor, 1=WallNorth, 2=Ceiling...
+24|};
+25|
+26|struct Interactable {
+27|    enum class Kind : std::uint8_t { Terminal, ElectricalShield, LightBulb, Corpse, Loot } kind;
+28|    float reachM = 2.5f;
+29|    bool active = true;
+30|};
+31|
+32|// Empty filter tags ([jirnyak.md] §18). Static anchored props carry StaticPropTag
+33|// + PropMeshTag; on detach the entity keeps identity and swaps StaticPropTag ->
+34|// DynamicBodyTag so BodyPass/PropPass can filter without recreate.
+35|struct StaticPropTag {};
+36|struct DynamicBodyTag {};
+37|struct PropMeshTag {};
+38|
+39|// AngularVelocity + Rotation live in ecs/components.h (core) so physics_step
+40|// can integrate them without src/sim including src/game. [jirnyak.md] §18.
+41|
+42|struct DebrisSpawnEvent {
+43|
+44|    vec3 pos;
+45|    vec3 impulse;
+46|    vec3 color;
+47|    std::uint32_t meshKind;
+48|};
+49|
+50|struct PendingDetachedProp {
+51|    Entity entity;
+52|    PropFallMode mode;
+53|    vec3 pos;
+54|    vec3 impulse;
+55|    vec3 color;
+56|    std::uint32_t meshKind;
+57|};
+58|
+59|// Nearest active Interactable of `kind` on the player's layer, if within reach.
+60|// Zero heap traffic — pure view scan. [jirnyak.md] §18 interaction_step.
+61|struct InteractionHit {
+62|    Entity entity = entt::null;
+63|    vec3 pos{0.0f, 0.0f, 0.0f};
+64|    float distSq = 0.0f;
+65|    bool hit = false;
+66|};
+67|
+68|// ── Публичный API ───────────────────────────────────────────────────────────────
+69|
+70|// Spawn a static anchored prop. `layer` is stamped on Transform so multi-layer
+71|// streamer slots do not leak props across floors. [jirnyak.md] §18.
+72|Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
+73|                  const SubVoxelAnchor& anchor, Interactable::Kind kind,
+74|                  PropFallMode fallMode, const vec3& color, std::uint32_t meshKind,
+75|                  LayerId layer = 0);
+76|
+77|// Destroy every SubVoxelAnchor prop on `layer` (terminals, shields, bulbs…).
+78|// Call before reseeding a recycled LayerId slot — same contract as
+79|// despawn_layer_mobs / refresh_floor_containers. [jirnyak.md] §18.
+80|std::uint32_t clear_layer_props(Registry& reg, LayerId layer);
+81|
+82|// Seed Terminal + ElectricalShield Interactables by scanning MacroGrid with the
+83|// same spatial_hash / wall-device rules as gpu::PropPlacer (kSaltWall branch).
+84|// Positions match propPass cosmetics when both use the same seed
+85|// (1337u ^ floor*0x9e3779b9). Returns count successfully spawned.

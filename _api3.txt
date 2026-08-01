@@ -1,0 +1,108 @@
+C:\hades\gigahrush2\src\game\prop_system.h:14:enum class PropFallMode : std::uint8_t {
+C:\hades\gigahrush2\src\game\prop_system.h:20:struct SubVoxelAnchor {
+C:\hades\gigahrush2\src\game\prop_system.h:26:struct Interactable {
+C:\hades\gigahrush2\src\game\prop_system.h:32:// Empty filter tags ([jirnyak.md] §18). Static anchored props carry StaticPropTag
+C:\hades\gigahrush2\src\game\prop_system.h:33:// + PropMeshTag; on detach the entity keeps identity and swaps StaticPropTag ->
+C:\hades\gigahrush2\src\game\prop_system.h:35:struct StaticPropTag {};
+C:\hades\gigahrush2\src\game\prop_system.h:36:struct DynamicBodyTag {};
+C:\hades\gigahrush2\src\game\prop_system.h:37:struct PropMeshTag {};
+C:\hades\gigahrush2\src\game\prop_system.h:42:struct DebrisSpawnEvent {
+C:\hades\gigahrush2\src\game\prop_system.h:50:struct PendingDetachedProp {
+C:\hades\gigahrush2\src\game\prop_system.h:52:    PropFallMode mode;
+C:\hades\gigahrush2\src\game\prop_system.h:61:struct InteractionHit {
+C:\hades\gigahrush2\src\game\prop_system.h:72:Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
+C:\hades\gigahrush2\src\game\prop_system.h:73:                  const SubVoxelAnchor& anchor, Interactable::Kind kind,
+C:\hades\gigahrush2\src\game\prop_system.h:74:                  PropFallMode fallMode, const vec3& color, std::uint32_t meshKind,
+C:\hades\gigahrush2\src\game\prop_system.h:77:// Destroy every SubVoxelAnchor prop on `layer` (terminals, shields, bulbs…).
+C:\hades\gigahrush2\src\game\prop_system.h:99:                                float projHitRadius, EventBus& bus);
+C:\hades\gigahrush2\src\game\prop_system.h:101:// Validate SubVoxelAnchor props against MacroGrid after geometry mutation.
+C:\hades\gigahrush2\src\game\prop_system.h:104:void anchor_validate_step(Registry& reg, const World& world, EventBus& bus,
+C:\hades\gigahrush2\src\game\prop_system.h:115:                      EventBus& bus, InteractionHit* outHit = nullptr);
+C:\hades\gigahrush2\src\game\prop_system.h:119:void prop_ragdoll_step(Registry& reg, float dt);
+C:\hades\gigahrush2\src\game\prop_system.h:122:                        EventBus& bus);
+C:\hades\gigahrush2\src\game\prop_system.cpp:52:// Swap StaticPropTag -> DynamicBodyTag without destroying the entity
+C:\hades\gigahrush2\src\game\prop_system.cpp:55:    if (reg.all_of<StaticPropTag>(prop))
+C:\hades\gigahrush2\src\game\prop_system.cpp:56:        reg.remove<StaticPropTag>(prop);
+C:\hades\gigahrush2\src\game\prop_system.cpp:60:static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
+C:\hades\gigahrush2\src\game\prop_system.cpp:62:                               std::uint32_t meshKind, EventBus& bus)
+C:\hades\gigahrush2\src\game\prop_system.cpp:66:    if (mode == PropFallMode::GpuHandoff) {
+C:\hades\gigahrush2\src\game\prop_system.cpp:67:        bus.publish(EventType::ItemTransferred, static_cast<uint32_t>(pos.x),
+C:\hades\gigahrush2\src\game\prop_system.cpp:74:    if (reg.all_of<SubVoxelAnchor>(prop))
+C:\hades\gigahrush2\src\game\prop_system.cpp:75:        reg.remove<SubVoxelAnchor>(prop);
+C:\hades\gigahrush2\src\game\prop_system.cpp:79:    if (mode == PropFallMode::RagdollRoll) {
+C:\hades\gigahrush2\src\game\prop_system.cpp:89:    // BodyPass needs AABB — without it a detached prop is invisible.
+C:\hades\gigahrush2\src\game\prop_system.cpp:95:                                float projHitRadius, EventBus& bus)
+C:\hades\gigahrush2\src\game\prop_system.cpp:103:    PropFallMode hitMode = PropFallMode::SimpleFall;
+C:\hades\gigahrush2\src\game\prop_system.cpp:107:    auto view = reg.view<Transform, SubVoxelAnchor, PropFallMode>();
+C:\hades\gigahrush2\src\game\prop_system.cpp:109:        const auto& anchor = view.get<SubVoxelAnchor>(entity);
+C:\hades\gigahrush2\src\game\prop_system.cpp:125:            hitMode = view.get<PropFallMode>(entity);
+C:\hades\gigahrush2\src\game\prop_system.cpp:134:        detach_single_prop(reg, hitEntity, hitMode, impulse, hitPos, hitColor, 0, bus);
+C:\hades\gigahrush2\src\game\prop_system.cpp:140:void anchor_validate_step(Registry& reg, const World& world, EventBus& bus,
+C:\hades\gigahrush2\src\game\prop_system.cpp:150:    static thread_local std::vector<PendingDetachedProp> detached;
+C:\hades\gigahrush2\src\game\prop_system.cpp:151:    detached.clear();
+C:\hades\gigahrush2\src\game\prop_system.cpp:153:    auto view = reg.view<Transform, SubVoxelAnchor, PropFallMode>();
+C:\hades\gigahrush2\src\game\prop_system.cpp:155:        const auto& anchor = view.get<SubVoxelAnchor>(entity);
+C:\hades\gigahrush2\src\game\prop_system.cpp:171:            detached.push_back({entity, view.get<PropFallMode>(entity), tr.pos,
+C:\hades\gigahrush2\src\game\prop_system.cpp:176:    for (const auto& item : detached) {
+C:\hades\gigahrush2\src\game\prop_system.cpp:177:        detach_single_prop(reg, item.entity, item.mode, item.impulse, item.pos,
+C:\hades\gigahrush2\src\game\prop_system.cpp:182:Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
+C:\hades\gigahrush2\src\game\prop_system.cpp:183:                  const SubVoxelAnchor& anchor, Interactable::Kind kind,
+C:\hades\gigahrush2\src\game\prop_system.cpp:184:                  PropFallMode fallMode, const vec3& color, std::uint32_t meshKind,
+C:\hades\gigahrush2\src\game\prop_system.cpp:198:    reg.emplace<SubVoxelAnchor>(prop, SubVoxelAnchor{cx, cy, cz, anchor.subX,
+C:\hades\gigahrush2\src\game\prop_system.cpp:202:    reg.emplace<PropFallMode>(prop, fallMode);
+C:\hades\gigahrush2\src\game\prop_system.cpp:205:    // StaticPropTag -> DynamicBodyTag without destroying the entity.
+C:\hades\gigahrush2\src\game\prop_system.cpp:206:    reg.emplace<StaticPropTag>(prop);
+C:\hades\gigahrush2\src\game\prop_system.cpp:214:    // SubVoxelAnchor marks every static prop (terminals, shields, padic bulbs).
+C:\hades\gigahrush2\src\game\prop_system.cpp:217:    auto view = reg.view<const SubVoxelAnchor, const Transform>();
+C:\hades\gigahrush2\src\game\prop_system.cpp:236:    // spawn_prop's solid() check and anchor_validate_step stay honest.
+C:\hades\gigahrush2\src\game\prop_system.cpp:275:                SubVoxelAnchor anchor;
+C:\hades\gigahrush2\src\game\prop_system.cpp:284:                Entity e = spawn_prop(reg, world, vec3{wx, wy, wz}, anchor, kind,
+C:\hades\gigahrush2\src\game\prop_system.cpp:285:                                      PropFallMode::SimpleFall, color, 0, layer);
+C:\hades\gigahrush2\src\game\prop_system.cpp:345:                      EventBus& bus, InteractionHit* outHit)
+C:\hades\gigahrush2\src\game\prop_system.cpp:356:void prop_ragdoll_step(Registry& reg, float dt)
+C:\hades\gigahrush2\src\game\prop_system.cpp:361:    // spinning after landing ([jirnyak.md] §18 prop_ragdoll).
+C:\hades\gigahrush2\src\game\prop_system.cpp:378:                        EventBus& bus) {
+C:\hades\gigahrush2\src\game\event_bus.h:1:// Event bus — the one channel gameplay systems use to tell each other that
+C:\hades\gigahrush2\src\game\event_bus.h:6://   * TRANSIENT by default. Events are published into a fixed-capacity ring and
+C:\hades\gigahrush2\src\game\event_bus.h:10://   * FIXED, POD events. Every event is the same small POD (`Event`), a type tag
+C:\hades\gigahrush2\src\game\event_bus.h:30://     `EventFeed` at the bottom of this header is the missing half: it renders
+C:\hades\gigahrush2\src\game\event_bus.h:44:// Event kinds. Extend as gameplay systems need them; the tag is just a u16 so
+C:\hades\gigahrush2\src\game\event_bus.h:66:enum class EventType : std::uint16_t {
+C:\hades\gigahrush2\src\game\event_bus.h:119:    PropDetached,
+C:\hades\gigahrush2\src\game\event_bus.h:122:// How many EventType values there are, for the per-type tally arrays. The
+C:\hades\gigahrush2\src\game\event_bus.h:123:// static_assert is what keeps this honest: add a value past PropDetached and the
+C:\hades\gigahrush2\src\game\event_bus.h:125:inline constexpr std::size_t kEventTypeCount = 8;
+C:\hades\gigahrush2\src\game\event_bus.h:126:static_assert(static_cast<std::size_t>(EventType::PropDetached) + 1 ==
+C:\hades\gigahrush2\src\game\event_bus.h:127:                  kEventTypeCount,
+C:\hades\gigahrush2\src\game\event_bus.h:128:              "kEventTypeCount must cover every EventType value");
+C:\hades\gigahrush2\src\game\event_bus.h:134:struct Event {
+C:\hades\gigahrush2\src\game\event_bus.h:135:    EventType type = EventType::None;
+C:\hades\gigahrush2\src\game\event_bus.h:143:class EventBus {
+C:\hades\gigahrush2\src\game\event_bus.h:154:    bool publish(const Event& e);
+C:\hades\gigahrush2\src\game\event_bus.h:157:    bool publish(EventType type, std::uint32_t a = 0, std::uint32_t b = 0,
+C:\hades\gigahrush2\src\game\event_bus.h:168:    const Event* events() const { return ring_.data(); }
+C:\hades\gigahrush2\src\game\event_bus.h:178:        for (std::size_t i = 0; i < kEventTypeCount; ++i) cycle_[i] = 0;
+C:\hades\gigahrush2\src\game\event_bus.h:181:    // Events dropped since init() because the ring was full (a tuning signal).
+C:\hades\gigahrush2\src\game\event_bus.h:185:    std::uint32_t cycle_count(EventType t) const {
+C:\hades\gigahrush2\src\game\event_bus.h:187:        return i < kEventTypeCount ? cycle_[i] : 0u;
+C:\hades\gigahrush2\src\game\event_bus.h:193:    std::uint64_t total_count(EventType t) const {
+C:\hades\gigahrush2\src\game\event_bus.h:195:        return i < kEventTypeCount ? total_[i] : 0u;
+C:\hades\gigahrush2\src\game\event_bus.h:202:    const std::vector<Event>& log() const { return log_; }
+C:\hades\gigahrush2\src\game\event_bus.h:206:    std::vector<Event> ring_;  // fixed capacity, reused each cycle
+C:\hades\gigahrush2\src\game\event_bus.h:210:    // Both are indexed by the EventType value, which is why kEventTypeCount is
+C:\hades\gigahrush2\src\game\event_bus.h:212:    std::uint32_t cycle_[kEventTypeCount] = {};
+C:\hades\gigahrush2\src\game\event_bus.h:213:    std::uint64_t total_[kEventTypeCount] = {};
+C:\hades\gigahrush2\src\game\event_bus.h:215:    std::vector<Event> log_;   // grows only while logging_ is true
+C:\hades\gigahrush2\src\game\event_bus.h:252:inline bool publish_npc_spawned(EventBus& bus, std::uint32_t firstId,
+C:\hades\gigahrush2\src\game\event_bus.h:255:    return bus.publish(EventType::NpcSpawned, firstId, count,
+C:\hades\gigahrush2\src\game\event_bus.h:260:inline bool publish_npc_migrated(EventBus& bus, std::uint32_t npcId,
+C:\hades\gigahrush2\src\game\event_bus.h:263:    return bus.publish(EventType::NpcMigrated, npcId, pack_floor(fromFloor),
+C:\hades\gigahrush2\src\game\event_bus.h:269:inline bool publish_floor_entered(EventBus& bus, std::int32_t floorNumber,
+C:\hades\gigahrush2\src\game\event_bus.h:272:    return bus.publish(EventType::FloorEntered, pack_floor(floorNumber), layer,
+C:\hades\gigahrush2\src\game\event_bus.h:296:std::uint32_t publish_floor_arrival(EventBus& bus, std::uint32_t countBefore,
+C:\hades\gigahrush2\src\game\event_bus.h:311:bool event_line(const Event& e, char* out, std::size_t cap);
+C:\hades\gigahrush2\src\game\event_bus.h:315:// This is what makes the bus observable. Reading `EventBus::events()` from the
+C:\hades\gigahrush2\src\game\event_bus.h:324:struct EventFeed {
+C:\hades\gigahrush2\src\game\event_bus.h:343:std::size_t feed_drain(EventFeed& feed, const EventBus& bus);
+C:\hades\gigahrush2\src\game\event_bus.h:346:const char* feed_line(const EventFeed& feed, std::size_t i);
+C:\hades\gigahrush2\src\game\event_bus.h:350:std::uint64_t feed_tick(const EventFeed& feed, std::size_t i);

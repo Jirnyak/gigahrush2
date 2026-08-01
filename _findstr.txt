@@ -1,0 +1,129 @@
+C:\hades\gigahrush2\src\world\destruct.h:26:// solid sub-voxels left with no connection to a larger structure is deleted
+C:\hades\gigahrush2\src\world\destruct.h:125:// Carve a sphere: roll every solid sub-voxel whose centre lies inside, with
+C:\hades\gigahrush2\src\world\macro_grid.h:7:// The sub-voxel mask is what makes collision cheap and fine-grained: a solid
+C:\hades\gigahrush2\src\world\macro_grid.h:9:// AABB against these bits with plain bitwise ops, so a fully solid cell and a
+C:\hades\gigahrush2\src\world\macro_grid.h:83:    // Convenience: is a single sub-voxel solid? Coordinates are macro cell +
+C:\hades\gigahrush2\src\world\macro_grid.h:85:    bool solid(int cx, int cy, int cz, int sx, int sy, int sz) const {
+C:\hades\gigahrush2\src\world\materials.h:54:// lintel, recoloured in place over cells that were already solid wall. Shut reads
+C:\hades\gigahrush2\src\world\nav.h:56:// A macro cell is coarse-walkable when it is not fully solid (mask not full);
+C:\hades\gigahrush2\src\world\nav.h:95:    // kFlowNone in solid / unreachable void. 128^3 * 1 B = 2 MiB. This is what
+C:\hades\gigahrush2\src\world\nav.h:111:    // cell is solid / unreachable. Coordinates are wrapped.
+C:\hades\gigahrush2\src\world\nav.h:133:// components, or either endpoint inside solid).
+C:\hades\gigahrush2\src\world\stain.h:5:// [world/subfield.h]) painted onto SOLID atoms. Channels add with saturation,
+C:\hades\gigahrush2\src\world\stain.h:45:// coordinates, toroidal). Paints only solid atoms — liquid clings to matter.
+C:\hades\gigahrush2\src\world\stain.h:51:// each walking up to `reach` metres of sub-voxel DDA to its first solid atom,
+C:\hades\gigahrush2\src\world\destruct.cpp:45:inline bool solid_key(const MacroGrid& g, std::uint32_t key) {
+C:\hades\gigahrush2\src\world\destruct.cpp:147:// Enumerate the 6-connected solid component containing `seedKey`, giving up —
+C:\hades\gigahrush2\src\world\destruct.cpp:169:            if (!solid_key(g, nk)) continue;
+C:\hades\gigahrush2\src\world\destruct.cpp:182:// The detachment sweep: seed a bounded flood-fill from every solid neighbour
+C:\hades\gigahrush2\src\world\destruct.cpp:204:            if (!solid_key(w.grid(), nk)) continue;
+C:\hades\gigahrush2\src\world\destruct.cpp:305:                if (!solid_key(w.grid(), key)) continue;
+C:\hades\gigahrush2\src\world\destruct.cpp:340:    if (!solid_key(w.grid(), key)) return false;
+C:\hades\gigahrush2\src\world\nav.cpp:13:// Coarse walkability: an agent can occupy a macro cell unless it is FULLY solid.
+C:\hades\gigahrush2\src\world\nav.cpp:15:// fully solid, so this cleanly separates the traversable void from structure.
+C:\hades\gigahrush2\src\world\nav.cpp:228:    // solid (no flood ever claimed it) — nothing to route to/from.
+C:\hades\gigahrush2\src\world\stain.cpp:75:        // Sub-voxel DDA to the first solid atom (the physics voxel walk).
+C:\hades\gigahrush2\src\game\event_bus.h:1:// Event bus — the one channel gameplay systems use to tell each other that
+C:\hades\gigahrush2\src\game\event_bus.h:6://   * TRANSIENT by default. Events are published into a fixed-capacity ring and
+C:\hades\gigahrush2\src\game\event_bus.h:10://   * FIXED, POD events. Every event is the same small POD (`Event`), a type tag
+C:\hades\gigahrush2\src\game\event_bus.h:11://     plus a few generic slots. No inheritance, no per-event heap — the ring is
+C:\hades\gigahrush2\src\game\event_bus.h:14://     the bus can mirror every published event into an append-only log. Off by
+C:\hades\gigahrush2\src\game\event_bus.h:16://   * OVERFLOW DROPS, LOUDLY. If more than `kCapacity` events are published in a
+C:\hades\gigahrush2\src\game\event_bus.h:21://     tally so a published event always has at least one reader. Added because an
+C:\hades\gigahrush2\src\game\event_bus.h:25://     producer's event is provably never read is worse than no bus — it looks
+C:\hades\gigahrush2\src\game\event_bus.h:30://     `EventFeed` at the bottom of this header is the missing half: it renders
+C:\hades\gigahrush2\src\game\event_bus.h:31://     every event of every type to a line and KEEPS it across `clear()`, so the
+C:\hades\gigahrush2\src\game\event_bus.h:44:// Event kinds. Extend as gameplay systems need them; the tag is just a u16 so
+C:\hades\gigahrush2\src\game\event_bus.h:50:// events the engine could not emit. Adding a value without naming its producer
+C:\hades\gigahrush2\src\game\event_bus.h:66:enum class EventType : std::uint16_t {
+C:\hades\gigahrush2\src\game\event_bus.h:72:    // per-record event would publish 420 entries for one Residential load,
+C:\hades\gigahrush2\src\game\event_bus.h:74:    // `a` = first record id, `b` = how many, `c` = floor (see event_floor).
+C:\hades\gigahrush2\src\game\event_bus.h:86:    // `c` = to floor (both signed-packed, see event_floor).
+C:\hades\gigahrush2\src\game\event_bus.h:94:    // value, zero-extended from int8 (recover with event_relation).
+C:\hades\gigahrush2\src\game\event_bus.h:110:    // see event_floor), `b` = LayerId, `c` = the entering record id.
+C:\hades\gigahrush2\src\game\event_bus.h:122:// How many EventType values there are, for the per-type tally arrays. The
+C:\hades\gigahrush2\src\game\event_bus.h:125:inline constexpr std::size_t kEventTypeCount = 8;
+C:\hades\gigahrush2\src\game\event_bus.h:126:static_assert(static_cast<std::size_t>(EventType::PropDetached) + 1 ==
+C:\hades\gigahrush2\src\game\event_bus.h:127:                  kEventTypeCount,
+C:\hades\gigahrush2\src\game\event_bus.h:128:              "kEventTypeCount must cover every EventType value");
+C:\hades\gigahrush2\src\game\event_bus.h:130:// One event. POD, trivially copyable, 24 bytes. The three `a/b/c` slots are
+C:\hades\gigahrush2\src\game\event_bus.h:134:struct Event {
+C:\hades\gigahrush2\src\game\event_bus.h:135:    EventType type = EventType::None;
+C:\hades\gigahrush2\src\game\event_bus.h:143:class EventBus {
+C:\hades\gigahrush2\src\game\event_bus.h:152:    // Publish an event for this cycle. Returns false (and bumps dropped()) if
+C:\hades\gigahrush2\src\game\event_bus.h:154:    bool publish(const Event& e);
+C:\hades\gigahrush2\src\game\event_bus.h:157:    bool publish(EventType type, std::uint32_t a = 0, std::uint32_t b = 0,
+C:\hades\gigahrush2\src\game\event_bus.h:160:    // The events published this cycle, in publish order. Valid until clear().
+C:\hades\gigahrush2\src\game\event_bus.h:164:    // from INSIDE a drain loop safe — a consumer that reacts to an event by
+C:\hades\gigahrush2\src\game\event_bus.h:167:    // a loop or the new events join the batch being drained.
+C:\hades\gigahrush2\src\game\event_bus.h:168:    const Event* events() const { return ring_.data(); }
+C:\hades\gigahrush2\src\game\event_bus.h:178:        for (std::size_t i = 0; i < kEventTypeCount; ++i) cycle_[i] = 0;
+C:\hades\gigahrush2\src\game\event_bus.h:181:    // Events dropped since init() because the ring was full (a tuning signal).
+C:\hades\gigahrush2\src\game\event_bus.h:185:    std::uint32_t cycle_count(EventType t) const {
+C:\hades\gigahrush2\src\game\event_bus.h:187:        return i < kEventTypeCount ? cycle_[i] : 0u;
+C:\hades\gigahrush2\src\game\event_bus.h:193:    std::uint64_t total_count(EventType t) const {
+C:\hades\gigahrush2\src\game\event_bus.h:195:        return i < kEventTypeCount ? total_[i] : 0u;
+C:\hades\gigahrush2\src\game\event_bus.h:199:    // published event is also appended here and kept across clear() calls.
+C:\hades\gigahrush2\src\game\event_bus.h:202:    const std::vector<Event>& log() const { return log_; }
+C:\hades\gigahrush2\src\game\event_bus.h:206:    std::vector<Event> ring_;  // fixed capacity, reused each cycle
+C:\hades\gigahrush2\src\game\event_bus.h:207:    std::size_t size_ = 0;     // live events in the ring this cycle
+C:\hades\gigahrush2\src\game\event_bus.h:210:    // Both are indexed by the EventType value, which is why kEventTypeCount is
+C:\hades\gigahrush2\src\game\event_bus.h:212:    std::uint32_t cycle_[kEventTypeCount] = {};
+C:\hades\gigahrush2\src\game\event_bus.h:213:    std::uint64_t total_[kEventTypeCount] = {};
+C:\hades\gigahrush2\src\game\event_bus.h:215:    std::vector<Event> log_;   // grows only while logging_ is true
+C:\hades\gigahrush2\src\game\event_bus.h:220:// Floor numbers are SIGNED and the demo stack reaches -50, while the event slots
+C:\hades\gigahrush2\src\game\event_bus.h:232:inline std::int32_t event_floor(std::uint32_t slot) {
+C:\hades\gigahrush2\src\game\event_bus.h:240:inline std::int8_t event_relation(std::uint32_t slot) {
+C:\hades\gigahrush2\src\game\event_bus.h:252:inline bool publish_npc_spawned(EventBus& bus, std::uint32_t firstId,
+C:\hades\gigahrush2\src\game\event_bus.h:255:    return bus.publish(EventType::NpcSpawned, firstId, count,
+C:\hades\gigahrush2\src\game\event_bus.h:260:inline bool publish_npc_migrated(EventBus& bus, std::uint32_t npcId,
+C:\hades\gigahrush2\src\game\event_bus.h:263:    return bus.publish(EventType::NpcMigrated, npcId, pack_floor(fromFloor),
+C:\hades\gigahrush2\src\game\event_bus.h:269:inline bool publish_floor_entered(EventBus& bus, std::int32_t floorNumber,
+C:\hades\gigahrush2\src\game\event_bus.h:272:    return bus.publish(EventType::FloorEntered, pack_floor(floorNumber), layer,
+C:\hades\gigahrush2\src\game\event_bus.h:281:// how many events were published, 1..3.
+C:\hades\gigahrush2\src\game\event_bus.h:296:std::uint32_t publish_floor_arrival(EventBus& bus, std::uint32_t countBefore,
+C:\hades\gigahrush2\src\game\event_bus.h:304:// Render one event as a line of text. Returns false for a type it cannot render
+C:\hades\gigahrush2\src\game\event_bus.h:308:// things per type and two of them need `event_floor`/`event_relation` to be read
+C:\hades\gigahrush2\src\game\event_bus.h:311:bool event_line(const Event& e, char* out, std::size_t cap);
+C:\hades\gigahrush2\src\game\event_bus.h:313:// The last few events, as text, held across `clear()`.
+C:\hades\gigahrush2\src\game\event_bus.h:315:// This is what makes the bus observable. Reading `EventBus::events()` from the
+C:\hades\gigahrush2\src\game\event_bus.h:324:struct EventFeed {
+C:\hades\gigahrush2\src\game\event_bus.h:340:// A cycle with more than kLines events loses the oldest of them, on purpose: a
+C:\hades\gigahrush2\src\game\event_bus.h:343:std::size_t feed_drain(EventFeed& feed, const EventBus& bus);
+C:\hades\gigahrush2\src\game\event_bus.h:346:const char* feed_line(const EventFeed& feed, std::size_t i);
+C:\hades\gigahrush2\src\game\event_bus.h:350:std::uint64_t feed_tick(const EventFeed& feed, std::size_t i);
+C:\hades\gigahrush2\src\game\event_bus.cpp:1:#include "game/event_bus.h"
+C:\hades\gigahrush2\src\game\event_bus.cpp:13:void EventBus::init() {
+C:\hades\gigahrush2\src\game\event_bus.cpp:16:    ring_.assign(kCapacity, Event{});
+C:\hades\gigahrush2\src\game\event_bus.cpp:19:    for (std::size_t i = 0; i < kEventTypeCount; ++i) {
+C:\hades\gigahrush2\src\game\event_bus.cpp:27:bool EventBus::publish(const Event& e) {
+C:\hades\gigahrush2\src\game\event_bus.cpp:31:        // A dropped event is NOT tallied into cycle_/total_, deliberately: those
+C:\hades\gigahrush2\src\game\event_bus.cpp:40:    // a bogus u16 tag from writing past the arrays. EventType is an open u16 by
+C:\hades\gigahrush2\src\game\event_bus.cpp:43:    if (ix < kEventTypeCount) {
+C:\hades\gigahrush2\src\game\event_bus.cpp:51:bool EventBus::publish(EventType type, std::uint32_t a, std::uint32_t b,
+C:\hades\gigahrush2\src\game\event_bus.cpp:53:    Event e;
+C:\hades\gigahrush2\src\game\event_bus.cpp:62:std::uint32_t publish_floor_arrival(EventBus& bus, std::uint32_t countBefore,
+C:\hades\gigahrush2\src\game\event_bus.cpp:91:bool event_line(const Event& e, char* out, std::size_t cap) {
+C:\hades\gigahrush2\src\game\event_bus.cpp:94:        case EventType::NpcSpawned:
+C:\hades\gigahrush2\src\game\event_bus.cpp:96:                          e.b, e.a, event_floor(e.c));
+C:\hades\gigahrush2\src\game\event_bus.cpp:98:        case EventType::NpcDied:
+C:\hades\gigahrush2\src\game\event_bus.cpp:109:        case EventType::NpcMigrated:
+C:\hades\gigahrush2\src\game\event_bus.cpp:111:                          event_floor(e.b), event_floor(e.c));
+C:\hades\gigahrush2\src\game\event_bus.cpp:113:        case EventType::RelationChanged:
+C:\hades\gigahrush2\src\game\event_bus.cpp:115:                          static_cast<int>(event_relation(e.c)));
+C:\hades\gigahrush2\src\game\event_bus.cpp:117:        case EventType::ItemTransferred:
+C:\hades\gigahrush2\src\game\event_bus.cpp:119:            // and a ration being eaten are the same event with one end missing, and
+C:\hades\gigahrush2\src\game\event_bus.cpp:128:        case EventType::FloorEntered:
+C:\hades\gigahrush2\src\game\event_bus.cpp:130:                          event_floor(e.a), e.b);
+C:\hades\gigahrush2\src\game\event_bus.cpp:132:        case EventType::None:
+C:\hades\gigahrush2\src\game\event_bus.cpp:138:std::size_t feed_drain(EventFeed& feed, const EventBus& bus) {
+C:\hades\gigahrush2\src\game\event_bus.cpp:143:    const Event* ev = bus.events();
+C:\hades\gigahrush2\src\game\event_bus.cpp:146:        char tmp[EventFeed::kLineLen];
+C:\hades\gigahrush2\src\game\event_bus.cpp:147:        if (!event_line(ev[i], tmp, sizeof(tmp))) continue;
+C:\hades\gigahrush2\src\game\event_bus.cpp:150:        for (; k + 1 < EventFeed::kLineLen && tmp[k] != '\0'; ++k) dst[k] = tmp[k];
+C:\hades\gigahrush2\src\game\event_bus.cpp:153:        feed.next = (feed.next + 1) % EventFeed::kLines;
+C:\hades\gigahrush2\src\game\event_bus.cpp:154:        if (feed.live < EventFeed::kLines) ++feed.live;
+C:\hades\gigahrush2\src\game\event_bus.cpp:160:const char* feed_line(const EventFeed& feed, std::size_t i) {
+C:\hades\gigahrush2\src\game\event_bus.cpp:167:        (feed.next + EventFeed::kLines - 1 - i) % EventFeed::kLines;
+C:\hades\gigahrush2\src\game\event_bus.cpp:171:std::uint64_t feed_tick(const EventFeed& feed, std::size_t i) {
+C:\hades\gigahrush2\src\game\event_bus.cpp:174:        (feed.next + EventFeed::kLines - 1 - i) % EventFeed::kLines;

@@ -3087,6 +3087,9 @@ int main(int argc, char** argv) {
                 // Was defined in combat.cpp and never called — dead path until now.
                 game::slow_step(reg, activeLayer, kSimDt);
                 physics_step(reg, stack, kSimDt);
+                // Prop ragdoll settle (AngularVelocity damping bookkeeping).
+                // Angular integration itself is in physics_step. [jirnyak.md] §18
+                game::prop_ragdoll_step(reg, kSimDt);
                 // Doors resolve AFTER physics for the same reason melee does: contact
                 // is tested by ADJACENCY against where bodies actually ended up this
                 // step, not where they intended to go. Costs nothing while no door is
@@ -3219,6 +3222,10 @@ int main(int argc, char** argv) {
                                               game::NoiseSource::WeaponFire};
                         game::noise_publish(noiseField, activeLayer,
                                             vec3{op.x, op.y, op.z}, np, 0);
+                        // Props anchored to carved cells fall / ragdoll
+                        // ([jirnyak.md] §18). dirtyCells = flat macro_index.
+                        game::anchor_validate_step(reg, stack.layer(activeLayer),
+                                                   bus, carveResult.dirtyCells);
                     }
                 }
                 if (interactWanted) {
@@ -3476,6 +3483,11 @@ int main(int argc, char** argv) {
                                                 8 +
                                                 std::min(byMat[m] / 4u, 56u)));
                             }
+                            // Detach props whose anchor cells were carved.
+                            // [jirnyak.md] §18
+                            game::anchor_validate_step(
+                                reg, stack.layer(activeLayer), bus,
+                                carveResult.dirtyCells);
                         }
                     }
                     combatCarves.clear();
@@ -5006,6 +5018,10 @@ int main(int argc, char** argv) {
             if (!doors.dirtyCells.empty()) {
                 voxelMirror.mark_dirty(doors.dirtyCells.data(),
                                        doors.dirtyCells.size());
+                // Door mask edits free/occupy macro cells — detach props
+                // whose anchors no longer have solid support. [jirnyak.md] §18
+                game::anchor_validate_step(reg, stack.layer(activeLayer), bus,
+                                           doors.dirtyCells);
                 doors.dirtyCells.clear();
             }
             if (!stainDirty.empty()) {
