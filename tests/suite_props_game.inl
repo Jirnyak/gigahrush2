@@ -33,11 +33,9 @@ static void paint_floor_band(World& world, int x0, int x1, int yFloor, int z0, i
     }
 }
 
-
-
-
 static int count_kind(const Registry& reg, LayerId layer, game::Interactable::Kind k) {
     int n = 0;
+
     auto view = reg.view<const game::Interactable, const Transform>();
     for (auto e : view) {
         if (view.get<const game::Interactable>(e).kind != k) continue;
