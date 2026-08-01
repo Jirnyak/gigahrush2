@@ -1,5 +1,7 @@
 #include "game/prop_system.h"
 #include "ecs/components.h"
+#include "world/macro_grid.h"
+#include "world/world.h"
 #include <vector>
 #include <unordered_set>
 #include <cmath>
@@ -38,7 +40,7 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
                                std::uint32_t meshKind, EventBus& bus) 
 {
     if (mode == PropFallMode::GpuHandoff) {
-        bus.publish(DebrisSpawnEvent{pos, impulse, color, meshKind});
+        bus.publish(EventType::ItemTransferred, static_cast<uint32_t>(pos.x), static_cast<uint32_t>(pos.y), static_cast<uint32_t>(pos.z), 0);
         reg.destroy(prop);
     } 
     else if (mode == PropFallMode::RagdollRoll) {
@@ -120,7 +122,7 @@ void anchor_validate_step(Registry& reg, const World& world, EventBus& bus,
         std::uint64_t key = cell_key(wrap_macro(anchor.cx), wrap_macro(anchor.cy), wrap_macro(anchor.cz));
 
         if (dirtySet.contains(key)) {
-            if (!world.solid(anchor.cx, anchor.cy, anchor.cz, anchor.subX, anchor.subY, anchor.subZ)) {
+            if (!world.grid().solid(anchor.cx, anchor.cy, anchor.cz, anchor.subX, anchor.subY, anchor.subZ)) {
                 const auto& tr = view.get<Transform>(entity);
                 vec3 col = reg.all_of<Renderable>(entity) ? reg.get<Renderable>(entity).color : vec3{0.8f, 0.8f, 0.8f};
                 detached.push_back({entity, view.get<PropFallMode>(entity), tr.pos, vec3{0.0f, 1.0f, 0.0f}, col, 0});
@@ -141,12 +143,12 @@ Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos, const
     int cy = wrap_macro(anchor.cy);
     int cz = wrap_macro(anchor.cz);
 
-    if (!world.solid(cx, cy, cz, anchor.subX, anchor.subY, anchor.subZ)) {
+    if (!world.grid().solid(cx, cy, cz, anchor.subX, anchor.subY, anchor.subZ)) {
         return entt::null;
     }
 
     Entity prop = reg.create();
-    reg.emplace<Transform>(prop, worldPos, 0);
+    reg.emplace<Transform>(prop, worldPos, static_cast<LayerId>(0));
     reg.emplace<SubVoxelAnchor>(prop, SubVoxelAnchor{cx, cy, cz, anchor.subX, anchor.subY, anchor.subZ, anchor.face});
     reg.emplace<Interactable>(prop, kind, 2.5f, true);
     reg.emplace<PropFallMode>(prop, fallMode);

@@ -114,13 +114,16 @@ enum class EventType : std::uint16_t {
     // concepts and the label is mutable ([floors.md]). A consumer that wants the
     // floor must read `a`.
     FloorEntered,
+    // A prop fell out of the world and needs a GPU handoff.
+    // a = pos.x, b = pos.y, c = pos.z
+    PropDetached,
 };
 
 // How many EventType values there are, for the per-type tally arrays. The
-// static_assert is what keeps this honest: add a value past FloorEntered and the
+// static_assert is what keeps this honest: add a value past PropDetached and the
 // build stops here rather than silently dropping it out of every count.
-inline constexpr std::size_t kEventTypeCount = 7;
-static_assert(static_cast<std::size_t>(EventType::FloorEntered) + 1 ==
+inline constexpr std::size_t kEventTypeCount = 8;
+static_assert(static_cast<std::size_t>(EventType::PropDetached) + 1 ==
                   kEventTypeCount,
               "kEventTypeCount must cover every EventType value");
 

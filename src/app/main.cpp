@@ -36,6 +36,7 @@
 #include "app/worldgen.h"
 #include "core/math.h"
 #include "game/mob_table.h"
+#include "game/lazy_baker.h"
 #include "core/tick.h"
 #include "core/wrap.h"
 #include "ecs/components.h"
@@ -1374,6 +1375,7 @@ int main(int argc, char** argv) {
     // --- World + ECS setup -------------------------------------------------
     // Build the world population-first, then embody the player from it ([npcs.md]).
     LevelStack stack;
+    game::LazyFieldBaker<float> lazyBaker;
     Registry reg;
     // Navigation for the ONE live floor. Re-baked on every floor entry; ~128 MiB
     // for the flow fields, which is affordable precisely because streaming keeps
@@ -2053,6 +2055,7 @@ int main(int argc, char** argv) {
     };
 
     while (running) {
+        lazyBaker.update_main_thread();
         std::uint64_t now = SDL_GetPerformanceCounter();
         float frameDt = static_cast<float>((now - prevTicks) / freq);
         prevTicks = now;
@@ -3160,6 +3163,7 @@ int main(int argc, char** argv) {
                         carve_sphere(stack.layer(activeLayer), op,
                                      carveScratch, carveResult);
                     if (removed > 0) {
+                        lazyBaker.request_rebake(stack.layer(activeLayer), carveResult.dirtyCells);
                         // No log, no bookkeeping: geometry persistence is the
                         // floor's own file, written when the player leaves
                         // ([save.h] modular layout) or on F5.
@@ -3417,6 +3421,7 @@ int main(int argc, char** argv) {
                             carve_sphere(stack.layer(activeLayer), op,
                                          carveScratch, carveResult);
                         if (removed > 0) {
+                            lazyBaker.request_rebake(stack.layer(activeLayer), carveResult.dirtyCells);
                             voxelMirror.mark_dirty(
                                 carveResult.dirtyCells.data(),
                                 carveResult.dirtyCells.size());

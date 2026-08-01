@@ -9,6 +9,9 @@
 
 namespace giga::nav {
 
+struct CoarseGraph;
+struct FineGraph;
+
 // ───────────────────────────────────────────────────────────────────────────────
 // ЗОЛОТОЕ ПРАВИЛО ГРАФА ЭЖИРНЯКА: Background Lazy Field Rebaker
 // 

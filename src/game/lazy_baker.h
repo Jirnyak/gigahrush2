@@ -13,7 +13,7 @@ namespace giga::game {
 
 // Снимок измененной ячейки для безопасного запекания в фоновом потоке (0% Data Race)
 struct CellSnapshot {
-    std::uint64_t key;
+    std::uint32_t key;
     SubMask mask;
     CellType type;
 };
@@ -34,17 +34,17 @@ public:
     const Field<T>& get() const { return *frontField_; }
 
     // 2. Запрос фонового допекания при выстрелах/взрывах (World::carve)
-    void request_rebake(const World& world, const std::vector<std::uint64_t>& dirtyCells) {
+    void request_rebake(const World& world, const std::vector<std::uint32_t>& dirtyCells) {
         if (dirtyCells.empty()) return;
 
         // 2.1. Формируем снимок ячеек на ГЛАВНОМ потоке (занимает < 0.001 мс)
         std::vector<CellSnapshot> snapshots;
         snapshots.reserve(dirtyCells.size());
-        for (std::uint64_t key : dirtyCells) {
-            int cx = wrap_macro(static_cast<int>((key >> 32) & 0xFFFF));
-            int cy = wrap_macro(static_cast<int>((key >> 16) & 0xFFFF));
-            int cz = wrap_macro(static_cast<int>(key & 0xFFFF));
-            snapshots.push_back({key, world.mask(cx, cy, cz), world.cell(cx, cy, cz)});
+        for (std::uint32_t key : dirtyCells) {
+            int cx = wrap_macro(static_cast<int>(key % 128));
+            int cy = wrap_macro(static_cast<int>((key / 128) % 128));
+            int cz = wrap_macro(static_cast<int>(key / 16384));
+            snapshots.push_back({key, world.grid().mask(cx, cy, cz), world.grid().cell(cx, cy, cz)});
         }
 
         // 2.2. Добавляем снимок в накопитель грязи
@@ -71,9 +71,9 @@ public:
             if (readyToSwap_.exchange(false, std::memory_order_acq_rel)) {
                 std::lock_guard<std::mutex> lock(bakedMutex_);
                 for (const auto& item : lastBakedSnapshots_) {
-                    int cx = wrap_macro(static_cast<int>((item.key >> 32) & 0xFFFF));
-                    int cy = wrap_macro(static_cast<int>((item.key >> 16) & 0xFFFF));
-                    int cz = wrap_macro(static_cast<int>(item.key & 0xFFFF));
+                    int cx = wrap_macro(static_cast<int>(item.key % 128));
+                    int cy = wrap_macro(static_cast<int>((item.key / 128) % 128));
+                    int cz = wrap_macro(static_cast<int>(item.key / 16384));
                     
                     frontField_->at(cx, cy, cz) = backField_->at(cx, cy, cz);
                 }
@@ -102,9 +102,9 @@ private:
             }
 
             for (const auto& item : batch) {
-                int cx = wrap_macro(static_cast<int>((item.key >> 32) & 0xFFFF));
-                int cy = wrap_macro(static_cast<int>((item.key >> 16) & 0xFFFF));
-                int cz = wrap_macro(static_cast<int>(item.key & 0xFFFF));
+                int cx = wrap_macro(static_cast<int>(item.key % 128));
+                int cy = wrap_macro(static_cast<int>((item.key / 128) % 128));
+                int cz = wrap_macro(static_cast<int>(item.key / 16384));
 
                 backField_->at(cx, cy, cz) = item.mask.empty() ? T{1} : T{0};
             }
