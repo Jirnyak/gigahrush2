@@ -291,16 +291,16 @@ static void test_prop_placement_rules() {
     broadPlacer.populate(broadGrid, broadPass, 12345u);
     CHECK(broadPlacer.total_placed() > 0);
 
-    // Verify flood lamps (emissive == 240)
-    const auto& lamps = inspect(broadPass).cpuInst_[static_cast<int>(PropShape::FloodLamp)];
-    bool foundLamp = false;
-    for (const auto& l : lamps) {
-        if (l.emissive == 250) {
-            foundLamp = true;
-            break;
-        }
-    }
-    CHECK(foundLamp);
+    // BareBulb/FloodLamp GPU instances moved to ECS PropMesh skin
+    // ([jirnyak.md] section 18). PropPlacer only reserves ceiling slots.
+    CHECK(inspect(broadPass).cpuInst_[static_cast<int>(PropShape::FloodLamp)].empty());
+    CHECK(inspect(broadPass).cpuInst_[static_cast<int>(PropShape::BareBulb)].empty());
+    CHECK(inspect(broadPass).cpuInst_[static_cast<int>(PropShape::Terminal)].empty());
+    CHECK(inspect(broadPass).cpuInst_[static_cast<int>(PropShape::ElectricalShield)].empty());
+    std::uint32_t cosmetic = 0;
+    for (int s = 0; s < kPropShapeCount; ++s) cosmetic += static_cast<std::uint32_t>(
+        inspect(broadPass).cpuInst_[s].size());
+    CHECK(cosmetic > 0u);
 }
 
 // 6. Test bounds checking and air cell requirement

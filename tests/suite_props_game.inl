@@ -456,6 +456,86 @@ static void test_embody_interact_terminal_applies_at_given_pos() {
     CHECK(!miss.hit);
 }
 
+
+// --- [jirnyak.md] section 18: PropPass passive skin (ECS PropMesh collect) ----
+
+static void test_collect_static_prop_mesh_instances_shapes() {
+    Registry reg;
+    World world;
+    const LayerId layer = 3;
+    const std::uint32_t seed = 0xC0FFEEu;
+
+    // Room: floor y=2, ceiling y=5, west wall at x=10 for wall devices.
+    for (int z = 10; z < 18; ++z) {
+        for (int x = 10; x < 18; ++x) {
+            world.grid().fill_cell(x, 2, z, kMatConcrete);
+            world.grid().fill_cell(x, 5, z, kMatConcrete);
+        }
+    }
+    for (int z = 10; z < 18; ++z)
+        for (int y = 3; y < 5; ++y)
+            world.grid().fill_cell(10, y, z, kMatConcrete);
+
+    const std::uint32_t nWall = game::seed_wall_interactables(reg, world, layer, seed);
+    const std::uint32_t nLamp = game::seed_ceiling_lights(reg, world, layer, seed);
+    CHECK(nWall + nLamp > 0u);
+
+    std::vector<game::PropMeshInstance> insts;
+    const std::uint32_t n = game::collect_static_prop_mesh_instances(reg, layer, insts);
+    CHECK(n == nWall + nLamp);
+    CHECK(insts.size() == static_cast<std::size_t>(n));
+
+    // PropShape ordinals (render/prop_mesh.h)
+    constexpr std::uint8_t kTerminal = 19;
+    constexpr std::uint8_t kFlood    = 21;
+    constexpr std::uint8_t kShield   = 27;
+    constexpr std::uint8_t kBulb     = 28;
+
+    std::uint32_t nTerm = 0, nShield = 0, nBulb = 0, nFlood = 0;
+    for (const auto& m : insts) {
+        if (m.shape == kTerminal) { ++nTerm; CHECK(m.matId == 3); }
+        else if (m.shape == kShield) { ++nShield; CHECK(m.matId == 4); }
+        else if (m.shape == kBulb) {
+            ++nBulb;
+            CHECK(m.emissive == 250);
+        } else if (m.shape == kFlood) {
+            ++nFlood;
+            CHECK(m.emissive == 250);
+        } else {
+            CHECK(false); // unexpected shape from wall/ceiling seed
+        }
+        CHECK(m.origin.x >= 0.0f);
+    }
+    CHECK(nTerm + nShield == nWall);
+    CHECK(nBulb + nFlood == nLamp);
+
+    // Detach drops StaticPropTag -> collect must shrink.
+    auto view = reg.view<game::SubVoxelAnchor, game::Interactable, Transform>();
+    Entity target = entt::null;
+    for (auto e : view) {
+        if (view.get<game::Interactable>(e).kind == game::Interactable::Kind::LightBulb) {
+            target = e;
+            break;
+        }
+    }
+    if (target != entt::null) {
+        const auto& a = reg.get<game::SubVoxelAnchor>(target);
+        world.grid().clear_cell(a.cx, a.cy, a.cz);
+        game::EventBus bus;
+        bus.init();
+        const std::vector<std::uint32_t> dirty{
+            static_cast<std::uint32_t>(macro_index(a.cx, a.cy, a.cz))};
+        game::anchor_validate_step(reg, world, bus, dirty);
+        CHECK(reg.all_of<game::DynamicBodyTag>(target));
+        CHECK(!reg.all_of<game::StaticPropTag>(target));
+
+        std::vector<game::PropMeshInstance> after;
+        const std::uint32_t n2 =
+            game::collect_static_prop_mesh_instances(reg, layer, after);
+        CHECK(n2 == n - 1u);
+    }
+}
+
 void test_props_game_all() {
     test_wall_interactables_seed_and_collect();
     test_wall_interactables_clear_is_layer_scoped();
@@ -467,4 +547,5 @@ void test_props_game_all() {
     test_prop_ragdoll_step_damps_angular();
     test_find_nearest_terminal_respects_reach();
     test_embody_interact_terminal_applies_at_given_pos();
+    test_collect_static_prop_mesh_instances_shapes();
 }

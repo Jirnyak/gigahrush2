@@ -22,6 +22,17 @@ constexpr std::uint32_t kSaltLight = 0x44444444u;
 // Must match PropPlacerConfig::lightChancePct.
 constexpr std::uint32_t kLightChancePct = 25u;
 
+// PropShape ordinals (render/prop_mesh.h) — game stores as uint8, never includes
+// render headers. Keep in lockstep with enum class PropShape.
+constexpr std::uint8_t kShapeTerminal         = 19;
+constexpr std::uint8_t kShapeFloodLamp        = 21;
+constexpr std::uint8_t kShapeElectricalShield = 27;
+constexpr std::uint8_t kShapeBareBulb         = 28;
+
+constexpr float kHalfPi = 1.5707963267948966f;
+constexpr float kPi     = 3.141592653589793f;
+
+
 static inline int wrap_macro_local(int c) {
     return (c % kMacroDimLocal + kMacroDimLocal) % kMacroDimLocal;
 }
@@ -192,9 +203,9 @@ void anchor_validate_step(Registry& reg, const World& world, EventBus& bus,
 Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
                   const SubVoxelAnchor& anchor, Interactable::Kind kind,
                   PropFallMode fallMode, const vec3& color, std::uint32_t meshKind,
-                  LayerId layer)
+                  LayerId layer, float yaw, std::uint8_t emissive,
+                  std::uint8_t matId, std::uint8_t animPhase, std::uint8_t flags)
 {
-    (void)meshKind;
     int cx = wrap_macro_local(anchor.cx);
     int cy = wrap_macro_local(anchor.cy);
     int cz = wrap_macro_local(anchor.cz);
@@ -215,9 +226,19 @@ Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
     // StaticPropTag -> DynamicBodyTag without destroying the entity.
     reg.emplace<StaticPropTag>(prop);
     reg.emplace<PropMeshTag>(prop);
+    // PropMesh carries PropShape ordinal + instance payload for PropPass skin.
+    PropMesh mesh{};
+    mesh.shape     = static_cast<std::uint8_t>(meshKind);
+    mesh.yaw       = yaw;
+    mesh.matId     = matId;
+    mesh.emissive  = emissive;
+    mesh.flags     = flags;
+    mesh.animPhase = animPhase;
+    reg.emplace<PropMesh>(prop, mesh);
 
     return prop;
 }
+
 
 std::uint32_t clear_layer_props(Registry& reg, LayerId layer) {
     std::vector<Entity> old_;
@@ -261,18 +282,31 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
                 const std::uint32_t rngWall = spatial_hash(x, y, z, seed ^ kSaltWall);
                 const std::uint32_t wsel = rngWall % 100;
 
+                // Wall yaw matches PropPlacer (west=0, east=pi, south=halfPi, north=3*halfPi).
+                float yawVal = 0.0f;
+                if (solidWest)        yawVal = 0.0f;
+                else if (solidEast)   yawVal = kPi;
+                else if (solidSouth)  yawVal = kHalfPi;
+                else if (solidNorth)  yawVal = kHalfPi * 3.0f;
+
                 Interactable::Kind kind;
                 float yOff;
                 vec3 color;
+                std::uint8_t shape = 0;
+                std::uint8_t matId = 4;
                 std::uint8_t face = 1; // wall
                 if (wsel >= 15 && wsel < 25) {
                     kind  = Interactable::Kind::ElectricalShield;
                     yOff  = 0.40f;
                     color = {0.18f, 0.20f, 0.22f};
+                    shape = kShapeElectricalShield;
+                    matId = 4;
                 } else if (wsel >= 25 && wsel < 35) {
                     kind  = Interactable::Kind::Terminal;
                     yOff  = 0.0f;
                     color = {0.32f, 0.35f, 0.38f};
+                    shape = kShapeTerminal;
+                    matId = 3;
                 } else {
                     continue; // radiator / empty — no Interactable
                 }
@@ -291,9 +325,12 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
                 anchor.subZ = 4;
                 anchor.face = face;
 
+                const std::uint8_t anim = static_cast<std::uint8_t>(rngWall & 0xFFu);
                 Entity e = spawn_prop(reg, world, vec3{wx, wy, wz}, anchor, kind,
-                                      PropFallMode::SimpleFall, color, 0, layer);
+                                      PropFallMode::SimpleFall, color, shape, layer,
+                                      yawVal, /*emissive*/0, matId, anim, /*flags*/0);
                 if (e != entt::null) ++count;
+
             }
         }
     }
@@ -337,10 +374,19 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
                 anchor.subZ = 4;
                 anchor.face = 2; // ceiling
 
+                // BareBulb vs FloodLamp + yaw/emissive match PropPlacer light branch.
+                const std::uint8_t shape =
+                    (rngLight & 1u) ? kShapeBareBulb : kShapeFloodLamp;
+                const float yaw = static_cast<float>(rngLight % 4u) * kHalfPi;
+                const std::uint8_t anim =
+                    static_cast<std::uint8_t>(rngLight & 0xFFu);
+
                 Entity e = spawn_prop(reg, world, vec3{wx, wy, wz}, anchor,
                                       Interactable::Kind::LightBulb,
                                       PropFallMode::RagdollRoll,
-                                      vec3{1.00f, 0.78f, 0.45f}, 0, layer);
+                                      vec3{1.00f, 0.78f, 0.45f}, shape, layer,
+                                      yaw, /*emissive*/250, /*matId*/0, anim,
+                                      /*flags*/0);
                 if (e != entt::null) ++count;
             }
         }
@@ -364,6 +410,33 @@ std::uint32_t collect_interactable_positions(const Registry& reg, LayerId layer,
     }
     return n;
 }
+
+std::uint32_t collect_static_prop_mesh_instances(const Registry& reg, LayerId layer,
+                                                 std::vector<PropMeshInstance>& out)
+{
+    std::uint32_t n = 0;
+    // StaticPropTag filters out detached DynamicBodyTag props (BodyPass owns those).
+    auto view = reg.view<const Transform, const PropMesh, const StaticPropTag>();
+    for (auto e : view) {
+        const auto& tr = view.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+        const auto& mesh = view.get<const PropMesh>(e);
+        PropMeshInstance inst{};
+        inst.shape     = mesh.shape;
+        inst.origin    = tr.pos;
+        inst.yaw       = mesh.yaw;
+        inst.matId     = mesh.matId;
+        inst.emissive  = mesh.emissive;
+        inst.flags     = mesh.flags;
+        inst.animPhase = mesh.animPhase;
+        if (reg.all_of<Renderable>(e))
+            inst.color = reg.get<Renderable>(e).color;
+        out.push_back(inst);
+        ++n;
+    }
+    return n;
+}
+
 
 InteractionHit find_nearest_interactable(const Registry& reg, Entity player,
                                          Interactable::Kind kind, float reachM)

@@ -36,6 +36,32 @@ struct StaticPropTag {};
 struct DynamicBodyTag {};
 struct PropMeshTag {};
 
+// GPU mesh skin payload for PropPass ([jirnyak.md] §18 — PropPass is a passive
+// skin over reg.view<Transform, PropMeshTag>()). shape is the PropShape ordinal
+// from render/prop_mesh.h; game never includes render headers — main maps
+// shape -> gpu::PropShape when uploading instances.
+struct PropMesh {
+    std::uint8_t shape     = 0;
+    float        yaw       = 0.0f;
+    std::uint8_t matId     = 0;
+    std::uint8_t emissive  = 0;
+    std::uint8_t flags     = 0;
+    std::uint8_t animPhase = 0;
+};
+
+// Headless POD mirror of gpu::PropInstance for tests / main upload.
+// Collect only StaticPropTag entities (detached props go to BodyPass).
+struct PropMeshInstance {
+    std::uint8_t shape     = 0;
+    vec3         origin{0.0f, 0.0f, 0.0f};
+    float        yaw       = 0.0f;
+    vec3         color{0.8f, 0.8f, 0.8f};
+    std::uint8_t matId     = 0;
+    std::uint8_t emissive  = 0;
+    std::uint8_t flags     = 0;
+    std::uint8_t animPhase = 0;
+};
+
 // AngularVelocity + Rotation live in ecs/components.h (core) so physics_step
 // can integrate them without src/sim including src/game. [jirnyak.md] §18.
 
@@ -68,11 +94,16 @@ struct InteractionHit {
 // ── Публичный API ───────────────────────────────────────────────────────────────
 
 // Spawn a static anchored prop. `layer` is stamped on Transform so multi-layer
-// streamer slots do not leak props across floors. [jirnyak.md] §18.
+// streamer slots do not leak props across floors. `meshKind` is the PropShape
+// ordinal stored on PropMesh (GPU skin). Optional `yaw`/`emissive`/`matId`/
+// `animPhase` fill the rest of the PropPass instance payload.
+// [jirnyak.md] §18.
 Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
                   const SubVoxelAnchor& anchor, Interactable::Kind kind,
                   PropFallMode fallMode, const vec3& color, std::uint32_t meshKind,
-                  LayerId layer = 0);
+                  LayerId layer = 0, float yaw = 0.0f,
+                  std::uint8_t emissive = 0, std::uint8_t matId = 0,
+                  std::uint8_t animPhase = 0, std::uint8_t flags = 0);
 
 // Destroy every SubVoxelAnchor prop on `layer` (terminals, shields, bulbs…).
 // Call before reseeding a recycled LayerId slot — same contract as
@@ -101,6 +132,13 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
 std::uint32_t collect_interactable_positions(const Registry& reg, LayerId layer,
                                              Interactable::Kind kind,
                                              std::vector<vec3>& out);
+
+// Collect StaticPropTag + PropMesh + Transform (+ optional Renderable) into a
+// flat instance list for PropPass upload. Detached DynamicBodyTag props are
+// excluded (BodyPass owns them). [jirnyak.md] §18 PropPass passive skin.
+std::uint32_t collect_static_prop_mesh_instances(const Registry& reg, LayerId layer,
+                                                 std::vector<PropMeshInstance>& out);
+
 
 bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& projVel,
                                 float projHitRadius, EventBus& bus);

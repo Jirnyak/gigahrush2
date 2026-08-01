@@ -147,45 +147,21 @@ void PropPlacer::populate(const MacroGrid& grid, PropPass& propPass, std::uint32
                         totalPlaced_++;
                         wallOccupied = true;
                     } else if (wsel < 25) {
-                        // Stairwell electrical distribution shield (ЩЭ)
-                        PropInstance es{};
-                        es.origin    = {wx, wy + 0.40f, wz};
-                        es.yaw       = yawVal;
-                        es.color     = {0.18f, 0.20f, 0.22f}; // Dark industrial steel box
-                        es.matId     = 4;
-                        es.emissive  = 0;   // Non-emissive steel body
-                        es.animPhase = static_cast<std::uint8_t>(rngWall & 0xFFu);
-                        propPass.add_instance(PropShape::ElectricalShield, es);
-                        totalPlaced_++;
+                        // ElectricalShield GPU instance owned by ECS PropMesh skin
+                        // ([jirnyak.md] §18). Reserve wall slot so radiators do not stack.
                         wallOccupied = true;
                     } else if (wsel < 35) {
-                        // Standard terminal / control panel
-                        PropInstance cab{};
-                        cab.origin    = {wx, wy, wz};
-                        cab.yaw       = yawVal;
-                        cab.color     = kCfg.cabColor;
-                        cab.matId     = 3;
-                        cab.animPhase = static_cast<std::uint8_t>(rngWall & 0xFFu);
-                        propPass.add_instance(PropShape::Terminal, cab);
-                        totalPlaced_++;
+                        // Terminal GPU instance owned by ECS PropMesh skin
+                        // ([jirnyak.md] §18). Reserve wall slot.
                         wallOccupied = true;
                     }
                 }
 
-                // 4. Lights & Incandescent Bulbs ("Лампочка Ильича на патроне")
+                // 4. Lights — ECS seed_ceiling_lights owns BareBulb/FloodLamp GPU
+                // instances ([jirnyak.md] §18 PropPass passive skin). Still reserve
+                // the ceiling slot with the same hash so other props do not stack.
                 std::uint32_t rngLight = spatial_hash(x, y, z, seed ^ kSaltLight);
                 if (solidAbove && !ceilingOccupied && (rngLight % 100 < kCfg.lightChancePct)) {
-                    PropInstance lamp{};
-                    lamp.origin    = {wx, wy + 1.55f, wz};
-                    lamp.yaw       = static_cast<float>(rngLight % 4) * kHalfPi;
-                    lamp.color     = {1.00f, 0.78f, 0.45f}; // Warm 2700K tungsten amber light
-                    lamp.matId     = 0;
-                    lamp.emissive  = 250; // Emissive filament
-                    lamp.animPhase = static_cast<std::uint8_t>(rngLight & 0xFFu); // Mains flicker phase
-
-                    PropShape lightShape = (rngLight & 1) ? PropShape::BareBulb : PropShape::FloodLamp;
-                    propPass.add_instance(lightShape, lamp);
-                    totalPlaced_++;
                     ceilingOccupied = true;
                 }
 

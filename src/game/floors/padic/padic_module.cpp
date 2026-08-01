@@ -43,10 +43,12 @@ std::uint32_t seed_padic_props(Registry& reg, const World& world, LayerId layer,
                     lightAnchor.subY = 4; 
                     lightAnchor.subZ = 6; // Ceiling is sz=6
                     
+                    // PropShape::BareBulb = 28 (render/prop_mesh.h ordinal).
                     Entity lamp = spawn_prop(reg, world, bulbPos, lightAnchor,
                                              game::Interactable::Kind::LightBulb,
                                              PropFallMode::RagdollRoll,
-                                             vec3{1.0f, 0.95f, 0.7f}, 12, layer);
+                                             vec3{1.0f, 0.95f, 0.7f}, 28, layer,
+                                             /*yaw*/0.0f, /*emissive*/250);
                     if (lamp != entt::null) {
                         ++count;
                     }

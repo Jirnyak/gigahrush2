@@ -1049,9 +1049,9 @@ std::uint32_t refresh_floor_mobs(Registry& reg, const World& world, int floorNum
 }
 
 // Floor interactive props: clear the recycled LayerId slot, seed Terminal +
-// ElectricalShield Interactables (same spatial_hash seed as propPlacer so GPU
-// cosmetics line up), then padic-only ceiling lightbulbs. [jirnyak.md] §18 —
-// sim queries Registry, never propPass.get_terminal_positions().
+// ElectricalShield + LightBulb Interactables (with PropMesh for PropPass skin),
+// then padic-only corridor bulbs. [jirnyak.md] §18 — sim queries Registry;
+// PropPass is filled via merge_ecs_prop_meshes after propPlacer cosmetics.
 std::uint32_t refresh_floor_props(Registry& reg, const World& world,
                                   int floorNumber, LayerId layer,
                                   unsigned padicSeed, game::EventBus& bus) {
@@ -1060,6 +1060,7 @@ std::uint32_t refresh_floor_props(Registry& reg, const World& world,
     const std::uint32_t wallSeed =
         1337u ^ (static_cast<std::uint32_t>(floorNumber) * 0x9e3779b9u);
     std::uint32_t count = game::seed_wall_interactables(reg, world, layer, wallSeed);
+
     // Ceiling BareBulb/FloodLamp cosmetics are still PropPlacer-driven, but
     // LightBulb Interactables live in ECS so lighting/HUD never read propPass
     // ([jirnyak.md] §18 — last get_prop_positions sim path).
@@ -1069,6 +1070,29 @@ std::uint32_t refresh_floor_props(Registry& reg, const World& world,
     return count;
 }
 
+
+
+// Upload StaticPropTag + PropMesh entities into PropPass after PropPlacer fills
+// non-interactable cosmetics. Interactable shapes (Terminal, ElectricalShield,
+// BareBulb, FloodLamp) are ECS-owned — PropPlacer only reserves their slots.
+// [jirnyak.md] §18 PropPass passive skin.
+static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
+                                  gpu::PropPass& propPass) {
+    std::vector<game::PropMeshInstance> insts;
+    game::collect_static_prop_mesh_instances(reg, layer, insts);
+    for (const auto& m : insts) {
+        if (m.shape >= static_cast<std::uint8_t>(gpu::kPropShapeCount)) continue;
+        gpu::PropInstance pi{};
+        pi.origin    = m.origin;
+        pi.yaw       = m.yaw;
+        pi.color     = m.color;
+        pi.matId     = m.matId;
+        pi.emissive  = m.emissive;
+        pi.flags     = m.flags;
+        pi.animPhase = m.animPhase;
+        propPass.add_instance(static_cast<gpu::PropShape>(m.shape), pi);
+    }
+}
 
 // Kick off this floor's navigation bake on a worker thread.
 //
@@ -1529,6 +1553,7 @@ int main(int argc, char** argv) {
         player = setup_maze(pool, reg, ground);
         if (propPass.ready()) {
             propPlacer.populate(stack.layer(ground).grid(), propPass, 1337u);
+            merge_ecs_prop_meshes(reg, ground, propPass);
         }
     } else {
         // Register every floor MODULE (number -> module + build recipe), then
@@ -1608,6 +1633,7 @@ int main(int argc, char** argv) {
             if (propPass.ready()) {
                 std::uint32_t fseed = 1337u ^ (static_cast<std::uint32_t>(currentFloor) * 0x9e3779b9u);
                 propPlacer.populate(stack.layer(l0).grid(), propPass, fseed);
+                merge_ecs_prop_meshes(reg, l0, propPass);
             }
         }
     }
@@ -2073,6 +2099,7 @@ int main(int argc, char** argv) {
             std::uint32_t fseed =
                 1337u ^ (static_cast<std::uint32_t>(currentFloor) * 0x9e3779b9u);
             propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);
+            merge_ecs_prop_meshes(reg, nl, propPass);
         }
         // ride_elevator keeps x/y and plants z=kArrivalZ. ~1-in-5 Residential
         // columns are solid at that z, so without this the body freezes in a
@@ -3846,6 +3873,7 @@ int main(int argc, char** argv) {
                                      0x9e3779b9u);
                                 propPlacer.populate(stack.layer(nl).grid(),
                                                     propPass, fseed);
+                                merge_ecs_prop_meshes(reg, nl, propPass);
                             }
                             voxelMirror.upload_all(stack.layer(nl));
                             if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
@@ -5172,6 +5200,7 @@ int main(int argc, char** argv) {
                         if (propPass.ready()) {
                             std::uint32_t fseed = 1337u ^ (static_cast<std::uint32_t>(currentFloor) * 0x9e3779b9u);
                             propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);
+                            merge_ecs_prop_meshes(reg, nl, propPass);
                         }
                         // Same clear as the keyboard ride path. There are TWO travel
                         // sites and the first fix only touched one, so a --shot
