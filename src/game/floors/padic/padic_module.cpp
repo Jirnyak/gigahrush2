@@ -16,7 +16,8 @@ bool register_padic_floor(FloorCatalog& cat) {
     return cat.claim(kPadicFloorNumber, {"padic", FloorKind::Padic});
 }
 
-std::uint32_t seed_padic_props(Registry& reg, const World& world, int number, unsigned seed, EventBus& bus) {
+std::uint32_t seed_padic_props(Registry& reg, const World& world, LayerId layer,
+                               int number, unsigned seed, EventBus& bus) {
     std::uint32_t count = 0;
     (void)seed;
     (void)number;
@@ -42,7 +43,10 @@ std::uint32_t seed_padic_props(Registry& reg, const World& world, int number, un
                     lightAnchor.subY = 4; 
                     lightAnchor.subZ = 6; // Ceiling is sz=6
                     
-                    Entity lamp = spawn_prop(reg, world, bulbPos, lightAnchor, Interactable::Kind::LightBulb, PropFallMode::RagdollRoll, vec3{1.0f, 0.95f, 0.7f}, 12);
+                    Entity lamp = spawn_prop(reg, world, bulbPos, lightAnchor,
+                                             Interactable::Kind::LightBulb,
+                                             PropFallMode::RagdollRoll,
+                                             vec3{1.0f, 0.95f, 0.7f}, 12, layer);
                     if (lamp != entt::null) {
                         ++count;
                     }

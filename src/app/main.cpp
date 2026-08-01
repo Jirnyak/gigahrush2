@@ -73,6 +73,7 @@
 #include "game/weapon_table.h"
 #include "game/event_bus.h"
 #include "game/floors/padic/padic.h"
+#include "game/prop_system.h"
 #include "game/investigate.h"
 #include "sim/fluid.h"
 #include "game/noise.h"
@@ -1043,15 +1044,23 @@ std::uint32_t refresh_floor_mobs(Registry& reg, const World& world, int floorNum
     return count;
 }
 
-// Padic-only interactive props (ceiling lightbulbs with RagdollRoll).
-// No-op on every other floor. Seed must be streamer.floor_seed_of so the
-// plan matches generate_padic_floor / door_build ([padic.h] §18).
+// Floor interactive props: clear the recycled LayerId slot, seed Terminal +
+// ElectricalShield Interactables (same spatial_hash seed as propPlacer so GPU
+// cosmetics line up), then padic-only ceiling lightbulbs. [jirnyak.md] §18 —
+// sim queries Registry, never propPass.get_terminal_positions().
 std::uint32_t refresh_floor_props(Registry& reg, const World& world,
-                                  int floorNumber, unsigned seed,
-                                  game::EventBus& bus) {
-    if (kind_for_floor(floorNumber) != game::FloorKind::Padic) return 0;
-    return game::seed_padic_props(reg, world, floorNumber, seed, bus);
+                                  int floorNumber, LayerId layer,
+                                  unsigned padicSeed, game::EventBus& bus) {
+    game::clear_layer_props(reg, layer);
+    // Must match propPlacer.populate fseed at every arrival site.
+    const std::uint32_t wallSeed =
+        1337u ^ (static_cast<std::uint32_t>(floorNumber) * 0x9e3779b9u);
+    std::uint32_t count = game::seed_wall_interactables(reg, world, layer, wallSeed);
+    if (kind_for_floor(floorNumber) == game::FloorKind::Padic)
+        count += game::seed_padic_props(reg, world, layer, floorNumber, padicSeed, bus);
+    return count;
 }
+
 
 // Kick off this floor's navigation bake on a worker thread.
 //
@@ -1575,7 +1584,7 @@ int main(int argc, char** argv) {
             LayerId l0 = reg.get<Transform>(player).layer;
             refresh_floor_mobs(reg, stack.layer(l0), 0, l0);
             refresh_floor_containers(reg, stack.layer(l0), 0, l0);
-            refresh_floor_props(reg, stack.layer(l0), 0,
+            refresh_floor_props(reg, stack.layer(l0), 0, l0,
                                streamer.floor_seed_of(registry, 0), bus);
             // Doors BEFORE the bake, and frozen for its duration: door_build leaves
             // every door open so the bake sees all-open geometry (an upper bound on
@@ -2029,7 +2038,7 @@ int main(int argc, char** argv) {
         LayerId nl = reg.get<Transform>(player).layer;
         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
         refresh_floor_containers(reg, stack.layer(nl), currentFloor, nl);
-        refresh_floor_props(reg, stack.layer(nl), currentFloor,
+        refresh_floor_props(reg, stack.layer(nl), currentFloor, nl,
                            streamer.floor_seed_of(registry, currentFloor), bus);
         // Re-empty crates already looted on a prior visit to this floor.
         // Deterministic spawn would otherwise refill them — the brick this pair
@@ -3249,9 +3258,14 @@ int main(int argc, char** argv) {
                             game::noise_publish(noiseField, activeLayer, ppos, np, 0);
                         }
 
-                        // 2. Terminal / ControlPanel interaction
-                        if (!handled && propPass.ready()) {
-                            std::vector<vec3> terms = propPass.get_terminal_positions();
+                        // 2. Terminal / ControlPanel interaction — ECS collect, not PropPass.
+                        if (!handled && activeLayer != kInvalidLayer) {
+                            std::vector<game::PropRecord> termRecs;
+                            game::collect_props_of_kind(reg, activeLayer,
+                                                        Interactable::Kind::Terminal, termRecs);
+                            std::vector<vec3> terms;
+                            terms.reserve(termRecs.size());
+                            for (const auto& rec : termRecs) terms.push_back(rec.pos);
                             game::TerminalInteractResult tres = game::embody_interact_terminal(
                                 reg, stack.layer(activeLayer), doors, activeLayer, ppos, 4.0f, terms);
                             if (tres.interacted) {
@@ -3274,10 +3288,14 @@ int main(int argc, char** argv) {
                             }
                         }
 
-                        // 3. ElectricalShield interaction / power cut sabotage
-                        if (!handled && propPass.ready()) {
-                            std::vector<vec3> shields = propPass.get_prop_positions(gpu::PropShape::ElectricalShield);
-                            for (const vec3& sp : shields) {
+                        // 3. ElectricalShield interaction / power cut sabotage — ECS.
+                        if (!handled && activeLayer != kInvalidLayer) {
+                            std::vector<game::PropRecord> shields;
+                            game::collect_props_of_kind(reg, activeLayer,
+                                                        Interactable::Kind::ElectricalShield,
+                                                        shields);
+                            for (const auto& rec : shields) {
+                                const vec3& sp = rec.pos;
                                 float dx = wrap_delta_f(ppos.x, sp.x, kWorldExtent);
                                 float dy = ppos.y - sp.y;
                                 float dz = wrap_delta_f(ppos.z, sp.z, kWorldExtent);
@@ -3795,7 +3813,7 @@ int main(int argc, char** argv) {
                             refresh_floor_mobs(reg, stack.layer(nl), currentFloor,
                                                nl);
                             refresh_floor_props(
-                                reg, stack.layer(nl), currentFloor,
+                                reg, stack.layer(nl), currentFloor, nl,
                                 streamer.floor_seed_of(registry, currentFloor),
                                 bus);
                             apply_floor_file(stack.layer(nl), currentFloor);
@@ -3879,8 +3897,12 @@ int main(int argc, char** argv) {
                 if ((craftWanted || scrapWanted) && reg.valid(player)) {
                     const Transform& ct = reg.get<Transform>(player);
                     bool nearTerm = false;
-                    if (propPass.ready()) {
-                        for (const vec3& tp : propPass.get_terminal_positions()) {
+                    {
+                        std::vector<game::PropRecord> termRecs;
+                        game::collect_props_of_kind(reg, activeLayer,
+                                                    Interactable::Kind::Terminal, termRecs);
+                        for (const auto& rec : termRecs) {
+                            const vec3& tp = rec.pos;
                             float dx = tp.x - ct.pos.x, dy = tp.y - ct.pos.y, dz = tp.z - ct.pos.z;
                             if (dx * dx + dy * dy + dz * dz < 16.0f) { nearTerm = true; break; }
                         }
@@ -4548,8 +4570,12 @@ int main(int argc, char** argv) {
         if (showCraftingWindow && reg.valid(player)) {
             const Transform& ct = reg.get<Transform>(player);
             bool nearTerm = false;
-            if (propPass.ready()) {
-                for (const vec3& tp : propPass.get_terminal_positions()) {
+            {
+                std::vector<game::PropRecord> termRecs;
+                game::collect_props_of_kind(reg, activeLayer,
+                                            Interactable::Kind::Terminal, termRecs);
+                for (const auto& rec : termRecs) {
+                    const vec3& tp = rec.pos;
                     float dx = tp.x - ct.pos.x, dy = tp.y - ct.pos.y, dz = tp.z - ct.pos.z;
                     if (dx * dx + dy * dy + dz * dz < 16.0f) { nearTerm = true; break; }
                 }
@@ -5121,7 +5147,7 @@ int main(int argc, char** argv) {
                         refresh_floor_containers(reg, stack.layer(nl),
                                                  currentFloor, nl);
                         refresh_floor_props(
-                            reg, stack.layer(nl), currentFloor,
+                            reg, stack.layer(nl), currentFloor, nl,
                             streamer.floor_seed_of(registry, currentFloor), bus);
                         // Re-empty crates already looted on a prior visit.
                         // Same seam as keyboard ride + F9 apply. [save.h]

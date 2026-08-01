@@ -65,7 +65,10 @@ void generate_padic_floor(World& world, int number, const FloorSpec& spec,
 struct Doorway;
 std::uint32_t padic_doorways(int number, unsigned seed, std::vector<Doorway>& out);
 
-// Seed props and test-balls for the Padic floor (ceiling lightbulbs & rolling/anchored test-balls)
-std::uint32_t seed_padic_props(Registry& reg, const World& world, int number, unsigned seed, EventBus& bus);
+// Seed props and test-balls for the Padic floor (ceiling lightbulbs & rolling/anchored
+// test-balls). layer tags Transform so a recycled LayerId slot can be cleared on the
+// next arrival ([prop_system.h]).
+std::uint32_t seed_padic_props(Registry& reg, const World& world, LayerId layer,
+                               int number, unsigned seed, EventBus& bus);
 
 } // namespace giga::game

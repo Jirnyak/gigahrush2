@@ -50,16 +50,39 @@ struct PendingDetachedProp {
 
 // ── Публичный API ───────────────────────────────────────────────────────────────
 
-Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos, const SubVoxelAnchor& anchor,
-                   Interactable::Kind kind, PropFallMode fallMode, 
-                   const vec3& color, std::uint32_t meshKind);
+// Spawn a static anchored prop. `layer` is stamped on Transform so multi-layer
+// streamer slots do not leak props across floors. [jirnyak.md] §18.
+Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
+                  const SubVoxelAnchor& anchor, Interactable::Kind kind,
+                  PropFallMode fallMode, const vec3& color, std::uint32_t meshKind,
+                  LayerId layer = 0);
 
-bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& projVel, 
+// Destroy every SubVoxelAnchor prop on `layer` (terminals, shields, bulbs…).
+// Call before reseeding a recycled LayerId slot — same contract as
+// despawn_layer_mobs / refresh_floor_containers. [jirnyak.md] §18.
+std::uint32_t clear_layer_props(Registry& reg, LayerId layer);
+
+// Seed Terminal + ElectricalShield Interactables by scanning MacroGrid with the
+// same spatial_hash / wall-device rules as gpu::PropPlacer (kSaltWall branch).
+// Positions match propPass cosmetics when both use the same seed
+// (1337u ^ floor*0x9e3779b9). Returns count successfully spawned.
+// [jirnyak.md] §18 — sim must not read propPass.get_terminal_positions().
+std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
+                                      LayerId layer, std::uint32_t seed);
+
+// Collect world positions of active Interactables of `kind` on `layer`.
+// Replaces propPass.get_terminal_positions() / get_prop_positions for sim+HUD.
+std::uint32_t collect_interactable_positions(const Registry& reg, LayerId layer,
+                                             Interactable::Kind kind,
+                                             std::vector<vec3>& out);
+
+bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& projVel,
                                 float projHitRadius, EventBus& bus);
 
-void anchor_validate_step(Registry& reg, const World& world, EventBus& bus, 
-                         const std::vector<std::uint64_t>& dirtyCells);
+void anchor_validate_step(Registry& reg, const World& world, EventBus& bus,
+                          const std::vector<std::uint64_t>& dirtyCells);
 
-bool prop_interact_step(Registry& reg, Entity player, Interactable::Kind targetKind, EventBus& bus);
+bool prop_interact_step(Registry& reg, Entity player, Interactable::Kind targetKind,
+                        EventBus& bus);
 
 } // namespace giga::game

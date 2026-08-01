@@ -1,6 +1,7 @@
 #include "game/prop_system.h"
 #include "ecs/components.h"
 #include "world/macro_grid.h"
+#include "world/materials.h"
 #include "world/world.h"
 #include <vector>
 #include <unordered_set>
@@ -10,6 +11,10 @@ namespace giga::game {
 
 constexpr int kMacroDim = 128;
 constexpr float kWorldExtent = 256.0f; // 128 * 2.0m
+
+// Must match gpu::PropPlacer kSaltWall so ECS interactables land on the same
+// cells as the GPU cosmetic Terminal / ElectricalShield instances.
+constexpr std::uint32_t kSaltWall = 0x33333333u;
 
 static inline int wrap_macro(int c) {
     return (c % kMacroDim + kMacroDim) % kMacroDim;
@@ -35,14 +40,30 @@ static inline std::uint64_t cell_key(int cx, int cy, int cz) {
            (static_cast<std::uint64_t>(cz & 0xFFFF));
 }
 
-static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode, 
-                               const vec3& impulse, const vec3& pos, const vec3& color, 
-                               std::uint32_t meshKind, EventBus& bus) 
+// Same spatial_hash as render/prop_placer.cpp (must stay bit-identical).
+static inline std::uint32_t spatial_hash(int x, int y, int z, std::uint32_t seed) {
+    std::uint32_t h = static_cast<std::uint32_t>(x) * 73856093u ^
+                      static_cast<std::uint32_t>(y) * 19349663u ^
+                      static_cast<std::uint32_t>(z) * 83492791u ^ seed;
+    h = (h ^ (h >> 16)) * 0x45d9f3bu;
+    h = (h ^ (h >> 16)) * 0x45d9f3bu;
+    return h ^ (h >> 16);
+}
+
+static inline bool is_solid_cell(CellType type) {
+    return type != kCellAir;
+}
+
+static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
+                               const vec3& impulse, const vec3& pos, const vec3& color,
+                               std::uint32_t meshKind, EventBus& bus)
 {
+    (void)meshKind;
     if (mode == PropFallMode::GpuHandoff) {
-        bus.publish(EventType::ItemTransferred, static_cast<uint32_t>(pos.x), static_cast<uint32_t>(pos.y), static_cast<uint32_t>(pos.z), 0);
+        bus.publish(EventType::ItemTransferred, static_cast<uint32_t>(pos.x),
+                    static_cast<uint32_t>(pos.y), static_cast<uint32_t>(pos.z), 0);
         reg.destroy(prop);
-    } 
+    }
     else if (mode == PropFallMode::RagdollRoll) {
         reg.remove<SubVoxelAnchor>(prop);
         reg.emplace_or_replace<GravityAffected>(prop);
@@ -55,7 +76,7 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
         // BodyPass needs AABB — without it a detached prop is invisible.
         if (!reg.all_of<AABB>(prop))
             reg.emplace<AABB>(prop, AABB{vec3{0.2f, 0.2f, 0.2f}});
-    } 
+    }
     else {
         reg.remove<SubVoxelAnchor>(prop);
         reg.emplace_or_replace<GravityAffected>(prop);
@@ -66,8 +87,8 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
 
 }
 
-bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& projVel, 
-                                float projHitRadius, EventBus& bus) 
+bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& projVel,
+                                float projHitRadius, EventBus& bus)
 {
     const float radiusSq = projHitRadius * projHitRadius;
     const int pcx = wrap_macro(static_cast<int>(projPos.x / kCellSize));
@@ -82,10 +103,10 @@ bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& 
     auto view = reg.view<Transform, SubVoxelAnchor, PropFallMode>();
     for (auto entity : view) {
         const auto& anchor = view.get<SubVoxelAnchor>(entity);
-        
+
         if (std::abs(wrap_delta_i(anchor.cx, pcx, kMacroDim)) > 1 ||
             std::abs(wrap_delta_i(anchor.cy, pcy, kMacroDim)) > 1 ||
-            std::abs(wrap_delta_i(anchor.cz, pcz, kMacroDim)) > 1) 
+            std::abs(wrap_delta_i(anchor.cz, pcz, kMacroDim)) > 1)
         {
             continue;
         }
@@ -112,8 +133,8 @@ bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& 
     return false;
 }
 
-void anchor_validate_step(Registry& reg, const World& world, EventBus& bus, 
-                         const std::vector<std::uint64_t>& dirtyCells) 
+void anchor_validate_step(Registry& reg, const World& world, EventBus& bus,
+                         const std::vector<std::uint64_t>& dirtyCells)
 {
     if (dirtyCells.empty()) return;
 
@@ -127,7 +148,7 @@ void anchor_validate_step(Registry& reg, const World& world, EventBus& bus,
     auto view = reg.view<Transform, SubVoxelAnchor, PropFallMode>();
     for (auto entity : view) {
         const auto& anchor = view.get<SubVoxelAnchor>(entity);
-        
+
         std::uint64_t key = cell_key(wrap_macro(anchor.cx), wrap_macro(anchor.cy), wrap_macro(anchor.cz));
 
         if (dirtySet.contains(key)) {
@@ -144,10 +165,12 @@ void anchor_validate_step(Registry& reg, const World& world, EventBus& bus,
     }
 }
 
-Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos, const SubVoxelAnchor& anchor,
-                   Interactable::Kind kind, PropFallMode fallMode, 
-                   const vec3& color, std::uint32_t meshKind) 
+Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
+                  const SubVoxelAnchor& anchor, Interactable::Kind kind,
+                  PropFallMode fallMode, const vec3& color, std::uint32_t meshKind,
+                  LayerId layer)
 {
+    (void)meshKind;
     int cx = wrap_macro(anchor.cx);
     int cy = wrap_macro(anchor.cy);
     int cz = wrap_macro(anchor.cz);
@@ -157,7 +180,7 @@ Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos, const
     }
 
     Entity prop = reg.create();
-    reg.emplace<Transform>(prop, worldPos, static_cast<LayerId>(0));
+    reg.emplace<Transform>(prop, worldPos, layer);
     reg.emplace<SubVoxelAnchor>(prop, SubVoxelAnchor{cx, cy, cz, anchor.subX, anchor.subY, anchor.subZ, anchor.face});
     reg.emplace<Interactable>(prop, kind, 2.5f, true);
     reg.emplace<PropFallMode>(prop, fallMode);
@@ -166,14 +189,113 @@ Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos, const
     return prop;
 }
 
+std::uint32_t clear_layer_props(Registry& reg, LayerId layer) {
+    std::vector<Entity> old_;
+    // SubVoxelAnchor marks every static prop (terminals, shields, padic bulbs).
+    // Detached ragdolls lose the anchor and are left alone — they belong to the
+    // live sim, not the floor roster.
+    auto view = reg.view<const SubVoxelAnchor, const Transform>();
+    for (auto e : view) {
+        if (view.get<const Transform>(e).layer == layer)
+            old_.push_back(e);
+    }
+    for (Entity e : old_) reg.destroy(e);
+    return static_cast<std::uint32_t>(old_.size());
+}
+
+std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
+                                      LayerId layer, std::uint32_t seed)
+{
+    const MacroGrid& grid = world.grid();
+    std::uint32_t count = 0;
+    constexpr float kCell = kCellSize;
+
+    // Mirror PropPlacer::populate wall-device branch (wsel bands 15-25 shield,
+    // 25-35 terminal). Floor support = solidBelow on Y (same convention as
+    // prop_placer). Anchor sub-voxels point into the solid floor cell so
+    // spawn_prop's solid() check and anchor_validate_step stay honest.
+    for (int z = 0; z < kMacroDim; ++z) {
+        for (int y = 0; y < kMacroDim; ++y) {
+            for (int x = 0; x < kMacroDim; ++x) {
+                if (grid.cell(x, y, z) != kCellAir) continue;
+
+                const CellType below = grid.cell(x, y - 1, z);
+                if (!is_solid_cell(below)) continue;
+
+                const bool solidWest  = is_solid_cell(grid.cell(x - 1, y, z));
+                const bool solidEast  = is_solid_cell(grid.cell(x + 1, y, z));
+                const bool solidNorth = is_solid_cell(grid.cell(x, y, z + 1));
+                const bool solidSouth = is_solid_cell(grid.cell(x, y, z - 1));
+                if (!(solidWest || solidEast || solidNorth || solidSouth)) continue;
+
+                const std::uint32_t rngWall = spatial_hash(x, y, z, seed ^ kSaltWall);
+                const std::uint32_t wsel = rngWall % 100;
+
+                Interactable::Kind kind;
+                float yOff;
+                vec3 color;
+                std::uint8_t face = 1; // wall
+                if (wsel >= 15 && wsel < 25) {
+                    kind  = Interactable::Kind::ElectricalShield;
+                    yOff  = 0.40f;
+                    color = {0.18f, 0.20f, 0.22f};
+                } else if (wsel >= 25 && wsel < 35) {
+                    kind  = Interactable::Kind::Terminal;
+                    yOff  = 0.0f;
+                    color = {0.32f, 0.35f, 0.38f};
+                } else {
+                    continue; // radiator / empty — no Interactable
+                }
+
+                const float wx = static_cast<float>(x) * kCell;
+                const float wy = static_cast<float>(y) * kCell + yOff;
+                const float wz = static_cast<float>(z) * kCell;
+
+                // Anchor into the solid floor cell under the air cell (Y-1).
+                SubVoxelAnchor anchor;
+                anchor.cx   = x;
+                anchor.cy   = wrap_macro(y - 1);
+                anchor.cz   = z;
+                anchor.subX = 4;
+                anchor.subY = 7; // top of floor cell
+                anchor.subZ = 4;
+                anchor.face = face;
+
+                Entity e = spawn_prop(reg, world, vec3{wx, wy, wz}, anchor, kind,
+                                      PropFallMode::SimpleFall, color, 0, layer);
+                if (e != entt::null) ++count;
+            }
+        }
+    }
+    return count;
+}
+
+std::uint32_t collect_interactable_positions(const Registry& reg, LayerId layer,
+                                             Interactable::Kind kind,
+                                             std::vector<vec3>& out)
+{
+    std::uint32_t n = 0;
+    auto view = reg.view<const Transform, const Interactable>();
+    for (auto e : view) {
+        const auto& tr = view.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+        const auto& ia = view.get<const Interactable>(e);
+        if (!ia.active || ia.kind != kind) continue;
+        out.push_back(tr.pos);
+        ++n;
+    }
+    return n;
+}
+
 bool prop_interact_step(Registry& reg, Entity player, Interactable::Kind targetKind, EventBus& bus) {
+    (void)bus;
     if (!reg.valid(player) || !reg.all_of<Transform>(player)) return false;
 
     const vec3 ppos = reg.get<Transform>(player).pos;
-    
+
     if (targetKind == Interactable::Kind::LightBulb) {
         vec3 bulbPos = ppos + vec3{0.0f, 1.8f, 0.0f};
-        
+
         SubVoxelAnchor anchor;
         anchor.cx = static_cast<int>(bulbPos.x / kCellSize);
         anchor.cy = static_cast<int>(bulbPos.y / kCellSize);
