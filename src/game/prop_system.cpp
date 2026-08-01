@@ -4,13 +4,22 @@
 
 namespace giga::game {
 
+static inline int wrap_macro(int c) {
+    return (c % 128 + 128) % 128;
+}
+
 Entity spawn_prop(Registry& reg, const vec3& worldPos, const SubVoxelAnchor& anchor,
                    Interactable::Kind kind, PropFallMode fallMode, 
                    const vec3& color, std::uint32_t meshKind) {
+    SubVoxelAnchor wrappedAnchor = anchor;
+    wrappedAnchor.cx = wrap_macro(anchor.cx);
+    wrappedAnchor.cy = wrap_macro(anchor.cy);
+    wrappedAnchor.cz = wrap_macro(anchor.cz);
+
     Entity prop = reg.create();
     
     reg.emplace<Transform>(prop, worldPos, 0);
-    reg.emplace<SubVoxelAnchor>(prop, anchor);
+    reg.emplace<SubVoxelAnchor>(prop, wrappedAnchor);
     reg.emplace<Interactable>(prop, kind, 2.5f, true);
     reg.emplace<PropFallMode>(prop, fallMode);
     reg.emplace<Renderable>(prop, color);
