@@ -2079,11 +2079,16 @@ int main(int argc, char** argv) {
             if (ev.type != game::EventType::NpcDied) continue;
             if (ev.type == game::EventType::NpcDied) {
                 // `b` is the mob kind, 0xFF when the dead thing was not a monster.
-                if (ev.b != 0xFFu)
+                if (ev.b != 0xFFu) {
                     game::contract_on_kill(contracts, static_cast<std::uint8_t>(ev.b));
+                    game::quest_on_kill(quests, static_cast<std::uint8_t>(ev.b));
+                }
                 // `a` is the pool id, kInvalidNpc when the dead thing had no record.
-                if (ev.a != game::kInvalidNpc)
+                // Giver death fails Active contracts AND Active quests the same way.
+                if (ev.a != game::kInvalidNpc) {
                     game::contract_on_giver_died(contracts, ev.a);
+                    game::quest_on_giver_died(quests, ev.a);
+                }
 
                 if (particlePass.ready()) {
                     vec3 deathPos = reg.valid(player) ? reg.get<Transform>(player).pos : vec3{64.0f, 4.0f, 64.0f};

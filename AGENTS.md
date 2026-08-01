@@ -1,5 +1,19 @@
 # Agent Instructions — gigahrush2
 
+> **MANDATORY SESSION INTAKE & ROUTING:**
+> Every agent (and spawned subagent) working on GigaHrush 2 MUST read the following canonical documents before initiating non-trivial architectural, gameplay, or code modifications:
+> 1. [AGENTS.md](AGENTS.md) (Operational mandates, DOD/ECS rules, no-exceptions invariant)
+> 2. [README.md](README.md) (Graf Irnyak / Klaus Schwab Architectural Manifesto & World Invariants)
+> 3. [jirnyak.md](jirnyak.md) (Purge Mandate & Data-Driven Content Boundaries)
+> 4. [master_prompt.md](master_prompt.md) (Owner standing directives & unlimited token policy)
+> 5. [ARCHITECTURE.md](ARCHITECTURE.md) (System architecture & pipeline specification)
+
+> **GRAF IRNYAK (KLAUS SCHWAB) ARCHITECTURAL MANIFESTO:**
+> - **Feature without live gameplay proof = DECLINED.**
+> - **Feature not based on any fundamental core system = DECLINED.**
+> - **All Content is Data-Driven:** Item drops, mob traits, stats, loot tables belong in CSVs (`data/items.csv`, `data/mobs.csv`), never hardcoded `if`-chains.
+> - **Ruthless Purge Policy ("Нещадная чистка"):** Cut and delete legacy meshing hacks, multi-colored striping, hardcoded keybindings, and random unintegrated mechanics.
+
 > **gigahrush2 is a universal voxel *core engine*, not a game.** It provides the
 > substrate — a toroidal 128³ macro world, 8³ sub-voxel masks, runtime typed
 > fields, vector gravity, a level stack, swept-AABB physics, cellular fluid, an
