@@ -5,6 +5,7 @@
 #include <cmath>
 #include "core/math.h"
 #include "ecs/registry.h"
+#include "ecs/components.h"
 #include "game/event_bus.h"
 #include "world/world.h"
 #include "world/level_stack.h"
@@ -29,12 +30,13 @@ struct Interactable {
     bool active = true;
 };
 
-// Empty filter tags ([jirnyak.md] §18). Static anchored props carry StaticPropTag
-// + PropMeshTag; on detach the entity keeps identity and swaps StaticPropTag ->
-// DynamicBodyTag so BodyPass/PropPass can filter without recreate.
-struct StaticPropTag {};
-struct DynamicBodyTag {};
-struct PropMeshTag {};
+// Filter tags live in ecs/components.h (core) so BodyPass can skip StaticPropTag
+// without including the game layer. Re-export into game:: for existing call sites
+// that write game::StaticPropTag / game::DynamicBodyTag / game::PropMeshTag.
+using StaticPropTag  = giga::StaticPropTag;
+using DynamicBodyTag = giga::DynamicBodyTag;
+using PropMeshTag    = giga::PropMeshTag;
+
 
 // GPU mesh skin payload for PropPass ([jirnyak.md] §18 — PropPass is a passive
 // skin over reg.view<Transform, PropMeshTag>()). shape is the PropShape ordinal

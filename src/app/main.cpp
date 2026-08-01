@@ -5047,9 +5047,12 @@ int main(int argc, char** argv) {
                 voxelMirror.mark_dirty(doors.dirtyCells.data(),
                                        doors.dirtyCells.size());
                 // Door mask edits free/occupy macro cells — detach props
-                // whose anchors no longer have solid support. [jirnyak.md] §18
-                game::anchor_validate_step(reg, stack.layer(activeLayer), bus,
-                                           doors.dirtyCells);
+                // whose anchors no longer have solid support. [jirnyak.md] s18
+                // Rebuild PropPass when anything detaches so GPU drops stale skins.
+                if (game::anchor_validate_step(reg, stack.layer(activeLayer), bus,
+                                               doors.dirtyCells) > 0) {
+                    merge_ecs_prop_meshes(reg, activeLayer, propPass);
+                }
                 // Same field-rebake debt carve pays: doors mutate occupancy
                 // masks the danger/scent fields sample. [lazy_baker.h]
                 lazyBaker.request_rebake(stack.layer(activeLayer),

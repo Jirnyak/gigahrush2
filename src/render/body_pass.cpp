@@ -270,6 +270,9 @@ void BodyPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
     for (auto e : view) {
         // Don't draw the viewer's own body: it would fill the first-person view.
         if (reg.all_of<CameraTag>(e)) continue;
+        // Static furniture is PropPass-only ([jirnyak.md] section 18). Detached
+        // props drop StaticPropTag for DynamicBodyTag and fall through as cubes.
+        if (reg.all_of<StaticPropTag>(e)) continue;
         const Transform& tr = view.get<const Transform>(e);
         if (tr.layer != layer) continue;
 

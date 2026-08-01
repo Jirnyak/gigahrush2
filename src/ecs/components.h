@@ -96,7 +96,7 @@ struct Renderable {
     vec3 color{0.80f, 0.80f, 0.82f};
 };
 
-// Angular motion for ragdoll / tumbling props ([jirnyak.md] §18).
+// Angular motion for ragdoll / tumbling props ([jirnyak.md] section 18).
 //
 // Lives in the CORE — not the game layer — for the same reason as
 // SelfIntegrating / NoClip: `physics_step` (src/sim) must integrate them, and
@@ -113,5 +113,16 @@ struct Rotation {
     vec3 euler{0.0f, 0.0f, 0.0f}; // radians, XYZ
 };
 
-} // namespace giga
+// Prop render-path filter tags ([jirnyak.md] section 18).
+//
+// Live in the CORE — not the game layer — for the same reason as CameraTag /
+// Renderable: BodyPass (src/render) must filter StaticPropTag so static
+// furniture is PropPass-only, and src/render may not include src/game. The
+// game attaches these at spawn; on detach it swaps StaticPropTag ->
+// DynamicBodyTag without destroying the entity. PropMeshTag marks entities
+// that carry a GPU mesh skin payload (the payload itself stays in game).
+struct StaticPropTag {};
+struct DynamicBodyTag {};
+struct PropMeshTag {};
 
+} // namespace giga
