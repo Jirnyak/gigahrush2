@@ -146,3 +146,7 @@ shot: saved -> shots/shot_mag.png (floor -8, 901 frames)
 [mag] FINAL has=1 mag=7 weapon=4 shots=42 hits=13 rideDone=1
 [mag] PROOF=GREEN
 ```
+
+## 2026-08-01 RE-PAR1 post-MAGSHOT
+- Read-only travel seam re-grep: 11/11 OK (place_body_safely×2, ai_release×2 main + floor_stream, elevator mag/rpg, QKILL, MAGSHOT harness).
+- No code change. OPEN still empty.

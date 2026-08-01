@@ -541,3 +541,14 @@ Command: `gigahrush2.exe --shot shots/shot_mag.png --frames 900 --ride 1 --actio
 MAGSHOT CLOSED. OPEN required queue still empty. Stay off `src/render/**`.
 Next OPEN: idle pull/push / re-PAR1 after foreign main; no invent.
 
+## RE-PAR1 2026-08-01 ~10:45 — post-MAGSHOT travel seam re-grep (read-only)
+
+11/11 OK, fails=0:
+- place_body_safely ×2 in main (keyboard L2047 + --shot travel L5139)
+- ai_release ×2 in main (keyboard leave L1971 + --shot leave L5063)
+- floor_stream unload still calls ai_release
+- elevator still restores PlayerRanged (hadRanged) + RpgStats
+- QKILL wires present (quest_on_kill + quest_on_giver_died)
+- MAGSHOT harness present (`--action mag` + PROOF lines)
+
+No code change. OPEN required queue still empty. Stay off src/render/**.
