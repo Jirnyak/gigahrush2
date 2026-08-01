@@ -524,7 +524,12 @@ if(GIGA_BUILD_TESTS)
     # PropMesh + collect_static_prop_mesh_instances; Terminal/Shield/BareBulb/FloodLamp
     # GPU instances from ECS (merge_ecs_prop_meshes after propPlacer.populate);
     # suite_props_game shape collect CHECKs.
-        PASS_REGULAR_EXPRESSION "game_test: 230985 checks, 0 failures")
+    # 230985 -> 231009 (+24) on 2026-08-01: Section 18 Corpse/Loot Interactable —
+    # finalize_deaths tags Kind::Corpse; drop_mob_loot tags Kind::Loot; empty
+    # searched corpses deactivate; main HUD/E use find_nearest; doors.dirtyCells
+    # feed lazyBaker; suite_props_game corpse/loot kind-filter CHECKs.
+        PASS_REGULAR_EXPRESSION "game_test: 231009 checks, 0 failures")
+
 
 
     # Text gate for the AGENTS.md rules that no compiler enforces on every host.

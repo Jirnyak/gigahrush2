@@ -620,21 +620,26 @@ static void test_corpse_and_loot_are_interactable() {
         CHECK(n > 0);
 
     }
-    Entity lootEnt = entt::null;
+    std::uint32_t lootCount = 0;
     for (auto e : reg.view<const Pickup, const game::Interactable>()) {
         const game::Interactable& ia = reg.get<const game::Interactable>(e);
-        if (ia.kind == game::Interactable::Kind::Loot && ia.active) {
-            lootEnt = e;
-            break;
-        }
+        if (ia.kind == game::Interactable::Kind::Loot && ia.active) ++lootCount;
     }
-    CHECK(lootEnt != entt::null);
+    CHECK(lootCount > 0);
     {
+        // drop_mob_loot can scatter several pickups; find_nearest returns the
+        // closest active Kind::Loot — not the first view iteration order.
         const game::InteractionHit hit = game::find_nearest_interactable(
             reg, player, game::Interactable::Kind::Loot, 3.0f);
         CHECK(hit.hit);
-        CHECK(hit.entity == lootEnt);
+        CHECK(reg.valid(hit.entity));
+        CHECK(reg.all_of<Pickup>(hit.entity));
+        CHECK(reg.all_of<game::Interactable>(hit.entity));
+        CHECK(reg.get<game::Interactable>(hit.entity).kind ==
+              game::Interactable::Kind::Loot);
+        CHECK(reg.get<game::Interactable>(hit.entity).active);
     }
+
     // Kind filter: Loot must not answer a Corpse query (corpse already inactive).
     {
         const game::InteractionHit hit = game::find_nearest_interactable(
