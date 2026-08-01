@@ -70,6 +70,50 @@ bool sweep_axis(const World& w, vec3& pos, vec3 half, int comp, float delta) {
     return true;
 }
 
+float axis_of(const vec3& v, int comp) {
+    return comp == 0 ? v.x : comp == 1 ? v.y : v.z;
+}
+
+// One sub-voxel atom of smooth step-up, plus the skin that lets the retried
+// sweep clear the step's top surface exactly. The manifest's rule: a single
+// 0.25 m atom is walkable without a jump; two atoms are a wall.
+constexpr float kStepRise = kVoxelSize + 0.01f;
+constexpr float kStepGainEps = 1e-4f;
+
+// Sweep one axis with auto-step. A grounded walker blocked on a non-up axis
+// retries the same move lifted one atom, keeps it only if it actually gains
+// ground (a real wall gains nothing), then settles flush onto the step top.
+// Universal: `upComp/upSign` come from the gravity vector's dominant axis, so
+// walkers on regional/inverted gravity step the same way; flyers and
+// projectiles never pass `canStep` and keep the plain sweep.
+bool sweep_axis_walk(const World& w, vec3& pos, vec3 half, int comp,
+                     float delta, bool canStep, int upComp, float upSign) {
+    vec3 flush = pos;
+    const bool hit = sweep_axis(w, flush, half, comp, delta);
+    if (!hit || !canStep || comp == upComp) {
+        pos = flush;
+        return hit;
+    }
+
+    vec3 lifted = pos;
+    if (sweep_axis(w, lifted, half, upComp, kStepRise * upSign)) {
+        pos = flush; // no headroom above — nothing to step onto
+        return true;
+    }
+    const bool hitLifted = sweep_axis(w, lifted, half, comp, delta);
+    const float dir = delta > 0.0f ? 1.0f : -1.0f;
+    const float gain =
+        (axis_of(lifted, comp) - axis_of(flush, comp)) * dir;
+    if (gain <= kStepGainEps) {
+        pos = flush; // a real wall, not a one-atom step
+        return true;
+    }
+    // Settle flush onto the step; the landing is this sweep's own clamp.
+    sweep_axis(w, lifted, half, upComp, -kStepRise * upSign);
+    pos = lifted;
+    return hitLifted;
+}
+
 } // namespace
 
 void physics_step(Registry& reg, LevelStack& stack, float dt,
@@ -124,22 +168,31 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
             // captured before collisions zero the velocity.
             bool movingDown = dot(vel.v, up) <= 0.0f;
 
-            // Integrate + collide, one axis at a time.
-            bool hitX = sweep_axis(w, tr.pos, half, 0, vel.v.x * h);
-            bool hitY = sweep_axis(w, tr.pos, half, 1, vel.v.y * h);
-            bool hitZ = sweep_axis(w, tr.pos, half, 2, vel.v.z * h);
+            // The dominant axis of "up", shared by the auto-step and the
+            // ground check below.
+            float ax = std::fabs(up.x), ay = std::fabs(up.y),
+                  az = std::fabs(up.z);
+            int upComp = (az >= ax && az >= ay) ? 2 : (ay >= ax) ? 1 : 0;
+            float upSign = axis_of(up, upComp) >= 0.0f ? 1.0f : -1.0f;
+            auto* g = reg.try_get<GravityAffected>(e);
+            const bool canStep = g && g->grounded;
+
+            // Integrate + collide, one axis at a time; grounded walkers step
+            // over single sub-voxel atoms instead of snagging on them.
+            bool hitX = sweep_axis_walk(w, tr.pos, half, 0, vel.v.x * h,
+                                        canStep, upComp, upSign);
+            bool hitY = sweep_axis_walk(w, tr.pos, half, 1, vel.v.y * h,
+                                        canStep, upComp, upSign);
+            bool hitZ = sweep_axis_walk(w, tr.pos, half, 2, vel.v.z * h,
+                                        canStep, upComp, upSign);
             if (hitX) vel.v.x = 0.0f;
             if (hitY) vel.v.y = 0.0f;
             if (hitZ) vel.v.z = 0.0f;
 
             // Ground check: a collision on the axis most aligned with "up",
             // while descending, means we are standing on something.
-            if (auto* g = reg.try_get<GravityAffected>(e)) {
-                float ax = std::fabs(up.x), ay = std::fabs(up.y),
-                      az = std::fabs(up.z);
-                bool upAxisHit = (az >= ax && az >= ay) ? hitZ
-                               : (ay >= ax)            ? hitY
-                                                        : hitX;
+            if (g) {
+                bool upAxisHit = upComp == 2 ? hitZ : upComp == 1 ? hitY : hitX;
                 g->grounded = upAxisHit && movingDown;
             }
 

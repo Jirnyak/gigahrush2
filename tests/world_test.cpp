@@ -220,6 +220,62 @@ static void test_physics_lands_on_floor() {
     CHECK(!aabb_overlaps_solid(w, out.pos, vec3{0.2f, 0.2f, 0.4f}));
 }
 
+// The manifest's smooth step: one 0.25 m sub-voxel atom is walkable without a
+// jump; two atoms are a wall. Exercised through the real physics_step.
+static void test_step_up_one_atom() {
+    LevelStack stack;
+    LayerId g = stack.push_layer();
+    World& w = stack.layer(g);
+    for (int y = 0; y < 20; ++y)
+        for (int x = 0; x < 20; ++x)
+            w.grid().fill_cell(x, y, 4, 1);
+    // A one-atom ridge across the walker's path at x-cell 12: the TOP sub-voxel
+    // layer of the (otherwise air) cells at z-cell 5... use the bottom layer.
+    for (int y = 0; y < 20; ++y) {
+        SubMask& m = w.grid().mask(12, y, 5);
+        for (int sy = 0; sy < kSubDim; ++sy)
+            for (int sx = 0; sx < kSubDim; ++sx)
+                m.set(sub_bit(sx, sy, 0)); // one 0.25 m slab on the floor
+        w.grid().set_cell(12, y, 5, 1);
+    }
+    // A two-atom ridge further along, at x-cell 15: must stay a wall.
+    for (int y = 0; y < 20; ++y) {
+        SubMask& m = w.grid().mask(15, y, 5);
+        for (int sz = 0; sz < 2; ++sz)
+            for (int sy = 0; sy < kSubDim; ++sy)
+                for (int sx = 0; sx < kSubDim; ++sx)
+                    m.set(sub_bit(sx, sy, sz));
+        w.grid().set_cell(15, y, 5, 1);
+    }
+
+    Registry reg;
+    Entity e = reg.create();
+    Transform tr;
+    tr.pos = vec3{10.5f * kCellSize, 10.5f * kCellSize, 5.0f * kCellSize + 0.5f};
+    tr.layer = g;
+    reg.emplace<Transform>(e, tr);
+    reg.emplace<Velocity>(e);
+    reg.emplace<AABB>(e, AABB{{0.2f, 0.2f, 0.4f}});
+    reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
+
+    // Settle onto the floor first (grounded gates the step).
+    for (int i = 0; i < kSimHz; ++i) physics_step(reg, stack, kSimDt);
+    CHECK(reg.get<GravityAffected>(e).grounded);
+    const float floorZ = reg.get<Transform>(e).pos.z;
+
+    // Walk +x for 3 s: the one-atom ridge at cell 12 must be crossed smoothly.
+    for (int i = 0; i < 3 * kSimHz; ++i) {
+        reg.get<Velocity>(e).v.x = 2.0f;
+        physics_step(reg, stack, kSimDt);
+    }
+    const vec3 stopped = reg.get<Transform>(e).pos;
+    CHECK(stopped.x > 13.0f * kCellSize);          // crossed the one-atom ridge
+    CHECK(stopped.x < 15.0f * kCellSize);          // held by the two-atom wall
+    CHECK(stopped.z >= floorZ - 0.01f);            // never sank into the floor
+    CHECK(reg.get<GravityAffected>(e).grounded);
+    CHECK(!aabb_overlaps_solid(w, stopped, vec3{0.2f, 0.2f, 0.4f}));
+}
+
 static void test_fluid_conserves_mass() {
     World w;
     // Solid floor everywhere at z-cell 0 so fluid cannot drain off the bottom.
@@ -560,6 +616,7 @@ int main() {
     test_route_step();
     test_destruct_all();
     test_props_all();
+    test_step_up_one_atom();
 
     std::printf("%d/%d checks passed\n", g_checks - g_fails, g_checks);
     if (g_fails) {
