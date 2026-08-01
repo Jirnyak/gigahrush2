@@ -19,6 +19,7 @@
 #include "game/weapon_table.h"
 #include "sim/camera.h"   // camera_forward
 #include "world/macro_grid.h"
+#include "world/stain.h" // blood — the universal stain layer
 #include "world/world.h"
 #include "world/types.h"
 
@@ -789,10 +790,11 @@ std::uint32_t slow_step(Registry& reg, LayerId layer, float dt) {
 }
 
 std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
-                              const LevelStack& stack, LayerId layer, float dt,
+                              LevelStack& stack, LayerId layer, float dt,
                               std::uint64_t tick, StatusSet* playerStatus,
                               Entity playerEntity,
-                              CarveProposalQueue* carves) {
+                              CarveProposalQueue* carves,
+                              std::vector<std::uint32_t>* stainDirty) {
     if (!stack.valid(layer)) return 0;
     const MacroGrid& grid = stack.layer(layer).grid();
 
@@ -1030,6 +1032,18 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
             }
         }
         if (landed) ++hits;
+        // Blood: a shot that landed on a BODY splatters the world through the
+        // universal stain layer ([world/stain.h]) — same op for every channel,
+        // colour from the substance table, dirty cells owed to the mirror by
+        // the caller. Wall hits bleed nothing; the carve chip is their mark.
+        if (landed && stainDirty && !h.onWall && !web && h.dmg > 0) {
+            stain_splat(stack.layer(layer), h.impactPos,
+                        vec3{0.0f, 0.0f, -0.35f}, 1.6f, /*rays=*/10,
+                        kStainBlood,
+                        static_cast<std::uint32_t>(tick) ^
+                            entt::to_integral(h.proj),
+                        *stainDirty);
+        }
         if (reg.valid(h.proj)) reg.destroy(h.proj);
     }
     (void)bus;

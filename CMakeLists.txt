@@ -399,8 +399,10 @@ if(GIGA_BUILD_TESTS)
     # meshing left to pin.
     # 39331 -> 39337 (+6) on 2026-08-01: test_step_up_one_atom — the manifest's
     # smooth one-atom step through the real physics_step.
+    # 39337 -> 39348 (+11) on 2026-08-01: stain system — StainField round-trip,
+    # splat/decay/clear coverage.
     set_tests_properties(world_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "39337/39337 checks passed")
+        PASS_REGULAR_EXPRESSION "39348/39348 checks passed")
 
     # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while

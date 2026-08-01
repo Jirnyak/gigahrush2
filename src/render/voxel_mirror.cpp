@@ -8,6 +8,7 @@
 #include "world/destruct.h" // kSubMaterialName
 #include "world/field.h"    // the mirrored "fluid" macro field
 #include "world/macro_grid.h"
+#include "world/stain.h"    // StainRGB — the paged stain mirror
 #include "world/subfield.h"
 #include "world/world.h"
 
@@ -44,6 +45,16 @@ std::uint8_t classify(const SubMask& m) {
     return m.full() ? 1 : 2;
 }
 
+// CPU stain atoms are 3 B; the GPU page holds one u32 per atom.
+void repack_stain_page(const StainRGB* src, std::uint8_t* dst) {
+    for (int i = 0; i < kSubVoxels; ++i) {
+        dst[i * 4 + 0] = src[i].r;
+        dst[i * 4 + 1] = src[i].g;
+        dst[i * 4 + 2] = src[i].b;
+        dst[i * 4 + 3] = 0;
+    }
+}
+
 } // namespace
 
 bool VoxelMirror::init(VulkanDevice& dev) {
@@ -69,6 +80,12 @@ bool VoxelMirror::init(VulkanDevice& dev) {
         return false;
     if (!fluid_.create_device_local_empty(dev, kFluidBytes, usage,
                                           "voxel-mirror fluid"))
+        return false;
+    if (!stainIdx_.create_device_local_empty(dev, kStainIdxBytes, usage,
+                                             "voxel-mirror stain-index"))
+        return false;
+    if (!stainPool_.create_device_local_empty(dev, kStainPoolBytes, usage,
+                                              "voxel-mirror stain-pool"))
         return false;
     for (int i = 0; i < kMaxFramesInFlight; ++i)
         if (!staging_[i].create_host_visible(dev, kStagingBytes,
@@ -117,6 +134,8 @@ void VoxelMirror::destroy() {
     oneShotPool_ = VK_NULL_HANDLE;
     oneShotCmd_ = VK_NULL_HANDLE;
     for (int i = 0; i < kMaxFramesInFlight; ++i) staging_[i].destroy(*dev_);
+    stainPool_.destroy(*dev_);
+    stainIdx_.destroy(*dev_);
     fluid_.destroy(*dev_);
     classes_.destroy(*dev_);
     pagePool_.destroy(*dev_);
@@ -259,6 +278,14 @@ void VoxelMirror::flush(VkCommandBuffer cmd, std::uint32_t frameIndex,
                    : kPageCap)
             : 0u;
     poolPages_ = poolCount;
+    const SubField<StainRGB>* stainF =
+        world.subfields().find<StainRGB>(kStainFieldName);
+    const std::uint32_t* stainTab = stainF ? stainF->page_table() : nullptr;
+    const std::uint32_t stainPages =
+        stainF ? static_cast<std::uint32_t>(
+                     stainF->page_count() < kStainPageCap ? stainF->page_count()
+                                                          : kStainPageCap)
+               : 0u;
 
     // How many sorted cells fit this frame's staging window.
     std::size_t take = 0;
@@ -266,12 +293,14 @@ void VoxelMirror::flush(VkCommandBuffer cmd, std::uint32_t frameIndex,
     while (take < dirty_.size()) {
         const std::uint32_t ci = dirty_[take];
         std::size_t c = kMaskBytesPerCell + sizeof(CellType) +
-                        sizeof(std::uint32_t) + 1 /* class byte */;
+                        sizeof(std::uint32_t) * 2 + 1 /* class byte */;
         if (pageTab && pageTab[ci] < poolCount) c += kPageBytes;
+        if (stainTab && stainTab[ci] < stainPages) c += kStainPageBytes;
         if (need + c > kStagingBytes) break;
         need += c;
         ++take;
     }
+    if (take == 0 && !fluidDirty_) return;
 
     VulkanBuffer& st = staging_[frameIndex % kMaxFramesInFlight];
     std::uint8_t* base = static_cast<std::uint8_t*>(st.mapped);
@@ -281,6 +310,8 @@ void VoxelMirror::flush(VkCommandBuffer cmd, std::uint32_t frameIndex,
     idxCopies_.clear();
     poolCopies_.clear();
     classCopies_.clear();
+    stainIdxCopies_.clear();
+    stainPoolCopies_.clear();
 
     std::size_t i = 0;
     while (i < take) {
@@ -317,6 +348,16 @@ void VoxelMirror::flush(VkCommandBuffer cmd, std::uint32_t frameIndex,
             {off, static_cast<VkDeviceSize>(c0) * sizeof(std::uint32_t), bytes});
         off += bytes;
 
+        // Stain page indices ride the same run.
+        std::uint32_t* sdst = reinterpret_cast<std::uint32_t*>(base + off);
+        for (std::uint32_t k = 0; k < len; ++k) {
+            const std::uint32_t slot = stainTab ? stainTab[c0 + k] : kNoPage;
+            sdst[k] = slot < stainPages ? slot : kNoPage;
+        }
+        stainIdxCopies_.push_back(
+            {off, static_cast<VkDeviceSize>(c0) * sizeof(std::uint32_t), bytes});
+        off += bytes;
+
         if (poolData)
             for (std::uint32_t k = 0; k < len; ++k) {
                 const std::uint32_t slot = pageTab[c0 + k];
@@ -328,6 +369,18 @@ void VoxelMirror::flush(VkCommandBuffer cmd, std::uint32_t frameIndex,
                     {off, static_cast<VkDeviceSize>(slot) * kPageBytes,
                      kPageBytes});
                 off += kPageBytes;
+            }
+        if (stainF)
+            for (std::uint32_t k = 0; k < len; ++k) {
+                const std::uint32_t slot = stainTab[c0 + k];
+                if (slot >= stainPages) continue;
+                repack_stain_page(stainF->pages_data() +
+                                      static_cast<std::size_t>(slot) * kSubVoxels,
+                                  base + off);
+                stainPoolCopies_.push_back(
+                    {off, static_cast<VkDeviceSize>(slot) * kStainPageBytes,
+                     kStainPageBytes});
+                off += kStainPageBytes;
             }
         i = j;
     }
@@ -351,6 +404,15 @@ void VoxelMirror::flush(VkCommandBuffer cmd, std::uint32_t frameIndex,
         vkCmdCopyBuffer(cmd, st.buffer, pagePool_.buffer,
                         static_cast<std::uint32_t>(poolCopies_.size()),
                         poolCopies_.data());
+    if (!stainIdxCopies_.empty())
+        vkCmdCopyBuffer(cmd, st.buffer, stainIdx_.buffer,
+                        static_cast<std::uint32_t>(stainIdxCopies_.size()),
+                        stainIdxCopies_.data());
+    if (!stainPoolCopies_.empty())
+        vkCmdCopyBuffer(cmd, st.buffer, stainPool_.buffer,
+                        static_cast<std::uint32_t>(stainPoolCopies_.size()),
+                        stainPoolCopies_.data());
+
 
     // The fluid image rides the same window, whole, after the cells; if this
     // frame's cells left no room it simply waits one more frame.

@@ -20,6 +20,7 @@
 #include "world/level_stack.h"
 #include "world/macro_grid.h"
 #include "world/nav.h"
+#include "world/stain.h"
 #include "world/subfield.h"
 #include "world/world.h"
 
@@ -274,6 +275,49 @@ static void test_step_up_one_atom() {
     CHECK(stopped.z >= floorZ - 0.01f);            // never sank into the floor
     CHECK(reg.get<GravityAffected>(e).grounded);
     CHECK(!aabb_overlaps_solid(w, stopped, vec3{0.2f, 0.2f, 0.4f}));
+}
+
+// The universal stain layer ([world/stain.h]): additive per-atom RGB on solid
+// sub-voxels — blood + urine mix by channel addition, air holds no paint.
+static void test_stain_layer() {
+    World w;
+    w.grid().fill_cell(10, 10, 10, 1);
+
+    // Air holds no paint; zero adds paint nothing.
+    CHECK(stain_paint(w, 10, 10, 10, kStainBlood) == UINT32_MAX);
+    CHECK(stain_paint(w, 10 * kSubDim, 10 * kSubDim, 10 * kSubDim,
+                      StainRGB{}) == UINT32_MAX);
+
+    // Paint one solid atom twice: channels ADD with saturation.
+    const int g = 10 * kSubDim; // the cell's first atom, global sub coords
+    const std::uint32_t ci = stain_paint(w, g, g, g, kStainBlood);
+    CHECK(ci == macro_index(10, 10, 10));
+    CHECK(stain_paint(w, g, g, g, kStainUrine) == ci);
+    const auto* f = w.subfields().find<StainRGB>(kStainFieldName);
+    CHECK(f != nullptr);
+    const StainRGB s = f->at(ci, 0, StainRGB{});
+    CHECK(s.r == 255); // 150 + 140 saturates
+    CHECK(s.g == 132); // 12 + 120: emergent mix, no substance branch anywhere
+    CHECK(s.b == 35);
+
+    // Splatter against a wall: deterministic, paints, reports dirty cells.
+    World v;
+    for (int z = 8; z < 12; ++z)
+        for (int y = 8; y < 12; ++y)
+            v.grid().fill_cell(10, y, z, 1);
+    std::vector<std::uint32_t> dirty;
+    const vec3 at{9.0f * kCellSize, 10.0f * kCellSize, 10.0f * kCellSize};
+    const std::int32_t a = stain_splat(v, at, vec3{1, 0, 0}, 4.0f, 16,
+                                       kStainBlood, 777u, dirty);
+    CHECK(a > 0);
+    CHECK(!dirty.empty());
+    std::vector<std::uint32_t> dirty2;
+    World u;
+    for (int z = 8; z < 12; ++z)
+        for (int y = 8; y < 12; ++y)
+            u.grid().fill_cell(10, y, z, 1);
+    CHECK(stain_splat(u, at, vec3{1, 0, 0}, 4.0f, 16, kStainBlood, 777u,
+                      dirty2) == a); // same seed, same bytes
 }
 
 static void test_fluid_conserves_mass() {
@@ -617,6 +661,7 @@ int main() {
     test_destruct_all();
     test_props_all();
     test_step_up_one_atom();
+    test_stain_layer();
 
     std::printf("%d/%d checks passed\n", g_checks - g_fails, g_checks);
     if (g_fails) {

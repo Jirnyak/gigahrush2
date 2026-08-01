@@ -100,6 +100,7 @@
 #include "sim/fluid.h"
 #include "sim/physics.h"
 #include "world/destruct.h"
+#include "world/stain.h"
 #include "world/level_stack.h"
 #include "world/nav.h"
 #include "world/nav_async.h"
@@ -1745,6 +1746,9 @@ int main(int argc, char** argv) {
     // after warmup ([world/destruct.h]).
     CarveScratch carveScratch;
     CarveResult carveResult;
+    // Macro cells the stain layer dirtied this tick ([world/stain.h]) — the
+    // same debt CarveResult::dirtyCells carries, drained into the mirror below.
+    std::vector<std::uint32_t> stainDirty;
     // Combat → geometry seam ([combat.h]): bullets/melee propose, sim disposes
     // below behind the same doors.frozen gate as the console carve row.
     game::CarveProposalQueue combatCarves;
@@ -3207,6 +3211,17 @@ int main(int argc, char** argv) {
                                 if (pool.valid(nrg->id)) {
                                     game::ReliefResult rr = game::relieve_needs(pool.needs(nrg->id), 100.0f, 100.0f);
                                     if (rr.pee > 0.0f || rr.poo > 0.0f) {
+                                        // The puddle: urine through the same
+                                        // universal stain layer blood uses —
+                                        // mixing with anything already there
+                                        // is just channel addition.
+                                        if (rr.pee > 0.0f)
+                                            stain_splat(stack.layer(activeLayer),
+                                                        ppos, vec3{0, 0, -1.0f},
+                                                        1.4f, /*rays=*/14,
+                                                        kStainUrine,
+                                                        static_cast<std::uint32_t>(simTick),
+                                                        stainDirty);
                                         std::snprintf(elevDiagLine, sizeof(elevDiagLine),
                                                       "PHYSIOLOGICAL RELIEF: CLEARED BLADDER (%.0f) & BOWEL (%.0f) PRESSURE",
                                                       rr.pee, rr.poo);
@@ -3301,7 +3316,7 @@ int main(int argc, char** argv) {
                 // projectile never lands on the frame it is fired.
                 meleeHits += game::projectile_step(
                     reg, pool, bus, stack, activeLayer, kSimDt, simTick,
-                    &playerStatus, player, &combatCarves);
+                    &playerStatus, player, &combatCarves, &stainDirty);
                 // Drain combat carve proposals through the same carve_sphere
                 // path the console uses. Frozen bake: drop (v1); console keeps
                 // pending via carveRadius until bake lands.
@@ -4860,6 +4875,10 @@ int main(int argc, char** argv) {
                 voxelMirror.mark_dirty(doors.dirtyCells.data(),
                                        doors.dirtyCells.size());
                 doors.dirtyCells.clear();
+            }
+            if (!stainDirty.empty()) {
+                voxelMirror.mark_dirty(stainDirty.data(), stainDirty.size());
+                stainDirty.clear();
             }
             voxelMirror.flush(cmd, renderer.currentFrame,
                               stack.layer(activeLayer));

@@ -50,6 +50,8 @@ layout(set = 0, binding = 5) uniform MarchUbo {
     vec4 albedo[32];    // display-referred material albedo (cube_pass kMaterial)
 } ub;
 layout(set = 0, binding = 6, std430) readonly buffer FluidBuf { float uFluid[]; };   // 1 float/cell
+layout(set = 0, binding = 7, std430) readonly buffer StainIdxBuf { uint uStainIdx[]; }; // 1/cell
+layout(set = 0, binding = 8, std430) readonly buffer StainPool { uint uStainPool[]; };  // 512 u32/page (RGBA8)
 
 #ifdef GIGA_ALBEDO_ARRAY
 // set 2: the photographic albedo/normal/roughness arrays CubePass loaded.
@@ -113,6 +115,17 @@ uint sub_mat(uint ci, ivec3 s) {
     return (bit & 1u) != 0u ? (w >> 16) & 0xFFFFu : w & 0xFFFFu;
 }
 
+// The stain of one sub-voxel ([world/stain.h]): additive RGB painted by
+// blood/urine/scorch. RGBA8 in the pool; alpha unused.
+vec3 sub_stain(uint ci, ivec3 s) {
+    uint pg = uStainIdx[ci];
+    if (pg == 0xFFFFFFFFu) return vec3(0.0);
+    uint bit = uint(s.x) | (uint(s.y) << 3) | (uint(s.z) << 6);
+    uint w = uStainPool[pg * 512u + bit];
+    return vec3(float(w & 0xFFu), float((w >> 8) & 0xFFu),
+                float((w >> 16) & 0xFFu)) * (1.0 / 255.0);
+}
+
 // Solidity of one sub-voxel by GLOBAL (unwrapped) sub coordinates — the AO taps.
 bool sub_solid_global(ivec3 g) {
     ivec3 c = ivec3(floor(vec3(g) / 8.0));
@@ -131,6 +144,7 @@ struct Hit {
     vec3 n;
     uint mat;
     uint ci; // wrapped macro cell index of the solid voxel, for the fluid tint
+    ivec3 sub; // the solid atom's local 0..7 coords, for the stain fetch
     bool ok;
 };
 
@@ -153,6 +167,7 @@ bool march_cell(uint ci, vec3 ro, vec3 rd, vec3 rinv, ivec3 stp, vec3 cellLo,
             else h.n = -rd; // camera embedded in a solid voxel
             h.mat = sub_mat(ci, s);
             h.ci = ci;
+            h.sub = s;
             h.ok = true;
             return true;
         }
@@ -174,6 +189,7 @@ Hit march(vec3 ro, vec3 rd, float tCap) {
     h.n = vec3(0.0, 0.0, 1.0);
     h.mat = 0u;
     h.ci = 0u;
+    h.sub = ivec3(0);
 
     // Degenerate components poison 1/rd with NaNs at exact cell boundaries.
     rd.x = abs(rd.x) < 1e-6 ? 1e-6 : rd.x;
@@ -206,6 +222,7 @@ Hit march(vec3 ro, vec3 rd, float tCap) {
                 else h.n = -rd;
                 h.mat = sub_mat(ci, s);
                 h.ci = ci;
+                h.sub = s;
                 h.ok = true;
                 return h;
             }
@@ -569,6 +586,13 @@ void main() {
     float tint = fl > 0.05 ? clamp(fl, 0.0, 1.0) : 0.0;
     if (tint > 0.0)
         vColor = mix(vColor, vec3(0.15, 0.35, 0.85), tint);
+    // Stains paint over everything else — wet organic matter on the surface.
+    // Strength follows the strongest channel (paint coverage), hue follows the
+    // accumulated mix, so blood + urine reads as their blend, emergently.
+    vec3 stain = sub_stain(h.ci, h.sub);
+    float stainAmt = max(stain.r, max(stain.g, stain.b));
+    if (stainAmt > 0.0)
+        vColor = mix(vColor, stain * 0.85, clamp(stainAmt * 1.2, 0.0, 0.92));
     vAo = voxel_ao(vWorldPos, h.n);
 
     // Honest depth through the same matrix the raster passes push.

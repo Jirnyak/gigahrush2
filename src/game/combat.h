@@ -587,11 +587,12 @@ inline constexpr float kBulletCarveRadius = 0.35f;
 inline constexpr float kMeleeCarveRadius = 0.55f;
 
 std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
-                              const LevelStack& stack, LayerId layer, float dt,
+                              LevelStack& stack, LayerId layer, float dt,
                               std::uint64_t tick,
                               StatusSet* playerStatus = nullptr,
                               Entity playerEntity = entt::null,
-                              CarveProposalQueue* carves = nullptr);
+                              CarveProposalQueue* carves = nullptr,
+                              std::vector<std::uint32_t>* stainDirty = nullptr);
 
 // The camera holder swings at whatever monster is in front of it.
 //

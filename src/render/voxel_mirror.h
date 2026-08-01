@@ -76,6 +76,15 @@ public:
     // marks it — the marcher tints hit cells from it, which is what retired
     // the last regular invalidate() storm (31/s in maze mode).
     static constexpr std::size_t kFluidBytes = kMacroCells * sizeof(float);
+    // The "stain" SubField ([world/stain.h]): same paged mirror as
+    // sub_material. GPU pages are RGBA8 (512 x 4 B) so the shader indexes one
+    // u32 per atom; the CPU's 3 B atoms are repacked during upload. Stains are
+    // painted, never load-bulk, so the pool is smaller than sub_material's.
+    // NOT covered by verify() yet — the repack has no CPU twin to memcmp.
+    static constexpr std::uint32_t kStainPageCap = 16384u; // 32 MiB
+    static constexpr std::size_t kStainPageBytes = kSubVoxels * 4;
+    static constexpr std::size_t kStainIdxBytes = kMacroCells * sizeof(std::uint32_t);
+    static constexpr std::size_t kStainPoolBytes = kStainPageCap * kStainPageBytes;
     // Per-frame dirty staging window: cells plus one whole fluid image fit
     // together; the queue carries any remainder to the next frame.
     static constexpr std::size_t kStagingBytes = 12u * 1024u * 1024u;
@@ -121,6 +130,8 @@ public:
     VkBuffer page_pool_buffer() const { return pagePool_.buffer; }
     VkBuffer class_buffer() const { return classes_.buffer; }
     VkBuffer fluid_buffer() const { return fluid_.buffer; }
+    VkBuffer stain_index_buffer() const { return stainIdx_.buffer; }
+    VkBuffer stain_pool_buffer() const { return stainPool_.buffer; }
 
 private:
     bool upload_via_staging(VulkanBuffer& dst, const void* src, std::size_t bytes);
@@ -139,6 +150,8 @@ private:
     VulkanBuffer pagePool_;
     VulkanBuffer classes_;
     VulkanBuffer fluid_;
+    VulkanBuffer stainIdx_;
+    VulkanBuffer stainPool_;
     VulkanBuffer staging_[kMaxFramesInFlight];
 
     VkCommandPool oneShotPool_ = VK_NULL_HANDLE;
@@ -155,9 +168,12 @@ private:
     std::vector<VkBufferCopy> idxCopies_;
     std::vector<VkBufferCopy> poolCopies_;
     std::vector<VkBufferCopy> classCopies_;
+    std::vector<VkBufferCopy> stainIdxCopies_;
+    std::vector<VkBufferCopy> stainPoolCopies_;
     // Reused expectation scratch for upload_all/verify's pageIdx image.
     std::vector<std::uint32_t> idxScratch_;
     std::vector<std::uint8_t> classScratch_;
+    std::vector<std::uint8_t> stainRepack_;
     std::vector<float> fluidZeros_;
     bool fluidDirty_ = false;
 
