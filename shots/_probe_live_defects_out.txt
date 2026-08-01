@@ -1,0 +1,903 @@
+==== propPlacer.populate sites ====
+1347:    gpu::PropPlacer propPlacer;
+1351:    // In a full game, a prop placement pass would populate these from world
+1501:            propPlacer.populate(stack.layer(ground).grid(), propPass, 1337u);
+1578:                propPlacer.populate(stack.layer(l0).grid(), propPass, fseed);
+2041:            propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);
+3711:                                propPlacer.populate(stack.layer(nl).grid(),
+5043:                            propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);
+
+==== --shot --ride path ====
+13:// (streaming, floor_stream.h / master_prompt #9). `[` and `]` ride down/up a
+1046:// This used to block: coarse ~1.9 s + fine ~1.8 s, measured, so every elevator ride
+1168:    // --shot FILE [--frames N] [--ride N]: render, capture, exit.
+1177:    int shotRide = 0;        // floors to descend before capturing
+1178:    // --floor N: ride straight to a labelled floor (up OR down — --ride only
+1179:    // descends, which made the padic floor at +4 unreachable in a --shot
+1180:    // proof). Uses the console teleport seam, so it exercises the real ride.
+1184:    int shotRideDone = 0;
+1204:        else if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
+1206:        else if (a == "--ride" && i + 1 < argc) shotRide = std::atoi(argv[++i]);
+1702:    // safe: it happens before the player has touched anything. --shot captures
+1810:    // performs the ride at the top of a frame, never mid-draw).
+1883:    // every ride — a transition is a load screen, where I/O belongs. [save.h]
+1940:    // One ride, either shape: the elevator keys ([ / ]) pass a DIRECTION, the
+1945:    auto do_ride = [&](bool absolute, int target) -> bool {
+1967:            // keyboard/--shot leave seam so a ride without an immediate unload
+1979:        game::RideResult ride =
+1986:        if (!ride.moved) return false;
+1987:        player = ride.player;
+1988:        currentFloor = ride.floor;
+1997:        // A rumour is about a FLOOR, so carrying one across a ride makes it
+2001:        // rides ago. The whole premise of this system is that a rumour is
+2043:        // ride_elevator keeps x/y and plants z=kArrivalZ. ~1-in-5 Residential
+2046:        // place_body_at_cell; keyboard/--shot did not. [save.h]
+2067:            do_ride(/*absolute=*/true, dst);
+2203:        // seam the floor teleport rides.
+2242:            // with the console teleport — see do_ride above the loop.
+2244:                do_ride(/*absolute=*/false, -1);
+2246:                do_ride(/*absolute=*/false, +1);
+2369:                // keyboard (no keys in --shot), so face+walk MUST land after
+2445:                // and a component would reset the clock on every floor ride.
+2459:                // leave (do_ride + --shot travel) and again inside FloorStreamer::unload.
+2470:                // compact stderr pulse so a --shot harness can assert the store
+2583:                    // --ride hops have landed so the snapshot is the deep floor,
+2585:                    // lags sim ticks; rides fire at presented % 420 == 0.
+2812:                               shotRideDone >= shotRide &&
+2840:                // Sound overrides sight's absence: a mob with no visible prey that
+2967:                // and investigate_step so it overrides both for the licensed handful —
+2968:                // the same override wander.cpp already performs internally on aggro —
+3133:                            // Headless --shot audit trail (HUD is invisible in captures).
+3553:                    // Headless --shot proof: HUD is invisible in captures
+4432:        // is carried out at the top of the NEXT frame (see do_ride).
+4949:            // --shot: count presented frames, then capture and quit. Counted here
+4957:                // at the same cadence rides use (the nav bake needs its ~5 s).
+4962:                if (shotRideDone < shotRide && shotFramesSeen % 420 == 0) {
+4964:                    // (measured 2.5 s + 2.4 s) to finish before the next ride.
+4968:                    // Same capture as the keyboard ride path. Two travel sites;
+4969:                    // without this, --shot loot -> ride -> return refills crates.
+4980:                        // Same AIMEM leave release as do_ride. Two travel
+4982:                        // under --shot --ride. [ai.h]
+5002:                        // it, and only the KEYBOARD ride path maintained it — so a
+5003:                        // --shot ride built floor -36's doors against floor 0's
+5020:                        // Same seam as keyboard ride + F9 apply. [save.h]
+5026:                        // the keyboard ride path. This is the SECOND travel
+5027:                        // site; a fix that touches only one path leaves --shot
+5045:                        // Same clear as the keyboard ride path. There are TWO travel
+5046:                        // sites and the first fix only touched one, so a --shot
+5058:                        // Same place_body_safely as the keyboard ride path. Two travel
+5059:                        // sites; a fix that touches only one leaves --shot soft-locked
+5063:                    ++shotRideDone;
+
+-- context 13 --
+8://
+9:// The default world is the floor-MODULE stack: several distinct 128^3 floors,
+10:// each themed by its FloorKind (floor_gen.h / floors.md) and wired through a
+11:// FloorRegistry. Only the ACTIVE floor is kept live — its World is generated and
+12:// its crowd embodied on entry, and folded back into the cold pool on exit
+13:// (streaming, floor_stream.h / master_prompt #9). `[` and `]` ride down/up a
+14:// floor. `gigahrush2 maze` selects the single-world labyrinth test bed instead.
+15://
+16:// Controls are DATA, not code: every key lives in the KeybindTable
+17:// ([keybind.h]) as a row mapping a scancode to a console command
+18:// ([console.h]), rebindable in the pause menu (Esc) and persisted to
+19:// gigahrush2.keys. Defaults: WASD move, mouse look (hold right mouse / Tab),
+20:// Space jump, F fly, Q door, E interact, [ / ] floor travel, ~ console.
+21:#include <SDL3/SDL.h>
+22:#include <algorithm>
+23:#include <SDL3/SDL_vulkan.h>
+24:
+25:#include <cmath>
+26:#include <cstdint>
+27:#include <cstdio>
+28:#include <cstdlib>
+29:#include <filesystem>
+30:#include <string>
+31:#include <vector>
+32:
+33:#include "imgui.h"
+34:#include "imgui_impl_sdl3.h"
+35:
+36:#include "app/worldgen.h"
+37:#include "core/math.h"
+38:#include "game/mob_table.h"
+39:#include "core/tick.h"
+40:#include "core/wrap.h"
+41:#include "ecs/components.h"
+42:#include "ecs/registry.h"
+43:#include "game/ai.h"       // the utility AI — adapted, wired, and dormant by default
+44:#include "game/embody.h"
+45:#include "game/elevator.h"
+46:#include "game/console.h"
+47:#include "game/keybind.h"
+48:#include "game/floor_catalog.h"
+49:#include "game/floor_registry.h"
+50:#include "game/floor_spec.h"
+51:#include "game/floor_stream.h"
+52:#include "game/macro_sim.h"
+
+-- context 1177 --
+1172:    // game and copying the pixels, and then the "proof" is a screenshot of a browser.
+1173:    // This reads the presented swapchain image directly and quits, so the window is up
+1174:    // for a couple of seconds instead of indefinitely. [screenshot.h]
+1175:    const char* shotPath = nullptr;
+1176:    int shotFrames = 600;    // ~10 s at 60 Hz: long enough for the first nav bake
+1177:    int shotRide = 0;        // floors to descend before capturing
+1178:    // --floor N: ride straight to a labelled floor (up OR down — --ride only
+1179:    // descends, which made the padic floor at +4 unreachable in a --shot
+1180:    // proof). Uses the console teleport seam, so it exercises the real ride.
+1181:    int shotFloor = 0;
+1182:    bool shotFloorWanted = false;
+1183:    int shotFramesSeen = 0;
+1184:    int shotRideDone = 0;
+1185:    gpu::Capture shotCap{};
+1186:    bool hasCustomPos = false;
+1187:    vec3 customPos{89.0f, 71.0f, 2.9f};
+1188:    bool hasCustomAng = false;
+1189:    float customYaw = 0.8f, customPitch = -0.5f;
+1190:    bool shotOrbit = false;
+1191:    std::string shotAction;
+1192:    bool shotActionConsumed = false; // one-shot save/load; attack stays held
+1193:    bool showHud = true;
+1194:    // --mirror-verify: after every wholesale upload and every ~300 frames, read
+1195:    // the GPU voxel mirror back and memcmp it against the CPU grid. Diagnostic
+1196:    // (queue-idles); the proof harness for the raymarch migration's stage 1.
+1197:    bool mirrorVerify = false;
+1198:    std::uint32_t mirrorFrame = 0;
+1199:
+1200:    for (int i = 1; i < argc; ++i) {
+1201:        std::string a = argv[i];
+1202:        if (a == "maze") genMode = WorldGenMode::Maze;
+1203:        else if (a == "floors" || a == "stack") genMode = WorldGenMode::FloorStack;
+1204:        else if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
+1205:        else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
+1206:        else if (a == "--ride" && i + 1 < argc) shotRide = std::atoi(argv[++i]);
+1207:        else if (a == "--floor" && i + 1 < argc) {
+1208:            shotFloor = std::atoi(argv[++i]);
+1209:            shotFloorWanted = true;
+1210:        }
+1211:        else if (a == "--no-hud" || a == "--nohud") showHud = false;
+1212:        else if (a == "--mirror-verify") mirrorVerify = true;
+1213:        else if (a == "--pos" && i + 3 < argc) {
+1214:            customPos.x = static_cast<float>(std::atof(argv[++i]));
+1215:            customPos.y = static_cast<float>(std::atof(argv[++i]));
+1216:            customPos.z = static_cast<float>(std::atof(argv[++i]));
+
+-- context 1178 --
+1173:    // This reads the presented swapchain image directly and quits, so the window is up
+1174:    // for a couple of seconds instead of indefinitely. [screenshot.h]
+1175:    const char* shotPath = nullptr;
+1176:    int shotFrames = 600;    // ~10 s at 60 Hz: long enough for the first nav bake
+1177:    int shotRide = 0;        // floors to descend before capturing
+1178:    // --floor N: ride straight to a labelled floor (up OR down — --ride only
+1179:    // descends, which made the padic floor at +4 unreachable in a --shot
+1180:    // proof). Uses the console teleport seam, so it exercises the real ride.
+1181:    int shotFloor = 0;
+1182:    bool shotFloorWanted = false;
+1183:    int shotFramesSeen = 0;
+1184:    int shotRideDone = 0;
+1185:    gpu::Capture shotCap{};
+1186:    bool hasCustomPos = false;
+1187:    vec3 customPos{89.0f, 71.0f, 2.9f};
+1188:    bool hasCustomAng = false;
+1189:    float customYaw = 0.8f, customPitch = -0.5f;
+1190:    bool shotOrbit = false;
+1191:    std::string shotAction;
+1192:    bool shotActionConsumed = false; // one-shot save/load; attack stays held
+1193:    bool showHud = true;
+1194:    // --mirror-verify: after every wholesale upload and every ~300 frames, read
+1195:    // the GPU voxel mirror back and memcmp it against the CPU grid. Diagnostic
+1196:    // (queue-idles); the proof harness for the raymarch migration's stage 1.
+1197:    bool mirrorVerify = false;
+1198:    std::uint32_t mirrorFrame = 0;
+1199:
+1200:    for (int i = 1; i < argc; ++i) {
+1201:        std::string a = argv[i];
+1202:        if (a == "maze") genMode = WorldGenMode::Maze;
+1203:        else if (a == "floors" || a == "stack") genMode = WorldGenMode::FloorStack;
+1204:        else if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
+1205:        else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
+1206:        else if (a == "--ride" && i + 1 < argc) shotRide = std::atoi(argv[++i]);
+1207:        else if (a == "--floor" && i + 1 < argc) {
+1208:            shotFloor = std::atoi(argv[++i]);
+1209:            shotFloorWanted = true;
+1210:        }
+1211:        else if (a == "--no-hud" || a == "--nohud") showHud = false;
+1212:        else if (a == "--mirror-verify") mirrorVerify = true;
+1213:        else if (a == "--pos" && i + 3 < argc) {
+1214:            customPos.x = static_cast<float>(std::atof(argv[++i]));
+1215:            customPos.y = static_cast<float>(std::atof(argv[++i]));
+1216:            customPos.z = static_cast<float>(std::atof(argv[++i]));
+1217:            hasCustomPos = true;
+
+-- context 1810 --
+1805:
+1806:    // ── Debug console (~) ───────────────────────────────────────────────
+1807:    // The registry + default commands are game code ([console.h]); the app owns
+1808:    // only the overlay state and the two seams: the per-frame context refresh
+1809:    // and the teleport REQUEST (client proposes, server disposes — the app
+1810:    // performs the ride at the top of a frame, never mid-draw).
+1811:    game::Console console;
+1812:    if (!game::console_register_defaults(console))
+1813:        std::fprintf(stderr, "[console] duplicate default command REFUSED\n");
+1814:    game::ConsoleContext consoleCtx;
+1815:    bool showConsole = false;
+1816:    bool consoleFocus = false;
+1817:    char consoleInput[256] = {};
+1818:    std::vector<std::string> consoleLog;
+1819:    std::vector<std::string> consoleHistory;
+1820:    int consoleHistPos = -1;
+1821:    int pendingTeleport = game::ConsoleContext::kNoRequest;
+1822:
+1823:    // ── Key bindings ────────────────────────────────────────────────────
+1824:    // Keys are DATA: a KeybindTable row maps a scancode to a console command
+1825:    // ([keybind.h]), so the event loop below does one lookup per keydown and
+1826:    // the old per-key `if` chain is gone. The table parses/serializes bytes;
+1827:    // the fopen lives HERE, the same split save.h uses.
+1828:    game::KeybindTable binds;
+1829:    if (!game::keybind_register_defaults(binds))
+1830:        std::fprintf(stderr, "[keybind] duplicate default bind REFUSED\n");
+1831:    constexpr const char* kBindsPath = "gigahrush2.keys";
+1832:    {
+1833:        std::FILE* f = std::fopen(kBindsPath, "rb");
+1834:        if (f) {
+1835:            char text[4096];
+1836:            const std::size_t n = std::fread(text, 1, sizeof text - 1, f);
+1837:            text[n] = '\0';
+1838:            std::fclose(f);
+1839:            binds.parse(text);
+1840:        }
+1841:    }
+1842:    input.set_move_binds(game::keybind_move_binds(binds));
+1843:    auto save_binds = [&]() {
+1844:        char text[4096];
+1845:        const std::size_t n = binds.serialize(text, sizeof text);
+1846:        std::FILE* f = std::fopen(kBindsPath, "wb");
+1847:        if (!f) return;
+1848:        std::fwrite(text, 1, n, f);
+1849:        std::fclose(f);
+
+-- context 1988 --
+1983:                     : streamer.travel(stack, registry, reg, pool, player,
+1984:                                       currentFloor, target, /*arrivalZ=*/2,
+1985:                                       pid);
+1986:        if (!ride.moved) return false;
+1987:        player = ride.player;
+1988:        currentFloor = ride.floor;
+1989:        // Deepest point reached, for the run score. |z|, because depth is
+1990:        // bidirectional: the roof is as far from safety as the basement.
+1991:        // [extraction.h]
+1992:        game::record_floor(ledger, currentFloor);
+1993:        // A new floor gets its own clock at its own depth. Not carried over:
+1994:        // the cooldown is a function of |z|, so inheriting a 30-minute surface
+1995:        // gap into the void would silently cancel the entire depth gradient.
+1996:        samosbor = game::samosbor_new_game(sbRng);
+1997:        // A rumour is about a FLOOR, so carrying one across a ride makes it
+1998:        // false. Caught on a capture: the line read "самосбор здесь часто
+1999:        // (17.2%)" while the HUD's own duty for the floor underfoot said 35.0%
+2000:        // — the number was true of the floor the speaker was standing on, two
+2001:        // rides ago. The whole premise of this system is that a rumour is
+2002:        // checkable, so a stale one is worse than none. [rumour.h]
+2003:        rumourLine[0] = 0;
+2004:        rumourAt = 0;
+2005:        // A gunshot on the floor you just left must not be audible to the crowd
+2006:        // on the one you arrived at. The streamer RECYCLES LayerId slots, so a
+2007:        // surviving record would not merely be stale — it would match the new
+2008:        // floor's layer id and be heard there. [noise.h]
+2009:        game::noise_clear(noiseField);
+2010:        currentSpec = spec_for_floor(currentFloor);
+2011:        // Mobs belong to the floor, not to the player: the departed layer's are
+2012:        // destroyed and the arrival's are spawned fresh (deterministically, so
+2013:        // a floor looks the same every visit).
+2014:        LayerId nl = reg.get<Transform>(player).layer;
+2015:        refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
+2016:        refresh_floor_containers(reg, stack.layer(nl), currentFloor, nl);
+2017:        // Re-empty crates already looted on a prior visit to this floor.
+2018:        // Deterministic spawn would otherwise refill them — the brick this pair
+2019:        // closes. Same seam as F9 apply. [save.h]
+2020:        game::apply_opened_containers(reg, nl, currentFloor,
+2021:                                      runState.opened.data(),
+2022:                                      runState.opened.size());
+2023:        // The floor's own file, if this floor was ever visited: stamp its saved
+2024:        // state over the fresh generation BEFORE doors, so door_build re-stamps
+2025:        // its leaves and the nav bake below sees the real geometry. [save.h]
+2026:        apply_floor_file(stack.layer(nl), currentFloor);
+2027:        // Doors before the bake, frozen for its duration. [door.h]
+
+-- context 1997 --
+1992:        game::record_floor(ledger, currentFloor);
+1993:        // A new floor gets its own clock at its own depth. Not carried over:
+1994:        // the cooldown is a function of |z|, so inheriting a 30-minute surface
+1995:        // gap into the void would silently cancel the entire depth gradient.
+1996:        samosbor = game::samosbor_new_game(sbRng);
+1997:        // A rumour is about a FLOOR, so carrying one across a ride makes it
+1998:        // false. Caught on a capture: the line read "самосбор здесь часто
+1999:        // (17.2%)" while the HUD's own duty for the floor underfoot said 35.0%
+2000:        // — the number was true of the floor the speaker was standing on, two
+2001:        // rides ago. The whole premise of this system is that a rumour is
+2002:        // checkable, so a stale one is worse than none. [rumour.h]
+2003:        rumourLine[0] = 0;
+2004:        rumourAt = 0;
+2005:        // A gunshot on the floor you just left must not be audible to the crowd
+2006:        // on the one you arrived at. The streamer RECYCLES LayerId slots, so a
+2007:        // surviving record would not merely be stale — it would match the new
+2008:        // floor's layer id and be heard there. [noise.h]
+2009:        game::noise_clear(noiseField);
+2010:        currentSpec = spec_for_floor(currentFloor);
+2011:        // Mobs belong to the floor, not to the player: the departed layer's are
+2012:        // destroyed and the arrival's are spawned fresh (deterministically, so
+2013:        // a floor looks the same every visit).
+2014:        LayerId nl = reg.get<Transform>(player).layer;
+2015:        refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
+2016:        refresh_floor_containers(reg, stack.layer(nl), currentFloor, nl);
+2017:        // Re-empty crates already looted on a prior visit to this floor.
+2018:        // Deterministic spawn would otherwise refill them — the brick this pair
+2019:        // closes. Same seam as F9 apply. [save.h]
+2020:        game::apply_opened_containers(reg, nl, currentFloor,
+2021:                                      runState.opened.data(),
+2022:                                      runState.opened.size());
+2023:        // The floor's own file, if this floor was ever visited: stamp its saved
+2024:        // state over the fresh generation BEFORE doors, so door_build re-stamps
+2025:        // its leaves and the nav bake below sees the real geometry. [save.h]
+2026:        apply_floor_file(stack.layer(nl), currentFloor);
+2027:        // Doors before the bake, frozen for its duration. [door.h]
+2028:        if (currentSpec)
+2029:            doorsBuilt = game::door_build(
+2030:                stack.layer(nl), doors, currentFloor, *currentSpec,
+2031:                streamer.floor_seed_of(registry, currentFloor));
+2032:        doors.frozen = true;
+2033:        begin_floor_nav(stack.layer(nl), nav);
+2034:        // Arrival geometry is final (floor file + doors stamped): re-snapshot
+2035:        // the GPU voxel mirror for the recycled World object.
+2036:        voxelMirror.upload_all(stack.layer(nl));
+
+-- context 2203 --
+2198:
+2199:        // --- console requests ---------------------------------------------
+2200:        // Drain the one-shot request bits ([console.h]) that bound keys, menu
+2201:        // buttons and typed console lines all set. The app performs each effect
+2202:        // HERE, at its safe point — the same client-proposes/server-disposes
+2203:        // seam the floor teleport rides.
+2204:        {
+2205:            using game::ConsoleRequest;
+2206:            const std::uint32_t reqs = consoleCtx.take_requests();
+2207:            auto has = [&](ConsoleRequest r) {
+2208:                return (reqs & game::request_bit(r)) != 0;
+2209:            };
+2210:            if (has(ConsoleRequest::Quit)) running = false;
+2211:            if (has(ConsoleRequest::Menu) && screen == AppScreen::Playing) {
+2212:                // Pausing frees the cursor so the menu is clickable and the OS
+2213:                // window can be moved / minimised; leaving re-arms mouselook.
+2214:                paused = !paused;
+2215:                if (!paused) {
+2216:                    menuPage = 0;
+2217:                    rebindCapture = -1;
+2218:                }
+2219:                input.set_mouselook(!paused);
+2220:                SDL_SetWindowRelativeMouseMode(window, !paused);
+2221:            }
+2222:            if (has(ConsoleRequest::Hud)) showHud = !showHud;
+2223:            if (has(ConsoleRequest::Console)) {
+2224:                // Opening frees the cursor so the input line is clickable; the
+2225:                // '`' char itself is filtered in the InputText callback so the
+2226:                // toggle never types into its own console.
+2227:                showConsole = !showConsole;
+2228:                consoleFocus = showConsole;
+2229:                if (showConsole) {
+2230:                    input.set_mouselook(false);
+2231:                    SDL_SetWindowRelativeMouseMode(window, false);
+2232:                }
+2233:            }
+2234:            if (has(ConsoleRequest::Mouselook) && !paused) {
+2235:                const bool on = !input.mouselook();
+2236:                input.set_mouselook(on);
+2237:                SDL_SetWindowRelativeMouseMode(window, on);
+2238:            }
+2239:            // Floor travel (#8/#9): streams the destination in on demand and
+2240:            // folds the departed floor's crowd back into the cold pool, so only
+2241:            // ONE floor is ever live. The whole depart/arrive sequence is shared
+2242:            // with the console teleport — see do_ride above the loop.
+
+-- context 2445 --
+2440:                // PARKED: game::needs_step(reg, pool, kSimDt);  <- branch 3-arg call
+2441:                // main already steps the clock at line ~1043 with the layer-scoped
+2442:                // 4-arg signature and keeps its NeedsTick report for the HUD. The branch
+2443:                // call operated on its per-entity Needs COMPONENT; main keeps the
+2444:                // survival clock in the pool row, because the elevator destroys the body
+2445:                // and a component would reset the clock on every floor ride.
+2446:                // THE UTILITY AI, UNPARKED — and dormant, which is not the same as absent.
+2447:                //
+2448:                // It sat commented out because two systems writing Velocity fight every
+2449:                // tick. That is now settled by a TOKEN rather than by hope: `AiBrain::motion`
+2450:                // decides per body, and both foreign writers — wander_step and
+2451:                // faction_feud_step — carry `if (ai_owns_motion(reg, e)) continue;`.
+2452:                // MEASURED over 200 ticks x 24 bodies: ai_step wrote Velocity 2400 times,
+2453:                // wander_step 300, and BOTH in one tick ZERO times; wander wrote 0 times
+2454:                // while the token was held and 600 once delegated. [ai.h]
+2455:                //
+2456:                // `aiCfg.enabled` is TRUE and `aiMem` is passed every tick. Memory is the
+2457:                // demand column owned above; null would disable recall/record bit-for-bit.
+2458:                // `ai_init` attaches brains in finish_floor_nav; `ai_release` runs on floor
+2459:                // leave (do_ride + --shot travel) and again inside FloorStreamer::unload.
+2460:                // Clearing enabled mid-run without release would strand MotionOwner::Ai
+2461:                // and freeze bodies under wander_step — that trap is what AIMEM closes.
+2462:                // NOTE the `activeLayer` argument: the parked call was
+2463:                // `ai_step(reg, pool, danger, activeGrid, simNow, kSimDt)` against an older
+2464:                // SIX-argument signature with no layer, so it would not even have compiled
+2465:                // if anyone had uncommented it. That is what "parked until adapted" was
+2466:                // really hiding — a commented-out call is not a call, and nothing checks it.
+2467:                aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
+2468:                                       kSimDt, aiCfg, &aiMem);
+2469:                // AIMEM proof trail: once nav has brains and AI is on, emit a
+2470:                // compact stderr pulse so a --shot harness can assert the store
+2471:                // is live (rows/writes/recalled) without parsing the HUD.
+2472:                if (aiCfg.enabled && (lastAimemLogTick == ~0ull ||
+2473:                                     simTick - lastAimemLogTick >= 60ull)) {
+2474:                    lastAimemLogTick = simTick;
+2475:                    std::fprintf(stderr,
+2476:                                 "[aimem] STEP tick=%llu layer=%u seen=%u replan=%u "
+2477:                                 "own_ai=%u own_wander=%u recall=%u filed=%u fled=%u "
+2478:                                 "rows=%u writes=%u coal=%u evict=%u bytes=%zu\n",
+2479:                                 static_cast<unsigned long long>(simTick),
+2480:                                 static_cast<unsigned>(activeLayer),
+2481:                                 aiTick.considered, aiTick.replanned,
+2482:                                 aiTick.aiOwned, aiTick.wanderOwned,
+2483:                                 aiTick.recalled, aiTick.remembered,
+2484:                                 aiTick.memoryFled, aiMem.rows(),
+
+-- context 2459 --
+2454:                // while the token was held and 600 once delegated. [ai.h]
+2455:                //
+2456:                // `aiCfg.enabled` is TRUE and `aiMem` is passed every tick. Memory is the
+2457:                // demand column owned above; null would disable recall/record bit-for-bit.
+2458:                // `ai_init` attaches brains in finish_floor_nav; `ai_release` runs on floor
+2459:                // leave (do_ride + --shot travel) and again inside FloorStreamer::unload.
+2460:                // Clearing enabled mid-run without release would strand MotionOwner::Ai
+2461:                // and freeze bodies under wander_step — that trap is what AIMEM closes.
+2462:                // NOTE the `activeLayer` argument: the parked call was
+2463:                // `ai_step(reg, pool, danger, activeGrid, simNow, kSimDt)` against an older
+2464:                // SIX-argument signature with no layer, so it would not even have compiled
+2465:                // if anyone had uncommented it. That is what "parked until adapted" was
+2466:                // really hiding — a commented-out call is not a call, and nothing checks it.
+2467:                aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
+2468:                                       kSimDt, aiCfg, &aiMem);
+2469:                // AIMEM proof trail: once nav has brains and AI is on, emit a
+2470:                // compact stderr pulse so a --shot harness can assert the store
+2471:                // is live (rows/writes/recalled) without parsing the HUD.
+2472:                if (aiCfg.enabled && (lastAimemLogTick == ~0ull ||
+2473:                                     simTick - lastAimemLogTick >= 60ull)) {
+2474:                    lastAimemLogTick = simTick;
+2475:                    std::fprintf(stderr,
+2476:                                 "[aimem] STEP tick=%llu layer=%u seen=%u replan=%u "
+2477:                                 "own_ai=%u own_wander=%u recall=%u filed=%u fled=%u "
+2478:                                 "rows=%u writes=%u coal=%u evict=%u bytes=%zu\n",
+2479:                                 static_cast<unsigned long long>(simTick),
+2480:                                 static_cast<unsigned>(activeLayer),
+2481:                                 aiTick.considered, aiTick.replanned,
+2482:                                 aiTick.aiOwned, aiTick.wanderOwned,
+2483:                                 aiTick.recalled, aiTick.remembered,
+2484:                                 aiTick.memoryFled, aiMem.rows(),
+2485:                                 aiMem.writes(), aiMem.coalesced(),
+2486:                                 aiMem.evictions(), aiMem.resident_bytes());
+2487:                }
+2488:                controller_step(reg, kSimDt);
+2489:                // Steer the crowd BEFORE physics: wander writes horizontal
+2490:                // velocity, physics integrates it and resolves collision.
+2491:                // Samosbor advances HERE — after controller_step, before
+2492:                // wander_step — for the three reasons in [samosbor.h]: the seal can
+2493:                // kill and must precede finalize_deaths by a whole tick; behaviour
+2494:                // systems must never read a stale phase; and anything spawned on a
+2495:                // transition needs physics in the same tick.
+2496:                {
+2497:                    const game::SamosborTransition tr_ =
+2498:                        game::samosbor_step(samosbor,
+
+-- context 2583 --
+2578:                        auto& cam = reg.get<CameraTag>(player);
+2579:                        cam.yaw += 0.015f;
+2580:                    }
+2581:                    // attack stays held every tick (like LMB); interact is
+2582:                    // one-shot-per-tick like E. save/load fire ONCE after all
+2583:                    // --ride hops have landed so the snapshot is the deep floor,
+2584:                    // not the hub. shotFramesSeen is presented-frame count and
+2585:                    // lags sim ticks; rides fire at presented % 420 == 0.
+2586:                    if (shotAction == "rpgcmbt" && reg.valid(player)) {
+2587:                        // RPGCMBT-SHOT: force a loud sheet so scaled melee
+2588:                        // is visible in stderr + HUD (random_rpg is modest).
+2589:                        static bool rpgcmbtSheet = false;
+2590:                        if (!rpgcmbtSheet) {
+2591:                            game::RpgStats sheet = game::fresh_rpg(10);
+2592:                            sheet.attr[0] = 20;  // STR
+2593:                            sheet.attr[1] = 20;  // AGI
+2594:                            sheet.attr[2] = 5;   // INT
+2595:                            sheet.attrPoints = 3;
+2596:                            sheet.psi = game::max_psi(sheet);
+2597:                            reg.emplace_or_replace<game::RpgStats>(player,
+2598:                                                                   sheet);
+2599:                            // Credit STR max-HP onto the pool row.
+2600:                            if (const game::NpcRef* nr =
+2601:                                    reg.try_get<game::NpcRef>(player)) {
+2602:                                if (pool.valid(nr->id)) {
+2603:                                    const std::int16_t mh =
+2604:                                        static_cast<std::int16_t>(
+2605:                                            game::max_hp(sheet));
+2606:                                    pool.max_hp(nr->id) = mh;
+2607:                                    if (pool.hp(nr->id) < mh)
+2608:                                        pool.hp(nr->id) = mh;
+2609:                                }
+2610:                            }
+2611:                            rpgcmbtSheet = true;
+2612:                            std::fprintf(stderr,
+2613:                                         "[rpgcmbt] forced sheet "
+2614:                                         "lvl=%u str=%u agi=%u int=%u\n",
+2615:                                         sheet.level, sheet.attr[0],
+2616:                                         sheet.attr[1], sheet.attr[2]);
+2617:                        }
+2618:                        // Hold attack every tick (same as wall/attack).
+2619:                        attackHeld = true;
+2620:                    } else if (shotAction == "attack") {
+2621:                        attackHeld = true;
+2622:                    } else if (shotAction == "interact") {
+
+-- context 2967 --
+2962:                        }
+2963:                    }
+2964:                }
+2965:                // NPC-vs-NPC: bodies holding a staggered fight licence steer at their
+2966:                // nearest enemy and swing when it is in reach. Placed AFTER wander_step
+2967:                // and investigate_step so it overrides both for the licensed handful —
+2968:                // the same override wander.cpp already performs internally on aggro —
+2969:                // and BEFORE physics_step so reach is tested against pre-integration
+2970:                // positions: a 1 cm error at a 1.35 m/s walk over one 8 ms step, three
+2971:                // orders of magnitude inside the 1.9 m unarmed reach.
+2972:                //
+2973:                // A feud can never kill a crowd body — damage to anyone but the camera
+2974:                // holder is floored at hp-1, because nothing in this game heals a
+2975:                // resident and a lethal feud would be a one-way population drain with
+2976:                // no counterplay. The camera holder IS killable: the player has
+2977:                // healing, resupply and possession-on-death. [faction_relations.h]
+2978:                feudHits += game::faction_feud_step(reg, pool, factionRel, activeLayer,
+2979:                                                    simTick);
+2980:                // Slowed CAP enforcement: after every velocity writer
+2981:                // (controller / wander / investigate / feud), before integrate.
+2982:                // Was defined in combat.cpp and never called — dead path until now.
+2983:                game::slow_step(reg, activeLayer, kSimDt);
+2984:                physics_step(reg, stack, kSimDt);
+2985:                // Doors resolve AFTER physics for the same reason melee does: contact
+2986:                // is tested by ADJACENCY against where bodies actually ended up this
+2987:                // step, not where they intended to go. Costs nothing while no door is
+2988:                // shut — door_step early-outs on doors.shut == 0. [door.h]
+2989:                doorTick = game::door_step(reg, stack.layer(activeLayer), doors,
+2990:                                           activeLayer, kSimDt, simTick);
+2991:                // Door VFX: debris + noise on monster break / force-open.
+2992:                // doorTick carries the world pos of the last event this tick.
+2993:                if (doorTick.broken > 0 && particlePass.ready()) {
+2994:                    // Heavy debris burst — door splintering
+2995:                    particlePass.emit_burst(
+2996:                        doorTick.lastBreakPos, vec3{0.0f, 0.8f, 0.0f},
+2997:                        vec3{0.85f, 0.55f, 0.25f},
+2998:                        gpu::GpuParticleKind::Spark,
+2999:                        40, 4.5f, 1.2f, 0.18f, 200.0f);
+3000:                    // Loud crash — audible across a wide radius
+3001:                    game::NoiseProfile np{18.0f, 3500, 4,
+3002:                                           game::NoiseSource::Door};
+3003:                    game::noise_publish(noiseField, activeLayer,
+3004:                                        doorTick.lastBreakPos, np, 0);
+3005:                }
+3006:                if (doorTick.opened > 0 && particlePass.ready()) {
+
+-- context 2968 --
+2963:                    }
+2964:                }
+2965:                // NPC-vs-NPC: bodies holding a staggered fight licence steer at their
+2966:                // nearest enemy and swing when it is in reach. Placed AFTER wander_step
+2967:                // and investigate_step so it overrides both for the licensed handful —
+2968:                // the same override wander.cpp already performs internally on aggro —
+2969:                // and BEFORE physics_step so reach is tested against pre-integration
+2970:                // positions: a 1 cm error at a 1.35 m/s walk over one 8 ms step, three
+2971:                // orders of magnitude inside the 1.9 m unarmed reach.
+2972:                //
+2973:                // A feud can never kill a crowd body — damage to anyone but the camera
+2974:                // holder is floored at hp-1, because nothing in this game heals a
+2975:                // resident and a lethal feud would be a one-way population drain with
+2976:                // no counterplay. The camera holder IS killable: the player has
+2977:                // healing, resupply and possession-on-death. [faction_relations.h]
+2978:                feudHits += game::faction_feud_step(reg, pool, factionRel, activeLayer,
+2979:                                                    simTick);
+2980:                // Slowed CAP enforcement: after every velocity writer
+2981:                // (controller / wander / investigate / feud), before integrate.
+2982:                // Was defined in combat.cpp and never called — dead path until now.
+2983:                game::slow_step(reg, activeLayer, kSimDt);
+2984:                physics_step(reg, stack, kSimDt);
+2985:                // Doors resolve AFTER physics for the same reason melee does: contact
+2986:                // is tested by ADJACENCY against where bodies actually ended up this
+2987:                // step, not where they intended to go. Costs nothing while no door is
+2988:                // shut — door_step early-outs on doors.shut == 0. [door.h]
+2989:                doorTick = game::door_step(reg, stack.layer(activeLayer), doors,
+2990:                                           activeLayer, kSimDt, simTick);
+2991:                // Door VFX: debris + noise on monster break / force-open.
+2992:                // doorTick carries the world pos of the last event this tick.
+2993:                if (doorTick.broken > 0 && particlePass.ready()) {
+2994:                    // Heavy debris burst — door splintering
+2995:                    particlePass.emit_burst(
+2996:                        doorTick.lastBreakPos, vec3{0.0f, 0.8f, 0.0f},
+2997:                        vec3{0.85f, 0.55f, 0.25f},
+2998:                        gpu::GpuParticleKind::Spark,
+2999:                        40, 4.5f, 1.2f, 0.18f, 200.0f);
+3000:                    // Loud crash — audible across a wide radius
+3001:                    game::NoiseProfile np{18.0f, 3500, 4,
+3002:                                           game::NoiseSource::Door};
+3003:                    game::noise_publish(noiseField, activeLayer,
+3004:                                        doorTick.lastBreakPos, np, 0);
+3005:                }
+3006:                if (doorTick.opened > 0 && particlePass.ready()) {
+3007:                    // Light dust puff — door pushed open
+
+-- context 4964 --
+4959:                    shotFloorWanted = false;
+4960:                    pendingTeleport = shotFloor;
+4961:                }
+4962:                if (shotRideDone < shotRide && shotFramesSeen % 420 == 0) {
+4963:                    // One floor down every ~7 s: long enough for the async nav bake
+4964:                    // (measured 2.5 s + 2.4 s) to finish before the next ride.
+4965:                    game::NpcId pid = reg.valid(player)
+4966:                                          ? reg.get<game::NpcRef>(player).id
+4967:                                          : game::kInvalidNpc;
+4968:                    // Same capture as the keyboard ride path. Two travel sites;
+4969:                    // without this, --shot loot -> ride -> return refills crates.
+4970:                    // [save.h]
+4971:                    {
+4972:                        const LayerId leaveLayer =
+4973:                            reg.valid(player) ? reg.get<Transform>(player).layer
+4974:                                              : static_cast<LayerId>(0);
+4975:                        game::refresh_opened_containers(reg, leaveLayer, currentFloor,
+4976:                                                        runState.opened);
+4977:                        // Same departure floor-file write as the keyboard
+4978:                        // path — two travel sites, one law. [save.h]
+4979:                        write_floor_file(stack.layer(leaveLayer), currentFloor);
+4980:                        // Same AIMEM leave release as do_ride. Two travel
+4981:                        // sites; a fix that touches only one proves nothing
+4982:                        // under --shot --ride. [ai.h]
+4983:                        {
+4984:                            const std::uint32_t released =
+4985:                                game::ai_release(reg, leaveLayer);
+4986:                            std::fprintf(stderr,
+4987:                                         "[aimem] LEAVE floor=%d layer=%u "
+4988:                                         "released=%u mem_rows=%u\n",
+4989:                                         currentFloor,
+4990:                                         static_cast<unsigned>(leaveLayer),
+4991:                                         released, aiMem.rows());
+4992:                        }
+4993:                    }
+4994:                    game::RideResult r = streamer.travel(
+4995:                        stack, registry, reg, pool, player, currentFloor, -1,
+4996:                        /*arrivalZ=*/2, pid);
+4997:                    if (r.moved) {
+4998:                        player = r.player;
+4999:                        currentFloor = r.floor;
+5000:                        game::record_floor(ledger, currentFloor);
+5001:                        // currentSpec was "(HUD only)" until door_build started reading
+5002:                        // it, and only the KEYBOARD ride path maintained it — so a
+5003:                        // --shot ride built floor -36's doors against floor 0's
+
+-- context 5003 --
+4998:                        player = r.player;
+4999:                        currentFloor = r.floor;
+5000:                        game::record_floor(ledger, currentFloor);
+5001:                        // currentSpec was "(HUD only)" until door_build started reading
+5002:                        // it, and only the KEYBOARD ride path maintained it — so a
+5003:                        // --shot ride built floor -36's doors against floor 0's
+5004:                        // Residential spec and produced ZERO doors. Caught by running
+5005:                        // the game, not by a test: the HUD read "doors 0 built" on a
+5006:                        // floor where the keyboard path builds thousands.
+5007:                        //
+5008:                        // This is the two-travel-sites trap this file already warns
+5009:                        // about, hit again by promoting a display variable to a source
+5010:                        // of truth. Both sites now set it.
+5011:                        currentSpec = spec_for_floor(currentFloor);
+5012:                        samosbor = game::samosbor_new_game(sbRng);
+5013:                        aim_player(reg, player);
+5014:                        LayerId nl = reg.get<Transform>(player).layer;
+5015:                        activeLayer = nl;
+5016:                        refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
+5017:                        refresh_floor_containers(reg, stack.layer(nl),
+5018:                                                 currentFloor, nl);
+5019:                        // Re-empty crates already looted on a prior visit.
+5020:                        // Same seam as keyboard ride + F9 apply. [save.h]
+5021:                        game::apply_opened_containers(
+5022:                            reg, nl, currentFloor, runState.opened.data(),
+5023:                            runState.opened.size());
+5024:                        // Arrival floor file BEFORE doors, then doors before
+5025:                        // the bake, frozen for its duration — the same law as
+5026:                        // the keyboard ride path. This is the SECOND travel
+5027:                        // site; a fix that touches only one path leaves --shot
+5028:                        // proving nothing. [save.h, door.h]
+5029:                        apply_floor_file(stack.layer(nl), currentFloor);
+5030:                        if (currentSpec)
+5031:                            doorsBuilt = game::door_build(
+5032:                                stack.layer(nl), doors, currentFloor,
+5033:                                *currentSpec,
+5034:                                streamer.floor_seed_of(registry, currentFloor));
+5035:                        doors.frozen = true;
+5036:                        begin_floor_nav(stack.layer(nl), nav);
+5037:                        voxelMirror.upload_all(stack.layer(nl));
+5038:                        if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
+5039:                        // Same transition autosave as the keyboard path.
+5040:                        save_run_now();
+5041:                        if (propPass.ready()) {
+5042:                            std::uint32_t fseed = 1337u ^ (static_cast<std::uint32_t>(currentFloor) * 0x9e3779b9u);
+
+==== lightChancePct expression ====
+32:    std::uint32_t lightChancePct       = 25;
+177:                if (solidAbove && !ceilingOccupied && (rngLight % 100 < kCfg.lightChancePct)) {
+HIT 305:                if (solidBelow && !solidAbove && !floorOccupied && (nOpen >= 2) && (rngRail % 100 < 8)) {
+  305:                if (solidBelow && !solidAbove && !floorOccupied && (nOpen >= 2) && (rngRail % 100 < 8)) {
+  306:                    PropInstance rail{};
+  307:                    rail.origin    = {wx, wy + 0.01f, wz};
+  308:                    rail.yaw       = (!solidWest && !solidEast) ? 0.0f : kHalfPi;
+  309:                    rail.color     = {0.35f, 0.38f, 0.40f};
+
+==== game_test main setvbuf/printf ====
+1:// Game-layer unit tests. Same tiny CHECK harness as world_test; links giga_game
+2:// so it exercises the macro entity systems headless (no SDL/Vulkan).
+3:#include <cmath>
+4:#include <cstdio>
+5:#include <cmath>
+6:#include <cstring>
+7:#include <vector>
+8:
+9:#include "core/tick.h"   // kSimDt / kSimHz — never a bare 1/120 ([core/tick.h])
+10:#include "core/wrap.h"
+11:#include "ecs/components.h"
+12:#include "ecs/registry.h"
+13:#include "game/contract.h"
+14:#include "game/vendor.h"
+15:#include "game/container.h"
+16:#include "game/combat.h"
+17:#include "game/embody.h"
+18:#include "game/elevator.h"
+19:#include "game/event_bus.h"
+20:#include "game/faction.h"
+21:#include "game/floor_gen.h"
+22:#include "game/floor_registry.h"
+23:#include "game/extraction.h"
+24:#include "game/faction.h"
+25:#include "game/faction_relations.h"
+26:#include "game/floor_spec.h"
+27:#include "game/mob_behaviour.h"
+28:#include "game/mob_table.h"
+29:#include "game/item_table.h"
+30:#include "game/loot.h"
+31:#include "game/ranged_table.h"
+32:#include "game/weapon_table.h"
+33:#include "game/mob_spawn.h"
+34:#include "game/floor_stream.h"
+35:#include "game/inventory.h"
+36:#include "game/item_table.h"
+37:#include "game/mob_table.h"
+38:#include "game/nav_cache.h"
+39:#include "game/npc_pool.h"
+40:#include "game/wander.h"
+41:#include "game/population.h"
+42:#include "game/rpg.h"
+43:
+44:#include "sim/physics.h"
+45:#include "world/lattice.h"
+46:#include "world/materials.h"
+47:#include "world/level_stack.h"
+48:#include "world/nav.h"
+49:#include "world/world.h"
+50:
+51:using namespace giga;
+52:using namespace giga::game;
+53:
+54:namespace {
+55:int g_fails = 0;
+56:int g_checks = 0;
+57:}
+58:
+59:#define CHECK(cond)                                                            \
+60:    do {                                                                       \
+61:        ++g_checks;                                                            \
+62:        if (!(cond)) {                                                         \
+63:            ++g_fails;                                                         \
+64:            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__,       \
+65:                         #cond);                                               \
+66:        }                                                                      \
+67:    } while (0)
+68:
+69:#include "suite_needs.inl"
+70:#include "suite_noise.inl"
+71:#include "suite_packs.inl"
+72:#include "suite_hunt.inl"
+73:#include "suite_samosbor.inl"
+74:#include "suite_doors.inl"
+75:#include "suite_saveload.inl"
+76:#include "suite_macrosim.inl"
+77:#include "suite_behaviours.inl"
+78:#include "suite_samosborhud.inl"
+79:#include "suite_fluidrooms.inl"
+80:#include "suite_eventsweb.inl"
+...
+
+==== interesting dirty files sample ====
+(see git status)
+
+BACKLOG unchecked items: 0
+
+==== HUD uses objective/time text? ====
+quest_objective_text main=0
+quest_time_text main=0
+quest_line main=1
+4357:                            active, contracts.completed, contracts.failed,
+4358:                            contractPaid);
+4359:                // Active quests — each row reports title + progress + time left.
+4360:                const int qActive = game::quest_active_count(quests);
+4361:                if (qActive > 0) {
+4362:                    ImGui::Separator();
+4363:                    ImGui::Text("quests %d active | paid %d rub", qActive, questPaid);
+4364:                    for (int qi = 1; qi <= static_cast<int>(game::kQuestCount); ++qi) {
+4365:                        char qline[320];
+4366:                        const game::QuestId qid = static_cast<game::QuestId>(qi);
+4367:                        if (game::quest_line(quests, qid, qline, sizeof(qline)))
+---
+4358:                            contractPaid);
+4359:                // Active quests — each row reports title + progress + time left.
+4360:                const int qActive = game::quest_active_count(quests);
+4361:                if (qActive > 0) {
+4362:                    ImGui::Separator();
+4363:                    ImGui::Text("quests %d active | paid %d rub", qActive, questPaid);
+4364:                    for (int qi = 1; qi <= static_cast<int>(game::kQuestCount); ++qi) {
+4365:                        char qline[320];
+4366:                        const game::QuestId qid = static_cast<game::QuestId>(qi);
+4367:                        if (game::quest_line(quests, qid, qline, sizeof(qline)))
+4368:                            ImGui::TextColored(ImVec4(0.70f, 0.98f, 0.60f, 1.0f),
+---
+4360:                const int qActive = game::quest_active_count(quests);
+4361:                if (qActive > 0) {
+4362:                    ImGui::Separator();
+4363:                    ImGui::Text("quests %d active | paid %d rub", qActive, questPaid);
+4364:                    for (int qi = 1; qi <= static_cast<int>(game::kQuestCount); ++qi) {
+4365:                        char qline[320];
+4366:                        const game::QuestId qid = static_cast<game::QuestId>(qi);
+4367:                        if (game::quest_line(quests, qid, qline, sizeof(qline)))
+4368:                            ImGui::TextColored(ImVec4(0.70f, 0.98f, 0.60f, 1.0f),
+4369:                                               "  quest: %s", qline);
+4370:                    }
+---
+4362:                    ImGui::Separator();
+4363:                    ImGui::Text("quests %d active | paid %d rub", qActive, questPaid);
+4364:                    for (int qi = 1; qi <= static_cast<int>(game::kQuestCount); ++qi) {
+4365:                        char qline[320];
+4366:                        const game::QuestId qid = static_cast<game::QuestId>(qi);
+4367:                        if (game::quest_line(quests, qid, qline, sizeof(qline)))
+4368:                            ImGui::TextColored(ImVec4(0.70f, 0.98f, 0.60f, 1.0f),
+4369:                                               "  quest: %s", qline);
+4370:                    }
+4371:                }
+4372:            }
+---
+4364:                    for (int qi = 1; qi <= static_cast<int>(game::kQuestCount); ++qi) {
+4365:                        char qline[320];
+4366:                        const game::QuestId qid = static_cast<game::QuestId>(qi);
+4367:                        if (game::quest_line(quests, qid, qline, sizeof(qline)))
+4368:                            ImGui::TextColored(ImVec4(0.70f, 0.98f, 0.60f, 1.0f),
+4369:                                               "  quest: %s", qline);
+4370:                    }
+4371:                }
+4372:            }
+4373:            if (rumourLine[0])
+4374:                ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.91f, 1.0f), "\"%s\"",
+---
+4366:                        const game::QuestId qid = static_cast<game::QuestId>(qi);
+4367:                        if (game::quest_line(quests, qid, qline, sizeof(qline)))
+4368:                            ImGui::TextColored(ImVec4(0.70f, 0.98f, 0.60f, 1.0f),
+4369:                                               "  quest: %s", qline);
+4370:                    }
+4371:                }
+4372:            }
+4373:            if (rumourLine[0])
+4374:                ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.91f, 1.0f), "\"%s\"",
+4375:                                   rumourLine);
+4376:            // Tan, NOT rumour's cyan, and prefixed with the situation so the two channels
+---

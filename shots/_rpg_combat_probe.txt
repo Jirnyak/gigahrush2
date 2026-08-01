@@ -1,0 +1,349 @@
+
+===== C:\hades\gigahrush2\src\game\rpg.h (217 lines) =====
+--- @64 ---
+   61: // keeps the 2^20-record footprint unchanged (the slots are already allocated and
+   62: // already seeded 3..15 by `seed_floor_from_spec`), and leaves slots 3..7 free.
+   63: enum class Attr : std::uint8_t { Str = 0, Agi, Int, Count };
+>>>64: inline constexpr std::size_t kAttrCount = static_cast<std::size_t>(Attr::Count);
+   65: 
+   66: // ---------------------------------------------------------------------------
+   67: // The XP curve
+--- @143 ---
+   140: //   ASYMPTOTIC  1 + A*(1-e^(-pk/A)) — saturates at a hard ceiling A (xp, contract
+   141: //                                  and document rewards). INT's xp bonus can never
+   142: //                                  exceed +100% no matter how many points go in.
+>>>143: std::uint16_t str_melee_dmg_mult_e3(const RpgStats& r);
+   144: std::uint16_t str_durability_wear_mult_e3(const RpgStats& r);
+   145: std::uint16_t agi_move_speed_mult_e3(const RpgStats& r);
+   146: std::uint16_t agi_attack_speed_mult_e3(const RpgStats& r);   // <1000 = faster
+--- @144 ---
+   141: //                                  and document rewards). INT's xp bonus can never
+   142: //                                  exceed +100% no matter how many points go in.
+   143: std::uint16_t str_melee_dmg_mult_e3(const RpgStats& r);
+>>>144: std::uint16_t str_durability_wear_mult_e3(const RpgStats& r);
+   145: std::uint16_t agi_move_speed_mult_e3(const RpgStats& r);
+   146: std::uint16_t agi_attack_speed_mult_e3(const RpgStats& r);   // <1000 = faster
+   147: std::uint16_t agi_ranged_spread_mult_e3(const RpgStats& r);  // <1000 = tighter
+--- @145 ---
+   142: //                                  exceed +100% no matter how many points go in.
+   143: std::uint16_t str_melee_dmg_mult_e3(const RpgStats& r);
+   144: std::uint16_t str_durability_wear_mult_e3(const RpgStats& r);
+>>>145: std::uint16_t agi_move_speed_mult_e3(const RpgStats& r);
+   146: std::uint16_t agi_attack_speed_mult_e3(const RpgStats& r);   // <1000 = faster
+   147: std::uint16_t agi_ranged_spread_mult_e3(const RpgStats& r);  // <1000 = tighter
+   148: std::uint16_t int_xp_mult_e3(const RpgStats& r);
+--- @146 ---
+   143: std::uint16_t str_melee_dmg_mult_e3(const RpgStats& r);
+   144: std::uint16_t str_durability_wear_mult_e3(const RpgStats& r);
+   145: std::uint16_t agi_move_speed_mult_e3(const RpgStats& r);
+>>>146: std::uint16_t agi_attack_speed_mult_e3(const RpgStats& r);   // <1000 = faster
+   147: std::uint16_t agi_ranged_spread_mult_e3(const RpgStats& r);  // <1000 = tighter
+   148: std::uint16_t int_xp_mult_e3(const RpgStats& r);
+   149: std::uint16_t int_psi_cost_mult_e3(const RpgStats& r);
+--- @147 ---
+   144: std::uint16_t str_durability_wear_mult_e3(const RpgStats& r);
+   145: std::uint16_t agi_move_speed_mult_e3(const RpgStats& r);
+   146: std::uint16_t agi_attack_speed_mult_e3(const RpgStats& r);   // <1000 = faster
+>>>147: std::uint16_t agi_ranged_spread_mult_e3(const RpgStats& r);  // <1000 = tighter
+   148: std::uint16_t int_xp_mult_e3(const RpgStats& r);
+   149: std::uint16_t int_psi_cost_mult_e3(const RpgStats& r);
+   150: std::uint16_t int_contract_reward_mult_e3(const RpgStats& r);
+--- @148 ---
+   145: std::uint16_t agi_move_speed_mult_e3(const RpgStats& r);
+   146: std::uint16_t agi_attack_speed_mult_e3(const RpgStats& r);   // <1000 = faster
+   147: std::uint16_t agi_ranged_spread_mult_e3(const RpgStats& r);  // <1000 = tighter
+>>>148: std::uint16_t int_xp_mult_e3(const RpgStats& r);
+   149: std::uint16_t int_psi_cost_mult_e3(const RpgStats& r);
+   150: std::uint16_t int_contract_reward_mult_e3(const RpgStats& r);
+   151: std::uint16_t int_document_reward_mult_e3(const RpgStats& r);
+--- @149 ---
+   146: std::uint16_t agi_attack_speed_mult_e3(const RpgStats& r);   // <1000 = faster
+   147: std::uint16_t agi_ranged_spread_mult_e3(const RpgStats& r);  // <1000 = tighter
+   148: std::uint16_t int_xp_mult_e3(const RpgStats& r);
+>>>149: std::uint16_t int_psi_cost_mult_e3(const RpgStats& r);
+   150: std::uint16_t int_contract_reward_mult_e3(const RpgStats& r);
+   151: std::uint16_t int_document_reward_mult_e3(const RpgStats& r);
+   152: 
+--- @150 ---
+   147: std::uint16_t agi_ranged_spread_mult_e3(const RpgStats& r);  // <1000 = tighter
+   148: std::uint16_t int_xp_mult_e3(const RpgStats& r);
+   149: std::uint16_t int_psi_cost_mult_e3(const RpgStats& r);
+>>>150: std::uint16_t int_contract_reward_mult_e3(const RpgStats& r);
+   151: std::uint16_t int_document_reward_mult_e3(const RpgStats& r);
+   152: 
+   153: // Flat seconds added to a PSI effect's duration, +1 s per INT point.
+--- @151 ---
+   148: std::uint16_t int_xp_mult_e3(const RpgStats& r);
+   149: std::uint16_t int_psi_cost_mult_e3(const RpgStats& r);
+   150: std::uint16_t int_contract_reward_mult_e3(const RpgStats& r);
+>>>151: std::uint16_t int_document_reward_mult_e3(const RpgStats& r);
+   152: 
+   153: // Flat seconds added to a PSI effect's duration, +1 s per INT point.
+   154: std::uint16_t int_psi_duration_bonus_sec(const RpgStats& r);
+--- @160 ---
+   157: // The threshold is the reference's `HEAVY_WEAPON_COOLDOWN` and the gate is why STR
+   158: // is not simply a universal attack-speed stat.
+   159: inline constexpr std::uint16_t kHeavyWeaponCooldownMs = 650;
+>>>160: std::uint16_t str_heavy_weapon_speed_mult_e3(const RpgStats& r,
+   161:                                             std::uint16_t baseCooldownMs);
+   162: 
+   163: // Melee damage for a swing, rounded. Matches the reference's two-branch
+--- @168 ---
+   165: // HANDED it is `max(1, level)` and the weapon number is ignored entirely. Then the
+   166: // STR multiplier applies to whichever. `weaponId == 0` means bare hands, the same
+   167: // sentinel [item_table.h] uses.
+>>>168: std::int16_t melee_damage(const RpgStats& r, ItemId weaponId,
+   169:                           std::int16_t weaponDamage);
+   170: 
+   171: // PSI cost after INT efficiency, floored at 1. The reference rounds to one decimal
+
+===== C:\hades\gigahrush2\src\game\rpg.cpp (375 lines) =====
+--- @212 ---
+   209:     return r;
+   210: }
+   211: 
+>>>212: std::uint16_t str_melee_dmg_mult_e3(const RpgStats& r) {
+   213:     return to_e3(linear_mult(attr_of(r, Attr::Str), kStrMeleeDamagePerPoint));
+   214: }
+   215: 
+--- @224 ---
+   221:     return to_e3(linear_mult(attr_of(r, Attr::Agi), kAgiMoveSpeedPerPoint));
+   222: }
+   223: 
+>>>224: std::uint16_t agi_attack_speed_mult_e3(const RpgStats& r) {
+   225:     return to_e3(inverse_mult(attr_of(r, Attr::Agi), kAgiAttackCooldownPerPoint));
+   226: }
+   227: 
+--- @228 ---
+   225:     return to_e3(inverse_mult(attr_of(r, Attr::Agi), kAgiAttackCooldownPerPoint));
+   226: }
+   227: 
+>>>228: std::uint16_t agi_ranged_spread_mult_e3(const RpgStats& r) {
+   229:     return to_e3(inverse_mult(attr_of(r, Attr::Agi), kAgiSpreadPerPoint));
+   230: }
+   231: 
+--- @260 ---
+   257:                                       kIntPsiDurationSecPerPoint);
+   258: }
+   259: 
+>>>260: std::uint16_t str_heavy_weapon_speed_mult_e3(const RpgStats& r,
+   261:                                             std::uint16_t baseCooldownMs) {
+   262:     if (baseCooldownMs < kHeavyWeaponCooldownMs) return 1000;
+   263:     return to_e3(inverse_mult(attr_of(r, Attr::Str), kStrHeavyWeaponSpeedPerPoint));
+--- @266 ---
+   263:     return to_e3(inverse_mult(attr_of(r, Attr::Str), kStrHeavyWeaponSpeedPerPoint));
+   264: }
+   265: 
+>>>266: std::int16_t melee_damage(const RpgStats& r, ItemId weaponId,
+   267:                           std::int16_t weaponDamage) {
+   268:     const int levelBonus = static_cast<int>(r.level) - 1;
+   269:     int base;
+--- @279 ---
+   276:         base = r.level < 1 ? 1 : static_cast<int>(r.level);
+   277:     }
+   278:     const float scaled = static_cast<float>(base) *
+>>>279:                          (static_cast<float>(str_melee_dmg_mult_e3(r)) / 1000.0f);
+   280:     const int out = static_cast<int>(scaled + 0.5f);
+   281:     return static_cast<std::int16_t>(out > 32767 ? 32767 : (out < 0 ? 0 : out));
+   282: }
+
+===== C:\hades\gigahrush2\src\game\combat.cpp (1285 lines) =====
+--- @369 ---
+   366: 
+   367:         // THE single cooldown decrement. Every mob, every tick, exactly once —
+   368:         // whether or not it is in reach, whether or not there is a target.
+>>>369:         if (mc.cooldownMs > elapsedMs) mc.cooldownMs =
+   370:             static_cast<std::uint16_t>(mc.cooldownMs - elapsedMs);
+   371:         else mc.cooldownMs = 0;
+   372:         // The windup runs down in the SAME one place, for the same reason: two
+--- @370 ---
+   367:         // THE single cooldown decrement. Every mob, every tick, exactly once —
+   368:         // whether or not it is in reach, whether or not there is a target.
+   369:         if (mc.cooldownMs > elapsedMs) mc.cooldownMs =
+>>>370:             static_cast<std::uint16_t>(mc.cooldownMs - elapsedMs);
+   371:         else mc.cooldownMs = 0;
+   372:         // The windup runs down in the SAME one place, for the same reason: two
+   373:         // sites decrementing a timer is how a monster ends up firing twice as fast
+--- @371 ---
+   368:         // whether or not it is in reach, whether or not there is a target.
+   369:         if (mc.cooldownMs > elapsedMs) mc.cooldownMs =
+   370:             static_cast<std::uint16_t>(mc.cooldownMs - elapsedMs);
+>>>371:         else mc.cooldownMs = 0;
+   372:         // The windup runs down in the SAME one place, for the same reason: two
+   373:         // sites decrementing a timer is how a monster ends up firing twice as fast
+   374:         // as it is authored to.
+--- @387 ---
+   384:             static_cast<std::uint16_t>(mc.windupMs - elapsedMs);
+   385:         else mc.windupMs = 0;
+   386: 
+>>>387:         if (mc.cooldownMs > 0) continue;
+   388: 
+   389:         // A CONTROL shooter is a monster whose whole attack is its projectile's
+   390:         // effect, so it has to get past a damage gate that was written as if damage
+--- @535 ---
+   532:                              s.projSpeedMmps, s.mob, s.proj);
+   533:             ++swings;
+   534:             if (MobCombat* mc = reg.try_get<MobCombat>(s.mob))
+>>>535:                 mc->cooldownMs = s.cd;
+   536:             continue;   // a shot in flight is not a hit yet
+   537:         }
+   538:         // No early `break` on a lethal hit any more, and its removal is required
+--- @549 ---
+   546:         if (r.hit) {
+   547:             ++swings;
+   548:             if (MobCombat* mc = reg.try_get<MobCombat>(s.mob))
+>>>549:                 mc->cooldownMs = s.cd;
+   550:         }
+   551:     }
+   552: 
+--- @1039 ---
+   1036: }
+   1037: 
+   1038: 
+>>>1039: std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
+   1040:                                  bool wantFire, float dt, std::uint64_t tick,
+   1041:                                  NoiseField* noise) {
+   1042:     Entity shooter = entt::null;
+--- @1060 ---
+   1057:     // Decremented EXACTLY ONCE, at the top, before any early-out. Defect 3: the
+   1058:     // reference decremented cooldowns at ~60 sites and some monsters out-attacked
+   1059:     // their own authored rate.
+>>>1060:     if (pr.cooldownMs > elapsedMs) pr.cooldownMs -= elapsedMs; else pr.cooldownMs = 0;
+   1061:     if (pr.reloadMs > elapsedMs) pr.reloadMs -= elapsedMs; else pr.reloadMs = 0;
+   1062: 
+   1063:     const NpcRef* nr = reg.try_get<NpcRef>(shooter);
+--- @1103 ---
+   1100:         return 0;
+   1101:     }
+   1102: 
+>>>1103:     if (!wantFire || pr.cooldownMs > 0) return 0;
+   1104: 
+   1105:     const CameraTag& cam = reg.get<const CameraTag>(shooter);
+   1106:     const Transform& tr = reg.get<const Transform>(shooter);
+--- @1115 ---
+   1112:     // reference is 2.5D, so jittering yaw alone was correct there; in true 3D it
+   1113:     // would put a shotgun's pellets in a dead-flat horizontal line, which reads as a
+   1114:     // bug rather than as a spread.
+>>>1115:     const float spread = static_cast<float>(def->spreadE4) * 1e-4f;
+   1116:     // Any two vectors perpendicular to fwd. Guarding on |fwd.z| rather than fwd.x
+   1117:     // keeps the cross product well-conditioned when looking straight up or down.
+   1118:     vec3 up = (fwd.z > 0.9f || fwd.z < -0.9f) ? vec3{1, 0, 0} : vec3{0, 0, 1};
+--- @1151 ---
+   1148:         // rows in data/items.csv and every per-channel column in [monster_traits.h]
+   1149:         // were all mitigating against a channel that only ever arrived as Kinetic.
+   1150:         spawn_projectile_dir(reg, layer, eye, dir,
+>>>1151:                              static_cast<std::int16_t>(def->dmg),
+   1152:                              def->projSpeedMmps, shooter, kPlayerGravityPct, 1,
+   1153:                              def->channel);
+   1154:     }
+--- @1168 ---
+   1165:     // ONE round per shot regardless of pellet count — a shotgun blast costs one shell
+   1166:     // and produces up to twelve projectiles. The reference's rule.
+   1167:     --pr.magCount;
+>>>1168:     pr.cooldownMs = def->cooldownMs;
+   1169:     ++pr.shots;
+   1170:     return 1;
+   1171: }
+--- @1173 ---
+   1170:     return 1;
+   1171: }
+   1172: 
+>>>1173: bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId layer,
+   1174:                        float dt, bool wantsAttack, std::uint64_t tick,
+   1175:                        const MacroGrid* grid, CarveProposalQueue* carves) {
+   1176:     Entity self = entt::null;
+--- @1191 ---
+   1188: 
+   1189:     const std::uint16_t elapsedMs =
+   1190:         static_cast<std::uint16_t>(dt * 1000.0f + 0.5f);
+>>>1191:     if (pm.cooldownMs > elapsedMs)
+   1192:         pm.cooldownMs = static_cast<std::uint16_t>(pm.cooldownMs - elapsedMs);
+   1193:     else
+   1194:         pm.cooldownMs = 0;
+--- @1192 ---
+   1189:     const std::uint16_t elapsedMs =
+   1190:         static_cast<std::uint16_t>(dt * 1000.0f + 0.5f);
+   1191:     if (pm.cooldownMs > elapsedMs)
+>>>1192:         pm.cooldownMs = static_cast<std::uint16_t>(pm.cooldownMs - elapsedMs);
+   1193:     else
+   1194:         pm.cooldownMs = 0;
+   1195: 
+--- @1194 ---
+   1191:     if (pm.cooldownMs > elapsedMs)
+   1192:         pm.cooldownMs = static_cast<std::uint16_t>(pm.cooldownMs - elapsedMs);
+   1193:     else
+>>>1194:         pm.cooldownMs = 0;
+   1195: 
+   1196:     if (!wantsAttack || pm.cooldownMs > 0) return false;
+   1197: 
+--- @1196 ---
+   1193:     else
+   1194:         pm.cooldownMs = 0;
+   1195: 
+>>>1196:     if (!wantsAttack || pm.cooldownMs > 0) return false;
+   1197: 
+   1198:     // Whatever is in hand. A found rebar hits eight times as hard as a fist and
+   1199:     // reaches four times as far — which is the entire point of picking loot up.
+--- @1200 ---
+   1197: 
+   1198:     // Whatever is in hand. A found rebar hits eight times as hard as a fist and
+   1199:     // reaches four times as far — which is the entire point of picking loot up.
+>>>1200:     const MeleeDef* wp = &unarmed_melee();
+   1201:     if (const NpcRef* n = reg.try_get<NpcRef>(self))
+   1202:         if (pool.valid(n->id)) {
+   1203:             const ItemId held = equipped_melee(pool.inventory(n->id));
+--- @1203 ---
+   1200:     const MeleeDef* wp = &unarmed_melee();
+   1201:     if (const NpcRef* n = reg.try_get<NpcRef>(self))
+   1202:         if (pool.valid(n->id)) {
+>>>1203:             const ItemId held = equipped_melee(pool.inventory(n->id));
+   1204:             if (const MeleeDef* m = melee_for_item(held)) wp = m;
+   1205:         }
+   1206:     const float reach =
+--- @1204 ---
+   1201:     if (const NpcRef* n = reg.try_get<NpcRef>(self))
+   1202:         if (pool.valid(n->id)) {
+   1203:             const ItemId held = equipped_melee(pool.inventory(n->id));
+>>>1204:             if (const MeleeDef* m = melee_for_item(held)) wp = m;
+   1205:         }
+   1206:     const float reach =
+   1207:         static_cast<float>(wp->reachMm) * 0.001f * kCellSize + kMeleeReachSlack;
+--- @1262 ---
+   1259:             if (hitWall) {
+   1260:                 carves->push(hitAt.x, hitAt.y, hitAt.z, kMeleeCarveRadius,
+   1261:                              carve_power_from_dmg(
+>>>1262:                                  static_cast<std::int16_t>(wp->dmg)),
+   1263:                              static_cast<std::uint32_t>(tick));
+   1264:                 pm.cooldownMs = wp->cooldownMs;
+   1265:                 (void)bus;
+--- @1264 ---
+   1261:                              carve_power_from_dmg(
+   1262:                                  static_cast<std::int16_t>(wp->dmg)),
+   1263:                              static_cast<std::uint32_t>(tick));
+>>>1264:                 pm.cooldownMs = wp->cooldownMs;
+   1265:                 (void)bus;
+   1266:                 return true;
+   1267:             }
+--- @1275 ---
+   1272:     // Same damage path, same Dead tag, same finalizer as a mob's swing. There is
+   1273:     // deliberately no second way for something to die.
+   1274:     DamageResult r = apply_damage(reg, pool, best,
+>>>1275:                                   static_cast<std::int16_t>(wp->dmg),
+   1276:                                   DamageChannel::Kinetic, self);
+   1277:     pm.cooldownMs = wp->cooldownMs;
+   1278:     if (r.lethal) ++pm.kills;
+--- @1277 ---
+   1274:     DamageResult r = apply_damage(reg, pool, best,
+   1275:                                   static_cast<std::int16_t>(wp->dmg),
+   1276:                                   DamageChannel::Kinetic, self);
+>>>1277:     pm.cooldownMs = wp->cooldownMs;
+   1278:     if (r.lethal) ++pm.kills;
+   1279:     (void)bus;
+   1280:     (void)tick;
+
+===== test mentions =====
+game_test.cpp: ['RpgStats', 'player_ranged']
+suite_audit.inl: ['player_melee', 'player_ranged']
+suite_noise.inl: ['player_ranged']
+suite_rpg.inl: ['melee_damage', 'str_melee_dmg', 'agi_attack_speed', 'agi_ranged_spread', 'str_heavy', 'RpgStats']
+suite_vendorammo.inl: ['player_ranged']

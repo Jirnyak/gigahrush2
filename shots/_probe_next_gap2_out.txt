@@ -1,0 +1,299 @@
+main.cpp lines=5100 bytes=288591
+PBS: count=3 lines=[2043, 5034, 5037]
+ai_release: count=4 lines=[1771, 1967, 2449, 4961]
+runState.status: count=2 lines=[1922, 3658]
+F9 status: count=1 lines=[3658]
+F5 status: count=1 lines=[1922]
+status_step: count=1 lines=[2519]
+combatCarves: count=8 lines=[1750, 3288, 3295, 3304, 3308, 3309, 3310, 3348]
+POSRPG: count=3 lines=[1156, 3238, 3881]
+ATTR1: count=1 lines=[2289]
+AGIMV: count=1 lines=[2530]
+HUD mag literal: count=1 lines=[4070]
+magCount: count=1 lines=[4073]
+HUD@4070: ImGui::Text("gun: %s  %u x%u dmg  %u/%u mag  "
+--- sound/audio game+app ---
+  src\game\combat.cpp hits~ 1
+  src\game\craft_table.cpp hits~ 1
+  src\game\hunt.h hits~ 1
+  src\game\investigate.cpp hits~ 5
+  src\game\investigate.h hits~ 5
+  src\game\item_table.cpp hits~ 1
+  src\game\mob_behaviour.h hits~ 2
+  src\game\mob_table.cpp hits~ 1
+  src\game\mob_table.h hits~ 1
+  src\game\monster_traits.cpp hits~ 1
+  src\game\monster_traits.h hits~ 1
+  src\game\noise.cpp hits~ 3
+  src\game\noise.h hits~ 9
+  src\game\speech.cpp hits~ 1
+  src\game\speech.h hits~ 1
+  src\game\wander.cpp hits~ 1
+  src\game\wander.h hits~ 1
+  src\app\main.cpp hits~ 5
+--- src/game headers ---
+  ai.h
+  combat.h
+  console.h
+  container.h
+  contract.h
+  craft.h
+  door.h
+  economy.h
+  elevator.h
+  embody.h
+  event_bus.h
+  extraction.h
+  faction.h
+  faction_relations.h
+  floor_catalog.h
+  floor_gen.h
+  floor_registry.h
+  floor_spec.h
+  floor_stream.h
+  hunt.h
+  inventory.h
+  investigate.h
+  item_table.h
+  keybind.h
+  loot.h
+  loot_table.h
+  macro_sim.h
+  mob_behaviour.h
+  mob_spawn.h
+  mob_table.h
+  monster_traits.h
+  nav_cache.h
+  needs.h
+  noise.h
+  npc_pool.h
+  player_command.h
+  population.h
+  quest.h
+  ranged_table.h
+  rpg.h
+  rumour.h
+  samosbor.h
+  save.h
+  speech.h
+  status.h
+  vendor.h
+  wander.h
+  weapon_table.h
+--- door delta ---
+door.cpp lines 381
+door.h lines 286
+door.h@13: //     is what makes the per-tick check affordable at all;
+door.h@50: // searches, and the tick stays O(live agents).
+door.h@105: // cannot keep out. No new CSV column pays for any of that.
+door.h@133: // progress at a 120 Hz tick without a float on the door or a timer per mob.
+door.h@138: // without any per-door sweep to decay it. A gap of more than one tick resets.
+door.h@145: // Every door on one live floor, plus the dense cell->door index the tick reads.
+door.h@222: // the same O(1) lookup the tick uses.
+door.h@241: // What one door pass resolved. All zero on the overwhelmingly common tick.
+door.h@245: std::uint32_t broken = 0;     // doors destroyed this tick
+door.h@247: // World-space centre of the last broken / force-opened door this tick.
+door.h@258: // rather than from a new one:
+door.h@277: // tick of contact and `wander_step` only rewrites it once every kWanderPeriod = 8
+door.h@278: // ticks, so a velocity probe samples intent on 1 tick in 8 and would stretch every
+door.h@282: // four indexed loads per live agent per tick.
+door.h@284: float dt, std::uint64_t tick);
+--- CMake game_test pin ---
+# `22609/22609 checks passed` (42.69 s, Release). The printed pair is
+PASS_REGULAR_EXPRESSION "39331/39331 checks passed")
+# PASS_REGULAR_EXPRESSION closes both. It matches the literal line `main` prints, so
+# Both numbers are pinned on purpose. `failures` is the gate. `checks` catches the
+# `audit_test: 149 checks, 0 failures` on 2026-07-30 — was 140/0 before
+PASS_REGULAR_EXPRESSION "audit_test: 149 checks, 0 failures")
+# `game_test: 134002 checks, 0 failures` - it read 132266 earlier the same day, before the
+PASS_REGULAR_EXPRESSION "game_test: 219716 checks, 0 failures")
+# cross-checks every C++-shaped file under src/ and tests/ against the scanned set
+PASS_REGULAR_EXPRESSION "files_scanned=[0-9][0-9][0-9]")
+--- ARCHITECTURE snips ---
+314: | Перки (Fallout/Underrail: статы → события → мир) | нет системы (XP-кривая и очки атрибутов есть) | **GAP**: таблица + гейты + эффекты-модификаторы + хуки через событийную шину ([
+316: | Тип урона × материал | carve: один скаляр power vs hardness | **GAP**: колонки типов в [material_props.h](src/world/material_props.h) — data-driven, без HP |
+318: | Вес (50 кг + выносливость) | в items.csv нет колонки веса, системы нет | **GAP** (CSV + генератор + гейт) |
+325: | Самосбор-перестройка + сшивка + ребейк | сирена/туман/duty/варианты есть; волновой перестройки геометрии НЕТ | **GAP, дизайн ЗАФИКСИРОВАН** (GPU-стенсил + op-list → CPU-истина; с
+--- critique_rpgcmbt ---
+# RPGCMBT critique
+
+## Verdict (short)
+
+| Question | Answer |
+|---|---|
+| (a) Is RPGCMBT combat.cpp correct? | **Yes** for the scoped wire (melee dmg/CD, ranged spread/CD, identity fallback). |
+| (b) Live player missing RpgStats on spawn? | **No** on primary paths (embody_as_player, death re-possess + carriedRpg, elevator restore). **Yes** on voluntary possess. |
+| (c) XP-on-kill status | **Wired** in finalize_deaths via award_xp. Gated on killer having RpgStats. |
+| (d) Any test pin that will red? | **No** - last run game_test EXIT=0, 219409 checks, 0 failures. Combat-wire setup can hit. |
+
+---
+
+## (a) combat.cpp RPGCMBT correctness
+
+### Melee (~1210-1302)
+- Damage: melee_damage(*rs, heldWeapon, wp->dmg) with heldWeapon=0 bare-hands sentinel - matches rpg.h two-branch rule.
+- CD: (baseMs * agi_attack_speed_mult_e3 * str_heavy_weapon_speed_mult_e3) / 1_000_000, clamped to [1, 65535].
+- Heavy gate: str_heavy_weapon_speed_mult_e3 returns 1000 when base < kHeavyWeaponCooldownMs (650). Fists are 340 ms -> STR does not speed fists (correct).
+- No RpgStats -> raw table dmg/CD (identity contract preserved).
+- Overflow: intermediate is uint32_t; max stays well under 2^32; cast clamp present.
+
+### Ranged spread (~1115-1118)
+- spread *= agi_ranged_spread_mult_e3(*rs) / 1000.0f on the cone - correct inverse mult, identity when absent.
+
+### Ranged CD (~1172-1180)
+- (def->cooldownMs * agi_attack_speed_mult_e3) / 1000, floor 1 / ceil 65535.
+- No STR-heavy on firearms (reference: heavy gate is melee cooldown threshold only).
+
+### Not wired (out of patch or no API)
+- Ranged damage still raw def->dmg (no rpg.h gun-damage formula).
+- agi_move_speed_mult_e3, str_durability_wear_mult_e3 still caller-less outside rpg.cpp.
+
+Attr indices: Attr::{Str=0,Agi=1,Int=2}; combat only goes through named helpers - no raw wrong-slot reads.
+
+---
+
+## (b) Live player RpgStats spawn
+
+| Path | Attaches RpgStats? |
+|---|---|
+| embody_as_player (embody.cpp:95) | **Yes** - random_rpg(pool.level(id), id) |
+
+--- gap_deep out ---
+HEAD probe POSRPG/SAVMAG/samosbor
+
+=== src/game/combat.h ===
+-- hit 'mag' @1 --
+>    1|// Combat — damage, death, and melee attacks.
+     2|//
+     3|// This module is deliberately shaped around three defects found in the TypeScript
+-- hit 'mag' @7 --
+     5|// size; each one is a bug that is *impossible* here rather than merely absent.
+     6|//
+>    7|//   1. **One damage function.** In the reference, pre-armour damage leaked into
+     8|//      the kill feed, the AI threat model and the blood spray while HP took the
+     9|//      mitigated value — so the number the player saw was not the number that
+-- hit 'mag' @10 --
+     8|//      the kill feed, the AI threat model and the blood spray while HP took the
+     9|//      mitigated value — so the number the player saw was not the number that
+>   10|//      landed. `apply_damage` is the only place damage is computed, and it returns
+    11|//      the value it actually applied. Report *that*, never the raw input.
+    12|//
+-- hit 'mag' @16 --
+    14|//      through, so an entity could be culled before its loot / A-Life / quest
+    15|//      hooks ran — a P0 its own balance.md documented and never fixed. Here
+>   16|//      `apply_damage` NEVER destroys anything: it tags `Dead`, and
+    17|//      `finalize_deaths` is the one function that ends a life, at one defined
+    18|//      point in the tick.
+-- hit 'mag' @27 --
+    25|// Where HP lives is NOT unified, on purpose. For an embodied NPC the pool row is
+    26|// canonical and folds back on floor exit ([npcs.md], embody.h); a mob has no macro
+>   27|// existence at all and carries its own. `apply_damage` resolves which, so callers
+    28|// never have to care — the *function* is single, the storage is where the
+    29|// architecture already put it.
+-- hit 'mag' @104 --
+   102|// Five channels, matching the reference's armour model and the `resist[5]` vector
+   103|// carried by armour items.
+>  104|enum class DamageChannel : std::uint8_t {
+   105|    Kinetic = 0, Buckshot, Energy, Fire, Psi, Count
+   106|};
+-- hit 'mag' @107 --
+   105|    Kinetic = 0, Buckshot, Energy, Fire, Psi, Count
+   106|};
+>  107|inline constexpr std::size_t kDamageChannels =
+   108|    static_cast<std::size_t>(DamageChannel::Count);
+   109|
+-- hit 'mag' @108 --
+   106|};
+   107|inline constexpr std::size_t kDamageChannels =
+>  108|    static_cast<std::size_t>(DamageChannel::Count);
+   109|
+   110|// Environmental hazard query for cell materials.
+-- hit 'mag' @112 --
+   110|// E
+--- audit_unwired ---
+# Audit - unwired game-lane features
+
+Date: 2026-07-31
+Lane: game audit only (no src/render, no dental-crm)
+Scope: features that EXIST in code but are NOT on the live main/combat gameplay path.
+
+## Top 3 (ranked)
+
+### 1. ATTR1 - spend_attr_point dead to gameplay
+
+Impact: High. Blast: Tiny. Invent: None.
+Impl: src/game/rpg.h:214, src/game/rpg.cpp:355, src/app/main.cpp:3834-3836 HUD tease, tests/suite_rpg.inl:323+
+Callers from main/combat: none.
+Not a gap: combat.cpp:205-218 award_xp levels + attrPoints.
+Next patch: main 1/2/3 keys -> spend_attr_point(*rs, Attr, &hp, &maxHp); HUD help.
+
+### 2. SAVRPG - F5/F9 save/load drops RpgStats (+ craft known-bits)
+
+Impact: High. Blast: Medium. Invent: None.
+Impl live: main.cpp:1676/3299/3686 carriedRpg; elevator.cpp:58-89 hadRpg; craft_write/read craft.h:400+/craft.cpp:360+; craft live main.cpp:1715/3552+
+Save gap: save.h PlayerSnapshot:330 and SaveState:352 have no RpgStats/craft; save_run_now main.cpp:1814-1843 skips them; save.cpp:364+ never visits craft_write.
+Next patch: bump kSaveVersion; embed RpgStats + craft blob; capture/restore in save_run_now + F9 load.
+
+### 3. AGIMV - agi_move_speed_mult_e3 unused on move
+
+Impact: Medium-high. Blast: Tiny. Invent: None.
+Impl: rpg.h:145 / rpg.cpp:220; suite_rpg.inl:77,98.
+Live move main.cpp:2396-2399: kPlayerWalkSpeed * needs.speedScale * status only - no AGI mult.
+Next patch: multiply by agi_move_speed_mult_e3(*rs)/1000.f when RpgStats present.
+
+## Candidate sweep
+
+- XP on kill: WIRED combat.cpp:205-218
+- level-up: WIRED inside award_xp
+- PlayerRanged mag body-swap: WIRED elevator.cpp:46-84; HUD :3865
+- inventory equip melee: WIRED auto best-in-bag
+- craft/scrap gameplay: WIRED; only persist dead
+- psi spend: DEFER needs.cpp:344 Psi not modelled
+- str_durability_wear_mult_e3: DEFER no wear tick
+- int_contract/xp_for_quest: lower pri flat pay
+
+## Execute order
+1. ATTR1  2. AGIMV  3. SAVRPG
+
+--- suite_doors new pins ---
+suite_doors lines 448
+            break;
+    CHECK(resTicks < 600);
+    CHECK(doors.doors[pick3].state == static_cast<std::uint8_t>(DoorState::Open));
+
+    // Pressing must be CONTINUOUS: a gap of more than one tick resets the shove.
+    // Otherwise a corridor's foot traffic would pop every door it ever passed.
+    std::uint32_t pick4 = kNoDoor;
+    for (std::uint32_t i = 0; i < doors.doors.size(); ++i)
+        if (i != pick && i != pick2 && i != pick3 && doors.doors[i].cz == 1 &&
+            doors.doors[i].axis == 0) {
+            pick4 = i;
+            break;
+        }
+    CHECK(pick4 != kNoDoor);
+    const Door probe4 = doors.doors[pick4];
+    reg.get<Transform>(resident).pos =
+        vec3{(static_cast<float>(probe4.cx) + 1.5f) * kCellSize,
+             (static_cast<float>(probe4.cy) + 0.5f) * kCellSize,
+             (static_cast<float>(probe4.cz) + 0.5f) * kCellSize};
+    CHECK(door_set(w, doors, reg, layer, pick4, true));
+    for (int i = 0; i < 4000; i += 4)   // touched once every 4 ticks: never enough
+        CHECK(door_step(reg, w, doors, layer, dt,
+                        static_cast<std::uint64_t>(i))
+                  .opened == 0);
+    CHECK(doors.doors[pick4].state == static_cast<std::uint8_t>(DoorState::Shut));
+
+    // The no-shut-doors fast path really is free: with nothing shut, door_step
+    // reports nothing at all even with bodies standing in every doorway.
+    CHECK(door_set(w, doors, reg, layer, pick4, false));
+    CHECK(doors.shut == 0);
+    const DoorTick idle = door_step(reg, w, doors, layer, dt, 9999u);
+    CHECK(idle.pressing == 0 && idle.opened == 0 && idle.broken == 0);
+}
+
+static void test_doors_all() {
+    test_doorways_match_the_generated_grid();
+    test_doors_leave_solidity_untouched();
+    test_shut_door_blocks_a_body();
+    test_shut_door_versus_monsters();
+}

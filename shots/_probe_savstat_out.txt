@@ -1,0 +1,297 @@
+=== status.h size=7077 ===
+L14: // three govnyak durations are in `systems/govnyak.ts:30-32` (70 / 210 / 480 s).
+L36: inline constexpr std::size_t kStatusCount = 6;
+L41: enum class StatusId : std::uint8_t {
+L51: struct StatusDef {
+L52:     std::uint32_t durationMs;     //  0  primary duration
+L53:     std::uint32_t altDurationMs;  //  4  duration under the alternate condition
+L73: extern const std::array<StatusDef, kStatusCount> kStatusTable;
+L74: extern const std::array<const char*, kStatusCount> kStatusNames;
+L77:     return static_cast<std::size_t>(id) < kStatusCount;
+L81:     return kStatusTable[static_cast<std::size_t>(id)];
+L85:     return status_valid(id) ? kStatusNames[static_cast<std::size_t>(id)] : "";
+L92: // all six at once, so the array is exactly kStatusCount and a slot is addressed by its
+L98: struct StatusSet {
+L99:     std::uint32_t remainMs[kStatusCount] = {};
+L102:     std::uint16_t intensityE3[kStatusCount] = {};
+L106:     std::uint8_t alt[kStatusCount] = {};
+L110: inline constexpr std::uint16_t kStatusIntensityCapE3 = 3000;
+L112: // Land `id`. `useAlt` selects the alternate duration/multiplier column — the caller
+L115: // LONGER remaining time, so re-entering a spore cloud cannot shorten your haze.
+L116: void status_apply(StatusSet& set, StatusId id, bool useAlt);
+L119: std::uint32_t status_step(StatusSet& set, std::uint32_t dtMs);
+L121: bool status_active(const StatusSet& set, StatusId id);
+L129: std::uint16_t status_move_mult_e3(const StatusSet& set);
+L130: std::uint16_t status_aim_mult_e3(const StatusSet& set);
+L131: std::uint16_t status_melee_mult_e3(const StatusSet& set);
+L132: std::uint16_t status_heal_mult_e3(const StatusSet& set);
+L135: std::uint32_t status_water_drain_e3(const StatusSet& set);
+L138: bool status_is_rooted(const StatusSet& set);
+=== status.cpp size=4895 ===
+L23: std::uint16_t fold_e3(const StatusSet& set, Pick pick) {
+L25:     for (std::size_t i = 0; i < kStatusCount; ++i) {
+L27:         acc = mul_e3(acc, pick(kStatusTable[i], set.alt[i] != 0));
+L34: void status_apply(StatusSet& set, StatusId id, bool useAlt) {
+L37:     const StatusDef& d = kStatusTable[i];
+L38:     const std::uint32_t ms = useAlt ? d.altDurationMs : d.durationMs;
+L52:         set.intensityE3[i] = next > kStatusIntensityCapE3
+L53:                                  ? kStatusIntensityCapE3
+L60: std::uint32_t status_step(StatusSet& set, std::uint32_t dtMs) {
+L62:     for (std::size_t i = 0; i < kStatusCount; ++i) {
+L77: bool status_active(const StatusSet& set, StatusId id) {
+L81: std::uint16_t status_move_mult_e3(const StatusSet& set) {
+L85:     for (std::size_t i = 0; i < kStatusCount; ++i) {
+L87:         const StatusDef& d = kStatusTable[i];
+L89:             d.rootMs != 0 && set.remainMs[i] > (d.durationMs - d.rootMs);
+L95: std::uint16_t status_aim_mult_e3(const StatusSet& set) {
+L101: std::uint16_t status_melee_mult_e3(const StatusSet& set) {
+L105: std::uint16_t status_heal_mult_e3(const StatusSet& set) {
+L109: std::uint32_t status_water_drain_e3(const StatusSet& set) {
+L113:     for (std::size_t i = 0; i < kStatusCount; ++i)
+L114:         if (set.remainMs[i] != 0) sum += kStatusTable[i].waterDrainE3;
+L118: bool status_is_rooted(const StatusSet& set) {
+L119:     for (std::size_t i = 0; i < kStatusCount; ++i) {
+L121:         const StatusDef& d = kStatusTable[i];
+L122:         // The root is the LEADING window, so it is active while the remaining time is
+L123:         // still above (duration - rootMs).
+L124:         if (d.rootMs != 0 && set.remainMs[i] > (d.durationMs - d.rootMs)) return true;
+
+=== status.h full structs (excerpt) ===
+// Timed player status effects ? the six the reference authors, as a table.
+//
+// WHAT THIS REPLACES. [combat.h] carries `Slowed`, and its own comment is a careful
+// argument for a CAP rather than a multiplier: `controller_step` rewrites the player's
+// velocity every tick, `wander_step` writes a crowd body's only on its stagger slot,
+// so a repeated multiply would give a resident 0.45^8 = 0.0017 of its speed within one
+// period ? a freeze, not a slow. That reasoning is correct and is NOT undone here.
+// `Slowed` is the enforcement mechanism; this is the CONTENT layer that decides what
+// lands and for how long. Five of the six statuses below had authored numbers in the
+// reference and nowhere to live.
+//
+// The reference spreads them across two files, which is why they read as missing:
+// zhelemish/paupsina/spore_haze constants are in `systems/status.ts:20-50`, and the
+// three govnyak durations are in `systems/govnyak.ts:30-32` (70 / 210 / 480 s).
+//
+// FIXED POINT, stated because it cannot be guessed: every multiplier is x1000. 0.54
+// is 540, 1.65 is 1650, "no change" is 1000. Integer throughout, because this tree
+// pins bit-exact digests and a float multiplier chain is not guaranteed identical
+// between MSVC and Clang ([AGENTS.md]).
+//
+// THE ALT COLUMN. Three statuses have a second value selected by a runtime condition,
+// not by being a different status: zhelemish is 180 s raw / 150 s treated, spore_haze
+// is 4.8 s bare / 2.2 s through an IP-4 (and x1.65 / x1.18 aim spread), paupsina moves
+// at x0.54 walking and x0.22 while still rooted. One row with an alternate, because
+// the player holds ONE zhelemish status whichever way he ate it.
+#pragma once
+
+#include <array>
+#include <cstdint>
+#include <type_traits>
+
+#include "game/item_table.h"
+
+namespace giga::game {
+
+inline constexpr std::size_t kStatusCount = 6;
+
+// Row order is data/status.csv row order, and it is load-bearing: a StatusId is an
+// index into the generated table, so INSERTING or REORDERING a row redefines every
+// stored id. Same hazard [save.h] documents for ItemId, same rule ? append only.
+enum class StatusId : std::uint8_t {
+    ZhelemishSkin = 0,
+    PaupsinaWeb,
+    SporeHaze,
+    GovnyakRelief,
+    GovnyakCough,
+    GovnyakDebt,
+};
+
+// POD, 24 bytes. Fixed-point throughout; see the header note for the x1000 scale.
+struct StatusDef {
+    std::uint32_t durationMs;     //  0  primary duration
+    std::uint32_t altDurationMs;  //  4  duration under the alternate condition
+    std::uint16_t moveMultE3;     //  8  horizontal speed multiplier x1000
+    std::uint16_t altMoveMultE3;  // 10  ... while rooted (paupsina)
+    std::uint16_t aimMultE3;      // 12  aim SPREAD multiplier x1000; >1000 is worse
+    std::uint16_t altAimMultE3;   // 14  ... with the gate item worn
+    std::uint16_t rootMs;         // 16  leading window with no movement at all
+    std::uint16_t meleeMultE3;    // 18  outgoing melee damage multiplier x1000
+    std::uint16_t healMultE3;     // 20  healing received multiplier x1000
+    std::uint16_t waterDrainE3;   // 22  extra water drain per second x1000
+    // 1-based ItemId whose PRESENCE selects the alternate column, or 0 for none.
+    // Resolved at generation time against data/items.csv, so a typo is a build
+    // failure rather than a status that is silently never protected.
+    ItemId gateItem;             // 24
+    std::uint8_t stacks;         // 26  1 = intensity accumulates (the govnyak three)
+    std::uint8_t pad_;           // 27
+};
+static_assert(sizeof(StatusDef) == 28, "StatusDef must stay a tight row");
+static_assert(std::is_trivially_copyable_v<StatusDef>);
+
+// Generated from data/status.csv by tools/gen_status_table.py.
+extern const std::array<StatusDef, kStatusCount> kStatusTable;
+extern const std::array<const char*, kStatusCount> kStatusNames;
+
+inline bool status_valid(StatusId id) {
+    return static_cast<std::size_t>(id) < kStatusCount;
+}
+
+inline const StatusDef& status_def(StatusId id) {
+    return kStatusTable[static_cast<std::size_t>(id)];
+}
+
+inline const char* status_name(StatusId id) {
+    return status_valid(id) ? kStatusNames[static_cast<std::size_t>(id)] : "";
+}
+
+// ---------------------------------------------------------------------------
+// Live state
+// ---------------------------------------------------------------------------
+// Fixed-size, so the tick allocates nothing. Six statuses exist and a player can hold
+// all six at once, so the array is exactly kStatusCount and a slot is addressed by its
+// own StatusId ? no search, no compaction, no ordering question.
+//
+// An expired slot keeps `remainMs == 0` rather than being cleared, for the reason
+// [combat.h] gives for leaving an expired `Slowed` attached: removing a component
+// mid-view can reallocate registry storage.
+struct StatusSet {
+    std::uint32_t remainMs[kStatusCount] = {};
+    // Accumulated intensity for the stacking statuses, x1000. The reference caps this
+    // (`GOVNYAK_STATUS_INTENSITY_CAP`); non-stacking rows leave it at 1000.
+    std::uint16_t intensityE3[kStatusCount] = {};
+    // Which slots resolved to their ALT column when they landed. Latched at landing,
+    // not re-read per tick: taking the gasmask off mid-effect must not retroactively
+    // lengthen a haze that was already shortened by wearing it.
+    std::uint8_t alt[kStatusCount] = {};
+};
+
+// The reference's cap on accumulated intensity (govnyak.ts). x1000.
+inline constexpr std::uint16_t kStatusIntensityCapE3 = 3000;
+
+// Land `id`. `useAlt` selects the alternate duration/multiplier column ? the caller
+// resolves the condition (item worn, food treated) because this module must not reach
+// into an inventory. Refreshes rather than replaces: an already-held status keeps the
+// LONGER remaining time, so re-entering a spore cloud cannot shorten your haze.
+void status_apply(StatusSet& set, StatusId id, bool useAlt);
+
+// Advance every slot by `dtMs`. Returns how many statuses expired on this call.
+std::uint32_t status_step(StatusSet& set, std::uint32_t dtMs);
+
+bool status_active(const StatusSet& set, StatusId id);
+
+// ---------------------------------------------------------------------------
+// Queries ? the whole reason the effects are data
+// ---------------------------------------------------------------------------
+// Each folds every ACTIVE status into one multiplier, x1000, so a caller applies one
+// number and never enumerates statuses itself. Multiplicative composition, because two
+// independent slows must both bite: 0.82 zhelemish x 0.54 paupsina = 0.44, not 0.82.
+std::uint16_t status_move_mult_e3(const StatusSet& set);
+std::uint16_t status_aim_mult_e3(const StatusSet& set);
+std::uint16_t status_melee_mult_e3(const StatusSet& set);
+std::uint16_t status_heal_mult_e3(const StatusSet& set);
+
+// Extra water drain per second, x1000, summed. A drain is a RATE and rates add.
+std::uint32_t status_water_drain_e3(const StatusSet& set);
+
+// True while any status is inside its leading root window. Paupsina's 0.65 s.
+bool status_is_rooted(const StatusSet& set);
+
+} // namespace giga::game
+
+
+=== player_ranged_step full scan ===
+mention L1040: std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
+
+=== main death path window ~3380-3850 ===
+L3412:                     if (const auto* rs0 = reg.try_get<game::RpgStats>(player))
+L3413:                         carriedRpg = *rs0;
+L3416:                 // ONE death point per tick, after everything that can deal damage
+L3417:                 // (combat.h). Nothing else in the tree destroys a damaged entity.
+L3574:                             carriedRpg = runState.rpg;
+L3576:                                 reg.emplace_or_replace<game::RpgStats>(
+L3579:                             // Version 8 / SAVMAG: restore chambered mag (lazy)
+L3581:                             // the ammo already debited into the magazine, and
+L3582:                             // does not zero the HUD kills line. [combat.h]
+L3583:                             kills = runState.kills;
+L3586:                                     reg.emplace_or_replace<game::PlayerRanged>(
+L3587:                                         player, runState.ranged);
+L3588:                                 if (runState.kills != 0u)
+L3589:                                     reg.emplace_or_replace<game::PlayerMelee>(
+L3590:                                         player, game::PlayerMelee{0, runState.kills});
+L3767:                 // hpCost is routed through apply_damage rather than dropped:
+L3786:                         game::apply_damage(reg, pool, player, cr.hpCost,
+L3787:                                            game::DamageChannel::Kinetic, player);
+L3806:                     // The PlayerMelee component dies with the body; the tally of
+L3810:                     // fresh RpgStats from the new record ? wrong across a DEATH
+L3812:                     // rule) and wrong across voluntary possession too (POSRPG
+L3815:                     // value saved off at the top of the death path (carriedRpg).
+L3816:                     player = possess_a_survivor(reg, pool, activeLayer);
+L3819:                     reg.emplace_or_replace<game::PlayerMelee>(
+L3820:                         player, game::PlayerMelee{0, kills});
+L3821:                     reg.emplace_or_replace<game::RpgStats>(player, carriedRpg);
+L3822:                 } else if (const auto* rsLive = reg.try_get<game::RpgStats>(player)) {
+L3827:                     carriedRpg = *rsLive;
+
+=== inventory possess/elevator ===
+
+=== rpg.cpp exported helpers + callers ===
+rpg.h fns: ['xp_for_level', 'total_xp_for_level', 'clamp_rpg_level', 'clamp_rpg_attribute', 'level_hp', 'level_psi', 'max_hp', 'max_psi', 'str_melee_dmg_mult_e3', 'str_durability_wear_mult_e3', 'agi_move_speed_mult_e3', 'agi_attack_speed_mult_e3', 'agi_ranged_spread_mult_e3', 'int_xp_mult_e3', 'int_psi_cost_mult_e3', 'int_contract_reward_mult_e3', 'int_document_reward_mult_e3', 'int_psi_duration_bonus_sec', 'str_heavy_weapon_speed_mult_e3', 'melee_damage', 'adjusted_psi_cost', 'xp_for_monster_kill', 'xp_for_npc_kill', 'xp_for_quest', 'spend_attr_point']
+  xp_for_level: callers=17 ['main.cpp:1', 'suite_rpg.inl:16']
+  total_xp_for_level: callers=5 ['suite_rpg.inl:5']
+  clamp_rpg_level: callers=4 ['suite_rpg.inl:4']
+  clamp_rpg_attribute: callers=2 ['suite_rpg.inl:2']
+  level_hp: callers=3 ['suite_rpg.inl:3']
+  level_psi: callers=2 ['suite_rpg.inl:2']
+  max_hp: callers=73 ['main.cpp:4', 'ai.cpp:2', 'combat.cpp:2', 'loot.cpp:1', 'macro_sim.cpp:1', 'population.cpp:1', 'save.cpp:1', 'speech.cpp:1']
+  max_psi: callers=9 ['main.cpp:2', 'suite_rpg.inl:7']
+  str_melee_dmg_mult_e3: callers=3 ['suite_rpg.inl:3']
+  str_durability_wear_mult_e3: callers=2 ['suite_rpg.inl:2']
+  agi_move_speed_mult_e3: callers=3 ['main.cpp:1', 'suite_rpg.inl:2']
+  agi_attack_speed_mult_e3: callers=8 ['combat.cpp:2', 'suite_rpg.inl:6']
+  agi_ranged_spread_mult_e3: callers=4 ['combat.cpp:1', 'suite_rpg.inl:3']
+  int_xp_mult_e3: callers=5 ['suite_rpg.inl:5']
+  int_psi_cost_mult_e3: callers=2 ['suite_rpg.inl:2']
+  int_contract_reward_mult_e3: callers=3 ['suite_rpg.inl:3']
+  int_document_reward_mult_e3: callers=3 ['suite_rpg.inl:3']
+  int_psi_duration_bonus_sec: callers=2 ['suite_rpg.inl:2']
+  str_heavy_weapon_speed_mult_e3: callers=6 ['combat.cpp:1', 'suite_rpg.inl:5']
+  melee_damage: callers=11 ['main.cpp:1', 'combat.cpp:2', 'suite_rpg.inl:8']
+  adjusted_psi_cost: callers=5 ['suite_rpg.inl:5']
+  xp_for_monster_kill: callers=14 ['combat.cpp:1', 'suite_rpg.inl:13']
+  xp_for_npc_kill: callers=3 ['combat.cpp:1', 'suite_rpg.inl:2']
+  xp_for_quest: callers=3 ['suite_rpg.inl:3']
+  spend_attr_point: callers=11 ['main.cpp:1', 'suite_rpg.inl:10']
+
+=== ai.h line 33 context ===
+L26: //                        cannot collide with this file's scope. Deliberately
+L27: //                        shares wander's stagger phase to override it.
+L28: //   physics_step      src/sim/physics.cpp      view<Transform,Velocity> excl SelfIntegrating
+L29: //                     -> reads to integrate; writes v.z (gravity/jump) and zeroes
+L30: //                        an axis on collision. The integrator, not a steerer.
+L31: //   slow_step         src/game/combat.cpp      view<Slowed,Transform,Velocity>
+L32: //                     -> CLAMPS magnitude, idempotent by construction. A
+L33: //                        post-filter, not an owner. NOT wired in main.cpp today.
+L34: //   faction_feud_step src/game/faction_relations.cpp view<Transform,Velocity,const NpcRef>
+L35: //                     -> IS a second NPC writer, and it is LIVE: main.cpp calls it
+L36: //                        every tick (main.cpp ~line 1022, after wander_step and
+L37: //                        investigate_step, before physics_step), and it writes
+L38: //                        `Velocity& vel = view.get<Velocity>(e)` at
+L39: //                        faction_relations.cpp ~line 270. Its scope is EXACTLY this
+L40: //                        file's ? an NpcRef body ? so it needs the SAME one-line
+L41: //                        guard wander_step gets below, and it needs it on the day
+L42: //                        `AiConfig::enabled` is first set true. An earlier revision
+L43: //                        of this comment claimed it was unwired; that was wrong, and
+L44: //                        it is the one hole in the single-writer claim below.
+L45: //                        Gated on a staggered fight licence plus an enemy in range,
+L46: //                        so the overlap is a handful of bodies per tick ? and because
+L47: //                        it runs LAST the symptom is not vibration but a flee that is
+L48: //                        silently cancelled: the AI's write is simply discarded.
+L49: //   one-shot, not per-tick: embody.cpp / mob_spawn.cpp / loot.cpp emplace a
+L50: //                        zeroed Velocity at creation; combat.cpp emplaces a
+
+=== death possess_a_survivor ===
+L1079: Entity possess_a_survivor(Registry& reg, game::NpcPool& pool, LayerId layer) {
+L1107: Entity possess_nearest_survivor(Registry& reg, game::NpcPool& pool, LayerId layer, const vec3& playerPos, float reachM) {
+L3170:                         Entity newPlayer = possess_nearest_survivor(reg, pool, activeLayer, ppos, 8.0f);
+L3816:                     player = possess_a_survivor(reg, pool, activeLayer);
+DONE

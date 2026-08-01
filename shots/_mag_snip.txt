@@ -1,0 +1,35 @@
+shotAction == "mag" && reg.valid(player)) {
+                        // MAGSHOT: live proof that PlayerRanged.magCount survives
+                        // elevator body-swap under --shot --ride. Unit pin owns the
+                        // pure seam (test_elevator FOR1/MAG1); this stamps a
+                        // distinctive partial mag + gun so the HUD gun line and
+                        // stderr can show the same count after each hop.
+                        static bool magForced = false;
+                        static int magLastRideLog = -1;
+                        static std::uint16_t magStamp = 7;
+                        static game::ItemId magGun = game::kInvalidItem;
+                        if (!magForced) {
+                            game::ItemId gun = game::kInvalidItem;
+                            for (game::ItemId i = 1; i <= game::kItemCount; ++i) {
+                                if (const game::RangedDef* d =
+                                        game::ranged_for_item(i)) {
+                                    if (d->pellets == 1 && d->magazine >= 8 &&
+                                        d->dmg >= 20) {
+                                        gun = i;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (gun == game::kInvalidItem) {
+                                std::fprintf(stderr, "[mag] FORCE FAIL no gun\n");
+                                magForced = true;
+                            } else if (const game::NpcRef* nr =
+                                           reg.try_get<game::NpcRef>(player)) {
+                                if (pool.valid(nr->id)) {
+                                    const game::RangedDef& def =
+                                        *game::ranged_for_item(gun);
+                                    game::Inventory& inv = pool.inventory(nr->id);
+                                    inv.slots[0] = game::ItemSlot{gun, 1};
+                                    inv.slots[1] = game::ItemSlot{def.ammo, 30};
+                                    game::PlayerRanged pr{};
+                          

@@ -1,0 +1,907 @@
+=== healWanted ===
+  1422|    game::DoorTick doorTick{};      // last step's report, for the HUD
+  1423|    std::uint32_t doorsBuilt = 0;   // on this floor, so the HUD can say "0 doors"
+  1424|    bool doorWanted = false;        // Q, consumed by one sim step
+>>1425|    bool interactWanted = false;    // E, consumed by one sim step (Terminal / ControlPanel / Relief interact)
+  1426|    bool possessWanted = false;     // P, consumed by one sim step (Voluntary Mind Projection / Body Swap)
+  1427|    char elevDiagLine[160] = {};
+  1428|    std::uint64_t elevDiagAt = 0;
+---
+  1627|    // F5 saves, F9 loads. Recorded as intent and acted on in the sim loop, the same
+  1628|    // shape sellWanted/buyWanted use: a load rewrites world state and belongs on the
+  1629|    // sim's clock, not the window's.
+>>1630|    bool saveWanted = false;
+  1631|    bool loadWanted = false;
+  1632|    // THE MAIN MENU — a separate app SCREEN, not a pause overlay. The world
+  1633|    // behind it is built but frozen; the run starts (or a slot loads) only when
+---
+  1683|    // below behind the same doors.frozen gate as the console carve row.
+  1684|    game::CarveProposalQueue combatCarves;
+  1685|
+>>1686|    bool healWanted = false;
+  1687|    bool eatWanted = false;       // G, consumed by one sim step
+  1688|    bool drinkWanted = false;     // T, consumed by one sim step
+  1689|    bool sellWanted = false;      // B, consumed by one sim step
+---
+  1684|    game::CarveProposalQueue combatCarves;
+  1685|
+  1686|    bool healWanted = false;
+>>1687|    bool eatWanted = false;       // G, consumed by one sim step
+  1688|    bool drinkWanted = false;     // T, consumed by one sim step
+  1689|    bool sellWanted = false;      // B, consumed by one sim step
+  1690|    bool buyWanted = false;       // R, consumed by one sim step       // set by H, consumed by one sim step
+---
+  2152|            // rows or world state, which belongs on the sim's clock, not the
+  2153|            // window's. (Set even while paused so a menu button lands on the
+  2154|            // first tick after resume rather than vanishing.)
+>>2155|            if (has(ConsoleRequest::Heal)) healWanted = true;
+  2156|            if (has(ConsoleRequest::Eat)) eatWanted = true;
+  2157|            if (has(ConsoleRequest::Drink)) drinkWanted = true;
+  2158|            if (has(ConsoleRequest::Door)) doorWanted = true;
+---
+  2153|            // window's. (Set even while paused so a menu button lands on the
+  2154|            // first tick after resume rather than vanishing.)
+  2155|            if (has(ConsoleRequest::Heal)) healWanted = true;
+>>2156|            if (has(ConsoleRequest::Eat)) eatWanted = true;
+  2157|            if (has(ConsoleRequest::Drink)) drinkWanted = true;
+  2158|            if (has(ConsoleRequest::Door)) doorWanted = true;
+  2159|            if (has(ConsoleRequest::Possess)) possessWanted = true;
+---
+  3634|                // cost for the caller to bill ([needs.h]), clamped so bad food
+  3635|                // floors at 1 HP. Discarding it would make risky food free, and a
+  3636|                // gamble with no downside is not a gamble.
+>>3637|                if (eatWanted || drinkWanted) {
+  3638|                    game::ConsumeResult cr{};
+  3639|                    if (eatWanted) {
+  3640|                        cr = game::use_best_food(reg, pool, bus, activeLayer,
+---
+  3636|                // gamble with no downside is not a gamble.
+  3637|                if (eatWanted || drinkWanted) {
+  3638|                    game::ConsumeResult cr{};
+>>3639|                    if (eatWanted) {
+  3640|                        cr = game::use_best_food(reg, pool, bus, activeLayer,
+  3641|                                                 simTick);
+  3642|                        ateFood += cr.food;
+---
+  3640|                        cr = game::use_best_food(reg, pool, bus, activeLayer,
+  3641|                                                 simTick);
+  3642|                        ateFood += cr.food;
+>>3643|                        eatWanted = false;
+  3644|                    } else {
+  3645|                        cr = game::use_best_drink(reg, pool, bus, activeLayer,
+  3646|                                                  simTick);
+---
+  3653|                        consumeHpCost += cr.hpCost;
+  3654|                    }
+  3655|                }
+>>3656|                if (healWanted) {
+  3657|                    healed += game::use_best_heal(reg, pool, bus, activeLayer,
+  3658|                                                  simTick);
+  3659|                    healWanted = false;
+---
+  3656|                if (healWanted) {
+  3657|                    healed += game::use_best_heal(reg, pool, bus, activeLayer,
+  3658|                                                  simTick);
+>>3659|                    healWanted = false;
+  3660|                }
+  3661|                // The player is not exempt: if it died it no longer exists, and
+  3662|                // everything below reads through it. Take another body now.
+---
+=== wall action sites ===
+2240|                if (shotPath && shotAction == "wall" && reg.valid(player) &&
+2241|                    shotFramesSeen >= 30 && !doors.frozen) {
+2242|                    const Transform& ptr = reg.get<Transform>(player);
+2243|                    const MacroGrid& g = stack.layer(activeLayer).grid();
+2244|                    const float cx = ptr.pos.x;
+2245|                    const float cy = ptr.pos.y;
+2246|                    const float cz = ptr.pos.z;
+2247|                    const float eyeZ = cz + 0.7f;
+2248|                    float bestD2 = 1.0e12f;
+2249|                    float bestDx = 0.0f, bestDy = 0.0f;
+2250|                    // Wider ring than melee reach so open-room spawns still
+2251|                    // find a wall; walk closes the gap (kPlayerWalkSpeed).
+2252|                    for (int pass = 0; pass < 2 && bestD2 >= 1.0e12f; ++pass) {
+2253|                        const float sampleZ =
+2254|                            pass == 0 ? eyeZ : (eyeZ - kCellSize);
+2255|                        const int gz =
+2256|                            static_cast<int>(sampleZ / kCellSize);
+2257|                        if (gz < 0 || gz >= kMacroDim) continue;
+2258|                        for (int ox = -8; ox <= 8; ++ox) {
+2259|                            for (int oy = -8; oy <= 8; ++oy) {
+2260|                                if (ox == 0 && oy == 0) continue;
+2261|                                const float px =
+2262|                                    cx + static_cast<float>(ox) * kCellSize;
+2263|                                const float py =
+2264|                                    cy + static_cast<float>(oy) * kCellSize;
+2265|                                const int gx = wrap_macro(
+2266|                                    static_cast<int>(px / kCellSize));
+2267|                                const int gy = wrap_macro(
+2268|                                    static_cast<int>(py / kCellSize));
+2269|                                if (g.cell(gx, gy, wrap_macro(gz)) ==
+2270|                                    kCellAir)
+2271|                                    continue;
+2272|                                const float dx =
+2273|                                    wrap_delta_f(cx, px, kWorldExtent);
+2274|                                const float dy =
+2275|                                    wrap_delta_f(cy, py, kWorldExtent);
+2276|                                const float d2 = dx * dx + dy * dy;
+2277|                                if (d2 < bestD2) {
+2278|                                    bestD2 = d2;
+2279|                                    bestDx = dx;
+2280|                                    bestDy = dy;
+2281|                                }
+2282|                            }
+2283|                        }
+2284|                    }
+2285|                    if (bestD2 < 1.0e12f) {
+2286|                        auto& cam = reg.get<CameraTag>(player);
+2287|                        // camera_forward / walk fwd: yaw=atan2(dy,dx) (Z-up).
+2288|                        cam.yaw = std::atan2(bestDy, bestDx);
+2289|                        cam.pitch = 0.0f;
+2290|                        if (auto* ctl = reg.try_get<Controller>(player)) {
+2291|                            // aim_player starts fly=true; wall walk needs ground
+2292|                            // locomotion so collision/wish actually close gap.
+2293|                            ctl->fly = false;
+2294|                            // Always walk forward while out of unarmed reach
+2295|                            // (~1.9 m). wishDir.x is camera-local forward.
+2296|                            if (bestD2 > 1.2f * 1.2f)
+2297|                                ctl->wishDir = {1.0f, 0.0f, 0.0f};
+2298|                        }
+2299|                    }
+2300|                }
+2301|                // Embodied crowd (#12): needs decay, then the utility brain
+2302|
+2303|                // re-plans (identity-staggered) and steers each NON-player body's
+2304|                // Velocity — BEFORE the controller/physics that integrate it, the
+2305|                // same locomotion path as the player ([ai.md], [npcs.md]).
+2306|                // PARKED: game::needs_step(reg, pool, kSimDt);  <- branch 3-arg call
+2307|                // main already steps the clock at line ~1043 with the layer-scoped
+2308|                // 4-arg signature and keeps its NeedsTick report for the HUD. The branch
+2309|                // call operated on its per-entity Needs COMPONENT; main keeps the
+2310|                // survival clock in the pool row, because the elevator destroys the body
+2311|                // and a component would reset the clock on every floor ride.
+2312|                // THE UTILITY AI, UNPARKED — and dormant, which is not the same as absent.
+2313|                //
+2314|                // It sat commented out because two systems writing Velocity fight every
+2315|                // tick. That is now settled by a TOKEN rather than by hope: `AiBrain::motion`
+2316|                // decides per body, and both foreign writers — wander_step and
+2317|                // faction_feud_step — carry `if (ai_owns_motion(reg, e)) continue;`.
+2318|                // MEASURED over 200 ticks x 24 bodies: ai_step wrote Velocity 2400 times,
+2319|                // wander_step 300, and BOTH in one tick ZERO times; wander wrote 0 times
+2320|                // while the token was held and 600 once delegated. [ai.h]
+2321|                //
+2322|                // `aiCfg.enabled` is TRUE and `aiMem` is passed every tick. Memory is the
+2323|                // demand column owned above; null would disable recall/record bit-for-bit.
+2324|                // `ai_init` attaches brains in finish_floor_nav; `ai_release` runs on floor
+2325|                // leave (do_ride + --shot travel) and again inside FloorStreamer::unload.
+2326|                // Clearing enabled mid-run without release would strand MotionOwner::Ai
+2327|                // and freeze bodies under wander_step — that trap is what AIMEM closes.
+2328|                // NOTE the `activeLayer` argument: the parked call was
+2329|                // `ai_step(reg, pool, danger, activeGrid, simNow, kSimDt)` against an older
+2330|                // SIX-argument signature with no layer, so it would not even have compiled
+---
+2543|                    } else if (shotAction == "wall" && reg.valid(player) &&
+2544|                               shotFramesSeen >= 30 && !doors.frozen) {
+2545|                        // Face+walk owned by early block (post-input.apply,
+2546|                        // pre-controller_step). Here: hold melee + log only.
+2547|                        attackHeld = true;
+2548|                        static int wallLog = 0;
+2549|                        if ((wallLog++ % 120) == 0) {
+2550|                            const Transform& ptr = reg.get<Transform>(player);
+2551|                            const MacroGrid& g =
+2552|                                stack.layer(activeLayer).grid();
+2553|                            const float cx = ptr.pos.x;
+2554|                            const float cy = ptr.pos.y;
+2555|                            const float cz = ptr.pos.z;
+2556|                            const float eyeZ = cz + 0.7f;
+2557|                            float bestD2 = 1.0e12f;
+2558|                            for (int pass = 0; pass < 2 && bestD2 >= 1.0e12f;
+2559|                                 ++pass) {
+2560|                                const float sampleZ =
+2561|                                    pass == 0 ? eyeZ : (eyeZ - kCellSize);
+2562|                                const int gz =
+2563|                                    static_cast<int>(sampleZ / kCellSize);
+2564|                                if (gz < 0 || gz >= kMacroDim) continue;
+2565|                                for (int ox = -8; ox <= 8; ++ox) {
+2566|                                    for (int oy = -8; oy <= 8; ++oy) {
+2567|                                        if (ox == 0 && oy == 0) continue;
+2568|                                        const float px =
+2569|                                            cx + static_cast<float>(ox) *
+2570|                                                     kCellSize;
+2571|                                        const float py =
+2572|                                            cy + static_cast<float>(oy) *
+2573|                                                     kCellSize;
+2574|                                        const int gx = wrap_macro(
+2575|                                            static_cast<int>(px / kCellSize));
+2576|                                        const int gy = wrap_macro(
+2577|                                            static_cast<int>(py / kCellSize));
+2578|                                        if (g.cell(gx, gy, wrap_macro(gz)) ==
+2579|                                            kCellAir)
+2580|                                            continue;
+2581|                                        const float dx = wrap_delta_f(
+2582|                                            cx, px, kWorldExtent);
+2583|                                        const float dy = wrap_delta_f(
+2584|                                            cy, py, kWorldExtent);
+2585|                                        const float d2 = dx * dx + dy * dy;
+2586|                                        if (d2 < bestD2) bestD2 = d2;
+2587|                                    }
+2588|                                }
+2589|                            }
+2590|                            const bool fly =
+2591|                                reg.all_of<Controller>(player)
+2592|                                    ? reg.get<Controller>(player).fly
+2593|                                    : false;
+2594|                            std::fprintf(
+2595|                                stderr,
+2596|                                "[wall] melee toward solid d=%.2f "
+2597|                                "floor=%d frozen=%d fly=%d\n",
+2598|                                bestD2 < 1.0e12f ? std::sqrt(bestD2)
+2599|                                                 : -1.0f,
+2600|                                currentFloor,
+2601|                                doors.frozen ? 1 : 0, fly ? 1 : 0);
+2602|                        }
+2603|                    } else if (!shotActionConsumed && shotAction == "carve" &&
+2604|
+2605|                               shotFramesSeen >= 30 && !doors.frozen) {
+2606|                        // One demolition charge ahead of the camera, once the
+2607|                        // nav bake has landed — the same request path the
+2608|                        // console `carve` row sets, so the screenshot
+2609|                        // exercises the real seam ([world/destruct.h]).
+2610|                        consoleCtx.carveRadius = 1.5f;
+2611|                        consoleCtx.carvePower = 0xFFFF;
+2612|                        shotActionConsumed = true;
+2613|                    } else if (!shotActionConsumed && shotAction == "status" &&
+2614|
+2615|                               shotFramesSeen >= 30) {
+2616|                        // STATUS proof: land two authored rows so move_e3 drops
+2617|                        // below 1000 and rooted becomes true for Paupsina's
+2618|                        // leading window. Real status_apply path, not a mock.
+2619|                        game::status_apply(playerStatus,
+2620|                                           game::StatusId::ZhelemishSkin,
+2621|                                           /*useAlt=*/false);
+2622|                        game::status_apply(playerStatus,
+2623|                                           game::StatusId::PaupsinaWeb,
+2624|                                           /*useAlt=*/false);
+2625|                        std::fprintf(
+2626|                            stderr,
+2627|                            "[status] APPLY zh+web move_e3=%u rooted=%d "
+2628|                            "zh_ms=%u web_ms=%u\n",
+2629|                            game::status_move_mult_e3(playerStatus),
+2630|                            game::status_is_rooted(playerStatus) ? 1 : 0,
+2631|                            playerStatus.remainMs[static_cast<std::size_t>(
+2632|                                game::StatusId::ZhelemishSkin)],
+2633|                            playerStatus.remainMs[static_cast<std::size_t>(
+---
+=== suite keybind/console ===
+tests/suite_keybind.inl lines 147
+tests/suite_keybind.inl:17|    CHECK(t.add({"probe", "help", 10, 0}));
+tests/suite_keybind.inl:19|    CHECK(!t.add({"probe", "quit", 11, 0}));
+tests/suite_keybind.inl:20|    CHECK(t.count() == 1);
+tests/suite_keybind.inl:21|    CHECK(!t.add({"", "help", 12, 0})); // no action name
+tests/suite_keybind.inl:22|    CHECK(t.find("probe") != nullptr);
+tests/suite_keybind.inl:23|    CHECK(t.find("absent") == nullptr);
+tests/suite_keybind.inl:24|    CHECK(t.find("probe")->scancode == 10);
+tests/suite_keybind.inl:29|    CHECK(keybind_register_defaults(defaults));
+tests/suite_keybind.inl:30|    CHECK(defaults.find("fly") != nullptr);
+tests/suite_keybind.inl:31|    CHECK(defaults.find("menu") != nullptr);
+tests/suite_keybind.inl:32|    CHECK(defaults.find("floor_up") != nullptr);
+tests/suite_keybind.inl:33|    CHECK(defaults.find("jump") != nullptr);
+tests/suite_keybind.inl:42|    CHECK(console_register_defaults(con));
+tests/suite_keybind.inl:44|    CHECK(keybind_register_defaults(t));
+tests/suite_keybind.inl:45|    for (std::size_t i = 0; i < t.count(); ++i) {
+tests/suite_keybind.inl:54|        CHECK(con.find(name) != nullptr);
+tests/suite_keybind.inl:60|    CHECK(keybind_register_defaults(t));
+tests/suite_keybind.inl:64|    CHECK(q != nullptr);
+tests/suite_keybind.inl:65|    CHECK(std::strcmp(q->action, "door") == 0);
+tests/suite_keybind.inl:67|    CHECK(t.find_scancode(scan::kW) == nullptr);
+tests/suite_keybind.inl:69|    CHECK(t.find_scancode(200) == nullptr);
+tests/suite_keybind.inl:72|    CHECK(t.conflicts("door") == 0);
+tests/suite_keybind.inl:73|    CHECK(t.rebind("heal", scan::kQ)); // heal onto Q too -> real ambiguity
+tests/suite_keybind.inl:74|    CHECK(t.conflicts("door") == 1);
+tests/suite_keybind.inl:75|    CHECK(t.conflicts("heal") == 1);
+tests/suite_keybind.inl:80|    CHECK(keybind_register_defaults(t));
+tests/suite_keybind.inl:81|    CHECK(t.rebind("fly", scan::kV));
+tests/suite_keybind.inl:82|    CHECK(t.find("fly")->scancode == scan::kV);
+tests/suite_keybind.inl:83|    CHECK(!t.rebind("absent", scan::kV));
+tests/suite_keybind.inl:86|    CHECK(!t.rebind("fly", kScancodeCount));
+tests/suite_keybind.inl:87|    CHECK(!t.rebind("fly", 0xFFFFu));
+tests/suite_keybind.inl:88|    CHECK(t.find("fly")->scancode == scan::kV); // untouched by the refusals
+tests/suite_keybind.inl:93|    CHECK(keybind_register_defaults(a));
+tests/suite_keybind.inl:94|    CHECK(a.rebind("fly", scan::kV));
+tests/suite_keybind.inl:95|    CHECK(a.rebind("jump", scan::kLCtrl));
+tests/suite_keybind.inl:99|    CHECK(n > 0);
+tests/suite_keybind.inl:100|    CHECK(text[n] == '\0');
+tests/suite_keybind.inl:104|    CHECK(keybind_register_defaults(b));
+tests/suite_keybind.inl:106|    CHECK(applied == static_cast<std::uint32_t>(b.count()));
+tests/suite_keybind.inl:107|    CHECK(b.find("fly")->scancode == scan::kV);
+tests/suite_keybind.inl:108|    CHECK(b.find("jump")->scancode == scan::kLCtrl);
+tests/suite_keybind.inl:112|    CHECK(keybind_register_defaults(c));
+tests/suite_keybind.inl:113|    const std::size_t before = c.count();
+tests/suite_keybind.inl:114|    CHECK(c.parse("# comment\nbind no_such_action 30\nnot a bind line\n"
+tests/suite_keybind.inl:116|    CHECK(c.count() == before);
+tests/suite_keybind.inl:117|    CHECK(c.find("no_such_action") == nullptr);
+tests/suite_keybind.inl:118|    CHECK(c.find("fly")->scancode == 5);
+tests/suite_keybind.inl:123|    CHECK(keybind_register_defaults(t));
+tests/suite_keybind.inl:125|    CHECK(m.fwd == scan::kW);
+tests/suite_keybind.inl:126|    CHECK(m.back == scan::kS);
+tests/suite_keybind.inl:127|    CHECK(m.left == scan::kA);
+tests/suite_keybind.inl:128|    CHECK(m.right == scan::kD);
+tests/suite_keybind.inl:129|    CHECK(m.up == scan::kE);
+tests/suite_keybind.inl:130|    CHECK(m.down == scan::kQ);
+tests/suite_keybind.inl:131|    CHECK(m.downAlt == scan::kLCtrl);
+tests/suite_keybind.inl:132|    CHECK(m.jump == scan::kSpace);
+tests/suite_keybind.inl:134|    CHECK(t.rebind("move_fwd", scan::kT));
+tests/suite_keybind.inl:135|    CHECK(keybind_move_binds(t).fwd == scan::kT);
+tests/suite_keybind.inl:137|    CHECK(keybind_move_binds(empty).fwd == scan::kW);
+tests/suite_console.inl lines 252
+tests/suite_console.inl:25|    CHECK(con.add({"probe", "probe", "test row", consoletest_cmd, nullptr}));
+tests/suite_console.inl:28|    CHECK(!con.add({"probe", "probe2", "usurper", consoletest_cmd, nullptr}));
+tests/suite_console.inl:29|    CHECK(con.count() == 1);
+tests/suite_console.inl:30|    CHECK(!con.add({"", "", "no name", consoletest_cmd, nullptr}));
+tests/suite_console.inl:31|    CHECK(!con.add({"norun", "norun", "no handler", nullptr, nullptr}));
+tests/suite_console.inl:32|    CHECK(con.find("probe") != nullptr);
+tests/suite_console.inl:33|    CHECK(con.find("absent") == nullptr);
+tests/suite_console.inl:38|    CHECK(console_register_defaults(defaults));
+tests/suite_console.inl:39|    CHECK(defaults.find("spawn") != nullptr);
+tests/suite_console.inl:40|    CHECK(defaults.find("god") != nullptr);
+tests/suite_console.inl:41|    CHECK(defaults.find("noclip") != nullptr);
+tests/suite_console.inl:42|    CHECK(defaults.find("teleport") != nullptr);
+tests/suite_console.inl:43|    CHECK(defaults.find("tp") != nullptr);
+tests/suite_console.inl:44|    CHECK(defaults.find("help") != nullptr);
+tests/suite_console.inl:45|    CHECK(defaults.find("ride") != nullptr);
+tests/suite_console.inl:46|    CHECK(defaults.find("fly") != nullptr);
+tests/suite_console.inl:47|    CHECK(defaults.find("save") != nullptr);
+tests/suite_console.inl:48|    CHECK(defaults.find("menu") != nullptr);
+tests/suite_console.inl:49|    CHECK(defaults.find("interact") != nullptr);
+tests/suite_console.inl:59|    CHECK(console_register_defaults(con));
+tests/suite_console.inl:63|    CHECK(con.exec(ctx, "fly", out, sizeof out));
+tests/suite_console.inl:64|    CHECK(ctx.requestBits == request_bit(ConsoleRequest::Fly));
+tests/suite_console.inl:65|    CHECK(con.exec(ctx, "save", out, sizeof out));
+tests/suite_console.inl:66|    CHECK(con.exec(ctx, "menu", out, sizeof out));
+tests/suite_console.inl:67|    CHECK(ctx.requestBits == (request_bit(ConsoleRequest::Fly) |
+tests/suite_console.inl:71|    CHECK(ctx.take_requests() == (request_bit(ConsoleRequest::Fly) |
+tests/suite_console.inl:74|    CHECK(ctx.requestBits == 0);
+tests/suite_console.inl:75|    CHECK(ctx.take_requests() == 0);
+tests/suite_console.inl:78|    CHECK(con.exec(ctx, "ride up", out, sizeof out));
+tests/suite_console.inl:79|    CHECK(ctx.take_requests() == request_bit(ConsoleRequest::FloorUp));
+tests/suite_console.inl:80|    CHECK(con.exec(ctx, "ride down", out, sizeof out));
+tests/suite_console.inl:81|    CHECK(ctx.take_requests() == request_bit(ConsoleRequest::FloorDown));
+tests/suite_console.inl:82|    CHECK(!con.exec(ctx, "ride sideways", out, sizeof out));
+tests/suite_console.inl:83|    CHECK(!con.exec(ctx, "ride", out, sizeof out));
+tests/suite_console.inl:84|    CHECK(ctx.take_requests() == 0);
+tests/suite_console.inl:88|    CHECK(con.complete(ctx, "ride ", cands, 8) == 2);
+tests/suite_console.inl:89|    CHECK(con.complete(ctx, "ride u", cands, 8) == 1);
+tests/suite_console.inl:90|    CHECK(std::strcmp(cands[0], "up") == 0);
+tests/suite_console.inl:95|    CHECK(con.add({"probe", "probe", "test row", consoletest_cmd, nullptr}));
+tests/suite_console.inl:99|    CHECK(con.exec(ctx, "  probe  one   two ", out, sizeof out));
+tests/suite_console.inl:100|    CHECK(consoletest_ran);
+tests/suite_console.inl:101|    CHECK(std::strcmp(out, "argc=3 last=two") == 0);
+tests/suite_console.inl:103|    CHECK(!con.exec(ctx, "warp 5", out, sizeof out));
+tests/suite_console.inl:104|    CHECK(out[0] != '\0');
+tests/suite_console.inl:105|    CHECK(!con.exec(ctx, "   ", out, sizeof out));
+tests/suite_console.inl:112|        CHECK(mob_kind_from_token(kMobTokens[i]) == static_cast<MobKind>(i));
+tests/suite_console.inl:113|    CHECK(mob_kind_from_token("SBORKA") == MobKind::Sborka);
+tests/suite_console.inl:114|    CHECK(mob_kind_from_token("no_such_mob") == MobKind::Count);
+tests/suite_console.inl:115|    CHECK(mob_kind_from_token("") == MobKind::Count);
+tests/suite_console.inl:116|    CHECK(mob_kind_from_token(nullptr) == MobKind::Count);
+tests/suite_console.inl:121|    CHECK(console_register_defaults(con));
+tests/suite_console.inl:127|    CHECK(n == 1);
+tests/suite_console.inl:128|    CHECK(std::strcmp(cands[0], "spawn") == 0);
+tests/suite_console.inl:132|    CHECK(n == 1);
+tests/suite_console.inl:133|    CHECK(std::strcmp(cands[0], "sborka") == 0);
+tests/suite_console.inl:135|    CHECK(n > 1); // sborka, shadow, spirit, ...
+tests/suite_console.inl:140|    CHECK(n == 0);
+tests/suite_console.inl:146|    CHECK(n == 2);
+tests/suite_console.inl:148|    CHECK(n == 1);
+tests/suite_console.inl:149|    CHECK(std::strcmp(cands[0], "-26") == 0);
+tests/suite_console.inl:164|    CHECK(console_register_defaults(con));
+tests/suite_console.inl:173|    CHECK(count_layer_mobs(ecs, 0) == 0);
+tests/suite_console.inl:174|    CHECK(con.exec(ctx, "spawn sborka 3", out, sizeof out));
+tests/suite_console.inl:175|    CHECK(count_layer_mobs(ecs, 0) == 3);
+tests/suite_console.inl:183|        CHECK(levelled);
+tests/suite_console.inl:185|    CHECK(!con.exec(ctx, "spawn nosuchmob", out, sizeof out));
+tests/suite_console.inl:186|    CHECK(!con.exec(ctx, "spawn", out, sizeof out)); // usage, not a crash
+tests/suite_console.inl:189|    CHECK(!ecs.all_of<GodMode>(player));
+tests/suite_console.inl:190|    CHECK(con.exec(ctx, "god", out, sizeof out));
+tests/suite_console.inl:191|    CHECK(ecs.all_of<GodMode>(player));
+tests/suite_console.inl:198|        CHECK(ecs.get<MobRef>(mob).hp == before); // untouchable
+tests/suite_console.inl:201|    CHECK(con.exec(ctx, "god", out, sizeof out));
+tests/suite_console.inl:202|    CHECK(!ecs.all_of<GodMode>(player));
+tests/suite_console.inl:205|    CHECK(con.exec(ctx, "noclip", out, sizeof out));
+tests/suite_console.inl:206|    CHECK(ecs.all_of<NoClip>(player));
+tests/suite_console.inl:207|    CHECK(ecs.get<Controller>(player).fly);
+tests/suite_console.inl:208|    CHECK(con.exec(ctx, "noclip", out, sizeof out));
+tests/suite_console.inl:209|    CHECK(!ecs.all_of<NoClip>(player));
+tests/suite_console.inl:210|    CHECK(!ecs.get<Controller>(player).fly);
+tests/suite_console.inl:214|    CHECK(!con.exec(bare, "spawn sborka", out, sizeof out));
+tests/suite_console.inl:215|    CHECK(!con.exec(bare, "god", out, sizeof out));
+tests/suite_console.inl:220|    CHECK(console_register_defaults(con));
+tests/suite_console.inl:230|    CHECK(con.exec(ctx, "teleport 5", out, sizeof out));
+tests/suite_console.inl:231|    CHECK(ctx.requestFloor == 5);
+tests/suite_console.inl:235|    CHECK(!con.exec(ctx, "teleport 99", out, sizeof out));
+tests/suite_console.inl:236|    CHECK(ctx.requestFloor == ConsoleContext::kNoRequest);
+tests/suite_console.inl:237|    CHECK(!con.exec(ctx, "teleport up", out, sizeof out));
+tests/suite_console.inl:238|    CHECK(!con.exec(ctx, "teleport", out, sizeof out));
+tests/suite_console.inl:240|    CHECK(con.exec(ctx, "tp 5", out, sizeof out));
+tests/suite_console.inl:241|    CHECK(ctx.requestFloor == 5);
+tests/suite_rpg.inl lines 747
+tests/suite_rpg.inl:12|    CHECK(xp_for_level(2) == 100);
+tests/suite_rpg.inl:13|    CHECK(xp_for_level(5) == 295);
+tests/suite_rpg.inl:14|    CHECK(xp_for_level(10) == 1020);
+tests/suite_rpg.inl:17|    CHECK(xp_for_level(0) == 0);
+tests/suite_rpg.inl:18|    CHECK(xp_for_level(1) == 0);
+tests/suite_rpg.inl:21|    CHECK(xp_for_level(3) == 75 + 50 + 20);    // 145
+tests/suite_rpg.inl:22|    CHECK(xp_for_level(4) == 75 + 75 + 60);    // 210
+tests/suite_rpg.inl:29|        CHECK(cur > prev);
+tests/suite_rpg.inl:35|    CHECK(xp_for_level(kRpgLevelCap) == 75u + 25u * 254u + 10u * 254u * 253u);
+tests/suite_rpg.inl:36|    CHECK(xp_for_level(kRpgLevelCap) == 649045u);
+tests/suite_rpg.inl:39|    CHECK(total_xp_for_level(1) == 0);
+tests/suite_rpg.inl:40|    CHECK(total_xp_for_level(2) == 100);
+tests/suite_rpg.inl:41|    CHECK(total_xp_for_level(3) == 245);
+tests/suite_rpg.inl:42|    CHECK(total_xp_for_level(4) == 455);
+tests/suite_rpg.inl:44|    CHECK(total_xp_for_level(kRpgLevelCap) < 0xFFFFFFFFull);
+tests/suite_rpg.inl:46|    CHECK(clamp_rpg_level(0) == 1);
+tests/suite_rpg.inl:47|    CHECK(clamp_rpg_level(-9) == 1);
+tests/suite_rpg.inl:48|    CHECK(clamp_rpg_level(1) == 1);
+tests/suite_rpg.inl:49|    CHECK(clamp_rpg_level(300) == kRpgLevelCap);
+tests/suite_rpg.inl:50|    CHECK(clamp_rpg_attribute(-1) == 0);
+tests/suite_rpg.inl:51|    CHECK(clamp_rpg_attribute(999) == kRpgAttributeCap);
+tests/suite_rpg.inl:56|    CHECK(level_hp(1) == 100);
+tests/suite_rpg.inl:57|    CHECK(level_hp(2) == 101);
+tests/suite_rpg.inl:58|    CHECK(level_hp(10) == 109);
+tests/suite_rpg.inl:59|    CHECK(level_psi(1) == 100);
+tests/suite_rpg.inl:60|    CHECK(level_psi(50) == 149);
+tests/suite_rpg.inl:63|    CHECK(r.level == 1);
+tests/suite_rpg.inl:64|    CHECK(r.xp == 0);
+tests/suite_rpg.inl:65|    CHECK(r.attrPoints == 0);
+tests/suite_rpg.inl:66|    CHECK(r.attr[0] == 0 && r.attr[1] == 0 && r.attr[2] == 0);
+tests/suite_rpg.inl:68|    CHECK(r.psi == 100);
+tests/suite_rpg.inl:69|    CHECK(max_psi(r) == 100);
+tests/suite_rpg.inl:70|    CHECK(max_hp(r) == 100);
+tests/suite_rpg.inl:75|    CHECK(str_melee_dmg_mult_e3(r) == 1000);
+tests/suite_rpg.inl:76|    CHECK(str_durability_wear_mult_e3(r) == 1000);
+tests/suite_rpg.inl:77|    CHECK(agi_move_speed_mult_e3(r) == 1000);
+tests/suite_rpg.inl:78|    CHECK(agi_attack_speed_mult_e3(r) == 1000);
+tests/suite_rpg.inl:79|    CHECK(agi_ranged_spread_mult_e3(r) == 1000);
+tests/suite_rpg.inl:80|    CHECK(int_xp_mult_e3(r) == 1000);
+tests/suite_rpg.inl:81|    CHECK(int_psi_cost_mult_e3(r) == 1000);
+tests/suite_rpg.inl:82|    CHECK(int_contract_reward_mult_e3(r) == 1000);
+tests/suite_rpg.inl:83|    CHECK(int_document_reward_mult_e3(r) == 1000);
+tests/suite_rpg.inl:84|    CHECK(int_psi_duration_bonus_sec(r) == 0);
+tests/suite_rpg.inl:89|    CHECK(str_melee_dmg_mult_e3(r) == 1100);
+tests/suite_rpg.inl:90|    CHECK(max_hp(r) == 110);              // round(100 * 1.10)
+tests/suite_rpg.inl:92|    CHECK(str_melee_dmg_mult_e3(r) == 1500);
+tests/suite_rpg.inl:93|    CHECK(max_hp(r) == 150);
+tests/suite_rpg.inl:98|    CHECK(agi_move_speed_mult_e3(r) == 1250);
+tests/suite_rpg.inl:103|    CHECK(max_psi(r) == 120);
+tests/suite_rpg.inl:104|    CHECK(int_psi_duration_bonus_sec(r) == 20);   // +1 s per point, flat
+tests/suite_rpg.inl:111|    CHECK(agi_attack_speed_mult_e3(r) == 833);
+tests/suite_rpg.inl:113|    CHECK(agi_ranged_spread_mult_e3(r) == 455);
+tests/suite_rpg.inl:115|    CHECK(agi_attack_speed_mult_e3(r) > 0);       // never free
+tests/suite_rpg.inl:116|    CHECK(agi_attack_speed_mult_e3(r) < 1000);
+tests/suite_rpg.inl:117|    CHECK(agi_ranged_spread_mult_e3(r) > 0);
+tests/suite_rpg.inl:122|    CHECK(str_durability_wear_mult_e3(r) == 714);
+tests/suite_rpg.inl:127|    CHECK(int_psi_cost_mult_e3(r) == 741);
+tests/suite_rpg.inl:133|        CHECK(int_xp_mult_e3(r) <= 2000);
+tests/suite_rpg.inl:134|        CHECK(int_contract_reward_mult_e3(r) <= 1500);   // asymptote 0.5
+tests/suite_rpg.inl:135|        CHECK(int_document_reward_mult_e3(r) <= 1700);   // asymptote 0.7
+tests/suite_rpg.inl:139|    CHECK(int_xp_mult_e3(r) > 1990);
+tests/suite_rpg.inl:140|    CHECK(int_contract_reward_mult_e3(r) > 1495);
+tests/suite_rpg.inl:141|    CHECK(int_document_reward_mult_e3(r) > 1690);
+tests/suite_rpg.inl:147|        CHECK(cur > prevXp);
+tests/suite_rpg.inl:155|    CHECK(str_heavy_weapon_speed_mult_e3(r, 649) == 1000);   // light: untouched
+tests/suite_rpg.inl:156|    CHECK(str_heavy_weapon_speed_mult_e3(r, 650) < 1000);    // heavy: faster
+tests/suite_rpg.inl:157|    CHECK(str_heavy_weapon_speed_mult_e3(r, 650) == 667);    // 1/(1+10*0.05)=0.6667
+tests/suite_rpg.inl:158|    CHECK(str_heavy_weapon_speed_mult_e3(r, 2000) == 667);
+tests/suite_rpg.inl:166|    CHECK(melee_damage(r, 0, 999) == 1);      // bare hands at level 1: 1, not 999
+tests/suite_rpg.inl:167|    CHECK(melee_damage(r, 1, 25) == 25);      // armed at level 1: no level bonus
+tests/suite_rpg.inl:170|    CHECK(melee_damage(r, 0, 999) == 10);     // bare hands: the level
+tests/suite_rpg.inl:171|    CHECK(melee_damage(r, 1, 25) == 34);      // 25 + 9
+tests/suite_rpg.inl:175|    CHECK(melee_damage(r, 1, 25) == 41);      // round(34 * 1.20) = 40.8 -> 41
+tests/suite_rpg.inl:176|    CHECK(melee_damage(r, 0, 0) == 12);       // round(10 * 1.20)
+tests/suite_rpg.inl:180|    CHECK(melee_damage(r, 1, 0) == 4);
+tests/suite_rpg.inl:185|    CHECK(adjusted_psi_cost(0, r) == 0);      // a free effect stays free
+tests/suite_rpg.inl:186|    CHECK(adjusted_psi_cost(10, r) == 10);    // no INT: unchanged
+tests/suite_rpg.inl:188|    CHECK(adjusted_psi_cost(10, r) == 7);     // round(10 * 0.7407)
+tests/suite_rpg.inl:190|    CHECK(adjusted_psi_cost(1, r) >= 1);      // the floor holds at max INT
+tests/suite_rpg.inl:191|    CHECK(adjusted_psi_cost(100, r) >= 1);
+tests/suite_rpg.inl:197|    CHECK(xp_for_monster_kill(MobKind::Sborka, 1) == 10);
+tests/suite_rpg.inl:198|    CHECK(xp_for_monster_kill(MobKind::Tvar, 1) == 50);
+tests/suite_rpg.inl:199|    CHECK(xp_for_monster_kill(MobKind::Betonnik, 1) == 240);
+tests/suite_rpg.inl:200|    CHECK(xp_for_monster_kill(MobKind::Mancobus, 1) == 400);
+tests/suite_rpg.inl:201|    CHECK(xp_for_monster_kill(MobKind::Creator, 1) == 10000);
+tests/suite_rpg.inl:204|    CHECK(xp_for_monster_kill(MobKind::Tvar, 5) == 94);
+tests/suite_rpg.inl:206|    CHECK(xp_for_monster_kill(MobKind::Sborka, 2) == 12);
+tests/suite_rpg.inl:208|    CHECK(xp_for_monster_kill(MobKind::Tvar, 0) == 50);
+tests/suite_rpg.inl:212|    CHECK(xp_for_monster_kill(MobKind::Panelnik, 1) == 10);
+tests/suite_rpg.inl:213|    CHECK(xp_for_monster_kill(MobKind::Paupsina, 1) == 10);
+tests/suite_rpg.inl:218|        CHECK(xp_for_monster_kill(static_cast<MobKind>(k), 1) >= 10);
+tests/suite_rpg.inl:221|    CHECK(xp_for_npc_kill(1) == 10);
+tests/suite_rpg.inl:222|    CHECK(xp_for_npc_kill(5) == 19);      // 10 * 1.88 = 18.8 -> 19
+tests/suite_rpg.inl:225|    CHECK(xp_for_quest(10) == 20);        // difficulty 1.0
+tests/suite_rpg.inl:226|    CHECK(xp_for_quest(25) == 50);        // difficulty 2.5
+tests/suite_rpg.inl:227|    CHECK(xp_for_quest(0) == 0);
+tests/suite_rpg.inl:235|    CHECK(a.granted == 100);
+tests/suite_rpg.inl:236|    CHECK(a.levelsGained == 1);
+tests/suite_rpg.inl:237|    CHECK(a.newLevel == 2);
+tests/suite_rpg.inl:238|    CHECK(!a.atCap);
+tests/suite_rpg.inl:239|    CHECK(r.level == 2);
+tests/suite_rpg.inl:240|    CHECK(r.xp == 0);
+tests/suite_rpg.inl:241|    CHECK(r.attrPoints == 1);             // exactly one point per level
+tests/suite_rpg.inl:246|    CHECK(a.levelsGained == 0);
+tests/suite_rpg.inl:247|    CHECK(r.level == 1);
+tests/suite_rpg.inl:248|    CHECK(r.xp == 99);
+tests/suite_rpg.inl:251|    CHECK(a.levelsGained == 1);
+tests/suite_rpg.inl:252|    CHECK(r.level == 2);
+tests/suite_rpg.inl:258|    CHECK(a.levelsGained == 3);
+tests/suite_rpg.inl:259|    CHECK(r.level == 4);
+tests/suite_rpg.inl:260|    CHECK(r.xp == 0);
+tests/suite_rpg.inl:261|    CHECK(r.attrPoints == 3);
+tests/suite_rpg.inl:265|    CHECK(r.level == 4);
+tests/suite_rpg.inl:266|    CHECK(r.xp == 1);
+tests/suite_rpg.inl:274|    CHECK(maxHp == 101);
+tests/suite_rpg.inl:275|    CHECK(hp == 41);                      // +1, NOT refilled to 101
+tests/suite_rpg.inl:281|    CHECK(r.psi == max_psi(r));
+tests/suite_rpg.inl:282|    CHECK(r.psi == 101);
+tests/suite_rpg.inl:290|    CHECK(a.granted == (1000u * xpMult + 500u) / 1000u);
+tests/suite_rpg.inl:291|    CHECK(a.granted > 1000);              // INT is a bonus, not a tax
+tests/suite_rpg.inl:297|    CHECK(a.granted == 0);
+tests/suite_rpg.inl:298|    CHECK(a.levelsGained == 0);
+tests/suite_rpg.inl:299|    CHECK(r.xp == xpBefore);
+tests/suite_rpg.inl:300|    CHECK(r.level == 3);
+tests/suite_rpg.inl:307|    CHECK(a.atCap);
+tests/suite_rpg.inl:308|    CHECK(a.levelsGained == 0);
+tests/suite_rpg.inl:309|    CHECK(a.newLevel == kRpgLevelCap);
+tests/suite_rpg.inl:310|    CHECK(r.xp == 0);
+tests/suite_rpg.inl:311|    CHECK(r.level == kRpgLevelCap);
+tests/suite_rpg.inl:316|    CHECK(r.level == kRpgLevelCap);
+tests/suite_rpg.inl:317|    CHECK(r.xp == 0);
+tests/suite_rpg.inl:318|    CHECK(a.atCap);
+tests/suite_rpg.inl:323|    CHECK(!spend_attr_point(r, Attr::Str));
+tests/suite_rpg.inl:324|    CHECK(r.attr[static_cast<std::size_t>(Attr::Str)] == 0);
+tests/suite_rpg.inl:331|    CHECK(spend_attr_point(r, Attr::Str, &hp, &maxHp));
+tests/suite_rpg.inl:332|    CHECK(r.attrPoints == 2);
+tests/suite_rpg.inl:333|    CHECK(r.attr[static_cast<std::size_t>(Attr::Str)] == 1);
+tests/suite_rpg.inl:334|    CHECK(maxHp == static_cast<std::int16_t>(max_hp(r)));
+tests/suite_rpg.inl:335|    CHECK(hp >= 50);                      // credited, never reduced
+tests/suite_rpg.inl:342|    CHECK(spend_attr_point(r, Attr::Int));
+tests/suite_rpg.inl:343|    CHECK(max_psi(r) > psiMaxBefore);
+tests/suite_rpg.inl:344|    CHECK(r.psi == 10 + (max_psi(r) - psiMaxBefore));
+tests/suite_rpg.inl:353|    CHECK(spend_attr_point(r, Attr::Agi, &hp, &maxHp));
+tests/suite_rpg.inl:354|    CHECK(maxHp == maxHpBefore);
+tests/suite_rpg.inl:355|    CHECK(hp == 60);
+tests/suite_rpg.inl:356|    CHECK(r.psi == 7);
+tests/suite_rpg.inl:362|    CHECK(!spend_attr_point(r, Attr::Str));
+tests/suite_rpg.inl:363|    CHECK(r.attrPoints == 5);
+tests/suite_rpg.inl:368|    CHECK(!spend_attr_point(r, Attr::Count));
+tests/suite_rpg.inl:369|    CHECK(r.attrPoints == 1);
+tests/suite_rpg.inl:375|    CHECK(r.attrPoints == 3);
+tests/suite_rpg.inl:376|    CHECK(spend_attr_point(r, Attr::Str));
+tests/suite_rpg.inl:377|    CHECK(spend_attr_point(r, Attr::Agi));
+tests/suite_rpg.inl:378|    CHECK(spend_attr_point(r, Attr::Int));
+tests/suite_rpg.inl:379|    CHECK(r.attrPoints == 0);
+tests/suite_rpg.inl:380|    CHECK(!spend_attr_point(r, Attr::Str));
+tests/suite_rpg.inl:388|        CHECK(r.level == lv);
+tests/suite_rpg.inl:389|        CHECK(spent == lv - 1);
+tests/suite_rpg.inl:390|        CHECK(r.attrPoints == 0);         // rolled builds have nothing unspent
+tests/suite_rpg.inl:391|        CHECK(r.xp == 0);
+tests/suite_rpg.inl:392|        CHECK(r.psi == max_psi(r));
+tests/suite_rpg.inl:399|    CHECK(a1.attr[0] == a2.attr[0]);
+tests/suite_rpg.inl:400|    CHECK(a1.attr[1] == a2.attr[1]);
+tests/suite_rpg.inl:401|    CHECK(a1.attr[2] == a2.attr[2]);
+tests/suite_rpg.inl:409|    CHECK(distinct > 0);
+tests/suite_rpg.inl:414|    CHECK(big.attr[0] > 0);
+tests/suite_rpg.inl:415|    CHECK(big.attr[1] > 0);
+tests/suite_rpg.inl:416|    CHECK(big.attr[2] > 0);
+tests/suite_rpg.inl:420|    CHECK(capped.level == kRpgLevelCap);
+tests/suite_rpg.inl:421|    CHECK(static_cast<int>(capped.attr[0]) + capped.attr[1] + capped.attr[2] == 254);
+tests/suite_rpg.inl:453|    CHECK(reg.get<RpgStats>(killer).xp == 0);
+tests/suite_rpg.inl:455|    CHECK(finalized == 1);
+tests/suite_rpg.inl:459|    CHECK(after.xp == xp_for_monster_kill(MobKind::Tvar, 1));
+tests/suite_rpg.inl:460|    CHECK(after.xp == 50);
+tests/suite_rpg.inl:461|    CHECK(after.level == 1);              // 50 < the 100 needed for level 2
+tests/suite_rpg.inl:462|    CHECK(after.attrPoints == 0);
+tests/suite_rpg.inl:474|    CHECK(after2.level == 2);
+tests/suite_rpg.inl:475|    CHECK(after2.attrPoints == 1);        // the level granted a spendable point
+tests/suite_rpg.inl:476|    CHECK(after2.xp == 0);                // 100 consumed exactly
+tests/suite_rpg.inl:487|    CHECK(finalize_deaths(reg, pool, bus, 3) == 1);
+tests/suite_rpg.inl:488|    CHECK(!reg.any_of<RpgStats>(plainKiller));
+tests/suite_rpg.inl:497|    CHECK(finalize_deaths(reg, pool, bus, 4) == 1);
+tests/suite_rpg.inl:509|    CHECK(reg.get<RpgStats>(killer2).xp == 94);
+tests/suite_rpg.inl:510|    CHECK(reg.get<RpgStats>(killer2).xp == xp_for_monster_kill(MobKind::Tvar, 5));
+tests/suite_rpg.inl:560|        CHECK(fist.dmg >= 1);
+tests/suite_rpg.inl:561|        CHECK(fist.cooldownMs >= 1);
+tests/suite_rpg.inl:564|        CHECK(player_melee_step(reg, pool, bus, layer, dt, /*wantsAttack=*/true,
+tests/suite_rpg.inl:566|        CHECK(reg.get<MobRef>(mob).hp ==
+tests/suite_rpg.inl:568|        CHECK(reg.get<PlayerMelee>(self).cooldownMs == fist.cooldownMs);
+tests/suite_rpg.inl:614|        CHECK(strE3 == 1000u);   // light weapon gate
+tests/suite_rpg.inl:618|        CHECK(expectDmg > static_cast<std::int16_t>(fist.dmg));
+tests/suite_rpg.inl:619|        CHECK(expectCd < fist.cooldownMs);
+tests/suite_rpg.inl:620|        CHECK(expectCd >= 1u);
+tests/suite_rpg.inl:623|        CHECK(player_melee_step(reg, pool, bus, layer, dt, /*wantsAttack=*/true,
+tests/suite_rpg.inl:625|        CHECK(reg.get<MobRef>(mob).hp == hp0 - expectDmg);
+tests/suite_rpg.inl:626|        CHECK(reg.get<PlayerMelee>(self).cooldownMs ==
+tests/suite_rpg.inl:652|        CHECK(def != nullptr);
+tests/suite_rpg.inl:653|        CHECK(gun != kInvalidItem);
+tests/suite_rpg.inl:673|        CHECK(player_ranged_step(reg, pool, layer, /*wantFire=*/true, dt,
+tests/suite_rpg.inl:675|        CHECK(reg.get<PlayerRanged>(shooter).cooldownMs == def->cooldownMs);
+tests/suite_rpg.inl:700|        CHECK(def != nullptr);
+tests/suite_rpg.inl:727|        CHECK(agiE3 < 1000u);
+tests/suite_rpg.inl:728|        CHECK(expectCd < def->cooldownMs);
+tests/suite_rpg.inl:729|        CHECK(expectCd >= 1u);
+tests/suite_rpg.inl:731|        CHECK(player_ranged_step(reg, pool, layer, /*wantFire=*/true, dt,
+tests/suite_rpg.inl:733|        CHECK(reg.get<PlayerRanged>(shooter).cooldownMs ==
+=== cmake pin ===
+cm:1|# 3.21 is a hard floor, not a preference: MSVC gained a CXX23 mapping in CMake
+cm:27|#   - SDL3                    -> system if present, else pinned via FetchContent
+cm:28|#   - EnTT, Dear ImGui        -> pinned via FetchContent
+cm:57|    # charset has to be pinned rather than inferred from the host's ANSI codepage.
+cm:120|# ---- Third-party (pinned) -------------------------------------------------
+cm:363|    # The count is pinned, for the reason spelled out at game_test below: add_test()
+cm:372|    # (passed, total), so the literal pins the total AND demands zero failures in one
+cm:373|    # regex. It is an EXECUTION count, not a site count: 108 CHECK sites, most inside
+cm:396|    # THE COUNT IS PINNED, NOT THE EXIT CODE INVERTED — and the difference is the whole
+cm:399|    # and today six of the seven findings are CLOSED pins rather than live defects. So
+cm:416|    # Both numbers are pinned on purpose. `failures` is the gate. `checks` catches the
+cm:417|    # other way a tripwire stops tripping silently — delete a test from
+cm:419|    # The cost is that adding a CHECK is a deliberate edit here, which is the intended
+cm:424|    # travel_arrival_not_in_wall (9 new CHECKs) closed the elevator soft-lock where
+cm:426|    # Earlier: 140 after descend_same_target_once (12 CHECKs); 41/2 on 2026-07-29
+cm:437|    # RE-CONFIGURE AFTER CHANGING ANY PIN BELOW. set_tests_properties is baked into
+cm:440|    # 2026-07-29: a corrected pin appeared to fail twice for exactly this reason, and the obvious
+cm:442|    # configures first) or `cmake -S . -B build-win` before trusting a ctest verdict on a pin.
+cm:447|    # THE COUNT IS PINNED HERE TOO — the same mechanism as audit_findings above, now on
+cm:448|    # the target that carries 3,887 of the repo's 4,036 CHECK sites. Until this line
+cm:449|    # existed the pin was on the 1% and the raw defect owned the other 99%: add_test()
+cm:460|    # (test_full_loop 41 CHECK sites, test_mob_behaviour 39, test_floor_bucket_index 37,
+cm:465|    # CHECK inside a test body; and shrinking a loop bound so the same CHECK runs
+cm:473|    # not the 3,887 static sites; the bulk of the CHECKs sit inside loops.
+cm:475|    # THIS TEST GOES RED THE MOMENT YOU ADD OR REMOVE A CHECK, and on this file that is
+cm:486|    # 219235 -> 219364 (+129) on 2026-07-31: save v6 — the macro world travels.
+cm:489|    # MacroSim clock/journeys; wire pins moved to the 64-byte header + the fixed
+cm:491|    # 219364 -> 219370 (+6) on 2026-07-31: the padic generator rewrite (dormitory
+cm:494|    # 219370 -> 219387 (+17) on 2026-07-31: RPG1 — RpgStats survives elevator
+cm:495|    # body-swap (up + down ride pins in test_elevator; mutation xp=777 etc.).
+cm:496|        PASS_REGULAR_EXPRESSION "game_test: 219409 checks, 0 failures")
+cm:507|    # Pinned to its last printed line instead of its exit code — but as a FLOOR, not an
+=== combat rpgcmbt ===
+c:1115|    // RPGCMBT: AGI tightens the cone (agi_ranged_spread_mult_e3 < 1000).
+c:1172|    // RPGCMBT: AGI shortens firearm cooldown (same inverse mult as melee).
+c:1177|             agi_attack_speed_mult_e3(*rs)) / 1000u;
+c:1212|    // RPGCMBT: STR/level scale damage via melee_damage(); AGI shortens cooldown;
+c:1222|    std::int16_t swingDmg = static_cast<std::int16_t>(wp->dmg);
+c:1223|    std::uint16_t swingCd = wp->cooldownMs;
+c:1225|        swingDmg = melee_damage(*rs, heldWeapon, static_cast<std::int16_t>(wp->dmg));
+c:1227|        const std::uint32_t agiE3 = agi_attack_speed_mult_e3(*rs);
+c:1231|        swingCd = static_cast<std::uint16_t>(cd > 65535u ? 65535u : (cd < 1u ? 1u : cd));
+c:1288|                             carve_power_from_dmg(swingDmg),
+c:1290|                pm.cooldownMs = swingCd;
+c:1300|    DamageResult r = apply_damage(reg, pool, best, swingDmg,
+c:1302|    pm.cooldownMs = swingCd;
+=== combat block ===
+1206|        pm.cooldownMs = 0;
+1207|
+1208|    if (!wantsAttack || pm.cooldownMs > 0) return false;
+1209|
+1210|    // Whatever is in hand. A found rebar hits eight times as hard as a fist and
+1211|    // reaches four times as far — which is the entire point of picking loot up.
+1212|    // RPGCMBT: STR/level scale damage via melee_damage(); AGI shortens cooldown;
+1213|    // STR also speeds heavy weapons (cd >= kHeavyWeaponCooldownMs). Without a
+1214|    // RpgStats component the raw table values are used (identity mults).
+1215|    const MeleeDef* wp = &unarmed_melee();
+1216|    ItemId heldWeapon = 0;  // 0 = bare hands sentinel [item_table.h]
+1217|    if (const NpcRef* n = reg.try_get<NpcRef>(self))
+1218|        if (pool.valid(n->id)) {
+1219|            heldWeapon = equipped_melee(pool.inventory(n->id));
+1220|            if (const MeleeDef* m = melee_for_item(heldWeapon)) wp = m;
+1221|        }
+1222|    std::int16_t swingDmg = static_cast<std::int16_t>(wp->dmg);
+1223|    std::uint16_t swingCd = wp->cooldownMs;
+1224|    if (const RpgStats* rs = reg.try_get<RpgStats>(self)) {
+1225|        swingDmg = melee_damage(*rs, heldWeapon, static_cast<std::int16_t>(wp->dmg));
+1226|        // Combine AGI attack-speed and STR heavy-weapon speed as e3 mults.
+1227|        const std::uint32_t agiE3 = agi_attack_speed_mult_e3(*rs);
+1228|        const std::uint32_t strE3 = str_heavy_weapon_speed_mult_e3(*rs, wp->cooldownMs);
+1229|        const std::uint32_t cd =
+1230|            (static_cast<std::uint32_t>(wp->cooldownMs) * agiE3 * strE3) / 1000000u;
+1231|        swingCd = static_cast<std::uint16_t>(cd > 65535u ? 65535u : (cd < 1u ? 1u : cd));
+1232|    }
+1233|    const float reach =
+1234|        static_cast<float>(wp->reachMm) * 0.001f * kCellSize + kMeleeReachSlack;
+1235|
+1236|    const Transform& me = reg.get<const Transform>(self);
+1237|    const CameraTag& cam = reg.get<const CameraTag>(self);
+1238|    const vec3 fwd = camera_forward(cam.yaw, cam.pitch);
+1239|
+1240|    // Nearest monster inside reach that is also roughly in front. Nearest rather
+1241|    // than first-found, so a swing in a crowd hits what you are actually up
+1242|    // against instead of whichever entity the view happened to yield first.
+1243|    Entity best = entt::null;
+1244|    float bestD2 = reach * reach;
+1245|    for (auto e : reg.view<const MobRef, const Transform>()) {
+=== heal consume context ===
+1684|    game::CarveProposalQueue combatCarves;
+1685|
+1686|    bool healWanted = false;
+1687|    bool eatWanted = false;       // G, consumed by one sim step
+1688|    bool drinkWanted = false;     // T, consumed by one sim step
+1689|    bool sellWanted = false;      // B, consumed by one sim step
+1690|    bool buyWanted = false;       // R, consumed by one sim step       // set by H, consumed by one sim step
+1691|    bool craftWanted = false;     // C, consumed by one sim step
+1692|    bool scrapWanted = false;     // X, consumed by one sim step
+1693|    bool showCraftingWindow = false;
+1694|    bool showVendorWindow = false;
+1695|    // Run state, not world state, so it lives beside the ledger. CraftingState is a
+1696|    // 96-byte POD ([craft.h]) — nothing to own, nothing to free. craft_init zeroes the
+1697|    // material bank, sets tier 0 and marks the nine default-known recipes.
+1698|    //
+1699|    // This is the first reader the nine authored craft_* columns in data/items.csv have
+1700|    // ever had: 446 items carried them and item_table.h:17 said in as many words
+1701|    // "crafting is not implemented".
+1702|    // The utility AI's config and last-tick report. `enabled` defaults FALSE ([ai.h]):
+1703|    // the system is wired, tested and dormant, and flipping this one bool is the whole
+1704|    // switch — but read the note at the ai_step call site first, because it also needs
+1705|    // ai_init to attach AiBrain and ai_release to clear the token safely.
+1706|    game::AiConfig aiCfg;
+1707|    aiCfg.enabled = true;   // utility AI live; brains attached in finish_floor_nav
+1708|    aiCfg.memory = true;    // second axis: needs a real AiMemory* at ai_step
+1709|    // Demand column owned HERE ([ai.h] "No global state"). Id-indexed so an
+1710|    // elevator fold keeps the row: the cold NpcId is the key, not the body.
+1711|    // Passed to every ai_step; null would be bit-for-bit the pre-memory pass.
+---
+2153|            // window's. (Set even while paused so a menu button lands on the
+2154|            // first tick after resume rather than vanishing.)
+2155|            if (has(ConsoleRequest::Heal)) healWanted = true;
+2156|            if (has(ConsoleRequest::Eat)) eatWanted = true;
+2157|            if (has(ConsoleRequest::Drink)) drinkWanted = true;
+2158|            if (has(ConsoleRequest::Door)) doorWanted = true;
+2159|            if (has(ConsoleRequest::Possess)) possessWanted = true;
+2160|            if (has(ConsoleRequest::Save)) saveWanted = true;
+2161|            if (has(ConsoleRequest::Load)) loadWanted = true;
+2162|            if (has(ConsoleRequest::Sell)) sellWanted = true;
+2163|            if (has(ConsoleRequest::Resupply)) buyWanted = true;
+2164|            if (has(ConsoleRequest::Scrap)) scrapWanted = true;
+2165|            if (has(ConsoleRequest::Vendor)) {
+2166|                showVendorWindow = !showVendorWindow;
+2167|                if (showVendorWindow) input.set_mouselook(false);
+2168|            }
+2169|            if (has(ConsoleRequest::Craft)) {
+2170|                craftWanted = true;
+2171|                showCraftingWindow = !showCraftingWindow;
+2172|                if (showCraftingWindow) input.set_mouselook(false);
+2173|            }
+2174|            // Interact takes the job on offer — contract first, then quest if
+2175|            // no contract is pending. Both clear on take so a second press is
+2176|            // harmless. Quest accept refuses a dead giver or a chain gate;
+2177|            // contract_accept refuses the same. [quest.h, contract.h]
+2178|            if (has(ConsoleRequest::Interact)) {
+2179|                interactWanted = true;
+2180|                if (game::contract_accept(contracts, offer, ledger)) {
+---
+3654|                    }
+3655|                }
+3656|                if (healWanted) {
+3657|                    healed += game::use_best_heal(reg, pool, bus, activeLayer,
+3658|                                                  simTick);
+3659|                    healWanted = false;
+3660|                }
+3661|                // The player is not exempt: if it died it no longer exists, and
+3662|                // everything below reads through it. Take another body now.
+3663|                if (!reg.valid(player)) {
+3664|                    // Bill the death before taking a new body. The dead pool row
+3665|                    // keeps its inventory forever (the pool never reclaims a slot),
+3666|                    // so those items are already gone in the only sense that
+3667|                    // matters — no living body can reach them. All that was missing
+3668|                    // was counting it. [extraction.h]
+3669|                    if (pool.valid(deadRow))
+3670|                        game::record_death(ledger, pool.inventory(deadRow));
+3671|                    // The PlayerMelee component dies with the body; the tally of
+3672|                    // what that person killed does not.
+3673|                    //
+3674|                    // Neither does the character sheet. `embody_as_player` rolls a
+3675|                    // fresh RpgStats from the new record, which is right for a
+3676|                    // possession but wrong across a DEATH — losing every level to a
+3677|                    // bad corridor is not the reference's rule, and the kill tally
+3678|                    // beside it already survives for the same reason. Captured
+3679|                    // before the possess (the old body is already gone by then, so
+3680|                    // this reads the value saved off at the top of the death path).
+3681|                    player = possess_a_survivor(reg, pool, activeLayer);
+---
+3657|                    healed += game::use_best_heal(reg, pool, bus, activeLayer,
+3658|                                                  simTick);
+3659|                    healWanted = false;
+3660|                }
+3661|                // The player is not exempt: if it died it no longer exists, and
+3662|                // everything below reads through it. Take another body now.
+3663|                if (!reg.valid(player)) {
+3664|                    // Bill the death before taking a new body. The dead pool row
+3665|                    // keeps its inventory forever (the pool never reclaims a slot),
+3666|                    // so those items are already gone in the only sense that
+3667|                    // matters — no living body can reach them. All that was missing
+3668|                    // was counting it. [extraction.h]
+3669|                    if (pool.valid(deadRow))
+3670|                        game::record_death(ledger, pool.inventory(deadRow));
+3671|                    // The PlayerMelee component dies with the body; the tally of
+3672|                    // what that person killed does not.
+3673|                    //
+3674|                    // Neither does the character sheet. `embody_as_player` rolls a
+3675|                    // fresh RpgStats from the new record, which is right for a
+3676|                    // possession but wrong across a DEATH — losing every level to a
+3677|                    // bad corridor is not the reference's rule, and the kill tally
+3678|                    // beside it already survives for the same reason. Captured
+3679|                    // before the possess (the old body is already gone by then, so
+3680|                    // this reads the value saved off at the top of the death path).
+3681|                    player = possess_a_survivor(reg, pool, activeLayer);
+3682|                    if (player == entt::null) { running = false; break; }
+3683|                    aim_player(reg, player);
+3684|                    reg.emplace_or_replace<game::PlayerMelee>(
+---
+=== counts ===
+keybind add count 28
+ConsoleRequest block:
+  [0] Menu
+  [1] Quit
+  [2] Hud
+  [3] Console
+  [4] Mouselook
+  [5] Fly
+  [6] FloorUp
+  [7] FloorDown
+  [8] Save
+  [9] Load
+  [10] Heal
+  [11] Eat
+  [12] Drink
+  [13] Door
+  [14] Possess
+  [15] Interact
+  [16] Sell
+  [17] Vendor
+  [18] Resupply
+  [19] Craft
+  [20] Scrap
+  Count at member index 21
+=== suite_rpg spend ===
+rpg:10|static void test_rpg_curve() {
+rpg:54|static void test_rpg_derived() {
+rpg:65|    CHECK(r.attrPoints == 0);
+rpg:161|static void test_rpg_melee_and_psi() {
+rpg:194|static void test_rpg_xp_sources() {
+rpg:230|static void test_rpg_award_and_spend() {
+rpg:241|    CHECK(r.attrPoints == 1);             // exactly one point per level
+rpg:261|    CHECK(r.attrPoints == 3);
+rpg:323|    CHECK(!spend_attr_point(r, Attr::Str));
+rpg:328|    r.attrPoints = 3;
+rpg:331|    CHECK(spend_attr_point(r, Attr::Str, &hp, &maxHp));
+rpg:332|    CHECK(r.attrPoints == 2);
+rpg:339|    r.attrPoints = 1;
+rpg:342|    CHECK(spend_attr_point(r, Attr::Int));
+rpg:348|    r.attrPoints = 1;
+rpg:353|    CHECK(spend_attr_point(r, Attr::Agi, &hp, &maxHp));
+rpg:360|    r.attrPoints = 5;
+rpg:362|    CHECK(!spend_attr_point(r, Attr::Str));
+rpg:363|    CHECK(r.attrPoints == 5);
+rpg:367|    r.attrPoints = 1;
+rpg:368|    CHECK(!spend_attr_point(r, Attr::Count));
+rpg:369|    CHECK(r.attrPoints == 1);
+rpg:375|    CHECK(r.attrPoints == 3);
+rpg:376|    CHECK(spend_attr_point(r, Attr::Str));
+rpg:377|    CHECK(spend_attr_point(r, Attr::Agi));
+rpg:378|    CHECK(spend_attr_point(r, Attr::Int));
+rpg:379|    CHECK(r.attrPoints == 0);
+rpg:380|    CHECK(!spend_attr_point(r, Attr::Str));
+rpg:383|static void test_rpg_random_build() {
+rpg:390|        CHECK(r.attrPoints == 0);         // rolled builds have nothing unspent
+rpg:430|static void test_rpg_kill_awards_xp() {
+rpg:462|    CHECK(after.attrPoints == 0);
+rpg:475|    CHECK(after2.attrPoints == 1);        // the level granted a spendable point
+rpg:525|static void test_rpg_combat_wire() {
+rpg:738|static void test_rpg_all() {
+rpg:739|    test_rpg_curve();
+rpg:740|    test_rpg_derived();
+rpg:741|    test_rpg_melee_and_psi();
+rpg:742|    test_rpg_xp_sources();
+rpg:743|    test_rpg_award_and_spend();
+rpg:744|    test_rpg_random_build();
+rpg:745|    test_rpg_kill_awards_xp();
+rpg:746|    test_rpg_combat_wire();

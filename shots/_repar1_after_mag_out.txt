@@ -1,0 +1,12 @@
+OK	place_body_safely call sites in main	count=2
+OK	ai_release call sites in main	count=2
+OK	do_ride present	
+OK	shot travel / ride harness	
+OK	floor_stream ai_release	
+OK	elevator PlayerRanged restore	
+OK	elevator RpgStats restore	
+OK	quest_on_kill in main	
+OK	quest_on_giver_died in main	
+OK	mag action harness	
+OK	mag PROOF line	
+SUMMARY	0

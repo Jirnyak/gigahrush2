@@ -1,0 +1,585 @@
+bytes=48324 lines=979
+38:#include "game/npc_pool.h"
+42:static void test_npcpool_all() {
+48:        static_assert(kMinFloor == -127 && kMaxFloor == 127,
+56:        CHECK(pool.floor(id) == -50);
+58:        CHECK(pool.floor(id) == 0);
+63:        for (int f = kMinFloor; f <= kMaxFloor; ++f) {
+67:        CHECK(allRoundTrip);
+77:        CHECK(cand != kInvalidNpc);
+78:        CHECK(pool.count() == spec.population);
+81:        for (NpcId id = 0; id < pool.count(); ++id)
+83:        CHECK(allLabelled);
+87:        CHECK(pool.floor(0) < 0);
+103:        CHECK(m != kInvalidModule);
+107:        CHECK(r.layer != kInvalidLayer);
+108:        CHECK(pool.count() == floor_spec(FloorKind::Derelict).population);
+111:        for (NpcId id = 0; id < pool.count(); ++id)
+113:        CHECK(allNegative);
+119:        CHECK(pool.capacity() == kNpcPoolSize);
+120:        CHECK(pool.count() == 0);
+121:        CHECK(pool.alive() == 0);
+122:        CHECK(pool.reserve_remaining() == kNpcPoolSize);
+125:        for (int i = 0; i < 5; ++i) ids[static_cast<std::size_t>(i)] = pool.spawn();
+126:        CHECK(ids[0] == 0 && ids[4] == 4);      // the id IS the slot index
+127:        CHECK(pool.count() == 5u);
+128:        CHECK(pool.alive() == 5u);
+129:        CHECK(pool.reserve_remaining() == kNpcPoolSize - 5u);
+132:        CHECK(pool.count() == 5u);              // high-water mark never decreases
+133:        CHECK(pool.alive() == 4u);
+134:        CHECK(pool.valid(ids[2]) && !pool.alive(ids[2]));
+136:        // of the tree is written against ([npc_pool.h] "Slot recycling").
+137:        CHECK(!pool.recycling());
+138:        CHECK(pool.free_slots() == 0u);
+139:        CHECK(pool.spawn() == 5u);              // the dead slot is never handed back
+140:        CHECK(pool.count() == 6u);
+141:        CHECK(pool.alive() == 5u);
+152:        CHECK(pool.count() == c);
+153:        CHECK(pool.alive() == a);
+154:        CHECK(pool.reserve_remaining() == kNpcPoolSize - c);
+155:        CHECK(pool.valid(ids[2]) && !pool.alive(ids[2]));
+156:        CHECK(pool.alive(ids[0]));
+159:        CHECK(pool.relations(ids[0])[0].target == 7u);
+160:        CHECK(pool.relations(ids[0])[0].affinity == -100);
+161:        CHECK(pool.relations(ids[1])[0].target == kInvalidNpc);
+162:        CHECK(std::strcmp(pool.name(ids[0]).data(), "Ivan") == 0);
+163:        CHECK(std::strcmp(pool.surname(ids[0]).data(), "Petrov") == 0);
+164:        CHECK(pool.name(ids[1])[0] == '\0');
+165:        CHECK(pool.level(ids[0]) == 7 && pool.level(ids[1]) == 0);
+166:        CHECK(pool.attrs(ids[0])[0] == 11 && pool.attrs(ids[1])[0] == 0);
+175:        CHECK(pool.name(0)[0] == '\0');
+176:        CHECK(pool.surname(0)[0] == '\0');
+177:        CHECK(pool.name(kNpcPoolSize - 1u)[0] == '\0');
+178:        CHECK(&pool.name(0) == &kBlankName);      // the fallback, not a real row
+179:        CHECK(&pool.surname(0) == &kBlankName);
+191:        for (std::uint32_t i = 0; i < n; ++i) {
+200:        CHECK(pool.count() == n);
+201:        CHECK(pool.alive() == n);
+204:        for (std::uint32_t i = 0; i < n; ++i) {
+216:        CHECK(intact);
+229:        std::printf("  npcpool: init() holds %.1f MiB (was %.1f MiB; %.1f MiB of "
+237:        CHECK(afterInit >= kEagerTable);
+238:        CHECK(afterInit <= kEagerTable + 4u * kRow);
+239:        CHECK(kOldTable - afterInit >= 180u * kRow); // 187 B/row is the paper figure
+245:        CHECK(afterSpawn - afterInit >= 32u * 1024u);
+246:        CHECK(afterSpawn - afterInit < 64u * 1024u); // 53,248 B
+255:        CHECK(afterRel > afterSpawn);
+256:        CHECK(afterRel - afterSpawn >= static_cast<std::size_t>(kNpcLazyChunk) *
+258:        CHECK(afterRel - afterSpawn < 2u * static_cast<std::size_t>(kNpcLazyChunk) *
+260:        CHECK(afterRel < kOldTable - 150u * kRow); // still far under the old table
+272:        for (int i = 0; i < 1930; ++i) (void)pool.spawn();
+273:        CHECK(pool.count() == 1930u);
+274:        CHECK(pool.alive() == 1930u);
+276:        std::printf("  npcpool: 1930-record demo stack adds %u B of LIVE columns "
+279:        CHECK(live < 128u * 1024u); // 53,248 B: still inside the first 4096-row chunk
+280:        CHECK(pool.resident_bytes() < 320u * static_cast<std::size_t>(kNpcPoolSize));
+296:        for (int i = 0; i < 8; ++i) ids[static_cast<std::size_t>(i)] = pool.spawn();
+297:        CHECK(pool.alive() == 8u);
+300:        CHECK(pool.alive() == 7u);
+302:        CHECK(pool.alive() == 7u);
+305:        CHECK(pool.alive() == 7u);
+306:        CHECK(pool.count() == 8u);               // and nothing else moved
+307:        CHECK(!pool.alive(ids[3]));
+308:        CHECK(pool.valid(ids[3]));
+315:        CHECK(pool.alive() == 7u);
+316:        CHECK(pool.count() == 8u);
+324:        for (std::uint32_t i = 0; i < 200u; ++i) (void)big.spawn();
+325:        for (std::uint32_t i = 0; i < 100u; ++i) {
+329:        CHECK(big.count() == 200u);
+330:        CHECK(big.alive() == 100u);   // old code: 0
+332:        for (NpcId id = 0; id < big.count(); ++id)
+334:        CHECK(counted == big.alive()); // the maintained counter equals the scan
+341:        CHECK(pool.recycling());
+344:        for (int i = 0; i < 6; ++i) ids[static_cast<std::size_t>(i)] = pool.spawn();
+345:        CHECK(pool.count() == 6u);
+346:        CHECK(pool.free_slots() == 0u);
+347:        CHECK(pool.recycled() == 0u);
+352:        CHECK(pool.free_slots() == 1u);
+353:        CHECK(pool.alive() == 5u);
+355:        CHECK(again == ids[2]);
+356:        CHECK(pool.count() == 6u);          // NOT 7: no tail slot was consumed
+357:        CHECK(pool.alive() == 6u);
+358:        CHECK(pool.free_slots() == 0u);
+359:        CHECK(pool.recycled() == 1u);
+360:        CHECK(pool.alive(again));
+361:        CHECK(pool.floor(again) == kNoFloorLabel);   // a fresh record is on no floor
+370:        CHECK(pool.free_slots() == 3u);
+371:        CHECK(pool.spawn() == ids[4]);
+372:        CHECK(pool.spawn() == ids[0]);
+373:        CHECK(pool.spawn() == ids[3]);
+374:        CHECK(pool.free_slots() == 0u);
+375:        CHECK(pool.count() == 6u);
+376:        CHECK(pool.recycled() == 4u);
+378:        CHECK(pool.spawn() == 6u);
+379:        CHECK(pool.count() == 7u);
+383:        // while recycled slots sat unused ([npc_pool.h] reserve_remaining).
+384:        CHECK(pool.reserve_remaining() == kNpcPoolSize - 7u);
+387:        CHECK(pool.free_slots() == 2u);
+388:        CHECK(pool.reserve_remaining() == kNpcPoolSize - 7u + 2u);
+392:        CHECK(pool.free_slots() == 0u);
+393:        CHECK(pool.reserve_remaining() == kNpcPoolSize - 7u);
+394:        CHECK(pool.spawn() == 7u);          // tail again, exactly as before this lane
+398:        // [npc_pool.h] kill() claims this and nothing tested it. Without the NpcAlive
+410:        CHECK(b == 1u);
+411:        CHECK(pool.alive() == 2u);
+416:        CHECK(pool.free_slots() == 1u);      // old code: 3
+417:        CHECK(pool.alive() == 1u);
+422:        CHECK(r0 == a);
+423:        CHECK(r1 != r0);                     // old code: r1 == r0 == a
+424:        CHECK(r1 == 2u);                     // ...the tail, because the queue was empty
+425:        CHECK(pool.count() == 3u);
+426:        CHECK(pool.alive() == 3u);
+427:        CHECK(pool.recycled() == 1u);
+430:        CHECK(pool.free_slots() <= pool.count() - pool.alive());
+438:        // the "rebuilt from the alive bits" half of the save-format note in [npc_pool.h]
+443:        CHECK(!pool.recycling());
+444:        for (int i = 0; i < 10; ++i) (void)pool.spawn();
+445:        CHECK(pool.count() == 10u);
+452:        CHECK(pool.alive() == 6u);
+453:        CHECK(pool.free_slots() == 0u);                     // nothing queued: still off
+454:        CHECK(pool.reserve_remaining() == kNpcPoolSize - 10u);
+457:        CHECK(pool.free_slots() == 4u);                     // all four corpses reclaimed
+458:        CHECK(pool.reserve_remaining() == kNpcPoolSize - 10u + 4u);
+459:        CHECK(pool.alive() == 6u);                          // and nobody was revived
+460:        CHECK(pool.count() == 10u);
+465:        CHECK(pool.spawn() == 2u);
+466:        CHECK(pool.spawn() == 4u);
+467:        CHECK(pool.spawn() == 7u);
+468:        CHECK(pool.spawn() == 9u);
+469:        CHECK(pool.free_slots() == 0u);
+470:        CHECK(pool.count() == 10u);                         // the tail never moved
+471:        CHECK(pool.alive() == 10u);
+472:        CHECK(pool.recycled() == 4u);
+482:        CHECK(pool.free_slots() == 1u);
+485:        CHECK(pool.free_slots() == 1u);
+486:        CHECK(pool.spawn() == 3u);
+487:        CHECK(pool.spawn() == 10u);                         // queue empty -> tail
+488:        CHECK(pool.count() == 11u);
+494:        CHECK(pool.free_slots() == 2u);
+496:        CHECK(pool.free_slots() == 0u);
+498:        CHECK(pool.free_slots() == 2u);
+499:        CHECK(pool.spawn() == 1u);          // ascending on rebuild, not the kill order
+500:        CHECK(pool.spawn() == 5u);
+501:        CHECK(pool.free_slots() == 0u);
+502:        CHECK(pool.count() == 11u);
+503:        CHECK(pool.alive() == 11u);
+504:        CHECK(pool.free_slots() <= pool.count() - pool.alive());
+551:        CHECK(pool.floor_bucket(-50).size() == 2u);
+553:        CHECK(pool.floor_bucket(-50).size() == 1u);   // a corpse leaves the roster
+556:        CHECK(reborn == a);
+557:        CHECK(pool.alive(reborn));
+560:        CHECK(pool.flags(reborn) == static_cast<std::uint8_t>(NpcAlive));
+561:        CHECK(!pool.embodied(reborn));
+562:        CHECK(!pool.is_player(reborn));            // NpcPlayer must not come back
+563:        CHECK(!(pool.flags(reborn) & NpcDesign));  // nor an authored-NPC bit
+564:        CHECK(pool.faction(reborn) == 0);
+565:        CHECK(pool.hp(reborn) == 0 && pool.max_hp(reborn) == 0);
+566:        CHECK(pool.cx(reborn) == 0 && pool.cy(reborn) == 0 && pool.cz(reborn) == 0);
+567:        CHECK(pool.height_mm(reborn) == 0);
+568:        CHECK(pool.inventory(reborn).empty());
+569:        CHECK(pool.inventory(reborn).at(7, 7).count == 0);
+571:        CHECK(pool.needs(reborn).seeded == 0);
+572:        CHECK(pool.needs(reborn).food == 0.0f);
+573:        CHECK(pool.needs(reborn).pendingPoo == 0.0f);
+575:        CHECK(pool.age(reborn) == 0);
+576:        CHECK(pool.sex(reborn) == SexUnset);
+577:        CHECK(pool.level(reborn) == 0);
+578:        CHECK(pool.attrs(reborn)[0] == 0);
+579:        CHECK(pool.attrs(reborn)[static_cast<std::size_t>(kAttrSlots - 1)] == 0);
+582:        CHECK(pool.name(reborn)[0] == '\0');
+583:        CHECK(pool.surname(reborn)[0] == '\0');
+584:        CHECK(pool.relations(reborn)[0].target == kInvalidNpc);
+585:        CHECK(pool.relations(reborn)[0].affinity == 0);
+586:        CHECK(pool.relations(reborn)[static_cast<std::size_t>(kRelSlots - 1)].target ==
+589:        CHECK(pool.floor(reborn) == kNoFloorLabel);
+590:        CHECK(pool.floor_bucket(-50).size() == 1u);
+591:        CHECK(pool.floor_bucket(-50)[0] == keep);
+593:        CHECK(std::strcmp(pool.name(keep).data(), "Anna") == 0);
+594:        CHECK(pool.level(keep) == 7);
+595:        CHECK(pool.needs(keep).food == 50.0f);
+596:        CHECK(pool.relations(keep)[0].target == a);
+597:        CHECK(pool.floor(keep) == -50);
+602:        CHECK(pool.floor_bucket(-50).size() == 2u);
+604:        CHECK(pool.floor_bucket(-50).size() == 1u);
+605:        CHECK(pool.floor_bucket(-50)[0] == keep);
+606:        CHECK(pool.floor_bucket(0).size() == 1u);
+623:        CHECK(pool.generation(a) == 0u);
+624:        CHECK(npc_handle_id(h0) == a);
+625:        CHECK(pool.handle_valid(h0));
+630:        CHECK(!pool.handle_valid(h0));
+631:        CHECK(pool.generation(a) == 1u);
+636:        CHECK(b == a);
+638:        CHECK(h1 != h0);
+639:        CHECK(npc_handle_id(h1) == npc_handle_id(h0));   // ...the id really is the same
+640:        CHECK(pool.handle_valid(h1));
+641:        CHECK(!pool.handle_valid(h0));
+644:        CHECK(!pool.handle_valid(kInvalidHandle));
+645:        CHECK(!pool.handle_valid(npc_handle(pool.count(), 0u)));   // past the high-water
+646:        CHECK(npc_handle_gen(kInvalidHandle) == kInvalidGen);
+654:        for (std::uint32_t i = 0; i < 4200u; ++i) {   // > 4095, so the counter wraps
+664:        CHECK(alwaysSameSlot);
+665:        CHECK(!everInvalidGen);
+666:        CHECK(allDistinct);
+667:        CHECK(pool.count() == 1u);           // 4,201 records through ONE slot
+668:        CHECK(pool.recycled() == 4201u);
+669:        std::printf("  npcpool: one slot carried %u records; generation now %u "
+692:            for (std::uint32_t i = 0; i < kLive; ++i) {
+700:            for (std::uint32_t r = 0; r < kRounds; ++r) {
+701:                for (std::uint32_t k = 0; k < kChurn; ++k) {
+716:            CHECK(!everExhausted);
+717:            CHECK(countHeld);                        // the high-water mark never moved
+718:            CHECK(pool.count() == kLive);
+719:            CHECK(pool.alive() == kLive);
+720:            CHECK(pool.recycled() == kRounds * kChurn);
+722:            CHECK(pool.count() + pool.recycled() == kSpawns);
+724:            CHECK(pool.floor_bucket(3).size() == kLive);
+727:            CHECK(recycleReserve == kNpcPoolSize - kLive);
+735:            for (std::uint32_t i = 0; i < kLive; ++i) {
+740:            for (std::uint32_t r = 0; r < kRounds; ++r) {
+741:                for (std::uint32_t k = 0; k < kChurn; ++k) {
+749:            CHECK(pool.count() == kSpawns);          // every birth ate a virgin slot
+750:            CHECK(pool.recycled() == 0u);
+751:            CHECK(pool.alive() == kLive);
+752:            CHECK(pool.reserve_remaining() == kNpcPoolSize - kSpawns);
+755:            CHECK(recycleCount * 100u < pool.count());
+756:            CHECK(recycleReserve > pool.reserve_remaining());
+757:            std::printf("  npcpool: %u births through %u live records -> slots used %u "
+781:            for (NpcId id = 0; id < p.count(); ++id) {
+795:                for (int s = 0; s < kAttrSlots; ++s)
+797:                for (int s = 0; s < kInvSlots; ++s) {
+802:                for (int s = 0; s < kRelSlots; ++s) {
+817:            for (std::uint32_t i = 0; i < 2000u; ++i) {
+831:            for (int wave = 0; wave < 3; ++wave) {
+832:                for (std::uint32_t k = 0; k < 400u; ++k) {
+838:                for (std::uint32_t k = 0; k < 300u; ++k) {
+856:        CHECK(dA == dB);
+857:        CHECK(handedA.size() == handedB.size());
+858:        CHECK(handedA == handedB);            // the id SEQUENCE reproduced, not just state
+859:        CHECK(!handedA.empty());
+866:        CHECK(handedRev.size() == handedA.size());
+867:        CHECK(handedRev != handedA);
+868:        std::printf("  npcpool: recycling digest 0x%016llx reproduced exactly over %u "
+917:            for (int t = 0; t < kTicks; ++t) {
+938:            CHECK(pool.alive() == kSeeded + out.births - out.deaths);
+939:            CHECK(pool.count() + pool.recycled() == kSeeded + out.births);
+948:        CHECK(wall.reuses == 0u);
+949:        CHECK(wall.blocked > 0u);                    // the refusal is real and reported
+950:        CHECK(wall.births <= kRoom);                 // ...and capped by the plast exactly
+951:        CHECK(wall.count == kSeeded + wall.births);  // every birth ate a virgin slot
+952:        CHECK(wall.alive < kSeeded);                 // decay, not a plateau
+953:        CHECK(!wall.roseAfterWall);                  // and it can never come back
+957:        CHECK(open.blocked == 0u);
+958:        CHECK(open.reuses > 0u);
+959:        CHECK(open.births > wall.births * 3u);       // births kept being granted
+960:        CHECK(open.count <= kSeeded + kRoom);        // the tail barely moved
+962:        CHECK(open.reuses + kRoom >= open.births);
+963:        CHECK(open.alive > wall.alive);              // strictly more people, same params
+967:        CHECK(open.alive >= kSeeded - kSeeded / 20u);
+968:        CHECK(open.alive <= kSeeded + kSeeded / 20u);
+969:        CHECK(open.minAlive >= kSeeded - kSeeded / 20u);
+971:        std::printf("  npcpool: MacroSim %d ticks, %u seeded, reserve squeezed to %u -> "
+976:        std::printf("  npcpool: %.3f ms/macro-step never-reclaim vs %.3f ms/macro-step "
+
+==== full file head 200 ====
+1:// NpcPool tests — the signed floor label and the column allocation policy. Included
+2:// into game_test.cpp, so it uses that file's CHECK macro and its
+3:// `using namespace giga::game`.
+4://
+5:// Two things are being pinned, and they are pinned for opposite reasons.
+6://
+7:// 1. THE FLOOR LABEL IS SIGNED. The building descends: main.cpp's demo stack is
+8://    {0, 1, 2, -8, -14, -26, -36, -50, 14, 30} and FloorRegistry's legal range is
+9://    -127..+127. The column was std::uint16_t and floor_stream.cpp cast the module
+10://    number into it, so every floor below the hub was stored as 65486/65500/65510/
+11://    65522/65528. Nothing in src/ read pool.floor() back, which is the ONLY reason
+12://    this never showed up — master_prompt #10 replaces FloorStreamer's fixed
+13://    [firstId, count) roster with a per-floor bucket index over pool.floor(id), and
+14://    that reader would have inherited the corruption. A wrap bug with no reader is
+15://    still a wrap bug; this file gives it the reader.
+16://
+17:// 2. THE ALLOCATION CHANGE MOVED NO BOOKKEEPING. init() no longer writes 187 B/row of
+18://    columns nothing reads, so 7 of the 18 SoA columns are now grown lazily. The
+19://    failure mode that would follow is not a crash — it is a resize that silently
+20://    drops or shifts rows while count()/alive() keep reporting the right totals. So
+21://    the checks below deliberately measure the same quantities before and after the
+22://    lazy columns are touched, and re-read 5,000 records across a growth boundary.
+23://
+24:// This is a .inl and not a .cpp on purpose: game_test.cpp owns the CHECK macro and the
+25:// counters, so the include has to land AFTER that macro rather than up among the
+26:// ordinary includes.
+27:
+28:#include <chrono>
+29:#include <cstdio>
+30:#include <cstring>
+31:#include <vector>
+32:
+33:#include "ecs/registry.h"
+34:#include "game/floor_registry.h"
+35:#include "game/floor_spec.h"
+36:#include "game/floor_stream.h"
+37:#include "game/macro_sim.h"   // the wall block below drives the REAL demographic tick
+38:#include "game/npc_pool.h"
+39:#include "game/population.h"
+40:#include "world/level_stack.h"
+41:
+42:static void test_npcpool_all() {
+43:    { // ---- the signed floor column round-trips the whole legal range ----
+44:        // The old column was std::uint16_t, so floor -50 was stored as 65536 - 50 =
+45:        // 65486, -36 as 65500, -14 as 65522 and -8 as 65528. FloorRegistry's whole
+46:        // legal range is checked below, not just those four, because the demo stack is
+47:        // data and the next stack will pick different numbers.
+48:        static_assert(kMinFloor == -127 && kMaxFloor == 127,
+49:                      "the range the round-trip below has to cover ([floors.md])");
+50:
+51:        NpcPool pool;
+52:        pool.init();
+53:        NpcId id = pool.spawn();
+54:
+55:        pool.set_floor(id, -50);
+56:        CHECK(pool.floor(id) == -50);
+57:        pool.set_floor(id, 0);
+58:        CHECK(pool.floor(id) == 0);
+59:
+60:        // Every label FloorRegistry will accept, not just the demo stack's. Rolled up
+61:        // into one CHECK so a width regression reports once instead of 255 times.
+62:        bool allRoundTrip = true;
+63:        for (int f = kMinFloor; f <= kMaxFloor; ++f) {
+64:            pool.set_floor(id, static_cast<std::int16_t>(f));
+65:            if (pool.floor(id) != f) allRoundTrip = false;
+66:        }
+67:        CHECK(allRoundTrip);
+68:    }
+69:
+70:    { // ---- the seeding path stores a descending floor as a negative number ----
+71:        NpcPool pool;
+72:        pool.init();
+73:        const FloorSpec& spec = floor_spec(FloorKind::Derelict);
+74:        // -50 is the deepest demo floor and a Derelict, so this is literally the
+75:        // record the shipping stack seeds last.
+76:        const NpcId cand = seed_floor_from_spec(pool, -50, spec, /*seed=*/77u);
+77:        CHECK(cand != kInvalidNpc);
+78:        CHECK(pool.count() == spec.population);
+79:
+80:        bool allLabelled = true;
+81:        for (NpcId id = 0; id < pool.count(); ++id)
+82:            if (pool.floor(id) != -50) allLabelled = false;
+83:        CHECK(allLabelled);
+84:
+85:        // And the label is not merely non-zero: it must be NEGATIVE, which is the
+86:        // property an unsigned column could never hold.
+87:        CHECK(pool.floor(0) < 0);
+88:    }
+89:
+90:    { // ---- FloorStreamer hands the module number through uncast ----
+91:        // The end-to-end path: add_module(-50) -> ensure_loaded -> seed_floor_from_spec
+92:        // -> pool.floor(). This is the call chain that carried the cast.
+93:        Registry ecs;
+94:        NpcPool pool;
+95:        pool.init();
+96:        FloorRegistry reg;
+97:        LevelStack stack;
+98:
+99:        FloorStreamer stream;
+100:        stream.init(stack, /*keepRadius=*/0);
+101:        const ModuleId m =
+102:            stream.add_module(reg, /*number=*/-50, FloorKind::Derelict, /*seed=*/4242u);
+103:        CHECK(m != kInvalidModule);
+104:
+105:        NpcId playerId = kInvalidNpc;
+106:        const LoadResult r = stream.ensure_loaded(stack, reg, ecs, pool, -50, playerId);
+107:        CHECK(r.layer != kInvalidLayer);
+108:        CHECK(pool.count() == floor_spec(FloorKind::Derelict).population);
+109:
+110:        bool allNegative = true;
+111:        for (NpcId id = 0; id < pool.count(); ++id)
+112:            if (pool.floor(id) != -50) allNegative = false;
+113:        CHECK(allNegative);
+114:    }
+115:
+116:    { // ---- live-row bookkeeping is untouched by the allocation change ----
+117:        NpcPool pool;
+118:        pool.init();
+119:        CHECK(pool.capacity() == kNpcPoolSize);
+120:        CHECK(pool.count() == 0);
+121:        CHECK(pool.alive() == 0);
+122:        CHECK(pool.reserve_remaining() == kNpcPoolSize);
+123:
+124:        NpcId ids[5] = {};
+125:        for (int i = 0; i < 5; ++i) ids[static_cast<std::size_t>(i)] = pool.spawn();
+126:        CHECK(ids[0] == 0 && ids[4] == 4);      // the id IS the slot index
+127:        CHECK(pool.count() == 5u);
+128:        CHECK(pool.alive() == 5u);
+129:        CHECK(pool.reserve_remaining() == kNpcPoolSize - 5u);
+130:
+131:        pool.kill(ids[2]);
+132:        CHECK(pool.count() == 5u);              // high-water mark never decreases
+133:        CHECK(pool.alive() == 4u);
+134:        CHECK(pool.valid(ids[2]) && !pool.alive(ids[2]));
+135:        // Recycling is OFF by default, so this is still the never-reclaim pool the rest
+136:        // of the tree is written against ([npc_pool.h] "Slot recycling").
+137:        CHECK(!pool.recycling());
+138:        CHECK(pool.free_slots() == 0u);
+139:        CHECK(pool.spawn() == 5u);              // the dead slot is never handed back
+140:        CHECK(pool.count() == 6u);
+141:        CHECK(pool.alive() == 5u);
+142:
+143:        // Now touch every lazily-allocated column. None of them participates in the
+144:        // bookkeeping, so all five totals must be bit-identical afterwards.
+145:        const std::uint32_t c = pool.count();
+146:        const std::uint32_t a = pool.alive();
+147:        pool.relations(ids[0])[0].target = 7u;
+148:        pool.relations(ids[0])[0].affinity = -100;
+149:        pool.set_name(ids[0], "Ivan", "Petrov");
+150:        pool.level(ids[0]) = 7;
+151:        pool.attrs(ids[0])[0] = 11;
+152:        CHECK(pool.count() == c);
+153:        CHECK(pool.alive() == a);
+154:        CHECK(pool.reserve_remaining() == kNpcPoolSize - c);
+155:        CHECK(pool.valid(ids[2]) && !pool.alive(ids[2]));
+156:        CHECK(pool.alive(ids[0]));
+157:
+158:        // ...and the values landed on the right rows, with neighbours untouched.
+159:        CHECK(pool.relations(ids[0])[0].target == 7u);
+160:        CHECK(pool.relations(ids[0])[0].affinity == -100);
+161:        CHECK(pool.relations(ids[1])[0].target == kInvalidNpc);
+162:        CHECK(std::strcmp(pool.name(ids[0]).data(), "Ivan") == 0);
+163:        CHECK(std::strcmp(pool.surname(ids[0]).data(), "Petrov") == 0);
+164:        CHECK(pool.name(ids[1])[0] == '\0');
+165:        CHECK(pool.level(ids[0]) == 7 && pool.level(ids[1]) == 0);
+166:        CHECK(pool.attrs(ids[0])[0] == 11 && pool.attrs(ids[1])[0] == 0);
+167:    }
+168:
+169:    { // ---- an untouched DEMAND column reads blank rather than out of bounds ----
+170:        NpcPool pool;
+171:        pool.init();
+172:        // No spawn and no set_name: name_ / surname_ hold zero bytes. A const accessor
+173:        // cannot materialize a column, so it must hand back the shared blank row —
+174:        // returning row 0 of an empty vector is the bug this guards.
+175:        CHECK(pool.name(0)[0] == '\0');
+176:        CHECK(pool.surname(0)[0] == '\0');
+177:        CHECK(pool.name(kNpcPoolSize - 1u)[0] == '\0');
+178:        CHECK(&pool.name(0) == &kBlankName);      // the fallback, not a real row
+179:        CHECK(&pool.surname(0) == &kBlankName);
+180:    }
+181:
+182:    { // ---- LIVE columns survive a geometric resize with every row intact ----
+183:        // kNpcLazyChunk is 4096, so 5,000 records force at least one reallocation.
+184:        // A resize that dropped, shifted or re-zeroed rows is the one regression this
+185:        // lane can introduce, and it is invisible from count()/alive().
+186:        NpcPool pool;
+187:        pool.init();
+188:        constexpr std::uint32_t n = 5000;
+189:        static_assert(n > kNpcLazyChunk, "the run must cross a growth boundary");
+190:
+191:        for (std::uint32_t i = 0; i < n; ++i) {
+192:            const NpcId id = pool.spawn();
+193:            pool.age(id) = static_cast<std::uint8_t>(1u + i % 90u);
+194:            pool.sex(id) = (i & 1u) ? SexFemale : SexMale;
+195:            pool.level(id) = static_cast<std::uint8_t>(1u + i % 100u);
+196:            pool.attrs(id)[0] = static_cast<std::uint8_t>(i % 251u);
+197:            pool.attrs(id)[static_cast<std::size_t>(kAttrSlots - 1)] =
+198:                static_cast<std::uint8_t>(i % 97u);
+199:        }
+200:        CHECK(pool.count() == n);
+
+==== full file tail 100 ====
+880:        // down to kRoom slots so the same wall arrives in seconds, and shows recycling
+881:        // closing it. Nothing here is a stub: the only thing that differs between the two
+882:        // runs is `set_recycling`.
+883:        constexpr std::uint32_t kSeeded = 3000;
+884:        constexpr std::uint32_t kRoom = 60;     // reserve slots the demographic pass gets
+885:        constexpr int kTicks = 250;             // 4.8 simulated years at 7 days/tick
+886:
+887:        struct Run {
+888:            std::uint32_t alive = 0;
+889:            std::uint32_t count = 0;
+890:            std::uint32_t reuses = 0;
+891:            std::uint32_t births = 0;
+892:            std::uint32_t deaths = 0;
+893:            std::uint32_t blocked = 0;
+894:            std::uint32_t minAlive = 0xFFFFFFFFu;
+895:            bool roseAfterWall = false;   // a population that recovered post-wall
+896:            double ms = 0.0;
+897:        };
+898:
+899:        auto sweep = [&](bool recycle) -> Run {
+900:            Run out{};
+901:            NpcPool pool;
+902:            pool.init();
+903:            pool.set_recycling(recycle);
+904:            seed_floor_population(pool, 0, kSeeded, 1234u);
+905:
+906:            MacroSim sim;
+907:            sim.init();
+908:            MacroParams p{};   // targetPopulation 0 -> latch the seeded size
+909:            // Squeeze the reserve: room = reserve_remaining() - reserveFloor == kRoom at
+910:            // the start of the run, for both modes, so the ONLY difference is whether
+911:            // deaths give slots back.
+912:            p.reserveFloor = pool.reserve_remaining() - kRoom;
+913:
+914:            bool wallHit = false;
+915:            std::uint32_t prevLiving = pool.alive();
+916:            const auto t0 = std::chrono::steady_clock::now();
+917:            for (int t = 0; t < kTicks; ++t) {
+918:                const MacroStats st = sim.step(pool, p);
+919:                out.births += st.births;
+920:                out.deaths += st.deaths;
+921:                out.blocked += st.birthsBlocked;
+922:                if (st.living < out.minAlive) out.minAlive = st.living;
+923:                // Once the plast is gone no birth can ever be granted again, so the
+924:                // population is structurally unable to recover: that is the "decays
+925:                // monotonically, no parameter moves it" claim in [macro_sim.h]'s banner,
+926:                // checked rather than quoted.
+927:                if (wallHit && st.living > prevLiving) out.roseAfterWall = true;
+928:                if (st.birthsBlocked > 0u && st.births == 0u) wallHit = true;
+929:                prevLiving = st.living;
+930:            }
+931:            const auto t1 = std::chrono::steady_clock::now();
+932:            out.ms = std::chrono::duration<double, std::milli>(t1 - t0).count() /
+933:                     static_cast<double>(kTicks);
+934:            out.alive = pool.alive();
+935:            out.count = pool.count();
+936:            out.reuses = pool.recycled();
+937:            // The bookkeeping identities, exactly, in both modes.
+938:            CHECK(pool.alive() == kSeeded + out.births - out.deaths);
+939:            CHECK(pool.count() + pool.recycled() == kSeeded + out.births);
+940:            return out;
+941:        };
+942:
+943:        const Run wall = sweep(/*recycle=*/false);
+944:        const Run open = sweep(/*recycle=*/true);
+945:
+946:        // WITHOUT recycling: the reserve is a one-way draw, so births stop being granted
+947:        // and the population can only fall.
+948:        CHECK(wall.reuses == 0u);
+949:        CHECK(wall.blocked > 0u);                    // the refusal is real and reported
+950:        CHECK(wall.births <= kRoom);                 // ...and capped by the plast exactly
+951:        CHECK(wall.count == kSeeded + wall.births);  // every birth ate a virgin slot
+952:        CHECK(wall.alive < kSeeded);                 // decay, not a plateau
+953:        CHECK(!wall.roseAfterWall);                  // and it can never come back
+954:
+955:        // WITH recycling: deaths refill the queue, so the closed loop keeps replacing and
+956:        // the high-water mark stops growing entirely.
+957:        CHECK(open.blocked == 0u);
+958:        CHECK(open.reuses > 0u);
+959:        CHECK(open.births > wall.births * 3u);       // births kept being granted
+960:        CHECK(open.count <= kSeeded + kRoom);        // the tail barely moved
+961:        // Births past the tail's kRoom slots can only have come from the queue.
+962:        CHECK(open.reuses + kRoom >= open.births);
+963:        CHECK(open.alive > wall.alive);              // strictly more people, same params
+964:        // Stationary, not merely non-empty: the closed loop holds the latched target.
+965:        // 5% is the guard rail, not the claim — the modelled band for this algorithm is
+966:        // a fraction of a percent ([suite_macrosim.inl] block 1 measures +0.00..+0.12%).
+967:        CHECK(open.alive >= kSeeded - kSeeded / 20u);
+968:        CHECK(open.alive <= kSeeded + kSeeded / 20u);
+969:        CHECK(open.minAlive >= kSeeded - kSeeded / 20u);
+970:
+971:        std::printf("  npcpool: MacroSim %d ticks, %u seeded, reserve squeezed to %u -> "
+972:                    "never-reclaim: %u alive (%u births, %u blocked, %u slots); "
+973:                    "recycling: %u alive (%u births, 0 blocked, %u slots, %u reuses)\n",
+974:                    kTicks, kSeeded, kRoom, wall.alive, wall.births, wall.blocked,
+975:                    wall.count, open.alive, open.births, open.count, open.reuses);
+976:        std::printf("  npcpool: %.3f ms/macro-step never-reclaim vs %.3f ms/macro-step "
+977:                    "recycling (printed, not asserted)\n", wall.ms, open.ms);
+978:    }
+979:}

@@ -1,0 +1,21 @@
+OK: place_body_safely call sites in main — count=2
+OK: ai_release call sites in main — count=2
+OK: do_ride present
+OK: shot travel / ride harness
+OK: floor_stream ai_release
+OK: elevator PlayerRanged restore
+OK: elevator RpgStats restore
+OK: quest_on_kill in main
+OK: quest_on_giver_died in main
+OK: mag action harness
+OK: mag PROOF line
+
+=== place_body_safely contexts ===
+  [0] L2047: ... this the body freezes in a         // wall forever (physics backs out every tick). F9 already calls         // place_body_at_cell; keyboard/--shot did not. [save.h]         game::place_body_safely(re...
+  [1] L5139: ...th. Two travel                         // sites; a fix that touches only one leaves --shot soft-locked                         // in a wall. [save.h]                         game::place_body_safely(re...
+
+=== ai_release contexts ===
+  [0] L1971: ...de without an immediate unload             // still cannot strand tokens. Idempotent. [ai.h]             {                 const std::uint32_t released =                     game::ai_release(reg, leav...
+  [1] L5063: ...g                         // under --shot --ride. [ai.h]                         {                             const std::uint32_t released =                                 game::ai_release(reg, leav...
+
+RE-PAR1 SUMMARY: 11/11 OK, fails=0

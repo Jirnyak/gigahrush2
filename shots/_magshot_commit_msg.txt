@@ -1,0 +1,6 @@
+feat(magshot): live --action mag PlayerRanged proof + game_test setvbuf
+
+MAGSHOT harness under --shot stamps magCount=7/shots=42/hits=13 and gun+ammo,
+logs [mag] FORCE/RIDE/FINAL, emits PROOF=GREEN after --ride hop (live verified).
+Unit elevator MAG1 pin unchanged. game_test: unbuffered stdio for long redirects.
+No pin change. Stay off src/render/**.

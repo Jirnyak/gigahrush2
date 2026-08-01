@@ -1,0 +1,193 @@
+==== SaveState fields ====
+389:struct SaveState {
+390:    RunLedger ledger{};
+391:    ContractBook book{};
+392:    PlayerSnapshot player{};
+393:    // Version 7: character sheet. Lives on the player entity at runtime
+394:    // ([rpg.h]); captured into the run on F5 and stamped back on F9. Default is
+395:    // a zeroed POD — main seeds a real sheet via fresh_rpg / embody.
+396:    RpgStats rpg{};
+397:    // Version 7: crafting bank + known-recipe bits + tier ([craft.h]). Run state
+398:    // beside the ledger in main; craft_write/craft_read own the 93-byte codec.
+399:    CraftingState craft{};
+400:    // Version 8 / SAVMAG: chambered firearm + kill tally. hasRanged mirrors the
+401:    // elevator's lazy-attach rule — do not invent PlayerRanged on a body that
+402:    // never fired. kills is the cumulative melee tally (local `kills` in main).
+403:    std::uint8_t hasRanged = 0;
+404:    PlayerRanged ranged{};
+405:    std::uint32_t kills = 0;
+406:    // Version 9 / SAVSTAT: live status effects. Local `playerStatus` in main —
+407:    // not an ECS component — so capture/restore is a direct assignment.
+408:    StatusSet status{};
+409:    // Every crate emptied anywhere in the building, not just on the live floor. Only the
+410:    // resident floor's crates are live entities, so the ones from other floors exist
+411:    // ONLY in this list — see `refresh_opened_containers`.
+412:    std::vector<OpenedContainerKey> opened;
+413:    // Version 2: quest log persisted across F5/F9. Written last by
+414:    // quest_log_write; read back by quest_log_read. Exactly kQuestLogWire bytes.
+415:    QuestLog quests{};
+416:    // Version 6: the macro world. poolBlob is NpcPool::save_rows' verbatim table,
+417:    // macroBlob is MacroSim::save_state, and factions is the LIVE relations
+418:    // matrix (36 POD bytes). Restored at the earliest possible point — from the
+419:    // MAIN MENU, before anything is embodied — so no body can hold a stale id.
+420:    std::vector<std::uint8_t> poolBlob;
+421:    std::vector<std::uint8_t> macroBlob;
+422:    FactionRelations factions = kBaseFactionMatrix;
+423:};
+
+==== runState. assignments in main ====
+1660:    game::SaveState runState;
+1661:    game::ContractBook& contracts = runState.book;
+1693:    game::RunLedger& ledger = runState.ledger;
+1728:    game::QuestLog& quests = runState.quests;  // lives in SaveState; F5/F9 persists it
+1890:        runState.player.clock = pool.needs(nr->id);
+1891:        runState.player.inv = pool.inventory(nr->id);
+1892:        runState.player.hp = pool.hp(nr->id);
+1893:        runState.player.maxHp = pool.max_hp(nr->id);
+1896:        runState.player.floorNumber = currentFloor;
+1897:        runState.player.cx = static_cast<std::uint8_t>(
+1899:        runState.player.cy = static_cast<std::uint8_t>(
+1901:        runState.player.cz = static_cast<std::uint8_t>(
+1907:            runState.rpg = *rs;
+1909:            runState.rpg = carriedRpg;
+1910:        runState.craft = crafting;
+1916:            runState.hasRanged = 1;
+1917:            runState.ranged = *pr;
+1919:            runState.hasRanged = 0;
+1920:            runState.ranged = game::PlayerRanged{};
+1922:        runState.kills = kills;
+1926:        runState.status = playerStatus;
+1928:        game::refresh_opened_containers(reg, pl, currentFloor, runState.opened);
+1931:        pool.save_rows(runState.poolBlob);
+1932:        macroSim.save_state(runState.macroBlob);
+1933:        runState.factions = factionRel;
+1959:                                            runState.opened);
+2021:                                      runState.opened.data(),
+2022:                                      runState.opened.size());
+3545:                                      static_cast<unsigned>(runState.opened.size()));
+3591:                            const int savedFloor = runState.player.floorNumber;
+3592:                            const std::uint8_t scx = runState.player.cx;
+3593:                            const std::uint8_t scy = runState.player.cy;
+3594:                            const std::uint8_t scz = runState.player.cz;
+3606:                            if (!runState.poolBlob.empty() &&
+3607:                                pool.load_rows(runState.poolBlob.data(),
+3608:                                               runState.poolBlob.size())) {
+3611:                                if (!runState.macroBlob.empty() &&
+3613:                                        runState.macroBlob.data(),
+3614:                                        runState.macroBlob.size()))
+3619:                                factionRel = runState.factions;
+3650:                                                            runState.player);
+3657:                            carriedRpg = runState.rpg;
+3660:                                    player, runState.rpg);
+3661:                            crafting = runState.craft;
+3666:                            kills = runState.kills;
+3668:                                if (runState.hasRanged)
+3670:                                        player, runState.ranged);
+3671:                                if (runState.kills != 0u)
+3673:                                        player, game::PlayerMelee{0, runState.kills});
+3678:                            playerStatus = runState.status;
+3693:                                    runState.opened.data(),
+3694:                                    runState.opened.size());
+4976:                                                        runState.opened);
+5022:                            reg, nl, currentFloor, runState.opened.data(),
+5023:                            runState.opened.size());
+
+==== save_run_now full lambda ====
+1884:    auto save_run_now = [&]() -> bool {
+1885:        const game::NpcRef* nr =
+1886:            reg.valid(player) ? reg.try_get<game::NpcRef>(player) : nullptr;
+1887:        if (!nr || !pool.valid(nr->id)) return false;
+1888:        const vec3& sp = reg.get<Transform>(player).pos;
+1889:        const LayerId pl = reg.get<Transform>(player).layer;
+1890:        runState.player.clock = pool.needs(nr->id);
+1891:        runState.player.inv = pool.inventory(nr->id);
+1892:        runState.player.hp = pool.hp(nr->id);
+1893:        runState.player.maxHp = pool.max_hp(nr->id);
+1894:        // The SIGNED floor, explicitly: NpcPool::floor() is the seeding label
+1895:        // and LayerId is a recycled storage slot. [save.h]
+1896:        runState.player.floorNumber = currentFloor;
+1897:        runState.player.cx = static_cast<std::uint8_t>(
+1898:            wrap_macro(static_cast<int>(sp.x / kCellSize)));
+1899:        runState.player.cy = static_cast<std::uint8_t>(
+1900:            wrap_macro(static_cast<int>(sp.y / kCellSize)));
+1901:        runState.player.cz = static_cast<std::uint8_t>(
+1902:            wrap_macro(static_cast<int>(sp.z / kCellSize)));
+1903:        // Version 7: character sheet + crafting bank. Prefer the live entity
+1904:        // component; fall back to the death-surviving carried snapshot so a
+1905:        // mid-death F5 still banks progression. [save.h] SAVRPG
+1906:        if (const game::RpgStats* rs = reg.try_get<game::RpgStats>(player))
+1907:            runState.rpg = *rs;
+1908:        else
+1909:            runState.rpg = carriedRpg;
+1910:        runState.craft = crafting;
+1911:        // Version 8 / SAVMAG: chambered mag + kill tally. Lazy-attach stays
+1912:        // lazy — only mark hasRanged when the body actually carries the
+1913:        // component (elevator rule). kills is the person-state local that
+1914:        // death-possession already stamps onto a new body.
+1915:        if (const game::PlayerRanged* pr = reg.try_get<game::PlayerRanged>(player)) {
+1916:            runState.hasRanged = 1;
+1917:            runState.ranged = *pr;
+1918:        } else {
+1919:            runState.hasRanged = 0;
+1920:            runState.ranged = game::PlayerRanged{};
+1921:        }
+1922:        runState.kills = kills;
+1923:        // Version 9 / SAVSTAT: live status effects. Local person-state — not an
+1924:        // ECS component — so capture is a direct assignment. F5 mid-haze must
+1925:        // not wipe timers on F9. [status.h]
+1926:        runState.status = playerStatus;
+1927:        // REFRESH, not append and not clear. [save.h]
+1928:        game::refresh_opened_containers(reg, pl, currentFloor, runState.opened);
+1929:        // v6: the macro world travels whole — pool table, macro clock, faction
+1930:        // matrix. The society you come back to is the one you left. [save.h]
+1931:        pool.save_rows(runState.poolBlob);
+1932:        macroSim.save_state(runState.macroBlob);
+1933:        runState.factions = factionRel;
+1934:        write_floor_file(stack.layer(pl), currentFloor);
+1935:        char runPath[128];
+1936:        run_save_path(runPath, sizeof runPath);
+1937:        return write_run(runState, runPath);
+1938:    };
+
+==== F9 / load path quests restore ====
+1698:    bool loadWanted = false;
+1728:    game::QuestLog& quests = runState.quests;  // lives in SaveState; F5/F9 persists it
+2261:            if (has(ConsoleRequest::Load)) loadWanted = true;
+2814:                        // Wait for async nav bake so loadWanted is not stuck
+2819:                            loadWanted = true;
+3560:                if (loadWanted) {
+3565:                        // leave loadWanted set; quiet until the bake ends
+3567:                        loadWanted = false;
+4658:                        loadWanted = true;
+
+==== M2_2 request ====
+## 2026-07-30T01:00:48Z
+
+You are Worker M2_2 for Gigahrush2 Milestone 2: Wire Quests Flow & Save State Persistence.
+Working directory: C:\hades\gigahrush2\.agents\worker_m2_2\
+Project root: C:\hades\gigahrush2
+
+MANDATORY INTEGRITY WARNING:
+DO NOT CHEAT. All implementations must be genuine. DO NOT hardcode test results, create dummy/facade implementations, or circumvent the intended task. A Forensic Auditor will independently verify your work. Integrity violations WILL be detected and your work WILL be rejected.
+
+Task Description:
+Explorer 2's detailed analysis is available at C:\hades\gigahrush2\.agents\explorer_m2_1\handoff.md.
+Complete the quest offer/accept wiring and save state persistence in `src/app/main.cpp`:
+1. Add state variables for quest offer tracking in `src/app/main.cpp`:
+   `game::QuestId questOfferId = game::kInvalidQuest;`
+   `game::NpcId questOfferGiver = game::kInvalidNpc;`
+   `char questOfferLine[320] = {};`
+2. Wire event bus drain loop in `src/app/main.cpp`:
+   Call `game::quest_on_kill(quests, static_cast<std::uint8_t>(ev.b));` when `ev.b != 0xFFu`.
+   Call `game::quest_on_giver_died(quests, ev.a);` when `ev.a != game::kInvalidNpc`.
+3. Wire proximity quest offer & reset in `src/app/main.cpp`:
+   Call `quest_offer` and `quest_offer_text` when `sp != game::kInvalidNpc` and update `questOfferId`, `questOfferGiver`, `questOfferLine`.
+   Reset quest offer variables on floor travel.
+4. Wire accept (`SDL_SCANCODE_E` key) in `src/app/main.cpp`:
+   If `questOfferId != game::kInvalidQuest`, call `game::quest_accept(quests, pool, questOfferId, questOfferGiver, currentFloor, ledger)`. Reset quest offer variables on success. If no quest offer is pending, fall back to `contract_accept`.
+5. Wire ImGui HUD rendering in `src/app/main.cpp`:
+   Render active quests using `quest_line`, pending quest offers, and quest status statistics (`activeQuests`, `quests.completed`, `quests.failed`, `quests.expired`, `quests.orphaned`, `questPaid`).
+6. Build and verify:
+   Execute `tools\win\build.bat Release` and run `build-win\game_test.exe` and `ctest --test-dir build-win`. Ensure 100% green test passes and 0 failures.
+
+Write your handoff report to `C:\hades\gigahrush2\.agents\worker_m2_2\handoff.md` with complete details of code changes and test execution stdout logs.

@@ -1,0 +1,279 @@
+==== quest_log API in quest.h/cpp ====
+h489:inline constexpr std::size_t kQuestLogWire =
+h501:// APPEND the log to `out`. Exactly `kQuestLogWire` bytes; cannot fail.
+h502:void quest_log_write(const QuestLog& log, std::vector<std::uint8_t>& out);
+h504:// Parse `kQuestLogWire` bytes. Returns false and leaves `log` COMPLETELY untouched on a
+h507:bool quest_log_read(const std::uint8_t* bytes, std::size_t n, QuestLog& log);
+c179:void visit_quest_log(Ar& ar, Log& log) {
+c575:void quest_log_write(const QuestLog& log, std::vector<std::uint8_t>& out) {
+c577:    visit_quest_log(w, log);
+c580:bool quest_log_read(const std::uint8_t* bytes, std::size_t n, QuestLog& log) {
+c581:    if (!bytes || n < kQuestLogWire) return false;
+c587:    Reader r(bytes, kQuestLogWire);
+c588:    visit_quest_log(r, tmp);
+c589:    if (!r.ok() || r.at() != kQuestLogWire) return false;
+
+==== save_write/read signatures and body outline ====
+h78:// reordered, a meaning changed. `save_read` refuses a version it does not recognise
+h110:inline constexpr std::uint32_t kSaveVersion = 9u;
+h158:    BadVersion,          // a different kSaveVersion wrote it
+h182:struct SaveHeader {
+h266:// Exact byte count `save_write` will produce for the given section sizes.
+h389:struct SaveState {
+h448:void save_write(const SaveState& st, std::vector<std::uint8_t>& out);
+h455:bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st,
+
+==== save.cpp structure ====
+23:namespace giga::game {
+25:namespace {
+155:    bool ok() const { return ok_; }
+156:    std::size_t at() const { return at_; }
+204:void visit_contract(Ar& ar, C& c) {
+243:void visit_inventory(Ar& ar, I& inv) {
+251:void visit_player(Ar& ar, P& p) {
+405:              "ContractBook is serialized; grow it and bump kSaveVersion in the same "
+407:static_assert(sizeof(Inventory) == 256, "the 8x8 grid is 64 x 4 B ([inventory.h])");
+409:void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
+443:    h.version = kSaveVersion;
+468:bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveError* err,
+487:    if (h.version != kSaveVersion) return fail(SaveError::BadVersion);
+613:std::size_t collect_opened_containers(Registry& reg, LayerId layer, int floorNumber,
+626:std::size_t refresh_opened_containers(Registry& reg, LayerId layer, int floorNumber,
+640:std::size_t apply_opened_containers(Registry& reg, LayerId layer, int floorNumber,
+755:namespace {
+948:std::size_t snapshot_floor(const World& w, int floorNumber,
+1030:bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
+1031:                          std::int32_t* floorOut) {
+1034:    std::int32_t floor = 0;
+1104:    // Every byte consumed, none left over — same discipline as save_read.
+1108:void floor_file_write(const World& w, int floorNumber,
+1122:bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
+1123:                     std::int32_t* floorOut, SaveError* err) {
+1148:void apply_player_snapshot(NpcPool& pool, NpcId id, const PlayerSnapshot& snap) {
+
+==== main F5/F9 save_run args ====
+939:        bytes.insert(bytes.end(), chunk, chunk + got);
+940:    }
+941:    std::fclose(f);
+942:    return true;
+943:}
+944:
+945:bool write_run(const game::SaveState& st, const char* path) {
+946:    std::vector<std::uint8_t> bytes;
+947:    game::save_write(st, bytes);
+948:    return write_bytes_file(bytes, path);
+949:}
+950:
+951:// Persist one floor's exact grid to its own file. A floor transition is a load
+952:// screen, so this is sanctioned I/O ([jirnyak.md] §6).
+953:bool write_floor_file(const World& w, int floor) {
+954:    std::vector<std::uint8_t> bytes;
+955:    game::floor_file_write(w, floor, bytes);
+956:    char path[128];
+957:    floor_save_path(floor, path, sizeof path);
+958:    return write_bytes_file(bytes, path);
+959:}
+960:
+961:// Stamp a floor's saved state over its freshly generated geometry, if a file
+---
+987:    for (;;) {
+988:        const std::size_t got = std::fread(chunk, 1, sizeof(chunk), f);
+989:        if (got == 0) break;
+990:        bytes.insert(bytes.end(), chunk, chunk + got);
+991:    }
+992:    std::fclose(f);
+993:    // An empty file yields bytes.data() == nullptr, which save_read reports as TooShort
+994:    // rather than dereferencing.
+995:    return game::save_read(bytes.data(), bytes.size(), st, &err);
+996:}
+997:
+998:// Repopulate the active floor's monsters: clear whatever was on the layer, then
+999:// spawn this floor's roster from the global table ([monsters.md]). Mobs are not
+1000:// alife records — they do not fold back, they are simply destroyed and remade,
+1001:// deterministically per (floor, seed).
+1002:// Containers are placed on the same trigger as monsters and with the same
+1003:// determinism, so a floor you leave and return to holds the same crates in the same
+1004:// rooms. Kept separate from refresh_floor_mobs because an emptied container is world
+1005:// state a save must eventually keep, while a monster is not ([container.h]).
+1006:std::uint32_t refresh_floor_containers(Registry& reg, const World& world,
+1007:                                      int floorNumber, LayerId layer) {
+1008:    // Clear whatever the previous occupant of this layer slot left behind.
+1009:    std::vector<Entity> old_;
+---
+1876:        char msg[256];
+1877:        console.exec(consoleCtx, line, msg, sizeof msg);
+1878:        if (showConsole && msg[0]) consoleLog.push_back(msg);
+1879:    };
+1880:
+1881:    // THE save, one law: run.sav (the run) + the resident floor's own file
+1882:    // (its geometry). F5 calls it, and so does the autosave at the end of
+1883:    // every ride — a transition is a load screen, where I/O belongs. [save.h]
+1884:    auto save_run_now = [&]() -> bool {
+1885:        const game::NpcRef* nr =
+1886:            reg.valid(player) ? reg.try_get<game::NpcRef>(player) : nullptr;
+1887:        if (!nr || !pool.valid(nr->id)) return false;
+1888:        const vec3& sp = reg.get<Transform>(player).pos;
+1889:        const LayerId pl = reg.get<Transform>(player).layer;
+1890:        runState.player.clock = pool.needs(nr->id);
+1891:        runState.player.inv = pool.inventory(nr->id);
+1892:        runState.player.hp = pool.hp(nr->id);
+1893:        runState.player.maxHp = pool.max_hp(nr->id);
+1894:        // The SIGNED floor, explicitly: NpcPool::floor() is the seeding label
+1895:        // and LayerId is a recycled storage slot. [save.h]
+1896:        runState.player.floorNumber = currentFloor;
+1897:        runState.player.cx = static_cast<std::uint8_t>(
+1898:            wrap_macro(static_cast<int>(sp.x / kCellSize)));
+---
+2043:        // ride_elevator keeps x/y and plants z=kArrivalZ. ~1-in-5 Residential
+2044:        // columns are solid at that z, so without this the body freezes in a
+2045:        // wall forever (physics backs out every tick). F9 already calls
+2046:        // place_body_at_cell; keyboard/--shot did not. [save.h]
+2047:        game::place_body_safely(reg, stack.layer(nl), player);
+2048:        // AUTOSAVE: every floor transition checkpoints the run, so a crash
+2049:        // costs at most the current floor's progress. The departed floor's
+2050:        // file is already on disk (written above, before travel).
+2051:        save_run_now();
+2052:        return true;
+2053:    };
+2054:
+2055:    while (running) {
+2056:        std::uint64_t now = SDL_GetPerformanceCounter();
+2057:        float frameDt = static_cast<float>((now - prevTicks) / freq);
+2058:        prevTicks = now;
+2059:
+2060:        // A console teleport is executed HERE, at the top of a frame, never in
+2061:        // the ImGui callback that requested it: mid-draw the frame's layer and
+2062:        // camera state are already committed, and yanking the world under them
+2063:        // is exactly the class of bug the request seam exists to prevent.
+2064:        if (pendingTeleport != game::ConsoleContext::kNoRequest) {
+2065:            const int dst = pendingTeleport;
+---
+3532:                    }
+3533:                }
+3534:                // Save and load. Both are world mutations, so they sit on the sim's
+3535:                // clock beside the other intent flags rather than in the event loop.
+3536:                if (saveWanted) {
+3537:                    saveWanted = false;
+3538:                    // The same one-law save the transition autosave uses:
+3539:                    // run.sav + the resident floor's own file. [save.h]
+3540:                    if (save_run_now())
+3541:                        std::snprintf(saveLine, sizeof(saveLine),
+3542:                                      "saved: floor %d, %u rub, %u crates",
+3543:                                      currentFloor,
+3544:                                      static_cast<unsigned>(ledger.banked),
+3545:                                      static_cast<unsigned>(runState.opened.size()));
+3546:                    else {
+3547:                        char runPath[128];
+3548:                        run_save_path(runPath, sizeof runPath);
+3549:                        std::snprintf(saveLine, sizeof(saveLine),
+3550:                                      "SAVE FAILED: could not write %s", runPath);
+3551:                    }
+3552:                    saveLineAt = simTick;
+3553:                    // Headless --shot proof: HUD is invisible in captures
+3554:                    // without a human; stderr is the audit trail. [save.h]
+---
+5032:                                stack.layer(nl), doors, currentFloor,
+5033:                                *currentSpec,
+5034:                                streamer.floor_seed_of(registry, currentFloor));
+5035:                        doors.frozen = true;
+5036:                        begin_floor_nav(stack.layer(nl), nav);
+5037:                        voxelMirror.upload_all(stack.layer(nl));
+5038:                        if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
+5039:                        // Same transition autosave as the keyboard path.
+5040:                        save_run_now();
+5041:                        if (propPass.ready()) {
+5042:                            std::uint32_t fseed = 1337u ^ (static_cast<std::uint32_t>(currentFloor) * 0x9e3779b9u);
+5043:                            propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);
+5044:                        }
+5045:                        // Same clear as the keyboard ride path. There are TWO travel
+5046:                        // sites and the first fix only touched one, so a --shot
+5047:                        // capture kept reporting a rumour about the floor it started
+5048:                        // on. A duplicated code path is a duplicated bug; this is the
+5049:                        // second one and the reason to be suspicious of the shape.
+5050:                        rumourLine[0] = 0;
+5051:                        rumourAt = 0;
+5052:                        // A gunshot on the floor you just left must not be audible to
+5053:                        // the crowd on the one you arrived at. The streamer RECYCLES
+5054:                        // LayerId slots, so a surviving record would not merely be
+---
+
+==== suite_saveload quest mentions ====
+284:    // 93 craft + 21 combat (hasRanged+ranged+kills) + 42 status + 308 quest log = 892,
+1285:    // the row from that transform. Writing both would give two answers to one question.
+1672:        // migrated" is a different question from "the designate is gone", and answering it
+1733:        CHECK(pool.floor_bucket(0)[0] == newborn);   // size 1, so order is not a question
+
+==== suite_quest log roundtrip ====
+24://   * `round_trip()` proves the save block is lossless with EVERY field distinct,
+25://     because a round-trip over zeroes passes even when the serializer drops half the
+557:    // The countdown a HUD reads is monotone and rounds UP, so a live quest never shows 0.
+940:void round_trip() {
+949:    // EVERY field distinct, because a round-trip over zeroes passes even when the
+972:    quest_log_write(a, buf);
+978:    quest_log_write(a, buf2);
+982:    CHECK(quest_log_read(buf.data(), buf.size(), b));
+997:    quest_log_write(a, payload);
+1000:    CHECK(quest_log_read(payload.data() + 37, payload.size() - 37, c));
+1008:    CHECK(!quest_log_read(buf.data(), kQuestLogWire - 1, keep));
+1010:    CHECK(!quest_log_read(nullptr, kQuestLogWire, keep));
+1018:    CHECK(!quest_log_read(bad.data(), bad.size(), keep));
+1021:    CHECK(!quest_log_read(bad.data(), bad.size(), keep));
+1024:    CHECK(quest_log_read(bad.data(), bad.size(), keep));
+1057:    quest_test::round_trip();
+
+==== contract save API ====
+3:// Everything needed for this already existed and none of it was connected. Containers
+14:// match an unrelated NPC; and a `giverPlotNpcId` rebinding field is read on load and
+35:// NPC targeting and no dialogue tree. Rather than build three systems to deliver one
+39:// The three objective kinds are chosen for exactly one reason: each is already
+56:    // extraction step already walks — the deepest hook available, because it makes the
+59:    // Kill N of a monster kind. Measured by the kill feed that combat already
+63:    // extraction already tracks on every ride.
+76:// One job. POD, 24 bytes, no pointers — it serializes with the save verbatim and can
+81:// already satisfy pays instantly, and re-accepting pays again. An audit measured 900
+84:    // (generation, id), NOT a bare id — see the header. Costs the save nothing: an
+85:    // NpcHandle is the same 32 bits an NpcId was, so [save.cpp] `visit_contract`'s
+94:    // |z| already reached when this job was accepted. Takes one of the two spare
+103:// you cannot, and there is no journal UI to read a longer list from.
+129:// the point it writes the field.
+147:// the exact job is already held from the same giver, or the offer is a Descend whose target
+148:// is already behind the run's deepest point — all refusals, not errors.
+161:// stamping how deep the run had already been. The first version left that to the caller
+170:// `inv` is the player's inventory, `led` the run ledger (Descend reads its deepest
+189:// is read the record is already dead, so `pool.handle(id)` would mint the corpse's NEW
+
+==== contract in save.cpp/main ====
+save_cpp contract: 14
+main contract_log: 0
+save.cpp:15:#include "game/quest.h"       // QuestLog, quest_log_write, quest_log_read, kQuestLogWire
+save.cpp:439:    quest_log_write(st.quests, body);
+save.cpp:577:        if (!quest_log_read(bytes + kSaveHeaderWire + pos,
+
+==== docs quest save ====
+FILE build-win\_deps\sdl3-src\docs\README-migration.md
+FILE build-win\_deps\entt-src\docs\md\entity.md
+FILE .claude\worktrees\wf_821f642e-b6b-6\build-win\_deps\sdl3-src\docs\README-migration.md
+FILE .claude\worktrees\wf_821f642e-b6b-6\build-win\_deps\entt-src\docs\md\entity.md
+FILE .claude\worktrees\wf_821f642e-b6b-4\build-win\_deps\sdl3-src\docs\README-migration.md
+FILE .claude\worktrees\wf_821f642e-b6b-4\build-win\_deps\entt-src\docs\md\entity.md
+FILE .claude\worktrees\wf_821f642e-b6b-3\build-win\_deps\sdl3-src\docs\README-migration.md
+FILE .claude\worktrees\wf_821f642e-b6b-3\build-win\_deps\entt-src\docs\md\entity.md
+FILE .claude\worktrees\wf_821f642e-b6b-1\build-win\_deps\sdl3-src\docs\README-migration.md
+FILE .claude\worktrees\wf_821f642e-b6b-1\build-win\_deps\entt-src\docs\md\entity.md
+FILE .claude\worktrees\agent-packs\build-win\_deps\sdl3-src\docs\README-migration.md
+FILE .claude\worktrees\agent-packs\build-win\_deps\entt-src\docs\md\entity.md
+FILE .claude\worktrees\agent-abb370ae2c46d5a3a\build-win\_deps\sdl3-src\docs\README-migration.md
+FILE .claude\worktrees\agent-abb370ae2c46d5a3a\build-win\_deps\entt-src\docs\md\entity.md
+FILE .claude\worktrees\agent-aa984c861c4bf8fa1\build-win\_deps\sdl3-src\docs\README-migration.md
+FILE .claude\worktrees\agent-aa984c861c4bf8fa1\build-win\_deps\entt-src\docs\md\entity.md
+FILE .claude\worktrees\agent-a9e46e1c099a5e82a\build-win\_deps\sdl3-src\docs\README-migration.md
+FILE .claude\worktrees\agent-a9e46e1c099a5e82a\build-win\_deps\entt-src\docs\md\entity.md
+FILE .claude\worktrees\agent-a961fd54bbdeb6917\build-win\_deps\sdl3-src\docs\README-migration.md
+FILE .claude\worktrees\agent-a961fd54bbdeb6917\build-win\_deps\entt-src\docs\md\entity.md
+FILE .claude\worktrees\agent-a78ddbee4b42dfb9d\build-win\_deps\sdl3-src\docs\README-migration.md
+FILE .claude\worktrees\agent-a78ddbee4b42dfb9d\build-win\_deps\entt-src\docs\md\entity.md
+FILE .claude\worktrees\agent-a48760c14348b44fc\build-win\_deps\sdl3-src\docs\README-migration.md
+FILE .claude\worktrees\agent-a48760c14348b44fc\build-win\_deps\entt-src\docs\md\entity.md
+FILE .agents\worker_m2_2\ORIGINAL_REQUEST.md
+  3:You are Worker M2_2 for Gigahrush2 Milestone 2: Wire Quests Flow & Save State Persistence.
+  12:Complete the quest offer/accept wiring and save state persistence in `src/app/main.cpp`:

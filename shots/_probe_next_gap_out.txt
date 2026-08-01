@@ -1,0 +1,1674 @@
+HEAD probe POSRPG/SAVMAG/samosbor
+
+=== src/game/combat.h ===
+-- hit 'mag' @1 --
+>    1|// Combat — damage, death, and melee attacks.
+     2|//
+     3|// This module is deliberately shaped around three defects found in the TypeScript
+-- hit 'mag' @7 --
+     5|// size; each one is a bug that is *impossible* here rather than merely absent.
+     6|//
+>    7|//   1. **One damage function.** In the reference, pre-armour damage leaked into
+     8|//      the kill feed, the AI threat model and the blood spray while HP took the
+     9|//      mitigated value — so the number the player saw was not the number that
+-- hit 'mag' @10 --
+     8|//      the kill feed, the AI threat model and the blood spray while HP took the
+     9|//      mitigated value — so the number the player saw was not the number that
+>   10|//      landed. `apply_damage` is the only place damage is computed, and it returns
+    11|//      the value it actually applied. Report *that*, never the raw input.
+    12|//
+-- hit 'mag' @16 --
+    14|//      through, so an entity could be culled before its loot / A-Life / quest
+    15|//      hooks ran — a P0 its own balance.md documented and never fixed. Here
+>   16|//      `apply_damage` NEVER destroys anything: it tags `Dead`, and
+    17|//      `finalize_deaths` is the one function that ends a life, at one defined
+    18|//      point in the tick.
+-- hit 'mag' @27 --
+    25|// Where HP lives is NOT unified, on purpose. For an embodied NPC the pool row is
+    26|// canonical and folds back on floor exit ([npcs.md], embody.h); a mob has no macro
+>   27|// existence at all and carries its own. `apply_damage` resolves which, so callers
+    28|// never have to care — the *function* is single, the storage is where the
+    29|// architecture already put it.
+-- hit 'mag' @104 --
+   102|// Five channels, matching the reference's armour model and the `resist[5]` vector
+   103|// carried by armour items.
+>  104|enum class DamageChannel : std::uint8_t {
+   105|    Kinetic = 0, Buckshot, Energy, Fire, Psi, Count
+   106|};
+-- hit 'mag' @107 --
+   105|    Kinetic = 0, Buckshot, Energy, Fire, Psi, Count
+   106|};
+>  107|inline constexpr std::size_t kDamageChannels =
+   108|    static_cast<std::size_t>(DamageChannel::Count);
+   109|
+-- hit 'mag' @108 --
+   106|};
+   107|inline constexpr std::size_t kDamageChannels =
+>  108|    static_cast<std::size_t>(DamageChannel::Count);
+   109|
+   110|// Environmental hazard query for cell materials.
+-- hit 'mag' @112 --
+   110|// Environmental hazard query for cell materials.
+   111|struct CellHazard {
+>  112|    std::int16_t damage = 0;
+   113|    DamageChannel channel = DamageChannel::Kinetic;
+   114|    bool active = false;
+-- hit 'mag' @113 --
+   111|struct CellHazard {
+   112|    std::int16_t damage = 0;
+>  113|    DamageChannel channel = DamageChannel::Kinetic;
+   114|    bool active = false;
+   115|};
+-- hit 'mag' @121 --
+   119|    switch (t) {
+   120|        case kMatElectricGrate:
+>  121|            h.damage = 15;
+   122|            h.channel = DamageChannel::Energy;
+   123|            h.active = true;
+-- hit 'mag' @122 --
+   120|        case kMatElectricGrate:
+   121|            h.damage = 15;
+>  122|            h.channel = DamageChannel::Energy;
+   123|            h.active = true;
+   124|            break;
+-- hit 'mag' @126 --
+   124|            break;
+   125|        case kMatAcidPool:
+>  126|            h.damage = 10;
+   127|            h.channel = DamageChannel::Kinetic;
+   128|            h.active = true;
+-- hit 'mag' @127 --
+   125|        case kMatAcidPool:
+   126|            h.damage = 10;
+>  127|            h.channel = DamageChannel::Kinetic;
+   128|            h.active = true;
+   129|            break;
+-- hit 'mag' @131 --
+   129|            break;
+   130|        case kMatFireCell:
+>  131|            h.damage = 20;
+   132|            h.channel = DamageChannel::Fire;
+   133|            h.active = true;
+-- hit 'mag' @132 --
+   130|        case kMatFireCell:
+   131|            h.damage = 20;
+>  132|            h.channel = DamageChannel::Fire;
+   133|            h.active = true;
+   134|            break;
+-- hit 'mag' @149 --
+   147|// gets reintroduced.
+   148|struct Armour {
+>  149|    std::int8_t resist[kDamageChannels] = {};
+   150|};
+   151|
+-- hit 'mag' @152 --
+   150|};
+   151|
+>  152|// "Damage does not touch me" — debug/console god mode.
+   153|//
+   154|// Checked in exactly one place, the top of apply_damage, because apply_damage is
+-- hit 'mag' @154 --
+   152|// "Damage does not touch me" — debug/console god mode.
+   153|//
+>  154|// Checked in exactly one place, the top of apply_damage, because apply_damage is
+   155|// THE damage entry point (defect (1) above): melee, projectiles, hazards and
+   156|// faction feuds all funnel through it, so one tag test covers every source
+-- hit 'mag' @155 --
+   153|//
+   154|// Checked in exactly one place, the top of apply_damage, because apply_damage is
+>  155|// THE damage entry point (defect (1) above): melee, projectiles, hazards and
+   156|// faction feuds all funnel through it, so one tag test covers every source
+   157|// without a second leak-prone guard anywhere else. The console toggles it.
+-- hit 'mag' @160 --
+   158|struct GodMode {};
+   159|
+>  160|// Set by apply_damage when a target's HP reaches zero. Nothing else may set it,
+   161|// and it does not mean the entity is gone — only that it is scheduled to die at
+   162|// the next finalize_deaths.
+-- hit 'ammo' @169 --
+   167|
+   168|// Fixed corpse inventory. 8 slots covers Boss (5 rolls @ 100%) plus a bundled
+>  169|// ammo pack when a firearm pays — still a pure POD array, no heap, no vector.
+   170|inline constexpr std::size_t kMaxCorpseSlots = 8;
+   171|
+-- hit 'mag' @243 --
+   241|// Carries Transform + AABB + Renderable too, so it renders through the existing
+   242|// body pass with no new render code: shots are visible tracers, not invisible
+>  243|// damage events.
+   244|struct Projectile {
+   245|    Entity source = entt::null;   // for the kill feed; may already be dead
+-- hit 'mag' @260 --
+   258|    // 0 = fired by a monster, 1 = fired by the player. Decides who it may hit.
+   259|    //
+>  260|    // It exists so that giving player bullets the ability to damage monsters does not
+   261|    // silently also create monster-on-monster friendly fire: once projectiles test
+   262|    // MobRef at all, a monster shooting past another monster would hit it. One branch
+-- hit 'mag' @279 --
+   277|    // whether its owner survived the flight.
+   278|    std::uint8_t proj = 0;
+>  279|    // Which `DamageChannel` this shot delivers, stored as the raw u8 the enum is.
+   280|    //
+   281|    // Same defect, same fix, one field over: `RangedDef::channel` was write-only.
+-- hit 'mag' @293 --
+   291|    //
+   292|    // Kinetic on all 29 firearms TODAY and that is not a placeholder — the reference
+>  293|    // sets `damageType` on zero physical weapons ([ranged_table.h] records this), so a
+   294|    // shotgun there deals Kinetic too. The channel that is genuinely authored is Psi,
+   295|    // on the 18 rows of the reference's data/psi.ts.
+-- hit 'mag' @296 --
+   294|    // shotgun there deals Kinetic too. The channel that is genuinely authored is Psi,
+   295|    // on the 18 rows of the reference's data/psi.ts.
+>  296|    std::uint8_t channel = static_cast<std::uint8_t>(DamageChannel::Kinetic);
+   297|};
+   298|
+-- hit 'PlayerMelee' @315 --
+   313|inline constexpr float kMuzzleForward = 1.7f;
+   314|
+>  315|// The camera holder's firearm state. A sibling of PlayerMelee rather than an
+   316|// extension of it, so one body can carry both a pipe and a pistol.
+   317|//
+-- hit 'mag' @318 --
+   316|// extension of it, so one body can carry both a pipe and a pistol.
+   317|//
+>  318|// `weapon` records which gun the magazine belongs to: swapping guns empties it, since
+   319|// a magazine of shells is not a magazine of 9mm. Attached lazily, like PlayerMelee.
+   320|struct PlayerRanged {
+-- hit 'PlayerMelee' @319 --
+   317|//
+   318|// `weapon` records which gun the magazine belongs to: swapping guns empties it, since
+>  319|// a magazine of shells is not a magazine of 9mm. Attached lazily, like PlayerMelee.
+   320|struct PlayerRanged {
+   321|    std::uint16_t cooldownMs = 0;
+-- hit 'PlayerRanged' @320 --
+   318|// `weapon` records which gun the magazine belongs to: swapping guns empties it, since
+   319|// a magazine of shells is not a magazine of 9mm. Attached lazily, like PlayerMelee.
+>  320|struct PlayerRanged {
+   321|    std::uint16_t cooldownMs = 0;
+   322|    std::uint16_t reloadMs = 0;
+-- hit 'mag' @323 --
+   321|    std::uint16_t cooldownMs = 0;
+   322|    std::uint16_t reloadMs = 0;
+>  323|    std::uint16_t magCount = 0;
+   324|    ItemId weapon = 0;
+   325|    std::uint32_t shots = 0;    // cumulative; survives possession like kills does
+-- hit 'PlayerMelee' @331 --
+   329|// The camera holder's swing state. Attached lazily by player_melee_step, so
+   330|// possessing a new body after death does not need to remember to add it.
+>  331|struct PlayerMelee {
+   332|    std::uint16_t cooldownMs = 0;
+   333|    std::uint32_t kills = 0;       // cumulative, survives possession
+-- hit 'mag' @356 --
+   354|inline constexpr float kProjHitRadius = 0.75f;     // metres
+   355|
+>  356|// What a WEB shot does instead of damage. Both numbers are read off the one
+   357|// authored WEB row rather than picked, and the row is unusually explicit about its
+   358|// own design — `data/mobs.csv` gives PAUPSINA `dmg = 0` and describes it as a
+-- hit 'mag' @360 --
+   358|// own design — `data/mobs.csv` gives PAUPSINA `dmg = 0` and describes it as a
+   359|// control monster that "does not chew health, but makes a bad corridor into a
+>  360|// sticky trap". It is the ONLY row in the file with zero damage.
+   361|//
+   362|// 0.45: the player walks 6.0 m/s and PAUPSINA moves 2250 mmps x 2 m = 4.5 m/s, so
+-- hit 'mag' @415 --
+   413|
+   414|// The best melee weapon in an inventory, or kInvalidItem for bare hands. "Best"
+>  415|// is highest damage — reach and speed are not traded off, because with no stamina
+   416|// or stagger system there is nothing to trade them against yet.
+   417|ItemId equipped_melee(const Inventory& inv);
+-- hit 'mag' @431 --
+   429|void sync_armour(Registry& reg, NpcPool& pool, Entity e);
+   430|
+>  431|struct DamageResult {
+   432|    std::int16_t applied = 0;  // AFTER mitigation — the only number worth reporting
+   433|    std::int16_t blocked = 0;
+-- hit 'mag' @438 --
+   436|};
+   437|
+>  438|// THE damage entry point. Every hit in the game goes through here.
+   439|//
+   440|// Resolves where the target's HP lives (mob instance vs. pool row), applies
+-- hit 'mag' @443 --
+   441|// channel mitigation, clamps, and tags `Dead` on reaching zero. Does **not**
+   442|// destroy the entity — see finalize_deaths.
+>  443|DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
+   444|                          std::int16_t raw, DamageChannel ch, Entity source,
+   445|                          const MacroGrid* grid = nullptr);
+-- hit 'mag' @444 --
+   442|// destroy the entity — see finalize_deaths.
+   443|DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
+>  444|                          std::int16_t raw, DamageChannel ch, Entity source,
+   445|                          const MacroGrid* grid = nullptr);
+   446|
+-- hit 'mag' @452 --
+   450|// destroys. Returns the number finalized.
+   451|//
+>  452|// Call it at ONE defined point per tick, after every system that can deal damage.
+   453|// Anything that needs to react to a death must do so from the event, not by
+   454|// watching for entities to vanish.
+-- hit 'mag' @500 --
+   498|
+   499|// Advance every shot in flight: integrate under gravity, stop on solid geometry,
+>  500|// damage what it touches on contact, expire on TTL. Destroys spent projectiles.
+   501|//
+   502|// Who a shot may hit is decided by `Projectile::team`, and it is deliberately not
+-- hit 'mag' @514 --
+   512|//
+   513|// A WEB shot (`Projectile::proj == ProjType::Web`) applies `apply_slow` to whatever
+>  514|// it hits INSTEAD of damage, and is counted as a hit for it. That is the only place
+   515|// `projType` is read, and reading it is why the field exists at all — before this,
+   516|// the one authored WEB row spat a bullet with the other 68.
+-- hit 'mag' @557 --
+   555|              "CarveProposalQueue must stay a pure POD struct");
+   556|
+>  557|// Map weapon damage onto the hardness scale. Concrete = 256; a fist (dmg 3)
+   558|// chips plaster/soil; a heavy pipe approaches a full concrete sub-voxel.
+   559|// Clamped so authored damage never invents explosive-grade power.
+-- hit 'mag' @559 --
+   557|// Map weapon damage onto the hardness scale. Concrete = 256; a fist (dmg 3)
+   558|// chips plaster/soil; a heavy pipe approaches a full concrete sub-voxel.
+>  559|// Clamped so authored damage never invents explosive-grade power.
+   560|inline std::uint16_t carve_power_from_dmg(std::int16_t dmg) {
+   561|    if (dmg < 0) dmg = 0;
+-- hit 'mag' @581 --
+   579|// The camera holder swings at whatever monster is in front of it.
+   580|//
+>  581|// Symmetry with mob_melee_step is deliberate: the same apply_damage, the same
+   582|// Dead tag, the same finalize_deaths. A mob killed by the player dies through
+   583|// exactly the path a player killed by a mob does, so there is no second death
+-- hit 'ammo' @590 --
+   588|// The player's firearm, and the structural twin of player_melee_step: resolve the
+   589|// camera holder, attach state lazily, decrement the cooldown EXACTLY ONCE at the top
+>  590|// (defect 3 above), pick the best gun in the inventory, spend one round of its ammo,
+   591|// and launch `pellets` projectiles down the camera ray inside the weapon's spread.
+   592|//
+
+=== src/ecs/components.h ===
+
+=== find PlayerRanged definition ===
+FOUND src/game/combat.h
+
+=== struct PlayerRanged in src/game/combat.h ===
+  320|struct PlayerRanged {
+  321|    std::uint16_t cooldownMs = 0;
+  322|    std::uint16_t reloadMs = 0;
+  323|    std::uint16_t magCount = 0;
+  324|    ItemId weapon = 0;
+  325|    std::uint32_t shots = 0;    // cumulative; survives possession like kills does
+  326|    std::uint32_t hits = 0;
+  327|};
+
+=== struct PlayerMelee in src/game/combat.h ===
+  331|struct PlayerMelee {
+  332|    std::uint16_t cooldownMs = 0;
+  333|    std::uint32_t kills = 0;       // cumulative, survives possession
+  334|};
+
+=== src/game/save.h ===
+-- hit 'kSaveVersion' @100 --
+    98|// tier). F5/F9 no longer drop progression. craft_write/craft_read own the craft
+    99|// codec ([craft.h]); the RPG fields are written little-endian field by field.
+>  100|inline constexpr std::uint32_t kSaveVersion = 7u;
+   101|
+   102|// ---------------------------------------------------------------------------
+-- hit 'kSaveVersion' @148 --
+   146|    TooShort,            // buffer ends before the format does
+   147|    BadMagic,            // not a gigahrush2 save at all
+>  148|    BadVersion,          // a different kSaveVersion wrote it
+   149|    ItemCountMismatch,   // data/items.csv changed row count  (the weak check)
+   150|    MobCountMismatch,    // data/mobs.csv changed row count    (the weak check)
+-- hit 'mag' @173 --
+   171|// must start comparing it — which it can, because it is written down.
+   172|struct SaveHeader {
+>  173|    std::uint32_t magic = 0;              //  0
+   174|    std::uint32_t version = 0;            //  4
+   175|    std::uint32_t tickHz = 0;             //  8  giga::kSimHz at write time; advisory
+-- hit 'kRpgWire' @214 --
+   212|// Version 7: RpgStats wire — field-by-field LE, NOT sizeof (pad_ is written so the
+   213|// footprint stays 12 and matches the POD layout without host padding surprises).
+>  214|inline constexpr std::size_t kRpgWire = 4 + 2 + 1 + 1 + 3 + 1;  // 12
+   215|static_assert(kRpgWire == 12);
+   216|// kCraftingWire (93) is defined in craft.h next to craft_write/craft_read.
+-- hit 'kRpgWire' @215 --
+   213|// footprint stays 12 and matches the POD layout without host padding surprises).
+   214|inline constexpr std::size_t kRpgWire = 4 + 2 + 1 + 1 + 3 + 1;  // 12
+>  215|static_assert(kRpgWire == 12);
+   216|// kCraftingWire (93) is defined in craft.h next to craft_write/craft_read.
+   217|// kQuestLogWire is defined in quest.h.
+-- hit 'kRpgWire' @220 --
+   218|inline constexpr std::size_t kOpenedKeyWire = 5;     // i16 floor + 3 x u8 cell
+   219|inline constexpr std::size_t kSaveFixedWire =
+>  220|    kLedgerWire + kBookWire + kPlayerWire + kRpgWire + kCraftingWire + kQuestLogWire;
+   221|
+   222|// Sanity ceiling on the opened-container list, so a corrupt header cannot ask for a
+-- hit 'mag' @314 --
+   312|// file does not exist simply generates pristine. run.sav never carries geometry.
+   313|//
+>  314|// Wire: u32 magic "GH2F" | u32 version | u32 blobBytes | u32 crc32(blob) | blob,
+   315|// where blob is exactly what snapshot_floor() produces (it embeds the floor number).
+   316|inline constexpr std::uint32_t kFloorMagic = 0x46324847u; // 'G','H','2','F'
+-- hit 'mag' @324 --
+   322|                      std::vector<std::uint8_t>& out);
+   323|
+>  324|// Validate a floor file and stamp it onto `w`. False on any rejection (magic,
+   325|// version, size, CRC, malformed blob) — the caller keeps the generated floor and,
+   326|// where it can, says so out loud. `floorOut` reports the floor the blob claims.
+-- hit 'SaveState' @364 --
+   362|// different and this file must not go hunting for singletons — "the player is not
+   363|// special" ([AGENTS.md]) means there is no player global to hunt for.
+>  364|struct SaveState {
+   365|    RunLedger ledger{};
+   366|    ContractBook book{};
+-- hit 'SaveState' @414 --
+   412|// Serialize. `out` is cleared first and ends up exactly `save_bytes_for(opened.size())`
+   413|// long. Cannot fail: there is no allocation to check and nothing to validate.
+>  414|void save_write(const SaveState& st, std::vector<std::uint8_t>& out);
+   415|
+   416|// Parse. Returns false and leaves `st` COMPLETELY untouched on any rejection — a
+-- hit 'SaveState' @421 --
+   419|// whenever the header itself parsed, even on rejection, so a caller can report
+   420|// "written by version 3, tick 120" for a save it just refused.
+>  421|bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st,
+   422|               SaveError* err = nullptr, SaveHeader* hdrOut = nullptr);
+   423|
+-- hit 'SaveState' @688 --
+   686|//
+   687|// `maxHp` is restored only when the save carries a positive one. A v1 save written by a
+>  688|// live player always does, but a default-constructed `SaveState` carries 0, and writing
+   689|// 0 into the row would make `entity_health` report 0/0 and every heal a no-op — worse
+   690|// than leaving the record's own maximum alone. Both values are clamped into the row's
+
+=== src/game/save.cpp ===
+-- hit 'craft_' @16 --
+    14|#include "game/mob_table.h"   // kMobNames, kMobKindCount
+    15|#include "game/quest.h"       // QuestLog, quest_log_write, quest_log_read, kQuestLogWire
+>   16|#include "game/craft.h"       // craft_write, craft_read, kCraftingWire
+    17|#include "game/rpg.h"         // RpgStats (visit_rpg)
+    18|#include "sim/physics.h"      // aabb_overlaps_solid — the solver's own predicate
+-- hit 'visit_rpg' @17 --
+    15|#include "game/quest.h"       // QuestLog, quest_log_write, quest_log_read, kQuestLogWire
+    16|#include "game/craft.h"       // craft_write, craft_read, kCraftingWire
+>   17|#include "game/rpg.h"         // RpgStats (visit_rpg)
+    18|#include "sim/physics.h"      // aabb_overlaps_solid — the solver's own predicate
+    19|#include "world/types.h"      // kCellSize, kVoxelSize, wrap_macro
+-- hit 'visit_player' @250 --
+   248|
+   249|template <class Ar, class P>
+>  250|void visit_player(Ar& ar, P& p) {
+   251|    visit_needs(ar, p.clock);
+   252|    visit_inventory(ar, p.inv);
+-- hit 'visit_rpg' @264 --
+   262|// kRpgWire (12) and a future non-zero pad cannot silently drop.
+   263|template <class Ar, class R>
+>  264|void visit_rpg(Ar& ar, R& r) {
+   265|    ar.u32(r.xp);
+   266|    ar.u16(r.psi);
+-- hit 'visit_player' @392 --
+   390|    visit_ledger(bw, st.ledger);
+   391|    visit_book(bw, st.book);
+>  392|    visit_player(bw, st.player);
+   393|    // Version 7: character sheet + crafting bank (fixed-size, in kSaveFixedWire).
+   394|    visit_rpg(bw, st.rpg);
+-- hit 'visit_rpg' @394 --
+   392|    visit_player(bw, st.player);
+   393|    // Version 7: character sheet + crafting bank (fixed-size, in kSaveFixedWire).
+>  394|    visit_rpg(bw, st.rpg);
+   395|    {
+   396|        const std::size_t at = body.size();
+-- hit 'craft_' @398 --
+   396|        const std::size_t at = body.size();
+   397|        body.resize(at + kCraftingWire);
+>  398|        craft_write(st.craft, body.data() + at);
+   399|    }
+   400|    for (const OpenedContainerKey& k : st.opened) visit_key(bw, k);
+-- hit 'visit_player' @507 --
+   505|    visit_ledger(r, tmp.ledger);
+   506|    visit_book(r, tmp.book);
+>  507|    visit_player(r, tmp.player);
+   508|    // Version 7: character sheet + crafting bank.
+   509|    visit_rpg(r, tmp.rpg);
+-- hit 'visit_rpg' @509 --
+   507|    visit_player(r, tmp.player);
+   508|    // Version 7: character sheet + crafting bank.
+>  509|    visit_rpg(r, tmp.rpg);
+   510|    {
+   511|        const std::size_t pos = r.at();
+-- hit 'craft_' @514 --
+   512|        if (static_cast<std::size_t>(h.payloadBytes) < pos + kCraftingWire)
+   513|            return fail(SaveError::TooShort);
+>  514|        if (!craft_read(bytes + kSaveHeaderWire + pos, kCraftingWire, tmp.craft))
+   515|            return fail(SaveError::TooShort);
+   516|        r.skip(kCraftingWire);
+
+=== src/app/main.cpp ===
+-- hit 'samosbor' @58 --
+    55|#include "game/needs.h"
+    56|#include "game/rumour.h"
+    57|#include "game/speech.h"
+>   58|#include "game/samosbor.h"
+    59|#include "game/contract.h"
+    60|#include "game/vendor.h"
+    61|#include "game/craft.h"
+-- hit 'samosbor' @132 --
+   129|// here (see cube.frag). 0.65 reads as contact shadow without making corridors feel
+   130|// like caves.
+   131|constexpr float kAoDirect = 0.65f;
+>  132|// How far the world closes in at the peak of a samosbor, as a fraction of the normal
+   133|// fog end. The fog is the ONLY visual the hazard has right now, and it is deliberately
+   134|// a range squeeze rather than a colour: fog mixes to BLACK and the encode satisfies
+   135|// f(0) == 0, which is what hides the toroidal wrap seam ([cube.frag]). Tinting the fog
+-- hit 'samosbor' @142 --
+   139|constexpr float kSamosborFogSqueeze = 0.34f;
+   140|
+   141|static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
+>  142|                                 float timeSec, const game::SamosborState& samosbor,
+   143|                                 const Registry& reg, LayerId activeLayer,
+   144|                                 const game::NoiseField* noiseField = nullptr,
+   145|                                 const game::PowerGridState* powerGrid = nullptr,
+-- hit 'samosbor' @153 --
+   150|    grid.add_light(camPos, kLampRadius, vec3{0.95f, 0.92f, 0.85f}, kLampIntensity);
+   151|
+   152|    // 2. Samosbor Alarm Hazard Light
+>  153|    const game::SamosborAlarm alarm = game::samosbor_alarm(samosbor);
+   154|    const float alarmPulse = alarm.pulse;
+   155|    if (alarmPulse > 0.01f) {
+   156|        vec3 alarmColor{0.95f, 0.20f, 0.85f}; // Purple default
+-- hit 'samosbor' @157 --
+   154|    const float alarmPulse = alarm.pulse;
+   155|    if (alarmPulse > 0.01f) {
+   156|        vec3 alarmColor{0.95f, 0.20f, 0.85f}; // Purple default
+>  157|        switch (static_cast<game::SamosborVariant>(samosbor.variant)) {
+   158|            case game::SamosborVariant::Wet:      alarmColor = vec3{0.15f, 0.85f, 0.95f}; break;
+   159|            case game::SamosborVariant::Electric: alarmColor = vec3{0.95f, 0.15f, 0.95f}; break;
+   160|            case game::SamosborVariant::Meat:     alarmColor = vec3{0.95f, 0.15f, 0.15f}; break;
+-- hit 'samosbor' @768 --
+   765|//
+   766|//   * `anchor_for_floor` snaps anything within a few floors of 0 to FloorBit::Z0, so
+   767|//     all five floors drew from the same habitat slice of the 69-kind roster.
+>  768|//   * `samosbor_duty01` at |z| <= 4 is ~2%, so the depth gradient the samosbor clock
+   769|//     exists to produce was invisible — one duty figure, five floors.
+   770|//   * `economy_band` put every floor in E0, capping loot at 90 roubles, so the
+   771|//     extraction loop's entire risk/reward curve was flat.
+-- hit 'samosbor' @778 --
+   775|// authors are {-50, -36, -26, 0, +14, +30}, so the stack now reaches them: the hub,
+   776|// two shallow floors, then the four descending anchors and the two above.
+   777|constexpr DemoFloor kDemoFloors[] = {
+>  778|    {0, game::FloorKind::Residential},   // start / hub — E0, samosbor ~2% duty
+   779|    {1, game::FloorKind::Commercial},
+   780|    {2, game::FloorKind::Industrial},
+   781|    {-8, game::FloorKind::Derelict},     // E1
+-- hit 'samosbor' @785 --
+   782|    {-14, game::FloorKind::Industrial},  // E2
+   783|    {-26, game::FloorKind::Derelict},    // anchor ZMinus26 — E3
+   784|    {-36, game::FloorKind::Industrial},  // anchor ZMinus36
+>  785|    {-50, game::FloorKind::Derelict},    // anchor ZMinus50 — E4, samosbor ~94% duty
+   786|    {14, game::FloorKind::Commercial},   // anchor ZPlus14 — up is depth too
+   787|    {30, game::FloorKind::Residential},  // anchor ZPlus30
+   788|};
+-- hit 'samosbor' @816 --
+   813|
+   814|// How far the world has closed in, as a multiplier on the fog range.
+   815|//
+>  816|// The fog is the only visual a samosbor has right now. It ramps IN over the first
+   817|// fifth of the Active phase and eases back OUT across the Aftermath, so one number —
+   818|// `samosbor_phase01` — produces both halves with no extra state to keep in sync.
+   819|//
+-- hit 'samosbor' @818 --
+   815|//
+   816|// The fog is the only visual a samosbor has right now. It ramps IN over the first
+   817|// fifth of the Active phase and eases back OUT across the Aftermath, so one number —
+>  818|// `samosbor_phase01` — produces both halves with no extra state to keep in sync.
+   819|//
+   820|// A squeeze and NOT a tint, deliberately: fog mixes to black and the encode satisfies
+   821|// f(0) == 0, which is what hides the toroidal wrap seam ([cube.frag]). Tinting would
+-- hit 'samosbor' @825 --
+   822|// break that unless the clear colour moved with it, and a visible seam is the worst
+   823|// failure this renderer has. Pulling the range in is strictly safe — more fog hides
+   824|// the seam harder, never less.
+>  825|float samosbor_fog_scale(const game::SamosborState& st) {
+   826|    const float p = game::samosbor_phase01(st);
+   827|    if (st.phase == static_cast<std::uint8_t>(game::SamosborPhase::Active)) {
+   828|        const float in_ = p < 0.2f ? p / 0.2f : 1.0f;
+-- hit 'samosbor' @826 --
+   823|// failure this renderer has. Pulling the range in is strictly safe — more fog hides
+   824|// the seam harder, never less.
+   825|float samosbor_fog_scale(const game::SamosborState& st) {
+>  826|    const float p = game::samosbor_phase01(st);
+   827|    if (st.phase == static_cast<std::uint8_t>(game::SamosborPhase::Active)) {
+   828|        const float in_ = p < 0.2f ? p / 0.2f : 1.0f;
+   829|        return 1.0f - (1.0f - kSamosborFogSqueeze) * in_;
+-- hit 'embody_as_player' @861 --
+   858|    for (game::NpcId id = 0; id < pool.count(); ++id) {
+   859|        if (!pool.alive(id)) continue;
+   860|        if (id == playerId)
+>  861|            player = game::embody_as_player(reg, pool, id, layer);
+   862|        else
+   863|            game::embody(reg, pool, id, layer);
+   864|    }
+-- hit 'possess_nearest' @1107 --
+  1104|    return chosen;
+  1105|}
+  1106|
+> 1107|Entity possess_nearest_survivor(Registry& reg, game::NpcPool& pool, LayerId layer, const vec3& playerPos, float reachM) {
+  1108|    Entity chosen = entt::null;
+  1109|    game::NpcId chosenId = game::kInvalidNpc;
+  1110|    float bestD2 = reachM * reachM;
+-- hit 'samosbor' @1299 --
+  1296|    // Populate initial decorative props. These are placed relative to world
+  1297|    // origin (0,0,0) and visible once the first floor is generated nearby.
+  1298|    // In a full game, a prop placement pass would populate these from world
+> 1299|    // data (room type, samosbor wave, etc.); here they demonstrate all shapes.
+  1300|    if (particlePass.ready()) {
+  1301|        particlePass.emit_burst(vec3{64.0f, 4.0f, 64.0f}, vec3{0.0f, 1.0f, 0.0f}, vec3{0.85f, 0.80f, 0.70f}, gpu::GpuParticleKind::DustMote, 128, 2.0f, 8.0f, 0.35f, 180.0f);
+  1302|        particlePass.emit_destruction_burst(vec3{64.0f, 2.0f, 64.0f}, 1, 64);
+-- hit 'possessWanted' @1427 --
+  1424|    std::uint32_t doorsBuilt = 0;   // on this floor, so the HUD can say "0 doors"
+  1425|    bool doorWanted = false;        // Q, consumed by one sim step
+  1426|    bool interactWanted = false;    // E, consumed by one sim step (Terminal / ControlPanel / Relief interact)
+> 1427|    bool possessWanted = false;     // P, consumed by one sim step (Voluntary Mind Projection / Body Swap)
+  1428|    char elevDiagLine[160] = {};
+  1429|    std::uint64_t elevDiagAt = 0;
+  1430|    game::PowerGridState powerGrid{};
+-- hit 'samosbor' @1579 --
+  1576|    // point of the readout is "is anything investigating right now", and a running
+  1577|    // total would answer a different question badly.
+  1578|    std::uint32_t heardMobs = 0;
+> 1579|    // The samosbor clock. One per live floor; the demo keeps one floor live, so one
+  1580|    // clock, re-armed on arrival ([samosbor.h]).
+  1581|    game::SamosborRng sbRng{0x5A303B0Du};
+  1582|    game::SamosborState samosbor = game::samosbor_new_game(sbRng);
+-- hit 'samosbor' @1580 --
+  1577|    // total would answer a different question badly.
+  1578|    std::uint32_t heardMobs = 0;
+  1579|    // The samosbor clock. One per live floor; the demo keeps one floor live, so one
+> 1580|    // clock, re-armed on arrival ([samosbor.h]).
+  1581|    game::SamosborRng sbRng{0x5A303B0Du};
+  1582|    game::SamosborState samosbor = game::samosbor_new_game(sbRng);
+  1583|    std::uint32_t samosborCycles = 0;
+-- hit 'samosbor' @1582 --
+  1579|    // The samosbor clock. One per live floor; the demo keeps one floor live, so one
+  1580|    // clock, re-armed on arrival ([samosbor.h]).
+  1581|    game::SamosborRng sbRng{0x5A303B0Du};
+> 1582|    game::SamosborState samosbor = game::samosbor_new_game(sbRng);
+  1583|    std::uint32_t samosborCycles = 0;
+  1584|    std::int16_t samosborDamage = 0;
+  1585|    // The last thing overheard, and when. Held rather than recomputed per frame
+-- hit 'samosbor' @1583 --
+  1580|    // clock, re-armed on arrival ([samosbor.h]).
+  1581|    game::SamosborRng sbRng{0x5A303B0Du};
+  1582|    game::SamosborState samosbor = game::samosbor_new_game(sbRng);
+> 1583|    std::uint32_t samosborCycles = 0;
+  1584|    std::int16_t samosborDamage = 0;
+  1585|    // The last thing overheard, and when. Held rather than recomputed per frame
+  1586|    // because a rumour is something you were TOLD — it should stay on screen after you
+-- hit 'samosbor' @1584 --
+  1581|    game::SamosborRng sbRng{0x5A303B0Du};
+  1582|    game::SamosborState samosbor = game::samosbor_new_game(sbRng);
+  1583|    std::uint32_t samosborCycles = 0;
+> 1584|    std::int16_t samosborDamage = 0;
+  1585|    // The last thing overheard, and when. Held rather than recomputed per frame
+  1586|    // because a rumour is something you were TOLD — it should stay on screen after you
+  1587|    // walk away, not vanish the moment the speaker is out of range.
+-- hit 'PlayerRanged' @1622 --
+  1619|    std::uint64_t speechAt = 0;
+  1620|    game::NeedsTick needs{};   // last step's report, for the HUD
+  1621|    int needsHpLost = 0;       // running total, so the HUD is not one tick
+> 1622|    // [[maybe_unused]]: superseded by PlayerRanged::shots (read straight from the
+  1623|    // component in the HUD) during the branch merge, but the `shots += ...` RHS is a
+  1624|    // side-effecting call (it fires the gun), so the accumulator is kept rather than
+  1625|    // rewriting the statement. MSVC did not warn; Clang -Wunused-but-set-variable does.
+-- hit 'F5' @1628 --
+  1625|    // rewriting the statement. MSVC did not warn; Clang -Wunused-but-set-variable does.
+  1626|    [[maybe_unused]] std::uint32_t shots = 0;   // rounds the player has fired
+  1627|    game::RunLedger& ledger = runState.ledger;
+> 1628|    // F5 saves, F9 loads. Recorded as intent and acted on in the sim loop, the same
+  1629|    // shape sellWanted/buyWanted use: a load rewrites world state and belongs on the
+  1630|    // sim's clock, not the window's.
+  1631|    bool saveWanted = false;
+-- hit 'F5' @1662 --
+  1659|    [[maybe_unused]] std::int32_t banked = 0;
+  1660|    std::int32_t containerTake = 0;   // roubles pulled out of crates
+  1661|    std::int32_t contractPaid = 0;    // roubles paid by finished jobs
+> 1662|    game::QuestLog& quests = runState.quests;  // lives in SaveState; F5/F9 persists it
+  1663|    std::int32_t questPaid = 0;       // roubles paid by finished quests
+  1664|    std::int32_t sold = 0;            // roubles taken for the haul
+  1665|    std::int32_t spent = 0;           // roubles spent on supplies
+-- hit 'embody_as_player' @1675 --
+  1672|    // The character sheet, carried across possession for the same reason `kills`
+  1673|    // is: a death takes the body, not the person's progression. Seeded level 1 so
+  1674|    // the very first embodiment (which happens below, before any death) has
+> 1675|    // something valid to fall back to; embody_as_player overwrites it with the
+  1676|    // record's own rolled build.
+  1677|    game::RpgStats carriedRpg = game::fresh_rpg(1);
+  1678|    bool attackHeld = false;
+-- hit 'carriedRpg' @1677 --
+  1674|    // the very first embodiment (which happens below, before any death) has
+  1675|    // something valid to fall back to; embody_as_player overwrites it with the
+  1676|    // record's own rolled build.
+> 1677|    game::RpgStats carriedRpg = game::fresh_rpg(1);
+  1678|    bool attackHeld = false;
+  1679|    // Carve scratch + result, reused across ops so a carve allocates nothing
+  1680|    // after warmup ([world/destruct.h]).
+-- hit 'F5' @1813 --
+  1810|    };
+  1811|
+  1812|    // THE save, one law: run.sav (the run) + the resident floor's own file
+> 1813|    // (its geometry). F5 calls it, and so does the autosave at the end of
+  1814|    // every ride — a transition is a load screen, where I/O belongs. [save.h]
+  1815|    auto save_run_now = [&]() -> bool {
+  1816|        const game::NpcRef* nr =
+-- hit 'save_run_now' @1815 --
+  1812|    // THE save, one law: run.sav (the run) + the resident floor's own file
+  1813|    // (its geometry). F5 calls it, and so does the autosave at the end of
+  1814|    // every ride — a transition is a load screen, where I/O belongs. [save.h]
+> 1815|    auto save_run_now = [&]() -> bool {
+  1816|        const game::NpcRef* nr =
+  1817|            reg.valid(player) ? reg.try_get<game::NpcRef>(player) : nullptr;
+  1818|        if (!nr || !pool.valid(nr->id)) return false;
+-- hit 'F5' @1836 --
+  1833|            wrap_macro(static_cast<int>(sp.z / kCellSize)));
+  1834|        // Version 7: character sheet + crafting bank. Prefer the live entity
+  1835|        // component; fall back to the death-surviving carried snapshot so a
+> 1836|        // mid-death F5 still banks progression. [save.h] SAVRPG
+  1837|        if (const game::RpgStats* rs = reg.try_get<game::RpgStats>(player))
+  1838|            runState.rpg = *rs;
+  1839|        else
+-- hit 'runState.rpg' @1838 --
+  1835|        // component; fall back to the death-surviving carried snapshot so a
+  1836|        // mid-death F5 still banks progression. [save.h] SAVRPG
+  1837|        if (const game::RpgStats* rs = reg.try_get<game::RpgStats>(player))
+> 1838|            runState.rpg = *rs;
+  1839|        else
+  1840|            runState.rpg = carriedRpg;
+  1841|        runState.craft = crafting;
+-- hit 'carriedRpg' @1840 --
+  1837|        if (const game::RpgStats* rs = reg.try_get<game::RpgStats>(player))
+  1838|            runState.rpg = *rs;
+  1839|        else
+> 1840|            runState.rpg = carriedRpg;
+  1841|        runState.craft = crafting;
+  1842|        // REFRESH, not append and not clear. [save.h]
+  1843|        game::refresh_opened_containers(reg, pl, currentFloor, runState.opened);
+-- hit 'runState.craft' @1841 --
+  1838|            runState.rpg = *rs;
+  1839|        else
+  1840|            runState.rpg = carriedRpg;
+> 1841|        runState.craft = crafting;
+  1842|        // REFRESH, not append and not clear. [save.h]
+  1843|        game::refresh_opened_containers(reg, pl, currentFloor, runState.opened);
+  1844|        // v6: the macro world travels whole — pool table, macro clock, faction
+-- hit 'samosbor' @1911 --
+  1908|        // A new floor gets its own clock at its own depth. Not carried over:
+  1909|        // the cooldown is a function of |z|, so inheriting a 30-minute surface
+  1910|        // gap into the void would silently cancel the entire depth gradient.
+> 1911|        samosbor = game::samosbor_new_game(sbRng);
+  1912|        // A rumour is about a FLOOR, so carrying one across a ride makes it
+  1913|        // false. Caught on a capture: the line read "самосбор здесь часто
+  1914|        // (17.2%)" while the HUD's own duty for the floor underfoot said 35.0%
+-- hit 'F9' @1937 --
+  1934|        refresh_floor_containers(reg, stack.layer(nl), currentFloor, nl);
+  1935|        // Re-empty crates already looted on a prior visit to this floor.
+  1936|        // Deterministic spawn would otherwise refill them — the brick this pair
+> 1937|        // closes. Same seam as F9 apply. [save.h]
+  1938|        game::apply_opened_containers(reg, nl, currentFloor,
+  1939|                                      runState.opened.data(),
+  1940|                                      runState.opened.size());
+-- hit 'F9' @1959 --
+  1956|        }
+  1957|        // ride_elevator keeps x/y and plants z=kArrivalZ. ~1-in-5 Residential
+  1958|        // columns are solid at that z, so without this the body freezes in a
+> 1959|        // wall forever (physics backs out every tick). F9 already calls
+  1960|        // place_body_at_cell; keyboard/--shot did not. [save.h]
+  1961|        game::place_body_safely(reg, stack.layer(nl), player);
+  1962|        // AUTOSAVE: every floor transition checkpoints the run, so a crash
+-- hit 'save_run_now' @1965 --
+  1962|        // AUTOSAVE: every floor transition checkpoints the run, so a crash
+  1963|        // costs at most the current floor's progress. The departed floor's
+  1964|        // file is already on disk (written above, before travel).
+> 1965|        save_run_now();
+  1966|        return true;
+  1967|    };
+  1968|
+-- hit 'possessWanted' @2168 --
+  2165|            if (has(ConsoleRequest::Eat)) eatWanted = true;
+  2166|            if (has(ConsoleRequest::Drink)) drinkWanted = true;
+  2167|            if (has(ConsoleRequest::Door)) doorWanted = true;
+> 2168|            if (has(ConsoleRequest::Possess)) possessWanted = true;
+  2169|            if (has(ConsoleRequest::Save)) saveWanted = true;
+  2170|            if (has(ConsoleRequest::Load)) loadWanted = true;
+  2171|            if (has(ConsoleRequest::Sell)) sellWanted = true;
+-- hit 'samosbor' @2401 --
+  2398|                // Steer the crowd BEFORE physics: wander writes horizontal
+  2399|                // velocity, physics integrates it and resolves collision.
+  2400|                // Samosbor advances HERE — after controller_step, before
+> 2401|                // wander_step — for the three reasons in [samosbor.h]: the seal can
+  2402|                // kill and must precede finalize_deaths by a whole tick; behaviour
+  2403|                // systems must never read a stale phase; and anything spawned on a
+  2404|                // transition needs physics in the same tick.
+-- hit 'samosbor' @2407 --
+  2404|                // transition needs physics in the same tick.
+  2405|                {
+  2406|                    const game::SamosborTransition tr_ =
+> 2407|                        game::samosbor_step(samosbor,
+  2408|                                            static_cast<std::uint32_t>(
+  2409|                                                kSimDt * 1000.0f + 0.5f),
+  2410|                                            currentFloor, sbRng);
+-- hit 'samosbor' @2411 --
+  2408|                                            static_cast<std::uint32_t>(
+  2409|                                                kSimDt * 1000.0f + 0.5f),
+  2410|                                            currentFloor, sbRng);
+> 2411|                    if (tr_.cycleEnded) ++samosborCycles;
+  2412|                    // The seal is ONE SHOT, not a per-tick drain. Modelled as a DoT a
+  2413|                    // 15-minute samosbor at |z|=50 would deal 3600 damage instead of
+  2414|                    // 4 — the correction that mattered most in the port.
+-- hit 'samosbor' @2413 --
+  2410|                                            currentFloor, sbRng);
+  2411|                    if (tr_.cycleEnded) ++samosborCycles;
+  2412|                    // The seal is ONE SHOT, not a per-tick drain. Modelled as a DoT a
+> 2413|                    // 15-minute samosbor at |z|=50 would deal 3600 damage instead of
+  2414|                    // 4 — the correction that mattered most in the port.
+  2415|                    if (tr_.sealed && reg.valid(player)) {
+  2416|                        // No shelter model yet, so everyone is caught outside. That is
+-- hit 'samosbor' @2422 --
+  2419|                        const game::DamageResult dr_ = game::apply_damage(
+  2420|                            reg, pool, player, game::kSamosborUnshelteredHp,
+  2421|                            game::DamageChannel::Kinetic, player);
+> 2422|                        samosborDamage =
+  2423|                            static_cast<std::int16_t>(samosborDamage + dr_.applied);
+  2424|                    }
+  2425|                }
+-- hit 'samosbor' @2423 --
+  2420|                            reg, pool, player, game::kSamosborUnshelteredHp,
+  2421|                            game::DamageChannel::Kinetic, player);
+  2422|                        samosborDamage =
+> 2423|                            static_cast<std::int16_t>(samosborDamage + dr_.applied);
+  2424|                    }
+  2425|                }
+  2426|                // Exhaustion costs movement speed, not HP — three stacking HP
+-- hit 'random_rpg' @2497 --
+  2494|                    // lags sim ticks; rides fire at presented % 420 == 0.
+  2495|                    if (shotAction == "rpgcmbt" && reg.valid(player)) {
+  2496|                        // RPGCMBT-SHOT: force a loud sheet so scaled melee
+> 2497|                        // is visible in stderr + HUD (random_rpg is modest).
+  2498|                        static bool rpgcmbtSheet = false;
+  2499|                        if (!rpgcmbtSheet) {
+  2500|                            game::RpgStats sheet = game::fresh_rpg(10);
+-- hit 'fresh_rpg' @2500 --
+  2497|                        // is visible in stderr + HUD (random_rpg is modest).
+  2498|                        static bool rpgcmbtSheet = false;
+  2499|                        if (!rpgcmbtSheet) {
+> 2500|                            game::RpgStats sheet = game::fresh_rpg(10);
+  2501|                            sheet.attr[0] = 20;  // STR
+  2502|                            sheet.attr[1] = 20;  // AGI
+  2503|                            sheet.attr[2] = 5;   // INT
+-- hit 'F5' @2996 --
+  2993|                    if (removed > 0) {
+  2994|                        // No log, no bookkeeping: geometry persistence is the
+  2995|                        // floor's own file, written when the player leaves
+> 2996|                        // ([save.h] modular layout) or on F5.
+  2997|                        // One rebuild of the cached instance list; partial
+  2998|                        // cells render their actual sub-voxel bits.
+  2999|                        cubePass.invalidate();
+-- hit 'possessWanted' @3146 --
+  3143|                        }
+  3144|                    }
+  3145|                }
+> 3146|                if (possessWanted) {
+  3147|                    possessWanted = false;
+  3148|                    if (reg.valid(player)) {
+  3149|                        const vec3 ppos = reg.get<Transform>(player).pos;
+-- hit 'possessWanted' @3147 --
+  3144|                    }
+  3145|                }
+  3146|                if (possessWanted) {
+> 3147|                    possessWanted = false;
+  3148|                    if (reg.valid(player)) {
+  3149|                        const vec3 ppos = reg.get<Transform>(player).pos;
+  3150|                        Entity newPlayer = possess_nearest_survivor(reg, pool, activeLayer, ppos, 8.0f);
+-- hit 'possess_nearest' @3150 --
+  3147|                    possessWanted = false;
+  3148|                    if (reg.valid(player)) {
+  3149|                        const vec3 ppos = reg.get<Transform>(player).pos;
+> 3150|                        Entity newPlayer = possess_nearest_survivor(reg, pool, activeLayer, ppos, 8.0f);
+  3151|                        if (newPlayer != entt::null) {
+  3152|                            player = newPlayer;
+  3153|                            const vec3 newPos = reg.get<Transform>(player).pos;
+-- hit 'samosbor' @3318 --
+  3315|                    const game::NpcId talker = game::nearest_speaker(reg, activeLayer);
+  3316|                    if (talker != game::kInvalidNpc) {
+  3317|                        const game::SpeechContext sc =
+> 3318|                            game::speech_context(reg, pool, talker, samosbor.phase);
+  3319|                        // The seed is the UTTERANCE COUNTER — the reference's
+  3320|                        // `repeatIndex: Math.floor(time)`. Identity is already folded in
+  3321|                        // by speech_line_index, so this is the only term that has to move
+-- hit 'carriedRpg' @3383 --
+  3380|                // taken before it runs and re-taken below when the body survives.
+  3381|                if (reg.valid(player))
+  3382|                    if (const auto* rs0 = reg.try_get<game::RpgStats>(player))
+> 3383|                        carriedRpg = *rs0;
+  3384|                game::loot_dead_mobs(reg, activeLayer, currentFloor,
+  3385|                                     static_cast<std::uint32_t>(simTick));
+  3386|                // ONE death point per tick, after everything that can deal damage
+-- hit 'save_run_now' @3427 --
+  3424|                    saveWanted = false;
+  3425|                    // The same one-law save the transition autosave uses:
+  3426|                    // run.sav + the resident floor's own file. [save.h]
+> 3427|                    if (save_run_now())
+  3428|                        std::snprintf(saveLine, sizeof(saveLine),
+  3429|                                      "saved: floor %d, %u rub, %u crates",
+  3430|                                      currentFloor,
+-- hit 'F9' @3444 --
+  3441|                    // without a human; stderr is the audit trail. [save.h]
+  3442|                    std::fprintf(stderr, "[save] %s\n", saveLine);
+  3443|                }
+> 3444|                // F9 full load: run + floor + cell + armour. APIs live in save.h;
+  3445|                // this was the only call site that still did a partial field copy and
+  3446|                // admitted it would not restore position. [save.h]
+  3447|                if (loadWanted) {
+-- hit 'embody_as_player' @3532 --
+  3529|                            const LayerId nl = lr.layer;
+  3530|                            activeLayer = nl;
+  3531|                            player = pid != game::kInvalidNpc
+> 3532|                                         ? game::embody_as_player(reg, pool, pid,
+  3533|                                                                  nl)
+  3534|                                         : lr.player;
+  3535|                            if (pid != game::kInvalidNpc) {
+-- hit 'embody_as_player' @3542 --
+  3539|                            }
+  3540|                            // Version 7: stamp the sheet onto the body and the
+  3541|                            // death-surviving carried snapshot, then restore the
+> 3542|                            // crafting bank. embody_as_player may have rolled a
+  3543|                            // fresh sheet from the record — overwrite it. [save.h]
+  3544|                            carriedRpg = runState.rpg;
+  3545|                            if (reg.valid(player))
+-- hit 'carriedRpg' @3544 --
+  3541|                            // death-surviving carried snapshot, then restore the
+  3542|                            // crafting bank. embody_as_player may have rolled a
+  3543|                            // fresh sheet from the record — overwrite it. [save.h]
+> 3544|                            carriedRpg = runState.rpg;
+  3545|                            if (reg.valid(player))
+  3546|                                reg.emplace_or_replace<game::RpgStats>(
+  3547|                                    player, runState.rpg);
+-- hit 'runState.rpg' @3547 --
+  3544|                            carriedRpg = runState.rpg;
+  3545|                            if (reg.valid(player))
+  3546|                                reg.emplace_or_replace<game::RpgStats>(
+> 3547|                                    player, runState.rpg);
+  3548|                            crafting = runState.craft;
+  3549|                            // Per-floor clocks and channels reset, same as any
+  3550|                            // arrival.
+-- hit 'runState.craft' @3548 --
+  3545|                            if (reg.valid(player))
+  3546|                                reg.emplace_or_replace<game::RpgStats>(
+  3547|                                    player, runState.rpg);
+> 3548|                            crafting = runState.craft;
+  3549|                            // Per-floor clocks and channels reset, same as any
+  3550|                            // arrival.
+  3551|                            samosbor = game::samosbor_new_game(sbRng);
+-- hit 'samosbor' @3551 --
+  3548|                            crafting = runState.craft;
+  3549|                            // Per-floor clocks and channels reset, same as any
+  3550|                            // arrival.
+> 3551|                            samosbor = game::samosbor_new_game(sbRng);
+  3552|                            rumourLine[0] = 0;
+  3553|                            rumourAt = 0;
+  3554|                            game::noise_clear(noiseField);
+-- hit 'PlayerMelee' @3763 --
+  3760|                    // was counting it. [extraction.h]
+  3761|                    if (pool.valid(deadRow))
+  3762|                        game::record_death(ledger, pool.inventory(deadRow));
+> 3763|                    // The PlayerMelee component dies with the body; the tally of
+  3764|                    // what that person killed does not.
+  3765|                    //
+  3766|                    // Neither does the character sheet. `embody_as_player` rolls a
+-- hit 'embody_as_player' @3766 --
+  3763|                    // The PlayerMelee component dies with the body; the tally of
+  3764|                    // what that person killed does not.
+  3765|                    //
+> 3766|                    // Neither does the character sheet. `embody_as_player` rolls a
+  3767|                    // fresh RpgStats from the new record, which is right for a
+  3768|                    // possession but wrong across a DEATH — losing every level to a
+  3769|                    // bad corridor is not the reference's rule, and the kill tally
+-- hit 'PlayerMelee' @3776 --
+  3773|                    player = possess_a_survivor(reg, pool, activeLayer);
+  3774|                    if (player == entt::null) { running = false; break; }
+  3775|                    aim_player(reg, player);
+> 3776|                    reg.emplace_or_replace<game::PlayerMelee>(
+  3777|                        player, game::PlayerMelee{0, kills});
+  3778|                    reg.emplace_or_replace<game::RpgStats>(player, carriedRpg);
+  3779|                } else if (const auto* rsLive = reg.try_get<game::RpgStats>(player)) {
+-- hit 'PlayerMelee' @3777 --
+  3774|                    if (player == entt::null) { running = false; break; }
+  3775|                    aim_player(reg, player);
+  3776|                    reg.emplace_or_replace<game::PlayerMelee>(
+> 3777|                        player, game::PlayerMelee{0, kills});
+  3778|                    reg.emplace_or_replace<game::RpgStats>(player, carriedRpg);
+  3779|                } else if (const auto* rsLive = reg.try_get<game::RpgStats>(player)) {
+  3780|                    // The body SURVIVED the tick. Refresh the snapshot, because
+-- hit 'carriedRpg' @3778 --
+  3775|                    aim_player(reg, player);
+  3776|                    reg.emplace_or_replace<game::PlayerMelee>(
+  3777|                        player, game::PlayerMelee{0, kills});
+> 3778|                    reg.emplace_or_replace<game::RpgStats>(player, carriedRpg);
+  3779|                } else if (const auto* rsLive = reg.try_get<game::RpgStats>(player)) {
+  3780|                    // The body SURVIVED the tick. Refresh the snapshot, because
+  3781|                    // finalize_deaths above may have just awarded XP and levelled it
+-- hit 'carriedRpg' @3784 --
+  3781|                    // finalize_deaths above may have just awarded XP and levelled it
+  3782|                    // — without this, a level earned by the killing blow would be
+  3783|                    // rolled back by the next death.
+> 3784|                    carriedRpg = *rsLive;
+  3785|                }
+  3786|                ++simTick;
+  3787|                // THE MACRO CLOCK. kMacroPeriodTicks = kSimHz*2 = 250, which is
+-- hit 'PlayerMelee' @3909 --
+  3906|                }
+  3907|            }
+  3908|            if (reg.valid(player))
+> 3909|                if (const auto* pm = reg.try_get<game::PlayerMelee>(player))
+  3910|                    kills = pm->kills;
+  3911|            ImGui::Text("hits taken: %u | deaths: %u | kills: %u", meleeHits,
+  3912|                        deaths, kills);
+-- hit 'PlayerRanged' @3952 --
+  3949|                    // spellings of the same one.
+  3950|                    if (const game::ItemId g_ = game::equipped_ranged(inv)) {
+  3951|                        const game::RangedDef* rd = game::ranged_for_item(g_);
+> 3952|                        const auto* prs = reg.try_get<game::PlayerRanged>(player);
+  3953|                        if (rd)
+  3954|                            ImGui::Text("gun: %s  %u x%u dmg  %u/%u mag  "
+  3955|                                        "%u shots %u hits",
+-- hit 'samosbor' @4136 --
+  4133|                                noiseField.dropped);
+  4134|            }
+  4135|            {
+> 4136|                const auto ph = static_cast<game::SamosborPhase>(samosbor.phase);
+  4137|                const float fogScale = samosbor_fog_scale(samosbor);
+  4138|                const bool danger =
+  4139|                    ph == game::SamosborPhase::Warning ||
+-- hit 'samosbor' @4137 --
+  4134|            }
+  4135|            {
+  4136|                const auto ph = static_cast<game::SamosborPhase>(samosbor.phase);
+> 4137|                const float fogScale = samosbor_fog_scale(samosbor);
+  4138|                const bool danger =
+  4139|                    ph == game::SamosborPhase::Warning ||
+  4140|                    ph == game::SamosborPhase::Active;
+-- hit 'samosbor' @4147 --
+  4144|                if (danger)
+  4145|                    ImGui::TextColored(ImVec4(0.90f, 0.31f, 0.36f, 1.0f),
+  4146|                                       "SAMOSBOR %s  %s  %.0f%%  (%.1f s left)",
+> 4147|                                       game::samosbor_phase_name(ph),
+  4148|                                       game::samosbor_variant_name(
+  4149|                                           static_cast<game::SamosborVariant>(
+  4150|                                               samosbor.variant)),
+-- hit 'samosbor' @4148 --
+  4145|                    ImGui::TextColored(ImVec4(0.90f, 0.31f, 0.36f, 1.0f),
+  4146|                                       "SAMOSBOR %s  %s  %.0f%%  (%.1f s left)",
+  4147|                                       game::samosbor_phase_name(ph),
+> 4148|                                       game::samosbor_variant_name(
+  4149|                                           static_cast<game::SamosborVariant>(
+  4150|                                               samosbor.variant)),
+  4151|                                       game::samosbor_phase01(samosbor) * 100.0f,
+-- hit 'samosbor' @4150 --
+  4147|                                       game::samosbor_phase_name(ph),
+  4148|                                       game::samosbor_variant_name(
+  4149|                                           static_cast<game::SamosborVariant>(
+> 4150|                                               samosbor.variant)),
+  4151|                                       game::samosbor_phase01(samosbor) * 100.0f,
+  4152|                                       samosbor.phaseMs * 0.001f);
+  4153|                else
+-- hit 'samosbor' @4151 --
+  4148|                                       game::samosbor_variant_name(
+  4149|                                           static_cast<game::SamosborVariant>(
+  4150|                                               samosbor.variant)),
+> 4151|                                       game::samosbor_phase01(samosbor) * 100.0f,
+  4152|                                       samosbor.phaseMs * 0.001f);
+  4153|                else
+  4154|                    // "to warning" is only true of Idle. In Aftermath phaseMs is the
+-- hit 'samosbor' @4152 --
+  4149|                                           static_cast<game::SamosborVariant>(
+  4150|                                               samosbor.variant)),
+  4151|                                       game::samosbor_phase01(samosbor) * 100.0f,
+> 4152|                                       samosbor.phaseMs * 0.001f);
+  4153|                else
+  4154|                    // "to warning" is only true of Idle. In Aftermath phaseMs is the
+  4155|                    // aftermath's own remainder and the warning is a whole cooldown
+-- hit 'samosbor' @4158 --
+  4155|                    // aftermath's own remainder and the warning is a whole cooldown
+  4156|                    // away, so labelling both the same way printed a wrong number —
+  4157|                    // caught by reading my own HUD in a screenshot, not by a test.
+> 4158|                    ImGui::Text("samosbor %s  (%.0f s %s)",
+  4159|                                game::samosbor_phase_name(ph),
+  4160|                                samosbor.phaseMs * 0.001f,
+  4161|                                ph == game::SamosborPhase::Idle ? "to warning"
+-- hit 'samosbor' @4159 --
+  4156|                    // away, so labelling both the same way printed a wrong number —
+  4157|                    // caught by reading my own HUD in a screenshot, not by a test.
+  4158|                    ImGui::Text("samosbor %s  (%.0f s %s)",
+> 4159|                                game::samosbor_phase_name(ph),
+  4160|                                samosbor.phaseMs * 0.001f,
+  4161|                                ph == game::SamosborPhase::Idle ? "to warning"
+  4162|                                                                : "left");
+-- hit 'samosbor' @4160 --
+  4157|                    // caught by reading my own HUD in a screenshot, not by a test.
+  4158|                    ImGui::Text("samosbor %s  (%.0f s %s)",
+  4159|                                game::samosbor_phase_name(ph),
+> 4160|                                samosbor.phaseMs * 0.001f,
+  4161|                                ph == game::SamosborPhase::Idle ? "to warning"
+  4162|                                                                : "left");
+  4163|                ImGui::Text("duty here %.1f%% | cycles %u | fog x%.2f | took %d hp",
+-- hit 'samosbor' @4164 --
+  4161|                                ph == game::SamosborPhase::Idle ? "to warning"
+  4162|                                                                : "left");
+  4163|                ImGui::Text("duty here %.1f%% | cycles %u | fog x%.2f | took %d hp",
+> 4164|                            game::samosbor_duty01(currentFloor) * 100.0f,
+  4165|                            samosborCycles, fogScale, samosborDamage);
+  4166|                if (elevDiagLine[0] && simTick - elevDiagAt < 8u * kSimHz)
+  4167|                    ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "%s", elevDiagLine);
+-- hit 'samosbor' @4165 --
+  4162|                                                                : "left");
+  4163|                ImGui::Text("duty here %.1f%% | cycles %u | fog x%.2f | took %d hp",
+  4164|                            game::samosbor_duty01(currentFloor) * 100.0f,
+> 4165|                            samosborCycles, fogScale, samosborDamage);
+  4166|                if (elevDiagLine[0] && simTick - elevDiagAt < 8u * kSimHz)
+  4167|                    ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "%s", elevDiagLine);
+  4168|            }
+-- hit 'F5' @4288 --
+  4285|            }
+  4286|            ImGui::TextUnformatted(
+  4287|                "WASD move | mouse look | Tab toggle look | Space jump | "
+> 4288|                "F fly | Q door | G eat | T drink | F5/F9 save/load | [ / ] floor | Esc menu");
+  4289|            ImGui::End();
+  4290|        }
+  4291|
+-- hit 'samosbor' @4658 --
+  4655|            float currentTimeSec = static_cast<float>(SDL_GetTicks()) / 1000.0f;
+  4656|
+  4657|            if (lightGrid.ready()) {
+> 4658|                collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, samosbor, reg, activeLayer, &noiseField, &powerGrid, &propPass);
+  4659|                lightGrid.update_and_dispatch(cmd, currentTimeSec, camMat.eye);
+  4660|            }
+  4661|
+-- hit 'samosbor' @4673 --
+  4670|                // Samosbor alarm atmospheric particles: variant-specific.
+  4671|                // During an active alarm the environment REACTS — the building
+  4672|                // bleeds, sparks, drips or spores according to what's coming.
+> 4673|                const game::SamosborAlarm alarmNow = game::samosbor_alarm(samosbor);
+  4674|                if (alarmNow.pulse > 0.05f) {
+  4675|                    vec3 aOff{
+  4676|                        static_cast<float>((simTick * 11u) % 41u) - 20.0f,
+-- hit 'samosbor' @4679 --
+  4676|                        static_cast<float>((simTick * 11u) % 41u) - 20.0f,
+  4677|                        static_cast<float>((simTick * 3u) % 7u) - 1.0f,
+  4678|                        static_cast<float>((simTick * 17u) % 41u) - 20.0f};
+> 4679|                    switch (static_cast<game::SamosborVariant>(samosbor.variant)) {
+  4680|                        case game::SamosborVariant::Electric:
+  4681|                            particlePass.emit_burst(
+  4682|                                camMat.eye + aOff, vec3{0.0f, 1.0f, 0.0f},
+-- hit 'samosbor' @4720 --
+  4717|                propPass.set_use_gpu_culling(true);
+  4718|                const mat4 vp = mat4_mul(camMat.proj, camMat.view);
+  4719|                const uint32_t fIdx = renderer.currentFrame;
+> 4720|                const float fogEnd = kWorldExtent * 0.50f * samosbor_fog_scale(samosbor);
+  4721|                const float torusPeriod = kWorldExtent;
+  4722|                for (int s = 0; s < gpu::kPropShapeCount; ++s) {
+  4723|                    uint32_t count = propPass.instance_count(s);
+-- hit 'samosbor' @4746 --
+  4743|            push.sunDir = vec4{0.4f, 0.3f, 0.85f, kFillStrength};
+  4744|            push.camPos = vec4{camMat.eye.x, camMat.eye.y, camMat.eye.z,
+  4745|                               kLampIntensity};
+> 4746|            const float fogScale = samosbor_fog_scale(samosbor);
+  4747|            const float samosborPulse = std::clamp((1.0f - fogScale) / (1.0f - kSamosborFogSqueeze), 0.0f, 1.0f);
+  4748|            push.fog = vec4{kWorldExtent * 0.30f * fogScale,
+  4749|                            kWorldExtent * 0.50f * fogScale,
+-- hit 'samosbor' @4747 --
+  4744|            push.camPos = vec4{camMat.eye.x, camMat.eye.y, camMat.eye.z,
+  4745|                               kLampIntensity};
+  4746|            const float fogScale = samosbor_fog_scale(samosbor);
+> 4747|            const float samosborPulse = std::clamp((1.0f - fogScale) / (1.0f - kSamosborFogSqueeze), 0.0f, 1.0f);
+  4748|            push.fog = vec4{kWorldExtent * 0.30f * fogScale,
+  4749|                            kWorldExtent * 0.50f * fogScale,
+  4750|                            kLampRadius, kAmbient};
+-- hit 'samosbor' @4754 --
+  4751|            // The wrap period, so cube.vert can place each cell at its nearest
+  4752|            // toroidal image itself. Instance origins are absolute, which is what
+  4753|            // makes the cube pass's instance cache possible.
+> 4754|            push.torus = vec4{kWorldExtent, kAoDirect, samosborPulse, currentTimeSec};
+  4755|            // Each pass is bracketed by GPU timestamps as well as by the CPU
+  4756|            // clock: the two answer different questions and need opposite fixes.
+  4757|            // The CPU figure is time spent building instance data on this thread;
+-- hit 'samosbor' @4855 --
+  4852|                        // about, hit again by promoting a display variable to a source
+  4853|                        // of truth. Both sites now set it.
+  4854|                        currentSpec = spec_for_floor(currentFloor);
+> 4855|                        samosbor = game::samosbor_new_game(sbRng);
+  4856|                        aim_player(reg, player);
+  4857|                        LayerId nl = reg.get<Transform>(player).layer;
+  4858|                        activeLayer = nl;
+-- hit 'F9' @4863 --
+  4860|                        refresh_floor_containers(reg, stack.layer(nl),
+  4861|                                                 currentFloor, nl);
+  4862|                        // Re-empty crates already looted on a prior visit.
+> 4863|                        // Same seam as keyboard ride + F9 apply. [save.h]
+  4864|                        game::apply_opened_containers(
+  4865|                            reg, nl, currentFloor, runState.opened.data(),
+  4866|                            runState.opened.size());
+-- hit 'save_run_now' @4882 --
+  4879|                        begin_floor_nav(stack.layer(nl), nav);
+  4880|                        cubePass.invalidate();
+  4881|                        // Same transition autosave as the keyboard path.
+> 4882|                        save_run_now();
+  4883|                        if (propPass.ready()) {
+  4884|                            std::uint32_t fseed = 1337u ^ (static_cast<std::uint32_t>(currentFloor) * 0x9e3779b9u);
+  4885|                            propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);
+
+=== src/game/elevator.cpp ===
+-- hit 'PlayerRanged' @4 --
+     2|
+     3|#include "ecs/components.h"
+>    4|#include "game/combat.h"   // PlayerRanged, PlayerMelee — live on the body, not the pool
+     5|#include "game/embody.h"
+     6|#include "game/rpg.h"      // RpgStats — XP/attrs/psi live on the body, not the pool
+-- hit 'RpgStats' @6 --
+     4|#include "game/combat.h"   // PlayerRanged, PlayerMelee — live on the body, not the pool
+     5|#include "game/embody.h"
+>    6|#include "game/rpg.h"      // RpgStats — XP/attrs/psi live on the body, not the pool
+     7|
+     8|namespace giga::game {
+-- hit 'PlayerRanged' @46 --
+    44|    // Melee kills tally has the same lifetime; main.cpp already re-stamps it on
+    45|    // death-possession, but a ride is not a death and never hit that path.
+>   46|    const bool hadRanged = reg.all_of<PlayerRanged>(player);
+    47|    PlayerRanged ranged{};
+    48|    if (hadRanged) ranged = reg.get<PlayerRanged>(player);
+-- hit 'PlayerRanged' @47 --
+    45|    // death-possession, but a ride is not a death and never hit that path.
+    46|    const bool hadRanged = reg.all_of<PlayerRanged>(player);
+>   47|    PlayerRanged ranged{};
+    48|    if (hadRanged) ranged = reg.get<PlayerRanged>(player);
+    49|    const bool hadMelee = reg.all_of<PlayerMelee>(player);
+-- hit 'PlayerRanged' @48 --
+    46|    const bool hadRanged = reg.all_of<PlayerRanged>(player);
+    47|    PlayerRanged ranged{};
+>   48|    if (hadRanged) ranged = reg.get<PlayerRanged>(player);
+    49|    const bool hadMelee = reg.all_of<PlayerMelee>(player);
+    50|    PlayerMelee melee{};
+-- hit 'PlayerMelee' @49 --
+    47|    PlayerRanged ranged{};
+    48|    if (hadRanged) ranged = reg.get<PlayerRanged>(player);
+>   49|    const bool hadMelee = reg.all_of<PlayerMelee>(player);
+    50|    PlayerMelee melee{};
+    51|    if (hadMelee) melee = reg.get<PlayerMelee>(player);
+-- hit 'PlayerMelee' @50 --
+    48|    if (hadRanged) ranged = reg.get<PlayerRanged>(player);
+    49|    const bool hadMelee = reg.all_of<PlayerMelee>(player);
+>   50|    PlayerMelee melee{};
+    51|    if (hadMelee) melee = reg.get<PlayerMelee>(player);
+    52|
+-- hit 'PlayerMelee' @51 --
+    49|    const bool hadMelee = reg.all_of<PlayerMelee>(player);
+    50|    PlayerMelee melee{};
+>   51|    if (hadMelee) melee = reg.get<PlayerMelee>(player);
+    52|
+    53|    // RpgStats is the same class of defect as PlayerRanged (RPG1). embody_as_player
+-- hit 'PlayerRanged' @53 --
+    51|    if (hadMelee) melee = reg.get<PlayerMelee>(player);
+    52|
+>   53|    // RpgStats is the same class of defect as PlayerRanged (RPG1). embody_as_player
+    54|    // always re-rolls via random_rpg(level, id) — deterministic base sheet for the
+    55|    // record, but mid-run XP, spent attr points, and current psi are wiped. Death
+-- hit 'RpgStats' @58 --
+    56|    // possession already captures/restores the sheet in main.cpp (carriedRpg);
+    57|    // a ride is not a death and never hit that path. Capture before fold_back.
+>   58|    const bool hadRpg = reg.all_of<RpgStats>(player);
+    59|    RpgStats rpg{};
+    60|    if (hadRpg) rpg = reg.get<RpgStats>(player);
+-- hit 'RpgStats' @59 --
+    57|    // a ride is not a death and never hit that path. Capture before fold_back.
+    58|    const bool hadRpg = reg.all_of<RpgStats>(player);
+>   59|    RpgStats rpg{};
+    60|    if (hadRpg) rpg = reg.get<RpgStats>(player);
+    61|
+-- hit 'RpgStats' @60 --
+    58|    const bool hadRpg = reg.all_of<RpgStats>(player);
+    59|    RpgStats rpg{};
+>   60|    if (hadRpg) rpg = reg.get<RpgStats>(player);
+    61|
+    62|    // Fold back on the departed floor (writes the record's macro cell from the
+-- hit 'PlayerRanged' @83 --
+    81|
+    82|    // Restore combat state only if it was present — do not invent a fresh
+>   83|    // PlayerRanged on a body that never fired (lazy attach stays lazy).
+    84|    if (hadRanged) reg.emplace_or_replace<PlayerRanged>(ne, ranged);
+    85|    if (hadMelee) reg.emplace_or_replace<PlayerMelee>(ne, melee);
+-- hit 'PlayerRanged' @84 --
+    82|    // Restore combat state only if it was present — do not invent a fresh
+    83|    // PlayerRanged on a body that never fired (lazy attach stays lazy).
+>   84|    if (hadRanged) reg.emplace_or_replace<PlayerRanged>(ne, ranged);
+    85|    if (hadMelee) reg.emplace_or_replace<PlayerMelee>(ne, melee);
+    86|    // Character sheet: overwrite the random_rpg roll from embody_as_player with
+-- hit 'PlayerMelee' @85 --
+    83|    // PlayerRanged on a body that never fired (lazy attach stays lazy).
+    84|    if (hadRanged) reg.emplace_or_replace<PlayerRanged>(ne, ranged);
+>   85|    if (hadMelee) reg.emplace_or_replace<PlayerMelee>(ne, melee);
+    86|    // Character sheet: overwrite the random_rpg roll from embody_as_player with
+    87|    // the pre-ride progression. embody always attaches RpgStats, so this is
+-- hit 'RpgStats' @87 --
+    85|    if (hadMelee) reg.emplace_or_replace<PlayerMelee>(ne, melee);
+    86|    // Character sheet: overwrite the random_rpg roll from embody_as_player with
+>   87|    // the pre-ride progression. embody always attaches RpgStats, so this is
+    88|    // emplace_or_replace rather than a lazy-absent guard (unlike combat).
+    89|    if (hadRpg) reg.emplace_or_replace<RpgStats>(ne, rpg);
+-- hit 'RpgStats' @89 --
+    87|    // the pre-ride progression. embody always attaches RpgStats, so this is
+    88|    // emplace_or_replace rather than a lazy-absent guard (unlike combat).
+>   89|    if (hadRpg) reg.emplace_or_replace<RpgStats>(ne, rpg);
+    90|
+    91|    r.player = ne;
+
+=== src/game/embody.cpp ===
+-- hit 'RpgStats' @4 --
+     2|
+     3|#include "game/faction.h"
+>    4|#include "game/rpg.h"      // RpgStats, random_rpg
+     5|// NOTE: #include "game/ai.h" (AiBrain) goes back here when the utility AI is
+     6|// adapted to main mob_table -- see tools/branch_port_pending/README.md
+-- hit 'RpgStats' @95 --
+    93|    // a body swap (main.cpp does this for the kill tally) overwrites this
+    94|    // immediately afterwards, and the body is freshly built here in either case.
+>   95|    reg.emplace_or_replace<RpgStats>(e, random_rpg(pool.level(id), id));
+    96|
+    97|    pool.set_player(id, true);
+
+=== src/game/embody.h ===
+
+=== src/app/main.cpp ===
+-- hit 'samosbor.' @58 --
+    57|#include "game/speech.h"
+>   58|#include "game/samosbor.h"
+    59|#include "game/contract.h"
+-- hit 'Samosbor' @139 --
+   138|// hides the seam harder, never less.
+>  139|constexpr float kSamosborFogSqueeze = 0.34f;
+   140|
+-- hit 'Samosbor' @142 --
+   141|static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
+>  142|                                 float timeSec, const game::SamosborState& samosbor,
+   143|                                 const Registry& reg, LayerId activeLayer,
+-- hit 'Samosbor' @152 --
+   151|
+>  152|    // 2. Samosbor Alarm Hazard Light
+   153|    const game::SamosborAlarm alarm = game::samosbor_alarm(samosbor);
+-- hit 'samosbor_' @153 --
+   152|    // 2. Samosbor Alarm Hazard Light
+>  153|    const game::SamosborAlarm alarm = game::samosbor_alarm(samosbor);
+   154|    const float alarmPulse = alarm.pulse;
+-- hit 'Samosbor' @157 --
+   156|        vec3 alarmColor{0.95f, 0.20f, 0.85f}; // Purple default
+>  157|        switch (static_cast<game::SamosborVariant>(samosbor.variant)) {
+   158|            case game::SamosborVariant::Wet:      alarmColor = vec3{0.15f, 0.85f, 0.95f}; break;
+-- hit 'Samosbor' @158 --
+   157|        switch (static_cast<game::SamosborVariant>(samosbor.variant)) {
+>  158|            case game::SamosborVariant::Wet:      alarmColor = vec3{0.15f, 0.85f, 0.95f}; break;
+   159|            case game::SamosborVariant::Electric: alarmColor = vec3{0.95f, 0.15f, 0.95f}; break;
+-- hit 'Samosbor' @159 --
+   158|            case game::SamosborVariant::Wet:      alarmColor = vec3{0.15f, 0.85f, 0.95f}; break;
+>  159|            case game::SamosborVariant::Electric: alarmColor = vec3{0.95f, 0.15f, 0.95f}; break;
+   160|            case game::SamosborVariant::Meat:     alarmColor = vec3{0.95f, 0.15f, 0.15f}; break;
+-- hit 'Samosbor' @160 --
+   159|            case game::SamosborVariant::Electric: alarmColor = vec3{0.95f, 0.15f, 0.95f}; break;
+>  160|            case game::SamosborVariant::Meat:     alarmColor = vec3{0.95f, 0.15f, 0.15f}; break;
+   161|            case game::SamosborVariant::Maronary: alarmColor = vec3{0.95f, 0.55f, 0.15f}; break;
+-- hit 'Samosbor' @161 --
+   160|            case game::SamosborVariant::Meat:     alarmColor = vec3{0.95f, 0.15f, 0.15f}; break;
+>  161|            case game::SamosborVariant::Maronary: alarmColor = vec3{0.95f, 0.55f, 0.15f}; break;
+   162|            case game::SamosborVariant::Istotit:  alarmColor = vec3{0.95f, 0.95f, 0.45f}; break;
+-- hit 'Samosbor' @162 --
+   161|            case game::SamosborVariant::Maronary: alarmColor = vec3{0.95f, 0.55f, 0.15f}; break;
+>  162|            case game::SamosborVariant::Istotit:  alarmColor = vec3{0.95f, 0.95f, 0.45f}; break;
+   163|            case game::SamosborVariant::Veretar:  alarmColor = vec3{0.85f, 0.85f, 0.95f}; break;
+-- hit 'Samosbor' @163 --
+   162|            case game::SamosborVariant::Istotit:  alarmColor = vec3{0.95f, 0.95f, 0.45f}; break;
+>  163|            case game::SamosborVariant::Veretar:  alarmColor = vec3{0.85f, 0.85f, 0.95f}; break;
+   164|            default: break;
+-- hit 'samosbor_' @768 --
+   767|//     all five floors drew from the same habitat slice of the 69-kind roster.
+>  768|//   * `samosbor_duty01` at |z| <= 4 is ~2%, so the depth gradient the samosbor clock
+   769|//     exists to produce was invisible — one duty figure, five floors.
+-- hit 'samosbor_' @818 --
+   817|// fifth of the Active phase and eases back OUT across the Aftermath, so one number —
+>  818|// `samosbor_phase01` — produces both halves with no extra state to keep in sync.
+   819|//
+-- hit 'samosbor_' @825 --
+   824|// the seam harder, never less.
+>  825|float samosbor_fog_scale(const game::SamosborState& st) {
+   826|    const float p = game::samosbor_phase01(st);
+-- hit 'samosbor_' @826 --
+   825|float samosbor_fog_scale(const game::SamosborState& st) {
+>  826|    const float p = game::samosbor_phase01(st);
+   827|    if (st.phase == static_cast<std::uint8_t>(game::SamosborPhase::Active)) {
+-- hit 'Samosbor' @827 --
+   826|    const float p = game::samosbor_phase01(st);
+>  827|    if (st.phase == static_cast<std::uint8_t>(game::SamosborPhase::Active)) {
+   828|        const float in_ = p < 0.2f ? p / 0.2f : 1.0f;
+-- hit 'Samosbor' @829 --
+   828|        const float in_ = p < 0.2f ? p / 0.2f : 1.0f;
+>  829|        return 1.0f - (1.0f - kSamosborFogSqueeze) * in_;
+   830|    }
+-- hit 'Samosbor' @831 --
+   830|    }
+>  831|    if (st.phase == static_cast<std::uint8_t>(game::SamosborPhase::Aftermath))
+   832|        return kSamosborFogSqueeze + (1.0f - kSamosborFogSqueeze) * p;
+-- hit 'Samosbor' @832 --
+   831|    if (st.phase == static_cast<std::uint8_t>(game::SamosborPhase::Aftermath))
+>  832|        return kSamosborFogSqueeze + (1.0f - kSamosborFogSqueeze) * p;
+   833|    return 1.0f;
+-- hit 'samosbor.' @1580 --
+  1579|    // The samosbor clock. One per live floor; the demo keeps one floor live, so one
+> 1580|    // clock, re-armed on arrival ([samosbor.h]).
+  1581|    game::SamosborRng sbRng{0x5A303B0Du};
+-- hit 'Samosbor' @1581 --
+  1580|    // clock, re-armed on arrival ([samosbor.h]).
+> 1581|    game::SamosborRng sbRng{0x5A303B0Du};
+  1582|    game::SamosborState samosbor = game::samosbor_new_game(sbRng);
+-- hit 'samosbor_' @1582 --
+  1581|    game::SamosborRng sbRng{0x5A303B0Du};
+> 1582|    game::SamosborState samosbor = game::samosbor_new_game(sbRng);
+  1583|    std::uint32_t samosborCycles = 0;
+-- hit 'samosbor_' @1911 --
+  1910|        // gap into the void would silently cancel the entire depth gradient.
+> 1911|        samosbor = game::samosbor_new_game(sbRng);
+  1912|        // A rumour is about a FLOOR, so carrying one across a ride makes it
+-- hit 'Samosbor' @2400 --
+  2399|                // velocity, physics integrates it and resolves collision.
+> 2400|                // Samosbor advances HERE — after controller_step, before
+  2401|                // wander_step — for the three reasons in [samosbor.h]: the seal can
+-- hit 'samosbor.' @2401 --
+  2400|                // Samosbor advances HERE — after controller_step, before
+> 2401|                // wander_step — for the three reasons in [samosbor.h]: the seal can
+  2402|                // kill and must precede finalize_deaths by a whole tick; behaviour
+-- hit 'Samosbor' @2406 --
+  2405|                {
+> 2406|                    const game::SamosborTransition tr_ =
+  2407|                        game::samosbor_step(samosbor,
+-- hit 'samosbor_' @2407 --
+  2406|                    const game::SamosborTransition tr_ =
+> 2407|                        game::samosbor_step(samosbor,
+  2408|                                            static_cast<std::uint32_t>(
+-- hit 'Samosbor' @2420 --
+  2419|                        const game::DamageResult dr_ = game::apply_damage(
+> 2420|                            reg, pool, player, game::kSamosborUnshelteredHp,
+  2421|                            game::DamageChannel::Kinetic, player);
+-- hit 'samosbor.' @3318 --
+  3317|                        const game::SpeechContext sc =
+> 3318|                            game::speech_context(reg, pool, talker, samosbor.phase);
+  3319|                        // The seed is the UTTERANCE COUNTER — the reference's
+-- hit 'samosbor_' @3551 --
+  3550|                            // arrival.
+> 3551|                            samosbor = game::samosbor_new_game(sbRng);
+  3552|                            rumourLine[0] = 0;
+-- hit 'Samosbor' @4136 --
+  4135|            {
+> 4136|                const auto ph = static_cast<game::SamosborPhase>(samosbor.phase);
+  4137|                const float fogScale = samosbor_fog_scale(samosbor);
+-- hit 'samosbor_' @4137 --
+  4136|                const auto ph = static_cast<game::SamosborPhase>(samosbor.phase);
+> 4137|                const float fogScale = samosbor_fog_scale(samosbor);
+  4138|                const bool danger =
+-- hit 'Samosbor' @4139 --
+  4138|                const bool danger =
+> 4139|                    ph == game::SamosborPhase::Warning ||
+  4140|                    ph == game::SamosborPhase::Active;
+-- hit 'Samosbor' @4140 --
+  4139|                    ph == game::SamosborPhase::Warning ||
+> 4140|                    ph == game::SamosborPhase::Active;
+  4141|                // Red only for the two phases that actually threaten you. The colour
+-- hit 'samosbor_' @4147 --
+  4146|                                       "SAMOSBOR %s  %s  %.0f%%  (%.1f s left)",
+> 4147|                                       game::samosbor_phase_name(ph),
+  4148|                                       game::samosbor_variant_name(
+-- hit 'samosbor_' @4148 --
+  4147|                                       game::samosbor_phase_name(ph),
+> 4148|                                       game::samosbor_variant_name(
+  4149|                                           static_cast<game::SamosborVariant>(
+-- hit 'Samosbor' @4149 --
+  4148|                                       game::samosbor_variant_name(
+> 4149|                                           static_cast<game::SamosborVariant>(
+  4150|                                               samosbor.variant)),
+-- hit 'samosbor.' @4150 --
+  4149|                                           static_cast<game::SamosborVariant>(
+> 4150|                                               samosbor.variant)),
+  4151|                                       game::samosbor_phase01(samosbor) * 100.0f,
+-- hit 'samosbor_' @4151 --
+  4150|                                               samosbor.variant)),
+> 4151|                                       game::samosbor_phase01(samosbor) * 100.0f,
+  4152|                                       samosbor.phaseMs * 0.001f);
+-- hit 'samosbor.' @4152 --
+  4151|                                       game::samosbor_phase01(samosbor) * 100.0f,
+> 4152|                                       samosbor.phaseMs * 0.001f);
+  4153|                else
+-- hit 'samosbor_' @4159 --
+  4158|                    ImGui::Text("samosbor %s  (%.0f s %s)",
+> 4159|                                game::samosbor_phase_name(ph),
+  4160|                                samosbor.phaseMs * 0.001f,
+-- hit 'samosbor.' @4160 --
+  4159|                                game::samosbor_phase_name(ph),
+> 4160|                                samosbor.phaseMs * 0.001f,
+  4161|                                ph == game::SamosborPhase::Idle ? "to warning"
+-- hit 'Samosbor' @4161 --
+  4160|                                samosbor.phaseMs * 0.001f,
+> 4161|                                ph == game::SamosborPhase::Idle ? "to warning"
+  4162|                                                                : "left");
+-- hit 'samosbor_' @4164 --
+  4163|                ImGui::Text("duty here %.1f%% | cycles %u | fog x%.2f | took %d hp",
+> 4164|                            game::samosbor_duty01(currentFloor) * 100.0f,
+  4165|                            samosborCycles, fogScale, samosborDamage);
+-- hit 'Samosbor' @4670 --
+  4669|
+> 4670|                // Samosbor alarm atmospheric particles: variant-specific.
+  4671|                // During an active alarm the environment REACTS — the building
+-- hit 'samosbor_' @4673 --
+  4672|                // bleeds, sparks, drips or spores according to what's coming.
+> 4673|                const game::SamosborAlarm alarmNow = game::samosbor_alarm(samosbor);
+  4674|                if (alarmNow.pulse > 0.05f) {
+-- hit 'Samosbor' @4679 --
+  4678|                        static_cast<float>((simTick * 17u) % 41u) - 20.0f};
+> 4679|                    switch (static_cast<game::SamosborVariant>(samosbor.variant)) {
+  4680|                        case game::SamosborVariant::Electric:
+-- hit 'Samosbor' @4680 --
+  4679|                    switch (static_cast<game::SamosborVariant>(samosbor.variant)) {
+> 4680|                        case game::SamosborVariant::Electric:
+  4681|                            particlePass.emit_burst(
+-- hit 'Samosbor' @4687 --
+  4686|                            break;
+> 4687|                        case game::SamosborVariant::Wet:
+  4688|                            particlePass.emit_burst(
+-- hit 'Samosbor' @4695 --
+  4694|                            break;
+> 4695|                        case game::SamosborVariant::Meat:
+  4696|                            particlePass.emit_burst(
+-- hit 'samosbor_' @4720 --
+  4719|                const uint32_t fIdx = renderer.currentFrame;
+> 4720|                const float fogEnd = kWorldExtent * 0.50f * samosbor_fog_scale(samosbor);
+  4721|                const float torusPeriod = kWorldExtent;
+-- hit 'samosbor_' @4746 --
+  4745|                               kLampIntensity};
+> 4746|            const float fogScale = samosbor_fog_scale(samosbor);
+  4747|            const float samosborPulse = std::clamp((1.0f - fogScale) / (1.0f - kSamosborFogSqueeze), 0.0f, 1.0f);
+-- hit 'Samosbor' @4747 --
+  4746|            const float fogScale = samosbor_fog_scale(samosbor);
+> 4747|            const float samosborPulse = std::clamp((1.0f - fogScale) / (1.0f - kSamosborFogSqueeze), 0.0f, 1.0f);
+  4748|            push.fog = vec4{kWorldExtent * 0.30f * fogScale,
+-- hit 'samosbor_' @4855 --
+  4854|                        currentSpec = spec_for_floor(currentFloor);
+> 4855|                        samosbor = game::samosbor_new_game(sbRng);
+  4856|                        aim_player(reg, player);
+
+=== src/game/samosbor.h ===
+-- hit 'depth' @1 --
+>    1|// Samosbor — the depth-scaled pressure clock ([floors.md], [monsters.md]).
+     2|//
+-- hit 'depth' @37 --
+    36|// negative-only; `mob_table.h` already builds its head-count/level budgets on
+>   37|// the same V-shape and this file reuses its `mob_depth01()` rather than shipping
+    38|// a second copy of clamp(|z|/50, 0, 1) that could drift away from it.
+-- hit 'depth' @57 --
+    56|//   * `balance.md:100-108` — duration 12..90 s, warning 18 s. This is the
+>   57|//     staleest of the three and predates the depth curve entirely: a flat 90 s
+    58|//     ceiling cannot grow with abs(z) at all. Its 12 s low end survives here
+-- hit 'depth' @78 --
+    77|#include "ecs/registry.h"
+>   78|#include "game/mob_table.h"      // MobDef::minSamosbor, mob_depth01, kFloorZSpan
+    79|#include "world/level_stack.h"   // LayerId
+-- hit 'depth' @85 --
+    84|// ---------------------------------------------------------------------------
+>   85|// The depth curve — the four numbers everything else follows from
+    86|// ---------------------------------------------------------------------------
+-- hit 'depth' @101 --
+   100|// prediction of the sampled curve rather than an approximation, and it is what
+>  101|// keeps the depth signal dominant over the noise. Widening this past ~0.35 would
+   102|// let a shallow roll outrun a deep one, which is the design failure the
+-- hit 'depth' @164 --
+   163|
+>  164|// New game only: the first event is 120..180 s in, regardless of depth. Verified
+   165|// against the code (`src/main.ts:3272`, `120 + rng() * 60`) as well as
+-- hit 'depth' @166 --
+   165|// against the code (`src/main.ts:3272`, `120 + rng() * 60`) as well as
+>  166|// `balance.md:102`. Every subsequent cooldown comes off the depth curve.
+   167|inline constexpr std::uint32_t kSamosborFirstTimerMinMs = 120u * 1000u;
+-- hit 'struct Samosbor' @183 --
+   182|// the call site instead of a hidden field.
+>  183|struct SamosborRng {
+   184|    std::uint32_t state = 0x9e3779b9u;
+-- hit 'struct Samosbor' @214 --
+   213|// builds — same convention as `MobDef`.
+>  214|struct SamosborVariantDef {
+   215|    std::uint8_t variant;           // SamosborVariant; must equal the row index
+-- hit 'samosbor_step' @275 --
+   274|// `SamosborState::variant` is a raw `std::uint8_t` that a truncated save, a memset or
+>  275|// a `SamosborState{}` written by hand can put outside 0..6 — `samosbor_step` already
+   276|// carries a `default:` branch for precisely that on the phase byte, so the failure is
+-- hit 'depth' @305 --
+   304|
+>  305|// Mean (jitter-free, variant-free) duration and cooldown at a depth. These are
+   306|// the two lerps the whole system is: `samosbor_duration_ms` and
+-- hit 'depth' @309 --
+   308|//
+>  309|// Depth input is `mob_depth01(floorZ)` = clamp(|z| / kFloorZSpan, 0, 1), reused
+   310|// from `mob_table.h` rather than re-derived, so the samosbor clock and the
+-- hit 'depth' @344 --
+   343|// sign and hands back cooldowns of up to 20 minutes — the exact opposite of the
+>  344|// depth contract, and the single reason the shipped reference tops out near a
+   345|// 54% duty cycle instead of 94%. A luck fork is good texture and worth adding
+-- hit 'depth' @346 --
+   345|// 54% duty cycle instead of 94%. A luck fork is good texture and worth adding
+>  346|// later, but it has to be **multiplicative** (a depth-independent factor keeps
+   347|// d/(d+c*k) monotone) rather than absolute, or it breaks the invariant the
+-- hit 'depth' @351 --
+   350|
+>  351|// The first event of a new game: 120..180 s, depth-independent. Use this once,
+   352|// at `samosbor_new_game`; every later gap comes from `samosbor_cooldown_ms`.
+-- hit 'samosbor_step' @374 --
+   373|// clock does not know what floor it is on (the caller passes `floorZ` to
+>  374|// `samosbor_step`, which is what lets one floor be renumbered without its clock
+   375|// noticing — `LayerId` != floor number, [floors.md]).
+-- hit 'struct Samosbor' @424 --
+   423|// there; that file is not this lane's to edit.
+>  424|struct SamosborState {
+   425|    std::uint32_t phaseMs = 0;       // time left in the current phase
+-- hit 'samosbor_step' @444 --
+   443|// ordinary 8 ms tick produces, because the shortest phase in the machine is
+>  444|// `kSamosborMinIdleMs` = 3 s. But `samosbor_step` walks up to four crossings in one
+   445|// call, and on a `steps >= 2` step — a load stall, a debug time-skip, a frame that
+-- hit 'samosbor_step' @469 --
+   468|// the spawner into an unbounded population leak. `activeEnded` is delivered on the tick
+>  469|// `samosbor_step` moves the phase to Aftermath, so on the ONE tick that carries the
+   470|// despawn edge `samosbor_active(st)` is already false and the guard drops it. The heads
+-- hit 'struct Samosbor' @490 --
+   489|// reading, and they need none of these fields.
+>  490|struct SamosborTransition {
+   491|    std::uint8_t from = 0;        // SamosborPhase at entry
+-- hit 'depth' @506 --
+   505|// same schedule whether you started on the roof or in the void, because the
+>  506|// depth curve is about where you *go*, not where you spawn.
+   507|//
+-- hit 'depth' @524 --
+   523|//   2. **It hands out the easiest gap in the game.** `samosbor_new_game` is the
+>  524|//      flat 120..180 s new-game timer, not a depth roll — its own doc says "use
+   525|//      this once". At |z| = 50 the authored cooldown is 60 s, so re-arming with the
+-- hit 'depth' @527 --
+   526|//      new-game timer gives 2-3x the calm that floor is ever supposed to give, and
+>  527|//      riding down-and-back-up is a free reset of the depth pressure the whole file
+   528|//      exists to produce. Arming off `samosbor_cooldown_ms` instead puts the first
+-- hit 'samosbor_step' @532 --
+   531|// Arms via `samosbor_arm(cooldown - kSamosborAftermathMs)`, exactly as the
+>  532|// Aftermath branch of `samosbor_step` does, so a ride and a completed cycle produce
+   533|// the same distribution of gaps. The subtraction cannot underflow: the smallest
+-- hit 'samosbor_step' @554 --
+   553|//
+>  554|// and `samosbor_step` goes **after `controller_step`, before `wander_step`**.
+   555|// Three reasons, in order of how expensive getting it wrong is:
+-- hit 'samosbor_step' @575 --
+   574|// single frame lasted a whole samosbor cycle.
+>  575|SamosborTransition samosbor_step(SamosborState& st, std::uint32_t dtMs,
+   576|                                 int floorZ, SamosborRng& rng);
+-- hit 'samosbor_step' @605 --
+   604|// banner cannot go stale, cannot be missed by a frame that skipped a tick or by
+>  605|// `samosbor_step`'s four-crossing clamp, survives a save/load with no extra field, and
+   606|// costs the call site ONE inserted line instead of a declaration plus an update plus a
+-- hit 'samosbor_step' @703 --
+   702|// must describe the SAME beat. Two calls cannot actually disagree inside one frame, but
+>  703|// they can be reordered around a `samosbor_step` by a later edit, and then the banner
+   704|// reads Warning while the colour pulses at the Impact rate. One call, one answer.
+-- hit 'struct Samosbor' @708 --
+   707|// caller needs. Pure, no allocation, no exceptions, no RTTI.
+>  708|struct SamosborAlarm {
+   709|    char text[kSamosborBeatTextCap] = {};  // NUL-terminated Russian line; empty when off
+-- hit 'struct Samosbor' @738 --
+   737|
+>  738|struct SamosborPressure {
+   739|    std::uint8_t fogRadiusCells;
+-- hit 'depth' @855 --
+   854|
+>  855|// Target near-player pressure for a floor: lerp(3, 7, depth01) scaled by the
+   856|// variant's `spawnMult`, capped at 7 (or at 10 on a high-risk floor).
+
+=== BACKLOG OPEN rows ===
+| CORP1 | Corpse loot staging: Dead→CorpseLootPending→Corpse; interact no item-loss (stack merge / inv-full leave remainder); suite asserts staged not floor | **unit GREEN:** game_test **215499 checks, 0 failures**; loottable 600 corpses → 833 staged slots, 39 slime_sample_green, floor pickups=0; Betonoed 5..10 slots, rub/kill ~137.3 (window 60..250); interact harden in loot.cpp (resolve player before searched; stackMax partial move; recompute slotCount) | prior |
+## OPEN / next (priority)
+| P1 | AIMEM | CLOSED 2026-07-31 — AiMemory floor-leave release GREEN | src/game/ai* + floor_stream | see CLOSED AIMEM |
+| P2 | TEX1 | CLOSED 2026-07-31 — 3 roughness ktx2 shipped; live load 6/6 | data/textures | see CLOSED TEX1 |
+| P2 | CNT1 | CLOSED 2026-07-31 — status+craft reference parity (no missing rows) | data/*.csv + tables | see CLOSED CNT1 |
+| P2 | PAR1 | CLOSED 2026-07-31 — both travel sites still call place_body_safely + ai_release | src/app/main.cpp read-only | see CLOSED PAR1; re-run after foreign main.cpp |
+| P3 | RPG1 | CLOSED 2026-07-31 — RpgStats survives elevator body-swap | src/game/elevator.cpp | see CLOSED RPG1; embody LOCKED |
+| P3 | MAGSHOT | Optional: real-game HUD mag line across --ride | main.cpp foreign-aware | unit pin owns body-swap |
+| P3 | M4 | CLOSED peek — Milestone 4 already CLOSED (suite_props / world_test) | .agents/worker_m4* | no leftover game work |
+| P3 | SHOTLOG | CLOSED 2026-07-31 — [place] MOVE/REFUSE in place_body_at_cell | src/game/save.cpp | see CLOSED SHOTLOG |
+| P2 | PADIC | CLOSED 2026-07-31 — floor4 stress GREEN (AI+tex+shot) | main harness + src/game | see CLOSED PADIC; Zhirnyak owns mesher stripes |
+Next OPEN: PAR1 (travel re-grep) or PADIC gameplay stress.
+Next OPEN: **PADIC** gameplay stress (`--floor 4`, doors/AI, stay off `src/render/**`).
+Next OPEN: P3 optional (RPG1/MAGSHOT) or re-PAR1 after foreign main; keep pull/push loop.
+Next OPEN: idle pull/push; re-PAR1 after next foreign main thrash; stay off src/render/**.
+Next OPEN: MAGSHOT deferred (SAVRPG CLOSED)
+Next OPEN: MAGSHOT deferred; stay off src/render/**.
+
+=== main.cpp possess / death windows ===
+  861|            player = game::embody_as_player(reg, pool, id, layer);
+ 1103|    std::fprintf(stderr, "[death] possessed record %u\n", chosenId);
+ 1107|Entity possess_nearest_survivor(Registry& reg, game::NpcPool& pool, LayerId layer, const vec3& playerPos, float reachM) {
+ 1427|    bool possessWanted = false;     // P, consumed by one sim step (Voluntary Mind Projection / Body Swap)
+ 1675|    // something valid to fall back to; embody_as_player overwrites it with the
+ 1677|    game::RpgStats carriedRpg = game::fresh_rpg(1);
+ 1840|            runState.rpg = carriedRpg;
+ 2168|            if (has(ConsoleRequest::Possess)) possessWanted = true;
+ 2886|                // healing, resupply and possession-on-death. [faction_relations.h]
+ 3146|                if (possessWanted) {
+ 3147|                    possessWanted = false;
+ 3150|                        Entity newPlayer = possess_nearest_survivor(reg, pool, activeLayer, ppos, 8.0f);
+ 3383|                        carriedRpg = *rs0;
+ 3532|                                         ? game::embody_as_player(reg, pool, pid,
+ 3542|                            // crafting bank. embody_as_player may have rolled a
+ 3544|                            carriedRpg = runState.rpg;
+ 3766|                    // Neither does the character sheet. `embody_as_player` rolls a
+ 3768|                    // possession but wrong across a DEATH — losing every level to a
+ 3778|                    reg.emplace_or_replace<game::RpgStats>(player, carriedRpg);
+ 3784|                    carriedRpg = *rsLive;

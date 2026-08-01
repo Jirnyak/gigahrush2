@@ -1,0 +1,127 @@
+=== OPEN section (first 80 lines after OPEN) ===
+## OPEN / next (priority)
+| Pri | ID | Item | Pathspec | Notes |
+|-----|----|------|----------|-------|
+| P1 | AIMEM | CLOSED 2026-07-31 — AiMemory floor-leave release GREEN | src/game/ai* + floor_stream | see CLOSED AIMEM |
+
+| P2 | TEX1 | CLOSED 2026-07-31 — 3 roughness ktx2 shipped; live load 6/6 | data/textures | see CLOSED TEX1 |
+| P2 | CNT1 | CLOSED 2026-07-31 — status+craft reference parity (no missing rows) | data/*.csv + tables | see CLOSED CNT1 |
+| P2 | PAR1 | CLOSED 2026-07-31 — both travel sites still call place_body_safely + ai_release | src/app/main.cpp read-only | see CLOSED PAR1; re-run after foreign main.cpp |
+
+| P3 | RPG1 | CLOSED 2026-07-31 — RpgStats survives elevator body-swap | src/game/elevator.cpp | see CLOSED RPG1; embody LOCKED |
+| P3 | POSRPG | CLOSED 2026-08-01 — voluntary possess carries RpgStats+kills+shots/hits | src/game/combat.* + main possess | see CLOSED POSRPG |
+| P3 | MELEEGRID | CLOSED 2026-08-01 — player_melee forwards grid (WallBrace soak) | src/game/combat.cpp + suite_behaviours §18 | see CLOSED MELEEGRID |
+| P3 | SAVSTAT | CLOSED 2026-08-01 — F5/F9 persist StatusSet (kSaveVersion 9) | save.h/cpp + main F5/F9 + suite_saveload | see CLOSED SAVSTAT |
+| P3 | MAGSHOT | **CLOSED 2026-08-01** live `--action mag` PROOF=GREEN (mag=7/shots=42/hits=13 across ride) | main.cpp harness | unit pin + live |
+
+| P3 | M4 | CLOSED peek — Milestone 4 already CLOSED (suite_props / world_test) | .agents/worker_m4* | no leftover game work |
+| P3 | SHOTLOG | CLOSED 2026-07-31 — [place] MOVE/REFUSE in place_body_at_cell | src/game/save.cpp | see CLOSED SHOTLOG |
+| P2 | PADIC | CLOSED 2026-07-31 — floor4 stress GREEN (AI+tex+shot) | main harness + src/game | see CLOSED PADIC; Zhirnyak owns mesher stripes |
+
+## LOCKED — do not touch
+- src/render/env_detail.* gpu_particle_pass.* gpu_light_grid.* GpuCullPass (foreign WIP)
+- shaders/**  (cube.frag.spv / cube_tex.frag.spv often dirty FOREIGN — never stage)
+- main.cpp propPlacer / light-grid sites (surgical save hunks only if needed)
+- .agents/** other lanes; root ORIGINAL_REQUEST.md if foreign
+- embody.cpp XP path
+- cube_pass.cpp, floor_gen.cpp, shots binaries unless pathspec-asked
+- force-push; git add -A
+- **Zhirnyak render lane:** stay off src/render/** (sub_mesh / cube_merge / cube_pass)
+
+## Safe zones
+- lane docs under .agents/worker_game_audit/**
+- src/game/** except embody if foreign-dirty (loot.cpp, combat.cpp, status* OK this cycle)
+- data/** content CSV
+- tests/suite_loottable.inl, suite
+
+=== Last CLOSED section ===
+## CLOSED 2026-08-01 MAGSHOT + setvbuf QoL
+
+### MAGSHOT — live PlayerRanged mag stamp across --ride
+- Harness: `main.cpp` `--action mag` under `--shot`
+  - Forces first single-pellet gun (magazine>=8, dmg>=20) + ammo into pool inventory
+  - Stamps `PlayerRanged{magCount=7, weapon=gun, shots=42, hits=13}` once
+  - Logs `[mag] FORCE`, `[mag] RIDE done=N ... ok=0|1` on each ride boundary,
+    and `[mag] FINAL` + `PROOF=GREEN|RED` at capture
+- Unit pin already owns pure body-swap (elevator FOR1/MAG1 / magCount==12);
+  this is the live HUD/path proof that the same component survives a real hop
+- No pin change (harness-only; no new CHECKs)
+
+### Live proof (Release gigahrush2.exe, cwd repo root)
+```
+[mag] FORCE gun=4 name=<gun> mag=7/30 shots=42 hits=13
+[mag] RIDE done=0 has=1 mag=7 weapon=4 shots=42 hits=13 ok=1
+[mag] RIDE done=1 has=1 mag=7 weapon=4 shots=42 hits=13 ok=1
+shot: saved -> shots/shot_mag.png (floor -8, 901 frames)
+[mag] FINAL has=1 mag=7 weapon=4 shots=42 hits=13 rideDone=1
+[mag] PROOF=GREEN
+```
+Command: `gigahrush2.exe --shot shots/shot_mag.png --frames 900 --ride 1 --action mag`
+(rc=0, ~31s, png ~2.7 MiB)
+
+### setvbuf QoL
+- `tests/game_test.cpp` `main()`: `setvbuf(stdout/
+
+=== progress last 60 lines ===
+
+## Cycle report (2026-07-31 ~10:10) — CORP1 + FEUD1 CLOSED
+цикл CORP1/FEUD1 | closed: corpse interact no item-loss; loottable asserts staged not floor;
+feud HP floor restored; unit GREEN 215499/0; CMake pin 215499; docs CLOSED |
+core pipeline already on main f4695b1; residual quality+pin+docs prior
+
+## Cycle report (2026-07-31 ~01:24) — FOR1 CLOSED
+цикл FOR1/MAG1 | closed: mag+melee survive elevator body-swap; unit was 213917/0 |
+pin superseded by CORP1 pin 215499 this cycle
+
+## Cycle report (2026-07-30 ~22:20) — SAV1
+цикл SAV1 | closed: --action save|load harness, two-phase F9 gameplay PROOF=GREEN floor-14
+
+## Architect answers (STATUS close)
+- **Least confident:** SporeHaze gate `gate != 0`; WEB only on playerEntity hit.
+- **Biggest missing:** AIMEM floor-leave; TEX1; CNT1. (CARVE CLOSED)
+- **Don't realize:** mults stack (zh×web); Slowed CAP + StatusSet coexist.
+- **Implemented-not-integrated:** combat→carve; AiMemory floor-leave release.
+- **Next execute:** commit pathspec → pull --rebase → push → CARVE (off render).
+
+## Cycle AIMEM 2026-07-31 (game/app domain — parallel to Zhirnyak padic/render)
+
+**Domain split:** Zhirnyak owns `src/render/**` + padic + door seed + `--floor`. This agent owns game/app AI/combat/status/corps wiring. No cross-touch.
+
+**Done:**
+- `game::AiMemory aiMem` owned in main (no global); `aiCfg.memory = true`
+- `ai_step(..., &aiMem)` every sim tick; periodic `[aimem] STEP` stderr (seen/replan/rows/writes/coal)
+- `ai_release` on: keyboard `do_ride` leave, `--shot` travel leave, `FloorStreamer::unload` before fold_back
+- Proof harness `shots/_run_aimem_proof.py`: 900 frames `--ride 1`
+- **PROOF=GREEN** exit=0 max_seen=419 STEP=37 LEAVE=1 RELEASE=1 brains attached after async nav bake; mem_rows=4096 writes>=2 coal>=8 PNG ok
+- Note: released=0 on leave is correct when brains never held MotionOwner::Ai (own_ai=0); contract still fires; memory column survives floor fold via NpcId
+
+**Files:** src/app/main.cpp, src/game/floor_stream.cpp, shots/_run_aimem_proof.py, BACKLOG, progress
+
+**Not touched:** src/render/**, shaders/**
+
+**Next (this agent, non-render):** TEX1 missing ktx2 roughness (logged in aimem stderr), CNT1 status.csv thin, scan unintegrated game systems; step-assist is physics — coordinate if needed. Zhirnyak continues padic tails (RAM sandwich, step 0.25, door tick load).
+
+## 2026-08-01 QKILL verify
+- Wire present in HEAD 3e3f18f main.cpp NpcDied drain: quest_on_kill + quest_on_giver_died next to contract hooks.
+- API+unit tests already in quest.cpp / suite_quest.inl; OPEN backlog empty.
+- gigahrush2 Debug+Release build OK after verify.
+- CMake pin remains 219716 checks, 0 failures.
+
+## 2026-08-01 MAGSHOT + setvbuf
+
+- Shipped optional live harness `--action mag`: stamps distinctive PlayerRanged
+  (mag=7, shots=42, hits=13) + gun/ammo; logs FORCE/RIDE/FINAL; PROOF=GREEN after
+  `--ride 1` hop (floor -8, 901 frames). Elevator MAG1 unit pin unchanged.
+- game_test main: unbuffered stdout/stderr via setvbuf (_IONBF) for redirected runs.
+- Files: src/app/main.cpp, tests/game_test.cpp, BACKLOG.md, progress.md
+- Proof:
+```
+[mag] FORCE gun=4 name=<gun> mag=7/30 shots=42 hits=13
+[mag] RIDE done=0 has=1 mag=7 weapon=4 shots=42 hits=13 ok=1
+[mag] RIDE done=1 has=1 mag=7 weapon=4 shots=42 hits=13 ok=1
+shot: saved -> shots/shot_mag.png (floor -8, 901 frames)
+[mag] FINAL has=1 mag=7 weapon=4 shots=42 hits=13 rideDone=1
+[mag] PROOF=GREEN
+```
+
+=== git status (tracked mods only) ===

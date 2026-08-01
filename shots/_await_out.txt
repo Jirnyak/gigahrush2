@@ -1,0 +1,24 @@
+await start running=True
+  still running size=165
+  still running size=992
+  still running size=1100
+  still running size=1268
+  still running size=1511
+  still running size=1711
+  still running size=3902
+  still running size=4357
+  still running size=12948
+  still running size=13373
+  still running size=13373
+  still running size=13428
+  still running size=13483
+  still running size=16325
+await end running=False
+Traceback (most recent call last):
+  File "C:\hades\gigahrush2\shots\_await_game_test.py", line 54, in <module>
+    print(text)
+    ~~~~~^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\encodings\cp1251.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\ufffd' in position 7867: character maps to <undefined>

@@ -1,0 +1,366 @@
+[vk] device: NVIDIA GeForce RTX 3060 Laptop GPU | api 1.3.280 | queues g=0 p=0 | validation=0
+[gpu-timer] on: 16 queries, period 1.000 ns/tick, 64 valid bits, 2-frame readback latency
+[vk-mem] light-point-buf: 0.01 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] light-grid-ssbo: 1.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[light-grid] initialized successfully (32x16x32 grid, max 256 lights)
+[vk-mem] albedo array: 101.38 MiB -> type 1 heap 0 (5996 MiB) BC7_SRGB_BLOCK 2048x2048 x19 layers x12 mips
+[vk-mem] albedo array: 101.38 MiB -> type 1 heap 0 (5996 MiB) BC7_UNORM_BLOCK 2048x2048 x19 layers x12 mips
+[vk-mem] albedo array: 101.38 MiB -> type 1 heap 0 (5996 MiB) BC7_UNORM_BLOCK 2048x2048 x19 layers x12 mips
+[tex] layer 10 <- data/textures/painted_metal_shutter.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 89.4 ms decode + 0.7 ms upload
+[tex] layer 10 <- data/textures/painted_metal_shutter_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 4.6 ms decode + 0.7 ms upload
+[tex] layer 10 <- data/textures/painted_metal_shutter_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 4.4 ms decode + 0.8 ms upload
+[tex] layer 11 <- data/textures/rubber_tiles.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 75.8 ms decode + 0.8 ms upload
+[tex] layer 11 <- data/textures/rubber_tiles_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 4.6 ms decode + 0.8 ms upload
+[tex] layer 11 <- data/textures/rubber_tiles_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 4.1 ms decode + 0.7 ms upload
+[tex] layer 12 <- data/textures/factory_wall.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 78.6 ms decode + 0.8 ms upload
+[tex] layer 12 <- data/textures/factory_wall_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 4.5 ms decode + 0.7 ms upload
+[tex] layer 12 <- data/textures/factory_wall_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 4.9 ms decode + 0.7 ms upload
+[tex] layer 13 <- data/textures/metal_grate_rusty.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 80.4 ms decode + 0.8 ms upload
+[tex] layer 13 <- data/textures/metal_grate_rusty_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 4.6 ms decode + 0.7 ms upload
+[tex] layer 13 <- data/textures/metal_grate_rusty_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 4.2 ms decode + 0.8 ms upload
+[tex] layer 14 <- data/textures/rusty_metal_03.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 80.3 ms decode + 0.8 ms upload
+[tex] layer 14 <- data/textures/rusty_metal_03_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 4.6 ms decode + 0.7 ms upload
+[tex] layer 14 <- data/textures/rusty_metal_03_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 5.3 ms decode + 0.7 ms upload
+[tex] layer 15 <- data/textures/rusty_corrugated_iron.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 70.8 ms decode + 0.8 ms upload
+[tex] layer 15 <- data/textures/rusty_corrugated_iron_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 4.3 ms decode + 0.8 ms upload
+[tex] layer 15 <- data/textures/rusty_corrugated_iron_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 4.0 ms decode + 0.7 ms upload
+[cube] albedo: 6/6 materials (mask 0xfc00), normal: 6/6 (mask 0xfc00), roughness: 6/6 (mask 0xfc00)
+[vk-mem] voxel-mirror masks: 128.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] voxel-mirror types: 4.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] voxel-mirror page-index: 8.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] voxel-mirror page-pool: 64.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] voxel-mirror class: 2.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] voxel-mirror fluid: 8.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] voxel-mirror stain-index: 8.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] voxel-mirror stain-pool: 32.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] voxel-mirror staging: 12.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] voxel-mirror staging: 12.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] raymarch ubo: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] raymarch ubo: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[raymarch] world pass up (textured)
+[vk-mem] device-local buffer: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] host-visible buffer: 2.25 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] host-visible buffer: 2.25 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[prop] shape 0: 100 verts, 192 indices
+[vk-mem] prop-vertex: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 1: 56 verts, 102 indices
+[vk-mem] prop-vertex: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 2: 264 verts, 396 indices
+[vk-mem] prop-vertex: 0.01 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 3: 172 verts, 360 indices
+[vk-mem] prop-vertex: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 4: 18 verts, 24 indices
+[vk-mem] prop-vertex: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 5: 64 verts, 120 indices
+[vk-mem] prop-vertex: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 6: 256 verts, 384 indices
+[vk-mem] prop-vertex: 0.01 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 7: 116 verts, 210 indices
+[vk-mem] prop-vertex: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 8: 650 verts, 984 indices
+[vk-mem] prop-vertex: 0.01 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 9: 288 verts, 432 indices
+[vk-mem] prop-vertex: 0.01 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 10: 136 verts, 204 indices
+[vk-mem] prop-vertex: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 11: 28 verts, 42 indices
+[vk-mem] prop-vertex: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 12: 24 verts, 36 indices
+[vk-mem] prop-vertex: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 13: 96 verts, 144 indices
+[vk-mem] prop-vertex: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 14: 24 verts, 36 indices
+[vk-mem] prop-vertex: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 15: 72 verts, 108 indices
+[vk-mem] prop-vertex: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 16: 28 verts, 42 indices
+[vk-mem] prop-vertex: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 17: 28 verts, 42 indices
+[vk-mem] prop-vertex: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 18: 40 verts, 60 indices
+[vk-mem] prop-vertex: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 19: 28 verts, 42 indices
+[vk-mem] prop-vertex: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 20: 208 verts, 312 indices
+[vk-mem] prop-vertex: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 21: 110 verts, 180 indices
+[vk-mem] prop-vertex: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 22: 924 verts, 1416 indices
+[vk-mem] prop-vertex: 0.02 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.01 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 23: 130 verts, 180 indices
+[vk-mem] prop-vertex: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 24: 868 verts, 1368 indices
+[vk-mem] prop-vertex: 0.02 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.01 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 25: 176 verts, 264 indices
+[vk-mem] prop-vertex: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 26: 88 verts, 132 indices
+[vk-mem] prop-vertex: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 27: 36 verts, 72 indices
+[vk-mem] prop-vertex: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[prop] shape 28: 68 verts, 114 indices
+[vk-mem] prop-vertex: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-index: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] prop-inst-s0-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s0-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s0-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s0-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s0-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s0-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s1-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s1-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s1-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s1-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s1-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s1-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s2-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s2-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s2-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s2-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s2-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s2-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s3-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s3-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s3-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s3-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s3-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s3-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s4-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s4-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s4-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s4-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s4-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s4-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s5-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s5-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s5-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s5-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s5-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s5-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s6-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s6-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s6-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s6-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s6-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s6-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s7-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s7-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s7-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s7-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s7-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s7-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s8-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s8-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s8-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s8-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s8-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s8-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s9-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s9-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s9-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s9-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s9-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s9-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s10-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s10-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s10-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s10-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s10-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s10-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s11-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s11-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s11-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s11-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s11-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s11-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s12-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s12-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s12-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s12-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s12-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s12-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s13-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s13-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s13-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s13-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s13-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s13-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s14-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s14-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s14-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s14-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s14-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s14-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s15-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s15-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s15-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s15-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s15-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s15-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s16-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s16-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s16-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s16-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s16-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s16-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s17-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s17-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s17-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s17-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s17-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s17-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s18-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s18-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s18-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s18-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s18-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s18-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s19-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s19-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s19-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s19-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s19-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s19-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s20-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s20-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s20-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s20-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s20-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s20-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s21-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s21-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s21-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s21-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s21-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s21-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s22-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s22-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s22-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s22-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s22-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s22-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s23-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s23-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s23-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s23-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s23-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s23-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s24-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s24-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s24-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s24-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s24-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s24-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s25-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s25-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s25-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s25-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s25-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s25-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s26-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s26-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s26-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s26-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s26-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s26-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s27-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s27-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s27-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s27-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s27-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s27-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s28-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s28-f0: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s28-f0: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-inst-s28-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cull-s28-f1: 0.12 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[vk-mem] prop-cmd-s28-f1: 0.00 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[prop] pass ready: 29 shapes, 2 frames in flight
+[vk-mem] particle-state: 0.62 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] particle-verts: 3.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] particle-draw-cmd: 0.00 MiB -> type 1 heap 0 (5996 MiB) DEVICE_LOCAL
+[vk-mem] particle-emit-ring: 0.03 MiB -> type 3 heap 1 (16246 MiB) HOST_VISIBLE HOST_COHERENT
+[particle] buffers ok: state=640.0 KiB verts=3072.0 KiB
+[particle] compute pipeline ready
+[particle] graphics pipeline ready
+[particle] init complete: 8192 slots
+[cull] pass ready (frustum & distance culling pipeline ok)
+[pop] seeded 1940 cold records across 11 registered floors
+[aimem] STEP tick=0 layer=1 seen=419 replan=419 own_ai=0 own_wander=419 recall=419 filed=0 fled=0 rows=0 writes=0 coal=0 evict=0 bytes=0
+[mag] FORCE gun=4 name=Калашников mag=7/30 shots=42 hits=13
+[mag] RIDE done=0 has=1 mag=7 weapon=4 shots=42 hits=13 ok=1
+[aimem] STEP tick=60 layer=1 seen=419 replan=0 own_ai=0 own_wander=419 recall=0 filed=0 fled=0 rows=0 writes=0 coal=0 evict=0 bytes=0
+[aimem] STEP tick=120 layer=1 seen=419 replan=0 own_ai=0 own_wander=419 recall=0 filed=0 fled=0 rows=0 writes=0 coal=0 evict=0 bytes=0
+[aimem] STEP tick=180 layer=1 seen=419 replan=0 own_ai=0 own_wander=419 recall=0 filed=0 fled=0 rows=0 writes=0 coal=0 evict=0 bytes=0
+[aimem] STEP tick=240 layer=1 seen=419 replan=2 own_ai=0 own_wander=419 recall=2 filed=0 fled=0 rows=0 writes=0 coal=0 evict=0 bytes=0
+[macro] tick=1 day=7.0 living=1940 births=0 deaths=0 blocked=0 depart=1 arrive=0 transit=1 reserve=1046636
+[aimem] STEP tick=300 layer=1 seen=419 replan=3 own_ai=0 own_wander=419 recall=3 filed=0 fled=0 rows=0 writes=0 coal=0 evict=0 bytes=0
+[aimem] STEP tick=360 layer=1 seen=419 replan=0 own_ai=0 own_wander=419 recall=0 filed=0 fled=0 rows=0 writes=0 coal=0 evict=0 bytes=0
+[aimem] STEP tick=420 layer=1 seen=419 replan=6 own_ai=0 own_wander=419 recall=6 filed=0 fled=0 rows=4096 writes=2 coal=0 evict=0 bytes=262144
+[aimem] STEP tick=480 layer=1 seen=419 replan=2 own_ai=0 own_wander=419 recall=2 filed=0 fled=0 rows=4096 writes=2 coal=1 evict=0 bytes=262144
+[macro] tick=2 day=14.0 living=1940 births=2 deaths=2 blocked=0 depart=1 arrive=0 transit=2 reserve=1046636
+[nav] bake coarse 2193 ms | fine 2321 ms | 536 agents wandering | 0 AI brains attached (async, off the main thread)
+[aimem] STEP tick=540 layer=1 seen=419 replan=2 own_ai=0 own_wander=419 recall=2 filed=0 fled=0 rows=4096 writes=2 coal=3 evict=0 bytes=262144
+[aimem] STEP tick=600 layer=1 seen=419 replan=4 own_ai=0 own_wander=419 recall=4 filed=0 fled=0 rows=4096 writes=2 coal=4 evict=0 bytes=262144
+[aimem] STEP tick=660 layer=1 seen=419 replan=5 own_ai=0 own_wander=419 recall=5 filed=0 fled=0 rows=4096 writes=2 coal=4 evict=0 bytes=262144
+[aimem] STEP tick=720 layer=1 seen=419 replan=2 own_ai=0 own_wander=419 recall=2 filed=0 fled=0 rows=4096 writes=3 coal=4 evict=0 bytes=262144
+[macro] tick=3 day=21.0 living=1940 births=1 deaths=1 blocked=0 depart=1 arrive=0 transit=3 reserve=1046636
+[aimem] STEP tick=780 layer=1 seen=419 replan=4 own_ai=0 own_wander=419 recall=4 filed=0 fled=0 rows=4096 writes=3 coal=4 evict=0 bytes=262144
+[aimem] STEP tick=840 layer=1 seen=419 replan=6 own_ai=0 own_wander=419 recall=6 filed=0 fled=0 rows=4096 writes=3 coal=4 evict=0 bytes=262144
+[aimem] LEAVE floor=0 layer=1 released=0 mem_rows=4096
+[aimem] RELEASE floor=0 layer=1 bodies=420 released=0
+[mag] RIDE done=1 has=1 mag=7 weapon=4 shots=42 hits=13 ok=1
+[aimem] STEP tick=900 layer=0 seen=0 replan=0 own_ai=0 own_wander=0 recall=0 filed=0 fled=0 rows=4096 writes=4 coal=4 evict=0 bytes=262144
+[aimem] STEP tick=960 layer=0 seen=0 replan=0 own_ai=0 own_wander=0 recall=0 filed=0 fled=0 rows=4096 writes=4 coal=4 evict=0 bytes=262144
+[macro] tick=4 day=28.0 living=1940 births=0 deaths=0 blocked=0 depart=0 arrive=1 transit=2 reserve=1046636
+[aimem] STEP tick=1020 layer=0 seen=0 replan=0 own_ai=0 own_wander=0 recall=0 filed=0 fled=0 rows=4096 writes=4 coal=4 evict=0 bytes=262144
+[aimem] STEP tick=1080 layer=0 seen=0 replan=0 own_ai=0 own_wander=0 recall=0 filed=0 fled=0 rows=4096 writes=4 coal=4 evict=0 bytes=262144
+[aimem] STEP tick=1140 layer=0 seen=0 replan=0 own_ai=0 own_wander=0 recall=0 filed=0 fled=0 rows=4096 writes=4 coal=4 evict=0 bytes=262144
+[aimem] STEP tick=1200 layer=0 seen=0 replan=0 own_ai=0 own_wander=0 recall=0 filed=0 fled=0 rows=4096 writes=4 coal=4 evict=0 bytes=262144
+[macro] tick=5 day=35.0 living=1940 births=0 deaths=0 blocked=0 depart=1 arrive=2 transit=1 reserve=1046636
+[aimem] STEP tick=1260 layer=0 seen=0 replan=0 own_ai=0 own_wander=0 recall=0 filed=0 fled=0 rows=4096 writes=4 coal=4 evict=0 bytes=262144
+[aimem] STEP tick=1320 layer=0 seen=0 replan=0 own_ai=0 own_wander=0 recall=0 filed=0 fled=0 rows=4096 writes=4 coal=4 evict=0 bytes=262144
+[aimem] STEP tick=1380 layer=0 seen=0 replan=0 own_ai=0 own_wander=0 recall=0 filed=0 fled=0 rows=4096 writes=4 coal=4 evict=0 bytes=262144
+[aimem] STEP tick=1440 layer=0 seen=0 replan=0 own_ai=0 own_wander=0 recall=0 filed=0 fled=0 rows=4096 writes=4 coal=4 evict=0 bytes=262144
+[nav] bake coarse 2697 ms | fine 2415 ms | 458 agents wandering | 40 AI brains attached (async, off the main thread)
+[macro] tick=6 day=42.0 living=1940 births=1 deaths=1 blocked=0 depart=0 arrive=1 transit=0 reserve=1046636
+[aimem] STEP tick=1500 layer=0 seen=40 replan=0 own_ai=0 own_wander=40 recall=0 filed=0 fled=0 rows=4096 writes=4 coal=4 evict=0 bytes=262144
+[aimem] STEP tick=1560 layer=0 seen=40 replan=0 own_ai=0 own_wander=40 recall=0 filed=0 fled=0 rows=4096 writes=4 coal=4 evict=0 bytes=262144
+[aimem] STEP tick=1620 layer=0 seen=40 replan=0 own_ai=0 own_wander=40 recall=0 filed=0 fled=0 rows=4096 writes=4 coal=4 evict=0 bytes=262144
+[aimem] STEP tick=1680 layer=0 seen=40 replan=1 own_ai=0 own_wander=40 recall=1 filed=0 fled=0 rows=4096 writes=4 coal=4 evict=0 bytes=262144
+[aimem] STEP tick=1740 layer=0 seen=40 replan=0 own_ai=0 own_wander=40 recall=0 filed=0 fled=0 rows=4096 writes=4 coal=4 evict=0 bytes=262144
+[macro] tick=7 day=49.0 living=1940 births=1 deaths=1 blocked=0 depart=0 arrive=0 transit=0 reserve=1046636
+[aimem] STEP tick=1800 layer=0 seen=40 replan=0 own_ai=0 own_wander=40 recall=0 filed=0 fled=0 rows=4096 writes=4 coal=4 evict=0 bytes=262144
+[aimem] STEP tick=1860 layer=0 seen=40 replan=0 own_ai=0 own_wander=40 recall=0 filed=0 fled=0 rows=4096 writes=4 coal=4 evict=0 bytes=262144
+shot: saved -> C:\hades\gigahrush2\shots\shot_mag.png (floor -8, 901 frames)
+[mag] FINAL has=1 mag=7 weapon=4 shots=42 hits=13 rideDone=1
+[mag] PROOF=GREEN
+gpu-ms: world 4.306 bodies 1.240 hud 0.017 frame 6.267  (bodies 351)
+gpu-ms-peak: world 4.348 bodies 1.502 hud 0.018 frame 6.456  (dropped 0)

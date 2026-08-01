@@ -1,0 +1,171 @@
+=== combat.h includes / PlayerRanged / ranged ===
+32: #include <cstddef>
+33: #include <cstdint>
+35: #include "ecs/components.h"
+36: #include "ecs/registry.h"
+37: #include "game/event_bus.h"
+38: #include "game/status.h"
+39: #include "game/inventory.h"
+40: #include "game/item_table.h"
+41: #include <unordered_set>
+43: #include "game/noise.h"          // NoiseField, for the gunshot and the body fall
+44: #include "game/ranged_table.h"   // ItemId, for the equipped-loadout helpers
+45: #include "game/npc_pool.h"
+46: #include "game/rpg.h"      // RpgStats (POSRPG transfer)
+47: #include "world/level_stack.h"
+48: #include "world/macro_grid.h"
+49: #include "world/materials.h"
+202:     // >0 while a ranged shot is being telegraphed. The windup is the whole reason
+203:     // ranged monsters are fair: you get 0.48-1.25 s of warning, per kind, and
+228: // iterating a view that includes `Slowed`, and erasing the component there is the
+268:     // raw u8 `MobDef::projType` is so this header does not have to include the mob
+282:     // Same defect, same fix, one field over: `RangedDef::channel` was write-only.
+283:     // The column exists in [ranged_table.h], the generator fills it from
+284:     // data/weapons_ranged.csv, and a search across src/ for a READER found NOTHING —
+294:     // sets `damageType` on zero physical weapons ([ranged_table.h] records this), so a
+321: struct PlayerRanged {
+343: // and cumulative shots/hits on PlayerRanged are wiped on first fire.
+348: //   * PlayerRanged shots/hits: MOVE into a lazy component on to; mag/weapon/
+481: // — melee if it is in reach, or a telegraphed shot if the kind is ranged and the
+484: // One function rather than a melee one and a ranged one, deliberately. The
+522: // without that a ranged hunter would telegraph, fire, burn its cooldown and never
+523: // land anything, because every ranged kind's minimum shot range starts INSIDE
+526: // Gravity is what makes a ranged monster miss: a shot fired level from chest height
+622: std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
+def in: C:\hades\gigahrush2\src\game\inventory.h
+def in: C:\hades\gigahrush2\src\game\noise.h
+ranged_for_item in HEADER: C:\hades\gigahrush2\src\game\ranged_table.h
+def in: C:\hades\gigahrush2\src\game\ranged_table.h
+exists inventory.h: True
+  inventory.h:8: #include <cstddef>
+  inventory.h:9: #include <cstdint>
+  inventory.h:19: struct ItemSlot {
+  inventory.h:26:     ItemSlot slots[kInvSlots]{};
+  inventory.h:28:     ItemSlot& at(int col, int row) {
+  inventory.h:31:     const ItemSlot& at(int col, int row) const {
+  inventory.h:42:         for (auto& s : slots) s = ItemSlot{};
+exists item_table.h: True
+  item_table.h:32: #include <array>
+  item_table.h:33: #include <cstddef>
+  item_table.h:34: #include <cstdint>
+  item_table.h:35: #include <type_traits>
+  item_table.h:37: #include "game/mob_table.h"  // RoomBit — items and mobs share the room taxonomy
+  item_table.h:41: // Item handle. **1-based**, because `ItemSlot::item == 0` already means "empty
+  item_table.h:46: inline constexpr std::size_t kItemCount = 446;
+  item_table.h:74: // combat.h; asserted in item_table.cpp, which includes both. Declared here rather
+exists ranged_table.h: True
+  ranged_table.h:38: #include <array>
+  ranged_table.h:39: #include <cstdint>
+  ranged_table.h:40: #include <type_traits>
+  ranged_table.h:42: #include "game/inventory.h"   // Inventory, for equipped_ranged
+  ranged_table.h:43: #include "game/item_table.h"
+  ranged_table.h:53: struct RangedDef {
+  ranged_table.h:69: static_assert(sizeof(RangedDef) == 16, "RangedDef must stay a tight 16-byte row");
+  ranged_table.h:70: static_assert(alignof(RangedDef) == 2);
+  ranged_table.h:71: static_assert(std::is_trivially_copyable_v<RangedDef>);
+  ranged_table.h:74: extern const std::array<RangedDef, kRangedCount> kRangedTable;
+exists weapon_table.h: True
+  weapon_table.h:15: #include <array>
+  weapon_table.h:16: #include <cstddef>
+  weapon_table.h:17: #include <cstdint>
+  weapon_table.h:18: #include <type_traits>
+  weapon_table.h:20: #include "game/item_table.h"
+  weapon_table.h:45: extern const std::array<std::uint8_t, kItemCount + 1> kMeleeByItem;
+
+=== mag branch start 136020 ===
+shotAction == "mag" && reg.valid(player)) {
+                        // MAGSHOT: live proof that PlayerRanged.magCount survives
+                        // elevator body-swap under --shot --ride. Unit pin owns the
+                        // pure seam (test_elevator FOR1/MAG1); this stamps a
+                        // distinctive partial mag + gun so the HUD gun line and
+                        // stderr can show the same count after each hop.
+                        static bool magForced = false;
+                        static int magLastRideLog = -1;
+                        static std::uint16_t magStamp = 7;
+                        static game::ItemId magGun = game::kInvalidItem;
+                        if (!magForced) {
+                            game::ItemId gun = game::kInvalidItem;
+                            for (game::ItemId i = 1; i <= game::kItemCount; ++i) {
+                                if (const game::RangedDef* d =
+                                        game::ranged_for_item(i)) {
+                                    if (d->pellets == 1 && d->magazine >= 8 &&
+                                        d->dmg >= 20) {
+                                        gun = i;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (gun == game::kInvalidItem) {
+                                std::fprintf(stderr, "[mag] FORCE FAIL no gun\n");
+                                magForced = true;
+                            } else if (const game::NpcRef* nr =
+                                           reg.try_get<game::NpcRef>(player)) {
+                                if (pool.valid(nr->id)) {
+                                    const game::RangedDef& def =
+                                        *game::ranged_for_item(gun);
+                                    game::Inventory& inv = pool.inventory(nr->id);
+                                    inv.slots[0] = game::ItemSlot{gun, 1};
+                                    inv.slots[1] = game::ItemSlot{def.ammo, 30};
+                                    game::PlayerRanged pr{};
+                                    pr.cooldownMs = 0;
+                                    pr.reloadMs = 0;
+                                    pr.magCount = magStamp;
+                                    pr.weapon = gun;
+                                    pr.shots = 42;
+                                    pr.hits = 13;
+                                    reg.emplace_or_replace<game::PlayerRanged>(
+                                        player, pr);
+                                    magGun = gun;
+                                    magForced = true;
+                                    std::fprintf(stderr,
+                                                 "[mag] FORCE gun=%u name=%s "
+                                                 "mag=%u/%u shots=%u hits=%u\n",
+                                                 static_cast<unsigned>(gun),
+                                                 game::item_name(gun),
+                                                 static_cast<unsigned>(pr.magCount),
+                                                 static_cast<unsigned>(def.magazine),
+                                                 pr.shots, pr.hits);
+                                }
+                            }
+                        }
+                        // Log once per completed ride (and once at force with done=0).
+                        if (magForced && shotRideDone != magLastRideLog) {
+                            magLastRideLog = shotRideDone;
+                            const game::PlayerRanged* pr =
+                                reg.try_get<game::PlayerRanged>(player);
+                            const unsigned mag =
+                                pr ? static_cast<unsigned>(pr->magCount) : 0u;
+                            const unsigned wpn =
+                                pr ? static_cast<unsigned>(pr->weapon) : 0u;
+                            const unsigned sh = pr ? pr->shots : 0u;
+                            const unsigned hi = pr ? pr->hits : 0u;
+                            const int ok =
+                                (pr && pr->magCount == magStamp &&
+                                 pr->weapon == magGun && pr->shots == 42u &&
+                                 pr->hits == 13u)
+                                    ? 1
+                                    : 0;
+                            std::fprintf(stderr,
+                                         "[mag] RIDE done=%d has=%d mag=%u "
+                                         "weapon=%u shots=%u hits=%u ok=%d\n",
+                                         shotRideDone, pr ? 1 : 0, mag, wpn, sh,
+                                         hi, ok);
+                        }
+                    } else if (shotAction == "atta
+
+=== proof context 292659 ===
+                     pr ? 1 : 0,
+                                     pr ? static_cast<unsigned>(pr->magCount) : 0u,
+                                     pr ? static_cast<unsigned>(pr->weapon) : 0u,
+                                     pr ? pr->shots : 0u, pr ? pr->hits : 0u,
+                                     shotRideDone);
+                        if (pr && pr->magCount == 7u && pr->shots == 42u &&
+                            pr->hits == 13u)
+                            std::fprintf(stderr, "[mag] PROOF=GREEN\n");
+                        else
+                            std::fprintf(stderr, "[mag] PROOF=RED\n");
+                    }
+                    if (renderer.timer.supported())
+                        std::fprintf(stderr,
+                                     "gpu-ms: world %.3f bodies %.3f hud %.3f "
+                            

@@ -1,0 +1,170 @@
+quest_step: 1
+quest_offer: 2
+quest_accept: 1
+quest_grant_item: 0
+quest_objective_text: 0
+quest_time_text: 0
+quest_offer_text: 1
+quest_line: 1
+quest_active_count: 1
+quest_eligible: 0
+quest_on_kill: 1
+quest_on_giver_died: 1
+contract_step: 2
+contract_on_kill: 1
+
+==== main quest_* call sites ====
+2084:                    game::quest_on_kill(quests, static_cast<std::uint8_t>(ev.b));
+2090:                    game::quest_on_giver_died(quests, ev.a);
+2208:                return (reqs & game::request_bit(r)) != 0;
+2315:                } else if (game::quest_valid(questOffer) &&
+2317:                           game::quest_accept(quests, pool, questOffer,
+3466:                        const game::QuestId qid = game::quest_offer(
+3468:                        if (game::quest_valid(qid) &&
+3469:                            game::quest_offer_text(qid, questOfferLine,
+3845:                            questPaid += game::quest_step(
+4360:                const int qActive = game::quest_active_count(quests);
+4367:                        if (game::quest_line(quests, qid, qline, sizeof(qline)))
+
+==== main contract_step sites ====
+1398:    //   DONE  Contract::giver        — an NpcHandle; contract_step polls handle_valid().
+3843:                            contractPaid += game::contract_step(
+
+==== contract step context ====
+1383:    nav::AsyncBake nav;
+1384:    game::NpcPool pool;
+1385:    pool.init();
+1386:    // SLOT RECYCLING IS DELIBERATELY NOT ARMED HERE, and the line is left in place
+1387:    // rather than omitted so the gate travels with it. Armed, a dead slot returns to an
+1388:    // intrusive free list and a birth stops being a one-way draw on a finite reserve:
+1389:    // measured in suite_npcpool.inl, 101,000 births cost 1,000 slots armed against
+1390:    // 101,000 unarmed, and over 250 macro ticks against a 60-slot reserve the population
+1391:    // holds at 3002 with 0 births refused instead of decaying to 2336 with 1197 refused.
+1392:    //
+1393:    // ARMED. A recycled id is a REUSED id, so every place that holds a bare NpcId ACROSS
+1394:    // TIME had to become generation-checked first. All of them now are, and the count is
+1395:    // written out because "fix one and declare victory" is how this would have shipped
+1396:    // broken — I made that mistake twice and was corrected twice:
+1397:    //   DONE  MacroSim::Journey::id  — stamps the departing generation, compares on landing.
+1398:    //   DONE  Contract::giver        — an NpcHandle; contract_step polls handle_valid().
+1399:    //                                  Measured A/B: with a bare id the job paid 700 rub to
+1400:    //                                  a newborn who never offered it and read Complete;
+1401:    //                                  with the handle it pays 0 and Fails.
+1402:    //   DONE  QuestProgress::giver   — the identical defect, same fix, quest.cpp now polls
+1403:    //                                  handle_valid(p.giver).
+1404:    //   DONE  Relationship::target   — the generation went into the dead `pad` field, so
+1405:    //                                  rel_ (128 B/row, 128.0 MiB at capacity) gained
+1406:    //                                  nothing. social_edge_target() returns kInvalidNpc for
+1407:    //                                  a stale edge, so the line callers already wrote for
+1408:    //                                  empty slots makes staleness safe by construction.
+1409:    //   DONE  FloorModule::candidate — an NpcHandle in the same 32 bits (a 20-bit id leaves
+1410:    //                                  room for the 12-bit generation). A stale designate
+1411:    //                                  RE-DESIGNATES from the floor's live roster instead of
+1412:    //                                  handing the camera to whoever inherited the slot.
+1413:    //   SAFE  NpcRef::id — the sixth store [npc_pool.h] names, and the ONE that needed no
+1414:    //                      change. Its lifetime is COUPLED, not merely short: the macro
+1415:    //                      demographic sweep skips `pool.embodied(id)` before it can reach
+1416:    //                      either kill() (macro_sim.cpp), so a macro death can never touch
+1417:    //                      an embodied body; and the only other pool.kill() caller anywhere
+---
+3828:                        }
+3829:                    // combat.h: "call after anything that changes the inventory". Crafting
+3830:                    // a better vest changes what equipped_armour resolves to, so skipping
+3831:                    // this would leave the body wearing the old one.
+3832:                    if (invChanged) game::sync_armour(reg, pool, player);
+3833:                    craftWanted = false;
+3834:                    scrapWanted = false;
+3835:                }
+3836:                // Contracts advance and pay AFTER the extraction step, so a Fetch
+3837:                // job completes at the pad — the same moment the loop's own payoff
+3838:                // lands, which is what makes the errand feel like part of the trip
+3839:                // rather than a parallel accounting system. [contract.h]
+3840:                if (reg.valid(player))
+3841:                    if (const auto* nrc = reg.try_get<game::NpcRef>(player))
+3842:                        if (pool.valid(nrc->id)) {
+3843:                            contractPaid += game::contract_step(
+3844:                                contracts, pool, pool.inventory(nrc->id), ledger);
+3845:                            questPaid += game::quest_step(
+3846:                                quests, pool, pool.inventory(nrc->id), ledger,
+3847:                                static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f));
+3848:                        }
+3849:                // Eating and drinking sit beside healing and AFTER pickup_step, so a
+3850:                // ration picked up this tick can be eaten this tick. Both refuse a
+3851:                // full bar, so a mistimed press costs nothing; both also fill
+3852:                // pendingPee / pendingPoo, which is the ONLY producer the pressure
+3853:                // metering has. [needs.h]
+3854:                //
+3855:                // hpCost is routed through apply_damage rather than dropped:
+3856:                // `apply_consumable` deliberately does NOT touch HP and reports the
+3857:                // cost for the caller to bill ([needs.h]), clamped so bad food
+3858:                // floors at 1 HP. Discarding it would make risky food free, and a
+3859:                // gamble with no downside is not a gamble.
+3860:                if (eatWanted || drinkWanted) {
+3861:                    game::ConsumeResult cr{};
+3862:                    if (eatWanted) {
+---
+
+==== quest_step docs ====
+181:static_assert(alignof(QuestDef) == 4);
+182:
+183:// Generated by tools/gen_quest_table.py. Row N is QuestId N+1.
+184:extern const std::array<QuestDef, kQuestCount> kQuestTable;
+185:
+186:// Russian display text, parallel to kQuestTable and kept out of `QuestDef` so the row
+187:// stays pointer-free and trivially serializable — same split as `kItemNames`.
+188:// `kQuestNames` is the short title, `kQuestBriefs` the sentence the giver says.
+189:extern const std::array<const char*, kQuestCount> kQuestNames;
+190:extern const std::array<const char*, kQuestCount> kQuestBriefs;
+191:
+192:inline bool quest_valid(QuestId id) {
+193:    return id != kInvalidQuest && static_cast<std::size_t>(id) <= kQuestCount;
+194:}
+195:inline const QuestDef& quest_def(QuestId id) {
+196:    return kQuestTable[static_cast<std::size_t>(id) - 1];
+197:}
+198:inline const char* quest_name(QuestId id) {
+199:    return kQuestNames[static_cast<std::size_t>(id) - 1];
+200:}
+201:inline const char* quest_brief(QuestId id) {
+202:    return kQuestBriefs[static_cast<std::size_t>(id) - 1];
+203:}
+204:
+205:// Per-row run state. 16 bytes, POD, no pointers.
+206:struct QuestProgress {
+207:    // Milliseconds left on the clock. Meaningful only while `state == Active` and only
+208:    // when the row's `limitMs != 0` — the DEF decides whether there is a deadline at
+209:    // all, so a zero here can never be mistaken for "already expired" by a load.
+210:    std::uint32_t remainingMs = 0;
+211:    std::int32_t progress = 0;
+212:    // Bound at accept and never rebound, so this names that person for the rest of the
+213:    // run — and it is a GENERATION-TAGGED HANDLE, which is what makes that sentence true
+214:    // rather than conditional on a pool policy.
+215:    //
+216:    // It used to be a bare `NpcId`, resting on [npc_pool.h] never-reclaim. That is the
+217:    // DEFAULT policy and not a property of the type: `set_recycling(true)` suspends it,
+218:    // and a recycled id is a REUSED id. The hole was silent rather than loud, exactly as
+219:    // it was for `Contract::giver` before the same migration: `quest_on_giver_died` fires
+220:    // only from the frame-top combat drain, so a giver killed by the MACRO sweep publishes
+221:    // no event, the slot goes to a newborn, and `quest_step`'s poll — then
+222:    // `!valid(id) || !alive(id)` — saw a living record at that index, kept the row, and
+223:    // paid an authored quest out to a stranger who never offered it. Which is the
+224:    // reference's own broken quest binding that contract.h opens by claiming this engine
+225:    // is immune to.
+226:    //
+227:    // `pool.handle_valid()` makes that unrepresentable: `kill()` bumps the generation
+228:    // whether or not the slot is reused, so one test answers "is this still the person I
+229:    // was holding?" for three distinct failures — an id past the high-water mark, a
+230:    // cleared alive bit, and a reclaimed slot. [tests/suite_quest.inl]
+231:    // `the_slot_is_recycled` is the witness. It closes ONE of the bare-NpcId stores
+232:    // [src/app/main.cpp] gates `set_recycling(true)` on — **not the last one**, and that
+233:    // gate's own list is the count of record, not this header. Do not read a single
+234:    // closed field as permission to arm recycling; open the gate and read it.
+235:    //
+
+==== HUD quest block ====
+1809:    // and the teleport REQUEST (client proposes, server disposes — the app
+4355:                                       "QUEST (E to take): %s", questOfferLine);
+4360:                const int qActive = game::quest_active_count(quests);
+4361:                if (qActive > 0) {
+4363:                    ImGui::Text("quests %d active | paid %d rub", qActive, questPaid);
+4367:                        if (game::quest_line(quests, qid, qline, sizeof(qline)))

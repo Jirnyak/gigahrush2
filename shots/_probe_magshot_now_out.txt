@@ -1,0 +1,64 @@
+lines=5125
+quest_on_kill=1
+quest_on_giver_died=1
+contract_on_kill=1
+actions=['wall', 'wall', 'rpgcmbt', 'rpgcmbt', 'attack', 'interact', 'corp', 'wall', 'carve', 'status', 'save', 'load', 'save']
+shotAction_count=25
+--- mag/PlayerRanged ---
+1688:// [[maybe_unused]]: superseded by PlayerRanged::shots (read straight from the
+1915:if (const game::PlayerRanged* pr = reg.try_get<game::PlayerRanged>(player)) {
+1920:runState.ranged = game::PlayerRanged{};
+3669:reg.emplace_or_replace<game::PlayerRanged>(
+4088:const auto* prs = reg.try_get<game::PlayerRanged>(player);
+4093:prs ? prs->magCount : 0, rd->magazine,
+--- shotAction blocks ---
+1191:std::string shotAction;
+1192:bool shotActionConsumed = false; // one-shot save/load; attack stays held
+1222:else if (a == "--action" && i + 1 < argc) { shotAction = argv[++i]; }
+2371:// shotAction=="wall" block only holds attackHeld + logs.
+2373:(shotAction == "wall" || shotAction == "rpgcmbt") &&
+2586:if (shotAction == "rpgcmbt" && reg.valid(player)) {
+2620:} else if (shotAction == "attack") {
+2622:} else if (shotAction == "interact") {
+2624:} else if (shotAction == "corp" && reg.valid(player) &&
+2652:if (corpseNear && !shotActionConsumed) {
+2657:shotActionConsumed = true;
+2717:} else if (shotAction == "wall" && reg.valid(player) &&
+2777:} else if (!shotActionConsumed && shotAction == "carve" &&
+2786:shotActionConsumed = true;
+2787:} else if (!shotActionConsumed && shotAction == "status" &&
+2809:shotActionConsumed = true;
+2810:} else if (!shotActionConsumed &&
+2811:(shotAction == "save" || shotAction == "load") &&
+2815:if (shotAction == "save") {
+2817:shotActionConsumed = true;
+2820:shotActionConsumed = true;
+setvbuf in game_test=False
+game_test main at 4158: int main() {
+  4158:int main() {
+  4159:    test_inventory();
+  4160:    test_pool_basics();
+  4161:    test_pool_death_keeps_slot();
+  4162:    test_relationships();
+  4163:    test_design_flag();
+  4164:    test_event_bus_transient();
+  4165:    test_event_bus_overflow();
+  4166:    test_event_bus_log();
+  4167:    test_attribute_block();
+  4168:    test_height_maps_to_body();
+  4169:    test_embody_and_foldback();
+  4170:    test_player_is_a_record();
+  4171:    test_population_seed();
+  4172:    test_floor_spec();
+pin=39348/39348 checks passed
+elevator hadRanged=3
+elevator magCount=1
+--- rpgcmbt context ---
+2373:(shotAction == "wall" || shotAction == "rpgcmbt") &&
+2586:if (shotAction == "rpgcmbt" && reg.valid(player)) {
+2587:// RPGCMBT-SHOT: force a loud sheet so scaled melee
+2589:static bool rpgcmbtSheet = false;
+2590:if (!rpgcmbtSheet) {
+2611:rpgcmbtSheet = true;
+2613:"[rpgcmbt] forced sheet "
+4098:// here so melee HUD shows RPG-scaled damage (RPGCMBT).

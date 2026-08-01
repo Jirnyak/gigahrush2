@@ -1,0 +1,57 @@
+OK added #include <algorithm>
+OK keybind k1
+OK keybind attr_str
+OK ConsoleRequest AttrStr
+OK cmd_attr
+OK main spend
+OK main agimv
+OK main rpgcmbt
+OK combat log
+OK suite_console attr
+OK suite_keybind attr_str
+HUD context:
+ prs->magCount : 0, rd->magazine,
+                                        prs ? prs->shots : 0, prs ? prs->hits : 0);
+                    }
+                    {
+                        std::uint16_t shownDmg = md->dmg;
+                        if (rs)
+                            shownDmg = static_cast<std::uint16_t>(
+                                std::max<std::int16_t>(
+                                    1, game::melee_damage(
+                                           *rs, wpn,
+                                           static_cast<std::int16_t>(md->dmg))));
+                        ImGui::Text("weapon: %s (%u dmg) | armour: %s",
+                                    wpn == game::kInvalidIt
+OK cmd_attr registered
+OK CMake pin replaced
+--- keybind suite command-link logic ---
+3|// The contract: bindings are ROWS (duplicate action refused, first wins — the
+4|// Console::add rule); dispatch is find_scancode over COMMAND rows only, so one
+5|// key can be a held axis and a pressed command at once; every default command
+18|    // Duplicate action: refused, first registration wins.
+22|    CHECK(t.find("probe") != nullptr);
+23|    CHECK(t.find("absent") == nullptr);
+24|    CHECK(t.find("probe")->scancode == 10);
+30|    CHECK(defaults.find("fly") != nullptr);
+31|    CHECK(defaults.find("menu") != nullptr);
+32|    CHECK(defaults.find("floor_up") != nullptr);
+33|    CHECK(defaults.find("jump") != nullptr);
+34|    CHECK(defaults.find("attr_str") != nullptr);
+35|    CHECK(defaults.find("attr_agi") != nullptr);
+36|    CHECK(defaults.find("attr_int") != nullptr);
+37|    CHECK(defaults.find("attr_str")->scancode == scan::k1);
+41|    // Every default binding's command must be a registered console row: the
+42|    // first word of each non-axis command resolves via Console::find. This is
+43|    // the cross-table weld — rename a console command and forget the binding,
+51|        if (!b.command[0]) continue; // held axis row, never dispatched
+54|        for (const char* p = b.command;
+58|        CHECK(con.find(name) != nullptr);
+65|    // Q is BOTH the fly-descend axis and the door command; dispatch must find
+66|    // the command row (axis rows are polled, not dispatched).
+70|    // W is only an axis row — no command to dispatch.
+74|    // The dual use above is by design, not a conflict; two COMMAND rows on one
+86|    CHECK(t.find("fly")->scancode == scan::kV);
+92|    CHECK(t.find("fly")->scancode == scan::kV); // untouched by the refusals
+111|    CHECK(b.find("fly")->scancode == scan::kV);
+112|    CHECK(b.find("jump")->scancode == scan::kLCtrl);

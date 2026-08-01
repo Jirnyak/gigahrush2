@@ -1,0 +1,16 @@
+OK src\game\keybind.h [keybind digits]
+OK src\game\keybind.cpp [keybind attr rows]
+OK src\game\console.h [ConsoleRequest Attr*]
+OK src\game\console.h [console.h comment]
+OK src/game/console.cpp [cmd_attr]
+OK main drain ATTR1
+OK main AGIMV
+OK main rpgcmbt shotAction
+OK main wall|rpgcmbt face/walk
+OK main HUD scaled dmg
+OK wrote main.cpp
+OK combat.cpp [rpgcmbt] log
+OK suite_console attr pins (+9 CHECKs)
+OK suite_keybind attr pins (+4 CHECKs)
+NEW_CHECKS_ESTIMATE console=9 keybind=4 total=13 -> pin 219422
+DONE patch

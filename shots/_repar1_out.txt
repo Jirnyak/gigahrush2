@@ -1,0 +1,199 @@
+main.cpp lines=5016 bytes=289705
+--- PBS (place_body_safely) n=3 ---
+  1985: game::place_body_safely(reg, stack.layer(nl), player);
+  4951: // Same place_body_safely as the keyboard ride path. Two travel
+  4954: game::place_body_safely(reg, stack.layer(nl), player);
+--- AIR (ai_release) n=4 ---
+  1714: // ai_init to attach AiBrain and ai_release to clear the token safely.
+  1910: game::ai_release(reg, leaveLayer);
+  2391: // `ai_init` attaches brains in finish_floor_nav; `ai_release` runs on floor
+  4879: game::ai_release(reg, leaveLayer);
+--- ST (playerStatus) n=33 ---
+  1736: game::StatusSet playerStatus{};
+  1865: runState.status = playerStatus;
+  2461: game::status_step(playerStatus, dtMs);
+  2463: float sm = game::status_move_mult_e3(playerStatus) / 1000.0f;
+  2464: if (game::status_is_rooted(playerStatus))
+  2478: game::status_active(playerStatus,
+  2480: game::status_active(playerStatus,
+  2482: game::status_active(playerStatus,
+  2484: game::status_active(playerStatus,
+  2486: game::status_active(playerStatus,
+  2488: game::status_active(playerStatus,
+  2496: game::status_move_mult_e3(playerStatus),
+  2497: game::status_aim_mult_e3(playerStatus),
+  2498: game::status_melee_mult_e3(playerStatus),
+  2499: game::status_is_rooted(playerStatus) ? 1 : 0,
+  2500: playerStatus.remainMs[static_cast<std::size_t>(
+  2502: playerStatus.remainMs[static_cast<std::size_t>(
+  2504: playerStatus.remainMs[static_cast<std::size_t>(
+  2726: game::status_apply(playerStatus,
+  2729: game::status_apply(playerStatus,
+  2736: game::status_move_mult_e3(playerStatus),
+  2737: game::status_is_rooted(playerStatus) ? 1 : 0,
+  2738: playerStatus.remainMs[static_cast<std::size_t>(
+  2740: playerStatus.remainMs[static_cast<std::size_t>(
+  2860: game::status_apply(playerStatus,
+  3245: &playerStatus, player, &combatCarves);
+  3599: playerStatus = runState.status;
+  3948: const std::uint16_t mv = game::status_move_mult_e3(playerStatus);
+  3949: const bool rooted = game::status_is_rooted(playerStatus);
+  3951: game::status_active(playerStatus, game::StatusId::SporeHaze) ||
+  3952: game::status_active(playerStatus, game::StatusId::ZhelemishSkin) ||
+  3953: game::status_active(playerStatus, game::StatusId::PaupsinaWeb)) {
+  3955: mv, game::status_aim_mult_e3(playerStatus),
+--- RS (runState.status) n=2 ---
+  1865: runState.status = playerStatus;
+  3599: playerStatus = runState.status;
+--- CARVE (combatCarves) n=8 ---
+  1693: game::CarveProposalQueue combatCarves;
+  3229: combatCarves.clear();
+  3236: &stack.layer(activeLayer).grid(), &combatCarves);
+  3245: &playerStatus, player, &combatCarves);
+  3249: if (!doors.frozen && combatCarves.count > 0) {
+  3251: for (std::uint8_t ci = 0; ci < combatCarves.count; ++ci) {
+  3252: const game::CarveProposal& pr = combatCarves.items[ci];
+  3289: combatCarves.clear();
+--- FLY (fly=false) n=0 ---
+--- FLY2 (fly = false) n=1 ---
+  2360: ctl->fly = false;
+--- save.h pins ---
+  61: #include "game/status.h"      // StatusSet (SAVSTAT v9)
+  106: // Version 9: live status effects travel too — StatusSet (remainMs/intensityE3/alt
+  107: // for all six authored statuses). F5 mid-haze must not wipe the timers on F9;
+  108: // a loaded body keeps the same move/aim/melee mults it saved under. [status.h]
+  110: inline constexpr std::uint32_t kSaveVersion = 9u;
+  158: BadVersion,          // a different kSaveVersion wrote it
+  239: inline constexpr std::size_t kStatusWire =
+  241: static_assert(kStatusWire == 42);
+  243: inline constexpr std::size_t kSaveFixedWire =
+  245: kCombatSaveWire + kStatusWire + kQuestLogWire;
+  270: return kSaveHeaderWire + kSaveFixedWire + kFactionWire +
+  406: // Version 9 / SAVSTAT: live status effects. Local `playerStatus` in main —
+  408: StatusSet status{};
+--- HUD mag / PlayerRanged ---
+  4005: ImGui::Text("gun: %s  %u x%u dmg  %u/%u mag  "
+  4008: prs ? prs->magCount : 0, rd->magazine,
+--- elevator ---
+  hadRanged=3
+  hadMelee=3
+  hadRpg=3
+  emplace_or_replace=4
+--- suite_saveload status ---
+  180: // Version 9 / SAVSTAT: non-default status timers so a dropped StatusSet
+  182: st.status.remainMs[0] = 12345u;
+  183: st.status.intensityE3[3] = 1500u;
+  184: st.status.alt[1] = 1u;
+  261: for (std::size_t i = 0; i < kStatusCount; ++i) {
+  262: CHECK(a.status.remainMs[i] == b.status.remainMs[i]);
+  263: CHECK(a.status.intensityE3[i] == b.status.intensityE3[i]);
+  264: CHECK(a.status.alt[i] == b.status.alt[i]);
+  291: static_assert(kStatusWire == 42);
+--- audit_unwired head ---
+# Audit - unwired game-lane features
+
+Date: 2026-07-31
+Lane: game audit only (no src/render, no dental-crm)
+Scope: features that EXIST in code but are NOT on the live main/combat gameplay path.
+
+## Top 3 (ranked)
+
+### 1. ATTR1 - spend_attr_point dead to gameplay
+
+Impact: High. Blast: Tiny. Invent: None.
+Impl: src/game/rpg.h:214, src/game/rpg.cpp:355, src/app/main.cpp:3834-3836 HUD tease, tests/suite_rpg.inl:323+
+Callers from main/combat: none.
+Not a gap: combat.cpp:205-218 award_xp levels + attrPoints.
+Next patch: main 1/2/3 keys -> spend_attr_point(*rs, Attr, &hp, &maxHp); HUD help.
+
+### 2. SAVRPG - F5/F9 save/load drops RpgStats (+ craft known-bits)
+
+Impact: High. Blast: Medium. Invent: None.
+Impl live: main.cpp:1676/3299/3686 carriedRpg; elevator.cpp:58-89 hadRpg; craft_write/read craft.h:400+/craft.cpp:360+; craft live main.cpp:1715/3552+
+Save gap: save.h PlayerSnapshot:330 and SaveState:352 have no RpgStats/craft; save_run_now main.cpp:1814-1843 skips them; save.cpp:364+ never visits craft_write.
+Next patch: bump kSaveVersion; embed RpgStats + craft blob; capture/restore in save_run_now + F9 load.
+
+### 3. AGIMV - agi_move_speed_mult_e3 unused on move
+
+Impact: Medium-high. Blast: Tiny. Invent: None.
+Impl: rpg.h:145 / rpg.cpp:220; suite_rpg.inl:77,98.
+Live move main.cpp:2396-2399: kPlayerWalkSpeed * needs.speedScale * status only - no AGI mult.
+Next patch: multiply by agi_move_speed_mult_e3(*rs)/1000.f when RpgStats present.
+
+## Candidate sweep
+
+- XP on kill: WIRED combat.cpp:205-218
+- level-up: WIRED inside award_xp
+- PlayerRanged mag body-swap: WIRED elevator.cpp:46-84; HUD :3865
+- inventory equip melee: WIRED auto best-in-bag
+- craft/scrap gameplay: WIRED; only persist dead
+- psi spend: DEFER needs.cpp:344 Psi not modelled
+- str_durability_wear_mult_e3: DEFER no wear tick
+- int_contract/xp_for_quest: lower pri flat pay
+
+## Execute order
+1. ATTR1  2. AGIMV  3. SAVRPG
+--- C:\hades\gigahrush2\.agents\worker_game_audit\ORIGINAL_REQUEST.md ---
+# ORIGINAL_REQUEST — worker_game_audit
+
+## User intent chain
+1. P2 loot-refill (opened crates refill on elevator return) — DONE in commit `702265d`.
+2. User: «ралтай дальше» — max effort on remaining game-audit defects.
+3. User: «хендофф пиши» / «хендофф пиши даун» — write proper engineering handoff NOW (not sentinel/orchestrator_7 prop swarm).
+
+## Session packet constraints
+- Done: `702265d` fix(game): capture/apply opened crates on `--shot` travel path
+- Files committed only: `src/app/main.cpp`, `tests/suite_audit.inl`, `tests/audit_test.cpp`, `CMakeLists.txt`
+- ctest `audit_findings`: `audit_test: 140 checks, 0 failures` (was 74)
+- Keyboard path already had capture/apply; shot path was the two-site trap — fixed
+- DO NOT TOUCH foreign dirty: `.agents/*` (other), `src/game/embody.cpp`, `src/render/prop_pass.cpp`, `shaders/prop.frag`
+- Shell: `git -C C:\hades\gigahrush2`; build: `tools\win\build.bat`
+- Sentinel handoff only tracks orchestrator_7 recovery — NOT game work
+- Next session MUST:
+  1. Write engineering handoff (this dir)
+  2. Continue max effort from BRIEFING/audit remaining defects without stomping other agents
+  3. Surgical Python/CRLF-safe edits only — no whole main.cpp rewrite
+
+## Lane identity
+- Agent dir: `.agents/worker_game_audit/`
+- Owns: game-audit findings, suite_audit pins, travel/crate/save seams in main.cpp (path-limited)
+- Does NOT own: prop_pass, prop_placer, prop.frag, suite_props, embody XP wiring, material chroma
+
+--- C:\hades\gigahrush2\ORIGINAL_REQUEST.md ---
+# Original User Request
+
+## Initial Request — 2026-07-30T08:57:41Z
+
+# Teamwork Project Prompt — GigaHrush2 Engine & Content Expansion
+
+GigaHrush2: High-performance Vulkan / C++23 engine expansion featuring GPU Compute volumetric light grid, GPU voxel destruction & particle debris cascade, procedural wire clutter & interactive props, and GPU Multi-Draw Indirect (MDI) frustum & occlusion culling.
+
+Working directory: `C:\hades\gigahrush2`
+Integrity mode: development
+
+## Requirements
+
+### R1. GPU Compute Volumetric Light Grid & Fog
+Implement a GPU compute pass (`shaders/light_grid.comp` / `src/render/gpu_light_grid.h/.cpp`) that updates a 3D light grid SSBO for local point/emissive lights (flickering lamps, emissive crystals, alarms). Raymarch light attenuation & fog density in `cube.frag`, `prop.frag`, and `particle.frag`.
+
+### R2. GPU Voxel Destruction & Debris Particle Cascade
+When a voxel cell/submask is destroyed or carved, trigger a GPU compute event that pushes debris particles directly into the `GpuParticlePass` ring buffer with realistic physical velocities and material-derived albedos (concrete dust, rust flakes, glass shards).
+
+### R3. Procedural Wire Clutter & Soviet Cyberpunk Interactive Props
+Expand `PropShape` and `EnvDetail` with procedural wire catenary curves (GPU ribbon meshes between walls), CRT monitors with animated noise shaders, working elevator switches, and illuminated warning signs.
+
+### R4. GPU Multi-Draw Indirect (MDI) & Frustum Culling
+Implement a compute culling pass (`shaders/cull.comp` / `src/render/gpu_cull_pass.h/.cpp`) that tests prop bounds against the view frustum and Hi-Z depth buffer, populating indirect draw command buffers for 0-CPU-overhead rendering.
+
+## Acceptance Criteria
+
+### Verification & Quality Bar
+- [ ] Shader compilation succeeds with `glslc` without errors or warnings.
+- [ ] C++23 codebase compiles cleanly under MSVC without warnings (`-W4 /permissive-`).
+- [ ] Executable `gigahrush2.exe` builds and links successfull
+--- possess + status seams ---
+  1679: std::uint32_t kills = 0;       // carried across possession
+  1680: // The character sheet, carried across possession for the same reason `kills`
+combat.h 351: void transfer_player_progression(Registry& reg, Entity from, Entity to);
+combat.h 592: StatusSet* playerStatus = nullptr,
+DONE repar1

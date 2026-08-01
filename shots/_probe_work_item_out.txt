@@ -1,0 +1,96 @@
+==== kSaveVersion ====
+h110:inline constexpr std::uint32_t kSaveVersion = 9u;
+h158:    BadVersion,          // a different kSaveVersion wrote it
+h201:    std::uint32_t questCount = 0;         // 48  kQuestCount       (weak)
+h202:    std::uint32_t questFingerprint = 0;   // 52  quest title hash  (strong)
+c15:#include "game/quest.h"       // QuestLog, quest_log_write, quest_log_read, kQuestLogWire
+c182:    ar.u32(h.questCount);
+c405:              "ContractBook is serialized; grow it and bump kSaveVersion in the same "
+c439:    quest_log_write(st.quests, body);
+c443:    h.version = kSaveVersion;
+c456:    h.questCount = static_cast<std::uint32_t>(kQuestCount);
+c487:    if (h.version != kSaveVersion) return fail(SaveError::BadVersion);
+c526:    if (h.questCount != static_cast<std::uint32_t>(kQuestCount))
+c577:        if (!quest_log_read(bytes + kSaveHeaderWire + pos,
+
+quest_offer_text main=1
+questOfferLine main=6
+1669:    game::QuestId questOffer = game::kInvalidQuest;
+1670:    game::NpcId questOfferGiver = game::kInvalidNpc;
+1671:    char questOfferLine[320] = {};
+2315:                } else if (game::quest_valid(questOffer) &&
+2316:                           questOfferGiver != game::kInvalidNpc &&
+2317:                           game::quest_accept(quests, pool, questOffer,
+2318:                                              questOfferGiver, currentFloor,
+2320:                    questOffer = game::kInvalidQuest;
+2321:                    questOfferGiver = game::kInvalidNpc;
+2322:                    questOfferLine[0] = 0;
+3466:                        const game::QuestId qid = game::quest_offer(
+3469:                            game::quest_offer_text(qid, questOfferLine,
+3470:                                                   sizeof(questOfferLine))) {
+3471:                            questOffer = qid;
+3472:                            questOfferGiver = sp;
+4353:                if (questOfferLine[0])
+4355:                                       "QUEST (E to take): %s", questOfferLine);
+
+==== floorstream suite ====
+suite_floorcatalog.inl lines=82 bytes=3759
+call test_npcpool_all: [(4224, 'test_npcpool_all')]
+call test_diffusion: [(4229, 'test_diffusion_all')]
+call test_floorstream: []
+call test_stream: [(4249, 'test_streamed_nav'), (4251, 'test_streamed_nav_cache'), (4253, 'test_stream_migration_reembodies')]
+call test_quest: [(4236, 'test_quest_all')]
+call test_save: [(4216, 'test_saveload_all')]
+
+Total test calls: 90
+After diffusion:
+  4229:test_diffusion_all
+  4230:test_loottable_all
+  4231:test_utilai_all
+  4232:test_navcache_all
+  4235:test_craft_all
+  4236:test_quest_all
+  4237:test_speech_all
+  4239:test_economy_all
+  4240:test_monster_all
+  4241:test_playercmd_all
+  4242:test_macrowire_all
+  4243:test_status_all
+  4244:test_rpg_all
+  4245:test_floorcatalog_all
+  4246:test_console_all
+  4247:test_keybind_all
+  4248:test_route_realfloor
+  4249:test_streamed_nav
+  4250:test_nav_cache_roundtrip
+  4251:test_streamed_nav_cache
+  4252:test_floor_bucket_index
+  4253:test_stream_migration_reembodies
+
+==== GT live ====
+out size=7431
+ count (was unbounded in seed)
+[test] suite_status: table and composition verified
+game_test: 219716 checks, 0 failures
+game_test: all checks passed. If ctest reports this target FAILED, the pinned count
+           in CMakeLists.txt no longer matches the total above. A RISING count with
+           zero failures means tests were ADDED, not that a guard broke: update the
+           PASS_REGULAR_EXPRESSION to the number above and say so in the commit.
+           A FALLING count is the case that matters - it means a suite stopped
+           running, which is exactly what this pin exists to catch.
+
+err size=8860
+tanding in water
+[monster] 0 kinds carry BOTH a wall pace and a water pace
+[monster] AiFlag::FoodBait 10 kinds vs authored bait list 14; disagree on 6 (1 flag-only, 5 list-only)
+[rpgcmbt] melee dmg=12 cd=242 str=20 agi=20 lvl=10 weapon=0
+[aimem] RELEASE floor=0 layer=1 bodies=420 released=0
+[aimem] RELEASE floor=0 layer=1 bodies=420 released=0
+[aimem] RELEASE floor=0 layer=1 bodies=420 released=0
+
+rc exists=True content=EXIT:0 
+
+HEAD 7d823c1
+quest_on_kill=1 quest_on_giver_died=1
+
+==== FIXME/TODO in src/game+app ====

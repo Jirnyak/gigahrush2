@@ -1,0 +1,51 @@
+3901|                        rs->level < game::kRpgLevelCap
+3903|                                  static_cast<std::uint8_t>(rs->level + 1))
+3906|                        ImGui::Text("LVL %u  XP %u / %u", rs->level, rs->xp, need);
+3908|                        ImGui::Text("LVL %u  (MAX)", rs->level);
+3910|                                rs->attr[0], rs->attr[1], rs->attr[2],
+3911|                                rs->attrPoints > 0 ? "   [+pts]" : "");
+3912|                    ImGui::Text("PSI %u / %u", rs->psi, game::max_psi(*rs));
+3935|                        const auto* prs = reg.try_get<game::PlayerRanged>(player);
+3940|                                        prs ? prs->magCount : 0, rd->magazine,
+3941|                                        prs ? prs->shots : 0, prs ? prs->hits : 0);
+3944|                        std::uint16_t shownDmg = md->dmg;
+3945|                        if (rs)
+3946|                            shownDmg = static_cast<std::uint16_t>(
+3948|                                    1, game::melee_damage(
+3949|                                           *rs, wpn,
+3951|                        ImGui::Text("weapon: %s (%u dmg) | armour: %s",
+3954|                                    shownDmg,
+3972|                // monsters are broken rather than like safety.
+3980|                                           "body: %s  (monsters ignore you)",
+---INCLUDES---
+22|#include <algorithm>
+65|#include "game/combat.h"
+67|#include "game/rpg.h"
+---PIN---
+469|    # `game_test: 134002 checks, 0 failures` - it read 132266 earlier the same day, before the
+496|        PASS_REGULAR_EXPRESSION "game_test: 219422 checks, 0 failures")
+---CONTEXT 800 chars before shownDmg---
+slots, not two
+                    // spellings of the same one.
+                    if (const game::ItemId g_ = game::equipped_ranged(inv)) {
+                        const game::RangedDef* rd = game::ranged_for_item(g_);
+                        const auto* prs = reg.try_get<game::PlayerRanged>(player);
+                        if (rd)
+                            ImGui::Text("gun: %s  %u x%u dmg  %u/%u mag  "
+                                        "%u shots %u hits",
+                                        game::item_name(g_), rd->dmg, rd->pellets,
+                                        prs ? prs->magCount : 0, rd->magazine,
+                                        prs ? prs->shots : 0, prs ? prs->hits : 0);
+                    }
+                    {
+                        std::uint16_t shownDmg = md->dmg;
+                        if (rs)
+                            shownDmg = static_cast<std::uint16_t>(
+                                std::max<std::int16_t>(
+                                    1, game::melee_damage(
+                                           *rs, wpn,
+                                           static_cast<std::int16_t>(md->dmg))));
+                        ImGui::Text("weapon: %s (%u dmg) | armour: %s",
+                                    wpn == game::kInvalidItem ? "fists"
+                                                              : game::item_name(wpn),
+ 

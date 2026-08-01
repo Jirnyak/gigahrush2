@@ -1,0 +1,289 @@
+=== TODO/FIXME/HACK in src/game ===
+noise.cpp:164: // 29 ProjType::Normal rows ([ranged_table.h] defers all 19 of those), so the
+vendor.cpp:67: // what a pack yields is not in ItemDef at all ([item_table.h], deferred), so there
+vendor.cpp:74: // can never enter a magazine: their consumers are the 19 deferred non-Normal
+wander.cpp:405: // body cannot climb a storey, and stairwell traversal is not wired.
+ai.h:33: //                        post-filter, not an owner. NOT wired in main.cpp today.
+ai.h:132: // separate decision [needs.h] explicitly defers. A crowd row is usually
+combat.h:496: // bloodbath this whole feature was deferred over.
+economy.h:30: //                      interned string ids [item_table.h] already defers. Recorded as
+floor_stream.h:96: // cache's key ([nav_cache.h]), and this is not one of them. So no `kXxxWire`
+hunt.h:3: // [combat.h] and [wander.h] both deferred this with the same sentence, and the
+hunt.h:98: // :457 between two runs of mine. Deferred rather than forced, because a phase-shifted
+hunt.h:120: //   * **Which is exactly the load spike the feature was deferred over.** 34 deaths
+item_table.h:15: // a column that silently rots. Explicitly deferred, with their reason:
+needs.h:322: // the only class present. What key 1 actually buys is DEFERRAL ? the key is repeatable
+needs.h:324: // unspent until the bag holds nothing else. Deferral is free on the pressure axis too:
+ranged_table.h:11: // architectural change. The other 19 (grenades, flamers, BFG, beams) are deferred
+ranged_table.h:18: // `ato41_atomic_flamer`, both `deletionBeam`), and both are in the deferred set. That
+samosbor.h:687: // that gets deferred. Bundled, it is:
+vendor.h:115: // `use_grant_id` / `use_grant_n` are among the columns item_table.h explicitly defers,
+wander.h:106: // step up a storey, and stairwell/elevator traversal is not wired yet. They
+count 20
+
+=== rpg.h key symbols ===
+  melee_damage: 1
+  spread: 2
+  agi_: 3
+  str_: 3
+  int_: 5
+  award_xp: 4
+  psi: 10
+  spend_attr: 1
+  agi_move: 1
+  agi_attack: 1
+  agi_ranged: 1
+  str_heavy: 1
+  int_: 5
+
+=== apply_damage call sites (joined) ===
+  apply_damage(Registry& reg, NpcPool& pool, Entity target, std::int16_t raw, DamageChannel ch, Entity source, const MacroGrid* grid)
+  apply_damage(reg, pool, s.target, s.raw, DamageChannel::Kinetic, s.mob, &grid)
+  apply_damage(reg, pool, hit.mob, hit.dmg, hit.ch, entt::null, &grid)
+  apply_damage(reg, pool, victim, h.dmg, ch, h.source, &grid)
+  apply_damage(reg, pool, h.other, h.dmg, ch, h.source, &grid)
+  apply_damage(reg, pool, best, swingDmg, DamageChannel::Kinetic, self, grid)
+
+=== _audit_unwired.md (first 80 lines) ===
+# Audit - unwired game-lane features
+
+Date: 2026-07-31
+Lane: game audit only (no src/render, no dental-crm)
+Scope: features that EXIST in code but are NOT on the live main/combat gameplay path.
+
+## Top 3 (ranked)
+
+### 1. ATTR1 - spend_attr_point dead to gameplay
+
+Impact: High. Blast: Tiny. Invent: None.
+Impl: src/game/rpg.h:214, src/game/rpg.cpp:355, src/app/main.cpp:3834-3836 HUD tease, tests/suite_rpg.inl:323+
+Callers from main/combat: none.
+Not a gap: combat.cpp:205-218 award_xp levels + attrPoints.
+Next patch: main 1/2/3 keys -> spend_attr_point(*rs, Attr, &hp, &maxHp); HUD help.
+
+### 2. SAVRPG - F5/F9 save/load drops RpgStats (+ craft known-bits)
+
+Impact: High. Blast: Medium. Invent: None.
+Impl live: main.cpp:1676/3299/3686 carriedRpg; elevator.cpp:58-89 hadRpg; craft_write/read craft.h:400+/craft.cpp:360+; craft live main.cpp:1715/3552+
+Save gap: save.h PlayerSnapshot:330 and SaveState:352 have no RpgStats/craft; save_run_now main.cpp:1814-1843 skips them; save.cpp:364+ never visits craft_write.
+Next patch: bump kSaveVersion; embed RpgStats + craft blob; capture/restore in save_run_now + F9 load.
+
+### 3. AGIMV - agi_move_speed_mult_e3 unused on move
+
+Impact: Medium-high. Blast: Tiny. Invent: None.
+Impl: rpg.h:145 / rpg.cpp:220; suite_rpg.inl:77,98.
+Live move main.cpp:2396-2399: kPlayerWalkSpeed * needs.speedScale * status only - no AGI mult.
+Next patch: multiply by agi_move_speed_mult_e3(*rs)/1000.f when RpgStats present.
+
+## Candidate sweep
+
+- XP on kill: WIRED combat.cpp:205-218
+- level-up: WIRED inside award_xp
+- PlayerRanged mag body-swap: WIRED elevator.cpp:46-84; HUD :3865
+- inventory equip melee: WIRED auto best-in-bag
+- craft/scrap gameplay: WIRED; only persist dead
+- psi spend: DEFER needs.cpp:344 Psi not modelled
+- str_durability_wear_mult_e3: DEFER no wear tick
+- int_contract/xp_for_quest: lower pri flat pay
+
+## Execute order
+1. ATTR1  2. AGIMV  3. SAVRPG
+
+=== death/possess transfer call sites ===
+combat.cpp:18: #include "game/rpg.h"      // RpgStats, xp_for_monster_kill, award_xp
+combat.cpp:158: std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
+combat.cpp:198: // can run several sim substeps, each calling finalize_deaths, while the bus
+combat.cpp:217: award_xp(*kr, gain, &pool.hp(kn->id), &pool.max_hp(kn->id));
+combat.cpp:219: award_xp(*kr, gain);
+combat.cpp:318: // discipline finalize_deaths, despawn_layer_mobs, loot_dead_mobs and
+combat.cpp:1325: void transfer_player_progression(Registry& reg, Entity from, Entity to) {
+main.cpp:1107: Entity possess_nearest_survivor(Registry& reg, game::NpcPool& pool, LayerId layer, const vec3& playerPos, float reachM) {
+main.cpp:1154: game::transfer_player_progression(reg, oldPlayer, chosen);
+main.cpp:1685: game::RpgStats carriedRpg = game::fresh_rpg(1);
+main.cpp:1848: runState.rpg = carriedRpg;
+main.cpp:2007: // Drain the bus BEFORE clearing it. `finalize_deaths` publishes NpcDied with
+main.cpp:2040: // `finalize_deaths` in the substep ? a frame can run several substeps, each
+main.cpp:2204: // STR immediately credits max-HP the same way award_xp does.
+main.cpp:2422: // kill and must precede finalize_deaths by a whole tick; behaviour
+main.cpp:3170: Entity newPlayer = possess_nearest_survivor(reg, pool, activeLayer, ppos, 8.0f);
+main.cpp:3175: // or a stale kill tally. transfer_player_progression
+main.cpp:3182: carriedRpg = *rs;
+main.cpp:3331: // them and still before finalize_deaths: a monster's blow lands
+main.cpp:3408: // fresh body would otherwise arrive at level 1. `finalize_deaths`
+main.cpp:3413: carriedRpg = *rs0;
+main.cpp:3418: deaths += game::finalize_deaths(reg, pool, bus, simTick,
+main.cpp:3574: carriedRpg = runState.rpg;
+main.cpp:3813: // stamps via transfer_player_progression). Death cannot call
+main.cpp:3815: // value saved off at the top of the death path (carriedRpg).
+main.cpp:3821: reg.emplace_or_replace<game::RpgStats>(player, carriedRpg);
+main.cpp:3824: // finalize_deaths above may have just awarded XP and levelled it
+main.cpp:3827: carriedRpg = *rsLive;
+
+=== player_ranged_step RPG bits ===
+
+=== tests mentioning deferred/skip/WIP ===
+suite_audit.inl:598: CHECK(contract_step(book, pool, inv, led) == 0);   // taken, not yet earned
+suite_audit.inl:784: // spawn-weight and no floorMask filter. `spawn_floor_mobs` skips any row with
+suite_behaviours.inl:248: // rows, so wander_init skips them and no velocity test can reach them.
+suite_behaviours.inl:452: CHECK(wander_init(reg, layer, 5u) == 4u);   // the viewer is skipped
+suite_diffusion.inl:33: // liveCells == openCells, which is the work count that proves nothing was skipped.
+suite_diffusion.inl:35: // and checks all six faces exactly, because a wrong neighbourhood in that skip would
+suite_diffusion.inl:718: { // ---- the zero-group skip must not blind the stencil at a run boundary ----
+suite_diffusion.inl:728: constexpr int kSkipProbes[][3] = {
+suite_diffusion.inl:737: for (const auto& p : kSkipProbes) {
+suite_diffusion.inl:752: // Source plus exactly six faces ? no more (the skip did not leak a seventh
+suite_diffusion.inl:831: // Every open cell above minLevel, so no run is skippable and the sweep does the
+suite_diffusion.inl:838: // becomes skippable part-way through the measurement.
+suite_diffusion.inl:848: // live, so not one run could be skipped and the figure below is full work. This
+suite_diffusion.inl:875: std::printf("  diffusion: SATURATED (%u live, nothing skippable) %.2f ms/sweep = "
+suite_doors.inl:43: static std::uint32_t pick_ground_door(const DoorSet& doors, std::uint32_t skipA,
+suite_doors.inl:44: std::uint32_t skipB, std::uint32_t skipC) {
+suite_doors.inl:47: if (i == skipA || i == skipB || i == skipC) continue;
+suite_economy.inl:132: // the stronger statement ? it cannot be reached-and-skipped.
+suite_eventsweb.inl:19: // The web half also uncovered a second, worse defect: `mob_attack_step` skipped any
+suite_eventsweb.inl:104: // them: the bus is wiped once per frame while the sim runs up to 8 steps.
+suite_eventsweb.inl:230: // skipped by `mob_attack_step`'s damage gate, exactly as PAUPSINA was.
+suite_faction2.inl:162: // ---- 3. nearest_faction_foe picks the right body, and skips the rest ------
+suite_faction2.inl:448: // A dead MOB (`a` == kInvalidNpc) is skipped before anything else is read.
+suite_fluidrooms.inl:197: // alone does not give: cube_pass skips any cell with an empty sub-mask, so a
+suite_fluidrooms.inl:228: // ride. Without the wipe in seed_floor_sumps the puddles on a re-entered floor
+suite_hunt.inl:9: // The floor under test is the composite the whole feature was deferred over, and it
+suite_keybind.inl:114: // Unknown actions, comments and garbage are skipped, never invented.
+suite_loottable.inl:9: // catalog pick skips it at every depth; it is not the ammunition of any gun in
+suite_loottable.inl:69: // A corpse in the window `loot_dead_mobs` walks: Dead + MobRef + Transform, not yet
+suite_macrowire.inl:101: // died, across 7.7 simulated years of macro time ? because step() skips embodied
+suite_monster.inl:392: // Asserted as a MEASURED ZERO rather than skipped. The day floor_gen seeds an open
+suite_monster.inl:464: // THE measured blocker. Not a skip and not a TODO: a number, in the log.
+suite_navcache.inl:295: void wipe_dir(const std::string& dir) {
+suite_navcache.inl:436: // reject it on length. Nothing in the tree writes one, so this is latent.
+suite_navcache.inl:669: wipe_dir(dir);
+suite_navcache.inl:821: wipe_dir(dir);
+suite_navcache.inl:975: wipe_dir(dir);
+suite_navcache.inl:1098: wipe_dir(dir);
+suite_navcache.inl:1241: // the hits bucket, so it is skipped: this counts REJECTION coverage.
+suite_needs.inl:604: // hand you one, because `drop_mob_loot` skips weight-0 rows ? while case C's shape
+suite_needs.inl:646: // RUB trash, and because the deferral is only ever deferral: the key is repeatable,
+suite_needs2.inl:19: //     permanently, at any dt and any elapsed time ? not merely "not yet".
+suite_needs2.inl:141: // The discarded points are gone, not deferred: relieving and then waiting out the
+suite_quest.inl:857: // it the row sits Active forever ? `quest_step` skips it on `want <= baseline`,
+suite_rpg.inl:25: // a level-up loop stall or skip.
+suite_rpg.inl:669: // Pre-armed: skip the gun-swap + reload branches so tick 0 fires.
+suite_samosbor.inl:250: // Idle -> Warning -> Active -> Aftermath -> Idle, no phase skipped.
+suite_samosbor2.inl:329: const FogTickReport skipped = samosbor_fog_tick_at(
+suite_samosbor2.inl:332: CHECK(!skipped.censused);
+suite_samosbor2.inl:333: CHECK(skipped.spawned == 0u);
+suite_samosborhud.inl:19: //     banner cannot go stale, cannot be missed by a skipped tick, and needs no latch in
+suite_saveload.inl:894: // Applying the same set twice is a no-op: already-opened crates are skipped, so an
+suite_saveload.inl:1206: // step, from a position physics had not yet accepted.
+suite_saveload.inl:1686: // scan skips that slot by construction, finds nothing, and the module designates
+suite_speech.inl:420: c.needs.food = kFoodWarnAt;  // exactly at the edge is NOT yet in the band
+suite_speech.inl:572: // A record with no embodied entity (brain dormant, or not yet embodied) gets
+suite_utilai.inl:667: // it ? otherwise the body would be skipped by wander AND written by both
+suite_utilai.inl:688: // body left holding the token would be skipped by wander forever and
+suite_utilai.inl:1487: //     would wipe what the person knows on every floor change. The AiBrain
+
+=== save wire fields (save.h) ===
+L58: #include "game/rpg.h"         // RpgStats
+L59: #include "game/craft.h"       // CraftingState, kCraftingWire, craft_write/read
+L60: #include "game/combat.h"      // PlayerRanged (SAVMAG v8)
+L74: inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
+L76: // Bump this whenever the wire layout changes in ANY way — a field added, a field
+L80: // Version 2: QuestLog added to the payload (quest_log_write / quest_log_read after the
+L81: // opened-container list). Version 1 saves are rejected; they predate quest persistence.
+L82: // Version 3 carried a carve-op log and version 4 an embedded active-floor snapshot;
+L91: // Version 6: THE MACRO WORLD travels too — the whole NpcPool table (verbatim flat
+L97: // Version 7: the character sheet and the crafting bank travel too — RpgStats
+L98: // (level/xp/attrs/psi) and CraftingState (known-recipe bits + material bank +
+L101: // Version 8: chambered firearm state and the cumulative kill tally travel too —
+L102: // PlayerRanged (mag/weapon/shots/hits + transient cooldowns) and melee kills.
+L103: // Ammo already debited into the magazine must not vanish on F9; kills already
+L105: inline constexpr std::uint32_t kSaveVersion = 8u;
+L153:     BadVersion,          // a different kSaveVersion wrote it
+L192:     // Version 2 additions (bytes 48-55). Placed at the end so a version-1 reader that
+L193:     // stops at byte 48 never tries to parse them. (Versions 3/4 briefly appended
+L198:     // Version 6 additions: byte lengths of the pool and macro-sim blobs that ride
+L209: inline constexpr std::size_t kSaveHeaderWire = 64;   // 48 v1; +8 v2 quests; +8 v6 pool/macro
+L217: // Version 7: RpgStats wire — field-by-field LE, NOT sizeof (pad_ is written so the
+L219: inline constexpr std::size_t kRpgWire = 4 + 2 + 1 + 1 + 3 + 1;  // 12
+L220: static_assert(kRpgWire == 12);
+L221: // kCraftingWire (93) is defined in craft.h next to craft_write/craft_read.
+L223: // Version 8 / SAVMAG: PlayerRanged field-by-field (NOT sizeof — host padding)
+L224: // + presence flag + cumulative melee kills. Cooldowns ride so a mid-reload F5
+L225: // does not free-fire on F9; hasRanged keeps lazy-attach honest (elevator rule).
+L226: inline constexpr std::size_t kRangedWire =
+L228: static_assert(kRangedWire == 16);
+L230:     1 + kRangedWire + 4;  // hasRanged + ranged + kills = 21
+L233: inline constexpr std::size_t kSaveFixedWire =
+L234:     kLedgerWire + kBookWire + kPlayerWire + kRpgWire + kCraftingWire +
+L260:     return kSaveHeaderWire + kSaveFixedWire + kFactionWire +
+L332: inline constexpr std::uint32_t kFloorFileVersion = 1u;
+L383:     // Version 7: character sheet. Lives on the player entity at runtime
+L386:     RpgStats rpg{};
+L387:     // Version 7: crafting bank + known-recipe bits + tier ([craft.h]). Run state
+L389:     CraftingState craft{};
+L390:     // Version 8 / SAVMAG: chambered firearm + kill tally. hasRanged mirrors the
+L391:     // elevator's lazy-attach rule — do not invent PlayerRanged on a body that
+L392:     // never fired. kills is the cumulative melee tally (local `kills` in main).
+L393:     std::uint8_t hasRanged = 0;
+L394:     PlayerRanged ranged{};
+L395:     std::uint32_t kills = 0;
+L400:     // Version 2: quest log persisted across F5/F9. Written last by
+L403:     // Version 6: the macro world. poolBlob is NpcPool::save_rows' verbatim table,
+L712: // `std::int16_t`, which is narrower than the wire's `std::int32_t`.
+
+=== StatusSet save/load? ===
+save.cpp status-ish hits 0
+main.cpp status-ish hits 58
+  main.cpp:1736: game::StatusSet playerStatus{};
+
+=== critique_rpgcmbt.md ===
+# RPGCMBT critique
+
+## Verdict (short)
+
+| Question | Answer |
+|---|---|
+| (a) Is RPGCMBT combat.cpp correct? | **Yes** for the scoped wire (melee dmg/CD, ranged spread/CD, identity fallback). |
+| (b) Live player missing RpgStats on spawn? | **No** on primary paths (embody_as_player, death re-possess + carriedRpg, elevator restore). **Yes** on voluntary possess. |
+| (c) XP-on-kill status | **Wired** in finalize_deaths via award_xp. Gated on killer having RpgStats. |
+| (d) Any test pin that will red? | **No** - last run game_test EXIT=0, 219409 checks, 0 failures. Combat-wire setup can hit. |
+
+---
+
+## (a) combat.cpp RPGCMBT correctness
+
+### Melee (~1210-1302)
+- Damage: melee_damage(*rs, heldWeapon, wp->dmg) with heldWeapon=0 bare-hands sentinel - matches rpg.h two-branch rule.
+- CD: (baseMs * agi_attack_speed_mult_e3 * str_heavy_weapon_speed_mult_e3) / 1_000_000, clamped to [1, 65535].
+- Heavy gate: str_heavy_weapon_speed_mult_e3 returns 1000 when base < kHeavyWeaponCooldownMs (650). Fists are 340 ms -> STR does not speed fists (correct).
+- No RpgStats -> raw table dmg/CD (identity contract preserved).
+- Overflow: intermediate is uint32_t; max stays well under 2^32; cast clamp present.
+
+### Ranged spread (~1115-1118)
+- spread *= agi_ranged_spread_mult_e3(*rs) / 1000.0f on the cone - correct inverse mult, identity when absent.
+
+### Ranged CD (~1172-1180)
+- (def->cooldownMs * agi_attack_speed_mult_e3) / 1000, floor 1 / ceil 65535.
+- No STR-heavy on firearms (reference: heavy gate is melee cooldown threshold only).
+
+### Not wired (out of patch or no API)
+- Ranged damage still raw def->dmg (no rpg.h gun-damage formula).
+- agi_move_speed_mult_e3, str_durability_wear_mult_e3 still caller-less outside rpg.cpp.
+
+Attr indices: Attr::{Str=0,Agi=1,Int=2}; combat only goes through named helpers - no raw wrong-slot reads.
+
+---
+
+## (b) Live player RpgStats spawn
+
+| Path | Attaches RpgStats? |
+|---|---|
+| embody_as_player (embody.cpp:95) | **Yes** - random_rpg(pool.level(id), id) |
+| Floor stream / maze / load via embody_as_player | **Yes** |
+| Elevator re-embody (elevator.cpp) | **Yes** - restores pre-ride sheet if hadRpg |
+| Death -> possess_a_survivor + main re-emplace carriedRpg | **Yes** (main, not the helper) |
+| Voluntary possess_nearest_survivor (mind projection) | **NO** - only CameraTag/Controller; ordinary residents never had a sheet |
+
+So RPGCMBT is not unit-green / live-dead on normal boot. It is live-dead after voluntary body hop until something else re-attac
+
+DONE

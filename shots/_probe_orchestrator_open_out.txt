@@ -1,0 +1,1003 @@
+
+==== auditor_m1 (4 hits) ====
+ORIGINAL_REQUEST.md:8:Perform a full forensic integrity audit on Milestone 1 code changes.
+progress.md:12:- [ ] Run test command (`ctest`)
+progress.md:13:- [ ] Produce forensic audit handoff report
+progress.md:14:- [ ] Send verdict to parent orchestrator
+
+==== auditor_m3_1 (5 hits) ====
+handoff.md:35:unwired-suite-exempt=tests/suite_economy.inl
+handoff.md:53:- Command: `ctest --test-dir C:/hades/gigahrush2/build-win --output-on-failure`
+handoff.md:56:100% tests passed, 0 tests failed out of 4
+handoff.md:109:ctest --test-dir C:/hades/gigahrush2/build-win --output-on-failure
+handoff.md:111:*Expected output*: `100% tests passed, 0 tests failed out of 4`.
+
+==== challenger_m1_2 (2 hits) ====
+handoff.md:60:100% tests passed, 0 tests failed out of 4
+handoff.md:104:ctest --test-dir build-win --output-on-failure
+
+==== challenger_m3_1 (7 hits) ====
+progress.md:6:- [ ] Run build script (`tools\win\build.bat Release`).
+progress.md:7:- [ ] Run test runner (`ctest --test-dir build-win -C Release`).
+progress.md:8:- [ ] Run benchmark executable (`build-win\Release\macro_bench.exe`).
+progress.md:9:- [ ] Analyze execution speed, record count, performance output, exit code.
+progress.md:10:- [ ] Stress-test edge conditions / adversarial analysis.
+progress.md:11:- [ ] Write handoff report (`handoff.md`).
+progress.md:12:- [ ] Send result message to parent agent.
+
+==== explorer_m1_2 (2 hits) ====
+handoff.md:99:* Changing `CubePush` layout beyond 128 bytes.
+handoff.md:100:* Changing `PointLight` struct alignment from std430 16-byte boundary.
+
+==== explorer_m1_3 (1 hits) ====
+handoff.md:65:- **Read-Only Scope**: This report presents an architectural investigation and blueprint. No changes were committed to `src/` source files.
+
+==== explorer_m1_next (19 hits) ====
+handoff.md:5:Direct inspection of the repository (`C:\hades\gigahrush2`) via `git status`, `git log`, `git diff`, and `view_file` revealed the current st
+handoff.md:9:- **Uncommitted working tree changes**:
+handoff.md:68:- Verifies 10 raw Kinetic damage against open WallBrace (Panelnik in air at `101.0, 111.0, 3.0`) applies `10` damage.
+handoff.md:78:- Verifies DebrisLurker in open deals `0.75x` base damage (18 HP lost).
+handoff.md:84:1. **Observation 1**: The user requested an investigation into Requirement R1 (`behaviour_incoming_mult`, `facing_damage_mult`, `burst_damag
+handoff.md:88:5. **Reasoning Step C**: Analysis of current working directory status shows uncommitted changes in `src/game/combat.h`, `tests/game_test.cpp
+handoff.md:89:6. **Conclusion**: R1 implementation and test coverage are 100% complete in the codebase. The worker's task is to verify build/test status, 
+handoff.md:96:- **Pre-existing Local Commits**: R1 wiring and tests were already committed in local commits on `main` ahead of `origin/main`. The working 
+handoff.md:103:- No further code changes are required for R1 in `src/game/combat.cpp` or `tests/suite_behaviours.inl`.
+handoff.md:104:- The worker should run the build and test suite to verify all checks pass, and proceed with committing the current uncommitted changes.
+handoff.md:117:- Run full ctest suite: `ctest --test-dir build-win --output-on-failure`
+handoff.md:119:- Any test failure in `test_behaviours_all()` (blocks 14–17).
+handoff.md:120:- `incMult` failing to apply defender damage mitigation in `apply_damage`.
+handoff.md:121:- `facing_damage_mult` failing to scale damage based on `CameraTag::yaw` and toroidal delta.
+handoff.md:122:- `burst_damage_mult` failing to boost damage during `BurstPhase::Sprint`.
+ORIGINAL_REQUEST.md:4:Working Directory: `C:\hades\gigahrush2\.agents\explorer_m1_next\`
+ORIGINAL_REQUEST.md:9:2. Inspect uncommitted changes in `src/game/combat.h`, `src/game/combat.cpp`, `src/game/mob_behaviour.hpp`, `tests/suite_behaviours.inl`, `t
+ORIGINAL_REQUEST.md:10:3. Determine what is currently implemented, what is missing or incomplete, and what specific code/test updates are needed in `src/game/comba
+ORIGINAL_REQUEST.md:11:4. Produce a detailed handoff report at `C:\hades\gigahrush2\.agents\explorer_m1_next\handoff.md` with:
+
+==== explorer_m1_revival (7 hits) ====
+handoff.md:11:- `tests/suite_monster.inl` and `tests/suite_audit.inl` (checked for uncommitted changes from worker_m1_3)
+handoff.md:27:- `audit_test.exe` output: `audit_test: 74 checks, 0 failures` (increased from 62 due to `descend_same_target_once()` in `tests/suite_audit.
+handoff.md:28:- `CMakeLists.txt` (line 397) has already been updated to `audit_test: 74 checks, 0 failures`. Reconfiguring CMake (`cmake -S . -B build-win
+handoff.md:82:- **Block 14** (lines 1218-1243): WallBrace defender incoming mitigation (Panelnik near wall takes 6 damage vs 10 in open; 1 raw damage floo
+handoff.md:110:ctest --test-dir build-win -C Release --output-on-failure
+handoff.md:116:Ensure blocks 14-17 run with 0 check failures and output log messages for `WallBrace`, `DeadEcho`, `FractureSprint`, and `DebrisLurker`.
+ORIGINAL_REQUEST.md:19:- Current code status and uncommitted changes in `src/game/` and `tests/`
+
+==== explorer_m2_1 (1 hits) ====
+ORIGINAL_REQUEST.md:17:5. Check if GLSL syntax is valid, GLSL compiler warnings might occur, or if anything is missing.
+
+==== explorer_m2_next (12 hits) ====
+handoff.md:3:**Working Directory**: `C:\hades\gigahrush2\.agents\explorer_m2_next\`
+handoff.md:11:### 1.1 Uncommitted Vulkan Rendering / Material Changes
+handoff.md:20:// material without extending the table fails the build rather than rendering as
+handoff.md:136:- **Uncommitted Material Changes**: Adding materials 16, 17, 18 (`kMatElectricGrate`, `kMatAcidPool`, `kMatFireCell`) and updating `kMatCoun
+handoff.md:156:ctest --test-dir build-win --output-on-failure
+ORIGINAL_REQUEST.md:5:Working Directory: `C:\hades\gigahrush2\.agents\explorer_m2_next\`
+ORIGINAL_REQUEST.md:10:2. Inspect uncommitted changes in `src/render/cube_pass.cpp` and `src/world/materials.h`, as well as `shaders/cube.frag` and existing textur
+ORIGINAL_REQUEST.md:12:4. Determine exact descriptor set layout changes, image/sampler creation, binding code, and shader sampler uniform definitions needed.
+ORIGINAL_REQUEST.md:13:5. Produce a detailed handoff report at `C:\hades\gigahrush2\.agents\explorer_m2_next\handoff.md` with:
+ORIGINAL_REQUEST.md:14:- Analysis of uncommitted Vulkan rendering / material changes
+ORIGINAL_REQUEST.md:16:- Exact shader uniform changes for `shaders/cube.frag`
+progress.md:6:- [x] Inspect git status and uncommitted changes in project root
+
+==== explorer_m2_revival (3 hits) ====
+handoff.md:112:`texMask_` tracks which material layers successfully decoded. Passing `texMask_` via `pc.torus.z` ensures that missing/corrupted textures fa
+handoff.md:148:- `build-win\game_test.exe` output: `game_test: 212588 checks, 0 failures`. Note: `CMakeLists.txt` pinning for `game_test` regex will need t
+progress.md:11:- [x] Audit test suite run (`game_test: 212588 checks, 0 failures`)
+
+==== explorer_m3_1 (16 hits) ====
+handoff.md:38:if (solidAbove && (nOpen >= 3 || (x % 8 == 0 && z % 8 == 0 && (rng % 100 < kCfg.lightChancePct)))) { ... }
+handoff.md:44:if (solidBelow && (nOpen <= 2) && (solidWest || solidEast) && (solidNorth || solidSouth) && (rng % 100 < kCfg.crateCornerChancePct)) { ... }
+handoff.md:51:if (nOpen >= 3) {
+handoff.md:114:* **Contrast with `--shot` ride path** (`src/app/main.cpp` Lines 2260–2295): `propPlacer.populate` is **missing** during automated multi-flo
+handoff.md:129:- A single open cell can therefore spawn a ceiling Pipe, a floor Grate, a wall Cabinet, a FloodLamp, a Crystal Cluster, a Support Beam, and 
+handoff.md:132:- In Rule 4, the condition is `solidAbove && (nOpen >= 3 || (x % 8 == 0 && z % 8 == 0 && (rng % 100 < kCfg.lightChancePct)))`.
+handoff.md:133:- Due to operator precedence, `nOpen >= 3` bypasses the `(rng % 100 < lightChancePct)` probability test. Every single intersection cell (`nO
+handoff.md:148:7. **Integration Gap in `--shot --ride` Mode**:
+handoff.md:149:- Interactive keypress floor change (`[` or `]`) triggers `propPlacer.populate()`.
+handoff.md:150:- `--shot --ride N` automated floor traversal (`main.cpp:2260-2295`) missing `propPlacer.populate()`, leaving subsequent floors without prop
+handoff.md:174:6. **Integration Gap**: Missing `propPlacer.populate()` in `main.cpp` `--shot --ride` code path.
+handoff.md:186:- Inspect `src/render/prop_placer.cpp:159`. Confirm expression `nOpen >= 3 || (x % 8 == 0 && z % 8 == 0 && (rng % 100 < kCfg.lightChancePct)
+handoff.md:203:inline uint32_t next_rng(uint32_t h) {
+handoff.md:208:if (solidAbove && (rng % 100 < kCfg.lightChancePct) && (nOpen >= 3 || (x % 8 == 0 && z % 8 == 0)))
+ORIGINAL_REQUEST.md:14:4. Check for any edge cases, missing placement categories, potential out-of-bounds accesses, or performance bugs.
+progress.md:9:- [x] Audit edge cases, missing categories, OOB risks, and performance
+
+==== explorer_m3_next (22 hits) ====
+handoff.md:4:**Working Directory**: `C:\hades\gigahrush2\.agents\explorer_m3_next\`
+handoff.md:19:- Initial `tools\win\build.bat Release` run failed at the link step with error:
+handoff.md:21:LINK: command "link.exe /nologo CMakeFiles\game_test.dir\tests\game_test.cpp.obj /out:game_test.exe ..." failed (exit code 1104)
+handoff.md:22:LINK : fatal error LNK1104: cannot open file "game_test.exe"
+handoff.md:53:[audit] contracts: Descend(-20) offered to a run already at -50 was refused at accept; the book paid 0 rub and holds 0 done / 0 failed
+handoff.md:55:[audit] contracts: giver id 0 recycled into a newborn (gen 0 -> 1); the job paid 0 rub and ended in state 3 (3 = Failed)
+handoff.md:58:audit_test: 74 checks, 0 failures
+handoff.md:61:- `CMakeLists.txt:395` currently pins: `PASS_REGULAR_EXPRESSION "audit_test: 62 checks, 0 failures"`.
+handoff.md:63:- Under CTest, `audit_findings` requires updating `CMakeLists.txt:395` to `"audit_test: 74 checks, 0 failures"` so the PASS_REGULAR_EXPRESSI
+handoff.md:71:PASS_REGULAR_EXPRESSION "game_test: 212368 checks, 0 failures")
+handoff.md:90:- Change: Line 74 heading changed from `# gigahrush2` to `### gigahrush2`.
+handoff.md:128:- Observation: Build initially failed with `LNK1104: cannot open file "game_test.exe"`. Process search confirmed `game_test.exe` background 
+handoff.md:132:- Observation: `CMakeLists.txt:395` enforces `PASS_REGULAR_EXPRESSION "audit_test: 62 checks, 0 failures"`.
+handoff.md:136:- Deduction: The uncommitted changes represent active M3 feature development and bug fixes. All code compiles clean; updating the CMake asse
+handoff.md:152:- `CMakeLists.txt:395` regex for `audit_findings` must be updated from `audit_test: 62 checks, 0 failures` to `audit_test: 74 checks, 0 fail
+handoff.md:153:- Check tally in `CMakeLists.txt:436` for `game_test` should be updated if `test_rpg_all()` changes the overall assertion count.
+handoff.md:174:*Expected Output*: `audit_test: 74 checks, 0 failures`
+handoff.md:177:ctest --test-dir build-win -C Release --output-on-failure
+ORIGINAL_REQUEST.md:5:Working Directory: `C:\hades\gigahrush2\.agents\explorer_m3_next\`
+ORIGINAL_REQUEST.md:10:2. Run git status / git diff analysis to map all uncommitted changes across `src/game/combat.h`, `src/render/cube_pass.cpp`, `src/world/mate
+ORIGINAL_REQUEST.md:12:4. Produce a detailed handoff report at `C:\hades\gigahrush2\.agents\explorer_m3_next\handoff.md` with:
+progress.md:11:- [x] Synthesized findings and produced `C:\hades\gigahrush2\.agents\explorer_m3_next\handoff.md`
+
+==== explorer_m3_revival (13 hits) ====
+handoff.md:15:- **`2/4 audit_findings`**: **PASSED** (7.77s) — Matched `audit_test: 74 checks, 0 failures`.
+handoff.md:17:- **`3/4 game_test`**: **FAILED** (185.99s) — `Required regular expression not found. Regex=[game_test: 212368 checks, 0 failures]`
+handoff.md:19:### B. Root Cause of `game_test` CTest Failure
+handoff.md:23:- In `CMakeLists.txt` (line 438), the test property regex was pinned to the prior value `"game_test: 212368 checks, 0 failures"`.
+handoff.md:58:1. **Failure Diagnosis**:
+handoff.md:59:- `game_test` did NOT fail due to a logic error or test assertion crash. 3 out of 4 test targets passed (`world_test`, `audit_findings`, `so
+handoff.md:60:- `game_test` failed solely because the count regex in `CMakeLists.txt` line 438 must be updated to match the new check tally printed by `ga
+handoff.md:63:- Step 1: Read the exact stdout count from `game_test.exe` (e.g. `game_test: NNNNNN checks, 0 failures`).
+handoff.md:64:- Step 2: Update `CMakeLists.txt` line 438 with the exact count string `game_test: NNNNNN checks, 0 failures`.
+handoff.md:87:- The single test failure in `game_test` is an intentional CTest tripwire triggered by adding `test_rpg_all()`.
+ORIGINAL_REQUEST.md:12:2. Inspect uncommitted git changes left by `worker_m1_3`:
+progress.md:7:- [x] Run `git status` and `git diff` to inspect uncommitted changes
+progress.md:12:- [ ] Notify parent via send_message
+
+==== explorer_m4_1 (3 hits) ====
+handoff.md:15:- `systems/monster_terrain.ts` & `systems/monster_traits.ts`: `wetTerrainCell` / `wetWaterCell` queries drive `Lotochnik` drain armor (42% d
+handoff.md:51:// Change:
+handoff.md:122:- Verify `suite_utilai` prints `1005 checks, 0 failures` and zero double-writes.
+
+==== orchestrator (10 hits) ====
+ORIGINAL_REQUEST.md:5:# Teamwork Project Prompt — Gigahrush2 Engine Next Phase
+ORIGINAL_REQUEST.md:14:- Audit test (`audit_test: 62 checks, 0 failures`), Quest flow, Utility AI (`aiCfg.enabled = true`), Status system, and Vulkan HUD metrics a
+ORIGINAL_REQUEST.md:28:- [ ] `cmake -DGIGA_ROOT=C:/hades/gigahrush2 -P tools/check_source_rules.cmake` passes.
+ORIGINAL_REQUEST.md:29:- [ ] `tools\win\build.bat Release` builds clean and all 4 CTest targets pass 100%.
+ORIGINAL_REQUEST.md:30:- [ ] Clean git commit & push to `origin main`.
+progress.md:10:- [ ] Milestone 1: R1 GPU Compute Volumetric Light Grid & Fog (In Progress)
+progress.md:11:- [ ] Milestone 2: R2 GPU Voxel Destruction & Debris Particle Cascade (Planned)
+progress.md:12:- [ ] Milestone 3: R3 Procedural Wire Clutter & Soviet Cyberpunk Props (Planned)
+progress.md:13:- [ ] Milestone 4: R4 GPU Multi-Draw Indirect & Frustum Culling (Planned)
+progress.md:14:- [ ] Milestone 5: R5 Final Verification, Build, 0B GC & Forensic Audit (Planned)
+
+==== orchestrator_1 (2 hits) ====
+progress.md:15:- [ ] M1 & M2 Review, Verification & Audit
+progress.md:16:- [ ] M3 Gate Verification: Build release, run CTest 4/4 targets, git commit & push
+
+==== orchestrator_2 (2 hits) ====
+ORIGINAL_REQUEST.md:14:- Previous worker `worker_m1_3` left uncommitted changes in:
+ORIGINAL_REQUEST.md:21:Please inspect and resume from these changes!
+
+==== orchestrator_6 (14 hits) ====
+progress.md:11:- [ ] Milestone 1: Vulkan Normal & Roughness Map Pipeline
+progress.md:14:- [ ] Reviewers & Challengers passed
+progress.md:15:- [ ] Forensic Auditor verified CLEAN
+progress.md:16:- [ ] Milestone 1 Gate Passed
+progress.md:17:- [ ] Milestone 2: Atmospheric Height-Based Fog & Light Scattering
+progress.md:20:- [ ] Reviewers & Challengers passed
+progress.md:21:- [ ] Forensic Auditor verified CLEAN
+progress.md:22:- [ ] Milestone 2 Gate Passed
+progress.md:29:- [ ] Milestone 4: System Verification & CTest Gate
+progress.md:30:- [ ] Build & CTest verified green (100% across all 4 targets)
+progress.md:31:- [ ] Source rules check (`check_source_rules.cmake`) passed
+progress.md:32:- [ ] Committed & pushed to `origin main`
+progress.md:33:- [ ] Final Victory Audit CLEAN
+progress.md:34:- [ ] Milestone 4 Gate Passed
+
+==== orchestrator_7 (18 hits) ====
+progress.md:9:- [ ] Milestone 1: Procedural Prop Placement System (`src/render/prop_placer.h / .cpp`)
+progress.md:12:- [ ] Reviewer code verification
+progress.md:13:- [ ] Challenger empirical check
+progress.md:14:- [ ] Forensic Auditor integrity check
+progress.md:15:- [ ] Milestone 1 Gate
+progress.md:16:- [ ] Milestone 2: Advanced Shader Effects & Material Features for Props (`shaders/prop.frag`)
+progress.md:19:- [ ] Reviewer code verification
+progress.md:20:- [ ] Challenger empirical check
+progress.md:21:- [ ] Forensic Auditor integrity check
+progress.md:22:- [ ] Milestone 2 Gate
+progress.md:23:- [ ] Milestone 3: Multi-Agent Code Audit & Verification Gate
+progress.md:24:- [ ] Critic & Auditor Swarm checks
+progress.md:25:- [ ] Zero performance degradation & static analysis validation
+progress.md:26:- [ ] Milestone 3 Gate
+progress.md:27:- [ ] Milestone 4: System Verification & Repository Push
+progress.md:28:- [ ] Build clean (`tools\win\build.bat Release`)
+progress.md:29:- [ ] CTest 100% pass across all targets
+progress.md:30:- [ ] Git commit and push to `origin main`
+
+==== reviewer_m1_1 (1 hits) ====
+ORIGINAL_REQUEST.md:8:Independently review the code changes and verify implementation quality, correctness, and adherence to requirements for Milestone 1.
+
+==== reviewer_m1_2 (5 hits) ====
+handoff.md:59:- `audit_test.exe`: `140 checks, 0 failures`
+handoff.md:60:- `game_test.exe`: `213879 checks, 0 failures`
+handoff.md:61:- `source_rules`: `100% tests passed, 0 tests failed`
+handoff.md:76:4. **Execution & Regression Testing**: `tools\win\build.bat Release` and full `ctest` suite ran to completion with zero test failures across
+handoff.md:103:ctest --test-dir build-win --output-on-failure
+
+==== reviewer_m3 (2 hits) ====
+ORIGINAL_REQUEST.md:17:4. Verify all 20 test suites pass with 0 failures, bit-exact digest `0x367f1cf342898c8c` is reproduced, and no regressions exist.
+ORIGINAL_REQUEST.md:18:5. Provide a PASS or FAIL verdict and write your review report in `C:\hades\gigahrush2\.agents\reviewer_m3\handoff.md`.
+
+==== reviewer_m3_1 (2 hits) ====
+progress.md:9:- [ ] Conduct adversarial review & integrity check
+progress.md:10:- [ ] Prepare handoff report and notify parent
+
+==== reviewer_m3_2 (4 hits) ====
+handoff.md:44:- *Note on prompt prompt description mentioning `kSaveFixedWire = 997`*: Git history (`git diff tests/suite_saveload.inl`) showed an old ver
+handoff.md:62:- Result: `100% tests passed, 0 tests failed out of 4`.
+handoff.md:70:- *Logic*: The previous implementation used `kSocialProbeSpan = 512` to search a bounded contiguous ID range, which failed to find candidate
+handoff.md:90:- Total for 3 opened crates: $780 + 3 \times 5 = 795$ bytes.
+
+==== victory_auditor (5 hits) ====
+progress.md:18:- [ ] Verify 100% CTest pass across all target test executables
+progress.md:19:- [ ] Report & Verdict
+progress.md:20:- [ ] Write C:\hades\gigahrush2\.agents\victory_auditor\audit_report.md
+progress.md:21:- [ ] Write C:\hades\gigahrush2\.agents\victory_auditor\handoff.md
+progress.md:22:- [ ] Send message to parent
+
+==== worker_game_audit (119 hits) ====
+handoff.md:14:702265d fix(game): capture/apply opened crates on --shot travel path
+handoff.md:19:4 files changed, 114 insertions(+), 2 deletions(-)
+handoff.md:23:`refresh_floor_containers` destroys every `Container` on the arrival `LayerId` and respawns from seed `0xC0FFEE ^ floor*0x9e3779b9` (cap 64)
+handoff.md:26:1. **Keyboard** `[` / `]` — already called `refresh_opened_containers` BEFORE `streamer.travel` and `apply_opened_containers` AFTER `refresh
+handoff.md:29:F5/F9 save/load already used the same API for the byte round-trip; saveload tests cover that path. The missing pin was the **in-memory destr
+handoff.md:37:| keyboard capture | ~955 | `refresh_opened_containers` before travel |
+handoff.md:40:| keyboard apply | ~1003 | `apply_opened_containers` |
+handoff.md:50:struct OpenedContainerKey {
+handoff.md:55:static_assert(sizeof(OpenedContainerKey) == 6);
+handoff.md:57:size_t refresh_opened_containers(Registry&, LayerId, int floorNumber,
+handoff.md:58:std::vector<OpenedContainerKey>& set);
+handoff.md:59:// drop keys for floorNumber, re-scan opened crates on layer, append
+handoff.md:61:size_t apply_opened_containers(Registry&, LayerId, int floorNumber,
+handoff.md:62:const OpenedContainerKey* keys, size_t n,
+handoff.md:63:const vec3* openedColour = nullptr);
+handoff.md:64:// AFTER spawn_floor_containers; re-open + empty matched crates
+handoff.md:70:- Test: `audit_test::travel_keeps_opened_crates` in `tests/suite_audit.inl`
+handoff.md:71:- Flow: spawn → open every 3rd → capture (+ foreign-floor key) → destroy all Container → respawn same seed → apply → assert emptied + foreig
+handoff.md:72:- CMake: `PASS_REGULAR_EXPRESSION "audit_test: 140 checks, 0 failures"`
+handoff.md:74:- Ledger entry **9. travel_keeps_opened_crates — CLOSED**
+handoff.md:88:| 9 | travel_keeps_opened_crates | CLOSED pin (**702265d**) |
+handoff.md:91:**Zero deliberately-red findings remain.** Next work = fresh forensic discovery, not finishing an open ledger item.
+handoff.md:108:| `main.cpp` propPlacer.populate sites | foreign wiring left in place; our hunks are only opened-crate capture/apply |
+handoff.md:124:Only one floor is resident. Opened crates on the floor being left exist as live ECS entities only until unload. `refresh_opened_containers` 
+handoff.md:127:Respawn creates new entities with `opened=false` and full loot. `apply_opened_containers` matches keys by (floor, cell), sets opened, emptie
+handoff.md:136:Isolates the destroy+respawn seam (spawn → open → capture → destroy → respawn → apply). Saveload tests already cover F5/F9 bytes. Avoids cou
+handoff.md:155:3. **Pin bump math** — new CHECKs change the printed count. CMake `PASS_REGULAR_EXPRESSION` must match exactly or ctest fails even when test
+handoff.md:163:7. **budget_vs_demo_cap** — green pin documenting silent mob cap truncation on deep floors. Raising `kMobSpawnCap` is a design/policy change
+handoff.md:165:8. **Cell-key collision** — known ~13% Residential; do not "fix" by stuffing entity ids into OpenedContainerKey.
+handoff.md:171:**P2 loot-refill is done.** Both keyboard and `--shot` travel paths capture opened crates before `streamer.travel` and apply after `refresh_
+handoff.md:173:**This lane's next job is not prop work.** Prop mesh/placer/shader defects are owned by worker_m1_1 / explorer_m3_* / orchestrator_7. Game-a
+handoff.md:177:## 5. Next session MUST
+handoff.md:181:| A | Multi-site travel parity | `findstr /n "streamer.travel refresh_opened_containers apply_opened_containers" src\app\main.cpp` — every t
+handoff.md:193:ctest --test-dir build-win -C Release -R audit_findings --output-on-failure
+handoff.md:204:findstr /n "refresh_opened_containers apply_opened_containers streamer.travel" C:\hades\gigahrush2\src\app\main.cpp
+handoff.md:206:ctest --test-dir build-win -C Release -R audit --output-on-failure
+handoff.md:216:| `.agents/worker_game_audit/BRIEFING.md` | Cold-start mission for next agent |
+handoff.md:219:| `src/game/save.h` | OpenedContainerKey + refresh/apply API |
+handoff.md:221:| `tests/suite_audit.inl` | Ledger + travel_keeps_opened_crates |
+handoff.md:232:game::refresh_opened_containers(reg, leaveLayer, currentFloor, runState.opened);
+
+==== worker_m1 (3 hits) ====
+handoff.md:47:100% tests passed, 0 tests failed out of 4
+handoff.md:56:5. *Render Loop Integration*: `main.cpp` collects active scene lights without heap allocations, dispatches `GpuLightGrid`, opens the graphic
+handoff.md:67:2. Run test suite: `ctest --test-dir build-win --output-on-failure`
+
+==== worker_m1_1 (11 hits) ====
+handoff.md:20:- `FungalColumn` (Shape 22): `push_cylinder_sides` called per ring with `rAvg`, causing radius mismatch and open gaps at ring boundaries ($y
+handoff.md:26:- `FloodLamp` rule contained operator precedence coupling: `if (solidAbove && (nOpen >= 3 || (x % 8 == 0 && z % 8 == 0 && (rng % 100 < kCfg.
+handoff.md:45:- **`FungalColumn`**: Replaced `push_cylinder_sides` calls with explicit ring quad generation interpolating bottom radius $r0(y0)$ to top ra
+handoff.md:53:- **FloodLamp Bug Fix**: Fixed precedence to `if (solidAbove && (rngLight % 100 < kCfg.lightChancePct) && (nOpen >= 3 || (x % 8 == 0 && z % 
+handoff.md:59:- `Arch`: Archway openings in corridor passages.
+handoff.md:61:- `Railing`: Handrails along open floor edges.
+handoff.md:80:All 25 `PropShape` procedural mesh generators in `prop_mesh.cpp` are now fully implemented with accurate 3D parametric geometry, correct smo
+ORIGINAL_REQUEST.md:46:1. SINGLE-COMPILER OWNER RULE: You MUST NOT execute tools\win\build.bat, cmake, ninja, glslc, or ctest. Implement the code changes directly 
+ORIGINAL_REQUEST.md:55:- Advanced/diversify spatial hash across rules (`next_rng` or separate hash seeds per rule) to prevent multi-prop stacking in the same cell.
+ORIGINAL_REQUEST.md:56:- Fix FloodLamp operator precedence bug: `if (solidAbove && (rng % 100 < kCfg.lightChancePct) && (nOpen >= 3 || (x % 8 == 0 && z % 8 == 0)))
+ORIGINAL_REQUEST.md:64:6. Send a message to the Lead Orchestrator summarizing your changes and referencing the report path.
+
+==== worker_m1_2 (8 hits) ====
+progress.md:6:- [ ] Inspect source code in `src/game/combat.h`, `src/game/combat.cpp`, `tests/suite_behaviours.inl`
+progress.md:7:- [ ] Implement `apply_damage` signature and definition update (`const MacroGrid* grid = nullptr`, `behaviour_incoming_mult` for `WallBrace`
+progress.md:8:- [ ] Implement `mob_attack_step` updates (camera yaw capture, wall query gating, `behaviour_claims_damage`, `facing_damage_mult`, `burst_da
+progress.md:9:- [ ] Pass `&grid` in `projectile_step` and queued swing execution
+progress.md:10:- [ ] Add integration test assertions in `tests/suite_behaviours.inl`
+progress.md:11:- [ ] Verify GPU texture sampling pipeline files build cleanly
+progress.md:12:- [ ] Execute `tools\win\build.bat Release` and `ctest --test-dir build-win -C Release`
+progress.md:13:- [ ] Produce `handoff.md` and send completion message to parent
+
+==== worker_m1_3 (1 hits) ====
+ORIGINAL_REQUEST.md:25:- Ensure all 4 test targets pass with 0 failures and 0 warnings.
+
+==== worker_m1_revival (8 hits) ====
+progress.md:8:## Next Steps
+progress.md:9:- [ ] Read Explorer 3 handoff report (`C:\hades\gigahrush2\.agents\explorer_m1_3\handoff.md`) and Explorer 1 handoff report (`C:\hades\gigah
+progress.md:10:- [ ] Inspect source files (`src/render/vk_texture.h/cpp`, `src/render/cube_pass.h/cpp`, `tools/fetch_textures.py`, `shaders/cube.frag`).
+progress.md:11:- [ ] Implement texture UNORM transcode target formats in `vk_texture.h/cpp` & `fetch_textures.py`.
+progress.md:12:- [ ] Update `CubePass` layout, pool, descriptor set bindings (0, 1, 2), texture loading, and push constant bitmasks.
+progress.md:13:- [ ] Update `shaders/cube.frag` to support normal maps, TBN matrices, roughness maps, dynamic specPow & specIntensity.
+progress.md:14:- [ ] Run build & tests sequentially (`build.bat Release` and `ctest`).
+progress.md:15:- [ ] Produce `handoff.md` and report to parent.
+
+==== worker_m2 (6 hits) ====
+progress.md:6:- [ ] View and analyze `shaders/cube.frag` and relevant host C++ files passing fog / light uniforms.
+progress.md:7:- [ ] Implement height-based fog density and light scattering in `shaders/cube.frag`.
+progress.md:8:- [ ] Compile SPIR-V shaders (`glslc -O shaders/cube.frag -o shaders/cube.frag.spv` & `glslc -O -DGIGA_ALBEDO_ARRAY shaders/cube.frag -o sha
+progress.md:9:- [ ] Run build (`tools\win\build.bat Release`) and run tests (`ctest --test-dir build-win -C Release`).
+progress.md:10:- [ ] Write handoff report `C:\hades\gigahrush2\.agents\worker_m2\handoff.md`.
+progress.md:11:- [ ] Send completion message to parent.
+
+==== worker_m2_1 (2 hits) ====
+ORIGINAL_REQUEST.md:11:1. SINGLE-COMPILER OWNER RULE: You MUST NOT execute tools\win\build.bat, cmake, ninja, glslc, or ctest. Implement the shader changes directl
+ORIGINAL_REQUEST.md:30:4. Send a message to the Lead Orchestrator summarizing your changes and referencing the report path.
+
+==== worker_m2_2 (3 hits) ====
+ORIGINAL_REQUEST.md:26:Render active quests using `quest_line`, pending quest offers, and quest status statistics (`activeQuests`, `quests.completed`, `quests.fail
+ORIGINAL_REQUEST.md:28:Execute `tools\win\build.bat Release` and run `build-win\game_test.exe` and `ctest --test-dir build-win`. Ensure 100% green test passes and 
+ORIGINAL_REQUEST.md:30:Write your handoff report to `C:\hades\gigahrush2\.agents\worker_m2_2\handoff.md` with complete details of code changes and test execution s
+
+==== worker_m2_next (9 hits) ====
+ORIGINAL_REQUEST.md:1:# Implementation Task for Worker M2 Next: Unpark Utility AI in src/app/main.cpp
+ORIGINAL_REQUEST.md:6:Apply the exact 3 code modifications described in `C:\hades\gigahrush2\.agents\explorer_m2_next\handoff.md`:
+ORIGINAL_REQUEST.md:39:2. Run `ctest --output-on-failure` and verify 100% pass rate across all 4 test targets (`world_test`, `audit_findings`, `game_test`, `source
+ORIGINAL_REQUEST.md:40:3. Save your handoff report to `C:\hades\gigahrush2\.agents\worker_m2_next\handoff.md` with build logs and ctest outputs.
+ORIGINAL_REQUEST.md:41:4. Update `C:\hades\gigahrush2\.agents\worker_m2_next\progress.md`.
+progress.md:11:- [ ] Run MSVC Release build (`tools\win\build.bat Release notest`) (currently executing)
+progress.md:12:- [ ] Run `ctest --output-on-failure`
+progress.md:13:- [ ] Write `handoff.md`
+progress.md:14:- [ ] Send message to orchestrator
+
+==== worker_m2_revival (3 hits) ====
+progress.md:11:- [ ] Run `ctest --test-dir build-win -C Release`
+progress.md:12:- [ ] Write `handoff.md`
+progress.md:13:- [ ] Send message to parent
+
+==== worker_m3 (2 hits) ====
+handoff.md:35:100% tests passed, 0 tests failed out of 4
+progress.md:13:- [ ] Notify parent
+
+==== worker_m4_1 (4 hits) ====
+handoff.md:26:`ctest --output-on-failure -R world_test`
+handoff.md:28:- Invalidation conditions: Any failure in `world_test` regex pin match `"44176/44176 checks passed"`.
+ORIGINAL_REQUEST.md:11:1. SINGLE-COMPILER OWNER RULE: You MUST NOT execute tools\win\build.bat, cmake, ninja, or ctest. Implement test code changes directly in `te
+ORIGINAL_REQUEST.md:26:4. Send a message to the Lead Orchestrator summarizing your changes and referencing the report path.
+
+==== worker_m4_2 (1 hits) ====
+ORIGINAL_REQUEST.md:31:Write your handoff report to `C:\hades\gigahrush2\.agents\worker_m4_2\handoff.md` with complete details of code changes and test execution s
+
+######## victory_auditor ########
+--- BRIEFING.md (1913 bytes) ---
+# BRIEFING — 2026-07-30T11:56:38Z
+
+## Mission
+Perform mandatory 3-Phase Victory Audit for Gigahrush2 C++23/Vulkan Engine Enterprise Graphics System & Procedural Prop Swarm. Produce audit_report.md and send verdict to Sentinel.
+
+## 🔒 My Identity
+- Archetype: victory_auditor
+- Roles: critic, specialist, auditor, victory_verifier
+- Working directory: C:\hades\gigahrush2\.agents\victory_auditor
+- Original parent: ac00c0f5-780f-48f2-9c3d-0cf4d7d36193
+- Target: full project (Gigahrush2 C++23/Vulkan Engine Enterprise Graphics System & Procedural Prop Swarm)
+
+## 🔒 Key Constraints
+- Audit-only — do NOT modify implementation code
+- Trust NOTHING — verify everything independently
+- CODE_ONLY network mode
+- Single-compiler owner rule: Subagents MUST NOT execute tools\win\build.bat, cmake, ninja, or ctest... Wait! The user request for Victory Auditor explicitly instructs: "Execute `tools\win\build.bat Release` and verify 100% CTest pass across all target test executables." As Victory Auditor executing Phase 3, running the build and test script is required for independent verification.
+
+## Current Parent
+- Conversation ID: ac00c0f5-780f-48f2-9c3d-0cf4d7d36193
+- Updated: 2026-07-30T11:56:38Z
+
+## Audit Scope
+- **Work product**: C:\hades\gigahrush2 codebase (R1, R2, R3, R4)
+- **Profile loaded**: General Project / Victory Audit
+- **Audit type**: Victory Audit (Phase 1 Timeline & Requirements, Phase 2 Integrity & Cheating, Phase 3 Independent Test Execution)
+
+## Audit Progress
+- **Phase**: investigating
+- **Checks completed**: [None]
+- **Checks remaining**: Phase 1 Requirements, Phase 2 Integrity, Phase 3 Independent Execution
+- **Findings so far**: TBD
+
+## Key Decisions Made
+- Initiated independent 3-phase audit procedure.
+
+## Artifact Index
+- C:\hades\gigahrush2\.agents\victory_auditor\audit_report.md — Victory Audit Report
+- C:\hades\gigahrush2\.agents\victory_auditor\handoff.md — Handoff Report
+
+--- ORIGINAL_REQUEST.md (1322 bytes) ---
+## 2026-07-30T11:56:38Z
+<USER_REQUEST>
+You are the independent Victory Auditor for Gigahrush2 C++23/Vulkan Engine Enterprise Graphics System & Procedural Prop Swarm.
+
+Your working directory is: C:\hades\gigahrush2\.agents\victory_auditor
+The root project directory is: C:\hades\gigahrush2
+The verbatim user request is recorded at: C:\hades\gigahrush2\.agents\ORIGINAL_REQUEST.md
+The Lead Orchestrator handoff report is at: C:\hades\gigahrush2\.agents\orchestrator\handoff.md
+
+Conduct a mandatory 3-phase victory audit:
+1. Phase 1 — Timeline & Requirements Audit: Verify R1 (25 prop shape generators & Vulkan GPU instancing), R2 (atmospheric shaders prop.vert/prop.frag), R3 (prop placer engine prop_placer.cpp), R4 (tests suite_props.inl & CMakeLists.txt regex update).
+2. Phase 2 — Integrity & Cheating Audit: Check for stubs, fake passes, commented-out assertions, hardcoded mock values, static analysis/source rule compliance, and zero-GC C++23 standards.
+3. Phase 3 — Independent Test Execution: Execute `tools\win\build.bat Release` and verify 100% CTest pass across all target test executables.
+
+Return a structured verdict: `VICTORY CONFIRMED` or `VICTORY REJECTED`, detailing findings in `C:\hades\gigahrush2\.agents\victory_auditor\audit_report.md`. Send your verdict report back to the Sentinel.
+</USER_REQUEST>
+
+--- progress.md (1125 bytes) ---
+# Progress Tracker — Victory Auditor
+
+Last visited: 2026-07-30T11:57:25Z
+
+## Task: 3-Phase Victory Audit
+
+- [x] Phase 1: Timeline & Requirements Audit
+  - [x] Verify R1: 25 prop shape generators & Vulkan GPU instancing
+  - [x] Verify R2: Atmospheric shaders (shaders/prop.vert, shaders/prop.frag)
+  - [x] Verify R3: Prop placer engine (src/render/prop_placer.cpp, prop_placer.h, main.cpp)
+  - [x] Verify R4: Tests (tests/suite_props.inl & CMakeLists.txt regex update)
+- [x] Phase 2: Integrity & Cheating Audit
+  - [x] Check for hardcoded test results / stubs / fake passes (CLEAN)
+  - [x] Check for commented-out assertions or facade implementations (CLEAN)
+  - [x] Check for zero-GC C++23 standards & static analysis compliance (CLEAN)
+- [/] Phase 3: Independent Test Execution
+  - [/] Execute `tools\win\build.bat Release` (Running as background task task-69)
+  - [ ] Verify 100% CTest pass across all target test executables
+- [ ] Report & Verdict
+  - [ ] Write C:\hades\gigahrush2\.agents\victory_auditor\audit_report.md
+  - [ ] Write C:\hades\gigahrush2\.agents\victory_auditor\handoff.md
+  - [ ] Send message to parent
+
+
+######## orchestrator ########
+--- BRIEFING.md (4645 bytes) ---
+# BRIEFING — 2026-07-30T12:58:00Z
+
+## Mission
+GigaHrush2 Engine & Content Expansion: Implement R1 (GPU Compute Volumetric Light Grid & Fog), R2 (GPU Voxel Destruction & Debris Particle Cascade), R3 (Procedural Wire Clutter & Soviet Cyberpunk Props), and R4 (GPU MDI & Frustum/Hi-Z Culling). Achieve zero MSVC warnings, zero glslc shader warnings/errors, 0B GC on hot render loops, and pass Forensic Audit.
+
+## 🔒 My Identity
+- Archetype: teamwork_orchestrator
+- Roles: orchestrator, user_liaison, human_reporter, successor
+- Working directory: C:\hades\gigahrush2\.agents\orchestrator
+- Original parent: c2dc9516-d529-4732-a445-bfe0ae4efd52
+- Original parent conversation ID: c2dc9516-d529-4732-a445-bfe0ae4efd52
+
+## 🔒 My Workflow
+- **Pattern**: Project
+- **Scope document**: C:\hades\gigahrush2\.agents\orchestrator\plan.md
+1. **Decompose**: 5 Milestones (R1 GPU Light Grid & Fog, R2 Voxel Destruction & Particle Debris, R3 Wire Clutter & Interactive Props, R4 GPU MDI & Culling, R5 Final Verification & Forensic Audit).
+2. **Dispatch & Execute**: Delegate technical analysis to Explorers, implementation to Workers, review to Reviewers/Challengers, integrity audit to Forensic Auditor.
+3. **On failure**: Retry -> Replace -> Skip -> Redistribute -> Redesign
+4. **Succession**: Self-succeed when spawn count >= 16 and pending subagents complete.
+- **Work items**:
+  1. Milestone 1 (R1: GPU Compute Volumetric Light Grid & Fog) [in-progress]
+  2. Milestone 2 (R2: GPU Voxel Destruction & Debris Particle Cascade) [planned]
+  3. Milestone 3 (R3: Procedural Wire Clutter & Soviet Cyberpunk Props) [planned]
+  4. Milestone 4 (R4: GPU Multi-Draw Indirect & Frustum Culling) [planned]
+  5. Milestone 5 (R5: Final Verification, Build, 0B GC & Forensic Audit) [planned]
+- **Current phase**: 1 (Executing Milestone 1)
+- **Current focus**: Milestone 1 - GPU Compute Volumetric Light Grid & Fog.
+
+## 🔒 Key Constraints
+- NEVER write, modify, or create source code files directly.
+- NEVER run build/test commands directly — delegate build & test execution to Workers.
+- Maintain clean, zero-GC C++23 engine code (`-W4 /permissive-`).
+- MAY use file-editing tools ONLY for metadata/state files (.md) in .agents/ folder.
+- MANDATORY INTEGRITY WARNING must be included verbatim in all Worker dispatches.
+- Forensic Auditor verdict MUST be CLEAN for milestone pass.
+
+## Current Parent
+- Conversation ID: c2dc9516-d529-4732-a445-bfe0ae4efd52
+- Updated: 2026-07-30T12:58:00Z
+
+## Key Decisions Made
+- Decomposed project 
+--- handoff.md (3528 bytes) ---
+# Master Orchestrator Handoff Report — Gigahrush2 Enterprise Graphics System & Procedural Prop Swarm
+
+**Role**: Lead Project Orchestrator  
+**Working Directory**: `C:\hades\gigahrush2\.agents\orchestrator`  
+**Date**: 2026-07-30  
+
+---
+
+## 1. Milestone State
+
+| # | Milestone Name | Status | Artifacts & Verification |
+|---|----------------|--------|--------------------------|
+| 1 | R1: Procedural Prop Mesh Generators & GPU Instancing | DONE | `src/render/prop_mesh.h/cpp`, `prop_pass.h/cpp` (All 25 shapes implemented with authentic 3D geometry & Vulkan instancing) |
+| 2 | R2: Advanced Atmospheric Shader Pipeline | DONE | `shaders/prop.vert`, `shaders/prop.frag` (Triplanar UVs, bump mapping, specular, emissive animations, height fog, Henyey-Greenstein scattering, sRGB dither) |
+| 3 | R3: Procedural Prop Placement System | DONE | `src/render/prop_placer.h/cpp`, `src/app/main.cpp` (Deterministic 3D spatial hash, slot reservation, 7 rule categories, `--shot --ride` integration) |
+| 4 | R4: Test Suite Assertion Coverage, Build, Source Rules & Forensic Audit | DONE | `tests/suite_props.inl`, `CMakeLists.txt` (`44176/44176 checks passed`, 0 MSVC warnings, Forensic Audit `VERDICT: CLEAN`) |
+
+---
+
+## 2. Active Subagents Summary
+
+| Subagent ID | Role / Type | Status | Summary of Delivered Handoff |
+|-------------|-------------|--------|------------------------------|
+| `42d237af-aa8b-4aff-b395-2e85e0fcc34f` | Explorer M1 | Completed | Analyzed 25 shape mesh generators and Vulkan instancing buffers. |
+| `60d61602-bfaf-4b5d-8afd-28621e415459` | Explorer M2 | Completed | Verified shader inputs, varyings, push constants, and shading formulas. |
+| `4737efc6-20b4-414b-9ade-1c7852e66caf` | Explorer M3 | Completed | Identified 6 prop placer logic defects and proposed exact refactoring rules. |
+| `4e7ddf33-bd42-44c8-a766-de1b6224b5f3` | Worker M1/M3 | Completed | Implemented prop mesh fixes, placer salt diversification, electric grate fix, and `--shot` integration. |
+| `67a67e04-b9dd-4b38-bf59-62626dd0cc55` | Worker M2 | Completed | Implemented atmospheric shader pipeline features in `shaders/prop.vert` and `shaders/prop.frag`. |
+| `7fa5a34f-07bd-49ad-a19f-3a89d2c350bd` | Worker M4 | Completed | Implemented R4 unit test assertions in `tests/suite_props.inl` and regex pin in `CMakeLists.txt`. |
+| `6c4e1c5f-2749-4100-9673-625085c88850` | Forensic Auditor | Completed | Audited all source files, shaders, and tests. Issued `VERDICT: CLEAN`. |
+
+---
+
+## 3. Pending Decisions
+
+- None. 
+--- ORIGINAL_REQUEST.md (1687 bytes) ---
+# Original User Request
+
+## Follow-up — 2026-07-30T01:59:02Z
+
+# Teamwork Project Prompt — Gigahrush2 Engine Next Phase
+
+Gigahrush2 C++23/Vulkan Engine systematic port, optimization, and feature expansion from original WebGL TypeScript codebase (`C:\hades\gigahrush`).
+
+Working directory: `C:\hades\gigahrush2`
+Backlog Guide: `file:///C:/Users/Admin/.gemini/antigravity/brain/5fdea2d8-75a6-417d-9242-a0c9b1503e97/BACKLOG_GUIDE.md`
+
+## Current Status
+- `main` HEAD = `7955a90`
+- Audit test (`audit_test: 62 checks, 0 failures`), Quest flow, Utility AI (`aiCfg.enabled = true`), Status system, and Vulkan HUD metrics are implemented and verified.
+
+## Requirements
+
+### R1. Procedural Surface Material & Normal Noise Deepening
+Enhance procedural shader surface rendering (`shaders/cube.frag` and `tools/gen_material_surface.py`) to add per-material chroma variation and derivative normal perturbing, avoiding flat monochrome cells while respecting the zero-warning and performance budget.
+
+### R2. MacroSim Bench Registration & Headless 2^20 Benchmark
+Unpark `tools/branch_port_pending/macro_bench.cpp`, register as `sim_bench` target in `CMakeLists.txt`, and measure per-step macro cost at full 2^20 pool scale (~1M records).
+
+### R3. Samosbor Phase Banner & Event Log Feed in HUD
+Wire Samosbor phase transitions (Warning/Active/Seal) into an active screen banner and add the combat/event bus log feed to the ImGui overlay in `src/app/main.cpp`.
+
+## Acceptance Criteria
+- [ ] `cmake -DGIGA_ROOT=C:/hades/gigahrush2 -P tools/check_source_rules.cmake` passes.
+- [ ] `tools\win\build.bat Release` builds clean and all 4 CTest targets pass 100%.
+- [ ] Clean git commit & push to `origin main`.
+
+--- plan.md (4062 bytes) ---
+# Master Project Plan: GigaHrush2 Engine & Content Expansion
+
+## Architecture Overview
+GigaHrush2: High-performance Vulkan / C++23 engine expansion featuring GPU Compute volumetric light grid, GPU voxel destruction & particle debris cascade, procedural wire clutter & interactive props, and GPU Multi-Draw Indirect (MDI) frustum & occlusion culling.
+
+## Milestones
+
+| # | Milestone Name | Scope | Dependencies | Status |
+|---|----------------|-------|--------------|--------|
+| 1 | R1: GPU Compute Volumetric Light Grid & Fog | `shaders/light_grid.comp`, `src/render/gpu_light_grid.h/.cpp`, raymarching light attenuation & fog in `cube.frag`, `prop.frag`, `particle.frag` | None | PLANNED |
+| 2 | R2: GPU Voxel Destruction & Debris Particle Cascade | Trigger GPU compute event on voxel destruction/carving, pushing debris into `GpuParticlePass` ring buffer with physics & albedos | M1 | PLANNED |
+| 3 | R3: Procedural Wire Clutter & Soviet Cyberpunk Props | `PropShape` / `EnvDetail` expanded with wire catenary curves (GPU ribbon meshes), CRT monitors with animated noise shaders, elevator switches, warning signs | M1 | PLANNED |
+| 4 | R4: GPU Multi-Draw Indirect (MDI) & Frustum Culling | `shaders/cull.comp`, `src/render/gpu_cull_pass.h/.cpp` for frustum & Hi-Z depth buffer occlusion culling, 0-CPU-overhead indirect draw buffers | M1, M3 | PLANNED |
+| 5 | R5: Final Verification, Build Clean, 0B GC & Forensic Audit | Full clean MSVC C++23 `-W4 /permissive-` build, glslc shader compilation zero errors/warnings, CTest pass, 0B GC verification, VulkanDevice integration check, and Forensic Audit CLEAN verdict | M1, M2, M3, M4 | PLANNED |
+
+## Detailed Milestone Descriptions
+
+### Milestone 1: GPU Compute Volumetric Light Grid & Fog (R1)
+- Implement `shaders/light_grid.comp` to compute/update 3D light grid SSBO for local point/emissive lights.
+- Create `src/render/gpu_light_grid.h` and `src/render/gpu_light_grid.cpp` to manage Vulkan resources, buffers, and compute dispatches.
+- Implement raymarching light attenuation & volumetric fog density in `cube.frag`, `prop.frag`, and `particle.frag`.
+
+### Milestone 2: GPU Voxel Destruction & Debris Particle Cascade (R2)
+- Integrate voxel destruction events with GPU compute dispatch.
+- Push debris particles directly into `GpuParticlePass` ring buffer.
+- Include realistic physical velocities and material-derived albedos (concrete dust, rust flakes, glass shards).
+
+### Milestone 3: Procedural Wire Clutter & Soviet Cyberpunk Interactive Props
+--- progress.md (1831 bytes) ---
+# Execution Progress — GigaHrush2 Engine & Content Expansion
+
+## Current Status
+Last visited: 2026-07-30T13:10:00Z
+
+## Iteration Status
+Current iteration: 1 / 32
+
+## Milestones Summary
+- [ ] Milestone 1: R1 GPU Compute Volumetric Light Grid & Fog (In Progress)
+- [ ] Milestone 2: R2 GPU Voxel Destruction & Debris Particle Cascade (Planned)
+- [ ] Milestone 3: R3 Procedural Wire Clutter & Soviet Cyberpunk Props (Planned)
+- [ ] Milestone 4: R4 GPU Multi-Draw Indirect & Frustum Culling (Planned)
+- [ ] Milestone 5: R5 Final Verification, Build, 0B GC & Forensic Audit (Planned)
+
+## Log of Actions
+- 2026-07-30T12:58:00Z: Initialized Project Orchestrator state and master plan for GigaHrush2 Engine & Content Expansion.
+- 2026-07-30T12:58:00Z: Commenced Milestone 1 (R1: GPU Compute Volumetric Light Grid & Fog).
+- 2026-07-30T12:58:27Z: Dispatched 3 Explorers for Milestone 1 (Vulkan Compute, Shader Raymarching, World Emitters & Data Flow).
+- 2026-07-30T12:59:32Z: Received Explorer 1 completion report (Vulkan Compute Architecture).
+- 2026-07-30T12:59:57Z: Received Explorer 2 completion report (Shader Raymarching).
+- 2026-07-30T12:59:57Z: Received Explorer 3 completion report (World Emitters & Data Flow).
+- 2026-07-30T13:00:01Z: All 3 Explorers completed for Milestone 1. Synthesizing findings for Worker dispatch.
+- 2026-07-30T13:00:09Z: Dispatched Worker M1 (GPU Light Grid & Fog) with MANDATORY INTEGRITY WARNING.
+- 2026-07-30T13:08:16Z: Received Worker M1 implementation handoff (MSVC build clean 0 warnings, glslc clean, 100% CTest pass).
+- 2026-07-30T13:08:50Z: Dispatched 2 Reviewers, 2 Challengers, and Forensic Auditor for Milestone 1 evaluation.
+- 2026-07-30T13:12:17Z: Received Challenger 2 completion report (VERIFIED PASS: glslc 0 warnings/errors, std430 alignment, edge cases, MSVC 0 warnings, 100% CTest pass).
+
+
+######## orchestrator_7 ########
+--- BRIEFING.md (3974 bytes) ---
+# BRIEFING — 2026-07-30T10:45:15Z
+
+## Mission
+Orchestrate Gigahrush2 Vulkan GPU Instancing & Graphic System: procedural prop placer, prop shader effects, multi-agent code audit, and clean repository push.
+
+## 🔒 My Identity
+- Archetype: self
+- Roles: orchestrator, user_liaison, human_reporter, successor
+- Working directory: C:\hades\gigahrush2\.agents\orchestrator_7
+- Original parent: top-level
+- Original parent conversation ID: c21acfea-5355-434b-bd0e-3fed1512a395
+
+## 🔒 My Workflow
+- **Pattern**: Project Pattern
+- **Scope document**: C:\hades\gigahrush2\.agents\orchestrator_7\PROJECT.md
+1. **Decompose**: Decomposed work into 4 milestones (M1: Prop Placer, M2: Prop Shader, M3: Audit Gate, M4: Build/Test & Push).
+2. **Dispatch & Execute**: Direct iteration loop per milestone (Explorer -> Worker -> Reviewer -> Challenger -> Forensic Auditor -> Gate).
+3. **On failure** (in this order):
+   - Retry: nudge stuck agent or re-send task
+   - Replace: spawn fresh agent with partial progress
+   - Skip: proceed without (only if non-critical)
+   - Redistribute: split stuck agent's remaining work
+   - Redesign: re-partition decomposition
+4. **Succession**: Self-succeed at 16 spawns.
+
+- **Work items**:
+  1. Milestone 1: Procedural Prop Placement System (`src/render/prop_placer.h / .cpp`) [in-progress]
+  2. Milestone 2: Advanced Shader Effects & Material Features for Props (`shaders/prop.frag`) [in-progress]
+  3. Milestone 3: Multi-Agent Code Audit & Verification Gate [pending]
+  4. Milestone 4: System Verification & Repository Push [pending]
+- **Current phase**: Phase 2 (M1/M2 Worker execution)
+- **Current focus**: worker_m1 executing M1 + M2 implementation
+
+## 🔒 Key Constraints
+- SINGLE-COMPILER OWNER RULE: strictly sequential build execution.
+- Maintain high C++23 / Vulkan code quality without mocks or stubs.
+- Never write source code directly (DISPATCH-ONLY orchestrator).
+- Zero warnings/errors on MSVC `/W4 /EHsc`.
+- Pass all 4 CTest targets 100% green (`world_test`, `audit_test` / `audit_findings`, `game_test`, `source_rules`).
+- Forensic Auditor is NON-SKIPPABLE binary veto.
+
+## Current Parent
+- Conversation ID: c21acfea-5355-434b-bd0e-3fed1512a395
+- Updated: not yet
+
+## Key Decisions Made
+- Decomposed into 4 milestones.
+- Scheduled heartbeat cron (task-13).
+- Completed 3 Explorer investigations (`explorer_m1_1`, `explorer_m1_2`, `explorer_m1_3`). Handbooks written.
+- Dispatched `worker_m1` for M1 + M2 implementation.
+
+## Team Roster
+| Agent | Type | Work Item | Stat
+--- progress.md (1472 bytes) ---
+# Progress Log — orchestrator_7
+
+Last visited: 2026-07-30T10:50:15Z
+
+## Current Status
+- [x] Initialized orchestrator state & BRIEFING.md
+- [x] Scheduled heartbeat cron (task-13)
+- [x] Defined Project Milestones in PROJECT.md
+- [ ] Milestone 1: Procedural Prop Placement System (`src/render/prop_placer.h / .cpp`)
+  - [x] Explorer dispatch & analysis (`explorer_m1_1` handoff complete)
+  - [/] Worker implementation (`worker_m1` active in conv fc6f8202-e2ba-4903-8dc1-a5c5deb886ee)
+  - [ ] Reviewer code verification
+  - [ ] Challenger empirical check
+  - [ ] Forensic Auditor integrity check
+  - [ ] Milestone 1 Gate
+- [ ] Milestone 2: Advanced Shader Effects & Material Features for Props (`shaders/prop.frag`)
+  - [x] Explorer dispatch & analysis (`explorer_m1_2` handoff complete)
+  - [/] Worker implementation (`worker_m1` active in conv fc6f8202-e2ba-4903-8dc1-a5c5deb886ee)
+  - [ ] Reviewer code verification
+  - [ ] Challenger empirical check
+  - [ ] Forensic Auditor integrity check
+  - [ ] Milestone 2 Gate
+- [ ] Milestone 3: Multi-Agent Code Audit & Verification Gate
+  - [ ] Critic & Auditor Swarm checks
+  - [ ] Zero performance degradation & static analysis validation
+  - [ ] Milestone 3 Gate
+- [ ] Milestone 4: System Verification & Repository Push
+  - [ ] Build clean (`tools\win\build.bat Release`)
+  - [ ] CTest 100% pass across all targets
+  - [ ] Git commit and push to `origin main`
+
+## Iteration Status
+Current iteration: 1 / 32
+Spawn count: 4 / 16
+
+--- PROJECT.md (1882 bytes) ---
+# Project: Gigahrush2 Vulkan GPU Instancing & Graphic System
+
+## Architecture
+- Engine Core: C++23 / Vulkan engine port from WebGL TypeScript.
+- World Generation: Voxel floor/walls/ceiling macro world (`src/world/`).
+- Prop Placement System: `src/world/prop_placer.h / .cpp` populating instanced prop shapes into `src/render/prop_pass.h / .cpp` & `prop_mesh.h / .cpp`.
+- Prop Shading: `shaders/prop.frag` & `shaders/prop.vert` for GPU instanced rendering.
+
+## Milestones
+| # | Name | Scope | Dependencies | Status |
+|---|------|-------|-------------|--------|
+| 1 | M1: Procedural Prop Placement System | `src/world/prop_placer.h / .cpp`, inspect voxel grid & populate prop meshes | None | IN_PROGRESS |
+| 2 | M2: Advanced Prop Shading & Materials | `shaders/prop.frag`, normal perturbation, roughness variation, emissive pulse/flicker | M1 | PLANNED |
+| 3 | M3: Multi-Agent Code Audit & Verification Gate | Code auditor checks, unused variables, bounds safety, test pins in CMakeLists.txt | M1, M2 | PLANNED |
+| 4 | M4: System Verification & Push | Clean release build, 100% CTest pass (4 targets), git commit & push | M1, M2, M3 | PLANNED |
+
+## Interface Contracts
+### `prop_placer` ↔ `world` / `prop_pass`
+- `PropPlacer` scans `VoxelGrid` (floor, ceiling, wall cells, anomalous zones, light intersections).
+- Generates `PropInstance` data (transform, material ID, animation phase, variant index) pushed to GPU instanced buffers in `prop_pass`.
+
+## Code Layout
+- `src/world/prop_placer.h`, `src/world/prop_placer.cpp`: Procedural prop placement logic.
+- `src/render/prop_mesh.h`, `src/render/prop_mesh.cpp`: GPU instanced prop geometries.
+- `src/render/prop_pass.h`, `src/render/prop_pass.cpp`: Vulkan pass for prop rendering.
+- `shaders/prop.vert`, `shaders/prop.frag`: Prop shader programs.
+- `tests/world_test.cpp`, `tests/audit_test.cpp`, `tests/game_test.cpp`: Engine tests.
+
+
+######## sentinel ########
+--- BRIEFING.md (1101 bytes) ---
+# BRIEFING — 2026-07-30T13:08:24Z
+
+## Mission
+Orchestrate and sentinel-monitor GigaHrush2 engine and content expansion project.
+
+## 🔒 My Identity
+- Archetype: sentinel
+- Working directory: C:\hades\gigahrush2\.agents\sentinel
+- Orchestrator: e6255fe7-26bc-48bd-99e3-c248be912493
+- Victory Auditor: to be spawned on victory claim
+
+## 🔒 Key Constraints
+- No technical decisions — relay only
+- Victory Audit is MANDATORY before reporting completion
+
+## User Context
+- **Last user request**: GigaHrush2 Engine & Content Expansion (R1 Volumetric Light Grid, R2 Voxel Destruction & Particle Debris, R3 Procedural Wires & Interactive Props, R4 GPU MDI & Culling)
+- **Pending clarifications**: none
+- **Delivered results**: none
+
+## Project Status
+- **Phase**: in progress (Milestone 1 implementation active — light_grid.comp & gpu_light_grid)
+
+## Victory Audit Status
+- **Triggered**: no
+- **Verdict**: pending
+- **Retry count**: 0
+
+## Artifact Index
+- C:\hades\gigahrush2\ORIGINAL_REQUEST.md — Original User Request
+- C:\hades\gigahrush2\.agents\ORIGINAL_REQUEST.md — Original User Request (.agents backup)
+
+--- handoff.md (1371 bytes) ---
+# Handoff Report — Project Sentinel Initialization
+
+## Observation
+- Received user prompt for GigaHrush2 Engine & Content Expansion covering R1 (Volumetric Light Grid & Fog), R2 (GPU Voxel Destruction & Debris Cascade), R3 (Procedural Wire Clutter & Soviet Cyberpunk Props), and R4 (GPU MDI & Frustum/Occlusion Culling).
+- Recorded original request verbatim to `C:\hades\gigahrush2\ORIGINAL_REQUEST.md` and `C:\hades\gigahrush2\.agents\ORIGINAL_REQUEST.md`.
+- Initialized Sentinel `BRIEFING.md`.
+
+## Logic Chain
+1. Recorded user requirements to `ORIGINAL_REQUEST.md`.
+2. Initialized persistent state in `BRIEFING.md`.
+3. Spawned Project Orchestrator subagent (`teamwork_preview_orchestrator`, ID `e6255fe7-26bc-48bd-99e3-c248be912493`).
+4. Scheduled 8-minute progress reporting cron and 10-minute liveness check cron.
+
+## Caveats
+- Sentinel strictly does NOT make technical decisions or edit codebase.
+- Victory audit is mandatory and blocking once orchestrator reports project completion.
+
+## Conclusion
+Project Sentinel has dispatched the Project Orchestrator and established automated progress and liveness monitoring crons.
+
+## Verification Method
+- Verified `ORIGINAL_REQUEST.md` exists and contains full requirements.
+- Verified subagent orchestrator `e6255fe7-26bc-48bd-99e3-c248be912493` launched.
+- Verified progress and liveness crons are active in task queue.
+
+
+######## worker_game_audit ########
+--- BACKLOG.md (30582 bytes) ---
+# BACKLOG — worker_game_audit
+
+Lane: game audit + save/travel seams + content port. NOT render/prop.
+Updated: 2026-08-01 ~00:45 Samara
+
+## CLOSED this session
+| ID | Item | Proof | Commit |
+|----|------|-------|--------|
+| SAVSTAT | F5/F9 persist StatusSet active effects; kSaveVersion 8->9; wire +42 status (892/992/1007) | **unit GREEN:** game_test **219711 checks, 0 failures** (+90 saveload) | this commit |
+| MELEEGRID | player_melee_step forwards grid to apply_damage so WallBrace (Panelnik) soaks player melee like projectiles/mob swings | **unit GREEN:** game_test **219621 checks, 0 failures** (+6 MELEEGRID braced/open) | this commit |
+
+| POSRPG | voluntary P-possess carries RpgStats+kills+shots/hits via transfer_player_progression; mag stays on abandoned body | **unit GREEN:** game_test **219615 checks, 0 failures** (+29 possess transfer) | this commit |
+| SAVMAG | F5/F9 persist PlayerRanged + melee kills; kSaveVersion 7->8; wire +21 combat (850/950/965) | **unit GREEN:** game_test **219586 checks, 0 failures** (+40 saveload) | this commit |
+| SAVRPG | F5/F9 persist RpgStats + CraftingState; kSaveVersion 6->7; wire 829/929/944 | **unit GREEN:** game_test **219546 checks, 0 failures** (+120 saveload) | this commit |
+| ATTR1 | spend_attr_point via keys 1/2/3 → KeybindTable attr_str/agi/int → console "attr str|agi|int" → ConsoleRequest → main drain | **unit GREEN:** game_test **219426 checks, 0 failures**; suite_console attr bits + suite_keybind k1/k2/k3 | this commit |
+| AGIMV | agi_move_speed_mult_e3 multiplies ctl_->moveSpeed after base assign | live in main tick; unit pin rides ATTR1 count | this commit |
+| RPGCMBT-SHOT | --action rpgcmbt forces fresh_rpg(10) STR=20 AGI=20 + attackHeld + [rpgcmbt] log + HUD melee_damage | **PROOF=GREEN** shot_rpgcmbt.png 2.7MiB jpg=103373; [rpgcmbt] forced sheet + melee dmg=12 cd=242 str=20 agi=20 | this commit |
+| RPGCMBT | wire RPG melee/ranged formulas into combat | **unit GREEN:** 219409 checks, 0 failures; test_rpg_combat_wire | **79f860a** |
+| CORP1 | Corpse loot staging: Dead→CorpseLootPending→Corpse; interact no item-loss (stack merge / inv-full leave remainder); suite asserts staged not floor | **unit GREEN:** game_test **215499 checks, 0 failures**; loottable 600 corpses → 833 staged slots, 39 slime_sample_green, floor pickups=0; Betonoed 5..10 slots, rub/kill ~137.3 (window 60..250); interact harden in loot.cpp (resolve player before searched; stackMax partial move; recompute slotCount) | prior |
+| FEUD1 | R
+--- BRIEFING.md (4341 bytes) ---
+# BRIEFING — worker_game_audit
+
+## Mission
+Game-audit lane: find, pin, and fix real defects in `src/game/` and the travel/save seams in `src/app/main.cpp`. Keep suite_audit red=defect / green=pin honest. Do not stomp concurrent prop/render agents.
+
+## Identity
+- **Agent**: `worker_game_audit`
+- **Dir**: `C:\hades\gigahrush2\.agents\worker_game_audit`
+- **Repo**: `C:\hades\gigahrush2`
+- **Shell**: `git -C C:\hades\gigahrush2`
+- **Build**: `tools\win\build.bat` (Release); single-compiler owner — coordinate builds
+
+## Done (do not re-do)
+- [x] P2 loot-refill two-site trap closed — commit `702265d`
+- [x] Pin `travel_keeps_opened_crates` in `tests/suite_audit.inl` (ledger entry 9 CLOSED)
+- [x] CMake audit pin 74 → 140 checks, 0 failures
+- [x] Keyboard `[`/`]` path already had capture/apply (pre-existing)
+- [x] `--shot` path now has capture BEFORE `streamer.travel` + apply AFTER `refresh_floor_containers`
+- [x] F5/F9 save path already used refresh/apply (pre-existing)
+- [x] Engineering handoff written to this directory
+
+## Hard constraints
+1. **Path-limit git add** — only our files: `src/app/main.cpp` (surgical hunks only), `tests/suite_audit.inl`, `tests/audit_test.cpp`, `CMakeLists.txt` (audit pin line only). Never stage prop/embody/shader dirt.
+2. **Foreign dirty — DO NOT TOUCH / DO NOT COMMIT AS OURS**:
+   - `src/game/embody.cpp`
+   - `src/render/prop_pass.cpp`, `prop_pass.h`, `prop_mesh.cpp`, `prop_placer.*`, `cube_pass.h`
+   - `shaders/prop.frag`, `prop.vert`
+   - `tests/suite_props.inl`, `suite_rpg.inl`, `world_test.cpp`
+   - CMakeLists dirt beyond the audit PASS_REGULAR_EXPRESSION pin
+   - main.cpp propPlacer.populate call sites (foreign wiring; leave intact)
+3. **Surgical edits only** — Python or small search/replace; CRLF-safe; no whole-file rewrite of main.cpp.
+4. **suite_audit ledger 1–9 ALL CLOSED** — next defects need fresh forensic read; do not invent RED findings.
+5. **Pin bump**: every new CHECK in suite_audit requires CMake PASS_REGULAR_EXPRESSION update to match printed `audit_test: N checks, 0 failures`.
+
+## Live call sites (main.cpp — line nums drift; re-grep)
+| Site | Lines (approx) | capture | apply | notes |
+|------|----------------|---------|-------|-------|
+| keyboard `[`/`]` | ~955 / ~1003 | yes | yes | pre-702265d |
+| F5/F9 save/load | ~1447 / ~1488 | yes | yes | save path |
+| `--shot` travel | ~2238 / ~2268 | yes | yes | **702265d** |
+| propPlacer.populate | ~626,690,1015,2284 | n/a | n/a | FOREIGN — leave |
+
+## API reminder (`src/ga
+--- handoff.md (12431 bytes) ---
+# Handoff Report — worker_game_audit
+
+**Agent**: `worker_game_audit`  
+**Working Directory**: `C:\hades\gigahrush2\.agents\worker_game_audit`  
+**Lane**: Game audit (`src/game` defects + travel/save crate seams) — **NOT** prop/orchestrator_7 swarm  
+**Date**: 2026-07-30  
+
+---
+
+## 1. Observation
+
+### 1.1 Shipped fix — commit `702265d`
+```
+702265d fix(game): capture/apply opened crates on --shot travel path
+ CMakeLists.txt        |  4 +--
+ src/app/main.cpp      | 15 ++++++++
+ tests/audit_test.cpp  |  1 +
+ tests/suite_audit.inl | 96 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 114 insertions(+), 2 deletions(-)
+```
+
+**Defect (two-site trap):**  
+`refresh_floor_containers` destroys every `Container` on the arrival `LayerId` and respawns from seed `0xC0FFEE ^ floor*0x9e3779b9` (cap 64). That is correct for a first visit. A **return** visit must re-empty crates whose `OpenedContainerKey` was captured on the way out — otherwise loot → elevator → return is a free refill.
+
+There are **two** interactive travel sites in `main.cpp`:
+1. **Keyboard** `[` / `]` — already called `refresh_opened_containers` BEFORE `streamer.travel` and `apply_opened_containers` AFTER `refresh_floor_containers`.
+2. **`--shot` automated ride** — called travel + refresh_floor_containers **without** capture/apply. That was the live hole.
+
+F5/F9 save/load already used the same API for the byte round-trip; saveload tests cover that path. The missing pin was the **in-memory destroy+respawn seam** shared by keyboard and shot.
+
+### 1.2 Live call sites (re-grepped 2026-07-30; line nums drift)
+| Symbol | Lines | Role |
+|--------|-------|------|
+| `refresh_floor_containers` def | ~292 | destroy+respawn crates |
+| `propPlacer` member | ~481 | FOREIGN prop wiring |
+| `propPlacer.populate` | ~626, ~690, ~1015, ~2284 | FOREIGN — do not edit as ours |
+| keyboard capture | ~955 | `refresh_opened_containers` before travel |
+| keyboard `streamer.travel` | ~958 | |
+| keyboard refresh_floor | ~998 | |
+| keyboard apply | ~1003 | `apply_opened_containers` |
+| F5/F9 capture | ~1447 | |
+| F5/F9 apply | ~1488 | |
+| **--shot capture** | **~2238** | **added in 702265d** |
+| --shot `streamer.travel` | ~2241 | |
+| --shot refresh_floor | ~2264 | |
+| **--shot apply** | **~2268** | **added in 702265d** |
+
+### 1.3 API (`src/game/save.h`)
+```cpp
+struct OpenedContainerKey {
+    int16_t floor;   // in-game floor number, never LayerId
+    uint8_t cx, cy, cz;
+    uint8_t pad_;    // 6 B total; NO entity 
+--- ORIGINAL_REQUEST.md (1467 bytes) ---
+# ORIGINAL_REQUEST — worker_game_audit
+
+## User intent chain
+1. P2 loot-refill (opened crates refill on elevator return) — DONE in commit `702265d`.
+2. User: «ралтай дальше» — max effort on remaining game-audit defects.
+3. User: «хендофф пиши» / «хендофф пиши даун» — write proper engineering handoff NOW (not sentinel/orchestrator_7 prop swarm).
+
+## Session packet constraints
+- Done: `702265d` fix(game): capture/apply opened crates on `--shot` travel path
+- Files committed only: `src/app/main.cpp`, `tests/suite_audit.inl`, `tests/audit_test.cpp`, `CMakeLists.txt`
+- ctest `audit_findings`: `audit_test: 140 checks, 0 failures` (was 74)
+- Keyboard path already had capture/apply; shot path was the two-site trap — fixed
+- DO NOT TOUCH foreign dirty: `.agents/*` (other), `src/game/embody.cpp`, `src/render/prop_pass.cpp`, `shaders/prop.frag`
+- Shell: `git -C C:\hades\gigahrush2`; build: `tools\win\build.bat`
+- Sentinel handoff only tracks orchestrator_7 recovery — NOT game work
+- Next session MUST:
+  1. Write engineering handoff (this dir)
+  2. Continue max effort from BRIEFING/audit remaining defects without stomping other agents
+  3. Surgical Python/CRLF-safe edits only — no whole main.cpp rewrite
+
+## Lane identity
+- Agent dir: `.agents/worker_game_audit/`
+- Owns: game-audit findings, suite_audit pins, travel/crate/save seams in main.cpp (path-limited)
+- Does NOT own: prop_pass, prop_placer, prop.frag, suite_props, embody XP wiring, material chroma
+
+--- progress.md (8100 bytes) ---
+# progress.md — worker_game_audit
+
+## Cycle report (2026-08-01 ~03:08) - re-PAR1 GREEN (post-SAVSTAT)
+- [x] SAVSTAT pushed **6e36b09** (tests+CMake+docs; core was 1c3c204)
+- [x] re-PAR1: PBS @1985/@4954 + ai_release @1910/@4879 GREEN
+- [x] SAVSTAT F5@1865 / F9@3599 status wire intact; kSaveVersion=9
+- [x] MAGSHOT deferred optional (HUD mag already @4005)
+- [ ] idle: pull/push loop; re-PAR1 after next foreign main thrash
+
+## Cycle report (2026-08-01 ~03:04) - SAVSTAT CLOSED
+- [x] SAVSTAT: F5/F9 StatusSet persist (kSaveVersion 9, +42 wire)
+- [x] suite_saveload busy_run/same_run/wire_layout pins
+- [x] game_test GREEN **219711 checks, 0 failures** (was 219621; +90)
+- [x] CMake pin 219621 -> 219711
+- [x] BACKLOG CLOSED table + SAVSTAT section; pathspec commit
+
+## Checked
+- [x] Restore session; git status; light-grid unlocked main.cpp
+- [x] Wire full F9 load in src/app/main.cpp (save.h contract)
+- [x] Proof build with vcvars64 → gigahrush2.exe GREEN
+- [x] game_test GREEN includes suite_saveload
+- [x] F9 code on HEAD (7709b3e main.cpp hunk; WT clean for our path)
+- [x] Write BACKLOG.md this cycle
+- [x] Classify locks: gpu_light_grid / render foreign — skip
+- [x] SHOT1: delete truncated duplicate --shot else-if (0f7086c)
+- [x] Release rebuild gigahrush2 + game_test + audit_test after fix
+- [x] Real gameplay: --shot shot_travel.png --frames 900 --ride 2 → floor -14, PNG 2.7MiB, exit 0
+- [x] place_body_safely on BOTH keyboard and --shot ride
+- [x] SAV1: wire --action save|load one-shot after rides + stderr [save]/[load]
+- [x] SAV1 two-phase real proof PROOF=GREEN (f9_diag.txt)
+- [x] FOR1: elevator capture/restore PlayerRanged+PlayerMelee already on HEAD
+- [x] FOR1: test_elevator pins; game_test was 213917/0; pin docs closed prior cycle
+- [x] CORP1: loot_corpse_interact production harden (player resolve, stack merge, inv-full, slotCount)
+- [x] CORP1: suite_loottable.inl blocks 6–7 truth (staged slots, 0 floor Pickups, slime_green, Betonoed)
+- [x] FEUD1: faction_relations.cpp remove isFatalFeud bypass; kFeudMinHpPct floor always for NPCs
+- [x] game_test GREEN **215499 checks, 0 failures** (was 2 faction failures pre-FEUD1)
+- [x] CMake pin 213917 → **215499**
+- [x] CORP1/FEUD1: BACKLOG + progress CLOSED + architect notes
+- [x] CORPSHOT: --action corp harness (face/walk/melee → one E on corpse)
+- [x] CORPSHOT: stderr [corp] CORPSE LOOTED once per interact edge
+- [x] CORPSHOT: empty searched corpse prompt skip / REMAINDER label
+- [x] CORPSHOT real-game PROOF=GREEN (corp_
+
+GT _gt_long_err.txt exists=True size=165
+[aimem] RELEASE floor=0 layer=1 bodies=420 released=0
+[aimem] RELEASE floor=0 layer=1 bodies=420 released=0
+[aimem] RELEASE floor=1 layer=0 bodies=261 released=0
+
+
+GT _gt_long_out.txt exists=True size=0
+
+
+GT _gt_long_rc.txt exists=False size=0

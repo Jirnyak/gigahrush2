@@ -1,0 +1,32 @@
+shotAction == "mag" YES
+[mag] FORCE YES
+[mag] RIDE YES
+[mag] PROOF YES
+magStamp YES
+PlayerRanged YES
+ranged_for_item YES
+kItemCount YES
+ItemSlot YES
+bytes 295133
+mag_at 136020
+snip_written
+proof_at 292659
+setvbuf_gt True
+    // instead of looking hung at the first long suite (npcpool/samosbor2).
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+    test_inventory();
+    test_pool_basics
+include ranged_table.h NO
+include item_table.h NO
+include inventory NO
+combat_has_PlayerRanged True
+combat_includes_ranged True
+CH: #include <cstddef>
+CH: #include <cstdint>
+CH: #include "ecs/components.h"
+CH: #include "ecs/registry.h"
+CH: #include "game/event_bus.h"
+CH: #include "game/status.h"
+CH: #include "game/inventory.h"
+CH: #include "game/item_table.h"

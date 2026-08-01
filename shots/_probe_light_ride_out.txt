@@ -1,0 +1,324 @@
+==== lightChance full context ====
+12:
+13:constexpr float kHalfPi = 1.5707963267948966f;
+14:constexpr float kPi = 3.141592653589793f;
+15:
+16:inline std::uint32_t spatial_hash(int x, int y, int z, std::uint32_t seed) {
+17:    std::uint32_t h = static_cast<std::uint32_t>(x) * 73856093u ^
+18:                      static_cast<std::uint32_t>(y) * 19349663u ^
+19:                      static_cast<std::uint32_t>(z) * 83492791u ^ seed;
+20:    h = (h ^ (h >> 16)) * 0x45d9f3bu;
+21:    h = (h ^ (h >> 16)) * 0x45d9f3bu;
+22:    return h ^ (h >> 16);
+23:}
+24:
+25:inline bool is_solid(CellType type) {
+26:    return type != kCellAir;
+27:}
+28:
+29:struct PropSpawnConfig {
+30:    std::uint32_t grateFloorChancePct   = 15;
+31:    std::uint32_t wallCabinetChancePct = 12;
+32:    std::uint32_t lightChancePct       = 25;
+33:    std::uint32_t anomalyChancePermil  = 15;
+34:    std::uint32_t crateCornerChancePct = 18;
+35:
+36:    vec3 grateColor   = {0.30f, 0.30f, 0.32f};
+37:    vec3 cabColor     = {0.32f, 0.35f, 0.38f};
+38:    vec3 warmLampCol  = {1.00f, 0.90f, 0.72f};
+39:    vec3 coolLampCol  = {0.75f, 0.88f, 1.00f};
+40:    vec3 crystalCol   = {0.70f, 0.15f, 0.95f};
+41:    vec3 acidCol      = {0.15f, 0.85f, 0.25f};
+42:    vec3 fungalCol    = {0.40f, 0.75f, 0.30f};
+43:    vec3 beamColor    = {0.22f, 0.24f, 0.26f};
+44:    vec3 crateColor   = {0.45f, 0.35f, 0.25f};
+45:};
+46:
+47:constexpr PropSpawnConfig kCfg{};
+48:
+49:// Distinct seeds per rule to diversify spatial hash across placement rules
+50:constexpr std::uint32_t kSaltGrate    = 0x22222222u;
+51:constexpr std::uint32_t kSaltWall     = 0x33333333u;
+52:constexpr std::uint32_t kSaltLight    = 0x44444444u;
+53:constexpr std::uint32_t kSaltAnomaly  = 0x55555555u;
+54:constexpr std::uint32_t kSaltCrate    = 0x77777777u;
+55:constexpr std::uint32_t kSaltPillar   = 0x88888888u;
+56:constexpr std::uint32_t kSaltRailing  = 0x99999999u;
+57:constexpr std::uint32_t kSaltBench    = 0xaaaaaaaau;
+58:constexpr std::uint32_t kSaltSecurity = 0xbbbbbbbbu;
+59:
+60:} // namespace
+61:
+---
+157:                        es.animPhase = static_cast<std::uint8_t>(rngWall & 0xFFu);
+158:                        propPass.add_instance(PropShape::ElectricalShield, es);
+159:                        totalPlaced_++;
+160:                        wallOccupied = true;
+161:                    } else if (wsel < 35) {
+162:                        // Standard terminal / control panel
+163:                        PropInstance cab{};
+164:                        cab.origin    = {wx, wy, wz};
+165:                        cab.yaw       = yawVal;
+166:                        cab.color     = kCfg.cabColor;
+167:                        cab.matId     = 3;
+168:                        cab.animPhase = static_cast<std::uint8_t>(rngWall & 0xFFu);
+169:                        propPass.add_instance(PropShape::Terminal, cab);
+170:                        totalPlaced_++;
+171:                        wallOccupied = true;
+172:                    }
+173:                }
+174:
+175:                // 4. Lights & Incandescent Bulbs ("Лампочка Ильича на патроне")
+176:                std::uint32_t rngLight = spatial_hash(x, y, z, seed ^ kSaltLight);
+177:                if (solidAbove && !ceilingOccupied && (rngLight % 100 < kCfg.lightChancePct)) {
+178:                    PropInstance lamp{};
+179:                    lamp.origin    = {wx, wy + 1.55f, wz};
+180:                    lamp.yaw       = static_cast<float>(rngLight % 4) * kHalfPi;
+181:                    lamp.color     = {1.00f, 0.78f, 0.45f}; // Warm 2700K tungsten amber light
+182:                    lamp.matId     = 0;
+183:                    lamp.emissive  = 250; // Emissive filament
+184:                    lamp.animPhase = static_cast<std::uint8_t>(rngLight & 0xFFu); // Mains flicker phase
+185:
+186:                    PropShape lightShape = (rngLight & 1) ? PropShape::BareBulb : PropShape::FloodLamp;
+187:                    propPass.add_instance(lightShape, lamp);
+188:                    totalPlaced_++;
+189:                    ceilingOccupied = true;
+190:                }
+191:
+192:                std::uint32_t rngSec = spatial_hash(x, y, z, seed ^ kSaltSecurity);
+193:                if (solidAbove && (solidWest || solidEast || solidNorth || solidSouth) && !wallOccupied && (rngSec % 100 < 8)) {
+194:                    PropInstance cam{};
+195:                    cam.origin    = {wx, wy + 1.50f, wz};
+196:                    if (solidWest)        cam.yaw = 0.0f;
+197:                    else if (solidEast)   cam.yaw = kPi;
+198:                    else if (solidSouth)  cam.yaw = kHalfPi;
+199:                    else if (solidNorth)  cam.yaw = kHalfPi * 3.0f;
+200:                    cam.color     = {0.40f, 0.42f, 0.45f};
+201:                    cam.matId     = 4;
+202:                    cam.emissive  = 120;
+203:                    cam.animPhase = static_cast<std::uint8_t>(rngSec & 0xFFu);
+204:
+205:                    propPass.add_instance(PropShape::SecurityCamera, cam);
+206:                    totalPlaced_++;
+---
+285:
+286:                // 7. Floor Clutter, Furniture & Storage (CrateBox, CrateLong, Barrel, StairStep, Railing, BenchSlab)
+287:                std::uint32_t rngBench = spatial_hash(x, y, z, seed ^ kSaltBench);
+288:                if (solidBelow && (solidWest || solidEast || solidNorth || solidSouth) && !floorOccupied && (rngBench % 100 < 10)) {
+289:                    PropInstance bench{};
+290:                    bench.origin    = {wx, wy + 0.01f, wz};
+291:                    if (solidWest)        bench.yaw = 0.0f;
+292:                    else if (solidEast)   bench.yaw = kPi;
+293:                    else if (solidSouth)  bench.yaw = kHalfPi;
+294:                    else if (solidNorth)  bench.yaw = kHalfPi * 3.0f;
+295:                    bench.color     = {0.50f, 0.30f, 0.20f};
+296:                    bench.matId     = 2;
+297:                    bench.animPhase = static_cast<std::uint8_t>(rngBench & 0xFFu);
+298:
+299:                    propPass.add_instance(PropShape::BenchSlab, bench);
+300:                    totalPlaced_++;
+301:                    floorOccupied = true;
+302:                }
+303:
+304:                std::uint32_t rngRail = spatial_hash(x, y, z, seed ^ kSaltRailing);
+305:                if (solidBelow && !solidAbove && !floorOccupied && (nOpen >= 2) && (rngRail % 100 < 8)) {
+306:                    PropInstance rail{};
+307:                    rail.origin    = {wx, wy + 0.01f, wz};
+308:                    rail.yaw       = (!solidWest && !solidEast) ? 0.0f : kHalfPi;
+309:                    rail.color     = {0.35f, 0.38f, 0.40f};
+310:                    rail.matId     = 4;
+311:                    rail.animPhase = static_cast<std::uint8_t>(rngRail & 0xFFu);
+312:
+313:                    propPass.add_instance(PropShape::Railing, rail);
+314:                    totalPlaced_++;
+315:                    floorOccupied = true;
+316:                }
+317:
+318:                std::uint32_t rngCrate = spatial_hash(x, y, z, seed ^ kSaltCrate);
+319:                if (solidBelow && (nOpen <= 2) && (solidWest || solidEast) && (solidNorth || solidSouth) && !floorOccupied && (rngCrate % 100 < kCfg.crateCornerChancePct)) {
+320:                    PropInstance item{};
+321:                    item.origin    = {wx, wy + 0.01f, wz};
+322:                    item.yaw       = static_cast<float>(rngCrate % 360) * (kPi / 180.0f);
+323:                    item.color     = kCfg.crateColor;
+324:                    item.matId     = 2;
+325:                    item.animPhase = static_cast<std::uint8_t>(rngCrate & 0xFFu);
+326:
+327:                    PropShape shape = PropShape::CrateBox;
+328:                    std::uint32_t csel = rngCrate % 4;
+329:                    if (csel == 0) {
+330:                        shape = PropShape::CrateLong;
+331:                    } else if (csel == 1) {
+332:                        shape = PropShape::Barrel;
+333:                        item.color = {0.38f, 0.28f, 0.18f};
+334:                    } else if (csel == 2) {
+---
+
+==== propPlacer populate / ride / shot ====
+1347:    gpu::PropPlacer propPlacer;
+1501:            propPlacer.populate(stack.layer(ground).grid(), propPass, 1337u);
+1578:                propPlacer.populate(stack.layer(l0).grid(), propPass, fseed);
+2041:            propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);
+3711:                                propPlacer.populate(stack.layer(nl).grid(),
+5043:                            propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);
+
+==== ride/shot floor loops ====
+13:// (streaming, floor_stream.h / master_prompt #9). `[` and `]` ride down/up a
+804:        for (const DemoFloor& f : kDemoFloors)
+1046:// This used to block: coarse ~1.9 s + fine ~1.8 s, measured, so every elevator ride
+1168:    // --shot FILE [--frames N] [--ride N]: render, capture, exit.
+1178:    // --floor N: ride straight to a labelled floor (up OR down — --ride only
+1179:    // descends, which made the padic floor at +4 unreachable in a --shot
+1180:    // proof). Uses the console teleport seam, so it exercises the real ride.
+1204:        else if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
+1206:        else if (a == "--ride" && i + 1 < argc) shotRide = std::atoi(argv[++i]);
+1513:        for (int f = game::kMinFloor; f <= game::kMaxFloor; ++f) {
+1702:    // safe: it happens before the player has touched anything. --shot captures
+1810:    // performs the ride at the top of a frame, never mid-draw).
+1883:    // every ride — a transition is a load screen, where I/O belongs. [save.h]
+1940:    // One ride, either shape: the elevator keys ([ / ]) pass a DIRECTION, the
+1967:            // keyboard/--shot leave seam so a ride without an immediate unload
+1979:        game::RideResult ride =
+1986:        if (!ride.moved) return false;
+1987:        player = ride.player;
+1988:        currentFloor = ride.floor;
+1997:        // A rumour is about a FLOOR, so carrying one across a ride makes it
+2046:        // place_body_at_cell; keyboard/--shot did not. [save.h]
+2369:                // keyboard (no keys in --shot), so face+walk MUST land after
+2445:                // and a component would reset the clock on every floor ride.
+2459:                // leave (do_ride + --shot travel) and again inside FloorStreamer::unload.
+2470:                // compact stderr pulse so a --shot harness can assert the store
+2583:                    // --ride hops have landed so the snapshot is the deep floor,
+3133:                            // Headless --shot audit trail (HUD is invisible in captures).
+3553:                    // Headless --shot proof: HUD is invisible in captures
+4949:            // --shot: count presented frames, then capture and quit. Counted here
+4964:                    // (measured 2.5 s + 2.4 s) to finish before the next ride.
+4968:                    // Same capture as the keyboard ride path. Two travel sites;
+4969:                    // without this, --shot loot -> ride -> return refills crates.
+4982:                        // under --shot --ride. [ai.h]
+5002:                        // it, and only the KEYBOARD ride path maintained it — so a
+5003:                        // --shot ride built floor -36's doors against floor 0's
+5020:                        // Same seam as keyboard ride + F9 apply. [save.h]
+5026:                        // the keyboard ride path. This is the SECOND travel
+5027:                        // site; a fix that touches only one path leaves --shot
+5045:                        // Same clear as the keyboard ride path. There are TWO travel
+5046:                        // sites and the first fix only touched one, so a --shot
+5058:                        // Same place_body_safely as the keyboard ride path. Two travel
+5059:                        // sites; a fix that touches only one leaves --shot soft-locked
+
+==== floor enter / leave prop ====
+998:// Repopulate the active floor's monsters: clear whatever was on the layer, then
+1351:    // In a full game, a prop placement pass would populate these from world
+1501:            propPlacer.populate(stack.layer(ground).grid(), propPass, 1337u);
+1578:                propPlacer.populate(stack.layer(l0).grid(), propPass, fseed);
+1943:    // props and the per-floor clocks — is identical, which is exactly why it
+2041:            propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);
+3711:                                propPlacer.populate(stack.layer(nl).grid(),
+5043:                            propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);
+
+==== backlog light/ride/prop ====
+16:| AGIMV | agi_move_speed_mult_e3 multiplies ctl_->moveSpeed after base assign | live in main tick; unit pin rides ATTR1 count | this commit |
+24:| PBS1 | place_body_safely after floor travel (keyboard + --shot --ride) | shot_travel.png floor -14, 901 frames, exit 0 | prior |
+32:| RPG1 | Elevator body-swap preserves RpgStats (xp/psi/level/attrPoints/attr[3]). Capture before fold_back, emplace_or_replace after embody_as_player. embody.cpp untouched. | **uni
+47:| P3 | MAGSHOT | Optional: real-game HUD mag line across --ride | main.cpp foreign-aware | unit pin owns body-swap |
+56:- main.cpp propPlacer / light-grid sites (surgical save hunks only if needed)
+104:fix: elevator.cpp ride capture/restore PlayerRanged+PlayerMelee
+109:phase1: --ride 2 --action save → floor -14, sav 780B, shot_f9_save.png PROOF=GREEN
+110:phase2: --ride 0 --action load → floor -14 @44,35,2, shot_f9_load.png
+115:--shot shot_travel.png --frames 900 --ride 2 → floor -14, PNG ~2.7 MiB, exit 0
+121:exe: build-win/Release/gigahrush2.exe --shot shots/shot_corp.png --frames 2400 --ride 0 --action corp
+133:exe: build-win/Release/gigahrush2.exe --shot shots/shot_status.png --frames 480 --ride 0 --action status
+157:exe: build-win/Release/gigahrush2.exe --shot shots/shot_carve.png --frames 1200 --ride 0 --action wall
+177:- ai_release on do_ride leave, --shot travel, FloorStreamer::unload
+226:| keyboard `do_ride` lambda | **1952** | after propPlacer.populate; before save_run_now; return true |
+227:| `--shot` travel (`--ride` / `--floor`) | **4798** | after noise_clear; comment at 4795 explicitly "Same place_body_safely as the keyboard ride path" |
+232:| keyboard `do_ride` leave | **1877** | `game::ai_release(reg, leaveLayer)` before unload |
+233:| `--shot` travel leave | **4723** | same AIMEM leave release under `--shot --ride` |
+237:- `do_ride` lambda @1851; keyboard +/- @2144/2146; `--floor` absolute hop @4694
+244:- propPlacer ×7, light-grid ×20, GpuCull ×2 keywords in main.cpp
+293:  exe: --shot shots/shot_place.png --frames 480 --ride 2
+307:  BASE sheet for (level,id), but mid-run XP / spent attrs / psi are WIPED on every ride.
+308:  Death possession already captures/restores via carriedRpg in main.cpp; ride is not death.
+316:  before ride: mutate xp=777 psi=42 level=5 attrPoints=3 Str=11 Agi=9 Int=7
+317:  after UP ride: CHECK all fields
+318:  after DOWN ride: CHECK all fields again (second fold must keep sheet)
+332:place_body_safely @1952 (keyboard do_ride) + @4798 (--shot travel)  GREEN
+339:`%u/%u mag` from PlayerRanged@3865. Real-game --ride HUD screenshot = optional polish.
+396:  live: gigahrush2.exe --shot shots/shot_rpgcmbt.png --frames 900 --ride 0 --action rpgcmbt
+501:place_body_safely @1985 (keyboard do_ride) + @4954 (--shot travel)  GREEN
+
+==== audit_unwired head ====
+# Audit - unwired game-lane features
+
+Date: 2026-07-31
+Lane: game audit only (no src/render, no dental-crm)
+Scope: features that EXIST in code but are NOT on the live main/combat gameplay path.
+
+## Top 3 (ranked)
+
+### 1. ATTR1 - spend_attr_point dead to gameplay
+
+Impact: High. Blast: Tiny. Invent: None.
+Impl: src/game/rpg.h:214, src/game/rpg.cpp:355, src/app/main.cpp:3834-3836 HUD tease, tests/suite_rpg.inl:323+
+Callers from main/combat: none.
+Not a gap: combat.cpp:205-218 award_xp levels + attrPoints.
+Next patch: main 1/2/3 keys -> spend_attr_point(*rs, Attr, &hp, &maxHp); HUD help.
+
+### 2. SAVRPG - F5/F9 save/load drops RpgStats (+ craft known-bits)
+
+Impact: High. Blast: Medium. Invent: None.
+Impl live: main.cpp:1676/3299/3686 carriedRpg; elevator.cpp:58-89 hadRpg; craft_write/read craft.h:400+/craft.cpp:360+; craft live main.cpp:1715/3552+
+Save gap: save.h PlayerSnapshot:330 and SaveState:352 have no RpgStats/craft; save_run_now main.cpp:1814-1843 skips them; save.cpp:364+ never visits craft_write.
+Next patch: bump kSaveVersion; embed RpgStats + craft blob; capture/restore in save_run_now + F9 load.
+
+### 3. AGIMV - agi_move_speed_mult_e3 unused on move
+
+Impact: Medium-high. Blast: Tiny. Invent: None.
+Impl: rpg.h:145 / rpg.cpp:220; suite_rpg.inl:77,98.
+Live move main.cpp:2396-2399: kPlayerWalkSpeed * needs.speedScale * status only - no AGI mult.
+Next patch: multiply by agi_move_speed_mult_e3(*rs)/1000.f when RpgStats present.
+
+## Candidate sweep
+
+- XP on kill: WIRED combat.cpp:205-218
+- level-up: WIRED inside award_xp
+- PlayerRanged mag body-swap: WIRED elevator.cpp:46-84; HUD :3865
+- inventory equip melee: WIRED auto best-in-bag
+- craft/scrap gameplay: WIRED; only persist dead
+- psi spend: DEFER needs.cpp:344 Psi not modelled
+- str_durability_wear_mult_e3: DEFER no wear tick
+- int_contract/xp_for_quest: lower pri flat pay
+
+## Execute order
+1. ATTR1  2. AGIMV  3. SAVRPG
+
+
+FILE .agents\explorer_m3_1\handoff.md
+  32:if (solidAbove && (rng % 100 < kCfg.pipeCeilingChancePct)) { ... }
+  38:if (solidAbove && (nOpen >= 3 || (x % 8 == 0 && z % 8 == 0 && (rng % 100 < kCfg.lightChancePct)))) { ... }
+  42:if (solidBelow && solidAbove && (x % 8 == 0) && (z % 8 == 0) && (rng % 100 < kCfg.supportBeamChancePct)) { ... }
+  68:} else if (solidAbove && (rng % 100 < 30)) {
+  114:* **Contrast with `--shot` ride path** (`src/app/main.cpp` Lines 2260–2295): `propPlacer.populate` is **missing** during automated multi-floor floor transitions
+  132:   - In Rule 4, the condition is `solidAbove && (nOpen >= 3 || (x % 8 == 0 && z % 8 == 0 && (rng % 100 < kCfg.lightChancePct)))`.
+  133:   - Due to operator precedence, `nOpen >= 3` bypasses the `(rng % 100 < lightChancePct)` probability test. Every single intersection cell (`nOpen >= 3`) with a
+  150:   - `--shot --ride N` automated floor traversal (`main.cpp:2260-2295`) missing `propPlacer.populate()`, leaving subsequent floors without props during automate
+  174:6. **Integration Gap**: Missing `propPlacer.populate()` in `main.cpp` `--shot --ride` code path.
+  186:   - Inspect `src/render/prop_placer.cpp:159`. Confirm expression `nOpen >= 3 || (x % 8 == 0 && z % 8 == 0 && (rng % 100 < kCfg.lightChancePct))`.
+  195:   - Search for `propPlacer.populate` in `src/app/main.cpp`. Confirm presence at lines 690 and 1015 (keyboard ride path) and absence in lines 2260–2295 (`--shot
+  208:if (solidAbove && (rng % 100 < kCfg.lightChancePct) && (nOpen >= 3 || (x % 8 == 0 && z % 8 == 0)))
+  215:} else if (solidAbove && (rng % 100 < 30)) {
+  223:// 4. Add propPlacer.populate() to main.cpp --shot ride path:
+
+FILE .agents\worker_m1_1\handoff.md
+  26:  - `FloodLamp` rule contained operator precedence coupling: `if (solidAbove && (nOpen >= 3 || (x % 8 == 0 && z % 8 == 0 && (rng % 100 < kCfg.lightChancePct))))
+  31:  - Automated `--shot --ride` floor transitions (lines 2260-2295) did not call `propPlacer.populate()`.
+  49:   - Verified that all 25 `PropShape` meshes are initialized during `PropPass::init()`, `instBufs_[s][f]` allocated per frame in flight, vertex attribute stride
+  53:   - **FloodLamp Bug Fix**: Fixed precedence to `if (solidAbove && (rngLight % 100 < kCfg.lightChancePct) && (nOpen >= 3 || (x % 8 == 0 && z % 8 == 0)))`.
+  54:   - **AcidPool Bug Fix**: Assigned `PropShape::AcidPool` exclusively when `below == kMatAcidPool`; `PropShape::FungalColumn` when `solidAbove && (rngAnomaly % 
+  67:   - Added `propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);` inside the automated `--shot --ride` floor transition block in `src/app/main.cpp` (ar
+  80:All 25 `PropShape` procedural mesh generators in `prop_mesh.cpp` are now fully implemented with accurate 3D parametric geometry, correct smooth/flat normals, cl
+  101:   Run `--shot --ride` mode to confirm props populate cleanly across automated floor transitions:
+
+FILE .agents\worker_m1_1\ORIGINAL_REQUEST.md
+  56:   - Fix FloodLamp operator precedence bug: `if (solidAbove && (rng % 100 < kCfg.lightChancePct) && (nOpen >= 3 || (x % 8 == 0 && z % 8 == 0)))`.
+  57:   - Fix AcidPool floor material check: assign `AcidPool` only when `below == kMatAcidPool`; assign `FungalColumn` when `solidAbove && (rng % 100 < 30)`; defaul
+  62:   - Ensure `propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);` is called during automated `--shot --ride` floor transitions (around line 2260-2295)

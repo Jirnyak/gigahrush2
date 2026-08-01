@@ -1,0 +1,4 @@
+docs(rpg1): mark 08be4ee pushed + re-PAR1 travel seams GREEN
+
+Post-push backlog: RPG1 hash pinned, re-grep PBS+ai_release both sites
+intact after RPG1. MAGSHOT deferred (unit pin owns mag body-swap).

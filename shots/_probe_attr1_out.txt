@@ -1,0 +1,210 @@
+rpg.h:15|// to live: level, xp, attrPoints, str/agi/int, psi, and the 13 derived multipliers.
+rpg.h:63|enum class Attr : std::uint8_t { Str = 0, Agi, Int, Count };
+rpg.h:96|struct RpgStats {
+rpg.h:100|    std::uint8_t attrPoints = 0;   // 7  unspent
+rpg.h:145|std::uint16_t agi_move_speed_mult_e3(const RpgStats& r);
+rpg.h:214|bool spend_attr_point(RpgStats& r, Attr a,
+main attrPoints: [3836]
+main RpgStats: [1676, 3299, 3675, 3686, 3687, 3824]
+main kPlayerWalkSpeed: [752, 2251, 2400]
+main speedScale: [2400, 4087]
+main shotAction: [1179, 1180, 1204, 2239, 2240, 2446, 2448, 2450, 2478, 2483, 2543, 2603, 2612, 2613, 2635, 2636, 2637, 2641, 2643, 2646]
+main KEY_: [2045]
+main scancode: [17, 1754, 1790, 2050, 2052, 2058, 2059, 4515]
+main level: [3, 100, 1672, 3295, 3676, 3689, 3690, 3826, 3827, 3828, 3831, 3833]
+main STR: [3020, 3834]
+main AGI: [3834]
+
+===== src/app/main.cpp MOVE 737-777 =====
+737|        *p_focus = true; // stay in the input line for the next command
+738|    }
+739|    ImGui::End();
+740|}
+741|
+742|// The player's unencumbered walk speed. Named here because the survival clock now
+743|// scales it every tick, so the base value has to live somewhere that is not the
+744|// Controller it overwrites — otherwise the first exhausted tick would halve the
+745|// speed and the second would halve the already-halved value, decaying to zero.
+746|// Matches Controller::moveSpeed's own default ([components.h]).
+747|// What one R press spends on supplies. A fixed budget rather than a shopping UI: the
+748|// interesting decision is HOW MUCH of the run to convert back into survival, not which
+749|// of 446 items to click. [vendor.h]
+750|constexpr std::int32_t kResupplyBudget = 600;
+751|
+752|constexpr float kPlayerWalkSpeed = 6.0f;       // fog.w, scales the hemispheric term
+753|
+754|// The demo floor stack: one row per floor MODULE. Numbers are the in-game labels
+755|// the FloorRegistry assigns (floors.md); kinds are picked to show every geometry
+756|// family side by side. Floor 0 is the residential hub the player starts on.
+757|struct DemoFloor {
+758|    int number;
+759|    game::FloorKind kind;
+760|};
+761|//
+762|// The numbers are DEEP on purpose, and this is a correction rather than content.
+763|// The stack used to be 0..4, and every depth budget in the game keys off |z|:
+764|//
+765|//   * `anchor_for_floor` snaps anything within a few floors of 0 to FloorBit::Z0, so
+766|//     all five floors drew from the same habitat slice of the 69-kind roster.
+767|//   * `samosbor_duty01` at |z| <= 4 is ~2%, so the depth gradient the samosbor clock
+768|//     exists to produce was invisible — one duty figure, five floors.
+769|//   * `economy_band` put every floor in E0, capping loot at 90 roubles, so the
+770|//     extraction loop's entire risk/reward curve was flat.
+771|//
+772|// Three shipped systems were therefore unobservable, and no test would have said so
+773|// because each of them is correct in isolation. The anchors the mob ecology actually
+774|// authors are {-50, -36, -26, 0, +14, +30}, so the stack now reaches them: the hub,
+775|// two shallow floors, then the four descending anchors and the two above.
+776|constexpr DemoFloor kDemoFloors[] = {
+777|    {0, game::FloorKind::Residential},   // start / hub — E0, samosbor ~2% duty
+
+===== src/app/main.cpp HUD 3826-3871 =====
+3826|                        rs->level < game::kRpgLevelCap
+3827|                            ? game::xp_for_level(
+3828|                                  static_cast<std::uint8_t>(rs->level + 1))
+3829|                            : 0u;
+3830|                    if (need > 0)
+3831|                        ImGui::Text("LVL %u  XP %u / %u", rs->level, rs->xp, need);
+3832|                    else
+3833|                        ImGui::Text("LVL %u  (MAX)", rs->level);
+3834|                    ImGui::Text("STR %u  AGI %u  INT %u%s",
+3835|                                rs->attr[0], rs->attr[1], rs->attr[2],
+3836|                                rs->attrPoints > 0 ? "   [+pts]" : "");
+3837|                    ImGui::Text("PSI %u / %u", rs->psi, game::max_psi(*rs));
+3838|                }
+3839|            {
+3840|                std::int32_t carried = 0;
+3841|                int slots = 0;
+3842|                const game::NpcRef* nr = reg.valid(player)
+3843|                                             ? reg.try_get<game::NpcRef>(player)
+3844|                                             : nullptr;
+3845|                if (nr && pool.valid(nr->id)) {
+3846|                    const game::Inventory& inv = pool.inventory(nr->id);
+3847|                    carried = game::inventory_value(inv);
+3848|                    for (const auto& sl : inv.slots)
+3849|                        if (sl.item != 0) ++slots;
+3850|
+3851|                    const game::ItemId wpn = game::equipped_melee(inv);
+3852|                    const game::ItemId arm = game::equipped_armour(inv);
+3853|                    const game::MeleeDef* md = game::melee_for_item(wpn);
+3854|                    if (!md) md = &game::unarmed_melee();
+3855|                    // The firearm, when there is one. Named separately from the
+3856|                    // melee line because they are different loadout slots, not two
+3857|                    // spellings of the same one.
+3858|                    if (const game::ItemId g_ = game::equipped_ranged(inv)) {
+3859|                        const game::RangedDef* rd = game::ranged_for_item(g_);
+3860|                        const auto* prs = reg.try_get<game::PlayerRanged>(player);
+3861|                        if (rd)
+3862|                            ImGui::Text("gun: %s  %u x%u dmg  %u/%u mag  "
+3863|                                        "%u shots %u hits",
+3864|                                        game::item_name(g_), rd->dmg, rd->pellets,
+3865|                                        prs ? prs->magCount : 0, rd->magazine,
+3866|                                        prs ? prs->shots : 0, prs ? prs->hits : 0);
+3867|                    }
+3868|                    ImGui::Text("weapon: %s (%u dmg) | armour: %s",
+3869|                                wpn == game::kInvalidItem ? "fists"
+3870|                                                          : game::item_name(wpn),
+3871|                                md->dmg,
+scancode hit 2050|if (e.key.scancode != SDL_SCANCODE_ESCAPE)
+shotAction 1204|else if (a == "--action" && i + 1 < argc) { shotAction = argv[++i]; }
+shotAction 2239|// shotAction=="wall" block only holds attackHeld + logs.
+shotAction 2240|if (shotPath && shotAction == "wall" && reg.valid(player) &&
+shotAction 2446|if (shotAction == "attack") {
+shotAction 2448|} else if (shotAction == "interact") {
+shotAction 2450|} else if (shotAction == "corp" && reg.valid(player) &&
+shotAction 2543|} else if (shotAction == "wall" && reg.valid(player) &&
+shotAction 2603|} else if (!shotActionConsumed && shotAction == "carve" &&
+shotAction 2613|} else if (!shotActionConsumed && shotAction == "status" &&
+shotAction 2637|(shotAction == "save" || shotAction == "load") &&
+shotAction 2641|if (shotAction == "save") {
+combat.cpp:1212|    // RPGCMBT: STR/level scale damage via melee_damage(); AGI shortens cooldown;
+combat.cpp:1222|    std::int16_t swingDmg = static_cast<std::int16_t>(wp->dmg);
+combat.cpp:1223|    std::uint16_t swingCd = wp->cooldownMs;
+combat.cpp:1225|        swingDmg = melee_damage(*rs, heldWeapon, static_cast<std::int16_t>(wp->dmg));
+combat.cpp:1231|        swingCd = static_cast<std::uint16_t>(cd > 65535u ? 65535u : (cd < 1u ? 1u : cd));
+combat.cpp:1288|                             carve_power_from_dmg(swingDmg),
+combat.cpp:1290|                pm.cooldownMs = swingCd;
+combat.cpp:1300|    DamageResult r = apply_damage(reg, pool, best, swingDmg,
+combat.cpp:1302|    pm.cooldownMs = swingCd;
+
+===== PROOF PLAN =====
+# RPGCMBT live gameplay proof plan
+
+## Status
+- Unit pin: tests/suite_rpg.inl -> test_rpg_combat_wire (game_test.exe / shots/_run_rpgcmbt_test.py)
+- Shot infra: REAL --shot in src/app/main.cpp + src/render/screenshot.h (swapchain capture)
+- RpgStats first-spawn attach: NOT a blocker (already attached)
+
+## Exact spawn / RpgStats sites
+- ATTACH: src/game/embody.cpp:95 emplace_or_replace RpgStats(random_rpg(pool.level(id), id)) in embody_as_player
+- INVOKE: src/game/floor_stream.cpp:204 first-load designate -> embody_as_player
+- Death reapply: src/app/main.cpp:3686 carriedRpg after possess_a_survivor
+- Elevator preserve: src/game/elevator.cpp:53-89 copy RpgStats across ride if present
+- carried seed: src/app/main.cpp:1676 fresh_rpg(1) fallback only
+- Call chain: main -> FloorStreamer::ensure_loaded -> floor_stream.cpp:204 -> embody.cpp:95
+
+## Shot CLI (existing)
+gigahrush2.exe --shot FILE [--frames N] [--ride N] [--floor N] [--orbit] [--action NAME] [--no-hud]
+Parse: main.cpp:1156-1204. Capture: main.cpp:4806-4813.
+
+### Existing --action values (real systems)
+- attack, interact, corp, wall, carve, status, save, load
+
+### Prior launch templates
+- PADIC: --shot shot_padic_play.png --frames 480 --floor 4 --action attack (cwd=ROOT) runner=_run_padic_proof.py
+- WALL: --shot shot_carve.png --frames 1200 --ride 0 --action wall runner=_run_carve_proof.py
+- CORP: --action corp runner=_run_corp_proof.py
+- TRAVEL: --frames 900 --ride 2 runner=_run_shot.py
+
+Existing PNGs: shot_aimem, shot_carve, shot_corp, shot_f9_load, shot_f9_save, shot_padic, shot_padic_play, shot_place, shot_status, shot_tex1, shot_travel
+
+## Combat scaling
+src/game/combat.cpp player_melee_step ~1212-1232:
+- With RpgStats: swingDmg=melee_damage; CD from AGI*STR heavy mults
+- Without: raw table (identity)
+
+## HUD strings (main.cpp:3823-3837)
+- LVL u  XP u / u
+- LVL u  (MAX)
+- STR u  AGI u  INT u
+- STR u  AGI u  INT u   [+pts]
+- PSI u / u
+- hits taken / kills
+- weapon: s (u dmg)  NOTE: table dmg NOT scaled
+
+## Stderr grep
+Existing: shot: | [wall] melee toward solid | [corp] | [status] tick | [nav] bake | [pop] seeded
+Missing: no [rpgcmbt] scaled dmg/cd line
+Proposed: [rpgcmbt] melee dmg=d cd=u str=u agi=u lvl=u weapon=u hit=d
+
+## Blockers
+1. B0 spawn attach - CLEAR. embody.cpp:95 attaches on player spawn.
+2. B1 no force-high-STR CLI (HARD). random_rpg modest; need patch main ~1498 or shotAction rpgcmbt.
+3. B2 no scaled-dmg stderr (HARD). Add fprintf combat.cpp~1232 or main after melee ~3118.
+4. B3 HUD weapon unscaled (SOFT). OCR STR/LVL OK.
+5. B4 possess omit RpgStats (SOFT). Death reapply 3686; not first-spawn.
+
+## Minimal REAL proof (unit-green first)
+Patches:
+1. Force sheet on --action rpgcmbt: fresh_rpg(10), STR=20, AGI=20
+2. Rate-limited [rpgcmbt] stderr on swing
+3. Optional HUD print melee_damage
+
+### Shot command template
+cd /d C:\hades\gigahrush2
+build-win\Release\gigahrush2.exe --shot shots\shot_rpgcmbt.png --frames 900 --ride 0 --action rpgcmbt 1>shots\shot_rpgcmbt_stdout.txt 2>shots\shot_rpgcmbt_stderr.txt
+
+Fallback: --action wall --frames 1200 (still needs force-STR patch)
+cwd=repo root; do NOT pass --no-hud
+
+Green gates: exit0, PNG>1KB, shot: saved, [rpgcmbt] str=20 dmg>table, [wall]/[corp], HUD LVL/STR/AGI/INT
+
+## Files to read next
+- src/app/main.cpp
+- src/game/embody.cpp:75-98
+- src/game/floor_stream.cpp:198-211
+- src/game/combat.cpp:1185-1307
+- src/game/rpg.h / rpg.cpp
+- tests/suite_rpg.inl
+- shots/_run_carve_proof.py, shots/_run_padic_proof.py
+

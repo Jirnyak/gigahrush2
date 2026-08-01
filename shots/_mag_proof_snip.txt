@@ -1,0 +1,12 @@
+              shotRideDone);
+                        if (pr && pr->magCount == 7u && pr->shots == 42u &&
+                            pr->hits == 13u)
+                            std::fprintf(stderr, "[mag] PROOF=GREEN\n");
+                        else
+                            std::fprintf(stderr, "[mag] PROOF=RED\n");
+                    }
+                    if (renderer.timer.supported())
+                        std::fprintf(stderr,
+                                     "gpu-ms: world %.3f bodies %.3f hud %.3f "
+                                     "frame %.3f  (bodies %u)\n",
+            

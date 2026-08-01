@@ -1,0 +1,262 @@
+combat.h lines=621
+--- last 50 ---
+572|std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
+573|                              const LevelStack& stack, LayerId layer, float dt,
+574|                              std::uint64_t tick,
+575|                              StatusSet* playerStatus = nullptr,
+576|                              Entity playerEntity = entt::null,
+577|                              CarveProposalQueue* carves = nullptr);
+578|
+579|// The camera holder swings at whatever monster is in front of it.
+580|//
+581|// Symmetry with mob_melee_step is deliberate: the same apply_damage, the same
+582|// Dead tag, the same finalize_deaths. A mob killed by the player dies through
+583|// exactly the path a player killed by a mob does, so there is no second death
+584|// route to forget to maintain.
+585|//
+586|// `wantsAttack` is edge-or-held at the caller's discretion; the cooldown is what
+587|// bounds the rate either way. Returns true if a swing actually landed.
+588|// The player's firearm, and the structural twin of player_melee_step: resolve the
+589|// camera holder, attach state lazily, decrement the cooldown EXACTLY ONCE at the top
+590|// (defect 3 above), pick the best gun in the inventory, spend one round of its ammo,
+591|// and launch `pellets` projectiles down the camera ray inside the weapon's spread.
+592|//
+593|// ONE round per shot regardless of pellet count — a shotgun blast costs one shell and
+594|// produces up to twelve projectiles, which is the reference's rule.
+595|//
+596|// Belongs immediately after player_melee_step in the sim order. Returns shots fired
+597|// (0 or 1 per call; a pellet spread is one shot).
+598|//
+599|// `noise` is an optional sink for the gunshot ([noise.h]): a gun going off is the
+600|// loudest event in the game and until now it was silent, so a monster that heard a
+601|// firefight behaved exactly like one standing in a library. Optional and trailing so
+602|// the three existing call sites — main.cpp and two tests — compile unchanged; pass
+603|// nullptr and the shot is silent, which is the pre-noise behaviour exactly.
+604|std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
+605|                                 bool wantFire, float dt, std::uint64_t tick,
+606|                                 NoiseField* noise = nullptr);
+607|
+608|// Optional `grid` + `carves`: when a swing finds no monster in the facing cone,
+609|// probe the cell the camera is looking at and propose a wall chip. Without both
+610|// pointers the function is bit-for-bit the pre-CARVE path (tests compile unchanged).
+611|bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId layer,
+612|                       float dt, bool wantsAttack, std::uint64_t tick,
+613|                       const MacroGrid* grid = nullptr,
+614|                       CarveProposalQueue* carves = nullptr);
+615|
+616|// Current/maximum HP of an entity, wherever its HP lives. Returns false if it
+617|// holds none. For HUD and tests.
+618|bool entity_health(const Registry& reg, const NpcPool& pool, Entity e,
+619|                   std::int16_t& hp, std::int16_t& maxHp);
+620|
+621|} // namespace giga::game
+
+--- rpg.h first 100 ---
+1|// RPG progression — levels, XP, the three attributes, and every derived stat.
+2|//
+3|// Ported from the reference `systems/rpg.ts` (418 lines). The reference's own
+4|// `data/rpg_progression.ts` is TWO LINES — just the two caps — so the numbers below
+5|// come from the system file, not from a data table. That is why this lands as a
+6|// header of constants rather than a generated CSV table like items/mobs: there are
+7|// no ROWS here, only formulas. The one genuinely row-shaped thing in the reference
+8|// (per-kind kill XP, 36 authored entries over 69 kinds) belongs in data/mobs.csv
+9|// beside the stats it scales, not in a second parallel file.
+10|//
+11|// WHAT ALREADY EXISTED, and is deliberately not duplicated. `mob_table.h` already
+12|// carries the monster-scaling half of `rpg.ts`: `mob_hp_at_level` is that file's
+13|// `scaleMonsterHp` (1 + 0.12*(L-1)). The dmg/speed curves (1 + 0.10, 1 + 0.02) are
+14|// documented there as inline. This file is the PLAYER/NPC half, which had nowhere
+15|// to live: level, xp, attrPoints, str/agi/int, psi, and the 13 derived multipliers.
+16|//
+17|// FIXED POINT, x1000, for the same reason [status.h] gives: this tree pins bit-exact
+18|// digests and a float multiplier chain is not guaranteed identical between MSVC and
+19|// Clang ([AGENTS.md]). x1.0 is 1000. The reference computes in doubles; every value
+20|// here is the rounded x1000 integer of that double, and the tests pin the reference's
+21|// own worked examples.
+22|//
+23|// NOT PORTED, deliberately, with the reason:
+24|//   * `regenPsi` — the reference body is empty (PSI recovers only from items and
+25|//     level-ups). An empty function is not a feature; the absence IS the design.
+26|//   * `randomGaussian` / `generateHeight` — this tree already has `height_for_age`
+27|//     in [population.h], and a Box-Muller pair needs stored RNG state, which the
+28|//     stateless `(id,salt)` hashing in [core/rng.h] exists to avoid.
+29|//   * `calcZoneLevel` — its ZONE_CELL is W/8 over the reference's flat 1024-wide
+30|//     zone grid. This engine's danger model is the V-shape about the hub keyed on
+31|//     floor NUMBER ([mob_table.h] `mob_level_for_floor`), which is already built and
+32|//     is not the same function. Porting the zone version would be a second,
+33|//     disagreeing definition of monster level.
+34|//   * `questDifficulty` / `questXpReward` / `questMoneyReward` — quest rewards are
+35|//     [quest.h]'s business; the XP half enters through `xp_for_quest` below so there
+36|//     is exactly one XP awarder.
+37|#pragma once
+38|
+39|#include <cstdint>
+40|#include <type_traits>
+41|#include "game/item_table.h"
+42|
+43|#include "game/mob_table.h"
+44|
+45|namespace giga::game {
+46|
+47|// Both caps are the reference's `RPG_LEVEL_CAP` / `RPG_ATTRIBUTE_CAP` = 255.
+48|//
+49|// 255 and not 256 is load-bearing: level and each attribute are stored in a
+50|// std::uint8_t, so the cap is exactly the storage maximum and a clamp at the cap
+51|// cannot be confused with a wrap to 0. `NpcPool::level()` is already u8.
+52|inline constexpr std::uint8_t kRpgLevelCap = 255;
+53|inline constexpr std::uint8_t kRpgAttributeCap = 255;
+54|
+55|// The three attributes, and WHICH SLOT each occupies in the pool's generic 8-slot
+56|// `attrs()` block ([npc_pool.h]).
+57|//
+58|// That block is documented as deliberately unnamed — "attribute names are not
+59|// finalized". They are finalized now, by the reference: str/agi/int and nothing
+60|// else. Naming the first three slots rather than adding three new pool columns
+61|// keeps the 2^20-record footprint unchanged (the slots are already allocated and
+62|// already seeded 3..15 by `seed_floor_from_spec`), and leaves slots 3..7 free.
+63|enum class Attr : std::uint8_t { Str = 0, Agi, Int, Count };
+64|inline constexpr std::size_t kAttrCount = static_cast<std::size_t>(Attr::Count);
+65|
+66|// ---------------------------------------------------------------------------
+67|// The XP curve
+68|// ---------------------------------------------------------------------------
+69|// Cost to advance FROM level-1 TO `level`: 75 + 25*rank + 10*rank*(rank-1), where
+70|// rank = level-1. The reference pins three worked values in its own comment, and
+71|// they are the tests: xpForLevel(2) = 100, (5) = 295, (10) = 1020.
+72|//
+73|// Returns 0 for level <= 1 (there is no cost to be level 1). u32 is sufficient and
+74|// checked: at the cap, rank = 254 gives 75 + 6350 + 10*254*253 = 649,045.
+75|std::uint32_t xp_for_level(std::uint8_t level);
+76|
+77|// Cumulative XP to reach `level` from scratch — the reference's `totalXpForLevel`,
+78|// which sums `xpForLevel(1..level)`. u64 because the sum to the cap is ~54.9M; it
+79|// fits u32, but the running sum is clearer unbounded and this is not a hot path.
+80|std::uint64_t total_xp_for_level(std::uint8_t level);
+81|
+82|std::uint8_t clamp_rpg_level(int level);
+83|std::uint8_t clamp_rpg_attribute(int points);
+84|
+85|// ---------------------------------------------------------------------------
+86|// Live per-character state
+87|// ---------------------------------------------------------------------------
+88|// POD, 12 bytes. This is the reference's `RPGStats` minus the two fields that are
+89|// derived rather than stored: `maxPsi` (always `max_psi(*this)`) and `maxHp`
+90|// (always `max_hp(*this)`). The reference stores maxPsi AND recomputes it at four
+91|// separate sites, which is the same class of defect [combat.h] documents for
+92|// damage — a cached value that can disagree with its own formula. Here there is
+93|// nowhere for it to drift.
+94|//
+95|// `psi` IS stored, because it is a spendable resource, not a derived stat.
+96|struct RpgStats {
+97|    std::uint32_t xp = 0;          // 0  toward the NEXT level, not cumulative
+98|    std::uint16_t psi = 100;       // 4  current; max is derived
+99|    std::uint8_t level = 1;        // 6
+100|    std::uint8_t attrPoints = 0;   // 7  unspent
+
+--- rpg.h decls (functions) ---
+52|inline constexpr std::uint8_t kRpgLevelCap = 255;
+53|inline constexpr std::uint8_t kRpgAttributeCap = 255;
+64|inline constexpr std::size_t kAttrCount = static_cast<std::size_t>(Attr::Count);
+96|struct RpgStats {
+108|inline constexpr std::uint16_t kBaseHp = 100;
+109|inline constexpr std::uint16_t kHpPerLevel = 1;
+110|inline constexpr std::uint16_t kBasePsi = 100;
+111|inline constexpr std::uint16_t kPsiPerLevel = 1;
+159|inline constexpr std::uint16_t kHeavyWeaponCooldownMs = 650;
+
+--- suite_rpg.inl last 40 ---
+708|        st.pos = vec3{40.0f, 40.0f, 40.0f};
+709|        st.layer = layer;
+710|        reg.emplace<Transform>(shooter, st);
+711|        reg.emplace<NpcRef>(shooter, NpcRef{sid});
+712|        CameraTag cam{};
+713|        cam.yaw = 0.0f;
+714|        cam.pitch = 0.0f;
+715|        reg.emplace<CameraTag>(shooter, cam);
+716|
+717|        RpgStats rs = fresh_rpg(10);
+718|        rs.attr[static_cast<std::size_t>(Attr::Agi)] = 20;
+719|        reg.emplace<RpgStats>(shooter, rs);
+720|
+721|        reg.emplace<PlayerRanged>(
+722|            shooter, PlayerRanged{0, 0, def->magazine, gun, 0, 0});
+723|
+724|        const std::uint32_t agiE3 = agi_attack_speed_mult_e3(rs);
+725|        const std::uint32_t expectCd =
+726|            (static_cast<std::uint32_t>(def->cooldownMs) * agiE3) / 1000u;
+727|        CHECK(agiE3 < 1000u);
+728|        CHECK(expectCd < def->cooldownMs);
+729|        CHECK(expectCd >= 1u);
+730|
+731|        CHECK(player_ranged_step(reg, pool, layer, /*wantFire=*/true, dt,
+732|                                 /*tick=*/1u) == 1u);
+733|        CHECK(reg.get<PlayerRanged>(shooter).cooldownMs ==
+734|              static_cast<std::uint16_t>(expectCd));
+735|    }
+736|}
+737|
+738|static void test_rpg_all() {
+739|    test_rpg_curve();
+740|    test_rpg_derived();
+741|    test_rpg_melee_and_psi();
+742|    test_rpg_xp_sources();
+743|    test_rpg_award_and_spend();
+744|    test_rpg_random_build();
+745|    test_rpg_kill_awards_xp();
+746|    test_rpg_combat_wire();
+747|}
+
+--- game_test how suite_rpg included ---
+109|#include "suite_rpg.inl"
+702|static void test_elevator() {
+4177|    test_elevator();
+
+--- CMake pin ---
+388|        PASS_REGULAR_EXPRESSION "39659/39659 checks passed")
+408|    # PASS_REGULAR_EXPRESSION closes both. It matches the literal line `main` prints, so
+445|        PASS_REGULAR_EXPRESSION "audit_test: 149 checks, 0 failures")
+497|    # AGIMV move mult live; suite_console +attr bits, suite_keybind +4; measured 219546 (SAVRPG +120 saveload CHECKs).
+498|        PASS_REGULAR_EXPRESSION "game_test: 219586 checks, 0 failures")
+530|        PASS_REGULAR_EXPRESSION "files_scanned=[0-9][0-9][0-9]")
+
+--- combat.cpp has rpg include? ---
+1|#include "game/combat.h"
+2|#include <cstdio>
+3|
+4|#include <cmath>
+5|#include <vector>
+6|
+7|#include "core/math.h"
+8|#include "core/wrap.h"
+9|#include "ecs/components.h"
+10|#include "game/embody.h"   // NpcRef
+11|#include "game/hunt.h"
+12|#include "game/mob_spawn.h"
+13|#include "game/faction_relations.h"
+14|#include "game/mob_behaviour.h"
+15|#include "game/mob_table.h"
+16|#include "game/monster_traits.h"
+17|#include "game/ranged_table.h"
+18|#include "game/rpg.h"      // RpgStats, xp_for_monster_kill, award_xp
+19|#include "game/weapon_table.h"
+20|#include "sim/camera.h"   // camera_forward
+21|#include "world/macro_grid.h"
+22|#include "world/world.h"
+23|#include "world/types.h"
+24|
+25|namespace giga::game {
+26|
+27|namespace {
+28|
+29|bool adjacent_wall(const MacroGrid& grid, const vec3& pos) {
+30|    const int cx = static_cast<int>(pos.x / kCellSize);
+31|    const int cy = static_cast<int>(pos.y / kCellSize);
+32|    const int cz = static_cast<int>(pos.z / kCellSize);
+33|    if (cz < 0 || cz >= kMacroDim) return false;
+34|    return grid.cell(cx + 1, cy, cz) != kCellAir ||
+35|           grid.cell(cx - 1, cy, cz) != kCellAir ||
+36|           grid.cell(cx, cy + 1, cz) != kCellAir ||
+37|           grid.cell(cx, cy - 1, cz) != kCellAir;
+38|}
+39|
+40|// Percentage mitigation, clamped. A negative resist is a vulnerability, which is

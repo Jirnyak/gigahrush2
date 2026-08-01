@@ -1,0 +1,221 @@
+=== award_xp ===
+
+=== status_melee / status_ in combat ===
+L793:                               std::uint64_t tick, StatusSet* playerStatus,
+L989:                 status_apply(*playerStatus, StatusId::PaupsinaWeb,
+
+=== main status_ / playerStatus key lines ===
+L1736:     game::StatusSet playerStatus{};
+L2457:                     game::status_step(playerStatus, dtMs);
+L2459:                         float sm = game::status_move_mult_e3(playerStatus) / 1000.0f;
+L2460:                         if (game::status_is_rooted(playerStatus))
+L2474:                             game::status_active(playerStatus,
+L2476:                             game::status_active(playerStatus,
+L2478:                             game::status_active(playerStatus,
+L2480:                             game::status_active(playerStatus,
+L2482:                             game::status_active(playerStatus,
+L2484:                             game::status_active(playerStatus,
+L2492:                                 game::status_move_mult_e3(playerStatus),
+L2493:                                 game::status_aim_mult_e3(playerStatus),
+L2494:                                 game::status_melee_mult_e3(playerStatus),
+L2495:                                 game::status_is_rooted(playerStatus) ? 1 : 0,
+L2496:                                 playerStatus.remainMs[static_cast<std::size_t>(
+L2498:                                 playerStatus.remainMs[static_cast<std::size_t>(
+L2500:                                 playerStatus.remainMs[static_cast<std::size_t>(
+L2721:                         // leading window. Real status_apply path, not a mock.
+L2722:                         game::status_apply(playerStatus,
+L2725:                         game::status_apply(playerStatus,
+L2732:                             game::status_move_mult_e3(playerStatus),
+L2733:                             game::status_is_rooted(playerStatus) ? 1 : 0,
+L2734:                             playerStatus.remainMs[static_cast<std::size_t>(
+L2736:                             playerStatus.remainMs[static_cast<std::size_t>(
+L2856:                                     game::status_apply(playerStatus,
+L3241:                     &playerStatus, player, &combatCarves);
+L3940:                 const std::uint16_t mv = game::status_move_mult_e3(playerStatus);
+L3941:                 const bool rooted = game::status_is_rooted(playerStatus);
+L3943:                     game::status_active(playerStatus, game::StatusId::SporeHaze) ||
+L3944:                     game::status_active(playerStatus, game::StatusId::ZhelemishSkin) ||
+L3945:                     game::status_active(playerStatus, game::StatusId::PaupsinaWeb)) {
+L3947:                                 mv, game::status_aim_mult_e3(playerStatus),
+
+=== save.cpp visit / write order around combat ===
+L16: #include "game/craft.h"       // craft_write, craft_read, kCraftingWire
+L17: #include "game/rpg.h"         // RpgStats (visit_rpg)
+L18: #include "game/combat.h"      // PlayerRanged (visit_ranged / SAVMAG)
+L30: // Every struct below is walked by a single `visit_*` template that both the writer and
+L166: void visit_header(Ar& ar, H& h) {
+L190: void visit_ledger(Ar& ar, L& led) {
+L204: void visit_contract(Ar& ar, C& c) {
+L216: void visit_book(Ar& ar, B& b) {
+L218:         visit_contract(ar, b.slot[i]);
+L230: void visit_needs(Ar& ar, N& n) {
+L243: void visit_inventory(Ar& ar, I& inv) {
+L251: void visit_player(Ar& ar, P& p) {
+L252:     visit_needs(ar, p.clock);
+L253:     visit_inventory(ar, p.inv);
+L263: // kRpgWire (12) and a future non-zero pad cannot silently drop.
+L265: void visit_rpg(Ar& ar, R& r) {
+L278: void visit_ranged(Ar& ar, R& r) {
+L288: void visit_key(Ar& ar, K& k) {
+L374: // kSaveFixedWire: ledger+book+player + v7 rpg(12)+craft(93) + v8 combat(21)
+L376: static_assert(kRpgWire == 12);
+L379: static_assert(kCombatSaveWire == 21);
+L380: static_assert(kSaveFixedWire == 829 + 21);  // 850
+L381: static_assert(kSaveFixedWire == 850);
+L402:     body.reserve(kSaveFixedWire + st.opened.size() * kOpenedKeyWire);
+L404:     visit_ledger(bw, st.ledger);
+L405:     visit_book(bw, st.book);
+L406:     visit_player(bw, st.player);
+L407:     // Version 7: character sheet + crafting bank (fixed-size, in kSaveFixedWire).
+L408:     visit_rpg(bw, st.rpg);
+L412:         craft_write(st.craft, body.data() + at);
+L415:     bw.u8(st.hasRanged);
+L416:     visit_ranged(bw, st.ranged);
+L417:     bw.u32(st.kills);
+L418:     for (const OpenedContainerKey& k : st.opened) visit_key(bw, k);
+L451:     visit_header(hw, h);
+L467:     visit_header(hr, h);
+L501:         kSaveFixedWire + kFactionWire +
+L523:     visit_ledger(r, tmp.ledger);
+L524:     visit_book(r, tmp.book);
+L525:     visit_player(r, tmp.player);
+L527:     visit_rpg(r, tmp.rpg);
+L532:         if (!craft_read(bytes + kSaveHeaderWire + pos, kCraftingWire, tmp.craft))
+L538:     visit_ranged(r, tmp.ranged);
+L539:     r.u32(tmp.kills);
+L541:     for (std::size_t i = 0; i < tmp.opened.size(); ++i) visit_key(r, tmp.opened[i]);
+
+=== suite_saveload wire pins ===
+L169:     // Version 8 / SAVMAG: non-default chamber + kills so a dropped combat
+L171:     st.hasRanged = 1;
+L178:     st.kills = 99u;
+L245:     CHECK(a.hasRanged == b.hasRanged);
+L252:     CHECK(a.kills == b.kills);
+L266: void wire_layout() {
+L271:     // 93 craft + 21 combat (hasRanged+ranged+kills) + 308 quest log = 850,
+L274:     static_assert(kRpgWire == 12);
+L277:     static_assert(kCombatSaveWire == 21);
+L278:     static_assert(kSaveFixedWire == 850);
+L280:     static_assert(save_bytes_for(0) == 950);
+L281:     static_assert(save_bytes_for(3) == 950 + 15);
+L282:     static_assert(save_bytes_for(3, 100, 50) == 950 + 15 + 150);
+L292:     // 965 B for a full run with three emptied crates and no macro blobs (those are
+L294:     // per-floor files ([save.h] modular layout), never here. v7 was 944; +21 SAVMAG.
+L295:     CHECK(bytes.size() == 965);
+L323:     CHECK(h.version == kSaveVersion);
+L329:     CHECK(h.payloadBytes == kSaveFixedWire + kFactionWire + 3u * kOpenedKeyWire);
+L700:     poke_u32(future, kOffVersion, kSaveVersion + 1u);
+L715:     poke_u32(lying, kOffPayloadBytes, static_cast<std::uint32_t>(kSaveFixedWire));
+L1734:     saveload_test::wire_layout();
+
+=== StatusSet wire calc ===
+raw field bytes: 24+12+6 = 42
+kSaveFixedWire currently need to see value
+L210: inline constexpr std::size_t kLedgerWire = 33;       // 2x8 + 4x4 + 1
+L212: inline constexpr std::size_t kBookWire =
+L213:     static_cast<std::size_t>(kMaxContracts) * kContractWire + 4 + 4 + 8;
+L214: inline constexpr std::size_t kNeedsWire = 33;        // 8 floats + seeded
+L215: inline constexpr std::size_t kInventoryWire = static_cast<std::size_t>(kInvSlots) * 4;
+L212: inline constexpr std::size_t kBookWire =
+L214: inline constexpr std::size_t kNeedsWire = 33;        // 8 floats + seeded
+L215: inline constexpr std::size_t kInventoryWire = static_cast<std::size_t>(kInvSlots) * 4;
+L216: inline constexpr std::size_t kPlayerWire = kNeedsWire + kInventoryWire + 4 + 4 + 4 + 3;
+L217: // Version 7: RpgStats wire — field-by-field LE, NOT sizeof (pad_ is written so the
+L216: inline constexpr std::size_t kPlayerWire = kNeedsWire + kInventoryWire + 4 + 4 + 4 + 3;
+L218: // footprint stays 12 and matches the POD layout without host padding surprises).
+L219: inline constexpr std::size_t kRpgWire = 4 + 2 + 1 + 1 + 3 + 1;  // 12
+L220: static_assert(kRpgWire == 12);
+L221: // kCraftingWire (93) is defined in craft.h next to craft_write/craft_read.
+L229: inline constexpr std::size_t kCombatSaveWire =
+L231: static_assert(kCombatSaveWire == 21);
+L232: inline constexpr std::size_t kOpenedKeyWire = 5;     // i16 floor + 3 x u8 cell
+L233: inline constexpr std::size_t kSaveFixedWire =
+L234:     kLedgerWire + kBookWire + kPlayerWire + kRpgWire + kCraftingWire +
+L231: static_assert(kCombatSaveWire == 21);
+L233: inline constexpr std::size_t kSaveFixedWire =
+L234:     kLedgerWire + kBookWire + kPlayerWire + kRpgWire + kCraftingWire +
+L235:     kCombatSaveWire + kQuestLogWire;
+L236: 
+L233: inline constexpr std::size_t kSaveFixedWire =
+L235:     kCombatSaveWire + kQuestLogWire;
+L236: 
+L237: // Sanity ceiling on the opened-container list, so a corrupt header cannot ask for a
+L238: // huge allocation before the checksum has had a chance to reject it. 64 crates per
+L234:     kLedgerWire + kBookWire + kPlayerWire + kRpgWire + kCraftingWire +
+L236: 
+L237: // Sanity ceiling on the opened-container list, so a corrupt header cannot ask for a
+L238: // huge allocation before the checksum has had a chance to reject it. 64 crates per
+L239: // floor ([main.cpp] refresh_floor_containers cap) x 255 floor labels is 16,320; this
+L235:     kCombatSaveWire + kQuestLogWire;
+L237: // Sanity ceiling on the opened-container list, so a corrupt header cannot ask for a
+L238: // huge allocation before the checksum has had a chance to reject it. 64 crates per
+L239: // floor ([main.cpp] refresh_floor_containers cap) x 255 floor labels is 16,320; this
+L240: // is four times that.
+L260:     return kSaveHeaderWire + kSaveFixedWire + kFactionWire +
+L262: }
+L263: 
+L264: // ---------------------------------------------------------------------------
+L265: // An opened crate, identified by something that survives a restart
+
+=== main F5 save_run / F9 load status-ish ===
+L1736:     game::StatusSet playerStatus{};
+L1823:     auto save_run_now = [&]() -> bool {
+L1846:             runState.rpg = *rs;
+L1848:             runState.rpg = carriedRpg;
+L1849:         runState.craft = crafting;
+L1855:             runState.hasRanged = 1;
+L1856:             runState.ranged = *pr;
+L1858:             runState.hasRanged = 0;
+L1859:             runState.ranged = game::PlayerRanged{};
+L1861:         runState.kills = kills;
+L1985:         save_run_now();
+L2457:                     game::status_step(playerStatus, dtMs);
+L2459:                         float sm = game::status_move_mult_e3(playerStatus) / 1000.0f;
+L2460:                         if (game::status_is_rooted(playerStatus))
+L2474:                             game::status_active(playerStatus,
+L2476:                             game::status_active(playerStatus,
+L2478:                             game::status_active(playerStatus,
+L2480:                             game::status_active(playerStatus,
+L2482:                             game::status_active(playerStatus,
+L2484:                             game::status_active(playerStatus,
+L2492:                                 game::status_move_mult_e3(playerStatus),
+L2493:                                 game::status_aim_mult_e3(playerStatus),
+L2494:                                 game::status_melee_mult_e3(playerStatus),
+L2495:                                 game::status_is_rooted(playerStatus) ? 1 : 0,
+L2496:                                 playerStatus.remainMs[static_cast<std::size_t>(
+L2498:                                 playerStatus.remainMs[static_cast<std::size_t>(
+L2500:                                 playerStatus.remainMs[static_cast<std::size_t>(
+L2722:                         game::status_apply(playerStatus,
+L2725:                         game::status_apply(playerStatus,
+L2732:                             game::status_move_mult_e3(playerStatus),
+L2733:                             game::status_is_rooted(playerStatus) ? 1 : 0,
+L2734:                             playerStatus.remainMs[static_cast<std::size_t>(
+L2736:                             playerStatus.remainMs[static_cast<std::size_t>(
+L2856:                                     game::status_apply(playerStatus,
+L3241:                     &playerStatus, player, &combatCarves);
+L3457:                     if (save_run_now())
+L3574:                             carriedRpg = runState.rpg;
+L3577:                                     player, runState.rpg);
+L3578:                             crafting = runState.craft;
+L3583:                             kills = runState.kills;
+L3585:                                 if (runState.hasRanged)
+L3587:                                         player, runState.ranged);
+L3588:                                 if (runState.kills != 0u)
+L3590:                                         player, game::PlayerMelee{0, runState.kills});
+L3940:                 const std::uint16_t mv = game::status_move_mult_e3(playerStatus);
+L3941:                 const bool rooted = game::status_is_rooted(playerStatus);
+L3943:                     game::status_active(playerStatus, game::StatusId::SporeHaze) ||
+L3944:                     game::status_active(playerStatus, game::StatusId::ZhelemishSkin) ||
+L3945:                     game::status_active(playerStatus, game::StatusId::PaupsinaWeb)) {
+L3947:                                 mv, game::status_aim_mult_e3(playerStatus),
+L4925:                         save_run_now();
+
+=== int_xp_mult in rpg.cpp ===
+L130: // by award_xp and spend_attr_point because the reference does the same arithmetic in
+L232: std::uint16_t int_xp_mult_e3(const RpgStats& r) {
+L306: XpAward award_xp(RpgStats& r, std::uint32_t amount,
+L323:          static_cast<std::uint64_t>(int_xp_mult_e3(r)) + 500ull) / 1000ull;
+
+=== slow_step in main ===
+L2912:                 game::slow_step(reg, activeLayer, kSimDt);
+DONE

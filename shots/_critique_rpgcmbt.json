@@ -1,0 +1,145 @@
+{
+  "patch": "RPGCMBT",
+  "verdict": {
+    "combat_cpp_correct": true,
+    "live_player_missing_rpgstats_spawn": false,
+    "xp_on_kill": "wired",
+    "test_pins_will_red": false,
+    "overall": "unit-green and live-wired on primary spawn paths; residual identity holes on voluntary possess + secondary formulas"
+  },
+  "answers": {
+    "a_combat_cpp": {
+      "ok": true,
+      "summary": "melee_damage / agi_attack_speed / str_heavy / agi_ranged_spread call sites match rpg.h contracts; CD math clamps; identity path without RpgStats preserves table values."
+    },
+    "b_live_spawn": {
+      "missing": false,
+      "primary": "embody_as_player attaches RpgStats via random_rpg(pool.level,id)",
+      "death_possess": "main.cpp emplace_or_replace carriedRpg after possess_a_survivor",
+      "elevator": "elevator.cpp restores hadRpg sheet",
+      "gap": "possess_nearest_survivor (voluntary mind-projection) and possess_a_survivor itself do NOT attach RpgStats; death path re-attaches after, voluntary path does not."
+    },
+    "c_xp_on_kill": {
+      "status": "wired in finalize_deaths",
+      "site": "src/game/combat.cpp finalize_deaths ~192-219",
+      "api": "xp_for_monster_kill / xp_for_npc_kill + award_xp",
+      "gate": "only killers with RpgStats component are credited",
+      "same_tick_note": "killing blow that also kills the player awards XP to killer entity before destroy; carriedRpg snapshot is taken BEFORE finalize so that XP is lost on player death-on-kill-tick (surviving path re-snapshots after)."
+    },
+    "d_test_red": {
+      "will_red": false,
+      "evidence": "shots/_rpgcmbt_test_out.txt EXIT=0, 219409 checks 0 failures",
+      "combat_wire_setup_ok": true,
+      "notes": [
+        "fist reach ok",
+        "mag pre-arm ok",
+        "Attr indices correct",
+        "MobRef kind0 Sborka ok for melee hp"
+      ]
+    }
+  },
+  "combat_call_sites": {
+    "melee_resolve": {
+      "lines": "~1210-1232",
+      "dmg": "melee_damage(*rs, heldWeapon, wp->dmg) weaponId 0 bare-hands ok",
+      "cd": "(base*agiE3*strE3)/1e6 floor1 ceil65535",
+      "str_heavy_gate": "fists 340<650 => identity 1000",
+      "overflow": "u32 safe + u16 clamp"
+    },
+    "ranged_spread": {
+      "lines": "~1115-1118",
+      "call": "agi_ranged_spread_mult_e3 /1000 on cone",
+      "ok": true
+    },
+    "ranged_cd": {
+      "lines": "~1172-1180",
+      "call": "(cd*agi)/1000 floor1 ceil65535",
+      "no_str_heavy_on_guns": true
+    },
+    "ranged_damage": {
+      "scaled": false,
+      "note": "raw def->dmg; no gun dmg formula in rpg.h"
+    }
+  },
+  "bugs_and_gaps": [
+    {
+      "id": "KIND0_SENTINEL_COLLISION",
+      "severity": "latent",
+      "where": "src/game/combat.cpp finalize_deaths kind init 0xFF then m->kind",
+      "what": "MobKind::Sborka=0 is a real kind. Sentinel for non-mob is 0xFF so kind0 correctly takes xp_for_monster_kill path. OK. Note only.",
+      "test_red": false
+    },
+    {
+      "id": "VOLUNTARY_POSSESS_NO_RPG",
+      "severity": "high-for-live",
+      "where": "src/app/main.cpp possess_nearest_survivor + possessWanted ~3067",
+      "what": "CameraTag/Controller moved; RpgStats not attached. After voluntary possess: identity combat + no XP.",
+      "test_red": false
+    },
+    {
+      "id": "DEATH_POSSESS_HELPER_NAKED",
+      "severity": "low",
+      "where": "possess_a_survivor ~1078",
+      "what": "Helper leaves body without RpgStats; main re-attaches. Fragile if reused.",
+      "test_red": false
+    },
+    {
+      "id": "KILL_TICK_PLAYER_DEATH_DROPS_XP",
+      "severity": "medium",
+      "where": "main.cpp carriedRpg before finalize_deaths",
+      "what": "Same-tick player death loses XP awarded in finalize; pre-snapshot misses it.",
+      "test_red": false
+    },
+    {
+      "id": "AGI_MOVE_STR_WEAR_UNWIRED",
+      "severity": "low-scope",
+      "where": "no callers outside rpg.cpp",
+      "what": "move-speed and durability-wear formulas have zero sim callers.",
+      "test_red": false
+    },
+    {
+      "id": "RANGED_DMG_NO_RPG",
+      "severity": "info",
+      "where": "player_ranged_step spawn_projectile_dir",
+      "what": "Guns ignore STR/level damage; no API yet.",
+      "test_red": false
+    }
+  ],
+  "attr_indices": {
+    "Str": 0,
+    "Agi": 1,
+    "Int": 2,
+    "test_writes": "correct",
+    "combat_reads": "via attr_of helpers only"
+  },
+  "cd_overflow": {
+    "melee": "safe",
+    "ranged": "safe",
+    "zero_cd": "floor at 1"
+  },
+  "files_read": [
+    "src/game/rpg.h",
+    "src/game/rpg.cpp",
+    "src/game/combat.cpp",
+    "src/game/combat.h",
+    "src/game/embody.cpp",
+    "src/game/elevator.cpp",
+    "src/app/main.cpp",
+    "tests/suite_rpg.inl",
+    "src/sim/camera.cpp",
+    "src/game/weapon_table.h",
+    "src/game/ranged_pick.cpp"
+  ],
+  "verified_lines": {
+    "melee_dmg_cd": "combat.cpp:1210-1232",
+    "ranged_spread": "combat.cpp:1115-1118",
+    "ranged_cd": "combat.cpp:1172-1180",
+    "xp_award": "combat.cpp:192-219",
+    "embody_rpg": "embody.cpp:95",
+    "elevator_rpg": "elevator.cpp:58-89",
+    "death_carry": "main.cpp:3298-3300,3681-3692",
+    "voluntary_possess": "main.cpp:1106-1145,3067",
+    "combat_wire_test": "suite_rpg.inl:525-736",
+    "kill_xp_test": "suite_rpg.inl:430"
+  }
+}

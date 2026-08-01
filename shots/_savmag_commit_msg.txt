@@ -1,0 +1,10 @@
+SAVMAG: F5/F9 persist chambered mag + kill tally (save v8)
+
+Ammo already debited into PlayerRanged.magCount vanished on F9 because the
+run save stopped at craft. kills already survive death-possession and the
+elevator but not a process restart. kSaveVersion 7->8 adds hasRanged +
+PlayerRanged (16 B field-by-field) + kills u32 after craft (+21 wire).
+
+kSaveFixedWire 829->850; empty 950; busy 3-opened 965.
+hasRanged mirrors the elevator lazy-attach rule.
+game_test: 219586 checks, 0 failures (was 219546; +40).

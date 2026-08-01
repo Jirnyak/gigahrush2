@@ -1,0 +1,4 @@
+OK fixed shownDmg HUD block
+OK no bare if (rs)
+OK rsHud present
+OK CMake changelog note added

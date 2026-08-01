@@ -1,0 +1,330 @@
+=== contract cpp=True main_mod_mentions= 36
+  funcs 6 wired 6 unwired 0
+  WIRED: contract_accept, contract_offer, contract_on_giver_died, contract_on_kill, contract_step, contract_text
+=== economy cpp=True main_mod_mentions= 3
+  funcs 14 wired 0 unwired 14
+  UNWIRED: bank_borrow_max, bank_credit_available, bank_debt, bank_deposit, bank_deposit_all, bank_open, bank_repay, bank_repay_all, bank_step, bank_take_loan, bank_withdraw, bank_withdraw_all, net_worth, wealth_tier
+=== extraction cpp=True main_mod_mentions= 14
+  funcs 8 wired 5 unwired 3
+  WIRED: deposit_valuables, on_extraction_pad, record_death, record_floor, risk_share
+  UNWIRED: at_risk_value, bankable_category, bankable_slot
+=== hunt cpp=True main_mod_mentions= 1
+  funcs 2 wired 0 unwired 2
+  UNWIRED: mob_hunts_npcs, nearest_prey
+=== investigate cpp=True main_mod_mentions= 8
+  funcs 2 wired 1 unwired 1
+  WIRED: investigate_step
+  UNWIRED: investigate_hear
+=== macro_sim cpp=True main_mod_mentions= 7
+  funcs 5 wired 1 unwired 4
+  WIRED: social_edge_target
+  UNWIRED: social_edge_clear, social_edge_handle, social_edge_live, social_edge_set
+=== needs cpp=True main_mod_mentions= 33
+  funcs 15 wired 6 unwired 9
+  WIRED: apply_consumable, needs_seconds_to_damage, needs_step, relieve_needs, use_best_drink, use_best_food
+  UNWIRED: consumable_hp_cost, item_feeds, item_hydrates, needs_advance, needs_failed_mask, needs_hp_rate, needs_roll, needs_speed_scale, needs_warn_mask
+=== population cpp=True main_mod_mentions= 17
+  funcs 3 wired 1 unwired 2
+  WIRED: seed_floor_population
+  UNWIRED: height_for_age, seed_floor_from_spec
+=== quest cpp=True main_mod_mentions= 99
+  funcs 17 wired 7 unwired 10
+  WIRED: quest_accept, quest_active_count, quest_line, quest_offer, quest_offer_text, quest_step, quest_valid
+  UNWIRED: quest_eligible, quest_grant_item, quest_log_read, quest_log_write, quest_objective_text, quest_on_giver_died, quest_on_kill, quest_state, quest_table_fingerprint, quest_time_text
+=== rumour cpp=True main_mod_mentions= 30
+  funcs 4 wired 3 unwired 1
+  WIRED: nearest_speaker, rumour_for, rumour_text
+  UNWIRED: dominant_faction
+=== samosbor cpp=True main_mod_mentions= 60
+  funcs 27 wired 5 unwired 22
+  WIRED: samosbor_alarm, samosbor_duty01, samosbor_new_game, samosbor_phase01, samosbor_step
+  UNWIRED: samosbor_active, samosbor_allows_kind, samosbor_arm, samosbor_beat, samosbor_beat_pulse01, samosbor_beat_text, samosbor_census, samosbor_cooldown_mean_ms, samosbor_cooldown_ms, samosbor_duration_mean_ms, samosbor_duration_ms, samosbor_enter_floor, samosbor_first_cooldown_ms, samosbor_fog_spawn_allowed, samosbor_fog_tick, samosbor_pick_variant, samosbor_rand, samosbor_rand01, samosbor_seal_before_end_ms, samosbor_threat_headroom, samosbor_threat_target, samosbor_unsheltered_pressure
+=== speech cpp=True main_mod_mentions= 21
+  funcs 4 wired 3 unwired 1
+  WIRED: speech_context, speech_line_index, speech_situation
+  UNWIRED: speech_line_count
+=== vendor cpp=True main_mod_mentions= 26
+  funcs 9 wired 8 unwired 1
+  WIRED: vendor_ammo_for, vendor_buy, vendor_buy_price, vendor_resupply, vendor_sell_all, vendor_sell_price, vendor_stocks, vendor_stocks_item
+  UNWIRED: vendor_kind_for
+=== event_bus cpp=True main_mod_mentions= 1
+  funcs 11 wired 0 unwired 11
+  UNWIRED: event_floor, event_line, event_relation, feed_drain, feed_tick, pack_floor, pack_relation, publish_floor_arrival, publish_floor_entered, publish_npc_migrated, publish_npc_spawned
+=== noise cpp=True main_mod_mentions= 61
+  funcs 8 wired 3 unwired 5
+  WIRED: noise_clear, noise_publish, noise_step
+  UNWIRED: body_fall_noise, container_open_noise, noise_audible, noise_distance, weapon_fire_noise
+=== wander cpp=True main_mod_mentions= 22
+  funcs 3 wired 2 unwired 1
+  WIRED: wander_init, wander_step
+  UNWIRED: pack_target_node
+=== container cpp=True main_mod_mentions= 26
+  funcs 4 wired 2 unwired 2
+  WIRED: loot_containers_step, spawn_floor_containers
+  UNWIRED: container_budget, roll_container
+=== player_command cpp=True main_mod_mentions= 0
+  funcs 1 wired 0 unwired 1
+  UNWIRED: apply_player_command
+=== craft cpp=True main_mod_mentions= 62
+  funcs 17 wired 10 unwired 7
+  WIRED: craft_best_available, craft_check, craft_disassemble, craft_init, craft_item, craft_known, craft_learn, craft_learn_from_carried, craft_missing, craft_scrap_slot
+  UNWIRED: craft_cost_total, craft_known_count, craft_learn_from_source, craft_read, craft_source_for_item, craft_station_ok, craft_write
+=== rpg cpp=True main_mod_mentions= 14
+  funcs 28 wired 9 unwired 19
+  WIRED: agi_move_speed_mult_e3, award_xp, fresh_rpg, max_hp, max_psi, melee_damage, random_rpg, spend_attr_point, xp_for_level
+  UNWIRED: adjusted_psi_cost, agi_attack_speed_mult_e3, agi_ranged_spread_mult_e3, clamp_rpg_attribute, clamp_rpg_level, int_contract_reward_mult_e3, int_document_reward_mult_e3, int_psi_cost_mult_e3, int_psi_duration_bonus_sec, int_xp_mult_e3, level_hp, level_psi, str_durability_wear_mult_e3, str_heavy_weapon_speed_mult_e3, str_melee_dmg_mult_e3, total_xp_for_level, xp_for_monster_kill, xp_for_npc_kill, xp_for_quest
+=== status cpp=True main_mod_mentions= 40
+  funcs 10 wired 7 unwired 3
+  WIRED: status_active, status_aim_mult_e3, status_apply, status_is_rooted, status_melee_mult_e3, status_move_mult_e3, status_step
+  UNWIRED: status_heal_mult_e3, status_valid, status_water_drain_e3
+=== loot cpp=True main_mod_mentions= 21
+  funcs 8 wired 5 unwired 3
+  WIRED: inventory_value, loot_corpse_interact, loot_dead_mobs, pickup_step, use_best_heal
+  UNWIRED: drop_mob_loot, drop_weapon_ammo, roll_mob_loot_slots
+=== faction cpp=False main_mod_mentions= 24
+  funcs 1 wired 0 unwired 1
+  UNWIRED: faction_color
+=== elevator cpp=True main_mod_mentions= 9
+  funcs 1 wired 1 unwired 0
+  WIRED: ride_elevator
+=== embody cpp=True main_mod_mentions= 12
+  funcs 6 wired 5 unwired 1
+  WIRED: body_eye_height, embody, embody_as_player, embody_interact_terminal, fold_back
+  UNWIRED: body_half_height
+=== door cpp=True main_mod_mentions= 124
+  funcs 8 wired 5 unwired 3
+  WIRED: door_build, door_query_near, door_step, door_toggle_near, inventory_has_keycard
+  UNWIRED: door_set, door_shut_all, door_toggle_locks
+=== weapon_table cpp=True main_mod_mentions= 1
+  funcs 0 wired 0 unwired 0
+=== ranged_table cpp=True main_mod_mentions= 0
+  funcs 2 wired 1 unwired 1
+  WIRED: equipped_ranged
+  UNWIRED: ranged_dps
+=== monster_traits cpp=True main_mod_mentions= 2
+  funcs 14 wired 3 unwired 11
+  WIRED: pos_wet, sync_monster_armour, trait_wet_regen_hps
+  UNWIRED: cell_wet, monster_trait_authored_count, monster_traits_rows_indexed, trait_allows_wet_spawn, trait_counterplay_damage, trait_damage_mult, trait_has_vulnerability, trait_incoming_mult, trait_move_mult, trait_takes_bait, trait_takes_bait_any
+=== mob_behaviour cpp=True main_mod_mentions= 0
+  funcs 18 wired 0 unwired 18
+  UNWIRED: behaviour_aggro_radius, behaviour_claims_damage, behaviour_damage_mult, behaviour_hurt_move_mult, behaviour_incoming_mult, behaviour_is_dead, behaviour_is_dispatched, behaviour_melee_reach, behaviour_move_mult, burst_damage_mult, burst_phase, burst_speed_mult, facing_damage_mult, frozen_by_gaze, pursuit_offset, wall_bias_damage, wall_bias_speed, wall_query_needed
+
+=== rpg helper call sites in main+combat ===
+  WIRED agi_attack_speed_mult_e3 main= 0 combat= 2
+  WIRED agi_move_speed_mult_e3 main= 1 combat= 0
+  WIRED agi_ranged_spread_mult_e3 main= 0 combat= 2
+  WIRED award_xp main= 1 combat= 3
+  WIRED fresh_rpg main= 2 combat= 0
+  DEAD int_contract_reward_mult_e3 main= 0 combat= 0
+  DEAD int_document_reward_mult_e3 main= 0 combat= 0
+  DEAD int_psi_cost_mult_e3 main= 0 combat= 0
+  DEAD int_psi_duration_bonus_sec main= 0 combat= 0
+  DEAD int_xp_mult_e3 main= 0 combat= 0
+  WIRED melee_damage main= 1 combat= 2
+  WIRED random_rpg main= 1 combat= 0
+  WIRED spend_attr_point main= 1 combat= 0
+  DEAD str_durability_wear_mult_e3 main= 0 combat= 0
+  WIRED str_heavy_weapon_speed_mult_e3 main= 0 combat= 1
+  DEAD str_melee_dmg_mult_e3 main= 0 combat= 0
+  WIRED xp_for_level main= 1 combat= 0
+  WIRED xp_for_monster_kill main= 0 combat= 2
+  WIRED xp_for_npc_kill main= 0 combat= 1
+  DEAD xp_for_quest main= 0 combat= 0
+
+=== weapon_table / ranged_table surface ===
+weapon_table lines 58
+  5 // rows and 48 of them are ranged; those need projectiles, ammo pools, magazines,
+  6 // spread and reload — none of which exist yet — so porting their numbers now would
+  27 // authors fractional reach (0.5 .. 2.35 cells) and cooldowns (0.20 .. 2.40 s), and
+  29 struct MeleeDef {
+  30 std::uint16_t dmg;         // 0  3 .. 96
+  32 std::uint16_t cooldownMs;  // 4  seconds * 1000
+  47 // The unarmed row. 3 damage, 0.5 cells, 340 ms — deliberately feeble, so finding
+ranged_table lines 105
+  13 // expiry, a burn status, area damage, or hitscan — and NOT because their numbers are
+  29 //                 magic number in code.
+  31 //   damageType    set on ZERO physical weapons, so in the reference a shotgun deals
+  47 inline constexpr std::size_t kRangedCount = 29;
+  53 struct RangedDef {
+  54 std::uint16_t dmg;            //  0  7..180, PER PELLET
+  55 std::uint16_t cooldownMs;     //  2  45..4250
+  61 std::uint16_t spreadE4;       //  6  0..4600
+  65 std::uint8_t magazine;        // 13  1..100
+  66 std::uint8_t channel;         // 14  DamageChannel; Kinetic on all 29 today
+  74 extern const std::array<RangedDef, kRangedCount> kRangedTable;
+  77 // N means `kRangedTable[N-1]`.
+
+=== event_bus ===
+lines 349
+// Event bus — the one channel gameplay systems use to tell each other that
+// something happened (an NPC died, an item changed hands, a floor was entered),
+// without any system holding a pointer to any other.
+//
+// Design decisions (see the design form in project history):
+//   * TRANSIENT by default. Events are published into a fixed-capacity ring and
+//     live exactly one drain cycle: a producer pushes this tick, every consumer
+//     reads the batch, then clear() wipes it. Nothing accumulates, no allocation
+//     in the hot path — the ring is sized once and reused every tick.
+//   * FIXED, POD events. Every event is the same small POD (`Event`), a type tag
+//     plus a few generic slots. No inheritance, no per-event heap — the ring is
+//     one flat array that serializes verbatim, same stance as the NPC pool.
+//   * OPTIONAL LOG. Debug/replay want history the transient ring throws away, so
+//     the bus can mirror every published event into an append-only log. Off by
+//     default (zero cost); when on, it's the only thing that grows.
+//   * OVERFLOW DROPS, LOUDLY. If more than `kCapacity` events are published in a
+//     single cycle the surplus is dropped and counted (`dropped()`), never
+//     grown — a bounded ring must stay bounded. The count surfaces the tuning
+//     problem instead of hiding it behind a silent reallocation.
+//   * EVERY PUBLISHED TYPE IS COUNTED. `cycle_count`/`total_count` keep a per-type
+//     tally so a published event always has at lea
+
+=== samosbor ===
+lines 928
+183: struct SamosborRng {
+214: struct SamosborVariantDef {
+275: // a `SamosborState{}` written by hand can put outside 0..6 — `samosbor_step` already
+374: // `samosbor_step`, which is what lets one floor be renumbered without its clock
+424: struct SamosborState {
+431: bool sealed = false;             // the one-shot seal already resolved this cycle
+435: // What changed in one step, so a caller reacts to transitions instead of polling
+441: // worth their bytes. On a single-crossing step they are derivable
+443: // ordinary 8 ms tick produces, because the shortest phase in the machine is
+444: // `kSamosborMinIdleMs` = 3 s. But `samosbor_step` walks up to four crossings in one
+445: // call, and on a `steps >= 2` step — a load stall, a debug time-skip, a frame that
+452: // `samosbor_fog_tick` ([mob_spawn.h]) — the fog population exists only between
+459: // `samosbor_fog_tick` had no call site in `src/` at all. The other eight fields were
+460: // never purposeless; six of them (`from`, `to`, `variant`, `steps`, `changed`, and the
+467: // shape for a caller is `if (samosbor_active(st)) samosbor_fog_tick(...)`, and it turns
+468: // the spawner into an unbounded population leak. `activeEnded` is delivered on the tick
+469: // `samosbor_step` moves the phase to Aftermath, so on the ONE tick that carries the
+472: // must be UNCONDITIONAL: every gate the tick needs is inside it, including the
+490: struct SamosborTransition {
+494: std::uint8_t steps = 0;       // phase boundaries crossed; 0 on the common path
+495: bool changed = false;         // steps != 0
+496: bool warningBegan = false;    // decision window open: HUD, siren, clear stale fog mobs
+497: bool activeBegan = false;     // fog and spawn pressure start NOW (first fog tick)
+498: bool sealed = false;          // resolve shelter and apply unsheltered pressure
+499: bool activeEnded = false;     // fog and spawn pressure stop; despawn fog mobs
+500: bool cycleEnded = false;      // aftermath spent; `count` incremented
+532: // Aftermath branch of `samosbor_step` does, so a ride and a completed cycle produce
+544: void samosbor_arm(SamosborState& st, std::uint32_t untilActiveMs);
+546: // THE step. Advance the clock by `dtMs` and report what crossed.
+548: // WHERE THIS BELONGS IN THE SIM ORDER. The existing per-tick order is
+550: //     input.apply -> controller_step -> wander_step -> physics_step
+551: //       -> player_melee_step -> mob_attack_step -> projectile_step
+552: //       -> loot_dead_mobs -> finalize_deaths -> pickup_step
+554: // and `samosbor_step` goes **after `controller_step`, before `wander_step`**.
+559: //      ([combat.h] defect 2) — and with a whole tick of margin, not one slot.
+560: //   2. `wander_step` and `mob_attack_step` will want to read the phase (fog
+561: //      makes a crowd flee and a mob bolder). Deciding the phase for this tick
+564: //      `physics_step` in the same tick, so they land on the floor instead of
+575: SamosborTransition samosbor_step(SamosborState& st, std::uint32_t dtMs,
+579: inline bool samosbor_active(const SamosborState& st) {
+604: // banner cannot go stale, cannot be missed by a frame that skipped a tick or by
+605: // `samosbor_step`'s four-crossing clamp, survives a save/load with no extra field, and
+610: // that genuinely needs them — `samosbor_fog_tick` ([mob_spawn.h]), which creates and
+669: bool samosbor_beat_text(const SamosborState& st, char* out, std::size_t cap);
+703: // they can be reordered around a `samosbor_step` by a later edit, and then the banner
+708: struct SamosborAlarm {
+712: bool on = false;                       // beat != None, i.e. `text` has content
+738: struct SamosborPressure {
+748: // `balance.md` reads like per-tick drain; the code applies it exactly once per
+804: // tick and pass by value.
+809: struct ThreatCensus {
+825: // **94% of the time**, so the fog spawn tick is effectively always running. With
+836: // guard is not a guard. `samosbor_fog_tick` ([mob_spawn.h]) is now the live caller,
+847: bool samosbor_fog_spawn_allowed(const ThreatCensus& census, bool highRisk);
+853: std::uint8_t samosbor_threat_headroom(const ThreatCensus& census, bool highRisk);
+863: bool highRisk);
+869: // **NOT a per-tick call.** `samosbor_fog_tick` runs it once every
+870: // `kFogSpawnPeriodTicks` (250 ticks = 2 s at kSimHz), and the cadence is a design
+874: // ~140 us at the 4096 budget. Per tick that would be 0.25%-1.75% of one core —
+881: // a raycast per mob per fog tick would violate the O(n) tick rule. A caller that
+926: bool samosbor_allows_kind(const MobDef& def, std::uint16_t samosborCount);
+main mentions samosbor: 95
+
+=== needs ===
+63: inline constexpr float kNeedMax = 100.0f;
+66: inline constexpr float kFoodDrainPerSec  = 0.08f;
+67: inline constexpr float kWaterDrainPerSec = 0.12f;
+68: inline constexpr float kSleepDrainPerSec = 0.05f;
+75: inline constexpr float kPeeDigestPerSec = 0.10f;
+76: inline constexpr float kPooDigestPerSec = 0.06f;
+81: inline constexpr float kHungerHpPerSec      = 0.3f;   // food  <= 0
+82: inline constexpr float kDehydrationHpPerSec = 0.5f;   // water <= 0
+83: inline constexpr float kOverflowHpPerSec    = 0.1f;   // pee or poo >= 100, each
+86: inline constexpr float kSleepExhaustedAt = 10.0f;
+87: inline constexpr float kSleepExhaustedSpeedScale = 0.5f;
+91: inline constexpr float kStartFoodLo  = 70.0f, kStartFoodHi  = 100.0f;
+92: inline constexpr float kStartWaterLo = 70.0f, kStartWaterHi = 100.0f;
+93: inline constexpr float kStartSleepLo = 60.0f, kStartSleepHi = 100.0f;
+94: inline constexpr float kStartPeeLo   =  0.0f, kStartPeeHi   =  30.0f;
+95: inline constexpr float kStartPooLo   =  0.0f, kStartPooHi   =  20.0f;
+121: inline constexpr float kNeedWarnLeadSec = 120.0f;
+122: inline constexpr float kFoodWarnAt  = kFoodDrainPerSec  * kNeedWarnLeadSec;  //  9.6
+123: inline constexpr float kWaterWarnAt = kWaterDrainPerSec * kNeedWarnLeadSec;  // 14.4
+124: inline constexpr float kSleepWarnAt = kSleepDrainPerSec * kNeedWarnLeadSec;  //  6.0
+127: inline constexpr float kPeeWarnAt = kNeedMax - kPeeDigestPerSec * kNeedWarnLeadSec; // 88.0
+128: inline constexpr float kPooWarnAt = kNeedMax - kPooDigestPerSec * kNeedWarnLeadSec; // 92.8
+132: inline constexpr float kFeedPooShare  = 0.7f;   // feed(v)      -> pendingPoo += v*0.7
+133: inline constexpr float kFeedPeeShare  = 0.3f;   //              -> pendingPee += v*0.3
+134: inline constexpr float kRiskyPooShare = 1.0f;   // riskyFeed(v) -> pendingPoo += v*1.0
+135: inline constexpr float kRiskyPeeShare = 0.4f;   //              -> pendingPee += v*0.4
+136: inline constexpr float kDrinkPeeShare = 0.6f;   // drink(v)     -> pendingPee += v*0.6
+158: inline constexpr std::int16_t kRiskyFeedHpCost = 6;
+164: inline constexpr float kDrinkStimSleepBonus = 10.0f;     // items.ts:449
+165: inline constexpr float kSleepingPillsWaterCost = 16.0f;  // items.ts:37
+166: inline constexpr float kSleepingPillsFoodCost  =  8.0f;
+167: inline constexpr std::int16_t kSleepingPillsHpCost = 4;
+172: inline constexpr float kToiletPeeRelief = 70.0f;
+173: inline constexpr float kToiletPooRelief = 65.0f;
+179: inline constexpr DamageChannel kAttritionChannel =
+193: struct NeedsTick {
+195: float speedScale = 1.0f;      // multiply into Controller::moveSpeed
+196: float secondsToDamage = 0.0f; // 0 while already losing HP
+199: bool lethal = false;
+200: bool ticked = false;          // false when no camera holder is on this layer
+209: void needs_advance(Needs& n, float dt);
+216: float needs_hp_rate(const Needs& n);
+220: float needs_seconds_to_damage(const Needs& n);
+224: float needs_speed_scale(const Needs& n);
+252: bool item_feeds(ItemId id);     // Feed | FeedRisky | FeedPsi   (21 of 446)
+253: bool item_hydrates(ItemId id);  // Drink | DrinkStim            ( 8 of 446)
+257: struct ConsumeResult {
+259: float food = 0.0f;
+260: float water = 0.0f;
+261: float sleep = 0.0f;
+262: float peeQueued = 0.0f;    // added to pendingPee, not to pee
+263: float pooQueued = 0.0f;
+265: bool used = false;
+337: struct ReliefResult {
+338: float pee = 0.0f;
+339: float poo = 0.0f;
+ main needs_step 2
+ main NeedsState 0
+ main speedScale 2
+ main psi 11
+
+main count quest = 99 and quest_ = 8
+
+main count contract = 36 and contract_ = 10
+
+main count vendor = 26 and vendor_ = 11
+
+main count extraction = 14 and extraction_ = 0
+
+main count rumour = 30 and rumour_ = 2
+
+main count hunt = 1 and hunt_ = 0
+
+main count investigate = 8 and investigate_ = 3
+
+main count population = 17 and population_ = 0
+
+main count macro_sim = 7 and macro_sim_ = 0
+
+main count economy = 3 and economy_ = 2
+
+main count speech = 21 and speech_ = 4
+
+main count container = 26 and container_ = 0

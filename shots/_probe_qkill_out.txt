@@ -1,0 +1,137 @@
+quest.cpp lines 598
+    61|                          static_cast<int>(d.target));
+    62|            return true;
+>   63|        case ObjectiveKind::Hunt:
+    64|            if (static_cast<std::size_t>(d.subject) >= kMobKindCount) return false;
+    65|            std::snprintf(out, cap, "%s x%d",
+    66|                          mob_name(static_cast<MobKind>(d.subject)),
+    67|                          static_cast<int>(d.target));
+    68|            return true;
+    69|        case ObjectiveKind::Descend:
+    70|            std::snprintf(out, cap, "%s %d", kDepth, static_cast<int>(d.target));
+    71|            return true;
+    72|        default:
+    73|            return false;
+    74|    }
+    75|}
+    76|
+    77|// ---------------------------------------------------------------------------
+---
+   287|
+   288|    // A re-taken (previously Orphaned) row starts over: fresh clock, fresh progress. See
+>  289|    // quest_on_giver_died for why carrying the remainder would be a punishment for
+   290|    // something the player did not do.
+   291|    QuestProgress& p = log.row[static_cast<std::size_t>(id) - 1];
+   292|    p = QuestProgress{};
+   293|    p.state = static_cast<std::uint8_t>(QuestState::Active);
+   294|    // Minted HERE and nowhere else: the bare id is what `quest_offer` hashed and what the
+   295|    // caller holds, this is the (generation, id) pair that outlives the tick. `giver` is
+   296|    // known live from the guard at the top, so `handle()` reads a real generation rather
+   297|    // than the 0 an out-of-range id would return. [quest.h]
+   298|    p.giver = pool.handle(giver);
+   299|    p.baseline = baseline;
+   300|    p.remainingMs = d.limitMs;
+   301|    return true;
+   302|}
+   303|
+---
+   415|                break;
+   416|            }
+>  417|            case ObjectiveKind::Hunt:
+   418|                if (p.progress < d.target) continue;
+   419|                break;
+   420|            case ObjectiveKind::Descend: {
+   421|                // |z|, because depth is bidirectional here and `RunLedger` keeps only
+   422|                // ONE high-water mark. That is why data/quests.csv authors a Descend as
+   423|                // a DEPTH rather than as a signed label: comparing the sign as well
+   424|                // would make an up-quest permanently unsatisfiable for any run that
+   425|                // went deeper down first, which is strictly worse than the ambiguity.
+   426|                const int reached =
+   427|                    led.deepestFloor < 0 ? -led.deepestFloor : led.deepestFloor;
+   428|                const int want = d.target < 0 ? -d.target : d.target;
+   429|                if (reached < want) {
+   430|                    p.progress = reached;
+   431|                    continue;
+---
+   458|}
+   459|
+>  460|void quest_on_kill(QuestLog& log, std::uint8_t mobKind) {
+   461|    for (std::size_t i = 0; i < kQuestCount; ++i) {
+   462|        QuestProgress& p = log.row[i];
+   463|        if (p.state != static_cast<std::uint8_t>(QuestState::Active)) continue;
+   464|        const QuestDef& d = kQuestTable[i];
+   465|        if (d.kind != static_cast<std::uint8_t>(ObjectiveKind::Hunt)) continue;
+   466|        if (d.subject != static_cast<std::uint16_t>(mobKind)) continue;
+   467|        if (p.progress < d.target) ++p.progress;
+   468|    }
+   469|}
+   470|
+   471|void quest_on_giver_died(QuestLog& log, NpcId who) {
+   472|    if (who == kInvalidNpc) return;
+   473|    for (std::size_t i = 0; i < kQuestCount; ++i) {
+   474|        QuestProgress& p = log.row[i];
+---
+   463|        if (p.state != static_cast<std::uint8_t>(QuestState::Active)) continue;
+   464|        const QuestDef& d = kQuestTable[i];
+>  465|        if (d.kind != static_cast<std::uint8_t>(ObjectiveKind::Hunt)) continue;
+   466|        if (d.subject != static_cast<std::uint16_t>(mobKind)) continue;
+   467|        if (p.progress < d.target) ++p.progress;
+   468|    }
+   469|}
+   470|
+   471|void quest_on_giver_died(QuestLog& log, NpcId who) {
+   472|    if (who == kInvalidNpc) return;
+   473|    for (std::size_t i = 0; i < kQuestCount; ++i) {
+   474|        QuestProgress& p = log.row[i];
+   475|        if (p.state != static_cast<std::uint8_t>(QuestState::Active)) continue;
+   476|        // The ID HALF of the handle, because `who` is a bare pool id off the event ring
+   477|        // and the record is ALREADY DEAD when this runs — `pool.handle(who)` would mint
+   478|        // the corpse's bumped generation and match nothing. `npc_handle_id` masks to
+   479|        // kNpcPoolBits, so a `who` of kInvalidNpc could never match a stored handle even
+---
+   469|}
+   470|
+>  471|void quest_on_giver_died(QuestLog& log, NpcId who) {
+   472|    if (who == kInvalidNpc) return;
+   473|    for (std::size_t i = 0; i < kQuestCount; ++i) {
+   474|        QuestProgress& p = log.row[i];
+   475|        if (p.state != static_cast<std::uint8_t>(QuestState::Active)) continue;
+   476|        // The ID HALF of the handle, because `who` is a bare pool id off the event ring
+   477|        // and the record is ALREADY DEAD when this runs — `pool.handle(who)` would mint
+   478|        // the corpse's bumped generation and match nothing. `npc_handle_id` masks to
+   479|        // kNpcPoolBits, so a `who` of kInvalidNpc could never match a stored handle even
+   480|        // without the early return above: never a wildcard.
+   481|        //
+   482|        // Coarser than `handle_valid`, and harmlessly so. The one case it over-matches is
+   483|        // a row whose giver died silently (a macro sweep publishes no event) into a slot
+   484|        // that was recycled, whose NEW occupant then dies in combat — and the verdict it
+   485|        // reaches there, Orphaned, is the same one quest_step's handle_valid poll reaches
+---
+=== tests/suite_quest.inl on_kill counts 7 giver 6 lines 1058
+  435|    quest_on_kill(log, other);
+  439|        quest_on_kill(log, static_cast<std::uint8_t>(d.subject));
+  442|    quest_on_kill(log, static_cast<std::uint8_t>(d.subject));
+  607|        quest_on_kill(log, static_cast<std::uint8_t>(d.subject));
+  641|            quest_on_kill(log, static_cast<std::uint8_t>(d.subject));
+  667|        quest_on_giver_died(log, kInvalidNpc);          // a no-op, never a wildcard
+  669|        quest_on_giver_died(log, a);
+  674|        quest_on_giver_died(log, a);
+  688|// which publishes no `NpcDied` event ([macro_sim.h]) — so `quest_on_giver_died` never
+  732|    // `quest_on_giver_died`'s event comparison working off a bare id.
+  740|        quest_on_kill(log, static_cast<std::uint8_t>(d.subject));
+  744|    // published, so `quest_on_giver_died` is deliberately NOT called here — that is
+  791|        quest_on_kill(log, static_cast<std::uint8_t>(d.subject));
+missing tests/suite_contract.inl
+=== tests/game_test.cpp on_kill counts 0 giver 0 lines 4273
+
+main includes quest.h True
+main quest_on_kill True
+main quest_on_giver_died True
+main contract_on_kill True
+main contract_on_giver_died True
+main@1728: game::QuestLog& quests = runState.quests;  // lives in SaveState; F5/F9 persists it
+main@1729: std::int32_t questPaid = 0;       // roubles paid by finished quests
+CMAKE: # `game_test: 134002 checks, 0 failures` - it read 132266 earlier the same day, before the
+CMAKE: PASS_REGULAR_EXPRESSION "game_test: 219716 checks, 0 failures")
+door_open_noise in noise.h False
+door_open_noise in noise.cpp False

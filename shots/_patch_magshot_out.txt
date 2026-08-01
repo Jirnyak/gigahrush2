@@ -1,0 +1,13 @@
+OK: inserted mag branch
+OK: inserted FINAL proof after shot fprintf
+include ranged_table: False
+include inventory.h: False
+include item_table: True
+include combat.h: True
+kItemCount in main already: True
+ItemSlot in main already: True
+item_name in main: True
+WROTE main.cpp bytes=295133 (was 289204)
+OK: setvbuf LF
+OK: cstdio present
+WROTE game_test.cpp

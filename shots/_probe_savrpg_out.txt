@@ -1,0 +1,193 @@
+=== src/game/save.h (43196 B, 675 lines) ===
+  -- kSaveVersion (2) --
+  94: inline constexpr std::uint32_t kSaveVersion = 6u;
+  142:     BadVersion,          // a different kSaveVersion wrote it
+  -- struct.*Save (3) --
+  166: struct SaveHeader {
+  352: struct SaveState {
+  669: // live player always does, but a default-constructed `SaveState` carries 0, and writing
+  -- version (13) --
+  14: //     covered twice over: NON-resident floors carry version 3's CARVE LOG (28 bytes
+  16: //     carries version 4's SNAPSHOT — its exact grid, RLE-encoded (~5 MB measured on
+  74: // reordered, a meaning changed. `save_read` refuses a version it does not recognise
+  79: // Version 3 carried a carve-op log and version 4 an embedded active-floor snapshot;
+  80: // BOTH are gone in version 5, replaced by the MODULAR layout the game actually is:
+  92: // anything is embodied, so no body can hold a stale id. Earlier versions are
+  137: // a version rejection from an accidental parse failure.
+  168:     std::uint32_t version = 0;            //  4
+  181:     // Version 2 additions (bytes 48-55). Placed at the end so a version-1 reader that
+  183:     // carveCount/snapBytes here; version 5 moved geometry into per-floor files and
+  302: // Wire: u32 magic "GH2F" | u32 version | u32 blobBytes | u32 crc32(blob) | blob,
+  313: // version, size, CRC, malformed blob) — the caller keeps the generated floor and,
+  401: // "written by version 3, tick 120" for a save it just refused.
+=== src/game/save.cpp (45925 B, 1087 lines) ===
+  -- kSaveVersion (3) --
+  360:               "ContractBook is serialized; grow it and bump kSaveVersion in the same "
+  385:     h.version = kSaveVersion;
+  429:     if (h.version != kSaveVersion) return fail(SaveError::BadVersion);
+  -- known (1) --
+  332:         default:                           return "unknown save error";
+  -- version (9) --
+  58:     // Signed -> unsigned is a modular conversion, always has been; unsigned -> signed
+  165:     ar.u32(h.version);
+  297: // Table fingerprints — the strong half of the version check
+  385:     h.version = kSaveVersion;
+  425:     // it refused ("written by version 3 at 120 Hz") instead of only that it did.
+  429:     if (h.version != kSaveVersion) return fail(SaveError::BadVersion);
+  1057:     std::uint32_t magic = 0, version = 0, blobBytes = 0, crc = 0;
+  1059:     r.u32(version);
+  1063:     if (version != kFloorFileVersion) return fail(SaveError::BadVersion);
+=== src/game/rpg.h (11865 B, 217 lines) ===
+  -- RpgStats (22) --
+  96: struct RpgStats {
+  104: static_assert(sizeof(RpgStats) == 12, "RpgStats must stay a tight POD");
+  105: static_assert(std::is_trivially_copyable_v<RpgStats>);
+  119: std::uint16_t max_hp(const RpgStats& r);
+  120: std::uint16_t max_psi(const RpgStats& r);
+  123: RpgStats fresh_rpg(std::uint8_t level = 1);
+  129: RpgStats random_rpg(std::uint8_t level, std::uint32_t seed);
+  143: std::uint16_t str_melee_dmg_mult_e3(const RpgStats& r);
+  144: std::uint16_t str_durability_wear_mult_e3(const RpgStats& r);
+  145: std::uint16_t agi_move_speed_mult_e3(const RpgStats& r);
+  146: std::uint16_t agi_attack_speed_mult_e3(const RpgStats& r);   // <1000 = faster
+  147: std::uint16_t agi_ranged_spread_mult_e3(const RpgStats& r);  // <1000 = tighter
+  148: std::uint16_t int_xp_mult_e3(const RpgStats& r);
+  149: std::uint16_t int_psi_cost_mult_e3(const RpgStats& r);
+  150: std::uint16_t int_contract_reward_mult_e3(const RpgStats& r);
+  151: std::uint16_t int_document_reward_mult_e3(const RpgStats& r);
+  154: std::uint16_t int_psi_duration_bonus_sec(const RpgStats& r);
+  160: std::uint16_t str_heavy_weapon_speed_mult_e3(const RpgStats& r,
+  168: std::int16_t melee_damage(const RpgStats& r, ItemId weaponId,
+  173: std::uint16_t adjusted_psi_cost(std::uint16_t baseCost, const RpgStats& r);
+  206: XpAward award_xp(RpgStats& r, std::uint32_t amount,
+  214: bool spend_attr_point(RpgStats& r, Attr a,
+  -- attrPoints (2) --
+  15: // to live: level, xp, attrPoints, str/agi/int, psi, and the 13 derived multipliers.
+  100:     std::uint8_t attrPoints = 0;   // 7  unspent
+  -- version (1) --
+  32: //     is not the same function. Porting the zone version would be a second,
+=== src/game/craft.h (22654 B, 413 lines) ===
+  -- known (16) --
+  45: // of `craft_recipe_sources.ts` plus the default-known set, ported row for row.
+  66: // default-known recipes are all tier 0 (measured), so a fresh run can build
+  73: // material bank is nine `std::uint32_t`, the known-recipe set is a 448-bit
+  186:     Default = 0,  // known from the first frame
+  223: // `craft_known_count` can popcount the lot without masking.
+  233:     std::uint64_t known[kCraftKnownWords]{};  //  0..55  one bit per item id
+  250:     UnknownItem,            // id 0, or past the end of the table
+  254:     TierTooHigh,            // known but not certified — the disassembly path
+  268: // A fresh run: empty bank, tier 0, the nine `kCraftKnownByDefault` recipes known.
+  271: bool craft_known(const CraftingState& st, ItemId id);
+  272: std::uint32_t craft_known_count(const CraftingState& st);
+  333: // Learn one recipe. Returns false when it was already known or is not
+  339: // even when all of them were already known, because certification is not
+  352:     std::uint32_t learned = 0;         // recipes newly known
+  385: // reference serializes only the bank and the known set for the same reason —
+  407: // the tier to kCraftMaxTier, and known-bits above kCraftRecipeCount are dropped.
+  -- craft_known (3) --
+  223: // `craft_known_count` can popcount the lot without masking.
+  271: bool craft_known(const CraftingState& st, ItemId id);
+  272: std::uint32_t craft_known_count(const CraftingState& st);
+  -- kCraft (35) --
+  40: // and `kCraftRecipeCount == kItemCount` by construction with recipe N being item
+  100: inline constexpr std::size_t kCraftMaterials = 9;
+  114: static_assert(static_cast<std::size_t>(CraftMaterial::Count) == kCraftMaterials,
+  131: inline constexpr std::uint8_t kCraftMaxTier = 4;
+  136: // `kCraftTable[id - 1]` is the recipe for item `id`, exactly as
+  145:     std::uint8_t comp[kCraftMaterials];  //  0..8  cost AND disassembly yield vector
+  147:     std::uint8_t tier;                   // 10     0..kCraftMaxTier
+  148:     std::uint8_t flags;                  // 11     kCraftKnownByDefault etc.
+  154: inline constexpr std::uint8_t kCraftKnownByDefault = 1u << 0;  // in the starting set
+  155: inline constexpr std::uint8_t kCraftDiscoverable   = 1u << 1;  // learnable at all
+  159: inline constexpr std::size_t kCraftRecipeCount = kItemCount;   // 446
+  163: extern const std::array<CraftRecipe, kCraftRecipeCount> kCraftTable;
+  166:     return kCraftTable[static_cast<std::size_t>(id) - 1];
+  196: inline constexpr std::size_t kCraftSourceCount = 24;      // 1 default + 23 ported
+  197: inline constexpr std::size_t kCraftSourceMaxRecipes = 9;  // the default row is the widest
+  202:     ItemId recipe[kCraftSourceMaxRecipes];  //  0..17
+  212: extern const std::array<CraftSource, kCraftSourceCount> kCraftSources;
+  213: // Stable ids, parallel to kCraftSources. Kept out of the row so it stays POD.
+  214: extern const std::array<const char*, kCraftSourceCount> kCraftSourceIds;
+  217: extern const std::array<const char*, kCraftSourceCount> kCraftSourceText;
+  224: inline constexpr std::size_t kCraftKnownWords = (kCraftRecipeCount + 63) / 64;  // 7
+  228: inline constexpr std::uint32_t kCraftMaterialMax = 999999u;
+  233:     std::uint64_t known[kCraftKnownWords]{};  //  0..55  one bit per item id
+  234:     std::uint32_t mat[kCraftMaterials]{};     // 56..91  the bank, 0..kCraftMaterialMax
+  268: // A fresh run: empty bank, tier 0, the nine `kCraftKnownByDefault` recipes known.
+  286: // Per-axis shortfall for a recipe, into `out[kCraftMaterials]`. Zero where the
+  331: inline constexpr std::uint32_t kCraftLearnPerMille = 500u;
+  343: // The source a given item teaches, or kCraftSourceCount if it teaches nothing.
+  354:     std::size_t source = kCraftSourceCount;
+  395: inline constexpr std::size_t kCraftingWire =
+=== src/game/craft.cpp (16981 B, 400 lines) ===
+  -- known (16) --
+  54:         case CraftFail::UnknownItem:           return "no such item";
+  66:     return "unknown";
+  82:         st.known[bit >> 6] |= (1ull << (bit & 63));
+  86: bool craft_known(const CraftingState& st, ItemId id) {
+  89:     return (st.known[bit >> 6] & (1ull << (bit & 63))) != 0;
+  92: std::uint32_t craft_known_count(const CraftingState& st) {
+  97:         n += static_cast<std::uint32_t>(std::popcount(st.known[w]));
+  120:     if (!item_valid(id)) return CraftFail::UnknownItem;
+  122:     if (!craft_known(st, id))
+  229:     if (craft_known(st, id)) return false;
+  231:     st.known[bit >> 6] |= (1ull << (bit & 63));
+  364:         put_u32(p, static_cast<std::uint32_t>(st.known[w] & 0xffffffffull));
+  365:         put_u32(p, static_cast<std::uint32_t>(st.known[w] >> 32));
+  378:         tmp.known[w] = static_cast<std::uint64_t>(lo) |
+  390:     // because the count is known at compile time and MSVC /W4 raises C4127 on a
+  394:         tmp.known[kCraftKnownWords - 1] &= (~0ull >> kSpareBits);
+  -- craft_known (4) --
+  86: bool craft_known(const CraftingState& st, ItemId id) {
+  92: std::uint32_t craft_known_count(const CraftingState& st) {
+  122:     if (!craft_known(st, id))
+  229:     if (craft_known(st, id)) return false;
+  -- kCraft (35) --
+  73:     for (std::size_t i = 0; i < kCraftMaterials; ++i) t += r.comp[i];
+  79:     for (ItemId id = 1; id <= kCraftRecipeCount; ++id) {
+  80:         if ((craft_recipe(id).flags & kCraftKnownByDefault) == 0) continue;
+  96:     for (std::size_t w = 0; w < kCraftKnownWords; ++w)
+  111:     for (std::size_t i = 0; i < kCraftMaterials; ++i) out[i] = 0;
+  114:     for (std::size_t i = 0; i < kCraftMaterials; ++i)
+  123:         return (r.flags & kCraftDiscoverable) ? CraftFail::NotLearned
+  128:     for (std::size_t i = 0; i < kCraftMaterials; ++i)
+  160:     for (std::size_t i = 0; i < kCraftMaterials; ++i) {
+  186:     for (std::size_t i = 0; i < kCraftMaterials; ++i) total += r.comp[i];
+  198:     std::size_t pick = kCraftMaterials - 1;
+  199:     for (std::size_t i = 0; i < kCraftMaterials; ++i) {
+  212:     if (st.mat[pick] > kCraftMaterialMax) st.mat[pick] = kCraftMaterialMax;
+  221:     if (rand_below(hash2(rollKey, kLearnSalt ^ id), 1000u) < kCraftLearnPerMille)
+  228:     if ((craft_recipe(id).flags & kCraftDiscoverable) == 0) return false;
+  236:     if (index >= kCraftSourceCount) return 0;
+  237:     const CraftSource& src = kCraftSources[index];
+  239:     for (std::size_t i = 0; i < src.count && i < kCraftSourceMaxRecipes; ++i)
+  244:         st.tier = src.grantsTier > kCraftMaxTier ? kCraftMaxTier : src.grantsTier;
+  249:     if (!item_valid(id)) return kCraftSourceCount;
+  250:     for (std::size_t i = 0; i < kCraftSourceCount; ++i)
+  251:         if (kCraftSources[i].unlock == id) return i;
+  252:     return kCraftSourceCount;
+  262:         if (src == kCraftSourceCount) continue;
+  277:         if (kCraftSources[src].consume != 0 && learned > 0) {
+  295:     for (ItemId id = 1; id <= kCraftRecipeCount; ++id) {
+  363:     for (std::size_t w = 0; w < kCraftKnownWords; ++w) {
+  367:     for (std::size_t i = 0; i < kCraftMaterials; ++i) put_u32(p, st.mat[i]);
+  372:     if (!in || n < kCraftingWire) return false;   // untouched on refusal
+  375:     for (std::size_t w = 0; w < kCraftKnownWords; ++w) {
+TESTFILE: tests\suite_saveload.inl
+TESTFILE: tests\suite_saveload.inl
+=== main.cpp save/load sites ===
+  1628:     // F5 saves, F9 loads. Recorded as intent and acted on in the sim loop, the same
+  1662:     game::QuestLog& quests = runState.quests;  // lives in SaveState; F5/F9 persists it
+  1813:     // (its geometry). F5 calls it, and so does the autosave at the end of
+  1815:     auto save_run_now = [&]() -> bool {
+  1929:         // closes. Same seam as F9 apply. [save.h]
+  1951:         // wall forever (physics backs out every tick). F9 already calls
+  1957:         save_run_now();
+  2712:                                (shotAction == "save" || shotAction == "load") &&
+  2716:                         if (shotAction == "save") {
+  2988:                         // ([save.h] modular layout) or on F5.
+  3419:                     if (save_run_now())
+  3436:                 // F9 full load: run + floor + cell + armour. APIs live in save.h;
+  4271:                 "F fly | Q door | G eat | T drink | F5/F9 save/load | [ / ] floor | Esc menu");
+  4846:                         // Same seam as keyboard ride + F9 apply. [save.h]
+  4865:                         save_run_now();

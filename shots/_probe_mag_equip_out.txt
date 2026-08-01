@@ -1,0 +1,133 @@
+==== gun equip / PlayerRanged create ====
+1688:    // [[maybe_unused]]: superseded by PlayerRanged::shots (read straight from the
+1915:        if (const game::PlayerRanged* pr = reg.try_get<game::PlayerRanged>(player)) {
+1920:            runState.ranged = game::PlayerRanged{};
+3664:                            // the ammo already debited into the magazine, and
+3669:                                    reg.emplace_or_replace<game::PlayerRanged>(
+4088:                        const auto* prs = reg.try_get<game::PlayerRanged>(player);
+4093:                                        prs ? prs->magCount : 0, rd->magazine,
+
+==== rpgcmbt action ====
+2373:                    (shotAction == "wall" || shotAction == "rpgcmbt") &&
+2374:                    reg.valid(player) &&
+2375:                    shotFramesSeen >= 30 && !doors.frozen) {
+2376:                    const Transform& ptr = reg.get<Transform>(player);
+2377:                    const MacroGrid& g = stack.layer(activeLayer).grid();
+2378:                    const float cx = ptr.pos.x;
+2379:                    const float cy = ptr.pos.y;
+2380:                    const float cz = ptr.pos.z;
+2381:                    const float eyeZ = cz + 0.7f;
+2382:                    float bestD2 = 1.0e12f;
+2383:                    float bestDx = 0.0f, bestDy = 0.0f;
+2384:                    // Wider ring than melee reach so open-room spawns still
+2385:                    // find a wall; walk closes the gap (kPlayerWalkSpeed).
+2386:                    for (int pass = 0; pass < 2 && bestD2 >= 1.0e12f; ++pass) {
+2387:                        const float sampleZ =
+2388:                            pass == 0 ? eyeZ : (eyeZ - kCellSize);
+2389:                        const int gz =
+2390:                            static_cast<int>(sampleZ / kCellSize);
+2391:                        if (gz < 0 || gz >= kMacroDim) continue;
+2392:                        for (int ox = -8; ox <= 8; ++ox) {
+2393:                            for (int oy = -8; oy <= 8; ++oy) {
+2394:                                if (ox == 0 && oy == 0) continue;
+2395:                                const float px =
+2396:                                    cx + static_cast<float>(ox) * kCellSize;
+2397:                                const float py =
+2398:                                    cy + static_cast<float>(oy) * kCellSize;
+2399:                                const int gx = wrap_macro(
+2400:                                    static_cast<int>(px / kCellSize));
+2401:                                const int gy = wrap_macro(
+2402:                                    static_cast<int>(py / kCellSize));
+2403:                                if (g.cell(gx, gy, wrap_macro(gz)) ==
+2404:                                    kCellAir)
+2405:                                    continue;
+2406:                                const float dx =
+2407:                                    wrap_delta_f(cx, px, kWorldExtent);
+2408:                                const float dy =
+2409:                                    wrap_delta_f(cy, py, kWorldExtent);
+2410:                                const float d2 = dx * dx + dy * dy;
+2411:                                if (d2 < bestD2) {
+2412:                                    bestD2 = d2;
+2413:                                    bestDx = dx;
+2414:                                    bestDy = dy;
+2415:                                }
+2416:                            }
+2417:                        }
+2418:                    }
+2419:                    if (bestD2 < 1.0e12f) {
+2420:                        auto& cam = reg.get<CameraTag>(player);
+2421:                        // camera_forward / walk fwd: yaw=atan2(dy,dx) (Z-up).
+2422:                        cam.yaw = std::atan2(bestDy, bestDx);
+2423:                        cam.pitch = 0.0f;
+2424:                        if (auto* ctl = reg.try_get<Controller>(player)) {
+2425:                            // aim_player starts fly=true; wall walk needs ground
+2426:                            // locomotion so collision/wish actually close gap.
+2427:                            ctl->fly = false;
+2428:                            // Always walk forward while out of unarmed reach
+2429:                            // (~1.9 m). wishDir.x is camera-local forward.
+2430:                            if (bestD2 > 1.2f * 1.2f)
+2431:                                ctl->wishDir = {1.0f, 0.0f, 0.0f};
+2432:                        }
+2433:                    }
+2434:                }
+2435:                // Embodied crowd (#12): needs decay, then the utility brain
+2436:
+2437:                // re-plans (identity-staggered) and steers each NON-player body's
+2438:                // Velocity — BEFORE the controller/physics that integrate it, the
+2439:                // same locomotion path as the player ([ai.md], [npcs.md]).
+2440:                // PARKED: game::needs_step(reg, pool, kSimDt);  <- branch 3-arg call
+2441:                // main already steps the clock at line ~1043 with the layer-scoped
+2442:                // 4-arg signature and keeps its NeedsTick report for the HUD. The branch
+2443:                // call operated on its per-entity Needs COMPONENT; main keeps the
+2444:                // survival clock in the pool row, because the elevator destroys the body
+2445:                // and a component would reset the clock on every floor ride.
+2446:                // THE UTILITY AI, UNPARKED — and dormant, which is not the same as absent.
+2447:                //
+2448:                // It sat commented out because two systems writing Velocity fight every
+2449:                // tick. That is now settled by a TOKEN rather than by hope: `AiBrain::motion`
+2450:                // decides per body, and both foreign writers — wander_step and
+2451:                // faction_feud_step — carry `if (ai_owns_motion(reg, e)) continue;`.
+2452:                // MEASURED over 200 ticks x 24 bodies: ai_step wrote Velocity 2400 times,
+
+==== fire API in main ====
+
+==== combat.h PlayerRanged / fire ====
+44:#include "game/ranged_table.h"   // ItemId, for the equipped-loadout helpers
+283:    // The column exists in [ranged_table.h], the generator fills it from
+294:    // sets `damageType` on zero physical weapons ([ranged_table.h] records this), so a
+321:struct PlayerRanged {
+324:    std::uint16_t magCount = 0;
+343:// and cumulative shots/hits on PlayerRanged are wiped on first fire.
+348://   * PlayerRanged shots/hits: MOVE into a lazy component on to; mag/weapon/
+622:std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
+
+==== item gun ids ====
+src/game/loot.h:148:// can never produce a single bullet — while guns spawn freely at weight 1000. A
+src/game/loot.h:152:// moment a weapon drops. Shotguns get 4..11 shells; everything else gets
+
+==== elevator ride_player signature ====
+12:// the swap so the ride doesn't snap the player's head or drop them out of fly.
+15:// the ride is a no-op — #9 (streaming) will load-on-demand later. Pure game-layer
+28:// Outcome of a ride. On success `player` is the NEW entity (the old one has been
+32:struct RideResult {
+39:// Ride from `fromFloor` by `dir` (+1 = up toward the roof, -1 = down). Resolves
+49:RideResult ride_elevator(Registry& reg, NpcPool& pool,
+
+==== suite mag ride ====
+FILE suite_rpg.inl
+  675:        CHECK(reg.get<PlayerRanged>(shooter).cooldownMs == def->cooldownMs);
+  733:        CHECK(reg.get<PlayerRanged>(shooter).cooldownMs ==
+  765:    CHECK(!reg.all_of<PlayerRanged>(from));
+  780:        pr.magCount = 12;
+  805:    CHECK(reg.all_of<PlayerRanged>(to));
+  806:    CHECK(reg.get<PlayerRanged>(to).shots == 7);
+  807:    CHECK(reg.get<PlayerRanged>(to).hits == 3);
+  808:    CHECK(reg.get<PlayerRanged>(to).magCount == 0);
+  809:    CHECK(reg.get<PlayerRanged>(to).weapon == static_cast<ItemId>(0));
+  810:    CHECK(reg.get<PlayerRanged>(from).magCount == 12);
+  811:    CHECK(reg.get<PlayerRanged>(from).weapon == static_cast<ItemId>(7));
+  812:    CHECK(reg.get<PlayerRanged>(from).shots == 0);
+  813:    CHECK(reg.get<PlayerRanged>(from).hits == 0);
+FILE suite_saveload.inl
+  174:    st.ranged.magCount = 7u;
+  254:    CHECK(a.ranged.magCount == b.ranged.magCount);

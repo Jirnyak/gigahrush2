@@ -1,0 +1,72 @@
+  hunt: 10 min, floor 15, 420 residents (42 Cultist-exempt) vs 593 monsters L3 -> 360 survivors, 60 dead (14.3%)
+  hunt: deaths per minute: 12 13 7 9 5 2 8 1 2 1
+  hunt: licensed hunters mean 17.9 peak 28 of 593 (1 in 32); prey pair-tests/tick ~6426
+  crates: 10 bankable, 19 consumable-only
+  crate loot by category: cat0=1 cat8=1  (total value=501)
+  at deposit: [id33 c1 cat0 v500 bank0] [id254 c1 cat8 v1 bank1] | melee=0 armour=33
+noise: 29 guns, radius 11.0..24.0 m, 10 of 29 audible past the 20 m sight radius
+noise: gunshot demo — Мертвяк at 26.0 m, 350 ticks (2.80 s)
+  start    : 26.00 m  (sight radius 20 m, so it cannot see him)
+  heard    : 18.18 m  (closed +7.82 m)
+  silenced : 19.27 m  (closed +6.73 m)
+  delta    : 1.09 m | 33 sound-steers while blind | 1 shot | 1 live noise
+noise: cost per sim tick with 300 mobs — quiet 0.000 us, worst case (64 records live) 36.720 us  [199996 steers]
+  macrosim: population curve (4000 seeded, 7 days/tick, target latched)
+    tick   0  living  4001  deaths   41  births   42  reserve 1044534  day 7
+    tick  50  living  4001  deaths    2  births    2  reserve 1044258  day 357
+    tick 100  living  4001  deaths    1  births    1  reserve 1044013  day 707
+    tick 150  living  4002  deaths    2  births    2  reserve 1043854  day 1057
+    tick 200  living  4003  deaths    2  births    2  reserve 1043725  day 1407
+    tick 250  living  4003  deaths    0  births    0  reserve 1043624  day 1757
+    tick 300  living  4003  deaths    1  births    1  reserve 1043519  day 2107
+    tick 350  living  4003  deaths    1  births    1  reserve 1043427  day 2457
+    tick 399  living  4003  deaths    1  births    1  reserve 1043337  day 2800
+    over 400 ticks: living 4001..4003 (target 4000), deaths 1236, births 1239, peak deaths/tick 41, slots consumed 1239 of 1044576
+    macrosim: 40 ticks x 2000 records, 1478 edges formed, digest 0xbf36f08115c2df79 reproduced exactly
+    macrosim: 2188 records, budget 64/tick -> max departures 34, max arrivals 34, 0.050 ms/step
+    macrosim: 43910 records, budget 64/tick -> max departures 34, max arrivals 34, 0.623 ms/step
+    macrosim: step cost 2,000 -> 40,000 records: 0.050 -> 0.623 ms/step (20x population; the O(n) sweep, not the bounded pass)
+    macrosim: 200 records seeded on floor -50, 9151 departures / 9003 arrivals -> 77 still negative, 84 positive, 167 off origin
+    macrosim: 3932 edges (0 stale) — pure-Citizen floor 2031 warm / 0 cold, Citizen+Wild floor 816 hostile-leaning
+    macrosim: reserve floor refused 115 births over 20 ticks, then 5 landed once it was lifted
+    macrosim: edge 0->1 formed at gen 0; the slot was recycled into a newborn at gen 1 — a bare id still reads alive=1 (affinity 5 would have been followed), the stamp drops it
+    macrosim: 1 stale edge(s) reclaimed, 2 re-formed; 2 edge(s) held, 0 still stale, every live one generation-matched; Relationship 8 B (4 B id + 2 B affinity + 2 B gen), rel_ 128 B/row unchanged
+[behaviours] MELEEGRID braced: raw=3 applied=2 (expect 2 @ x0.58)
+[behaviours] MELEEGRID open: raw=3 applied=3
+  npcpool: init() holds 306.0 MiB (was 493.0 MiB; 187.0 MiB of reader-less columns no longer allocated)
+  npcpool: 1930-record demo stack adds 53248 B of LIVE columns (13 B/row eager would be 13.0 MiB)
+  npcpool: one slot carried 4202 records; generation now 106 (kInvalidGen 4095 is never minted)
+  npcpool: 101000 births through 1000 live records -> slots used 1000 (recycling) vs 101000 (never-reclaim); 4.07 ms for the recycling run
+  npcpool: recycling digest 0xf2a7a8cb0a39b1cf reproduced exactly over 2900 handed-out ids; reversed kill order diverges
+  npcpool: MacroSim 250 ticks, 3000 seeded, reserve squeezed to 60 -> never-reclaim: 2336 alive (60 births, 1197 blocked, 3060 slots); recycling: 3002 alive (726 births, 0 blocked, 3002 slots, 724 reuses)
+  npcpool: 0.065 ms/macro-step never-reclaim vs 0.040 ms/macro-step recycling (printed, not asserted)
+  diffusion: 2097152 cells, field 8.00 MiB + scratch 8.00 MiB + walkable 256 KiB + run bits 4 KiB = 16.254 MiB/layer
+  diffusion: 1253822 of 2097152 cells open (59.8%); bitset bake 25.20 ms
+  diffusion: SPARSE  (4957 live) 4.05 ms/sweep = 3.23 ns/open cell; at 5 sweeps/s 20.26 ms/s = 2.03% of one core
+  diffusion: SATURATED (1253822 live, nothing skippable) 12.83 ms/sweep = 10.23 ns/open cell; at 5 sweeps/s 64.15 ms/s = 6.42% of one core (sim step budget is 8 ms)
+[utilai] intent switches over 800 re-plans (8 bodies x 100 ticks): hysteresis ON = 3, OFF = 792
+[utilai] per 100 re-plans per body: ON = 0.4, OFF = 99.0
+[utilai] 200 ticks x 24 bodies: ai_step wrote Velocity 2400 times, wander_step 300 times, BOTH in one tick 0 times
+[utilai] guard: wander_step wrote 0 times with the token held by ai, 600 times with it delegated
+[utilai] memory footprint: trace 8 B, row 64 B (8 slots) -> 256.0 KiB resident after 1 write (4096 rows); projected 58.0 MiB at the 950k active target, 64.0 MiB at the full 2^20
+[utilai] coalescing: 200 sightings of one cell -> 1 live trace(s), 1 write(s), 199 coalesce(s), 0 eviction(s)
+[utilai] MEMORY CHANGES THE DECISION (live danger field == 0 in BOTH arms): forgets -> 'work' (flee 18.1); remembers one danger mark -> 'flee' (flee 47.5), delta +29.4
+[utilai] danger field went to ZERO after 10 hot ticks; 12 bodies still fleeing: no store = 0, store+memory OFF = 0, store+memory ON = 12 (live traces 0 / 0 / 12)
+[utilai] one remembered attacker, 512 identities each: Citizens combat 418->132 flee 94->380 | Liquidators combat 438->512 flee 0->0
+[utilai] one tick, 3 groups x 8: wander owns 8, ai owns 16 (of which 8 steered by a REMEMBERED cell with a flat live field), group C |v| = 2.16 m/s in -x
+[utilai] memory ON, 200 ticks x 24 bodies: ai_step wrote Velocity 3200 times, wander_step 200 times, BOTH in one tick 0 times
+[utilai] freshness: a remembered danger mark stops changing the decision at age 810 s and expires entirely at 900 s (live traces 1 -> 0)
+[utilai] cost over 600 ticks x 16 bodies: 42 re-plans, 7211 recalls (0.75 recalls per body per tick vs 600 ticks of unconditional scanning that were avoided)
+[utilai] determinism: FNV-1a over every memory row + intent + decision count, two independent runs = 0x51671950 / 0x51671950
+[utilai] body destroyed and rebuilt (the elevator path): brain decisions 1 -> 0, memory digest 0xe3db63a1 -> 0xe3db63a1, intent still 'flee'
+  navcache: 5 hits / 21 refusals across 8 of 9 error codes; 3890 route_step calls compared over 38 walks (38 arrived); blob 136327988 B full vs 13108 B coarse-only (10400x)
+  navcache/evict: 450 names round-tripped + 20 disowned; 13 files / 409088760 B written; 2 downgraded, 4 stubs evicted, 2 junk reclaimed; measured on disk 272655976 B -> 136341096 B
+  navcache/bound: 10-floor stack 1.27 GiB -> 0.51 GiB (545390600 B, 4 full + 6 stubs); ceiling 0.51 GiB for ANY key count (was unbounded in seed)
+[test] suite_status: table and composition verified
+game_test: 219716 checks, 0 failures
+game_test: all checks passed. If ctest reports this target FAILED, the pinned count
+           in CMakeLists.txt no longer matches the total above. A RISING count with
+           zero failures means tests were ADDED, not that a guard broke: update the
+           PASS_REGULAR_EXPRESSION to the number above and say so in the commit.
+           A FALLING count is the case that matters - it means a suite stopped
+           running, which is exactly what this pin exists to catch.

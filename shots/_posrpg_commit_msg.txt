@@ -1,0 +1,5 @@
+POSRPG: voluntary possess carries RpgStats+kills+shots/hits
+
+possess_nearest_survivor was camera-only; death and elevator already kept
+progression. Add transfer_player_progression: copy RpgStats, move kills and
+ranged shots/hits; mag stays on the abandoned body. Unit pin 219615 (+29).

@@ -1,0 +1,346 @@
+==== shotRideDone / elevator ride in shot path ====
+1177:    int shotRide = 0;        // floors to descend before capturing
+1184:    int shotRideDone = 0;
+1206:        else if (a == "--ride" && i + 1 < argc) shotRide = std::atoi(argv[++i]);
+2812:                               shotRideDone >= shotRide &&
+4962:                if (shotRideDone < shotRide && shotFramesSeen % 420 == 0) {
+5063:                    ++shotRideDone;
+
+==== elevWanted / ride call context ====
+
+==== fire / magCount decrement ====
+4093:                                        prs ? prs->magCount : 0, rd->magazine,
+
+==== combat.cpp magCount ====
+1076:    if (pr.reloadMs > elapsedMs) pr.reloadMs -= elapsedMs; else pr.reloadMs = 0;
+1090:        pr.magCount = 0;
+1091:        pr.reloadMs = 0;
+1094:    if (pr.reloadMs > 0) return 0;
+1096:    if (pr.magCount == 0) {
+1097:        // Reload: move up to a magazine's worth out of the inventory. Counting first
+1099:        // pack does not lock the player into a permanent reload.
+1113:        pr.magCount = got;
+1114:        pr.reloadMs = def->reloadMs;
+1186:    --pr.magCount;
+
+==== status action full (template) ====
+2787:                    } else if (!shotActionConsumed && shotAction == "status" &&
+2788:
+2789:                               shotFramesSeen >= 30) {
+2790:                        // STATUS proof: land two authored rows so move_e3 drops
+2791:                        // below 1000 and rooted becomes true for Paupsina's
+2792:                        // leading window. Real status_apply path, not a mock.
+2793:                        game::status_apply(playerStatus,
+2794:                                           game::StatusId::ZhelemishSkin,
+2795:                                           /*useAlt=*/false);
+2796:                        game::status_apply(playerStatus,
+2797:                                           game::StatusId::PaupsinaWeb,
+2798:                                           /*useAlt=*/false);
+2799:                        std::fprintf(
+2800:                            stderr,
+2801:                            "[status] APPLY zh+web move_e3=%u rooted=%d "
+2802:                            "zh_ms=%u web_ms=%u\n",
+2803:                            game::status_move_mult_e3(playerStatus),
+2804:                            game::status_is_rooted(playerStatus) ? 1 : 0,
+2805:                            playerStatus.remainMs[static_cast<std::size_t>(
+2806:                                game::StatusId::ZhelemishSkin)],
+2807:                            playerStatus.remainMs[static_cast<std::size_t>(
+2808:                                game::StatusId::PaupsinaWeb)]);
+2809:                        shotActionConsumed = true;
+2810:                    } else if (!shotActionConsumed &&
+2811:                               (shotAction == "save" || shotAction == "load") &&
+2812:                               shotRideDone >= shotRide &&
+2813:                               shotFramesSeen >= 30) {
+2814:                        // Wait for async nav bake so loadWanted is not stuck
+2815:                        if (shotAction == "save") {
+2816:                            saveWanted = true;
+
+==== save action waits ride ====
+2811:                               (shotAction == "save" || shotAction == "load") &&
+2812:                               shotRideDone >= shotRide &&
+2815:                        if (shotAction == "save") {
+
+==== MAGSHOT backlog block ====
+45:| P3 | MELEEGRID | CLOSED 2026-08-01 — player_melee forwards grid (WallBrace soak) | src/game/combat.cpp + suite_behaviours §18 | see CLOSED MELEEGRID |
+46:| P3 | SAVSTAT | CLOSED 2026-08-01 — F5/F9 persist StatusSet (kSaveVersion 9) | save.h/cpp + main F5/F9 + suite_saveload | see CLOSED SAVSTAT |
+47:| P3 | MAGSHOT | Optional: real-game HUD mag line across --ride | main.cpp foreign-aware | unit pin owns body-swap |
+48:
+49:| P3 | M4 | CLOSED peek — Milestone 4 already CLOSED (suite_props / world_test) | .agents/worker_m4* | no leftover game work |
+50:| P3 | SHOTLOG | CLOSED 2026-07-31 — [place] MOVE/REFUSE in place_body_at_cell | src/game/save.cpp | see CLOSED SHOTLOG |
+51:| P2 | PADIC | CLOSED 2026-07-31 — floor4 stress GREEN (AI+tex+shot) | main harness + src/game | see CLOSED PADIC; Zhirnyak owns mesher stripes |
+52:
+53:## LOCKED — do not touch
+54:- src/render/env_detail.* gpu_particle_pass.* gpu_light_grid.* GpuCullPass (foreign WIP)
+55:- shaders/**  (cube.frag.spv / cube_tex.frag.spv often dirty FOREIGN — never stage)
+56:- main.cpp propPlacer / light-grid sites (surgical save hunks only if needed)
+57:- .agents/** other lanes; root ORIGINAL_REQUEST.md if foreign
+58:- embody.cpp XP path
+59:- cube_pass.cpp, floor_gen.cpp, shots binaries unless pathspec-asked
+60:- force-push; git add -A
+61:- **Zhirnyak render lane:** stay off src/render/** (sub_mesh / cube_merge / cube_pass)
+62:
+63:## Safe zones
+64:- lane docs under .agents/worker_game_audit/**
+65:- src/game/** except embody if foreign-dirty (loot.cpp, combat.cpp, status* OK this cycle)
+66:- data/** content CSV
+67:- tests/suite_loottable.inl, suite_audit.inl + pins in CMake
+68:- save/load/travel if main.cpp free of foreign WIP
+69:
+70:## CORP1 architect proof block — 2026-07-31
+71:```
+72:Pipeline (main ~2380): damage → loot_dead_mobs → finalize_deaths → Corpse → interact (~2091, reach 2.2f)
+73:Dead-window staging keeps finalize sole Corpse emplacer
+74:POD fixed arrays kMaxCorpseSlots=8, trivially_copyable
+75:Systems pure: loot writes data, finalize moves, interact drains
+76:drop_mob_loot = non-prod/debug for kill path (floor Pickup gold carpet FIXED)
+77:loot_corpse_interact: resolve CameraTag player BEFORE searched=true / slot mutation;
+78:  stack merge moves only space up to stackMax; remainder stays on corpse;
+79:  inventory full → break, leave remainder; recompute corpse.slotCount after drain
+80:
+81:suite_loottable.inl blocks 6–7:
+82:  Assert CorpseLootPending + filled slots + 0 floor Pickups
+83:  Kind-authored slime_sample_green in staged slots
+84:  Betonoed Boss: 5..10 staged slots; rub/kill 60..250; floor=0
+85:  Measured: 600 corpses → 833 staged slots, 39 slime_sample_green; floor=0; Betonoed ~137.3 rub/kill
+86:
+
+==== shot scripts ====
+shot_aimem_stderr.txt
+shot_aimem_stdout.txt
+shot_carve_stderr.txt
+shot_carve_stdout.txt
+shot_corp_stderr.txt
+shot_corp_stdout.txt
+shot_f9_load_stderr.txt
+shot_f9_load_stdout.txt
+shot_f9_save_stderr.txt
+shot_f9_save_stdout.txt
+shot_padic_play_stderr.txt
+shot_padic_play_stdout.txt
+shot_padic_stderr.txt
+shot_place_stderr.txt
+shot_place_stdout.txt
+shot_status_stderr.txt
+shot_status_stdout.txt
+shot_tex1_stderr.txt
+shot_travel_done.txt
+shot_travel_stderr.txt
+shot_travel_stdout.txt
+
+==== lightChance line ====
+32:    std::uint32_t lightChancePct       = 25;
+  raw: std::uint32_t lightChancePct       = 25;
+177:                if (solidAbove && !ceilingOccupied && (rngLight % 100 < kCfg.lightChancePct)) {
+  raw: if (solidAbove && !ceilingOccupied && (rngLight % 100 < kCfg.lightChancePct)) {
+
+==== layer switch populate ====
+
+-- populate at 1501 --
+1471:    // because a door belongs to the floor and not to the player — and because the
+1472:    // dense cell->door index is sized for exactly ONE layer ([door.h]).
+1473:    //
+1474:    // Declared up here rather than beside the ledger because the FIRST floor is set
+1475:    // up above the ledger, and a DoorSet declared later compiled as "undeclared
+1476:    // identifier" at the very site that has to build the starting floor's doors.
+1477:    game::DoorSet doors;
+1478:    game::DoorTick doorTick{};      // last step's report, for the HUD
+1479:    std::uint32_t doorsBuilt = 0;   // on this floor, so the HUD can say "0 doors"
+1480:    bool doorWanted = false;        // Q, consumed by one sim step
+1481:    bool interactWanted = false;    // E, consumed by one sim step (Terminal / ControlPanel / Relief interact)
+1482:    bool possessWanted = false;     // P, consumed by one sim step (Voluntary Mind Projection / Body Swap)
+1483:    char elevDiagLine[160] = {};
+1484:    std::uint64_t elevDiagAt = 0;
+1485:    game::PowerGridState powerGrid{};
+1486:    // Doors derive from THE FLOOR'S OWN SEED — streamer.floor_seed_of(), the same
+1487:    // value its geometry was generated from. There used to be a separate
+1488:    // kDoorSeed constant here, and it was a bug factory, not a knob: door_build
+1489:    // asks the grid whether each doorway is still an architectural opening, and
+1490:    // with the doorway list derived from a DIFFERENT seed than the walls, the
+1491:    // padic floor kept only the ~5% of doors that matched by coincidence
+1492:    // (measured: 1302 of ~26k). One floor, one seed, every consumer.
+1493:
+1494:    Entity player = entt::null;
+1495:
+1496:    if (genMode == WorldGenMode::Maze) {
+1497:        LayerId ground = stack.push_layer();
+1498:        generate_demo_world(stack.layer(ground), 1337u, genMode);
+1499:        player = setup_maze(pool, reg, ground);
+1500:        if (propPass.ready()) {
+1501:            propPlacer.populate(stack.layer(ground).grid(), propPass, 1337u);
+1502:        }
+1503:    } else {
+1504:        // Register every floor MODULE (number -> module + build recipe), then
+1505:        // load ONLY floor 0. The rest stay cold until the elevator enters them,
+1506:        // and leaving a floor folds its crowd back — re-entry re-embodies the same
+1507:        // records, so the population never grows per visit.
+1508:        streamer.init(stack, /*keepRadius=*/0);
+1509:        // The registered building = the catalog's EXPLICIT CLAIMS: the demo rows
+1510:        // plus every module folder's own number (padic's 4 arrives here without
+
+-- populate at 1578 --
+1548:        game::NpcId playerId = game::kInvalidNpc;
+1549:        game::LoadResult start =
+1550:            streamer.ensure_loaded(stack, registry, reg, pool, 0, playerId);
+1551:        player = start.player;
+1552:        currentFloor = 0;
+1553:        currentSpec = spec_for_floor(0);
+1554:        if (player != entt::null) {
+1555:            aim_player(reg, player);
+1556:            if (hasCustomPos) reg.get<Transform>(player).pos = customPos;
+1557:            if (hasCustomAng) {
+1558:                auto& cam = reg.get<CameraTag>(player);
+1559:                cam.yaw = customYaw;
+1560:                cam.pitch = customPitch;
+1561:            }
+1562:            LayerId l0 = reg.get<Transform>(player).layer;
+1563:            refresh_floor_mobs(reg, stack.layer(l0), 0, l0);
+1564:            refresh_floor_containers(reg, stack.layer(l0), 0, l0);
+1565:            // Doors BEFORE the bake, and frozen for its duration: door_build leaves
+1566:            // every door open so the bake sees all-open geometry (an upper bound on
+1567:            // connectivity), and AsyncBake holds a raw pointer to the live MacroGrid
+1568:            // that must not be mutated until ready(). [door.h]
+1569:            if (currentSpec)
+1570:                doorsBuilt = game::door_build(stack.layer(l0), doors, 0,
+1571:                                              *currentSpec,
+1572:                                              streamer.floor_seed_of(registry, 0));
+1573:            doors.frozen = true;
+1574:            begin_floor_nav(stack.layer(l0), nav);
+1575:            game::ai_init(reg, l0);
+1576:            if (propPass.ready()) {
+1577:                std::uint32_t fseed = 1337u ^ (static_cast<std::uint32_t>(currentFloor) * 0x9e3779b9u);
+1578:                propPlacer.populate(stack.layer(l0).grid(), propPass, fseed);
+1579:            }
+1580:        }
+1581:    }
+1582:
+1583:    if (player == entt::null) {
+1584:        std::fprintf(stderr, "population seeding failed to embody a player\n");
+1585:        hud.destroy();
+1586:        bodyPass.destroy();
+1587:        raymarchPass.destroy();
+
+-- populate at 2041 --
+2011:        // Mobs belong to the floor, not to the player: the departed layer's are
+2012:        // destroyed and the arrival's are spawned fresh (deterministically, so
+2013:        // a floor looks the same every visit).
+2014:        LayerId nl = reg.get<Transform>(player).layer;
+2015:        refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
+2016:        refresh_floor_containers(reg, stack.layer(nl), currentFloor, nl);
+2017:        // Re-empty crates already looted on a prior visit to this floor.
+2018:        // Deterministic spawn would otherwise refill them — the brick this pair
+2019:        // closes. Same seam as F9 apply. [save.h]
+2020:        game::apply_opened_containers(reg, nl, currentFloor,
+2021:                                      runState.opened.data(),
+2022:                                      runState.opened.size());
+2023:        // The floor's own file, if this floor was ever visited: stamp its saved
+2024:        // state over the fresh generation BEFORE doors, so door_build re-stamps
+2025:        // its leaves and the nav bake below sees the real geometry. [save.h]
+2026:        apply_floor_file(stack.layer(nl), currentFloor);
+2027:        // Doors before the bake, frozen for its duration. [door.h]
+2028:        if (currentSpec)
+2029:            doorsBuilt = game::door_build(
+2030:                stack.layer(nl), doors, currentFloor, *currentSpec,
+2031:                streamer.floor_seed_of(registry, currentFloor));
+2032:        doors.frozen = true;
+2033:        begin_floor_nav(stack.layer(nl), nav);
+2034:        // Arrival geometry is final (floor file + doors stamped): re-snapshot
+2035:        // the GPU voxel mirror for the recycled World object.
+2036:        voxelMirror.upload_all(stack.layer(nl));
+2037:        if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
+2038:        if (propPass.ready()) {
+2039:            std::uint32_t fseed =
+2040:                1337u ^ (static_cast<std::uint32_t>(currentFloor) * 0x9e3779b9u);
+2041:            propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);
+2042:        }
+2043:        // ride_elevator keeps x/y and plants z=kArrivalZ. ~1-in-5 Residential
+2044:        // columns are solid at that z, so without this the body freezes in a
+2045:        // wall forever (physics backs out every tick). F9 already calls
+2046:        // place_body_at_cell; keyboard/--shot did not. [save.h]
+2047:        game::place_body_safely(reg, stack.layer(nl), player);
+2048:        // AUTOSAVE: every floor transition checkpoints the run, so a crash
+2049:        // costs at most the current floor's progress. The departed floor's
+2050:        // file is already on disk (written above, before travel).
+
+-- populate at 3711 --
+3681:                            samosbor = game::samosbor_new_game(sbRng);
+3682:                            rumourLine[0] = 0;
+3683:                            rumourAt = 0;
+3684:                            game::noise_clear(noiseField);
+3685:                            // Arrival order is load-path law: containers before
+3686:                            // re-open, mobs, floor file, doors, freeze, bake,
+3687:                            // then placement. [save.h]
+3688:                            refresh_floor_containers(reg, stack.layer(nl),
+3689:                                                     currentFloor, nl);
+3690:                            const std::size_t reopened =
+3691:                                game::apply_opened_containers(
+3692:                                    reg, nl, currentFloor,
+3693:                                    runState.opened.data(),
+3694:                                    runState.opened.size());
+3695:                            refresh_floor_mobs(reg, stack.layer(nl), currentFloor,
+3696:                                               nl);
+3697:                            apply_floor_file(stack.layer(nl), currentFloor);
+3698:                            if (currentSpec)
+3699:                                doorsBuilt = game::door_build(
+3700:                                    stack.layer(nl), doors, currentFloor,
+3701:                                    *currentSpec,
+3702:                                    streamer.floor_seed_of(registry,
+3703:                                                           currentFloor));
+3704:                            doors.frozen = true;
+3705:                            begin_floor_nav(stack.layer(nl), nav);
+3706:                            if (propPass.ready()) {
+3707:                                std::uint32_t fseed =
+3708:                                    1337u ^
+3709:                                    (static_cast<std::uint32_t>(currentFloor) *
+3710:                                     0x9e3779b9u);
+3711:                                propPlacer.populate(stack.layer(nl).grid(),
+3712:                                                    propPass, fseed);
+3713:                            }
+3714:                            voxelMirror.upload_all(stack.layer(nl));
+3715:                            if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
+3716:
+3717:                            game::PlacedCell placed{};
+3718:                            if (reg.valid(player)) {
+3719:                                placed = game::place_body_at_cell(
+3720:                                    reg, stack.layer(nl), player, scx, scy, scz);
+
+-- populate at 5043 --
+5013:                        aim_player(reg, player);
+5014:                        LayerId nl = reg.get<Transform>(player).layer;
+5015:                        activeLayer = nl;
+5016:                        refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
+5017:                        refresh_floor_containers(reg, stack.layer(nl),
+5018:                                                 currentFloor, nl);
+5019:                        // Re-empty crates already looted on a prior visit.
+5020:                        // Same seam as keyboard ride + F9 apply. [save.h]
+5021:                        game::apply_opened_containers(
+5022:                            reg, nl, currentFloor, runState.opened.data(),
+5023:                            runState.opened.size());
+5024:                        // Arrival floor file BEFORE doors, then doors before
+5025:                        // the bake, frozen for its duration — the same law as
+5026:                        // the keyboard ride path. This is the SECOND travel
+5027:                        // site; a fix that touches only one path leaves --shot
+5028:                        // proving nothing. [save.h, door.h]
+5029:                        apply_floor_file(stack.layer(nl), currentFloor);
+5030:                        if (currentSpec)
+5031:                            doorsBuilt = game::door_build(
+5032:                                stack.layer(nl), doors, currentFloor,
+5033:                                *currentSpec,
+5034:                                streamer.floor_seed_of(registry, currentFloor));
+5035:                        doors.frozen = true;
+5036:                        begin_floor_nav(stack.layer(nl), nav);
+5037:                        voxelMirror.upload_all(stack.layer(nl));
+5038:                        if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
+5039:                        // Same transition autosave as the keyboard path.
+5040:                        save_run_now();
+5041:                        if (propPass.ready()) {
+5042:                            std::uint32_t fseed = 1337u ^ (static_cast<std::uint32_t>(currentFloor) * 0x9e3779b9u);
+5043:                            propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);
+5044:                        }
+5045:                        // Same clear as the keyboard ride path. There are TWO travel
+5046:                        // sites and the first fix only touched one, so a --shot
+5047:                        // capture kept reporting a rumour about the floor it started
+5048:                        // on. A duplicated code path is a duplicated bug; this is the
+5049:                        // second one and the reason to be suspicious of the shape.
+5050:                        rumourLine[0] = 0;
+5051:                        rumourAt = 0;
+5052:                        // A gunshot on the floor you just left must not be audible to

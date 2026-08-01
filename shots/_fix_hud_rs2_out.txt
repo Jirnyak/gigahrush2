@@ -1,0 +1,115 @@
+3860|                // and blaming the queue family in that case would be a lie.
+3861|                ImGui::TextUnformatted(
+3862|                    "gpu: n/a (no timestamps, or GIGA_GPU_TIMER=0)");
+3863|            }
+3864|            auto& tr = reg.get<Transform>(player);
+3865|            auto& ctl = reg.get<Controller>(player);
+3866|            auto& ga = reg.get<GravityAffected>(player);
+3867|            ImGui::Text("pos  %.1f %.1f %.1f (layer %u)", tr.pos.x, tr.pos.y,
+3868|                        tr.pos.z, tr.layer);
+3869|            ImGui::Text("mode %s%s", ctl.fly ? "fly" : "walk",
+3870|                        ga.grounded ? " (grounded)" : "");
+3871|            ImGui::Text("instances drawn: %u / %zu cells | props %u | cull %s | particles %s",
+3872|                        cubePass.last_instance_count(), kMacroCells,
+3873|                        propPass.last_draw_count(),
+3874|                        cullPass.ready() ? "GPU-ready" : "off",
+3875|                        particlePass.ready() ? "on" : "off");
+3876|            std::int16_t php = 0, pmax = 0;
+3877|            if (game::entity_health(reg, pool, player, php, pmax))
+3878|                ImGui::Text("HP %d / %d%s", php, pmax, php <= 0 ? "  DEAD" : "");
+3879|            {
+3880|                const std::uint16_t mv = game::status_move_mult_e3(playerStatus);
+3881|                const bool rooted = game::status_is_rooted(playerStatus);
+3882|                if (mv != 1000 || rooted ||
+3883|                    game::status_active(playerStatus, game::StatusId::SporeHaze) ||
+3884|                    game::status_active(playerStatus, game::StatusId::ZhelemishSkin) ||
+3885|                    game::status_active(playerStatus, game::StatusId::PaupsinaWeb)) {
+3886|                    ImGui::Text("status move_e3=%u aim_e3=%u rooted=%d",
+3887|                                mv, game::status_aim_mult_e3(playerStatus),
+3888|                                rooted ? 1 : 0);
+3889|                }
+3890|            }
+3891|            if (reg.valid(player))
+3892|                if (const auto* pm = reg.try_get<game::PlayerMelee>(player))
+3893|                    kills = pm->kills;
+3894|            ImGui::Text("hits taken: %u | deaths: %u | kills: %u", meleeHits,
+3895|                        deaths, kills);
+3896|            // Character sheet. ASCII only, like every other printf/ImGui string in
+3897|            // this file — the Windows console is CP1251 and Cyrillic here mojibakes.
+3898|            if (reg.valid(player))
+3899|                if (const auto* rs = reg.try_get<game::RpgStats>(player)) {
+3900|                    const std::uint32_t need =
+3901|                        rs->level < game::kRpgLevelCap
+3902|                            ? game::xp_for_level(
+3903|                                  static_cast<std::uint8_t>(rs->level + 1))
+3904|                            : 0u;
+3905|                    if (need > 0)
+3906|                        ImGui::Text("LVL %u  XP %u / %u", rs->level, rs->xp, need);
+3907|                    else
+3908|                        ImGui::Text("LVL %u  (MAX)", rs->level);
+3909|                    ImGui::Text("STR %u  AGI %u  INT %u%s",
+3910|                                rs->attr[0], rs->attr[1], rs->attr[2],
+3911|                                rs->attrPoints > 0 ? "   [+pts]" : "");
+3912|                    ImGui::Text("PSI %u / %u", rs->psi, game::max_psi(*rs));
+3913|                }
+3914|            {
+3915|                std::int32_t carried = 0;
+3916|                int slots = 0;
+3917|                const game::NpcRef* nr = reg.valid(player)
+3918|                                             ? reg.try_get<game::NpcRef>(player)
+3919|                                             : nullptr;
+3920|                if (nr && pool.valid(nr->id)) {
+3921|                    const game::Inventory& inv = pool.inventory(nr->id);
+3922|                    carried = game::inventory_value(inv);
+3923|                    for (const auto& sl : inv.slots)
+3924|                        if (sl.item != 0) ++slots;
+3925|
+3926|                    const game::ItemId wpn = game::equipped_melee(inv);
+3927|                    const game::ItemId arm = game::equipped_armour(inv);
+3928|                    const game::MeleeDef* md = game::melee_for_item(wpn);
+3929|                    if (!md) md = &game::unarmed_melee();
+3930|                    // The firearm, when there is one. Named separately from the
+3931|                    // melee line because they are different loadout slots, not two
+3932|                    // spellings of the same one.
+3933|                    if (const game::ItemId g_ = game::equipped_ranged(inv)) {
+3934|                        const game::RangedDef* rd = game::ranged_for_item(g_);
+3935|                        const auto* prs = reg.try_get<game::PlayerRanged>(player);
+3936|                        if (rd)
+3937|                            ImGui::Text("gun: %s  %u x%u dmg  %u/%u mag  "
+3938|                                        "%u shots %u hits",
+3939|                                        game::item_name(g_), rd->dmg, rd->pellets,
+3940|                                        prs ? prs->magCount : 0, rd->magazine,
+3941|                                        prs ? prs->shots : 0, prs ? prs->hits : 0);
+3942|                    }
+3943|                    {
+3944|                        std::uint16_t shownDmg = md->dmg;
+3945|                        if (rs)
+3946|                            shownDmg = static_cast<std::uint16_t>(
+3947|                                std::max<std::int16_t>(
+3948|                                    1, game::melee_damage(
+3949|                                           *rs, wpn,
+3950|                                           static_cast<std::int16_t>(md->dmg))));
+3951|                        ImGui::Text("weapon: %s (%u dmg) | armour: %s",
+3952|                                    wpn == game::kInvalidItem ? "fists"
+3953|                                                              : game::item_name(wpn),
+3954|                                    shownDmg,
+3955|                                arm == game::kInvalidItem ? "none"
+3956|                                                          : game::item_name(arm));
+3957|                    }
+3958|                }
+3959|                {
+3960|                    const float share = game::risk_share(ledger, carried);
+3961|                    ImGui::Text("BANKED %lld rub | at risk %d (%.0f%% of the run)",
+3962|                                static_cast<long long>(ledger.banked), carried,
+3963|                                share * 100.0f);
+3964|                    ImGui::Text("lost to death %lld | best haul %d | deepest %d (E%u)",
+3965|                                static_cast<long long>(ledger.lostToDeath),
+3966|                                ledger.bestHaul, ledger.deepestFloor,
+3967|                                ledger.deepestBand);
+3968|                }
+3969|                // Which body you are wearing, and whether the floor wants to eat
+3970|                // it. Printed because the mechanic is invisible otherwise: a cultist
+3971|                // simply is not attacked, and with no readout that looks like the
+3972|                // monsters are broken rather than like safety.
+3973|                if (nr && pool.valid(nr->id)) {
+3974|                    const auto f = static_cast<game::Faction>(

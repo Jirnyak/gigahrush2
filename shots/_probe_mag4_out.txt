@@ -1,0 +1,179 @@
+==== src/game/ranged_table.h (5336) ====
+42:#include "game/inventory.h"   // Inventory, for equipped_ranged
+53:struct RangedDef {
+63:    ItemId ammo;                  // 10  1-based ItemId, resolved at generation time
+65:    std::uint8_t magazine;        // 13  1..100
+69:static_assert(sizeof(RangedDef) == 16, "RangedDef must stay a tight 16-byte row");
+70:static_assert(alignof(RangedDef) == 2);
+71:static_assert(std::is_trivially_copyable_v<RangedDef>);
+74:extern const std::array<RangedDef, kRangedCount> kRangedTable;
+76:// Sparse map from ItemId to a row, **ONE-BASED**: 0 means "not a ranged weapon" and
+86:inline const RangedDef* ranged_for_item(ItemId id) {
+94:inline float ranged_dps(const RangedDef& d) {
+103:ItemId equipped_ranged(const Inventory& inv);
+==== src/game/ranged_table.cpp (5299) ====
+7:const std::array<RangedDef, kRangedCount> kRangedTable = {{
+8:    // [ 0] makarov                  ammo_9mm x1
+9:    RangedDef{ 22, 520, 22000, 120, 1000, 12, 1, 8, 0, 0 },
+10:    // [ 1] tt_pistol                ammo_762tt x1
+11:    RangedDef{ 34, 550, 23000, 500, 1000, 11, 1, 8, 0, 0 },
+12:    // [ 2] nagant                   ammo_nagant x1
+13:    RangedDef{ 48, 1250, 23000, 60, 1000, 20, 1, 7, 0, 0 },
+14:    // [ 3] homemade_pistol          ammo_9mm x1
+15:    RangedDef{ 27, 920, 15000, 2000, 1000, 12, 1, 1, 0, 0 },
+16:    // [ 4] karkarov_pistol          ammo_9mm x1
+17:    RangedDef{ 18, 480, 21000, 350, 1000, 12, 1, 8, 0, 0 },
+18:    // [ 5] zatychkin_pistol         ammo_9mm x1
+19:    RangedDef{ 17, 180, 20000, 800, 1000, 12, 1, 8, 0, 0 },
+20:    // [ 6] ppsh                     ammo_9mm x1
+21:    RangedDef{ 8, 70, 18000, 1500, 1000, 12, 1, 1, 0, 0 },
+22:    // [ 7] slyoznev_pps41           ammo_9mm x1
+23:    RangedDef{ 7, 55, 18000, 1900, 1000, 12, 1, 71, 0, 0 },
+24:    // [ 8] ak47                     ammo_762 x1
+25:    RangedDef{ 26, 140, 25000, 900, 1000, 10, 1, 30, 0, 0 },
+26:    // [ 9] eralashnikov_auto        ammo_762 x1
+27:    RangedDef{ 23, 120, 24000, 1100, 1000, 10, 1, 30, 0, 0 },
+28:    // [10] machinegun               ammo_belt x1
+29:    RangedDef{ 13, 50, 21000, 2000, 1000, 13, 1, 1, 0, 0 },
+30:    // [11] rpl23_lmg                ammo_belt x1
+31:    RangedDef{ 14, 60, 22000, 1700, 1000, 13, 1, 100, 0, 0 },
+32:    // [12] p41_heavy_mg             ammo_belt x1
+33:    RangedDef{ 18, 45, 21000, 2400, 1000, 13, 1, 100, 0, 0 },
+34:    // [13] nosin_rifle              ammo_762 x1
+35:    RangedDef{ 55, 1450, 26000, 180, 1000, 10, 1, 5, 0, 0 },
+36:    // [14] moskvin_rifle            ammo_762 x1
+37:    RangedDef{ 76, 1900, 29000, 60, 1000, 10, 1, 5, 0, 0 },
+38:    // [15] tanev_svt40              ammo_762 x1
+39:    RangedDef{ 105, 2550, 33000, 20, 1000, 10, 1, 10, 0, 0 },
+41:    RangedDef{ 140, 2850, 32000, 20, 1000, 334, 1, 1, 0, 0 },
+42:    // [17] ptrs_liquidator          ammo_harpoon x1
+43:    RangedDef{ 170, 4250, 34000, 15, 1000, 18, 1, 5, 0, 0 },
+44:    // [18] shotgun                  ammo_shells x7
+45:    RangedDef{ 12, 1200, 15000, 3400, 1000, 23, 7, 1, 0, 0 },
+46:    // [19] toz_shotgun              ammo_shells x8
+47:    RangedDef{ 11, 1600, 20000, 1300, 1000, 23, 8, 2, 0, 0 },
+48:    // [20] chizh3_shotgun           ammo_shells x8
+49:    RangedDef{ 13, 1000, 17000, 2400, 1000, 23, 8, 2, 0, 0 },
+50:    // [21] conscripts_doublebarrel  ammo_shells x7
+51:    RangedDef{ 10, 1450, 15000, 2800, 1000, 23, 7, 2, 0, 0 },
+52:    // [22] rb91_auto_shotgun        ammo_shells x9
+53:    RangedDef{ 11, 650, 16000, 3000, 1000, 23, 9, 10, 0, 0 },
+54:    // [23] granit4u_belt_shotgun    ammo_shells x12
+55:    RangedDef{ 8, 2350, 14000, 4600, 1000, 23, 12, 20, 0, 0 },
+56:    // [24] pushkin_shotgun          ammo_shells x6
+57:    RangedDef{ 14, 820, 19000, 1200, 1000, 23, 6, 6, 0, 0 },
+58:    // [25] nailgun                  ammo_nails x1
+59:    RangedDef{ 14, 330, 20000, 140, 1000, 21, 1, 1, 0, 0 },
+60:    // [26] harpoon_gun              ammo_harpoon x1
+61:    RangedDef{ 88, 2350, 18000, 30, 1000, 18, 1, 1, 0, 0 },
+62:    // [27] gauss                    ammo_energy x1
+63:    RangedDef{ 180, 2600, 44000, 0, 1000, 16, 1, 1, 0, 0 },
+64:    // [28] plasma                   ammo_energy x1
+65:    RangedDef{ 26, 160, 14000, 1800, 1000, 16, 1, 1, 0, 0 },
+68:// Index by ItemId, ONE-BASED: 0 means "not a ranged weapon" and N
+==== src/game/item_table.h (6032) ====
+18://   ammo_id / use_grant_id      needs interned string ids; nothing fires yet
+43:using ItemId = std::uint16_t;
+44:inline constexpr ItemId kInvalidItem = 0;
+80:struct ItemDef {
+104:inline bool item_valid(ItemId id) {
+107:inline const ItemDef& item_def(ItemId id) {
+110:inline const char* item_name(ItemId id) {
+133:std::uint32_t item_weight_on_floor(ItemId id, int floorZ, std::uint16_t roomMask);
+missing src/game/item_def.h hits=[]
+==== src/game/loot.h (9715) ====
+43:// answers `container_budget` can give: its hard floor of 24, for the wide-stride kinds
+77:struct Pickup {
+78:    ItemId item = kInvalidItem;
+118:// Roll mob loot into a fixed POD slot buffer (same rolls/chance/kind/catalog/ammo
+143:// How much ammo drops alongside a firearm, from the reference's own bundling rule.
+151:// The reference does not solve this with loot weights either; it bundles ammo at the
+153:// max(10, magazine) + 0..19 rounds. So a Makarov (mag 8) yields 10..29 and an RPL-23
+154:// (mag 100) yields 100..119 — the magazine size decides the bundle, which keeps a
+156:std::uint32_t drop_weapon_ammo(Registry& reg, LayerId layer, const vec3& pos,
+157:                               ItemId weapon, std::uint32_t seed);
+163:struct CorpseLootResult {
+==== src/game/inventory.h (1641) ====
+19:struct ItemSlot {
+25:struct Inventory {
+==== shoot test chunk ====
+// Game-layer unit tests. Same tiny CHECK harness as world_test; links giga_game
+// so it exercises the macro entity systems headless (no SDL/Vulkan).
+#include <cmath>
+#include <cstdio>
+#include <cmath>
+#include <cstring>
+#include <vector>
+
+#include "core/tick.h"   // kSimDt / kSimHz — never a bare 1/120 ([core/tick.h])
+#include "core/wrap.h"
+#include "ecs/components.h"
+#include "ecs/registry.h"
+#include "game/contract.h"
+#include "game/vendor.h"
+#include "game/container.h"
+#include "game/combat.h"
+#include "game/embody.h"
+#include "game/elevator.h"
+#include "game/event_bus.h"
+#include "game/faction.h"
+#include "game/floor_gen.h"
+#include "game/floor_registry.h"
+#include "game/extraction.h"
+#include "game/faction.h"
+#include "game/faction_relations.h"
+#include "game/floor_spec.h"
+#include "game/mob_behaviour.h"
+#include "game/mob_table.h"
+#include "game/item_table.h"
+#include "game/loot.h"
+#include "game/ranged_table.h"
+#include "game/weapon_table.h"
+#include "game/mob_spawn.h"
+#include "game/floor_stream.h"
+#include "game/inventory.h"
+#include "game/item_table.h"
+#include "game/mob_table.h"
+#include "game/nav_cache.h"
+#include "game/npc_pool.h"
+#include "game/wander.h"
+#include "game/population.h"
+#include "game/rpg.h"
+
+#include "sim/physics.h"
+#include "world/lattice.h"
+#include "world/materials.h"
+#include "world/level_stack.h"
+#include "world/nav.h"
+#include "world/world.h"
+
+using namespace giga;
+using namespace giga::game;
+
+namespace {
+int g_fails = 0;
+int g_checks = 0;
+}
+
+#define CHECK(cond)                                                            \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fails;                                                         \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__,       \
+                         #cond);                                               \
+        }                                                                      \
+    } while (0)
+
+#include "suite_needs.inl"
+#include "suite_noise.inl"
+#include "suite_packs.inl"
+#include "suite_hunt.inl"
+#include "suite_samosbor.inl"
+#include "suite_doors.inl"
+#include "suite_saveload.inl"
+#include "suite_macrosim.inl"
+#include "suite_behaviours.inl"
+#include "suite_samosborhud.inl"
+#include "suite_fluidrooms.inl"
+#include "s

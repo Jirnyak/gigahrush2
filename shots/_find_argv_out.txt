@@ -1,0 +1,121 @@
+
+==== "--shot" count=1 first=[55748]
+  else if (a == "floors" || a == "stack") genMode = WorldGenMode::FloorStack;
+        else if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
+        else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
+        else if (a == "--ride" && i + 1 < argc) shotRide = std::ato
+---
+
+==== "--action" count=1 first=[56865]
+hasCustomAng = true; }
+        else if (a == "--orbit") { shotOrbit = true; }
+        else if (a == "--action" && i + 1 < argc) { shotAction = argv[++i]; }
+    }
+
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+        std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
+        return 1;
+    }
+
+    SDL_Win
+---
+
+==== "--ride" count=1 first=[55903]
+ else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
+        else if (a == "--ride" && i + 1 < argc) shotRide = std::atoi(argv[++i]);
+        else if (a == "--floor" && i + 1 < argc) {
+            shotFloor = std::atoi(argv[++i]);
+            shotFloorWanted = true;
+        
+---
+
+==== "--frames" count=1 first=[55818]
+rStack;
+        else if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
+        else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
+        else if (a == "--ride" && i + 1 < argc) shotRide = std::atoi(argv[++i]);
+        else if (a == "--floor" && i + 1 < argc) {
+     
+---
+
+==== shotAction count=15 first=[55096, 55117, 56895, 119992, 120100]
+false;
+    float customYaw = 0.8f, customPitch = -0.5f;
+    bool shotOrbit = false;
+    std::string shotAction;
+    bool shotActionConsumed = false; // one-shot save/load; attack stays held
+    bool showHud = true;
+    // --mirror-verify: after every wholesale upload and every ~300 frames, read
+    
+---
+omYaw = 0.8f, customPitch = -0.5f;
+    bool shotOrbit = false;
+    std::string shotAction;
+    bool shotActionConsumed = false; // one-shot save/load; attack stays held
+    bool showHud = true;
+    // --mirror-verify: after every wholesale upload and every ~300 frames, read
+    // the GPU voxel mirr
+---
+ else if (a == "--orbit") { shotOrbit = true; }
+        else if (a == "--action" && i + 1 < argc) { shotAction = argv[++i]; }
+    }
+
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+        std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
+        return 1;
+    }
+
+    SDL_Window* window = SDL_CreateWindow
+---
+
+                // apply and BEFORE controller_step consumes wishDir. The later
+                // shotAction=="wall" block only holds attackHeld + logs.
+                if (shotPath &&
+                    (shotAction == "wall" || shotAction == "rpgcmbt") &&
+                    reg.valid(player) &&
+---
+on=="wall" block only holds attackHeld + logs.
+                if (shotPath &&
+                    (shotAction == "wall" || shotAction == "rpgcmbt") &&
+                    reg.valid(player) &&
+                    shotFramesSeen >= 30 && !doors.frozen) {
+                    const Transform& ptr = reg
+---
+
+==== argv[i] count=1 first=[55578]
+e;
+    std::uint32_t mirrorFrame = 0;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "maze") genMode = WorldGenMode::Maze;
+        else if (a == "floors" || a == "stack") genMode = WorldGenMode::FloorStack;
+        else if (a == "--shot" && i + 1 < argc) shot
+---
+
+FILE _check_rpgcmbt_status.py
+  os.chdir(r"C:\hades\gigahrush2")
+
+FILE _critique_rpgcmbt.md
+  | Elevator re-embody (elevator.cpp) | **Yes** - restores pre-ride sheet if hadRpg |
+
+FILE _finish_rpgcmbt.py
+  root = Path(r"C:\hades\gigahrush2")
+  4. **RPGCMBT-SHOT** — live `--action attack` proof with forced high STR + `[rpgcmbt]` log line
+
+FILE _patch_attr1_agimv_rpgcmbt.py
+
+FILE _patch_rpgcmbt_test.py
+
+FILE _rpgcmbt_commit_msg.txt
+
+FILE _rpgcmbt_shot_log.txt
+  shot: saved -> C:\hades\gigahrush2\shots\shot_rpgcmbt.png (floor 0, 901 frames)
+
+FILE _rpgcmbt_test_out.txt
+
+FILE _run_rpgcmbt_test.py
+  os.chdir(r"C:\hades\gigahrush2")
+          cwd=r"C:\hades\gigahrush2",
+
+FILE _wait_rpgcmbt.py

@@ -1,0 +1,4 @@
+[aimem] RELEASE floor=0 layer=1 bodies=420 released=0
+[aimem] RELEASE floor=0 layer=1 bodies=420 released=0
+[aimem] RELEASE floor=1 layer=0 bodies=261 released=0
+EXIT=0  

@@ -1,0 +1,11 @@
+feat(rpg1): preserve RpgStats across elevator body-swap
+
+Same class as FOR1/MAG1: RpgStats lives on the BODY; embody_as_player
+re-rolls random_rpg and wiped mid-run XP/attrs/psi on every ride.
+Death path already restored via carriedRpg; ride never hit that path.
+
+elevator.cpp: capture RpgStats before fold_back; emplace_or_replace after
+embody_as_player. embody.cpp untouched (LOCKED).
+
+test_elevator: mutate sheet (xp=777…) and pin up + down rides.
+game_test: 219387 checks, 0 failures (was 219370; +17 RPG1 pins).

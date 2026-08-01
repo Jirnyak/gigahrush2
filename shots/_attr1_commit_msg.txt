@@ -1,0 +1,10 @@
+feat(attr1/agimv/rpgcmbt-shot): spend attrs 1/2/3, AGI move mult, live rpgcmbt proof
+
+ATTR1: keys 1/2/3 → attr_str/agi/int keybinds → console "attr str|agi|int"
+→ ConsoleRequest AttrStr/Agi/Int → main drain spend_attr_point.
+AGIMV: agi_move_speed_mult_e3 multiplies ctl_->moveSpeed after base assign.
+RPGCMBT-SHOT: --action rpgcmbt forces fresh_rpg(10) STR=20 AGI=20 + attackHeld;
+rate-limited [rpgcmbt] melee log; HUD weapon dmg via melee_damage.
+
+Proof: game_test 219426 checks, 0 failures (pin 219409→219426);
+live shot_rpgcmbt.png [rpgcmbt] melee dmg=12 cd=242 str=20 agi=20 PROOF=GREEN.

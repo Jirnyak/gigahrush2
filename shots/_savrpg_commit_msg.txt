@@ -1,0 +1,6 @@
+feat(savrpg): kSaveVersion 7 - persist RpgStats + CraftingState on F5/F9 
+ 
+Wire visit_rpg (12 B) + craft_write/read (93 B) after player. 
+kSaveFixedWire 724->829; empty 929; busy 944. F5 captures live sheet 
+else carriedRpg + crafting; F9 restores both. suite_saveload pins. 
+game_test: 219546 checks, 0 failures (was 219426; +120). 
