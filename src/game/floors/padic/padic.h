@@ -27,6 +27,8 @@
 
 #include <vector>
 #include "game/floor_spec.h" // FloorKind, FloorSpec
+#include "ecs/registry.h"
+#include "game/event_bus.h"
 
 namespace giga {
 class World;
@@ -62,5 +64,8 @@ void generate_padic_floor(World& world, int number, const FloorSpec& spec,
 // Retrieve doorway locations for the Padic geometry (called by floor_doorways).
 struct Doorway;
 std::uint32_t padic_doorways(int number, unsigned seed, std::vector<Doorway>& out);
+
+// Seed props and test-balls for the Padic floor (ceiling lightbulbs & rolling/anchored test-balls)
+std::uint32_t seed_padic_props(Registry& reg, const World& world, int number, unsigned seed, EventBus& bus);
 
 } // namespace giga::game

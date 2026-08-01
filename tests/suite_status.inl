@@ -94,6 +94,8 @@ static void test_status_all() {
         CHECK(!status_active(s, StatusId::SporeHaze));
         CHECK(status_move_mult_e3(s) == 1000);   // a clean set changes nothing
         CHECK(status_aim_mult_e3(s) == 1000);
+        CHECK(status_melee_mult_e3(s) == 1000);  // STATMELEE identity
+        CHECK(status_heal_mult_e3(s) == 1000);
         CHECK(!status_is_rooted(s));
 
         status_apply(s, StatusId::SporeHaze, false);
@@ -147,6 +149,10 @@ static void test_status_all() {
         status_step(s, 700);   // web out of its root, zhelemish still running
         // 0.82 x 0.54 = 0.4428 -> 443.
         CHECK(status_move_mult_e3(s) == 443);
+        // STATMELEE: zhelemish melee 0.7 still active after web leaves root;
+        // paupsina melee is identity 1000 so fold stays 700.
+        CHECK(status_melee_mult_e3(s) == 700);
+        CHECK(status_heal_mult_e3(s) == 550);
 
         status_step(s, 4200);  // web expires entirely; zhelemish is a 180 s effect
         CHECK(!status_active(s, StatusId::PaupsinaWeb));

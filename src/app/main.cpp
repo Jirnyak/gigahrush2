@@ -3390,11 +3390,13 @@ int main(int argc, char** argv) {
                 combatCarves.clear();
                 shots += game::player_ranged_step(reg, pool, activeLayer,
                                                   haveGun && attackHeld && !paused,
-                                                  kSimDt, simTick, &noiseField);
+                                                  kSimDt, simTick, &noiseField,
+                                                  &playerStatus);
                 bool meleeHit = game::player_melee_step(
                     reg, pool, bus, activeLayer, kSimDt,
                     !haveGun && attackHeld && !paused, simTick,
-                    &stack.layer(activeLayer).grid(), &combatCarves);
+                    &stack.layer(activeLayer).grid(), &combatCarves,
+                    &playerStatus);
                 meleeHits += game::mob_attack_step(reg,
                                    stack.layer(activeLayer).grid(),
                                    pool, bus, activeLayer,

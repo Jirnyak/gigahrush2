@@ -16,6 +16,7 @@
 #include "game/monster_traits.h"
 #include "game/ranged_table.h"
 #include "game/rpg.h"      // RpgStats, xp_for_monster_kill, award_xp
+#include "game/status.h"   // StatusSet, status_melee/aim mults
 #include "game/weapon_table.h"
 #include "sim/camera.h"   // camera_forward
 #include "world/macro_grid.h"
@@ -1053,7 +1054,7 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
 
 std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
                                  bool wantFire, float dt, std::uint64_t tick,
-                                 NoiseField* noise) {
+                                 NoiseField* noise, const StatusSet* status) {
     Entity shooter = entt::null;
     for (auto e : reg.view<const CameraTag, const Transform>()) {
         if (reg.get<const Transform>(e).layer != layer) continue;
@@ -1132,6 +1133,12 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
     if (const RpgStats* rs = reg.try_get<RpgStats>(shooter)) {
         spread *= static_cast<float>(agi_ranged_spread_mult_e3(*rs)) / 1000.0f;
     }
+    // STATAIM: SporeHaze (and friends) widen the cone via status_aim_mult_e3.
+    if (status) {
+        const std::uint16_t am = status_aim_mult_e3(*status);
+        if (am != 1000u)
+            spread *= static_cast<float>(am) / 1000.0f;
+    }
     // Any two vectors perpendicular to fwd. Guarding on |fwd.z| rather than fwd.x
     // keeps the cross product well-conditioned when looking straight up or down.
     vec3 up = (fwd.z > 0.9f || fwd.z < -0.9f) ? vec3{1, 0, 0} : vec3{0, 0, 1};
@@ -1199,7 +1206,8 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
 
 bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId layer,
                        float dt, bool wantsAttack, std::uint64_t tick,
-                       const MacroGrid* grid, CarveProposalQueue* carves) {
+                       const MacroGrid* grid, CarveProposalQueue* carves,
+                       const StatusSet* status) {
     Entity self = entt::null;
     for (auto e : reg.view<const CameraTag, const Transform>()) {
         if (reg.get<const Transform>(e).layer != layer) continue;
@@ -1254,6 +1262,19 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
                          static_cast<unsigned>(rs->attr[1]),
                          static_cast<unsigned>(rs->level),
                          static_cast<unsigned>(heldWeapon));
+        }
+    }
+    // STATMELEE: authored status melee mult (Zhelemish 700/1000). Applied after
+    // RPGCMBT so both bite; identity 1000 when status is null or clean.
+    if (status) {
+        const std::uint32_t m = status_melee_mult_e3(*status);
+        if (m != 1000u) {
+            int scaled = static_cast<int>(
+                (static_cast<std::int32_t>(swingDmg) * static_cast<std::int32_t>(m))
+                / 1000);
+            if (scaled < 1 && swingDmg > 0) scaled = 1;
+            if (scaled > 32767) scaled = 32767;
+            swingDmg = static_cast<std::int16_t>(scaled);
         }
     }
     const float reach =

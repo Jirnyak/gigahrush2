@@ -619,17 +619,24 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
 // firefight behaved exactly like one standing in a library. Optional and trailing so
 // the three existing call sites — main.cpp and two tests — compile unchanged; pass
 // nullptr and the shot is silent, which is the pre-noise behaviour exactly.
+// Optional `status`: when non-null, spread is scaled by status_aim_mult_e3
+// (SporeHaze widens the cone). Null keeps the pre-STATAIM path bit-for-bit.
 std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
                                  bool wantFire, float dt, std::uint64_t tick,
-                                 NoiseField* noise = nullptr);
+                                 NoiseField* noise = nullptr,
+                                 const StatusSet* status = nullptr);
 
 // Optional `grid` + `carves`: when a swing finds no monster in the facing cone,
 // probe the cell the camera is looking at and propose a wall chip. Without both
 // pointers the function is bit-for-bit the pre-CARVE path (tests compile unchanged).
+// Optional `status`: when non-null, swing damage is scaled by
+// status_melee_mult_e3 (Zhelemish 0.7 etc). Null keeps the pre-STATMELEE path
+// bit-for-bit (tests compile unchanged).
 bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId layer,
                        float dt, bool wantsAttack, std::uint64_t tick,
                        const MacroGrid* grid = nullptr,
-                       CarveProposalQueue* carves = nullptr);
+                       CarveProposalQueue* carves = nullptr,
+                       const StatusSet* status = nullptr);
 
 // Current/maximum HP of an entity, wherever its HP lives. Returns false if it
 // holds none. For HUD and tests.
