@@ -409,14 +409,12 @@ void EnvDetail::place_walls(const giga::MacroGrid& grid, PropPass& pass,
                       static_cast<std::uint8_t>(s & 0xFF)));
         ++totalPlaced_;
     }
-    // Terminal
+    // Terminal GPU instance owned by ECS PropMesh skin via seed_wall_interactables
+    // ([jirnyak.md] section 18/20). Do NOT add_instance here -- that creates a
+    // ghost terminal invisible to interaction_step / find_nearest_interactable.
+    // Hash roll is still consumed so biome density stays bit-stable.
     if (pct_roll(s, cfg.terminalWallPct)) {
-        float yaw = static_cast<float>(s & 3u) * 1.5708f;
-        std::uint8_t em = static_cast<std::uint8_t>(35.0f * cfg.emissiveScale);
-        pass.add_instance(PropShape::Terminal,
-            make_inst(wp, yaw, cfg.terminalCol, 7, em, 0,
-                      static_cast<std::uint8_t>(rng01(s) * 255.0f)));
-        ++totalPlaced_;
+        // reserved for ECS seed path
     }
     // Fungal wall
     if (ppm_roll(s, cfg.fungalWallPpm)) {
@@ -427,13 +425,10 @@ void EnvDetail::place_walls(const giga::MacroGrid& grid, PropPass& pass,
                       static_cast<std::uint8_t>(rng01(s) * 255.0f)));
         ++totalPlaced_;
     }
-    // Control panel
+    // ControlPanel: same rule as Terminal -- ECS owns interactable wall devices.
+    // ([jirnyak.md] section 18/20). Consume density roll, no ghost GPU instance.
     if (pct_roll(s, 6)) {
-        pass.add_instance(PropShape::ControlPanel,
-            make_inst(wp, static_cast<float>(s & 3u) * 1.5708f,
-                      cfg.terminalCol, 12,
-                      static_cast<std::uint8_t>(20.0f * cfg.emissiveScale)));
-        ++totalPlaced_;
+        // reserved for ECS seed path
     }
     // Valve on wall pipe
     if (pct_roll(s, 10)) {

@@ -792,6 +792,68 @@ static void test_gpu_handoff_spawns_debris_on_detach() {
     printf("[props] GpuHandoff detach -> %u debris with AngularVelocity\n", chips);
 }
 
+
+// [jirnyak.md] section 18/20 -- terminals are sim-owned via seed_wall_interactables.
+// PropPass no longer exposes get_terminal_positions; interaction_step must resolve
+// ECS Interactable entities, not ghost GPU instances from env_detail.
+static void test_sim_owned_terminals_seed_and_interact() {
+    Registry reg;
+    World world;
+    EventBus bus;
+    bus.init();
+    const LayerId layer = 21;
+    const std::uint32_t seed = 0xC0FFEEu;
+
+    // Floor y=2, ceiling y=5, west wall x=10 so seed_wall can place devices.
+    for (int z = 10; z < 18; ++z) {
+        for (int x = 10; x < 18; ++x) {
+            world.grid().fill_cell(x, 2, z, kMatConcrete);
+            world.grid().fill_cell(x, 5, z, kMatConcrete);
+        }
+    }
+    for (int z = 10; z < 18; ++z)
+        for (int y = 3; y < 5; ++y)
+            world.grid().fill_cell(10, y, z, kMatConcrete);
+
+    const std::uint32_t nWall = game::seed_wall_interactables(reg, world, layer, seed);
+    CHECK(nWall > 0u);
+
+    std::vector<vec3> terms;
+    game::collect_interactable_positions(reg, layer, game::Interactable::Kind::Terminal, terms);
+    std::vector<vec3> shields;
+    game::collect_interactable_positions(reg, layer, game::Interactable::Kind::ElectricalShield, shields);
+    CHECK(terms.size() + shields.size() > 0u);
+
+    // Prefer Terminal if present; else ElectricalShield (both are wall devices).
+    const auto kind = !terms.empty() ? game::Interactable::Kind::Terminal
+                                     : game::Interactable::Kind::ElectricalShield;
+    const vec3 target = !terms.empty() ? terms[0] : shields[0];
+
+    // Actor 1.5 m from target -- inside interaction_step default reach (~3 m).
+    const Entity actor = make_actor_at(reg, layer,
+        vec3{target.x + 1.5f, target.y, target.z});
+
+    {
+        const game::InteractionHit hit = game::find_nearest_interactable(
+            reg, actor, kind, 4.0f);
+        CHECK(hit.hit);
+        CHECK(hit.entity != entt::null);
+        CHECK(reg.all_of<game::Interactable>(hit.entity));
+        CHECK(reg.get<game::Interactable>(hit.entity).kind == kind);
+    }
+
+    bus.clear();
+    game::InteractionHit out{};
+    CHECK(game::interaction_step(reg, actor, kind, bus, &out));
+    CHECK(out.hit);
+    CHECK(out.entity != entt::null);
+    CHECK(reg.valid(out.entity));
+    CHECK(reg.all_of<game::Interactable>(out.entity));
+
+    printf("[props] s20 sim-owned terminals: nWall=%u terms=%zu shields=%zu interact=ok\n",
+           nWall, terms.size(), shields.size());
+}
+
 void test_props_game_all() {
     test_wall_interactables_seed_and_collect();
     test_wall_interactables_clear_is_layer_scoped();
@@ -805,6 +867,7 @@ void test_props_game_all() {
     test_spawn_debris_pieces_direct();
     test_gpu_handoff_spawns_debris_on_detach();
     test_find_nearest_terminal_respects_reach();
+    test_sim_owned_terminals_seed_and_interact();
     test_embody_interact_terminal_applies_at_given_pos();
     test_collect_static_prop_mesh_instances_shapes();
     test_corpse_and_loot_are_interactable();

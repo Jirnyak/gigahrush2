@@ -73,12 +73,10 @@ public:
         return positions;
     }
 
-    std::vector<vec3> get_terminal_positions() const {
-        std::vector<vec3> positions = get_prop_positions(PropShape::Terminal);
-        std::vector<vec3> panels = get_prop_positions(PropShape::ControlPanel);
-        positions.insert(positions.end(), panels.begin(), panels.end());
-        return positions;
-    }
+    // get_terminal_positions REMOVED ([jirnyak.md] section 18/20).
+    // Sim + HUD must use game::collect_interactable_positions /
+    // game::find_nearest_interactable / game::interaction_step. PropPass is a
+    // passive GPU skin -- it must not be the source of truth for terminals.
 
 private:
     bool create_pipeline(VkPipelineLayout layout, VkRenderPass rp,

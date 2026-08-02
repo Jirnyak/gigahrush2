@@ -529,8 +529,8 @@ if(GIGA_BUILD_TESTS)
     # searched corpses deactivate; main HUD/E use find_nearest; doors.dirtyCells
     # feed lazyBaker; suite_props_game corpse/loot kind-filter CHECKs.
 
-    # 231061 -> 231072 (+11) on 2026-08-02: PropDetached event_line + EventFeed; suite_eventsweb CHECKs.
-        PASS_REGULAR_EXPRESSION "game_test: 231072 checks, 0 failures")
+    # 231072 -> 231083 (+11) on 2026-08-02: s20 sim-owned terminals; kill ghost GPU Terminal/ControlPanel + get_terminal_positions; suite_props_game CHECK.
+        PASS_REGULAR_EXPRESSION "game_test: 231083 checks, 0 failures")
 
 
 
