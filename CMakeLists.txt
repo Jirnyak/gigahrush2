@@ -531,7 +531,10 @@ if(GIGA_BUILD_TESTS)
 
     # 231072 -> 231083 (+11) on 2026-08-02: s20 sim-owned terminals; kill ghost GPU Terminal/ControlPanel + get_terminal_positions; suite_props_game CHECK.
     # 231083 -> 236278 (+5195) on 2026-08-02: Z-up seeder geometry + GpuHandoff spawn_debris_pieces + DynamicBodyTag/padic fixes (suite_props green).
-        PASS_REGULAR_EXPRESSION "game_test: 236278 checks, 0 failures")
+    # 236278 -> 236272 (-6) on 2026-08-02: 60dbd2a dropped 6 corpse-ragdoll CHECKs in suite_hunt
+    # (finalize_deaths strips Velocity again; corpses stay static). Props.csv pipeline
+    # (52947b3) added no new CHECKs. Verified green: game_test 236272/0.
+        PASS_REGULAR_EXPRESSION "game_test: 236272 checks, 0 failures")
 
 
 
