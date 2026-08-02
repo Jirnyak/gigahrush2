@@ -6,15 +6,15 @@ namespace giga::game {
 
 const std::array<PropDef, kPropCount> kPropTable = {{
     // [0] terminal
-    PropDef{ 19, 0, 0, 0, 3, 0, 0, 0, 320, 350, 380, 2500 },
+    PropDef{ 0, 0, 0, 0, 3, 0, 0, 0, 320, 350, 380, 2500 },
     // [1] electrical_shield
-    PropDef{ 27, 0, 1, 0, 4, 0, 0, 0, 180, 200, 220, 2500 },
+    PropDef{ 1, 0, 1, 0, 4, 0, 0, 0, 180, 200, 220, 2500 },
     // [2] bare_bulb
-    PropDef{ 28, 1, 2, 250, 0, 0, 0, 0, 1000, 780, 450, 2500 },
+    PropDef{ 2, 1, 2, 250, 0, 0, 0, 0, 1000, 780, 450, 2500 },
     // [3] flood_lamp
-    PropDef{ 21, 1, 2, 250, 0, 0, 0, 0, 1000, 780, 450, 2500 },
+    PropDef{ 3, 1, 2, 250, 0, 0, 0, 0, 1000, 780, 450, 2500 },
     // [4] padic_stair_bulb
-    PropDef{ 28, 1, 2, 250, 0, 0, 0, 0, 1000, 950, 700, 2500 },
+    PropDef{ 2, 1, 2, 250, 0, 0, 0, 0, 1000, 950, 700, 2500 },
 }};
 
 // Display names. Cyrillic; suites assert non-empty / lead bytes.

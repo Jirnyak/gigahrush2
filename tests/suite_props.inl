@@ -35,38 +35,13 @@ inline const PropPassInspector& inspect(const PropPass& pass) {
 
 // 1. Explicit coverage for all 29 PropShape enum values
 static void test_prop_shape_enum_coverage() {
-    static_assert(kPropShapeCount == 29, "kPropShapeCount must be 29");
-    static_assert(static_cast<uint8_t>(PropShape::kCount) == 29, "PropShape::kCount must be 29");
+    static_assert(kPropShapeCount == 4, "kPropShapeCount must be 4");
+    static_assert(static_cast<uint8_t>(PropShape::kCount) == 4, "PropShape::kCount must be 4");
 
-    static_assert(static_cast<uint8_t>(PropShape::Cylinder) == 0, "PropShape::Cylinder must be 0");
-    static_assert(static_cast<uint8_t>(PropShape::HalfCylinder) == 1, "PropShape::HalfCylinder must be 1");
-    static_assert(static_cast<uint8_t>(PropShape::Arch) == 2, "PropShape::Arch must be 2");
-    static_assert(static_cast<uint8_t>(PropShape::Barrel) == 3, "PropShape::Barrel must be 3");
-    static_assert(static_cast<uint8_t>(PropShape::StairStep) == 4, "PropShape::StairStep must be 4");
-    static_assert(static_cast<uint8_t>(PropShape::Pipe) == 5, "PropShape::Pipe must be 5");
-    static_assert(static_cast<uint8_t>(PropShape::PipeElbow) == 6, "PropShape::PipeElbow must be 6");
-    static_assert(static_cast<uint8_t>(PropShape::PipeTee) == 7, "PropShape::PipeTee must be 7");
-    static_assert(static_cast<uint8_t>(PropShape::Valve) == 8, "PropShape::Valve must be 8");
-    static_assert(static_cast<uint8_t>(PropShape::Grate) == 9, "PropShape::Grate must be 9");
-    static_assert(static_cast<uint8_t>(PropShape::RoundGrate) == 10, "PropShape::RoundGrate must be 10");
-    static_assert(static_cast<uint8_t>(PropShape::CabinetBox) == 11, "PropShape::CabinetBox must be 11");
-    static_assert(static_cast<uint8_t>(PropShape::ControlPanel) == 12, "PropShape::ControlPanel must be 12");
-    static_assert(static_cast<uint8_t>(PropShape::Railing) == 13, "PropShape::Railing must be 13");
-    static_assert(static_cast<uint8_t>(PropShape::SupportBeam) == 14, "PropShape::SupportBeam must be 14");
-    static_assert(static_cast<uint8_t>(PropShape::CrateBox) == 15, "PropShape::CrateBox must be 15");
-    static_assert(static_cast<uint8_t>(PropShape::CrateLong) == 16, "PropShape::CrateLong must be 16");
-    static_assert(static_cast<uint8_t>(PropShape::LockerUnit) == 17, "PropShape::LockerUnit must be 17");
-    static_assert(static_cast<uint8_t>(PropShape::BenchSlab) == 18, "PropShape::BenchSlab must be 18");
-    static_assert(static_cast<uint8_t>(PropShape::Terminal) == 19, "PropShape::Terminal must be 19");
-    static_assert(static_cast<uint8_t>(PropShape::SecurityCamera) == 20, "PropShape::SecurityCamera must be 20");
-    static_assert(static_cast<uint8_t>(PropShape::FloodLamp) == 21, "PropShape::FloodLamp must be 21");
-    static_assert(static_cast<uint8_t>(PropShape::FungalColumn) == 22, "PropShape::FungalColumn must be 22");
-    static_assert(static_cast<uint8_t>(PropShape::CrystalCluster) == 23, "PropShape::CrystalCluster must be 23");
-    static_assert(static_cast<uint8_t>(PropShape::AcidPool) == 24, "PropShape::AcidPool must be 24");
-    static_assert(static_cast<uint8_t>(PropShape::Radiator) == 25, "PropShape::Radiator must be 25");
-    static_assert(static_cast<uint8_t>(PropShape::DermatinDoor) == 26, "PropShape::DermatinDoor must be 26");
-    static_assert(static_cast<uint8_t>(PropShape::ElectricalShield) == 27, "PropShape::ElectricalShield must be 27");
-    static_assert(static_cast<uint8_t>(PropShape::BareBulb) == 28, "PropShape::BareBulb must be 28");
+    static_assert(static_cast<uint8_t>(PropShape::Terminal) == 0, "PropShape::Terminal must be 0");
+    static_assert(static_cast<uint8_t>(PropShape::ElectricalShield) == 1, "PropShape::ElectricalShield must be 1");
+    static_assert(static_cast<uint8_t>(PropShape::BareBulb) == 2, "PropShape::BareBulb must be 2");
+    static_assert(static_cast<uint8_t>(PropShape::FloodLamp) == 3, "PropShape::FloodLamp must be 3");
 
     // Runtime loop check using non-constant local variables
     for (int s = 0; s < kPropShapeCount; ++s) {

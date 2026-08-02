@@ -1,6 +1,6 @@
 id,name,shape,fall_mode,interact,emissive,mat_id,color_r_e3,color_g_e3,color_b_e3,reach_mm
-terminal,Терминал,19,SimpleFall,Terminal,0,3,320,350,380,2500
-electrical_shield,Электрощиток,27,SimpleFall,ElectricalShield,0,4,180,200,220,2500
-bare_bulb,Лампочка Ильича,28,RagdollRoll,LightBulb,250,0,1000,780,450,2500
-flood_lamp,Прожектор,21,RagdollRoll,LightBulb,250,0,1000,780,450,2500
-padic_stair_bulb,Лампочка падика,28,RagdollRoll,LightBulb,250,0,1000,950,700,2500
+terminal,Терминал,0,SimpleFall,Terminal,0,3,320,350,380,2500
+electrical_shield,Электрощиток,1,SimpleFall,ElectricalShield,0,4,180,200,220,2500
+bare_bulb,Лампочка Ильича,2,RagdollRoll,LightBulb,250,0,1000,780,450,2500
+flood_lamp,Прожектор,3,RagdollRoll,LightBulb,250,0,1000,780,450,2500
+padic_stair_bulb,Лампочка падика,2,RagdollRoll,LightBulb,250,0,1000,950,700,2500

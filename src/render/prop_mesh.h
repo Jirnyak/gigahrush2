@@ -56,39 +56,10 @@ struct PropMesh {
 // ──────────────────────────── shape catalogue ─────────────────────────────────
 
 enum class PropShape : uint8_t {
-    // ──── Phase 1: basic primitives ─────────────────────────────────────────
-    Cylinder     = 0, // vertical pillar  r=0.30 m, h=2.00 m, 16 sides
-    HalfCylinder = 1, // half-pipe wall   r=0.40 m, h=2.00 m,  8 sides
-    Arch         = 2, // archway opening  outer r=1.0, inner r=0.6, d=0.5 m
-    Barrel       = 3, // squat barrel     r=0.35 m, h=0.80 m, 12 sides
-    StairStep    = 4, // wedge step       2.0 x 0.25 x 0.40 m
-    Pipe         = 5, // horizontal pipe  r=0.15 m, l=2.00 m, 10 sides
-    // ──── Phase 2: mechanical & structural ──────────────────────────────────
-    PipeElbow    = 6, // 90° pipe bend (quarter torus) r=0.15, bend_r=0.30 m
-    PipeTee      = 7, // T-junction: one horizontal pipe + one vertical branch
-    Valve        = 8, // handwheel valve: wheel + spokes + stem
-    Grate        = 9, // flat floor grate 2x2x0.05 m (bar grid)
-    RoundGrate   = 10,// round ventilation grate r=0.50 m
-    CabinetBox   = 11,// electrical cabinet 0.4x1.8x0.2 m (wall-mount)
-    ControlPanel = 12,// angled console 1.2x1.0x0.4 m
-    Railing      = 13,// handrail segment 2.0 m long (top bar + 2 posts)
-    // ──── Phase 3: living world ──────────────────────────────────────────────
-    SupportBeam  = 14,// H-section steel beam 4.0 m long
-    CrateBox     = 15,// storage crate 0.6x0.6x0.6 m with edge chamfers
-    CrateLong    = 16,// long crate  2.0x0.6x0.6 m
-    LockerUnit   = 17,// locker 0.5x1.8x0.3 m (door + frame)
-    BenchSlab    = 18,// bench 2.0x0.45x0.40 m
-    Terminal     = 19,// computer terminal: pedestal + angled screen
-    SecurityCamera = 20,// dome camera on L-bracket
-    FloodLamp    = 21,// conical floodlight on stem
-    // ──── Phase 4: organic / anomalous ──────────────────────────────────────
-    FungalColumn = 22,// mushroom-encrusted column r≈0.35 with organic bumps
-    CrystalCluster = 23,// cluster of 5 tapered prism crystals
-    AcidPool     = 24,// flat acid pool disk r=0.8 with edge bubbles
-    Radiator     = 25,// cast-iron accordion radiator (чугунная батарея М-140)
-    DermatinDoor = 26,// padded vinyl apartment door (дерматиновая дверь)
-    ElectricalShield = 27,// stairwell electrical distribution box (электрощиток ЩЭ)
-    BareBulb     = 28,// incandescent bulb hanging on wire ("лампочка Ильича")
+    Terminal = 0,
+    ElectricalShield = 1,
+    BareBulb = 2,
+    FloodLamp = 3,
     kCount
 };
 

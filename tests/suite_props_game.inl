@@ -496,10 +496,10 @@ static void test_collect_static_prop_mesh_instances_shapes() {
     CHECK(insts.size() == static_cast<std::size_t>(n));
 
     // PropShape ordinals (render/prop_mesh.h)
-    constexpr std::uint8_t kTerminal = 19;
-    constexpr std::uint8_t kFlood    = 21;
-    constexpr std::uint8_t kShield   = 27;
-    constexpr std::uint8_t kBulb     = 28;
+    constexpr std::uint8_t kTerminal = 0;
+    constexpr std::uint8_t kFlood    = 3;
+    constexpr std::uint8_t kShield   = 1;
+    constexpr std::uint8_t kBulb     = 2;
 
     std::uint32_t nTerm = 0, nShield = 0, nBulb = 0, nFlood = 0;
     for (const auto& m : insts) {

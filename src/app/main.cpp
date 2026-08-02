@@ -88,7 +88,7 @@
 
 #include "render/gpu_timer.h"
 #include "render/gpu_light_grid.h"
-#include "render/gpu_particle_pass.h"
+
 #include "render/gpu_cull_pass.h"
 #include "render/imgui_layer.h"
 #include "render/vk_device.h"
@@ -1386,19 +1386,9 @@ int main(int argc, char** argv) {
         // Non-fatal: the game runs fine without props.
     }
 
-    gpu::GpuParticlePass particlePass;
-    if (!particlePass.init(&device, renderer.renderPass, 0, GIGA_SHADER_DIR, lightGrid.descriptor_set_layout())) {
-        std::fprintf(stderr, "[particle] pass init failed (continuing without particles)\n");
-    }
-
     gpu::GpuCullPass cullPass;
     if (!cullPass.init(&device, GIGA_SHADER_DIR)) {
         std::fprintf(stderr, "[cull] pass init failed (continuing without GPU culling)\n");
-    }
-
-    if (particlePass.ready()) {
-        particlePass.emit_burst(vec3{64.0f, 4.0f, 64.0f}, vec3{0.0f, 1.0f, 0.0f}, vec3{0.85f, 0.80f, 0.70f}, gpu::GpuParticleKind::DustMote, 128, 2.0f, 8.0f, 0.35f, 180.0f);
-        particlePass.emit_destruction_burst(vec3{64.0f, 2.0f, 64.0f}, 1, 64);
     }
 
 
@@ -1495,7 +1485,6 @@ int main(int argc, char** argv) {
     game::FactionRelations factionRel = game::kBaseFactionMatrix;
     game::RelationTick relTick{};   // last drain's tallies, for the HUD
     std::uint32_t feudHits = 0;     // running total of NPC-vs-NPC hits that landed
-    std::uint32_t prevFeudHits = 0; // snapshot for detecting distant combat flashes
     // Transient event ring ([events.md]). Combat publishes deaths into it; it is
     // cleared once per frame, so a listener must consume within the frame or use
     // the opt-in log.
@@ -2151,20 +2140,7 @@ int main(int argc, char** argv) {
                     game::quest_on_giver_died(quests, ev.a);
                 }
 
-                if (particlePass.ready()) {
-                    vec3 deathPos = reg.valid(player) ? reg.get<Transform>(player).pos : vec3{64.0f, 4.0f, 64.0f};
-                    if (ev.a != game::kInvalidNpc) {
-                        reg.view<game::NpcRef, Transform>().each([&](entt::entity, const game::NpcRef& nr, const Transform& tr) {
-                            if (nr.id == ev.a) deathPos = tr.pos;
-                        });
-                    }
-                    particlePass.emit_burst(deathPos + vec3{0.0f, 0.8f, 0.0f},
-                                            vec3{0.0f, 1.5f, 0.0f},
-                                            vec3{0.95f, 0.20f, 0.15f},
-                                            gpu::GpuParticleKind::Spark,
-                                            48, 5.0f, 1.5f, 0.25f, 180.0f);
-                    particlePass.emit_destruction_burst(deathPos + vec3{0.0f, 0.5f, 0.0f}, 1, 32);
-                }
+
             }
         }
         // Diplomacy reads the same ring, in the same frame-top drain, and for the same
@@ -2996,22 +2972,14 @@ int main(int argc, char** argv) {
                         const float* fluidData = giga::fluid_data(stack.layer(activeLayer));
                         if (game::pos_wet(fluidData, tr.pos)) {
                             mr.hp = std::min<std::int16_t>(mr.maxHp, mr.hp + static_cast<std::int16_t>(regenRate * 0.13f + 0.5f));
-                            if (particlePass.ready()) {
-                                particlePass.emit_burst(tr.pos + vec3{0.0f, 0.5f, 0.0f}, vec3{0.0f, 0.5f, 0.0f},
-                                                        vec3{0.20f, 0.85f, 0.40f}, gpu::GpuParticleKind::BioSpore,
-                                                        6, 1.2f, 0.4f, 0.10f, 60.0f);
-                            }
+
                         }
                     }
 
                     // 2. Lampoglaz Flash Blinding Ability
                     if (kind == game::MobKind::Lampoglaz) {
                         if ((simTick + entt::to_integral(me_)) % 250 == 0) {
-                            if (particlePass.ready()) {
-                                particlePass.emit_burst(tr.pos + vec3{0.0f, 1.5f, 0.0f}, vec3{0.0f, 1.0f, 0.0f},
-                                                        vec3{0.70f, 0.95f, 1.00f}, gpu::GpuParticleKind::Spark,
-                                                        36, 5.0f, 1.2f, 0.20f, 360.0f);
-                            }
+
                             game::NoiseProfile flashNoise{14.0f, 1800, 2, game::NoiseSource::Door};
                             game::noise_publish(noiseField, activeLayer, tr.pos, flashNoise, static_cast<std::uint32_t>(entt::to_integral(me_)));
                             if (reg.valid(player)) {
@@ -3029,11 +2997,7 @@ int main(int argc, char** argv) {
                     // 3. SporeCarpet / Meat-Spore Acid Cloud Hazard Pass
                     if (kind == game::MobKind::SporeCarpet) {
                         if ((simTick + entt::to_integral(me_)) % 40 == 0) {
-                            if (particlePass.ready()) {
-                                particlePass.emit_burst(tr.pos + vec3{0.0f, 0.3f, 0.0f}, vec3{0.0f, 0.4f, 0.0f},
-                                                        vec3{0.45f, 0.85f, 0.25f}, gpu::GpuParticleKind::BioSpore,
-                                                        16, 2.2f, 0.5f, 0.15f, 120.0f);
-                            }
+
                             if (reg.valid(player)) {
                                 const vec3& ppos = reg.get<Transform>(player).pos;
                                 float dx = wrap_delta_f(tr.pos.x, ppos.x, kWorldExtent);
@@ -3078,28 +3042,11 @@ int main(int argc, char** argv) {
                             const float spd = std::sqrt(vel.v.x * vel.v.x + vel.v.z * vel.v.z);
                             const float alpha = (spd > 0.5f) ? 0.85f : 0.15f;
                             rend->color = vec3{0.20f * alpha, 0.30f * alpha, 0.40f * alpha};
-                            if (alpha < 0.30f && (simTick % 50 == 0) && particlePass.ready()) {
-                                particlePass.emit_burst(tr.pos + vec3{0.0f, 1.0f, 0.0f}, vec3{0.0f, 0.2f, 0.0f},
-                                                        vec3{0.30f, 0.60f, 0.90f}, gpu::GpuParticleKind::DustMote,
-                                                        4, 1.0f, 0.3f, 0.08f, 90.0f);
-                            }
+
                         }
                     }
 
-                    // 5. Monster Attack Windup Telegraph Particles & Visual Charge
-                    if (const game::MobCombat* mc = reg.try_get<game::MobCombat>(me_)) {
-                        const game::MobDef& mdef = game::kMobTable[mr.kind];
-                        if (mc->windupMs > 0 && mdef.windupMs > 0) {
-                            float progress = 1.0f - (static_cast<float>(mc->windupMs) / static_cast<float>(mdef.windupMs));
-                            vec3 chargeColor{1.0f, 0.40f + 0.50f * progress, 0.10f};
-                            if (particlePass.ready() && (simTick % 3 == 0)) {
-                                particlePass.emit_burst(tr.pos + vec3{0.0f, 1.2f, 0.0f}, vec3{0.0f, 1.2f, 0.0f},
-                                                        chargeColor, gpu::GpuParticleKind::Spark,
-                                                        static_cast<int>(4 + 10 * progress), 2.0f + 3.0f * progress,
-                                                        0.3f, 0.12f, 180.0f);
-                            }
-                        }
-                    }
+
                 }
                 // NPC-vs-NPC: bodies holding a staggered fight licence steer at their
                 // nearest enemy and swing when it is in reach. Placed AFTER wander_step
@@ -3132,26 +3079,14 @@ int main(int argc, char** argv) {
                                            activeLayer, kSimDt, simTick);
                 // Door VFX: debris + noise on monster break / force-open.
                 // doorTick carries the world pos of the last event this tick.
-                if (doorTick.broken > 0 && particlePass.ready()) {
-                    // Heavy debris burst — door splintering
-                    particlePass.emit_burst(
-                        doorTick.lastBreakPos, vec3{0.0f, 0.8f, 0.0f},
-                        vec3{0.85f, 0.55f, 0.25f},
-                        gpu::GpuParticleKind::Spark,
-                        40, 4.5f, 1.2f, 0.18f, 200.0f);
+                if (doorTick.broken > 0) {
                     // Loud crash — audible across a wide radius
                     game::NoiseProfile np{18.0f, 3500, 4,
                                            game::NoiseSource::Door};
                     game::noise_publish(noiseField, activeLayer,
                                         doorTick.lastBreakPos, np, 0);
                 }
-                if (doorTick.opened > 0 && particlePass.ready()) {
-                    // Light dust puff — door pushed open
-                    particlePass.emit_burst(
-                        doorTick.lastOpenPos, vec3{0.0f, 0.5f, 0.0f},
-                        vec3{0.55f, 0.50f, 0.40f},
-                        gpu::GpuParticleKind::DustMote,
-                        16, 2.0f, 0.6f, 0.10f, 90.0f);
+                if (doorTick.opened > 0) {
                     game::NoiseProfile np{8.0f, 800, 2,
                                            game::NoiseSource::Door};
                     game::noise_publish(noiseField, activeLayer,
@@ -3179,14 +3114,7 @@ int main(int argc, char** argv) {
                                 (static_cast<float>(d.cy) + 0.5f) * kCellSize,
                                 (static_cast<float>(d.cz) +
                                  static_cast<float>(d.h) * 0.5f) * kCellSize};
-                            // Dust puff from door frame impact
-                            if (particlePass.ready()) {
-                                particlePass.emit_burst(
-                                    doorPos, vec3{0.0f, 0.6f, 0.0f},
-                                    vec3{0.65f, 0.55f, 0.40f},
-                                    gpu::GpuParticleKind::DustMote,
-                                    20, 2.5f, 0.8f, 0.12f, 120.0f);
-                            }
+
                             // Slam noise so mobs hear it
                             game::NoiseProfile np{10.0f, 1200, 2,
                                                    game::NoiseSource::Door};
@@ -3233,24 +3161,7 @@ int main(int argc, char** argv) {
                         // point of the raymarch migration.
                         voxelMirror.mark_dirty(carveResult.dirtyCells.data(),
                                                carveResult.dirtyCells.size());
-                        // DEBRIS HANDOFF: simulation is done with these
-                        // voxels. The particle pass fakes their fall, grouped
-                        // by material so a big carve is a handful of emit
-                        // events, not thousands ([gpu_particle_pass.h]).
-                        if (particlePass.ready()) {
-                            std::uint32_t byMat[kMatCount] = {};
-                            for (const auto& v : carveResult.destroyed)
-                                if (v.mat < kMatCount) ++byMat[v.mat];
-                            for (const auto& v : carveResult.detached)
-                                if (v.mat < kMatCount) ++byMat[v.mat];
-                            const vec3 at{op.x, op.y, op.z};
-                            for (std::uint16_t m = 1; m < kMatCount; ++m)
-                                if (byMat[m])
-                                    particlePass.emit_destruction_burst(
-                                        at, m,
-                                        static_cast<int>(
-                                            8 + std::min(byMat[m] / 4u, 56u)));
-                        }
+
                         // A blast is the loudest thing after gunfire: let the
                         // crowd hear it.
                         game::NoiseProfile np{18.0f, 2200, 4,
@@ -3300,13 +3211,7 @@ int main(int argc, char** argv) {
                                                      clr.itemsTaken, clr.roublesGained,
                                                      currentFloor);
                                     }
-                                    if (particlePass.ready()) {
-                                        particlePass.emit_burst(ppos + vec3{0.0f, 0.4f, 0.0f},
-                                                                vec3{0.0f, 0.4f, 0.0f},
-                                                                vec3{1.0f, 0.86f, 0.42f},
-                                                                gpu::GpuParticleKind::DustMote,
-                                                                20, 2.0f, 0.5f, 0.12f, 120.0f);
-                                    }
+
                                     game::NoiseProfile np{6.0f, 600, 1, game::NoiseSource::Door};
                                     game::noise_publish(noiseField, activeLayer, ppos, np, 0);
                                 }
@@ -3333,12 +3238,7 @@ int main(int argc, char** argv) {
                                     std::fprintf(stderr, "[gameplay] Terminal/ControlPanel interact: doors %s (%u toggled) | ElecArc burst emitted at (%.1f, %.1f, %.1f)\n",
                                                  tres.doorsLocked ? "LOCKED" : "UNLOCKED", tres.doorsToggled,
                                                  tres.propPos.x, tres.propPos.y, tres.propPos.z);
-                                    if (particlePass.ready()) {
-                                        particlePass.emit_burst(tres.propPos + vec3{0.0f, 1.0f, 0.0f},
-                                                                vec3{0.0f, 1.0f, 0.0f}, vec3{0.35f, 0.85f, 1.0f},
-                                                                gpu::GpuParticleKind::ElecArc,
-                                                                64, 5.5f, 0.6f, 0.15f, 180.0f);
-                                    }
+
                                     game::NoiseProfile np{12.0f, 2000, 3, game::NoiseSource::Door};
                                     game::noise_publish(noiseField, activeLayer, tres.propPos, np, 0);
                                 }
@@ -3361,13 +3261,7 @@ int main(int argc, char** argv) {
                                                   "POWER GRID SABOTAGE: ELECTRICAL SHIELD DESTROYED AT (%.1f, %.1f)",
                                                   sp.x, sp.z);
                                     elevDiagAt = simTick;
-                                    if (particlePass.ready()) {
-                                        particlePass.emit_burst(sp + vec3{0.0f, 0.4f, 0.0f},
-                                                                vec3{0.0f, 1.0f, 0.0f},
-                                                                vec3{0.35f, 0.85f, 1.00f},
-                                                                gpu::GpuParticleKind::ElecArc,
-                                                                64, 6.0f, 0.9f, 0.20f, 250.0f);
-                                    }
+
                                     game::NoiseProfile np{16.0f, 2500, 3, game::NoiseSource::Door};
                                     game::noise_publish(noiseField, activeLayer, sp, np, 0);
                                 }
@@ -3395,13 +3289,7 @@ int main(int argc, char** argv) {
                                                       "PHYSIOLOGICAL RELIEF: CLEARED BLADDER (%.0f) & BOWEL (%.0f) PRESSURE",
                                                       rr.pee, rr.poo);
                                         elevDiagAt = simTick;
-                                        if (particlePass.ready()) {
-                                            particlePass.emit_burst(ppos + vec3{0.0f, 0.5f, 0.0f},
-                                                                    vec3{0.0f, -0.5f, 0.0f},
-                                                                    vec3{0.40f, 0.70f, 0.60f},
-                                                                    gpu::GpuParticleKind::DustMote,
-                                                                    16, 1.5f, 0.5f, 0.10f, 90.0f);
-                                        }
+
                                         game::NoiseProfile np{5.0f, 500, 1, game::NoiseSource::Door};
                                         game::noise_publish(noiseField, activeLayer, ppos, np, 0);
                                     }
@@ -3434,13 +3322,7 @@ int main(int argc, char** argv) {
                                           "MIND PROJECTION: POSSESSED RESIDENT BODY #%u AT (%.1f, %.1f)",
                                           newId, newPos.x, newPos.z);
                             elevDiagAt = simTick;
-                            if (particlePass.ready()) {
-                                particlePass.emit_burst(newPos + vec3{0.0f, 1.0f, 0.0f},
-                                                        vec3{0.0f, 1.0f, 0.0f},
-                                                        vec3{0.30f, 0.95f, 0.85f},
-                                                        gpu::GpuParticleKind::BioSpore,
-                                                        48, 4.0f, 1.0f, 0.20f, 200.0f);
-                            }
+
                             game::NoiseProfile np{15.0f, 1500, 3, game::NoiseSource::Door};
                             game::noise_publish(noiseField, activeLayer, newPos, np, 0);
                         }
@@ -3474,7 +3356,7 @@ int main(int argc, char** argv) {
                                                   haveGun && attackHeld && !paused,
                                                   kSimDt, simTick, &noiseField,
                                                   &playerStatus);
-                bool meleeHit = game::player_melee_step(
+                game::player_melee_step(
                     reg, pool, bus, activeLayer, kSimDt,
                     !haveGun && attackHeld && !paused, simTick,
                     &stack.layer(activeLayer).grid(), &combatCarves,
@@ -3516,21 +3398,7 @@ int main(int argc, char** argv) {
                                          removed,
                                          static_cast<unsigned>(pr.power),
                                          pr.radius, pr.x, pr.y, pr.z);
-                            if (particlePass.ready()) {
-                                std::uint32_t byMat[kMatCount] = {};
-                                for (const auto& v : carveResult.destroyed)
-                                    if (v.mat < kMatCount) ++byMat[v.mat];
-                                for (const auto& v : carveResult.detached)
-                                    if (v.mat < kMatCount) ++byMat[v.mat];
-                                const vec3 at{op.x, op.y, op.z};
-                                for (std::uint16_t m = 1; m < kMatCount; ++m)
-                                    if (byMat[m])
-                                        particlePass.emit_destruction_burst(
-                                            at, m,
-                                            static_cast<int>(
-                                                8 +
-                                                std::min(byMat[m] / 4u, 56u)));
-                            }
+
                             // Detach props whose anchor cells were carved.
                             // Rebuild PropPass static skin on any detach so the
                             // GPU drops the old furniture pose. [jirnyak.md] §18
@@ -3546,48 +3414,7 @@ int main(int argc, char** argv) {
 
 
 
-                // ── Combat VFX ─────────────────────────────────────────
-                if (reg.valid(player) && particlePass.ready()) {
-                    const vec3 ppos = reg.get<Transform>(player).pos;
 
-                    // Player MELEE HIT — big orange-white sparks burst
-                    if (meleeHit) {
-                        particlePass.emit_burst(
-                            ppos + vec3{0.0f, 1.2f, 0.0f},
-                            vec3{0.0f, 1.0f, 0.0f},
-                            vec3{1.0f, 0.75f, 0.30f},
-                            gpu::GpuParticleKind::Spark,
-                            48, 6.0f, 1.0f, 0.22f, 240.0f);
-                    }
-
-                    // Player TOOK DAMAGE — red blood/spark burst
-                    std::int16_t postHp = 0, postMax = 0;
-                    game::entity_health(reg, pool, player, postHp, postMax);
-                    if (postHp < preHp && preHp > 0) {
-                        particlePass.emit_burst(
-                            ppos + vec3{0.0f, 1.0f, 0.0f},
-                            vec3{0.0f, 0.8f, 0.0f},
-                            vec3{0.85f, 0.12f, 0.08f},
-                            gpu::GpuParticleKind::Spark,
-                            32, 4.0f, 0.8f, 0.16f, 180.0f);
-                    }
-
-                    // Distant FACTION COMBAT flashes — brief light pulse
-                    if (feudHits > prevFeudHits) {
-                        // Distant flash: offset from player, warm orange
-                        vec3 flashOff{
-                            static_cast<float>((simTick * 7u) % 61u) - 30.0f,
-                            2.0f,
-                            static_cast<float>((simTick * 13u) % 61u) - 30.0f};
-                        particlePass.emit_burst(
-                            ppos + flashOff,
-                            vec3{0.0f, 0.5f, 0.0f},
-                            vec3{1.0f, 0.65f, 0.20f},
-                            gpu::GpuParticleKind::Spark,
-                            12, 3.0f, 0.5f, 0.10f, 120.0f);
-                    }
-                    prevFeudHits = feudHits;
-                }
                 // them and still before finalize_deaths: a monster's blow lands
                 // first, and if that already killed you apply_damage refuses the
                 // target, so you cannot be billed for starving after you are dead.
@@ -3965,10 +3792,7 @@ int main(int argc, char** argv) {
                         if (pool.valid(nrk->id)) {
                             game::Inventory& ci = pool.inventory(nrk->id);
                             if (craftWanted) {
-                                if (particlePass.ready()) {
-                                    particlePass.emit_burst(ct.pos + vec3{0.0f, 1.2f, 0.0f}, vec3{0.0f, 1.0f, 0.0f},
-                                                            vec3{0.20f, 0.90f, 1.00f}, gpu::GpuParticleKind::ElecArc, 16, 4.0f, 1.2f, 0.25f, 90.0f);
-                                }
+
                                 const game::LearnResult lr =
                                     game::craft_learn_from_carried(crafting, ci);
                                 recipesLearned += lr.learned;
@@ -4197,10 +4021,9 @@ int main(int argc, char** argv) {
                         tr.pos.z, tr.layer);
             ImGui::Text("mode %s%s", ctl.fly ? "fly" : "walk",
                         ga.grounded ? " (grounded)" : "");
-            ImGui::Text("props %u | cull %s | particles %s",
+            ImGui::Text("props %u | cull %s",
                         propPass.last_draw_count(),
-                        cullPass.ready() ? "GPU-ready" : "off",
-                        particlePass.ready() ? "on" : "off");
+                        cullPass.ready() ? "GPU-ready" : "off");
             std::int16_t php = 0, pmax = 0;
             if (game::entity_health(reg, pool, player, php, pmax))
                 ImGui::Text("HP %d / %d%s", php, pmax, php <= 0 ? "  DEAD" : "");
@@ -4958,59 +4781,7 @@ int main(int argc, char** argv) {
                 lightGrid.update_and_dispatch(cmd, currentTimeSec, camMat.eye);
             }
 
-            if (particlePass.ready()) {
-                // Ambient dust: ever-present, subtle. 3 per frame at low speed.
-                particlePass.emit_burst(camMat.eye + vec3{0.0f, 0.5f, 0.0f},
-                                        vec3{0.0f, 0.2f, 0.0f},
-                                        vec3{0.85f, 0.80f, 0.70f},
-                                        gpu::GpuParticleKind::DustMote,
-                                        3, 0.8f, 4.0f, 0.15f, 180.0f);
 
-                // Samosbor alarm atmospheric particles: variant-specific.
-                // During an active alarm the environment REACTS — the building
-                // bleeds, sparks, drips or spores according to what's coming.
-                const game::SamosborAlarm alarmNow = game::samosbor_alarm(samosbor);
-                if (alarmNow.pulse > 0.05f) {
-                    vec3 aOff{
-                        static_cast<float>((simTick * 11u) % 41u) - 20.0f,
-                        static_cast<float>((simTick * 3u) % 7u) - 1.0f,
-                        static_cast<float>((simTick * 17u) % 41u) - 20.0f};
-                    switch (static_cast<game::SamosborVariant>(samosbor.variant)) {
-                        case game::SamosborVariant::Electric:
-                            particlePass.emit_burst(
-                                camMat.eye + aOff, vec3{0.0f, 1.0f, 0.0f},
-                                vec3{0.70f, 0.85f, 1.0f},
-                                gpu::GpuParticleKind::ElecArc,
-                                8, 5.0f, 0.4f, 0.12f, 160.0f);
-                            break;
-                        case game::SamosborVariant::Wet:
-                            particlePass.emit_burst(
-                                camMat.eye + aOff + vec3{0, 3, 0},
-                                vec3{0.0f, -1.0f, 0.0f},
-                                vec3{0.20f, 0.55f, 0.65f},
-                                gpu::GpuParticleKind::AcidDrip,
-                                6, 3.0f, 1.5f, 0.08f, 90.0f);
-                            break;
-                        case game::SamosborVariant::Meat:
-                            particlePass.emit_burst(
-                                camMat.eye + aOff, vec3{0.0f, 0.3f, 0.0f},
-                                vec3{0.55f, 0.85f, 0.25f},
-                                gpu::GpuParticleKind::BioSpore,
-                                5, 1.5f, 2.5f, 0.20f, 120.0f);
-                            break;
-                        default:
-                            // Other variants: generic alarm smoke
-                            particlePass.emit_burst(
-                                camMat.eye + aOff, vec3{0.0f, 0.5f, 0.0f},
-                                vec3{0.60f, 0.45f, 0.35f},
-                                gpu::GpuParticleKind::Smoke,
-                                4, 1.0f, 3.0f, 0.25f, 100.0f);
-                            break;
-                    }
-                }
-
-                particlePass.record_compute(cmd, kSimDt, currentTimeSec, camMat.eye);
-            }
 
             // Voxel-mirror upkeep, outside the render pass: doors publish
             // their mask edits the same way carve does ([game/door.h]
@@ -5101,17 +4872,7 @@ int main(int argc, char** argv) {
             // Props: GPU-instanced arbitrary-mesh pass, same depth buffer.
             if (propPass.ready())
                 propPass.record(cmd, renderer.currentFrame, push, lightGrid.descriptor_set());
-            if (particlePass.ready()) {
-                gpu::ParticleDrawPush particlePush{};
-                mat4 vp = mat4_mul(camMat.proj, camMat.view);
-                std::memcpy(particlePush.viewProj, &vp, sizeof(vp));
-                particlePush.camPos = camMat.eye;
-                particlePush.camRight = vec3{camMat.view.m[0], camMat.view.m[4], camMat.view.m[8]};
-                particlePush.camUp = vec3{camMat.view.m[1], camMat.view.m[5], camMat.view.m[9]};
-                particlePush.fogStart = kWorldExtent * 0.30f * fogScale;
-                particlePush.fogEnd = kWorldExtent * 0.50f * fogScale;
-                particlePass.record_draw(cmd, particlePush, lightGrid.descriptor_set());
-            }
+
 
             std::uint64_t t2 = SDL_GetPerformanceCounter();
             cubeMs = static_cast<float>((t1 - t0) / freq * 1000.0);
@@ -5308,7 +5069,7 @@ int main(int argc, char** argv) {
 
     // --- teardown (reverse order) -----------------------------------------
     hud.destroy();
-    particlePass.destroy();
+
     cullPass.destroy();
     propPass.destroy();
     bodyPass.destroy();

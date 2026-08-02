@@ -240,105 +240,21 @@ void GpuCullPass::record_cull(VkCommandBuffer cmd,
 
 void GpuCullPass::get_shape_aabb(PropShape shape, vec3& outMin, vec3& outMax) noexcept {
     switch (shape) {
-    case PropShape::Cylinder:
-        outMin = {-0.30f, 0.00f, -0.30f};
-        outMax = { 0.30f, 2.00f,  0.30f};
-        break;
-    case PropShape::HalfCylinder:
-        outMin = {-0.40f, 0.00f, -0.40f};
-        outMax = { 0.40f, 2.00f,  0.40f};
-        break;
-    case PropShape::Arch:
-        outMin = {-1.00f, 0.00f, -0.25f};
-        outMax = { 1.00f, 1.00f,  0.25f};
-        break;
-    case PropShape::Barrel:
-        outMin = {-0.35f, 0.00f, -0.35f};
-        outMax = { 0.35f, 0.80f,  0.35f};
-        break;
-    case PropShape::StairStep:
-        outMin = {-1.00f, 0.00f, -0.20f};
-        outMax = { 1.00f, 0.25f,  0.20f};
-        break;
-    case PropShape::Pipe:
-        outMin = {-0.15f, -0.15f, 0.00f};
-        outMax = { 0.15f,  0.15f, 2.00f};
-        break;
-    case PropShape::PipeElbow:
-        outMin = {-0.45f, -0.45f, -0.15f};
-        outMax = { 0.45f,  0.45f,  0.15f};
-        break;
-    case PropShape::PipeTee:
-        outMin = {-1.00f, -0.15f, -0.15f};
-        outMax = { 1.00f,  0.15f,  0.15f};
-        break;
-    case PropShape::Valve:
-        outMin = {-0.25f, -0.25f, -0.25f};
-        outMax = { 0.25f,  0.25f,  0.25f};
-        break;
-    case PropShape::Grate:
-        outMin = {-1.00f, 0.00f, -1.00f};
-        outMax = { 1.00f, 0.05f,  1.00f};
-        break;
-    case PropShape::RoundGrate:
-        outMin = {-0.50f, 0.00f, -0.50f};
-        outMax = { 0.50f, 0.05f,  0.50f};
-        break;
-    case PropShape::CabinetBox:
-        outMin = {-0.20f, 0.00f, -0.10f};
-        outMax = { 0.20f, 1.80f,  0.10f};
-        break;
-    case PropShape::ControlPanel:
-        outMin = {-0.60f, 0.00f, -0.20f};
-        outMax = { 0.60f, 1.00f,  0.20f};
-        break;
-    case PropShape::Railing:
-        outMin = {-1.00f, 0.00f, -0.10f};
-        outMax = { 1.00f, 1.10f,  0.10f};
-        break;
-    case PropShape::SupportBeam:
-        outMin = {-0.20f, 0.00f, -0.20f};
-        outMax = { 0.20f, 4.00f,  0.20f};
-        break;
-    case PropShape::CrateBox:
-        outMin = {-0.30f, 0.00f, -0.30f};
-        outMax = { 0.30f, 0.60f,  0.30f};
-        break;
-    case PropShape::CrateLong:
-        outMin = {-1.00f, 0.00f, -0.30f};
-        outMax = { 1.00f, 0.60f,  0.30f};
-        break;
-    case PropShape::LockerUnit:
-        outMin = {-0.25f, 0.00f, -0.15f};
-        outMax = { 0.25f, 1.80f,  0.15f};
-        break;
-    case PropShape::BenchSlab:
-        outMin = {-1.00f, 0.00f, -0.20f};
-        outMax = { 1.00f, 0.45f,  0.20f};
-        break;
     case PropShape::Terminal:
         outMin = {-0.40f, 0.00f, -0.40f};
         outMax = { 0.40f, 1.40f,  0.40f};
-        break;
-    case PropShape::SecurityCamera:
-        outMin = {-0.20f, -0.20f, -0.20f};
-        outMax = { 0.20f,  0.30f,  0.20f};
         break;
     case PropShape::FloodLamp:
         outMin = {-0.30f, 0.00f, -0.30f};
         outMax = { 0.30f, 1.50f,  0.30f};
         break;
-    case PropShape::FungalColumn:
-        outMin = {-0.40f, 0.00f, -0.40f};
-        outMax = { 0.40f, 2.00f,  0.40f};
+    case PropShape::ElectricalShield:
+        outMin = {-0.35f, 0.00f, 0.00f};
+        outMax = { 0.35f, 1.10f, 0.15f};
         break;
-    case PropShape::CrystalCluster:
-        outMin = {-0.50f, 0.00f, -0.50f};
-        outMax = { 0.50f, 1.00f,  0.50f};
-        break;
-    case PropShape::AcidPool:
-        outMin = {-0.80f, 0.00f, -0.80f};
-        outMax = { 0.80f, 0.10f,  0.80f};
+    case PropShape::BareBulb:
+        outMin = {-0.05f, 0.00f, -0.05f};
+        outMax = { 0.05f, 0.50f,  0.05f};
         break;
     default:
         outMin = {-1.00f, -1.00f, -1.00f};
