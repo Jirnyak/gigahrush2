@@ -345,8 +345,11 @@ static void test_lazy_field_rebaker() {
     grid.clear_cell(20, 20, 20);
 
     std::size_t steps = 0;
-    for (int i = 0; i < 128 && !rebaker.is_idle(); ++i) {
-        steps += rebaker.step_lazy_rebake(grid, coarse, fine, /*budgetMs=*/50.0f);
+    for (int i = 0; i < 500 && !rebaker.is_idle(); ++i) {
+        steps += rebaker.step_lazy_rebake(grid, coarse, fine);
+        if (!rebaker.is_idle()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
     }
     CHECK(rebaker.is_idle());
     CHECK(rebaker.pending_count() == 0);
@@ -358,7 +361,7 @@ static void test_lazy_field_rebaker() {
     FineNav emptyFine;
     rebaker.queue_node(expectNode);
     CHECK(rebaker.pending_count() == 1);
-    CHECK(rebaker.step_lazy_rebake(grid, coarse, emptyFine, 50.0f) == 0);
+    CHECK(rebaker.step_lazy_rebake(grid, coarse, emptyFine) == 0);
     CHECK(rebaker.pending_count() == 1);
     rebaker.clear();
     CHECK(rebaker.is_idle());

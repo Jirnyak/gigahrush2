@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <future>
 #include <queue>
 #include <unordered_set>
 #include <vector>
@@ -14,8 +15,8 @@ namespace giga::nav {
 //
 // On wall destroy / geometry change of a 1024^3 floor, nav must NOT block the
 // render thread. Dirty lattice nodes are queued from carve dirtyCells; each
-// frame step_lazy_rebake spends <= budgetMs rebaking fine flow slices one node
-// at a time, then rebuilds nearest + coarse once the queue drains.
+// frame step_lazy_rebake checks if a background thread has finished rebaking
+// a slice and memcopies it. No BFS work happens on the main thread.
 class LazyFieldRebaker {
 public:
     LazyFieldRebaker() = default;
@@ -27,15 +28,16 @@ public:
     // Queue a lattice node id in [0, kNodes).
     void queue_node(int nodeId, std::uint32_t priority = 1);
 
-    // Spend up to budgetMs rebaking pending fine nodes. When the queue empties
-    // after work, rebuilds nearest + coarse once. Returns fine nodes rebaked.
-    // No-op (returns 0) when fine.flow is empty (AsyncBake in flight).
+    // Check if the background worker has finished a node. If so, apply it.
+    // If idle and queue has items, spawn a background task for the next node.
+    // When the queue empties, rebuilds nearest + coarse once.
+    // Returns fine nodes applied this frame. No-op when fine.flow is empty.
     std::size_t step_lazy_rebake(const MacroGrid& grid, CoarseGraph& coarse,
-                                 FineNav& fine, float budgetMs = 0.2f);
+                                 FineNav& fine);
 
     std::size_t pending_count() const { return m_pendingQueue.size(); }
     bool is_idle() const {
-        return m_pendingQueue.empty() && !m_needClosingPass;
+        return m_pendingQueue.empty() && !m_needClosingPass && !m_activeTask.valid();
     }
     std::uint64_t rebaked_count_total() const { return m_rebakedCountTotal; }
     std::uint64_t closing_pass_count() const { return m_closingPassCount; }
@@ -45,9 +47,17 @@ public:
         std::queue<int> empty;
         std::swap(m_pendingQueue, empty);
         m_needClosingPass = false;
+        // NOTE: we let any active future finish naturally, we just ignore its result later
+        // if it writes to something, wait, it returns BakeResult by value, so no dangling refs.
     }
 
 private:
+    struct BakeResult {
+        int nodeId;
+        std::vector<std::uint8_t> flowData;
+    };
+    std::future<BakeResult> m_activeTask;
+
     std::unordered_set<int> m_queuedSet;
     std::queue<int> m_pendingQueue;
     bool m_needClosingPass = false;

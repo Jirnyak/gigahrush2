@@ -30,3 +30,27 @@
    - **`splitmix32` / `hash_u32`**:
      - В `src/core/rng.h` уже вынесен финализатор `hash_u32` (`splitmix32`). Тем не менее, во многих файлах (`needs.cpp`, `loot_table.cpp`, `samosbor.cpp`, `macro_sim.cpp`, `floor_gen.cpp`) всё ещё остаются локальные реализации или комментарии вида `// Local copy rather than a shared header`.
      - **Решение**: Перевести все места на `giga::hash_u32` из `core/rng.h` и удалить дублирующийся код.
+
+## Проблема 2: Нарушение правила производительности и O(n) тика (LazyFieldRebaker)
+
+В коммитах от Омнисенс (marko1olo) добавлен `LazyFieldRebaker`, который выполняет пошаговое перепекание графа навигации (BFS/A*) прямо в горячем цикле тика (hot path) с заданным бюджетом времени (`step_lazy_rebake`).
+- **Нарушение мандата**: `AGENTS.md` строго предписывает: _"Performance first... bake at load, tick in O(n) — precompute BFS/nav/flow/light maps once at load into flat memory... Never run BFS/A* or worse-than-O(n) work in the hot path; when geometry mutates, freeze → re-bake → resume."_
+- **Решение**: Полностью вырезать `LazyFieldRebaker` и `step_lazy_rebake`. При разрушении/изменении геометрии мира навигация должна замораживаться, отправляться в фоновый поток (`AsyncBake`), а после завершения заменяться атомарно. Никаких инкрементальных вычислений путей в основном тике.
+
+## Проблема 3: Хардкод пропов и хаки генерации (P-adic lightbulbs)
+
+В коммите `feat(padic): add interior ceiling lightbulbs above stairwell flights` хардкодом спавнятся лампочки `spawn_stair_bulb` прямо в C++ коде генератора P-adic уровня (`padic_module.cpp`), с жестко заданным ID пропа (`28`), цветом (`vec3{1.0f, 0.95f, 0.7f}`) и яркостью.
+- **Нарушение мандата**: _"All Content is Data-Driven: Item drops, mob traits, stats, loot tables belong in CSVs, never hardcoded if-chains."_
+- **Решение**: Вычистить эти хардкодные вызовы. Любой спавн пропов должен опираться на дата-дривен дизайн (CSV/Data), а не собираться магическими числами внутри `padic_module.cpp` под предлогом "§24 exam".
+
+## Проблема 4: Физика трупов (Corpse Ragdoll Dynamics)
+
+Добавлены физические компоненты (`Velocity`, `AngularVelocity`, `GravityAffected`, `DynamicBodyTag`) к трупам в момент смерти NPC в `combat.cpp`.
+- **Анализ**: Хотя коммит прикрывается правилом "v1 Read-Only Canon", он внедряет лишние физические расчеты для мертвых объектов, превращая каждый труп в активный DynamicBody, что нарушает философию оптимизации и добавляет лишний мусор в симуляцию.
+- **Решение**: Вернуть трупам статус статичных пропов/декораций (только компонент `Dead` / `Corpse`, без активной симуляции), вычистив костыли из `combat.cpp`.
+
+## Проблема 5: Флаг GpuHandoff реализован на CPU (Не переведен на GPU)
+
+В `prop_system.h` заявлен флаг `PropFallMode::GpuHandoff`, который по идее должен передавать разрушение и рендер мелких осколков (шрапнели) исключительно на графический процессор.
+- **Анализ**: На самом деле при разрушении вызывается `spawn_debris_pieces`, которая создает множество новых физических сущностей (`DynamicBodyTag`) прямо в ECS `giga::Registry` на процессоре. Они симулируются и честно кувыркаются в основном цикле.
+- **Проблема**: Это создает сильную нагрузку на CPU при множественных разрушениях, а само название `GpuHandoff` вводит разработчиков в заблуждение, так как перенос симуляции этих частиц на GPU до сих пор не реализован.

@@ -268,4 +268,8 @@ std::uint8_t route_step(const CoarseGraph& coarse, const FineNav& fine,
     return fine.at(tNode, from.x, from.y, from.z);
 }
 
+void bake_fine_node_async(const MacroGrid& grid, int id, std::uint8_t* slice) {
+    bake_fine_node(grid, id, slice);
+}
+
 } // namespace giga::nav

@@ -125,6 +125,7 @@ void bake_fine(const MacroGrid& grid, FineNav& out);
 // Full bake_fine is ~130 MiB and seconds of BFS — too heavy per carve. These
 // helpers re-touch only what geometry change invalidated so LazyFieldRebaker
 // can amortize work under a per-frame budget without freezing the render thread.
+void bake_fine_node_async(const MacroGrid& grid, int id, std::uint8_t* slice);
 void rebake_fine_node(const MacroGrid& grid, FineNav& fine, int nodeId);
 void rebake_nearest(const MacroGrid& grid, FineNav& fine);
 void rebake_coarse(const MacroGrid& grid, CoarseGraph& coarse);

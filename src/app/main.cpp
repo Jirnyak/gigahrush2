@@ -2126,8 +2126,7 @@ int main(int argc, char** argv) {
         // §22: amortize nav field rebake under frame budget.
         if (nav.ready() && !nav.baking() && !navRebaker.is_idle()) {
             navRebaker.step_lazy_rebake(stack.layer(activeLayer).grid(),
-                                        nav.mutable_coarse(), nav.mutable_fine(),
-                                        /*budgetMs=*/0.2f);
+                                        nav.mutable_coarse(), nav.mutable_fine());
         }
         std::uint64_t now = SDL_GetPerformanceCounter();
         float frameDt = static_cast<float>((now - prevTicks) / freq);
