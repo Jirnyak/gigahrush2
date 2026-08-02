@@ -1,0 +1,118 @@
+=== src/game/event_bus.h (352 lines) ===
+6|//   * TRANSIENT by default. Events are published into a fixed-capacity ring and
+14|//     the bus can mirror every published event into an append-only log. Off by
+16|//   * OVERFLOW DROPS, LOUDLY. If more than `kCapacity` events are published in a
+21|//     tally so a published event always has at least one reader. Added because an
+22|//     audit found `ItemTransferred` published from three sites (loot.cpp x2,
+26|//     wired. The tally is two increments per publish and turns "does anything read
+32|//     three `ItemTransferred` producers are read on the tick they publish instead
+49|// published by no code path at all before 2026-07-29, so the enum advertised
+55|// `publish_floor_arrival` below rather than through hand-written publishes at each
+66|enum class EventType : std::uint16_t {
+72|    // per-record event would publish 420 entries for one Residential load,
+75|    // Producer: `publish_floor_arrival`, from the `NpcPool::count()` delta across
+87|    // Producer: `publish_floor_arrival`, when `fromFloor != toFloor`. Note this is
+97|    // That function is the only publisher and it is itself a CONSUMER of NpcDied,
+111|    // Producer: `publish_floor_arrival`, unconditionally — every arrival is one.
+122|// How many EventType values there are, for the per-type tally arrays. The
+125|inline constexpr std::size_t kEventTypeCount = 8;
+126|static_assert(static_cast<std::size_t>(EventType::PropDetached) + 1 ==
+127|                  kEventTypeCount,
+128|              "kEventTypeCount must cover every EventType value");
+134|struct Event {
+135|    EventType type = EventType::None;
+154|    bool publish(const Event& e);
+156|    // Convenience overload — build + publish without a temporary at call sites.
+157|    bool publish(EventType type, std::uint32_t a = 0, std::uint32_t b = 0,
+160|    // The events published this cycle, in publish order. Valid until clear().
+163|    // to kCapacity and nothing ever resizes it. That is what makes publishing
+165|    // publishing another (relations_drain_deaths does exactly this) cannot
+178|        for (std::size_t i = 0; i < kEventTypeCount; ++i) cycle_[i] = 0;
+184|    // How many of `t` were published in the current cycle (reset by clear()).
+185|    std::uint32_t cycle_count(EventType t) const {
+187|        return i < kEventTypeCount ? cycle_[i] : 0u;
+190|    // How many of `t` have been published since init(). Never reset by clear(),
+193|    std::uint64_t total_count(EventType t) const {
+195|        return i < kEventTypeCount ? total_[i] : 0u;
+199|    // published event is also appended here and kept across clear() calls.
+210|    // Both are indexed by the EventType value, which is why kEventTypeCount is
+212|    std::uint32_t cycle_[kEventTypeCount] = {};
+213|    std::uint64_t total_[kEventTypeCount] = {};
+244|// --- typed publish helpers --------------------------------------------------
+252|inline bool publish_npc_spawned(EventBus& bus, std::uint32_t firstId,
+255|    return bus.publish(EventType::NpcSpawned, firstId, count,
+260|inline bool publish_npc_migrated(EventBus& bus, std::uint32_t npcId,
+263|    return bus.publish(EventType::NpcMigrated, npcId, pack_floor(fromFloor),
+269|inline bool publish_floor_entered(EventBus& bus, std::int32_t floorNumber,
+272|    return bus.publish(EventType::FloorEntered, pack_floor(floorNumber), layer,
+278|// Everything an arrival publishes: the crowd it seeded (NpcSpawned, only if the
+281|// how many events were published, 1..3.
+286|// exact reason, and both are commented in place. Three publishes copied to three
+296|std::uint32_t publish_floor_arrival(EventBus& bus, std::uint32_t countBefore,
+324|struct EventFeed {
+329|    std::uint64_t at[kLines] = {};   // the sim tick each line was published on
+337|// consumer may itself publish: `relations_drain_deaths` reads NpcDied and emits
+348|// The sim tick line `i` was published on, for a HUD that wants to fade old lines.
+=== src/game/prop_system.h (182 lines) ===
+18|    GpuHandoff   // 3. Shatter into CPU debris chips then destroy parent entity
+70|struct DebrisSpawnEvent {
+167|// Spawn N small DynamicBodyTag debris chips from a DebrisSpawnEvent.
+171|// [jirnyak.md] section 18/19 -- GpuHandoff must leave sim debris, not void.
+172|std::uint32_t spawn_debris_pieces(Registry& reg, const DebrisSpawnEvent& ev,
+
+=== HITS ===
+HIT C:\hades\gigahrush2\src\game\prop_system.cpp
+HIT C:\hades\gigahrush2\src\game\prop_system.h
+HIT C:\hades\gigahrush2\tests\suite_props_game.inl
+
+=== prop_system.cpp 60-95 ===
+60|    if (mk == 0u && reg.all_of<PropMesh>(prop))
+61|        mk = static_cast<std::uint32_t>(reg.get<PropMesh>(prop).shape);
+62|
+63|    // Always announce detach so render/GPU handoff and tests can observe it
+64|    // ([jirnyak.md] section 18 PropDetached -- a/b/c = packed world pos).
+65|    bus.publish(EventType::PropDetached,
+66|                static_cast<std::uint32_t>(pos.x),
+67|                static_cast<std::uint32_t>(pos.y),
+68|                static_cast<std::uint32_t>(pos.z));
+69|
+70|    if (mode == PropFallMode::GpuHandoff) {
+71|        // GPU particle handoff then destroy parent entity.
+72|        DebrisSpawnEvent ev{};
+73|        ev.pos = pos;
+74|        ev.impulse = impulse;
+75|        ev.color = col;
+76|        ev.meshKind = mk;
+77|        bus.publish(ev);
+78|        reg.destroy(prop);
+79|        return;
+80|    }
+81|
+82|    // Keep entity identity; drop anchor and flip the static/dynamic tag pair.
+83|    if (reg.all_of<SubVoxelAnchor>(prop))
+84|        reg.remove<SubVoxelAnchor>(prop);
+85|    mark_dynamic(reg, prop);
+86|    reg.emplace_or_replace<GravityAffected>(prop);
+87|
+88|    if (mode == PropFallMode::RagdollRoll) {
+89|        // Canonical Velocity{vec3} form (combat.cpp). AngularVelocity/Rotation
+90|        // (core components) are integrated by physics_step each substep.
+91|        reg.emplace_or_replace<Velocity>(prop, Velocity{impulse});
+92|        reg.emplace_or_replace<AngularVelocity>(prop, AngularVelocity{vec3{impulse.z, impulse.x, 2.0f}});
+93|        reg.emplace_or_replace<Rotation>(prop);
+94|    } else {
+95|        reg.emplace_or_replace<Velocity>(prop, Velocity{vec3{0.0f, 0.0f, -0.5f}});
+
+=== suite gpu handoff test snippet ===
+715|// [jirnyak.md] section 18/19 -- DebrisSpawnEvent consumer + GpuHandoff shatter.
+716|// GpuHandoff used to destroy the parent with zero debris; now spawn_debris_pieces
+718|static void test_spawn_debris_pieces_direct() {
+727|    const std::uint32_t n = game::spawn_debris_pieces(reg, ev, layer, /*count=*/4);
+753|    printf("[props] spawn_debris_pieces direct: %u chips with AngularVelocity\n", n);
+756|static void test_gpu_handoff_spawns_debris_on_detach() {
+777|                                    game::PropFallMode::GpuHandoff,
+783|    // Carve support -> anchor_validate detaches GpuHandoff path.
+806|    CHECK(chips == 0u);
+807|    printf("[props] GpuHandoff detach -> %u debris with AngularVelocity\n", chips);
+882|    test_spawn_debris_pieces_direct();
+883|    test_gpu_handoff_spawns_debris_on_detach();

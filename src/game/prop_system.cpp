@@ -68,13 +68,17 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
                 static_cast<std::uint32_t>(pos.z));
 
     if (mode == PropFallMode::GpuHandoff) {
-        // GPU particle handoff then destroy parent entity.
+        // Shatter parent into CPU debris chips then destroy it
+        // ([jirnyak.md] §18/19 — sim debris on BodyPass, not void / bus POD).
         DebrisSpawnEvent ev{};
         ev.pos = pos;
         ev.impulse = impulse;
         ev.color = col;
         ev.meshKind = mk;
-        bus.publish(ev);
+        LayerId layer = 0;
+        if (reg.all_of<Transform>(prop))
+            layer = reg.get<Transform>(prop).layer;
+        spawn_debris_pieces(reg, ev, layer, /*count=*/3);
         reg.destroy(prop);
         return;
     }
@@ -255,21 +259,21 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
     constexpr float kCell = kCellSize;
 
     // Mirror PropPlacer::populate wall-device branch (wsel bands 15-25 shield,
-    // 25-35 terminal). Floor support = solidBelow on Y (same convention as
-    // prop_placer). Anchor sub-voxels point into the solid floor cell so
+    // 25-35 terminal). World is Z-up: floor support = solid cell at z-1.
+    // Horizontal walls are X/Y neighbors. Anchor into solid floor so
     // spawn_prop's solid() check and anchor_validate_step stay honest.
     for (int z = 0; z < kMacroDim; ++z) {
         for (int y = 0; y < kMacroDim; ++y) {
             for (int x = 0; x < kMacroDim; ++x) {
                 if (grid.cell(x, y, z) != kCellAir) continue;
 
-                const CellType below = grid.cell(x, y - 1, z);
+                const CellType below = grid.cell(x, y, z - 1);
                 if (!is_solid_cell(below)) continue;
 
                 const bool solidWest  = is_solid_cell(grid.cell(x - 1, y, z));
                 const bool solidEast  = is_solid_cell(grid.cell(x + 1, y, z));
-                const bool solidNorth = is_solid_cell(grid.cell(x, y, z + 1));
-                const bool solidSouth = is_solid_cell(grid.cell(x, y, z - 1));
+                const bool solidNorth = is_solid_cell(grid.cell(x, y + 1, z));
+                const bool solidSouth = is_solid_cell(grid.cell(x, y - 1, z));
                 if (!(solidWest || solidEast || solidNorth || solidSouth)) continue;
 
                 const std::uint32_t rngWall = giga::spatial_hash(x, y, z, seed ^ kSaltWall);
@@ -283,20 +287,20 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
                 else if (solidNorth)  yawVal = kHalfPi * 3.0f;
 
                 Interactable::Kind kind;
-                float yOff;
+                float zOff;
                 vec3 color;
                 std::uint8_t shape = 0;
                 std::uint8_t matId = 4;
                 std::uint8_t face = 1; // wall
                 if (wsel >= 15 && wsel < 25) {
                     kind  = Interactable::Kind::ElectricalShield;
-                    yOff  = 0.40f;
+                    zOff  = 0.40f;
                     color = {0.18f, 0.20f, 0.22f};
                     shape = kShapeElectricalShield;
                     matId = 4;
                 } else if (wsel >= 25 && wsel < 35) {
                     kind  = Interactable::Kind::Terminal;
-                    yOff  = 0.0f;
+                    zOff  = 0.0f;
                     color = {0.32f, 0.35f, 0.38f};
                     shape = kShapeTerminal;
                     matId = 3;
@@ -305,17 +309,17 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
                 }
 
                 const float wx = static_cast<float>(x) * kCell;
-                const float wy = static_cast<float>(y) * kCell + yOff;
-                const float wz = static_cast<float>(z) * kCell;
+                const float wy = static_cast<float>(y) * kCell;
+                const float wz = static_cast<float>(z) * kCell + zOff;
 
-                // Anchor into the solid floor cell under the air cell (Y-1).
+                // Anchor into the solid floor cell under the air cell (Z-1).
                 SubVoxelAnchor anchor;
                 anchor.cx   = x;
-                anchor.cy   = wrap_macro(y - 1);
-                anchor.cz   = z;
+                anchor.cy   = y;
+                anchor.cz   = wrap_macro(z - 1);
                 anchor.subX = 4;
-                anchor.subY = 7; // top of floor cell
-                anchor.subZ = 4;
+                anchor.subY = 4;
+                anchor.subZ = 7; // top of floor cell
                 anchor.face = face;
 
                 const std::uint8_t anim = static_cast<std::uint8_t>(rngWall & 0xFFu);
@@ -340,31 +344,31 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
 
     // Mirror PropPlacer::populate light branch:
     //   solidAbove && (rngLight % 100 < lightChancePct)
-    //   origin = {wx, wy + 1.55f, wz}
-    // Anchor into the solid ceiling cell (Y+1) so spawn_prop solid() and
+    //   origin = {wx, wy, wz + 1.55f}
+    // Anchor into the solid ceiling cell (Z+1) so spawn_prop solid() and
     // anchor_validate_step stay honest — lamp falls when ceiling is carved.
     for (int z = 0; z < kMacroDim; ++z) {
         for (int y = 0; y < kMacroDim; ++y) {
             for (int x = 0; x < kMacroDim; ++x) {
                 if (grid.cell(x, y, z) != kCellAir) continue;
 
-                const CellType above = grid.cell(x, y + 1, z);
+                const CellType above = grid.cell(x, y, z + 1);
                 if (!is_solid_cell(above)) continue;
 
                 const std::uint32_t rngLight = giga::spatial_hash(x, y, z, seed ^ kSaltLight);
                 if ((rngLight % 100u) >= kLightChancePct) continue;
 
                 const float wx = static_cast<float>(x) * kCell;
-                const float wy = static_cast<float>(y) * kCell + 1.55f;
-                const float wz = static_cast<float>(z) * kCell;
+                const float wy = static_cast<float>(y) * kCell;
+                const float wz = static_cast<float>(z) * kCell + 1.55f;
 
                 SubVoxelAnchor anchor;
                 anchor.cx   = x;
-                anchor.cy   = wrap_macro(y + 1);
-                anchor.cz   = z;
+                anchor.cy   = y;
+                anchor.cz   = wrap_macro(z + 1);
                 anchor.subX = 4;
-                anchor.subY = 0; // bottom of ceiling cell
-                anchor.subZ = 4;
+                anchor.subY = 4;
+                anchor.subZ = 0; // bottom of ceiling cell
                 anchor.face = 2; // ceiling
 
                 // BareBulb vs FloodLamp + yaw/emissive match PropPlacer light branch.

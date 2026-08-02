@@ -496,6 +496,8 @@ bool cmd_spawn_ball(ConsoleContext& ctx, int argc, const char* const* argv,
     // house style and has been a footgun when aggregate paren-init drifts.
     ctx.ecs->emplace<Velocity>(ball, Velocity{vec3{offset.x * 0.5f, offset.y * 0.5f, 0.0f}});
     ctx.ecs->emplace<Renderable>(ball, Renderable{vec3{0.95f, 0.15f, 0.10f}});
+    // BodyPass / physics free-body filter ([jirnyak.md] section 18).
+    ctx.ecs->emplace<DynamicBodyTag>(ball);
 
     if (out && cap)
         std::snprintf(out, cap,

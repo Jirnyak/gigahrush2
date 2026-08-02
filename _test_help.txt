@@ -1,0 +1,2 @@
+args=['--help'] TIMEOUT
+out=b''

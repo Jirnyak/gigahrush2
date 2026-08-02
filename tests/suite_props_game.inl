@@ -3,6 +3,7 @@
 // tagged by Transform.layer. PropPass is render-only; sim+HUD must not read it.
 
 #include "game/floors/padic/padic.h"
+#include "game/floor_spec.h"
 #include "game/prop_system.h"
 #include "game/embody.h"  // TerminalInteractResult / embody_interact_terminal
 #include "world/world.h"
@@ -22,14 +23,14 @@ namespace {
 // Terminal (wsel 25-34) / ElectricalShield (15-24). Paint a floor slab and
 // alternating wall columns at yFloor+1 so every other cell is air with solid
 // west+east neighbors (~half the band × 20% device rate). No PropPass.
-static void paint_floor_band(World& world, int x0, int x1, int yFloor, int z0, int z1) {
-    const int yAir = yFloor + 1;
-    for (int z = z0; z < z1; ++z) {
+static void paint_floor_band(World& world, int x0, int x1, int zFloor, int y0, int y1) {
+    const int zAir = zFloor + 1;
+    for (int y = y0; y < y1; ++y) {
         for (int x = x0; x < x1; ++x) {
-            world.grid().fill_cell(x, yFloor, z, kMatConcrete); // floor
-            // Even offset from x0 → wall column; odd → air corridor cell.
+            world.grid().fill_cell(x, y, zFloor, kMatConcrete); // floor (Z-up)
+            // Even offset from x0 -> wall column; odd -> air corridor cell.
             if (((x - x0) & 1) == 0)
-                world.grid().fill_cell(x, yAir, z, kMatConcrete);
+                world.grid().fill_cell(x, y, zAir, kMatConcrete);
         }
     }
 }
@@ -50,12 +51,11 @@ static int count_kind(const Registry& reg, LayerId layer, game::Interactable::Ki
 // seed_ceiling_lights walks AIR cells with a SOLID cell above (ceiling) and
 // rolls spatial_hash(kSaltLight) with lightChancePct=25. Paint a ceiling slab
 // over an air band so ~25% of cells spawn LightBulb — no PropPass.
-static void paint_ceiling_band(World& world, int x0, int x1, int yAir, int z0, int z1) {
-    const int yCeil = yAir + 1;
-    for (int z = z0; z < z1; ++z) {
+static void paint_ceiling_band(World& world, int x0, int x1, int zAir, int y0, int y1) {
+    const int zCeil = zAir + 1;
+    for (int y = y0; y < y1; ++y) {
         for (int x = x0; x < x1; ++x) {
-            // Ensure the air cell stays air (default) and ceiling is solid.
-            world.grid().fill_cell(x, yCeil, z, kMatConcrete);
+            world.grid().fill_cell(x, y, zCeil, kMatConcrete);
         }
     }
 }
@@ -70,7 +70,7 @@ static void test_wall_interactables_seed_and_collect() {
 
     // Dense floor band: enough air-above-solid candidates that 2%/1% rolls
     // produce at least one Terminal and one ElectricalShield under this seed.
-    paint_floor_band(world, /*x0*/2, /*x1*/80, /*yFloor*/5, /*z0*/2, /*z1*/80);
+    paint_floor_band(world, /*x0*/2, /*x1*/80, /*zFloor*/5, /*z0*/2, /*z1*/80);
 
     const std::uint32_t n = game::seed_wall_interactables(reg, world, layer, seed);
     CHECK(n > 0);
@@ -153,7 +153,7 @@ static void test_ceiling_lights_seed_and_collect() {
     const LayerId layer = 5;
     const unsigned seed = 0xB11B11u;
 
-    paint_ceiling_band(world, /*x0*/2, /*x1*/80, /*yAir*/8, /*z0*/2, /*z1*/80);
+    paint_ceiling_band(world, /*x0*/2, /*x1*/80, /*zAir*/8, /*z0*/2, /*z1*/80);
 
     const std::uint32_t n = game::seed_ceiling_lights(reg, world, layer, seed);
     CHECK(n > 0);
@@ -168,7 +168,7 @@ static void test_ceiling_lights_seed_and_collect() {
     for (const vec3& p : lampPos) {
         CHECK(std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z));
         // PropPlacer origin y = yAir*kCell + 1.55; yAir=8, kCell=2 → 16+1.55=17.55
-        CHECK(p.y > 16.0f && p.y < 19.0f);
+        CHECK(p.z > 16.0f && p.z < 19.0f);
     }
 
     auto view = reg.view<const game::Interactable, const Transform>();
@@ -196,9 +196,9 @@ static void test_ceiling_lights_do_not_collide_with_wall_devices() {
     const unsigned seed = 0xCE11u;
 
     // Floor at y=5, air at y=6, ceiling at y=7. Wall columns on even x at y=6.
-    paint_floor_band(world, 2, 70, /*yFloor*/5, 2, 70);
+    paint_floor_band(world, 2, 70, /*zFloor*/5, 2, 70);
     // paint_floor_band already fills even-x wall columns at yAir=6; add ceiling.
-    paint_ceiling_band(world, 2, 70, /*yAir*/6, 2, 70);
+    paint_ceiling_band(world, 2, 70, /*zAir*/6, 2, 70);
 
     const std::uint32_t nWall = game::seed_wall_interactables(reg, world, layer, seed);
     const std::uint32_t nLamp = game::seed_ceiling_lights(reg, world, layer, seed);
@@ -213,31 +213,46 @@ static void test_ceiling_lights_do_not_collide_with_wall_devices() {
 }
 
 static void test_padic_props_seed_tags_layer() {
-    // seed_padic_props must tag Transform.layer so clear_layer_props can reclaim
-    // the slot on the next arrival. No PropPass involved.
+    // [jirnyak.md] section 24 -- padic stair lamps on PlanStair lattice after
+    // generate_padic_floor; solid SubVoxelAnchor (no floating bulbs).
     Registry reg;
     World world;
     EventBus bus;
+    bus.init();
     const LayerId layer = 4;
-    // seed_padic_props walks its own stairwell lattice; empty grid → n may be 0.
-    // If it spawns anything, every entity must carry Transform.layer == layer.
+    const int number = 4;
+    const unsigned seed = 0x0BAD1Cu;
+
+    FloorSpec spec{};
+    generate_padic_floor(world, number, spec, seed);
+
     const std::uint32_t n =
-        game::seed_padic_props(reg, world, layer, /*number=*/4, /*seed=*/0x0BAD1Cu, bus);
-    if (n > 0) {
-        auto view = reg.view<const game::Interactable, const Transform>();
-        int tagged = 0;
-        for (auto e : view) {
-            if (view.get<const Transform>(e).layer == layer) ++tagged;
-        }
-        CHECK(tagged == static_cast<int>(n));
-        CHECK(game::clear_layer_props(reg, layer) == n);
-    } else {
-        // Still exercise the call path: clear of an empty layer is a no-op.
-        CHECK(game::clear_layer_props(reg, layer) == 0);
+        game::seed_padic_props(reg, world, layer, number, seed, bus);
+    CHECK(n > 0u);
+
+    auto view = reg.view<const game::Interactable, const Transform,
+                         const game::SubVoxelAnchor>();
+    int tagged = 0;
+    int solidAnchors = 0;
+    for (auto e : view) {
+        if (view.get<const Transform>(e).layer != layer) continue;
+        ++tagged;
+        CHECK(view.get<const game::Interactable>(e).kind ==
+              game::Interactable::Kind::LightBulb);
+        CHECK(reg.all_of<game::StaticPropTag>(e));
+        const auto& a = view.get<const game::SubVoxelAnchor>(e);
+        if (world.grid().solid(a.cx, a.cy, a.cz, a.subX, a.subY, a.subZ))
+            ++solidAnchors;
+        const auto& tr = view.get<const Transform>(e);
+        CHECK(std::isfinite(tr.pos.x) && std::isfinite(tr.pos.y) &&
+              std::isfinite(tr.pos.z));
     }
+    CHECK(tagged == static_cast<int>(n));
+    CHECK(solidAnchors == static_cast<int>(n));
+    CHECK(game::clear_layer_props(reg, layer) == n);
+    CHECK(count_kind(reg, layer, game::Interactable::Kind::LightBulb) == 0);
 }
 
-// --- [jirnyak.md] section 18: spawn / anchor validate / ragdoll settle ---------
 
 static void test_spawn_prop_anchor_and_detach_on_air() {
     Registry reg;
@@ -466,14 +481,14 @@ static void test_collect_static_prop_mesh_instances_shapes() {
     const std::uint32_t seed = 0xC0FFEEu;
 
     // Room: floor y=2, ceiling y=5, west wall at x=10 for wall devices.
-    for (int z = 10; z < 18; ++z) {
+    for (int y = 10; y < 18; ++y) {
         for (int x = 10; x < 18; ++x) {
-            world.grid().fill_cell(x, 2, z, kMatConcrete);
-            world.grid().fill_cell(x, 5, z, kMatConcrete);
+            world.grid().fill_cell(x, y, 2, kMatConcrete);
+            world.grid().fill_cell(x, y, 5, kMatConcrete);
         }
     }
-    for (int z = 10; z < 18; ++z)
-        for (int y = 3; y < 5; ++y)
+    for (int y = 10; y < 18; ++y)
+        for (int z = 3; z < 5; ++z)
             world.grid().fill_cell(10, y, z, kMatConcrete);
 
     const std::uint32_t nWall = game::seed_wall_interactables(reg, world, layer, seed);
@@ -788,7 +803,7 @@ static void test_gpu_handoff_spawns_debris_on_detach() {
         CHECK(w.x * w.x + w.y * w.y + w.z * w.z > 1e-6f);
         ++chips;
     }
-    CHECK(chips == 0u);
+    CHECK(chips == 3u);
     printf("[props] GpuHandoff detach -> %u debris with AngularVelocity\n", chips);
 }
 
@@ -805,14 +820,14 @@ static void test_sim_owned_terminals_seed_and_interact() {
     const std::uint32_t seed = 0xC0FFEEu;
 
     // Floor y=2, ceiling y=5, west wall x=10 so seed_wall can place devices.
-    for (int z = 10; z < 18; ++z) {
+    for (int y = 10; y < 18; ++y) {
         for (int x = 10; x < 18; ++x) {
-            world.grid().fill_cell(x, 2, z, kMatConcrete);
-            world.grid().fill_cell(x, 5, z, kMatConcrete);
+            world.grid().fill_cell(x, y, 2, kMatConcrete);
+            world.grid().fill_cell(x, y, 5, kMatConcrete);
         }
     }
-    for (int z = 10; z < 18; ++z)
-        for (int y = 3; y < 5; ++y)
+    for (int y = 10; y < 18; ++y)
+        for (int z = 3; z < 5; ++z)
             world.grid().fill_cell(10, y, z, kMatConcrete);
 
     const std::uint32_t nWall = game::seed_wall_interactables(reg, world, layer, seed);

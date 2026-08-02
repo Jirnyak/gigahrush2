@@ -1,0 +1,38 @@
+OK console DynamicBodyTag
+OK wall neighbors Z-up
+OK wall zOff decl
+OK wall zOff terminal
+OK wall origin+anchor Z-up
+OK ceiling Z-up
+OK wall comment
+OK ceil comment
+OK placer neighbors
+OK placer grate.origin
+OK placer rad.origin
+OK placer cam.origin
+OK placer crystal.origin
+OK placer bench.origin
+OK placer rail.origin
+OK placer item.origin
+OK padic_module
+OK paint_floor_band
+OK paint_ceiling_band
+OK lamp assert p.z
+OK room paint x2
+OK suite_props_game
+OK suite_console DynamicBodyTag
+ALL PHASE1+2 DONE
+Traceback (most recent call last):
+  File "C:\hades\gigahrush2\_p.py", line 480, in <module>
+    (R / "_patch_log.txt").write_text("\n".join(log) + "\n", encoding="utf-8")
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\pathlib\_local.py", line 555, in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\pathlib\_abc.py", line 651, in write_text
+    with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\pathlib\_local.py", line 537, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+PermissionError: [Errno 13] Permission denied: 'C:\\hades\\gigahrush2\\_patch_log.txt'

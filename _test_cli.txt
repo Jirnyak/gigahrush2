@@ -1,0 +1,47 @@
+#include "suite_props_game.inl"
+#include "suite_needs.inl"
+#include "suite_noise.inl"
+#include "suite_packs.inl"
+#include "suite_hunt.inl"
+#include "suite_samosbor.inl"
+#include "suite_doors.inl"
+#include "suite_saveload.inl"
+#include "suite_macrosim.inl"
+#include "suite_behaviours.inl"
+#include "suite_samosborhud.inl"
+#include "suite_fluidrooms.inl"
+#include "suite_eventsweb.inl"
+#include "suite_needs2.inl"
+#include "suite_vendorammo.inl"
+#include "suite_npcpool.inl"
+#include "suite_samosbor2.inl"
+#include "suite_faction2.inl"
+#include "suite_diffusion.inl"
+#include "suite_loottable.inl"
+#include "suite_utilai.inl"
+// Wired 2026-07-29. This suite existed for its whole life without being included by any
+// translation unit: commit 56c9c6a added src/game/nav_cache.{cpp,h} and tests/suite_navcache.inl
+// now fails on any suite_*.inl that no tests/*.cpp includes, so this cannot recur silently.
+#include "suite_navcache.inl"
+#include "suite_craft.inl"
+#include "suite_quest.inl"
+#include "suite_speech.inl"
+#include "suite_economy.inl"
+#include "suite_monster.inl"
+#include "suite_playercmd.inl"
+#include "suite_macrowire.inl"
+#include "suite_status.inl"
+#include "suite_rpg.inl"
+#include "suite_floorcatalog.inl"
+#include "suite_console.inl"
+#include "suite_keybind.inl"
+    // Self-hit, the whole reason kMuzzleForward and the source filter exist. Before
+            // filter candidates on `useEffect != None`, which of the 17 AMMO rows
+            // Filtering to Misc/Note was the WRONG way to express "cannot be equipped",
+// tests/suite_macrosim.inl, which carries its own seeding helpers. Its `spawn_aged`
+    // Unbuffered stdio so redirected CI/agent runs show suite progress live
+    // instead of looking hung at the first long suite (npcpool/samosbor2).
+    test_console_all();
+    test_props_game_all();
+    // quest and speech suites landed and took the total to 134002. audit_test.cpp:102-109 already
+            "           A FALLING count is the case that matters - it means a suite stopped\n"

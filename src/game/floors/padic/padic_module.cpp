@@ -9,6 +9,7 @@
 #include "game/prop_system.h"
 #include "ecs/components.h"
 #include "core/wrap.h"
+#include "world/types.h"
 
 namespace giga::game {
 
@@ -23,47 +24,78 @@ std::uint32_t seed_padic_props(Registry& reg, const World& world, LayerId layer,
     (void)number;
     (void)bus;
 
-    // Storey base heights b = 0, 3, ..., 123
-    for (int b = 0; b <= 123; b += 3) {
-        // Stairwells at fixed locations across blocks
-        for (int bj = 0; bj < 4; ++bj) {
-            for (int bi = 0; bi < 4; ++bi) {
-                if (((bi + bj) & 1) == 0) {
-                    int bx = 16 + bi * 32 + 2;
-                    int by = 16 + bj * 32 + 2;
-                    int sx = bx + 13;
-                    
-                    // Helper to spawn a bare lightbulb at (cx, cy, cz) macro coordinates
-                    auto spawn_stair_bulb = [&](int cx, int cy, int cz) {
-                        vec3 bulbPos{static_cast<float>(cx * 2.0f + 1.0f),
-                                     static_cast<float>(cy * 2.0f + 1.0f),
-                                     static_cast<float>(cz * 2.0f + 1.75f)};
-                        SubVoxelAnchor lightAnchor;
-                        lightAnchor.cx = wrap_macro(cx);
-                        lightAnchor.cy = wrap_macro(cy);
-                        lightAnchor.cz = cz;
-                        lightAnchor.subX = 4;
-                        lightAnchor.subY = 4;
-                        lightAnchor.subZ = 6; // Ceiling is sz=6
+    const MacroGrid& grid = world.grid();
 
-                        // PropShape::BareBulb = 28 (render/prop_mesh.h ordinal).
-                        Entity lamp = spawn_prop(reg, world, bulbPos, lightAnchor,
-                                                 game::Interactable::Kind::LightBulb,
-                                                 PropFallMode::RagdollRoll,
-                                                 vec3{1.0f, 0.95f, 0.7f}, 28, layer,
-                                                 /*yaw*/0.0f, /*emissive*/250);
-                        if (lamp != entt::null) {
-                            ++count;
-                        }
-                    };
+    // Match padic_gen.cpp PlanStair lattice exactly:
+    //   hasStair when ((bi+bj)&1)==0
+    //   sx = bx+13, sy = by+1  (flight A); flight B is sy+1
+    //   storey bases b = 0,3,...,123; sandwich ceiling lives in cell b+2
+    //   (kCeilW = sz=6 inside that cell). Shaft has no full sandwich, but
+    //   stamp_stair puts an entry-strip slab at (sx, sy / sy+1, b+2).
+    // Corridor mouth is (sx, by=sy-1) with opening — use a normal ceiling
+    // neighbor when solid, else hang from the entry strip solid bits.
+    constexpr int kStorey = 3;
+    constexpr int kLastBase = 123;
+    constexpr int kCorr0 = 16;          // kLatticeHalf
+    constexpr int kLatticeSpacing = 32;
+    constexpr int kLatticeDim = 4;
 
-                    // 1. Corridor ceiling lightbulb outside stairwell entrance:
-                    spawn_stair_bulb(sx, by - 1, b + 2);
-                    // 2. Flight A ceiling lightbulb inside lower stairwell shaft:
-                    spawn_stair_bulb(sx, by, b + 2);
-                    // 3. Flight B ceiling lightbulb inside upper stairwell shaft:
-                    spawn_stair_bulb(sx, by + 1, b + 2);
-                }
+    auto try_spawn_bulb = [&](int cx, int cy, int airZ) -> bool {
+        SubVoxelAnchor anchor{};
+        vec3 bulbPos{};
+        const int ceilZ = airZ + 1;
+        const int wcx = wrap_macro(cx);
+        const int wcy = wrap_macro(cy);
+        const int wAir = wrap_macro(airZ);
+        const int wCeil = wrap_macro(ceilZ);
+
+        if (grid.solid(wcx, wcy, wCeil, 4, 4, 0)) {
+            anchor.cx = wcx;
+            anchor.cy = wcy;
+            anchor.cz = wCeil;
+            anchor.subX = 4;
+            anchor.subY = 4;
+            anchor.subZ = 0;
+            anchor.face = 2;
+            bulbPos = vec3{static_cast<float>(cx) * kCellSize + 1.0f,
+                           static_cast<float>(cy) * kCellSize + 1.0f,
+                           static_cast<float>(airZ) * kCellSize + 1.55f};
+        } else if (grid.solid(wcx, wcy, wAir, 2, 4, 6)) {
+            anchor.cx = wcx;
+            anchor.cy = wcy;
+            anchor.cz = wAir;
+            anchor.subX = 2;
+            anchor.subY = 4;
+            anchor.subZ = 6;
+            anchor.face = 2;
+            bulbPos = vec3{static_cast<float>(cx) * kCellSize + 0.5f,
+                           static_cast<float>(cy) * kCellSize + 1.0f,
+                           static_cast<float>(airZ) * kCellSize + 1.55f};
+        } else {
+            return false; // no honest solid support — do not float a lamp
+        }
+
+        Entity lamp = spawn_prop(reg, world, bulbPos, anchor,
+                                 Interactable::Kind::LightBulb,
+                                 PropFallMode::RagdollRoll,
+                                 vec3{1.0f, 0.95f, 0.7f}, /*meshKind*/28, layer,
+                                 /*yaw*/0.0f, /*emissive*/250);
+        return lamp != entt::null;
+    };
+
+    for (int b = 0; b <= kLastBase; b += kStorey) {
+        for (int bj = 0; bj < kLatticeDim; ++bj) {
+            for (int bi = 0; bi < kLatticeDim; ++bi) {
+                if (((bi + bj) & 1) != 0) continue;
+                const int bx = kCorr0 + bi * kLatticeSpacing + 2;
+                const int by = kCorr0 + bj * kLatticeSpacing + 2;
+                const int sx = bx + 13;
+                const int sy = by + 1; // PlanStair.y — flight A row
+
+                const int airZ = b + 1;
+                if (try_spawn_bulb(sx, by, airZ)) ++count;       // corridor mouth
+                if (try_spawn_bulb(sx, sy, airZ)) ++count;       // flight A
+                if (try_spawn_bulb(sx, sy + 1, airZ)) ++count;   // flight B
             }
         }
     }

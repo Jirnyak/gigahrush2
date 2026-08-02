@@ -64,12 +64,13 @@ void PropPlacer::populate(const MacroGrid& grid, PropPass& propPass, std::uint32
                 CellType cur = grid.cell(x, y, z);
                 if (cur != kCellAir) continue; // Props inhabit air space
 
-                CellType below = grid.cell(x, y - 1, z);
-                CellType above = grid.cell(x, y + 1, z);
+                // Z-up: below/above on Z; north/south on Y.
+                CellType below = grid.cell(x, y, z - 1);
+                CellType above = grid.cell(x, y, z + 1);
                 CellType west  = grid.cell(x - 1, y, z);
                 CellType east  = grid.cell(x + 1, y, z);
-                CellType north = grid.cell(x, y, z + 1);
-                CellType south = grid.cell(x, y, z - 1);
+                CellType north = grid.cell(x, y + 1, z);
+                CellType south = grid.cell(x, y - 1, z);
 
                 const bool solidBelow = is_solid(below);
                 const bool solidAbove = is_solid(above);
@@ -98,7 +99,7 @@ void PropPlacer::populate(const MacroGrid& grid, PropPass& propPass, std::uint32
                 std::uint32_t rngGrate = giga::spatial_hash(x, y, z, seed ^ kSaltGrate);
                 if (solidBelow && !floorOccupied && (below == kMatElectricGrate || (rngGrate % 100 < kCfg.grateFloorChancePct))) {
                     PropInstance grate{};
-                    grate.origin    = {wx, wy + 0.01f, wz};
+                    grate.origin    = {wx, wy, wz + 0.01f};
                     grate.yaw       = (!solidWest && !solidEast) ? 0.0f : kHalfPi;
                     grate.color     = kCfg.grateColor;
                     grate.matId     = 4;
@@ -130,7 +131,7 @@ void PropPlacer::populate(const MacroGrid& grid, PropPass& propPass, std::uint32
                     if (wsel < 15) {
                         // Cast-iron accordion radiator under windows / on walls
                         PropInstance rad{};
-                        rad.origin    = {wx, wy + 0.05f, wz};
+                        rad.origin    = {wx, wy, wz + 0.05f};
                         rad.yaw       = yawVal;
                         rad.color     = {0.80f, 0.78f, 0.74f}; // Aged radiator off-white enamel
                         rad.matId     = 4;
@@ -160,7 +161,7 @@ void PropPlacer::populate(const MacroGrid& grid, PropPass& propPass, std::uint32
                 std::uint32_t rngSec = giga::spatial_hash(x, y, z, seed ^ kSaltSecurity);
                 if (solidAbove && (solidWest || solidEast || solidNorth || solidSouth) && !wallOccupied && (rngSec % 100 < 8)) {
                     PropInstance cam{};
-                    cam.origin    = {wx, wy + 1.50f, wz};
+                    cam.origin    = {wx, wy, wz + 1.50f};
                     if (solidWest)        cam.yaw = 0.0f;
                     else if (solidEast)   cam.yaw = kPi;
                     else if (solidSouth)  cam.yaw = kHalfPi;
@@ -180,7 +181,7 @@ void PropPlacer::populate(const MacroGrid& grid, PropPass& propPass, std::uint32
                 const bool isAnomalyMat = (below == kMatAcidPool || below == kMatWaterMark || below == kMatElectricGrate);
                 if (solidBelow && !floorOccupied && (isAnomalyMat || (rngAnomaly % 1000 < kCfg.anomalyChancePermil))) {
                     PropInstance crystal{};
-                    crystal.origin    = {wx, wy + 0.01f, wz};
+                    crystal.origin    = {wx, wy, wz + 0.01f};
                     crystal.yaw       = static_cast<float>(rngAnomaly % 360) * (kPi / 180.0f);
                     crystal.color     = kCfg.crystalCol;
                     crystal.matId     = 0;
@@ -255,7 +256,7 @@ void PropPlacer::populate(const MacroGrid& grid, PropPass& propPass, std::uint32
                 std::uint32_t rngBench = giga::spatial_hash(x, y, z, seed ^ kSaltBench);
                 if (solidBelow && (solidWest || solidEast || solidNorth || solidSouth) && !floorOccupied && (rngBench % 100 < 10)) {
                     PropInstance bench{};
-                    bench.origin    = {wx, wy + 0.01f, wz};
+                    bench.origin    = {wx, wy, wz + 0.01f};
                     if (solidWest)        bench.yaw = 0.0f;
                     else if (solidEast)   bench.yaw = kPi;
                     else if (solidSouth)  bench.yaw = kHalfPi;
@@ -272,7 +273,7 @@ void PropPlacer::populate(const MacroGrid& grid, PropPass& propPass, std::uint32
                 std::uint32_t rngRail = giga::spatial_hash(x, y, z, seed ^ kSaltRailing);
                 if (solidBelow && !solidAbove && !floorOccupied && (nOpen >= 2) && (rngRail % 100 < 8)) {
                     PropInstance rail{};
-                    rail.origin    = {wx, wy + 0.01f, wz};
+                    rail.origin    = {wx, wy, wz + 0.01f};
                     rail.yaw       = (!solidWest && !solidEast) ? 0.0f : kHalfPi;
                     rail.color     = {0.35f, 0.38f, 0.40f};
                     rail.matId     = 4;
@@ -286,7 +287,7 @@ void PropPlacer::populate(const MacroGrid& grid, PropPass& propPass, std::uint32
                 std::uint32_t rngCrate = giga::spatial_hash(x, y, z, seed ^ kSaltCrate);
                 if (solidBelow && (nOpen <= 2) && (solidWest || solidEast) && (solidNorth || solidSouth) && !floorOccupied && (rngCrate % 100 < kCfg.crateCornerChancePct)) {
                     PropInstance item{};
-                    item.origin    = {wx, wy + 0.01f, wz};
+                    item.origin    = {wx, wy, wz + 0.01f};
                     item.yaw       = static_cast<float>(rngCrate % 360) * (kPi / 180.0f);
                     item.color     = kCfg.crateColor;
                     item.matId     = 2;

@@ -292,6 +292,7 @@ static void test_console_spawn_ball() {
     }
     CHECK(ball != entt::null);
     CHECK(ecs.all_of<GravityAffected>(ball));
+    CHECK(ecs.all_of<DynamicBodyTag>(ball));
     // spawn_ball must NOT attach angular components (RagdollRoll props do).
     CHECK(!ecs.all_of<AngularVelocity>(ball));
     CHECK(!ecs.all_of<Rotation>(ball));
