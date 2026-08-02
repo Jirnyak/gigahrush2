@@ -7,8 +7,10 @@
 #include "ecs/registry.h"
 #include "ecs/components.h"
 #include "game/event_bus.h"
+#include "game/prop_table.h"
 #include "world/world.h"
 #include "world/level_stack.h"
+
 
 namespace giga::game {
 
@@ -106,6 +108,15 @@ Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
                   LayerId layer = 0, float yaw = 0.0f,
                   std::uint8_t emissive = 0, std::uint8_t matId = 0,
                   std::uint8_t animPhase = 0, std::uint8_t flags = 0);
+
+// Spawn from data/props.csv row (PropId). shape/fall/interact/color/emissive/
+// matId/reach come from the generated table — call sites must not hardcode
+// those. yaw/animPhase/flags stay procedural (placement). [jirnyak.md] §21.
+Entity spawn_prop_from_id(Registry& reg, const World& world, const vec3& worldPos,
+                          const SubVoxelAnchor& anchor, PropId id,
+                          LayerId layer = 0, float yaw = 0.0f,
+                          std::uint8_t animPhase = 0, std::uint8_t flags = 0);
+
 
 // Destroy every SubVoxelAnchor prop on `layer` (terminals, shields, bulbs…).
 // Call before reseeding a recycled LayerId slot — same contract as

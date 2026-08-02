@@ -337,6 +337,10 @@ _giga_csv_vs_header("data/weapons_ranged.csv" "src/game/ranged_table.h"
 #     instead would make this rule pass while blind to a re-harvest.
 _giga_csv_vs_header("data/materials.csv" "shaders/material_surface.glsl"
     "kMaterialCsvRows[ \t]*=[ \t]*([0-9]+)" "material surface")
+# Props table (jirnyak.md §21) — same drift hazard as items/mobs/weapons.
+_giga_csv_vs_header("data/props.csv" "src/game/prop_table.h"
+    "kPropCount[ \t]*=[ \t]*([0-9]+)" "prop")
+
 
 # ---- Verdict ---------------------------------------------------------------
 # ---- Guard: every test suite must be compiled by somebody ------------------

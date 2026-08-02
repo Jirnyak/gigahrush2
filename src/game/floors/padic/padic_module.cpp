@@ -75,12 +75,12 @@ std::uint32_t seed_padic_props(Registry& reg, const World& world, LayerId layer,
             return false; // no honest solid support — do not float a lamp
         }
 
-        Entity lamp = spawn_prop(reg, world, bulbPos, anchor,
-                                 Interactable::Kind::LightBulb,
-                                 PropFallMode::RagdollRoll,
-                                 vec3{1.0f, 0.95f, 0.7f}, /*meshKind*/28, layer,
-                                 /*yaw*/0.0f, /*emissive*/250);
+        // Skin/fall/color/emissive from data/props.csv (PropId::PadicStairBulb).
+        Entity lamp = spawn_prop_from_id(reg, world, bulbPos, anchor,
+                                         PropId::PadicStairBulb, layer,
+                                         /*yaw*/0.0f);
         return lamp != entt::null;
+
     };
 
     for (int b = 0; b <= kLastBase; b += kStorey) {

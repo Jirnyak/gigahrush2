@@ -259,6 +259,7 @@
 | Реплики НПЦ | `data/speech_lines.csv` | `tools/gen_speech_table.py` |
 | Статусы | `data/status.csv` | `tools/gen_status_table.py` |
 | Материалы | `data/materials.csv` | `tools/gen_material_surface.py` |
+| Пропы (интерактивы/декор) | `data/props.csv` | `tools/gen_prop_table.py` |
 
 Прочие ряды-таблицы (не CSV, но тот же принцип "одна строка — один контент"):
 - **Этаж** — папка `src/game/floors/<имя>/` + claim в каталоге этажей (`floor_catalog`). Никогда не `if` по номеру этажа.

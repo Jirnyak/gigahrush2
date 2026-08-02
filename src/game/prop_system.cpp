@@ -21,15 +21,29 @@ constexpr std::uint32_t kSaltLight = 0x44444444u;
 // Must match PropPlacerConfig::lightChancePct.
 constexpr std::uint32_t kLightChancePct = 25u;
 
-// PropShape ordinals (render/prop_mesh.h) — game stores as uint8, never includes
-// render headers. Keep in lockstep with enum class PropShape.
-constexpr std::uint8_t kShapeTerminal         = 19;
-constexpr std::uint8_t kShapeFloodLamp        = 21;
-constexpr std::uint8_t kShapeElectricalShield = 27;
-constexpr std::uint8_t kShapeBareBulb         = 28;
-
 constexpr float kHalfPi = 1.5707963267948966f;
 constexpr float kPi     = 3.141592653589793f;
+
+// Map table ordinals (data/props.csv) onto the live enums. Unknown values
+// fall back to safe defaults so a bad CSV row cannot crash the seeder.
+static PropFallMode fall_mode_from_u8(std::uint8_t v) {
+    switch (v) {
+    case 1:  return PropFallMode::RagdollRoll;
+    case 2:  return PropFallMode::GpuHandoff;
+    default: return PropFallMode::SimpleFall;
+    }
+}
+
+static Interactable::Kind interact_kind_from_u8(std::uint8_t v) {
+    switch (v) {
+    case 0:  return Interactable::Kind::Terminal;
+    case 1:  return Interactable::Kind::ElectricalShield;
+    case 2:  return Interactable::Kind::LightBulb;
+    case 3:  return Interactable::Kind::Corpse;
+    case 4:  return Interactable::Kind::Loot;
+    default: return Interactable::Kind::Loot;
+    }
+}
 
 
 
@@ -236,8 +250,31 @@ Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
     return prop;
 }
 
+Entity spawn_prop_from_id(Registry& reg, const World& world, const vec3& worldPos,
+                          const SubVoxelAnchor& anchor, PropId id,
+                          LayerId layer, float yaw,
+                          std::uint8_t animPhase, std::uint8_t flags)
+{
+    if (!prop_valid(id)) return entt::null;
+    const PropDef& d = prop_def(id);
+    Entity e = spawn_prop(reg, world, worldPos, anchor,
+                          interact_kind_from_u8(d.interactKind),
+                          fall_mode_from_u8(d.fallMode),
+                          prop_color(d),
+                          d.shape,
+                          layer, yaw, d.emissive, d.matId, animPhase, flags);
+    if (e == entt::null) return entt::null;
+    // Table reachMm overrides the spawn_prop default (2.5 m).
+    if (reg.all_of<Interactable>(e)) {
+        auto& ia = reg.get<Interactable>(e);
+        ia.reachM = static_cast<float>(d.reachMm) * 0.001f;
+    }
+    return e;
+}
+
 
 std::uint32_t clear_layer_props(Registry& reg, LayerId layer) {
+
     std::vector<Entity> old_;
     // SubVoxelAnchor marks every static prop (terminals, shields, padic bulbs).
     // Detached ragdolls lose the anchor and are left alone — they belong to the
@@ -286,24 +323,15 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
                 else if (solidSouth)  yawVal = kHalfPi;
                 else if (solidNorth)  yawVal = kHalfPi * 3.0f;
 
-                Interactable::Kind kind;
+                // Placement bands match PropPlacer; skin/fall/color from props.csv.
+                PropId pid;
                 float zOff;
-                vec3 color;
-                std::uint8_t shape = 0;
-                std::uint8_t matId = 4;
-                std::uint8_t face = 1; // wall
                 if (wsel >= 15 && wsel < 25) {
-                    kind  = Interactable::Kind::ElectricalShield;
-                    zOff  = 0.40f;
-                    color = {0.18f, 0.20f, 0.22f};
-                    shape = kShapeElectricalShield;
-                    matId = 4;
+                    pid  = PropId::ElectricalShield;
+                    zOff = 0.40f;
                 } else if (wsel >= 25 && wsel < 35) {
-                    kind  = Interactable::Kind::Terminal;
-                    zOff  = 0.0f;
-                    color = {0.32f, 0.35f, 0.38f};
-                    shape = kShapeTerminal;
-                    matId = 3;
+                    pid  = PropId::Terminal;
+                    zOff = 0.0f;
                 } else {
                     continue; // radiator / empty — no Interactable
                 }
@@ -320,13 +348,13 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
                 anchor.subX = 4;
                 anchor.subY = 4;
                 anchor.subZ = 7; // top of floor cell
-                anchor.face = face;
+                anchor.face = 1; // wall
 
                 const std::uint8_t anim = static_cast<std::uint8_t>(rngWall & 0xFFu);
-                Entity e = spawn_prop(reg, world, vec3{wx, wy, wz}, anchor, kind,
-                                      PropFallMode::SimpleFall, color, shape, layer,
-                                      yawVal, /*emissive*/0, matId, anim, /*flags*/0);
+                Entity e = spawn_prop_from_id(reg, world, vec3{wx, wy, wz}, anchor,
+                                             pid, layer, yawVal, anim, /*flags*/0);
                 if (e != entt::null) ++count;
+
 
             }
         }
@@ -371,20 +399,17 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
                 anchor.subZ = 0; // bottom of ceiling cell
                 anchor.face = 2; // ceiling
 
-                // BareBulb vs FloodLamp + yaw/emissive match PropPlacer light branch.
-                const std::uint8_t shape =
-                    (rngLight & 1u) ? kShapeBareBulb : kShapeFloodLamp;
+                // BareBulb vs FloodLamp choice stays procedural; skin from props.csv.
+                const PropId pid =
+                    (rngLight & 1u) ? PropId::BareBulb : PropId::FloodLamp;
                 const float yaw = static_cast<float>(rngLight % 4u) * kHalfPi;
                 const std::uint8_t anim =
                     static_cast<std::uint8_t>(rngLight & 0xFFu);
 
-                Entity e = spawn_prop(reg, world, vec3{wx, wy, wz}, anchor,
-                                      Interactable::Kind::LightBulb,
-                                      PropFallMode::RagdollRoll,
-                                      vec3{1.00f, 0.78f, 0.45f}, shape, layer,
-                                      yaw, /*emissive*/250, /*matId*/0, anim,
-                                      /*flags*/0);
+                Entity e = spawn_prop_from_id(reg, world, vec3{wx, wy, wz}, anchor,
+                                             pid, layer, yaw, anim, /*flags*/0);
                 if (e != entt::null) ++count;
+
             }
         }
     }
