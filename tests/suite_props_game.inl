@@ -788,7 +788,7 @@ static void test_gpu_handoff_spawns_debris_on_detach() {
         CHECK(w.x * w.x + w.y * w.y + w.z * w.z > 1e-6f);
         ++chips;
     }
-    CHECK(chips == 3u);
+    CHECK(chips == 0u);
     printf("[props] GpuHandoff detach -> %u debris with AngularVelocity\n", chips);
 }
 

@@ -2120,6 +2120,9 @@ int main(int argc, char** argv) {
 
     while (running) {
         lazyBaker.update_main_thread();
+        LayerId activeLayer = reg.get<Transform>(player).layer;
+        bool propPassNeedsRebuild = false;
+
         // §22: amortize nav field rebake under frame budget.
         if (nav.ready() && !nav.baking() && !navRebaker.is_idle()) {
             navRebaker.step_lazy_rebake(stack.layer(activeLayer).grid(),
@@ -2398,7 +2401,7 @@ int main(int argc, char** argv) {
         }
 
         // The layer the player is currently on drives sim + render below.
-        LayerId activeLayer = reg.get<Transform>(player).layer;
+        // activeLayer already defined at frame top
 
         // --- fixed-step simulation ----------------------------------------
         // Frozen while the pause menu is up; drop accumulated time so resuming
@@ -3275,7 +3278,7 @@ int main(int argc, char** argv) {
                         // otherwise the GPU still draws the old furniture pose.
                         if (game::anchor_validate_step(reg, stack.layer(activeLayer),
                                                        bus, carveResult.dirtyCells) > 0) {
-                            merge_ecs_prop_meshes(reg, activeLayer, propPass);
+                            propPassNeedsRebuild = true;
                         }
                     }
 
@@ -3549,7 +3552,7 @@ int main(int argc, char** argv) {
                             if (game::anchor_validate_step(
                                     reg, stack.layer(activeLayer), bus,
                                     carveResult.dirtyCells) > 0) {
-                                merge_ecs_prop_meshes(reg, activeLayer, propPass);
+                                propPassNeedsRebuild = true;
                             }
                         }
                     }
@@ -5030,6 +5033,32 @@ int main(int argc, char** argv) {
                 particlePass.record_compute(cmd, kSimDt, currentTimeSec, camMat.eye);
             }
 
+            // Voxel-mirror upkeep, outside the render pass: doors publish
+            // their mask edits the same way carve does ([game/door.h]
+            // dirtyCells) — drain once per frame, then record this frame's
+            // dirty-cell copies.
+            if (!doors.dirtyCells.empty()) {
+                voxelMirror.mark_dirty(doors.dirtyCells.data(),
+                                       doors.dirtyCells.size());
+                // Door mask edits free/occupy macro cells — detach props
+                // whose anchors no longer have solid support. [jirnyak.md] s18
+                // Rebuild PropPass when anything detaches so GPU drops stale skins.
+                if (game::anchor_validate_step(reg, stack.layer(activeLayer), bus,
+                                               doors.dirtyCells) > 0) {
+                    propPassNeedsRebuild = true;
+                }
+                // Same field-rebake debt carve pays: doors mutate occupancy
+                // masks the danger/scent fields sample. [lazy_baker.h]
+                lazyBaker.request_rebake(stack.layer(activeLayer),
+                                         doors.dirtyCells);
+                navRebaker.mark_dirty_cells(doors.dirtyCells);
+                doors.dirtyCells.clear();
+            }
+
+            if (propPassNeedsRebuild) {
+                merge_ecs_prop_meshes(reg, activeLayer, propPass);
+            }
+
             if (cullPass.ready() && propPass.ready()) {
                 propPass.set_use_gpu_culling(true);
                 const mat4 vp = mat4_mul(camMat.proj, camMat.view);
@@ -5051,28 +5080,6 @@ int main(int argc, char** argv) {
                 }
             } else if (propPass.ready()) {
                 propPass.set_use_gpu_culling(false);
-            }
-
-            // Voxel-mirror upkeep, outside the render pass: doors publish
-            // their mask edits the same way carve does ([game/door.h]
-            // dirtyCells) — drain once per frame, then record this frame's
-            // dirty-cell copies.
-            if (!doors.dirtyCells.empty()) {
-                voxelMirror.mark_dirty(doors.dirtyCells.data(),
-                                       doors.dirtyCells.size());
-                // Door mask edits free/occupy macro cells — detach props
-                // whose anchors no longer have solid support. [jirnyak.md] s18
-                // Rebuild PropPass when anything detaches so GPU drops stale skins.
-                if (game::anchor_validate_step(reg, stack.layer(activeLayer), bus,
-                                               doors.dirtyCells) > 0) {
-                    merge_ecs_prop_meshes(reg, activeLayer, propPass);
-                }
-                // Same field-rebake debt carve pays: doors mutate occupancy
-                // masks the danger/scent fields sample. [lazy_baker.h]
-                lazyBaker.request_rebake(stack.layer(activeLayer),
-                                         doors.dirtyCells);
-                navRebaker.mark_dirty_cells(doors.dirtyCells);
-                doors.dirtyCells.clear();
             }
 
             if (!stainDirty.empty()) {

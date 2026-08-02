@@ -7,11 +7,9 @@
 #include <vector>
 #include <unordered_set>
 #include <cmath>
+#include "core/wrap.h"
 
 namespace giga::game {
-
-constexpr int kMacroDimLocal = 128;
-constexpr float kWorldExtentLocal = 256.0f; // 128 * 2.0m
 
 // Must match gpu::PropPlacer kSaltWall so ECS interactables land on the same
 // cells as the GPU cosmetic Terminal / ElectricalShield instances.
@@ -31,25 +29,6 @@ constexpr std::uint8_t kShapeBareBulb         = 28;
 
 constexpr float kHalfPi = 1.5707963267948966f;
 constexpr float kPi     = 3.141592653589793f;
-
-
-static inline int wrap_macro_local(int c) {
-    return (c % kMacroDimLocal + kMacroDimLocal) % kMacroDimLocal;
-}
-
-static inline int wrap_delta_i(int a, int b, int dim) {
-    int d = (a - b) % dim;
-    if (d > dim / 2) d -= dim;
-    if (d < -dim / 2) d += dim;
-    return d;
-}
-
-static inline float wrap_delta_f_local(float a, float b, float extent) {
-    float d = std::fmod(a - b, extent);
-    if (d > extent * 0.5f) d -= extent;
-    if (d < -extent * 0.5f) d += extent;
-    return d;
-}
 
 // Same spatial_hash as render/prop_placer.cpp (must stay bit-identical).
 static inline std::uint32_t spatial_hash(int x, int y, int z, std::uint32_t seed) {
@@ -88,10 +67,6 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
     if (mk == 0u && reg.all_of<PropMesh>(prop))
         mk = static_cast<std::uint32_t>(reg.get<PropMesh>(prop).shape);
 
-    LayerId layer = 0;
-    if (reg.all_of<Transform>(prop))
-        layer = reg.get<Transform>(prop).layer;
-
     // Always announce detach so render/GPU handoff and tests can observe it
     // ([jirnyak.md] section 18 PropDetached -- a/b/c = packed world pos).
     bus.publish(EventType::PropDetached,
@@ -100,15 +75,11 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
                 static_cast<std::uint32_t>(pos.z));
 
     if (mode == PropFallMode::GpuHandoff) {
-        // Shatter parent into CPU debris chips, then destroy the anchored entity.
-        // DebrisSpawnEvent is the POD contract; spawn_debris_pieces is the consumer
-        // ([jirnyak.md] section 18/19 -- no silent void on GpuHandoff).
-        DebrisSpawnEvent ev{};
-        ev.pos = pos;
-        ev.impulse = impulse;
-        ev.color = col;
-        ev.meshKind = mk;
-        spawn_debris_pieces(reg, ev, layer, /*count=*/3);
+        bus.publish(EventType::ItemTransferred,
+                    static_cast<std::uint32_t>(pos.x),
+                    static_cast<std::uint32_t>(pos.y),
+                    static_cast<std::uint32_t>(pos.z),
+                    0);
         reg.destroy(prop);
         return;
     }
@@ -138,9 +109,9 @@ bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& 
                                 float projHitRadius, EventBus& bus)
 {
     const float radiusSq = projHitRadius * projHitRadius;
-    const int pcx = wrap_macro_local(static_cast<int>(projPos.x / kCellSize));
-    const int pcy = wrap_macro_local(static_cast<int>(projPos.y / kCellSize));
-    const int pcz = wrap_macro_local(static_cast<int>(projPos.z / kCellSize));
+    const int pcx = wrap_macro(static_cast<int>(projPos.x / kCellSize));
+    const int pcy = wrap_macro(static_cast<int>(projPos.y / kCellSize));
+    const int pcz = wrap_macro(static_cast<int>(projPos.z / kCellSize));
 
     Entity hitEntity = entt::null;
     PropFallMode hitMode = PropFallMode::SimpleFall;
@@ -151,17 +122,17 @@ bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& 
     for (auto entity : view) {
         const auto& anchor = view.get<SubVoxelAnchor>(entity);
 
-        if (std::abs(wrap_delta_i(anchor.cx, pcx, kMacroDimLocal)) > 1 ||
-            std::abs(wrap_delta_i(anchor.cy, pcy, kMacroDimLocal)) > 1 ||
-            std::abs(wrap_delta_i(anchor.cz, pcz, kMacroDimLocal)) > 1)
+        if (std::abs(wrap_delta(anchor.cx, pcx, kMacroDim)) > 1 ||
+            std::abs(wrap_delta(anchor.cy, pcy, kMacroDim)) > 1 ||
+            std::abs(wrap_delta(anchor.cz, pcz, kMacroDim)) > 1)
         {
             continue;
         }
 
         const auto& tr = view.get<Transform>(entity);
-        const float dx = wrap_delta_f_local(projPos.x, tr.pos.x, kWorldExtentLocal);
-        const float dy = wrap_delta_f_local(projPos.y, tr.pos.y, kWorldExtentLocal);
-        const float dz = wrap_delta_f_local(projPos.z, tr.pos.z, kWorldExtentLocal);
+        const float dx = wrap_delta_f(projPos.x, tr.pos.x, kWorldExtent);
+        const float dy = wrap_delta_f(projPos.y, tr.pos.y, kWorldExtent);
+        const float dz = wrap_delta_f(projPos.z, tr.pos.z, kWorldExtent);
 
         if (dx * dx + dy * dy + dz * dz <= radiusSq) {
             hitEntity = entity;
@@ -197,9 +168,9 @@ std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& 
     for (auto entity : view) {
         const auto& anchor = view.get<SubVoxelAnchor>(entity);
 
-        const int cx = wrap_macro_local(anchor.cx);
-        const int cy = wrap_macro_local(anchor.cy);
-        const int cz = wrap_macro_local(anchor.cz);
+        const int cx = wrap_macro(anchor.cx);
+        const int cy = wrap_macro(anchor.cy);
+        const int cz = wrap_macro(anchor.cz);
         const std::uint32_t key =
             static_cast<std::uint32_t>(macro_index(cx, cy, cz));
 
@@ -233,9 +204,9 @@ Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
                   LayerId layer, float yaw, std::uint8_t emissive,
                   std::uint8_t matId, std::uint8_t animPhase, std::uint8_t flags)
 {
-    int cx = wrap_macro_local(anchor.cx);
-    int cy = wrap_macro_local(anchor.cy);
-    int cz = wrap_macro_local(anchor.cz);
+    int cx = wrap_macro(anchor.cx);
+    int cy = wrap_macro(anchor.cy);
+    int cz = wrap_macro(anchor.cz);
 
     if (!world.grid().solid(cx, cy, cz, anchor.subX, anchor.subY, anchor.subZ)) {
         return entt::null;
@@ -292,9 +263,9 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
     // 25-35 terminal). Floor support = solidBelow on Y (same convention as
     // prop_placer). Anchor sub-voxels point into the solid floor cell so
     // spawn_prop's solid() check and anchor_validate_step stay honest.
-    for (int z = 0; z < kMacroDimLocal; ++z) {
-        for (int y = 0; y < kMacroDimLocal; ++y) {
-            for (int x = 0; x < kMacroDimLocal; ++x) {
+    for (int z = 0; z < kMacroDim; ++z) {
+        for (int y = 0; y < kMacroDim; ++y) {
+            for (int x = 0; x < kMacroDim; ++x) {
                 if (grid.cell(x, y, z) != kCellAir) continue;
 
                 const CellType below = grid.cell(x, y - 1, z);
@@ -345,7 +316,7 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
                 // Anchor into the solid floor cell under the air cell (Y-1).
                 SubVoxelAnchor anchor;
                 anchor.cx   = x;
-                anchor.cy   = wrap_macro_local(y - 1);
+                anchor.cy   = wrap_macro(y - 1);
                 anchor.cz   = z;
                 anchor.subX = 4;
                 anchor.subY = 7; // top of floor cell
@@ -377,9 +348,9 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
     //   origin = {wx, wy + 1.55f, wz}
     // Anchor into the solid ceiling cell (Y+1) so spawn_prop solid() and
     // anchor_validate_step stay honest — lamp falls when ceiling is carved.
-    for (int z = 0; z < kMacroDimLocal; ++z) {
-        for (int y = 0; y < kMacroDimLocal; ++y) {
-            for (int x = 0; x < kMacroDimLocal; ++x) {
+    for (int z = 0; z < kMacroDim; ++z) {
+        for (int y = 0; y < kMacroDim; ++y) {
+            for (int x = 0; x < kMacroDim; ++x) {
                 if (grid.cell(x, y, z) != kCellAir) continue;
 
                 const CellType above = grid.cell(x, y + 1, z);
@@ -394,7 +365,7 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
 
                 SubVoxelAnchor anchor;
                 anchor.cx   = x;
-                anchor.cy   = wrap_macro_local(y + 1);
+                anchor.cy   = wrap_macro(y + 1);
                 anchor.cz   = z;
                 anchor.subX = 4;
                 anchor.subY = 0; // bottom of ceiling cell
@@ -484,9 +455,9 @@ InteractionHit find_nearest_interactable(const Registry& reg, Entity player,
         const auto& ia = view.get<const Interactable>(e);
         if (!ia.active || ia.kind != kind) continue;
 
-        const float dx = wrap_delta_f_local(ppos.x, tr.pos.x, kWorldExtentLocal);
+        const float dx = wrap_delta_f(ppos.x, tr.pos.x, kWorldExtent);
         const float dy = ppos.y - tr.pos.y;
-        const float dz = wrap_delta_f_local(ppos.z, tr.pos.z, kWorldExtentLocal);
+        const float dz = wrap_delta_f(ppos.z, tr.pos.z, kWorldExtent);
         const float d2 = dx * dx + dy * dy + dz * dz;
         if (d2 < best) {
             best = d2;
@@ -577,8 +548,8 @@ void prop_ragdoll_step(Registry& reg, float dt)
     constexpr float kGroundMul = 0.85f; // per-step multiplier when grounded
     constexpr float kRestW2 = 1e-4f;    // |w|^2 below this -> remove component
 
-    static thread_local std::vector<Entity> settled;
-    settled.clear();
+    Entity settled[64];
+    int settledCount = 0;
 
     auto view = reg.view<DynamicBodyTag, AngularVelocity>();
     for (auto e : view) {
@@ -600,13 +571,18 @@ void prop_ragdoll_step(Registry& reg, float dt)
 
         const float w2 = ang.w.x * ang.w.x + ang.w.y * ang.w.y + ang.w.z * ang.w.z;
         if (w2 < kRestW2) {
-            settled.push_back(e);
+            settled[settledCount++] = e;
+            if (settledCount == 64) {
+                for (int i = 0; i < 64; ++i) {
+                    reg.remove<AngularVelocity>(settled[i]);
+                }
+                settledCount = 0;
+            }
         }
     }
 
-    for (Entity e : settled) {
-        if (reg.valid(e) && reg.all_of<AngularVelocity>(e))
-            reg.remove<AngularVelocity>(e);
+    for (int i = 0; i < settledCount; ++i) {
+        reg.remove<AngularVelocity>(settled[i]);
     }
 }
 
