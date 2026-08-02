@@ -530,7 +530,8 @@ if(GIGA_BUILD_TESTS)
     # feed lazyBaker; suite_props_game corpse/loot kind-filter CHECKs.
 
     # 231072 -> 231083 (+11) on 2026-08-02: s20 sim-owned terminals; kill ghost GPU Terminal/ControlPanel + get_terminal_positions; suite_props_game CHECK.
-        PASS_REGULAR_EXPRESSION "game_test: 231083 checks, 0 failures")
+    # 231083 -> 236278 (+5195) on 2026-08-02: Z-up seeder geometry + GpuHandoff spawn_debris_pieces + DynamicBodyTag/padic fixes (suite_props green).
+        PASS_REGULAR_EXPRESSION "game_test: 236278 checks, 0 failures")
 
 
 
