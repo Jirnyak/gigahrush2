@@ -77,16 +77,38 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
                                const vec3& impulse, const vec3& pos, const vec3& color,
                                std::uint32_t meshKind, EventBus& bus)
 {
-    (void)meshKind;
-    (void)color;
+    // Resolve skin payload from the live entity when the caller left zeros
+    // (anchor_validate / projectile hit historically passed meshKind=0).
+    vec3 col = color;
+    if ((col.x == 0.0f && col.y == 0.0f && col.z == 0.0f) &&
+        reg.all_of<Renderable>(prop)) {
+        col = reg.get<Renderable>(prop).color;
+    }
+    std::uint32_t mk = meshKind;
+    if (mk == 0u && reg.all_of<PropMesh>(prop))
+        mk = static_cast<std::uint32_t>(reg.get<PropMesh>(prop).shape);
+
+    LayerId layer = 0;
+    if (reg.all_of<Transform>(prop))
+        layer = reg.get<Transform>(prop).layer;
+
     // Always announce detach so render/GPU handoff and tests can observe it
-    // ([jirnyak.md] §18 PropDetached — a/b/c = packed world pos).
+    // ([jirnyak.md] section 18 PropDetached -- a/b/c = packed world pos).
     bus.publish(EventType::PropDetached,
                 static_cast<std::uint32_t>(pos.x),
                 static_cast<std::uint32_t>(pos.y),
                 static_cast<std::uint32_t>(pos.z));
 
     if (mode == PropFallMode::GpuHandoff) {
+        // Shatter parent into CPU debris chips, then destroy the anchored entity.
+        // DebrisSpawnEvent is the POD contract; spawn_debris_pieces is the consumer
+        // ([jirnyak.md] section 18/19 -- no silent void on GpuHandoff).
+        DebrisSpawnEvent ev{};
+        ev.pos = pos;
+        ev.impulse = impulse;
+        ev.color = col;
+        ev.meshKind = mk;
+        spawn_debris_pieces(reg, ev, layer, /*count=*/3);
         reg.destroy(prop);
         return;
     }
@@ -107,7 +129,7 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
         reg.emplace_or_replace<Velocity>(prop, Velocity{vec3{0.0f, 0.0f, -0.5f}});
     }
 
-    // BodyPass needs AABB — without it a detached prop is invisible.
+    // BodyPass needs AABB -- without it a detached prop is invisible.
     if (!reg.all_of<AABB>(prop))
         reg.emplace<AABB>(prop, AABB{vec3{0.2f, 0.2f, 0.2f}});
 }
@@ -189,8 +211,11 @@ std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& 
             vec3 col = reg.all_of<Renderable>(entity)
                            ? reg.get<Renderable>(entity).color
                            : vec3{0.8f, 0.8f, 0.8f};
+            std::uint32_t mk = 0;
+            if (reg.all_of<PropMesh>(entity))
+                mk = static_cast<std::uint32_t>(reg.get<PropMesh>(entity).shape);
             detached.push_back({entity, view.get<PropFallMode>(entity), tr.pos,
-                                vec3{0.0f, 1.0f, 0.0f}, col, 0});
+                                vec3{0.0f, 1.0f, 0.0f}, col, mk});
         }
     }
 
@@ -484,6 +509,62 @@ bool interaction_step(Registry& reg, Entity player, Interactable::Kind kind,
     InteractionHit hit = find_nearest_interactable(reg, player, kind, reach);
     if (outHit) *outHit = hit;
     return hit.hit;
+}
+
+std::uint32_t spawn_debris_pieces(Registry& reg, const DebrisSpawnEvent& ev,
+                                  LayerId layer, int count)
+{
+    // Clamp: one chip minimum so callers never get a silent no-op; hard cap
+    // keeps a single shatter from flooding BodyPass.
+    if (count < 1) count = 1;
+    if (count > 8) count = 8;
+
+    // Small chips -- BodyPass AABB skin. half=0.10 m matches roll-drive r floor
+    // path in physics_step (r = min half, clamped >= 0.05).
+    constexpr float kHalf = 0.10f;
+    // Deterministic scatter offsets (no RNG) so tests are bit-stable.
+    static constexpr float kOx[8] = {
+        0.06f, -0.06f, 0.06f, -0.06f, 0.00f, 0.00f, 0.09f, -0.09f};
+    static constexpr float kOy[8] = {
+        0.00f, 0.00f, 0.00f, 0.00f, 0.06f, -0.06f, 0.04f, -0.04f};
+    static constexpr float kOz[8] = {
+        0.06f, 0.06f, -0.06f, -0.06f, 0.04f, 0.04f, 0.00f, 0.00f};
+
+    std::uint32_t n = 0;
+    for (int i = 0; i < count; ++i) {
+        Entity e = reg.create();
+        const vec3 p{ev.pos.x + kOx[i], ev.pos.y + kOy[i], ev.pos.z + kOz[i]};
+        reg.emplace<Transform>(e, p, layer);
+
+        // Lateral scatter on the impulse so chips fan out instead of stacking.
+        vec3 v = ev.impulse;
+        v.x += 0.45f * static_cast<float>((i % 3) - 1);
+        v.y += 0.45f * static_cast<float>(((i / 3) % 3) - 1);
+        // Guarantee a non-zero kick even if impulse was zero (anchor air detach).
+        if (v.x == 0.0f && v.y == 0.0f && v.z == 0.0f)
+            v.z = 1.0f;
+        reg.emplace<Velocity>(e, Velocity{v});
+
+        // Spin from impulse, same basis as RagdollRoll detach, plus per-chip bias.
+        const float fi = static_cast<float>(i);
+        vec3 w{ev.impulse.z + fi * 0.7f, ev.impulse.x - fi * 0.5f, 2.0f + fi};
+        reg.emplace<AngularVelocity>(e, AngularVelocity{w});
+        reg.emplace<Rotation>(e);
+        reg.emplace<AABB>(e, AABB{vec3{kHalf, kHalf, kHalf}});
+        reg.emplace<GravityAffected>(e);
+        reg.emplace<DynamicBodyTag>(e);
+        reg.emplace<Renderable>(e, ev.color);
+
+        // Optional mesh skin ordinal for render upload; BodyPass still owns motion.
+        if (ev.meshKind != 0u) {
+            reg.emplace<PropMeshTag>(e);
+            PropMesh mesh{};
+            mesh.shape = static_cast<std::uint8_t>(ev.meshKind & 0xFFu);
+            reg.emplace<PropMesh>(e, mesh);
+        }
+        ++n;
+    }
+    return n;
 }
 
 void prop_ragdoll_step(Registry& reg, float dt)

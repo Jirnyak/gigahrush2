@@ -696,6 +696,102 @@ static void test_debris_roll_drives_angular_on_ground() {
            ang.w.y, target);
 }
 
+
+// [jirnyak.md] section 18/19 -- DebrisSpawnEvent consumer + GpuHandoff shatter.
+// GpuHandoff used to destroy the parent with zero debris; now spawn_debris_pieces
+// leaves N DynamicBodyTag chips with AngularVelocity for BodyPass / physics_step.
+static void test_spawn_debris_pieces_direct() {
+    Registry reg;
+    const LayerId layer = 9;
+    game::DebrisSpawnEvent ev{};
+    ev.pos = vec3{12.0f, 4.0f, 8.0f};
+    ev.impulse = vec3{1.5f, 0.0f, 2.0f};
+    ev.color = vec3{0.7f, 0.3f, 0.2f};
+    ev.meshKind = 28u; // BareBulb ordinal
+
+    const std::uint32_t n = game::spawn_debris_pieces(reg, ev, layer, /*count=*/4);
+    CHECK(n == 4u);
+
+    std::uint32_t dyn = 0, withAng = 0, withRot = 0, withVel = 0;
+    auto view = reg.view<const game::DynamicBodyTag, const Transform>();
+    for (auto e : view) {
+        CHECK(view.get<const Transform>(e).layer == layer);
+        ++dyn;
+        if (reg.all_of<AngularVelocity>(e)) {
+            const vec3& w = reg.get<AngularVelocity>(e).w;
+            const float w2 = w.x * w.x + w.y * w.y + w.z * w.z;
+            CHECK(w2 > 1e-6f);
+            ++withAng;
+        }
+        if (reg.all_of<Rotation>(e)) ++withRot;
+        if (reg.all_of<Velocity>(e)) ++withVel;
+        CHECK(reg.all_of<AABB>(e));
+        CHECK(reg.all_of<GravityAffected>(e));
+        CHECK(reg.all_of<Renderable>(e));
+        CHECK(!reg.all_of<game::StaticPropTag>(e));
+        CHECK(!reg.all_of<game::SubVoxelAnchor>(e));
+    }
+    CHECK(dyn == 4u);
+    CHECK(withAng == 4u);
+    CHECK(withRot == 4u);
+    CHECK(withVel == 4u);
+    printf("[props] spawn_debris_pieces direct: %u chips with AngularVelocity\n", n);
+}
+
+static void test_gpu_handoff_spawns_debris_on_detach() {
+    Registry reg;
+    World world;
+    EventBus bus;
+    bus.init();
+    const LayerId layer = 11;
+
+    world.grid().fill_cell(14, 6, 14, kMatConcrete);
+
+    game::SubVoxelAnchor anchor{};
+    anchor.cx = 14;
+    anchor.cy = 6;
+    anchor.cz = 14;
+    anchor.subX = 4;
+    anchor.subY = 4;
+    anchor.subZ = 4;
+    anchor.face = 0;
+
+    const vec3 pos{14.5f * 2.0f, 6.5f * 2.0f, 14.5f * 2.0f};
+    const auto e = game::spawn_prop(reg, world, pos, anchor,
+                                    game::Interactable::Kind::LightBulb,
+                                    game::PropFallMode::GpuHandoff,
+                                    vec3{1.0f, 0.78f, 0.45f},
+                                    /*meshKind*/28u, layer);
+    CHECK(reg.valid(e));
+    CHECK(reg.all_of<game::StaticPropTag>(e));
+
+    // Carve support -> anchor_validate detaches GpuHandoff path.
+    world.grid().clear_cell(14, 6, 14);
+    const std::vector<std::uint32_t> dirty{
+        static_cast<std::uint32_t>(macro_index(14, 6, 14))};
+    bus.clear();
+    const std::uint32_t detached = game::anchor_validate_step(reg, world, bus, dirty);
+    CHECK(detached == 1u);
+    CHECK(!reg.valid(e)); // parent destroyed
+    {
+        const std::uint32_t n = bus.cycle_count(EventType::PropDetached);
+        CHECK(n > 0u);
+    }
+
+    // Three debris chips (default count) with full BodyPass payload.
+    std::uint32_t chips = 0;
+    auto view = reg.view<const game::DynamicBodyTag, const AngularVelocity,
+                         const Velocity, const Rotation, const AABB>();
+    for (auto d : view) {
+        CHECK(reg.get<Transform>(d).layer == layer);
+        const vec3& w = reg.get<AngularVelocity>(d).w;
+        CHECK(w.x * w.x + w.y * w.y + w.z * w.z > 1e-6f);
+        ++chips;
+    }
+    CHECK(chips == 3u);
+    printf("[props] GpuHandoff detach -> %u debris with AngularVelocity\n", chips);
+}
+
 void test_props_game_all() {
     test_wall_interactables_seed_and_collect();
     test_wall_interactables_clear_is_layer_scoped();
@@ -706,6 +802,8 @@ void test_props_game_all() {
     test_anchor_validate_skips_solid_support();
     test_prop_ragdoll_step_damps_angular();
     test_debris_roll_drives_angular_on_ground();
+    test_spawn_debris_pieces_direct();
+    test_gpu_handoff_spawns_debris_on_detach();
     test_find_nearest_terminal_respects_reach();
     test_embody_interact_terminal_applies_at_given_pos();
     test_collect_static_prop_mesh_instances_shapes();

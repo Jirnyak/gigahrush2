@@ -15,7 +15,7 @@ namespace giga::game {
 enum class PropFallMode : std::uint8_t {
     SimpleFall,  // 1. Падение AABB на CPU (тяжелые щитки, терминалы)
     RagdollRoll, // 2. Вращение/кувыркание на CPU (лампы, ведра, стулья)
-    GpuHandoff   // 3. Передача в GPU-частицы и мгновенный destroy сущности
+    GpuHandoff   // 3. Shatter into CPU debris chips then destroy parent entity
 };
 
 struct SubVoxelAnchor {
@@ -163,6 +163,14 @@ InteractionHit find_nearest_interactable(const Registry& reg, Entity player,
 // No std::vector — call from the sim tick freely. [jirnyak.md] §18.
 bool interaction_step(Registry& reg, Entity player, Interactable::Kind kind,
                       EventBus& bus, InteractionHit* outHit = nullptr);
+
+// Spawn N small DynamicBodyTag debris chips from a DebrisSpawnEvent.
+// Each piece gets Velocity + AngularVelocity + Rotation + AABB + GravityAffected
+// + Renderable so BodyPass draws them and physics_step rolls them on contact.
+// count is clamped to [1, 8]. Returns how many entities were created.
+// [jirnyak.md] section 18/19 -- GpuHandoff must leave sim debris, not void.
+std::uint32_t spawn_debris_pieces(Registry& reg, const DebrisSpawnEvent& ev,
+                                  LayerId layer, int count = 3);
 
 // Advance ragdoll spin bookkeeping for DynamicBodyTag props. Angular integration
 // itself lives in physics_step; this is the game-side settle / impulse helper.
