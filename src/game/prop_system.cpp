@@ -68,11 +68,13 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
                 static_cast<std::uint32_t>(pos.z));
 
     if (mode == PropFallMode::GpuHandoff) {
-        bus.publish(EventType::ItemTransferred,
-                    static_cast<std::uint32_t>(pos.x),
-                    static_cast<std::uint32_t>(pos.y),
-                    static_cast<std::uint32_t>(pos.z),
-                    0);
+        // GPU particle handoff then destroy parent entity.
+        DebrisSpawnEvent ev{};
+        ev.pos = pos;
+        ev.impulse = impulse;
+        ev.color = col;
+        ev.meshKind = mk;
+        bus.publish(ev);
         reg.destroy(prop);
         return;
     }
