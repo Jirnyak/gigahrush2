@@ -205,23 +205,68 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
             tr.pos.y = wrapf(tr.pos.y, kWorldExtent);
             tr.pos.z = wrapf(tr.pos.z, kWorldExtent);
 
-            // Ragdoll / tumbling: integrate angular velocity into Euler rotation
-            // when both components are present ([jirnyak.md] §18). BodyPass is
-            // still axis-aligned, so this is state for PropPass / future draw;
-            // damp spin on ground contact so tumbling props settle.
+            // Ragdoll / tumbling + grounded roll ([jirnyak.md] section 18).
+            // BodyPass is still axis-aligned; Rotation/AngularVelocity are sim
+            // state for PropPass / future draw. On DynamicBodyTag debris that is
+            // grounded with lateral speed, drive spin from v so balls/props roll
+            // on slopes instead of skating. Skin lift keeps the AABB from
+            // settling one binary-search eps into solid (no grid sink).
+            const bool isDebris = reg.all_of<DynamicBodyTag>(e);
+            if (g && g->grounded && isDebris) {
+                constexpr float kContactSkin = 0.02f;
+                if (aabb_overlaps_solid(w, tr.pos, half)) {
+                    vec3 lifted = tr.pos;
+                    const float lift = kContactSkin * upSign;
+                    if (upComp == 0) lifted.x += lift;
+                    else if (upComp == 1) lifted.y += lift;
+                    else lifted.z += lift;
+                    if (!aabb_overlaps_solid(w, lifted, half)) {
+                        tr.pos = lifted;
+                    }
+                }
+                const float r = std::max(0.05f, std::min({half.x, half.y, half.z}));
+                const float vn = dot(vel.v, up);
+                vec3 vLat{vel.v.x - up.x * vn, vel.v.y - up.y * vn,
+                          vel.v.z - up.z * vn};
+                const float v2 = vLat.x * vLat.x + vLat.y * vLat.y + vLat.z * vLat.z;
+                constexpr float kRollV2 = 1e-4f;
+                if (v2 > kRollV2) {
+                    // n x v_lat / r  (right-hand, n = contact up)
+                    vec3 wTarget{up.y * vLat.z - up.z * vLat.y,
+                                 up.z * vLat.x - up.x * vLat.z,
+                                 up.x * vLat.y - up.y * vLat.x};
+                    wTarget.x /= r;
+                    wTarget.y /= r;
+                    wTarget.z /= r;
+                    auto& ang = reg.emplace_or_replace<AngularVelocity>(e);
+                    constexpr float kBlend = 0.35f;
+                    ang.w.x = ang.w.x * (1.0f - kBlend) + wTarget.x * kBlend;
+                    ang.w.y = ang.w.y * (1.0f - kBlend) + wTarget.y * kBlend;
+                    ang.w.z = ang.w.z * (1.0f - kBlend) + wTarget.z * kBlend;
+                    if (!reg.all_of<Rotation>(e)) reg.emplace<Rotation>(e);
+                }
+            }
+
             if (auto* ang = reg.try_get<AngularVelocity>(e)) {
                 if (auto* rot = reg.try_get<Rotation>(e)) {
                     rot->euler.x += ang->w.x * h;
                     rot->euler.y += ang->w.y * h;
                     rot->euler.z += ang->w.z * h;
+                    // Settle spin only when grounded AND not actively rolling.
                     if (g && g->grounded) {
-                        ang->w.x *= 0.85f;
-                        ang->w.y *= 0.85f;
-                        ang->w.z *= 0.85f;
+                        const float vn = dot(vel.v, up);
+                        const float vLat2 =
+                            (vel.v.x - up.x * vn) * (vel.v.x - up.x * vn) +
+                            (vel.v.y - up.y * vn) * (vel.v.y - up.y * vn) +
+                            (vel.v.z - up.z * vn) * (vel.v.z - up.z * vn);
+                        if (vLat2 <= 1e-4f) {
+                            ang->w.x *= 0.85f;
+                            ang->w.y *= 0.85f;
+                            ang->w.z *= 0.85f;
+                        }
                     }
                 }
-            }
-        }
+            }        }
     }
 }
 

@@ -650,6 +650,52 @@ static void test_corpse_and_loot_are_interactable() {
 
 
 
+
+// BodyPass roll drive ([jirnyak.md] section 18): grounded DynamicBodyTag debris
+// with lateral speed must receive AngularVelocity and must not sink into solid.
+// Default gravity is -Z (world/gravity.h), so the floor is an XY slab.
+static void test_debris_roll_drives_angular_on_ground() {
+    LevelStack stack;
+    LayerId g = stack.push_layer();
+    World& w = stack.layer(g);
+    for (int y = 0; y < 20; ++y)
+        for (int x = 0; x < 20; ++x)
+            w.grid().fill_cell(x, y, 4, 1);
+
+    Registry reg;
+    Entity e = reg.create();
+    Transform tr;
+    const float halfR = 0.25f;
+    // Rest just above floor slab top (z-cell 4 top = 5 * kCellSize).
+    tr.pos = vec3{10.5f * kCellSize, 10.5f * kCellSize,
+                  5.0f * kCellSize + halfR + 0.02f};
+    tr.layer = g;
+    reg.emplace<Transform>(e, tr);
+    reg.emplace<Velocity>(e, Velocity{{2.0f, 0.0f, 0.0f}});
+    reg.emplace<AABB>(e, AABB{{halfR, halfR, halfR}});
+    reg.emplace<GravityAffected>(e);
+    reg.emplace<DynamicBodyTag>(e);
+
+    for (int i = 0; i < kSimHz; ++i) {
+        if (auto* vel = reg.try_get<Velocity>(e)) vel->v.x = 2.0f;
+        physics_step(reg, stack, kSimDt);
+    }
+
+    CHECK(reg.get<GravityAffected>(e).grounded);
+    CHECK(reg.all_of<AngularVelocity>(e));
+    CHECK(reg.all_of<Rotation>(e));
+    const auto& ang = reg.get<AngularVelocity>(e);
+    // n=+Z, v_lat=+X -> n x v = +Y * |v| -> omega.y ~ +v.x / r.
+    const float target = 2.0f / halfR;
+    CHECK(std::fabs(ang.w.y) > 0.5f);
+    CHECK(std::fabs(ang.w.y - target) < target * 0.75f);
+    const auto& out = reg.get<Transform>(e);
+    CHECK(!aabb_overlaps_solid(w, out.pos, vec3{halfR, halfR, halfR}));
+    CHECK(out.pos.z >= 5.0f * kCellSize);
+    printf("[props] debris roll drives AngularVelocity on ground (wy=%.3f target=%.3f)\n",
+           ang.w.y, target);
+}
+
 void test_props_game_all() {
     test_wall_interactables_seed_and_collect();
     test_wall_interactables_clear_is_layer_scoped();
@@ -659,6 +705,7 @@ void test_props_game_all() {
     test_spawn_prop_anchor_and_detach_on_air();
     test_anchor_validate_skips_solid_support();
     test_prop_ragdoll_step_damps_angular();
+    test_debris_roll_drives_angular_on_ground();
     test_find_nearest_terminal_respects_reach();
     test_embody_interact_terminal_applies_at_given_pos();
     test_collect_static_prop_mesh_instances_shapes();

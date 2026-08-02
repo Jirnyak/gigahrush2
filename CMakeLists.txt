@@ -528,7 +528,9 @@ if(GIGA_BUILD_TESTS)
     # finalize_deaths tags Kind::Corpse; drop_mob_loot tags Kind::Loot; empty
     # searched corpses deactivate; main HUD/E use find_nearest; doors.dirtyCells
     # feed lazyBaker; suite_props_game corpse/loot kind-filter CHECKs.
-        PASS_REGULAR_EXPRESSION "game_test: 231009 checks, 0 failures")
+
+    # 231009 -> 231016 (+7) on 2026-08-02: Section 18 debris roll BodyPass omega=(n x v_lat)/r + contact skin; suite_props_game debris roll CHECK.
+        PASS_REGULAR_EXPRESSION "game_test: 231016 checks, 0 failures")
 
 
 
