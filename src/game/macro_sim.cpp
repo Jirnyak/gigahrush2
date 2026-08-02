@@ -17,18 +17,7 @@ constexpr std::uint64_t kTenthsPerDay = 10;
 // STATELESS hashing is the whole determinism strategy: every per-record decision is a
 // hash of (id, tick, salt), so there is no per-NPC RNG state to carry, the sweep does
 // not depend on iteration order, and the same (pool, params, step count) reproduces
-// bit-for-bit. Order-sensitive and well-mixed, so consecutive ids at a fixed tick
-// spread across the whole range.
-std::uint32_t hash2(std::uint32_t a, std::uint32_t b) {
-    return giga::hash_u32(a ^ (giga::hash_u32(b) * 0x9e3779b9u + 0x85ebca6bu));
-}
-std::uint32_t hash3(std::uint32_t a, std::uint32_t b, std::uint32_t c) {
-    return hash2(hash2(a, b), c);
-}
-// Uniform float in [0, 1) from a hash word (top 24 bits -> exact 2^-24 spacing).
-float rand01(std::uint32_t h) {
-    return static_cast<float>(h >> 8) * (1.0f / 16777216.0f);
-}
+// bit-for-bit. Uses giga::hash2 / hash3 / rand01 from core/rng.h (single source).
 
 // Independent hash streams for the different per-record decisions — salting keeps
 // "does this NPC die?" uncorrelated with "who is a birth parent?" and so on. Every

@@ -31,25 +31,12 @@ namespace giga::game {
 namespace {
 
 #include "core/rng.h"
-// Combine two keys, order-sensitive, so consecutive draw indices at a fixed seed spread
-// across the whole range instead of correlating.
-std::uint32_t hash2(std::uint32_t a, std::uint32_t b) {
-    return giga::hash_u32(a ^ (giga::hash_u32(b) * 0x9e3779b9u + 0x85ebca6bu));
-}
-
-// Uniform in [0,1) from a hash word: top 24 bits, exact 2^-24 spacing. Note the
-// half-open range — 0.0f IS produced, once every 2^24 draws, and that matters below.
-float rand01(std::uint32_t h) {
-    return static_cast<float>(h >> 8) * (1.0f / 16777216.0f);
-}
-
-// A stateless draw sequence: draw i is rand01(hash2(seed, i)). No RNG state to store,
-// advance or serialise — the engine's determinism stance, and the reason a death rolled
-// twice, or across a save/load, yields the same item.
+// A stateless draw sequence: draw i is giga::rand01(giga::hash2(seed, i)).
+// No RNG state to store — hash2/rand01 live in core/rng.h (single source).
 struct DrawStream {
     std::uint32_t seed;
     std::uint32_t i = 0;
-    float next() { return rand01(hash2(seed, i++)); }
+    float next() { return giga::rand01(giga::hash2(seed, i++)); }
 };
 
 // ===========================================================================
