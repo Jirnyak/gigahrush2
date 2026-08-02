@@ -85,7 +85,6 @@
 #include "render/body_pass.h"
 #include "render/cube_pass.h"
 #include "render/prop_pass.h"
-#include "render/prop_placer.h"
 
 #include "render/gpu_timer.h"
 #include "render/gpu_light_grid.h"
@@ -1052,12 +1051,11 @@ std::uint32_t refresh_floor_mobs(Registry& reg, const World& world, int floorNum
 // Floor interactive props: clear the recycled LayerId slot, seed Terminal +
 // ElectricalShield + LightBulb Interactables (with PropMesh for PropPass skin),
 // then padic-only corridor bulbs. [jirnyak.md] §18 — sim queries Registry;
-// PropPass is filled via merge_ecs_prop_meshes after propPlacer cosmetics.
+// PropPass is filled via merge_ecs_prop_meshes.
 std::uint32_t refresh_floor_props(Registry& reg, const World& world,
                                   int floorNumber, LayerId layer,
                                   unsigned padicSeed, game::EventBus& bus) {
     game::clear_layer_props(reg, layer);
-    // Must match propPlacer.populate fseed at every arrival site.
     const std::uint32_t wallSeed =
         1337u ^ (static_cast<std::uint32_t>(floorNumber) * 0x9e3779b9u);
     std::uint32_t count = game::seed_wall_interactables(reg, world, layer, wallSeed);
@@ -1398,12 +1396,6 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "[cull] pass init failed (continuing without GPU culling)\n");
     }
 
-    gpu::PropPlacer propPlacer;
-
-    // Populate initial decorative props. These are placed relative to world
-    // origin (0,0,0) and visible once the first floor is generated nearby.
-    // In a full game, a prop placement pass would populate these from world
-    // data (room type, samosbor wave, etc.); here they demonstrate all shapes.
     if (particlePass.ready()) {
         particlePass.emit_burst(vec3{64.0f, 4.0f, 64.0f}, vec3{0.0f, 1.0f, 0.0f}, vec3{0.85f, 0.80f, 0.70f}, gpu::GpuParticleKind::DustMote, 128, 2.0f, 8.0f, 0.35f, 180.0f);
         particlePass.emit_destruction_burst(vec3{64.0f, 2.0f, 64.0f}, 1, 64);
@@ -1555,7 +1547,6 @@ int main(int argc, char** argv) {
         generate_demo_world(stack.layer(ground), 1337u, genMode);
         player = setup_maze(pool, reg, ground);
         if (propPass.ready()) {
-            propPlacer.populate(stack.layer(ground).grid(), propPass, 1337u);
             merge_ecs_prop_meshes(reg, ground, propPass);
         }
     } else {
@@ -1635,8 +1626,6 @@ int main(int argc, char** argv) {
             begin_floor_nav(stack.layer(l0), nav);
             game::ai_init(reg, l0);
             if (propPass.ready()) {
-                std::uint32_t fseed = 1337u ^ (static_cast<std::uint32_t>(currentFloor) * 0x9e3779b9u);
-                propPlacer.populate(stack.layer(l0).grid(), propPass, fseed);
                 merge_ecs_prop_meshes(reg, l0, propPass);
             }
         }
@@ -2101,9 +2090,6 @@ int main(int argc, char** argv) {
         voxelMirror.upload_all(stack.layer(nl));
         if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
         if (propPass.ready()) {
-            std::uint32_t fseed =
-                1337u ^ (static_cast<std::uint32_t>(currentFloor) * 0x9e3779b9u);
-            propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);
             merge_ecs_prop_meshes(reg, nl, propPass);
         }
         // ride_elevator keeps x/y and plants z=kArrivalZ. ~1-in-5 Residential
@@ -3900,12 +3886,6 @@ int main(int argc, char** argv) {
                             navRebaker.clear();
                             begin_floor_nav(stack.layer(nl), nav);
                             if (propPass.ready()) {
-                                std::uint32_t fseed =
-                                    1337u ^
-                                    (static_cast<std::uint32_t>(currentFloor) *
-                                     0x9e3779b9u);
-                                propPlacer.populate(stack.layer(nl).grid(),
-                                                    propPass, fseed);
                                 merge_ecs_prop_meshes(reg, nl, propPass);
                             }
                             voxelMirror.upload_all(stack.layer(nl));
@@ -5243,8 +5223,6 @@ int main(int argc, char** argv) {
                         // Same transition autosave as the keyboard path.
                         save_run_now();
                         if (propPass.ready()) {
-                            std::uint32_t fseed = 1337u ^ (static_cast<std::uint32_t>(currentFloor) * 0x9e3779b9u);
-                            propPlacer.populate(stack.layer(nl).grid(), propPass, fseed);
                             merge_ecs_prop_meshes(reg, nl, propPass);
                         }
                         // Same clear as the keyboard ride path. There are TWO travel

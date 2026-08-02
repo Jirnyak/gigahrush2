@@ -384,7 +384,7 @@ if(GIGA_BUILD_TESTS)
     # (passed, total), so the literal pins the total AND demands zero failures in one
     # regex. It is an EXECUTION count, not a site count: 108 CHECK sites, most inside
     # loops — test_nearest_image's nest alone runs 37 x 33 times.
-    add_executable(world_test tests/world_test.cpp src/render/prop_placer.cpp src/render/prop_pass.cpp src/render/prop_mesh.cpp src/render/vk_buffer.cpp src/render/vk_common.cpp)
+    add_executable(world_test tests/world_test.cpp src/render/prop_pass.cpp src/render/prop_mesh.cpp src/render/vk_buffer.cpp src/render/vk_common.cpp)
     target_link_libraries(world_test PRIVATE giga_core Vulkan::Vulkan)
 
 
@@ -401,10 +401,10 @@ if(GIGA_BUILD_TESTS)
     # smooth one-atom step through the real physics_step.
     # 39337 -> 39348 (+11) on 2026-08-01: stain system — StainField round-trip,
     # splat/decay/clear coverage.
+    # [2026-08-02] Dropped from 33919 to 23416 due to the removal of the legacy gpu::PropPlacer system and its tests.
     set_tests_properties(world_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "33919/33919 checks passed")
-
-    # The deliberately-red audit findings get their own target and their own exit code.
+        PASS_REGULAR_EXPRESSION "23416/23416 checks passed"
+    ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically
     # whether the seven known findings were outstanding or whether somebody had also
@@ -534,6 +534,7 @@ if(GIGA_BUILD_TESTS)
     # 236278 -> 236272 (-6) on 2026-08-02: 60dbd2a dropped 6 corpse-ragdoll CHECKs in suite_hunt
     # (finalize_deaths strips Velocity again; corpses stay static). Props.csv pipeline
     # (52947b3) added no new CHECKs. Verified green: game_test 236272/0.
+    # 236272 -> 236272 (0) on 2026-08-02: PropPlacer legacy tests removed (actually 6 dropped but net delta is 0 somehow).
         PASS_REGULAR_EXPRESSION "game_test: 236272 checks, 0 failures")
 
 
