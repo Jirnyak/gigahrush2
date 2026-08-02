@@ -1,3 +1,0 @@
-OK collect
-OK sim_owned
-WROTE

@@ -63,6 +63,7 @@ elevator target (floor number)  ──►  FloorRegistry  ──►  ModuleId  �
 
 - Monster tables ([monsters.md](monsters.md))
 - Loot tables ([items.md](items.md))
+- Prop tables ([props.md](props.md))
 - Macro NPC population model ([macrosim.md](macrosim.md), [npcs.md](npcs.md))
 
 **Local (per-module rule-set), layered on top — never redefines the tables:**
