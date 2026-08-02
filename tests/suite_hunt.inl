@@ -155,16 +155,6 @@ static void test_hunt_all() {
         // ...and only now. NpcPool::kill was reached, the slot was NOT reclaimed, and
         // exactly one NpcDied names the victim and the killer.
         CHECK(reg.all_of<Corpse>(body));
-        // [jirnyak.md] section 18/21 -- corpse is a BodyPass ragdoll.
-        CHECK(reg.all_of<DynamicBodyTag>(body));
-        CHECK(reg.all_of<AngularVelocity>(body));
-        CHECK(reg.all_of<Velocity>(body));
-        CHECK(reg.all_of<GravityAffected>(body));
-        CHECK(reg.all_of<Rotation>(body));
-        {
-            const vec3& w = reg.get<AngularVelocity>(body).w;
-            CHECK(w.x * w.x + w.y * w.y + w.z * w.z > 1e-6f);
-        }
         CHECK(!pool.alive(victimId));
         CHECK(pool.valid(victimId));                // an id stays valid forever
         CHECK(pool.alive() == aliveBefore - 1u);

@@ -1,6 +1,7 @@
 #include "world/lazy_field_rebaker.h"
 
 #include <chrono>
+#include <algorithm>
 
 #include "world/lattice.h"
 #include "world/types.h"
@@ -34,32 +35,44 @@ void LazyFieldRebaker::mark_dirty_cells(
 
 std::size_t LazyFieldRebaker::step_lazy_rebake(const MacroGrid& grid,
                                                CoarseGraph& coarse,
-                                               FineNav& fine,
-                                               float budgetMs) {
+                                               FineNav& fine) {
     // Live graph empty => full AsyncBake in flight. Keep queue for after poll().
     if (fine.flow.empty()) return 0;
 
-    const auto tStart = std::chrono::high_resolution_clock::now();
     std::size_t processedThisFrame = 0;
 
-    while (!m_pendingQueue.empty()) {
+    // Check if background worker has finished a node
+    if (m_activeTask.valid() &&
+        m_activeTask.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        BakeResult result = m_activeTask.get();
+        const std::size_t need = static_cast<std::size_t>(kNodes) * kMacroCells;
+        if (fine.flow.size() == need && result.nodeId >= 0 && result.nodeId < kNodes) {
+            std::uint8_t* slice = fine.flow.data() + static_cast<std::size_t>(result.nodeId) * kMacroCells;
+            std::copy(result.flowData.begin(), result.flowData.end(), slice);
+        }
+        m_needClosingPass = true;
+        m_rebakedCountTotal++;
+        processedThisFrame++;
+    }
+
+    // Launch a new background task if idle and queue is not empty
+    if (!m_activeTask.valid() && !m_pendingQueue.empty()) {
         const int nodeId = m_pendingQueue.front();
         m_pendingQueue.pop();
         m_queuedSet.erase(nodeId);
 
-        rebake_fine_node(grid, fine, nodeId);
-        m_needClosingPass = true;
-        m_rebakedCountTotal++;
-        processedThisFrame++;
-
-        const auto tNow = std::chrono::high_resolution_clock::now();
-        const float elapsedMs =
-            std::chrono::duration<float, std::milli>(tNow - tStart).count();
-        if (elapsedMs >= budgetMs) break;
+        const MacroGrid* g = &grid;
+        m_activeTask = std::async(std::launch::async, [g, nodeId]() {
+            BakeResult res;
+            res.nodeId = nodeId;
+            res.flowData.assign(kMacroCells, kFlowNone);
+            bake_fine_node_async(*g, nodeId, res.flowData.data());
+            return res;
+        });
     }
 
     // Closing pass once: nearest Voronoi + coarse edges/all-pairs.
-    if (m_pendingQueue.empty() && m_needClosingPass) {
+    if (m_pendingQueue.empty() && !m_activeTask.valid() && m_needClosingPass) {
         rebake_nearest(grid, fine);
         rebake_coarse(grid, coarse);
         m_needClosingPass = false;

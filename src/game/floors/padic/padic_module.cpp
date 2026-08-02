@@ -29,40 +29,7 @@ std::uint32_t seed_padic_props(Registry& reg, const World& world, LayerId layer,
         for (int bj = 0; bj < 4; ++bj) {
             for (int bi = 0; bi < 4; ++bi) {
                 if (((bi + bj) & 1) == 0) {
-                    int bx = 16 + bi * 32 + 2;
-                    int by = 16 + bj * 32 + 2;
-                    int sx = bx + 13;
-                    
-                    // Helper to spawn a bare lightbulb at (cx, cy, cz) macro coordinates
-                    auto spawn_stair_bulb = [&](int cx, int cy, int cz) {
-                        vec3 bulbPos{static_cast<float>(cx * 2.0f + 1.0f),
-                                     static_cast<float>(cy * 2.0f + 1.0f),
-                                     static_cast<float>(cz * 2.0f + 1.75f)};
-                        SubVoxelAnchor lightAnchor;
-                        lightAnchor.cx = wrap_macro(cx);
-                        lightAnchor.cy = wrap_macro(cy);
-                        lightAnchor.cz = cz;
-                        lightAnchor.subX = 4;
-                        lightAnchor.subY = 4;
-                        lightAnchor.subZ = 6; // Ceiling is sz=6
-
-                        // PropShape::BareBulb = 28 (render/prop_mesh.h ordinal).
-                        Entity lamp = spawn_prop(reg, world, bulbPos, lightAnchor,
-                                                 game::Interactable::Kind::LightBulb,
-                                                 PropFallMode::RagdollRoll,
-                                                 vec3{1.0f, 0.95f, 0.7f}, 28, layer,
-                                                 /*yaw*/0.0f, /*emissive*/250);
-                        if (lamp != entt::null) {
-                            ++count;
-                        }
-                    };
-
-                    // 1. Corridor ceiling lightbulb outside stairwell entrance:
-                    spawn_stair_bulb(sx, by - 1, b + 2);
-                    // 2. Flight A ceiling lightbulb inside lower stairwell shaft:
-                    spawn_stair_bulb(sx, by, b + 2);
-                    // 3. Flight B ceiling lightbulb inside upper stairwell shaft:
-                    spawn_stair_bulb(sx, by + 1, b + 2);
+                    // empty for now, formerly held lightbulbs
                 }
             }
         }

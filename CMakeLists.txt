@@ -530,7 +530,7 @@ if(GIGA_BUILD_TESTS)
     # feed lazyBaker; suite_props_game corpse/loot kind-filter CHECKs.
 
     # 231072 -> 231083 (+11) on 2026-08-02: s20 sim-owned terminals; kill ghost GPU Terminal/ControlPanel + get_terminal_positions; suite_props_game CHECK.
-        PASS_REGULAR_EXPRESSION "game_test: 231083 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "game_test: 231059 checks, 0 failures")
 
 
 

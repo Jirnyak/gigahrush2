@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cmath>
 #include <cstring>
+#include <thread>
 #include <vector>
 
 #include "core/jobs.h"
