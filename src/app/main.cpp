@@ -107,6 +107,7 @@
 #include "world/level_stack.h"
 #include "world/nav.h"
 #include "world/nav_async.h"
+#include "world/lazy_field_rebaker.h"
 
 using namespace giga;
 
@@ -1428,6 +1429,8 @@ int main(int argc, char** argv) {
     // Build the world population-first, then embody the player from it ([npcs.md]).
     LevelStack stack;
     game::LazyFieldBaker<float> lazyBaker;
+    // §22: lazy nav field rebake under frame budget after carves.
+    nav::LazyFieldRebaker navRebaker;
     Registry reg;
     // Navigation for the ONE live floor. Re-baked on every floor entry; ~128 MiB
     // for the flow fields, which is affordable precisely because streaming keeps
@@ -1628,6 +1631,7 @@ int main(int argc, char** argv) {
                                               *currentSpec,
                                               streamer.floor_seed_of(registry, 0));
             doors.frozen = true;
+            navRebaker.clear();
             begin_floor_nav(stack.layer(l0), nav);
             game::ai_init(reg, l0);
             if (propPass.ready()) {
@@ -2090,6 +2094,7 @@ int main(int argc, char** argv) {
                 stack.layer(nl), doors, currentFloor, *currentSpec,
                 streamer.floor_seed_of(registry, currentFloor));
         doors.frozen = true;
+        navRebaker.clear();
         begin_floor_nav(stack.layer(nl), nav);
         // Arrival geometry is final (floor file + doors stamped): re-snapshot
         // the GPU voxel mirror for the recycled World object.
@@ -2115,6 +2120,12 @@ int main(int argc, char** argv) {
 
     while (running) {
         lazyBaker.update_main_thread();
+        // §22: amortize nav field rebake under frame budget.
+        if (nav.ready() && !nav.baking() && !navRebaker.is_idle()) {
+            navRebaker.step_lazy_rebake(stack.layer(activeLayer).grid(),
+                                        nav.mutable_coarse(), nav.mutable_fine(),
+                                        /*budgetMs=*/0.2f);
+        }
         std::uint64_t now = SDL_GetPerformanceCounter();
         float frameDt = static_cast<float>((now - prevTicks) / freq);
         prevTicks = now;
@@ -3226,6 +3237,7 @@ int main(int argc, char** argv) {
                                      carveScratch, carveResult);
                     if (removed > 0) {
                         lazyBaker.request_rebake(stack.layer(activeLayer), carveResult.dirtyCells);
+                        navRebaker.mark_dirty_cells(carveResult.dirtyCells);
                         // No log, no bookkeeping: geometry persistence is the
                         // floor's own file, written when the player leaves
                         // ([save.h] modular layout) or on F5.
@@ -3506,6 +3518,7 @@ int main(int argc, char** argv) {
                                          carveScratch, carveResult);
                         if (removed > 0) {
                             lazyBaker.request_rebake(stack.layer(activeLayer), carveResult.dirtyCells);
+                            navRebaker.mark_dirty_cells(carveResult.dirtyCells);
                             voxelMirror.mark_dirty(
                                 carveResult.dirtyCells.data(),
                                 carveResult.dirtyCells.size());
@@ -3882,6 +3895,7 @@ int main(int argc, char** argv) {
                                     streamer.floor_seed_of(registry,
                                                            currentFloor));
                             doors.frozen = true;
+                            navRebaker.clear();
                             begin_floor_nav(stack.layer(nl), nav);
                             if (propPass.ready()) {
                                 std::uint32_t fseed =
@@ -5057,6 +5071,7 @@ int main(int argc, char** argv) {
                 // masks the danger/scent fields sample. [lazy_baker.h]
                 lazyBaker.request_rebake(stack.layer(activeLayer),
                                          doors.dirtyCells);
+                navRebaker.mark_dirty_cells(doors.dirtyCells);
                 doors.dirtyCells.clear();
             }
 
@@ -5215,6 +5230,7 @@ int main(int argc, char** argv) {
                                 *currentSpec,
                                 streamer.floor_seed_of(registry, currentFloor));
                         doors.frozen = true;
+                        navRebaker.clear();
                         begin_floor_nav(stack.layer(nl), nav);
                         voxelMirror.upload_all(stack.layer(nl));
                         if (mirrorVerify) voxelMirror.verify(stack.layer(nl));

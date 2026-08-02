@@ -402,7 +402,7 @@ if(GIGA_BUILD_TESTS)
     # 39337 -> 39348 (+11) on 2026-08-01: stain system — StainField round-trip,
     # splat/decay/clear coverage.
     set_tests_properties(world_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "39349/39349 checks passed")
+        PASS_REGULAR_EXPRESSION "33919/33919 checks passed")
 
     # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while

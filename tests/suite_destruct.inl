@@ -5,6 +5,9 @@
 #include <chrono>
 #include <thread>
 #include "game/lazy_baker.h"
+#include "world/lazy_field_rebaker.h"
+#include "world/lattice.h"
+#include "world/nav.h"
 
 // The sparse sub-field: uniform cells cost nothing, mixed cells page, pages
 // collapse back and recycle, and the WORST case is pinned to exactly the dense
@@ -309,6 +312,58 @@ static void test_carve_sphere() {
     CHECK(carve_sphere(w2, dead, scratch, res2) == 0);
 }
 
+
+// jirnyak.md section 22: LazyFieldRebaker queues lattice nodes from carve
+// dirtyCells, rebakes fine flow under a time budget, then closes with nearest
+// + coarse. Must not no-op: after drain, pending is empty and rebaked_count
+// grows; nearest on a reopened air cell must leave kFlowNone after closing.
+static void test_lazy_field_rebaker() {
+    using namespace giga::nav;
+
+    MacroGrid grid;
+    CoarseGraph coarse{};
+    FineNav fine;
+    bake_coarse(grid, coarse);
+    bake_fine(grid, fine);
+    CHECK(!fine.flow.empty());
+    CHECK(fine.nearest.size() == kMacroCells);
+
+    LazyFieldRebaker rebaker;
+    CHECK(rebaker.is_idle());
+    CHECK(rebaker.pending_count() == 0);
+
+    const std::uint32_t key =
+        static_cast<std::uint32_t>(macro_index(20, 20, 20));
+    const int expectNode = lattice_id(lattice_axis_of(20), lattice_axis_of(20),
+                                      lattice_axis_of(20));
+    rebaker.mark_dirty_cells(std::vector<std::uint32_t>{key, key});
+    CHECK(rebaker.pending_count() == 1);
+    CHECK(!rebaker.is_idle());
+
+    grid.fill_cell(20, 20, 20, /*mat*/ 1);
+    fine.nearest[macro_index(20, 20, 20)] = kFlowNone;
+    grid.clear_cell(20, 20, 20);
+
+    std::size_t steps = 0;
+    for (int i = 0; i < 128 && !rebaker.is_idle(); ++i) {
+        steps += rebaker.step_lazy_rebake(grid, coarse, fine, /*budgetMs=*/50.0f);
+    }
+    CHECK(rebaker.is_idle());
+    CHECK(rebaker.pending_count() == 0);
+    CHECK(rebaker.rebaked_count_total() >= 1);
+    CHECK(steps >= 1);
+    CHECK(rebaker.closing_pass_count() >= 1);
+    CHECK(fine.nearest_node(20, 20, 20) != kFlowNone);
+
+    FineNav emptyFine;
+    rebaker.queue_node(expectNode);
+    CHECK(rebaker.pending_count() == 1);
+    CHECK(rebaker.step_lazy_rebake(grid, coarse, emptyFine, 50.0f) == 0);
+    CHECK(rebaker.pending_count() == 1);
+    rebaker.clear();
+    CHECK(rebaker.is_idle());
+}
+
 static void test_lazy_baker() {
     game::LazyFieldBaker<float> baker;
     World w;
@@ -333,4 +388,5 @@ static void test_destruct_all() {
     test_carve_layers();
     test_carve_sphere();
     test_lazy_baker();
+    test_lazy_field_rebaker();
 }
