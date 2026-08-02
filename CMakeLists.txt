@@ -529,8 +529,8 @@ if(GIGA_BUILD_TESTS)
     # searched corpses deactivate; main HUD/E use find_nearest; doors.dirtyCells
     # feed lazyBaker; suite_props_game corpse/loot kind-filter CHECKs.
 
-    # 231016 -> 231061 (+45) on 2026-08-02: Section 19 DebrisSpawnEvent spawn_debris_pieces + GpuHandoff shatter; suite_props_game debris spawn CHECKs.
-        PASS_REGULAR_EXPRESSION "game_test: 231061 checks, 0 failures")
+    # 231061 -> 231072 (+11) on 2026-08-02: PropDetached event_line + EventFeed; suite_eventsweb CHECKs.
+        PASS_REGULAR_EXPRESSION "game_test: 231072 checks, 0 failures")
 
 
 

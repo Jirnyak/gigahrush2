@@ -129,6 +129,11 @@ bool event_line(const Event& e, char* out, std::size_t cap) {
             std::snprintf(out, cap, "record %u entered floor %d (layer %u)", e.c,
                           event_floor(e.a), e.b);
             return true;
+        // a/b/c = packed world pos (uint32 casts of pos.x/y/z) from detach_single_prop.
+        // [jirnyak.md] section 18 PropDetached — must be feed-visible like every other type.
+        case EventType::PropDetached:
+            std::snprintf(out, cap, "prop detached at (%u,%u,%u)", e.a, e.b, e.c);
+            return true;
         case EventType::None:
         default:
             return false;

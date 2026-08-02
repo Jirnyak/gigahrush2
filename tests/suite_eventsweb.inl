@@ -70,7 +70,40 @@ float flat_speed(Registry& reg, Entity e) {
 
 } // namespace eventsweb
 
+
+// [jirnyak.md] section 18 — PropDetached must render in event_line / EventFeed.
+// Producer: detach_single_prop (a/b/c = packed world pos). Without this case the
+// bus tally saw PropDetached but feed_drain dropped it as unrenderable (default).
+static void test_prop_detached_event_line_and_feed() {
+    EventBus bus;
+    bus.init();
+    EventFeed feed{};
+
+    CHECK(bus.publish(EventType::PropDetached, 10u, 20u, 30u, /*tick=*/42u));
+    CHECK(bus.cycle_count(EventType::PropDetached) == 1u);
+
+    char buf[96] = {};
+    Event e{};
+    e.type = EventType::PropDetached;
+    e.a = 10u;
+    e.b = 20u;
+    e.c = 30u;
+    e.tick = 42u;
+    CHECK(event_line(e, buf, sizeof(buf)));
+    CHECK(std::strstr(buf, "prop detached") != nullptr);
+    CHECK(std::strstr(buf, "10") != nullptr);
+    CHECK(std::strstr(buf, "20") != nullptr);
+    CHECK(std::strstr(buf, "30") != nullptr);
+
+    CHECK(feed_drain(feed, bus) == 1u);
+    CHECK(feed.live == 1);
+    CHECK(std::strstr(feed_line(feed, 0), "prop detached") != nullptr);
+    CHECK(feed_tick(feed, 0) == 42u);
+    printf("[events] PropDetached event_line + feed: %s\n", feed_line(feed, 0));
+}
+
 static void test_eventsweb_all() {
+    test_prop_detached_event_line_and_feed();
     using namespace eventsweb;
 
     // ---- 1. One arrival, the events it produces, and a drain that reads them --
