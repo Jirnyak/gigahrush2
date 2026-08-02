@@ -33,7 +33,7 @@ inline const PropPassInspector& inspect(const PropPass& pass) {
 
 } // namespace
 
-// 1. Explicit coverage for all 29 PropShape enum values
+// 1. Explicit coverage for all 4 PropShape enum values
 static void test_prop_shape_enum_coverage() {
     static_assert(kPropShapeCount == 4, "kPropShapeCount must be 4");
     static_assert(static_cast<uint8_t>(PropShape::kCount) == 4, "PropShape::kCount must be 4");
@@ -49,7 +49,7 @@ static void test_prop_shape_enum_coverage() {
         CHECK(static_cast<int>(shape) == s);
     }
 
-    // Verify all 25 shapes can be stored and cleared in PropPass
+    // Verify all 4 shapes can be stored and cleared in PropPass
     PropPass pass;
     pass.clear_instances();
     const auto& insp = inspect(pass);

@@ -836,4 +836,4 @@ void test_props_game_all() {
     test_embody_interact_terminal_applies_at_given_pos();
     test_collect_static_prop_mesh_instances_shapes();
     test_corpse_and_loot_are_interactable();
-
+}

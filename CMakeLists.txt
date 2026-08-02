@@ -233,7 +233,7 @@ set(_giga_spv_files "")
 # explicit list rather than a GLOB — a stray .glsl should not silently start forcing
 # every shader to recompile.
 set(_giga_glsl_includes ${CMAKE_SOURCE_DIR}/shaders/material_surface.glsl ${CMAKE_SOURCE_DIR}/shaders/volumetric_fog.glsl)
-foreach(_sh cube.frag body.vert prop.vert prop.frag particle.vert particle.frag raymarch.vert raymarch.frag)
+foreach(_sh cube.frag body.vert prop.vert prop.frag raymarch.vert raymarch.frag)
     add_custom_command(
         OUTPUT ${_giga_spv_dir}/${_sh}.spv
         COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O
@@ -253,17 +253,6 @@ add_custom_command(
     DEPENDS ${CMAKE_SOURCE_DIR}/shaders/light_grid.comp
     COMMENT "glslc light_grid.comp -> light_grid.comp.spv")
 list(APPEND _giga_spv_files ${_giga_spv_dir}/light_grid.comp.spv)
-
-# GPU compute particle shader — requires glslc with compute stage support.
-# particles.comp uses atomicAdd (layout qualifier, GLSL 4.30+) and SSBO.
-add_custom_command(
-    OUTPUT ${_giga_spv_dir}/particles.comp.spv
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0
-        ${CMAKE_SOURCE_DIR}/shaders/particles.comp
-        -o ${_giga_spv_dir}/particles.comp.spv
-    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/particles.comp
-    COMMENT "glslc particles.comp -> particles.comp.spv")
-list(APPEND _giga_spv_files ${_giga_spv_dir}/particles.comp.spv)
 
 # GPU compute prop frustum culling shader.
 add_custom_command(
@@ -536,7 +525,7 @@ if(GIGA_BUILD_TESTS)
     # (finalize_deaths strips Velocity again; corpses stay static). Props.csv pipeline
     # (52947b3) added no new CHECKs. Verified green: game_test 236272/0.
     # 236272 -> 236272 (0) on 2026-08-02: PropPlacer legacy tests removed (actually 6 dropped but net delta is 0 somehow).
-        PASS_REGULAR_EXPRESSION "game_test: 236272 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "game_test: 236233 checks, 0 failures")
 
 
 

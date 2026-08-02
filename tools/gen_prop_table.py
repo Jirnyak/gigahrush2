@@ -30,15 +30,9 @@ OUT_CPP = os.path.join(REPO, "src", "game", "prop_table.cpp")
 
 # Must stay in lockstep with enum class PropShape in render/prop_mesh.h.
 VALID_SHAPES = {
-    "Cylinder": 0, "HalfCylinder": 1, "Arch": 2, "Barrel": 3, "StairStep": 4,
-    "Pipe": 5, "PipeElbow": 6, "PipeTee": 7, "Valve": 8, "Grate": 9,
-    "RoundGrate": 10, "CabinetBox": 11, "ControlPanel": 12, "Railing": 13,
-    "SupportBeam": 14, "CrateBox": 15, "CrateLong": 16, "LockerUnit": 17,
-    "BenchSlab": 18, "Terminal": 19, "SecurityCamera": 20, "FloodLamp": 21,
-    "FungalColumn": 22, "CrystalCluster": 23, "AcidPool": 24, "Radiator": 25,
-    "DermatinDoor": 26, "ElectricalShield": 27, "BareBulb": 28,
+    "Terminal": 0, "ElectricalShield": 1, "BareBulb": 2, "FloodLamp": 3,
 }
-SHAPE_MAX = 28
+SHAPE_MAX = 3
 
 FALL_MODES = {"SimpleFall": 0, "RagdollRoll": 1, "GpuHandoff": 2}
 INTERACTS = {
