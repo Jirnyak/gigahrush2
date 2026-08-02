@@ -71,6 +71,13 @@ public:
     const CoarseGraph& coarse() const { return coarse_; }
     const FineNav& fine() const { return fine_; }
 
+    // Mutable live graph for LazyFieldRebaker (§22). Only call on the main
+    // thread while !baking() — the worker never touches coarse_/fine_ after
+    // poll() has moved ownership. Carves that land during a full bake stay
+    // queued on the rebaker until ready().
+    CoarseGraph& mutable_coarse() { return coarse_; }
+    FineNav& mutable_fine() { return fine_; }
+
     // Milliseconds the last completed bake took, split by stage. For the HUD, so
     // the cost stays visible instead of becoming folklore.
     float last_coarse_ms() const { return coarseMs_; }

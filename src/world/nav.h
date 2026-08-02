@@ -121,6 +121,14 @@ struct FineNav {
 // out.nearest. Bake-time only (floor load / post-samosbor), never on the tick.
 void bake_fine(const MacroGrid& grid, FineNav& out);
 
+// --- Lazy / partial rebake (jirnyak.md §22) ---------------------------------
+// Full bake_fine is ~130 MiB and seconds of BFS — too heavy per carve. These
+// helpers re-touch only what geometry change invalidated so LazyFieldRebaker
+// can amortize work under a per-frame budget without freezing the render thread.
+void rebake_fine_node(const MacroGrid& grid, FineNav& fine, int nodeId);
+void rebake_nearest(const MacroGrid& grid, FineNav& fine);
+void rebake_coarse(const MacroGrid& grid, CoarseGraph& coarse);
+
 // --- Routing: enter the baked nav from any cell -----------------------------
 //
 // route_step is the O(1)/tick query the movement AI (#12) calls: "I am at cell

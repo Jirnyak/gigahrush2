@@ -1,6 +1,7 @@
 #include "world/nav_async.h"
 
 #include <chrono>
+#include <utility>
 
 #include "world/macro_grid.h"
 
@@ -14,34 +15,35 @@ void AsyncBake::join_worker() {
 }
 
 void AsyncBake::start(const MacroGrid& grid) {
-    // Only one bake at a time. Joining here is what lets the rest of the class
-    // avoid copying a 132 MiB grid: the caller cannot regenerate the World while a
-    // worker is reading it, because regeneration goes through travel and travel
-    // goes through here.
+    // A second start() while a bake is still running is rare (floor change inside
+    // a floor change). Join first so the previous worker's writes to pending_*
+    // finish before we re-use them — and so the previous worker doesn't outlive
+    // a World the caller is about to regenerate.
     join_worker();
-    done_.store(false, std::memory_order_relaxed);
 
-    // Drop the live graph BEFORE launching. A stale graph is worse than none: it
-    // was baked from different geometry, so steering by it walks agents into walls
-    // that did not exist when it was made. An empty flow field makes wander_step
-    // no-op, which is the honest degradation.
+    // Drop the live graph immediately. Until poll() lands the new one, ready()
+    // is false and the crowd stands still rather than steering by stale geometry.
     fine_.flow.clear();
-    fine_.flow.shrink_to_fit();
+    fine_.nearest.clear();
+    pendingFine_.flow.clear();
+    pendingFine_.nearest.clear();
 
+    done_.store(false, std::memory_order_relaxed);
     running_ = true;
-    const MacroGrid* g = &grid;
-    worker_ = std::thread([this, g] {
+
+    // Capture by pointer: the grid is owned by the caller and must outlive the
+    // bake (enforced by the start/travel contract in the header).
+    worker_ = std::thread([this, g = &grid]() {
         using clock = std::chrono::steady_clock;
         const auto t0 = clock::now();
         bake_coarse(*g, pending_);
         const auto t1 = clock::now();
         bake_fine(*g, pendingFine_);
         const auto t2 = clock::now();
-
         coarseMs_ = std::chrono::duration<float, std::milli>(t1 - t0).count();
         fineMs_ = std::chrono::duration<float, std::milli>(t2 - t1).count();
-        // Release, paired with the acquire in poll(): everything written above must
-        // be visible to the main thread before it sees the flag.
+        // release so the main thread's acquire load in poll() sees the finished
+        // pending_* buffers.
         done_.store(true, std::memory_order_release);
     });
 }
@@ -50,13 +52,12 @@ bool AsyncBake::poll() {
     if (!running_) return false;
     if (!done_.load(std::memory_order_acquire)) return false;
 
-    // Join first, then take ownership. Joining before touching `pending_` is what
-    // makes the handover a plain move rather than a synchronised one — after join()
-    // the worker provably cannot touch it again.
     join_worker();
     coarse_ = pending_;
     fine_.flow = std::move(pendingFine_.flow);
+    fine_.nearest = std::move(pendingFine_.nearest);
     pendingFine_.flow.clear();
+    pendingFine_.nearest.clear();
     return true;
 }
 

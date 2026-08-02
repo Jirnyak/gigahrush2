@@ -1,60 +1,58 @@
 #pragma once
 
 #include <cstdint>
-#include <vector>
-#include <unordered_set>
 #include <queue>
-#include "world/nav.h"
+#include <unordered_set>
+#include <vector>
+
 #include "world/macro_grid.h"
+#include "world/nav.h"
 
 namespace giga::nav {
 
-struct CoarseGraph;
-struct FineGraph;
-
-// ───────────────────────────────────────────────────────────────────────────────
-// ЗОЛОТОЕ ПРАВИЛО ГРАФА ЭЖИРНЯКА: Background Lazy Field Rebaker
-// 
-// Обеспечивает постепенное фоновое перепекание навигационных полей и 
-// графов видимости при длительном разрушении этажа (1024^3) и игре без 
-// загрузок при 0% потерь FPS.
-// ───────────────────────────────────────────────────────────────────────────────
-
-struct DirtyRegion {
-    int cx = 0;
-    int cy = 0;
-    int cz = 0;
-    std::uint32_t priority = 0;
-};
-
+// jirnyak.md §22 — Background Lazy Field Rebaker
+//
+// On wall destroy / geometry change of a 1024^3 floor, nav must NOT block the
+// render thread. Dirty lattice nodes are queued from carve dirtyCells; each
+// frame step_lazy_rebake spends <= budgetMs rebaking fine flow slices one node
+// at a time, then rebuilds nearest + coarse once the queue drains.
 class LazyFieldRebaker {
 public:
     LazyFieldRebaker() = default;
     ~LazyFieldRebaker() = default;
 
-    // Пометить измененные макро-ячейки после World::carve / взрывов
-    void mark_dirty_cells(const std::vector<std::uint64_t>& dirtyCellKeys);
+    // Flat macro_index keys (CarveResult::dirtyCells / LazyFieldBaker packing).
+    void mark_dirty_cells(const std::vector<std::uint32_t>& dirtyMacroKeys);
 
-    // Добавить ячейку в очередь перепекания с приоритетом
-    void queue_region(int cx, int cy, int cz, std::uint32_t priority = 1);
+    // Queue a lattice node id in [0, kNodes).
+    void queue_node(int nodeId, std::uint32_t priority = 1);
 
-    // Ленивый пошаговый прогон в кадре (с фиксированным бюджетом времени <= 0.2 мс)
-    std::size_t step_lazy_rebake(const MacroGrid& grid, CoarseGraph& coarse, FineGraph& fine, float budgetMs = 0.2f);
+    // Spend up to budgetMs rebaking pending fine nodes. When the queue empties
+    // after work, rebuilds nearest + coarse once. Returns fine nodes rebaked.
+    // No-op (returns 0) when fine.flow is empty (AsyncBake in flight).
+    std::size_t step_lazy_rebake(const MacroGrid& grid, CoarseGraph& coarse,
+                                 FineNav& fine, float budgetMs = 0.2f);
 
-    // Остаток очередей на перепекание
     std::size_t pending_count() const { return m_pendingQueue.size(); }
-    bool is_idle() const { return m_pendingQueue.empty(); }
+    bool is_idle() const {
+        return m_pendingQueue.empty() && !m_needClosingPass;
+    }
+    std::uint64_t rebaked_count_total() const { return m_rebakedCountTotal; }
+    std::uint64_t closing_pass_count() const { return m_closingPassCount; }
 
     void clear() {
         m_queuedSet.clear();
-        std::queue<DirtyRegion> empty;
+        std::queue<int> empty;
         std::swap(m_pendingQueue, empty);
+        m_needClosingPass = false;
     }
 
 private:
-    std::unordered_set<std::uint64_t> m_queuedSet;
-    std::queue<DirtyRegion> m_pendingQueue;
+    std::unordered_set<int> m_queuedSet;
+    std::queue<int> m_pendingQueue;
+    bool m_needClosingPass = false;
     std::uint64_t m_rebakedCountTotal = 0;
+    std::uint64_t m_closingPassCount = 0;
 };
 
 } // namespace giga::nav

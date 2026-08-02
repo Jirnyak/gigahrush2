@@ -1,5 +1,6 @@
 #include "world/nav.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <vector>
 
@@ -217,6 +218,27 @@ void bake_fine(const MacroGrid& grid, FineNav& out) {
     // deterministic multi-source BFS labels every walkable cell with its anchor.
     out.nearest.assign(kMacroCells, kFlowNone);
     bake_nearest(grid, out.nearest.data());
+}
+
+void rebake_fine_node(const MacroGrid& grid, FineNav& fine, int nodeId) {
+    if (nodeId < 0 || nodeId >= kNodes) return;
+    const std::size_t need = static_cast<std::size_t>(kNodes) * kMacroCells;
+    if (fine.flow.size() != need) {
+        fine.flow.assign(need, kFlowNone);
+    }
+    std::uint8_t* slice =
+        fine.flow.data() + static_cast<std::size_t>(nodeId) * kMacroCells;
+    std::fill(slice, slice + kMacroCells, kFlowNone);
+    bake_fine_node(grid, nodeId, slice);
+}
+
+void rebake_nearest(const MacroGrid& grid, FineNav& fine) {
+    fine.nearest.assign(kMacroCells, kFlowNone);
+    bake_nearest(grid, fine.nearest.data());
+}
+
+void rebake_coarse(const MacroGrid& grid, CoarseGraph& coarse) {
+    bake_coarse(grid, coarse);
 }
 
 std::uint8_t route_step(const CoarseGraph& coarse, const FineNav& fine,
