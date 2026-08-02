@@ -56,10 +56,8 @@ struct FloorGeom {
     int storey;    // Z cells per internal storey (divides 128)
     int stride;    // X/Y room-lattice pitch (divides 128)
     int doorH;     // doorway opening height, cells above the slab
-    bool pillars;  // walls are pillars at lattice crossings only (open plate)
     int gapPct;    // % of wall cells knocked out (0 = intact ... high = maze/decay)
     int holePct;   // % of slab cells missing (collapsed floors, vertical holes)
-    int rubblePct; // % of interior air cells filled with a debris block
     int sumps;     // walled pools of standing water on the ground storey (0 = dry)
     int sumpR;     // basin half-width in cells; the water patch is (2R+1)^2
     CellType wall; // material id for this kind's walls  ([voxels.md])
@@ -82,13 +80,13 @@ struct FloorGeom {
 // than thematic: fluid_step does not create the field it cannot find, so those two
 // kinds pay one hash lookup per step instead of 8 MiB.
 //
-//                         storey stride doorH pillars gap hole rubble sump sumpR  wall  slab
+//                         storey stride doorH gap hole sump sumpR  wall  slab
 constexpr FloorGeom kGeom[] = {
-    /* Residential */ {  4,  8, 2, false,  0,  0, 0,  0, 0, kMatPlaster,     kMatParquet },
-    /* Commercial  */ {  8, 16, 3, false,  0,  0, 0,  0, 0, kMatShopShutter, kMatLino    },
-    /* Industrial  */ { 16, 32, 5, true,   0,  0, 2,  4, 2, kMatFactoryWall, kMatTread   },
-    /* Derelict    */ {  4,  8, 2, false, 38, 12, 9, 12, 1, kMatRust,        kMatRubble  },
-    /* Padic       */ {  2,  4, 1, false, 50, 25, 20, 0, 0, kMatRust,        kMatRubble  },
+    /* Residential */ {  4,  8, 2,  0,  0,  0, 0, kMatPlaster,     kMatParquet },
+    /* Commercial  */ {  8, 16, 3,  0,  0,  0, 0, kMatShopShutter, kMatLino    },
+    /* Industrial  */ { 16, 32, 5,  0,  0,  4, 2, kMatFactoryWall, kMatTread   },
+    /* Derelict    */ {  4,  8, 2, 38, 12, 12, 1, kMatRust,        kMatRubble  },
+    /* Padic       */ {  2,  4, 1, 50, 25,  0, 0, kMatRust,        kMatRubble  },
 };
 static_assert(sizeof(kGeom) / sizeof(kGeom[0]) ==
                   static_cast<std::size_t>(FloorKind::Count),
@@ -173,7 +171,6 @@ bool overlaps_lattice(int cx, int cy, int r) {
 // rather than a claim about two loops that happen to look alike today.
 template <class Fn>
 void for_each_doorway(const FloorGeom& geom, std::uint32_t fseed, Fn&& fn) {
-    if (geom.pillars) return; // an open plate is already fully connected
     const int storeys = kMacroDim / geom.storey;
     const int roomsPerAxis = kMacroDim / geom.stride;
     for (int f = 0; f < storeys; ++f) {
@@ -540,16 +537,14 @@ void generate_default_floor(World& world, int number, const FloorSpec& spec,
                 g.fill_cell(x, y, base, cellSlab);
             }
 
-        // Interior partitions: full-height walls on the room lattice. In pillar
-        // mode only the lattice crossings are solid (an open plate on columns);
-        // otherwise the whole grid line is a wall. `gapPct` knocks out a fraction
-        // to break the layout into a maze (decay).
+        // Interior partitions: full-height walls on the room lattice.
+        // `gapPct` knocks out a fraction to break the layout into a maze (decay).
         for (int z = base + 1; z < top; ++z)
             for (int y = 0; y < kMacroDim; ++y)
                 for (int x = 0; x < kMacroDim; ++x) {
                     const bool onX = (x % stride) == 0;
                     const bool onY = (y % stride) == 0;
-                    const bool wall = geom.pillars ? (onX && onY) : (onX || onY);
+                    const bool wall = (onX || onY);
                     if (!wall) continue;
                     if (geom.gapPct && rng.below(100) < geom.gapPct) continue;
                     CellType cellWall = kWall;
@@ -576,21 +571,10 @@ void generate_default_floor(World& world, int number, const FloorSpec& spec,
                     g.fill_cell(x, y, z, cellWall);
                 }
 
-        // Rubble: scatter debris blocks in interior air just above the slab
-        // (derelict clutter / industrial machinery), never on the wall lattice.
-        if (geom.rubblePct) {
-            const int z = base + 1;
-            for (int y = 0; y < kMacroDim; ++y)
-                for (int x = 0; x < kMacroDim; ++x) {
-                    if ((x % stride) == 0 || (y % stride) == 0) continue;
-                    if (rng.below(100) < geom.rubblePct) g.fill_cell(x, y, z, kWall);
-                }
-        }
     }
 
     // Doorways: open one gap in every wall segment between adjacent rooms so each
-    // storey is one connected apartment graph. Skipped in pillar mode — an open
-    // plate is already fully connected.
+    // storey is one connected apartment graph.
     //
     // One pass over all storeys rather than a step inside the loop above, and that
     // is safe rather than merely tidier: the only later writer is the rubble

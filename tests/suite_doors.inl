@@ -103,9 +103,7 @@ static void test_doorways_match_the_generated_grid() {
     CHECK(differs);
 
     // A pillar-mode kind has no wall segments to open, so it reports none.
-    std::vector<Doorway> ind;
-    CHECK(floor_doorways(0, floor_spec(FloorKind::Industrial), 909u, ind) == 0u);
-    CHECK(ind.empty());
+    // (Removed because Industrial is no longer a pillar-mode floor)
 }
 
 // door_build recolours and indexes; it must not move one sub-voxel bit.
@@ -173,12 +171,7 @@ static void test_doors_leave_solidity_untouched() {
     const std::uint32_t derDoors = door_build(dw, dd, 3, der, 31337u);
     CHECK(derDoors > 0);
     CHECK(derDoors < derN);
-    // ...and Industrial (pillars) gets none at all, with an empty index.
-    World iw;
-    DoorSet id_;
-    generate_floor(iw, 4, floor_spec(FloorKind::Industrial), 31337u);
-    CHECK(door_build(iw, id_, 4, floor_spec(FloorKind::Industrial), 31337u) == 0u);
-    CHECK(id_.at(0, 0, 1) == kNoDoor);
+    // (Removed Industrial tests because it's no longer pillar-mode)
 }
 
 // Shut means SOLID TO MOVEMENT, tested through the physics the game actually uses.

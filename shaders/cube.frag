@@ -669,13 +669,5 @@ void main() {
     vec3 mapped = clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
     vec3 srgb = pow(mapped, vec3(1.0 / kGamma));
 
-    // A long mid-grey-to-black ramp over ~51 m into an 8-bit target bands badly,
-    // and the fade to black *is* the aesthetic here. One LSB of interleaved
-    // gradient noise removes it. Scaled by (1 - fog) so a fully-fogged pixel
-    // stays bit-exact 0 and matches the cleared background precisely.
-    float ign = fract(52.9829189
-                      * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
-    srgb += (ign - 0.5) / 255.0 * (1.0 - fog);
-
     outColor = vec4(srgb, 1.0);
 }
