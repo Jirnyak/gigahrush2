@@ -43,7 +43,7 @@ namespace giga::game {
 using ItemId = std::uint16_t;
 inline constexpr ItemId kInvalidItem = 0;
 
-inline constexpr std::size_t kItemCount = 446;
+inline constexpr std::size_t kItemCount = 442;
 
 enum class ItemCategory : std::uint8_t {
     Misc = 0,   // 268

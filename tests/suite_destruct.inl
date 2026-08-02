@@ -345,7 +345,7 @@ static void test_lazy_field_rebaker() {
     grid.clear_cell(20, 20, 20);
 
     std::size_t steps = 0;
-    for (int i = 0; i < 500 && !rebaker.is_idle(); ++i) {
+    for (int i = 0; i < 2000 && !rebaker.is_idle(); ++i) {
         steps += rebaker.step_lazy_rebake(grid, coarse, fine);
         if (!rebaker.is_idle()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));

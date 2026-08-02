@@ -21,7 +21,7 @@
 
 namespace giga::game {
 
-inline constexpr std::size_t kMeleeCount = 23;   // 22 item-backed + unarmed
+inline constexpr std::size_t kMeleeCount = 22;   // 21 item-backed + unarmed
 
 // POD, 12 bytes. Fixed-point for the same reason as everywhere else: the reference
 // authors fractional reach (0.5 .. 2.35 cells) and cooldowns (0.20 .. 2.40 s), and

@@ -20,63 +20,60 @@ constexpr std::uint8_t u8(ObjectiveKind v) { return static_cast<std::uint8_t>(v)
 
 const std::array<QuestDef, kQuestCount> kQuestTable = {{
     // [0] QuestId 1  pump_1
-    QuestDef{ 0u, 3, 120, 420, 0,
+    QuestDef{ 0u, 3, 120, 418, 0,
               0, u8(ObjectiveKind::Fetch), 0, 0, 2, {0, 0, 0} },
     // [1] QuestId 2  pump_2
-    QuestDef{ 900000u, 1, 260, 227, 354,
+    QuestDef{ 900000u, 1, 260, 227, 352,
               1, u8(ObjectiveKind::Fetch), 1, -14, 2, {0, 0, 0} },
-    // [2] QuestId 3  pump_3
-    QuestDef{ 1200000u, 4, 900, 19, 0,
-              0, u8(ObjectiveKind::Hunt), 2, -26, -14, {0, 0, 0} },
-    // [3] QuestId 4  medpost_1
+    // [2] QuestId 3  medpost_1
     QuestDef{ 0u, 6, 90, 40, 0,
               0, u8(ObjectiveKind::Fetch), 0, 0, 2, {0, 0, 0} },
-    // [4] QuestId 5  medpost_2
-    QuestDef{ 600000u, 2, 300, 25, 409,
-              2, u8(ObjectiveKind::Fetch), 4, -8, 2, {0, 0, 0} },
-    // [5] QuestId 6  medpost_3
-    QuestDef{ 900000u, 5, 420, 22, 0,
-              0, u8(ObjectiveKind::Hunt), 5, 0, 14, {0, 0, 0} },
-    // [6] QuestId 7  kantselyariya_1
+    // [3] QuestId 4  medpost_2
+    QuestDef{ 600000u, 2, 300, 25, 407,
+              2, u8(ObjectiveKind::Fetch), 3, -8, 2, {0, 0, 0} },
+    // [4] QuestId 5  medpost_3
+    QuestDef{ 900000u, 5, 420, 21, 0,
+              0, u8(ObjectiveKind::Hunt), 4, 0, 14, {0, 0, 0} },
+    // [5] QuestId 6  kantselyariya_1
     QuestDef{ 0u, 2, 140, 46, 0,
               0, u8(ObjectiveKind::Fetch), 0, 14, 30, {0, 0, 0} },
-    // [7] QuestId 8  kantselyariya_2
-    QuestDef{ 1200000u, 1, 700, 237, 406,
-              1, u8(ObjectiveKind::Fetch), 7, 14, 30, {0, 0, 0} },
-    // [8] QuestId 9  kantselyariya_3
-    QuestDef{ 1500000u, 3, 1200, 45, 0,
-              0, u8(ObjectiveKind::Hunt), 8, 23, 30, {0, 0, 0} },
-    // [9] QuestId 10  bread_line
+    // [6] QuestId 7  kantselyariya_2
+    QuestDef{ 1200000u, 1, 700, 237, 404,
+              1, u8(ObjectiveKind::Fetch), 6, 14, 30, {0, 0, 0} },
+    // [7] QuestId 8  kantselyariya_3
+    QuestDef{ 1500000u, 3, 1200, 44, 0,
+              0, u8(ObjectiveKind::Hunt), 7, 23, 30, {0, 0, 0} },
+    // [8] QuestId 9  bread_line
     QuestDef{ 420000u, 10, 110, 64, 0,
               0, u8(ObjectiveKind::Fetch), 0, 0, 2, {0, 0, 0} },
-    // [10] QuestId 11  sbor_cleanup
+    // [9] QuestId 10  sbor_cleanup
     QuestDef{ 300000u, 8, 180, 0, 0,
               0, u8(ObjectiveKind::Hunt), 0, 0, 2, {0, 0, 0} },
-    // [11] QuestId 12  hermo_leak
+    // [10] QuestId 11  hermo_leak
     QuestDef{ 480000u, 1, 220, 183, 0,
               0, u8(ObjectiveKind::Fetch), 0, -14, 2, {0, 0, 0} },
-    // [12] QuestId 13  filter_run
+    // [11] QuestId 12  filter_run
     QuestDef{ 600000u, 2, 320, 159, 137,
               1, u8(ObjectiveKind::Fetch), 0, 0, 14, {0, 0, 0} },
-    // [13] QuestId 14  dogs_at_the_door
-    QuestDef{ 480000u, 4, 500, 59, 0,
+    // [12] QuestId 13  dogs_at_the_door
+    QuestDef{ 480000u, 4, 500, 58, 0,
               0, u8(ObjectiveKind::Hunt), 0, -8, 14, {0, 0, 0} },
-    // [14] QuestId 15  urgent_morphine
-    QuestDef{ 90000u, 1, 400, 239, 394,
+    // [13] QuestId 14  urgent_morphine
+    QuestDef{ 90000u, 1, 400, 239, 392,
               2, u8(ObjectiveKind::Fetch), 0, -14, -4, {0, 0, 0} },
-    // [15] QuestId 16  eel_pit
-    QuestDef{ 900000u, 2, 1100, 54, 0,
+    // [14] QuestId 15  eel_pit
+    QuestDef{ 900000u, 2, 1100, 53, 0,
               0, u8(ObjectiveKind::Hunt), 0, -26, -14, {0, 0, 0} },
-    // [16] QuestId 17  psi_supply
-    QuestDef{ 1200000u, 1, 1800, 302, 239,
+    // [15] QuestId 16  psi_supply
+    QuestDef{ 1200000u, 1, 1800, 301, 239,
               1, u8(ObjectiveKind::Fetch), 0, -26, -14, {0, 0, 0} },
-    // [17] QuestId 18  deep_shadow
-    QuestDef{ 1800000u, 3, 2400, 58, 0,
+    // [16] QuestId 17  deep_shadow
+    QuestDef{ 1800000u, 3, 2400, 57, 0,
               0, u8(ObjectiveKind::Hunt), 0, -50, -31, {0, 0, 0} },
-    // [18] QuestId 19  go_deep
+    // [17] QuestId 18  go_deep
     QuestDef{ 2400000u, 26, 2600, 0, 0,
               0, u8(ObjectiveKind::Descend), 0, 0, 2, {0, 0, 0} },
-    // [19] QuestId 20  deep_dive
+    // [18] QuestId 19  deep_dive
     QuestDef{ 3600000u, 50, 6000, 0, 136,
               2, u8(ObjectiveKind::Descend), 0, -26, -14, {0, 0, 0} },
 }};
@@ -84,7 +81,6 @@ const std::array<QuestDef, kQuestCount> kQuestTable = {{
 const std::array<const char*, kQuestCount> kQuestNames = {{
     "Бирки вентилей",
     "Манометр для насоса",
-    "Угорь в трубе",
     "Бинты на медпост",
     "Антибиотик до закрытия",
     "Крысоножки в кухонном блоке",
@@ -107,7 +103,6 @@ const std::array<const char*, kQuestCount> kQuestNames = {{
 const std::array<const char*, kQuestCount> kQuestBriefs = {{
     "Три бирки с производства — без них насос не примут.",
     "Манометр целый — не битый. Насос стоит и вода не идёт.",
-    "В обратке завёлся угорь. Четыре — и линию можно чистить.",
     "Шесть бинтов. Смена кончается — перевязывать нечем.",
     "Два антибиотика и быстро — до закрытия медпоста.",
     "Пять крысоножек — и продукты перестанут пропадать.",

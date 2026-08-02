@@ -56,11 +56,7 @@ struct PropMesh {
 // ──────────────────────────── shape catalogue ─────────────────────────────────
 
 enum class PropShape : uint8_t {
-    Terminal = 0,
-    ElectricalShield = 1,
-    BareBulb = 2,
-    FloodLamp = 3,
-    kCount
+    kCount = 0
 };
 
 

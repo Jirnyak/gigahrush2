@@ -127,7 +127,7 @@ constexpr RareDrop kR_Robot[] = {{kItAmmoEnergy, 0.07f, 1}, {kItCircuitBoard, 0.
 constexpr RareDrop kR_Shovnik[] = {{kItHermoGasket, 0.05f, 1}, {kItSealantTube, 0.03f, 1}};
 constexpr RareDrop kR_Lampovy[] = {{kItLampBulb, 0.06f, 1}, {kItFuse, 0.04f, 1}};
 constexpr RareDrop kR_Pechateed[] = {{kItInkBottle, 0.05f, 1}, {kItBlankForm, 0.04f, 1}};
-constexpr RareDrop kR_TubeEel[] = {{kItManometer, 0.05f, 1}, {kItPipe, 0.03f, 1}};
+
 constexpr RareDrop kR_Paragraph[] = {{kItUnsignedOrder, 0.05f, 1}, {kItPsiOrderSeal, 0.015f, 1}};
 constexpr RareDrop kR_Nelyud[] = {{kItFakePass, 0.04f, 1}, {kItUnpeopleDetector, 0.015f, 1}};
 constexpr RareDrop kR_Krysnozhka[] = {{kItRawmeat, 0.04f, 1}, {kItMutantTissueSample, 0.018f, 1}};
@@ -209,7 +209,7 @@ constexpr MobLoot kMobLootTable[] = {
     /* 16 Shovnik              */ {SPAN(kR_Shovnik), nullptr, 0},
     /* 17 Lampovy              */ {SPAN(kR_Lampovy), nullptr, 0},
     /* 18 Pechateed            */ {SPAN(kR_Pechateed), nullptr, 0},
-    /* 19 TubeEel              */ {SPAN(kR_TubeEel), nullptr, 0},
+
     /* 20 Paragraph            */ {SPAN(kR_Paragraph), nullptr, 0},
     /* 21 Nelyud               */ {SPAN(kR_Nelyud), nullptr, 0},
     /* 22 Krysnozhka           */ {SPAN(kR_Krysnozhka), nullptr, 0},

@@ -104,7 +104,7 @@ std::uint32_t monster_base_xp(MobKind kind) {
         case MobKind::Lampovy:           return 56;
         case MobKind::Lampoglaz:         return 84;
         case MobKind::Pechateed:         return 76;
-        case MobKind::TubeEel:           return 110;
+
         case MobKind::Paragraph:         return 90;
         case MobKind::Nelyud:            return 140;
         case MobKind::Krysnozhka:        return 48;

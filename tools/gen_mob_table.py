@@ -22,7 +22,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CSV_PATH = os.path.join(REPO, "data", "mobs.csv")
 OUT_PATH = os.path.join(REPO, "src", "game", "mob_table.cpp")
 
-EXPECTED_ROWS = 69
+EXPECTED_ROWS = 68
 
 # CSV token -> C++ enumerator. Any token missing from these maps is a hard error:
 # silently mapping an unknown behaviour to Plain is exactly how content rots.
@@ -249,7 +249,7 @@ def main():
 KINDS = [
     "Sborka", "Tvar", "Polzun", "Betonnik", "Zombie", "Eye", "Nightmare",
     "Shadow", "Rebar", "Matka", "Idol", "Mancobus", "Herald", "Creator",
-    "Spirit", "Robot", "Shovnik", "Lampovy", "Pechateed", "TubeEel",
+    "Spirit", "Robot", "Shovnik", "Lampovy", "Pechateed",
     "Paragraph", "Nelyud", "Krysnozhka", "Kostorez", "Safeguard",
     "BlackLiquidator", "KhorovayaMatka", "Slimevik", "Sobrannyy",
     "ZhornayaTvar", "Bezekhiy", "Pseudolift", "Slepoglaz", "Olgoy",

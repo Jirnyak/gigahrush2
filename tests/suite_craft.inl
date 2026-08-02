@@ -157,31 +157,31 @@ static void test_craft_all() {
             if (r.flags & kCraftDiscoverable) ++discoverable;
         }
 
-        CHECK(total == 5613u);
+        CHECK(total == 5589u);
         CHECK(zeroRows == 0);           // craft_disassemble's modulo depends on this
         CHECK(minRow == 1u);
         CHECK(maxRow == 180u);
         CHECK(maxAxis == 59u);
-        CHECK(axis[0] == 904u);   // mechanics
-        CHECK(axis[1] == 372u);   // electronics
-        CHECK(axis[2] == 1106u);  // consumables
-        CHECK(axis[3] == 389u);   // bio
-        CHECK(axis[4] == 795u);   // chemical
-        CHECK(axis[5] == 968u);   // metal
+        CHECK(axis[0] == 896u);
+        CHECK(axis[1] == 371u);
+        CHECK(axis[2] == 1103u);
+        CHECK(axis[3] == 388u);
+        CHECK(axis[4] == 794u);
+        CHECK(axis[5] == 958u);
         CHECK(axis[6] == 85u);    // cybernetics
         CHECK(axis[7] == 749u);   // psimatter
         CHECK(axis[8] == 245u);   // metamatter
-        CHECK(tierHist[0] == 230);
-        CHECK(tierHist[1] == 137);
+        CHECK(tierHist[0] == 228);
+        CHECK(tierHist[1] == 135);
         CHECK(tierHist[2] == 51);
         CHECK(tierHist[3] == 17);
         CHECK(tierHist[4] == 11);
         CHECK(stationHist[static_cast<std::size_t>(CraftStation::Any)] == 22);
-        CHECK(stationHist[static_cast<std::size_t>(CraftStation::Workbench)] == 237);
-        CHECK(stationHist[static_cast<std::size_t>(CraftStation::Lathe)] == 92);
+        CHECK(stationHist[static_cast<std::size_t>(CraftStation::Workbench)] == 235);
+        CHECK(stationHist[static_cast<std::size_t>(CraftStation::Lathe)] == 90);
         CHECK(stationHist[static_cast<std::size_t>(CraftStation::Lab)] == 77);
         CHECK(stationHist[static_cast<std::size_t>(CraftStation::NetTerminal)] == 18);
-        CHECK(defaults == 9);
+        CHECK(defaults == 8);
         CHECK(discoverable == static_cast<int>(kCraftRecipeCount));
 
         std::fprintf(stderr,
@@ -198,7 +198,7 @@ static void test_craft_all() {
     { // ---- 2. a fresh run knows nine recipes and can afford none of them -----
         CraftingState st{};
         craft_init(st);
-        CHECK(craft_known_count(st) == 9u);
+        CHECK(craft_known_count(st) == 8u);
         CHECK(st.tier == 0);
         CHECK(bank_total(st) == 0u);
 
@@ -215,7 +215,7 @@ static void test_craft_all() {
             ++checksRun;
             CHECK(f == CraftFail::InsufficientMaterials);
         }
-        CHECK(knownSeen == 9);
+        CHECK(knownSeen == 8);
         // Nothing unknown reports anything but "not learned" at its own station.
         CHECK(craft_check(st, inv, kInvalidItem, CraftStation::Any) ==
               CraftFail::UnknownItem);
@@ -314,7 +314,7 @@ static void test_craft_all() {
         CHECK(craft_learn(st, deep));
         CHECK(craft_known(st, deep));
         CHECK(!craft_learn(st, deep));          // idempotent
-        CHECK(craft_known_count(st) == 10u);
+        CHECK(craft_known_count(st) == 9u);
         CHECK(st.tier == 0);                    // learning granted nothing
 
         Inventory inv{};
@@ -386,7 +386,7 @@ static void test_craft_all() {
             }
         }
         CHECK(offVector == 0u);
-        CHECK(compTotal == 5613u);
+        CHECK(compTotal == 5589u);
         CHECK(yieldTotal == static_cast<std::uint32_t>(kCraftRecipeCount));
 
         // THE RATIO, asserted rather than described. Disassembling one of every item
@@ -598,7 +598,7 @@ static void test_craft_all() {
                 CHECK(s.unlock == kInvalidItem);
             }
         }
-        CHECK(taught == 71u);
+        CHECK(taught == 69u);
         CHECK(byKind[static_cast<std::size_t>(CraftSourceKind::Default)] == 1u);
         CHECK(byKind[static_cast<std::size_t>(CraftSourceKind::Item)] == 9u);
         CHECK(carriers == 9u);
@@ -709,7 +709,7 @@ static void test_craft_all() {
         CHECK(none.from == kInvalidItem);
         CHECK(none.source == kCraftSourceCount);
         CHECK(!none.consumed);
-        CHECK(craft_known_count(st) == 9u);
+        CHECK(craft_known_count(st) == 8u);
         CHECK(craft_learn_from_source(st, kCraftSourceCount) == 0u);   // out of range
     }
 

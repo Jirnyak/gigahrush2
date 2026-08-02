@@ -18,7 +18,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CSV_PATH = os.path.join(REPO, "data", "items.csv")
 OUT_PATH = os.path.join(REPO, "src", "game", "item_table.cpp")
 
-EXPECTED_ROWS = 446
+EXPECTED_ROWS = 442
 
 CATEGORY = {
     "MISC": "Misc", "WEAPON": "Weapon", "FOOD": "Food", "MEDICINE": "Medicine",

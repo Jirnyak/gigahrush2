@@ -74,7 +74,7 @@ ITEMS_PATH = os.path.join(REPO, "data", "items.csv")
 MOBS_PATH = os.path.join(REPO, "data", "mobs.csv")
 OUT_PATH = os.path.join(REPO, "src", "game", "quest_table.cpp")
 
-EXPECTED_ROWS = 20
+EXPECTED_ROWS = 19
 
 # ObjectiveKind, reused from src/game/contract.h rather than redeclared. Quests do
 # not invent a fourth objective: each of these three is already measured by a system

@@ -1,7 +1,6 @@
 id,name_ru,brief_ru,kind,subject,target,floor_lo,floor_hi,limit_s,reward_rub,reward_item,reward_count,prereq
 pump_1,Бирки вентилей,Три бирки с производства — без них насос не примут.,FETCH,valve_tag,3,0,2,0,120,,0,
 pump_2,Манометр для насоса,Манометр целый — не битый. Насос стоит и вода не идёт.,FETCH,manometer,1,-14,2,900,260,sealant_tube,1,pump_1
-pump_3,Угорь в трубе,В обратке завёлся угорь. Четыре — и линию можно чистить.,HUNT,TUBE_EEL,4,-26,-14,1200,900,,0,pump_2
 medpost_1,Бинты на медпост,Шесть бинтов. Смена кончается — перевязывать нечем.,FETCH,bandage,6,0,2,0,90,,0,
 medpost_2,Антибиотик до закрытия,Два антибиотика и быстро — до закрытия медпоста.,FETCH,antibiotic,2,-8,2,600,300,tourniquet,2,medpost_1
 medpost_3,Крысоножки в кухонном блоке,Пять крысоножек — и продукты перестанут пропадать.,HUNT,KRYSNOZHKA,5,0,14,900,420,,0,medpost_2

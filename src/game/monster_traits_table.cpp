@@ -2,7 +2,7 @@
 // hand-edit. Edit the CSV and re-run the generator; see [monsters.md] and the long
 // note in game/monster_traits.h.
 //
-// 22 authored rows expanded to a DENSE 69-entry table, one per MobKind in kMobTable
+// 21 authored rows expanded to a DENSE 68-entry table, one per MobKind in kMobTable
 // order. The unauthored entries are the default row (every multiplier 100, no resist,
 // no vulnerability, no bait) and carry `authored = 0` so a reader can tell "this kind
 // has no trait" from "this kind's trait happens to be neutral".
@@ -96,221 +96,216 @@ const std::array<MonsterTraits, kMobKindCount> kMonsterTraits = {{
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0,
                    static_cast<std::uint16_t>(b(BaitBit::Document)),
                    u8(MobKind::Pechateed), 1 },
-    // [19] TUBE_EEL  ai/monster.ts:5107 waterStrider 1.45/0.72 + :5159 dmg 1.18/0.78
-    MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Wet),
-                   kNoVulnChannel, 0, 145, 72, 118, 78, 100, 0,
-                   static_cast<std::uint16_t>(b(BaitBit::Meat) | b(BaitBit::Wet) | b(BaitBit::Fungal) | b(BaitBit::Govnyak)),
-                   u8(MobKind::TubeEel), 1 },
-    // [20] PARAGRAPH  (default row)
+    // [19] PARAGRAPH  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::Paragraph), 0 },
-    // [21] NELYUD  (default row)
+    // [20] NELYUD  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::Nelyud), 0 },
-    // [22] KRYSNOZHKA  monster_bait.ts:71 BAIT_TRAITS_BY_ECOLOGY_TAG.monster_krysnozhka
+    // [21] KRYSNOZHKA  monster_bait.ts:71 BAIT_TRAITS_BY_ECOLOGY_TAG.monster_krysnozhka
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0,
                    static_cast<std::uint16_t>(b(BaitBit::Meat) | b(BaitBit::Fungal) | b(BaitBit::Stale) | b(BaitBit::Govnyak)),
                    u8(MobKind::Krysnozhka), 1 },
-    // [23] KOSTOREZ  (default row)
+    // [22] KOSTOREZ  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::Kostorez), 0 },
-    // [24] SAFEGUARD  (default row)
+    // [23] SAFEGUARD  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::Safeguard), 0 },
-    // [25] BLACK_LIQUIDATOR  (default row)
+    // [24] BLACK_LIQUIDATOR  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::BlackLiquidator), 0 },
-    // [26] KHOROVAYA_MATKA  (default row)
+    // [25] KHOROVAYA_MATKA  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::KhorovayaMatka), 0 },
-    // [27] SLIMEVIK  monster_ecology.ts:125 BAIT_ATTRACTED_MONSTER_KINDS with no trait row
+    // [26] SLIMEVIK  monster_ecology.ts:125 BAIT_ATTRACTED_MONSTER_KINDS with no trait row
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0,
                    static_cast<std::uint16_t>(b(BaitBit::Govnyak)),
                    u8(MobKind::Slimevik), 1 },
-    // [28] SOBRANNYY  (default row)
+    // [27] SOBRANNYY  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::Sobrannyy), 0 },
-    // [29] ZHORNAYA_TVAR  monster_bait.ts:76 BAIT_TRAITS_BY_ECOLOGY_TAG.monster_zhornaya_tvar
+    // [28] ZHORNAYA_TVAR  monster_bait.ts:76 BAIT_TRAITS_BY_ECOLOGY_TAG.monster_zhornaya_tvar
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0,
                    static_cast<std::uint16_t>(b(BaitBit::Meat) | b(BaitBit::Food) | b(BaitBit::Stale) | b(BaitBit::Risky) | b(BaitBit::Govnyak)),
                    u8(MobKind::ZhornayaTvar), 1 },
-    // [30] BEZEKHIY  (default row)
+    // [29] BEZEKHIY  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::Bezekhiy), 0 },
-    // [31] PSEUDOLIFT  (default row)
+    // [30] PSEUDOLIFT  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::Pseudolift), 0 },
-    // [32] SLEPOGLAZ  (default row)
+    // [31] SLEPOGLAZ  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::Slepoglaz), 0 },
-    // [33] OLGOY  ai/monster.ts:3464 olgoyTerrainMoveMult + :3468 olgoyTerrainDmgMult
+    // [32] OLGOY  ai/monster.ts:3464 olgoyTerrainMoveMult + :3468 olgoyTerrainDmgMult
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Wet),
                    kNoVulnChannel, 0, 112, 55, 144, 82, 100, 0,
                    static_cast<std::uint16_t>(b(BaitBit::Meat) | b(BaitBit::Wet) | b(BaitBit::Risky) | b(BaitBit::Govnyak)),
                    u8(MobKind::Olgoy), 1 },
-    // [34] VODYANOY_KOSHMAR  ai/monster.ts:5104 waterPressureLine 1.16/0.86
+    // [33] VODYANOY_KOSHMAR  ai/monster.ts:5104 waterPressureLine 1.16/0.86
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Wet),
                    kNoVulnChannel, 0, 116, 86, 100, 100, 100, 0,
                    static_cast<std::uint16_t>(0),
                    u8(MobKind::VodyanoyKoshmar), 1 },
-    // [35] LAMPOGLAZ  (default row)
+    // [34] LAMPOGLAZ  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::Lampoglaz), 0 },
-    // [36] TUMANNIK  (default row)
+    // [35] TUMANNIK  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::Tumannik), 0 },
-    // [37] CHERNOSLIZ  ai/monster.ts:5089 blackWaterWake 1.0 on water / 0.46 off it
+    // [36] CHERNOSLIZ  ai/monster.ts:5089 blackWaterWake 1.0 on water / 0.46 off it
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Wet),
                    kNoVulnChannel, 0, 100, 46, 100, 100, 100, 0,
                    static_cast<std::uint16_t>(0),
                    u8(MobKind::Chernosliz), 1 },
-    // [38] RZHAVNIK  (default row)
+    // [37] RZHAVNIK  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::Rzhavnik), 0 },
-    // [39] BETONOED  (default row)
+    // [38] BETONOED  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::Betonoed), 0 },
-    // [40] PANELNIK  (default row)
+    // [39] PANELNIK  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::Panelnik), 0 },
-    // [41] PAUPSINA  (default row)
+    // [40] PAUPSINA  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::Paupsina), 0 },
-    // [42] BORSHCHEVIK  borshchevik.ts:265 max(base ceil(maxHp*0.44))
+    // [41] BORSHCHEVIK  borshchevik.ts:265 max(base ceil(maxHp*0.44))
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    3, 44, 100, 100, 100, 100, 100, 0,
                    static_cast<std::uint16_t>(0),
                    u8(MobKind::Borshchevik), 1 },
-    // [43] OBZHIVALSHCHIK  (default row)
+    // [42] OBZHIVALSHCHIK  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::Obzhivalshchik), 0 },
-    // [44] HEAD_SLUG  (default row)
+    // [43] HEAD_SLUG  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::HeadSlug), 0 },
-    // [45] PROTOKOLNIK  monster_bait.ts:82 BAIT_TRAITS_BY_ECOLOGY_TAG.monster_protokolnik
+    // [44] PROTOKOLNIK  monster_bait.ts:82 BAIT_TRAITS_BY_ECOLOGY_TAG.monster_protokolnik
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0,
                    static_cast<std::uint16_t>(b(BaitBit::Document)),
                    u8(MobKind::Protokolnik), 1 },
-    // [46] DIKIY_MERTVYAK  (default row)
+    // [45] DIKIY_MERTVYAK  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::DikiyMertvyak), 0 },
-    // [47] KONTORSHCHIK  monster_bait.ts:81 BAIT_TRAITS_BY_ECOLOGY_TAG.monster_kontorshchik
+    // [46] KONTORSHCHIK  monster_bait.ts:81 BAIT_TRAITS_BY_ECOLOGY_TAG.monster_kontorshchik
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0,
                    static_cast<std::uint16_t>(b(BaitBit::Document)),
                    u8(MobKind::Kontorshchik), 1 },
-    // [48] TONKAYA_TEN  (default row)
+    // [47] TONKAYA_TEN  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::TonkayaTen), 0 },
-    // [49] KANTSELYARSKIY_IDOL  (default row)
+    // [48] KANTSELYARSKIY_IDOL  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::KantselyarskiyIdol), 0 },
-    // [50] LOZHNYY_DUKH  (default row)
+    // [49] LOZHNYY_DUKH  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::LozhnyyDukh), 0 },
-    // [51] CHERVIE_AVATAR  (default row)
+    // [50] CHERVIE_AVATAR  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::ChervieAvatar), 0 },
-    // [52] POMOYNY_ROY  monster_bait.ts:72 BAIT_TRAITS_BY_ECOLOGY_TAG.monster_pomoyny_roy
+    // [51] POMOYNY_ROY  monster_bait.ts:72 BAIT_TRAITS_BY_ECOLOGY_TAG.monster_pomoyny_roy
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0,
                    static_cast<std::uint16_t>(b(BaitBit::Food) | b(BaitBit::Meat) | b(BaitBit::Fungal) | b(BaitBit::Stale) | b(BaitBit::Govnyak)),
                    u8(MobKind::PomoynyRoy), 1 },
-    // [53] SCULPTURE  (default row)
+    // [52] SCULPTURE  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::Sculpture), 0 },
-    // [54] TRUBNYY_AVTOMAT  (default row)
+    // [53] TRUBNYY_AVTOMAT  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::TrubnyyAvtomat), 0 },
-    // [55] LOTOCHNIK  monster_traits.ts:104 drainArmor 0.58 + ai/monster.ts:286 wet regen 1.35/s
+    // [54] LOTOCHNIK  monster_traits.ts:104 drainArmor 0.58 + ai/monster.ts:286 wet regen 1.35/s
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Wet),
                    kNoVulnChannel, 0, 145, 72, 118, 78, 58, 1350,
                    static_cast<std::uint16_t>(0),
                    u8(MobKind::Lotochnik), 1 },
-    // [56] TRESKOTNIK  (default row)
+    // [55] TRESKOTNIK  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::Treskotnik), 0 },
-    // [57] ZAKALENNAYA_ARMATURA  monster_armor.ts:18 WEAK_DAMAGE_MULT 0.28 HEAVY_DAMAGE_MULT 0.68
+    // [56] ZAKALENNAYA_ARMATURA  monster_armor.ts:18 WEAK_DAMAGE_MULT 0.28 HEAVY_DAMAGE_MULT 0.68
     MonsterTraits{ {72, 32, 32, 32, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0,
                    static_cast<std::uint16_t>(0),
                    u8(MobKind::ZakalennayaArmatura), 1 },
-    // [58] GLUBINNAYA_TEN  (default row)
+    // [57] GLUBINNAYA_TEN  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::GlubinnayaTen), 0 },
-    // [59] GREEN_DOG  monster_ecology.ts:126 BAIT_ATTRACTED_MONSTER_KINDS with no trait row
+    // [58] GREEN_DOG  monster_ecology.ts:126 BAIT_ATTRACTED_MONSTER_KINDS with no trait row
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0,
                    static_cast<std::uint16_t>(b(BaitBit::Govnyak)),
                    u8(MobKind::GreenDog), 1 },
-    // [60] SLIME_WOMAN  ai/monster.ts:5110 slimeStrider 1.48 wet / 0.86 unlit dry
+    // [59] SLIME_WOMAN  ai/monster.ts:5110 slimeStrider 1.48 wet / 0.86 unlit dry
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Wet),
                    kNoVulnChannel, 0, 148, 86, 100, 100, 100, 0,
                    static_cast<std::uint16_t>(0),
                    u8(MobKind::SlimeWoman), 1 },
-    // [61] GNILUSHKA  (default row)
+    // [60] GNILUSHKA  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::Gnilushka), 0 },
-    // [62] MUKHOZHUK_HOST  (default row)
+    // [61] MUKHOZHUK_HOST  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::MukhozhukHost), 0 },
-    // [63] FOG_SHARK  fog_shark.ts:61 max(base maxHp+1) — a guaranteed kill
+    // [62] FOG_SHARK  fog_shark.ts:61 max(base maxHp+1) — a guaranteed kill
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    3, 100, 100, 100, 100, 100, 100, 0,
                    static_cast<std::uint16_t>(0),
                    u8(MobKind::FogShark), 1 },
-    // [64] BLOOD_PLANT  blood_plant.ts:245 max(base ceil(maxHp*0.38))
+    // [63] BLOOD_PLANT  blood_plant.ts:245 max(base ceil(maxHp*0.38))
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    3, 38, 100, 100, 100, 100, 100, 0,
                    static_cast<std::uint16_t>(0),
                    u8(MobKind::BloodPlant), 1 },
-    // [65] SWARM  swarm_nests.ts:439 max(base hp) + monster_bait.ts:73
+    // [64] SWARM  swarm_nests.ts:439 max(base hp) + monster_bait.ts:73
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    3, 100, 100, 100, 100, 100, 100, 0,
                    static_cast<std::uint16_t>(b(BaitBit::Meat) | b(BaitBit::Fungal) | b(BaitBit::Stale) | b(BaitBit::Govnyak)),
                    u8(MobKind::Swarm), 1 },
-    // [66] SPORE_CARPET  (default row)
+    // [65] SPORE_CARPET  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::SporeCarpet), 0 },
-    // [67] LISHENNYY  (default row)
+    // [66] LISHENNYY  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::Lishennyy), 0 },
-    // [68] GNOME  (default row)
+    // [67] GNOME  (default row)
     MonsterTraits{ {0, 0, 0, 0, 0}, t(TerrainPref::Any),
                    kNoVulnChannel, 0, 100, 100, 100, 100, 100, 0, 0,
                    u8(MobKind::Gnome), 0 },

@@ -125,7 +125,7 @@ std::uint32_t fnv_over(const char* const* names, std::size_t n) {
 void catalog_is_reachable() {
     static_assert(sizeof(QuestDef) == 24);
     static_assert(sizeof(QuestProgress) == 16);
-    static_assert(kQuestCount == 20);
+    static_assert(kQuestCount == 19);
     CHECK(kQuestTable.size() == kQuestCount);
     CHECK(kQuestNames.size() == kQuestCount);
     CHECK(kQuestBriefs.size() == kQuestCount);
@@ -213,7 +213,7 @@ void catalog_is_reachable() {
     }
     // All three objective kinds are used, so none of them is a dead enumerator.
     CHECK(fetches > 0 && hunts > 0 && descends > 0);
-    CHECK(chained == 6);   // three chains of three steps: two links each
+    CHECK(chained == 5);   // chained quests
 
     // **The no-deadline exemption is narrowed to chain HEADS, and that is mechanical.**
     // The reference exempts every hand-authored quest from expiry outright
@@ -221,7 +221,7 @@ void catalog_is_reachable() {
     // is data, and it applies only to a row that starts a chain — everything after the
     // first step carries a real clock, so losing one closes the chain.
     CHECK(untimed == 3);
-    CHECK(timed == 17);
+    CHECK(timed == 16);
     for (std::size_t i = 0; i < kQuestCount; ++i) {
         const QuestDef& d = kQuestTable[i];
         if (d.limitMs != 0u) continue;
@@ -387,14 +387,10 @@ void the_chain() {
     CHECK(log.rewardItemsLost == 0u);
     CHECK(log.earned == h.reward + s2.reward);
 
-    // Step 3 opens once step 2 is Complete — the chain advances one link at a time rather
-    // than unlocking the whole run at the head. Asked on step 3's OWN shallowest floor,
+    // Step 2 opens once step 1 is Complete. Asked on step 2's OWN shallowest floor,
     // which is deeper than the hub, so this is the band check and the chain check at once.
-    QuestId step3 = kInvalidQuest;
-    for (std::size_t i = 0; i < kQuestCount && step3 == kInvalidQuest; ++i)
-        if (kQuestTable[i].prereq == step2) step3 = static_cast<QuestId>(i + 1);
-    CHECK(step3 != kInvalidQuest);
-    CHECK(quest_eligible(log, step3, kQuestTable[step3 - 1].floorLo));
+    CHECK(step2 != kInvalidQuest);
+    CHECK(quest_eligible(log, step2, kQuestTable[step2 - 1].floorLo));
 
     // A reward that does not fit is COUNTED, never allowed to block a completion — a
     // blocked completion would leave an Active row the player has already finished, and
@@ -944,7 +940,7 @@ void round_trip() {
     // with the struct should never link, let alone run.
     static_assert(kQuestRowWire == 14u);
     static_assert(kQuestLogWire == kQuestCount * kQuestRowWire + 28u);
-    static_assert(kQuestLogWire == 308u);
+    static_assert(kQuestLogWire == 294u);
 
     // EVERY field distinct, because a round-trip over zeroes passes even when the
     // serializer drops half the struct. Negative progress is included on purpose: it is

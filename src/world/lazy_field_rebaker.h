@@ -37,7 +37,7 @@ public:
 
     std::size_t pending_count() const { return m_pendingQueue.size(); }
     bool is_idle() const {
-        return m_pendingQueue.empty() && !m_needClosingPass && !m_activeTask.valid();
+        return m_pendingQueue.empty() && !m_needClosingPass && !m_activeTask.valid() && !m_closingTask.valid();
     }
     std::uint64_t rebaked_count_total() const { return m_rebakedCountTotal; }
     std::uint64_t closing_pass_count() const { return m_closingPassCount; }

@@ -32,7 +32,7 @@ namespace giga::game {
 enum class MobKind : std::uint8_t {
     Sborka = 0, Tvar, Polzun, Betonnik, Zombie, Eye, Nightmare, Shadow, Rebar,
     Matka, Idol, Mancobus, Herald, Creator, Spirit, Robot, Shovnik, Lampovy,
-    Pechateed, TubeEel, Paragraph, Nelyud, Krysnozhka, Kostorez, Safeguard,
+    Pechateed, Paragraph, Nelyud, Krysnozhka, Kostorez, Safeguard,
     BlackLiquidator, KhorovayaMatka, Slimevik, Sobrannyy, ZhornayaTvar,
     Bezekhiy, Pseudolift, Slepoglaz, Olgoy, VodyanoyKoshmar, Lampoglaz,
     Tumannik, Chernosliz, Rzhavnik, Betonoed, Panelnik, Paupsina, Borshchevik,
@@ -44,7 +44,7 @@ enum class MobKind : std::uint8_t {
     Count
 };
 inline constexpr std::size_t kMobKindCount = static_cast<std::size_t>(MobKind::Count);
-static_assert(kMobKindCount == 69, "the reference has exactly 69 monster kinds");
+static_assert(kMobKindCount == 68, "the reference has exactly 68 monster kinds");
 
 // HP-banded, DERIVED — the reference authors no tier field anywhere.
 enum class MobTier : std::uint8_t { Trash, Light, Medium, Heavy, Elite, Boss, Count };

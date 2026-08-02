@@ -132,7 +132,7 @@ inline constexpr QuestId kInvalidQuest = 0;
 //     at the same time as the generator, not afterwards").
 // The one-line fix belongs in a file this lane does not own; it is in the handoff as the
 // Rule 7 hunk. Delete this whole note once it lands.
-inline constexpr std::size_t kQuestCount = 20;
+inline constexpr std::size_t kQuestCount = 19;
 static_assert(kQuestCount <= 255,
               "QuestDef::prereq is a QuestId in one byte and 0 is kInvalidQuest");
 
@@ -257,7 +257,7 @@ static_assert(alignof(QuestProgress) == 4);
 // ([AGENTS.md] "dense over sparse", [performance.md]): a chain prerequisite is then an
 // O(1) index instead of a scan; "have I already done this" needs no separate bitmap;
 // and there is no "log full" refusal to design, which matters because refusing a chain
-// step for lack of a slot would brick the chain. At `kQuestCount = 20` the whole thing
+// step for lack of a slot would brick the chain. At `kQuestCount = 19` the whole thing
 // is 352 bytes, so density costs nothing worth counting.
 //
 // **There is deliberately no cap on concurrent active quests.** The deadline IS the

@@ -34,7 +34,7 @@ ITEMS_CSV = os.path.join(REPO, "data", "items.csv")
 OUT_PATH = os.path.join(REPO, "src", "game", "status_table.cpp")
 
 EXPECTED_ROWS = 6         # must agree with kStatusCount in status.h
-EXPECTED_ITEM_ROWS = 446  # must agree with kItemCount
+EXPECTED_ITEM_ROWS = 442  # must agree with kItemCount
 
 
 def die(msg):

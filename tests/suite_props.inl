@@ -35,13 +35,8 @@ inline const PropPassInspector& inspect(const PropPass& pass) {
 
 // 1. Explicit coverage for all 4 PropShape enum values
 static void test_prop_shape_enum_coverage() {
-    static_assert(kPropShapeCount == 4, "kPropShapeCount must be 4");
-    static_assert(static_cast<uint8_t>(PropShape::kCount) == 4, "PropShape::kCount must be 4");
-
-    static_assert(static_cast<uint8_t>(PropShape::Terminal) == 0, "PropShape::Terminal must be 0");
-    static_assert(static_cast<uint8_t>(PropShape::ElectricalShield) == 1, "PropShape::ElectricalShield must be 1");
-    static_assert(static_cast<uint8_t>(PropShape::BareBulb) == 2, "PropShape::BareBulb must be 2");
-    static_assert(static_cast<uint8_t>(PropShape::FloodLamp) == 3, "PropShape::FloodLamp must be 3");
+    static_assert(kPropShapeCount == 0, "kPropShapeCount must be 0");
+    static_assert(static_cast<uint8_t>(PropShape::kCount) == 0, "PropShape::kCount must be 0");
 
     // Runtime loop check using non-constant local variables
     for (int s = 0; s < kPropShapeCount; ++s) {

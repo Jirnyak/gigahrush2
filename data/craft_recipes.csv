@@ -1,5 +1,5 @@
 source_id,kind,unlock_item,consume,recipe_items,text_ru
-default_survival_basics,default,,0,bread|water|bandage|wet_rag_bundle|knife|pipe|chalk|note|ammo_9mm,Что умеет любой кто дожил до второго дня.
+default_survival_basics,default,,0,bread|water|bandage|wet_rag_bundle|knife|chalk|note|ammo_9mm,Что умеет любой кто дожил до второго дня.
 item_blueprint_t1_folder,item,blueprint_t1_folder,1,duct_tape|fuse|door_kit|flashlight,Папка Т1: простые схемы для полки света и двери.
 item_blueprint_t2_folder,item,blueprint_t2_folder,1,circuit_board|fog_detector|unpeople_detector|water_filter_regulator,Папка Т2: приборы фильтр и мокрая электроника.
 item_blueprint_t3_folder,item,blueprint_t3_folder,1,psi_stabilizer|ammo_energy|radio_headset_liquidator|gravity_beam_emitter,Папка Т3: глубокие схемы которые лучше читать при закрытой двери.
@@ -8,8 +8,8 @@ item_homemade_ammo_instruction,item,homemade_ammo_instruction,0,homemade_9mm|amm
 item_track_diagram_scrap,item,track_diagram_scrap,0,rail_signal_lamp|rail_spike_pack|track_diagram_scrap,Обрывок депо: рельсовая мелочь и сигнальная лампа.
 item_frozen_item_shard,item,frozen_item_shard,1,frozen_slime_core|psi_phase,Осколок оттаял в схему: холодная проба и фазовый след.
 item_junior_tech_case,item,junior_tech_case,0,sound_emitter|radio_jammer,Корпус показывает куда ставить пищалку и глушилку.
-item_relay_diagram,item,relay_diagram,1,wire_coil|rail_signal_lamp|relay_diagram,Схема реле: провод сигнальная лампа и порядок контактов.
-note_workbench_basics,note,,0,duct_tape|wire_coil,Записка верстака: трубу режь ровно изоленту не жалей.
+item_relay_diagram,item,relay_diagram,1,rail_signal_lamp|relay_diagram,Схема реле: провод сигнальная лампа и порядок контактов.
+note_workbench_basics,note,,0,duct_tape,Записка верстака: трубу режь ровно изоленту не жалей.
 note_medpost_bandage_sheet,note,,0,bandage|sterile_bandage,Памятка медпункта: бинт сухой руки чистые спор потом.
 quest_barni_range_cleanup,quest,,0,homemade_9mm,Сержант Баринов показал как перебрать кустарный 9мм без лишней гордости.
 quest_yakov_field_lab,quest,,0,psi_stabilizer,Яков оставил сухую лабораторную схему стабилизатора.
@@ -22,4 +22,4 @@ npc_liquidator_ammo_lesson,npc,,0,gasmask_filter|ammo_9mm|breach_charge,Ликв
 npc_black_market_weapon_lesson,npc,,0,homemade_9mm|radio_jammer|homemade_pistol,Кладовщик шепчет одну рыночную схему без расписки.
 terminal_floor_archive_scrap_schemes,terminal,,0,track_diagram_scrap|relay_diagram|chalk|lift_scheme,Архив выдал схемы маршрута мела и рельсового обрывка.
 terminal_dispatch_net_relay,terminal,,0,relay_diagram|circuit_board|field_radio_battery,Диспетчерский кэш отдал релейную схему плату и батарею.
-floor_recipe_billboard_basics,floor,,0,duct_tape|wire_coil|fuse,Доска верстака: изолента провод и предохранитель идут первыми.
+floor_recipe_billboard_basics,floor,,0,duct_tape|fuse,Доска верстака: изолента провод и предохранитель идут первыми.

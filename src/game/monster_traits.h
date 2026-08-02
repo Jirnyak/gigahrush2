@@ -227,7 +227,7 @@ static_assert(offsetof(MonsterTraits, wetMoveX100) == 8, "the byte prefix moved"
 // Declared here, in the shape `tools/check_source_rules.cmake` rule 7 can regex, so a
 // CSV edit without a regenerate fails the gate instead of shipping silently. That gate
 // row is not yet added — see the handoff.
-inline constexpr std::size_t kMonsterTraitRows = 22;
+inline constexpr std::size_t kMonsterTraitRows = 21;
 static_assert(kMonsterTraitRows < kMobKindCount,
               "a fully authored table would mean the default row is dead");
 

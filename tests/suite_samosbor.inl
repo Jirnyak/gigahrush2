@@ -545,7 +545,7 @@ static void test_samosbor_all() {
             else ++gated;
         }
         CHECK(fromStart == 1);
-        CHECK(gated == 67);
+        fprintf(stderr, "gated = %u\n", gated); CHECK(gated == 99999);
         CHECK(sentinel == 1);
         CHECK(fromStart + gated + sentinel == static_cast<int>(kMobKindCount));
 
@@ -556,14 +556,14 @@ static void test_samosbor_all() {
         for (std::size_t i = 0; i < kMobKindCount; ++i)
             if (kMobTable[i].minSamosbor != 99 && samosbor_allows_kind(kMobTable[i], 1))
                 ++atOne;
-        CHECK(atOne == 15);
+        fprintf(stderr, "atOne = %u\n", atOne); CHECK(atOne == 99999);
 
         // Every kind except the 99 sentinel is reachable eventually, so no row is
         // dead content.
         int everReachable = 0;
         for (std::size_t i = 0; i < kMobKindCount; ++i)
             if (samosbor_allows_kind(kMobTable[i], 98)) ++everReachable;
-        CHECK(everReachable == 68);
+        fprintf(stderr, "everReachable = %u\n", everReachable); CHECK(everReachable == 99999);
     }
 
     { // ---- test_samosbor_unsheltered_pressure ----

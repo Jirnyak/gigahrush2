@@ -1,5 +1,4 @@
 id,provider,license,source,src_w,src_h,lin_r,lin_g,lin_b,lum_std,role
-blue_metal_plate,Poly Haven,CC0,https://polyhaven.com/a/blue_metal_plate,2048,2048,0.0232,0.0493,0.0735,0.0103,scuffed painted steel for pressure-rated tool housings
 box_profile_metal_sheet,Poly Haven,CC0,https://polyhaven.com/a/box_profile_metal_sheet,2048,2048,0.1447,0.0192,0.0087,0.0036,profiled metal sheet for modular equipment casings and trim strips
 container_side,Poly Haven,CC0,https://polyhaven.com/a/container_side,2048,2048,0.1086,0.2483,0.0816,0.0068,shipping-container steel side for larger equipment casings and service bay props
 corrugated_iron,Poly Haven,CC0,https://polyhaven.com/a/corrugated_iron,2048,2048,0.4019,0.4494,0.4263,0.0287,broad weathered galvanized steel ridges for hull panels and station service cladding
@@ -8,8 +7,6 @@ corrugated_iron_03,Poly Haven,CC0,https://polyhaven.com/a/corrugated_iron_03,204
 factory_wall,Poly Haven,CC0,https://polyhaven.com/a/factory_wall,2048,2048,0.1238,0.1844,0.0747,0.0365,green corrugated factory metal for diegetic equipment panels
 green_metal_rust,Poly Haven,CC0,https://polyhaven.com/a/green_metal_rust,2048,2048,0.0498,0.0739,0.0342,0.0076,old painted green industrial metal for aged bulkheads and repaired service modules
 metal_grate_rusty,Poly Haven,CC0,https://polyhaven.com/a/metal_grate_rusty,2048,2048,0.2272,0.0878,0.0323,0.022,"rusted open grate surface for drains, vents, and salvage deck details"
-metal_plate,Poly Haven,CC0,https://polyhaven.com/a/metal_plate,2048,2048,0.049,0.0335,0.0122,0.0127,"painted diamond-plate steel for deck plates, tool insets, and worn industrial trims"
-metal_plate_02,Poly Haven,CC0,https://polyhaven.com/a/metal_plate_02,2048,2048,0.0897,0.0666,0.0482,0.0123,worn corroded steel plate for prop body panels and industrial trim
 painted_metal_shutter,Poly Haven,CC0,https://polyhaven.com/a/painted_metal_shutter,2048,2048,0.2157,0.2292,0.2399,0.0345,"painted shutter slats for tool ribs, locker fronts, and modular equipment housings"
 rubber_tiles,Poly Haven,CC0,https://polyhaven.com/a/rubber_tiles,2048,2048,0.0144,0.0151,0.0184,0.0011,"smooth dark waterproof rubber with seams for gaskets, grips, and equipment feet"
 rusty_corrugated_iron,Poly Haven,CC0,https://polyhaven.com/a/rusty_corrugated_iron,2048,2048,0.0986,0.0236,0.0097,0.0171,"oxidized corrugated sheet for wreckage, salvage scrap, and damaged external casings"

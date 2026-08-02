@@ -19,7 +19,7 @@
 // pack has 16 photographs and materials.h has 16 ids; they are unrelated
 // numbers and only 6 of the 16 rows are consumed. Do not "simplify" the gate to
 // compare against the array length instead.
-const uint kMaterialCsvRows = 16u;
+const uint kMaterialCsvRows = 13u;
 
 // Family per material id — see the kFam* constants in cube.frag.
 //   0 air / body sentinel  generic  authored                 CV 0.0000

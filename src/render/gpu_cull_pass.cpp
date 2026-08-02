@@ -240,22 +240,6 @@ void GpuCullPass::record_cull(VkCommandBuffer cmd,
 
 void GpuCullPass::get_shape_aabb(PropShape shape, vec3& outMin, vec3& outMax) noexcept {
     switch (shape) {
-    case PropShape::Terminal:
-        outMin = {-0.40f, 0.00f, -0.40f};
-        outMax = { 0.40f, 1.40f,  0.40f};
-        break;
-    case PropShape::FloodLamp:
-        outMin = {-0.30f, 0.00f, -0.30f};
-        outMax = { 0.30f, 1.50f,  0.30f};
-        break;
-    case PropShape::ElectricalShield:
-        outMin = {-0.35f, 0.00f, 0.00f};
-        outMax = { 0.35f, 1.10f, 0.15f};
-        break;
-    case PropShape::BareBulb:
-        outMin = {-0.05f, 0.00f, -0.05f};
-        outMax = { 0.05f, 0.50f,  0.05f};
-        break;
     default:
         outMin = {-1.00f, -1.00f, -1.00f};
         outMax = { 1.00f,  2.00f,  1.00f};

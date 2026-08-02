@@ -46,7 +46,7 @@ OUT_PATH = os.path.join(REPO, "src", "game", "craft_table.cpp")
 # Must equal kItemCount in item_table.h AND kCraftRecipeCount in craft.h, which is
 # defined as kItemCount — so the recipe count cannot drift from the item count by
 # construction and this is only a guard on the CSV itself.
-EXPECTED_ITEM_ROWS = 446
+EXPECTED_ITEM_ROWS = 442
 # Must equal kCraftSourceCount in craft.h. The `source_rules` ctest compares this
 # CSV's row count against that constant; see the note at the bottom of this file.
 EXPECTED_SOURCE_ROWS = 24
@@ -197,8 +197,8 @@ def main():
     # A default-known id that named nothing would have been caught above; a
     # default-known id that named something with no recipe cannot happen, because
     # every item has one. Assert the count so the ported list cannot silently shrink.
-    if len(default_known) != 9:
-        die("the reference's DEFAULT_KNOWN_RECIPE_IDS has 9 entries; this CSV's "
+    if len(default_known) != 8:
+        die("the reference's DEFAULT_KNOWN_RECIPE_IDS has 8 entries; this CSV's "
             "default row has %d. If the starting set really changed, say so in "
             "craft.h too — suite_craft.inl asserts it." % len(default_known))
 

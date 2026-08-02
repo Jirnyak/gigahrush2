@@ -388,12 +388,12 @@ static_assert(kCraftingWire == 93);
 static_assert(kRangedWire == 16);
 static_assert(kCombatSaveWire == 21);
 static_assert(kStatusWire == 42);
-static_assert(kSaveFixedWire == 850 + 42);  // 892
-static_assert(kSaveFixedWire == 892);
+static_assert(kSaveFixedWire == 850 + 28);  // 878
+static_assert(kSaveFixedWire == 878);
 static_assert(kFactionWire == 36);
 // header 64 + fixed 892 + faction 36 = 992 for an empty run.
-static_assert(save_bytes_for(0) == 992);
-static_assert(save_bytes_for(0, 100, 50) == 992 + 150);
+static_assert(save_bytes_for(0) == 978);
+static_assert(save_bytes_for(0, 100, 50) == 978 + 150);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two

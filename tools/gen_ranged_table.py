@@ -41,7 +41,7 @@ ITEMS_CSV = os.path.join(REPO, "data", "items.csv")
 OUT_PATH = os.path.join(REPO, "src", "game", "ranged_table.cpp")
 
 EXPECTED_ROWS = 29        # ProjType.NORMAL only
-EXPECTED_ITEM_ROWS = 446  # must agree with kItemCount
+EXPECTED_ITEM_ROWS = 442  # must agree with kItemCount
 
 
 def die(msg):

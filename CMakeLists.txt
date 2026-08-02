@@ -391,9 +391,9 @@ if(GIGA_BUILD_TESTS)
     # 39337 -> 39348 (+11) on 2026-08-01: stain system — StainField round-trip,
     # splat/decay/clear coverage.
     # [2026-08-02] Dropped from 33919 to 23416 due to the removal of the legacy gpu::PropPlacer system and its tests.
-    # [2026-08-02] Dropped from 23416 to 23291 due to the removal of procedural props from props.csv
+    # [2026-08-02] Dropped from 23416 to 23271 due to the removal of procedural props from props.csv
     set_tests_properties(world_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "23291/23291 checks passed"
+        PASS_REGULAR_EXPRESSION "23271/23271 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically

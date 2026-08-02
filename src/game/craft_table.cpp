@@ -2,13 +2,13 @@
 // data/craft_recipes.csv — do not hand-edit. Edit the CSVs and re-run the
 // generator; see [craft.h].
 //
-// 446 recipes, one per item id, carrying 5613 authored material units in total
-// (tier histogram 230/137/51/17/11). The cost vectors are COPIED from items.csv
+// 442 recipes, one per item id, carrying 5589 authored material units in total
+// (tier histogram 228/135/51/17/11). The cost vectors are COPIED from items.csv
 // columns 27..37, not computed here: they are the reference's own
 // ITEM_COMPOSITIONS export, and a second derivation would be a second thing to
 // drift.
 //
-// 24 knowledge sources teaching 71 recipes between them. `grantsTier` on each is
+// 24 knowledge sources teaching 67 recipes between them. `grantsTier` on each is
 // DERIVED as the maximum tier it teaches, so a source always certifies what it
 // hands over.
 //
@@ -844,572 +844,560 @@ const std::array<CraftRecipe, kCraftRecipeCount> kCraftTable = {{
     // [272] id 273  pills  tier 0  total 5
     CraftRecipe{ {0, 0, 2, 0, 3, 0, 0, 0, 0}, u8(CraftStation::Lab), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [273] id 274  pipe  tier 0  total 5
-    CraftRecipe{ {2, 0, 0, 0, 0, 3, 0, 0, 0}, u8(CraftStation::Lathe), 0,
-                 static_cast<std::uint8_t>(kCraftDiscoverable | kCraftKnownByDefault) },
-    // [274] id 275  pistol_grenade_launcher  tier 2  total 35
+    // [273] id 274  pistol_grenade_launcher  tier 2  total 35
     CraftRecipe{ {6, 3, 0, 0, 14, 12, 0, 0, 0}, u8(CraftStation::Lathe), 2,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [275] id 276  plasma  tier 3  total 58
+    // [274] id 275  plasma  tier 3  total 58
     CraftRecipe{ {12, 19, 0, 0, 4, 15, 8, 0, 0}, u8(CraftStation::NetTerminal), 3,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [276] id 277  plastic_sheet  tier 0  total 2
+    // [275] id 276  plastic_sheet  tier 0  total 2
     CraftRecipe{ {0, 1, 0, 0, 0, 1, 0, 0, 0}, u8(CraftStation::Lathe), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [277] id 278  pneumomail_capsule  tier 1  total 8
+    // [276] id 277  pneumomail_capsule  tier 1  total 8
     CraftRecipe{ {3, 0, 5, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [278] id 279  portable_siren_key  tier 1  total 8
+    // [277] id 278  portable_siren_key  tier 1  total 8
     CraftRecipe{ {2, 5, 1, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [279] id 280  post_samosbor_probe_kit  tier 1  total 11
+    // [278] id 279  post_samosbor_probe_kit  tier 1  total 11
     CraftRecipe{ {3, 0, 5, 0, 3, 0, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [280] id 281  ppsh  tier 2  total 16
+    // [279] id 280  ppsh  tier 2  total 16
     CraftRecipe{ {6, 2, 0, 0, 1, 7, 0, 0, 0}, u8(CraftStation::Lathe), 2,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [281] id 282  pressed_sugar  tier 0  total 2
+    // [280] id 281  pressed_sugar  tier 0  total 2
     CraftRecipe{ {0, 0, 1, 1, 0, 0, 0, 0, 0}, u8(CraftStation::Any), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [282] id 283  pressure_logbook  tier 0  total 5
+    // [281] id 282  pressure_logbook  tier 0  total 5
     CraftRecipe{ {0, 0, 5, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [283] id 284  protective_apron  tier 1  total 8
+    // [282] id 283  protective_apron  tier 1  total 8
     CraftRecipe{ {0, 0, 3, 0, 5, 0, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [284] id 285  protein_mold_cake  tier 0  total 3
+    // [283] id 284  protein_mold_cake  tier 0  total 3
     CraftRecipe{ {0, 0, 1, 2, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [285] id 286  psi_beam  tier 3  total 58
+    // [284] id 285  psi_beam  tier 3  total 58
     CraftRecipe{ {0, 0, 0, 10, 10, 0, 0, 38, 0}, u8(CraftStation::Lab), 3,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [286] id 287  psi_brainburn  tier 3  total 82
+    // [285] id 286  psi_brainburn  tier 3  total 82
     CraftRecipe{ {0, 0, 0, 14, 14, 0, 0, 54, 0}, u8(CraftStation::Lab), 3,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [287] id 288  psi_concrete_splinter  tier 2  total 35
+    // [286] id 287  psi_concrete_splinter  tier 2  total 35
     CraftRecipe{ {0, 0, 0, 6, 6, 0, 0, 23, 0}, u8(CraftStation::Lab), 2,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [288] id 289  psi_control  tier 3  total 82
+    // [287] id 288  psi_control  tier 3  total 82
     CraftRecipe{ {0, 0, 0, 14, 14, 0, 0, 54, 0}, u8(CraftStation::Lab), 3,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [289] id 290  psi_dust  tier 1  total 8
+    // [288] id 289  psi_dust  tier 1  total 8
     CraftRecipe{ {2, 0, 3, 0, 0, 0, 0, 3, 0}, u8(CraftStation::Lab), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [290] id 291  psi_madness  tier 3  total 58
+    // [289] id 290  psi_madness  tier 3  total 58
     CraftRecipe{ {0, 0, 0, 10, 10, 0, 0, 38, 0}, u8(CraftStation::Lab), 3,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [291] id 292  psi_mark  tier 2  total 35
+    // [290] id 291  psi_mark  tier 2  total 35
     CraftRecipe{ {0, 0, 0, 6, 6, 0, 0, 23, 0}, u8(CraftStation::Lab), 2,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [292] id 293  psi_meat_hook  tier 3  total 58
+    // [291] id 292  psi_meat_hook  tier 3  total 58
     CraftRecipe{ {0, 0, 0, 10, 10, 0, 0, 38, 0}, u8(CraftStation::Lab), 3,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [293] id 294  psi_order_seal  tier 3  total 58
+    // [292] id 293  psi_order_seal  tier 3  total 58
     CraftRecipe{ {0, 0, 0, 10, 10, 0, 0, 38, 0}, u8(CraftStation::Lab), 3,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [294] id 295  psi_phase  tier 4  total 90
+    // [293] id 294  psi_phase  tier 4  total 90
     CraftRecipe{ {0, 0, 0, 12, 12, 0, 0, 48, 18}, u8(CraftStation::NetTerminal), 4,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [295] id 296  psi_possession  tier 4  total 90
+    // [294] id 295  psi_possession  tier 4  total 90
     CraftRecipe{ {0, 0, 0, 12, 12, 0, 0, 48, 18}, u8(CraftStation::NetTerminal), 4,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [296] id 297  psi_recall  tier 3  total 58
+    // [295] id 296  psi_recall  tier 3  total 58
     CraftRecipe{ {0, 0, 0, 10, 10, 0, 0, 38, 0}, u8(CraftStation::Lab), 3,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [297] id 298  psi_rupture  tier 3  total 58
+    // [296] id 297  psi_rupture  tier 3  total 58
     CraftRecipe{ {0, 0, 0, 10, 10, 0, 0, 38, 0}, u8(CraftStation::Lab), 3,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [298] id 299  psi_shadow_lance  tier 3  total 58
+    // [297] id 298  psi_shadow_lance  tier 3  total 58
     CraftRecipe{ {0, 0, 0, 10, 10, 0, 0, 38, 0}, u8(CraftStation::Lab), 3,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [299] id 300  psi_shield  tier 3  total 58
+    // [298] id 299  psi_shield  tier 3  total 58
     CraftRecipe{ {0, 0, 0, 10, 10, 0, 0, 38, 0}, u8(CraftStation::Lab), 3,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [300] id 301  psi_siren_pulse  tier 3  total 58
+    // [299] id 300  psi_siren_pulse  tier 3  total 58
     CraftRecipe{ {0, 0, 0, 10, 10, 0, 0, 38, 0}, u8(CraftStation::Lab), 3,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [301] id 302  psi_stabilizer  tier 1  total 11
+    // [300] id 301  psi_stabilizer  tier 1  total 11
     CraftRecipe{ {0, 0, 4, 0, 7, 0, 0, 0, 0}, u8(CraftStation::Lab), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [302] id 303  psi_storm  tier 3  total 58
+    // [301] id 302  psi_storm  tier 3  total 58
     CraftRecipe{ {0, 0, 0, 10, 10, 0, 0, 38, 0}, u8(CraftStation::Lab), 3,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [303] id 304  psi_strike  tier 2  total 35
+    // [302] id 303  psi_strike  tier 2  total 35
     CraftRecipe{ {0, 0, 0, 6, 6, 0, 0, 23, 0}, u8(CraftStation::Lab), 2,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [304] id 305  psi_void_needle  tier 4  total 90
+    // [303] id 304  psi_void_needle  tier 4  total 90
     CraftRecipe{ {0, 0, 0, 12, 12, 0, 0, 48, 18}, u8(CraftStation::NetTerminal), 4,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [305] id 306  psychiatrist_referral  tier 0  total 3
+    // [304] id 305  psychiatrist_referral  tier 0  total 3
     CraftRecipe{ {0, 0, 3, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [306] id 307  ptrs_liquidator  tier 3  total 82
+    // [305] id 306  ptrs_liquidator  tier 3  total 82
     CraftRecipe{ {25, 13, 0, 0, 6, 38, 0, 0, 0}, u8(CraftStation::Lathe), 3,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [307] id 308  pump_impeller  tier 1  total 8
+    // [306] id 307  pump_impeller  tier 1  total 8
     CraftRecipe{ {3, 0, 0, 0, 0, 5, 0, 0, 0}, u8(CraftStation::Lathe), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [308] id 309  pump_passport  tier 0  total 5
+    // [307] id 308  pump_passport  tier 0  total 5
     CraftRecipe{ {0, 0, 5, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [309] id 310  pushkin_shotgun  tier 2  total 24
+    // [308] id 309  pushkin_shotgun  tier 2  total 24
     CraftRecipe{ {8, 2, 0, 0, 2, 12, 0, 0, 0}, u8(CraftStation::Lathe), 2,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [310] id 311  quarantine_breach_notice  tier 1  total 8
+    // [309] id 310  quarantine_breach_notice  tier 1  total 8
     CraftRecipe{ {3, 0, 5, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [311] id 312  quarantine_medcard  tier 0  total 5
+    // [310] id 311  quarantine_medcard  tier 0  total 5
     CraftRecipe{ {0, 0, 5, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [312] id 313  radio  tier 1  total 11
+    // [311] id 312  radio  tier 1  total 11
     CraftRecipe{ {4, 3, 1, 0, 0, 3, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [313] id 314  radio_headset_liquidator  tier 1  total 11
+    // [312] id 313  radio_headset_liquidator  tier 1  total 11
     CraftRecipe{ {4, 4, 1, 0, 0, 2, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [314] id 315  radio_jammer  tier 1  total 8
+    // [313] id 314  radio_jammer  tier 1  total 8
     CraftRecipe{ {3, 0, 5, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [315] id 316  rail_depot_pass  tier 1  total 8
+    // [314] id 315  rail_depot_pass  tier 1  total 8
     CraftRecipe{ {2, 0, 3, 0, 0, 3, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [316] id 317  rail_signal_lamp  tier 1  total 8
+    // [315] id 316  rail_signal_lamp  tier 1  total 8
     CraftRecipe{ {2, 3, 1, 0, 0, 2, 0, 0, 0}, u8(CraftStation::NetTerminal), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [317] id 318  rail_spike_pack  tier 0  total 5
+    // [316] id 317  rail_spike_pack  tier 0  total 5
     CraftRecipe{ {2, 0, 0, 0, 0, 3, 0, 0, 0}, u8(CraftStation::Lathe), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [318] id 319  rail_switch_handle  tier 1  total 8
+    // [317] id 318  rail_switch_handle  tier 1  total 8
     CraftRecipe{ {3, 0, 0, 0, 0, 5, 0, 0, 0}, u8(CraftStation::Lathe), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [319] id 320  rail_switch_order  tier 1  total 8
+    // [318] id 319  rail_switch_order  tier 1  total 8
     CraftRecipe{ {2, 0, 3, 0, 0, 3, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [320] id 321  raionsovet_floor_pass  tier 1  total 8
+    // [319] id 320  raionsovet_floor_pass  tier 1  total 8
     CraftRecipe{ {0, 0, 8, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [321] id 322  rake_bayonet  tier 1  total 11
+    // [320] id 321  rake_bayonet  tier 1  total 11
     CraftRecipe{ {4, 0, 0, 0, 0, 7, 0, 0, 0}, u8(CraftStation::Lathe), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [322] id 323  ration_registry_extract  tier 0  total 5
+    // [321] id 322  ration_registry_extract  tier 0  total 5
     CraftRecipe{ {2, 0, 3, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [323] id 324  ration_stamp_pad  tier 0  total 5
+    // [322] id 323  ration_stamp_pad  tier 0  total 5
     CraftRecipe{ {0, 0, 4, 0, 0, 1, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [324] id 325  rawmeat  tier 0  total 1
+    // [323] id 324  rawmeat  tier 0  total 1
     CraftRecipe{ {0, 0, 0, 1, 0, 0, 0, 0, 0}, u8(CraftStation::Any), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [325] id 326  rb91_auto_shotgun  tier 2  total 24
+    // [324] id 325  rb91_auto_shotgun  tier 2  total 24
     CraftRecipe{ {8, 2, 0, 0, 2, 12, 0, 0, 0}, u8(CraftStation::Lathe), 2,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [326] id 327  rebar  tier 1  total 8
+    // [325] id 326  rebar  tier 1  total 8
     CraftRecipe{ {4, 0, 0, 0, 0, 4, 0, 0, 0}, u8(CraftStation::Lathe), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [327] id 328  record_exposure_notice  tier 1  total 8
+    // [326] id 327  record_exposure_notice  tier 1  total 8
     CraftRecipe{ {3, 0, 5, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [328] id 329  red_concentrate  tier 0  total 4
+    // [327] id 328  red_concentrate  tier 0  total 4
     CraftRecipe{ {0, 0, 1, 3, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [329] id 330  red_mold_sample  tier 1  total 11
+    // [328] id 329  red_mold_sample  tier 1  total 11
     CraftRecipe{ {0, 0, 2, 6, 3, 0, 0, 0, 0}, u8(CraftStation::Lab), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [330] id 331  relay_diagram  tier 0  total 5
+    // [329] id 330  relay_diagram  tier 0  total 5
     CraftRecipe{ {1, 3, 1, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [331] id 332  resident_identity_stub  tier 0  total 5
+    // [330] id 331  resident_identity_stub  tier 0  total 5
     CraftRecipe{ {2, 0, 3, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [332] id 333  resident_trinket_box  tier 0  total 5
+    // [331] id 332  resident_trinket_box  tier 0  total 5
     CraftRecipe{ {1, 0, 4, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [333] id 334  rifle_bolt_pack  tier 0  total 4
+    // [332] id 333  rifle_bolt_pack  tier 0  total 4
     CraftRecipe{ {0, 0, 1, 0, 1, 2, 0, 0, 0}, u8(CraftStation::Lathe), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [334] id 335  rock_salt  tier 0  total 2
+    // [333] id 334  rock_salt  tier 0  total 2
     CraftRecipe{ {0, 0, 0, 0, 2, 0, 0, 0, 0}, u8(CraftStation::Lab), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [335] id 336  roks47_flamethrower  tier 2  total 35
+    // [334] id 335  roks47_flamethrower  tier 2  total 35
     CraftRecipe{ {8, 2, 0, 0, 15, 10, 0, 0, 0}, u8(CraftStation::Lathe), 2,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [336] id 337  roller_brush  tier 0  total 3
+    // [335] id 336  roller_brush  tier 0  total 3
     CraftRecipe{ {1, 0, 0, 0, 1, 1, 0, 0, 0}, u8(CraftStation::Lathe), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [337] id 338  rpl23_lmg  tier 2  total 35
+    // [336] id 337  rpl23_lmg  tier 2  total 35
     CraftRecipe{ {11, 5, 0, 0, 3, 16, 0, 0, 0}, u8(CraftStation::Lathe), 2,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [338] id 339  rubber_club  tier 1  total 8
+    // [337] id 338  rubber_club  tier 1  total 8
     CraftRecipe{ {4, 0, 0, 0, 0, 4, 0, 0, 0}, u8(CraftStation::Lathe), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [339] id 340  rubber_door_wedge  tier 0  total 5
+    // [338] id 339  rubber_door_wedge  tier 0  total 5
     CraftRecipe{ {3, 0, 2, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [340] id 341  rubber_strip  tier 0  total 3
+    // [339] id 340  rubber_strip  tier 0  total 3
     CraftRecipe{ {0, 0, 3, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [341] id 342  rubber_tube  tier 0  total 3
+    // [340] id 341  rubber_tube  tier 0  total 3
     CraftRecipe{ {1, 0, 0, 0, 1, 1, 0, 0, 0}, u8(CraftStation::Lathe), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [342] id 343  rusty_rake  tier 0  total 3
+    // [341] id 342  rusty_rake  tier 0  total 3
     CraftRecipe{ {1, 0, 0, 0, 0, 2, 0, 0, 0}, u8(CraftStation::Lathe), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [343] id 344  samosbor_alarm_schedule  tier 0  total 5
+    // [342] id 343  samosbor_alarm_schedule  tier 0  total 5
     CraftRecipe{ {2, 0, 3, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [344] id 345  samosbor_tally  tier 0  total 5
+    // [343] id 344  samosbor_tally  tier 0  total 5
     CraftRecipe{ {2, 0, 3, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [345] id 346  sample_chain_form  tier 0  total 5
+    // [344] id 345  sample_chain_form  tier 0  total 5
     CraftRecipe{ {0, 0, 2, 2, 1, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [346] id 347  sample_cork_seal  tier 0  total 3
+    // [345] id 346  sample_cork_seal  tier 0  total 3
     CraftRecipe{ {0, 0, 1, 1, 1, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [347] id 348  sand_spoiled_ration  tier 0  total 1
+    // [346] id 347  sand_spoiled_ration  tier 0  total 1
     CraftRecipe{ {0, 0, 0, 1, 0, 0, 0, 0, 0}, u8(CraftStation::Any), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [348] id 349  sanitary_kit  tier 1  total 8
+    // [347] id 348  sanitary_kit  tier 1  total 8
     CraftRecipe{ {0, 0, 3, 0, 5, 0, 0, 0, 0}, u8(CraftStation::Lab), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [349] id 350  screen_unit  tier 0  total 5
+    // [348] id 349  screen_unit  tier 0  total 5
     CraftRecipe{ {1, 3, 1, 0, 0, 0, 0, 0, 0}, u8(CraftStation::NetTerminal), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [350] id 351  scrubbed_serial_plate  tier 1  total 8
-    CraftRecipe{ {1, 0, 3, 1, 1, 2, 0, 0, 0}, u8(CraftStation::Workbench), 1,
-                 static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [351] id 352  scrubbed_weapon_tag  tier 0  total 5
+    // [349] id 350  scrubbed_weapon_tag  tier 0  total 5
     CraftRecipe{ {0, 0, 4, 0, 0, 1, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [352] id 353  seal_wax  tier 0  total 3
+    // [350] id 351  seal_wax  tier 0  total 3
     CraftRecipe{ {0, 0, 3, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [353] id 354  sealant_tube  tier 0  total 3
+    // [351] id 352  sealant_tube  tier 0  total 3
     CraftRecipe{ {1, 0, 2, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [354] id 355  sealed_complaint  tier 0  total 3
+    // [352] id 353  sealed_complaint  tier 0  total 3
     CraftRecipe{ {0, 0, 3, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [355] id 356  sealed_veretar_sand  tier 1  total 11
+    // [353] id 354  sealed_veretar_sand  tier 1  total 11
     CraftRecipe{ {0, 0, 2, 4, 5, 0, 0, 0, 0}, u8(CraftStation::Lab), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [356] id 357  shark_scale  tier 2  total 16
+    // [354] id 355  shark_scale  tier 2  total 16
     CraftRecipe{ {0, 0, 6, 5, 5, 0, 0, 0, 0}, u8(CraftStation::Workbench), 2,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [357] id 358  shelter_seat_card  tier 1  total 8
+    // [355] id 356  shelter_seat_card  tier 1  total 8
     CraftRecipe{ {0, 0, 8, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [358] id 359  shelter_seat_forgery  tier 0  total 5
+    // [356] id 357  shelter_seat_forgery  tier 0  total 5
     CraftRecipe{ {2, 0, 3, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [359] id 360  shelter_tally  tier 1  total 8
+    // [357] id 358  shelter_tally  tier 1  total 8
     CraftRecipe{ {3, 0, 5, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [360] id 361  shmk_disposable  tier 2  total 16
+    // [358] id 359  shmk_disposable  tier 2  total 16
     CraftRecipe{ {3, 1, 0, 0, 7, 5, 0, 0, 0}, u8(CraftStation::Lathe), 2,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [361] id 362  shock_baton  tier 1  total 11
+    // [359] id 360  shock_baton  tier 1  total 11
     CraftRecipe{ {4, 1, 0, 0, 0, 6, 0, 0, 0}, u8(CraftStation::Lathe), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [362] id 363  shotgun  tier 2  total 16
+    // [360] id 361  shotgun  tier 2  total 16
     CraftRecipe{ {6, 2, 0, 0, 1, 7, 0, 0, 0}, u8(CraftStation::Lathe), 2,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [363] id 364  siren_energy  tier 0  total 3
+    // [361] id 362  siren_energy  tier 0  total 3
     CraftRecipe{ {0, 0, 2, 0, 1, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [364] id 365  siren_instruction  tier 0  total 2
+    // [362] id 363  siren_instruction  tier 0  total 2
     CraftRecipe{ {0, 0, 2, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [365] id 366  siren_shard  tier 1  total 8
+    // [363] id 364  siren_shard  tier 1  total 8
     CraftRecipe{ {2, 0, 3, 0, 0, 0, 0, 3, 0}, u8(CraftStation::Lab), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [366] id 367  sledgehammer  tier 1  total 11
+    // [364] id 365  sledgehammer  tier 1  total 11
     CraftRecipe{ {5, 0, 0, 0, 0, 6, 0, 0, 0}, u8(CraftStation::Lathe), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [367] id 368  sleeping_pills  tier 1  total 8
+    // [365] id 366  sleeping_pills  tier 1  total 8
     CraftRecipe{ {0, 0, 3, 0, 5, 0, 0, 0, 0}, u8(CraftStation::Lab), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [368] id 369  slime_age_label_brown  tier 0  total 5
+    // [366] id 367  slime_age_label_brown  tier 0  total 5
     CraftRecipe{ {0, 0, 2, 1, 2, 0, 0, 0, 0}, u8(CraftStation::Lab), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [369] id 370  slime_age_label_orange  tier 0  total 5
+    // [367] id 368  slime_age_label_orange  tier 0  total 5
     CraftRecipe{ {0, 0, 2, 1, 2, 0, 0, 0, 0}, u8(CraftStation::Lab), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [370] id 371  slime_age_label_violet  tier 1  total 8
+    // [368] id 369  slime_age_label_violet  tier 1  total 8
     CraftRecipe{ {0, 0, 3, 2, 3, 0, 0, 0, 0}, u8(CraftStation::Lab), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [371] id 372  slime_calcified_chip  tier 1  total 8
+    // [369] id 370  slime_calcified_chip  tier 1  total 8
     CraftRecipe{ {0, 0, 1, 3, 4, 0, 0, 0, 0}, u8(CraftStation::Lab), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [372] id 373  slime_motor_node  tier 1  total 11
+    // [370] id 371  slime_motor_node  tier 1  total 11
     CraftRecipe{ {0, 0, 2, 4, 5, 0, 0, 0, 0}, u8(CraftStation::Lab), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [373] id 374  slime_sample_black  tier 1  total 11
+    // [371] id 372  slime_sample_black  tier 1  total 11
     CraftRecipe{ {0, 0, 2, 3, 6, 0, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [374] id 375  slime_sample_blue  tier 1  total 11
+    // [372] id 373  slime_sample_blue  tier 1  total 11
     CraftRecipe{ {0, 0, 2, 3, 6, 0, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [375] id 376  slime_sample_brown  tier 0  total 5
+    // [373] id 374  slime_sample_brown  tier 0  total 5
     CraftRecipe{ {0, 0, 1, 2, 2, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [376] id 377  slime_sample_contaminated  tier 1  total 8
+    // [374] id 375  slime_sample_contaminated  tier 1  total 8
     CraftRecipe{ {0, 0, 1, 3, 4, 0, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [377] id 378  slime_sample_fake  tier 0  total 5
+    // [375] id 376  slime_sample_fake  tier 0  total 5
     CraftRecipe{ {0, 0, 1, 2, 2, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [378] id 379  slime_sample_green  tier 1  total 8
+    // [376] id 377  slime_sample_green  tier 1  total 8
     CraftRecipe{ {0, 0, 1, 3, 4, 0, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [379] id 380  slime_sample_red  tier 1  total 8
+    // [377] id 378  slime_sample_red  tier 1  total 8
     CraftRecipe{ {0, 0, 1, 3, 4, 0, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [380] id 381  slime_sample_seroburmaline  tier 1  total 11
+    // [378] id 379  slime_sample_seroburmaline  tier 1  total 11
     CraftRecipe{ {0, 0, 2, 3, 5, 0, 0, 1, 0}, u8(CraftStation::Lab), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [381] id 382  slime_sample_silver  tier 1  total 11
+    // [379] id 380  slime_sample_silver  tier 1  total 11
     CraftRecipe{ {0, 0, 2, 4, 4, 0, 0, 1, 0}, u8(CraftStation::Lab), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [382] id 383  slime_sample_silver_open  tier 0  total 5
+    // [380] id 381  slime_sample_silver_open  tier 0  total 5
     CraftRecipe{ {0, 0, 1, 1, 2, 0, 0, 1, 0}, u8(CraftStation::Lab), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [383] id 384  slime_sample_white  tier 1  total 11
+    // [381] id 382  slime_sample_white  tier 1  total 11
     CraftRecipe{ {0, 0, 2, 3, 6, 0, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [384] id 385  slime_scraper  tier 0  total 5
+    // [382] id 383  slime_scraper  tier 0  total 5
     CraftRecipe{ {2, 0, 1, 0, 1, 1, 0, 0, 0}, u8(CraftStation::Lab), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [385] id 386  slime_sense_node  tier 1  total 11
+    // [383] id 384  slime_sense_node  tier 1  total 11
     CraftRecipe{ {0, 0, 2, 4, 5, 0, 0, 0, 0}, u8(CraftStation::Lab), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [386] id 387  slyoznev_pps41  tier 2  total 16
+    // [384] id 385  slyoznev_pps41  tier 2  total 16
     CraftRecipe{ {5, 2, 0, 0, 1, 8, 0, 0, 0}, u8(CraftStation::Lathe), 2,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [387] id 388  smoke_candle_check  tier 0  total 5
+    // [385] id 386  smoke_candle_check  tier 0  total 5
     CraftRecipe{ {1, 0, 3, 0, 1, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [388] id 389  soap_72  tier 0  total 2
+    // [386] id 387  soap_72  tier 0  total 2
     CraftRecipe{ {0, 0, 2, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [389] id 390  sound_emitter  tier 0  total 5
+    // [387] id 388  sound_emitter  tier 0  total 5
     CraftRecipe{ {1, 3, 1, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [390] id 391  soup_cube  tier 0  total 2
+    // [388] id 389  soup_cube  tier 0  total 2
     CraftRecipe{ {0, 0, 1, 1, 0, 0, 0, 0, 0}, u8(CraftStation::Any), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [391] id 392  spore_print  tier 0  total 3
+    // [389] id 390  spore_print  tier 0  total 3
     CraftRecipe{ {0, 0, 3, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [392] id 393  spring  tier 0  total 2
+    // [390] id 391  spring  tier 0  total 2
     CraftRecipe{ {1, 0, 0, 0, 0, 1, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [393] id 394  sterile_bandage  tier 0  total 5
+    // [391] id 392  sterile_bandage  tier 0  total 5
     CraftRecipe{ {0, 0, 2, 0, 3, 0, 0, 0, 0}, u8(CraftStation::Lab), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [394] id 395  sterile_swab  tier 0  total 3
+    // [392] id 393  sterile_swab  tier 0  total 3
     CraftRecipe{ {0, 0, 0, 2, 1, 0, 0, 0, 0}, u8(CraftStation::Lab), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [395] id 396  stolen_archive_card  tier 0  total 5
+    // [393] id 394  stolen_archive_card  tier 0  total 5
     CraftRecipe{ {0, 0, 5, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [396] id 397  stolen_filter_pack  tier 1  total 8
+    // [394] id 395  stolen_filter_pack  tier 1  total 8
     CraftRecipe{ {1, 0, 5, 1, 1, 0, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [397] id 398  stolen_terminal_stamp  tier 1  total 8
+    // [395] id 396  stolen_terminal_stamp  tier 1  total 8
     CraftRecipe{ {0, 3, 3, 1, 1, 0, 0, 0, 0}, u8(CraftStation::NetTerminal), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [398] id 399  strange_clot  tier 2  total 16
+    // [396] id 397  strange_clot  tier 2  total 16
     CraftRecipe{ {3, 0, 7, 0, 0, 0, 0, 6, 0}, u8(CraftStation::Lab), 2,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [399] id 400  substrate_sack  tier 0  total 3
+    // [397] id 398  substrate_sack  tier 0  total 3
     CraftRecipe{ {0, 0, 3, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [400] id 401  sugar_pack  tier 0  total 2
+    // [398] id 399  sugar_pack  tier 0  total 2
     CraftRecipe{ {0, 0, 1, 1, 0, 0, 0, 0, 0}, u8(CraftStation::Any), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [401] id 402  syringe_empty  tier 0  total 3
+    // [399] id 400  syringe_empty  tier 0  total 3
     CraftRecipe{ {0, 0, 3, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [402] id 403  tanev_svt40  tier 3  total 82
+    // [400] id 401  tanev_svt40  tier 3  total 82
     CraftRecipe{ {25, 13, 0, 0, 6, 38, 0, 0, 0}, u8(CraftStation::Lathe), 3,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [403] id 404  tea  tier 0  total 2
+    // [401] id 402  tea  tier 0  total 2
     CraftRecipe{ {0, 0, 1, 0, 1, 0, 0, 0, 0}, u8(CraftStation::Any), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [404] id 405  technical_spirit  tier 0  total 5
+    // [402] id 403  technical_spirit  tier 0  total 5
     CraftRecipe{ {0, 0, 2, 1, 2, 0, 0, 0, 0}, u8(CraftStation::Lab), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [405] id 406  temp_pass  tier 0  total 3
+    // [403] id 404  temp_pass  tier 0  total 3
     CraftRecipe{ {0, 0, 3, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [406] id 407  terminal_order_receipt  tier 0  total 5
+    // [404] id 405  terminal_order_receipt  tier 0  total 5
     CraftRecipe{ {0, 1, 4, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [407] id 408  toiletpaper  tier 0  total 2
+    // [405] id 406  toiletpaper  tier 0  total 2
     CraftRecipe{ {0, 0, 2, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [408] id 409  tourniquet  tier 0  total 3
+    // [406] id 407  tourniquet  tier 0  total 3
     CraftRecipe{ {0, 0, 1, 0, 2, 0, 0, 0, 0}, u8(CraftStation::Lab), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [409] id 410  toz_shotgun  tier 2  total 16
+    // [407] id 408  toz_shotgun  tier 2  total 16
     CraftRecipe{ {6, 2, 0, 0, 1, 7, 0, 0, 0}, u8(CraftStation::Lathe), 2,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [410] id 411  track_diagram_scrap  tier 1  total 8
+    // [408] id 409  track_diagram_scrap  tier 1  total 8
     CraftRecipe{ {2, 0, 3, 0, 0, 3, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [411] id 412  tracked_zhernov  tier 2  total 35
+    // [409] id 410  tracked_zhernov  tier 2  total 35
     CraftRecipe{ {14, 0, 0, 0, 0, 21, 0, 0, 0}, u8(CraftStation::Lathe), 2,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [412] id 413  tt_pistol  tier 2  total 16
+    // [410] id 411  tt_pistol  tier 2  total 16
     CraftRecipe{ {6, 2, 0, 0, 1, 7, 0, 0, 0}, u8(CraftStation::Lathe), 2,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [413] id 414  tut_cafe_key  tier 0  total 3
+    // [411] id 412  tut_cafe_key  tier 0  total 3
     CraftRecipe{ {1, 0, 0, 0, 0, 2, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [414] id 415  unpeople_detector  tier 1  total 11
+    // [412] id 413  unpeople_detector  tier 1  total 11
     CraftRecipe{ {4, 3, 1, 0, 0, 3, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [415] id 416  unsigned_order  tier 0  total 5
+    // [413] id 414  unsigned_order  tier 0  total 5
     CraftRecipe{ {0, 0, 5, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [416] id 417  used_gasmask_filter  tier 0  total 2
+    // [414] id 415  used_gasmask_filter  tier 0  total 2
     CraftRecipe{ {0, 0, 2, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [417] id 418  uv_spotlight  tier 2  total 16
+    // [415] id 416  uv_spotlight  tier 2  total 16
     CraftRecipe{ {9, 0, 2, 0, 0, 5, 0, 0, 0}, u8(CraftStation::Workbench), 2,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [418] id 419  vacuum  tier 2  total 16
+    // [416] id 417  vacuum  tier 2  total 16
     CraftRecipe{ {6, 5, 1, 0, 0, 4, 0, 0, 0}, u8(CraftStation::Workbench), 2,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [419] id 420  valve_tag  tier 0  total 3
+    // [417] id 418  valve_tag  tier 0  total 3
     CraftRecipe{ {0, 0, 3, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [420] id 421  vent_damper_plate  tier 1  total 8
-    CraftRecipe{ {4, 0, 0, 0, 0, 4, 0, 0, 0}, u8(CraftStation::Workbench), 1,
-                 static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [421] id 422  veretar_sand  tier 1  total 11
+    // [418] id 419  veretar_sand  tier 1  total 11
     CraftRecipe{ {0, 0, 3, 0, 8, 0, 0, 0, 0}, u8(CraftStation::Lab), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [422] id 423  void_archive_warrant  tier 4  total 90
+    // [419] id 420  void_archive_warrant  tier 4  total 90
     CraftRecipe{ {0, 0, 56, 0, 0, 0, 0, 0, 34}, u8(CraftStation::NetTerminal), 4,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [423] id 424  void_spike  tier 4  total 90
+    // [420] id 421  void_spike  tier 4  total 90
     CraftRecipe{ {21, 0, 0, 0, 0, 34, 0, 14, 21}, u8(CraftStation::NetTerminal), 4,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [424] id 425  voluntary_receipt  tier 0  total 3
+    // [421] id 422  voluntary_receipt  tier 0  total 3
     CraftRecipe{ {0, 0, 3, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [425] id 426  water  tier 0  total 1
+    // [422] id 423  water  tier 0  total 1
     CraftRecipe{ {0, 0, 1, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Any), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable | kCraftKnownByDefault) },
-    // [426] id 427  water_coupon  tier 0  total 1
+    // [423] id 424  water_coupon  tier 0  total 1
     CraftRecipe{ {0, 0, 1, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [427] id 428  water_filter_regulator  tier 1  total 8
+    // [424] id 425  water_filter_regulator  tier 1  total 8
     CraftRecipe{ {4, 0, 0, 0, 0, 4, 0, 0, 0}, u8(CraftStation::Lathe), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [428] id 429  water_reservoir_quota  tier 0  total 5
+    // [425] id 426  water_reservoir_quota  tier 0  total 5
     CraftRecipe{ {2, 0, 3, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [429] id 430  water_reservoir_sample  tier 0  total 5
+    // [426] id 427  water_reservoir_sample  tier 0  total 5
     CraftRecipe{ {0, 0, 0, 3, 2, 0, 0, 0, 0}, u8(CraftStation::Lab), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [430] id 431  weapon_blueprint_t2  tier 1  total 8
+    // [427] id 428  weapon_blueprint_t2  tier 1  total 8
     CraftRecipe{ {0, 0, 5, 1, 1, 1, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [431] id 432  weapon_checkout_tag  tier 0  total 5
+    // [428] id 429  weapon_checkout_tag  tier 0  total 5
     CraftRecipe{ {0, 0, 4, 0, 0, 1, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [432] id 433  weapon_permit_forged  tier 0  total 5
+    // [429] id 430  weapon_permit_forged  tier 0  total 5
     CraftRecipe{ {0, 0, 5, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [433] id 434  weapon_permit_signed  tier 1  total 8
+    // [430] id 431  weapon_permit_signed  tier 1  total 8
     CraftRecipe{ {0, 0, 8, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [434] id 435  wet_rag_bundle  tier 0  total 2
+    // [431] id 432  wet_rag_bundle  tier 0  total 2
     CraftRecipe{ {1, 0, 1, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Any), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable | kCraftKnownByDefault) },
-    // [435] id 436  wire_coil  tier 0  total 3
-    CraftRecipe{ {1, 1, 0, 0, 0, 1, 0, 0, 0}, u8(CraftStation::Lathe), 0,
-                 static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [436] id 437  wrench  tier 0  total 5
+    // [432] id 433  wrench  tier 0  total 5
     CraftRecipe{ {2, 0, 0, 0, 0, 3, 0, 0, 0}, u8(CraftStation::Lathe), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [437] id 438  yeast_bread  tier 0  total 2
+    // [433] id 434  yeast_bread  tier 0  total 2
     CraftRecipe{ {0, 0, 1, 1, 0, 0, 0, 0, 0}, u8(CraftStation::Any), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [438] id 439  zatychkin_pistol  tier 2  total 16
+    // [434] id 435  zatychkin_pistol  tier 2  total 16
     CraftRecipe{ {5, 2, 0, 0, 1, 8, 0, 0, 0}, u8(CraftStation::Lathe), 2,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [439] id 440  zhek_seal  tier 1  total 8
+    // [435] id 436  zhek_seal  tier 1  total 8
     CraftRecipe{ {3, 0, 5, 0, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [440] id 441  zhelemish_boiled  tier 0  total 3
+    // [436] id 437  zhelemish_boiled  tier 0  total 3
     CraftRecipe{ {0, 0, 1, 0, 2, 0, 0, 0, 0}, u8(CraftStation::Lab), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [441] id 442  zhelemish_dried  tier 0  total 3
+    // [437] id 438  zhelemish_dried  tier 0  total 3
     CraftRecipe{ {0, 0, 1, 2, 0, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [442] id 443  zhelemish_raw  tier 0  total 2
+    // [438] id 439  zhelemish_raw  tier 0  total 2
     CraftRecipe{ {0, 0, 1, 1, 0, 0, 0, 0, 0}, u8(CraftStation::Any), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [443] id 444  zhelemish_sample_contaminated  tier 0  total 3
+    // [439] id 440  zhelemish_sample_contaminated  tier 0  total 3
     CraftRecipe{ {0, 0, 0, 2, 1, 0, 0, 0, 0}, u8(CraftStation::Workbench), 0,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [444] id 445  zhelemish_sample_sealed  tier 1  total 11
+    // [440] id 441  zhelemish_sample_sealed  tier 1  total 11
     CraftRecipe{ {0, 0, 1, 6, 4, 0, 0, 0, 0}, u8(CraftStation::Workbench), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
-    // [445] id 446  zinc_slime_bucket  tier 1  total 11
+    // [441] id 442  zinc_slime_bucket  tier 1  total 11
     CraftRecipe{ {0, 0, 2, 4, 5, 0, 0, 0, 0}, u8(CraftStation::Lab), 1,
                  static_cast<std::uint8_t>(kCraftDiscoverable) },
 }};
 
 const std::array<CraftSource, kCraftSourceCount> kCraftSources = {{
-    // [0] default_survival_basics  kind Default  teaches 9  grants tier 0
-    CraftSource{ {64, 426, 40, 435, 205, 274, 77, 254, 12},
-                 kInvalidItem, 9, u8(CraftSourceKind::Default), 0, 0 },
+    // [0] default_survival_basics  kind Default  teaches 8  grants tier 0
+    CraftSource{ {64, 423, 40, 432, 205, 77, 254, 12, 0},
+                 kInvalidItem, 8, u8(CraftSourceKind::Default), 0, 0 },
     // [1] item_blueprint_t1_folder  kind Item  teaches 4  grants tier 1
     CraftSource{ {121, 156, 120, 142, 0, 0, 0, 0, 0},
                  51, 4, u8(CraftSourceKind::Item), 1, 1 },
     // [2] item_blueprint_t2_folder  kind Item  teaches 4  grants tier 1
-    CraftSource{ {89, 145, 415, 428, 0, 0, 0, 0, 0},
+    CraftSource{ {89, 145, 413, 425, 0, 0, 0, 0, 0},
                  52, 4, u8(CraftSourceKind::Item), 1, 1 },
     // [3] item_blueprint_t3_folder  kind Item  teaches 4  grants tier 4
-    CraftSource{ {302, 16, 314, 170, 0, 0, 0, 0, 0},
+    CraftSource{ {301, 16, 313, 170, 0, 0, 0, 0, 0},
                  53, 4, u8(CraftSourceKind::Item), 4, 1 },
     // [4] item_weapon_blueprint_t2  kind Item  teaches 3  grants tier 2
     CraftSource{ {87, 63, 7, 0, 0, 0, 0, 0, 0},
-                 431, 3, u8(CraftSourceKind::Item), 2, 1 },
+                 428, 3, u8(CraftSourceKind::Item), 2, 1 },
     // [5] item_homemade_ammo_instruction  kind Item  teaches 3  grants tier 1
     CraftSource{ {186, 12, 188, 0, 0, 0, 0, 0, 0},
                  187, 3, u8(CraftSourceKind::Item), 1, 0 },
     // [6] item_track_diagram_scrap  kind Item  teaches 3  grants tier 1
-    CraftSource{ {317, 318, 411, 0, 0, 0, 0, 0, 0},
-                 411, 3, u8(CraftSourceKind::Item), 1, 0 },
+    CraftSource{ {316, 317, 409, 0, 0, 0, 0, 0, 0},
+                 409, 3, u8(CraftSourceKind::Item), 1, 0 },
     // [7] item_frozen_item_shard  kind Item  teaches 2  grants tier 4
-    CraftSource{ {154, 295, 0, 0, 0, 0, 0, 0, 0},
+    CraftSource{ {154, 294, 0, 0, 0, 0, 0, 0, 0},
                  153, 2, u8(CraftSourceKind::Item), 4, 1 },
     // [8] item_junior_tech_case  kind Item  teaches 2  grants tier 1
-    CraftSource{ {390, 315, 0, 0, 0, 0, 0, 0, 0},
+    CraftSource{ {388, 314, 0, 0, 0, 0, 0, 0, 0},
                  199, 2, u8(CraftSourceKind::Item), 1, 0 },
-    // [9] item_relay_diagram  kind Item  teaches 3  grants tier 1
-    CraftSource{ {436, 317, 331, 0, 0, 0, 0, 0, 0},
-                 331, 3, u8(CraftSourceKind::Item), 1, 1 },
-    // [10] note_workbench_basics  kind Note  teaches 2  grants tier 0
-    CraftSource{ {121, 436, 0, 0, 0, 0, 0, 0, 0},
-                 kInvalidItem, 2, u8(CraftSourceKind::Note), 0, 0 },
+    // [9] item_relay_diagram  kind Item  teaches 2  grants tier 1
+    CraftSource{ {316, 330, 0, 0, 0, 0, 0, 0, 0},
+                 330, 2, u8(CraftSourceKind::Item), 1, 1 },
+    // [10] note_workbench_basics  kind Note  teaches 1  grants tier 0
+    CraftSource{ {121, 0, 0, 0, 0, 0, 0, 0, 0},
+                 kInvalidItem, 1, u8(CraftSourceKind::Note), 0, 0 },
     // [11] note_medpost_bandage_sheet  kind Note  teaches 2  grants tier 0
-    CraftSource{ {40, 394, 0, 0, 0, 0, 0, 0, 0},
+    CraftSource{ {40, 392, 0, 0, 0, 0, 0, 0, 0},
                  kInvalidItem, 2, u8(CraftSourceKind::Note), 0, 0 },
     // [12] quest_barni_range_cleanup  kind Quest  teaches 1  grants tier 0
     CraftSource{ {186, 0, 0, 0, 0, 0, 0, 0, 0},
                  kInvalidItem, 1, u8(CraftSourceKind::Quest), 0, 0 },
     // [13] quest_yakov_field_lab  kind Quest  teaches 1  grants tier 1
-    CraftSource{ {302, 0, 0, 0, 0, 0, 0, 0, 0},
+    CraftSource{ {301, 0, 0, 0, 0, 0, 0, 0, 0},
                  kInvalidItem, 1, u8(CraftSourceKind::Quest), 1, 0 },
     // [14] quest_idol_ministry_registration  kind Quest  teaches 2  grants tier 0
-    CraftSource{ {46, 353, 0, 0, 0, 0, 0, 0, 0},
+    CraftSource{ {46, 351, 0, 0, 0, 0, 0, 0, 0},
                  kInvalidItem, 2, u8(CraftSourceKind::Quest), 0, 0 },
     // [15] quest_idol_liquidator_field_report  kind Quest  teaches 2  grants tier 1
     CraftSource{ {12, 159, 0, 0, 0, 0, 0, 0, 0},
@@ -1418,26 +1406,26 @@ const std::array<CraftSource, kCraftSourceCount> kCraftSources = {{
     CraftSource{ {185, 230, 0, 0, 0, 0, 0, 0, 0},
                  kInvalidItem, 2, u8(CraftSourceKind::Quest), 1, 0 },
     // [17] npc_mechanic_tool_lesson  kind Npc  teaches 3  grants tier 1
-    CraftSource{ {437, 156, 120, 0, 0, 0, 0, 0, 0},
+    CraftSource{ {433, 156, 120, 0, 0, 0, 0, 0, 0},
                  kInvalidItem, 3, u8(CraftSourceKind::Npc), 1, 0 },
     // [18] npc_scientist_lab_lesson  kind Npc  teaches 3  grants tier 1
-    CraftSource{ {128, 395, 302, 0, 0, 0, 0, 0, 0},
+    CraftSource{ {128, 393, 301, 0, 0, 0, 0, 0, 0},
                  kInvalidItem, 3, u8(CraftSourceKind::Npc), 1, 0 },
     // [19] npc_liquidator_ammo_lesson  kind Npc  teaches 3  grants tier 2
     CraftSource{ {159, 12, 63, 0, 0, 0, 0, 0, 0},
                  kInvalidItem, 3, u8(CraftSourceKind::Npc), 2, 0 },
     // [20] npc_black_market_weapon_lesson  kind Npc  teaches 3  grants tier 1
-    CraftSource{ {186, 315, 188, 0, 0, 0, 0, 0, 0},
+    CraftSource{ {186, 314, 188, 0, 0, 0, 0, 0, 0},
                  kInvalidItem, 3, u8(CraftSourceKind::Npc), 1, 0 },
     // [21] terminal_floor_archive_scrap_schemes  kind Terminal  teaches 4  grants tier 1
-    CraftSource{ {411, 331, 77, 212, 0, 0, 0, 0, 0},
+    CraftSource{ {409, 330, 77, 212, 0, 0, 0, 0, 0},
                  kInvalidItem, 4, u8(CraftSourceKind::Terminal), 1, 0 },
     // [22] terminal_dispatch_net_relay  kind Terminal  teaches 3  grants tier 0
-    CraftSource{ {331, 89, 135, 0, 0, 0, 0, 0, 0},
+    CraftSource{ {330, 89, 135, 0, 0, 0, 0, 0, 0},
                  kInvalidItem, 3, u8(CraftSourceKind::Terminal), 0, 0 },
-    // [23] floor_recipe_billboard_basics  kind Floor  teaches 3  grants tier 0
-    CraftSource{ {121, 436, 156, 0, 0, 0, 0, 0, 0},
-                 kInvalidItem, 3, u8(CraftSourceKind::Floor), 0, 0 },
+    // [23] floor_recipe_billboard_basics  kind Floor  teaches 2  grants tier 0
+    CraftSource{ {121, 156, 0, 0, 0, 0, 0, 0, 0},
+                 kInvalidItem, 2, u8(CraftSourceKind::Floor), 0, 0 },
 }};
 
 const std::array<const char*, kCraftSourceCount> kCraftSourceIds = {{

@@ -33,9 +33,9 @@ OUT_PATH = os.path.join(REPO, "src", "game", "monster_traits_table.cpp")
 
 # Authored rows. Must equal kMonsterTraitRows in src/game/monster_traits.h, which is
 # also what tools/check_source_rules.cmake rule 7 regexes for.
-EXPECTED_ROWS = 22
+EXPECTED_ROWS = 21
 # The dense table width. Must equal kMobKindCount, which mob_table.h static_asserts.
-EXPECTED_KINDS = 69
+EXPECTED_KINDS = 68
 
 TERRAIN = {"ANY": "Any", "WET": "Wet"}
 
@@ -280,7 +280,7 @@ def main():
 CPP_KIND = [
     "Sborka", "Tvar", "Polzun", "Betonnik", "Zombie", "Eye", "Nightmare",
     "Shadow", "Rebar", "Matka", "Idol", "Mancobus", "Herald", "Creator",
-    "Spirit", "Robot", "Shovnik", "Lampovy", "Pechateed", "TubeEel",
+    "Spirit", "Robot", "Shovnik", "Lampovy", "Pechateed",
     "Paragraph", "Nelyud", "Krysnozhka", "Kostorez", "Safeguard",
     "BlackLiquidator", "KhorovayaMatka", "Slimevik", "Sobrannyy",
     "ZhornayaTvar", "Bezekhiy", "Pseudolift", "Slepoglaz", "Olgoy",

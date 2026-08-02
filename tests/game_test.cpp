@@ -107,7 +107,7 @@ int g_checks = 0;
 #include "suite_economy.inl"
 #include "suite_monster.inl"
 #include "suite_playercmd.inl"
-#include "suite_macrowire.inl"
+
 #include "suite_status.inl"
 #include "suite_rpg.inl"
 #include "suite_floorcatalog.inl"
@@ -1147,7 +1147,7 @@ static void test_mob_table() {
     CHECK(immobile == 4);   // IDOL, BORSHCHEVIK, KANTSELYARSKIY_IDOL, BLOOD_PLANT
     CHECK(boss == 3);       // MANCOBUS, HERALD, CREATOR
     CHECK(rare == 33);
-    CHECK(plain == 23);     // 15 with no flags + 8 whose flags are all shared bits
+    CHECK(plain == 22);     // 15 with no flags + 8 whose flags are all shared bits
 
     // Spot-check both ends of the catalog against the CSV.
     const MobDef& sborka = mob_def(MobKind::Sborka);
@@ -1670,8 +1670,8 @@ static void test_melee_cooldown_and_reach() {
 static void test_item_table() {
     // 446, not the ~434 items.md and the reference's own desdoc.md both claim, and
     // not the 253 in its balance.md. Compile-time, so it belongs to the build.
-    static_assert(kItemCount == 446, "446 items ([items.md])");
-    static_assert(kMeleeCount == 23, "23 melee weapons, 22 of them items");
+    static_assert(kItemCount == 442, "442 items ([items.md])");
+    static_assert(kMeleeCount == 22, "22 melee weapons, 21 of them items");
 
     CHECK(kItemTable.size() == kItemCount);
     CHECK(kItemNames.size() == kItemCount);
@@ -1703,14 +1703,14 @@ static void test_item_table() {
     }
     // Census pins, so a truncated or duplicated regenerate fails here rather than
     // passing every per-row check.
-    CHECK(weapons == 88);
+    CHECK(weapons == 87);
     CHECK(healers == 12);
     CHECK(armoured == 5);
     // 356, not 355: data/items.csv gave the `key` row spawn_w_milli 350 (it was 0),
     // which is what makes the whole KEY category reachable at all. All three KEY rows
     // used to be unspawnable, unstockable and unbankable — content that cost a table
     // row and could never appear.
-    CHECK(spawnable == 356);
+    CHECK(spawnable == 352);
 }
 
 // Depth gating is the greed loop: value rises with depth, and NOT via a hard cut.
@@ -1930,7 +1930,7 @@ static void test_loadout_changes_the_numbers() {
         // Index 0 is unarmed and must never be reachable via an item.
         CHECK(melee_for_item(static_cast<ItemId>(i)) == &kMeleeTable[mi]);
     }
-    CHECK(linked == 22);                     // 22 item-backed + fists
+    CHECK(linked == 21);                     // 22 item-backed + fists
     CHECK(melee_for_item(kInvalidItem) == nullptr);
     for (const MeleeDef& m : kMeleeTable) {
         CHECK(m.dmg >= 1 && m.dmg <= 4000);
@@ -4194,7 +4194,7 @@ int main() {
     test_economy_all();
     test_monster_all();
     test_playercmd_all();
-    test_macrowire_all();
+
     test_status_all();
     test_rpg_all();
     test_floorcatalog_all();

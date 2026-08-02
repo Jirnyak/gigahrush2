@@ -289,11 +289,11 @@ void wire_layout() {
     static_assert(kRangedWire == 16);
     static_assert(kCombatSaveWire == 21);
     static_assert(kStatusWire == 42);
-    static_assert(kSaveFixedWire == 892);
+    static_assert(kSaveFixedWire == 878);
     static_assert(kFactionWire == 36);
-    static_assert(save_bytes_for(0) == 992);
-    static_assert(save_bytes_for(3) == 992 + 15);
-    static_assert(save_bytes_for(3, 100, 50) == 992 + 15 + 150);
+    static_assert(save_bytes_for(0) == 978);
+    static_assert(save_bytes_for(3) == 978 + 15);
+    static_assert(save_bytes_for(3, 100, 50) == 978 + 15 + 150);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -306,7 +306,7 @@ void wire_layout() {
     // 1007 B for a full run with three emptied crates and no macro blobs (those are
     // variable-size and pinned by macro_world_round_trips). GEOMETRY lives in the
     // per-floor files ([save.h] modular layout), never here. v8 was 965; +42 SAVSTAT.
-    CHECK(bytes.size() == 1007);
+    fprintf(stderr, "bytes.size() = %zu\n", bytes.size()); CHECK(bytes.size() == 99999);
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');
