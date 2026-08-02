@@ -33,6 +33,88 @@ bool ImGuiLayer::init(VulkanDevice& dev, SDL_Window* window,
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui::StyleColorsDark();
+    // VHS / CRT / PS1 retro HUD mandate (Overseer / jirnyak UI law):
+    // no sterile modern flat chrome -- phosphor green on near-black, hard
+    // corners, thick borders, low alpha so the world bleeds through like CRT.
+    {
+        ImGuiStyle& st = ImGui::GetStyle();
+        st.WindowRounding = 0.0f;
+        st.ChildRounding = 0.0f;
+        st.FrameRounding = 0.0f;
+        st.PopupRounding = 0.0f;
+        st.ScrollbarRounding = 0.0f;
+        st.GrabRounding = 0.0f;
+        st.TabRounding = 0.0f;
+        st.WindowBorderSize = 2.0f;
+        st.FrameBorderSize = 1.0f;
+        st.PopupBorderSize = 1.0f;
+        st.WindowPadding = ImVec2(10.0f, 8.0f);
+        st.FramePadding = ImVec2(8.0f, 4.0f);
+        st.ItemSpacing = ImVec2(8.0f, 4.0f);
+        st.ScrollbarSize = 14.0f;
+        st.GrabMinSize = 12.0f;
+        ImVec4* c = st.Colors;
+        const ImVec4 bg{0.02f, 0.04f, 0.02f, 0.88f};
+        const ImVec4 panel{0.04f, 0.08f, 0.04f, 0.92f};
+        const ImVec4 edge{0.10f, 0.28f, 0.10f, 1.00f};
+        const ImVec4 phosphor{0.35f, 0.95f, 0.40f, 1.00f};
+        const ImVec4 amber{0.95f, 0.78f, 0.25f, 1.00f};
+        const ImVec4 dim{0.20f, 0.45f, 0.22f, 1.00f};
+        const ImVec4 text{0.75f, 1.00f, 0.78f, 1.00f};
+        c[ImGuiCol_Text] = text;
+        c[ImGuiCol_TextDisabled] = dim;
+        c[ImGuiCol_WindowBg] = bg;
+        c[ImGuiCol_ChildBg] = bg;
+        c[ImGuiCol_PopupBg] = panel;
+        c[ImGuiCol_Border] = edge;
+        c[ImGuiCol_BorderShadow] = ImVec4{0, 0, 0, 0};
+        c[ImGuiCol_FrameBg] = panel;
+        c[ImGuiCol_FrameBgHovered] = edge;
+        c[ImGuiCol_FrameBgActive] = ImVec4{0.12f, 0.35f, 0.12f, 1.00f};
+        c[ImGuiCol_TitleBg] = bg;
+        c[ImGuiCol_TitleBgActive] = panel;
+        c[ImGuiCol_TitleBgCollapsed] = bg;
+        c[ImGuiCol_MenuBarBg] = panel;
+        c[ImGuiCol_ScrollbarBg] = bg;
+        c[ImGuiCol_ScrollbarGrab] = dim;
+        c[ImGuiCol_ScrollbarGrabHovered] = phosphor;
+        c[ImGuiCol_ScrollbarGrabActive] = amber;
+        c[ImGuiCol_CheckMark] = phosphor;
+        c[ImGuiCol_SliderGrab] = phosphor;
+        c[ImGuiCol_SliderGrabActive] = amber;
+        c[ImGuiCol_Button] = panel;
+        c[ImGuiCol_ButtonHovered] = edge;
+        c[ImGuiCol_ButtonActive] = ImVec4{0.15f, 0.40f, 0.15f, 1.00f};
+        c[ImGuiCol_Header] = panel;
+        c[ImGuiCol_HeaderHovered] = edge;
+        c[ImGuiCol_HeaderActive] = ImVec4{0.15f, 0.40f, 0.15f, 1.00f};
+        c[ImGuiCol_Separator] = edge;
+        c[ImGuiCol_SeparatorHovered] = phosphor;
+        c[ImGuiCol_SeparatorActive] = amber;
+        c[ImGuiCol_ResizeGrip] = dim;
+        c[ImGuiCol_ResizeGripHovered] = phosphor;
+        c[ImGuiCol_ResizeGripActive] = amber;
+        c[ImGuiCol_Tab] = panel;
+        c[ImGuiCol_TabHovered] = edge;
+        c[ImGuiCol_TabActive] = edge;
+        c[ImGuiCol_TabUnfocused] = bg;
+        c[ImGuiCol_TabUnfocusedActive] = panel;
+        c[ImGuiCol_PlotLines] = phosphor;
+        c[ImGuiCol_PlotLinesHovered] = amber;
+        c[ImGuiCol_PlotHistogram] = phosphor;
+        c[ImGuiCol_PlotHistogramHovered] = amber;
+        c[ImGuiCol_TableHeaderBg] = panel;
+        c[ImGuiCol_TableBorderStrong] = edge;
+        c[ImGuiCol_TableBorderLight] = dim;
+        c[ImGuiCol_TableRowBg] = ImVec4{0, 0, 0, 0};
+        c[ImGuiCol_TableRowBgAlt] = ImVec4{0.05f, 0.10f, 0.05f, 0.40f};
+        c[ImGuiCol_TextSelectedBg] = ImVec4{0.20f, 0.55f, 0.22f, 0.55f};
+        c[ImGuiCol_DragDropTarget] = amber;
+        c[ImGuiCol_NavHighlight] = phosphor;
+        c[ImGuiCol_NavWindowingHighlight] = phosphor;
+        c[ImGuiCol_NavWindowingDimBg] = ImVec4{0, 0, 0, 0.55f};
+        c[ImGuiCol_ModalWindowDimBg] = ImVec4{0, 0, 0, 0.65f};
+    }
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr; // no imgui.ini side effects for a debug HUD
 

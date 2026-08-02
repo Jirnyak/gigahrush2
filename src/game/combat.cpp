@@ -260,7 +260,25 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
             // Pure NPC deaths carry NpcRef only — MobRef is optional.
             if (reg.all_of<MobRef>(e)) reg.remove<MobRef>(e);
             if (reg.all_of<MobCombat>(e)) reg.remove<MobCombat>(e);
-            if (reg.all_of<Velocity>(e)) reg.remove<Velocity>(e);
+            // [jirnyak.md] section 18/21 -- corpse is a BodyPass ragdoll, not a
+            // frozen prop. Keep / inject Velocity + AngularVelocity + DynamicBodyTag
+            // so physics_step rolls the body on contact (same contract as debris).
+            // Do NOT strip Velocity here -- that made corpses freeze in mid-air.
+            {
+                vec3 kick{0.0f, 0.0f, 0.8f};
+                if (const Velocity* v = reg.try_get<Velocity>(e)) {
+                    kick = v->v;
+                    if (kick.x == 0.0f && kick.y == 0.0f && kick.z == 0.0f)
+                        kick.z = 0.8f;
+                }
+                reg.emplace_or_replace<Velocity>(e, Velocity{kick});
+                vec3 w{kick.z + 0.5f, kick.x - 0.3f, 1.5f};
+                reg.emplace_or_replace<AngularVelocity>(e, AngularVelocity{w});
+                if (!reg.all_of<Rotation>(e))
+                    reg.emplace<Rotation>(e);
+                reg.emplace_or_replace<GravityAffected>(e);
+                reg.emplace_or_replace<DynamicBodyTag>(e);
+            }
             reg.remove<Dead>(e);
 
 

@@ -24,6 +24,7 @@
 2. **Feature not based on any fundamental core system = DECLINED.** Every mechanic must be an emergent layer over core engines (voxel, physics, ECS, macropopulation, attributes).
 3. **All Content is Data-Driven.** Attributes, item drops, loot tables, mob traits, floor modules are loaded from CSV/tables (`data/items.csv`, `data/mobs.csv`), never hardcoded `if`-chains in C++.
 4. **Ruthless Purge Policy ("Нещадная чистка"):** Cut and delete legacy meshing hacks, multi-colored striping, hardcoded keybindings, and random isolated mechanics. Core simplicity outranks secondary fluff.
+5. **Retro-Pixel / VHS / CRT UI Mandate ("Интерфейс це важно"):** All HUD and canvas overlays must follow the Soviet-punk service-equipment ("служебная аппаратура") CRT aesthetic from GigaHrush 1 (`taste.md`). No sterile modern flat chrome, zero rounding (0.0f), phosphor green on near-black CRT alpha background.
 
 ---
 
