@@ -36,12 +36,23 @@ void LazyFieldRebaker::mark_dirty_cells(
 std::size_t LazyFieldRebaker::step_lazy_rebake(const MacroGrid& grid,
                                                CoarseGraph& coarse,
                                                FineNav& fine) {
-    // Live graph empty => full AsyncBake in flight. Keep queue for after poll().
     if (fine.flow.empty()) return 0;
-
     std::size_t processedThisFrame = 0;
 
-    // Check if background worker has finished a node
+    if (m_closingTask.valid() &&
+        m_closingTask.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        ClosingResult res = m_closingTask.get();
+        if (fine.nearest.size() == res.nearest.size()) {
+            std::copy(res.nearest.begin(), res.nearest.end(), fine.nearest.begin());
+        }
+        coarse = res.coarse;
+        m_closingPassCount++;
+    }
+
+    if (m_closingTask.valid()) {
+        return 0;
+    }
+
     if (m_activeTask.valid() &&
         m_activeTask.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         BakeResult result = m_activeTask.get();
@@ -55,7 +66,6 @@ std::size_t LazyFieldRebaker::step_lazy_rebake(const MacroGrid& grid,
         processedThisFrame++;
     }
 
-    // Launch a new background task if idle and queue is not empty
     if (!m_activeTask.valid() && !m_pendingQueue.empty()) {
         const int nodeId = m_pendingQueue.front();
         m_pendingQueue.pop();
@@ -71,12 +81,21 @@ std::size_t LazyFieldRebaker::step_lazy_rebake(const MacroGrid& grid,
         });
     }
 
-    // Closing pass once: nearest Voronoi + coarse edges/all-pairs.
-    if (m_pendingQueue.empty() && !m_activeTask.valid() && m_needClosingPass) {
-        rebake_nearest(grid, fine);
-        rebake_coarse(grid, coarse);
+    if (m_pendingQueue.empty() && !m_activeTask.valid() && m_needClosingPass && !m_closingTask.valid()) {
+        const MacroGrid* g = &grid;
+        const FineNav* f = &fine;
+        m_closingTask = std::async(std::launch::async, [g, f]() {
+            ClosingResult res;
+            res.nearest.assign(kMacroCells, kFlowNone);
+            FineNav local_fine;
+            local_fine.flow = f->flow; 
+            local_fine.nearest = res.nearest;
+            rebake_nearest(*g, local_fine);
+            res.nearest = std::move(local_fine.nearest);
+            rebake_coarse(*g, res.coarse);
+            return res;
+        });
         m_needClosingPass = false;
-        m_closingPassCount++;
     }
 
     return processedThisFrame;

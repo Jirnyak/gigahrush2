@@ -82,17 +82,6 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
                 static_cast<std::uint32_t>(pos.z));
 
     if (mode == PropFallMode::GpuHandoff) {
-        // Shatter parent into CPU debris chips then destroy it
-        // ([jirnyak.md] §18/19 — sim debris on BodyPass, not void / bus POD).
-        DebrisSpawnEvent ev{};
-        ev.pos = pos;
-        ev.impulse = impulse;
-        ev.color = col;
-        ev.meshKind = mk;
-        LayerId layer = 0;
-        if (reg.all_of<Transform>(prop))
-            layer = reg.get<Transform>(prop).layer;
-        spawn_debris_pieces(reg, ev, layer, /*count=*/3);
         reg.destroy(prop);
         return;
     }
@@ -504,62 +493,6 @@ bool interaction_step(Registry& reg, Entity player, Interactable::Kind kind,
     InteractionHit hit = find_nearest_interactable(reg, player, kind, reach);
     if (outHit) *outHit = hit;
     return hit.hit;
-}
-
-std::uint32_t spawn_debris_pieces(Registry& reg, const DebrisSpawnEvent& ev,
-                                  LayerId layer, int count)
-{
-    // Clamp: one chip minimum so callers never get a silent no-op; hard cap
-    // keeps a single shatter from flooding BodyPass.
-    if (count < 1) count = 1;
-    if (count > 8) count = 8;
-
-    // Small chips -- BodyPass AABB skin. half=0.10 m matches roll-drive r floor
-    // path in physics_step (r = min half, clamped >= 0.05).
-    constexpr float kHalf = 0.10f;
-    // Deterministic scatter offsets (no RNG) so tests are bit-stable.
-    static constexpr float kOx[8] = {
-        0.06f, -0.06f, 0.06f, -0.06f, 0.00f, 0.00f, 0.09f, -0.09f};
-    static constexpr float kOy[8] = {
-        0.00f, 0.00f, 0.00f, 0.00f, 0.06f, -0.06f, 0.04f, -0.04f};
-    static constexpr float kOz[8] = {
-        0.06f, 0.06f, -0.06f, -0.06f, 0.04f, 0.04f, 0.00f, 0.00f};
-
-    std::uint32_t n = 0;
-    for (int i = 0; i < count; ++i) {
-        Entity e = reg.create();
-        const vec3 p{ev.pos.x + kOx[i], ev.pos.y + kOy[i], ev.pos.z + kOz[i]};
-        reg.emplace<Transform>(e, p, layer);
-
-        // Lateral scatter on the impulse so chips fan out instead of stacking.
-        vec3 v = ev.impulse;
-        v.x += 0.45f * static_cast<float>((i % 3) - 1);
-        v.y += 0.45f * static_cast<float>(((i / 3) % 3) - 1);
-        // Guarantee a non-zero kick even if impulse was zero (anchor air detach).
-        if (v.x == 0.0f && v.y == 0.0f && v.z == 0.0f)
-            v.z = 1.0f;
-        reg.emplace<Velocity>(e, Velocity{v});
-
-        // Spin from impulse, same basis as RagdollRoll detach, plus per-chip bias.
-        const float fi = static_cast<float>(i);
-        vec3 w{ev.impulse.z + fi * 0.7f, ev.impulse.x - fi * 0.5f, 2.0f + fi};
-        reg.emplace<AngularVelocity>(e, AngularVelocity{w});
-        reg.emplace<Rotation>(e);
-        reg.emplace<AABB>(e, AABB{vec3{kHalf, kHalf, kHalf}});
-        reg.emplace<GravityAffected>(e);
-        reg.emplace<DynamicBodyTag>(e);
-        reg.emplace<Renderable>(e, ev.color);
-
-        // Optional mesh skin ordinal for render upload; BodyPass still owns motion.
-        if (ev.meshKind != 0u) {
-            reg.emplace<PropMeshTag>(e);
-            PropMesh mesh{};
-            mesh.shape = static_cast<std::uint8_t>(ev.meshKind & 0xFFu);
-            reg.emplace<PropMesh>(e, mesh);
-        }
-        ++n;
-    }
-    return n;
 }
 
 void prop_ragdoll_step(Registry& reg, float dt)

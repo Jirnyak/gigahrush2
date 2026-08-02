@@ -69,14 +69,6 @@ struct PropMeshInstance {
 // AngularVelocity + Rotation live in ecs/components.h (core) so physics_step
 // can integrate them without src/sim including src/game. [jirnyak.md] §18.
 
-struct DebrisSpawnEvent {
-
-    vec3 pos;
-    vec3 impulse;
-    vec3 color;
-    std::uint32_t meshKind;
-};
-
 struct PendingDetachedProp {
     Entity entity;
     PropFallMode mode;
@@ -174,14 +166,6 @@ InteractionHit find_nearest_interactable(const Registry& reg, Entity player,
 // No std::vector — call from the sim tick freely. [jirnyak.md] §18.
 bool interaction_step(Registry& reg, Entity player, Interactable::Kind kind,
                       EventBus& bus, InteractionHit* outHit = nullptr);
-
-// Spawn N small DynamicBodyTag debris chips from a DebrisSpawnEvent.
-// Each piece gets Velocity + AngularVelocity + Rotation + AABB + GravityAffected
-// + Renderable so BodyPass draws them and physics_step rolls them on contact.
-// count is clamped to [1, 8]. Returns how many entities were created.
-// [jirnyak.md] section 18/19 -- GpuHandoff must leave sim debris, not void.
-std::uint32_t spawn_debris_pieces(Registry& reg, const DebrisSpawnEvent& ev,
-                                  LayerId layer, int count = 3);
 
 // Advance ragdoll spin bookkeeping for DynamicBodyTag props. Angular integration
 // itself lives in physics_step; this is the game-side settle / impulse helper.

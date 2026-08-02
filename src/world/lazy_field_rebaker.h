@@ -58,6 +58,12 @@ private:
     };
     std::future<BakeResult> m_activeTask;
 
+    struct ClosingResult {
+        std::vector<std::uint8_t> nearest;
+        CoarseGraph coarse;
+    };
+    std::future<ClosingResult> m_closingTask;
+
     std::unordered_set<int> m_queuedSet;
     std::queue<int> m_pendingQueue;
     bool m_needClosingPass = false;
