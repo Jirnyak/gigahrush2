@@ -13,6 +13,8 @@
 > - **Feature not based on any fundamental core system = DECLINED.**
 > - **All Content is Data-Driven:** Item drops, mob traits, stats, loot tables belong in CSVs (`data/items.csv`, `data/mobs.csv`), never hardcoded `if`-chains.
 > - **Ruthless Purge Policy ("Нещадная чистка"):** Cut and delete legacy meshing hacks, multi-colored striping, hardcoded keybindings, and random unintegrated mechanics.
+> - **Retro-Pixel / VHS / CRT UI Mandate ("Интерфейс це важно"):** All HUD/ImGui and canvas overlays MUST follow the Soviet-punk service-equipment ("служебная аппаратура") CRT aesthetic from GigaHrush 1 (`taste.md`). No sterile modern flat chrome, zero rounding (`WindowRounding = 0.0f`), phosphor green on near-black CRT alpha background.
+> - **v1 is Read-Only Canon:** `C:\hades\gigahrush` (v1) is a read-only aesthetic and architectural reference. All new rules, features, and code MUST be written to `C:\hades\gigahrush2`.
 
 > **gigahrush2 is a universal voxel *core engine*, not a game.** It provides the
 > substrate — a toroidal 128³ macro world, 8³ sub-voxel masks, runtime typed
@@ -245,6 +247,19 @@ unibyte and UTF-8 locales"*, exit 2 — printing no matches, which reads as "non
 found" unless you check the exit status. `/utf-8` also earns its place on a DBCS
 host, where a multi-byte comment character can swallow the following quote and
 break the parse.
+
+## 🖥️ UI / HUD Aesthetic Mandate ("Интерфейс це важно")
+
+1. **Inheritance from GigaHrush 1 (`taste.md`)**:
+   - `gigahrush2` inherits the Soviet-punk "служебная аппаратура" (service equipment), pixel-minimalist horror, and bureaucratic paper/card aesthetic from GigaHrush 1.
+   - UI elements must look like rugged diagnostic equipment, forms, punch cards, and CRT monitors.
+2. **ImGui Geometry & Styling (`src/render/imgui_layer.cpp`)**:
+   - **Zero Rounding**: Strictly `WindowRounding = 0.0f`, `FrameRounding = 0.0f`, `ChildRounding = 0.0f`, `TabRounding = 0.0f`, `GrabRounding = 0.0f`.
+   - **CRT Phosphor Palette**: Phosphor green (`#59F266`) text/accents on near-black (`#050A05`) backgrounds with low alpha (`0.88`) so the 3D world bleeds through like an old CRT screen.
+   - **Amber Alerts**: Amber (`#F2C740`) for active states, warnings, and drag-drop targets.
+   - **Borders**: Crisp rectangular borders (`WindowBorderSize = 2.0f`, `FrameBorderSize = 1.0f`).
+3. **Strict Ban on Modern Chrome**:
+   - Absolutely no soft glowing casino cards, rounded modern SaaS widgets, or decorative non-functional UI fluff.
 
 ## Workflow Checklist
 
