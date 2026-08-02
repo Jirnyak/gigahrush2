@@ -69,6 +69,7 @@ each one**. Correctness first; speed is a side effect of not backtracking.
 
 ## Hard Rules
 
+- **THE NATIVE-FIRST LAW (ZERO CRUTCH SCRIPTS):** You are ABSOLUTELY FORBIDDEN from creating Python, Bash, Node, or PowerShell wrapper scripts (`_patch_*.py`, `_wire_*.py`, etc.) to edit, append, test, or generate code. You MUST edit source files natively using `replace_file_content` or `replace_in_file`. Any attempt to bypass direct file editing with a script is a CRITICAL COMPLIANCE FAILURE.
 - **No exceptions. No RTTI.** The core is built `-fno-exceptions -fno-rtti`
   (EnTT with `ENTT_NOEXCEPTION`). Do not use `try`/`catch`/`throw`/
   `dynamic_cast`/`typeid`. For type identity without RTTI use the `type_tag<T>()`
