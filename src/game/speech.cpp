@@ -5,6 +5,7 @@
 // ([speech_table.cpp]) has already baked the index, so a pick is: two bucket reads,
 // one `hash3`, one modulo, one add.
 #include "game/speech.h"
+#include <algorithm>
 
 #include "core/rng.h"        // hash3 / rand_below — the stateless mixer
 #include "game/ai.h"         // IntentId / kIntentNone / AiBrain — the committed decision
@@ -100,9 +101,7 @@ float reserve_severity(float value, float warnAt) {
     return (warnAt - v) / warnAt;
 }
 
-// Local, because core/math.h ships no float max and ai.cpp keeps its own for the same
-// reason. Two call sites do not justify touching a shared header.
-float maxf_local(float a, float b) { return a > b ? a : b; }
+
 
 // Severity of a rising pressure: 0 below the warning band, 1 at kNeedMax.
 float pressure_severity(float value, float warnAt) {
@@ -230,7 +229,7 @@ SpeechSituation speech_situation(const SpeechContext& c) {
             reserve_severity(c.needs.food, kFoodWarnAt),
             reserve_severity(c.needs.water, kWaterWarnAt),
             reserve_severity(c.needs.sleep, kSleepWarnAt),
-            maxf_local(pressure_severity(c.needs.pee, kPeeWarnAt),
+            std::max(pressure_severity(c.needs.pee, kPeeWarnAt),
                        pressure_severity(c.needs.poo, kPooWarnAt)),
         };
         const SpeechSituation kMap[4] = {

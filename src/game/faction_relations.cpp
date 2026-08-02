@@ -35,19 +35,7 @@ std::int8_t clamp8(int v) {
     return static_cast<std::int8_t>(v);
 }
 
-// splitmix64-style scrambler, as in wander.cpp / hunt.cpp / population.cpp /
-// mob_spawn.cpp. Duplicated for the same reason they duplicate it: three lines,
-// wanted inlined, and a shared header between otherwise independent systems buys
-// nothing.
-std::uint32_t mix(std::uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352du;
-    x ^= x >> 15;
-    x *= 0x846ca68bu;
-    x ^= x >> 16;
-    return x;
-}
-
+#include "core/rng.h"
 // Advance speed for a body walking at an enemy, m/s. The same 1.35 an ordinary
 // resident walks at (wander.cpp kNpcWalkSpeed, which is file-local there): closing
 // on somebody you dislike is walking, not sprinting, and giving a brawler a speed
@@ -153,13 +141,13 @@ bool npc_seeks_fight(std::uint32_t bodyId, std::uint64_t tick) {
     // licence on the floor would expire on the same tick and a body whose window
     // opened late would be handed a brawl it cannot finish.
     const std::uint64_t phase =
-        static_cast<std::uint64_t>(mix(bodyId ^ 0x7c3ad19fu)) % kFeudEpochTicks;
+        static_cast<std::uint64_t>(giga::hash_u32(bodyId ^ 0x7c3ad19fu)) % kFeudEpochTicks;
     const std::uint32_t epoch =
         static_cast<std::uint32_t>((tick + phase) / kFeudEpochTicks);
     // The epoch is mixed BEFORE it is combined, for the reason pack_target_node
     // documents: raw epochs are 0,1,2... and xoring a small counter into an id makes
     // neighbouring epochs and neighbouring ids collide in blocks.
-    const std::uint32_t h = mix((bodyId * 0x9e3779b9u) ^ mix(epoch));
+    const std::uint32_t h = giga::hash_u32((bodyId * 0x9e3779b9u) ^ giga::hash_u32(epoch));
     return h % kFeudShare == 0u;
 }
 
@@ -251,7 +239,7 @@ std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
         // Identity-hash stagger: a body's slot is a function of its own id, so the
         // crowd spreads evenly across the period with no scheduling state.
         const std::uint32_t id = static_cast<std::uint32_t>(entt::to_integral(e));
-        if (mix(id) % kFeudPeriod != phaseNow) continue;
+        if (giga::hash_u32(id) % kFeudPeriod != phaseNow) continue;
         // Scarcity of aggressors is THE rate control ([faction_relations.h]
         // kFeudShare). Everything below this line runs for ~6.5 bodies on a 420-body
         // Residential floor, one eighth of them per tick.
@@ -293,7 +281,7 @@ std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
                     (kFeudPeriod * static_cast<std::uint32_t>(kSimStepMs));
                 if (visitsPerShot == 0) visitsPerShot = 1;
 
-                const std::uint64_t off = static_cast<std::uint64_t>(mix(id ^ 0x5f1e3a9bu) % visitsPerShot);
+                const std::uint64_t off = static_cast<std::uint64_t>(giga::hash_u32(id ^ 0x5f1e3a9bu) % visitsPerShot);
                 if ((visit + off) % visitsPerShot == 0) {
                     vec3 dir{dx, dy, dz};
                     spawn_projectile_dir(reg, layer, tr.pos, dir, 
@@ -328,7 +316,7 @@ std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
             (kFeudPeriod * static_cast<std::uint32_t>(kSimStepMs));
         if (visitsPerSwing == 0) visitsPerSwing = 1;
         const std::uint64_t off =
-            static_cast<std::uint64_t>(mix(id ^ 0x5f1e3a9bu) % visitsPerSwing);
+            static_cast<std::uint64_t>(giga::hash_u32(id ^ 0x5f1e3a9bu) % visitsPerSwing);
         if ((visit + off) % visitsPerSwing != 0) continue;   // between swings
 
         std::int16_t raw = static_cast<std::int16_t>(w->dmg);

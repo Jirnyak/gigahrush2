@@ -10,17 +10,7 @@ namespace giga::game {
 
 namespace {
 
-// Same integer hash the loot roller uses. Local copy rather than a shared header:
-// two call sites is not the "used by 3+ consumers" bar for a utility file
-// ([AGENTS.md] File Organization).
-std::uint32_t mix(std::uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352du;
-    x ^= x >> 15;
-    x *= 0x846ca68bu;
-    x ^= x >> 16;
-    return x;
-}
+#include "core/rng.h"
 
 // Uniform [0, 1) from a hash, using the top 24 bits — exactly a float's mantissa,
 // so every representable step is reachable and none is reachable twice.
@@ -104,7 +94,7 @@ ConsumeResult use_best_for(Registry& reg, NpcPool& pool, EventBus& bus,
     if (me.entity == entt::null) return out;
 
     Needs& n = pool.needs(me.id);
-    if (n.seeded == 0) n = needs_roll(mix(me.id + 1u));
+    if (n.seeded == 0) n = needs_roll(giga::hash_u32(me.id + 1u));
 
     const float bar = want == Appetite::Food ? n.food : n.water;
     const float missing = kNeedMax - bar;
@@ -161,11 +151,11 @@ ConsumeResult use_best_for(Registry& reg, NpcPool& pool, EventBus& bus,
 
 Needs needs_roll(std::uint32_t seed) {
     Needs n;
-    n.food  = kStartFoodLo  + u01(mix(seed ^ 0x9e3779b9u)) * (kStartFoodHi  - kStartFoodLo);
-    n.water = kStartWaterLo + u01(mix(seed ^ 0x85ebca6bu)) * (kStartWaterHi - kStartWaterLo);
-    n.sleep = kStartSleepLo + u01(mix(seed ^ 0xc2b2ae35u)) * (kStartSleepHi - kStartSleepLo);
-    n.pee   = kStartPeeLo   + u01(mix(seed ^ 0x27d4eb2fu)) * (kStartPeeHi   - kStartPeeLo);
-    n.poo   = kStartPooLo   + u01(mix(seed ^ 0x165667b1u)) * (kStartPooHi   - kStartPooLo);
+    n.food  = kStartFoodLo  + u01(giga::hash_u32(seed ^ 0x9e3779b9u)) * (kStartFoodHi  - kStartFoodLo);
+    n.water = kStartWaterLo + u01(giga::hash_u32(seed ^ 0x85ebca6bu)) * (kStartWaterHi - kStartWaterLo);
+    n.sleep = kStartSleepLo + u01(giga::hash_u32(seed ^ 0xc2b2ae35u)) * (kStartSleepHi - kStartSleepLo);
+    n.pee   = kStartPeeLo   + u01(giga::hash_u32(seed ^ 0x27d4eb2fu)) * (kStartPeeHi   - kStartPeeLo);
+    n.poo   = kStartPooLo   + u01(giga::hash_u32(seed ^ 0x165667b1u)) * (kStartPooHi   - kStartPooLo);
     n.pendingPee = 0.0f;
     n.pendingPoo = 0.0f;
     n.hpDebt = 0.0f;
@@ -254,7 +244,7 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt) {
     // Lazy roll, the way `player_melee_step` attaches PlayerMelee lazily: no spawn
     // path, elevator or possession has to remember to seed the clock. Seeded from
     // the record id, so the same body is the same body across a reload.
-    if (n.seeded == 0) n = needs_roll(mix(me.id + 1u));
+    if (n.seeded == 0) n = needs_roll(giga::hash_u32(me.id + 1u));
 
     needs_advance(n, dt);
 

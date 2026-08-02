@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 
+#include "core/rng.h"
 #include "world/materials.h"
 
 namespace giga::gpu {
@@ -12,15 +13,6 @@ namespace {
 
 constexpr float kHalfPi = 1.5707963267948966f;
 constexpr float kPi = 3.141592653589793f;
-
-inline std::uint32_t spatial_hash(int x, int y, int z, std::uint32_t seed) {
-    std::uint32_t h = static_cast<std::uint32_t>(x) * 73856093u ^
-                      static_cast<std::uint32_t>(y) * 19349663u ^
-                      static_cast<std::uint32_t>(z) * 83492791u ^ seed;
-    h = (h ^ (h >> 16)) * 0x45d9f3bu;
-    h = (h ^ (h >> 16)) * 0x45d9f3bu;
-    return h ^ (h >> 16);
-}
 
 inline bool is_solid(CellType type) {
     return type != kCellAir;
@@ -103,7 +95,7 @@ void PropPlacer::populate(const MacroGrid& grid, PropPass& propPass, std::uint32
                 bool wallOccupied    = false;
 
                 // 2. Floor Grates & Drainage (Grate, RoundGrate)
-                std::uint32_t rngGrate = spatial_hash(x, y, z, seed ^ kSaltGrate);
+                std::uint32_t rngGrate = giga::spatial_hash(x, y, z, seed ^ kSaltGrate);
                 if (solidBelow && !floorOccupied && (below == kMatElectricGrate || (rngGrate % 100 < kCfg.grateFloorChancePct))) {
                     PropInstance grate{};
                     grate.origin    = {wx, wy + 0.01f, wz};
@@ -126,7 +118,7 @@ void PropPlacer::populate(const MacroGrid& grid, PropPass& propPass, std::uint32
                 }
 
                 // 3. Wall Devices & Soviet Props (CabinetBox, Terminal, Radiator, ElectricalShield)
-                std::uint32_t rngWall = spatial_hash(x, y, z, seed ^ kSaltWall);
+                std::uint32_t rngWall = giga::spatial_hash(x, y, z, seed ^ kSaltWall);
                 if (solidBelow && (solidWest || solidEast || solidNorth || solidSouth) && !wallOccupied) {
                     float yawVal = 0.0f;
                     if (solidWest)        yawVal = 0.0f;
@@ -160,12 +152,12 @@ void PropPlacer::populate(const MacroGrid& grid, PropPass& propPass, std::uint32
                 // 4. Lights — ECS seed_ceiling_lights owns BareBulb/FloodLamp GPU
                 // instances ([jirnyak.md] §18 PropPass passive skin). Still reserve
                 // the ceiling slot with the same hash so other props do not stack.
-                std::uint32_t rngLight = spatial_hash(x, y, z, seed ^ kSaltLight);
+                std::uint32_t rngLight = giga::spatial_hash(x, y, z, seed ^ kSaltLight);
                 if (solidAbove && !ceilingOccupied && (rngLight % 100 < kCfg.lightChancePct)) {
                     ceilingOccupied = true;
                 }
 
-                std::uint32_t rngSec = spatial_hash(x, y, z, seed ^ kSaltSecurity);
+                std::uint32_t rngSec = giga::spatial_hash(x, y, z, seed ^ kSaltSecurity);
                 if (solidAbove && (solidWest || solidEast || solidNorth || solidSouth) && !wallOccupied && (rngSec % 100 < 8)) {
                     PropInstance cam{};
                     cam.origin    = {wx, wy + 1.50f, wz};
@@ -184,7 +176,7 @@ void PropPlacer::populate(const MacroGrid& grid, PropPass& propPass, std::uint32
                 }
 
                 // 5. Anomalous Zones (AcidPool, FungalColumn, CrystalCluster)
-                std::uint32_t rngAnomaly = spatial_hash(x, y, z, seed ^ kSaltAnomaly);
+                std::uint32_t rngAnomaly = giga::spatial_hash(x, y, z, seed ^ kSaltAnomaly);
                 const bool isAnomalyMat = (below == kMatAcidPool || below == kMatWaterMark || below == kMatElectricGrate);
                 if (solidBelow && !floorOccupied && (isAnomalyMat || (rngAnomaly % 1000 < kCfg.anomalyChancePermil))) {
                     PropInstance crystal{};
@@ -213,7 +205,7 @@ void PropPlacer::populate(const MacroGrid& grid, PropPass& propPass, std::uint32
                 }
 
                 // 6. Corner Structural Pillars & Archways (Cylinder, Arch) — ONLY at room corners
-                std::uint32_t rngPillar = spatial_hash(x, y, z, seed ^ kSaltPillar);
+                std::uint32_t rngPillar = giga::spatial_hash(x, y, z, seed ^ kSaltPillar);
                 bool isCorner = ((solidWest || solidEast) && (solidNorth || solidSouth));
                 if (solidBelow && solidAbove && isCorner && !floorOccupied && (rngPillar % 100 < 15)) {
                     PropInstance pillar{};
@@ -260,7 +252,7 @@ void PropPlacer::populate(const MacroGrid& grid, PropPass& propPass, std::uint32
                 }
 
                 // 7. Floor Clutter, Furniture & Storage (CrateBox, CrateLong, Barrel, StairStep, Railing, BenchSlab)
-                std::uint32_t rngBench = spatial_hash(x, y, z, seed ^ kSaltBench);
+                std::uint32_t rngBench = giga::spatial_hash(x, y, z, seed ^ kSaltBench);
                 if (solidBelow && (solidWest || solidEast || solidNorth || solidSouth) && !floorOccupied && (rngBench % 100 < 10)) {
                     PropInstance bench{};
                     bench.origin    = {wx, wy + 0.01f, wz};
@@ -277,7 +269,7 @@ void PropPlacer::populate(const MacroGrid& grid, PropPass& propPass, std::uint32
                     floorOccupied = true;
                 }
 
-                std::uint32_t rngRail = spatial_hash(x, y, z, seed ^ kSaltRailing);
+                std::uint32_t rngRail = giga::spatial_hash(x, y, z, seed ^ kSaltRailing);
                 if (solidBelow && !solidAbove && !floorOccupied && (nOpen >= 2) && (rngRail % 100 < 8)) {
                     PropInstance rail{};
                     rail.origin    = {wx, wy + 0.01f, wz};
@@ -291,7 +283,7 @@ void PropPlacer::populate(const MacroGrid& grid, PropPass& propPass, std::uint32
                     floorOccupied = true;
                 }
 
-                std::uint32_t rngCrate = spatial_hash(x, y, z, seed ^ kSaltCrate);
+                std::uint32_t rngCrate = giga::spatial_hash(x, y, z, seed ^ kSaltCrate);
                 if (solidBelow && (nOpen <= 2) && (solidWest || solidEast) && (solidNorth || solidSouth) && !floorOccupied && (rngCrate % 100 < kCfg.crateCornerChancePct)) {
                     PropInstance item{};
                     item.origin    = {wx, wy + 0.01f, wz};

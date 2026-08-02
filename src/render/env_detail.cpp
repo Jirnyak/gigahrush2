@@ -10,6 +10,7 @@
 
 #include "render/env_detail.h"
 #include "render/prop_pass.h"   // PropPass, PropShape, PropInstance
+#include "core/rng.h"
 
 #include <cmath>
 #include <cstdio>
@@ -126,18 +127,6 @@ const BiomePropConfig EnvDetail::kConfigs[kBiomeCount] = {
     },
 };
 
-// ── RNG ───────────────────────────────────────────────────────────────────────
-
-/*static*/ std::uint32_t EnvDetail::spatial_hash(int x, int y, int z,
-                                                   std::uint32_t seed) noexcept {
-    std::uint32_t h = seed ^ (static_cast<std::uint32_t>(x) * 2654435761u)
-                            ^ (static_cast<std::uint32_t>(y) * 2246822519u)
-                            ^ (static_cast<std::uint32_t>(z) * 3266489917u);
-    h ^= h >> 16;
-    h *= 0x45d9f3bu;
-    h ^= h >> 16;
-    return h;
-}
 
 static inline float rng01(std::uint32_t& s) noexcept {
     s ^= s << 13; s ^= s >> 17; s ^= s << 5;
@@ -180,7 +169,7 @@ static inline bool ppm_roll(std::uint32_t& s, std::uint32_t ppm) noexcept {
         score[static_cast<int>(Biome::Organic)] += 2;
 
     // Spatial hash salt: add noise to avoid large uniform regions
-    std::uint32_t h = spatial_hash(x >> 3, y >> 3, z >> 3, seed);
+    std::uint32_t h = giga::spatial_hash(x >> 3, y >> 3, z >> 3, seed);
     score[h % kBiomeCount] += 1;
 
     // Pick highest score
@@ -495,7 +484,7 @@ void EnvDetail::populate(const giga::MacroGrid& grid, PropPass& pass,
 
         Biome   b   = biomeMap_.at(x, y, z);
         const BiomePropConfig& cfg = kConfigs[static_cast<int>(b)];
-        std::uint32_t s = spatial_hash(x, y, z, seed);
+        std::uint32_t s = giga::spatial_hash(x, y, z, seed);
 
         place_ceiling   (grid, pass, x, y, z, cfg, s ^ 0x11111111u);
         place_floor     (grid, pass, x, y, z, cfg, s ^ 0x22222222u);

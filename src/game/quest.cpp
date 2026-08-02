@@ -11,15 +11,7 @@ namespace {
 // it is a file-static there and hoisting it would be an edit to contract.cpp for no
 // behavioural reason; both are the well-known lowbias32 constants, so the two cannot
 // drift into disagreement about anything that matters.
-std::uint32_t mix(std::uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352du;
-    x ^= x >> 15;
-    x *= 0x846ca68bu;
-    x ^= x >> 16;
-    return x;
-}
-
+#include "core/rng.h"
 // ---------------------------------------------------------------------------
 // Russian text fragments, as hex escapes
 // ---------------------------------------------------------------------------
@@ -239,7 +231,7 @@ QuestId quest_offer(const NpcPool& pool, const QuestLog& log, NpcId giver, int f
     // same person on the same floor always offers the same thing, so walking away and
     // coming back cannot reroll it into something better. A different multiplier from
     // contract.cpp's so a body's quest roll and its contract roll are independent.
-    const std::uint32_t h = mix(static_cast<std::uint32_t>(giver) * 0x9e3779b9u ^
+    const std::uint32_t h = giga::hash_u32(static_cast<std::uint32_t>(giver) * 0x9e3779b9u ^
                                 static_cast<std::uint32_t>(floorZ) * 0xa24baed1u ^ seed);
     if ((h % 100u) >= kQuestOfferPct) return kInvalidQuest;   // not carrying anything
 
@@ -251,7 +243,7 @@ QuestId quest_offer(const NpcPool& pool, const QuestLog& log, NpcId giver, int f
         const QuestId id = static_cast<QuestId>(i + 1);
         if (!quest_eligible(log, id, floorZ)) continue;
         ++seen;
-        if (mix(h ^ seen) % seen == 0u) pick = id;
+        if (giga::hash_u32(h ^ seen) % seen == 0u) pick = id;
     }
     return pick;
 }

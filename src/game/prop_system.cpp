@@ -8,6 +8,7 @@
 #include <unordered_set>
 #include <cmath>
 #include "core/wrap.h"
+#include "core/rng.h"
 
 namespace giga::game {
 
@@ -30,15 +31,7 @@ constexpr std::uint8_t kShapeBareBulb         = 28;
 constexpr float kHalfPi = 1.5707963267948966f;
 constexpr float kPi     = 3.141592653589793f;
 
-// Same spatial_hash as render/prop_placer.cpp (must stay bit-identical).
-static inline std::uint32_t spatial_hash(int x, int y, int z, std::uint32_t seed) {
-    std::uint32_t h = static_cast<std::uint32_t>(x) * 73856093u ^
-                      static_cast<std::uint32_t>(y) * 19349663u ^
-                      static_cast<std::uint32_t>(z) * 83492791u ^ seed;
-    h = (h ^ (h >> 16)) * 0x45d9f3bu;
-    h = (h ^ (h >> 16)) * 0x45d9f3bu;
-    return h ^ (h >> 16);
-}
+
 
 static inline bool is_solid_cell(CellType type) {
     return type != kCellAir;
@@ -277,7 +270,7 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
                 const bool solidSouth = is_solid_cell(grid.cell(x, y, z - 1));
                 if (!(solidWest || solidEast || solidNorth || solidSouth)) continue;
 
-                const std::uint32_t rngWall = spatial_hash(x, y, z, seed ^ kSaltWall);
+                const std::uint32_t rngWall = giga::spatial_hash(x, y, z, seed ^ kSaltWall);
                 const std::uint32_t wsel = rngWall % 100;
 
                 // Wall yaw matches PropPlacer (west=0, east=pi, south=halfPi, north=3*halfPi).
@@ -356,7 +349,7 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
                 const CellType above = grid.cell(x, y + 1, z);
                 if (!is_solid_cell(above)) continue;
 
-                const std::uint32_t rngLight = spatial_hash(x, y, z, seed ^ kSaltLight);
+                const std::uint32_t rngLight = giga::spatial_hash(x, y, z, seed ^ kSaltLight);
                 if ((rngLight % 100u) >= kLightChancePct) continue;
 
                 const float wx = static_cast<float>(x) * kCell;

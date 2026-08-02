@@ -30,23 +30,11 @@ namespace giga::game {
 
 namespace {
 
-// splitmix32 finalizer. Locally defined, like the one in loot.cpp, container.cpp and
-// hunt.cpp — the multipliers are identical, so this stream is drawn from the same
-// generator the rest of the loot path uses. Promoting the nine copies into a shared
-// header is a separate change with nine call sites.
-std::uint32_t mix(std::uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352du;
-    x ^= x >> 15;
-    x *= 0x846ca68bu;
-    x ^= x >> 16;
-    return x;
-}
-
+#include "core/rng.h"
 // Combine two keys, order-sensitive, so consecutive draw indices at a fixed seed spread
 // across the whole range instead of correlating.
 std::uint32_t hash2(std::uint32_t a, std::uint32_t b) {
-    return mix(a ^ (mix(b) * 0x9e3779b9u + 0x85ebca6bu));
+    return giga::hash_u32(a ^ (giga::hash_u32(b) * 0x9e3779b9u + 0x85ebca6bu));
 }
 
 // Uniform in [0,1) from a hash word: top 24 bits, exact 2^-24 spacing. Note the

@@ -1,4 +1,5 @@
 #include "game/ai.h"
+#include <algorithm>
 
 #include <cmath>
 #include <vector>
@@ -20,8 +21,6 @@ namespace {
 
 // --- Scorer math (reference npc_utility.ts helpers, verbatim) ---------------
 
-inline float maxf(float a, float b) { return a > b ? a : b; }
-inline float clamp01f(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
 
 // clampScore: NaN -> 0, else clamp to [0, 100].
 inline float clamp_score(float s) {
@@ -31,21 +30,21 @@ inline float clamp_score(float s) {
 
 // smoothstep(e0, e1, v) — Hermite ease over the clamped ramp.
 inline float smoothstep01(float e0, float e1, float v) {
-    const float x = clamp01f((v - e0) / (e1 - e0));
+    const float x = giga::clamp01((v - e0) / (e1 - e0));
     return x * x * (3.0f - 2.0f * x);
 }
 
 // Reserve pressure: a low reserve (v -> 0) maps toward 1.
 inline float low_need_pressure(float v) {
-    return smoothstep01(0.18f, 0.82f, clamp01f((72.0f - v) / 72.0f));
+    return smoothstep01(0.18f, 0.82f, giga::clamp01((72.0f - v) / 72.0f));
 }
 // Bladder pressure: a full column (v -> 100) maps toward 1.
 inline float high_need_pressure(float v) {
-    return smoothstep01(0.35f, 0.90f, clamp01f(v / 100.0f));
+    return smoothstep01(0.35f, 0.90f, giga::clamp01(v / 100.0f));
 }
 // Health pressure: 0 at full HP, 1 at 0 HP.
 inline float health_pressure(float hp, float maxHp) {
-    return maxHp > 0.0f ? clamp01f(1.0f - hp / maxHp) : 0.0f;
+    return maxHp > 0.0f ? giga::clamp01(1.0f - hp / maxHp) : 0.0f;
 }
 
 // Normalise a heterogeneous "unit-ish" input to [0,1] by magnitude band:
@@ -53,9 +52,9 @@ inline float health_pressure(float hp, float maxHp) {
 inline float unitish(float v) {
     if (v != v) return 0.0f; // NaN
     const float a = v < 0.0f ? -v : v;
-    if (a <= 1.0f) return clamp01f(v);
-    if (a <= 100.0f) return clamp01f(v / 100.0f);
-    return clamp01f(v / 255.0f);
+    if (a <= 1.0f) return giga::clamp01(v);
+    if (a <= 100.0f) return giga::clamp01(v / 100.0f);
+    return giga::clamp01(v / 255.0f);
 }
 
 // computeThreatPressure: the max over every danger channel, nudged by
@@ -71,17 +70,17 @@ inline float unitish(float v) {
 // can never double-count what the body is currently standing in.
 inline float compute_threat_pressure(const Perception& p) {
     float m = unitish(p.danger);
-    m = maxf(m, unitish(p.monster));
-    m = maxf(m, unitish(p.gunfire) * 0.75f);
-    m = maxf(m, unitish(p.fire));
-    m = maxf(m, unitish(p.fog) * 0.6f);
-    m = maxf(m, unitish(p.rememberedThreat) * kMemThreatWeight);
-    m = maxf(m, clamp01f(p.visibleHostiles / 3.0f) * 0.85f);
-    m = maxf(m, p.threatDistance < 0.0f
+    m = std::max(m, unitish(p.monster));
+    m = std::max(m, unitish(p.gunfire) * 0.75f);
+    m = std::max(m, unitish(p.fire));
+    m = std::max(m, unitish(p.fog) * 0.6f);
+    m = std::max(m, unitish(p.rememberedThreat) * kMemThreatWeight);
+    m = std::max(m, giga::clamp01(p.visibleHostiles / 3.0f) * 0.85f);
+    m = std::max(m, p.threatDistance < 0.0f
                     ? 0.0f
-                    : clamp01f((16.0f - p.threatDistance) / 16.0f));
+                    : giga::clamp01((16.0f - p.threatDistance) / 16.0f));
     const float s = m + (p.cornered ? 0.15f : 0.0f) + (p.inShelter ? -0.18f : 0.0f);
-    return clamp01f(s);
+    return giga::clamp01(s);
 }
 
 // Salt for the substitute needs roll. Distinct from every other hash stream so
@@ -148,16 +147,16 @@ void score_intents(const Perception& p, const Needs& needs,
     const float threat = compute_threat_pressure(p);
     const float hpP = health_pressure(p.hp, p.maxHp);
     const float toiletP =
-        maxf(high_need_pressure(needs.pee), high_need_pressure(needs.poo));
+        std::max(high_need_pressure(needs.pee), high_need_pressure(needs.poo));
     const float drinkP = low_need_pressure(needs.water);
     const float eatP = low_need_pressure(needs.food);
     const float sleepP = low_need_pressure(needs.sleep);
-    const float urgent = maxf(maxf(maxf(toiletP, drinkP), maxf(eatP, sleepP)), hpP);
+    const float urgent = std::max(std::max(std::max(toiletP, drinkP), std::max(eatP, sleepP)), hpP);
 
-    const float vhp = clamp01f(p.visibleHostiles / 4.0f);
+    const float vhp = giga::clamp01(p.visibleHostiles / 4.0f);
     const float ctp = p.threatDistance < 0.0f
                           ? 0.0f
-                          : clamp01f((18.0f - p.threatDistance) / 18.0f);
+                          : giga::clamp01((18.0f - p.threatDistance) / 18.0f);
     const bool stronger =
         p.strongerHostile || (p.hostilePower > p.allyPower + 0.15f);
 
@@ -463,7 +462,7 @@ MemoryRecall ai_recall(const AiMemory& mem, NpcId id, int cx, int cy, int cz,
         const float prox = 1.0f - dist / static_cast<float>(kMemRecallCells);
 
         if (kind == MemDanger || kind == MemHurt) {
-            const float th = clamp01f(str * prox * fresh);
+            const float th = giga::clamp01(str * prox * fresh);
             if (th > out.threat) out.threat = th;
             // A mark on the body's OWN cell contributes 0 to the direction (its
             // delta is the zero vector) while still contributing its full share to
@@ -474,7 +473,7 @@ MemoryRecall ai_recall(const AiMemory& mem, NpcId id, int cx, int cy, int cz,
             sumX -= static_cast<float>(dx) * th;
             sumY -= static_cast<float>(dy) * th;
         } else {
-            const float w = clamp01f(str * fresh);
+            const float w = giga::clamp01(str * fresh);
             if (w > out.siteStrength[kind]) {
                 out.siteStrength[kind] = w;
                 out.siteDistCells[kind] = dist;
@@ -522,7 +521,7 @@ void apply_recall(const MemoryRecall& r, std::uint16_t faction, Perception& p) {
         // with d in world units. One macro cell is kCellSize metres.
         const float metres = r.siteDistCells[m.kind] * kCellSize;
         p.targetPenalty[m.intent] +=
-            clamp01f(metres / kMemTargetDistSpan) * kMemTargetDistWeight;
+            giga::clamp01(metres / kMemTargetDistSpan) * kMemTargetDistWeight;
     }
 }
 

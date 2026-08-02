@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdio>   // snprintf — samosbor_beat_text is the only user
 
+#include "core/rng.h"
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "game/mob_spawn.h"  // MobRef — what counts as a threat
@@ -52,15 +53,7 @@ void enter(SamosborState& st, SamosborPhase p, std::uint32_t ms) {
 // ---------------------------------------------------------------------------
 
 std::uint32_t samosbor_rand(SamosborRng& rng) {
-    // splitmix32. Advance first, so a freshly-constructed Rng does not hand back
-    // its own seed as the first draw.
-    std::uint32_t x = (rng.state += 0x9e3779b9u);
-    x ^= x >> 16;
-    x *= 0x7feb352du;
-    x ^= x >> 15;
-    x *= 0x846ca68bu;
-    x ^= x >> 16;
-    return x;
+    return giga::hash_u32(rng.state += 0x9e3779b9u);
 }
 
 float samosbor_rand01(SamosborRng& rng) {

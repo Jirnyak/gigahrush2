@@ -28,6 +28,18 @@ constexpr std::uint32_t hash_u32(std::uint32_t x) {
     return x;
 }
 
+// 3D coordinate spatial hash (stateless, identical avalanche properties to
+// splitmix32 but pre-mixed with primes for fast coordinate processing).
+// Used by both gpu procedural generation and ecs prop placement.
+constexpr std::uint32_t spatial_hash(int x, int y, int z, std::uint32_t seed) {
+    std::uint32_t h = static_cast<std::uint32_t>(x) * 73856093u ^
+                      static_cast<std::uint32_t>(y) * 19349663u ^
+                      static_cast<std::uint32_t>(z) * 83492791u ^ seed;
+    h = (h ^ (h >> 16)) * 0x45d9f3bu;
+    h = (h ^ (h >> 16)) * 0x45d9f3bu;
+    return h ^ (h >> 16);
+}
+
 // splitmix64 finalizer — for 64-bit mixing / combining wide keys.
 constexpr std::uint64_t hash_u64(std::uint64_t x) {
     x ^= x >> 30;

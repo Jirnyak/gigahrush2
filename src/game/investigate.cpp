@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include "core/rng.h"
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "game/embody.h"           // NpcRef
@@ -14,21 +15,6 @@
 namespace giga::game {
 
 namespace {
-
-// splitmix64-style scrambler. Duplicated from wander.cpp rather than exported, and
-// the duplication is the POINT: this pass must land in the same stagger slot as the
-// steering pass it overrides, which means it must compute the identical hash. A
-// shared helper would be tidier and would also make it possible for one of them to
-// start using a different one. Six lines, and the contract is pinned by
-// test_noise_all, which asserts the two passes visit a mob on the same tick.
-std::uint32_t mix(std::uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352du;
-    x ^= x >> 15;
-    x *= 0x846ca68bu;
-    x ^= x >> 16;
-    return x;
-}
 
 } // namespace
 
@@ -93,7 +79,7 @@ std::uint32_t investigate_step(Registry& reg, const NoiseField& field, NpcPool& 
         if (tr.layer != layer) continue;
 
         const std::uint32_t id = static_cast<std::uint32_t>(entt::to_integral(e));
-        if (mix(id) % kWanderPeriod != phase) continue;
+        if (giga::hash_u32(id) % kWanderPeriod != phase) continue;
 
         const MobRef& mr = view.get<const MobRef>(e);
         const MobDef& md = kMobTable[mr.kind];

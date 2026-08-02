@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "core/wrap.h"
+#include "core/rng.h"
 #include "ecs/components.h"
 #include "game/embody.h"   // NpcRef
 #include "game/floor_gen.h" // floor_room_mask — the crate's contents follow the ROOM
@@ -17,15 +18,6 @@
 namespace giga::game {
 
 namespace {
-
-std::uint32_t mix(std::uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352du;
-    x ^= x >> 15;
-    x *= 0x846ca68bu;
-    x ^= x >> 16;
-    return x;
-}
 
 // Grey-green crate, deliberately unlike the pickup colour and unlike the monster red
 // axis. An unopened container must read as "go there" at a distance.
@@ -159,7 +151,7 @@ Container roll_in_room(ContainerKind kind, int floorZ, std::uint32_t seed,
     if (total == 0) return c;   // nothing legal here; an empty container is honest
 
     // How many slots this kind fills. A safe holds fewer, better things.
-    const std::uint32_t h0 = mix(seed);
+    const std::uint32_t h0 = giga::hash_u32(seed);
     int fill;
     switch (kind) {
         case ContainerKind::PublicBox:   fill = 1 + static_cast<int>(h0 % 2u); break;
@@ -206,7 +198,7 @@ Container roll_in_room(ContainerKind kind, int floorZ, std::uint32_t seed,
         }
         if (ammo != kInvalidItem) {
             const std::uint8_t st = item_def(ammo).stackMax;
-            const std::uint32_t n = 8u + (mix(seed ^ 0xA11A0u) % 16u);
+            const std::uint32_t n = 8u + (giga::hash_u32(seed ^ 0xA11A0u) % 16u);
             c.item[0] = ammo;
             c.count[0] = static_cast<std::uint8_t>(n > st ? st : n);
             firstSlot = 1;
@@ -214,8 +206,8 @@ Container roll_in_room(ContainerKind kind, int floorZ, std::uint32_t seed,
     }
 
     for (int i = firstSlot; i < fill; ++i) {
-        const std::uint32_t h = mix(seed ^ (static_cast<std::uint32_t>(i + 1) *
-                                            0x9e3779b9u));
+        const std::uint32_t h = giga::hash_u32(seed ^ (static_cast<std::uint32_t>(i + 1) *
+                                                 0x9e3779b9u));
         const std::uint32_t r = h % total;
         std::size_t lo = 0, hi = cum.size() - 1;
         while (lo < hi) {
@@ -275,7 +267,7 @@ std::uint32_t spawn_floor_containers(Registry& reg, const World& world,
 
     std::uint32_t made = 0;
     for (std::uint32_t i = 0; i < want; ++i) {
-        const std::uint32_t h = mix(seed ^ (i * 0x85ebca6bu));
+        const std::uint32_t h = giga::hash_u32(seed ^ (i * 0x85ebca6bu));
         // A room, then a cell inside it. Room interiors are offset off the lattice
         // lines, which is what keeps containers out of the walls themselves.
         const int rx = static_cast<int>((h % static_cast<std::uint32_t>(perAxis)));
@@ -323,8 +315,8 @@ std::uint32_t spawn_floor_containers(Registry& reg, const World& world,
         reg.emplace<SubVoxelAnchor>(e, SubVoxelAnchor{cx, cy, cz, 4, 4, 0, 0});
         reg.emplace<PropFallMode>(e, PropFallMode::SimpleFall);
         reg.emplace<Container>(
-            e, roll_in_room(pick_kind(kind, mix(h ^ 0x5bf03635u)), floorNumber,
-                            mix(h ^ 0xc2b2ae35u), roomMask));
+            e, roll_in_room(pick_kind(kind, giga::hash_u32(h ^ 0x5bf03635u)), floorNumber,
+                            giga::hash_u32(h ^ 0xc2b2ae35u), roomMask));
         ++made;
     }
     return made;

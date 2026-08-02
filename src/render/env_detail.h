@@ -114,7 +114,7 @@ public:
     std::uint32_t total_placed() const noexcept { return totalPlaced_; }
 
 private:
-    static std::uint32_t spatial_hash(int x, int y, int z, std::uint32_t seed) noexcept;
+
     static Biome classify_cell(const giga::MacroGrid& grid, int x, int y, int z,
                                std::uint32_t seed) noexcept;
 

@@ -84,11 +84,7 @@ void roster_add(Roster& r, std::size_t row, std::uint32_t weight) {
     ++r.n;
 }
 
-// Clamp a room-local coordinate into the interior, 1..span. The wall lattice sits
-// on local 0, so 0 is never a legal standing cell even when it happens to be air
-// (a knocked-out wall cell on a Derelict floor) — a monster in a doorway reads as a
-// monster stuck in a wall.
-int clamp_local(int v, int span) { return v < 1 ? 1 : (v > span ? span : v); }
+
 
 // Tier tint. This is a **gameplay read**, not decoration: in a dark corridor the
 // player must be able to tell a monster from a civilian instantly, so the palette
@@ -417,8 +413,8 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
                     // room", which is the honest resolution: letting the spread win
                     // would push half the pack through the walls into two other
                     // rooms and undo the grouping this whole function exists for.
-                    cx = x0 + clamp_local(ax - x0 + dx, span);
-                    cy = y0 + clamp_local(ay - y0 + dy, span);
+                    cx = x0 + std::clamp(ax - x0 + dx, 1, span);
+                    cy = y0 + std::clamp(ay - y0 + dy, 1, span);
                     if (placeable(wet, grid, cx, cy, kGroundZ)) {
                         placed = true;
                         break;

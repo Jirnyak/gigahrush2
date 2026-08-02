@@ -1,0 +1,32 @@
+# Отчёт о проблемах в кодовой базе (Gigahrush 2)
+
+## Проблема 1: Дублирование математики и базовых алгоритмов вместо использования API ядра
+
+Вместо использования общих математических и базовых функций из ядра (`src/core/math.h`, `src/core/wrap.h`, `src/core/rng.h`), в подсистемах игры (`src/game/` и `src/render/`) создаются локальные копии функций и констант. Это нарушает принцип единственного источника истины (DRY), засоряет файлы и может привести к рассинхронизации логики между модулями.
+
+### Найденные проявления проблемы:
+
+1. **Тороидальная математика (`wrap_delta`) и константы мира:**
+   - Функция `find_nearest_interactable` и другие компоненты раньше содержали или продолжают содержать локальные обёртки типа `wrap_delta_f_local` и `kWorldExtentLocal`.
+   - **Решение**: Использовать исключительно `wrap_delta_f` и `kWorldExtent` из `core/wrap.h`.
+
+2. **Локальные функции нахождения максимума (`maxf_local`, `maxf`) и минимизация float:**
+   - В `src/game/speech.cpp:105` (`maxf_local`) и `src/game/ai.cpp:23` (`maxf`) написаны локальные функции `max` для `float`.
+   - В `speech.cpp` прямо оставлен комментарий: `// Local, because core/math.h ships no float max and ai.cpp keeps its own for the same. Two call sites do not justify touching a shared header.`
+   - **Анализ**: В C++ уже есть `std::max` из `<algorithm>` (который подтягивается через `core/math.h`). Кроме того, согласно правилу проекта по **минимизации float** (всё, что возможно, переводится на целые числа/инты), приведение вычислений потребностей/scors к integer/fixed-point параметрам избавит от необходимости таких float-костылей, а там, где float действительно нужен, следует использовать `std::max` / `giga::max`.
+
+3. **Локальные функции ограничения (`clamp_local`):**
+   - В `src/game/mob_spawn.cpp:91` создана локальная функция:
+     `int clamp_local(int v, int span) { return v < 1 ? 1 : (v > span ? span : v); }`
+   - В `src/game/ai.cpp:24` создана локальная функция `clamp01f(float v)`.
+   - **Решение**: В `core/math.h` уже есть `clamp01(float)`. Для целочисленного `clamp` следует использовать `std::clamp` из `<algorithm>` или добавить шаблонный / целочисленный `clamp` в `core/math.h`.
+
+4. **Дублирование функций хеширования (`splitmix32` / `spatial_hash`):**
+   - **`spatial_hash`**:
+     - В `src/game/prop_system.cpp:34` локально объявлена `spatial_hash(int x, int y, int z, uint32_t seed)`.
+     - В `src/render/prop_placer.cpp:16` дублируется эта же функция с комментарием `// Same spatial_hash as render/prop_placer.cpp (must stay bit-identical)`.
+     - В `src/render/env_detail.cpp:131` объявлена ещё одна вариация `EnvDetail::spatial_hash`.
+     - **Решение**: Вынести единую `spatial_hash` в `src/core/rng.h`.
+   - **`splitmix32` / `hash_u32`**:
+     - В `src/core/rng.h` уже вынесен финализатор `hash_u32` (`splitmix32`). Тем не менее, во многих файлах (`needs.cpp`, `loot_table.cpp`, `samosbor.cpp`, `macro_sim.cpp`, `floor_gen.cpp`) всё ещё остаются локальные реализации или комментарии вида `// Local copy rather than a shared header`.
+     - **Решение**: Перевести все места на `giga::hash_u32` из `core/rng.h` и удалить дублирующийся код.

@@ -1,4 +1,5 @@
 #include "game/floor_gen.h"
+#include "core/rng.h"
 
 #include <bit>
 #include <cstddef>
@@ -38,13 +39,8 @@ struct Rng {
 // geometry, while adjacent floors of the same kind look unrelated. Avalanche is
 // splitmix32's finalizer so nearby numbers don't produce correlated layouts.
 std::uint32_t floor_seed(unsigned seed, int number) {
-    std::uint32_t h = static_cast<std::uint32_t>(seed) +
-                      static_cast<std::uint32_t>(number) * 0x9E3779B9u;
-    h ^= h >> 16;
-    h *= 0x85EBCA6Bu;
-    h ^= h >> 13;
-    h *= 0xC2B2AE35u;
-    h ^= h >> 16;
+    std::uint32_t h = giga::hash_u32(static_cast<std::uint32_t>(seed) +
+                      static_cast<std::uint32_t>(number) * 0x9E3779B9u);
     return h ? h : 1u;
 }
 
@@ -124,12 +120,7 @@ int doorway_slot(std::uint32_t fseed, int storey, int rx, int ry, int axis,
                               (static_cast<std::uint32_t>(rx & 31) << 5) |
                               (static_cast<std::uint32_t>(ry & 31) << 10) |
                               (static_cast<std::uint32_t>(axis & 1) << 15);
-    std::uint32_t h = fseed ^ (key * 0x9E3779B9u);
-    h ^= h >> 16;
-    h *= 0x7FEB352Du;
-    h ^= h >> 15;
-    h *= 0x846CA68Bu;
-    h ^= h >> 16;
+    std::uint32_t h = giga::hash_u32(fseed ^ (key * 0x9E3779B9u));
     const int span = stride - 3;
     return 2 + (span > 0 ? static_cast<int>(h % static_cast<unsigned>(span)) : 0);
 }

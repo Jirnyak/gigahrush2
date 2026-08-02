@@ -1,5 +1,8 @@
 #include "game/macro_sim.h"
 
+#include "game/npc_pool.h"
+#include "core/rng.h"
+
 #include "game/faction_relations.h"  // FactionRelations, rel_row
 #include "game/floor_registry.h"     // kMinFloor / kMaxFloor / kFloorSlots
 #include "game/population.h"         // height_for_age
@@ -11,29 +14,13 @@ namespace {
 constexpr std::uint32_t kDaysPerYear = 365;
 constexpr std::uint64_t kTenthsPerDay = 10;
 
-// splitmix32 finalizer, as in wander.cpp / hunt.cpp / population.cpp /
-// faction_relations.cpp / mob_spawn.cpp. Duplicated for the same reason all five
-// duplicate it: three lines, wanted inlined, and a shared header between otherwise
-// independent systems buys nothing. The branch this module was ported from shipped a
-// src/core/rng.h for exactly this; on this side the file-local copy is the
-// established convention, and introducing a sixth-caller core header to replace five
-// identical copies is a tree-wide cleanup, not a line item in a society sim.
-std::uint32_t mix(std::uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352du;
-    x ^= x >> 15;
-    x *= 0x846ca68bu;
-    x ^= x >> 16;
-    return x;
-}
-
 // STATELESS hashing is the whole determinism strategy: every per-record decision is a
 // hash of (id, tick, salt), so there is no per-NPC RNG state to carry, the sweep does
 // not depend on iteration order, and the same (pool, params, step count) reproduces
 // bit-for-bit. Order-sensitive and well-mixed, so consecutive ids at a fixed tick
 // spread across the whole range.
 std::uint32_t hash2(std::uint32_t a, std::uint32_t b) {
-    return mix(a ^ (mix(b) * 0x9e3779b9u + 0x85ebca6bu));
+    return giga::hash_u32(a ^ (giga::hash_u32(b) * 0x9e3779b9u + 0x85ebca6bu));
 }
 std::uint32_t hash3(std::uint32_t a, std::uint32_t b, std::uint32_t c) {
     return hash2(hash2(a, b), c);
