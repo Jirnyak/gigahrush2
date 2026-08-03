@@ -590,7 +590,15 @@ void main() {
         } else {
             grad_world = vec3(-grad_uv.x * sign(n_geom.y), 0.0, -grad_uv.y * sign(n_geom.y));
         }
-        n = normalize(n_geom + bump * grad_world);
+        // Step discontinuities (floor/fract in surface_height) divide by the
+        // 5 mm tap — an unbounded gradient flips the shading normal and one
+        // pixel catches full additive specular on a flat dark surface
+        // (measured: 0.6-1.2% of lino/tread/rubble pixels at 6.5x flat).
+        // Cap the tilt so a spike cannot exceed ~30 deg.
+        vec3 tilt = bump * grad_world;
+        float tl = length(tilt);
+        if (tl > 0.58) tilt *= 0.58 / tl;
+        n = normalize(n_geom + tilt);
     }
 
 #ifdef GIGA_ALBEDO_ARRAY

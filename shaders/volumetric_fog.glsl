@@ -42,9 +42,10 @@ float ign_jitter(vec2 fragCoord) {
 
 // Lognormal height fog density with spatial micro-turbulent mist
 float sample_volumetric_fog_density(vec3 pos, float heightScale) {
-    float baseDensity = exp(-clamp(heightScale * pos.y, -3.0, 3.0));
+    // Z-up world: height rides z; the mist swirl noise lives in the xy plane.
+    float baseDensity = exp(-clamp(heightScale * pos.z, -3.0, 3.0));
     // Spatial noise perturbation for dynamic mist swirl
-    vec2 p = pos.xz * 0.15;
+    vec2 p = pos.xy * 0.15;
     vec2 i = floor(p);
     vec2 f = fract(p);
     f = f * f * (3.0 - 2.0 * f);
@@ -76,6 +77,8 @@ vec4 march_volumetric_fog(
     float timeSec,
     float samosborPulse
 ) {
+    // Step-count-invariant (measured 2026-08-03: 12 vs 24 steps, p99 frame
+    // delta = 2/765) — raise freely if the IGN dither ever reads as noise.
     const int kNumSteps = 12;
     float jitter = ign_jitter(fragCoord);
     float stepSize = maxDist / float(kNumSteps);
@@ -104,7 +107,7 @@ vec4 march_volumetric_fog(
         vec3 toLamp = headlampPos - p;
         float lampDistSq = dot(toLamp, toLamp);
         float lampAtt = 1.0 / (1.0 + lampDistSq / max(headlampRadius * headlampRadius, 1e-4));
-        float lampCos = dot(-rayDir, normalize(toLamp));
+        float lampCos = dot(-rayDir, toLamp) * inversesqrt(max(lampDistSq, 1e-6));
         float lampPhase = henyey_greenstein_phase(lampCos, 0.55);
         vec3 lampColor = vec3(0.95, 0.92, 0.85) * (headlampIntensity * lampAtt * lampPhase * 0.35);
 
@@ -130,12 +133,12 @@ vec4 march_volumetric_fog(
                 uint lightIdx = cell.lightIndices[k];
                 PointLight pt = uPointLights[lightIdx];
 
-                vec3 toPt;
-                toPt.x = pt.posRadius.x - p.x;
-                toPt.x -= 128.0 * floor((toPt.x + 64.0) / 128.0);
-                toPt.y = pt.posRadius.y - p.y;
-                toPt.z = pt.posRadius.z - p.z;
-                toPt.z -= 128.0 * floor((toPt.z + 64.0) / 128.0);
+                // Torus wrap on ALL three axes with the true 256 m period
+                // (kWorldExtent). The old 128 m half-period folded a light
+                // 130 m away to 2 m — phantom fog glow in the wrong place —
+                // and y never wrapped at all.
+                vec3 toPt = pt.posRadius.xyz - p;
+                toPt -= 256.0 * floor((toPt + 128.0) / 256.0);
                 float dPtSq = dot(toPt, toPt);
                 float radius = pt.posRadius.w;
 
@@ -144,7 +147,9 @@ vec4 march_volumetric_fog(
                     float ptAtt = clamp(1.0 - (dPt / radius), 0.0, 1.0);
                     ptAtt *= ptAtt; // Smooth falloff quadratic
 
-                    float ptCos = dot(-rayDir, normalize(toPt));
+                    // No normalize(): a sample landing on the light centre
+                    // would emit NaN into the additive inscatter term.
+                    float ptCos = dot(-rayDir, toPt) / max(dPt, 1e-3);
                     float ptPhase = henyey_greenstein_phase(ptCos, 0.40);
 
                     pointLightScat += pt.colorIntensity.rgb * (pt.colorIntensity.w * ptAtt * ptPhase);

@@ -534,7 +534,12 @@ void main() {
         } else {
             grad_world = vec3(-grad_uv.x * sign(n_geom.y), 0.0, -grad_uv.y * sign(n_geom.y));
         }
-        n = normalize(n_geom + bump * grad_world);
+        // Same tilt cap as raymarch.frag: unbounded step-discontinuity
+        // gradients flip the normal and spark single-pixel specular.
+        vec3 tilt = bump * grad_world;
+        float tl = length(tilt);
+        if (tl > 0.58) tilt *= 0.58 / tl;
+        n = normalize(n_geom + tilt);
     }
 
 #ifdef GIGA_ALBEDO_ARRAY
