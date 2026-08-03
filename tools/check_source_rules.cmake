@@ -377,10 +377,13 @@ _giga_csv_vs_header("data/particles.csv" "src/game/particle_table.h"
 # failed the day 56c9c6a landed.
 #
 # ESCAPE HATCH, deliberately in-file rather than a central allowlist: a suite
-# still being written carries `giga-check: unwired-suite` plus a reason on some
-# line. Keeping the exemption next to the code means it is deleted by the same
-# edit that wires the suite up, instead of rotting in a list nobody re-reads —
-# which is the failure mode of every allowlist that only ever grows.
+# still being written carries a comment LINE STARTING with
+# `// giga-check: unwired-suite` plus a reason. Keeping the exemption next to
+# the code means it is deleted by the same edit that wires the suite up,
+# instead of rotting in a list nobody re-reads — which is the failure mode of
+# every allowlist that only ever grows. Line-start is REQUIRED: a plain
+# substring match let ordinary prose mentioning the token ("the exemption is
+# GONE, do not re-add it") silently disable the gate for that file.
 file(GLOB GIGA_SUITE_FILES "${GIGA_ROOT}/tests/suite_*.inl")
 file(GLOB GIGA_TEST_TUS "${GIGA_ROOT}/tests/*.cpp")
 
@@ -395,8 +398,9 @@ foreach(_suite IN LISTS GIGA_SUITE_FILES)
     file(RELATIVE_PATH _suite_rel "${GIGA_ROOT}" "${_suite}")
     file(READ "${_suite}" _suite_body)
 
-    string(FIND "${_suite_body}" "giga-check: unwired-suite" _suite_exempt)
-    if(NOT _suite_exempt EQUAL -1)
+    string(REGEX MATCH "(^|\n)[ \t]*//[ \t]*giga-check: unwired-suite"
+           _suite_exempt "${_suite_body}")
+    if(NOT _suite_exempt STREQUAL "")
         message("unwired-suite-exempt=${_suite_rel}")
         continue()
     endif()
@@ -404,7 +408,7 @@ foreach(_suite IN LISTS GIGA_SUITE_FILES)
     string(FIND "${GIGA_TU_TEXT}" "#include \"${_suite_name}\"" _suite_included)
     if(_suite_included EQUAL -1)
         list(APPEND GIGA_FAILURES
-            "${_suite_rel}:1: compiled by NOBODY — no tests/*.cpp contains #include \"${_suite_name}\", so every assertion in it is dead text. Add the include to the right test translation unit AND call its test_*_all() from that file's main. If it is still being written, put `giga-check: unwired-suite <reason>` in it and delete that line when you wire it up.")
+            "${_suite_rel}:1: compiled by NOBODY — no tests/*.cpp contains #include \"${_suite_name}\", so every assertion in it is dead text. Add the include to the right test translation unit AND call its test_*_all() from that file's main. If it is still being written, put a line starting `// giga-check: unwired-suite <reason>` in it and delete that line when you wire it up.")
         continue()
     endif()
 
