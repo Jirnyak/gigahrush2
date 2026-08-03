@@ -143,7 +143,7 @@ bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& 
     }
 
     if (hitEntity != entt::null) {
-        vec3 impulse = normalize(projVel) * 3.0f + vec3{0.0f, 1.0f, 0.0f};
+        vec3 impulse = normalize(projVel) * 3.0f + vec3{0.0f, 0.0f, 1.0f};
         detach_single_prop(reg, hitEntity, hitMode, impulse, hitPos, hitColor, 0, bus);
         return true;
     }
@@ -185,7 +185,7 @@ std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& 
             if (reg.all_of<PropMesh>(entity))
                 mk = static_cast<std::uint32_t>(reg.get<PropMesh>(entity).shape);
             detached.push_back({entity, view.get<PropFallMode>(entity), tr.pos,
-                                vec3{0.0f, 1.0f, 0.0f}, col, mk});
+                                vec3{0.0f, 0.0f, 1.0f}, col, mk});
         }
     }
 

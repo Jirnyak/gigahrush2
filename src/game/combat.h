@@ -45,6 +45,7 @@
 #include "game/ranged_table.h"   // ItemId, for the equipped-loadout helpers
 #include "game/npc_pool.h"
 #include "game/rpg.h"      // RpgStats (POSRPG transfer)
+#include "core/wrap.h"     // wrap_delta_f — toroidal deltas, every axis
 #include "world/level_stack.h"
 #include "world/macro_grid.h"
 #include "world/materials.h"
@@ -88,10 +89,11 @@ struct PowerGridState {
             int sx = static_cast<int>((k >> 32) & 0xFFFF);
             int sy = static_cast<int>((k >> 16) & 0xFFFF);
             int sz = static_cast<int>(k & 0xFFFF);
-            vec3 shieldPos{sx * 2.0f, sy * 2.0f + 0.40f, sz * 2.0f};
-            float dx = pos.x - shieldPos.x;
-            float dy = pos.y - shieldPos.y;
-            float dz = pos.z - shieldPos.z;
+            // Z-up: the 0.40 m mount offset rides the vertical (z) axis.
+            vec3 shieldPos{sx * kCellSize, sy * kCellSize, sz * kCellSize + 0.40f};
+            float dx = wrap_delta_f(pos.x, shieldPos.x, kWorldExtent);
+            float dy = wrap_delta_f(pos.y, shieldPos.y, kWorldExtent);
+            float dz = wrap_delta_f(pos.z, shieldPos.z, kWorldExtent);
             if (dx * dx + dy * dy + dz * dz <= 12.0f * 12.0f) {
                 return true;
             }

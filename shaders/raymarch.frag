@@ -336,11 +336,13 @@ float surface(uint mat, vec2 uv, vec3 aw, float px, float g) {
     float sigma = kMatSurface[id].x;
     float pitch = kMatSurface[id].y;
 
-    bool isHorizontal = (abs(aw.y) > 0.7);
+    // Z-up world: floors/ceilings have |n.z| ~ 1. Testing Y here shaded
+    // ceilings with the wall band logic and walls with the floor path.
+    bool isHorizontal = (abs(aw.z) > 0.7);
 
     if (fam == kFamGeneric) {
         if (!isHorizontal) {
-            float h_in_room = fract(vWorldPos.y * 0.5);
+            float h_in_room = fract(vWorldPos.z * 0.5);
             vec3 wallColorMult;
             float wallGloss = 1.0;
             if (h_in_room < 0.58) {
@@ -368,7 +370,7 @@ float surface(uint mat, vec2 uv, vec3 aw, float px, float g) {
 
     if (fam == kFamPlaster) {
         if (!isHorizontal) {
-            float h_in_room = fract(vWorldPos.y * 0.5);
+            float h_in_room = fract(vWorldPos.z * 0.5);
             float wallGloss = (h_in_room < 0.58) ? 1.20 : 0.90;
             float stain = vnoise(uv * pitch);
             float n = (g - 0.5) * kNormGrain * 0.78 + (stain - 0.5) * kNormNoise * 0.62;
@@ -575,7 +577,7 @@ void main() {
     uint fam = kMatFamily[mid];
     float bump = kMatSurface[mid].w;
 
-    bool isHorizontal = (aw.y > 0.7);
+    bool isHorizontal = (aw.z > 0.7);
 
     vec3 n = n_geom;
     if (bump > 0.001) {
@@ -702,7 +704,7 @@ void main() {
     lit = lit * fogVol.a + fogVol.rgb;
 
     const float kHeightFogScale = 0.04;
-    float heightDensity = exp(-clamp(kHeightFogScale * vWorldPos.y, -3.0, 3.0));
+    float heightDensity = exp(-clamp(kHeightFogScale * vWorldPos.z, -3.0, 3.0));
     float effectiveDist = d * heightDensity;
 
     float fog = clamp((effectiveDist - pc.fog.x) / max(pc.fog.y - pc.fog.x, 1e-3), 0.0, 1.0);

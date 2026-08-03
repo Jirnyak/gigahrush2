@@ -170,7 +170,7 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
             case game::SamosborVariant::Veretar:  alarmColor = vec3{0.85f, 0.85f, 0.95f}; break;
             default: break;
         }
-        grid.add_light(camPos + vec3{0.0f, 3.0f, 0.0f}, 48.0f, alarmColor, alarmPulse * 3.5f);
+        grid.add_light(camPos + vec3{0.0f, 0.0f, 3.0f}, 48.0f, alarmColor, alarmPulse * 3.5f);
     }
 
     // 3. Mob Emitters (Lampovy & Lampoglaz)
@@ -181,14 +181,14 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
         const auto kind = static_cast<game::MobKind>(m.kind);
 
         float dx = wrap_delta_f(camPos.x, tr.pos.x, kWorldExtent);
-        float dy = camPos.y - tr.pos.y;
+        float dy = wrap_delta_f(camPos.y, tr.pos.y, kWorldExtent);
         float dz = wrap_delta_f(camPos.z, tr.pos.z, kWorldExtent);
         if (dx * dx + dy * dy + dz * dz > 48.0f * 48.0f) continue;
 
         if (kind == game::MobKind::Lampovy) {
-            grid.add_light(tr.pos + vec3{0.0f, 1.2f, 0.0f}, 12.0f, vec3{1.0f, 0.88f, 0.65f}, 2.0f);
+            grid.add_light(tr.pos + vec3{0.0f, 0.0f, 1.2f}, 12.0f, vec3{1.0f, 0.88f, 0.65f}, 2.0f);
         } else if (kind == game::MobKind::Lampoglaz) {
-            grid.add_light(tr.pos + vec3{0.0f, 1.5f, 0.0f}, 16.0f, vec3{0.70f, 0.95f, 1.0f}, 2.8f);
+            grid.add_light(tr.pos + vec3{0.0f, 0.0f, 1.5f}, 16.0f, vec3{0.70f, 0.95f, 1.0f}, 2.8f);
         }
     }
 
@@ -199,10 +199,10 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
         const game::Container& cnt = reg.get<const game::Container>(e);
         if (!cnt.opened) {
             float dx = wrap_delta_f(camPos.x, tr.pos.x, kWorldExtent);
-            float dy = camPos.y - tr.pos.y;
+            float dy = wrap_delta_f(camPos.y, tr.pos.y, kWorldExtent);
             float dz = wrap_delta_f(camPos.z, tr.pos.z, kWorldExtent);
             if (dx * dx + dy * dy + dz * dz < 32.0f * 32.0f) {
-                grid.add_light(tr.pos + vec3{0.0f, 0.5f, 0.0f}, 6.0f, vec3{0.30f, 0.90f, 0.50f}, 1.2f);
+                grid.add_light(tr.pos + vec3{0.0f, 0.0f, 0.5f}, 6.0f, vec3{0.30f, 0.90f, 0.50f}, 1.2f);
             }
         }
     }
@@ -215,7 +215,7 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
         if (proj.ttlMs == 0) continue;
 
         float dx = wrap_delta_f(camPos.x, tr.pos.x, kWorldExtent);
-        float dy = camPos.y - tr.pos.y;
+        float dy = wrap_delta_f(camPos.y, tr.pos.y, kWorldExtent);
         float dz = wrap_delta_f(camPos.z, tr.pos.z, kWorldExtent);
         if (dx * dx + dy * dy + dz * dz < 48.0f * 48.0f) {
             vec3 pcol = (proj.team == 1) ? vec3{1.0f, 0.85f, 0.40f} : vec3{0.95f, 0.20f, 0.40f};
@@ -232,9 +232,9 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
             float lifeFrac = (loud->lifeMs > 0) ? (static_cast<float>(loud->ttlMs) / static_cast<float>(loud->lifeMs)) : 1.0f;
             float pulse = std::sin(timeSec * 30.0f + static_cast<float>(loud->id)) * 0.35f + 0.65f;
             float intensity = (static_cast<float>(loud->severity) * 2.0f) * lifeFrac * pulse;
-            grid.add_light(npos + vec3{0.0f, 0.8f, 0.0f}, loud->radius * 0.8f, vec3{1.0f, 0.70f, 0.30f}, intensity);
+            grid.add_light(npos + vec3{0.0f, 0.0f, 0.8f}, loud->radius * 0.8f, vec3{1.0f, 0.70f, 0.30f}, intensity);
             float acousticFlicker = 1.0f + 0.50f * (static_cast<float>(loud->severity) / 5.0f) * std::sin(timeSec * 40.0f);
-            grid.add_light(camPos + vec3{0.0f, 1.0f, 0.0f}, 14.0f, vec3{0.90f, 0.80f, 0.50f}, 1.5f * acousticFlicker);
+            grid.add_light(camPos + vec3{0.0f, 0.0f, 1.0f}, 14.0f, vec3{0.90f, 0.80f, 0.50f}, 1.5f * acousticFlicker);
         }
     }
 
@@ -253,7 +253,7 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
             if (powerGrid && powerGrid->is_power_cut(pos)) continue; // Local power cut!
 
             float dx = wrap_delta_f(camPos.x, pos.x, kWorldExtent);
-            float dy = camPos.y - pos.y;
+            float dy = wrap_delta_f(camPos.y, pos.y, kWorldExtent);
             float dz = wrap_delta_f(camPos.z, pos.z, kWorldExtent);
             if (dx * dx + dy * dy + dz * dz > 36.0f * 36.0f) continue;
 
@@ -262,7 +262,7 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
             float microFlick = (std::fmod(timeSec * 47.0f + pos.x * 3.1f + pos.z * 5.7f, 1.0f) < 0.07f) ? -0.50f : 0.0f;
             float intensity = std::max(0.2f, 1.8f + flick + microFlick);
 
-            grid.add_light(pos + vec3{0.0f, -0.2f, 0.0f}, 12.0f, vec3{1.00f, 0.88f, 0.65f}, intensity);
+            grid.add_light(pos + vec3{0.0f, 0.0f, -0.2f}, 12.0f, vec3{1.00f, 0.88f, 0.65f}, intensity);
         }
     }
 }
