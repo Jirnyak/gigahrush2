@@ -62,8 +62,8 @@ struct GravityField {
     // The quantized regime consumers key on. RUNTIME STATE, not generation
     // config: the floor module writes it when it builds the world, and the game
     // may flip it mid-run (a samosbor variant, a console command) — gravity's
-    // direction is CONTEXT, one of the 8 values, and lazy background re-baking
-    // ([game/lazy_baker.h]) reads it like any other input. Keep it and `global`
+    // direction is CONTEXT, one of the 8 values, and any background re-baking
+    // reads it like any other input. Keep it and `global`
     // in agreement (regime_from_vector) when changing either.
     GravityRegime regime = GravityRegime::NegZ;
 

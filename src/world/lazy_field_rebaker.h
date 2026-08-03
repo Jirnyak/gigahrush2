@@ -22,7 +22,7 @@ public:
     LazyFieldRebaker() = default;
     ~LazyFieldRebaker() = default;
 
-    // Flat macro_index keys (CarveResult::dirtyCells / LazyFieldBaker packing).
+    // Flat macro_index keys (CarveResult::dirtyCells packing).
     void mark_dirty_cells(const std::vector<std::uint32_t>& dirtyMacroKeys);
 
     // Queue a lattice node id in [0, kNodes).

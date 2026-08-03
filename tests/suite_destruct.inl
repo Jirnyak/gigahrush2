@@ -4,7 +4,6 @@
 
 #include <chrono>
 #include <thread>
-#include "game/lazy_baker.h"
 #include "world/lazy_field_rebaker.h"
 #include "world/lattice.h"
 #include "world/nav.h"
@@ -367,29 +366,11 @@ static void test_lazy_field_rebaker() {
     CHECK(rebaker.is_idle());
 }
 
-static void test_lazy_baker() {
-    game::LazyFieldBaker<float> baker;
-    World w;
-    std::vector<std::uint32_t> dirty = { static_cast<std::uint32_t>(macro_index(10, 10, 10)) };
-    baker.request_rebake(w, dirty);
-    
-    int retries = 100;
-    while (retries-- > 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        baker.update_main_thread();
-        if (baker.get().at(10, 10, 10) != 0.0f) {
-            break;
-        }
-    }
-    CHECK(baker.get().at(10, 10, 10) != 0.0f);
-}
-
 static void test_destruct_all() {
     test_subfield();
     test_carve_roll();
     test_carve_at();
     test_carve_layers();
     test_carve_sphere();
-    test_lazy_baker();
     test_lazy_field_rebaker();
 }

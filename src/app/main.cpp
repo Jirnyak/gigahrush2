@@ -35,7 +35,6 @@
 
 #include "core/math.h"
 #include "game/mob_table.h"
-#include "game/lazy_baker.h"
 #include "core/tick.h"
 #include "core/wrap.h"
 #include "ecs/components.h"
@@ -1623,7 +1622,6 @@ int main(int argc, char** argv) {
     // --- World + ECS setup -------------------------------------------------
     // Build the world population-first, then embody the player from it ([npcs.md]).
     LevelStack stack;
-    game::LazyFieldBaker<float> lazyBaker;
     // §22: lazy nav field rebake under frame budget after carves.
     nav::LazyFieldRebaker navRebaker;
     Registry reg;
@@ -2307,7 +2305,6 @@ int main(int argc, char** argv) {
     };
 
     while (running) {
-        lazyBaker.update_main_thread();
         LayerId activeLayer = reg.get<Transform>(player).layer;
         bool propPassNeedsRebuild = false;
 
@@ -3369,7 +3366,6 @@ int main(int argc, char** argv) {
                         carve_sphere(stack.layer(activeLayer), op,
                                      carveScratch, carveResult);
                     if (removed > 0) {
-                        lazyBaker.request_rebake(stack.layer(activeLayer), carveResult.dirtyCells);
                         navRebaker.mark_dirty_cells(carveResult.dirtyCells);
                         // No log, no bookkeeping: geometry persistence is the
                         // floor's own file, written when the player leaves
@@ -3612,7 +3608,6 @@ int main(int argc, char** argv) {
                             carve_sphere(stack.layer(activeLayer), op,
                                          carveScratch, carveResult);
                         if (removed > 0) {
-                            lazyBaker.request_rebake(stack.layer(activeLayer), carveResult.dirtyCells);
                             navRebaker.mark_dirty_cells(carveResult.dirtyCells);
                             voxelMirror.mark_dirty(
                                 carveResult.dirtyCells.data(),
@@ -5088,9 +5083,7 @@ int main(int argc, char** argv) {
                     propPassNeedsRebuild = true;
                 }
                 // Same field-rebake debt carve pays: doors mutate occupancy
-                // masks the danger/scent fields sample. [lazy_baker.h]
-                lazyBaker.request_rebake(stack.layer(activeLayer),
-                                         doors.dirtyCells);
+                // masks the nav flow fields sample.
                 navRebaker.mark_dirty_cells(doors.dirtyCells);
                 doors.dirtyCells.clear();
             }
