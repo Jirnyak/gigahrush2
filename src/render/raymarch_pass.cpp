@@ -179,7 +179,9 @@ bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
         MarchUbo* u = static_cast<MarchUbo*>(ubo_[f].mapped);
         u->invViewProj = mat4_identity();
         for (std::uint32_t i = 0; i < 32; ++i) {
-            const vec3 c = i < matCount ? albedo[i] : vec3{0.75f, 0.75f, 0.78f};
+            // Out-of-range material ids must SCREAM, not blend in: a near-white
+            // fallback rendered as believable "dead pixels" in a dark world.
+            const vec3 c = i < matCount ? albedo[i] : vec3{1.0f, 0.0f, 1.0f};
             u->albedo[i] = vec4{c.x, c.y, c.z, 0.0f};
         }
 

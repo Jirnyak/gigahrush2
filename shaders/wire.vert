@@ -37,9 +37,17 @@ void main() {
     uint s = seg % 7u;
     uint corner = uint(gl_VertexIndex) % 6u;
 
+    // Dead chain: clip cleanly (the cloth.vert pattern). Collapsing p0 == p1
+    // instead sent normalize(cross(vec3(0), v)) — NaN clip coords, UB.
+    if (wb.c[chain].meta.y < 0.5) {
+        gl_Position = vec4(1e9, 1e9, 1e9, 1.0);
+        vFog = 1.0;
+        vWorldPos = vec3(0.0);
+        return;
+    }
+
     vec3 p0 = wb.c[chain].cur[s].xyz;
     vec3 p1 = wb.c[chain].cur[s + 1u].xyz;
-    if (wb.c[chain].meta.y < 0.5) { p0 = vec3(1e9); p1 = vec3(1e9); }
 
     // ONE wrap decision per chain — its first point. Per-segment wrapping let
     // neighbouring segments disagree near the seam and the cable tore.

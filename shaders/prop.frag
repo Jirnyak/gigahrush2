@@ -113,15 +113,26 @@ vec3 construct_perturbed_normal(vec3 n_geom, uint mat_id, vec2 uv, vec3 aw, floa
     vec3 B = cross(n_geom, T);
 
     const float eps = 0.002;
-    float s_right = surface(mat_id, uv + vec2(eps, 0.0), aw, px, grain(uv + vec2(eps, 0.0)));
-    float s_left  = surface(mat_id, uv - vec2(eps, 0.0), aw, px, grain(uv - vec2(eps, 0.0)));
-    float s_top   = surface(mat_id, uv + vec2(0.0, eps), aw, px, grain(uv + vec2(0.0, eps)));
-    float s_bot   = surface(mat_id, uv - vec2(0.0, eps), aw, px, grain(uv - vec2(0.0, eps)));
+    // Grain's finest octave (~2 cm period) is far below the 4 mm tap spacing:
+    // differencing across it decorrelates the shading normal from geometry
+    // (58 deg median tilt — single-pixel specular sparks). Hold grain constant
+    // across the taps so that octave cancels, exactly as the world pass's
+    // compute_grad_uv already does.
+    float g0 = grain(uv);
+    float s_right = surface(mat_id, uv + vec2(eps, 0.0), aw, px, g0);
+    float s_left  = surface(mat_id, uv - vec2(eps, 0.0), aw, px, g0);
+    float s_top   = surface(mat_id, uv + vec2(0.0, eps), aw, px, g0);
+    float s_bot   = surface(mat_id, uv - vec2(0.0, eps), aw, px, g0);
 
     float dSdu = (s_right - s_left) / (2.0 * eps);
     float dSdv = (s_top - s_bot)   / (2.0 * eps);
 
-    vec3 n_perturbed = n_geom - bumpScale * (dSdu * T + dSdv * B);
+    // Residual step discontinuities (floor/fract families in surface()) still
+    // divide by 0.004; cap the tilt so no tap can flip the normal past ~30 deg.
+    vec3 tilt = bumpScale * (dSdu * T + dSdv * B);
+    float tl = length(tilt);
+    if (tl > 0.58) tilt *= 0.58 / tl;
+    vec3 n_perturbed = n_geom - tilt;
     return normalize(n_perturbed);
 }
 

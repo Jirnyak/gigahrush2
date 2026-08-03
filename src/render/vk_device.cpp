@@ -246,6 +246,10 @@ bool VulkanDevice::init(SDL_Window* window, bool enableValidation) {
         devExts.push_back("VK_KHR_portability_subset");
 
     VkPhysicalDeviceFeatures feats{};
+    // The renderer indexes SSBOs from GPU-resident tables (page indices, stain
+    // slots); with robustness off any stale slot is genuine UB. robustBufferAccess
+    // is the one feature the spec guarantees on every implementation.
+    feats.robustBufferAccess = VK_TRUE;
 
     VkDeviceCreateInfo dci{};
     dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;

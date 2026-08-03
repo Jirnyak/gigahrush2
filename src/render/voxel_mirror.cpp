@@ -239,6 +239,20 @@ bool VoxelMirror::upload_all(const World& world) {
         ok = ok && upload_via_staging(
                        pagePool_, sub->pages_data(),
                        static_cast<std::size_t>(poolPages_) * kPageBytes);
+
+    // Stain: the index must never stay raw VRAM — sub_stain() dereferences it
+    // for every hit pixel, and a garbage slot is a wild read into the pool.
+    // Reset every cell to kNoPage, then queue the cells that do carry stain
+    // pages; the flush path lands index + page together, so a valid slot never
+    // points at an unwritten page.
+    idxScratch_.assign(kMacroCells, kNoPage);
+    ok = ok && upload_via_staging(stainIdx_, idxScratch_.data(), kStainIdxBytes);
+    if (const SubField<StainRGB>* stainF =
+            world.subfields().find<StainRGB>(kStainFieldName)) {
+        const std::uint32_t* tab = stainF->page_table();
+        for (std::uint32_t ci = 0; ci < kMacroCells; ++ci)
+            if (tab[ci] != kNoPage) mark_dirty(&ci, 1);
+    }
     return ok;
 }
 
@@ -520,10 +534,41 @@ bool VoxelMirror::verify(const World& world) {
         ok = readback_compare(pagePool_, sub->pages_data(),
                               static_cast<std::size_t>(poolCount) * kPageBytes,
                               "page-pool", &m3) && ok;
+
+    // Stain half — the same truth-vs-GPU contract as sub-material above.
+    const SubField<StainRGB>* stainF =
+        world.subfields().find<StainRGB>(kStainFieldName);
+    const std::uint32_t stainPages =
+        stainF ? (stainF->page_count() < kStainPageCap
+                      ? static_cast<std::uint32_t>(stainF->page_count())
+                      : kStainPageCap)
+               : 0u;
+    idxScratch_.assign(kMacroCells, kNoPage);
+    if (stainF) {
+        const std::uint32_t* tab = stainF->page_table();
+        for (std::size_t i = 0; i < kMacroCells; ++i)
+            idxScratch_[i] = tab[i] < stainPages ? tab[i] : kNoPage;
+    }
+    std::uint32_t m5 = 0, m6 = 0;
+    ok = readback_compare(stainIdx_, idxScratch_.data(), kStainIdxBytes,
+                          "stain-index", &m5) && ok;
+    if (stainF && stainPages > 0) {
+        std::vector<std::uint8_t> repacked(
+            static_cast<std::size_t>(stainPages) * kStainPageBytes);
+        for (std::uint32_t p = 0; p < stainPages; ++p)
+            repack_stain_page(stainF->pages_data() +
+                                  static_cast<std::size_t>(p) * kSubVoxels,
+                              repacked.data() +
+                                  static_cast<std::size_t>(p) * kStainPageBytes);
+        ok = readback_compare(stainPool_, repacked.data(), repacked.size(),
+                              "stain-pool", &m6) && ok;
+    }
     std::fprintf(stderr,
                  "[mirror] verify %s: %u dirty queued | masks %u types %u "
-                 "pageIdx %u pool %u class %u mismatching bytes\n",
-                 ok ? "OK" : "FAIL", dirty_backlog(), m0, m1, m2, m3, m4);
+                 "pageIdx %u pool %u class %u stainIdx %u stainPool %u "
+                 "mismatching bytes\n",
+                 ok ? "OK" : "FAIL", dirty_backlog(), m0, m1, m2, m3, m4, m5,
+                 m6);
     return ok;
 }
 
