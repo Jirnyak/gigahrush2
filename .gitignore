@@ -6,6 +6,16 @@
 # CMake FetchContent caches live under build/, but guard the source tree too.
 _deps/
 
+# Compiled SPIR-V — build products, glslc writes them into build/shaders/.
+# AGENTS.md: never stage shaders/** binaries; sources (.vert/.frag/.comp/.glsl) stay tracked.
+shaders/*.spv
+
+# ctest output written into the repo root when ctest runs from here.
+/Testing/
+
+# Agent scratch (briefings/progress/handoffs) — session-local, not project state.
+.agents/
+
 # Editor / OS cruft
 .DS_Store
 *.swp
