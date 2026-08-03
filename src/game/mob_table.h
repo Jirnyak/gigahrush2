@@ -177,8 +177,25 @@ struct MobDef {
     std::uint8_t packMin;          // 33  1..8
     std::uint8_t packMax;          // 34  1..16
     std::uint8_t packSpread;       // 35  cells, 0..10
+    // --- nav traversal profile, in SUB-VOXELS (0.25 m) ---------------------
+    // The universal articulation numbers the nav bake tags graph edges with:
+    // a rise <= navStepSub is a walk (stairs are 1-sub risers), a rise <=
+    // navClimbSub is a jump/climb (8 = one 2 m cell), a fall <= navDropSub is a
+    // drop. navFly != 0 ignores gravity entirely (and everyone flies under a
+    // Zero-g regime — [world/gravity.h]). Axis-generic on purpose: "rise" is
+    // against the floor module's declared gravity, never a named axis.
+    std::uint8_t navStepSub;       // 36  walkable riser, sub-voxels
+    std::uint8_t navClimbSub;      // 37  jump/climb height, sub-voxels
+    std::uint8_t navDropSub;       // 38  safe drop, sub-voxels
+    std::uint8_t navFly;           // 39  0 = walker, 1 = flyer
+    // --- universal mass ([ecs/components.h] Mass) --------------------------
+    // kg x10 (0.1 kg resolution, max 6553 kg). Feeds E = m*v^2/2 and p = m*v —
+    // fall damage, knockback, ragdoll swing — never a per-system constant.
+    std::uint16_t massKgX10;       // 40
+    std::uint8_t pad0_ = 0;        // 42
+    std::uint8_t pad1_ = 0;        // 43
 };
-static_assert(sizeof(MobDef) == 36, "MobDef must stay a tight 36-byte row");
+static_assert(sizeof(MobDef) == 44, "MobDef must stay a tight 44-byte row");
 static_assert(alignof(MobDef) == 4);
 static_assert(std::is_trivially_copyable_v<MobDef>);
 static_assert(offsetof(MobDef, projSpeedMmps) == 14, "hot prefix boundary moved");

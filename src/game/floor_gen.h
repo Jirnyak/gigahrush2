@@ -6,12 +6,11 @@
 // lets a streamed-out floor be torn down and regenerated bit-for-bit on return
 // (increment #9), so nothing about a floor's layout has to be persisted.
 //
-// The floor's *character* (its FloorKind, carried in the FloorSpec) selects a
-// geometry PROFILE — room pitch, storey height, doorway size, and decay (broken
-// walls, collapsed slabs, rubble). Different kinds therefore build measurably
-// different interiors from the same seed: dense residential warrens, open
-// commercial halls, sparse industrial plates on pillars, broken derelict mazes.
-// The profile is a data table (one row per kind), never a code branch.
+// GEOMETRY COMES FROM MODULES ([floors.md] — the folder is the module). This
+// file is only the dispatch seam (kind -> module generator row) plus the room
+// TAXONOMY the content tables key on. The floor's *character* (its FloorKind,
+// carried in the FloorSpec) themes CONTENT — population, mobs, loot, room mix —
+// never geometry branches.
 //
 // Pure game-layer + core: no SDL/Vulkan/ImGui, headless-testable in game_test.
 #pragma once
@@ -21,10 +20,11 @@
 #include <vector>
 
 #include "game/floor_spec.h"
-#include "game/mob_table.h"  // RoomBit — the generator names rooms in the shared taxonomy
+#include "world/gravity.h" // GravityRegime — the module's declared frame
 
 namespace giga {
 class World;
+class MacroGrid;
 }
 
 namespace giga::game {
@@ -45,10 +45,42 @@ void generate_floor(World& world, int number, const FloorSpec& spec,
 //
 // Exported rather than copied because the mob spawner places packs BY ROOM and has
 // to agree with the generator exactly. A duplicated stride table would keep
-// compiling and start placing "rooms" straddling wall lines the day a row in the
-// generator's geometry profile is retuned — a silent, seed-dependent drift.
-// Out-of-range kinds fall back to row 0, the same clamp generate_floor uses.
+// compiling and start placing "rooms" straddling wall lines the day the module's
+// geometry is retuned — a silent, seed-dependent drift.
 int floor_room_stride(FloorKind kind);
+
+// ---------------------------------------------------------------------------
+// Gravity frame — the module's declared regime, and axis-generic ground queries
+// ---------------------------------------------------------------------------
+// The engine is ISOTROPIC (x/y/z equal citizens on the torus); gravity is the
+// one emergent asymmetry, and it is the MODULE's to declare ([world/gravity.h]
+// GravityRegime — 8 values, one of which is Zero). Every consumer that puts a
+// body or a crate "on the ground" goes through these instead of naming an axis.
+GravityRegime floor_gravity_regime();
+
+// The standing coordinate along the gravity axis (the module's ground storey).
+// Meaningless under Zero (any air cell is ground) — callers branch on regime.
+int floor_ground_coord();
+
+// A standing cell: air, with solid one cell toward -g. Under Zero every air
+// cell qualifies. Wraps on all axes. Reads the WORLD's live regime
+// (world.gravity().regime — runtime state the game may flip mid-run), never the
+// module's generation-time constant.
+bool floor_standable(const World& w, int x, int y, int z);
+
+// Compose a cell from two TANGENT coordinates (the two non-gravity axes in
+// x,y,z order) and a HEIGHT coordinate `h` along the gravity axis. No storey is
+// special: spawn draws h over the whole axis and filters with floor_standable —
+// the torus has no privileged coordinate.
+void floor_cell(const World& w, int u, int v, int h, int& x, int& y, int& z);
+
+// floor_cell at the module's default ground coordinate — the ARRIVAL storey
+// (elevator pads), not a spawn privilege.
+void floor_ground_cell(const World& w, int u, int v, int& x, int& y, int& z);
+
+// Legacy projection: the ground coordinate, valid while the registered module's
+// regime is +-Z. Prefer the frame helpers above in new code.
+int floor_ground_z();
 
 // ---------------------------------------------------------------------------
 // Room taxonomy — what KIND of room a lattice cell is
@@ -86,47 +118,6 @@ inline constexpr std::size_t kFloorRoomBits = 11;
 // Index of a single-bit room mask, 0..kFloorRoomBits-1, or -1 for 0 / out of range.
 // Consumers use it to key a per-room-kind lookup table without a switch.
 int floor_room_bit_index(std::uint16_t mask);
-
-// ---------------------------------------------------------------------------
-// Standing water
-// ---------------------------------------------------------------------------
-// Industrial and Derelict floors seed the fluid field ([sim/fluid.h]) with walled
-// SUMPS on the ground storey — a burst pipe's outfall, a flooded pit. Before this the
-// field was seeded only by the maze test bed, so the cellular fluid sim was compiled
-// and tested and could not be reached in the mode the game runs.
-//
-// Water goes in a KERBED basin rather than a bare puddle, and that is a cost decision
-// with a measured number behind it, not decoration. An open puddle bleeds 6.25% of its
-// edge gradient per step into the surrounding room forever: it is invisible within
-// ~50 steps and still creeping thousands of steps later, and every moving step
-// invalidates the cube pass's instance cache at 28.6 ms a rebuild
-// ([render/cube_pass.h]) — so settle time IS frame time. A basin whose four lateral
-// neighbours and floor are solid cannot leak at all, so it levels out and then costs
-// nothing for the rest of the run: measured on fluid.cpp's exact transfer rule, 27
-// steps to zero motion for a 3x3 basin and 41 for a 5x5, mass conserved exactly.
-//
-// The basin cells are PARTIALLY carved — four solid sub-voxel layers of eight — and
-// that is what makes the liquid VISIBLE rather than merely present. cube_pass emits
-// only cells with a non-empty sub-mask, so fluid in an AIR cell tints nothing at all;
-// the maze test bed's two seeded puddles have never rendered for the same reason. Half
-// solid leaves 0.5 of a unit of capacity, is drawn, is tinted, and keeps the basin
-// floor 1.0 m below the kerb's top face — inside the 1.27 m apex `Jump` gives, so a
-// body that falls in through a Derelict slab hole can get out again. This is the first
-// partial sub-mask anything in the tree writes.
-//
-// Cells of water this kind seeds when every sump finds a home, i.e. the ceiling. A
-// sump whose draws all collide with a lattice lobby or an already-placed basin is
-// dropped instead of placed; simulated over 399 seeds x 8 floor numbers per kind, all
-// 4 Industrial and all 12 Derelict basins were placed every time.
-std::uint32_t floor_sump_cells(FloorKind kind);
-
-// The level water SETTLES to inside a sump, in cell-fractions — the authored number,
-// with the seed derived from it (the outfall cell starts at double its share, so the
-// solver has work to do). 8x the render's 0.05 tint threshold, under the 0.5 capacity
-// a half-solid basin cell has, and far above kFluidMinFlow so a settled basin reads as
-// water rather than as rounding. Measured settle: 27 steps for a 3x3 basin, 41 for a
-// 5x5, ending at 0.400000 per cell in both with mass conserved exactly.
-inline constexpr float kFloorSumpLevel = 0.40f;
 
 // One opening this generator punches through an interior wall — the cell a DOOR
 // occupies ([door.h]). Positions are macro cells, so a byte each.

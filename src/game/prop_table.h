@@ -29,7 +29,7 @@ enum class PropId : std::uint16_t {
 // includes render headers. fallMode / interactKind are ordinals matching
 // PropFallMode and Interactable::Kind in prop_system.h (255 = no interact).
 // color*E3 are RGB x1000 (1000 = 1.0). reachMm is Interactable.reachM * 1000.
-// Layout is explicit: 8 x uint8 then 4 x uint16 = 16 bytes (no hidden padding).
+// Layout is explicit: 6 x uint8 then 9 x uint16 = 24 bytes (no hidden padding).
 struct PropDef {
     std::uint8_t  shape;         // 0  PropShape ordinal
     std::uint8_t  fallMode;      // 1  PropFallMode ordinal
@@ -37,14 +37,17 @@ struct PropDef {
     std::uint8_t  emissive;      // 3  0..255 PropPass emissive
     std::uint8_t  matId;         // 4
     std::uint8_t  pad0_ = 0;     // 5
-    std::uint8_t  pad1_ = 0;     // 6
-    std::uint8_t  pad2_ = 0;     // 7
+    std::uint16_t massG;         // 6  universal mass, grams ([ecs] Mass)
     std::uint16_t colorRE3;      // 8  RGB x1000
     std::uint16_t colorGE3;      // 10
     std::uint16_t colorBE3;      // 12
     std::uint16_t reachMm;       // 14 Interactable reach in millimetres
+    std::uint16_t sizeXMm;       // 16 authored mesh size, millimetres — the
+    std::uint16_t sizeYMm;       // 18 unit shape is scaled to exactly this,
+    std::uint16_t sizeZMm;       // 20 so a bulb is a bulb and not a 1 m drum
+    std::uint16_t pad1_ = 0;     // 22
 };
-static_assert(sizeof(PropDef) == 16, "PropDef must stay a tight 16-byte row");
+static_assert(sizeof(PropDef) == 24, "PropDef must stay a tight 24-byte row");
 static_assert(std::is_trivially_copyable_v<PropDef>);
 
 

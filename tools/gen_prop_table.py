@@ -30,19 +30,25 @@ OUT_CPP = os.path.join(REPO, "src", "game", "prop_table.cpp")
 
 # Must stay in lockstep with enum class PropShape in render/prop_mesh.h.
 VALID_SHAPES = {
-    "Terminal": 0, "ElectricalShield": 1, "BareBulb": 2, "FloodLamp": 3,
+    "Box": 0, "CylinderX": 1, "CylinderY": 2, "CylinderZ": 3,
 }
 SHAPE_MAX = 3
 
 FALL_MODES = {"SimpleFall": 0, "RagdollRoll": 1, "GpuHandoff": 2}
-INTERACTS = {
-    "Terminal": 0,
-    "ElectricalShield": 1,
-    "LightBulb": 2,
-    "Corpse": 3,
-    "Loot": 4,
-    "None": 255,
-}
+
+# The interact ordinals come from data/interactables.csv (the generated
+# InteractKind enum) — a prop names an interactive by its cpp_name and this
+# generator refuses a name the table does not carry. "None" = 255.
+def _load_interacts():
+    import csv as _csv
+    path = os.path.join(REPO, "data", "interactables.csv")
+    with open(path, encoding="utf-8", newline="") as fh:
+        rows = list(_csv.DictReader(fh))
+    m = {r["cpp_name"].strip(): i for i, r in enumerate(rows)}
+    m["None"] = 255
+    return m
+
+INTERACTS = _load_interacts()
 
 
 def die(msg):
@@ -123,18 +129,28 @@ def main():
         enum_name = camel(sid)
         enum_lines.append("    %s = %d," % (enum_name, i))
         names.append((sid, name))
-        # Layout: 4+4 uint8 (shape..mat + 3 pad) then 4 uint16 = 16 bytes.
+        massG = int(round(float(r.get("mass_kg") or "10") * 1000.0))
+        sizes = tuple(int(round(float(r.get(c) or "1.0") * 1000.0))
+                      for c in ("size_x_m", "size_y_m", "size_z_m"))
+        for v in sizes:
+            if not (0 < v <= 65535):
+                die("row %d: size out of range" % i)
+        if not (0 < massG <= 65535):
+            die("row %d: mass_kg %r out of range" % (i, r.get("mass_kg")))
+        # Layout: 6 uint8 (shape..mat + pad) then massG + 4 colour/reach uint16.
         defs.append(
             "    // [%d] %s\n"
-            "    PropDef{ %d, %d, %d, %d, %d, 0, 0, 0, %d, %d, %d, %d }," % (
+            "    PropDef{ %d, %d, %d, %d, %d, 0, %d, %d, %d, %d, %d, %d, %d, %d }," % (
                 i, sid,
                 shape,
                 FALL_MODES[fall],
                 INTERACTS[interact],
                 emissive,
                 mat_id,
+                massG,
                 cr, cg, cb,
-                reach))
+                reach,
+                sizes[0], sizes[1], sizes[2]))
 
     count = len(rows)
 
@@ -194,7 +210,7 @@ BODY_H = """// POD row. shape is the PropShape ordinal (render/prop_mesh.h); gam
 // includes render headers. fallMode / interactKind are ordinals matching
 // PropFallMode and Interactable::Kind in prop_system.h (255 = no interact).
 // color*E3 are RGB x1000 (1000 = 1.0). reachMm is Interactable.reachM * 1000.
-// Layout is explicit: 8 x uint8 then 4 x uint16 = 16 bytes (no hidden padding).
+// Layout is explicit: 6 x uint8 then 9 x uint16 = 24 bytes (no hidden padding).
 struct PropDef {
     std::uint8_t  shape;         // 0  PropShape ordinal
     std::uint8_t  fallMode;      // 1  PropFallMode ordinal
@@ -202,14 +218,17 @@ struct PropDef {
     std::uint8_t  emissive;      // 3  0..255 PropPass emissive
     std::uint8_t  matId;         // 4
     std::uint8_t  pad0_ = 0;     // 5
-    std::uint8_t  pad1_ = 0;     // 6
-    std::uint8_t  pad2_ = 0;     // 7
+    std::uint16_t massG;         // 6  universal mass, grams ([ecs] Mass)
     std::uint16_t colorRE3;      // 8  RGB x1000
     std::uint16_t colorGE3;      // 10
     std::uint16_t colorBE3;      // 12
     std::uint16_t reachMm;       // 14 Interactable reach in millimetres
+    std::uint16_t sizeXMm;       // 16 authored mesh size, millimetres — the
+    std::uint16_t sizeYMm;       // 18 unit shape is scaled to exactly this,
+    std::uint16_t sizeZMm;       // 20 so a bulb is a bulb and not a 1 m drum
+    std::uint16_t pad1_ = 0;     // 22
 };
-static_assert(sizeof(PropDef) == 16, "PropDef must stay a tight 16-byte row");
+static_assert(sizeof(PropDef) == 24, "PropDef must stay a tight 24-byte row");
 static_assert(std::is_trivially_copyable_v<PropDef>);
 
 

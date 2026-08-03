@@ -32,14 +32,14 @@ namespace loottable_detail {
 constexpr ItemId kAmmoEnergy          =  16;
 constexpr ItemId kCircuitBoard        =  89;
 constexpr ItemId kMetalSheet          = 232;
-constexpr ItemId kPsiConcreteSplinter = 288;
-constexpr ItemId kPsiMark             = 292;
-constexpr ItemId kPsiOrderSeal        = 294;
-constexpr ItemId kRawmeat             = 325;
-constexpr ItemId kRebar               = 327;
-constexpr ItemId kSlimeSampleGreen    = 379;
-constexpr ItemId kWetRagBundle        = 435;
-constexpr ItemId kWireCoil            = 436;
+constexpr ItemId kPsiConcreteSplinter = 287;
+constexpr ItemId kPsiMark             = 291;
+constexpr ItemId kPsiOrderSeal        = 293;
+constexpr ItemId kRawmeat             = 324;
+constexpr ItemId kRebar               = 326;
+constexpr ItemId kSlimeSampleGreen    = 377;
+constexpr ItemId kWetRagBundle        = 432;
+constexpr ItemId kSpring              = 391;
 
 // The catalog roll's own gate, so the suite can assert "the catalog CANNOT produce this"
 // from the same function `drop_mob_loot` calls rather than from a claim in a comment.
@@ -239,7 +239,7 @@ static void test_loottable_all() {
         // semantic, and it is the one thing a "roll every entry" rewrite would break.
         const std::uint8_t reb = static_cast<std::uint8_t>(MobKind::Rebar);
         const double pRebar = observed_rate(reb, -26, kRebar, kN);
-        const double pWire = observed_rate(reb, -26, kWireCoil, kN);
+        const double pWire = observed_rate(reb, -26, kSpring, kN);
         CHECK(pRebar > 0.075 && pRebar < 0.085);
         CHECK(pWire > 0.033 && pWire < 0.041);
         CHECK(pWire < 0.04);                          // strictly under the authored 4%
@@ -259,7 +259,7 @@ static void test_loottable_all() {
         //   rare rebar       0.5525 * 0.08              = 0.0442
         //   rare wire_coil   0.5525 * 0.92 * 0.05       = 0.0254   (folded into wire)
         const std::uint8_t gn = static_cast<std::uint8_t>(MobKind::Gnome);
-        const double gWire = observed_rate(gn, -26, kWireCoil, kN);
+        const double gWire = observed_rate(gn, -26, kSpring, kN);
         const double gSheet = observed_rate(gn, -26, kMetalSheet, kN);
         const double gRebar = observed_rate(gn, -26, kRebar, kN);
         CHECK(gWire > 0.368 && gWire < 0.383);        // 0.35 + 0.0254 = 0.3754

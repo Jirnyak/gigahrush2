@@ -1,5 +1,7 @@
 #include "game/population.h"
 
+#include "game/floor_gen.h" // floor_ground_z — the module's ground storey
+
 namespace giga::game {
 
 namespace {
@@ -16,15 +18,14 @@ std::uint32_t mix(std::uint32_t x) {
 }
 
 // Placement lattice. In the floor-MODULE model each layer is its own 128^3
-// world (floor_gen.h), so a record's floor number is a LABEL, not a Z band: the
-// crowd stands on the module's internal ground storey. `kGroundZ` is one cell
-// above that storey's base slab (slab at cell z=0, air above).
+// world (floor_gen.h), so a record's floor number is a LABEL, not a Z band —
+// and NO storey is privileged: the torus wraps all three axes, so the height
+// coordinate is drawn over the whole axis like the other two. Cold records are
+// seeded BLIND (their World may not even exist yet); embodiment resolves each
+// body onto the nearest standable cell (floor_stream.cpp, place_body_safely).
 //
-// Records sit on a 16-cell room lattice at interior offsets {3,6,9,12}. Because
-// 16 is a multiple of every floor kind's wall stride (8, 16, 32) and the offsets
-// are never multiples of 8, these cells are guaranteed air (never on a wall
-// line) for ALL kinds — so one placement rule is wall-safe across the catalog.
-constexpr int kGroundZ = 1;            // internal ground storey, one above slab
+// Records sit on a 16-cell room lattice at interior offsets {3,6,9,12} — a
+// best-effort spread, same idea.
 constexpr int kRoomStride = 16;        // placement lattice pitch
 constexpr int kRoomsPerAxis = 128 / kRoomStride; // 8
 constexpr int kRoomCount = kRoomsPerAxis * kRoomsPerAxis; // 64
@@ -106,7 +107,8 @@ NpcId seed_floor_from_spec(NpcPool& pool, int floor, const FloorSpec& spec,
         int oy = kInteriorOff[slot / 4];
         pool.cx(id) = static_cast<std::uint8_t>(rx * kRoomStride + ox);
         pool.cy(id) = static_cast<std::uint8_t>(ry * kRoomStride + oy);
-        pool.cz(id) = static_cast<std::uint8_t>(kGroundZ);
+        pool.cz(id) = static_cast<std::uint8_t>(mix(r ^ 0x51ED270Bu) %
+                                                static_cast<std::uint32_t>(kMacroDim));
 
         // The label is signed end to end: `floor` is an int (FloorRegistry's range is
         // kMinFloor -127 .. kMaxFloor +127) and the column is std::int16_t, so a

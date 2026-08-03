@@ -8,6 +8,7 @@
 #include "game/floor_gen.h"   // generate_floor
 #include "game/nav_cache.h"   // nav_cache_name, save/load_nav_cache
 #include "game/population.h"  // seed_floor_from_spec
+#include "game/save.h"        // place_body_safely — blind-seeded cells resolve here
 
 namespace giga::game {
 
@@ -104,8 +105,8 @@ void FloorStreamer::free_slot(LayerId slot) {
     if (slot != kInvalidLayer) freeSlots_.push_back(slot);
 }
 
-void FloorStreamer::embody_crowd(Registry& ecs, NpcPool& pool, FloorModule& fm,
-                                 LayerId layer, NpcId& playerId,
+void FloorStreamer::embody_crowd(Registry& ecs, NpcPool& pool, const World& world,
+                                 FloorModule& fm, LayerId layer, NpcId& playerId,
                                  Entity& outPlayer) {
     // Snapshot whoever is CURRENTLY labelled with this floor's number — the live
     // per-floor bucket (npc_pool.h), not a frozen seed range, so a macro migration
@@ -200,14 +201,20 @@ void FloorStreamer::embody_crowd(Registry& ecs, NpcPool& pool, FloorModule& fm,
         // anyone already embodied — e.g. the player, labelled with this floor but
         // currently standing on another — which is what prevents a duplicate body.
         if (pool.embodied(id)) continue;
+        Entity e;
         if (playerId == kInvalidNpc && id == designate) {
-            Entity e = embody_as_player(ecs, pool, id, layer);
+            e = embody_as_player(ecs, pool, id, layer);
             playerId = id;
             outPlayer = e;
-            fm.bodies.push_back(e);
         } else {
-            fm.bodies.push_back(embody(ecs, pool, id, layer));
+            e = embody(ecs, pool, id, layer);
         }
+        // Cold records are seeded BLIND across the whole height axis (no storey
+        // is privileged on the torus — [population.cpp]); the stored cell may be
+        // inside a slab or a wall, and THIS is the one seam every embodiment
+        // passes through, so the resolve lives here rather than in embody().
+        place_body_safely(ecs, world, e);
+        fm.bodies.push_back(e);
     }
 }
 
@@ -259,6 +266,12 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
     LayerId slot = alloc_slot();
     if (slot == kInvalidLayer) return out; // slot pool exhausted (should not happen)
     generate_floor(stack.layer(slot), fm.number, floor_spec(fm.kind), fm.seed);
+    // Antourage AFTER the geometry and BEFORE the nav bake, so nav routes
+    // around the solid dressing. Deterministic in (grid, number, seed) — a
+    // recycled slot re-bakes bit-for-bit like the geometry itself.
+    auto ab = std::make_unique<AntourageBake>();
+    bake_antourage(stack.layer(slot), fm.number, fm.seed, *ab);
+    antourage_[m] = std::move(ab);
     reg.set_resident(m, slot);
 
     // Bring up this floor's navigation into a per-module holder that lives only
@@ -287,7 +300,7 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
     nav_[m] = std::move(fn);
 
     fm.bodies.clear();
-    embody_crowd(ecs, pool, fm, slot, playerId, out.player);
+    embody_crowd(ecs, pool, stack.layer(slot), fm, slot, playerId, out.player);
     out.layer = slot;
     return out;
 }
@@ -330,6 +343,7 @@ void FloorStreamer::unload(LevelStack& stack, FloorRegistry& reg, Registry& ecs,
     // cold floor costs no nav RAM (~130 MiB reclaimed here); a later reload rebakes
     // it from the deterministically regenerated geometry.
     nav_[m].reset();
+    antourage_[m].reset();
 
     // Sweep whatever ELSE still lives on this layer.
     //
@@ -375,6 +389,21 @@ const FloorNav* FloorStreamer::nav_at(const FloorRegistry& reg, int number) cons
     return nav_[m].get();
 }
 
+const AntourageBake* FloorStreamer::antourage_at(const FloorRegistry& reg,
+                                                 int number) const {
+    ModuleId m = reg.module_at(number);
+    if (m == kInvalidModule) return nullptr;
+    return antourage_[m].get();
+}
+
+const AntourageBake* FloorStreamer::antourage_at_layer(const FloorRegistry& reg,
+                                                       LayerId layer) const {
+    if (layer == kInvalidLayer) return nullptr;
+    for (ModuleId m = 0; m < kMaxModules; ++m)
+        if (reg.layer_of(m) == layer) return antourage_[m].get();
+    return nullptr;
+}
+
 void FloorStreamer::keep_only(LevelStack& stack, FloorRegistry& reg, Registry& ecs,
                               NpcPool& pool, int activeNumber) {
     for (ModuleId m = 0; m < next_; ++m) {
@@ -389,7 +418,7 @@ void FloorStreamer::keep_only(LevelStack& stack, FloorRegistry& reg, Registry& e
 
 RideResult FloorStreamer::travel(LevelStack& stack, FloorRegistry& reg,
                                  Registry& ecs, NpcPool& pool, Entity player,
-                                 int fromFloor, int dir, std::uint8_t arrivalZ,
+                                 int fromFloor, int dir, std::uint8_t arrivalCoord,
                                  NpcId& playerId) {
     RideResult r;
     r.player = player;
@@ -401,14 +430,14 @@ RideResult FloorStreamer::travel(LevelStack& stack, FloorRegistry& reg,
     // nothing for most of one. [floor_registry.h next_labelled_floor]
     const int dstFloor = next_labelled_floor(reg, fromFloor, dir);
     if (dstFloor == fromFloor) return r; // end of the stack
-    return teleport(stack, reg, ecs, pool, player, fromFloor, dstFloor, arrivalZ,
+    return teleport(stack, reg, ecs, pool, player, fromFloor, dstFloor, arrivalCoord,
                     playerId);
 }
 
 RideResult FloorStreamer::teleport(LevelStack& stack, FloorRegistry& reg,
                                    Registry& ecs, NpcPool& pool, Entity player,
                                    int fromFloor, int toFloor,
-                                   std::uint8_t arrivalZ, NpcId& playerId) {
+                                   std::uint8_t arrivalCoord, NpcId& playerId) {
     RideResult r;
     r.player = player;
     r.floor = fromFloor;
@@ -425,7 +454,7 @@ RideResult FloorStreamer::teleport(LevelStack& stack, FloorRegistry& reg,
     // was just loaded. Passing a raw direction would move the player to a floor
     // whose geometry is not resident.
     RideResult ride = ride_elevator(ecs, pool, reg, player, fromFloor,
-                                    toFloor - fromFloor, arrivalZ);
+                                    toFloor - fromFloor, arrivalCoord);
     if (!ride.moved) return ride;
 
     // The ride built a fresh player body on the destination; adopt it into the

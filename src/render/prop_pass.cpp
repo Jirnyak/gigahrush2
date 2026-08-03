@@ -151,7 +151,7 @@ bool PropPass::create_pipeline(VkPipelineLayout layout, VkRenderPass rp,
     //  loc 6 = inEmissive (binding 1, PropInstance::emissive  as R8_UINT)
     //  loc 7 = inFlags    (binding 1, PropInstance::flags     as R8_UINT)
     //  loc 8 = inAnimPhase(binding 1, PropInstance::animPhase as R8_UNORM)
-    VkVertexInputAttributeDescription attrs[9]{};
+    VkVertexInputAttributeDescription attrs[10]{};
     attrs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(PropVertex,   pos)};
     attrs[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(PropVertex,   normal)};
     attrs[2] = {2, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(PropInstance, origin)};
@@ -161,12 +161,13 @@ bool PropPass::create_pipeline(VkPipelineLayout layout, VkRenderPass rp,
     attrs[6] = {6, 1, VK_FORMAT_R8_UINT,           offsetof(PropInstance, emissive)};
     attrs[7] = {7, 1, VK_FORMAT_R8_UINT,           offsetof(PropInstance, flags)};
     attrs[8] = {8, 1, VK_FORMAT_R8_UNORM,          offsetof(PropInstance, animPhase)};
+    attrs[9] = {9, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(PropInstance, scale)};
 
     VkPipelineVertexInputStateCreateInfo vi{};
     vi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vi.vertexBindingDescriptionCount   = 2;
     vi.pVertexBindingDescriptions      = bindings;
-    vi.vertexAttributeDescriptionCount = 9;
+    vi.vertexAttributeDescriptionCount = 10;
     vi.pVertexAttributeDescriptions    = attrs;
 
     VkPipelineInputAssemblyStateCreateInfo ia{};

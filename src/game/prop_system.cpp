@@ -35,14 +35,11 @@ static PropFallMode fall_mode_from_u8(std::uint8_t v) {
 }
 
 static Interactable::Kind interact_kind_from_u8(std::uint8_t v) {
-    switch (v) {
-    case 0:  return Interactable::Kind::Terminal;
-    case 1:  return Interactable::Kind::ElectricalShield;
-    case 2:  return Interactable::Kind::LightBulb;
-    case 3:  return Interactable::Kind::Corpse;
-    case 4:  return Interactable::Kind::Loot;
-    default: return Interactable::Kind::Loot;
-    }
+    // The ordinal IS the generated table row ([interact_table.h], CSV order).
+    // Out-of-range (255 = "None" and any stale byte) clamps to row 0's
+    // behaviourless default at the call sites that check `interact != 255`.
+    return v < kInteractCount ? static_cast<Interactable::Kind>(v)
+                              : Interactable::Kind::Loot;
 }
 
 
@@ -253,6 +250,14 @@ Entity spawn_prop_from_id(Registry& reg, const World& world, const vec3& worldPo
                           d.shape,
                           layer, yaw, d.emissive, d.matId, animPhase, flags);
     if (e == entt::null) return entt::null;
+    // Universal mass from the table ([ecs/components.h] Mass): a falling or
+    // thrown prop hits with E = m*v^2/2 like everything else in the game.
+    reg.emplace_or_replace<Mass>(e, Mass{static_cast<float>(d.massG) * 0.001f});
+    // Authored size: the unit shape is scaled to the table's exact metres.
+    if (auto* pm = reg.try_get<PropMesh>(e))
+        pm->scale = vec3{static_cast<float>(d.sizeXMm) * 0.001f,
+                         static_cast<float>(d.sizeYMm) * 0.001f,
+                         static_cast<float>(d.sizeZMm) * 0.001f};
     // Table reachMm overrides the spawn_prop default (2.5 m).
     if (reg.all_of<Interactable>(e)) {
         auto& ia = reg.get<Interactable>(e);
@@ -284,17 +289,16 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
     std::uint32_t count = 0;
     constexpr float kCell = kCellSize;
 
-    // Mirror PropPlacer::populate wall-device branch (wsel bands 15-25 shield,
-    // 25-35 terminal). World is Z-up: floor support = solid cell at z-1.
-    // Horizontal walls are X/Y neighbors. Anchor into solid floor so
-    // spawn_prop's solid() check and anchor_validate_step stay honest.
+    // WALL-MOUNTED devices, isotropically ([isotropy-law]): a candidate is ANY
+    // air cell beside a wall — no floor-support requirement (the old PropPlacer
+    // port demanded solid-below, which on the module geometry confined every
+    // shield to one ankle-height row per storey). The device anchors INTO the
+    // wall cell it hangs on and sits FLUSH against the wall face, centred in
+    // the cell, at panel height.
     for (int z = 0; z < kMacroDim; ++z) {
         for (int y = 0; y < kMacroDim; ++y) {
             for (int x = 0; x < kMacroDim; ++x) {
                 if (grid.cell(x, y, z) != kCellAir) continue;
-
-                const CellType below = grid.cell(x, y, z - 1);
-                if (!is_solid_cell(below)) continue;
 
                 const bool solidWest  = is_solid_cell(grid.cell(x - 1, y, z));
                 const bool solidEast  = is_solid_cell(grid.cell(x + 1, y, z));
@@ -303,48 +307,56 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
                 if (!(solidWest || solidEast || solidNorth || solidSouth)) continue;
 
                 const std::uint32_t rngWall = giga::spatial_hash(x, y, z, seed ^ kSaltWall);
-                const std::uint32_t wsel = rngWall % 100;
+                const std::uint32_t wsel = rngWall % 2000;
 
-                // Wall yaw matches PropPlacer (west=0, east=pi, south=halfPi, north=3*halfPi).
-                float yawVal = 0.0f;
-                if (solidWest)        yawVal = 0.0f;
-                else if (solidEast)   yawVal = kPi;
-                else if (solidSouth)  yawVal = kHalfPi;
-                else if (solidNorth)  yawVal = kHalfPi * 3.0f;
-
-                // Placement bands match PropPlacer; skin/fall/color from props.csv.
+                // Sparse bands: ~0.35% shields + ~0.2% terminals of eligible
+                // wall cells ≈ a dozen devices per storey (the legacy
+                // 10%+10% carpeted whole rooms with thousands).
                 PropId pid;
-                float zOff;
-                if (wsel >= 15 && wsel < 25) {
-                    pid  = PropId::ElectricalShield;
-                    zOff = 0.40f;
-                } else if (wsel >= 25 && wsel < 35) {
-                    pid  = PropId::Terminal;
-                    zOff = 0.0f;
+                if (wsel < 7) {
+                    pid = PropId::ElectricalShield;
+                } else if (wsel < 11) {
+                    pid = PropId::Terminal;
                 } else {
-                    continue; // radiator / empty — no Interactable
+                    continue;
                 }
+                const PropDef& d = prop_def(pid);
+                const float thick = static_cast<float>(d.sizeYMm) * 0.001f;
 
-                const float wx = static_cast<float>(x) * kCell;
-                const float wy = static_cast<float>(y) * kCell;
-                const float wz = static_cast<float>(z) * kCell + zOff;
+                // The wall it hangs on: normal direction + flush offset + yaw.
+                // Sizes are authored width(X) x thickness(Y) x height(Z) for a
+                // yaw-0 panel facing +-Y; X/Y walls rotate a quarter turn.
+                int wxd = 0, wyd = 0;
+                float yawVal = 0.0f;
+                if (solidWest)       { wxd = -1; yawVal = kHalfPi; }
+                else if (solidEast)  { wxd = 1;  yawVal = kHalfPi; }
+                else if (solidSouth) { wyd = -1; yawVal = 0.0f; }
+                else                 { wyd = 1;  yawVal = 0.0f; }
 
-                // Anchor into the solid floor cell under the air cell (Z-1).
+                // Flush: slide the panel centre from the cell centre to the
+                // wall face, leaving half its thickness plus a hair of gap.
+                const float slide = 1.0f - (0.5f * thick + 0.02f);
+                const float wx = (static_cast<float>(x) + 0.5f) * kCell +
+                                 static_cast<float>(wxd) * slide;
+                const float wy = (static_cast<float>(y) + 0.5f) * kCell +
+                                 static_cast<float>(wyd) * slide;
+                const float wz = (static_cast<float>(z) + 0.5f) * kCell;
+
+                // Anchor INTO the wall cell: the panel falls when its wall is
+                // carved, not when some unrelated floor is.
                 SubVoxelAnchor anchor;
-                anchor.cx   = x;
-                anchor.cy   = y;
-                anchor.cz   = wrap_macro(z - 1);
-                anchor.subX = 4;
-                anchor.subY = 4;
-                anchor.subZ = 7; // top of floor cell
+                anchor.cx   = static_cast<std::uint8_t>(wrap_macro(x + wxd));
+                anchor.cy   = static_cast<std::uint8_t>(wrap_macro(y + wyd));
+                anchor.cz   = static_cast<std::uint8_t>(z);
+                anchor.subX = static_cast<std::uint8_t>(wxd < 0 ? 7 : wxd > 0 ? 0 : 4);
+                anchor.subY = static_cast<std::uint8_t>(wyd < 0 ? 7 : wyd > 0 ? 0 : 4);
+                anchor.subZ = 4;
                 anchor.face = 1; // wall
 
                 const std::uint8_t anim = static_cast<std::uint8_t>(rngWall & 0xFFu);
                 Entity e = spawn_prop_from_id(reg, world, vec3{wx, wy, wz}, anchor,
                                              pid, layer, yawVal, anim, /*flags*/0);
                 if (e != entt::null) ++count;
-
-
             }
         }
     }
@@ -372,12 +384,31 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
                 const CellType above = grid.cell(x, y, z + 1);
                 if (!is_solid_cell(above)) continue;
 
+                // No lamps in doorway/niche cells: walls on BOTH opposite sides
+                // means a lintel slot, and a bulb there floats in the opening.
+                const bool nichX = is_solid_cell(grid.cell(x - 1, y, z)) &&
+                                   is_solid_cell(grid.cell(x + 1, y, z));
+                const bool nichY = is_solid_cell(grid.cell(x, y - 1, z)) &&
+                                   is_solid_cell(grid.cell(x, y + 1, z));
+                if (nichX || nichY) continue;
+
                 const std::uint32_t rngLight = giga::spatial_hash(x, y, z, seed ^ kSaltLight);
                 if ((rngLight % 100u) >= kLightChancePct) continue;
 
-                const float wx = static_cast<float>(x) * kCell;
-                const float wy = static_cast<float>(y) * kCell;
-                const float wz = static_cast<float>(z) * kCell + 1.55f;
+                // Hang from the REAL ceiling under-face: the sandwich is
+                // partially carved from below, and the cell-plane form left
+                // bulbs floating mid-air. A holed centre column = no lamp.
+                const int faceSz =
+                    grid.mask(x, y, z + 1).lowest_layer_centre();
+                if (faceSz < 0) continue;
+                const float faceM = (static_cast<float>(z) + 1.0f) * kCell +
+                                    static_cast<float>(faceSz) * (kCell / 8.0f);
+
+                // Cell CENTRE — the corner form hung bulbs on whatever wall
+                // shared the corner (the same bug the wall seeder had).
+                const float wx = (static_cast<float>(x) + 0.5f) * kCell;
+                const float wy = (static_cast<float>(y) + 0.5f) * kCell;
+                const float wz = faceM - 0.14f;
 
                 SubVoxelAnchor anchor;
                 anchor.cx   = x;
@@ -436,6 +467,7 @@ std::uint32_t collect_static_prop_mesh_instances(const Registry& reg, LayerId la
         inst.shape     = mesh.shape;
         inst.origin    = tr.pos;
         inst.yaw       = mesh.yaw;
+        inst.scale     = mesh.scale;
         inst.matId     = mesh.matId;
         inst.emissive  = mesh.emissive;
         inst.flags     = mesh.flags;

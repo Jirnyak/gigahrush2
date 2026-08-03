@@ -598,7 +598,8 @@ static void test_craft_all() {
                 CHECK(s.unlock == kInvalidItem);
             }
         }
-        CHECK(taught == 69u);
+        // 67, was 69: the legacy-item purge removed two recipe outputs.
+        CHECK(taught == 67u);
         CHECK(byKind[static_cast<std::size_t>(CraftSourceKind::Default)] == 1u);
         CHECK(byKind[static_cast<std::size_t>(CraftSourceKind::Item)] == 9u);
         CHECK(carriers == 9u);

@@ -355,7 +355,7 @@ not commit maps ahead of the code that reads them. Note that a normal map wants
 
 `data/materials.csv` has 16 rows and `src/world/materials.h` has 16 `CellType`
 ids — **the two 16s are unrelated and do not line up.** The authoritative binding
-lives in the `MATERIALS` table in `tools/gen_material_surface.py`, re-verified
+lives in the `MATERIALS` table in `tools/gen_material_table.py`, re-verified
 2026-07-29 by reading that table: exactly six of its entries carry a non-`None` CSV
 id, and they are
 

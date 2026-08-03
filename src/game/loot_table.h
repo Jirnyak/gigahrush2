@@ -63,7 +63,7 @@
 // floor 0 — the cheapest, karkarov_pistol at 320 rub, decays to 0.13 and truncates to 0 —
 // so the hub is the one depth where `drop_weapon_ammo` can add nothing at all, and the
 // one depth where this arithmetic is exact. Most authored rows are cheap materials (rebar
-// 80, wire_coil 12), so under an E2/E3 cap the swap loses — most on a ONE-roll tier,
+// 80, spring 7), so under an E2/E3 cap the swap loses — most on a ONE-roll tier,
 // averaging out across a Boss's five.
 //
 // It is a discount on **28 of the 30 cells above**, -0.9% to -10.2%. It is NOT always a
@@ -223,6 +223,8 @@ KindDrop roll_kind_drop(std::uint8_t kind, int floorZ, std::uint32_t seed);
 // exactly the number below. Regenerating for a legitimate CSV change means re-deriving
 // the ids and updating this constant in the same commit.
 std::int32_t loot_table_value_sum();
-inline constexpr std::int32_t kLootTableValueChecksum = 104552;
+// Re-derived 2026-08-02 after the legacy-item purge shifted ids (pipe and
+// wire_coil rows deleted; wire_coil drops re-authored onto spring, 12 -> 7 rub).
+inline constexpr std::int32_t kLootTableValueChecksum = 104447;
 
 } // namespace giga::game

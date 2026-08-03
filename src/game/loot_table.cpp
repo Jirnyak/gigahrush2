@@ -48,16 +48,16 @@ struct DrawStream {
 // container pick (container.cpp). Those ten items have no other spawn path anywhere, and
 // this table is the only thing that can produce them.
 // ===========================================================================
-constexpr ItemId kItAmmoEnergy          =  16;  // ammo_energy             300 rub  w=0
-constexpr ItemId kItAntibiotic          =  25;  // antibiotic               70 rub
-constexpr ItemId kItAntidep             =  26;  // antidep                  95 rub
-constexpr ItemId kItAntifungalOintment  =  28;  // antifungal_ointment      55 rub
-constexpr ItemId kItBandage             =  40;  // bandage                  10 rub
-constexpr ItemId kItBlankForm           =  46;  // blank_form               10 rub
-constexpr ItemId kItBottledVoice        =  60;  // bottled_voice           250 rub
-constexpr ItemId kItCigs                =  88;  // cigs                      5 rub
-constexpr ItemId kItCircuitBoard        =  89;  // circuit_board            35 rub
-constexpr ItemId kItClothRoll           =  94;  // cloth_roll                6 rub
+constexpr ItemId kItAmmoEnergy          =   16;  // ammo_energy             300 rub  w=0
+constexpr ItemId kItAntibiotic          =   25;  // antibiotic               70 rub
+constexpr ItemId kItAntidep             =   26;  // antidep                  95 rub
+constexpr ItemId kItAntifungalOintment  =   28;  // antifungal_ointment      55 rub
+constexpr ItemId kItBandage             =   40;  // bandage                  10 rub
+constexpr ItemId kItBlankForm           =   46;  // blank_form               10 rub
+constexpr ItemId kItBottledVoice        =   60;  // bottled_voice           250 rub
+constexpr ItemId kItCigs                =   88;  // cigs                      5 rub
+constexpr ItemId kItCircuitBoard        =   89;  // circuit_board            35 rub
+constexpr ItemId kItClothRoll           =   94;  // cloth_roll                6 rub
 constexpr ItemId kItDuctTape            = 121;  // duct_tape                 8 rub
 constexpr ItemId kItFakePass            = 132;  // fake_pass                45 rub
 constexpr ItemId kItFibrousCapsuleCut   = 134;  // fibrous_capsule_cut     145 rub  w=0
@@ -77,31 +77,30 @@ constexpr ItemId kItMutantTissueSample  = 242;  // mutant_tissue_sample    115 r
 constexpr ItemId kItNeighborComplaint   = 246;  // neighbor_complaint        5 rub
 constexpr ItemId kItNote                = 254;  // note                      1 rub
 constexpr ItemId kItOfficialPermitSlip  = 256;  // official_permit_slip     48 rub
-constexpr ItemId kItPipe                = 274;  // pipe                     40 rub
-constexpr ItemId kItPsiConcreteSplinter = 288;  // psi_concrete_splinter 14000 rub
-constexpr ItemId kItPsiDust             = 290;  // psi_dust                120 rub
-constexpr ItemId kItPsiMark             = 292;  // psi_mark              10000 rub
-constexpr ItemId kItPsiOrderSeal        = 294;  // psi_order_seal        24000 rub
-constexpr ItemId kItQuarantineMedcard   = 312;  // quarantine_medcard       45 rub  w=0
-constexpr ItemId kItRawmeat             = 325;  // rawmeat                   1 rub
-constexpr ItemId kItRebar               = 327;  // rebar                    80 rub
-constexpr ItemId kItRedMoldSample       = 330;  // red_mold_sample         180 rub  w=0
-constexpr ItemId kItRelayDiagram        = 331;  // relay_diagram            30 rub
-constexpr ItemId kItRockSalt            = 335;  // rock_salt                 4 rub
-constexpr ItemId kItSealWax             = 353;  // seal_wax                 14 rub
-constexpr ItemId kItSealantTube         = 354;  // sealant_tube             20 rub
-constexpr ItemId kItSharkScale          = 357;  // shark_scale            1000 rub
-constexpr ItemId kItSirenShard          = 366;  // siren_shard              90 rub
-constexpr ItemId kItSlimeSampleBlack    = 374;  // slime_sample_black      220 rub  w=0
-constexpr ItemId kItSlimeSampleBrown    = 376;  // slime_sample_brown       35 rub  w=0
-constexpr ItemId kItSlimeSampleGreen    = 379;  // slime_sample_green      120 rub  w=0
-constexpr ItemId kItSporePrint          = 392;  // spore_print              12 rub
-constexpr ItemId kItStrangeClot         = 399;  // strange_clot            500 rub  w=0
-constexpr ItemId kItUnpeopleDetector    = 415;  // unpeople_detector       300 rub
-constexpr ItemId kItUnsignedOrder       = 416;  // unsigned_order           22 rub
-constexpr ItemId kItVoidSpike           = 424;  // void_spike             1500 rub  w=0
-constexpr ItemId kItWetRagBundle        = 435;  // wet_rag_bundle            4 rub
-constexpr ItemId kItWireCoil            = 436;  // wire_coil                12 rub
+constexpr ItemId kItPsiConcreteSplinter = 287;  // psi_concrete_splinter 14000 rub
+constexpr ItemId kItPsiDust             = 289;  // psi_dust                120 rub
+constexpr ItemId kItPsiMark             = 291;  // psi_mark              10000 rub
+constexpr ItemId kItPsiOrderSeal        = 293;  // psi_order_seal        24000 rub
+constexpr ItemId kItQuarantineMedcard   = 311;  // quarantine_medcard       45 rub  w=0
+constexpr ItemId kItRawmeat             = 324;  // rawmeat                   1 rub
+constexpr ItemId kItRebar               = 326;  // rebar                    80 rub
+constexpr ItemId kItRedMoldSample       = 329;  // red_mold_sample         180 rub  w=0
+constexpr ItemId kItRelayDiagram        = 330;  // relay_diagram            30 rub
+constexpr ItemId kItRockSalt            = 334;  // rock_salt                 4 rub
+constexpr ItemId kItSealWax             = 351;  // seal_wax                 14 rub
+constexpr ItemId kItSealantTube         = 352;  // sealant_tube             20 rub
+constexpr ItemId kItSharkScale          = 355;  // shark_scale            1000 rub
+constexpr ItemId kItSirenShard          = 364;  // siren_shard              90 rub
+constexpr ItemId kItSlimeSampleBlack    = 372;  // slime_sample_black      220 rub  w=0
+constexpr ItemId kItSlimeSampleBrown    = 374;  // slime_sample_brown       35 rub  w=0
+constexpr ItemId kItSlimeSampleGreen    = 377;  // slime_sample_green      120 rub  w=0
+constexpr ItemId kItSporePrint          = 390;  // spore_print              12 rub
+constexpr ItemId kItStrangeClot         = 397;  // strange_clot            500 rub  w=0
+constexpr ItemId kItUnpeopleDetector    = 413;  // unpeople_detector       300 rub
+constexpr ItemId kItUnsignedOrder       = 414;  // unsigned_order           22 rub
+constexpr ItemId kItVoidSpike           = 421;  // void_spike             1500 rub  w=0
+constexpr ItemId kItWetRagBundle        = 432;  // wet_rag_bundle            4 rub
+constexpr ItemId kItSpring              = 391;  // spring                    7 rub
 
 // ===========================================================================
 // rareDrops — one array per kind. ORDER IS LOAD-BEARING: first-hit-single means the
@@ -116,7 +115,7 @@ constexpr RareDrop kR_Zombie[] = {{kItNote, 0.05f, 1}, {kItCigs, 0.03f, 1}};
 constexpr RareDrop kR_Eye[] = {{kItLampBulb, 0.05f, 1}, {kItPsiDust, 0.02f, 1}};
 constexpr RareDrop kR_Nightmare[] = {{kItPsiDust, 0.06f, 1}, {kItAntidep, 0.02f, 1}};
 constexpr RareDrop kR_Shadow[] = {{kItStrangeClot, 0.03f, 1}};
-constexpr RareDrop kR_Rebar[] = {{kItRebar, 0.08f, 1}, {kItWireCoil, 0.04f, 1}};
+constexpr RareDrop kR_Rebar[] = {{kItRebar, 0.08f, 1}, {kItSpring, 0.04f, 1}};
 constexpr RareDrop kR_Matka[] = {{kItMeatRune, 0.05f, 1}, {kItRawmeat, 0.12f, 1}};
 constexpr RareDrop kR_Idol[] = {{kItIdolChernobog, 0.03f, 1}, {kItPsiMark, 0.015f, 1}};
 constexpr RareDrop kR_Mancobus[] = {{kItAmmoEnergy, 0.08f, 1}, {kItBottledVoice, 0.03f, 1}};
@@ -138,7 +137,7 @@ constexpr RareDrop kR_KhorovayaMatka[] = {{kItMeatRune, 0.06f, 1}, {kItRawmeat, 
 constexpr RareDrop kR_Slimevik[] = {{kItFilterLayer, 0.05f, 1}, {kItSlimeSampleBrown, 0.04f, 1}};
 constexpr RareDrop kR_Sobrannyy[] = {{kItClothRoll, 0.05f, 1}, {kItHermoGasket, 0.025f, 1}};
 constexpr RareDrop kR_ZhornayaTvar[] = {{kItRawmeat, 0.07f, 1}};
-constexpr RareDrop kR_Bezekhiy[] = {{kItWireCoil, 0.035f, 1}, {kItSealantTube, 0.02f, 1}};
+constexpr RareDrop kR_Bezekhiy[] = {{kItSpring, 0.035f, 1}, {kItSealantTube, 0.02f, 1}};
 constexpr RareDrop kR_Pseudolift[] = {{kItCircuitBoard, 0.04f, 1}, {kItRelayDiagram, 0.025f, 1}};
 constexpr RareDrop kR_Slepoglaz[] = {{kItPsiDust, 0.04f, 1}, {kItStrangeClot, 0.02f, 1}};
 constexpr RareDrop kR_Olgoy[] = {{kItRawmeat, 0.12f, 1}, {kItMeatRune, 0.03f, 1}, {kItFibrousCapsuleCut, 0.02f, 1}};
@@ -146,10 +145,10 @@ constexpr RareDrop kR_VodyanoyKoshmar[] = {{kItMetalWater, 0.06f, 1}, {kItPsiDus
 constexpr RareDrop kR_Lampoglaz[] = {{kItLampBulb, 0.07f, 1}, {kItFuse, 0.035f, 1}};
 constexpr RareDrop kR_Tumannik[] = {{kItFilterLayer, 0.035f, 1}, {kItPsiDust, 0.015f, 1}};
 constexpr RareDrop kR_Chernosliz[] = {{kItSlimeSampleBlack, 0.05f, 1}, {kItPsiDust, 0.015f, 1}};
-constexpr RareDrop kR_Rzhavnik[] = {{kItRebar, 0.05f, 1}, {kItWireCoil, 0.04f, 1}};
+constexpr RareDrop kR_Rzhavnik[] = {{kItRebar, 0.05f, 1}, {kItSpring, 0.04f, 1}};
 constexpr RareDrop kR_Betonoed[] = {{kItRebar, 0.05f, 1}, {kItPsiConcreteSplinter, 0.025f, 1}};
 constexpr RareDrop kR_Panelnik[] = {{kItSealantTube, 0.05f, 1}, {kItRebar, 0.035f, 1}};
-constexpr RareDrop kR_Paupsina[] = {{kItWireCoil, 0.045f, 1}, {kItDuctTape, 0.025f, 1}};
+constexpr RareDrop kR_Paupsina[] = {{kItSpring, 0.045f, 1}, {kItDuctTape, 0.025f, 1}};
 constexpr RareDrop kR_Borshchevik[] = {{kItAntifungalOintment, 0.045f, 1}, {kItGasmaskFilter, 0.025f, 1}};
 constexpr RareDrop kR_Obzhivalshchik[] = {{kItNeighborComplaint, 0.08f, 1}, {kItSealantTube, 0.035f, 1}};
 constexpr RareDrop kR_HeadSlug[] = {{kItAntibiotic, 0.035f, 1}, {kItQuarantineMedcard, 0.025f, 1}};
@@ -176,14 +175,14 @@ constexpr RareDrop kR_BloodPlant[] = {{kItRedMoldSample, 0.08f, 1}, {kItRockSalt
 constexpr RareDrop kR_Swarm[] = {{kItDuctTape, 0.035f, 1}, {kItRawmeat, 0.018f, 1}};
 constexpr RareDrop kR_SporeCarpet[] = {{kItSporePrint, 0.055f, 1}, {kItFilterLayer, 0.035f, 1}, {kItRockSalt, 0.025f, 1}};
 constexpr RareDrop kR_Lishennyy[] = {{kItStrangeClot, 0.035f, 1}, {kItPsiDust, 0.02f, 1}};
-constexpr RareDrop kR_Gnome[] = {{kItRebar, 0.08f, 1}, {kItWireCoil, 0.05f, 1}};
+constexpr RareDrop kR_Gnome[] = {{kItRebar, 0.08f, 1}, {kItSpring, 0.05f, 1}};
 
 // ===========================================================================
 // lootTable — the only three kinds the reference authors one for.
 // ===========================================================================
 constexpr LootEntry kL_Zombie[] = {{kItWetRagBundle, 0.35f, 1, 1}, {kItRawmeat, 0.15f, 1, 2}};
 constexpr LootEntry kL_Betonoed[] = {{kItRawmeat, 0.25f, 1, 2}, {kItMetalSheet, 0.1f, 1, 1}};
-constexpr LootEntry kL_Gnome[] = {{kItWireCoil, 0.35f, 1, 2}, {kItMetalSheet, 0.15f, 1, 1}};
+constexpr LootEntry kL_Gnome[] = {{kItSpring, 0.35f, 1, 2}, {kItMetalSheet, 0.15f, 1, 1}};
 
 // (ptr, count) from an array, so a row cannot state a length its array does not have.
 #define SPAN(arr) (arr), static_cast<std::uint8_t>(sizeof(arr) / sizeof((arr)[0]))
@@ -335,7 +334,7 @@ KindDrop roll_kind_drop(std::uint8_t kind, int floorZ, std::uint32_t seed) {
         // would still hit one kill in 16.7 million, and the item it handed over is
         // exactly the one the gate exists to withhold. Cheap guard, unbounded
         // consequence. Purely defensive today: the 6 authored lootTable entries are
-        // wet_rag_bundle (4 rub), rawmeat (1), metal_sheet (22) and wire_coil (12), all
+        // wet_rag_bundle (4 rub), rawmeat (1), metal_sheet (22) and spring (7), all
         // under the E0 cap of 90, so `c` never reaches 0 at any depth.
         if (c <= 0.0f || draw > c) continue;
         if (amount <= 0) continue;

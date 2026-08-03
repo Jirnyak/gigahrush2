@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure real material photographs and emit data/materials.csv.
+"""Measure real material photographs and emit data/textures.csv (the ASSET catalog).
 
 The renderer has no texture sampler yet (that is a separate increment), but the
 *look* of a surface is mostly its colour statistics, and those we can harvest
@@ -38,7 +38,7 @@ except ImportError:
     sys.exit(2)
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT_CSV = os.path.join(REPO, "data", "materials.csv")
+OUT_CSV = os.path.join(REPO, "data", "textures.csv")
 
 # Default pack location on this machine. Deliberately a default and not a
 # hard-coded requirement: the emitted CSV is committed, so nobody else needs the
@@ -105,8 +105,19 @@ def main():
             continue
         st = measure(os.path.join(d, base[0]))
         info = manifest.get(name, {})
+        # Map files present in data/textures for this asset set; blank = none.
+        texdir = os.path.join(REPO, "data", "textures")
+        have = set(os.listdir(texdir)) if os.path.isdir(texdir) else set()
+        def _f(suffix):
+            f = name + suffix + ".ktx2"
+            return f if f in have else ""
         rows.append({
             "id": name,
+            "albedo_file": _f(""),
+            "normal_file": _f("_normal"),
+            "roughness_file": _f("_roughness"),
+            "tile_scale": "0.5",
+            "srgb": "1",
             "provider": provider,
             "license": info.get("license", licence),
             "source": info.get("source", ""),

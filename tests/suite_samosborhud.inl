@@ -53,7 +53,7 @@ namespace samosborhud_detail {
 
 // Mobs stand on the module's ground storey, one cell above the base slab
 // (mob_spawn.cpp's kGroundZ). Restated because fog placement is only legal there.
-inline constexpr int kTestGroundZ = 1;
+inline const int kTestGroundZ = giga::game::floor_ground_z();
 
 // A cell centre on the ground storey -- where a pressure anchor has to sit for the fog
 // spawner's z-consistency test to have any legal candidates at all.

@@ -495,24 +495,23 @@ static void test_collect_static_prop_mesh_instances_shapes() {
     CHECK(n == nWall + nLamp);
     CHECK(insts.size() == static_cast<std::size_t>(n));
 
-    // PropShape ordinals (render/prop_mesh.h)
-    constexpr std::uint8_t kTerminal = 0;
-    constexpr std::uint8_t kFlood    = 3;
-    constexpr std::uint8_t kShield   = 1;
-    constexpr std::uint8_t kBulb     = 2;
+    // The rebuilt catalog (render/prop_mesh.h) shares shapes between prop
+    // kinds (terminal/shield/flood are all Box), so classification goes by the
+    // AUTHORED columns instead: material for the wall pair, emissive for lamps.
+    constexpr std::uint8_t kBox  = 0;
+    constexpr std::uint8_t kCylZ = 3;
 
     std::uint32_t nTerm = 0, nShield = 0, nBulb = 0, nFlood = 0;
     for (const auto& m : insts) {
-        if (m.shape == kTerminal) { ++nTerm; CHECK(m.matId == 3); }
-        else if (m.shape == kShield) { ++nShield; CHECK(m.matId == 4); }
-        else if (m.shape == kBulb) {
-            ++nBulb;
-            CHECK(m.emissive == 250);
-        } else if (m.shape == kFlood) {
-            ++nFlood;
-            CHECK(m.emissive == 250);
+        if (m.emissive > 0) {   // lamps: authored emissive (props.csv)
+            if (m.shape == kCylZ) ++nBulb;
+            else { CHECK(m.shape == kBox); ++nFlood; }
+        } else if (m.shape == kBox && m.matId == 3) {
+            ++nTerm;
+        } else if (m.shape == kBox && m.matId == 4) {
+            ++nShield;
         } else {
-            CHECK(false); // unexpected shape from wall/ceiling seed
+            CHECK(false); // unexpected instance from wall/ceiling seed
         }
         CHECK(m.origin.x >= 0.0f);
     }

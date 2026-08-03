@@ -1,0 +1,6 @@
+id,cpp_name,color_mode,color_r,color_g,color_b,emissive,gravity_mul,drag,bounce,size_m,life_s,speed_mps,comment
+dust,Dust,material,0.0,0.0,0.0,0,0.30,0.93,0.0,0.07,2.2,1.6,carve puff — colour sampled from the carved material row
+debris,Debris,material,0.0,0.0,0.0,0,1.0,0.997,0.35,0.14,3.5,2.6,detached chunks — colour from the carved material; bounces
+blood,Blood,fixed,0.42,0.03,0.03,0,1.0,0.99,0.0,0.075,1.8,2.8,body-hit spray via apply_damage
+spark,Spark,fixed,1.0,0.72,0.28,235,0.45,0.996,0.55,0.035,0.8,6.5,bullet-on-wall chip glow; bounces and dies fast
+drip,Drip,fixed,0.32,0.36,0.40,0,1.0,1.0,0.0,0.055,4.0,0.3,severed pipe leaking — falls straight and splashes

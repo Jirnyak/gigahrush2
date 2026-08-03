@@ -181,6 +181,7 @@ bool cmd_spawn(ConsoleContext& ctx, int argc, const char* const* argv,
     const auto& tr = ctx.ecs->get<Transform>(ctx.player);
     const int cx = static_cast<int>(tr.pos.x / kCellSize);
     const int cy = static_cast<int>(tr.pos.y / kCellSize);
+    const int cz = static_cast<int>(tr.pos.z / kCellSize); // the caller's storey
     const std::uint8_t level =
         static_cast<std::uint8_t>(floor_mob_tier(ctx.currentFloor));
     std::uint32_t spawned = 0;
@@ -190,7 +191,8 @@ bool cmd_spawn(ConsoleContext& ctx, int argc, const char* const* argv,
         const int dy = static_cast<int>(i % 5) - 2;
         const Entity e = spawn_mob_at(
             *ctx.ecs, tr.layer, kind, level, wrap_macro(cx + dx),
-            wrap_macro(cy + dy), static_cast<std::uint32_t>(i) * 0x9e3779b9u + 1u);
+            wrap_macro(cy + dy), wrap_macro(cz),
+            static_cast<std::uint32_t>(i) * 0x9e3779b9u + 1u);
         if (e != entt::null) ++spawned;
     }
     if (out && cap)

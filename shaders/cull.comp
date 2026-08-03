@@ -9,12 +9,15 @@
 
 layout (local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
-// Per-instance attributes (matches PropInstance in src/render/prop_mesh.h, 32 B)
+// Per-instance attributes (matches PropInstance in src/render/prop_mesh.h,
+// 48 B = three std430 vec4s — keep the two layouts in LOCKSTEP or every copied
+// instance shears).
 struct PropInstance {
-    vec3  origin;      // World position / base centre (12 B)
+    vec3  origin;      // World position / centre (12 B)
     float yaw;         // Rotation angle in radians (4 B)
     vec3  color;       // RGB albedo multiplier (12 B)
     uint  packedFlags; // matId(8), emissive(8), flags(8), animPhase(8) (4 B)
+    vec4  scaleAndPad; // xyz = per-axis local scale, w = pad (16 B)
 };
 
 // VkDrawIndexedIndirectCommand layout (20 B)
@@ -98,11 +101,18 @@ void main() {
     planes[4] = r2;      // Near (Vulkan depth [0, 1])
     planes[5] = r3 - r2; // Far
 
-    // 4. Frustum AABB test
-    vec3 boxMin = push.boxMinExt.xyz;
-    vec3 boxMax = push.boxMaxParams.xyz;
-    vec3 center = worldPos + (boxMin + boxMax) * 0.5;
-    vec3 extents = (boxMax - boxMin) * 0.5;
+    // 4. Frustum AABB test — PER-INSTANCE bounds, not per-shape. Unit meshes
+    // span +-0.5 around the origin and the instance scales them, so the true
+    // half-extent IS scale/2: a pipe leg stretched to 40 m must not be culled
+    // by a 1 m shape box the moment its centre leaves the frustum (measured:
+    // every long leg vanished). Small margin covers yaw rotation slop.
+    vec3 center = worldPos;
+    vec3 extents = abs(inst.scaleAndPad.xyz) * 0.5 + vec3(0.1);
+    // Yaw spins around the local Y axis, so the X/Z footprint can swap — take
+    // the max of the pair and the box stays conservative at any angle.
+    float yawSafe = max(extents.x, extents.z);
+    extents.x = yawSafe;
+    extents.z = yawSafe;
 
     bool visible = true;
     for (int i = 0; i < 6; ++i) {

@@ -185,6 +185,21 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
                                         canStep, upComp, upSign);
             bool hitZ = sweep_axis_walk(w, tr.pos, half, 2, vel.v.z * h,
                                         canStep, upComp, upSign);
+            // Impact report BEFORE zeroing: the killed velocity is the impact
+            // speed the game layer's universal law (E = m*v^2/2 over Mass)
+            // consumes. 4 m/s floor keeps ordinary walking/jump landings from
+            // churning components (a jump lands at ~5 m/s and the damage law
+            // has its own free band on top).
+            {
+                const float kx = hitX ? vel.v.x : 0.0f;
+                const float ky = hitY ? vel.v.y : 0.0f;
+                const float kz = hitZ ? vel.v.z : 0.0f;
+                const float killed = std::sqrt(kx * kx + ky * ky + kz * kz);
+                if (killed > 4.0f) {
+                    Impact& im = reg.get_or_emplace<Impact>(e);
+                    if (killed > im.speed) im.speed = killed;
+                }
+            }
             if (hitX) vel.v.x = 0.0f;
             if (hitY) vel.v.y = 0.0f;
             if (hitZ) vel.v.z = 0.0f;

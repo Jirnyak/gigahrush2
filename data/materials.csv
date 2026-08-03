@@ -1,14 +1,21 @@
-id,provider,license,source,src_w,src_h,lin_r,lin_g,lin_b,lum_std,role
-box_profile_metal_sheet,Poly Haven,CC0,https://polyhaven.com/a/box_profile_metal_sheet,2048,2048,0.1447,0.0192,0.0087,0.0036,profiled metal sheet for modular equipment casings and trim strips
-container_side,Poly Haven,CC0,https://polyhaven.com/a/container_side,2048,2048,0.1086,0.2483,0.0816,0.0068,shipping-container steel side for larger equipment casings and service bay props
-corrugated_iron,Poly Haven,CC0,https://polyhaven.com/a/corrugated_iron,2048,2048,0.4019,0.4494,0.4263,0.0287,broad weathered galvanized steel ridges for hull panels and station service cladding
-corrugated_iron_02,Poly Haven,CC0,https://polyhaven.com/a/corrugated_iron_02,2048,2048,0.0994,0.0978,0.0828,0.011,weathered corrugated iron for industrial pressure hull skins and ribbed panels
-corrugated_iron_03,Poly Haven,CC0,https://polyhaven.com/a/corrugated_iron_03,2048,2048,0.1518,0.1823,0.1815,0.0117,narrow galvanized corrugation for compact equipment ribs and small panel strips
-factory_wall,Poly Haven,CC0,https://polyhaven.com/a/factory_wall,2048,2048,0.1238,0.1844,0.0747,0.0365,green corrugated factory metal for diegetic equipment panels
-green_metal_rust,Poly Haven,CC0,https://polyhaven.com/a/green_metal_rust,2048,2048,0.0498,0.0739,0.0342,0.0076,old painted green industrial metal for aged bulkheads and repaired service modules
-metal_grate_rusty,Poly Haven,CC0,https://polyhaven.com/a/metal_grate_rusty,2048,2048,0.2272,0.0878,0.0323,0.022,"rusted open grate surface for drains, vents, and salvage deck details"
-painted_metal_shutter,Poly Haven,CC0,https://polyhaven.com/a/painted_metal_shutter,2048,2048,0.2157,0.2292,0.2399,0.0345,"painted shutter slats for tool ribs, locker fronts, and modular equipment housings"
-rubber_tiles,Poly Haven,CC0,https://polyhaven.com/a/rubber_tiles,2048,2048,0.0144,0.0151,0.0184,0.0011,"smooth dark waterproof rubber with seams for gaskets, grips, and equipment feet"
-rusty_corrugated_iron,Poly Haven,CC0,https://polyhaven.com/a/rusty_corrugated_iron,2048,2048,0.0986,0.0236,0.0097,0.0171,"oxidized corrugated sheet for wreckage, salvage scrap, and damaged external casings"
-rusty_metal_03,Poly Haven,CC0,https://polyhaven.com/a/rusty_metal_03,2048,2048,0.238,0.0968,0.0076,0.0531,"rich rusted steel for damaged salvage, wreckage, and repair props"
-worn_shutter,Poly Haven,CC0,https://polyhaven.com/a/worn_shutter,2048,2048,0.0553,0.0467,0.0378,0.0145,"dark corrugated worn metal for ribs, grips, cartridge shells"
+id,name,cpp_name,hardness,albedo_r,albedo_g,albedo_b,texture_id,family,cv,pitch,chroma_sigma,chroma_r,chroma_g,chroma_b,bump_scale,note,density_kg_m3
+0,air,,0,0.00,0.00,0.00,,generic,0.0,0.0,0.0,1,1,1,0.0,never drawn by the world pass; body.vert writes this id so bodies keep the pre-existing look,0
+1,concrete,Concrete,256,0.30,0.30,0.28,,smooth,0.08,1.0,0.03,1,1,1,0.04,"aged Soviet panel concrete; poured smooth, no panel seams",2400
+2,soil,Soil,64,0.24,0.36,0.18,,smooth,0.22,0.8,0.12,1.15,0.9,0.65,0.1,organic earth / soil mottle,1600
+3,water_mark,WaterMark,96,0.18,0.28,0.55,,generic,0.0,0.0,0.0,1,1,1,0.0,legacy water marker,1000
+4,slab_tan,SlabTan,192,0.36,0.30,0.22,,smooth,0.06,1.0,0.04,1.05,0.95,0.85,0.03,muted tan concrete slab,2200
+5,extract,Extract,65535,0.10,0.85,0.42,,smooth,0.03,0.0,0.0,1,1,1,0.02,"the bank pad: signage, not surface — unbreakable infrastructure",2400
+6,door,Door,65535,0.16,0.24,0.42,,generic,0.0,0.0,0.0,1,1,1,0.0,"door leaf + frame; carve-immune, owned by the door state machine",7800
+7,hub_pad,HubPad,65535,0.00,0.80,0.95,,smooth,0.03,0.0,0.0,1,1,1,0.02,"nav / fast-travel pad: lattice ground truth, unbreakable",2400
+8,plaster,Plaster,32,0.48,0.44,0.38,,plaster,0.13,0.7,0.08,1.1,1.0,0.7,0.12,AUTHORED: dirty whitewash over precast panel; broad stains ~2.9 m,800
+9,parquet,Parquet,48,0.32,0.20,0.10,,plank,0.11,20.0,0.07,1.15,0.95,0.75,0.18,"AUTHORED: varnished oak, board-to-board tone; 10 cm boards",700
+10,shop_shutter,ShopShutter,128,0.38,0.40,0.42,painted_metal_shutter,ribbed,,28.0,0.05,0.9,0.95,1.1,0.4,"roller-shutter slats, 7 cm",7800
+11,lino,Lino,40,0.26,0.16,0.12,rubber_tiles,tile,,4.0,0.04,0.95,1.05,0.9,0.2,dark rubber with seams; 50 cm tiles,1200
+12,factory_wall,FactoryWall,256,0.22,0.30,0.22,factory_wall,ribbed,,13.0,0.08,0.85,1.15,0.8,0.35,"green corrugated factory metal, 15 cm corrugation",7800
+13,tread,Tread,320,0.38,0.24,0.15,metal_grate_rusty,tread,,8.0,0.09,1.15,0.85,0.65,0.3,"walkway grate, 25 cm studs",7800
+14,rust,Rust,112,0.40,0.20,0.08,rusty_metal_03,rust,,1.3,0.18,1.25,0.6,0.2,0.25,"thresholded low-frequency patches ~1.5 m; corroded, weaker than fresh steel",5200
+15,rubble,Rubble,24,0.22,0.18,0.14,rusty_corrugated_iron,rubble,,6.0,0.15,1.1,0.9,0.7,0.35,chunk plateaus at 33 cm; already broken once,1800
+16,electric_grate,ElectricGrate,384,0.85,0.70,0.15,,tread,0.09,8.0,0.06,1.1,1.0,0.6,0.3,"AUTHORED: electrified floor grate — tread lattice, hot hazard tint",7800
+17,acid_pool,AcidPool,16,0.15,0.75,0.12,,smooth,0.10,0.8,0.1,0.8,1.2,0.7,0.05,"AUTHORED: caustic pool surface, broad slicks",1100
+18,fire_cell,FireCell,16,0.85,0.25,0.04,,smooth,0.15,1.2,0.12,1.25,0.85,0.5,0.05,AUTHORED: burning floor cell,200
+19,pipe_metal,PipeMetal,180,0.13,0.16,0.14,,ribbed,0.10,10.0,0.06,0.95,1.00,1.05,0.30,"AUTHORED: baked wall-pipe runs (antourage) — painted steel conduit, dents and joint rings",7800

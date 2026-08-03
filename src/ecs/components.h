@@ -31,6 +31,25 @@ struct AABB {
     vec3 half{0.4f, 0.4f, 0.9f};
 };
 
+// Mass in kilograms — THE universal physical context (owner, 2026-08-02). One
+// number, two laws everywhere: E = m*v^2/2 and p = m*v. Filled from the content
+// tables at spawn (mobs.csv mass_kg, props.csv mass_kg, materials.csv density
+// for debris via material_subvoxel_mass_kg, height for NPC bodies). Fall
+// damage, a thrown prop's punch and a ragdoll's swing are all the same
+// arithmetic over this one component — never a per-system constant.
+struct Mass {
+    float kg = 70.0f;
+};
+
+// The physics system's impact report: the collision speed the sweep KILLED this
+// step (m/s over the axes that hit). Written by physics_step whenever it zeroes
+// velocity components above a small threshold; consumed and REMOVED by the game
+// layer's impact law (damage = k * m * v^2 / 2 over Mass). A POD seam, so L2
+// physics never knows what HP is.
+struct Impact {
+    float speed = 0.0f;
+};
+
 // Marks an entity as subject to the layer's gravity field.
 struct GravityAffected {
     float scale = 1.0f;   // multiplier on the gravity vector

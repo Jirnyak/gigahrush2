@@ -7,9 +7,11 @@
 namespace giga::game {
 
 bool on_extraction_pad(const MacroGrid& grid, const vec3& pos) {
-    // MacroGrid::cell wraps x/y/z itself, so no normalization is needed here — but
-    // the z guard below is deliberate: z must NOT wrap for this query. A pad at the
-    // bottom of the stack must not bank for someone standing at the top of it.
+    // Z WRAPS here on purpose. One World is ONE floor — other floors are other
+    // Worlds in the stack — and the module's storey 0 stands on the attic
+    // sandwich at z=127 (the torus's z-wrap), which is exactly where the
+    // extraction paint lives. The old "z must not wrap" guard came from the
+    // pre-module stack-of-storeys geometry and made the bank undetectable.
     const int cx = static_cast<int>(pos.x / kCellSize);
     const int cy = static_cast<int>(pos.y / kCellSize);
     const int cz = static_cast<int>(pos.z / kCellSize);
@@ -17,8 +19,7 @@ bool on_extraction_pad(const MacroGrid& grid, const vec3& pos) {
     // little above the surface it rests on, so checking only the containing cell
     // makes the pad work when you clip into it and not when you stand on it.
     for (int dz = 0; dz >= -1; --dz) {
-        const int z = cz + dz;
-        if (z < 0 || z >= kMacroDim) continue;
+        const int z = wrap_macro(cz + dz);
         if (grid.cell(cx, cy, z) == kMatExtract) return true;
     }
     return false;

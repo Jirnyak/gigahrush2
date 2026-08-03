@@ -1,15 +1,16 @@
 #include "game/elevator.h"
 
 #include "ecs/components.h"
-#include "game/combat.h"   // PlayerRanged, PlayerMelee — live on the body, not the pool
+#include "game/combat.h"    // PlayerRanged, PlayerMelee — live on the body, not the pool
 #include "game/embody.h"
+#include "game/floor_gen.h" // floor_gravity_regime — arrival rides the module's axis
 #include "game/rpg.h"      // RpgStats — XP/attrs/psi live on the body, not the pool
 
 namespace giga::game {
 
 RideResult ride_elevator(Registry& reg, NpcPool& pool,
                          const FloorRegistry& registry, Entity player,
-                         int fromFloor, int dir, std::uint8_t arrivalZ) {
+                         int fromFloor, int dir, std::uint8_t arrivalCoord) {
     RideResult r;
     r.player = player;
     r.floor = fromFloor;
@@ -61,9 +62,18 @@ RideResult ride_elevator(Registry& reg, NpcPool& pool,
 
     // Fold back on the departed floor (writes the record's macro cell from the
     // live transform, then destroys the entity), relocate to the arrival storey
-    // keeping x/y, and re-embody as player on the destination layer.
+    // ALONG THE MODULE'S GRAVITY AXIS keeping the two tangent coordinates
+    // ([floor_gen.h] frame — x/y/z are equal citizens, the regime picks which
+    // one an elevator rides), and re-embody as player on the destination layer.
     fold_back(reg, pool, id, player);
-    pool.cz(id) = arrivalZ;
+    const CellStep down = regime_down(floor_gravity_regime());
+    if (down.x != 0)
+        pool.cx(id) = arrivalCoord;
+    else if (down.y != 0)
+        pool.cy(id) = arrivalCoord;
+    else if (down.z != 0)
+        pool.cz(id) = arrivalCoord;
+    // Zero-g: any air cell is ground — the record keeps the cell it left from.
 
     Entity ne = embody_as_player(reg, pool, id, dstLayer);
     if (ne == entt::null) { // unreachable for a valid embodied record

@@ -75,11 +75,11 @@ int g_checks = 0;
 #include "suite_hunt.inl"
 #include "suite_samosbor.inl"
 #include "suite_doors.inl"
+#include "suite_antourage.inl"
 #include "suite_saveload.inl"
 #include "suite_macrosim.inl"
 #include "suite_behaviours.inl"
 #include "suite_samosborhud.inl"
-#include "suite_fluidrooms.inl"
 #include "suite_eventsweb.inl"
 #include "suite_needs2.inl"
 #include "suite_vendorammo.inl"
@@ -113,6 +113,7 @@ int g_checks = 0;
 #include "suite_floorcatalog.inl"
 #include "suite_console.inl"
 #include "suite_keybind.inl"
+#include "suite_particles.inl"
 static void test_inventory() {
     // Compile-time layout contract: a static_assert, not a CHECK. It is a fact
     // about the type, so it belongs to the build, not to a test run.
@@ -382,9 +383,10 @@ static void test_population_seed() {
         CHECK(pool.floor(id) == 5);
         CHECK(pool.age(id) >= 1 && pool.age(id) <= 100);
         CHECK(pool.height_mm(id) > 0);
-        // Records stand on the module's internal ground storey (one above slab),
-        // independent of the floor label — each floor is its own 128^3 world.
-        CHECK(pool.cz(id) == 1);
+        // The height coordinate is a BLIND draw over the whole axis — no storey
+        // is privileged on the torus; embodiment resolves onto real floors
+        // ([floor_stream.cpp] place_body_safely).
+        CHECK(pool.cz(id) < kMacroDim);
     }
     // Seeding alone does not make anyone the player; embodiment does.
     CHECK(!pool.is_player(playerId));
@@ -474,7 +476,7 @@ static void test_seed_from_spec() {
     for (NpcId id = 0; id < pool.count(); ++id) {
         CHECK(pool.alive(id));
         CHECK(pool.floor(id) == 3);
-        CHECK(pool.cz(id) == 1);                         // internal ground storey
+        CHECK(pool.cz(id) < kMacroDim);                  // blind height draw
         CHECK(pool.age(id) >= 20 && pool.age(id) <= 40); // spec age window honored
         CHECK(pool.height_mm(id) > 0);
         CHECK(pool.faction(id) == 0);                    // mix {1,0,0,0}
@@ -622,8 +624,10 @@ static void test_lattice() {
 }
 
 // The per-floor generator (floors.md: floor = pure fn(seed, number)). It must be
-// deterministic, wipe prior contents, and give each FloorKind a measurably
-// different interior.
+// deterministic and wipe prior contents. GEOMETRY COMES FROM MODULES: every
+// FloorKind dispatches to the one registered module (padic), kind themes CONTENT
+// only (population, mobs, loot, room mix) — the generic per-kind lattice builder
+// was purged (owner's mandate, 2026-08-02).
 static void test_floor_gen() {
     // Determinism, including over a recycled slot: build a floor, then build the
     // SAME floor into a world already dirtied by a different one — the grids must
@@ -642,35 +646,22 @@ static void test_floor_gen() {
     generate_floor(c, 6, floor_spec(FloorKind::Residential), 1u);
     CHECK(a.grid().types() != c.grid().types());
 
-    // Kind selects a geometry profile with a clearly different solid-cell budget.
-    World res, com, ind, der;
+    // Every kind dispatches to the same geometry module, so two kinds given the
+    // same (number, seed) build IDENTICAL grids — kind themes content, not
+    // geometry. A second module would claim its own numbers, not a kind branch.
+    World res, ind;
     generate_floor(res, 0, floor_spec(FloorKind::Residential), 3u);
-    generate_floor(com, 0, floor_spec(FloorKind::Commercial), 3u);
     generate_floor(ind, 0, floor_spec(FloorKind::Industrial), 3u);
-    generate_floor(der, 0, floor_spec(FloorKind::Derelict), 3u);
-    const std::size_t nr = solid_cells(res);
-    const std::size_t nc = solid_cells(com);
-    const std::size_t ni = solid_cells(ind);
-    const std::size_t nd = solid_cells(der);
+    CHECK(res.grid().types() == ind.grid().types());
+    CHECK(solid_cells(res) > 0);
 
-    // All four kinds are distinct interiors...
-    CHECK(nr != nc && nr != ni && nr != nd);
-    CHECK(nc != ni && nc != nd && ni != nd);
-    // ...and the ordering matches the design: a dense residential warren has more
-    // wall than open commercial halls, which have more than a pillared industrial
-    // plate; the derelict floor is the residential lattice half-collapsed, so it
-    // sits below intact residential. Even the sparsest floor has real structure.
-    CHECK(nr > nc);
-    CHECK(nc > ni);
-    CHECK(nr > nd);
-    CHECK(ni > 0);
-
-    // Fixed lattice: on EVERY floor kind the 16 shaft columns are carved to air
-    // through the FULL height (Z wraps, so this also links top -> 0), and an
-    // adjacent lobby cell is opened so the shaft joins the walkable graph.
-    // Node-to-node reachability is exercised by the nav no-seam test (#11).
-    for (World* w : {&res, &com, &ind, &der}) {
-        auto& g = w->grid();
+    // Fixed lattice ([torus-nav-baking]): the 16 shaft columns are carved to air
+    // through the FULL height (Z wraps, so this also links top -> 0), the ground
+    // lobby is opened, and the diagonal corner posts are solid hub-pad columns
+    // spanning the whole map. Node-to-node reachability is exercised by the nav
+    // no-seam test (#11).
+    {
+        auto& g = res.grid();
         for (int ny = 0; ny < kLatticeDim; ++ny)
             for (int nx = 0; nx < kLatticeDim; ++nx) {
                 const int cx = lattice_coord(nx);
@@ -680,24 +671,9 @@ static void test_floor_gen() {
                 CHECK(g.cell(cx + 2, cy, 1) == kCellAir);  // lobby opened
                 // Elevator column: diagonal corner posts are solid hub-pad type
                 // the FULL height (span the whole map; Z wraps into a loop).
-                CHECK(g.cell(cx + 2, cy + 2, 0) == 7);
-                CHECK(g.cell(cx + 2, cy + 2, 1) == 7);
-                CHECK(g.cell(cx + 2, cy + 2, kMacroDim - 1) == 7);
-            }
-    }
-
-    // Hub pads: each column carries a coloured landing pad (type 7) at all four
-    // lattice z-levels {16,48,80,112}, so the 16 columns present 4x4x4 = 64
-    // visible nodes. Checked on the intact kinds only: derelict randomly drops
-    // slab cells (holePct), so a given pad cell there may be an open hole.
-    for (World* w : {&res, &com, &ind}) {
-        auto& g = w->grid();
-        for (int ny = 0; ny < kLatticeDim; ++ny)
-            for (int nx = 0; nx < kLatticeDim; ++nx) {
-                const int cx = lattice_coord(nx);
-                const int cy = lattice_coord(ny);
-                for (int nz = 0; nz < kLatticeDim; ++nz)
-                    CHECK(g.cell(cx + 2, cy, lattice_coord(nz)) == 7); // kHubPad
+                CHECK(g.cell(cx + 2, cy + 2, 0) == kMatHubPad);
+                CHECK(g.cell(cx + 2, cy + 2, 1) == kMatHubPad);
+                CHECK(g.cell(cx + 2, cy + 2, kMacroDim - 1) == kMatHubPad);
             }
     }
 }
@@ -769,7 +745,7 @@ static void test_elevator() {
 
     // Ride up: floor 0 -> 1. Same record, now embodied on layer 1.
     RideResult up = ride_elevator(reg, pool, registry, p, /*from=*/0, /*dir=*/+1,
-                                  /*arrivalZ=*/2);
+                                  kArrivalCoord);
     CHECK(up.moved);
     CHECK(up.floor == 1);
     CHECK(up.layer == l1);
@@ -780,9 +756,10 @@ static void test_elevator() {
     CHECK(reg.get<Transform>(p).layer == l1); // now on the destination layer
     CHECK(pool.is_player(id));                // still the player
     CHECK(pool.embodied(id));
-    CHECK(pool.cx(id) == 40); // x/y kept
+    CHECK(pool.cx(id) == 40); // tangent coordinates kept
     CHECK(pool.cy(id) == 50);
-    CHECK(pool.cz(id) == 2);  // dropped onto the arrival storey
+    // Dropped onto the arrival storey ALONG the module's gravity axis.
+    CHECK(pool.cz(id) == kArrivalCoord);
     // View + movement mode preserved across the swap.
     CHECK(reg.get<Controller>(p).fly == true);
     // Not named `near`: <minwindef.h> defines `near` and `far` as object-like
@@ -812,7 +789,7 @@ static void test_elevator() {
 
     // Ride up again: floor 2 is not loaded -> no-op, player untouched.
     RideResult none = ride_elevator(reg, pool, registry, p, /*from=*/1,
-                                    /*dir=*/+1, /*arrivalZ=*/2);
+                                    /*dir=*/+1, kArrivalCoord);
     CHECK(!none.moved);
     CHECK(none.floor == 1);
     CHECK(none.player == p);
@@ -826,7 +803,7 @@ static void test_elevator() {
 
     // Ride back down: floor 1 -> 0. Second fold_back must keep mag/kills too.
     RideResult down = ride_elevator(reg, pool, registry, p, /*from=*/1,
-                                    /*dir=*/-1, /*arrivalZ=*/2);
+                                    /*dir=*/-1, kArrivalCoord);
     CHECK(down.moved);
     CHECK(down.floor == 0);
     CHECK(down.layer == l0);
@@ -967,7 +944,7 @@ static void test_floor_travel() {
 
     // Ride up 0 -> 1: destination loads on demand, floor 0 unloads.
     RideResult up = stream.travel(stack, reg, ecs, pool, player, /*from=*/0,
-                                  /*dir=*/+1, /*arrivalZ=*/2, playerId);
+                                  /*dir=*/+1, kArrivalCoord, playerId);
     CHECK(up.moved);
     CHECK(up.floor == 1);
     player = up.player;
@@ -984,7 +961,7 @@ static void test_floor_travel() {
     // player — a member of floor 0's range but currently embodied — is skipped by
     // the crowd pass and moved across by the elevator, so it is never duplicated.
     RideResult down = stream.travel(stack, reg, ecs, pool, player, /*from=*/1,
-                                    /*dir=*/-1, /*arrivalZ=*/2, playerId);
+                                    /*dir=*/-1, kArrivalCoord, playerId);
     CHECK(down.moved);
     CHECK(down.floor == 0);
     player = down.player;
@@ -1257,7 +1234,10 @@ static void test_mob_spawn() {
         const Transform& tr = view.get<const Transform>(e);
         int cx = static_cast<int>(tr.pos.x / kCellSize);
         int cy = static_cast<int>(tr.pos.y / kCellSize);
-        CHECK(w.grid().cell(cx, cy, 1) == kCellAir);
+        int cz = static_cast<int>(tr.pos.z / kCellSize);
+        // ANY storey — spawn draws the height over the whole axis; what is
+        // pinned is that every head stands on a real floor.
+        CHECK(floor_standable(w, cx, cy, cz));
 
         // Immobile kinds are architecture, not bodies: no gravity component.
         const bool immobile = has_flag(kMobTable[m.kind].aiFlags, AiFlag::Immobile);
@@ -1435,7 +1415,12 @@ static void test_wander_moves_the_crowd() {
     NpcId first = seed_floor_population(pool, /*floor=*/0, /*n=*/120, /*seed=*/9u);
     CHECK(first != kInvalidNpc);
     for (NpcId id = 0; id < pool.count(); ++id)
-        if (pool.alive(id)) embody(reg, pool, id, layer);
+        if (pool.alive(id)) {
+            // The streamer's own resolve seam: blind-seeded heights land inside
+            // slabs, and a body inside solid never moves ([floor_stream.cpp]).
+            Entity e = embody(reg, pool, id, layer);
+            place_body_safely(reg, stack.layer(layer), e);
+        }
 
     nav::CoarseGraph coarse;
     nav::FineNav fine;
@@ -2343,12 +2328,14 @@ static void test_extraction_reachable() {
     World hub;
     generate_floor(hub, 0, floor_spec(FloorKind::Residential), 1u);
 
-    // Walkable ground is cell z=1: the storey-0 slab is z=0 and a body stands on it.
-    const float standZ = 1.5f * kCellSize;
+    // Walkable ground of the module's storey 0 is cell z=0: its floor is the
+    // attic sandwich at z=127 (Z wraps), which is what the extraction pass
+    // paints. A body there occupies z=0.
+    const float standZ = 0.5f * kCellSize;
     int reachable = 0;
     for (int y = 0; y < kMacroDim; ++y)
         for (int x = 0; x < kMacroDim; ++x) {
-            if (hub.grid().cell(x, y, 1) != kCellAir) continue;   // must be standable
+            if (hub.grid().cell(x, y, 0) != kCellAir) continue;   // must be standable
             const vec3 p{(x + 0.5f) * kCellSize, (y + 0.5f) * kCellSize, standZ};
             if (on_extraction_pad(hub.grid(), p)) ++reachable;
         }
@@ -2366,7 +2353,7 @@ static void test_extraction_reachable() {
     int leaked = 0;
     for (int y = 0; y < kMacroDim; ++y)
         for (int x = 0; x < kMacroDim; ++x) {
-            if (deep.grid().cell(x, y, 1) != kCellAir) continue;
+            if (deep.grid().cell(x, y, 0) != kCellAir) continue;
             const vec3 p{(x + 0.5f) * kCellSize, (y + 0.5f) * kCellSize, standZ};
             if (on_extraction_pad(deep.grid(), p)) ++leaked;
         }
@@ -3011,8 +2998,9 @@ static void test_containers() {
         const Transform& t = reg.get<const Transform>(e);
         const int cx = static_cast<int>(t.pos.x / kCellSize);
         const int cy = static_cast<int>(t.pos.y / kCellSize);
-        CHECK(w.grid().cell(cx, cy, 1) == kCellAir);      // standable
-        CHECK(w.grid().cell(cx, cy, 0) != kCellAir);      // and not over a hole
+        const int cz = static_cast<int>(t.pos.z / kCellSize);
+        // ANY storey — what is pinned is that every crate sits on a real floor.
+        CHECK(floor_standable(w, cx, cy, cz));
         ++reachable;
     }
     CHECK(reachable == static_cast<int>(made));
@@ -3486,15 +3474,16 @@ static void test_full_loop() {
     LayerId hub = stack.push_layer();
     generate_floor(stack.layer(hub), 0, floor_spec(FloorKind::Residential), 1u);
 
-    // Stand on the extraction ring. Walkable ground is cell z=1 and the pad is the slab
-    // at z=0, which is the pairing the pad check relies on.
+    // Stand on the extraction ring. Walkable ground of storey 0 is cell z=0 and
+    // the pad is the attic sandwich at z=127 (Z wraps) — the pairing the pad
+    // check relies on in the module's geometry.
     vec3 padPos{0, 0, 0};
     bool found = false;
     for (int y = 0; y < kMacroDim && !found; ++y)
         for (int x = 0; x < kMacroDim && !found; ++x) {
-            if (stack.layer(hub).grid().cell(x, y, 1) != kCellAir) continue;
+            if (stack.layer(hub).grid().cell(x, y, 0) != kCellAir) continue;
             const vec3 c{(x + 0.5f) * kCellSize, (y + 0.5f) * kCellSize,
-                         1.5f * kCellSize};
+                         0.5f * kCellSize};
             if (on_extraction_pad(stack.layer(hub).grid(), c)) { padPos = c; found = true; }
         }
     CHECK(found);
@@ -4168,11 +4157,11 @@ int main() {
     test_packs_all();
     test_samosbor_all();
     test_doors_all();
+    test_antourage_all();
     test_saveload_all();
     test_macrosim_all();
     test_behaviours_all();
     test_samosborhud_all();
-    test_fluidrooms_all();
     test_eventsweb_all();
     test_needs2_all();
     test_vendorammo_all();
@@ -4200,6 +4189,7 @@ int main() {
     test_floorcatalog_all();
     test_console_all();
     test_keybind_all();
+    test_particles_all();
     test_route_realfloor();
     test_streamed_nav();
     test_nav_cache_roundtrip();

@@ -11,7 +11,7 @@
 // FloorRegistry. Only the ACTIVE floor is kept live — its World is generated and
 // its crowd embodied on entry, and folded back into the cold pool on exit
 // (streaming, floor_stream.h / master_prompt #9). `[` and `]` ride down/up a
-// floor. `gigahrush2 maze` selects the single-world labyrinth test bed instead.
+// floor.
 //
 // Controls are DATA, not code: every key lives in the KeybindTable
 // ([keybind.h]) as a row mapping a scancode to a console command
@@ -33,7 +33,6 @@
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 
-#include "app/worldgen.h"
 #include "core/math.h"
 #include "game/mob_table.h"
 #include "game/lazy_baker.h"
@@ -43,6 +42,7 @@
 #include "ecs/registry.h"
 #include "game/ai.h"       // the utility AI — adapted, wired, and dormant by default
 #include "game/embody.h"
+#include "game/impact.h"
 #include "game/elevator.h"
 #include "game/console.h"
 #include "game/keybind.h"
@@ -79,11 +79,13 @@
 #include "game/noise.h"
 #include "game/wander.h"
 #include "game/npc_pool.h"
-#include "game/population.h"
 #include "game/macro_sim.h"
 #include "input/input.h"
 #include "render/body_pass.h"
 #include "render/cube_pass.h"
+#include "render/material_table.h" // kMaterial — generated albedo table
+#include "render/particle_pass.h"
+#include "render/wire_pass.h"
 #include "render/prop_pass.h"
 
 #include "render/gpu_timer.h"
@@ -852,30 +854,6 @@ void aim_player(Registry& reg, Entity player) {
     reg.get<Controller>(player).fly = true;
 }
 
-// Maze test bed: seed a plain crowd on one layer, pin the player to an open maze
-// cell (the labyrinth has no apartment lattice), and return the player entity.
-Entity setup_maze(game::NpcPool& pool, Registry& reg, LayerId layer) {
-    game::NpcId playerId =
-        game::seed_floor_population(pool, /*floor=*/0, /*n=*/64, /*seed=*/1337u);
-    if (playerId == game::kInvalidNpc) return entt::null;
-
-    vec3 mazeCell{30.0f, 30.0f, 90.0f};
-    pool.cx(playerId) = static_cast<std::uint8_t>(mazeCell.x);
-    pool.cy(playerId) = static_cast<std::uint8_t>(mazeCell.y);
-    pool.cz(playerId) = static_cast<std::uint8_t>(mazeCell.z);
-
-    Entity player = entt::null;
-    for (game::NpcId id = 0; id < pool.count(); ++id) {
-        if (!pool.alive(id)) continue;
-        if (id == playerId)
-            player = game::embody_as_player(reg, pool, id, layer);
-        else
-            game::embody(reg, pool, id, layer);
-    }
-    if (player != entt::null) aim_player(reg, player);
-    return player;
-}
-
 // Kind / rule-set for ANY floor number, resolved through the catalog: an
 // explicit claim when one exists, else the pattern defaults. TOTAL — pick any
 // number and there is a floor there ([floor_catalog.h]), which is what lets
@@ -1059,6 +1037,19 @@ std::uint32_t refresh_floor_props(Registry& reg, const World& world,
     const std::uint32_t wallSeed =
         1337u ^ (static_cast<std::uint32_t>(floorNumber) * 0x9e3779b9u);
     std::uint32_t count = game::seed_wall_interactables(reg, world, layer, wallSeed);
+    std::fprintf(stderr, "[props] wall devices seeded: %u\n", count);
+    if (std::getenv("GIGA_ANTOURAGE_DEBUG") != nullptr) {
+        int shown = 0;
+        for (auto e : reg.view<const game::Interactable, const Transform>()) {
+            if (reg.get<const game::Interactable>(e).kind !=
+                game::InteractKind::ElectricalShield)
+                continue;
+            const vec3& p = reg.get<const Transform>(e).pos;
+            std::fprintf(stderr, "[props] shield at (%.1f %.1f %.1f)\n", p.x,
+                         p.y, p.z);
+            if (++shown == 4) break;
+        }
+    }
 
     // Ceiling BareBulb/FloodLamp cosmetics are still PropPlacer-driven, but
     // LightBulb Interactables live in ECS so lighting/HUD never read propPass
@@ -1075,8 +1066,144 @@ std::uint32_t refresh_floor_props(Registry& reg, const World& world,
 // non-interactable cosmetics. Interactable shapes (Terminal, ElectricalShield,
 // BareBulb, FloodLamp) are ECS-owned — PropPlacer only reserves their slots.
 // [jirnyak.md] §18 PropPass passive skin.
+// One rebuild = the whole scene list: ECS props PLUS the floor's baked
+// antourage ([game/antourage]). Clears first — add_instance appends, and with
+// real shapes in the catalog a second merge would double every mesh.
+// Pack the game-side wire chains into the render pass's POD format (render
+// never includes game/, so the translation lives here in the app).
+static void upload_wires(gpu::WirePass& wirePass, const game::AntourageBake* ab) {
+    if (!wirePass.ready()) return;
+    static std::vector<gpu::GpuWireChain> packed;
+    packed.clear();
+    if (ab != nullptr) {
+        for (const game::WireChain& c : ab->wires) {
+            gpu::GpuWireChain g{};
+            g.meta = vec4{c.restLen, 1.0f, c.massKg, 0.0f};
+            for (int i = 0; i < gpu::kWireChainPoints; ++i) {
+                const bool pinned = (c.pinMask >> i) & 1u;
+                g.cur[i] = vec4{c.p[i].x, c.p[i].y, c.p[i].z,
+                                pinned ? 0.0f : 1.0f};
+                g.prev[i] = vec4{c.p[i].x, c.p[i].y, c.p[i].z, 0.0f};
+            }
+            packed.push_back(g);
+        }
+    }
+    wirePass.upload(packed.data(), static_cast<std::uint32_t>(packed.size()));
+    if (std::getenv("GIGA_WIRE_DBG") != nullptr)
+        for (std::size_t i = 0; i < packed.size() && i < 20; ++i)
+            std::fprintf(stderr, "[wire] %zu mid (%.1f %.1f %.1f)\n", i,
+                         packed[i].cur[4].x, packed[i].cur[4].y,
+                         packed[i].cur[4].z);
+}
+
+// --- unified particle pool: the app-side packing seam -----------------------
+// Render never includes game/ ([ARCHITECTURE.md]), so bursts proposed in game/
+// ([game/particles.h]) become GpuParticle records HERE: the material tint is
+// resolved against the generated kMaterial albedo, and velocities/lifetimes
+// jitter deterministically off the burst seed (xorshift — no global RNG).
+namespace {
+
+struct ParticleRng {
+    std::uint32_t s;
+    // [-1, 1)
+    float next() {
+        s ^= s << 13;
+        s ^= s >> 17;
+        s ^= s << 5;
+        return static_cast<float>(static_cast<std::int32_t>(s)) *
+               (1.0f / 2147483648.0f);
+    }
+};
+
+void pack_particles(std::vector<gpu::GpuParticle>& out, const vec3& pos,
+                    const vec3& dir, const game::ParticleDef& def,
+                    const vec3& tint, std::uint8_t count, std::uint32_t seed) {
+    ParticleRng rng{seed * 0x9e3779b9u + 1u};
+    for (std::uint8_t k = 0; k < count; ++k) {
+        gpu::GpuParticle p{};
+        const float life = def.lifeS * (0.7f + 0.3f * (rng.next() * 0.5f + 0.5f));
+        p.posLife = vec4{pos.x + rng.next() * 0.12f, pos.y + rng.next() * 0.12f,
+                         pos.z + rng.next() * 0.12f, life};
+        p.velTotal = vec4{(dir.x + rng.next() * 0.6f) * def.speedMps,
+                          (dir.y + rng.next() * 0.6f) * def.speedMps,
+                          (dir.z + rng.next() * 0.6f) * def.speedMps, life};
+        p.colorSize = vec4{tint.x, tint.y, tint.z, def.sizeM};
+        p.phys = vec4{def.gravityMul, def.drag, def.bounce,
+                      static_cast<float>(def.emissive)};
+        out.push_back(p);
+    }
+}
+
+void drain_particle_bursts(gpu::ParticlePass& pass,
+                           game::ParticleBurstQueue& q) {
+    if (!pass.ready() || q.count == 0) {
+        q.clear();
+        return;
+    }
+    static std::vector<gpu::GpuParticle> tmp;
+    tmp.clear();
+    for (std::uint16_t i = 0; i < q.count; ++i) {
+        const game::ParticleBurst& b = q.items[i];
+        const game::ParticleDef& def = game::kParticleTable[b.kind];
+        const vec3 tint = def.colorFromMaterial
+                              ? kMaterial[b.matId < kMatCount ? b.matId : 0]
+                              : vec3{def.r, def.g, def.b};
+        pack_particles(tmp, b.pos, b.dir, def, tint, b.count, b.seed);
+    }
+    pass.spawn(tmp.data(), static_cast<std::uint32_t>(tmp.size()));
+    q.clear();
+}
+
+// Carve → dust + debris: CarveResult already names every removed sub-voxel
+// WITH its material ([world/destruct.h] CarvedVoxel), so the puff is tinted by
+// the very wall it came from. Sampled with a stride — a blast stays a cloud,
+// not tens of thousands of sprites.
+void spawn_carve_particles(gpu::ParticlePass& pass, const CarveResult& res,
+                           std::uint32_t seed) {
+    if (!pass.ready()) return;
+    static std::vector<gpu::GpuParticle> tmp;
+    tmp.clear();
+    const auto voxel_pos = [](const CarvedVoxel& v) {
+        const int cx = static_cast<int>(v.cell) & 127;
+        const int cy = (static_cast<int>(v.cell) >> 7) & 127;
+        const int cz = (static_cast<int>(v.cell) >> 14) & 127;
+        const int sx = v.bit & 7, sy = (v.bit >> 3) & 7, sz = v.bit >> 6;
+        return vec3{(static_cast<float>(cx * 8 + sx) + 0.5f) * kVoxelSize,
+                    (static_cast<float>(cy * 8 + sy) + 0.5f) * kVoxelSize,
+                    (static_cast<float>(cz * 8 + sz) + 0.5f) * kVoxelSize};
+    };
+    const game::ParticleDef& dust =
+        game::particle_def(game::ParticleKind::Dust);
+    const std::size_t nd = res.destroyed.size();
+    const std::size_t sd = nd > 48 ? nd / 48 : 1;
+    for (std::size_t i = 0; i < nd; i += sd) {
+        const CarvedVoxel& v = res.destroyed[i];
+        const vec3 tint = kMaterial[v.mat < kMatCount ? v.mat : 0];
+        pack_particles(tmp, voxel_pos(v), vec3{0.0f, 0.0f, 0.35f}, dust, tint,
+                       1, seed ^ static_cast<std::uint32_t>(i));
+    }
+    const game::ParticleDef& debris =
+        game::particle_def(game::ParticleKind::Debris);
+    const std::size_t nt = res.detached.size();
+    const std::size_t st = nt > 24 ? nt / 24 : 1;
+    for (std::size_t i = 0; i < nt; i += st) {
+        const CarvedVoxel& v = res.detached[i];
+        const vec3 tint = kMaterial[v.mat < kMatCount ? v.mat : 0];
+        pack_particles(tmp, voxel_pos(v), vec3{0.0f, 0.0f, -0.2f}, debris,
+                       tint, 1, seed ^ 0x5bd1e995u ^
+                                    static_cast<std::uint32_t>(i));
+    }
+    pass.spawn(tmp.data(), static_cast<std::uint32_t>(tmp.size()));
+}
+
+} // namespace
+
 static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
-                                  gpu::PropPass& propPass) {
+                                  gpu::PropPass& propPass,
+                                  const game::AntourageBake* ab,
+                                  const World& world,
+                                  std::vector<vec3>* dripEmitters = nullptr) {
+    propPass.clear_instances();
     std::vector<game::PropMeshInstance> insts;
     game::collect_static_prop_mesh_instances(reg, layer, insts);
     for (const auto& m : insts) {
@@ -1085,11 +1212,47 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
         pi.origin    = m.origin;
         pi.yaw       = m.yaw;
         pi.color     = m.color;
+        pi.scale     = m.scale;
         pi.matId     = m.matId;
         pi.emissive  = m.emissive;
         pi.flags     = m.flags;
         pi.animPhase = m.animPhase;
         propPass.add_instance(static_cast<gpu::PropShape>(m.shape), pi);
+    }
+    if (ab == nullptr) return;
+    // UNIVERSAL antourage instances ([game/antourage/antourage.h]): the core
+    // renders whatever a module emitted — shape + transform + material +
+    // anchors — with zero knowledge of what it depicts. Aliveness reads the
+    // LIVE grid: carve an anchor away and the piece stops being drawn.
+    static const bool antourageDebug =
+        std::getenv("GIGA_ANTOURAGE_DEBUG") != nullptr;
+    const MacroGrid& g = world.grid();
+    if (dripEmitters) dripEmitters->clear();
+    for (const game::AntourageInstance& it : ab->instances) {
+        if (g.cell(it.ax0, it.ay0, it.az0) == kCellAir ||
+            g.cell(it.ax1, it.ay1, it.az1) == kCellAir) {
+            // A severed pipe piece: its anchor was carved away, so the mesh
+            // stops drawing — and the stump becomes a DRIP emitter for the
+            // unified particle pool (owner's design: якорь мёртв → эмиттер).
+            if (dripEmitters && it.matId == kMatPipeMetal &&
+                dripEmitters->size() < 96)
+                dripEmitters->push_back(it.pos);
+            continue;
+        }
+        gpu::PropInstance pi{};
+        pi.origin = it.pos;
+        pi.yaw = it.yaw;
+        pi.scale = it.scale;
+        pi.matId = it.matId;
+        pi.emissive = antourageDebug ? 220 : it.emissive;
+        const bool ownColor =
+            it.color.x != 0.0f || it.color.y != 0.0f || it.color.z != 0.0f;
+        pi.color = antourageDebug ? vec3{1.0f, 0.0f, 1.0f}
+                   : ownColor     ? it.color
+                                  : kMaterial[it.matId < kMatCount ? it.matId
+                                                                   : 0];
+        if (it.shape < static_cast<std::uint8_t>(gpu::kPropShapeCount))
+            propPass.add_instance(static_cast<gpu::PropShape>(it.shape), pi);
     }
 }
 
@@ -1214,9 +1377,6 @@ Entity possess_nearest_survivor(Registry& reg, game::NpcPool& pool, LayerId laye
 } // namespace
 
 int main(int argc, char** argv) {
-    // World select: `gigahrush2 maze` for the labyrinth test bed, otherwise the
-    // floor-module stack (default).
-    WorldGenMode genMode = WorldGenMode::FloorStack;
     // --shot FILE [--frames N] [--ride N]: render, capture, exit.
     //
     // Visual work has to be looked at, and grabbing the window through the compositor
@@ -1251,9 +1411,7 @@ int main(int argc, char** argv) {
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
-        if (a == "maze") genMode = WorldGenMode::Maze;
-        else if (a == "floors" || a == "stack") genMode = WorldGenMode::FloorStack;
-        else if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
+        if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
         else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
         else if (a == "--ride" && i + 1 < argc) shotRide = std::atoi(argv[++i]);
         else if (a == "--floor" && i + 1 < argc) {
@@ -1390,6 +1548,24 @@ int main(int argc, char** argv) {
     if (!cullPass.init(&device, GIGA_SHADER_DIR)) {
         std::fprintf(stderr, "[cull] pass init failed (continuing without GPU culling)\n");
     }
+
+    // Hanging wires: GPU-verlet antourage chains ([render/wire_pass.h]).
+    gpu::WirePass wirePass;
+    if (!wirePass.init(&device, renderer.renderPass, GIGA_SHADER_DIR)) {
+        std::fprintf(stderr, "[wire] pass init failed (continuing without wires)\n");
+    }
+
+    // The unified particle pool: blood/dust/sparks/drips, one compute sim
+    // colliding against the voxel mirror ([render/particle_pass.h]).
+    gpu::ParticlePass particlePass;
+    if (!particlePass.init(&device, renderer.renderPass, GIGA_SHADER_DIR,
+                           voxelMirror.masks_buffer())) {
+        std::fprintf(stderr,
+                     "[particle] pass init failed (continuing without particles)\n");
+    }
+    // Severed pipe stumps ([merge_ecs_prop_meshes]) — each drips on a slow
+    // clock while its floor stays loaded. Refilled at every prop merge.
+    std::vector<vec3> dripEmitters;
 
 
     gpu::ImGuiLayer hud;
@@ -1531,14 +1707,7 @@ int main(int argc, char** argv) {
 
     Entity player = entt::null;
 
-    if (genMode == WorldGenMode::Maze) {
-        LayerId ground = stack.push_layer();
-        generate_demo_world(stack.layer(ground), 1337u, genMode);
-        player = setup_maze(pool, reg, ground);
-        if (propPass.ready()) {
-            merge_ecs_prop_meshes(reg, ground, propPass);
-        }
-    } else {
+    {
         // Register every floor MODULE (number -> module + build recipe), then
         // load ONLY floor 0. The rest stay cold until the elevator enters them,
         // and leaving a floor folds its crowd back — re-entry re-embodies the same
@@ -1561,8 +1730,7 @@ int main(int argc, char** argv) {
         // uniform draw over [-50,30] would send 71 of every 81 travellers to a floor
         // that does not exist. Must run after the add_module loop above (the registry
         // is the authoritative live set) and before the first `step()`. Re-call after
-        // any renumber. In Maze mode this branch is never taken, so fewer than two
-        // labels are registered and migration correctly stays off. [macro_sim.h]
+        // any renumber. [macro_sim.h]
         macroSim.set_floors_from(registry);
         // POPULATE THE WHOLE BUILDING, not just the floor about to be loaded.
         //
@@ -1615,7 +1783,10 @@ int main(int argc, char** argv) {
             begin_floor_nav(stack.layer(l0), nav);
             game::ai_init(reg, l0);
             if (propPass.ready()) {
-                merge_ecs_prop_meshes(reg, l0, propPass);
+                merge_ecs_prop_meshes(reg, l0, propPass,
+                                      streamer.antourage_at_layer(registry, l0),
+                                      stack.layer(l0), &dripEmitters);
+                upload_wires(wirePass, streamer.antourage_at_layer(registry, l0));
             }
         }
     }
@@ -1652,7 +1823,6 @@ int main(int argc, char** argv) {
 
     bool running = true;
     bool paused = false; // Esc pause menu: freezes the sim + frees the cursor
-    bool fluidPaused = false;
     float simAccum = 0.0f;
     // Monotonic sim-time (seconds), advanced one kSimDt per fixed step. The AI
     // re-plan stagger ([ai.md] #12c) schedules each agent's next decision against
@@ -1792,6 +1962,9 @@ int main(int argc, char** argv) {
     // Combat → geometry seam ([combat.h]): bullets/melee propose, sim disposes
     // below behind the same doors.frozen gate as the console carve row.
     game::CarveProposalQueue combatCarves;
+    // Combat/impact → particle seam ([game/particles.h]): blood and sparks are
+    // proposed as bursts during the sim step and drained into the GPU pool.
+    game::ParticleBurstQueue particleBursts;
 
     bool healWanted = false;
     bool eatWanted = false;       // G, consumed by one sim step
@@ -1840,8 +2013,6 @@ int main(int argc, char** argv) {
     float ateFood = 0.0f;      // food points that LANDED, for the HUD
     float drankWater = 0.0f;
     std::int32_t consumeHpCost = 0;   // HP paid for risky food, running total
-    int fluidStepEvery = 4; // sim steps between fluid updates
-    int fluidCounter = 0;
 
     // ── Debug console (~) ───────────────────────────────────────────────
     // The registry + default commands are game code ([console.h]); the app owns
@@ -2018,10 +2189,10 @@ int main(int argc, char** argv) {
         }
         game::RideResult ride =
             absolute ? streamer.teleport(stack, registry, reg, pool, player,
-                                         currentFloor, target, /*arrivalZ=*/2,
+                                         currentFloor, target, game::kArrivalCoord,
                                          pid)
                      : streamer.travel(stack, registry, reg, pool, player,
-                                       currentFloor, target, /*arrivalZ=*/2,
+                                       currentFloor, target, game::kArrivalCoord,
                                        pid);
         if (!ride.moved) return false;
         player = ride.player;
@@ -2079,9 +2250,12 @@ int main(int argc, char** argv) {
         voxelMirror.upload_all(stack.layer(nl));
         if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
         if (propPass.ready()) {
-            merge_ecs_prop_meshes(reg, nl, propPass);
+            merge_ecs_prop_meshes(reg, nl, propPass,
+                                  streamer.antourage_at_layer(registry, nl),
+                                  stack.layer(nl), &dripEmitters);
+                upload_wires(wirePass, streamer.antourage_at_layer(registry, nl));
         }
-        // ride_elevator keeps x/y and plants z=kArrivalZ. ~1-in-5 Residential
+        // ride_elevator keeps x/y and plants z=kArrivalCoord. ~1-in-5 Residential
         // columns are solid at that z, so without this the body freezes in a
         // wall forever (physics backs out every tick). F9 already calls
         // place_body_at_cell; keyboard/--shot did not. [save.h]
@@ -3068,6 +3242,10 @@ int main(int argc, char** argv) {
                 // Was defined in combat.cpp and never called — dead path until now.
                 game::slow_step(reg, activeLayer, kSimDt);
                 physics_step(reg, stack, kSimDt);
+                // The universal impact law, straight after the sweep that wrote
+                // the reports: damage = k*m*v^2/2 over Mass — fall damage and
+                // prop crashes with no per-cause constants ([game/impact.h]).
+                game::impact_damage_step(reg, pool, &particleBursts);
                 // Prop ragdoll settle (AngularVelocity damping bookkeeping).
                 // Angular integration itself is in physics_step. [jirnyak.md] §18
                 game::prop_ragdoll_step(reg, kSimDt);
@@ -3161,6 +3339,10 @@ int main(int argc, char** argv) {
                         // point of the raymarch migration.
                         voxelMirror.mark_dirty(carveResult.dirtyCells.data(),
                                                carveResult.dirtyCells.size());
+                        // Dust and debris off the blast, tinted by the carved
+                        // material ([particle_pass.h]).
+                        spawn_carve_particles(particlePass, carveResult,
+                                              op.seed);
 
                         // A blast is the loudest thing after gunfire: let the
                         // crowd hear it.
@@ -3190,7 +3372,8 @@ int main(int argc, char** argv) {
                         {
                             const game::InteractionHit corpseHit =
                                 game::find_nearest_interactable(
-                                    reg, player, game::Interactable::Kind::Corpse, 2.2f);
+                                    reg, player, game::Interactable::Kind::Corpse,
+                        game::interact_def(game::InteractKind::Corpse).reachM);
                             if (corpseHit.hit) {
                                 game::CorpseLootResult clr = game::loot_corpse_interact(
                                     reg, pool, bus, activeLayer, ppos, 2.2f, simTick);
@@ -3223,7 +3406,8 @@ int main(int argc, char** argv) {
                         // no fake hit when nothing is in reach.
                         if (!handled && activeLayer != kInvalidLayer) {
                             game::InteractionHit termHit = game::find_nearest_interactable(
-                                reg, player, game::Interactable::Kind::Terminal, 4.0f);
+                                reg, player, game::Interactable::Kind::Terminal,
+                    game::interact_def(game::InteractKind::Terminal).reachM);
                             if (termHit.hit) {
                                 game::TerminalInteractResult tres =
                                     game::embody_interact_terminal(
@@ -3360,16 +3544,18 @@ int main(int argc, char** argv) {
                     reg, pool, bus, activeLayer, kSimDt,
                     !haveGun && attackHeld && !paused, simTick,
                     &stack.layer(activeLayer).grid(), &combatCarves,
-                    &playerStatus);
+                    &playerStatus, &particleBursts);
                 meleeHits += game::mob_attack_step(reg,
                                    stack.layer(activeLayer).grid(),
                                    pool, bus, activeLayer,
-                                                   kSimDt, simTick);
+                                                   kSimDt, simTick,
+                                                   &particleBursts);
                 // Shots resolve AFTER the pass that launched them, so a
                 // projectile never lands on the frame it is fired.
                 meleeHits += game::projectile_step(
                     reg, pool, bus, stack, activeLayer, kSimDt, simTick,
-                    &playerStatus, player, &combatCarves, &stainDirty);
+                    &playerStatus, player, &combatCarves, &stainDirty,
+                    &particleBursts);
                 // Drain combat carve proposals through the same carve_sphere
                 // path the console uses. Frozen bake: drop (v1); console keeps
                 // pending via carveRadius until bake lands.
@@ -3392,6 +3578,8 @@ int main(int argc, char** argv) {
                             voxelMirror.mark_dirty(
                                 carveResult.dirtyCells.data(),
                                 carveResult.dirtyCells.size());
+                            spawn_carve_particles(particlePass, carveResult,
+                                                  pr.seed);
                             std::fprintf(stderr,
                                          "[carve] COMBAT removed=%d power=%u "
                                          "r=%.2f at (%.1f,%.1f,%.1f)\n",
@@ -3411,6 +3599,51 @@ int main(int argc, char** argv) {
                     }
                     combatCarves.clear();
                 }
+                // Severed pipes drip on a slow clock: one drop per stump
+                // roughly every 0.4 s ([game/particles.h] — the "якорь мёртв
+                // → эмиттер" writer). Emitters are refilled at every prop
+                // merge, so a re-carved or reloaded floor stays honest.
+                if ((simTick % 50u) == 0u && !dripEmitters.empty() &&
+                    particlePass.ready()) {
+                    static std::vector<gpu::GpuParticle> dripTmp;
+                    dripTmp.clear();
+                    const game::ParticleDef& dripDef =
+                        game::particle_def(game::ParticleKind::Drip);
+                    for (std::size_t i = 0; i < dripEmitters.size(); ++i)
+                        pack_particles(dripTmp, dripEmitters[i],
+                                       vec3{0.0f, 0.0f, -0.2f}, dripDef,
+                                       vec3{dripDef.r, dripDef.g, dripDef.b}, 1,
+                                       static_cast<std::uint32_t>(simTick) ^
+                                           static_cast<std::uint32_t>(i));
+                    particlePass.spawn(dripTmp.data(),
+                                       static_cast<std::uint32_t>(
+                                           dripTmp.size()));
+                }
+                // Binary diagnostic, same law as GIGA_ANTOURAGE_DEBUG: a
+                // fountain 3 m ahead of the camera answers "does the pool
+                // render at all" without hunting for dust. The env VALUE picks
+                // the CSV row (GIGA_PARTICLE_DBG=3 → sparks, =1 → debris...),
+                // so every kind can be eyeballed in isolation.
+                static const char* particleDbg =
+                    std::getenv("GIGA_PARTICLE_DBG");
+                if (particleDbg != nullptr && (simTick % 15u) == 0u &&
+                    reg.valid(player)) {
+                    int dk = std::atoi(particleDbg);
+                    if (dk < 0 || dk >= game::kParticleKindCount)
+                        dk = static_cast<int>(game::ParticleKind::Spark);
+                    const auto& camT = reg.get<CameraTag>(player);
+                    const vec3 fw = camera_forward(camT.yaw, camT.pitch);
+                    const vec3 pp = reg.get<Transform>(player).pos;
+                    particleBursts.push(
+                        vec3{pp.x + fw.x * 3.0f, pp.y + fw.y * 3.0f,
+                             pp.z + 1.2f + fw.z * 3.0f},
+                        vec3{0.0f, 0.0f, 1.0f},
+                        static_cast<game::ParticleKind>(dk), 12,
+                        kMatElectricGrate, // debris/dust tint: loud yellow
+                        static_cast<std::uint32_t>(simTick));
+                }
+                // Drain this tick's blood/spark proposals into the GPU pool.
+                drain_particle_bursts(particlePass, particleBursts);
 
 
 
@@ -3713,7 +3946,10 @@ int main(int argc, char** argv) {
                             navRebaker.clear();
                             begin_floor_nav(stack.layer(nl), nav);
                             if (propPass.ready()) {
-                                merge_ecs_prop_meshes(reg, nl, propPass);
+                                merge_ecs_prop_meshes(reg, nl, propPass,
+                                  streamer.antourage_at_layer(registry, nl),
+                                  stack.layer(nl), &dripEmitters);
+                upload_wires(wirePass, streamer.antourage_at_layer(registry, nl));
                             }
                             voxelMirror.upload_all(stack.layer(nl));
                             if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
@@ -3781,7 +4017,8 @@ int main(int argc, char** argv) {
                     // Zero-heap nearest Terminal (4 m = sqrt(16)). [jirnyak.md] §18
                     const bool nearTerm =
                         game::find_nearest_interactable(
-                            reg, player, game::Interactable::Kind::Terminal, 4.0f)
+                            reg, player, game::Interactable::Kind::Terminal,
+                    game::interact_def(game::InteractKind::Terminal).reachM)
                             .hit;
                     const game::CraftStation bench =
                         game::on_extraction_pad(stack.layer(activeLayer).grid(), ct.pos)
@@ -3927,7 +4164,7 @@ int main(int argc, char** argv) {
                 // nothing renders the graph yet). Passing the real matrix now means
                 // that when social is switched on it reads the one true source of
                 // attitudes instead of a second, silently diverging copy. [macrosim.md]
-                if (genMode != WorldGenMode::Maze && simTick % game::kMacroPeriodTicks == 0) {
+                if (simTick % game::kMacroPeriodTicks == 0) {
                     macroStats = macroSim.step(pool, macroParams, &factionRel);
                     // The world lives whether or not anyone is looking, and this line
                     // is the proof: a headless run shows the population moving with no
@@ -3942,16 +4179,9 @@ int main(int argc, char** argv) {
                                  macroStats.departures, macroStats.arrivals,
                                  macroStats.inTransit, macroStats.reserveRemaining);
                 }
-                // Fluid only lives in the maze test bed (the floor modules seed no
-                // puddles yet); step it on the active layer there.
-                if (genMode == WorldGenMode::Maze && !fluidPaused &&
-                    ++fluidCounter >= fluidStepEvery) {
-                    fluid_step(activeWorld);
-                    fluidCounter = 0;
-                    // The marcher tints from the mirrored fluid field; one
-                    // 8 MiB re-mirror per step, no instance rebuild anywhere.
-                    voxelMirror.mark_fluid_dirty();
-                }
+                // Fluid: no floor module seeds the field yet, so the cellular
+                // step is not run here. Re-wire (throttled, [sim/fluid.h]) when
+                // a module seeds standing water.
                 simNow += kSimDt;
                 simAccum -= kSimDt;
             }
@@ -4024,6 +4254,20 @@ int main(int argc, char** argv) {
             ImGui::Text("props %u | cull %s",
                         propPass.last_draw_count(),
                         cullPass.ready() ? "GPU-ready" : "off");
+            // Antourage — the binary "is it even there" line (owner's ask):
+            // baked pipe legs/joints + wire chains on THIS floor, straight from
+            // the resident bake. 0/0/0 = the bake did not run or was evicted.
+            {
+                const game::AntourageBake* hudAb =
+                    streamer.antourage_at_layer(registry, activeLayer);
+                ImGui::Text("antourage: %zu instances | %zu wires (gpu %u)",
+                            hudAb ? hudAb->instances.size() : 0,
+                            hudAb ? hudAb->wires.size() : 0,
+                            wirePass.chain_count());
+                ImGui::Text("particles: %u alive / %u spawned | %zu drip emitters",
+                            particlePass.alive_count(),
+                            particlePass.spawned_total(), dripEmitters.size());
+            }
             std::int16_t php = 0, pmax = 0;
             if (game::entity_health(reg, pool, player, php, pmax))
                 ImGui::Text("HP %d / %d%s", php, pmax, php <= 0 ? "  DEAD" : "");
@@ -4391,15 +4635,15 @@ int main(int argc, char** argv) {
                         bodyPass.last_instance_count(), pool.alive(), pool.count(),
                         pool.capacity());
             ImGui::Text("floor %d: %s (target pop %u)", currentFloor,
-                        currentSpec ? currentSpec->name : "maze",
+                        currentSpec ? currentSpec->name : "?",
                         currentSpec ? currentSpec->population : 64u);
-            // The coarse society tick's last report ([macro_sim.h]). Off in maze mode
-            // (no registered floor set). `macroSim.tick()` is 0 until the first step
+            // The coarse society tick's last report ([macro_sim.h]).
+            // `macroSim.tick()` is 0 until the first step
             // lands ~2 s in, so this reads "warming up" rather than a row of zeroes
             // that looks broken. births/deaths are this step's tallies; in-transit is
             // the live migration backlog; reserve is the birth headroom the pool will
             // never reclaim (the design-scale wall lives here, macro_sim.h banner).
-            if (genMode != WorldGenMode::Maze) {
+            {
                 if (macroSim.tick() == 0)
                     ImGui::Text("society: warming up (first macro tick at %.1f s)",
                                 static_cast<float>(game::kMacroPeriodTicks) *
@@ -4412,10 +4656,6 @@ int main(int argc, char** argv) {
                                 macroStats.reserveRemaining,
                                 static_cast<unsigned long long>(macroStats.tick),
                                 macroSim.day());
-            }
-            if (genMode == WorldGenMode::Maze) {
-                ImGui::Checkbox("pause fluid", &fluidPaused);
-                ImGui::SliderInt("fluid step every", &fluidStepEvery, 1, 30);
             }
             ImGui::TextUnformatted(
                 "WASD move | mouse look | Tab toggle look | Space jump | "
@@ -4444,7 +4684,8 @@ int main(int argc, char** argv) {
             // Zero-heap nearest Terminal ([jirnyak.md] section 18) -- same reach as craft hot path.
             const bool nearTerm =
                 game::find_nearest_interactable(
-                    reg, player, game::Interactable::Kind::Terminal, 4.0f)
+                    reg, player, game::Interactable::Kind::Terminal,
+                    game::interact_def(game::InteractKind::Terminal).reachM)
                     .hit;
             const game::CraftStation bench =
                 game::on_extraction_pad(stack.layer(activeLayer).grid(), ct.pos)
@@ -4511,9 +4752,10 @@ int main(int argc, char** argv) {
             // Terminal proximity -- zero-heap find_nearest ([jirnyak.md] section 18).
             if (!promptText && activeLayer != kInvalidLayer) {
                 const game::InteractionHit termHit = game::find_nearest_interactable(
-                    reg, player, game::Interactable::Kind::Terminal, 4.0f);
+                    reg, player, game::Interactable::Kind::Terminal,
+                    game::interact_def(game::InteractKind::Terminal).reachM);
                 if (termHit.hit) {
-                    set_prompt("interact", "TERMINAL (DOOR LOCKS)");
+                    set_prompt("interact", game::interact_def(game::InteractKind::Terminal).prompt);
                 }
             }
 
@@ -4521,14 +4763,16 @@ int main(int argc, char** argv) {
             if (!promptText && activeLayer != kInvalidLayer) {
                 const game::InteractionHit shieldHit = game::find_nearest_interactable(
                     reg, player,
-                    game::Interactable::Kind::ElectricalShield, 3.5f);
+                    game::Interactable::Kind::ElectricalShield,
+                    game::interact_def(game::InteractKind::ElectricalShield).reachM);
                 if (shieldHit.hit) {
                     const vec3& sp = shieldHit.pos;
                     int scx = static_cast<int>(sp.x / kCellSize);
                     int scy = static_cast<int>(sp.y / kCellSize);
                     int scz = static_cast<int>(sp.z / kCellSize);
                     if (!powerGrid.is_shield_destroyed(scx, scy, scz)) {
-                        set_prompt("interact", "SABOTAGE ELECTRICAL SHIELD");
+                        set_prompt("interact",
+                                   game::interact_def(game::InteractKind::ElectricalShield).prompt);
                     }
                 }
             }
@@ -4539,15 +4783,18 @@ int main(int argc, char** argv) {
             if (!promptText && activeLayer != kInvalidLayer) {
                 const game::InteractionHit corpseHit =
                     game::find_nearest_interactable(
-                        reg, player, game::Interactable::Kind::Corpse, 2.2f);
+                        reg, player, game::Interactable::Kind::Corpse,
+                        game::interact_def(game::InteractKind::Corpse).reachM);
                 if (corpseHit.hit && reg.valid(corpseHit.entity)) {
                     if (const game::Corpse* corpse =
                             reg.try_get<game::Corpse>(corpseHit.entity)) {
                         set_prompt("interact",
-                                   corpse->searched ? "LOOT CORPSE (REMAINDER)"
-                                                    : "LOOT CORPSE");
+                                   corpse->searched
+                                       ? "LOOT CORPSE (REMAINDER)"
+                                       : game::interact_def(game::InteractKind::Corpse).prompt);
                     } else {
-                        set_prompt("interact", "LOOT CORPSE");
+                        set_prompt("interact",
+                                   game::interact_def(game::InteractKind::Corpse).prompt);
                     }
                 }
             }
@@ -4806,10 +5053,17 @@ int main(int argc, char** argv) {
             }
 
             if (propPassNeedsRebuild) {
-                merge_ecs_prop_meshes(reg, activeLayer, propPass);
+                merge_ecs_prop_meshes(reg, activeLayer, propPass,
+                                      streamer.antourage_at_layer(registry, activeLayer),
+                                      stack.layer(activeLayer), &dripEmitters);
+                upload_wires(wirePass, streamer.antourage_at_layer(registry, activeLayer));
             }
 
-            if (cullPass.ready() && propPass.ready()) {
+            // GIGA_NO_GPU_CULL=1 falls back to the CPU cull — the A/B switch
+            // that separates "cull.comp corrupts instances" from every other
+            // mesh-path suspect in one relaunch.
+            static const bool noGpuCull = std::getenv("GIGA_NO_GPU_CULL") != nullptr;
+            if (!noGpuCull && cullPass.ready() && propPass.ready()) {
                 propPass.set_use_gpu_culling(true);
                 const mat4 vp = mat4_mul(camMat.proj, camMat.view);
                 const uint32_t fIdx = renderer.currentFrame;
@@ -4832,12 +5086,44 @@ int main(int argc, char** argv) {
                 propPass.set_use_gpu_culling(false);
             }
 
+            // Wire verlet: aliveness from the LIVE grid (anchor probe), then
+            // the compute step — recorded before the render pass like the cull.
+            if (wirePass.ready() && wirePass.chain_count() > 0 &&
+                activeLayer != kInvalidLayer) {
+                if (const game::AntourageBake* ab =
+                        streamer.antourage_at_layer(registry, activeLayer)) {
+                    static std::vector<std::uint8_t> wireAlive;
+                    wireAlive.clear();
+                    const MacroGrid& wg = stack.layer(activeLayer).grid();
+                    for (const game::WireChain& c : ab->wires)
+                        wireAlive.push_back(
+                            wg.cell(c.ax0, c.ay0, c.az0) != kCellAir &&
+                                    wg.cell(c.ax1, c.ay1, c.az1) != kCellAir
+                                ? 1u
+                                : 0u);
+                    wirePass.write_alive(wireAlive.data(),
+                                         static_cast<std::uint32_t>(
+                                             wireAlive.size()));
+                }
+                const vec3 wp = reg.valid(player) && reg.all_of<Transform>(player)
+                                    ? reg.get<Transform>(player).pos
+                                    : camMat.eye;
+                if (std::getenv("GIGA_WIRE_NOSIM") == nullptr)
+                    wirePass.record_sim(cmd, wp, 1.0f / 60.0f);
+            }
+
             if (!stainDirty.empty()) {
                 voxelMirror.mark_dirty(stainDirty.data(), stainDirty.size());
                 stainDirty.clear();
             }
             voxelMirror.flush(cmd, renderer.currentFrame,
                               stack.layer(activeLayer));
+
+            // Particle sim AFTER the mirror flush: its barrier orders the
+            // masks transfer before compute reads, so a particle collides
+            // with THIS frame's carve holes, not last frame's walls.
+            if (std::getenv("GIGA_PARTICLE_NOSIM") == nullptr)
+                particlePass.record_sim(cmd, 1.0f / 60.0f);
 
             renderer.begin_pass(0.0f, 0.0f, 0.0f);
 
@@ -4872,6 +5158,10 @@ int main(int argc, char** argv) {
             // Props: GPU-instanced arbitrary-mesh pass, same depth buffer.
             if (propPass.ready())
                 propPass.record(cmd, renderer.currentFrame, push, lightGrid.descriptor_set());
+            wirePass.record_draw(cmd, push);
+            // Particles LAST among world passes: alpha-blended sprites need
+            // every opaque depth already written.
+            particlePass.record_draw(cmd, push);
 
 
             std::uint64_t t2 = SDL_GetPerformanceCounter();
@@ -4934,7 +5224,7 @@ int main(int argc, char** argv) {
                     }
                     game::RideResult r = streamer.travel(
                         stack, registry, reg, pool, player, currentFloor, -1,
-                        /*arrivalZ=*/2, pid);
+                        game::kArrivalCoord, pid);
                     if (r.moved) {
                         player = r.player;
                         currentFloor = r.floor;
@@ -4984,7 +5274,10 @@ int main(int argc, char** argv) {
                         // Same transition autosave as the keyboard path.
                         save_run_now();
                         if (propPass.ready()) {
-                            merge_ecs_prop_meshes(reg, nl, propPass);
+                            merge_ecs_prop_meshes(reg, nl, propPass,
+                                  streamer.antourage_at_layer(registry, nl),
+                                  stack.layer(nl), &dripEmitters);
+                upload_wires(wirePass, streamer.antourage_at_layer(registry, nl));
                         }
                         // Same clear as the keyboard ride path. There are TWO travel
                         // sites and the first fix only touched one, so a --shot
@@ -5070,6 +5363,8 @@ int main(int argc, char** argv) {
     // --- teardown (reverse order) -----------------------------------------
     hud.destroy();
 
+    particlePass.destroy();
+    wirePass.destroy();
     cullPass.destroy();
     propPass.destroy();
     bodyPass.destroy();

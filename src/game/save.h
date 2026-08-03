@@ -536,13 +536,12 @@ std::size_t apply_opened_containers(Registry& reg, LayerId layer, int floorNumbe
 //      today (door frames are recolours, not solidity changes) but would silently stop
 //      being correct the day a door is built Shut.
 
-// The arrival storey an elevator ride drops the player on. Cell z=2 is air on the ground
-// storey of every kind: `generate_floor` lays the slab at cell z=0 and the storey's air
-// band is [1, storey), and the shallowest storey in the table is Residential's 4
-// ([floor_gen.cpp] kGeom). Named here because `main.cpp` passes the bare literal 2 at
-// both of its travel sites and a load is the third — three spellings of one number is
-// how it drifts.
-inline constexpr std::uint8_t kArrivalZ = 2;
+// The arrival storey an elevator ride drops the player on: the geometry module's
+// ground standing cell (air with a solid floor below — [floor_gen.h]
+// floor_ground_z; floor_gen.cpp static_asserts the two stay equal). Named here
+// because `main.cpp` passes it at both of its travel sites and a load is the
+// third — three spellings of one number is how it drifts.
+inline constexpr std::uint8_t kArrivalCoord = 3;
 
 // Hop ceiling for the loop below. Equal to FloorRegistry's kFloorSlots (255 labels), so
 // even a pathological stack cannot spin: every hop crosses at least one label and no
@@ -581,7 +580,7 @@ struct LoadTravel {
 LoadTravel travel_to_saved_floor(LevelStack& stack, FloorRegistry& reg, Registry& ecs,
                                  NpcPool& pool, FloorStreamer& streamer, Entity player,
                                  int fromFloor, int targetFloor,
-                                 std::uint8_t arrivalZ = kArrivalZ);
+                                 std::uint8_t arrivalCoord = kArrivalCoord);
 
 // ---------------------------------------------------------------------------
 // Placement — a body in solid geometry never moves again
@@ -598,7 +597,7 @@ LoadTravel travel_to_saved_floor(LevelStack& stack, FloorRegistry& reg, Registry
 // `generate_floor` is a pure function of (seed, number, kind) and clears to air first,
 // so the same build rebuilds the floor bit-for-bit and a cell the player stood in comes
 // back air. What is dangerous is the ARRIVAL cell of an elevator ride, which is
-// `(cx, cy)` from the floor you LEFT and `z = kArrivalZ`: the wall lattices of two floor
+// `(cx, cy)` from the floor you LEFT and `z = kArrivalCoord`: the wall lattices of two floor
 // kinds do not align (strides 8 / 16 / 32), so the arrival column is frequently inside
 // a full-height wall. Counted from the generator's own table for the densest case,
 // Residential: 128^2 - 112^2 = 3840 of 16384 columns (23.4%) sit on a wall line, and at
@@ -698,7 +697,7 @@ PlacedCell place_body_at_cell(Registry& reg, const World& world, Entity body,
 
 // Same, for a body that is already somewhere: resolve the cell it is standing in. This
 // is what an elevator arrival needs — `ride_elevator` keeps x/y from the floor you left
-// and sets z = arrivalZ, which is the ~1-in-5 wall case measured above.
+// and sets z = arrivalCoord, which is the ~1-in-5 wall case measured above.
 PlacedCell place_body_safely(Registry& reg, const World& world, Entity body,
                              int radius = kPlaceRadius);
 

@@ -102,8 +102,8 @@
 //                          same way F5/F9 already did. This pin is the destroy+
 //                          respawn seam those sites share — no entity id in the key.
 //  10. travel_arrival_not_in_wall
-//                          CLOSED. ride_elevator keeps x/y and sets z=arrivalZ
-//                          (kArrivalZ=2). ~1-in-5 Residential columns are solid at
+//                          CLOSED. ride_elevator keeps x/y and sets z=arrivalCoord
+//                          (kArrivalCoord=2). ~1-in-5 Residential columns are solid at
 //                          that z ([save.h]). place_body_safely is implemented and
 //                          unit-tested; F9 called place_body_at_cell; keyboard and
 //                          --shot did not. Without the call the body freezes in a
@@ -1053,7 +1053,7 @@ static void travel_keeps_opened_crates() {
 // ---------------------------------------------------------------------------
 // PIN (green): elevator arrival is not left inside a wall
 // ---------------------------------------------------------------------------
-// ride_elevator keeps x/y from the departed floor and plants z = kArrivalZ
+// ride_elevator keeps x/y from the departed floor and plants z = kArrivalCoord
 // ([elevator.cpp]). Wall lattices of two floor kinds do not align, so ~1-in-5
 // Residential columns at z=2 are solid ([save.h] measurement). place_body_safely
 // resolves the body's current cell to a standable neighbour and zeroes Velocity.
@@ -1067,10 +1067,6 @@ static void travel_keeps_opened_crates() {
 // suite_saveload already unit-tests the helper; this is the audit ledger witness
 // that the travel path must keep calling it.
 static void travel_arrival_not_in_wall() {
-    // Same wall-crossing convention as suite_saveload: stride-8 lattice, not a
-    // doorway, not a lobby. At kArrivalZ the cell is solid on Residential.
-    constexpr std::uint8_t kWallX = 8;
-    constexpr std::uint8_t kWallY = 8;
     const vec3 kBodyHalf{0.4f, 0.4f,
                          body_half_height(static_cast<std::uint16_t>(1750))};
 
@@ -1081,7 +1077,37 @@ static void travel_arrival_not_in_wall() {
     generate_floor(stack.layer(layer), /*floorZ=*/-26,
                    floor_spec(FloorKind::Residential), 1337u);
 
-    const vec3 wallCentre = macro_cell_centre(kWallX, kWallY, kArrivalZ);
+    // A wall cell at the arrival storey with a standable neighbour — FOUND in
+    // the built grid (the module's BSP walls are seed-derived, not a lattice a
+    // constant could name; same convention as suite_saveload's find_wall_probe).
+    int wallX = -1, wallY = -1;
+    for (int y = 4; y < kMacroDim - 4 && wallX < 0; ++y)
+        for (int x = 4; x < kMacroDim - 4 && wallX < 0; ++x) {
+            const vec3 c = macro_cell_centre(static_cast<std::uint8_t>(x),
+                                             static_cast<std::uint8_t>(y),
+                                             kArrivalCoord);
+            if (!aabb_overlaps_solid(stack.layer(layer), c, kBodyHalf)) continue;
+            for (int dy = -1; dy <= 1 && wallX < 0; ++dy)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    if (!dx && !dy) continue;
+                    const vec3 nb = macro_cell_centre(
+                        static_cast<std::uint8_t>(wrap_macro(x + dx)),
+                        static_cast<std::uint8_t>(wrap_macro(y + dy)), kArrivalCoord);
+                    if (!aabb_overlaps_solid(stack.layer(layer), nb, kBodyHalf) &&
+                        stack.layer(layer).grid().cell(wrap_macro(x + dx),
+                                                       wrap_macro(y + dy),
+                                                       kArrivalCoord - 1) != kCellAir) {
+                        wallX = x;
+                        wallY = y;
+                        break;
+                    }
+                }
+        }
+    CHECK(wallX >= 0);
+
+    const vec3 wallCentre =
+        macro_cell_centre(static_cast<std::uint8_t>(wallX),
+                          static_cast<std::uint8_t>(wallY), kArrivalCoord);
     CHECK(aabb_overlaps_solid(stack.layer(layer), wallCentre, kBodyHalf));
 
 
@@ -1114,8 +1140,8 @@ static void travel_arrival_not_in_wall() {
     std::fprintf(stderr,
                  "[audit] travel arrival: wall (%u,%u,%u) -> standable "
                  "(%u,%u,%u) rings=%d supported=%d\n",
-                 static_cast<unsigned>(kWallX), static_cast<unsigned>(kWallY),
-                 static_cast<unsigned>(kArrivalZ),
+                 static_cast<unsigned>(wallX), static_cast<unsigned>(wallY),
+                 static_cast<unsigned>(kArrivalCoord),
                  static_cast<unsigned>(placed.cx),
                  static_cast<unsigned>(placed.cy),
                  static_cast<unsigned>(placed.cz), placed.rings,

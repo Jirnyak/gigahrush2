@@ -30,15 +30,23 @@ struct PropVertex {
 // Per-instance data, uploaded via a per-instance vertex binding.
 // Layout must match prop.vert locations 2-5.
 struct PropInstance {
-    vec3    origin;    // world-space minimum corner / base centre
+    vec3    origin;    // world-space CENTRE of the unit mesh
     float   yaw;       // rotation around local Y, radians
     vec3    color;     // display-referred RGB (cube.frag gamma-expands it)
     uint8_t matId;     // material id (0-30), same encoding as CubeInstance
     uint8_t emissive;  // 0-255 -> 0.0-2.0 emissive multiplier (crystals/lamps)
     uint8_t flags;     // bit0=flipX, bit1=damaged(tint darker), bit2=glow pulse
     uint8_t animPhase; // 0-255 mapped 0-2pi: valve spin, lamp flicker phase
+    // Per-axis local scale applied before yaw. Unit meshes span +-0.5, so a
+    // pipe leg is CylinderX scaled (lengthM, diamM, diamM) — one instance per
+    // straight run, however long ([game/antourage]).
+    vec3    scale{1.0f, 1.0f, 1.0f};
+    // Pads the struct to 48 B = THREE std430 vec4s. cull.comp mirrors this
+    // layout as {vec4, vec4, vec4} — an unpadded 44 would shear every instance
+    // the compute pass copies (measured: full-screen flickering junk).
+    float   pad_ = 0.0f;
 };
-static_assert(sizeof(PropInstance) == 32, "PropInstance size mismatch");
+static_assert(sizeof(PropInstance) == 48, "PropInstance size mismatch");
 
 // ──────────────────────────── mesh container ──────────────────────────────────
 
@@ -55,8 +63,16 @@ struct PropMesh {
 
 // ──────────────────────────── shape catalogue ─────────────────────────────────
 
+// The clean parametric catalog (the legacy 29-shape zoo died in the purge):
+// unit meshes centred on the origin spanning +-0.5, FLAT-SHADED (hard facets —
+// the owner's Soviet-industrial read). Cylinders are 8-gon, one per axis so an
+// axis-aligned pipe leg needs no per-instance rotation.
 enum class PropShape : uint8_t {
-    kCount = 0
+    Box = 0,
+    CylinderX,
+    CylinderY,
+    CylinderZ,
+    kCount
 };
 
 

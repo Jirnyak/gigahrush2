@@ -81,7 +81,7 @@ bool entity_health(const Registry& reg, const NpcPool& pool, Entity e,
 
 DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
                           std::int16_t raw, DamageChannel ch, Entity source,
-                          const MacroGrid* grid) {
+                          const MacroGrid* grid, ParticleBurstQueue* particles) {
     DamageResult out;
     if (!reg.valid(target) || raw <= 0) return out;
     if (reg.all_of<Dead>(target)) return out;  // already scheduled to die
@@ -157,6 +157,34 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
         vel.v.z += hitDir.z * 2.5f;
     }
     out.lethal = (after == 0 && before > 0);
+
+    // Blood — the unified particle pool's one writer for every hurt body
+    // ([particles.h]). Psi is mental and bleeds nothing; everything physical
+    // sprays away from the attacker, scaled by what actually landed.
+    if (particles && out.applied > 0 && ch != DamageChannel::Psi) {
+        if (const Transform* tt = reg.try_get<Transform>(target)) {
+            vec3 dir{0.0f, 0.0f, 0.45f};
+            if (reg.valid(source)) {
+                if (const Transform* st = reg.try_get<Transform>(source)) {
+                    const float dx = tt->pos.x - st->pos.x;
+                    const float dy = tt->pos.y - st->pos.y;
+                    const float len = std::sqrt(dx * dx + dy * dy);
+                    if (len > 1e-3f) {
+                        dir.x = dx / len * 0.8f;
+                        dir.y = dy / len * 0.8f;
+                    }
+                }
+            }
+            const int n = 2 + out.applied / 3;
+            particles->push(
+                vec3{tt->pos.x, tt->pos.y, tt->pos.z + 0.9f}, dir,
+                ParticleKind::Blood,
+                static_cast<std::uint8_t>(n > 18 ? 18 : n), 0,
+                static_cast<std::uint32_t>(entt::to_integral(target)) ^
+                    (static_cast<std::uint32_t>(before) << 16) ^
+                    static_cast<std::uint32_t>(out.applied));
+        }
+    }
 
     if (out.lethal)
         reg.emplace<Dead>(target,
@@ -377,7 +405,8 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
 
 std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
                              NpcPool& pool, EventBus& bus,
-                             LayerId layer, float dt, std::uint64_t tick) {
+                             LayerId layer, float dt, std::uint64_t tick,
+                             ParticleBurstQueue* particles) {
     // The camera holder, resolved ONCE per pass. It is a single entity that every
     // monster may want, so hoisting it out of the loop is free; crowd prey is
     // per-monster and cannot be hoisted the same way ([hunt.h]).
@@ -642,7 +671,8 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         // a target that is `Dead`, returns hit == false, and so leaves that mob's
         // cooldown unset exactly as the break did.
         DamageResult r = apply_damage(reg, pool, s.target, s.raw,
-                                      DamageChannel::Kinetic, s.mob, &grid);
+                                      DamageChannel::Kinetic, s.mob, &grid,
+                                      particles);
         if (r.hit) {
             ++swings;
             if (MobCombat* mc = reg.try_get<MobCombat>(s.mob))
@@ -651,7 +681,8 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
     }
 
     for (const auto& hit : hazardHits) {
-        apply_damage(reg, pool, hit.mob, hit.dmg, hit.ch, entt::null, &grid);
+        apply_damage(reg, pool, hit.mob, hit.dmg, hit.ch, entt::null, &grid,
+                     particles);
     }
 
     (void)bus;
@@ -892,7 +923,8 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                               std::uint64_t tick, StatusSet* playerStatus,
                               Entity playerEntity,
                               CarveProposalQueue* carves,
-                              std::vector<std::uint32_t>* stainDirty) {
+                              std::vector<std::uint32_t>* stainDirty,
+                              ParticleBurstQueue* particles) {
     if (!stack.valid(layer)) return 0;
     const MacroGrid& grid = stack.layer(layer).grid();
 
@@ -1096,10 +1128,12 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         // a channel is a property of the SHOT and not of what it happened to strike.
         const DamageChannel ch = static_cast<DamageChannel>(h.channel);
         if (h.onVictim && victim != entt::null) {
-            DamageResult r = apply_damage(reg, pool, victim, h.dmg, ch, h.source, &grid);
+            DamageResult r = apply_damage(reg, pool, victim, h.dmg, ch, h.source,
+                                          &grid, particles);
             if (r.hit) landed = true;
         } else if (h.other != entt::null && reg.valid(h.other)) {
-            DamageResult r = apply_damage(reg, pool, h.other, h.dmg, ch, h.source, &grid);
+            DamageResult r = apply_damage(reg, pool, h.other, h.dmg, ch, h.source,
+                                          &grid, particles);
             if (r.hit) {
                 landed = true;
                 // Credit the shooter, the same way the melee path credits a swing.
@@ -1127,6 +1161,19 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                                  static_cast<std::uint32_t>(
                                      entt::to_integral(h.proj)))) {
                 landed = true;
+            }
+            // Sparks — the projectile-on-wall writer of the unified pool
+            // ([particles.h]). The chip carve above is the scar; this is the
+            // flash. The sim's voxel bounce scatters them off the surface, so
+            // no impact normal is needed here.
+            if (particles) {
+                const int n = 4 + h.dmg / 4;
+                particles->push(h.impactPos, vec3{0.0f, 0.0f, 0.6f},
+                                ParticleKind::Spark,
+                                static_cast<std::uint8_t>(n > 12 ? 12 : n), 0,
+                                static_cast<std::uint32_t>(tick) ^
+                                    static_cast<std::uint32_t>(
+                                        entt::to_integral(h.proj)));
             }
         }
         if (landed) ++hits;
@@ -1304,7 +1351,7 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
 bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId layer,
                        float dt, bool wantsAttack, std::uint64_t tick,
                        const MacroGrid* grid, CarveProposalQueue* carves,
-                       const StatusSet* status) {
+                       const StatusSet* status, ParticleBurstQueue* particles) {
     Entity self = entt::null;
     for (auto e : reg.view<const CameraTag, const Transform>()) {
         if (reg.get<const Transform>(e).layer != layer) continue;
@@ -1443,7 +1490,7 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
     // deliberately no second way for something to die.
     // MELEEGRID: forward grid so WallBrace soaks player melee (mobs/projectiles already do).
     DamageResult r = apply_damage(reg, pool, best, swingDmg,
-                                  DamageChannel::Kinetic, self, grid);
+                                  DamageChannel::Kinetic, self, grid, particles);
     pm.cooldownMs = swingCd;
     if (r.lethal) ++pm.kills;
     (void)bus;

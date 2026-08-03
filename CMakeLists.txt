@@ -233,7 +233,7 @@ set(_giga_spv_files "")
 # explicit list rather than a GLOB — a stray .glsl should not silently start forcing
 # every shader to recompile.
 set(_giga_glsl_includes ${CMAKE_SOURCE_DIR}/shaders/material_surface.glsl ${CMAKE_SOURCE_DIR}/shaders/volumetric_fog.glsl)
-foreach(_sh cube.frag body.vert prop.vert prop.frag raymarch.vert raymarch.frag)
+foreach(_sh cube.frag body.vert prop.vert prop.frag raymarch.vert raymarch.frag wire.vert wire.frag particle.vert particle.frag)
     add_custom_command(
         OUTPUT ${_giga_spv_dir}/${_sh}.spv
         COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O
@@ -253,6 +253,26 @@ add_custom_command(
     DEPENDS ${CMAKE_SOURCE_DIR}/shaders/light_grid.comp
     COMMENT "glslc light_grid.comp -> light_grid.comp.spv")
 list(APPEND _giga_spv_files ${_giga_spv_dir}/light_grid.comp.spv)
+
+# GPU verlet for hanging wires (antourage ghost chains).
+add_custom_command(
+    OUTPUT ${_giga_spv_dir}/wire_sim.comp.spv
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0
+        ${CMAKE_SOURCE_DIR}/shaders/wire_sim.comp
+        -o ${_giga_spv_dir}/wire_sim.comp.spv
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/wire_sim.comp
+    COMMENT "glslc wire_sim.comp -> wire_sim.comp.spv")
+list(APPEND _giga_spv_files ${_giga_spv_dir}/wire_sim.comp.spv)
+
+# GPU sim for the unified particle pool (blood/dust/sparks/drips).
+add_custom_command(
+    OUTPUT ${_giga_spv_dir}/particle_sim.comp.spv
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0
+        ${CMAKE_SOURCE_DIR}/shaders/particle_sim.comp
+        -o ${_giga_spv_dir}/particle_sim.comp.spv
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/particle_sim.comp
+    COMMENT "glslc particle_sim.comp -> particle_sim.comp.spv")
+list(APPEND _giga_spv_files ${_giga_spv_dir}/particle_sim.comp.spv)
 
 # GPU compute prop frustum culling shader.
 add_custom_command(
@@ -393,7 +413,7 @@ if(GIGA_BUILD_TESTS)
     # [2026-08-02] Dropped from 33919 to 23416 due to the removal of the legacy gpu::PropPlacer system and its tests.
     # [2026-08-02] Dropped from 23416 to 23271 due to the removal of procedural props from props.csv
     set_tests_properties(world_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "23271/23271 checks passed"
+        PASS_REGULAR_EXPRESSION "23291/23291 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically
@@ -427,7 +447,7 @@ if(GIGA_BUILD_TESTS)
     # friction for this file.
     #
     # OBSERVED, not derived: `build-win\audit_test.exe` printed
-    # `audit_test: 149 checks, 0 failures` on 2026-07-30 — was 140/0 before
+    # `audit_test: 150 checks, 0 failures` on 2026-07-30 — was 140/0 before
     # travel_arrival_not_in_wall (9 new CHECKs) closed the elevator soft-lock where
     # keyboard/--shot kept x/y and planted z=kArrivalZ inside a solid column.
     # Earlier: 140 after descend_same_target_once (12 CHECKs); 41/2 on 2026-07-29
@@ -449,7 +469,7 @@ if(GIGA_BUILD_TESTS)
     # configures first) or `cmake -S . -B build-win` before trusting a ctest verdict on a pin.
     add_test(NAME audit_findings COMMAND audit_test)
     set_tests_properties(audit_findings PROPERTIES
-        PASS_REGULAR_EXPRESSION "audit_test: 149 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "audit_test: 150 checks, 0 failures")
 
     # THE COUNT IS PINNED HERE TOO — the same mechanism as audit_findings above, now on
     # the target that carries 3,887 of the repo's 4,036 CHECK sites. Until this line
@@ -525,7 +545,10 @@ if(GIGA_BUILD_TESTS)
     # (finalize_deaths strips Velocity again; corpses stay static). Props.csv pipeline
     # (52947b3) added no new CHECKs. Verified green: game_test 236272/0.
     # 236272 -> 236272 (0) on 2026-08-02: PropPlacer legacy tests removed (actually 6 dropped but net delta is 0 somehow).
-        PASS_REGULAR_EXPRESSION "game_test: 236233 checks, 0 failures")
+    # 218985 -> 219307 (+322) on 2026-08-03: unified particle pool game half —
+    # suite_particles.inl (generated table row sanity, ParticleBurstQueue ring
+    # incl. its 255-push overflow loop, apply_damage-is-the-blood-writer).
+        PASS_REGULAR_EXPRESSION "game_test: 219307 checks, 0 failures")
 
 
 

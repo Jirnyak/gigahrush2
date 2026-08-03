@@ -40,7 +40,7 @@ struct RideResult {
 // `fromFloor + dir` through `registry`; if that floor is not loaded, returns a
 // no-op result and leaves `player` untouched. Otherwise folds the player's record
 // back on its current layer, moves it to the arrival cell (keeps x/y, sets cell
-// z = `arrivalZ`), re-embodies it as player on the destination layer preserving
+// z = `arrivalCoord`), re-embodies it as player on the destination layer preserving
 // camera yaw/pitch/fov + fly mode, and returns the new player entity.
 //
 // `player` must be an embodied record (carry an NpcRef); otherwise this is a
@@ -48,6 +48,6 @@ struct RideResult {
 // number -> layer, not the reverse — the app already knows the player's floor.
 RideResult ride_elevator(Registry& reg, NpcPool& pool,
                          const FloorRegistry& registry, Entity player,
-                         int fromFloor, int dir, std::uint8_t arrivalZ);
+                         int fromFloor, int dir, std::uint8_t arrivalCoord);
 
 } // namespace giga::game

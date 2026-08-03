@@ -29,49 +29,64 @@ void push_quad(std::vector<PropVertex>& v, std::vector<uint32_t>& idx,
     idx.push_back(base + 0); idx.push_back(base + 2); idx.push_back(base + 3);
 }
 
-// Add a triangle fan cap at height `y`, radius `r`, `segs` sides.
-// faceUp=true -> +Y cap, false -> -Y cap.
-void push_cap(std::vector<PropVertex>& v, std::vector<uint32_t>& idx,
-              float r, float y, int segs, bool faceUp) {
-    vec3 cn = {0.0f, faceUp ? 1.0f : -1.0f, 0.0f};
-    uint32_t centre = static_cast<uint32_t>(v.size());
-    v.push_back({{0.0f, y, 0.0f}, cn});
-    for (int i = 0; i <= segs; ++i) {
-        float ang = (2.0f * kPi * i) / segs;
-        v.push_back({{r * std::cos(ang), y, r * std::sin(ang)}, cn});
-    }
-    for (int i = 0; i < segs; ++i) {
-        uint32_t a = centre + 1 + i;
-        uint32_t b = centre + 1 + i + 1;
-        if (faceUp) { idx.push_back(centre); idx.push_back(a); idx.push_back(b); }
-        else        { idx.push_back(centre); idx.push_back(b); idx.push_back(a); }
+// Swizzle a local (axis, u, v) triple into xyz with the cylinder axis on
+// `axis` (0=x, 1=y, 2=z). One generator, three oriented meshes.
+vec3 ax(int axis, float a, float u, float v) {
+    switch (axis) {
+        case 0:  return {a, u, v};
+        case 1:  return {u, a, v};
+        default: return {u, v, a};
     }
 }
 
-// Cylinder sides with smooth normals.
-void push_cylinder_sides(std::vector<PropVertex>& v, std::vector<uint32_t>& idx,
-                         float r, float y0, float y1, int segs,
-                         float angStart = 0.0f, float angEnd = 2.0f * kPi) {
-    float span = angEnd - angStart;
+// Unit FLAT-SHADED 8-gon cylinder along `axis`: length 1 (a in +-0.5), radius
+// 0.5. Every facet carries its own face normal — hard edges by construction.
+void push_cylinder(std::vector<PropVertex>& v, std::vector<uint32_t>& idx,
+                   int axis, int segs = 8) {
+    const float r = 0.5f;
+    // The (a, u, v) -> xyz swizzle for axis 1 is an ODD permutation — it
+    // mirrors orientation, so its winding must flip or the whole Y cylinder
+    // renders inside-out (measured on axes 0/2 first: sides low->high order
+    // back-face-culled away and only the elbow boxes drew).
+    const bool flip = axis == 1;
     for (int i = 0; i < segs; ++i) {
-        float a0 = angStart + span * i       / segs;
-        float a1 = angStart + span * (i + 1) / segs;
-        float c0 = std::cos(a0), s0 = std::sin(a0);
-        float c1 = std::cos(a1), s1 = std::sin(a1);
-        vec3 n0 = {c0, 0.0f, s0};
-        vec3 n1 = {c1, 0.0f, s1};
-        uint32_t base = static_cast<uint32_t>(v.size());
-        v.push_back({{r * c0, y0, r * s0}, n0});
-        v.push_back({{r * c0, y1, r * s0}, n0});
-        v.push_back({{r * c1, y1, r * s1}, n1});
-        v.push_back({{r * c1, y0, r * s1}, n1});
-        idx.push_back(base);     idx.push_back(base + 1); idx.push_back(base + 2);
-        idx.push_back(base);     idx.push_back(base + 2); idx.push_back(base + 3);
+        const float a0 = (2.0f * kPi * i) / segs;
+        const float a1 = (2.0f * kPi * (i + 1)) / segs;
+        const float am = 0.5f * (a0 + a1);
+        const vec3 n = ax(axis, 0.0f, std::cos(am), std::sin(am));
+        const vec3 q0 = ax(axis, -0.5f, r * std::cos(a0), r * std::sin(a0));
+        const vec3 q1 = ax(axis, -0.5f, r * std::cos(a1), r * std::sin(a1));
+        const vec3 q2 = ax(axis, 0.5f, r * std::cos(a1), r * std::sin(a1));
+        const vec3 q3 = ax(axis, 0.5f, r * std::cos(a0), r * std::sin(a0));
+        if (flip) push_quad(v, idx, q0, q3, q2, q1, n);
+        else      push_quad(v, idx, q0, q1, q2, q3, n);
+        // End caps as facet triangles, flat axial normals.
+        for (int e = 0; e < 2; ++e) {
+            const float aa = e == 0 ? -0.5f : 0.5f;
+            const vec3 cn = ax(axis, e == 0 ? -1.0f : 1.0f, 0.0f, 0.0f);
+            const uint32_t base = static_cast<uint32_t>(v.size());
+            v.push_back({ax(axis, aa, 0.0f, 0.0f), cn});
+            v.push_back({ax(axis, aa, r * std::cos(a0), r * std::sin(a0)), cn});
+            v.push_back({ax(axis, aa, r * std::cos(a1), r * std::sin(a1)), cn});
+            if ((e == 0) != flip) {
+                idx.push_back(base); idx.push_back(base + 2); idx.push_back(base + 1);
+            } else {
+                idx.push_back(base); idx.push_back(base + 1); idx.push_back(base + 2);
+            }
+        }
     }
 }
 
-// ─────────────────────── shape builders ───────────────────────────────────────
-// (Procedural mesh builders removed as part of the legacy cleanup)
+// Unit box, +-0.5 on every axis, one flat normal per face.
+void push_box(std::vector<PropVertex>& v, std::vector<uint32_t>& idx) {
+    const float h = 0.5f;
+    push_quad(v, idx, {h,-h,-h}, {h,h,-h}, {h,h,h}, {h,-h,h}, {1,0,0});
+    push_quad(v, idx, {-h,-h,-h}, {-h,-h,h}, {-h,h,h}, {-h,h,-h}, {-1,0,0});
+    push_quad(v, idx, {-h,h,-h}, {-h,h,h}, {h,h,h}, {h,h,-h}, {0,1,0});
+    push_quad(v, idx, {-h,-h,-h}, {h,-h,-h}, {h,-h,h}, {-h,-h,h}, {0,-1,0});
+    push_quad(v, idx, {-h,-h,h}, {h,-h,h}, {h,h,h}, {-h,h,h}, {0,0,1});
+    push_quad(v, idx, {-h,-h,-h}, {-h,h,-h}, {h,h,-h}, {h,-h,-h}, {0,0,-1});
+}
 
 // ─────────────────────── upload to GPU ───────────────────────────────────────
 
@@ -119,6 +134,10 @@ bool build_prop_mesh(PropShape shape, const VulkanDevice& dev, PropMesh& out) {
     indices.reserve(512);
 
     switch (shape) {
+        case PropShape::Box:       push_box(verts, indices); break;
+        case PropShape::CylinderX: push_cylinder(verts, indices, 0); break;
+        case PropShape::CylinderY: push_cylinder(verts, indices, 1); break;
+        case PropShape::CylinderZ: push_cylinder(verts, indices, 2); break;
         default:
             std::fprintf(stderr, "[prop] unknown shape %d\n", static_cast<int>(shape));
             return false;

@@ -38,6 +38,7 @@
 #include "game/npc_pool.h"       // giga::game::NpcPool, NpcId
 #include "world/level_stack.h"   // giga::LevelStack, LayerId
 #include "world/nav.h"           // giga::nav::CoarseGraph, FineNav
+#include "game/antourage/antourage.h" // AntourageBake — per-floor baked dressing
 
 namespace giga::game {
 
@@ -217,7 +218,7 @@ public:
     // dormant while the demo stack happened to be 0..4.
     RideResult travel(LevelStack& stack, FloorRegistry& reg, Registry& ecs,
                       NpcPool& pool, Entity player, int fromFloor, int dir,
-                      std::uint8_t arrivalZ, NpcId& playerId);
+                      std::uint8_t arrivalCoord, NpcId& playerId);
 
     // Jump straight to floor `toFloor` — the console's teleport, and the shared
     // tail travel() resolves into. Loads the destination on demand, moves the
@@ -229,7 +230,7 @@ public:
     // registered floor, not the adjacent one.
     RideResult teleport(LevelStack& stack, FloorRegistry& reg, Registry& ecs,
                         NpcPool& pool, Entity player, int fromFloor, int toFloor,
-                        std::uint8_t arrivalZ, NpcId& playerId);
+                        std::uint8_t arrivalCoord, NpcId& playerId);
 
     // True when floor `number` currently has a resident layer.
     bool loaded(const FloorRegistry& reg, int number) const {
@@ -240,6 +241,14 @@ public:
     // currently resident (nav lives only while the floor is loaded — ensure_loaded
     // bakes it, unload frees it). The pointer stays valid until `number` unloads.
     const FloorNav* nav_at(const FloorRegistry& reg, int number) const;
+
+    // The resident floor's antourage bake (wire chains etc.), or null when the
+    // floor is cold. Render-side consumers only.
+    const AntourageBake* antourage_at(const FloorRegistry& reg, int number) const;
+    // Same, keyed by the RESIDENT layer — what a render feeder that only knows
+    // its LayerId asks.
+    const AntourageBake* antourage_at_layer(const FloorRegistry& reg,
+                                            LayerId layer) const;
 
     int keep_radius() const { return keepRadius_; }
 
@@ -253,7 +262,8 @@ private:
 
     // Embody a module's cold crowd onto `layer`. See ensure_loaded for the
     // player-designation and skip-already-embodied rules.
-    void embody_crowd(Registry& ecs, NpcPool& pool, FloorModule& fm, LayerId layer,
+    void embody_crowd(Registry& ecs, NpcPool& pool, const World& world,
+                      FloorModule& fm, LayerId layer,
                       NpcId& playerId, Entity& outPlayer);
 
     FloorModule modules_[kMaxModules];
@@ -262,6 +272,9 @@ private:
     // FloorStreamer object (a stack local in app + tests) tiny. ensure_loaded
     // bakes into nav_[m]; unload resets it back to null.
     std::unique_ptr<FloorNav> nav_[kMaxModules];
+    // Per-module antourage bake (the GHOST half: wire chains for the render
+    // backend; the solid half lives in the grid itself). Same lifetime as nav_.
+    std::unique_ptr<AntourageBake> antourage_[kMaxModules];
     ModuleId next_ = 0; // bump allocator for ModuleId
     std::vector<LayerId> freeSlots_;
     int keepRadius_ = 0;

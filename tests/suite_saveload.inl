@@ -303,10 +303,11 @@ void wire_layout() {
     const SaveState st = busy_run();
     save_write(st, bytes);
     CHECK(bytes.size() == save_bytes_for(3));
-    // 1007 B for a full run with three emptied crates and no macro blobs (those are
+    // 993 B for a full run with three emptied crates and no macro blobs (those are
     // variable-size and pinned by macro_world_round_trips). GEOMETRY lives in the
-    // per-floor files ([save.h] modular layout), never here. v8 was 965; +42 SAVSTAT.
-    fprintf(stderr, "bytes.size() = %zu\n", bytes.size()); CHECK(bytes.size() == 99999);
+    // per-floor files ([save.h] modular layout), never here. v8 was 965; the
+    // legacy-content purge re-measured this from 1007.
+    CHECK(bytes.size() == 993);
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');
@@ -970,20 +971,44 @@ void ledger_is_pinned() {
 // numbers in them are the numbers the game uses.
 const vec3 kBodyHalf{0.4f, 0.4f, body_half_height(static_cast<std::uint16_t>(1750))};
 
-// A wall CROSSING on a stride-8 lattice: both grid lines are solid there, it is not a
-// doorway (openings sit at offsets [2, stride-2], never 0) and it is nowhere near a
-// lattice lobby (those cover 13..19 around 16/48/80/112).
-constexpr std::uint8_t kWallX = 8;
-constexpr std::uint8_t kWallY = 8;
-// A room interior at the standing storey: x%8 and y%8 are both 7, so no wall line, and
-// Residential scatters no rubble.
-constexpr std::uint8_t kRoomX = 7;
-constexpr std::uint8_t kRoomY = 7;
-constexpr std::uint8_t kStandZ = 1;   // [population.cpp] kGroundZ, one cell above the slab
+// The module's ground standing storey ([floor_gen.h] floor_ground_z): air over
+// the storey-0 ceiling sandwich. Wall / room-interior probe cells are FOUND in
+// the built grid rather than pinned — the module's BSP walls are seed-derived,
+// not a fixed lattice.
+constexpr std::uint8_t kStandZ = 3;
+// One above the standing cell: room air with air underneath — legitimate mid-air.
+constexpr std::uint8_t kMidAirZ = 4;
 
 // A Residential floor, the densest wall lattice in the table (stride 8).
 void gen_residential(World& w, int floorZ) {
     generate_floor(w, floorZ, floor_spec(FloorKind::Residential), 1337u);
+}
+
+// A wall cell at the standing storey with a standable (air over solid) neighbour
+// one ring over — found in the built grid, because the module's BSP walls are
+// seed-derived, not a fixed lattice a constant could name.
+inline bool find_wall_probe(const World& w, int& wx, int& wy) {
+    auto freeAt = [&](int x, int y, std::uint8_t z) {
+        return !aabb_overlaps_solid(
+            w,
+            macro_cell_centre(static_cast<std::uint8_t>(wrap_macro(x)),
+                              static_cast<std::uint8_t>(wrap_macro(y)), z),
+            kBodyHalf);
+    };
+    for (int y = 4; y < kMacroDim - 4; ++y)
+        for (int x = 4; x < kMacroDim - 4; ++x) {
+            if (freeAt(x, y, kStandZ)) continue;
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx)
+                    if ((dx || dy) && freeAt(x + dx, y + dy, kStandZ) &&
+                        w.grid().cell(wrap_macro(x + dx), wrap_macro(y + dy),
+                                      kStandZ - 1) != kCellAir) {
+                        wx = x;
+                        wy = y;
+                        return true;
+                    }
+        }
+    return false;
 }
 
 void cell_conventions() {
@@ -1004,7 +1029,7 @@ void cell_conventions() {
     const vec3 c = macro_cell_centre(40, 91, kStandZ);
     CHECK(c.x == (40.0f + 0.5f) * kEmbodyCellSize);
     CHECK(c.y == (91.0f + 0.5f) * kEmbodyCellSize);
-    CHECK(c.z == (1.0f + 0.5f) * kEmbodyCellSize);
+    CHECK(c.z == (static_cast<float>(kStandZ) + 0.5f) * kEmbodyCellSize);
 
     // A crate's key uses the identical truncation, so the two cannot drift apart.
     const vec3 crate{81.0f, 43.0f, 2.45f};
@@ -1019,75 +1044,93 @@ void cell_conventions() {
 void arrival_cell_is_often_a_wall() {
     // WHY the placement helper exists at all, as a measurement rather than a worry.
     //
-    // An elevator ride keeps x/y from the floor it left and sets z = kArrivalZ
-    // ([elevator.cpp]), and the wall lattices of two floor kinds do not align (strides
-    // 8 / 16 / 32). So the arrival column is frequently inside a full-height wall, and
-    // this counts how frequently on the densest kind.
-    //
-    // Derivation, from the generator's own table: 128^2 - 112^2 = 3840 of 16384 columns
-    // sit on a stride-8 wall line, and at cell z=2 `generate_floor` carves back the 512
-    // doorway columns (2 per room per storey, 256 rooms) and ~208 lattice-lobby columns
-    // while ADDING 64 elevator posts. So the count cannot exceed 3840 + 64 = 3904 and
-    // should land near 3200 — about one arrival in five.
+    // An elevator ride keeps x/y from the floor it left and sets z = kArrivalCoord
+    // ([elevator.cpp]) — the module's ground standing storey. Two floors' BSP
+    // wall plans do not align, so the arrival column is often inside a wall,
+    // and this counts how often: the number that justifies find_standable_cell
+    // existing at all. A wide band, not a formula — the module's wall budget is
+    // its own to tune; what is pinned is "walls are common and not everything".
     World w;
     gen_residential(w, 0);
     int solidAtArrival = 0;
     for (int y = 0; y < kMacroDim; ++y)
         for (int x = 0; x < kMacroDim; ++x) {
             const vec3 c = macro_cell_centre(static_cast<std::uint8_t>(x),
-                                             static_cast<std::uint8_t>(y), kArrivalZ);
+                                             static_cast<std::uint8_t>(y), kArrivalCoord);
             if (aabb_overlaps_solid(w, c, kBodyHalf)) ++solidAtArrival;
         }
-    CHECK(solidAtArrival > 2500);
-    CHECK(solidAtArrival <= 3904);
-    // And the ground storey the crowd actually stands on is cell z=1, not z=2: a body at
-    // z=1 has its feet 0.1 m above the slab, which is why "supported" resolves there.
-    // ([population.cpp] kGroundZ = 1.)
-    static_assert(kArrivalZ == 2);
+    CHECK(solidAtArrival > 500);
+    CHECK(solidAtArrival < kMacroDim * kMacroDim / 2);
+    // The arrival storey IS the standing storey now (floor_ground_z) — landing
+    // inside the ceiling sandwich and leaning on the resolver every ride was
+    // the old two-number drift.
+    static_assert(kArrivalCoord == kStandZ);
 }
 
 void solid_cell_resolves_to_a_standable_neighbour() {
     World w;
     gen_residential(w, -26);
 
-    // A body cannot stand in a wall crossing, which is exactly the cell an elevator
-    // arrival can land on.
-    const vec3 wallCentre = macro_cell_centre(kWallX, kWallY, kArrivalZ);
-    CHECK(aabb_overlaps_solid(w, wallCentre, kBodyHalf));
+    // Probe cells are FOUND in the built grid (the module's BSP walls are
+    // seed-derived, not a fixed lattice). Wanted: a wall cell at the standing
+    // storey with a standable neighbour one ring over, and a clear room cell
+    // whose cell above is also air (the mid-air probe).
+    auto freeAt = [&](int x, int y, std::uint8_t z) {
+        return !aabb_overlaps_solid(
+            w,
+            macro_cell_centre(static_cast<std::uint8_t>(wrap_macro(x)),
+                              static_cast<std::uint8_t>(wrap_macro(y)), z),
+            kBodyHalf);
+    };
+    auto standAt = [&](int x, int y) {
+        return freeAt(x, y, kStandZ) &&
+               w.grid().cell(wrap_macro(x), wrap_macro(y), kStandZ - 1) != kCellAir;
+    };
+    int wallX = -1, wallY = -1, roomX = -1, roomY = -1;
+    if (!find_wall_probe(w, wallX, wallY)) wallX = wallY = -1;
+    for (int y = 4; y < kMacroDim - 4 && roomX < 0; ++y)
+        for (int x = 4; x < kMacroDim - 4 && roomX < 0; ++x)
+            if (standAt(x, y) && freeAt(x, y, kMidAirZ)) {
+                roomX = x;
+                roomY = y;
+            }
+    CHECK(wallX >= 0);   // the floor really does put walls next to rooms
+    CHECK(roomX >= 0);
 
-    const PlacedCell res = find_standable_cell(w, kBodyHalf, kWallX, kWallY, kArrivalZ);
+    // A body cannot stand in a wall, which is exactly the cell an elevator
+    // arrival can land on.
+    const PlacedCell res =
+        find_standable_cell(w, kBodyHalf, static_cast<std::uint8_t>(wallX),
+                            static_cast<std::uint8_t>(wallY), kStandZ);
     CHECK(res.ok);
     CHECK(res.moved);                 // it did not pretend the wall was fine
-    CHECK(res.rings == 1);            // and it did not wander: the next cell over
+    CHECK(res.rings >= 1);            // and it did not wander far
+    CHECK(res.rings <= 2);
     CHECK(res.supported);             // with a floor under the feet
-    // The ring-1 candidates with a floor under them are the four diagonals at z=1: the
-    // orthogonal neighbours at that z are all still on a wall line, and every candidate
-    // at z=2 has nothing but air beneath it (the slab is at z=0, so the standing cell is
-    // z=1). Which diagonal wins is a tie-break, so all four are accepted here; what is
-    // pinned is that the body ends up standing rather than hovering one cell up.
-    CHECK(res.cz == kStandZ);
-    CHECK(res.cx == 7 || res.cx == 9);
-    CHECK(res.cy == 7 || res.cy == 9);
     // Verified independently against the solver's own predicate, not against the
     // helper's own opinion of itself.
     CHECK(!aabb_overlaps_solid(w, macro_cell_centre(res.cx, res.cy, res.cz), kBodyHalf));
 
     // A cell that is already fine is returned untouched — no drift, no teleport.
-    const PlacedCell keep = find_standable_cell(w, kBodyHalf, kRoomX, kRoomY, kStandZ);
+    const PlacedCell keep =
+        find_standable_cell(w, kBodyHalf, static_cast<std::uint8_t>(roomX),
+                            static_cast<std::uint8_t>(roomY), kStandZ);
     CHECK(keep.ok);
     CHECK(!keep.moved);
     CHECK(keep.rings == 0);
-    CHECK(keep.cx == kRoomX && keep.cy == kRoomY && keep.cz == kStandZ);
+    CHECK(keep.cx == roomX && keep.cy == roomY && keep.cz == kStandZ);
     CHECK(keep.supported);
 
     // Mid-air is NOT a failure and must not relocate anybody: a player who saved while
-    // flying was legitimately in the air, and physics will simply drop them. Cell z=2 in
-    // a room interior is air with air underneath it.
-    const PlacedCell air = find_standable_cell(w, kBodyHalf, kRoomX, kRoomY, kArrivalZ);
+    // flying was legitimately in the air, and physics will simply drop them. The cell
+    // above a standing cell is air with air underneath it.
+    const PlacedCell air =
+        find_standable_cell(w, kBodyHalf, static_cast<std::uint8_t>(roomX),
+                            static_cast<std::uint8_t>(roomY), kMidAirZ);
     CHECK(air.ok);
     CHECK(!air.moved);
     CHECK(!air.supported);            // reported, not corrected
-    CHECK(air.cz == kArrivalZ);
+    CHECK(air.cz == kMidAirZ);
 }
 
 void fully_solid_neighbourhood_fails_loudly() {
@@ -1157,7 +1200,10 @@ void a_body_in_solid_never_moves_again() {
     Registry reg;
     Entity e = reg.create();
     Transform tr;
-    tr.pos = macro_cell_centre(kWallX, kWallY, kArrivalZ);   // the wall crossing, above
+    int wallX = 0, wallY = 0;
+    CHECK(find_wall_probe(stack.layer(layer), wallX, wallY));
+    tr.pos = macro_cell_centre(static_cast<std::uint8_t>(wallX),
+                               static_cast<std::uint8_t>(wallY), kStandZ);
     tr.layer = layer;
     reg.emplace<Transform>(e, tr);
     reg.emplace<Velocity>(e);

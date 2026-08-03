@@ -28,6 +28,27 @@ inline constexpr CellType kCellAir = 0;
 struct SubMask {
     std::uint64_t words[kSubMaskWords] = {};
 
+    // Lowest occupied sub-layer (0..7), or -1 when empty. word i IS layer sz=i
+    // (sub_bit packs sx + sy*8 + sz*64). Anything that HANGS from a cell (a
+    // wire anchor, a lamp, a pipe hugging a ceiling) must ask for the REAL
+    // under-face — partially carved cells (the sandwich lintels) keep their
+    // matter in the top layers only, and hanging from the cell PLANE reads as
+    // hanging from air (owner's screenshots, 2026-08-03).
+    int lowest_layer() const {
+        for (int sz = 0; sz < 8; ++sz)
+            if (words[sz] != 0) return sz;
+        return -1;
+    }
+    // Same, but only the 2x2 CENTRE column — a point attachment needs matter
+    // straight above it, not somewhere at the cell's rim.
+    int lowest_layer_centre() const {
+        const std::uint64_t centre = (std::uint64_t{3} << (3 + 3 * 8)) |
+                                     (std::uint64_t{3} << (3 + 4 * 8));
+        for (int sz = 0; sz < 8; ++sz)
+            if (words[sz] & centre) return sz;
+        return -1;
+    }
+
     bool empty() const {
         for (auto w : words) if (w) return false;
         return true;

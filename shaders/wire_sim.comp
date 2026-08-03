@@ -1,0 +1,70 @@
+#version 450
+// wire_sim.comp — GPU verlet for hanging wires (antourage GHOST chains).
+//
+// ONE-WAY by law ([game/antourage/antourage.h]): bodies push wires, wires never
+// push anything back — the whole sim lives on the render side and the CPU tick
+// pays zero. One invocation per CHAIN (8 points): counts are tiny (~100 chains
+// per floor), so the constraint relaxation runs serially per thread and needs
+// no cross-invocation sync at all.
+//
+// Layout must stay in LOCKSTEP with gpu::GpuWireChain (render/wire_pass.h) and
+// shaders/wire.vert: {vec4 meta; vec4 cur[8]; vec4 prev[8]}, meta.x = segment
+// rest length, meta.y = alive flag (CPU writes it from the anchor probe),
+// cur.w = inverse mass (0 = pinned endpoint).
+
+layout(local_size_x = 64) in;
+
+struct WChain {
+    vec4 meta;
+    vec4 cur[8];
+    vec4 prev[8];
+};
+
+layout(std430, binding = 0) buffer Wires { WChain c[]; } wb;
+
+layout(push_constant) uniform Push {
+    vec4 sim;    // x = dt, y = gravity Z accel, z = chain count, w = damping
+    vec4 player; // xyz = player world pos, w = push radius
+} pc;
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= uint(pc.sim.z)) return;
+    if (wb.c[i].meta.y < 0.5) return;   // dead chain: anchors carved away
+
+    const float dt = pc.sim.x;
+    const float rest = wb.c[i].meta.x;
+
+    // Verlet integrate every free point.
+    for (int k = 0; k < 8; ++k) {
+        vec4 cur = wb.c[i].cur[k];
+        if (cur.w == 0.0) continue;     // pinned anchor point
+        vec3 vel = (cur.xyz - wb.c[i].prev[k].xyz) * pc.sim.w;
+        vec3 np = cur.xyz + vel + vec3(0.0, 0.0, pc.sim.y) * dt * dt;
+        // The player brushing through: a soft radial push (one-way).
+        vec3 dp = np - pc.player.xyz;
+        float r = pc.player.w;
+        float d2 = dot(dp, dp);
+        if (d2 < r * r && d2 > 1e-6) {
+            float d = sqrt(d2);
+            np += dp / d * (r - d) * 0.35;
+        }
+        wb.c[i].prev[k] = vec4(cur.xyz, 0.0);
+        wb.c[i].cur[k] = vec4(np, cur.w);
+    }
+
+    // Distance constraints, a few relaxation sweeps.
+    for (int it = 0; it < 4; ++it)
+        for (int k = 0; k < 7; ++k) {
+            vec4 A = wb.c[i].cur[k];
+            vec4 B = wb.c[i].cur[k + 1];
+            vec3 d = B.xyz - A.xyz;
+            float len = length(d);
+            if (len < 1e-5) continue;
+            float ws = A.w + B.w;
+            if (ws <= 0.0) continue;
+            vec3 corr = d * ((len - rest) / len);
+            wb.c[i].cur[k].xyz += corr * (A.w / ws);
+            wb.c[i].cur[k + 1].xyz -= corr * (B.w / ws);
+        }
+}

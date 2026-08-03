@@ -561,6 +561,13 @@ void generate_padic_floor(World& world, int number, const FloorSpec& spec,
     SubField<CellType>& sm =
         world.subfields().get_or_create<CellType>(kSubMaterialName);
 
+    // Declare this module's gravity frame ON THE WORLD. The regime is runtime
+    // state ([world/gravity.h]) — this is its generation-time default; the game
+    // may flip it later and consumers re-read it, they never cache the module
+    // constant.
+    world.gravity().global = vec3{0.0f, 0.0f, -9.81f};
+    world.gravity().regime = kPadicGravity;
+
     // Clear to air — including stale material pages from the floor this World
     // object held before (floor streaming recycles Worlds in place).
     sm.clear();

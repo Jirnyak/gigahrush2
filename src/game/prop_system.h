@@ -7,6 +7,7 @@
 #include "ecs/registry.h"
 #include "ecs/components.h"
 #include "game/event_bus.h"
+#include "game/interact_table.h"
 #include "game/prop_table.h"
 #include "world/world.h"
 #include "world/level_stack.h"
@@ -26,8 +27,12 @@ struct SubVoxelAnchor {
     std::uint8_t face = 0;                       // Опора: 0=Floor, 1=WallNorth, 2=Ceiling...
 };
 
+// The KIND is a row of data/interactables.csv ([interact_table.h] — generated
+// enum, so a new interactive is a CSV row, never an enum edit here). reachM
+// defaults from the table row; a prop's authored reach_mm overrides per spawn.
 struct Interactable {
-    enum class Kind : std::uint8_t { Terminal, ElectricalShield, LightBulb, Corpse, Loot } kind;
+    using Kind = InteractKind;
+    Kind kind;
     float reachM = 2.5f;
     bool active = true;
 };
@@ -47,6 +52,7 @@ using PropMeshTag    = giga::PropMeshTag;
 struct PropMesh {
     std::uint8_t shape     = 0;
     float        yaw       = 0.0f;
+    vec3         scale{1.0f, 1.0f, 1.0f}; // authored size (props.csv size_*_m)
     std::uint8_t matId     = 0;
     std::uint8_t emissive  = 0;
     std::uint8_t flags     = 0;
@@ -60,6 +66,7 @@ struct PropMeshInstance {
     vec3         origin{0.0f, 0.0f, 0.0f};
     float        yaw       = 0.0f;
     vec3         color{0.8f, 0.8f, 0.8f};
+    vec3         scale{1.0f, 1.0f, 1.0f}; // authored size (props.csv size_*_m)
     std::uint8_t matId     = 0;
     std::uint8_t emissive  = 0;
     std::uint8_t flags     = 0;

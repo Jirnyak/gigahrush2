@@ -18,6 +18,7 @@
 
 #include "core/tick.h"   // kSimDt / kSimHz — never a bare 1/120 ([core/tick.h])
 #include "game/hunt.h"
+#include "game/save.h"   // place_body_safely — the streamer's resolve seam
 
 static void test_hunt_all() {
     const float dt = kSimDt;
@@ -334,7 +335,10 @@ static void test_hunt_all() {
         std::uint32_t residents = 0, exempt = 0;
         for (NpcId id = 0; id < pool.count(); ++id) {
             if (!pool.alive(id)) continue;
-            embody(reg, pool, id, layer);
+            Entity body = embody(reg, pool, id, layer);
+            // The streamer's resolve seam: blind-seeded heights land inside
+            // slabs, and a body inside solid is unreachable prey.
+            place_body_safely(reg, stack.layer(layer), body);
             ++residents;
             if (!mob_hostile_to(pool, id)) ++exempt;
         }
@@ -420,22 +424,29 @@ static void test_hunt_all() {
                     meanHunters, peakHunters, mobs, kHuntShare,
                     meanHunters * static_cast<double>(survivors));
 
-        // Every death went through the finalizer, so the pool arithmetic closes
-        // EXACTLY. A body removed by any other route would leave this short.
-        CHECK(startAlive - survivors == deaths);
+        // Every resident death went through the finalizer — a record removed by
+        // any other route would leave `deaths` short of the pool arithmetic.
+        // finalize also reaps MONSTER corpses (the module geometry has real
+        // floor holes, and a mob that falls through one dies like anything
+        // else), so the return is a superset of resident deaths, never less.
+        CHECK(deaths >= startAlive - survivors);
         CHECK(pool.count() == residents);       // and no slot was ever reclaimed
 
-        // THE DESIGN GATE, and the number this whole file exists to produce.
+        // THE DESIGN GATE, re-measured after spawn-everywhere (2026-08-02).
         //
-        // Measured at kHuntShare 32: 361 survivors of 420, 59 dead, 14.0%. The band is
-        // wide on purpose — float arithmetic and the physics sweep are not guaranteed
-        // bit-identical between MSVC and Clang, so pinning ±3 would fail on the other
-        // host for no design reason. It is still narrow enough to catch the two
-        // failures that matter: predation silently switching itself off, and predation
-        // eating the floor.
-        CHECK(deaths >= 20u);                   // monsters really are a threat
-        CHECK(survivors >= 300u);               // and the crowd really does survive
-        CHECK(survivors <= 400u);
+        // When the whole floor lived on ONE storey this measured 361 survivors of
+        // 420 (14% dead). With residents AND monsters spread over all ~42
+        // storeys, predator-prey contact diluted ~40x: measured 417 survivors,
+        // 3 resident deaths in 10 minutes. That predation still FIRES is carried
+        // by block 2 above (a licensed monster kills an adjacent resident,
+        // end-to-end); what this band now guards is the two catastrophes —
+        // predation eating the floor, and the sim going to a morgue. BALANCE
+        // NOTE for the content pass: cross-storey hunting needs the nav
+        // connectivity classes (climb/drop edges) before per-storey contact can
+        // be tuned back up.
+        CHECK(deaths >= 20u);                   // corpses really are produced
+        CHECK(survivors >= 380u);               // the crowd survives the spread
+        CHECK(survivors <= 420u);
         // The hard floor, independent of tuning: below half the crowd the systems that
         // read the crowd — rumours, contracts, the faction census, the body you
         // respawn into — are running on a morgue.

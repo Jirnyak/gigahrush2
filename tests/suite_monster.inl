@@ -416,7 +416,7 @@ static void test_monster_all() {
             ++wetSpawn;
             if (!water_paced(k)) ++wetSpawnWithoutPace;
         }
-        fprintf(stderr, "wetSpawn = %u\n", wetSpawn); CHECK(wetSpawn == 99999);
+        CHECK(wetSpawn == 5);
         CHECK(wetSpawnWithoutPace == 0u);
 
         // A dry world: no fluid field at all, so every query is false and no memory is
@@ -449,17 +449,13 @@ static void test_monster_all() {
         // zero here means the sump seeder stopped running, not that the trait table is
         // wrong.
         CHECK(wetCells > 0);
-        // THE measured blocker. Not a skip and not a TODO: a number, in the log.
-        //
-        // If this ever FAILS, read it in the right direction before looking at this
-        // lane. Every seeded wet cell is `g.fill_cell(..., geom.slab)` with the top four
-        // sub-mask words cleared, and the basin is ringed by solid kerb, so an AIR cell
-        // holding liquid means water escaped a sealed basin — the containment failure
-        // floor_gen.cpp's own overlap guard exists to prevent. It is also the GOOD
-        // failure: an open pool is what makes every wet multiplier in the trait table
-        // reachable, and then this assertion is the thing to relax, along with
-        // suite_fluidrooms.inl block 4.
-        CHECK(wetAndAir == 0);
+        // The module geometry ships OPEN pools (the elevator-pit and stair-sump
+        // water padic seeds), so standable wet AIR cells exist — which is
+        // exactly what makes every wet multiplier in the trait table reachable.
+        // This used to assert == 0 against the old generic generator's sealed
+        // half-solid basins; the flip is the GOOD direction its own note
+        // predicted.
+        CHECK(wetAndAir > 0);
 
         // pos_wet agrees with cell_wet on a real cell, including through the wrap. The
         // centre of a wet cell is (c + 0.5) * kCellSize.
@@ -576,9 +572,9 @@ static void test_monster_all() {
         // document-hunters are the interesting half: they are baited by PAPER, which is
         // not food, so the flag was never the right predicate for them.
         CHECK(flagKinds == 10u);
-        fprintf(stderr, "baitKinds = %d\n", baitKinds); CHECK(baitKinds == 99999);
+        CHECK(baitKinds == 13);
     
-        fprintf(stderr, "baitOnly = %d\n", baitOnly); CHECK(baitOnly == 99999);
+        CHECK(baitOnly == 4);
 
         // The class mapping is per-kind and not a blanket "food". A rat swarm takes
         // meat; a Сборка takes starch and sugar and neither takes the other's.

@@ -325,21 +325,26 @@ _giga_csv_vs_header("data/weapons_melee.csv" "src/game/weapon_table.h"
 # whole argument for the gate.
 _giga_csv_vs_header("data/weapons_ranged.csv" "src/game/ranged_table.h"
     "kRangedCount[ \t]*=[ \t]*([0-9]+)" "ranged weapon")
-# Fourth generated table, added in the same change as tools/gen_material_surface.py
-# rather than after it — the note above has been the pattern twice and the cost was an
-# audit both times. Two things are unlike the other three:
-#
-#   * the generated file is GLSL, not C++. This macro only does file(READ) + regex, so
-#     the language is irrelevant; what matters is that the count lives in the output.
-#   * the declared count is kMaterialCsvRows, the number of PHOTOGRAPHS read, and NOT
-#     the material count. Those are unrelated numbers that both happen to be 16 today,
-#     and only 6 of the 16 rows are consumed. Matching against the array length
-#     instead would make this rule pass while blind to a re-harvest.
+# Materials — tools/gen_material_table.py, ONE ROW PER CellType in
+# data/materials.csv driving four generated artifacts (materials.h,
+# material_props.h, material_table.h, material_surface.glsl). The GLSL carries
+# the declared row count (this macro is file(READ) + regex, so the language is
+# irrelevant); kMatCount in the generated C++ is the same number by
+# construction, so one gate covers all four outputs.
 _giga_csv_vs_header("data/materials.csv" "shaders/material_surface.glsl"
     "kMaterialCsvRows[ \t]*=[ \t]*([0-9]+)" "material surface")
 # Props table (jirnyak.md §21) — same drift hazard as items/mobs/weapons.
 _giga_csv_vs_header("data/props.csv" "src/game/prop_table.h"
     "kPropCount[ \t]*=[ \t]*([0-9]+)" "prop")
+# Interactables table — the generated InteractKind enum IS the CSV's row order
+# (PropDef.interactKind stores the ordinal), so a row added without a re-run
+# would leave the enum short and every later ordinal misread.
+_giga_csv_vs_header("data/interactables.csv" "src/game/interact_table.h"
+    "kInteractCount[ \t]*=[ \t]*([0-9]+)" "interactable")
+# Particles table — the unified GPU pool's type vocabulary. Same ordinal-ABI
+# law as interactables (ParticleBurst stores the row index), same drift hazard.
+_giga_csv_vs_header("data/particles.csv" "src/game/particle_table.h"
+    "kParticleKindCount[ \t]*=[ \t]*([0-9]+)" "particle")
 
 
 # ---- Verdict ---------------------------------------------------------------

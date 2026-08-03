@@ -1,0 +1,6 @@
+id,cpp_name,prompt,reach_m,note
+terminal,Terminal,TERMINAL (DOOR LOCKS),4.0,wall terminal: door-lock control menu (app subscribes)
+electrical_shield,ElectricalShield,SABOTAGE ELECTRICAL SHIELD,3.5,power-grid node: sabotage kills the zone feed
+light_bulb,LightBulb,LIGHT BULB,2.5,ceiling light: shootable / future switch wiring
+corpse,Corpse,LOOT CORPSE,2.2,searchable body: loot transfer UI
+loot,Loot,PICK UP,2.0,floor loot pickup

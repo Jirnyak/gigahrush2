@@ -28,6 +28,7 @@
 #include <vector>
 #include "game/floor_spec.h" // FloorKind, FloorSpec
 #include "ecs/registry.h"
+#include "world/gravity.h"   // GravityRegime — the module declares its frame
 #include "world/level_stack.h"
 #include "game/event_bus.h"
 
@@ -43,6 +44,20 @@ class FloorCatalog;
 // module may hold it, and a second claimant is a refused registration + a red
 // test ([suite_floorcatalog.inl]).
 inline constexpr int kPadicFloorNumber = 4;
+
+// This module's declared gravity frame ([world/gravity.h] GravityRegime): the
+// dormitory tower stacks its storeys against -Z. The ENGINE is isotropic — a
+// sister module could build against -X and every consumer keyed on the regime
+// would follow it; the asymmetry is the module's emergent choice, never the
+// engine's.
+inline constexpr GravityRegime kPadicGravity = GravityRegime::NegZ;
+
+// The ground-storey STANDING coordinate along the gravity axis: storeys are
+// 3-cell (air at b, b+1; two-slab sandwich at b+2), so the first standing cell
+// (air with a solid floor one step toward -g) sits at coordinate 3 — storey 1's
+// air over storey 0's ceiling sandwich. Content placement (crates, mob packs)
+// keys on this through the floor_gen frame helpers, never on a literal.
+inline constexpr int kPadicGroundCoord = 3;
 
 // Register the module's catalog rows (currently: the claim on number 4).
 // Returns false if the claim was refused — another module took the number.

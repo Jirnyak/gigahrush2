@@ -10,7 +10,6 @@
 #include "game/npc_pool.h"
 #include "game/prop_system.h"
 #include "sim/fluid.h"     // fluid_at, kFluidMinFlow — a crate does not float
-#include "world/lattice.h"
 #include "world/materials.h"
 #include "world/types.h"
 #include "world/world.h"
@@ -66,12 +65,6 @@ ContainerKind pick_kind(FloorKind fk, std::uint32_t h) {
 // A cell a body can stand in, with something solid under it. The second half matters:
 // Derelict drops 12% of its slab cells, and a container spawned over a hole falls out
 // of the world.
-bool standable(const MacroGrid& g, int x, int y, int z) {
-    if (g.cell(x, y, z) != kCellAir) return false;
-    if (z <= 0) return false;
-    return g.cell(x, y, z - 1) != kCellAir;
-}
-
 // Candidates for one container: every item that can appear on this floor, in this
 // ROOM, under this container kind's share of the band cap. Returns the cumulative
 // weight total; `pool`/`cum` are parallel and must come in empty.
@@ -279,15 +272,27 @@ std::uint32_t spawn_floor_containers(Registry& reg, const World& world,
         const int oy = 2 + static_cast<int>((h >> 24) %
                                             static_cast<std::uint32_t>(
                                                 stride > 4 ? stride - 3 : 1));
-        const int cx = wrap_macro(rx * stride + ox);
-        const int cy = wrap_macro(ry * stride + oy);
-
-        // Ground storey, and only where a body could actually reach it.
-        int cz = 1;
-        if (!standable(g, cx, cy, cz)) continue;
+        // ANY storey, and only where a body could actually reach it. The cell
+        // comes from the module's GRAVITY FRAME ([floor_gen.h]): the two room
+        // draws are tangent coordinates, and the HEIGHT coordinate is drawn
+        // over the whole axis — the torus has no privileged storey, so crates
+        // land on every floor of the tower, not only the arrival one. A few
+        // tries per crate because most height draws land inside a slab.
+        int cx = 0, cy = 0, cz = 0;
+        bool spotFound = false;
+        for (std::uint32_t t = 0; t < 6 && !spotFound; ++t) {
+            const std::uint32_t hh = giga::hash_u32(h ^ ((t + 1u) * 0x9E3779B9u));
+            const int ch =
+                static_cast<int>(hh % static_cast<std::uint32_t>(kMacroDim));
+            floor_cell(world, wrap_macro(rx * stride + ox),
+                       wrap_macro(ry * stride + oy), ch, cx, cy, cz);
+            spotFound = floor_standable(world, cx, cy, cz);
+        }
+        if (!spotFound) continue;
         // Never on the extraction pad: the bank is a landmark, and a crate sitting on
         // it makes the one cell the player needs to find harder to read.
-        if (g.cell(cx, cy, cz - 1) == kMatExtract) continue;
+        const CellStep dn = regime_down(world.gravity().regime);
+        if (g.cell(cx + dn.x, cy + dn.y, cz + dn.z) == kMatExtract) continue;
         // Never in standing water. Today's basins are half-solid cells, so `standable`
         // above already refuses them on TYPE — this states the rule rather than the
         // accident, and it is the half that survives a floor kind seeding an open pool,

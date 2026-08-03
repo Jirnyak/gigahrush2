@@ -694,7 +694,7 @@ static_assert(kEmbodyCellSize == kCellSize,
 LoadTravel travel_to_saved_floor(LevelStack& stack, FloorRegistry& reg, Registry& ecs,
                                  NpcPool& pool, FloorStreamer& streamer, Entity player,
                                  int fromFloor, int targetFloor,
-                                 std::uint8_t arrivalZ) {
+                                 std::uint8_t arrivalCoord) {
     LoadTravel out;
     out.floor = fromFloor;
     out.player = player;
@@ -720,7 +720,7 @@ LoadTravel travel_to_saved_floor(LevelStack& stack, FloorRegistry& reg, Registry
         if (pid == kInvalidNpc) break;
 
         const RideResult ride = streamer.travel(stack, reg, ecs, pool, out.player,
-                                               out.floor, dir, arrivalZ, pid);
+                                               out.floor, dir, arrivalCoord, pid);
         if (!ride.moved) break;   // end of the stack, or the next floor would not load
         out.player = ride.player;
         out.layer = ride.layer;

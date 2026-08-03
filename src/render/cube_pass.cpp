@@ -7,50 +7,16 @@
 #include <cstdlib>
 #include <string>
 
+#include "render/material_table.h" // GENERATED: kMaterial + kMaterialMaps
 #include "world/materials.h"
 
 namespace giga::gpu {
 
 namespace {
 
-// Albedo per material id ([world/materials.h]), in **display-referred** values —
-// the shading (raymarch.frag / cube.frag) linearises once with pow(2.2) before
-// lighting, so these are what you would pick in a colour picker, not linear.
-//
-// The industrial half is MEASURED, not chosen: each value is the mean albedo of a
-// real 2 K photograph (Poly Haven, CC0), measured after linearising and converted
-// back for this table. data/materials.csv carries the source URL, the linear mean
-// and the luminance variance for every one, produced by tools/measure_materials.py.
-// The residential half is authored, because the pack has no wallpaper, parquet,
-// plaster or linoleum.
-//
-// Why bother measuring: hand-picked albedos drift bright and desaturated, which is
-// exactly how "flat painted cubes" looks. Real rust is darker and far more
-// saturated than anyone guesses.
-constexpr vec3 kMaterial[kMatCount] = {
-    /*  0 air, never drawn      */ {0.00f, 0.00f, 0.00f},
-    /*  1 concrete (maze)       */ {0.30f, 0.30f, 0.28f}, // aged Soviet panel concrete
-    /*  2 soil (maze)           */ {0.24f, 0.36f, 0.18f}, // dark earth / soil
-    /*  3 water marker (maze)   */ {0.18f, 0.28f, 0.55f},
-    /*  4 tan slab (maze)       */ {0.36f, 0.30f, 0.22f}, // muted Soviet floor slab
-    /*  5 extraction pad        */ {0.10f, 0.85f, 0.42f}, // emerald bank
-    /*  6 door leaf + frame     */ {0.16f, 0.24f, 0.42f}, // Soviet stairwell blue entrance door
-    /*  7 nav / hub pad         */ {0.00f, 0.80f, 0.95f},
-    // --- authentic Soviet Khrushchevka palette ---
-    /*  8 plaster    authored   */ {0.48f, 0.44f, 0.38f}, // aged Soviet plaster / wallpaper
-    /*  9 parquet    authored   */ {0.32f, 0.20f, 0.10f}, // rich Soviet varnished oak parquet
-    /* 10 shop shutter  measured*/ {0.38f, 0.40f, 0.42f}, // painted metal shutter
-    /* 11 lino          measured*/ {0.26f, 0.16f, 0.12f}, // Soviet maroon/brown linoleum
-    /* 12 factory wall  measured*/ {0.22f, 0.30f, 0.22f}, // Soviet panel green
-    /* 13 tread plate   measured*/ {0.38f, 0.24f, 0.15f}, // rusty metal tread
-    /* 14 rust          measured*/ {0.40f, 0.20f, 0.08f}, // dark oxidized rust
-    /* 15 rubble        measured*/ {0.22f, 0.18f, 0.14f}, // dark concrete rubble / soil
-    /* 16 electric grate        */ {0.85f, 0.70f, 0.15f},
-    /* 17 acid pool             */ {0.15f, 0.75f, 0.12f},
-    /* 18 fire cell             */ {0.85f, 0.25f, 0.04f},
-};
-static_assert(sizeof(kMaterial) / sizeof(kMaterial[0]) == kMatCount,
-              "one albedo row per material id in world/materials.h");
+// kMaterial (mean albedo per id) is GENERATED — render/material_table.h,
+// from data/materials.csv. Measured rows carry their provenance in
+// data/textures.csv; edit the CSV, never a literal here.
 
 } // namespace
 
@@ -61,33 +27,8 @@ const vec3* material_albedo_table(std::uint32_t* count) {
 
 namespace {
 
-// Which photograph in data/textures is a material's real albedo. Six rows,
-// because six is how many of the sixteen ids the pack covers. AUTHORITY for
-// this binding is the MATERIALS table in tools/gen_material_surface.py, and
-// data/textures/README.md restates it; ids 1..9 stay authored because the pack
-// has no plaster, wood, lino or concrete photograph.
-struct MaterialMap {
-    CellType id;
-    const char* file;
-};
-constexpr MaterialMap kMaterialMaps[] = {
-    {kMatShopShutter, "painted_metal_shutter.ktx2"},
-    {kMatLino, "rubber_tiles.ktx2"},
-    {kMatFactoryWall, "factory_wall.ktx2"},
-    {kMatTread, "metal_grate_rusty.ktx2"},
-    {kMatRust, "rusty_metal_03.ktx2"},
-    {kMatRubble, "rusty_corrugated_iron.ktx2"},
-};
-inline constexpr int kMaterialMapCount =
-    static_cast<int>(sizeof(kMaterialMaps) / sizeof(kMaterialMaps[0]));
-constexpr bool material_maps_in_range() {
-    for (const MaterialMap& m : kMaterialMaps)
-        if (m.id >= kMatCount) return false;
-    return true;
-}
-static_assert(material_maps_in_range(),
-              "every textured material id must be < kMatCount — the albedo array "
-              "is indexed by the id directly, with no mapping table");
+// kMaterialMaps (id -> KTX2 set) is GENERATED — render/material_table.h,
+// from data/materials.csv texture_id bindings against data/textures.csv.
 
 #ifndef GIGA_TEXTURE_DIR
 #define GIGA_TEXTURE_DIR "data/textures"
@@ -149,20 +90,15 @@ void CubePass::load_material_textures() {
     }
 
     for (const MaterialMap& m : kMaterialMaps) {
-        const std::string path_albedo = join(dir, m.file);
-        if (albedo_.load_layer(m.id, path_albedo.c_str()))
+        // Every file name comes from the generated table (data/textures.csv);
+        // an empty field means the asset set carries no such map.
+        if (albedo_.load_layer(m.id, join(dir, m.albedo).c_str()))
             texMask_ |= 1u << m.id;
-
-        std::string stem = m.file;
-        if (stem.size() >= 5 && stem.compare(stem.size() - 5, 5, ".ktx2") == 0)
-            stem.erase(stem.size() - 5);
-
-        const std::string path_normal = join(dir, (stem + "_normal.ktx2").c_str());
-        if (normal_.load_layer(m.id, path_normal.c_str()))
+        if (m.normal[0] != '\0' &&
+            normal_.load_layer(m.id, join(dir, m.normal).c_str()))
             normalMask_ |= 1u << m.id;
-
-        const std::string path_rough = join(dir, (stem + "_roughness.ktx2").c_str());
-        if (roughness_.load_layer(m.id, path_rough.c_str()))
+        if (m.roughness[0] != '\0' &&
+            roughness_.load_layer(m.id, join(dir, m.roughness).c_str()))
             roughnessMask_ |= 1u << m.id;
     }
 

@@ -387,10 +387,11 @@ void the_chain() {
     CHECK(log.rewardItemsLost == 0u);
     CHECK(log.earned == h.reward + s2.reward);
 
-    // Step 2 opens once step 1 is Complete. Asked on step 2's OWN shallowest floor,
-    // which is deeper than the hub, so this is the band check and the chain check at once.
+    // Step 2 was just COMPLETED above, so even on its own shallowest floor it is
+    // no longer offerable — a finished chain link never re-offers (only Unseen /
+    // Orphaned are eligible, [quest.cpp] quest_eligible).
     CHECK(step2 != kInvalidQuest);
-    CHECK(quest_eligible(log, step2, kQuestTable[step2 - 1].floorLo));
+    CHECK(!quest_eligible(log, step2, kQuestTable[step2 - 1].floorLo));
 
     // A reward that does not fit is COUNTED, never allowed to block a completion — a
     // blocked completion would leave an Active row the player has already finished, and

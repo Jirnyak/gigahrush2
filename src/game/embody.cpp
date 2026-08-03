@@ -46,6 +46,13 @@ Entity embody(Registry& reg, NpcPool& pool, NpcId id, LayerId layer) {
     // Stature drives the collider: ~0.4 m half-width, half-height from height.
     float hh = body_half_height(pool.height_mm(id));
     reg.emplace<AABB>(e, AABB{vec3{0.4f, 0.4f, hh}});
+    // Universal mass from stature: BMI-style m = 22 * height^2 (metres) —
+    // 1.75 m adult ≈ 67 kg, children scale down the same law. Feeds
+    // E = m*v^2/2 (fall damage) and p = m*v everywhere.
+    {
+        const float hm = resolved_height_mm(pool.height_mm(id)) * 0.001f;
+        reg.emplace<Mass>(e, Mass{22.0f * hm * hm});
+    }
     reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
     reg.emplace<Jump>(e, Jump{6.5f, false});
 

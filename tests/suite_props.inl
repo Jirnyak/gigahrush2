@@ -35,8 +35,8 @@ inline const PropPassInspector& inspect(const PropPass& pass) {
 
 // 1. Explicit coverage for all 4 PropShape enum values
 static void test_prop_shape_enum_coverage() {
-    static_assert(kPropShapeCount == 0, "kPropShapeCount must be 0");
-    static_assert(static_cast<uint8_t>(PropShape::kCount) == 0, "PropShape::kCount must be 0");
+    static_assert(kPropShapeCount == 4, "the rebuilt catalog: Box + 3 axis cylinders");
+    static_assert(static_cast<uint8_t>(PropShape::kCount) == 4, "PropShape::kCount must be 4");
 
     // Runtime loop check using non-constant local variables
     for (int s = 0; s < kPropShapeCount; ++s) {
@@ -74,7 +74,7 @@ static void test_prop_shape_enum_coverage() {
 
 // 2. Struct layout and size assertions
 static void test_prop_instance_layout() {
-    static_assert(sizeof(PropInstance) == 32, "PropInstance size mismatch");
+    static_assert(sizeof(PropInstance) == 48, "PropInstance size mismatch");
     static_assert(sizeof(PropVertex) == 24, "PropVertex size mismatch");
 
     static_assert(offsetof(PropInstance, origin) == 0, "origin offset error");
@@ -88,7 +88,7 @@ static void test_prop_instance_layout() {
     // Runtime checks with non-constant local variables to avoid MSVC C4127 warnings
     size_t szInst = sizeof(PropInstance);
     size_t szVert = sizeof(PropVertex);
-    CHECK(szInst == 32);
+    CHECK(szInst == 48);
     CHECK(szVert == 24);
 
     size_t offOrigin = offsetof(PropInstance, origin);

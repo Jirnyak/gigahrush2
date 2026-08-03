@@ -39,7 +39,7 @@ namespace samosbor2_detail {
 // Mobs stand on the module's ground storey, one cell above the base slab
 // (mob_spawn.cpp's kGroundZ). Restated here because the fog spawner's placement is
 // only legal on that storey and these tests have to know where to look.
-inline constexpr int kTestGroundZ = 1;
+inline const int kTestGroundZ = giga::game::floor_ground_z();
 
 // A samosbor parked in the middle of its Active phase, which is the only phase the
 // fog spawner does anything in. Built by hand rather than by stepping a clock
@@ -285,7 +285,8 @@ static void test_samosbor2_all() {
         CHECK(mid0.effCount == 0);
         CHECK(!mid0.relaxed);
         CHECK(roster_has(mid0, MobKind::Betonoed));
-        CHECK(samosbor_fog_roster(-26, 99).n == 42u);
+        // 41, was 42: the legacy-content purge removed one kind from this band.
+        CHECK(samosbor_fog_roster(-26, 99).n == 41u);
         CHECK(samosbor_fog_roster(-36, 0).n == 4u);
         CHECK(samosbor_fog_roster(-36, 99).n == 29u);
         CHECK(samosbor_fog_roster(0, 0).n == 12u);

@@ -1,0 +1,91 @@
+#version 450
+// particle_sim.comp — the UNIFIED PARTICLE POOL's physics: one thread per
+// particle, colliding against the voxel MIRROR ([render/voxel_mirror.h] masks
+// SSBO), the same grid truth the raymarcher walks. ONE-WAY by law: the world
+// pushes particles, particles push nothing back — the CPU tick pays zero.
+//
+// Layout must stay in LOCKSTEP with gpu::GpuParticle
+// (render/particle_pass.h) and shaders/particle.vert:
+// {vec4 posLife; vec4 velTotal; vec4 colorSize; vec4 phys}.
+// All physics knobs ride ON the particle (stamped at spawn from the generated
+// particle table), so this shader holds no table to drift.
+
+layout(local_size_x = 64) in;
+
+struct Particle {
+    vec4 posLife;   // xyz world m, w life remaining s (<=0 dead)
+    vec4 velTotal;  // xyz m/s, w life total s
+    vec4 colorSize; // rgb, w billboard edge m
+    vec4 phys;      // x gravity mul, y drag/60Hz-step, z bounce, w emissive
+};
+
+layout(std430, binding = 0) buffer Pool { Particle p[]; } pb;
+// VoxelMirror masks: 16 uints per macro cell, one bit per sub-voxel — the
+// exact view raymarch.frag reads.
+layout(std430, binding = 1) readonly buffer MaskBuf { uint uMasks[]; };
+
+layout(push_constant) uniform Push {
+    vec4 sim; // x dt, y gravity z accel, z particle count, w wrap period (m)
+} pc;
+
+// Solidity of the sub-voxel containing world point `w` (toroidal).
+// Cell = 2 m, sub-voxel = 0.25 m; kMacroDim = 128 so wrap is a power-of-two AND.
+bool solid_at(vec3 w) {
+    vec3 q = w * 0.5; // cell space
+    ivec3 c = ivec3(floor(q)) & 127;
+    ivec3 s = ivec3(floor(fract(q) * 8.0)) & 7;
+    uint ci = uint(c.x) | (uint(c.y) << 7) | (uint(c.z) << 14);
+    uint bit = uint(s.x) | (uint(s.y) << 3) | (uint(s.z) << 6);
+    return ((uMasks[ci * 16u + (bit >> 5)] >> (bit & 31u)) & 1u) != 0u;
+}
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= uint(pc.sim.z)) return;
+
+    float life = pb.p[i].posLife.w;
+    if (life <= 0.0) return;
+
+    const float dt = pc.sim.x;
+    const float per = pc.sim.w;
+
+    life -= dt;
+    vec3 pos = pb.p[i].posLife.xyz;
+    vec3 vel = pb.p[i].velTotal.xyz;
+    float gravMul = pb.p[i].phys.x;
+    float drag = pb.p[i].phys.y;
+    float bounce = pb.p[i].phys.z;
+
+    vel.z += pc.sim.y * gravMul * dt;
+    vel *= pow(drag, dt * 60.0); // drag authored per 60 Hz step
+
+    // Axis-wise voxel collision: each axis advances alone and reflects (or
+    // kills) on solid. Cheap, and it yields a usable surface response without
+    // computing a normal — a spark off a wall reverses the blocked axis only.
+    bool hit = false;
+    vec3 np = pos;
+    for (int a = 0; a < 3; ++a) {
+        vec3 cand = np;
+        cand[a] += vel[a] * dt;
+        cand = mod(cand, per);
+        if (solid_at(cand)) {
+            hit = true;
+            vel[a] = -vel[a] * bounce;
+        } else {
+            np = cand;
+        }
+    }
+    if (hit) {
+        if (bounce <= 0.0) {
+            // Contact kills this kind (dust settles, blood lands, a drip
+            // splashes): freeze and give it a short fade instead of a pop.
+            vel = vec3(0.0);
+            life = min(life, 0.12);
+        } else {
+            vel *= 0.8; // scrub tangential energy on any bounce
+        }
+    }
+
+    pb.p[i].posLife = vec4(np, life);
+    pb.p[i].velTotal.xyz = vel;
+}

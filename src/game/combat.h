@@ -41,6 +41,7 @@
 #include <unordered_set>
 
 #include "game/noise.h"          // NoiseField, for the gunshot and the body fall
+#include "game/particles.h"      // ParticleBurstQueue — blood/spark proposals
 #include "game/ranged_table.h"   // ItemId, for the equipped-loadout helpers
 #include "game/npc_pool.h"
 #include "game/rpg.h"      // RpgStats (POSRPG transfer)
@@ -457,9 +458,15 @@ struct DamageResult {
 // Resolves where the target's HP lives (mob instance vs. pool row), applies
 // channel mitigation, clamps, and tags `Dead` on reaching zero. Does **not**
 // destroy the entity — see finalize_deaths.
+// Optional `particles`: when non-null, a hit that applied damage through a
+// physical channel (everything but Psi) proposes a Blood burst at the target —
+// the unified-pool law ([particles.h]): apply_damage IS the blood writer, so a
+// bullet, a swing, a fall and a hazard all bleed through one line. Null keeps
+// the pre-particle path bit-for-bit (tests compile unchanged).
 DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
                           std::int16_t raw, DamageChannel ch, Entity source,
-                          const MacroGrid* grid = nullptr);
+                          const MacroGrid* grid = nullptr,
+                          ParticleBurstQueue* particles = nullptr);
 
 // THE death finalizer, and the only place an entity dies. Publishes one NpcDied
 // per death (payload: `a` = victim NpcId or kInvalidNpc for a mob, `b` = MobKind
@@ -500,7 +507,8 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
 // cardinal cell reads, and only for a monster actually in reach and swinging.
 std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
                              NpcPool& pool, EventBus& bus,
-                             LayerId layer, float dt, std::uint64_t tick);
+                             LayerId layer, float dt, std::uint64_t tick,
+                             ParticleBurstQueue* particles = nullptr);
 
 void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
                       const vec3& to, std::int16_t dmg,
@@ -592,7 +600,8 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                               StatusSet* playerStatus = nullptr,
                               Entity playerEntity = entt::null,
                               CarveProposalQueue* carves = nullptr,
-                              std::vector<std::uint32_t>* stainDirty = nullptr);
+                              std::vector<std::uint32_t>* stainDirty = nullptr,
+                              ParticleBurstQueue* particles = nullptr);
 
 // The camera holder swings at whatever monster is in front of it.
 //
@@ -636,7 +645,8 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
                        float dt, bool wantsAttack, std::uint64_t tick,
                        const MacroGrid* grid = nullptr,
                        CarveProposalQueue* carves = nullptr,
-                       const StatusSet* status = nullptr);
+                       const StatusSet* status = nullptr,
+                       ParticleBurstQueue* particles = nullptr);
 
 // Current/maximum HP of an entity, wherever its HP lives. Returns false if it
 // holds none. For HUD and tests.

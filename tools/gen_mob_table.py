@@ -192,7 +192,9 @@ def main():
              u8(MobKind::{kind}), u8(MobTier::{tier}),
              u8(MobBehaviour::{beh}), u8(ProjType::{proj}),
              {samo}, static_cast<std::uint8_t>({floors}),
-             u8(MobPackMode::{pack}), {pmin}, {pmax}, {pspread} }},"""
+             u8(MobPackMode::{pack}), {pmin}, {pmax}, {pspread},
+             {nstep}, {nclimb}, {ndrop}, {nfly},
+             {massx10} }},"""
             .format(
                 idx=i, rid=r["id"],
                 flags=" | ".join(flags) if flags else "0u",
@@ -214,7 +216,15 @@ def main():
                 pack=PACK[pack],
                 pmin=fixed(r["pack_min"], 1, "pack_min", i, 0, 8),
                 pmax=fixed(r["pack_max"], 1, "pack_max", i, 0, 16),
-                pspread=fixed(r["pack_spread"], 1, "pack_spread", i, 0, 10)))
+                pspread=fixed(r["pack_spread"], 1, "pack_spread", i, 0, 10),
+                # Nav traversal profile in sub-voxels; blank = humanoid default
+                # (step 1 riser, climb one 2 m cell, drop 4 m, walker).
+                nstep=fixed(r.get("nav_step_sub") or "1", 1, "nav_step_sub", i, 0, 32),
+                nclimb=fixed(r.get("nav_climb_sub") or "8", 1, "nav_climb_sub", i, 0, 64),
+                ndrop=fixed(r.get("nav_drop_sub") or "16", 1, "nav_drop_sub", i, 0, 255),
+                nfly=fixed(r.get("nav_fly") or "0", 1, "nav_fly", i, 0, 1),
+                # Universal mass, kg x10 (blank = 80 kg placeholder).
+                massx10=fixed(r.get("mass_kg") or "80", 10, "mass_kg", i, 1)))
         names.append("    %s," % cpp_string(r["name_ru"]))
         # Latin console token: the CSV id lowercased. ASCII by construction (the
         # id column doubles as the enumerator map key), so a console can match it
