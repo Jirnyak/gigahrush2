@@ -89,9 +89,10 @@ WalkCell hug_cell(const WalkCell& c, int axis, int wx, int wy) {
 // Emit one straight run as UNIVERSAL instances ([antourage.h]). Ends that were
 // stopped by SOLID matter extend half a cell into it — a pipe terminates in a
 // wall, never hanging cut in mid-air ("кусочность", owner's screenshots).
-void emit_leg(const MacroGrid& g, AntourageBake& out,
-              const std::vector<WalkCell>& cells, int axis, int wx, int wy,
-              int sign, bool stopSolid) {
+// PRECONDITION: `cells` never crosses the torus seam — emit_leg() splits first.
+void emit_leg_run(const MacroGrid& g, AntourageBake& out,
+                  const std::vector<WalkCell>& cells, int axis, int wx, int wy,
+                  int sign, bool stopSolid) {
     if (static_cast<int>(cells.size()) < kPipeMinLeg) return;
     const WalkCell f = hug_cell(cells.front(), axis, wx, wy);
     const WalkCell l = hug_cell(cells.back(), axis, wx, wy);
@@ -154,6 +155,35 @@ void emit_leg(const MacroGrid& g, AntourageBake& out,
     }
 }
 
+// A leg whose wrapped indices cross the torus seam must be SPLIT there: one
+// instance renders at exactly one toroidal image, and a wrapped span fed to
+// duct_axis_point as-is produced ~250 m ghost beams whose midpoint sat far
+// from their geometry — the pipes that popped in and out with the camera.
+void emit_leg(const MacroGrid& g, AntourageBake& out,
+              const std::vector<WalkCell>& cells, int axis, int wx, int wy,
+              int sign, bool stopSolid) {
+    std::size_t start = 0;
+    for (std::size_t i = 1; i <= cells.size(); ++i) {
+        bool cut = i == cells.size();
+        if (!cut) {
+            const WalkCell& p = cells[i - 1];
+            const WalkCell& c = cells[i];
+            const int d = axis == 0 ? c.x - p.x
+                          : axis == 1 ? c.y - p.y
+                                      : c.z - p.z;
+            cut = d != sign; // a ±1 step that reads as ∓(kMacroDim-1) = the seam
+        }
+        if (!cut) continue;
+        std::vector<WalkCell> run(cells.begin() + static_cast<std::ptrdiff_t>(start),
+                                  cells.begin() + static_cast<std::ptrdiff_t>(i));
+        // A seam-cut end continues on the other image; only the true final end
+        // keeps the caller's stop-into-solid extension.
+        emit_leg_run(g, out, run, axis, wx, wy, sign,
+                     i == cells.size() ? stopSolid : false);
+        start = i;
+    }
+}
+
 void bake_pipes(const World& w, std::uint32_t fseed, AntourageBake& out) {
     const MacroGrid& g = w.grid();
     for (int walk = 0; walk < kPipeWalks; ++walk) {
@@ -169,6 +199,23 @@ void bake_pipes(const World& w, std::uint32_t fseed, AntourageBake& out) {
         int wx = 0, wy = 0;                        // vertical wall hug, unset
         bool stopSolid = false;
         std::vector<WalkCell> leg;
+        // An elbow Box may only exist BETWEEN two emitted legs. It is held
+        // pending until the following leg proves real; pushing it eagerly left
+        // a lone 0.5 m cube in the air whenever the new leg died under
+        // kPipeMinLeg (near-certain for 2-cell wall drops).
+        AntourageInstance pendingJoint{};
+        bool havePendingJoint = false;
+        auto emit_leg_checked = [&](const std::vector<WalkCell>& cells,
+                                    int axis_, int wx_, int wy_, int sign_,
+                                    bool stop) {
+            const std::size_t before = out.instances.size();
+            emit_leg(g, out, cells, axis_, wx_, wy_, sign_, stop);
+            const bool emitted = out.instances.size() > before;
+            if (emitted && havePendingJoint)
+                out.instances.push_back(pendingJoint);
+            havePendingJoint = false;
+            return emitted;
+        };
         for (int step = 0; step < kPipeMaxSteps; ++step) {
             const bool ok = axis == 2 ? vert_ok(g, x, y, z, wx, wy)
                                       : horiz_ok(g, x, y, z);
@@ -206,7 +253,8 @@ void bake_pipes(const World& w, std::uint32_t fseed, AntourageBake& out) {
                                    y + (newAxis == 1 ? newSign : 0), z);
                 }
                 if (can) {
-                    emit_leg(g, out, leg, axis, wx, wy, sign, false);
+                    const bool prevEmitted =
+                        emit_leg_checked(leg, axis, wx, wy, sign, false);
                     // The flanged elbow: a universal Box instance.
                     AntourageInstance j{};
                     j.pos = duct_axis_point(x, y, z, axis, wx, wy);
@@ -222,7 +270,10 @@ void bake_pipes(const World& w, std::uint32_t fseed, AntourageBake& out) {
                     j.ax0 = j.ax1 = static_cast<std::uint8_t>(jh.x);
                     j.ay0 = j.ay1 = static_cast<std::uint8_t>(jh.y);
                     j.az0 = j.az1 = static_cast<std::uint8_t>(jh.z);
-                    out.instances.push_back(j);
+                    if (prevEmitted) {
+                        pendingJoint = j;
+                        havePendingJoint = true;
+                    }
                     leg.clear();
                     leg.push_back({x, y, z});
                     axis = newAxis;
@@ -236,7 +287,7 @@ void bake_pipes(const World& w, std::uint32_t fseed, AntourageBake& out) {
             z += axis == 2 ? sign : 0;
             x = wrap_macro(x); y = wrap_macro(y); z = wrap_macro(z);
         }
-        emit_leg(g, out, leg, axis, wx, wy, sign, stopSolid);
+        emit_leg_checked(leg, axis, wx, wy, sign, stopSolid);
     }
 }
 

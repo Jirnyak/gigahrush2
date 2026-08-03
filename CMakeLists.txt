@@ -563,7 +563,11 @@ if(GIGA_BUILD_TESTS)
     # 219307 -> 223717 (+4410) on 2026-08-03: ClothSheet third primitive —
     # bake_cloths curtains (152 sheets on floor 0, per-sheet anchor/pin/rest
     # loops dominate the delta) + determinism now covers cloths.
-        PASS_REGULAR_EXPRESSION "game_test: 223717 checks, 0 failures")
+    # 223717 -> 222457 (-1260) on 2026-08-03: pipe bake stops emitting orphan
+    # elbow Boxes (joint now pending until the following leg proves real) and
+    # splits seam-crossing legs (3290 -> 2975 instances; 315 fewer x 4
+    # per-instance checks).
+        PASS_REGULAR_EXPRESSION "game_test: 222457 checks, 0 failures")
 
 
 

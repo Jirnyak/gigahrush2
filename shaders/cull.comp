@@ -78,10 +78,13 @@ void main() {
         relPos.z -= period * floor(relPos.z / period + 0.5);
     }
 
-    // 2. Fog distance check (fogEnd in push.camPos.w)
-    float distSq = dot(relPos, relPos);
+    // 2. Fog distance check (fogEnd in push.camPos.w) — against the NEAREST
+    // point of the instance's bounds, not its centre: a long pipe leg whose
+    // midpoint sits past fogEnd can still have an end 5 m from the camera
+    // (centre-only culling made whole runs pop in and out with one step).
     float fogEnd = push.camPos.w;
-    if (fogEnd > 0.0 && distSq > fogEnd * fogEnd) {
+    float boundR = 0.5 * length(inst.scaleAndPad.xyz) + 0.1;
+    if (fogEnd > 0.0 && length(relPos) - boundR > fogEnd) {
         return; // Culled by distance fog
     }
 

@@ -283,7 +283,6 @@ void PropPass::record(VkCommandBuffer cmd, uint32_t frameIndex,
     // Extract camera position and fog radius from push constants for culling.
     const vec3  camPos   = {push.camPos.x, push.camPos.y, push.camPos.z};
     const float fogEnd   = push.fog.y;
-    const float fogEndSq = fogEnd * fogEnd;
     const float period   = push.torus.x;
 
     lastDrawCount_ = 0;
@@ -321,8 +320,15 @@ void PropPass::record(VkCommandBuffer cmd, uint32_t frameIndex,
             dx -= period * std::floor(dx / period + 0.5f);
             dy -= period * std::floor(dy / period + 0.5f);
             dz -= period * std::floor(dz / period + 0.5f);
-            float distSq = dx * dx + dy * dy + dz * dz;
-            if (distSq > fogEndSq) continue; // entirely fogged to black
+            // Nearest point of the instance bounds, mirroring cull.comp — a
+            // centre-only test culled long legs whose near end was in view.
+            const float boundR =
+                0.5f * std::sqrt(inst.scale.x * inst.scale.x +
+                                 inst.scale.y * inst.scale.y +
+                                 inst.scale.z * inst.scale.z) +
+                0.1f;
+            const float dist = std::sqrt(dx * dx + dy * dy + dz * dz) - boundR;
+            if (dist > fogEnd) continue; // entirely fogged to black
 
             dst[count++] = inst;
             if (count >= static_cast<uint32_t>(kMaxPropInstances)) break;
