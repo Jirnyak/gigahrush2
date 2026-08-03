@@ -1,3 +1,4 @@
+#include "core/rng.h"
 #include "game/hunt.h"
 
 #include "core/wrap.h"
@@ -11,17 +12,6 @@ namespace giga::game {
 
 namespace {
 
-// splitmix64-style scrambler, as in wander.cpp / population.cpp / mob_spawn.cpp.
-// Duplicated for the same reason they duplicate it: three lines, wanted inlined,
-// and a shared header between otherwise independent systems buys nothing.
-std::uint32_t mix(std::uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352du;
-    x ^= x >> 15;
-    x *= 0x846ca68bu;
-    x ^= x >> 16;
-    return x;
-}
 
 } // namespace
 
@@ -30,13 +20,13 @@ bool mob_hunts_npcs(std::uint32_t mobId, std::uint64_t tick) {
     // licence on the floor would expire on the same tick and a monster whose window
     // opened late would be handed a fight it cannot finish.
     const std::uint64_t phase =
-        static_cast<std::uint64_t>(mix(mobId ^ 0x2f6a1c7bu)) % kHuntEpochTicks;
+        static_cast<std::uint64_t>(hash_u32(mobId ^ 0x2f6a1c7bu)) % kHuntEpochTicks;
     const std::uint32_t epoch =
         static_cast<std::uint32_t>((tick + phase) / kHuntEpochTicks);
     // The epoch is mixed BEFORE it is combined, for the reason pack_target_node
     // documents: raw epochs are 0,1,2... and xoring a small counter into an id makes
     // neighbouring epochs and neighbouring ids collide in blocks.
-    const std::uint32_t h = mix((mobId * 0x9e3779b9u) ^ mix(epoch));
+    const std::uint32_t h = hash_u32((mobId * 0x9e3779b9u) ^ hash_u32(epoch));
     return h % kHuntShare == 0u;
 }
 

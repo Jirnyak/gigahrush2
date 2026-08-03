@@ -1,3 +1,4 @@
+#include "core/rng.h"
 #include "game/rumour.h"
 
 #include <cstdio>
@@ -14,14 +15,6 @@ namespace giga::game {
 
 namespace {
 
-std::uint32_t mix(std::uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352du;
-    x ^= x >> 15;
-    x *= 0x846ca68bu;
-    x ^= x >> 16;
-    return x;
-}
 
 // Which kinds actually spawned on this layer. Counted from the live registry rather
 // than re-derived from the spawn tables, because the point of a threat rumour is that
@@ -38,7 +31,7 @@ std::uint16_t sample_live_mob_kind(const Registry& reg, LayerId layer,
         if (reg.get<const Transform>(e).layer != layer) continue;
         ++seen;
         if (roll % seen == 0) pick = reg.get<const MobRef>(e).kind;
-        roll = mix(roll);
+        roll = hash_u32(roll);
     }
     countOut = seen;
     return pick;
@@ -114,7 +107,7 @@ Rumour rumour_for(const Registry& reg, const NpcPool& pool, NpcId speaker,
     // about the same floor. That is what makes a rumour read as something a body
     // KNOWS rather than as dice, and it means walking back to them repeats it.
     const std::uint32_t seed =
-        mix(speaker * 0x9e3779b9u ^ static_cast<std::uint32_t>(floorZ * 2654435761u));
+        hash_u32(speaker * 0x9e3779b9u ^ static_cast<std::uint32_t>(floorZ * 2654435761u));
 
     // **THE WARNING OVERRIDES EVERY SPEAKER, and it is the only override that ignores
     // the seed.** For 30 s the whole floor knows the same thing and it is the most
@@ -218,7 +211,7 @@ Rumour rumour_for(const Registry& reg, const NpcPool& pool, NpcId speaker,
         case RumourKind::Threat: {
             std::uint32_t live = 0;
             const std::uint16_t k =
-                sample_live_mob_kind(reg, layer, mix(seed ^ 0x11u), live);
+                sample_live_mob_kind(reg, layer, hash_u32(seed ^ 0x11u), live);
             // Nothing alive to warn about: fall through to the fog, which is always
             // true. Emitting an empty threat line would be the one thing this system
             // must never do — say something false.

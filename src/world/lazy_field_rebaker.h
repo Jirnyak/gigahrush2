@@ -47,8 +47,8 @@ public:
         std::queue<int> empty;
         std::swap(m_pendingQueue, empty);
         m_needClosingPass = false;
-        // NOTE: we let any active future finish naturally, we just ignore its result later
-        // if it writes to something, wait, it returns BakeResult by value, so no dangling refs.
+        // Any active future is left to finish naturally; its BakeResult is
+        // returned by value and simply dropped, so nothing dangles.
     }
 
 private:

@@ -2586,11 +2586,10 @@ int main(int argc, char** argv) {
             // 0 and no one flees, the scorer's stubbed-input stance ([ai.md]).
             // Fetched once per frame: the fixed loop below never (re)creates it.
             World& activeWorld = stack.layer(activeLayer);
-            // [[maybe_unused]]: danger + activeGrid are the arguments to the PARKED
-            // ai_step call below (line ~920). ai.cpp sits in tools/branch_port_pending/
-            // until adapted to main's mob_table, so its inputs are fetched-but-unread
-            // for now. Kept so the wiring is one uncomment away. MSVC did not warn;
-            // Clang -Wunused-variable does.
+            // NOTE: `danger` is null in the shipped game — diffusion_step (the
+            // field's only producer) is not wired into the tick yet, so ai_step's
+            // threat term reads 0 and nobody flees. Wiring diffusion in is the
+            // open task; the fetch stays so that wiring is one call away.
             [[maybe_unused]] const Field<float>* danger = activeWorld.fields().find<float>("danger");
             [[maybe_unused]] const MacroGrid& activeGrid = activeWorld.grid();
             int guard = 0;

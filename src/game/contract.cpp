@@ -1,3 +1,4 @@
+#include "core/rng.h"
 #include "game/contract.h"
 
 #include <cstdio>
@@ -8,14 +9,6 @@ namespace giga::game {
 
 namespace {
 
-std::uint32_t mix(std::uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352du;
-    x ^= x >> 15;
-    x *= 0x846ca68bu;
-    x ^= x >> 16;
-    return x;
-}
 
 // Share of bodies who want something. Most people in a corridor are not hiring, and a
 // floor where everyone has a job is a job board rather than a building.
@@ -47,7 +40,7 @@ Contract contract_offer(const NpcPool& pool, NpcId giver, int floorZ,
 
     // Deterministic in (giver, floor): the same person always offers the same job, so
     // walking away and coming back cannot reroll it into something better.
-    const std::uint32_t h = mix(static_cast<std::uint32_t>(giver) * 0x9e3779b9u ^
+    const std::uint32_t h = hash_u32(static_cast<std::uint32_t>(giver) * 0x9e3779b9u ^
                                static_cast<std::uint32_t>(floorZ) * 0x85ebca6bu ^ seed);
     if ((h % 100u) >= kOfferPct) return c;   // not hiring
 
@@ -69,7 +62,7 @@ Contract contract_offer(const NpcPool& pool, NpcId giver, int floorZ,
             if (d.value <= 0 || d.value > bandCap / 4) continue;
             total += w;
             // Reservoir choice, so no second pass and no vector.
-            if (mix(h ^ total) % total < w) want = id;
+            if (hash_u32(h ^ total) % total < w) want = id;
         }
         if (want == kInvalidItem) return c;
         const std::int32_t n =
@@ -84,7 +77,7 @@ Contract contract_offer(const NpcPool& pool, NpcId giver, int floorZ,
     } else if (pick < 80) {
         // HUNT. A kind that can actually be met, which takes two tests and not one.
         const std::uint16_t kind = static_cast<std::uint16_t>(
-            mix(h ^ 0x51ed270bu) % static_cast<std::uint32_t>(kMobKindCount));
+            hash_u32(h ^ 0x51ed270bu) % static_cast<std::uint32_t>(kMobKindCount));
         const MobDef& md = kMobTable[kind];
         if (md.dmg == 0) return c;   // do not send anyone to hunt scenery
         // **SPAWNABILITY — the other half of "findable", and it was missing.** A floor's

@@ -12,17 +12,16 @@
 
 namespace giga::game {
 
-// Must match gpu::PropPlacer kSaltWall so ECS interactables land on the same
+// Salt for wall-device placement rolls (inherited from the purged gpu::PropPlacer
+// so historical placements stay put) — ECS interactables land on the same
 // cells as the GPU cosmetic Terminal / ElectricalShield instances.
 constexpr std::uint32_t kSaltWall = 0x33333333u;
-// Must match gpu::PropPlacer kSaltLight so ECS LightBulbs land on the
-// same cells as BareBulb / FloodLamp GPU cosmetics.
+// Salt for ceiling-light placement rolls (same inheritance as kSaltWall above).
 constexpr std::uint32_t kSaltLight = 0x44444444u;
-// Must match PropPlacerConfig::lightChancePct.
+// Chance a candidate ceiling cell hosts a bulb, percent.
 constexpr std::uint32_t kLightChancePct = 25u;
 
 constexpr float kHalfPi = 1.5707963267948966f;
-constexpr float kPi     = 3.141592653589793f;
 
 // Map table ordinals (data/props.csv) onto the live enums. Unknown values
 // fall back to safe defaults so a bad CSV row cannot crash the seeder.

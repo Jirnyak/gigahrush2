@@ -256,7 +256,7 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt) {
     const float rate = needs_hp_rate(n);
     if (rate <= 0.0f) return out;
 
-    // HP is an integer and the slowest drain is 0.1 HP/s, which at the 120 Hz sim
+    // HP is an integer and the slowest drain is 0.1 HP/s, which at the 125 Hz sim
     // step is 0.00083 HP — truncating that to an int every step would make
     // starvation cost exactly nothing, forever. So the fraction is BANKED in the
     // row and only whole HP is ever spent. The debt is deliberately not forgiven

@@ -4,17 +4,17 @@
 // the catalog, it only shifts which rows are likely to appear ([items.md]). Adding
 // an item is one row in `data/items.csv` plus `python tools/gen_item_table.py`.
 //
-// **446 items**, ported from the TypeScript reference — not the ~434 that both
-// `items.md` and the reference's own `desdoc.md` claim, and not the 253 in its
-// `balance.md`. 446 is what `Object.keys(ITEMS)` actually yields once spreads and
-// computed keys are resolved, and it is the number the reference's own README
-// agrees with.
+// **442 items** live in the CSV today (kItemCount is generated from it and is
+// the truth). The port originally landed 446 — what `Object.keys(ITEMS)` of the
+// TypeScript reference actually yields once spreads and computed keys resolve
+// (not the ~434 its own docs claim) — and four rows have since been purged.
 //
 // This table is deliberately LEAN. The reference's `ItemDef` carries ~40 fields;
 // only the ones with a live consumer are ported, because a column nothing reads is
 // a column that silently rots. Explicitly deferred, with their reason:
 //
-//   craft[9] + station + tier   crafting is not implemented
+//   station + tier              consumed by the live craft system via its own
+//                               generator (craft_table.cpp) — see craft.h
 //   ammo_id / use_grant_id      needs interned string ids; nothing fires yet
 //   durability (17 items)       no wear system
 //   science/contraband/deceptive (2/5/2 items)  no faction or trade system
@@ -60,7 +60,7 @@ enum class ItemCategory : std::uint8_t {
 
 enum class EquipSlot : std::uint8_t { None = 0, Weapon, Armor, Tool, Count };
 
-// What using an item does. 387 of 446 do nothing — the reference implements a use
+// What using an item does. Most rows do nothing — the reference implements a use
 // action on only 59. Names map 1:1 onto its closures.
 enum class UseEffect : std::uint8_t {
     None = 0,

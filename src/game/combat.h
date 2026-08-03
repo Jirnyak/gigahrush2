@@ -145,9 +145,9 @@ inline CellHazard get_cell_hazard(CellType t) {
 // Flat percentage mitigation per channel, 0..100, clamped on use. Absent means no
 // armour at all, which is the common case — the reference authors only four.
 //
-// Currently nothing populates this: armour is an item property and the item table
-// is not ported yet. It exists now anyway, because mitigation living in one place
-// is the whole point of defect (1) above, and bolting it on later is how the leak
+// Populated from the item table's armour rows (equip flow below and
+// monster_traits.cpp for mobs). It lives here, in one place, because mitigation
+// living in one place is the whole point of defect (1) above, and bolting it on later is how the leak
 // gets reintroduced.
 struct Armour {
     std::int8_t resist[kDamageChannels] = {};

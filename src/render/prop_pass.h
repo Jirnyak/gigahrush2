@@ -35,8 +35,8 @@ public:
     PropPass& operator=(const PropPass&) = delete;
 
     // `pipelineLayout` is borrowed from CubePass (same push-constant block).
-    // `shaderDir` must contain prop.vert.spv and cube_tex.frag.spv (or
-    // cube.frag.spv when no albedo array is available).
+    // `shaderDir` must contain prop.vert.spv and prop.frag.spv (falls back to
+    // cube.frag.spv when prop.frag.spv is absent).
     bool init(VulkanDevice* dev, VkPipelineLayout pipelineLayout,
               VkRenderPass renderPass, const char* shaderDir);
 

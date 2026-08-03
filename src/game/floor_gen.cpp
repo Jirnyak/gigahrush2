@@ -1,3 +1,4 @@
+#include "core/rng.h"
 #include "game/floor_gen.h"
 
 #include <bit>
@@ -13,17 +14,6 @@ namespace giga::game {
 
 namespace {
 
-// Splitmix32 finalizer. The room taxonomy needs a PURE hash rather than a draw
-// from a shared RNG stream: every consumer must agree about what room (rx, ry)
-// is, and a stream couples the answer to the order other loops draw numbers in.
-std::uint32_t mix32(std::uint32_t h) {
-    h ^= h >> 16;
-    h *= 0x7FEB352Du;
-    h ^= h >> 15;
-    h *= 0x846CA68Bu;
-    h ^= h >> 16;
-    return h;
-}
 
 // --- room taxonomy ----------------------------------------------------------
 // One weighted row per FloorKind: which RoomBits this kind's lattice produces and in
@@ -152,7 +142,7 @@ std::uint16_t floor_room_mask(FloorKind kind, int number, int rx, int ry) {
     // A pure hash of the room's identity, with each input on its own odd multiplier so
     // a floor's rooms decorrelate from its neighbour's at the same (rx, ry).
     const std::uint32_t h =
-        mix32(static_cast<std::uint32_t>(k) * 0x9E3779B9u ^
+        hash_u32(static_cast<std::uint32_t>(k) * 0x9E3779B9u ^
               static_cast<std::uint32_t>(number) * 0x85EBCA6Bu ^
               static_cast<std::uint32_t>(rx) * 0x27220A95u ^
               static_cast<std::uint32_t>(ry) * 0x165667B1u);

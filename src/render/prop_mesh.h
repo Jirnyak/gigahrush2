@@ -5,8 +5,8 @@
 // memory once at startup. The prop_pass then draws thousands of instances of
 // these shapes in a single vkCmdDrawIndexed per shape.
 //
-// Vertex layout matches cube.vert / body.vert so the same fragment shader
-// (cube.frag) handles both voxels and props — no extra permutations.
+// Vertex layout matches body.vert so the same fragment shader (cube.frag)
+// handles both bodies and props — no extra permutations.
 #pragma once
 
 #include <vulkan/vulkan.h>

@@ -1,3 +1,4 @@
+#include "core/rng.h"
 #include "game/mob_spawn.h"
 
 #include "game/combat.h"
@@ -18,16 +19,6 @@ namespace giga::game {
 
 namespace {
 
-// splitmix64-style scrambler, same as population.cpp. Keeps spawning
-// reproducible without pulling in <random>.
-std::uint32_t mix(std::uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352du;
-    x ^= x >> 15;
-    x *= 0x846ca68bu;
-    x ^= x >> 16;
-    return x;
-}
 
 // Attempts per mob to find a standable cell before giving up on that one. A
 // Derelict floor is 38% gap and 12% holes, so a handful of rejections is normal;
@@ -104,7 +95,7 @@ vec3 tier_color(MobTier tier, std::uint32_t jitterKey) {
     std::size_t i = static_cast<std::size_t>(tier);
     if (i >= static_cast<std::size_t>(MobTier::Count)) i = 0;
     vec3 c = kTierHue[i];
-    std::uint32_t h = mix(jitterKey);
+    std::uint32_t h = hash_u32(jitterKey);
     float j = (static_cast<float>(h & 0xFFu) / 255.0f - 0.5f) * 0.14f;
     return vec3{clamp01(c.x + j), clamp01(c.y + j), clamp01(c.z + j)};
 }
@@ -311,7 +302,7 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
     // even in the degenerate all-Loner case — the loop cannot spin.
     for (std::uint32_t p = 0; p < want && spawned < want; ++p) {
         const std::uint32_t r =
-            mix(seed ^ (p * 0x9e3779b9u) ^
+            hash_u32(seed ^ (p * 0x9e3779b9u) ^
                 static_cast<std::uint32_t>(floorNumber) * 0x85ebca6bu);
 
         // 1. Draw a room, preferring an empty one. This is the entire difference
@@ -321,7 +312,7 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
         int room = 0;
         for (int t = 0; t < kRoomTries; ++t) {
             const std::uint32_t h =
-                mix(r ^ (static_cast<std::uint32_t>(t) * 0x27220a95u));
+                hash_u32(r ^ (static_cast<std::uint32_t>(t) * 0x27220a95u));
             const int rx = static_cast<int>(
                 (h >> 8) % static_cast<std::uint32_t>(roomsPerAxis));
             const int ry = static_cast<int>(
@@ -346,7 +337,7 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
             floor_room_bit_index(floor_room_mask(kind, floorNumber, rx, ry));
         const Roster& rs =
             (bit >= 0 && rosters[bit].n != 0) ? rosters[bit] : floorRoster;
-        const std::uint32_t pick = mix(r ^ 0x2545f491u) % rs.total;
+        const std::uint32_t pick = hash_u32(r ^ 0x2545f491u) % rs.total;
         std::uint32_t ri = 0;
         while (ri + 1 < rs.n && pick >= rs.cum[ri]) ++ri;
         const MobKind mobKind = static_cast<MobKind>(rs.kind[ri]);
@@ -360,7 +351,7 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
         if (static_cast<MobPackMode>(def.packMode) != MobPackMode::Loner) {
             const std::uint32_t lo = def.packMin ? def.packMin : 1u;
             const std::uint32_t hi = def.packMax > lo ? def.packMax : lo;
-            heads = lo + mix(r ^ 0x165667b1u) % (hi - lo + 1u);
+            heads = lo + hash_u32(r ^ 0x165667b1u) % (hi - lo + 1u);
         }
         // The budget is the budget: the last pack of a floor is truncated rather
         // than allowed to overshoot it.
@@ -374,7 +365,7 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
         bool haveAnchor = false;
         for (int t = 0; t < kPlaceTries; ++t) {
             const std::uint32_t h =
-                mix(r ^ (static_cast<std::uint32_t>(t + 1) * 0xc2b2ae35u));
+                hash_u32(r ^ (static_cast<std::uint32_t>(t + 1) * 0xc2b2ae35u));
             ax = x0 + 1 +
                  static_cast<int>((h >> 7) % static_cast<std::uint32_t>(span));
             ay = y0 + 1 +
@@ -382,7 +373,7 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
             // The pack's storey, drawn over the WHOLE gravity axis: the torus
             // has no privileged floor, so packs live on every storey of the
             // tower. Members below share it — a pack is one room on one storey.
-            packH = static_cast<int>(mix(h ^ 0xA5A5A5A5u) %
+            packH = static_cast<int>(hash_u32(h ^ 0xA5A5A5A5u) %
                                      static_cast<std::uint32_t>(kMacroDim));
             if (placeable(wet, world, ax, ay, packH)) { haveAnchor = true; break; }
         }
@@ -406,7 +397,7 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
                 const std::uint32_t sp = static_cast<std::uint32_t>(2 * spread + 1);
                 for (int t = 0; t < kPlaceTries; ++t) {
                     const std::uint32_t h =
-                        mix(r ^ ((k * 0x9e3779b9u + static_cast<std::uint32_t>(t)) *
+                        hash_u32(r ^ ((k * 0x9e3779b9u + static_cast<std::uint32_t>(t)) *
                                  0x7feb352du));
                     const int dx = static_cast<int>((h >> 6) % sp) - spread;
                     const int dy = static_cast<int>((h >> 17) % sp) - spread;
@@ -430,7 +421,7 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
             // cooldown, putting eight monsters in a room into perfect lockstep. That
             // is the very thing the stagger below exists to prevent, and packs make
             // it far more likely than independent placement ever did.
-            const std::uint32_t rh = mix(r ^ (k * 0x9e3779b9u) ^ 0x51ed270bu);
+            const std::uint32_t rh = hash_u32(r ^ (k * 0x9e3779b9u) ^ 0x51ed270bu);
             emplace_mob(reg, layer, mobKind, def, level, cx, cy, packH, rh,
                         packId);
             ++spawned;
@@ -633,7 +624,7 @@ FogTickReport samosbor_fog_tick_at(Registry& reg, const World& world,
         if (live.withinOuter >= out.target) break;
 
         const std::uint32_t r =
-            mix(kFogSalt ^ (static_cast<std::uint32_t>(simTick) * 0x9e3779b9u) ^
+            hash_u32(kFogSalt ^ (static_cast<std::uint32_t>(simTick) * 0x9e3779b9u) ^
                 ((i + 1u) * 0x85ebca6bu) ^
                 (static_cast<std::uint32_t>(floorNumber) * 0x27220a95u));
 
@@ -641,7 +632,7 @@ FogTickReport samosbor_fog_tick_at(Registry& reg, const World& world,
         // `half.z` above the cell floor (1.70 m for a Boss), and the legality test
         // below is the census's own distance test on the FINAL position, so the cell
         // cannot be judged before the tier that decides how tall the thing is.
-        const std::uint32_t pick = mix(r ^ 0x2545f491u) % roster.total;
+        const std::uint32_t pick = hash_u32(r ^ 0x2545f491u) % roster.total;
         std::uint32_t ri = 0;
         while (ri + 1 < roster.n && pick >= roster.cumWeight[ri]) ++ri;
         const MobKind kind = static_cast<MobKind>(roster.kind[ri]);
@@ -657,7 +648,7 @@ FogTickReport samosbor_fog_tick_at(Registry& reg, const World& world,
         bool placed = false;
         for (int t = 0; t < kFogPlaceTries; ++t) {
             const std::uint32_t h =
-                mix(r ^ (static_cast<std::uint32_t>(t + 1) * 0xc2b2ae35u));
+                hash_u32(r ^ (static_cast<std::uint32_t>(t + 1) * 0xc2b2ae35u));
             const int tx = wrap_macro(acx + static_cast<int>((h >> 7) % span) -
                                       kThreatOuterRadiusCells);
             const int ty = wrap_macro(acy + static_cast<int>((h >> 19) % span) -
@@ -695,7 +686,7 @@ FogTickReport samosbor_fog_tick_at(Registry& reg, const World& world,
         // property ([mob_spawn.h] header); fog arrivals trickle. pack = 0 is the
         // matching truth for wander: "walks alone".
         Entity e = emplace_mob(reg, layer, kind, def, level, cx, cy, acz,
-                               mix(r ^ 0x51ed270bu), /*packId=*/0u);
+                               hash_u32(r ^ 0x51ed270bu), /*packId=*/0u);
         reg.emplace<FogSpawn>(e);
         ++out.spawned;
 

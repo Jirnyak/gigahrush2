@@ -1,3 +1,4 @@
+#include "core/rng.h"
 #include "game/loot.h"
 
 #include <vector>
@@ -19,14 +20,6 @@ namespace giga::game {
 
 namespace {
 
-std::uint32_t mix(std::uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352du;
-    x ^= x >> 15;
-    x *= 0x846ca68bu;
-    x ^= x >> 16;
-    return x;
-}
 
 // A dropped item is a small box on the ground. Bright warm gold: it must be
 // findable in a headlamp cone, and it must not collide with either the faction
@@ -67,7 +60,7 @@ std::uint32_t drop_chance_for_tier(std::uint8_t tier) {
 std::uint16_t weapon_ammo_count(ItemId weapon, std::uint32_t seed) {
     const RangedDef* def = ranged_for_item(weapon);
     if (!def) return 0;
-    const std::uint32_t h = mix(seed ^ 0xA11A3300u);
+    const std::uint32_t h = hash_u32(seed ^ 0xA11A3300u);
     std::uint16_t count;
     if (def->pellets > 1)
         count = static_cast<std::uint16_t>(4u + (h % 8u));
@@ -107,10 +100,10 @@ std::uint32_t roll_mob_loot_slots(std::uint8_t mobKind, std::uint8_t mobTier,
     std::uint8_t filled = 0;
     for (std::uint32_t r = 0; r < rolls; ++r) {
         if (filled >= outCap) break;
-        std::uint32_t h = mix(seed ^ (r * 0x9e3779b9u));
+        std::uint32_t h = hash_u32(seed ^ (r * 0x9e3779b9u));
         if ((h % 100u) >= chance) continue;
 
-        KindDrop kd = roll_kind_drop(mobKind, floorNumber, mix(h ^ 0x10071ee7u));
+        KindDrop kd = roll_kind_drop(mobKind, floorNumber, hash_u32(h ^ 0x10071ee7u));
         if (kd.item == kInvalidItem) {
             if (!poolBuilt) {
                 poolBuilt = true;
@@ -126,7 +119,7 @@ std::uint32_t roll_mob_loot_slots(std::uint8_t mobKind, std::uint8_t mobTier,
                 }
             }
             if (total == 0) continue;
-            const std::uint32_t pick = mix(h) % total;
+            const std::uint32_t pick = hash_u32(h) % total;
             std::size_t k = 0;
             while (k + 1 < pool.size() && pick >= cum[k]) ++k;
             kd.item = pool[k];
@@ -142,7 +135,7 @@ std::uint32_t roll_mob_loot_slots(std::uint8_t mobKind, std::uint8_t mobTier,
             break;
 
         // Firearm → append ammo ItemSlot (mirror drop_weapon_ammo), no floor entity.
-        const std::uint32_t j = mix(h ^ 0x51ed270bu);
+        const std::uint32_t j = hash_u32(h ^ 0x51ed270bu);
         if (const RangedDef* rdef = ranged_for_item(id)) {
             const std::uint16_t ac =
                 weapon_ammo_count(id, seed ^ (j * 0x2545F491u));
@@ -184,7 +177,7 @@ std::uint32_t drop_mob_loot(Registry& reg, LayerId layer, const vec3& pos,
 
     std::uint32_t made = 0;
     for (std::uint32_t r = 0; r < rolls; ++r) {
-        std::uint32_t h = mix(seed ^ (r * 0x9e3779b9u));
+        std::uint32_t h = hash_u32(seed ^ (r * 0x9e3779b9u));
         if ((h % 100u) >= chance) continue;
 
         // ---- WHAT falls. The tier envelope above already decided HOW MUCH. -------
@@ -195,7 +188,7 @@ std::uint32_t drop_mob_loot(Registry& reg, LayerId layer, const vec3& pos,
         // the per-kill item count — and therefore the whole economy — is unchanged.
         // A miss (and every kind at every depth can miss) falls through to the catalog,
         // exactly as every kind did before the table existed.
-        KindDrop kd = roll_kind_drop(mobKind, floorNumber, mix(h ^ 0x10071ee7u));
+        KindDrop kd = roll_kind_drop(mobKind, floorNumber, hash_u32(h ^ 0x10071ee7u));
         if (kd.item == kInvalidItem) {
             if (!poolBuilt) {
                 poolBuilt = true;
@@ -211,7 +204,7 @@ std::uint32_t drop_mob_loot(Registry& reg, LayerId layer, const vec3& pos,
                 }
             }
             if (total == 0) continue;   // nothing legal on this floor; the roll is void
-            const std::uint32_t pick = mix(h) % total;
+            const std::uint32_t pick = hash_u32(h) % total;
             std::size_t k = 0;
             while (k + 1 < pool.size() && pick >= cum[k]) ++k;
             kd.item = pool[k];
@@ -221,7 +214,7 @@ std::uint32_t drop_mob_loot(Registry& reg, LayerId layer, const vec3& pos,
 
         // Scatter slightly so multiple drops from one corpse are separately
         // visible rather than one box hiding the others.
-        const std::uint32_t j = mix(h ^ 0x51ed270bu);
+        const std::uint32_t j = hash_u32(h ^ 0x51ed270bu);
         const float ox = (static_cast<float>(j & 0xFFu) / 255.0f - 0.5f) * 1.2f;
         const float oy = (static_cast<float>((j >> 8) & 0xFFu) / 255.0f - 0.5f) * 1.2f;
 
@@ -267,7 +260,7 @@ std::uint32_t drop_weapon_ammo(Registry& reg, LayerId layer, const vec3& pos,
                                ItemId weapon, std::uint32_t seed) {
     const RangedDef* def = ranged_for_item(weapon);
     if (!def) return 0;
-    const std::uint32_t h = mix(seed ^ 0xA11A3300u);
+    const std::uint32_t h = hash_u32(seed ^ 0xA11A3300u);
 
     // Shotguns get shells by the handful; everything else gets at least a magazine
     // plus change, so the magazine size — not the item's rarity — decides the bundle.

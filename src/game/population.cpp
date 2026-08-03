@@ -1,3 +1,4 @@
+#include "core/rng.h"
 #include "game/population.h"
 
 #include "game/floor_gen.h" // floor_ground_z — the module's ground storey
@@ -6,16 +7,6 @@ namespace giga::game {
 
 namespace {
 
-// Small deterministic hash -> pseudo-random stream. Same splitmix64 style used
-// elsewhere; keeps seeding reproducible without pulling in <random>.
-std::uint32_t mix(std::uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352du;
-    x ^= x >> 15;
-    x *= 0x846ca68bu;
-    x ^= x >> 16;
-    return x;
-}
 
 // Placement lattice. In the floor-MODULE model each layer is its own 128^3
 // world (floor_gen.h), so a record's floor number is a LABEL, not a Z band —
@@ -95,7 +86,7 @@ NpcId seed_floor_from_spec(NpcPool& pool, int floor, const FloorSpec& spec,
         if (first == kInvalidNpc) first = id;
         last = id;
 
-        std::uint32_t r = mix(seed ^ (i * 0x9e3779b9u));
+        std::uint32_t r = hash_u32(seed ^ (i * 0x9e3779b9u));
 
         // Fill rooms round-robin (even spread), then step through interior slots
         // within each room. Wraps past kSlotsPerRoom only at very high density.
@@ -107,7 +98,7 @@ NpcId seed_floor_from_spec(NpcPool& pool, int floor, const FloorSpec& spec,
         int oy = kInteriorOff[slot / 4];
         pool.cx(id) = static_cast<std::uint8_t>(rx * kRoomStride + ox);
         pool.cy(id) = static_cast<std::uint8_t>(ry * kRoomStride + oy);
-        pool.cz(id) = static_cast<std::uint8_t>(mix(r ^ 0x51ED270Bu) %
+        pool.cz(id) = static_cast<std::uint8_t>(hash_u32(r ^ 0x51ED270Bu) %
                                                 static_cast<std::uint32_t>(kMacroDim));
 
         // The label is signed end to end: `floor` is an int (FloorRegistry's range is
@@ -120,16 +111,16 @@ NpcId seed_floor_from_spec(NpcPool& pool, int floor, const FloorSpec& spec,
             static_cast<std::uint8_t>(ageLo + static_cast<int>(r % static_cast<std::uint32_t>(ageSpan)));
         pool.age(id) = age;
         pool.sex(id) = (r & 0x100u) ? SexFemale : SexMale;
-        pool.height_mm(id) = height_for_age(age, mix(r));
+        pool.height_mm(id) = height_for_age(age, hash_u32(r));
 
         // Generic attribute block: byte-valued, seeded per slot. No named stats.
         auto& attrs = pool.attrs(id);
         for (int a = 0; a < kAttrSlots; ++a)
             attrs[static_cast<std::size_t>(a)] =
-                static_cast<std::uint8_t>(3 + (mix(r + a * 0x1000193u) % 13u)); // 3..15
+                static_cast<std::uint8_t>(3 + (hash_u32(r + a * 0x1000193u) % 13u)); // 3..15
 
         pool.level(id) = static_cast<std::uint8_t>(1 + (r % 10u));
-        pool.faction(id) = sample_faction(spec.factionMix, mix(r ^ 0x51ed270bu));
+        pool.faction(id) = sample_faction(spec.factionMix, hash_u32(r ^ 0x51ed270bu));
         pool.max_hp(id) = 100;
         pool.hp(id) = 100;
         ++placed;

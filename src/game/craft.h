@@ -21,7 +21,8 @@
 // table to drift from the composition table.
 //
 // ---------------------------------------------------------------------------
-// Why there is no 446-row craft_recipes.csv
+// Why there is no separate recipe-COST table (data/craft_recipes.csv holds
+// recipe KNOWLEDGE sources only — see the last paragraph)
 // ---------------------------------------------------------------------------
 // Because the recipes are already in `data/items.csv`, and a second copy of them
 // would be the exact failure [AGENTS.md] warns about for generated tables, one

@@ -1,3 +1,4 @@
+#include "core/rng.h"
 #include "game/wander.h"
 
 #include <cmath>
@@ -21,15 +22,6 @@ namespace giga::game {
 
 namespace {
 
-// splitmix64-style scrambler, as elsewhere in the game layer.
-std::uint32_t mix(std::uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352du;
-    x ^= x >> 15;
-    x *= 0x846ca68bu;
-    x ^= x >> 16;
-    return x;
-}
 
 // Walking speed for an ordinary resident, m/s. Mobs override this from their
 // table row (speed is authored in cells/s, and a cell is kCellSize metres).
@@ -57,7 +49,7 @@ std::uint8_t pack_target_node(std::uint8_t pack, std::uint64_t tick) {
     // and XORing a small counter into a small pack id would make neighbouring packs
     // and neighbouring epochs collide in blocks.
     const std::uint32_t h =
-        mix((static_cast<std::uint32_t>(pack) * 0x9e3779b9u) ^ mix(epoch));
+        hash_u32((static_cast<std::uint32_t>(pack) * 0x9e3779b9u) ^ hash_u32(epoch));
     return static_cast<std::uint8_t>(h % nav::kNodes);
 }
 
@@ -96,7 +88,7 @@ std::uint32_t wander_init(Registry& reg, LayerId layer, std::uint32_t seed) {
             c.pack != 0
                 ? pack_target_node(c.pack, 0)
                 : static_cast<std::uint8_t>(
-                      mix(seed ^
+                      hash_u32(seed ^
                           (static_cast<std::uint32_t>(entt::to_integral(c.e)) *
                            0x9e3779b9u)) %
                       nav::kNodes);
@@ -218,7 +210,7 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         // Identity-hash stagger: an agent's slot is a function of its own id, so
         // the crowd spreads evenly across the period with no scheduling state.
         const std::uint32_t id = static_cast<std::uint32_t>(entt::to_integral(e));
-        if (mix(id) % kWanderPeriod != phase) continue;
+        if (hash_u32(id) % kWanderPeriod != phase) continue;
 
         WanderTarget& wt = view.get<WanderTarget>(e);
         Velocity& vel = view.get<Velocity>(e);
@@ -382,7 +374,7 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
             // until the epoch turns (kPackEpochTicks, ~15 s) rather than retrying
             // after ~1.1 s.
             if (wt.pack == 0 && wt.cooldown == 0) {
-                std::uint32_t h = mix(id ^ static_cast<std::uint32_t>(tick));
+                std::uint32_t h = hash_u32(id ^ static_cast<std::uint32_t>(tick));
                 wt.node = static_cast<std::uint8_t>(h % nav::kNodes);
                 wt.cooldown = kRepathCooldown;
             }
@@ -427,7 +419,7 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                 // waits out the epoch instead of privately picking another.
                 if (wt.pack == 0 && wt.cooldown == 0) {
                     std::uint32_t h =
-                        mix(id ^ static_cast<std::uint32_t>(tick) ^ 0x5bf03635u);
+                        hash_u32(id ^ static_cast<std::uint32_t>(tick) ^ 0x5bf03635u);
                     wt.node = static_cast<std::uint8_t>(h % nav::kNodes);
                     wt.cooldown = kRepathCooldown;
                 }

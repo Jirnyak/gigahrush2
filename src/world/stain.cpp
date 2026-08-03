@@ -1,3 +1,4 @@
+#include "core/rng.h"
 #include "world/stain.h"
 
 #include <cmath>
@@ -18,16 +19,6 @@ std::uint8_t sat_add(std::uint8_t a, std::uint8_t b) {
     return static_cast<std::uint8_t>(s > 255 ? 255 : s);
 }
 
-// Deterministic per-ray direction hash — the carve_hash discipline: no RNG
-// stream, same seed = same spray on any machine.
-std::uint32_t mix32(std::uint32_t h) {
-    h ^= h >> 16;
-    h *= 0x7feb352du;
-    h ^= h >> 15;
-    h *= 0x846ca68bu;
-    h ^= h >> 16;
-    return h;
-}
 float u01(std::uint32_t h) {
     return static_cast<float>(h >> 8) * (1.0f / 16777216.0f);
 }
@@ -62,9 +53,9 @@ std::int32_t stain_splat(World& w, vec3 origin, vec3 bias, float reach,
 
     for (int i = 0; i < rays; ++i) {
         // Uniform direction from two hashes, pulled toward `bias`.
-        const std::uint32_t h = mix32(seed ^ (0x9e3779b9u * (i + 1)));
+        const std::uint32_t h = hash_u32(seed ^ (0x9e3779b9u * (i + 1)));
         const float z = u01(h) * 2.0f - 1.0f;
-        const float a = u01(mix32(h)) * 6.2831853f;
+        const float a = u01(hash_u32(h)) * 6.2831853f;
         const float rxy = std::sqrt(std::max(0.0f, 1.0f - z * z));
         vec3 dir{rxy * std::cos(a), rxy * std::sin(a), z};
         dir += bias;

@@ -123,9 +123,8 @@ Entity spawn_prop_from_id(Registry& reg, const World& world, const vec3& worldPo
 std::uint32_t clear_layer_props(Registry& reg, LayerId layer);
 
 // Seed Terminal + ElectricalShield Interactables by scanning MacroGrid with the
-// same spatial_hash / wall-device rules as gpu::PropPlacer (kSaltWall branch).
-// Positions match propPass cosmetics when both use the same seed
-// (1337u ^ floor*0x9e3779b9). Returns count successfully spawned.
+// deterministic spatial_hash wall-device rules (kSaltWall branch in the .cpp).
+// Returns count successfully spawned.
 // [jirnyak.md] §18 — sim must not read propPass.get_terminal_positions().
 std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
                                       LayerId layer, std::uint32_t seed);

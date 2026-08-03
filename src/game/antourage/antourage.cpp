@@ -18,14 +18,6 @@ namespace giga::game {
 
 namespace {
 
-std::uint32_t mix(std::uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352du;
-    x ^= x >> 15;
-    x *= 0x846ca68bu;
-    x ^= x >> 16;
-    return x;
-}
 
 // --- Pipe walker -------------------------------------------------------------
 // A 3D "tubes screensaver" walker over the grid: it starts on a ceiling-hugged
@@ -187,7 +179,7 @@ void emit_leg(const MacroGrid& g, AntourageBake& out,
 void bake_pipes(const World& w, std::uint32_t fseed, AntourageBake& out) {
     const MacroGrid& g = w.grid();
     for (int walk = 0; walk < kPipeWalks; ++walk) {
-        std::uint32_t h = mix(fseed ^ (static_cast<std::uint32_t>(walk) *
+        std::uint32_t h = hash_u32(fseed ^ (static_cast<std::uint32_t>(walk) *
                                        0x9E3779B9u));
         int x = static_cast<int>(h & 127u);
         int y = static_cast<int>((h >> 7) & 127u);
@@ -226,7 +218,7 @@ void bake_pipes(const World& w, std::uint32_t fseed, AntourageBake& out) {
             }
             ++out.pipeCells;
             leg.push_back({x, y, z});
-            h = mix(h ^ 0xA24BAED1u);
+            h = hash_u32(h ^ 0xA24BAED1u);
             // Turn? Only after a leg has real length, and only into a legal
             // first cell of the new direction.
             const bool wantTurn = static_cast<int>(leg.size()) >= kPipeMinLeg &&
@@ -310,7 +302,7 @@ void bake_wires(const World& w, std::uint32_t fseed, AntourageBake& out) {
                g.cell(x, y, z - 1) == kCellAir;
     };
     for (int t = 0; t < kWireTriesPerRoomish; ++t) {
-        const std::uint32_t h = mix(fseed ^ (static_cast<std::uint32_t>(t) *
+        const std::uint32_t h = hash_u32(fseed ^ (static_cast<std::uint32_t>(t) *
                                              0x9E3779B9u));
         const int x = static_cast<int>(h & 127u);
         const int y = static_cast<int>((h >> 7) & 127u);
@@ -382,7 +374,7 @@ void bake_cloths(const World& w, std::uint32_t fseed, AntourageBake& out) {
                g.cell(x, y, z - 1) == kCellAir;
     };
     for (int t = 0; t < kClothTries; ++t) {
-        const std::uint32_t h = mix(fseed ^ (static_cast<std::uint32_t>(t) *
+        const std::uint32_t h = hash_u32(fseed ^ (static_cast<std::uint32_t>(t) *
                                              0x9E3779B9u));
         const int x = static_cast<int>(h & 127u);
         const int y = static_cast<int>((h >> 7) & 127u);
@@ -442,8 +434,8 @@ void bake_antourage(const World& w, int number, unsigned seed,
         giga::hash_u32(static_cast<std::uint32_t>(seed) ^
                        (static_cast<std::uint32_t>(number) * 0xA24BAED1u));
     bake_pipes(w, fseed, out);
-    bake_wires(w, mix(fseed ^ 0x5A303B0Du), out);
-    bake_cloths(w, mix(fseed ^ 0x7C0FFEE1u), out);
+    bake_wires(w, hash_u32(fseed ^ 0x5A303B0Du), out);
+    bake_cloths(w, hash_u32(fseed ^ 0x7C0FFEE1u), out);
 }
 
 } // namespace giga::game

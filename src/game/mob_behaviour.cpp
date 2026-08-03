@@ -1,3 +1,4 @@
+#include "core/rng.h"
 #include "game/mob_behaviour.h"
 
 #include <cmath>
@@ -34,20 +35,6 @@ constexpr float kRing[8][2] = {
     { 0.7071068f, -0.7071068f},
 };
 
-// splitmix64-style scrambler, the same one wander.cpp and investigate.cpp carry.
-// Duplicated rather than shared for the reason [investigate.cpp] states about its own
-// copy, but with the OPPOSITE requirement: those two must land in the same stagger
-// slot, so they must compute the identical hash. This one must NOT — it offsets the
-// burst cycle, and if it agreed with the stagger hash then the phase a Трескотник
-// sprints in would be locked to the phase it is visited in.
-std::uint32_t mix(std::uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352du;
-    x ^= x >> 15;
-    x *= 0x846ca68bu;
-    x ^= x >> 16;
-    return x;
-}
 
 // The salt is what makes it a different hash rather than a different call to the same
 // one. Any nonzero constant works; this one is FNV-1a's offset basis, used here for
@@ -174,7 +161,7 @@ BurstPhase burst_phase(MobBehaviour b, std::uint32_t mobId, std::uint64_t tick,
     // Per-identity phase offset, so a pack does not sprint in unison. The offset is a
     // whole number of ticks inside one cycle, so the cycle length is exact.
     const std::uint64_t offset =
-        static_cast<std::uint64_t>(mix(mobId ^ kBurstSalt)) % kFractureCycleTicks;
+        static_cast<std::uint64_t>(hash_u32(mobId ^ kBurstSalt)) % kFractureCycleTicks;
     const std::uint64_t t = (tick + offset) % kFractureCycleTicks;
     if (t < kFractureWindupTicks) return BurstPhase::Windup;
     if (t < kFractureWindupTicks + kFractureSprintTicks) return BurstPhase::Sprint;

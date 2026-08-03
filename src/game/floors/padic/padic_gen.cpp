@@ -37,6 +37,7 @@
 // HOLES: some floors are breached — ragged sub-voxel blobs (unions of discs at
 // 0.25 m resolution, never neat rectangles) punched through both sandwich
 // layers, varying per storey.
+#include "core/rng.h"
 #include "game/floors/padic/padic.h"
 
 #include "game/floor_gen.h"
@@ -82,15 +83,6 @@ inline std::uint32_t lcg(std::uint32_t& s) {
 }
 inline int rnd(std::uint32_t& s, int lo, int hi) { // inclusive
     return lo + static_cast<int>(lcg(s) % static_cast<std::uint32_t>(hi - lo + 1));
-}
-// Storey-varying decisions (holes, rubble) come from a HASH of their
-// coordinates, not from the plan's rng stream — the plan must stay identical
-// across storeys and consumers ([floor_gen.h] on why replayed streams drift).
-inline std::uint32_t hmix(std::uint32_t x) {
-    x ^= x >> 16; x *= 0x7feb352du;
-    x ^= x >> 15; x *= 0x846ca68bu;
-    x ^= x >> 16;
-    return x;
 }
 
 // ---- the shared plan ---------------------------------------------------------
@@ -217,7 +209,7 @@ void build_plan(Plan& p, unsigned seed, int number) {
     p.grate.assign(p.floorMat.size(), 0);
     p.opening.assign(p.floorMat.size(), 0);
     p.blockOf.assign(p.floorMat.size(), 0xFF);
-    std::uint32_t rng = hmix(static_cast<std::uint32_t>(seed) ^
+    std::uint32_t rng = hash_u32(static_cast<std::uint32_t>(seed) ^
                              (static_cast<std::uint32_t>(number) * 0x9E3779B9u) ^
                              0x7AD1Cu);
     if (rng == 0) rng = 0x7AD1Cu; // an all-zero LCG stream is a degenerate plan
@@ -423,27 +415,27 @@ void stamp_stair(MacroGrid& g, SubField<CellType>& sm, const PlanStair& st,
 void punch_holes(MacroGrid& g, SubField<CellType>& sm, const Plan& p, int zc,
                  std::uint32_t h) {
     for (int blk = 0; blk < kLatticeDim * kLatticeDim; ++blk) {
-        std::uint32_t r = hmix(h ^ (0xB10Cu + static_cast<std::uint32_t>(blk)));
+        std::uint32_t r = hash_u32(h ^ (0xB10Cu + static_cast<std::uint32_t>(blk)));
         if ((r % 5u) >= 2u) continue; // 40% of blocks per storey get one hole
         const int bi = blk % kLatticeDim, bj = blk / kLatticeDim;
         const int bx = kCorr0 + bi * kLatticeSpacing + 2;
         const int by = kCorr0 + bj * kLatticeSpacing + 2;
         // Blob centre, in unwrapped sub-voxel coordinates, well inside the block.
-        r = hmix(r);
+        r = hash_u32(r);
         const int cxs = (bx + 4 + static_cast<int>(r % 22u)) * kSubDim + 4;
-        r = hmix(r);
+        r = hash_u32(r);
         const int cys = (by + 4 + static_cast<int>(r % 22u)) * kSubDim + 4;
         struct Disc { int x, y, r; };
         Disc d[4];
-        r = hmix(r);
+        r = hash_u32(r);
         const int nd = 2 + static_cast<int>(r % 3u);
         int reach = 0;
         for (int k = 0; k < nd; ++k) {
-            r = hmix(r);
+            r = hash_u32(r);
             d[k].x = cxs + static_cast<int>(r % 17u) - 8;
-            r = hmix(r);
+            r = hash_u32(r);
             d[k].y = cys + static_cast<int>(r % 17u) - 8;
-            r = hmix(r);
+            r = hash_u32(r);
             d[k].r = 5 + static_cast<int>(r % 8u);
             const int e = (k == 0 ? 0 : 8) + d[k].r;
             if (e > reach) reach = e;
@@ -581,17 +573,17 @@ void generate_padic_floor(World& world, int number, const FloorSpec& spec,
     sm.reserve_pages(700000);
 
     const std::uint32_t floorSalt =
-        hmix(static_cast<std::uint32_t>(seed) ^
+        hash_u32(static_cast<std::uint32_t>(seed) ^
              (static_cast<std::uint32_t>(number) * 0x51ED270Bu));
 
     for (int b = 0; b <= kLastBase; b += kStorey) {
-        const std::uint32_t sh = hmix(floorSalt ^ static_cast<std::uint32_t>(b));
+        const std::uint32_t sh = hash_u32(floorSalt ^ static_cast<std::uint32_t>(b));
         stamp_sandwich(g, sm, p, b + 2);
         punch_holes(g, sm, p, b + 2, sh);
         stamp_walls(g, sm, p, b);
         for (std::size_t s = 0; s < p.stairs.size(); ++s)
             stamp_stair(g, sm, p.stairs[s], b,
-                        hmix(sh ^ (0x57A12u + static_cast<std::uint32_t>(s))));
+                        hash_u32(sh ^ (0x57A12u + static_cast<std::uint32_t>(s))));
     }
     // Attic: the 2-cell crawl whose sandwich is storey 0's floor. No holes —
     // the arrival floor stays solid. Stair entry strips so the ground-storey
