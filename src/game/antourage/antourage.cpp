@@ -314,6 +314,71 @@ void bake_wires(const World& w, std::uint32_t fseed, AntourageBake& out) {
 
 } // namespace
 
+// --- CLOTH module: hanging curtains/tarps -----------------------------------
+// The 2D-sheet primitive's first author ([antourage.h] ClothSheet): a strip of
+// canvas hung from the real ceiling under-face, top row pinned, everything
+// else swinging — pushed through by every body on the floor. The candidate
+// test mirrors bake_wires (ceilinged air over clear air) plus headroom below,
+// so a curtain hangs across walkable space, never inside an attic crevice.
+constexpr int kClothTries = 6000;       // draws over the whole floor
+constexpr float kClothWidthM = 1.8f;    // across, metres
+constexpr float kClothDropM = 1.6f;     // hang, metres
+
+void bake_cloths(const World& w, std::uint32_t fseed, AntourageBake& out) {
+    const MacroGrid& g = w.grid();
+    auto ceilinged_air = [&](int x, int y, int z) {
+        return g.cell(x, y, z) == kCellAir && g.cell(x, y, z + 1) != kCellAir &&
+               g.cell(x, y, z - 1) == kCellAir;
+    };
+    for (int t = 0; t < kClothTries; ++t) {
+        const std::uint32_t h = mix(fseed ^ (static_cast<std::uint32_t>(t) *
+                                             0x9E3779B9u));
+        const int x = static_cast<int>(h & 127u);
+        const int y = static_cast<int>((h >> 7) & 127u);
+        const int z = static_cast<int>((h >> 14) & 127u);
+        const bool alongX = (h >> 27) & 1u;
+        const int dx = alongX ? 1 : 0, dy = alongX ? 0 : 1;
+        // Density roll: curtains are an accent, not a jungle — wires own the
+        // ceilings, a sheet appears roughly once per eight candidate spots.
+        if (((h >> 21) & 7u) != 0u) continue;
+        // Both top-corner cells and the span between them under real ceiling.
+        if (!ceilinged_air(x, y, z)) continue;
+        if (!ceilinged_air(x + dx, y + dy, z)) continue;
+        const float face0 = ceiling_face_m(g, x, y, z, true);
+        const float face1 =
+            ceiling_face_m(g, wrap_macro(x + dx), wrap_macro(y + dy), z, true);
+        if (face0 < 0.0f || face1 < 0.0f) continue;
+
+        ClothSheet s{};
+        s.ax0 = static_cast<std::uint8_t>(wrap_macro(x));
+        s.ay0 = static_cast<std::uint8_t>(wrap_macro(y));
+        s.az0 = static_cast<std::uint8_t>(wrap_macro(z + 1));
+        s.ax1 = static_cast<std::uint8_t>(wrap_macro(x + dx));
+        s.ay1 = static_cast<std::uint8_t>(wrap_macro(y + dy));
+        s.az1 = s.az0;
+        // Top edge: centred between the two cells, sunk to the LOWER of the
+        // two real faces so no corner pins into air.
+        const float topZ = (face0 < face1 ? face0 : face1) + 0.10f;
+        const vec3 mid{(static_cast<float>(x) + 0.5f + 0.5f * dx) * kCellSize,
+                       (static_cast<float>(y) + 0.5f + 0.5f * dy) * kCellSize,
+                       topZ};
+        const vec3 across{static_cast<float>(dx), static_cast<float>(dy), 0.0f};
+        s.restX = kClothWidthM / static_cast<float>(kClothW - 1);
+        s.restY = kClothDropM / static_cast<float>(kClothH - 1);
+        for (int r = 0; r < kClothH; ++r)
+            for (int c = 0; c < kClothW; ++c) {
+                const float u = static_cast<float>(c) /
+                                    static_cast<float>(kClothW - 1) -
+                                0.5f;
+                vec3 p = mid + across * (u * kClothWidthM);
+                p.z -= static_cast<float>(r) * s.restY;
+                s.p[r * kClothW + c] = p;
+            }
+        s.pinMask = 0xFFu; // the top row
+        out.cloths.push_back(s);
+    }
+}
+
 void bake_antourage(const World& w, int number, unsigned seed,
                     AntourageBake& out) {
     // v1 is written against a +-Z gravity frame (the sole registered geometry
@@ -327,6 +392,7 @@ void bake_antourage(const World& w, int number, unsigned seed,
                        (static_cast<std::uint32_t>(number) * 0xA24BAED1u));
     bake_pipes(w, fseed, out);
     bake_wires(w, mix(fseed ^ 0x5A303B0Du), out);
+    bake_cloths(w, mix(fseed ^ 0x7C0FFEE1u), out);
 }
 
 } // namespace giga::game

@@ -21,10 +21,14 @@ struct WChain {
 };
 
 layout(std430, binding = 0) buffer Wires { WChain c[]; } wb;
+// This frame's push bodies: xyz = world pos, w = radius. EVERY body on the
+// layer is here — the player is one of them, an NPC with a camera, never a
+// special case (owner's law).
+layout(std430, binding = 1) readonly buffer Bodies { vec4 b[]; } bb;
 
 layout(push_constant) uniform Push {
-    vec4 sim;    // x = dt, y = gravity Z accel, z = chain count, w = damping
-    vec4 player; // xyz = player world pos, w = push radius
+    vec4 sim; // x = dt, y = gravity Z accel, z = chain count, w = damping
+    vec4 aux; // x = body count, y = wrap period (m)
 } pc;
 
 void main() {
@@ -41,13 +45,18 @@ void main() {
         if (cur.w == 0.0) continue;     // pinned anchor point
         vec3 vel = (cur.xyz - wb.c[i].prev[k].xyz) * pc.sim.w;
         vec3 np = cur.xyz + vel + vec3(0.0, 0.0, pc.sim.y) * dt * dt;
-        // The player brushing through: a soft radial push (one-way).
-        vec3 dp = np - pc.player.xyz;
-        float r = pc.player.w;
-        float d2 = dot(dp, dp);
-        if (d2 < r * r && d2 > 1e-6) {
-            float d = sqrt(d2);
-            np += dp / d * (r - d) * 0.35;
+        // Bodies brushing through: a soft radial push per body (one-way).
+        // Deltas wrap on the torus so a body across the seam still pushes.
+        float per = pc.aux.y;
+        for (uint bi = 0u; bi < uint(pc.aux.x); ++bi) {
+            vec3 dp = np - bb.b[bi].xyz;
+            dp -= per * floor(dp / per + 0.5);
+            float r = bb.b[bi].w;
+            float d2 = dot(dp, dp);
+            if (d2 < r * r && d2 > 1e-6) {
+                float d = sqrt(d2);
+                np += dp / d * (r - d) * 0.35;
+            }
         }
         wb.c[i].prev[k] = vec4(cur.xyz, 0.0);
         wb.c[i].cur[k] = vec4(np, cur.w);

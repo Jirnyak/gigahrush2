@@ -84,6 +84,7 @@
 #include "render/body_pass.h"
 #include "render/cube_pass.h"
 #include "render/material_table.h" // kMaterial — generated albedo table
+#include "render/cloth_pass.h"
 #include "render/particle_pass.h"
 #include "render/wire_pass.h"
 #include "render/prop_pass.h"
@@ -1096,6 +1097,36 @@ static void upload_wires(gpu::WirePass& wirePass, const game::AntourageBake* ab)
                          packed[i].cur[4].z);
 }
 
+// Pack the game-side cloth sheets into the render pass's POD format — the
+// third primitive's twin of upload_wires (render never includes game/).
+static void upload_cloths(gpu::ClothPass& clothPass,
+                          const game::AntourageBake* ab) {
+    if (!clothPass.ready()) return;
+    static std::vector<gpu::GpuClothSheet> packed;
+    packed.clear();
+    static_assert(gpu::kClothGridPoints == game::kClothPoints,
+                  "grid shape is the CPU/GPU lockstep");
+    if (ab != nullptr) {
+        for (const game::ClothSheet& s : ab->cloths) {
+            gpu::GpuClothSheet g{};
+            g.meta = vec4{s.restX, 1.0f, s.restY, 0.0f};
+            for (int i = 0; i < gpu::kClothGridPoints; ++i) {
+                const bool pinned = (s.pinMask >> i) & 1u;
+                g.cur[i] = vec4{s.p[i].x, s.p[i].y, s.p[i].z,
+                                pinned ? 0.0f : 1.0f};
+                g.prev[i] = vec4{s.p[i].x, s.p[i].y, s.p[i].z, 0.0f};
+            }
+            packed.push_back(g);
+        }
+    }
+    clothPass.upload(packed.data(), static_cast<std::uint32_t>(packed.size()));
+    if (std::getenv("GIGA_WIRE_DBG") != nullptr)
+        for (std::size_t i = 0; i < packed.size() && i < 20; ++i)
+            std::fprintf(stderr, "[cloth] %zu top (%.1f %.1f %.1f)\n", i,
+                         packed[i].cur[3].x, packed[i].cur[3].y,
+                         packed[i].cur[3].z);
+}
+
 // --- unified particle pool: the app-side packing seam -----------------------
 // Render never includes game/ ([ARCHITECTURE.md]), so bursts proposed in game/
 // ([game/particles.h]) become GpuParticle records HERE: the material tint is
@@ -1555,6 +1586,12 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "[wire] pass init failed (continuing without wires)\n");
     }
 
+    // Cloth sheets: GPU-verlet antourage curtains ([render/cloth_pass.h]).
+    gpu::ClothPass clothPass;
+    if (!clothPass.init(&device, renderer.renderPass, GIGA_SHADER_DIR)) {
+        std::fprintf(stderr, "[cloth] pass init failed (continuing without cloth)\n");
+    }
+
     // The unified particle pool: blood/dust/sparks/drips, one compute sim
     // colliding against the voxel mirror ([render/particle_pass.h]).
     gpu::ParticlePass particlePass;
@@ -1787,6 +1824,7 @@ int main(int argc, char** argv) {
                                       streamer.antourage_at_layer(registry, l0),
                                       stack.layer(l0), &dripEmitters);
                 upload_wires(wirePass, streamer.antourage_at_layer(registry, l0));
+                upload_cloths(clothPass, streamer.antourage_at_layer(registry, l0));
             }
         }
     }
@@ -2254,6 +2292,7 @@ int main(int argc, char** argv) {
                                   streamer.antourage_at_layer(registry, nl),
                                   stack.layer(nl), &dripEmitters);
                 upload_wires(wirePass, streamer.antourage_at_layer(registry, nl));
+                upload_cloths(clothPass, streamer.antourage_at_layer(registry, nl));
         }
         // ride_elevator keeps x/y and plants z=kArrivalCoord. ~1-in-5 Residential
         // columns are solid at that z, so without this the body freezes in a
@@ -3950,6 +3989,7 @@ int main(int argc, char** argv) {
                                   streamer.antourage_at_layer(registry, nl),
                                   stack.layer(nl), &dripEmitters);
                 upload_wires(wirePass, streamer.antourage_at_layer(registry, nl));
+                upload_cloths(clothPass, streamer.antourage_at_layer(registry, nl));
                             }
                             voxelMirror.upload_all(stack.layer(nl));
                             if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
@@ -4260,10 +4300,13 @@ int main(int argc, char** argv) {
             {
                 const game::AntourageBake* hudAb =
                     streamer.antourage_at_layer(registry, activeLayer);
-                ImGui::Text("antourage: %zu instances | %zu wires (gpu %u)",
+                ImGui::Text("antourage: %zu instances | %zu wires (gpu %u) | "
+                            "%zu cloths (gpu %u)",
                             hudAb ? hudAb->instances.size() : 0,
                             hudAb ? hudAb->wires.size() : 0,
-                            wirePass.chain_count());
+                            wirePass.chain_count(),
+                            hudAb ? hudAb->cloths.size() : 0,
+                            clothPass.sheet_count());
                 ImGui::Text("particles: %u alive / %u spawned | %zu drip emitters",
                             particlePass.alive_count(),
                             particlePass.spawned_total(), dripEmitters.size());
@@ -5057,6 +5100,7 @@ int main(int argc, char** argv) {
                                       streamer.antourage_at_layer(registry, activeLayer),
                                       stack.layer(activeLayer), &dripEmitters);
                 upload_wires(wirePass, streamer.antourage_at_layer(registry, activeLayer));
+                upload_cloths(clothPass, streamer.antourage_at_layer(registry, activeLayer));
             }
 
             // GIGA_NO_GPU_CULL=1 falls back to the CPU cull — the A/B switch
@@ -5086,6 +5130,30 @@ int main(int argc, char** argv) {
                 propPass.set_use_gpu_culling(false);
             }
 
+            // Push bodies for the verlet passes: EVERY body on the active
+            // layer (the same set BodyPass draws, PLUS the camera holder —
+            // the player is an NPC with a camera, never a special case:
+            // wires and curtains answer to the whole crowd identically).
+            {
+                static std::vector<vec4> pushBodies;
+                pushBodies.clear();
+                for (auto e :
+                     reg.view<const Transform, const AABB, const Renderable>()) {
+                    if (reg.all_of<StaticPropTag>(e)) continue;
+                    const Transform& tr = reg.get<const Transform>(e);
+                    if (tr.layer != activeLayer) continue;
+                    pushBodies.push_back(
+                        vec4{tr.pos.x, tr.pos.y, tr.pos.z, 0.9f});
+                    if (pushBodies.size() >= gpu::kMaxPushBodies) break;
+                }
+                wirePass.upload_bodies(pushBodies.data(),
+                                       static_cast<std::uint32_t>(
+                                           pushBodies.size()));
+                clothPass.upload_bodies(pushBodies.data(),
+                                        static_cast<std::uint32_t>(
+                                            pushBodies.size()));
+            }
+
             // Wire verlet: aliveness from the LIVE grid (anchor probe), then
             // the compute step — recorded before the render pass like the cull.
             if (wirePass.ready() && wirePass.chain_count() > 0 &&
@@ -5105,11 +5173,30 @@ int main(int argc, char** argv) {
                                          static_cast<std::uint32_t>(
                                              wireAlive.size()));
                 }
-                const vec3 wp = reg.valid(player) && reg.all_of<Transform>(player)
-                                    ? reg.get<Transform>(player).pos
-                                    : camMat.eye;
                 if (std::getenv("GIGA_WIRE_NOSIM") == nullptr)
-                    wirePass.record_sim(cmd, wp, 1.0f / 60.0f);
+                    wirePass.record_sim(cmd, 1.0f / 60.0f);
+            }
+
+            // Cloth verlet: same aliveness law, same clock.
+            if (clothPass.ready() && clothPass.sheet_count() > 0 &&
+                activeLayer != kInvalidLayer) {
+                if (const game::AntourageBake* ab =
+                        streamer.antourage_at_layer(registry, activeLayer)) {
+                    static std::vector<std::uint8_t> clothAlive;
+                    clothAlive.clear();
+                    const MacroGrid& wg = stack.layer(activeLayer).grid();
+                    for (const game::ClothSheet& c : ab->cloths)
+                        clothAlive.push_back(
+                            wg.cell(c.ax0, c.ay0, c.az0) != kCellAir &&
+                                    wg.cell(c.ax1, c.ay1, c.az1) != kCellAir
+                                ? 1u
+                                : 0u);
+                    clothPass.write_alive(clothAlive.data(),
+                                          static_cast<std::uint32_t>(
+                                              clothAlive.size()));
+                }
+                if (std::getenv("GIGA_WIRE_NOSIM") == nullptr)
+                    clothPass.record_sim(cmd, 1.0f / 60.0f);
             }
 
             if (!stainDirty.empty()) {
@@ -5159,6 +5246,7 @@ int main(int argc, char** argv) {
             if (propPass.ready())
                 propPass.record(cmd, renderer.currentFrame, push, lightGrid.descriptor_set());
             wirePass.record_draw(cmd, push);
+            clothPass.record_draw(cmd, push);
             // Particles LAST among world passes: alpha-blended sprites need
             // every opaque depth already written.
             particlePass.record_draw(cmd, push);
@@ -5278,6 +5366,7 @@ int main(int argc, char** argv) {
                                   streamer.antourage_at_layer(registry, nl),
                                   stack.layer(nl), &dripEmitters);
                 upload_wires(wirePass, streamer.antourage_at_layer(registry, nl));
+                upload_cloths(clothPass, streamer.antourage_at_layer(registry, nl));
                         }
                         // Same clear as the keyboard ride path. There are TWO travel
                         // sites and the first fix only touched one, so a --shot
@@ -5364,6 +5453,7 @@ int main(int argc, char** argv) {
     hud.destroy();
 
     particlePass.destroy();
+    clothPass.destroy();
     wirePass.destroy();
     cullPass.destroy();
     propPass.destroy();

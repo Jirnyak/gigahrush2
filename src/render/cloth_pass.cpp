@@ -1,4 +1,4 @@
-#include "render/wire_pass.h"
+#include "render/cloth_pass.h"
 
 #include <cstdio>
 #include <cstring>
@@ -38,30 +38,30 @@ std::string join(const char* dir, const char* file) {
 }
 
 struct SimPush {
-    vec4 sim; // x dt, y gravity z, z chain count, w damping
-    vec4 aux; // x body count, y wrap period (m), z/w unused
+    vec4 sim; // x dt, y gravity z, z sheet count, w damping
+    vec4 aux; // x body count, y wrap period (m)
 };
 
 } // namespace
 
-bool WirePass::init(VulkanDevice* dev, VkRenderPass renderPass,
-                    const char* shaderDir) {
+bool ClothPass::init(VulkanDevice* dev, VkRenderPass renderPass,
+                     const char* shaderDir) {
     dev_ = dev;
     if (!points_.create_host_visible(
-            *dev_, sizeof(GpuWireChain) * kMaxWireChains,
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "wire-chains"))
+            *dev_, sizeof(GpuClothSheet) * kMaxClothSheets,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "cloth-sheets"))
         return false;
     if (!bodies_.create_host_visible(*dev_, sizeof(vec4) * kMaxPushBodies,
                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                     "wire-bodies"))
+                                     "cloth-bodies"))
         return false;
 
     VkDescriptorSetLayoutBinding b[2]{};
-    b[0].binding = 0; // the chains
+    b[0].binding = 0;
     b[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     b[0].descriptorCount = 1;
     b[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_VERTEX_BIT;
-    b[1].binding = 1; // this frame's push bodies, compute only
+    b[1].binding = 1;
     b[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     b[1].descriptorCount = 1;
     b[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -106,7 +106,8 @@ bool WirePass::init(VulkanDevice* dev, VkRenderPass renderPass,
     return create_pipelines(renderPass, shaderDir);
 }
 
-bool WirePass::create_pipelines(VkRenderPass renderPass, const char* shaderDir) {
+bool ClothPass::create_pipelines(VkRenderPass renderPass,
+                                 const char* shaderDir) {
     VkDevice d = dev_->device;
 
     // --- compute -----------------------------------------------------------
@@ -122,8 +123,8 @@ bool WirePass::create_pipelines(VkRenderPass renderPass, const char* shaderDir) 
             return false;
 
         std::vector<char> spv;
-        if (!read_file(join(shaderDir, "wire_sim.comp.spv"), spv)) {
-            std::fprintf(stderr, "[wire] wire_sim.comp.spv missing\n");
+        if (!read_file(join(shaderDir, "cloth_sim.comp.spv"), spv)) {
+            std::fprintf(stderr, "[cloth] cloth_sim.comp.spv missing\n");
             return false;
         }
         VkShaderModule m = VK_NULL_HANDLE;
@@ -142,7 +143,7 @@ bool WirePass::create_pipelines(VkRenderPass renderPass, const char* shaderDir) 
         if (!ok) return false;
     }
 
-    // --- graphics (line list) ----------------------------------------------
+    // --- graphics (two-sided quads) ----------------------------------------
     {
         VkPushConstantRange pr{
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
@@ -157,9 +158,9 @@ bool WirePass::create_pipelines(VkRenderPass renderPass, const char* shaderDir) 
             return false;
 
         std::vector<char> vs, fs;
-        if (!read_file(join(shaderDir, "wire.vert.spv"), vs) ||
-            !read_file(join(shaderDir, "wire.frag.spv"), fs)) {
-            std::fprintf(stderr, "[wire] wire shaders missing\n");
+        if (!read_file(join(shaderDir, "cloth.vert.spv"), vs) ||
+            !read_file(join(shaderDir, "cloth.frag.spv"), fs)) {
+            std::fprintf(stderr, "[cloth] cloth shaders missing\n");
             return false;
         }
         VkShaderModule vm = VK_NULL_HANDLE, fm = VK_NULL_HANDLE;
@@ -194,7 +195,7 @@ bool WirePass::create_pipelines(VkRenderPass renderPass, const char* shaderDir) 
         VkPipelineRasterizationStateCreateInfo rs{};
         rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
         rs.polygonMode = VK_POLYGON_MODE_FILL;
-        rs.cullMode = VK_CULL_MODE_NONE;
+        rs.cullMode = VK_CULL_MODE_NONE; // cloth has two faces
         rs.lineWidth = 1.0f;
 
         VkPipelineMultisampleStateCreateInfo ms{};
@@ -246,33 +247,32 @@ bool WirePass::create_pipelines(VkRenderPass renderPass, const char* shaderDir) 
     return true;
 }
 
-void WirePass::upload(const GpuWireChain* chains, std::uint32_t count) {
+void ClothPass::upload(const GpuClothSheet* sheets, std::uint32_t count) {
     if (!points_.mapped) return;
-    chainCount_ = count < kMaxWireChains ? count : kMaxWireChains;
-    if (chainCount_ > 0)
-        std::memcpy(points_.mapped, chains,
-                    sizeof(GpuWireChain) * chainCount_);
+    sheetCount_ = count < kMaxClothSheets ? count : kMaxClothSheets;
+    if (sheetCount_ > 0)
+        std::memcpy(points_.mapped, sheets,
+                    sizeof(GpuClothSheet) * sheetCount_);
 }
 
-void WirePass::write_alive(const std::uint8_t* flags, std::uint32_t count) {
+void ClothPass::write_alive(const std::uint8_t* flags, std::uint32_t count) {
     if (!points_.mapped) return;
-    auto* c = static_cast<GpuWireChain*>(points_.mapped);
-    const std::uint32_t n = count < chainCount_ ? count : chainCount_;
+    auto* c = static_cast<GpuClothSheet*>(points_.mapped);
+    const std::uint32_t n = count < sheetCount_ ? count : sheetCount_;
     for (std::uint32_t i = 0; i < n; ++i)
         c[i].meta.y = flags[i] ? 1.0f : 0.0f;
 }
 
-void WirePass::upload_bodies(const vec4* bodies, std::uint32_t count) {
+void ClothPass::upload_bodies(const vec4* bodies, std::uint32_t count) {
     if (!bodies_.mapped) return;
     bodyCount_ = count < kMaxPushBodies ? count : kMaxPushBodies;
     if (bodyCount_ > 0)
         std::memcpy(bodies_.mapped, bodies, sizeof(vec4) * bodyCount_);
 }
 
-void WirePass::record_sim(VkCommandBuffer cmd, float dt) {
-    if (simPipeline_ == VK_NULL_HANDLE || chainCount_ == 0) return;
+void ClothPass::record_sim(VkCommandBuffer cmd, float dt) {
+    if (simPipeline_ == VK_NULL_HANDLE || sheetCount_ == 0) return;
 
-    // Last frame's draw read the points; order the write after it.
     VkMemoryBarrier mb{};
     mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     mb.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
@@ -285,12 +285,12 @@ void WirePass::record_sim(VkCommandBuffer cmd, float dt) {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, simLayout_, 0,
                             1, &set_, 0, nullptr);
     SimPush p{};
-    p.sim = vec4{dt, -9.81f, static_cast<float>(chainCount_), 0.985f};
+    p.sim = vec4{dt, -9.81f, static_cast<float>(sheetCount_), 0.985f};
     p.aux = vec4{static_cast<float>(bodyCount_),
                  static_cast<float>(kWorldExtent), 0.0f, 0.0f};
     vkCmdPushConstants(cmd, simLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                        sizeof(SimPush), &p);
-    vkCmdDispatch(cmd, (chainCount_ + 63u) / 64u, 1, 1);
+    vkCmdDispatch(cmd, (sheetCount_ + 63u) / 64u, 1, 1);
 
     VkMemoryBarrier mb2{};
     mb2.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
@@ -301,8 +301,8 @@ void WirePass::record_sim(VkCommandBuffer cmd, float dt) {
                          nullptr, 0, nullptr);
 }
 
-void WirePass::record_draw(VkCommandBuffer cmd, const CubePush& push) {
-    if (drawPipeline_ == VK_NULL_HANDLE || chainCount_ == 0) return;
+void ClothPass::record_draw(VkCommandBuffer cmd, const CubePush& push) {
+    if (drawPipeline_ == VK_NULL_HANDLE || sheetCount_ == 0) return;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawPipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawLayout_, 0,
@@ -310,10 +310,10 @@ void WirePass::record_draw(VkCommandBuffer cmd, const CubePush& push) {
     vkCmdPushConstants(cmd, drawLayout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(CubePush), &push);
-    vkCmdDraw(cmd, chainCount_ * 42u, 1, 0, 0); // 7 segs x 2 tris x 3
+    vkCmdDraw(cmd, sheetCount_ * kClothVertsPerSheet, 1, 0, 0);
 }
 
-void WirePass::destroy() {
+void ClothPass::destroy() {
     if (dev_ == nullptr) return;
     VkDevice d = dev_->device;
     if (drawPipeline_) vkDestroyPipeline(d, drawPipeline_, nullptr);

@@ -57,6 +57,22 @@ static void test_antourage_all() {
         CHECK(c.p[kWirePoints / 2].z < top); // the middle really sags
     }
 
+    // CLOTH — the third primitive ([antourage.h] ClothSheet): sheets hang from
+    // real ceiling anchors, the top row is pinned, every free point sits at or
+    // below its own column's pin, and both rest lengths are usable.
+    CHECK(!bake.cloths.empty());
+    std::fprintf(stderr, "[antourage] cloths: %zu\n", bake.cloths.size());
+    for (const ClothSheet& s : bake.cloths) {
+        CHECK(w.grid().cell(s.ax0, s.ay0, s.az0) != kCellAir);
+        CHECK(w.grid().cell(s.ax1, s.ay1, s.az1) != kCellAir);
+        CHECK(s.restX > 0.0f);
+        CHECK(s.restY > 0.0f);
+        CHECK(s.pinMask == 0xFFu); // this module pins exactly the top row
+        for (int c = 0; c < kClothW; ++c)
+            for (int r = 1; r < kClothH; ++r)
+                CHECK(s.p[r * kClothW + c].z <= s.p[c].z + 1e-4f);
+    }
+
     // Deterministic: same (grid, number, seed) -> the identical dressing, so a
     // recycled World re-bakes bit-for-bit like the geometry.
     World w2;
@@ -66,6 +82,7 @@ static void test_antourage_all() {
     CHECK(again.pipeCells == bake.pipeCells);
     CHECK(again.instances.size() == bake.instances.size());
     CHECK(again.wires.size() == bake.wires.size());
+    CHECK(again.cloths.size() == bake.cloths.size());
     CHECK(w.grid().types() == w2.grid().types());
 
     // The dressing must not eat the doors: door_build still validates a real

@@ -55,6 +55,27 @@ struct WireChain {
     std::uint8_t pinMask = 0x81;
 };
 
+// The THIRD universal primitive (owner's decision, 2026-08-03): a 2D verlet
+// SHEET — curtain, tarp, flag, web membrane. Same chain math as WireChain,
+// constraints along two axes; the GPU backend integrates it and every body on
+// the floor pushes through it (nobody is special — the player is an NPC with
+// a camera). Fixed grid so the GPU struct is fixed-size: kClothW x kClothH
+// points, row-major, row 0 = the TOP row (pinned by default).
+inline constexpr int kClothW = 8;
+inline constexpr int kClothH = 4;
+inline constexpr int kClothPoints = kClothW * kClothH; // 32 — one pin bit each
+struct ClothSheet {
+    vec3 p[kClothPoints];    // rest pose, world units, row-major from the top
+    float restX = 0.0f;      // horizontal neighbour rest length
+    float restY = 0.0f;      // vertical neighbour rest length
+    // The two anchor CELLS (the ceiling cells over the top corners). Either
+    // carved to air -> the sheet is dead; probed against the LIVE grid.
+    std::uint8_t ax0, ay0, az0;
+    std::uint8_t ax1, ay1, az1;
+    // Bit i pins point i. Default: the whole top row hangs, the rest swings.
+    std::uint32_t pinMask = 0xFFu;
+};
+
 // THE UNIVERSAL PRIMITIVE (owner's contract, 2026-08-03): a module emits
 // INSTANCES — shape + transform + material + anchor cells — and the core
 // renders them without knowing what they depict. Pipes, radiators, bas-relief,
@@ -88,6 +109,7 @@ struct AntourageInstance {
 struct AntourageBake {
     std::vector<AntourageInstance> instances;
     std::vector<WireChain> wires;
+    std::vector<ClothSheet> cloths;
     std::uint32_t pipeCells = 0;   // cells the pipe walker traversed (stats)
 };
 

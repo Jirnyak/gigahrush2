@@ -34,6 +34,11 @@ static_assert(sizeof(GpuWireChain) == 272, "three-vec4-clean layout");
 
 inline constexpr std::uint32_t kMaxWireChains = 1024;
 
+// Push-body cap. Every body on the active layer brushes wires and cloth —
+// the player is just one of them (an NPC with a camera, owner's law). One
+// vec4 per body: xyz = world pos, w = push radius.
+inline constexpr std::uint32_t kMaxPushBodies = 512;
+
 class WirePass {
 public:
     WirePass() = default;
@@ -53,8 +58,12 @@ public:
     // kills chain i this frame — one byte per chain, written into meta.y.
     void write_alive(const std::uint8_t* flags, std::uint32_t count);
 
+    // This frame's push bodies (every Transform+AABB body on the layer, the
+    // camera holder among them — nobody special). vec4 = xyz pos, w radius.
+    void upload_bodies(const vec4* bodies, std::uint32_t count);
+
     // The verlet step. Record OUTSIDE the render pass (compute), before draw.
-    void record_sim(VkCommandBuffer cmd, const vec3& playerPos, float dt);
+    void record_sim(VkCommandBuffer cmd, float dt);
 
     // The line draw. Record INSIDE the render pass, after the solid passes.
     void record_draw(VkCommandBuffer cmd, const CubePush& push);
@@ -66,7 +75,9 @@ private:
 
     VulkanDevice* dev_ = nullptr;
     VulkanBuffer points_;                       // persistent, host-visible
+    VulkanBuffer bodies_;                       // per-frame push bodies
     std::uint32_t chainCount_ = 0;
+    std::uint32_t bodyCount_ = 0;
 
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool pool_ = VK_NULL_HANDLE;

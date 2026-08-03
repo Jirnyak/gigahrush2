@@ -233,7 +233,7 @@ set(_giga_spv_files "")
 # explicit list rather than a GLOB — a stray .glsl should not silently start forcing
 # every shader to recompile.
 set(_giga_glsl_includes ${CMAKE_SOURCE_DIR}/shaders/material_surface.glsl ${CMAKE_SOURCE_DIR}/shaders/volumetric_fog.glsl)
-foreach(_sh cube.frag body.vert prop.vert prop.frag raymarch.vert raymarch.frag wire.vert wire.frag particle.vert particle.frag)
+foreach(_sh cube.frag body.vert prop.vert prop.frag raymarch.vert raymarch.frag wire.vert wire.frag particle.vert particle.frag cloth.vert cloth.frag)
     add_custom_command(
         OUTPUT ${_giga_spv_dir}/${_sh}.spv
         COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O
@@ -263,6 +263,16 @@ add_custom_command(
     DEPENDS ${CMAKE_SOURCE_DIR}/shaders/wire_sim.comp
     COMMENT "glslc wire_sim.comp -> wire_sim.comp.spv")
 list(APPEND _giga_spv_files ${_giga_spv_dir}/wire_sim.comp.spv)
+
+# GPU verlet for 2D cloth sheets (antourage curtains/tarps).
+add_custom_command(
+    OUTPUT ${_giga_spv_dir}/cloth_sim.comp.spv
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0
+        ${CMAKE_SOURCE_DIR}/shaders/cloth_sim.comp
+        -o ${_giga_spv_dir}/cloth_sim.comp.spv
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/cloth_sim.comp
+    COMMENT "glslc cloth_sim.comp -> cloth_sim.comp.spv")
+list(APPEND _giga_spv_files ${_giga_spv_dir}/cloth_sim.comp.spv)
 
 # GPU sim for the unified particle pool (blood/dust/sparks/drips).
 add_custom_command(
@@ -548,7 +558,10 @@ if(GIGA_BUILD_TESTS)
     # 218985 -> 219307 (+322) on 2026-08-03: unified particle pool game half —
     # suite_particles.inl (generated table row sanity, ParticleBurstQueue ring
     # incl. its 255-push overflow loop, apply_damage-is-the-blood-writer).
-        PASS_REGULAR_EXPRESSION "game_test: 219307 checks, 0 failures")
+    # 219307 -> 223717 (+4410) on 2026-08-03: ClothSheet third primitive —
+    # bake_cloths curtains (152 sheets on floor 0, per-sheet anchor/pin/rest
+    # loops dominate the delta) + determinism now covers cloths.
+        PASS_REGULAR_EXPRESSION "game_test: 223717 checks, 0 failures")
 
 
 
