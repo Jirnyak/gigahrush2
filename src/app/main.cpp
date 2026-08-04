@@ -4373,7 +4373,27 @@ int main(int argc, char** argv) {
             }
             std::int16_t php = 0, pmax = 0;
             if (game::entity_health(reg, pool, player, php, pmax))
-                ImGui::Text("HP %d / %d%s", php, pmax, php <= 0 ? "  DEAD" : "");
+                if (pmax > 0) {
+                    const float frac = static_cast<float>(php) /
+                                       static_cast<float>(pmax);
+                    // Service-equipment status bar: hard-edged phosphor-green fill
+                    // (no glow), amber when critical, dark when dead. taste.md:
+                    // important status gets its own bar, not an overlay drawn over
+                    // the gameplay zone.
+                    if (php <= 0)
+                        ImGui::PushStyleColor(ImGuiCol_PlotHistogram,
+                            ImVec4(0.30f, 0.05f, 0.05f, 1.00f)); // dead
+                    else if (frac <= 0.25f)
+                        ImGui::PushStyleColor(ImGuiCol_PlotHistogram,
+                            ImVec4(0.95f, 0.78f, 0.25f, 1.00f)); // critical amber
+                    else
+                        ImGui::PushStyleColor(ImGuiCol_PlotHistogram,
+                            ImVec4(0.349f, 0.949f, 0.400f, 1.00f)); // phosphor
+                    ImGui::ProgressBar(frac, ImVec2(220.0f, 14.0f), "");
+                    ImGui::PopStyleColor();
+                    ImGui::SameLine();
+                    ImGui::Text("HP %d / %d%s", php, pmax, php <= 0 ? "  DEAD" : "");
+                }
             {
                 const std::uint16_t mv = game::status_move_mult_e3(playerStatus);
                 const bool rooted = game::status_is_rooted(playerStatus);
