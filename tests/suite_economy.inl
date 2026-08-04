@@ -35,7 +35,7 @@
 //
 // WIRED: tests/game_test.cpp includes this file beside suite_craft.inl and calls
 // `test_economy_all()` from its main, so every assertion below runs inside the shipped
-// game_test binary. The `giga-check: unwired-suite` exemption this file carried while it
+// game_test binary. The source-rules `unwired-suite` exemption this file carried while it
 // was waiting for that wire-up is GONE, deleted by the same edit — which is exactly what
 // the escape hatch in tools/check_source_rules.cmake asks for. Do not re-add it.
 //
