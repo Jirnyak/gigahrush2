@@ -14,10 +14,7 @@ namespace {
 constexpr int kSubGrid = kMacroDim * kSubDim; // 1024, a power of two
 constexpr int kSubGridMask = kSubGrid - 1;
 
-std::uint8_t sat_add(std::uint8_t a, std::uint8_t b) {
-    const int s = static_cast<int>(a) + static_cast<int>(b);
-    return static_cast<std::uint8_t>(s > 255 ? 255 : s);
-}
+
 
 float u01(std::uint32_t h) {
     return static_cast<float>(h >> 8) * (1.0f / 16777216.0f);
@@ -25,7 +22,7 @@ float u01(std::uint32_t h) {
 
 } // namespace
 
-std::uint32_t stain_paint(World& w, int gx, int gy, int gz, StainRGB add) {
+std::uint32_t stain_paint(World& w, SubField<StainRGB>& field, int gx, int gy, int gz, StainRGB add) {
     if (add.r == 0 && add.g == 0 && add.b == 0) return UINT32_MAX;
     gx &= kSubGridMask;
     gy &= kSubGridMask;
@@ -34,13 +31,12 @@ std::uint32_t stain_paint(World& w, int gx, int gy, int gz, StainRGB add) {
     const int bit = sub_bit(gx % kSubDim, gy % kSubDim, gz % kSubDim);
     if (!w.grid().mask(cx, cy, cz).test(bit)) return UINT32_MAX; // air holds no paint
 
-    auto& field = w.subfields().get_or_create<StainRGB>(kStainFieldName);
     const std::size_t ci = macro_index(cx, cy, cz);
     StainRGB* page = field.ensure_page(ci, StainRGB{});
     StainRGB& s = page[bit];
-    s.r = sat_add(s.r, add.r);
-    s.g = sat_add(s.g, add.g);
-    s.b = sat_add(s.b, add.b);
+    s.r = std::max(s.r, add.r);
+    s.g = std::max(s.g, add.g);
+    s.b = std::max(s.b, add.b);
     return static_cast<std::uint32_t>(ci);
 }
 
@@ -51,13 +47,35 @@ std::int32_t stain_splat(World& w, vec3 origin, vec3 bias, float reach,
     std::int32_t painted = 0;
     const int maxSteps = static_cast<int>(reach / kVoxelSize) + 1;
 
+    auto& field = w.subfields().get_or_create<StainRGB>(kStainFieldName);
+
     for (int i = 0; i < rays; ++i) {
-        // Uniform direction from two hashes, pulled toward `bias`.
-        const std::uint32_t h = hash_u32(seed ^ (0x9e3779b9u * (i + 1)));
-        const float z = u01(h) * 2.0f - 1.0f;
-        const float a = u01(hash_u32(h)) * 6.2831853f;
-        const float rxy = std::sqrt(std::max(0.0f, 1.0f - z * z));
-        vec3 dir{rxy * std::cos(a), rxy * std::sin(a), z};
+        // Uniform direction via rejection sampling in a unit sphere
+        vec3 dir{0.0f, 0.0f, 0.0f};
+        float r2 = 0.0f;
+        std::uint32_t h = mix32(seed ^ (0x9e3779b9u * (i + 1)));
+        for (int attempt = 0; attempt < 8; ++attempt) {
+            float dx = u01(h) * 2.0f - 1.0f;
+            h = mix32(h);
+            float dy = u01(h) * 2.0f - 1.0f;
+            h = mix32(h);
+            float dz = u01(h) * 2.0f - 1.0f;
+            h = mix32(h);
+            r2 = dx * dx + dy * dy + dz * dz;
+            if (r2 > 1e-4f && r2 <= 1.0f) {
+                dir = vec3{dx, dy, dz};
+                break;
+            }
+        }
+        if (r2 <= 1e-4f || r2 > 1.0f) {
+            dir = vec3{0.0f, 0.0f, 1.0f};
+            r2 = 1.0f;
+        }
+        const float invR = 1.0f / std::sqrt(r2);
+        dir.x *= invR;
+        dir.y *= invR;
+        dir.z *= invR;
+
         dir += bias;
         const float len = std::sqrt(dot(dir, dir));
         if (len < 1e-4f) continue;
@@ -79,7 +97,7 @@ std::int32_t stain_splat(World& w, vec3 origin, vec3 bias, float reach,
                 static_cast<std::uint8_t>(static_cast<float>(colour.r) * k),
                 static_cast<std::uint8_t>(static_cast<float>(colour.g) * k),
                 static_cast<std::uint8_t>(static_cast<float>(colour.b) * k)};
-            const std::uint32_t ci = stain_paint(w, gx, gy, gz, scaled);
+            const std::uint32_t ci = stain_paint(w, field, gx, gy, gz, scaled);
             if (ci != UINT32_MAX) {
                 ++painted;
                 bool seen = false;

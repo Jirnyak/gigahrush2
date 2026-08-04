@@ -2,6 +2,7 @@
 #include <algorithm>
 
 #include <cmath>
+#include <mutex>
 #include <vector>
 
 #include "core/math.h"        // vec3, normalize
@@ -20,6 +21,22 @@
 namespace giga::game {
 
 namespace {
+
+struct MemoryEvent {
+    NpcId id;
+    std::uint8_t kind;
+    int cx;
+    int cy;
+    int cz;
+    float strength01;
+};
+
+struct ThreadLocalMemQueue {
+    std::vector<MemoryEvent> events;
+};
+
+std::mutex g_tl_mem_mutex;
+std::vector<ThreadLocalMemQueue*> g_tl_mem_queues;
 
 // --- Scorer math (reference npc_utility.ts helpers, verbatim) ---------------
 
@@ -583,20 +600,31 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
     // recall, no record, no allocation. The store is the real switch; the flag is
     // what lets one store be measured on and off with nothing else different.
     const bool useMem = (mem != nullptr) && cfg.memory;
-    // Hoisted out of the loop so a body that neither re-plans nor flees pays
-    // NOTHING for memory — not even zeroing a MemoryRecall. `ai_recall` returns a
-    // fully-initialised value, so the assignment below cannot carry stale fields
-    // from the previous body; `haveRecall` is what gates every read.
-    MemoryRecall recall;
 
-    // One allocation-free sweep over the packed columns. Nothing here emplaces or
-    // destroys a component, so the view cannot be invalidated mid-iteration —
-    // that hazard lives in `ai_init`, by construction rather than by comment.
+    // Collect active entities for OpenMP Map phase
     auto view = reg.view<AiBrain, const NpcRef, const Transform, Velocity>();
+    std::vector<Entity> active_entities;
+    active_entities.reserve(view.size_hint());
     for (auto e : view) {
-        const Transform& tr = view.get<const Transform>(e);
-        if (tr.layer != layer) continue;
+        if (view.get<const Transform>(e).layer == layer) {
+            active_entities.push_back(e);
+        }
+    }
 
+    #pragma omp parallel for schedule(dynamic, 64) \
+        reduction(+: out.considered, out.replanned, out.switches, out.aiOwned, out.wanderOwned, out.recalled, out.memoryFled)
+    for (int i = 0; i < static_cast<int>(active_entities.size()); ++i) {
+        Entity e = active_entities[i];
+
+        static thread_local ThreadLocalMemQueue tl_queue;
+        static thread_local bool tl_registered = false;
+        if (!tl_registered) {
+            std::lock_guard<std::mutex> lock(g_tl_mem_mutex);
+            g_tl_mem_queues.push_back(&tl_queue);
+            tl_registered = true;
+        }
+
+        const Transform& tr = view.get<const Transform>(e);
         AiBrain& brain = view.get<AiBrain>(e);
 
         // Scope re-checked every tick, not just at attach time. `ai_init` refuses
@@ -638,8 +666,7 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             // Strength is the FRACTION of max HP lost — a real varying number, not
             // a constant standing in for one.
             const float frac = maxHp > 0.0f ? lost / maxHp : 1.0f;
-            if (ai_remember_cell(*mem, id, MemHurt, cx, cy, cz, frac, now))
-                ++out.remembered;
+            tl_queue.events.push_back({id, MemHurt, cx, cy, cz, frac});
         }
         brain.lastHp = hpNow;
 
@@ -649,6 +676,7 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
         // shipping cadence that is ~0.36 recalls per body per second plus the
         // fleeing slice, not 125 — which is what keeps this O(n) with a small
         // constant instead of a per-tick row scan over the whole crowd.
+        MemoryRecall recall;
         const bool wantReplan = now >= static_cast<double>(brain.nextDecisionAt);
         bool haveRecall = false;
         if (useMem && (wantReplan || brain.currentIntent == IntentFlee)) {
@@ -719,9 +747,9 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             // refuses to record below severity 2 of 5, which is what 0.20 is.
             if (useMem) {
                 const float sev = unitish(dangerHere);
-                if (sev >= kMemDangerRecordUnit &&
-                    ai_remember_cell(*mem, id, MemDanger, cx, cy, cz, sev, now))
-                    ++out.remembered;
+                if (sev >= kMemDangerRecordUnit) {
+                    tl_queue.events.push_back({id, MemDanger, cx, cy, cz, sev});
+                }
             }
         }
         brain.stateTimer += dt;
@@ -793,6 +821,20 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
         // vel.v.z is intentionally untouched — physics_step owns it (gravity and
         // jump). Same rule as wander_step: this is locomotion, not flight.
     }
+
+    // Phase 2: Reduce
+    if (useMem) {
+        std::lock_guard<std::mutex> lock(g_tl_mem_mutex);
+        for (ThreadLocalMemQueue* q : g_tl_mem_queues) {
+            for (const MemoryEvent& ev : q->events) {
+                if (ai_remember_cell(*mem, ev.id, ev.kind, ev.cx, ev.cy, ev.cz, ev.strength01, now)) {
+                    ++out.remembered;
+                }
+            }
+            q->events.clear();
+        }
+    }
+
     return out;
 }
 

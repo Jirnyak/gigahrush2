@@ -24,6 +24,8 @@
 namespace giga {
 
 class World;
+template <class T>
+class SubField;
 
 // One stained atom's colour. Additive with per-channel saturation; {0,0,0} is
 // the unpainted base, so a page that fades back to black folds away.
@@ -45,7 +47,7 @@ inline constexpr StainRGB kStainUrine{140, 120, 25};
 // coordinates, toroidal). Paints only solid atoms — liquid clings to matter.
 // Returns the flat macro cell index it dirtied, or UINT32_MAX if nothing was
 // painted (air, or a zero add).
-std::uint32_t stain_paint(World& w, int gx, int gy, int gz, StainRGB add);
+std::uint32_t stain_paint(World& w, SubField<StainRGB>& field, int gx, int gy, int gz, StainRGB add);
 
 // Splatter: `rays` deterministic directions out of `origin` (metres, toroidal),
 // each walking up to `reach` metres of sub-voxel DDA to its first solid atom,

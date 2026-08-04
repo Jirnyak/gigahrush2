@@ -7,6 +7,7 @@
 #include <vector>
 #include <unordered_set>
 #include <cmath>
+#include <algorithm>
 #include "core/wrap.h"
 #include "core/rng.h"
 
@@ -155,9 +156,9 @@ std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& 
     if (dirtyCells.empty()) return 0;
 
     // dirtyCells are flat macro_index keys (CarveResult / DoorSet contract).
-    static thread_local std::unordered_set<std::uint32_t> dirtySet;
-    dirtySet.clear();
-    dirtySet.insert(dirtyCells.begin(), dirtyCells.end());
+    static thread_local std::vector<std::uint32_t> sortedDirty;
+    sortedDirty.assign(dirtyCells.begin(), dirtyCells.end());
+    std::sort(sortedDirty.begin(), sortedDirty.end());
 
     static thread_local std::vector<PendingDetachedProp> detached;
     detached.clear();
@@ -172,7 +173,7 @@ std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& 
         const std::uint32_t key =
             static_cast<std::uint32_t>(macro_index(cx, cy, cz));
 
-        if (!dirtySet.contains(key)) continue;
+        if (!std::binary_search(sortedDirty.begin(), sortedDirty.end(), key)) continue;
 
         // Anchor support lost when the sub-voxel is no longer solid.
         if (!world.grid().solid(cx, cy, cz, anchor.subX, anchor.subY, anchor.subZ)) {
