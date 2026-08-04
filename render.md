@@ -50,6 +50,10 @@ risk: the shader is downstream of truth, never the source of it.
 | `voxel_mirror` | One-way sim→GPU copy of masks/types/sub-materials/class/fluid, kept fresh by the carve/door dirty seams + arrival re-uploads; `--mirror-verify` readback harness |
 | `raymarch_pass` | The fullscreen two-level DDA that draws the world and writes honest `gl_FragDepth` |
 | `cube_pass` | What survives of the mesher: the photographic material arrays + the shared `CubePush` pipeline layout the prop pass borrows |
+| `prop_pass` | One `vkCmdDrawIndexed` per shape (≤ 4096 instances each) for ECS props AND the floor's baked antourage instances ([antourage.md]) — the core draws a row without knowing what it depicts |
+| `wire_pass` | GPU-verlet hanging chains: `wire_sim.comp` integrates, `wire.vert` pulls points straight from the SSBO. CPU pays only the per-frame anchor-aliveness bytes |
+| `cloth_pass` | The same architecture for 8×4 verlet sheets (curtains, tarps) — `cloth_sim.comp` + two-sided quads |
+| `particle_pass` | The unified GPU particle pool: one compute sim, one CSV-driven type table, every effect (blood, dust, debris, drips) is a burst written by the sim side |
 | `imgui_layer` | Dear ImGui SDL3 + Vulkan overlay, own descriptor pool |
 | `gpu_timer` | `VK_QUERY_TYPE_TIMESTAMP` brackets around each pass; the only honest cost number in the renderer |
 
@@ -358,4 +362,6 @@ window + input + timing only — **never** the graphics API.
 
 Consumes `CameraMatrices` from [camera.md](camera.md) and reads the grid
 ([voxels.md](voxels.md)) + `fluid` field ([fields.md](fields.md)). Driven by the
-app loop ([ARCHITECTURE.md](ARCHITECTURE.md) §Simulation loop).
+app loop ([ARCHITECTURE.md](ARCHITECTURE.md) §Simulation loop). Draws the ECS
+props of [props.md](props.md) and the baked dressing of
+[antourage.md](antourage.md) — both hand over pure data and get nothing back.

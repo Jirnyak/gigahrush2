@@ -89,4 +89,54 @@ static void test_antourage_all() {
     // door population against the dressed grid.
     DoorSet doors;
     CHECK(door_build(w, doors, 0, floor_spec(FloorKind::Residential), 1337u) > 0);
+
+    // DESTRUCTION reaches the dressing ([antourage.h] antourage_carve_step —
+    // the antourage twin of anchor_validate_step). Empty the first instance's
+    // anchor cell by hand, hand the carve's dirty list over, and the piece must
+    // report itself dead exactly ONCE, with debris to show for it.
+    {
+        // A leg, not a joint: two DISTINCT anchor cells, so the "already dead"
+        // half of the rule can be exercised by killing them one at a time.
+        const AntourageInstance* leg = nullptr;
+        for (const AntourageInstance& it : bake.instances)
+            if (it.ax0 != it.ax1 || it.ay0 != it.ay1 || it.az0 != it.az1) {
+                leg = &it;
+                break;
+            }
+        CHECK(leg != nullptr);
+        const AntourageInstance& victim = *leg;
+        CHECK(antourage_alive(w.grid(), victim));
+        ParticleBurstQueue bursts;
+        // A dirty list that names an untouched cell kills nobody.
+        const std::uint32_t innocent = static_cast<std::uint32_t>(
+            macro_index(victim.ax0, victim.ay0, wrap_macro(victim.az0 + 4)));
+        CHECK(antourage_carve_step(w, bake, &innocent, 1, bursts, 7u) == 0);
+        CHECK(bursts.count == 0);
+
+        w.grid().set_cell(victim.ax0, victim.ay0, victim.az0, kCellAir);
+        const std::uint32_t dirty = static_cast<std::uint32_t>(
+            macro_index(victim.ax0, victim.ay0, victim.az0));
+        CHECK(!antourage_alive(w.grid(), victim));
+        const std::uint32_t dead =
+            antourage_carve_step(w, bake, &dirty, 1, bursts, 7u);
+        CHECK(dead > 0);  // at least the victim; anchor cells are shared
+        // One burst per severed piece, up to the queue's bounded ring.
+        CHECK(bursts.count > 0 && bursts.count <= dead);
+        std::fprintf(stderr, "[antourage] carve severed %u piece(s)\n", dead);
+
+        // The SECOND carve nearby must not re-kill what is already gone: the
+        // victim's other anchor goes now, and the piece — dead since the first
+        // op — stays silent.
+        ParticleBurstQueue again;
+        w.grid().set_cell(victim.ax1, victim.ay1, victim.az1, kCellAir);
+        const std::uint32_t dirty2 = static_cast<std::uint32_t>(
+            macro_index(victim.ax1, victim.ay1, victim.az1));
+        const std::uint32_t dead2 =
+            antourage_carve_step(w, bake, &dirty2, 1, again, 9u);
+        for (std::uint16_t i = 0; i < again.count; ++i)
+            CHECK(again.items[i].pos.x != victim.pos.x ||
+                  again.items[i].pos.y != victim.pos.y ||
+                  again.items[i].pos.z != victim.pos.z);
+        CHECK(again.count == dead2);
+    }
 }

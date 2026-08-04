@@ -351,6 +351,7 @@ void bake_wires(const World& w, std::uint32_t fseed, AntourageBake& out) {
         }
         c.restLen = spanM * 1.02f / static_cast<float>(kWirePoints - 1);
         c.massKg = spanM * kWireKgPerMetre;
+        c.matId = static_cast<std::uint8_t>(kMatPipeMetal); // cable sheath
         out.wires.push_back(c);
     }
 }
@@ -418,6 +419,9 @@ void bake_cloths(const World& w, std::uint32_t fseed, AntourageBake& out) {
                 s.p[r * kClothW + c] = p;
             }
         s.pinMask = 0xFFu; // the top row
+        // Canvas has no material row of its own yet; plaster's dusty beige is
+        // the closest honest tint for the shreds. One CSV line from real.
+        s.matId = static_cast<std::uint8_t>(kMatPlaster);
         out.cloths.push_back(s);
     }
 }
@@ -436,6 +440,99 @@ void bake_antourage(const World& w, int number, unsigned seed,
     bake_pipes(w, fseed, out);
     bake_wires(w, hash_u32(fseed ^ 0x5A303B0Du), out);
     bake_cloths(w, hash_u32(fseed ^ 0x7C0FFEE1u), out);
+}
+
+// --- DESTRUCTION ------------------------------------------------------------
+
+bool antourage_alive(const MacroGrid& g, const AntourageInstance& it) {
+    return g.cell(it.ax0, it.ay0, it.az0) != kCellAir &&
+           g.cell(it.ax1, it.ay1, it.az1) != kCellAir;
+}
+bool antourage_alive(const MacroGrid& g, const WireChain& c) {
+    return g.cell(c.ax0, c.ay0, c.az0) != kCellAir &&
+           g.cell(c.ax1, c.ay1, c.az1) != kCellAir;
+}
+bool antourage_alive(const MacroGrid& g, const ClothSheet& s) {
+    return g.cell(s.ax0, s.ay0, s.az0) != kCellAir &&
+           g.cell(s.ax1, s.ay1, s.az1) != kCellAir;
+}
+
+namespace {
+
+// Was this cell emptied by the op that produced `dirty`? The dirty list is
+// small (the cells one blast touched) and the AIR test comes first, so the
+// scan runs only for the handful of anchors that are gone at all — no set to
+// build, no allocation on a path a shotgun can hit several times per tick.
+bool cell_died(const MacroGrid& g, const std::uint32_t* dirty, std::size_t n,
+               int x, int y, int z) {
+    if (g.cell(x, y, z) != kCellAir) return false;
+    const std::uint32_t key = static_cast<std::uint32_t>(macro_index(x, y, z));
+    for (std::size_t i = 0; i < n; ++i)
+        if (dirty[i] == key) return true;
+    return false;
+}
+
+// Did the piece hanging between these two anchors die on THIS op? It must be
+// dead now AND have been alive before: every anchor is either still solid or
+// was severed by this very carve, and at least one was severed. Without the
+// second half a piece killed an hour ago would shed debris again every time a
+// carve grazed its other anchor.
+bool pair_died(const MacroGrid& g, const std::uint32_t* dirty, std::size_t n,
+               int x0, int y0, int z0, int x1, int y1, int z1) {
+    const bool d0 = cell_died(g, dirty, n, x0, y0, z0);
+    const bool d1 = cell_died(g, dirty, n, x1, y1, z1);
+    if (!d0 && !d1) return false;
+    if (!d0 && g.cell(x0, y0, z0) == kCellAir) return false; // already dead
+    if (!d1 && g.cell(x1, y1, z1) == kCellAir) return false;
+    return true;
+}
+
+} // namespace
+
+std::uint32_t antourage_carve_step(const World& w, const AntourageBake& bake,
+                                   const std::uint32_t* dirtyCells,
+                                   std::size_t dirtyCount,
+                                   ParticleBurstQueue& bursts,
+                                   std::uint32_t seed) {
+    if (dirtyCells == nullptr || dirtyCount == 0) return 0;
+    const MacroGrid& g = w.grid();
+    // Debris falls along gravity; v1 dresses only the +-Z regimes (bake_antourage
+    // above), so the pieces it can shed fall the way that frame's gravity points.
+    const vec3 down = w.gravity().regime == GravityRegime::PosZ
+                          ? vec3{0.0f, 0.0f, 0.4f}
+                          : vec3{0.0f, 0.0f, -0.4f};
+    std::uint32_t dead = 0;
+    for (std::size_t i = 0; i < bake.instances.size(); ++i) {
+        const AntourageInstance& it = bake.instances[i];
+        if (!pair_died(g, dirtyCells, dirtyCount, it.ax0, it.ay0, it.az0,
+                       it.ax1, it.ay1, it.az1))
+            continue;
+        ++dead;
+        bursts.push(it.pos, down, ParticleKind::Debris, 4, it.matId,
+                    seed ^ static_cast<std::uint32_t>(i) * 0x9E3779B9u);
+    }
+    for (std::size_t i = 0; i < bake.wires.size(); ++i) {
+        const WireChain& c = bake.wires[i];
+        if (!pair_died(g, dirtyCells, dirtyCount, c.ax0, c.ay0, c.az0, c.ax1,
+                       c.ay1, c.az1))
+            continue;
+        ++dead;
+        bursts.push(c.p[kWirePoints / 2], down, ParticleKind::Debris, 3,
+                    c.matId, seed ^ 0x5A303B0Du ^
+                                 static_cast<std::uint32_t>(i) * 0x9E3779B9u);
+    }
+    for (std::size_t i = 0; i < bake.cloths.size(); ++i) {
+        const ClothSheet& s = bake.cloths[i];
+        if (!pair_died(g, dirtyCells, dirtyCount, s.ax0, s.ay0, s.az0, s.ax1,
+                       s.ay1, s.az1))
+            continue;
+        ++dead;
+        // Canvas tears into dust, not chunks.
+        bursts.push(s.p[kClothPoints / 2], down, ParticleKind::Dust, 4, s.matId,
+                    seed ^ 0x7C0FFEE1u ^
+                        static_cast<std::uint32_t>(i) * 0x9E3779B9u);
+    }
+    return dead;
 }
 
 } // namespace giga::game

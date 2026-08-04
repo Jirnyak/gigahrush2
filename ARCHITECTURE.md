@@ -168,6 +168,12 @@ population — is built here on top of the engine primitives, not inside the cor
 See [floors.md](floors.md), [monsters.md](monsters.md), [items.md](items.md),
 [npcs.md](npcs.md), [macrosim.md](macrosim.md).
 
+**Dressing is a game-layer bake, not a render feature.** `src/game/antourage`
+runs over a finished floor and emits mesh primitives anchored to real voxels —
+pipes, verlet wires, curtains ([antourage.md](antourage.md)). It lives in
+`giga_game` and is headless-testable for the same reason everything else here
+is: it touches no GPU type, the app merely packs its rows into the passes.
+
 **Macrosim is its own module — a game within the game.** The macro population
 simulation ([macrosim.md](macrosim.md)) is a self-contained, socially/economically
 focused society sim that runs in the background of normal play and can be

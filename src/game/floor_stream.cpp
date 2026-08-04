@@ -266,9 +266,11 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
     LayerId slot = alloc_slot();
     if (slot == kInvalidLayer) return out; // slot pool exhausted (should not happen)
     generate_floor(stack.layer(slot), fm.number, floor_spec(fm.kind), fm.seed);
-    // Antourage AFTER the geometry and BEFORE the nav bake, so nav routes
-    // around the solid dressing. Deterministic in (grid, number, seed) — a
-    // recycled slot re-bakes bit-for-bit like the geometry itself.
+    // Antourage AFTER the geometry: it READS the finished grid as context and
+    // never writes it ([antourage.md] — the dressing is mesh on anchors, so
+    // nav has nothing to route around and does not care where in the load this
+    // runs). Deterministic in (grid, number, seed) — a recycled slot re-bakes
+    // bit-for-bit like the geometry itself, which is why nothing is persisted.
     auto ab = std::make_unique<AntourageBake>();
     bake_antourage(stack.layer(slot), fm.number, fm.seed, *ab);
     antourage_[m] = std::move(ab);

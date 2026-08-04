@@ -525,6 +525,31 @@ in-process loopback. Five additive increments; **#1 built:**
   per-entity ownership, invalid-avatar no-op) exercises the whole apply path in
   `game_test` with **no SDL**.
 
+**Antourage — baked floor dressing (BUILT 2026-08-02…04, [antourage.md](antourage.md)).**
+The owner's "генератор проги внутри проги": after a floor module finishes its
+geometry, `bake_antourage` walks the finished grid as pure CONTEXT and emits
+**three universal primitives** — rigid `AntourageInstance` rows (pipes, elbows;
+2975 on floor 0), `WireChain` verlet ropes (802) and `ClothSheet` 8×4 verlet
+sheets (152). The law: the grid is only an **anchor** — antourage never writes
+voxels, so nothing is ever invisible-but-solid, and it carries no collision.
+Wires and cloth are integrated **entirely on the GPU** (`wire_sim.comp`,
+`cloth_sim.comp`); every body on the layer pushes them and they push nothing
+back (the player is just one body). The bake is a pure function of
+`(grid, number, seed)`, lives per resident module beside `FloorNav`, and is
+never persisted. **Destruction reaches it** (2026-08-04): `antourage_carve_step`
+is the dressing's `anchor_validate_step` twin — a carve's `dirtyCells` name
+exactly the pieces severed by that op, each sheds a material-tinted debris burst
+into the unified particle pool, and the caller re-packs `PropPass`; severed pipe
+stumps become drip emitters. Aliveness is always a live-grid probe, never a
+cached flag. Proof: `tests/suite_antourage.inl` (determinism, anchors-are-solid,
+no pipe material ever written into a cell, carve kills exactly once).
+
+**Unified GPU particle pool (BUILT 2026-08-03).** Blood, dust, debris, sparks
+and drips are rows of `data/particles.csv`; every game-side writer pushes a
+BURST into one bounded POD queue (`game/particles.h`) and the app drains it into
+a 32k-particle SSBO with a compute sim that collides against the voxel mirror.
+One dispose path, many proposers — the same law as `CarveProposalQueue`.
+
 ---
 
 ## 7. Remaining roadmap (tracked as tasks #10–#13)

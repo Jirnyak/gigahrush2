@@ -177,10 +177,14 @@ in the `NpcPool` ([npcs.md](npcs.md)).
   embodied elsewhere (e.g. the player standing on another floor) are **skipped**,
   so nobody is duplicated. The
   first ever load — before any player exists — designates the module's candidate
-  as the player. Right after the geometry is built, the floor's **navigation is
-  baked** into a per-module `FloorNav` (coarse graph + flow fields, freed on
-  unload, retrieved via `nav_at`), with an opt-in disk cache — see [nav.md](nav.md).
-  This is the one place the full nav bake runs.
+  as the player. Right after the geometry is built, the floor's **dressing is
+  baked** into a per-module `AntourageBake` (pipes, wires, curtains — mesh on
+  voxel anchors, the grid is never written, see [antourage.md](antourage.md)),
+  and then its **navigation** into a per-module `FloorNav` (coarse graph + flow
+  fields, freed on unload, retrieved via `nav_at`), with an opt-in disk cache —
+  see [nav.md](nav.md). This is the one place the full nav bake runs. Both bakes
+  are pure functions of `(grid, number, seed)`, so both are freed on eviction and
+  neither is ever persisted.
 - **Leave** (`unload` / `keep_only`): every embodied body on the floor is
   `fold_back`'d into its cold record (position/state deltas persist), the layer is
   freed, and the slot returns to the free-list. An invalid handle (a body the
@@ -222,5 +226,6 @@ the real-time engine runs: ~16k embodied **agents on the CPU**, every cellular
 
 Built on [world.md](world.md); consumes global [monsters.md](monsters.md) /
 [items.md](items.md) / [macrosim.md](macrosim.md); reached via
-[elevators.md](elevators.md); bakes [nav.md](nav.md) on load; may install
+[elevators.md](elevators.md); bakes [antourage.md](antourage.md) and
+[nav.md](nav.md) on load; places [props.md](props.md); may install
 [gravity.md](gravity.md) / [fields.md](fields.md) overrides.

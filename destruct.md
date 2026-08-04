@@ -2,7 +2,8 @@
 
 > Code: `src/world/destruct.h/.cpp`, `src/world/subfield.h`,
 > `src/world/material_props.h` · Tests: `tests/suite_destruct.inl` ·
-> Related: [voxels.md](voxels.md), [fields.md](fields.md), [nav.md](nav.md)
+> Related: [voxels.md](voxels.md), [fields.md](fields.md), [nav.md](nav.md),
+> [props.md](props.md), [antourage.md](antourage.md)
 
 Мир состоит из клеточек (128³ macro cells) и субклеточек (8³ битов в каждой).
 Разрушение — это ЕДИНСТВЕННЫЙ универсальный способ, которым геометрия теряет
@@ -75,6 +76,14 @@ Carve НЕ перепекает ничего. Коллизия жива сраз
 | Рендер | `voxelMirror.mark_dirty(dirtyCells)` | 64 Б/ячейка PCIe-аплоада, без rebuild |
 | Diffusion / Cellular | `*_mark_cell()` на каждую dirty-ячейку | O(1) патчи |
 | Nav (flow fields) | **ничего** — stale до следующего полного bake | тот же принятый долг, что у дверей |
+| Пропы ([props.md]) | `anchor_validate_step()` | мебель без опоры отрывается по своему `PropFallMode` |
+| Антураж ([antourage.md]) | `antourage_carve_step()` | перерубленные трубы/провода/шторы сыплют обломки и перестают рисоваться |
+
+Последние две строки — один и тот же вход (`dirtyCells`) и один и тот же
+возврат: «сколько отвалилось». Ненулевой = перепаковать статичную шкуру
+`PropPass`, иначе GPU продолжает рисовать мебель и трубы, которых уже нет.
+Проб на «живость» не кэшируется нигде: carve умеет только превращать твёрдое в
+воздух, поэтому грязный список операции называет РОВНО её жертв.
 
 ## Приложение
 

@@ -571,7 +571,11 @@ if(GIGA_BUILD_TESTS)
     # markololo fork (FastTravelState + hub gate + console fasttravel/ft +
     # §23 hermetic doors / flee-to-shelter). His own pin admitted 16 failures;
     # on this tree the same suites are green.
-        PASS_REGULAR_EXPRESSION "game_test: 222514 checks, 0 failures")
+    # 222514 -> 222522 (+8) on 2026-08-04: antourage_carve_step — destruction
+    # now severs the baked dressing (suite_antourage: innocent dirty list kills
+    # nobody, a carved anchor kills exactly once with debris, an already-dead
+    # piece stays silent on the next op).
+        PASS_REGULAR_EXPRESSION "game_test: 222522 checks, 0 failures")
 
 
 

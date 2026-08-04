@@ -1260,8 +1260,7 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
     const MacroGrid& g = world.grid();
     if (dripEmitters) dripEmitters->clear();
     for (const game::AntourageInstance& it : ab->instances) {
-        if (g.cell(it.ax0, it.ay0, it.az0) == kCellAir ||
-            g.cell(it.ax1, it.ay1, it.az1) == kCellAir) {
+        if (!game::antourage_alive(g, it)) {
             // A severed pipe piece: its anchor was carved away, so the mesh
             // stops drawing — and the stump becomes a DRIP emitter for the
             // unified particle pool (owner's design: якорь мёртв → эмиттер).
@@ -2320,6 +2319,22 @@ int main(int argc, char** argv) {
     while (running) {
         LayerId activeLayer = reg.get<Transform>(player).layer;
         bool propPassNeedsRebuild = false;
+
+        // The dressing's half of every geometry mutation, next to the ECS-prop
+        // half (anchor_validate_step): whatever emptied these cells — a blast,
+        // a bullet, an opening door — the baked antourage anchored to them is
+        // severed, sheds debris through the shared particle queue, and the
+        // instance list owes a re-pack. True = "the GPU is drawing a lie".
+        const auto antourage_carve_step_here =
+            [&](const std::vector<std::uint32_t>& dirty,
+                std::uint32_t seed) -> bool {
+            const game::AntourageBake* ab =
+                streamer.antourage_at_layer(registry, activeLayer);
+            if (ab == nullptr || dirty.empty()) return false;
+            return game::antourage_carve_step(stack.layer(activeLayer), *ab,
+                                              dirty.data(), dirty.size(),
+                                              particleBursts, seed) > 0;
+        };
 
         // §22: amortize nav field rebake under frame budget.
         if (nav.ready() && !nav.baking() && !navRebaker.is_idle()) {
@@ -3409,6 +3424,13 @@ int main(int argc, char** argv) {
                                                        bus, carveResult.dirtyCells) > 0) {
                             propPassNeedsRebuild = true;
                         }
+                        // ...and the BAKED dressing answers to the same blast
+                        // ([game/antourage] antourage_carve_step): severed
+                        // pipes shed debris and the instance list is re-packed
+                        // so the GPU stops drawing what no longer hangs.
+                        if (antourage_carve_step_here(carveResult.dirtyCells,
+                                                      op.seed))
+                            propPassNeedsRebuild = true;
                     }
 
                 }
@@ -3645,6 +3667,10 @@ int main(int argc, char** argv) {
                                     carveResult.dirtyCells) > 0) {
                                 propPassNeedsRebuild = true;
                             }
+                            // Same duty for the baked dressing.
+                            if (antourage_carve_step_here(carveResult.dirtyCells,
+                                                          pr.seed))
+                                propPassNeedsRebuild = true;
                         }
                     }
                     combatCarves.clear();
@@ -5100,6 +5126,11 @@ int main(int argc, char** argv) {
                                                doors.dirtyCells) > 0) {
                     propPassNeedsRebuild = true;
                 }
+                // A door leaf sliding away empties cells too — dressing that
+                // hung off them is just as severed as by a blast.
+                if (antourage_carve_step_here(doors.dirtyCells,
+                                              static_cast<std::uint32_t>(simTick)))
+                    propPassNeedsRebuild = true;
                 // Same field-rebake debt carve pays: doors mutate occupancy
                 // masks the nav flow fields sample.
                 navRebaker.mark_dirty_cells(doors.dirtyCells);
@@ -5175,11 +5206,8 @@ int main(int argc, char** argv) {
                     wireAlive.clear();
                     const MacroGrid& wg = stack.layer(activeLayer).grid();
                     for (const game::WireChain& c : ab->wires)
-                        wireAlive.push_back(
-                            wg.cell(c.ax0, c.ay0, c.az0) != kCellAir &&
-                                    wg.cell(c.ax1, c.ay1, c.az1) != kCellAir
-                                ? 1u
-                                : 0u);
+                        wireAlive.push_back(game::antourage_alive(wg, c) ? 1u
+                                                                         : 0u);
                     wirePass.write_alive(wireAlive.data(),
                                          static_cast<std::uint32_t>(
                                              wireAlive.size()));
@@ -5197,11 +5225,8 @@ int main(int argc, char** argv) {
                     clothAlive.clear();
                     const MacroGrid& wg = stack.layer(activeLayer).grid();
                     for (const game::ClothSheet& c : ab->cloths)
-                        clothAlive.push_back(
-                            wg.cell(c.ax0, c.ay0, c.az0) != kCellAir &&
-                                    wg.cell(c.ax1, c.ay1, c.az1) != kCellAir
-                                ? 1u
-                                : 0u);
+                        clothAlive.push_back(game::antourage_alive(wg, c) ? 1u
+                                                                          : 0u);
                     clothPass.write_alive(clothAlive.data(),
                                           static_cast<std::uint32_t>(
                                               clothAlive.size()));

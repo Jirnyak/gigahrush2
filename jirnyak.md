@@ -274,10 +274,17 @@
 | Квесты | `data/quests.csv` | `tools/gen_quest_table.py` |
 | Реплики НПЦ | `data/speech_lines.csv` | `tools/gen_speech_table.py` |
 | Статусы | `data/status.csv` | `tools/gen_status_table.py` |
-| Материалы | `data/materials.csv` | `tools/gen_material_surface.py` |
+| Материалы | `data/materials.csv` | `tools/gen_material_table.py` |
+| Текстуры | `data/textures.csv` | `tools/gen_material_table.py` (+ `fetch_textures.py`) |
 | Пропы (интерактивы/декор) | `data/props.csv` | `tools/gen_prop_table.py` |
+| Виды интерактива | `data/interactables.csv` | `tools/gen_interact_table.py` |
+| Частицы (кровь/пыль/обломки/капли) | `data/particles.csv` | `tools/gen_particle_table.py` |
 
 Прочие ряды-таблицы (не CSV, но тот же принцип "одна строка — один контент"):
+- **Модуль антуража** — одна функция `(контекст мира, seed) → примитивы` в
+  `src/game/antourage/` ([antourage.md](antourage.md)). Трубы, провода, шторы,
+  сталактиты — всё это ряды трёх универсальных примитивов; ядро при добавлении
+  модуля НЕ трогается. Антураж не пишет воксели и не спавнит сущности.
 - **Этаж** — папка `src/game/floors/<имя>/` + claim в каталоге этажей (`floor_catalog`). Никогда не `if` по номеру этажа.
 - **Консольная команда** — один ряд `ConsoleCommand` (`src/game/console.h`); аргументы автодополняются из живых таблиц. Новый моб в CSV автоматически виден команде `spawn`.
 - **Клавиша** — один ряд `KeyBind` (`src/game/keybind.h`): скан-код → консольная команда. Хардкод скан-кодов в event loop запрещён.

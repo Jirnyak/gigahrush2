@@ -1,44 +1,84 @@
-# Props — 3D interactive objects and decorations
+# Пропы — интерактивные объекты этажа
 
-> **Status: PLANNED.** Prop catalog and the 3-flag system are planned for the game layer (`src/game/`).
-> Built on the ECS ([ecs.md](ecs.md)) and deeply anchored to the 3D sub-voxel world geometry.
->
-> - **Source of truth:** Will be a universal prop table (e.g. `data/props.csv`) generated via a Python script (analogous to `items.csv`).
-> - **Code:** To be implemented in `src/game/prop_table.h` / `.cpp`.
+> **Status: BUILT.** Каталог — `data/props.csv` → `tools/gen_prop_table.py` →
+> `src/game/prop_table.h/.cpp`; сущности и якоря — `src/game/prop_system.h/.cpp`;
+> отрисовка — `src/render/prop_pass.h` + `src/render/prop_mesh.h`.
+> Tests: `tests/suite_props.inl`, `tests/suite_props_game.inl` ·
+> Related: [antourage.md](antourage.md), [destruct.md](destruct.md),
+> [ecs.md](ecs.md), [floors.md](floors.md)
 
-Props are interactive, physical, or decorative objects placed into the world. Unlike static sub-voxel geometry, props are distinct ECS entities that can move, react to physics, or be destroyed, while still anchoring natively into the toroidal 3D voxel world.
+Проп — интерактивный, физический или декоративный ОБЪЕКТ: отдельная сущность
+ECS с координатами, которая может двигаться, реагировать на физику и быть
+разрушенной, оставаясь при этом прикреплённой к субвоксельной геометрии мира.
 
-## The 3-Flag Props System
+**Проп ≠ антураж.** Трубы, провода и шторы — это не пропы, а запечённый
+[антураж](antourage.md): плоские строки меша, ноль сущностей, ноль тика.
+Разделение записано кровью: старая система держала `Pipe`/`Grate`/`Railing`
+в таблице форм пропов и спавнила сто сущностей на одну длинную трубу.
 
-Every prop's physical behavior and lifecycle is governed by a **3-flag system**, dividing them into three distinct processing tiers:
+## Таблица — единственный источник истины
 
-1. **Physical Ragdolls**
-   - Complex, multi-part props with full articulated physics (e.g., corpses, hanging cables, complex machines).
-   - Handled by the main CPU physics engine.
-   - Persistent entities.
+`data/props.csv` (сейчас 5 строк) задаёт на каждую строку: форму меша,
+режим падения, вид интерактива, эмиссию, материал, цвет, дальность
+взаимодействия, массу и габариты. Кодоген превращает CSV в `enum class PropId`
+и плоскую таблицу; `spawn_prop_from_id()` — единственный способ поставить проп,
+и он берёт из таблицы всё, кроме процедурного (позиция, yaw, фаза анимации).
 
-2. **AABB (Axis-Aligned Bounding Box)**
-   - Standard solid objects (crates, barrels, terminals, furniture).
-   - Use swept-AABB collision against the $8^3$ sub-voxel masks and other entities.
-   - Handled by the CPU physics engine but significantly cheaper to tick than ragdolls.
+Вид интерактива — тоже строка данных: `data/interactables.csv` →
+`InteractKind` ([items.md], `interact_table.h`). Новый интерактив = строка CSV,
+а не правка enum в C++.
 
-3. **Debris & Small Props (GPU Physics)**
-   - Shrapnel, broken glass, shell casings, and tiny cosmetic scatter (осколки и маленькие пропы).
-   - Handled entirely via **GPU physics** for massive scale with zero CPU tick overhead.
-   - **Temporary:** they bounce, settle, and are then automatically despawned/deleted to preserve memory and maintain the O(N) tick budget.
+Расстановкой занимается генератор этажа:
+`seed_wall_interactables` (терминалы и щитки по правилам стен),
+`seed_ceiling_lights` (лампочки под потолком) и модульные сеятели вроде
+`seed_padic_props` — лампочки над лестничными пролётами падика.
 
-## Universal Prop Table & Floor Generation
+## Три режима падения (`PropFallMode`)
 
-Like items and monsters, prop definitions live in a **single universal data table**.
-- A dedicated floor generator module (part of the procedural floor generation) reads this table.
-- Floors pull props from the table based on their rule-set, theme, and budget to populate the level.
-- The generator does not hardcode prop logic; it simply spawns ECS entities based on the table's data.
+| Режим | Кто | Что происходит при отрыве |
+|---|---|---|
+| `SimpleFall` | тяжёлое: терминалы, щитки | AABB теряет якорь, получает `Velocity` + гравитацию, падает на CPU |
+| `RagdollRoll` | лампы, вёдра, стулья | то же плюс `AngularVelocity`/`Rotation` — кувыркается |
+| `GpuHandoff` | мелочь, осколки | сущность уничтожается сразу; предполагается, что зрелище берут на себя GPU-частицы |
 
-## Visuals: Procedural vs. Asset-driven
+Ragdoll и падение интегрирует `physics_step`; игровая часть — в
+`prop_ragdoll_step`.
 
-- **Default:** Props are **procedural**, constructed dynamically or represented via generated voxel shapes.
-- **Future:** A prop definition can specify its own explicit 3D model, texture, or sprite from the assets folder. This allows bespoke hero-props to seamlessly override the procedural default.
+## Разрушение — якорь решает
 
-## Connections
+У статичного пропа есть `SubVoxelAnchor` (макро-ячейка + субвоксель + грань
+опоры). После любой мутации геометрии — carve ([destruct.md]) или уехавшая
+дверь — вызывающий обязан прогнать `anchor_validate_step(reg, world, bus,
+dirtyCells)`: пропы, чья опора стала воздухом, отрываются согласно своему
+режиму, публикуется `PropDetached`, а ненулевой возврат означает «перепакуй
+статичную шкуру `PropPass`, иначе GPU рисует старую позу мебели».
 
-Placed by the floor generator ([floors.md](floors.md)), simulated by [physics.md](physics.md) (CPU or GPU), and stored as [ecs.md](ecs.md) entities.
+Ровно тот же долг у запечённого убранства — `antourage_carve_step()`
+([antourage.md]), и вызывается он в тех же трёх местах.
+
+## Отрисовка
+
+`PropPass` — пассивная шкура над `reg.view<Transform, PropMeshTag>()`: один
+`vkCmdDrawIndexed` на форму, до 4096 инстансов на форму за кадр, GPU-куллинг
+через `cull.comp`. Оторвавшиеся (`DynamicBodyTag`) пропы уходят в `BodyPass` —
+`PropPass` рисует только статику. В тот же список инстансов попадает антураж
+этажа: ядро рисует строку и не спрашивает, что она изображает.
+
+Визуал сегодня процедурный (каталог форм `PropShape`). Загрузка внешних
+моделей — будущая колонка `asset_path` в CSV; ядро для этого трогать не надо.
+
+## Известные границы (честно)
+
+* **`GpuHandoff` ничего не показывает.** Сущность исчезает, `PropDetached`
+  публикуется — и никто его не слушает: всплеск частиц из общего пула
+  ([antourage.md] §разрушение делает это для антуража) сюда ещё не заведён.
+  Раньше этот режим врал сильнее — плодил CPU-осколки; теперь он просто нем.
+* **Каталог тонкий** — 5 строк. Бочек, стульев, шкафов нет; каждый из них —
+  одна строка CSV.
+* **Нет ассетов** — только процедурные формы каталога.
+
+## Связи
+
+Расставляются генератором этажа ([floors.md](floors.md)), симулируются
+[physics.md](physics.md), хранятся как сущности [ecs.md](ecs.md), реагируют на
+[destruct.md](destruct.md), рисуются [render.md](render.md).

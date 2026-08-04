@@ -27,9 +27,11 @@
 #include <vector>
 
 #include "core/math.h"
+#include "game/particles.h" // the debris a severed piece owes the world
 
 namespace giga {
 class World;
+class MacroGrid;
 }
 
 namespace giga::game {
@@ -53,6 +55,11 @@ struct WireChain {
     // and is pushed aside by whoever walks through (the GPU verlet already
     // does the pushing; this mask is all a designer needs to set).
     std::uint8_t pinMask = 0x81;
+    // Material row the chain is made of ([world/materials.h]). The draw is a
+    // plain line today; this is what tints the DEBRIS when a carve severs it,
+    // so the shred matches the thing that shredded — data, not a constant in
+    // the destruction path.
+    std::uint8_t matId = 0;
 };
 
 // The THIRD universal primitive (owner's decision, 2026-08-03): a 2D verlet
@@ -74,6 +81,7 @@ struct ClothSheet {
     std::uint8_t ax1, ay1, az1;
     // Bit i pins point i. Default: the whole top row hangs, the rest swings.
     std::uint32_t pinMask = 0xFFu;
+    std::uint8_t matId = 0; // debris tint, as on WireChain
 };
 
 // THE UNIVERSAL PRIMITIVE (owner's contract, 2026-08-03): a module emits
@@ -129,5 +137,32 @@ inline constexpr float kPipeRadius = 0.30f;
 // module's geometry (any time before first render).
 void bake_antourage(const World& w, int number, unsigned seed,
                     AntourageBake& out);
+
+// --- DESTRUCTION ------------------------------------------------------------
+// Aliveness is a PROBE, never a cached flag (the law at the top of this file):
+// a piece is drawn while both its anchor cells are solid in the LIVE grid.
+// These are the one place a consumer asks the question, so the rule cannot
+// drift between the instance path, the wire pass and the cloth pass.
+bool antourage_alive(const MacroGrid& g, const AntourageInstance& it);
+bool antourage_alive(const MacroGrid& g, const WireChain& c);
+bool antourage_alive(const MacroGrid& g, const ClothSheet& s);
+
+// The carve's edge detector, and the antourage twin of anchor_validate_step
+// ([game/prop_system.h] — ECS props detach the same way on the same input).
+//
+// A carve only ever turns solid into air, so the op's `dirtyCells` name
+// EXACTLY the pieces that died on THIS op: an anchor that is now air and sat
+// in the dirty set was severed a moment ago. No bookkeeping, no dead-flag to
+// keep in sync with a reload — pass a carve's dirty list, get its casualties.
+//
+// Every casualty pushes one debris burst into the shared particle queue
+// ([game/particles.h]), tinted by the piece's own material. Returns how many
+// pieces died, so the caller knows it owes a GPU re-pack (the severed pipe is
+// still in the instance list the renderer uploaded last time).
+std::uint32_t antourage_carve_step(const World& w, const AntourageBake& bake,
+                                   const std::uint32_t* dirtyCells,
+                                   std::size_t dirtyCount,
+                                   ParticleBurstQueue& bursts,
+                                   std::uint32_t seed);
 
 } // namespace giga::game
