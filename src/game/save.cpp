@@ -410,7 +410,7 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     // Payload first: the header carries the payload's length and checksum, so it cannot
     // be written until the payload exists.
     std::vector<std::uint8_t> body;
-    body.reserve(kSaveFixedWire + st.opened.size() * kOpenedKeyWire);
+    body.reserve(save_bytes_for(st.opened.size(), st.poolBlob.size(), st.macroBlob.size()) - kSaveHeaderWire);
     Writer bw(body);
     visit_ledger(bw, st.ledger);
     visit_book(bw, st.book);
@@ -1046,7 +1046,7 @@ bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
         std::uint32_t len = 0;
         r.u16(v);
         r.u32(len);
-        if (at + len > kMacroCells) return false;
+        if (len > kMacroCells - at) return false;
         for (std::uint32_t j = 0; j < len; ++j) types[at + j] = v;
         at += len;
     }
@@ -1056,18 +1056,19 @@ bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
     r.u32(stateRuns);
     // Mixed cells are flagged and filled from the raw stream afterwards, in the
     // same cell order the writer walked.
-    std::vector<std::uint32_t> mixedCells;
+    static thread_local std::vector<std::uint32_t> scratchMixedCells;
+    scratchMixedCells.clear();
     at = 0;
     for (std::uint32_t k2 = 0; k2 < stateRuns && r.ok(); ++k2) {
         std::uint8_t s = 0;
         std::uint32_t len = 0;
         r.u8(s);
         r.u32(len);
-        if (s > 2 || at + len > kMacroCells) return false;
+        if (s > 2 || len > kMacroCells - at) return false;
         for (std::uint32_t j = 0; j < len; ++j) {
             if (s == 0) masks[at + j].clear_all();
             else if (s == 1) masks[at + j].set_all();
-            else mixedCells.push_back(static_cast<std::uint32_t>(at + j));
+            else scratchMixedCells.push_back(static_cast<std::uint32_t>(at + j));
         }
         at += len;
     }
@@ -1075,8 +1076,8 @@ bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
 
     std::uint32_t mixedCount = 0;
     r.u32(mixedCount);
-    if (mixedCount != mixedCells.size()) return false;
-    for (std::uint32_t mc : mixedCells) {
+    if (mixedCount != scratchMixedCells.size()) return false;
+    for (std::uint32_t mc : scratchMixedCells) {
         for (std::size_t k2 = 0; k2 < kSubMaskWords; ++k2)
             r.u64(masks[mc].words[k2]);
         // An all-zero or all-one "mixed" mask would desync state_of on the next
