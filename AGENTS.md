@@ -70,6 +70,18 @@ each one**. Correctness first; speed is a side effect of not backtracking.
 ## Hard Rules
 
 - **THE NATIVE-FIRST LAW (ZERO CRUTCH SCRIPTS):** You are ABSOLUTELY FORBIDDEN from creating Python, Bash, Node, or PowerShell wrapper scripts (`_patch_*.py`, `_wire_*.py`, etc.) to edit, append, test, or generate code. You MUST edit source files natively using `replace_file_content` or `replace_in_file`. Any attempt to bypass direct file editing with a script is a CRITICAL COMPLIANCE FAILURE.
+- **YOUR SCRATCH IS NOT PROJECT STATE.** Whatever an agent keeps to think with —
+  patch scripts, briefings, progress notes, captured stdout/stderr of a test run,
+  pid files, its own config — never enters the tree. `.gitignore` already refuses
+  `.agents/`, `appDataDir/`, `.goosehints`, `/Testing/`, root `_*.txt` and
+  `shaders/*.spv`; if you invent a new scratch location, add it there in the same
+  commit. A commit whose whole content is scratch is not a checkpoint, it is
+  litter — and it hides the one real change in the next commit that mixes both.
+- **NEVER PIN A FAILING SUITE.** The `PASS_REGULAR_EXPRESSION` counts in
+  [CMakeLists.txt](CMakeLists.txt) end in `0 failures`, always. Pinning
+  `N checks, K failures` with `K > 0` converts a broken invariant into the
+  expected state and the pin stops meaning anything. Fix the failure or delete
+  the test with a reason in the commit message; do not enshrine it.
 - **No exceptions. No RTTI.** The core is built `-fno-exceptions -fno-rtti`
   (EnTT with `ENTT_NOEXCEPTION`). Do not use `try`/`catch`/`throw`/
   `dynamic_cast`/`typeid`. For type identity without RTTI use the `type_tag<T>()`
