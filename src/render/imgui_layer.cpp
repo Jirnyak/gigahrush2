@@ -238,13 +238,21 @@ void ImGuiLayer::draw_crt_overlay() {
             }
         }
     } else if (nowMs >= glitchNextMs_) {
-        // Start a new glitch. Derive band height and duration deterministically
-        // from the trigger time so the pattern is reproducible (no RNG state).
-        const std::uint64_t t = nowMs;
-        glitchBandH_ = 6.0f + static_cast<float>((t / 997u) % 9); // 6..14 px
-        glitchDurMs_ = 70u + (t / 571u) % 80u;                    // 70..149 ms
-        glitchStartMs_ = nowMs;
-        glitchNextMs_ = nowMs + 4000u + (t / 397u) % 6000u;       // 4..10 s
+        if (glitchNextMs_ == 0) {
+            // First-ever trigger: do not roll a band on the boot frame;
+            // schedule the first glitch a couple seconds out instead so the
+            // effect is genuinely rare from the very start.
+            const std::uint64_t t = nowMs;
+            glitchNextMs_ = nowMs + 2500u + (t / 397u) % 4000u; // 2.5..6.5 s
+        } else {
+            // Start a new glitch. Derive band height and duration deterministically
+            // from the trigger time so the pattern is reproducible (no RNG state).
+            const std::uint64_t t = nowMs;
+            glitchBandH_ = 6.0f + static_cast<float>((t / 997u) % 9); // 6..14 px
+            glitchDurMs_ = 70u + (t / 571u) % 80u;                    // 70..149 ms
+            glitchStartMs_ = nowMs;
+            glitchNextMs_ = nowMs + 4000u + (t / 397u) % 6000u;       // 4..10 s
+        }
     }
 
     // --- Vignette: the CRT tube darkens toward the corners (screen curvature
