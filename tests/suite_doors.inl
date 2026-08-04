@@ -439,9 +439,116 @@ static void test_shut_door_versus_monsters() {
     CHECK(idle.pressing == 0 && idle.opened == 0 && idle.broken == 0);
 }
 
+// inventory_has_keycard: a keycard of the required tier (or better) grants
+// access; no tier required always grants; a wrong/missing tier never does.
+static void test_inventory_keycard() {
+    {   // ---- no tier required: always true
+        Inventory empty;
+        empty.clear();
+        CHECK(inventory_has_keycard(empty, 0));
+        CHECK(inventory_has_keycard(empty, static_cast<std::uint8_t>(KeycardTier::None)));
+    }
+    {   // ---- tier 1 requested, empty inventory: denied
+        Inventory empty;
+        empty.clear();
+        CHECK(!inventory_has_keycard(empty, 1));
+        CHECK(!inventory_has_keycard(empty, static_cast<std::uint8_t>(KeycardTier::Red)));
+    }
+    {   // ---- tier 3 requested, only a tier-1 card held: denied
+        Inventory inv;
+        inv.clear();
+        const ItemSlot card{};
+        // A card is any item in the Key category; tier equals its ItemCategory row.
+        // We hold one card (id 1) and ask for more than it can grant.
+        ItemSlot& s = inv.slots[0];
+        s.item = 1;
+        CHECK(inventory_has_keycard(inv, 1));          // exactly the card's tier
+        CHECK(!inventory_has_keycard(inv, 2));         // a higher tier is not covered
+        CHECK(!inventory_has_keycard(inv, 3));
+    }
+    {   // ---- a matching-tier card in a later slot is still found
+        Inventory inv;
+        inv.clear();
+        inv.slots[7].item = 2;   // tier-2 card deep in the grid
+        CHECK(!inventory_has_keycard(inv, 1));
+        CHECK(inventory_has_keycard(inv, 2));
+        CHECK(inventory_has_keycard(inv, static_cast<std::uint8_t>(KeycardTier::Blue)));
+    }
+}
+
+// door_query_near: nearest non-broken door within reach, or kNoDoor.
+static void test_door_query_near() {
+    LevelStack stack;
+    const LayerId layer = stack.push_layer();
+    World& w = stack.layer(layer);
+    const FloorSpec& res = floor_spec(FloorKind::Residential);
+    generate_floor(w, /*number=*/0, res, /*seed=*/909u);
+
+    DoorSet doors;
+    const std::uint32_t built = door_build(w, doors, /*number=*/0, res, layer);
+    CHECK(built > 0);
+
+    // Every built door lies on a wall segment; querying from far away yields none.
+    const std::uint32_t far = door_query_near(doors, vec3{999.0f, 999.0f, 0.0f});
+    CHECK(far == kNoDoor);
+
+    // Querying from a door's own cell finds that door (nearest, zero-distance).
+    bool foundSelf = false;
+    for (std::uint32_t i = 0; i < doors.doors.size(); ++i) {
+        const Door& d = doors.doors[i];
+        if (d.state == static_cast<std::uint8_t>(DoorState::Broken)) continue;
+        const vec3 at{d.cx + 0.5f, d.cy + 0.5f, static_cast<float>(d.cz)};
+        const std::uint32_t hit = door_query_near(doors, at);
+        if (hit != kNoDoor) { CHECK(hit == i); foundSelf = true; }
+    }
+    CHECK(foundSelf);
+
+    // A door that breaks (hp -> 0) is no longer queryable.
+    if (built > 1) {
+        const std::uint32_t id0 = 0;
+        Door& d0 = doors.doors[id0];
+        d0.hp = 0;
+        const Door& d0r = doors.doors[id0];
+        const vec3 at{d0r.cx + 0.5f, d0r.cy + 0.5f, static_cast<float>(d0r.cz)};
+        CHECK(door_query_near(doors, at) != id0);
+    }
+}
+
+// door_shut_all + door_toggle_locks: shut every door, then toggle lock state.
+static void test_door_shut_all_and_locks() {
+    LevelStack stack;
+    const LayerId layer = stack.push_layer();
+    World& w = stack.layer(layer);
+    const FloorSpec& res = floor_spec(FloorKind::Residential);
+    generate_floor(w, /*number=*/0, res, /*seed=*/909u);
+
+    DoorSet doors;
+    const std::uint32_t built = door_build(w, doors, /*number=*/0, res, layer);
+    if (built == 0) return;
+
+    Registry reg;
+    // With nothing shut, toggle_locks shuts every door.
+    CHECK(doors.shut == 0);
+    const std::uint32_t toggled = door_toggle_locks(w, doors, reg, layer);
+    CHECK(toggled > 0);
+    CHECK(doors.shut > 0);
+
+    // door_shut_all is idempotent and returns how many were already shut.
+    const std::uint32_t shutNow = door_shut_all(w, doors, reg, layer);
+    CHECK(shutNow >= toggled);
+
+    // Toggling again (some shut) opens them back to the idle state.
+    const std::uint32_t toggled2 = door_toggle_locks(w, doors, reg, layer);
+    CHECK(toggled2 > 0);
+    CHECK(doors.shut == 0);
+}
+
 static void test_doors_all() {
     test_doorways_match_the_generated_grid();
     test_doors_leave_solidity_untouched();
     test_shut_door_blocks_a_body();
     test_shut_door_versus_monsters();
+    test_inventory_keycard();
+    test_door_query_near();
+    test_door_shut_all_and_locks();
 }
