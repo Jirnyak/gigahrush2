@@ -59,12 +59,20 @@ struct FluidStep {
     bool present = false;        // the field existed; false = this layer is dry
 };
 
+struct FluidScratch {
+    std::vector<float> delta;
+};
+
 // Advance the named fluid field by one deterministic step over `world`.
 //
 // A layer with no fluid field costs one hash lookup and nothing else: the field is
 // NOT created, so stepping a dry floor never allocates the 8 MiB a 128^3 float
 // field needs. This is what makes an unconditional per-tick call affordable on the
 // two FloorKinds that seed no water.
+FluidStep fluid_step(World& world, FluidScratch& scratch, const FluidParams& params = {});
+
+// Scratchless overload for one-off callers and tests: allocates a FluidScratch,
+// sweeps once, and drops it.
 FluidStep fluid_step(World& world, const FluidParams& params = {});
 
 // Liquid in one cell of the default field, toroidally indexed; 0 when this layer has
