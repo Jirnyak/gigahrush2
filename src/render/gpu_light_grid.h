@@ -41,6 +41,15 @@ struct alignas(16) GridPush {
     vec4 params;  // x = uTime, y = maxLightsPerCell (15), z = activeLightCount, w = reserved
 };
 static_assert(sizeof(GridPush) == 64, "GridPush layout must be 64 bytes");
+#if defined(_MSC_VER)
+// MSVC C4324 structure was padded due to alignment specifier is expected:
+// GpuLightGrid is alignas(16) so the GpuPointLight stagingLights_ array
+// (std430, alignas(16) elements) stays 16-byte aligned for the compute
+// shader. The trailing pad_ already makes sizeof a multiple of 16; the
+// alignment padding C4324 flags is intentional - layout must not change.
+#pragma warning(push)
+#pragma warning(disable : 4324)
+#endif
 
 class GpuLightGrid {
 public:
@@ -91,5 +100,8 @@ private:
     GpuPointLight stagingLights_[kMaxPointLights]{};
     uint32_t stagingLightCount_ = 0;
 };
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
 } // namespace giga::gpu
