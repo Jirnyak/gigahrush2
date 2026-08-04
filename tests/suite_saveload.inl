@@ -530,8 +530,8 @@ void floor_file_round_trips() {
     std::vector<std::uint8_t> file;
     floor_file_write(live, -26, file);
     CHECK(file.size() > kFloorHeaderWire);
-    const std::vector<giga::CellType> typesAtSave = live.grid().types();
-    const std::vector<giga::SubMask> masksAtSave = live.grid().masks();
+    const auto typesAtSave = live.grid().types();
+    const auto masksAtSave = live.grid().masks();
 
     // Post-save damage the file must NOT contain.
     const giga::CarveOp second{27.0f, 24.5f, 11.0f, 1.0f, 0xFFFF, 0x9999u, 512};

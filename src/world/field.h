@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "world/types.h"
+#include "core/aligned_allocator.h"
 
 namespace giga {
 
@@ -38,12 +39,12 @@ public:
         return data_[macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z))];
     }
 
-    std::vector<T>& data() { return data_; }
-    const std::vector<T>& data() const { return data_; }
+    std::vector<T, AlignedAllocator<T, 64>>& data() { return data_; }
+    const std::vector<T, AlignedAllocator<T, 64>>& data() const { return data_; }
     void fill(const T& v) { std::fill(data_.begin(), data_.end(), v); }
 
 private:
-    std::vector<T> data_;
+    std::vector<T, AlignedAllocator<T, 64>> data_;
 };
 
 // Type identity without RTTI. Each T gets a distinct, stable tag: the address

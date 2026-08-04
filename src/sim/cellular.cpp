@@ -196,7 +196,7 @@ inline bool row_hot(const std::uint64_t* hot, const RowGeom& g) {
 
 // Running totals every sweep reports. Kept in one struct so the three sweeps below share
 // the accounting instead of each growing its own copy of it.
-struct Tally {
+struct alignas(64) Tally {
     std::uint64_t total = 0;
     std::uint32_t live = 0;
     std::uint32_t absorbed = 0;
@@ -213,6 +213,17 @@ struct Tally {
         }
     }
 };
+
+#pragma omp declare reduction(TallyPlus : Tally : \
+    omp_out.total += omp_in.total, \
+    omp_out.live += omp_in.live, \
+    omp_out.absorbed += omp_in.absorbed, \
+    omp_out.born += omp_in.born, \
+    omp_out.died += omp_in.died, \
+    omp_out.changes += omp_in.changes, \
+    omp_out.peak = (omp_out.peak > omp_in.peak ? omp_out.peak : omp_in.peak)) \
+    initializer(omp_priv = Tally{})
+
 
 // ---------------------------------------------------------------------------
 // RULE 1 — the abelian sandpile (sandpile_perekrytie.ts, 3D and live)
@@ -237,6 +248,12 @@ void sweep_sandpile(World& world, CellularScratch& scratch, const CellularParams
     const int collapseAt = static_cast<int>(params.collapseAt);
     MacroGrid& grid = world.grid();
 
+    // schedule(dynamic,4): rows have wildly different cost — empty rows exit in ~1 ns
+    // (memset + continue), hot rows pay per-grain topple work up to ~1000 ns.
+    // schedule(static) guaranteed starvation for threads that drew cold rows while
+    // other threads processed clustered hot regions. chunk=4 amortizes scheduler
+    // overhead while keeping all threads fed under both sparse and dense grids.
+    #pragma omp parallel for collapse(2) schedule(dynamic,4) reduction(TallyPlus:t)
     for (int z = 0; z < kMacroDim; ++z)
         for (int y = 0; y < kMacroDim; ++y) {
             const RowGeom g = row_geom(y, z);
@@ -265,8 +282,10 @@ void sweep_sandpile(World& world, CellularScratch& scratch, const CellularParams
                     // Costs nothing in practice: this branch is only entered when a
                     // fully solid group holds field data, which never happens through
                     // the sanctioned entry point.
-                    if (group_hot(hot, g.w0 + gi))
+                    if (group_hot(hot, g.w0 + gi)) {
+                        #pragma omp simd aligned(rs: 64) reduction(+:t.absorbed)
                         for (int b = 0; b < 64; ++b) t.absorbed += rs[xg + b];
+                    }
                     continue;
                 }
                 const std::uint64_t mym = open[g.wym + gi], myp = open[g.wyp + gi];
@@ -358,7 +377,11 @@ void sweep_sandpile(World& world, CellularScratch& scratch, const CellularParams
                         const int zb = wrap_macro(z - 1);
                         if (!bit_at(open, below) && bit_at(writable, below) &&
                             !in_keepout(params, x, y, zb)) {
-                            grid.clear_cell(x, y, zb);
+                            #pragma omp critical
+                            {
+                                grid.clear_cell(x, y, zb);
+                                scratch.geomDirty = true;
+                            }
                             ++t.changes;
                             t.absorbed += static_cast<std::uint32_t>(next);
                             next = 0;
@@ -367,7 +390,6 @@ void sweep_sandpile(World& world, CellularScratch& scratch, const CellularParams
                             // on traversal order. Defer to a full rebuild on the next
                             // sweep instead: a collapse needs stress >= collapseAt and
                             // is one-way, so it is rare enough to pay for.
-                            scratch.geomDirty = true;
                         }
                     }
                     const std::uint8_t out = static_cast<std::uint8_t>(next);
@@ -409,13 +431,12 @@ void sweep_life(World& world, CellularScratch& scratch, const CellularParams& pa
     const std::uint64_t* __restrict hot = scratch.hotGroups.data();
     MacroGrid& grid = world.grid();
 
-    std::uint8_t aym[kRow], ay[kRow], ayp[kRow];
-    std::uint8_t cym[kRow], cy[kRow], cyp[kRow];
-
-    const auto build = [](const std::uint8_t* row, std::uint8_t* a, std::uint8_t* c) {
+    const auto build = [](const std::uint8_t* __restrict row, std::uint8_t* __restrict a, std::uint8_t* __restrict c) {
+        #pragma omp simd aligned(row, a: 64)
         for (int x = 0; x < kMacroDim; ++x) a[x] = row[x] != 0u ? 1u : 0u;
         // Second loop, not fused: c[0] reads a[127], so the whole of `a` must exist
         // before any of `c` is written.
+        #pragma omp simd aligned(a, c: 64)
         for (int x = 0; x < kMacroDim; ++x) {
             const int xm = (x == 0) ? (kMacroDim - 1) : (x - 1);
             const int xp = (x == kMacroDim - 1) ? 0 : (x + 1);
@@ -423,8 +444,11 @@ void sweep_life(World& world, CellularScratch& scratch, const CellularParams& pa
         }
     };
 
+    #pragma omp parallel for collapse(2) schedule(static) reduction(TallyPlus:t)
     for (int z = 0; z < kMacroDim; ++z)
         for (int y = 0; y < kMacroDim; ++y) {
+            alignas(64) std::uint8_t aym[kRow], ay[kRow], ayp[kRow];
+            alignas(64) std::uint8_t cym[kRow], cy[kRow], cyp[kRow];
             const RowGeom g = row_geom(y, z);
             std::uint8_t* __restrict rd = dst + g.i0;
             if (!row_hot(hot, g)) {
@@ -437,6 +461,15 @@ void sweep_life(World& world, CellularScratch& scratch, const CellularParams& pa
             build(src + g.i0 + g.ym, aym, cym);
             build(src + g.i0, ay, cy);
             build(src + g.i0 + g.yp, ayp, cyp);
+
+            alignas(64) std::uint8_t next_state[kRow];
+            #pragma omp simd aligned(ay, cym, cy, cyp, next_state: 64)
+            for (int x = 0; x < kMacroDim; ++x) {
+                const bool alive = ay[x] != 0u;
+                const int n = static_cast<int>(cym[x]) + static_cast<int>(cy[x]) +
+                              static_cast<int>(cyp[x]) - static_cast<int>(ay[x]);
+                next_state[x] = ((n == 3) || (alive && n == 2)) ? 1u : 0u;
+            }
 
             for (int x = 0; x < kMacroDim; ++x) {
                 const std::size_t i = g.i0 + static_cast<std::size_t>(x);
@@ -451,9 +484,7 @@ void sweep_life(World& world, CellularScratch& scratch, const CellularParams& pa
                     t.account(out);
                     continue;
                 }
-                const int n = static_cast<int>(cym[x]) + static_cast<int>(cy[x]) +
-                              static_cast<int>(cyp[x]) - static_cast<int>(ay[x]);
-                bool next = (n == 3) || (alive && n == 2);
+                bool next = next_state[x] != 0u;
 
                 if (params.topology) {
                     const bool isSolid = !bit_at(open, i);
@@ -468,10 +499,16 @@ void sweep_life(World& world, CellularScratch& scratch, const CellularParams& pa
                             next = isSolid;
                         } else {
                             if (next) {
-                                grid.fill_cell(x, y, z, params.material);
+                                #pragma omp critical
+                                {
+                                    grid.fill_cell(x, y, z, params.material);
+                                }
                                 bit_clear(open, i);
                             } else {
-                                grid.clear_cell(x, y, z);
+                                #pragma omp critical
+                                {
+                                    grid.clear_cell(x, y, z);
+                                }
                                 bit_set(open, i);
                             }
                             ++t.changes;
@@ -521,6 +558,12 @@ void sweep_creep(CellularScratch& scratch, const CellularParams& params,
     const int from = params.spreadFrom < 1 ? 1 : static_cast<int>(params.spreadFrom);
     const int drop = static_cast<int>(params.spreadDrop);
 
+    // schedule(dynamic,4): bitboard-driven sparse iteration. Empty rows exit in
+    // ~1 ns (self==0 → continue). Active rows pay per-open-cell offer()/decay work.
+    // Under schedule(static) a thread drawing a column of air cells finishes in
+    // microseconds while another processes a dense creep front for milliseconds.
+    // chunk=4 keeps the scheduler overhead bounded while eliminating idle time.
+    #pragma omp parallel for collapse(2) schedule(dynamic,4) reduction(TallyPlus:t)
     for (int z = 0; z < kMacroDim; ++z)
         for (int y = 0; y < kMacroDim; ++y) {
             const RowGeom g = row_geom(y, z);
@@ -614,6 +657,7 @@ void cellular_refresh_geometry(const MacroGrid& grid, CellularScratch& scratch,
     std::uint64_t* wr = scratch.writable.data();
     const bool whole = window.whole_world();
 
+    #pragma omp parallel for collapse(2) schedule(static)
     for (int z = 0; z < kMacroDim; ++z)
         for (int y = 0; y < kMacroDim; ++y) {
             // Hoisted out of the x loop: both are properties of (y, z) alone, and the

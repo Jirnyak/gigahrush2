@@ -30,36 +30,80 @@ bool mob_hunts_npcs(std::uint32_t mobId, std::uint64_t tick) {
     return h % kHuntShare == 0u;
 }
 
-Prey nearest_prey(const Registry& reg, const NpcPool& pool, LayerId layer,
-                  const vec3& from, float radius) {
-    Prey best;
-    float bestD2 = radius * radius;
+void build_spatial_hash(SpatialHash& hash, const Registry& reg, const NpcPool& pool, LayerId layer, std::uint64_t tick) {
+    hash.tick = tick;
+    hash.layer = layer;
+    if (hash.heads.empty()) {
+        hash.heads.assign(kMacroCells, entt::null);
+    } else {
+        for (std::uint32_t c : hash.active_cells) {
+            hash.heads[c] = entt::null;
+        }
+    }
+    hash.active_cells.clear();
+    hash.nodes.clear();
 
-    // Monsters carry no NpcRef ([npcs.md]: they have no macro existence at all), so
-    // this view cannot reach one and there is no monster-on-monster exclusion to
-    // write — the same structural argument rumour.cpp's nearest_speaker makes.
     for (auto e : reg.view<const NpcRef, const Transform>()) {
         const Transform& tr = reg.get<const Transform>(e);
         if (tr.layer != layer) continue;
-        // The camera holder belongs to the caller's own, longer-ranged target rule.
         if (reg.all_of<CameraTag>(e)) continue;
-        // A body already scheduled to die is not worth a hunting window: apply_damage
-        // refuses a Dead target anyway, so taking it would mean a monster standing
-        // over a corpse doing nothing until its licence expired.
         if (reg.all_of<Dead>(e)) continue;
 
         const NpcId id = reg.get<const NpcRef>(e).id;
         if (!pool.valid(id)) continue;
-        if (!mob_hostile_to(pool, id)) continue;   // Cultists, by body and not by row
+        if (!mob_hostile_to(pool, id)) continue;
 
-        const float dx = wrap_delta_f(from.x, tr.pos.x, kWorldExtent);
-        const float dy = wrap_delta_f(from.y, tr.pos.y, kWorldExtent);
-        const float dz = wrap_delta_f(from.z, tr.pos.z, kWorldExtent);
-        const float d2 = dx * dx + dy * dy + dz * dz;
-        if (d2 >= bestD2) continue;
-        bestD2 = d2;
-        best.e = e;
-        best.pos = tr.pos;
+        int cx = wrap_macro(static_cast<int>(tr.pos.x / kCellSize));
+        int cy = wrap_macro(static_cast<int>(tr.pos.y / kCellSize));
+        int cz = wrap_macro(static_cast<int>(tr.pos.z / kCellSize));
+
+        std::uint32_t cellIdx = static_cast<std::uint32_t>(macro_index(cx, cy, cz));
+        if (hash.heads[cellIdx] == entt::null) {
+            hash.active_cells.push_back(cellIdx);
+        }
+
+        std::uint32_t nodeIdx = static_cast<std::uint32_t>(hash.nodes.size());
+        hash.nodes.push_back({e, tr.pos, hash.heads[cellIdx]});
+        hash.heads[cellIdx] = nodeIdx;
+    }
+}
+
+Prey nearest_prey(const SpatialHash& hash, const vec3& from, float radius) {
+    Prey best;
+    float bestD2 = radius * radius;
+
+    int rCells = static_cast<int>(std::ceil(radius / kCellSize));
+    int cx0 = static_cast<int>(from.x / kCellSize);
+    int cy0 = static_cast<int>(from.y / kCellSize);
+    int cz0 = static_cast<int>(from.z / kCellSize);
+
+    for (int dz = -rCells; dz <= rCells; ++dz) {
+        for (int dy = -rCells; dy <= rCells; ++dy) {
+            for (int dx = -rCells; dx <= rCells; ++dx) {
+                int cx = wrap_macro(cx0 + dx);
+                int cy = wrap_macro(cy0 + dy);
+                int cz = wrap_macro(cz0 + dz);
+
+                std::uint32_t cellIdx = static_cast<std::uint32_t>(macro_index(cx, cy, cz));
+                std::uint32_t nodeIdx = hash.heads[cellIdx];
+                
+                while (nodeIdx != entt::null) {
+                    const auto& node = hash.nodes[nodeIdx];
+                    
+                    const float dpx = wrap_delta_f(from.x, node.pos.x, kWorldExtent);
+                    const float dpy = wrap_delta_f(from.y, node.pos.y, kWorldExtent);
+                    const float dpz = wrap_delta_f(from.z, node.pos.z, kWorldExtent);
+                    const float d2 = dpx * dpx + dpy * dpy + dpz * dpz;
+                    
+                    if (d2 < bestD2) {
+                        bestD2 = d2;
+                        best.e = node.e;
+                        best.pos = node.pos;
+                    }
+                    nodeIdx = node.next;
+                }
+            }
+        }
     }
     return best;
 }

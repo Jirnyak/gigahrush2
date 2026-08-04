@@ -100,6 +100,7 @@
 #include "world/level_stack.h" // LayerId, kInvalidLayer — the driver's floor token
 #include "world/materials.h"   // kMatConcrete — the default material a Life cell grows as
 #include "world/world.h"       // World, MacroGrid
+#include "core/aligned_allocator.h"
 
 namespace giga {
 
@@ -344,10 +345,10 @@ struct CellularStep {
 // `writable` are built at those boundaries and read on every sweep — the same
 // bake-once / read-O(1) shape as nav.
 struct CellularScratch {
-    std::vector<std::uint8_t> back;      // 2.00 MiB
-    std::vector<std::uint64_t> open;     // 256 KiB; 1 = cell is not fully solid
-    std::vector<std::uint64_t> writable; // 256 KiB; 1 = a topology rule may flip it
-    std::vector<std::uint64_t> hotGroups; // 4 KiB; pure scratch, rewritten per sweep
+    std::vector<std::uint8_t, AlignedAllocator<std::uint8_t, 64>> back;      // 2.00 MiB
+    std::vector<std::uint64_t, AlignedAllocator<std::uint64_t, 64>> open;     // 256 KiB; 1 = cell is not fully solid
+    std::vector<std::uint64_t, AlignedAllocator<std::uint64_t, 64>> writable; // 256 KiB; 1 = a topology rule may flip it
+    std::vector<std::uint64_t, AlignedAllocator<std::uint64_t, 64>> hotGroups; // 4 KiB; pure scratch, rewritten per sweep
 
     // Set when geometry moved and the two bitsets have not caught up. The next sweep
     // rebuilds instead of spreading through a wall that now exists. This is the blunt

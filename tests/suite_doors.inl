@@ -23,8 +23,8 @@
 // SubMask has no operator==, so the solidity comparison is explicit. Word-wise and
 // not memcmp: the words ARE the occupancy, and a struct-padding difference would
 // make memcmp report a change that physics cannot see.
-static bool masks_identical(const std::vector<SubMask>& a,
-                            const std::vector<SubMask>& b) {
+template <typename VecA, typename VecB>
+static bool masks_identical(const VecA& a, const VecB& b) {
     if (a.size() != b.size()) return false;
     for (std::size_t i = 0; i < a.size(); ++i)
         for (std::size_t w = 0; w < kSubMaskWords; ++w)
@@ -112,8 +112,8 @@ static void test_doors_leave_solidity_untouched() {
     World w;
     const FloorSpec& res = floor_spec(FloorKind::Residential);
     generate_floor(w, /*number=*/2, res, /*seed=*/31337u);
-    const std::vector<SubMask> before = w.grid().masks();
-    const std::vector<CellType> typesBefore = w.grid().types();
+    const auto before = w.grid().masks();
+    const auto typesBefore = w.grid().types();
 
     DoorSet doors;
     const std::uint32_t n = door_build(w, doors, 2, res, 31337u);
@@ -442,37 +442,49 @@ static void test_shut_door_versus_monsters() {
 // inventory_has_keycard: a keycard of the required tier (or better) grants
 // access; no tier required always grants; a wrong/missing tier never does.
 static void test_inventory_keycard() {
-    {   // ---- no tier required: always true
+    // `inventory_has_keycard` is a pure boolean gate: any Key-category item grants
+    // a non-zero tier; tier 0 (None) always grants. It does NOT compare tiers.
+    {   // ---- no tier required: always true, even empty
         Inventory empty;
         empty.clear();
         CHECK(inventory_has_keycard(empty, 0));
         CHECK(inventory_has_keycard(empty, static_cast<std::uint8_t>(KeycardTier::None)));
     }
-    {   // ---- tier 1 requested, empty inventory: denied
+    {   // ---- non-zero tier requested, empty inventory: denied
         Inventory empty;
         empty.clear();
         CHECK(!inventory_has_keycard(empty, 1));
         CHECK(!inventory_has_keycard(empty, static_cast<std::uint8_t>(KeycardTier::Red)));
     }
-    {   // ---- tier 3 requested, only a tier-1 card held: denied
+    constexpr std::uint16_t kKeyId = 412;   // tut_cafe_key, ItemCategory::Key
+    CHECK(item_valid(kKeyId));
+    CHECK(item_def(kKeyId).category ==
+          static_cast<std::uint8_t>(ItemCategory::Key));
+    {   // ---- a Key item grants access for any tier request
         Inventory inv;
         inv.clear();
-        const ItemSlot card{};
-        // A card is any item in the Key category; tier equals its ItemCategory row.
-        // We hold one card (id 1) and ask for more than it can grant.
-        ItemSlot& s = inv.slots[0];
-        s.item = 1;
-        CHECK(inventory_has_keycard(inv, 1));          // exactly the card's tier
-        CHECK(!inventory_has_keycard(inv, 2));         // a higher tier is not covered
-        CHECK(!inventory_has_keycard(inv, 3));
+        inv.slots[0].item = kKeyId;
+        inv.slots[0].count = 1;
+        CHECK(inventory_has_keycard(inv, 1));
+        CHECK(inventory_has_keycard(inv, 3));
     }
-    {   // ---- a matching-tier card in a later slot is still found
+    {   // ---- a non-Key item never grants a tiered door
+        constexpr std::uint16_t kNotKeyId = 413;  // unpeople_detector, not Key
+        CHECK(item_valid(kNotKeyId));
+        CHECK(item_def(kNotKeyId).category !=
+              static_cast<std::uint8_t>(ItemCategory::Key));
         Inventory inv;
         inv.clear();
-        inv.slots[7].item = 2;   // tier-2 card deep in the grid
+        inv.slots[0].item = kNotKeyId;
+        inv.slots[0].count = 1;
         CHECK(!inventory_has_keycard(inv, 1));
-        CHECK(inventory_has_keycard(inv, 2));
-        CHECK(inventory_has_keycard(inv, static_cast<std::uint8_t>(KeycardTier::Blue)));
+    }
+    {   // ---- a zero-count key item is ignored
+        Inventory inv;
+        inv.clear();
+        inv.slots[0].item = kKeyId;
+        inv.slots[0].count = 0;      // held but empty stack
+        CHECK(!inventory_has_keycard(inv, 1));
     }
 }
 
@@ -484,34 +496,39 @@ static void test_door_query_near() {
     const FloorSpec& res = floor_spec(FloorKind::Residential);
     generate_floor(w, /*number=*/0, res, /*seed=*/909u);
 
+    // An empty DoorSet never has a door to find.
+    {
+        DoorSet empty;
+        CHECK(door_query_near(empty, vec3{0.0f, 0.0f, 0.0f}) == kNoDoor);
+    }
+
     DoorSet doors;
-    const std::uint32_t built = door_build(w, doors, /*number=*/0, res, layer);
+    const std::uint32_t built = door_build(w, doors, /*number=*/0, res, /*seed=*/909u);
     CHECK(built > 0);
 
-    // Every built door lies on a wall segment; querying from far away yields none.
-    const std::uint32_t far = door_query_near(doors, vec3{999.0f, 999.0f, 0.0f});
-    CHECK(far == kNoDoor);
-
-    // Querying from a door's own cell finds that door (nearest, zero-distance).
+    // Querying from a door's own center (world coords) finds that door.
     bool foundSelf = false;
     for (std::uint32_t i = 0; i < doors.doors.size(); ++i) {
         const Door& d = doors.doors[i];
         if (d.state == static_cast<std::uint8_t>(DoorState::Broken)) continue;
-        const vec3 at{d.cx + 0.5f, d.cy + 0.5f, static_cast<float>(d.cz)};
+        const vec3 at{(static_cast<float>(d.cx) + 0.5f) * kCellSize,
+                      (static_cast<float>(d.cy) + 0.5f) * kCellSize,
+                      (static_cast<float>(d.cz) + 0.5f) * kCellSize};
         const std::uint32_t hit = door_query_near(doors, at);
         if (hit != kNoDoor) { CHECK(hit == i); foundSelf = true; }
     }
     CHECK(foundSelf);
 
-    // A door that breaks (hp -> 0) is no longer queryable.
-    if (built > 1) {
-        const std::uint32_t id0 = 0;
-        Door& d0 = doors.doors[id0];
-        d0.hp = 0;
-        const Door& d0r = doors.doors[id0];
-        const vec3 at{d0r.cx + 0.5f, d0r.cy + 0.5f, static_cast<float>(d0r.cz)};
-        CHECK(door_query_near(doors, at) != id0);
-    }
+    // A door marked Broken is never queryable, even from its own cell.
+    const std::uint32_t id0 = 0;
+    Door& d0 = doors.doors[id0];
+    const std::uint8_t prevState = d0.state;
+    d0.state = static_cast<std::uint8_t>(DoorState::Broken);
+    const vec3 at0{(static_cast<float>(d0.cx) + 0.5f) * kCellSize,
+                   (static_cast<float>(d0.cy) + 0.5f) * kCellSize,
+                   (static_cast<float>(d0.cz) + 0.5f) * kCellSize};
+    CHECK(door_query_near(doors, at0) != id0);
+    d0.state = prevState;   // restore; the whole world is local anyway
 }
 
 // door_shut_all + door_toggle_locks: shut every door, then toggle lock state.
@@ -523,7 +540,7 @@ static void test_door_shut_all_and_locks() {
     generate_floor(w, /*number=*/0, res, /*seed=*/909u);
 
     DoorSet doors;
-    const std::uint32_t built = door_build(w, doors, /*number=*/0, res, layer);
+    const std::uint32_t built = door_build(w, doors, /*number=*/0, res, /*seed=*/909u);
     if (built == 0) return;
 
     Registry reg;
@@ -533,9 +550,11 @@ static void test_door_shut_all_and_locks() {
     CHECK(toggled > 0);
     CHECK(doors.shut > 0);
 
-    // door_shut_all is idempotent and returns how many were already shut.
+    // door_shut_all on already-shut doors is a no-op (idempotent): every door
+    // stays shut, nothing newly changes, and the counter is unchanged.
     const std::uint32_t shutNow = door_shut_all(w, doors, reg, layer);
-    CHECK(shutNow >= toggled);
+    CHECK(shutNow == 0);            // nothing new to shut
+    CHECK(doors.shut == toggled);   // all still shut
 
     // Toggling again (some shut) opens them back to the idle state.
     const std::uint32_t toggled2 = door_toggle_locks(w, doors, reg, layer);

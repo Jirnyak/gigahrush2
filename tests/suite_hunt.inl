@@ -236,17 +236,20 @@ static void test_hunt_all() {
             reg.emplace<Transform>(b, bt);
             reg.emplace<NpcRef>(b, NpcRef{cul});
 
-            CHECK(nearest_prey(reg, pool, layer, bt.pos, kHuntRadius).e ==
-                  entt::null);
+            SpatialHash sh;
+            build_spatial_hash(sh, reg, pool, layer, 0);
+            CHECK(nearest_prey(sh, bt.pos, kHuntRadius).e == entt::null);
             pool.faction(cul) = static_cast<std::uint16_t>(Faction::Citizens);
-            CHECK(nearest_prey(reg, pool, layer, bt.pos, kHuntRadius).e == b);
+            build_spatial_hash(sh, reg, pool, layer, 0);
+            CHECK(nearest_prey(sh, bt.pos, kHuntRadius).e == b);
             // The radius is real, not decorative.
             const vec3 away{bt.pos.x + kHuntRadius + 1.0f, bt.pos.y, bt.pos.z};
-            CHECK(nearest_prey(reg, pool, layer, away, kHuntRadius).e == entt::null);
+            build_spatial_hash(sh, reg, pool, layer, 0);
+            CHECK(nearest_prey(sh, away, kHuntRadius).e == entt::null);
             // And a body already scheduled to die is not worth a window.
             reg.emplace<Dead>(b, Dead{entt::null, 0});
-            CHECK(nearest_prey(reg, pool, layer, bt.pos, kHuntRadius).e ==
-                  entt::null);
+            build_spatial_hash(sh, reg, pool, layer, 0);
+            CHECK(nearest_prey(sh, bt.pos, kHuntRadius).e == entt::null);
         }
     }
 

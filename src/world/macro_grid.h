@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "world/types.h"
+#include "core/aligned_allocator.h"
 
 namespace giga {
 
@@ -25,7 +26,7 @@ using CellType = std::uint16_t;
 inline constexpr CellType kCellAir = 0;
 
 // One macro cell's sub-voxel occupancy: kSubVoxels bits packed into words.
-struct SubMask {
+struct alignas(64) SubMask {
     std::uint64_t words[kSubMaskWords] = {};
 
     // Lowest occupied sub-layer (0..7), or -1 when empty. word i IS layer sz=i
@@ -112,18 +113,18 @@ public:
     void clear_cell(int x, int y, int z);
 
     // Raw flat access for renderers and serializers.
-    const std::vector<CellType>& types() const { return types_; }
-    const std::vector<SubMask>& masks() const { return masks_; }
+    const std::vector<CellType, AlignedAllocator<CellType, 64>>& types() const { return types_; }
+    const std::vector<SubMask, AlignedAllocator<SubMask, 64>>& masks() const { return masks_; }
 
     // Mutable raw access for wholesale state restore (a floor snapshot stamping
     // the grid back, [game/save.h]). Bulk writers only — per-cell mutation goes
     // through the toroidal accessors above.
-    std::vector<CellType>& types_mut() { return types_; }
-    std::vector<SubMask>& masks_mut() { return masks_; }
+    std::vector<CellType, AlignedAllocator<CellType, 64>>& types_mut() { return types_; }
+    std::vector<SubMask, AlignedAllocator<SubMask, 64>>& masks_mut() { return masks_; }
 
 private:
-    std::vector<CellType> types_;
-    std::vector<SubMask> masks_;
+    std::vector<CellType, AlignedAllocator<CellType, 64>> types_;
+    std::vector<SubMask, AlignedAllocator<SubMask, 64>> masks_;
 };
 
 } // namespace giga

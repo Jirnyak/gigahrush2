@@ -261,7 +261,7 @@ struct DiffusionStep {
 // load and after self-assembly, never per tick), so the bitset is built at those
 // boundaries and read on every sweep — the same bake-once/read-O(1) shape as nav.
 struct DiffusionScratch {
-    std::vector<float> back;         // 8.00 MiB, sized on first sweep, then reused
+    std::vector<float, AlignedAllocator<float, 64>> back;         // 8.00 MiB, sized on first sweep, then reused
     std::vector<std::uint64_t> open; // 256 KiB walkability bitset, 1 = cell is open
 
     // 4 KiB, one bit per 64-cell run: 1 = that run of the field is not all zero. Sized

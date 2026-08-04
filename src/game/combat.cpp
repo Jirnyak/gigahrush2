@@ -409,7 +409,9 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
 std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
                              NpcPool& pool, EventBus& bus,
                              LayerId layer, float dt, std::uint64_t tick,
-                             ParticleBurstQueue* particles) {
+                             const float* wet) {
+    bool hash_built = false;
+    static thread_local SpatialHash spatial_hash;
     // The camera holder, resolved ONCE per pass. It is a single entity that every
     // monster may want, so hoisting it out of the loop is free; crowd prey is
     // per-monster and cannot be hoisted the same way ([hunt.h]).
@@ -448,21 +450,26 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
     // intent. Phase 2 applies damage after the view is gone. This is the same
     // discipline finalize_deaths, despawn_layer_mobs, loot_dead_mobs and
     // pickup_step already follow — this was the one place it was missed.
-    struct Swing {
+    struct MeleeSwing {
         Entity mob;
-        // Per-swing now, not one shared victim: a monster may be hunting a resident
-        // while its neighbour is hunting the player ([hunt.h]).
         Entity target;
         std::int16_t raw;
         std::uint16_t cd;
-        bool ranged;         // launch a projectile instead of touching the victim
-        vec3 from;           // launch origin, captured while the view was alive
-        vec3 to;             // aim point, captured with it
-        std::uint16_t projSpeedMmps;
-        std::uint8_t proj;   // ProjType, copied off the row so the launch can read it
     };
-    static thread_local std::vector<Swing> queued;
-    queued.clear();
+    static thread_local std::vector<MeleeSwing> queuedMelee;
+    queuedMelee.clear();
+
+    struct RangedSwing {
+        Entity mob;
+        std::int16_t raw;
+        std::uint16_t cd;
+        vec3 from;
+        vec3 to;
+        std::uint16_t projSpeedMmps;
+        std::uint8_t proj;
+    };
+    static thread_local std::vector<RangedSwing> queuedRanged;
+    queuedRanged.clear();
 
     struct HazardHit {
         Entity mob;
@@ -560,7 +567,11 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
                     px * px + py * py + pz * pz <= kHuntRadius * kHuntRadius;
             }
             if (!playerClose) {
-                const Prey pr = nearest_prey(reg, pool, layer, tr.pos, kHuntRadius);
+                if (!hash_built) {
+                    build_spatial_hash(spatial_hash, reg, pool, layer, tick);
+                    hash_built = true;
+                }
+                const Prey pr = nearest_prey(spatial_hash, tr.pos, kHuntRadius);
                 if (pr.e != entt::null) {
                     victim = pr.e;
                     victimPos = pr.pos;
@@ -631,8 +642,7 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         const float reach = behaviour_melee_reach(beh, def.meleeReachMm, nearWall);
         if (raw > 0 && d2 <= reach * reach) {
             mc.windupMs = 0;   // contact cancels a shot it was lining up
-            queued.push_back(Swing{e, victim, raw, def.attackCdMs, false, tr.pos,
-                                   victimPos, 0, def.projType});
+            queuedMelee.push_back(MeleeSwing{e, victim, raw, def.attackCdMs});
             continue;
         }
 
@@ -656,26 +666,19 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         }
         // windupDone, or a kind with no authored windup: the shot leaves now.
 
-        queued.push_back(Swing{e, victim, raw, def.attackCdMs, true, tr.pos,
-                               victimPos, def.projSpeedMmps, def.projType});
+        queuedRanged.push_back(RangedSwing{e, raw, def.attackCdMs, tr.pos,
+                                           victimPos, def.projSpeedMmps, def.projType});
     }
 
     std::uint32_t swings = 0;
-    for (const Swing& s : queued) {
-        if (s.ranged) {
-            spawn_projectile(reg, layer, s.from, s.to, s.raw,
-                             s.projSpeedMmps, s.mob, s.proj);
-            ++swings;
-            if (MobCombat* mc = reg.try_get<MobCombat>(s.mob))
-                mc->cooldownMs = s.cd;
-            continue;   // a shot in flight is not a hit yet
-        }
-        // No early `break` on a lethal hit any more, and its removal is required
-        // rather than tidying: the queue now holds swings at DIFFERENT targets, so
-        // one body going down must not cancel the monster mauling somebody else in
-        // another room. Nothing is lost by dropping it — apply_damage already refuses
-        // a target that is `Dead`, returns hit == false, and so leaves that mob's
-        // cooldown unset exactly as the break did.
+    for (const RangedSwing& s : queuedRanged) {
+        spawn_projectile(reg, layer, s.from, s.to, s.raw,
+                         s.projSpeedMmps, s.mob, s.proj);
+        ++swings;
+        if (MobCombat* mc = reg.try_get<MobCombat>(s.mob))
+            mc->cooldownMs = s.cd;
+    }
+    for (const MeleeSwing& s : queuedMelee) {
         DamageResult r = apply_damage(reg, pool, s.target, s.raw,
                                       DamageChannel::Kinetic, s.mob, &grid,
                                       particles);
@@ -954,33 +957,28 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
 
     // Same two-phase discipline as the attack step, for the same reason:
     // apply_damage can create the Dead pool and dangle a live view.
-    struct Hit {
+    struct BodyHit {
         Entity proj;
         std::int16_t dmg;
         Entity source;
-        bool onVictim;
-        // Set instead of onVictim when the shot struck a specific body that is not
-        // the camera holder: a monster for a player shot, a resident for a monster
-        // shot. One field rather than two, because phase 2 does the same thing with
-        // either — apply_damage does not care what it is pointed at.
-        Entity other = entt::null;
-        // ProjType, carried through phase 2 because that is where the effect lands.
-        // Read off the Projectile in phase 1 rather than looked up again later: the
-        // entity is destroyed at the end of the resolution loop. Named `projType`
-        // and not `proj` because `proj` above is the projectile ENTITY.
+        Entity victim; // either player or mob/npc
         std::uint8_t projType = 0;
-        // DamageChannel, carried for exactly the reason projType above is: phase 2 is
-        // where apply_damage runs, and the Projectile entity is destroyed at the end
-        // of the resolution loop, so the channel has to be read off it in phase 1.
         std::uint8_t channel = static_cast<std::uint8_t>(DamageChannel::Kinetic);
-        // Wall impact: solid geometry stopped the shot. impactPos is the contact
-        // point (projectile position at the stop). onWall is mutually exclusive
-        // with onVictim/other — a body hit never also carves the wall behind it.
-        bool onWall = false;
-        vec3 impactPos{0, 0, 0};
     };
-    static thread_local std::vector<Hit> resolved;
-    resolved.clear();
+    static thread_local std::vector<BodyHit> resolvedBody;
+    resolvedBody.clear();
+
+    struct EnvHit {
+        Entity proj;
+        std::int16_t dmg;
+        Entity source;
+        bool onProp; // true = prop, false = wall
+        vec3 impactPos{0,0,0};
+        std::uint8_t projType = 0;
+        std::uint8_t channel = static_cast<std::uint8_t>(DamageChannel::Kinetic);
+    };
+    static thread_local std::vector<EnvHit> resolvedEnv;
+    resolvedEnv.clear();
 
     for (auto e : reg.view<Projectile, Transform, Velocity>()) {
         Transform& tr = reg.get<Transform>(e);
@@ -1002,7 +1000,7 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         tr.pos.z += v.v.z * dt;
 
         if (p.ttlMs == 0) {
-            resolved.push_back(Hit{e, 0, p.source, false});
+            resolvedEnv.push_back(EnvHit{e, 0, p.source, false, tr.pos, p.proj, p.channel});
             continue;
         }
 
@@ -1015,12 +1013,10 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         // sufficient alone, because a shot fired straight down still passes through
         // the shooter on its way to the floor.
         if (victim != entt::null && p.source != victim) {
-            const float hx = wrap_delta_f(tr.pos.x, victimPos.x, kWorldExtent);
-            const float hy = wrap_delta_f(tr.pos.y, victimPos.y, kWorldExtent);
-            const float hz = wrap_delta_f(tr.pos.z, victimPos.z, kWorldExtent);
-            if (hx * hx + hy * hy + hz * hz <= kProjHitRadius * kProjHitRadius) {
-                resolved.push_back(
-                    Hit{e, p.dmg, p.source, true, entt::null, p.proj, p.channel});
+            if (proj_segment_hits_body(prevPos, tr.pos, victimPos, kProjHitRadius,
+                                       kWorldExtent)) {
+                resolvedBody.push_back(
+                    BodyHit{e, p.dmg, p.source, victim, p.proj, p.channel});
                 continue;
             }
         }
@@ -1047,7 +1043,7 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                 const float hz = wrap_delta_f(tr.pos.z, mt.pos.z, kWorldExtent);
                 if (hx * hx + hy * hy + hz * hz > kProjHitRadius * kProjHitRadius)
                     continue;
-                resolved.push_back(Hit{e, p.dmg, p.source, false, m, p.proj,
+                resolvedBody.push_back(BodyHit{e, p.dmg, p.source, m, p.proj,
                                        p.channel});
                 struck = true;
                 break;
@@ -1078,8 +1074,7 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                 const float hz = wrap_delta_f(tr.pos.z, bt.pos.z, kWorldExtent);
                 if (hx * hx + hy * hy + hz * hz > kProjHitRadius * kProjHitRadius)
                     continue;
-                if (!mob_hostile_to(pool, reg.get<const NpcRef>(b).id)) continue;
-                resolved.push_back(Hit{e, p.dmg, p.source, false, b, p.proj,
+                resolvedBody.push_back(BodyHit{e, p.dmg, p.source, b, p.proj,
                                        p.channel});
                 struck = true;
                 break;
@@ -1087,122 +1082,128 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
             if (struck) continue;
         }
 
+        // Props before wall: shatterable lamps / terminals absorb the round so a
+        // body in front of glass is not skipped and a wall behind glass is not
+        // carved. check_projectile_prop_hits is two-phase internally (scan then
+        // detach after its own view closes) so SimpleFall emplace cannot dangle
+        // the live Projectile view here. [jirnyak.md] section 24.
+        if (check_projectile_prop_hits(reg, prevPos, tr.pos, v.v, kProjHitRadius, bus)) {
+            resolvedEnv.push_back(EnvHit{e, p.dmg, p.source, true, tr.pos, p.proj, p.channel});
+            continue;
+        }
+
         // Solid geometry stops it. Cell-level rather than sub-voxel on purpose: a
         // shot clipping the corner of a wall should stop, and the sub-voxel mask
         // would let it slip through a half-carved cell that reads as solid.
         // Carry p.dmg so phase 2 can propose a wall chip (carve_power_from_dmg);
         // body damage is still skipped via onWall (no onVictim/other).
-        const int cx = wrap_macro(static_cast<int>(tr.pos.x / kCellSize));
-        const int cy = wrap_macro(static_cast<int>(tr.pos.y / kCellSize));
-        const int cz = static_cast<int>(tr.pos.z / kCellSize);
-        if (cz < 0 || cz >= kMacroDim ||
-            grid.cell(cx, cy, wrap_macro(cz)) != kCellAir) {
-            Hit h{e, p.dmg, p.source, false};
-            h.onWall = true;
-            h.impactPos = tr.pos;
-            h.projType = p.proj;
-            h.channel = p.channel;
-            resolved.push_back(h);
+        // Segment-walk prevPos->tr.pos so a round that tunnels a full solid cell
+        // (or clips a corner) still stops. Point-at-end only tested the landing
+        // cell; a 600 m/s probe advances 4.8 m/step and can skip a 2 m cell.
+        // XY torus via wrap_delta_f from prevPos; Z linear. Carve stays
+        // melee/explosion only. [jirnyak.md] s25 wall sweep.
+        {
+            const float sdx = wrap_delta_f(prevPos.x, tr.pos.x, kWorldExtent);
+            const float sdy = wrap_delta_f(prevPos.y, tr.pos.y, kWorldExtent);
+            const float sdz = tr.pos.z - prevPos.z;
+            const float slen = std::sqrt(sdx * sdx + sdy * sdy + sdz * sdz);
+            // Half-voxel samples (kVoxelSize=0.25 => 0.125 m). A makarov step
+            // is ~0.7 m so this is a handful of probes; a 600 m/s probe is ~40.
+            const int nSamp = slen < 1e-6f ? 1
+                : std::max(1, static_cast<int>(std::ceil(slen / (kVoxelSize * 0.5f))));
+            bool wallHit = false;
+            vec3 hitAt = tr.pos;
+            for (int si = 1; si <= nSamp; ++si) {
+                const float t = static_cast<float>(si) / static_cast<float>(nSamp);
+                const float px = wrapf(prevPos.x + sdx * t, kWorldExtent);
+                const float py = wrapf(prevPos.y + sdy * t, kWorldExtent);
+                const float pz = prevPos.z + sdz * t;
+                const int cx = wrap_macro(static_cast<int>(std::floor(px / kCellSize)));
+                const int cy = wrap_macro(static_cast<int>(std::floor(py / kCellSize)));
+                const int cz = static_cast<int>(std::floor(pz / kCellSize));
+                if (cz < 0 || cz >= kMacroDim ||
+                    grid.cell(cx, cy, wrap_macro(cz)) != kCellAir) {
+                    wallHit = true;
+                    hitAt = vec3{px, py, pz};
+                    break;
+                }
+            }
+            if (wallHit) {
+                resolvedEnv.push_back(EnvHit{e, p.dmg, p.source, false, hitAt, p.proj, p.channel});
+            }
         }
     }
 
 
     std::uint32_t hits = 0;
-    for (const Hit& h : resolved) {
-        // What a WEB shot delivers, and the ONLY reader of `MobDef::projType` in the
-        // tree. A web carries dmg 0 (its one authored row is the only zero-damage row
-        // in data/mobs.csv), so `apply_damage` would refuse it and the shot would
-        // land as nothing at all — the slow IS the hit, and it is counted as one so
-        // the HUD's hit tally does not report a web-spitter as permanently missing.
-        //
-        // Applied before apply_damage rather than after, because apply_damage may tag
-        // `Dead`, and slowing a corpse is a wasted 8 bytes on an entity that is about
-        // to be destroyed. A web cannot itself be lethal, so ordering costs nothing.
-        //
-        // `landed` and not `++hits` in two places: a shot must count once whatever it
-        // delivered, or a future WEB row with nonzero damage would report two hits for
-        // one projectile and quietly inflate the tally the HUD prints.
-        bool landed = false;
+    
+    // Phase 2a: Environment Hits (Walls & Props)
+    for (const EnvHit& h : resolvedEnv) {
         const bool web = static_cast<ProjType>(h.projType) == ProjType::Web;
-        const Entity body = h.onVictim ? victim : h.other;
-        if (web && body != entt::null && reg.valid(body)) {
-            landed = apply_slow(reg, body, kWebSlowScale, kWebSlowMs);
-            // Content layer: Slowed is the velocity CAP; PaupsinaWeb is the
-            // authored row (root window + move 540/220). Both coexist.
-            if (landed && playerStatus && body == playerEntity) {
-                status_apply(*playerStatus, StatusId::PaupsinaWeb,
-                             /*useAlt=*/false);
+        bool landed = false;
+        
+        if (h.onProp) {
+            landed = true;
+        } else {
+            landed = true;
+            if (carves && !web && h.dmg > 0) {
+                const std::uint16_t pow = carve_power_from_dmg(h.dmg);
+                (void)carves->push(h.impactPos.x, h.impactPos.y, h.impactPos.z,
+                                   kBulletCarveRadius, pow,
+                                   static_cast<std::uint32_t>(tick) * 0x9e3779b9u ^
+                                       static_cast<std::uint32_t>(entt::to_integral(h.proj)),
+                                   h.channel);
             }
         }
-
-        // `h.channel` and not `DamageChannel::Kinetic`: this is the line that makes
-        // armour's resist[5] mean anything on a shot. Both branches take it, because
-        // a channel is a property of the SHOT and not of what it happened to strike.
+        
+        if (landed) ++hits;
+        if (reg.valid(h.proj)) reg.destroy(h.proj);
+    }
+    
+    // Phase 2b: Body Hits (Player, Monsters, NPCs)
+    for (const BodyHit& h : resolvedBody) {
+        if (!reg.valid(h.victim)) {
+            if (reg.valid(h.proj)) reg.destroy(h.proj);
+            continue;
+        }
+        
+        const bool web = static_cast<ProjType>(h.projType) == ProjType::Web;
         const DamageChannel ch = static_cast<DamageChannel>(h.channel);
-        if (h.onVictim && victim != entt::null) {
-            DamageResult r = apply_damage(reg, pool, victim, h.dmg, ch, h.source,
-                                          &grid, particles);
-            if (r.hit) landed = true;
-        } else if (h.other != entt::null && reg.valid(h.other)) {
-            DamageResult r = apply_damage(reg, pool, h.other, h.dmg, ch, h.source,
-                                          &grid, particles);
-            if (r.hit) {
-                landed = true;
-                // Credit the shooter, the same way the melee path credits a swing.
-                // Only a player carries PlayerRanged, so this quietly does nothing for
-                // the monster-shot-hit-a-resident case and needs no team test.
-                if (reg.valid(h.source)) {
-                    if (auto* pr = reg.try_get<PlayerRanged>(h.source)) ++pr->hits;
-                    // And a KILL is a kill however it was made. `PlayerMelee::kills` is
-                    // the game's only kill counter and the HUD prints it as "kills", so
-                    // leaving shot monsters out of it meant a player with a rifle watched
-                    // the number stay at zero while the corridor emptied. The field's
-                    // NAME is now wrong; the behaviour was worse.
-                    if (r.lethal)
-                        if (auto* pm = reg.try_get<PlayerMelee>(h.source)) ++pm->kills;
+        bool landed = false;
+        
+        DamageResult r = apply_damage(reg, pool, h.victim, h.dmg, ch, h.source, &grid, wet);
+        if (r.hit) {
+            landed = true;
+            
+            // Apply PaupsinaWeb if needed (only to player)
+            if (web && playerStatus && h.victim == playerEntity) {
+                status_apply(*playerStatus, StatusId::PaupsinaWeb, false);
+            }
+            
+            // Credit the shooter
+            if (reg.valid(h.source)) {
+                if (auto* pr = reg.try_get<PlayerRanged>(h.source)) ++pr->hits;
+                if (r.lethal)
+                    if (auto* pm = reg.try_get<PlayerMelee>(h.source)) ++pm->kills;
+            }
+            
+            // Blood splatter on body hits
+            if (stainDirty && !web && h.dmg > 0) {
+                if (const Transform* tr = reg.try_get<Transform>(h.victim)) {
+                    stain_splat(stack.layer(layer), tr->pos,
+                                vec3{0.0f, 0.0f, -0.35f}, 1.6f, 10,
+                                kStainBlood,
+                                static_cast<std::uint32_t>(tick) ^
+                                    entt::to_integral(h.proj),
+                                *stainDirty);
                 }
             }
         }
-        // Wall chip: combat proposes, app disposes via carve_sphere ([destruct.h]).
-        // WEB is control, not demolition — skip. Power from weapon dmg (not 0).
-        if (h.onWall && carves && !web && h.dmg > 0) {
-            const std::uint16_t pow = carve_power_from_dmg(h.dmg);
-            if (carves->push(h.impactPos.x, h.impactPos.y, h.impactPos.z,
-                             kBulletCarveRadius, pow,
-                             static_cast<std::uint32_t>(tick) * 0x9e3779b9u ^
-                                 static_cast<std::uint32_t>(
-                                     entt::to_integral(h.proj)))) {
-                landed = true;
-            }
-            // Sparks — the projectile-on-wall writer of the unified pool
-            // ([particles.h]). The chip carve above is the scar; this is the
-            // flash. The sim's voxel bounce scatters them off the surface, so
-            // no impact normal is needed here.
-            if (particles) {
-                const int n = 4 + h.dmg / 4;
-                particles->push(h.impactPos, vec3{0.0f, 0.0f, 0.6f},
-                                ParticleKind::Spark,
-                                static_cast<std::uint8_t>(n > 12 ? 12 : n), 0,
-                                static_cast<std::uint32_t>(tick) ^
-                                    static_cast<std::uint32_t>(
-                                        entt::to_integral(h.proj)));
-            }
-        }
+        
         if (landed) ++hits;
-        // Blood: a shot that landed on a BODY splatters the world through the
-        // universal stain layer ([world/stain.h]) — same op for every channel,
-        // colour from the substance table, dirty cells owed to the mirror by
-        // the caller. Wall hits bleed nothing; the carve chip is their mark.
-        if (landed && stainDirty && !h.onWall && !web && h.dmg > 0) {
-            stain_splat(stack.layer(layer), h.impactPos,
-                        vec3{0.0f, 0.0f, -0.35f}, 1.6f, /*rays=*/10,
-                        kStainBlood,
-                        static_cast<std::uint32_t>(tick) ^
-                            entt::to_integral(h.proj),
-                        *stainDirty);
-        }
         if (reg.valid(h.proj)) reg.destroy(h.proj);
     }
+
     (void)bus;
     return hits;
 }

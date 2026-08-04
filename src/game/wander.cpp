@@ -123,6 +123,9 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
 
     const std::uint32_t phase = static_cast<std::uint32_t>(tick % kWanderPeriod);
 
+    bool hash_built = false;
+    static thread_local SpatialHash spatial_hash;
+
     // Whoever holds the camera. Mobs inside kAggroRadius abandon their wander and
     // come for it, which is what turns 77 idle monsters into a threat. Found once
     // per pass, not per agent.
@@ -271,8 +274,12 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                 // inverted, for the one kind whose whole design is not noticing you.
                 // Derived from the radius rather than re-stated, so the next short
                 // behaviour cannot reintroduce it.
+                if (!hash_built) {
+                    build_spatial_hash(spatial_hash, reg, pool, layer, tick);
+                    hash_built = true;
+                }
                 const float preyRadius = radius < kHuntRadius ? radius : kHuntRadius;
-                const Prey pr = nearest_prey(reg, pool, layer, tr.pos, preyRadius);
+                const Prey pr = nearest_prey(spatial_hash, tr.pos, preyRadius);
                 if (pr.e != entt::null) {
                     ax = wrap_delta_f(tr.pos.x, pr.pos.x, kWorldExtent);
                     ay = wrap_delta_f(tr.pos.y, pr.pos.y, kWorldExtent);

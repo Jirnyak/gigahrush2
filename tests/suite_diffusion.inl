@@ -67,7 +67,7 @@ namespace {
 void diffusion_scan(const Field<float>& f, std::uint32_t& nonZero, double& total) {
     nonZero = 0;
     total = 0.0;
-    const std::vector<float>& d = f.data();
+    const auto& d = f.data();
     for (std::size_t i = 0; i < d.size(); ++i)
         if (d[i] != 0.0f) {
             ++nonZero;

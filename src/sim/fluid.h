@@ -60,7 +60,8 @@ struct FluidStep {
 };
 
 struct FluidScratch {
-    std::vector<float> delta;
+    std::vector<float, AlignedAllocator<float, 64>> back;
+    std::vector<std::uint64_t> hotGroups;
 };
 
 // Advance the named fluid field by one deterministic step over `world`.

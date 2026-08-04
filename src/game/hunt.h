@@ -156,7 +156,24 @@ struct Prey {
 // Read-only: it takes a const Registry and touches no component that could be
 // created, so it is safe to call from inside another view's iteration — which is
 // exactly how both consumers use it.
-Prey nearest_prey(const Registry& reg, const NpcPool& pool, LayerId layer,
-                  const vec3& from, float radius);
+struct SpatialHashNode {
+    Entity e = entt::null;
+    vec3 pos{0, 0, 0};
+    std::uint32_t next = entt::null;
+};
+
+struct SpatialHash {
+    std::uint64_t tick = 0xFFFFFFFFFFFFFFFFull;
+    LayerId layer = 255;
+    
+    std::vector<std::uint32_t> heads;
+    std::vector<SpatialHashNode> nodes;
+    std::vector<std::uint32_t> active_cells;
+};
+
+// Build the spatial hash for a given layer. O(N) cost, optimized with sparse clearing.
+void build_spatial_hash(SpatialHash& hash, const Registry& reg, const NpcPool& pool, LayerId layer, std::uint64_t tick);
+
+Prey nearest_prey(const SpatialHash& hash, const vec3& from, float radius);
 
 } // namespace giga::game

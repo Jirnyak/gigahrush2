@@ -951,8 +951,8 @@ std::size_t snapshot_floor(const World& w, int floorNumber,
     Writer wr(out);
     wr.i32(static_cast<std::int32_t>(floorNumber));
 
-    const std::vector<CellType>& types = w.grid().types();
-    const std::vector<SubMask>& masks = w.grid().masks();
+    const auto& types = w.grid().types();
+    const auto& masks = w.grid().masks();
 
     // Pass 1 over types: count runs, then emit. Two passes beat buffering runs.
     auto emit_type_runs = [&](bool countOnly, std::uint32_t& runs) {
@@ -1035,8 +1035,8 @@ bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
     r.i32(floor);
     if (floorOut) *floorOut = floor;
 
-    std::vector<CellType>& types = w.grid().types_mut();
-    std::vector<SubMask>& masks = w.grid().masks_mut();
+    auto& types = w.grid().types_mut();
+    auto& masks = w.grid().masks_mut();
 
     std::uint32_t typeRuns = 0;
     r.u32(typeRuns);
