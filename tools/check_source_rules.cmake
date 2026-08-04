@@ -402,9 +402,18 @@ foreach(_suite IN LISTS GIGA_SUITE_FILES)
     file(RELATIVE_PATH _suite_rel "${GIGA_ROOT}" "${_suite}")
     file(READ "${_suite}" _suite_body)
 
-    string(REGEX MATCH "(^|\n)[ \t]*//[ \t]*giga-check: unwired-suite"
-           _suite_exempt "${_suite_body}")
-    if(NOT _suite_exempt STREQUAL "")
+    # An exemption is a directive LINE: `// giga-check: unwired-suite <reason>`. Match it
+    # only when the directive is the leading content of a `//` comment (optionally after
+    # whitespace), never mid-prose. A plain string(FIND) over the whole body could not tell
+    # a live directive from a comment that merely QUOTES the string, so a WIRED header
+    # saying "the exemption is gone" would silently exempt the suite and skip its
+    # wired/`reached` audit (the suite_economy.inl false positive, fixed in 742b638).
+    set(_suite_exempt FALSE)
+    string(REGEX MATCHALL "(^|\n)[ \t]*//[ \t]*giga-check: unwired-suite[ \t]" _suite_exempt_hits "${_suite_body}")
+    if(_suite_exempt_hits)
+        set(_suite_exempt TRUE)
+    endif()
+    if(_suite_exempt)
         message("unwired-suite-exempt=${_suite_rel}")
         continue()
     endif()
