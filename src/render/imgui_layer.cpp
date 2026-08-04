@@ -57,7 +57,7 @@ bool ImGuiLayer::init(VulkanDevice& dev, SDL_Window* window,
         const ImVec4 bg{0.02f, 0.04f, 0.02f, 0.88f};
         const ImVec4 panel{0.04f, 0.08f, 0.04f, 0.92f};
         const ImVec4 edge{0.10f, 0.28f, 0.10f, 1.00f};
-        const ImVec4 phosphor{0.35f, 0.95f, 0.40f, 1.00f};
+        const ImVec4 phosphor{0.349f, 0.949f, 0.400f, 1.00f}; // #59F266
         const ImVec4 amber{0.95f, 0.78f, 0.25f, 1.00f};
         const ImVec4 dim{0.20f, 0.45f, 0.22f, 1.00f};
         const ImVec4 text{0.75f, 1.00f, 0.78f, 1.00f};
@@ -172,6 +172,27 @@ void ImGuiLayer::begin_frame() {
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
+}
+
+void ImGuiLayer::draw_crt_overlay() {
+    if (!ready_) return;
+    ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::Begin("CRT_Overlay", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                 ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoFocusOnAppearing |
+                 ImGuiWindowFlags_NoBringToFrontOnFocus);
+    
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    for (float y = 0.0f; y < io.DisplaySize.y; y += 3.0f) {
+        draw->AddLine(ImVec2(0.0f, y), ImVec2(io.DisplaySize.x, y), IM_COL32(0, 0, 0, 100));
+    }
+    
+    ImGui::End();
+    ImGui::PopStyleVar(2);
 }
 
 void ImGuiLayer::render(VkCommandBuffer cmd) {

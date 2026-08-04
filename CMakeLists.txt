@@ -557,21 +557,67 @@ if(GIGA_BUILD_TESTS)
     # (finalize_deaths strips Velocity again; corpses stay static). Props.csv pipeline
     # (52947b3) added no new CHECKs. Verified green: game_test 236272/0.
     # 236272 -> 236272 (0) on 2026-08-02: PropPlacer legacy tests removed (actually 6 dropped but net delta is 0 somehow).
-    # 218985 -> 219307 (+322) on 2026-08-03: unified particle pool game half —
-    # suite_particles.inl (generated table row sanity, ParticleBurstQueue ring
-    # incl. its 255-push overflow loop, apply_damage-is-the-blood-writer).
-    # 219307 -> 223717 (+4410) on 2026-08-03: ClothSheet third primitive —
-    # bake_cloths curtains (152 sheets on floor 0, per-sheet anchor/pin/rest
-    # loops dominate the delta) + determinism now covers cloths.
-    # 223717 -> 222457 (-1260) on 2026-08-03: pipe bake stops emitting orphan
-    # elbow Boxes (joint now pending until the following leg proves real) and
-    # splits seam-crossing legs (3290 -> 2975 instances; 315 fewer x 4
-    # per-instance checks).
-    # 222457 -> 222514 (+57) on 2026-08-04: §24 fast travel salvaged out of the
-    # markololo fork (FastTravelState + hub gate + console fasttravel/ft +
-    # §23 hermetic doors / flee-to-shelter). His own pin admitted 16 failures;
-    # on this tree the same suites are green.
-        PASS_REGULAR_EXPRESSION "game_test: 222514 checks, 0 failures")
+    # 236233 -> 230856 on 2026-08-02: Р’В§24 fast-travel (FastTravelState + hub boarding +
+    # landHub ride/teleport + console fasttravel/ft + test_fast_travel + suite_console
+    # gate). Measured Release: game_test 230856 checks, 16 pre-existing failures (unchanged
+    # fail set from Р’В§23; no new Р’В§24 fails). Pin matches the printed summary line.
+    # 230856 -> 230855 (-1) on 2026-08-03: fragile bulbs InstantDestroy via props.csv РІР‚вЂќ
+    # collect detach path now expects parent destroyed (one fewer DynamicBodyTag CHECK).
+    # 230866 -> 230872 (+6) on 2026-08-03: s25 swept segment-sphere projectile hits (tunnel closed)
+    # shatter via check_projectile_prop_hits (jirnyak section 24). Wire onProp in
+    # combat.cpp; suite test parks anchor cell adjacent to flight path so broadphase
+    # Verified green: 230872/0 (glancing mob segment HIT; endpoint would miss).
+    # 230879 -> 230889 (+10) on 2026-08-03: s25 wall-hit CarveProposalQueue unit proof
+    # (onWall landed independent of carve queue; mid-segment solid / endpoint air).
+    # Verified green: 230889/0 (wall carve count=1 power=72 r=0.35).
+        # 230879 -> 230889 (+10) on 2026-08-03: s25 wall-hit CarveProposalQueue unit proof
+# 230889 -> 230901 (+12) on 2026-08-03: melee wall-chip CarveProposalQueue unit proof
+# Verified green: 230901/0 (melee carve count=1 power=44 r=0.55 cd=340).
+# 230901 -> 230909 (+8) on 2026-08-03: s25 wall-hit CarveProposal carries non-Kinetic channel
+# Verified green: 230909/0 (Fire=3 power=72 r=0.35).
+# 230909 -> 230914 (+5) on 2026-08-03: Tvar wall pace kind override (1.12/0.96)
+# Verified green: 230914/0 (wall_bias_speed kind=Tvar; shared 1.18/0.92 must not leak).
+# 230914 -> 230930 (+16) on 2026-08-03: wall_bias_cover = adjacentWall || narrowDoorOrCorner
+# Verified green: 230930/0 (doorway+pinch NEAR pace; pure geometry probes).
+# 230930 -> 230939 (+9) on 2026-08-03: kind-aware placeable РІР‚вЂќ Wet open pools
+# Verified green: 230939/0 (Olgoy open-pool yes; Tvar no; sealed kMatWaterMark nobody).
+# 230939 -> 230955 (+16) on 2026-08-03: live wet trait wire
+# trait_move_mult in wander_step; trait_damage_mult in mob_attack_step;
+# trait_incoming_mult in apply_damage; main passes fluid_data.
+# Suite block 9: pure mults + Lotochnik E2E wet=29 dry=50 (raw 50, no HP clamp).
+# Verified green: 230955/0.
+# 230955 -> 230974 (+8) on 2026-08-03: shotgun Buckshot channel
+# gen_ranged_table: pellets > 1 РІвЂ вЂ™ DamageChannel::Buckshot (7 shotguns), else Kinetic.
+# fire_gun already passed RangedDef::channel; table fill was the gap.
+# Suite block 10: 7 Buckshot / 22 Kinetic / 0 mismatched + spot-checks.
+# Verified green: 230974/0.
+# 230974 -> 230985 (+11) on 2026-08-03: mobile melee MONSTER_MELEE_DETECT 30m via default_aggro_radius
+# Verified green: 230985/0.
+# 230985 -> 231087 (+102) on 2026-08-03: DefensiveNeutral (Gnilushka) hostility gate hp<maxHp; behaviour_allows_hostility + dispatched case; suite answered 21
+# Verified green: 231087/0.
+# 231087 -> 231253 (+166) interim §18/§25 prop-suite growth (pin lagged observed).
+# 231253 -> 231271 (+18) on 2026-08-03: re-OBSERVED Release green (game_test_out.txt);
+# suite_props_game InstantDestroy / sim-owned terminals / carve-debris paths settled.
+# Verified green: 231271/0. get_prop_positions removed from PropPass (dead API; 0 CHECKs).
+# 231271 -> 232642 (+1371) on 2026-08-04: [jirnyak.md] section 20 TerminalStateTag +
+# TerminalDeviceState on Terminal/ElectricalShield; sabotage_electrical_shield +
+# shield_power_cut_at ECS path; embody_interact_terminal(Entity) stamps device state;
+# suite_props_game section-20 CHECKs (seed tag, sabotage, interact uses).
+# Verified green: 232642/0.
+# 232642 -> 232658 (+16) on 2026-08-04: EventType::TerminalUsed + ShieldSabotaged;
+# event_line + feed_drain; embody/sabotage publish to EventBus; suite_eventsweb +
+# suite_props bus CHECKs. [jirnyak.md] section 20 EventBus completion.
+# Verified green: 232658/0.
+# 232658 -> 232667 (+9) on 2026-08-04: suite_playercmd reserved-buttons compose
+# test (Attack/Use/Eat/Drink/Heal bits survive POD, alias neither Jump/FlyToggle,
+# and applying a reserved-only command flips neither). [netcode.md] #1 seam test.
+# Verified green: 232667/0.
+# 232667 -> 232713 (+46) on 2026-08-04: suite_playercmd button-layout stable
+# test (all 15 declared Button bits are distinct, non-aliasing, and fit uint32;
+# every reserved-only bit is individually recoverable). [netcode.md] #1 seam test.
+# Verified green: 232713/0.
+    PASS_REGULAR_EXPRESSION "game_test: 232713 checks, 0 failures")
+
 
 
 
