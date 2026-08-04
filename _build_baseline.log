@@ -2,20 +2,20 @@
 
   Checking File Globs
   SDL_uclibc.vcxproj -> C:\hades\gigahrush2\build-win\_deps\sdl3-build\Release\SDL_uclibc.lib
-  ktx_read.vcxproj -> C:\hades\gigahrush2\build-win\Release\ktx_read.dll
-  astcenc-avx2-static.vcxproj -> C:\hades\gigahrush2\build-win\_deps\ktx-build\external\astc-encoder\Source\Release\astcenc-avx2-static.lib
-  objUtil.vcxproj -> C:\hades\gigahrush2\build-win\_deps\ktx-build\Release\objUtil.lib
-  giga_core.vcxproj -> C:\hades\gigahrush2\build-win\Release\giga_core.lib
-  obj_basisu_cbind.vcxproj -> C:\hades\gigahrush2\build-win\_deps\ktx-build\interface\basisu_c_binding\Release\obj_basisu_cbind.lib
-  Auto build dll exports
-  world_test.vcxproj -> C:\hades\gigahrush2\build-win\Release\world_test.exe
-  ktx.vcxproj -> C:\hades\gigahrush2\build-win\Release\ktx.dll
-  giga_game.vcxproj -> C:\hades\gigahrush2\build-win\Release\giga_game.lib
   SDL3-shared.vcxproj -> C:\hades\gigahrush2\build-win\_deps\sdl3-build\Release\SDL3.dll
-  game_test.vcxproj -> C:\hades\gigahrush2\build-win\Release\game_test.exe
+  astcenc-avx2-static.vcxproj -> C:\hades\gigahrush2\build-win\_deps\ktx-build\external\astc-encoder\Source\Release\astcenc-avx2-static.lib
+  giga_core.vcxproj -> C:\hades\gigahrush2\build-win\Release\giga_core.lib
+  giga_game.vcxproj -> C:\hades\gigahrush2\build-win\Release\giga_game.lib
   audit_test.vcxproj -> C:\hades\gigahrush2\build-win\Release\audit_test.exe
-  macro_bench.vcxproj -> C:\hades\gigahrush2\build-win\Release\macro_bench.exe
-  sim_bench.vcxproj -> C:\hades\gigahrush2\build-win\Release\sim_bench.exe
+  game_test.vcxproj -> C:\hades\gigahrush2\build-win\Release\game_test.exe
   giga_imgui.vcxproj -> C:\hades\gigahrush2\build-win\Release\giga_imgui.lib
+  Auto build dll exports
+  ktx.vcxproj -> C:\hades\gigahrush2\build-win\Release\ktx.dll
   gigahrush2.vcxproj -> C:\hades\gigahrush2\build-win\Release\gigahrush2.exe
   Staging runtime DLLs next to gigahrush2
+  ktx_read.vcxproj -> C:\hades\gigahrush2\build-win\Release\ktx_read.dll
+  macro_bench.vcxproj -> C:\hades\gigahrush2\build-win\Release\macro_bench.exe
+  objUtil.vcxproj -> C:\hades\gigahrush2\build-win\_deps\ktx-build\Release\objUtil.lib
+  obj_basisu_cbind.vcxproj -> C:\hades\gigahrush2\build-win\_deps\ktx-build\interface\basisu_c_binding\Release\obj_basisu_cbind.lib
+  sim_bench.vcxproj -> C:\hades\gigahrush2\build-win\Release\sim_bench.exe
+  world_test.vcxproj -> C:\hades\gigahrush2\build-win\Release\world_test.exe

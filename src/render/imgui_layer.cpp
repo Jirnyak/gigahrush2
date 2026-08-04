@@ -177,20 +177,58 @@ void ImGuiLayer::begin_frame() {
 void ImGuiLayer::draw_crt_overlay() {
     if (!ready_) return;
     ImGuiIO& io = ImGui::GetIO();
+    const float w = io.DisplaySize.x;
+    const float h = io.DisplaySize.y;
+    if (w <= 0.0f || h <= 0.0f) return;
+
     ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
-    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGui::SetNextWindowSize(ImVec2(w, h));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::Begin("CRT_Overlay", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
                  ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoFocusOnAppearing |
                  ImGuiWindowFlags_NoBringToFrontOnFocus);
-    
+
     ImDrawList* draw = ImGui::GetWindowDrawList();
-    for (float y = 0.0f; y < io.DisplaySize.y; y += 3.0f) {
-        draw->AddLine(ImVec2(0.0f, y), ImVec2(io.DisplaySize.x, y), IM_COL32(0, 0, 0, 100));
+
+    // --- Phosphor wash: faint green tint across the whole display, so the
+    // 3D world bleeds through the HUD like it is being viewed through a CRT
+    // screen (low alpha phosphor residue). (#59F266 @ ~4% alpha.)
+    draw->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(w, h),
+                        IM_COL32(89, 242, 102, 10));
+
+    // --- CRT scanlines: alternating dark bands at 3px period. Two passes so
+    // the lines read as hardware geometry rather than a flat stripe: a thin
+    // opaque black line on each 3px boundary, plus a softer half-tone under it.
+    for (float y = 0.0f; y < h; y += 3.0f) {
+        // Primary scanline: the "blanking" row of the raster.
+        draw->AddLine(ImVec2(0.0f, y), ImVec2(w, y), IM_COL32(0, 0, 0, 110));
+        // Secondary row: half-intensity, half-pixel offset below the primary,
+        // giving the raster its vertical texture instead of isolated lines.
+        if (y + 1.0f < h)
+            draw->AddLine(ImVec2(0.0f, y + 1.0f), ImVec2(w, y + 1.0f),
+                          IM_COL32(0, 0, 0, 45));
     }
-    
+
+    // --- Vignette: the CRT tube darkens toward the corners (screen curvature
+    // is too expensive a shader to fake here, but a radial falloff reads as
+    // "tube" and kills the flat-panel look the mandate forbids). Drawn as four
+    // overlapping gradient quads so the falloff is smooth, not a hard band.
+    constexpr std::uint32_t kVig = 60u;
+    draw->AddRectFilledMultiColor(ImVec2(0.0f, 0.0f), ImVec2(w * 0.5f, h * 0.5f),
+                                  IM_COL32(0, 0, 0, kVig), IM_COL32(0, 0, 0, 0),
+                                  IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, kVig));
+    draw->AddRectFilledMultiColor(ImVec2(w * 0.5f, 0.0f), ImVec2(w, h * 0.5f),
+                                  IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, kVig),
+                                  IM_COL32(0, 0, 0, kVig), IM_COL32(0, 0, 0, 0));
+    draw->AddRectFilledMultiColor(ImVec2(0.0f, h * 0.5f), ImVec2(w * 0.5f, h),
+                                  IM_COL32(0, 0, 0, kVig), IM_COL32(0, 0, 0, 0),
+                                  IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, kVig));
+    draw->AddRectFilledMultiColor(ImVec2(w * 0.5f, h * 0.5f), ImVec2(w, h),
+                                  IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, kVig),
+                                  IM_COL32(0, 0, 0, kVig), IM_COL32(0, 0, 0, 0));
+
     ImGui::End();
     ImGui::PopStyleVar(2);
 }

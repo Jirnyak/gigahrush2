@@ -616,7 +616,11 @@ if(GIGA_BUILD_TESTS)
 # test (all 15 declared Button bits are distinct, non-aliasing, and fit uint32;
 # every reserved-only bit is individually recoverable). [netcode.md] #1 seam test.
 # Verified green: 232713/0.
-    PASS_REGULAR_EXPRESSION "game_test: 232713 checks, 0 failures")
+# 232713 -> 233053 (+340) on 2026-08-04: suite_console mob_token bijection
+# test (every MobKind yields a distinct non-empty latin spawn token and the
+# reverse map round-trips; ~68 kinds x 5 CHECKs each).
+# Verified green: 233053/0.
+    PASS_REGULAR_EXPRESSION "game_test: 233053 checks, 0 failures")
 
 
 

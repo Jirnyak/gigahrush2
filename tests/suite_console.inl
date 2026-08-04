@@ -440,6 +440,23 @@ static void test_console_fasttravel() {
     CHECK(!con.exec(bare, "fasttravel 5", out, sizeof out));
 }
 
+static void test_console_mob_token_bijection() {
+    // The forward map mob_token(k) must be a bijection onto kMobTokens:
+    // every kind yields a distinct non-empty latin token, so no two monsters
+    // share a spawn token and the reverse map is well-defined.
+    std::array<bool, kMobKindCount> seen{};
+    for (std::size_t k = 0; k < kMobKindCount; ++k) {
+        const char* tk = mob_token(static_cast<MobKind>(k));
+        CHECK(tk != nullptr);
+        CHECK(tk[0] != 0);                     // non-empty
+        const std::size_t idx = static_cast<std::size_t>(mob_kind_from_token(tk));
+        CHECK(idx < kMobKindCount);
+        CHECK(idx == k);                        // round-trips to itself
+        CHECK(!seen[idx]);                      // no aliasing across kinds
+        seen[idx] = true;
+    }
+}
+
 static void test_console_all() {
     test_console_registry_rules();
     test_console_requests();
@@ -450,5 +467,6 @@ static void test_console_all() {
     test_console_spawn_ball();
     test_console_teleport_request();
     test_console_fasttravel();
+    test_console_mob_token_bijection();
 }
 

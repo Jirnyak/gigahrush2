@@ -1,6 +1,9 @@
-id,name,shape,fall_mode,interact,emissive,mat_id,color_r_e3,color_g_e3,color_b_e3,reach_mm,mass_kg,size_x_m,size_y_m,size_z_m
-terminal,Терминал,Box,SimpleFall,Terminal,0,3,320,350,380,2500,45,0.9,0.45,1.4
-electrical_shield,Электрощиток,Box,SimpleFall,ElectricalShield,0,4,180,200,220,2500,25,0.6,0.22,0.9
-bare_bulb,Лампочка Ильича,CylinderZ,RagdollRoll,LightBulb,210,0,1000,780,450,2500,0.3,0.12,0.12,0.22
-flood_lamp,Прожектор,Box,RagdollRoll,LightBulb,150,0,1000,780,450,2500,6,0.5,0.14,0.28
-padic_stair_bulb,Лампочка падика,CylinderZ,RagdollRoll,LightBulb,210,0,1000,950,700,2500,0.3,0.12,0.12,0.22
+id,name,shape,fall_mode,interact,emissive,mat_id,color_r_e3,color_g_e3,color_b_e3,reach_mm
+terminal,Терминал,0,SimpleFall,Terminal,0,3,320,350,380,2500
+electrical_shield,Электрощиток,1,SimpleFall,ElectricalShield,0,4,180,200,220,2500
+bare_bulb,Лампочка Ильича,2,InstantDestroy,LightBulb,250,0,1000,780,450,2500
+flood_lamp,Прожектор,3,InstantDestroy,LightBulb,250,0,1000,780,450,2500
+padic_stair_bulb,Лампочка падика,2,InstantDestroy,LightBulb,250,0,1000,950,700,2500
+elevator_door_fast,Лифт Фаст-тревела,0,SimpleFall,None,0,3,200,250,800,2500
+elevator_door_down,Лифт Вниз,0,SimpleFall,None,0,3,800,200,200,2500
+elevator_door_up,Лифт Вверх,0,SimpleFall,None,0,3,200,800,200,2500

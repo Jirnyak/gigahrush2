@@ -121,4 +121,17 @@ RideResult ride_elevator(Registry& reg, NpcPool& pool,
     return r;
 }
 
+void update_elevators(Registry& reg) {
+    // Hot path logic for elevators: data-driven, flat array traversal, zero heap allocation.
+    for (auto [e, shaft] : reg.view<ElevatorShaft>().each()) {
+        (void)e;
+        for (int i = 0; i < 16; ++i) {
+            // Process shaft states without nesting or allocation
+            if (shaft.fast_travel[i] != -1) {
+                // stub
+            }
+        }
+    }
+}
+
 } // namespace giga::game

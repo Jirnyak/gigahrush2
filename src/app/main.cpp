@@ -5074,6 +5074,13 @@ int main(int argc, char** argv) {
             ImGui::End();
         }
 
+        // CRT / VHS full-screen overlay: scanlines, phosphor wash and tube
+        // vignette drawn on top of every ImGui window (and the 3D world through
+        // the transparent background), per the Soviet служебный aesthetic
+        // mandate ([jirnyak.md] §19/§8.6). Must be recorded after all HUD and
+        // menu windows so it sits on top of them, and before ImGui::Render().
+        hud.draw_crt_overlay();
+
         // Begin command recording & compute pass before graphics render pass
         if (renderer.begin_frame_cmd(window)) {
             VkCommandBuffer cmd = renderer.current_cmd();

@@ -14,7 +14,13 @@ const std::array<PropDef, kPropCount> kPropTable = {{
     // [3] flood_lamp
     PropDef{ 0, 1, 2, 150, 0, 0, 6000, 1000, 780, 450, 2500, 500, 140, 280 },
     // [4] padic_stair_bulb
-    PropDef{ 3, 1, 2, 210, 0, 0, 300, 1000, 950, 700, 2500, 120, 120, 220 },
+    PropDef{ 2, 2, 2, 250, 0, 0, 0, 0, 1000, 950, 700, 2500 },
+    // [5] elevator_door_fast
+    PropDef{ 0, 0, 255, 0, 3, 0, 0, 0, 200, 250, 800, 2500 },
+    // [6] elevator_door_down
+    PropDef{ 0, 0, 255, 0, 3, 0, 0, 0, 800, 200, 200, 2500 },
+    // [7] elevator_door_up
+    PropDef{ 0, 0, 255, 0, 3, 0, 0, 0, 200, 800, 200, 2500 },
 }};
 
 // Display names. Cyrillic; suites assert non-empty / lead bytes.
@@ -24,6 +30,9 @@ const std::array<const char*, kPropCount> kPropNames = {{
     "Лампочка Ильича",  // bare_bulb
     "Прожектор",  // flood_lamp
     "Лампочка падика",  // padic_stair_bulb
+    "Лифт Фаст-тревела",  // elevator_door_fast
+    "Лифт Вниз",  // elevator_door_down
+    "Лифт Вверх",  // elevator_door_up
 }};
 
 const std::array<const char*, kPropCount> kPropIds = {{
@@ -32,6 +41,9 @@ const std::array<const char*, kPropCount> kPropIds = {{
     "bare_bulb",
     "flood_lamp",
     "padic_stair_bulb",
+    "elevator_door_fast",
+    "elevator_door_down",
+    "elevator_door_up",
 }};
 
 } // namespace giga::game

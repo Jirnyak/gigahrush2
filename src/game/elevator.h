@@ -25,6 +25,14 @@
 
 namespace giga::game {
 
+// Rule 24: МАТРИЦА ЛИФТОВ. Data-Driven flat arrays to ensure zero heap allocations in the hot path.
+// Represents the fixed grid of elevator shafts on a floor (4x4 fast travel, 4x4 down, 4x4 up).
+struct ElevatorShaft {
+    int fast_travel[16];
+    int proc_down[16];
+    int proc_up[16];
+};
+
 // Outcome of a ride. On success `player` is the NEW entity (the old one has been
 // destroyed) and `moved` is true. On a no-op (no such loaded floor) `player` is
 // the unchanged input entity, `moved` is false, and `floor`/`layer` report where
@@ -55,5 +63,6 @@ RideResult ride_elevator(Registry& reg, NpcPool& pool,
                          int fromFloor, int dir, std::uint8_t arrivalCoord,
                          int landHub = -1);
 
-} // namespace giga::game
+void update_elevators(Registry& reg);
 
+} // namespace giga::game
