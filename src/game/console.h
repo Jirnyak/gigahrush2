@@ -35,6 +35,7 @@ namespace giga::game {
 class FloorRegistry;
 class FloorCatalog;
 class NpcPool;
+struct FastTravelState;
 
 // One-shot actions a command may REQUEST of the app — the generic sibling of
 // requestFloor, and the seam the keybinding table ([keybind.h]) dispatches
@@ -80,9 +81,19 @@ struct ConsoleContext {
     Entity player = entt::null;
     int currentFloor = 0;
 
+    // Fast-travel unlock bitset ([fast_travel.h] §24). Null in headless tests
+    // that never touch `fasttravel`/`ft`. The app owns the state and points
+    // this at it each frame via refresh_console_ctx.
+    FastTravelState* fastTravel = nullptr;
+
     // Out: a cross-floor move the APP must perform (see header note). Reset to
     // kNoRequest by the app once handled.
     int requestFloor = kNoRequest;
+
+    // Out: planar lattice hub (0..15) to land on when requestFloor is a fast
+    // travel. -1 means keep mirrored x/y (debug `teleport` / ±1 ride). The app
+    // drains this together with requestFloor at its safe point.
+    int requestLandHub = -1;
 
     // Out: a pending sphere carve ([world/destruct.h]) — the command proposes
     // size and power only; the app aims it from the camera and performs it on

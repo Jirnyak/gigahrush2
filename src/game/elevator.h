@@ -46,8 +46,14 @@ struct RideResult {
 // `player` must be an embodied record (carry an NpcRef); otherwise this is a
 // no-op. `fromFloor` is supplied by the caller because the registry maps
 // number -> layer, not the reverse — the app already knows the player's floor.
+//
+// `landHub` (default -1): when in [0, 16), also plant x/y on that planar lattice
+// hub cabin before embody — the fast-travel landing ([elevators.md] §24). Adjacent
+// ±1 rides leave it at -1 and keep the mirrored x/y.
 RideResult ride_elevator(Registry& reg, NpcPool& pool,
                          const FloorRegistry& registry, Entity player,
-                         int fromFloor, int dir, std::uint8_t arrivalCoord);
+                         int fromFloor, int dir, std::uint8_t arrivalCoord,
+                         int landHub = -1);
 
 } // namespace giga::game
+

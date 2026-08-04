@@ -567,7 +567,11 @@ if(GIGA_BUILD_TESTS)
     # elbow Boxes (joint now pending until the following leg proves real) and
     # splits seam-crossing legs (3290 -> 2975 instances; 315 fewer x 4
     # per-instance checks).
-        PASS_REGULAR_EXPRESSION "game_test: 222457 checks, 0 failures")
+    # 222457 -> 222514 (+57) on 2026-08-04: §24 fast travel salvaged out of the
+    # markololo fork (FastTravelState + hub gate + console fasttravel/ft +
+    # §23 hermetic doors / flee-to-shelter). His own pin admitted 16 failures;
+    # on this tree the same suites are green.
+        PASS_REGULAR_EXPRESSION "game_test: 222514 checks, 0 failures")
 
 
 

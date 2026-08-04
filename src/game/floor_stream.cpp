@@ -437,7 +437,8 @@ RideResult FloorStreamer::travel(LevelStack& stack, FloorRegistry& reg,
 RideResult FloorStreamer::teleport(LevelStack& stack, FloorRegistry& reg,
                                    Registry& ecs, NpcPool& pool, Entity player,
                                    int fromFloor, int toFloor,
-                                   std::uint8_t arrivalCoord, NpcId& playerId) {
+                                   std::uint8_t arrivalCoord, NpcId& playerId,
+                                   int landHub) {
     RideResult r;
     r.player = player;
     r.floor = fromFloor;
@@ -452,10 +453,12 @@ RideResult FloorStreamer::teleport(LevelStack& stack, FloorRegistry& reg,
     ensure_loaded(stack, reg, ecs, pool, toFloor, playerId);
     // Hand the elevator the resolved delta so it agrees with the module that
     // was just loaded. Passing a raw direction would move the player to a floor
-    // whose geometry is not resident.
+    // whose geometry is not resident. landHub plants the cabin when the call is
+    // a fast-travel ride ([elevators.md] §24); -1 keeps mirrored x/y.
     RideResult ride = ride_elevator(ecs, pool, reg, player, fromFloor,
-                                    toFloor - fromFloor, arrivalCoord);
+                                    toFloor - fromFloor, arrivalCoord, landHub);
     if (!ride.moved) return ride;
+
 
     // The ride built a fresh player body on the destination; adopt it into the
     // destination module so a later unload folds it, then prune to the kept window

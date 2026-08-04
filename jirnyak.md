@@ -219,6 +219,14 @@
 - **АВТОНОМНОЕ ПОВЕДЕНИЕ НПЦ ПРИ ТРЕВОГЕ:** При наступлении Самосбора и появлении фиолетового тумана НПЦ переключаются на поиск ближайших гермокомнат.
 - **ГЕРМОДВЕРИ КАК ФИЗИЧЕСКИЕ ОБЪЕКТЫ:** Шлюзы управляются через ECS-компоненты; закрытие гермодвери физически отсекает распространение тумана и блокирует звуковые колебания.
 
+### SHIPPED (NPC AI shelter flee) — 2026-08-02
+- `Door.hermetic` bit (packed into free keycardTier bit) + `door_build` tags Living/Medical/Hq apartment doors via `floor_room_mask`.
+- `door_nearest_shelter(world, doors, cx,cy,cz → out)` — pure scan, closest hermetic door with hp>0 (toroidal XY).
+- `ai_step(..., const DoorSet* doors, const World* world)` — both optional; null keeps prior gradient/memory path (tests).
+- `IntentFlee` precedence: `door_nearest_shelter` → `−∇danger` → `AiMemory` away vector.
+- Live wire: `main.cpp` passes `&doors, &activeWorld` so Samosbor purple-fog flee steers to hermetic apartments.
+- Build: `giga_game` / `game_test` / `gigahrush2` Release green.
+
 ---
 
 ## 24. ВЕРТИКАЛЬНАЯ НАВИГАЦИЯ: ЛЕСТНИЦЫ, ПАДИКИ И 32 ЛИФТА (VERTICAL TRANSIT & FASTRACK)

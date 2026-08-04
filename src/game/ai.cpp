@@ -10,10 +10,12 @@
 #include "game/embody.h"      // NpcRef
 #include "game/mob_spawn.h"   // MobRef — the scope exclusion
 #include "game/needs.h"       // needs_roll — substitute for an unseeded pool row
+#include "game/door.h"        // door_nearest_shelter — hermetic flee target (§23)
 #include "sim/diffusion.h"    // diffusion_gradient — the flee steering field
 #include "world/field.h"      // Field<float>
 #include "world/macro_grid.h" // MacroGrid (open/wall test inside the gradient)
 #include "world/types.h"      // wrap_macro, kCellSize, kMacroDim
+#include "world/world.h"      // World — door_nearest_shelter needs const World&
 
 namespace giga::game {
 
@@ -568,7 +570,8 @@ std::uint32_t ai_release(Registry& reg, LayerId layer) {
 // --------------------------------------------------------------------------
 AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                const MacroGrid& grid, LayerId layer, double now, float dt,
-               const AiConfig& cfg, AiMemory* mem) {
+               const AiConfig& cfg, AiMemory* mem,
+               const DoorSet* doors, const World* world) {
     AiTick out;
     // Dormant by default. Returning before the sweep means a disabled AI costs
     // one branch, and it means nothing can be left half-arbitrated: the token is
@@ -733,7 +736,26 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
         bool owned = false;
         bool viaMemory = false;
         if (brain.currentIntent == IntentFlee) {
-            if (danger != nullptr) {
+            // §23 hermetic shelter first: a sealed apartment is a real destination
+            // during Samosbor purple fog, not just "away from the gradient". Both
+            // world and doors must be live (main wires them; tests pass null and
+            // keep the prior gradient/memory path bit-for-bit). Already-inside a
+            // sealed room is handled by door_nearest_shelter returning the body's
+            // own cell — dx/dy then fall below kMinFleeGrad2 and we fall through.
+            if (world != nullptr && doors != nullptr) {
+                int ox = cx, oy = cy, oz = cz;
+                if (door_nearest_shelter(*world, *doors, cx, cy, cz, ox, oy, oz)) {
+                    const float dx = static_cast<float>(wrap_delta(cx, ox, kMacroDim));
+                    const float dy = static_cast<float>(wrap_delta(cy, oy, kMacroDim));
+                    if (dx * dx + dy * dy > kMinFleeGrad2) {
+                        dir = normalize(vec3{dx, dy, 0.0f});
+                        owned = true;
+                    }
+                }
+            }
+            // Live danger gradient: preferred over memory when no shelter
+            // direction is available (no hermetic door on floor, or already there).
+            if (!owned && danger != nullptr) {
                 // Down the gradient: the field is danger, so safety is -grad.
                 const vec3 g = diffusion_gradient(*danger, grid, cx, cy, cz);
                 const vec3 away{-g.x, -g.y, 0.0f};
@@ -742,8 +764,7 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                     owned = true;
                 }
             }
-            // The live field wins when it has a direction; memory is the FALLBACK,
-            // which is the correct precedence — a field reading is now, a trace is
+            // Memory is the last FALLBACK — a field reading is now, a trace is
             // then. This branch is what stops the body handing itself back to
             // wander the instant the diffusion field evaporates, and it is the only
             // new way a body can take MotionOwner::Ai. `IntentFlee` is still the

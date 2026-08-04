@@ -224,6 +224,7 @@
 namespace giga {
 template <class T> class Field;
 class MacroGrid;
+class World;
 } // namespace giga
 
 namespace giga::game {
@@ -909,9 +910,17 @@ std::uint32_t ai_release(Registry& reg, LayerId layer);
 //
 // Pure game layer over EnTT + NpcPool + a read-only field/grid, so it is
 // exercised headless by `game_test`.
+//
+// `doors` + `world` (optional, §23 follow-up): when both non-null, IntentFlee
+// prefers door_nearest_shelter over pure −∇danger so NPCs run to hermetic
+// apartments during Samosbor purple fog. Either null keeps bit-for-bit prior
+// behaviour (tests pass nullptr; main wires activeWorld + doors).
+struct DoorSet; // door.h — incomplete OK; full type only needed in ai.cpp
 AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                const MacroGrid& grid, LayerId layer, double now, float dt,
-               const AiConfig& cfg = {}, AiMemory* mem = nullptr);
+               const AiConfig& cfg = {}, AiMemory* mem = nullptr,
+               const DoorSet* doors = nullptr,
+               const World* world = nullptr);
 
 // --- Recorders anything may call --------------------------------------------
 // The write side of the seam, deliberately public and deliberately tiny: filing a

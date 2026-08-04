@@ -44,6 +44,7 @@
 #include "game/impact.h"
 #include "game/elevator.h"
 #include "game/console.h"
+#include "game/fast_travel.h" // §24 lattice hub unlock + boarding
 #include "game/keybind.h"
 #include "game/floor_catalog.h"
 #include "game/floor_registry.h"
@@ -2066,6 +2067,11 @@ int main(int argc, char** argv) {
     std::vector<std::string> consoleHistory;
     int consoleHistPos = -1;
     int pendingTeleport = game::ConsoleContext::kNoRequest;
+    int pendingLandHub = -1; // lattice hub for fast-travel land; -1 = keep x/y
+    // §24 fast-travel unlock set. Discovery: boarding a hub unlocks THIS floor.
+    // Start floor 0 unlocked so the first hub ride has somewhere to go back to.
+    game::FastTravelState fastTravel;
+    fastTravel.unlock(0);
 
     // ── Key bindings ────────────────────────────────────────────────────
     // Keys are DATA: a KeybindTable row maps a scancode to a console command
@@ -2118,6 +2124,7 @@ int main(int argc, char** argv) {
         consoleCtx.catalog = &floor_catalog();
         consoleCtx.player = player;
         consoleCtx.currentFloor = currentFloor;
+        consoleCtx.fastTravel = &fastTravel; // §24 hub unlock bitset
     };
     auto exec_command = [&](const char* line) {
         char msg[256];
@@ -2189,7 +2196,9 @@ int main(int argc, char** argv) {
     // the streamer call — the arrival refresh of mobs/containers/doors/nav/
     // props and the per-floor clocks — is identical, which is exactly why it
     // lives here once instead of twice.
-    auto do_ride = [&](bool absolute, int target) -> bool {
+    // `landHub` (default -1): lattice hub index for §24 fast-travel landings;
+    // -1 keeps mirrored x/y (debug teleport / ±1 ride). Absolute path only.
+    auto do_ride = [&](bool absolute, int target, int landHub = -1) -> bool {
         // Pass the player's durable record id so the destination crowd skips it
         // instead of spawning a second player.
         game::NpcId pid = reg.valid(player) ? reg.get<game::NpcRef>(player).id
@@ -2226,13 +2235,17 @@ int main(int argc, char** argv) {
         game::RideResult ride =
             absolute ? streamer.teleport(stack, registry, reg, pool, player,
                                          currentFloor, target, game::kArrivalCoord,
-                                         pid)
+                                         pid, landHub)
                      : streamer.travel(stack, registry, reg, pool, player,
                                        currentFloor, target, game::kArrivalCoord,
                                        pid);
         if (!ride.moved) return false;
         player = ride.player;
         currentFloor = ride.floor;
+        // §24 discovery: landing on (or via) a lattice hub unlocks THIS floor
+        // for the fast-travel network. Boarding the cabin is the discover act.
+        if (landHub >= 0)
+            fastTravel.unlock(currentFloor);
         // Deepest point reached, for the run score. |z|, because depth is
         // bidirectional: the roof is as far from safety as the basement.
         // [extraction.h]
@@ -2323,8 +2336,10 @@ int main(int argc, char** argv) {
         // is exactly the class of bug the request seam exists to prevent.
         if (pendingTeleport != game::ConsoleContext::kNoRequest) {
             const int dst = pendingTeleport;
+            const int hub = pendingLandHub;
             pendingTeleport = game::ConsoleContext::kNoRequest;
-            do_ride(/*absolute=*/true, dst);
+            pendingLandHub = -1;
+            do_ride(/*absolute=*/true, dst, hub);
         }
 
         // Events are transient by design ([events.md]): whatever was published
@@ -2710,8 +2725,10 @@ int main(int argc, char** argv) {
                 // SIX-argument signature with no layer, so it would not even have compiled
                 // if anyone had uncommented it. That is what "parked until adapted" was
                 // really hiding — a commented-out call is not a call, and nothing checks it.
+                // §23 hermetic flee: doors + activeWorld let IntentFlee steer toward
+                // door_nearest_shelter (sealed apartments) before −∇danger / memory.
                 aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
-                                       kSimDt, aiCfg, &aiMem);
+                                       kSimDt, aiCfg, &aiMem, &doors, &activeWorld);
                 // AIMEM proof trail: once nav has brains and AI is on, emit a
                 // compact stderr pulse so a --shot harness can assert the store
                 // is live (rows/writes/recalled) without parsing the HUD.
@@ -4712,7 +4729,9 @@ int main(int argc, char** argv) {
                           consoleHistory, consoleHistPos);
             if (consoleCtx.requestFloor != game::ConsoleContext::kNoRequest) {
                 pendingTeleport = consoleCtx.requestFloor;
+                pendingLandHub = consoleCtx.requestLandHub;
                 consoleCtx.requestFloor = game::ConsoleContext::kNoRequest;
+                consoleCtx.requestLandHub = -1;
             }
         }
 

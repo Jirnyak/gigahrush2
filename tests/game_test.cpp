@@ -16,6 +16,8 @@
 #include "game/combat.h"
 #include "game/embody.h"
 #include "game/elevator.h"
+#include "game/fast_travel.h" // §24 hub unlock + boarding gate
+
 #include "game/event_bus.h"
 #include "game/faction.h"
 #include "game/floor_gen.h"
@@ -829,9 +831,126 @@ static void test_elevator() {
     CHECK(reg.get<RpgStats>(p).attr[static_cast<std::size_t>(Attr::Int)] == 7);
 }
 
+// §24 fast-travel: unlock bitset + hub boarding gate + landHub teleport.
+// Adjacent ±1 rides stay hub-free; absolute teleports may land on a lattice hub.
+static void test_fast_travel() {
+    // --- Unlock bitset ---
+    FastTravelState ft;
+    CHECK(!ft.unlocked(0));
+    CHECK(!ft.unlocked(5));
+    ft.unlock(0);
+    ft.unlock(5);
+    CHECK(ft.unlocked(0));
+    CHECK(ft.unlocked(5));
+    CHECK(!ft.unlocked(12));
+    // Out-of-range is a silent no-op / false — never crashes.
+    ft.unlock(9999);
+    CHECK(!ft.unlocked(9999));
+    ft.unlock(-9999);
+    CHECK(!ft.unlocked(-9999));
+
+    // --- Hub cell geometry: hub = iy*4+ix, cell = (lattice_coord(ix),
+    // lattice_coord(iy)). Out-of-range is a no-op (cx/cy unchanged). ---
+    std::uint8_t hx = 1, hy = 1;
+    fast_hub_cell(/*hub=*/0, hx, hy);
+    CHECK(hx == static_cast<std::uint8_t>(lattice_coord(0)));
+    CHECK(hy == static_cast<std::uint8_t>(lattice_coord(0)));
+    std::uint8_t hx15 = 1, hy15 = 1;
+    fast_hub_cell(/*hub=*/15, hx15, hy15);
+    CHECK(hx15 == static_cast<std::uint8_t>(lattice_coord(3)));
+    CHECK(hy15 == static_cast<std::uint8_t>(lattice_coord(3)));
+    std::uint8_t fbX = 40, fbY = 50;
+    fast_hub_cell(/*hub=*/-1, fbX, fbY);
+    CHECK(fbX == 40 && fbY == 50);
+    fast_hub_cell(/*hub=*/99, fbX, fbY);
+    CHECK(fbX == 40 && fbY == 50);
+
+    // --- Boarding: exact cabin centre cell only ---
+    CHECK(on_fast_hub(hx, hy));
+    CHECK(fast_hub_at(hx, hy) == 0);
+    CHECK(!on_fast_hub(static_cast<int>(hx) + 1, hy));
+    CHECK(!on_fast_hub(hx, static_cast<int>(hy) + 1));
+
+    // --- Gate: registered + unlocked + on hub ---
+    FloorRegistry freg;
+    freg.assign(0, 0);
+    freg.assign(5, 1);
+    freg.assign(12, 2);
+    FastTravelState net;
+    net.unlock(0);
+    net.unlock(5); // 12 stays locked
+    int hub = -1;
+
+    CHECK(fast_travel_gate(net, freg, /*from=*/0, /*to=*/0, hx, hy, &hub) ==
+          FastTravelGate::SameFloor);
+    CHECK(fast_travel_gate(net, freg, 0, 5, /*cx=*/1, /*cy=*/1, &hub) ==
+          FastTravelGate::NotOnHub);
+    CHECK(fast_travel_gate(net, freg, 0, 12, hx, hy, &hub) ==
+          FastTravelGate::Locked);
+    CHECK(fast_travel_gate(net, freg, 0, 99, hx, hy, &hub) ==
+          FastTravelGate::NoFloor);
+    CHECK(fast_travel_gate(net, freg, 0, 5, hx, hy, &hub) ==
+          FastTravelGate::Ok);
+    CHECK(hub == 0);
+
+    // --- ride_elevator landHub snaps planar cell onto the destination hub ---
+    Registry reg;
+    NpcPool pool;
+    pool.init();
+    FloorRegistry registry;
+    const LayerId l0 = 0, l1 = 1;
+    registry.assign(0, static_cast<ModuleId>(0));
+    registry.set_resident(static_cast<ModuleId>(0), l0);
+    registry.assign(1, static_cast<ModuleId>(1));
+    registry.set_resident(static_cast<ModuleId>(1), l1);
+
+    NpcId id = pool.spawn();
+    CHECK(id != kInvalidNpc);
+    pool.cx(id) = 40;
+    pool.cy(id) = 50;
+    pool.cz(id) = 1;
+    pool.height_mm(id) = 1750;
+    Entity p = embody_as_player(reg, pool, id, l0);
+    CHECK(p != entt::null);
+
+    // landHub=0 snaps planar cell onto hub 0's cabin centre on arrival.
+    RideResult hubLand =
+        ride_elevator(reg, pool, registry, p, /*from=*/0, /*dir=*/+1,
+                      /*arrivalZ=*/2, /*landHub=*/0);
+    CHECK(hubLand.moved);
+    CHECK(hubLand.floor == 1);
+    p = hubLand.player;
+    std::uint8_t wantX = 40, wantY = 50;
+    fast_hub_cell(/*hub=*/0, wantX, wantY);
+    CHECK(pool.cx(id) == wantX);
+    CHECK(pool.cy(id) == wantY);
+    CHECK(pool.cz(id) == 2);
+
+    // landHub=-1 keeps the pre-ride planar cell (mirrored x/y).
+    // fold_back reads Transform, not the pool row — move the live body so the
+    // fold writes 40/50, then landHub=-1 must preserve those cells.
+    {
+        Transform& tr = reg.get<Transform>(p);
+        tr.pos.x = (40.0f + 0.5f) * kCellSize;
+        tr.pos.y = (50.0f + 0.5f) * kCellSize;
+    }
+    RideResult back =
+        ride_elevator(reg, pool, registry, p, /*from=*/1, /*dir=*/-1,
+                      /*arrivalZ=*/2, /*landHub=*/-1);
+    CHECK(back.moved);
+    CHECK(back.floor == 0);
+    CHECK(pool.cx(id) == 40);
+    CHECK(pool.cy(id) == 50);
+}
+
+
+
+
+
 // Count records whose id is in [lo, hi) that are currently live ECS entities
 // standing on `layer` — i.e. the crowd of one streamed floor.
 static int live_on_layer(Registry& ecs, NpcId lo, NpcId hi, LayerId layer) {
+
     int n = 0;
     auto view = ecs.view<NpcRef, Transform>();
     for (auto e : view) {
@@ -4119,7 +4238,9 @@ int main() {
     test_lattice();
     test_floor_gen();
     test_elevator();
+    test_fast_travel(); // §24 hub unlock + boarding gate + landHub
     test_floor_stream();
+
     test_floor_travel();
     test_nav_realfloor();
     test_nav_fine_realfloor();

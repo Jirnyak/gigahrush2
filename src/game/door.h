@@ -126,7 +126,10 @@ struct Door {
     std::uint8_t cz = 0;    // BOTTOM leaf cell, Z
     std::uint8_t h = 0;     // leaf height in cells
     std::uint8_t axis : 2 = 0;        // Doorway::axis (0 or 1)
-    std::uint8_t keycardTier : 6 = 0; // Keycard access tier (0=None, 1=Red, 2=Blue, 3=Master)
+    std::uint8_t keycardTier : 5 = 0; // Keycard access tier (0=None, 1=Red, 2=Blue, 3=Master)
+    // §23 гермодверь: apartment door on Living / Medical / Hq. Seals Samosbor
+    // purple fog while Shut/Locked and hp > 0. Tagged at door_build.
+    std::uint8_t hermetic : 1 = 0;
     std::uint8_t state = static_cast<std::uint8_t>(DoorState::Open);
     std::int16_t hp = kDoorHp;
     // Damage below one whole HP, in milli-HP. Lets a 1.1 dmg/s monster make
@@ -251,6 +254,17 @@ struct DoorTick {
     vec3 lastBreakPos{0, 0, 0};
     vec3 lastOpenPos{0, 0, 0};
 };
+
+// §23 nearest hermetic shelter: scan doors on this floor for hermetic==1 with
+// hp > 0, return the cell of the closest door (toroidal XY). True when at least
+// one shelter exists; out* then hold that door's (cx,cy,cz). When the caller is
+// already at a hermetic door cell, out equals the query cell.
+//
+// Pure query — no World mutation. Used by IntentFlee so NPCs run to sealed
+// apartments during Samosbor purple fog (gradient/memory remain the fallback).
+bool door_nearest_shelter(const World& world, const DoorSet& doors,
+                          int cx, int cy, int cz,
+                          int& outX, int& outY, int& outZ);
 
 // One pass: let whoever is standing against a shut door do something about it.
 //

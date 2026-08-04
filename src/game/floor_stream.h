@@ -228,9 +228,15 @@ public:
     // window. No-op RideResult when `toFloor` == `fromFloor` or maps to no
     // registered module. Unlike travel(), `toFloor` is an ABSOLUTE label — any
     // registered floor, not the adjacent one.
+    //
+    // `landHub` (default -1): when in [0, 16), plants the rider on that planar
+    // lattice cabin on arrival — fast-travel landing ([elevators.md] §24). The
+    // debug console `teleport` leaves this at -1 (mirrored x/y); `fasttravel`
+    // passes the boarding hub so destination == source cabin.
     RideResult teleport(LevelStack& stack, FloorRegistry& reg, Registry& ecs,
                         NpcPool& pool, Entity player, int fromFloor, int toFloor,
-                        std::uint8_t arrivalCoord, NpcId& playerId);
+                        std::uint8_t arrivalCoord, NpcId& playerId,
+                        int landHub = -1);
 
     // True when floor `number` currently has a resident layer.
     bool loaded(const FloorRegistry& reg, int number) const {

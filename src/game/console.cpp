@@ -7,12 +7,15 @@
 
 #include "ecs/components.h"      // Transform, Controller, NoClip, Velocity, AABB
 #include "game/combat.h"         // GodMode
+#include "game/embody.h"         // NpcRef — hub boarding reads pool cells via body
+#include "game/fast_travel.h"    // FastTravelState, fast_travel_gate (§24)
 #include "game/floor_registry.h" // registered-floor enumeration for teleport
-
 #include "game/floor_spec.h"     // floor_mob_tier — spawn at the floor's level
 #include "game/mob_spawn.h"      // spawn_mob_at
 #include "game/mob_table.h"      // kMobTokens, mob_kind_from_token
+#include "game/npc_pool.h"       // NpcPool cx/cy for hub boarding
 #include "world/types.h"         // kCellSize, wrap_macro
+
 
 namespace giga::game {
 
@@ -388,10 +391,107 @@ bool cmd_request(ConsoleContext& ctx, int, const char* const* argv, char* out,
     return false;
 }
 
+// --- fasttravel <floor> / ft <floor> ---------------------------------------
+// Lattice-hub jump to an unlocked floor ([elevators.md] §24). Unlike debug
+// teleport (any registered floor, keep x/y), this gates on hub boarding + the
+// discovery unlock set and lands on the SAME hub index on the destination.
+
+bool cmd_fasttravel(ConsoleContext& ctx, int argc, const char* const* argv,
+                    char* out, std::size_t cap) {
+    if (argc < 2) {
+        put(out, cap,
+            "usage: fasttravel <floor> — stand on a lattice hub; Tab lists unlocked");
+        return false;
+    }
+    if (!ctx.fastTravel) {
+        put(out, cap, "fasttravel: unlock state not wired");
+        return false;
+    }
+    if (!ctx.floors) {
+        put(out, cap, "fasttravel: no floor registry wired");
+        return false;
+    }
+    if (!ctx.pool || !ctx.ecs || ctx.player == entt::null ||
+        !ctx.ecs->valid(ctx.player)) {
+        put(out, cap, "fasttravel: no live player");
+        return false;
+    }
+    const auto* nr = ctx.ecs->try_get<NpcRef>(ctx.player);
+    if (!nr || !ctx.pool->valid(nr->id)) {
+        put(out, cap, "fasttravel: player has no pool body");
+        return false;
+    }
+    char* end = nullptr;
+    const long f = std::strtol(argv[1], &end, 10);
+    if (end == argv[1] || (end && *end)) {
+        if (out && cap)
+            std::snprintf(out, cap, "fasttravel: '%s' is not a floor number",
+                          argv[1]);
+        return false;
+    }
+    const int toFloor = static_cast<int>(f);
+    const int cx = static_cast<int>(ctx.pool->cx(nr->id));
+    const int cy = static_cast<int>(ctx.pool->cy(nr->id));
+    int hub = -1;
+    const FastTravelGate gate =
+        fast_travel_gate(*ctx.fastTravel, *ctx.floors, ctx.currentFloor, toFloor,
+                         cx, cy, &hub);
+    switch (gate) {
+    case FastTravelGate::Ok:
+        break;
+    case FastTravelGate::SameFloor:
+        put(out, cap, "fasttravel: already there");
+        return true;
+    case FastTravelGate::NotOnHub:
+        put(out, cap,
+            "fasttravel: stand on a lattice hub cabin (exact 4x4 centre cell)");
+        return false;
+    case FastTravelGate::Locked:
+        if (out && cap)
+            std::snprintf(out, cap,
+                          "fasttravel: floor %d is locked — board a hub there first",
+                          toFloor);
+        return false;
+    case FastTravelGate::NoFloor:
+        if (out && cap)
+            std::snprintf(out, cap, "fasttravel: floor %d is not registered",
+                          toFloor);
+        return false;
+    }
+    // Boarding a hub discovers THIS floor for the network (elevators.md).
+    ctx.fastTravel->unlock(ctx.currentFloor);
+    // REQUEST: app drains requestFloor + requestLandHub at frame top.
+    ctx.requestFloor = toFloor;
+    ctx.requestLandHub = hub;
+    if (out && cap)
+        std::snprintf(out, cap, "fast-travelling to floor %d via hub %d...",
+                      toFloor, hub);
+    return true;
+}
+
+std::uint32_t complete_fasttravel(const ConsoleContext& ctx, int argIndex,
+                                  const char* prefix, const char** out,
+                                  std::uint32_t cap) {
+    if (argIndex != 1 || !ctx.floors || !ctx.fastTravel) return 0;
+    // Unlocked + registered floors only — locked destinations never complete.
+    static char scratch[kFloorSlots][8];
+    std::uint32_t n = 0;
+    for (int f = kMinFloor; f <= kMaxFloor && n < cap; ++f) {
+        if (ctx.floors->module_at(f) == kInvalidModule) continue;
+        if (!ctx.fastTravel->unlocked(f)) continue;
+        std::snprintf(scratch[n], sizeof scratch[n], "%d", f);
+        if (!iprefix(prefix, scratch[n])) continue;
+        out[n] = scratch[n];
+        ++n;
+    }
+    return n;
+}
+
 // --- ride <up|down> --------------------------------------------------------
 
 bool cmd_ride(ConsoleContext& ctx, int argc, const char* const* argv, char* out,
               std::size_t cap) {
+
     if (argc < 2) {
         put(out, cap, "usage: ride <up|down>");
         return false;
@@ -526,8 +626,14 @@ bool console_register_defaults(Console& con) {
                    complete_teleport});
     ok &= con.add({"tp", "tp <floor>", "alias of teleport", cmd_teleport,
                    complete_teleport});
+    ok &= con.add({"fasttravel", "fasttravel <floor>",
+                   "hub jump to an unlocked floor (lattice cabin boarding)",
+                   cmd_fasttravel, complete_fasttravel});
+    ok &= con.add({"ft", "ft <floor>", "alias of fasttravel", cmd_fasttravel,
+                   complete_fasttravel});
     ok &= con.add({"ride", "ride <up|down>", "ride one floor up or down",
                    cmd_ride, complete_ride});
+
     ok &= con.add({"carve", "carve [radius] [power]",
                    "blast a sphere out of the world ahead of the camera",
                    cmd_carve, nullptr});

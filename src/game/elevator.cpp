@@ -3,6 +3,7 @@
 #include "ecs/components.h"
 #include "game/combat.h"    // PlayerRanged, PlayerMelee — live on the body, not the pool
 #include "game/embody.h"
+#include "game/fast_travel.h" // fast_hub_cell — optional lattice landing
 #include "game/floor_gen.h" // floor_gravity_regime — arrival rides the module's axis
 #include "game/rpg.h"      // RpgStats — XP/attrs/psi live on the body, not the pool
 
@@ -10,7 +11,8 @@ namespace giga::game {
 
 RideResult ride_elevator(Registry& reg, NpcPool& pool,
                          const FloorRegistry& registry, Entity player,
-                         int fromFloor, int dir, std::uint8_t arrivalCoord) {
+                         int fromFloor, int dir, std::uint8_t arrivalCoord,
+                         int landHub) {
     RideResult r;
     r.player = player;
     r.floor = fromFloor;
@@ -74,8 +76,22 @@ RideResult ride_elevator(Registry& reg, NpcPool& pool,
     else if (down.z != 0)
         pool.cz(id) = arrivalCoord;
     // Zero-g: any air cell is ground — the record keeps the cell it left from.
+    // Fast-travel landing: same hub index on the destination floor so the ride
+    // is positionally stable across the stack ([elevators.md] 4×4 cabins). The
+    // cabin lives in the two coordinates TANGENT to the module's gravity axis,
+    // so the lattice is named by the frame the floor declared, not by x/y.
+    if (landHub >= 0 && landHub < kFastHubsPerFloor) {
+        if (down.x != 0)
+            fast_hub_cell(landHub, pool.cy(id), pool.cz(id));
+        else if (down.y != 0)
+            fast_hub_cell(landHub, pool.cx(id), pool.cz(id));
+        else // z-down and zero-g: the lattice is the xy plane
+            fast_hub_cell(landHub, pool.cx(id), pool.cy(id));
+    }
+
 
     Entity ne = embody_as_player(reg, pool, id, dstLayer);
+
     if (ne == entt::null) { // unreachable for a valid embodied record
         r.player = entt::null;
         r.layer = kInvalidLayer;

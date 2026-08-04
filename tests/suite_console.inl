@@ -10,7 +10,12 @@
 // Included from game_test.cpp like every suite; uses its CHECK.
 
 #include "game/console.h"
-#include "ecs/components.h" // AngularVelocity, Rotation (core) — spawn_ball must NOT attach these
+#include "game/embody.h"      // NpcRef — hub boarding needs a pool body
+#include "game/fast_travel.h" // FastTravelState + fast_hub_cell (§24)
+#include "game/npc_pool.h"    // NpcPool for boarding cell
+#include "ecs/components.h"   // AngularVelocity, Rotation (core) — spawn_ball must NOT attach these
+
+
 
 static bool consoletest_ran = false;
 static bool consoletest_cmd(ConsoleContext&, int argc, const char* const* argv,
@@ -42,8 +47,11 @@ static void test_console_registry_rules() {
     CHECK(defaults.find("noclip") != nullptr);
     CHECK(defaults.find("teleport") != nullptr);
     CHECK(defaults.find("tp") != nullptr);
+    CHECK(defaults.find("fasttravel") != nullptr); // §24 lattice hub jump
+    CHECK(defaults.find("ft") != nullptr);
     CHECK(defaults.find("help") != nullptr);
     CHECK(defaults.find("ride") != nullptr);
+
     CHECK(defaults.find("fly") != nullptr);
     CHECK(defaults.find("save") != nullptr);
     CHECK(defaults.find("menu") != nullptr);
@@ -338,6 +346,100 @@ static void test_console_teleport_request() {
     CHECK(ctx.requestFloor == 5);
 }
 
+// §24 fast-travel: hub boarding + unlock gate. The console never moves the
+// world — it only proposes requestFloor + requestLandHub for the app to drain.
+static void test_console_fasttravel() {
+    Console con;
+    CHECK(console_register_defaults(con));
+
+    FloorRegistry freg;
+    freg.assign(0, 0);
+    freg.assign(5, 1);
+    freg.assign(12, 2);
+
+    FastTravelState ft;
+    ft.unlock(0);
+    ft.unlock(5); // destination discovered; 12 stays locked
+
+    Registry ecs;
+    NpcPool pool;
+    pool.init();
+    Entity player = ecs.create();
+    // Place the body on hub 0's cabin centre so boarding passes.
+    std::uint8_t hx = 64, hy = 64;
+    fast_hub_cell(/*hub=*/0, hx, hy);
+    const NpcId body = pool.spawn();
+    CHECK(body != kInvalidNpc);
+    pool.cx(body) = hx;
+    pool.cy(body) = hy;
+    pool.cz(body) = 2;
+    pool.set_floor(body, 0);
+    pool.set_player(body, true);
+    ecs.emplace<NpcRef>(player, NpcRef{body});
+
+
+    ConsoleContext ctx;
+    ctx.ecs = &ecs;
+    ctx.pool = &pool;
+    ctx.floors = &freg;
+    ctx.player = player;
+    ctx.currentFloor = 0;
+    ctx.fastTravel = &ft;
+    char out[192];
+
+    // Not on a hub → refuse (move off the cabin first).
+    {
+        // Re-place off any hub: cell (1,1) is never a lattice hub centre.
+        pool.cx(body) = 1;
+        pool.cy(body) = 1;
+        CHECK(!con.exec(ctx, "fasttravel 5", out, sizeof out));
+        CHECK(ctx.requestFloor == ConsoleContext::kNoRequest);
+        CHECK(ctx.requestLandHub < 0);
+        // Restore hub boarding for the rest of the cases.
+        pool.cx(body) = hx;
+        pool.cy(body) = hy;
+    }
+
+
+
+
+    // Locked destination (12 unlocked? no) → refuse, request clean.
+    CHECK(!con.exec(ctx, "fasttravel 12", out, sizeof out));
+    CHECK(ctx.requestFloor == ConsoleContext::kNoRequest);
+
+    // Unregistered floor → refuse.
+    CHECK(!con.exec(ctx, "fasttravel 99", out, sizeof out));
+    CHECK(ctx.requestFloor == ConsoleContext::kNoRequest);
+
+    // Same floor → soft-ok, no request (already there).
+    CHECK(con.exec(ctx, "fasttravel 0", out, sizeof out));
+    CHECK(ctx.requestFloor == ConsoleContext::kNoRequest);
+
+    // Unlocked + on hub → requestFloor + requestLandHub set. Boarding also
+    // re-unlocks the CURRENT floor (discovery is idempotent).
+    CHECK(con.exec(ctx, "fasttravel 5", out, sizeof out));
+    CHECK(ctx.requestFloor == 5);
+    CHECK(ctx.requestLandHub == 0); // boarded hub 0 → land on hub 0
+    CHECK(ft.unlocked(0));
+    ctx.requestFloor = ConsoleContext::kNoRequest;
+    ctx.requestLandHub = -1;
+
+    // `ft` alias shares the handler.
+    CHECK(con.exec(ctx, "ft 5", out, sizeof out));
+    CHECK(ctx.requestFloor == 5);
+    CHECK(ctx.requestLandHub == 0);
+
+    // Completion lists unlocked registered floors only (0 and 5, not 12).
+    const char* cands[8];
+    std::uint32_t n = con.complete(ctx, "fasttravel ", cands, 8);
+    CHECK(n == 2);
+    // Unwired unlock state completes nothing.
+    ConsoleContext bare;
+    bare.floors = &freg;
+    CHECK(con.complete(bare, "fasttravel ", cands, 8) == 0);
+    CHECK(!con.exec(bare, "fasttravel 5", out, sizeof out));
+}
+
 static void test_console_all() {
     test_console_registry_rules();
     test_console_requests();
@@ -347,4 +449,6 @@ static void test_console_all() {
     test_console_spawn_god_noclip();
     test_console_spawn_ball();
     test_console_teleport_request();
+    test_console_fasttravel();
 }
+

@@ -71,6 +71,17 @@ void clear_leaf(MacroGrid& g, DoorSet& doors, const Door& d) {
 
 } // namespace
 
+// §23: Living / Medical / Hq apartments get hermetic doors (seal vs Samosbor fog).
+static constexpr std::uint16_t kHermeticRoomMask =
+    static_cast<std::uint16_t>(RoomBit::Living) |
+    static_cast<std::uint16_t>(RoomBit::Medical) |
+    static_cast<std::uint16_t>(RoomBit::Hq);
+
+static bool room_is_hermetic(FloorKind kind, int number, int rx, int ry) {
+    const std::uint16_t m = floor_room_mask(kind, number, rx, ry);
+    return (m & kHermeticRoomMask) != 0u;
+}
+
 std::uint32_t door_build(World& world, DoorSet& doors, int number,
                          const FloorSpec& spec, unsigned seed) {
     MacroGrid& g = world.grid();
@@ -85,6 +96,10 @@ std::uint32_t door_build(World& world, DoorSet& doors, int number,
 
     std::vector<Doorway> ways;
     floor_doorways(number, spec, seed, ways);
+
+    // Room lattice for §23 hermetic tagging (same stride as floor_doorways).
+    const int stride = floor_room_stride(spec.kind);
+    const int roomsPerAxis = (stride > 0) ? (kMacroDim / stride) : 1;
 
     for (const Doorway& w : ways) {
         const int cx = w.cx, cy = w.cy, cz = w.cz, h = w.h;
@@ -113,6 +128,30 @@ std::uint32_t door_build(World& world, DoorSet& doors, int number,
         d.axis = w.axis;
         d.state = static_cast<std::uint8_t>(DoorState::Open);
         d.hp = kDoorHp;
+
+        // §23 hermetic: doorway sits on a room wall line; tag if either adjacent
+        // room is Living / Medical / Hq (apartment-grade seal).
+        if (stride > 0) {
+            if (w.axis == 0) {
+                // Wall at x = rx*stride; rooms (rx-1, ry) and (rx, ry).
+                const int rxR = cx / stride;
+                const int rxL = (rxR - 1 + roomsPerAxis) % roomsPerAxis;
+                const int ry  = cy / stride;
+                if (room_is_hermetic(spec.kind, number, rxL, ry) ||
+                    room_is_hermetic(spec.kind, number, rxR, ry)) {
+                    d.hermetic = 1;
+                }
+            } else {
+                // Wall at y = ry*stride; rooms (rx, ry-1) and (rx, ry).
+                const int ryU = cy / stride;
+                const int ryD = (ryU - 1 + roomsPerAxis) % roomsPerAxis;
+                const int rx  = cx / stride;
+                if (room_is_hermetic(spec.kind, number, rx, ryD) ||
+                    room_is_hermetic(spec.kind, number, rx, ryU)) {
+                    d.hermetic = 1;
+                }
+            }
+        }
 
         const std::uint32_t id = static_cast<std::uint32_t>(doors.doors.size());
         doors.doors.push_back(d);
@@ -376,6 +415,34 @@ DoorTick door_step(Registry& reg, World& world, DoorSet& doors, LayerId layer,
         }
     }
     return out;
+}
+
+bool door_nearest_shelter(const World& /*world*/, const DoorSet& doors,
+                          int cx, int cy, int cz,
+                          int& outX, int& outY, int& outZ) {
+    // Pure scan: closest hermetic door with hp > 0 on this floor (toroidal XY).
+    // World is unused today — kept so the signature matches door.h / ai_step and
+    // can later filter by floor geometry without an API break.
+    bool found = false;
+    int bestD2 = 0;
+    for (const Door& d : doors.doors) {
+        if (!d.hermetic) continue;
+        if (d.hp <= 0) continue;
+        // Prefer same-Z slab when possible; still accept other floors of the door
+        // column so a body one cell below the lintel still finds the shelter.
+        const int dx = wrap_delta(cx, static_cast<int>(d.cx), kMacroDim);
+        const int dy = wrap_delta(cy, static_cast<int>(d.cy), kMacroDim);
+        const int dz = wrap_delta(cz, static_cast<int>(d.cz), kMacroDim);
+        const int d2 = dx * dx + dy * dy + dz * dz;
+        if (!found || d2 < bestD2) {
+            found = true;
+            bestD2 = d2;
+            outX = static_cast<int>(d.cx);
+            outY = static_cast<int>(d.cy);
+            outZ = static_cast<int>(d.cz);
+        }
+    }
+    return found;
 }
 
 } // namespace giga::game
