@@ -345,6 +345,10 @@ _giga_csv_vs_header("data/interactables.csv" "src/game/interact_table.h"
 # law as interactables (ParticleBurst stores the row index), same drift hazard.
 _giga_csv_vs_header("data/particles.csv" "src/game/particle_table.h"
     "kParticleKindCount[ \t]*=[ \t]*([0-9]+)" "particle")
+# Monster traits — hand-maintained header mirroring the ported TS bait/resist
+# table, so it drifts the moment a row is added to the CSV alone.
+_giga_csv_vs_header("data/monster_traits.csv" "src/game/monster_traits.h"
+    "kMonsterTraitRows[ \t]*=[ \t]*([0-9]+)" "monster traits")
 
 
 # ---- Verdict ---------------------------------------------------------------

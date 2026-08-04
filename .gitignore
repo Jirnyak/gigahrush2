@@ -69,3 +69,12 @@ __pycache__/
 # part-way leaves a .bin behind with nothing ignoring it.
 navcache_test_tmp/
 gigahrush2_save/
+
+# Agent scratch that is not ours. The markololo fork (force-pushed off main on
+# 2026-08-04) carried 140 committed .ps1 patch scripts, ctest stdout dumps and
+# pid files under appDataDir/brain/, plus a per-agent config in the root and
+# _-prefixed run logs. Nothing in src/ reads any of it — it is one agent's
+# working memory, not project state, and it stays out of the tree.
+appDataDir/
+.goosehints
+/_*.txt
