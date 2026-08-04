@@ -40,7 +40,7 @@ float fluid_at(const World& world, int x, int y, int z) {
     return fluid_at(fluid_data(world), x, y, z);
 }
 
-FluidStep fluid_step(World& world, const FluidParams& params) {
+FluidStep fluid_step(World& world, FluidScratch& scratch, const FluidParams& params) {
     FluidStep out;
     // NON-CREATING lookup, deliberately. `get_or_create` here meant that stepping a
     // layer nobody had seeded allocated a 128^3 float field — 8 MiB — and then swept
@@ -61,10 +61,11 @@ FluidStep fluid_step(World& world, const FluidParams& params) {
     // neither the 8 MiB zero-fill nor the 16 MiB read-modify-write of the apply pass —
     // which matters because standing water on a floor is the permanent state, not the
     // transient one.
-    std::vector<float> delta;
+    std::vector<float>& delta = scratch.delta;
+    if (delta.size() != kMacroCells) delta.assign(kMacroCells, 0.0f);
+
     std::size_t lo = kMacroCells, hi = 0;
     auto touch = [&](std::size_t k, float v) {
-        if (delta.empty()) delta.assign(kMacroCells, 0.0f);
         delta[k] += v;
         if (k < lo) lo = k;
         if (k > hi) hi = k;
@@ -148,12 +149,19 @@ FluidStep fluid_step(World& world, const FluidParams& params) {
     // exact, not an approximation — `dst[i] + 0.0f` clamped at zero is `dst[i]` for
     // any non-negative amount, and amounts are non-negative by construction (every
     // seeder writes >= 0 and this pass clamps).
-    if (delta.empty()) return out;
+    if (lo > hi) return out;
 
     std::vector<float>& dst = f.data();
-    for (std::size_t i = lo; i <= hi; ++i)
+    for (std::size_t i = lo; i <= hi; ++i) {
         dst[i] = std::max(0.0f, dst[i] + delta[i]);
+        delta[i] = 0.0f;
+    }
     return out;
+}
+
+FluidStep fluid_step(World& world, const FluidParams& params) {
+    FluidScratch once;
+    return fluid_step(world, once, params);
 }
 
 } // namespace giga
