@@ -249,9 +249,25 @@ bool WirePass::create_pipelines(VkRenderPass renderPass, const char* shaderDir) 
 void WirePass::upload(const GpuWireChain* chains, std::uint32_t count) {
     if (!points_.mapped) return;
     chainCount_ = count < kMaxWireChains ? count : kMaxWireChains;
+    // A silent truncation reads as "the floor has this many wires" forever.
+    // Say it out loud instead: the bake is already at ~800 on a padic floor.
+    if (count > kMaxWireChains)
+        std::fprintf(stderr,
+                     "[wire] TRUNCATED: %u chains baked, cap %u — %u are NOT "
+                     "drawn or simulated (raise kMaxWireChains)\n",
+                     count, kMaxWireChains, count - kMaxWireChains);
     if (chainCount_ > 0)
         std::memcpy(points_.mapped, chains,
                     sizeof(GpuWireChain) * chainCount_);
+}
+
+void WirePass::write_pins(const std::uint8_t* masks, std::uint32_t count) {
+    if (!points_.mapped) return;
+    auto* c = static_cast<GpuWireChain*>(points_.mapped);
+    const std::uint32_t n = count < chainCount_ ? count : chainCount_;
+    for (std::uint32_t i = 0; i < n; ++i)
+        for (int j = 0; j < kWireChainPoints; ++j)
+            c[i].cur[j].w = ((masks[i] >> j) & 1u) ? 0.0f : 1.0f;
 }
 
 void WirePass::write_alive(const std::uint8_t* flags, std::uint32_t count) {

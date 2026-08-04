@@ -258,12 +258,26 @@ void PropPass::destroy() {
 void PropPass::add_instance(PropShape shape, const PropInstance& inst) {
     int s = static_cast<int>(shape);
     if (s < 0 || s >= kPropShapeCount) return;
-    if (static_cast<int>(cpuInst_[s].size()) < kMaxPropInstances)
+    if (static_cast<int>(cpuInst_[s].size()) < kMaxPropInstances) {
         cpuInst_[s].push_back(inst);
+        return;
+    }
+    // Full. Say so ONCE per shape per rebuild, then keep counting quietly.
+    if (++droppedInst_[static_cast<std::size_t>(s)] == 1u)
+        std::fprintf(stderr,
+                     "[prop] shape %d FULL at %d instances — everything past "
+                     "this is dropped this rebuild (raise kMaxPropInstances)\n",
+                     s, kMaxPropInstances);
 }
 
 void PropPass::clear_instances() {
-    for (auto& v : cpuInst_) v.clear();
+    for (std::size_t s = 0; s < cpuInst_.size(); ++s) {
+        if (droppedInst_[s] > 1u)
+            std::fprintf(stderr, "[prop] shape %zu dropped %u instances\n", s,
+                         droppedInst_[s]);
+        droppedInst_[s] = 0u;
+        cpuInst_[s].clear();
+    }
 }
 
 void PropPass::record(VkCommandBuffer cmd, uint32_t frameIndex,

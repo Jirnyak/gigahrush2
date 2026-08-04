@@ -575,7 +575,11 @@ if(GIGA_BUILD_TESTS)
     # now severs the baked dressing (suite_antourage: innocent dirty list kills
     # nobody, a carved anchor kills exactly once with debris, an already-dead
     # piece stays silent on the next op).
-        PASS_REGULAR_EXPRESSION "game_test: 222522 checks, 0 failures")
+    # 222522 -> 222544 (+22) on 2026-08-04: partial dressing death
+    # (wire_live_pins / cloth_live_pins — a cut end lets go, the piece dies only
+    # when nothing is pinned any more) + GpuHandoff finally pushes a debris
+    # burst (suite_props_game asserts the burst AND the no-queue no-op).
+        PASS_REGULAR_EXPRESSION "game_test: 222544 checks, 0 failures")
 
 
 

@@ -58,6 +58,11 @@ public:
     // CPU-side aliveness (anchor probe against the live grid), as for wires.
     void write_alive(const std::uint8_t* flags, std::uint32_t count);
 
+    // Per-sheet pin mask (bit j pins point j) into the inverse-mass slots —
+    // the wire pass's twin. Cut one ceiling anchor and half the top row lets
+    // go, so the curtain drops on that corner and keeps swinging.
+    void write_pins(const std::uint32_t* masks, std::uint32_t count);
+
     // This frame's push bodies — same array the wire pass gets.
     void upload_bodies(const vec4* bodies, std::uint32_t count);
 

@@ -250,9 +250,24 @@ bool ClothPass::create_pipelines(VkRenderPass renderPass,
 void ClothPass::upload(const GpuClothSheet* sheets, std::uint32_t count) {
     if (!points_.mapped) return;
     sheetCount_ = count < kMaxClothSheets ? count : kMaxClothSheets;
+    // Same honesty rule as WirePass::upload — no silent ceiling.
+    if (count > kMaxClothSheets)
+        std::fprintf(stderr,
+                     "[cloth] TRUNCATED: %u sheets baked, cap %u — %u are NOT "
+                     "drawn or simulated (raise kMaxClothSheets)\n",
+                     count, kMaxClothSheets, count - kMaxClothSheets);
     if (sheetCount_ > 0)
         std::memcpy(points_.mapped, sheets,
                     sizeof(GpuClothSheet) * sheetCount_);
+}
+
+void ClothPass::write_pins(const std::uint32_t* masks, std::uint32_t count) {
+    if (!points_.mapped) return;
+    auto* c = static_cast<GpuClothSheet*>(points_.mapped);
+    const std::uint32_t n = count < sheetCount_ ? count : sheetCount_;
+    for (std::uint32_t i = 0; i < n; ++i)
+        for (int j = 0; j < kClothGridPoints; ++j)
+            c[i].cur[j].w = ((masks[i] >> j) & 1u) ? 0.0f : 1.0f;
 }
 
 void ClothPass::write_alive(const std::uint8_t* flags, std::uint32_t count) {

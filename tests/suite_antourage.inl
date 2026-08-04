@@ -139,4 +139,65 @@ static void test_antourage_all() {
                   again.items[i].pos.z != victim.pos.z);
         CHECK(again.count == dead2);
     }
+
+    // A verlet chain does NOT die with one anchor: the cut end lets go and it
+    // hangs from the other ([antourage.h] wire_live_pins). Death is "nothing
+    // is pinned any more" — and the sheet's top row splits the same way.
+    {
+        World w3;
+        generate_floor(w3, 0, floor_spec(FloorKind::Residential), 1337u);
+        AntourageBake b3;
+        bake_antourage(w3, 0, 1337u, b3);
+        CHECK(!b3.wires.empty());
+        const WireChain wire = b3.wires.front();
+        CHECK(wire_live_pins(w3.grid(), wire) == wire.pinMask); // intact
+        CHECK(antourage_alive(w3.grid(), wire));
+
+        w3.grid().set_cell(wire.ax0, wire.ay0, wire.az0, kCellAir);
+        const std::uint8_t halfPins = wire_live_pins(w3.grid(), wire);
+        CHECK((halfPins & 1u) == 0u);                    // that end let go
+        CHECK((halfPins >> (kWirePoints - 1)) & 1u);     // this one still holds
+        CHECK(antourage_alive(w3.grid(), wire));         // still hanging
+        // ...and a carve that only cuts one end sheds NO debris for the chain
+        // (pipes sharing that ceiling cell may still die — check the chain's
+        // own midpoint, not the total).
+        ParticleBurstQueue q;
+        const vec3 mid = wire.p[kWirePoints / 2];
+        const std::uint32_t cut0 = static_cast<std::uint32_t>(
+            macro_index(wire.ax0, wire.ay0, wire.az0));
+        antourage_carve_step(w3, b3, &cut0, 1, q, 3u);
+        for (std::uint16_t i = 0; i < q.count; ++i)
+            CHECK(q.items[i].pos.x != mid.x || q.items[i].pos.y != mid.y ||
+                  q.items[i].pos.z != mid.z);
+        const std::uint16_t afterFirst = q.count;
+
+        w3.grid().set_cell(wire.ax1, wire.ay1, wire.az1, kCellAir);
+        CHECK(wire_live_pins(w3.grid(), wire) == 0u);
+        CHECK(!antourage_alive(w3.grid(), wire));
+        const std::uint32_t cut1 = static_cast<std::uint32_t>(
+            macro_index(wire.ax1, wire.ay1, wire.az1));
+        CHECK(antourage_carve_step(w3, b3, &cut1, 1, q, 4u) > 0);
+        CHECK(q.count > afterFirst); // the chain finally shed its debris
+
+        // Cloth: one corner cut leaves the other half of the top row pinned.
+        // Pick a sheet the two carves above did not already touch.
+        const ClothSheet* intact = nullptr;
+        for (const ClothSheet& s : b3.cloths)
+            if (w3.grid().cell(s.ax0, s.ay0, s.az0) != kCellAir &&
+                w3.grid().cell(s.ax1, s.ay1, s.az1) != kCellAir) {
+                intact = &s;
+                break;
+            }
+        CHECK(intact != nullptr);
+        const ClothSheet sheet = *intact;
+        CHECK(cloth_live_pins(w3.grid(), sheet) == sheet.pinMask);
+        w3.grid().set_cell(sheet.ax0, sheet.ay0, sheet.az0, kCellAir);
+        const std::uint32_t halfSheet = cloth_live_pins(w3.grid(), sheet);
+        CHECK((halfSheet & 0x0Fu) == 0u);   // left half of the top row let go
+        CHECK((halfSheet & 0xF0u) != 0u);   // right half still holds
+        CHECK(antourage_alive(w3.grid(), sheet));
+        w3.grid().set_cell(sheet.ax1, sheet.ay1, sheet.az1, kCellAir);
+        CHECK(cloth_live_pins(w3.grid(), sheet) == 0u);
+        CHECK(!antourage_alive(w3.grid(), sheet));
+    }
 }

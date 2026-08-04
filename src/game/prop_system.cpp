@@ -57,7 +57,8 @@ static void mark_dynamic(Registry& reg, Entity prop) {
 
 static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
                                const vec3& impulse, const vec3& pos, const vec3& color,
-                               std::uint32_t meshKind, EventBus& bus)
+                               std::uint32_t meshKind, EventBus& bus,
+                               ParticleBurstQueue* bursts, std::uint32_t seed)
 {
     // Resolve skin payload from the live entity when the caller left zeros
     // (anchor_validate / projectile hit historically passed meshKind=0).
@@ -78,6 +79,18 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
                 static_cast<std::uint32_t>(pos.z));
 
     if (mode == PropFallMode::GpuHandoff) {
+        // The mode's whole promise: no CPU debris entity, the SHOW is GPU
+        // particles. It used to keep only the first half and vanish silently —
+        // the burst below is what makes the name true. Tinted by the prop's own
+        // material row, exactly as a severed antourage piece is
+        // ([game/antourage] antourage_carve_step).
+        if (bursts != nullptr) {
+            std::uint16_t matId = 0;
+            if (reg.all_of<PropMesh>(prop))
+                matId = reg.get<PropMesh>(prop).matId;
+            bursts->push(pos, vec3{0.0f, 0.0f, 0.35f}, ParticleKind::Debris, 6,
+                         matId, seed ^ 0xD3B15u);
+        }
         reg.destroy(prop);
         return;
     }
@@ -104,7 +117,8 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
 }
 
 bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& projVel,
-                                float projHitRadius, EventBus& bus)
+                                float projHitRadius, EventBus& bus,
+                                ParticleBurstQueue* bursts, std::uint32_t seed)
 {
     const float radiusSq = projHitRadius * projHitRadius;
     const int pcx = wrap_macro(static_cast<int>(projPos.x / kCellSize));
@@ -143,14 +157,16 @@ bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& 
 
     if (hitEntity != entt::null) {
         vec3 impulse = normalize(projVel) * 3.0f + vec3{0.0f, 0.0f, 1.0f};
-        detach_single_prop(reg, hitEntity, hitMode, impulse, hitPos, hitColor, 0, bus);
+        detach_single_prop(reg, hitEntity, hitMode, impulse, hitPos, hitColor, 0,
+                           bus, bursts, seed);
         return true;
     }
     return false;
 }
 
 std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& bus,
-                                   const std::vector<std::uint32_t>& dirtyCells)
+                                   const std::vector<std::uint32_t>& dirtyCells,
+                                   ParticleBurstQueue* bursts, std::uint32_t seed)
 {
     if (dirtyCells.empty()) return 0;
 
@@ -188,9 +204,11 @@ std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& 
         }
     }
 
-    for (const auto& item : detached) {
+    for (std::size_t i = 0; i < detached.size(); ++i) {
+        const auto& item = detached[i];
         detach_single_prop(reg, item.entity, item.mode, item.impulse, item.pos,
-                           item.color, item.meshKind, bus);
+                           item.color, item.meshKind, bus, bursts,
+                           seed ^ static_cast<std::uint32_t>(i) * 0x9E3779B9u);
     }
     return static_cast<std::uint32_t>(detached.size());
 }

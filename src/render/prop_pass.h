@@ -90,6 +90,10 @@ private:
 
     // CPU-side instance lists, rebuilt each frame before upload
     std::array<std::vector<PropInstance>, kPropShapeCount> cpuInst_;
+    // Instances refused because the per-shape cap was full, since the last
+    // clear. Reported out loud — a silent drop reads as "the floor has this
+    // much dressing" when it does not ([antourage.md] GPU ceilings).
+    std::array<std::uint32_t, kPropShapeCount> droppedInst_{};
 
     // Per-shape × per-frame host-visible GPU instance buffers
     std::array<std::array<VulkanBuffer, kMaxFramesInFlight>, kPropShapeCount> instBufs_;

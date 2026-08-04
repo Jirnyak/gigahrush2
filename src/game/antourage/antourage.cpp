@@ -448,13 +448,29 @@ bool antourage_alive(const MacroGrid& g, const AntourageInstance& it) {
     return g.cell(it.ax0, it.ay0, it.az0) != kCellAir &&
            g.cell(it.ax1, it.ay1, it.az1) != kCellAir;
 }
+std::uint8_t wire_live_pins(const MacroGrid& g, const WireChain& c) {
+    std::uint8_t m = c.pinMask;
+    if (g.cell(c.ax0, c.ay0, c.az0) == kCellAir) m &= ~std::uint8_t{1u};
+    if (g.cell(c.ax1, c.ay1, c.az1) == kCellAir)
+        m &= static_cast<std::uint8_t>(~(1u << (kWirePoints - 1)));
+    return m;
+}
+
+std::uint32_t cloth_live_pins(const MacroGrid& g, const ClothSheet& s) {
+    std::uint32_t m = s.pinMask;
+    // The top row splits between the two corner cells it hangs from.
+    constexpr std::uint32_t kLeft = (1u << (kClothW / 2)) - 1u;      // 0x0F
+    constexpr std::uint32_t kRight = ((1u << kClothW) - 1u) & ~kLeft; // 0xF0
+    if (g.cell(s.ax0, s.ay0, s.az0) == kCellAir) m &= ~kLeft;
+    if (g.cell(s.ax1, s.ay1, s.az1) == kCellAir) m &= ~kRight;
+    return m;
+}
+
 bool antourage_alive(const MacroGrid& g, const WireChain& c) {
-    return g.cell(c.ax0, c.ay0, c.az0) != kCellAir &&
-           g.cell(c.ax1, c.ay1, c.az1) != kCellAir;
+    return wire_live_pins(g, c) != 0u;
 }
 bool antourage_alive(const MacroGrid& g, const ClothSheet& s) {
-    return g.cell(s.ax0, s.ay0, s.az0) != kCellAir &&
-           g.cell(s.ax1, s.ay1, s.az1) != kCellAir;
+    return cloth_live_pins(g, s) != 0u;
 }
 
 namespace {
@@ -511,11 +527,14 @@ std::uint32_t antourage_carve_step(const World& w, const AntourageBake& bake,
         bursts.push(it.pos, down, ParticleKind::Debris, 4, it.matId,
                     seed ^ static_cast<std::uint32_t>(i) * 0x9E3779B9u);
     }
+    // A chain or a sheet dies only when the LAST thing holding it lets go: cut
+    // one end and it dangles (wire_live_pins). So the test is "an anchor was
+    // severed by this op AND nothing is pinned any more".
     for (std::size_t i = 0; i < bake.wires.size(); ++i) {
         const WireChain& c = bake.wires[i];
-        if (!pair_died(g, dirtyCells, dirtyCount, c.ax0, c.ay0, c.az0, c.ax1,
-                       c.ay1, c.az1))
-            continue;
+        const bool cut = cell_died(g, dirtyCells, dirtyCount, c.ax0, c.ay0, c.az0) ||
+                         cell_died(g, dirtyCells, dirtyCount, c.ax1, c.ay1, c.az1);
+        if (!cut || antourage_alive(g, c)) continue;
         ++dead;
         bursts.push(c.p[kWirePoints / 2], down, ParticleKind::Debris, 3,
                     c.matId, seed ^ 0x5A303B0Du ^
@@ -523,9 +542,9 @@ std::uint32_t antourage_carve_step(const World& w, const AntourageBake& bake,
     }
     for (std::size_t i = 0; i < bake.cloths.size(); ++i) {
         const ClothSheet& s = bake.cloths[i];
-        if (!pair_died(g, dirtyCells, dirtyCount, s.ax0, s.ay0, s.az0, s.ax1,
-                       s.ay1, s.az1))
-            continue;
+        const bool cut = cell_died(g, dirtyCells, dirtyCount, s.ax0, s.ay0, s.az0) ||
+                         cell_died(g, dirtyCells, dirtyCount, s.ax1, s.ay1, s.az1);
+        if (!cut || antourage_alive(g, s)) continue;
         ++dead;
         // Canvas tears into dust, not chunks.
         bursts.push(s.p[kClothPoints / 2], down, ParticleKind::Dust, 4, s.matId,

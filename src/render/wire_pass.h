@@ -58,6 +58,12 @@ public:
     // kills chain i this frame — one byte per chain, written into meta.y.
     void write_alive(const std::uint8_t* flags, std::uint32_t count);
 
+    // Per-chain pin mask (bit j pins point j) written into the sim's inverse
+    // mass slots: pinned = 0, free = 1. This is how a SEVERED end lets go
+    // without re-uploading the chain — the live verlet positions are kept, so
+    // the wire whips down from where it was instead of snapping back to rest.
+    void write_pins(const std::uint8_t* masks, std::uint32_t count);
+
     // This frame's push bodies (every Transform+AABB body on the layer, the
     // camera holder among them — nobody special). vec4 = xyz pos, w radius.
     void upload_bodies(const vec4* bodies, std::uint32_t count);

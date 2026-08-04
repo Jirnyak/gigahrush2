@@ -8,6 +8,7 @@
 #include "ecs/components.h"
 #include "game/event_bus.h"
 #include "game/interact_table.h"
+#include "game/particles.h" // the burst a GpuHandoff prop owes the world
 #include "game/prop_table.h"
 #include "world/world.h"
 #include "world/level_stack.h"
@@ -152,15 +153,22 @@ std::uint32_t collect_static_prop_mesh_instances(const Registry& reg, LayerId la
 
 
 bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& projVel,
-                                float projHitRadius, EventBus& bus);
+                                float projHitRadius, EventBus& bus,
+                                ParticleBurstQueue* bursts = nullptr,
+                                std::uint32_t seed = 0);
 
 // Validate SubVoxelAnchor props against MacroGrid after geometry mutation.
 // `dirtyCells` is CarveResult::dirtyCells / DoorSet::dirtyCells — flat
 // macro_index keys (uint32), NOT a packed xyz64. Returns how many props
 // detached (StaticPropTag → DynamicBodyTag) so the caller can rebuild the
 // static PropPass skin. [jirnyak.md] §18.
+// Optional `bursts`: the shared particle queue ([game/particles.h]). A
+// GpuHandoff prop shatters into it instead of vanishing silently — pass it and
+// the mode finally does what its name says.
 std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& bus,
-                                   const std::vector<std::uint32_t>& dirtyCells);
+                                   const std::vector<std::uint32_t>& dirtyCells,
+                                   ParticleBurstQueue* bursts = nullptr,
+                                   std::uint32_t seed = 0);
 
 
 // Zero-alloc nearest Interactable query for the interact key path.

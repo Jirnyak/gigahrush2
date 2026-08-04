@@ -3421,7 +3421,8 @@ int main(int argc, char** argv) {
                         // Rebuild PropPass static skin when any prop detached —
                         // otherwise the GPU still draws the old furniture pose.
                         if (game::anchor_validate_step(reg, stack.layer(activeLayer),
-                                                       bus, carveResult.dirtyCells) > 0) {
+                                                       bus, carveResult.dirtyCells,
+                                                       &particleBursts, op.seed) > 0) {
                             propPassNeedsRebuild = true;
                         }
                         // ...and the BAKED dressing answers to the same blast
@@ -3664,7 +3665,8 @@ int main(int argc, char** argv) {
                             // GPU drops the old furniture pose. [jirnyak.md] §18
                             if (game::anchor_validate_step(
                                     reg, stack.layer(activeLayer), bus,
-                                    carveResult.dirtyCells) > 0) {
+                                    carveResult.dirtyCells, &particleBursts,
+                                    pr.seed) > 0) {
                                 propPassNeedsRebuild = true;
                             }
                             // Same duty for the baked dressing.
@@ -5123,7 +5125,8 @@ int main(int argc, char** argv) {
                 // whose anchors no longer have solid support. [jirnyak.md] s18
                 // Rebuild PropPass when anything detaches so GPU drops stale skins.
                 if (game::anchor_validate_step(reg, stack.layer(activeLayer), bus,
-                                               doors.dirtyCells) > 0) {
+                                               doors.dirtyCells, &particleBursts,
+                                               static_cast<std::uint32_t>(simTick)) > 0) {
                     propPassNeedsRebuild = true;
                 }
                 // A door leaf sliding away empties cells too — dressing that
@@ -5202,15 +5205,22 @@ int main(int argc, char** argv) {
                 activeLayer != kInvalidLayer) {
                 if (const game::AntourageBake* ab =
                         streamer.antourage_at_layer(registry, activeLayer)) {
-                    static std::vector<std::uint8_t> wireAlive;
+                    static std::vector<std::uint8_t> wireAlive, wirePins;
                     wireAlive.clear();
+                    wirePins.clear();
                     const MacroGrid& wg = stack.layer(activeLayer).grid();
-                    for (const game::WireChain& c : ab->wires)
-                        wireAlive.push_back(game::antourage_alive(wg, c) ? 1u
-                                                                         : 0u);
-                    wirePass.write_alive(wireAlive.data(),
-                                         static_cast<std::uint32_t>(
-                                             wireAlive.size()));
+                    // One probe, two answers: the live pin mask says which ends
+                    // still hold, and "no pin left" IS death. A cut end lets go
+                    // and the wire whips down from the other ([antourage.md]).
+                    for (const game::WireChain& c : ab->wires) {
+                        const std::uint8_t m = game::wire_live_pins(wg, c);
+                        wirePins.push_back(m);
+                        wireAlive.push_back(m != 0u ? 1u : 0u);
+                    }
+                    const auto wireN =
+                        static_cast<std::uint32_t>(wirePins.size());
+                    wirePass.write_alive(wireAlive.data(), wireN);
+                    wirePass.write_pins(wirePins.data(), wireN);
                 }
                 if (std::getenv("GIGA_WIRE_NOSIM") == nullptr)
                     wirePass.record_sim(cmd, 1.0f / 60.0f);
@@ -5222,14 +5232,19 @@ int main(int argc, char** argv) {
                 if (const game::AntourageBake* ab =
                         streamer.antourage_at_layer(registry, activeLayer)) {
                     static std::vector<std::uint8_t> clothAlive;
+                    static std::vector<std::uint32_t> clothPins;
                     clothAlive.clear();
+                    clothPins.clear();
                     const MacroGrid& wg = stack.layer(activeLayer).grid();
-                    for (const game::ClothSheet& c : ab->cloths)
-                        clothAlive.push_back(game::antourage_alive(wg, c) ? 1u
-                                                                          : 0u);
-                    clothPass.write_alive(clothAlive.data(),
-                                          static_cast<std::uint32_t>(
-                                              clothAlive.size()));
+                    for (const game::ClothSheet& c : ab->cloths) {
+                        const std::uint32_t m = game::cloth_live_pins(wg, c);
+                        clothPins.push_back(m);
+                        clothAlive.push_back(m != 0u ? 1u : 0u);
+                    }
+                    const auto clothN =
+                        static_cast<std::uint32_t>(clothPins.size());
+                    clothPass.write_alive(clothAlive.data(), clothN);
+                    clothPass.write_pins(clothPins.data(), clothN);
                 }
                 if (std::getenv("GIGA_WIRE_NOSIM") == nullptr)
                     clothPass.record_sim(cmd, 1.0f / 60.0f);

@@ -742,8 +742,21 @@ static void test_gpu_handoff_destroys_parent_without_cpu_debris() {
     const std::vector<std::uint32_t> dirty{
         static_cast<std::uint32_t>(macro_index(14, 6, 14))};
     bus.clear();
-    const std::uint32_t detached = game::anchor_validate_step(reg, world, bus, dirty);
+    // The mode's promise is "the GPU shows it" — so it must actually PUSH a
+    // burst into the shared particle queue ([game/particles.h]). Vanishing in
+    // silence was the half of the bug that outlived the CPU-debris half.
+    game::ParticleBurstQueue bursts;
+    const std::uint32_t detached =
+        game::anchor_validate_step(reg, world, bus, dirty, &bursts, 77u);
     CHECK(detached == 1u);
+    CHECK(bursts.count == 1u);
+    CHECK(bursts.items[0].count > 0u);
+    CHECK(bursts.items[0].kind ==
+          static_cast<std::uint8_t>(game::ParticleKind::Debris));
+    CHECK(bursts.items[0].pos.x == pos.x && bursts.items[0].pos.z == pos.z);
+    // ...and the queue stays untouched when the caller does not offer one
+    // (headless sim, tests, a server with no renderer).
+    CHECK(game::anchor_validate_step(reg, world, bus, dirty) == 0u);
     CHECK(!reg.valid(e)); // parent destroyed
     {
         const std::uint32_t n = bus.cycle_count(EventType::PropDetached);

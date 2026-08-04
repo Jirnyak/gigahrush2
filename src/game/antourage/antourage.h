@@ -16,7 +16,9 @@
 //
 // Destruction needs no machinery: every emitted piece records the solid cells
 // it hangs from, and the consumer checks them against the LIVE grid — carve
-// the anchor away and the piece stops being drawn (+ debris, later).
+// the anchor away and the piece stops being drawn, shedding a debris burst on
+// the way out (antourage_carve_step below). A verlet chain or sheet loses only
+// the end that was cut and swings from the rest.
 //
 // Determinism: bake_antourage is a pure function of (grid contents, number,
 // seed) — a recycled World re-bakes bit-for-bit, nothing is persisted.
@@ -46,8 +48,9 @@ struct WireChain {
     vec3 p[kWirePoints];       // rest pose, world units
     float restLen = 0.0f;      // segment rest length (uniform per chain)
     float massKg = 0.0f;       // whole-chain mass (materials density * volume)
-    // The two anchor CELLS. If either is carved to air the chain is dead —
-    // checked against the live grid by the consumer, never cached.
+    // The two anchor CELLS. Carve one and that END lets go (the chain hangs
+    // from the other); carve both and the chain is dead — probed against the
+    // live grid by the consumer, never cached.
     std::uint8_t ax0, ay0, az0;
     std::uint8_t ax1, ay1, az1;
     // Which of the 8 points are PINNED (bit i = point i). 0x81 = both ends —
@@ -75,8 +78,9 @@ struct ClothSheet {
     vec3 p[kClothPoints];    // rest pose, world units, row-major from the top
     float restX = 0.0f;      // horizontal neighbour rest length
     float restY = 0.0f;      // vertical neighbour rest length
-    // The two anchor CELLS (the ceiling cells over the top corners). Either
-    // carved to air -> the sheet is dead; probed against the LIVE grid.
+    // The two anchor CELLS (the ceiling cells over the top corners). Carve one
+    // and that HALF of the top row lets go — the sheet hangs by a corner;
+    // carve both and it is dead. Probed against the LIVE grid.
     std::uint8_t ax0, ay0, az0;
     std::uint8_t ax1, ay1, az1;
     // Bit i pins point i. Default: the whole top row hangs, the rest swings.
@@ -143,9 +147,23 @@ void bake_antourage(const World& w, int number, unsigned seed,
 // a piece is drawn while both its anchor cells are solid in the LIVE grid.
 // These are the one place a consumer asks the question, so the rule cannot
 // drift between the instance path, the wire pass and the cloth pass.
+// A rigid instance needs BOTH anchors: a pipe leg with one end in the void is
+// not a pipe leg. A verlet chain or sheet is different — it can hang from what
+// is left, so its aliveness is "some point is still pinned to solid matter".
 bool antourage_alive(const MacroGrid& g, const AntourageInstance& it);
 bool antourage_alive(const MacroGrid& g, const WireChain& c);
 bool antourage_alive(const MacroGrid& g, const ClothSheet& s);
+
+// The pin mask a chain/sheet actually has against the LIVE grid: a severed
+// anchor LETS ITS END GO and the thing swings from whatever still holds it —
+// shoot one ceiling anchor and the wire whips down instead of vanishing. The
+// backend writes these into the sim's inverse-mass slots each time they change
+// (render/wire_pass.h write_pins). 0 = nothing holds = the piece is dead.
+//
+// Point 0 belongs to anchor 0 and the last point to anchor 1; a sheet's top row
+// splits down the middle, left half to anchor 0, right half to anchor 1.
+std::uint8_t wire_live_pins(const MacroGrid& g, const WireChain& c);
+std::uint32_t cloth_live_pins(const MacroGrid& g, const ClothSheet& s);
 
 // The carve's edge detector, and the antourage twin of anchor_validate_step
 // ([game/prop_system.h] — ECS props detach the same way on the same input).
