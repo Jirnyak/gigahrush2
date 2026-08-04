@@ -34,7 +34,7 @@ void build_spatial_hash(SpatialHash& hash, const Registry& reg, const NpcPool& p
     hash.tick = tick;
     hash.layer = layer;
     if (hash.heads.empty()) {
-        hash.heads.assign(kMacroCells, entt::null);
+        hash.heads.assign(kHuntCells, entt::null);
     } else {
         for (std::uint32_t c : hash.active_cells) {
             hash.heads[c] = entt::null;
@@ -53,11 +53,11 @@ void build_spatial_hash(SpatialHash& hash, const Registry& reg, const NpcPool& p
         if (!pool.valid(id)) continue;
         if (!mob_hostile_to(pool, id)) continue;
 
-        int cx = wrap_macro(static_cast<int>(tr.pos.x / kCellSize));
-        int cy = wrap_macro(static_cast<int>(tr.pos.y / kCellSize));
-        int cz = wrap_macro(static_cast<int>(tr.pos.z / kCellSize));
+        int cx = static_cast<int>(tr.pos.x / kHuntCellSize) & (kHuntGridDim - 1);
+        int cy = static_cast<int>(tr.pos.y / kHuntCellSize) & (kHuntGridDim - 1);
+        int cz = static_cast<int>(tr.pos.z / kHuntCellSize) & (kHuntGridDim - 1);
 
-        std::uint32_t cellIdx = static_cast<std::uint32_t>(macro_index(cx, cy, cz));
+        std::uint32_t cellIdx = static_cast<std::uint32_t>(cx + cy * kHuntGridDim + cz * kHuntGridDim * kHuntGridDim);
         if (hash.heads[cellIdx] == entt::null) {
             hash.active_cells.push_back(cellIdx);
         }
@@ -69,25 +69,25 @@ void build_spatial_hash(SpatialHash& hash, const Registry& reg, const NpcPool& p
 }
 
 Prey nearest_prey(const SpatialHash& hash, const vec3& from, float radius) {
-    Prey best;
-    float bestD2 = radius * radius;
+    int cx = static_cast<int>(from.x / kHuntCellSize) & (kHuntGridDim - 1);
+    int cy = static_cast<int>(from.y / kHuntCellSize) & (kHuntGridDim - 1);
+    int cz = static_cast<int>(from.z / kHuntCellSize) & (kHuntGridDim - 1);
+    int range = static_cast<int>(radius / kHuntCellSize) + 1;
 
-    int rCells = static_cast<int>(std::ceil(radius / kCellSize));
-    int cx0 = static_cast<int>(from.x / kCellSize);
-    int cy0 = static_cast<int>(from.y / kCellSize);
-    int cz0 = static_cast<int>(from.z / kCellSize);
+    Prey closest{entt::null, {0,0,0}};
+    float minDist2 = radius * radius;
 
-    for (int dz = -rCells; dz <= rCells; ++dz) {
-        for (int dy = -rCells; dy <= rCells; ++dy) {
-            for (int dx = -rCells; dx <= rCells; ++dx) {
-                int cx = wrap_macro(cx0 + dx);
-                int cy = wrap_macro(cy0 + dy);
-                int cz = wrap_macro(cz0 + dz);
-
-                std::uint32_t cellIdx = static_cast<std::uint32_t>(macro_index(cx, cy, cz));
+    for (int dz = -range; dz <= range; ++dz) {
+        for (int dy = -range; dy <= range; ++dy) {
+            for (int dx = -range; dx <= range; ++dx) {
+                int nx = (cx + dx) & (kHuntGridDim - 1);
+                int ny = (cy + dy) & (kHuntGridDim - 1);
+                int nz = (cz + dz) & (kHuntGridDim - 1);
+                
+                std::uint32_t cellIdx = static_cast<std::uint32_t>(nx + ny * kHuntGridDim + nz * kHuntGridDim * kHuntGridDim);
                 std::uint32_t nodeIdx = hash.heads[cellIdx];
                 
-                while (nodeIdx != entt::null) {
+                while (nodeIdx != entt::null && nodeIdx < hash.nodes.size()) {
                     const auto& node = hash.nodes[nodeIdx];
                     
                     const float dpx = wrap_delta_f(from.x, node.pos.x, kWorldExtent);
@@ -95,17 +95,17 @@ Prey nearest_prey(const SpatialHash& hash, const vec3& from, float radius) {
                     const float dpz = wrap_delta_f(from.z, node.pos.z, kWorldExtent);
                     const float d2 = dpx * dpx + dpy * dpy + dpz * dpz;
                     
-                    if (d2 < bestD2) {
-                        bestD2 = d2;
-                        best.e = node.e;
-                        best.pos = node.pos;
+                    if (d2 < minDist2) {
+                        minDist2 = d2;
+                        closest.e = node.e;
+                        closest.pos = node.pos;
                     }
                     nodeIdx = node.next;
                 }
             }
         }
     }
-    return best;
+    return closest;
 }
 
 } // namespace giga::game

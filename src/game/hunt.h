@@ -156,6 +156,10 @@ struct Prey {
 // Read-only: it takes a const Registry and touches no component that could be
 // created, so it is safe to call from inside another view's iteration — which is
 // exactly how both consumers use it.
+inline constexpr float kHuntCellSize = 8.0f;
+inline constexpr int kHuntGridDim = 32; // 256.0 (kWorldExtent) / 8.0
+inline constexpr std::uint32_t kHuntCells = kHuntGridDim * kHuntGridDim * kHuntGridDim;
+
 struct SpatialHashNode {
     Entity e = entt::null;
     vec3 pos{0, 0, 0};
