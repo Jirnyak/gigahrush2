@@ -446,6 +446,7 @@ void bake_wires(const World& w, const GravityFrame& f, std::uint32_t fseed,
         c.restLen = (f.pull ? spanM * 1.02f : spanM) /
                     static_cast<float>(kWirePoints - 1);
         c.massKg = spanM * kWireKgPerMetre;
+        c.face = antourage_face_pack(f.axis, -f.upSign);
         c.matId = static_cast<std::uint8_t>(kMatPipeMetal); // cable sheath
         out.wires.push_back(c);
     }
@@ -515,6 +516,7 @@ void bake_cloths(const World& w, const GravityFrame& f, std::uint32_t fseed,
         s.pinMask = 0xFFu; // the top row
         // Canvas has no material row of its own yet; plaster's dusty beige is
         // the closest honest tint for the shreds. One CSV line from real.
+        s.face = antourage_face_pack(f.axis, -f.upSign);
         s.matId = static_cast<std::uint8_t>(kMatPlaster);
         out.cloths.push_back(s);
     }
@@ -555,10 +557,25 @@ bool antourage_alive(const MacroGrid& g, const AntourageInstance& it) {
     return g.cell(it.ax0, it.ay0, it.az0) != kCellAir &&
            g.cell(it.ax1, it.ay1, it.az1) != kCellAir;
 }
+// Did the matter this end was pinned TO go away? A cell is 2 m and a carve works
+// in 0.25 m sub-voxels, so "the cell is air" is far too coarse a question: it
+// only becomes true once all 512 sub-voxels are gone, and a player-sized hole
+// punched exactly where the wire hangs left it dangling from a cell that was
+// still 90% full (owner, live play 2026-08-05). So ask what the BAKE asked when
+// it chose the spot — is there still matter in the attachment column of the face
+// it hangs off ([macro_grid.h] face_layer, centre 2x2). Same question, same
+// answer, and the thing lets go exactly when the matter it hung from does.
+static bool anchor_gone(const MacroGrid& g, int x, int y, int z,
+                        std::uint8_t face) {
+    if (g.cell(x, y, z) == kCellAir) return true;
+    return g.mask(x, y, z).face_layer(antourage_face_axis(face),
+                                      antourage_face_dir(face), true) < 0;
+}
+
 std::uint8_t wire_live_pins(const MacroGrid& g, const WireChain& c) {
     std::uint8_t m = c.pinMask;
-    if (g.cell(c.ax0, c.ay0, c.az0) == kCellAir) m &= ~std::uint8_t{1u};
-    if (g.cell(c.ax1, c.ay1, c.az1) == kCellAir)
+    if (anchor_gone(g, c.ax0, c.ay0, c.az0, c.face)) m &= ~std::uint8_t{1u};
+    if (anchor_gone(g, c.ax1, c.ay1, c.az1, c.face))
         m &= static_cast<std::uint8_t>(~(1u << (kWirePoints - 1)));
     return m;
 }
@@ -568,8 +585,8 @@ std::uint32_t cloth_live_pins(const MacroGrid& g, const ClothSheet& s) {
     // The top row splits between the two corner cells it hangs from.
     constexpr std::uint32_t kLeft = (1u << (kClothW / 2)) - 1u;      // 0x0F
     constexpr std::uint32_t kRight = ((1u << kClothW) - 1u) & ~kLeft; // 0xF0
-    if (g.cell(s.ax0, s.ay0, s.az0) == kCellAir) m &= ~kLeft;
-    if (g.cell(s.ax1, s.ay1, s.az1) == kCellAir) m &= ~kRight;
+    if (anchor_gone(g, s.ax0, s.ay0, s.az0, s.face)) m &= ~kLeft;
+    if (anchor_gone(g, s.ax1, s.ay1, s.az1, s.face)) m &= ~kRight;
     return m;
 }
 
@@ -589,6 +606,20 @@ namespace {
 bool cell_died(const MacroGrid& g, const std::uint32_t* dirty, std::size_t n,
                int x, int y, int z) {
     if (g.cell(x, y, z) != kCellAir) return false;
+    const std::uint32_t key = static_cast<std::uint32_t>(macro_index(x, y, z));
+    for (std::size_t i = 0; i < n; ++i)
+        if (dirty[i] == key) return true;
+    return false;
+}
+
+// The chain/sheet twin of cell_died: the anchor is GONE now (sub-voxel aware,
+// anchor_gone above) and the cell it lived in is in this op's dirty list, so it
+// was this carve that took it. The dirty list names cells whose MASK changed, so
+// a partial carve of a still-solid cell is in it — which is exactly the case the
+// cell-level test used to miss.
+bool anchor_died(const MacroGrid& g, const std::uint32_t* dirty, std::size_t n,
+                 int x, int y, int z, std::uint8_t face) {
+    if (!anchor_gone(g, x, y, z, face)) return false;
     const std::uint32_t key = static_cast<std::uint32_t>(macro_index(x, y, z));
     for (std::size_t i = 0; i < n; ++i)
         if (dirty[i] == key) return true;
@@ -638,8 +669,9 @@ std::uint32_t antourage_carve_step(const World& w, const AntourageBake& bake,
     // severed by this op AND nothing is pinned any more".
     for (std::size_t i = 0; i < bake.wires.size(); ++i) {
         const WireChain& c = bake.wires[i];
-        const bool cut = cell_died(g, dirtyCells, dirtyCount, c.ax0, c.ay0, c.az0) ||
-                         cell_died(g, dirtyCells, dirtyCount, c.ax1, c.ay1, c.az1);
+        const bool cut =
+            anchor_died(g, dirtyCells, dirtyCount, c.ax0, c.ay0, c.az0, c.face) ||
+            anchor_died(g, dirtyCells, dirtyCount, c.ax1, c.ay1, c.az1, c.face);
         if (!cut || antourage_alive(g, c)) continue;
         ++dead;
         const vec3 mid = c.p[kWirePoints / 2];
@@ -649,8 +681,9 @@ std::uint32_t antourage_carve_step(const World& w, const AntourageBake& bake,
     }
     for (std::size_t i = 0; i < bake.cloths.size(); ++i) {
         const ClothSheet& s = bake.cloths[i];
-        const bool cut = cell_died(g, dirtyCells, dirtyCount, s.ax0, s.ay0, s.az0) ||
-                         cell_died(g, dirtyCells, dirtyCount, s.ax1, s.ay1, s.az1);
+        const bool cut =
+            anchor_died(g, dirtyCells, dirtyCount, s.ax0, s.ay0, s.az0, s.face) ||
+            anchor_died(g, dirtyCells, dirtyCount, s.ax1, s.ay1, s.az1, s.face);
         if (!cut || antourage_alive(g, s)) continue;
         ++dead;
         // Canvas tears into dust, not chunks.

@@ -4,6 +4,7 @@
 // Included into game_test.cpp after its CHECK macro and `using namespace`.
 
 #include "game/antourage/antourage.h"
+#include "world/destruct.h"   // carve_sphere — the player's own hole-puncher
 #include "world/material_props.h"
 
 // The eight regimes, in the enum's own order.
@@ -234,6 +235,68 @@ static void test_antourage_isotropy() {
     CHECK(same_bake(bakes[0], bakes[7]));
     // Sideways is really sideways: the -X floor is NOT the -Z floor's dressing.
     CHECK(!same_bake(bakes[0], bakes[4]));
+}
+
+// A PLAYER-SIZED carve at the spot a wire hangs from must drop it. Reported from
+// live play (owner, 2026-08-05): the ceiling around a wire was blown away and the
+// wire kept hanging in the hole. It was not the GPU path — the probe was the
+// wrong SIZE. A cell is 2 m and a carve works in 0.25 m sub-voxels, so
+// "the anchor cell is air" needs all 512 sub-voxels gone; a 1.5 m sphere leaves
+// the cell nominally solid and the pin stayed. The probe now asks the question
+// the bake asked (matter in the attachment column), so the two agree.
+static void test_antourage_carve_drops_the_wire() {
+    World w;
+    generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
+    AntourageBake bake;
+    bake_antourage(w, 0, 1337u, bake);
+    CHECK(!bake.wires.empty());
+
+    // A wire whose two anchors are DIFFERENT cells, so one carve cuts one end.
+    const WireChain* pick = nullptr;
+    for (const WireChain& c : bake.wires)
+        if (c.ax0 != c.ax1 || c.ay0 != c.ay1 || c.az0 != c.az1) { pick = &c; break; }
+    CHECK(pick != nullptr);
+    const WireChain wire = *pick;
+    CHECK(wire_live_pins(w.grid(), wire) == wire.pinMask);
+
+    // Blow a hole exactly where point 0 is pinned, with the console/weapon
+    // radius (main.cpp consoleCtx.carveRadius = 1.5 m).
+    // A BULLET-sized hole, not a demolition: 0.6 m, well under the 2 m cell.
+    // Measured on this floor — at 0.35/0.6/1.0 m the anchor CELL stays non-air
+    // and only at 1.5 m does it empty, so this radius is exactly the case the
+    // old cell-level probe got wrong.
+    CarveOp op{};
+    op.x = wire.p[0].x;
+    op.y = wire.p[0].y;
+    op.z = wire.p[0].z;
+    op.radius = 0.6f;
+    op.power = 60000;   // enough to beat any material's hardness roll
+    op.seed = 4242u;
+    CarveScratch scratch;
+    CarveResult res;
+    carve_sphere(w, op, scratch, res);
+    CHECK(!res.dirtyCells.empty());
+    // THE DISCRIMINATOR: the cell is still nominally solid...
+    CHECK(w.grid().cell(wire.ax0, wire.ay0, wire.az0) != kCellAir);
+
+    // ...and yet the column the wire hung from is gone, so THAT end lets go.
+    const std::uint8_t pins = wire_live_pins(w.grid(), wire);
+    CHECK((pins & 1u) == 0u);
+    // ...while the far anchor still holds it: a cut end lets go, it does not
+    // delete the chain ([antourage.md] partial death).
+    CHECK(antourage_alive(w.grid(), wire));
+    std::fprintf(stderr,
+                 "[antourage] 0.6 m carve at the pin: cell still solid, "
+                 "pins %02X -> %02X\n", wire.pinMask, pins);
+
+    // And the carve's own dirty list reports the severed end to the caller, so
+    // the debris burst and the GPU re-pack happen on the same op.
+    ParticleBurstQueue bursts;
+    antourage_carve_step(w, bake, res.dirtyCells.data(), res.dirtyCells.size(),
+                         bursts, 11u);
+    // The far end still holds this chain, so IT sheds nothing yet; whatever else
+    // that blast severed is free to report.
+    CHECK(antourage_alive(w.grid(), wire));
 }
 
 static void test_antourage_all() {

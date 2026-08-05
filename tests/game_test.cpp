@@ -4279,6 +4279,7 @@ int main() {
     test_samosbor_all();
     test_doors_all();
     test_antourage_all();
+    test_antourage_carve_drops_the_wire();
     test_gravity_frames();
     test_antourage_isotropy();
     test_saveload_all();

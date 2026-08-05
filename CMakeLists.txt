@@ -595,7 +595,14 @@ if(GIGA_BUILD_TESTS)
     # not what is shut), so the tests were corrected, not the engine. The one
     # real gap they exposed is filed as problems.md §10 (keycard tier ignored)
     # and pinned AS-IS so closing it is loud.
-        PASS_REGULAR_EXPRESSION "game_test: 223868 checks, 0 failures")
+    # 223868 -> 223876 (+8) on 2026-08-05: the wire that would not fall (owner,
+    # live play) — aliveness for chains/sheets is now SUB-VOXEL aware. A cell is
+    # 2 m and a carve cuts 0.25 m, so "the anchor cell is air" only became true at
+    # a ~1.5 m blast; measured here, 0.35/0.6/1.0 m leave the cell nominally solid
+    # while the attachment column is gone. Each piece records the FACE it hangs
+    # off and the probe asks what the bake asked. The new test pins the
+    # discriminating case: 0.6 m hole, cell still solid, pin released.
+        PASS_REGULAR_EXPRESSION "game_test: 223876 checks, 0 failures")
 
 
 
