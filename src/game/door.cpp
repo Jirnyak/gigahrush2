@@ -56,16 +56,16 @@ bool leaf_occupied(const Door& d, const Registry& reg, LayerId layer) {
 void fill_leaf(MacroGrid& g, DoorSet& doors, const Door& d) {
     for (int z = 0; z < d.h; ++z) {
         g.fill_cell(d.cx, d.cy, d.cz + z, kMatDoor);
-        doors.dirtyCells.push_back(macro_index(
-            wrap_macro(d.cx), wrap_macro(d.cy), wrap_macro(d.cz + z)));
+        doors.dirtyCells.push_back(static_cast<std::uint32_t>(macro_index(
+            wrap_macro(d.cx), wrap_macro(d.cy), wrap_macro(d.cz + z))));
     }
 }
 
 void clear_leaf(MacroGrid& g, DoorSet& doors, const Door& d) {
     for (int z = 0; z < d.h; ++z) {
         g.clear_cell(d.cx, d.cy, d.cz + z);
-        doors.dirtyCells.push_back(macro_index(
-            wrap_macro(d.cx), wrap_macro(d.cy), wrap_macro(d.cz + z)));
+        doors.dirtyCells.push_back(static_cast<std::uint32_t>(macro_index(
+            wrap_macro(d.cx), wrap_macro(d.cy), wrap_macro(d.cz + z))));
     }
 }
 

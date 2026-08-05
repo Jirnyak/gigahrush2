@@ -239,12 +239,9 @@ void GpuCullPass::record_cull(VkCommandBuffer cmd,
 }
 
 void GpuCullPass::get_shape_aabb(PropShape shape, vec3& outMin, vec3& outMax) noexcept {
-    switch (shape) {
-    default:
-        outMin = {-1.00f, -1.00f, -1.00f};
-        outMax = { 1.00f,  2.00f,  1.00f};
-        break;
-    }
+    (void)shape;
+    outMin = {-1.00f, -1.00f, -1.00f};
+    outMax = { 1.00f,  2.00f,  1.00f};
 }
 
 } // namespace giga::gpu

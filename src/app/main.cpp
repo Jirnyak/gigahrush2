@@ -5266,10 +5266,10 @@ int main(int argc, char** argv) {
             {
                 static std::vector<vec4> pushBodies;
                 pushBodies.clear();
-                for (auto e :
+                for (auto bodyEntity :
                      reg.view<const Transform, const AABB, const Renderable>()) {
-                    if (reg.all_of<StaticPropTag>(e)) continue;
-                    const Transform& tr = reg.get<const Transform>(e);
+                    if (reg.all_of<StaticPropTag>(bodyEntity)) continue;
+                    const Transform& tr = reg.get<const Transform>(bodyEntity);
                     if (tr.layer != activeLayer) continue;
                     pushBodies.push_back(
                         vec4{tr.pos.x, tr.pos.y, tr.pos.z, 0.9f});
