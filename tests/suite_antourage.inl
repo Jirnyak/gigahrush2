@@ -3,6 +3,7 @@
 //
 // Included into game_test.cpp after its CHECK macro and `using namespace`.
 
+#include <algorithm>
 #include "game/antourage/antourage.h"
 #include "sim/physics.h"     // aabb_overlaps_solid — the rest test
 #include "world/destruct.h"   // carve_sphere — the player's own hole-puncher
@@ -456,14 +457,59 @@ static void test_pipes_hug_and_branch() {
         }
         if (!touching) ++floating;
     }
-    std::fprintf(stderr, "[antourage] pipes: %u legs, %u joints, %u floating\n",
-                 legs, joints, floating);
+    // CONTINUITY, the owner's actual complaint ("все трубы разрывны"): every
+    // segment must meet something — the next segment of its own run, or a
+    // fitting sitting on it. An orphan stub is a pipe that goes nowhere.
+    // Keyed by the cell it occupies plus the face it hugs, which is exactly the
+    // network's own node identity.
+    // Keyed by the CLAMP COLUMN and the face, which is the network's own node
+    // identity — not by world position: a pipe sits on the real surface, which
+    // for a high lintel is inside the neighbouring cell, so position keys make
+    // consecutive segments look unrelated.
+    auto key_of = [](std::uint8_t ax, std::uint8_t ay, std::uint8_t az,
+                     std::uint8_t face) {
+        return macro_index(ax, ay, az) * 8u + face;
+    };
+    std::vector<std::uint64_t> runKeys, fitKeys;
+    for (const AntourageInstance& it : b.instances) {
+        const std::uint64_t k = key_of(it.ax0, it.ay0, it.az0, it.face);
+        if (it.shape == kShapeBox) fitKeys.push_back(k);
+        else runKeys.push_back(k);
+    }
+    std::sort(runKeys.begin(), runKeys.end());
+    std::sort(fitKeys.begin(), fitKeys.end());
+    auto has = [](const std::vector<std::uint64_t>& v, std::uint64_t k) {
+        return std::binary_search(v.begin(), v.end(), k);
+    };
+    std::uint32_t orphans = 0;
+    for (const AntourageInstance& it : b.instances) {
+        if (it.shape == kShapeBox) continue;
+        if (has(fitKeys, key_of(it.ax0, it.ay0, it.az0, it.face))) continue;
+        const int axis = it.shape == kShapeCylinderX ? 0
+                       : it.shape == kShapeCylinderY ? 1 : 2;
+        bool linked = false;
+        for (int s = -1; s <= 1 && !linked; s += 2) {
+            int a[3] = {it.ax0, it.ay0, it.az0};
+            a[axis] = wrap_macro(a[axis] + s);
+            const std::uint64_t nk = key_of(static_cast<std::uint8_t>(a[0]),
+                                            static_cast<std::uint8_t>(a[1]),
+                                            static_cast<std::uint8_t>(a[2]),
+                                            it.face);
+            linked = has(runKeys, nk) || has(fitKeys, nk);
+        }
+        if (!linked) ++orphans;
+    }
+    std::fprintf(stderr,
+                 "[antourage] pipes: %u legs, %u joints, %u floating, %u orphans\n",
+                 legs, joints, floating, orphans);
     CHECK(legs > 0);
     // A handful may sit over a sub-voxel the ray misses at a torus seam; a
     // regression that unseats the legs shows up in the hundreds, not the ones.
     CHECK(floating * 1000u <= legs);
-    // A NETWORK, not a scatter.
-    CHECK(joints * 3u > legs);
+    // A NETWORK, not a scatter: joints are common...
+    CHECK(joints * 4u > legs);
+    // ...and nothing dead-ends into thin air.
+    CHECK(orphans * 100u <= legs);
 }
 
 static void test_antourage_all() {

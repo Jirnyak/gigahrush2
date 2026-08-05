@@ -633,7 +633,14 @@ if(GIGA_BUILD_TESTS)
     # rather than in walker starts. One segment per cell, clamped to its own
     # column, with the clamp DRAWN (the owner asked to see the anchors). Pinned:
     # 0 of 3097 segments float, 1653 joints/brackets.
-        PASS_REGULAR_EXPRESSION "game_test: 231000 checks, 0 failures")
+    # 231000 -> 229369 on 2026-08-05: the network's node is (cell, FACE), not a
+    # cell. Linking neighbouring CELLS let the tree hop from a ceiling-hugging
+    # cell to a wall-hugging one two metres away, and the two correctly-seated
+    # segments did not touch — the gaps and mid-air stubs on the owner's
+    # screenshots. A move is now either ALONG one surface or AROUND a corner in
+    # one cell (an elbow, with a fitting drawn over the bend). Pinned by direct
+    # measurement: 3208 segments, 0 floating, 0 orphans, 1134 fittings.
+        PASS_REGULAR_EXPRESSION "game_test: 229369 checks, 0 failures")
 
 
 
