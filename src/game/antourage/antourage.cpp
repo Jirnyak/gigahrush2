@@ -154,6 +154,36 @@ WalkCell hug_cell(const GravityFrame& f, const WalkCell& c, int axis,
     return stepped(c, f.axis, f.upSign);
 }
 
+// The axis and the direction (from the ANCHOR toward the pipe) that a run of
+// `axis` hugs. One byte of it is stored on the instance so the aliveness probe
+// can ask about the very column the leg hugs — the same rule chains and sheets
+// live by ([antourage.h] face).
+int hug_axis(const GravityFrame& f, int axis, const Wall& wall) {
+    return axis == f.axis ? wall.axis : f.axis;
+}
+int hug_dir(const GravityFrame& f, int axis, const Wall& wall) {
+    return axis == f.axis ? -wall.sign : -f.upSign;
+}
+
+// Does the cell this walk cell hugs still carry matter IN THE COLUMN the pipe
+// touches, and where is its face? Returns the face coordinate along the hug
+// axis in world metres, or -1 when the column is empty — a leg has no business
+// existing over a cell it cannot actually touch ("трубы висят в воздухе",
+// owner 2026-08-05: the old code fell back to the cell PLANE and drew a pipe
+// hugging nothing).
+float hug_face(const MacroGrid& g, const GravityFrame& f, const WalkCell& c,
+               int axis, const Wall& wall) {
+    const int ha = hug_axis(f, axis, wall);
+    if (ha < 0) return -1.0f;
+    const int hd = hug_dir(f, axis, wall);
+    const WalkCell anchor = hug_cell(f, c, axis, wall);
+    const int s = g.mask(anchor.x, anchor.y, anchor.z).face_layer(ha, hd, true);
+    if (s < 0) return -1.0f;
+    const int edge = hd < 0 ? s : s + 1;
+    return static_cast<float>(cell_axis(anchor, ha)) * kCellSize +
+           static_cast<float>(edge) * (kCellSize / static_cast<float>(kSubDim));
+}
+
 // Emit one straight run as UNIVERSAL instances ([antourage.h]). Ends that were
 // stopped by SOLID matter extend half a cell into it — a pipe terminates in a
 // wall, never hanging cut in mid-air ("кусочность", owner's screenshots).
@@ -166,27 +196,29 @@ void emit_leg_run(const MacroGrid& g, const GravityFrame& f, AntourageBake& out,
     const WalkCell a1 = hug_cell(f, cells.back(), axis, wall);
     vec3 a = duct_axis_point(f, cells.front(), axis, wall);
     vec3 b = duct_axis_point(f, cells.back(), axis, wall);
-    if (axis != f.axis) {
-        // Tangent legs hang from the REAL ceiling face: the face furthest DOWN
-        // along the run, so the pipe never pierces a lower lintel.
+    // EVERY leg — tangent or vertical — is seated on the REAL face of the matter
+    // it hugs, offset by its own radius. The face furthest from that matter
+    // along the run wins, so a pipe never pierces a lower lintel or a closer
+    // wall. No fallback to the cell plane: emit_leg() has already split the run
+    // at any cell whose column is empty, so a face exists for every cell here.
+    const int ha = hug_axis(f, axis, wall);
+    const int hd = hug_dir(f, axis, wall);
+    if (ha >= 0) {
         float face = 0.0f;
         float best = 1e9f;
         for (const WalkCell& c : cells) {
-            const float fm = ceiling_face(g, f, c, false);
+            const float fm = hug_face(g, f, c, axis, wall);
             if (fm < 0.0f) continue;
-            const float key = down_key(f, fm);
+            const float key = fm * static_cast<float>(-hd);
             if (key < best) {
                 best = key;
                 face = fm;
             }
         }
-        if (best > 1e8f)   // no matter on any ceiling column: the cell plane
-            face = (static_cast<float>(cell_axis(cells.front(), f.axis)) +
-                    (f.upSign > 0 ? 1.0f : 0.0f)) * kCellSize;
-        const float u = static_cast<float>(f.upSign);
-        const float axisCoord = face - u * kPipeRadius - u * 0.04f;
-        vec_set(a, f.axis, axisCoord);
-        vec_set(b, f.axis, axisCoord);
+        if (best > 1e8f) return;  // nothing to hug: not a leg
+        const float d = static_cast<float>(hd);
+        vec_set(a, ha, face + d * kPipeRadius + d * 0.04f);
+        vec_set(b, ha, face + d * kPipeRadius + d * 0.04f);
     }
     // Extend the ends into whatever solid stops them.
     vec3 dir{0, 0, 0};
@@ -207,6 +239,7 @@ void emit_leg_run(const MacroGrid& g, const GravityFrame& f, AntourageBake& out,
         axis == 0 ? kShapeCylinderX : axis == 1 ? kShapeCylinderY
                                                 : kShapeCylinderZ);
     inst.matId = static_cast<std::uint8_t>(kMatPipeMetal);
+    inst.face = antourage_face_pack(ha, hd);
     inst.ax0 = static_cast<std::uint8_t>(a0.x);
     inst.ay0 = static_cast<std::uint8_t>(a0.y);
     inst.az0 = static_cast<std::uint8_t>(a0.z);
@@ -231,21 +264,34 @@ void emit_leg_run(const MacroGrid& g, const GravityFrame& f, AntourageBake& out,
 void emit_leg(const MacroGrid& g, const GravityFrame& f, AntourageBake& out,
               const std::vector<WalkCell>& cells, int axis, const Wall& wall,
               int sign, bool stopSolid) {
-    std::size_t start = 0;
-    for (std::size_t i = 1; i <= cells.size(); ++i) {
-        bool cut = i == cells.size();
-        if (!cut) {
-            const int d = cell_axis(cells[i], axis) - cell_axis(cells[i - 1], axis);
-            cut = d != sign; // a ±1 step that reads as ∓(kMacroDim-1) = the seam
+    // A run is a maximal stretch of cells that (1) does not cross the torus seam
+    // and (2) every one of which has real matter in the column the pipe hugs.
+    // A faceless cell is not merely a boundary — it is DROPPED, or the next run
+    // would anchor to a column that is not there.
+    std::vector<WalkCell> run;
+    for (std::size_t i = 0; i <= cells.size(); ++i) {
+        bool flush = i == cells.size();
+        bool keep = false;
+        if (!flush) {
+            keep = hug_face(g, f, cells[i], axis, wall) >= 0.0f;
+            if (!keep) flush = true;
+            else if (!run.empty()) {
+                // A +-1 step that reads as -+(kMacroDim-1) is the seam.
+                const int d = cell_axis(cells[i], axis) - cell_axis(run.back(), axis);
+                if (d != sign) flush = true;
+            }
         }
-        if (!cut) continue;
-        std::vector<WalkCell> run(cells.begin() + static_cast<std::ptrdiff_t>(start),
-                                  cells.begin() + static_cast<std::ptrdiff_t>(i));
-        // A seam-cut end continues on the other image; only the true final end
-        // keeps the caller's stop-into-solid extension.
-        emit_leg_run(g, f, out, run, axis, wall, sign,
-                     i == cells.size() ? stopSolid : false);
-        start = i;
+        if (flush && !run.empty()) {
+            // Only the TRUE final end keeps the caller's stop-into-solid
+            // extension; a cut end continues elsewhere (or nowhere).
+            const bool finalEnd = i == cells.size() && run.size() == cells.size();
+            emit_leg_run(g, f, out, run, axis, wall, sign,
+                         finalEnd ? stopSolid : false);
+            run.clear();
+        }
+        if (!flush || keep) {
+            if (keep) run.push_back(cells[i]);
+        }
     }
 }
 
@@ -553,10 +599,6 @@ void bake_antourage(const World& w, int number, unsigned seed,
 
 // --- DESTRUCTION ------------------------------------------------------------
 
-bool antourage_alive(const MacroGrid& g, const AntourageInstance& it) {
-    return g.cell(it.ax0, it.ay0, it.az0) != kCellAir &&
-           g.cell(it.ax1, it.ay1, it.az1) != kCellAir;
-}
 // Did the matter this end was pinned TO go away? A cell is 2 m and a carve works
 // in 0.25 m sub-voxels, so "the cell is air" is far too coarse a question: it
 // only becomes true once all 512 sub-voxels are gone, and a player-sized hole
@@ -572,6 +614,14 @@ static bool anchor_gone(const MacroGrid& g, int x, int y, int z,
                                       antourage_face_dir(face), true) < 0;
 }
 
+
+bool antourage_alive(const MacroGrid& g, const AntourageInstance& it) {
+    // BOTH ends, and each by the SUB-VOXEL column it hugs (anchor_gone below):
+    // a pipe with one end in the void is not a pipe, and a pipe whose wall was
+    // shot out where it clamps is not hanging on anything either.
+    return !anchor_gone(g, it.ax0, it.ay0, it.az0, it.face) &&
+           !anchor_gone(g, it.ax1, it.ay1, it.az1, it.face);
+}
 std::uint8_t wire_live_pins(const MacroGrid& g, const WireChain& c) {
     std::uint8_t m = c.pinMask;
     if (anchor_gone(g, c.ax0, c.ay0, c.az0, c.face)) m &= ~std::uint8_t{1u};

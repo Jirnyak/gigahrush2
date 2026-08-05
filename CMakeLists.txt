@@ -602,7 +602,12 @@ if(GIGA_BUILD_TESTS)
     # while the attachment column is gone. Each piece records the FACE it hangs
     # off and the probe asks what the bake asked. The new test pins the
     # discriminating case: 0.6 m hole, cell still solid, pin released.
-        PASS_REGULAR_EXPRESSION "game_test: 223876 checks, 0 failures")
+    # 223876 -> 223840 (-36) on 2026-08-05: pipes anchor like the chains do —
+    # by the SUB-VOXEL column they hug, not by a 2 m cell (owner: "асимметрия это
+    # плохо"). The bake now seats every leg on the real face and splits a run at
+    # any cell whose column is empty, so 9 legs that hung in the air are gone
+    # (2975 -> 2966 on floor 0) and the rest sit against the matter they touch.
+        PASS_REGULAR_EXPRESSION "game_test: 223840 checks, 0 failures")
 
 
 

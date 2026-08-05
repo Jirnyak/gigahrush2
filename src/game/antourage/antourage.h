@@ -130,7 +130,11 @@ struct AntourageInstance {
     std::uint8_t shape = 0;
     std::uint8_t matId = 0;
     std::uint8_t emissive = 0;
-    std::uint8_t pad_ = 0;
+    // The face this piece HUGS, packed like WireChain::face. A pipe is anchored
+    // to the column it touches, not merely to a 2 m cell — same rule as the
+    // chains, because a rule that differs per primitive drifts (owner,
+    // 2026-08-05: "асимметрия это плохо").
+    std::uint8_t face = 0;
     std::uint8_t ax0, ay0, az0;   // anchor cells for the LIVE-grid probe
     std::uint8_t ax1, ay1, az1;
     std::uint8_t pad2_ = 0, pad3_ = 0;
