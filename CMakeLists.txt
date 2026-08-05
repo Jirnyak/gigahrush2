@@ -640,7 +640,14 @@ if(GIGA_BUILD_TESTS)
     # screenshots. A move is now either ALONG one surface or AROUND a corner in
     # one cell (an elbow, with a fitting drawn over the bend). Pinned by direct
     # measurement: 3208 segments, 0 floating, 0 orphans, 1134 fittings.
-        PASS_REGULAR_EXPRESSION "game_test: 229369 checks, 0 failures")
+    # 229369 -> 228322 on 2026-08-05: the floor stopped being a mounting surface
+    # (1252 of 3208 segments lay across the walkway — the rule is stated in the
+    # FRAME: whatever gravity calls "the side you walk on" is not a surface), and
+    # a BEND now costs three straight metres instead of nothing. Free bends let
+    # the path zig-zag between surfaces inside one cell: in zero-g, where every
+    # frame has five surfaces, that was two fittings per cell and almost no
+    # straight run (9140 instances against NegZ's 3954; now 5441 against 4080).
+        PASS_REGULAR_EXPRESSION "game_test: 228322 checks, 0 failures")
 
 
 

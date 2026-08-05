@@ -499,9 +499,19 @@ static void test_pipes_hug_and_branch() {
         }
         if (!linked) ++orphans;
     }
+    std::uint32_t byAxis[3] = {0, 0, 0}, byFace[6] = {0,0,0,0,0,0};
+    for (const AntourageInstance& it : b.instances) {
+        if (it.shape == kShapeBox) continue;
+        ++byAxis[it.shape == kShapeCylinderX ? 0 : it.shape == kShapeCylinderY ? 1 : 2];
+        ++byFace[it.face % 6u];
+    }
     std::fprintf(stderr,
                  "[antourage] pipes: %u legs, %u joints, %u floating, %u orphans\n",
                  legs, joints, floating, orphans);
+    std::fprintf(stderr,
+                 "[antourage] run axes X %u Y %u Z %u | faces +X %u -X %u +Y %u -Y %u +Z %u -Z %u\n",
+                 byAxis[0], byAxis[1], byAxis[2], byFace[0], byFace[1],
+                 byFace[2], byFace[3], byFace[4], byFace[5]);
     CHECK(legs > 0);
     // A handful may sit over a sub-voxel the ray misses at a torus seam; a
     // regression that unseats the legs shows up in the hundreds, not the ones.

@@ -252,8 +252,13 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
     // --- 1. every place a pipe could be clamped ----------------------------
     // Faces are tried in the frame's own order: the ceiling first (where a main
     // belongs), then the walls (risers and skirting runs).
-    const int faceOrder[6] = {
-        antourage_face_pack(f.axis, -f.upSign), antourage_face_pack(f.axis, f.upSign),
+    // NOT the floor: a main clamped to the ground would lie across the walkway,
+    // and 1252 of 3208 segments did exactly that before this list lost it
+    // (owner: "часть труб была на полу"). Ceiling first, then the four walls —
+    // ceilings carry the distribution, walls carry the risers.
+    const int kFaces = 5;
+    const int faceOrder[kFaces] = {
+        antourage_face_pack(f.axis, -f.upSign),
         antourage_face_pack(f.tanA, -1), antourage_face_pack(f.tanA, 1),
         antourage_face_pack(f.tanB, -1), antourage_face_pack(f.tanB, 1),
     };
@@ -263,7 +268,7 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
                 const WalkCell c{x, y, z};
                 if (!is_air(g, c)) continue;
                 const std::size_t ci = macro_index(x, y, z);
-                for (int fi = 0; fi < 6; ++fi) {
+                for (int fi = 0; fi < kFaces; ++fi) {
                     const int face = faceOrder[fi];
                     if (!can_hug(g, c, face)) continue;
                     const std::size_t st = state_of(ci, face);
@@ -273,47 +278,70 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
             }
     if (nodes.size() < 64) return;
 
-    // --- 2. mains: a multi-source BFS whose predecessor links ARE the trunks -
-    std::vector<std::uint32_t> queue;
-    queue.reserve(nodes.size());
+    // --- 2. mains: cheapest-path forest, where a BEND COSTS MORE -----------
+    // Plain BFS treats "turn onto another surface" as free, so paths zig-zag
+    // between the ceiling and a wall inside a single cell — measured in zero-g,
+    // where every frame has five surfaces to play with, that produced two
+    // fittings per cell of pipe and almost no straight runs. A bend is
+    // deliberately three times a straight metre, so the network runs straight
+    // and turns only where the geometry actually makes it turn.
+    constexpr int kStraightCost = 1;
+    constexpr int kBendCost = 3;
+    constexpr int kBuckets = kBendCost + 1;
+    std::vector<std::uint32_t> bucket[kBuckets];
+    std::vector<std::uint16_t> dist(net.size(), 0xFFFFu);
     for (int s = 0; s < kPipeSources; ++s) {
         const std::uint32_t h =
             hash_u32(fseed ^ (static_cast<std::uint32_t>(s) * 0x9E3779B9u));
         const std::uint32_t pick = nodes[h % nodes.size()];
         if (net[pick].pred != -3) continue;
         net[pick].pred = -1;
-        queue.push_back(pick);
+        dist[pick] = 0;
+        bucket[0].push_back(pick);
     }
-    if (queue.empty()) return;
-    for (std::size_t head = 0; head < queue.size(); ++head) {
-        const std::uint32_t st = queue[head];
-        const std::size_t ci = st / 6u;
-        const int face = static_cast<int>(st % 6u);
-        const WalkCell c = cell_of(ci);
-        const int fax = antourage_face_axis(face);
-        // (a) along the surface: the two axes that are not the face's own.
-        for (int axis = 0; axis < 3; ++axis) {
-            if (axis == fax) continue;
-            for (int sgn = -1; sgn <= 1; sgn += 2) {
-                const WalkCell n = stepped(c, axis, sgn);
-                const std::size_t ns = state_of(macro_index(n.x, n.y, n.z), face);
-                if (net[ns].pred != -3) continue;
+    bool any = false;
+    for (int b = 0; b < kBuckets && !any; ++b) any = !bucket[b].empty();
+    if (!any) return;
+    // Dial's buckets: costs are tiny and bounded, so a ring of four lists is a
+    // priority queue with no heap and no allocation per node.
+    for (std::uint32_t d = 0; d < 0xFFFEu; ++d) {
+        std::vector<std::uint32_t>& cur = bucket[d % kBuckets];
+        for (std::size_t head = 0; head < cur.size(); ++head) {
+            const std::uint32_t st = cur[head];
+            if (dist[st] != d) continue;        // stale entry, already improved
+            const std::size_t ci = st / 6u;
+            const int face = static_cast<int>(st % 6u);
+            const WalkCell c = cell_of(ci);
+            const int fax = antourage_face_axis(face);
+            auto relax = [&](std::size_t ns, std::uint32_t cost, int axis) {
+                if (net[ns].pred == -2) return;             // not a place a pipe fits
+                const std::uint32_t nd = d + cost;
+                if (nd >= dist[ns]) return;
+                dist[ns] = static_cast<std::uint16_t>(nd);
                 net[ns].pred = static_cast<std::int32_t>(st);
                 net[ns].axis = static_cast<std::uint8_t>(axis);
-                queue.push_back(static_cast<std::uint32_t>(ns));
+                bucket[nd % kBuckets].push_back(static_cast<std::uint32_t>(ns));
+            };
+            // (a) along the surface
+            for (int axis = 0; axis < 3; ++axis) {
+                if (axis == fax) continue;
+                for (int sgn = -1; sgn <= 1; sgn += 2) {
+                    const WalkCell n = stepped(c, axis, sgn);
+                    relax(state_of(macro_index(n.x, n.y, n.z), face),
+                          kStraightCost, axis);
+                }
+            }
+            // (b) around a corner, same cell — the expensive move
+            for (int fi = 0; fi < kFaces; ++fi) {
+                const int other = faceOrder[fi];
+                if (other == face) continue;
+                relax(state_of(ci, other), kBendCost, 0xFF);
             }
         }
-        // (b) around a corner: same cell, another surface. This is what lets a
-        // ceiling main turn down a wall and become a riser.
-        for (int fi = 0; fi < 6; ++fi) {
-            const int other = faceOrder[fi];
-            if (other == face) continue;
-            const std::size_t ns = state_of(ci, other);
-            if (net[ns].pred != -3) continue;
-            net[ns].pred = static_cast<std::int32_t>(st);
-            net[ns].axis = 0xFFu;               // a bend, not a run
-            queue.push_back(static_cast<std::uint32_t>(ns));
-        }
+        cur.clear();
+        bool more = false;
+        for (int b = 0; b < kBuckets && !more; ++b) more = !bucket[b].empty();
+        if (!more) break;
     }
 
     // --- 3. trace outlets home ---------------------------------------------
