@@ -103,16 +103,18 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
     // Defender behaviour incoming damage multiplier (e.g. WallBrace armour against walls)
     if (grid && reg.all_of<MobRef>(target)) {
         if (const MobRef* m = reg.try_get<MobRef>(target)) {
-            const MobDef& def = kMobTable[m->kind];
-            const auto beh = static_cast<MobBehaviour>(def.behaviour);
-            if (wall_query_needed(def.aiFlags, beh)) {
-                if (const Transform* tr = reg.try_get<Transform>(target)) {
-                    const bool nearWall = adjacent_wall(*grid, tr->pos);
-                    const float incMult = behaviour_incoming_mult(beh, nearWall);
-                    if (incMult != 1.0f) {
-                        int mitigated = static_cast<int>(static_cast<float>(dmg) * incMult + 0.5f);
-                        if (mitigated < 1 && dmg > 0) mitigated = 1;
-                        dmg = static_cast<std::int16_t>(mitigated);
+            if (static_cast<std::size_t>(m->kind) < kMobKindCount) {
+                const MobDef& def = kMobTable[m->kind];
+                const auto beh = static_cast<MobBehaviour>(def.behaviour);
+                if (wall_query_needed(def.aiFlags, beh)) {
+                    if (const Transform* tr = reg.try_get<Transform>(target)) {
+                        const bool nearWall = adjacent_wall(*grid, tr->pos);
+                        const float incMult = behaviour_incoming_mult(beh, nearWall);
+                        if (incMult != 1.0f) {
+                            int mitigated = static_cast<int>(static_cast<float>(dmg) * incMult + 0.5f);
+                            if (mitigated < 1 && dmg > 0) mitigated = 1;
+                            dmg = static_cast<std::int16_t>(mitigated);
+                        }
                     }
                 }
             }
@@ -474,6 +476,7 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         if (tr.layer != layer) continue;
 
         const MobRef& mr = reg.get<const MobRef>(e);
+        if (static_cast<std::size_t>(mr.kind) >= kMobKindCount) continue;
         const MobDef& def = kMobTable[mr.kind];
 
         // Environmental hazard check
@@ -843,7 +846,9 @@ bool apply_slow(Registry& reg, Entity target, float scale, std::uint16_t ms) {
     // header for why a resident (neither component) is refused instead of guessed.
     float base = 0.0f;
     if (const MobRef* m = reg.try_get<MobRef>(target)) {
-        base = static_cast<float>(kMobTable[m->kind].speedMmps) * 0.001f * kCellSize;
+        if (static_cast<std::size_t>(m->kind) < kMobKindCount) {
+            base = static_cast<float>(kMobTable[m->kind].speedMmps) * 0.001f * kCellSize;
+        }
     } else if (const Controller* c = reg.try_get<Controller>(target)) {
         base = c->moveSpeed;
     }
@@ -874,8 +879,11 @@ float slow_scale(const Registry& reg, Entity e) {
     // Reported against the same authority the cap was derived from, so the number the
     // HUD prints is the fraction of the body's OWN speed and not of some global.
     float base = 0.0f;
-    if (const MobRef* m = reg.try_get<MobRef>(e))
-        base = static_cast<float>(kMobTable[m->kind].speedMmps) * 0.001f * kCellSize;
+    if (const MobRef* m = reg.try_get<MobRef>(e)) {
+        if (static_cast<std::size_t>(m->kind) < kMobKindCount) {
+            base = static_cast<float>(kMobTable[m->kind].speedMmps) * 0.001f * kCellSize;
+        }
+    }
     else if (const Controller* c = reg.try_get<Controller>(e))
         base = c->moveSpeed;
     if (base <= 0.0f) return 1.0f;

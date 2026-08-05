@@ -410,7 +410,12 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     // Payload first: the header carries the payload's length and checksum, so it cannot
     // be written until the payload exists.
     std::vector<std::uint8_t> body;
-    body.reserve(kSaveFixedWire + st.opened.size() * kOpenedKeyWire);
+    // The same size the writer will actually produce, minus the header this
+    // buffer does not carry — `save_bytes_for` is the one place that arithmetic
+    // lives, so the reserve cannot drift from the wire format.
+    body.reserve(save_bytes_for(st.opened.size(), st.poolBlob.size(),
+                                st.macroBlob.size()) -
+                 kSaveHeaderWire);
     Writer bw(body);
     visit_ledger(bw, st.ledger);
     visit_book(bw, st.book);
@@ -1046,7 +1051,9 @@ bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
         std::uint32_t len = 0;
         r.u16(v);
         r.u32(len);
-        if (at + len > kMacroCells) return false;
+        // Subtract, never add: `at + len` is uint32 arithmetic and a hostile or
+        // corrupt run length wraps it past the guard straight into the write below.
+        if (len > kMacroCells - at) return false;
         for (std::uint32_t j = 0; j < len; ++j) types[at + j] = v;
         at += len;
     }
@@ -1063,7 +1070,7 @@ bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
         std::uint32_t len = 0;
         r.u8(s);
         r.u32(len);
-        if (s > 2 || at + len > kMacroCells) return false;
+        if (s > 2 || len > kMacroCells - at) return false; // same wrap guard
         for (std::uint32_t j = 0; j < len; ++j) {
             if (s == 0) masks[at + j].clear_all();
             else if (s == 1) masks[at + j].set_all();
