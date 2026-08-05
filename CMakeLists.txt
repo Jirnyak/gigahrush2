@@ -613,7 +613,13 @@ if(GIGA_BUILD_TESTS)
     # the same SSBO particle_sim uses) before it stops being drawn. The test
     # pins the three states, including the one the first draft got wrong: a
     # spent clock must STAY spent, or the piece restarts its fall every frame.
-        PASS_REGULAR_EXPRESSION "game_test: 223852 checks, 0 failures")
+    # 223852 -> 223862 (+10) on 2026-08-05: a severed PIPE falls too. The chains
+    # got their fall from the verlet they already were; a rigid leg becomes a
+    # DetachedPiece integrated in the game layer against aabb_overlaps_solid —
+    # the SOLVER's predicate, not a third copy of collision — and drawn through
+    # the instance list it already lived in. Verified headless: 4.86 m of fall,
+    # then rest on real geometry, then the same 8 s clock empties the array.
+        PASS_REGULAR_EXPRESSION "game_test: 223862 checks, 0 failures")
 
 
 

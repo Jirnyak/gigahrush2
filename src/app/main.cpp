@@ -1241,7 +1241,9 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
                                   gpu::PropPass& propPass,
                                   const game::AntourageBake* ab,
                                   const World& world,
-                                  std::vector<vec3>* dripEmitters = nullptr) {
+                                  std::vector<vec3>* dripEmitters = nullptr,
+                                  const std::vector<game::DetachedPiece>* falling =
+                                      nullptr) {
     propPass.clear_instances();
     std::vector<game::PropMeshInstance> insts;
     game::collect_static_prop_mesh_instances(reg, layer, insts);
@@ -1291,6 +1293,23 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
                                                                    : 0];
         if (it.shape < static_cast<std::uint8_t>(gpu::kPropShapeCount))
             propPass.add_instance(static_cast<gpu::PropShape>(it.shape), pi);
+    }
+
+    // SEVERED pieces still in the air ([antourage.h] DetachedPiece): the same
+    // shapes, drawn from the falling body's own transform instead of the bake's.
+    // They live in the instance list exactly as long as they are falling, so the
+    // renderer needs no second path and no second shader.
+    if (falling != nullptr) {
+        for (const game::DetachedPiece& d : *falling) {
+            gpu::PropInstance pi{};
+            pi.origin = d.pos;
+            pi.yaw = d.yaw;
+            pi.scale = d.scale;
+            pi.matId = d.matId;
+            pi.color = kMaterial[d.matId < kMatCount ? d.matId : 0];
+            if (d.shape < static_cast<std::uint8_t>(gpu::kPropShapeCount))
+                propPass.add_instance(static_cast<gpu::PropShape>(d.shape), pi);
+        }
     }
 }
 
@@ -1620,6 +1639,10 @@ int main(int argc, char** argv) {
     // Severed pipe stumps ([merge_ecs_prop_meshes]) — each drips on a slow
     // clock while its floor stays loaded. Refilled at every prop merge.
     std::vector<vec3> dripEmitters;
+    // Antourage legs cut loose and still falling ([antourage.h] DetachedPiece).
+    // Transient render/sim state, never persisted: a reloaded floor re-bakes its
+    // dressing whole, so anything mid-air simply never happened.
+    std::vector<game::DetachedPiece> antourageFalling;
 
 
     gpu::ImGuiLayer hud;
@@ -2351,7 +2374,8 @@ int main(int argc, char** argv) {
             if (ab == nullptr || dirty.empty()) return false;
             return game::antourage_carve_step(stack.layer(activeLayer), *ab,
                                               dirty.data(), dirty.size(),
-                                              particleBursts, seed) > 0;
+                                              particleBursts, seed,
+                                              &antourageFalling) > 0;
         };
 
         // §22: amortize nav field rebake under frame budget.
@@ -5190,10 +5214,20 @@ int main(int argc, char** argv) {
                 doors.dirtyCells.clear();
             }
 
+            // Falling legs are integrated on the SIM's own collision predicate
+            // and re-packed while any of them is still in the air — a handful of
+            // bodies for a few seconds, so the repack is cheaper than a second
+            // draw path would be.
+            if (!antourageFalling.empty()) {
+                game::antourage_detach_step(stack.layer(activeLayer),
+                                            antourageFalling, frameDt);
+                propPassNeedsRebuild = true;
+            }
             if (propPassNeedsRebuild) {
                 merge_ecs_prop_meshes(reg, activeLayer, propPass,
                                       streamer.antourage_at_layer(registry, activeLayer),
-                                      stack.layer(activeLayer), &dripEmitters);
+                                      stack.layer(activeLayer), &dripEmitters,
+                                      &antourageFalling);
                 upload_wires(wirePass, streamer.antourage_at_layer(registry, activeLayer));
                 upload_cloths(clothPass, streamer.antourage_at_layer(registry, activeLayer));
             }

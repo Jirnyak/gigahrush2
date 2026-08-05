@@ -15,6 +15,7 @@
 #include <cmath>
 
 #include "core/rng.h"
+#include "sim/physics.h"   // aabb_overlaps_solid — the solver's own predicate
 #include "world/macro_grid.h"
 #include "world/materials.h"
 #include "world/world.h"
@@ -597,6 +598,47 @@ void bake_antourage(const World& w, int number, unsigned seed,
     }
 }
 
+// --- A SEVERED PIECE, FALLING -----------------------------------------------
+
+void antourage_detach_step(const World& w, std::vector<DetachedPiece>& pieces,
+                           float dt) {
+    if (pieces.empty() || dt <= 0.0f) return;
+    for (std::size_t i = 0; i < pieces.size();) {
+        DetachedPiece& d = pieces[i];
+        d.life -= dt;
+        if (d.life <= 0.0f) {           // spent: swap-erase keeps the array dense
+            d = pieces.back();
+            pieces.pop_back();
+            continue;
+        }
+        d.vel = d.vel + w.gravity().at(d.pos) * dt;
+        // Half-extents of the piece's own box. The collision predicate is the
+        // SOLVER's (`aabb_overlaps_solid`), so a pipe rests on exactly the
+        // surface a body would stand on — one truth, not a second copy.
+        const vec3 half = d.scale * 0.5f;
+        bool grounded = false;
+        for (int a = 0; a < 3; ++a) {
+            vec3 next = d.pos;
+            vec_add(next, a, vec_axis(d.vel, a) * dt);
+            if (!aabb_overlaps_solid(w, next, half)) {
+                d.pos = next;
+                continue;
+            }
+            // Blocked on this axis: kill that component and scrub the tumble.
+            // A little restitution reads as metal clanging off concrete rather
+            // than a box glued mid-air.
+            vec_set(d.vel, a, vec_axis(d.vel, a) * -0.18f);
+            grounded = true;
+        }
+        if (grounded) {
+            d.vel = d.vel * 0.6f;
+            d.spin *= 0.5f;
+        }
+        d.yaw += d.spin * dt;
+        ++i;
+    }
+}
+
 // --- DESTRUCTION ------------------------------------------------------------
 
 // Did the matter this end was pinned TO go away? A cell is 2 m and a carve works
@@ -697,7 +739,8 @@ std::uint32_t antourage_carve_step(const World& w, const AntourageBake& bake,
                                    const std::uint32_t* dirtyCells,
                                    std::size_t dirtyCount,
                                    ParticleBurstQueue& bursts,
-                                   std::uint32_t seed) {
+                                   std::uint32_t seed,
+                                   std::vector<DetachedPiece>* fell) {
     if (dirtyCells == nullptr || dirtyCount == 0) return 0;
     const MacroGrid& g = w.grid();
     // Debris falls along gravity — the VECTOR at the piece, not a regime branch:
@@ -713,6 +756,26 @@ std::uint32_t antourage_carve_step(const World& w, const AntourageBake& bake,
         ++dead;
         bursts.push(it.pos, fall(it.pos), ParticleKind::Debris, 4, it.matId,
                     seed ^ static_cast<std::uint32_t>(i) * 0x9E3779B9u);
+        // ...and the leg itself does not blink out: it drops, tumbles and lies
+        // there for as long as a severed chain does ([antourage.h] FallClock).
+        if (fell != nullptr) {
+            const std::uint32_t h =
+                hash_u32(seed ^ static_cast<std::uint32_t>(i) * 0x27220A95u);
+            DetachedPiece d{};
+            d.pos = it.pos;
+            d.scale = it.scale;
+            // A nudge off the wall it hugged, so it visibly lets go instead of
+            // sliding straight down the surface, plus a lazy tumble.
+            d.vel = normalize(fall(it.pos)) * 0.6f;
+            vec_add(d.vel, antourage_face_axis(it.face),
+                    static_cast<float>(antourage_face_dir(it.face)) * 0.45f);
+            d.yaw = it.yaw;
+            d.spin = (static_cast<float>(h & 255u) / 255.0f - 0.5f) * 2.4f;
+            d.life = kAntourageFallSec;
+            d.shape = it.shape;
+            d.matId = it.matId;
+            fell->push_back(d);
+        }
     }
     // A chain or a sheet dies only when the LAST thing holding it lets go: cut
     // one end and it dangles (wire_live_pins). So the test is "an anchor was

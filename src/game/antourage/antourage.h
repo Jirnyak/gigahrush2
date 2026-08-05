@@ -230,6 +230,37 @@ struct FallClock {
     void clear() { left.clear(); }
 };
 
+// --- A SEVERED RIGID PIECE, FALLING -----------------------------------------
+// The chains got their fall for free: they were already verlet bodies, and all
+// they needed was the world to land on. A pipe is rigid and had nothing, so it
+// gets the smallest honest body that reads right — position, velocity, a tumble,
+// and the SAME lifetime the chains use.
+//
+// It lives in the GAME layer, not in a compute pass, for three reasons that all
+// point the same way: it collides against `aabb_overlaps_solid` — the SOLVER's
+// own predicate, the truth bodies already fall by, rather than a third copy of
+// collision written against the render mirror; it is headless-testable like
+// everything else here; and the cost is O(pieces currently falling), which is a
+// handful even after a grenade. The row is a flat POD on purpose: the day it is
+// thousands, this array moves to an SSBO unchanged.
+struct DetachedPiece {
+    vec3 pos;
+    vec3 vel;
+    vec3 scale;             // metres per axis, as on AntourageInstance
+    float yaw = 0.0f;       // current spin about the up axis
+    float spin = 0.0f;      // rad/s, scrubbed by every contact
+    float life = 0.0f;      // seconds left; <= 0 is gone
+    std::uint8_t shape = 0;
+    std::uint8_t matId = 0;
+};
+
+// Integrate every falling piece and drop the spent ones (swap-erase, so the
+// array stays dense and the caller may hand it straight to the renderer).
+// Gravity is the world VECTOR at the piece, so a regional or sideways field
+// carries the debris the way it carries a body.
+void antourage_detach_step(const World& w, std::vector<DetachedPiece>& pieces,
+                           float dt);
+
 // The carve's edge detector, and the antourage twin of anchor_validate_step
 // ([game/prop_system.h] — ECS props detach the same way on the same input).
 //
@@ -242,10 +273,14 @@ struct FallClock {
 // ([game/particles.h]), tinted by the piece's own material. Returns how many
 // pieces died, so the caller knows it owes a GPU re-pack (the severed pipe is
 // still in the instance list the renderer uploaded last time).
+// `fell` is optional: hand it a vector and every severed RIGID piece is pushed
+// there as a falling body ([DetachedPiece] above) instead of simply vanishing.
+// Headless callers and tests pass nullptr and get the old silence.
 std::uint32_t antourage_carve_step(const World& w, const AntourageBake& bake,
                                    const std::uint32_t* dirtyCells,
                                    std::size_t dirtyCount,
                                    ParticleBurstQueue& bursts,
-                                   std::uint32_t seed);
+                                   std::uint32_t seed,
+                                   std::vector<DetachedPiece>* fell = nullptr);
 
 } // namespace giga::game

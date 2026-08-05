@@ -4,6 +4,7 @@
 // Included into game_test.cpp after its CHECK macro and `using namespace`.
 
 #include "game/antourage/antourage.h"
+#include "sim/physics.h"     // aabb_overlaps_solid — the rest test
 #include "world/destruct.h"   // carve_sphere — the player's own hole-puncher
 #include "world/material_props.h"
 
@@ -326,6 +327,79 @@ static void test_antourage_fall_clock() {
     // Pieces are independent, and an index never touched before is alive.
     CHECK(fc.step(9, true, dt));
     CHECK(fc.left.size() == 10);
+}
+
+// A severed PIPE does not blink out either: it falls, lands on the floor and
+// lies there for the same 8 s a chain does ([antourage.h] DetachedPiece).
+// The collision predicate is the solver's own, so it rests exactly where a body
+// would stand.
+static void test_antourage_detached_pipe_falls_and_lands() {
+    World w;
+    generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
+    AntourageBake bake;
+    bake_antourage(w, 0, 1337u, bake);
+    CHECK(!bake.instances.empty());
+
+    // Drop a piece from a real pipe's place and let it go.
+    const AntourageInstance& src = bake.instances.front();
+    std::vector<DetachedPiece> falling;
+    DetachedPiece d{};
+    d.pos = src.pos;
+    d.scale = src.scale;
+    d.life = kAntourageFallSec;
+    d.shape = src.shape;
+    d.matId = src.matId;
+    d.spin = 1.0f;
+    falling.push_back(d);
+
+    const float dt = 1.0f / 60.0f;
+    const float startZ = falling[0].pos.z;
+    float restZ = startZ;
+    int frames = 0;
+    // Run most of the life: it must fall, then STOP somewhere solid.
+    for (; frames < 360 && !falling.empty(); ++frames) {
+        antourage_detach_step(w, falling, dt);
+        if (!falling.empty()) restZ = falling[0].pos.z;
+    }
+    CHECK(!falling.empty());          // 6 s < 8 s life: still with us
+    CHECK(restZ < startZ - 0.05f);    // it really fell
+    CHECK(!aabb_overlaps_solid(w, falling[0].pos, falling[0].scale * 0.5f));
+    // ...and it came to REST rather than tunnelling: another second moves it
+    // less than a sub-voxel.
+    const vec3 before = falling[0].pos;
+    for (int i = 0; i < 60; ++i) antourage_detach_step(w, falling, dt);
+    CHECK(!falling.empty());
+    const vec3 after = falling[0].pos;
+    CHECK(length(after - before) < 0.25f);
+    std::fprintf(stderr, "[antourage] pipe fell %.2f m and rested\n",
+                 startZ - after.z);
+
+    // The life is the SAME clock the chains use: run it out and the array
+    // empties itself.
+    for (int i = 0; i < 200 && !falling.empty(); ++i)
+        antourage_detach_step(w, falling, dt);
+    CHECK(falling.empty());
+
+    // And a carve hands severed legs over instead of dropping them on the floor
+    // of the void: the same op that reports a death fills the falling list.
+    World w2;
+    generate_floor(w2, 0, floor_spec(FloorKind::Residential), 1337u);
+    AntourageBake b2;
+    bake_antourage(w2, 0, 1337u, b2);
+    const AntourageInstance victim = b2.instances.front();
+    w2.grid().set_cell(victim.ax0, victim.ay0, victim.az0, kCellAir);
+    const std::uint32_t dirty = static_cast<std::uint32_t>(
+        macro_index(victim.ax0, victim.ay0, victim.az0));
+    ParticleBurstQueue bursts;
+    std::vector<DetachedPiece> fell;
+    const std::uint32_t dead =
+        antourage_carve_step(w2, b2, &dirty, 1, bursts, 5u, &fell);
+    CHECK(dead > 0);
+    CHECK(fell.size() == dead);       // one body per severed rigid piece
+    CHECK(fell[0].life > 0.0f);
+    // Passing no list is still legal — headless callers keep their silence.
+    ParticleBurstQueue q2;
+    antourage_carve_step(w2, b2, &dirty, 1, q2, 5u);
 }
 
 static void test_antourage_all() {
