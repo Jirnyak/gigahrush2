@@ -765,18 +765,18 @@ static void test_antourage_all() {
         // The SECOND carve nearby must not re-kill what is already gone: a
         // neighbouring cell empties now, and the piece — dead since the first
         // op — stays silent.
-        ParticleBurstQueue again;
+        ParticleBurstQueue bursts2;
         const int nx = wrap_macro(victim.ax1 + 1);
         w.grid().set_cell(nx, victim.ay1, victim.az1, kCellAir);
         const std::uint32_t dirty2 = static_cast<std::uint32_t>(
             macro_index(nx, victim.ay1, victim.az1));
         const std::uint32_t dead2 =
-            antourage_carve_step(w, bake, &dirty2, 1, again, 9u);
-        for (std::uint16_t i = 0; i < again.count; ++i)
-            CHECK(again.items[i].pos.x != victim.pos.x ||
-                  again.items[i].pos.y != victim.pos.y ||
-                  again.items[i].pos.z != victim.pos.z);
-        CHECK(again.count == dead2);
+            antourage_carve_step(w, bake, &dirty2, 1, bursts2, 9u);
+        for (std::uint16_t i = 0; i < bursts2.count; ++i)
+            CHECK(bursts2.items[i].pos.x != victim.pos.x ||
+                  bursts2.items[i].pos.y != victim.pos.y ||
+                  bursts2.items[i].pos.z != victim.pos.z);
+        CHECK(bursts2.count == dead2);
     }
 
     // A verlet chain does NOT die with one anchor: the cut end lets go and it
