@@ -35,15 +35,6 @@ private:
     VulkanDevice* dev_ = nullptr;
     VkDescriptorPool pool_ = VK_NULL_HANDLE;
     bool ready_ = false;
-
-    // Rare CRT tracking-roll glitch state (taste.md: rare glitches make the
-    // service UI alive as long as reading is not hindered). A glitch is a brief
-    // horizontal band of darker scanlines that rolls down the screen: subtle
-    // (low alpha), rare (seconds apart), and never touches the 3D world.
-    std::uint64_t glitchNextMs_ = 0;   // next allowed trigger (SDL ticks)
-    std::uint64_t glitchStartMs_ = 0;  // current glitch start; 0 = no active glitch
-    std::uint64_t glitchDurMs_ = 0;    // current glitch duration (ms)
-    float glitchBandH_ = 10.0f;        // current band height (px)
 };
 
 } // namespace giga::gpu

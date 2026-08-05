@@ -211,50 +211,6 @@ void ImGuiLayer::draw_crt_overlay() {
                           IM_COL32(0, 0, 0, 45));
     }
 
-    // --- Rare CRT tracking-roll glitch (taste.md: rare glitches make the
-    // service UI alive as long as reading is not hindered). A horizontal band
-    // of darker scanlines rolls down the screen occasionally. It is rare
-    // (seconds apart), subtle (low alpha), and confined to the overlay, so
-    // the 3D world and text stay readable.
-    const std::uint64_t nowMs = SDL_GetTicks();
-    if (glitchStartMs_ != 0) {
-        // Active glitch: roll the band down over its duration.
-        const std::uint64_t elapsed = nowMs - glitchStartMs_;
-        if (elapsed >= glitchDurMs_) {
-            glitchStartMs_ = 0; // glitch done
-        } else {
-            const float progress = static_cast<float>(elapsed) /
-                                  static_cast<float>(glitchDurMs_);
-            const float bandTop = progress * (h + glitchBandH_) - glitchBandH_;
-            // Darker scanlines inside the band + a faint roll shimmer (reads
-            // as a tracking tear without corrupting any glyph).
-            draw->AddRectFilled(ImVec2(0.0f, bandTop),
-                                ImVec2(w, bandTop + glitchBandH_),
-                                IM_COL32(0, 0, 0, 95));
-            for (float y = bandTop; y < bandTop + glitchBandH_; y += 3.0f) {
-                if (y < 0.0f || y >= h) continue;
-                draw->AddLine(ImVec2(0.0f, y), ImVec2(w, y),
-                              IM_COL32(89, 242, 102, 40));
-            }
-        }
-    } else if (nowMs >= glitchNextMs_) {
-        if (glitchNextMs_ == 0) {
-            // First-ever trigger: do not roll a band on the boot frame;
-            // schedule the first glitch a couple seconds out instead so the
-            // effect is genuinely rare from the very start.
-            const std::uint64_t t = nowMs;
-            glitchNextMs_ = nowMs + 2500u + (t / 397u) % 4000u; // 2.5..6.5 s
-        } else {
-            // Start a new glitch. Derive band height and duration deterministically
-            // from the trigger time so the pattern is reproducible (no RNG state).
-            const std::uint64_t t = nowMs;
-            glitchBandH_ = 6.0f + static_cast<float>((t / 997u) % 9); // 6..14 px
-            glitchDurMs_ = 70u + (t / 571u) % 80u;                    // 70..149 ms
-            glitchStartMs_ = nowMs;
-            glitchNextMs_ = nowMs + 4000u + (t / 397u) % 6000u;       // 4..10 s
-        }
-    }
-
     // --- Vignette: the CRT tube darkens toward the corners (screen curvature
     // is too expensive a shader to fake here, but a radial falloff reads as
     // "tube" and kills the flat-panel look the mandate forbids). Drawn as four
