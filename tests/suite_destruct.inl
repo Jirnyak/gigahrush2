@@ -47,9 +47,14 @@ static void test_subfield() {
 
     // The budget pin: worst case (every cell paged) is page bytes + table.
     // 2^21 cells x 512 sub-voxels x 2 bytes = exactly 2 GiB of pages.
+    // static_assert and not CHECK: every operand is constexpr, so `if (!(cond))`
+    // inside CHECK is a constant condition and MSVC /W4 raises C4127, which
+    // [jirnyak.md] §12 makes a build failure. It is also the stronger claim — a
+    // budget that moved should never link, let alone run.
     constexpr std::uint64_t worstPages =
         std::uint64_t{kMacroCells} * kSubVoxels * sizeof(CellType);
-    CHECK(worstPages == (std::uint64_t{1} << 31));
+    static_assert(worstPages == (std::uint64_t{1} << 31),
+                  "page budget: 2^21 cells x 512 sub-voxels x 2 B == 2 GiB");
 }
 
 // The stateless roll: pure integer probability power/hardness, deterministic

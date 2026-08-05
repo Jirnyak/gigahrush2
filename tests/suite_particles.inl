@@ -15,7 +15,14 @@
 
 // Generated table: every row holds usable physics and identity.
 static void test_particle_table_rows() {
-    CHECK(kParticleKindCount == static_cast<std::uint8_t>(ParticleKind::Count));
+    // The generated table's length and the enum's Count are two homes for one
+    // number; a regenerated table that disagrees with the enum must not link.
+    // static_assert and not CHECK: both sides are compile-time constants, so the
+    // CHECK was MSVC /W4 C4127 ([jirnyak.md] §12), and this claim guards the
+    // bounds of the loop below — failing at compile time beats reading garbage.
+    static_assert(kParticleKindCount ==
+                      static_cast<std::uint8_t>(ParticleKind::Count),
+                  "particle_table.h rows must match ParticleKind::Count");
     for (std::uint8_t i = 0; i < kParticleKindCount; ++i) {
         const ParticleDef& d = kParticleTable[i];
         CHECK(d.id != nullptr && d.id[0] != '\0');

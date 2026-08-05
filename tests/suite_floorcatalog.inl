@@ -64,7 +64,11 @@ static void test_catalog_patterns_match_floor_spec_for() {
     for (int f = kMinFloor; f <= kMaxFloor; ++f) {
         if (cat.claimed(f)) continue;
         if (cat.resolve(f).kind != floor_spec_for(f).kind) {
-            CHECK(false && "catalog pattern drifted from floor_spec_for");
+            // The comparison is re-stated rather than written `false && "…"`: a
+            // folded constant is MSVC /W4 C4127 ([jirnyak.md] §12), and CHECK
+            // prints `#cond`, so this makes the failure line name the drift
+            // instead of reading `FAIL …: false`.
+            CHECK(cat.resolve(f).kind == floor_spec_for(f).kind);
             return;
         }
         ++checked;

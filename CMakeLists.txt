@@ -424,8 +424,12 @@ if(GIGA_BUILD_TESTS)
     # [2026-08-02] Dropped from 23416 to 23271 due to the removal of procedural props from props.csv
     # [2026-08-03] 23291 -> 23290 (-1): LazyFieldBaker deleted (orphaned duplicate of
     # LazyFieldRebaker whose output nothing read), its single CHECK went with it.
+    # 23290 -> 23289 (-1) on 2026-08-05: the 2 GiB page-budget claim in
+    # suite_destruct.inl became a static_assert. Every operand is constexpr, so the
+    # CHECK was MSVC /W4 C4127; one runtime check therefore no longer executes. The
+    # claim is not weaker — static_assert cannot be reached-and-skipped. No coverage lost.
     set_tests_properties(world_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "23290/23290 checks passed"
+        PASS_REGULAR_EXPRESSION "23289/23289 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically
@@ -670,7 +674,14 @@ if(GIGA_BUILD_TESTS)
     # the piece vanished with no debris and no falling body. Plus branches are
     # capped from the JOIN end (uncapped, three outlets swallowed the whole cell
     # budget): 467 branch points against 259, pinned as a ratio.
-        PASS_REGULAR_EXPRESSION "game_test: 233598 checks, 0 failures")
+    # 233598 -> 233597 (-1) on 2026-08-05: the particle table's row-count claim in
+    # suite_particles.inl became a static_assert. Both sides are compile-time
+    # constants, so the CHECK was MSVC /W4 C4127; one runtime check therefore no
+    # longer executes. That claim also bounds the loop under it, so failing at
+    # compile time is strictly better than reading past the table. No coverage lost.
+    # (suite_floorcatalog.inl's `false && "…"` C4127 was fixed in the same commit and
+    # moves nothing: it only ever ran on an already-failing sweep.)
+        PASS_REGULAR_EXPRESSION "game_test: 233597 checks, 0 failures")
 
 
 
