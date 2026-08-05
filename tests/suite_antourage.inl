@@ -382,6 +382,44 @@ static void test_antourage_detached_pipe_falls_and_lands() {
         antourage_detach_step(w, falling, dt);
     CHECK(falling.empty());
 
+    // THE PLAYER'S OWN PATH, end to end (owner asked whether every anchor must
+    // die for a pipe to fall — no: a segment is clamped to ONE column, so
+    // blowing that column drops that segment and leaves its neighbours up).
+    {
+        World wp;
+        generate_floor(wp, 0, floor_spec(FloorKind::Residential), 1337u);
+        AntourageBake bp;
+        bake_antourage(wp, 0, 1337u, bp);
+        const AntourageInstance* pipe = nullptr;
+        for (const AntourageInstance& it : bp.instances)
+            if (it.shape != kShapeBox) { pipe = &it; break; }
+        CHECK(pipe != nullptr);
+        const AntourageInstance target = *pipe;
+        CHECK(antourage_alive(wp.grid(), target));
+        // Shoot the pipe itself with the console/weapon radius.
+        CarveOp op{};
+        op.x = target.pos.x; op.y = target.pos.y; op.z = target.pos.z;
+        op.radius = 1.5f;
+        op.power = 60000;
+        op.seed = 77u;
+        CarveScratch sc;
+        CarveResult res2;
+        carve_sphere(wp, op, sc, res2);
+        CHECK(!res2.dirtyCells.empty());
+        // Its clamp column is gone, so the piece is dead...
+        CHECK(!antourage_alive(wp.grid(), target));
+        // ...and the very same op hands it over as a falling body.
+        ParticleBurstQueue q3;
+        std::vector<DetachedPiece> fell3;
+        const std::uint32_t dead3 = antourage_carve_step(
+            wp, bp, res2.dirtyCells.data(), res2.dirtyCells.size(), q3, 3u, &fell3);
+        CHECK(dead3 > 0);
+        CHECK(!fell3.empty());
+        std::fprintf(stderr,
+                     "[antourage] one 1.5 m shot at a pipe: %u pieces cut loose\n",
+                     dead3);
+    }
+
     // And a carve hands severed legs over instead of dropping them on the floor
     // of the void: the same op that reports a death fills the falling list.
     World w2;
@@ -513,11 +551,34 @@ static void test_pipes_hug_and_branch() {
         for (std::uint8_t of = 0; of < 6u; ++of)
             if (of != face) unite(static_cast<std::int64_t>(i), idx_of(cell * 8u + of));
     }
+    // Branch points: nodes with three or more neighbours in the network. This
+    // is what "ветвится" means in a number.
+    std::uint32_t branchPoints = 0;
+    for (std::size_t i = 0; i < allKeys.size(); ++i) {
+        const std::uint64_t k = allKeys[i];
+        const std::uint8_t face = static_cast<std::uint8_t>(k % 8u);
+        const std::size_t cell = static_cast<std::size_t>(k / 8u);
+        const int cx = static_cast<int>(cell % kMacroDim);
+        const int cy = static_cast<int>((cell / kMacroDim) % kMacroDim);
+        const int cz = static_cast<int>(cell / (kMacroDim * kMacroDim));
+        int deg = 0;
+        for (int axis = 0; axis < 3; ++axis)
+            for (int sgn = -1; sgn <= 1; sgn += 2) {
+                int a3[3] = {cx, cy, cz};
+                a3[axis] = wrap_macro(a3[axis] + sgn);
+                if (idx_of(macro_index(a3[0], a3[1], a3[2]) * 8u + face) >= 0) ++deg;
+            }
+        for (std::uint8_t of = 0; of < 6u; ++of)
+            if (of != face && idx_of(cell * 8u + of) >= 0) ++deg;
+        if (deg >= 3) ++branchPoints;
+    }
+
     std::uint32_t comps = 0;
     for (std::size_t i = 0; i < allKeys.size(); ++i)
         if (find(static_cast<std::uint32_t>(i)) == i) ++comps;
-    std::fprintf(stderr, "[antourage] pipe network: %zu nodes, %u components\n",
-                 allKeys.size(), comps);
+    std::fprintf(stderr,
+                 "[antourage] pipe network: %zu nodes, %u components, %u branch points\n",
+                 allKeys.size(), comps, branchPoints);
 
     std::uint32_t orphans = 0;
     for (const AntourageInstance& it : b.instances) {
@@ -566,8 +627,11 @@ static void test_pipes_hug_and_branch() {
     CHECK(comps >= 1u && comps <= 3u);
     CHECK(floating == 0u);
     CHECK(orphans == 0u);
-    // ...and it is a network, not a scatter: fittings are common.
+    // ...and it is a network, not a scatter: fittings are common and the graph
+    // really BRANCHES — a node with three or more neighbours every few cells,
+    // not one pipeline across the floor.
     CHECK(joints * 4u > legs);
+    CHECK(branchPoints * 20u > static_cast<std::uint32_t>(allKeys.size()));
     // WHERE: the whole floor, not one storey. No eighth of the tower may hold
     // more than half the network — the recurring "everything on the ground
     // floor" asymmetry ([problems.md] §11) is exactly what this catches.

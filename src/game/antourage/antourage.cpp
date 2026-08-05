@@ -153,7 +153,15 @@ float ceiling_face(const MacroGrid& g, const GravityFrame& f, const WalkCell& c,
 // emergent property of a walker's step count. Split across the frames a regime
 // declares, exactly like the other two modules.
 constexpr int kPipeCellBudget = 3000;
-constexpr int kPipeOutlets = 260;    // branch endpoints drawn per floor
+constexpr int kPipeOutlets = 700;
+// How far one branch may reach past the main it leaves. Without a cap the first
+// few outlets swallow the whole cell budget in two or three enormous runs and
+// the floor gets a pipeline, not a plumbing system; with it, the same budget
+// buys many short branches — which is what branching LOOKS like. Measured on
+// floor 0 at a fixed 3000-cell budget: cap 22 -> 259 branch points, 10 -> 392,
+// 6 -> 450. Eight keeps the branches long enough to read as pipes rather than
+// stubs while still branching every ~8 cells.
+constexpr int kPipeBranchCells = 8;    // branch endpoints drawn per floor
 // Plant rooms. Each grows its own tree, so this IS the component count of the
 // finished network — the owner's acceptance criterion is 1..3 ([problems.md]
 // §11), and a building fed from three risers is what that means physically.
@@ -349,20 +357,34 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
 
     // --- 3. trace outlets home ---------------------------------------------
     std::uint32_t cells = 0;
+    std::vector<std::int32_t> path;
     for (int o = 0; o < kPipeOutlets && cells < static_cast<std::uint32_t>(budget); ++o) {
         const std::uint32_t h = hash_u32(fseed ^ 0x5BD1E995u ^
                                          (static_cast<std::uint32_t>(o) * 0x9E3779B9u));
         std::int32_t cur = static_cast<std::int32_t>(nodes[h % nodes.size()]);
         if (net[cur].pred == -3) continue;      // the mains never reached it
-        for (int guard = 0; guard < kPipeMaxRun; ++guard) {
-            if (net[cur].inNet) break;          // joined an existing main
-            net[cur].inNet = 1;
+        // Walk home first, THEN mark — and mark from the join end. Marking as we
+        // walk would spend the budget on the outlet side of a long path and stop
+        // in mid-air; taken from the join, a capped branch is still attached.
+        path.clear();
+        while (!net[cur].inNet && static_cast<int>(path.size()) < kPipeMaxRun) {
+            path.push_back(cur);
+            if (net[cur].pred < 0) break;       // reached the plant
+            cur = net[cur].pred;
+        }
+        if (path.empty()) continue;
+        std::size_t take = path.size();
+        if (take > static_cast<std::size_t>(kPipeBranchCells))
+            take = static_cast<std::size_t>(kPipeBranchCells);
+        for (std::size_t i = path.size() - take; i < path.size(); ++i) {
+            const std::int32_t st2 = path[i];
+            if (net[st2].inNet) continue;
+            net[st2].inNet = 1;
             ++cells;
-            const std::int32_t p = net[cur].pred;
-            if (p < 0) break;                   // home
+            const std::int32_t p = net[st2].pred;
+            if (p < 0) continue;
             ++net[p].deg;
-            ++net[cur].deg;
-            cur = p;
+            ++net[st2].deg;
         }
     }
     out.pipeCells += cells;
@@ -792,18 +814,6 @@ bool antourage_alive(const MacroGrid& g, const ClothSheet& s) {
 
 namespace {
 
-// Was this cell emptied by the op that produced `dirty`? The dirty list is
-// small (the cells one blast touched) and the AIR test comes first, so the
-// scan runs only for the handful of anchors that are gone at all — no set to
-// build, no allocation on a path a shotgun can hit several times per tick.
-bool cell_died(const MacroGrid& g, const std::uint32_t* dirty, std::size_t n,
-               int x, int y, int z) {
-    if (g.cell(x, y, z) != kCellAir) return false;
-    const std::uint32_t key = static_cast<std::uint32_t>(macro_index(x, y, z));
-    for (std::size_t i = 0; i < n; ++i)
-        if (dirty[i] == key) return true;
-    return false;
-}
 
 // The chain/sheet twin of cell_died: the anchor is GONE now (sub-voxel aware,
 // anchor_gone above) and the cell it lived in is in this op's dirty list, so it
@@ -820,17 +830,24 @@ bool anchor_died(const MacroGrid& g, const std::uint32_t* dirty, std::size_t n,
 }
 
 // Did the piece hanging between these two anchors die on THIS op? It must be
-// dead now AND have been alive before: every anchor is either still solid or
+// dead now AND have been alive before: every anchor is either still holding or
 // was severed by this very carve, and at least one was severed. Without the
 // second half a piece killed an hour ago would shed debris again every time a
 // carve grazed its other anchor.
+//
+// SUB-VOXEL aware, like everything else about aliveness. It was not, and that
+// was a real bug the owner hit: a shot that emptied a pipe's clamp column left
+// the CELL non-air, so this said "nothing died" while the renderer stopped
+// drawing the piece — it vanished instead of falling, with no debris and no
+// body handed over.
 bool pair_died(const MacroGrid& g, const std::uint32_t* dirty, std::size_t n,
-               int x0, int y0, int z0, int x1, int y1, int z1) {
-    const bool d0 = cell_died(g, dirty, n, x0, y0, z0);
-    const bool d1 = cell_died(g, dirty, n, x1, y1, z1);
+               int x0, int y0, int z0, int x1, int y1, int z1,
+               std::uint8_t face) {
+    const bool d0 = anchor_died(g, dirty, n, x0, y0, z0, face);
+    const bool d1 = anchor_died(g, dirty, n, x1, y1, z1, face);
     if (!d0 && !d1) return false;
-    if (!d0 && g.cell(x0, y0, z0) == kCellAir) return false; // already dead
-    if (!d1 && g.cell(x1, y1, z1) == kCellAir) return false;
+    if (!d0 && anchor_gone(g, x0, y0, z0, face)) return false; // already dead
+    if (!d1 && anchor_gone(g, x1, y1, z1, face)) return false;
     return true;
 }
 
@@ -852,7 +869,7 @@ std::uint32_t antourage_carve_step(const World& w, const AntourageBake& bake,
     for (std::size_t i = 0; i < bake.instances.size(); ++i) {
         const AntourageInstance& it = bake.instances[i];
         if (!pair_died(g, dirtyCells, dirtyCount, it.ax0, it.ay0, it.az0,
-                       it.ax1, it.ay1, it.az1))
+                       it.ax1, it.ay1, it.az1, it.face))
             continue;
         ++dead;
         bursts.push(it.pos, fall(it.pos), ParticleKind::Debris, 4, it.matId,

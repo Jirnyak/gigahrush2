@@ -663,7 +663,14 @@ if(GIGA_BUILD_TESTS)
     # floor" class). Plus the step fitting: a door lintel leaves the neighbour's
     # seat at another height, and the two half-links met at two heights — the
     # break in the screenshots.
-        PASS_REGULAR_EXPRESSION "game_test: 233848 checks, 0 failures")
+    # 233848 -> 233598 on 2026-08-05: a shot at a pipe finally DROPS it. The
+    # instance death path was still cell-level while aliveness had moved to the
+    # sub-voxel column, so a carve that emptied a pipe's clamp left the cell
+    # non-air: carve_step reported nothing, the renderer just stopped drawing —
+    # the piece vanished with no debris and no falling body. Plus branches are
+    # capped from the JOIN end (uncapped, three outlets swallowed the whole cell
+    # budget): 467 branch points against 259, pinned as a ratio.
+        PASS_REGULAR_EXPRESSION "game_test: 233598 checks, 0 failures")
 
 
 
