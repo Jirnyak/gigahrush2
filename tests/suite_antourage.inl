@@ -4,6 +4,7 @@
 // Included into game_test.cpp after its CHECK macro and `using namespace`.
 
 #include <algorithm>
+#include <functional>
 #include "game/antourage/antourage.h"
 #include "sim/physics.h"     // aabb_overlaps_solid — the rest test
 #include "world/destruct.h"   // carve_sphere — the player's own hole-puncher
@@ -448,9 +449,17 @@ static void test_pipes_hug_and_branch() {
     // identity — not by world position: a pipe sits on the real surface, which
     // for a high lintel is inside the neighbouring cell, so position keys make
     // consecutive segments look unrelated.
+    // Keyed by the pipe's OWN cell and face — the network's node identity. The
+    // cell is the anchor stepped back toward the pipe (the anchor is the column
+    // on the far side of the face), and it matters: keying by the anchor makes
+    // a bend inside one cell look like two unrelated places, because its two
+    // faces have two different anchors.
     auto key_of = [](std::uint8_t ax, std::uint8_t ay, std::uint8_t az,
                      std::uint8_t face) {
-        return macro_index(ax, ay, az) * 8u + face;
+        int c3[3] = {ax, ay, az};
+        c3[antourage_face_axis(face)] =
+            wrap_macro(c3[antourage_face_axis(face)] + antourage_face_dir(face));
+        return macro_index(c3[0], c3[1], c3[2]) * 8u + face;
     };
     std::vector<std::uint64_t> runKeys, fitKeys;
     for (const AntourageInstance& it : b.instances) {
@@ -463,6 +472,53 @@ static void test_pipes_hug_and_branch() {
     auto has = [](const std::vector<std::uint64_t>& v, std::uint64_t k) {
         return std::binary_search(v.begin(), v.end(), k);
     };
+    // CONNECTED COMPONENTS, the owner's own acceptance criterion: a plumbing
+    // system is one graph, not a pile of islands. Union-find over the emitted
+    // pieces, joined the way the network joins them — same face and adjacent
+    // clamp column, or two faces of the same cell.
+    std::vector<std::uint64_t> allKeys = runKeys;
+    allKeys.insert(allKeys.end(), fitKeys.begin(), fitKeys.end());
+    std::sort(allKeys.begin(), allKeys.end());
+    allKeys.erase(std::unique(allKeys.begin(), allKeys.end()), allKeys.end());
+    std::vector<std::uint32_t> parent(allKeys.size());
+    for (std::size_t i = 0; i < parent.size(); ++i)
+        parent[i] = static_cast<std::uint32_t>(i);
+    std::function<std::uint32_t(std::uint32_t)> find =
+        [&](std::uint32_t x) { while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+    auto idx_of = [&](std::uint64_t k) -> std::int64_t {
+        const auto it2 = std::lower_bound(allKeys.begin(), allKeys.end(), k);
+        if (it2 == allKeys.end() || *it2 != k) return -1;
+        return it2 - allKeys.begin();
+    };
+    auto unite = [&](std::int64_t a2, std::int64_t b2) {
+        if (a2 < 0 || b2 < 0) return;
+        const std::uint32_t ra = find(static_cast<std::uint32_t>(a2));
+        const std::uint32_t rb = find(static_cast<std::uint32_t>(b2));
+        if (ra != rb) parent[ra] = rb;
+    };
+    for (std::size_t i = 0; i < allKeys.size(); ++i) {
+        const std::uint64_t k = allKeys[i];
+        const std::uint8_t face = static_cast<std::uint8_t>(k % 8u);
+        const std::size_t cell = static_cast<std::size_t>(k / 8u);
+        const int cx = static_cast<int>(cell % kMacroDim);
+        const int cy = static_cast<int>((cell / kMacroDim) % kMacroDim);
+        const int cz = static_cast<int>(cell / (kMacroDim * kMacroDim));
+        for (int axis = 0; axis < 3; ++axis)
+            for (int sgn = -1; sgn <= 1; sgn += 2) {
+                int a3[3] = {cx, cy, cz};
+                a3[axis] = wrap_macro(a3[axis] + sgn);
+                unite(static_cast<std::int64_t>(i),
+                      idx_of(macro_index(a3[0], a3[1], a3[2]) * 8u + face));
+            }
+        for (std::uint8_t of = 0; of < 6u; ++of)
+            if (of != face) unite(static_cast<std::int64_t>(i), idx_of(cell * 8u + of));
+    }
+    std::uint32_t comps = 0;
+    for (std::size_t i = 0; i < allKeys.size(); ++i)
+        if (find(static_cast<std::uint32_t>(i)) == i) ++comps;
+    std::fprintf(stderr, "[antourage] pipe network: %zu nodes, %u components\n",
+                 allKeys.size(), comps);
+
     std::uint32_t orphans = 0;
     for (const AntourageInstance& it : b.instances) {
         if (it.shape == kShapeBox) continue;
@@ -481,6 +537,15 @@ static void test_pipes_hug_and_branch() {
         }
         if (!linked) ++orphans;
     }
+    // WHERE on the floor does the network actually live? A tower whose plumbing
+    // all sits on one storey is the recurring "everything on the ground floor"
+    // asymmetry ([problems.md] §11), and only a histogram catches it.
+    std::uint32_t byStorey[8] = {0,0,0,0,0,0,0,0};
+    for (const AntourageInstance& it : b.instances)
+        ++byStorey[(it.az0 * 8u) / kMacroDim];
+    std::fprintf(stderr, "[antourage] pieces by z-eighth: %u %u %u %u %u %u %u %u\n",
+                 byStorey[0], byStorey[1], byStorey[2], byStorey[3],
+                 byStorey[4], byStorey[5], byStorey[6], byStorey[7]);
     std::uint32_t byAxis[3] = {0, 0, 0}, byFace[6] = {0,0,0,0,0,0};
     for (const AntourageInstance& it : b.instances) {
         if (it.shape == kShapeBox) continue;
@@ -495,13 +560,20 @@ static void test_pipes_hug_and_branch() {
                  byAxis[0], byAxis[1], byAxis[2], byFace[0], byFace[1],
                  byFace[2], byFace[3], byFace[4], byFace[5]);
     CHECK(legs > 0);
-    // A handful may sit over a sub-voxel the ray misses at a torus seam; a
-    // regression that unseats the legs shows up in the hundreds, not the ones.
-    CHECK(floating * 1000u <= legs);
-    // A NETWORK, not a scatter: joints are common...
+    // THE OWNER'S ACCEPTANCE CRITERIA, verbatim (2026-08-05):
+    //   "тест печатает число компонент связности (должно быть 1-3) и долю
+    //    висящих в пустоте секций (должно быть 0)".
+    CHECK(comps >= 1u && comps <= 3u);
+    CHECK(floating == 0u);
+    CHECK(orphans == 0u);
+    // ...and it is a network, not a scatter: fittings are common.
     CHECK(joints * 4u > legs);
-    // ...and nothing dead-ends into thin air.
-    CHECK(orphans * 100u <= legs);
+    // WHERE: the whole floor, not one storey. No eighth of the tower may hold
+    // more than half the network — the recurring "everything on the ground
+    // floor" asymmetry ([problems.md] §11) is exactly what this catches.
+    std::uint32_t total = 0, worst = 0;
+    for (int i = 0; i < 8; ++i) { total += byStorey[i]; if (byStorey[i] > worst) worst = byStorey[i]; }
+    CHECK(worst * 2u <= total);
 }
 
 static void test_antourage_all() {

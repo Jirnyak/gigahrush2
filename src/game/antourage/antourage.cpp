@@ -154,7 +154,10 @@ float ceiling_face(const MacroGrid& g, const GravityFrame& f, const WalkCell& c,
 // declares, exactly like the other two modules.
 constexpr int kPipeCellBudget = 3000;
 constexpr int kPipeOutlets = 260;    // branch endpoints drawn per floor
-constexpr int kPipeSources = 5;      // plant rooms the mains run back to
+// Plant rooms. Each grows its own tree, so this IS the component count of the
+// finished network — the owner's acceptance criterion is 1..3 ([problems.md]
+// §11), and a building fed from three risers is what that means physically.
+constexpr int kPipeSources = 3;
 constexpr int kPipeBracketEvery = 3; // cells between visible clamps
 constexpr int kPipeMaxRun = 4096;    // guard on a pathological trace
 
@@ -435,6 +438,32 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
             inst.az0 = inst.az1 = static_cast<std::uint8_t>(an.z);
             out.instances.push_back(inst);
         };
+
+        // A STEP IN THE SURFACE — a door lintel, a lower slab — leaves the
+        // neighbour's seat at a different height on the SAME face. The two
+        // half-links then meet at the cell boundary at two different heights,
+        // which is the break the owner photographed. The jog closes it: a short
+        // piece along the face axis, spanning exactly the difference, emitted
+        // once per pair (by the lower cell index).
+        for (int i = 0; i < links; ++i) {
+            const WalkCell nb = stepped(c, link[i].axis, link[i].sgn);
+            const std::size_t ns = state_of(macro_index(nb.x, nb.y, nb.z), face);
+            if (ns < st) continue;                  // the other side draws it
+            const vec3 nbPos = pipe_point(g, nb, face);
+            const float mine = vec_axis(a, fax);
+            const float theirs = vec_axis(nbPos, fax);
+            const float step = theirs - mine;
+            if (std::fabs(step) < 0.05f) continue;
+            vec3 jog = a;
+            vec_add(jog, link[i].axis,
+                    static_cast<float>(link[i].sgn) * 0.5f * kCellSize);
+            vec_set(jog, fax, mine + step * 0.5f);
+            // A FITTING, not a run: it spans away from the surface by design,
+            // so it must not be measured by the rule that says a run hugs.
+            vec3 sc{d, d, d};
+            vec_set(sc, fax, std::fabs(step) + d);
+            push_box(out, jog, sc, static_cast<std::uint8_t>(face), an);
+        }
 
         const bool straight = links == 2 && !bends &&
                               link[0].axis == link[1].axis &&

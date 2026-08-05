@@ -655,7 +655,15 @@ if(GIGA_BUILD_TESTS)
     # collapse to one cylinder. The seating check now measures the gap to the
     # piece's OWN anchor column instead of ray-marching from its centre, which
     # lied about half-links reaching under a neighbour's higher ceiling.
-        PASS_REGULAR_EXPRESSION "game_test: 232042 checks, 0 failures")
+    # 232042 -> 233848 on 2026-08-05: the owner's acceptance criteria are the
+    # test now — connected COMPONENTS (1..3, measured by union-find over the
+    # emitted pieces: it was 5, one per plant, so the plant count is 3), zero
+    # floating, zero orphans, and no eighth of the tower holding more than half
+    # the network ([problems.md] §11, the recurring "everything on the ground
+    # floor" class). Plus the step fitting: a door lintel leaves the neighbour's
+    # seat at another height, and the two half-links met at two heights — the
+    # break in the screenshots.
+        PASS_REGULAR_EXPRESSION "game_test: 233848 checks, 0 failures")
 
 
 
