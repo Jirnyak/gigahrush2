@@ -626,7 +626,14 @@ if(GIGA_BUILD_TESTS)
     # phase that starts every branch ON an existing trunk and welds a junction at
     # the root — joints went 184 -> 2343 against 3855 legs. Most of the delta is
     # the per-instance CHECK loops over an instance list that grew 2957 -> 6198.
-        PASS_REGULAR_EXPRESSION "game_test: 236793 checks, 0 failures")
+    # 236793 -> 231000 on 2026-08-05: the pipe walker is GONE and the pipes are
+    # a NETWORK — multi-source BFS over every cell that can hug a face, then a
+    # trace of 260 outlets back to 5 plant rooms. The union is a tree: connected
+    # by construction, branching where outlets diverge, budgeted in CELLS (3000)
+    # rather than in walker starts. One segment per cell, clamped to its own
+    # column, with the clamp DRAWN (the owner asked to see the anchors). Pinned:
+    # 0 of 3097 segments float, 1653 joints/brackets.
+        PASS_REGULAR_EXPRESSION "game_test: 231000 checks, 0 failures")
 
 
 

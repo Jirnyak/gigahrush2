@@ -75,6 +75,12 @@ void vec_add(vec3& v, int axis, float s) { vec_set(v, axis, vec_axis(v, axis) + 
 // axis < 0 means "no wall" — a vertical run with nothing to hug is not a run.
 struct Wall { int axis = -1; int sign = 0; };
 
+// Faces compare in the FRAME's terms: the smaller key is the one further DOWN,
+// whichever way down happens to point.
+float down_key(const GravityFrame& f, float coord) {
+    return coord * static_cast<float>(f.upSign);
+}
+
 bool is_air(const MacroGrid& g, const WalkCell& c) {
     return g.cell(c.x, c.y, c.z) == kCellAir;
 }
@@ -86,10 +92,6 @@ bool is_air(const MacroGrid& g, const WalkCell& c) {
 // PURE MESH: nothing is written into the grid (the law in antourage.h). Each
 // leg records the SOLID cells it hugs as its anchors; carve those and the leg
 // dies with them.
-constexpr int kPipeWalks = 16000;    // walker starts drawn per floor (~15% land)
-constexpr int kPipeMaxSteps = 96;    // cells one walker may visit
-constexpr int kPipeMinLeg = 3;       // shorter stretches are dropped
-constexpr int kPipeTurnPct = 18;     // per-step chance to turn
 
 // Can the walker OCCUPY this cell running TANGENT to gravity? Air, ceiling on
 // the UP side, air on the DOWN side (headroom guard — see the duct height note
@@ -122,387 +124,258 @@ float ceiling_face(const MacroGrid& g, const GravityFrame& f, const WalkCell& c,
            static_cast<float>(edge) * (kCellSize / static_cast<float>(kSubDim));
 }
 
-// Faces compare in the FRAME's terms: the smaller key is the one further DOWN,
-// whichever way down happens to point.
-float down_key(const GravityFrame& f, float coord) {
-    return coord * static_cast<float>(f.upSign);
+
+
+
+
+
+
+
+// --- THE PIPE NETWORK -------------------------------------------------------
+// A building's plumbing is ONE CONNECTED THING that spans the floor and
+// branches into the rooms — not a scatter of straight runs. The old walker was
+// a screensaver: 16000 independent random walks, so every section it laid was
+// an orphan by construction, which is exactly what the owner kept seeing
+// ("ЕСТЬ ОДИНОЧНЫЕ ТРУБЫ РАЗБИТЫЕ, ЭТО НЕ СЕТЬ", 2026-08-05).
+//
+// The network is now a FUNCTION OF THE GRID, in three steps and no randomness
+// beyond where it aims:
+//
+//   1. CANDIDATES — every cell a pipe could physically hug: air under a real
+//      ceiling column (a run), or air against a real wall column (a riser).
+//   2. SPANNING FOREST — a multi-source BFS over those candidates. The sources
+//      are the plant rooms; the BFS's predecessor links ARE the mains, because
+//      a shortest-path tree merges: two rooms fed from the same source share
+//      their pipe all the way back to it.
+//   3. TRACE — pick outlets, walk each one's predecessors home, and mark what
+//      it used. The union is a tree: connected by construction, branching where
+//      outlets diverge, and covering as much of the floor as there are outlets.
+//
+// What gets emitted is then just a reading of that tree: a cylinder per edge, a
+// visible BRACKET where the pipe is clamped to its surface (the owner asked for
+// the anchors to be legible: "надо чтобы якоря были явно показаны"), an elbow
+// where it turns, and a junction box where a branch leaves a main.
+// The floor's whole pipe allowance in CELLS — the thing that actually costs
+// instances and GPU slots, so it is budgeted directly instead of being an
+// emergent property of a walker's step count. Split across the frames a regime
+// declares, exactly like the other two modules.
+constexpr int kPipeCellBudget = 3000;
+constexpr int kPipeOutlets = 260;    // branch endpoints drawn per floor
+constexpr int kPipeSources = 5;      // plant rooms the mains run back to
+constexpr int kPipeBracketEvery = 3; // cells between visible clamps
+constexpr int kPipeMaxRun = 4096;    // guard on a pathological trace
+
+// Everything one bake needs to know about a cell of the network.
+struct NetCell {
+    std::int32_t pred = -2;   // -2 = not a candidate, -1 = source, else index
+    std::uint8_t inNet = 0;   // survived the trace
+    std::uint8_t axis = 0;    // axis the edge pred->this runs along
+    std::uint8_t hugA = 0;    // face this cell's pipe hugs (packed)
+    std::uint8_t deg = 0;     // tree degree, for junction boxes
+};
+
+WalkCell cell_of(std::size_t idx) {
+    return {static_cast<int>(idx % kMacroDim),
+            static_cast<int>((idx / kMacroDim) % kMacroDim),
+            static_cast<int>(idx / (kMacroDim * kMacroDim))};
 }
 
-// The axis line a direction runs on inside a cell, world units. Tangent runs
-// get their height from the LEG emitter (real ceiling faces); this returns the
-// cell centre plus a placeholder height near the ceiling.
-vec3 duct_axis_point(const GravityFrame& f, const WalkCell& c, int axis,
-                     const Wall& wall) {
+// Which face would a pipe in this cell hug, if any? A ceiling column first (the
+// natural place for a main), else any wall column (a riser). Returns the packed
+// face, or 0xFF when the cell can hold no pipe at all.
+std::uint8_t cell_face(const MacroGrid& g, const GravityFrame& f,
+                       const WalkCell& c) {
+    if (hug_ok(g, f, c)) {
+        // ...but only where the ceiling really has matter in the column the
+        // clamp bites. hug_ok answers at CELL level, and a lintel carved from
+        // below leaves cells that are "not air" with nothing above the pipe —
+        // 91 segments hung in exactly those before this check.
+        const WalkCell above = stepped(c, f.axis, f.upSign);
+        if (g.mask(above.x, above.y, above.z)
+                .face_layer(f.axis, -f.upSign, true) >= 0)
+            return antourage_face_pack(f.axis, -f.upSign);
+    }
+    if (!is_air(g, c)) return 0xFFu;
+    for (int t = 0; t < 2; ++t) {
+        const int ax = t == 0 ? f.tanA : f.tanB;
+        for (int sgn = -1; sgn <= 1; sgn += 2) {
+            const Wall wall{ax, sgn};
+            if (!wall_ok(g, c, wall)) continue;
+            // Only if the column it would clamp to really carries matter.
+            const WalkCell anchor = stepped(c, ax, sgn);
+            if (g.mask(anchor.x, anchor.y, anchor.z).face_layer(ax, -sgn, true) >= 0)
+                return antourage_face_pack(ax, -sgn);
+        }
+    }
+    return 0xFFu;
+}
+
+// The world point a pipe sits at inside `c`, given the face it hugs: the cell's
+// centre on the two free axes, the real surface plus a radius on the third.
+vec3 pipe_point(const MacroGrid& g, const WalkCell& c, std::uint8_t face) {
+    const int ax = antourage_face_axis(face);
+    const int dr = antourage_face_dir(face);
     vec3 p{static_cast<float>(c.x) * kCellSize + 1.0f,
            static_cast<float>(c.y) * kCellSize + 1.0f,
            static_cast<float>(c.z) * kCellSize + 1.0f};
-    if (axis == f.axis) {
-        // A vertical run rides the wall it hugs.
-        if (wall.axis >= 0)
-            vec_add(p, wall.axis, 0.75f * static_cast<float>(wall.sign));
-    } else {
-        vec_add(p, f.axis, 0.75f * static_cast<float>(f.upSign));
-    }
+    const WalkCell anchor = stepped(c, ax, -dr);
+    const int s = g.mask(anchor.x, anchor.y, anchor.z).face_layer(ax, dr, true);
+    if (s < 0) return p;
+    const int edge = dr < 0 ? s : s + 1;
+    const float face_m =
+        static_cast<float>(cell_axis(anchor, ax)) * kCellSize +
+        static_cast<float>(edge) * (kCellSize / static_cast<float>(kSubDim));
+    vec_set(p, ax, face_m + static_cast<float>(dr) * (kPipeRadius + 0.04f));
     return p;
 }
 
-// The SOLID cell a walk cell hangs from: the ceiling on the up side of a
-// tangent step, the hugged wall beside a vertical one. This is the anchor the
-// LIVE-grid aliveness probe checks.
-WalkCell hug_cell(const GravityFrame& f, const WalkCell& c, int axis,
-                  const Wall& wall) {
-    if (axis == f.axis) return stepped(c, wall.axis, wall.sign);
-    return stepped(c, f.axis, f.upSign);
+// The solid cell a pipe in `c` is clamped to.
+WalkCell face_anchor(const WalkCell& c, std::uint8_t face) {
+    return stepped(c, antourage_face_axis(face), -antourage_face_dir(face));
 }
 
-// The axis and the direction (from the ANCHOR toward the pipe) that a run of
-// `axis` hugs. One byte of it is stored on the instance so the aliveness probe
-// can ask about the very column the leg hugs — the same rule chains and sheets
-// live by ([antourage.h] face).
-int hug_axis(const GravityFrame& f, int axis, const Wall& wall) {
-    return axis == f.axis ? wall.axis : f.axis;
-}
-int hug_dir(const GravityFrame& f, int axis, const Wall& wall) {
-    return axis == f.axis ? -wall.sign : -f.upSign;
-}
-
-// Does the cell this walk cell hugs still carry matter IN THE COLUMN the pipe
-// touches, and where is its face? Returns the face coordinate along the hug
-// axis in world metres, or -1 when the column is empty — a leg has no business
-// existing over a cell it cannot actually touch ("трубы висят в воздухе",
-// owner 2026-08-05: the old code fell back to the cell PLANE and drew a pipe
-// hugging nothing).
-float hug_face(const MacroGrid& g, const GravityFrame& f, const WalkCell& c,
-               int axis, const Wall& wall) {
-    const int ha = hug_axis(f, axis, wall);
-    if (ha < 0) return -1.0f;
-    const int hd = hug_dir(f, axis, wall);
-    const WalkCell anchor = hug_cell(f, c, axis, wall);
-    const int s = g.mask(anchor.x, anchor.y, anchor.z).face_layer(ha, hd, true);
-    if (s < 0) return -1.0f;
-    const int edge = hd < 0 ? s : s + 1;
-    return static_cast<float>(cell_axis(anchor, ha)) * kCellSize +
-           static_cast<float>(edge) * (kCellSize / static_cast<float>(kSubDim));
-}
-
-// Emit one straight run as UNIVERSAL instances ([antourage.h]). Ends that were
-// stopped by SOLID matter extend half a cell into it — a pipe terminates in a
-// wall, never hanging cut in mid-air ("кусочность", owner's screenshots).
-// PRECONDITION: `cells` never crosses the torus seam — emit_leg() splits first.
-void emit_leg_run(const MacroGrid& g, const GravityFrame& f, AntourageBake& out,
-                  const std::vector<WalkCell>& cells, int axis,
-                  const Wall& wall, int sign, bool stopSolid) {
-    if (static_cast<int>(cells.size()) < kPipeMinLeg) return;
-    const WalkCell a0 = hug_cell(f, cells.front(), axis, wall);
-    const WalkCell a1 = hug_cell(f, cells.back(), axis, wall);
-    vec3 a = duct_axis_point(f, cells.front(), axis, wall);
-    vec3 b = duct_axis_point(f, cells.back(), axis, wall);
-    // EVERY leg — tangent or vertical — is seated on the REAL face of the matter
-    // it hugs, offset by its own radius. The face furthest from that matter
-    // along the run wins, so a pipe never pierces a lower lintel or a closer
-    // wall. No fallback to the cell plane: emit_leg() has already split the run
-    // at any cell whose column is empty, so a face exists for every cell here.
-    const int ha = hug_axis(f, axis, wall);
-    const int hd = hug_dir(f, axis, wall);
-    if (ha >= 0) {
-        float face = 0.0f;
-        float best = 1e9f;
-        for (const WalkCell& c : cells) {
-            const float fm = hug_face(g, f, c, axis, wall);
-            if (fm < 0.0f) continue;
-            const float key = fm * static_cast<float>(-hd);
-            if (key < best) {
-                best = key;
-                face = fm;
-            }
-        }
-        if (best > 1e8f) return;  // nothing to hug: not a leg
-        const float d = static_cast<float>(hd);
-        vec_set(a, ha, face + d * kPipeRadius + d * 0.04f);
-        vec_set(b, ha, face + d * kPipeRadius + d * 0.04f);
-    }
-    // Extend the ends into whatever solid stops them.
-    vec3 dir{0, 0, 0};
-    vec_set(dir, axis, static_cast<float>(sign));
-    const WalkCell back = stepped(cells.front(), axis, -sign);
-    if (!is_air(g, back)) a = a - dir * 1.0f;
-    if (stopSolid) b = b + dir * 1.0f;
-
-    AntourageInstance inst{};
-    inst.pos = (a + b) * 0.5f;
-    const float len = std::fabs(vec_axis(b, axis) - vec_axis(a, axis));
-    const float d = 2.0f * kPipeRadius;
-    inst.scale = vec3{d, d, d};
-    vec_set(inst.scale, axis, len + d);
-    // The shape catalog is spelled in WORLD axes, so a sideways frame's runs
-    // pick their cylinder here with no extra rule.
-    inst.shape = static_cast<std::uint8_t>(
-        axis == 0 ? kShapeCylinderX : axis == 1 ? kShapeCylinderY
-                                                : kShapeCylinderZ);
-    inst.matId = static_cast<std::uint8_t>(kMatPipeMetal);
-    inst.face = antourage_face_pack(ha, hd);
-    inst.ax0 = static_cast<std::uint8_t>(a0.x);
-    inst.ay0 = static_cast<std::uint8_t>(a0.y);
-    inst.az0 = static_cast<std::uint8_t>(a0.z);
-    inst.ax1 = static_cast<std::uint8_t>(a1.x);
-    inst.ay1 = static_cast<std::uint8_t>(a1.y);
-    inst.az1 = static_cast<std::uint8_t>(a1.z);
-    out.instances.push_back(inst);
-    // Long straight runs become a BUNDLE: a second parallel main under the
-    // first — the industrial "магистраль" read that single tubes never give.
-    if (static_cast<int>(cells.size()) >= 10) {
-        // BESIDE the first, not under it: a twin hung off the face by a second
-        // radius reads as a pipe floating in the air (measured: 116 of them),
-        // while two mains sharing one surface read as the industrial
-        // "магистраль" they are meant to be.
-        int side = -1;
-        for (int a = 0; a < 3; ++a)
-            if (a != axis && a != ha) side = a;
-        if (side >= 0) {
-            AntourageInstance twin = inst;
-            vec_add(twin.pos, side, 2.4f * kPipeRadius);
-            out.instances.push_back(twin);
-        }
-    }
-}
-
-// A leg whose wrapped indices cross the torus seam must be SPLIT there: one
-// instance renders at exactly one toroidal image, and a wrapped span fed to
-// duct_axis_point as-is produced ~250 m ghost beams whose midpoint sat far
-// from their geometry — the pipes that popped in and out with the camera.
-void emit_leg(const MacroGrid& g, const GravityFrame& f, AntourageBake& out,
-              const std::vector<WalkCell>& cells, int axis, const Wall& wall,
-              int sign, bool stopSolid) {
-    // A run is a maximal stretch of cells that (1) does not cross the torus seam
-    // and (2) every one of which has real matter in the column the pipe hugs.
-    // A faceless cell is not merely a boundary — it is DROPPED, or the next run
-    // would anchor to a column that is not there.
-    // How far the hugged face may wander along a single leg. A leg is seated at
-    // ONE height, so a run whose ceiling steps up leaves the pipe hanging in the
-    // gap — measured before this rule, 531 of 2767 cylinders floated 1-2 m under
-    // nothing (owner's screenshots: "трубы висят в воздухе"). Half a pipe radius
-    // is the most that still reads as touching.
-    constexpr float kFaceStep = 0.5f * kPipeRadius;
-    std::vector<WalkCell> run;
-    float runFace = 0.0f;
-    for (std::size_t i = 0; i <= cells.size(); ++i) {
-        bool flush = i == cells.size();
-        bool keep = false;
-        float thisFace = 0.0f;
-        if (!flush) {
-            thisFace = hug_face(g, f, cells[i], axis, wall);
-            keep = thisFace >= 0.0f;
-            if (!keep) flush = true;
-            else if (!run.empty()) {
-                // A +-1 step that reads as -+(kMacroDim-1) is the seam.
-                const int d = cell_axis(cells[i], axis) - cell_axis(run.back(), axis);
-                if (d != sign) flush = true;
-                // ...and a step in the SURFACE ends the leg just as surely: the
-                // next stretch is a new pipe, seated on its own face.
-                else if (std::fabs(thisFace - runFace) > kFaceStep) flush = true;
-            }
-        }
-        if (flush && !run.empty()) {
-            // Only the TRUE final end keeps the caller's stop-into-solid
-            // extension; a cut end continues elsewhere (or nowhere).
-            const bool finalEnd = i == cells.size() && run.size() == cells.size();
-            emit_leg_run(g, f, out, run, axis, wall, sign,
-                         finalEnd ? stopSolid : false);
-            run.clear();
-        }
-        if (keep) {
-            if (run.empty()) runFace = thisFace;
-            run.push_back(cells[i]);
-        }
-    }
-}
-
-// One walker, from a given cell in a given direction. Returns how many
-// instances it laid, and records SEEDS — cells it actually ran through — so a
-// later walk can branch OFF this pipe instead of appearing somewhere unrelated.
-// That is what turns a scatter of lonely sections into a network (owner,
-// 2026-08-05: "до сих пор нет сети труб, просто одиночные секции").
-struct BranchSeed { WalkCell cell; int axis; Wall wall; };
-
-std::size_t walk_pipe(const MacroGrid& g, const GravityFrame& f,
-                      AntourageBake& out, WalkCell c, int axis, int sign,
-                      Wall wall, std::uint32_t h,
-                      std::vector<BranchSeed>* seeds) {
-    const std::size_t before_all = out.instances.size();
-    {
-        bool stopSolid = false;
-        std::vector<WalkCell> leg;
-        // An elbow Box may only exist BETWEEN two emitted legs. It is held
-        // pending until the following leg proves real; pushing it eagerly left
-        // a lone 0.5 m cube in the air whenever the new leg died under
-        // kPipeMinLeg (near-certain for 2-cell wall drops).
-        AntourageInstance pendingJoint{};
-        bool havePendingJoint = false;
-        auto emit_leg_checked = [&](const std::vector<WalkCell>& cells,
-                                    int axis_, const Wall& wall_, int sign_,
-                                    bool stop) {
-            const std::size_t before = out.instances.size();
-            emit_leg(g, f, out, cells, axis_, wall_, sign_, stop);
-            const bool emitted = out.instances.size() > before;
-            if (emitted && havePendingJoint)
-                out.instances.push_back(pendingJoint);
-            havePendingJoint = false;
-            return emitted;
-        };
-        for (int step = 0; step < kPipeMaxSteps; ++step) {
-            const bool ok = axis == f.axis ? wall_ok(g, c, wall)
-                                           : hug_ok(g, f, c);
-            if (!ok) {
-                // A run stopped by SOLID matter terminates INSIDE it.
-                stopSolid = !is_air(g, c);
-                break;
-            }
-            ++out.pipeCells;
-            leg.push_back(c);
-            // Every few cells, offer this spot as a place a later walk may
-            // branch from. Sparse on purpose: a seed per cell would make the
-            // branch phase re-roll the same corridor over and over.
-            if (seeds != nullptr && (leg.size() % 3u) == 0u)
-                seeds->push_back(BranchSeed{c, axis, wall});
-            h = hash_u32(h ^ 0xA24BAED1u);
-            // Turn? Only after a leg has real length, and only into a legal
-            // first cell of the new direction.
-            const bool wantTurn = static_cast<int>(leg.size()) >= kPipeMinLeg &&
-                                  static_cast<int>(h % 100u) < kPipeTurnPct;
-            if (wantTurn) {
-                // HALF the turns go vertical — the up/down branching the
-                // screensaver look lives on (was a flat 1/3 and read as none).
-                const int pick = static_cast<int>((h >> 8) % 4u);
-                const int newAxis =
-                    pick < 2 ? f.axis : (pick == 2 ? f.tanA : f.tanB);
-                const int newSign = ((h >> 10) & 1u) ? 1 : -1;
-                Wall nwall{};
-                bool can = false;
-                // A turn must be legal at the CORNER CELL as well as at the cell
-                // after it: the corner becomes the first cell of the new leg, and
-                // its ANCHOR is recorded from the new direction. Probing only the
-                // next cell let a leg start where there was nothing to hug — a
-                // piece born with an anchor in the air, which the aliveness probe
-                // reads as dead and never draws. Invisible in a -Z world (those
-                // legs happened to fall under kPipeMinLeg and vanish); the first
-                // sideways frame put it on the test's first run.
-                if (newAxis == f.axis) {
-                    // Descend/ascend hugging the wall the tangent leg ran
-                    // beside — the OTHER tangent axis, probed on both sides.
-                    nwall.axis = axis == f.tanA ? f.tanB : f.tanA;
-                    for (int s = -1; s <= 1 && !can; s += 2) {
-                        nwall.sign = s;
-                        can = wall_ok(g, c, nwall) &&
-                              wall_ok(g, stepped(c, f.axis, newSign), nwall);
-                    }
-                } else if (newAxis != axis) {
-                    can = hug_ok(g, f, c) &&
-                          hug_ok(g, f, stepped(c, newAxis, newSign));
-                }
-                if (can) {
-                    const bool prevEmitted =
-                        emit_leg_checked(leg, axis, wall, sign, false);
-                    // The flanged elbow: a universal Box instance.
-                    AntourageInstance j{};
-                    j.pos = duct_axis_point(f, c, axis, wall);
-                    if (axis != f.axis) {
-                        const float fm = ceiling_face(g, f, c, false);
-                        const float u = static_cast<float>(f.upSign);
-                        if (fm >= 0.0f)
-                            vec_set(j.pos, f.axis, fm - u * kPipeRadius - u * 0.04f);
-                    }
-                    const float jd = 1.7f * kPipeRadius;
-                    j.scale = vec3{jd, jd, jd};
-                    j.shape = kShapeBox;
-                    j.matId = static_cast<std::uint8_t>(kMatPipeMetal);
-                    const WalkCell jh = hug_cell(f, c, axis, wall);
-                    j.ax0 = j.ax1 = static_cast<std::uint8_t>(jh.x);
-                    j.ay0 = j.ay1 = static_cast<std::uint8_t>(jh.y);
-                    j.az0 = j.az1 = static_cast<std::uint8_t>(jh.z);
-                    if (prevEmitted) {
-                        pendingJoint = j;
-                        havePendingJoint = true;
-                    }
-                    leg.clear();
-                    leg.push_back(c);
-                    axis = newAxis;
-                    sign = newSign;
-                    wall = nwall;
-                }
-            }
-            c = stepped(c, axis, sign);
-        }
-        emit_leg_checked(leg, axis, wall, sign, stopSolid);
-    }
-    return out.instances.size() - before_all;
+void push_box(AntourageBake& out, vec3 pos, float size, std::uint8_t face,
+              const WalkCell& anchor) {
+    AntourageInstance b{};
+    b.pos = pos;
+    b.scale = vec3{size, size, size};
+    b.shape = kShapeBox;
+    b.matId = static_cast<std::uint8_t>(kMatPipeMetal);
+    b.face = face;
+    b.ax0 = b.ax1 = static_cast<std::uint8_t>(anchor.x);
+    b.ay0 = b.ay1 = static_cast<std::uint8_t>(anchor.y);
+    b.az0 = b.az1 = static_cast<std::uint8_t>(anchor.z);
+    out.instances.push_back(b);
 }
 
 void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
-                int walks, AntourageBake& out) {
+                int budget, AntourageBake& out) {
     const MacroGrid& g = w.grid();
-    // Two phases, and the second is what makes it a NETWORK. Phase one lays
-    // TRUNKS from random ceiling-hugged cells, remembering where they ran.
-    // Phase two starts every walk ON an existing trunk and heads away from it,
-    // welding a junction box at the root — so a branch is attached by
-    // construction instead of by luck.
-    std::vector<BranchSeed> seeds;
-    seeds.reserve(4096);
-    const int trunks = walks / 2;
-    for (int walk = 0; walk < trunks; ++walk) {
-        const std::uint32_t h =
-            hash_u32(fseed ^ (static_cast<std::uint32_t>(walk) * 0x9E3779B9u));
-        WalkCell c{static_cast<int>(h & 127u), static_cast<int>((h >> 7) & 127u),
-                   static_cast<int>((h >> 14) & 127u)};
-        if (!hug_ok(g, f, c)) continue;
-        const int axis = ((h >> 21) & 1u) ? f.tanB : f.tanA;
-        const int sign = ((h >> 22) & 1u) ? 1 : -1;
-        walk_pipe(g, f, out, c, axis, sign, Wall{}, h, &seeds);
-    }
-    if (seeds.empty()) return;
-    for (int b = 0; b < walks - trunks; ++b) {
-        const std::uint32_t h = hash_u32(fseed ^ 0xB7E15163u ^
-                                         (static_cast<std::uint32_t>(b) * 0x9E3779B9u));
-        const BranchSeed& sd = seeds[h % seeds.size()];
-        // Leave along a DIFFERENT axis than the trunk ran: half the branches go
-        // sideways along the same face, half turn down the nearest wall.
-        const bool goVertical = ((h >> 8) & 1u) != 0u;
-        const int sign = ((h >> 9) & 1u) ? 1 : -1;
-        int axis;
-        Wall wall{};
-        if (goVertical) {
-            axis = f.axis;
-            wall.axis = sd.axis == f.tanA ? f.tanB : f.tanA;
-            wall.sign = ((h >> 10) & 1u) ? 1 : -1;
-            if (!wall_ok(g, sd.cell, wall)) {
-                wall.sign = -wall.sign;
-                if (!wall_ok(g, sd.cell, wall)) continue;
+    std::vector<NetCell> net(kMacroCells);
+    std::vector<std::uint32_t> candidates;
+    candidates.reserve(1u << 15);
+
+    // --- 1. candidates ------------------------------------------------------
+    for (int z = 0; z < kMacroDim; ++z)
+        for (int y = 0; y < kMacroDim; ++y)
+            for (int x = 0; x < kMacroDim; ++x) {
+                const WalkCell c{x, y, z};
+                const std::uint8_t face = cell_face(g, f, c);
+                if (face == 0xFFu) continue;
+                const std::size_t i = macro_index(x, y, z);
+                net[i].pred = -3;              // candidate, not yet reached
+                net[i].hugA = face;
+                candidates.push_back(static_cast<std::uint32_t>(i));
             }
-        } else {
-            axis = sd.axis == f.tanA ? f.tanB : f.tanA;
-            if (!hug_ok(g, f, sd.cell)) continue;
+    if (candidates.size() < 64) return;
+
+    // --- 2. spanning forest -------------------------------------------------
+    // Sources are spread by hash rather than clustered, so the mains do not all
+    // radiate from one corner of the floor.
+    std::vector<std::uint32_t> queue;
+    queue.reserve(candidates.size());
+    for (int s = 0; s < kPipeSources; ++s) {
+        const std::uint32_t h =
+            hash_u32(fseed ^ (static_cast<std::uint32_t>(s) * 0x9E3779B9u));
+        const std::uint32_t pick = candidates[h % candidates.size()];
+        if (net[pick].pred != -3) continue;
+        net[pick].pred = -1;
+        queue.push_back(pick);
+    }
+    if (queue.empty()) return;
+    for (std::size_t head = 0; head < queue.size(); ++head) {
+        const std::uint32_t ci = queue[head];
+        const WalkCell c = cell_of(ci);
+        // Fixed neighbour order keeps the tree deterministic in (grid, seed).
+        for (int axis = 0; axis < 3; ++axis)
+            for (int sgn = -1; sgn <= 1; sgn += 2) {
+                const WalkCell n = stepped(c, axis, sgn);
+                const std::size_t ni = macro_index(n.x, n.y, n.z);
+                if (net[ni].pred != -3) continue;
+                // A pipe may run along a face, or drop down a wall — but it may
+                // not float: the destination must hug something itself.
+                net[ni].pred = static_cast<std::int32_t>(ci);
+                net[ni].axis = static_cast<std::uint8_t>(axis);
+                queue.push_back(static_cast<std::uint32_t>(ni));
+            }
+    }
+
+    // --- 3. trace the outlets home -----------------------------------------
+    // Every traced cell is connected to a source THROUGH cells that are also
+    // traced, so the emitted set is one tree per source and nothing is an
+    // orphan. Branches merge as they approach the source: that merge IS the
+    // main.
+    std::uint32_t cells = 0;
+    for (int o = 0; o < kPipeOutlets && cells < static_cast<std::uint32_t>(budget); ++o) {
+        const std::uint32_t h = hash_u32(fseed ^ 0x5BD1E995u ^
+                                         (static_cast<std::uint32_t>(o) * 0x9E3779B9u));
+        std::int32_t cur = static_cast<std::int32_t>(candidates[h % candidates.size()]);
+        if (net[cur].pred == -3) continue;      // outlet the mains never reached
+        for (int guard = 0; guard < kPipeMaxRun; ++guard) {
+            if (net[cur].inNet) break;          // joined an existing main
+            net[cur].inNet = 1;
+            ++cells;
+            const std::int32_t p = net[cur].pred;
+            if (p < 0) break;                   // reached the plant room
+            ++net[p].deg;
+            ++net[cur].deg;
+            cur = p;
         }
-        const std::size_t made =
-            walk_pipe(g, f, out, sd.cell, axis, sign, wall, h, nullptr);
-        if (made == 0) continue;
-        // The weld: a junction box at the root, so the branch visibly LEAVES
-        // the trunk instead of merely touching it.
-        AntourageInstance j{};
-        j.pos = duct_axis_point(f, sd.cell, sd.axis, sd.wall);
-        const float fm = hug_face(g, f, sd.cell, sd.axis, sd.wall);
-        const int ja = hug_axis(f, sd.axis, sd.wall);
-        const int jd = hug_dir(f, sd.axis, sd.wall);
-        if (fm >= 0.0f && ja >= 0)
-            vec_set(j.pos, ja, fm + static_cast<float>(jd) * (kPipeRadius + 0.04f));
-        const float jd2 = 2.0f * kPipeRadius;
-        j.scale = vec3{jd2, jd2, jd2};
-        j.shape = kShapeBox;
-        j.matId = static_cast<std::uint8_t>(kMatPipeMetal);
-        j.face = antourage_face_pack(ja < 0 ? f.axis : ja, jd);
-        const WalkCell jh = hug_cell(f, sd.cell, sd.axis, sd.wall);
-        j.ax0 = j.ax1 = static_cast<std::uint8_t>(jh.x);
-        j.ay0 = j.ay1 = static_cast<std::uint8_t>(jh.y);
-        j.az0 = j.az1 = static_cast<std::uint8_t>(jh.z);
-        out.instances.push_back(j);
+    }
+    out.pipeCells += cells;
+
+    // --- 4. read the tree out as pipe --------------------------------------
+    int sinceBracket = 0;
+    for (std::uint32_t ci : candidates) {
+        const NetCell& n = net[ci];
+        if (!n.inNet || n.pred < 0) continue;
+        const NetCell& pn = net[n.pred];
+        if (!pn.inNet) continue;                // parent trimmed: no edge
+        const WalkCell c = cell_of(ci);
+        const int axis = n.axis;
+        // ONE SEGMENT PER CELL, spanning its own cell boundary to boundary and
+        // seated on its OWN face — so both its anchor bytes are the very column
+        // it is clamped to, and consecutive cells' segments abut with no gap.
+        // (Drawing an edge BETWEEN two cells instead put a segment on the
+        // average of two surfaces, hugging neither: 967 of 3154 floated, and
+        // its far anchor could be air, which the law forbids outright.)
+        const std::uint8_t face = n.hugA;
+        const vec3 a = pipe_point(g, c, face);
+        const WalkCell an = face_anchor(c, face);
+        AntourageInstance inst{};
+        inst.pos = a;
+        const float d = 2.0f * kPipeRadius;
+        inst.scale = vec3{d, d, d};
+        vec_set(inst.scale, axis, kCellSize + 0.1f);   // overlap kills hairlines
+        inst.shape = static_cast<std::uint8_t>(
+            axis == 0 ? kShapeCylinderX : axis == 1 ? kShapeCylinderY
+                                                    : kShapeCylinderZ);
+        inst.matId = static_cast<std::uint8_t>(kMatPipeMetal);
+        inst.face = face;
+        inst.ax0 = inst.ax1 = static_cast<std::uint8_t>(an.x);
+        inst.ay0 = inst.ay1 = static_cast<std::uint8_t>(an.y);
+        inst.az0 = inst.az1 = static_cast<std::uint8_t>(an.z);
+        out.instances.push_back(inst);
+
+        // A JUNCTION where a branch leaves a main, an ELBOW where the pipe
+        // changes surface or direction, and a visible BRACKET every few cells
+        // otherwise — the clamp holds the pipe up, so it is drawn, not implied.
+        const WalkCell an0 = an;
+        if (n.deg >= 3) {
+            push_box(out, a, 2.2f * kPipeRadius, face, an0);
+            sinceBracket = 0;
+        } else if (pn.hugA != face || pn.axis != n.axis) {
+            push_box(out, a, 2.0f * kPipeRadius, face, an0);
+            sinceBracket = 0;
+        } else if (++sinceBracket >= kPipeBracketEvery) {
+            sinceBracket = 0;
+            vec3 clamp = a;
+            // Sunk halfway into the surface so it reads as a bracket biting the
+            // wall, not a cube threaded onto the pipe.
+            vec_add(clamp, antourage_face_axis(n.hugA),
+                    static_cast<float>(-antourage_face_dir(n.hugA)) * kPipeRadius);
+            push_box(out, clamp, 1.5f * kPipeRadius, n.hugA, an0);
+        }
     }
 }
 
@@ -688,7 +561,7 @@ void bake_antourage(const World& w, int number, unsigned seed,
         const std::uint32_t fs =
             i == 0 ? fseed
                    : hash_u32(fseed ^ static_cast<std::uint32_t>(i) * 0x2545F491u);
-        bake_pipes(w, f, fs, kPipeWalks / n, out);
+        bake_pipes(w, f, fs, kPipeCellBudget / n, out);
         bake_wires(w, f, hash_u32(fs ^ 0x5A303B0Du), kWireTriesPerRoomish / n, out);
         bake_cloths(w, f, hash_u32(fs ^ 0x7C0FFEE1u), kClothTries / n, out);
     }
@@ -712,6 +585,16 @@ void antourage_detach_step(const World& w, std::vector<DetachedPiece>& pieces,
         // SOLVER's (`aabb_overlaps_solid`), so a pipe rests on exactly the
         // surface a body would stand on — one truth, not a second copy.
         const vec3 half = d.scale * 0.5f;
+        // A piece cut loose while its box still overlapped the surface it hugged
+        // (a segment's ends overlap their neighbours by design) must FALL OUT,
+        // not freeze: while it starts inside matter, it moves ballistically and
+        // the collision test resumes the moment it is clear.
+        if (aabb_overlaps_solid(w, d.pos, half)) {
+            d.pos = d.pos + d.vel * dt;
+            d.yaw += d.spin * dt;
+            ++i;
+            continue;
+        }
         bool grounded = false;
         for (int a = 0; a < 3; ++a) {
             vec3 next = d.pos;

@@ -433,13 +433,26 @@ static void test_pipes_hug_and_branch() {
         for (int k = 0; k < 4 && !touching; ++k) {
             float* c = ax == 0 ? &probe.x : ax == 1 ? &probe.y : &probe.z;
             *c -= static_cast<float>(dr) * step;
-            const int cx = wrap_macro(static_cast<int>(std::floor(probe.x / kCellSize)));
-            const int cy = wrap_macro(static_cast<int>(std::floor(probe.y / kCellSize)));
-            const int cz = wrap_macro(static_cast<int>(std::floor(probe.z / kCellSize)));
-            const int sx = static_cast<int>(std::floor(probe.x / step)) & 7;
-            const int sy = static_cast<int>(std::floor(probe.y / step)) & 7;
-            const int sz = static_cast<int>(std::floor(probe.z / step)) & 7;
-            touching = w.grid().solid(cx, cy, cz, sx, sy, sz);
+            // Wrap into the torus BEFORE sampling: a negative world coordinate
+            // floors the wrong way and the probe reads someone else's cell.
+            const vec3 q{wrapf(probe.x, kWorldExtent), wrapf(probe.y, kWorldExtent),
+                         wrapf(probe.z, kWorldExtent)};
+            const int cx = wrap_macro(static_cast<int>(std::floor(q.x / kCellSize)));
+            const int cy = wrap_macro(static_cast<int>(std::floor(q.y / kCellSize)));
+            const int cz = wrap_macro(static_cast<int>(std::floor(q.z / kCellSize)));
+            const int sx = static_cast<int>(std::floor(q.x / step)) & 7;
+            const int sy = static_cast<int>(std::floor(q.y / step)) & 7;
+            const int sz = static_cast<int>(std::floor(q.z / step)) & 7;
+            // The bake clamps to the 2x2 CENTRE column, so the probe must ask
+            // about the same four sub-voxels; sampling the single one under the
+            // axis called 72 well-clamped pipes floating.
+            for (int u = -1; u <= 0 && !touching; ++u)
+                for (int v = -1; v <= 0 && !touching; ++v) {
+                    const int qx = ax == 0 ? sx : (sx + u) & 7;
+                    const int qy = ax == 1 ? sy : (ax == 0 ? (sy + u) & 7 : (sy + v) & 7);
+                    const int qz = ax == 2 ? sz : (sz + v) & 7;
+                    touching = w.grid().solid(cx, cy, cz, qx, qy, qz);
+                }
         }
         if (!touching) ++floating;
     }
@@ -542,16 +555,10 @@ static void test_antourage_all() {
     // anchor cell by hand, hand the carve's dirty list over, and the piece must
     // report itself dead exactly ONCE, with debris to show for it.
     {
-        // A leg, not a joint: two DISTINCT anchor cells, so the "already dead"
-        // half of the rule can be exercised by killing them one at a time.
-        const AntourageInstance* leg = nullptr;
-        for (const AntourageInstance& it : bake.instances)
-            if (it.ax0 != it.ax1 || it.ay0 != it.ay1 || it.az0 != it.az1) {
-                leg = &it;
-                break;
-            }
-        CHECK(leg != nullptr);
-        const AntourageInstance& victim = *leg;
+        // Every pipe segment is clamped to ONE column now ([antourage.md] — a
+        // segment belongs to its own cell), so "already dead" is exercised by
+        // carving the same anchor twice rather than one end at a time.
+        const AntourageInstance& victim = bake.instances.front();
         CHECK(antourage_alive(w.grid(), victim));
         ParticleBurstQueue bursts;
         // A dirty list that names an untouched cell kills nobody.
@@ -571,13 +578,14 @@ static void test_antourage_all() {
         CHECK(bursts.count > 0 && bursts.count <= dead);
         std::fprintf(stderr, "[antourage] carve severed %u piece(s)\n", dead);
 
-        // The SECOND carve nearby must not re-kill what is already gone: the
-        // victim's other anchor goes now, and the piece — dead since the first
+        // The SECOND carve nearby must not re-kill what is already gone: a
+        // neighbouring cell empties now, and the piece — dead since the first
         // op — stays silent.
         ParticleBurstQueue again;
-        w.grid().set_cell(victim.ax1, victim.ay1, victim.az1, kCellAir);
+        const int nx = wrap_macro(victim.ax1 + 1);
+        w.grid().set_cell(nx, victim.ay1, victim.az1, kCellAir);
         const std::uint32_t dirty2 = static_cast<std::uint32_t>(
-            macro_index(victim.ax1, victim.ay1, victim.az1));
+            macro_index(nx, victim.ay1, victim.az1));
         const std::uint32_t dead2 =
             antourage_carve_step(w, bake, &dirty2, 1, again, 9u);
         for (std::uint16_t i = 0; i < again.count; ++i)
