@@ -43,6 +43,49 @@ constexpr CellStep regime_down(GravityRegime r) {
     }
 }
 
+// The frame a regime names, spelled in AXIS NUMBERS — regime_down's twin for
+// consumers whose arithmetic is per-AXIS rather than per-cell-step. A baker
+// that hugs "the face on the up side" (antourage's pipes and hanging wires)
+// must not spell that face `z + 1`: it asks the frame which axis is vertical,
+// which two are tangent, and which way up is.
+//
+// `pull` is the honest half of the isotropy law: geometry (which face a thing
+// hugs) is a frame question and always answerable, but SAG is a force. Under
+// Zero there is no pull, and a hanging thing behaves like it — a cable between
+// two anchors is straight, not catenary (owner, 2026-08-04).
+struct GravityFrame {
+    int axis = 2;            // 0 = X, 1 = Y, 2 = Z — the axis gravity runs on
+    int upSign = 1;          // +1 when "up" is +axis (-Z pull => up is +Z)
+    int tanA = 0, tanB = 1;  // the other two axes, ascending
+    bool pull = true;        // does gravity actually pull along it?
+};
+
+// The frame of one axis + one up direction. tanA/tanB are the remaining two
+// axes in ascending order, so a consumer's two "horizontals" are stable.
+constexpr GravityFrame axis_frame(int axis, int upSign, bool pull) {
+    GravityFrame f{};
+    f.axis = axis;
+    f.upSign = upSign;
+    f.tanA = axis == 0 ? 1 : 0;
+    f.tanB = axis == 2 ? 1 : 2;
+    f.pull = pull;
+    return f;
+}
+
+// The single frame an AXIS regime declares. Zero and Custom name no axis and
+// fall back to the Z frame with pull off — callers that can dress more than one
+// frame should use gravity_frames() below instead of decreeing an axis.
+constexpr GravityFrame regime_frame(GravityRegime r) {
+    const CellStep d = regime_down(r);
+    if (d.x != 0) return axis_frame(0, d.x < 0 ? 1 : -1, true);
+    if (d.y != 0) return axis_frame(1, d.y < 0 ? 1 : -1, true);
+    if (d.z != 0) return axis_frame(2, d.z < 0 ? 1 : -1, true);
+    return axis_frame(2, 1, false);
+}
+
+// Every frame Zero can declare: three axes x two faces.
+inline constexpr int kMaxGravityFrames = 6;
+
 // Classify a vector into the regime its dominant axis names; near-zero is Zero.
 inline GravityRegime regime_from_vector(vec3 g) {
     const float ax = g.x < 0 ? -g.x : g.x;
@@ -75,5 +118,34 @@ struct GravityField {
 
     vec3 at(vec3 pos) const { return region ? region(*this, pos) : global; }
 };
+
+// Every frame this field DECLARES, written into `out` (room for
+// kMaxGravityFrames); returns how many. Allocation-free, so a baker can ask on
+// the stack.
+//
+// An axis regime declares exactly ONE frame: up is -gravity, and dressing hangs
+// from ceilings because that is where gravity says ceilings are. Zero declares
+// none — and rather than decreeing an axis (the mistake regime-blind code makes
+// silently), it gets all SIX faces, because with no pull "ceiling" and "floor"
+// are the same word: a pipe lies along what a heavy floor would call the ground
+// exactly as readily as under its ceiling (owner, 2026-08-04). Custom must fall
+// back to the vector field, as its own doc-comment says: classify the global
+// vector and take that axis; a Custom field whose global part is genuinely zero
+// lands on the six-frame answer, which is the right one.
+//
+// A consumer that spends a BUDGET per frame (walker starts, placement tries)
+// divides it by the count: the same total dressing spread over the faces the
+// world actually has, never six times as much of it.
+inline int gravity_frames(const GravityField& g, GravityFrame* out) {
+    GravityRegime r = g.regime;
+    if (r == GravityRegime::Custom) r = regime_from_vector(g.global);
+    if (r != GravityRegime::Zero) {
+        out[0] = regime_frame(r);
+        return 1;
+    }
+    for (int i = 0; i < kMaxGravityFrames; ++i)
+        out[i] = axis_frame(i / 2, (i & 1) ? -1 : 1, false);
+    return kMaxGravityFrames;
+}
 
 } // namespace giga

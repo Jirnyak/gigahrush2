@@ -4279,6 +4279,8 @@ int main() {
     test_samosbor_all();
     test_doors_all();
     test_antourage_all();
+    test_gravity_frames();
+    test_antourage_isotropy();
     test_saveload_all();
     test_macrosim_all();
     test_behaviours_all();

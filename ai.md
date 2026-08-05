@@ -15,8 +15,10 @@
 > whole brain is exercised **headless** by `game_test`, exactly like the macro tick.
 >
 > - **Code:** [src/game/ai.h](src/game/ai.h) / [.cpp](src/game/ai.cpp)
-> - **Tests:** [tests/game_test.cpp](tests/game_test.cpp) `test_needs_decay`,
->   `test_scorer`, `test_selection`, `test_ai_step`
+> - **Tests:** `game_test` — `test_needs_all` / `test_needs2_all`
+>   ([tests/suite_needs.inl](tests/suite_needs.inl),
+>   [suite_needs2.inl](tests/suite_needs2.inl)) and `test_utilai_all`
+>   ([tests/suite_utilai.inl](tests/suite_utilai.inl))
 > - **Architecture:** [ARCHITECTURE.md](ARCHITECTURE.md) §L4
 > - Upstream of [physics.md](physics.md): a plain NPC has **no `Controller`/`CameraTag`**
 >   (those are the *player's* input seam), so the brain writes its horizontal
@@ -39,8 +41,8 @@ pipeline. Only the score stage is pure; the rest is a tiny per-entity FSM state.
 
 ### 1. Needs — the drives (data, decaying columns)
 
-A fixed block of **0..100 needs** per embodied agent, stored SoA (an ECS
-component, not a per-entity object). They **decay/rise every sim tick** at
+A fixed block of **0..100 needs** per agent, stored SoA as a column of `NpcPool`
+(not an ECS component — see the Built note below). They **decay/rise every sim tick** at
 data-driven rates, scaled by the character-sheet attribute block
 ([npcs.md](npcs.md): generic 8-slot attributes, slot→meaning is a table):
 
@@ -59,13 +61,17 @@ fine needs — the macro tick models their lives abstractly; needs materialise o
 on embodiment and fold away on de-embodiment, like every other transient
 ([npcs.md](npcs.md): hp/inventory stay canonical, only transient state folds).
 
-**Built (#12a — [src/game/ai.h](src/game/ai.h) / [.cpp](src/game/ai.cpp)).** The
-`Needs` component is a flat `float[kNeedCount]` block **plus two `pending`
-digestion pools** (`pendingPee` / `pendingPoo`). One block holds both flavours,
-split only by **index** (`kFirstPressure`), never a type tag: `[0, kFirstPressure)`
-are the **reserves** (food/water/sleep), the rest the **pressures** (pee/poo).
-`needs_step(reg, pool, dt)` is one linear sweep over the packed EnTT column — O(n)
-over the live set, no per-object dispatch:
+**Built (#12a — [src/game/needs.h](src/game/needs.h) /
+[npc_pool.h](src/game/npc_pool.h)).** `Needs` is **a 36-byte row in `NpcPool`, not
+an ECS component** (`npc_pool.h`, pinned by a `static_assert`): three **reserves**
+that drain (`food` / `water` / `sleep`), two **pressures** that fill (`pee` /
+`poo`), the two `pending` digestion pools feeding them (`pendingPee` /
+`pendingPoo`), plus `hpDebt` and the `seeded` flag. Reserve or pressure is a
+property of the FIELD, not of a tag or an index range. The pool row is the storage
+because the macro society sim ticks these on its own coarse clock, with no world
+loaded ([macrosim.md](macrosim.md)); `needs_advance(n, dt)` is that pure clock —
+no registry, no HP, no allocation — and `needs_step` is the embodied wrapper that
+also charges HP and speed:
 
 - **reserves decay** every tick by `rate·dt`, each **attribute-slowed** by
   `rate /= (1 + 0.1·stat)` — STR (attr slot 0) slows food, AGI (slot 1) water, INT
@@ -76,7 +82,7 @@ over the live set, no per-object dispatch:
   v += dp; pending -= dp`, clamped at 100. A **fresh gut (empty pool) holds pee/poo
   flat** — they do not climb on their own; the eat intent (#12b) fills the pool.
 
-`seed_needs(needs, id)` seeds a fresh body deterministically from its stable id (a
+`needs_roll(seed)` seeds a fresh body deterministically from its stable id (a
 stateless `hash3` per need over an independent salt; per-need bands food/water
 70–100, sleep 60–100, pee 0–30, poo 0–20; pending pools empty), so embodiment is
 reproducible with **zero stored RNG state**. Every rate, range, the digestion
@@ -84,7 +90,7 @@ model, and the `0.1`-per-point attribute coefficient are **ported verbatim from
 the reference `needs.ts`** (same design-doc → exact-extraction → code flow as the
 [faction matrix](macrosim.md)). Restore-on-use — eating / drinking / toilet /
 sleep filling or draining a need — is an intent *effect*, so it lands with the
-scorer (#12b). Verified headless by `test_needs_decay`.
+scorer (#12b). Verified headless by `test_needs_all`.
 
 ### 2. Utility scorer — 13 intents, pure and stateless
 
@@ -117,7 +123,7 @@ room-affordance model, a minute-of-day clock, the samosbor event — sit at
 zero/`none`/−1 in `Perception`, so **every additive term with a missing input
 contributes 0 and the ranking among the live intents (needs-driven + diffusion
 threat) is exactly the reference's**; a later system fills the field and its term
-switches on with *no scorer edit*. Verified headless by `test_scorer` (need- and
+switches on with *no scorer edit*. Verified headless by `test_utilai_all` (need- and
 threat-driven argmax, the 0..100 range, per-identity spread).
 
 ### 3. Selection — argmax with hysteresis (anti-flapping)
@@ -148,7 +154,7 @@ thresholds live as named constants in [ai.h](src/game/ai.h) (`kSwitchMargin`,
 `kEmergencyScore`, and the `stickiness_amount` curve / re-plan bounds the #12c
 driver consumes). The **AiBrain** component (current intent + `stateTimer` +
 `nextDecisionAt` + a `decisions` re-plan counter) is defined here and folds with
-embodiment like `Needs`. Verified headless by `test_selection` (margin
+embodiment like `Needs`. Verified headless by `test_utilai_all` (margin
 stick/switch, emergency preempt, emergency-below-score fallback, tie-break); the
 re-plan **cadence** and the identity **stagger** are the driver's job — see §5.
 
@@ -164,18 +170,22 @@ step. Flee steering reads **`diffusion_gradient`** ([diffusion.md](diffusion.md)
 the flee intent's input, distinct from nav).
 
 **Built (#12c — [src/game/ai.cpp](src/game/ai.cpp) `ai_step`).** The driver
-resolves each agent's macro cell from its `Transform`, and steers by writing the
-horizontal `Velocity` at `kNpcWalkSpeed` (2 m/s — the reference
-`HUMANOID_BASE_MOVE_SPEED`; the player's `Controller` runs 7):
+resolves each agent's macro cell from its `Transform` and then hands motion to
+exactly ONE writer per body, through the `AiBrain::motion` token ([ai.h] — the
+single-writer rule this file exists to protect):
 
-- **Flee** reads `−diffusion_gradient(danger)` and heads down-field toward safety —
-  the baked flee field driving locomotion end-to-end. If the field is flat (or
-  absent) the agent falls through to roam.
-- **Every other intent roams** a deterministic per-identity `wander_heading`
-  (`rand01(hash2(id, decisions))·2π`), so the crowd disperses and each re-plan
-  turns onto a fresh leg — visible motion for every intent, no idle clumping.
+- **Flee OWNS the body.** It reads `−diffusion_gradient(danger)` (or the remembered
+  away-vector when the field is flat) and writes the horizontal `Velocity` at
+  `kFleeSpeed`. `IntentFlee` is still the only owning intent.
+- **Every other intent DELEGATES** — the token goes to `MotionOwner::Wander` and
+  `wander_step` steers that body exactly as it does for a brainless NPC (its own
+  file-local `kNpcWalkSpeed`, 1.35 m/s; the player's `Controller` runs faster).
+  Nothing in `ai_step` writes velocity for those bodies, so there is never a
+  second writer to reconcile.
 - `v.z` is **never touched** — gravity ([gravity.md](gravity.md)) owns the vertical
-  axis, so walkers stay grounded.
+  axis, so walkers stay grounded. (Both writers still spell that axis `z`: the
+  locomotion path is the ±Z debt the isotropy law names — [gravity.md] frame,
+  `floor_cell` and the antourage walkers are the pattern to follow when it moves.)
 
 **Deferred (needs #13):** full `route_step` path-following toward an intent's
 *target cell*. The baked fine flow fields aim at the elevated lattice nodes
@@ -203,7 +213,7 @@ fold, the same stateless-hash trick as the macro tick
 agents spawned the same frame drift apart permanently and the crowd's cadence
 spreads smoothly across frames. The only scheduling state is that one `float`
 deadline riding in the FSM record that already folds with embodiment — no wheel,
-no queue, no side table. Verified headless by `test_ai_step` (embodiment attaches
+no queue, no side table. Verified headless by `test_utilai_all` (embodiment attaches
 `Needs`/`AiBrain`; one step commits an intent, staggers into [1.5, 4.0] s, and
 steers at walk speed with `v.z` untouched; the player is skipped; same id →
 identical steer, different id → different heading; a saturating danger ramp

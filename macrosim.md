@@ -146,7 +146,7 @@ growing population is covered evenly. For each visited **cold** record (alive,
 (`hash3(id, tick, kSaltMigrate)` against the per-tick probability
 `migrateRatePerYear × daysPerTick/365`) and, on success, **starts a journey**:
 picks a destination floor uniformly in the configured band `[floorLo, floorHi]`
-(excluding the current one, `pick_dest_floor`) with an ETA
+(excluding the current one; salted `kSaltDest`) with an ETA
 `(travelBaseDays + travelPerFloorDays·|Δfloor|) × jitter(0.8‥1.35)` — the
 reference's ETA shape.
 
@@ -165,9 +165,9 @@ floorLo`), so the demographic-only bench and tests are byte-for-byte unaffected.
 Cost at the full 2²⁰: **+0.05 ms/tick** even with a deliberately heavy
 65536-record budget over the full 0‥63 band (3.17 → 3.22 ms — `macro_bench`, two
 phases), i.e. the bounded pass adds **no O(n) term**. Verified by
-`test_macro_migration` (population conserved, every record stays in-band, embodied
+`test_macrosim_all` (population conserved, every record stays in-band, embodied
 records never move, journeys conserve Σdepartures − Σarrivals == in-transit) and
-`test_macro_migration_determinism` (two pools evolve bit-identically over 30
+`test_macrosim_all` also pins determinism (two pools evolve bit-identically over 30
 ticks).
 
 **Not yet ported** (deferred, noted for follow-ups): the reference's route/danger
@@ -191,16 +191,16 @@ fauna/raiders) and Player, so **combat targeting and the player's own standing
 resolve through the one table** — never a code branch.
 
 A tiny data primitive, the same stance as `FloorSpec` / `MacroParams`:
-`attitude(a,b)` reads a directed cell (out-of-range faction → neutral `0`, so a
-stray pool value never indexes past the table); `set` / `nudge` / `nudge_mutual`
-mutate with integer-math clamping to `[-127,127]` (the reference clamps to
-`[-128,127]` — an immaterial one-unit-lower floor; we avoid -128 so negation stays
-well-defined); and two **data-driven thresholds** classify a cell branch-free —
-`hostile()` at or below **-50**, `friendly()` at or above **50** (ported from the
-reference's `areFactionsHostile` / `FRIENDLY_RELATION_THRESHOLD`). `reset_to_base()`
-restores the seed (a future respawn hook will reset just the Player row/column).
+`at(a,b)` reads a cell of the 6x6 `std::int8_t` matrix — five factions plus the
+player row — and the matrix is **symmetric by construction**: `add_mutual(a,b,d)`
+is the only shift and it writes both cells, clamped, because a one-sided grudge
+has no mechanic here. `hostile()` is the single data-driven threshold
+(`kHostileRelation = -50`, ported from the reference's `areFactionsHostile` /
+`FRIENDLY_RELATION_THRESHOLD`). `reset()` restores the authored seed;
+`reset_player_row_col()` is the rebirth hook — it wipes ONLY the player's 11 cells
+and leaves the world's own 25 exactly as play has bent them.
 
-Standalone and headless-verified by `test_faction_matrix` (base values, full
+Standalone and headless-verified by `test_faction2_all` (base values, full
 symmetry + diagonal, threshold edges, out-of-range tolerance, clamp, mutual
 nudge, reset). It carries **no per-tick cost** yet — it is the state the two
 consumers below read: the **#10d-ii social pass** (which seeds per-NPC edges from
@@ -250,10 +250,10 @@ with the systems that raise the events (combat → #13, quests → content). We 
 tests are byte-for-byte unaffected. Cost at the full 2²⁰ with a deliberately heavy
 65536-record budget over 64 floors: **+0.11 ms/tick** (3.16 → 3.27 ms —
 `macro_bench`, Release -O3, three phases), i.e. **no O(n) term**; the realistic
-64/tick budget is free. Verified by `test_macro_social` (edges form; every edge is
+64/tick budget is free. Verified by `test_macrosim_all` (edges form; every edge is
 in-range, co-floor, self-free and duplicate-free; the all-Citizen floor yields only
 warm edges while the Citizen+Wild floor yields hostile ones — faction standing
-drives the sign; off by default) and `test_macro_social_determinism` (two pools
+drives the sign; off by default) and the same suite's determinism half (two pools
 grow bit-identical graphs over 30 ticks).
 
 **Not yet ported** (deferred, noted for follow-ups): event-driven edge **drift**
@@ -277,7 +277,7 @@ determinism stance, [ARCHITECTURE.md](ARCHITECTURE.md) §Determinism). Concretel
 every per-record decision in the tick — mortality roll, parent reservoir, newborn
 attributes — is a **stateless hash of `(id, tick, salt)`** (`core/rng.h`), so the
 sweep carries no per-NPC RNG state, is independent of iteration order, and
-reproduces exactly for a given `(seed, tick)`. Verified by `test_macro_determinism`
+reproduces exactly for a given `(seed, tick)`. Verified by `test_macrosim_all`
 (two independently seeded pools evolve bit-identically over 24 monthly ticks).
 
 ## Connections

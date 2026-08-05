@@ -186,6 +186,34 @@ on a CPU-bound machine. Every "store it sparse to save memory" or "recompute it
 each frame to save load time" shortcut trades the cheap resource (disk/RAM/load)
 for the scarce one (CPU tick) — exactly backwards.
 
+## First question when the frame time collapses: WHICH BINARY?
+
+Measured 2026-08-05 on floor 0, identical code and scene, `--shot` slope over
+60→360 frames:
+
+| Tree | CPU ms/frame | FPS |
+|---|---|---|
+| `-DCMAKE_BUILD_TYPE=Debug` (`-g`, no `-O`) | 62.2 | ~16 |
+| `-DCMAKE_BUILD_TYPE=Release` (`-O3 -flto=thin`) | 5.9 | ~170 |
+
+**A Debug tree is ~10x slower and looks exactly like a regression in whatever
+landed last** — the sim is a mesh of tiny header functions (`wrap_macro`,
+`wrapi`, `MacroGrid::mask`, `SubMask::test`), and at `-O0` every one becomes an
+out-of-line call. A profile of the Debug binary spends 77% of the main thread in
+`physics_step → sweep_axis → voxel_solid`, most of it inside those stubs.
+
+`build/` carries the type in its cache, so it stays whatever it was configured
+as until someone reconfigures — a rebuild will not tell you. Hence the app now
+prints `[build] optimized` / `[build] DEBUG …` at launch and paints the warning
+next to the HUD's FPS counter. When the number looks wrong, read that line
+before reading the diff.
+
+**Method note:** measure with the `--shot` SLOPE, never one run — a single run
+buries per-frame cost under ~2.5 s (Release) or ~21 s (Debug) of load. Two runs
+at different `--frames` and a subtraction give the honest per-frame number.
+`/usr/bin/sample <pid>` on a long `--shot` run names the hot function in seconds
+and is the cheapest way to tell "my change is slow" from "this build is slow".
+
 ## Connections
 
 Shapes [voxels.md](voxels.md) (dense SoA grid), [fields.md](fields.md) (dense

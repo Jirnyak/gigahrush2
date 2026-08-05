@@ -579,7 +579,15 @@ if(GIGA_BUILD_TESTS)
     # (wire_live_pins / cloth_live_pins — a cut end lets go, the piece dies only
     # when nothing is pinned any more) + GpuHandoff finally pushes a debris
     # burst (suite_props_game asserts the burst AND the no-queue no-op).
-        PASS_REGULAR_EXPRESSION "game_test: 222544 checks, 0 failures")
+    # 222544 -> 222670 (+126) on 2026-08-04: antourage speaks the DECLARED gravity
+    # frame (problems.md §8 closed) — test_gravity_frames pins the frame contract
+    # (one frame per axis regime, six faces for Zero, Custom reads the vector) and
+    # test_antourage_isotropy bakes all EIGHT regimes on one geometry: non-empty,
+    # no anchor in air, no voxel written, bit-for-bit determinism, and sag only
+    # where there is pull. +-Z is unchanged (2975/802/152) — the generalisation is
+    # identity-preserving, and the one behaviour change it forced (a turn must be
+    # legal at the corner cell, not just after it) moved NegY by two instances.
+        PASS_REGULAR_EXPRESSION "game_test: 222670 checks, 0 failures")
 
 
 

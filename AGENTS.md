@@ -233,6 +233,26 @@ tools\win\build.bat Release fresh   :: wipe build-win\ first
 
 Output is `build-win\gigahrush2.exe`; run modes and controls are unchanged.
 
+**CHECK THE BUILD TYPE BEFORE BELIEVING A PERFORMANCE NUMBER.** `build/` keeps
+`CMAKE_BUILD_TYPE` in its cache and a rebuild never mentions it, so a tree can sit
+in `Debug` (`-g`, no `-O`) for days and every binary built out of it is **~10x
+slower** — measured 2026-08-05 on floor 0: 62.2 ms/frame at `-O0` against 5.9 ms
+at `-O3 -flto`, identical code. It reads exactly like a regression in whatever
+landed last, and it will be blamed on the last diff. Order of operations when
+frame time collapses ([performance.md](performance.md) §First question):
+
+1. `grep CMAKE_BUILD_TYPE build/CMakeCache.txt` — and the app now prints
+   `[build] optimized` / `[build] DEBUG …` at launch and paints it beside the HUD
+   FPS counter, so the answer is on screen.
+2. `/usr/bin/sample <pid>` on a running `--shot` — trivial header functions
+   (`wrap_macro`, `MacroGrid::mask`) showing up as out-of-line calls through
+   DYLD stubs means unoptimized, full stop.
+3. Only then read the diff.
+
+Measure per-frame cost by the SLOPE of two `--shot` runs at different `--frames`
+(load is ~2.5 s Release / ~21 s Debug and swamps a single run). Never quote a
+frame time from one run, and never quote one at all without naming the build type.
+
 Ensure **zero warnings**. That is `-Wall -Wextra -Wno-unused-parameter` on
 Clang/GCC and `/W4 /wd4100` on MSVC, applied by the single `giga_target_flags()`
 function in the top-level `CMakeLists.txt`; vendored Dear ImGui lives in its own

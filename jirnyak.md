@@ -173,7 +173,7 @@
        ```
     3. **Валидация привязки (`anchor_validate_step`):** Системы проверяют `reg.view<Transform, SubVoxelAnchor>()` против `MacroGrid`. Если субоксель становится `kCellAir`, проп падает (`DynamicBodyTag` + `GravityAffected`) или распадается на обломки.
     4. **Чистая `interaction_step()`:** В `src/game/` создается `interaction_step(Registry& reg, World& world, EventBus& bus, Entity player)`, которая итерирует view `<Transform, Interactable>` без распределений памяти `std::vector` в кадре.
-- **ОБРАБОТКА `World::carve` И `anchor_step()`:** `World::carve` при вырезании стены просто возвращает список измененных координат `dirtyCells`. Система `anchor_step()` в слое `giga_game` прогоняет этот список по EnTT-реестру и роняет отвалившиеся пропы.
+- **ОБРАБОТКА `World::carve` И `anchor_validate_step()`:** `World::carve` при вырезании стены просто возвращает список измененных координат `dirtyCells`. Система `anchor_validate_step()` в слое `giga_game` прогоняет этот список по EnTT-реестру и роняет отвалившиеся пропы.
 - **ПОДВОДНЫЙ КАМЕНЬ №4: ПЕРЕКЛЮЧЕНИЕ РЕНДЕРА (PropPass -> BodyPass):**
   - **Проблема:** Статичные пропы отрисовываются через GPU-батч `PropPass` (в `src/render/`), а падающие физические объекты — через `BodyPass`.
   - **Опасность:** При потере якоря проп **НЕ ДОЛЖЕН УДАЛЯТЬСЯ И СОЗДАВАТЬСЯ ЗАНОВО В ПАМЯТИ**!

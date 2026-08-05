@@ -31,29 +31,33 @@ never a code branch**. **Array index IS the id**, exactly as an `NpcId` is its
 pool slot; an inventory slot ([inventory.h](src/game/inventory.h)) stores that
 `uint16` id and id `0` is the empty/none sentinel. Ported from the reference
 (`../gigahrush`, `src/data/items.ts`): a faithful representative span today
-(every `ItemType`, every use-effect archetype), grown toward the full set by
+(every `ItemCategory`, every use-effect archetype), grown toward the full set by
 pure data edits.
 
 Each `ItemDef` row carries:
 
-- **`type`** (`ItemType`: Food/Drink/Medicine/Weapon/Tool/Key/Note/Misc/Ammo —
-  numeric values are load-bearing, matching the reference ordinal).
+- **`category`** (`ItemCategory`, [item_table.h](src/game/item_table.h)):
+  Misc/Weapon/Food/Medicine/Ammo/Tool/Drink/Key/Note. The ordinals are OUR
+  frequency order (Misc = 0, the 268-row bulk), not the reference's — the CSV
+  authors the name, the generator assigns the number, so nothing may key on it.
 - **`name`** — the reference string key (`"bread"`, `"ak47"`) for HUD/debug and
   loot resolution; `item_id("bread")` resolves it back to the id (cold path).
 - **`value`** (rubles — the economy axis and loot value-gate), **`spawnW`** (base
   spawn weight), **`stack`**, **`durability`**.
-- **`resist[5]`** — armor mitigation percent per `DamageType`
-  (Kinetic/Buckshot/Energy/Fire/Psi); 0 on non-armor.
-- **`tags`** — an `ItemTag` bitmask (Weapon/Ranged/Melee/Ammo/Armor/Consumable/
-  Food/Drink/Medicine/Tool/Key/Contraband/Valuable/Craft/Science/Quest), the set
-  loot placement, the economy and the AI branch on.
+- **`resist[5]`** — armor mitigation percent per `DamageChannel`
+  ([combat.h](src/game/combat.h): Kinetic/Buckshot/Energy/Fire/Psi), pinned equal
+  to `DamageChannel::Count`; 0 on non-armor.
+- **`tags_hot` / `tags_all`** — authored as STRINGS in the CSV (465 distinct
+  ones). Honest status: **no consumer reads them yet** — the two-tier flattening
+  into a bitmask is a planned pass, and until it lands loot placement, the economy
+  and the AI branch on `category`, `spawn_rooms` and the numeric scores instead.
 - **`science` / `contraband` / `deceptive`** — quest/economy scores.
 - **`use`** — a `UseEffect` (see below).
 
 Weapon **combat** stats (damage, range, magazine, ammo type) are deliberately a
 **separate registry** keyed by the same id — they land with combat, exactly as
 the reference splits `ItemDef` from weapon stats. The catalog only marks weapons
-by `type` + `TagWeapon`/`TagRanged`/`TagMelee` and their `value` for now.
+by `category` and their `value` for now.
 
 ### Use-effects close the digestion loop
 
@@ -86,8 +90,9 @@ mechanisms:
   **independently** per entry, each dropping a uniform `[minCount,maxCount]`; the
   surviving hits are shuffled and **capped at 3 stacks**. Fires on **any** death.
 
-`roll_mob_loot(kind, seed, killerIsPlayer)` returns a fixed-capacity (`≤4`)
-`LootResult` and is **deterministic from `seed`** (mixed from sim-time + entity
+`roll_mob_loot_slots(mobKind, mobTier, floorNumber, seed, outSlots, outCap)`
+([loot.h](src/game/loot.h)) fills a fixed POD slot buffer — no entities — and is
+**deterministic from `seed`** (mixed from sim-time + entity
 id at the kill site) with **no stored RNG state** — a local draw counter over
 giga's native splitmix mixer ([core/rng.h](src/core/rng.h)) substitutes the
 reference's stateful xorshift32 while porting every loot semantic verbatim (draw

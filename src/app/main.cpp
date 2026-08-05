@@ -115,6 +115,14 @@ using namespace giga;
 
 namespace {
 
+// Which binary is this? NDEBUG is the one thing every optimized CMake
+// configuration defines and Debug does not, so it needs no CMake cooperation.
+#ifdef NDEBUG
+constexpr const char* kBuildKind = "optimized";
+#else
+constexpr const char* kBuildKind = "DEBUG — NO OPTIMIZATION, ~10x slower sim";
+#endif
+
 constexpr int kWinW = 1280;
 constexpr int kWinH = 720;
 
@@ -1461,6 +1469,14 @@ int main(int argc, char** argv) {
         else if (a == "--orbit") { shotOrbit = true; }
         else if (a == "--action" && i + 1 < argc) { shotAction = argv[++i]; }
     }
+
+    // SAY WHICH BINARY THIS IS, every launch. An unoptimized tree is ~10x
+    // slower on the sim (measured 2026-08-05: 62 ms/frame at -O0 against 5.9 ms
+    // at -O3, same scene) — and it looks exactly like a performance regression
+    // in whatever landed last, because nothing about the build says otherwise.
+    // Cheap line, one whole debugging session saved. Rebuild with
+    // `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release`.
+    std::fprintf(stderr, "[build] %s\n", kBuildKind);
 
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
@@ -4279,6 +4295,11 @@ int main(int argc, char** argv) {
             ImGui::Begin("gigahrush2");
             ImGui::Text("%.1f FPS (%.2f ms)", frameDt > 0 ? 1.0f / frameDt : 0.0f,
                         frameDt * 1000.0f);
+#ifndef NDEBUG
+            // A slow frame must never be mistaken for a code regression when it
+            // is really an unoptimized tree (see the [build] line at launch).
+            ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.25f, 1.0f), "%s", kBuildKind);
+#endif
             ImGui::Text("cpu record: cube %.2f ms | body %.2f ms", cubeMs, bodyMs);
             ImGui::Text("mirror: dirty %u | up %u cells %.1f KiB | pages %u%s",
                         voxelMirror.dirty_backlog(),
