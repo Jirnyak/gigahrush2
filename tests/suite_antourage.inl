@@ -4,6 +4,7 @@
 // Included into game_test.cpp after its CHECK macro and `using namespace`.
 
 #include <algorithm>
+#include <chrono>
 #include <functional>
 #include "game/antourage/antourage.h"
 #include "sim/physics.h"     // aabb_overlaps_solid — the rest test
@@ -457,7 +458,16 @@ static void test_pipes_hug_and_branch() {
     World w;
     generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
     AntourageBake b;
+    // BUDGET, the last line of the owner's spec: measured, not asserted. A wall
+    // clock on a shared machine makes a flaky gate, but an unmeasured budget is
+    // not a budget — so the number is printed every run and written down in
+    // [antourage.md]. The bake is load-path work ([performance.md]).
+    const auto t0 = std::chrono::steady_clock::now();
     bake_antourage(w, 0, 1337u, b);
+    const auto t1 = std::chrono::steady_clock::now();
+    std::fprintf(stderr, "[antourage] bake: %.1f ms, %zu instances\n",
+                 std::chrono::duration<double, std::milli>(t1 - t0).count(),
+                 b.instances.size());
 
     const float step = kCellSize / static_cast<float>(kSubDim);
     std::uint32_t legs = 0, joints = 0, floating = 0;

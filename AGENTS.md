@@ -294,6 +294,35 @@ break the parse.
 3. **Strict Ban on Modern Chrome**:
    - Absolutely no soft glowing casino cards, rounded modern SaaS widgets, or decorative non-functional UI fluff.
 
+## Measure the thing the owner is looking at
+
+Four rounds of "the pipes are still broken" (2026-08-05) were four rounds of
+MEASURING THE WRONG NUMBER. Each time the metric was green and the screenshot
+was not, and each time the metric was the lie:
+
+- counting FITTINGS and calling it connectivity — an island of two segments
+  passes; union-find over the emitted pieces said 5 components, then 90 when the
+  key was wrong, then 3 when it was right;
+- keying a network node by its ANCHOR cell — a bend inside one cell has two
+  faces and therefore two anchors, so a connected corner read as two strangers;
+- ray-marching from a piece's CENTRE to prove it touches — a half-link reaches
+  into the neighbour's cell, where the ceiling may be higher, so 12 correctly
+  clamped pipes read as floating and 967 floating ones once read as fine.
+
+Rules that came out of it, and they generalise past pipes:
+
+1. **Measure the property the complaint names, not a proxy for it.** "Не сеть" is
+   connected components. "Висят в воздухе" is the distance from the piece to the
+   surface it names as its anchor. "Всё на первом этаже" is a histogram over the
+   whole 128³, never a look near the camera.
+2. **A metric that passes while the screenshot fails is a BUG IN THE METRIC.**
+   Fix it first; only then argue about the code it was grading.
+3. **Print the number every run.** A count in the log is what lets the next
+   session see a regression as a number instead of as a feeling.
+4. **State the acceptance criteria before the fix** (the owner's own form: ЧТО /
+   ГДЕ / СИММЕТРИЯ / МОДЕЛЬ / БЮДЖЕТ / ПРОВЕРКА — [problems.md] §11) and make the
+   test print exactly those.
+
 ## Workflow Checklist
 
 1. Make the smallest change that solves the problem.
