@@ -204,7 +204,7 @@ inline std::size_t state_of(std::size_t cellIdx, int face) {
 // Can a pipe in `c` clamp to `face`? The cell must be air and the neighbour on
 // the far side of that face must carry matter in the 2x2 column the clamp
 // bites — the same question the bracket will be drawn against.
-bool can_hug(const MacroGrid& g, const WalkCell& c, int face) {
+bool can_hug(const MacroGrid& g, const WalkCell& c, std::uint8_t face) {
     if (!is_air(g, c)) return false;
     const int ax = antourage_face_axis(face);
     const int dr = antourage_face_dir(face);
@@ -215,7 +215,7 @@ bool can_hug(const MacroGrid& g, const WalkCell& c, int face) {
 
 // The world point a pipe sits at inside `c` on `face`: cell centre on the two
 // free axes, the REAL surface plus a radius on the third.
-vec3 pipe_point(const MacroGrid& g, const WalkCell& c, int face) {
+vec3 pipe_point(const MacroGrid& g, const WalkCell& c, std::uint8_t face) {
     const int ax = antourage_face_axis(face);
     const int dr = antourage_face_dir(face);
     vec3 p{static_cast<float>(c.x) * kCellSize + 1.0f,
@@ -232,7 +232,7 @@ vec3 pipe_point(const MacroGrid& g, const WalkCell& c, int face) {
     return p;
 }
 
-WalkCell face_anchor(const WalkCell& c, int face) {
+WalkCell face_anchor(const WalkCell& c, std::uint8_t face) {
     return stepped(c, antourage_face_axis(face), -antourage_face_dir(face));
 }
 
@@ -268,7 +268,7 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
     // (owner: "часть труб была на полу"). Ceiling first, then the four walls —
     // ceilings carry the distribution, walls carry the risers.
     const int kFaces = 5;
-    const int faceOrder[kFaces] = {
+    const std::uint8_t faceOrder[kFaces] = {
         antourage_face_pack(f.axis, -f.upSign),
         antourage_face_pack(f.tanA, -1), antourage_face_pack(f.tanA, 1),
         antourage_face_pack(f.tanB, -1), antourage_face_pack(f.tanB, 1),
@@ -280,7 +280,7 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
                 if (!is_air(g, c)) continue;
                 const std::size_t ci = macro_index(x, y, z);
                 for (int fi = 0; fi < kFaces; ++fi) {
-                    const int face = faceOrder[fi];
+                    const std::uint8_t face = faceOrder[fi];
                     if (!can_hug(g, c, face)) continue;
                     const std::size_t st = state_of(ci, face);
                     net[st].pred = -3;
