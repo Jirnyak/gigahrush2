@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Архитектурный контракт ГИГАХРУЩА</title>
+  <desc id="desc">Схема пяти слоев core, data, gen, systems и render вокруг одного World. Генераторы строят World, системы меняют состояние, рендер читает World.</desc>
+  <defs>
+    <linearGradient id="pageBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f6f2ea"/>
+      <stop offset="1" stop-color="#e5ded1"/>
+    </linearGradient>
+    <linearGradient id="worldBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#17212b"/>
+      <stop offset="1" stop-color="#253546"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#1d1b16" flood-opacity="0.16"/>
+    </filter>
+    <marker id="arrowDark" markerWidth="14" markerHeight="14" refX="11" refY="7" orient="auto" markerUnits="strokeWidth">
+      <path d="M2 2 L12 7 L2 12 Z" fill="#26313a"/>
+    </marker>
+    <marker id="arrowMuted" markerWidth="13" markerHeight="13" refX="10" refY="6.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M2 2 L11 6.5 L2 11 Z" fill="#8b8174"/>
+    </marker>
+    <style>
+      .base { font-family: Inter, Arial, Helvetica, sans-serif; }
+      .h1 { font-size: 46px; font-weight: 850; fill: #171a1d; letter-spacing: 0; }
+      .sub { font-size: 23px; font-weight: 500; fill: #5c574e; letter-spacing: 0; }
+      .layerName { font-size: 33px; font-weight: 850; fill: #15191d; letter-spacing: 0; }
+      .layerBody { font-size: 19px; font-weight: 550; fill: #45484b; letter-spacing: 0; }
+      .chip { font-size: 22px; font-weight: 800; fill: #1d242b; letter-spacing: 0; }
+      .worldName { font-size: 54px; font-weight: 900; fill: #ffffff; letter-spacing: 0; }
+      .worldBody { font-size: 22px; font-weight: 650; fill: #d5e3ec; letter-spacing: 0; }
+      .caption { font-size: 29px; font-weight: 800; fill: #171a1d; letter-spacing: 0; }
+      .note { font-size: 21px; font-weight: 500; fill: #5a554d; letter-spacing: 0; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#pageBg)"/>
+  <rect x="42" y="40" width="1516" height="820" rx="30" fill="#fffaf1" stroke="#d5ccbd" stroke-width="2"/>
+
+  <g class="base">
+    <text x="800" y="106" text-anchor="middle" class="h1">Архитектурный контракт ГИГАХРУЩА</text>
+    <text x="800" y="145" text-anchor="middle" class="sub">пять слоев ответственности вокруг одного активного World</text>
+
+    <g filter="url(#softShadow)">
+      <rect x="105" y="214" width="220" height="150" rx="14" fill="#dceaf0" stroke="#84a5b4" stroke-width="2"/>
+      <rect x="386" y="214" width="220" height="150" rx="14" fill="#f0e7c8" stroke="#c5ac55" stroke-width="2"/>
+      <rect x="667" y="214" width="220" height="150" rx="14" fill="#dfeecf" stroke="#89ad69" stroke-width="2"/>
+      <rect x="948" y="214" width="220" height="150" rx="14" fill="#ead8df" stroke="#ba8192" stroke-width="2"/>
+      <rect x="1229" y="214" width="220" height="150" rx="14" fill="#d9dfef" stroke="#8192ba" stroke-width="2"/>
+    </g>
+
+    <g>
+      <text x="215" y="267" text-anchor="middle" class="layerName">core</text>
+      <text x="215" y="305" text-anchor="middle" class="layerBody">типы, константы</text>
+      <text x="215" y="333" text-anchor="middle" class="layerBody">форма World</text>
+
+      <text x="496" y="267" text-anchor="middle" class="layerName">data</text>
+      <text x="496" y="305" text-anchor="middle" class="layerBody">предметы, фракции</text>
+      <text x="496" y="333" text-anchor="middle" class="layerBody">квесты, монстры</text>
+
+      <text x="777" y="267" text-anchor="middle" class="layerName">gen</text>
+      <text x="777" y="305" text-anchor="middle" class="layerBody">этажи, комнаты</text>
+      <text x="777" y="333" text-anchor="middle" class="layerBody">POI, размещение</text>
+
+      <text x="1058" y="267" text-anchor="middle" class="layerName">systems</text>
+      <text x="1058" y="305" text-anchor="middle" class="layerBody">AI, A-Life, бой</text>
+      <text x="1058" y="333" text-anchor="middle" class="layerBody">save, интеракции</text>
+
+      <text x="1339" y="267" text-anchor="middle" class="layerName">render</text>
+      <text x="1339" y="305" text-anchor="middle" class="layerBody">WebGL / canvas</text>
+      <text x="1339" y="333" text-anchor="middle" class="layerBody">HUD, карта</text>
+    </g>
+
+    <path d="M326 289 H374" stroke="#8b8174" stroke-width="4" fill="none" marker-end="url(#arrowMuted)"/>
+    <path d="M607 289 H655" stroke="#8b8174" stroke-width="4" fill="none" marker-end="url(#arrowMuted)"/>
+    <path d="M888 289 H936" stroke="#8b8174" stroke-width="4" fill="none" marker-end="url(#arrowMuted)"/>
+    <path d="M1169 289 H1217" stroke="#8b8174" stroke-width="4" fill="none" marker-end="url(#arrowMuted)"/>
+
+    <rect x="470" y="494" width="660" height="190" rx="28" fill="url(#worldBg)" filter="url(#softShadow)"/>
+    <rect x="500" y="524" width="600" height="128" rx="17" fill="none" stroke="#5d7488" stroke-width="2"/>
+    <text x="800" y="582" text-anchor="middle" class="worldName">World</text>
+    <text x="800" y="624" text-anchor="middle" class="worldBody">cells, roomMap, features, light, fog, entities</text>
+
+    <path d="M777 365 V476" stroke="#26313a" stroke-width="5" fill="none" marker-end="url(#arrowDark)"/>
+    <rect x="672" y="401" width="210" height="42" rx="21" fill="#fffaf1" stroke="#c8bdab" stroke-width="2"/>
+    <text x="777" y="429" text-anchor="middle" class="chip">gen builds</text>
+
+    <path d="M1058 365 V476" stroke="#26313a" stroke-width="5" fill="none" marker-end="url(#arrowDark)"/>
+    <rect x="936" y="401" width="244" height="42" rx="21" fill="#fffaf1" stroke="#c8bdab" stroke-width="2"/>
+    <text x="1058" y="429" text-anchor="middle" class="chip">systems mutate</text>
+
+    <path d="M1130 589 C1264 584 1339 502 1339 382" stroke="#26313a" stroke-width="5" fill="none" marker-end="url(#arrowDark)"/>
+    <rect x="1194" y="506" width="222" height="42" rx="21" fill="#fffaf1" stroke="#c8bdab" stroke-width="2"/>
+    <text x="1305" y="534" text-anchor="middle" class="chip">render reads</text>
+
+    <path d="M215 365 C260 418 326 454 458 521" stroke="#8b8174" stroke-width="3" stroke-dasharray="10 13" fill="none" marker-end="url(#arrowMuted)"/>
+    <rect x="248" y="432" width="206" height="38" rx="19" fill="#fffaf1" stroke="#d2c6b6" stroke-width="2"/>
+    <text x="351" y="457" text-anchor="middle" class="note">defines shape</text>
+
+    <path d="M496 365 C542 418 604 454 686 486" stroke="#8b8174" stroke-width="3" stroke-dasharray="10 13" fill="none" marker-end="url(#arrowMuted)"/>
+    <rect x="455" y="432" width="256" height="38" rx="19" fill="#fffaf1" stroke="#d2c6b6" stroke-width="2"/>
+    <text x="583" y="457" text-anchor="middle" class="note">definitions feed</text>
+
+    <text x="800" y="760" text-anchor="middle" class="caption">Генераторы строят World, системы меняют состояние, рендер только читает.</text>
+    <text x="800" y="804" text-anchor="middle" class="note">Контент добавляется через данные, генераторы, события и интеракции, а не через исключения в главном цикле.</text>
+  </g>
+</svg>

@@ -1,0 +1,979 @@
+
+> gigahrush@1.0.0 test:generation
+> node scripts/run-generation-tests.mjs
+
+Generation test selection: 296 files; 187 unit files covered by npm run test:unit.
+Generation test file 1/296: tests/alife-migration-data.test.ts
+TAP version 13
+# Subtest: A-Life population plan validates and allocates the run-sized budget
+ok 1 - A-Life population plan validates and allocates the run-sized budget
+  ---
+  duration_ms: 24.667856
+  type: 'test'
+  ...
+# Subtest: A-Life population plan uses seed-sized totals below technical capacity
+ok 2 - A-Life population plan uses seed-sized totals below technical capacity
+  ---
+  duration_ms: 82.212791
+  type: 'test'
+  ...
+# Subtest: A-Life population plan keeps authored floor taste and NPC-free route stops explicit
+ok 3 - A-Life population plan keeps authored floor taste and NPC-free route stops explicit
+  ---
+  duration_ms: 7.126825
+  type: 'test'
+  ...
+# Subtest: A-Life population plan projects one runtime NPC package into one reserved identity
+ok 4 - A-Life population plan projects one runtime NPC package into one reserved identity
+  ---
+  duration_ms: 6.921585
+  type: 'test'
+  ...
+# Subtest: A-Life population plan dedupes package rows by plotNpcId
+ok 5 - A-Life population plan dedupes package rows by plotNpcId
+  ---
+  duration_ms: 4.527346
+  type: 'test'
+  ...
+# Subtest: A-Life population plan does not synthesize reservations without NPC packages
+ok 6 - A-Life population plan does not synthesize reservations without NPC packages
+  ---
+  duration_ms: 7.000621
+  type: 'test'
+  ...
+# Subtest: A-Life population plan reserves design packages on design route keys
+ok 7 - A-Life population plan reserves design packages on design route keys
+  ---
+  duration_ms: 6.186445
+  type: 'test'
+  ...
+# Subtest: A-Life population plan keeps event-only reservations on route-allowed NPC-free floors
+ok 8 - A-Life population plan keeps event-only reservations on route-allowed NPC-free floors
+  ---
+  duration_ms: 23.833343
+  type: 'test'
+  ...
+# Subtest: A-Life population plan skips non-runtime and unreviewed community packages
+ok 9 - A-Life population plan skips non-runtime and unreviewed community packages
+  ---
+  duration_ms: 8.884189
+  type: 'test'
+  ...
+# Subtest: A-Life population plan resolves authored NPC floor keys from their content packages
+ok 10 - A-Life population plan resolves authored NPC floor keys from their content packages
+  ---
+  duration_ms: 14.581351
+  type: 'test'
+  ...
+# Subtest: A-Life migration profiles validate statically
+ok 11 - A-Life migration profiles validate statically
+  ---
+  duration_ms: 1.002537
+  type: 'test'
+  ...
+# Subtest: shared floor key resolver covers story, design and procedural A-Life keys
+ok 12 - shared floor key resolver covers story, design and procedural A-Life keys
+  ---
+  duration_ms: 0.187176
+  type: 'test'
+  ...
+1..12
+# tests 12
+# suites 0
+# pass 12
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1897.190186
+Generation test file 2/296: tests/antenna-court.test.ts
+TAP version 13
+# Subtest: antenna court expands into mid/micro rooms and five cell-first territories
+ok 1 - antenna court expands into mid/micro rooms and five cell-first territories
+  ---
+  duration_ms: 9436.217543
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 11708.891083
+Generation test file 3/296: tests/attractor-dvor.test.ts
+TAP version 13
+# Subtest: attractor_dvor is registered as a maintenance authored route floor
+ok 1 - attractor_dvor is registered as a maintenance authored route floor
+  ---
+  duration_ms: 2.230224
+  type: 'test'
+  ...
+# Subtest: attractor_dvor population profile favors liquidator flow crews and industrial monsters
+ok 2 - attractor_dvor population profile favors liquidator flow crews and industrial monsters
+  ---
+  duration_ms: 2.131739
+  type: 'test'
+  ...
+# Subtest: attractor_dvor exposes flow streamlines, local switches, patrol loop and route cues
+ok 3 - attractor_dvor exposes flow streamlines, local switches, patrol loop and route cues
+  ---
+  duration_ms: 4716.892861
+  type: 'test'
+  ...
+# Subtest: genfix 085 attractor_dvor expands into macro, mid, micro and cell-first territories
+ok 4 - genfix 085 attractor_dvor expands into macro, mid, micro and cell-first territories
+  ---
+  duration_ms: 253.46837
+  type: 'test'
+  ...
+# Subtest: attractor_dvor ships the dead-zone cut, transit cache and pressure actors
+ok 5 - attractor_dvor ships the dead-zone cut, transit cache and pressure actors
+  ---
+  duration_ms: 85.977003
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 7164.078076
+Generation test file 4/296: tests/bank-floor.test.ts
+TAP version 13
+# Subtest: bank_floor is registered as an authored Ministry-band route
+ok 1 - bank_floor is registered as an authored Ministry-band route
+  ---
+  duration_ms: 1.597892
+  type: 'test'
+  ...
+# Subtest: normal lift route reaches bank_floor between Ministry and Raionsovet archive
+ok 2 - normal lift route reaches bank_floor between Ministry and Raionsovet archive
+  ---
+  duration_ms: 10.017708
+  type: 'test'
+  ...
+# Subtest: bank_floor population profile targets bank crowds, guards and paper monsters
+ok 3 - bank_floor population profile targets bank crowds, guards and paper monsters
+  ---
+  duration_ms: 1.853325
+  type: 'test'
+  ...
+# Subtest: bank_floor generator creates named banking rooms, NPCs, containers and passable spawn
+ok 4 - bank_floor generator creates named banking rooms, NPCs, containers and passable spawn
+  ---
+  duration_ms: 3142.221827
+  type: 'test'
+  ...
+# Subtest: bank_floor has named mini-HQs and cell territory near target shares
+ok 5 - bank_floor has named mini-HQs and cell territory near target shares
+  ---
+  duration_ms: 73.352473
+  type: 'test'
+  ...
+# Subtest: bank_floor full route keeps crowd density and guarded vault pressure in playable bands
+ok 6 - bank_floor full route keeps crowd density and guarded vault pressure in playable bands
+  ---
+  duration_ms: 2.19068
+  type: 'test'
+  ...
+# Subtest: bank_floor marks vault risk SDF around high-value rooms and escape pressure
+ok 7 - bank_floor marks vault risk SDF around high-value rooms and escape pressure
+  ---
+  duration_ms: 0.483314
+  type: 'test'
+  ...
+# Subtest: bank_floor exposes legal deposit and risky vault interactions through existing systems
+ok 8 - bank_floor exposes legal deposit and risky vault interactions through existing systems
+  ---
+  duration_ms: 2788.723106
+  type: 'test'
+  ...
+# Subtest: bank_floor registers banking side quests for deposit, loan, repayment and forged paper choices
+ok 9 - bank_floor registers banking side quests for deposit, loan, repayment and forged paper choices
+  ---
+  duration_ms: 0.739021
+  type: 'test'
+  ...
+1..9
+# tests 9
+# suites 0
+# pass 9
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 7709.576419
+Generation test file 5/296: tests/black-market-88.test.ts
+TAP version 13
+# Subtest: black_market_88 is the z -10 authored Living-band route floor
+ok 1 - black_market_88 is the z -10 authored Living-band route floor
+  ---
+  duration_ms: 1.371569
+  type: 'test'
+  ...
+# Subtest: black_market_88 population profile keeps market crowd and service-gut monster pressure bounded
+ok 2 - black_market_88 population profile keeps market crowd and service-gut monster pressure bounded
+  ---
+  duration_ms: 1.877278
+  type: 'test'
+  ...
+# Subtest: black_market_88 generator exposes bazaar, auction, service guts, containers and decision NPCs
+ok 3 - black_market_88 generator exposes bazaar, auction, service guts, containers and decision NPCs
+  ---
+  duration_ms: 4196.297784
+  type: 'test'
+  ...
+# Subtest: black_market_88 uses wild-dominant cell territory with authored mini HQ compounds
+ok 4 - black_market_88 uses wild-dominant cell territory with authored mini HQ compounds
+  ---
+  duration_ms: 78.885352
+  type: 'test'
+  ...
+# Subtest: black_market_88 hub graph is scale-free enough without uncapped hub degree
+ok 5 - black_market_88 hub graph is scale-free enough without uncapped hub degree
+  ---
+  duration_ms: 0.45423
+  type: 'test'
+  ...
+# Subtest: black_market_88 small-world alleys and raid shutters leave survivable bypasses
+ok 6 - black_market_88 small-world alleys and raid shutters leave survivable bypasses
+  ---
+  duration_ms: 79.257552
+  type: 'test'
+  ...
+# Subtest: black_market_88 state covers purchase, debt, raid and samosbor demand without live simulation
+ok 7 - black_market_88 state covers purchase, debt, raid and samosbor demand without live simulation
+  ---
+  duration_ms: 1.384259
+  type: 'test'
+  ...
+1..7
+# tests 7
+# suites 0
+# pass 7
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6097.050536
+Generation test file 6/296: tests/bolnichny-korpus.test.ts
+TAP version 13
+# Subtest: bolnichny_korpus is registered as a Kvartiry-band authored hospital route
+ok 1 - bolnichny_korpus is registered as a Kvartiry-band authored hospital route
+  ---
+  duration_ms: 1.390704
+  type: 'test'
+  ...
+# Subtest: bolnichny_korpus population profile targets medical staff and infected pressure
+ok 2 - bolnichny_korpus population profile targets medical staff and infected pressure
+  ---
+  duration_ms: 1.730464
+  type: 'test'
+  ...
+# Subtest: bolnichny_korpus generator ships clean and dirty routes without trapping lifts
+ok 3 - bolnichny_korpus generator ships clean and dirty routes without trapping lifts
+  ---
+  duration_ms: 5202.010287
+  type: 'test'
+  ...
+# Subtest: bolnichny_korpus expands into hospital micro rooms and cell-first territory shares
+ok 4 - bolnichny_korpus expands into hospital micro rooms and cell-first territory shares
+  ---
+  duration_ms: 177.449885
+  type: 'test'
+  ...
+# Subtest: bolnichny_korpus gates pharmacy loot but keeps it reachable through clearance paths
+ok 5 - bolnichny_korpus gates pharmacy loot but keeps it reachable through clearance paths
+  ---
+  duration_ms: 86.993538
+  type: 'test'
+  ...
+# Subtest: bolnichny_korpus exposes authored NPCs and treatment, forgery, escort and exposure hooks
+ok 6 - bolnichny_korpus exposes authored NPCs and treatment, forgery, escort and exposure hooks
+  ---
+  duration_ms: 1.053616
+  type: 'test'
+  ...
+1..6
+# tests 6
+# suites 0
+# pass 6
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 7163.472301
+Generation test file 7/296: tests/cantor-pustoty.test.ts
+TAP version 13
+# Subtest: cantor_pustoty is registered as a late Void route floor
+ok 1 - cantor_pustoty is registered as a late Void route floor
+  ---
+  duration_ms: 2.840512
+  type: 'test'
+  ...
+# Subtest: cantor_pustoty generates recursive gaps, repaired bridges, and reachable route anchors
+ok 2 - cantor_pustoty generates recursive gaps, repaired bridges, and reachable route anchors
+  ---
+  duration_ms: 6827.911224
+  type: 'test'
+  ...
+# Subtest: cantor_pustoty spreads cell-first faction territory from authored mini-HQs
+ok 3 - cantor_pustoty spreads cell-first faction territory from authored mini-HQs
+  ---
+  duration_ms: 78.13281
+  type: 'test'
+  ...
+# Subtest: cantor_pustoty exposes tool preparation, risky dust-island loot, and cue markers
+ok 4 - cantor_pustoty exposes tool preparation, risky dust-island loot, and cue markers
+  ---
+  duration_ms: 483.40053
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 9225.316475
+Generation test file 8/296: tests/caravans.test.ts
+TAP version 13
+# Subtest: caravan lane definitions validate and cover required supply lanes
+ok 1 - caravan lane definitions validate and cover required supply lanes
+  ---
+  duration_ms: 2.881114
+  type: 'test'
+  ...
+# Subtest: forced caravan tick moves stock between two floors and publishes visible events
+ok 2 - forced caravan tick moves stock between two floors and publishes visible events
+  ---
+  duration_ms: 7.025343
+  type: 'test'
+  ...
+# Subtest: caravan tariff getter reflects robbery pressure and paid stabilization
+ok 3 - caravan tariff getter reflects robbery pressure and paid stabilization
+  ---
+  duration_ms: 1.88396
+  type: 'test'
+  ...
+# Subtest: caravan tariffs feed item economy quotes and invalidate cached prices
+ok 4 - caravan tariffs feed item economy quotes and invalidate cached prices
+  ---
+  duration_ms: 2.061131
+  type: 'test'
+  ...
+# Subtest: caravan exchange registers route choices and quest events open or close lanes
+ok 5 - caravan exchange registers route choices and quest events open or close lanes
+  ---
+  duration_ms: 2.044592
+  type: 'test'
+  ...
+# Subtest: caravan contract completions apply escort, raid, reroute, report, and seat outcomes
+ok 6 - caravan contract completions apply escort, raid, reroute, report, and seat outcomes
+  ---
+  duration_ms: 3.755987
+  type: 'test'
+  ...
+# Subtest: small caravan runs open near service cells without appending new people
+ok 7 - small caravan runs open near service cells without appending new people
+  ---
+  duration_ms: 659.476876
+  type: 'test'
+  ...
+# Subtest: small caravan claims existing persistent A-Life members
+ok 8 - small caravan claims existing persistent A-Life members
+  ---
+  duration_ms: 427.030444
+  type: 'test'
+  ...
+# Subtest: small caravan assigns identity only to eligible ordinary members
+ok 9 - small caravan assigns identity only to eligible ordinary members
+  ---
+  duration_ms: 379.513177
+  type: 'test'
+  ...
+# Subtest: small caravan rejects player, plot, quest, and menu-target NPCs without creating a ghost run
+ok 10 - small caravan rejects player, plot, quest, and menu-target NPCs without creating a ghost run
+  ---
+  duration_ms: 431.623557
+  type: 'test'
+  ...
+# Subtest: small caravan arrival moves surviving member A-Life records to destination key
+ok 11 - small caravan arrival moves surviving member A-Life records to destination key
+  ---
+  duration_ms: 407.040245
+  type: 'test'
+  ...
+# Subtest: caravan raids do not kill every persistent member by default
+ok 12 - caravan raids do not kill every persistent member by default
+  ---
+  duration_ms: 426.069618
+  type: 'test'
+  ...
+# Subtest: off-floor caravan lane migration moves a bounded prefilled A-Life record
+ok 13 - off-floor caravan lane migration moves a bounded prefilled A-Life record
+  ---
+  duration_ms: 367.676503
+  type: 'test'
+  ...
+1..13
+# tests 13
+# suites 0
+# pass 13
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4526.844213
+Generation test file 9/296: tests/cayley-byuro.test.ts
+TAP version 13
+# Subtest: cayley_byuro is registered as a Ministry-band authored route
+ok 1 - cayley_byuro is registered as a Ministry-band authored route
+  ---
+  duration_ms: 1.463292
+  type: 'test'
+  ...
+# Subtest: cayley_byuro form order is deterministic and non-commutative
+ok 2 - cayley_byuro form order is deterministic and non-commutative
+  ---
+  duration_ms: 0.334798
+  type: 'test'
+  ...
+# Subtest: cayley_byuro authored generator creates graph rooms, cues and decision containers
+ok 3 - cayley_byuro authored generator creates graph rooms, cues and decision containers
+  ---
+  duration_ms: 1718.76861
+  type: 'test'
+  ...
+# Subtest: cayley_byuro full route owns cells from faction HQ anchors
+ok 4 - cayley_byuro full route owns cells from faction HQ anchors
+  ---
+  duration_ms: 4333.694871
+  type: 'test'
+  ...
+# Subtest: cayley_byuro full route applies bounded Ministry population pressure
+ok 5 - cayley_byuro full route applies bounded Ministry population pressure
+  ---
+  duration_ms: 3535.269452
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 11379.124896
+Generation test file 10/296: tests/chthonic-attic.test.ts
+TAP version 13
+# Subtest: chthonic_attic expands the root macro into service islands and micro rooms
+ok 1 - chthonic_attic expands the root macro into service islands and micro rooms
+  ---
+  duration_ms: 6632.853024
+  type: 'test'
+  ...
+# Subtest: chthonic_attic seeds cell-first faction HQs and target territory shares
+ok 2 - chthonic_attic seeds cell-first faction HQs and target territory shares
+  ---
+  duration_ms: 809.343303
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 9298.523864
+Generation test file 11/296: tests/communal-ring.test.ts
+TAP version 13
+# Subtest: communal_ring is the authored коммуналка route floor
+ok 1 - communal_ring is the authored коммуналка route floor
+  ---
+  duration_ms: 1.417356
+  type: 'test'
+  ...
+# Subtest: communal_ring generator creates through communal flats with quest NPCs
+ok 2 - communal_ring generator creates through communal flats with quest NPCs
+  ---
+  duration_ms: 4108.031429
+  type: 'test'
+  ...
+# Subtest: communal_ring uses the design population field as a dense social floor
+ok 3 - communal_ring uses the design population field as a dense social floor
+  ---
+  duration_ms: 25.315778
+  type: 'test'
+  ...
+# Subtest: communal_ring seeds authored human faction HQs and target cell territory shares
+ok 4 - communal_ring seeds authored human faction HQs and target cell territory shares
+  ---
+  duration_ms: 77.294415
+  type: 'test'
+  ...
+# Subtest: communal_ring registers communal service and through-flat side quests
+ok 5 - communal_ring registers communal service and through-flat side quests
+  ---
+  duration_ms: 0.631376
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5931.477161
+Generation test file 12/296: tests/content-registry.test.ts
+TAP version 13
+# Subtest: Living zone content labels are visible and unique after manifest import
+ok 1 - Living zone content labels are visible and unique after manifest import
+  ---
+  duration_ms: 1.830352
+  type: 'test'
+  ...
+# Subtest: side quest registry snapshot exposes unique ids after floor manifests import
+ok 2 - side quest registry snapshot exposes unique ids after floor manifests import
+  ---
+  duration_ms: 1.266143
+  type: 'test'
+  ...
+# Subtest: registered content ids and plot NPC package ids are unique
+ok 3 - registered content ids and plot NPC package ids are unique
+  ---
+  duration_ms: 4.026003
+  type: 'test'
+  ...
+# Subtest: plot chain and side quest references resolve through NPC packages
+ok 4 - plot chain and side quest references resolve through NPC packages
+  ---
+  duration_ms: 1.859309
+  type: 'test'
+  ...
+# Subtest: AG82 idol branches preserve the main Yakov item path
+ok 5 - AG82 idol branches preserve the main Yakov item path
+  ---
+  duration_ms: 0.396861
+  type: 'test'
+  ...
+# Subtest: contracts, rumors, rooms, and variants reference existing ids
+ok 6 - contracts, rumors, rooms, and variants reference existing ids
+  ---
+  duration_ms: 6.210892
+  type: 'test'
+  ...
+# Subtest: monster ecology covers every registered monster and resolves tactical references
+ok 7 - monster ecology covers every registered monster and resolves tactical references
+  ---
+  duration_ms: 1.271321
+  type: 'test'
+  ...
+1..7
+# tests 7
+# suites 0
+# pass 7
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1871.701856
+Generation test file 13/296: tests/craft-recipe-sources.test.ts
+TAP version 13
+# Subtest: craft recipe source recipe ids resolve to current item ids
+ok 1 - craft recipe source recipe ids resolve to current item ids
+  ---
+  duration_ms: 2.135078
+  type: 'test'
+  ...
+# Subtest: craft recipe source registry covers every discovery kind
+ok 2 - craft recipe source registry covers every discovery kind
+  ---
+  duration_ms: 0.490049
+  type: 'test'
+  ...
+# Subtest: item and terminal recipe sources point at existing registries
+ok 3 - item and terminal recipe sources point at existing registries
+  ---
+  duration_ms: 0.215719
+  type: 'test'
+  ...
+# Subtest: quest recipe sources are attached through authored quest eventData
+ok 4 - quest recipe sources are attached through authored quest eventData
+  ---
+  duration_ms: 0.364764
+  type: 'test'
+  ...
+# Subtest: using a consumed item recipe source learns recipes and removes one item
+ok 5 - using a consumed item recipe source learns recipes and removes one item
+  ---
+  duration_ms: 6.387487
+  type: 'test'
+  ...
+# Subtest: duplicate consumed item source does not duplicate recipes or consume the item
+ok 6 - duplicate consumed item source does not duplicate recipes or consume the item
+  ---
+  duration_ms: 1.238255
+  type: 'test'
+  ...
+# Subtest: consumed source is not spent when no crafting state can be written
+ok 7 - consumed source is not spent when no crafting state can be written
+  ---
+  duration_ms: 0.410312
+  type: 'test'
+  ...
+# Subtest: non-consumed item recipe source learns recipes and keeps the item
+ok 8 - non-consumed item recipe source learns recipes and keeps the item
+  ---
+  duration_ms: 1.228054
+  type: 'test'
+  ...
+# Subtest: note source data learns a recipe without raw text matching
+ok 9 - note source data learns a recipe without raw text matching
+  ---
+  duration_ms: 2.627264
+  type: 'test'
+  ...
+# Subtest: direct craft note sources are reachable from generic note data
+ok 10 - direct craft note sources are reachable from generic note data
+  ---
+  duration_ms: 0.656405
+  type: 'test'
+  ...
+# Subtest: npc teaching option learns at most one deterministic occupation-gated recipe
+ok 11 - npc teaching option learns at most one deterministic occupation-gated recipe
+  ---
+  duration_ms: 9.926596
+  type: 'test'
+  ...
+# Subtest: recipe billboard learns a floor source through the generic interactive path
+ok 12 - recipe billboard learns a floor source through the generic interactive path
+  ---
+  duration_ms: 9.783053
+  type: 'test'
+  ...
+# Subtest: quest completion unlocks stable recipe ids from eventData
+ok 13 - quest completion unlocks stable recipe ids from eventData
+  ---
+  duration_ms: 36.374729
+  type: 'test'
+  ...
+# Subtest: terminal recipe source is local and offline safe
+ok 14 - terminal recipe source is local and offline safe
+  ---
+  duration_ms: 30.320787
+  type: 'test'
+  ...
+1..14
+# tests 14
+# suites 0
+# pass 14
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1135.058652
+Generation test file 14/296: tests/craft-stations.test.ts
+TAP version 13
+# Subtest: craft station interactive ids are registered
+ok 1 - craft station interactive ids are registered
+  ---
+  duration_ms: 1.700499
+  type: 'test'
+  ...
+# Subtest: craft station placement profiles are data-owned per floor route
+ok 2 - craft station placement profiles are data-owned per floor route
+  ---
+  duration_ms: 0.634271
+  type: 'test'
+  ...
+# Subtest: craft station placement refuses blocked and protected empty cells
+ok 3 - craft station placement refuses blocked and protected empty cells
+  ---
+  duration_ms: 8.890894
+  type: 'test'
+  ...
+# Subtest: craft station placement may attach to a matching protected authored feature only
+ok 4 - craft station placement may attach to a matching protected authored feature only
+  ---
+  duration_ms: 33.693448
+  type: 'test'
+  ...
+# Subtest: craft station interaction opens generic craft and disassembly hooks
+ok 5 - craft station interaction opens generic craft and disassembly hooks
+  ---
+  duration_ms: 65.737783
+  type: 'test'
+  ...
+# Subtest: station surface flags rehydrate behavior on a restored world object
+ok 6 - station surface flags rehydrate behavior on a restored world object
+  ---
+  duration_ms: 122.099402
+  type: 'test'
+  ...
+# Subtest: LIVING expedition prep exposes reachable lathe and disassembly station pair
+ok 7 - LIVING expedition prep exposes reachable lathe and disassembly station pair
+  ---
+  duration_ms: 32020.150191
+  type: 'test'
+  ...
+# Subtest: Yakov lab exposes a guaranteed reachable lathe and disassembly workbench
+ok 8 - Yakov lab exposes a guaranteed reachable lathe and disassembly workbench
+  ---
+  duration_ms: 445.807104
+  type: 'test'
+  ...
+# Subtest: ordinary story floor craft station placement stays reachable and capped
+ok 9 - ordinary story floor craft station placement stays reachable and capped
+  ---
+  duration_ms: 5341.205668
+  type: 'test'
+  ...
+# Subtest: maintenance collectors use the story-floor craft station profile
+ok 10 - maintenance collectors use the story-floor craft station profile
+  ---
+  duration_ms: 6059.80775
+  type: 'test'
+  ...
+# Subtest: slime NII uses design-floor craft station profile
+ok 11 - slime NII uses design-floor craft station profile
+  ---
+  duration_ms: 6755.657594
+  type: 'test'
+  ...
+# Subtest: procedural craft station placement respects cap and avoids aptMask
+ok 12 - procedural craft station placement respects cap and avoids aptMask
+  ---
+  duration_ms: 4443.718997
+  type: 'test'
+  ...
+1..12
+# tests 12
+# suites 0
+# pass 12
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 58051.357154
+Generation test file 15/296: tests/critical-leak-archive.test.ts
+TAP version 13
+# Subtest: critical_leak_archive is registered as a Ministry archive route stop
+ok 1 - critical_leak_archive is registered as a Ministry archive route stop
+  ---
+  duration_ms: 2.760895
+  type: 'test'
+  ...
+# Subtest: critical_leak_archive carves a wet percolation archive with bridges and route lifts
+ok 2 - critical_leak_archive carves a wet percolation archive with bridges and route lifts
+  ---
+  duration_ms: 3597.435831
+  type: 'test'
+  ...
+# Subtest: critical_leak_archive fills the macro with registry blocks, micro rooms and HQ compounds
+ok 3 - critical_leak_archive fills the macro with registry blocks, micro rooms and HQ compounds
+  ---
+  duration_ms: 130.30518
+  type: 'test'
+  ...
+# Subtest: critical_leak_archive seeds cell-first HQ territory and target shares
+ok 4 - critical_leak_archive seeds cell-first HQ territory and target shares
+  ---
+  duration_ms: 73.563852
+  type: 'test'
+  ...
+# Subtest: critical_leak_archive exposes dry packet, contaminated shortcut and floodgate decisions
+ok 5 - critical_leak_archive exposes dry packet, contaminated shortcut and floodgate decisions
+  ---
+  duration_ms: 111.371219
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5758.361532
+Generation test file 16/296: tests/dark-metro-genfix-083.test.ts
+TAP version 13
+# Subtest: dark_metro is registered as the z-32 Maintenance route shortcut
+ok 1 - dark_metro is registered as the z-32 Maintenance route shortcut
+  ---
+  duration_ms: 1.501423
+  type: 'test'
+  ...
+# Subtest: dark_metro keeps rail macro shape and fills it with mid and micro station rooms
+ok 2 - dark_metro keeps rail macro shape and fills it with mid and micro station rooms
+  ---
+  duration_ms: 5033.19224
+  type: 'test'
+  ...
+# Subtest: dark_metro has authored mini HQ compounds and target cell-first territory shares
+ok 3 - dark_metro has authored mini HQ compounds and target cell-first territory shares
+  ---
+  duration_ms: 78.131372
+  type: 'test'
+  ...
+# Subtest: dark_metro ambient veterans prefer their own cell territory after territory spread
+ok 4 - dark_metro ambient veterans prefer their own cell territory after territory spread
+  ---
+  duration_ms: 1.37954
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6987.715482
+Generation test file 17/296: tests/darkness-floor.test.ts
+TAP version 13
+# Subtest: darkness floor exposes light, reveal, sound and radon topology state
+ok 1 - darkness floor exposes light, reveal, sound and radon topology state
+  ---
+  duration_ms: 1037.368734
+  type: 'test'
+  ...
+# Subtest: darkness full route has mid/micro structure and named cell-first HQ territory
+ok 2 - darkness full route has mid/micro structure and named cell-first HQ territory
+  ---
+  duration_ms: 3590.781081
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6467.706365
+Generation test file 18/296: tests/data-ids.test.ts
+TAP version 13
+# Subtest: item ids are unique, keyed by id, and weapon items have stats
+ok 1 - item ids are unique, keyed by id, and weapon items have stats
+  ---
+  duration_ms: 3.929958
+  type: 'test'
+  ...
+# Subtest: ammo uses planned sources and explicit scarcity resources
+ok 2 - ammo uses planned sources and explicit scarcity resources
+  ---
+  duration_ms: 1.344846
+  type: 'test'
+  ...
+# Subtest: story and side quest ids are unique and resolve through NPC packages
+ok 3 - story and side quest ids are unique and resolve through NPC packages
+  ---
+  duration_ms: 7.26172
+  type: 'test'
+  ...
+# Subtest: contract, resource, factory, and container ids stay coherent
+not ok 4 - contract, resource, factory, and container ids stay coherent
+  ---
+  duration_ms: 4.736685
+  type: 'test'
+  location: '/app/tests/data-ids.test.ts:1:10587'
+  failureType: 'testCodeFailure'
+  error: "Cannot read properties of undefined (reading 'forEach')"
+  code: 'ERR_TEST_FAILURE'
+  name: 'TypeError'
+  stack: |-
+    TestContext.<anonymous> (/app/tests/data-ids.test.ts:376:18)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: compact expedition contracts cover real contract actions with concrete targets
+ok 5 - compact expedition contracts cover real contract actions with concrete targets
+  ---
+  duration_ms: 0.834431
+  type: 'test'
+  ...
+# Subtest: samosbor variants, director beats, and aftermath stay coherent
+ok 6 - samosbor variants, director beats, and aftermath stay coherent
+  ---
+  duration_ms: 1.102994
+  type: 'test'
+  ...
+# Subtest: samosbor variants keep the universal active pipeline and variant fog semantics
+ok 7 - samosbor variants keep the universal active pipeline and variant fog semantics
+  ---
+  duration_ms: 0.991243
+  type: 'test'
+  ...
+# Subtest: samosbor floor families expose warning and aftermath identities
+ok 8 - samosbor floor families expose warning and aftermath identities
+  ---
+  duration_ms: 0.716158
+  type: 'test'
+  ...
+# Subtest: slime definitions expose stable sample ids and text handles
+ok 9 - slime definitions expose stable sample ids and text handles
+  ---
+  duration_ms: 1.932322
+  type: 'test'
+  ...
+# Subtest: zhelemish definitions expose stable item ids and economy roles
+ok 10 - zhelemish definitions expose stable item ids and economy roles
+  ---
+  duration_ms: 1.373839
+  type: 'test'
+  ...
+# Subtest: rumor reveals and expedition leads reference known gameplay ids
+ok 11 - rumor reveals and expedition leads reference known gameplay ids
+  ---
+  duration_ms: 1.691641
+  type: 'test'
+  ...
+# Subtest: screen signal definitions reference known rumors, rooms, factions, and variants
+ok 12 - screen signal definitions reference known rumors, rooms, factions, and variants
+  ---
+  duration_ms: 0.941409
+  type: 'test'
+  ...
+# Subtest: permit and local terminal registries stay keyed and reference live data
+ok 13 - permit and local terminal registries stay keyed and reference live data
+  ---
+  duration_ms: 1.689947
+  type: 'test'
+  ...
+# Subtest: monster ecology and floor catalog ids are unique and valid
+ok 14 - monster ecology and floor catalog ids are unique and valid
+  ---
+  duration_ms: 2.640308
+  type: 'test'
+  ...
+1..14
+# tests 14
+# suites 0
+# pass 13
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2607.305976
+Generation test file failed: tests/data-ids.test.ts

@@ -1,0 +1,27 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "gigahrush",
+  "main": "./functions/worker.ts",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/api/*"
+    ]
+  },
+  "compatibility_date": "2026-05-18",
+  "send_metrics": false,
+  "d1_databases": [
+    {
+      "binding": "GIGA_NET",
+      "database_name": "gigahrush-net",
+      "database_id": "1dfe42b8-45a3-4cc9-a7ca-c2032358e460"
+    },
+    {
+      "binding": "NPC_DB",
+      "database_name": "gigahrush-npc-intake",
+      "database_id": "f4a9d06f-66f2-4335-8a9f-b2008c7f9c8c"
+    }
+  ]
+}

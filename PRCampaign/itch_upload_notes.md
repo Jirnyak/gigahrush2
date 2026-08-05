@@ -1,0 +1,21 @@
+Required itch.io HTML5 settings:
+- Kind of game: HTML
+- Upload: itch/gigahrush-itch.zip
+- File setting: This file will be played in the browser
+- Embed option for mobile: Mobile Friendly enabled
+- Launch mode: Click to launch in fullscreen
+- Scrollbars: disabled
+
+Why: itch.io runs HTML5 games inside an iframe. On mobile, Mobile Friendly makes itch.io launch the game into a fullscreen/fill-window viewport. The game canvas is built to resize to that viewport.
+Launch distinctions:
+- Direct HTTPS/static/Cloudflare page: FULL requests native browser fullscreen only when the browser exposes a compatible Fullscreen API.
+- Embedded itch/mobile iframe: FULL is a direct-page launcher and opens ?standalone=1 instead of requesting iframe fullscreen.
+- iPhone/iPad WebKit: forced fullscreen is disabled because it can reload the web view. Use the direct page or Add to Home Screen standalone launch.
+
+The ZIP includes PWA manifest, icons, and service worker metadata for direct mobile launch. Before upload, verify manifest.webmanifest, sw.js, icon-192.png, icon-512.png, and apple-touch-icon.png are at the archive root next to index.html.
+
+Release size notes:
+- Run npm run build:size after npm run build for the single-file HTML/gzip report.
+- npm run itch:build runs the same warning-only report after packaging, including current ZIP upload weight.
+- Current warning thresholds: 9.5 MB HTML, 4.5 MB HTML gzip, 4.5 MB itch ZIP, 5.8 MB Bad Apple frame source, 3.3 MB Bad Apple frame gzip.
+- Warnings do not block this first budget pass. If a release crosses one, keep the content, note the reason, and compact generated frames/sprite/texture code before adding more heavy data.

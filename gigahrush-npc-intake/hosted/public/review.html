@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TENEVIK NPC review</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #101212;
+        --panel: #1d2020;
+        --line: #515953;
+        --text: #e6e0d0;
+        --muted: #9ba095;
+        --accent: #d0b35d;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      }
+      main {
+        width: min(1200px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 24px 0 40px;
+      }
+      header {
+        display: grid;
+        grid-template-columns: minmax(220px, 1fr) auto;
+        gap: 12px;
+        align-items: end;
+        margin-bottom: 16px;
+      }
+      input, select, textarea, button {
+        border: 1px solid var(--line);
+        background: #0f1111;
+        color: var(--text);
+        padding: 8px 10px;
+        font: inherit;
+      }
+      button { color: var(--accent); border-color: var(--accent); cursor: pointer; }
+      .grid { display: grid; gap: 12px; }
+      article {
+        border: 1px solid var(--line);
+        background: var(--panel);
+        padding: 14px;
+        display: grid;
+        gap: 10px;
+      }
+      .top {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .muted { color: var(--muted); }
+      .actions {
+        display: grid;
+        grid-template-columns: repeat(4, max-content) minmax(180px, 1fr);
+        gap: 8px;
+        align-items: start;
+      }
+      @media (max-width: 760px) {
+        header, .actions { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <label>Review token
+          <input id="token" type="password" autocomplete="off">
+        </label>
+        <button id="load">Загрузить заявки</button>
+      </header>
+      <section id="list" class="grid"></section>
+    </main>
+    <script>
+      const token = document.getElementById('token');
+      const list = document.getElementById('list');
+      const headers = () => ({ 'X-Tenevik-Review-Token': token.value });
+
+      function escapeHtml(value) {
+        return String(value ?? '').replace(/[&<>"']/g, ch => ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#39;',
+        })[ch]);
+      }
+
+      async function api(path, init = {}) {
+        const response = await fetch(path, { ...init, headers: { ...headers(), ...(init.headers || {}) } });
+        const type = response.headers.get('Content-Type') || '';
+        const data = type.includes('json') ? await response.json() : await response.text();
+        if (!response.ok || data.ok === false) throw new Error(data.error || 'request failed');
+        return data;
+      }
+
+      function render(submissions) {
+        list.innerHTML = '';
+        for (const sub of submissions) {
+          const article = document.createElement('article');
+          const preview = sub.preview || {};
+          article.innerHTML = `
+            <div class="top">
+              <strong>${escapeHtml(sub.packageId)}</strong>
+              <span>${escapeHtml(sub.status)}</span>
+            </div>
+            <div class="muted">${escapeHtml(sub.submissionId)}</div>
+            <div class="muted">contact: ${escapeHtml(sub.authorContactPrivate || 'not provided')}</div>
+            <div>${escapeHtml(preview.publicLine || 'Нет публичной строки')}</div>
+            <div class="muted">${escapeHtml(preview.samplePost || '')}</div>
+            <div class="actions">
+              <button data-download="${escapeHtml(sub.submissionId)}">ZIP</button>
+              <button data-export="${escapeHtml(sub.submissionId)}">Export</button>
+              <select data-status="${escapeHtml(sub.submissionId)}">
+                ${['submitted', 'needs_review', 'accepted', 'rejected', 'imported'].map(status => `<option ${status === sub.status ? 'selected' : ''}>${escapeHtml(status)}</option>`).join('')}
+              </select>
+              <button data-save="${escapeHtml(sub.submissionId)}">Save</button>
+              <textarea data-notes="${escapeHtml(sub.submissionId)}" placeholder="moderator notes">${escapeHtml(sub.moderatorNotes || '')}</textarea>
+            </div>
+          `;
+          list.appendChild(article);
+        }
+      }
+
+      async function load() {
+        const data = await api('/api/review/submissions');
+        render(data.submissions || []);
+      }
+
+      document.getElementById('load').addEventListener('click', () => load().catch(err => alert(err.message)));
+      list.addEventListener('click', async event => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        const download = target.dataset.download;
+        const exportId = target.dataset.export;
+        const save = target.dataset.save;
+        try {
+          if (download) {
+            const response = await fetch(`/api/review/submissions/${download}/download`, { headers: headers() });
+            if (!response.ok) throw new Error('download failed');
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `${download}.zip`;
+            link.click();
+            URL.revokeObjectURL(url);
+          } else if (exportId) {
+            const data = await api(`/api/review/submissions/${exportId}/export`);
+            alert(`${data.export.root}\n${data.export.files.join('\n')}`);
+          } else if (save) {
+            const status = list.querySelector(`[data-status="${save}"]`).value;
+            const moderatorNotes = list.querySelector(`[data-notes="${save}"]`).value;
+            await api(`/api/review/submissions/${save}/status`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ status, moderatorNotes })
+            });
+            await load();
+          }
+        } catch (err) {
+          alert(err.message);
+        }
+      });
+    </script>
+  </body>
+</html>

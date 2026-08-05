@@ -1,0 +1,9 @@
+{
+  "locale": "en",
+  "notes": "Reviewed EN batch for newly added/changed UI control strings.",
+  "entries": {
+    "gt_34060409ebb338": "${controlBindingLabel('controlsMenu')} - keys  |  ${controlBindingLabel('menuUp')}/${controlBindingLabel('menuDown')} - choose  |  ${controlBindingLabel('interact')} - confirm  |  ${controlBindingLabel('gameMenu')} - close",
+    "gt_7c0e1dc9fc8721": "${controls} - keys  |  ${move} - move  |  Mouse - look  |  ${interact} - action",
+    "gt_98a025c58fef17": "Fullscreen is unavailable in this browser or container."
+  }
+}

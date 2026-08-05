@@ -1,0 +1,107 @@
+{
+  "updatedAt": "2026-05-22T02:08:32.447Z",
+  "entries": [
+    {
+      "name": "anim_hell_blinking_eyes.gif",
+      "note": "GIF: адские стены и пол с моргающими глазами, 36 кадров / 4 секунды",
+      "upload": true,
+      "bytes": 6060864
+    },
+    {
+      "name": "anim_underhell_maronary_samosbor_loop.gif",
+      "note": "GIF: Underhell + маронарий/самосбор",
+      "upload": true,
+      "bytes": 3797308
+    },
+    {
+      "name": "hell_02-hell-maronary-samosbor.png",
+      "note": "ад + маронарий, сильный зелёный самосборный эффект",
+      "upload": true,
+      "bytes": 2151364
+    },
+    {
+      "name": "hell_03-underhell-gate-pack.png",
+      "note": "Underhell, нижний пропускник и опасный пак",
+      "upload": true,
+      "bytes": 2048768
+    },
+    {
+      "name": "hell_05-void-eye-protocols.png",
+      "note": "Пустота, протоколы и тёмные сущности",
+      "upload": true,
+      "bytes": 1854594
+    },
+    {
+      "name": "hell_06-darkness-route-blackout.png",
+      "note": "Darkness, почти чёрная зона",
+      "upload": true,
+      "bytes": 1481712
+    },
+    {
+      "name": "hell_07-procedural-wall-snake.png",
+      "note": "процедурная опасная зона wall_snake",
+      "upload": true,
+      "bytes": 1735600
+    },
+    {
+      "name": "hell_09-smog-false-safe-block.png",
+      "note": "смог / ложная зачистка",
+      "upload": true,
+      "bytes": 1767305
+    },
+    {
+      "name": "loc_03-ministerstvo-raionsovet-archive.png",
+      "note": "министерство, райсовет и архив",
+      "upload": true,
+      "bytes": 2044064
+    },
+    {
+      "name": "loc_04-kollektory-maintenance.png",
+      "note": "коллекторы / технический этаж",
+      "upload": true,
+      "bytes": 2167948
+    },
+    {
+      "name": "loc_07-krysha-antenny.png",
+      "note": "крыша, небо и антенны",
+      "upload": true,
+      "bytes": 2062113
+    },
+    {
+      "name": "extra_01-living-start-hud.png",
+      "note": "жилая зона, стартовый HUD",
+      "upload": true,
+      "bytes": 2189480
+    },
+    {
+      "name": "extra_03-living-monster-ring-clean.png",
+      "note": "жилая зона, монстры вокруг игрока",
+      "upload": true,
+      "bytes": 2344349
+    },
+    {
+      "name": "extra_04-living-combat-hud.png",
+      "note": "боевой HUD-кадр",
+      "upload": true,
+      "bytes": 2310194
+    },
+    {
+      "name": "anim_hell_blinking_eyes_preview.png",
+      "note": "preview-кадр для проверки GIF",
+      "upload": false,
+      "bytes": 2029447
+    },
+    {
+      "name": "anim_hell_blinking_eyes_strip.png",
+      "note": "контрольная полоска кадров, не для загрузки",
+      "upload": false,
+      "bytes": 406875
+    },
+    {
+      "name": "contact_sheet.png",
+      "note": "старый контакт-лист, не для загрузки",
+      "upload": false,
+      "bytes": 1774707
+    }
+  ]
+}

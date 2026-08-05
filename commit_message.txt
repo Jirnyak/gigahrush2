@@ -1,0 +1,5 @@
+🧪 Add missing edge case test for dist2
+
+🎯 **What:** The testing gap addressed is the lack of an edge case test for the wrapping logic in the `dist2` function in `src/core/world.ts`.
+📊 **Coverage:** The scenario where distances wrap around the edge of the toroidal world (e.g. from coordinates (1,1) to (1023,1023)) is now tested.
+✨ **Result:** The test coverage has improved by including this edge case, increasing the reliability of distance calculations in the codebase.

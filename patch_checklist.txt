@@ -1,0 +1,25 @@
+Patch Checklist:
+
+- What changed and why?
+  Added procedural generation logic to `procedural_floor.ts` to spawn 5-8 Wild NPCs outside the Liquidator checkpoint perimeters when generating a Liquidator majority floor (`applyLiquidatorMajorityProfile`). Also added 2-3 Liquidator patrollers starting at a checkpoint and heading towards the wild zone (`AIGoal.GOTO`) to organically trigger a skirmish. Modified `forpost.ts` to also simulate a perimeter skirmish on the maintenance floor by spawning 5-8 Wild NPCs far from the base and modifying 2 Liquidator guards to `AIGoal.WANDER` so they patrol and engage the Wilds.
+
+- Where is the new gameplay visible or which debug path reaches it?
+  On procedural floors with a Liquidator majority, there will be skirmishes between Liquidator patrollers and Wild NPCs far from the main checkpoints. In the `forpost` room on the maintenance floor, patrollers will wander and fight a spawned group of Wild NPCs outside their base.
+
+- Which floor, route, zone, room or system verifies it?
+  `procedural_floor.ts` (Liquidator majority floors) and `forpost.ts` (Maintenance floor Forpost plot room).
+
+- How does it react to samosbor, or why is it exempt?
+  It relies on standard A-Life/NPC spawning and AI components. Samosbor handles them identically to other ambient NPCs (fleeing, dying, etc.).
+
+- Does it touch A-Life, factions, economy, quests, events, save/load, localization or render?
+  Touches A-Life/generation by injecting the NPCs. The faction system handles the actual combat seamlessly.
+
+- What cap, cadence, cache, dirty flag or placement-time work prevents frame-time growth?
+  It runs exactly once at floor generation time (`generateForpost`, `spawnLiquidatorPerimeterSkirmish`).
+
+- Were docs updated only for shipped facts?
+  No new architectural rules or docs required for this spawn variation.
+
+- Which checks passed, or why were checks skipped?
+  `npm run typecheck` and `npm run test:generation` passed locally.

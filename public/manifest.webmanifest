@@ -1,0 +1,27 @@
+{
+  "id": "./",
+  "name": "ГИГАХРУЩ",
+  "short_name": "ГИГАХРУЩ",
+  "description": "Процедурный survival-horror в бетонной мегаструктуре.",
+  "start_url": "./?standalone=1",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "landscape",
+  "background_color": "#000000",
+  "theme_color": "#050707",
+  "icons": [
+    {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,333 @@
+diff --git a/src/main.ts b/src/main.ts
+index a41ac36..4cd5804 100644
+--- a/src/main.ts
++++ b/src/main.ts
+@@ -1,3 +1,4 @@
++import { countAmmo, removeItem, publishPlayerItemEvent } from './systems/inventory';
+ /* ── ГИГАХРУЩ — main entry point ──────────────────────────────── */
+ import './index.css';
+ import './systems/demos_runtime';
+@@ -64,6 +65,7 @@ import { adjustMonsterProjectileDamage, recordMonsterMeleeDeath, recordMonsterPr
+ import { applyMonsterArmorHit } from './systems/monster_armor';
+ import {
+   pickupNearby, useItem, dropItem, getWeaponStats, equippedCombatItemId,
++  addItem,
+   consumeDurability, consumeAmmo, consumeToolDurability, getEquippedToolDurability,
+   updateInventoryConditions,
+ } from './systems/inventory';
+@@ -106,6 +108,7 @@ import {
+   resetUiSettings,
+   screenInterferenceMode,
+   toggleAutoPickup,
++  toggleCrittersEnabled,
+   toggleMapHighContrast,
+   toggleUiElement,
+   toggleMapLegendToggle,
+@@ -200,7 +203,7 @@ import { cleanupToolProfile } from './systems/liquidator_cleanup_items';
+ import { cleanSurfaceArea as cleanWorldSurfaceArea } from './systems/surface_cleanup';
+ import { updateScriptedArrivals } from './systems/scripted_arrivals';
+ import { applyStoryRouteGates } from './systems/story_route_gates';
+-import { setDoorState } from './systems/door_state';
++import { setDoorState, damageDoor } from './systems/door_state';
+ import {
+   freshRPG, awardXP, xpForMonsterKill, xpForNpcKill,
+   meleeDamage, actorMoveSpeed, agiAttackSpeedMult,
+@@ -2851,9 +2854,61 @@ function playerActions(_dt: number): void {
+   const wantsAttack = input.attack || input.mouseAttack;
+   player.attackCd = Math.max(0, (player.attackCd ?? 0) - _dt);
+ 
+-  if (wantsAttack && player.attackCd! <= 0) {
+-    const weaponId = equippedCombatItemId(player);
+-    const ws = getWeaponStats(player, weaponId);
++  const weaponId = equippedCombatItemId(player);
++  const ws = getWeaponStats(player, weaponId);
++
++  // Calculate reload speed mod (agility)
++  const reloadSpeedMod = player.rpg ? (1 + (player.rpg.agi * 0.05)) : 1;
++
++  // Reload Logic
++  if (player.reloading) {
++    player.reloadTimer = Math.max(0, (player.reloadTimer ?? 0) - _dt);
++    if (player.reloadTimer <= 0) {
++      if (ws.magazineSize !== Infinity && ws.ammoType) {
++        const needed = (ws.magazineSize ?? 1) - (player.currentMag ?? 0);
++        if (needed > 0) {
++          const available = countAmmo(player, weaponId);
++          const actual = Math.min(needed, available);
++          if (actual > 0) {
++            removeItem(player, ws.ammoType, actual);
++            player.currentMag = (player.currentMag ?? 0) + actual;
++            publishPlayerItemEvent(state, player, 'ammo_consumed', ws.ammoType, actual, 0);
++          }
++        }
++      } else if (ws.magazineSize === Infinity) {
++        player.currentMag = Infinity;
++      } else {
++        player.currentMag = ws.magazineSize ?? 1; // Melee/Tools
++      }
++      player.reloading = false;
++    }
++  }
++
++  // Manual Reload
++  if (input.reload && !player.reloading && ((player.currentMag ?? 0) < (ws.magazineSize ?? 1))) {
++    if (ws.magazineSize !== Infinity && countAmmo(player, weaponId) > 0) {
++      player.reloading = true;
++      player.reloadTimer = (ws.reloadTime ?? 1) / reloadSpeedMod;
++    } else if (ws.magazineSize === 1) { // melee weapons
++      player.reloading = true;
++      player.reloadTimer = (ws.reloadTime ?? 1) / reloadSpeedMod;
++    }
++  }
++
++  // Auto Reload check
++  if (wantsAttack && !player.reloading && player.attackCd! <= 0) {
++    if (!ws.psiCost && (player.currentMag ?? 0) <= 0 && ws.magazineSize !== Infinity) {
++      if (countAmmo(player, weaponId) > 0 || ws.magazineSize === 1) {
++        player.reloading = true;
++        player.reloadTimer = (ws.reloadTime ?? 1) / reloadSpeedMod;
++      } else {
++        // can't reload, no ammo
++        player.attackCd = 0.5; // stop spam
++      }
++    }
++  }
++
++  if (wantsAttack && player.attackCd! <= 0 && !player.reloading && (ws.psiCost || ws.magazineSize === Infinity || (player.currentMag ?? 0) > 0)) {
+     // AGI reduces attack cooldown
+     const atkSpeedMod = player.rpg ? agiAttackSpeedMult(player.rpg) : 1;
+ 
+@@ -2932,6 +2987,8 @@ function playerActions(_dt: number): void {
+       const ax = player.x + Math.cos(player.angle) * range;
+       const ay = player.y + Math.sin(player.angle) * range;
+ 
++      player.currentMag = 0; // Empty mag for melee
++
+       let hitSomething = isPaupsinaWebCuttingWeapon(weaponId)
+         ? reducePaupsinaWeb(player, state.time, state.msgs, state, player, 'cut')
+         : false;
+@@ -2979,6 +3036,17 @@ function playerActions(_dt: number): void {
+         }
+         hitSomething = true;
+       }
++
++      if (!hitSomething) {
++        const attackIdx = world.idx(Math.floor(ax), Math.floor(ay));
++        if (world.cells[attackIdx] === Cell.DOOR && world.doors.has(attackIdx)) {
++          const door = world.doors.get(attackIdx)!;
++          const broke = damageDoor(world, door, normalDmg);
++          state.msgs.push(msg(broke ? 'Дверь выбита!' : `Удар по двери! -${normalDmg}`, state.time, broke ? '#4a4' : '#aaa'));
++          hitSomething = true;
++        }
++      }
++
+       if (weaponId === 'chainsaw') playChainsaw(); else playAttack();
+       publishWeaponNoise(state, player, weaponId, ws);
+       notifyLiftArachnaNoise(world, player, state, weaponId);
+@@ -3326,7 +3394,7 @@ function updateProjectiles(dt: number): void {
+     let nearestHitT = Infinity;
+     if (pt !== ProjType.FLAME) {
+       for (const e of projectileHitQuery) {
+-        if (!e.alive || e.id === p.ownerId) continue;
++        if (!e.alive) continue;
+         if (e.type !== EntityType.MONSTER && e.type !== EntityType.NPC) continue;
+         const hitT = projectilePathHitT(prevX, prevY, wx, wy, e, hitRadius);
+         if (hitT <= blockingT + 0.000001 && hitT < nearestHitT) {
+@@ -3336,7 +3404,7 @@ function updateProjectiles(dt: number): void {
+       }
+     }
+     for (const e of projectileHitQuery) {
+-      if (!e.alive || e.id === p.ownerId) continue;
++      if (!e.alive) continue;
+       if (e.type !== EntityType.MONSTER && e.type !== EntityType.NPC) continue;
+       if (pt !== ProjType.FLAME && e !== nearestHit) continue;
+       const hitT = pt === ProjType.FLAME ? projectilePathHitT(prevX, prevY, wx, wy, e, hitRadius) : nearestHitT;
+@@ -4923,27 +4991,24 @@ function loadGame(): boolean {
+       state.currentFloor = floor;
+       setFloorRunState(state, savedFloorRun, floor);
+       setFloorInstanceState(state, loadedFloorInstances, floor);
+-      setLiftArachnaState(state, dataState.liftArachna as Parameters<typeof setLiftArachnaState>[1]);
+-      setPseudoliftState(state, dataState.pseudolift as Parameters<typeof setPseudoliftState>[1]);
+-      state.worldEvents = normalizeWorldEventState(dataState.worldEvents as Parameters<typeof normalizeWorldEventState>[0]);
+-      setAlifeMobilityState(state, dataState.alifeMobility);
+-      restoreComputersFromSave(dataState.computers);
+-      restoreNetHackFromSave(dataState.netHack);
+-      state.crafting = restoreCraftingState(dataState.crafting);
+-      restoreDemosSocialFromSave(state, dataState.demosSocial);
+-      normalizeGameEconomy(state, dataState.economy);
+-      (state as GameState & { banking?: BankingState }).banking = normalizeBankingState(dataState.banking);
+-      normalizeGameStockMarket(state, dataState.stockMarket);
+-      setProductionState(state, dataState.production, floor);
+-      state.samosborActive = false;
+-      if (savedSamosborActive) {
+-        state.samosborTimer = Math.max(state.samosborTimer, 45);
+-        state.msgs.push(msg('Активный самосбор из сохранения сброшен: маршрут восстановлен, следующий цикл пересчитан.', state.time, '#fa4'));
+-      }
+-      state.uvBeamFx = 0;
+-      state.uvBeamLen = 0;
+-      floorTeleportCd = 0;
+-      state.gameOver = false;
++      setfunction applyUrinationPenalty(dt: number): void {
++  const room = world.roomAt(player.x, player.y);
++
++  if (!_urinePenaltyStarted) {
++    _urinePenaltyStarted = true;
++
++    publishEvent(state, {
++      type: 'player_urinated',
++      actorId: player.id,
++      x: player.x,
++      y: player.y,
++      roomId: room?.id,
++      severity: 1,
++      privacy: 'witnessed',
++      tags: ['urination'],
++    });
++  }
++}state.gameOver = false;
+       state.gameWon = false;
+       state.deathTimer = 0;
+       resetRuntimeCamera(runtimeCamera);
+@@ -4995,20 +5060,39 @@ let _cleanRelAccum = 0;
+ 
+ function applyUrinationPenalty(dt: number): void {
+   const room = world.roomAt(player.x, player.y);
+-  if (room && room.type === RoomType.BATHROOM) return; // toilet — no penalty
+-
+-  const ownerFaction = territoryFactionAt(world, player.x, player.y);
+-  if (ownerFaction === null) return;
+ 
+   // Immediate penalty when urination starts
+   if (!_urinePenaltyStarted) {
+     _urinePenaltyStarted = true;
+-    addFactionRel(ownerFaction, Faction.PLAYER, -1);
+-    addFactionRel(Faction.PLAYER, ownerFaction, -1);
+-    addKarma(player, -1);
+-    state.msgs.push(msg('Местные недовольны...', state.time, '#f84'));
++    publishEvent(state, {
++      type: 'player_urinated',
++      actorId: player.id,
++      x: player.x,
++      y: player.y,
++      roomId: room?.id,
++      severity: 1,
++      privacy: 'witnessed',
++      tags: ['urination'],
++    });
++
++    if (!room || room.type !== RoomType.BATHROOM) {
++      const ownerFaction = territoryFactionAt(world, player.x, player.y);
++      if (ownerFaction !== null) {
++        addFactionRel(ownerFaction, Faction.PLAYER, -1);
++        addFactionRel(Faction.PLAYER, ownerFaction, -1);
++        addKarma(player, -2);
++        state.msgs.push(msg('Местные недовольны...', state.time, '#f84'));
++      } else {
++        addKarma(player, -1);
++      }
++    }
+   }
+ 
++  if (room && room.type === RoomType.BATHROOM) return; // toilet — no ongoing penalty
++
++  const ownerFaction = territoryFactionAt(world, player.x, player.y);
++  if (ownerFaction === null) return;
++
+   // Ongoing penalty: -1 per game minute (= per real second)
+   _urinePenaltyAccum += dt;
+   if (_urinePenaltyAccum >= 1.0) {
+@@ -5821,6 +5905,18 @@ function closeHelpMenu(): void {
+ 
+ function useInventorySelection(): void {
+   const zoneId = world.zoneMap[world.idx(Math.floor(player.x), Math.floor(player.y))];
++  if (state.invSel === MAX_INVENTORY_SLOTS) {
++    if (player.armorDefId) {
++      const defId = player.armorDefId;
++      if (addItem(player, defId, 1)) {
++        state.msgs.push(msg(`Снята броня: ${ITEMS[defId]?.name ?? defId}`, state.time, '#8cf'));
++        player.armorDefId = undefined;
++      } else {
++        state.msgs.push(msg('Нет места в инвентаре для брони.', state.time, '#f84'));
++      }
++    }
++    return;
++  }
+   const slot = player.inventory?.[state.invSel];
+   if (slot && applyStoryItemOutcomes({
+     trigger: 'use',
+@@ -5834,6 +5930,22 @@ function useInventorySelection(): void {
+ }
+ 
+ function dropInventorySelection(): void {
++  if (state.invSel === MAX_INVENTORY_SLOTS) {
++    if (player.armorDefId) {
++      // Create a temporary slot and drop it using the existing logic
++      // or implement dropArmor
++      const defId = player.armorDefId;
++      const slot = { defId, count: 1 };
++      player.inventory = player.inventory || [];
++      player.inventory.push(slot); // Temporarily put it in to drop it
++      const tempIdx = player.inventory.length - 1;
++      dropItem(player, tempIdx, entities, state.msgs, state.time, nextEntityId, state, world);
++      player.armorDefId = undefined;
++      // dropItem removes the slot from inventory.
++      // Wait, let's just make it simpler
++    }
++    return;
++  }
+   dropItem(player, state.invSel, entities, state.msgs, state.time, nextEntityId, state, world);
+ }
+ 
+@@ -6211,7 +6323,12 @@ function applyUiSettingsSelection(index: number): void {
+     state.msgs.push(msg(`Автоподбор предметов: ${enabled ? 'вкл' : 'выкл'}`, state.time, enabled ? '#8cf' : '#fc8'));
+     return;
+   }
+-  toggleUiElement(row.element.id);
++  if (row.kind === 'critters') {
++    const enabled = toggleCrittersEnabled();
++    state.msgs.push(msg(`Живность: ${enabled ? 'вкл' : 'выкл'}`, state.time, enabled ? '#8cf' : '#fc8'));
++    return;
++  }
++  if (row.kind === 'element') toggleUiElement(row.element.id);
+ }
+ 
+ function applyMapLegendSelection(index: number): void {
+@@ -7108,12 +7225,24 @@ function handleMenuInput(): void {
+     const dnNav = menuDownNav();
+     const leftNav = menuRepeatStep('left', input.invLeft, leftEdge);
+     const rightNav = menuRepeatStep('right', input.invRight, rightEdge);
+-    if (upNav) state.invSel = wrapMenuIndex(state.invSel - INVENTORY_GRID_COLS, MAX_INVENTORY_SLOTS);
+-    if (dnNav) state.invSel = wrapMenuIndex(state.invSel + INVENTORY_GRID_COLS, MAX_INVENTORY_SLOTS);
+-    if (leftNav) state.invSel = wrapMenuIndex(state.invSel - 1, MAX_INVENTORY_SLOTS);
+-    if (rightNav) state.invSel = wrapMenuIndex(state.invSel + 1, MAX_INVENTORY_SLOTS);
++        if (upNav) {
++      if (state.invSel === MAX_INVENTORY_SLOTS) {
++        state.invSel = MAX_INVENTORY_SLOTS - 1;
++      } else {
++        state.invSel = wrapMenuIndex(state.invSel - INVENTORY_GRID_COLS, MAX_INVENTORY_SLOTS);
++      }
++    }
++    if (dnNav) {
++      if (state.invSel >= MAX_INVENTORY_SLOTS - INVENTORY_GRID_COLS && state.invSel < MAX_INVENTORY_SLOTS) {
++        state.invSel = MAX_INVENTORY_SLOTS;
++      } else if (state.invSel !== MAX_INVENTORY_SLOTS) {
++        state.invSel = wrapMenuIndex(state.invSel + INVENTORY_GRID_COLS, MAX_INVENTORY_SLOTS);
++      }
++    }
++    if (leftNav && state.invSel !== MAX_INVENTORY_SLOTS) state.invSel = wrapMenuIndex(state.invSel - 1, MAX_INVENTORY_SLOTS);
++    if (rightNav && state.invSel !== MAX_INVENTORY_SLOTS) state.invSel = wrapMenuIndex(state.invSel + 1, MAX_INVENTORY_SLOTS);
+     if (acceptEdge) useInventorySelection();
+-    if (dropEdge) dropItem(player, state.invSel, entities, state.msgs, state.time, nextEntityId, state, world);
++    if (dropEdge) dropInventorySelection();
+     // Attribute spending (1=STR, 2=AGI, 3=INT)
+     if (input.attrStr && player.rpg && player.rpg.attrPoints > 0) {
+       if (spendAttrPoint(player, 'str'))
+@@ -8050,7 +8179,7 @@ function gameLoop(now: number): void {
+   const renderSceneStart = performance.now();
+   renderSceneGL(world, textures, sprites, entities,
+     cameraView,
+-    fogDensity, glitch, flashlight, uiTime, particles, state.samosborActive, ambientLight, toolBeam, state.uvBeamLen, screenInterference, visualDetailProfile, visualGeometryProfile, visualSurfaceProfile, lightingQualityIndex());
++    fogDensity, glitch, flashlight, uiTime, particles, state.samosborActive, ambientLight, toolBeam, state.uvBeamLen, screenInterference, visualDetailProfile, visualGeometryProfile, visualSurfaceProfile, lightingQualityIndex(), currentFps);
+   lastRenderSceneMs = performance.now() - renderSceneStart;
+ 
+   // Draw HUD on 2D overlay canvas

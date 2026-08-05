@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ГИГАХРУЩ NPC Intake</title>
+    <link rel="stylesheet" href="./src/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <strong>ГИГАХРУЩ / NPC intake</strong>
+        <span id="lookupStatus">lookup: loading</span>
+      </div>
+      <div class="top-actions">
+        <button id="submitPackage" type="button" disabled>Send to dev inbox</button>
+        <button id="exportZip" type="button" disabled>Export ZIP</button>
+      </div>
+    </header>
+
+    <main class="app-shell">
+      <form id="npcForm" class="form-column" autocomplete="off">
+        <section class="panel">
+          <h1>Анкета NPC</h1>
+          <div class="grid two">
+            <label>Package id <input name="id" placeholder="ivan_slesar" required></label>
+            <label>Kind
+              <select name="kind">
+                <option value="plot">plot - сюжетный контракт</option>
+                <option value="design">design - ручной персонаж этажа</option>
+                <option value="procedural" selected>procedural - обычный A-Life человек</option>
+              </select>
+            </label>
+          </div>
+          <p class="hint-line">Kind отвечает за авторский смысл анкеты. Presence и mobility ниже отвечают только за способ попадания NPC в население или сцену.</p>
+        </section>
+
+        <details class="panel" open>
+          <summary>Identity</summary>
+          <div class="grid two">
+            <label class="wide">Имя в игре <input name="displayName" required></label>
+            <label>Прозвище <input name="nickname"></label>
+          </div>
+        </details>
+
+        <details class="panel" open>
+          <summary>Demographics / Affiliation</summary>
+          <div class="grid three">
+            <label>Пол
+              <select name="sex">
+                <option value="male">male</option>
+                <option value="female">female</option>
+              </select>
+            </label>
+            <label>Возраст <input name="age" type="number" min="1" max="100" value="25"></label>
+            <label>Faction <select name="faction" data-lookup="factions"></select></label>
+            <label>Occupation <select name="occupation" data-lookup="occupations"></select></label>
+            <label class="wide">Role tags <input name="roleTags" placeholder="shift, kitchen, witness"></label>
+            <label class="wide">Game visual preset <input name="npcVisualId" list="visualIds" placeholder="occupation default"></label>
+            <input name="sprite" type="hidden">
+            <input name="spriteSeed" type="hidden" value="1">
+            <input name="portraitHint" type="hidden">
+          </div>
+        </details>
+
+        <details class="panel" open>
+          <summary>RPG / Wealth / Loadout</summary>
+          <div class="grid four">
+            <label>Level <input name="level" type="number" min="1" max="100" value="1"></label>
+            <label>STR <input name="str" type="number" min="1" max="100" value="5"></label>
+            <label>AGI <input name="agi" type="number" min="1" max="100" value="5"></label>
+            <label>INT <input name="int" type="number" min="1" max="100" value="5"></label>
+            <label>Cash <input name="cashRubles" type="number" min="0" value="0"></label>
+            <label>Account <input name="accountRubles" type="number" min="0" value="0"></label>
+            <label>Debt <input name="debtRubles" type="number" min="0" value="0"></label>
+            <label>Perks <input name="perks" placeholder="steady_hands:1"></label>
+            <label>Weapon <input name="weapon" list="itemIds"></label>
+            <label>Tool <input name="tool" list="itemIds"></label>
+            <label class="wide">Asset tags <input name="assetTags"></label>
+            <label class="wide">Inventory lines
+              <textarea name="inventory" rows="4" placeholder="bread x 2&#10;bandage x 1"></textarea>
+            </label>
+          </div>
+        </details>
+
+        <details class="panel" open>
+          <summary>Social / Placement</summary>
+          <div class="grid three">
+            <label>Player relation <input name="playerRelation" type="number" min="-100" max="100" value="0"></label>
+            <label>Karma <input name="karma" type="number" min="-127" max="127" value="0"></label>
+            <label>Home floor <select name="homeFloorKey" data-lookup="floorKeys"></select></label>
+            <label>Presence
+              <select name="presence">
+                <option value="population">population</option>
+                <option value="anchor">anchor</option>
+                <option value="room_content">room_content</option>
+                <option value="event_only">event_only</option>
+              </select>
+            </label>
+            <label>Mobility
+              <select name="mobility">
+                <option value="fixed_home">fixed_home</option>
+                <option value="cold_movable">cold_movable</option>
+                <option value="caravan_allowed">caravan_allowed</option>
+                <option value="event_locked">event_locked</option>
+              </select>
+            </label>
+            <label>Room id <input name="roomId"></label>
+            <label class="wide">NPC links, one per line
+              <textarea name="links" rows="5" placeholder="olga|80|friend|friend,work|yes"></textarea>
+            </label>
+            <label class="wide">Room/spawn tags <input name="placementTags" placeholder="kitchen, shelter, queue"></label>
+          </div>
+        </details>
+
+        <details class="panel" open>
+          <summary>Bio / Speech</summary>
+          <div class="grid two">
+            <label class="wide">Public line <input name="publicLine" required maxlength="180"></label>
+            <label>Origin <input name="origin"></label>
+            <label>Work <input name="work"></label>
+            <label class="wide">Wants <textarea name="wants" rows="3"></textarea></label>
+            <label class="wide">Fears <textarea name="fears" rows="3"></textarea></label>
+            <label class="wide">Habits <textarea name="habits" rows="3"></textarea></label>
+            <label class="wide">Secrets <textarea name="secrets" rows="3"></textarea></label>
+            <label>Voice tags <input name="voiceTags" placeholder="terse, tired"></label>
+            <label>Forbidden topics <input name="forbiddenTopics"></label>
+            <label class="wide">Talk lines <textarea name="talkLines" rows="4"></textarea></label>
+            <label class="wide">Post-state talk lines <textarea name="talkLinesPost" rows="3"></textarea></label>
+            <label class="wide">Catchphrases <textarea name="catchphrases" rows="3"></textarea></label>
+            <label class="wide">Demos post hints <textarea name="demosPostHints" rows="3"></textarea></label>
+          </div>
+        </details>
+
+        <details class="panel" open>
+          <summary>Content Proposal / Consent</summary>
+          <div class="grid two">
+            <label>Proposal
+              <select name="contentProposalType">
+                <option value="none">none</option>
+                <option value="quest_seed">quest seed</option>
+                <option value="room_content">room content</option>
+                <option value="note_document">note/document</option>
+                <option value="trade_profile">trade profile</option>
+              </select>
+            </label>
+            <label>Public credit <input name="publicCredit"></label>
+            <label class="wide">Proposal notes <textarea name="contentProposalText" rows="4"></textarea></label>
+            <label class="wide consent">
+              <input name="consent" type="checkbox">
+              I allow TENEVIK GAMES to review, edit and use this NPC package in ГИГАХРУЩ.
+            </label>
+            <label class="wide">Private contact, not exported into npc.json <input name="privateContact"></label>
+          </div>
+        </details>
+      </form>
+
+      <aside class="side-column">
+        <section class="panel sprite-panel">
+          <h2>Sprite lab</h2>
+          <div class="sprite-grid">
+            <label class="file-pick">Upload PNG/JPEG/WebP/GIF<input id="spriteFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif"></label>
+            <div class="tools">
+              <button id="drawPencil" type="button" class="active">Pencil</button>
+              <button id="drawErase" type="button">Erase</button>
+              <button id="drawClear" type="button">Clear</button>
+            </div>
+            <canvas id="drawCanvas" width="128" height="128" aria-label="sprite drawing canvas"></canvas>
+            <canvas id="spriteCanvas" width="128" height="128" aria-label="normalized sprite preview"></canvas>
+          </div>
+          <div class="grid four crop-grid">
+            <label>Body X <input id="bodyX" type="number" min="0" value="0"></label>
+            <label>Body Y <input id="bodyY" type="number" min="0" value="0"></label>
+            <label>Body W <input id="bodyW" type="number" min="1" value="64"></label>
+            <label>Body H <input id="bodyH" type="number" min="1" value="64"></label>
+            <label>Portrait X <input id="portraitX" type="number" min="0" value="12"></label>
+            <label>Portrait Y <input id="portraitY" type="number" min="0" value="2"></label>
+            <label>Portrait W <input id="portraitW" type="number" min="1" value="40"></label>
+            <label>Portrait H <input id="portraitH" type="number" min="1" value="36"></label>
+          </div>
+          <pre id="spriteStatus" class="status-box">Draw or upload a sprite.</pre>
+        </section>
+
+        <section class="panel">
+          <h2>Демос preview</h2>
+          <div id="demosPreview" class="demos-preview"></div>
+          <pre id="validationBox" class="status-box"></pre>
+        </section>
+
+        <section class="panel questionnaire-panel">
+          <h2>Готовые анкеты</h2>
+          <p class="hint-line">Нажатие на карточку заполняет форму как шаблон. Перед экспортом поменяйте id и факты.</p>
+          <label>Фильтр
+            <input id="questionnaireSearch" placeholder="имя, id, этаж, фракция">
+          </label>
+          <div id="questionnaireList" class="questionnaire-list"></div>
+          <pre id="questionnaireDetails" class="status-box">Выберите анкету из списка.</pre>
+        </section>
+      </aside>
+    </main>
+
+    <datalist id="itemIds"></datalist>
+    <datalist id="visualIds"></datalist>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>

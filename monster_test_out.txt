@@ -1,0 +1,5 @@
+
+> gigahrush@1.0.0 test:unit
+> node scripts/run-unit-tests.mjs tests/monster_23_bezekhiy_dead_echo.test.ts
+
+Unit test selection: 250 files; 297 generation/content files reserved for npm run test:generation.

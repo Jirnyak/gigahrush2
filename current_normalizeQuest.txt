@@ -1,0 +1,104 @@
+  4576	function normalizeQuest(raw: unknown, nowMinutes: number): Quest | null {
+  4577	  if (!isRecord(raw)) return null;
+  4578	  const type = normalizeQuestType(raw.type);
+  4579	  if (type === undefined) return null;
+  4580	  const desc = cleanSaveText(raw.desc);
+  4581	  if (!desc) return null;
+  4582	  const id = clampInt(raw.id, 0, 1, 1_000_000);
+  4583	  const done = raw.done === true || raw.failed === true;
+  4584	  const q: Quest = {
+  4585	    id,
+  4586	    type,
+  4587	    giverId: clampInt(raw.giverId, -1, -1, 1_000_000),
+  4588	    giverName: cleanSaveText(raw.giverName, '???', 96),
+  4589	    desc,
+  4590	    done,
+  4591	  };
+  4592
+  4593	  const targetItem = cleanSaveText(raw.targetItem, '', 64);
+  4594	  if (targetItem === 'money' || ITEMS[targetItem]) q.targetItem = targetItem;
+  4595	  if (raw.targetCount !== undefined) q.targetCount = clampInt(raw.targetCount, 1, 1, 999);
+  4596	  if (typeof raw.targetRoom === 'number' && Number.isFinite(raw.targetRoom)) {
+  4597	    q.targetRoom = clampInt(raw.targetRoom, -1, -1, 100_000);
+  4598	  }
+  4599	  if (isFloorLevel(raw.targetFloor)) q.targetFloor = raw.targetFloor;
+  4600	  const targetRoomType = normalizeRoomType(raw.targetRoomType);
+  4601	  if (targetRoomType !== undefined) q.targetRoomType = targetRoomType;
+  4602	  const targetRoomName = cleanSaveText(raw.targetRoomName, '', 96);
+  4603	  if (targetRoomName) q.targetRoomName = targetRoomName;
+  4604	  const targetZoneTag = cleanSaveText(raw.targetZoneTag, '', 48);
+  4605	  if (targetZoneTag) q.targetZoneTag = targetZoneTag;
+  4606	  q.targetRoute = normalizeQuestTargetRoute(raw.targetRoute);
+  4607	  const targetHint = cleanSaveText(raw.targetHint);
+  4608	  if (targetHint) q.targetHint = targetHint;
+  4609	  const targetMonsterKind = normalizeMonsterKind(raw.targetMonsterKind);
+  4610	  if (targetMonsterKind !== undefined) q.targetMonsterKind = targetMonsterKind;
+  4611	  if (raw.killCount !== undefined) q.killCount = clampInt(raw.killCount, 0, 0, 999);
+  4612	  if (raw.killNeeded !== undefined) q.killNeeded = clampInt(raw.killNeeded, 1, 1, 999);
+  4613	  if (typeof raw.targetNpcId === 'number' && Number.isFinite(raw.targetNpcId)) {
+  4614	    q.targetNpcId = clampInt(raw.targetNpcId, -1, -1, 1_000_000);
+  4615	  }
+  4616	  const targetNpcName = cleanSaveText(raw.targetNpcName, '', 96);
+  4617	  if (targetNpcName) q.targetNpcName = targetNpcName;
+  4618	  const targetPlotNpcId = cleanSaveText(raw.targetPlotNpcId, '', 64);
+  4619	  if (targetPlotNpcId) q.targetPlotNpcId = targetPlotNpcId;
+  4620	  const rewardItem = cleanSaveText(raw.rewardItem, '', 64);
+  4621	  if (ITEMS[rewardItem]) q.rewardItem = rewardItem;
+  4622	  if (raw.rewardCount !== undefined) q.rewardCount = clampInt(raw.rewardCount, 1, 1, 999);
+  4623	  q.extraRewards = normalizeRewardList(raw.extraRewards);
+  4624	  if (raw.relationDelta !== undefined) q.relationDelta = clampInt(raw.relationDelta, 0, -100, 100);
+  4625	  if (raw.difficulty !== undefined) q.difficulty = clampNumber(raw.difficulty, 1, 0, 10);
+  4626	  if (raw.xpReward !== undefined) q.xpReward = clampInt(raw.xpReward, 0, 0, 100_000);
+  4627	  if (raw.moneyReward !== undefined) q.moneyReward = clampInt(raw.moneyReward, 0, 0, MAX_SAVE_MONEY);
+  4628	  if (typeof raw.plotStepIndex === 'number' && Number.isFinite(raw.plotStepIndex)) {
+  4629	    q.plotStepIndex = clampInt(raw.plotStepIndex, 0, 0, 10_000);
+  4630	  }
+  4631	  const sideQuestId = cleanSaveText(raw.sideQuestId, '', 96);
+  4632	  if (sideQuestId) q.sideQuestId = sideQuestId;
+  4633	  const contractId = cleanSaveText(raw.contractId, '', 96);
+  4634	  if (contractId) q.contractId = contractId;
+  4635	  const contractFaction = normalizeFaction(raw.contractFaction);
+  4636	  if (contractFaction !== undefined) q.contractFaction = contractFaction;
+  4637	  if (raw.contractRank !== undefined) q.contractRank = clampInt(raw.contractRank, 0, 0, 10);
+  4638	  if (isFloorLevel(raw.visitFloor)) q.visitFloor = raw.visitFloor;
+  4639	  if (raw.holdSeconds !== undefined) q.holdSeconds = clampInt(raw.holdSeconds, 0, 1, 3600);
+  4640	  if (raw.holdProgressSeconds !== undefined) q.holdProgressSeconds = clampNumber(raw.holdProgressSeconds, 0, 0, 3600);
+  4641	  if (raw.holdLastTime !== undefined) q.holdLastTime = clampNumber(raw.holdLastTime, 0, 0, 1_000_000_000);
+  4642	  if (raw.holdResetOnExit !== undefined) q.holdResetOnExit = raw.holdResetOnExit === true;
+  4643	  if (raw.holdSpawnMonsters !== undefined) q.holdSpawnMonsters = clampInt(raw.holdSpawnMonsters, 0, 0, 32);
+  4644	  if (raw.holdSpawnIntervalSeconds !== undefined) q.holdSpawnIntervalSeconds = clampNumber(raw.holdSpawnIntervalSeconds, 1, 1, 600);
+  4645	  if (raw.holdSpawnMaxAlive !== undefined) q.holdSpawnMaxAlive = clampInt(raw.holdSpawnMaxAlive, 1, 1, 64);
+  4646	  if (raw.holdSpawnLastTime !== undefined) q.holdSpawnLastTime = clampNumber(raw.holdSpawnLastTime, 0, 0, 1_000_000_000);
+  4647	  q.eventTags = normalizeStringArray(raw.eventTags);
+  4648	  const eventData = compactSaveData(raw.eventData);
+  4649	  if (isRecord(eventData)) q.eventData = eventData;
+  4650	  q.eventPrivacy = normalizeEventPrivacy(raw.eventPrivacy);
+  4651	  q.eventSeverity = normalizeEventSeverity(raw.eventSeverity);
+  4652	  const eventTargetName = cleanSaveText(raw.eventTargetName);
+  4653	  if (eventTargetName) q.eventTargetName = eventTargetName;
+  4654	  const failOnNpcDeathPlotId = cleanSaveText(raw.failOnNpcDeathPlotId, '', 64);
+  4655	  if (failOnNpcDeathPlotId) q.failOnNpcDeathPlotId = failOnNpcDeathPlotId;
+  4656	  q.abandonsSideQuestIds = normalizeStringArray(raw.abandonsSideQuestIds, 12, 96);
+  4657
+  4658	  const timeLimit = raw.timeLimitMinutes === undefined
+  4659	    ? undefined
+  4660	    : clampInt(raw.timeLimitMinutes, 0, 1, MAX_QUEST_TIME_LIMIT_MINUTES);
+  4661	  let expiresAt = raw.expiresAtMinutes === undefined
+  4662	    ? undefined
+  4663	    : clampInt(raw.expiresAtMinutes, 0, 0, nowMinutes + MAX_QUEST_TIME_LIMIT_MINUTES);
+  4664	  if (timeLimit !== undefined) {
+  4665	    q.timeLimitMinutes = timeLimit;
+  4666	    if (expiresAt === undefined && !done) expiresAt = Math.ceil(nowMinutes + timeLimit);
+  4667	  }
+  4668	  if (expiresAt !== undefined) q.expiresAtMinutes = expiresAt;
+  4669	  if (raw.failed === true) q.failed = true;
+  4670
+  4671	  if (!q.done) {
+  4672	    if (type === QuestType.FETCH && !q.targetItem) return null;
+  4673	    if (type === QuestType.VISIT && q.targetRoom === undefined && q.targetRoomName === undefined && q.targetRoute === undefined && q.visitFloor === undefined) return null;
+  4674	    if (type === QuestType.KILL && q.targetMonsterKind === undefined && !q.targetPlotNpcId && q.killNeeded === undefined) return null;
+  4675	    if (type === QuestType.TALK && q.targetNpcId === undefined && !q.targetPlotNpcId) return null;
+  4676	  }
+  4677
+  4678	  return q;
+  4679	}

@@ -1,0 +1,25 @@
+{
+  "locale": "en",
+  "notes": "Reviewed EN batch for remaining procedural anomaly runtime strings.",
+  "entries": {
+    "gt_109e4ecee894de": "Wet cloth",
+    "gt_1e7ead27626fde": "cloth and water ready",
+    "gt_287f22cf65b9b5": "wet cloth protects your throat",
+    "gt_475c7e0317108a": "filter holds the smog",
+    "gt_625434041c446b": "E: shut off smog source",
+    "gt_6bfc33bc072ef5": "cough: need filter or detour",
+    "gt_78b53b60e47eb2": "Wet cloth protects your throat, but water drains faster.",
+    "gt_8427322a1761fc": "Smog source shut off. The corridors are visible again.",
+    "gt_9107f0e2bef245": "The marker is already torn off. Silence no longer holds this block.",
+    "gt_a19595057e4ce4": "Cough cuts your throat: -${hpLoss} HP. Shut off the source or detour.",
+    "gt_be68afb332c7a9": "The filter dulls the smog, but the path is still murky.",
+    "gt_bee1cd8b52eb4d": "You spread word of the quiet block. The shelter is no longer yours to decide.",
+    "gt_c3eb214ee0317a": "The jump screen shudders. Need a lift map, access order, or active radio.",
+    "gt_db022e1fad8b6b": "The black palm mark is sealed under lacquer. Need a cleaning kit or jackhammer.",
+    "gt_db4696ed152562": "Mark torn off. The quiet block got loud; the cache stayed someone else's.",
+    "gt_e7175c939a3f48": "Smog source shut off bare-handed. Throat and skin will remember.",
+    "gt_ec518cec0e0c31": "The board is silent: the siren is not networked here. Under the clean floor: a cult mark and someone else's cache.",
+    "gt_ecacf1aa254988": "Cloth wetted and pressed to your face. The smog is more tolerable.",
+    "gt_f6c623df2abc64": "Jump anchored. This cell pair no longer tears the route."
+  }
+}

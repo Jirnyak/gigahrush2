@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=1920, initial-scale=1">
+  <title>ГИГАХРУЩ - роудмапа уже сделанного</title>
+  <style>
+    :root {
+      --bg: #10110f;
+      --ink: #f4f0df;
+      --muted: #b8b39d;
+      --line: rgba(244,240,223,.18);
+      --red: #c84b43;
+      --amber: #d5a13a;
+      --green: #68a66b;
+      --cyan: #68a7b8;
+      --violet: #8b6bd9;
+      --paper: #24251f;
+      --deep: #070806;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, "Segoe UI", Arial, sans-serif;
+      overflow: hidden;
+    }
+    .deck {
+      width: 1920px;
+      height: 1080px;
+      position: relative;
+      overflow: hidden;
+      background:
+        linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px) 0 0 / 48px 48px,
+        linear-gradient(rgba(255,255,255,.018) 1px, transparent 1px) 0 0 / 48px 48px,
+        radial-gradient(circle at 14% 12%, rgba(213,161,58,.14), transparent 31%),
+        radial-gradient(circle at 90% 20%, rgba(104,166,107,.09), transparent 26%),
+        linear-gradient(135deg, #161711, #0a0b09 72%, #050605);
+    }
+    .slide {
+      width: 1920px;
+      height: 1080px;
+      position: absolute;
+      inset: 0;
+      padding: 56px 82px 82px;
+      display: none;
+    }
+    .slide.active { display: block; }
+    .kicker {
+      color: var(--amber);
+      font-size: 24px;
+      letter-spacing: 0;
+      text-transform: uppercase;
+      font-weight: 800;
+      margin-bottom: 9px;
+    }
+    h1 {
+      margin: 0;
+      max-width: 1400px;
+      font-size: 82px;
+      line-height: .95;
+      letter-spacing: 0;
+      font-weight: 900;
+    }
+    h2 {
+      margin: 0 0 18px;
+      font-size: 52px;
+      line-height: 1.02;
+      letter-spacing: 0;
+      font-weight: 900;
+    }
+    h3 {
+      margin: 0 0 12px;
+      font-size: 30px;
+      line-height: 1.05;
+      color: #fff4c0;
+    }
+    p {
+      margin: 0;
+      font-size: 23px;
+      line-height: 1.33;
+      color: var(--muted);
+    }
+    .lead {
+      margin-top: 16px;
+      max-width: 1180px;
+      font-size: 31px;
+      line-height: 1.14;
+      color: #e9e3c7;
+    }
+    .grid {
+      display: grid;
+      gap: 18px;
+    }
+    .cols-2 { grid-template-columns: repeat(2, 1fr); }
+    .cols-3 { grid-template-columns: repeat(3, 1fr); }
+    .cols-4 { grid-template-columns: repeat(4, 1fr); }
+    .card {
+      background: linear-gradient(180deg, rgba(255,255,255,.055), rgba(255,255,255,.025));
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 20px;
+      box-shadow: 0 14px 36px rgba(0,0,0,.22);
+    }
+    .card.dark { background: rgba(0,0,0,.24); }
+    .card.red { border-color: rgba(200,75,67,.45); }
+    .card.green { border-color: rgba(104,166,107,.45); }
+    .card.cyan { border-color: rgba(104,167,184,.45); }
+    .card.violet { border-color: rgba(139,107,217,.48); }
+    .stat {
+      font-size: 50px;
+      line-height: .9;
+      font-weight: 900;
+      color: #fff7cb;
+      margin-bottom: 12px;
+    }
+    .stat small {
+      font-size: 24px;
+      color: var(--muted);
+      font-weight: 700;
+    }
+    ul {
+      margin: 0;
+      padding-left: 25px;
+      color: var(--muted);
+      font-size: 21px;
+      line-height: 1.22;
+    }
+    li { margin: 7px 0; }
+    .pillrow { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+    .pill {
+      border: 1px solid var(--line);
+      background: rgba(0,0,0,.22);
+      color: #f8edc3;
+      padding: 10px 16px;
+      border-radius: 999px;
+      font-size: 22px;
+      font-weight: 800;
+    }
+    .road {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 14px;
+      margin-top: 46px;
+    }
+    .step {
+      position: relative;
+      min-height: 188px;
+      padding: 18px 16px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: rgba(0,0,0,.25);
+    }
+    .step:after {
+      content: "";
+      position: absolute;
+      right: -12px;
+      top: 82px;
+      width: 20px;
+      height: 20px;
+      border-top: 4px solid var(--amber);
+      border-right: 4px solid var(--amber);
+      transform: rotate(45deg);
+    }
+    .step:last-child:after { display: none; }
+    .icon {
+      width: 62px;
+      height: 62px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      border: 2px solid rgba(255,255,255,.22);
+      background: rgba(255,255,255,.06);
+      font-size: 34px;
+      margin-bottom: 14px;
+    }
+    .step h3 { font-size: 25px; }
+    .step p { font-size: 19px; line-height: 1.18; }
+    .footer {
+      position: absolute;
+      left: 82px;
+      right: 82px;
+      bottom: 18px;
+      display: flex;
+      justify-content: space-between;
+      color: rgba(244,240,223,.55);
+      font-size: 18px;
+      border-top: 1px solid rgba(244,240,223,.14);
+      padding-top: 13px;
+    }
+    .seal {
+      position: absolute;
+      right: 82px;
+      top: 56px;
+      border: 2px solid rgba(213,161,58,.55);
+      color: var(--amber);
+      padding: 14px 18px;
+      border-radius: 8px;
+      font-size: 21px;
+      font-weight: 900;
+      transform: rotate(2deg);
+      background: rgba(0,0,0,.28);
+    }
+    .band {
+      margin-top: 26px;
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 20px;
+    }
+    .lane {
+      display: grid;
+      grid-template-columns: 170px 1fr;
+      gap: 20px;
+      align-items: stretch;
+      margin-bottom: 18px;
+    }
+    .lane .label {
+      border-radius: 8px;
+      background: rgba(213,161,58,.14);
+      border: 1px solid rgba(213,161,58,.35);
+      padding: 20px;
+      font-size: 25px;
+      font-weight: 900;
+      color: #fff4c0;
+    }
+    .timeline {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 14px;
+    }
+    .tile {
+      min-height: 108px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      padding: 15px;
+      background: rgba(255,255,255,.04);
+    }
+    .tile strong {
+      display: block;
+      color: #fff4c0;
+      font-size: 22px;
+      margin-bottom: 8px;
+    }
+    .tile span {
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1.22;
+    }
+    .matrix {
+      display: grid;
+      grid-template-columns: 310px repeat(4, 1fr);
+      gap: 12px;
+      margin-top: 22px;
+    }
+    .matrix > div {
+      min-height: 90px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      padding: 14px;
+      background: rgba(0,0,0,.22);
+      font-size: 19px;
+      color: var(--muted);
+      line-height: 1.2;
+    }
+    .matrix .head {
+      background: rgba(213,161,58,.16);
+      color: #fff4c0;
+      font-weight: 900;
+    }
+    .linkbox {
+      margin-top: 24px;
+      display: grid;
+      grid-template-columns: 1.1fr .9fr;
+      gap: 24px;
+    }
+    .mono {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 25px;
+      color: #dff5d4;
+      line-height: 1.45;
+    }
+    .bigword {
+      position: absolute;
+      right: 76px;
+      bottom: 74px;
+      font-size: 168px;
+      font-weight: 1000;
+      color: rgba(255,255,255,.045);
+      line-height: .8;
+    }
+  </style>
+</head>
+<body>
+  <main class="deck">
+    <section class="slide active" data-slide="1" data-file="slide_01_cover">
+      <div class="seal">ГОТОВО В БИЛДЕ<br>на 2026-06-02</div>
+      <div class="kicker">Публичная роудмапа уже сделанного</div>
+      <h1>ГИГАХРУЩ</h1>
+      <p class="lead">Браузерный survival horror / ARPG shooter про вылазки в безграничной бетонной хрущевке. Не обещание на будущее, а карта того, что уже собрано в коде и документах.</p>
+      <div class="pillrow">
+        <div class="pill">играть в браузере</div>
+        <div class="pill">вылазки и возвращение</div>
+        <div class="pill">живые NPC и фракции</div>
+        <div class="pill">САМОСБОР меняет маршрут</div>
+        <div class="pill">процедурный звук, спрайты, текстуры</div>
+      </div>
+      <div class="road">
+        <div class="step"><div class="icon">1</div><h3>Зацепка</h3><p>Слух, квест, контракт, дефицит, документ или просьба NPC.</p></div>
+        <div class="step"><div class="icon">2</div><h3>Подготовка</h3><p>Еда, вода, патроны, бинты, документы, инструмент, маршрут.</p></div>
+        <div class="step"><div class="icon">3</div><h3>Вылазка</h3><p>Лифт, фракционные зоны, лут, торговля, кража, бой или обход.</p></div>
+        <div class="step"><div class="icon">4</div><h3>САМОСБОР</h3><p>Сирена, гермы, туман, убежище, монстры, локальная перестройка.</p></div>
+        <div class="step"><div class="icon">5</div><h3>Возврат</h3><p>Лут, XP, деньги, репутация, долг, ранение или новый враг.</p></div>
+        <div class="step"><div class="icon">6</div><h3>След</h3><p>Пустые контейнеры, трупы, кровь, слухи, измененный участок этажа.</p></div>
+      </div>
+      <div class="footer"><span>Формулировка для тредов: “безграничная бетонная структура”, без раскрытия технической геометрии.</span><span>slide 1/8</span></div>
+    </section>
+
+    <section class="slide" data-slide="2" data-file="slide_02_first_minutes">
+      <div class="kicker">Игровой путь уже есть</div>
+      <h2>Первые минуты: не данжон, а жилая зона</h2>
+      <p class="lead">Стартовый путь уже ведет игрока через людей, шкафчик, стрельбище, лабораторию и пункт сборов. Это объясняет вылазку без отдельной лекции.</p>
+      <div class="band">
+        <div class="card green"><h3>Ольга Дмитриевна</h3><ul><li>Первый бытовой контакт.</li><li>Учит смотреть на дом как на живое место.</li><li>Запускает понятную цепочку, а не сухой туториал.</li></ul></div>
+        <div class="card cyan"><h3>Сержант Баринов</h3><ul><li>Оружейная и стрельбище.</li><li>Патроны, мишени, базовый бой.</li><li>Игрок понимает, чем платит за ошибку.</li></ul></div>
+        <div class="card violet"><h3>Яков и пункт сборов</h3><ul><li>Лаборатория, станки, разбор.</li><li>Вода, хлеб, бинт, патроны, маршрутные бумаги.</li><li>Рядом ранняя полевая задача.</li></ul></div>
+      </div>
+      <div class="matrix">
+        <div class="head">Что уже доступно</div><div class="head">Быт</div><div class="head">Выбор</div><div class="head">Риск</div><div class="head">Польза игроку</div>
+        <div class="head">Жилая зона</div><div>Квартиры, актовый зал, лаборатория, шкафчики, стрельбище.</div><div>Готовиться, говорить, торговать, брать поручение.</div><div>Самосбор, дефицит, социальные последствия.</div><div>Понятный стартовый маршрут.</div>
+        <div class="head">E-взаимодействия</div><div>Раковины, туалеты, контейнеры, станки, доски рецептов.</div><div>Пить, облегчаться, крафтить, разбирать, читать, открывать.</div><div>Сломанные приборы, доступы, кража, свидетели.</div><div>Мир ощущается предметным.</div>
+        <div class="head">NPC-меню</div><div>Разговор, торговля, мини-игры, уроки, задания.</div><div>Купить, продать, сыграть, узнать, принять работу.</div><div>Деньги, ставка, отношение, фракции.</div><div>NPC не декорация.</div>
+      </div>
+      <div class="bigword">СТАРТ</div>
+      <div class="footer"><span>Публичный тезис: игра начинается в доме с людьми, предметами и задачей, а не в пустом лабиринте.</span><span>slide 2/8</span></div>
+    </section>
+
+    <section class="slide" data-slide="3" data-file="slide_03_living_world">
+      <div class="kicker">Живой дом</div>
+      <h2>NPC, фракции, бой и смерть уже связаны</h2>
+      <p class="lead">На активном этаже живые акторы получают честный AI-проход. У жителей есть фракция, деньги, инвентарь, отношение, карма, профессия и смерть как факт мира.</p>
+      <div class="grid cols-4" style="margin-top:34px">
+        <div class="card"><div class="stat">AI</div><h3>Без “пузыря игрока”</h3><p>Дальние NPC и монстры не превращаются в неподвижный фон активного этажа.</p></div>
+        <div class="card"><div class="stat">REL</div><h3>Отношения</h3><p>Личная неприязнь и фракционная вражда влияют на угрозу, карту и реакцию.</p></div>
+        <div class="card"><div class="stat">FIGHT</div><h3>Физический бой</h3><p>Снаряды летят, попадают, дают friendly fire, кровь, дроп и события.</p></div>
+        <div class="card"><div class="stat">DEAD</div><h3>Смерть не декор</h3><p>Убитые persistent NPC и plot NPC не обязаны вернуться при следующем визите.</p></div>
+      </div>
+      <div class="lane" style="margin-top:42px"><div class="label">Игрок</div><div class="timeline">
+        <div class="tile"><strong>Бьет нейтрала</strong><span>Портится личное отношение, может упасть отношение фракции, страдает карма.</span></div>
+        <div class="tile"><strong>Шумит и стреляет</strong><span>Акторы реагируют на урон, угрозу, видимость и локальный stimulus.</span></div>
+        <div class="tile"><strong>Убивает</strong><span>Появляются кровь, дроп, счетчики убийств и события.</span></div>
+        <div class="tile"><strong>Умирает</strong><span>Фиксируется причина смерти, камера смерти, мир продолжает тикать.</span></div>
+        <div class="tile"><strong>Возвращается</strong><span>Очищенное место не обязано магически заполниться обратно.</span></div>
+      </div></div>
+      <div class="grid cols-3" style="margin-top:26px">
+        <div class="card green"><h3>Что видит игрок</h3><ul><li>Цветные точки NPC по отношению.</li><li>События и реплики с дистанцией.</li><li>Указание источника урона.</li></ul></div>
+        <div class="card red"><h3>Что меняется</h3><ul><li>Фракционные зоны и реакция.</li><li>Контейнеры, дроп, кровь, двери.</li><li>Смерти persistent NPC.</li></ul></div>
+        <div class="card cyan"><h3>Чего не обещать</h3><ul><li>Полную hidden realtime жизнь всех этажей.</li><li>Бесконечный refill жителей.</li><li>MMO или серверный save.</li></ul></div>
+      </div>
+      <div class="footer"><span>Публичный тезис: дом уже живет через NPC, фракции, отношение, бой, слухи и последствия.</span><span>slide 3/8</span></div>
+    </section>
+
+    <section class="slide" data-slide="4" data-file="slide_04_route_floors">
+      <div class="kicker">Этажи и маршрут</div>
+      <h2>Лифт ведет не в один биом, а в десятки микромиров</h2>
+      <p class="lead">Route-остановки имеют память, опасность, население, лут, фракции, монстров, локальные правила и причины туда идти.</p>
+      <div class="grid cols-4" style="margin-top:34px">
+        <div class="card"><div class="stat">6</div><h3>крупных доменов</h3><p>Жилая зона, Министерство, Квартиры, Коллекторы, Мясной низ, Пустота.</p></div>
+        <div class="card"><div class="stat">41</div><h3>авторская остановка</h3><p>Банк, коммуналка, НЕТ-колодец, метро, производственный пояс, Подада и другие места.</p></div>
+        <div class="card"><div class="stat">54</div><h3>процедурные stop</h3><p>Seed, опасность, геометрия, фракция, лут, монстры и аномалия.</p></div>
+        <div class="card"><div class="stat">8</div><h3>лифт-аномалий</h3><p>Редкие pocket-world остановки, которые не ломают общую модель маршрута.</p></div>
+      </div>
+      <div class="lane" style="margin-top:40px"><div class="label">Память</div><div class="timeline">
+        <div class="tile"><strong>Двери</strong><span>Открытые и закрытые состояния принадлежат конкретной остановке.</span></div>
+        <div class="tile"><strong>Контейнеры</strong><span>Украденное и найденное не обязано возвращаться само.</span></div>
+        <div class="tile"><strong>Следы</strong><span>Кровь, пули, ожоги, web и остатки событий остаются историей места.</span></div>
+        <div class="tile"><strong>Монстры</strong><span>Зачистка не превращается в скрытый refill.</span></div>
+        <div class="tile"><strong>Самосбор</strong><span>Перестроенный участок становится новым состоянием этажа.</span></div>
+      </div></div>
+      <div class="grid cols-3" style="margin-top:26px">
+        <div class="card cyan"><h3>Авторские места</h3><ul><li>Банковский этаж и документы.</li><li>Коммунальное кольцо и shared services.</li><li>Тёмное метро с поездами.</li><li>Силиконовый НЕТ-колодец.</li></ul></div>
+        <div class="card green"><h3>Процедурные места</h3><ul><li>10 геометрических профилей.</li><li>5 majority-профилей.</li><li>20 anomaly-профилей.</li><li>Лут и монстры от контекста.</li></ul></div>
+        <div class="card violet"><h3>Аномалии</h3><ul><li>Туман, телепорт-клетки, холод.</li><li>Грибница, ложная безопасность.</li><li>Живые тоннели, поезда, зомби-сценарии.</li><li>Сдвигающиеся участки и странные правила.</li></ul></div>
+      </div>
+      <div class="footer"><span>Публичный тезис: лифт уводит все дальше по безграничной бетонной структуре; каждая остановка может оставить след.</span><span>slide 4/8</span></div>
+    </section>
+
+    <section class="slide" data-slide="5" data-file="slide_05_samosbor">
+      <div class="kicker">САМОСБОР</div>
+      <h2>Не фильтр на экране, а событие, меняющее вылазку</h2>
+      <p class="lead">Самосбор уже имеет предупреждение, убежища, гермы, активное давление, монстров, вариантные эффекты, локальную перестройку и последствия.</p>
+      <div class="road" style="grid-template-columns: repeat(5, 1fr); margin-top:42px">
+        <div class="step"><div class="icon">!</div><h3>Предупреждение</h3><p>HUD/log дают короткую строку: что ждать и что делать.</p></div>
+        <div class="step"><div class="icon">#</div><h3>Укрытие</h3><p>Гермодвери, защищенные комнаты и маршрут до безопасного места.</p></div>
+        <div class="step"><div class="icon">*</div><h3>Давление</h3><p>Туман, свет, герметизация, монстры, перемещение сущностей.</p></div>
+        <div class="step"><div class="icon">~</div><h3>Перестройка</h3><p>Локальный участок структуры меняется и сшивается с этажом.</p></div>
+        <div class="step"><div class="icon">+</div><h3>Последствия</h3><p>Следы, лут, слухи, нехватки, события, новое состояние этажа.</p></div>
+      </div>
+      <div class="grid cols-4" style="margin-top:38px">
+        <div class="card violet"><div class="stat">7</div><h3>вариантов</h3><p>Классический, мокрый, электрический, мясной, Maronary, Istotit, Veretar.</p></div>
+        <div class="card"><div class="stat">19</div><h3>модификаторов</h3><p>Меняют длительность, давление, укрытия, эффекты и угрозу.</p></div>
+        <div class="card"><div class="stat">44</div><h3>события последствий</h3><p>События после активной фазы, слухи, следы и локальная цена.</p></div>
+        <div class="card"><div class="stat">33</div><h3>режиссерские события</h3><p>Предупреждения, патрули, дефицит, двери, отголоски, слухи.</p></div>
+      </div>
+      <div class="grid cols-4" style="margin-top:24px">
+        <div class="card dark"><h3>Классика</h3><p>Фиолетовый туман и монстры. Решение: найти укрытие, переждать, прорваться.</p></div>
+        <div class="card dark"><h3>Maronary</h3><p>Меняет идентичность, актеров, предметы, контейнеры и детали клеток.</p></div>
+        <div class="card dark"><h3>Veretar</h3><p>Удаляет и оставляет белый след, протечки и опасную пустоту после события.</p></div>
+        <div class="card dark"><h3>Istotit</h3><p>Создает, лечит, маркирует убежища и может оставить социальный долг.</p></div>
+      </div>
+      <div class="footer"><span>Публичный тезис: сирена меняет цель вылазки - теперь нужно решить, бежать, прятаться, чистить край поля или рисковать.</span><span>slide 5/8</span></div>
+    </section>
+
+    <section class="slide" data-slide="6" data-file="slide_06_items_economy">
+      <div class="kicker">Предметы, крафт, экономика</div>
+      <h2>Подготовка уже имеет цену и инструменты</h2>
+      <p class="lead">Вылазка начинается до лифта: что взять, что продать, что разобрать, что скрафтить, какой ресурс потратить и кому задолжать.</p>
+      <div class="grid cols-4" style="margin-top:34px">
+        <div class="card"><div class="stat">434</div><h3>предмета</h3><p>Еда, вода, медицина, оружие, инструменты, документы, боеприпасы, образцы.</p></div>
+        <div class="card"><div class="stat">70 <small>+ 18</small></div><h3>оружие и PSI</h3><p>Физические weapon stats и PSI entries в общем боевом контракте.</p></div>
+        <div class="card"><div class="stat">9</div><h3>материалов крафта</h3><p>Механика, электроника, расходники, био, химия, металл, кибернетика, PSI, мета.</p></div>
+        <div class="card"><div class="stat">12 <small>/ 42</small></div><h3>фабрики</h3><p>Производства и рецепты с входами, выходами, доступом, bad batches и ремонтом.</p></div>
+      </div>
+      <div class="lane" style="margin-top:40px"><div class="label">Экспедиция</div><div class="timeline">
+        <div class="tile"><strong>Выбрать запас</strong><span>Вода, еда, бинт, патроны, фильтр, документ или инструмент.</span></div>
+        <div class="tile"><strong>Оценить дефицит</strong><span>Ресурсы, цены, demand, тарифы, scarcity и trader spread.</span></div>
+        <div class="tile"><strong>Сделать предмет</strong><span>Known recipes, станок, лабораторный стол, disassembly bench.</span></div>
+        <div class="tile"><strong>Включить производство</strong><span>Кухня, медпункт, металл, боеприпасы, энергия, repair outputs.</span></div>
+        <div class="tile"><strong>Вернуться</strong><span>Продать, сдать НИИ, спрятать, подделать, починить, вложить в маршрут.</span></div>
+      </div></div>
+      <div class="grid cols-3" style="margin-top:26px">
+        <div class="card green"><h3>Крафт игрока</h3><ul><li>434 item recipes через item composition.</li><li>Known/default recipes, recipe sources, billboards.</li><li>Разбор предметов дает материал и шанс изучить рецепт.</li></ul></div>
+        <div class="card cyan"><h3>Макроэкономика</h3><ul><li>17 ресурсов.</li><li>Караванные линии, тарифы и supply pressure.</li><li>Банк, рынок, торговля, scarcity.</li></ul></div>
+        <div class="card red"><h3>Не просто числа</h3><ul><li>Редкое оружие балансируется доступом и риском.</li><li>Документы дают доступ и audit risk.</li><li>Дефицит меняет маршрут и награду.</li></ul></div>
+      </div>
+      <div class="footer"><span>Публичный тезис: “взять воду или патроны” уже является игровым решением, а не flavor-текстом.</span><span>slide 6/8</span></div>
+    </section>
+
+    <section class="slide" data-slide="7" data-file="slide_07_monsters">
+      <div class="kicker">Монстры и контригра</div>
+      <h2>Угрозы работают как правила места</h2>
+      <p class="lead">Монстр готов не тогда, когда у него есть HP, а когда игрок может понять cue, ошибку и ответ: свет, сухой бетон, дверь, шум, приманка, документ, огонь или отход.</p>
+      <div class="grid cols-4" style="margin-top:34px">
+        <div class="card"><div class="stat">67</div><h3>monster kind</h3><p>Базовые пакеты с характеристиками, спрайтом, этажами и правилами.</p></div>
+        <div class="card"><div class="stat">67</div><h3>ecology entry</h3><p>Среда, комнаты, веса, rare drops, слухи, counterplay, death hint.</p></div>
+        <div class="card"><div class="stat">577</div><h3>слухов</h3><p>Игрок учится через рассказы, события, следы и логи, а не только через wiki.</p></div>
+        <div class="card"><div class="stat">0</div><h3>фонового refill</h3><p>Монстры появляются через генерацию, самосбор, квесты, лифт, hack backlash и authored consequences.</p></div>
+      </div>
+      <div class="matrix">
+        <div class="head">Правило</div><div class="head">Пример угрозы</div><div class="head">Cue</div><div class="head">Ответ</div><div class="head">Зачем игроку</div>
+        <div class="head">Свет</div><div>Лампоглаз, тень, световой паразит.</div><div>Лампа, вспышка, темный угол.</div><div>Сбить линию, уйти в темноту или включить свет.</div><div>Свет становится решением, а не декором.</div>
+        <div class="head">Вода</div><div>Трубный угорь, Лоточник, водный кошмар.</div><div>Мокрый лоток, плеск, черная вода.</div><div>Выманить на сухое, идти по кромке, использовать гарпун.</div><div>Маршрут важнее DPS.</div>
+        <div class="head">Документы</div><div>Печатеед, Конторщик, Протокольник.</div><div>Папки, печати, бумажный шум.</div><div>Спрятать бумаги, бросить бланк, сломать линию.</div><div>Лут может быть запахом опасности.</div>
+        <div class="head">Двери и шум</div><div>Псевдолифт, ложный дух, стаи, засадники.</div><div>Сквозняк, вой, слишком чистый тамбур.</div><div>Проверить, не открывать вслепую, отойти, бросить приманку.</div><div>Осторожность становится механикой.</div>
+      </div>
+      <div class="footer"><span>Публичный тезис: десятки монстров уже привязаны к быту, аномалиям, слухам, следам, луту и контригре.</span><span>slide 7/8</span></div>
+    </section>
+
+    <section class="slide" data-slide="8" data-file="slide_08_public_pack">
+      <div class="kicker">Публичный пакет</div>
+      <h2>Как показывать проект в шапке тредов</h2>
+      <p class="lead">Главный акцент - не “вот сколько кода”, а “что игрок уже может сделать и чем это отличается от пустого рогалика”.</p>
+      <div class="linkbox">
+        <div class="card">
+          <h3>Текст для шапки</h3>
+          <p>ГИГАХРУЩ - бесплатный браузерный survival horror / ARPG shooter про вылазки в безграничной бетонной хрущевке. Готовишь еду, воду, патроны и документы, берешь слух или задание, уходишь в структуру, торгуешь, крадешь, дерешься, прячешься от САМОСБОРА и возвращаешься с последствиями. NPC живут и умирают, фракции делят зоны, этажи меняются.</p>
+          <div class="pillrow">
+            <div class="pill">без установки</div>
+            <div class="pill">RU/EN</div>
+            <div class="pill">WebGL/canvas</div>
+            <div class="pill">mobile input layer</div>
+            <div class="pill">optional НЕТ-СФЕРА</div>
+          </div>
+        </div>
+        <div class="card dark">
+          <h3>Ссылки</h3>
+          <div class="mono">
+            MyIndie:<br>myindie.ru/games/game/gigahrush<br><br>
+            Direct:<br>gigahrush.bileter.workers.dev<br><br>
+            itch mirror:<br>tenevik.itch.io/gigahrush<br><br>
+            Telegram:<br>t.me/gigah_rush
+          </div>
+        </div>
+      </div>
+      <div class="grid cols-3" style="margin-top:28px">
+        <div class="card green"><h3>Говорить</h3><ul><li>Вылазки, подготовка, возврат.</li><li>Живые NPC, фракции, смерть.</li><li>Самосбор меняет план.</li><li>Монстры имеют правила и counterplay.</li></ul></div>
+        <div class="card red"><h3>Не говорить</h3><ul><li>Точные размеры карты и топологию.</li><li>Внутренние caps, save shape, route coordinates.</li><li>MMO/полный online.</li><li>Публичность портала до модерации.</li></ul></div>
+        <div class="card cyan"><h3>Что просить у игроков</h3><ul><li>Понятна ли первая цель.</li><li>Читается ли HUD и бой.</li><li>Где вылазка ломается слишком рано.</li><li>Что мешает вернуться второй раз.</li></ul></div>
+      </div>
+      <div class="footer"><span>Пакет сделан как PR/media-материал. Код игры не менялся.</span><span>slide 8/8</span></div>
+    </section>
+  </main>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const slideNo = params.get('slide') || '1';
+    for (const slide of document.querySelectorAll('.slide')) {
+      slide.classList.toggle('active', slide.dataset.slide === slideNo);
+    }
+  </script>
+</body>
+</html>

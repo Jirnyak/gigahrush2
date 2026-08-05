@@ -1,0 +1,10 @@
+# Keep ordinary code searches focused on source and primary docs.
+gatbage/
+dist/
+itch/
+pikabu/
+portal/
+screenshots/
+node_modules/
+.git/
+.wrangler/

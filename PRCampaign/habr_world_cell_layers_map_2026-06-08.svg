@@ -1,0 +1,133 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Один индекс клетки связывает слои World</title>
+  <desc id="desc">Слева реальная схема всего этажа из screenshots/habr, справа показано как один индекс клетки обращается к cells, roomMap, doors, features, fog, territory и render-слоям.</desc>
+  <defs>
+    <linearGradient id="pageBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f4f1e8"/>
+      <stop offset="1" stop-color="#e2dbce"/>
+    </linearGradient>
+    <linearGradient id="worldChip" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#172432"/>
+      <stop offset="1" stop-color="#293b4c"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#1d1b16" flood-opacity="0.18"/>
+    </filter>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <marker id="arrow" markerWidth="14" markerHeight="14" refX="11" refY="7" orient="auto" markerUnits="strokeWidth">
+      <path d="M2 2 L12 7 L2 12 Z" fill="#42d5ff"/>
+    </marker>
+    <clipPath id="mapClip">
+      <rect x="76" y="214" width="740" height="562" rx="8"/>
+    </clipPath>
+    <style>
+      .base { font-family: Inter, Arial, Helvetica, sans-serif; letter-spacing: 0; }
+      .h1 { font-size: 43px; font-weight: 850; fill: #16191c; }
+      .sub { font-size: 22px; font-weight: 520; fill: #5c564d; }
+      .mapTitle { font-size: 24px; font-weight: 850; fill: #8ee9ef; }
+      .mapSmall { font-size: 18px; font-weight: 700; fill: #659da1; }
+      .panelTitle { font-size: 31px; font-weight: 850; fill: #171a1d; }
+      .panelSub { font-size: 18px; font-weight: 540; fill: #5b554c; }
+      .chipMain { font-size: 34px; font-weight: 900; fill: #ffffff; }
+      .chipSub { font-size: 18px; font-weight: 600; fill: #c7d8e4; }
+      .layerName { font-size: 22px; font-weight: 850; fill: #16191c; }
+      .layerBody { font-size: 19px; font-weight: 650; fill: #55504a; }
+      .caption { font-size: 28px; font-weight: 820; fill: #16191c; }
+      .tag { font-size: 19px; font-weight: 850; fill: #bdf7ff; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#pageBg)"/>
+  <rect x="38" y="38" width="1524" height="824" rx="30" fill="#fffaf1" stroke="#d3c8b8" stroke-width="2"/>
+
+  <g class="base">
+    <text x="800" y="101" text-anchor="middle" class="h1">Один индекс клетки связывает слои World</text>
+    <text x="800" y="139" text-anchor="middle" class="sub">геометрия, комнаты, двери, признаки, туман, территория и рендер читают один и тот же i</text>
+
+    <g filter="url(#shadow)">
+      <rect x="56" y="164" width="780" height="628" rx="18" fill="#061114" stroke="#164e57" stroke-width="2"/>
+    </g>
+    <text x="82" y="198" class="mapTitle">RAW-КАРТА ЭТАЖА</text>
+    <text x="808" y="198" text-anchor="end" class="mapSmall">screenshots/habr</text>
+
+    <g clip-path="url(#mapClip)">
+      <image href="../screenshots/habr/Screenshot%202026-06-08%20at%2021.52.04.png" x="76" y="214" width="740" height="562" preserveAspectRatio="xMidYMid meet"/>
+      <rect x="76" y="214" width="740" height="562" fill="#061114" opacity="0.03"/>
+    </g>
+    <rect x="75" y="213" width="742" height="564" fill="none" stroke="#123f46" stroke-width="2"/>
+
+    <g filter="url(#glow)">
+      <circle cx="452" cy="535" r="18" fill="#6ce8ff" opacity="0.28"/>
+      <path d="M452 516 V554 M433 535 H471" stroke="#eaffff" stroke-width="4" stroke-linecap="round"/>
+      <rect x="446" y="529" width="12" height="12" fill="#ffffff" stroke="#38d6ff" stroke-width="2"/>
+    </g>
+
+    <path d="M470 535 C625 520 760 442 940 290" fill="none" stroke="#42d5ff" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow)"/>
+    <rect x="550" y="490" width="148" height="40" rx="20" fill="#061114" stroke="#38d6ff" stroke-width="2"/>
+    <text x="624" y="516" text-anchor="middle" class="tag">тот же i</text>
+
+    <g filter="url(#shadow)">
+      <rect x="880" y="164" width="662" height="628" rx="18" fill="#fffaf1" stroke="#d3c8b8" stroke-width="2"/>
+    </g>
+    <text x="1211" y="213" text-anchor="middle" class="panelTitle">Один cell index</text>
+    <text x="1211" y="241" text-anchor="middle" class="panelSub">каждый слой отвечает на свой вопрос</text>
+
+    <rect x="998" y="264" width="426" height="86" rx="22" fill="url(#worldChip)"/>
+    <text x="1211" y="313" text-anchor="middle" class="chipMain">idx = y * W + x</text>
+    <text x="1211" y="337" text-anchor="middle" class="chipSub">одна координата, много полей</text>
+
+    <line x1="962" y1="388" x2="962" y2="700" stroke="#42d5ff" stroke-width="4" stroke-linecap="round"/>
+
+    <g>
+      <circle cx="962" cy="398" r="7" fill="#42d5ff"/>
+      <rect x="986" y="376" width="520" height="45" rx="12" fill="#e7ece8" stroke="#a8b8ad" stroke-width="2"/>
+      <rect x="986" y="376" width="12" height="45" rx="6" fill="#596269"/>
+      <text x="1017" y="405" class="layerName">cells[i]</text>
+      <text x="1258" y="405" class="layerBody">геометрия</text>
+
+      <circle cx="962" cy="449" r="7" fill="#42d5ff"/>
+      <rect x="986" y="427" width="520" height="45" rx="12" fill="#eee4f2" stroke="#b79bc5" stroke-width="2"/>
+      <rect x="986" y="427" width="12" height="45" rx="6" fill="#7b4a91"/>
+      <text x="1017" y="456" class="layerName">roomMap[i]</text>
+      <text x="1258" y="456" class="layerBody">комната</text>
+
+      <circle cx="962" cy="500" r="7" fill="#42d5ff"/>
+      <rect x="986" y="478" width="520" height="45" rx="12" fill="#e8f2f4" stroke="#98bfc6" stroke-width="2"/>
+      <rect x="986" y="478" width="12" height="45" rx="6" fill="#21859a"/>
+      <text x="1017" y="507" class="layerName">doors.get(i)</text>
+      <text x="1258" y="507" class="layerBody">проход</text>
+
+      <circle cx="962" cy="551" r="7" fill="#42d5ff"/>
+      <rect x="986" y="529" width="520" height="45" rx="12" fill="#f4ebd8" stroke="#c4ab72" stroke-width="2"/>
+      <rect x="986" y="529" width="12" height="45" rx="6" fill="#b98824"/>
+      <text x="1017" y="558" class="layerName">features[i]</text>
+      <text x="1258" y="558" class="layerBody">признак</text>
+
+      <circle cx="962" cy="602" r="7" fill="#42d5ff"/>
+      <rect x="986" y="580" width="520" height="45" rx="12" fill="#e6edf6" stroke="#9faec2" stroke-width="2"/>
+      <rect x="986" y="580" width="12" height="45" rx="6" fill="#526a95"/>
+      <text x="1017" y="609" class="layerName">fog[i]</text>
+      <text x="1258" y="609" class="layerBody">видимость</text>
+
+      <circle cx="962" cy="653" r="7" fill="#42d5ff"/>
+      <rect x="986" y="631" width="520" height="45" rx="12" fill="#e8f1df" stroke="#a8bd8c" stroke-width="2"/>
+      <rect x="986" y="631" width="12" height="45" rx="6" fill="#5c8c37"/>
+      <text x="1017" y="660" class="layerName">territory[i]</text>
+      <text x="1258" y="660" class="layerBody">контроль</text>
+
+      <circle cx="962" cy="704" r="7" fill="#42d5ff"/>
+      <rect x="986" y="682" width="520" height="45" rx="12" fill="#eef0f4" stroke="#aab0bd" stroke-width="2"/>
+      <rect x="986" y="682" width="12" height="45" rx="6" fill="#3d4656"/>
+      <text x="1017" y="711" class="layerName">render</text>
+      <text x="1258" y="711" class="layerBody">проекция</text>
+    </g>
+
+    <text x="800" y="832" text-anchor="middle" class="caption">Один индекс клетки связывает геометрию, комнаты, признаки, туман, территорию и рендер.</text>
+  </g>
+</svg>

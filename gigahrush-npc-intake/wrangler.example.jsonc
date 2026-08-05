@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gigahrush-npc-intake",
+  "main": "hosted/worker.mjs",
+  "compatibility_date": "2026-06-05",
+  "assets": {
+    "directory": "./hosted/public"
+  },
+  "r2_buckets": [
+    {
+      "binding": "NPC_SUBMISSIONS",
+      "bucket_name": "gigahrush-npc-submissions"
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "NPC_DB",
+      "database_name": "gigahrush-npc-intake",
+      "database_id": "replace-with-cloudflare-d1-database-id"
+    }
+  ],
+  "vars": {
+    "TENEVIK_REVIEW_TOKEN": "replace-with-secret-in-dashboard"
+  }
+}

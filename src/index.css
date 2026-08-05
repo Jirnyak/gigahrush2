@@ -1,0 +1,314 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+html {
+  width: 100%;
+  height: 100%;
+  height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  background: #000;
+  cursor: none;
+}
+
+body {
+  width: 100%;
+  height: 100%;
+  min-height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  background: #000;
+  cursor: none;
+}
+
+html.pointer-capture-required,
+body.pointer-capture-required,
+body.pointer-capture-required canvas {
+  cursor: pointer;
+}
+
+@supports (-webkit-touch-callout: none) {
+  html,
+  body {
+    min-height: -webkit-fill-available;
+  }
+}
+canvas {
+  display: block;
+  width: var(--app-viewport-width, 100vw);
+  height: var(--app-viewport-height, 100dvh);
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  position: fixed;
+  top: 0;
+  left: 0;
+}
+#hud {
+  pointer-events: none;
+  z-index: 1;
+}
+
+body.mobile-controls-on #hud {
+  pointer-events: auto;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: #000;
+  font-family: 'Courier New', monospace;
+  -webkit-font-smoothing: antialiased;
+}
+
+canvas {
+  image-rendering: pixelated;
+}
+
+.mobile-controls {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: var(--app-viewport-width, 100vw);
+  height: var(--app-viewport-height, 100dvh);
+  z-index: 3;
+  pointer-events: none;
+  touch-action: none;
+  font-family: 'Courier New', monospace;
+  --mobile-edge-left: max(14px, env(safe-area-inset-left));
+  --mobile-edge-right: max(14px, env(safe-area-inset-right));
+  --mobile-edge-top: max(10px, env(safe-area-inset-top));
+  --mobile-edge-bottom: max(14px, env(safe-area-inset-bottom));
+}
+
+.mobile-controls[hidden] {
+  display: none;
+}
+
+.mobile-pad,
+.mobile-interact,
+.mobile-fire-zone,
+.mobile-menu-btn,
+.mobile-fullscreen {
+  border: 1px solid rgba(80, 220, 190, 0.45);
+  color: #9ef;
+  background: rgba(3, 12, 14, 0.42);
+  box-shadow: 0 0 14px rgba(0, 255, 200, 0.1), inset 0 0 16px rgba(0, 255, 200, 0.08);
+  font: 700 14px 'Courier New', monospace;
+  text-align: center;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  pointer-events: auto;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-pad:active,
+.mobile-interact:active,
+.mobile-fire-zone:active,
+.mobile-menu-btn:active,
+.mobile-fullscreen:active {
+  border-color: rgba(255, 230, 120, 0.7);
+  color: #fe8;
+  background: rgba(35, 26, 8, 0.56);
+}
+
+.mobile-pad {
+  position: absolute;
+  width: clamp(92px, 26dvh, 148px);
+  height: clamp(92px, 26dvh, 148px);
+  border-radius: 50%;
+}
+
+.mobile-pad::before,
+.mobile-pad::after {
+  content: '';
+  position: absolute;
+  inset: 22%;
+  border: 1px solid rgba(120, 230, 220, 0.2);
+  border-radius: 50%;
+}
+
+.mobile-pad::after {
+  inset: 46% 12%;
+  height: 1px;
+  border-width: 1px 0 0;
+  border-radius: 0;
+}
+
+.mobile-pad--move {
+  left: var(--mobile-edge-left);
+  bottom: var(--mobile-edge-bottom);
+}
+
+.mobile-pad--look {
+  right: max(86px, calc(env(safe-area-inset-right) + 86px));
+  bottom: var(--mobile-edge-bottom);
+}
+
+.mobile-pad-thumb {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 34%;
+  height: 34%;
+  border: 1px solid rgba(255, 240, 150, 0.65);
+  border-radius: 50%;
+  background: rgba(255, 230, 120, 0.16);
+  transform: translate(0, 0);
+  translate: -50% -50%;
+}
+
+.mobile-interact {
+  position: absolute;
+  right: max(86px, calc(env(safe-area-inset-right) + 86px));
+  top: 50%;
+  width: 70px;
+  height: 46px;
+  border-radius: 10px;
+  font-size: clamp(10px, 2.8dvh, 12px);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(10px, -50%);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+
+.mobile-controls.can-interact:not(.is-menu-open) .mobile-interact,
+.mobile-controls.is-menu-open:not(.is-game-over) .mobile-interact {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(0, -50%);
+}
+
+.mobile-controls.is-menu-open:not(.is-game-over) .mobile-interact {
+  transition: none;
+}
+
+.mobile-controls:not(.is-started) .mobile-pad,
+.mobile-controls:not(.is-started) .mobile-interact,
+.mobile-controls:not(.is-started) .mobile-fire-zone {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.mobile-fire-zone {
+  position: absolute;
+  right: max(86px, calc(env(safe-area-inset-right) + 86px));
+  top: 28%;
+  width: min(26vw, 180px);
+  height: 36%;
+  min-width: 104px;
+  min-height: 86px;
+  border-radius: 999px;
+  opacity: 0.18;
+}
+
+.mobile-fire-zone::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgba(255, 210, 120, 0.38);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.mobile-menu-rail {
+  position: absolute;
+  right: var(--mobile-edge-right);
+  top: 50%;
+  display: grid;
+  grid-template-rows: 42px 58px 42px;
+  gap: 8px;
+  transform: translateY(-50%);
+  pointer-events: auto;
+}
+
+.mobile-menu-btn {
+  width: 62px;
+  height: 100%;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+}
+
+.mobile-menu-select {
+  font-size: clamp(10px, 2.8dvh, 12px);
+  color: #fe8;
+}
+
+.mobile-fullscreen {
+  position: absolute;
+  right: var(--mobile-edge-right);
+  top: var(--mobile-edge-top);
+  width: 62px;
+  height: 42px;
+  border-radius: 8px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  pointer-events: auto;
+}
+
+.mobile-fullscreen[hidden] {
+  display: none;
+}
+
+.mobile-controls:not(.is-started) .mobile-menu-rail {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.mobile-controls.is-menu-open .mobile-pad,
+.mobile-controls.is-menu-open .mobile-fire-zone,
+.mobile-controls.is-game-over .mobile-pad,
+.mobile-controls.is-game-over .mobile-fire-zone {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.mobile-rotate {
+  display: none;
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: #9ef;
+  background: rgba(0, 0, 0, 0.88);
+  font: 700 18px 'Courier New', monospace;
+  text-align: center;
+  pointer-events: auto;
+}
+
+.mobile-controls.is-started.is-portrait .mobile-rotate {
+  display: flex;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: #111;
+}
+::-webkit-scrollbar-thumb {
+  background: #333;
+}

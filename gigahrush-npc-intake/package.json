@@ -1,0 +1,14 @@
+{
+  "name": "gigahrush-npc-intake",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/serve.mjs",
+    "sync:lookups": "node scripts/sync-lookups.mjs",
+    "check:lookups": "node scripts/sync-lookups.mjs --check",
+    "check:hosted": "node --check hosted/worker.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "check": "npm run check:lookups && npm run check:hosted && npm test"
+  }
+}

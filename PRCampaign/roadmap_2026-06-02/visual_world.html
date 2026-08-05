@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=1920, initial-scale=1">
+  <title>ГИГАХРУЩ - визуальная роудмапа мира</title>
+  <style>
+    :root {
+      --ink: #f6f0d6;
+      --muted: #bbb59c;
+      --dim: #817b68;
+      --amber: #d6a23a;
+      --red: #b9443e;
+      --green: #77b06d;
+      --cyan: #70aebe;
+      --violet: #8c68d9;
+      --black: #060705;
+      --panel: rgba(23, 24, 19, .82);
+      --line: rgba(246, 240, 214, .18);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      width: 1920px;
+      height: 1080px;
+      overflow: hidden;
+      background: #070806;
+      color: var(--ink);
+      font-family: Inter, "Segoe UI", Arial, sans-serif;
+    }
+    .poster {
+      position: absolute;
+      inset: 0;
+      width: 1920px;
+      height: 1080px;
+      display: none;
+      padding: 58px 74px 64px;
+      background:
+        linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px) 0 0 / 64px 64px,
+        linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px) 0 0 / 64px 64px,
+        radial-gradient(circle at 16% 15%, rgba(214,162,58,.13), transparent 31%),
+        radial-gradient(circle at 92% 16%, rgba(112,174,190,.08), transparent 28%),
+        linear-gradient(135deg, #171912, #070806 72%);
+    }
+    .poster.active { display: block; }
+    .kicker {
+      color: var(--amber);
+      font-size: 25px;
+      font-weight: 900;
+      text-transform: uppercase;
+      margin-bottom: 9px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 62px;
+      line-height: .98;
+      letter-spacing: 0;
+      font-weight: 950;
+      max-width: 1320px;
+    }
+    .lead {
+      margin: 16px 0 0;
+      max-width: 1120px;
+      font-size: 27px;
+      line-height: 1.18;
+      color: #e8dfbf;
+    }
+    h2 {
+      margin: 0 0 12px;
+      font-size: 34px;
+      line-height: 1.05;
+      color: #fff4c3;
+    }
+    p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 20px;
+      line-height: 1.24;
+    }
+    .stamp {
+      position: absolute;
+      right: 76px;
+      top: 58px;
+      padding: 12px 16px;
+      border: 2px solid rgba(214,162,58,.58);
+      border-radius: 8px;
+      color: #ffd15f;
+      font-size: 22px;
+      font-weight: 950;
+      background: rgba(0,0,0,.36);
+      transform: rotate(2deg);
+      text-align: center;
+    }
+    .footer {
+      position: absolute;
+      left: 74px;
+      right: 74px;
+      bottom: 22px;
+      padding-top: 12px;
+      border-top: 1px solid rgba(246,240,214,.13);
+      color: rgba(246,240,214,.56);
+      display: flex;
+      justify-content: space-between;
+      font-size: 18px;
+    }
+    .shot {
+      position: relative;
+      overflow: hidden;
+      border-radius: 8px;
+      border: 1px solid rgba(246,240,214,.2);
+      background: #090a08;
+      box-shadow: 0 18px 48px rgba(0,0,0,.42);
+    }
+    .shot img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      image-rendering: auto;
+    }
+    .shot:after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(180deg, transparent 62%, rgba(0,0,0,.55));
+      pointer-events: none;
+    }
+    .cap {
+      position: absolute;
+      left: 18px;
+      right: 18px;
+      bottom: 14px;
+      color: #fff4c3;
+      font-size: 22px;
+      font-weight: 900;
+      z-index: 2;
+      text-shadow: 0 2px 8px #000;
+    }
+    .statgrid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+    }
+    .stat {
+      min-height: 126px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(0,0,0,.28);
+      padding: 16px;
+    }
+    .stat strong {
+      display: block;
+      color: #fff4c3;
+      font-size: 47px;
+      line-height: .95;
+      margin-bottom: 7px;
+    }
+    .stat span {
+      display: block;
+      color: var(--muted);
+      font-size: 20px;
+      line-height: 1.16;
+    }
+    .facade {
+      position: absolute;
+      right: 74px;
+      bottom: 82px;
+      width: 780px;
+      height: 780px;
+      border: 2px solid rgba(246,240,214,.14);
+      border-radius: 8px;
+      background:
+        linear-gradient(90deg, rgba(255,255,255,.08) 2px, transparent 2px) 0 0 / 76px 76px,
+        linear-gradient(rgba(255,255,255,.08) 2px, transparent 2px) 0 0 / 76px 76px,
+        linear-gradient(135deg, rgba(190,188,164,.16), rgba(40,43,36,.32));
+      box-shadow: inset 0 0 70px rgba(0,0,0,.62), 0 24px 74px rgba(0,0,0,.44);
+      overflow: hidden;
+    }
+    .facade .window {
+      position: absolute;
+      width: 38px;
+      height: 26px;
+      border-radius: 3px;
+      background: rgba(245,230,150,.5);
+      box-shadow: 0 0 16px rgba(245,230,150,.28);
+    }
+    .facade .darkwin { background: rgba(0,0,0,.52); box-shadow: none; }
+    .facade .shaft {
+      position: absolute;
+      top: -20px;
+      bottom: -20px;
+      left: 374px;
+      width: 70px;
+      background: linear-gradient(180deg, rgba(0,0,0,.78), rgba(70,68,56,.22), rgba(0,0,0,.82));
+      border-left: 2px solid rgba(214,162,58,.45);
+      border-right: 2px solid rgba(214,162,58,.45);
+    }
+    .facade .fogband {
+      position: absolute;
+      left: -80px;
+      right: -80px;
+      height: 120px;
+      top: 430px;
+      background: radial-gradient(ellipse at 40% 50%, rgba(139,104,217,.55), transparent 60%);
+      filter: blur(3px);
+      transform: rotate(-4deg);
+    }
+    .facade .meat {
+      position: absolute;
+      width: 250px;
+      height: 92px;
+      right: -25px;
+      bottom: 120px;
+      background: radial-gradient(circle, rgba(185,68,62,.7), rgba(80,12,18,.7) 62%, transparent 72%);
+      filter: blur(2px);
+    }
+    .facade .label {
+      position: absolute;
+      left: 18px;
+      padding: 8px 10px;
+      border-radius: 5px;
+      background: rgba(0,0,0,.64);
+      border: 1px solid rgba(246,240,214,.15);
+      color: #fff4c3;
+      font-size: 20px;
+      font-weight: 850;
+    }
+    .iso {
+      position: relative;
+      width: 100%;
+      height: 100%;
+    }
+    .room {
+      position: absolute;
+      border-radius: 4px;
+      border: 2px solid rgba(246,240,214,.18);
+      background: rgba(120,120,98,.16);
+      transform: skewY(-8deg);
+    }
+    .room.safe { border-color: rgba(112,174,190,.48); background: rgba(112,174,190,.14); }
+    .room.red { border-color: rgba(185,68,62,.55); background: rgba(185,68,62,.18); }
+    .room.green { border-color: rgba(119,176,109,.48); background: rgba(119,176,109,.14); }
+    .corridor {
+      position: absolute;
+      border-radius: 4px;
+      background: rgba(214,162,58,.32);
+      box-shadow: 0 0 18px rgba(214,162,58,.2);
+      transform: skewY(-8deg);
+    }
+    .dot {
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 16px currentColor;
+    }
+    .dot.red { background: var(--red); }
+    .dot.cyan { background: var(--cyan); }
+    .dot.violet { background: var(--violet); }
+    .route {
+      display: grid;
+      grid-template-columns: 1fr 420px;
+      gap: 26px;
+      margin-top: 28px;
+      height: 708px;
+    }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 20px;
+      box-shadow: 0 18px 48px rgba(0,0,0,.28);
+    }
+    .biglist {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      margin-top: 18px;
+    }
+    .tag {
+      border: 1px solid rgba(246,240,214,.14);
+      background: rgba(0,0,0,.28);
+      border-radius: 7px;
+      padding: 12px 14px;
+      color: #fff4c3;
+      font-size: 21px;
+      font-weight: 850;
+    }
+    .mini {
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1.18;
+      margin-top: 4px;
+      font-weight: 500;
+    }
+    .fog {
+      position: absolute;
+      border-radius: 999px;
+      background: radial-gradient(circle, rgba(139,104,217,.58), rgba(139,104,217,.2) 48%, transparent 73%);
+      filter: blur(4px);
+    }
+    .whitefog {
+      background: radial-gradient(circle, rgba(235,235,218,.6), rgba(235,235,218,.18) 48%, transparent 73%);
+    }
+    .goldfog {
+      background: radial-gradient(circle, rgba(214,162,58,.6), rgba(214,162,58,.2) 48%, transparent 73%);
+    }
+    .greenfog {
+      background: radial-gradient(circle, rgba(119,176,109,.58), rgba(119,176,109,.18) 48%, transparent 73%);
+    }
+    .worldline {
+      height: 6px;
+      background: linear-gradient(90deg, var(--amber), var(--violet), var(--green), var(--cyan));
+      border-radius: 6px;
+      box-shadow: 0 0 20px rgba(214,162,58,.28);
+      margin: 18px 0;
+    }
+  </style>
+</head>
+<body>
+  <section class="poster active" data-poster="1">
+    <div class="stamp">МИР, А НЕ МЕНЮ</div>
+    <div class="kicker">Визуальная карта замысла</div>
+    <h1>Безграничная бетонная хрущевка как место для вылазок</h1>
+    <p class="lead">Игрок должен видеть не “таблицу фич”, а дом: фасад, лифт, окна, коридоры, туман, жильцов, кровь, трубы и странные нижние уровни.</p>
+    <div style="display:grid;grid-template-columns: 1fr 780px;gap:34px;margin-top:34px;height:740px">
+      <div>
+        <div class="statgrid">
+          <div class="stat"><strong>41</strong><span>авторская остановка маршрута</span></div>
+          <div class="stat"><strong>54</strong><span>процедурные остановки на забег</span></div>
+          <div class="stat"><strong>67</strong><span>монстров как правил места</span></div>
+          <div class="stat"><strong>434</strong><span>предмета для подготовки и последствий</span></div>
+        </div>
+        <div class="shot" style="height:340px;margin-top:24px">
+          <img src="../../screenshots/frontpage-review/extra_01-living-start-hud.png" alt="">
+          <div class="cap">Старт не в пустоте: жилая зона, NPC, HUD, вылазка начинается рядом с домом.</div>
+        </div>
+        <div class="worldline"></div>
+        <div class="biglist" style="grid-template-columns:repeat(4,1fr);gap:10px">
+          <div class="tag">Дом <div class="mini">кухни, туалеты, шкафчики, соседи</div></div>
+          <div class="tag">Лифт <div class="mini">переход между микромирами</div></div>
+          <div class="tag">Самосбор <div class="mini">сирена, туман, укрытия, перестройка</div></div>
+          <div class="tag">След <div class="mini">кровь, контейнеры, смерти, слухи</div></div>
+        </div>
+      </div>
+      <div class="facade">
+        <div class="shaft"></div>
+        <div class="fogband"></div>
+        <div class="meat"></div>
+        <div class="label" style="top:34px">Крыша / антенны</div>
+        <div class="label" style="top:168px">Министерство / архивы</div>
+        <div class="label" style="top:304px">Жилая зона / старт</div>
+        <div class="label" style="top:520px">Коллекторы / трубы</div>
+        <div class="label" style="top:684px">Мясной низ / Пустота</div>
+      </div>
+    </div>
+    <div class="footer"><span>Публично: “безграничная бетонная структура”. Точные технические размеры и топология не раскрываются.</span><span>visual 1/6</span></div>
+  </section>
+
+  <section class="poster" data-poster="2">
+    <div class="kicker">Геометрия вылазки</div>
+    <h1>Игрок погружается через маршрут: подготовка, лифт, риск, возврат</h1>
+    <p class="lead">Картинка для треда должна объяснять цикл одним взглядом: безопасная комната рядом, опасность дальше, самосбор сверху, последствия сзади.</p>
+    <div class="route">
+      <div class="panel">
+        <div class="iso">
+          <div class="room safe" style="left:56px;top:46px;width:310px;height:170px"></div>
+          <div class="room green" style="left:420px;top:74px;width:230px;height:140px"></div>
+          <div class="room" style="left:742px;top:46px;width:310px;height:170px"></div>
+          <div class="room red" style="left:1098px;top:88px;width:260px;height:170px"></div>
+          <div class="room" style="left:170px;top:290px;width:260px;height:165px"></div>
+          <div class="room red" style="left:538px;top:292px;width:342px;height:180px"></div>
+          <div class="room safe" style="left:1010px;top:306px;width:280px;height:156px"></div>
+          <div class="room" style="left:330px;top:548px;width:290px;height:150px"></div>
+          <div class="room red" style="left:760px;top:548px;width:310px;height:150px"></div>
+          <div class="corridor" style="left:350px;top:150px;width:460px;height:38px"></div>
+          <div class="corridor" style="left:616px;top:204px;width:46px;height:395px"></div>
+          <div class="corridor" style="left:810px;top:150px;width:310px;height:38px"></div>
+          <div class="corridor" style="left:428px;top:370px;width:620px;height:38px"></div>
+          <div class="corridor" style="left:620px;top:608px;width:160px;height:38px"></div>
+          <div class="fog" style="left:520px;top:230px;width:450px;height:340px"></div>
+          <div class="dot cyan" style="left:160px;top:120px"></div>
+          <div class="dot" style="left:498px;top:135px"></div>
+          <div class="dot red" style="left:695px;top:360px"></div>
+          <div class="dot red" style="left:850px;top:615px"></div>
+          <div class="dot violet" style="left:1160px;top:170px"></div>
+          <div class="dot" style="left:1135px;top:370px"></div>
+          <div class="tag" style="position:absolute;left:72px;top:235px;width:250px">Пункт сборов<div class="mini">вода, хлеб, бинт, патроны, документы</div></div>
+          <div class="tag" style="position:absolute;left:452px;top:506px;width:250px">САМОСБОР<div class="mini">поле перестраивает локальный маршрут</div></div>
+          <div class="tag" style="position:absolute;left:1028px;top:496px;width:280px">Убежище<div class="mini">решение: бежать, ждать или рисковать</div></div>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Как читать схему</h2>
+        <div class="biglist" style="grid-template-columns:1fr">
+          <div class="tag">Синий <div class="mini">безопасная стартовая опора, где игрок готовит вылазку.</div></div>
+          <div class="tag">Зеленый <div class="mini">люди, торговля, задания, слухи, фракционная зона.</div></div>
+          <div class="tag">Красный <div class="mini">бой, монстр, кража, закрытая дверь, долг или запретный лут.</div></div>
+          <div class="tag">Фиолетовый <div class="mini">самосбор: меняет поле, а не просто рисует туман.</div></div>
+          <div class="tag">Желтая линия <div class="mini">маршрут игрока: вернуться важнее, чем просто зайти глубже.</div></div>
+        </div>
+        <div class="shot" style="height:210px;margin-top:22px">
+          <img src="../../screenshots/frontpage-review/extra_04-living-combat-hud.png" alt="">
+          <div class="cap">Бой и HUD должны читаться как часть маршрута.</div>
+        </div>
+      </div>
+    </div>
+    <div class="footer"><span>Ключ: геометрия должна объяснять выбор, а не показывать внутреннюю карту.</span><span>visual 2/6</span></div>
+  </section>
+
+  <section class="poster" data-poster="3">
+    <div class="kicker">Вертикаль и масштаб</div>
+    <h1>Лифт уводит через домены: быт, документы, трубы, мясо, пустота</h1>
+    <p class="lead">Эта картинка показывает масштаб мира без технических координат: чем дальше от жилого центра, тем страннее правила, но каждый слой остается игровой зоной.</p>
+    <div style="display:grid;grid-template-columns: 520px 1fr;gap:26px;margin-top:28px;height:710px">
+      <div class="panel" style="position:relative;overflow:hidden">
+        <div style="position:absolute;left:245px;top:20px;bottom:20px;width:70px;border-left:3px solid rgba(214,162,58,.55);border-right:3px solid rgba(214,162,58,.55);background:rgba(0,0,0,.38)"></div>
+        <div class="tag" style="position:absolute;left:40px;top:46px;width:360px">Крыши и антенны<div class="mini">свет, воздух, дальние сигналы</div></div>
+        <div class="tag" style="position:absolute;left:94px;top:152px;width:360px">Министерство<div class="mini">архивы, пропуска, очереди, протокол</div></div>
+        <div class="tag" style="position:absolute;left:40px;top:258px;width:360px">Квартиры<div class="mini">соседи, коммуналки, долги, бытовой ужас</div></div>
+        <div class="tag" style="position:absolute;left:94px;top:364px;width:360px">Жилая зона<div class="mini">старт, подготовка, первые NPC</div></div>
+        <div class="tag" style="position:absolute;left:40px;top:470px;width:360px">Коллекторы<div class="mini">вода, трубы, насосы, лаборатории</div></div>
+        <div class="tag" style="position:absolute;left:94px;top:576px;width:360px">Мясной низ / Пустота<div class="mini">культ, хтонь, протоколы, финальное давление</div></div>
+      </div>
+      <div class="panel">
+        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:18px;height:100%">
+          <div class="shot"><img src="../../screenshots/frontpage-review/loc_07-krysha-antenny.png" alt=""><div class="cap">Крыша: бетон, небо, антенны</div></div>
+          <div class="shot"><img src="../../screenshots/frontpage-review/loc_03-ministerstvo-raionsovet-archive.png" alt=""><div class="cap">Министерство: документы и контроль</div></div>
+          <div class="shot"><img src="../../screenshots/frontpage-review/loc_04-kollektory-maintenance.png" alt=""><div class="cap">Коллекторы: вода и техника</div></div>
+          <div class="shot"><img src="../../screenshots/frontpage-review/hell_05-void-eye-protocols.png" alt=""><div class="cap">Пустота: протоколы и поздняя угроза</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="footer"><span>Публичный масштаб: “лифт уводит все дальше”, без внутренних координат.</span><span>visual 3/6</span></div>
+  </section>
+
+  <section class="poster" data-poster="4">
+    <div class="kicker">Самосбор как зрелище и система</div>
+    <h1>Сирена делает знакомое место чужим</h1>
+    <p class="lead">Самосбор нужно показывать как драму: было, предупреждение, туман, укрытие, перестройка, остаток. Это продает идею лучше, чем список внутренних названий.</p>
+    <div style="display:grid;grid-template-columns: 1.05fr .95fr;gap:24px;margin-top:30px;height:710px">
+      <div class="panel" style="position:relative;overflow:hidden">
+        <div class="room safe" style="left:70px;top:64px;width:300px;height:170px"></div>
+        <div class="room" style="left:480px;top:70px;width:300px;height:170px"></div>
+        <div class="room red" style="left:240px;top:338px;width:350px;height:190px"></div>
+        <div class="room" style="left:670px;top:360px;width:260px;height:180px"></div>
+        <div class="corridor" style="left:322px;top:150px;width:300px;height:38px"></div>
+        <div class="corridor" style="left:420px;top:222px;width:44px;height:252px"></div>
+        <div class="fog" style="left:210px;top:180px;width:520px;height:420px"></div>
+        <div class="fog whitefog" style="left:545px;top:90px;width:260px;height:220px"></div>
+        <div class="fog greenfog" style="left:120px;top:428px;width:250px;height:190px"></div>
+        <div class="fog goldfog" style="left:650px;top:460px;width:250px;height:170px"></div>
+        <div class="dot cyan" style="left:168px;top:130px"></div>
+        <div class="dot red" style="left:372px;top:424px"></div>
+        <div class="dot violet" style="left:702px;top:410px"></div>
+        <div class="tag" style="position:absolute;left:70px;top:252px;width:286px">Герма / убежище<div class="mini">не текстовый бонус, а маршрутное решение</div></div>
+        <div class="tag" style="position:absolute;left:508px;top:598px;width:360px">Последствия<div class="mini">остатки, слухи, дефицит, следы, измененная геометрия</div></div>
+      </div>
+      <div>
+        <div class="shot" style="height:330px"><img src="../../screenshots/frontpage-review/hell_02-hell-maronary-samosbor.png" alt=""><div class="cap">Визуальная фаза: туман, сигнал, потеря привычной ориентации.</div></div>
+        <div class="statgrid" style="grid-template-columns:repeat(2,1fr);margin-top:18px">
+          <div class="stat"><strong>7</strong><span>вариантов самосбора: меняет, удаляет, создает, давит.</span></div>
+          <div class="stat"><strong>44</strong><span>события последствий после активной фазы.</span></div>
+          <div class="stat"><strong>33</strong><span>режиссерских событий: предупреждения, патрули, дефицит, слухи.</span></div>
+          <div class="stat"><strong>1</strong><span>главное решение: укрыться, прорваться или рискнуть.</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="footer"><span>Публичный тезис: САМОСБОР не сброс, а локальная катастрофа с памятью.</span><span>visual 4/6</span></div>
+  </section>
+
+  <section class="poster" data-poster="5">
+    <div class="kicker">Экология угроз</div>
+    <h1>Монстры объясняют мир через правила, а не только через вид</h1>
+    <p class="lead">Хорошая картинка должна показывать, что враги связаны с бытом: свет, вода, документы, еда, дверь, шум, туман, ложный лифт.</p>
+    <div style="display:grid;grid-template-columns: 1fr 1fr;gap:24px;margin-top:30px;height:710px">
+      <div class="panel">
+        <div class="biglist" style="grid-template-columns:repeat(2,1fr);gap:16px">
+          <div class="tag">Свет<div class="mini">лампы, темные углы, вспышки, линии выстрела</div></div>
+          <div class="tag">Вода<div class="mini">лотки, трубы, мокрая броня, сухая кромка</div></div>
+          <div class="tag">Документы<div class="mini">бумажный запах, печати, протоколы, архивы</div></div>
+          <div class="tag">Еда и приманка<div class="mini">стаи, мусор, мясо, запах и отвлечение</div></div>
+          <div class="tag">Дверь<div class="mini">ложная безопасность, засадник, псевдолифт</div></div>
+          <div class="tag">Шум<div class="mini">вой, шаги, удар по металлу, последний звук</div></div>
+          <div class="tag">Туман<div class="mini">смещение силуэта, боковой удар, плотный карман</div></div>
+          <div class="tag">След<div class="mini">кровь, ожог, паутина, слух, редкая добыча</div></div>
+        </div>
+        <div class="statgrid" style="grid-template-columns:repeat(3,1fr);margin-top:18px">
+          <div class="stat"><strong>67</strong><span>типов монстров</span></div>
+          <div class="stat"><strong>67</strong><span>экологических правил</span></div>
+          <div class="stat"><strong>577</strong><span>слухов</span></div>
+        </div>
+      </div>
+      <div class="panel" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div class="shot"><img src="../../screenshots/frontpage-review/extra_03-living-monster-ring-clean.png" alt=""><div class="cap">Бытовая угроза рядом с игроком.</div></div>
+        <div class="shot"><img src="../../screenshots/frontpage-review/hell_07-procedural-wall-snake.png" alt=""><div class="cap">Аномалия как правило движения.</div></div>
+        <div class="shot"><img src="../../screenshots/frontpage-review/hell_09-smog-false-safe-block.png" alt=""><div class="cap">Ложная безопасность и странное укрытие.</div></div>
+        <div class="shot"><img src="../../screenshots/frontpage-review/hell_03-underhell-gate-pack.png" alt=""><div class="cap">Поздний маршрут: мясо, культ, давление.</div></div>
+      </div>
+    </div>
+    <div class="footer"><span>Публичный тезис: монстр - это правило, которое можно увидеть, понять, ответить и запомнить.</span><span>visual 5/6</span></div>
+  </section>
+
+  <section class="poster" data-poster="6">
+    <div class="kicker">Один кадр для закрепа</div>
+    <h1>Что уже сделано: масштаб, цикл, графика, погружение</h1>
+    <p class="lead">Итоговый постер для шапки: слева факты из кода, справа реальные кадры, внизу понятная формула игры.</p>
+    <div style="display:grid;grid-template-columns: 540px 1fr;gap:24px;margin-top:26px;height:718px">
+      <div class="panel">
+        <h2>Шапка в одну фразу</h2>
+        <p style="font-size:24px;color:#e8dfbf">ГИГАХРУЩ - браузерный survival horror / ARPG shooter про вылазки в безграничной бетонной хрущевке, где подготовка, NPC, фракции, монстры и САМОСБОР оставляют последствия.</p>
+        <div class="worldline"></div>
+        <div class="biglist" style="grid-template-columns:1fr">
+          <div class="tag">41 авторская остановка<div class="mini">свои правила, NPC, лут, решения</div></div>
+          <div class="tag">54 процедурные остановки<div class="mini">зерно забега, опасность, фракция, аномалия, уклон к монстрам</div></div>
+          <div class="tag">434 предмета<div class="mini">вода, еда, документы, оружие, инструменты, образцы</div></div>
+          <div class="tag">399 шагов побочных квестов<div class="mini">локальные истории, поручения, последствия</div></div>
+          <div class="tag">67 монстров<div class="mini">не картинки, а правила вылазки</div></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div style="display:grid;grid-template-columns: 1.2fr .8fr;grid-template-rows: 350px 310px;gap:16px;height:100%">
+          <div class="shot" style="grid-row:span 2"><img src="../../screenshots/frontpage-review/contact_sheet.png" alt=""><div class="cap">Реальные кадры: старт, бой, самосбор, коллекторы, Ад, Пустота.</div></div>
+          <div class="shot"><img src="../../../gatbage/tmp/media/gamepush_promo_2026-05-28/gigahrush_cover_1920x1080.png" alt=""><div class="cap">Промо-обложка: бетонный survival horror.</div></div>
+          <div class="shot"><img src="../../screenshots/frontpage-review/anim_hell_blinking_eyes_preview.png" alt=""><div class="cap">Нижние уровни: хтонь, глаза, протокол.</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="footer"><span>Играть: myindie.ru/games/game/gigahrush | direct: gigahrush.bileter.workers.dev | t.me/gigah_rush</span><span>visual 6/6</span></div>
+  </section>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const posterNo = params.get('poster') || '1';
+    for (const poster of document.querySelectorAll('.poster')) {
+      poster.classList.toggle('active', poster.dataset.poster === posterNo);
+    }
+    const facade = document.querySelector('.facade');
+    if (facade) {
+      for (let y = 18; y < 760; y += 56) {
+        for (let x = 26; x < 760; x += 66) {
+          if (x > 352 && x < 466) continue;
+          const w = document.createElement('div');
+          w.className = `window ${((x * 17 + y * 31) % 7) < 2 ? 'darkwin' : ''}`;
+          w.style.left = `${x}px`;
+          w.style.top = `${y}px`;
+          facade.append(w);
+        }
+      }
+    }
+  </script>
+</body>
+</html>
