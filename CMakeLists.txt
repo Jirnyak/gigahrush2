@@ -647,7 +647,15 @@ if(GIGA_BUILD_TESTS)
     # the path zig-zag between surfaces inside one cell: in zero-g, where every
     # frame has five surfaces, that was two fittings per cell and almost no
     # straight run (9140 instances against NegZ's 3954; now 5441 against 4080).
-        PASS_REGULAR_EXPRESSION "game_test: 228322 checks, 0 failures")
+    # 228322 -> 232042 on 2026-08-05: corners are CONTEXTUAL, the way timaert's
+    # roads do it (shaders/macro.frag roadOverlay): a cell draws the union of
+    # half-links from its own centre toward every neighbour that is also pipe,
+    # so elbows, tees and crosses emerge from the neighbourhood in all six
+    # directions instead of being special cases. Straight pass-throughs still
+    # collapse to one cylinder. The seating check now measures the gap to the
+    # piece's OWN anchor column instead of ray-marching from its centre, which
+    # lied about half-links reaching under a neighbour's higher ceiling.
+        PASS_REGULAR_EXPRESSION "game_test: 232042 checks, 0 failures")
 
 
 

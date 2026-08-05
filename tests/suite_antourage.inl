@@ -425,43 +425,25 @@ static void test_pipes_hug_and_branch() {
     for (const AntourageInstance& it : b.instances) {
         if (it.shape == kShapeBox) { ++joints; continue; }
         ++legs;
+        // SEATED, measured against the very column the piece names as its
+        // anchor: the distance from the pipe's axis to that column's face must
+        // be the mounting gap, not a metre of air. Ray-marching from the
+        // instance CENTRE looked right but lied both ways — a half-link reaches
+        // into the neighbour's cell, where the ceiling may be higher.
         const int ax = antourage_face_axis(it.face);
         const int dr = antourage_face_dir(it.face);
-        // March from the pipe axis back toward the anchor: matter must appear
-        // within one radius plus the mounting gap plus a sub-voxel of slack.
-        bool touching = false;
-        vec3 probe = it.pos;
-        for (int k = 0; k < 4 && !touching; ++k) {
-            float* c = ax == 0 ? &probe.x : ax == 1 ? &probe.y : &probe.z;
-            *c -= static_cast<float>(dr) * step;
-            // Wrap into the torus BEFORE sampling: a negative world coordinate
-            // floors the wrong way and the probe reads someone else's cell.
-            const vec3 q{wrapf(probe.x, kWorldExtent), wrapf(probe.y, kWorldExtent),
-                         wrapf(probe.z, kWorldExtent)};
-            const int cx = wrap_macro(static_cast<int>(std::floor(q.x / kCellSize)));
-            const int cy = wrap_macro(static_cast<int>(std::floor(q.y / kCellSize)));
-            const int cz = wrap_macro(static_cast<int>(std::floor(q.z / kCellSize)));
-            const int sx = static_cast<int>(std::floor(q.x / step)) & 7;
-            const int sy = static_cast<int>(std::floor(q.y / step)) & 7;
-            const int sz = static_cast<int>(std::floor(q.z / step)) & 7;
-            // The bake clamps to the 2x2 CENTRE column, so the probe must ask
-            // about the same four sub-voxels; sampling the single one under the
-            // axis called 72 well-clamped pipes floating.
-            for (int u = -1; u <= 0 && !touching; ++u)
-                for (int v = -1; v <= 0 && !touching; ++v) {
-                    const int qx = ax == 0 ? sx : (sx + u) & 7;
-                    const int qy = ax == 1 ? sy : (ax == 0 ? (sy + u) & 7 : (sy + v) & 7);
-                    const int qz = ax == 2 ? sz : (sz + v) & 7;
-                    touching = w.grid().solid(cx, cy, cz, qx, qy, qz);
-                }
-        }
-        if (!touching) ++floating;
+        const int s = w.grid().mask(it.ax0, it.ay0, it.az0).face_layer(ax, dr, true);
+        if (s < 0) { ++floating; continue; }         // nothing to clamp to at all
+        const int anchorCoord = ax == 0 ? it.ax0 : ax == 1 ? it.ay0 : it.az0;
+        const int edge = dr < 0 ? s : s + 1;
+        const float face_m = static_cast<float>(anchorCoord) * kCellSize +
+                             static_cast<float>(edge) * step;
+        const float pipe_m = ax == 0 ? it.pos.x : ax == 1 ? it.pos.y : it.pos.z;
+        // Toroidal difference: an anchor across the seam is still adjacent.
+        const float gap = std::fabs(wrap_delta_f(pipe_m, face_m, kWorldExtent));
+        if (gap > kPipeRadius + 0.2f) ++floating;
     }
-    // CONTINUITY, the owner's actual complaint ("все трубы разрывны"): every
-    // segment must meet something — the next segment of its own run, or a
-    // fitting sitting on it. An orphan stub is a pipe that goes nowhere.
-    // Keyed by the cell it occupies plus the face it hugs, which is exactly the
-    // network's own node identity.
+
     // Keyed by the CLAMP COLUMN and the face, which is the network's own node
     // identity — not by world position: a pipe sits on the real surface, which
     // for a high lintel is inside the neighbouring cell, so position keys make

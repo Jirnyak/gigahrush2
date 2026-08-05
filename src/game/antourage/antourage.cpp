@@ -364,7 +364,19 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
     }
     out.pipeCells += cells;
 
-    // --- 4. read the tree out ----------------------------------------------
+    // --- 4. read the tree out, CONTEXTUALLY --------------------------------
+    // Borrowed wholesale from timaert's roads (shaders/macro.frag roadOverlay):
+    // a cell does not draw "a segment", it draws the UNION OF HALF-LINKS from
+    // its own centre toward every neighbour that is also network. Corners, tees
+    // and crosses then emerge from the neighbourhood instead of being special
+    // cases — and they emerge in all six directions, because the rule never
+    // names an axis. A straight pass-through is the one case worth collapsing
+    // back into a single full-length cylinder, which is most cells.
+    auto linked = [&](std::size_t a, std::size_t b) {
+        if (!net[a].inNet || !net[b].inNet) return false;
+        return net[a].pred == static_cast<std::int32_t>(b) ||
+               net[b].pred == static_cast<std::int32_t>(a);
+    };
     int sinceBracket = 0;
     for (std::uint32_t st : nodes) {
         const NetNode& n = net[st];
@@ -372,63 +384,87 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
         const std::size_t ci = st / 6u;
         const int face = static_cast<int>(st % 6u);
         const WalkCell c = cell_of(ci);
+        const int fax = antourage_face_axis(face);
         const vec3 a = pipe_point(g, c, face);
         const WalkCell an = face_anchor(c, face);
         const float d = 2.0f * kPipeRadius;
 
-        if (n.pred < 0) {
-            // The PLANT: a main has to start at something, or its first segment
-            // reads as a stub cut off in the air.
-            push_box(out, a, vec3{3.0f * kPipeRadius, 3.0f * kPipeRadius,
-                                  3.0f * kPipeRadius},
-                     static_cast<std::uint8_t>(face), an);
-            continue;
+        // The neighbourhood: which of the four in-surface directions carry pipe.
+        struct Link { int axis; int sgn; };
+        Link link[4];
+        int links = 0;
+        for (int axis = 0; axis < 3; ++axis) {
+            if (axis == fax) continue;
+            for (int sgn = -1; sgn <= 1; sgn += 2) {
+                const WalkCell nb = stepped(c, axis, sgn);
+                if (linked(st, state_of(macro_index(nb.x, nb.y, nb.z), face)))
+                    link[links++] = Link{axis, sgn};
+            }
         }
-        if (!net[n.pred].inNet) continue;
-
-        if (n.axis == 0xFFu) {
-            // A BEND inside one cell: the two seats are an L apart, so the
-            // fitting is a box spanning both. Nothing else can bridge them, and
-            // leaving them unbridged is precisely the gap that was on screen.
-            const int pface = static_cast<int>(static_cast<std::size_t>(n.pred) % 6u);
-            const vec3 b = pipe_point(g, c, pface);
+        // A bend to another surface of THIS cell is a connection too, but its
+        // partner sits at a different seat, so it is drawn as the fitting that
+        // spans both rather than as a half-link.
+        bool bends = false;
+        for (int fi = 0; fi < kFaces; ++fi) {
+            const int other = faceOrder[fi];
+            if (other == face) continue;
+            const std::size_t os = state_of(ci, other);
+            if (!linked(st, os)) continue;
+            bends = true;
+            if (st < os) continue;      // one fitting per pair, not two
+            const vec3 b = pipe_point(g, c, other);
             vec3 lo{std::fmin(a.x, b.x), std::fmin(a.y, b.y), std::fmin(a.z, b.z)};
             vec3 hi{std::fmax(a.x, b.x), std::fmax(a.y, b.y), std::fmax(a.z, b.z)};
             push_box(out, (lo + hi) * 0.5f,
                      vec3{hi.x - lo.x + d, hi.y - lo.y + d, hi.z - lo.z + d},
                      static_cast<std::uint8_t>(face), an);
+        }
+
+        auto emit_pipe = [&](int axis, float len, vec3 pos) {
+            AntourageInstance inst{};
+            inst.pos = pos;
+            inst.scale = vec3{d, d, d};
+            vec_set(inst.scale, axis, len);
+            inst.shape = static_cast<std::uint8_t>(
+                axis == 0 ? kShapeCylinderX : axis == 1 ? kShapeCylinderY
+                                                        : kShapeCylinderZ);
+            inst.matId = static_cast<std::uint8_t>(kMatPipeMetal);
+            inst.face = static_cast<std::uint8_t>(face);
+            inst.ax0 = inst.ax1 = static_cast<std::uint8_t>(an.x);
+            inst.ay0 = inst.ay1 = static_cast<std::uint8_t>(an.y);
+            inst.az0 = inst.az1 = static_cast<std::uint8_t>(an.z);
+            out.instances.push_back(inst);
+        };
+
+        const bool straight = links == 2 && !bends &&
+                              link[0].axis == link[1].axis &&
+                              link[0].sgn == -link[1].sgn;
+        if (straight) {
+            emit_pipe(link[0].axis, kCellSize + 0.1f, a);
+        } else {
+            // Half a cell toward each neighbour, from this cell's own centre.
+            for (int i = 0; i < links; ++i) {
+                vec3 pos = a;
+                vec_add(pos, link[i].axis,
+                        static_cast<float>(link[i].sgn) * 0.25f * kCellSize);
+                emit_pipe(link[i].axis, 0.5f * kCellSize + 0.05f, pos);
+            }
+            // The hub: what the half-links meet in. An END (one link, or none
+            // but a bend) gets a cap, a tee or a cross gets a body.
+            const float hub = links >= 3 ? 2.4f * kPipeRadius
+                            : links == 2 ? 2.1f * kPipeRadius
+                                         : 1.8f * kPipeRadius;
+            push_box(out, a, vec3{hub, hub, hub},
+                     static_cast<std::uint8_t>(face), an);
             sinceBracket = 0;
             continue;
         }
 
-        // A RUN: one segment per cell, spanning its own cell boundary to
-        // boundary on its own surface. The parent shares this face by
-        // construction, so the two are collinear and overlap.
-        const int axis = n.axis;
-        AntourageInstance inst{};
-        inst.pos = a;
-        inst.scale = vec3{d, d, d};
-        vec_set(inst.scale, axis, kCellSize + 0.1f);
-        inst.shape = static_cast<std::uint8_t>(
-            axis == 0 ? kShapeCylinderX : axis == 1 ? kShapeCylinderY
-                                                    : kShapeCylinderZ);
-        inst.matId = static_cast<std::uint8_t>(kMatPipeMetal);
-        inst.face = static_cast<std::uint8_t>(face);
-        inst.ax0 = inst.ax1 = static_cast<std::uint8_t>(an.x);
-        inst.ay0 = inst.ay1 = static_cast<std::uint8_t>(an.y);
-        inst.az0 = inst.az1 = static_cast<std::uint8_t>(an.z);
-        out.instances.push_back(inst);
-
-        if (n.deg >= 3) {
-            push_box(out, a, vec3{2.2f * kPipeRadius, 2.2f * kPipeRadius,
-                                  2.2f * kPipeRadius},
-                     static_cast<std::uint8_t>(face), an);
-            sinceBracket = 0;
-        } else if (++sinceBracket >= kPipeBracketEvery) {
+        if (++sinceBracket >= kPipeBracketEvery) {
             sinceBracket = 0;
             vec3 clamp = a;
-            vec_add(clamp, antourage_face_axis(face),
-                    static_cast<float>(-antourage_face_dir(face)) * kPipeRadius);
+            vec_add(clamp, fax, static_cast<float>(-antourage_face_dir(face)) *
+                                    kPipeRadius);
             push_box(out, clamp, vec3{1.5f * kPipeRadius, 1.5f * kPipeRadius,
                                       1.5f * kPipeRadius},
                      static_cast<std::uint8_t>(face), an);
