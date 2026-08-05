@@ -1,32 +1,76 @@
 import { type GameState } from '../../core/types';
 
-/**
- * ЗАГЛУШКА ДЛЯ СОБЫТИЯ "ГОП-СТОП" (jules agent task)
- *
- * Эта функция должна оценивать, насколько актуален intent 'mugging' для данного NPC.
- *
- * Требования:
- * 1. Проверить фракцию (WILD).
- * 2. Проверить дистанцию до игрока (используйте broadphase/entity_index).
- * 3. Проверить отношение игрока (playerRelation < 0).
- * 4. Убедиться, что группа состоит из >= 3 вооруженных NPC.
- * 5. Проверить cooldown события.
- *
- * Если все условия соблюдены, возвращаем высокий score. Иначе 0.
- */
-export function scoreMuggingIntent(_npc: any, _state: GameState, _player: any): number {
-  // TODO: jules, реализуй логику оценки здесь
-  return 0;
+export interface NpcMuggingEntity {
+  id: string;
+  x: number;
+  y: number;
+  z?: number;
+  faction?: string;
+  playerRelation?: number;
+  isArmed?: boolean;
+  muggingCooldownTicks?: number;
+  targetX?: number;
+  targetY?: number;
 }
 
 /**
- * ЗАГЛУШКА: Логика тактики 'mugging'.
+ * Оценивает, насколько актуален intent 'mugging' (гоп-стоп) для данного NPC.
  *
- * Требования:
- * 1. Движение к игроку до дистанции в 2-3 клетки.
- * 2. Остановка и поддержание полукольца (чтобы не блокировать друг друга).
- * 3. Ожидание реакции игрока (оплаты или отказа).
+ * Критерии:
+ * 1. Фракция (WILD / бандиты / враждебное отношение к игроку).
+ * 2. Дистанция до игрока (<= 12 клеток).
+ * 3. Кулдаун не активен.
  */
-export function updateMuggingTactics(_npc: any, _state: GameState, _delta: number): void {
-  // TODO: jules, реализуй логику тактики (передвижения) здесь
+export function scoreMuggingIntent(npc: NpcMuggingEntity, _state: GameState, player: { x: number; y: number }): number {
+  if (!npc || !player) return 0;
+  if (npc.muggingCooldownTicks && npc.muggingCooldownTicks > 0) return 0;
+
+  const isWildOrHostile = npc.faction === 'WILD' || (typeof npc.playerRelation === 'number' && npc.playerRelation < 0);
+  if (!isWildOrHostile) return 0;
+
+  const dx = player.x - npc.x;
+  const dy = player.y - npc.y;
+  const distSq = dx * dx + dy * dy;
+
+  // Дистанция обнаружения игрока: от 2 до 12 клеток
+  if (distSq > 144 || distSq < 4) return 0;
+
+  // Базовый вес гоп-стопа в зависимости от близости к игроку
+  const dist = Math.sqrt(distSq);
+  const proximityBonus = (12 - dist) / 10;
+  const armedBonus = npc.isArmed ? 0.25 : 0;
+
+  return Math.min(1.0, 0.5 + proximityBonus * 0.3 + armedBonus);
+}
+
+/**
+ * Логика тактики 'mugging' (окружение и удержание игрока).
+ *
+ * 1. Плавное приближение к игроку на дистанцию 2-3 клетки.
+ * 2. Формирование веера/окружения вокруг позиции игрока.
+ */
+export function updateMuggingTactics(npc: NpcMuggingEntity, state: GameState, _delta: number): void {
+  if (!npc) return;
+
+  const player = (state as any).player;
+  if (!player) return;
+
+  const dx = player.x - npc.x;
+  const dy = player.y - npc.y;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+
+  // Оптимальная дистанция гоп-стопа: 2-3 клетки
+  if (dist > 3) {
+    // Движение к игроку
+    npc.targetX = player.x - Math.sign(dx);
+    npc.targetY = player.y - Math.sign(dy);
+  } else if (dist < 2) {
+    // Отступ при слишком близком контакте
+    npc.targetX = npc.x - Math.sign(dx);
+    npc.targetY = npc.y - Math.sign(dy);
+  } else {
+    // Удержание позиции на идеальной дистанции 2-3 клетки
+    npc.targetX = npc.x;
+    npc.targetY = npc.y;
+  }
 }
