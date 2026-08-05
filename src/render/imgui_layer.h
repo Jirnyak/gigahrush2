@@ -27,6 +27,7 @@ public:
     bool process_event(const SDL_Event& e);
 
     void begin_frame();
+    void draw_crt_overlay();
     // Records ImGui draw data into the (already-open) render pass command buffer.
     void render(VkCommandBuffer cmd);
 
