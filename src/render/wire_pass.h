@@ -46,7 +46,12 @@ public:
     WirePass(const WirePass&) = delete;
     WirePass& operator=(const WirePass&) = delete;
 
-    bool init(VulkanDevice* dev, VkRenderPass renderPass, const char* shaderDir);
+    // `masksBuffer` is VoxelMirror's masks SSBO, exactly as ParticlePass takes
+    // it: the sim collides against the render-side copy of the grid, so a piece
+    // that lost its last pin falls and LANDS instead of sinking through the
+    // floor. The mirror outlives this pass, so the raw handle is safe to keep.
+    bool init(VulkanDevice* dev, VkRenderPass renderPass, const char* shaderDir,
+              VkBuffer masksBuffer);
     void destroy();
     bool ready() const { return drawPipeline_ != VK_NULL_HANDLE; }
 

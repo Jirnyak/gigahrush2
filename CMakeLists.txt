@@ -607,7 +607,13 @@ if(GIGA_BUILD_TESTS)
     # плохо"). The bake now seats every leg on the real face and splits a run at
     # any cell whose column is empty, so 9 legs that hung in the air are gone
     # (2975 -> 2966 on floor 0) and the rest sit against the matter they touch.
-        PASS_REGULAR_EXPRESSION "game_test: 223840 checks, 0 failures")
+    # 223840 -> 223852 (+12) on 2026-08-05: death is a STATE, not an event —
+    # FallClock keeps a severed chain/sheet simulated and drawn for 8 s so it
+    # drops and lands (wire_sim/cloth_sim now collide against the VoxelMirror,
+    # the same SSBO particle_sim uses) before it stops being drawn. The test
+    # pins the three states, including the one the first draft got wrong: a
+    # spent clock must STAY spent, or the piece restarts its fall every frame.
+        PASS_REGULAR_EXPRESSION "game_test: 223852 checks, 0 failures")
 
 
 

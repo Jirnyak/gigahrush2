@@ -299,6 +299,35 @@ static void test_antourage_carve_drops_the_wire() {
     CHECK(antourage_alive(w.grid(), wire));
 }
 
+// Death is a STATE, not an event ([antourage.h] FallClock): the last anchor
+// letting go starts a countdown instead of deleting the piece, so it falls,
+// lands and only then stops being drawn.
+static void test_antourage_fall_clock() {
+    FallClock fc;
+    const float dt = 1.0f / 60.0f;
+    // Held: drawn, and no clock is running at all.
+    CHECK(fc.step(0, true, dt));
+    CHECK(fc.left[0] < 0.0f);
+    // Severed: still drawn, and the countdown starts at the full life.
+    CHECK(fc.step(0, false, dt));
+    CHECK(fc.left[0] > kAntourageFallSec - 1e-4f);
+    // It keeps falling for the whole life, then stops — measured by stepping.
+    int frames = 0;
+    while (fc.step(0, false, dt) && frames < 10000) ++frames;
+    CHECK(frames > 0);
+    const float lived = static_cast<float>(frames + 1) * dt;
+    CHECK(lived > kAntourageFallSec - 0.05f);
+    CHECK(lived < kAntourageFallSec + 0.05f);
+    CHECK(!fc.step(0, false, dt)); // stays dead
+    // ...unless the world put it back (a reloaded floor re-bakes): held again
+    // means anchored again, and the clock is forgotten.
+    CHECK(fc.step(0, true, dt));
+    CHECK(fc.left[0] < 0.0f);
+    // Pieces are independent, and an index never touched before is alive.
+    CHECK(fc.step(9, true, dt));
+    CHECK(fc.left.size() == 10);
+}
+
 static void test_antourage_all() {
     // A real floor, dressed.
     World w;

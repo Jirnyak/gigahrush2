@@ -45,7 +45,7 @@ struct SimPush {
 } // namespace
 
 bool ClothPass::init(VulkanDevice* dev, VkRenderPass renderPass,
-                     const char* shaderDir) {
+                     const char* shaderDir, VkBuffer masksBuffer) {
     dev_ = dev;
     if (!points_.create_host_visible(
             *dev_, sizeof(GpuClothSheet) * kMaxClothSheets,
@@ -56,7 +56,7 @@ bool ClothPass::init(VulkanDevice* dev, VkRenderPass renderPass,
                                      "cloth-bodies"))
         return false;
 
-    VkDescriptorSetLayoutBinding b[2]{};
+    VkDescriptorSetLayoutBinding b[3]{};
     b[0].binding = 0;
     b[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     b[0].descriptorCount = 1;
@@ -65,15 +65,19 @@ bool ClothPass::init(VulkanDevice* dev, VkRenderPass renderPass,
     b[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     b[1].descriptorCount = 1;
     b[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    b[2].binding = 2; // VoxelMirror masks — what a severed piece lands ON
+    b[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    b[2].descriptorCount = 1;
+    b[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     VkDescriptorSetLayoutCreateInfo slci{};
     slci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    slci.bindingCount = 2;
+    slci.bindingCount = 3;
     slci.pBindings = b;
     if (vkCreateDescriptorSetLayout(dev_->device, &slci, nullptr, &setLayout_) !=
         VK_SUCCESS)
         return false;
 
-    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2};
+    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3};
     VkDescriptorPoolCreateInfo pci{};
     pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pci.maxSets = 1;
@@ -88,12 +92,13 @@ bool ClothPass::init(VulkanDevice* dev, VkRenderPass renderPass,
     ai.pSetLayouts = &setLayout_;
     if (vkAllocateDescriptorSets(dev_->device, &ai, &set_) != VK_SUCCESS)
         return false;
-    VkDescriptorBufferInfo bi[2] = {
+    VkDescriptorBufferInfo bi[3] = {
         {points_.buffer, 0, VK_WHOLE_SIZE},
         {bodies_.buffer, 0, VK_WHOLE_SIZE},
+        {masksBuffer, 0, VK_WHOLE_SIZE},
     };
-    VkWriteDescriptorSet w[2]{};
-    for (int i = 0; i < 2; ++i) {
+    VkWriteDescriptorSet w[3]{};
+    for (int i = 0; i < 3; ++i) {
         w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[i].dstSet = set_;
         w[i].dstBinding = static_cast<std::uint32_t>(i);
@@ -101,7 +106,7 @@ bool ClothPass::init(VulkanDevice* dev, VkRenderPass renderPass,
         w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         w[i].pBufferInfo = &bi[i];
     }
-    vkUpdateDescriptorSets(dev_->device, 2, w, 0, nullptr);
+    vkUpdateDescriptorSets(dev_->device, 3, w, 0, nullptr);
 
     return create_pipelines(renderPass, shaderDir);
 }

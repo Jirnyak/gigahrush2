@@ -1597,13 +1597,15 @@ int main(int argc, char** argv) {
 
     // Hanging wires: GPU-verlet antourage chains ([render/wire_pass.h]).
     gpu::WirePass wirePass;
-    if (!wirePass.init(&device, renderer.renderPass, GIGA_SHADER_DIR)) {
+    if (!wirePass.init(&device, renderer.renderPass, GIGA_SHADER_DIR,
+                       voxelMirror.masks_buffer())) {
         std::fprintf(stderr, "[wire] pass init failed (continuing without wires)\n");
     }
 
     // Cloth sheets: GPU-verlet antourage curtains ([render/cloth_pass.h]).
     gpu::ClothPass clothPass;
-    if (!clothPass.init(&device, renderer.renderPass, GIGA_SHADER_DIR)) {
+    if (!clothPass.init(&device, renderer.renderPass, GIGA_SHADER_DIR,
+                        voxelMirror.masks_buffer())) {
         std::fprintf(stderr, "[cloth] pass init failed (continuing without cloth)\n");
     }
 
@@ -5258,12 +5260,18 @@ int main(int argc, char** argv) {
                     wirePins.clear();
                     const MacroGrid& wg = stack.layer(activeLayer).grid();
                     // One probe, two answers: the live pin mask says which ends
-                    // still hold, and "no pin left" IS death. A cut end lets go
-                    // and the wire whips down from the other ([antourage.md]).
-                    for (const game::WireChain& c : ab->wires) {
-                        const std::uint8_t m = game::wire_live_pins(wg, c);
+                    // still hold, and "no pin left" starts the FALL. The chain
+                    // keeps simulating unpinned for kAntourageFallSec, so it
+                    // drops, lands on the floor (world_land in wire_sim.comp)
+                    // and only then stops being drawn ([antourage.md]).
+                    static game::FallClock wireFall;
+                    if (wireFall.left.size() != ab->wires.size()) wireFall.clear();
+                    for (std::size_t wi = 0; wi < ab->wires.size(); ++wi) {
+                        const std::uint8_t m =
+                            game::wire_live_pins(wg, ab->wires[wi]);
                         wirePins.push_back(m);
-                        wireAlive.push_back(m != 0u ? 1u : 0u);
+                        wireAlive.push_back(
+                            wireFall.step(wi, m != 0u, frameDt) ? 1u : 0u);
                     }
                     const auto wireN =
                         static_cast<std::uint32_t>(wirePins.size());
@@ -5284,10 +5292,15 @@ int main(int argc, char** argv) {
                     clothAlive.clear();
                     clothPins.clear();
                     const MacroGrid& wg = stack.layer(activeLayer).grid();
-                    for (const game::ClothSheet& c : ab->cloths) {
-                        const std::uint32_t m = game::cloth_live_pins(wg, c);
+                    static game::FallClock clothFall;
+                    if (clothFall.left.size() != ab->cloths.size())
+                        clothFall.clear();
+                    for (std::size_t si = 0; si < ab->cloths.size(); ++si) {
+                        const std::uint32_t m =
+                            game::cloth_live_pins(wg, ab->cloths[si]);
                         clothPins.push_back(m);
-                        clothAlive.push_back(m != 0u ? 1u : 0u);
+                        clothAlive.push_back(
+                            clothFall.step(si, m != 0u, frameDt) ? 1u : 0u);
                     }
                     const auto clothN =
                         static_cast<std::uint32_t>(clothPins.size());

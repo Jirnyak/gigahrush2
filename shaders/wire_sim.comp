@@ -26,6 +26,40 @@ layout(std430, binding = 0) buffer Wires { WChain c[]; } wb;
 // special case (owner's law).
 layout(std430, binding = 1) readonly buffer Bodies { vec4 b[]; } bb;
 
+// VoxelMirror masks — the same SSBO particle_sim.comp collides against, so a
+// piece that lost its last pin FALLS AND LANDS instead of sinking through the
+// floor. One view of the truth, one collision rule.
+layout(std430, binding = 2) readonly buffer MaskBuf { uint uMasks[]; };
+
+// Solidity of the sub-voxel containing world point `w` (toroidal).
+// Cell = 2 m, sub-voxel = 0.25 m; kMacroDim = 128 so wrap is a power-of-two AND.
+bool solid_at(vec3 w) {
+    vec3 q = w * 0.5;
+    ivec3 c = ivec3(floor(q)) & 127;
+    ivec3 sv = ivec3(floor(fract(q) * 8.0)) & 7;
+    uint ci = uint(c.x) | (uint(c.y) << 7) | (uint(c.z) << 14);
+    uint bit = uint(sv.x) | (uint(sv.y) << 3) | (uint(sv.z) << 6);
+    return ((uMasks[ci * 16u + (bit >> 5)] >> (bit & 31u)) & 1u) != 0u;
+}
+
+// Move a free point toward `np` without entering matter: each axis advances
+// alone and simply does not move when the sub-voxel it would enter is solid.
+// Axis-wise is what lets a point resting on a floor keep sliding along it.
+//
+// Verlet needs no extra bookkeeping for the stop: `prev` stays the pre-step
+// position, so a blocked axis ends with cur == prev — velocity zero on exactly
+// that axis, full speed on the others. (Writing prev by hand here is how the
+// first draft made points buzz inside walls.)
+vec3 world_land(vec3 cur, vec3 np) {
+    vec3 pos = cur;
+    for (int a = 0; a < 3; ++a) {
+        vec3 cand = pos;
+        cand[a] = np[a];
+        if (!solid_at(cand)) pos[a] = np[a];
+    }
+    return pos;
+}
+
 layout(push_constant) uniform Push {
     vec4 sim; // x = dt, y = gravity Z accel, z = chain count, w = damping
     vec4 aux; // x = body count, y = wrap period (m)
@@ -58,8 +92,9 @@ void main() {
                 np += dp / d * (r - d) * 0.35;
             }
         }
+        // Land on the world instead of sinking through it.
         wb.c[i].prev[k] = vec4(cur.xyz, 0.0);
-        wb.c[i].cur[k] = vec4(np, cur.w);
+        wb.c[i].cur[k] = vec4(world_land(cur.xyz, np), cur.w);
     }
 
     // Distance constraints, a few relaxation sweeps.

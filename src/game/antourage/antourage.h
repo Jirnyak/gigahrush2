@@ -192,6 +192,44 @@ bool antourage_alive(const MacroGrid& g, const ClothSheet& s);
 std::uint8_t wire_live_pins(const MacroGrid& g, const WireChain& c);
 std::uint32_t cloth_live_pins(const MacroGrid& g, const ClothSheet& s);
 
+// --- THE FALL CLOCK ---------------------------------------------------------
+// Death is a STATE, not an event (owner, 2026-08-05): the last anchor letting go
+// must not delete the thing on the spot — it should fall, land on the floor and
+// only then stop being drawn. The probe stays a pure function of the live grid
+// (the law at the top of this file); the countdown is separate, render-side
+// state that may be thrown away and rebuilt at any time, which is exactly what
+// makes it safe — a reloaded floor simply starts its falls over.
+inline constexpr float kAntourageFallSec = 8.0f;
+
+struct FallClock {
+    // Seconds of fall left per piece, parallel to the bake's own vector. THREE
+    // states in one float, and the third one is load-bearing: negative =
+    // anchored (no clock), positive = falling, exactly 0 = spent. Without a
+    // separate "spent", a piece whose countdown crossed zero reads as anchored
+    // again on the very next frame and restarts its fall forever.
+    std::vector<float> left;
+
+    // One piece, one frame. `held` is the live-grid answer ("something still
+    // holds it"). Returns whether the piece is still simulated and drawn.
+    bool step(std::size_t i, bool held, float dt) {
+        if (left.size() <= i) left.resize(i + 1, -1.0f);
+        if (held) {                      // still hanging: no clock at all
+            left[i] = -1.0f;
+            return true;
+        }
+        if (left[i] == 0.0f) return false;   // spent, and stays spent
+        if (left[i] < 0.0f) {            // severed THIS frame: start falling
+            left[i] = kAntourageFallSec;
+            return true;
+        }
+        left[i] -= dt;
+        if (left[i] > 0.0f) return true;
+        left[i] = 0.0f;
+        return false;
+    }
+    void clear() { left.clear(); }
+};
+
 // The carve's edge detector, and the antourage twin of anchor_validate_step
 // ([game/prop_system.h] — ECS props detach the same way on the same input).
 //

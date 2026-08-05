@@ -4280,6 +4280,7 @@ int main() {
     test_doors_all();
     test_antourage_all();
     test_antourage_carve_drops_the_wire();
+    test_antourage_fall_clock();
     test_gravity_frames();
     test_antourage_isotropy();
     test_saveload_all();
