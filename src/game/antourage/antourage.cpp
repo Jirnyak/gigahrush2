@@ -321,7 +321,7 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
             const std::uint32_t st = cur[head];
             if (dist[st] != d) continue;        // stale entry, already improved
             const std::size_t ci = st / 6u;
-            const int face = static_cast<int>(st % 6u);
+            const std::uint8_t face = static_cast<std::uint8_t>(st % 6u);
             const WalkCell c = cell_of(ci);
             const int fax = antourage_face_axis(face);
             auto relax = [&](std::size_t ns, std::uint32_t cost, int axis) {
@@ -407,7 +407,7 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
         const NetNode& n = net[st];
         if (!n.inNet) continue;
         const std::size_t ci = st / 6u;
-        const int face = static_cast<int>(st % 6u);
+        const std::uint8_t face = static_cast<std::uint8_t>(st % 6u);
         const WalkCell c = cell_of(ci);
         const int fax = antourage_face_axis(face);
         const vec3 a = pipe_point(g, c, face);
@@ -431,7 +431,7 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
         // spans both rather than as a half-link.
         bool bends = false;
         for (int fi = 0; fi < kFaces; ++fi) {
-            const int other = faceOrder[fi];
+            const std::uint8_t other = faceOrder[fi];
             if (other == face) continue;
             const std::size_t os = state_of(ci, other);
             if (!linked(st, os)) continue;
@@ -442,7 +442,7 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
             vec3 hi{std::fmax(a.x, b.x), std::fmax(a.y, b.y), std::fmax(a.z, b.z)};
             push_box(out, (lo + hi) * 0.5f,
                      vec3{hi.x - lo.x + d, hi.y - lo.y + d, hi.z - lo.z + d},
-                     static_cast<std::uint8_t>(face), an);
+                     face, an);
         }
 
         auto emit_pipe = [&](int axis, float len, vec3 pos) {
@@ -454,7 +454,7 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
                 axis == 0 ? kShapeCylinderX : axis == 1 ? kShapeCylinderY
                                                         : kShapeCylinderZ);
             inst.matId = static_cast<std::uint8_t>(kMatPipeMetal);
-            inst.face = static_cast<std::uint8_t>(face);
+            inst.face = face;
             inst.ax0 = inst.ax1 = static_cast<std::uint8_t>(an.x);
             inst.ay0 = inst.ay1 = static_cast<std::uint8_t>(an.y);
             inst.az0 = inst.az1 = static_cast<std::uint8_t>(an.z);
@@ -484,7 +484,7 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
             // so it must not be measured by the rule that says a run hugs.
             vec3 sc{d, d, d};
             vec_set(sc, fax, std::fabs(step) + d);
-            push_box(out, jog, sc, static_cast<std::uint8_t>(face), an);
+            push_box(out, jog, sc, face, an);
         }
 
         const bool straight = links == 2 && !bends &&
@@ -506,7 +506,7 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
                             : links == 2 ? 2.1f * kPipeRadius
                                          : 1.8f * kPipeRadius;
             push_box(out, a, vec3{hub, hub, hub},
-                     static_cast<std::uint8_t>(face), an);
+                     face, an);
             sinceBracket = 0;
             continue;
         }
@@ -518,7 +518,7 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
                                     kPipeRadius);
             push_box(out, clamp, vec3{1.5f * kPipeRadius, 1.5f * kPipeRadius,
                                       1.5f * kPipeRadius},
-                     static_cast<std::uint8_t>(face), an);
+                     face, an);
         }
     }
 }
