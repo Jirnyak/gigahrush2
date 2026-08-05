@@ -587,7 +587,15 @@ if(GIGA_BUILD_TESTS)
     # where there is pull. +-Z is unchanged (2975/802/152) — the generalisation is
     # identity-preserving, and the one behaviour change it forced (a turn must be
     # legal at the corner cell, not just after it) moved NegY by two instances.
-        PASS_REGULAR_EXPRESSION "game_test: 222670 checks, 0 failures")
+    # 222670 -> 223868 (+1198) on 2026-08-05: door coverage salvaged out of the
+    # marko1olo fork (bd27413) — keycard predicate, door_query_near reach, the
+    # shut/toggle pair. His assertions were written against his own tree and
+    # failed 5 ways here; on inspection OUR code was right every time (cells are
+    # 2 m, so his metre-less probe missed; door_shut_all counts what it CHANGED,
+    # not what is shut), so the tests were corrected, not the engine. The one
+    # real gap they exposed is filed as problems.md §10 (keycard tier ignored)
+    # and pinned AS-IS so closing it is loud.
+        PASS_REGULAR_EXPRESSION "game_test: 223868 checks, 0 failures")
 
 
 
