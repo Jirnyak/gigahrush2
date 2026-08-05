@@ -619,7 +619,14 @@ if(GIGA_BUILD_TESTS)
     # the SOLVER's predicate, not a third copy of collision — and drawn through
     # the instance list it already lived in. Verified headless: 4.86 m of fall,
     # then rest on real geometry, then the same 8 s clock empties the array.
-        PASS_REGULAR_EXPRESSION "game_test: 223862 checks, 0 failures")
+    # 223862 -> 236793 (+12931) on 2026-08-05: pipes finally HUG and BRANCH.
+    # Legs are split where the hugged surface steps (531 of 2767 cylinders were
+    # floating 1-2 m under nothing) and the bundle twin now sits BESIDE its main
+    # on the same face instead of hanging under it; then the walker got a second
+    # phase that starts every branch ON an existing trunk and welds a junction at
+    # the root — joints went 184 -> 2343 against 3855 legs. Most of the delta is
+    # the per-instance CHECK loops over an instance list that grew 2957 -> 6198.
+        PASS_REGULAR_EXPRESSION "game_test: 236793 checks, 0 failures")
 
 
 

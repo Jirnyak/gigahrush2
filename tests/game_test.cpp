@@ -4278,6 +4278,7 @@ int main() {
     test_packs_all();
     test_samosbor_all();
     test_doors_all();
+    test_pipes_hug_and_branch();
     test_antourage_all();
     test_antourage_carve_drops_the_wire();
     test_antourage_fall_clock();

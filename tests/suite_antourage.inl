@@ -402,6 +402,57 @@ static void test_antourage_detached_pipe_falls_and_lands() {
     antourage_carve_step(w2, b2, &dirty, 1, q2, 5u);
 }
 
+// TWO THINGS A PIPE MUST BE, measured rather than eyeballed — both were owner
+// bug reports from live play (2026-08-05: "трубы висят в воздухе", "нет сети
+// труб, просто одиночные секции без ветвлений").
+//
+// 1. TOUCHING. Every cylinder is seated on the face it hugs, so a ray from its
+//    axis toward its anchor meets matter within a radius and a bit. Before the
+//    leg was split at surface steps, 531 of 2767 floated 1-2 m under nothing.
+// 2. CONNECTED. The bake lays trunks and then BRANCHES OFF them, welding a
+//    junction at each root, so joints are common rather than accidental: one
+//    per ~1.6 legs, against one per 15 when every walk started somewhere
+//    unrelated.
+static void test_pipes_hug_and_branch() {
+    World w;
+    generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
+    AntourageBake b;
+    bake_antourage(w, 0, 1337u, b);
+
+    const float step = kCellSize / static_cast<float>(kSubDim);
+    std::uint32_t legs = 0, joints = 0, floating = 0;
+    for (const AntourageInstance& it : b.instances) {
+        if (it.shape == kShapeBox) { ++joints; continue; }
+        ++legs;
+        const int ax = antourage_face_axis(it.face);
+        const int dr = antourage_face_dir(it.face);
+        // March from the pipe axis back toward the anchor: matter must appear
+        // within one radius plus the mounting gap plus a sub-voxel of slack.
+        bool touching = false;
+        vec3 probe = it.pos;
+        for (int k = 0; k < 4 && !touching; ++k) {
+            float* c = ax == 0 ? &probe.x : ax == 1 ? &probe.y : &probe.z;
+            *c -= static_cast<float>(dr) * step;
+            const int cx = wrap_macro(static_cast<int>(std::floor(probe.x / kCellSize)));
+            const int cy = wrap_macro(static_cast<int>(std::floor(probe.y / kCellSize)));
+            const int cz = wrap_macro(static_cast<int>(std::floor(probe.z / kCellSize)));
+            const int sx = static_cast<int>(std::floor(probe.x / step)) & 7;
+            const int sy = static_cast<int>(std::floor(probe.y / step)) & 7;
+            const int sz = static_cast<int>(std::floor(probe.z / step)) & 7;
+            touching = w.grid().solid(cx, cy, cz, sx, sy, sz);
+        }
+        if (!touching) ++floating;
+    }
+    std::fprintf(stderr, "[antourage] pipes: %u legs, %u joints, %u floating\n",
+                 legs, joints, floating);
+    CHECK(legs > 0);
+    // A handful may sit over a sub-voxel the ray misses at a torus seam; a
+    // regression that unseats the legs shows up in the hundreds, not the ones.
+    CHECK(floating * 1000u <= legs);
+    // A NETWORK, not a scatter.
+    CHECK(joints * 3u > legs);
+}
+
 static void test_antourage_all() {
     // A real floor, dressed.
     World w;
