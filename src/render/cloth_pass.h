@@ -72,7 +72,9 @@ public:
     void upload_bodies(const vec4* bodies, std::uint32_t count);
 
     // The verlet step. Record OUTSIDE the render pass, before draw.
-    void record_sim(VkCommandBuffer cmd, float dt);
+    // `gravity` is the layer's declared acceleration VECTOR (m/s^2), straight
+    // from world.gravity() — the sim must never re-derive "down" for itself.
+    void record_sim(VkCommandBuffer cmd, float dt, vec3 gravity);
 
     // The two-sided quad draw. Record INSIDE the render pass.
     void record_draw(VkCommandBuffer cmd, const CubePush& push);

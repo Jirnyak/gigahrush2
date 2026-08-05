@@ -5313,7 +5313,9 @@ int main(int argc, char** argv) {
                     wirePass.write_pins(wirePins.data(), wireN);
                 }
                 if (std::getenv("GIGA_WIRE_NOSIM") == nullptr)
-                    wirePass.record_sim(cmd, 1.0f / 60.0f);
+                    wirePass.record_sim(
+                        cmd, 1.0f / 60.0f,
+                        stack.layer(activeLayer).gravity().global);
             }
 
             // Cloth verlet: same aliveness law, same clock.
@@ -5342,7 +5344,9 @@ int main(int argc, char** argv) {
                     clothPass.write_pins(clothPins.data(), clothN);
                 }
                 if (std::getenv("GIGA_WIRE_NOSIM") == nullptr)
-                    clothPass.record_sim(cmd, 1.0f / 60.0f);
+                    clothPass.record_sim(
+                        cmd, 1.0f / 60.0f,
+                        stack.layer(activeLayer).gravity().global);
             }
 
             if (!stainDirty.empty()) {
@@ -5355,8 +5359,12 @@ int main(int argc, char** argv) {
             // Particle sim AFTER the mirror flush: its barrier orders the
             // masks transfer before compute reads, so a particle collides
             // with THIS frame's carve holes, not last frame's walls.
+            // Gravity is the layer's declared VECTOR — the flush above already
+            // dereferences activeLayer, so it is valid here.
             if (std::getenv("GIGA_PARTICLE_NOSIM") == nullptr)
-                particlePass.record_sim(cmd, 1.0f / 60.0f);
+                particlePass.record_sim(
+                    cmd, 1.0f / 60.0f,
+                    stack.layer(activeLayer).gravity().global);
 
             renderer.begin_pass(0.0f, 0.0f, 0.0f);
 

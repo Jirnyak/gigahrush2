@@ -61,8 +61,9 @@ vec3 world_land(vec3 cur, vec3 np) {
 }
 
 layout(push_constant) uniform Push {
-    vec4 sim; // x = dt, y = gravity Z accel, z = chain count, w = damping
-    vec4 aux; // x = body count, y = wrap period (m)
+    vec4 sim;  // x = dt, y = unused, z = chain count, w = damping
+    vec4 aux;  // x = body count, y = wrap period (m)
+    vec4 grav; // xyz = gravity acceleration VECTOR (m/s^2), w = unused
 } pc;
 
 void main() {
@@ -78,7 +79,7 @@ void main() {
         vec4 cur = wb.c[i].cur[k];
         if (cur.w == 0.0) continue;     // pinned anchor point
         vec3 vel = (cur.xyz - wb.c[i].prev[k].xyz) * pc.sim.w;
-        vec3 np = cur.xyz + vel + vec3(0.0, 0.0, pc.sim.y) * dt * dt;
+        vec3 np = cur.xyz + vel + pc.grav.xyz * dt * dt;
         // Bodies brushing through: a soft radial push per body (one-way).
         // Deltas wrap on the torus so a body across the seam still pushes.
         float per = pc.aux.y;
