@@ -235,6 +235,15 @@ std::uint32_t drop_mob_loot(Registry& reg, LayerId layer, const vec3& pos,
         if (kd.count < 1) kd.count = 1;
         if (cap && kd.count > cap) kd.count = cap;
         reg.emplace<Pickup>(e, Pickup{id, kd.count});
+        // MASS, and its absence here was a real hole: a rifle lying on the floor is
+        // as much a concrete object as the mob that dropped it, yet loot was the ONE
+        // spawn path in the tree that emplaced no `Mass`. Mobs, props and embodied
+        // bodies all carry it, so `impact.cpp` charged E = m*v^2/2 to every falling
+        // thing in the game EXCEPT the loot. It could not be fixed before items had
+        // a weight at all ([item_table.h] massG) — which is what makes this the
+        // first line of the payoff rather than an afterthought.
+        reg.emplace<Mass>(e, Mass{static_cast<float>(item_def(id).massG) *
+                                  0.001f * static_cast<float>(kd.count)});
         // [jirnyak.md] §18: floor loot is Interactable::Kind::Loot so HUD/E
         // can route through find_nearest_interactable. Backend remains pickup_step.
         reg.emplace<Interactable>(
@@ -287,8 +296,14 @@ std::uint32_t drop_weapon_ammo(Registry& reg, LayerId layer, const vec3& pos,
     reg.emplace<AABB>(e, AABB{kPickupHalf});
     reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
     reg.emplace<Renderable>(e, Renderable{kPickupColor});
-    reg.emplace<Pickup>(e, Pickup{def->ammo, static_cast<std::uint8_t>(
-                                                 count > 255 ? 255 : count)});
+    const std::uint32_t bundled = count > 255 ? 255u : count;
+    reg.emplace<Pickup>(e, Pickup{def->ammo,
+                                  static_cast<std::uint8_t>(bundled)});
+    // The bundle weighs its ROUNDS, not one round — the same stack multiply
+    // `inventory_mass_g` does, because a pile of sixty on the floor and the same
+    // sixty in a pocket must not disagree about what they weigh.
+    reg.emplace<Mass>(e, Mass{static_cast<float>(item_def(def->ammo).massG) *
+                              0.001f * static_cast<float>(bundled)});
     // [jirnyak.md] §18: ammo bundles are floor Loot interactables too.
     reg.emplace<Interactable>(
         e, Interactable{Interactable::Kind::Loot, kPickupReach, true});
