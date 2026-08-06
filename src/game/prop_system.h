@@ -19,7 +19,7 @@ namespace giga::game {
 enum class PropFallMode : std::uint8_t {
     SimpleFall,  // 1. Падение AABB на CPU (тяжелые щитки, терминалы)
     RagdollRoll, // 2. Вращение/кувыркание на CPU (лампы, ведра, стулья)
-    GpuHandoff   // 3. Shatter into CPU debris chips then destroy parent entity
+    GpuHandoff   // 3. Уничтожить сущность, осколки — всплеск в GPU-пул частиц
 };
 
 struct SubVoxelAnchor {

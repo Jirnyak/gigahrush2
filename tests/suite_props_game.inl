@@ -706,9 +706,11 @@ static void test_debris_roll_drives_angular_on_ground() {
 }
 
 
-// [jirnyak.md] section 18/19 -- DebrisSpawnEvent consumer + GpuHandoff shatter.
-// GpuHandoff used to destroy the parent with zero debris; now spawn_debris_pieces
-// leaves N DynamicBodyTag chips with AngularVelocity for BodyPass / physics_step.
+// [jirnyak.md] section 18/19 -- GpuHandoff shatter.
+// The mode's whole promise: ZERO CPU debris entities. The parent is destroyed and
+// the SHOW is a burst pushed into the unified GPU particle pool ([particle_pass.h]),
+// so a chain collapse costs the tick nothing. The queue is optional — headless sim
+// and tests may pass nullptr and get silence, which the second half of this test pins.
 
 static void test_gpu_handoff_destroys_parent_without_cpu_debris() {
     Registry reg;
