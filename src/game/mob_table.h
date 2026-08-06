@@ -189,11 +189,20 @@ struct MobDef {
     std::uint8_t navDropSub;       // 38  safe drop, sub-voxels
     std::uint8_t navFly;           // 39  0 = walker, 1 = flyer
     // --- universal mass ([ecs/components.h] Mass) --------------------------
-    // kg x10 (0.1 kg resolution, max 6553 kg). Feeds E = m*v^2/2 and p = m*v —
-    // fall damage, knockback, ragdoll swing — never a per-system constant.
-    std::uint16_t massKgX10;       // 40
-    std::uint8_t pad0_ = 0;        // 42
-    std::uint8_t pad1_ = 0;        // 43
+    // GRAMS, and the unit is the same one [prop_table.h] uses — that is the whole
+    // reason this field changed shape. It used to be kg x10 here and grams in a
+    // uint16 there: the same 16 bits meaning two different things, which is
+    // [problems.md] §20's class ("одна величина считается по-разному"), and it bit
+    // — a prop could not be authored past 65.5 kg while this table already carried
+    // 900 kg rows, so a kitchen stove had to be written down as 65 kg.
+    //
+    // The widening cost NOTHING: `massKgX10` plus the two pad bytes that followed
+    // it were already four contiguous bytes at a 4-aligned offset, so the row is
+    // still exactly 44. Range 1 g .. 4294 t covers a cartridge and a lift cabin.
+    //
+    // Feeds E = m*v^2/2 and p = m*v — fall damage, knockback, ragdoll swing —
+    // never a per-system constant.
+    std::uint32_t massG;           // 40
 };
 static_assert(sizeof(MobDef) == 44, "MobDef must stay a tight 44-byte row");
 static_assert(alignof(MobDef) == 4);

@@ -135,19 +135,25 @@ def main():
         for v in sizes:
             if not (0 < v <= 65535):
                 die("row %d: size out of range" % i)
-        if not (0 < massG <= 65535):
-            die("row %d: mass_kg %r out of range" % (i, r.get("mass_kg")))
-        # Layout: 6 uint8 (shape..mat + pad) then massG + 4 colour/reach uint16.
+        # GRAMS in a uint32, the one mass unit in the tree (see PropDef's comment).
+        # Zero is REFUSED rather than defaulted: a massless prop silently drops out
+        # of every E = m*v^2/2 law, and "authored as 0" is indistinguishable from
+        # "nobody filled this column in" — measured, that is exactly what had
+        # happened to 45 of 69 rows in data/mobs.csv.
+        if not (0 < massG <= 4294967295):
+            die("row %d: mass_kg %r out of range (grams must be 1..2^32-1, and a "
+                "prop may not be massless)" % (i, r.get("mass_kg")))
+        # Layout: massG (uint32), 6 uint8 (shape..mat + pad), 7 uint16.
         defs.append(
             "    // [%d] %s\n"
-            "    PropDef{ %d, %d, %d, %d, %d, 0, %d, %d, %d, %d, %d, %d, %d, %d }," % (
+            "    PropDef{ %d, %d, %d, %d, %d, %d, 0, %d, %d, %d, %d, %d, %d, %d }," % (
                 i, sid,
+                massG,
                 shape,
                 FALL_MODES[fall],
                 INTERACTS[interact],
                 emissive,
                 mat_id,
-                massG,
                 cr, cg, cb,
                 reach,
                 sizes[0], sizes[1], sizes[2]))
@@ -210,25 +216,38 @@ BODY_H = """// POD row. shape is the PropShape ordinal (render/prop_mesh.h); gam
 // includes render headers. fallMode / interactKind are ordinals matching
 // PropFallMode and Interactable::Kind in prop_system.h (255 = no interact).
 // color*E3 are RGB x1000 (1000 = 1.0). reachMm is Interactable.reachM * 1000.
-// Layout is explicit: 6 x uint8 then 9 x uint16 = 24 bytes (no hidden padding).
+//
+// MASS IS GRAMS IN A uint32, AND IT IS THE SAME UNIT EVERYWHERE — MobDef carries
+// the identical field, and any future ItemDef weight will too. It used to be grams
+// in a uint16 here and kg x10 in a uint16 there: the same 16 bits with two
+// different meanings, which is [problems.md] §20's class exactly, and it was not
+// theoretical — data/mobs.csv already carried 900 kg, fourteen times this table's
+// old 65.5 kg ceiling, so a stove had to be authored at 65 kg instead of 80.
+//
+// The widening COST NOTHING: this row already carried `pad0_` and `pad1_`, so the
+// four bytes came out of padding and the row is still exactly 24. Range is now
+// 1 g .. 4294 tonnes, which brackets a 9 mm cartridge and a lift cabin with one
+// encoding and no per-table conversion to misremember.
+//
+// Layout is explicit: 1 x uint32, 6 x uint8, 7 x uint16 = 24 bytes, no hidden pad.
 struct PropDef {
-    std::uint8_t  shape;         // 0  PropShape ordinal
-    std::uint8_t  fallMode;      // 1  PropFallMode ordinal
-    std::uint8_t  interactKind;  // 2  Interactable::Kind or 255
-    std::uint8_t  emissive;      // 3  0..255 PropPass emissive
-    std::uint8_t  matId;         // 4
-    std::uint8_t  pad0_ = 0;     // 5
-    std::uint16_t massG;         // 6  universal mass, grams ([ecs] Mass)
-    std::uint16_t colorRE3;      // 8  RGB x1000
-    std::uint16_t colorGE3;      // 10
-    std::uint16_t colorBE3;      // 12
-    std::uint16_t reachMm;       // 14 Interactable reach in millimetres
-    std::uint16_t sizeXMm;       // 16 authored mesh size, millimetres — the
-    std::uint16_t sizeYMm;       // 18 unit shape is scaled to exactly this,
-    std::uint16_t sizeZMm;       // 20 so a bulb is a bulb and not a 1 m drum
-    std::uint16_t pad1_ = 0;     // 22
+    std::uint32_t massG;         // 0  universal mass, GRAMS ([ecs] Mass)
+    std::uint8_t  shape;         // 4  PropShape ordinal
+    std::uint8_t  fallMode;      // 5  PropFallMode ordinal
+    std::uint8_t  interactKind;  // 6  Interactable::Kind or 255
+    std::uint8_t  emissive;      // 7  0..255 PropPass emissive
+    std::uint8_t  matId;         // 8
+    std::uint8_t  pad0_ = 0;     // 9
+    std::uint16_t colorRE3;      // 10 RGB x1000
+    std::uint16_t colorGE3;      // 12
+    std::uint16_t colorBE3;      // 14
+    std::uint16_t reachMm;       // 16 Interactable reach in millimetres
+    std::uint16_t sizeXMm;       // 18 authored mesh size, millimetres — the
+    std::uint16_t sizeYMm;       // 20 unit shape is scaled to exactly this,
+    std::uint16_t sizeZMm;       // 22 so a bulb is a bulb and not a 1 m drum
 };
 static_assert(sizeof(PropDef) == 24, "PropDef must stay a tight 24-byte row");
+static_assert(alignof(PropDef) == 4);
 static_assert(std::is_trivially_copyable_v<PropDef>);
 
 

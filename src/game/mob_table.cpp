@@ -27,7 +27,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              1, static_cast<std::uint8_t>(u8(FloorBit::ZPlus30) | u8(FloorBit::ZPlus14) | u8(FloorBit::Z0) | u8(FloorBit::ZMinus26) | u8(FloorBit::ZMinus36)),
              u8(MobPackMode::Crowd), 8, 16, 5,
              1, 8, 16, 0,
-             120 },
+             12000 },
     // [1] TVAR
     MobDef{ f(AiFlag::FoodBait) | f(AiFlag::WallBias),
              54, 13, 1650, 1150, 1550,
@@ -38,7 +38,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              1, static_cast<std::uint8_t>(u8(FloorBit::ZPlus14) | u8(FloorBit::Z0) | u8(FloorBit::ZMinus26) | u8(FloorBit::ZMinus36)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             850 },
+             85000 },
     // [2] POLZUN
     MobDef{ f(AiFlag::FoodBait),
              168, 22, 850, 2250, 1350,
@@ -49,7 +49,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              1, static_cast<std::uint8_t>(u8(FloorBit::Z0) | u8(FloorBit::ZMinus26) | u8(FloorBit::ZMinus36)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             4000 },
+             400000 },
     // [3] BETONNIK
     MobDef{ f(AiFlag::Rare),
              1000, 35, 800, 3000, 1200,
@@ -60,7 +60,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              4, static_cast<std::uint8_t>(u8(FloorBit::ZPlus30) | u8(FloorBit::Z0) | u8(FloorBit::ZMinus26) | u8(FloorBit::ZMinus36) | u8(FloorBit::ZMinus50)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             9000 },
+             900000 },
     // [4] ZOMBIE
     MobDef{ 0u,
              35, 8, 1400, 1500, 1200,
@@ -71,7 +71,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::ZPlus30) | u8(FloorBit::ZPlus14) | u8(FloorBit::Z0) | u8(FloorBit::ZMinus26) | u8(FloorBit::ZMinus36)),
              u8(MobPackMode::Crowd), 5, 10, 6,
              1, 8, 16, 0,
-             850 },
+             85000 },
     // [5] EYE
     MobDef{ f(AiFlag::Flying) | f(AiFlag::Ranged),
              20, 14, 2200, 2500, 1200,
@@ -82,7 +82,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              3, static_cast<std::uint8_t>(u8(FloorBit::ZPlus30) | u8(FloorBit::Z0) | u8(FloorBit::ZMinus26) | u8(FloorBit::ZMinus36) | u8(FloorBit::ZMinus50)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             400 },
+             40000 },
     // [6] NIGHTMARE
     MobDef{ f(AiFlag::Rare),
              260, 32, 1350, 1150, 1200,
@@ -93,7 +93,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              3, static_cast<std::uint8_t>(u8(FloorBit::ZPlus30) | u8(FloorBit::Z0) | u8(FloorBit::ZMinus26) | u8(FloorBit::ZMinus36) | u8(FloorBit::ZMinus50)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             4000 },
+             400000 },
     // [7] SHADOW
     MobDef{ 0u,
              50, 12, 2400, 1000, 1200,
@@ -104,7 +104,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::ZPlus30) | u8(FloorBit::ZPlus14) | u8(FloorBit::Z0) | u8(FloorBit::ZMinus36) | u8(FloorBit::ZMinus50)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             850 },
+             85000 },
     // [8] REBAR
     MobDef{ f(AiFlag::WallBias) | f(AiFlag::Rare),
              210, 24, 820, 2400, 1200,
@@ -115,7 +115,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              5, static_cast<std::uint8_t>(u8(FloorBit::Z0) | u8(FloorBit::ZMinus26) | u8(FloorBit::ZMinus36) | u8(FloorBit::ZMinus50)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             4000 },
+             400000 },
     // [9] MATKA
     MobDef{ f(AiFlag::Rare),
              350, 12, 400, 3500, 1200,
@@ -126,7 +126,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              4, static_cast<std::uint8_t>(u8(FloorBit::ZMinus26) | u8(FloorBit::ZMinus36) | u8(FloorBit::ZMinus50)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             9000 },
+             900000 },
     // [10] IDOL
     MobDef{ f(AiFlag::Ranged) | f(AiFlag::Rare) | f(AiFlag::Immobile),
              100, 30, 0, 2000, 1200,
@@ -137,7 +137,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              3, static_cast<std::uint8_t>(u8(FloorBit::ZPlus30) | u8(FloorBit::Z0) | u8(FloorBit::ZMinus36) | u8(FloorBit::ZMinus50)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             2200 },
+             220000 },
     // [11] MANCOBUS
     MobDef{ f(AiFlag::Ranged) | f(AiFlag::Boss) | f(AiFlag::Rare),
              400, 40, 700, 3000, 1200,
@@ -148,7 +148,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              6, static_cast<std::uint8_t>(u8(FloorBit::ZMinus26) | u8(FloorBit::ZMinus36)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             9000 },
+             900000 },
     // [12] HERALD
     MobDef{ f(AiFlag::Ranged) | f(AiFlag::Boss) | f(AiFlag::Rare),
              250, 30, 1400, 2000, 1200,
@@ -159,7 +159,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              5, static_cast<std::uint8_t>(u8(FloorBit::ZMinus36)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             9000 },
+             900000 },
     // [13] CREATOR
     MobDef{ f(AiFlag::Ranged) | f(AiFlag::Boss) | f(AiFlag::Rare),
              520, 44, 1050, 2350, 1200,
@@ -170,7 +170,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              99, static_cast<std::uint8_t>(u8(FloorBit::ZMinus50)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             9000 },
+             900000 },
     // [14] SPIRIT
     MobDef{ f(AiFlag::Flying) | f(AiFlag::Rare),
              40, 15, 2000, 1500, 1200,
@@ -181,7 +181,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              4, static_cast<std::uint8_t>(u8(FloorBit::ZPlus30) | u8(FloorBit::ZMinus36) | u8(FloorBit::ZMinus50)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             850 },
+             85000 },
     // [15] ROBOT
     MobDef{ f(AiFlag::Ranged) | f(AiFlag::Rare),
              65, 18, 1800, 1800, 1200,
@@ -192,7 +192,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              3, static_cast<std::uint8_t>(u8(FloorBit::ZPlus30) | u8(FloorBit::ZMinus26)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             2200 },
+             220000 },
     // [16] SHOVNIK
     MobDef{ f(AiFlag::WallBias),
              45, 11, 2100, 1100, 1200,
@@ -203,7 +203,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::ZPlus30) | u8(FloorBit::ZPlus14) | u8(FloorBit::Z0)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             850 },
+             85000 },
     // [17] LAMPOVY
     MobDef{ 0u,
              38, 11, 1750, 1000, 1200,
@@ -214,7 +214,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::ZPlus30) | u8(FloorBit::ZPlus14) | u8(FloorBit::Z0) | u8(FloorBit::ZMinus26)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             850 },
+             85000 },
     // [18] PECHATEED
     MobDef{ 0u,
              58, 10, 1620, 1450, 1200,
@@ -225,7 +225,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::ZPlus30) | u8(FloorBit::ZPlus14) | u8(FloorBit::Z0)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             850 },
+             85000 },
     // [19] PARAGRAPH
     MobDef{ f(AiFlag::Ranged) | f(AiFlag::Rare),
              46, 15, 1050, 2350, 1200,
@@ -236,7 +236,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              3, static_cast<std::uint8_t>(u8(FloorBit::ZPlus30) | u8(FloorBit::ZMinus50)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             850 },
+             85000 },
     // [20] NELYUD
     MobDef{ f(AiFlag::Rare),
              80, 18, 1800, 1400, 1200,
@@ -247,7 +247,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              3, static_cast<std::uint8_t>(u8(FloorBit::ZPlus30) | u8(FloorBit::ZPlus14) | u8(FloorBit::Z0)),
              u8(MobPackMode::Crowd), 5, 10, 6,
              1, 8, 16, 0,
-             2200 },
+             220000 },
     // [21] KRYSNOZHKA
     MobDef{ f(AiFlag::FoodBait),
              14, 3, 2450, 650, 1200,
@@ -258,7 +258,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              1, static_cast<std::uint8_t>(u8(FloorBit::ZPlus14) | u8(FloorBit::Z0) | u8(FloorBit::ZMinus26)),
              u8(MobPackMode::Crowd), 8, 16, 5,
              1, 8, 16, 0,
-             400 },
+             40000 },
     // [22] KOSTOREZ
     MobDef{ f(AiFlag::Rare),
              150, 17, 1550, 2800, 1200,
@@ -269,7 +269,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              6, static_cast<std::uint8_t>(u8(FloorBit::ZMinus26) | u8(FloorBit::ZMinus36)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             4000 },
+             400000 },
     // [23] SAFEGUARD
     MobDef{ f(AiFlag::Rare),
              185, 24, 2150, 2400, 1200,
@@ -280,7 +280,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              7, static_cast<std::uint8_t>(u8(FloorBit::ZMinus26) | u8(FloorBit::ZMinus50)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             4000 },
+             400000 },
     // [24] BLACK_LIQUIDATOR
     MobDef{ f(AiFlag::Rare),
              92, 15, 1220, 1800, 1350,
@@ -291,7 +291,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              3, static_cast<std::uint8_t>(u8(FloorBit::ZPlus30) | u8(FloorBit::ZPlus14) | u8(FloorBit::Z0)),
              u8(MobPackMode::Roamer), 2, 3, 8,
              1, 8, 16, 0,
-             2200 },
+             220000 },
     // [25] KHOROVAYA_MATKA
     MobDef{ f(AiFlag::Rare),
              420, 10, 280, 3800, 1200,
@@ -302,7 +302,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              5, static_cast<std::uint8_t>(u8(FloorBit::ZMinus36)),
              u8(MobPackMode::Crowd), 8, 16, 5,
              1, 8, 16, 0,
-             9000 },
+             900000 },
     // [26] SLIMEVIK
     MobDef{ 0u,
              18, 2, 1050, 1800, 1200,
@@ -313,7 +313,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              1, static_cast<std::uint8_t>(u8(FloorBit::Z0) | u8(FloorBit::ZMinus26)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             400 },
+             40000 },
     // [27] SOBRANNYY
     MobDef{ f(AiFlag::Rare),
              260, 24, 1180, 3100, 1200,
@@ -324,7 +324,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              5, static_cast<std::uint8_t>(u8(FloorBit::Z0) | u8(FloorBit::ZMinus26) | u8(FloorBit::ZMinus36)),
              u8(MobPackMode::Crowd), 5, 10, 6,
              1, 8, 16, 0,
-             4000 },
+             400000 },
     // [28] ZHORNAYA_TVAR
     MobDef{ f(AiFlag::FoodBait),
              62, 19, 1720, 2650, 1200,
@@ -335,7 +335,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::ZPlus14) | u8(FloorBit::Z0) | u8(FloorBit::ZMinus36)),
              u8(MobPackMode::Territorial), 2, 4, 4,
              1, 8, 16, 0,
-             2200 },
+             220000 },
     // [29] BEZEKHIY
     MobDef{ 0u,
              58, 9, 1280, 1450, 1200,
@@ -346,7 +346,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::Z0) | u8(FloorBit::ZPlus14) | u8(FloorBit::ZPlus30)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             850 },
+             85000 },
     // [30] PSEUDOLIFT
     MobDef{ f(AiFlag::Rare),
              125, 24, 550, 780, 1200,
@@ -357,7 +357,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              1, static_cast<std::uint8_t>(u8(FloorBit::Z0) | u8(FloorBit::ZMinus26) | u8(FloorBit::ZMinus36)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             4000 },
+             400000 },
     // [31] SLEPOGLAZ
     MobDef{ 0u,
              52, 24, 620, 3400, 1200,
@@ -368,7 +368,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              3, static_cast<std::uint8_t>(u8(FloorBit::ZMinus26) | u8(FloorBit::ZMinus36)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             850 },
+             85000 },
     // [32] OLGOY
     MobDef{ f(AiFlag::FoodBait) | f(AiFlag::Rare),
              118, 22, 950, 2250, 1480,
@@ -379,7 +379,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::ZMinus26) | u8(FloorBit::ZMinus36)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             2200 },
+             220000 },
     // [33] VODYANOY_KOSHMAR
     MobDef{ 0u,
              86, 10, 1340, 1200, 1200,
@@ -390,7 +390,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::ZMinus26)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             2200 },
+             220000 },
     // [34] LAMPOGLAZ
     MobDef{ f(AiFlag::Ranged),
              44, 10, 280, 1900, 1200,
@@ -401,7 +401,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::Z0) | u8(FloorBit::ZPlus30)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             850 },
+             85000 },
     // [35] TUMANNIK
     MobDef{ 0u,
              64, 9, 1900, 720, 1200,
@@ -412,7 +412,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::Z0) | u8(FloorBit::ZMinus36)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             2200 },
+             220000 },
     // [36] CHERNOSLIZ
     MobDef{ f(AiFlag::Ranged),
              18, 18, 500, 3100, 1200,
@@ -423,7 +423,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::ZMinus26)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             400 },
+             40000 },
     // [37] RZHAVNIK
     MobDef{ 0u,
              72, 13, 1350, 1550, 1200,
@@ -434,7 +434,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::Z0) | u8(FloorBit::ZMinus26)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             2200 },
+             220000 },
     // [38] BETONOED
     MobDef{ f(AiFlag::WallBias) | f(AiFlag::Rare),
              360, 28, 980, 2350, 1200,
@@ -445,7 +445,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              0, static_cast<std::uint8_t>(u8(FloorBit::ZMinus26)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             9000 },
+             900000 },
     // [39] PANELNIK
     MobDef{ 0u,
              96, 16, 1080, 1450, 1160,
@@ -456,7 +456,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::ZPlus14) | u8(FloorBit::Z0) | u8(FloorBit::ZMinus26)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             2200 },
+             220000 },
     // [40] PAUPSINA
     MobDef{ f(AiFlag::Ranged),
              32, 0, 2250, 2650, 1200,
@@ -467,7 +467,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::ZPlus14) | u8(FloorBit::Z0) | u8(FloorBit::ZMinus26)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             850 },
+             85000 },
     // [41] BORSHCHEVIK
     MobDef{ f(AiFlag::Immobile),
              62, 12, 0, 1450, 1200,
@@ -478,7 +478,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::Z0) | u8(FloorBit::ZMinus26)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             2200 },
+             220000 },
     // [42] OBZHIVALSHCHIK
     MobDef{ 0u,
              92, 16, 1050, 1550, 1200,
@@ -489,7 +489,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              1, static_cast<std::uint8_t>(u8(FloorBit::ZPlus14) | u8(FloorBit::Z0)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             2200 },
+             220000 },
     // [43] HEAD_SLUG
     MobDef{ f(AiFlag::Rare),
              58, 6, 1480, 1150, 1200,
@@ -500,7 +500,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::Z0) | u8(FloorBit::ZPlus14) | u8(FloorBit::ZPlus30) | u8(FloorBit::ZMinus26)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             850 },
+             85000 },
     // [44] PROTOKOLNIK
     MobDef{ f(AiFlag::Rare),
              112, 6, 1080, 2400, 1200,
@@ -511,7 +511,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              3, static_cast<std::uint8_t>(u8(FloorBit::ZPlus30)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             2200 },
+             220000 },
     // [45] DIKIY_MERTVYAK
     MobDef{ 0u,
              22, 7, 2550, 1050, 1200,
@@ -522,7 +522,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              1, static_cast<std::uint8_t>(u8(FloorBit::ZPlus14) | u8(FloorBit::Z0)),
              u8(MobPackMode::Crowd), 5, 10, 6,
              1, 8, 16, 0,
-             400 },
+             40000 },
     // [46] KONTORSHCHIK
     MobDef{ f(AiFlag::Rare),
              72, 12, 950, 1650, 1200,
@@ -533,7 +533,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::ZPlus30) | u8(FloorBit::Z0)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             2200 },
+             220000 },
     // [47] TONKAYA_TEN
     MobDef{ 0u,
              28, 5, 2950, 1450, 1200,
@@ -544,7 +544,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::ZPlus30) | u8(FloorBit::Z0) | u8(FloorBit::ZMinus50)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             850 },
+             85000 },
     // [48] KANTSELYARSKIY_IDOL
     MobDef{ f(AiFlag::Ranged) | f(AiFlag::Rare) | f(AiFlag::Immobile),
              72, 18, 0, 2900, 1200,
@@ -555,7 +555,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::ZPlus30)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             2200 },
+             220000 },
     // [49] LOZHNYY_DUKH
     MobDef{ f(AiFlag::Rare),
              34, 9, 2250, 1650, 1200,
@@ -566,7 +566,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              3, static_cast<std::uint8_t>(u8(FloorBit::ZPlus30) | u8(FloorBit::Z0) | u8(FloorBit::ZMinus50)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             850 },
+             85000 },
     // [50] CHERVIE_AVATAR
     MobDef{ f(AiFlag::Ranged) | f(AiFlag::Rare),
              118, 17, 1450, 2150, 1200,
@@ -577,7 +577,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              4, static_cast<std::uint8_t>(u8(FloorBit::ZPlus30) | u8(FloorBit::ZMinus26) | u8(FloorBit::ZMinus50)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             2200 },
+             220000 },
     // [51] POMOYNY_ROY
     MobDef{ f(AiFlag::FoodBait),
              38, 2, 2180, 380, 1200,
@@ -588,7 +588,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              1, static_cast<std::uint8_t>(u8(FloorBit::ZPlus14) | u8(FloorBit::Z0) | u8(FloorBit::ZMinus26)),
              u8(MobPackMode::Crowd), 8, 16, 5,
              1, 8, 16, 0,
-             850 },
+             85000 },
     // [52] SCULPTURE
     MobDef{ f(AiFlag::Rare),
              250, 1000, 8500, 250, 1200,
@@ -599,7 +599,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::ZMinus26) | u8(FloorBit::ZMinus36) | u8(FloorBit::ZMinus50)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             4000 },
+             400000 },
     // [53] TRUBNYY_AVTOMAT
     MobDef{ f(AiFlag::Ranged) | f(AiFlag::Rare),
              150, 25, 820, 2750, 1200,
@@ -610,7 +610,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::ZMinus26)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             4000 },
+             400000 },
     // [54] LOTOCHNIK
     MobDef{ f(AiFlag::WaterStrider),
              74, 13, 1250, 1250, 1200,
@@ -621,7 +621,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::ZMinus26) | u8(FloorBit::Z0)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             2200 },
+             220000 },
     // [55] TRESKOTNIK
     MobDef{ 0u,
              18, 15, 2750, 1650, 1200,
@@ -632,7 +632,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              1, static_cast<std::uint8_t>(u8(FloorBit::ZPlus14) | u8(FloorBit::Z0) | u8(FloorBit::ZMinus36)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             400 },
+             40000 },
     // [56] ZAKALENNAYA_ARMATURA
     MobDef{ f(AiFlag::Rare),
              265, 31, 620, 2900, 1200,
@@ -643,7 +643,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              5, static_cast<std::uint8_t>(u8(FloorBit::ZMinus26) | u8(FloorBit::ZMinus36)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             4000 },
+             400000 },
     // [57] GLUBINNAYA_TEN
     MobDef{ 0u,
              64, 18, 1820, 1700, 1200,
@@ -654,7 +654,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              3, static_cast<std::uint8_t>(u8(FloorBit::ZMinus36) | u8(FloorBit::ZMinus50)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             2200 },
+             220000 },
     // [58] GREEN_DOG
     MobDef{ f(AiFlag::FoodBait),
              34, 9, 2550, 820, 1200,
@@ -665,7 +665,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              1, static_cast<std::uint8_t>(u8(FloorBit::ZPlus14) | u8(FloorBit::Z0) | u8(FloorBit::ZMinus26)),
              u8(MobPackMode::Crowd), 3, 6, 6,
              1, 8, 16, 0,
-             850 },
+             85000 },
     // [59] SLIME_WOMAN
     MobDef{ f(AiFlag::Rare),
              118, 17, 1180, 1550, 1380,
@@ -676,7 +676,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              3, static_cast<std::uint8_t>(u8(FloorBit::ZMinus26) | u8(FloorBit::Z0)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             2200 },
+             220000 },
     // [60] GNILUSHKA
     MobDef{ f(AiFlag::Rare),
              74, 16, 1420, 1050, 1200,
@@ -687,7 +687,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::Z0) | u8(FloorBit::ZPlus14)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             2200 },
+             220000 },
     // [61] MUKHOZHUK_HOST
     MobDef{ f(AiFlag::FoodBait) | f(AiFlag::Rare),
              118, 13, 1280, 1280, 1200,
@@ -698,7 +698,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              4, static_cast<std::uint8_t>(u8(FloorBit::ZPlus30) | u8(FloorBit::ZMinus26)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             2200 },
+             220000 },
     // [62] FOG_SHARK
     MobDef{ 0u,
              18, 12, 2850, 780, 1200,
@@ -709,7 +709,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::Z0) | u8(FloorBit::ZMinus26) | u8(FloorBit::ZMinus36)),
              u8(MobPackMode::Roamer), 2, 4, 10,
              1, 8, 16, 0,
-             400 },
+             40000 },
     // [63] BLOOD_PLANT
     MobDef{ f(AiFlag::Rare) | f(AiFlag::Immobile),
              96, 19, 0, 2850, 1200,
@@ -720,7 +720,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              4, static_cast<std::uint8_t>(u8(FloorBit::Z0) | u8(FloorBit::ZMinus26) | u8(FloorBit::ZMinus36)),
              u8(MobPackMode::Territorial), 1, 3, 3,
              1, 8, 16, 0,
-             2200 },
+             220000 },
     // [64] SWARM
     MobDef{ f(AiFlag::FoodBait),
              12, 2, 2750, 240, 1050,
@@ -731,7 +731,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              2, static_cast<std::uint8_t>(u8(FloorBit::ZMinus26) | u8(FloorBit::ZMinus36)),
              u8(MobPackMode::Crowd), 8, 16, 5,
              1, 8, 16, 0,
-             120 },
+             12000 },
     // [65] SPORE_CARPET
     MobDef{ 0u,
              24, 4, 820, 1400, 1200,
@@ -742,7 +742,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              1, static_cast<std::uint8_t>(u8(FloorBit::ZPlus30) | u8(FloorBit::ZPlus14) | u8(FloorBit::Z0) | u8(FloorBit::ZMinus26)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             400 },
+             40000 },
     // [66] LISHENNYY
     MobDef{ 0u,
              76, 11, 1720, 1050, 1200,
@@ -753,7 +753,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              4, static_cast<std::uint8_t>(u8(FloorBit::ZMinus36) | u8(FloorBit::ZMinus50)),
              u8(MobPackMode::Loner), 1, 1, 0,
              1, 8, 16, 0,
-             2200 },
+             220000 },
     // [67] GNOME
     MobDef{ 0u,
              25, 8, 2800, 800, 1200,
@@ -764,7 +764,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
              1, static_cast<std::uint8_t>(u8(FloorBit::ZMinus26) | u8(FloorBit::ZPlus14) | u8(FloorBit::Z0)),
              u8(MobPackMode::Crowd), 3, 6, 6,
              1, 8, 16, 0,
-             400 },
+             40000 },
 }};
 
 const std::array<const char*, kMobKindCount> kMobNames = {{
