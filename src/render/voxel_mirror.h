@@ -123,7 +123,8 @@ public:
     void destroy();
     bool ready() const { return ready_; }
 
-    // Full snapshot of `world` into all four buffers. Own one-shot submit +
+    // Full snapshot of `world` into EVERY mirrored buffer (there are eight, not
+    // the four this line said for as long as the mirror had four). Own one-shot submit +
     // fence wait — a load-screen moment (floor build/arrival/load), never a
     // per-frame call. Clears the dirty queue: everything is fresh.
     bool upload_all(const World& world);
@@ -143,7 +144,11 @@ public:
 
     // --mirror-verify: read every buffer back and memcmp against the CPU truth.
     // Queue-idles on a fence per buffer — a diagnostic, never a frame-path call.
-    // Returns true when all four buffers match bit-exactly.
+    // Returns true when every mirrored buffer matches bit-exactly. `fluid_` was
+    // missing from this comparison until 2026-08-06 — the same present-in-upload,
+    // absent-from-verify split that [problems.md] section 7 blames for the white
+    // pixels. Stain pages are still uncovered: their GPU form is a repack, so
+    // there is no CPU twin to memcmp.
     bool verify(const World& world);
 
     // HUD stats.

@@ -37,8 +37,18 @@ public:
 
     // Adjacent-layer navigation. Returns kInvalidLayer at the ends of the
     // stack (the stack does not wrap in W — only x/y/z are toroidal).
+    //
+    // The `w < size()` half is load-bearing and is NOT redundant with the test
+    // beside it. `LayerId` is a uint32 and `kInvalidLayer` is 0xFFFFFFFF, so
+    // `above(kInvalidLayer)` computed `0xFFFFFFFF + 1 == 0`, and `0 < size()` is
+    // true for any non-empty stack — the one input guaranteed to be out of range
+    // returned LAYER 0. The idiom this exists for, `w = stack.above(w)` in a
+    // loop, therefore wrapped W from the top of the stack straight back to the
+    // bottom: the single axis the torus law forbids from wrapping. `below()` was
+    // always guarded (`w > 0`); this is its missing twin. [problems.md] section 30
     LayerId above(LayerId w) const {
-        return (w + 1 < layers_.size()) ? w + 1 : kInvalidLayer;
+        return (w < layers_.size() && w + 1 < layers_.size()) ? w + 1
+                                                             : kInvalidLayer;
     }
     LayerId below(LayerId w) const {
         return (w > 0 && w < layers_.size()) ? w - 1 : kInvalidLayer;
