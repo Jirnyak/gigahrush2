@@ -34,6 +34,7 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "game/inventory.h"  // Inventory/ItemSlot — carried-weight reader below
 #include "game/mob_table.h"  // RoomBit — items and mobs share the room taxonomy
 
 namespace giga::game {
@@ -79,17 +80,31 @@ inline constexpr std::size_t kItemResistChannels = 5;
 // 8,920 B — permanently cache-resident, like the mob table.
 struct ItemDef {
     std::int32_t value;         //  0  roubles, 0 .. 500,000
-    std::uint16_t spawnWeight;  //  4  milli-weight, 0..50,000; 0 = never random
-    std::uint16_t roomMask;     //  6  RoomBit bitmask — where it is found
-    std::int16_t useA;          //  8  primary use magnitude, signed (-6 .. 60)
-    std::uint8_t category;      // 10  ItemCategory
-    std::uint8_t equipSlot;     // 11  EquipSlot
-    std::uint8_t stackMax;      // 12  1..255
-    std::uint8_t useEffect;     // 13  UseEffect
-    std::int8_t resist[kItemResistChannels];  // 14..18, armour; 441 are zero
-    std::uint8_t pad_;          // 19
+    // GRAMS — the SAME unit as [prop_table.h] massG and [mob_table.h] massG, so
+    // there is exactly one thing "mass" means in this tree. Resolved from
+    // data/item_mass.csv by rule (id > tag > prefix > category) rather than from a
+    // 442-value column, because a rule is reviewable and 442 magic numbers are not;
+    // the generator prints every resolved weight and REFUSES an item no rule
+    // matches, which is what makes "everything has a weight" a build gate instead
+    // of an intention.
+    //
+    // ZERO IS LEGAL HERE and means "not a physical object" — a psi technique is a
+    // thing you know, not a thing in your pack. That is the opposite of the prop
+    // and mob tables, where 0 is refused because it is indistinguishable from an
+    // unfilled column; here no row can be unfilled, because an unmatched item does
+    // not build.
+    std::uint32_t massG;        //  4
+    std::uint16_t spawnWeight;  //  8  milli-weight, 0..50,000; 0 = never random
+    std::uint16_t roomMask;     // 10  RoomBit bitmask — where it is found
+    std::int16_t useA;          // 12  primary use magnitude, signed (-6 .. 60)
+    std::uint8_t category;      // 14  ItemCategory
+    std::uint8_t equipSlot;     // 15  EquipSlot
+    std::uint8_t stackMax;      // 16  1..255
+    std::uint8_t useEffect;     // 17  UseEffect
+    std::int8_t resist[kItemResistChannels];  // 18..22, armour; 441 are zero
+    std::uint8_t pad_;          // 23
 };
-static_assert(sizeof(ItemDef) == 20, "ItemDef must stay a tight 20-byte row");
+static_assert(sizeof(ItemDef) == 24, "ItemDef must stay a tight 24-byte row");
 static_assert(alignof(ItemDef) == 4);
 static_assert(std::is_trivially_copyable_v<ItemDef>);
 
@@ -109,6 +124,29 @@ inline const ItemDef& item_def(ItemId id) {
 }
 inline const char* item_name(ItemId id) {
     return kItemNames[static_cast<std::size_t>(id) - 1];
+}
+
+// --- CARRIED WEIGHT ----------------------------------------------------------
+// The reader `massG` exists for, and it lands in the SAME change as the column on
+// purpose: a data column with no consumer is [problems.md] §35's whole class, and
+// this table was on course to become the biggest example of it in the tree.
+//
+// The budget is a flat 50 kg ([jirnyak.md] §8.5). The manifesto also grants
+// "+1 kg per Выносливость", and that half is NOT implemented, because `Attr`
+// ([rpg.h]) is {Str, Agi, Int} — there is no Endurance attribute to read yet.
+// Stated rather than faked with a constant pretending to be a stat.
+inline constexpr std::uint32_t kCarryBaseG = 50000;
+
+// Total grams held in one 8x8 grid. O(kInvSlots), no allocation, and it is the
+// stack COUNT that multiplies — sixty 9 mm rounds weigh sixty times one round.
+inline std::uint32_t inventory_mass_g(const Inventory& inv) {
+    std::uint32_t g = 0;
+    for (int i = 0; i < kInvSlots; ++i) {
+        const ItemSlot& s = inv.slots[i];
+        if (s.count == 0 || !item_valid(s.item)) continue;
+        g += item_def(s.item).massG * static_cast<std::uint32_t>(s.count);
+    }
+    return g;
 }
 
 // ---------------------------------------------------------------------------

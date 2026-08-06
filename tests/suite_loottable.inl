@@ -446,4 +446,72 @@ static void test_loottable_all() {
             CHECK(any > 0);
         }
     }
+
+    // --- EVERY ITEM HAS A MASS, and the rule table is not lying ---------------
+    // `massG` is resolved from data/item_mass.csv by rule, so the risk is not a
+    // missing value — the generator refuses those — but a rule that answers
+    // ABSURDLY for a family nobody re-read. So this asserts the SHAPE of the
+    // result: physical things weigh something, only the psi techniques weigh
+    // nothing, and the spread is a real spread rather than one default wearing
+    // 442 hats.
+    {
+        std::uint32_t weightless = 0, heaviest = 0, lightest = 0xFFFFFFFFu;
+        ItemId heaviestId = kInvalidItem, lightestId = kInvalidItem;
+        std::uint32_t distinct[16] = {};
+        for (ItemId id = 1; id <= static_cast<ItemId>(kItemCount); ++id) {
+            const std::uint32_t g = item_def(id).massG;
+            if (g == 0) {
+                ++weightless;
+                continue;
+            }
+            if (g > heaviest) { heaviest = g; heaviestId = id; }
+            if (g < lightest) { lightest = g; lightestId = id; }
+            // Decade histogram: 1..9 g, 10..99 g, 100..999 g, ...
+            std::uint32_t d = 0, v = g;
+            while (v >= 10 && d < 15) { v /= 10; ++d; }
+            ++distinct[d];
+        }
+        std::printf("[items] mass: %u weightless, lightest %u g, heaviest %u g (%s)\n",
+                    weightless, lightest, heaviest,
+                    heaviestId != kInvalidItem ? item_name(heaviestId) : "-");
+
+        // The 20 psi techniques are the ONLY weightless rows. A weightless rifle
+        // would mean a rule stopped matching and the category default took over.
+        CHECK(weightless == 20u);
+        // A gram is the finest the unit can express and 26 kg the heaviest thing a
+        // person carries here; both must be REACHED, or the range is decorative.
+        CHECK(lightest <= 10u);
+        CHECK(heaviest > 20000u);
+        // Spread across at least four decades — 6 g nails, 45 g shells, 400 g food,
+        // 4 kg rifles, 26 kg flamers. One default applied 442 times would collapse
+        // this to one bucket, which is the failure mode a rule table invites.
+        int decades = 0;
+        for (std::uint32_t n : distinct)
+            if (n > 0) ++decades;
+        CHECK(decades >= 4);
+
+        // The READER, on a real load-out. Picked by SCAN rather than by string id,
+        // because the item table has no id->ItemId lookup and inventing one for a
+        // test would be a worse trade than losing the readable name.
+        CHECK(item_valid(heaviestId) && item_valid(lightestId));
+        Inventory inv{};
+        inv.slots[0] = ItemSlot{heaviestId, 1};
+        inv.slots[1] = ItemSlot{lightestId, 60};
+        const std::uint32_t carried = inventory_mass_g(inv);
+        // STACK COUNT MULTIPLIES — this is what a per-item weight is FOR, and
+        // dropping the multiply is what would make sixty rounds weigh one round.
+        CHECK(carried == item_def(heaviestId).massG +
+                             60u * item_def(lightestId).massG);
+        CHECK(carried > item_def(heaviestId).massG); // the 60 actually counted
+        std::printf("[items] %s + 60 x %s = %.2f kg of a %.0f kg budget\n",
+                    item_name(heaviestId), item_name(lightestId),
+                    static_cast<double>(carried) / 1000.0,
+                    static_cast<double>(kCarryBaseG) / 1000.0);
+        CHECK(carried > 0u && carried < kCarryBaseG);
+        // An empty grid weighs nothing, and a zero-count slot is not a phantom kilo.
+        Inventory none{};
+        CHECK(inventory_mass_g(none) == 0u);
+        none.slots[3] = ItemSlot{heaviestId, 0};
+        CHECK(inventory_mass_g(none) == 0u);
+    }
 }

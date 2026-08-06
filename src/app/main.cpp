@@ -4717,6 +4717,26 @@ int main(int argc, char** argv) {
                 ImGui::Text("loot %d rub (%d/%d slots) | healed %d | band E%u",
                             carried, slots, game::kInvSlots, healed,
                             game::economy_band(currentFloor));
+                // CARRIED WEIGHT — the reader `ItemDef::massG` exists for. Slots
+                // alone never said what a load-out COSTS: sixty rifle rounds and
+                // sixty documents occupy one slot each and are 0.96 kg against
+                // 1.2 kg of paper. The budget is a flat 50 kg ([item_table.h]
+                // kCarryBaseG); the manifesto's "+1 kg per Выносливость" is absent
+                // because there is no Endurance attribute to read ([rpg.h] Attr is
+                // Str/Agi/Int), and the HUD says the flat number rather than
+                // implying a stat that does not exist.
+                if (reg.valid(player)) {
+                    if (const auto* nr = reg.try_get<game::NpcRef>(player)) {
+                        if (pool.valid(nr->id)) {
+                            const std::uint32_t heldG =
+                                game::inventory_mass_g(pool.inventory(nr->id));
+                            ImGui::Text("weight %.1f / %.0f kg%s",
+                                        static_cast<double>(heldG) / 1000.0,
+                                        static_cast<double>(game::kCarryBaseG) / 1000.0,
+                                        heldG > game::kCarryBaseG ? "  OVERLOADED" : "");
+                        }
+                    }
+                }
                 // Crafting, on screen: C builds or reads, X strips. `bank` is the 9-axis
                 // material vector summed, because nine numbers on the HUD would be noise
                 // — the per-axis detail is what the craft menu is for when one exists.
