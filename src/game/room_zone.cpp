@@ -12,12 +12,57 @@ namespace giga::game {
 
 namespace {
 
-// Walkability, IDENTICAL to `nav::bake_fine`'s: a macro cell is traversable unless
-// it is FULLY solid. Not "similar to" — the same predicate, because a body steered
-// by a room field and a body steered by the nav flow field must agree about what a
-// wall is, or one of the two walks into geometry the other routes around.
+// WALKABILITY IS BODY-SIZED HERE, AND THAT IS A MEASURED CORRECTION.
+//
+// The first version of this file used `nav::bake_fine`'s predicate verbatim — a
+// macro cell is traversable unless it is FULLY solid — on the argument that two
+// steering systems must agree about what a wall is. The argument was right and the
+// predicate was wrong, and the live run said so in one number: of the ~63 bodies on
+// an errand in steady state, **62 were STALLED** (`ai_step`'s stall probe: driven at
+// kErrandSpeed, returned at ~0 by physics). The field was routing them through cells
+// it called open and `physics_step` called shut, and they shoved at the geometry for
+// the rest of the session.
+//
+// The gap is that "not fully solid" is a 1-in-512 bar. Collision is exact against
+// sub-voxels ([sim/physics.cpp] aabb_overlaps_solid) and an NPC's AABB is 0.4 m
+// half-width by ~0.85 m half-height ([game/embody.cpp]) — 4 x 4 x 7 sub-voxels at
+// kVoxelSize 0.25 m. A cell with a single carved voxel passes the old test and
+// stops a body dead.
+//
+// So the bar is what a BODY needs: the centred 4x4 footprint clear over the lower 7
+// sub-layers. Because `SubMask` packs one Z sub-layer per 64-bit word
+// ([world/macro_grid.h]: word i IS layer sz=i), that is SEVEN AND-tests per cell,
+// not 96 bit lookups — which is why it is affordable to run over all 2M cells.
+//
+// STRICTER THAN NAV, NEVER LOOSER, and the direction is what makes the divergence
+// safe: every cell this calls walkable, nav also calls walkable, so a body steered
+// by a room field is never sent somewhere the nav graph considers structure. The
+// reverse would be the bug.
+inline constexpr std::uint64_t kBodyFootprint = [] {
+    // sub_bit packs sx + sy * kSubDim, so one row of the footprint is a byte.
+    std::uint64_t m = 0;
+    for (int sy = 2; sy <= 5; ++sy)
+        for (int sx = 2; sx <= 5; ++sx)
+            m |= std::uint64_t{1} << (sx + sy * kSubDim);
+    return m;
+}();
+// 1.7 m of body needs 7 of the cell's 8 sub-layers, which leaves exactly one spare —
+// so the run may start at layer 0 or at layer 1 and NOT anywhere else. Both starts
+// are real geometry and testing only one of them was measurably wrong: start 1 is a
+// cell whose bottom sub-layer IS the walking surface, start 0 a cell carrying its
+// matter in the ceiling (the "sandwich lintel" [world/macro_grid.h] describes).
+// Demanding layers 0..6 alone called every floor-bearing cell a wall.
+inline constexpr int kBodySubLayers = 7;
+
 inline bool blocked(const MacroGrid& g, int x, int y, int z) {
-    return g.mask(x, y, z).full();
+    const SubMask& m = g.mask(x, y, z);
+    for (int start = 0; start + kBodySubLayers <= kSubDim; ++start) {
+        bool clear = true;
+        for (int i = 0; i < kBodySubLayers && clear; ++i)
+            if ((m.words[start + i] & kBodyFootprint) != 0) clear = false;
+        if (clear) return false;
+    }
+    return true;
 }
 
 // Salt for the seat hash. Its own stream, so a body's seat is uncorrelated with its
@@ -25,6 +70,10 @@ inline bool blocked(const MacroGrid& g, int x, int y, int z) {
 inline constexpr std::uint32_t kSaltSeat = 0x5ea70000u;
 
 } // namespace
+
+bool room_body_walkable(const MacroGrid& grid, int x, int y, int z) {
+    return !blocked(grid, x, y, z);
+}
 
 // ---------------------------------------------------------------------------
 // Recovery — table reads, no branches on room kind.
@@ -147,12 +196,36 @@ void bake_near(const std::uint8_t* present, int roomsPerAxis,
     }
 }
 
+// The body-clearance answer for every macro cell, computed ONCE into a flat byte
+// per cell and then only read.
+//
+// This is not a micro-optimisation, it is the difference between a bake and a
+// hang. Inline, the predicate runs once per cell per neighbour per bit — 2M x 6 x 3
+// = 36M evaluations — and MEASURED that way it ate ~25 SECONDS of load, which the
+// `[rooms]` line did not print and which showed up only as the sim falling from
+// 4140 ticks per 4000 frames to 600. Hoisted, it runs 2M times, once. [AGENTS.md]
+// "bake at load, tick in O(n)" applies inside the bake too: the inner loop of a
+// 2-million-cell flood is not the place to ask a question whose answer never
+// changes.
+//
+// 2 MiB, transient — freed before `bake_room_zones` returns, so it never appears in
+// `resident_bytes()`.
+void bake_walkable(const MacroGrid& g, std::vector<std::uint8_t>& out) {
+    out.assign(kMacroCells, 0u);
+    std::uint8_t* base = out.data();
+    parallel_for(kMacroDim, [&g, base](int z) {
+        for (int y = 0; y < kMacroDim; ++y)
+            for (int x = 0; x < kMacroDim; ++x)
+                base[macro_index(x, y, z)] = blocked(g, x, y, z) ? 0u : 1u;
+    });
+}
+
 // One bit's flow field: a multi-source wrapped BFS seeded from EVERY walkable cell
 // of that room kind at once. Same loop as `nav::bake_fine_node` with a seed SET
 // instead of a seed cell — which is exactly why the flow byte convention is shared
 // rather than re-invented.
-void bake_flow(const MacroGrid& g, FloorKind kind, int number, std::uint16_t bit,
-               int stride, std::vector<std::uint8_t>& out) {
+void bake_flow(const std::uint8_t* walkable, FloorKind kind, int number,
+               std::uint16_t bit, int stride, std::vector<std::uint8_t>& out) {
     out.assign(kMacroCells, nav::kFlowNone);
     std::vector<int> q;
     q.reserve(1u << 18);
@@ -165,8 +238,9 @@ void bake_flow(const MacroGrid& g, FloorKind kind, int number, std::uint16_t bit
                 if (x % stride == 0) continue;
                 if (floor_room_mask(kind, number, x / stride, y / stride) != bit)
                     continue;
-                if (blocked(g, x, y, z)) continue;
-                const std::size_t ci = macro_index(x, y, z);
+                const std::size_t ci0 = macro_index(x, y, z);
+                if (walkable[ci0] == 0) continue;
+                const std::size_t ci = ci0;
                 out[ci] = nav::kFlowArrived;
                 q.push_back(static_cast<int>(ci));
             }
@@ -185,7 +259,7 @@ void bake_flow(const MacroGrid& g, FloorKind kind, int number, std::uint16_t bit
             const int nz = wrap_macro(cz + nav::kNavDir[d][2]);
             const std::size_t ni = macro_index(nx, ny, nz);
             if (out[ni] != nav::kFlowNone) continue; // reached, or a seed
-            if (blocked(g, nx, ny, nz)) continue;    // wall stays kFlowNone
+            if (walkable[ni] == 0) continue;         // wall stays kFlowNone
             // We stepped cur -> nbr in dir d, so nbr routes back in dir (d ^ 1).
             out[ni] = static_cast<std::uint8_t>(d ^ 1);
             q.push_back(static_cast<int>(ni));
@@ -237,13 +311,20 @@ void bake_room_zones(const MacroGrid& grid, FloorKind kind, int number,
     }
     if (have == 0) return;
 
-    // One job per bit. Each writes only its own two vectors, so the bake is
-    // race-free and bit-identical regardless of scheduling — the same per-slice
-    // isolation `nav::bake_fine` relies on ([core/jobs.h] contract).
+    // ONE clearance pass for every field that follows. Transient: it goes out of
+    // scope here and never counts toward `resident_bytes()`.
+    std::vector<std::uint8_t> walkable;
+    bake_walkable(grid, walkable);
+    const std::uint8_t* walkPtr = walkable.data();
+
+    // One job per bit. Each writes only its own two vectors and only READS the
+    // shared clearance map, so the bake is race-free and bit-identical regardless of
+    // scheduling — the same per-slice isolation `nav::bake_fine` relies on
+    // ([core/jobs.h] contract).
     parallel_for(static_cast<int>(kFloorRoomBits), [&](int bi) {
         const std::uint16_t bit = static_cast<std::uint16_t>(1u << bi);
         if ((have & bit) == 0) return;
-        bake_flow(grid, kind, number, bit, stride, out.flow[bi]);
+        bake_flow(walkPtr, kind, number, bit, stride, out.flow[bi]);
         bake_near(present.data() + static_cast<std::size_t>(bi) * roomCount,
                   roomsPerAxis, out.nearRoom[bi]);
     });

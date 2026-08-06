@@ -16,6 +16,7 @@
 // bar can hold is in suite_needs2.inl.
 #include "core/tick.h"   // kSimDt / kSimHz — never a bare 1/120 ([core/tick.h])
 #include "game/needs.h"
+#include "game/room_zone.h" // RoomZones/room_bit_at — the ambient-recovery arm
 #include "game/elevator.h"
 #include "game/floor_registry.h"
 #include "game/population.h"
@@ -851,10 +852,26 @@ void survives_the_body_swap() {
     CHECK(t.speedScale == kSleepExhaustedSpeedScale);
 }
 
-void only_the_player_starves() {
-    // Does an off-screen citizen on floor -12 need to starve? No. The clock is stored
-    // per record but ticked for exactly one of them: a crowd with no AI that eats must
-    // not be quietly killed by the survival system while the player walks around.
+// THIS TEST REPLACES `only_the_player_starves`, WHICH WAS GREEN AND IS NOW WRONG.
+// The old one asserted, for each of 63 residents, `seeded == 0`, `food == 0` and
+// `hp == 100 && alive` — i.e. that the survival clock deliberately skipped the crowd.
+// That was the correct invariant while nothing could walk an NPC to a kitchen, and
+// [needs.h] said so in writing, naming the exact condition for widening it: "widen it
+// when the utility AI (#12) can walk an NPC to a kitchen, not before".
+//
+// It can now ([room_zone.h], [ai.h], [problems.md] §27 legs (a)-(c); measured in
+// suite_rooms: 64 of 64 starving bodies standing in a kitchen 40 s later). So the old
+// assertions are not PINNED PAST A FAILURE ([AGENTS.md] "NEVER PIN A FAILING SUITE"),
+// they are retired by their own stated condition, and what replaces them is the pair
+// of facts that make the widening safe rather than lethal:
+//
+//   * without rooms the crowd DIES, and this test measures that rather than assuming
+//     it — the ~14-minute population wipe is a real number, not a worry;
+//   * with rooms it does not.
+//
+// Running both arms is the whole point. An ambient-recovery bug would otherwise turn
+// the building into a morgue silently, over minutes, with every other test green.
+void the_whole_floor_lives_on_one_clock() {
     NpcPool pool;
     pool.init();
     Registry reg;
@@ -869,32 +886,160 @@ void only_the_player_starves() {
     }
     CHECK(embody_as_player(reg, pool, playerId, 0) != entt::null);
 
-    // Twenty-five minutes: past the point a full body dies of thirst.
-    std::int32_t lost = 0;
-    for (int i = 0; i < 25 * 60 * 4; ++i)
-        lost += needs_step(reg, pool, 0, kRefPeriod).hpLost;
+    // ONE STEP is enough to see the seeding rule: everybody's clock is now live.
+    const NeedsTick first = needs_step(reg, pool, 0, kRefPeriod);
+    CHECK(first.ticked);            // the camera holder's report is unchanged in shape
+    CHECK(first.bodies == 64u);     // ...and 64 clocks moved, not 1
+    CHECK(first.recovering == 0u);  // no rooms passed: nothing restores
 
-    // The player's clock ran, was seeded lazily (nothing had to remember to), and was
-    // billed for it.
+    // THE CAMERA HOLDER STARTS ITS TRIP AT THE TOP — `needs_roll`'s 70..100 band,
+    // undisturbed, because "the body you wake up in decides how long your first trip
+    // can be" is a player-facing design decision this widening must not quietly move.
     CHECK(pool.needs(playerId).seeded == 1);
-    CHECK(pool.needs(playerId).water == 0.0f);
-    CHECK(lost > 0);
+    CHECK(pool.needs(playerId).water > kStartWaterLo - 1.0f);
 
-    // Every citizen is untouched: clock never rolled, HP never docked, still alive.
+    // A RESIDENT IS BORN PARTWAY THROUGH ITS OWN DAY. Two properties, both of which a
+    // constant phase or a broken hash would fail: the spread is REAL, and nobody is
+    // born already failing (the `kResidentPhaseMaxSec` derivation).
+    float lo = kNeedMax, hi = 0.0f;
     int crowd = 0;
     for (NpcId i = 0; i < pool.count(); ++i) {
         if (i == playerId) continue;
         ++crowd;
-        CHECK(pool.needs(i).seeded == 0);
-        CHECK(pool.needs(i).food == 0.0f);   // never rolled, NOT "starving"
-        CHECK(pool.hp(i) == 100 && pool.alive(i));
+        const Needs& n = pool.needs(i);
+        CHECK(n.seeded == 1);
+        CHECK(n.water > 0.0f && n.food > 0.0f); // thirsty is allowed, failing is not
+        if (n.water < lo) lo = n.water;
+        if (n.water > hi) hi = n.water;
     }
     CHECK(crowd == 63);
+    std::printf("[needs] resident phase spread: water %.1f .. %.1f over %d bodies\n",
+                static_cast<double>(lo), static_cast<double>(hi), crowd);
+    CHECK(hi - lo > 30.0f); // a constant phase would make this 30 (the roll band alone)
 
-    // No camera holder on a layer means no clock at all — an unloaded floor is not
+    // ARM 1 — NO ROOMS. Twenty-five minutes with nothing to drink is a morgue, and
+    // that is exactly the cost [needs.h] refused to pay before legs (a)-(c) existed.
+    for (int i = 0; i < 25 * 60 * 4; ++i) needs_step(reg, pool, 0, kRefPeriod);
+    // COUNTED ON hp, NOT ON `alive`. `apply_damage` writes hp and nothing else; the
+    // `Dead` tag and the pool's alive bit are set one pass later by
+    // `finalize_deaths`, which is the single-death-point contract [combat.h]
+    // describes and which this harness deliberately does not run. Asserting on
+    // `alive` here would have read 0 dead out of a building that is entirely dead —
+    // a metric that passes while the thing it grades fails ([AGENTS.md]).
+    int deadNoRooms = 0;
+    for (NpcId i = 0; i < pool.count(); ++i)
+        if (pool.hp(i) <= 0) ++deadNoRooms;
+    std::printf("[needs] 25 min WITHOUT rooms: %d of 64 at zero HP\n", deadNoRooms);
+    CHECK(deadNoRooms > 32); // most of the building
+
+    // ARM 2 — THE SAME 25 MINUTES, OBEYING THE SCORER. Not "parked in a kitchen":
+    // parking there for 25 minutes KILLS you, and correctly — the kitchen queues
+    // 2.1 pee/s and 1.225 poo/s of digestion ([room_zone.h] "the kitchen charges for
+    // itself"), so a body that eats forever and never leaves drowns in its own
+    // bladder at 0.2 HP/s. Measured that way first, and it is the loop working, not
+    // a bug. What this arm asserts is the CLOSED LOOP:
+    //
+    //   needs -> score_intents -> intent_room_mask -> the room -> room_recover -> needs
+    //
+    // Every link is the shipping one; the only thing the harness stands in for is
+    // the walking, which suite_rooms measures separately (64 of 64 arrive). So this
+    // is §27's whole pillar, end to end, headless, in one loop.
+    NpcPool pool2;
+    pool2.init();
+    Registry reg2;
+    const NpcId p2 = seed_floor_population(pool2, /*floor=*/0, /*n=*/64, /*seed=*/5u);
+    RoomZones zones;
+    zones.kind = FloorKind::Residential;
+    zones.number = 0;
+
+    // One cell of each room kind the affordance table names, plus a corridor for the
+    // bodies whose winning intent has no destination. `needs_step` reads only
+    // `kind`/`number` off the zones, so no bake is needed to ask what a cell is.
+    int cellX[kFloorRoomBits] = {}, cellY[kFloorRoomBits] = {};
+    int corridorX = 0, corridorY = 0;
+    for (int y = 1; y < kMacroDim; ++y) {
+        if (y % 4 == 0) continue;
+        for (int x = 1; x < kMacroDim; ++x) {
+            if (x % 4 == 0) continue;
+            const int bi = floor_room_bit_index(
+                room_bit_at(zones.kind, zones.number, x, y));
+            if (bi < 0) continue;
+            if (cellX[bi] == 0) { cellX[bi] = x; cellY[bi] = y; }
+            if (corridorX == 0 &&
+                room_bit_at(zones.kind, zones.number, x, y) ==
+                    static_cast<std::uint16_t>(RoomBit::Corridor)) {
+                corridorX = x;
+                corridorY = y;
+            }
+        }
+    }
+    CHECK(cellX[floor_room_bit_index(static_cast<std::uint16_t>(RoomBit::Kitchen))] != 0);
+    CHECK(cellX[floor_room_bit_index(static_cast<std::uint16_t>(RoomBit::Bathroom))] != 0);
+    CHECK(corridorX != 0);
+
+    std::vector<Entity> ents;
+    for (NpcId i = 0; i < pool2.count(); ++i) {
+        pool2.hp(i) = 100;
+        pool2.max_hp(i) = 100;
+        Entity e = (i == p2) ? embody_as_player(reg2, pool2, i, 0)
+                             : embody(reg2, pool2, i, 0);
+        CHECK(e != entt::null);
+        reg2.get<Transform>(e).layer = 0;
+        ents.push_back(e);
+    }
+
+    NeedsTick last{};
+    int visitedKitchen = 0, visitedBathroom = 0;
+    for (int t = 0; t < 25 * 60 * 4; ++t) {
+        for (NpcId i = 0; i < pool2.count(); ++i) {
+            // The REAL scorer on the REAL row, with every stubbed Perception input at
+            // its default — the same call `ai_step` makes on a re-plan.
+            Perception p;
+            p.idSeed = identity_seed(i);
+            p.faction = pool2.faction(i);
+            p.hp = static_cast<float>(pool2.hp(i));
+            p.maxHp = static_cast<float>(pool2.max_hp(i));
+            float scores[kIntentCount];
+            score_intents(p, pool2.needs(i), scores);
+            const std::uint16_t want = intent_room_mask(select_intent_raw(scores));
+            const int bi = want != 0 ? floor_room_bit_index(want) : -1;
+            const int gx = (bi >= 0 && cellX[bi] != 0) ? cellX[bi] : corridorX;
+            const int gy = (bi >= 0 && cellX[bi] != 0) ? cellY[bi] : corridorY;
+            if (bi >= 0 && want == static_cast<std::uint16_t>(RoomBit::Kitchen))
+                ++visitedKitchen;
+            if (bi >= 0 && want == static_cast<std::uint16_t>(RoomBit::Bathroom))
+                ++visitedBathroom;
+            Transform& tr = reg2.get<Transform>(ents[i]);
+            tr.pos = vec3{(static_cast<float>(gx) + 0.5f) * kCellSize,
+                          (static_cast<float>(gy) + 0.5f) * kCellSize, 8.0f};
+        }
+        last = needs_step(reg2, pool2, 0, kRefPeriod, &zones);
+    }
+
+    int hurt = 0, minHp = 100;
+    for (NpcId i = 0; i < pool2.count(); ++i) {
+        if (pool2.hp(i) < 100) ++hurt;
+        if (pool2.hp(i) < minHp) minHp = pool2.hp(i);
+    }
+    std::printf("[needs] 25 min OBEYING THE SCORER: %d of 64 lost HP (min %d), "
+                "%d kitchen-seconds, %d bathroom-seconds, %u recovering\n",
+                hurt, minHp, visitedKitchen / 4, visitedBathroom / 4,
+                last.recovering);
+    // NOBODY DIES, and the building is not merely alive — it is UNSCRATCHED. The
+    // same 25 minutes that takes all 64 bodies to zero HP with no rooms costs a
+    // crowd that goes where it wants exactly nothing.
+    CHECK(hurt == 0);
+    CHECK(minHp == 100);
+    // BOTH rooms are used, in both directions. A crowd that only ever ate would pass
+    // an "alive" check for a while and then die of the thing it never went to fix.
+    CHECK(visitedKitchen > 0);
+    CHECK(visitedBathroom > 0);
+
+    // Nothing embodied on a layer means no clock at all — an unloaded floor is not
     // secretly running its own survival sim. A zero dt is a no-op, not a rewind.
     const NeedsTick none = needs_step(reg, pool, 77, kRefPeriod);
     CHECK(!none.ticked && none.hpLost == 0 && none.speedScale == 1.0f);
+    CHECK(none.bodies == 0u);
     CHECK(!needs_step(reg, pool, 0, 0.0f).ticked);
 }
 
@@ -910,5 +1055,5 @@ static void test_needs_all() {
     needs_test::use_best();
     needs_test::pressure();
     needs_test::survives_the_body_swap();
-    needs_test::only_the_player_starves();
+    needs_test::the_whole_floor_lives_on_one_clock();
 }

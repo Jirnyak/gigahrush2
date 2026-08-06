@@ -859,7 +859,21 @@ Ordered by value. A–C are gameplay; D–F are structural; G is hygiene.
 
 ---
 
-### PLAN A — Make the crowd want things (problems.md §27) — THE BIG ONE
+### PLAN A — Make the crowd want things (problems.md §27) — **DONE 2026-08-06**
+
+> **DELIVERED.** All four legs landed in that order; §27 is CLOSED and carries the
+> numbers. Live run: `own_ai` 0 → 21..85 of ~380, the intent histogram MOVES
+> (`drink` 78 → 39 as the crowd gets watered, against a frozen `work=335
+> patrol=84` before), `crowd_dead_total=0` with the clock running for every body.
+> Two defects the plan below did not anticipate are what actually decided it, and
+> both are written up in §27: nav's "not fully solid" walkability is a 1-in-512 bar
+> that a 4x4x7-sub-voxel collider cannot clear (62 of 63 errand bodies were pinned),
+> and axis-aligned steering let a body clip the jamb of the doorway its own field
+> routed it through (23/64 arrivals against 64/64). Read §27 before touching this
+> area; the remaining debt is listed there under «ЧТО НЕ СДЕЛАНО» —
+> `IntentHeal`'s deadlock, `Perception::armed`, work/social/patrol rows, and the
+> X/Y-only room taxonomy. The brief below is kept as the historical statement of
+> the problem.
 
 **Do NOT start by widening the needs tick.** That was tried on 2026-08-06,
 measured, and reverted: with the clock running for all 419 bodies (`needsCrowd=419`)

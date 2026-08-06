@@ -693,7 +693,27 @@ if(GIGA_BUILD_TESTS)
     # 64/64 standing in a kitchen after 40 s, 667 m walked; WITHOUT zones own_ai=0,
     # eat=64, 0/64, 0 m. Both arms agree on what the bodies WANT, which is what
     # makes the difference attributable to ownership and nothing else.
-        PASS_REGULAR_EXPRESSION "game_test: 235200 checks, 0 failures")
+    # 235200 -> 235213 on 2026-08-06: +13 NET, and the net hides a REPLACEMENT.
+    # `only_the_player_starves` (66 CHECKs, 63 of them a per-resident triple) is gone;
+    # `the_whole_floor_lives_on_one_clock` (79) is in its place. The old test was GREEN
+    # and asserted that the survival clock skipped the crowd — correct while nothing
+    # could walk an NPC to a kitchen, and [needs.h] named that exact condition for
+    # widening it. §27 legs (a)-(c) satisfy it, so the assertions are retired by their
+    # own stated condition, not pinned past a failure. What replaced them are the two
+    # numbers that make the widening safe rather than lethal, both measured:
+    #   25 min WITHOUT rooms:        64 of 64 at zero HP
+    #   25 min OBEYING THE SCORER:   0 of 64 lost HP (min 100)
+    # 235213 -> 235067 on 2026-08-06: -146, and a DROP is the honest direction here.
+    # The errand block stopped hand-rolling `pos += v*dt` and started calling the real
+    # `physics_step`, and the descent block stopped sampling nav's looser "not fully
+    # solid" population and started sampling the cells a COLLIDER can occupy
+    # (room_body_walkable). The old harness reported 64/64 arrivals while the live
+    # game had 62 of 63 errand bodies pinned against geometry — it certified the
+    # failure. Fewer, truer CHECKs; the two defects it then exposed are fixed and
+    # pinned at zero (`with.stalled == 0`):
+    #   kitchen descent: 884 sampled, 874 arrived, 10 unreachable, 0 over budget
+    #   errand WITH zones: own_ai=64 stalled=0 in-kitchen=60/64 at 40 s, 64/64 at 120 s
+        PASS_REGULAR_EXPRESSION "game_test: 235067 checks, 0 failures")
 
 
 

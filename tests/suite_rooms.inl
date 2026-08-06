@@ -127,11 +127,15 @@ void rooms_descent_actually_arrives() {
     // Walk the flow to termination from every 4th cell of the arrival storey. The
     // budget is generous but FINITE: a field with a cycle in it would spin forever,
     // and "it terminated" is half of what this block asserts.
+    // SAMPLED OVER THE CELLS A BODY CAN STAND IN, not over the cells that are merely
+    // "not fully solid". Sampling nav's looser population was the first version and
+    // it graded the wrong thing: it counted cells no NPC could ever occupy as
+    // routing failures ([room_zone.h] room_body_walkable).
     constexpr int kBudget = 512;
     int sampled = 0, arrived = 0, unreachable = 0, overBudget = 0;
     for (int y = 0; y < kMacroDim; y += 4) {
         for (int x = 0; x < kMacroDim; x += 4) {
-            if (w.grid().mask(x, y, ground).full()) continue;
+            if (!room_body_walkable(w.grid(), x, y, ground)) continue;
             ++sampled;
             int cx = x, cy = y, cz = ground, steps = 0;
             std::uint8_t f = z.flow[ki][macro_index(cx, cy, cz)];
@@ -155,7 +159,13 @@ void rooms_descent_actually_arrives() {
                 sampled, arrived, unreachable, overBudget);
     CHECK(sampled > 0);
     CHECK(overBudget == 0);          // no cycles, and no route longer than 512 cells
-    CHECK(arrived * 10 >= sampled * 9); // >=90% of the storey can reach a kitchen
+    CHECK(arrived * 100 >= sampled * 95); // >=95% of the standable storey reaches one
+    // The residual is real and is NOT a bug to chase to zero: a handful of cells sit
+    // in pockets a body cannot leave (sealed rooms, and rims where the centred
+    // footprint fits but no neighbour's does). What matters is that those bodies
+    // report `errandLost` and delegate to wander instead of shoving — asserted in
+    // the errand block, where `stalled` is zero.
+    CHECK(unreachable * 20 <= sampled);
 
     // `room_route` composes the same answer and names the room it chose. A body
     // standing IN a kitchen is told it has arrived rather than sent to another one.
@@ -222,10 +232,14 @@ void rooms_seat_is_the_micro_goal() {
 struct ErrandRun {
     std::uint32_t owned = 0;    // peak bodies the AI steered on any one tick
     std::uint32_t eating = 0;   // peak bodies committed to IntentEat
+    std::uint32_t stalled = 0;  // peak errand bodies physics refused to move
     int inKitchen = 0;          // bodies standing in a kitchen at the end
+    int bodies = 0;             // bodies that got a legal spawn
     float travelled = 0.0f;     // metres walked, summed
 };
-ErrandRun rooms_run_errand(const World& w, const RoomZones* zones, int ticks) {
+ErrandRun rooms_run_errand(LevelStack& stack, LayerId layer,
+                           const RoomZones* zones, int ticks) {
+    const World& w = stack.layer(layer);
     ErrandRun out;
     NpcPool pool;
     pool.init();
@@ -249,13 +263,22 @@ ErrandRun rooms_run_errand(const World& w, const RoomZones* zones, int ticks) {
                 room_bit(RoomBit::Kitchen))
                 continue;
             const NpcId id = static_cast<NpcId>(placed);
-            Entity e = embody(reg, pool, id, 0);
+            Entity e = embody(reg, pool, id, layer);
             if (e == entt::null) continue;
             Transform& tr = reg.get<Transform>(e);
             tr.pos = vec3{(static_cast<float>(x) + 0.5f) * kCellSize,
                           (static_cast<float>(y) + 0.5f) * kCellSize,
                           (static_cast<float>(ground) + 0.5f) * kCellSize};
-            tr.layer = 0;
+            tr.layer = layer;
+            // Refuse a spawn the collider cannot occupy. A body whose AABB starts
+            // INSIDE geometry is refused motion on every axis by `sweep_axis`
+            // forever, so seeding one would measure a physics failure and blame the
+            // AI for it. The field's own clearance test is centred and this is the
+            // real collider, so the two can disagree at a cell's rim.
+            if (aabb_overlaps_solid(w, tr.pos, reg.get<AABB>(e).half)) {
+                reg.destroy(e);
+                continue;
+            }
             // STARVING, and seeded — so the scorer reads this row instead of
             // substituting the constant identity roll ([ai.cpp] needs_for).
             Needs& n = pool.needs(id);
@@ -266,28 +289,30 @@ ErrandRun rooms_run_errand(const World& w, const RoomZones* zones, int ticks) {
             ++placed;
         }
     }
-    ai_init(reg, 0);
+    ai_init(reg, layer);
 
+    // THE REAL INTEGRATOR, not a hand-rolled one. An earlier revision of this block
+    // advanced `pos += v * dt` with no collision and reported 64 of 64 bodies
+    // arriving — while the live game had 62 of 63 errand bodies PINNED against
+    // geometry, because a field that routes cell-to-cell through cells physics
+    // refuses to enter passes a collision-free integrator perfectly. A harness that
+    // cannot reproduce the shipping failure is a harness that certifies it
+    // ([AGENTS.md] "a metric that passes while the screenshot fails is a BUG IN THE
+    // METRIC").
     AiConfig cfg;
     cfg.enabled = true;
     for (int t = 0; t < ticks; ++t) {
         const AiTick a =
-            ai_step(reg, pool, nullptr, w.grid(), 0,
+            ai_step(reg, pool, nullptr, w.grid(), layer,
                     static_cast<double>(t) * static_cast<double>(kSimDt), kSimDt,
                     cfg, nullptr, nullptr, nullptr, zones);
         if (a.aiOwned > out.owned) out.owned = a.aiOwned;
         if (a.byIntent[IntentEat] > out.eating) out.eating = a.byIntent[IntentEat];
-        // Integrate what the AI wrote. No physics and no collision: the flow field
-        // routes cell by cell through walkable cells, so following it is the whole
-        // claim under test — adding a collision resolver would measure physics too.
-        for (Entity e : bodies) {
-            Transform& tr = reg.get<Transform>(e);
-            const Velocity& v = reg.get<Velocity>(e);
-            tr.pos.x = wrapf(tr.pos.x + v.v.x * kSimDt, kWorldExtent);
-            tr.pos.y = wrapf(tr.pos.y + v.v.y * kSimDt, kWorldExtent);
-        }
+        if (a.errandStalled > out.stalled) out.stalled = a.errandStalled;
+        physics_step(reg, stack, kSimDt);
     }
 
+    out.bodies = static_cast<int>(bodies.size());
     for (std::size_t i = 0; i < bodies.size(); ++i) {
         const Transform& tr = reg.get<Transform>(bodies[i]);
         const int cx = wrap_macro(static_cast<int>(tr.pos.x / kCellSize));
@@ -303,54 +328,64 @@ ErrandRun rooms_run_errand(const World& w, const RoomZones* zones, int ticks) {
 }
 
 void rooms_a_hungry_body_walks_to_a_kitchen() {
-    World w;
-    generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
+    LevelStack stack;
+    const LayerId layer = stack.push_layer();
+    generate_floor(stack.layer(layer), 0, floor_spec(FloorKind::Residential), 1337u);
     RoomZones z;
-    bake_room_zones(w.grid(), FloorKind::Residential, 0, z);
+    bake_room_zones(stack.layer(layer).grid(), FloorKind::Residential, 0, z);
 
     // 40 seconds. A kitchen is ~10 cells away at the Residential mix's 16/100
     // weight, i.e. ~20 m, and the errand pace is 1.35 m/s — so this is ~2.5x the
     // budget a straight walk needs, and a body that has not arrived by then is not
     // walking toward one.
     const int ticks = static_cast<int>(40.0f / kSimDt);
-    const ErrandRun with = rooms_run_errand(w, &z, ticks);
-    const ErrandRun without = rooms_run_errand(w, nullptr, ticks);
+    const ErrandRun with = rooms_run_errand(stack, layer, &z, ticks);
+    const ErrandRun without = rooms_run_errand(stack, layer, nullptr, ticks);
 
-    std::printf("[rooms] errand WITH zones:    own_ai=%u eat=%u in-kitchen=%d/64 "
-                "walked=%.0f m\n",
-                with.owned, with.eating, with.inKitchen,
+    std::printf("[rooms] errand WITH zones:    own_ai=%u eat=%u stalled=%u "
+                "in-kitchen=%d/%d walked=%.0f m\n",
+                with.owned, with.eating, with.stalled, with.inKitchen, with.bodies,
                 static_cast<double>(with.travelled));
-    std::printf("[rooms] errand WITHOUT zones: own_ai=%u eat=%u in-kitchen=%d/64 "
-                "walked=%.0f m\n",
-                without.owned, without.eating, without.inKitchen,
-                static_cast<double>(without.travelled));
+    std::printf("[rooms] errand WITHOUT zones: own_ai=%u eat=%u stalled=%u "
+                "in-kitchen=%d/%d walked=%.0f m\n",
+                without.owned, without.eating, without.stalled, without.inKitchen,
+                without.bodies, static_cast<double>(without.travelled));
 
     // Both arms AGREE about what the bodies want — the scorer is untouched by this
     // leg. That is what makes the comparison fair: the only thing that changed is
     // whether wanting it can steer.
+    CHECK(with.bodies == 64 && without.bodies == 64);
     CHECK(with.eating == 64u);
     CHECK(without.eating == 64u);
 
     // WITHOUT the zones: the pre-rooms behaviour, verbatim. Not one body is
-    // AI-owned, nothing moves (wander_step is not in this harness), and this is
-    // exactly the `own_ai=0` of [problems.md] §27 reproduced headless.
+    // AI-owned, and with no steerer in this harness (wander_step is not wired here)
+    // nothing walks anywhere. This is `own_ai=0` of [problems.md] §27, headless.
     CHECK(without.owned == 0u);
-    CHECK(without.travelled == 0.0f);
     CHECK(without.inKitchen == 0);
 
-    // WITH the zones: every body takes the token and the great majority is standing
-    // in a kitchen 40 s later.
+    // WITH the zones: every body takes the token, and the great majority is standing
+    // in a kitchen 40 s later — THROUGH THE REAL COLLIDER, which is the claim that
+    // matters and the one a collision-free integrator could not make.
     CHECK(with.owned == 64u);
     CHECK(with.travelled > 0.0f);
     CHECK(with.inKitchen * 4 >= 64 * 3); // >= 75% arrived
+    // AND NOBODY SHOVED. The stall probe counts errand bodies physics refused to
+    // move; a non-zero reading here is the signature of the two defects this block
+    // caught and would catch again — a field that routes through cells a collider
+    // cannot enter, and axis steering that lets a body clip the jamb of the doorway
+    // it was routed through. Both were live, both are measured at zero now.
+    CHECK(with.stalled == 0u);
 
     // SETTLED, not milling: once a body reaches its seat the AI keeps the token and
     // writes a zero. Run on longer and the arrivals must not drift back out — which
     // is the failure mode of handing the body back to wander on arrival.
-    const ErrandRun longer = rooms_run_errand(w, &z, ticks * 3);
-    std::printf("[rooms] errand at 120 s:      in-kitchen=%d/64\n",
-                longer.inKitchen);
+    const ErrandRun longer = rooms_run_errand(stack, layer, &z, ticks * 3);
+    std::printf("[rooms] errand at 120 s:      in-kitchen=%d/%d stalled=%u\n",
+                longer.inKitchen, longer.bodies, longer.stalled);
     CHECK(longer.inKitchen >= with.inKitchen);
+    CHECK(longer.inKitchen == longer.bodies); // every last one, and none drifts out
+    CHECK(longer.stalled == 0u);
 }
 
 void rooms_recovery_closes_the_loop() {

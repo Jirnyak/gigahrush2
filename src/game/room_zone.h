@@ -220,6 +220,21 @@ void room_recover(Needs& n, std::uint16_t bit, float dt);
 // room). Pure, O(1), and keyed exactly like every other taxonomy consumer.
 std::uint16_t room_bit_at(FloorKind kind, int number, int x, int y);
 
+// CAN A WALKING BODY OCCUPY THIS CELL — the predicate the bake floods through, and
+// the reason it is public is that it is a CONTRACT, not an implementation detail:
+// anything asking "why did the field not route there" must be able to ask the same
+// question the field asked.
+//
+// It is stricter than `nav`'s "not fully solid" and deliberately so. Collision is
+// exact against sub-voxels ([sim/physics.cpp]) and an NPC's collider is 0.4 m
+// half-width by ~0.85 m half-height ([game/embody.cpp]) = 4 x 4 x 7 sub-voxels, so a
+// cell with one carved voxel passes nav's test and stops a body dead. Measured on
+// the live floor before this existed: 62 of 63 bodies on an errand were pinned
+// against geometry the field called open.
+//
+// Stricter in the SAFE direction: every cell this accepts, nav also accepts.
+bool room_body_walkable(const MacroGrid& grid, int x, int y, int z);
+
 // The body's SEAT inside room (rx, ry): a deterministic interior offset in
 // [1, stride-1] on each axis, from its identity seed. Two bodies in one room get
 // different seats; the same body always gets the same one, so it does not shuffle

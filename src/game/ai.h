@@ -872,8 +872,32 @@ struct AiTick {
     // -- rooms ([room_zone.h], §27 legs (a)+(b)) --
     std::uint32_t roomOwned = 0;  // bodies walking an ERRAND: a non-flee intent that
                                   // found a destination and took the token
-    std::uint32_t settled = 0;    // of those, the ones already at their seat and
-                                  // holding still while the room restores them
+    std::uint32_t settled = 0;    // of those, the ones already INSIDE the room they
+                                  // wanted (walking the last metres to their seat or
+                                  // already holding still on it)
+    // How the walkers are being steered, because "errand" alone cannot tell a body
+    // routing cleanly from a body shoving at a wall. `errandStep` took a horizontal
+    // flow step — the field answered. `errandColumn` fell back to the bearing toward
+    // the target room's column because the field's next step was VERTICAL and a
+    // walking body cannot climb; that path ignores geometry, so a large and steady
+    // errandColumn is the signature of a crowd pressed against walls rather than
+    // walking to kitchens. Split out for exactly that reason.
+    std::uint32_t errandStep = 0;
+    std::uint32_t errandColumn = 0;
+    std::uint32_t errandLost = 0; // wanted a room, none reachable -> delegated
+    // Summed toroidal distance, in macro cells, from each walking body to the room
+    // it is walking to. Divided by `errandStep + errandColumn` this is the crowd's
+    // mean remaining errand — and it is the ONE number that separates "walking" from
+    // "shoving at a wall", which no ownership counter can: a stuck crowd reports a
+    // perfectly healthy `errandStep` forever. Watch it FALL.
+    std::uint32_t errandDistCells = 0;
+    // Errand bodies that PHYSICS REFUSED TO MOVE last tick, detected with no stored
+    // state at all: `ai_step` runs before `physics_step`, so the Velocity it reads on
+    // entry is last tick's POST-collision value, and `physics_step` zeroes the axis a
+    // body collided on. A body we drove at kErrandSpeed that comes back at ~0 hit
+    // something. This is the counter that distinguishes "the field is wrong" from
+    // "the field is right and the geometry says no".
+    std::uint32_t errandStalled = 0;
     // Committed intents, histogrammed. This is the number that says whether the
     // scorer is decoration: with the needs clock frozen the crowd's argmax is a pure
     // function of (faction, id) and this histogram is CONSTANT IN TIME — the exact

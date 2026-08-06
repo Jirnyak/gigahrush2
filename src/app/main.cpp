@@ -1333,11 +1333,21 @@ void begin_floor_nav(const World& world, int floorNumber, nav::AsyncBake& bake,
     // ownership story to get wrong: the fields are complete before the first tick
     // that could read them, so `ai_step` never sees a half-built field.
     const game::FloorKind kind = kind_for_floor(floorNumber);
+    // TIMED, and the timing is not decoration. An untimed synchronous bake once cost
+    // ~25 s of load without a single line saying so, and the only symptom anyone saw
+    // was the sim running 4140 ticks per 4000 frames one day and 600 the next
+    // ([room_zone.cpp] bake_walkable). A bake that does not print its own cost hides
+    // exactly the regression it is most likely to cause.
+    const auto roomT0 = std::chrono::steady_clock::now();
     game::bake_room_zones(world.grid(), kind, floorNumber, rooms);
+    const double roomMs =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - roomT0).count();
     std::fprintf(stderr,
-                 "[rooms] floor %d: kind=%d baked mask 0x%04X (%zu bytes resident)\n",
+                 "[rooms] floor %d: kind=%d baked mask 0x%04X (%zu bytes resident) "
+                 "in %.0f ms\n",
                  floorNumber, static_cast<int>(kind),
-                 static_cast<unsigned>(rooms.baked), rooms.resident_bytes());
+                 static_cast<unsigned>(rooms.baked), rooms.resident_bytes(), roomMs);
 }
 
 // Called once the bake has landed: hand the new floor's inhabitants somewhere to
@@ -2097,6 +2107,10 @@ int main(int argc, char** argv) {
     game::AiMemory aiMem;
     game::AiTick aiTick{};
     std::uint64_t lastAimemLogTick = ~0ull;
+    // Cumulative residents finished off by attrition since the run began. A running
+    // total rather than a per-step count, because the failure it watches for is
+    // slow: one death per second reads as noise per step and as a morgue per minute.
+    std::uint32_t crowdDead = 0;
     game::CraftingState crafting{};
     game::craft_init(crafting);
     std::uint32_t crafted = 0, scrapped = 0, recipesLearned = 0;
@@ -2844,6 +2858,7 @@ int main(int argc, char** argv) {
                     std::fprintf(stderr,
                                  "[aimem] STEP tick=%llu layer=%u seen=%u replan=%u "
                                  "own_ai=%u own_wander=%u errand=%u settled=%u "
+                                 "step=%u column=%u lost=%u stalled=%u meandist=%.1f "
                                  "recall=%u filed=%u fled=%u "
                                  "rows=%u writes=%u coal=%u evict=%u bytes=%zu\n",
                                  static_cast<unsigned long long>(simTick),
@@ -2851,6 +2866,13 @@ int main(int argc, char** argv) {
                                  aiTick.considered, aiTick.replanned,
                                  aiTick.aiOwned, aiTick.wanderOwned,
                                  aiTick.roomOwned, aiTick.settled,
+                                 aiTick.errandStep, aiTick.errandColumn,
+                                 aiTick.errandLost, aiTick.errandStalled,
+                                 (aiTick.errandStep + aiTick.errandColumn) != 0
+                                     ? static_cast<double>(aiTick.errandDistCells) /
+                                           static_cast<double>(aiTick.errandStep +
+                                                               aiTick.errandColumn)
+                                     : 0.0,
                                  aiTick.recalled, aiTick.remembered,
                                  aiTick.memoryFled, aiMem.rows(),
                                  aiMem.writes(), aiMem.coalesced(),
@@ -3904,8 +3926,28 @@ int main(int argc, char** argv) {
                         }
                     }
                 }
-                needs = game::needs_step(reg, pool, activeLayer, kSimDt);
+                // §27 legs (c)+(d): the clock now runs for EVERY embodied body on
+                // the floor, and `roomZones` is the half that keeps that from being
+                // a morgue — a body in a kitchen fills, a body in a bathroom
+                // empties. Passing null here would reinstate the ~14-minute
+                // population wipe [needs.h] blocked the widening on.
+                needs = game::needs_step(reg, pool, activeLayer, kSimDt, &roomZones);
                 needsHpLost += needs.hpLost;
+                // The other half of the acceptance trail. `bodies` says the clock is
+                // no longer a one-body clock, `recovering` says rooms are actually
+                // feeding people, and `crowdDead` is the number that would climb if
+                // the ambient half were ever broken again — a silent morgue is the
+                // failure mode this widening had to buy its way past ([needs.h]).
+                // Cadence piggybacks on the [aimem] pulse a few hundred lines up,
+                // which set `lastAimemLogTick` to `simTick` earlier in THIS tick, so
+                // the two lines always describe the same frame.
+                crowdDead += needs.crowdKilled;
+                if (aiCfg.enabled && lastAimemLogTick == simTick)
+                    std::fprintf(stderr,
+                                 "[needs] tick=%llu bodies=%u recovering=%u "
+                                 "crowd_dead_total=%u\n",
+                                 static_cast<unsigned long long>(simTick),
+                                 needs.bodies, needs.recovering, crowdDead);
                 // Corpses pay out BEFORE they are destroyed. The gap between
                 // "hp hit zero" and "gone" is precisely what the Dead tag exists
                 // to create (combat.h defect 2) — the reference's P0 was culling

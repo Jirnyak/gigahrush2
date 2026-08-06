@@ -796,6 +796,17 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             const std::uint16_t want = intent_room_mask(brain.currentIntent);
             const std::uint16_t here =
                 want != 0 ? room_bit_at(rooms->kind, rooms->number, cx, cy) : 0;
+            // Stall probe, read BEFORE this pass overwrites Velocity — see AiTick.
+            // SETTLED BODIES ARE EXCLUDED and the exclusion is the whole point: a
+            // body at its seat is stopped ON PURPOSE, so counting it as stalled made
+            // the metric read 64 of 64 pinned at the exact moment all 64 had
+            // arrived. A stall counter that fires on success is worse than none.
+            if (want != 0 && (here & want) == 0 &&
+                brain.motion == static_cast<std::uint8_t>(MotionOwner::Ai)) {
+                const vec3& prev = view.get<Velocity>(e).v;
+                const float sp2 = prev.x * prev.x + prev.y * prev.y;
+                if (sp2 < kErrandSpeed * kErrandSpeed * 0.0625f) ++out.errandStalled;
+            }
 
             if (want != 0 && (here & want) != 0) {
                 // ALREADY IN THE RIGHT ROOM — so the goal is no longer the room, it
@@ -836,13 +847,37 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             } else if (want != 0) {
                 // NOT THERE YET — descend the room kind's baked field.
                 const RoomRoute r = room_route(*rooms, want, cx, cy, cz);
+                if (r.bit != 0) {
+                    const int ddx = wrap_delta(cx, r.targetX, kMacroDim);
+                    const int ddy = wrap_delta(cy, r.targetY, kMacroDim);
+                    out.errandDistCells += static_cast<std::uint32_t>(
+                        (ddx < 0 ? -ddx : ddx) + (ddy < 0 ? -ddy : ddy));
+                }
                 if (r.bit != 0 && r.dir < 4) {
                     // A horizontal step. kNavDir 0..3 are +-x/+-y; 4..5 are the
                     // gravity axis, and `Velocity.z` belongs to physics.
-                    dir = normalize(vec3{static_cast<float>(nav::kNavDir[r.dir][0]),
-                                         static_cast<float>(nav::kNavDir[r.dir][1]),
-                                         0.0f});
-                    owned = true;
+                    //
+                    // AIM AT THE NEXT CELL'S CENTRE, NOT ALONG THE AXIS, and the
+                    // difference is not cosmetic — it was measured. Steering by the
+                    // raw axis vector lets a body keep whatever lateral offset it
+                    // entered the cell with, and the clearance the field guarantees
+                    // is the CENTRED 4x4 footprint ([room_zone.h]), so an off-centre
+                    // body clips the jamb of the very doorway the field routed it
+                    // through. Through the real collider that took arrivals from
+                    // 64/64 down to 23/64. Aiming at the centre makes the walk
+                    // self-correcting: every step pulls the body back onto the line
+                    // the clearance test actually cleared.
+                    const int nx = wrap_macro(cx + nav::kNavDir[r.dir][0]);
+                    const int ny = wrap_macro(cy + nav::kNavDir[r.dir][1]);
+                    const float tx = (static_cast<float>(nx) + 0.5f) * kCellSize;
+                    const float ty = (static_cast<float>(ny) + 0.5f) * kCellSize;
+                    const float dx = wrap_delta_f(tr.pos.x, tx, kWorldExtent);
+                    const float dy = wrap_delta_f(tr.pos.y, ty, kWorldExtent);
+                    if (dx * dx + dy * dy > kMinFleeGrad2) {
+                        dir = normalize(vec3{dx, dy, 0.0f});
+                        owned = true;
+                        ++out.errandStep;
+                    }
                 } else if (r.bit != 0) {
                     // THE VERTICAL STEP, and it is not a rare case: the field is
                     // 6-connected, so a route may legitimately begin by going up a
@@ -859,7 +894,10 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                     if (dx * dx + dy * dy > kMinFleeGrad2) {
                         dir = normalize(vec3{dx, dy, 0.0f});
                         owned = true;
+                        ++out.errandColumn;
                     }
+                } else {
+                    ++out.errandLost;
                 }
                 // r.bit == 0 means no room of that kind is REACHABLE from here (a
                 // sealed pocket, or a floor that has none). Fall through to wander.
