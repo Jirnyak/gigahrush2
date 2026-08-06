@@ -2819,7 +2819,7 @@ int main(int argc, char** argv) {
                                  aiMem.writes(), aiMem.coalesced(),
                                  aiMem.evictions(), aiMem.resident_bytes());
                 }
-                controller_step(reg, kSimDt);
+                controller_step(reg, kSimDt, &activeWorld.gravity());
                 // Steer the crowd BEFORE physics: wander writes horizontal
                 // velocity, physics integrates it and resolves collision.
                 // Samosbor advances HERE — after controller_step, before
