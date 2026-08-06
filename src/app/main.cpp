@@ -1821,6 +1821,14 @@ int main(int argc, char** argv) {
         // difference between a world that lives when unobserved and one that only exists
         // where the camera has been. Costs ~4,200 records against a 2^20 pool and touches
         // no layer, no geometry and no ECS entity.
+        // A visited floor IS its snapshot: hand the streamer the way to get one
+        // back, and it restores immediately after generating — before the pipes
+        // are routed and the lamps are hung, so nothing is ever anchored to
+        // geometry that is about to change under it. [problems.md] §42
+        streamer.set_floor_restore([](World& w, int floorNumber) {
+            return apply_floor_file(w, floorNumber);
+        });
+
         const std::uint32_t seeded = streamer.seed_all_modules(pool);
         std::fprintf(stderr, "[pop] seeded %u cold records across %u registered floors\n",
                      seeded, macroSim.floor_count());
@@ -2332,10 +2340,8 @@ int main(int argc, char** argv) {
         game::apply_opened_containers(reg, nl, currentFloor,
                                        runState.opened.data(),
                                        runState.opened.size());
-        // The floor's own file, if this floor was ever visited: stamp its saved
-        // state over the fresh generation BEFORE doors, so door_build re-stamps
-        // its leaves and the nav bake below sees the real geometry. [save.h]
-        apply_floor_file(stack.layer(nl), currentFloor);
+        // (The floor's own file is restored INSIDE ensure_loaded now — before the
+        //  dressing bake and the props, not after them. [problems.md] §42)
         // Doors before the bake, frozen for its duration. [door.h]
         if (currentSpec)
             doorsBuilt = game::door_build(
@@ -4066,7 +4072,6 @@ int main(int argc, char** argv) {
                                 reg, stack.layer(nl), currentFloor, nl,
                                 streamer.floor_seed_of(registry, currentFloor),
                                 bus);
-                            apply_floor_file(stack.layer(nl), currentFloor);
                             if (currentSpec)
                                 doorsBuilt = game::door_build(
                                     stack.layer(nl), doors, currentFloor,
@@ -5511,7 +5516,6 @@ int main(int argc, char** argv) {
                         // the keyboard ride path. This is the SECOND travel
                         // site; a fix that touches only one path leaves --shot
                         // proving nothing. [save.h, door.h]
-                        apply_floor_file(stack.layer(nl), currentFloor);
                         if (currentSpec)
                             doorsBuilt = game::door_build(
                                 stack.layer(nl), doors, currentFloor,

@@ -27,6 +27,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>   // std::function — the floor-restore hook
 #include <memory>
 #include <string>
 #include <vector>
@@ -133,6 +134,22 @@ public:
     // to `dir` keyed on each floor's (number, kind, seed). Empty (the default)
     // disables it — every load bakes from scratch. Set once, before loading.
     void set_nav_cache_dir(const std::string& dir) { navCacheDir_ = dir; }
+
+    // How a VISITED floor gets its saved geometry back.
+    //
+    // Called by `ensure_loaded` immediately after `generate_floor` and before the
+    // dressing bake, the props, the doors and the nav — so that everything which
+    // attaches itself to geometry sees the FINAL geometry. Return true if the
+    // world was restored, false to leave the fresh generation standing (no file
+    // yet, unreadable file, first visit).
+    //
+    // A hook rather than a direct call because reading `floor_<N>.sav` is file
+    // I/O, and giga_game does none by design ([save.h]) — the app owns the bytes,
+    // this owns the ordering. Stamping late is what put lamps in mid-air over
+    // their own holes; [problems.md] §42.
+    void set_floor_restore(std::function<bool(World&, int)> fn) {
+        restore_ = std::move(fn);
+    }
 
     // Own a per-floor nav bake at all. **Default OFF, and that is the fix.**
     //
@@ -305,6 +322,7 @@ private:
     int keepRadius_ = 0;
     std::string navCacheDir_; // empty = on-disk nav cache disabled
     bool navBake_ = false;    // see set_nav_bake: OFF for the app, on for tests
+    std::function<bool(World&, int)> restore_;  // see set_floor_restore
 };
 
 } // namespace giga::game

@@ -283,6 +283,33 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
     LayerId slot = alloc_slot();
     if (slot == kInvalidLayer) return out; // slot pool exhausted (should not happen)
     generate_floor(stack.layer(slot), fm.number, floor_spec(fm.kind), fm.seed);
+
+    // A VISITED FLOOR IS ITS SNAPSHOT. Restore it HERE — immediately after
+    // generation and before anything attaches itself to the geometry.
+    //
+    // The stamp used to happen in `main`, three call sites, AFTER the dressing
+    // bake and after the props were seeded. So pipes were routed and lamps were
+    // hung against PRISTINE geometry, and only then did the snapshot turn their
+    // anchors back into the holes the player had blown. `spawn_prop` honestly
+    // refuses an anchor that is not solid, but at that moment it still was; and
+    // `anchor_validate_step` only ever fires on a live carve's dirty-cell list,
+    // which a snapshot stamp does not produce. Net effect: a lamp you shot down
+    // came back floating over its own hole on every revisit. [problems.md] §42.
+    //
+    // Why generation still runs at all, rather than being skipped outright: the
+    // snapshot carries GEOMETRY ONLY — floor number, cell types, mask states,
+    // mixed masks, sub-material pages. The floor's declared GRAVITY FRAME and its
+    // fluid/gas fields are set by the generator (`padic_gen.cpp` — regime, global,
+    // kFluidField, kGasField), because the frame is a property of the MODULE, not
+    // of the saved bytes. Restoring without generating would raise a floor with no
+    // declared frame, which today only ever looks fine because the World slot is
+    // recycled and the previous floor happened to share it. Generation is the
+    // cheap half anyway — the seconds were in the nav bake, and that is off now.
+    //
+    // File I/O stays in the app (`save.h`'s split: giga_game reads no files), so
+    // the restore arrives as a hook. No hook, or no file, or a refused file =>
+    // the freshly generated floor stands, which is exactly the first-visit case.
+    if (restore_) restore_(stack.layer(slot), fm.number);
     // Antourage AFTER the geometry: it READS the finished grid as context and
     // never writes it ([antourage.md] — the dressing is mesh on anchors, so
     // nav has nothing to route around and does not care where in the load this
