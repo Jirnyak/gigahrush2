@@ -1,5 +1,6 @@
 #include "game/floor_stream.h"
 
+#include <chrono>   // the floor-entry timings printed below
 #include <cstdio>
 
 #include "ecs/components.h"   // giga::Transform
@@ -282,7 +283,13 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
     // floor bit-for-bit (floor_gen.h) — no layout is ever persisted.
     LayerId slot = alloc_slot();
     if (slot == kInvalidLayer) return out; // slot pool exhausted (should not happen)
+    // PRINT THE NUMBER EVERY RUN. Which half of a floor entry costs what has been
+    // folklore ("generation is cheap, the nav bake is the slow one"); now it is a
+    // line in the log. Feeds the open question of whether a visited floor should
+    // skip geometry generation entirely.
+    const auto tGen0 = std::chrono::steady_clock::now();
     generate_floor(stack.layer(slot), fm.number, floor_spec(fm.kind), fm.seed);
+    const auto tGen1 = std::chrono::steady_clock::now();
 
     // A VISITED FLOOR IS ITS SNAPSHOT. Restore it HERE — immediately after
     // generation and before anything attaches itself to the geometry.
@@ -309,7 +316,18 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
     // File I/O stays in the app (`save.h`'s split: giga_game reads no files), so
     // the restore arrives as a hook. No hook, or no file, or a refused file =>
     // the freshly generated floor stands, which is exactly the first-visit case.
-    if (restore_) restore_(stack.layer(slot), fm.number);
+    const auto tRes0 = std::chrono::steady_clock::now();
+    const bool restored = restore_ ? restore_(stack.layer(slot), fm.number) : false;
+    const auto tRes1 = std::chrono::steady_clock::now();
+    {
+        auto ms = [](auto a, auto b) {
+            return std::chrono::duration<double, std::milli>(b - a).count();
+        };
+        std::fprintf(stderr,
+                     "[floor] %d: generate %.1f ms | restore %s %.1f ms\n",
+                     fm.number, ms(tGen0, tGen1),
+                     restored ? "HIT" : "miss", ms(tRes0, tRes1));
+    }
     // Antourage AFTER the geometry: it READS the finished grid as context and
     // never writes it ([antourage.md] — the dressing is mesh on anchors, so
     // nav has nothing to route around and does not care where in the load this
