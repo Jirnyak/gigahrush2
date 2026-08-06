@@ -4351,6 +4351,21 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Session over: the last body on the floor died and possess_a_survivor
+        // found no one to fall into (:4305). `running = false` alone does NOT end
+        // the frame — the sim loop above closes here, but `while (running)` is only
+        // re-tested at the top of the next iteration, so control would fall
+        // straight into rendering with `player == entt::null`. The HUD block reads
+        // `reg.get<Transform>(player)` unguarded, and Release compiles EnTT's
+        // asserts out (NDEBUG), so that is an unchecked sparse-set index — a silent
+        // out-of-bounds read, not a clean abort.
+        //
+        // Bailing here rather than guarding each read: a frame with no player is
+        // not meaningful to draw (compute_camera finds no CameraTag and yields a
+        // stale matrix), and a per-read guard has to be repeated at every `player`
+        // access below — one of which was already missed once.
+        if (!running) break;
+
         // --- render --------------------------------------------------------
         int fbw = 0, fbh = 0;
         SDL_GetWindowSizeInPixels(window, &fbw, &fbh);
