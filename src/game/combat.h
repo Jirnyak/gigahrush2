@@ -543,9 +543,14 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
 // `emplace<Dead>` and reallocate the storage the view is walking.
 //
 // Returns the number of bodies that took hazard damage this step.
+//
+// Optional `gravity`: decides which neighbouring cell counts as "the one the body
+// stands on". Null keeps the -Z probe, which is correct under the shipping NegZ
+// regime and wrong under every other one.
 std::uint32_t hazard_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                           LayerId layer, std::uint64_t tick,
-                          ParticleBurstQueue* particles = nullptr);
+                          ParticleBurstQueue* particles = nullptr,
+                          const GravityField* gravity = nullptr);
 
 void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
                       const vec3& to, std::int16_t dmg,

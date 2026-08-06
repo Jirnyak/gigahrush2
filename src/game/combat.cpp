@@ -175,23 +175,36 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
     // Blood — the unified particle pool's one writer for every hurt body
     // ([particles.h]). Psi is mental and bleeds nothing; everything physical
     // sprays away from the attacker, scaled by what actually landed.
+    //
+    // The 0.45 upward bias and the 0.9 chest offset ride the layer's gravity
+    // vector rather than +Z, and the away-from-attacker component is taken in the
+    // plane perpendicular to gravity — the same derivation the knockback block
+    // above makes, from the same `gravity` parameter, which was already in scope
+    // and simply went unread here. Magnitudes are untouched: only the frame they
+    // are expressed in changes. With no field the old +Z / XY frame stands, and
+    // it does so bit-for-bit — with up = {0,0,1} the stripped vector is exactly
+    // (dx, dy, 0), so `len` is the old sqrt(dx*dx + dy*dy) and the spawn point is
+    // the old pos.z + 0.9.
     if (particles && out.applied > 0 && ch != DamageChannel::Psi) {
         if (const Transform* tt = reg.try_get<Transform>(target)) {
-            vec3 dir{0.0f, 0.0f, 0.45f};
+            vec3 up{0.0f, 0.0f, 1.0f};
+            if (gravity) {
+                const vec3 g = gravity->at(tt->pos);
+                const float gLen = length(g);
+                if (gLen > 1e-6f) up = g * (-1.0f / gLen);
+            }
+            vec3 dir = up * 0.45f;
             if (reg.valid(source)) {
                 if (const Transform* st = reg.try_get<Transform>(source)) {
-                    const float dx = tt->pos.x - st->pos.x;
-                    const float dy = tt->pos.y - st->pos.y;
-                    const float len = std::sqrt(dx * dx + dy * dy);
-                    if (len > 1e-3f) {
-                        dir.x = dx / len * 0.8f;
-                        dir.y = dy / len * 0.8f;
-                    }
+                    vec3 away = tt->pos - st->pos;
+                    away = away - up * dot(away, up);  // drop the vertical part
+                    const float len = length(away);
+                    if (len > 1e-3f) dir = dir + away * (0.8f / len);
                 }
             }
             const int n = 2 + out.applied / 3;
             particles->push(
-                vec3{tt->pos.x, tt->pos.y, tt->pos.z + 0.9f}, dir,
+                tt->pos + up * 0.9f, dir,
                 ParticleKind::Blood,
                 static_cast<std::uint8_t>(n > 18 ? 18 : n), 0,
                 static_cast<std::uint32_t>(entt::to_integral(target)) ^
@@ -707,7 +720,8 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
 
 std::uint32_t hazard_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                           LayerId layer, std::uint64_t tick,
-                          ParticleBurstQueue* particles) {
+                          ParticleBurstQueue* particles,
+                          const GravityField* gravity) {
     struct Hit {
         Entity body;
         std::int16_t dmg;
@@ -729,8 +743,30 @@ std::uint32_t hazard_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         const int cy = wrap_macro(static_cast<int>(tr.pos.y / kCellSize));
         const int cz = wrap_macro(static_cast<int>(tr.pos.z / kCellSize));
         CellHazard hz = get_cell_hazard(grid.cell(cx, cy, cz));
-        if (!hz.active)
-            hz = get_cell_hazard(grid.cell(cx, cy, wrap_macro(cz - 1)));
+        if (!hz.active) {
+            // "The cell it stands ON" is one step along GRAVITY, not one step
+            // down -Z. `regime_down` already spells that step for the six axis
+            // regimes; Custom is resolved to its nearest axis the same way
+            // gravity_frames does it, and Zero returns {0,0,0} — correctly, since
+            // a body in free fall stands on nothing and the probe is skipped.
+            //
+            // Under the shipping NegZ this is {0,0,-1} and therefore identical to
+            // the old `cz - 1`. It mattered everywhere else: under PosZ the probe
+            // read the CEILING, and under any lateral regime an unrelated WALL —
+            // so the acid you were standing in stopped burning while a wall you
+            // merely passed started to.
+            CellStep d{0, 0, -1};
+            if (gravity) {
+                GravityRegime r = gravity->regime;
+                if (r == GravityRegime::Custom)
+                    r = regime_from_vector(gravity->at(tr.pos));
+                d = regime_down(r);
+            }
+            if (d.x != 0 || d.y != 0 || d.z != 0)
+                hz = get_cell_hazard(grid.cell(wrap_macro(cx + d.x),
+                                               wrap_macro(cy + d.y),
+                                               wrap_macro(cz + d.z)));
+        }
         if (!hz.active) continue;
 
         // Identity stagger on the entity, matching the monster path exactly.
