@@ -465,10 +465,17 @@ struct DamageResult {
 // the unified-pool law ([particles.h]): apply_damage IS the blood writer, so a
 // bullet, a swing, a fall and a hazard all bleed through one line. Null keeps
 // the pre-particle path bit-for-bit (tests compile unchanged).
+//
+// Optional `gravity`: the field the knockback plane is derived from. A hit shoves
+// the target along the FLOOR, and "floor" means "perpendicular to gravity here",
+// never the XZ plane ([AGENTS.md]: gravity is a vector, -Z is not an axiom). When
+// null the impulse follows the raw line between attacker and target — isotropic,
+// no axis assumed, just uncorrected for slope. Pass it wherever the layer is known.
 DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
                           std::int16_t raw, DamageChannel ch, Entity source,
                           const MacroGrid* grid = nullptr,
-                          ParticleBurstQueue* particles = nullptr);
+                          ParticleBurstQueue* particles = nullptr,
+                          const GravityField* gravity = nullptr);
 
 // THE death finalizer, and the only place an entity dies. Publishes one NpcDied
 // per death (payload: `a` = victim NpcId or kInvalidNpc for a mob, `b` = MobKind
@@ -507,10 +514,12 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
 // Returns the number of swings that landed.
 // `grid` is read only for the wall-adjacency test AiFlag::WallBias needs — four
 // cardinal cell reads, and only for a monster actually in reach and swinging.
+// `gravity` is forwarded to apply_damage so the knockback plane matches the layer.
 std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
                              NpcPool& pool, EventBus& bus,
                              LayerId layer, float dt, std::uint64_t tick,
-                             ParticleBurstQueue* particles = nullptr);
+                             ParticleBurstQueue* particles = nullptr,
+                             const GravityField* gravity = nullptr);
 
 // Cell hazards for EMBODIED BODIES — the player and every resident.
 //
@@ -669,12 +678,14 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
 // Optional `status`: when non-null, swing damage is scaled by
 // status_melee_mult_e3 (Zhelemish 0.7 etc). Null keeps the pre-STATMELEE path
 // bit-for-bit (tests compile unchanged).
+// Optional `gravity`: forwarded to apply_damage for the knockback plane.
 bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId layer,
                        float dt, bool wantsAttack, std::uint64_t tick,
                        const MacroGrid* grid = nullptr,
                        CarveProposalQueue* carves = nullptr,
                        const StatusSet* status = nullptr,
-                       ParticleBurstQueue* particles = nullptr);
+                       ParticleBurstQueue* particles = nullptr,
+                       const GravityField* gravity = nullptr);
 
 // Current/maximum HP of an entity, wherever its HP lives. Returns false if it
 // holds none. For HUD and tests.

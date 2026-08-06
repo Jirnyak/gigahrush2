@@ -3699,12 +3699,14 @@ int main(int argc, char** argv) {
                     reg, pool, bus, activeLayer, kSimDt,
                     !haveGun && attackHeld && !paused, simTick,
                     &stack.layer(activeLayer).grid(), &combatCarves,
-                    &playerStatus, &particleBursts);
+                    &playerStatus, &particleBursts,
+                    &stack.layer(activeLayer).gravity());
                 meleeHits += game::mob_attack_step(reg,
                                    stack.layer(activeLayer).grid(),
                                    pool, bus, activeLayer,
                                                    kSimDt, simTick,
-                                                   &particleBursts);
+                                                   &particleBursts,
+                                   &stack.layer(activeLayer).gravity());
                 // Fire, acid and live grates bill EVERY embodied body, not just
                 // monsters. Straight after the monster sweep so both pay on the
                 // same tick and the same 1-in-16 cadence. [problems.md] §41
