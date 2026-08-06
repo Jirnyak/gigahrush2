@@ -4719,21 +4719,33 @@ int main(int argc, char** argv) {
                             game::economy_band(currentFloor));
                 // CARRIED WEIGHT — the reader `ItemDef::massG` exists for. Slots
                 // alone never said what a load-out COSTS: sixty rifle rounds and
-                // sixty documents occupy one slot each and are 0.96 kg against
-                // 1.2 kg of paper. The budget is a flat 50 kg ([item_table.h]
-                // kCarryBaseG); the manifesto's "+1 kg per Выносливость" is absent
-                // because there is no Endurance attribute to read ([rpg.h] Attr is
-                // Str/Agi/Int), and the HUD says the flat number rather than
-                // implying a stat that does not exist.
+                // sixty documents each occupy one slot and are 0.96 kg against
+                // 1.5 kg of paper.
+                //
+                // The budget is THIS BODY's, not a constant: 64 kg + 4 kg per point
+                // of Strength ([rpg.h] carry_capacity_g). Printed with the Str that
+                // produced it, because a number that moves when you level up should
+                // say why on the same line.
                 if (reg.valid(player)) {
                     if (const auto* nr = reg.try_get<game::NpcRef>(player)) {
                         if (pool.valid(nr->id)) {
                             const std::uint32_t heldG =
                                 game::inventory_mass_g(pool.inventory(nr->id));
-                            ImGui::Text("weight %.1f / %.0f kg%s",
-                                        static_cast<double>(heldG) / 1000.0,
-                                        static_cast<double>(game::kCarryBaseG) / 1000.0,
-                                        heldG > game::kCarryBaseG ? "  OVERLOADED" : "");
+                            // The sheet is an ECS component, not a pool column
+                            // ([combat.h] "RpgStats: copy from -> to"), so a body
+                            // with none reads as Str 0 rather than as no budget.
+                            const game::RpgStats rs =
+                                reg.all_of<game::RpgStats>(player)
+                                    ? reg.get<game::RpgStats>(player)
+                                    : game::RpgStats{};
+                            const std::uint32_t capG = game::carry_capacity_g(rs);
+                            ImGui::Text(
+                                "weight %.1f / %.0f kg  (64 + 4 x STR %u)%s",
+                                static_cast<double>(heldG) / 1000.0,
+                                static_cast<double>(capG) / 1000.0,
+                                static_cast<unsigned>(
+                                    rs.attr[static_cast<std::size_t>(game::Attr::Str)]),
+                                heldG > capG ? "  OVERLOADED" : "");
                         }
                     }
                 }

@@ -726,7 +726,12 @@ if(GIGA_BUILD_TESTS)
     # than 442 numbers: only the 20 psi techniques are weightless, the range is
     # really spanned, and stack COUNT multiplies.
     #   [items] mass: 20 weightless, lightest 6 g, heaviest 26000 g (АТО-41)
-        PASS_REGULAR_EXPRESSION "game_test: 235093 checks, 0 failures")
+    # 235093 -> 235098 on 2026-08-06: +5, CARRY CAPACITY moved off a flat constant
+    # onto the body: 64 kg + 4 kg per point of Strength ([rpg.h] carry_capacity_g).
+    # The extra CHECKs pin the two endpoints and the EVENNESS the owner asked for —
+    # both constants are powers of two in kilogrammes, so a capacity can never come
+    # out odd, and a stray constant that broke that would otherwise be silent.
+        PASS_REGULAR_EXPRESSION "game_test: 235098 checks, 0 failures")
 
 
 

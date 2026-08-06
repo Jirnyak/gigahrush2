@@ -503,11 +503,25 @@ static void test_loottable_all() {
         CHECK(carried == item_def(heaviestId).massG +
                              60u * item_def(lightestId).massG);
         CHECK(carried > item_def(heaviestId).massG); // the 60 actually counted
-        std::printf("[items] %s + 60 x %s = %.2f kg of a %.0f kg budget\n",
+        // THE BUDGET IS THE BODY'S: 64 kg + 4 kg per Strength ([rpg.h]). Both are
+        // powers of two in kilogrammes, so a capacity is always even — asserted,
+        // because that is the property the owner asked for and a stray odd
+        // constant would break it silently.
+        RpgStats weak{};   // Str 0
+        RpgStats strong{};
+        strong.attr[static_cast<std::size_t>(Attr::Str)] = 8;
+        CHECK(carry_capacity_g(weak) == 64000u);
+        CHECK(carry_capacity_g(strong) == 64000u + 8u * 4000u); // 96 kg
+        CHECK(carry_capacity_g(weak) % 2000u == 0u);
+        CHECK(carry_capacity_g(strong) % 2000u == 0u);
+        CHECK(carry_capacity_g(strong) > carry_capacity_g(weak));
+        std::printf("[items] %s + 60 x %s = %.2f kg | budget %.0f kg at STR 0, "
+                    "%.0f kg at STR 8\n",
                     item_name(heaviestId), item_name(lightestId),
                     static_cast<double>(carried) / 1000.0,
-                    static_cast<double>(kCarryBaseG) / 1000.0);
-        CHECK(carried > 0u && carried < kCarryBaseG);
+                    static_cast<double>(carry_capacity_g(weak)) / 1000.0,
+                    static_cast<double>(carry_capacity_g(strong)) / 1000.0);
+        CHECK(carried > 0u && carried < carry_capacity_g(weak));
         // An empty grid weighs nothing, and a zero-count slot is not a phantom kilo.
         Inventory none{};
         CHECK(inventory_mass_g(none) == 0u);

@@ -131,12 +131,10 @@ inline const char* item_name(ItemId id) {
 // purpose: a data column with no consumer is [problems.md] §35's whole class, and
 // this table was on course to become the biggest example of it in the tree.
 //
-// The budget is a flat 50 kg ([jirnyak.md] §8.5). The manifesto also grants
-// "+1 kg per Выносливость", and that half is NOT implemented, because `Attr`
-// ([rpg.h]) is {Str, Agi, Int} — there is no Endurance attribute to read yet.
-// Stated rather than faked with a constant pretending to be a stat.
-inline constexpr std::uint32_t kCarryBaseG = 50000;
-
+// The BUDGET this is weighed against lives in [rpg.h] (`carry_capacity_g`), not
+// here, because it is a property of the character and not of the catalog: 64 kg
+// plus 4 kg per point of Strength. This file only answers "how much is in the bag".
+//
 // Total grams held in one 8x8 grid. O(kInvSlots), no allocation, and it is the
 // stack COUNT that multiplies — sixty 9 mm rounds weigh sixty times one round.
 inline std::uint32_t inventory_mass_g(const Inventory& inv) {

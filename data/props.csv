@@ -1,10 +1,10 @@
-id,name,shape,fall_mode,interact,emissive,mat_id,color_r_e3,color_g_e3,color_b_e3,reach_mm,mass_kg,size_x_m,size_y_m,size_z_m
-terminal,Терминал,Box,SimpleFall,Terminal,0,3,320,350,380,2500,45,0.9,0.45,1.4
-electrical_shield,Электрощиток,Box,SimpleFall,ElectricalShield,0,4,180,200,220,2500,25,0.6,0.22,0.9
-bare_bulb,Лампочка Ильича,CylinderZ,RagdollRoll,LightBulb,210,0,1000,780,450,2500,0.3,0.12,0.12,0.22
-flood_lamp,Прожектор,Box,RagdollRoll,LightBulb,150,0,1000,780,450,2500,6,0.5,0.14,0.28
-padic_stair_bulb,Лампочка падика,CylinderZ,RagdollRoll,LightBulb,210,0,1000,950,700,2500,0.3,0.12,0.12,0.22
-kitchen_stove,Плита,Box,SimpleFall,Terminal,0,4,420,430,400,2500,80,0.7,0.6,0.9
-kitchen_table,Стол,Box,SimpleFall,Terminal,0,3,520,420,300,2500,25,1.1,0.7,0.78
-toilet_pan,Унитаз,CylinderZ,SimpleFall,Terminal,0,3,880,890,870,2500,35,0.4,0.4,0.75
-bed_cot,Койка,Box,SimpleFall,Terminal,0,3,300,340,420,2500,40,1.9,0.85,0.5
+id,name,shape,fall_mode,interact,emissive,mat_id,color_r_e3,color_g_e3,color_b_e3,reach_mm,mass_g,size_x_m,size_y_m,size_z_m
+terminal,Терминал,Box,SimpleFall,Terminal,0,3,320,350,380,2500,45000,0.9,0.45,1.4
+electrical_shield,Электрощиток,Box,SimpleFall,ElectricalShield,0,4,180,200,220,2500,25000,0.6,0.22,0.9
+bare_bulb,Лампочка Ильича,CylinderZ,RagdollRoll,LightBulb,210,0,1000,780,450,2500,300,0.12,0.12,0.22
+flood_lamp,Прожектор,Box,RagdollRoll,LightBulb,150,0,1000,780,450,2500,6000,0.5,0.14,0.28
+padic_stair_bulb,Лампочка падика,CylinderZ,RagdollRoll,LightBulb,210,0,1000,950,700,2500,300,0.12,0.12,0.22
+kitchen_stove,Плита,Box,SimpleFall,Terminal,0,4,420,430,400,2500,80000,0.7,0.6,0.9
+kitchen_table,Стол,Box,SimpleFall,Terminal,0,3,520,420,300,2500,25000,1.1,0.7,0.78
+toilet_pan,Унитаз,CylinderZ,SimpleFall,Terminal,0,3,880,890,870,2500,35000,0.4,0.4,0.75
+bed_cot,Койка,Box,SimpleFall,Terminal,0,3,300,340,420,2500,40000,1.9,0.85,0.5

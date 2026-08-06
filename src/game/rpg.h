@@ -104,6 +104,32 @@ struct RpgStats {
 static_assert(sizeof(RpgStats) == 12, "RpgStats must stay a tight POD");
 static_assert(std::is_trivially_copyable_v<RpgStats>);
 
+// ---------------------------------------------------------------------------
+// CARRY CAPACITY — what STRENGTH is for, and the first thing in this file that
+// spends an attribute on something the player can feel.
+// ---------------------------------------------------------------------------
+// 64 kg base, +4 kg per point of Str. Both are powers of two in KILOGRAMS
+// (2^6 and 2^2), which is the owner's call and the house style ([jirnyak.md] §1:
+// prefer powers of two wherever a number is free to be one). The useful
+// consequence is that a capacity is always 64 + 4*str — even, and readable at a
+// glance as "how many rifles" rather than as an arbitrary budget.
+//
+// GRAMS, like every other mass in the tree ([item_table.h] massG, [prop_table.h],
+// [mob_table.h]) — a capacity and a load must be the same kind of number or the
+// comparison needs a conversion, and a conversion is where units go wrong.
+//
+// It reads STRENGTH and not Endurance deliberately: `Attr` is {Str, Agi, Int}
+// ([rpg.h] above) and the manifesto's eight-attribute sheet is not built. Hanging
+// this off Str is the honest wiring for the attributes that EXIST; the day
+// Endurance lands, this is the one line that moves.
+inline constexpr std::uint32_t kCarryBaseG = 64000;
+inline constexpr std::uint32_t kCarryPerStrG = 4000;
+
+inline constexpr std::uint32_t carry_capacity_g(const RpgStats& r) {
+    return kCarryBaseG +
+           kCarryPerStrG * static_cast<std::uint32_t>(r.attr[static_cast<std::size_t>(Attr::Str)]);
+}
+
 // Base + per-level linear growth, straight from the reference constants.
 inline constexpr std::uint16_t kBaseHp = 100;
 inline constexpr std::uint16_t kHpPerLevel = 1;
