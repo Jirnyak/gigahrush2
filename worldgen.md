@@ -1,84 +1,42 @@
-# Worldgen — Demo world modules
+# Worldgen — DELETED (2026-08-02)
 
-Enough world to prove the core (macro grid, sub-voxels, fields, fluid, toroidal
-physics) renders and is walkable. **Not part of the engine contract** — a real
-game replaces these with its own generators. Two modes ship, selected at launch.
+**This system no longer exists.** `src/app/worldgen.{cpp,h}` were removed with the
+legacy meshers, and the two launch modes this file used to document —
+`gigahrush2 maze` and `gigahrush2 floors` — are gone with them:
+[src/app/main.cpp](src/app/main.cpp) parses only flags (`--shot`, `--frames`,
+`--ride`, `--floor`, `--pos`, `--yaw`, `--pitch`, `--orbit`, `--action`,
+`--no-hud`, `--mirror-verify`) and has no positional world-mode argument at all.
 
-- **Code:** [src/app/worldgen.cpp](src/app/worldgen.cpp) /
-  [worldgen.h](src/app/worldgen.h)
-- **Architecture:** [ARCHITECTURE.md](ARCHITECTURE.md) §L4
+The document is kept as a tombstone rather than deleted because
+[ARCHITECTURE.md](ARCHITECTURE.md) and older commit messages link to it, and a
+dangling link reads as "the doc was lost" rather than "the system was cut".
 
-## Selecting a mode
+## What replaced it
 
-```sh
-./build/gigahrush2            # FloorStack (default)
-./build/gigahrush2 floors     # FloorStack, explicit
-./build/gigahrush2 maze       # Maze
-```
+Geometry is a **floor module**: a folder under `src/game/floors/<name>/` claimed
+by the floor catalog. See [floors.md](floors.md) for the module contract and
+[src/game/floor_gen.h](src/game/floor_gen.h) for the dispatch seam. The only
+registered geometric module today is **padic**
+([src/game/floors/padic](src/game/floors/padic)) — a dormitory tower of 3-cell
+storeys on a two-slab sandwich, with BSP apartments and real stair shafts.
 
-Both are deterministic given the seed (xorshift32, bit-compatible with the
-reference generator). Same seed → same world within a build.
+## What survived the deletion, and where it lives now
 
-## Cell scale
+- **Cell scale** — one macro cell is ~2 m (`kCellSize = 2.0`,
+  [src/world/types.h](src/world/types.h)), so a sub-voxel is 0.25 m and the
+  128-cell torus is **256 m** across (`kWorldExtent`). Unchanged.
+- **Determinism** — the ONE-FLOOR-ONE-SEED law. A floor's geometry is a pure
+  function of `(seed, floor number, FloorSpec)`, which is what lets a
+  streamed-out floor be regenerated bit-for-bit on return instead of persisted.
+  See [floors.md](floors.md).
+- **The maze's purpose** — proving isotropy and the torus visually — is now
+  served by the isotropy tests (`test_antourage_isotropy`, `test_gravity_frames`)
+  rather than by a launchable world.
 
-One macro cell is **~2 m** (`kCellSize = 2.0`, [types.h](src/world/types.h)),
-matching the reference game's block scale, so a sub-voxel is 0.25 m and gravity /
-move / jump speeds read as real m/s. Corridors are one cell (2 m) wide and
-doorways two cells (4 m) tall — a human-sized collider fits.
+## What did NOT survive, and is a real gap
 
-## Mode: Maze (isotropy test bed)
-
-A **fully-connected 3D labyrinth** — the isotropy proof. Every open cell is
-reachable from every other, and the maze wraps on all three axes, so a corridor
-running off one face re-enters from the opposite one (a true torus, not a box).
-
-- **Lattice.** Macro cells at *even* coordinates are "rooms" (64³ of them); the
-  odd cell between two rooms is the "wall" knocked out to join them. 128 is even,
-  so the lattice tiles the torus seamlessly (room 63 → room 0 on wrap).
-- **Carve.** Recursive-backtracker (growing-tree family, the same class the
-  reference floor generator uses, lifted 2D→3D) with an explicit stack: from the
-  current room pick a random unvisited neighbour along any of the 6 axial
-  directions (wrapped), clear the wall between them, advance; backtrack when
-  stuck. Result is a perfect maze.
-- **Braiding.** ~18 % of wall cells are then opened to add loops and junctions,
-  so it reads as a warren rather than a bare spanning tree.
-
-This mode exists to make the torus and isotropy *visible*: fly any direction and
-the structure looks the same; fly far enough on any axis and you wrap back into
-the same connected maze.
-
-## Mode: FloorStack (khrushchevka)
-
-A **toroidal stack of building floors** — 2D apartment plans extruded to a fixed
-height and stacked along Z. Because Z wraps, the top floor's ceiling *is* floor
-0's slab: the stack has **no top and no bottom**.
-
-- **Storeys.** `kFloorHeight = 4` cells (8 m) × `kFloorCount = 32` floors = 128.
-  The height must divide `kMacroDim` so the stack tiles the torus exactly.
-- **Slab.** Each storey opens with a solid concrete plane (the floor, and the
-  ceiling of the storey below / the top storey on wrap).
-- **Apartments.** Full-height interior walls on a `kRoomStride = 16` cell lattice
-  (8×8 rooms per floor); the stride divides `kMacroDim` so walls are seamless
-  across the x/y wrap. One-cell doorways (2 cells tall) join adjacent rooms, so
-  each floor is a single connected apartment graph. Door offsets jitter per floor.
-- **Stairwells.** A few 2×2 vertical shafts are punched through every slab across
-  the full Z column, connecting storeys — and, via the Z wrap, the top floor back
-  to floor 0.
-
-> **Note — this is demo geometry, not the floor *module* system.** Real floors
-> are chartered modules with number↔slot indirection, rule-sets, and per-floor
-> content, and travel between them is via elevators along the **W** axis (which
-> does *not* wrap). See [floors.md](floors.md) / [elevators.md](elevators.md).
-> This mode just stacks storeys inside one 128³ world along Z to exercise the
-> grid; do not confuse the Z-stack demo with the W-axis floor architecture.
-
-## Fields
-
-Both modes seed a little `fluid` field ([fields.md](fields.md)) near the spawn so
-the fluid sim ([fluid.md](fluid.md)) and HUD controls have something to move.
-
-## Connections
-
-Writes the [voxels.md](voxels.md) grid and [fields.md](fields.md); exercised by
-[physics.md](physics.md) (toroidal collision + position wrap). Superseded by the
-game-layer generators behind [floors.md](floors.md).
+The old FloorStack mode seeded a little `fluid` field near spawn so the fluid
+sim had something to move. **No floor module seeds standing water today**, which
+is why `fluid_step` is not called from the frame loop at all
+([src/app/main.cpp](src/app/main.cpp) says so at the call site). See
+[problems.md](problems.md) §13.

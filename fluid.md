@@ -32,7 +32,10 @@ Fluid is just a registered [field](fields.md) — proving the field system carri
 real simulation state, not only static overlays. A game can run several
 independent fluids (water, lava, gas) by naming different fields.
 
-**Where it runs.** `fluid_step` is the CPU prototype (throttled, maze demo only).
+**Where it runs — NOWHERE today.** The padic module seeds real water (lattice
+pits, stair sumps) and the mirror uploads it, but `fluid_step` has no caller
+outside the tests: the water is painted and frozen. The maze demo it used to
+run in was deleted with `src/app/worldgen.cpp` ([worldgen.md](worldgen.md)).
 As a *cellular field* it belongs on the **GPU as an async-compute stencil** like
 every other field — fluids, gases, and heat share the same substrate and the same
 destination ([performance.md](performance.md) §The compute split). The CPU agent
@@ -41,5 +44,5 @@ tick never pays for it.
 ## Connections
 
 Uses [fields.md](fields.md) for storage, [voxels.md](voxels.md) masks for
-blocking, and [gravity.md](gravity.md) for flow direction. The cube pass tints
+blocking, and [gravity.md](gravity.md) for flow direction. The RAYMARCH pass tints
 cells by this field ([render.md](render.md)).

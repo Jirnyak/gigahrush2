@@ -6,7 +6,8 @@
 > ([inventory.h](src/game/inventory.h)) and the embodied needs
 > ([needs.h](src/game/needs.h)).
 >
-> - **Source of truth is [data/items.csv](data/items.csv)** - 446 rows. Adding an item
+> - **Source of truth is [data/items.csv](data/items.csv)** - **442 rows** (the port
+>   landed 446; four have since been purged). Adding an item
 >   is one row plus `python tools/gen_item_table.py`, which regenerates
 >   [src/game/item_table.cpp](src/game/item_table.cpp). The `source_rules` ctest
 >   compares the csv row count against `kItemCount`, so a regenerated table and an
@@ -38,7 +39,7 @@ Each `ItemDef` row carries:
 
 - **`category`** (`ItemCategory`, [item_table.h](src/game/item_table.h)):
   Misc/Weapon/Food/Medicine/Ammo/Tool/Drink/Key/Note. The ordinals are OUR
-  frequency order (Misc = 0, the 268-row bulk), not the reference's — the CSV
+  frequency order (Misc = 0, the 265-row bulk), not the reference's — the CSV
   authors the name, the generator assigns the number, so nothing may key on it.
 - **`name`** — the reference string key (`"bread"`, `"ak47"`) for HUD/debug and
   loot resolution; `item_id("bread")` resolves it back to the id (cold path).
@@ -47,7 +48,7 @@ Each `ItemDef` row carries:
 - **`resist[5]`** — armor mitigation percent per `DamageChannel`
   ([combat.h](src/game/combat.h): Kinetic/Buckshot/Energy/Fire/Psi), pinned equal
   to `DamageChannel::Count`; 0 on non-armor.
-- **`tags_hot` / `tags_all`** — authored as STRINGS in the CSV (465 distinct
+- **`tags_hot` / `tags_all`** — authored as STRINGS in the CSV (459 distinct
   ones). Honest status: **no consumer reads them yet** — the two-tier flattening
   into a bitmask is a planned pass, and until it lands loot placement, the economy
   and the AI branch on `category`, `spawn_rooms` and the numeric scores instead.
@@ -62,17 +63,21 @@ by `category` and their `value` for now.
 ### Use-effects close the digestion loop
 
 The reference stores `use` as a closure; a closure is not data and cannot sit in
-a static table or serialise, so each is re-encoded as the **deltas it applied** —
-a flat `UseEffect { dFood, dWater, dSleep, dHp, dPsi, dPendingPoo, dPendingPee,
-transformOutput, transformCount }`, with products **baked at authoring time**
-(reference `feed(15)` → `dFood 15`, `dPendingPoo 10.5`, `dPendingPee 4.5`).
+a static table or serialise, so each is re-encoded as a **named `UseEffect`
+archetype** — `Heal`, `HealPsi`, `Feed`, `FeedPsi`, `FeedRisky`, `Drink`,
+`DrinkStim`, `Painkiller`, `Antiemetic`, `PsiSurge`, `SleepingPills`,
+`TechnicalSpirit`, `Unpack`, `UnsealSample`, `RedeemCoupon` — plus ONE signed
+magnitude `useA` on the row ([src/game/item_table.h](src/game/item_table.h)).
 
-`apply_use_effect(needs, hp, maxHp, def)` applies one row in place: reserves
-clamp to `[0,100]`, hp clamps to `[0,maxHp]`, and the **pending pools are exactly
-the ones `needs_step` ([ai.md](ai.md) #12a) digests into pee/poo pressure** — so
-eating here *closes the digestion loop the needs system already models*. `dPsi`
-is stored but not applied (no psi stat yet — the same stubbed-input stance as the
-scorer). It returns the id the item transforms into (`0` = fully consumed).
+**The struct this section used to describe does not exist**, and neither does
+`apply_use_effect`: there is no `UseEffect { dFood, dWater, … }` and no
+`dPendingPoo`/`transformOutput` field anywhere in `src/`. Do not go looking for
+them. What exists: `needs.cpp` dispatches `Feed` / `FeedPsi` / `FeedRisky` /
+`Drink` / `DrinkStim` / `SleepingPills`, and `loot.cpp` dispatches `Heal`. The
+other **eight archetypes have no handler at all**, so the items carrying them are
+purchasable and inert ([problems.md](problems.md) §35). The second CSV column
+`use_b` is likewise unread — the risky-feed HP cost is a hardcoded constant that
+disagrees with the authored data on two rows.
 
 ## Monster death-drop loot tables (built)
 

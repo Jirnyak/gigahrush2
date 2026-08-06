@@ -173,7 +173,7 @@ between them is the point:
   statistics of a flat-lit photograph and holds nothing about whether a surface is
   ribbed, planked or tiled, nor how deep a groove is. Nine families — generic,
   plaster, plank, tile, ribbed, tread, rust, rubble, smooth — are declared in
-  [tools/gen_material_surface.py](tools/gen_material_surface.py) and implemented in
+  [tools/gen_material_table.py](tools/gen_material_table.py) and implemented in
   [cube.frag](shaders/cube.frag). Periodic families fade themselves out via
   `fwidth`, because regular structure aliases where noise merely goes grey.
 
@@ -187,7 +187,7 @@ Two consequences worth keeping:
   amplitude alone cannot separate the two Derelict surfaces. The **family** does.
   That is the argument for structure over a single roughness dial.
 
-The table is **generated**: `tools/gen_material_surface.py` reads
+The table is **generated**: `tools/gen_material_table.py` reads
 `data/materials.csv` and emits `shaders/material_surface.glsl`, which `cube.frag`
 `#include`s. It is the fourth generated table in the tree and it joined the
 `source_rules` CSV-drift gate in the same change as the generator. Two traps:

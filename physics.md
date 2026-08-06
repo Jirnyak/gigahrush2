@@ -11,7 +11,10 @@ slide along walls and land flush on sub-voxel surfaces.
 
 ## Model
 
-`physics_step(reg, stack, dt, params)` iterates `view<Transform, Velocity>`:
+`physics_step(reg, stack, dt, params)` iterates
+`view<Transform, Velocity>(entt::exclude<SelfIntegrating>)` — anything that
+integrates its own motion (projectiles) carries that tag and must NOT be moved
+twice; until the exclusion existed they ran at double speed and double gravity:
 
 1. **Substep** `dt` (up to `maxSubsteps`, capped at `maxStep`) so fast movers
    don't tunnel through thin sub-voxel walls.

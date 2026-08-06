@@ -3,7 +3,7 @@
 # GIGAH|RUSH 2 — Architectural Manifesto & Next-Gen Voxel Engine
 
 [![C++23](https://img.shields.io/badge/Standard-C%2B%2B23-blue?style=for-the-badge)]()
-[![OpenGL](https://img.shields.io/badge/Render-OpenGL%204.6-red?style=for-the-badge)]()
+[![Vulkan](https://img.shields.io/badge/Render-Vulkan%20(MoltenVK)-red?style=for-the-badge)]()
 [![Build](https://img.shields.io/badge/Build-Passing-brightgreen?style=for-the-badge)]()
 [![Audit](https://img.shields.io/badge/Audit-100%25%20Verified-purple?style=for-the-badge)]()
 [![Zero Alloc](https://img.shields.io/badge/Runtime-Zero%20Allocation-00ff88?style=for-the-badge)]()
@@ -59,7 +59,7 @@
 ```
 
 ### 1. Active Floor Topology & Torus
-- **128³ Cell Grid:** Active floor is a $128 \times 128 \times 128$ toroidal world ($kWorldExtent = 128$, cell size $\approx 2\,\text{m}$).
+- **128³ Cell Grid:** Active floor is a $128 \times 128 \times 128$ toroidal world. `kMacroDim = 128` cells at `kCellSize = 2.0` m, so **`kWorldExtent = 256` m** — the wrap period is the METRE extent, never the cell count. (Writing 128 here is the half-period mistake `problems.md` §7 cost a month to find.)
 - **1024³ Sub-Voxel Atoms:** Each cell contains $8 \times 8 \times 8$ sub-voxel material atoms ($1024^3$ total sub-voxels per floor).
 - **Toroidal Wrapping:** X, Y, and Z axes wrap seamlessly (`wrap_macro` / `wrap_delta`). Falling off any face re-enters from the opposite side. Level stack (W axis) does not wrap.
 
@@ -77,9 +77,9 @@
 - **Possess Ability:** Psi-control (`possess`) allows switching control to any NPC or mob.
 
 ### 5. RPG & 8-Attribute System ($2^3$ Power-of-Two Storage)
-- **Baseline (Level 0):** 8 attribute points, 1 perk point. Base HP = 100, Base Psi = 10.
+- **Baseline (Level 0):** 8 attribute points, 1 perk point. Base HP = 100, Base Psi = 100 (`kBaseHp`/`kBasePsi`, [src/game/rpg.h](src/game/rpg.h) — the pool is symmetric with HP).
 - **Leveling:** Each level grants +1 Attribute Point. Every 2nd level grants +1 Perk Point.
-- **8 Attributes:**
+- **8 Attributes** — *TARGET, not yet built.* Today `enum class Attr { Str, Agi, Int }` and `RpgStats.attr[3]` ([src/game/rpg.h](src/game/rpg.h)); the pool's generic block already reserves 8 slots, so slots 3..7 are free. See the conflict table at the end of [ARCHITECTURE.md](ARCHITECTURE.md).
   1. **Strength (Сила):** Melee damage multiplier (+1%).
   2. **Agility (Ловкость):** Weapon reload / attack speed (+1%).
   3. **Intelligence (Интеллект):** Psi damage (+1%).
@@ -107,18 +107,25 @@
 ### Prerequisites
 - C++23 compliant compiler (Clang 16+, GCC 13+, MSVC 2022+)
 - CMake 3.25+
-- OpenGL 4.6 / Vulkan drivers
+- Vulkan drivers (MoltenVK on macOS); `glslc` from shaderc
 - SDL3, EnTT
 
 ### Building Locally
 ```bash
-# Configure & build headless tests + main binary
-cmake -B build -DCMAKE_BUILD_TYPE=Debug
-cmake --build build --config Debug
+# Configure & build headless tests + main binary.
+# RELEASE, always. A Debug tree is ~10x slower on the sim (measured: 62.2 ms/frame
+# at -O0 against 5.9 ms at -O3, identical code) and reads exactly like a regression
+# in whatever landed last — see AGENTS.md §Build.
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
 
 # Run headless verification suite
 ctest --test-dir build --output-on-failure
 ```
+
+> Run the game **from the repo root**: `data/textures` is resolved relative to the
+> working directory, and from anywhere else all six texture sets silently fail to
+> load and the world renders procedural-only ([problems.md](problems.md) §31).
 
 ---
 

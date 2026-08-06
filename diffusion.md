@@ -63,7 +63,10 @@ vec3 g = diffusion_gradient(field, grid, x, y, z);
 A wrapped central difference over **open** neighbours per axis, falling back to a
 one-sided difference when one side is walled (that side carries no flux) and to 0
 when both sides are walls. Cheap and allocation-free — safe to call per agent on
-the tick. This is the flee vector the utility-AI (#12) steers by.
+the tick. This is the flee vector the utility-AI (#12) is *written* to steer by — but
+nothing wires `diffusion_tick` into the app loop, so `danger` is **null in the
+shipped game**, the threat term reads 0 and no body ever flees
+([src/app/main.cpp](src/app/main.cpp) says so at the call site).
 
 ## What it is *not*
 
@@ -79,8 +82,11 @@ Three distinct notions of "danger" must not be conflated:
 
 ## Where it runs
 
-`diffusion_step` runs on the **coarse macro tick**, not the 125 Hz sim tick —
-danger evolves on the order of the reference's `danger_field.ts` (~2×/s), not per
+`diffusion_step` runs on a coarse cadence derived FROM the sim tick, not per
+tick: `kDiffusionSweepTicks = 25` at `kSimHz = 125` is exactly **5 sweeps/s**
+([src/sim/diffusion.h](src/sim/diffusion.h)). The reference's `danger_field.ts`
+runs ~2×/s, but 125 has only the divisors 1, 5, 25 and 125, so 5/s is the
+nearest cadence that stays integral and keeps every decay figure exact. Not per
 frame. As a *cellular field* it belongs, like fluid/gas/heat, on the **GPU as an
 async-compute stencil** ([performance.md](performance.md) §The compute split); the
 current CPU implementation is the deterministic reference the GPU port must match.

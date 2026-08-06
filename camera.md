@@ -26,10 +26,16 @@ entity and returns `CameraMatrices { view, proj, eye, forward, valid }`:
 
 ## Clip-space note
 
-`mat4_perspective` in [core/math.h](src/core/math.h) currently emits GL-style
-`[-1, 1]` depth while the render pass clears depth to `1.0` with `LESS`. If far
-geometry renders behind the clear plane, map projected z to `[0, 1]` here or in
-the shared math. Tracked in [render.md](render.md).
+**Resolved — do not "fix" this again.** `mat4_perspective` in
+[core/math.h](src/core/math.h) emits **Vulkan `[0, 1]` depth**:
+`m[10] = zf / (zn - zf)`, `m[14] = (zn * zf) / (zn - zf)`, so the near plane maps
+to `z_ndc = 0` and the far plane to `1.0` — matching a depth buffer cleared to
+`1.0` with `VK_COMPARE_OP_LESS`. The caller flips Y once (`proj.m[5] = -proj.m[5]`)
+for Vulkan's +Y-down clip space, so world +Z renders up.
+
+This paragraph used to say the projection "currently emits GL-style `[-1, 1]`
+depth" and asked the next reader to convert it. That was stale, and the ask was
+the dangerous half: converting an already-correct matrix inverts the depth test.
 
 ## Connections
 

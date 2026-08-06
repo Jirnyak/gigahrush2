@@ -52,7 +52,10 @@ elevator target (floor number)  ──►  FloorRegistry  ──►  ModuleId  �
 
 - Floors occupy an array indexed roughly **−127 … 127**, **sparsely populated** —
   not every slot is filled; modules load/unload on demand.
-- Game starts at floor **0**. Adjacent travel (`±1`) via elevators reaches −1 /
+- Game starts at floor **0**. An elevator ride takes a DIRECTION, not an offset:
+  `next_labelled_floor` reaches the **nearest labelled floor** on that side,
+  because the stack is deliberately sparse — on the shipped building `[` from 0
+  lands on **−8**, not on −1. (Historical wording said it reaches −1 /
   +1. See [elevators.md](elevators.md) for the `4×4×4` = 64-node fast-travel
   lattice (which doubles as the [nav.md](nav.md) coarse graph).
 - W does not wrap ([world.md](world.md)); floors have a genuine top and bottom.
@@ -182,7 +185,10 @@ in the `NpcPool` ([npcs.md](npcs.md)).
   voxel anchors, the grid is never written, see [antourage.md](antourage.md)),
   and then its **navigation** into a per-module `FloorNav` (coarse graph + flow
   fields, freed on unload, retrieved via `nav_at`), with an opt-in disk cache —
-  see [nav.md](nav.md). This is the one place the full nav bake runs. Both bakes
+  see [nav.md](nav.md). **Today only the tests read that one:** the app runs its
+  own async bake (`begin_floor_nav` / `nav::AsyncBake` in `main.cpp`) after doors
+  are stamped, so the full bake currently runs TWICE per load and the cache dir
+  is never set ([problems.md](problems.md) §26). Both bakes
   are pure functions of `(grid, number, seed)`, so both are freed on eviction and
   neither is ever persisted.
 - **Leave** (`unload` / `keep_only`): every embodied body on the floor is

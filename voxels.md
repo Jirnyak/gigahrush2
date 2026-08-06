@@ -66,8 +66,10 @@ as a solid wall.
 
 ## Data-driven extension
 
-Add a cell type → pick an id and add a colour row in the cube pass. No engine
-branch. Carving detail = clearing/setting sub-voxel bits; physics picks it up
+Add a cell type → add one row to [data/materials.csv](data/materials.csv) and
+re-run `tools/gen_material_table.py`, which emits `world/materials.h`,
+`render/material_table.h` and the GLSL sibling. Hand-editing a colour into the
+cube pass is what the `source_rules` ctest exists to fail. No engine branch. Carving detail = clearing/setting sub-voxel bits; physics picks it up
 for free because collision reads the same masks.
 
 ## Destruction

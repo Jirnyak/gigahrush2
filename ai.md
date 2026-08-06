@@ -42,7 +42,11 @@ pipeline. Only the score stage is pure; the rest is a tiny per-entity FSM state.
 ### 1. Needs — the drives (data, decaying columns)
 
 A fixed block of **0..100 needs** per agent, stored SoA as a column of `NpcPool`
-(not an ECS component — see the Built note below). They **decay/rise every sim tick** at
+(not an ECS component — see the Built note below). Rates are authored per second, but **only the camera holder's row is advanced**
+(`needs.h`: "TICK SCOPE: ONLY THE CAMERA HOLDER"): a crowd row stays unseeded
+and the scorer substitutes a deterministic roll from the record id, constant in
+time — which is why every need-driven intent scores exactly 0
+([problems.md](problems.md) §27). Nominally they decay/rise at
 data-driven rates, scaled by the character-sheet attribute block
 ([npcs.md](npcs.md): generic 8-slot attributes, slot→meaning is a table):
 
@@ -73,7 +77,10 @@ loaded ([macrosim.md](macrosim.md)); `needs_advance(n, dt)` is that pure clock �
 no registry, no HP, no allocation — and `needs_step` is the embodied wrapper that
 also charges HP and speed:
 
-- **reserves decay** every tick by `rate·dt`, each **attribute-slowed** by
+- **reserves decay** every tick by `rate·dt`. The attribute scaling below is
+  **REFERENCE ONLY — NOT PORTED**: `needs_advance(Needs&, float)` takes no
+  record and no attribute block, and no `0.1` coefficient exists in `src/game`.
+  For the record, the reference slows each by
   `rate /= (1 + 0.1·stat)` — STR (attr slot 0) slows food, AGI (slot 1) water, INT
   (slot 2) sleep, read from the record's generic 8-slot block (`pool.attrs(id)`);
   clamped at 0. (Fixing slots 0/1/2 = STR/AGI/INT is the `slot→meaning` data
@@ -104,11 +111,16 @@ patrol · faction_assault · wander`
 
 Purity is load-bearing: it makes the scorer trivially testable in isolation
 (headless, like the macro tick) and order-independent, and it keeps **zero
-scheduling RAM** — see stagger. `faction_assault` reads the
-[faction matrix](macrosim.md) (#10d): an agent scores assaulting a nearby member
-of a faction its own faction is `hostile()` toward. `social` biases toward
-faction-`friendly()` neighbours and the agent's own high-affinity relationship
-edges (the per-NPC `rel_` block, [npcs.md](npcs.md)).
+scheduling RAM** — see stagger. `faction_assault` is wired as the
+reference's flat 50 gated on `Perception::factionAssaultTarget`, which **has no
+producer anywhere in the tree** — so the term is a constant 0 and the intent can
+never be selected. `social` biases on `FactionTraits::sociability` ONLY: neither
+`hostile()`, `friendly()` nor the per-NPC `rel_` affinity edges are read by the
+scorer. The design below is the target, not the code:
+[faction matrix](macrosim.md) (#10d) — an agent scores assaulting a nearby member
+of a faction its own faction is `hostile()` toward, and `social` biases toward
+faction-`friendly()` neighbours and high-affinity relationship edges
+(the per-NPC `rel_` block, [npcs.md](npcs.md)).
 
 **Built (#12b — [src/game/ai.cpp](src/game/ai.cpp) `score_intents`).** A pure
 `score_intents(perception, needs, out[13])` fills the 13 utilities, each an
@@ -174,7 +186,11 @@ resolves each agent's macro cell from its `Transform` and then hands motion to
 exactly ONE writer per body, through the `AiBrain::motion` token ([ai.h] — the
 single-writer rule this file exists to protect):
 
-- **Flee OWNS the body.** It reads `−diffusion_gradient(danger)` (or the remembered
+- **Flee OWNS the body.** Three direction sources in PRIORITY ORDER:
+  `door_nearest_shelter` (a sealed apartment during Samosbor, §23) is tried
+  FIRST, then `−diffusion_gradient(danger)`, then the remembered away-vector.
+  Since `danger` is null in the shipped game the gradient never contributes.
+  Historically documented as: it reads `−diffusion_gradient(danger)` (or the remembered
   away-vector when the field is flat) and writes the horizontal `Velocity` at
   `kFleeSpeed`. `IntentFlee` is still the only owning intent.
 - **Every other intent DELEGATES** — the token goes to `MotionOwner::Wander` and
@@ -199,7 +215,9 @@ flee-gradient + wander give the whole crowd honest, deterministic motion.
 
 ### 5. Driver + scheduling — identity-hash stagger, no queue
 
-`ai_step(reg, pool, danger, grid, now, dt)` is the per-frame driver: it iterates
+`ai_step(reg, pool, danger, grid, layer, now, dt, cfg, mem, doors, world)` is the
+per-frame driver (the six-argument form below is the OLD signature and would not
+compile); the sweep is layer-scoped, so it iterates
 **all** live AI entities every frame (no persistent stripe buffers, no scheduling
 wheel or queue), skips camera-holders, decays nothing (that's `needs_step`), and
 for each agent either **re-plans or coasts**, then applies §4 steering. Whether an

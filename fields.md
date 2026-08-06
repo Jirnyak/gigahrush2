@@ -81,8 +81,11 @@ layer, not a second dense grid.
 
 A field is host-side dense memory, but a *cellular* field's per-step evolution
 (diffusion, flow, heat, pressure, light, destruction propagation) is a stencil
-over the whole grid — that runs as **async compute on the GPU**, not on the CPU
-agent tick ([performance.md](performance.md) §The compute split). The CPU uploads
+over the whole grid, and **belongs** on the GPU as async compute rather than on
+the CPU agent tick ([performance.md](performance.md) §The compute split).
+**NO SUCH PASS EXISTS YET** — `shaders/` holds cloth, cull, light-grid, particle
+and wire compute and no field stencil, so every field solver in the tree is the
+CPU reference that port must one day reproduce bit-for-bit. The CPU uploads
 only the cells it dirtied and reads back the sparse subset the agents must sense.
 Static overlays the CPU merely reads (e.g. a baked light map) need no such pass.
 

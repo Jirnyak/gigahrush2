@@ -129,11 +129,16 @@ brew install sdl3 vulkan-headers vulkan-loader molten-vk shaderc
 # build (EnTT + Dear ImGui are fetched & pinned by CMake)
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-# headless tests (link core/game only — no SDL/Vulkan)
+# headless tests. game_test and audit_test link giga_game/giga_core only; world_test
+# ALSO compiles four src/render TUs and links Vulkan::Vulkan (CMakeLists.txt), so it
+# needs a Vulkan loader present even though it renders nothing.
 ctest --test-dir build --output-on-failure
-# run
-./build/gigahrush2 floors   # DEFAULT: the floor-module stack (5 distinct floors)
-./build/gigahrush2 maze      # the 3D labyrinth isotropy test bed (single world)
+# run — FROM THE REPO ROOT (data/textures is resolved relative to the CWD; from
+# anywhere else all six texture sets silently fail to load, problems.md §31).
+# There are no positional world modes: `floors` and `maze` were deleted with
+# src/app/worldgen.cpp (2026-08-02). Geometry comes from floor modules.
+./build/gigahrush2
+./build/gigahrush2 --shot shot.png --frames 60 --floor 4   # headless capture
 ```
 
 Windows host (MSVC + Ninja + LunarG Vulkan SDK) — prerequisites and the full
@@ -566,13 +571,21 @@ content gives intents reachable targets. **The MacroSim app-loop wiring is now D
 (2026-07-29):** `macro.step()` runs in `main.cpp`'s fixed-step loop every
 `kMacroPeriodTicks` (250 ticks = 2 s), gated to floors mode, after
 `set_floors_from(registry)` turns migration on; a HUD "society:" line shows it, and
-`tests/suite_macrowire.inl` proves the step skips every embodied record against a real
+The embodied-skip is proven in `tests/suite_macrosim.inl` against a real
 streamer-loaded floor (the on-screen crowd never ages while the cold society churns).
+*(This sentence used to name `tests/suite_macrowire.inl`, which does not exist in the
+tree — the claim was true, the citation was not.)*
 So the open work is **#13** content tables (then `route_step` goal-seeking lights up).
 The floor-module epic (#6–#9) is **done**.
 
 ### #10 — Macro tick (demographic core + bucket index + migration + social BUILT 2026-07-28) ✔
 Coarse clock (own rate, **never** the 125 Hz sim tick — [macrosim.md](macrosim.md)).
+**CORRECTED 2026-08-06:** as wired, it IS driven off the sim tick —
+`if (simTick % kMacroPeriodTicks == 0) macroSim.step(...)` sits inside
+`while (simAccum >= kSimDt)` in `main.cpp`, and `kMacroPeriodTicks = kSimHz * 2`.
+The clock is coarse but its trigger is not independent, and `MacroSim::step` opens
+with an unbudgeted columnar sweep over the whole pool. Harmless at today's ~4.2k
+seeded records, a designed-in wall at the 2²⁰ target. See [problems.md] §21.
 This is where the **off-screen population comes alive**; the ref proved 2²⁰ is
 viable *only if the macro tick stays columnar* (its own 1M target was retired
 because per-record object graphs — not typed columns — dominated cost; gigahrush2

@@ -53,6 +53,12 @@ grows and it survives `clear()`. `clear_log()` empties it.
 ## Connections
 
 Drained by whatever orchestrates a tick (the macro sim and, later, the app
-loop). Producers are the gameplay systems: the NPC pool ([npcs.md](npcs.md)),
+loop, immediately before `bus.clear()`; the macro sim neither publishes nor
+drains). Producers are combat (`NpcDied`), inventory transfers
+([items.md](items.md)) from `loot.cpp`/`needs.cpp`, prop detachment and
+`relations_drain_deaths`. **Three types have no live producer:** `NpcSpawned`,
+`NpcMigrated` and `FloorEntered` all go through `publish_floor_arrival`, which
+is called only from the test suite. Historically listed: the NPC pool
+([npcs.md](npcs.md)),
 inventory transfers ([items.md](items.md)), the mob table
 ([monsters.md](monsters.md)), and macro migration ([macrosim.md](macrosim.md)).

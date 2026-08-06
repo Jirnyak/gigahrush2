@@ -157,9 +157,11 @@ not scattered through `src/app`.
 [app/main.cpp](src/app/main.cpp) wires SDL3 + Vulkan + ECS and runs a
 fixed-timestep sim (125 Hz — `kSimHz` in [src/core/tick.h](src/core/tick.h), an
 exactly-8 ms step) against an uncapped render loop with a HUD.
-[worldgen.cpp](src/app/worldgen.cpp) builds demo worlds (a connected 3D maze and
-a toroidal khrushchevka floor stack) to exercise the core — see
-[worldgen.md](worldgen.md). Real game generators replace it.
+Geometry comes from **floor modules** under `src/game/floors/<name>/`, claimed by
+the floor catalog ([floors.md](floors.md)); `src/game/floor_gen.h` is the dispatch
+seam. The old `src/app/worldgen.cpp` demo worlds (maze + khrushchevka stack) and
+their launch modes were **deleted 2026-08-02** — [worldgen.md](worldgen.md) is now
+a tombstone. The only registered geometric module is `padic`.
 
 **This is where the game lives.** The planned game layer — floor **modules**
 (isolated geometry/quests/NPCs/rules per floor), elevators, fast-travel grid,
@@ -190,7 +192,9 @@ while (accumulator ≥ dt):          # fixed 125 Hz (kSimDt, 8 ms exactly)
     input.apply       → write intent onto active camera entity
     controller_step   → intent → velocity
     physics_step      → integrate + collide vs sub-voxel masks
-    fluid_step        → (throttled) cellular liquid
+    (fluid_step)      → NOT CALLED: no floor module seeds the field, so the
+                        cellular liquid step is absent from the shipped loop
+                        (see the call site in main.cpp and problems.md §13)
 compute_camera        → view/proj from CameraTag entity
 render                → mirror flush (dirty cells → GPU) → raymarch world
                         → body/prop/particle passes → ImGui HUD
@@ -316,18 +320,18 @@ deterministic). Cross-build / cross-platform float identity is a non-goal.
 | Манифест | Сегодня в коде | Статус |
 |---|---|---|
 | 8 атрибутов | `Attr{Str,Agi,Int}` ([rpg.h](src/game/rpg.h)); пул УЖЕ держит 8 слотов (3..7 свободны, засеяны) | **КОНФЛИКТ**: расширить enum + `RpgStats.attr[8]` (12→16 Б), пересадить производные (сейчас STR→HP+melee, AGI→move+attack+spread, INT→psi+xp+награды), сейв-версия |
-| Пси | `kBasePsi = 100`, +1/уровень, max от INT +1% | **РЕШЕНО**: пул 100 остаётся; владелец max-пси — воля +1% (не INT); INT% → пси-урон; реген только при полном сне ~1%/с + предметы |
+| Пси | `kBasePsi = 100`, +1/уровень, max от INT +1% | **РЕШЕНО НА БУМАГЕ, пул инертен**: числа есть ([rpg.h:110-111]), но пси никто не тратит и не восстанавливает — `adjusted_psi_cost`, `int_psi_cost_mult_e3`, `int_psi_duration_bonus_sec` не имеют вызовов вне тестов, пси-урона нет, регена во сне нет, `UseEffect::HealPsi` (7 строк items.csv) и `PsiSurge` не диспатчатся. [problems.md] §35 |
 | Перки (Fallout/Underrail: статы → события → мир) | нет системы (XP-кривая и очки атрибутов есть) | **GAP**: таблица + гейты + эффекты-модификаторы + хуки через событийную шину ([events.md](events.md)) |
 | Типы урона/брони | в данных УЖЕ 5 резистов: kinetic/buckshot/energy/fire/psi (items.csv), `damageType` частично в combat | **ПОЧТИ**: сверить номенклатуру (колющий=kinetic? дробящий=buckshot?) и довести до боя |
 | Тип урона × материал | carve: один скаляр power vs hardness | **GAP**: колонки типов в [material_props.h](src/world/material_props.h) — data-driven, без HP |
-| Инвентарь 8×8 + слоты | `kInvSlots = 64 = 8×8`, `equip_slot` в items.csv | **СОВПАДАЕТ** ✓ |
+| Инвентарь 8×8 + слоты | `kInvSlots = 64 = 8×8`, `equip_slot` в items.csv | **ЧАСТИЧНО**: 8×8 ✓, но слотов экипировки НЕТ — `equipSlot` читается в одном месте и только сравнивается с `Armor` (`combat.cpp:724`); оружие выбирается автоматически по лучшему стату (`ranged_pick.cpp:6`), `Tool` не проверяет никто. `stackMax` соблюдается непоследовательно ([problems.md] §35) |
 | Вес (50 кг + выносливость) | в items.csv нет колонки веса, системы нет | **GAP** (CSV + генератор + гейт) |
-| Нужды еда/вода/туалет/сон | `Needs{food,water,sleep,pee,poo}` + needs_step | **ЧАСТИЧНО**: структура ✓, но тикает только у держателя камеры — РЕШЕНО: тик у ВСЕХ воплощённых (O(n) по этажу) |
+| Нужды еда/вода/туалет/сон | `Needs{food,water,sleep,pee,poo}` + needs_step | **ЧАСТИЧНО, решение НЕ реализовано**: структура ✓, но `needs_step` до сих пор выходит по `find_player(...) == entt::null` и тикает РОВНО ОДНУ строку — держателя камеры ([needs.cpp:239-243], [needs.h:25] «TICK SCOPE: ONLY THE CAMERA HOLDER»). Решение «тик у ВСЕХ воплощённых» принято и не написано; из-за этого скорер утилити-ИИ схлопывается в константу — [problems.md] §27 |
 | Игрок = NPC, possess | `NpcPlayer`-бит, `possess` | **СОВПАДАЕТ** ✓ |
 | Макропопуляция = источник истины, fold-back | streamer/embody/fold-back, сейв несёт пул verbatim | **СОВПАДАЕТ** ✓ |
 | Комнаты-зоны как поля 128³ | комнаты в floor_gen, `spawn_rooms` в лут-таблице; зонального поля для AI-нужд нет | **ЧАСТИЧНО** |
 | Гермо-комнаты неразрушимые | механизм `kHardnessUnbreakable` есть; жилых гермозон нет | **ЧАСТИЧНО** |
 | Лифты 4×4 fast + 4×4↓ + 4×4↑ столбами | hub-пады на z-уровнях {16,48,80,112} + extract-пады + [/]-ride | **КОНФЛИКТ раскладки** (см. [elevators.md](elevators.md)) |
 | Самосбор-перестройка + сшивка + ребейк | сирена/туман/duty/варианты есть; волновой перестройки геометрии НЕТ | **GAP, дизайн ЗАФИКСИРОВАН** (GPU-стенсил + op-list → CPU-истина; см. манифест п.4) |
-| Баллистика снарядов | `projectile_step` + carve от попаданий | **СОВПАДАЕТ** ✓ (гранаты — проверить) |
-| Квесты: линейка + процедурные | quests.csv + suite_quest; процедурные/ивенты частично ([events.md](events.md)) | **ЧАСТИЧНО** |
+| Баллистика снарядов | `projectile_step` + carve от попаданий | **КОНФЛИКТ**: `Projectile::team` вводит ТРИ friendly-fire-исключения, прямо запрещённых манифестом — пуля игрока не может задеть NPC (`combat.cpp:1066`), выстрел монстра не может задеть монстра (`:1035`), снаряд не может задеть владельца (`:1013`, `:1038`). Гранат нет вовсе: все 19 не-`Normal` стволов отложены ([ranged_table.h:20-27]). [problems.md] §33 |
+| Квесты: линейка + процедурные | quests.csv + suite_quest; процедурные/ивенты частично ([events.md](events.md)) | **ЧАСТИЧНО, и XP за квесты НЕТ**: `quest_step` (`quest.cpp:433-447`) и `contract_step` (`contract.cpp:356-363`) платят только деньгами (+предмет у квеста), при том что манифест п.5 требует XP за квесты, а `xp_for_quest` (`rpg.cpp:300`) написан и не имеет НИ ОДНОГО вызова вне тестов. Плюс цель Hunt засчитывает ЛЮБУЮ смерть моба, включая убийства монстрами и хазардами ([problems.md] §40) |

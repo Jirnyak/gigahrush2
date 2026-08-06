@@ -30,7 +30,10 @@ stack.
 
 ## Two travel modes (hybrid boarding — owner 2026-07-28)
 
-- **Transition (`±1`) — built.** Ordinary lifts move one floor at a time and may
+- **Transition (a DIRECTION, not `±1`) — built.** `FloorStreamer::travel` resolves
+  the direction to the **nearest labelled floor** on that side
+  (`next_labelled_floor`); on the shipped building, down from 0 reaches −8.
+  Ordinary lifts may
   be ridden **from anywhere** on the floor. From floor 0 you reach −1 or +1.
   `ride_elevator` resolves the target **number** to its resident module/layer
   through the `FloorRegistry`, folds the rider's record back on the departed
@@ -63,7 +66,12 @@ definition never changes.
 ## The 4×4×4 lattice
 
 A **fixed, seed-independent** lattice of **64 nodes** per floor module, at cell
-spacing 32 (centres `{16, 48, 80, 112}` on each axis). Because 32 divides every
+spacing 32 (centres `{16, 48, 80, 112}` on each axis). The geometry MODULE is what
+guarantees a shaft + lobby at every node: `stamp_lattice` walks the lattice itself
+and lays the corridors along its lines. Since the generic per-kind generator was
+purged there is ONE room stride (4) and ONE storey height (3 cells) for every
+`FloorKind` — the per-kind arithmetic below described that deleted generator.
+Historically: because 32 divides every
 `FloorKind`'s storey height (4/8/16/4) and room stride (8/16/32/8), a node always
 lands on a slab + room line, so the generator can carve a guaranteed shaft + lobby
 at every node on every floor kind. The lattice is stamped **identically on every

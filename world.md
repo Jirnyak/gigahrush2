@@ -15,6 +15,9 @@ Owns the simulation state local to one layer:
 - `grid()` — the macro grid ([voxels.md](voxels.md))
 - `fields()` — runtime typed fields ([fields.md](fields.md))
 - `gravity()` — this layer's gravity vector ([gravity.md](gravity.md))
+- `subfields()` — sparse SUB-VOXEL typed fields, the sanctioned exception to
+  macro-only density; the canonical residents are `"sub_material"`
+  ([destruct.md](destruct.md)) and the stain layer
 
 Entities do **not** live in the world; they live in the shared ECS registry and
 reference their layer by `Transform::layer` ([ecs.md](ecs.md)).
@@ -38,8 +41,10 @@ numbers, modules, or rules; that indirection lives in the game layer. See
 
 ## Planned seams (not yet built)
 
-- **Streaming.** Layers are all resident today. Async load/unload of distant
-  layers is a later seam.
+- **Streaming.** The engine's `LevelStack` never grows or shrinks: the game layer
+  pre-allocates a small pool of slots and RECYCLES them, keeping ONE live floor at
+  a time ([floors.md](floors.md), `FloorStreamer`). Genuinely async load/unload of
+  distant layers is still a later seam.
 - **Nested scale.** W+1 can hold a sub-world that one macro cell of layer W
   "opens into" — the level stack is the substrate for that.
 

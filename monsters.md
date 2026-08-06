@@ -20,7 +20,7 @@ via its rule-set ([floors.md](floors.md)).
 
 ## The table (built)
 
-**69 monster kinds**, ported from the TypeScript reference. Note that number: this
+**68 monster kinds**, ported from the TypeScript reference. Note that number: this
 doc, and the reference's own `balance.md` and `ecology.md`, previously claimed
 "~90" and "67". 69 is what the reference's `enum MonsterKind`, `MONSTERS`,
 `MONSTER_SPRITES` and `MONSTER_ECOLOGY` all agree on, gaplessly, with zero orphans
@@ -32,7 +32,7 @@ and are included.
   `src/game/mob_table.cpp`. The generator is deliberately *not* wired into CMake —
   the generated file is committed, so the build needs no Python — and it hard-fails
   on an unknown token rather than silently mapping it to a default.
-- **`MobDef` is a 32-byte POD row**, widest-first so there is no interior padding,
+- **`MobDef` is a 44-byte POD row**, widest-first so there is no interior padding,
   with the six fields the tick reads in the first 14 bytes. The whole table is
   2,208 B and permanently cache-resident. Fractional reference values (speed 3.15,
   attackRate 0.24) are fixed-point, so the table is bit-identical across builds.
@@ -119,21 +119,28 @@ architecture, not bodies in it.
   combat needs a threat model per body, which is the next increment, not this one.
   Nothing heals a crowd body either — [needs.h](src/game/needs.h) ticks the camera
   holder's row alone — so a resident that survives a hunt stays wounded forever.
-- **Ranged attacks.** 13 kinds are flagged `Ranged` with real projectile speeds and
-  nothing fires them.
-- **The 47 `MobBehaviour` scripts.** Every kind carries its behaviour id; none are
-  dispatched yet, so a `WeepingAngel` currently behaves like a `Plain` chaser.
-- **Armour.** The mitigation path exists and is tested, but nothing populates
-  `Armour` — resistances are an item property and the item table is not ported.
-- **Pack resolution.** `packMode`/`packMin`/`packMax`/`packSpread` are in the table
-  and unread; mobs spawn individually.
-- **Loot.** 66 of the 69 kinds have *no* loot table in the reference — they drop at
+- **Loot.** 65 of the 68 kinds have *no* loot table in the reference — they drop at
   most one rare item. That is a real content hole inherited from the reference, not
   a porting gap.
-- **Instantiation** — monsters become ECS entities with the universal components
-  ([ecs.md](ecs.md)) plus game components (health, faction, AI). They must move via
-  the same [controller.md](controller.md) / [physics.md](physics.md) systems as any
-  other entity — no special-case monster mover.
+
+**BUILT since this list was written** (do not re-implement — verified 2026-08-06):
+
+- **Ranged attacks.** The 13 `Ranged` kinds honour `shotRangeMm` / `minRangeMm` /
+  `windupMs`: outside the dead zone a mob telegraphs, then `spawn_projectile`
+  (`combat.cpp`) puts a real projectile in flight.
+- **`MobBehaviour` dispatch — the stateless half.** `frozen_by_gaze` really does
+  freeze a `WeepingAngel` under your gaze (`mob_behaviour.cpp`, called from
+  `wander_step`), and the aggro-radius / pursuit-offset / move-mult / burst-phase
+  hooks are live. **27 of the 47 enumerators still read as `Plain`**, each blocked
+  on one named missing piece.
+- **Armour.** Two populators — `sync_monster_armour` (from `monster_traits.csv`,
+  called by `main.cpp`) and the equip path in `combat.cpp` — feed one mitigation
+  point in `apply_damage`.
+- **Pack resolution.** `mob_spawn.cpp` branches on `MobPackMode`; only the
+  samosbor fog spawner deliberately ignores it.
+- **Instantiation.** `mob_spawn.cpp` creates the entity with `MobRef`/`MobCombat`
+  plus the universal components ([ecs.md](ecs.md)); movement goes through the same
+  [physics.md](physics.md) systems as any other entity — no special-case mover.
 - **Respawn** does not exist in the reference and is forbidden by its
   `ecology.md`; a killed monster is gone for the visit.
 ## Global vs. local (the boundary)

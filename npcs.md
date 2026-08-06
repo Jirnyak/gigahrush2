@@ -1,7 +1,9 @@
 # NPCs — Macro population & embodiment
 
 > **Status: macro pool + embodiment + one-live-floor streaming built; macro tick
-> pending.** Game layer (`src/game/`, the `giga_game` library), on top of the ECS
+> BUILT** (migration #10c + social #10d; `macroSim.step` runs every `kSimHz*2`
+> ticks — though from inside the 125 Hz loop, which [problems.md](problems.md)
+> §21 files as a law violation). Aggregate trade/economy still pending. Game layer (`src/game/`, the `giga_game` library), on top of the ECS
 > ([ecs.md](ecs.md)) and macro simulation ([macrosim.md](macrosim.md)).
 >
 > - **Code:** [src/game/npc_pool.h](src/game/npc_pool.h) /
@@ -83,12 +85,12 @@ apart only by the `NpcDesign` flag bit — never separate arrays.
 
 `NpcPool` now also has an **opt-in** `set_recycling(true)`, which threads a dead slot
 onto an intrusive FIFO free list so a birth stops being a one-way draw on a finite
-reserve. It is OFF in the shipping binary — `set_recycling` has no caller in `src/` —
+reserve. It is ARMED in the shipping binary — `main.cpp:1714` calls `pool.set_recycling(true)`, which became safe once all six bare-`NpcId`-across-time stores were made generation-checked `NpcHandle`s —
 so the paragraph above still describes what actually runs, and `macrosim.md`'s
 "never reclaims" stays accurate. Two things must land before it can be armed, because
 a recycled id is a REUSED id and both of these store a bare `NpcId` across time:
 `MacroSim::Journey` now carries the departing generation (done), and
-`Contract::giver` still needs to become an `NpcHandle` (not done). Reuse is
+`Contract::giver` IS an `NpcHandle` now (`contract.h`), and `contract_step` polls `handle_valid()`. Reuse is
 generation-tagged via `NpcHandle` / `handle_valid()`, which is the tool any code
 holding an id across ticks should be using.
 

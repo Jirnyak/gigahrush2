@@ -58,7 +58,7 @@ dirtyCells)`: пропы, чья опора стала воздухом, отр�
 
 ## Отрисовка
 
-`PropPass` — пассивная шкура над `reg.view<Transform, PropMeshTag>()`: один
+`PropPass` — пассивная шкура над `reg.view<Transform, PropMesh, StaticPropTag>()`: один
 `vkCmdDrawIndexed` на форму, до 4096 инстансов на форму за кадр, GPU-куллинг
 через `cull.comp`. Оторвавшиеся (`DynamicBodyTag`) пропы уходят в `BodyPass` —
 `PropPass` рисует только статику. В тот же список инстансов попадает антураж

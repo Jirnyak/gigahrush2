@@ -34,9 +34,16 @@ the split is deliberate:
   performance cores) — ~19 % of budget. So the agent tick MUST be threaded; once it
   is, 16k agents/floor is comfortable. **The agent-count headroom figure needs a
   re-run before it is quoted again:** the retired "~86k" was projected against the
-  old 8.33 ms budget, and `tests/sim_bench.cpp` still derives its budget from a
-  hardcoded `1.0f / 120.0f`, so its printed projection reads ~4 % high until that
-  literal becomes `kSimDt`.
+  old 8.33 ms budget. The `1.0f / 120.0f` literal is FIXED — `tests/sim_bench.cpp:60`
+  is now `constexpr float kDt = kSimDt;` — but the benchmark's results-table header
+  still prints `@120Hz @60Hz` over numbers computed at 125 Hz, and its `FAITHFUL`
+  verdict compares RUNTIMES, not trajectories ([problems.md] §36), so the multicore
+  figure is not yet a number to quote either.
+
+  **The agent tick is still SINGLE-THREADED.** `core/jobs.h`'s `parallel_for` is used
+  only by the nav bake (`world/nav.cpp:172,212`); `physics_step`, `ai_step` and
+  `wander_step` run on the main thread. The 10.5 ms single-thread figure above is
+  therefore what the shipped game would pay at 16k agents — 131 % of budget.
 - **GPU → fields.** Every *cellular* field — fluid, gas, heat, pressure, light,
   destruction propagation — is a dense stencil pass over the 128³ grid and runs
   as **async compute on the GPU**, not on the frame's CPU budget. The GPU is
