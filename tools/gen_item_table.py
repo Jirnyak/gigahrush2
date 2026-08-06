@@ -16,7 +16,6 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CSV_PATH = os.path.join(REPO, "data", "items.csv")
-MASS_PATH = os.path.join(REPO, "data", "item_mass.csv")
 OUT_PATH = os.path.join(REPO, "src", "game", "item_table.cpp")
 
 EXPECTED_ROWS = 442
@@ -117,70 +116,38 @@ def pick(table, row, col, i, what):
     return table[tok]
 
 
-def load_mass_rules():
-    """data/item_mass.csv -> ordered rule lists, one per match kind.
+def item_mass_g(row, i):
+    """Grams for one item, straight out of the row's own `mass_g` column.
 
-    A separate table and not a 443rd column, for a reason that is about REVIEW and
-    not about convenience: 442 magic numbers cannot be checked by reading, while
-    "документ весит 20 г" can, and it covers 81 rows at once. The cost is that a
-    weight is resolved rather than looked up — which is why `resolve_mass` below
-    reports the rule that answered, and why main() prints every resolved weight.
+    THE COLUMN IS THE SOURCE, exactly as it is for props and mobs — one shape for
+    all three catalogs, an item's weight sitting beside its value and its stack cap
+    where anyone reading the row will see it.
+
+    It was briefly resolved from a rule table (data/item_mass.csv) instead, which is
+    how these 442 values were AUTHORED — writing "документ весит 20 г" once is how
+    75 bureaucratic MISC rows got an honest weight rather than 442 blind guesses.
+    That table did its job and was migrated into this column; the reasoning survives
+    in items.md, and the values are now plain data with no indirection to resolve.
+
+    Empty or zero is legal and means "not a physical object": a psi technique is a
+    thing you know, not a thing in your pack, and 20 rows are exactly that. It is
+    NOT a licence for an unfilled column — the CSV carries a value on every row and
+    `source_rules` counts them — which is why the prop and mob tables, where 0 would
+    be indistinguishable from unfilled, refuse it outright.
     """
-    kinds = {"id": [], "tag": [], "prefix": [], "category": []}
-    with open(MASS_PATH, encoding="utf-8", newline="") as fh:
-        # Comment lines are how the table explains itself; csv has no notion of
-        # them, so they are dropped before parsing rather than after.
-        text = [ln for ln in fh if not ln.lstrip().startswith("#")]
-    for n, r in enumerate(csv.DictReader(text), start=2):
-        kind = (r.get("match_kind") or "").strip()
-        match = (r.get("match") or "").strip()
-        if not kind and not match:
-            continue
-        if kind not in kinds:
-            die("item_mass.csv row %d: unknown match_kind %r (id|tag|prefix|category)"
-                % (n, kind))
-        raw = (r.get("mass_g") or "").strip()
-        if not raw.isdigit():
-            die("item_mass.csv row %d (%s %s): mass_g %r must be a whole number of "
-                "grams" % (n, kind, match, raw))
-        g = int(raw)
-        if g > 4294967295:
-            die("item_mass.csv row %d (%s %s): %d g exceeds uint32"
-                % (n, kind, match, g))
-        kinds[kind].append((match, g))
-    return kinds
-
-
-def resolve_mass(row, rules, i):
-    """Grams for one item, plus the rule that decided it.
-
-    PRIORITY id > tag > prefix > category, first row wins inside a kind. An item
-    that matches NOTHING is a build failure, never a default: "everything has a
-    weight" is only true if the build refuses the first item that does not.
-    """
-    iid = row["id"].strip()
-    for match, g in rules["id"]:
-        if match == iid:
-            return g, "id:" + match
-    tags = set(t for t in (row.get("tags_all") or "").split("|") if t)
-    for match, g in rules["tag"]:
-        if match in tags:
-            return g, "tag:" + match
-    for match, g in rules["prefix"]:
-        if iid.startswith(match):
-            return g, "prefix:" + match
-    cat = (row.get("category") or "").strip()
-    for match, g in rules["category"]:
-        if match == cat:
-            return g, "category:" + match
-    die("row %d (%s): no mass rule matches — add an id/tag/category row to "
-        "data/item_mass.csv. Every item must have a weight." % (i, iid))
+    raw = (row.get("mass_g") or "").strip()
+    if not raw.isdigit():
+        die("row %d (%s): mass_g %r must be a whole number of grams — every item "
+            "has a weight" % (i, row["id"], raw))
+    g = int(raw)
+    if g > 4294967295:
+        die("row %d (%s): %d g exceeds uint32" % (i, row["id"], g))
+    return g
 
 
 def main():
     with open(CSV_PATH, encoding="utf-8", newline="") as fh:
         rows = list(csv.DictReader(fh))
-    mass_rules = load_mass_rules()
 
     if len(rows) != EXPECTED_ROWS:
         die("expected %d rows, got %d — if the catalog really changed, update "
@@ -189,7 +156,7 @@ def main():
 
     seen, out, names = set(), [], []
     used_cat, used_use = set(), set()
-    mass_by_rule, resolved = {}, []
+    resolved = []
     for i, r in enumerate(rows):
         if r["id"] in seen:
             die("duplicate id %r at row %d" % (r["id"], i))
@@ -205,16 +172,15 @@ def main():
 
         resists = [num(r, c, i, -128, 127) for c in RESIST_COLS]
 
-        massG, rule = resolve_mass(r, mass_rules, i)
-        mass_by_rule[rule] = mass_by_rule.get(rule, 0) + 1
-        resolved.append((r["id"], massG, rule))
+        massG = item_mass_g(r, i)
+        resolved.append((r["id"], massG))
 
         out.append(
-            "    // [%d] id %d  %s  (%d g via %s)\n"
+            "    // [%d] id %d  %s  (%d g)\n"
             "    ItemDef{ %d, %d, %d, static_cast<std::uint16_t>(%s), %d,\n"
             "             u8(ItemCategory::%s), u8(EquipSlot::%s), %d,\n"
             "             u8(UseEffect::%s), {%s}, 0 },"
-            % (i, i + 1, r["id"], massG, rule,
+            % (i, i + 1, r["id"], massG,
                num(r, "value_rub", i, 0, 2000000000),
                massG,
                spawn_weight(r, i),
@@ -226,19 +192,15 @@ def main():
                ", ".join(str(x) for x in resists)))
         names.append("    %s," % cpp_string(r["name_ru"].strip()))
 
-    # THE MASS SUMMARY, printed every run. A resolved weight that nobody can see
-    # is a weight nobody can argue with: this is what lets the owner spot "справка
-    # весит 2 кг" without reading 442 rows of generated C++. A rule that answers
-    # for one item is usually a rule that should have been an `id` row; a rule that
-    # answers for 200 is doing the work the table exists to do.
+    # THE MASS SUMMARY, printed every run. A number nobody can see is a number
+    # nobody can argue with: this is what lets the owner spot "справка весит 2 кг"
+    # without reading 442 rows of a wide CSV or of generated C++.
     heavy = sorted(resolved, key=lambda t: -t[1])[:6]
     light = sorted((t for t in resolved if t[1] > 0), key=lambda t: t[1])[:6]
     total = sum(t[1] for t in resolved)
     sys.stderr.write(
-        "gen_item_table: mass resolved for %d items, %.1f kg if you carried one of "
-        "each\n" % (len(resolved), total / 1000.0))
-    for rule, n in sorted(mass_by_rule.items(), key=lambda kv: (-kv[1], kv[0]))[:12]:
-        sys.stderr.write("    %-24s %3d items\n" % (rule, n))
+        "gen_item_table: mass on %d items, %.1f kg if you carried one of each\n"
+        % (len(resolved), total / 1000.0))
     sys.stderr.write("    heaviest: %s\n"
                      % ", ".join("%s %.1f kg" % (t[0], t[1] / 1000.0) for t in heavy))
     sys.stderr.write("    lightest: %s\n"
