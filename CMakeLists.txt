@@ -681,7 +681,14 @@ if(GIGA_BUILD_TESTS)
     # the piece vanished with no debris and no falling body. Plus branches are
     # capped from the JOIN end (uncapped, three outlets swallowed the whole cell
     # budget): 467 branch points against 259, pinned as a ratio.
-        PASS_REGULAR_EXPRESSION "game_test: 233598 checks, 0 failures")
+    # 233598 -> 235191 on 2026-08-06: suite_rooms.inl, leg (b)+(c) of
+    # [problems.md] §27 — the room affordance/recovery tables and their baked
+    # 128^3 fields. +1593, and 1024 of them are one CHECK per sampled cell in the
+    # descent block, which is the point: it walks the flow field to termination
+    # from every 4th walkable cell of the arrival storey and asserts each walk ENDS
+    # IN A KITCHEN. Measured on this tree: 1024 sampled, 1024 arrived, 0
+    # unreachable, 0 over budget.
+        PASS_REGULAR_EXPRESSION "game_test: 235191 checks, 0 failures")
 
 
 
