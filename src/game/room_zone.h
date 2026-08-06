@@ -213,6 +213,58 @@ bool room_restores(std::uint16_t bit);
 void room_recover(Needs& n, std::uint16_t bit, float dt);
 
 // ---------------------------------------------------------------------------
+// TABLE 3 — what FURNITURE a room kind contains.
+//
+// A room was a purely logical fact: `floor_room_mask` is a hash of the room's
+// coordinates and nothing in the world said "kitchen". So the crowd's whole errand
+// behaviour was invisible — you could watch 400 people walk somewhere and had no way
+// to tell they were walking to a kitchen. Furniture is what makes the decision
+// legible, and it is CONTENT rather than a debug overlay: the room is furnished in
+// the shipped game, for the player, permanently.
+//
+// One row per (room kind, piece). `slot` is what makes the placement a PURE FUNCTION
+// instead of stored state — see `room_furniture_spot`. Adding a bookshelf to the
+// living room is one row here plus one row in data/props.csv, and no code at all.
+// ---------------------------------------------------------------------------
+struct RoomFurniture {
+    std::uint16_t room;   // RoomBit
+    std::uint16_t prop;   // PropId ordinal — kept as a plain integer so this header
+                          // does not drag prop_table.h into ai.cpp's include set
+    std::uint8_t slot;    // 0..kRoomSlots-1, the interior cell it occupies
+    bool useSpot;         // may an NPC stand AT it? (a stove yes, a table no)
+};
+
+// How many distinct interior cells a room offers. The room interior is
+// (stride-1)^2 = 9 cells at stride 4, and a slot is an index into it in row-major
+// order — so a slot is a POSITION, not a piece of stored geometry.
+inline constexpr std::uint8_t kRoomSlots = 9;
+
+// PropId ordinals, spelled once. Kept as literals rather than an include so that
+// `ai.cpp` — which only ever asks "where is the use spot" — pays nothing for the
+// generated prop table. The static_asserts in room_zone.cpp pin them against the
+// real enum, so a CSV reorder breaks the BUILD instead of moving the furniture.
+inline constexpr std::uint16_t kPropKitchenStove = 5;
+inline constexpr std::uint16_t kPropKitchenTable = 6;
+inline constexpr std::uint16_t kPropToiletPan = 7;
+inline constexpr std::uint16_t kPropBedCot = 8;
+
+inline constexpr RoomFurniture kRoomFurniture[] = {
+    // A kitchen: a stove to stand at, and a table that is scenery. Two pieces, so a
+    // kitchen reads as a kitchen from the doorway and not as "a box in a room".
+    {room_bit(RoomBit::Kitchen), kPropKitchenStove, 0, true},
+    {room_bit(RoomBit::Kitchen), kPropKitchenTable, 4, false},
+    // A bathroom: two pans, because a bathroom with ONE fixture makes a queue of
+    // nine residents converge on one voxel.
+    {room_bit(RoomBit::Bathroom), kPropToiletPan, 0, true},
+    {room_bit(RoomBit::Bathroom), kPropToiletPan, 2, true},
+    // A flat: two cots along the far wall.
+    {room_bit(RoomBit::Living), kPropBedCot, 6, true},
+    {room_bit(RoomBit::Living), kPropBedCot, 8, true},
+};
+inline constexpr std::size_t kRoomFurnitureCount =
+    sizeof(kRoomFurniture) / sizeof(kRoomFurniture[0]);
+
+// ---------------------------------------------------------------------------
 // WHERE the rooms are.
 // ---------------------------------------------------------------------------
 
@@ -235,12 +287,43 @@ std::uint16_t room_bit_at(FloorKind kind, int number, int x, int y);
 // Stricter in the SAFE direction: every cell this accepts, nav also accepts.
 bool room_body_walkable(const MacroGrid& grid, int x, int y, int z);
 
+// The interior offset of furniture `slot`, in [1, stride-1] on each axis. A slot is
+// a POSITION in the room's (stride-1)^2 interior, row-major — which is what lets the
+// SEEDER and the AI agree about where the stove is without either storing anything
+// or reading the other's output. Same argument `floor_doorways` makes for hashing a
+// doorway's offset instead of replaying the generator's RNG: a position has no order
+// to get wrong.
+void room_slot_offset(std::uint8_t slot, int stride, int& ox, int& oy);
+
 // The body's SEAT inside room (rx, ry): a deterministic interior offset in
 // [1, stride-1] on each axis, from its identity seed. Two bodies in one room get
 // different seats; the same body always gets the same one, so it does not shuffle
 // between ticks. This is the whole micro-goal — see the file banner.
-void room_seat_offset(std::uint32_t idSeed, int rx, int ry, int stride, int& ox,
-                      int& oy);
+//
+// `roomBit` is what makes the seat CONTEXTUAL rather than random: if the room kind
+// has furniture marked `useSpot` ([room_zone.h] kRoomFurniture — a stove, a pan, a
+// cot), the body is seated AT one of those, chosen by its identity so a crowd
+// spreads across them. A room with no use spot falls back to a free interior cell,
+// which is what keeps every un-furnished room kind working exactly as before.
+void room_seat_offset(std::uint32_t idSeed, std::uint16_t roomBit, int rx, int ry,
+                      int stride, int& ox, int& oy);
+
+// Furnish every room on `layer` from `kRoomFurniture`, and return how many pieces
+// landed. Spawns ordinary prop ECS entities through `spawn_prop_from_id`, so the
+// renderer picks them up as the passive skin it already is ([jirnyak.md] §18) and
+// nothing here touches render.
+//
+// Call once per floor entry, AFTER the geometry is final and BEFORE the crowd is
+// steered — same slot in the load as the other per-floor seeders. Idempotent only in
+// the sense every floor seeder is: call `despawn_layer_props` first when recycling a
+// layer, exactly as the mob and container seeders require.
+//
+// A piece is REFUSED rather than floated when its cell cannot hold it: no body-sized
+// clearance, or no honest floor underneath. That is the same rule the padic bulb
+// seeder states ("no honest solid support — do not float a lamp") and the same one
+// [problems.md] §11 was opened over.
+std::uint32_t seed_room_furniture(Registry& reg, const World& world, LayerId layer,
+                                  FloorKind kind, int number);
 
 // One floor's baked room fields. ~2 MiB per affordance bit PRESENT on the floor:
 // a Residential floor bakes Kitchen/Bathroom/Living = 6 MiB, an Industrial floor

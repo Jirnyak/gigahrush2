@@ -5,8 +5,10 @@
 #include "core/jobs.h"        // parallel_for — bake-time only, one job per room bit
 #include "core/rng.h"         // hash2/hash3 — the seat is a hash, not stored state
 #include "game/needs.h"       // kNeedMax — one clamp band for every needs writer
+#include "game/prop_system.h" // spawn_prop_from_id / SubVoxelAnchor — the furnisher
 #include "world/macro_grid.h" // MacroGrid — the bake's walkability test
 #include "world/types.h"      // kMacroDim, kMacroCells, macro_index, wrap_macro
+#include "world/world.h"      // World — the furnisher reads its grid
 
 namespace giga::game {
 
@@ -68,6 +70,9 @@ inline bool blocked(const MacroGrid& g, int x, int y, int z) {
 // Salt for the seat hash. Its own stream, so a body's seat is uncorrelated with its
 // re-plan phase, its score jitter and worldgen.
 inline constexpr std::uint32_t kSaltSeat = 0x5ea70000u;
+// Furniture yaw gets its own stream so a room's look is uncorrelated with who sits
+// in it — otherwise the stove's angle would leak the identity of its user.
+inline constexpr std::uint32_t kSaltFurnitureYaw = 0xf00d1e00u;
 
 } // namespace
 
@@ -129,8 +134,20 @@ std::uint16_t room_bit_at(FloorKind kind, int number, int x, int y) {
     return floor_room_mask(kind, number, wx / stride, wy / stride);
 }
 
-void room_seat_offset(std::uint32_t idSeed, int rx, int ry, int stride, int& ox,
-                      int& oy) {
+void room_slot_offset(std::uint8_t slot, int stride, int& ox, int& oy) {
+    const int span = stride - 1;
+    if (span <= 0) {
+        ox = 0;
+        oy = 0;
+        return;
+    }
+    const int s = static_cast<int>(slot) % (span * span);
+    ox = 1 + s % span;
+    oy = 1 + s / span;
+}
+
+void room_seat_offset(std::uint32_t idSeed, std::uint16_t roomBit, int rx, int ry,
+                      int stride, int& ox, int& oy) {
     const int span = stride - 1; // interior width: offsets 1..stride-1
     if (span <= 0) {
         ox = 0;
@@ -140,6 +157,23 @@ void room_seat_offset(std::uint32_t idSeed, int rx, int ry, int stride, int& ox,
     const std::uint32_t h = hash3(idSeed ^ kSaltSeat,
                                   static_cast<std::uint32_t>(rx),
                                   static_cast<std::uint32_t>(ry));
+
+    // CONTEXTUAL FIRST: sit at the furniture this room kind actually has. Collected
+    // on the stack from a 6-row constexpr table — no allocation, and the same table
+    // the seeder placed the pieces from, so the body walks to a stove that is really
+    // there rather than to a coordinate that agrees with one by luck.
+    std::uint8_t spots[kRoomSlots];
+    std::uint8_t n = 0;
+    for (const RoomFurniture& f : kRoomFurniture) {
+        if (f.room != roomBit || !f.useSpot) continue;
+        if (n < kRoomSlots) spots[n++] = f.slot;
+    }
+    if (n != 0) {
+        room_slot_offset(spots[h % n], stride, ox, oy);
+        return;
+    }
+
+    // No furniture for this room kind: a free interior cell, exactly as before.
     ox = 1 + static_cast<int>(h % static_cast<std::uint32_t>(span));
     oy = 1 + static_cast<int>((h >> 16) % static_cast<std::uint32_t>(span));
 }
@@ -329,6 +363,138 @@ void bake_room_zones(const MacroGrid& grid, FloorKind kind, int number,
                   roomsPerAxis, out.nearRoom[bi]);
     });
     out.baked = have;
+}
+
+// ---------------------------------------------------------------------------
+// Furnishing.
+// ---------------------------------------------------------------------------
+
+// The PropId ordinals [room_zone.h] spells as literals must BE the generated enum.
+// data/props.csv row order is load-bearing ([prop_table.h]) — reorder it and every
+// kitchen quietly grows a toilet, with nothing failing. These four lines are what
+// turn that into a build error instead.
+static_assert(kPropKitchenStove == static_cast<std::uint16_t>(PropId::KitchenStove));
+static_assert(kPropKitchenTable == static_cast<std::uint16_t>(PropId::KitchenTable));
+static_assert(kPropToiletPan == static_cast<std::uint16_t>(PropId::ToiletPan));
+static_assert(kPropBedCot == static_cast<std::uint16_t>(PropId::BedCot));
+
+namespace {
+
+// The height of the walkable surface under cell (x,y,z), in metres, or a negative
+// number when there is no honest floor to stand a thing on.
+//
+// SCANNED, NOT ASSUMED, and the first version of this function is why the sentence
+// is here: it tested only sub-layer 0 of the cell and only sub-layer 7 of the cell
+// below, and placed **zero** pieces on a whole Residential floor. The padic
+// module's slab does not fill its cell to the brim — measured on the live floor,
+// the player settles with its feet at z = 5.65 m, i.e. on sub-layer 6 of cell 2,
+// not on cell 2's top face. A floor is wherever the matter ENDS, so find it.
+//
+// Under the body FOOTPRINT rather than anywhere in the cell: a piece must rest on
+// the same surface a body would stand on, or it sinks into the one carved corner.
+// THE SURFACE AND THE ANCHOR COME FROM ONE SCAN, and that is the whole point of
+// returning a struct. `spawn_prop` refuses any prop whose anchor sub-voxel is not
+// SOLID ([prop_system.cpp]:227) — the engine's "nothing hangs in the air" rule,
+// and the first version of this seeder placed **zero** pieces on a whole floor
+// because it anchored at the cell a body STANDS in, which is air by definition.
+// Deriving the height and the anchor from the same scan makes them unable to
+// disagree; deriving them separately is how a prop ends up floating a quarter of a
+// metre above the slab it claims to rest on ([problems.md] §11).
+struct RoomFloor {
+    float height = -1.0f; // world metres of the walking surface, <0 = no support
+    int cz = 0;           // macro cell holding the supporting sub-voxel
+    std::uint8_t subZ = 0;
+};
+
+RoomFloor room_floor_under(const MacroGrid& g, int x, int y, int z) {
+    RoomFloor out;
+    // Matter inside this cell, from the bottom up: the top of the lowest solid run
+    // is the surface. Covers a cell whose own floor is a thin lip.
+    const SubMask& here = g.mask(x, y, z);
+    int top = -1;
+    for (int sz = 0; sz < kSubDim; ++sz) {
+        if ((here.words[sz] & kBodyFootprint) == 0) break;
+        top = sz;
+    }
+    if (top >= 0) {
+        out.height = static_cast<float>(z) * kCellSize +
+                     static_cast<float>(top + 1) * kVoxelSize;
+        out.cz = z;
+        out.subZ = static_cast<std::uint8_t>(top);
+        return out;
+    }
+
+    // Otherwise the floor is whatever the cell BELOW ends with. Scanned from the
+    // top down rather than assumed at sub-layer 7: measured on the padic module,
+    // the slab stops at sub-layer 7 in some cells and lower in others, and a body
+    // settles with its feet at 5.65 m — not on any cell's brim.
+    const int below = wrap_macro(z - 1);
+    const SubMask& bm = g.mask(x, y, below);
+    for (int sz = kSubDim - 1; sz >= 0; --sz) {
+        if ((bm.words[sz] & kBodyFootprint) == 0) continue;
+        out.height = static_cast<float>(below) * kCellSize +
+                     static_cast<float>(sz + 1) * kVoxelSize;
+        out.cz = below;
+        out.subZ = static_cast<std::uint8_t>(sz);
+        return out;
+    }
+    return out; // nothing underneath: refuse rather than float
+}
+
+} // namespace
+
+std::uint32_t seed_room_furniture(Registry& reg, const World& world, LayerId layer,
+                                  FloorKind kind, int number) {
+    const int stride = floor_room_stride(kind);
+    if (stride <= 1) return 0;
+    const MacroGrid& grid = world.grid();
+    const int roomsPerAxis = kMacroDim / stride;
+    const int z = floor_ground_coord();
+    std::uint32_t placed = 0;
+
+    for (int ry = 0; ry < roomsPerAxis; ++ry) {
+        for (int rx = 0; rx < roomsPerAxis; ++rx) {
+            const std::uint16_t bit = floor_room_mask(kind, number, rx, ry);
+            for (const RoomFurniture& f : kRoomFurniture) {
+                if (f.room != bit) continue;
+                int ox = 0, oy = 0;
+                room_slot_offset(f.slot, stride, ox, oy);
+                const int cx = wrap_macro(rx * stride + ox);
+                const int cy = wrap_macro(ry * stride + oy);
+                // Refuse rather than float: no body-sized clearance means the piece
+                // would be inside geometry, and no floor means it would hang.
+                if (blocked(grid, cx, cy, z)) continue;
+                const RoomFloor floor = room_floor_under(grid, cx, cy, z);
+                if (floor.height < 0.0f) continue;
+
+                const PropDef& def = prop_def(static_cast<PropId>(f.prop));
+                const float halfH =
+                    static_cast<float>(def.sizeZMm) * 0.0005f; // mm -> m, halved
+                SubVoxelAnchor anchor{};
+                anchor.cx = cx;
+                anchor.cy = cy;
+                anchor.cz = floor.cz;    // the SOLID it rests on, never the air above
+                anchor.subX = kSubDim / 2;
+                anchor.subY = kSubDim / 2;
+                anchor.subZ = floor.subZ;
+                anchor.face = 0; // Floor
+                const vec3 pos{(static_cast<float>(cx) + 0.5f) * kCellSize,
+                               (static_cast<float>(cy) + 0.5f) * kCellSize,
+                               floor.height + halfH};
+                // Yaw from the room's identity, so a street of flats does not look
+                // stamped: the same hash family the seat uses, its own salt.
+                const float yaw =
+                    rand01(hash3(kSaltFurnitureYaw, static_cast<std::uint32_t>(rx),
+                                 static_cast<std::uint32_t>(ry))) *
+                    6.2831853f;
+                if (spawn_prop_from_id(reg, world, pos, anchor,
+                                       static_cast<PropId>(f.prop), layer,
+                                       yaw) != entt::null)
+                    ++placed;
+            }
+        }
+    }
+    return placed;
 }
 
 // ---------------------------------------------------------------------------

@@ -817,7 +817,12 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                 const int rx = cx / roomStride;
                 const int ry = cy / roomStride;
                 int ox = 0, oy = 0;
-                room_seat_offset(idSeed, rx, ry, roomStride, ox, oy);
+                // Seated AT the furniture when the room has any: a stove, a pan, a
+                // cot ([room_zone.h] kRoomFurniture). The same table the furnisher
+                // placed them from, so the body walks to a thing that is really
+                // there — which is what makes the whole errand VISIBLE instead of
+                // being a number in stderr.
+                room_seat_offset(idSeed, here, rx, ry, roomStride, ox, oy);
                 const int sx = rx * roomStride + ox;
                 const int sy = ry * roomStride + oy;
 

@@ -1066,6 +1066,24 @@ std::uint32_t refresh_floor_props(Registry& reg, const World& world,
     count += game::seed_ceiling_lights(reg, world, layer, wallSeed);
     if (kind_for_floor(floorNumber) == game::FloorKind::Padic)
         count += game::seed_padic_props(reg, world, layer, floorNumber, padicSeed, bus);
+    // FURNISH THE ROOMS ([room_zone.h] kRoomFurniture). Not decoration and not a
+    // debug overlay: until this landed a "kitchen" was a hash of the room's
+    // coordinates and NOTHING in the world said so, which meant the crowd's whole
+    // errand behaviour ([problems.md] §27) could only be checked by reading stderr.
+    // A stove you can see is what makes "he went to the kitchen" an observation
+    // instead of a claim — and the AI seats bodies AT these same pieces, off the
+    // same table, so the two cannot drift apart.
+    //
+    // Keyed on (kind, number) like every other room-taxonomy consumer, so it needs
+    // no seed of its own and agrees with the container and mob spawners by
+    // construction ([floor_gen.h]).
+    {
+        const std::uint32_t furniture = game::seed_room_furniture(
+            reg, world, layer, kind_for_floor(floorNumber), floorNumber);
+        count += furniture;
+        std::fprintf(stderr, "[rooms] floor %d: %u pieces of furniture placed\n",
+                     floorNumber, furniture);
+    }
     return count;
 }
 

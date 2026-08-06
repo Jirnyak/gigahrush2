@@ -225,11 +225,22 @@ void rooms_descent_actually_arrives() {
 
 void rooms_seat_is_the_micro_goal() {
     const int stride = 4;
+    const std::uint16_t kNoFurniture = room_bit(RoomBit::Storage);
     int ox = 0, oy = 0;
 
-    // Interior, on both axes, for every identity we try.
+    // A slot is a POSITION in the interior, row-major, and both the furnisher and
+    // the AI derive their answer from this one function — which is what stops them
+    // from agreeing about the stove only by luck.
+    room_slot_offset(0, stride, ox, oy);
+    CHECK(ox == 1 && oy == 1);
+    room_slot_offset(4, stride, ox, oy);
+    CHECK(ox == 2 && oy == 2);
+    room_slot_offset(8, stride, ox, oy);
+    CHECK(ox == 3 && oy == 3);
+
+    // --- a room kind with NO furniture: a free interior cell, as before ---------
     for (std::uint32_t id = 0; id < 256; ++id) {
-        room_seat_offset(id, 3, 7, stride, ox, oy);
+        room_seat_offset(id, kNoFurniture, 3, 7, stride, ox, oy);
         CHECK(ox >= 1 && ox <= stride - 1);
         CHECK(oy >= 1 && oy <= stride - 1);
     }
@@ -237,13 +248,13 @@ void rooms_seat_is_the_micro_goal() {
     // Stable: the same body in the same room always gets the same seat, so it does
     // not shuffle between ticks. This is what lets the micro-goal be stateless.
     int ax = 0, ay = 0, bx = 0, by = 0;
-    room_seat_offset(1234u, 5, 9, stride, ax, ay);
-    room_seat_offset(1234u, 5, 9, stride, bx, by);
+    room_seat_offset(1234u, kNoFurniture, 5, 9, stride, ax, ay);
+    room_seat_offset(1234u, kNoFurniture, 5, 9, stride, bx, by);
     CHECK(ax == bx && ay == by);
 
     // Different room, same body: a different seat is expected (you sit where you
     // are), and the whole point is that it needs no stored state to change.
-    room_seat_offset(1234u, 6, 9, stride, bx, by);
+    room_seat_offset(1234u, kNoFurniture, 6, 9, stride, bx, by);
     CHECK(bx >= 1 && by >= 1);
 
     // Spread: 256 bodies in one room must not stack on one cell. With 9 interior
@@ -251,13 +262,51 @@ void rooms_seat_is_the_micro_goal() {
     // once, which a constant or a poorly mixed hash would fail.
     int used[16] = {};
     for (std::uint32_t id = 0; id < 256; ++id) {
-        room_seat_offset(id, 2, 2, stride, ox, oy);
+        room_seat_offset(id, kNoFurniture, 2, 2, stride, ox, oy);
         ++used[(oy - 1) * (stride - 1) + (ox - 1)];
     }
     int distinct = 0;
     for (int i = 0; i < (stride - 1) * (stride - 1); ++i)
         if (used[i] > 0) ++distinct;
     CHECK(distinct == (stride - 1) * (stride - 1));
+
+    // --- a FURNISHED room: the seat is a USE SPOT, never anywhere else ----------
+    // This is the tie between the invisible decision and the visible object. A body
+    // that walks to a kitchen must end up at the stove, not at a random tile that
+    // happens to be in the same room — otherwise the furniture is scenery and the
+    // errand is still unreadable.
+    const struct { RoomBit room; std::uint16_t prop; } kUse[] = {
+        {RoomBit::Kitchen, kPropKitchenStove},
+        {RoomBit::Bathroom, kPropToiletPan},
+        {RoomBit::Living, kPropBedCot},
+    };
+    for (const auto& u : kUse) {
+        int hits = 0, distinctSpots = 0;
+        int seen[16] = {};
+        for (std::uint32_t id = 0; id < 256; ++id) {
+            room_seat_offset(id, room_bit(u.room), 4, 4, stride, ox, oy);
+            // Every seat must coincide with a `useSpot` row of THIS room kind.
+            bool onFurniture = false;
+            for (const RoomFurniture& f : kRoomFurniture) {
+                if (f.room != room_bit(u.room) || !f.useSpot) continue;
+                int fx = 0, fy = 0;
+                room_slot_offset(f.slot, stride, fx, fy);
+                if (fx == ox && fy == oy) onFurniture = true;
+            }
+            if (onFurniture) ++hits;
+            ++seen[(oy - 1) * (stride - 1) + (ox - 1)];
+        }
+        for (int i = 0; i < 16; ++i)
+            if (seen[i] > 0) ++distinctSpots;
+        CHECK(hits == 256);
+        // And a crowd SPREADS across them: a bathroom with two pans must not queue
+        // nine residents onto one. Kitchens have a single use spot by design, so the
+        // bar is "as many spots as the table declares", not "more than one".
+        int declared = 0;
+        for (const RoomFurniture& f : kRoomFurniture)
+            if (f.room == room_bit(u.room) && f.useSpot) ++declared;
+        CHECK(distinctSpots == declared);
+    }
 }
 
 // Walk `n` starving bodies for `ticks` and report what the AI did with them. With
@@ -420,6 +469,73 @@ void rooms_a_hungry_body_walks_to_a_kitchen() {
     CHECK(longer.inKitchen >= with.inKitchen);
     CHECK(longer.inKitchen == longer.bodies); // every last one, and none drifts out
     CHECK(longer.stalled == 0u);
+}
+
+void rooms_furniture_makes_the_errand_visible() {
+    LevelStack stack;
+    const LayerId layer = stack.push_layer();
+    World& w = stack.layer(layer);
+    generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
+
+    Registry reg;
+    const std::uint32_t placed =
+        seed_room_furniture(reg, w, layer, FloorKind::Residential, 0);
+
+    // Count what actually landed, per kind, and where. A furnisher that places a
+    // stove inside a wall or hanging in the air passes "placed > 0" and fails the
+    // only thing that matters, so this walks the entities it made.
+    const int ground = floor_ground_coord();
+    int stoves = 0, pans = 0, cots = 0, wrongRoom = 0, unreachable = 0;
+    int floating = 0, anchorAir = 0;
+    for (auto e : reg.view<const Transform, const PropMesh, const SubVoxelAnchor>()) {
+        const SubVoxelAnchor& a = reg.get<const SubVoxelAnchor>(e);
+        const std::uint16_t bit = room_bit_at(FloorKind::Residential, 0, a.cx, a.cy);
+        // Every piece must be INSIDE a room of the kind its table row names.
+        bool ok = false;
+        for (const RoomFurniture& f : kRoomFurniture)
+            if (f.room == bit) ok = true;
+        if (!ok) ++wrongRoom;
+        // REACHABLE: a body must be able to stand in the cell the piece occupies.
+        // Tested at the STANDING storey, not at the anchor's cell — the anchor
+        // points at the SOLID underneath by design, so testing it would ask
+        // "is the floor walkable" and always answer no.
+        if (!room_body_walkable(w.grid(), a.cx, a.cy, ground)) ++unreachable;
+        // ANCHORED IN MATTER: `spawn_prop` already refuses otherwise, so this is a
+        // second opinion on the rule rather than a duplicate of it — it is what
+        // would catch the anchor and the height being derived separately again.
+        if (!w.grid().solid(a.cx, a.cy, a.cz, a.subX, a.subY, a.subZ)) ++anchorAir;
+        // AND NOT FLOATING: the piece's underside must sit ON that surface, within
+        // one sub-voxel. This is the measurement [problems.md] §11 says to make —
+        // the distance from the piece to the surface it names as its support.
+        const vec3& p = reg.get<const Transform>(e).pos;
+        const float half = reg.get<const PropMesh>(e).scale.z * 0.5f;
+        const float surface =
+            static_cast<float>(a.cz) * kCellSize +
+            static_cast<float>(a.subZ + 1) * kVoxelSize;
+        if (std::fabs((p.z - half) - surface) > kVoxelSize) ++floating;
+        if (bit == room_bit(RoomBit::Kitchen)) ++stoves;
+        if (bit == room_bit(RoomBit::Bathroom)) ++pans;
+        if (bit == room_bit(RoomBit::Living)) ++cots;
+    }
+    std::printf("[rooms] furnished floor 0: %u pieces — kitchen %d, bathroom %d, "
+                "living %d | wrong-room %d, unreachable %d, anchor-in-air %d, "
+                "floating %d\n",
+                placed, stoves, pans, cots, wrongRoom, unreachable, anchorAir,
+                floating);
+
+    CHECK(placed > 0);
+    CHECK(stoves > 0 && pans > 0 && cots > 0);
+    CHECK(wrongRoom == 0);
+    CHECK(unreachable == 0);
+    CHECK(anchorAir == 0);
+    CHECK(floating == 0);
+
+    // An Industrial floor rolls none of the three kinds, so it furnishes NOTHING
+    // and costs nothing — the same data-driven degradation the fields have.
+    World ind;
+    generate_floor(ind, 0, floor_spec(FloorKind::Industrial), 1337u);
+    Registry reg2;
+    CHECK(seed_room_furniture(reg2, ind, 0, FloorKind::Industrial, 0) == 0u);
 }
 
 void rooms_recovery_closes_the_loop() {

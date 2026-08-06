@@ -713,7 +713,13 @@ if(GIGA_BUILD_TESTS)
     # pinned at zero (`with.stalled == 0`):
     #   kitchen descent: 884 sampled, 874 arrived, 10 unreachable, 0 over budget
     #   errand WITH zones: own_ai=64 stalled=0 in-kitchen=60/64 at 40 s, 64/64 at 120 s
-        PASS_REGULAR_EXPRESSION "game_test: 235067 checks, 0 failures")
+    # 235067 -> 235083 on 2026-08-06: +16, room FURNITURE — a kitchen is now a stove
+    # and a table you can see, so "he walked to the kitchen" is an observation and
+    # not a claim. The block walks the entities the seeder made rather than trusting
+    # a count, and the four numbers after the pieces are the ones that matter:
+    #   786 pieces — kitchen 186, bathroom 177, living 423
+    #   wrong-room 0, unreachable 0, anchor-in-air 0, floating 0
+        PASS_REGULAR_EXPRESSION "game_test: 235083 checks, 0 failures")
 
 
 
