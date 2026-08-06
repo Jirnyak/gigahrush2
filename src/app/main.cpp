@@ -3314,10 +3314,23 @@ int main(int argc, char** argv) {
                                   nav.coarse(),
                                   nav.fine(), activeLayer, simTick);
 
-                // Footstep noise generation while walking or running
+                // Footstep noise generation while walking or running.
+                // "Walking" is speed ACROSS the floor, so the vertical component is
+                // stripped using the layer's gravity vector, never a hardcoded axis
+                // ([AGENTS.md]: gravity is a vector). The old x^2+z^2 sum counted
+                // falling as footsteps and left motion along one real horizontal
+                // axis completely silent — mobs simply could not hear you walk it.
                 if (reg.valid(player)) {
                     const auto& vel = reg.get<Velocity>(player);
-                    const float speedSq = vel.v.x * vel.v.x + vel.v.z * vel.v.z;
+                    const vec3 pg =
+                        stack.layer(activeLayer).gravity().at(reg.get<Transform>(player).pos);
+                    const float pgLen = length(pg);
+                    vec3 lat = vel.v;
+                    if (pgLen > 1e-6f) {
+                        const vec3 up = pg * (-1.0f / pgLen);
+                        lat = lat - up * dot(lat, up);
+                    }
+                    const float speedSq = dot(lat, lat);
                     if (speedSq > 0.5f && (simTick % 28 == 0)) {
                         const vec3& ppos = reg.get<Transform>(player).pos;
                         game::NoiseProfile footstepNoise{6.0f, 400, 1, game::NoiseSource::Footstep};
@@ -3409,11 +3422,24 @@ int main(int argc, char** argv) {
                         }
                     }
 
-                    // 4. Stalker / TonkayaTen Cloaking Tint Modulation
+                    // 4. Stalker / TonkayaTen Cloaking Tint Modulation.
+                    // The tell is LATERAL movement, so the vertical component comes
+                    // off via the gravity vector rather than a fixed axis. With the
+                    // old x^2+z^2 a Ten drifting along one real horizontal axis read
+                    // as motionless and stayed cloaked — the player's counterplay
+                    // (spot it while it moves) silently did not exist on that axis.
                     if (kind == game::MobKind::TonkayaTen || kind == game::MobKind::GlubinnayaTen) {
                         if (Renderable* rend = reg.try_get<Renderable>(me_)) {
                             const Velocity& vel = reg.get<Velocity>(me_);
-                            const float spd = std::sqrt(vel.v.x * vel.v.x + vel.v.z * vel.v.z);
+                            const vec3 tg =
+                                stack.layer(activeLayer).gravity().at(reg.get<Transform>(me_).pos);
+                            const float tgLen = length(tg);
+                            vec3 tlat = vel.v;
+                            if (tgLen > 1e-6f) {
+                                const vec3 tup = tg * (-1.0f / tgLen);
+                                tlat = tlat - tup * dot(tlat, tup);
+                            }
+                            const float spd = std::sqrt(dot(tlat, tlat));
                             const float alpha = (spd > 0.5f) ? 0.85f : 0.15f;
                             rend->color = vec3{0.20f * alpha, 0.30f * alpha, 0.40f * alpha};
 
@@ -3752,12 +3778,14 @@ int main(int argc, char** argv) {
                     reg, pool, bus, activeLayer, kSimDt,
                     !haveGun && attackHeld && !paused, simTick,
                     &stack.layer(activeLayer).grid(), &combatCarves,
-                    &playerStatus, &particleBursts);
+                    &playerStatus, &particleBursts,
+                    &stack.layer(activeLayer).gravity());
                 meleeHits += game::mob_attack_step(reg,
                                    stack.layer(activeLayer).grid(),
                                    pool, bus, activeLayer,
                                                    kSimDt, simTick,
-                                                   &particleBursts);
+                                                   &particleBursts,
+                                   &stack.layer(activeLayer).gravity());
                 // Fire, acid and live grates bill EVERY embodied body, not just
                 // monsters. Straight after the monster sweep so both pay on the
                 // same tick and the same 1-in-16 cadence. [problems.md] §41
@@ -4431,6 +4459,21 @@ int main(int argc, char** argv) {
                 simAccum -= kSimDt;
             }
         }
+
+        // Session over: the last body on the floor died and possess_a_survivor
+        // found no one to fall into (:4305). `running = false` alone does NOT end
+        // the frame — the sim loop above closes here, but `while (running)` is only
+        // re-tested at the top of the next iteration, so control would fall
+        // straight into rendering with `player == entt::null`. The HUD block reads
+        // `reg.get<Transform>(player)` unguarded, and Release compiles EnTT's
+        // asserts out (NDEBUG), so that is an unchecked sparse-set index — a silent
+        // out-of-bounds read, not a clean abort.
+        //
+        // Bailing here rather than guarding each read: a frame with no player is
+        // not meaningful to draw (compute_camera finds no CameraTag and yields a
+        // stale matrix), and a per-read guard has to be repeated at every `player`
+        // access below — one of which was already missed once.
+        if (!running) break;
 
         // --- render --------------------------------------------------------
         int fbw = 0, fbh = 0;

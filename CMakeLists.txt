@@ -435,8 +435,20 @@ if(GIGA_BUILD_TESTS)
     # nav.h helpers that existed only to feed it went too, along with
     # AsyncBake's mutable_coarse()/mutable_fine(). [problems.md] §14, and this
     # is what problems.md §2 asked for since 2026-08-04.
+    # 23274 -> 23361 (+87) on 2026-08-06: test_mat4_lookAt. mat4_lookAt did
+    # `normalize(cross(f, up))` with no degenerate guard, so whenever the view
+    # direction was parallel or anti-parallel to `up` the cross vanished,
+    # normalize() substituted no axis (math.h:29-32 returns {0,0,0}), and the
+    # entire rotation basis went to zeros — a singular view matrix. Reachable
+    # today via `--pitch 1.5708`, which writes pitch past the ±1.5533 rad clamp
+    # that keeps mouselook off the singularity. The suite pins orthonormality of
+    # the three rotation rows across the regression cases, ordinary directions,
+    # both near-degenerate clamp boundaries, all four non-Z gravity regimes, and
+    # non-unit `up` — the last of which is what fixes WHICH quantity the guard
+    # may measure: |cross(f, up)|, never dot(f, up), because `up` is a public
+    # parameter under no obligation to be unit-length.
     set_tests_properties(world_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "23274/23274 checks passed"
+        PASS_REGULAR_EXPRESSION "23361/23361 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically

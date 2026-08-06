@@ -81,7 +81,8 @@ bool entity_health(const Registry& reg, const NpcPool& pool, Entity e,
 
 DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
                           std::int16_t raw, DamageChannel ch, Entity source,
-                          const MacroGrid* grid, ParticleBurstQueue* particles) {
+                          const MacroGrid* grid, ParticleBurstQueue* particles,
+                          const GravityField* gravity) {
     DamageResult out;
     if (!reg.valid(target) || raw <= 0) return out;
     if (reg.all_of<Dead>(target)) return out;  // already scheduled to die
@@ -141,22 +142,33 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
 
     out.applied = static_cast<std::int16_t>(before - after);
 
-    // Directional knockback impulse on hit (DOD DOD-compliant pure math)
+    // Directional knockback impulse on hit (DOD DOD-compliant pure math).
+    // LATERAL means "perpendicular to gravity", never "XZ": the plane is derived
+    // from the layer's own gravity vector ([AGENTS.md] — gravity is a vector, and
+    // "down" is never assumed to be -Z). A hit shoves the target away along the
+    // ground, not up the slope of whichever axis happens to be vertical today.
+    // Without a field the raw attacker→target line is used: still isotropic, just
+    // uncorrected for slope — no axis is privileged in either branch.
     if (out.applied > 0 && reg.all_of<Velocity, Transform>(target)) {
-        vec3 hitDir{0.0f, 0.0f, 0.0f};
         if (reg.valid(source) && reg.all_of<Transform>(source)) {
             const vec3& srcPos = reg.get<Transform>(source).pos;
             const vec3& tgtPos = reg.get<Transform>(target).pos;
-            hitDir = vec3{tgtPos.x - srcPos.x, 0.0f, tgtPos.z - srcPos.z};
-            float lenSq = hitDir.x * hitDir.x + hitDir.z * hitDir.z;
+            vec3 d = tgtPos - srcPos;
+            if (gravity) {
+                const vec3 g = gravity->at(tgtPos);
+                const float gLen = length(g);
+                if (gLen > 1e-6f) {
+                    // Strip the component along gravity: what is left is the floor plane.
+                    const vec3 up = g * (-1.0f / gLen);
+                    d = d - up * dot(d, up);
+                }
+            }
+            const float lenSq = dot(d, d);
             if (lenSq > 0.001f) {
-                float invLen = 1.0f / std::sqrt(lenSq);
-                hitDir.x *= invLen; hitDir.z *= invLen;
+                auto& vel = reg.get<Velocity>(target);
+                vel.v = vel.v + d * (2.5f / std::sqrt(lenSq));
             }
         }
-        auto& vel = reg.get<Velocity>(target);
-        vel.v.x += hitDir.x * 2.5f;
-        vel.v.z += hitDir.z * 2.5f;
     }
     out.lethal = (after == 0 && before > 0);
 
@@ -408,7 +420,8 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
 std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
                              NpcPool& pool, EventBus& bus,
                              LayerId layer, float dt, std::uint64_t tick,
-                             ParticleBurstQueue* particles) {
+                             ParticleBurstQueue* particles,
+                             const GravityField* gravity) {
     // The camera holder, resolved ONCE per pass. It is a single entity that every
     // monster may want, so hoisting it out of the loop is free; crowd prey is
     // per-monster and cannot be hoisted the same way ([hunt.h]).
@@ -675,7 +688,7 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         // cooldown unset exactly as the break did.
         DamageResult r = apply_damage(reg, pool, s.target, s.raw,
                                       DamageChannel::Kinetic, s.mob, &grid,
-                                      particles);
+                                      particles, gravity);
         if (r.hit) {
             ++swings;
             if (MobCombat* mc = reg.try_get<MobCombat>(s.mob))
@@ -1032,7 +1045,20 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         // Per-projectile gravity. A monster's lob is compensated for full gravity;
         // a camera-aimed player shot cannot be, so it flies flatter instead. One
         // integrator, two trajectories. [combat.h Projectile::gravityPct]
-        v.v.z -= kProjGravity * (static_cast<float>(p.gravityPct) * 0.01f) * dt;
+        //
+        // The pull follows the layer's gravity VECTOR, never -Z ([AGENTS.md]:
+        // read it via world.gravity().at(pos)). kProjGravity stays the ballistic
+        // tuning knob it always was — it is a MAGNITUDE (m/s^2), so it scales the
+        // unit gravity direction rather than being bolted onto one axis. This is
+        // the game's only projectile integrator: shots carry SelfIntegrating, so
+        // physics_step never touches them and there is no second chance to be right.
+        const vec3 projG = stack.layer(layer).gravity().at(tr.pos);
+        const float projGLen = length(projG);
+        if (projGLen > 1e-6f) {
+            const float mag =
+                kProjGravity * (static_cast<float>(p.gravityPct) * 0.01f) * dt;
+            v.v = v.v + projG * (mag / projGLen);
+        }
         tr.pos.x = wrapf(tr.pos.x + v.v.x * dt, kWorldExtent);
         tr.pos.y = wrapf(tr.pos.y + v.v.y * dt, kWorldExtent);
         tr.pos.z += v.v.z * dt;
@@ -1177,11 +1203,13 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         const DamageChannel ch = static_cast<DamageChannel>(h.channel);
         if (h.onVictim && victim != entt::null) {
             DamageResult r = apply_damage(reg, pool, victim, h.dmg, ch, h.source,
-                                          &grid, particles);
+                                          &grid, particles,
+                                          &stack.layer(layer).gravity());
             if (r.hit) landed = true;
         } else if (h.other != entt::null && reg.valid(h.other)) {
             DamageResult r = apply_damage(reg, pool, h.other, h.dmg, ch, h.source,
-                                          &grid, particles);
+                                          &grid, particles,
+                                          &stack.layer(layer).gravity());
             if (r.hit) {
                 landed = true;
                 // Credit the shooter, the same way the melee path credits a swing.
@@ -1399,7 +1427,8 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
 bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId layer,
                        float dt, bool wantsAttack, std::uint64_t tick,
                        const MacroGrid* grid, CarveProposalQueue* carves,
-                       const StatusSet* status, ParticleBurstQueue* particles) {
+                       const StatusSet* status, ParticleBurstQueue* particles,
+                       const GravityField* gravity) {
     Entity self = entt::null;
     for (auto e : reg.view<const CameraTag, const Transform>()) {
         if (reg.get<const Transform>(e).layer != layer) continue;
@@ -1538,7 +1567,8 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
     // deliberately no second way for something to die.
     // MELEEGRID: forward grid so WallBrace soaks player melee (mobs/projectiles already do).
     DamageResult r = apply_damage(reg, pool, best, swingDmg,
-                                  DamageChannel::Kinetic, self, grid, particles);
+                                  DamageChannel::Kinetic, self, grid, particles,
+                                  gravity);
     pm.cooldownMs = swingCd;
     if (r.lethal) ++pm.kills;
     (void)bus;
