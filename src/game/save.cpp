@@ -1026,7 +1026,34 @@ std::size_t snapshot_floor(const World& w, int floorNumber,
             const CellType* pg = mats->page(i);
             if (!pg) continue;
             wr.u32(static_cast<std::uint32_t>(i));
-            for (int b = 0; b < kSubVoxels; ++b) wr.u16(pg[b]);
+            // RUN-LENGTH, not raw. A page is 512 sub-voxel materials and it is
+            // almost never 512 DIFFERENT ones: the padic sandwich gives a cell a
+            // run of base, a run of ceiling plaster and a run of floor concrete —
+            // three runs, ~14 bytes, against 1024 raw. Written the same way the
+            // type and mask-state arrays above already are.
+            //
+            // This does NOT constrain what a page may contain. Flaked plaster, a
+            // blast crater, any arbitrary mix of atoms still encodes — it just
+            // costs more runs. That is the point: the cell stays a LEGO of atoms
+            // and only the ENCODING gets cheaper. (The alternative once floated
+            // here — promoting common combinations to CellTypes — would have
+            // hardcoded a finite set of mixes into the material vocabulary and
+            // broken the moment a surface chipped. Rejected, correctly.)
+            std::uint32_t runs = 0;
+            for (int b = 0; b < kSubVoxels;) {
+                int e = b + 1;
+                while (e < kSubVoxels && pg[e] == pg[b]) ++e;
+                ++runs;
+                b = e;
+            }
+            wr.u16(static_cast<std::uint16_t>(runs));
+            for (int b = 0; b < kSubVoxels;) {
+                int e = b + 1;
+                while (e < kSubVoxels && pg[e] == pg[b]) ++e;
+                wr.u16(pg[b]);
+                wr.u16(static_cast<std::uint16_t>(e - b));
+                b = e;
+            }
         }
     }
     return out.size();
@@ -1102,11 +1129,20 @@ bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
         r.u32(cell);
         if (cell >= kMacroCells) return false;
         CellType* pg = mats.ensure_page(cell, types[cell]);
-        for (int b = 0; b < kSubVoxels; ++b) {
-            std::uint16_t v = 0;
+        std::uint16_t runs = 0;
+        r.u16(runs);
+        int at = 0;
+        for (std::uint16_t k = 0; k < runs && r.ok(); ++k) {
+            std::uint16_t v = 0, len = 0;
             r.u16(v);
-            pg[b] = v;
+            r.u16(len);
+            // Subtract-never-add, the same guard the mask and type runs use: a
+            // forged length cannot walk past the page.
+            if (len == 0 || len > static_cast<std::uint16_t>(kSubVoxels - at))
+                return false;
+            for (std::uint16_t q = 0; q < len; ++q) pg[at++] = v;
         }
+        if (at != kSubVoxels) return false;
     }
     // Every byte consumed, none left over — same discipline as save_read.
     return r.ok() && r.at() == n;
