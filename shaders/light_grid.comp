@@ -29,10 +29,13 @@ layout(push_constant) uniform GridPush {
     vec4 camPos;    // xyz = camera world position, w = max range (48.0m)
     vec4 gridMin;   // xyz = 3D grid min corner in world space, w = cell size x/z (2.0m)
     vec4 gridExt;   // x = gridDimX (32), y = gridDimY (16), z = gridDimZ (32), w = cell size y (2.0m)
-    vec4 params;    // x = uTime, y = maxLightsPerCell (15), z = activeLightCount, w = reserved
+    vec4 params;    // x = uTime, y = maxLightsPerCell (15), z = activeLightCount,
+                    // w = TORUS WRAP PERIOD in metres (kWorldExtent, pushed by the host)
 } pc;
 
-// Toroidal wrap helper for 128m world extent
+// Toroidal wrap. The period is PUSHED, never written here: this helper used to be
+// called with a literal 128.0 against a 256 m world, which is the half-period
+// mistake [problems.md] §7 spent a month on.
 float wrap_delta(float a, float b, float L) {
     float d = b - a;
     return d - L * floor((d + L * 0.5) / L);
@@ -42,8 +45,14 @@ float dist_sq_point_aabb_toroidal(vec3 p, vec3 bMin, vec3 bMax, float L) {
     vec3 cCenter = (bMin + bMax) * 0.5;
     vec3 cHalf   = (bMax - bMin) * 0.5;
 
+    // ALL THREE AXES. y used to be a bare subtraction, and that was the live bug:
+    // the world wraps on x, y and z alike ([AGENTS.md] §Toroidal invariants), so a
+    // lamp two metres away across the y seam measured ~254 m, landed outside the
+    // grid box and was never binned into any cell — the fog stayed dark exactly
+    // where a light was. The consumer (volumetric_fog.glsl) already wrapped y
+    // correctly, so producer and consumer disagreed about the shape of the world.
     float dx = wrap_delta(cCenter.x, p.x, L);
-    float dy = p.y - cCenter.y;
+    float dy = wrap_delta(cCenter.y, p.y, L);
     float dz = wrap_delta(cCenter.z, p.z, L);
 
     vec3 delta = max(vec3(0.0), abs(vec3(dx, dy, dz)) - cHalf);
@@ -77,7 +86,8 @@ void main() {
         if (intensity <= 0.001) continue;
 
         vec3 lightPos = light.posRadius.xyz;
-        float dSq = dist_sq_point_aabb_toroidal(lightPos, cellMin, cellMax, 128.0);
+        float dSq =
+            dist_sq_point_aabb_toroidal(lightPos, cellMin, cellMax, pc.params.w);
 
         if (dSq <= radius * radius) {
             if (foundCount < 15u) {

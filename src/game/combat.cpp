@@ -692,6 +692,46 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
     return swings;
 }
 
+std::uint32_t hazard_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
+                          LayerId layer, std::uint64_t tick,
+                          ParticleBurstQueue* particles) {
+    struct Hit {
+        Entity body;
+        std::int16_t dmg;
+        DamageChannel ch;
+    };
+    // Empty in the overwhelming common case (hazard cells are sparse), and an
+    // empty std::vector does not allocate — so this costs nothing on a tick where
+    // nobody is standing in fire.
+    std::vector<Hit> hits;
+
+    for (auto e : reg.view<const NpcRef, const Transform>()) {
+        const Transform& tr = reg.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+
+        // The body's own cell, then the cell it stands ON — the same two probes
+        // the monster path makes, so a pool of acid burns whether you are in it
+        // or on its surface.
+        const int cx = wrap_macro(static_cast<int>(tr.pos.x / kCellSize));
+        const int cy = wrap_macro(static_cast<int>(tr.pos.y / kCellSize));
+        const int cz = wrap_macro(static_cast<int>(tr.pos.z / kCellSize));
+        CellHazard hz = get_cell_hazard(grid.cell(cx, cy, cz));
+        if (!hz.active)
+            hz = get_cell_hazard(grid.cell(cx, cy, wrap_macro(cz - 1)));
+        if (!hz.active) continue;
+
+        // Identity stagger on the entity, matching the monster path exactly.
+        const std::uint64_t id = static_cast<std::uint64_t>(entt::to_integral(e));
+        if ((tick + id) % 16 != 0) continue;
+        hits.push_back(Hit{e, hz.damage, hz.channel});
+    }
+
+    for (const Hit& h : hits)
+        apply_damage(reg, pool, h.body, h.dmg, h.ch, entt::null, &grid, particles);
+
+    return static_cast<std::uint32_t>(hits.size());
+}
+
 ItemId equipped_melee(const Inventory& inv) {
     ItemId best = kInvalidItem;
     std::uint16_t bestDmg = 0;

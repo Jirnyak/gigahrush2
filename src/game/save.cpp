@@ -1116,6 +1116,22 @@ void floor_file_write(const World& w, int floorNumber,
                       std::vector<std::uint8_t>& out) {
     std::vector<std::uint8_t> blob;
     snapshot_floor(w, floorNumber, blob);
+
+    // SAY IT when the writer outgrows the reader. There is no guard here on
+    // purpose — refusing to write would lose the floor silently, which is worse —
+    // but the reader rejects anything over kMaxSnapBytes, and for a year the two
+    // disagreed with no diagnostic at either end: floor files were written and
+    // refused, and the only clue was one `refused: ... (floor regenerates
+    // pristine)` line on load, long after the cause. Now the WRITE side names it
+    // too, so the next size regression is a number at the moment it happens.
+    // [save.h] kMaxSnapBytes, [problems.md] §37.
+    if (blob.size() > static_cast<std::size_t>(kMaxSnapBytes)) {
+        std::fprintf(stderr,
+                     "[save] floor %d snapshot is %zu B, past the %u B read cap "
+                     "— this file will be REFUSED on load\n",
+                     floorNumber, blob.size(), kMaxSnapBytes);
+    }
+
     out.clear();
     out.reserve(kFloorHeaderWire + blob.size());
     Writer wr(out);

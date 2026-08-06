@@ -62,7 +62,9 @@ public:
     void spawn(const GpuParticle* items, std::uint32_t count);
 
     // The sim step. Record OUTSIDE the render pass (compute), before draw.
-    void record_sim(VkCommandBuffer cmd, float dt);
+    // `gravity` is the layer's declared acceleration VECTOR (m/s^2), straight
+    // from world.gravity(); per-particle phys.x still scales it.
+    void record_sim(VkCommandBuffer cmd, float dt, vec3 gravity);
 
     // The billboard draw. Record INSIDE the render pass, after the solid
     // passes (alpha-blended, depth-tested, no depth write).

@@ -258,10 +258,29 @@ inline constexpr std::size_t kFactionWire =
     kRelFactionCount * kRelFactionCount;
 
 // Ceiling on a floor file's snapshot blob before its checksum has vouched for the
-// header. The honest worst case is a checkerboard floor: 2 M mask-state runs (5 B
-// each) + 2 M mixed masks (64 B each) + full type runs — ~150 MB. A quarter GiB
-// bounds that with slack while still refusing a corrupt header asking for gigabytes.
-inline constexpr std::uint32_t kMaxSnapBytes = 256u * 1024u * 1024u;
+// header.
+//
+// WAS 256 MiB, and that number was derived from the WRONG worst case. It counted
+// mask runs and type runs — "a checkerboard floor: 2 M mask-state runs (5 B each)
+// + 2 M mixed masks (64 B each) + full type runs, ~150 MB" — and never counted the
+// term that actually dominates: the `sub_material` PAGES. A pristine padic floor
+// carries 689,958 pages x 1 KiB = 706 MB, so a MEASURED, never-shot-at floor wrote
+// a 772.0 MB file that this reader refused on sight (2026-08-06).
+//
+// The consequence was not a slow save, it was NO save: `floor_file_write` has no
+// size guard, so every `floor_<N>.sav` the game produced was unreadable by its own
+// reader, and every carve, every door state and every sub-material edit was lost on
+// revisit while 736 MiB of disk was burned per floor per save. [problems.md] §37.
+//
+// 1 GiB restores the property the number is FOR — a corrupt header asking for
+// gigabytes is still refused, `blobBytes` still fits a uint32 with 4x slack — while
+// admitting the real measured payload with ~39% headroom.
+//
+// This is the CHEAP half. The floor is a pure function of (seed, number)
+// ([floors.md] ONE-FLOOR-ONE-SEED), so the file should carry only the DELTA from
+// generation, which would make an untouched floor a few KB instead of 736 MiB.
+// Same root as the mirror's page-pool overflow ([render/voxel_mirror.h] kPageCap).
+inline constexpr std::uint32_t kMaxSnapBytes = 1024u * 1024u * 1024u;
 
 // Exact byte count `save_write` will produce for the given section sizes.
 inline constexpr std::size_t save_bytes_for(std::size_t openedCount,

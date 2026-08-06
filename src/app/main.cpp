@@ -109,7 +109,6 @@
 #include "world/level_stack.h"
 #include "world/nav.h"
 #include "world/nav_async.h"
-#include "world/lazy_field_rebaker.h"
 
 using namespace giga;
 
@@ -1664,7 +1663,6 @@ int main(int argc, char** argv) {
     // Build the world population-first, then embody the player from it ([npcs.md]).
     LevelStack stack;
     // §22: lazy nav field rebake under frame budget after carves.
-    nav::LazyFieldRebaker navRebaker;
     Registry reg;
     // Navigation for the ONE live floor. Re-baked on every floor entry; ~128 MiB
     // for the flow fields, which is affordable precisely because streaming keeps
@@ -1855,7 +1853,6 @@ int main(int argc, char** argv) {
                                               *currentSpec,
                                               streamer.floor_seed_of(registry, 0));
             doors.frozen = true;
-            navRebaker.clear();
             begin_floor_nav(stack.layer(l0), nav);
             game::ai_init(reg, l0);
             if (propPass.ready()) {
@@ -2238,6 +2235,19 @@ int main(int argc, char** argv) {
     // lives here once instead of twice.
     // `landHub` (default -1): lattice hub index for §24 fast-travel landings;
     // -1 keeps mirrored x/y (debug teleport / ±1 ride). Absolute path only.
+    //
+    // THE LIVE LAYER LIVES HERE, not inside the frame loop, and `do_ride` writes
+    // it back before returning. It used to be declared at the top of the loop
+    // body, which the lambda (defined above it) could not reach — so a ride left
+    // the enclosing `activeLayer` pointing at the slot the streamer had just
+    // recycled, and the REST OF THAT FRAME ran against the departed floor's
+    // World: carve, door_step, the mirror flush and bodyPass.record all took the
+    // wrong layer. Two of the four travel sites (F9, --shot) had each grown their
+    // own `activeLayer = nl;` patch; the console teleport and the [ / ] keys had
+    // not. With `keepRadius = 0` there are exactly two slots and `ensure_loaded`
+    // allocates before `unload` frees, so the id alternates on EVERY ride — the
+    // corruption was guaranteed, not occasional. [problems.md] §24.
+    LayerId activeLayer = reg.get<Transform>(player).layer;
     auto do_ride = [&](bool absolute, int target, int landHub = -1) -> bool {
         // Pass the player's durable record id so the destination crowd skips it
         // instead of spawning a second player.
@@ -2332,7 +2342,6 @@ int main(int argc, char** argv) {
                 stack.layer(nl), doors, currentFloor, *currentSpec,
                 streamer.floor_seed_of(registry, currentFloor));
         doors.frozen = true;
-        navRebaker.clear();
         begin_floor_nav(stack.layer(nl), nav);
         // Arrival geometry is final (floor file + doors stamped): re-snapshot
         // the GPU voxel mirror for the recycled World object.
@@ -2350,6 +2359,9 @@ int main(int argc, char** argv) {
         // wall forever (physics backs out every tick). F9 already calls
         // place_body_at_cell; keyboard/--shot did not. [save.h]
         game::place_body_safely(reg, stack.layer(nl), player);
+        // Publish the new slot to the enclosing frame. ONE place, so a fifth
+        // travel site cannot forget it the way two of the first four did.
+        activeLayer = nl;
         // AUTOSAVE: every floor transition checkpoints the run, so a crash
         // costs at most the current floor's progress. The departed floor's
         // file is already on disk (written above, before travel).
@@ -2358,7 +2370,7 @@ int main(int argc, char** argv) {
     };
 
     while (running) {
-        LayerId activeLayer = reg.get<Transform>(player).layer;
+        activeLayer = reg.get<Transform>(player).layer;
         bool propPassNeedsRebuild = false;
 
         // The dressing's half of every geometry mutation, next to the ECS-prop
@@ -2379,10 +2391,6 @@ int main(int argc, char** argv) {
         };
 
         // §22: amortize nav field rebake under frame budget.
-        if (nav.ready() && !nav.baking() && !navRebaker.is_idle()) {
-            navRebaker.step_lazy_rebake(stack.layer(activeLayer).grid(),
-                                        nav.mutable_coarse(), nav.mutable_fine());
-        }
         std::uint64_t now = SDL_GetPerformanceCounter();
         float frameDt = static_cast<float>((now - prevTicks) / freq);
         prevTicks = now;
@@ -3439,7 +3447,6 @@ int main(int argc, char** argv) {
                         carve_sphere(stack.layer(activeLayer), op,
                                      carveScratch, carveResult);
                     if (removed > 0) {
-                        navRebaker.mark_dirty_cells(carveResult.dirtyCells);
                         // No log, no bookkeeping: geometry persistence is the
                         // floor's own file, written when the player leaves
                         // ([save.h] modular layout) or on F5.
@@ -3666,6 +3673,11 @@ int main(int argc, char** argv) {
                                    pool, bus, activeLayer,
                                                    kSimDt, simTick,
                                                    &particleBursts);
+                // Fire, acid and live grates bill EVERY embodied body, not just
+                // monsters. Straight after the monster sweep so both pay on the
+                // same tick and the same 1-in-16 cadence. [problems.md] §41
+                game::hazard_step(reg, stack.layer(activeLayer).grid(), pool,
+                                  activeLayer, simTick, &particleBursts);
                 // Shots resolve AFTER the pass that launched them, so a
                 // projectile never lands on the frame it is fired.
                 meleeHits += game::projectile_step(
@@ -3689,7 +3701,6 @@ int main(int argc, char** argv) {
                             carve_sphere(stack.layer(activeLayer), op,
                                          carveScratch, carveResult);
                         if (removed > 0) {
-                            navRebaker.mark_dirty_cells(carveResult.dirtyCells);
                             voxelMirror.mark_dirty(
                                 carveResult.dirtyCells.data(),
                                 carveResult.dirtyCells.size());
@@ -4063,7 +4074,6 @@ int main(int argc, char** argv) {
                                     streamer.floor_seed_of(registry,
                                                            currentFloor));
                             doors.frozen = true;
-                            navRebaker.clear();
                             begin_floor_nav(stack.layer(nl), nav);
                             if (propPass.ready()) {
                                 merge_ecs_prop_meshes(reg, nl, propPass,
@@ -5210,7 +5220,6 @@ int main(int argc, char** argv) {
                     propPassNeedsRebuild = true;
                 // Same field-rebake debt carve pays: doors mutate occupancy
                 // masks the nav flow fields sample.
-                navRebaker.mark_dirty_cells(doors.dirtyCells);
                 doors.dirtyCells.clear();
             }
 
@@ -5313,7 +5322,9 @@ int main(int argc, char** argv) {
                     wirePass.write_pins(wirePins.data(), wireN);
                 }
                 if (std::getenv("GIGA_WIRE_NOSIM") == nullptr)
-                    wirePass.record_sim(cmd, 1.0f / 60.0f);
+                    wirePass.record_sim(
+                        cmd, 1.0f / 60.0f,
+                        stack.layer(activeLayer).gravity().global);
             }
 
             // Cloth verlet: same aliveness law, same clock.
@@ -5342,7 +5353,9 @@ int main(int argc, char** argv) {
                     clothPass.write_pins(clothPins.data(), clothN);
                 }
                 if (std::getenv("GIGA_WIRE_NOSIM") == nullptr)
-                    clothPass.record_sim(cmd, 1.0f / 60.0f);
+                    clothPass.record_sim(
+                        cmd, 1.0f / 60.0f,
+                        stack.layer(activeLayer).gravity().global);
             }
 
             if (!stainDirty.empty()) {
@@ -5355,8 +5368,12 @@ int main(int argc, char** argv) {
             // Particle sim AFTER the mirror flush: its barrier orders the
             // masks transfer before compute reads, so a particle collides
             // with THIS frame's carve holes, not last frame's walls.
+            // Gravity is the layer's declared VECTOR — the flush above already
+            // dereferences activeLayer, so it is valid here.
             if (std::getenv("GIGA_PARTICLE_NOSIM") == nullptr)
-                particlePass.record_sim(cmd, 1.0f / 60.0f);
+                particlePass.record_sim(
+                    cmd, 1.0f / 60.0f,
+                    stack.layer(activeLayer).gravity().global);
 
             renderer.begin_pass(0.0f, 0.0f, 0.0f);
 
@@ -5501,7 +5518,6 @@ int main(int argc, char** argv) {
                                 *currentSpec,
                                 streamer.floor_seed_of(registry, currentFloor));
                         doors.frozen = true;
-                        navRebaker.clear();
                         begin_floor_nav(stack.layer(nl), nav);
                         voxelMirror.upload_all(stack.layer(nl));
                         if (mirrorVerify) voxelMirror.verify(stack.layer(nl));

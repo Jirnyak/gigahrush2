@@ -220,27 +220,6 @@ void bake_fine(const MacroGrid& grid, FineNav& out) {
     bake_nearest(grid, out.nearest.data());
 }
 
-void rebake_fine_node(const MacroGrid& grid, FineNav& fine, int nodeId) {
-    if (nodeId < 0 || nodeId >= kNodes) return;
-    const std::size_t need = static_cast<std::size_t>(kNodes) * kMacroCells;
-    if (fine.flow.size() != need) {
-        fine.flow.assign(need, kFlowNone);
-    }
-    std::uint8_t* slice =
-        fine.flow.data() + static_cast<std::size_t>(nodeId) * kMacroCells;
-    std::fill(slice, slice + kMacroCells, kFlowNone);
-    bake_fine_node(grid, nodeId, slice);
-}
-
-void rebake_nearest(const MacroGrid& grid, FineNav& fine) {
-    fine.nearest.assign(kMacroCells, kFlowNone);
-    bake_nearest(grid, fine.nearest.data());
-}
-
-void rebake_coarse(const MacroGrid& grid, CoarseGraph& coarse) {
-    bake_coarse(grid, coarse);
-}
-
 std::uint8_t route_step(const CoarseGraph& coarse, const FineNav& fine,
                         ivec3 from, ivec3 to) {
     // Already standing on the destination cell.
@@ -266,10 +245,6 @@ std::uint8_t route_step(const CoarseGraph& coarse, const FineNav& fine,
     // region boundary (with consumer hysteresis); the global fields let us skip
     // straight to the target anchor here.
     return fine.at(tNode, from.x, from.y, from.z);
-}
-
-void bake_fine_node_async(const MacroGrid& grid, int id, std::uint8_t* slice) {
-    bake_fine_node(grid, id, slice);
 }
 
 } // namespace giga::nav

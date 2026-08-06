@@ -71,12 +71,13 @@ public:
     const CoarseGraph& coarse() const { return coarse_; }
     const FineNav& fine() const { return fine_; }
 
-    // Mutable live graph for LazyFieldRebaker (§22). Only call on the main
-    // thread while !baking() — the worker never touches coarse_/fine_ after
-    // poll() has moved ownership. Carves that land during a full bake stay
-    // queued on the rebaker until ready().
-    CoarseGraph& mutable_coarse() { return coarse_; }
-    FineNav& mutable_fine() { return fine_; }
+    // NO mutable accessors. `mutable_coarse()` / `mutable_fine()` existed for
+    // LazyFieldRebaker alone and went with it (2026-08-06): handing out a
+    // writable live graph is what let a worker thread BFS the grid the main
+    // thread was carving. The live graph is written at exactly one point —
+    // inside `poll()`, on the main thread, after the worker is joined — and
+    // keeping it that way is the whole safety argument of this class.
+    // [problems.md] §14.
 
     // Milliseconds the last completed bake took, split by stage. For the HUD, so
     // the cost stays visible instead of becoming folklore.

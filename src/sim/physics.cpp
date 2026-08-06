@@ -253,7 +253,18 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
                     wTarget.x /= r;
                     wTarget.y /= r;
                     wTarget.z /= r;
-                    auto& ang = reg.emplace_or_replace<AngularVelocity>(e);
+                    // get_or_emplace, NOT emplace_or_replace — the same form
+                    // `Impact` uses above. With no constructor arguments,
+                    // emplace_or_replace assigns a value-initialized
+                    // AngularVelocity{} over the existing one (EnTT
+                    // registry.hpp: `curr = Type{args...}`), so `ang.w` was
+                    // ALWAYS {0,0,0} on the right-hand side and the blend below
+                    // collapsed to `ang.w = wTarget * kBlend`. Two consequences,
+                    // both silent: a rolling body span at a permanent 35% of the
+                    // correct n x v_lat / r and never converged, and any authored
+                    // tumble (prop_system.cpp gives a detached ragdoll one) was
+                    // wiped by the first grounded substep. [problems.md] §16.
+                    auto& ang = reg.get_or_emplace<AngularVelocity>(e);
                     constexpr float kBlend = 0.35f;
                     ang.w.x = ang.w.x * (1.0f - kBlend) + wTarget.x * kBlend;
                     ang.w.y = ang.w.y * (1.0f - kBlend) + wTarget.y * kBlend;

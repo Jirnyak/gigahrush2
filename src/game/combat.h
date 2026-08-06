@@ -512,6 +512,32 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
                              LayerId layer, float dt, std::uint64_t tick,
                              ParticleBurstQueue* particles = nullptr);
 
+// Cell hazards for EMBODIED BODIES — the player and every resident.
+//
+// `get_cell_hazard` has always known that an electrified grate costs 15 Energy, an
+// acid pool 10 and a fire cell 20. Until now the only place that damage was ever
+// APPLIED was inside `mob_attack_step`'s `view<MobRef, Transform, MobCombat>`, so
+// monsters burned and **nothing else did**: the player and every resident could
+// stand in fire, in acid and on a live grate indefinitely and lose zero HP. That
+// broke two stated laws at once — "the player is not special" (here he was special
+// in his own favour) and the manifest's "100% symmetrical combat, damage, armour".
+// [problems.md] §41.
+//
+// Same law as the monsters, deliberately: the same cell-then-floor-below probe and
+// the same 1-in-16-tick cadence, so a body in fire pays 20 HP about 7.8 times a
+// second whoever it belongs to. That is fast — under a second to kill an unarmoured
+// 100 HP body — but it is the rate monsters have always paid, and making the two
+// differ is precisely the asymmetry this closes. Flying monsters are exempt in the
+// mob path; embodied bodies have no such flag and none is invented here.
+//
+// Two-phase, like every other damage sweep in this file: `apply_damage` can
+// `emplace<Dead>` and reallocate the storage the view is walking.
+//
+// Returns the number of bodies that took hazard damage this step.
+std::uint32_t hazard_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
+                          LayerId layer, std::uint64_t tick,
+                          ParticleBurstQueue* particles = nullptr);
+
 void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
                       const vec3& to, std::int16_t dmg,
                       std::uint16_t projSpeedMmps, Entity source,

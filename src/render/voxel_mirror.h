@@ -57,10 +57,31 @@ class VoxelMirror {
 public:
     // Mirrors SubField<T>::kNoPage — asserted equal in the .cpp.
     static constexpr std::uint32_t kNoPage = 0xFFFFFFFFu;
-    // Page-pool capacity, slots. 64 MiB; typical floors hold tens of MB of
-    // mixed cells ([destruct.md]), so this is generous, and running past it is
-    // loud, never silent.
-    static constexpr std::uint32_t kPageCap = 65536u;
+    // Page-pool capacity, slots. **768 MiB** at 1 KiB per page.
+    //
+    // MEASURED, not guessed (2026-08-06, floor 0, Release): the padic sandwich
+    // gives almost every cell a floor material and a different ceiling material,
+    // so the cell is genuinely non-uniform and earns a page. A pristine floor
+    // holds **689,958** pages = 706 MB. The old cap of 65,536 (64 MiB) was
+    // therefore oversubscribed **10.5x**, and the overflow was not academic:
+    // `upload_all` clamped `poolPages_` to the cap and handed every cell past it
+    // `kNoPage`, so **90.5% of the floor rendered as flat uniform CellType** —
+    // all the sub-voxel carving the generator emitted, invisible. It printed
+    // `[mirror] page pool OVERFLOW` on every single run and nobody read it.
+    //
+    // 786,432 slots = exactly 768 MiB, ~14% headroom over the measured need.
+    // Affordable by contract: [performance.md] budgets the GPU as "effectively
+    // unlimited - draw AND compute", and this host reports a 16 GiB heap.
+    // Transient cost is higher than resident: `upload_via_staging` allocates a
+    // staging buffer the size of the payload, so a full snapshot peaks at
+    // ~706 MB device + ~706 MB host-visible before the staging buffer is freed.
+    //
+    // This is the CHEAP half of the fix. The real fix is to stop minting a page
+    // per sandwich cell at all (encode "concrete floor + plaster ceiling" as a
+    // CellType so the cell stays uniform), which would also collapse the floor
+    // snapshot — the same root causes [problems.md] §37. Until then, raising the
+    // cap is what makes the floor the generator actually built reach the screen.
+    static constexpr std::uint32_t kPageCap = 786432u;
 
     static constexpr std::size_t kMaskBytesPerCell = 64;                    // 8x uint64
     static constexpr std::size_t kPageBytes = kSubVoxels * sizeof(std::uint16_t);

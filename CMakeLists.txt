@@ -424,8 +424,19 @@ if(GIGA_BUILD_TESTS)
     # [2026-08-02] Dropped from 23416 to 23271 due to the removal of procedural props from props.csv
     # [2026-08-03] 23291 -> 23290 (-1): LazyFieldBaker deleted (orphaned duplicate of
     # LazyFieldRebaker whose output nothing read), its single CHECK went with it.
+    # 23290 -> 23274 (-16) on 2026-08-06: LazyFieldRebaker DELETED, and its
+    # test_lazy_field_rebaker (16 CHECKs) with it. Not a coverage loss to mourn —
+    # the suite asserted that a system worked, and the system was a data race:
+    # its `std::async` worker BFS-ed the live MacroGrid while the main thread
+    # carved it, `clear()` deliberately did not join, and `mark_dirty_cells`
+    # queued ONE lattice node when a carve invalidates all 64 flow fields, so it
+    # repaired 1/64 of what it broke. The honest debt is the one [destruct.h]
+    # already documents: nav stays stale until the next full bake. The four
+    # nav.h helpers that existed only to feed it went too, along with
+    # AsyncBake's mutable_coarse()/mutable_fine(). [problems.md] §14, and this
+    # is what problems.md §2 asked for since 2026-08-04.
     set_tests_properties(world_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "23290/23290 checks passed"
+        PASS_REGULAR_EXPRESSION "23274/23274 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically

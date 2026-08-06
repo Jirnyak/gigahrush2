@@ -121,14 +121,18 @@ struct FineNav {
 // out.nearest. Bake-time only (floor load / post-samosbor), never on the tick.
 void bake_fine(const MacroGrid& grid, FineNav& out);
 
-// --- Lazy / partial rebake (jirnyak.md §22) ---------------------------------
-// Full bake_fine is ~130 MiB and seconds of BFS — too heavy per carve. These
-// helpers re-touch only what geometry change invalidated so LazyFieldRebaker
-// can amortize work under a per-frame budget without freezing the render thread.
-void bake_fine_node_async(const MacroGrid& grid, int id, std::uint8_t* slice);
-void rebake_fine_node(const MacroGrid& grid, FineNav& fine, int nodeId);
-void rebake_nearest(const MacroGrid& grid, FineNav& fine);
-void rebake_coarse(const MacroGrid& grid, CoarseGraph& coarse);
+// --- No partial rebake. Deleted 2026-08-06, with LazyFieldRebaker -----------
+// Four helpers used to live here so a per-frame rebaker could re-touch "only
+// what geometry change invalidated". It could not: `flow[node]` is a BFS FROM
+// that node across the whole 128^3, so a carve anywhere invalidates all 64
+// fields while the rebaker queued exactly ONE — 1/64 of the repair — and it ran
+// that BFS on a worker holding a raw pointer into the live MacroGrid the main
+// thread was carving, with a `clear()` that deliberately did not join. A racy
+// 1/64 fix is worse than the honest debt, which [destruct.h] already states:
+// carved geometry leaves the flow fields stale until the next full bake
+// (floor load / post-samosbor). [problems.md] §14, and the resolution of the
+// jirnyak.md §22 vs problems.md §2 conflict — the background thread is
+// legitimate and lives in `nav::AsyncBake`; the incremental BFS was not.
 
 // --- Routing: enter the baked nav from any cell -----------------------------
 //

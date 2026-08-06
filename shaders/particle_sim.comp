@@ -25,7 +25,8 @@ layout(std430, binding = 0) buffer Pool { Particle p[]; } pb;
 layout(std430, binding = 1) readonly buffer MaskBuf { uint uMasks[]; };
 
 layout(push_constant) uniform Push {
-    vec4 sim; // x dt, y gravity z accel, z particle count, w wrap period (m)
+    vec4 sim;  // x dt, y unused, z particle count, w wrap period (m)
+    vec4 grav; // xyz = gravity acceleration VECTOR (m/s^2), w = unused
 } pc;
 
 // Solidity of the sub-voxel containing world point `w` (toroidal).
@@ -56,7 +57,7 @@ void main() {
     float drag = pb.p[i].phys.y;
     float bounce = pb.p[i].phys.z;
 
-    vel.z += pc.sim.y * gravMul * dt;
+    vel += pc.grav.xyz * gravMul * dt;
     vel *= pow(drag, dt * 60.0); // drag authored per 60 Hz step
 
     // Axis-wise voxel collision: each axis advances alone and reflects (or

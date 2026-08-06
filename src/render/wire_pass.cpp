@@ -38,9 +38,12 @@ std::string join(const char* dir, const char* file) {
 }
 
 struct SimPush {
-    vec4 sim; // x dt, y gravity z, z chain count, w damping
-    vec4 aux; // x body count, y wrap period (m), z/w unused
+    vec4 sim;  // x dt, y unused, z chain count, w damping
+    vec4 aux;  // x body count, y wrap period (m), z/w unused
+    vec4 grav; // xyz gravity vector (m/s^2), w unused — NEVER assume -Z
 };
+static_assert(sizeof(SimPush) == 48,
+              "sim push must stay under the 128-byte guaranteed range");
 
 } // namespace
 
@@ -290,7 +293,7 @@ void WirePass::upload_bodies(const vec4* bodies, std::uint32_t count) {
         std::memcpy(bodies_.mapped, bodies, sizeof(vec4) * bodyCount_);
 }
 
-void WirePass::record_sim(VkCommandBuffer cmd, float dt) {
+void WirePass::record_sim(VkCommandBuffer cmd, float dt, vec3 gravity) {
     if (simPipeline_ == VK_NULL_HANDLE || chainCount_ == 0) return;
 
     // Last frame's draw read the points; order the write after it.
@@ -306,9 +309,10 @@ void WirePass::record_sim(VkCommandBuffer cmd, float dt) {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, simLayout_, 0,
                             1, &set_, 0, nullptr);
     SimPush p{};
-    p.sim = vec4{dt, -9.81f, static_cast<float>(chainCount_), 0.985f};
+    p.sim = vec4{dt, 0.0f, static_cast<float>(chainCount_), 0.985f};
     p.aux = vec4{static_cast<float>(bodyCount_),
                  static_cast<float>(kWorldExtent), 0.0f, 0.0f};
+    p.grav = vec4{gravity.x, gravity.y, gravity.z, 0.0f};
     vkCmdPushConstants(cmd, simLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                        sizeof(SimPush), &p);
     vkCmdDispatch(cmd, (chainCount_ + 63u) / 64u, 1, 1);

@@ -3832,6 +3832,11 @@ static void test_streamed_nav() {
     LevelStack stack;
     FloorStreamer stream;
     stream.init(stack, /*keepRadius=*/0);
+    // The streamer's own per-floor nav bake is OFF by default now — the app
+    // steers off nav::AsyncBake and never read this one, so baking it on every
+    // floor entry was a multi-second blocking stall for nothing ([problems.md]
+    // §26). This suite is the thing that tests the feature, so it opts in.
+    stream.set_nav_bake(true);
 
     const std::uint32_t seed = 4242u;
     stream.add_module(reg, /*number=*/0, FloorKind::Residential, seed);

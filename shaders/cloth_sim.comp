@@ -58,8 +58,9 @@ vec3 world_land(vec3 cur, vec3 np) {
 }
 
 layout(push_constant) uniform Push {
-    vec4 sim; // x = dt, y = gravity Z accel, z = sheet count, w = damping
-    vec4 aux; // x = body count, y = wrap period (m)
+    vec4 sim;  // x = dt, y = unused, z = sheet count, w = damping
+    vec4 aux;  // x = body count, y = wrap period (m)
+    vec4 grav; // xyz = gravity acceleration VECTOR (m/s^2), w = unused
 } pc;
 
 const int W = 8;
@@ -80,7 +81,7 @@ void main() {
         vec4 cur = sb.s[i].cur[k];
         if (cur.w == 0.0) continue; // pinned
         vec3 vel = (cur.xyz - sb.s[i].prev[k].xyz) * pc.sim.w;
-        vec3 np = cur.xyz + vel + vec3(0.0, 0.0, pc.sim.y) * dt * dt;
+        vec3 np = cur.xyz + vel + pc.grav.xyz * dt * dt;
         for (uint bi = 0u; bi < uint(pc.aux.x); ++bi) {
             vec3 dp = np - bb.b[bi].xyz;
             dp -= per * floor(dp / per + 0.5);

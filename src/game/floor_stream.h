@@ -134,6 +134,25 @@ public:
     // disables it — every load bakes from scratch. Set once, before loading.
     void set_nav_cache_dir(const std::string& dir) { navCacheDir_ = dir; }
 
+    // Own a per-floor nav bake at all. **Default OFF, and that is the fix.**
+    //
+    // `ensure_loaded` used to bake `bake_coarse` + `bake_fine` unconditionally on
+    // every floor entry — the measured ~1.9 s + ~1.8 s and ~130 MiB that
+    // [world/nav_async.h] calls "the worst thing the player feels" — and the app
+    // read the result NEVER: `nav_at` has no caller outside the tests, while the
+    // crowd steers off `main.cpp`'s own `nav::AsyncBake`. So every ride paid a
+    // multi-second BLOCKING bake whose product was freed unread, on top of the
+    // async bake that actually feeds the game. [problems.md] §26.
+    //
+    // Not deleted, because it is a real feature with real coverage: the resident
+    // FloorNav is what `suite_navcache` and `test_floor_streamer_nav` assert
+    // against, and it is the only thing that exercises the on-disk nav cache.
+    // Turning it off by default gives the app the seconds back while leaving the
+    // feature — and its tests — intact. Setting a cache dir implies it, because
+    // memoizing a bake you never make is meaningless.
+    void set_nav_bake(bool on) { navBake_ = on; }
+    bool nav_bake() const { return navBake_ || !navCacheDir_.empty(); }
+
     // Register a floor module: assign `number -> module` in `reg` and record how
     // to build it. Does NOT load it. Returns the new ModuleId, or kInvalidModule
     // if the module table is full.
@@ -285,6 +304,7 @@ private:
     std::vector<LayerId> freeSlots_;
     int keepRadius_ = 0;
     std::string navCacheDir_; // empty = on-disk nav cache disabled
+    bool navBake_ = false;    // see set_nav_bake: OFF for the app, on for tests
 };
 
 } // namespace giga::game

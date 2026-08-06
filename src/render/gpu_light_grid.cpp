@@ -9,6 +9,7 @@
 
 #include "render/vk_common.h"
 #include "render/vk_device.h"
+#include "world/types.h"   // kWorldExtent — the ONE wrap period, never a literal
 
 namespace giga::gpu {
 
@@ -248,7 +249,17 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const
     push.gridMin = vec4{gridMinPos.x, gridMinPos.y, gridMinPos.z, cellSize.x};
     push.gridExt = vec4{static_cast<float>(kGridDimX), static_cast<float>(kGridDimY),
                         static_cast<float>(kGridDimZ), cellSize.y};
-    push.params = vec4{timeSec, 15.0f, static_cast<float>(stagingLightCount_), 0.0f};
+    // params.w carries the TORUS WRAP PERIOD. It used to be a spare 0 while the
+    // shader wrapped against a hardcoded `128.0` — half the real 256 m extent, and
+    // only on x and z. The literal itself turned out to be harmless (128 divides
+    // 256, and `collect_scene_lights` culls every light past 48 m before it ever
+    // reaches this buffer), but the MISSING Y WRAP was not: a lamp two metres away
+    // across the y seam reads as ~254 m, falls outside the grid box and is never
+    // binned at all, so the fog goes dark exactly where it should glow. Sending the
+    // period makes the shader's period unfalsifiable by construction — the same
+    // rule [problems.md] §7 wrote after the phantom-lamp hunt.
+    push.params = vec4{timeSec, 15.0f, static_cast<float>(stagingLightCount_),
+                       kWorldExtent};
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout_, 0, 1, &descriptorSet_, 0, nullptr);

@@ -199,8 +199,25 @@ void FloorStreamer::embody_crowd(Registry& ecs, NpcPool& pool, const World& worl
     for (NpcId id : crowd) {
         // Bucket residents are alive by construction (kill/leave drop them). Skip
         // anyone already embodied — e.g. the player, labelled with this floor but
-        // currently standing on another — which is what prevents a duplicate body.
+        // currently standing on another.
         if (pool.embodied(id)) continue;
+        // ...and skip the record the CALLER is going to embody as the player
+        // itself. The `embodied` test above cannot cover it across a save:
+        // `NpcPool::save_rows` deliberately strips `NpcEmbodied` ("bodies never
+        // survive a save") and `load_rows` strips it again, so on the F9 path the
+        // player's row reads NOT embodied. With a valid `playerId` passed in, the
+        // designate branch below is skipped, this loop embodied the player's row
+        // as an ordinary resident, and main then called `embody_as_player` on the
+        // SAME id — `embody()` creates unconditionally, so the run came back with
+        // a camera-less clone sharing the player's pool row (damage to it drained
+        // the player's HP). Only bites when the saved floor equals the row's own
+        // floor label, i.e. F9 on the starting floor. [problems.md] §25.
+        //
+        // Deliberately NOT also guarding inside `embody()`: making it return null
+        // for an already-embodied id would turn this duplicate into a NULL player
+        // at main.cpp's unguarded `reg.get<Transform>(player)` (§28.1) — a crash
+        // in place of a clone. The skip belongs where the caller's intent is known.
+        if (id == playerId) continue;
         Entity e;
         if (playerId == kInvalidNpc && id == designate) {
             e = embody_as_player(ecs, pool, id, layer);
@@ -284,6 +301,12 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
     // cache dir set (C.2b) we first try the memoized bake keyed on this floor's
     // (number, kind, seed) — a pure fn of the geometry — and only bake + write
     // the cache on a miss.
+    //
+    // GATED, and OFF by default (`set_nav_bake`): the shipping app steers off its
+    // own `nav::AsyncBake` and never reads `nav_at`, so doing this here bought a
+    // multi-second blocking stall per floor entry and 130 MiB, then freed the
+    // result unread. [problems.md] §26.
+    if (nav_bake()) {
     auto fn = std::make_unique<FloorNav>();
     std::string cachePath;
     bool haveNav = false;
@@ -300,6 +323,7 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
                            fn->fine);
     }
     nav_[m] = std::move(fn);
+    }
 
     fm.bodies.clear();
     embody_crowd(ecs, pool, stack.layer(slot), fm, slot, playerId, out.player);
