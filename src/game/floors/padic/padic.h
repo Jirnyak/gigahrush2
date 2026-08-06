@@ -74,6 +74,20 @@ bool register_padic_floor(FloorCatalog& cat);
 // buildings. Clears the grid (and stale sub-material pages) first like every
 // floor generator ([floor_gen.h] generate_floor contract). Dispatched by kind
 // from floor_gen.cpp's generator table.
+// The module's LAWS, declared before any geometry: gravity frame + the
+// sub-material registry. Runs on every floor entry, generated or restored —
+// the frame is a property of the module, not of the saved bytes, so a floor
+// rebuilt from a snapshot still gets it. Idempotent.
+void padic_declare_rules(World& world, int number, const FloorSpec& spec,
+                         unsigned seed);
+
+// The module's rules laid ON TOP of finished geometry: water in the lattice
+// pits and stair sumps, buoyant gas in the shafts. Runs after generation OR
+// after a snapshot restore, so a revisited floor gets its fluids back even
+// though the snapshot carries geometry only. Deterministic in (seed, number).
+void padic_apply_rules(World& world, int number, const FloorSpec& spec,
+                       unsigned seed);
+
 void generate_padic_floor(World& world, int number, const FloorSpec& spec,
                           unsigned seed);
 

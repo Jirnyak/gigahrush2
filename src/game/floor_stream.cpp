@@ -283,51 +283,49 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
     // floor bit-for-bit (floor_gen.h) — no layout is ever persisted.
     LayerId slot = alloc_slot();
     if (slot == kInvalidLayer) return out; // slot pool exhausted (should not happen)
-    // PRINT THE NUMBER EVERY RUN. Which half of a floor entry costs what has been
-    // folklore ("generation is cheap, the nav bake is the slow one"); now it is a
-    // line in the log. Feeds the open question of whether a visited floor should
-    // skip geometry generation entirely.
-    const auto tGen0 = std::chrono::steady_clock::now();
-    generate_floor(stack.layer(slot), fm.number, floor_spec(fm.kind), fm.seed);
-    const auto tGen1 = std::chrono::steady_clock::now();
+    // A FLOOR ENTRY IS THREE STEPS ([floor_gen.h]), and the middle one is a FORK.
+    //
+    //   1. LAWS      — always. The module says what kind of place this is:
+    //                  gravity frame, registries. Not in the snapshot, because
+    //                  it is a property of the MODULE, not of the saved bytes.
+    //   2. GEOMETRY  — restored from the floor's snapshot if it was ever
+    //                  visited, generated from (seed, number) if it was not.
+    //                  One or the other, never both.
+    //   3. RULES     — always, on top of whichever geometry step ran: fluids and
+    //                  seeded content, so a revisited floor gets its water back
+    //                  even though the snapshot carries geometry only.
+    //
+    // Generation and rules used to be fused inside the module generator, which is
+    // what forced a visited floor to be BUILT before its snapshot could be laid
+    // over it — 126 ms of voxels written and immediately overwritten, and worse,
+    // the ordering bug that hung lamps in mid-air ([problems.md] §42). Now the
+    // fork is literal: a visited floor is its snapshot plus its module's rules.
+    //
+    // Timings are printed because which half costs what was folklore until it was
+    // measured: generate ~130 ms against a ~6.4 s snapshot read on this floor.
+    const auto t0 = std::chrono::steady_clock::now();
+    floor_declare_rules(stack.layer(slot), fm.number, floor_spec(fm.kind), fm.seed);
 
-    // A VISITED FLOOR IS ITS SNAPSHOT. Restore it HERE — immediately after
-    // generation and before anything attaches itself to the geometry.
-    //
-    // The stamp used to happen in `main`, three call sites, AFTER the dressing
-    // bake and after the props were seeded. So pipes were routed and lamps were
-    // hung against PRISTINE geometry, and only then did the snapshot turn their
-    // anchors back into the holes the player had blown. `spawn_prop` honestly
-    // refuses an anchor that is not solid, but at that moment it still was; and
-    // `anchor_validate_step` only ever fires on a live carve's dirty-cell list,
-    // which a snapshot stamp does not produce. Net effect: a lamp you shot down
-    // came back floating over its own hole on every revisit. [problems.md] §42.
-    //
-    // Why generation still runs at all, rather than being skipped outright: the
-    // snapshot carries GEOMETRY ONLY — floor number, cell types, mask states,
-    // mixed masks, sub-material pages. The floor's declared GRAVITY FRAME and its
-    // fluid/gas fields are set by the generator (`padic_gen.cpp` — regime, global,
-    // kFluidField, kGasField), because the frame is a property of the MODULE, not
-    // of the saved bytes. Restoring without generating would raise a floor with no
-    // declared frame, which today only ever looks fine because the World slot is
-    // recycled and the previous floor happened to share it. Generation is the
-    // cheap half anyway — the seconds were in the nav bake, and that is off now.
-    //
-    // File I/O stays in the app (`save.h`'s split: giga_game reads no files), so
-    // the restore arrives as a hook. No hook, or no file, or a refused file =>
-    // the freshly generated floor stands, which is exactly the first-visit case.
-    const auto tRes0 = std::chrono::steady_clock::now();
-    const bool restored = restore_ ? restore_(stack.layer(slot), fm.number) : false;
-    const auto tRes1 = std::chrono::steady_clock::now();
+    const auto t1 = std::chrono::steady_clock::now();
+    const bool restored = restore_ && restore_(stack.layer(slot), fm.number);
+    const auto t2 = std::chrono::steady_clock::now();
+    if (!restored)
+        generate_floor(stack.layer(slot), fm.number, floor_spec(fm.kind), fm.seed);
+    const auto t3 = std::chrono::steady_clock::now();
+
+    floor_apply_rules(stack.layer(slot), fm.number, floor_spec(fm.kind), fm.seed);
+    const auto t4 = std::chrono::steady_clock::now();
     {
         auto ms = [](auto a, auto b) {
             return std::chrono::duration<double, std::milli>(b - a).count();
         };
         std::fprintf(stderr,
-                     "[floor] %d: generate %.1f ms | restore %s %.1f ms\n",
-                     fm.number, ms(tGen0, tGen1),
-                     restored ? "HIT" : "miss", ms(tRes0, tRes1));
+                     "[floor] %d: laws %.1f ms | %s %.1f ms | rules %.1f ms\n",
+                     fm.number, ms(t0, t1),
+                     restored ? "RESTORED" : "generated",
+                     restored ? ms(t1, t2) : ms(t2, t3), ms(t3, t4));
     }
+
     // Antourage AFTER the geometry: it READS the finished grid as context and
     // never writes it ([antourage.md] — the dressing is mesh on anchors, so
     // nav has nothing to route around and does not care where in the load this

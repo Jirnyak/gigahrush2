@@ -425,7 +425,15 @@ static void test_monster_all() {
         CHECK(!pos_wet(nullptr, vec3{10.0f, 10.0f, 10.0f}));
 
         World w;
+        // A floor entry is THREE steps now ([floor_gen.h]): the module's laws,
+        // then geometry (generated here — no snapshot in a unit test), then the
+        // module's rules laid on top. The fluids this test looks for are step 3:
+        // they used to be fused into the generator, and were split out so a
+        // RESTORED floor gets its water back too. Building a floor by hand means
+        // following the same contract the streamer does.
+        floor_declare_rules(w, -26, floor_spec(FloorKind::Derelict), 4242u);
         generate_floor(w, -26, floor_spec(FloorKind::Derelict), 4242u);
+        floor_apply_rules(w, -26, floor_spec(FloorKind::Derelict), 4242u);
         for (int i = 0; i < 400; ++i)
             if (fluid_step(w).moved == 0.0f) break;
 

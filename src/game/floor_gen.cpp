@@ -183,11 +183,40 @@ static_assert(sizeof(kGenerators) / sizeof(kGenerators[0]) ==
                   static_cast<std::size_t>(FloorKind::Count),
               "generator table must have exactly one row per FloorKind");
 
+constexpr FloorGeneratorFunc kRuleDeclarers[] = {
+    padic_declare_rules, padic_declare_rules, padic_declare_rules,
+    padic_declare_rules, padic_declare_rules,
+};
+static_assert(sizeof(kRuleDeclarers) / sizeof(kRuleDeclarers[0]) ==
+                  static_cast<std::size_t>(FloorKind::Count),
+              "rule-declarer table must have exactly one row per FloorKind");
+
+constexpr FloorGeneratorFunc kRuleAppliers[] = {
+    padic_apply_rules, padic_apply_rules, padic_apply_rules,
+    padic_apply_rules, padic_apply_rules,
+};
+static_assert(sizeof(kRuleAppliers) / sizeof(kRuleAppliers[0]) ==
+                  static_cast<std::size_t>(FloorKind::Count),
+              "rule-applier table must have exactly one row per FloorKind");
+
+std::size_t kind_row(const FloorSpec& spec) {
+    const std::size_t k = static_cast<std::size_t>(spec.kind);
+    return k >= static_cast<std::size_t>(FloorKind::Count) ? 0 : k;
+}
+
+void floor_declare_rules(World& world, int number, const FloorSpec& spec,
+                         unsigned seed) {
+    kRuleDeclarers[kind_row(spec)](world, number, spec, seed);
+}
+
 void generate_floor(World& world, int number, const FloorSpec& spec,
                     unsigned seed) {
-    std::size_t k = static_cast<std::size_t>(spec.kind);
-    if (k >= static_cast<std::size_t>(FloorKind::Count)) k = 0;
-    kGenerators[k](world, number, spec, seed);
+    kGenerators[kind_row(spec)](world, number, spec, seed);
+}
+
+void floor_apply_rules(World& world, int number, const FloorSpec& spec,
+                       unsigned seed) {
+    kRuleAppliers[kind_row(spec)](world, number, spec, seed);
 }
 
 } // namespace giga::game

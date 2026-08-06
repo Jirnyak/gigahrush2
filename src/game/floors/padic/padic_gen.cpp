@@ -547,57 +547,42 @@ void stamp_lattice(MacroGrid& g, SubField<CellType>& sm, int number) {
 
 } // namespace
 
-void generate_padic_floor(World& world, int number, const FloorSpec& spec,
-                          unsigned seed) {
-    MacroGrid& g = world.grid();
-    SubField<CellType>& sm =
-        world.subfields().get_or_create<CellType>(kSubMaterialName);
+// THE MODULE'S LAWS, declared BEFORE any geometry exists.
+//
+// A floor is a sub-game with its own rules ([floors.md]); this is where it says
+// what they are. Split out of the generator on 2026-08-06 because the two were
+// fused, and that fusion is what forced a visited floor to be GENERATED before
+// its snapshot could be laid over it: the frame lives here, the voxels do not,
+// so a restored floor can now get its laws without rebuilding geometry it is
+// about to throw away.
+//
+// Runs on EVERY floor entry, generated or restored. Idempotent by construction:
+// get_or_create returns the resident registry, and the frame is two assignments.
+void padic_declare_rules(World& world, int /*number*/, const FloorSpec& /*spec*/,
+                         unsigned /*seed*/) {
+    // The sub-material registry has to exist before either geometry writer —
+    // the generator's put_bits or the snapshot reader's ensure_page — touches it.
+    world.subfields().get_or_create<CellType>(kSubMaterialName);
 
-    // Declare this module's gravity frame ON THE WORLD. The regime is runtime
-    // state ([world/gravity.h]) — this is its generation-time default; the game
-    // may flip it later and consumers re-read it, they never cache the module
-    // constant.
+    // The regime is runtime state ([world/gravity.h]) — this is its entry-time
+    // default; the game may flip it later and consumers re-read it, they never
+    // cache the module constant. It is NOT in the floor snapshot, and must not
+    // be: gravity is a property of the MODULE, not of the saved bytes.
     world.gravity().global = vec3{0.0f, 0.0f, -9.81f};
     world.gravity().regime = kPadicGravity;
+}
 
-    // Clear to air — including stale material pages from the floor this World
-    // object held before (floor streaming recycles Worlds in place).
-    sm.clear();
-    for (int z = 0; z < kMacroDim; ++z)
-        for (int y = 0; y < kMacroDim; ++y)
-            for (int x = 0; x < kMacroDim; ++x) g.clear_cell(x, y, z);
-
+// THE MODULE'S RULES LAID ON TOP OF FINISHED GEOMETRY.
+//
+// Runs after the floor exists, whether it was generated fresh or restored from a
+// snapshot — so a revisited floor gets its water and gas back even though the
+// snapshot carries geometry only. Positions come from the module's own lattice
+// and plan, not from reading the grid, so this is deterministic in
+// (seed, number) exactly like the geometry and the doorways are.
+void padic_apply_rules(World& world, int number, const FloorSpec& /*spec*/,
+                       unsigned seed) {
     Plan p;
     build_plan(p, seed, number);
-    // Every sandwich cell will page (ceiling != floor material by design).
-    sm.reserve_pages(700000);
-
-    const std::uint32_t floorSalt =
-        hash_u32(static_cast<std::uint32_t>(seed) ^
-             (static_cast<std::uint32_t>(number) * 0x51ED270Bu));
-
-    for (int b = 0; b <= kLastBase; b += kStorey) {
-        const std::uint32_t sh = hash_u32(floorSalt ^ static_cast<std::uint32_t>(b));
-        stamp_sandwich(g, sm, p, b + 2);
-        punch_holes(g, sm, p, b + 2, sh);
-        stamp_walls(g, sm, p, b);
-        for (std::size_t s = 0; s < p.stairs.size(); ++s)
-            stamp_stair(g, sm, p.stairs[s], b,
-                        hash_u32(sh ^ (0x57A12u + static_cast<std::uint32_t>(s))));
-    }
-    // Attic: the 2-cell crawl whose sandwich is storey 0's floor. No holes —
-    // the arrival floor stays solid. Stair entry strips so the ground-storey
-    // landings have something to stand on.
-    stamp_sandwich(g, sm, p, kMacroDim - 1);
-    for (const PlanStair& st : p.stairs)
-        for (int row = 0; row < 2; ++row) {
-            put_bits(g, sm, st.x, st.y + row, kMacroDim - 1, kCeilW, kEntryX04,
-                     kMatConcrete);
-            put_bits(g, sm, st.x, st.y + row, kMacroDim - 1, kFloorW, kEntryX04,
-                     kMatConcrete);
-        }
-
-    stamp_lattice(g, sm, number);
 
     // Seed water and gas fluids in staircases and elevator shafts
     Field<float>* wet = world.fields().find<float>(kFluidField);
@@ -639,6 +624,53 @@ void generate_padic_floor(World& world, int number, const FloorSpec& spec,
             }
         }
     }
+
+}
+
+void generate_padic_floor(World& world, int number, const FloorSpec& spec,
+                          unsigned seed) {
+    MacroGrid& g = world.grid();
+    SubField<CellType>& sm =
+        world.subfields().get_or_create<CellType>(kSubMaterialName);
+
+    // Clear to air — including stale material pages from the floor this World
+    // object held before (floor streaming recycles Worlds in place).
+    sm.clear();
+    for (int z = 0; z < kMacroDim; ++z)
+        for (int y = 0; y < kMacroDim; ++y)
+            for (int x = 0; x < kMacroDim; ++x) g.clear_cell(x, y, z);
+
+    Plan p;
+    build_plan(p, seed, number);
+    // Every sandwich cell will page (ceiling != floor material by design).
+    sm.reserve_pages(700000);
+
+    const std::uint32_t floorSalt =
+        hash_u32(static_cast<std::uint32_t>(seed) ^
+             (static_cast<std::uint32_t>(number) * 0x51ED270Bu));
+
+    for (int b = 0; b <= kLastBase; b += kStorey) {
+        const std::uint32_t sh = hash_u32(floorSalt ^ static_cast<std::uint32_t>(b));
+        stamp_sandwich(g, sm, p, b + 2);
+        punch_holes(g, sm, p, b + 2, sh);
+        stamp_walls(g, sm, p, b);
+        for (std::size_t s = 0; s < p.stairs.size(); ++s)
+            stamp_stair(g, sm, p.stairs[s], b,
+                        hash_u32(sh ^ (0x57A12u + static_cast<std::uint32_t>(s))));
+    }
+    // Attic: the 2-cell crawl whose sandwich is storey 0's floor. No holes —
+    // the arrival floor stays solid. Stair entry strips so the ground-storey
+    // landings have something to stand on.
+    stamp_sandwich(g, sm, p, kMacroDim - 1);
+    for (const PlanStair& st : p.stairs)
+        for (int row = 0; row < 2; ++row) {
+            put_bits(g, sm, st.x, st.y + row, kMacroDim - 1, kCeilW, kEntryX04,
+                     kMatConcrete);
+            put_bits(g, sm, st.x, st.y + row, kMacroDim - 1, kFloorW, kEntryX04,
+                     kMatConcrete);
+        }
+
+    stamp_lattice(g, sm, number);
 
     (void)spec.population; // geometry ignores population; the seeder consumes it
 }

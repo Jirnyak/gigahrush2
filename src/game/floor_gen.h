@@ -36,8 +36,33 @@ namespace giga::game {
 // again with the same arguments (even on a recycled World slot) and you get an
 // identical grid. `number` is the in-game floor label (signed, floors.md); it is
 // mixed into the RNG so two floors of the same kind still differ.
+// A FLOOR ENTRY IS THREE STEPS, NOT ONE. Generation and rules used to be fused
+// inside the module generator; splitting them is what lets a VISITED floor come
+// back from its snapshot instead of being rebuilt ([floors.md], [problems.md] §42):
+//
+//   1. floor_declare_rules  — the module's LAWS. Gravity frame, registries.
+//                             ALWAYS, before any geometry exists. The frame is a
+//                             property of the MODULE, never of the saved bytes,
+//                             which is exactly why a restored floor still needs
+//                             this and why the snapshot does not carry it.
+//   2. generate_floor  OR  a snapshot restore — the GEOMETRY. One or the other:
+//                             first visit builds it from (seed, number), a
+//                             revisit reads it back verbatim.
+//   3. floor_apply_rules    — the module's rules laid ON TOP of whichever
+//                             geometry step ran: fluids, seeded content.
+//                             ALWAYS, after geometry is final.
+//
+// Steps 1 and 3 are idempotent and deterministic in (seed, number), like the
+// geometry itself. A module supplies all three as data rows in floor_gen.cpp's
+// dispatch tables — never a branch.
+void floor_declare_rules(World& world, int number, const FloorSpec& spec,
+                         unsigned seed);
+
 void generate_floor(World& world, int number, const FloorSpec& spec,
                     unsigned seed);
+
+void floor_apply_rules(World& world, int number, const FloorSpec& spec,
+                       unsigned seed);
 
 // The X/Y room-lattice pitch this kind builds on, in macro cells. A "room" is the
 // (stride-1)^2 interior between four wall lines; the wall lines themselves sit on

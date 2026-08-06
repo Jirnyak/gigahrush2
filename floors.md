@@ -175,7 +175,7 @@ in the `NpcPool` ([npcs.md](npcs.md)).
 - **Enter** (`ensure_loaded(number)`): the first time a module is entered its
   crowd is seeded **once** into the cold pool, which labels every seeded record
   with the floor's number (so they land in `pool.floor_bucket(number)`); a free
-  slot is allocated; `generate_floor` rebuilds the geometry into it; and the crowd
+  slot is allocated; the floor is brought up in **three steps** (below); and the crowd
   — **whoever is currently in that floor's bucket** — is embodied. Records already
   embodied elsewhere (e.g. the player standing on another floor) are **skipped**,
   so nobody is duplicated. The
@@ -220,6 +220,46 @@ the real-time engine runs: ~16k embodied **agents on the CPU**, every cellular
 > destination materializes them on next load and the origin no longer does — the
 > membership is live, `set_floor`/`kill` keep it in O(1). Seeding stays once-only,
 > so the population is still steady per visit.
+
+
+### A floor entry is three steps, and the middle one is a fork
+
+Generation and rules used to be fused inside the module's generator. Splitting
+them is what makes a floor an honest **sub-game with its own laws**, and what lets
+a **visited floor be its snapshot** instead of being rebuilt
+([floor_gen.h](src/game/floor_gen.h)):
+
+| Step | What | When |
+|---|---|---|
+| 1. `floor_declare_rules` | the module's **LAWS** — gravity frame, registries | **always**, before any geometry exists |
+| 2. `generate_floor` **or** a snapshot restore | the **GEOMETRY** | one or the other, never both |
+| 3. `floor_apply_rules` | the module's rules laid **on top** — fluids, seeded content | **always**, after geometry is final |
+
+The frame is a property of the **module**, not of the saved bytes, which is
+exactly why the snapshot does not carry it and why a restored floor still needs
+step 1. Steps 1 and 3 are idempotent and deterministic in `(seed, number)`, like
+the geometry. A module supplies all three as data rows in `floor_gen.cpp`'s
+dispatch tables — never a branch.
+
+**Why the fork exists at all.** Attaching anything to geometry that is about to
+change under it is the bug class this closes: pipes were routed and lamps hung
+against pristine geometry, and only then did the snapshot turn their anchors back
+into the holes the player had blown ([problems.md](problems.md) §42).
+
+**Measured** (floor 0, Release, printed by every run as `[floor] N: laws … | … | rules …`):
+
+```
+laws 0.7 ms | generated  164.4 ms | rules 1.5 ms    first visit
+laws 0.6 ms | RESTORED  6595.5 ms | rules 1.4 ms    revisit — no generation at all
+```
+
+**The snapshot is deliberately WHOLE, not a delta.** The obvious optimisation —
+store only the divergence from a deterministic regeneration — is rejected on
+purpose (owner, 2026-08-06): this is a game with **full destructibility**, so the
+worst case is a player who breaks everything, and then the delta *is* the whole
+floor. That buys the complexity of two code paths and no size guarantee. A whole
+snapshot is one path with one cost, and 6.4 s of load is affordable where a
+maintenance-hungry conditional format is not.
 
 ## Open questions (resolve when implementing)
 
