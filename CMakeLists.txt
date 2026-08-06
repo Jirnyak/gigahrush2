@@ -731,7 +731,15 @@ if(GIGA_BUILD_TESTS)
     # The extra CHECKs pin the two endpoints and the EVENNESS the owner asked for —
     # both constants are powers of two in kilogrammes, so a capacity can never come
     # out odd, and a stray constant that broke that would otherwise be silent.
-        PASS_REGULAR_EXPRESSION "game_test: 235098 checks, 0 failures")
+    # 235098 -> 235119 on 2026-08-06: +21, ENCUMBRANCE. The pure curve is pinned on
+    # the properties that make it not-arbitrary — CONTINUOUS across the threshold
+    # (a gram over costs <0.1 %, so there is no step to feel), a genuinely free
+    # band under capacity, floored so an absurd load slows and never freezes, and
+    # the threshold moving with Strength. The driver half proves the claim the whole
+    # design rests on: the load reaches the `Mass` component, so fall damage and
+    # knockback see it through laws that did not change.
+    #   [items] mass: bare 71.9 kg -> carrying 2 x АТО-41 = 123.9 kg
+        PASS_REGULAR_EXPRESSION "game_test: 235119 checks, 0 failures")
 
 
 

@@ -528,4 +528,88 @@ static void test_loottable_all() {
         none.slots[3] = ItemSlot{heaviestId, 0};
         CHECK(inventory_mass_g(none) == 0u);
     }
+
+    // --- ENCUMBRANCE: what the weight COSTS ------------------------------------
+    // The pure half first ([encumbrance.h] encumbrance_of), because every property
+    // that matters is a property of the curve and needs no registry to state.
+    {
+        const std::uint32_t cap = 64000;
+
+        // NO CLIFF AT THE THRESHOLD. Exactly at capacity the pace is untouched, and
+        // a gram over must not teleport it downward — a step you can feel at the
+        // edge is what makes an encumbrance rule read as arbitrary.
+        const EncumbranceEffect atLimit = encumbrance_of(cap, cap);
+        const EncumbranceEffect justOver = encumbrance_of(cap + 1, cap);
+        CHECK(atLimit.speedScale == 1.0f);
+        CHECK(!atLimit.overloaded);
+        CHECK(justOver.overloaded);
+        CHECK(justOver.speedScale < 1.0f);
+        CHECK(1.0f - justOver.speedScale < 0.001f); // continuous across the edge
+
+        // THE FREE BAND IS REALLY FREE: under capacity nothing is charged but the
+        // noise, which is not a penalty — it is what carrying things sounds like.
+        const EncumbranceEffect half = encumbrance_of(cap / 2, cap);
+        CHECK(half.speedScale == 1.0f);
+        CHECK(half.extraSleepPerSec == 0.0f);
+        CHECK(half.noiseMult > 1.0f && half.noiseMult < 1.0f + kNoiseLoadGain);
+        CHECK(encumbrance_of(0, cap).noiseMult == 1.0f); // empty is silent-as-before
+
+        // Double the budget is half the pace, and the fatigue is exactly the
+        // authored rate — both are the numbers [encumbrance.h] states in prose.
+        const EncumbranceEffect twice = encumbrance_of(cap * 2, cap);
+        CHECK(std::fabs(twice.speedScale - 0.5f) < 1e-5f);
+        CHECK(std::fabs(twice.extraSleepPerSec - kOverloadSleepDrainPerSec) < 1e-5f);
+
+        // FLOORED, never frozen: an absurd load slows you to the floor and no
+        // further, because a scale approaching zero is a soft lock and not a cost.
+        CHECK(encumbrance_of(cap * 1000, cap).speedScale == kEncumbranceMinScale);
+        // A body with no character sheet has no budget, and must not be crushed by
+        // a division rather than left alone.
+        CHECK(encumbrance_of(50000, 0).speedScale == 1.0f);
+        CHECK(!encumbrance_of(50000, 0).overloaded);
+
+        // STRENGTH IS THE THRESHOLD. The same load that overloads a weak body is
+        // inside a strong one's band — which is the point of spending the points.
+        RpgStats str8{};
+        str8.attr[static_cast<std::size_t>(Attr::Str)] = 8;
+        const std::uint32_t load = 80000; // 80 kg
+        CHECK(encumbrance_of(load, carry_capacity_g(RpgStats{})).overloaded);
+        CHECK(!encumbrance_of(load, carry_capacity_g(str8)).overloaded);
+    }
+
+    // The DRIVER half: the load must actually reach the `Mass` component, because
+    // that is the whole "no new mechanic" claim — fall damage and knockback read
+    // Mass and nothing else.
+    {
+        NpcPool pool;
+        pool.init();
+        Registry reg;
+        seed_floor_population(pool, /*floor=*/0, /*n=*/4, /*seed=*/3u);
+        const NpcId id = 0;
+        Entity e = embody(reg, pool, id, 0);
+        CHECK(e != entt::null);
+        const float bare = reg.get<Mass>(e).kg;
+        CHECK(bare > 10.0f); // stature alone, m = 22*h^2
+
+        // Load 40 kg of the heaviest thing in the catalogue.
+        std::uint32_t heaviest = 0;
+        ItemId hid = kInvalidItem;
+        for (ItemId i = 1; i <= static_cast<ItemId>(kItemCount); ++i)
+            if (item_def(i).massG > heaviest) { heaviest = item_def(i).massG; hid = i; }
+        pool.inventory(id).slots[0] = ItemSlot{hid, 2};
+        const EncumbranceTick t = encumbrance_step(reg, pool, 0, kSimDt, 0);
+        CHECK(t.visited >= 1u);
+        const float loaded = reg.get<Mass>(e).kg;
+        std::printf("[items] mass: bare %.1f kg -> carrying 2 x %s = %.1f kg\n",
+                    static_cast<double>(bare), item_name(hid),
+                    static_cast<double>(loaded));
+        // The two rifles are IN the mass, to the gram.
+        CHECK(std::fabs(loaded - (bare + 2.0f * heaviest * 0.001f)) < 0.01f);
+        // And dropping them takes it back off: the sweep recomputes, it does not
+        // accumulate — a system that only ever added would make a looter immortal
+        // in reverse, growing heavier every visit.
+        pool.inventory(id).slots[0] = ItemSlot{};
+        encumbrance_step(reg, pool, 0, kSimDt, 0);
+        CHECK(std::fabs(reg.get<Mass>(e).kg - bare) < 0.01f);
+    }
 }

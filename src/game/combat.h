@@ -314,6 +314,13 @@ inline constexpr std::uint8_t kPlayerGravityPct = 40;
 // kProjHitRadius^2 = 0.5625. It hits — and the shorter 125 Hz step makes it hit
 // HARDER than the 0.497 this comment recorded at 120 Hz. The reference uses
 // 0.85 cells; this is that.
+// The stature knockback is normalised to, in kg: `body_mass_kg` of a 1.75 m adult
+// ([embody.h] m = 22*h^2 -> 67.4). A body of exactly this mass takes the historical
+// flat 2.5 m/s shove, so the shipped feel is a FIXED POINT rather than a retune,
+// and everything lighter or heavier now scales around it through p = m*v — which
+// is what makes a full pack plant you and a child fly. See combat.cpp's knockback.
+inline constexpr float kKnockbackRefMassKg = 67.4f;
+
 inline constexpr float kMuzzleForward = 1.7f;
 
 // The camera holder's firearm state. A sibling of PlayerMelee rather than an

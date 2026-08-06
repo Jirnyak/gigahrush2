@@ -154,9 +154,19 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
                 hitDir.x *= invLen; hitDir.z *= invLen;
             }
         }
+        // KNOCKBACK IS AN IMPULSE, so it divides by mass — p = m*v, the same law
+        // `impact.cpp` charges energy with. It used to add a flat 2.5 m/s to every
+        // body, which meant a loaded liquidator and an empty child flew equally and
+        // the `Mass` component was decoration on this path. Normalised at
+        // kKnockbackRefMassKg so the shipped feel is unchanged for a body of average
+        // stature carrying nothing, and a full pack now genuinely plants you.
+        const Mass* km = reg.try_get<Mass>(target);
+        const float kmass = km != nullptr && km->kg > 1.0f ? km->kg
+                                                           : kKnockbackRefMassKg;
+        const float impulse = 2.5f * (kKnockbackRefMassKg / kmass);
         auto& vel = reg.get<Velocity>(target);
-        vel.v.x += hitDir.x * 2.5f;
-        vel.v.z += hitDir.z * 2.5f;
+        vel.v.x += hitDir.x * impulse;
+        vel.v.z += hitDir.z * impulse;
     }
     out.lethal = (after == 0 && before > 0);
 
