@@ -2,9 +2,12 @@
 
 #include <cmath>
 
+#include "core/wrap.h"       // wrap_macro — the body's cell is a toroidal lookup
 #include "ecs/components.h"
 #include "game/embody.h"     // NpcRef
 #include "game/inventory.h"
+#include "game/room_zone.h"  // room_bit_at / room_restores / room_recover
+#include "world/types.h"     // kCellSize — pos -> macro cell, the one conversion
 
 namespace giga::game {
 
@@ -163,6 +166,18 @@ Needs needs_roll(std::uint32_t seed) {
     return n;
 }
 
+Needs needs_roll_resident(std::uint32_t seed) {
+    Needs n = needs_roll(seed);
+    // Built by RUNNING the real clock rather than by inventing a second set of
+    // bands: a resident's state is then always a state the ordinary clock could
+    // have produced, and retuning any drain moves the residents with it for free.
+    // Its own hash stream, so the phase is uncorrelated with the five bar rolls.
+    const float phase =
+        u01(giga::hash_u32(seed ^ 0xd4ec1e5eu)) * kResidentPhaseMaxSec;
+    needs_advance(n, phase);
+    return n;
+}
+
 void needs_advance(Needs& n, float dt) {
     if (dt <= 0.0f) return;
     n.food  = clamp_need(n.food  - kFoodDrainPerSec  * dt);
@@ -232,47 +247,91 @@ float needs_speed_scale(const Needs& n) {
     return scale;
 }
 
-NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt) {
+NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
+                     const RoomZones* rooms) {
     NeedsTick out;
     if (dt <= 0.0f) return out;
 
-    const PlayerRef me = find_player(reg, pool, layer);
-    if (me.entity == entt::null) return out;   // nobody is playing this layer
-    out.ticked = true;
+    // ONE SWEEP over the embodied bodies of this layer, camera holder included as an
+    // ordinary row. There is no player branch in the loop — only a per-body question
+    // ("does this entity hold CameraTag") that decides which seed roll it gets and
+    // whose numbers land in the report ([jirnyak.md] §9: key on the component, never
+    // on an identity).
+    //
+    // ITERATING WHILE DAMAGING IS SAFE HERE, and it is checked rather than assumed:
+    // `apply_damage` ([combat.cpp]) writes hp, may write Velocity, and creates NO
+    // component — `Dead` is emplaced by `finalize_deaths`, one pass later, which is
+    // precisely the single-death-point contract [combat.h] describes. So no storage
+    // can grow under this view. An earlier revision of this file buffered the player
+    // through `find_player` for fear of that, and the fear was of the wrong function.
+    auto view = reg.view<const NpcRef, const Transform>();
+    for (auto e : view) {
+        const Transform& tr = view.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+        const NpcId id = view.get<const NpcRef>(e).id;
+        if (!pool.valid(id) || !pool.alive(id)) continue;
 
-    Needs& n = pool.needs(me.id);
-    // Lazy roll, the way `player_melee_step` attaches PlayerMelee lazily: no spawn
-    // path, elevator or possession has to remember to seed the clock. Seeded from
-    // the record id, so the same body is the same body across a reload.
-    if (n.seeded == 0) n = needs_roll(giga::hash_u32(me.id + 1u));
+        const bool camera = reg.all_of<CameraTag>(e);
+        Needs& n = pool.needs(id);
+        // Lazy roll, the way `player_melee_step` attaches PlayerMelee lazily: no
+        // spawn path, elevator or possession has to remember to seed the clock.
+        // Seeded from the record id, so the same body is the same body across a
+        // reload — and a RESIDENT is seeded at its own point of the day, so a floor
+        // is not 419 people who all ate breakfast on the same frame.
+        if (n.seeded == 0) {
+            const std::uint32_t seed = giga::hash_u32(id + 1u);
+            n = camera ? needs_roll(seed) : needs_roll_resident(seed);
+        }
 
-    needs_advance(n, dt);
+        needs_advance(n, dt);
+        ++out.bodies;
 
-    out.failed = needs_failed_mask(n);
-    out.warned = needs_warn_mask(n);
-    out.speedScale = needs_speed_scale(n);
-    out.secondsToDamage = needs_seconds_to_damage(n);
+        // AMBIENT RECOVERY — the other half of the widened scope. Standing in a
+        // kitchen fills you and queues the digestion that later sends you to a
+        // bathroom; a corridor does nothing, at the cost of one table read.
+        if (rooms != nullptr) {
+            const int cx = wrap_macro(static_cast<int>(std::floor(tr.pos.x / kCellSize)));
+            const int cy = wrap_macro(static_cast<int>(std::floor(tr.pos.y / kCellSize)));
+            const std::uint16_t bit = room_bit_at(rooms->kind, rooms->number, cx, cy);
+            if (room_restores(bit)) {
+                room_recover(n, bit, dt);
+                ++out.recovering;
+            }
+        }
 
-    const float rate = needs_hp_rate(n);
-    if (rate <= 0.0f) return out;
+        if (camera) {
+            out.ticked = true;
+            out.failed = needs_failed_mask(n);
+            out.warned = needs_warn_mask(n);
+            out.speedScale = needs_speed_scale(n);
+            out.secondsToDamage = needs_seconds_to_damage(n);
+        }
 
-    // HP is an integer and the slowest drain is 0.1 HP/s, which at the 125 Hz sim
-    // step is 0.00083 HP — truncating that to an int every step would make
-    // starvation cost exactly nothing, forever. So the fraction is BANKED in the
-    // row and only whole HP is ever spent. The debt is deliberately not forgiven
-    // when a need is topped back up: unpaid damage is still owed.
-    n.hpDebt += rate * dt;
-    if (n.hpDebt < 1.0f) return out;
+        const float rate = needs_hp_rate(n);
+        if (rate <= 0.0f) continue;
 
-    float whole = std::floor(n.hpDebt);
-    n.hpDebt -= whole;
-    if (whole > 32767.0f) whole = 32767.0f;   // a catch-up dt cannot overflow int16
+        // HP is an integer and the slowest drain is 0.1 HP/s, which at the 125 Hz sim
+        // step is 0.00083 HP — truncating that to an int every step would make
+        // starvation cost exactly nothing, forever. So the fraction is BANKED in the
+        // row and only whole HP is ever spent. The debt is deliberately not forgiven
+        // when a need is topped back up: unpaid damage is still owed.
+        n.hpDebt += rate * dt;
+        if (n.hpDebt < 1.0f) continue;
 
-    const DamageResult r = apply_damage(reg, pool, me.entity,
-                                        static_cast<std::int16_t>(whole),
-                                        kAttritionChannel, entt::null);
-    out.hpLost = r.applied;
-    out.lethal = r.lethal;
+        float whole = std::floor(n.hpDebt);
+        n.hpDebt -= whole;
+        if (whole > 32767.0f) whole = 32767.0f; // a catch-up dt cannot overflow int16
+
+        const DamageResult r = apply_damage(reg, pool, e,
+                                            static_cast<std::int16_t>(whole),
+                                            kAttritionChannel, entt::null);
+        if (camera) {
+            out.hpLost = r.applied;
+            out.lethal = r.lethal;
+        } else if (r.lethal) {
+            ++out.crowdKilled;
+        }
+    }
     return out;
 }
 

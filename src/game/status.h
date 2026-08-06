@@ -64,7 +64,14 @@ struct StatusDef {
     // failure rather than a status that is silently never protected.
     ItemId gateItem;             // 24
     std::uint8_t stacks;         // 26  1 = intensity accumulates (the govnyak three)
-    std::uint8_t pad_;           // 27
+    // `= 0` is load-bearing twice over, and this row had neither. The generator
+    // emits twelve initialisers for thirteen fields, so without a default this is
+    // (a) six -Wmissing-field-initializers in a tree that must build with none, and
+    // (b) an INDETERMINATE byte inside a table that determinism tests digest —
+    // two builds of identical sources could disagree. The same default every other
+    // generated row already carries ([prop_table.h] pad0_, [mob_table.h] before its
+    // pads were reclaimed by massG).
+    std::uint8_t pad_ = 0;       // 27
 };
 static_assert(sizeof(StatusDef) == 28, "StatusDef must stay a tight row");
 static_assert(std::is_trivially_copyable_v<StatusDef>);

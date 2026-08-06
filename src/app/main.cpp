@@ -40,6 +40,7 @@
 #include "ecs/components.h"
 #include "ecs/registry.h"
 #include "game/ai.h"       // the utility AI — adapted, wired, and dormant by default
+#include "game/room_zone.h" // room affordance/recovery tables + the baked zone fields
 #include "game/embody.h"
 #include "game/impact.h"
 #include "game/elevator.h"
@@ -1065,6 +1066,24 @@ std::uint32_t refresh_floor_props(Registry& reg, const World& world,
     count += game::seed_ceiling_lights(reg, world, layer, wallSeed);
     if (kind_for_floor(floorNumber) == game::FloorKind::Padic)
         count += game::seed_padic_props(reg, world, layer, floorNumber, padicSeed, bus);
+    // FURNISH THE ROOMS ([room_zone.h] kRoomFurniture). Not decoration and not a
+    // debug overlay: until this landed a "kitchen" was a hash of the room's
+    // coordinates and NOTHING in the world said so, which meant the crowd's whole
+    // errand behaviour ([problems.md] §27) could only be checked by reading stderr.
+    // A stove you can see is what makes "he went to the kitchen" an observation
+    // instead of a claim — and the AI seats bodies AT these same pieces, off the
+    // same table, so the two cannot drift apart.
+    //
+    // Keyed on (kind, number) like every other room-taxonomy consumer, so it needs
+    // no seed of its own and agrees with the container and mob spawners by
+    // construction ([floor_gen.h]).
+    {
+        const std::uint32_t furniture = game::seed_room_furniture(
+            reg, world, layer, kind_for_floor(floorNumber), floorNumber);
+        count += furniture;
+        std::fprintf(stderr, "[rooms] floor %d: %u pieces of furniture placed\n",
+                     floorNumber, furniture);
+    }
     return count;
 }
 
@@ -1323,8 +1342,30 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
 // Now the player moves, looks, fights and loots immediately; the floor's crowd
 // stands still until the bake lands, because wander_step no-ops on an empty flow
 // field. That degradation is automatic rather than special-cased.
-void begin_floor_nav(const World& world, nav::AsyncBake& bake) {
+void begin_floor_nav(const World& world, int floorNumber, nav::AsyncBake& bake,
+                     game::RoomZones& rooms) {
     bake.start(world.grid());
+    // The ROOM zones are baked here too, and synchronously, because they are three
+    // multi-source BFS against the async bake's 128 — measured below in the same
+    // line the nav timings print. Synchronous also means there is no second
+    // ownership story to get wrong: the fields are complete before the first tick
+    // that could read them, so `ai_step` never sees a half-built field.
+    const game::FloorKind kind = kind_for_floor(floorNumber);
+    // TIMED, and the timing is not decoration. An untimed synchronous bake once cost
+    // ~25 s of load without a single line saying so, and the only symptom anyone saw
+    // was the sim running 4140 ticks per 4000 frames one day and 600 the next
+    // ([room_zone.cpp] bake_walkable). A bake that does not print its own cost hides
+    // exactly the regression it is most likely to cause.
+    const auto roomT0 = std::chrono::steady_clock::now();
+    game::bake_room_zones(world.grid(), kind, floorNumber, rooms);
+    const double roomMs =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - roomT0).count();
+    std::fprintf(stderr,
+                 "[rooms] floor %d: kind=%d baked mask 0x%04X (%zu bytes resident) "
+                 "in %.0f ms\n",
+                 floorNumber, static_cast<int>(kind),
+                 static_cast<unsigned>(rooms.baked), rooms.resident_bytes(), roomMs);
 }
 
 // Called once the bake has landed: hand the new floor's inhabitants somewhere to
@@ -1670,6 +1711,13 @@ int main(int argc, char** argv) {
     // Baked asynchronously; owns both the live graph the tick reads and the
     // pending one a worker fills (world/nav_async.h).
     nav::AsyncBake nav;
+    // Room zones for the SAME one live floor ([room_zone.h]): which macro cells are
+    // a kitchen / a bathroom / a flat, and the dense field a body descends to reach
+    // one. ~6 MiB on a Residential floor, 0 on a floor whose room mix rolls none of
+    // them. Baked SYNCHRONOUSLY inside begin_floor_nav — three multi-source BFS
+    // against nav's 128, so it is a rounding error on a load the same function is
+    // already spending seconds on, and a synchronous bake needs no ownership story.
+    game::RoomZones roomZones;
     game::NpcPool pool;
     pool.init();
     // SLOT RECYCLING IS DELIBERATELY NOT ARMED HERE, and the line is left in place
@@ -1861,7 +1909,7 @@ int main(int argc, char** argv) {
                                               *currentSpec,
                                               streamer.floor_seed_of(registry, 0));
             doors.frozen = true;
-            begin_floor_nav(stack.layer(l0), nav);
+            begin_floor_nav(stack.layer(l0), 0, nav, roomZones);
             game::ai_init(reg, l0);
             if (propPass.ready()) {
                 merge_ecs_prop_meshes(reg, l0, propPass,
@@ -2077,6 +2125,10 @@ int main(int argc, char** argv) {
     game::AiMemory aiMem;
     game::AiTick aiTick{};
     std::uint64_t lastAimemLogTick = ~0ull;
+    // Cumulative residents finished off by attrition since the run began. A running
+    // total rather than a per-step count, because the failure it watches for is
+    // slow: one death per second reads as noise per step and as a morgue per minute.
+    std::uint32_t crowdDead = 0;
     game::CraftingState crafting{};
     game::craft_init(crafting);
     std::uint32_t crafted = 0, scrapped = 0, recipesLearned = 0;
@@ -2348,7 +2400,7 @@ int main(int argc, char** argv) {
                 stack.layer(nl), doors, currentFloor, *currentSpec,
                 streamer.floor_seed_of(registry, currentFloor));
         doors.frozen = true;
-        begin_floor_nav(stack.layer(nl), nav);
+        begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
         // Arrival geometry is final (floor file + doors stamped): re-snapshot
         // the GPU voxel mirror for the recycled World object.
         voxelMirror.upload_all(stack.layer(nl));
@@ -2378,6 +2430,16 @@ int main(int argc, char** argv) {
     while (running) {
         activeLayer = reg.get<Transform>(player).layer;
         bool propPassNeedsRebuild = false;
+        // SEPARATE from the instance repack above, and the separation is the fix.
+        // Re-packing the prop instance list and re-uploading the verlet STATE are
+        // different events that shared one flag: `upload_wires`/`upload_cloths`
+        // rewrite both `cur` and `prev` from the BAKE pose, i.e. they reset every
+        // chain and sheet on the floor to rest with zero velocity. Since the flag
+        // is also raised every frame while any severed leg is still falling
+        // (kAntourageFallSec = 8 s), one shot at a wall froze all the dressing on
+        // the floor for eight seconds. Pin changes never needed it anyway —
+        // `write_pins` publishes those per frame. [problems.md] section 28.4
+        bool dressingSetChanged = false;
 
         // The dressing's half of every geometry mutation, next to the ECS-prop
         // half (anchor_validate_step): whatever emptied these cells — a blast,
@@ -2798,8 +2860,13 @@ int main(int argc, char** argv) {
                 // really hiding — a commented-out call is not a call, and nothing checks it.
                 // §23 hermetic flee: doors + activeWorld let IntentFlee steer toward
                 // door_nearest_shelter (sealed apartments) before −∇danger / memory.
+                // §27 legs (a)+(b): `roomZones` is what lets a winning eat/drink/
+                // toilet/sleep intent actually STEER a body — without it every
+                // non-flee intent hands motion straight back to wander_step and the
+                // scorer is decoration (measured: own_ai=0 of 419).
                 aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
-                                       kSimDt, aiCfg, &aiMem, &doors, &activeWorld);
+                                       kSimDt, aiCfg, &aiMem, &doors, &activeWorld,
+                                       &roomZones);
                 // AIMEM proof trail: once nav has brains and AI is on, emit a
                 // compact stderr pulse so a --shot harness can assert the store
                 // is live (rows/writes/recalled) without parsing the HUD.
@@ -2808,16 +2875,44 @@ int main(int argc, char** argv) {
                     lastAimemLogTick = simTick;
                     std::fprintf(stderr,
                                  "[aimem] STEP tick=%llu layer=%u seen=%u replan=%u "
-                                 "own_ai=%u own_wander=%u recall=%u filed=%u fled=%u "
+                                 "own_ai=%u own_wander=%u errand=%u settled=%u "
+                                 "step=%u column=%u lost=%u stalled=%u meandist=%.1f "
+                                 "recall=%u filed=%u fled=%u "
                                  "rows=%u writes=%u coal=%u evict=%u bytes=%zu\n",
                                  static_cast<unsigned long long>(simTick),
                                  static_cast<unsigned>(activeLayer),
                                  aiTick.considered, aiTick.replanned,
                                  aiTick.aiOwned, aiTick.wanderOwned,
+                                 aiTick.roomOwned, aiTick.settled,
+                                 aiTick.errandStep, aiTick.errandColumn,
+                                 aiTick.errandLost, aiTick.errandStalled,
+                                 (aiTick.errandStep + aiTick.errandColumn) != 0
+                                     ? static_cast<double>(aiTick.errandDistCells) /
+                                           static_cast<double>(aiTick.errandStep +
+                                                               aiTick.errandColumn)
+                                     : 0.0,
                                  aiTick.recalled, aiTick.remembered,
                                  aiTick.memoryFled, aiMem.rows(),
                                  aiMem.writes(), aiMem.coalesced(),
                                  aiMem.evictions(), aiMem.resident_bytes());
+                    // THE HISTOGRAM IS THE ACCEPTANCE NUMBER, not own_ai alone.
+                    // [problems.md] §27's diagnosis is that the crowd's argmax is a
+                    // pure function of (faction, id) and therefore CONSTANT IN
+                    // TIME; a histogram that moves between two of these lines is
+                    // the evidence that the scorer became a decision. Printed on
+                    // the same 60-tick cadence so a --shot harness can diff two.
+                    char intents[256];
+                    int at = 0;
+                    for (std::uint8_t i = 0; i < game::kIntentCount; ++i) {
+                        if (aiTick.byIntent[i] == 0) continue;
+                        at += std::snprintf(intents + at,
+                                            sizeof(intents) - static_cast<std::size_t>(at),
+                                            " %s=%u", game::kIntentName[i],
+                                            aiTick.byIntent[i]);
+                        if (at >= static_cast<int>(sizeof(intents)) - 1) break;
+                    }
+                    std::fprintf(stderr, "[aimem] INTENT tick=%llu%s\n",
+                                 static_cast<unsigned long long>(simTick), intents);
                 }
                 controller_step(reg, kSimDt, &activeWorld.gravity());
                 // Steer the crowd BEFORE physics: wander writes horizontal
@@ -3511,8 +3606,10 @@ int main(int argc, char** argv) {
                         // pipes shed debris and the instance list is re-packed
                         // so the GPU stops drawing what no longer hangs.
                         if (antourage_carve_step_here(carveResult.dirtyCells,
-                                                      op.seed))
+                                                      op.seed)) {
                             propPassNeedsRebuild = true;
+                            dressingSetChanged = true;
+                        }
                     }
 
                 }
@@ -3876,8 +3973,28 @@ int main(int argc, char** argv) {
                         }
                     }
                 }
-                needs = game::needs_step(reg, pool, activeLayer, kSimDt);
+                // §27 legs (c)+(d): the clock now runs for EVERY embodied body on
+                // the floor, and `roomZones` is the half that keeps that from being
+                // a morgue — a body in a kitchen fills, a body in a bathroom
+                // empties. Passing null here would reinstate the ~14-minute
+                // population wipe [needs.h] blocked the widening on.
+                needs = game::needs_step(reg, pool, activeLayer, kSimDt, &roomZones);
                 needsHpLost += needs.hpLost;
+                // The other half of the acceptance trail. `bodies` says the clock is
+                // no longer a one-body clock, `recovering` says rooms are actually
+                // feeding people, and `crowdDead` is the number that would climb if
+                // the ambient half were ever broken again — a silent morgue is the
+                // failure mode this widening had to buy its way past ([needs.h]).
+                // Cadence piggybacks on the [aimem] pulse a few hundred lines up,
+                // which set `lastAimemLogTick` to `simTick` earlier in THIS tick, so
+                // the two lines always describe the same frame.
+                crowdDead += needs.crowdKilled;
+                if (aiCfg.enabled && lastAimemLogTick == simTick)
+                    std::fprintf(stderr,
+                                 "[needs] tick=%llu bodies=%u recovering=%u "
+                                 "crowd_dead_total=%u\n",
+                                 static_cast<unsigned long long>(simTick),
+                                 needs.bodies, needs.recovering, crowdDead);
                 // Corpses pay out BEFORE they are destroyed. The gap between
                 // "hp hit zero" and "gone" is precisely what the Dead tag exists
                 // to create (combat.h defect 2) — the reference's P0 was culling
@@ -4108,7 +4225,7 @@ int main(int argc, char** argv) {
                                     streamer.floor_seed_of(registry,
                                                            currentFloor));
                             doors.frozen = true;
-                            begin_floor_nav(stack.layer(nl), nav);
+                            begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
                             if (propPass.ready()) {
                                 merge_ecs_prop_meshes(reg, nl, propPass,
                                   streamer.antourage_at_layer(registry, nl),
@@ -4165,6 +4282,16 @@ int main(int argc, char** argv) {
                                 if (buyWanted)
                                     spent += game::vendor_resupply(vi, ledger,
                                                                    kResupplyBudget);
+                                // Trade changed the bag, so the ARMOUR component
+                                // has to be re-derived from it. The rule is stated
+                                // in this file ("call after anything that changes
+                                // the inventory") and every craft/loot path obeys
+                                // it; all three vendor paths did not. Selling the
+                                // vest you are wearing removed it from the bag and
+                                // left the resistances on the entity — permanent
+                                // free armour, paid for. [problems.md] 28.3
+                                if (sellWanted || buyWanted)
+                                    game::sync_armour(reg, pool, player);
                             }
                     }
                     sellWanted = false;
@@ -4442,13 +4569,28 @@ int main(int argc, char** argv) {
                 ImGui::TextUnformatted(
                     "gpu: n/a (no timestamps, or GIGA_GPU_TIMER=0)");
             }
-            auto& tr = reg.get<Transform>(player);
-            auto& ctl = reg.get<Controller>(player);
-            auto& ga = reg.get<GravityAffected>(player);
-            ImGui::Text("pos  %.1f %.1f %.1f (layer %u)", tr.pos.x, tr.pos.y,
-                        tr.pos.z, tr.layer);
-            ImGui::Text("mode %s%s", ctl.fly ? "fly" : "walk",
-                        ga.grounded ? " (grounded)" : "");
+            // GUARDED, because `player` can legitimately be null HERE. When the
+            // last living body on the layer dies, `possess_a_survivor` returns
+            // null and the sim loop does `running = false; break;` — but that
+            // `break` leaves the FIXED-STEP LOOP, not the frame, so execution
+            // walks straight on into this HUD. Three unchecked `reg.get<>` on a
+            // null entity followed: with -fno-exceptions and EnTT's asserts
+            // compiled out in Release that is a raw out-of-bounds sparse-set
+            // read, i.e. a crash at the exact moment a run ends. The other 48
+            // uses of `player` in this file test validity; these did not.
+            // [problems.md] §28.1
+            if (reg.valid(player)) {
+                const auto& tr = reg.get<Transform>(player);
+                const auto& ctl = reg.get<Controller>(player);
+                const auto& ga = reg.get<GravityAffected>(player);
+                ImGui::Text("pos  %.1f %.1f %.1f (layer %u)", tr.pos.x, tr.pos.y,
+                            tr.pos.z, tr.layer);
+                ImGui::Text("mode %s%s", ctl.fly ? "fly" : "walk",
+                            ga.grounded ? " (grounded)" : "");
+            } else {
+                ImGui::TextUnformatted("pos  -- (no body: run over)");
+                ImGui::TextUnformatted("mode --");
+            }
             ImGui::Text("props %u | cull %s",
                         propPass.last_draw_count(),
                         cullPass.ready() ? "GPU-ready" : "off");
@@ -4894,12 +5036,25 @@ int main(int argc, char** argv) {
             DrawConsoleUI(&showConsole, &consoleFocus, consoleInput,
                           sizeof consoleInput, console, consoleCtx, consoleLog,
                           consoleHistory, consoleHistPos);
-            if (consoleCtx.requestFloor != game::ConsoleContext::kNoRequest) {
-                pendingTeleport = consoleCtx.requestFloor;
-                pendingLandHub = consoleCtx.requestLandHub;
-                consoleCtx.requestFloor = game::ConsoleContext::kNoRequest;
-                consoleCtx.requestLandHub = -1;
-            }
+        }
+
+        // DRAINED UNCONDITIONALLY, outside the console overlay.
+        //
+        // This used to sit INSIDE `if (showConsole)`, so a floor request only
+        // ever landed while the console happened to be open. Every other console
+        // request (`requestBits`) is drained unconditionally, and this one is the
+        // channel `cmd_teleport` / `cmd_fasttravel` write to — which meant a
+        // KeyBind row running `ft 14`, exactly the one-row extension
+        // [ARCHITECTURE.md] advertises, did NOTHING when pressed. Worse, the
+        // request was not dropped but LATCHED: it sat in the context and fired
+        // the next time the player opened the console for some unrelated reason,
+        // teleporting them mid-thought. Same for a pause-menu MenuItem, which
+        // runs `exec_command` with the console shut. [problems.md] section 28.2
+        if (consoleCtx.requestFloor != game::ConsoleContext::kNoRequest) {
+            pendingTeleport = consoleCtx.requestFloor;
+            pendingLandHub = consoleCtx.requestLandHub;
+            consoleCtx.requestFloor = game::ConsoleContext::kNoRequest;
+            consoleCtx.requestLandHub = -1;
         }
 
         if (showCraftingWindow && reg.valid(player)) {
@@ -4929,8 +5084,17 @@ int main(int argc, char** argv) {
             const bool isOnPad = game::on_extraction_pad(stack.layer(activeLayer).grid(), vt.pos);
             if (const auto* nrv = reg.try_get<game::NpcRef>(player)) {
                 if (pool.valid(nrv->id)) {
+                    const std::int32_t soldBefore = sold;
+                    const std::int32_t spentBefore = spent;
                     DrawVendorWindowUI(&showVendorWindow, pool.inventory(nrv->id), ledger, 
                                        vendorKind, isOnPad, sold, spent);
+                    // Same re-derive as the keyboard path. The window is not handed
+                    // reg/pool/player, so the CALLER does it — the shape the
+                    // crafting window already uses via its `invChanged` out-param.
+                    // Either counter moving means stock crossed the bag boundary.
+                    // [problems.md] 28.3
+                    if (sold != soldBefore || spent != spentBefore)
+                        game::sync_armour(reg, pool, player);
                 }
             }
         }
@@ -5278,8 +5442,10 @@ int main(int argc, char** argv) {
                 // A door leaf sliding away empties cells too — dressing that
                 // hung off them is just as severed as by a blast.
                 if (antourage_carve_step_here(doors.dirtyCells,
-                                              static_cast<std::uint32_t>(simTick)))
+                                              static_cast<std::uint32_t>(simTick))) {
                     propPassNeedsRebuild = true;
+                    dressingSetChanged = true;
+                }
                 // Same field-rebake debt carve pays: doors mutate occupancy
                 // masks the nav flow fields sample.
                 doors.dirtyCells.clear();
@@ -5299,6 +5465,10 @@ int main(int argc, char** argv) {
                                       streamer.antourage_at_layer(registry, activeLayer),
                                       stack.layer(activeLayer), &dripEmitters,
                                       &antourageFalling);
+            }
+            // Only when the dressing SET actually changed — never merely because
+            // a rigid leg is mid-fall.
+            if (dressingSetChanged) {
                 upload_wires(wirePass, streamer.antourage_at_layer(registry, activeLayer));
                 upload_cloths(clothPass, streamer.antourage_at_layer(registry, activeLayer));
             }
@@ -5579,7 +5749,7 @@ int main(int argc, char** argv) {
                                 *currentSpec,
                                 streamer.floor_seed_of(registry, currentFloor));
                         doors.frozen = true;
-                        begin_floor_nav(stack.layer(nl), nav);
+                        begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
                         voxelMirror.upload_all(stack.layer(nl));
                         if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
                         // Same transition autosave as the keyboard path.

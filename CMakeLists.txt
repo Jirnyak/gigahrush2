@@ -693,7 +693,45 @@ if(GIGA_BUILD_TESTS)
     # the piece vanished with no debris and no falling body. Plus branches are
     # capped from the JOIN end (uncapped, three outlets swallowed the whole cell
     # budget): 467 branch points against 259, pinned as a ratio.
-        PASS_REGULAR_EXPRESSION "game_test: 233598 checks, 0 failures")
+    # 233598 -> 235191 on 2026-08-06: suite_rooms.inl, leg (b)+(c) of
+    # [problems.md] §27 — the room affordance/recovery tables and their baked
+    # 128^3 fields. +1593, and 1024 of them are one CHECK per sampled cell in the
+    # descent block, which is the point: it walks the flow field to termination
+    # from every 4th walkable cell of the arrival storey and asserts each walk ENDS
+    # IN A KITCHEN. Measured on this tree: 1024 sampled, 1024 arrived, 0
+    # unreachable, 0 over budget.
+    # 235191 -> 235200 on 2026-08-06: +9, the errand block — leg (a) of §27 proved
+    # headless with the pre-rooms arm run beside it. WITH zones own_ai=64, eat=64,
+    # 64/64 standing in a kitchen after 40 s, 667 m walked; WITHOUT zones own_ai=0,
+    # eat=64, 0/64, 0 m. Both arms agree on what the bodies WANT, which is what
+    # makes the difference attributable to ownership and nothing else.
+    # 235200 -> 235213 on 2026-08-06: +13 NET, and the net hides a REPLACEMENT.
+    # `only_the_player_starves` (66 CHECKs, 63 of them a per-resident triple) is gone;
+    # `the_whole_floor_lives_on_one_clock` (79) is in its place. The old test was GREEN
+    # and asserted that the survival clock skipped the crowd — correct while nothing
+    # could walk an NPC to a kitchen, and [needs.h] named that exact condition for
+    # widening it. §27 legs (a)-(c) satisfy it, so the assertions are retired by their
+    # own stated condition, not pinned past a failure. What replaced them are the two
+    # numbers that make the widening safe rather than lethal, both measured:
+    #   25 min WITHOUT rooms:        64 of 64 at zero HP
+    #   25 min OBEYING THE SCORER:   0 of 64 lost HP (min 100)
+    # 235213 -> 235067 on 2026-08-06: -146, and a DROP is the honest direction here.
+    # The errand block stopped hand-rolling `pos += v*dt` and started calling the real
+    # `physics_step`, and the descent block stopped sampling nav's looser "not fully
+    # solid" population and started sampling the cells a COLLIDER can occupy
+    # (room_body_walkable). The old harness reported 64/64 arrivals while the live
+    # game had 62 of 63 errand bodies pinned against geometry — it certified the
+    # failure. Fewer, truer CHECKs; the two defects it then exposed are fixed and
+    # pinned at zero (`with.stalled == 0`):
+    #   kitchen descent: 884 sampled, 874 arrived, 10 unreachable, 0 over budget
+    #   errand WITH zones: own_ai=64 stalled=0 in-kitchen=60/64 at 40 s, 64/64 at 120 s
+    # 235067 -> 235083 on 2026-08-06: +16, room FURNITURE — a kitchen is now a stove
+    # and a table you can see, so "he walked to the kitchen" is an observation and
+    # not a claim. The block walks the entities the seeder made rather than trusting
+    # a count, and the four numbers after the pieces are the ones that matter:
+    #   786 pieces — kitchen 186, bathroom 177, living 423
+    #   wrong-room 0, unreachable 0, anchor-in-air 0, floating 0
+        PASS_REGULAR_EXPRESSION "game_test: 235083 checks, 0 failures")
 
 
 

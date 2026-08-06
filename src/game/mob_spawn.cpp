@@ -183,7 +183,7 @@ Entity emplace_mob(Registry& reg, LayerId layer, MobKind kind, const MobDef& def
     reg.emplace<Renderable>(e, Renderable{tier_color(tier, headHash)});
 
     // Universal mass ([ecs/components.h]): the table's authored kilograms.
-    reg.emplace<Mass>(e, Mass{static_cast<float>(def.massKgX10) * 0.1f});
+    reg.emplace<Mass>(e, Mass{static_cast<float>(def.massG) * 0.001f});
     reg.emplace<MobRef>(e, MobRef{static_cast<std::uint8_t>(kind), level,
                                   static_cast<std::int16_t>(hp),
                                   static_cast<std::int16_t>(hp), packId});

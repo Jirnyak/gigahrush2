@@ -276,10 +276,17 @@ inline constexpr std::size_t kFactionWire =
 // gigabytes is still refused, `blobBytes` still fits a uint32 with 4x slack — while
 // admitting the real measured payload with ~39% headroom.
 //
-// This is the CHEAP half. The floor is a pure function of (seed, number)
-// ([floors.md] ONE-FLOOR-ONE-SEED), so the file should carry only the DELTA from
-// generation, which would make an untouched floor a few KB instead of 736 MiB.
-// Same root as the mirror's page-pool overflow ([render/voxel_mirror.h] kPageCap).
+// The size that forced this ceiling up has since been dealt with at its real
+// cause — the ENCODING, not the model: v2 run-length-encodes sub-material pages
+// and a pristine floor went 736 -> 125 MB. The cap stays at 1 GiB because it
+// costs nothing and a heavily destroyed floor legitimately grows.
+//
+// Two tempting "fixes" were considered and REJECTED, recorded so they are not
+// revived: (a) promoting common sub-voxel mixes to CellTypes — hardcodes a finite
+// set of combinations into an infinite space and dies at the first chipped
+// surface; (b) storing only the DELTA from a regenerated floor — makes the
+// generator a permanent part of the save format, so any generator change silently
+// decodes every existing save into a subtly different floor.
 inline constexpr std::uint32_t kMaxSnapBytes = 1024u * 1024u * 1024u;
 
 // Exact byte count `save_write` will produce for the given section sizes.
@@ -358,7 +365,11 @@ OpenedContainerKey container_key(int floorNumber, const vec3& pos);
 // Wire: u32 magic "GH2F" | u32 version | u32 blobBytes | u32 crc32(blob) | blob,
 // where blob is exactly what snapshot_floor() produces (it embeds the floor number).
 inline constexpr std::uint32_t kFloorMagic = 0x46324847u; // 'G','H','2','F'
-inline constexpr std::uint32_t kFloorFileVersion = 1u;
+// v2 (2026-08-06): sub-material PAGES are run-length encoded instead of raw.
+// A page is 512 materials and almost never 512 distinct ones, so the raw form
+// spent 1024 B on what usually needs a dozen. Nothing about the material model
+// changed — a page may still hold any mix of atoms, it just encodes cheaply.
+inline constexpr std::uint32_t kFloorFileVersion = 2u;
 inline constexpr std::size_t kFloorHeaderWire = 16;
 
 // Encode the World into a complete floor file (header + CRC + snapshot blob).

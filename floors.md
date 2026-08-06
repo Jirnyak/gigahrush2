@@ -253,13 +253,25 @@ laws 0.7 ms | generated  164.4 ms | rules 1.5 ms    first visit
 laws 0.6 ms | RESTORED  6595.5 ms | rules 1.4 ms    revisit — no generation at all
 ```
 
-**The snapshot is deliberately WHOLE, not a delta.** The obvious optimisation —
-store only the divergence from a deterministic regeneration — is rejected on
-purpose (owner, 2026-08-06): this is a game with **full destructibility**, so the
-worst case is a player who breaks everything, and then the delta *is* the whole
-floor. That buys the complexity of two code paths and no size guarantee. A whole
-snapshot is one path with one cost, and 6.4 s of load is affordable where a
-maintenance-hungry conditional format is not.
+**The snapshot is deliberately WHOLE, and cheap because of its ENCODING.** Pages
+are run-length encoded (`kFloorFileVersion` 2): measured **736.2 → 125.5 MB** and
+**6595 → 1329 ms**, with the material model untouched — a page may still hold any
+mix of atoms, flaked plaster and blast craters included, it just costs more runs.
+
+Two alternatives were rejected on purpose and are recorded so they are not
+revived:
+
+- **Promoting common sub-voxel mixes to their own `CellType`.** Cell types are a
+  finite vocabulary and atom combinations are not, so this hardcodes an arbitrary
+  subset of mixes and breaks the first time a surface chips. It also destroys the
+  premise that a floor is LEGO built from destructible atoms with the geometry
+  rules doing the composing.
+- **Storing only the DELTA from a deterministic regeneration.** It collapses
+  properly (change something back and it cancels) and is bounded by the whole
+  snapshot, so it is not the spaghetti-of-edits it first looks like — but it makes
+  the generator a permanent part of the save format. Touch the generator, even to
+  fix a bug, and every existing save silently decodes into a subtly different
+  floor. A whole snapshot does not care what the generator becomes tomorrow.
 
 ## Open questions (resolve when implementing)
 

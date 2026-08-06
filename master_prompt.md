@@ -847,6 +847,178 @@ the whole game runs exactly as today until the final mode-dispatch step. **#1 do
 
 ---
 
+## 7b. Prompt-plans from the 2026-08-06 audit — one brief per session
+
+Self-contained. Each is a session's worth of work: hand one over verbatim, do
+that and nothing else. Every one names its problems.md section, the files, the
+acceptance test, and the trap that will bite. **Read the named problems.md entry
+first** — several of them record a fix that was already tried and reverted, and
+repeating it wastes the session.
+
+Ordered by value. A–C are gameplay; D–F are structural; G is hygiene.
+
+---
+
+### PLAN A — Make the crowd want things (problems.md §27) — **DONE 2026-08-06**
+
+> **DELIVERED.** All four legs landed in that order; §27 is CLOSED and carries the
+> numbers. Live run: `own_ai` 0 → 21..85 of ~380, the intent histogram MOVES
+> (`drink` 78 → 39 as the crowd gets watered, against a frozen `work=335
+> patrol=84` before), `crowd_dead_total=0` with the clock running for every body.
+> Two defects the plan below did not anticipate are what actually decided it, and
+> both are written up in §27: nav's "not fully solid" walkability is a 1-in-512 bar
+> that a 4x4x7-sub-voxel collider cannot clear (62 of 63 errand bodies were pinned),
+> and axis-aligned steering let a body clip the jamb of the doorway its own field
+> routed it through (23/64 arrivals against 64/64). Read §27 before touching this
+> area; the remaining debt is listed there under «ЧТО НЕ СДЕЛАНО» —
+> `IntentHeal`'s deadlock, `Perception::armed`, work/social/patrol rows, and the
+> X/Y-only room taxonomy. The brief below is kept as the historical statement of
+> the problem.
+
+**Do NOT start by widening the needs tick.** That was tried on 2026-08-06,
+measured, and reverted: with the clock running for all 419 bodies (`needsCrowd=419`)
+`own_ai` stayed **0**, because `MotionOwner::Ai` is taken ONLY on `IntentFlee`
+(`ai.cpp:770` — "IntentFlee is still the ONLY owning intent"). Every other winning
+intent hands motion back to `wander_step`. Widening the tick alone changes nothing
+and breaks `suite_needs.inl:865-891` (63 CHECKs that deliberately pin the narrow
+scope, with a written argument in `needs.h:25-35`).
+
+The pillar has three legs and needs all three:
+
+1. **Let a non-Flee intent OWN motion.** `ai.cpp` around `:770-785`. Until an
+   `eat` decision can actually steer a body, the scorer is decoration.
+2. **Give a hungry body somewhere to GO.** Zone fields over the 128³ keyed to
+   needs (kitchen / toilet / living), which ARCHITECTURE.md §Манифест п.4 calls
+   for and floors.md lists as ЧАСТИЧНО. `floor_room_mask(kind, number, rx, ry)`
+   already exists and already carries `RoomBit::Kitchen`/`Bathroom`/`Living`;
+   what is missing is a per-cell field the AI can descend, and `nav::route_step`
+   to steer by it.
+3. **Give it something to RECOVER from.** Ambient recovery in the matching room,
+   the way the reference does (`needs.ts:279-314`). Without it a need saturates
+   and the body pins itself in an unsatisfiable emergency — the same deadlock
+   `IntentHeal` already has (`hunt.h:41-42`: nothing heals a crowd body).
+
+Only THEN widen `needs_step` past the camera holder, and re-pin `suite_needs`
+with the reason in the commit message.
+
+**Acceptance:** `[aimem] STEP … own_ai=N` with N > 0 on a live run, and a body
+observed walking to a kitchen and its food bar rising. Not a green test — a
+printed number and a screenshot.
+
+---
+
+### PLAN B — Data authored but never read (problems.md §35)
+
+The single largest class the audit found. ~10 CSV column groups are parsed into
+structs that nothing consumes, including **272 nav-traversal numbers** in
+`data/mobs.csv` (`nav_step_sub`/`nav_climb_sub`/`nav_drop_sub`/`nav_fly`) that the
+nav bake never opens, and an `ai_flags` column the generator silently ignores
+while building `aiFlags` from *other* columns (46 of 68 rows differ).
+
+Two directions, do both:
+- **Wire or delete.** For each group in §35's table, either give it a reader or
+  cut the column and say why in the commit.
+- **Close the CLASS with a gate.** `source_rules` counts CSV *rows*, never
+  columns. A column with no consumer is invisible to every gate in the tree. The
+  cheap fix is the pattern `item_table.h:14-24` already uses: an explicit
+  "deferred, and here is why" list, made mandatory — a column that is neither
+  read nor listed fails the build.
+
+**Trap:** three rows in §35's table were WRONG in the first draft (they do have
+readers). Verify each with your own grep before deleting anything.
+
+---
+
+### PLAN C — Force written as an axis letter (problems.md §15, §34)
+
+Isotropy was won once, for antourage (§8), and never propagated. Still in the Z
+frame: **the player's own locomotion** (`controller.cpp:18-44` — basis built from
+literals `right{sy,-cy,0}`, `up{0,0,1}`, and walk writes only `.x`/`.y`),
+knockback that pushes along the gravity axis (`combat.cpp:150-159` — it launches
+bodies upward instead of back), corpse settling written in a Y-up frame
+(`combat.cpp:297-304`), four `±Z` literals in `prop_system.cpp`, hearing that
+refuses to wrap z (`noise.cpp:212-217`), and the AI's memory/shelter bearings
+which drop `dz` entirely (`ai.h:655-659`, `ai.cpp:419-421`).
+
+The rule is written and the machinery exists: `GravityFrame` + `gravity_frames()`
+in `world/gravity.h`. §8's lesson is the method — **generalising is DIAGNOSIS**:
+running the antourage bake over all eight regimes exposed a years-old bug in the
+Z frame itself.
+
+**Acceptance:** a test that drives locomotion under a non-`NegZ` regime. Today
+nothing does, which is exactly why all of this survives.
+
+---
+
+### PLAN D — Systems built and never connected (problems.md §13)
+
+`src/sim/cellular.{h,cpp}` is **1,484 lines with zero callers and zero tests**,
+and its header cites a `tests/suite_cellular.inl` that has never existed — so
+every measured claim in it is unverified. `fluid_step` and `diffusion_step` are
+called only from tests while their consumers run every tick and read zeros
+(`pos_wet` always false; `danger` null, so nobody ever flees).
+`VoxelMirror::mark_fluid_dirty()` has no caller, so the fluid mirror is frozen at
+boot. `stain.h` promises pages that "fade back to black" and no fading function
+exists.
+
+Decide per system: wire it, or cut it and say why. Then close the class — **no
+gate anywhere asks whether a system is CALLED**. A list of public `*_step` /
+`*_tick` entry points required to have a caller outside `tests/`, with an
+explicit exemption list, is the cheapest thing that would have caught all of it.
+
+---
+
+### PLAN E — main.cpp is 5,616 lines, ~1,400 of them giga_game (problems.md §29)
+
+Measured line ranges are in §29's table. The two critical state bugs of this
+audit (§24 stale `activeLayer`, §25 duplicate player body) both lived here and
+both were unreachable from `game_test` — that is the argument, not tidiness.
+
+Highest value first: per-tick monster traits as an `if`-chain on `MobKind`
+(3245-3333) when `monster_traits.h` already holds the data; the F9 world restore
+(3917-4107); interact resolution (3480-3600); `do_ride` (2234-2358), which is
+duplicated for `--shot` at 5436-5534 and which the file itself warns about four
+times.
+
+**Trap:** move in verified increments, build green after each. Do not attempt the
+whole extraction in one pass.
+
+---
+
+### PLAN F — Gates that one line disables (problems.md §36)
+
+`check_source_rules.cmake` checks a suite is compiled with a raw
+`string(FIND …)` over the concatenated text of every `tests/*.cpp` — so a
+**commented-out** `#include` or dispatch call satisfies it. The idiom already
+exists in the tree (`game_test.cpp:4262`). The `unwired-suite` exemption is
+self-service and silent: the pin `files_scanned=[0-9][0-9][0-9]` still matches.
+`sim_bench` prints `FAITHFUL` by comparing RUNTIMES, never a trajectory. And
+`wrapf` — the float torus wrap every entity position passes through twice per
+step — has **zero** assertions.
+
+---
+
+### PLAN G — Confirmed one-liners (problems.md §30, §19, §20)
+
+Each is small, independently verifiable, and none needs a design decision:
+
+- `LevelStack::above(kInvalidLayer)` returns layer **0** (unsigned wraparound), so
+  `w = stack.above(w)` wraps W — the one axis that must not wrap.
+- `wrapf` can return exactly `size`, outside its documented `[0, size)`.
+- `FieldRegistry::get_or_create<T>` reinterprets memory on a type mismatch while
+  its own comment claims a debug assert that does not exist. The tag is already
+  stored; the check is one pointer compare.
+- `VoxelMirror::verify()` omits `fluid_` — the exact §7 lesson ("every buffer in
+  BOTH the snapshot path and verify()").
+- `samosborPulse` is recomputed in `cube.frag`/`raymarch.frag` with two errors, so
+  the world pass runs the effect at **0.457** where the CPU says 1.0.
+- `pc.torus.w` carries a packed mask AND a seconds clock; the world pass gets a
+  denormal (or a NaN) where it expects time.
+- Stain pages survive floor regeneration and leak on carve — blood from floor −8
+  is still resident when the slot becomes floor 3.
+
+---
+
 ## 8. Numbers & tables a future agent will need
 
 - **World:** `kMacroDim=128`, `kCellSize=2.0 m`, `kWorldExtent=256 m`,

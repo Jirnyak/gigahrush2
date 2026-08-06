@@ -76,11 +76,20 @@ public:
     // staging buffer the size of the payload, so a full snapshot peaks at
     // ~706 MB device + ~706 MB host-visible before the staging buffer is freed.
     //
-    // This is the CHEAP half of the fix. The real fix is to stop minting a page
-    // per sandwich cell at all (encode "concrete floor + plaster ceiling" as a
-    // CellType so the cell stays uniform), which would also collapse the floor
-    // snapshot — the same root causes [problems.md] §37. Until then, raising the
-    // cap is what makes the floor the generator actually built reach the screen.
+    // 690k pages is NOT a defect to design away — it is what the design costs. A
+    // cell genuinely holds 8^3 material atoms, and the sandwich genuinely gives it
+    // a floor of one material and a ceiling of another, so the page is honest. An
+    // earlier revision of this comment proposed promoting common combinations
+    // ("concrete floor + plaster ceiling") to their own CellType so the cell would
+    // read uniform. That idea is WRONG and is recorded here so nobody revives it:
+    // CellTypes are a finite vocabulary and sub-voxel combinations are not, so it
+    // hardcodes an arbitrary subset of mixes and breaks the moment a surface chips
+    // — which is the entire premise of a floor built from destructible atoms.
+    //
+    // The page COUNT is therefore correct and this cap simply has to cover it. What
+    // was actually oversized was the ENCODING on disk, and that was fixed where it
+    // belonged: the floor snapshot run-length-encodes pages now ([save.h] v2), 736
+    // -> 125 MB and 6.6 -> 1.3 s, with the material model untouched.
     static constexpr std::uint32_t kPageCap = 786432u;
 
     static constexpr std::size_t kMaskBytesPerCell = 64;                    // 8x uint64
@@ -114,7 +123,8 @@ public:
     void destroy();
     bool ready() const { return ready_; }
 
-    // Full snapshot of `world` into all four buffers. Own one-shot submit +
+    // Full snapshot of `world` into EVERY mirrored buffer (there are eight, not
+    // the four this line said for as long as the mirror had four). Own one-shot submit +
     // fence wait — a load-screen moment (floor build/arrival/load), never a
     // per-frame call. Clears the dirty queue: everything is fresh.
     bool upload_all(const World& world);
@@ -134,7 +144,11 @@ public:
 
     // --mirror-verify: read every buffer back and memcmp against the CPU truth.
     // Queue-idles on a fence per buffer — a diagnostic, never a frame-path call.
-    // Returns true when all four buffers match bit-exactly.
+    // Returns true when every mirrored buffer matches bit-exactly. `fluid_` was
+    // missing from this comparison until 2026-08-06 — the same present-in-upload,
+    // absent-from-verify split that [problems.md] section 7 blames for the white
+    // pixels. Stain pages are still uncovered: their GPU form is a repack, so
+    // there is no CPU twin to memcmp.
     bool verify(const World& world);
 
     // HUD stats.

@@ -43,6 +43,7 @@
 #include "game/npc_pool.h"
 #include "game/wander.h"
 #include "game/population.h"
+#include "game/room_zone.h"
 #include "game/rpg.h"
 
 #include "sim/physics.h"
@@ -94,6 +95,7 @@ int g_checks = 0;
 #include "suite_diffusion.inl"
 #include "suite_loottable.inl"
 #include "suite_utilai.inl"
+#include "suite_rooms.inl"
 // Wired 2026-07-29. This suite existed for its whole life without being included by any
 // translation unit: commit 56c9c6a added src/game/nav_cache.{cpp,h} and tests/suite_navcache.inl
 // and never touched this file, so 733 lines and 104 CHECK sites were dead text while
@@ -4305,6 +4307,16 @@ int main() {
     test_diffusion_all();
     test_loottable_all();
     test_utilai_all();
+    // Room zones: leg (b)+(c) of §27 — where a need can be satisfied, and what
+    // standing there does. The descent block is the one that measures the property
+    // the complaint names.
+    rooms_taxonomy_is_read_the_same_way();
+    rooms_bake_follows_the_floor_mix();
+    rooms_descent_actually_arrives();
+    rooms_seat_is_the_micro_goal();
+    rooms_a_hungry_body_walks_to_a_kitchen();
+    rooms_furniture_makes_the_errand_visible();
+    rooms_recovery_closes_the_loop();
     test_navcache_all();
     // Wave 6: crafting (446 items carried 11 authored craft_* columns and no system),
     // quests as a layer over contracts, and NPC speech.

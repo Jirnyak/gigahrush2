@@ -94,9 +94,17 @@ inline bool near_lattice_axis(int c) {
 // increment A). Excluding a 3x3 column around each, through all 128 z, costs
 // 16 * 9 * 128 = 18,432 cells = 0.88% of the world and makes "a Life sweep walled up a
 // lift shaft" structurally impossible rather than merely unlikely.
-inline bool lattice_protected(int x, int y) {
-    return near_lattice_axis(x) && near_lattice_axis(y);
-}
+// ...AND IT IS NOT ENFORCED. The predicate that expressed it (`lattice_protected`
+// = near_lattice_axis(x) && near_lattice_axis(y)) had ZERO callers and was removed
+// on 2026-08-06 because it warned as unused — which is the only reason anyone
+// noticed that the safety property above is a description of an intention, not of
+// behaviour. Nothing in this file excludes the lift shafts from a sweep.
+//
+// It never bit because this whole translation unit is unreachable: `cellular_step`,
+// `cellular_tick` and `CellularDriver` have no callers anywhere in src/ or tests/
+// ([problems.md] section 13). Whoever wires the sandpile up owes this predicate
+// back, at the sweep, before the first Life pass runs — otherwise a sweep really
+// can wall up a shaft and take vertical connectivity with it.
 
 // Squared toroidal cell distance against the keep-out sphere. Called only for a cell
 // that would actually FLIP, so this is O(changes) and not O(cells).

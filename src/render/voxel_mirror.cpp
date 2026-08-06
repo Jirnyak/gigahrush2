@@ -520,7 +520,7 @@ bool VoxelMirror::verify(const World& world) {
             idxScratch_[i] = tab[i] < poolCount ? tab[i] : kNoPage;
     }
 
-    std::uint32_t m0 = 0, m1 = 0, m2 = 0, m3 = 0, m4 = 0;
+    std::uint32_t m0 = 0, m1 = 0, m2 = 0, m3 = 0, m4 = 0, mFluid = 0;
     bool ok = readback_compare(masks_, g.masks().data(), kMasksBytes, "masks", &m0);
     ok = readback_compare(types_, g.types().data(), kTypesBytes, "types", &m1) && ok;
     ok = readback_compare(pageIdx_, idxScratch_.data(), kPageIdxBytes,
@@ -534,6 +534,25 @@ bool VoxelMirror::verify(const World& world) {
         ok = readback_compare(pagePool_, sub->pages_data(),
                               static_cast<std::size_t>(poolCount) * kPageBytes,
                               "page-pool", &m3) && ok;
+
+    // FLUID — was uploaded by upload_all and checked by nobody, which is exactly
+    // the divergence [problems.md] section 7 (Source C) cost months on: a buffer
+    // present in one path and absent from the other. It is 8 MiB bound at set 0
+    // binding 6 and dereferenced by EVERY hit pixel (raymarch.frag `uFluid[h.ci]`),
+    // so an unverified one is the loudest possible place for stale bytes to hide.
+    // Compared against the same source upload_all uses: the layer's field, or
+    // zeros when it has none.
+    {
+        const Field<float>* flv = world.fields().find<float>("fluid");
+        if (flv) {
+            ok = readback_compare(fluid_, flv->data().data(), kFluidBytes,
+                                  "fluid", &mFluid) && ok;
+        } else {
+            fluidZeros_.assign(kMacroCells, 0.0f);
+            ok = readback_compare(fluid_, fluidZeros_.data(), kFluidBytes,
+                                  "fluid", &mFluid) && ok;
+        }
+    }
 
     // Stain half — the same truth-vs-GPU contract as sub-material above.
     const SubField<StainRGB>* stainF =
@@ -565,10 +584,10 @@ bool VoxelMirror::verify(const World& world) {
     }
     std::fprintf(stderr,
                  "[mirror] verify %s: %u dirty queued | masks %u types %u "
-                 "pageIdx %u pool %u class %u stainIdx %u stainPool %u "
+                 "pageIdx %u pool %u class %u fluid %u stainIdx %u stainPool %u "
                  "mismatching bytes\n",
-                 ok ? "OK" : "FAIL", dirty_backlog(), m0, m1, m2, m3, m4, m5,
-                 m6);
+                 ok ? "OK" : "FAIL", dirty_backlog(), m0, m1, m2, m3, m4, mFluid,
+                 m5, m6);
     return ok;
 }
 

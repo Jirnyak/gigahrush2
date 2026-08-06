@@ -22,16 +22,37 @@
 // ([macrosim.md]), so this is where hungry citizens will look. 36 B x 2^20 = 38 MB,
 // noise against the pool's 0.48 GiB.
 //
-// TICK SCOPE: ONLY THE CAMERA HOLDER. O(1) per sim step, whatever the population.
-// Does an off-screen citizen on floor -12 need to starve? No — and not for
-// performance reasons. 950k rows of float math is cheap; it is simply WRONG. At
-// 0.12/s the whole population dehydrates inside 14 minutes of play and the building
-// is a morgue before the player reaches floor -3, because no citizen has an AI that
-// eats yet. The reference survives this with a round-robin cold budget (192
-// entities/tick) PLUS ambient recovery in kitchens and bathrooms
-// (`needs.ts:279-314`); gigahrush2 has neither, so the honest slice is "the clock
-// belongs to the body you are playing". Widen it when the utility AI (#12) can walk
-// an NPC to a kitchen, not before.
+// TICK SCOPE: EVERY EMBODIED BODY ON THE LIVE FLOOR — since 2026-08-06, and the
+// condition this file set for that is now met. The previous scope was ONLY THE
+// CAMERA HOLDER, with this written argument: "at 0.12/s the whole population
+// dehydrates inside 14 minutes of play and the building is a morgue before the
+// player reaches floor -3, because no citizen has an AI that eats yet. The
+// reference survives this with a round-robin cold budget (192 entities/tick) PLUS
+// ambient recovery in kitchens and bathrooms (`needs.ts:279-314`); gigahrush2 has
+// neither. Widen it when the utility AI (#12) can walk an NPC to a kitchen, not
+// before."
+//
+// It can now. `intent_room_mask` gives a hungry body a kitchen to walk to and the
+// utility AI takes ownership of its motion to get there ([room_zone.h], [ai.h],
+// [problems.md] §27 legs (a)+(b)); `room_recover` is the reference's ambient
+// recovery, ported from the same `needs.ts` lines the paragraph above names. So the
+// argument is retired by having its condition satisfied, not by being overruled —
+// and the ROUND-ROBIN half is deliberately still not taken, because it is not
+// needed: the scope is one floor's embodied bodies (419 on the demo stack, 16,000
+// at the design ceiling), which is O(n) in exactly the population the tick already
+// walks for physics. The cold 950k stay cold; the macro sim owns their clock
+// ([macrosim.md]) and this pass never sees them.
+//
+// A BODY THE FLOOR HAS ALREADY BEEN LIVING IN IS NOT FRESHLY FED. Seeding 419
+// residents with `needs_roll` would put the whole crowd in the same 70..100 band at
+// the same instant — a building where everybody ate breakfast simultaneously and
+// nobody is hungry for the next nine minutes. `needs_roll_resident` rolls the same
+// body and then advances it to a hashed point of its own day. The camera holder is
+// the exception and it is keyed on the COMPONENT, never on an identity
+// ([jirnyak.md] §9): whoever holds `CameraTag` when their row is first seen is
+// starting a trip, so their clock starts at the top. Possess a resident mid-run and
+// you inherit THEIR day, because their row is already seeded — which is the right
+// answer and costs no code.
 //
 // ATTRITION GOES THROUGH `apply_damage`, ON A CHANNEL ARMOUR CANNOT SEE. Starving to
 // death must be the same death as being clubbed to death — `Dead` tag, one
@@ -179,6 +200,19 @@ inline constexpr float kToiletPooRelief = 65.0f;
 inline constexpr DamageChannel kAttritionChannel =
     static_cast<DamageChannel>(kDamageChannels);
 
+// HOW FAR INTO ITS OWN DAY A RESIDENT IS BORN, in seconds — DERIVED FROM THE RATES,
+// never picked, for the same reason the warning leads above are. The property that
+// has to hold is "a resident may be thirsty at t=0 but must never be ALREADY
+// FAILING", because a body that spawns at water 0 is losing HP before it has taken a
+// step and its first decision is the IntentHeal deadlock ([hunt.h]:41-42), not a
+// walk to the kitchen. Water is the first bar to fail ([needs.h] static_assert), so
+// the bound is the UNLUCKIEST water roll's window with 20 % of it left standing:
+// 70 / 0.12 * 0.8 = 466.7 s. Retune any drain and this follows it.
+inline constexpr float kResidentPhaseMaxSec =
+    kStartWaterLo / kWaterDrainPerSec * 0.8f;
+static_assert(kStartWaterLo - kWaterDrainPerSec * kResidentPhaseMaxSec > 0.0f,
+              "a resident must never be born already dehydrating");
+
 // One byte answers the HUD, the warning line and the damage sum at once.
 enum NeedBit : std::uint8_t {
     NeedFood  = 1u << 0,
@@ -198,11 +232,22 @@ struct NeedsTick {
     std::uint8_t warned = 0;      // NeedBit mask: inside the warning band
     bool lethal = false;
     bool ticked = false;          // false when no camera holder is on this layer
+    // -- the widened scope; the fields above stay ABOUT THE CAMERA HOLDER so every
+    //    existing HUD/consumer reads what it always read --
+    std::uint32_t bodies = 0;     // clocks advanced this step, camera holder included
+    std::uint32_t recovering = 0; // of those, standing in a room that restores
+    std::uint32_t crowdKilled = 0; // non-camera bodies this step's attrition finished
 };
 
 // Deterministic in `seed`, so a record gets the same body across a save/load rather
 // than a fresh roll each session.
 Needs needs_roll(std::uint32_t seed);
+
+// The same roll, then advanced to a hashed point of that body's own day — see
+// `kResidentPhaseMaxSec`. Deterministic in `seed` like the roll it wraps, and built
+// by running the REAL `needs_advance` rather than by inventing second bands, so a
+// resident's state is always a state the ordinary clock could have produced.
+Needs needs_roll_resident(std::uint32_t seed);
 
 // The pure clock: no registry, no HP, no allocation. The piece the macro sim can
 // reuse on its own coarse clock, and the piece a test can drive without a world.
@@ -223,11 +268,28 @@ float needs_seconds_to_damage(const Needs& n);
 // returns the same value, so the caller needs no second call.
 float needs_speed_scale(const Needs& n);
 
-// Advance the camera holder's clock and charge it. Resolves the player the same way
-// every other system here does (first `CameraTag` on `layer`), so there is still no
-// player singleton. Rolls the record's needs lazily on first sight — the way
-// `player_melee_step` attaches `PlayerMelee` lazily — so no spawn, elevator or
-// possession path has to remember to seed them.
+// Advance EVERY embodied body's clock on `layer` and charge it. Rolls each record's
+// needs lazily on first sight — the way `player_melee_step` attaches `PlayerMelee`
+// lazily — so no spawn, elevator or possession path has to remember to seed them,
+// and the camera holder gets `needs_roll` where a resident gets
+// `needs_roll_resident` (see the scope note in this file's banner).
+//
+// `rooms` is the ambient-recovery half ([room_zone.h], `needs.ts:253-280`): a body
+// standing in a kitchen fills, a body in a bathroom empties, and eating queues the
+// digestion that later sends it to one. WITHOUT IT THE WIDENED SCOPE IS A MORGUE —
+// the population dehydrates in ~14 minutes with nothing to drink — so passing null
+// is a legitimate but SHORT-LIVED state (a floor still baking, a unit test measuring
+// the drain in isolation), never the shipping wiring.
+//
+// Only `RoomZones::kind` and `::number` are read here, not the baked fields: what
+// restores a body is STANDING IN THE ROOM, which is a property of the taxonomy and
+// true whether or not anything baked a route to it. That is also why an Industrial
+// floor — which bakes no field at all — still lets a body recover in the one room
+// kind its mix happens to roll.
+//
+// NeedsTick's `hpLost` / `failed` / `warned` / `speedScale` / `ticked` stay ABOUT
+// THE CAMERA HOLDER, so every existing consumer (HUD, warning line) reads exactly
+// what it read before; the crowd is reported through the three new counters.
 //
 // WHERE IT BELONGS IN THE SIM LOOP (`src/app/main.cpp`) — it is a damage source, so
 // it goes LAST among them, immediately before `loot_dead_mobs`:
@@ -242,8 +304,10 @@ float needs_speed_scale(const Needs& n);
 // `apply_damage` refuses the target, so you cannot be billed for starving after you
 // are dead.
 //
-// No allocation, no exceptions, O(1) in population.
-NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt);
+// No allocation, no exceptions, O(n) in the EMBODIED bodies on one layer.
+struct RoomZones; // room_zone.h — incomplete OK; the full type is only needed in the .cpp
+NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
+                     const RoomZones* rooms = nullptr);
 
 // Keyed off `UseEffect`, never `ItemCategory` — and the distinction is real:
 // `calm_brew` is category DRINK and `easter_egg` is category FOOD, but both are
