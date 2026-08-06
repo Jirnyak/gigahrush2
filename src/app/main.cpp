@@ -2378,6 +2378,16 @@ int main(int argc, char** argv) {
     while (running) {
         activeLayer = reg.get<Transform>(player).layer;
         bool propPassNeedsRebuild = false;
+        // SEPARATE from the instance repack above, and the separation is the fix.
+        // Re-packing the prop instance list and re-uploading the verlet STATE are
+        // different events that shared one flag: `upload_wires`/`upload_cloths`
+        // rewrite both `cur` and `prev` from the BAKE pose, i.e. they reset every
+        // chain and sheet on the floor to rest with zero velocity. Since the flag
+        // is also raised every frame while any severed leg is still falling
+        // (kAntourageFallSec = 8 s), one shot at a wall froze all the dressing on
+        // the floor for eight seconds. Pin changes never needed it anyway —
+        // `write_pins` publishes those per frame. [problems.md] section 28.4
+        bool dressingSetChanged = false;
 
         // The dressing's half of every geometry mutation, next to the ECS-prop
         // half (anchor_validate_step): whatever emptied these cells — a blast,
@@ -3485,8 +3495,10 @@ int main(int argc, char** argv) {
                         // pipes shed debris and the instance list is re-packed
                         // so the GPU stops drawing what no longer hangs.
                         if (antourage_carve_step_here(carveResult.dirtyCells,
-                                                      op.seed))
+                                                      op.seed)) {
                             propPassNeedsRebuild = true;
+                            dressingSetChanged = true;
+                        }
                     }
 
                 }
@@ -4136,6 +4148,16 @@ int main(int argc, char** argv) {
                                 if (buyWanted)
                                     spent += game::vendor_resupply(vi, ledger,
                                                                    kResupplyBudget);
+                                // Trade changed the bag, so the ARMOUR component
+                                // has to be re-derived from it. The rule is stated
+                                // in this file ("call after anything that changes
+                                // the inventory") and every craft/loot path obeys
+                                // it; all three vendor paths did not. Selling the
+                                // vest you are wearing removed it from the bag and
+                                // left the resistances on the entity — permanent
+                                // free armour, paid for. [problems.md] 28.3
+                                if (sellWanted || buyWanted)
+                                    game::sync_armour(reg, pool, player);
                             }
                     }
                     sellWanted = false;
@@ -4385,13 +4407,28 @@ int main(int argc, char** argv) {
                 ImGui::TextUnformatted(
                     "gpu: n/a (no timestamps, or GIGA_GPU_TIMER=0)");
             }
-            auto& tr = reg.get<Transform>(player);
-            auto& ctl = reg.get<Controller>(player);
-            auto& ga = reg.get<GravityAffected>(player);
-            ImGui::Text("pos  %.1f %.1f %.1f (layer %u)", tr.pos.x, tr.pos.y,
-                        tr.pos.z, tr.layer);
-            ImGui::Text("mode %s%s", ctl.fly ? "fly" : "walk",
-                        ga.grounded ? " (grounded)" : "");
+            // GUARDED, because `player` can legitimately be null HERE. When the
+            // last living body on the layer dies, `possess_a_survivor` returns
+            // null and the sim loop does `running = false; break;` — but that
+            // `break` leaves the FIXED-STEP LOOP, not the frame, so execution
+            // walks straight on into this HUD. Three unchecked `reg.get<>` on a
+            // null entity followed: with -fno-exceptions and EnTT's asserts
+            // compiled out in Release that is a raw out-of-bounds sparse-set
+            // read, i.e. a crash at the exact moment a run ends. The other 48
+            // uses of `player` in this file test validity; these did not.
+            // [problems.md] §28.1
+            if (reg.valid(player)) {
+                const auto& tr = reg.get<Transform>(player);
+                const auto& ctl = reg.get<Controller>(player);
+                const auto& ga = reg.get<GravityAffected>(player);
+                ImGui::Text("pos  %.1f %.1f %.1f (layer %u)", tr.pos.x, tr.pos.y,
+                            tr.pos.z, tr.layer);
+                ImGui::Text("mode %s%s", ctl.fly ? "fly" : "walk",
+                            ga.grounded ? " (grounded)" : "");
+            } else {
+                ImGui::TextUnformatted("pos  -- (no body: run over)");
+                ImGui::TextUnformatted("mode --");
+            }
             ImGui::Text("props %u | cull %s",
                         propPass.last_draw_count(),
                         cullPass.ready() ? "GPU-ready" : "off");
@@ -4837,12 +4874,25 @@ int main(int argc, char** argv) {
             DrawConsoleUI(&showConsole, &consoleFocus, consoleInput,
                           sizeof consoleInput, console, consoleCtx, consoleLog,
                           consoleHistory, consoleHistPos);
-            if (consoleCtx.requestFloor != game::ConsoleContext::kNoRequest) {
-                pendingTeleport = consoleCtx.requestFloor;
-                pendingLandHub = consoleCtx.requestLandHub;
-                consoleCtx.requestFloor = game::ConsoleContext::kNoRequest;
-                consoleCtx.requestLandHub = -1;
-            }
+        }
+
+        // DRAINED UNCONDITIONALLY, outside the console overlay.
+        //
+        // This used to sit INSIDE `if (showConsole)`, so a floor request only
+        // ever landed while the console happened to be open. Every other console
+        // request (`requestBits`) is drained unconditionally, and this one is the
+        // channel `cmd_teleport` / `cmd_fasttravel` write to — which meant a
+        // KeyBind row running `ft 14`, exactly the one-row extension
+        // [ARCHITECTURE.md] advertises, did NOTHING when pressed. Worse, the
+        // request was not dropped but LATCHED: it sat in the context and fired
+        // the next time the player opened the console for some unrelated reason,
+        // teleporting them mid-thought. Same for a pause-menu MenuItem, which
+        // runs `exec_command` with the console shut. [problems.md] section 28.2
+        if (consoleCtx.requestFloor != game::ConsoleContext::kNoRequest) {
+            pendingTeleport = consoleCtx.requestFloor;
+            pendingLandHub = consoleCtx.requestLandHub;
+            consoleCtx.requestFloor = game::ConsoleContext::kNoRequest;
+            consoleCtx.requestLandHub = -1;
         }
 
         if (showCraftingWindow && reg.valid(player)) {
@@ -4872,8 +4922,17 @@ int main(int argc, char** argv) {
             const bool isOnPad = game::on_extraction_pad(stack.layer(activeLayer).grid(), vt.pos);
             if (const auto* nrv = reg.try_get<game::NpcRef>(player)) {
                 if (pool.valid(nrv->id)) {
+                    const std::int32_t soldBefore = sold;
+                    const std::int32_t spentBefore = spent;
                     DrawVendorWindowUI(&showVendorWindow, pool.inventory(nrv->id), ledger, 
                                        vendorKind, isOnPad, sold, spent);
+                    // Same re-derive as the keyboard path. The window is not handed
+                    // reg/pool/player, so the CALLER does it — the shape the
+                    // crafting window already uses via its `invChanged` out-param.
+                    // Either counter moving means stock crossed the bag boundary.
+                    // [problems.md] 28.3
+                    if (sold != soldBefore || spent != spentBefore)
+                        game::sync_armour(reg, pool, player);
                 }
             }
         }
@@ -5221,8 +5280,10 @@ int main(int argc, char** argv) {
                 // A door leaf sliding away empties cells too — dressing that
                 // hung off them is just as severed as by a blast.
                 if (antourage_carve_step_here(doors.dirtyCells,
-                                              static_cast<std::uint32_t>(simTick)))
+                                              static_cast<std::uint32_t>(simTick))) {
                     propPassNeedsRebuild = true;
+                    dressingSetChanged = true;
+                }
                 // Same field-rebake debt carve pays: doors mutate occupancy
                 // masks the nav flow fields sample.
                 doors.dirtyCells.clear();
@@ -5242,6 +5303,10 @@ int main(int argc, char** argv) {
                                       streamer.antourage_at_layer(registry, activeLayer),
                                       stack.layer(activeLayer), &dripEmitters,
                                       &antourageFalling);
+            }
+            // Only when the dressing SET actually changed — never merely because
+            // a rigid leg is mid-fall.
+            if (dressingSetChanged) {
                 upload_wires(wirePass, streamer.antourage_at_layer(registry, activeLayer));
                 upload_cloths(clothPass, streamer.antourage_at_layer(registry, activeLayer));
             }
