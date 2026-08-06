@@ -95,6 +95,40 @@ void rooms_bake_follows_the_floor_mix() {
     std::printf("[rooms] residential floor 0: baked mask 0x%04X, %zu bytes\n",
                 static_cast<unsigned>(zr.baked), zr.resident_bytes());
 
+    // A COPY-PASTEABLE HANDLE FOR THE MANUAL CHECK, and it earns its place: nothing
+    // in the world marks a kitchen, so "stand in one and watch the bar climb" is
+    // otherwise a hunt. `main.cpp` applies `--pos X Y Z` to the PLAYER at floor-0
+    // setup whether or not `--shot` is given, so these three numbers put a human
+    // inside the room the AI is walking to. Printed for the two rooms that restore
+    // the bars a player can actually see move.
+    const RoomBit kShowRooms[] = {RoomBit::Kitchen, RoomBit::Bathroom,
+                                  RoomBit::Living};
+    const int showGround = floor_ground_z();
+    for (RoomBit want : kShowRooms) {
+        for (int y = 1; y < kMacroDim; ++y) {
+            if (y % 4 == 0) continue;
+            bool found = false;
+            for (int x = 1; x < kMacroDim && !found; ++x) {
+                if (x % 4 == 0) continue;
+                if (room_bit_at(FloorKind::Residential, 0, x, y) != room_bit(want))
+                    continue;
+                if (!room_body_walkable(res.grid(), x, y, showGround)) continue;
+                std::printf("[rooms] floor 0 %-8s at cell (%d,%d,%d)  ->  "
+                            "--pos %.1f %.1f %.1f\n",
+                            floor_room_bit_index(room_bit(want)) ==
+                                    floor_room_bit_index(room_bit(RoomBit::Kitchen))
+                                ? "KITCHEN"
+                                : (want == RoomBit::Bathroom ? "BATHROOM" : "LIVING"),
+                            x, y, showGround,
+                            static_cast<double>((x + 0.5f) * kCellSize),
+                            static_cast<double>((y + 0.5f) * kCellSize),
+                            static_cast<double>((showGround + 0.5f) * kCellSize));
+                found = true;
+            }
+            if (found) break;
+        }
+    }
+
     // An Industrial floor's mix is Production/Storage/Corridor/Smoking — no room an
     // intent names. Nothing is baked, `room_route` answers "nothing reachable", and
     // every consumer degrades to the pre-rooms behaviour with no special case.
