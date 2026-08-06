@@ -11,6 +11,7 @@
 #include "game/mob_spawn.h"   // MobRef — the scope exclusion
 #include "game/needs.h"       // needs_roll — substitute for an unseeded pool row
 #include "game/door.h"        // door_nearest_shelter — hermetic flee target (§23)
+#include "game/room_zone.h"   // room affordance table + baked fields (§27 legs a,b)
 #include "sim/diffusion.h"    // diffusion_gradient — the flee steering field
 #include "world/field.h"      // Field<float>
 #include "world/macro_grid.h" // MacroGrid (open/wall test inside the gradient)
@@ -571,7 +572,8 @@ std::uint32_t ai_release(Registry& reg, LayerId layer) {
 AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                const MacroGrid& grid, LayerId layer, double now, float dt,
                const AiConfig& cfg, AiMemory* mem,
-               const DoorSet* doors, const World* world) {
+               const DoorSet* doors, const World* world,
+               const RoomZones* rooms) {
     AiTick out;
     // Dormant by default. Returning before the sweep means a disabled AI costs
     // one branch, and it means nothing can be left half-arbitrated: the token is
@@ -583,6 +585,12 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
     // recall, no record, no allocation. The store is the real switch; the flag is
     // what lets one store be measured on and off with nothing else different.
     const bool useMem = (mem != nullptr) && cfg.memory;
+    // Rooms are OFF unless a bake landed AND that bake found something. A floor
+    // whose mix rolls no kitchen, no bathroom and no flat bakes nothing
+    // ([room_zone.h]), so `ready()` is false and this pass is bit-for-bit the
+    // pre-rooms one — the degradation is a property of the data, not a branch.
+    const bool useRooms = (rooms != nullptr) && rooms->ready();
+    const int roomStride = useRooms ? floor_room_stride(rooms->kind) : 0;
     // Hoisted out of the loop so a body that neither re-plans nor flees pays
     // NOTHING for memory — not even zeroing a MemoryRecall. `ai_recall` returns a
     // fully-initialised value, so the assignment below cannot carry stale fields
@@ -615,6 +623,11 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
         const NpcId id = view.get<const NpcRef>(e).id;
         if (!pool.valid(id)) continue;
         ++out.considered;
+        // Hoisted out of the re-plan branch: the SEAT hash needs it on every tick a
+        // body is on an errand, not only on the ticks it re-decides. One lowbias32
+        // finalise, and it is the same value the score jitter uses, so nothing about
+        // any existing decision moves.
+        const std::uint32_t idSeed = identity_seed(id);
 
         // The macro cell the body stands in — the same pos->cell map fold_back
         // uses, wrapped onto the torus. kCellSize == kEmbodyCellSize; using the
@@ -662,8 +675,6 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
         // one float below is the whole scheduler. A fresh brain
         // (nextDecisionAt == 0) plans at once.
         if (wantReplan) {
-            const std::uint32_t idSeed = identity_seed(id);
-
             Perception p;
             p.idSeed = idSeed;
             p.faction = pool.faction(id);
@@ -775,7 +786,90 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                 owned = true;
                 viaMemory = true;
             }
+        } else if (useRooms) {
+            // --- THE ERRAND: a non-flee intent that has somewhere to be --------
+            // This is §27 leg (a). Everything about it is a TABLE read: which room
+            // kind satisfies this intent, where the nearest one is, and what one
+            // second inside it does. No intent is named in this branch — adding
+            // "work happens in a Production room" is a row in kRoomAffordance and
+            // not a line here ([room_zone.h]).
+            const std::uint16_t want = intent_room_mask(brain.currentIntent);
+            const std::uint16_t here =
+                want != 0 ? room_bit_at(rooms->kind, rooms->number, cx, cy) : 0;
+
+            if (want != 0 && (here & want) != 0) {
+                // ALREADY IN THE RIGHT ROOM — so the goal is no longer the room, it
+                // is the MICRO-GOAL: this body's own seat among the room's nine
+                // interior cells, hashed from its identity so a hungry crowd
+                // spreads across the kitchen instead of converging on one voxel.
+                // Stateless by construction; see the [room_zone.h] banner.
+                const int rx = cx / roomStride;
+                const int ry = cy / roomStride;
+                int ox = 0, oy = 0;
+                room_seat_offset(idSeed, rx, ry, roomStride, ox, oy);
+                const int sx = rx * roomStride + ox;
+                const int sy = ry * roomStride + oy;
+
+                // A seat inside solid geometry is unreachable, and a body that
+                // cannot reach its seat would push into the wall for the rest of
+                // the session. Standing anywhere in the right room is what the
+                // recovery actually keys on ([room_zone.h] room_bit_at), so an
+                // unreachable seat degrades to "settled where you are" rather than
+                // to a permanent shove.
+                if (grid.mask(sx, sy, cz).full()) {
+                    owned = true; // settled: hold still, the room does the work
+                } else {
+                    const float tx = (static_cast<float>(sx) + 0.5f) * kCellSize;
+                    const float ty = (static_cast<float>(sy) + 0.5f) * kCellSize;
+                    const float dx = wrap_delta_f(tr.pos.x, tx, kWorldExtent);
+                    const float dy = wrap_delta_f(tr.pos.y, ty, kWorldExtent);
+                    const float d2 = dx * dx + dy * dy;
+                    owned = true;
+                    if (d2 > kSeatArriveM * kSeatArriveM)
+                        dir = normalize(vec3{dx, dy, 0.0f});
+                    // else: dir stays zero — SETTLED. Owning the body and writing a
+                    // zero is the point, not an oversight: handing it back to
+                    // wander here would walk it out of the kitchen mid-meal, which
+                    // is the one failure mode this whole leg exists to prevent.
+                }
+                if (owned) ++out.settled;
+            } else if (want != 0) {
+                // NOT THERE YET — descend the room kind's baked field.
+                const RoomRoute r = room_route(*rooms, want, cx, cy, cz);
+                if (r.bit != 0 && r.dir < 4) {
+                    // A horizontal step. kNavDir 0..3 are +-x/+-y; 4..5 are the
+                    // gravity axis, and `Velocity.z` belongs to physics.
+                    dir = normalize(vec3{static_cast<float>(nav::kNavDir[r.dir][0]),
+                                         static_cast<float>(nav::kNavDir[r.dir][1]),
+                                         0.0f});
+                    owned = true;
+                } else if (r.bit != 0) {
+                    // THE VERTICAL STEP, and it is not a rare case: the field is
+                    // 6-connected, so a route may legitimately begin by going up a
+                    // storey, and a walking body cannot climb one. `wander_step`
+                    // measured the same thing (110 of 120 ground-storey residents
+                    // get a vertical first step) and takes the same fallback: walk
+                    // toward the target room's COLUMN and let physics resolve what
+                    // it meets. `targetX/targetY` is exact, not a guess — it is the
+                    // nearest room of that kind, brute-forced at bake time.
+                    const float tx = (static_cast<float>(r.targetX) + 0.5f) * kCellSize;
+                    const float ty = (static_cast<float>(r.targetY) + 0.5f) * kCellSize;
+                    const float dx = wrap_delta_f(tr.pos.x, tx, kWorldExtent);
+                    const float dy = wrap_delta_f(tr.pos.y, ty, kWorldExtent);
+                    if (dx * dx + dy * dy > kMinFleeGrad2) {
+                        dir = normalize(vec3{dx, dy, 0.0f});
+                        owned = true;
+                    }
+                }
+                // r.bit == 0 means no room of that kind is REACHABLE from here (a
+                // sealed pocket, or a floor that has none). Fall through to wander.
+            }
+            if (owned) ++out.roomOwned;
         }
+
+        ++out.byIntent[brain.currentIntent < kIntentCount
+                           ? brain.currentIntent
+                           : static_cast<std::uint8_t>(IntentWander)];
 
         if (!owned) {
             // Delegate. wander_step steers this body, exactly as it does today.
@@ -788,8 +882,15 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
         ++out.aiOwned;
         if (viaMemory) ++out.memoryFled;
         Velocity& vel = view.get<Velocity>(e);
-        vel.v.x = dir.x * kFleeSpeed;
-        vel.v.y = dir.y * kFleeSpeed;
+        // Panic reads as panic only while the ordinary pace is ordinary: a body
+        // running from a gradient outpaces one walking to the kitchen by 60%.
+        // A SETTLED body has `dir` at zero, so this writes a real stop — owning the
+        // body and holding it still is what keeps wander from walking it back out
+        // of the room mid-meal.
+        const float speed =
+            brain.currentIntent == IntentFlee ? kFleeSpeed : kErrandSpeed;
+        vel.v.x = dir.x * speed;
+        vel.v.y = dir.y * speed;
         // vel.v.z is intentionally untouched — physics_step owns it (gravity and
         // jump). Same rule as wander_step: this is locomotion, not flight.
     }

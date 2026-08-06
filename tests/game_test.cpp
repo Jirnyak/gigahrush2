@@ -4314,6 +4314,7 @@ int main() {
     rooms_bake_follows_the_floor_mix();
     rooms_descent_actually_arrives();
     rooms_seat_is_the_micro_goal();
+    rooms_a_hungry_body_walks_to_a_kitchen();
     rooms_recovery_closes_the_loop();
     test_navcache_all();
     // Wave 6: crafting (446 items carried 11 authored craft_* columns and no system),

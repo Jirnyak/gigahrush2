@@ -18,6 +18,13 @@
 //             asked for, inside a bounded step budget. Printed as a count.
 //   Block 4 — the SEAT (the micro-goal). Interior, stable per identity, spread
 //             across identities.
+//   Block 6 — THE ERRAND, end to end through the driver, and this is the block
+//             that answers §27's actual complaint. Starve 64 bodies, run `ai_step`
+//             with the zones, integrate the Velocity it writes, and count how many
+//             END UP STANDING IN A KITCHEN. `own_ai` and the arrival count are both
+//             printed. Run the SAME loop with `rooms = nullptr` and every body must
+//             stay wander-owned — which is what proves the win came from this leg
+//             and not from something else moving.
 //   Block 5 — RECOVERY, and the LOOP it closes. A kitchen second is +3.5 food and a
 //             queued bowel; a bathroom second is -12 pee; a corridor second is
 //             nothing. Then the loop itself: feed a body in a kitchen long enough
@@ -207,6 +214,143 @@ void rooms_seat_is_the_micro_goal() {
     for (int i = 0; i < (stride - 1) * (stride - 1); ++i)
         if (used[i] > 0) ++distinct;
     CHECK(distinct == (stride - 1) * (stride - 1));
+}
+
+// Walk `n` starving bodies for `ticks` and report what the AI did with them. With
+// `zones == nullptr` this is the pre-rooms pass, which is exactly why both arms run
+// through ONE function: the only difference between them is the argument.
+struct ErrandRun {
+    std::uint32_t owned = 0;    // peak bodies the AI steered on any one tick
+    std::uint32_t eating = 0;   // peak bodies committed to IntentEat
+    int inKitchen = 0;          // bodies standing in a kitchen at the end
+    float travelled = 0.0f;     // metres walked, summed
+};
+ErrandRun rooms_run_errand(const World& w, const RoomZones* zones, int ticks) {
+    ErrandRun out;
+    NpcPool pool;
+    pool.init();
+    Registry reg;
+
+    constexpr std::uint32_t kBodies = 64;
+    seed_floor_population(pool, /*floor=*/0, kBodies, /*seed=*/9u);
+    const int ground = floor_ground_z();
+
+    // Place every body on a walkable cell that is NOT already a kitchen, so
+    // "ended in a kitchen" can only mean it walked there.
+    std::vector<Entity> bodies;
+    std::vector<vec3> start;
+    int placed = 0;
+    for (int y = 1; y < kMacroDim && placed < static_cast<int>(kBodies); ++y) {
+        if (y % 4 == 0) continue;
+        for (int x = 1; x < kMacroDim && placed < static_cast<int>(kBodies); ++x) {
+            if (x % 4 == 0) continue;
+            if (w.grid().mask(x, y, ground).full()) continue;
+            if (room_bit_at(FloorKind::Residential, 0, x, y) ==
+                room_bit(RoomBit::Kitchen))
+                continue;
+            const NpcId id = static_cast<NpcId>(placed);
+            Entity e = embody(reg, pool, id, 0);
+            if (e == entt::null) continue;
+            Transform& tr = reg.get<Transform>(e);
+            tr.pos = vec3{(static_cast<float>(x) + 0.5f) * kCellSize,
+                          (static_cast<float>(y) + 0.5f) * kCellSize,
+                          (static_cast<float>(ground) + 0.5f) * kCellSize};
+            tr.layer = 0;
+            // STARVING, and seeded — so the scorer reads this row instead of
+            // substituting the constant identity roll ([ai.cpp] needs_for).
+            Needs& n = pool.needs(id);
+            n = needs_roll(giga::hash_u32(id + 1u));
+            n.food = 2.0f;
+            bodies.push_back(e);
+            start.push_back(tr.pos);
+            ++placed;
+        }
+    }
+    ai_init(reg, 0);
+
+    AiConfig cfg;
+    cfg.enabled = true;
+    for (int t = 0; t < ticks; ++t) {
+        const AiTick a =
+            ai_step(reg, pool, nullptr, w.grid(), 0,
+                    static_cast<double>(t) * static_cast<double>(kSimDt), kSimDt,
+                    cfg, nullptr, nullptr, nullptr, zones);
+        if (a.aiOwned > out.owned) out.owned = a.aiOwned;
+        if (a.byIntent[IntentEat] > out.eating) out.eating = a.byIntent[IntentEat];
+        // Integrate what the AI wrote. No physics and no collision: the flow field
+        // routes cell by cell through walkable cells, so following it is the whole
+        // claim under test — adding a collision resolver would measure physics too.
+        for (Entity e : bodies) {
+            Transform& tr = reg.get<Transform>(e);
+            const Velocity& v = reg.get<Velocity>(e);
+            tr.pos.x = wrapf(tr.pos.x + v.v.x * kSimDt, kWorldExtent);
+            tr.pos.y = wrapf(tr.pos.y + v.v.y * kSimDt, kWorldExtent);
+        }
+    }
+
+    for (std::size_t i = 0; i < bodies.size(); ++i) {
+        const Transform& tr = reg.get<Transform>(bodies[i]);
+        const int cx = wrap_macro(static_cast<int>(tr.pos.x / kCellSize));
+        const int cy = wrap_macro(static_cast<int>(tr.pos.y / kCellSize));
+        if (room_bit_at(FloorKind::Residential, 0, cx, cy) ==
+            room_bit(RoomBit::Kitchen))
+            ++out.inKitchen;
+        const float dx = wrap_delta_f(start[i].x, tr.pos.x, kWorldExtent);
+        const float dy = wrap_delta_f(start[i].y, tr.pos.y, kWorldExtent);
+        out.travelled += std::sqrt(dx * dx + dy * dy);
+    }
+    return out;
+}
+
+void rooms_a_hungry_body_walks_to_a_kitchen() {
+    World w;
+    generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
+    RoomZones z;
+    bake_room_zones(w.grid(), FloorKind::Residential, 0, z);
+
+    // 40 seconds. A kitchen is ~10 cells away at the Residential mix's 16/100
+    // weight, i.e. ~20 m, and the errand pace is 1.35 m/s — so this is ~2.5x the
+    // budget a straight walk needs, and a body that has not arrived by then is not
+    // walking toward one.
+    const int ticks = static_cast<int>(40.0f / kSimDt);
+    const ErrandRun with = rooms_run_errand(w, &z, ticks);
+    const ErrandRun without = rooms_run_errand(w, nullptr, ticks);
+
+    std::printf("[rooms] errand WITH zones:    own_ai=%u eat=%u in-kitchen=%d/64 "
+                "walked=%.0f m\n",
+                with.owned, with.eating, with.inKitchen,
+                static_cast<double>(with.travelled));
+    std::printf("[rooms] errand WITHOUT zones: own_ai=%u eat=%u in-kitchen=%d/64 "
+                "walked=%.0f m\n",
+                without.owned, without.eating, without.inKitchen,
+                static_cast<double>(without.travelled));
+
+    // Both arms AGREE about what the bodies want — the scorer is untouched by this
+    // leg. That is what makes the comparison fair: the only thing that changed is
+    // whether wanting it can steer.
+    CHECK(with.eating == 64u);
+    CHECK(without.eating == 64u);
+
+    // WITHOUT the zones: the pre-rooms behaviour, verbatim. Not one body is
+    // AI-owned, nothing moves (wander_step is not in this harness), and this is
+    // exactly the `own_ai=0` of [problems.md] §27 reproduced headless.
+    CHECK(without.owned == 0u);
+    CHECK(without.travelled == 0.0f);
+    CHECK(without.inKitchen == 0);
+
+    // WITH the zones: every body takes the token and the great majority is standing
+    // in a kitchen 40 s later.
+    CHECK(with.owned == 64u);
+    CHECK(with.travelled > 0.0f);
+    CHECK(with.inKitchen * 4 >= 64 * 3); // >= 75% arrived
+
+    // SETTLED, not milling: once a body reaches its seat the AI keeps the token and
+    // writes a zero. Run on longer and the arrivals must not drift back out — which
+    // is the failure mode of handing the body back to wander on arrival.
+    const ErrandRun longer = rooms_run_errand(w, &z, ticks * 3);
+    std::printf("[rooms] errand at 120 s:      in-kitchen=%d/64\n",
+                longer.inKitchen);
+    CHECK(longer.inKitchen >= with.inKitchen);
 }
 
 void rooms_recovery_closes_the_loop() {

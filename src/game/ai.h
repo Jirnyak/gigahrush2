@@ -109,21 +109,33 @@
 // (needs + the diffusion danger field + this file's memory column + faction
 // traits) is the reference's.
 //
-// Only ONE intent earns Ai ownership: `IntentFlee`. It has TWO direction sources,
-// tried in that order, and both produce a motion no other system in the tree does:
+// AN INTENT EARNS Ai OWNERSHIP WHEN IT HAS SOMEWHERE TO GO, and until 2026-08-06
+// exactly one ever did. `IntentFlee` has TWO direction sources, tried in order:
 //
 //   1. the live baked diffusion danger gradient ([diffusion.md]);
 //   2. failing that, the body's own remembered danger cells (see MEMORY below).
 //
 // Source 2 exists because the diffusion field EVAPORATES, so without it a body
 // hands itself straight back to wander the moment the field it was running from
-// decays — and walks back into the corridor on the next re-plan. Every other
-// intent still delegates to `wander_step`, because wander already owns the
-// flow-field roaming this engine has and duplicating it here would be a worse
-// copy. That is the honest state: the brain decides WHETHER a body flees and (now)
-// roughly which way, and wander decides where everyone else walks. Intents gain
-// their own destinations (and their own ownership) when #13 content gives them
-// reachable target cells.
+// decays — and walks back into the corridor on the next re-plan.
+//
+// EVERY OTHER INTENT DELEGATED TO `wander_step`, and that single fact is what made
+// the whole scorer decoration: measured on a live run, `own_ai=0` out of 419 bodies
+// with the clock running for all of them ([problems.md] §27 — the reverted fix). A
+// decision to eat that cannot steer a body is not a decision.
+//
+// It is now a THIRD source, and it is a table rather than a second special case:
+// `intent_room_mask` ([room_zone.h]) answers "which room kind satisfies this
+// intent", and an intent with an answer descends that kind's baked 128^3 field,
+// walks to its own SEAT inside the room, and holds still there while the room's
+// ambient recovery does the work. eat/drink -> Kitchen, toilet -> Bathroom,
+// sleep -> Living today; work/social/patrol are a ROW away and deliberately not
+// taken yet, so one behaviour change is measurable at a time.
+//
+// An intent with NO row, or a floor whose mix contains none of the rooms it names
+// (an Industrial floor has no kitchen at all), still delegates to `wander_step` —
+// which is right: wander already owns the flow-field roaming this engine has, and
+// duplicating it here would be a worse copy.
 //
 // STORAGE: needs are NOT re-homed here. `Needs` is a NpcPool row on purpose
 // ([needs.h]: the elevator destroys and rebuilds the player body, so a component
@@ -218,6 +230,7 @@
 #include "game/faction.h"      // Faction / kFactionCount — the trait table's index
 #include "game/npc_pool.h"     // NpcPool, NpcId, Needs (the pool row this reads)
 #include "world/level_stack.h" // LayerId
+#include "world/types.h"       // kCellSize — the seat radius is stated in cells
 
 // Pointer/reference parameters need only a declaration, so the header stays
 // light; ai.cpp includes world/field.h + world/macro_grid.h for the definitions.
@@ -766,6 +779,19 @@ inline constexpr const char* kRethinkChannel = "utility_rethink";
 // strolling to a lattice node, or the intent is invisible. DATA, retune freely.
 inline constexpr float kFleeSpeed = 1.35f * 1.6f;
 
+// Errand pace, m/s — walking to the kitchen is not fleeing. Deliberately EQUAL to
+// `wander.cpp`'s kNpcWalkSpeed so a body that switches from roaming to an errand
+// changes DIRECTION and not gait; the flee multiplier above is what makes panic
+// legible, and it only reads as panic while the ordinary pace is the ordinary one.
+inline constexpr float kErrandSpeed = 1.35f;
+
+// How close to its seat a body must be to count as SETTLED, in metres. Below this
+// it stops and the room's ambient recovery does the work ([room_zone.h] micro-goal).
+// One third of a cell: tight enough that bodies visibly spread across a room's nine
+// interior cells rather than piling on its centre, loose enough that swept-AABB
+// collision against furniture cannot leave a body shuffling forever.
+inline constexpr float kSeatArriveM = kCellSize * 0.35f;
+
 // Below this squared gradient magnitude the danger field carries no usable
 // direction (uniform or empty), and flee hands ownership BACK to wander rather
 // than writing a zero velocity — a frozen body is a worse answer than a
@@ -843,6 +869,16 @@ struct AiTick {
     std::uint32_t remembered = 0; // traces filed this tick
     std::uint32_t memoryFled = 0; // bodies steered by a REMEMBERED danger cell
                                   // because the live gradient carried no direction
+    // -- rooms ([room_zone.h], §27 legs (a)+(b)) --
+    std::uint32_t roomOwned = 0;  // bodies walking an ERRAND: a non-flee intent that
+                                  // found a destination and took the token
+    std::uint32_t settled = 0;    // of those, the ones already at their seat and
+                                  // holding still while the room restores them
+    // Committed intents, histogrammed. This is the number that says whether the
+    // scorer is decoration: with the needs clock frozen the crowd's argmax is a pure
+    // function of (faction, id) and this histogram is CONSTANT IN TIME — the exact
+    // symptom [problems.md] §27 opens with. A moving histogram is the proof.
+    std::uint32_t byIntent[kIntentCount] = {};
 };
 
 // Attach an `AiBrain` to every embodied NPC body on `layer` that lacks one, and
@@ -915,12 +951,28 @@ std::uint32_t ai_release(Registry& reg, LayerId layer);
 // prefers door_nearest_shelter over pure −∇danger so NPCs run to hermetic
 // apartments during Samosbor purple fog. Either null keeps bit-for-bit prior
 // behaviour (tests pass nullptr; main wires activeWorld + doors).
-struct DoorSet; // door.h — incomplete OK; full type only needed in ai.cpp
+//
+// `rooms` (optional, §27 leg (a)+(b)) is what ends "IntentFlee is the ONLY owning
+// intent". With it, an intent the affordance table gives a destination
+// ([room_zone.h] kRoomAffordance — eat/drink/toilet/sleep today) descends that
+// room kind's baked field, walks to its SEAT inside the room, and holds there
+// while the room restores it. Null, or a floor whose room mix contains none of
+// those kinds, is bit-for-bit the pre-rooms pass: the intent still wins, it simply
+// has nowhere to go and delegates to `wander_step` exactly as it always did.
+//
+// THE SINGLE-WRITER STORY IS UNCHANGED IN SHAPE, and that is the reason this is
+// safe to widen. Ownership is still one token, still decided in one place, still
+// re-derived every tick. What changed is only the SET of intents that can earn it;
+// `wander_step` and `faction_feud_step` read the same `ai_owns_motion` guard and
+// neither had to learn anything about rooms.
+struct DoorSet;   // door.h — incomplete OK; full type only needed in ai.cpp
+struct RoomZones; // room_zone.h — likewise
 AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                const MacroGrid& grid, LayerId layer, double now, float dt,
                const AiConfig& cfg = {}, AiMemory* mem = nullptr,
                const DoorSet* doors = nullptr,
-               const World* world = nullptr);
+               const World* world = nullptr,
+               const RoomZones* rooms = nullptr);
 
 // --- Recorders anything may call --------------------------------------------
 // The write side of the seam, deliberately public and deliberately tiny: filing a

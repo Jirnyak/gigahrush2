@@ -40,6 +40,7 @@
 #include "ecs/components.h"
 #include "ecs/registry.h"
 #include "game/ai.h"       // the utility AI — adapted, wired, and dormant by default
+#include "game/room_zone.h" // room affordance/recovery tables + the baked zone fields
 #include "game/embody.h"
 #include "game/impact.h"
 #include "game/elevator.h"
@@ -1323,8 +1324,20 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
 // Now the player moves, looks, fights and loots immediately; the floor's crowd
 // stands still until the bake lands, because wander_step no-ops on an empty flow
 // field. That degradation is automatic rather than special-cased.
-void begin_floor_nav(const World& world, nav::AsyncBake& bake) {
+void begin_floor_nav(const World& world, int floorNumber, nav::AsyncBake& bake,
+                     game::RoomZones& rooms) {
     bake.start(world.grid());
+    // The ROOM zones are baked here too, and synchronously, because they are three
+    // multi-source BFS against the async bake's 128 — measured below in the same
+    // line the nav timings print. Synchronous also means there is no second
+    // ownership story to get wrong: the fields are complete before the first tick
+    // that could read them, so `ai_step` never sees a half-built field.
+    const game::FloorKind kind = kind_for_floor(floorNumber);
+    game::bake_room_zones(world.grid(), kind, floorNumber, rooms);
+    std::fprintf(stderr,
+                 "[rooms] floor %d: kind=%d baked mask 0x%04X (%zu bytes resident)\n",
+                 floorNumber, static_cast<int>(kind),
+                 static_cast<unsigned>(rooms.baked), rooms.resident_bytes());
 }
 
 // Called once the bake has landed: hand the new floor's inhabitants somewhere to
@@ -1670,6 +1683,13 @@ int main(int argc, char** argv) {
     // Baked asynchronously; owns both the live graph the tick reads and the
     // pending one a worker fills (world/nav_async.h).
     nav::AsyncBake nav;
+    // Room zones for the SAME one live floor ([room_zone.h]): which macro cells are
+    // a kitchen / a bathroom / a flat, and the dense field a body descends to reach
+    // one. ~6 MiB on a Residential floor, 0 on a floor whose room mix rolls none of
+    // them. Baked SYNCHRONOUSLY inside begin_floor_nav — three multi-source BFS
+    // against nav's 128, so it is a rounding error on a load the same function is
+    // already spending seconds on, and a synchronous bake needs no ownership story.
+    game::RoomZones roomZones;
     game::NpcPool pool;
     pool.init();
     // SLOT RECYCLING IS DELIBERATELY NOT ARMED HERE, and the line is left in place
@@ -1861,7 +1881,7 @@ int main(int argc, char** argv) {
                                               *currentSpec,
                                               streamer.floor_seed_of(registry, 0));
             doors.frozen = true;
-            begin_floor_nav(stack.layer(l0), nav);
+            begin_floor_nav(stack.layer(l0), 0, nav, roomZones);
             game::ai_init(reg, l0);
             if (propPass.ready()) {
                 merge_ecs_prop_meshes(reg, l0, propPass,
@@ -2348,7 +2368,7 @@ int main(int argc, char** argv) {
                 stack.layer(nl), doors, currentFloor, *currentSpec,
                 streamer.floor_seed_of(registry, currentFloor));
         doors.frozen = true;
-        begin_floor_nav(stack.layer(nl), nav);
+        begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
         // Arrival geometry is final (floor file + doors stamped): re-snapshot
         // the GPU voxel mirror for the recycled World object.
         voxelMirror.upload_all(stack.layer(nl));
@@ -2808,8 +2828,13 @@ int main(int argc, char** argv) {
                 // really hiding — a commented-out call is not a call, and nothing checks it.
                 // §23 hermetic flee: doors + activeWorld let IntentFlee steer toward
                 // door_nearest_shelter (sealed apartments) before −∇danger / memory.
+                // §27 legs (a)+(b): `roomZones` is what lets a winning eat/drink/
+                // toilet/sleep intent actually STEER a body — without it every
+                // non-flee intent hands motion straight back to wander_step and the
+                // scorer is decoration (measured: own_ai=0 of 419).
                 aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
-                                       kSimDt, aiCfg, &aiMem, &doors, &activeWorld);
+                                       kSimDt, aiCfg, &aiMem, &doors, &activeWorld,
+                                       &roomZones);
                 // AIMEM proof trail: once nav has brains and AI is on, emit a
                 // compact stderr pulse so a --shot harness can assert the store
                 // is live (rows/writes/recalled) without parsing the HUD.
@@ -2818,16 +2843,36 @@ int main(int argc, char** argv) {
                     lastAimemLogTick = simTick;
                     std::fprintf(stderr,
                                  "[aimem] STEP tick=%llu layer=%u seen=%u replan=%u "
-                                 "own_ai=%u own_wander=%u recall=%u filed=%u fled=%u "
+                                 "own_ai=%u own_wander=%u errand=%u settled=%u "
+                                 "recall=%u filed=%u fled=%u "
                                  "rows=%u writes=%u coal=%u evict=%u bytes=%zu\n",
                                  static_cast<unsigned long long>(simTick),
                                  static_cast<unsigned>(activeLayer),
                                  aiTick.considered, aiTick.replanned,
                                  aiTick.aiOwned, aiTick.wanderOwned,
+                                 aiTick.roomOwned, aiTick.settled,
                                  aiTick.recalled, aiTick.remembered,
                                  aiTick.memoryFled, aiMem.rows(),
                                  aiMem.writes(), aiMem.coalesced(),
                                  aiMem.evictions(), aiMem.resident_bytes());
+                    // THE HISTOGRAM IS THE ACCEPTANCE NUMBER, not own_ai alone.
+                    // [problems.md] §27's diagnosis is that the crowd's argmax is a
+                    // pure function of (faction, id) and therefore CONSTANT IN
+                    // TIME; a histogram that moves between two of these lines is
+                    // the evidence that the scorer became a decision. Printed on
+                    // the same 60-tick cadence so a --shot harness can diff two.
+                    char intents[256];
+                    int at = 0;
+                    for (std::uint8_t i = 0; i < game::kIntentCount; ++i) {
+                        if (aiTick.byIntent[i] == 0) continue;
+                        at += std::snprintf(intents + at,
+                                            sizeof(intents) - static_cast<std::size_t>(at),
+                                            " %s=%u", game::kIntentName[i],
+                                            aiTick.byIntent[i]);
+                        if (at >= static_cast<int>(sizeof(intents)) - 1) break;
+                    }
+                    std::fprintf(stderr, "[aimem] INTENT tick=%llu%s\n",
+                                 static_cast<unsigned long long>(simTick), intents);
                 }
                 controller_step(reg, kSimDt);
                 // Steer the crowd BEFORE physics: wander writes horizontal
@@ -4091,7 +4136,7 @@ int main(int argc, char** argv) {
                                     streamer.floor_seed_of(registry,
                                                            currentFloor));
                             doors.frozen = true;
-                            begin_floor_nav(stack.layer(nl), nav);
+                            begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
                             if (propPass.ready()) {
                                 merge_ecs_prop_meshes(reg, nl, propPass,
                                   streamer.antourage_at_layer(registry, nl),
@@ -5587,7 +5632,7 @@ int main(int argc, char** argv) {
                                 *currentSpec,
                                 streamer.floor_seed_of(registry, currentFloor));
                         doors.frozen = true;
-                        begin_floor_nav(stack.layer(nl), nav);
+                        begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
                         voxelMirror.upload_all(stack.layer(nl));
                         if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
                         // Same transition autosave as the keyboard path.

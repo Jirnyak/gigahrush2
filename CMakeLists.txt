@@ -688,7 +688,12 @@ if(GIGA_BUILD_TESTS)
     # from every 4th walkable cell of the arrival storey and asserts each walk ENDS
     # IN A KITCHEN. Measured on this tree: 1024 sampled, 1024 arrived, 0
     # unreachable, 0 over budget.
-        PASS_REGULAR_EXPRESSION "game_test: 235191 checks, 0 failures")
+    # 235191 -> 235200 on 2026-08-06: +9, the errand block — leg (a) of §27 proved
+    # headless with the pre-rooms arm run beside it. WITH zones own_ai=64, eat=64,
+    # 64/64 standing in a kitchen after 40 s, 667 m walked; WITHOUT zones own_ai=0,
+    # eat=64, 0/64, 0 m. Both arms agree on what the bodies WANT, which is what
+    # makes the difference attributable to ownership and nothing else.
+        PASS_REGULAR_EXPRESSION "game_test: 235200 checks, 0 failures")
 
 
 
