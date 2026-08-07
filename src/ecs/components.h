@@ -32,11 +32,20 @@ struct AABB {
 };
 
 // Mass in kilograms — THE universal physical context (owner, 2026-08-02). One
-// number, two laws everywhere: E = m*v^2/2 and p = m*v. Filled from the content
-// tables at spawn (mobs.csv mass_kg, props.csv mass_kg, materials.csv density
-// for debris via material_subvoxel_mass_kg, height for NPC bodies). Fall
-// damage, a thrown prop's punch and a ragdoll's swing are all the same
-// arithmetic over this one component — never a per-system constant.
+// number, two laws everywhere: E = m*v^2/2 and p = m*v. Fall damage, a thrown
+// prop's punch, knockback and a ragdoll's swing are all the same arithmetic over
+// this one component — never a per-system constant.
+//
+// FILLED FROM ONE UNIT. Every content table spells mass as `mass_g`, whole GRAMS
+// in a uint32 — mobs.csv, props.csv and items.csv alike (2026-08-07; before that
+// props meant grams and mobs meant kg x10 in the same 16 bits, which capped a
+// prop at 65.5 kg while mob rows already carried 900). Debris comes from
+// materials.csv density via `material_subvoxel_mass_kg`, and an NPC body from its
+// stature via `body_mass_kg`.
+//
+// A BODY'S MASS INCLUDES WHAT IT CARRIES. `encumbrance_step` ([encumbrance.h])
+// recomputes body + inventory, which is why a loaded fall hurts more and a loaded
+// body is shifted less — through these two laws, with neither law changed.
 struct Mass {
     float kg = 70.0f;
 };

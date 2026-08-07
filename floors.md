@@ -80,6 +80,40 @@ elevator target (floor number)  ──►  FloorRegistry  ──►  ModuleId  �
 A module contributes *modifiers*; it does not fork the global data. This keeps
 balance centralized while letting each floor feel distinct.
 
+## Room zones — what a room MEANS, and where the nearest one is
+
+`floor_room_mask(kind, number, rx, ry)` has always answered "what kind of room is
+this" — a pure hash of the room's identity on the X/Y lattice at
+`floor_room_stride` (4 cells today), keyed deliberately NOT on the world seed so
+the mob spawner, the container spawner and everything else agree about room 5.
+[room_zone.h](src/game/room_zone.h) is what finally made that answer *usable*:
+
+- **`kRoomAffordance`** — intent → the RoomBit mask that satisfies it
+  (eat/drink → Kitchen, toilet → Bathroom, sleep → Living). This is the table
+  that ended "IntentFlee is the only owning intent" ([ai.md], [problems.md] §27).
+- **`kRoomRecovery`** — RoomBit → what one second inside does to a `Needs` row,
+  ported from the reference's `needs.ts:253-280`. The kitchen CHARGES for itself:
+  it queues the digestion that later wins `IntentToilet`, so kitchen → bathroom
+  is a loop produced by two data rows and no state machine.
+- **`kRoomFurniture`** — RoomBit → the props that stand in it ([props.md]).
+- **One dense 128³ flow field per affordance bit**, baked by the same
+  multi-source BFS as `nav::bake_fine` and seeded from every walkable cell of
+  that room kind at once. ~2 MiB per bit, 6.0 MiB and 44 ms on a Residential
+  floor, **0 on an Industrial one** — its room mix rolls none of those kinds, so
+  the degradation is a property of the DATA and not a branch anywhere.
+
+**Walkability here is STRICTER than nav's, and that is load-bearing.** `nav` calls
+a cell traversable unless it is fully solid — a 1-in-512 bar. Collision is exact
+against sub-voxels and an NPC's collider is 4×4×7 of them, so a cell with one
+carved voxel passes nav's test and stops a body dead: measured, 62 of 63 bodies on
+an errand were pinned against geometry the field called open. `room_body_walkable`
+demands a centred 4×4 footprint clear over 7 consecutive sub-layers. Stricter in
+the SAFE direction — every cell it accepts, nav accepts too.
+
+Carve invalidates these fields exactly the way it invalidates nav's, and for the
+same reason: a flood FROM a room kind across the whole grid has no partial rebake.
+Stale means mis-steered, never crashed.
+
 ## As built
 
 A floor module is **not** one fat struct — it is the intersection of small,

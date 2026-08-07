@@ -85,7 +85,7 @@
   3. **Intelligence (Интеллект):** Psi damage (+1%).
   4. **Charisma (Харизма):** Trading discount & relationship bonus (+1).
   5. **Willpower (Сила воли):** Psi capacity (+1 flat).
-  6. **Endurance (Выносливость):** Carry weight (+1 kg).
+  6. **Endurance (Выносливость):** Carry weight (+1 kg). *Today carry weight is on **Strength** instead (+4 kg/point) — there is no Endurance attribute to read, and wiring the budget to one that exists beat leaving it unbuilt. One line moves when slot 5 lands.*
   7. **Vitality (Живучесть):** Max HP (+1%).
   8. **Speed (Скорость):** Movement speed (+1%).
 - **Needs & Survival:** HP, Psi (mana), Food, Water, Toilet, Sleep. High food passively restores HP.
@@ -96,7 +96,7 @@
 - **Probabilistic Voxel Erosion:** Material table maps damage types to destruction probability (zero-alloc, no per-voxel HP). Auto bursts on walls chip sub-voxel paint.
 
 ### 7. Inventory Grid & Equipment
-- **Grid Layout:** Fixed $8 \times 8$ inventory grid + Carry weight limit (base 50 kg).
+- **Grid Layout:** Fixed $8 \times 8$ inventory grid + carry weight — **64 kg + 4 kg per point of Strength** ([rpg.h](src/game/rpg.h) `carry_capacity_g`; both constants are powers of two in kg, so a capacity is always even). Every item carries `mass_g` in whole grams, the same unit and column name props and mobs use. Overload costs pace, sleep and stealth — and, because the load joins the body's `Mass`, it also makes falls hurt and knockback shift you less, through laws that did not change ([items.md](items.md), [encumbrance.h](src/game/encumbrance.h)).
 - **Slots:** Weapon, Armor, Psi, Tools (Flashlight with durability/battery).
 - **Death Drops:** Dead NPCs drop inventory into floor cell containers ($128^3$).
 

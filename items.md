@@ -80,6 +80,38 @@ the column, `item_table.cpp` differed from its rule-built predecessor **in comme
 lines only — not one `ItemDef{...}` byte**. If these weights are ever re-authored
 wholesale, do it the same way: rules first, then a proof-by-identical-output
 migration.
+
+### Carried weight and encumbrance (built)
+
+`inventory_mass_g` sums a grid, stack COUNT included — sixty rounds weigh sixty
+rounds. The budget is the CHARACTER's, in [rpg.h](src/game/rpg.h):
+
+    carry_capacity_g = 64 kg + 4 kg per point of Strength
+
+Both constants are powers of two in kilogrammes, so a capacity is always even.
+It reads **Strength** and not Endurance because `Attr` is `{Str, Agi, Int}` and
+the manifesto's eight-attribute sheet is not built; hanging it off an attribute
+that exists is honest wiring, and the day Endurance lands it is one line.
+
+What the load COSTS lives in [encumbrance.h](src/game/encumbrance.h), and half of
+it is not a new rule at all — it is three laws that already existed finally seeing
+the pack:
+
+| law | before | now |
+|---|---|---|
+| `E = m·v²/2` — fall damage ([impact.cpp](src/game/impact.cpp)) | body only, `22·h²` | `Mass` = body + load |
+| `p = m·v` — knockback ([combat.cpp](src/game/combat.cpp)) | flat 2.5 m/s for everyone | impulse ÷ mass, normalised at `kKnockbackRefMassKg` |
+| the noise field — footsteps | fixed 6 m radius | × `1 + 0.6·(carried/capacity)` |
+
+So weight matters ALWAYS and CONTINUOUSLY, with no cliff at the threshold. The two
+penalties that do need a threshold take it from the same `carry_capacity_g`:
+**speed** (free under capacity, then `capacity/carried`, floored at
+`kEncumbranceMinScale` so an absurd load slows and never freezes) and **fatigue**
+(overload burns sleep, and `sleep < 10` already halves pace on its own).
+
+The sweep is staggered 1-in-8 by identity like `wander_step`; the camera holder is
+visited every tick because its number drives the HUD and the Controller. The
+consequence, stated: a crowd body's `Mass` can lag its inventory by ~64 ms.
 - **`tags_hot` / `tags_all`** — authored as STRINGS in the CSV (459 distinct
   ones). Honest status: **no consumer reads them yet** — the two-tier flattening
   into a bitmask is a planned pass, and until it lands loot placement, the economy
