@@ -42,11 +42,28 @@ pipeline. Only the score stage is pure; the rest is a tiny per-entity FSM state.
 ### 1. Needs — the drives (data, decaying columns)
 
 A fixed block of **0..100 needs** per agent, stored SoA as a column of `NpcPool`
-(not an ECS component — see the Built note below). Rates are authored per second, but **only the camera holder's row is advanced**
-(`needs.h`: "TICK SCOPE: ONLY THE CAMERA HOLDER"): a crowd row stays unseeded
-and the scorer substitutes a deterministic roll from the record id, constant in
-time — which is why every need-driven intent scores exactly 0
-([problems.md](problems.md) §27). Nominally they decay/rise at
+(not an ECS component — see the Built note below). Rates are authored per second,
+and **every embodied body on the live floor is advanced** — O(n) in one floor's
+crowd (419 on the demo stack), never the cold 950k, whose lives the macro tick
+models abstractly.
+
+That scope was ONLY THE CAMERA HOLDER until 2026-08-06, and the reason it widened
+is worth keeping: `needs.h` refused to run the clock for a crowd that had no AI
+able to eat, because at 0.12 water/s the whole population dehydrates in ~14
+minutes and the building is a morgue before the player reaches floor −3. It named
+its own condition — "widen it when the utility AI can walk an NPC to a kitchen" —
+and §27's room work met it. Both halves landed together: the crowd's clock, and
+`room_recover`, the ambient recovery that keeps it from being a morgue. Measured
+in `suite_needs`: 25 minutes with no rooms takes 64 of 64 bodies to zero HP; the
+same 25 minutes obeying the scorer costs 0 of 64 a single point.
+
+A resident is also seeded at its own point of the day (`needs_roll_resident` —
+the ordinary roll, then the REAL clock advanced by a hashed phase), so a floor is
+not 419 people who all ate breakfast on the same frame. The camera holder is the
+exception, keyed on the component and never on an identity: whoever holds
+`CameraTag` when their row is first seen is starting a trip.
+
+Nominally they decay/rise at
 data-driven rates, scaled by the character-sheet attribute block
 ([npcs.md](npcs.md): generic 8-slot attributes, slot→meaning is a table):
 
@@ -190,14 +207,37 @@ single-writer rule this file exists to protect):
   `door_nearest_shelter` (a sealed apartment during Samosbor, §23) is tried
   FIRST, then `−diffusion_gradient(danger)`, then the remembered away-vector.
   Since `danger` is null in the shipped game the gradient never contributes.
-  Historically documented as: it reads `−diffusion_gradient(danger)` (or the remembered
-  away-vector when the field is flat) and writes the horizontal `Velocity` at
-  `kFleeSpeed`. `IntentFlee` is still the only owning intent.
+- **AN ERRAND OWNS THE BODY TOO** — since 2026-08-06, and this is what ended
+  "`IntentFlee` is the only owning intent", the single sentence
+  [problems.md] §27 was really about. Ownership is not a list of intents, it is
+  the question *does this intent have somewhere to go*, and the answer is a
+  TABLE: `intent_room_mask` ([room_zone.h] `kRoomAffordance`) maps an intent to
+  the room kinds that satisfy it — eat/drink → Kitchen, toilet → Bathroom,
+  sleep → Living. An intent with an answer descends that room kind's baked 128³
+  field, walks to its own SEAT inside the room, and holds still there while the
+  room's ambient recovery works. work/social/patrol are one row away and
+  deliberately not taken yet, so one behaviour change stays measurable at a time.
+  - **MACRO vs MICRO goal.** The macro goal is `currentIntent` — chosen by the
+    scorer, sticky, and already interruptible, because `select_intent` lets an
+    emergency survival intent preempt without the margin. The micro goal is the
+    SEAT: one interior cell, hashed from (identity, room), so a hungry crowd
+    spreads across a kitchen instead of converging on one voxel. It is a pure
+    function and not stored state — which is the whole reason `AiBrain` is still
+    16 bytes and nothing has to invalidate it.
+  - Errand pace is `kErrandSpeed` = wander's 1.35 m/s exactly. Panic reads as
+    panic only while the ordinary pace is ordinary; `kFleeSpeed`'s ×1.6 is what
+    carries that, and it only works against an unremarkable baseline.
+  - The step is aimed at the NEXT CELL'S CENTRE, never along the raw axis. That
+    is measured, not stylistic: the clearance the field guarantees is a CENTRED
+    footprint, so an off-centre body clips the jamb of the very doorway the field
+    routed it through — 23 of 64 arrivals against 64 of 64.
 - **Every other intent DELEGATES** — the token goes to `MotionOwner::Wander` and
   `wander_step` steers that body exactly as it does for a brainless NPC (its own
   file-local `kNpcWalkSpeed`, 1.35 m/s; the player's `Controller` runs faster).
-  Nothing in `ai_step` writes velocity for those bodies, so there is never a
-  second writer to reconcile.
+  An intent with no affordance row, and any intent at all on a floor whose room
+  mix contains none of the rooms it names (an Industrial floor has no kitchen),
+  lands here. Nothing in `ai_step` writes velocity for those bodies, so there is
+  never a second writer to reconcile.
 - `v.z` is **never touched** — gravity ([gravity.md](gravity.md)) owns the vertical
   axis, so walkers stay grounded. (Both writers still spell that axis `z`: the
   locomotion path is the ±Z debt the isotropy law names — [gravity.md] frame,

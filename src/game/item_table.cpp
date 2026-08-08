@@ -22,1772 +22,1772 @@ constexpr std::uint16_t u16(RoomBit v) { return static_cast<std::uint16_t>(v); }
 } // namespace
 
 const std::array<ItemDef, kItemCount> kItemTable = {{
-    // [0] id 1  acid_bottle
-    ItemDef{ 40, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [0] id 1  acid_bottle  (700 g)
+    ItemDef{ 40, 700, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [1] id 2  aerosol_paint_maiden
-    ItemDef{ 72, 200, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Smoking) | u16(RoomBit::Production)), 0,
+    // [1] id 2  aerosol_paint_maiden  (400 g)
+    ItemDef{ 72, 400, 200, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Smoking) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 3,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [2] id 3  agnia_a130
-    ItemDef{ 5500, 80, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Hq)), 0,
+    // [2] id 3  agnia_a130  (7000 g)
+    ItemDef{ 5500, 7000, 80, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [3] id 4  ak47
-    ItemDef{ 5500, 0, static_cast<std::uint16_t>(0), 0,
+    // [3] id 4  ak47  (4300 g)
+    ItemDef{ 5500, 4300, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [4] id 5  alcohol_bottle
-    ItemDef{ 30, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Production)), 0,
+    // [4] id 5  alcohol_bottle  (700 g)
+    ItemDef{ 30, 700, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [5] id 6  alkali_powder
-    ItemDef{ 28, 700, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
+    // [5] id 6  alkali_powder  (300 g)
+    ItemDef{ 28, 300, 700, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 8,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [6] id 7  ammo_12g_chemical
-    ItemDef{ 90, 0, static_cast<std::uint16_t>(0), 0,
+    // [6] id 7  ammo_12g_chemical  (45 g)
+    ItemDef{ 90, 45, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Ammo), u8(EquipSlot::None), 6,
              u8(UseEffect::Unpack), {0, 0, 0, 0, 0}, 0 },
-    // [7] id 8  ammo_12g_incendiary
-    ItemDef{ 48, 0, static_cast<std::uint16_t>(0), 0,
+    // [7] id 8  ammo_12g_incendiary  (45 g)
+    ItemDef{ 48, 45, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Ammo), u8(EquipSlot::None), 12,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [8] id 9  ammo_12g_slug
-    ItemDef{ 28, 0, static_cast<std::uint16_t>(0), 0,
+    // [8] id 9  ammo_12g_slug  (45 g)
+    ItemDef{ 28, 45, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Ammo), u8(EquipSlot::None), 12,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [9] id 10  ammo_762
-    ItemDef{ 18, 0, static_cast<std::uint16_t>(0), 0,
+    // [9] id 10  ammo_762  (16 g)
+    ItemDef{ 18, 16, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Ammo), u8(EquipSlot::None), 255,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [10] id 11  ammo_762tt
-    ItemDef{ 10, 0, static_cast<std::uint16_t>(0), 0,
+    // [10] id 11  ammo_762tt  (11 g)
+    ItemDef{ 10, 11, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Ammo), u8(EquipSlot::None), 255,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [11] id 12  ammo_9mm
-    ItemDef{ 3, 0, static_cast<std::uint16_t>(0), 0,
+    // [11] id 12  ammo_9mm  (8 g)
+    ItemDef{ 3, 8, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Ammo), u8(EquipSlot::None), 255,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [12] id 13  ammo_belt
-    ItemDef{ 140, 0, static_cast<std::uint16_t>(0), 0,
+    // [12] id 13  ammo_belt  (2500 g)
+    ItemDef{ 140, 2500, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Ammo), u8(EquipSlot::None), 255,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [13] id 14  ammo_coupon_9mm
-    ItemDef{ 45, 350, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
+    // [13] id 14  ammo_coupon_9mm  (10 g)
+    ItemDef{ 45, 10, 350, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [14] id 15  ammo_coupon_shells
-    ItemDef{ 62, 250, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
+    // [14] id 15  ammo_coupon_shells  (10 g)
+    ItemDef{ 62, 10, 250, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [15] id 16  ammo_energy
-    ItemDef{ 300, 0, static_cast<std::uint16_t>(0), 0,
+    // [15] id 16  ammo_energy  (120 g)
+    ItemDef{ 300, 120, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Ammo), u8(EquipSlot::None), 255,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [16] id 17  ammo_fuel
-    ItemDef{ 70, 0, static_cast<std::uint16_t>(0), 0,
+    // [16] id 17  ammo_fuel  (1200 g)
+    ItemDef{ 70, 1200, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Ammo), u8(EquipSlot::None), 255,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [17] id 18  ammo_harpoon
-    ItemDef{ 60, 0, static_cast<std::uint16_t>(0), 0,
+    // [17] id 18  ammo_harpoon  (350 g)
+    ItemDef{ 60, 350, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Ammo), u8(EquipSlot::None), 255,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [18] id 19  ammo_issue_order
-    ItemDef{ 72, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
+    // [18] id 19  ammo_issue_order  (20 g)
+    ItemDef{ 72, 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [19] id 20  ammo_nagant
-    ItemDef{ 12, 0, static_cast<std::uint16_t>(0), 0,
+    // [19] id 20  ammo_nagant  (12 g)
+    ItemDef{ 12, 12, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Ammo), u8(EquipSlot::None), 255,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [20] id 21  ammo_nails
-    ItemDef{ 9, 0, static_cast<std::uint16_t>(0), 0,
+    // [20] id 21  ammo_nails  (6 g)
+    ItemDef{ 9, 6, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Ammo), u8(EquipSlot::None), 255,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [21] id 22  ammo_rifle_coupon
-    ItemDef{ 96, 180, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office)), 0,
+    // [21] id 22  ammo_rifle_coupon  (10 g)
+    ItemDef{ 96, 10, 180, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::RedeemCoupon), {0, 0, 0, 0, 0}, 0 },
-    // [22] id 23  ammo_shells
-    ItemDef{ 12, 0, static_cast<std::uint16_t>(0), 0,
+    // [22] id 23  ammo_shells  (45 g)
+    ItemDef{ 12, 45, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Ammo), u8(EquipSlot::None), 255,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [23] id 24  anti_spore_inhaler
-    ItemDef{ 85, 550, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage)), 24,
+    // [23] id 24  anti_spore_inhaler  (120 g)
+    ItemDef{ 85, 120, 550, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage)), 24,
              u8(ItemCategory::Medicine), u8(EquipSlot::None), 255,
              u8(UseEffect::Heal), {0, 0, 0, 0, 0}, 0 },
-    // [24] id 25  antibiotic
-    ItemDef{ 70, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical)), 35,
+    // [24] id 25  antibiotic  (120 g)
+    ItemDef{ 70, 120, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical)), 35,
              u8(ItemCategory::Medicine), u8(EquipSlot::None), 255,
              u8(UseEffect::Heal), {0, 0, 0, 0, 0}, 0 },
-    // [25] id 26  antidep
-    ItemDef{ 95, 700, static_cast<std::uint16_t>(u16(RoomBit::Medical)), 0,
+    // [25] id 26  antidep  (120 g)
+    ItemDef{ 95, 120, 700, static_cast<std::uint16_t>(u16(RoomBit::Medical)), 0,
              u8(ItemCategory::Medicine), u8(EquipSlot::None), 255,
              u8(UseEffect::HealPsi), {0, 0, 0, 0, 0}, 0 },
-    // [26] id 27  antiemetic
-    ItemDef{ 24, 750, static_cast<std::uint16_t>(u16(RoomBit::Medical)), 8,
+    // [26] id 27  antiemetic  (120 g)
+    ItemDef{ 24, 120, 750, static_cast<std::uint16_t>(u16(RoomBit::Medical)), 8,
              u8(ItemCategory::Medicine), u8(EquipSlot::None), 255,
              u8(UseEffect::Antiemetic), {0, 0, 0, 0, 0}, 0 },
-    // [27] id 28  antifungal_ointment
-    ItemDef{ 55, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Bathroom)), 20,
+    // [27] id 28  antifungal_ointment  (120 g)
+    ItemDef{ 55, 120, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Bathroom)), 20,
              u8(ItemCategory::Medicine), u8(EquipSlot::None), 255,
              u8(UseEffect::Heal), {0, 0, 0, 0, 0}, 0 },
-    // [28] id 29  archive_access_permit
-    ItemDef{ 85, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office)), 0,
+    // [28] id 29  archive_access_permit  (20 g)
+    ItemDef{ 85, 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [29] id 30  arena_gold_trophy
-    ItemDef{ 1500, 0, static_cast<std::uint16_t>(0), 0,
+    // [29] id 30  arena_gold_trophy  (800 g)
+    ItemDef{ 1500, 800, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [30] id 31  armor_cultist
-    ItemDef{ 2000, 15000, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Medical)), 0,
+    // [30] id 31  armor_cultist  (6000 g)
+    ItemDef{ 2000, 6000, 15000, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Medical)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::Armor), 1,
              u8(UseEffect::None), {10, 10, 40, 0, 75}, 0 },
-    // [31] id 32  armor_heavy
-    ItemDef{ 3000, 10000, static_cast<std::uint16_t>(u16(RoomBit::Production)), 0,
+    // [31] id 32  armor_heavy  (14000 g)
+    ItemDef{ 3000, 14000, 10000, static_cast<std::uint16_t>(u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::Armor), 1,
              u8(UseEffect::None), {60, 70, 30, 20, 0}, 0 },
-    // [32] id 33  armor_light
-    ItemDef{ 500, 50000, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Production)), 0,
+    // [32] id 33  armor_light  (4000 g)
+    ItemDef{ 500, 4000, 50000, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::Armor), 1,
              u8(UseEffect::None), {20, 30, 0, 5, 0}, 0 },
-    // [33] id 34  armor_liquidator
-    ItemDef{ 4500, 5000, static_cast<std::uint16_t>(u16(RoomBit::Production)), 0,
+    // [33] id 34  armor_liquidator  (11000 g)
+    ItemDef{ 4500, 11000, 5000, static_cast<std::uint16_t>(u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::Armor), 1,
              u8(UseEffect::None), {80, 85, 20, 15, 5}, 0 },
-    // [34] id 35  armor_medium
-    ItemDef{ 1200, 30000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Production)), 0,
+    // [34] id 35  armor_medium  (8000 g)
+    ItemDef{ 1200, 8000, 30000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::Armor), 1,
              u8(UseEffect::None), {40, 50, 15, 10, 0}, 0 },
-    // [35] id 36  asbestos_cord
-    ItemDef{ 24, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [35] id 36  asbestos_cord  (200 g)
+    ItemDef{ 24, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [36] id 37  ato41_atomic_flamer
-    ItemDef{ 150000, 0, static_cast<std::uint16_t>(0), 0,
+    // [36] id 37  ato41_atomic_flamer  (26000 g)
+    ItemDef{ 150000, 26000, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 2,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [37] id 38  axe
-    ItemDef{ 150, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production)), 0,
+    // [37] id 38  axe  (1200 g)
+    ItemDef{ 150, 1200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [38] id 39  ballot
-    ItemDef{ 1, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Common) | u16(RoomBit::Living) | u16(RoomBit::Corridor)), 0,
+    // [38] id 39  ballot  (200 g)
+    ItemDef{ 1, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Common) | u16(RoomBit::Living) | u16(RoomBit::Corridor)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [39] id 40  bandage
-    ItemDef{ 10, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Bathroom)), 15,
+    // [39] id 40  bandage  (120 g)
+    ItemDef{ 10, 120, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Bathroom)), 15,
              u8(ItemCategory::Medicine), u8(EquipSlot::None), 255,
              u8(UseEffect::Heal), {0, 0, 0, 0, 0}, 0 },
-    // [40] id 41  bank_debt_paper
-    ItemDef{ 80, 700, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
+    // [40] id 41  bank_debt_paper  (20 g)
+    ItemDef{ 80, 20, 700, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [41] id 42  barrel_part
-    ItemDef{ 80, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [41] id 42  barrel_part  (200 g)
+    ItemDef{ 80, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 3,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [42] id 43  bayonet
-    ItemDef{ 105, 750, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Storage)), 0,
+    // [42] id 43  bayonet  (300 g)
+    ItemDef{ 105, 300, 750, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [43] id 44  bfg
-    ItemDef{ 180000, 0, static_cast<std::uint16_t>(0), 0,
+    // [43] id 44  bfg  (18000 g)
+    ItemDef{ 180000, 18000, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [44] id 45  black_market_shells
-    ItemDef{ 42, 0, static_cast<std::uint16_t>(0), 0,
+    // [44] id 45  black_market_shells  (45 g)
+    ItemDef{ 42, 45, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Ammo), u8(EquipSlot::None), 12,
              u8(UseEffect::Unpack), {0, 0, 0, 0, 0}, 0 },
-    // [45] id 46  blank_form
-    ItemDef{ 10, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office)), 0,
+    // [45] id 46  blank_form  (200 g)
+    ItemDef{ 10, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [46] id 47  bleached_document
-    ItemDef{ 0, 0, static_cast<std::uint16_t>(0), 0,
+    // [46] id 47  bleached_document  (200 g)
+    ItemDef{ 0, 200, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [47] id 48  block_kit
-    ItemDef{ 400, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
+    // [47] id 48  block_kit  (3000 g)
+    ItemDef{ 400, 3000, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Tool), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [48] id 49  blue_glow_sample_open
-    ItemDef{ 90, 0, static_cast<std::uint16_t>(0), 18,
+    // [48] id 49  blue_glow_sample_open  (200 g)
+    ItemDef{ 90, 200, 0, static_cast<std::uint16_t>(0), 18,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::PsiSurge), {0, 0, 0, 0, 0}, 0 },
-    // [49] id 50  blue_glow_sample_sealed
-    ItemDef{ 420, 0, static_cast<std::uint16_t>(0), -6,
+    // [49] id 50  blue_glow_sample_sealed  (200 g)
+    ItemDef{ 420, 200, 0, static_cast<std::uint16_t>(0), -6,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::UnsealSample), {0, 0, 0, 0, 0}, 0 },
-    // [50] id 51  blueprint_t1_folder
-    ItemDef{ 46, 600, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Storage) | u16(RoomBit::Living)), 0,
+    // [50] id 51  blueprint_t1_folder  (20 g)
+    ItemDef{ 46, 20, 600, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Storage) | u16(RoomBit::Living)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 3,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [51] id 52  blueprint_t2_folder
-    ItemDef{ 140, 220, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
+    // [51] id 52  blueprint_t2_folder  (20 g)
+    ItemDef{ 140, 20, 220, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 2,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [52] id 53  blueprint_t3_folder
-    ItemDef{ 420, 0, static_cast<std::uint16_t>(0), 0,
+    // [52] id 53  blueprint_t3_folder  (20 g)
+    ItemDef{ 420, 20, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [53] id 54  body_bag_roll
-    ItemDef{ 58, 450, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Medical)), 0,
+    // [53] id 54  body_bag_roll  (150 g)
+    ItemDef{ 58, 150, 450, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Medical)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [54] id 55  boiled_slime_residue
-    ItemDef{ 82, 0, static_cast<std::uint16_t>(0), 0,
+    // [54] id 55  boiled_slime_residue  (150 g)
+    ItemDef{ 82, 150, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [55] id 56  boiler_water
-    ItemDef{ 3, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Common)), 16,
+    // [55] id 56  boiler_water  (600 g)
+    ItemDef{ 3, 600, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Common)), 16,
              u8(ItemCategory::Drink), u8(EquipSlot::None), 255,
              u8(UseEffect::Drink), {0, 0, 0, 0, 0}, 0 },
-    // [56] id 57  book
-    ItemDef{ 3, 1000, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Common) | u16(RoomBit::Office)), 0,
+    // [56] id 57  book  (200 g)
+    ItemDef{ 3, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Common) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [57] id 58  borrowed_kitchen_key
-    ItemDef{ 28, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage)), 0,
+    // [57] id 58  borrowed_kitchen_key  (200 g)
+    ItemDef{ 28, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [58] id 59  bottle_empty
-    ItemDef{ 2, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Living) | u16(RoomBit::Storage)), 0,
+    // [58] id 59  bottle_empty  (300 g)
+    ItemDef{ 2, 300, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Living) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 12,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [59] id 60  bottled_voice
-    ItemDef{ 250, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Office)), 0,
+    // [59] id 60  bottled_voice  (150 g)
+    ItemDef{ 250, 150, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [60] id 61  braga_bucket
-    ItemDef{ 95, 120, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Smoking) | u16(RoomBit::Storage)), 0,
+    // [60] id 61  braga_bucket  (200 g)
+    ItemDef{ 95, 200, 120, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Smoking) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [61] id 62  brass_knuckles
-    ItemDef{ 90, 100, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Storage)), 0,
+    // [61] id 62  brass_knuckles  (400 g)
+    ItemDef{ 90, 400, 100, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [62] id 63  breach_charge
-    ItemDef{ 740, 45, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Production)), 0,
+    // [62] id 63  breach_charge  (2000 g)
+    ItemDef{ 740, 2000, 45, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 2,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [63] id 64  bread
-    ItemDef{ 3, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage)), 15,
+    // [63] id 64  bread  (400 g)
+    ItemDef{ 3, 400, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage)), 15,
              u8(ItemCategory::Food), u8(EquipSlot::None), 255,
              u8(UseEffect::Feed), {0, 0, 0, 0, 0}, 0 },
-    // [64] id 65  brown_slime_cleanup_act
-    ItemDef{ 18, 0, static_cast<std::uint16_t>(0), 0,
+    // [64] id 65  brown_slime_cleanup_act  (200 g)
+    ItemDef{ 18, 200, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [65] id 66  brt2_foam_projector
-    ItemDef{ 3100, 0, static_cast<std::uint16_t>(0), 0,
+    // [65] id 66  brt2_foam_projector  (4800 g)
+    ItemDef{ 3100, 4800, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [66] id 67  burn_gel
-    ItemDef{ 46, 750, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Hq) | u16(RoomBit::Storage)), 22,
+    // [66] id 67  burn_gel  (120 g)
+    ItemDef{ 46, 120, 750, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Hq) | u16(RoomBit::Storage)), 22,
              u8(ItemCategory::Medicine), u8(EquipSlot::None), 255,
              u8(UseEffect::Heal), {0, 0, 0, 0, 0}, 0 },
-    // [67] id 68  calm_brew
-    ItemDef{ 18, 800, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Kitchen)), 0,
+    // [67] id 68  calm_brew  (600 g)
+    ItemDef{ 18, 600, 800, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Kitchen)), 0,
              u8(ItemCategory::Drink), u8(EquipSlot::None), 255,
              u8(UseEffect::HealPsi), {0, 0, 0, 0, 0}, 0 },
-    // [68] id 69  camera
-    ItemDef{ 140, 200, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Office)), 0,
+    // [68] id 69  camera  (500 g)
+    ItemDef{ 140, 500, 200, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [69] id 70  canned
-    ItemDef{ 10, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage)), 30,
+    // [69] id 70  canned  (400 g)
+    ItemDef{ 10, 400, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage)), 30,
              u8(ItemCategory::Food), u8(EquipSlot::None), 255,
              u8(UseEffect::Feed), {0, 0, 0, 0, 0}, 0 },
-    // [70] id 71  caravan_route
-    ItemDef{ 65, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Smoking)), 0,
+    // [70] id 71  caravan_route  (200 g)
+    ItemDef{ 65, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Smoking)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [71] id 72  card_deck
-    ItemDef{ 22, 550, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Smoking) | u16(RoomBit::Living) | u16(RoomBit::Kitchen)), 0,
+    // [71] id 72  card_deck  (200 g)
+    ItemDef{ 22, 200, 550, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Smoking) | u16(RoomBit::Living) | u16(RoomBit::Kitchen)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [72] id 73  cardboard_stack
-    ItemDef{ 3, 1000, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Storage) | u16(RoomBit::Office)), 0,
+    // [72] id 73  cardboard_stack  (200 g)
+    ItemDef{ 3, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Storage) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 20,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [73] id 74  ceramic_shards_pack
-    ItemDef{ 8, 800, static_cast<std::uint16_t>(u16(RoomBit::Bathroom) | u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
+    // [73] id 74  ceramic_shards_pack  (200 g)
+    ItemDef{ 8, 200, 800, static_cast<std::uint16_t>(u16(RoomBit::Bathroom) | u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 12,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [74] id 75  chain
-    ItemDef{ 60, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [74] id 75  chain  (1800 g)
+    ItemDef{ 60, 1800, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [75] id 76  chainsaw
-    ItemDef{ 3200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production)), 0,
+    // [75] id 76  chainsaw  (6000 g)
+    ItemDef{ 3200, 6000, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [76] id 77  chalk
-    ItemDef{ 6, 900, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Common) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
+    // [76] id 77  chalk  (50 g)
+    ItemDef{ 6, 50, 900, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Common) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Tool), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [77] id 78  checkers_board
-    ItemDef{ 30, 440, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Living) | u16(RoomBit::Kitchen) | u16(RoomBit::Smoking)), 0,
+    // [77] id 78  checkers_board  (200 g)
+    ItemDef{ 30, 200, 440, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Living) | u16(RoomBit::Kitchen) | u16(RoomBit::Smoking)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [78] id 79  chernobog_cell_map
-    ItemDef{ 180, 0, static_cast<std::uint16_t>(0), 0,
+    // [78] id 79  chernobog_cell_map  (150 g)
+    ItemDef{ 180, 150, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [79] id 80  chernobog_confiscation_act
-    ItemDef{ 150, 0, static_cast<std::uint16_t>(0), 0,
+    // [79] id 80  chernobog_confiscation_act  (150 g)
+    ItemDef{ 150, 150, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [80] id 81  chernobog_external_cell_index
-    ItemDef{ 130, 0, static_cast<std::uint16_t>(0), 0,
+    // [80] id 81  chernobog_external_cell_index  (150 g)
+    ItemDef{ 130, 150, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [81] id 82  chernobog_liquidator_memo
-    ItemDef{ 160, 0, static_cast<std::uint16_t>(0), 0,
+    // [81] id 82  chernobog_liquidator_memo  (150 g)
+    ItemDef{ 160, 150, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [82] id 83  chernobog_redacted_central_note
-    ItemDef{ 240, 0, static_cast<std::uint16_t>(0), 0,
+    // [82] id 83  chernobog_redacted_central_note  (150 g)
+    ItemDef{ 240, 150, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [83] id 84  chernobog_witness_correction
-    ItemDef{ 120, 0, static_cast<std::uint16_t>(0), 0,
+    // [83] id 84  chernobog_witness_correction  (150 g)
+    ItemDef{ 120, 150, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [84] id 85  chest_failsafe_charge
-    ItemDef{ 1650, 0, static_cast<std::uint16_t>(0), 0,
+    // [84] id 85  chest_failsafe_charge  (1500 g)
+    ItemDef{ 1650, 1500, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [85] id 86  child_map
-    ItemDef{ 30, 1000, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Common)), 0,
+    // [85] id 86  child_map  (200 g)
+    ItemDef{ 30, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Common)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [86] id 87  chizh3_shotgun
-    ItemDef{ 980, 140, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Storage)), 0,
+    // [86] id 87  chizh3_shotgun  (3300 g)
+    ItemDef{ 980, 3300, 140, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [87] id 88  cigs
-    ItemDef{ 5, 1000, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Common) | u16(RoomBit::Smoking)), 0,
+    // [87] id 88  cigs  (200 g)
+    ItemDef{ 5, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Common) | u16(RoomBit::Smoking)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 12,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [88] id 89  circuit_board
-    ItemDef{ 35, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Office)), 0,
+    // [88] id 89  circuit_board  (200 g)
+    ItemDef{ 35, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [89] id 90  clean_health_cert
-    ItemDef{ 35, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office)), 0,
+    // [89] id 90  clean_health_cert  (20 g)
+    ItemDef{ 35, 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [90] id 91  cleaning_kit
-    ItemDef{ 80, 1000, static_cast<std::uint16_t>(u16(RoomBit::Bathroom) | u16(RoomBit::Storage) | u16(RoomBit::Living)), 0,
+    // [90] id 91  cleaning_kit  (1200 g)
+    ItemDef{ 80, 1200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Bathroom) | u16(RoomBit::Storage) | u16(RoomBit::Living)), 0,
              u8(ItemCategory::Tool), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [91] id 92  cleanup_order_stub
-    ItemDef{ 86, 450, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office)), 0,
+    // [91] id 92  cleanup_order_stub  (20 g)
+    ItemDef{ 86, 20, 450, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 3,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [92] id 93  cleanup_tongs
-    ItemDef{ 160, 350, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Hq)), 0,
+    // [92] id 93  cleanup_tongs  (900 g)
+    ItemDef{ 160, 900, 350, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Tool), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [93] id 94  cloth_roll
-    ItemDef{ 6, 1000, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Storage)), 0,
+    // [93] id 94  cloth_roll  (200 g)
+    ItemDef{ 6, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 8,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [94] id 95  concentrate_bonus_coupon
-    ItemDef{ 42, 240, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Kitchen) | u16(RoomBit::Hq)), 0,
+    // [94] id 95  concentrate_bonus_coupon  (10 g)
+    ItemDef{ 42, 10, 240, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Kitchen) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [95] id 96  concentrate_coupon
-    ItemDef{ 3, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Common) | u16(RoomBit::Storage)), 0,
+    // [95] id 96  concentrate_coupon  (10 g)
+    ItemDef{ 3, 10, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Common) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [96] id 97  concrete_breaker_grenade
-    ItemDef{ 620, 25, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Production)), 0,
+    // [96] id 97  concrete_breaker_grenade  (700 g)
+    ItemDef{ 620, 700, 25, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [97] id 98  confiscation_tag
-    ItemDef{ 50, 350, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office)), 0,
+    // [97] id 98  confiscation_tag  (20 g)
+    ItemDef{ 50, 20, 350, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [98] id 99  confiscation_warrant
-    ItemDef{ 135, 350, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office)), 0,
+    // [98] id 99  confiscation_warrant  (20 g)
+    ItemDef{ 135, 20, 350, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [99] id 100  conscripts_doublebarrel
-    ItemDef{ 900, 200, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Living)), 0,
+    // [99] id 100  conscripts_doublebarrel  (3100 g)
+    ItemDef{ 900, 3100, 200, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Living)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [100] id 101  container_key_label
-    ItemDef{ 9, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Office)), 0,
+    // [100] id 101  container_key_label  (200 g)
+    ItemDef{ 9, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [101] id 102  contaminated_gloves
-    ItemDef{ 8, 0, static_cast<std::uint16_t>(0), 0,
+    // [101] id 102  contaminated_gloves  (150 g)
+    ItemDef{ 8, 150, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [102] id 103  contaminated_sample_act
-    ItemDef{ 58, 240, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office)), 0,
+    // [102] id 103  contaminated_sample_act  (20 g)
+    ItemDef{ 58, 20, 240, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 3,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [103] id 104  contaminated_swab
-    ItemDef{ 5, 450, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage) | u16(RoomBit::Smoking)), 0,
+    // [103] id 104  contaminated_swab  (150 g)
+    ItemDef{ 5, 150, 450, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage) | u16(RoomBit::Smoking)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 12,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [104] id 105  contraband_receipt_blank
-    ItemDef{ 44, 280, static_cast<std::uint16_t>(u16(RoomBit::Smoking) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
+    // [104] id 105  contraband_receipt_blank  (20 g)
+    ItemDef{ 44, 20, 280, static_cast<std::uint16_t>(u16(RoomBit::Smoking) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 5,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [105] id 106  contraband_shocker_parts
-    ItemDef{ 150, 250, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Office) | u16(RoomBit::Smoking)), 0,
+    // [105] id 106  contraband_shocker_parts  (500 g)
+    ItemDef{ 150, 500, 250, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Office) | u16(RoomBit::Smoking)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 2,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [106] id 107  corpse_number_tag
-    ItemDef{ 38, 350, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Hq) | u16(RoomBit::Storage)), 0,
+    // [106] id 107  corpse_number_tag  (20 g)
+    ItemDef{ 38, 20, 350, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Hq) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 24,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [107] id 108  cotton_wool
-    ItemDef{ 6, 900, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Bathroom) | u16(RoomBit::Storage)), 0,
+    // [107] id 108  cotton_wool  (200 g)
+    ItemDef{ 6, 200, 900, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Bathroom) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 12,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [108] id 109  cracked_sample_jar
-    ItemDef{ 3, 500, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production) | u16(RoomBit::Bathroom)), 0,
+    // [108] id 109  cracked_sample_jar  (200 g)
+    ItemDef{ 3, 200, 500, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production) | u16(RoomBit::Bathroom)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [109] id 110  crowbar
-    ItemDef{ 100, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [109] id 110  crowbar  (2500 g)
+    ItemDef{ 100, 2500, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [110] id 111  cult_supply_list
-    ItemDef{ 38, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage) | u16(RoomBit::Office)), 0,
+    // [110] id 111  cult_supply_list  (200 g)
+    ItemDef{ 38, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [111] id 112  deactivated_residue
-    ItemDef{ 55, 0, static_cast<std::uint16_t>(0), 0,
+    // [111] id 112  deactivated_residue  (250 g)
+    ItemDef{ 55, 250, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 255,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [112] id 113  debt_settlement_receipt
-    ItemDef{ 110, 550, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
+    // [112] id 113  debt_settlement_receipt  (20 g)
+    ItemDef{ 110, 20, 550, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [113] id 114  decon_completion_stamp
-    ItemDef{ 55, 320, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Medical) | u16(RoomBit::Production)), 0,
+    // [113] id 114  decon_completion_stamp  (20 g)
+    ItemDef{ 55, 20, 320, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Medical) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [114] id 115  decon_fluid
-    ItemDef{ 75, 450, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Production) | u16(RoomBit::Hq)), 0,
+    // [114] id 115  decon_fluid  (300 g)
+    ItemDef{ 75, 300, 450, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Production) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [115] id 116  denunciation
-    ItemDef{ 12, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Smoking)), 0,
+    // [115] id 116  denunciation  (200 g)
+    ItemDef{ 12, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Smoking)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [116] id 117  dice_bone
-    ItemDef{ 16, 650, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Smoking) | u16(RoomBit::Living)), 0,
+    // [116] id 117  dice_bone  (200 g)
+    ItemDef{ 16, 200, 650, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Smoking) | u16(RoomBit::Living)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [117] id 118  diver_route_tag
-    ItemDef{ 55, 0, static_cast<std::uint16_t>(0), 0,
+    // [117] id 118  diver_route_tag  (200 g)
+    ItemDef{ 55, 200, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [118] id 119  domino_box
-    ItemDef{ 24, 480, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Smoking) | u16(RoomBit::Living) | u16(RoomBit::Kitchen)), 0,
+    // [118] id 119  domino_box  (200 g)
+    ItemDef{ 24, 200, 480, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Smoking) | u16(RoomBit::Living) | u16(RoomBit::Kitchen)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [119] id 120  door_kit
-    ItemDef{ 400, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
+    // [119] id 120  door_kit  (2500 g)
+    ItemDef{ 400, 2500, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Tool), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [120] id 121  duct_tape
-    ItemDef{ 8, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production) | u16(RoomBit::Living)), 0,
+    // [120] id 121  duct_tape  (200 g)
+    ItemDef{ 8, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production) | u16(RoomBit::Living)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [121] id 122  easter_egg
-    ItemDef{ 20, 0, static_cast<std::uint16_t>(0), 10,
+    // [121] id 122  easter_egg  (400 g)
+    ItemDef{ 20, 400, 0, static_cast<std::uint16_t>(0), 10,
              u8(ItemCategory::Food), u8(EquipSlot::None), 255,
              u8(UseEffect::HealPsi), {0, 0, 0, 0, 0}, 0 },
-    // [122] id 123  electrode_pack
-    ItemDef{ 36, 700, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [122] id 123  electrode_pack  (200 g)
+    ItemDef{ 36, 200, 700, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [123] id 124  elevator_access_order
-    ItemDef{ 62, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq) | u16(RoomBit::Corridor)), 0,
+    // [123] id 124  elevator_access_order  (20 g)
+    ItemDef{ 62, 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq) | u16(RoomBit::Corridor)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [124] id 125  elevator_override_form
-    ItemDef{ 42, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Corridor) | u16(RoomBit::Hq)), 0,
+    // [124] id 125  elevator_override_form  (200 g)
+    ItemDef{ 42, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Corridor) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [125] id 126  emergency_roster
-    ItemDef{ 18, 1000, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Hq) | u16(RoomBit::Office)), 0,
+    // [125] id 126  emergency_roster  (200 g)
+    ItemDef{ 18, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Hq) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [126] id 127  empty_roks_tank
-    ItemDef{ 130, 250, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [126] id 127  empty_roks_tank  (200 g)
+    ItemDef{ 130, 200, 250, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 2,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [127] id 128  empty_sample_jar
-    ItemDef{ 12, 650, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage) | u16(RoomBit::Kitchen)), 0,
+    // [127] id 128  empty_sample_jar  (200 g)
+    ItemDef{ 12, 200, 650, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage) | u16(RoomBit::Kitchen)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [128] id 129  entrenching_spade
-    ItemDef{ 75, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Hq)), 0,
+    // [128] id 129  entrenching_spade  (1500 g)
+    ItemDef{ 75, 1500, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [129] id 130  eralashnikov_auto
-    ItemDef{ 5200, 100, static_cast<std::uint16_t>(u16(RoomBit::Hq)), 0,
+    // [129] id 130  eralashnikov_auto  (4300 g)
+    ItemDef{ 5200, 4300, 100, static_cast<std::uint16_t>(u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [130] id 131  experimental_concentrate
-    ItemDef{ 34, 220, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Production) | u16(RoomBit::Storage)), 32,
+    // [130] id 131  experimental_concentrate  (400 g)
+    ItemDef{ 34, 400, 220, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Production) | u16(RoomBit::Storage)), 32,
              u8(ItemCategory::Food), u8(EquipSlot::None), 255,
              u8(UseEffect::FeedRisky), {0, 0, 0, 0, 0}, 0 },
-    // [131] id 132  fake_pass
-    ItemDef{ 45, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Smoking)), 0,
+    // [131] id 132  fake_pass  (20 g)
+    ItemDef{ 45, 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Smoking)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [132] id 133  felt_door_pad
-    ItemDef{ 18, 800, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Storage) | u16(RoomBit::Office)), 0,
+    // [132] id 133  felt_door_pad  (200 g)
+    ItemDef{ 18, 200, 800, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Storage) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [133] id 134  fibrous_capsule_cut
-    ItemDef{ 145, 0, static_cast<std::uint16_t>(0), 0,
+    // [133] id 134  fibrous_capsule_cut  (150 g)
+    ItemDef{ 145, 150, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 3,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [134] id 135  field_radio_battery
-    ItemDef{ 38, 750, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Office)), 0,
+    // [134] id 135  field_radio_battery  (500 g)
+    ItemDef{ 38, 500, 750, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [135] id 136  filter_canister
-    ItemDef{ 55, 600, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Hq) | u16(RoomBit::Medical)), 0,
+    // [135] id 136  filter_canister  (200 g)
+    ItemDef{ 55, 200, 600, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Hq) | u16(RoomBit::Medical)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [136] id 137  filter_layer
-    ItemDef{ 16, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage)), 0,
+    // [136] id 137  filter_layer  (200 g)
+    ItemDef{ 16, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [137] id 138  filter_receipt
-    ItemDef{ 11, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage) | u16(RoomBit::Office)), 0,
+    // [137] id 138  filter_receipt  (200 g)
+    ItemDef{ 11, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [138] id 139  filtered_water
-    ItemDef{ 8, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Medical) | u16(RoomBit::Storage)), 35,
+    // [138] id 139  filtered_water  (600 g)
+    ItemDef{ 8, 600, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Medical) | u16(RoomBit::Storage)), 35,
              u8(ItemCategory::Drink), u8(EquipSlot::None), 255,
              u8(UseEffect::Drink), {0, 0, 0, 0, 0}, 0 },
-    // [139] id 140  fire_hook
-    ItemDef{ 120, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Corridor)), 0,
+    // [139] id 140  fire_hook  (3000 g)
+    ItemDef{ 120, 3000, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Corridor)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [140] id 141  flamethrower
-    ItemDef{ 6500, 40, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [140] id 141  flamethrower  (23000 g)
+    ItemDef{ 6500, 23000, 40, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [141] id 142  flashlight
-    ItemDef{ 150, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Living) | u16(RoomBit::Production)), 0,
+    // [141] id 142  flashlight  (350 g)
+    ItemDef{ 150, 350, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Living) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Tool), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [142] id 143  foam_grenade_6p10
-    ItemDef{ 260, 90, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Production)), 0,
+    // [142] id 143  foam_grenade_6p10  (500 g)
+    ItemDef{ 260, 500, 90, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [143] id 144  foam_grenade_act
-    ItemDef{ 72, 180, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office)), 0,
+    // [143] id 144  foam_grenade_act  (20 g)
+    ItemDef{ 72, 20, 180, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 2,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [144] id 145  fog_detector
-    ItemDef{ 220, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Hq)), 0,
+    // [144] id 145  fog_detector  (600 g)
+    ItemDef{ 220, 600, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Tool), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [145] id 146  forged_bank_debt_paper
-    ItemDef{ 68, 500, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Smoking)), 0,
+    // [145] id 146  forged_bank_debt_paper  (20 g)
+    ItemDef{ 68, 20, 500, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Smoking)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [146] id 147  forged_permit_slip
-    ItemDef{ 32, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Smoking) | u16(RoomBit::Storage)), 0,
+    // [146] id 147  forged_permit_slip  (20 g)
+    ItemDef{ 32, 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Smoking) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [147] id 148  forged_quarantine_clearance
-    ItemDef{ 36, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Smoking) | u16(RoomBit::Office)), 0,
+    // [147] id 148  forged_quarantine_clearance  (20 g)
+    ItemDef{ 36, 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Smoking) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [148] id 149  forged_raionsovet_pass
-    ItemDef{ 75, 550, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Smoking)), 0,
+    // [148] id 149  forged_raionsovet_pass  (20 g)
+    ItemDef{ 75, 20, 550, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Smoking)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [149] id 150  forged_ration_card
-    ItemDef{ 18, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Smoking) | u16(RoomBit::Common)), 0,
+    // [149] id 150  forged_ration_card  (200 g)
+    ItemDef{ 18, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Smoking) | u16(RoomBit::Common)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [150] id 151  forged_shelter_tally
-    ItemDef{ 95, 0, static_cast<std::uint16_t>(0), 0,
+    // [150] id 151  forged_shelter_tally  (20 g)
+    ItemDef{ 95, 20, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [151] id 152  forged_stamp_sheet
-    ItemDef{ 70, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Smoking)), 0,
+    // [151] id 152  forged_stamp_sheet  (20 g)
+    ItemDef{ 70, 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Smoking)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [152] id 153  frozen_item_shard
-    ItemDef{ 96, 80, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
+    // [152] id 153  frozen_item_shard  (150 g)
+    ItemDef{ 96, 150, 80, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [153] id 154  frozen_slime_core
-    ItemDef{ 180, 80, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
+    // [153] id 154  frozen_slime_core  (150 g)
+    ItemDef{ 180, 150, 80, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 3,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [154] id 155  fuel_issue_stamp
-    ItemDef{ 76, 180, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Production) | u16(RoomBit::Office)), 0,
+    // [154] id 155  fuel_issue_stamp  (20 g)
+    ItemDef{ 76, 20, 180, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Production) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 3,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [155] id 156  fuse
-    ItemDef{ 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [155] id 156  fuse  (200 g)
+    ItemDef{ 20, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [156] id 157  g41_grenade_launcher
-    ItemDef{ 12000, 0, static_cast<std::uint16_t>(0), 0,
+    // [156] id 157  g41_grenade_launcher  (6300 g)
+    ItemDef{ 12000, 6300, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [157] id 158  gas_sample_ampoule
-    ItemDef{ 165, 160, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Production) | u16(RoomBit::Hq)), 0,
+    // [157] id 158  gas_sample_ampoule  (150 g)
+    ItemDef{ 165, 150, 160, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Production) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 3,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [158] id 159  gasmask_filter
-    ItemDef{ 70, 800, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage) | u16(RoomBit::Hq)), 0,
+    // [158] id 159  gasmask_filter  (200 g)
+    ItemDef{ 70, 200, 800, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [159] id 160  gauss
-    ItemDef{ 60000, 0, static_cast<std::uint16_t>(0), 0,
+    // [159] id 160  gauss  (12000 g)
+    ItemDef{ 60000, 12000, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [160] id 161  gear
-    ItemDef{ 9, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [160] id 161  gear  (200 g)
+    ItemDef{ 9, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [161] id 162  glass_ampoule_empty
-    ItemDef{ 14, 750, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Production)), 0,
+    // [161] id 162  glass_ampoule_empty  (200 g)
+    ItemDef{ 14, 200, 750, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 12,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [162] id 163  glass_shard
-    ItemDef{ 2, 1000, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Corridor)), 0,
+    // [162] id 163  glass_shard  (200 g)
+    ItemDef{ 2, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Corridor)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [163] id 164  govnyak_bad_batch
-    ItemDef{ 13, 1000, static_cast<std::uint16_t>(u16(RoomBit::Smoking) | u16(RoomBit::Storage)), 0,
+    // [163] id 164  govnyak_bad_batch  (200 g)
+    ItemDef{ 13, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Smoking) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [164] id 165  govnyak_brick
-    ItemDef{ 24, 1000, static_cast<std::uint16_t>(u16(RoomBit::Smoking) | u16(RoomBit::Storage)), 0,
+    // [164] id 165  govnyak_brick  (200 g)
+    ItemDef{ 24, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Smoking) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [165] id 166  govnyak_courier_package
-    ItemDef{ 1, 0, static_cast<std::uint16_t>(0), 0,
+    // [165] id 166  govnyak_courier_package  (200 g)
+    ItemDef{ 1, 200, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [166] id 167  govnyak_roll
-    ItemDef{ 7, 1000, static_cast<std::uint16_t>(u16(RoomBit::Smoking) | u16(RoomBit::Common) | u16(RoomBit::Storage)), 0,
+    // [166] id 167  govnyak_roll  (200 g)
+    ItemDef{ 7, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Smoking) | u16(RoomBit::Common) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 12,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [167] id 168  govnyak_sample
-    ItemDef{ 85, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
+    // [167] id 168  govnyak_sample  (200 g)
+    ItemDef{ 85, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 3,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [168] id 169  granit4u_belt_shotgun
-    ItemDef{ 220000, 12, static_cast<std::uint16_t>(u16(RoomBit::Hq)), 0,
+    // [168] id 169  granit4u_belt_shotgun  (5200 g)
+    ItemDef{ 220000, 5200, 12, static_cast<std::uint16_t>(u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [169] id 170  gravity_beam_emitter
-    ItemDef{ 500000, 0, static_cast<std::uint16_t>(0), 0,
+    // [169] id 170  gravity_beam_emitter  (9000 g)
+    ItemDef{ 500000, 9000, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [170] id 171  green_briquette
-    ItemDef{ 6, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage)), 20,
+    // [170] id 171  green_briquette  (400 g)
+    ItemDef{ 6, 400, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage)), 20,
              u8(ItemCategory::Food), u8(EquipSlot::None), 255,
              u8(UseEffect::Feed), {0, 0, 0, 0, 0}, 0 },
-    // [171] id 172  grenade
-    ItemDef{ 160, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage)), 0,
+    // [171] id 172  grenade  (600 g)
+    ItemDef{ 160, 600, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 255,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [172] id 173  grey_briquette
-    ItemDef{ 4, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage) | u16(RoomBit::Common)), 18,
+    // [172] id 173  grey_briquette  (400 g)
+    ItemDef{ 4, 400, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage) | u16(RoomBit::Common)), 18,
              u8(ItemCategory::Food), u8(EquipSlot::None), 255,
              u8(UseEffect::Feed), {0, 0, 0, 0, 0}, 0 },
-    // [173] id 174  grn420_gravizhernov
-    ItemDef{ 140000, 0, static_cast<std::uint16_t>(0), 0,
+    // [173] id 174  grn420_gravizhernov  (9500 g)
+    ItemDef{ 140000, 9500, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [174] id 175  gunstock
-    ItemDef{ 35, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [174] id 175  gunstock  (200 g)
+    ItemDef{ 35, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [175] id 176  gusl_index_fragment
-    ItemDef{ 28, 400, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
+    // [175] id 176  gusl_index_fragment  (20 g)
+    ItemDef{ 28, 20, 400, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 5,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [176] id 177  gusl_index_page
-    ItemDef{ 60, 220, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq) | u16(RoomBit::Storage)), 0,
+    // [176] id 177  gusl_index_page  (20 g)
+    ItemDef{ 60, 20, 220, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Note), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [177] id 178  hammer
-    ItemDef{ 30, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [177] id 178  hammer  (900 g)
+    ItemDef{ 30, 900, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [178] id 179  harpoon_gun
-    ItemDef{ 1250, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [178] id 179  harpoon_gun  (4200 g)
+    ItemDef{ 1250, 4200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [179] id 180  hazard_shift_extension
-    ItemDef{ 58, 280, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Hq) | u16(RoomBit::Office)), 0,
+    // [179] id 180  hazard_shift_extension  (20 g)
+    ItemDef{ 58, 20, 280, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Hq) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [180] id 181  heating_element
-    ItemDef{ 38, 550, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [180] id 181  heating_element  (500 g)
+    ItemDef{ 38, 500, 550, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [181] id 182  hermetic_tape
-    ItemDef{ 26, 750, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Medical)), 0,
+    // [181] id 182  hermetic_tape  (200 g)
+    ItemDef{ 26, 200, 750, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Medical)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 8,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [182] id 183  hermo_gasket
-    ItemDef{ 60, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
+    // [182] id 183  hermo_gasket  (200 g)
+    ItemDef{ 60, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [183] id 184  hermodoor_journal
-    ItemDef{ 64, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office) | u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
+    // [183] id 184  hermodoor_journal  (20 g)
+    ItemDef{ 64, 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office) | u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 2,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [184] id 185  holy_water
-    ItemDef{ 70, 0, static_cast<std::uint16_t>(0), 20,
+    // [184] id 185  holy_water  (120 g)
+    ItemDef{ 70, 120, 0, static_cast<std::uint16_t>(0), 20,
              u8(ItemCategory::Medicine), u8(EquipSlot::None), 255,
              u8(UseEffect::HealPsi), {0, 0, 0, 0, 0}, 0 },
-    // [185] id 186  homemade_9mm
-    ItemDef{ 11, 0, static_cast<std::uint16_t>(0), 0,
+    // [185] id 186  homemade_9mm  (8 g)
+    ItemDef{ 11, 8, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Ammo), u8(EquipSlot::None), 12,
              u8(UseEffect::Unpack), {0, 0, 0, 0, 0}, 0 },
-    // [186] id 187  homemade_ammo_instruction
-    ItemDef{ 90, 300, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage) | u16(RoomBit::Smoking)), 0,
+    // [186] id 187  homemade_ammo_instruction  (20 g)
+    ItemDef{ 90, 20, 300, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage) | u16(RoomBit::Smoking)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 2,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [187] id 188  homemade_pistol
-    ItemDef{ 350, 550, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [187] id 188  homemade_pistol  (700 g)
+    ItemDef{ 350, 700, 550, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [188] id 189  idol_chernobog
-    ItemDef{ 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Storage) | u16(RoomBit::Office) | u16(RoomBit::Smoking)), 0,
+    // [188] id 189  idol_chernobog  (200 g)
+    ItemDef{ 200, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Storage) | u16(RoomBit::Office) | u16(RoomBit::Smoking)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [189] id 190  import_toiletpaper
-    ItemDef{ 18, 180, static_cast<std::uint16_t>(u16(RoomBit::Bathroom) | u16(RoomBit::Storage) | u16(RoomBit::Common)), 0,
+    // [189] id 190  import_toiletpaper  (200 g)
+    ItemDef{ 18, 200, 180, static_cast<std::uint16_t>(u16(RoomBit::Bathroom) | u16(RoomBit::Storage) | u16(RoomBit::Common)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [190] id 191  infected_mushroom
-    ItemDef{ 2, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production)), 12,
+    // [190] id 191  infected_mushroom  (400 g)
+    ItemDef{ 2, 400, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production)), 12,
              u8(ItemCategory::Food), u8(EquipSlot::None), 255,
              u8(UseEffect::FeedRisky), {0, 0, 0, 0, 0}, 0 },
-    // [191] id 192  ink_bottle
-    ItemDef{ 8, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office)), 0,
+    // [191] id 192  ink_bottle  (200 g)
+    ItemDef{ 8, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [192] id 193  inspection_mirror
-    ItemDef{ 22, 1000, static_cast<std::uint16_t>(u16(RoomBit::Bathroom) | u16(RoomBit::Medical) | u16(RoomBit::Office)), 0,
+    // [192] id 193  inspection_mirror  (200 g)
+    ItemDef{ 22, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Bathroom) | u16(RoomBit::Medical) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [193] id 194  instant_coffee
-    ItemDef{ 10, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Office)), 18,
+    // [193] id 194  instant_coffee  (600 g)
+    ItemDef{ 10, 600, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Office)), 18,
              u8(ItemCategory::Drink), u8(EquipSlot::None), 255,
              u8(UseEffect::Drink), {0, 0, 0, 0, 0}, 0 },
-    // [194] id 195  iodine
-    ItemDef{ 25, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Bathroom)), 10,
+    // [194] id 195  iodine  (120 g)
+    ItemDef{ 25, 120, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Bathroom)), 10,
              u8(ItemCategory::Medicine), u8(EquipSlot::None), 255,
              u8(UseEffect::Heal), {0, 0, 0, 0, 0}, 0 },
-    // [195] id 196  ip4_gasmask
-    ItemDef{ 520, 80, static_cast<std::uint16_t>(u16(RoomBit::Hq)), 0,
+    // [195] id 196  ip4_gasmask  (900 g)
+    ItemDef{ 520, 900, 80, static_cast<std::uint16_t>(u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Tool), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [196] id 197  istotit_candle
-    ItemDef{ 45, 0, static_cast<std::uint16_t>(0), 0,
+    // [196] id 197  istotit_candle  (120 g)
+    ItemDef{ 45, 120, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Medicine), u8(EquipSlot::None), 255,
              u8(UseEffect::HealPsi), {0, 0, 0, 0, 0}, 0 },
-    // [197] id 198  jackhammer
-    ItemDef{ 1500, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [197] id 198  jackhammer  (22000 g)
+    ItemDef{ 1500, 22000, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Tool), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [198] id 199  junior_tech_case
-    ItemDef{ 24, 700, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Storage) | u16(RoomBit::Office)), 0,
+    // [198] id 199  junior_tech_case  (500 g)
+    ItemDef{ 24, 500, 700, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Storage) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [199] id 200  karkarov_pistol
-    ItemDef{ 320, 280, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Storage)), 0,
+    // [199] id 200  karkarov_pistol  (900 g)
+    ItemDef{ 320, 900, 280, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [200] id 201  kasha
-    ItemDef{ 5, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen)), 20,
+    // [200] id 201  kasha  (400 g)
+    ItemDef{ 5, 400, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen)), 20,
              u8(ItemCategory::Food), u8(EquipSlot::None), 255,
              u8(UseEffect::Feed), {0, 0, 0, 0, 0}, 0 },
-    // [201] id 202  key
-    ItemDef{ 50, 350, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Living)), 0,
+    // [201] id 202  key  (30 g)
+    ItemDef{ 50, 30, 350, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Living)), 0,
              u8(ItemCategory::Key), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [202] id 203  key_tutorial_apartment
-    ItemDef{ 0, 0, static_cast<std::uint16_t>(0), 0,
+    // [202] id 203  key_tutorial_apartment  (30 g)
+    ItemDef{ 0, 30, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Key), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [203] id 204  keyboard_unit
-    ItemDef{ 32, 600, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
+    // [203] id 204  keyboard_unit  (500 g)
+    ItemDef{ 32, 500, 600, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [204] id 205  knife
-    ItemDef{ 15, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen)), 0,
+    // [204] id 205  knife  (250 g)
+    ItemDef{ 15, 250, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [205] id 206  kompot
-    ItemDef{ 5, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen)), 20,
+    // [205] id 206  kompot  (600 g)
+    ItemDef{ 5, 600, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen)), 20,
              u8(ItemCategory::Drink), u8(EquipSlot::None), 255,
              u8(UseEffect::Drink), {0, 0, 0, 0, 0}, 0 },
-    // [206] id 207  krona_battery
-    ItemDef{ 18, 800, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
+    // [206] id 207  krona_battery  (500 g)
+    ItemDef{ 18, 500, 800, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 8,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [207] id 208  kulich
-    ItemDef{ 40, 0, static_cast<std::uint16_t>(0), 35,
+    // [207] id 208  kulich  (400 g)
+    ItemDef{ 40, 400, 0, static_cast<std::uint16_t>(0), 35,
              u8(ItemCategory::Food), u8(EquipSlot::None), 255,
              u8(UseEffect::FeedPsi), {0, 0, 0, 0, 0}, 0 },
-    // [208] id 209  labor_shift_card
-    ItemDef{ 24, 550, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Office)), 0,
+    // [208] id 209  labor_shift_card  (20 g)
+    ItemDef{ 24, 20, 550, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 8,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [209] id 210  lamp_bulb
-    ItemDef{ 12, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production) | u16(RoomBit::Office)), 0,
+    // [209] id 210  lamp_bulb  (200 g)
+    ItemDef{ 12, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [210] id 211  lice_shampoo
-    ItemDef{ 26, 450, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Bathroom)), 0,
+    // [210] id 211  lice_shampoo  (200 g)
+    ItemDef{ 26, 200, 450, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Bathroom)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [211] id 212  lift_scheme
-    ItemDef{ 75, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Corridor)), 0,
+    // [211] id 212  lift_scheme  (200 g)
+    ItemDef{ 75, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Corridor)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [212] id 213  lighter
-    ItemDef{ 40, 1500, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Living) | u16(RoomBit::Smoking) | u16(RoomBit::Bathroom)), 0,
+    // [212] id 213  lighter  (25 g)
+    ItemDef{ 40, 25, 1500, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Living) | u16(RoomBit::Smoking) | u16(RoomBit::Bathroom)), 0,
              u8(ItemCategory::Tool), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [213] id 214  lime_bucket
-    ItemDef{ 64, 320, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [213] id 214  lime_bucket  (150 g)
+    ItemDef{ 64, 150, 320, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [214] id 215  liquidator_axe
-    ItemDef{ 420, 250, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Production)), 0,
+    // [214] id 215  liquidator_axe  (2000 g)
+    ItemDef{ 420, 2000, 250, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [215] id 216  liquidator_field_roster
-    ItemDef{ 70, 350, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
+    // [215] id 216  liquidator_field_roster  (20 g)
+    ItemDef{ 70, 20, 350, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 2,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [216] id 217  liquidator_flashlamp
-    ItemDef{ 620, 280, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Production)), 0,
+    // [216] id 217  liquidator_flashlamp  (900 g)
+    ItemDef{ 620, 900, 280, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Tool), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [217] id 218  liquidator_issue_card
-    ItemDef{ 115, 250, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office)), 0,
+    // [217] id 218  liquidator_issue_card  (20 g)
+    ItemDef{ 115, 20, 250, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 3,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [218] id 219  liquidator_rake
-    ItemDef{ 135, 350, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
+    // [218] id 219  liquidator_rake  (2400 g)
+    ItemDef{ 135, 2400, 350, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [219] id 220  liquidator_ration
-    ItemDef{ 15, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Hq)), 40,
+    // [219] id 220  liquidator_ration  (400 g)
+    ItemDef{ 15, 400, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Hq)), 40,
              u8(ItemCategory::Food), u8(EquipSlot::None), 255,
              u8(UseEffect::Feed), {0, 0, 0, 0, 0}, 0 },
-    // [220] id 221  liquidator_token
-    ItemDef{ 80, 1000, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Storage)), 0,
+    // [220] id 221  liquidator_token  (200 g)
+    ItemDef{ 80, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [221] id 222  losyash_rifle
-    ItemDef{ 45000, 25, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Hq)), 0,
+    // [221] id 222  losyash_rifle  (4500 g)
+    ItemDef{ 45000, 4500, 25, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [222] id 223  machinegun
-    ItemDef{ 9000, 0, static_cast<std::uint16_t>(0), 0,
+    // [222] id 223  machinegun  (9000 g)
+    ItemDef{ 9000, 9000, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [223] id 224  magazine_part
-    ItemDef{ 64, 550, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage) | u16(RoomBit::Hq)), 0,
+    // [223] id 224  magazine_part  (200 g)
+    ItemDef{ 64, 200, 550, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [224] id 225  mail_intercept_slip
-    ItemDef{ 46, 300, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Smoking) | u16(RoomBit::Storage)), 0,
+    // [224] id 225  mail_intercept_slip  (20 g)
+    ItemDef{ 46, 20, 300, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Smoking) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [225] id 226  makarov
-    ItemDef{ 420, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage)), 0,
+    // [225] id 226  makarov  (730 g)
+    ItemDef{ 420, 730, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [226] id 227  manometer
-    ItemDef{ 35, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [226] id 227  manometer  (200 g)
+    ItemDef{ 35, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [227] id 228  market_weight_scale
-    ItemDef{ 88, 280, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
+    // [227] id 228  market_weight_scale  (200 g)
+    ItemDef{ 88, 200, 280, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [228] id 229  maronary_shaving
-    ItemDef{ 260, 0, static_cast<std::uint16_t>(0), 0,
+    // [228] id 229  maronary_shaving  (150 g)
+    ItemDef{ 260, 150, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [229] id 230  meat_rune
-    ItemDef{ 220, 1000, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Storage) | u16(RoomBit::Smoking)), 0,
+    // [229] id 230  meat_rune  (200 g)
+    ItemDef{ 220, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Storage) | u16(RoomBit::Smoking)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [230] id 231  metal_chair
-    ItemDef{ 22, 1000, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Office)), 0,
+    // [230] id 231  metal_chair  (4500 g)
+    ItemDef{ 22, 4500, 1000, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [231] id 232  metal_sheet
-    ItemDef{ 22, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [231] id 232  metal_sheet  (200 g)
+    ItemDef{ 22, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [232] id 233  metal_water
-    ItemDef{ 2, 1000, static_cast<std::uint16_t>(u16(RoomBit::Bathroom) | u16(RoomBit::Production)), 20,
+    // [232] id 233  metal_water  (600 g)
+    ItemDef{ 2, 600, 1000, static_cast<std::uint16_t>(u16(RoomBit::Bathroom) | u16(RoomBit::Production)), 20,
              u8(ItemCategory::Drink), u8(EquipSlot::None), 255,
              u8(UseEffect::Drink), {0, 0, 0, 0, 0}, 0 },
-    // [233] id 234  metro_ticket
-    ItemDef{ 25, 1000, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Office)), 0,
+    // [233] id 234  metro_ticket  (200 g)
+    ItemDef{ 25, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [234] id 235  ministry_audit_forgery
-    ItemDef{ 88, 0, static_cast<std::uint16_t>(0), 0,
+    // [234] id 235  ministry_audit_forgery  (20 g)
+    ItemDef{ 88, 20, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 3,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [235] id 236  ministry_clean_stamp
-    ItemDef{ 150, 400, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
+    // [235] id 236  ministry_clean_stamp  (20 g)
+    ItemDef{ 150, 20, 400, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [236] id 237  missing_record_file
-    ItemDef{ 95, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
+    // [236] id 237  missing_record_file  (200 g)
+    ItemDef{ 95, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [237] id 238  moonshine_still_part
-    ItemDef{ 125, 180, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Kitchen) | u16(RoomBit::Smoking)), 0,
+    // [237] id 238  moonshine_still_part  (200 g)
+    ItemDef{ 125, 200, 180, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Kitchen) | u16(RoomBit::Smoking)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 2,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [238] id 239  morphine_ampoule
-    ItemDef{ 140, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Hq)), 60,
+    // [238] id 239  morphine_ampoule  (120 g)
+    ItemDef{ 140, 120, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Hq)), 60,
              u8(ItemCategory::Medicine), u8(EquipSlot::None), 255,
              u8(UseEffect::Heal), {0, 0, 0, 0, 0}, 0 },
-    // [239] id 240  moskvin_rifle
-    ItemDef{ 7500, 60, static_cast<std::uint16_t>(u16(RoomBit::Hq)), 0,
+    // [239] id 240  moskvin_rifle  (4200 g)
+    ItemDef{ 7500, 4200, 60, static_cast<std::uint16_t>(u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [240] id 241  mushroom_mass
-    ItemDef{ 6, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage) | u16(RoomBit::Production)), 22,
+    // [240] id 241  mushroom_mass  (400 g)
+    ItemDef{ 6, 400, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage) | u16(RoomBit::Production)), 22,
              u8(ItemCategory::Food), u8(EquipSlot::None), 255,
              u8(UseEffect::Feed), {0, 0, 0, 0, 0}, 0 },
-    // [241] id 242  mutant_tissue_sample
-    ItemDef{ 115, 0, static_cast<std::uint16_t>(0), 0,
+    // [241] id 242  mutant_tissue_sample  (150 g)
+    ItemDef{ 115, 150, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [242] id 243  nagant
-    ItemDef{ 720, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
+    // [242] id 243  nagant  (800 g)
+    ItemDef{ 720, 800, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [243] id 244  nailgun
-    ItemDef{ 360, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production)), 0,
+    // [243] id 244  nailgun  (3500 g)
+    ItemDef{ 360, 3500, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [244] id 245  napalm_mix
-    ItemDef{ 120, 0, static_cast<std::uint16_t>(0), 0,
+    // [244] id 245  napalm_mix  (1500 g)
+    ItemDef{ 120, 1500, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Ammo), u8(EquipSlot::None), 3,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [245] id 246  neighbor_complaint
-    ItemDef{ 5, 1000, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Office)), 0,
+    // [245] id 246  neighbor_complaint  (200 g)
+    ItemDef{ 5, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [246] id 247  nii_contraband_manifest
-    ItemDef{ 140, 0, static_cast<std::uint16_t>(0), 0,
+    // [246] id 247  nii_contraband_manifest  (20 g)
+    ItemDef{ 140, 20, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [247] id 248  nii_forged_audit
-    ItemDef{ 110, 0, static_cast<std::uint16_t>(0), 0,
+    // [247] id 248  nii_forged_audit  (20 g)
+    ItemDef{ 110, 20, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [248] id 249  nii_market_receipt
-    ItemDef{ 95, 0, static_cast<std::uint16_t>(0), 0,
+    // [248] id 249  nii_market_receipt  (150 g)
+    ItemDef{ 95, 150, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [249] id 250  nii_sample_container
-    ItemDef{ 65, 0, static_cast<std::uint16_t>(0), 0,
+    // [249] id 250  nii_sample_container  (20 g)
+    ItemDef{ 65, 20, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [250] id 251  nii_sample_label
-    ItemDef{ 35, 450, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office)), 0,
+    // [250] id 251  nii_sample_label  (20 g)
+    ItemDef{ 35, 20, 450, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 10,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [251] id 252  noise_can
-    ItemDef{ 12, 700, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage) | u16(RoomBit::Common)), 0,
+    // [251] id 252  noise_can  (200 g)
+    ItemDef{ 12, 200, 700, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage) | u16(RoomBit::Common)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [252] id 253  nosin_rifle
-    ItemDef{ 5000, 160, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Hq)), 0,
+    // [252] id 253  nosin_rifle  (4000 g)
+    ItemDef{ 5000, 4000, 160, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [253] id 254  note
-    ItemDef{ 1, 1000, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Common) | u16(RoomBit::Storage) | u16(RoomBit::Office)), 0,
+    // [253] id 254  note  (10 g)
+    ItemDef{ 1, 10, 1000, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Common) | u16(RoomBit::Storage) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Note), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [254] id 255  o15_multijet_flamer
-    ItemDef{ 15000, 12, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Production)), 0,
+    // [254] id 255  o15_multijet_flamer  (24000 g)
+    ItemDef{ 15000, 24000, 12, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [255] id 256  official_permit_slip
-    ItemDef{ 48, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
+    // [255] id 256  official_permit_slip  (20 g)
+    ItemDef{ 48, 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [256] id 257  official_quarantine_clearance
-    ItemDef{ 54, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office)), 0,
+    // [256] id 257  official_quarantine_clearance  (20 g)
+    ItemDef{ 54, 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [257] id 258  ovb_search_warrant
-    ItemDef{ 210, 60, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office)), 0,
+    // [257] id 258  ovb_search_warrant  (20 g)
+    ItemDef{ 210, 20, 60, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [258] id 259  overexposed_photo
-    ItemDef{ 140, 0, static_cast<std::uint16_t>(0), 0,
+    // [258] id 259  overexposed_photo  (150 g)
+    ItemDef{ 140, 150, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [259] id 260  ozk_patch
-    ItemDef{ 46, 650, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Hq) | u16(RoomBit::Storage)), 0,
+    // [259] id 260  ozk_patch  (200 g)
+    ItemDef{ 46, 200, 650, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Hq) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 8,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [260] id 261  p14_gasmask_receipt
-    ItemDef{ 24, 650, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
+    // [260] id 261  p14_gasmask_receipt  (20 g)
+    ItemDef{ 24, 20, 650, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [261] id 262  p41_heavy_mg
-    ItemDef{ 15000, 0, static_cast<std::uint16_t>(0), 0,
+    // [261] id 262  p41_heavy_mg  (10800 g)
+    ItemDef{ 15000, 10800, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [262] id 263  painkiller_pack
-    ItemDef{ 36, 900, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage) | u16(RoomBit::Smoking)), 10,
+    // [262] id 263  painkiller_pack  (120 g)
+    ItemDef{ 36, 120, 900, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage) | u16(RoomBit::Smoking)), 10,
              u8(ItemCategory::Medicine), u8(EquipSlot::None), 255,
              u8(UseEffect::Painkiller), {0, 0, 0, 0, 0}, 0 },
-    // [263] id 264  part_ticket
-    ItemDef{ 160, 80, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
+    // [263] id 264  part_ticket  (20 g)
+    ItemDef{ 160, 20, 80, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [264] id 265  party_might_launcher
-    ItemDef{ 8000, 18, static_cast<std::uint16_t>(u16(RoomBit::Hq)), 0,
+    // [264] id 265  party_might_launcher  (8000 g)
+    ItemDef{ 8000, 8000, 18, static_cast<std::uint16_t>(u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [265] id 266  party_portrait_pin
-    ItemDef{ 22, 550, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Common) | u16(RoomBit::Living)), 0,
+    // [265] id 266  party_portrait_pin  (200 g)
+    ItemDef{ 22, 200, 550, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Common) | u16(RoomBit::Living)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [266] id 267  passport_stub
-    ItemDef{ 45, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office)), 0,
+    // [266] id 267  passport_stub  (20 g)
+    ItemDef{ 45, 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [267] id 268  pbrog1_foam_launcher
-    ItemDef{ 820, 0, static_cast<std::uint16_t>(0), 0,
+    // [267] id 268  pbrog1_foam_launcher  (5500 g)
+    ItemDef{ 820, 5500, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [268] id 269  pearl_barley
-    ItemDef{ 7, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage)), 24,
+    // [268] id 269  pearl_barley  (400 g)
+    ItemDef{ 7, 400, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage)), 24,
              u8(ItemCategory::Food), u8(EquipSlot::None), 255,
              u8(UseEffect::Feed), {0, 0, 0, 0, 0}, 0 },
-    // [269] id 270  permanent_pass
-    ItemDef{ 90, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
+    // [269] id 270  permanent_pass  (20 g)
+    ItemDef{ 90, 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [270] id 271  permanganate_vial
-    ItemDef{ 28, 650, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Bathroom) | u16(RoomBit::Storage)), 10,
+    // [270] id 271  permanganate_vial  (300 g)
+    ItemDef{ 28, 300, 650, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Bathroom) | u16(RoomBit::Storage)), 10,
              u8(ItemCategory::Medicine), u8(EquipSlot::None), 255,
              u8(UseEffect::Heal), {0, 0, 0, 0, 0}, 0 },
-    // [271] id 272  personal_file_copy
-    ItemDef{ 110, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office)), 0,
+    // [271] id 272  personal_file_copy  (200 g)
+    ItemDef{ 110, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [272] id 273  pills
-    ItemDef{ 40, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical)), 25,
+    // [272] id 273  pills  (120 g)
+    ItemDef{ 40, 120, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical)), 25,
              u8(ItemCategory::Medicine), u8(EquipSlot::None), 255,
              u8(UseEffect::HealPsi), {0, 0, 0, 0, 0}, 0 },
-    // [273] id 274  pistol_grenade_launcher
-    ItemDef{ 5200, 35, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Smoking) | u16(RoomBit::Hq)), 0,
+    // [273] id 274  pistol_grenade_launcher  (1800 g)
+    ItemDef{ 5200, 1800, 35, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Smoking) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [274] id 275  plasma
-    ItemDef{ 45000, 0, static_cast<std::uint16_t>(0), 0,
+    // [274] id 275  plasma  (11000 g)
+    ItemDef{ 45000, 11000, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [275] id 276  plastic_sheet
-    ItemDef{ 7, 900, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production) | u16(RoomBit::Living)), 0,
+    // [275] id 276  plastic_sheet  (500 g)
+    ItemDef{ 7, 500, 900, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production) | u16(RoomBit::Living)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 12,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [276] id 277  pneumomail_capsule
-    ItemDef{ 65, 0, static_cast<std::uint16_t>(0), 0,
+    // [276] id 277  pneumomail_capsule  (20 g)
+    ItemDef{ 65, 20, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [277] id 278  portable_siren_key
-    ItemDef{ 85, 350, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office)), 0,
+    // [277] id 278  portable_siren_key  (500 g)
+    ItemDef{ 85, 500, 350, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [278] id 279  post_samosbor_probe_kit
-    ItemDef{ 280, 120, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Medical)), 0,
+    // [278] id 279  post_samosbor_probe_kit  (150 g)
+    ItemDef{ 280, 150, 120, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Medical)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [279] id 280  ppsh
-    ItemDef{ 1200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage)), 0,
+    // [279] id 280  ppsh  (3630 g)
+    ItemDef{ 1200, 3630, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [280] id 281  pressed_sugar
-    ItemDef{ 5, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Common)), 8,
+    // [280] id 281  pressed_sugar  (400 g)
+    ItemDef{ 5, 400, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Common)), 8,
              u8(ItemCategory::Food), u8(EquipSlot::None), 255,
              u8(UseEffect::Feed), {0, 0, 0, 0, 0}, 0 },
-    // [281] id 282  pressure_logbook
-    ItemDef{ 34, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
+    // [281] id 282  pressure_logbook  (200 g)
+    ItemDef{ 34, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [282] id 283  protective_apron
-    ItemDef{ 95, 280, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage)), 0,
+    // [282] id 283  protective_apron  (150 g)
+    ItemDef{ 95, 150, 280, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [283] id 284  protein_mold_cake
-    ItemDef{ 12, 550, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage) | u16(RoomBit::Bathroom)), 28,
+    // [283] id 284  protein_mold_cake  (400 g)
+    ItemDef{ 12, 400, 550, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage) | u16(RoomBit::Bathroom)), 28,
              u8(ItemCategory::Food), u8(EquipSlot::None), 255,
              u8(UseEffect::Feed), {0, 0, 0, 0, 0}, 0 },
-    // [284] id 285  psi_beam
-    ItemDef{ 45000, 180, static_cast<std::uint16_t>(u16(RoomBit::Medical)), 0,
+    // [284] id 285  psi_beam  (0 g)
+    ItemDef{ 45000, 0, 180, static_cast<std::uint16_t>(u16(RoomBit::Medical)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [285] id 286  psi_brainburn
-    ItemDef{ 52000, 250, static_cast<std::uint16_t>(u16(RoomBit::Medical)), 0,
+    // [285] id 286  psi_brainburn  (0 g)
+    ItemDef{ 52000, 0, 250, static_cast<std::uint16_t>(u16(RoomBit::Medical)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [286] id 287  psi_concrete_splinter
-    ItemDef{ 14000, 750, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Production)), 0,
+    // [286] id 287  psi_concrete_splinter  (0 g)
+    ItemDef{ 14000, 0, 750, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [287] id 288  psi_control
-    ItemDef{ 64000, 250, static_cast<std::uint16_t>(u16(RoomBit::Medical)), 0,
+    // [287] id 288  psi_control  (0 g)
+    ItemDef{ 64000, 0, 250, static_cast<std::uint16_t>(u16(RoomBit::Medical)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [288] id 289  psi_dust
-    ItemDef{ 120, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office)), 0,
+    // [288] id 289  psi_dust  (0 g)
+    ItemDef{ 120, 0, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [289] id 290  psi_madness
-    ItemDef{ 18000, 650, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Common)), 0,
+    // [289] id 290  psi_madness  (0 g)
+    ItemDef{ 18000, 0, 650, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Common)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [290] id 291  psi_mark
-    ItemDef{ 10000, 800, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office)), 0,
+    // [290] id 291  psi_mark  (0 g)
+    ItemDef{ 10000, 0, 800, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [291] id 292  psi_meat_hook
-    ItemDef{ 26000, 450, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage)), 0,
+    // [291] id 292  psi_meat_hook  (0 g)
+    ItemDef{ 26000, 0, 450, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [292] id 293  psi_order_seal
-    ItemDef{ 24000, 400, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
+    // [292] id 293  psi_order_seal  (0 g)
+    ItemDef{ 24000, 0, 400, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [293] id 294  psi_phase
-    ItemDef{ 70000, 200, static_cast<std::uint16_t>(u16(RoomBit::Storage)), 0,
+    // [293] id 294  psi_phase  (0 g)
+    ItemDef{ 70000, 0, 200, static_cast<std::uint16_t>(u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [294] id 295  psi_possession
-    ItemDef{ 76000, 120, static_cast<std::uint16_t>(u16(RoomBit::Medical)), 0,
+    // [294] id 295  psi_possession  (0 g)
+    ItemDef{ 76000, 0, 120, static_cast<std::uint16_t>(u16(RoomBit::Medical)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [295] id 296  psi_recall
-    ItemDef{ 18000, 650, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office)), 0,
+    // [295] id 296  psi_recall  (0 g)
+    ItemDef{ 18000, 0, 650, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [296] id 297  psi_rupture
-    ItemDef{ 16000, 700, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage)), 0,
+    // [296] id 297  psi_rupture  (0 g)
+    ItemDef{ 16000, 0, 700, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [297] id 298  psi_shadow_lance
-    ItemDef{ 24000, 450, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office)), 0,
+    // [297] id 298  psi_shadow_lance  (0 g)
+    ItemDef{ 24000, 0, 450, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [298] id 299  psi_shield
-    ItemDef{ 30000, 300, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Hq)), 0,
+    // [298] id 299  psi_shield  (0 g)
+    ItemDef{ 30000, 0, 300, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [299] id 300  psi_siren_pulse
-    ItemDef{ 32000, 350, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office)), 0,
+    // [299] id 300  psi_siren_pulse  (0 g)
+    ItemDef{ 32000, 0, 350, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [300] id 301  psi_stabilizer
-    ItemDef{ 300, 350, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office)), 0,
+    // [300] id 301  psi_stabilizer  (0 g)
+    ItemDef{ 300, 0, 350, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Medicine), u8(EquipSlot::None), 255,
              u8(UseEffect::HealPsi), {0, 0, 0, 0, 0}, 0 },
-    // [301] id 302  psi_storm
-    ItemDef{ 36000, 350, static_cast<std::uint16_t>(u16(RoomBit::Medical)), 0,
+    // [301] id 302  psi_storm  (0 g)
+    ItemDef{ 36000, 0, 350, static_cast<std::uint16_t>(u16(RoomBit::Medical)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [302] id 303  psi_strike
-    ItemDef{ 10000, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office) | u16(RoomBit::Common)), 0,
+    // [302] id 303  psi_strike  (0 g)
+    ItemDef{ 10000, 0, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office) | u16(RoomBit::Common)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [303] id 304  psi_void_needle
-    ItemDef{ 70000, 150, static_cast<std::uint16_t>(u16(RoomBit::Medical)), 0,
+    // [303] id 304  psi_void_needle  (0 g)
+    ItemDef{ 70000, 0, 150, static_cast<std::uint16_t>(u16(RoomBit::Medical)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [304] id 305  psychiatrist_referral
-    ItemDef{ 18, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office)), 0,
+    // [304] id 305  psychiatrist_referral  (200 g)
+    ItemDef{ 18, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [305] id 306  ptrs_liquidator
-    ItemDef{ 70000, 0, static_cast<std::uint16_t>(0), 0,
+    // [305] id 306  ptrs_liquidator  (20300 g)
+    ItemDef{ 70000, 20300, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [306] id 307  pump_impeller
-    ItemDef{ 76, 350, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [306] id 307  pump_impeller  (200 g)
+    ItemDef{ 76, 200, 350, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 2,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [307] id 308  pump_passport
-    ItemDef{ 40, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Office)), 0,
+    // [307] id 308  pump_passport  (200 g)
+    ItemDef{ 40, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [308] id 309  pushkin_shotgun
-    ItemDef{ 3200, 18, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Smoking)), 0,
+    // [308] id 309  pushkin_shotgun  (3400 g)
+    ItemDef{ 3200, 3400, 18, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Smoking)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [309] id 310  quarantine_breach_notice
-    ItemDef{ 66, 280, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
+    // [309] id 310  quarantine_breach_notice  (20 g)
+    ItemDef{ 66, 20, 280, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 3,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [310] id 311  quarantine_medcard
-    ItemDef{ 45, 0, static_cast<std::uint16_t>(0), 0,
+    // [310] id 311  quarantine_medcard  (20 g)
+    ItemDef{ 45, 20, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [311] id 312  radio
-    ItemDef{ 180, 1000, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
+    // [311] id 312  radio  (800 g)
+    ItemDef{ 180, 800, 1000, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Tool), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [312] id 313  radio_headset_liquidator
-    ItemDef{ 260, 180, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
+    // [312] id 313  radio_headset_liquidator  (400 g)
+    ItemDef{ 260, 400, 180, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Tool), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [313] id 314  radio_jammer
-    ItemDef{ 95, 350, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
+    // [313] id 314  radio_jammer  (200 g)
+    ItemDef{ 95, 200, 350, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 3,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [314] id 315  rail_depot_pass
-    ItemDef{ 95, 140, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Production) | u16(RoomBit::Corridor)), 0,
+    // [314] id 315  rail_depot_pass  (20 g)
+    ItemDef{ 95, 20, 140, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Production) | u16(RoomBit::Corridor)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 2,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [315] id 316  rail_signal_lamp
-    ItemDef{ 95, 250, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
+    // [315] id 316  rail_signal_lamp  (500 g)
+    ItemDef{ 95, 500, 250, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 2,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [316] id 317  rail_spike_pack
-    ItemDef{ 34, 550, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [316] id 317  rail_spike_pack  (200 g)
+    ItemDef{ 34, 200, 550, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 8,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [317] id 318  rail_switch_handle
-    ItemDef{ 120, 200, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [317] id 318  rail_switch_handle  (200 g)
+    ItemDef{ 120, 200, 200, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [318] id 319  rail_switch_order
-    ItemDef{ 110, 120, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Production)), 0,
+    // [318] id 319  rail_switch_order  (20 g)
+    ItemDef{ 110, 20, 120, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 2,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [319] id 320  raionsovet_floor_pass
-    ItemDef{ 95, 800, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
+    // [319] id 320  raionsovet_floor_pass  (20 g)
+    ItemDef{ 95, 20, 800, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [320] id 321  rake_bayonet
-    ItemDef{ 240, 180, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Storage)), 0,
+    // [320] id 321  rake_bayonet  (900 g)
+    ItemDef{ 240, 900, 180, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [321] id 322  ration_registry_extract
-    ItemDef{ 26, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Kitchen) | u16(RoomBit::Common)), 0,
+    // [321] id 322  ration_registry_extract  (20 g)
+    ItemDef{ 26, 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Kitchen) | u16(RoomBit::Common)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [322] id 323  ration_stamp_pad
-    ItemDef{ 24, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Kitchen) | u16(RoomBit::Common)), 0,
+    // [322] id 323  ration_stamp_pad  (20 g)
+    ItemDef{ 24, 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Kitchen) | u16(RoomBit::Common)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [323] id 324  rawmeat
-    ItemDef{ 1, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production)), 10,
+    // [323] id 324  rawmeat  (400 g)
+    ItemDef{ 1, 400, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production)), 10,
              u8(ItemCategory::Food), u8(EquipSlot::None), 255,
              u8(UseEffect::Feed), {0, 0, 0, 0, 0}, 0 },
-    // [324] id 325  rb91_auto_shotgun
-    ItemDef{ 2400, 40, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Smoking)), 0,
+    // [324] id 325  rb91_auto_shotgun  (3600 g)
+    ItemDef{ 2400, 3600, 40, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Smoking)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [325] id 326  rebar
-    ItemDef{ 80, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [325] id 326  rebar  (2000 g)
+    ItemDef{ 80, 2000, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [326] id 327  record_exposure_notice
-    ItemDef{ 80, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office)), 0,
+    // [326] id 327  record_exposure_notice  (200 g)
+    ItemDef{ 80, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [327] id 328  red_concentrate
-    ItemDef{ 22, 450, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Office) | u16(RoomBit::Hq)), 26,
+    // [327] id 328  red_concentrate  (400 g)
+    ItemDef{ 22, 400, 450, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Office) | u16(RoomBit::Hq)), 26,
              u8(ItemCategory::Food), u8(EquipSlot::None), 255,
              u8(UseEffect::Feed), {0, 0, 0, 0, 0}, 0 },
-    // [328] id 329  red_mold_sample
-    ItemDef{ 180, 0, static_cast<std::uint16_t>(0), 0,
+    // [328] id 329  red_mold_sample  (150 g)
+    ItemDef{ 180, 150, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 3,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [329] id 330  relay_diagram
-    ItemDef{ 30, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
+    // [329] id 330  relay_diagram  (200 g)
+    ItemDef{ 30, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [330] id 331  resident_identity_stub
-    ItemDef{ 32, 800, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Office) | u16(RoomBit::Common)), 0,
+    // [330] id 331  resident_identity_stub  (20 g)
+    ItemDef{ 32, 20, 800, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Office) | u16(RoomBit::Common)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [331] id 332  resident_trinket_box
-    ItemDef{ 34, 450, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Storage) | u16(RoomBit::Common)), 0,
+    // [331] id 332  resident_trinket_box  (200 g)
+    ItemDef{ 34, 200, 450, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Storage) | u16(RoomBit::Common)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 3,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [332] id 333  rifle_bolt_pack
-    ItemDef{ 85, 0, static_cast<std::uint16_t>(0), 0,
+    // [332] id 333  rifle_bolt_pack  (300 g)
+    ItemDef{ 85, 300, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Ammo), u8(EquipSlot::None), 24,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [333] id 334  rock_salt
-    ItemDef{ 4, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage) | u16(RoomBit::Bathroom)), 0,
+    // [333] id 334  rock_salt  (300 g)
+    ItemDef{ 4, 300, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage) | u16(RoomBit::Bathroom)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [334] id 335  roks47_flamethrower
-    ItemDef{ 9000, 45, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Production)), 0,
+    // [334] id 335  roks47_flamethrower  (23000 g)
+    ItemDef{ 9000, 23000, 45, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [335] id 336  roller_brush
-    ItemDef{ 12, 700, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production) | u16(RoomBit::Living)), 0,
+    // [335] id 336  roller_brush  (400 g)
+    ItemDef{ 12, 400, 700, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production) | u16(RoomBit::Living)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [336] id 337  rpl23_lmg
-    ItemDef{ 8500, 25, static_cast<std::uint16_t>(u16(RoomBit::Hq)), 0,
+    // [336] id 337  rpl23_lmg  (7500 g)
+    ItemDef{ 8500, 7500, 25, static_cast<std::uint16_t>(u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [337] id 338  rubber_club
-    ItemDef{ 90, 550, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
+    // [337] id 338  rubber_club  (700 g)
+    ItemDef{ 90, 700, 550, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [338] id 339  rubber_door_wedge
-    ItemDef{ 32, 650, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [338] id 339  rubber_door_wedge  (200 g)
+    ItemDef{ 32, 200, 650, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [339] id 340  rubber_strip
-    ItemDef{ 10, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [339] id 340  rubber_strip  (200 g)
+    ItemDef{ 10, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [340] id 341  rubber_tube
-    ItemDef{ 18, 650, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [340] id 341  rubber_tube  (200 g)
+    ItemDef{ 18, 200, 650, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [341] id 342  rusty_rake
-    ItemDef{ 18, 450, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Living)), 0,
+    // [341] id 342  rusty_rake  (2200 g)
+    ItemDef{ 18, 2200, 450, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Living)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [342] id 343  samosbor_alarm_schedule
-    ItemDef{ 52, 300, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq) | u16(RoomBit::Common)), 0,
+    // [342] id 343  samosbor_alarm_schedule  (20 g)
+    ItemDef{ 52, 20, 300, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq) | u16(RoomBit::Common)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 2,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [343] id 344  samosbor_tally
-    ItemDef{ 28, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq) | u16(RoomBit::Common)), 0,
+    // [343] id 344  samosbor_tally  (200 g)
+    ItemDef{ 28, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq) | u16(RoomBit::Common)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [344] id 345  sample_chain_form
-    ItemDef{ 60, 450, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
+    // [344] id 345  sample_chain_form  (20 g)
+    ItemDef{ 60, 20, 450, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [345] id 346  sample_cork_seal
-    ItemDef{ 9, 700, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Medical) | u16(RoomBit::Storage)), 0,
+    // [345] id 346  sample_cork_seal  (150 g)
+    ItemDef{ 9, 150, 700, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Medical) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 12,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [346] id 347  sand_spoiled_ration
-    ItemDef{ 0, 0, static_cast<std::uint16_t>(0), 4,
+    // [346] id 347  sand_spoiled_ration  (400 g)
+    ItemDef{ 0, 400, 0, static_cast<std::uint16_t>(0), 4,
              u8(ItemCategory::Food), u8(EquipSlot::None), 255,
              u8(UseEffect::FeedRisky), {0, 0, 0, 0, 0}, 0 },
-    // [347] id 348  sanitary_kit
-    ItemDef{ 90, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage)), 45,
+    // [347] id 348  sanitary_kit  (120 g)
+    ItemDef{ 90, 120, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage)), 45,
              u8(ItemCategory::Medicine), u8(EquipSlot::None), 255,
              u8(UseEffect::Heal), {0, 0, 0, 0, 0}, 0 },
-    // [348] id 349  screen_unit
-    ItemDef{ 44, 450, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Living) | u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
+    // [348] id 349  screen_unit  (500 g)
+    ItemDef{ 44, 500, 450, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Living) | u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 3,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [349] id 350  scrubbed_weapon_tag
-    ItemDef{ 50, 250, static_cast<std::uint16_t>(u16(RoomBit::Smoking) | u16(RoomBit::Storage)), 0,
+    // [349] id 350  scrubbed_weapon_tag  (20 g)
+    ItemDef{ 50, 20, 250, static_cast<std::uint16_t>(u16(RoomBit::Smoking) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [350] id 351  seal_wax
-    ItemDef{ 14, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
+    // [350] id 351  seal_wax  (200 g)
+    ItemDef{ 14, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [351] id 352  sealant_tube
-    ItemDef{ 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage) | u16(RoomBit::Bathroom)), 0,
+    // [351] id 352  sealant_tube  (200 g)
+    ItemDef{ 20, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage) | u16(RoomBit::Bathroom)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [352] id 353  sealed_complaint
-    ItemDef{ 16, 1000, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Office)), 0,
+    // [352] id 353  sealed_complaint  (200 g)
+    ItemDef{ 16, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [353] id 354  sealed_veretar_sand
-    ItemDef{ 260, 0, static_cast<std::uint16_t>(0), 0,
+    // [353] id 354  sealed_veretar_sand  (150 g)
+    ItemDef{ 260, 150, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 3,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [354] id 355  shark_scale
-    ItemDef{ 1000, 30, static_cast<std::uint16_t>(u16(RoomBit::Bathroom) | u16(RoomBit::Storage)), 0,
+    // [354] id 355  shark_scale  (200 g)
+    ItemDef{ 1000, 200, 30, static_cast<std::uint16_t>(u16(RoomBit::Bathroom) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [355] id 356  shelter_seat_card
-    ItemDef{ 68, 320, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
+    // [355] id 356  shelter_seat_card  (20 g)
+    ItemDef{ 68, 20, 320, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [356] id 357  shelter_seat_forgery
-    ItemDef{ 46, 200, static_cast<std::uint16_t>(u16(RoomBit::Smoking) | u16(RoomBit::Office) | u16(RoomBit::Common)), 0,
+    // [356] id 357  shelter_seat_forgery  (20 g)
+    ItemDef{ 46, 20, 200, static_cast<std::uint16_t>(u16(RoomBit::Smoking) | u16(RoomBit::Office) | u16(RoomBit::Common)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [357] id 358  shelter_tally
-    ItemDef{ 75, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq) | u16(RoomBit::Common)), 0,
+    // [357] id 358  shelter_tally  (20 g)
+    ItemDef{ 75, 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq) | u16(RoomBit::Common)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [358] id 359  shmk_disposable
-    ItemDef{ 520, 80, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Storage)), 0,
+    // [358] id 359  shmk_disposable  (3000 g)
+    ItemDef{ 520, 3000, 80, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [359] id 360  shock_baton
-    ItemDef{ 360, 160, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office) | u16(RoomBit::Smoking)), 0,
+    // [359] id 360  shock_baton  (1400 g)
+    ItemDef{ 360, 1400, 160, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office) | u16(RoomBit::Smoking)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [360] id 361  shotgun
-    ItemDef{ 950, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage)), 0,
+    // [360] id 361  shotgun  (3200 g)
+    ItemDef{ 950, 3200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [361] id 362  siren_energy
-    ItemDef{ 14, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Hq)), 18,
+    // [361] id 362  siren_energy  (600 g)
+    ItemDef{ 14, 600, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Hq)), 18,
              u8(ItemCategory::Drink), u8(EquipSlot::None), 255,
              u8(UseEffect::DrinkStim), {0, 0, 0, 0, 0}, 0 },
-    // [362] id 363  siren_instruction
-    ItemDef{ 4, 1000, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Office) | u16(RoomBit::Living)), 0,
+    // [362] id 363  siren_instruction  (200 g)
+    ItemDef{ 4, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Office) | u16(RoomBit::Living)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [363] id 364  siren_shard
-    ItemDef{ 90, 1000, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Storage)), 0,
+    // [363] id 364  siren_shard  (150 g)
+    ItemDef{ 90, 150, 1000, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [364] id 365  sledgehammer
-    ItemDef{ 260, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production)), 0,
+    // [364] id 365  sledgehammer  (5000 g)
+    ItemDef{ 260, 5000, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [365] id 366  sleeping_pills
-    ItemDef{ 62, 350, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Smoking)), 45,
+    // [365] id 366  sleeping_pills  (120 g)
+    ItemDef{ 62, 120, 350, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Smoking)), 45,
              u8(ItemCategory::Medicine), u8(EquipSlot::None), 255,
              u8(UseEffect::SleepingPills), {0, 0, 0, 0, 0}, 0 },
-    // [366] id 367  slime_age_label_brown
-    ItemDef{ 22, 320, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office) | u16(RoomBit::Production)), 0,
+    // [366] id 367  slime_age_label_brown  (20 g)
+    ItemDef{ 22, 20, 320, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 8,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [367] id 368  slime_age_label_orange
-    ItemDef{ 52, 200, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office) | u16(RoomBit::Production)), 0,
+    // [367] id 368  slime_age_label_orange  (20 g)
+    ItemDef{ 52, 20, 200, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 8,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [368] id 369  slime_age_label_violet
-    ItemDef{ 130, 80, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Hq) | u16(RoomBit::Production)), 0,
+    // [368] id 369  slime_age_label_violet  (20 g)
+    ItemDef{ 130, 20, 80, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Hq) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [369] id 370  slime_calcified_chip
-    ItemDef{ 78, 180, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage) | u16(RoomBit::Medical)), 0,
+    // [369] id 370  slime_calcified_chip  (250 g)
+    ItemDef{ 78, 250, 180, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage) | u16(RoomBit::Medical)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [370] id 371  slime_motor_node
-    ItemDef{ 190, 80, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Production)), 0,
+    // [370] id 371  slime_motor_node  (150 g)
+    ItemDef{ 190, 150, 80, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 3,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [371] id 372  slime_sample_black
-    ItemDef{ 220, 0, static_cast<std::uint16_t>(0), 0,
+    // [371] id 372  slime_sample_black  (250 g)
+    ItemDef{ 220, 250, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [372] id 373  slime_sample_blue
-    ItemDef{ 170, 0, static_cast<std::uint16_t>(0), 0,
+    // [372] id 373  slime_sample_blue  (250 g)
+    ItemDef{ 170, 250, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [373] id 374  slime_sample_brown
-    ItemDef{ 35, 0, static_cast<std::uint16_t>(0), 0,
+    // [373] id 374  slime_sample_brown  (250 g)
+    ItemDef{ 35, 250, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [374] id 375  slime_sample_contaminated
-    ItemDef{ 75, 0, static_cast<std::uint16_t>(0), 0,
+    // [374] id 375  slime_sample_contaminated  (200 g)
+    ItemDef{ 75, 200, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [375] id 376  slime_sample_fake
-    ItemDef{ 25, 0, static_cast<std::uint16_t>(0), 0,
+    // [375] id 376  slime_sample_fake  (200 g)
+    ItemDef{ 25, 200, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [376] id 377  slime_sample_green
-    ItemDef{ 120, 0, static_cast<std::uint16_t>(0), 0,
+    // [376] id 377  slime_sample_green  (250 g)
+    ItemDef{ 120, 250, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [377] id 378  slime_sample_red
-    ItemDef{ 130, 0, static_cast<std::uint16_t>(0), 0,
+    // [377] id 378  slime_sample_red  (250 g)
+    ItemDef{ 130, 250, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [378] id 379  slime_sample_seroburmaline
-    ItemDef{ 360, 0, static_cast<std::uint16_t>(0), 0,
+    // [378] id 379  slime_sample_seroburmaline  (250 g)
+    ItemDef{ 360, 250, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [379] id 380  slime_sample_silver
-    ItemDef{ 220, 0, static_cast<std::uint16_t>(0), 0,
+    // [379] id 380  slime_sample_silver  (250 g)
+    ItemDef{ 220, 250, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [380] id 381  slime_sample_silver_open
-    ItemDef{ 45, 0, static_cast<std::uint16_t>(0), 0,
+    // [380] id 381  slime_sample_silver_open  (250 g)
+    ItemDef{ 45, 250, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [381] id 382  slime_sample_white
-    ItemDef{ 180, 0, static_cast<std::uint16_t>(0), 0,
+    // [381] id 382  slime_sample_white  (250 g)
+    ItemDef{ 180, 250, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [382] id 383  slime_scraper
-    ItemDef{ 38, 850, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
+    // [382] id 383  slime_scraper  (600 g)
+    ItemDef{ 38, 600, 850, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Tool), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [383] id 384  slime_sense_node
-    ItemDef{ 210, 0, static_cast<std::uint16_t>(0), 0,
+    // [383] id 384  slime_sense_node  (150 g)
+    ItemDef{ 210, 150, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 3,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [384] id 385  slyoznev_pps41
-    ItemDef{ 1100, 180, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Storage)), 0,
+    // [384] id 385  slyoznev_pps41  (3000 g)
+    ItemDef{ 1100, 3000, 180, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [385] id 386  smoke_candle_check
-    ItemDef{ 34, 450, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
+    // [385] id 386  smoke_candle_check  (200 g)
+    ItemDef{ 34, 200, 450, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [386] id 387  soap_72
-    ItemDef{ 7, 900, static_cast<std::uint16_t>(u16(RoomBit::Bathroom) | u16(RoomBit::Kitchen) | u16(RoomBit::Storage)), 0,
+    // [386] id 387  soap_72  (200 g)
+    ItemDef{ 7, 200, 900, static_cast<std::uint16_t>(u16(RoomBit::Bathroom) | u16(RoomBit::Kitchen) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 8,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [387] id 388  sound_emitter
-    ItemDef{ 58, 350, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [387] id 388  sound_emitter  (500 g)
+    ItemDef{ 58, 500, 350, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [388] id 389  soup_cube
-    ItemDef{ 3, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage)), 12,
+    // [388] id 389  soup_cube  (400 g)
+    ItemDef{ 3, 400, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage)), 12,
              u8(ItemCategory::Food), u8(EquipSlot::None), 255,
              u8(UseEffect::Feed), {0, 0, 0, 0, 0}, 0 },
-    // [389] id 390  spore_print
-    ItemDef{ 12, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
+    // [389] id 390  spore_print  (200 g)
+    ItemDef{ 12, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [390] id 391  spring
-    ItemDef{ 7, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [390] id 391  spring  (200 g)
+    ItemDef{ 7, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [391] id 392  sterile_bandage
-    ItemDef{ 32, 700, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Hq)), 25,
+    // [391] id 392  sterile_bandage  (120 g)
+    ItemDef{ 32, 120, 700, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Hq)), 25,
              u8(ItemCategory::Medicine), u8(EquipSlot::None), 255,
              u8(UseEffect::Heal), {0, 0, 0, 0, 0}, 0 },
-    // [392] id 393  sterile_swab
-    ItemDef{ 18, 800, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office)), 0,
+    // [392] id 393  sterile_swab  (150 g)
+    ItemDef{ 18, 150, 800, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 12,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [393] id 394  stolen_archive_card
-    ItemDef{ 60, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office)), 0,
+    // [393] id 394  stolen_archive_card  (20 g)
+    ItemDef{ 60, 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [394] id 395  stolen_filter_pack
-    ItemDef{ 120, 350, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Hq) | u16(RoomBit::Smoking)), 0,
+    // [394] id 395  stolen_filter_pack  (200 g)
+    ItemDef{ 120, 200, 350, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Hq) | u16(RoomBit::Smoking)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 3,
              u8(UseEffect::Unpack), {0, 0, 0, 0, 0}, 0 },
-    // [395] id 396  stolen_terminal_stamp
-    ItemDef{ 155, 160, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Smoking) | u16(RoomBit::Storage)), 0,
+    // [395] id 396  stolen_terminal_stamp  (20 g)
+    ItemDef{ 155, 20, 160, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Smoking) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [396] id 397  strange_clot
-    ItemDef{ 500, 0, static_cast<std::uint16_t>(0), 0,
+    // [396] id 397  strange_clot  (200 g)
+    ItemDef{ 500, 200, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [397] id 398  substrate_sack
-    ItemDef{ 10, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production) | u16(RoomBit::Bathroom)), 0,
+    // [397] id 398  substrate_sack  (200 g)
+    ItemDef{ 10, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production) | u16(RoomBit::Bathroom)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [398] id 399  sugar_pack
-    ItemDef{ 8, 800, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage) | u16(RoomBit::Living)), 6,
+    // [398] id 399  sugar_pack  (400 g)
+    ItemDef{ 8, 400, 800, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage) | u16(RoomBit::Living)), 6,
              u8(ItemCategory::Food), u8(EquipSlot::None), 8,
              u8(UseEffect::Feed), {0, 0, 0, 0, 0}, 0 },
-    // [399] id 400  syringe_empty
-    ItemDef{ 18, 700, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage)), 0,
+    // [399] id 400  syringe_empty  (200 g)
+    ItemDef{ 18, 200, 700, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 12,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [400] id 401  tanev_svt40
-    ItemDef{ 60000, 0, static_cast<std::uint16_t>(0), 0,
+    // [400] id 401  tanev_svt40  (3850 g)
+    ItemDef{ 60000, 3850, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [401] id 402  tea
-    ItemDef{ 3, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Common)), 15,
+    // [401] id 402  tea  (600 g)
+    ItemDef{ 3, 600, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Common)), 15,
              u8(ItemCategory::Drink), u8(EquipSlot::None), 255,
              u8(UseEffect::Drink), {0, 0, 0, 0, 0}, 0 },
-    // [402] id 403  technical_spirit
-    ItemDef{ 44, 420, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Production)), 6,
+    // [402] id 403  technical_spirit  (300 g)
+    ItemDef{ 44, 300, 420, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Production)), 6,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::TechnicalSpirit), {0, 0, 0, 0, 0}, 0 },
-    // [403] id 404  temp_pass
-    ItemDef{ 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
+    // [403] id 404  temp_pass  (20 g)
+    ItemDef{ 20, 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [404] id 405  terminal_order_receipt
-    ItemDef{ 36, 350, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Common)), 0,
+    // [404] id 405  terminal_order_receipt  (20 g)
+    ItemDef{ 36, 20, 350, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Common)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [405] id 406  toiletpaper
-    ItemDef{ 4, 1000, static_cast<std::uint16_t>(u16(RoomBit::Bathroom) | u16(RoomBit::Storage)), 0,
+    // [405] id 406  toiletpaper  (200 g)
+    ItemDef{ 4, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Bathroom) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 8,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [406] id 407  tourniquet
-    ItemDef{ 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Hq)), 12,
+    // [406] id 407  tourniquet  (120 g)
+    ItemDef{ 20, 120, 1000, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Hq)), 12,
              u8(ItemCategory::Medicine), u8(EquipSlot::None), 255,
              u8(UseEffect::Heal), {0, 0, 0, 0, 0}, 0 },
-    // [407] id 408  toz_shotgun
-    ItemDef{ 1200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Hq)), 0,
+    // [407] id 408  toz_shotgun  (2800 g)
+    ItemDef{ 1200, 2800, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [408] id 409  track_diagram_scrap
-    ItemDef{ 130, 180, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Storage) | u16(RoomBit::Corridor)), 0,
+    // [408] id 409  track_diagram_scrap  (20 g)
+    ItemDef{ 130, 20, 180, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Storage) | u16(RoomBit::Corridor)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [409] id 410  tracked_zhernov
-    ItemDef{ 5400, 0, static_cast<std::uint16_t>(0), 0,
+    // [409] id 410  tracked_zhernov  (14000 g)
+    ItemDef{ 5400, 14000, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [410] id 411  tt_pistol
-    ItemDef{ 650, 1000, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Storage)), 0,
+    // [410] id 411  tt_pistol  (850 g)
+    ItemDef{ 650, 850, 1000, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [411] id 412  tut_cafe_key
-    ItemDef{ 0, 0, static_cast<std::uint16_t>(0), 0,
+    // [411] id 412  tut_cafe_key  (30 g)
+    ItemDef{ 0, 30, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Key), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [412] id 413  unpeople_detector
-    ItemDef{ 300, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Medical)), 0,
+    // [412] id 413  unpeople_detector  (700 g)
+    ItemDef{ 300, 700, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Medical)), 0,
              u8(ItemCategory::Tool), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [413] id 414  unsigned_order
-    ItemDef{ 22, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
+    // [413] id 414  unsigned_order  (200 g)
+    ItemDef{ 22, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [414] id 415  used_gasmask_filter
-    ItemDef{ 6, 0, static_cast<std::uint16_t>(0), 0,
+    // [414] id 415  used_gasmask_filter  (150 g)
+    ItemDef{ 6, 150, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [415] id 416  uv_spotlight
-    ItemDef{ 950, 120, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Storage)), 0,
+    // [415] id 416  uv_spotlight  (1200 g)
+    ItemDef{ 950, 1200, 120, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Tool), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [416] id 417  vacuum
-    ItemDef{ 500, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Living) | u16(RoomBit::Production)), 0,
+    // [416] id 417  vacuum  (6000 g)
+    ItemDef{ 500, 6000, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Living) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Tool), u8(EquipSlot::Tool), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [417] id 418  valve_tag
-    ItemDef{ 12, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [417] id 418  valve_tag  (200 g)
+    ItemDef{ 12, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [418] id 419  veretar_sand
-    ItemDef{ 160, 0, static_cast<std::uint16_t>(0), 0,
+    // [418] id 419  veretar_sand  (150 g)
+    ItemDef{ 160, 150, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [419] id 420  void_archive_warrant
-    ItemDef{ 120, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
+    // [419] id 420  void_archive_warrant  (20 g)
+    ItemDef{ 120, 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [420] id 421  void_spike
-    ItemDef{ 1500, 0, static_cast<std::uint16_t>(0), 0,
+    // [420] id 421  void_spike  (150 g)
+    ItemDef{ 1500, 150, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [421] id 422  voluntary_receipt
-    ItemDef{ 14, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
+    // [421] id 422  voluntary_receipt  (200 g)
+    ItemDef{ 14, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [422] id 423  water
-    ItemDef{ 2, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage) | u16(RoomBit::Bathroom)), 25,
+    // [422] id 423  water  (600 g)
+    ItemDef{ 2, 600, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage) | u16(RoomBit::Bathroom)), 25,
              u8(ItemCategory::Drink), u8(EquipSlot::None), 255,
              u8(UseEffect::Drink), {0, 0, 0, 0, 0}, 0 },
-    // [423] id 424  water_coupon
-    ItemDef{ 2, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Common) | u16(RoomBit::Kitchen)), 0,
+    // [423] id 424  water_coupon  (10 g)
+    ItemDef{ 2, 10, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Common) | u16(RoomBit::Kitchen)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [424] id 425  water_filter_regulator
-    ItemDef{ 82, 300, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [424] id 425  water_filter_regulator  (200 g)
+    ItemDef{ 82, 200, 300, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 3,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [425] id 426  water_reservoir_quota
-    ItemDef{ 34, 280, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Kitchen) | u16(RoomBit::Hq)), 0,
+    // [425] id 426  water_reservoir_quota  (10 g)
+    ItemDef{ 34, 10, 280, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Kitchen) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 4,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [426] id 427  water_reservoir_sample
-    ItemDef{ 38, 450, static_cast<std::uint16_t>(u16(RoomBit::Bathroom) | u16(RoomBit::Kitchen) | u16(RoomBit::Production)), 0,
+    // [426] id 427  water_reservoir_sample  (150 g)
+    ItemDef{ 38, 150, 450, static_cast<std::uint16_t>(u16(RoomBit::Bathroom) | u16(RoomBit::Kitchen) | u16(RoomBit::Production)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [427] id 428  weapon_blueprint_t2
-    ItemDef{ 260, 180, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
+    // [427] id 428  weapon_blueprint_t2  (20 g)
+    ItemDef{ 260, 20, 180, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [428] id 429  weapon_checkout_tag
-    ItemDef{ 44, 450, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Storage) | u16(RoomBit::Office)), 0,
+    // [428] id 429  weapon_checkout_tag  (20 g)
+    ItemDef{ 44, 20, 450, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Storage) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [429] id 430  weapon_permit_forged
-    ItemDef{ 58, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Smoking)), 0,
+    // [429] id 430  weapon_permit_forged  (20 g)
+    ItemDef{ 58, 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Smoking)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [430] id 431  weapon_permit_signed
-    ItemDef{ 95, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
+    // [430] id 431  weapon_permit_signed  (20 g)
+    ItemDef{ 95, 20, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [431] id 432  wet_rag_bundle
-    ItemDef{ 4, 1000, static_cast<std::uint16_t>(u16(RoomBit::Bathroom) | u16(RoomBit::Kitchen)), 0,
+    // [431] id 432  wet_rag_bundle  (200 g)
+    ItemDef{ 4, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Bathroom) | u16(RoomBit::Kitchen)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 6,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [432] id 433  wrench
-    ItemDef{ 35, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
+    // [432] id 433  wrench  (1100 g)
+    ItemDef{ 35, 1100, 1000, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [433] id 434  yeast_bread
-    ItemDef{ 8, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen)), 25,
+    // [433] id 434  yeast_bread  (400 g)
+    ItemDef{ 8, 400, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen)), 25,
              u8(ItemCategory::Food), u8(EquipSlot::None), 255,
              u8(UseEffect::Feed), {0, 0, 0, 0, 0}, 0 },
-    // [434] id 435  zatychkin_pistol
-    ItemDef{ 900, 120, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office)), 0,
+    // [434] id 435  zatychkin_pistol  (750 g)
+    ItemDef{ 900, 750, 120, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Office)), 0,
              u8(ItemCategory::Weapon), u8(EquipSlot::Weapon), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [435] id 436  zhek_seal
-    ItemDef{ 120, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Common)), 0,
+    // [435] id 436  zhek_seal  (200 g)
+    ItemDef{ 120, 200, 1000, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Common)), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [436] id 437  zhelemish_boiled
-    ItemDef{ 16, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Medical)), 8,
+    // [436] id 437  zhelemish_boiled  (120 g)
+    ItemDef{ 16, 120, 1000, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Medical)), 8,
              u8(ItemCategory::Medicine), u8(EquipSlot::None), 255,
              u8(UseEffect::Heal), {0, 0, 0, 0, 0}, 0 },
-    // [437] id 438  zhelemish_dried
-    ItemDef{ 11, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Kitchen)), 16,
+    // [437] id 438  zhelemish_dried  (400 g)
+    ItemDef{ 11, 400, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Kitchen)), 16,
              u8(ItemCategory::Food), u8(EquipSlot::None), 255,
              u8(UseEffect::Feed), {0, 0, 0, 0, 0}, 0 },
-    // [438] id 439  zhelemish_raw
-    ItemDef{ 5, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Bathroom)), 10,
+    // [438] id 439  zhelemish_raw  (400 g)
+    ItemDef{ 5, 400, 1000, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Bathroom)), 10,
              u8(ItemCategory::Food), u8(EquipSlot::None), 255,
              u8(UseEffect::FeedRisky), {0, 0, 0, 0, 0}, 0 },
-    // [439] id 440  zhelemish_sample_contaminated
-    ItemDef{ 18, 0, static_cast<std::uint16_t>(0), 0,
+    // [439] id 440  zhelemish_sample_contaminated  (250 g)
+    ItemDef{ 18, 250, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [440] id 441  zhelemish_sample_sealed
-    ItemDef{ 240, 0, static_cast<std::uint16_t>(0), 0,
+    // [440] id 441  zhelemish_sample_sealed  (250 g)
+    ItemDef{ 240, 250, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
-    // [441] id 442  zinc_slime_bucket
-    ItemDef{ 210, 0, static_cast<std::uint16_t>(0), 0,
+    // [441] id 442  zinc_slime_bucket  (150 g)
+    ItemDef{ 210, 150, 0, static_cast<std::uint16_t>(0), 0,
              u8(ItemCategory::Misc), u8(EquipSlot::None), 1,
              u8(UseEffect::None), {0, 0, 0, 0, 0}, 0 },
 }};

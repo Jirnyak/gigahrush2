@@ -41,6 +41,7 @@
 #include "ecs/registry.h"
 #include "game/ai.h"       // the utility AI — adapted, wired, and dormant by default
 #include "game/room_zone.h" // room affordance/recovery tables + the baked zone fields
+#include "game/encumbrance.h" // carried weight -> mass, speed, fatigue, noise
 #include "game/embody.h"
 #include "game/impact.h"
 #include "game/elevator.h"
@@ -2024,6 +2025,11 @@ int main(int argc, char** argv) {
     game::SpeechMemory speechMem;
     std::uint64_t speechAt = 0;
     game::NeedsTick needs{};   // last step's report, for the HUD
+    // Last encumbrance report. Read by THREE consumers a frame apart — the
+    // Controller's speed chain, the footstep noise radius and the HUD — which is
+    // why the sweep reports instead of writing: one producer, three readers, no
+    // second writer of anyone's movement.
+    game::EncumbranceTick encumbrance{};
     int needsHpLost = 0;       // running total, so the HUD is not one tick
     // [[maybe_unused]]: superseded by PlayerRanged::shots (read straight from the
     // component in the HUD) during the branch merge, but the `shots += ...` RHS is a
@@ -2959,8 +2965,12 @@ int main(int argc, char** argv) {
                         float sm = game::status_move_mult_e3(playerStatus) / 1000.0f;
                         if (game::status_is_rooted(playerStatus))
                             sm = 0.0f;
-                        ctl_->moveSpeed =
-                            kPlayerWalkSpeed * needs.speedScale * sm;
+                        // ENCUMBRANCE joins the SAME chain as hunger, exhaustion
+                        // and status rather than becoming a second writer of
+                        // moveSpeed — one place folds every movement multiplier
+                        // together, which is the only reason they cannot fight.
+                        ctl_->moveSpeed = kPlayerWalkSpeed * needs.speedScale * sm *
+                                          encumbrance.playerEffect.speedScale;
                         // AGIMV: AGI multiplies walk speed (linear +1%/pt).
                         if (const game::RpgStats* rs =
                                 reg.try_get<game::RpgStats>(player)) {
@@ -3351,7 +3361,15 @@ int main(int argc, char** argv) {
                     const float speedSq = dot(lat, lat);
                     if (speedSq > 0.5f && (simTick % 28 == 0)) {
                         const vec3& ppos = reg.get<Transform>(player).pos;
-                        game::NoiseProfile footstepNoise{6.0f, 400, 1, game::NoiseSource::Footstep};
+                        // A LOADED BODY IS LOUDER. Not a penalty rule — it is what
+                        // carrying things sounds like, so it is charged from the
+                        // first gram and scales with the load RATIO ([encumbrance.h]
+                        // kNoiseLoadGain), never with raw kilogrammes: a strong
+                        // character must not be punished for the bigger budget its
+                        // Strength bought.
+                        game::NoiseProfile footstepNoise{
+                            6.0f * encumbrance.playerEffect.noiseMult, 400, 1,
+                            game::NoiseSource::Footstep};
                         game::noise_publish(noiseField, activeLayer, ppos, footstepNoise,
                                             static_cast<std::uint32_t>(entt::to_integral(player)));
                     }
@@ -3978,6 +3996,11 @@ int main(int argc, char** argv) {
                 // a morgue — a body in a kitchen fills, a body in a bathroom
                 // empties. Passing null here would reinstate the ~14-minute
                 // population wipe [needs.h] blocked the widening on.
+                // ENCUMBRANCE before the needs clock, because it charges the same
+                // sleep bar the clock then reads for its exhaustion penalty — a
+                // load taxes you on the tick you carry it, not one tick later.
+                encumbrance = game::encumbrance_step(reg, pool, activeLayer, kSimDt,
+                                                     simTick);
                 needs = game::needs_step(reg, pool, activeLayer, kSimDt, &roomZones);
                 needsHpLost += needs.hpLost;
                 // The other half of the acceptance trail. `bodies` says the clock is
@@ -4774,6 +4797,47 @@ int main(int argc, char** argv) {
                 ImGui::Text("loot %d rub (%d/%d slots) | healed %d | band E%u",
                             carried, slots, game::kInvSlots, healed,
                             game::economy_band(currentFloor));
+                // CARRIED WEIGHT — the reader `ItemDef::massG` exists for. Slots
+                // alone never said what a load-out COSTS: sixty rifle rounds and
+                // sixty documents each occupy one slot and are 0.96 kg against
+                // 1.5 kg of paper.
+                //
+                // The budget is THIS BODY's, not a constant: 64 kg + 4 kg per point
+                // of Strength ([rpg.h] carry_capacity_g). Printed with the Str that
+                // produced it, because a number that moves when you level up should
+                // say why on the same line.
+                if (reg.valid(player)) {
+                    if (const auto* nr = reg.try_get<game::NpcRef>(player)) {
+                        if (pool.valid(nr->id)) {
+                            const std::uint32_t heldG =
+                                game::inventory_mass_g(pool.inventory(nr->id));
+                            // The sheet is an ECS component, not a pool column
+                            // ([combat.h] "RpgStats: copy from -> to"), so a body
+                            // with none reads as Str 0 rather than as no budget.
+                            const game::RpgStats rs =
+                                reg.all_of<game::RpgStats>(player)
+                                    ? reg.get<game::RpgStats>(player)
+                                    : game::RpgStats{};
+                            const std::uint32_t capG = game::carry_capacity_g(rs);
+                            const game::EncumbranceEffect& ee =
+                                encumbrance.playerEffect;
+                            // The CONSEQUENCES, not just the number. A HUD that
+                            // says OVERLOADED and nothing else leaves the player
+                            // guessing what it cost; these are the three live
+                            // multipliers ([encumbrance.h]).
+                            ImGui::Text(
+                                "weight %.1f / %.0f kg (64 + 4 x STR %u) | "
+                                "pace x%.2f | noise x%.2f%s",
+                                static_cast<double>(heldG) / 1000.0,
+                                static_cast<double>(capG) / 1000.0,
+                                static_cast<unsigned>(
+                                    rs.attr[static_cast<std::size_t>(game::Attr::Str)]),
+                                static_cast<double>(ee.speedScale),
+                                static_cast<double>(ee.noiseMult),
+                                ee.overloaded ? "  OVERLOADED" : "");
+                        }
+                    }
+                }
                 // Crafting, on screen: C builds or reads, X strips. `bank` is the 9-axis
                 // material vector summed, because nine numbers on the HUD would be noise
                 // — the per-axis detail is what the craft menu is for when one exists.

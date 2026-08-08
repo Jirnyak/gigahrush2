@@ -731,7 +731,27 @@ if(GIGA_BUILD_TESTS)
     # a count, and the four numbers after the pieces are the ones that matter:
     #   786 pieces — kitchen 186, bathroom 177, living 423
     #   wrong-room 0, unreachable 0, anchor-in-air 0, floating 0
-        PASS_REGULAR_EXPRESSION "game_test: 235083 checks, 0 failures")
+    # 235083 -> 235093 on 2026-08-06: +10, ITEM WEIGHT. All 442 items gained a mass
+    # in grams — the same unit props and mobs now use — resolved by rule from
+    # data/item_mass.csv, and a reader (`inventory_mass_g`) landed with it so the
+    # column is not a §35 orphan. The block asserts the SHAPE of the result rather
+    # than 442 numbers: only the 20 psi techniques are weightless, the range is
+    # really spanned, and stack COUNT multiplies.
+    #   [items] mass: 20 weightless, lightest 6 g, heaviest 26000 g (АТО-41)
+    # 235093 -> 235098 on 2026-08-06: +5, CARRY CAPACITY moved off a flat constant
+    # onto the body: 64 kg + 4 kg per point of Strength ([rpg.h] carry_capacity_g).
+    # The extra CHECKs pin the two endpoints and the EVENNESS the owner asked for —
+    # both constants are powers of two in kilogrammes, so a capacity can never come
+    # out odd, and a stray constant that broke that would otherwise be silent.
+    # 235098 -> 235119 on 2026-08-06: +21, ENCUMBRANCE. The pure curve is pinned on
+    # the properties that make it not-arbitrary — CONTINUOUS across the threshold
+    # (a gram over costs <0.1 %, so there is no step to feel), a genuinely free
+    # band under capacity, floored so an absurd load slows and never freezes, and
+    # the threshold moving with Strength. The driver half proves the claim the whole
+    # design rests on: the load reaches the `Mass` component, so fall damage and
+    # knockback see it through laws that did not change.
+    #   [items] mass: bare 71.9 kg -> carrying 2 x АТО-41 = 123.9 kg
+        PASS_REGULAR_EXPRESSION "game_test: 235119 checks, 0 failures")
 
 
 

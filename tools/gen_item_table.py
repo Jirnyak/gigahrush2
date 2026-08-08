@@ -116,6 +116,35 @@ def pick(table, row, col, i, what):
     return table[tok]
 
 
+def item_mass_g(row, i):
+    """Grams for one item, straight out of the row's own `mass_g` column.
+
+    THE COLUMN IS THE SOURCE, exactly as it is for props and mobs — one shape for
+    all three catalogs, an item's weight sitting beside its value and its stack cap
+    where anyone reading the row will see it.
+
+    It was briefly resolved from a rule table (data/item_mass.csv) instead, which is
+    how these 442 values were AUTHORED — writing "документ весит 20 г" once is how
+    75 bureaucratic MISC rows got an honest weight rather than 442 blind guesses.
+    That table did its job and was migrated into this column; the reasoning survives
+    in items.md, and the values are now plain data with no indirection to resolve.
+
+    Empty or zero is legal and means "not a physical object": a psi technique is a
+    thing you know, not a thing in your pack, and 20 rows are exactly that. It is
+    NOT a licence for an unfilled column — the CSV carries a value on every row and
+    `source_rules` counts them — which is why the prop and mob tables, where 0 would
+    be indistinguishable from unfilled, refuse it outright.
+    """
+    raw = (row.get("mass_g") or "").strip()
+    if not raw.isdigit():
+        die("row %d (%s): mass_g %r must be a whole number of grams — every item "
+            "has a weight" % (i, row["id"], raw))
+    g = int(raw)
+    if g > 4294967295:
+        die("row %d (%s): %d g exceeds uint32" % (i, row["id"], g))
+    return g
+
+
 def main():
     with open(CSV_PATH, encoding="utf-8", newline="") as fh:
         rows = list(csv.DictReader(fh))
@@ -127,6 +156,7 @@ def main():
 
     seen, out, names = set(), [], []
     used_cat, used_use = set(), set()
+    resolved = []
     for i, r in enumerate(rows):
         if r["id"] in seen:
             die("duplicate id %r at row %d" % (r["id"], i))
@@ -142,13 +172,17 @@ def main():
 
         resists = [num(r, c, i, -128, 127) for c in RESIST_COLS]
 
+        massG = item_mass_g(r, i)
+        resolved.append((r["id"], massG))
+
         out.append(
-            "    // [%d] id %d  %s\n"
-            "    ItemDef{ %d, %d, static_cast<std::uint16_t>(%s), %d,\n"
+            "    // [%d] id %d  %s  (%d g)\n"
+            "    ItemDef{ %d, %d, %d, static_cast<std::uint16_t>(%s), %d,\n"
             "             u8(ItemCategory::%s), u8(EquipSlot::%s), %d,\n"
             "             u8(UseEffect::%s), {%s}, 0 },"
-            % (i, i + 1, r["id"],
+            % (i, i + 1, r["id"], massG,
                num(r, "value_rub", i, 0, 2000000000),
+               massG,
                spawn_weight(r, i),
                room_mask(r, i),
                num(r, "use_a", i, -32768, 32767),
@@ -157,6 +191,24 @@ def main():
                ue,
                ", ".join(str(x) for x in resists)))
         names.append("    %s," % cpp_string(r["name_ru"].strip()))
+
+    # THE MASS SUMMARY, printed every run. A number nobody can see is a number
+    # nobody can argue with: this is what lets the owner spot "справка весит 2 кг"
+    # without reading 442 rows of a wide CSV or of generated C++.
+    heavy = sorted(resolved, key=lambda t: -t[1])[:6]
+    light = sorted((t for t in resolved if t[1] > 0), key=lambda t: t[1])[:6]
+    total = sum(t[1] for t in resolved)
+    sys.stderr.write(
+        "gen_item_table: mass on %d items, %.1f kg if you carried one of each\n"
+        % (len(resolved), total / 1000.0))
+    sys.stderr.write("    heaviest: %s\n"
+                     % ", ".join("%s %.1f kg" % (t[0], t[1] / 1000.0) for t in heavy))
+    sys.stderr.write("    lightest: %s\n"
+                     % ", ".join("%s %d g" % (t[0], t[1]) for t in light))
+    zero = [t[0] for t in resolved if t[1] == 0]
+    if zero:
+        sys.stderr.write("    weightless (not physical objects): %d — %s\n"
+                         % (len(zero), ", ".join(zero[:4]) + " ..."))
 
     # An enumerator no row uses is either dead weight or a sign the CSV drifted.
     for name, used, table in (("ItemCategory", used_cat, CATEGORY),

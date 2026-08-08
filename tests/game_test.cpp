@@ -43,6 +43,7 @@
 #include "game/npc_pool.h"
 #include "game/wander.h"
 #include "game/population.h"
+#include "game/encumbrance.h"
 #include "game/room_zone.h"
 #include "game/rpg.h"
 

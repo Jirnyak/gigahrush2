@@ -129,7 +129,15 @@ def main():
         enum_name = camel(sid)
         enum_lines.append("    %s = %d," % (enum_name, i))
         names.append((sid, name))
-        massG = int(round(float(r.get("mass_kg") or "10") * 1000.0))
+        # GRAMS, read as an integer and never scaled here. The column used to be
+        # `mass_kg` and was multiplied on the way in, which put a unit conversion
+        # between what the author wrote and what the engine stored — the same seam
+        # that let props mean grams and mobs mean kg x10 for months. One unit, one
+        # name, no arithmetic: what is in the cell is what lands in the row.
+        mass_raw = (r.get("mass_g") or "").strip()
+        if not mass_raw.isdigit():
+            die("row %d: mass_g %r must be a whole number of grams" % (i, mass_raw))
+        massG = int(mass_raw)
         sizes = tuple(int(round(float(r.get(c) or "1.0") * 1000.0))
                       for c in ("size_x_m", "size_y_m", "size_z_m"))
         for v in sizes:
@@ -141,8 +149,8 @@ def main():
         # "nobody filled this column in" — measured, that is exactly what had
         # happened to 45 of 69 rows in data/mobs.csv.
         if not (0 < massG <= 4294967295):
-            die("row %d: mass_kg %r out of range (grams must be 1..2^32-1, and a "
-                "prop may not be massless)" % (i, r.get("mass_kg")))
+            die("row %d: mass_g %r out of range (1..2^32-1, and a prop may not be "
+                "massless)" % (i, mass_raw))
         # Layout: massG (uint32), 6 uint8 (shape..mat + pad), 7 uint16.
         defs.append(
             "    // [%d] %s\n"

@@ -23,6 +23,11 @@ float body_half_height(std::uint16_t height_mm) {
     return resolved_height_mm(height_mm) * 0.001f * 0.5f;
 }
 
+float body_mass_kg(std::uint16_t height_mm) {
+    const float hm = resolved_height_mm(height_mm) * 0.001f;
+    return 22.0f * hm * hm;
+}
+
 float body_eye_height(std::uint16_t height_mm) {
     // Eyes ~7% below the crown, measured from the body centre (Transform::pos).
     float h = resolved_height_mm(height_mm) * 0.001f;
@@ -46,13 +51,11 @@ Entity embody(Registry& reg, NpcPool& pool, NpcId id, LayerId layer) {
     // Stature drives the collider: ~0.4 m half-width, half-height from height.
     float hh = body_half_height(pool.height_mm(id));
     reg.emplace<AABB>(e, AABB{vec3{0.4f, 0.4f, hh}});
-    // Universal mass from stature: BMI-style m = 22 * height^2 (metres) —
-    // 1.75 m adult ≈ 67 kg, children scale down the same law. Feeds
-    // E = m*v^2/2 (fall damage) and p = m*v everywhere.
-    {
-        const float hm = resolved_height_mm(pool.height_mm(id)) * 0.001f;
-        reg.emplace<Mass>(e, Mass{22.0f * hm * hm});
-    }
+    // Universal mass from stature ([embody.h] body_mass_kg). Feeds E = m*v^2/2
+    // (fall damage) and p = m*v everywhere. This is the BODY only; what it is
+    // CARRYING is folded in by `encumbrance_step` ([encumbrance.h]), which is what
+    // makes a loaded fall hurt more through the same law rather than a new one.
+    reg.emplace<Mass>(e, Mass{body_mass_kg(pool.height_mm(id))});
     reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
     reg.emplace<Jump>(e, Jump{6.5f, false});
 

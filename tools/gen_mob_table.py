@@ -224,13 +224,14 @@ def main():
                 ndrop=fixed(r.get("nav_drop_sub") or "16", 1, "nav_drop_sub", i, 0, 255),
                 nfly=fixed(r.get("nav_fly") or "0", 1, "nav_fly", i, 0, 1),
                 # Universal mass, kg x10 (blank = 80 kg placeholder).
-                # GRAMS, the one mass unit in the tree ([mob_table.h] massG). The
+                # GRAMS, read as an integer and never scaled here — the same column
+                # name and unit props and items use ([mob_table.h] massG). The
                 # lower bound is 1, not 0: a massless creature drops silently out
                 # of every E = m*v^2/2 law — no fall damage, no knockback, no
                 # impact — and "0" is indistinguishable from "nobody filled the
-                # column in". Measured on this file today: all 68 rows are
-                # authored, on a deliberate 12/40/85/220/400/900 kg ladder.
-                massx10=fixed(r.get("mass_kg") or "80", 1000, "mass_kg", i, 1,
+                # column in". Measured on this file: all 68 rows are authored, on a
+                # deliberate 12/40/85/220/400/900 kg ladder.
+                massx10=fixed(r.get("mass_g") or "", 1, "mass_g", i, 1,
                               4294967295)))
         names.append("    %s," % cpp_string(r["name_ru"]))
         # Latin console token: the CSV id lowercased. ASCII by construction (the

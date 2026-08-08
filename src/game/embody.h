@@ -50,6 +50,15 @@ inline constexpr std::uint16_t kDefaultHeightMm = 1800; // 1.8 m
 // the height, since the AABB is expressed as half-extents around Transform::pos.
 float body_half_height(std::uint16_t height_mm);
 
+// The BODY's own mass in kg, from stature alone: a BMI-style m = 22 * h^2, so a
+// 1.75 m adult is ~67 kg and children scale down by the same law.
+//
+// Exported because it now has TWO callers — `embody` stamps it at birth, and
+// [encumbrance.h] recomputes body+load every few ticks — and a physical law with
+// two copies is a law that will be retuned in one of them. Same reason
+// `floor_room_stride` is exported rather than duplicated ([floor_gen.h]).
+float body_mass_kg(std::uint16_t height_mm);
+
 // The eye height for a body of this stature (world units above Transform::pos).
 // Eyes sit a little below the crown; whoever holds the camera sees from here.
 float body_eye_height(std::uint16_t height_mm);

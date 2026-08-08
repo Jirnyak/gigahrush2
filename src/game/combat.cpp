@@ -165,8 +165,14 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
             }
             const float lenSq = dot(d, d);
             if (lenSq > 0.001f) {
+                // KNOCKBACK IS AN IMPULSE, so it divides by mass — p = m*v, the same law
+                // `impact.cpp` charges energy with. Normalised at kKnockbackRefMassKg.
+                const Mass* km = reg.try_get<Mass>(target);
+                const float kmass = km != nullptr && km->kg > 1.0f ? km->kg
+                                                                   : kKnockbackRefMassKg;
+                const float impulse = (2.5f / std::sqrt(lenSq)) * (kKnockbackRefMassKg / kmass);
                 auto& vel = reg.get<Velocity>(target);
-                vel.v = vel.v + d * (2.5f / std::sqrt(lenSq));
+                vel.v = vel.v + d * impulse;
             }
         }
     }
