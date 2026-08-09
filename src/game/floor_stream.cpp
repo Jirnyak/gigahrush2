@@ -9,6 +9,7 @@
 #include "game/floor_gen.h"   // generate_floor
 #include "game/nav_cache.h"   // nav_cache_name, save/load_nav_cache
 #include "game/population.h"  // seed_floor_from_spec
+#include "game/role.h"        // RoleId
 #include "game/save.h"        // place_body_safely — blind-seeded cells resolve here
 
 namespace giga::game {
@@ -92,6 +93,21 @@ std::uint32_t FloorStreamer::seed_all_modules(NpcPool& pool) {
         fm.candidate = mint_candidate(pool, cand);
         fm.seeded = true;
     }
+    
+    std::uint32_t roleCounts[5] = {};
+    for (NpcId i = 0; i < pool.count(); ++i) {
+        if (pool.valid(i)) {
+            std::uint8_t r = pool.role(i);
+            if (r < 5) roleCounts[r]++;
+        }
+    }
+    std::fprintf(stderr, "[aimem] roles resident=%u duty=%u medic=%u looter=%u cultist=%u\n",
+                 roleCounts[static_cast<std::uint8_t>(RoleId::Resident)],
+                 roleCounts[static_cast<std::uint8_t>(RoleId::Duty)],
+                 roleCounts[static_cast<std::uint8_t>(RoleId::Medic)],
+                 roleCounts[static_cast<std::uint8_t>(RoleId::Looter)],
+                 roleCounts[static_cast<std::uint8_t>(RoleId::Cultist)]);
+                 
     return static_cast<std::uint32_t>(pool.count() - before);
 }
 
