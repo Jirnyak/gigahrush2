@@ -133,6 +133,7 @@ registry (§1–§45) and outranks any doc that disagrees with a measured findin
 | [Docs/specs/13_BESTIARY_TRAITS_AND_SPAWN.md](Docs/specs/13_BESTIARY_TRAITS_AND_SPAWN.md) | 68 kinds, trait dispatch, spawn weighting, hunt throttle |
 | [Docs/specs/14_NEEDS_AND_SURVIVAL.md](Docs/specs/14_NEEDS_AND_SURVIVAL.md) | Five needs, digestion loop, encumbrance, cold-NPC gap |
 | [Docs/specs/15_BAKED_NAVIGATION.md](Docs/specs/15_BAKED_NAVIGATION.md) | 130 MiB/floor (peak 260), flight-field vs walk-field, 9 nav.md divergences |
+| [Docs/specs/16_ELEVATORS_AND_FLOOR_STREAMING.md](Docs/specs/16_ELEVATORS_AND_FLOOR_STREAMING.md) | 16 shafts not 32, 6.4s revisit vs 130ms first visit, no floor stash |
 
 Each spec opens with **what is already built** so no session re-specifies working
 code, and every claim carries a `file:line`.
