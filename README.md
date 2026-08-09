@@ -102,6 +102,43 @@
 
 ---
 
+## 📚 Documentation Map
+
+`AGENTS.md` and `ARCHITECTURE.md` both state that this README orchestrates the
+per-system docs; until 2026-08-09 no such index existed here. This is it.
+
+**Authority, in order.** [AGENTS.md](AGENTS.md) (hard rules, working method) →
+[ARCHITECTURE.md](ARCHITECTURE.md) (layers + the owner's game manifesto) → the
+per-system files below. [master_prompt.md](master_prompt.md) wins on "what state
+is the game layer in and what's next"; [problems.md](problems.md) is the defect
+registry (§1–§45) and outranks any doc that disagrees with a measured finding.
+
+**Design specs & roadmap** — the forward-looking layer, added 2026-08-09:
+
+| Document | Scope |
+|---|---|
+| [Docs/MASTER_ROADMAP.md](Docs/MASTER_ROADMAP.md) | Phased plan 0→6, dependency graph, per-phase acceptance number |
+| [Docs/specs/01_ALIFE_AND_UTILITY_AI.md](Docs/specs/01_ALIFE_AND_UTILITY_AI.md) | Social roles, affordance rows, panic, section hierarchy |
+| [Docs/specs/02_VOXEL_PHYSICS_AND_FLUIDS.md](Docs/specs/02_VOXEL_PHYSICS_AND_FLUIDS.md) | Carving gates, GPU fields, structural stress, gas/fire/smoke |
+| [Docs/specs/03_ECONOMY_MASS_AND_CRAFTING.md](Docs/specs/03_ECONOMY_MASS_AND_CRAFTING.md) | Wear/jamming/fouling, equip slots, junk crafting |
+| [Docs/specs/04_RENDER_AND_ACOUSTICS.md](Docs/specs/04_RENDER_AND_ACOUSTICS.md) | Post-process target, CRT toggle, acoustics from zero |
+| [Docs/specs/05_TESTING_AND_PERF_BUDGETS.md](Docs/specs/05_TESTING_AND_PERF_BUDGETS.md) | Isotropy gate, budget assertions, class-closing gates |
+
+Each spec opens with **what is already built** so no session re-specifies working
+code, and every claim carries a `file:line`.
+
+**Per-system contracts** — what the engine does today:
+
+| Layer | Documents |
+|---|---|
+| World / voxels | [world.md](world.md) · [voxels.md](voxels.md) · [fields.md](fields.md) · [gravity.md](gravity.md) · [destruct.md](destruct.md) |
+| Simulation | [physics.md](physics.md) · [controller.md](controller.md) · [camera.md](camera.md) · [fluid.md](fluid.md) · [diffusion.md](diffusion.md) · [nav.md](nav.md) |
+| Game layer | [floors.md](floors.md) · [elevators.md](elevators.md) · [npcs.md](npcs.md) · [ai.md](ai.md) · [macrosim.md](macrosim.md) · [monsters.md](monsters.md) · [items.md](items.md) · [props.md](props.md) · [antourage.md](antourage.md) |
+| Platform | [render.md](render.md) · [ecs.md](ecs.md) · [events.md](events.md) · [netcode.md](netcode.md) |
+| Cross-cutting | [performance.md](performance.md) · [jirnyak.md](jirnyak.md) · [worldgen.md](worldgen.md) (tombstone) |
+
+---
+
 ## 🔧 Build & Execution
 
 ### Prerequisites
