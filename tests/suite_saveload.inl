@@ -289,12 +289,12 @@ void wire_layout() {
     static_assert(kCraftingWire == 93);
     static_assert(kRangedWire == 16);
     static_assert(kCombatSaveWire == 21);
-    static_assert(kStatusWire == 42);
-    static_assert(kSaveFixedWire == 882);
+    static_assert(kStatusWire == 49);
+    static_assert(kSaveFixedWire == 889);
     static_assert(kFactionWire == 36);
-    static_assert(save_bytes_for(0) == 982);
-    static_assert(save_bytes_for(3) == 982 + 15);
-    static_assert(save_bytes_for(3, 100, 50) == 982 + 15 + 150);
+    static_assert(save_bytes_for(0) == 989);
+    static_assert(save_bytes_for(3) == 989 + 15);
+    static_assert(save_bytes_for(3, 100, 50) == 989 + 15 + 150);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -529,7 +529,8 @@ void floor_file_round_trips() {
 
     // The departure write. Keep the raw arrays for the bit-identity claim.
     std::vector<std::uint8_t> file;
-    floor_file_write(live, -26, file);
+    game::HermeticZones zonesOut;
+    floor_file_write(live, -26, zonesOut, file);
     CHECK(file.size() > kFloorHeaderWire);
     const std::vector<giga::CellType> typesAtSave = live.grid().types();
     const std::vector<giga::SubMask> masksAtSave = live.grid().masks();
@@ -543,7 +544,8 @@ void floor_file_round_trips() {
     genesis(twin);
     std::int32_t floorOut = 0;
     SaveError err = SaveError::Count;
-    CHECK(floor_file_read(file.data(), file.size(), twin, &floorOut, &err));
+    game::HermeticZones zonesIn;
+    CHECK(floor_file_read(file.data(), file.size(), twin, zonesIn, &floorOut, &err));
     CHECK(err == SaveError::None);
     CHECK(floorOut == -26);
     CHECK(std::memcmp(typesAtSave.data(), twin.grid().types().data(),
@@ -564,7 +566,8 @@ void floor_file_round_trips() {
         giga::World v;
         genesis(v);
         SaveError e = SaveError::None;
-        CHECK(!floor_file_read(bad.data(), bad.size(), v, nullptr, &e));
+        game::HermeticZones dummyZones;
+        CHECK(!floor_file_read(bad.data(), bad.size(), v, dummyZones, nullptr, &e));
         CHECK(e == want);
     };
     std::vector<std::uint8_t> bad = file;

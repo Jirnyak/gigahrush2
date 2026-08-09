@@ -297,6 +297,18 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
                 const int cz = wrap_macro(static_cast<int>(std::floor(tr.pos.z / kCellSize)));
                 room_recover(n, bit, dt, mem, id, cx, cy, cz, now);
                 ++out.recovering;
+
+                if (kRoomRecovery[floor_room_bit_index(bit)].sleep > 0.0f) {
+                    if (PsiPool* psi = reg.try_get<PsiPool>(e)) {
+                        psi->regenBank += dt * 1.0f; // 1%/sec
+                        if (psi->regenBank >= 1.0f) {
+                            int regen = static_cast<int>(psi->regenBank);
+                            psi->current = static_cast<std::int16_t>(psi->current + regen);
+                            if (psi->current > psi->max) psi->current = psi->max;
+                            psi->regenBank -= regen;
+                        }
+                    }
+                }
             }
         }
 

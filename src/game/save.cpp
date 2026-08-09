@@ -388,13 +388,13 @@ static_assert(kRpgWire == 12);
 static_assert(kCraftingWire == 93);
 static_assert(kRangedWire == 16);
 static_assert(kCombatSaveWire == 21);
-static_assert(kStatusWire == 42);
-static_assert(kSaveFixedWire == 850 + 28 + 4);  // 882
-static_assert(kSaveFixedWire == 882);
+static_assert(kStatusWire == 49);
+static_assert(kSaveFixedWire == 850 + 28 + 4 + 7);  // 889
+static_assert(kSaveFixedWire == 889);
 static_assert(kFactionWire == 36);
-// header 64 + fixed 892 + faction 36 = 992 for an empty run.
-static_assert(save_bytes_for(0) == 982);
-static_assert(save_bytes_for(0, 100, 50) == 982 + 150);
+// header 64 + fixed 889 + faction 36 = 989 for an empty run.
+static_assert(save_bytes_for(0) == 989);
+static_assert(save_bytes_for(0, 100, 50) == 989 + 150);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two
@@ -952,6 +952,7 @@ PlacedCell place_body_safely(Registry& reg, const World& world, Entity body,
 // carved/stair cells — single-digit MB against the raw 138 MB.
 
 std::size_t snapshot_floor(const World& w, int floorNumber,
+                           const HermeticZones& hermeticZones,
                            std::vector<std::uint8_t>& out) {
     out.clear();
     Writer wr(out);
@@ -1057,10 +1058,25 @@ std::size_t snapshot_floor(const World& w, int floorNumber,
             }
         }
     }
+
+    // HermeticZones (appended after sub-materials)
+    const std::size_t sealedWords = hermeticZones.sealed.size();
+    wr.u32(static_cast<std::uint32_t>(sealedWords));
+    for (std::size_t i = 0; i < sealedWords; ++i) {
+        wr.u64(hermeticZones.sealed[i]);
+    }
+    
+    const std::size_t doorCount = hermeticZones.doorCells.size();
+    wr.u32(static_cast<std::uint32_t>(doorCount));
+    for (std::size_t i = 0; i < doorCount; ++i) {
+        wr.u32(hermeticZones.doorCells[i]);
+    }
+
     return out.size();
 }
 
 bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
+                          HermeticZones& hermeticZones,
                           std::int32_t* floorOut) {
     if (!bytes || n == 0) return false;
     Reader r(bytes, n);
@@ -1145,14 +1161,41 @@ bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
         }
         if (at != kSubVoxels) return false;
     }
+
+    // HermeticZones
+    std::uint32_t sealedWords = 0;
+    r.u32(sealedWords);
+    // Be robust to older saves that might not have HermeticZones appended.
+    // If the reader hit the end (or fails), just assume empty zones.
+    if (!r.ok()) {
+        hermeticZones = HermeticZones();
+        return true; 
+    }
+    
+    if (sealedWords != (kMacroCells + 63) / 64) return false;
+    hermeticZones.sealed.assign(sealedWords, 0);
+    for (std::uint32_t i = 0; i < sealedWords && r.ok(); ++i) {
+        r.u64(hermeticZones.sealed[i]);
+    }
+
+    std::uint32_t doorCount = 0;
+    r.u32(doorCount);
+    // Sanity limit on door cells (prevent massive alloc on corrupted data)
+    if (doorCount > kMacroCells) return false;
+    hermeticZones.doorCells.resize(doorCount);
+    for (std::uint32_t i = 0; i < doorCount && r.ok(); ++i) {
+        r.u32(hermeticZones.doorCells[i]);
+    }
+
     // Every byte consumed, none left over — same discipline as save_read.
     return r.ok() && r.at() == n;
 }
 
 void floor_file_write(const World& w, int floorNumber,
+                      const HermeticZones& hermeticZones,
                       std::vector<std::uint8_t>& out) {
     std::vector<std::uint8_t> blob;
-    snapshot_floor(w, floorNumber, blob);
+    snapshot_floor(w, floorNumber, hermeticZones, blob);
 
     // SAY IT when the writer outgrows the reader. There is no guard here on
     // purpose — refusing to write would lose the floor silently, which is worse —
@@ -1180,6 +1223,7 @@ void floor_file_write(const World& w, int floorNumber,
 }
 
 bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
+                     HermeticZones& hermeticZones,
                      std::int32_t* floorOut, SaveError* err) {
     if (err) *err = SaveError::None;
     auto fail = [err](SaveError e) {
@@ -1200,7 +1244,7 @@ bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
         return fail(SaveError::SizeMismatch);
     if (crc32(bytes + kFloorHeaderWire, blobBytes) != crc)
         return fail(SaveError::BadChecksum);
-    if (!apply_floor_snapshot(w, bytes + kFloorHeaderWire, blobBytes, floorOut))
+    if (!apply_floor_snapshot(w, bytes + kFloorHeaderWire, blobBytes, hermeticZones, floorOut))
         return fail(SaveError::SizeMismatch);
     return true;
 }

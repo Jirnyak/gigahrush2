@@ -126,6 +126,21 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
 
     out.blocked = static_cast<std::int16_t>(raw - dmg);
 
+    if (ch == DamageChannel::Psi) {
+        if (PsiPool* psi = reg.try_get<PsiPool>(target)) {
+            psi->current = static_cast<std::int16_t>(psi->current - dmg);
+            if (psi->current <= 0) {
+                psi->current = 0;
+                if (StatusSet* s = reg.try_get<StatusSet>(target)) {
+                    status_apply(*s, StatusId::PsiStun, false);
+                }
+            }
+            out.hit = true;
+            out.applied = dmg;
+        }
+        return out;
+    }
+
     // Where the HP lives depends on what the target is, and that is the only
     // branch: everything above and below is common.
     std::int16_t* hp = nullptr;
