@@ -123,6 +123,11 @@ registry (§1–§45) and outranks any doc that disagrees with a measured findin
 | [Docs/specs/03_ECONOMY_MASS_AND_CRAFTING.md](Docs/specs/03_ECONOMY_MASS_AND_CRAFTING.md) | Wear/jamming/fouling, equip slots, junk crafting |
 | [Docs/specs/04_RENDER_AND_ACOUSTICS.md](Docs/specs/04_RENDER_AND_ACOUSTICS.md) | Post-process target, CRT toggle, acoustics from zero |
 | [Docs/specs/05_TESTING_AND_PERF_BUDGETS.md](Docs/specs/05_TESTING_AND_PERF_BUDGETS.md) | Isotropy gate, budget assertions, class-closing gates |
+| [Docs/specs/06_SAMOSBOR_AND_CRISIS.md](Docs/specs/06_SAMOSBOR_AND_CRISIS.md) | Fog field, hermetic zones, geometry-rewriting wave, PSI pool |
+| [Docs/specs/07_MAINCPP_DECOMPOSITION.md](Docs/specs/07_MAINCPP_DECOMPOSITION.md) | 5927-line main.cpp split: 8 extractable regions, AppState |
+| [Docs/specs/08_WORLD_FLOORS_AND_ROOMS.md](Docs/specs/08_WORLD_FLOORS_AND_ROOMS.md) | Single floor predicate chain, 11 room fields, anomalies |
+| [Docs/specs/09_COMBAT_BALLISTICS_AND_RPG.md](Docs/specs/09_COMBAT_BALLISTICS_AND_RPG.md) | Honest friendly fire, psi pool, INT attribute, status producers |
+| [Docs/specs/10_SAVE_AND_PERSISTENCE.md](Docs/specs/10_SAVE_AND_PERSISTENCE.md) | Save v10: samosbor clock, NPC memory, no-migration contract |
 
 Each spec opens with **what is already built** so no session re-specifies working
 code, and every claim carries a `file:line`.
