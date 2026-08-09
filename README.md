@@ -135,6 +135,7 @@ registry (§1–§45) and outranks any doc that disagrees with a measured findin
 | [Docs/specs/15_BAKED_NAVIGATION.md](Docs/specs/15_BAKED_NAVIGATION.md) | 130 MiB/floor (peak 260), flight-field vs walk-field, 9 nav.md divergences |
 | [Docs/specs/16_ELEVATORS_AND_FLOOR_STREAMING.md](Docs/specs/16_ELEVATORS_AND_FLOOR_STREAMING.md) | 16 shafts not 32, 6.4s revisit vs 130ms first visit, no floor stash |
 | [Docs/specs/17_ITEM_DATA_AND_CONTAINERS.md](Docs/specs/17_ITEM_DATA_AND_CONTAINERS.md) | 442 items (not 446), 14 dead CSV columns, nowhere to store anything |
+| [Docs/specs/18_BUILD_GATES_AND_CI.md](Docs/specs/18_BUILD_GATES_AND_CI.md) | CI cannot configure (no Vulkan SDK step), 5 platform asymmetries, no -Werror |
 
 Each spec opens with **what is already built** so no session re-specifies working
 code, and every claim carries a `file:line`.
