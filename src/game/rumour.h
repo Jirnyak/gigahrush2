@@ -165,9 +165,9 @@ static_assert(kRumourLullSpeakMs > kSamosborWarningMs,
 // only one that could reach it.** This lived in rumour.cpp's anonymous namespace, so
 // `src/app/main.cpp` had no way to ask which faction holds a floor, and
 // `VendorKind` therefore stayed on Citizen forever: two of its three sell rates were
-// dead constants ([vendor.h]). Pair it with `vendor_kind_for` on floor arrival and the
-// rumour becomes information you can act on — walk into a Scientist floor and the same
-// haul is worth 8% more.
+// dead constants ([vendor.h]). Paired with `vendor_kind_for` on ALL THREE floor
+// arrival paths (lift, load, --shot), the rumour becomes information you can act
+// on — walk into a Scientist floor and the same haul is worth 8% more.
 //
 // O(bodies on the layer), one pass, no allocation. Called on arrival, never per tick.
 Faction dominant_faction(const Registry& reg, const NpcPool& pool, LayerId layer);

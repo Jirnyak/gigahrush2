@@ -4268,6 +4268,7 @@ int main(int argc, char** argv) {
                             // Per-floor clocks and channels reset, same as any
                             // arrival.
                             samosbor = game::samosbor_new_game(sbRng);
+                            vendorKind = game::vendor_kind_for(game::dominant_faction(reg, pool, nl));
                             rumourLine[0] = 0;
                             rumourAt = 0;
                             game::noise_clear(noiseField);
@@ -5860,6 +5861,7 @@ int main(int argc, char** argv) {
                         aim_player(reg, player);
                         LayerId nl = reg.get<Transform>(player).layer;
                         activeLayer = nl;
+                        vendorKind = game::vendor_kind_for(game::dominant_faction(reg, pool, nl));
                         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
                         refresh_floor_containers(reg, stack.layer(nl),
                                                  currentFloor, nl);
