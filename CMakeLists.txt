@@ -787,6 +787,24 @@ if(GIGA_BUILD_TESTS)
     set_tests_properties(source_rules PROPERTIES
         PASS_REGULAR_EXPRESSION "files_scanned=[0-9][0-9][0-9]")
 
+    add_test(NAME wired
+        COMMAND ${CMAKE_COMMAND} -DGIGA_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_wired.cmake)
+    set_tests_properties(wired PROPERTIES
+        PASS_REGULAR_EXPRESSION "GIGA_WIRED=PASS")
+
+    # Python gate for CSV columns (runs check_csv_columns.py)
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_FOUND)
+        add_test(NAME csv_columns
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_csv_columns.py)
+        set_tests_properties(csv_columns PROPERTIES
+            PASS_REGULAR_EXPRESSION "GIGA_CSV_COLUMNS=PASS")
+    else()
+        message(WARNING "Python3 not found. Skipping csv_columns ctest.")
+    endif()
+
+
     # Honest crowd benchmark: real floor + 16k wandering agents + real physics.
     # An executable, not a ctest (it measures, it doesn't pass/fail). Runs at the
     # global Release -O3 so the numbers reflect an optimized build. Threads come
