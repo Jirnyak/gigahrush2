@@ -446,7 +446,7 @@ PosY, NegZ, PosZ, Zero, Custom`); `set_regime()` на `:25-28` направля�
 |---|---|---|---|
 | `src/render/` | 8 212 (41 файл) | ~14 (`suite_props.inl`, только раскладка) | ~1 на 590 строк — **безголовость объясняет, но не отменяет** |
 | `src/app/main.cpp` | 5 927 | **0 прямых** | не линкуется ни в один тестовый бинарник |
-| `src/sim/cellular.*` | 1 484 | **0 ссылок из любого теста** | подтверждает [спеку 02](02_VOXEL_PHYSICS_AND_FLUIDS.md) |
+| `src/sim/cellular.*` | 1 492 | ~~0~~ → `suite_cellular.inl`, 116 строк | закрыто `e720f90`; **три утверждения из шести ссылок всё ещё не проверены** — [спека 20](20_CELLULAR_AUTOMATA.md) §5 |
 | `src/game/rumour.*` | `suite_samosborhud.inl` | **~250 строк, 24 CHECK** | тест `test_samosborhud_samosbor_rumours` |
 
 `main.cpp` — самая структурная из четырёх: наборы тестируют **системы, которые он

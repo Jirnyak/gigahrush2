@@ -137,9 +137,16 @@ registry (§1–§45) and outranks any doc that disagrees with a measured findin
 | [Docs/specs/17_ITEM_DATA_AND_CONTAINERS.md](Docs/specs/17_ITEM_DATA_AND_CONTAINERS.md) | 442 items (not 446), 14 dead CSV columns, nowhere to store anything |
 | [Docs/specs/18_BUILD_GATES_AND_CI.md](Docs/specs/18_BUILD_GATES_AND_CI.md) | CI cannot configure (no Vulkan SDK step), 5 platform asymmetries, no -Werror |
 | [Docs/specs/19_ECS_COMPONENTS_AND_ORDER.md](Docs/specs/19_ECS_COMPONENTS_AND_ORDER.md) | 39 components, 6 Velocity writers, Corpse loot lost on save |
+| [Docs/specs/20_CELLULAR_AUTOMATA.md](Docs/specs/20_CELLULAR_AUTOMATA.md) | 1492 unreachable lines, wired within the hour; the gravity fix is half-applied and the gate misses it |
+| [Docs/specs/21_RUMOURS_AND_INFORMATION.md](Docs/specs/21_RUMOURS_AND_INFORMATION.md) | A truth generator with no NPC listener; 4 of 9 kinds unreachable behind a one-line shim |
 
 Each spec opens with **what is already built** so no session re-specifies working
 code, and every claim carries a `file:line`.
+
+Specs 20 and 21 additionally carry a dated **what changed while this was being
+written** section: both subsystems were wired by a parallel session within the
+hour, so the "current state" half of a spec is perishable and is kept separable
+from the reasoning half on purpose.
 
 **Per-system contracts** — what the engine does today:
 
