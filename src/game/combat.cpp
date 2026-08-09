@@ -18,6 +18,7 @@
 
 #include "game/faction_relations.h"
 #include "game/mob_behaviour.h"
+#include "game/ai.h" // AiMemory and ai_remember_actor
 #include "game/mob_table.h"
 #include "game/monster_traits.h"
 #include "game/ranged_table.h"
@@ -82,7 +83,8 @@ bool entity_health(const Registry& reg, const NpcPool& pool, Entity e,
 DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
                           std::int16_t raw, DamageChannel ch, Entity source,
                           const MacroGrid* grid, ParticleBurstQueue* particles,
-                          const GravityField* gravity) {
+                          const GravityField* gravity, AiMemory* mem,
+                          double now) {
     DamageResult out;
     if (!reg.valid(target) || raw <= 0) return out;
     if (reg.all_of<Dead>(target)) return out;  // already scheduled to die
@@ -216,6 +218,14 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
                 static_cast<std::uint32_t>(entt::to_integral(target)) ^
                     (static_cast<std::uint32_t>(before) << 16) ^
                     static_cast<std::uint32_t>(out.applied));
+        }
+    }
+
+    if (mem && out.applied > 0) {
+        if (const NpcRef* targetNr = reg.try_get<NpcRef>(target)) {
+            if (const NpcRef* sourceNr = reg.try_get<NpcRef>(source)) {
+                ai_remember_actor(*mem, targetNr->id, MemFoe, sourceNr->id, 1.0f, now);
+            }
         }
     }
 
@@ -440,7 +450,9 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
                              NpcPool& pool, EventBus& bus,
                              LayerId layer, float dt, std::uint64_t tick,
                              ParticleBurstQueue* particles,
-                             const GravityField* gravity) {
+                             const GravityField* gravity,
+                             AiMemory* mem,
+                             double now) {
     // The camera holder, resolved ONCE per pass. It is a single entity that every
     // monster may want, so hoisting it out of the loop is free; crowd prey is
     // per-monster and cannot be hoisted the same way ([hunt.h]).

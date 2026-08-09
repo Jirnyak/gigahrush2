@@ -79,6 +79,8 @@ inline constexpr float kOverloadSleepDrainPerSec = 0.10f;
 // punished for the strength it paid for.
 inline constexpr float kNoiseLoadGain = 0.6f;
 
+class NoiseField;
+
 // What one body's load costs it. All three numbers are pure functions of
 // (carried, capacity) so they can be unit-tested without a registry.
 struct EncumbranceEffect {
@@ -108,12 +110,10 @@ struct EncumbranceTick {
 //
 // Writes `Mass` (body + load) on every body it visits, and charges the fatigue to
 // the pool's `Needs` row. Does NOT touch Velocity or Controller: the speed scale
-// is REPORTED, because the app already owns one place where every movement
-// multiplier is folded together and a second writer there is how two systems
-// start fighting over a body's pace.
+// is returned for the caller to apply.
 //
 // Runs anywhere in the tick before movement is resolved. No allocation.
 EncumbranceTick encumbrance_step(Registry& reg, NpcPool& pool, LayerId layer,
-                                 float dt, std::uint64_t tick);
+                                 float dt, std::uint64_t tick, NoiseField* noiseField = nullptr);
 
 } // namespace giga::game

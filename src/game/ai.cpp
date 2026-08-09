@@ -12,11 +12,15 @@
 #include "game/needs.h"       // needs_roll — substitute for an unseeded pool row
 #include "game/door.h"        // door_nearest_shelter — hermetic flee target (§23)
 #include "game/room_zone.h"   // room affordance table + baked fields (§27 legs a,b)
+#include "game/role.h"        // RoleTraits, role_traits()
 #include "sim/diffusion.h"    // diffusion_gradient — the flee steering field
 #include "world/field.h"      // Field<float>
 #include "world/macro_grid.h" // MacroGrid (open/wall test inside the gradient)
 #include "world/types.h"      // wrap_macro, kCellSize, kMacroDim
 #include "world/world.h"      // World — door_nearest_shelter needs const World&
+#include "world/lattice.h"    // LatticeNode, lattice_unpack, lattice_coord
+#include "world/nav.h"        // route_step, kFlowArrived
+#include "core/rng.h"         // hash3
 
 namespace giga::game {
 
@@ -261,7 +265,14 @@ void score_intents(const Perception& p, const Needs& needs,
     // per-body so a uniform crowd does not act in lockstep.
     //
     // Note for anyone measuring thrash: this jitter is constant in TIME (it is a
-    // function of identity and intent only), so it cannot itself cause flapping.
+    // Role traits (spec 01 section 3a.6). Applied BEFORE identity jitter.
+    const RoleTraits& rt = role_traits(static_cast<RoleId>(p.role));
+    out[IntentWork]   *= rt.workDrive;
+    out[IntentPatrol] *= rt.patrolDrive;
+    out[IntentSocial] *= rt.sociability;
+    out[IntentWork]   += rt.scavengeDrive * p.localScore[IntentWork] * (1.0f - threat);
+    out[IntentHeal]   += rt.careDrive * p.nearbyWounded01 * (1.0f - threat);
+
     // Time variation comes from the needs, the danger field and the stickiness.
     for (std::uint8_t i = 0; i < kIntentCount; ++i) {
         out[i] = clamp_score(
@@ -565,11 +576,22 @@ std::uint32_t ai_release(Registry& reg, LayerId layer) {
     return n;
 }
 
+void panic_publish_step(Field<float>& danger, int cx, int cy, int cz, float dt, float panic) {
+    danger.at(cx, cy, cz) += kPanicEmit * dt * panic;
+}
+
+void panic_publish_step(Field<float>& danger, const vec3& pos, float dt, float panic) {
+    const int cx = wrap_macro(static_cast<int>(std::floor(pos.x / kCellSize)));
+    const int cy = wrap_macro(static_cast<int>(std::floor(pos.y / kCellSize)));
+    const int cz = wrap_macro(static_cast<int>(std::floor(pos.z / kCellSize)));
+    panic_publish_step(danger, cx, cy, cz, dt, panic);
+}
+
 // --------------------------------------------------------------------------
 // ai_step — arbitration first, steering second. See ai.h for the contract, and
 // the file header for the ownership rule this enforces.
 // --------------------------------------------------------------------------
-AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
+AiTick ai_step(Registry& reg, NpcPool& pool, Field<float>* danger,
                const MacroGrid& grid, LayerId layer, double now, float dt,
                const AiConfig& cfg, AiMemory* mem,
                const DoorSet* doors, const World* world,
@@ -682,6 +704,7 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             p.maxHp = static_cast<float>(pool.max_hp(id));
             p.danger = dangerHere;
             p.currentIntent = brain.currentIntent;
+            p.role = pool.role(id);
             // Zeroed when hysteresis is off, so the two arms of the measurement
             // differ in exactly the mechanism under test and nothing else.
             p.stickinessAmount =
@@ -736,6 +759,12 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             }
         }
         brain.stateTimer += dt;
+
+        // Publish panic into danger field for emergency intents (R1).
+        if (danger != nullptr && intent_is_emergency(brain.currentIntent)) {
+            const FactionTraits& ft = faction_traits(pool.faction(id));
+            panic_publish_step(*danger, cx, cy, cz, dt, ft.panic);
+        }
 
         // --- Arbitrate, then steer ------------------------------------------
         // Ownership is decided EVERY tick, not only at re-plan, because the input
@@ -908,6 +937,11 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                 // sealed pocket, or a floor that has none). Fall through to wander.
             }
             if (owned) ++out.roomOwned;
+        } else if (brain.currentIntent == IntentPatrol) {
+            owned = true; // Claim the body so wander_step skips it.
+            if (!reg.all_of<PatrolPlan>(e)) {
+                reg.emplace<PatrolPlan>(e, PatrolPlan{});
+            }
         }
 
         ++out.byIntent[brain.currentIntent < kIntentCount
@@ -936,8 +970,73 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
         vel.v.y = dir.y * speed;
         // vel.v.z is intentionally untouched — physics_step owns it (gravity and
         // jump). Same rule as wander_step: this is locomotion, not flight.
-    }
+}
     return out;
+}
+
+void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
+                    const nav::FineNav& fine, LayerId layer, float dt) {
+    auto view = reg.view<AiBrain, PatrolPlan, const Transform, Velocity, const NpcRef>();
+    for (auto e : view) {
+        const auto& brain = view.get<AiBrain>(e);
+        if (brain.motion != static_cast<std::uint8_t>(MotionOwner::Ai)) continue;
+        if (brain.currentIntent != IntentPatrol) continue;
+
+        const auto& tr = view.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+
+        auto& plan = view.get<PatrolPlan>(e);
+        auto& vel = view.get<Velocity>(e);
+        const auto& nr = view.get<const NpcRef>(e);
+
+        const int cx = wrap_macro(static_cast<int>(std::floor(tr.pos.x / kCellSize)));
+        const int cy = wrap_macro(static_cast<int>(std::floor(tr.pos.y / kCellSize)));
+        const int cz = static_cast<int>(std::floor(tr.pos.z / kCellSize));
+        ivec3 myCell{cx, cy, cz};
+
+        if (plan.nodeFrom == plan.nodeTo) {
+            const std::uint32_t idSeed = identity_seed(nr.id);
+            plan.nodeTo = static_cast<std::uint8_t>(hash3(idSeed, plan.hops, kPatrolSalt) % kLatticeCount);
+        }
+
+        const LatticeNode n = lattice_unpack(plan.nodeTo);
+        ivec3 dest{lattice_coord(n.ix), lattice_coord(n.iy), lattice_coord(n.iz)};
+
+        const std::uint8_t stepDir = nav::route_step(coarse, fine, myCell, dest);
+
+        if (stepDir == nav::kFlowArrived) {
+            plan.hops++;
+            plan.nodeFrom = plan.nodeTo;
+            const std::uint32_t idSeed = identity_seed(nr.id);
+            plan.nodeTo = static_cast<std::uint8_t>(hash3(idSeed, plan.hops, kPatrolSalt) % kLatticeCount);
+            vel.v.x = 0.0f;
+            vel.v.y = 0.0f;
+        } else if (stepDir < 6) {
+            if (stepDir < 4) {
+                const int nx = wrap_macro(cx + nav::kNavDir[stepDir][0]);
+                const int ny = wrap_macro(cy + nav::kNavDir[stepDir][1]);
+                const float tx = (static_cast<float>(nx) + 0.5f) * kCellSize;
+                const float ty = (static_cast<float>(ny) + 0.5f) * kCellSize;
+                const float dx = wrap_delta_f(tr.pos.x, tx, kWorldExtent);
+                const float dy = wrap_delta_f(tr.pos.y, ty, kWorldExtent);
+                if (dx * dx + dy * dy > kMinFleeGrad2) {
+                    vec3 dir = normalize(vec3{dx, dy, 0.0f});
+                    vel.v.x = dir.x * kErrandSpeed;
+                    vel.v.y = dir.y * kErrandSpeed;
+                }
+            } else {
+                const float tx = (static_cast<float>(dest.x) + 0.5f) * kCellSize;
+                const float ty = (static_cast<float>(dest.y) + 0.5f) * kCellSize;
+                const float dx = wrap_delta_f(tr.pos.x, tx, kWorldExtent);
+                const float dy = wrap_delta_f(tr.pos.y, ty, kWorldExtent);
+                if (dx * dx + dy * dy > kMinFleeGrad2) {
+                    vec3 dir = normalize(vec3{dx, dy, 0.0f});
+                    vel.v.x = dir.x * kErrandSpeed;
+                    vel.v.y = dir.y * kErrandSpeed;
+                }
+            }
+        }
+    }
 }
 
 } // namespace giga::game

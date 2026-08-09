@@ -35,6 +35,7 @@
 
 #include "core/math.h"
 #include "game/mob_table.h"
+#include "game/prop_table.h"
 #include "core/tick.h"
 #include "core/wrap.h"
 #include "ecs/components.h"
@@ -77,6 +78,7 @@
 #include "game/floors/padic/padic.h"
 #include "game/prop_system.h"
 #include "game/investigate.h"
+#include "sim/cellular.h" // Sandpile stress driver — §20_CELLULAR_AUTOMATA
 #include "sim/fluid.h"
 #include "game/noise.h"
 #include "game/wander.h"
@@ -1811,6 +1813,15 @@ int main(int argc, char** argv) {
     // Declared up here rather than beside the ledger because the FIRST floor is set
     // up above the ledger, and a DoorSet declared later compiled as "undeclared
     // identifier" at the very site that has to build the starting floor's doors.
+    // Sandpile stress driver: seeds from geometry, sweeps at 5/s, arms only when a
+    // voxel destruction event deposits grains. Life and Creep remain unconnected —
+    // Life needs a windowed arena, Creep needs a game-design infection source.
+    // cellular_driver_on_floor_built MUST be called at every floor arrival (not the
+    // LayerId backstop inside cellular_tick, which cannot see recycled slots).
+    giga::CellularDriver stressDriver;
+    stressDriver.params.rule = giga::CellularRule::Sandpile;
+    stressDriver.params.topology = true; // enable collapses (z-slab removal)
+
     game::DoorSet doors;
     game::DoorTick doorTick{};      // last step's report, for the HUD
     std::uint32_t doorsBuilt = 0;   // on this floor, so the HUD can say "0 doors"
@@ -1943,6 +1954,10 @@ int main(int argc, char** argv) {
         World& w0 = stack.layer(reg.get<Transform>(player).layer);
         voxelMirror.upload_all(w0);
         if (mirrorVerify) voxelMirror.verify(w0);
+        // Arm the sandpile for floor 0. Called here (not inside do_ride) because
+        // the first ride is not taken — the initial floor is direct-built. [§20]
+        const LayerId l0 = reg.get<Transform>(player).layer;
+        giga::cellular_driver_on_floor_built(stressDriver, w0, l0);
     }
 
     InputState input;
@@ -2358,6 +2373,11 @@ int main(int argc, char** argv) {
         if (!ride.moved) return false;
         player = ride.player;
         currentFloor = ride.floor;
+
+        {
+            LayerId arrivalLayer = reg.valid(player) ? reg.get<Transform>(player).layer : static_cast<LayerId>(0);
+            vendorKind = game::vendor_kind_for(game::dominant_faction(reg, pool, arrivalLayer));
+        }
         // §24 discovery: landing on (or via) a lattice hub unlocks THIS floor
         // for the fast-travel network. Boarding the cabin is the discover act.
         if (landHub >= 0)
@@ -2407,6 +2427,10 @@ int main(int argc, char** argv) {
                 streamer.floor_seed_of(registry, currentFloor));
         doors.frozen = true;
         begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
+        // Arm/reseed the sandpile for the new floor AFTER geometry is final
+        // (doors stamped, nav built). The LayerId backstop inside cellular_tick
+        // is a guard, not the contract — it cannot see recycled slots. [§20]
+        giga::cellular_driver_on_floor_built(stressDriver, stack.layer(nl), nl);
         // Arrival geometry is final (floor file + doors stamped): re-snapshot
         // the GPU voxel mirror for the recycled World object.
         voxelMirror.upload_all(stack.layer(nl));
@@ -2744,7 +2768,7 @@ int main(int argc, char** argv) {
             // field's only producer) is not wired into the tick yet, so ai_step's
             // threat term reads 0 and nobody flees. Wiring diffusion in is the
             // open task; the fetch stays so that wiring is one call away.
-            [[maybe_unused]] const Field<float>* danger = activeWorld.fields().find<float>("danger");
+            [[maybe_unused]] Field<float>* danger = activeWorld.fields().find<float>("danger");
             [[maybe_unused]] const MacroGrid& activeGrid = activeWorld.grid();
             int guard = 0;
             while (simAccum >= kSimDt && guard++ < 8) {
@@ -3338,6 +3362,7 @@ int main(int argc, char** argv) {
                         }
                     }
                 }
+                game::ai_patrol_step(reg, nav.coarse(), nav.fine(), activeLayer, kSimDt);
                 game::wander_step(reg, stack.layer(activeLayer).grid(), pool,
                                   nav.coarse(),
                                   nav.fine(), activeLayer, simTick);
@@ -3726,19 +3751,40 @@ int main(int argc, char** argv) {
                         if (!handled) {
                             if (const auto* nrg = reg.try_get<game::NpcRef>(player)) {
                                 if (pool.valid(nrg->id)) {
-                                    game::ReliefResult rr = game::relieve_needs(pool.needs(nrg->id), 100.0f, 100.0f);
+                                    bool toiletHit = false;
+                                    const vec3& playerPos = reg.get<const Transform>(player).pos;
+                                    for (auto [pe, pt, pm] : reg.view<const Transform, const game::PropMesh>().each()) {
+                                        if (pm.shape == game::prop_def(game::PropId::ToiletPan).shape) {
+                                            float dx = pt.pos.x - playerPos.x;
+                                            float dy = pt.pos.y - playerPos.y;
+                                            float dz = pt.pos.z - playerPos.z;
+                                            if (dx*dx + dy*dy + dz*dz <= 4.0f) {
+                                                toiletHit = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    
+                                    game::ReliefResult rr;
+                                    if (toiletHit) {
+                                        rr = game::relieve_needs(pool.needs(nrg->id), 70.0f, 65.0f);
+                                    } else {
+                                        rr = game::relieve_needs(pool.needs(nrg->id), 40.0f, 35.0f);
+                                    }
+
                                     if (rr.pee > 0.0f || rr.poo > 0.0f) {
                                         // The puddle: urine through the same
                                         // universal stain layer blood uses —
                                         // mixing with anything already there
                                         // is just channel addition.
-                                        if (rr.pee > 0.0f)
+                                        if (!toiletHit && rr.pee > 0.0f) {
                                             stain_splat(stack.layer(activeLayer),
                                                         ppos, vec3{0, 0, -1.0f},
                                                         1.4f, /*rays=*/14,
                                                         kStainUrine,
                                                         static_cast<std::uint32_t>(simTick),
                                                         stainDirty);
+                                        }
                                         std::snprintf(elevDiagLine, sizeof(elevDiagLine),
                                                       "PHYSIOLOGICAL RELIEF: CLEARED BLADDER (%.0f) & BOWEL (%.0f) PRESSURE",
                                                       rr.pee, rr.poo);
@@ -3963,7 +4009,7 @@ int main(int argc, char** argv) {
                     const game::NpcId sp = game::nearest_speaker(reg, activeLayer);
                     if (sp != game::kInvalidNpc) {
                         const game::Rumour ru = game::rumour_for(
-                            reg, pool, sp, activeLayer, currentFloor);
+                            reg, pool, sp, activeLayer, currentFloor, samosbor);
                         if (game::rumour_text(ru, rumourLine, sizeof(rumourLine)))
                             rumourAt = simTick;
                         // The same body may also be hiring. One proximity sweep, two
@@ -4000,7 +4046,7 @@ int main(int argc, char** argv) {
                 // sleep bar the clock then reads for its exhaustion penalty — a
                 // load taxes you on the tick you carry it, not one tick later.
                 encumbrance = game::encumbrance_step(reg, pool, activeLayer, kSimDt,
-                                                     simTick);
+                                                     simTick, &noiseField);
                 needs = game::needs_step(reg, pool, activeLayer, kSimDt, &roomZones);
                 needsHpLost += needs.hpLost;
                 // The other half of the acceptance trail. `bodies` says the clock is
@@ -4047,7 +4093,7 @@ int main(int argc, char** argv) {
                 // should be sweepable in the same tick if the inventory overflowed
                 // onto the floor. [container.h]
                 const std::int32_t fromBox =
-                    game::loot_containers_step(reg, pool, activeLayer, &noiseField);
+                    game::loot_containers_step(reg, pool, activeLayer, &noiseField, &aiMem, simNow);
                 if (fromBox != 0) {
                     loot += fromBox;
                     containerTake += fromBox;
@@ -4249,6 +4295,7 @@ int main(int argc, char** argv) {
                                                            currentFloor));
                             doors.frozen = true;
                             begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
+                            giga::cellular_driver_on_floor_built(stressDriver, stack.layer(nl), nl); // [§20]
                             if (propPass.ready()) {
                                 merge_ecs_prop_meshes(reg, nl, propPass,
                                   streamer.antourage_at_layer(registry, nl),
@@ -4510,6 +4557,26 @@ int main(int argc, char** argv) {
                 // pressure/light) on the GPU as async compute, so wiring the CPU
                 // `fluid_step` into this tick would install the very thing the
                 // performance mandate forbids. Owner call, not a TODO to grab.
+                // CELLULAR SANDPILE TICK. Runs at 5/s (every 25 sim ticks) and
+                // only when the floor has been stressed. Returns true when a
+                // sweep ran. `last.changes > 0` means grid cells were flipped
+                // (collapses); we owe the diffusion bitset and the GPU mirror.
+                if (activeLayer != kInvalidLayer &&
+                    giga::cellular_tick(stressDriver,
+                                        stack.layer(activeLayer),
+                                        activeLayer, simTick)) {
+                    if (stressDriver.last.changes > 0) {
+                        // Tell the diffusion sweep its walkability bitset is
+                        // stale. Blunt, idempotent, one bool — see [cellular.h].
+                        giga::cellular_mark_geometry_dirty(stressDriver.scratch);
+                        // GPU mirror: no per-cell list from the sandpile, so
+                        // re-upload the whole active layer. Collapses are rare
+                        // (stress >= collapseAt == 10) so the fence-wait cost
+                        // is acceptable. [voxel_mirror.h §future mutators]
+                        if (voxelMirror.ready())
+                            voxelMirror.upload_all(stack.layer(activeLayer));
+                    }
+                }
                 simNow += kSimDt;
                 simAccum -= kSimDt;
             }
@@ -4807,10 +4874,10 @@ int main(int argc, char** argv) {
                 // produced it, because a number that moves when you level up should
                 // say why on the same line.
                 if (reg.valid(player)) {
-                    if (const auto* nr = reg.try_get<game::NpcRef>(player)) {
-                        if (pool.valid(nr->id)) {
+                    if (const auto* pnr = reg.try_get<game::NpcRef>(player)) {
+                        if (pool.valid(pnr->id)) {
                             const std::uint32_t heldG =
-                                game::inventory_mass_g(pool.inventory(nr->id));
+                                game::inventory_mass_g(pool.inventory(pnr->id));
                             // The sheet is an ECS component, not a pool column
                             // ([combat.h] "RpgStats: copy from -> to"), so a body
                             // with none reads as Str 0 rather than as no budget.
@@ -5033,9 +5100,11 @@ int main(int argc, char** argv) {
                     for (int qi = 1; qi <= static_cast<int>(game::kQuestCount); ++qi) {
                         char qline[320];
                         const game::QuestId qid = static_cast<game::QuestId>(qi);
-                        if (game::quest_line(quests, qid, qline, sizeof(qline)))
+                        if (game::quest_line(quests, qid, qline, sizeof(qline))) {
                             ImGui::TextColored(ImVec4(0.70f, 0.98f, 0.60f, 1.0f),
                                                "  quest: %s", qline);
+                            // intentionally deferred: quest_objective_text(qid, ...)
+                        }
                     }
                 }
             }
@@ -5571,10 +5640,10 @@ int main(int argc, char** argv) {
             {
                 static std::vector<vec4> pushBodies;
                 pushBodies.clear();
-                for (auto e :
+                for (auto pe :
                      reg.view<const Transform, const AABB, const Renderable>()) {
-                    if (reg.all_of<StaticPropTag>(e)) continue;
-                    const Transform& tr = reg.get<const Transform>(e);
+                    if (reg.all_of<StaticPropTag>(pe)) continue;
+                    const Transform& tr = reg.get<const Transform>(pe);
                     if (tr.layer != activeLayer) continue;
                     pushBodies.push_back(
                         vec4{tr.pos.x, tr.pos.y, tr.pos.z, 0.9f});
@@ -5814,6 +5883,7 @@ int main(int argc, char** argv) {
                                 streamer.floor_seed_of(registry, currentFloor));
                         doors.frozen = true;
                         begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
+                        giga::cellular_driver_on_floor_built(stressDriver, stack.layer(nl), nl); // [§20]
                         voxelMirror.upload_all(stack.layer(nl));
                         if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
                         // Same transition autosave as the keyboard path.

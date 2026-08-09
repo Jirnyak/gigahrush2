@@ -221,7 +221,7 @@ void visit_book(Ar& ar, B& b) {
     ar.i64(b.earned);
 }
 
-// All eight floats, including the two "pending" queues and `hpDebt`. Dropping the
+// All nine floats, including the two "pending" queues and `hpDebt`. Dropping the
 // pending queues would silently forgive a bladder you had already filled, and dropping
 // `hpDebt` would forgive sub-1-HP attrition — the exact fraction the elevator test pins
 // as surviving a body swap ([suite_needs.inl] survives_the_body_swap). A save is a
@@ -236,6 +236,7 @@ void visit_needs(Ar& ar, N& n) {
     ar.f32(n.pendingPee);
     ar.f32(n.pendingPoo);
     ar.f32(n.hpDebt);
+    ar.f32(n.hpBank);
     ar.u8(n.seeded);
 }
 
@@ -379,7 +380,7 @@ static_assert(sizeof(SaveHeader) == kSaveHeaderWire,
               "still 64 and only this assert needs relaxing");
 static_assert(kLedgerWire == 8 + 8 + 4 + 4 + 4 + 4 + 1);
 static_assert(kContractWire == 4 + 2 + 4 + 4 + 4 + 1 + 1 + 1);
-static_assert(kNeedsWire == 8 * 4 + 1);
+static_assert(kNeedsWire == 9 * 4 + 1);
 static_assert(kInventoryWire == 64 * 4);
 // kSaveFixedWire: ledger+book+player + v7 rpg(12)+craft(93) + v8 combat(21)
 // + v9 status(42) + quest log. Was 850 in v8; +42 = 892 in v9.
@@ -388,12 +389,12 @@ static_assert(kCraftingWire == 93);
 static_assert(kRangedWire == 16);
 static_assert(kCombatSaveWire == 21);
 static_assert(kStatusWire == 42);
-static_assert(kSaveFixedWire == 850 + 28);  // 878
-static_assert(kSaveFixedWire == 878);
+static_assert(kSaveFixedWire == 850 + 28 + 4);  // 882
+static_assert(kSaveFixedWire == 882);
 static_assert(kFactionWire == 36);
 // header 64 + fixed 892 + faction 36 = 992 for an empty run.
-static_assert(save_bytes_for(0) == 978);
-static_assert(save_bytes_for(0, 100, 50) == 978 + 150);
+static_assert(save_bytes_for(0) == 982);
+static_assert(save_bytes_for(0, 100, 50) == 982 + 150);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two

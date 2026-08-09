@@ -5,6 +5,7 @@
 #include <cstring> // std::memcmp, std::memset — the group zero test and the row clear
 
 #include "core/rng.h"         // hash2 / hash_u32 — the deterministic window placement
+#include "world/gravity.h"    // regime_down
 #include "world/lattice.h"    // lattice_coord, kLatticeSpacing — the columns to protect
 #include "world/macro_grid.h" // MacroGrid, SubMask
 #include "world/types.h"      // kMacroCells, kMacroDim, macro_index, wrap_macro
@@ -94,17 +95,10 @@ inline bool near_lattice_axis(int c) {
 // increment A). Excluding a 3x3 column around each, through all 128 z, costs
 // 16 * 9 * 128 = 18,432 cells = 0.88% of the world and makes "a Life sweep walled up a
 // lift shaft" structurally impossible rather than merely unlikely.
-// ...AND IT IS NOT ENFORCED. The predicate that expressed it (`lattice_protected`
-// = near_lattice_axis(x) && near_lattice_axis(y)) had ZERO callers and was removed
-// on 2026-08-06 because it warned as unused — which is the only reason anyone
-// noticed that the safety property above is a description of an intention, not of
-// behaviour. Nothing in this file excludes the lift shafts from a sweep.
-//
-// It never bit because this whole translation unit is unreachable: `cellular_step`,
-// `cellular_tick` and `CellularDriver` have no callers anywhere in src/ or tests/
-// ([problems.md] section 13). Whoever wires the sandpile up owes this predicate
-// back, at the sweep, before the first Life pass runs — otherwise a sweep really
-// can wall up a shaft and take vertical connectivity with it.
+// IT IS ENFORCED structurally by the `writable` bitmask. `cellular_refresh_geometry`
+// strips out the lattice columns from the region, so any rule that gates its edits
+// on `writable` (Sandpile collapse, Life generation) inherently respects the lattice.
+// A Life sweep walling up a lift shaft is structurally impossible.
 
 // Squared toroidal cell distance against the keep-out sphere. Called only for a cell
 // that would actually FLIP, so this is O(changes) and not O(cells).
@@ -362,8 +356,11 @@ void sweep_sandpile(World& world, CellularScratch& scratch, const CellularParams
                     // swap. Discharges only when a slab was actually removed, so the
                     // sink stays tied to an observable event.
                     if (collapseAt > 0 && next >= collapseAt) {
-                        const std::size_t below = i + g.zm;
-                        const int zb = wrap_macro(z - 1);
+                        const CellStep dn = regime_down(world.gravity().regime);
+                        const int xb = wrap_macro(x + dn.x);
+                        const int yb = wrap_macro(y + dn.y);
+                        const int zb = wrap_macro(z + dn.z);
+                        const std::size_t below = macro_index(xb, yb, zb);
                         if (!bit_at(open, below) && bit_at(writable, below) &&
                             !in_keepout(params, x, y, zb)) {
                             grid.clear_cell(x, y, zb);
@@ -816,14 +813,6 @@ CellularStep cellular_step(World& world, CellularScratch& scratch,
     return out;
 }
 
-CellularStep cellular_step(World& world, const CellularParams& params) {
-    // One code path, so this cannot drift from the scratch form. The cost of the
-    // convenience is stated in the header: a 2.00 MiB allocation and a full 128 MiB
-    // bitset rebuild, both discarded when this returns.
-    CellularScratch once;
-    return cellular_step(world, once, params);
-}
-
 // ---------------------------------------------------------------------------
 // The driver
 // ---------------------------------------------------------------------------
@@ -858,6 +847,16 @@ void cellular_driver_on_floor_built(CellularDriver& driver, World& world, LayerI
     }
 }
 
+// ---------------------------------------------------------------------------
+// RULE DESIGN DECISION: ONLY `Sandpile` IS WIRED BY DEFAULT
+// Life and Creep remain unconnected in the main loop for architectural reasons:
+//   1. `Life` without a windowing system will saturate a 2.1M cell floor immediately,
+//      doing heavy work everywhere and never sleeping. It requires arena/windowing.
+//   2. `Creep` requires a game-design source (an active hazard or infection origin)
+//      to seed it, otherwise the field remains strictly zero forever.
+// Sandpile requires neither: it seeds from the map (collapse stress) and reacts
+// to voxel destruction, so it is the only rule active globally.
+// ---------------------------------------------------------------------------
 bool cellular_tick(CellularDriver& driver, World& world, LayerId layer,
                    std::uint64_t simTick) {
     // The sim is stepping a different layer than the bitsets were built from. Rebuild

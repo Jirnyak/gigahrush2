@@ -119,6 +119,7 @@ int g_checks = 0;
 #include "suite_console.inl"
 #include "suite_keybind.inl"
 #include "suite_particles.inl"
+#include "suite_cellular.inl"
 static void test_inventory() {
     // Compile-time layout contract: a static_assert, not a CHECK. It is a fact
     // about the type, so it belongs to the build, not to a test run.
@@ -4342,6 +4343,7 @@ int main() {
     test_floor_bucket_index();
     test_stream_migration_reembodies();
     test_props_game_all();
+    test_cellular_all();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
 

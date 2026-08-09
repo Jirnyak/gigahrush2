@@ -167,10 +167,15 @@ struct Needs {
     float pendingPee = 0.0f;  // drunk/eaten but not yet digested into `pee`
     float pendingPoo = 0.0f;  // ditto for `poo`
     float hpDebt = 0.0f;      // sub-1-HP attrition carried between ticks
+    // Fractional heal bank: HP is integer on the crowd body, so "+1.2 HP/s" cannot
+    // be expressed directly. Bank accumulates the fraction; the whole part spills
+    // into pool.hp() each tick in needs_step. Same shape as hpDebt on the damage side.
+    // Used by: Medical room recovery (kRoomRecovery) and Medic role (careDrive path).
+    float hpBank = 0.0f;
     std::uint8_t seeded = 0;  // 0 = never rolled (see above)
     std::uint8_t pad_[3] = {};
 };
-static_assert(sizeof(Needs) == 36, "Needs must stay a tight 36-byte row");
+static_assert(sizeof(Needs) == 40, "Needs must stay a tight 40-byte row (hpBank added 2026-08-09)");
 static_assert(alignof(Needs) == 4);
 
 // Semantics of Relationship::affinity — the per-NPC social graph ([macrosim.md]
@@ -514,6 +519,10 @@ public:
     std::uint8_t&  sex(NpcId id)     { return sex_[id]; }      // NpcSex code
     std::uint16_t& height_mm(NpcId id) { return heightMm_[id]; } // stature, mm
     std::uint8_t&  level(NpcId id)   { return level_[id]; }
+    // Role assignment (RoleId stored as uint8). LIVE column: sized by spawn().
+    // Initialised from role_for(id, floorKind) at floor seeding; may be overridden
+    // by game events (e.g. Resident -> Looter after samosbor). See role.h.
+    std::uint8_t&  role(NpcId id)    { return role_[id]; }
     // The 8-slot generic attribute block. Addressed by index; slot->name mapping
     // lives in a data table, not here (see kAttrSlots).
     std::array<std::uint8_t, kAttrSlots>& attrs(NpcId id) { return attr_[id]; }
@@ -573,14 +582,17 @@ private:
     std::vector<std::uint8_t>  sex_;    // LIVE — NpcSex code (0 = unset)
     std::vector<std::uint16_t> heightMm_; // stature in mm; drives embodied AABB
     std::vector<std::uint8_t>  level_;  // LIVE
-    // LIVE — generic sheet block, 8 B/row
+    // LIVE -- role archetype (RoleId as uint8). 1 B/row = 1.0 MiB at capacity.
+    // Initialised from role_for() at floor seeding; writable for story overrides.
+    std::vector<std::uint8_t>  role_;   // LIVE -- see role.h
+    // LIVE -- generic sheet block, 8 B/row
     std::vector<std::array<std::uint8_t, kAttrSlots>> attr_;
     std::vector<std::array<char, kNameLen>> name_;      // DEMAND
     std::vector<std::array<char, kNameLen>> surname_;   // DEMAND
-    std::vector<std::array<Relationship, kRelSlots>> rel_; // DEMAND — 128 B/row
+    std::vector<std::array<Relationship, kRelSlots>> rel_; // DEMAND -- 128 B/row
     std::vector<Inventory> inv_;
 
-    std::vector<Needs> needs_;   // survival clock ([needs.h]); 36 B/row
+    std::vector<Needs> needs_;   // survival clock ([needs.h]); 40 B/row (was 36, hpBank added)
     std::uint32_t alive_ = 0;
 
     // LIVE — reuse counter per slot, bumped by kill(). 2 B/row (2.0 MiB at capacity,

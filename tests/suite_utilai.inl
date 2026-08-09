@@ -77,6 +77,7 @@
 
 #include "game/ai.h"
 #include "game/needs.h"   // needs_roll — NOT reachable from game_test.cpp's prelude
+#include "game/role.h"
 #include "game/wander.h"  // wander_init / wander_step / kWanderPeriod
 #include "sim/diffusion.h"
 #include "world/field.h"
@@ -1530,4 +1531,197 @@ static void test_utilai_all() {
                      decisionsBefore, before, digest_memory(mem, id),
                      kIntentName[reg.get<AiBrain>(e).currentIntent]);
     }
+
+    // ======================================================================
+    // 16. PANIC VIA DIFFUSION PUBLISH (R1).
+    // ======================================================================
+    {
+        Field<float> danger(0.0f);
+        const float panicFactor = 0.5f;
+        const int cx = 10, cy = 12, cz = 1;
+        CHECK(danger.at(cx, cy, cz) == 0.0f);
+
+        panic_publish_step(danger, cx, cy, cz, kSimDt, panicFactor);
+        const float expected = kPanicEmit * kSimDt * panicFactor;
+        CHECK(std::abs(danger.at(cx, cy, cz) - expected) < 1e-5f);
+
+        // Also test via ai_step when body is in an emergency intent
+        Registry reg;
+        NpcPool pool;
+        pool.init();
+        NpcId id = 0;
+        Entity e = make_body(reg, pool, 15, 15, 1, Faction::Citizens, id);
+        CHECK(ai_init(reg, kLayer) == 1u);
+
+        AiBrain& brain = reg.get<AiBrain>(e);
+        brain.currentIntent = IntentFlee; // emergency intent!
+        const float dangerBefore = danger.at(15, 15, 1);
+
+        AiConfig cfg;
+        cfg.enabled = true;
+        MacroGrid grid;
+        ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg);
+
+        const float citPanic = faction_traits(static_cast<std::uint16_t>(Faction::Citizens)).panic;
+        const float expectedEmit = kPanicEmit * kSimDt * citPanic;
+        CHECK(std::abs(danger.at(15, 15, 1) - (dangerBefore + expectedEmit)) < 1e-5f);
+        std::fprintf(stdout, "[utilai] R1 panic publish verified: emitted %.4f into danger field\n", expectedEmit);
+    }
+
+    // ======================================================================
+    // 17. ROLE SCORING INTEGRATION (R6).
+    // ======================================================================
+    {
+        Needs needs = needs_roll(9999u);
+        Perception p;
+        p.idSeed = identity_seed(1u);
+        p.faction = static_cast<std::uint16_t>(Faction::Citizens);
+        p.hp = 100.0f;
+        p.maxHp = 100.0f;
+
+        float scoresResident[kIntentCount];
+        float scoresDuty[kIntentCount];
+        float scoresMedic[kIntentCount];
+
+        p.role = static_cast<std::uint8_t>(RoleId::Resident);
+        score_intents(p, needs, scoresResident);
+
+        p.role = static_cast<std::uint8_t>(RoleId::Duty);
+        score_intents(p, needs, scoresDuty);
+
+        p.role = static_cast<std::uint8_t>(RoleId::Medic);
+        score_intents(p, needs, scoresMedic);
+
+        const RoleTraits& rtDuty = role_traits(RoleId::Duty);
+        const RoleTraits& rtRes = role_traits(RoleId::Resident);
+        const RoleTraits& rtMedic = role_traits(RoleId::Medic);
+
+        // Duty has higher patrolDrive and workDrive than Resident
+        CHECK(rtDuty.patrolDrive > rtRes.patrolDrive);
+        CHECK(scoresDuty[IntentPatrol] > scoresResident[IntentPatrol]);
+
+        // Medic has higher careDrive than Duty
+        CHECK(rtMedic.careDrive > rtDuty.careDrive);
+
+        std::fprintf(stdout, "[utilai] R6 role scoring verified: Resident patrol=%.1f, Duty patrol=%.1f\n",
+                     scoresResident[IntentPatrol], scoresDuty[IntentPatrol]);
+    }
+
+    // ======================================================================
+    // 18. ADVERSARIAL EDGE CASE TESTS (R1 & R6).
+    // ======================================================================
+    {
+        // Edge Case 1: Null danger field pointer in ai_step with emergency intent
+        {
+            Registry reg;
+            NpcPool pool;
+            pool.init();
+            NpcId id = 0;
+            Entity e = make_body(reg, pool, 20, 20, 1, Faction::Citizens, id);
+            CHECK(ai_init(reg, kLayer) == 1u);
+
+            AiBrain& brain = reg.get<AiBrain>(e);
+            brain.currentIntent = IntentFlee; // Emergency intent!
+
+            AiConfig cfg;
+            cfg.enabled = true;
+            MacroGrid grid;
+
+            // Calling ai_step with danger = nullptr must NOT dereference null or crash
+            const AiTick tick = ai_step(reg, pool, nullptr, grid, kLayer, 0.0, kSimDt, cfg);
+            CHECK(tick.considered == 1u);
+        }
+
+        // Edge Case 2: 0 dt in panic_publish_step
+        {
+            Field<float> danger(10.0f);
+            const int cx = 5, cy = 5, cz = 1;
+            panic_publish_step(danger, cx, cy, cz, 0.0f, 0.5f);
+            CHECK(danger.at(cx, cy, cz) == 10.0f);
+        }
+
+        // Edge Case 3: Negative panic value in panic_publish_step
+        {
+            Field<float> danger(10.0f);
+            const int cx = 5, cy = 5, cz = 1;
+            const float negPanic = -0.5f;
+            panic_publish_step(danger, cx, cy, cz, kSimDt, negPanic);
+            const float expected = 10.0f + kPanicEmit * kSimDt * negPanic;
+            CHECK(std::abs(danger.at(cx, cy, cz) - expected) < 1e-5f);
+        }
+
+        // Edge Case 4: Emergency vs Non-Emergency Intents panic emission
+        {
+            Field<float> danger(0.0f);
+            Registry reg;
+            NpcPool pool;
+            pool.init();
+            MacroGrid grid;
+            AiConfig cfg;
+            cfg.enabled = true;
+
+            // Emergency intents must publish panic:
+            const std::uint8_t emergencies[] = { IntentSafety, IntentCombat, IntentFlee, IntentHeal };
+            for (std::uint8_t intent : emergencies) {
+                NpcId id = 0;
+                Entity e = make_body(reg, pool, 30, 30, 1, Faction::Citizens, id);
+                ai_init(reg, kLayer);
+                reg.get<AiBrain>(e).currentIntent = intent;
+                const float before = danger.at(30, 30, 1);
+                ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg);
+                const float after = danger.at(30, 30, 1);
+                CHECK(after > before);
+            }
+
+            // Non-emergency intents must NOT publish panic:
+            const std::uint8_t nonEmergencies[] = {
+                IntentToilet, IntentDrink, IntentEat, IntentSleep,
+                IntentWork, IntentSocial, IntentPatrol, IntentFactionAssault, IntentWander
+            };
+            for (std::uint8_t intent : nonEmergencies) {
+                NpcId id = 0;
+                Entity e = make_body(reg, pool, 40, 40, 1, Faction::Citizens, id);
+                ai_init(reg, kLayer);
+                reg.get<AiBrain>(e).currentIntent = intent;
+                const float before = danger.at(40, 40, 1);
+                ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg);
+                const float after = danger.at(40, 40, 1);
+                CHECK(after == before);
+            }
+        }
+
+        // Edge Case 5: Invalid Role IDs in role_traits & score_intents
+        {
+            // Out-of-bounds RoleId (e.g. 255 or 10) must fall back safely to Resident (index 0)
+            const RoleTraits& rtInvalid255 = role_traits(static_cast<RoleId>(255));
+            const RoleTraits& rtInvalid10  = role_traits(static_cast<RoleId>(10));
+            const RoleTraits& rtResident   = role_traits(RoleId::Resident);
+
+            CHECK(rtInvalid255.workDrive == rtResident.workDrive);
+            CHECK(rtInvalid10.workDrive  == rtResident.workDrive);
+
+            Needs needs = needs_roll(1111u);
+            Perception p;
+            p.idSeed = identity_seed(2u);
+            p.faction = static_cast<std::uint16_t>(Faction::Citizens);
+            p.hp = 100.0f;
+            p.maxHp = 100.0f;
+
+            float scoresInvalid[kIntentCount];
+            float scoresResident[kIntentCount];
+
+            p.role = 255;
+            score_intents(p, needs, scoresInvalid);
+
+            p.role = static_cast<std::uint8_t>(RoleId::Resident);
+            score_intents(p, needs, scoresResident);
+
+            for (int i = 0; i < kIntentCount; ++i) {
+                CHECK(scoresInvalid[i] == scoresResident[i]);
+            }
+        }
+
+        std::fprintf(stdout, "[utilai] Edge case stress tests (null danger, 0 dt, neg panic, non-emergency, invalid role IDs) PASSED\n");
+    }
 }
+

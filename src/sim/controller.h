@@ -20,5 +20,3 @@ void controller_step(Registry& reg, float dt,
                      const GravityField* gravity = nullptr);
 
 } // namespace giga
-
-} // namespace giga

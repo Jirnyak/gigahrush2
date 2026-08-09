@@ -719,6 +719,10 @@ struct Perception {
     bool strongerHostile = false;
     bool cornered = false;
     bool armed = false;
+
+    // -- Role-based additions (spec 01) --
+    std::uint8_t role = 0;       // RoleId
+    float nearbyWounded01 = 0.0f; // 0..1 fraction of nearby allies that are wounded
     bool orderedCombat = false;
     bool inShelter = false;
     bool isTraveler = false;
@@ -797,6 +801,11 @@ inline constexpr float kSeatArriveM = kCellSize * 0.35f;
 // than writing a zero velocity — a frozen body is a worse answer than a
 // strolling one.
 inline constexpr float kMinFleeGrad2 = 1e-10f;
+inline constexpr float kPanicEmit = 10.0f;
+
+// Publish panic into danger field for an NPC in emergency intent.
+void panic_publish_step(Field<float>& danger, int cx, int cy, int cz, float dt, float panic);
+void panic_publish_step(Field<float>& danger, const vec3& pos, float dt, float panic);
 
 // The survival intents that may preempt the current one without the margin.
 inline bool intent_is_emergency(std::uint8_t intent) {
@@ -991,12 +1000,27 @@ std::uint32_t ai_release(Registry& reg, LayerId layer);
 // neither had to learn anything about rooms.
 struct DoorSet;   // door.h — incomplete OK; full type only needed in ai.cpp
 struct RoomZones; // room_zone.h — likewise
-AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
+AiTick ai_step(Registry& reg, NpcPool& pool, Field<float>* danger,
                const MacroGrid& grid, LayerId layer, double now, float dt,
                const AiConfig& cfg = {}, AiMemory* mem = nullptr,
                const DoorSet* doors = nullptr,
                const World* world = nullptr,
                const RoomZones* rooms = nullptr);
+
+} // namespace giga::game
+
+namespace giga::nav {
+    struct CoarseGraph;
+    struct FineNav;
+}
+
+namespace giga::game {
+
+// Patrol execution: the first consumer of route_step.
+// Runs after ai_step, reads IntentPatrol bodies that ai_step claimed (MotionOwner::Ai)
+// but did not steer (Velocity = 0), and steers them via the baked navigation graph.
+void ai_patrol_step(Registry& reg, const giga::nav::CoarseGraph& coarse,
+                    const giga::nav::FineNav& fine, LayerId layer, float dt);
 
 // --- Recorders anything may call --------------------------------------------
 // The write side of the seam, deliberately public and deliberately tiny: filing a

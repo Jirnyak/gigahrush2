@@ -477,11 +477,7 @@ bool cellular_pulse_active(const CellularParams& params, std::uint64_t sweep);
 CellularStep cellular_step(World& world, CellularScratch& scratch,
                            const CellularParams& params = {});
 
-// Scratchless overload for one-off callers and tests: allocates a CellularScratch,
-// sweeps once, and drops it. Bit-identical to the scratch form — same code path — so it
-// costs the 2.00 MiB back buffer plus a full 128 MiB bitset rebuild EVERY call.
-// Correct anywhere, affordable only where the cadence is "once".
-CellularStep cellular_step(World& world, const CellularParams& params = {});
+
 
 // FNV-1a 64 over the whole field, in flat index order; 0 when the layer has no such
 // field. The cheap way to compare two runs bit-for-bit without holding two 2.00 MiB

@@ -222,7 +222,8 @@ void same_run(const SaveState& a, const SaveState& b) {
     }
 
     // Padding-free structs, so a raw byte compare is exact rather than optimistic.
-    static_assert(sizeof(Needs) == 8 * 4 + 1 + 3, "Needs has no implicit padding");
+    // hpBank (float) was added 2026-08-09 (+4 B): 9 floats + seeded + pad_[3] = 40 B.
+    static_assert(sizeof(Needs) == 9 * 4 + 1 + 3, "Needs has no implicit padding");
     static_assert(sizeof(Inventory) == 64 * 4, "Inventory has no implicit padding");
     CHECK(std::memcmp(&a.player.clock, &b.player.clock, sizeof(Needs)) == 0);
     CHECK(std::memcmp(&a.player.inv, &b.player.inv, sizeof(Inventory)) == 0);
@@ -289,11 +290,11 @@ void wire_layout() {
     static_assert(kRangedWire == 16);
     static_assert(kCombatSaveWire == 21);
     static_assert(kStatusWire == 42);
-    static_assert(kSaveFixedWire == 878);
+    static_assert(kSaveFixedWire == 882);
     static_assert(kFactionWire == 36);
-    static_assert(save_bytes_for(0) == 978);
-    static_assert(save_bytes_for(3) == 978 + 15);
-    static_assert(save_bytes_for(3, 100, 50) == 978 + 15 + 150);
+    static_assert(save_bytes_for(0) == 982);
+    static_assert(save_bytes_for(3) == 982 + 15);
+    static_assert(save_bytes_for(3, 100, 50) == 982 + 15 + 150);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -307,7 +308,7 @@ void wire_layout() {
     // variable-size and pinned by macro_world_round_trips). GEOMETRY lives in the
     // per-floor files ([save.h] modular layout), never here. v8 was 965; the
     // legacy-content purge re-measured this from 1007.
-    CHECK(bytes.size() == 993);
+    CHECK(bytes.size() == 997); // 993 + 4 bytes for hpBank in Needs
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');

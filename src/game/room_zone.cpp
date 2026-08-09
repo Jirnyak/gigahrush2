@@ -4,6 +4,7 @@
 
 #include "core/jobs.h"        // parallel_for — bake-time only, one job per room bit
 #include "core/rng.h"         // hash2/hash3 — the seat is a hash, not stored state
+#include "game/ai.h"          // ai_remember_cell
 #include "game/needs.h"       // kNeedMax — one clamp band for every needs writer
 #include "game/prop_system.h" // spawn_prop_from_id / SubVoxelAnchor — the furnisher
 #include "world/macro_grid.h" // MacroGrid — the bake's walkability test
@@ -90,10 +91,11 @@ bool room_restores(std::uint16_t bit) {
     const RoomRecovery& r = kRoomRecovery[i];
     return r.food != 0.0f || r.water != 0.0f || r.sleep != 0.0f ||
            r.pee != 0.0f || r.poo != 0.0f || r.pendingPee != 0.0f ||
-           r.pendingPoo != 0.0f;
+           r.pendingPoo != 0.0f || r.hpBank != 0.0f;
 }
 
-void room_recover(Needs& n, std::uint16_t bit, float dt) {
+void room_recover(Needs& n, std::uint16_t bit, float dt,
+                  AiMemory* mem, NpcId id, int cx, int cy, int cz, double now) {
     if (dt <= 0.0f) return;
     const int i = floor_room_bit_index(bit);
     if (i < 0) return;
@@ -107,16 +109,38 @@ void room_recover(Needs& n, std::uint16_t bit, float dt) {
         if (v > kNeedMax) v = kNeedMax;
     };
 
+    const float oldFood = n.food;
+    const float oldWater = n.water;
+    const float oldSleep = n.sleep;
+    const float oldPee = n.pee;
+    const float oldPoo = n.poo;
+
     add(n.food, r.food * dt);
     add(n.water, r.water * dt);
     add(n.sleep, r.sleep * dt);
     add(n.pee, -r.pee * dt);
     add(n.poo, -r.poo * dt);
+
+    if (mem && id != kInvalidNpc) {
+        if (r.food > 0.0f && n.food > oldFood)
+            ai_remember_cell(*mem, id, MemFood, cx, cy, cz, 1.0f, now);
+        if (r.water > 0.0f && n.water > oldWater)
+            ai_remember_cell(*mem, id, MemWater, cx, cy, cz, 1.0f, now);
+        if (r.sleep > 0.0f && n.sleep > oldSleep && n.sleep > 50.0f)
+            ai_remember_cell(*mem, id, MemRest, cx, cy, cz, 1.0f, now);
+        if ((r.pee > 0.0f && n.pee < oldPee) || (r.poo > 0.0f && n.poo < oldPoo))
+            ai_remember_cell(*mem, id, MemToilet, cx, cy, cz, 1.0f, now);
+    }
+
     // The queues are NOT clamped to kNeedMax: they are a backlog, and `digest`
     // meters them out ([needs.h]). Clamping them here would silently forgive the
     // consequence of eating, which is the whole point of the kitchen row.
     n.pendingPee += r.pendingPee * dt;
     n.pendingPoo += r.pendingPoo * dt;
+    // hpBank accumulates fractional HP gain (Medical room = 1.2 HP/s). The whole-HP
+    // spill into pool.hp() happens in needs_step, where the pool is accessible.
+    // Not clamped here: the spill in needs_step drains it each tick.
+    n.hpBank += r.hpBank * dt;
 }
 
 // ---------------------------------------------------------------------------

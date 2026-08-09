@@ -118,10 +118,25 @@ inline constexpr std::uint16_t room_bit(RoomBit b) {
 }
 
 inline constexpr RoomAffordance kRoomAffordance[] = {
-    {IntentEat, room_bit(RoomBit::Kitchen)},
-    {IntentDrink, room_bit(RoomBit::Kitchen)},
+    {IntentEat,    room_bit(RoomBit::Kitchen)},
+    {IntentDrink,  room_bit(RoomBit::Kitchen)},
     {IntentToilet, room_bit(RoomBit::Bathroom)},
-    {IntentSleep, room_bit(RoomBit::Living)},
+    {IntentSleep,  room_bit(RoomBit::Living)},
+    // --- Added 2026-08-09: closes spec 01 §2.2 (work/social/patrol "a ROW away") ---
+    // IntentWork routes to any production/office/hq room. workDrive multiplier from
+    // role (RoleTraits::workDrive) scales the score; the room field gives it somewhere to go.
+    {IntentWork,   static_cast<std::uint16_t>(room_bit(RoomBit::Production) |
+                                              room_bit(RoomBit::Office)     |
+                                              room_bit(RoomBit::Hq))},
+    // IntentSocial routes to common rooms and smoking rooms (Cultist gathering point).
+    {IntentSocial, static_cast<std::uint16_t>(room_bit(RoomBit::Common) |
+                                              room_bit(RoomBit::Smoking))},
+    // IntentPatrol routes to corridor — Duty role then overrides with route_step to
+    // lattice nodes. The corridor row stops the intent from silently delegating to wander.
+    {IntentPatrol, room_bit(RoomBit::Corridor)},
+    // IntentHeal routes to Medical. With hpBank now non-zero in kRoomRecovery,
+    // this row closes the deadlock: IntentHeal wins, body walks here, hpBank fills.
+    {IntentHeal,   room_bit(RoomBit::Medical)},
 };
 inline constexpr std::size_t kRoomAffordanceCount =
     sizeof(kRoomAffordance) / sizeof(kRoomAffordance[0]);
@@ -187,17 +202,22 @@ struct RoomRecovery {
     float poo;         // - per second
     float pendingPee;  // + per second into the digestion queue
     float pendingPoo;  // + per second
+    // Fractional HP bank: Medical room heals at 1.2 HP/s. HP is integer on the crowd
+    // body; this accumulates the fraction and spills it whole-HP each tick in
+    // needs_step. 0 everywhere that is not Medical. (spec 01 \u00a73.3 + spec 14 \u00a79.1)
+    float hpBank;      // + HP per second (fractional; whole part spills to pool.hp)
 };
 
 inline constexpr RoomRecovery kRoomRecovery[kFloorRoomBits] = {
     /* 0 Corridor   */ {},
     /* 1 Common     */ {}, // reference: +1.5 food/water, but only in the LUNCH state
     /* 2 Storage    */ {},
-    /* 3 Kitchen    */ {3.5f, 4.5f, 0.0f, 0.0f, 0.0f, 2.1f, 3.5f * 0.35f},
-    /* 4 Bathroom   */ {0.0f, 2.0f, 0.0f, 12.0f, 9.0f, 0.0f, 0.0f},
-    /* 5 Living     */ {0.0f, 0.0f, 2.8f, 0.0f, 0.0f, 0.0f, 0.0f},
+    /* 3 Kitchen    */ {3.5f, 4.5f, 0.0f, 0.0f, 0.0f, 2.1f, 3.5f * 0.35f, 0.0f},
+    /* 4 Bathroom   */ {0.0f, 2.0f, 0.0f, 12.0f, 9.0f, 0.0f, 0.0f,        0.0f},
+    /* 5 Living     */ {0.0f, 0.0f, 2.8f, 0.0f, 0.0f, 0.0f, 0.0f,          0.0f},
     /* 6 Office     */ {}, // reference: sleep, but gated on `resting` — see above
-    /* 7 Medical    */ {}, // reference: hp — needs a crowd heal bank, see above
+    /* 7 Medical    */ {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                       /* hpBank */ 1.2f}, // 1.2 HP/s via fractional bank (spec 01 \u00a73.3)
     /* 8 Production */ {},
     /* 9 Smoking    */ {},
     /*10 Hq         */ {},
@@ -210,7 +230,9 @@ bool room_restores(std::uint16_t bit);
 // Advance `n` by one `dt` of standing in a room of kind `bit`. Pure: no registry,
 // no world, no allocation, and a `bit` of 0 (a wall line, or a room kind with a
 // zero row) is a no-op. Clamps into [0, kNeedMax] exactly like `needs_advance`.
-void room_recover(Needs& n, std::uint16_t bit, float dt);
+void room_recover(Needs& n, std::uint16_t bit, float dt,
+                  class AiMemory* mem = nullptr, NpcId id = kInvalidNpc,
+                  int cx = 0, int cy = 0, int cz = 0, double now = 0.0);
 
 // ---------------------------------------------------------------------------
 // TABLE 3 — what FURNITURE a room kind contains.

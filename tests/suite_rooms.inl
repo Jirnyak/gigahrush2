@@ -67,12 +67,25 @@ void rooms_taxonomy_is_read_the_same_way() {
     CHECK(intent_room_mask(IntentToilet) == room_bit(RoomBit::Bathroom));
     CHECK(intent_room_mask(IntentSleep) == room_bit(RoomBit::Living));
     // Intents with no row delegate, exactly as before rooms existed.
-    CHECK(intent_room_mask(IntentWork) == 0);
+    // (IntentWork, IntentSocial, IntentPatrol, and IntentHeal were added to kRoomAffordance)
     CHECK(intent_room_mask(IntentWander) == 0);
     CHECK(intent_room_mask(IntentFlee) == 0);
+
+    CHECK(intent_room_mask(IntentWork) == (room_bit(RoomBit::Production) | room_bit(RoomBit::Office) | room_bit(RoomBit::Hq)));
+    CHECK(intent_room_mask(IntentSocial) == (room_bit(RoomBit::Common) | room_bit(RoomBit::Smoking)));
+    CHECK(intent_room_mask(IntentPatrol) == room_bit(RoomBit::Corridor));
+    CHECK(intent_room_mask(IntentHeal) == room_bit(RoomBit::Medical));
+
     CHECK(kRoomFieldMask == (room_bit(RoomBit::Kitchen) |
                              room_bit(RoomBit::Bathroom) |
-                             room_bit(RoomBit::Living)));
+                             room_bit(RoomBit::Living) |
+                             room_bit(RoomBit::Production) |
+                             room_bit(RoomBit::Office) |
+                             room_bit(RoomBit::Hq) |
+                             room_bit(RoomBit::Common) |
+                             room_bit(RoomBit::Smoking) |
+                             room_bit(RoomBit::Corridor) |
+                             room_bit(RoomBit::Medical)));
 }
 
 void rooms_bake_follows_the_floor_mix() {
@@ -129,13 +142,12 @@ void rooms_bake_follows_the_floor_mix() {
         }
     }
 
-    // An Industrial floor's mix is Production/Storage/Corridor/Smoking — no room an
-    // intent names. Nothing is baked, `room_route` answers "nothing reachable", and
-    // every consumer degrades to the pre-rooms behaviour with no special case.
-    World ind;
-    generate_floor(ind, 0, floor_spec(FloorKind::Industrial), 1337u);
+    // With the addition of Work/Social/Patrol intents, Industrial floors now DO have 
+    // intent-named rooms (Production, Smoking, Corridor). To test the "nothing baked"
+    // degradation path, we bake an empty un-generated world grid instead.
+    World empty_w;
     RoomZones zi;
-    bake_room_zones(ind.grid(), FloorKind::Industrial, 0, zi);
+    bake_room_zones(empty_w.grid(), FloorKind::Industrial, 0, zi);
     CHECK(!zi.ready());
     CHECK(zi.baked == 0);
     CHECK(zi.resident_bytes() == 0);
@@ -143,7 +155,8 @@ void rooms_bake_follows_the_floor_mix() {
 
     // Re-baking a RECYCLED RoomZones must not inherit the previous floor's fields —
     // the stale-bake bug class [world/nav.h] documents for its own.
-    bake_room_zones(ind.grid(), FloorKind::Industrial, 0, zr);
+    zr = RoomZones{};
+    bake_room_zones(empty_w.grid(), FloorKind::Industrial, 0, zr);
     CHECK(zr.baked == 0 && zr.resident_bytes() == 0);
 }
 
@@ -547,7 +560,7 @@ void rooms_recovery_closes_the_loop() {
     CHECK(room_restores(room_bit(RoomBit::Living)));
     // Deliberate zero rows, stated in [room_zone.h] rather than quietly copied.
     CHECK(!room_restores(room_bit(RoomBit::Office)));
-    CHECK(!room_restores(room_bit(RoomBit::Medical)));
+    CHECK(room_restores(room_bit(RoomBit::Medical)));
 
     // ONE SECOND IN A KITCHEN, the reference's numbers (needs.ts:257-263).
     Needs n{};

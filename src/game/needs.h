@@ -193,12 +193,25 @@ inline constexpr std::int16_t kSleepingPillsHpCost = 4;
 inline constexpr float kToiletPeeRelief = 70.0f;
 inline constexpr float kToiletPooRelief = 65.0f;
 
+// Field relief — squatting in an open area (no ToiletPan prop in reach).
+// Less effective than a toilet and leaves a stain; also publishes noise (spec 14 §9.1).
+// Deliberately well below kToiletPee/PooRelief to make furniture matter.
+inline constexpr float kFieldPeeRelief = 40.0f;
+inline constexpr float kFieldPooRelief = 35.0f;
+
 // One index past the last real `DamageChannel` — see the header comment.
 // `enum class : uint8_t` carries the underlying type's value range, so this cast is
 // well-defined, not UB. It also lands in `Dead::channel`, where it reads as
 // "attrition"; nothing switches on that field.
 inline constexpr DamageChannel kAttritionChannel =
     static_cast<DamageChannel>(kDamageChannels);
+// GUARD: if a sixth damage channel is ever added, kAttritionChannel becomes a valid
+// channel index and apply_damage's armour table would start mitigating starvation.
+// This assert turns that silent break into a build error (spec 14 §9.4).
+static_assert(static_cast<std::size_t>(kAttritionChannel) >= kDamageChannels,
+              "kAttritionChannel must lie OUTSIDE the mitigable channel range: "
+              "a sixth damage channel would silently let armour reduce starvation HP loss. "
+              "Either raise kAttritionChannel or audit apply_damage's guard.");
 
 // HOW FAR INTO ITS OWN DAY A RESIDENT IS BORN, in seconds — DERIVED FROM THE RATES,
 // never picked, for the same reason the warning leads above are. The property that
@@ -307,7 +320,8 @@ float needs_speed_scale(const Needs& n);
 // No allocation, no exceptions, O(n) in the EMBODIED bodies on one layer.
 struct RoomZones; // room_zone.h — incomplete OK; the full type is only needed in the .cpp
 NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
-                     const RoomZones* rooms = nullptr);
+                     const RoomZones* rooms = nullptr,
+                     class AiMemory* mem = nullptr, double now = 0.0);
 
 // Keyed off `UseEffect`, never `ItemCategory` — and the distinction is real:
 // `calm_brew` is category DRINK and `easter_egg` is category FOOD, but both are

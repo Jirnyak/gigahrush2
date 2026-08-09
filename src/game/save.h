@@ -216,7 +216,7 @@ inline constexpr std::size_t kLedgerWire = 33;       // 2x8 + 4x4 + 1
 inline constexpr std::size_t kContractWire = 21;     // 4 + 2 + 3x4 + 3   (pad_ dropped)
 inline constexpr std::size_t kBookWire =
     static_cast<std::size_t>(kMaxContracts) * kContractWire + 4 + 4 + 8;
-inline constexpr std::size_t kNeedsWire = 33;        // 8 floats + seeded
+inline constexpr std::size_t kNeedsWire = 37;        // 9 floats + seeded
 inline constexpr std::size_t kInventoryWire = static_cast<std::size_t>(kInvSlots) * 4;
 inline constexpr std::size_t kPlayerWire = kNeedsWire + kInventoryWire + 4 + 4 + 4 + 3;
 // Version 7: RpgStats wire — field-by-field LE, NOT sizeof (pad_ is written so the

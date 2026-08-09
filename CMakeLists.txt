@@ -808,4 +808,9 @@ if(GIGA_BUILD_TESTS)
     add_executable(macro_bench tests/macro_bench.cpp)
     target_link_libraries(macro_bench PRIVATE giga_game)
     giga_target_flags(macro_bench OFF)
+
+    add_executable(m1_challenger_test tests/m1_challenger_test.cpp)
+    target_link_libraries(m1_challenger_test PRIVATE giga_game)
+    giga_target_flags(m1_challenger_test OFF)
 endif()
+

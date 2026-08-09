@@ -248,7 +248,7 @@ float needs_speed_scale(const Needs& n) {
 }
 
 NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
-                     const RoomZones* rooms) {
+                     const RoomZones* rooms, AiMemory* mem, double now) {
     NeedsTick out;
     if (dt <= 0.0f) return out;
 
@@ -294,7 +294,8 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
             const int cy = wrap_macro(static_cast<int>(std::floor(tr.pos.y / kCellSize)));
             const std::uint16_t bit = room_bit_at(rooms->kind, rooms->number, cx, cy);
             if (room_restores(bit)) {
-                room_recover(n, bit, dt);
+                const int cz = wrap_macro(static_cast<int>(std::floor(tr.pos.z / kCellSize)));
+                room_recover(n, bit, dt, mem, id, cx, cy, cz, now);
                 ++out.recovering;
             }
         }
@@ -330,6 +331,20 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
             out.lethal = r.lethal;
         } else if (r.lethal) {
             ++out.crowdKilled;
+        }
+
+        // hpBank heal spill-over: the fractional heal mirror of hpDebt above.
+        // Medical room recovery (and Medic role) accumulate here; we drain the
+        // integer part each tick to prevent unbounded growth.
+        // DO NOT route through apply_damage: healing is not a damage channel.
+        if (n.hpBank >= 1.0f) {
+            const float wholeheal = std::floor(n.hpBank);
+            n.hpBank -= wholeheal;
+            auto& hp    = pool.hp(id);
+            const auto& maxHp = pool.max_hp(id);
+            const std::int16_t gain = static_cast<std::int16_t>(
+                std::min(wholeheal, static_cast<float>(maxHp - hp)));
+            if (gain > 0) hp += gain;
         }
     }
     return out;
