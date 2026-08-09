@@ -128,6 +128,10 @@ registry (§1–§45) and outranks any doc that disagrees with a measured findin
 | [Docs/specs/08_WORLD_FLOORS_AND_ROOMS.md](Docs/specs/08_WORLD_FLOORS_AND_ROOMS.md) | Single floor predicate chain, 11 room fields, anomalies |
 | [Docs/specs/09_COMBAT_BALLISTICS_AND_RPG.md](Docs/specs/09_COMBAT_BALLISTICS_AND_RPG.md) | Honest friendly fire, psi pool, INT attribute, status producers |
 | [Docs/specs/10_SAVE_AND_PERSISTENCE.md](Docs/specs/10_SAVE_AND_PERSISTENCE.md) | Save v10: samosbor clock, NPC memory, no-migration contract |
+| [Docs/specs/11_SOCIAL_SYSTEMS.md](Docs/specs/11_SOCIAL_SYSTEMS.md) | Speech, rumour, vendor, quests; the severed faction→price link |
+| [Docs/specs/12_MACRO_SIM_AND_NPC_POOL.md](Docs/specs/12_MACRO_SIM_AND_NPC_POOL.md) | 2^20 pool, embodiment round trip, the unbudgeted demography sweep |
+| [Docs/specs/13_BESTIARY_TRAITS_AND_SPAWN.md](Docs/specs/13_BESTIARY_TRAITS_AND_SPAWN.md) | 68 kinds, trait dispatch, spawn weighting, hunt throttle |
+| [Docs/specs/14_NEEDS_AND_SURVIVAL.md](Docs/specs/14_NEEDS_AND_SURVIVAL.md) | Five needs, digestion loop, encumbrance, cold-NPC gap |
 
 Each spec opens with **what is already built** so no session re-specifies working
 code, and every claim carries a `file:line`.
