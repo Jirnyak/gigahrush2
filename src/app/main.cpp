@@ -3841,6 +3841,28 @@ int main(int argc, char** argv) {
                 // Drain combat carve proposals through the same carve_sphere
                 // path the console uses. Frozen bake: drop (v1); console keeps
                 // pending via carveRadius until bake lands.
+                if (doors.frozen && combatCarves.count > 0) {
+                    combatCarves.droppedBake += combatCarves.count;
+                    combatCarves.count = 0;
+                }
+                // Gated like every other debug channel (GIGA_*_DBG): the counters
+                // are always kept, the line only prints when asked for.
+                static const bool carveDbg =
+                    std::getenv("GIGA_CARVE_DBG") != nullptr;
+                if (carveDbg &&
+                    (combatCarves.count > 0 || combatCarves.droppedFull > 0 ||
+                     combatCarves.droppedDegenerate > 0 ||
+                     combatCarves.droppedBake > 0 ||
+                     combatCarves.clampedRadius > 0)) {
+                    std::fprintf(stderr,
+                                 "[carve] proposals=%u dropped_full=%u "
+                                 "dropped_degen=%u dropped_bake=%u clamped=%u\n",
+                                 static_cast<unsigned>(combatCarves.count),
+                                 static_cast<unsigned>(combatCarves.droppedFull),
+                                 static_cast<unsigned>(combatCarves.droppedDegenerate),
+                                 static_cast<unsigned>(combatCarves.droppedBake),
+                                 static_cast<unsigned>(combatCarves.clampedRadius));
+                }
                 if (!doors.frozen && combatCarves.count > 0) {
                     for (std::uint8_t ci = 0; ci < combatCarves.count; ++ci) {
                         const game::CarveProposal& pr = combatCarves.items[ci];

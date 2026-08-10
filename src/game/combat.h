@@ -613,14 +613,38 @@ static_assert(std::is_trivially_copyable_v<CarveProposal>,
 struct CarveProposalQueue {
     CarveProposal items[kMaxCarveProposals] = {};
     std::uint8_t count = 0;
+    // A refused proposal used to vanish silently — a shot that visibly hit a wall
+    // and carved nothing, with no way to tell "queue full" from "degenerate radius"
+    // from "bake in flight". Counted per reason so the drain site can PRINT what
+    // was dropped instead of letting the miss read as a physics bug. Reset by
+    // clear() together with the queue itself.
+    std::uint16_t droppedFull = 0;
+    std::uint16_t droppedDegenerate = 0;
+    std::uint16_t droppedBake = 0;
+    std::uint16_t clampedRadius = 0;
 
-    void clear() { count = 0; }
+    void clear() {
+        count = 0;
+        droppedFull = 0;
+        droppedDegenerate = 0;
+        droppedBake = 0;
+        clampedRadius = 0;
+    }
 
     bool push(float x, float y, float z, float radius, std::uint16_t power,
               std::uint32_t seed) {
-        if (count >= kMaxCarveProposals) return false;
-        if (radius <= 0.0f || power == 0) return false;
-        if (radius > 8.0f) radius = 8.0f; // one carve, not a demolition service
+        if (count >= kMaxCarveProposals) {
+            ++droppedFull;
+            return false;
+        }
+        if (radius <= 0.0f || power == 0) {
+            ++droppedDegenerate;
+            return false;
+        }
+        if (radius > 8.0f) {
+            radius = 8.0f; // one carve, not a demolition service
+            ++clampedRadius;
+        }
         items[count++] = CarveProposal{x, y, z, radius, power, seed};
         return true;
     }
