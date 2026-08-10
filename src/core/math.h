@@ -70,7 +70,25 @@ inline mat4 mat4_perspective(float fovyRad, float aspect, float zn, float zf) {
 
 inline mat4 mat4_lookAt(vec3 eye, vec3 center, vec3 up) {
     vec3 f = normalize(center - eye);
-    vec3 s = normalize(cross(f, up));
+    // A look-at basis is undefined when f is parallel to the reference up: cross()
+    // vanishes, normalize() returns {0,0,0}, and every row below collapses. Under a
+    // gravity-derived up that is the COMMON case (looking along gravity), not an
+    // edge one, so it is handled here rather than at each call site.
+    //
+    // Tested on the cross itself, not on dot(f, up), because dot is only a valid
+    // angle measure when up is unit-length and this is a public primitive. Below
+    // the threshold the fallback is the axis in which |f| is SMALLEST: f can be at
+    // most 1/sqrt(3) aligned with it, so that cross is always well-conditioned
+    // (sin >= 0.816) and no second failure is reachable.
+    vec3 axis = cross(f, up);
+    if (dot(axis, axis) < 1e-6f) {
+        const float ax = std::fabs(f.x), ay = std::fabs(f.y), az = std::fabs(f.z);
+        const vec3 alt = (ax <= ay && ax <= az) ? vec3{1, 0, 0}
+                       : (ay <= az)             ? vec3{0, 1, 0}
+                                                : vec3{0, 0, 1};
+        axis = cross(f, alt);
+    }
+    vec3 s = normalize(axis);
     vec3 u = cross(s, f);
     mat4 r = mat4_identity();
     r.m[0] = s.x; r.m[4] = s.y; r.m[8] = s.z;

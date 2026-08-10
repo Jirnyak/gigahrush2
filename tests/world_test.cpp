@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "core/jobs.h"
+#include "core/math.h"
 #include "core/tick.h"   // kSimDt / kSimHz — never a bare 1/120 ([core/tick.h])
 #include "core/wrap.h"
 #include "ecs/components.h"
@@ -641,9 +642,96 @@ static void test_route_step() {
     CHECK(route_step(gi, fi, ivec3{48, 48, 48}, ivec3{16, 16, 16}) == kFlowNone);
 }
 
+// mat4_lookAt's basis, and the degenerate case that used to collapse it. The
+// pre-guard code did `normalize(cross(f, up))` unconditionally: when f is
+// parallel or anti-parallel to up the cross vanishes, normalize() returns
+// {0,0,0} (math.h:29-32 substitutes no axis), and s, then u = cross(s,f), then
+// the whole rotation basis went to zeros — a singular view matrix. Under a
+// gravity-derived up, "looking along gravity" is the COMMON case, not an exotic
+// one, so this is asserted as the property that actually broke: the three
+// rotation rows must be unit-length and mutually perpendicular.
+static void test_mat4_lookAt() {
+    // The rotation rows of the column-major view matrix: right (s), up (u) and
+    // -forward. Read as rows because the matrix is stored column-major for GLSL.
+    auto row_right = [](const mat4& m) { return vec3{m.m[0], m.m[4], m.m[8]}; };
+    auto row_up    = [](const mat4& m) { return vec3{m.m[1], m.m[5], m.m[9]}; };
+    auto row_back  = [](const mat4& m) { return vec3{m.m[2], m.m[6], m.m[10]}; };
+
+    auto check_orthonormal = [&](const mat4& m) {
+        const vec3 s = row_right(m), u = row_up(m), b = row_back(m);
+        CHECK_NEAR(length(s), 1.0f, 1e-4f);   // all three zero before the guard
+        CHECK_NEAR(length(u), 1.0f, 1e-4f);
+        CHECK_NEAR(length(b), 1.0f, 1e-4f);
+        CHECK_NEAR(dot(s, u), 0.0f, 1e-4f);   // mutually perpendicular
+        CHECK_NEAR(dot(s, b), 0.0f, 1e-4f);
+        CHECK_NEAR(dot(u, b), 0.0f, 1e-4f);
+    };
+
+    // THE REGRESSION CASES. Straight down and straight up the reference up axis:
+    // cross(f, up) is exactly {0,0,0} both times, so the old code returned a
+    // basis of zeros and length(s) == length(u) == 0 failed here.
+    check_orthonormal(mat4_lookAt(vec3{0, 0, 0}, vec3{0, 0, -1}, vec3{0, 0, 1}));
+    check_orthonormal(mat4_lookAt(vec3{0, 0, 0}, vec3{0, 0, 1}, vec3{0, 0, 1}));
+
+    // Ordinary directions — well clear of the threshold, so the guard must not
+    // change them. These passed before the fix and still have to.
+    check_orthonormal(mat4_lookAt(vec3{0, 0, 0}, vec3{1, 0, 0}, vec3{0, 0, 1}));
+    check_orthonormal(mat4_lookAt(vec3{0, 0, 0}, vec3{0, 1, 0}, vec3{0, 0, 1}));
+    check_orthonormal(mat4_lookAt(vec3{1, 2, 3}, vec3{2, 3, 4}, vec3{0, 0, 1}));
+
+    // Near-degenerate, and the reason the old defect was survivable in practice:
+    // src/game/player_command.cpp clamps pitch to +-1.5533 rad (~89 deg), so a
+    // real mouselook frame looking "straight up" is f ~ {0.0175, 0, 0.9998}.
+    // |cross(f, up)| is then ~0.0175 — 3.06e-4 squared, still 306x the 1e-6
+    // threshold — so this takes the ORDINARY path, not the fallback. It is the
+    // boundary the clamp buys, pinned so that widening the clamp or the
+    // threshold without re-reading this cannot go unnoticed.
+    check_orthonormal(mat4_lookAt(vec3{0, 0, 0}, vec3{0.0175f, 0, 0.9998f},
+                                  vec3{0, 0, 1}));
+    check_orthonormal(mat4_lookAt(vec3{0, 0, 0}, vec3{0.0175f, 0, -0.9998f},
+                                  vec3{0, 0, 1}));
+
+    // Non-NegZ gravity regimes. The engine runs 8 of them and "up" is not always
+    // Z, so the collapse was reachable on every axis, not just the Z one. Each of
+    // these four is exactly parallel/anti-parallel and so hit the same zero basis.
+    check_orthonormal(mat4_lookAt(vec3{0, 0, 0}, vec3{1, 0, 0}, vec3{1, 0, 0}));
+    check_orthonormal(mat4_lookAt(vec3{0, 0, 0}, vec3{-1, 0, 0}, vec3{1, 0, 0}));
+    check_orthonormal(mat4_lookAt(vec3{0, 0, 0}, vec3{0, 1, 0}, vec3{0, 1, 0}));
+    check_orthonormal(mat4_lookAt(vec3{0, 0, 0}, vec3{0, -1, 0}, vec3{0, 1, 0}));
+
+    // NON-UNIT up — the case that pins WHICH quantity the guard measures. up is a
+    // public parameter and is not required to be unit-length, so a guard written
+    // against dot(f, up) would be reading a number scaled by |up| and compare it
+    // to a threshold calibrated for 1.
+    //
+    // Orthonormality alone cannot catch that mistake: a wrongly-taken fallback
+    // still returns an orthonormal basis, just a differently-rolled one. So the
+    // discriminating assertion is that the guard did NOT fire — on the ordinary
+    // path s = normalize(cross(f, up)) is perpendicular to up BY CONSTRUCTION,
+    // whereas the fallback's s = normalize(cross(f, alt)) is not.
+    auto check_up_respected = [&](const mat4& m, vec3 up) {
+        CHECK_NEAR(dot(row_right(m), normalize(up)), 0.0f, 1e-4f);
+    };
+    const vec3 tallUp{0, 0, 10};
+    const mat4 perp = mat4_lookAt(vec3{0, 0, 0}, vec3{1, 0, 0}, tallUp);
+    check_orthonormal(perp);
+    check_up_respected(perp, tallUp);
+    const mat4 perpOff = mat4_lookAt(vec3{5, 5, 5}, vec3{6, 5, 5}, vec3{0, 0, 100});
+    check_orthonormal(perpOff);
+    check_up_respected(perpOff, vec3{0, 0, 100});
+    // The one that actually separates |cross| from dot: f is 0.8 aligned with the
+    // up AXIS, so dot(f, up) == 8 — far past any unit-calibrated threshold — while
+    // |cross(f, up)| == 6 and the basis is perfectly well-conditioned. A dot-based
+    // guard fires here and rolls the camera; the |cross| guard leaves it alone.
+    const mat4 tilted = mat4_lookAt(vec3{0, 0, 0}, vec3{0.6f, 0, 0.8f}, tallUp);
+    check_orthonormal(tilted);
+    check_up_respected(tilted, tallUp);
+}
+
 int main() {
     test_wrap();
     test_nearest_image();
+    test_mat4_lookAt();
     test_submask();
     test_grid_toroidal();
     test_fields();
