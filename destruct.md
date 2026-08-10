@@ -76,7 +76,7 @@ Carve НЕ перепекает ничего. Коллизия жива сраз
 |---|---|---|
 | Рендер | `voxelMirror.mark_dirty(dirtyCells)` | 64 Б/ячейка PCIe-аплоада, без rebuild |
 | Diffusion / Cellular | `*_mark_cell()` на каждую dirty-ячейку | O(1) патчи |
-| Nav (flow fields) | `navRebaker.mark_dirty_cells(dirtyCells)` | ленивый фоновый перепёк узлов решётки ([lazy_field_rebaker.h] §22) — но он чинит ОДНО поле из 64 и гоняет BFS по живому гриду без синхронизации ([problems.md] §14) |
+| Nav (flow fields) | — потребителя нет (2026-08-06) | ленивый ре-бейкер удалён: частичный пересчёт `flow[node]` невозможен, одна дыра меняет все 64 поля ([problems.md] §2, §14). Поля обновляются только полным `nav::AsyncBake` |
 | Пропы ([props.md]) | `anchor_validate_step()` | мебель без опоры отрывается по своему `PropFallMode` |
 | Антураж ([antourage.md]) | `antourage_carve_step()` | перерубленные трубы/провода/шторы сыплют обломки и перестают рисоваться |
 
