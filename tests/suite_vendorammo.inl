@@ -351,6 +351,7 @@ static void test_vendorammo_all() {
             tr.layer = layer;
             reg.emplace<Transform>(e, tr);
             reg.emplace<NpcRef>(e, NpcRef{id});
+            pool.set_floor(id, layer);
         }
         // One Scientist body, so the tally is a real majority and not a single sample.
         {
@@ -362,13 +363,14 @@ static void test_vendorammo_all() {
             tr.layer = layer;
             reg.emplace<Transform>(e, tr);
             reg.emplace<NpcRef>(e, NpcRef{id});
+            pool.set_floor(id, layer);
         }
-        CHECK(dominant_faction(reg, pool, layer) == Faction::Wild);
+        CHECK(dominant_faction(pool, layer) == Faction::Wild);
         // A layer nobody stands on answers Citizens, which is also the default vendor —
         // so an empty floor is a safe input rather than an out-of-range index.
-        CHECK(dominant_faction(reg, pool, layer + 1) == Faction::Citizens);
+        CHECK(dominant_faction(pool, layer + 1) == Faction::Citizens);
 
-        const VendorKind who = vendor_kind_for(dominant_faction(reg, pool, layer));
+        const VendorKind who = vendor_kind_for(dominant_faction(pool, layer));
         CHECK(who == VendorKind::Wild);
 
         // The rate actually differs, which is the whole point of feeding this through.

@@ -169,8 +169,10 @@ static_assert(kRumourLullSpeakMs > kSamosborWarningMs,
 // rumour becomes information you can act on — walk into a Scientist floor and the same
 // haul is worth 8% more.
 //
-// O(bodies on the layer), one pass, no allocation. Called on arrival, never per tick.
-Faction dominant_faction(const Registry& reg, const NpcPool& pool, LayerId layer);
+// O(records in the floor bucket), one pass, no allocation. Called on arrival,
+// never per tick. Tallies the floor's whole COLD roster, not the embodied
+// window — a vendor's allegiance is a property of the floor.
+Faction dominant_faction(const NpcPool& pool, int floorNumber);
 
 // Build the rumour a given speaker would tell, from live state and the live samosbor
 // clock.

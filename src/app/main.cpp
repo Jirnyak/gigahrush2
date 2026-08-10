@@ -2358,6 +2358,10 @@ int main(int argc, char** argv) {
         if (!ride.moved) return false;
         player = ride.player;
         currentFloor = ride.floor;
+        // The vendor answers to whoever OWNS this floor — re-asked on every
+        // arrival path (ride / load / floor change), because a stale kind from
+        // the departure floor mispriced every trade until the next reload.
+        vendorKind = game::vendor_kind_for(game::dominant_faction(pool, currentFloor));
         // §24 discovery: landing on (or via) a lattice hub unlocks THIS floor
         // for the fast-travel network. Boarding the cabin is the discover act.
         if (landHub >= 0)
@@ -4222,6 +4226,8 @@ int main(int argc, char** argv) {
                             // Per-floor clocks and channels reset, same as any
                             // arrival.
                             samosbor = game::samosbor_new_game(sbRng);
+                            vendorKind = game::vendor_kind_for(
+                                game::dominant_faction(pool, currentFloor));
                             rumourLine[0] = 0;
                             rumourAt = 0;
                             game::noise_clear(noiseField);
@@ -5809,6 +5815,8 @@ int main(int argc, char** argv) {
                         aim_player(reg, player);
                         LayerId nl = reg.get<Transform>(player).layer;
                         activeLayer = nl;
+                        vendorKind = game::vendor_kind_for(
+                            game::dominant_faction(pool, currentFloor));
                         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
                         refresh_floor_containers(reg, stack.layer(nl),
                                                  currentFloor, nl);
