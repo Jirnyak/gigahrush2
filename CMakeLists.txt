@@ -751,7 +751,11 @@ if(GIGA_BUILD_TESTS)
     # design rests on: the load reaches the `Mass` component, so fall damage and
     # knockback see it through laws that did not change.
     #   [items] mass: bare 71.9 kg -> carrying 2 x АТО-41 = 123.9 kg
-        PASS_REGULAR_EXPRESSION "game_test: 235119 checks, 0 failures")
+    # 235119 -> 235195 (+76) on 2026-08-10: suite_gravity_regimes.inl — the
+    # isotropy law pinned over all 8 GravityRegimes (regime_down/regime_frame
+    # shape, fluid Zero-symmetry, fall direction per regime). Count measured by
+    # a real run, per AGENTS.md: pin only on 0 failures.
+        PASS_REGULAR_EXPRESSION "game_test: 235195 checks, 0 failures")
 
 
 

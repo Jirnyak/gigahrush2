@@ -73,21 +73,12 @@ FluidStep fluid_step(World& world, FluidScratch& scratch, const FluidParams& par
 
     // "Down" follows gravity's dominant axis; default gravity is -Z, so down is
     // decreasing Z. We resolve it once per step from the global vector.
-    vec3 gdir = world.gravity().global;
-    int downAxis = 2, downSign = -1;
-    {
-        float ax = std::fabs(gdir.x), ay = std::fabs(gdir.y),
-              az = std::fabs(gdir.z);
-        if (ax >= ay && ax >= az) { downAxis = 0; downSign = gdir.x < 0 ? -1 : 1; }
-        else if (ay >= az)        { downAxis = 1; downSign = gdir.y < 0 ? -1 : 1; }
-        else                      { downAxis = 2; downSign = gdir.z < 0 ? -1 : 1; }
-    }
+    // "Down" follows the layer's gravity regime.
+    GravityFrame frame = regime_frame(world.gravity().regime);
+    CellStep downStep = regime_down(world.gravity().regime);
 
-    auto step_cell = [&](int x, int y, int z, int axis, int s) {
-        int nx = x + (axis == 0 ? s : 0);
-        int ny = y + (axis == 1 ? s : 0);
-        int nz = z + (axis == 2 ? s : 0);
-        return macro_index(wrap_macro(nx), wrap_macro(ny), wrap_macro(nz));
+    auto step_cell = [&](int x, int y, int z, const CellStep& s) {
+        return macro_index(wrap_macro(x + s.x), wrap_macro(y + s.y), wrap_macro(z + s.z));
     };
 
     for (int z = 0; z < kMacroDim; ++z)
@@ -101,13 +92,11 @@ FluidStep fluid_step(World& world, FluidScratch& scratch, const FluidParams& par
         float remaining = amount;
 
         // 1) Flow straight down into the cell below, up to its free capacity.
-        std::size_t di = step_cell(x, y, z, downAxis, downSign);
+        std::size_t di = step_cell(x, y, z, downStep);
         float belowCap = params.maxPerCell *
-            capacity_frac(grid, x + (downAxis == 0 ? downSign : 0),
-                                 y + (downAxis == 1 ? downSign : 0),
-                                 z + (downAxis == 2 ? downSign : 0));
+            capacity_frac(grid, x + downStep.x, y + downStep.y, z + downStep.z);
         float belowFree = std::max(0.0f, belowCap - src[di]);
-        float down = std::min(remaining, belowFree);
+        float down = frame.pull ? std::min(remaining, belowFree) : 0.0f;
         if (down > params.minFlow) {
             touch(i, -down);
             touch(di, down);
@@ -118,26 +107,40 @@ FluidStep fluid_step(World& world, FluidScratch& scratch, const FluidParams& par
 
         // 2) Spread the remainder to the four lateral neighbours that hold
         //    less, proportional to the height difference (viscosity-damped).
-        const int lat[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
-        // Lateral axes are the two that are not the down axis.
-        int a0 = (downAxis == 0) ? 1 : 0;
-        int a1 = (downAxis == 2) ? 1 : 2;
-        for (auto& d : lat) {
-            int ax = (d[0] != 0) ? a0 : a1;
-            int sign = (d[0] != 0) ? d[0] : d[1];
-            std::size_t ni = step_cell(x, y, z, ax, sign);
+        const CellStep lat[4] = {
+            {frame.tanA == 0 ? 1 : 0, frame.tanA == 1 ? 1 : 0, frame.tanA == 2 ? 1 : 0},
+            {frame.tanA == 0 ? -1 : 0, frame.tanA == 1 ? -1 : 0, frame.tanA == 2 ? -1 : 0},
+            {frame.tanB == 0 ? 1 : 0, frame.tanB == 1 ? 1 : 0, frame.tanB == 2 ? 1 : 0},
+            {frame.tanB == 0 ? -1 : 0, frame.tanB == 1 ? -1 : 0, frame.tanB == 2 ? -1 : 0}
+        };
+
+        float moves[4] = {};
+        std::size_t nis[4] = {};
+        float totalMove = 0.0f;
+
+        for (int li = 0; li < 4; ++li) {
+            std::size_t ni = step_cell(x, y, z, lat[li]);
+            nis[li] = ni;
             float ncap = params.maxPerCell *
-                capacity_frac(grid, x + (ax == 0 ? sign : 0),
-                                     y + (ax == 1 ? sign : 0),
-                                     z + (ax == 2 ? sign : 0));
+                capacity_frac(grid, x + lat[li].x, y + lat[li].y, z + lat[li].z);
             float diff = remaining - std::min(src[ni], ncap);
             if (diff > params.minFlow) {
-                float move = std::min(remaining,
-                                      diff * params.viscosity * 0.25f);
+                float move = std::min(remaining, diff * params.viscosity * 0.25f);
                 move = std::min(move, std::max(0.0f, ncap - src[ni]));
                 if (move > params.minFlow) {
+                    moves[li] = move;
+                    totalMove += move;
+                }
+            }
+        }
+
+        if (totalMove > params.minFlow) {
+            float scale = (totalMove > remaining) ? remaining / totalMove : 1.0f;
+            for (int li = 0; li < 4; ++li) {
+                float move = moves[li] * scale;
+                if (move > params.minFlow) {
                     touch(i, -move);
-                    touch(ni, move);
+                    touch(nis[li], move);
                     remaining -= move;
                     out.moved += move;
                 }
