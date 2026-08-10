@@ -158,7 +158,9 @@ Needs needs_roll(std::uint32_t seed) {
     n.water = kStartWaterLo + u01(giga::hash_u32(seed ^ 0x85ebca6bu)) * (kStartWaterHi - kStartWaterLo);
     n.sleep = kStartSleepLo + u01(giga::hash_u32(seed ^ 0xc2b2ae35u)) * (kStartSleepHi - kStartSleepLo);
     n.pee   = kStartPeeLo   + u01(giga::hash_u32(seed ^ 0x27d4eb2fu)) * (kStartPeeHi   - kStartPeeLo);
-    n.poo   = kStartPooLo   + u01(giga::hash_u32(seed ^ 0x165667b1u)) * (kStartPooHi   - kStartPooLo);
+    n.poo   = kStartPooLo   + u01(giga::hash_u32(seed ^ 0x165667b1u)) * (kStartPooLo   - kStartPooLo);
+    n.sanity = kStartSanityLo + u01(giga::hash_u32(seed ^ 0xb2c84210u)) * (kStartSanityHi - kStartSanityLo);
+    n.radiation = kStartRadLo + u01(giga::hash_u32(seed ^ 0xf028ea75u)) * (kStartRadHi - kStartRadLo);
     n.pendingPee = 0.0f;
     n.pendingPoo = 0.0f;
     n.hpDebt = 0.0f;
@@ -183,6 +185,9 @@ void needs_advance(Needs& n, float dt) {
     n.food  = clamp_need(n.food  - kFoodDrainPerSec  * dt);
     n.water = clamp_need(n.water - kWaterDrainPerSec * dt);
     n.sleep = clamp_need(n.sleep - kSleepDrainPerSec * dt);
+    n.sanity = clamp_need(n.sanity - kSanityDrainPerSec * dt);
+    // radiation only fills autonomously if there was an ambient field, but the pressure itself does not drain autonomously
+    n.radiation = clamp_need(n.radiation + kRadiationFillPerSec * dt);
     digest(n.pendingPee, n.pee, kPeeDigestPerSec * dt);
     digest(n.pendingPoo, n.poo, kPooDigestPerSec * dt);
 }
@@ -194,6 +199,8 @@ std::uint8_t needs_failed_mask(const Needs& n) {
     if (n.sleep <= 0.0f)     m |= NeedSleep;   // reported, but costs 0 HP/s
     if (n.pee   >= kNeedMax) m |= NeedPee;
     if (n.poo   >= kNeedMax) m |= NeedPoo;
+    if (n.sanity <= 0.0f)    m |= NeedSanity;
+    if (n.radiation >= kNeedMax) m |= NeedRadiation;
     return m;
 }
 
@@ -204,6 +211,8 @@ std::uint8_t needs_warn_mask(const Needs& n) {
     if (n.sleep < kSleepWarnAt) m |= NeedSleep;
     if (n.pee   > kPeeWarnAt)   m |= NeedPee;
     if (n.poo   > kPooWarnAt)   m |= NeedPoo;
+    if (n.sanity < kSanityWarnAt) m |= NeedSanity;
+    if (n.radiation > kRadiationWarnAt) m |= NeedRadiation;
     return m;
 }
 
@@ -216,6 +225,8 @@ float needs_hp_rate(const Needs& n) {
     if (f & NeedWater) rate += kDehydrationHpPerSec;
     if (f & NeedPee)   rate += kOverflowHpPerSec;
     if (f & NeedPoo)   rate += kOverflowHpPerSec;
+    if (f & NeedSanity) rate += kInsanityHpPerSec;
+    if (f & NeedRadiation) rate += kLethalRadHpPerSec;
     return rate;
 }
 
@@ -244,6 +255,8 @@ float needs_speed_scale(const Needs& n) {
     if (n.sleep < kSleepExhaustedAt) scale *= kSleepExhaustedSpeedScale; // 0.5f exhaustion penalty
     if (n.food <= 0.0f)              scale *= 0.75f; // 25% starvation penalty
     if (n.water <= 0.0f)             scale *= 0.65f; // 35% dehydration penalty
+    if (n.sanity <= 0.0f)            scale *= 0.80f; // 20% panic penalty
+    if (n.radiation >= 50.0f)        scale *= 0.90f; // 10% sickness penalty (early onset)
     return scale;
 }
 

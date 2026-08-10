@@ -108,8 +108,9 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // Version 9: live status effects travel too — StatusSet (remainMs/intensityE3/alt
 // for all six authored statuses). F5 mid-haze must not wipe the timers on F9;
 // a loaded body keeps the same move/aim/melee mults it saved under. [status.h]
-// SAVSTAT
-inline constexpr std::uint32_t kSaveVersion = 10u;
+// Version 10: Spec 03 Wear and jam states on equipped weapons
+// Version 11: Spec 04 Needs (Sanity, Radiation)
+inline constexpr std::uint32_t kSaveVersion = 11u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around

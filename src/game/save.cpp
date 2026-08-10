@@ -237,6 +237,8 @@ void visit_needs(Ar& ar, N& n) {
     ar.f32(n.pendingPoo);
     ar.f32(n.hpDebt);
     ar.f32(n.hpBank);
+    ar.f32(n.sanity);
+    ar.f32(n.radiation);
     ar.u8(n.seeded);
 }
 

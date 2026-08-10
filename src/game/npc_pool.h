@@ -172,10 +172,12 @@ struct Needs {
     // into pool.hp() each tick in needs_step. Same shape as hpDebt on the damage side.
     // Used by: Medical room recovery (kRoomRecovery) and Medic role (careDrive path).
     float hpBank = 0.0f;
+    float sanity = 0.0f;      // 0..100 reserve, drains; 0 = insane
+    float radiation = 0.0f;   // 0..100 pressure, fills; 100 = lethal
     std::uint8_t seeded = 0;  // 0 = never rolled (see above)
     std::uint8_t pad_[3] = {};
 };
-static_assert(sizeof(Needs) == 40, "Needs must stay a tight 40-byte row (hpBank added 2026-08-09)");
+static_assert(sizeof(Needs) == 48, "Needs must stay a tight 48-byte row (sanity/rad added)");
 static_assert(alignof(Needs) == 4);
 
 // Semantics of Relationship::affinity — the per-NPC social graph ([macrosim.md]

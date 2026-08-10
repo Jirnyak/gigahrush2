@@ -105,6 +105,7 @@
 #include "render/vk_swapchain.h"
 #include "render/voxel_mirror.h"
 #include "render/raymarch_pass.h"
+#include "render/post_pass.h"
 #include "render/screenshot.h"
 #include "sim/camera.h"
 #include "sim/controller.h"
@@ -116,6 +117,8 @@
 #include "world/level_stack.h"
 #include "world/nav.h"
 #include "world/nav_async.h"
+#include "audio/audio_device.h"
+#include "audio/voice.h"
 
 using namespace giga;
 
@@ -1731,8 +1734,14 @@ int main(int argc, char** argv) {
     std::vector<game::DetachedPiece> antourageFalling;
 
 
+    gpu::PostPass postPass;
+    if (!postPass.init(device, renderer.post_render_pass(), GIGA_SHADER_DIR)) {
+        std::fprintf(stderr, "[post] pass init failed\n");
+        return 1;
+    }
+
     gpu::ImGuiLayer hud;
-    if (!hud.init(device, window, renderer.renderPass,
+    if (!hud.init(device, window, renderer.post_render_pass(),
                   static_cast<std::uint32_t>(renderer.swap().images.size()))) {
         std::fprintf(stderr, "ImGui init failed\n");
         bodyPass.destroy();
@@ -1744,6 +1753,17 @@ int main(int argc, char** argv) {
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
+    }
+
+    // --- Audio init (Phase 0) -----------------------------------------------
+    // Non-fatal: the game runs silently if audio fails (headless servers, CI).
+    giga::audio::AudioDevice audioDevice;
+    giga::audio::VoiceManager voices;
+    const bool audioOk = audioDevice.init();
+    if (!audioOk) {
+        std::fprintf(stderr, "[audio] AudioDevice init failed — running silent\n");
+    } else {
+        voices.init(audioDevice);
     }
 
     // --- World + ECS setup -------------------------------------------------
@@ -4663,6 +4683,19 @@ int main(int argc, char** argv) {
         float aspect = fbh > 0 ? static_cast<float>(fbw) / fbh : 1.0f;
         CameraMatrices camMat = compute_camera(reg, aspect);
 
+        // Audio listener update — every frame, non-fatal if audio is absent.
+        if (audioOk) {
+            // vec3 members are {x, y, z}; OpenAL uses a right-handed +Y-up
+            // system; the engine uses the same convention, so no transform needed.
+            const float listenerPos[3] = {camMat.eye.x, camMat.eye.y, camMat.eye.z};
+            const float listenerFwd[3] = {camMat.forward.x, camMat.forward.y, camMat.forward.z};
+            const float listenerUp[3]  = {0.0f, 0.0f, 1.0f};
+            audioDevice.update_listener(listenerPos, listenerFwd, listenerUp);
+            if (activeLayer != kInvalidLayer) {
+                voices.update(audioDevice, listenerPos);
+            }
+        }
+
         hud.begin_frame();
         if (showHud)
         {
@@ -5877,6 +5910,23 @@ int main(int argc, char** argv) {
             cubeMs = static_cast<float>((t1 - t0) / freq * 1000.0);
             bodyMs = static_cast<float>((t2 - t1) / freq * 1000.0);
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Hud);
+            
+            renderer.begin_post_pass(1.0f / 60.0f);
+            gpu::PostState postState{};
+            // Expose the EyeAdapt GPU result to the PostState CPU side.
+            postState.darkAdapt = renderer.eyeAdaptPass_.get_current_lum();
+            if (player != entt::null) {
+                const game::NpcId pid = reg.get<game::NpcRef>(player).id;
+                const game::Needs& needs = pool.needs(pid);
+                if (needs.sanity < 30.0f) {
+                    postState.hallucination = (30.0f - needs.sanity) / 30.0f;
+                }
+                const game::StatusSet* statuses = reg.try_get<game::StatusSet>(player);
+                if (statuses && game::status_is_active(*statuses, game::StatusId::PsiStun)) {
+                    postState.stun = 1.0f;
+                }
+            }
+            postPass.record(cmd, renderer.offscreen_view(), postState);
             hud.render(cmd);
             renderer.timer.pass_end(cmd, gpu::GpuPass::Hud);
             renderer.end_frame(window);
@@ -6087,6 +6137,12 @@ int main(int argc, char** argv) {
     voxelMirror.destroy();
     cubePass.destroy();
     lightGrid.destroy();
+    // Audio must be torn down before the Vulkan device (no shared resources,
+    // but destroying context after a GPU teardown is still cleaner).
+    if (audioOk) {
+        voices.destroy();
+        audioDevice.destroy();
+    }
     renderer.destroy();
     device.destroy();
     SDL_DestroyWindow(window);

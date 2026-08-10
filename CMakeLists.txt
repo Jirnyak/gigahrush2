@@ -190,6 +190,16 @@ if(NOT SDL3_FOUND)
     FetchContent_MakeAvailable(SDL3)
 endif()
 
+FetchContent_Declare(OpenAL
+    GIT_REPOSITORY https://github.com/kcat/openal-soft.git
+    GIT_TAG 1.23.1
+)
+set(ALSOFT_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(ALSOFT_TESTS OFF CACHE BOOL "" FORCE)
+set(ALSOFT_UTILS OFF CACHE BOOL "" FORCE)
+set(ALSOFT_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(OpenAL)
+
 set(IMGUI_SOURCES
     ${imgui_SOURCE_DIR}/imgui.cpp
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
@@ -233,7 +243,7 @@ set(_giga_spv_files "")
 # explicit list rather than a GLOB — a stray .glsl should not silently start forcing
 # every shader to recompile.
 set(_giga_glsl_includes ${CMAKE_SOURCE_DIR}/shaders/material_surface.glsl ${CMAKE_SOURCE_DIR}/shaders/volumetric_fog.glsl)
-foreach(_sh cube.frag body.vert prop.vert prop.frag raymarch.vert raymarch.frag wire.vert wire.frag particle.vert particle.frag cloth.vert cloth.frag)
+foreach(_sh cube.frag body.vert prop.vert prop.frag raymarch.vert raymarch.frag wire.vert wire.frag particle.vert particle.frag cloth.vert cloth.frag post.vert post.frag)
     add_custom_command(
         OUTPUT ${_giga_spv_dir}/${_sh}.spv
         COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O
@@ -303,6 +313,15 @@ add_custom_command(
     COMMENT "glslc gas_sim.comp -> gas_sim.comp.spv")
 list(APPEND _giga_spv_files ${_giga_spv_dir}/gas_sim.comp.spv)
 
+add_custom_command(
+    OUTPUT ${_giga_spv_dir}/adapt.comp.spv
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0
+        ${CMAKE_SOURCE_DIR}/shaders/adapt.comp
+        -o ${_giga_spv_dir}/adapt.comp.spv
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/adapt.comp
+    COMMENT "glslc adapt.comp -> adapt.comp.spv")
+list(APPEND _giga_spv_files ${_giga_spv_dir}/adapt.comp.spv)
+
 # prop_tex.frag — triplanar KTX2 texture variant for prop pass.
 add_custom_command(
     OUTPUT ${_giga_spv_dir}/prop_tex.frag.spv
@@ -361,6 +380,7 @@ add_custom_target(giga_shaders DEPENDS ${_giga_spv_files})
 # any .cpp added in a subdirectory, and the symptom is a link error far from the
 # cause.
 file(GLOB_RECURSE GIGA_RENDER_SOURCES CONFIGURE_DEPENDS src/render/*.cpp)
+file(GLOB_RECURSE GIGA_AUDIO_SOURCES CONFIGURE_DEPENDS src/audio/*.cpp)
 file(GLOB_RECURSE GIGA_APP_SOURCES CONFIGURE_DEPENDS
     src/app/*.cpp src/input/*.cpp)
 
@@ -372,7 +392,7 @@ target_include_directories(giga_imgui PUBLIC
     ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
 target_link_libraries(giga_imgui PUBLIC SDL3::SDL3 Vulkan::Vulkan)
 
-add_executable(gigahrush2 ${GIGA_APP_SOURCES} ${GIGA_RENDER_SOURCES})
+add_executable(gigahrush2 ${GIGA_APP_SOURCES} ${GIGA_RENDER_SOURCES} ${GIGA_AUDIO_SOURCES})
 add_dependencies(gigahrush2 giga_shaders)
 target_include_directories(gigahrush2 PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_definitions(gigahrush2 PRIVATE
@@ -383,8 +403,9 @@ target_compile_definitions(gigahrush2 PRIVATE
 # note the target name is lowercase `ktx`, not a KTX:: namespaced alias — KTX-Software
 # exports it unnamespaced when built as a subproject.
 target_link_libraries(gigahrush2 PRIVATE giga_game giga_core giga_imgui
-    SDL3::SDL3 Vulkan::Vulkan ktx)
-target_include_directories(gigahrush2 PRIVATE ${ktx_SOURCE_DIR}/include)
+    SDL3::SDL3 Vulkan::Vulkan ktx OpenAL)
+target_include_directories(gigahrush2 PRIVATE ${ktx_SOURCE_DIR}/include
+    ${openal_SOURCE_DIR}/include)
 # RTTI is permitted in the app shell (ON) — only the core/game libs forbid it.
 giga_target_flags(gigahrush2 ON)
 

@@ -87,6 +87,8 @@ inline constexpr float kNeedMax = 100.0f;
 inline constexpr float kFoodDrainPerSec  = 0.08f;
 inline constexpr float kWaterDrainPerSec = 0.12f;
 inline constexpr float kSleepDrainPerSec = 0.05f;
+inline constexpr float kSanityDrainPerSec = 0.03f; // sanity degrades slowly over time
+inline constexpr float kRadiationFillPerSec = 0.0f; // radiation only fills from environmental hazards
 static_assert(kWaterDrainPerSec > kFoodDrainPerSec,
               "water must run out before food — that ordering IS the design");
 
@@ -102,6 +104,8 @@ inline constexpr float kPooDigestPerSec = 0.06f;
 inline constexpr float kHungerHpPerSec      = 0.3f;   // food  <= 0
 inline constexpr float kDehydrationHpPerSec = 0.5f;   // water <= 0
 inline constexpr float kOverflowHpPerSec    = 0.1f;   // pee or poo >= 100, each
+inline constexpr float kInsanityHpPerSec    = 0.2f;   // sanity <= 0 (self-harm/panic)
+inline constexpr float kLethalRadHpPerSec   = 1.0f;   // radiation >= 100
 
 // `main.ts:3777-3786`: flat, binary, no ramp.
 inline constexpr float kSleepExhaustedAt = 10.0f;
@@ -114,6 +118,8 @@ inline constexpr float kStartWaterLo = 70.0f, kStartWaterHi = 100.0f;
 inline constexpr float kStartSleepLo = 60.0f, kStartSleepHi = 100.0f;
 inline constexpr float kStartPeeLo   =  0.0f, kStartPeeHi   =  30.0f;
 inline constexpr float kStartPooLo   =  0.0f, kStartPooHi   =  20.0f;
+inline constexpr float kStartSanityLo = 80.0f, kStartSanityHi = 100.0f;
+inline constexpr float kStartRadLo    =  0.0f, kStartRadHi    =  0.0f;
 
 // THE SURVIVAL WINDOW. A reserve `v` at drain `r` lasts `v / r` seconds:
 //
@@ -143,10 +149,12 @@ inline constexpr float kNeedWarnLeadSec = 120.0f;
 inline constexpr float kFoodWarnAt  = kFoodDrainPerSec  * kNeedWarnLeadSec;  //  9.6
 inline constexpr float kWaterWarnAt = kWaterDrainPerSec * kNeedWarnLeadSec;  // 14.4
 inline constexpr float kSleepWarnAt = kSleepDrainPerSec * kNeedWarnLeadSec;  //  6.0
+inline constexpr float kSanityWarnAt = kSanityDrainPerSec * kNeedWarnLeadSec; //  3.6
 // Pressures warn by headroom, and their lead is a WORST case: it only elapses while
 // the pending queue still has something to meter out.
 inline constexpr float kPeeWarnAt = kNeedMax - kPeeDigestPerSec * kNeedWarnLeadSec; // 88.0
 inline constexpr float kPooWarnAt = kNeedMax - kPooDigestPerSec * kNeedWarnLeadSec; // 92.8
+inline constexpr float kRadiationWarnAt = 80.0f; // flat warning since it's driven by external hazards, not steady internal meter
 
 // What goes in comes out. Structural helper constants in the reference
 // (`items.ts:32-34`), not per-item data, so they port verbatim.
@@ -228,11 +236,13 @@ static_assert(kStartWaterLo - kWaterDrainPerSec * kResidentPhaseMaxSec > 0.0f,
 
 // One byte answers the HUD, the warning line and the damage sum at once.
 enum NeedBit : std::uint8_t {
-    NeedFood  = 1u << 0,
-    NeedWater = 1u << 1,
-    NeedSleep = 1u << 2,
-    NeedPee   = 1u << 3,
-    NeedPoo   = 1u << 4,
+    NeedFood      = 1u << 0,
+    NeedWater     = 1u << 1,
+    NeedSleep     = 1u << 2,
+    NeedPee       = 1u << 3,
+    NeedPoo       = 1u << 4,
+    NeedSanity    = 1u << 5,
+    NeedRadiation = 1u << 6,
 };
 
 // What one `needs_step` actually did — the "report what LANDED" shape of
