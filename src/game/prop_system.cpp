@@ -88,7 +88,15 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
             std::uint16_t matId = 0;
             if (reg.all_of<PropMesh>(prop))
                 matId = reg.get<PropMesh>(prop).matId;
-            bursts->push(pos, vec3{0.0f, 0.0f, 0.35f}, ParticleKind::Debris, 6,
+            // Burst direction rides the caller's impulse, which callers derive
+            // from the layer's gravity vector — this function has no World and
+            // must NOT invent an axis of its own ([AGENTS.md]: never assume -Z).
+            // Falls back to +Z when the impulse is degenerate — the same last-resort
+            // axis the SimpleFall branch below uses, so the two never disagree.
+            const float iLen = length(impulse);
+            const vec3 dir = iLen > 1e-6f ? impulse * (0.35f / iLen)
+                                          : vec3{0.0f, 0.0f, 0.35f};
+            bursts->push(pos, dir, ParticleKind::Debris, 6,
                          matId, seed ^ 0xD3B15u);
         }
         reg.destroy(prop);
@@ -108,7 +116,13 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
         reg.emplace_or_replace<AngularVelocity>(prop, AngularVelocity{vec3{impulse.z, impulse.x, 2.0f}});
         reg.emplace_or_replace<Rotation>(prop);
     } else {
-        reg.emplace_or_replace<Velocity>(prop, Velocity{vec3{0.0f, 0.0f, -0.5f}});
+        // SimpleFall: a small shove along the pull. Derived by negating the
+        // caller's up-facing impulse instead of hardcoding -Z, for the same
+        // reason as the burst above — this function never sees a World.
+        const float iLen = length(impulse);
+        const vec3 down =
+            iLen > 1e-6f ? impulse * (-0.5f / iLen) : vec3{0.0f, 0.0f, -0.5f};
+        reg.emplace_or_replace<Velocity>(prop, Velocity{down});
     }
 
     // BodyPass needs AABB -- without it a detached prop is invisible.
@@ -199,8 +213,16 @@ std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& 
             std::uint32_t mk = 0;
             if (reg.all_of<PropMesh>(entity))
                 mk = static_cast<std::uint32_t>(reg.get<PropMesh>(entity).shape);
+            // The detach kick is a nudge AWAY from the pull, so it is derived from
+            // the layer's gravity vector, not the literal +Z it used to be
+            // ([AGENTS.md]: never assume -Z). `world` is already in hand here, so
+            // there is no excuse for guessing which way is up.
+            const vec3 g = world.gravity().at(tr.pos);
+            const float gLen = length(g);
+            const vec3 up =
+                gLen > 1e-6f ? g * (-1.0f / gLen) : vec3{0.0f, 0.0f, 1.0f};
             detached.push_back({entity, view.get<PropFallMode>(entity), tr.pos,
-                                vec3{0.0f, 0.0f, 1.0f}, col, mk});
+                                up, col, mk});
         }
     }
 
