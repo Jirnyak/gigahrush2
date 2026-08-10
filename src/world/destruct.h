@@ -69,8 +69,7 @@ struct StressParams {
 
 // Absolute sub-voxel grid: 128 cells x 8 = 1024 per axis, a power of two, so
 // toroidal wrap is a mask.
-inline constexpr int kSubGridDim = kMacroDim * kSubDim;
-inline constexpr int kSubGridMask = kSubGridDim - 1;
+
 
 // One removed sub-voxel: packed cell index + sub bit, and the material it was.
 // 8 bytes; `cell` is the flat macro_index, `bit` the sub_bit.

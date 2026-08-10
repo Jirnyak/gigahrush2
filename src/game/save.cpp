@@ -245,6 +245,8 @@ void visit_inventory(Ar& ar, I& inv) {
     for (int i = 0; i < kInvSlots; ++i) {
         ar.u16(inv.slots[i].item);
         ar.u16(inv.slots[i].count);
+        ar.u8(inv.slots[i].condition);
+        ar.u8(inv.slots[i].pad_);
     }
 }
 
@@ -252,6 +254,8 @@ template <class Ar, class P>
 void visit_player(Ar& ar, P& p) {
     visit_needs(ar, p.clock);
     visit_inventory(ar, p.inv);
+    for (int i = 0; i < static_cast<int>(EquipSlot::kEquipSlotCount); ++i)
+        ar.u8(p.eq.invSlot[i]);
     ar.i32(p.hp);
     ar.i32(p.maxHp);
     ar.i32(p.floorNumber);

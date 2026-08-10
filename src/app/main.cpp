@@ -3887,7 +3887,7 @@ int main(int argc, char** argv) {
                 shots += game::player_ranged_step(reg, pool, activeLayer,
                                                   haveGun && attackHeld && !paused,
                                                   kSimDt, simTick, &noiseField,
-                                                  &playerStatus);
+                                                  &playerStatus, &simBus);
                 game::player_melee_step(
                     reg, pool, bus, activeLayer, kSimDt,
                     !haveGun && attackHeld && !paused, simTick,
@@ -3915,13 +3915,20 @@ int main(int argc, char** argv) {
                 // Drain combat carve proposals through the same carve_sphere
                 // path the console uses. Frozen bake: drop (v1); console keeps
                 // pending via carveRadius until bake lands.
+                if (doors.frozen && combatCarves.count > 0) {
+                    combatCarves.droppedBake += combatCarves.count;
+                    combatCarves.count = 0;
+                }
+
                 if (combatCarves.count > 0 || combatCarves.droppedFull > 0 ||
-                    combatCarves.droppedDegenerate > 0 || combatCarves.clampedRadius > 0) {
+                    combatCarves.droppedDegenerate > 0 || combatCarves.droppedBake > 0 ||
+                    combatCarves.clampedRadius > 0) {
                     std::fprintf(stderr,
-                                 "[carve] proposals=%u dropped_full=%u dropped_degen=%u clamped=%u\n",
+                                 "[carve] proposals=%u dropped_full=%u dropped_degen=%u dropped_bake=%u clamped=%u\n",
                                  static_cast<unsigned>(combatCarves.count),
                                  static_cast<unsigned>(combatCarves.droppedFull),
                                  static_cast<unsigned>(combatCarves.droppedDegenerate),
+                                 static_cast<unsigned>(combatCarves.droppedBake),
                                  static_cast<unsigned>(combatCarves.clampedRadius));
                 }
 
@@ -4307,6 +4314,8 @@ int main(int argc, char** argv) {
                             if (pid != game::kInvalidNpc) {
                                 game::apply_player_snapshot(pool, pid,
                                                             runState.player);
+                                if (reg.valid(player))
+                                    reg.emplace_or_replace<game::Equipped>(player, runState.player.eq);
                                 game::sync_armour(reg, pool, player);
                             }
                             // Version 7: stamp the sheet onto the body and the
@@ -4516,7 +4525,8 @@ int main(int argc, char** argv) {
                                 contracts, pool, pool.inventory(nrc->id), ledger);
                             questPaid += game::quest_step(
                                 quests, pool, pool.inventory(nrc->id), ledger,
-                                static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f));
+                                static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f),
+                                reg.try_get<game::RpgStats>(player));
                         }
                 // Eating and drinking sit beside healing and AFTER pickup_step, so a
                 // ration picked up this tick can be eaten this tick. Both refuse a

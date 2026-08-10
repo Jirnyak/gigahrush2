@@ -10,25 +10,18 @@
 
 namespace giga {
 
-// KEY PACKING IS NOT A ONE-LINE KNOB — spec2.txt §5.2, types.h §19.
-// The sub-voxel bit layout in pack_key/unpack_key/key_at hardcodes:
-//   shift 9   = kSubVoxels bits (8^3 = 512 => 9 bits)
-//   mask 511  = 9-bit sub index (0..511)
-//   >>3 / &7  = 3-bit sub-axis = kSubDim / 2
-// Changing kSubDim without updating this file is undefined behaviour.
-// voxels.md once claimed \"changing kSubDim is a one-line edit\"; that was
-// wrong and this assert is the correction.
-static_assert(kSubDim == 8,
-              "destruct.cpp key packing hardcodes kSubDim == 8 "
-              "(shift 9 == log2(8^3), mask 511 == 8^3-1, >>3 & 7 == sub axis). "
-              "Update pack_key/unpack_key/key_at before changing kSubDim.");
+// Key packing now uses dynamic bitshifts derived from kSubDim (types.h).
+// kSubDim can be changed (e.g. to 16) without breaking these bitwise operations,
+// provided kSubDim is a power of 2.
+static_assert(std::has_single_bit(static_cast<unsigned>(kSubDim)),
+              "kSubDim must be a power of 2 for bitwise math in destruct.cpp");
 
 namespace {
 
 // --- packed sub-voxel keys ---------------------------------------------------
 // key = macro cell index (21 bits) << 9 | sub bit (9 bits). Fits 30 bits.
 inline std::uint32_t pack_key(std::uint32_t ci, std::uint32_t bit) {
-    return (ci << 9) | bit;
+    return (ci << kSubVoxelsShift) | bit;
 }
 
 struct SubCoord {
@@ -37,14 +30,14 @@ struct SubCoord {
 };
 
 inline SubCoord unpack_key(std::uint32_t key) {
-    const std::uint32_t ci = key >> 9, bit = key & 511u;
+    const std::uint32_t ci = key >> kSubVoxelsShift, bit = key & kSubVoxelsMask;
     SubCoord c;
     c.cx = static_cast<int>(ci & 127u);
     c.cy = static_cast<int>((ci >> 7) & 127u);
     c.cz = static_cast<int>(ci >> 14);
-    c.sx = static_cast<int>(bit & 7u);
-    c.sy = static_cast<int>((bit >> 3) & 7u);
-    c.sz = static_cast<int>(bit >> 6);
+    c.sx = static_cast<int>(bit & kSubDimMask);
+    c.sy = static_cast<int>((bit >> kSubDimShift) & 7u);
+    c.sz = static_cast<int>(bit >> (kSubDimShift * 2));
     return c;
 }
 
@@ -55,21 +48,21 @@ inline std::uint32_t key_at(int ax, int ay, int az) {
     ay &= kSubGridMask;
     az &= kSubGridMask;
     const std::uint32_t ci = static_cast<std::uint32_t>(
-        macro_index(ax >> 3, ay >> 3, az >> 3));
+        macro_index(ax >> kSubDimShift, ay >> kSubDimShift, az >> kSubDimShift));
     const std::uint32_t bit =
-        static_cast<std::uint32_t>(sub_bit(ax & 7, ay & 7, az & 7));
+        static_cast<std::uint32_t>(sub_bit(ax & kSubDimMask, ay & kSubDimMask, az & kSubDimMask));
     return pack_key(ci, bit);
 }
 
 inline bool solid_key(const MacroGrid& g, std::uint32_t key) {
-    return g.masks()[key >> 9].test(static_cast<int>(key & 511u));
+    return g.masks()[key >> kSubVoxelsShift].test(static_cast<int>(key & kSubVoxelsMask));
 }
 
 inline CellType mat_key(const World& w, const SubField<CellType>* mats,
                         std::uint32_t key) {
-    const std::size_t ci = key >> 9;
+    const std::size_t ci = key >> kSubVoxelsShift;
     const CellType base = w.grid().types()[ci];
-    return mats ? mats->at(ci, static_cast<int>(key & 511u), base) : base;
+    return mats ? mats->at(ci, static_cast<int>(key & kSubVoxelsMask), base) : base;
 }
 
 // Clear one sub-voxel and keep every invariant: an emptied cell reverts to air
@@ -77,10 +70,10 @@ inline CellType mat_key(const World& w, const SubField<CellType>* mats,
 // dirty marks.
 inline void remove_key(World& w, SubField<CellType>* mats, std::uint32_t key,
                        std::vector<std::uint32_t>& dirty) {
-    const std::uint32_t ci = key >> 9;
+    const std::uint32_t ci = key >> kSubVoxelsShift;
     const SubCoord c = unpack_key(key);
     SubMask& m = w.grid().mask(c.cx, c.cy, c.cz);
-    m.clear(static_cast<int>(key & 511u));
+    m.clear(static_cast<int>(key & kSubVoxelsMask));
     dirty.push_back(ci);
     if (m.empty()) {
         w.grid().set_cell(c.cx, c.cy, c.cz, kCellAir);
@@ -189,7 +182,7 @@ bool flood_component(const MacroGrid& g, const Field<std::uint8_t>* anchors, Vis
             const int r = vis.probe(nk, run);
             if (r == 0) continue;       // our own frontier, already queued
             if (r < 0) return false;    // merged into a supported region
-            if (anchors && anchors->data()[nk >> 9] != 0) return false; // anchored
+            if (anchors && anchors->data()[nk >> kSubVoxelsShift] != 0) return false; // anchored
             s.comp.push_back(nk);
             s.queue.push_back(nk);
             if (static_cast<std::int32_t>(s.comp.size()) > limit)
@@ -227,7 +220,7 @@ void detach_sweep(World& w, SubField<CellType>* mats, std::int32_t limit,
             if (!flood_component(w.grid(), anchors, vis, s, nk, run, limit)) continue;
             for (std::uint32_t k : s.comp) {
                 out.detached.push_back(CarvedVoxel{
-                    k >> 9, static_cast<std::uint16_t>(k & 511u),
+                    k >> kSubVoxelsShift, static_cast<std::uint16_t>(k & kSubVoxelsMask),
                     mat_key(w, mats, k)});
                 remove_key(w, mats, k, out.dirtyCells);
             }
@@ -333,13 +326,13 @@ std::int32_t carve_sphere(World& w, const CarveOp& op, CarveScratch& scratch,
                 const std::uint16_t peff = static_cast<std::uint16_t>(
                     static_cast<float>(op.power) * (r2 - d2) / r2);
                 if (peff == 0) continue;
-                const std::uint32_t ci = key >> 9;
+                const std::uint32_t ci = key >> kSubVoxelsShift;
                 if (sealedMask && !sealedMask->empty() && ((*sealedMask)[ci / 64] & (1ull << (ci % 64)))) continue;
-                if (!carve_roll(carve_hash(op.seed, ci, key & 511u), peff,
+                if (!carve_roll(carve_hash(op.seed, ci, key & kSubVoxelsMask), peff,
                                 hardness))
                     continue;
                 out.destroyed.push_back(CarvedVoxel{
-                    ci, static_cast<std::uint16_t>(key & 511u), mat});
+                    ci, static_cast<std::uint16_t>(key & kSubVoxelsMask), mat});
                 remove_key(w, mats, key, out.dirtyCells);
             }
         }

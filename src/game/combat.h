@@ -603,6 +603,13 @@ void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
 // in one step without allocating on the hot path.
 inline constexpr std::size_t kMaxCarveProposals = 128;
 
+enum class DropReason : std::uint8_t {
+    None = 0,
+    QueueFull,
+    InvalidRadiusPower,
+    BakeInProgress
+};
+
 struct CarveProposal {
     float x = 0.0f;
     float y = 0.0f;
@@ -619,23 +626,27 @@ struct CarveProposalQueue {
     std::uint8_t count = 0;
     std::uint16_t droppedFull = 0;
     std::uint16_t droppedDegenerate = 0;
+    std::uint16_t droppedBake = 0;
     std::uint16_t clampedRadius = 0;
 
     void clear() {
         count = 0;
         droppedFull = 0;
         droppedDegenerate = 0;
+        droppedBake = 0;
         clampedRadius = 0;
     }
 
     bool push(float x, float y, float z, float radius, std::uint16_t power,
-              std::uint32_t seed) {
+              std::uint32_t seed, DropReason* outReason = nullptr) {
         if (count >= kMaxCarveProposals) {
             ++droppedFull;
+            if (outReason) *outReason = DropReason::QueueFull;
             return false;
         }
         if (radius <= 0.0f || power == 0) {
             ++droppedDegenerate;
+            if (outReason) *outReason = DropReason::InvalidRadiusPower;
             return false;
         }
         if (radius > 8.0f) {
@@ -643,6 +654,7 @@ struct CarveProposalQueue {
             ++clampedRadius;
         } // one carve, not a demolition service
         items[count++] = CarveProposal{x, y, z, radius, power, seed};
+        if (outReason) *outReason = DropReason::None;
         return true;
     }
 };
@@ -703,7 +715,8 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
 std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
                                  bool wantFire, float dt, std::uint64_t tick,
                                  NoiseField* noise = nullptr,
-                                 const StatusSet* status = nullptr);
+                                 const StatusSet* status = nullptr,
+                                 EventBus* bus = nullptr);
 
 // Optional `grid` + `carves`: when a swing finds no monster in the facing cone,
 // probe the cell the camera is looking at and propose a wall chip. Without both

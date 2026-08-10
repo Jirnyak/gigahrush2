@@ -79,7 +79,7 @@ inline constexpr float kOverloadSleepDrainPerSec = 0.10f;
 // punished for the strength it paid for.
 inline constexpr float kNoiseLoadGain = 0.6f;
 
-class NoiseField;
+struct NoiseField;
 
 // What one body's load costs it. All three numbers are pure functions of
 // (carried, capacity) so they can be unit-tested without a registry.

@@ -59,6 +59,7 @@
 #include "game/craft.h"       // CraftingState, kCraftingWire, craft_write/read
 #include "game/combat.h"      // PlayerRanged (SAVMAG v8)
 #include "game/status.h"      // StatusSet (SAVSTAT v9)
+#include "equip.h"
 #include "world/destruct.h"   // CarveOp, CarveScratch, CarveResult, carve_sphere
 #include "world/level_stack.h"  // LayerId, and World via world/world.h
 #include "game/hermetic.h"
@@ -108,7 +109,7 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // for all six authored statuses). F5 mid-haze must not wipe the timers on F9;
 // a loaded body keeps the same move/aim/melee mults it saved under. [status.h]
 // SAVSTAT
-inline constexpr std::uint32_t kSaveVersion = 9u;
+inline constexpr std::uint32_t kSaveVersion = 10u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -399,6 +400,7 @@ bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
 struct PlayerSnapshot {
     Needs clock{};              // the survival clock; canonical in the pool row
     Inventory inv{};            // 64 slots, 256 B
+    Equipped eq{};              // 4 B, equipped slots
     std::int32_t hp = 0;        // also pool-row state, also unreproducible
     std::int32_t maxHp = 0;
     // The SIGNED floor the player stood on. Saved separately and explicitly because

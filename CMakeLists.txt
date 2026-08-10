@@ -767,7 +767,7 @@ if(GIGA_BUILD_TESTS)
     #   test_gravity_regimes_isotropy() — добавляет test_fluid_isotropy() (1 CHECK). Это же
     #   закрывает source_rules: _all() была определена но не диспатчилась (check_source_rules
     #   требует что каждая suite_*.inl функция _all() должна быть вызвана из tests/*.cpp).
-        PASS_REGULAR_EXPRESSION "game_test: 235169 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "game_test: 235191 checks, 0 failures")
 
 
 

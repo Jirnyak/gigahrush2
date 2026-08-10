@@ -26,9 +26,6 @@ namespace giga {
 // silently dry, and nothing would fail to compile.
 inline constexpr const char* kFluidField = "fluid";
 
-// Separate field for buoyant gas (e.g. CO2, methane) in elevator shafts.
-// Gas uses the same cellular automata step but with inverted gravity direction.
-inline constexpr const char* kGasField = "gas";
 
 
 // Amounts below this are dribbles: never transferred, and treated as DRY by every

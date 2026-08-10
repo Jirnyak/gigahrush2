@@ -47,6 +47,8 @@
 #include "world/materials.h"
 #include "world/subfield.h"
 #include "world/types.h"
+#include "world/gas_field.h"
+#include "world/macro_grid.h"
 #include "world/world.h"
 
 #include <cstring>
@@ -589,9 +591,9 @@ void padic_apply_rules(World& world, int number, const FloorSpec& /*spec*/,
     if (wet == nullptr) wet = &world.fields().get_or_create<float>(kFluidField, 0.0f);
     else wet->fill(0.0f);
 
-    Field<float>* gas = world.fields().find<float>(kGasField);
-    if (gas == nullptr) gas = &world.fields().get_or_create<float>(kGasField, 0.0f);
-    else gas->fill(0.0f);
+    Field<GasCell>* gas = world.fields().find<GasCell>(kGasField);
+    if (gas == nullptr) gas = &world.fields().get_or_create<GasCell>(kGasField, GasCell{0, 0, 255, 0});
+    else gas->fill(GasCell{0, 0, 255, 0});
 
     // Seed water in lattice elevator pit (z=0..2) and stair landing sumps
     for (int ny = 0; ny < kLatticeDim; ++ny) {
@@ -620,7 +622,7 @@ void padic_apply_rules(World& world, int number, const FloorSpec& /*spec*/,
             int cy = lattice_coord(ny);
             for (int z = 3; z <= 15; ++z) {
                 std::size_t idx = macro_index(wrap_macro(cx), wrap_macro(cy), z);
-                gas->data()[idx] = 0.6f;
+                gas->data()[idx].toxic = 153; // 0.6 * 255
             }
         }
     }

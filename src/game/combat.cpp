@@ -23,6 +23,7 @@
 #include "game/monster_traits.h"
 #include "game/ranged_table.h"
 #include "game/rpg.h"      // RpgStats, xp_for_monster_kill, award_xp
+#include "game/equip.h"
 #include "game/status.h"   // StatusSet, status_melee/aim mults
 #include "game/weapon_table.h"
 #include "sim/camera.h"   // camera_forward
@@ -1343,7 +1344,8 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
 
 std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
                                  bool wantFire, float dt, std::uint64_t tick,
-                                 NoiseField* noise, const StatusSet* status) {
+                                 NoiseField* noise, const StatusSet* status,
+                                 EventBus* bus) {
     Entity shooter = entt::null;
     for (auto e : reg.view<const CameraTag, const Transform>()) {
         if (reg.get<const Transform>(e).layer != layer) continue;
@@ -1369,7 +1371,7 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
     if (!nr || !pool.valid(nr->id)) return 0;
     Inventory& inv = pool.inventory(nr->id);
 
-    const ItemId gun = equipped_ranged(inv);
+    const ItemId gun = equipped_ranged(inv, reg.try_get<Equipped>(shooter));
     const RangedDef* def = ranged_for_item(gun);
     if (!def) return 0;
 
@@ -1407,6 +1409,46 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
 
     if (!wantFire || pr.cooldownMs > 0) return 0;
 
+    // Find the actual slot to apply wear.
+    ItemSlot* gunSlot = nullptr;
+    if (const Equipped* eq = reg.try_get<Equipped>(shooter)) {
+        const std::uint8_t slotIdx = eq->invSlot[static_cast<std::size_t>(EquipSlot::Weapon)];
+        if (slotIdx < kInvSlots && inv.slots[slotIdx].item == gun) {
+            gunSlot = &inv.slots[slotIdx];
+        }
+    }
+    if (!gunSlot) {
+        for (ItemSlot& sl : inv.slots) {
+            if (sl.item == gun && sl.count > 0) {
+                gunSlot = &sl;
+                break;
+            }
+        }
+    }
+
+    if (gunSlot) {
+        const ItemDef& gunDef = item_def(gunSlot->item);
+        if (gunDef.wear == WearKind::Jamming) {
+            const float fouling = static_cast<float>(255 - gunSlot->condition); // dust is 0 for now
+            constexpr float kJamPerFouling = 0.0005f; // approx 12.5% at max wear
+            constexpr std::uint64_t kJamSalt = 0x1337babe;
+            const float jamChance = fouling * kJamPerFouling;
+            if (jamChance > 0.0f && rand01(hash3(static_cast<std::uint64_t>(entt::to_integral(shooter)), tick, kJamSalt)) < jamChance) {
+                if (bus) publish_weapon_jammed(*bus, static_cast<std::uint32_t>(entt::to_integral(shooter)), tick);
+                // Jammed! Reset cooldown to force the player to unjam it
+                pr.cooldownMs = def->cooldownMs;
+                return 0;
+            }
+        }
+        
+        // Apply wear per use. Condition goes down.
+        if (gunSlot->condition >= gunDef.wearPerUse) {
+            gunSlot->condition = static_cast<std::uint8_t>(gunSlot->condition - gunDef.wearPerUse);
+        } else {
+            gunSlot->condition = 0;
+        }
+    }
+
     const CameraTag& cam = reg.get<const CameraTag>(shooter);
     const Transform& tr = reg.get<const Transform>(shooter);
     const vec3 eye{tr.pos.x + cam.eyeOffset.x, tr.pos.y + cam.eyeOffset.y,
@@ -1438,7 +1480,6 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
     rt = vec3{rt.x / rl, rt.y / rl, rt.z / rl};
     vec3 ud{rt.y * fwd.z - rt.z * fwd.y, rt.z * fwd.x - rt.x * fwd.z,
             rt.x * fwd.y - rt.y * fwd.x};
-
     std::uint32_t seed = static_cast<std::uint32_t>(tick) * 0x9e3779b9u ^
                          static_cast<std::uint32_t>(entt::to_integral(shooter));
     for (std::uint8_t i = 0; i < def->pellets; ++i) {

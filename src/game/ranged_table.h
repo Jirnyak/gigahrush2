@@ -100,6 +100,7 @@ inline float ranged_dps(const RangedDef& d) {
 // The best firearm in an inventory, by burst DPS, or kInvalidItem when there is none.
 // Mirrors `equipped_melee`'s "highest damage wins" — ugly, consistent, and honest
 // until there is a weapon-selection UI.
-ItemId equipped_ranged(const Inventory& inv);
+struct Equipped;
+ItemId equipped_ranged(const Inventory& inv, const Equipped* eq = nullptr);
 
 } // namespace giga::game

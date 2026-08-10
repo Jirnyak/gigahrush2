@@ -311,10 +311,83 @@ static void test_carve_sphere() {
 }
 
 
+static void test_structural_stress() {
+    World w;
+    auto i0 = macro_index(10, 10, 10);
+    auto i1 = macro_index(11, 10, 10);
+    auto i2 = macro_index(12, 10, 10);
+    w.grid().fill_cell(10, 10, 10, kMatConcrete);
+    w.grid().fill_cell(11, 10, 10, kMatConcrete);
+    w.grid().fill_cell(12, 10, 10, kMatConcrete);
+    
+    // Set i0 as anchor
+    Field<std::uint8_t>& anchors = w.fields().get_or_create<std::uint8_t>(kAnchorFieldName, 0);
+    anchors.data()[i0] = 1;
+    
+    w.gravity().regime = static_cast<GravityRegime>(0);
+    
+    Field<float>& stress = w.fields().get_or_create<float>("stress", -1.0f);
+    stress.data()[i0] = 2000.0f; // Anchor has high stress
+    stress.data()[i1] = 100.0f;  // Slab has positive stress
+    stress.data()[i2] = 50.0f;
+    
+    // Test 1: Hanging cell collapses on carve
+    w.grid().fill_cell(10, 11, 10, kMatConcrete);
+    stress.data()[macro_index(10, 11, 10)] = 0.0f; // Manually mock hanging cell
+    CarveResult res;
+    res.dirtyCells.push_back(macro_index(10, 12, 10)); // Carve next to it
+    std::vector<std::size_t> collapses;
+    find_structural_collapses(w, res, collapses);
+    CHECK(collapses.size() == 1);
+    CHECK(collapses[0] == macro_index(10, 11, 10));
+    
+    // Test 2: Slab dug to the anchor falls (detached from anchor, size < limit)
+    // Carve i1 to detach i2 from i0
+    CarveOp op;
+    op.x = (11.0f * 8.0f + 4.0f) * kVoxelSize;
+    op.y = (10.0f * 8.0f + 4.0f) * kVoxelSize;
+    op.z = (10.0f * 8.0f + 4.0f) * kVoxelSize;
+    op.radius = 1.5f; // Big enough to remove cell 11 completely
+    op.power = 0xFFFF;
+    op.seed = 1;
+    op.detachLimit = 1000; // Limit larger than cell i2 (512 voxels)
+    
+    CarveScratch scratch;
+    CarveResult out;
+    carve_sphere(w, op, scratch, out);
+    
+    bool i2_fell = false;
+    for (const auto& v : out.detached) {
+        if (v.cell == i2) i2_fell = true;
+    }
+    CHECK(i2_fell); // i2 is 512 voxels, limit is 1000, no anchor reachable -> falls!
+    
+    // Test 3: Slab AT the anchor stands (contains anchor, size < limit)
+    op.x = (9.0f * 8.0f + 4.0f) * kVoxelSize; // carve cell 9
+    w.grid().fill_cell(9, 10, 10, kMatConcrete);
+    out.clear();
+    carve_sphere(w, op, scratch, out);
+    
+    bool i0_fell = false;
+    for (const auto& v : out.detached) {
+        if (v.cell == i0) i0_fell = true;
+    }
+    CHECK(!i0_fell); // i0 is 512 voxels, limit is 1000, BUT it is an anchor -> stands!
+}
+
+
 static void test_destruct_all() {
+    std::fprintf(stderr, "Running test_subfield\n"); std::fflush(stderr);
     test_subfield();
+    std::fprintf(stderr, "Running test_carve_roll\n"); std::fflush(stderr);
     test_carve_roll();
+    std::fprintf(stderr, "Running test_carve_at\n"); std::fflush(stderr);
     test_carve_at();
+    std::fprintf(stderr, "Running test_carve_layers\n"); std::fflush(stderr);
     test_carve_layers();
+    std::fprintf(stderr, "Running test_carve_sphere\n"); std::fflush(stderr);
     test_carve_sphere();
+    std::fprintf(stderr, "Running test_structural_stress\n"); std::fflush(stderr);
+    test_structural_stress();
+    std::fprintf(stderr, "Done test_destruct_all\n"); std::fflush(stderr);
 }
