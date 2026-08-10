@@ -3826,7 +3826,8 @@ int main(int argc, char** argv) {
                 // monsters. Straight after the monster sweep so both pay on the
                 // same tick and the same 1-in-16 cadence. [problems.md] §41
                 game::hazard_step(reg, stack.layer(activeLayer).grid(), pool,
-                                  activeLayer, simTick, &particleBursts);
+                                  activeLayer, simTick, &particleBursts,
+                                  &stack.layer(activeLayer).gravity());
                 // Shots resolve AFTER the pass that launched them, so a
                 // projectile never lands on the frame it is fired.
                 meleeHits += game::projectile_step(
@@ -4493,9 +4494,22 @@ int main(int argc, char** argv) {
                                  macroStats.departures, macroStats.arrivals,
                                  macroStats.inTransit, macroStats.reserveRemaining);
                 }
-                // Fluid: no floor module seeds the field yet, so the cellular
-                // step is not run here. Re-wire (throttled, [sim/fluid.h]) when
-                // a module seeds standing water.
+                // Fluid: `fluid_step` ([sim/fluid.h]) is NOT run here, and the
+                // reason this comment used to give — "no floor module seeds the
+                // field yet" — is FALSE. `padic_gen.cpp` (kFluidField seeding)
+                // runs for every FloorKind via floor_gen.cpp's padic_apply_rules,
+                // so every floor in the game seeds standing water. The consumers
+                // are live and read it each tick (pos_wet below, plus wet-spawn
+                // suppression in mob_spawn.cpp and crate flotation in
+                // container.cpp) — they just read a field that never evolves.
+                // Water is painted and frozen.
+                //
+                // The precondition is met; what is missing is the decision on
+                // WHERE the step belongs. [master_prompt.md] and
+                // [performance.md] both put every cellular field (fluid/gas/heat/
+                // pressure/light) on the GPU as async compute, so wiring the CPU
+                // `fluid_step` into this tick would install the very thing the
+                // performance mandate forbids. Owner call, not a TODO to grab.
                 simNow += kSimDt;
                 simAccum -= kSimDt;
             }
