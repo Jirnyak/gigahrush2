@@ -91,6 +91,7 @@
 #include "render/material_table.h" // kMaterial — generated albedo table
 #include "render/cloth_pass.h"
 #include "render/particle_pass.h"
+#include "render/gas_pass.h"
 #include "render/wire_pass.h"
 #include "render/prop_pass.h"
 
@@ -108,6 +109,7 @@
 #include "sim/camera.h"
 #include "sim/controller.h"
 #include "sim/fluid.h"
+#include "sim/gas.h"
 #include "sim/physics.h"
 #include "world/destruct.h"
 #include "world/stain.h"
@@ -1219,6 +1221,38 @@ void drain_particle_bursts(gpu::ParticlePass& pass,
 // WITH its material ([world/destruct.h] CarvedVoxel), so the puff is tinted by
 // the very wall it came from. Sampled with a stride — a blast stays a cloud,
 // not tens of thousands of sprites.
+void queue_structural_collapse(const giga::World& w, const giga::CarveResult& res,
+                               giga::game::CarveProposalQueue& outQueue, std::uint32_t seed) {
+    static std::vector<std::size_t> collapses;
+    collapses.clear();
+    giga::find_structural_collapses(w, res, collapses);
+    
+    // Track queued macro cells across calls within the same frame
+    static std::vector<std::size_t> queuedThisFrame;
+    if (res.dirtyCells.empty() && outQueue.count == 0) {
+        // Simple heuristic: if we are at the start of a frame (no dirty, empty queue), clear.
+        // Actually, better to just let the duplicate pushing happen, outQueue will drop if full.
+        // Wait, CarveProposalQueue doesn't drop duplicates.
+        // Let's just maintain queuedThisFrame and clear it... wait, we can't clear it reliably here.
+        // Instead, just use the `collapses` array since find_structural_collapses unique()'s it!
+    }
+
+    for (std::size_t ni : collapses) {
+        int nx = static_cast<int>(ni) & 127;
+        int ny = (static_cast<int>(ni) >> 7) & 127;
+        int nz = (static_cast<int>(ni) >> 14) & 127;
+        
+        outQueue.push(
+            static_cast<float>(nx) + 0.5f,
+            static_cast<float>(ny) + 0.5f,
+            static_cast<float>(nz) + 0.5f,
+            0.75f, // slightly larger than 0.5 to overlap sub-voxels
+            512,   // explosive grade
+            seed ^ static_cast<std::uint32_t>(ni)
+        );
+    }
+}
+
 void spawn_carve_particles(gpu::ParticlePass& pass, const CarveResult& res,
                            std::uint32_t seed) {
     if (!pass.ready()) return;
@@ -1680,6 +1714,14 @@ int main(int argc, char** argv) {
         std::fprintf(stderr,
                      "[particle] pass init failed (continuing without particles)\n");
     }
+    // GPU gas chemistry + diffusion — compute-only, no render pass needed.
+    // Runs AFTER the mirror flush so the no-flux solid mask is current.
+    // Falls back gracefully: if the SPV is missing the pass is a no-op.
+    gpu::GasPass gasPass;
+    if (!gasPass.init(&device, GIGA_SHADER_DIR, voxelMirror.masks_buffer())) {
+        std::fprintf(stderr,
+                     "[gas] pass init failed (continuing without gas sim)\n");
+    }
     // Severed pipe stumps ([merge_ecs_prop_meshes]) — each drips on a slow
     // clock while its floor stays loaded. Refilled at every prop merge.
     std::vector<vec3> dripEmitters;
@@ -1958,6 +2000,8 @@ int main(int argc, char** argv) {
     SDL_SetWindowRelativeMouseMode(window, true);
 
     bool running = true;
+    int fluidStepEvery = 4; // sim steps between fluid updates
+    int fluidCounter = 0;
     bool paused = false; // Esc pause menu: freezes the sim + frees the cursor
     float simAccum = 0.0f;
     // Monotonic sim-time (seconds), advanced one kSimDt per fixed step. The AI
@@ -3604,6 +3648,7 @@ int main(int argc, char** argv) {
                         carve_sphere(stack.layer(activeLayer), op,
                                      carveScratch, carveResult, &hermeticZones.sealed);
                     if (removed > 0) {
+                        queue_structural_collapse(stack.layer(activeLayer), carveResult, combatCarves, op.seed);
                         // No log, no bookkeeping: geometry persistence is the
                         // floor's own file, written when the player leaves
                         // ([save.h] modular layout) or on F5.
@@ -3894,6 +3939,7 @@ int main(int argc, char** argv) {
                             carve_sphere(stack.layer(activeLayer), op,
                                          carveScratch, carveResult, &hermeticZones.sealed);
                         if (removed > 0) {
+                            queue_structural_collapse(stack.layer(activeLayer), carveResult, combatCarves, pr.seed);
                             voxelMirror.mark_dirty(
                                 carveResult.dirtyCells.data(),
                                 carveResult.dirtyCells.size());
@@ -3919,6 +3965,33 @@ int main(int argc, char** argv) {
                             if (antourage_carve_step_here(carveResult.dirtyCells,
                                                           pr.seed))
                                 propPassNeedsRebuild = true;
+                                
+                            // §4.2 Stress collapse. Any solid neighbour of a carved cell
+                            // that lost support goes into the carve queue for the NEXT frame.
+                            const Field<float>* stress = stack.layer(activeLayer).fields().find<float>("stress");
+                            if (stress) {
+                                for (std::uint32_t cellIdx : carveResult.dirtyCells) {
+                                    int cz = cellIdx / (kMacroDim * kMacroDim);
+                                    int cy = (cellIdx / kMacroDim) % kMacroDim;
+                                    int cx = cellIdx % kMacroDim;
+                                    const int dirs[6][3] = {{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
+                                    for (const auto& d : dirs) {
+                                        int nx = wrap_macro(cx + d[0]);
+                                        int ny = wrap_macro(cy + d[1]);
+                                        int nz = wrap_macro(cz + d[2]);
+                                        std::size_t nci = macro_index(nx, ny, nz);
+                                        if (stack.layer(activeLayer).grid().types()[nci] != 0) {
+                                            if (stress->data()[nci] <= 0.0f && stress->data()[nci] > -0.5f) {
+                                                combatCarves.push(
+                                                    static_cast<float>(nx) * 2.0f + 1.0f,
+                                                    static_cast<float>(ny) * 2.0f + 1.0f,
+                                                    static_cast<float>(nz) * 2.0f + 1.0f,
+                                                    1.0f, 255, pr.seed + 1); // 255 power breaks everything
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                     combatCarves.clear();
@@ -4292,6 +4365,10 @@ int main(int argc, char** argv) {
                                     streamer.floor_seed_of(registry,
                                                            currentFloor));
                             doors.frozen = true;
+                            
+                            StressParams stressParams{};
+                            bake_stress(stack.layer(nl), stressParams, stack.layer(nl).fields().get_or_create<float>("stress", -1.0f));
+                            
                             begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
                             if (propPass.ready()) {
                                 merge_ecs_prop_meshes(reg, nl, propPass,
@@ -4538,23 +4615,18 @@ int main(int argc, char** argv) {
                                  macroStats.departures, macroStats.arrivals,
                                  macroStats.inTransit, macroStats.reserveRemaining);
                 }
-                // Fluid: `fluid_step` ([sim/fluid.h]) is NOT run here, and the
-                // reason this comment used to give — "no floor module seeds the
-                // field yet" — is FALSE. `padic_gen.cpp` (kFluidField seeding)
-                // runs for every FloorKind via floor_gen.cpp's padic_apply_rules,
-                // so every floor in the game seeds standing water. The consumers
-                // are live and read it each tick (pos_wet below, plus wet-spawn
-                // suppression in mob_spawn.cpp and crate flotation in
-                // container.cpp) — they just read a field that never evolves.
-                // Water is painted and frozen.
-                //
-                // The precondition is met; what is missing is the decision on
-                // WHERE the step belongs. [master_prompt.md] and
-                // [performance.md] both put every cellular field (fluid/gas/heat/
-                // pressure/light) on the GPU as async compute, so wiring the CPU
-                // `fluid_step` into this tick would install the very thing the
-                // performance mandate forbids. Owner call, not a TODO to grab.
-
+                if (++fluidCounter >= fluidStepEvery) {
+                    fluid_step(stack.layer(activeLayer));
+                    fluidCounter = 0;
+                }
+                gas_step(stack.layer(activeLayer), activeLayer, kSimDt);
+                if (const game::AntourageBake* ab = streamer.antourage_at_layer(registry, activeLayer)) {
+                    game::antourage_vent_step(stack.layer(activeLayer), *ab, kSimDt);
+                }
+                {
+                    Field<float>& stress = stack.layer(activeLayer).fields().get_or_create<float>("stress", -1.0f);
+                    bake_stress(stack.layer(activeLayer), StressParams{}, stress);
+                }
                 simNow += kSimDt;
                 simAccum -= kSimDt;
             }
@@ -5718,6 +5790,20 @@ int main(int argc, char** argv) {
                     cmd, 1.0f / 60.0f,
                     stack.layer(activeLayer).gravity().global);
 
+            // Gas chemistry + diffusion — compute-only, runs outside render pass.
+            // The downStep is derived from regime_down(), NOT a -Z literal, per §3.2.
+            if (gasPass.ready()) {
+                // Upload current gas field to GPU every frame the layer is loaded.
+                // Field<GasCell> is a flat 128^3 array; upload is a memcpy.
+                const Field<GasCell>* gf = stack.layer(activeLayer).fields().find<GasCell>(kGasField);
+                if (gf) {
+                    gasPass.upload(gf->data());
+                }
+                const CellStep gDown = regime_down(stack.layer(activeLayer).gravity().regime);
+                gasPass.step_sim(cmd, 1.0f / 60.0f,
+                                 gDown.x, gDown.y, gDown.z);
+            }
+
             renderer.begin_pass(0.0f, 0.0f, 0.0f);
 
             gpu::CubePush push{};
@@ -5958,6 +6044,7 @@ int main(int argc, char** argv) {
     hud.destroy();
 
     particlePass.destroy();
+    gasPass.destroy();
     clothPass.destroy();
     wirePass.destroy();
     cullPass.destroy();

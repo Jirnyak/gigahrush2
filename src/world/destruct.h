@@ -57,6 +57,16 @@ namespace giga {
 // per voxel ([jirnyak.md] §7 — no string lookups in hot paths).
 inline constexpr const char* kSubMaterialName = "sub_material";
 
+// Anchor field name for structural stress calculations. Cells marked in this
+// field are anchors that hold load and never collapse.
+inline constexpr const char* kAnchorFieldName = "anchor";
+
+struct StressParams {
+    float carryPerHardness = 1.0f; // how much weight 1 hardness can carry
+    float collapseAt = 1.0f;       // threshold for collapse
+    int   relaxIters = 4;          // relaxation iterations
+};
+
 // Absolute sub-voxel grid: 128 cells x 8 = 1024 per axis, a power of two, so
 // toroidal wrap is a mask.
 inline constexpr int kSubGridDim = kMacroDim * kSubDim;
@@ -138,5 +148,13 @@ bool carve_at(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
               std::uint16_t power, std::uint32_t seed, CarveScratch& scratch,
               CarveResult& out,
               const std::vector<std::uint64_t>* sealedMask = nullptr);
+
+// Bake stress field (macro cells) based on structural support.
+// Anchors hold infinite load. Gravity drives support direction.
+void bake_stress(World& world, const StressParams& params, Field<float>& out_stress);
+
+// Find unsupported solid neighbors (stress <= 0) of carved cells to trigger cascading collapse.
+// Appends macro cell indices to out_collapses.
+void find_structural_collapses(const World& w, const CarveResult& res, std::vector<std::size_t>& out_collapses);
 
 } // namespace giga

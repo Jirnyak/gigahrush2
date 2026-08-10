@@ -488,7 +488,9 @@ static void test_nav_coarse() {
     using namespace nav;
     MacroGrid air;
     CoarseGraph g{};
+    std::fprintf(stderr, "test_nav_coarse: running bake_coarse\n"); std::fflush(stderr);
     bake_coarse(air, g);
+    std::fprintf(stderr, "test_nav_coarse: bake_coarse complete\n"); std::fflush(stderr);
 
     for (int i = 0; i < kNodes; ++i) {
         CHECK(g.dist[i][i] == 0);

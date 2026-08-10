@@ -1,9 +1,28 @@
 #include "world/destruct.h"
+#include "world/gravity.h"
+#include "world/material_props.h"
+#include "world/subfield.h"
+#include "world/world.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 namespace giga {
+
+// KEY PACKING IS NOT A ONE-LINE KNOB — spec2.txt §5.2, types.h §19.
+// The sub-voxel bit layout in pack_key/unpack_key/key_at hardcodes:
+//   shift 9   = kSubVoxels bits (8^3 = 512 => 9 bits)
+//   mask 511  = 9-bit sub index (0..511)
+//   >>3 / &7  = 3-bit sub-axis = kSubDim / 2
+// Changing kSubDim without updating this file is undefined behaviour.
+// voxels.md once claimed \"changing kSubDim is a one-line edit\"; that was
+// wrong and this assert is the correction.
+static_assert(kSubDim == 8,
+              "destruct.cpp key packing hardcodes kSubDim == 8 "
+              "(shift 9 == log2(8^3), mask 511 == 8^3-1, >>3 & 7 == sub axis). "
+              "Update pack_key/unpack_key/key_at before changing kSubDim.");
+
 namespace {
 
 // --- packed sub-voxel keys ---------------------------------------------------
@@ -150,7 +169,7 @@ const int kDir6[6][3] = {{1, 0, 0},  {-1, 0, 0}, {0, 1, 0},
 // component was fully enumerated (it dead-ended within the limit), i.e. it is
 // genuinely detached: nothing else in the world holds it. The component's keys
 // are left in scratch.comp.
-bool flood_component(const MacroGrid& g, VisitedSet& vis, CarveScratch& s,
+bool flood_component(const MacroGrid& g, const Field<std::uint8_t>* anchors, VisitedSet& vis, CarveScratch& s,
                      std::uint32_t seedKey, std::uint32_t run,
                      std::int32_t limit) {
     s.comp.clear();
@@ -170,6 +189,7 @@ bool flood_component(const MacroGrid& g, VisitedSet& vis, CarveScratch& s,
             const int r = vis.probe(nk, run);
             if (r == 0) continue;       // our own frontier, already queued
             if (r < 0) return false;    // merged into a supported region
+            if (anchors && anchors->data()[nk >> 9] != 0) return false; // anchored
             s.comp.push_back(nk);
             s.queue.push_back(nk);
             if (static_cast<std::int32_t>(s.comp.size()) > limit)
@@ -186,6 +206,7 @@ bool flood_component(const MacroGrid& g, VisitedSet& vis, CarveScratch& s,
 // the final geometry.
 void detach_sweep(World& w, SubField<CellType>* mats, std::int32_t limit,
                   CarveScratch& s, CarveResult& out) {
+    const Field<std::uint8_t>* anchors = w.fields().find<std::uint8_t>(kAnchorFieldName);
     if (out.destroyed.empty() || limit <= 0) return;
     VisitedSet vis(s, static_cast<std::size_t>(limit) * 2 +
                           out.destroyed.size());
@@ -203,7 +224,7 @@ void detach_sweep(World& w, SubField<CellType>* mats, std::int32_t limit,
             // earlier detached component.
             if (!solid_key(w.grid(), nk)) continue;
             ++run;
-            if (!flood_component(w.grid(), vis, s, nk, run, limit)) continue;
+            if (!flood_component(w.grid(), anchors, vis, s, nk, run, limit)) continue;
             for (std::uint32_t k : s.comp) {
                 out.detached.push_back(CarvedVoxel{
                     k >> 9, static_cast<std::uint16_t>(k & 511u),
@@ -352,6 +373,84 @@ bool carve_at(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
     detach_sweep(w, mats, kSubVoxels, scratch, out);
     finalize_dirty(out);
     return true;
+}
+
+void bake_stress(World& world, const StressParams& params, Field<float>& out_stress) {
+    auto t0 = std::chrono::high_resolution_clock::now();
+    const Field<std::uint8_t>* anchors = world.fields().find<std::uint8_t>(kAnchorFieldName);
+    
+    // Step 1: anchors hold infinity, air holds 0
+    for (int cy = 0; cy < kMacroDim; ++cy) {
+        for (int cx = 0; cx < kMacroDim; ++cx) {
+            for (int cz = 0; cz < kMacroDim; ++cz) {
+                std::size_t ci = macro_index(cx, cy, cz);
+                bool solid = world.grid().types()[ci] != 0; 
+                if (anchors && anchors->at(cx, cy, cz) != 0) {
+                    out_stress.data()[ci] = 1e9f;
+                } else if (!solid) {
+                    out_stress.data()[ci] = 0.0f;
+                } else {
+                    out_stress.data()[ci] = -1.0f;
+                }
+            }
+        }
+    }
+    
+    // Step 2: relax from support
+    CellStep down = regime_down(world.gravity().regime);
+    
+    for (int iter = 0; iter < params.relaxIters; ++iter) {
+        for (int cy = 0; cy < kMacroDim; ++cy) {
+            for (int cx = 0; cx < kMacroDim; ++cx) {
+                for (int cz = 0; cz < kMacroDim; ++cz) {
+                    std::size_t ci = macro_index(cx, cy, cz);
+                    if (out_stress.data()[ci] == 1e9f || out_stress.data()[ci] == 0.0f) continue;
+                    
+                    int sx = wrap_macro(cx - down.x);
+                    int sy = wrap_macro(cy - down.y);
+                    int sz = wrap_macro(cz - down.z);
+                    std::size_t si = macro_index(sx, sy, sz);
+                    
+                    float support = out_stress.data()[si];
+                    if (support > 0.0f) {
+                        float cellHardness = material_hardness(world.grid().types()[ci]);
+                        out_stress.data()[ci] = std::min(support * 0.9f, cellHardness * params.carryPerHardness);
+                    }
+                }
+            }
+        }
+    }
+    
+    auto t1 = std::chrono::high_resolution_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    std::fprintf(stderr, "[bake] stress field computed in %.2f ms\n", ms);
+}
+
+void find_structural_collapses(const World& w, const CarveResult& res, std::vector<std::size_t>& out_collapses) {
+    const Field<float>* stress = w.fields().find<float>("stress");
+    if (!stress) return;
+    
+    for (std::uint32_t cell : res.dirtyCells) {
+        int cx = static_cast<int>(cell) & 127;
+        int cy = (static_cast<int>(cell) >> 7) & 127;
+        int cz = (static_cast<int>(cell) >> 14) & 127;
+        
+        for (const auto& d : kDir6) {
+            int nx = (cx + d[0]) & 127;
+            int ny = (cy + d[1]) & 127;
+            int nz = (cz + d[2]) & 127;
+            std::size_t ni = static_cast<std::size_t>(nx | (ny << 7) | (nz << 14));
+            
+            if (w.grid().types()[ni] != 0 && stress->data()[ni] <= 0.0f) {
+                out_collapses.push_back(ni);
+            }
+        }
+    }
+    
+    if (!out_collapses.empty()) {
+        std::sort(out_collapses.begin(), out_collapses.end());
+        out_collapses.erase(std::unique(out_collapses.begin(), out_collapses.end()), out_collapses.end());
+    }
 }
 
 } // namespace giga
