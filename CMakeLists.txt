@@ -751,7 +751,14 @@ if(GIGA_BUILD_TESTS)
     # design rests on: the load reaches the `Mass` component, so fall damage and
     # knockback see it through laws that did not change.
     #   [items] mass: bare 71.9 kg -> carrying 2 x АТО-41 = 123.9 kg
-        PASS_REGULAR_EXPRESSION "game_test: 235119 checks, 0 failures")
+    # 235119 -> 235168 on 2026-08-09: +49, eb9b6ae ("Add diagnostics expected red") добавил
+    #   test_gravity_regimes_isotropy() (+44 CHECK runtime: 6 directional × 6 + 2 special × 4)
+    #   и test_budgets_thresholds() (+5 CHECK_BUDGET), но pin не обновил.
+    # 235168 -> 235169 on 2026-08-10: +1, dispatch test_gravity_regimes_all() вместо прямого
+    #   test_gravity_regimes_isotropy() — добавляет test_fluid_isotropy() (1 CHECK). Это же
+    #   закрывает source_rules: _all() была определена но не диспатчилась (check_source_rules
+    #   требует что каждая suite_*.inl функция _all() должна быть вызвана из tests/*.cpp).
+        PASS_REGULAR_EXPRESSION "game_test: 235169 checks, 0 failures")
 
 
 

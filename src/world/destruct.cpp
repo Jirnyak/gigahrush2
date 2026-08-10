@@ -273,7 +273,8 @@ void set_sub_material(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
 }
 
 std::int32_t carve_sphere(World& w, const CarveOp& op, CarveScratch& scratch,
-                          CarveResult& out) {
+                          CarveResult& out,
+                          const std::vector<std::uint64_t>* sealedMask) {
     out.clear();
     if (op.radius <= 0.0f || op.power == 0) return 0;
     SubField<CellType>* mats = w.subfields().find<CellType>(kSubMaterialName);
@@ -312,6 +313,7 @@ std::int32_t carve_sphere(World& w, const CarveOp& op, CarveScratch& scratch,
                     static_cast<float>(op.power) * (r2 - d2) / r2);
                 if (peff == 0) continue;
                 const std::uint32_t ci = key >> 9;
+                if (sealedMask && !sealedMask->empty() && ((*sealedMask)[ci / 64] & (1ull << (ci % 64)))) continue;
                 if (!carve_roll(carve_hash(op.seed, ci, key & 511u), peff,
                                 hardness))
                     continue;
@@ -330,13 +332,15 @@ std::int32_t carve_sphere(World& w, const CarveOp& op, CarveScratch& scratch,
 
 bool carve_at(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
               std::uint16_t power, std::uint32_t seed, CarveScratch& scratch,
-              CarveResult& out) {
+              CarveResult& out,
+              const std::vector<std::uint64_t>* sealedMask) {
     out.clear();
     const std::uint32_t ci = static_cast<std::uint32_t>(
         macro_index(wrap_macro(cx), wrap_macro(cy), wrap_macro(cz)));
     const std::uint32_t bit =
         static_cast<std::uint32_t>(sub_bit(sx, sy, sz));
     const std::uint32_t key = pack_key(ci, bit);
+    if (sealedMask && !sealedMask->empty() && ((*sealedMask)[ci / 64] & (1ull << (ci % 64)))) return false;
     if (!solid_key(w.grid(), key)) return false;
     SubField<CellType>* mats = w.subfields().find<CellType>(kSubMaterialName);
     const CellType mat = mat_key(w, mats, key);

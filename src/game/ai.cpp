@@ -622,6 +622,7 @@ AiTick ai_step(Registry& reg, NpcPool& pool, Field<float>* danger,
     // One allocation-free sweep over the packed columns. Nothing here emplaces or
     // destroys a component, so the view cannot be invalidated mid-iteration —
     // that hazard lives in `ai_init`, by construction rather than by comment.
+    const Field<float>* fogField = world != nullptr ? world->fields().find<float>(kFogField) : nullptr;
     auto view = reg.view<AiBrain, const NpcRef, const Transform, Velocity>();
     for (auto e : view) {
         const Transform& tr = view.get<const Transform>(e);
@@ -659,6 +660,7 @@ AiTick ai_step(Registry& reg, NpcPool& pool, Field<float>* danger,
         const int cz = wrap_macro(static_cast<int>(std::floor(tr.pos.z / kCellSize)));
 
         const float dangerHere = danger != nullptr ? danger->at(cx, cy, cz) : 0.0f;
+        const float fogHere = fogField != nullptr ? fogField->at(cx, cy, cz) : 0.0f;
 
         // --- RECORDER 1: an HP drop, checked EVERY tick ----------------------
         // Damage is an event, not a poll, so the tick it lands on is the only tick
@@ -703,6 +705,7 @@ AiTick ai_step(Registry& reg, NpcPool& pool, Field<float>* danger,
             p.hp = static_cast<float>(hpNow);
             p.maxHp = static_cast<float>(pool.max_hp(id));
             p.danger = dangerHere;
+            p.fog = fogHere;
             p.currentIntent = brain.currentIntent;
             p.role = pool.role(id);
             // Zeroed when hysteresis is off, so the two arms of the measurement

@@ -119,7 +119,7 @@ int g_checks = 0;
 #include "suite_console.inl"
 #include "suite_keybind.inl"
 #include "suite_particles.inl"
-#include "suite_cellular.inl"
+#include "suite_architecture.inl"
 #include "suite_gravity_regimes.inl"
 #include "suite_budgets.inl"
 
@@ -4344,10 +4344,15 @@ int main() {
     test_nav_cache_roundtrip();
     test_streamed_nav_cache();
     test_floor_bucket_index();
+    std::fprintf(stderr, "Entering test_stream_migration_reembodies...\n");
     test_stream_migration_reembodies();
+    std::fprintf(stderr, "Entering test_props_game_all...\n");
     test_props_game_all();
-    test_cellular_all();
-    test_gravity_regimes_isotropy();
+    std::fprintf(stderr, "Entering test_architecture_gates...\n");
+    test_architecture_gates();
+    std::fprintf(stderr, "Entering test_gravity_regimes_all...\n");
+    test_gravity_regimes_all();
+    std::fprintf(stderr, "Entering test_budgets_thresholds...\n");
     test_budgets_thresholds();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);

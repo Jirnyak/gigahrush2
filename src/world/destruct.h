@@ -126,13 +126,17 @@ void set_sub_material(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
 // power scaled by quadratic falloff (power * (r^2 - d^2) / r^2), then run the
 // detachment sweep around everything removed. Appends into `out` (cleared
 // first); returns total sub-voxels removed (destroyed + detached).
+// If `sealedMask` is provided, sub-voxels in sealed cells (macro index) are unbreakable.
 std::int32_t carve_sphere(World& w, const CarveOp& op, CarveScratch& scratch,
-                          CarveResult& out);
+                          CarveResult& out,
+                          const std::vector<std::uint64_t>* sealedMask = nullptr);
 
 // Carve a single sub-voxel (the pickaxe primitive): one roll at full power,
 // then the same detachment sweep. Returns true if the voxel was removed.
+// If `sealedMask` is provided, sub-voxels in sealed cells are unbreakable.
 bool carve_at(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
               std::uint16_t power, std::uint32_t seed, CarveScratch& scratch,
-              CarveResult& out);
+              CarveResult& out,
+              const std::vector<std::uint64_t>* sealedMask = nullptr);
 
 } // namespace giga

@@ -17,6 +17,8 @@ const std::array<StatusDef, kStatusCount> kStatusTable = {{
     StatusDef{ 210000, 210000, 1000, 1000, 1000, 1000, 0, 1000, 1000, 0, 0, 1 },
     // [5] govnyak_debt
     StatusDef{ 480000, 480000, 1000, 1000, 1000, 1000, 0, 1000, 1000, 0, 0, 1 },
+    // [6] psi_stun
+    StatusDef{ 10000, 10000, 1, 1, 1000, 1000, 10000, 1000, 1000, 0, 0, 0 },
 }};
 
 // Display names. Cyrillic, and never printed by a test: this host's
@@ -29,6 +31,7 @@ const std::array<const char*, kStatusCount> kStatusNames = {{
     "Облегчение",  // govnyak_relief
     "Кашель",  // govnyak_cough
     "Долг говняка",  // govnyak_debt
+    "Пси-Оглушение",  // psi_stun
 }};
 
 } // namespace giga::game

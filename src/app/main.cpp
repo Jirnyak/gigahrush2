@@ -78,11 +78,12 @@
 #include "game/floors/padic/padic.h"
 #include "game/prop_system.h"
 #include "game/investigate.h"
-#include "sim/cellular.h" // Sandpile stress driver — §20_CELLULAR_AUTOMATA
+
 #include "sim/fluid.h"
 #include "game/noise.h"
 #include "game/wander.h"
 #include "game/npc_pool.h"
+#include "game/role.h"
 #include "game/macro_sim.h"
 #include "input/input.h"
 #include "render/body_pass.h"
@@ -947,9 +948,9 @@ bool write_run(const game::SaveState& st, const char* path) {
 
 // Persist one floor's exact grid to its own file. A floor transition is a load
 // screen, so this is sanctioned I/O ([jirnyak.md] §6).
-bool write_floor_file(const World& w, int floor) {
+bool write_floor_file(const World& w, int floor, const game::HermeticZones& hermeticZones) {
     std::vector<std::uint8_t> bytes;
-    game::floor_file_write(w, floor, bytes);
+    game::floor_file_write(w, floor, hermeticZones, bytes);
     char path[128];
     floor_save_path(floor, path, sizeof path);
     return write_bytes_file(bytes, path);
@@ -957,13 +958,13 @@ bool write_floor_file(const World& w, int floor) {
 
 // Stamp a floor's saved state over its freshly generated geometry, if a file
 // exists. Absent file = pristine floor; a REFUSED file is said out loud.
-bool apply_floor_file(World& w, int floor) {
+bool apply_floor_file(World& w, int floor, game::HermeticZones& hermeticZones) {
     char path[128];
     floor_save_path(floor, path, sizeof path);
     std::vector<std::uint8_t> bytes;
     if (!read_bytes_file(bytes, path)) return false;
     game::SaveError err = game::SaveError::None;
-    if (!game::floor_file_read(bytes.data(), bytes.size(), w, nullptr, &err)) {
+    if (!game::floor_file_read(bytes.data(), bytes.size(), w, hermeticZones, nullptr, &err)) {
         std::fprintf(stderr, "[save] %s refused: %s (floor regenerates pristine)\n",
                      path, game::save_error_text(err));
         return false;
@@ -1721,6 +1722,7 @@ int main(int argc, char** argv) {
     // against nav's 128, so it is a rounding error on a load the same function is
     // already spending seconds on, and a synchronous bake needs no ownership story.
     game::RoomZones roomZones;
+    game::HermeticZones hermeticZones;
     game::NpcPool pool;
     pool.init();
     // SLOT RECYCLING IS DELIBERATELY NOT ARMED HERE, and the line is left in place
@@ -1813,14 +1815,6 @@ int main(int argc, char** argv) {
     // Declared up here rather than beside the ledger because the FIRST floor is set
     // up above the ledger, and a DoorSet declared later compiled as "undeclared
     // identifier" at the very site that has to build the starting floor's doors.
-    // Sandpile stress driver: seeds from geometry, sweeps at 5/s, arms only when a
-    // voxel destruction event deposits grains. Life and Creep remain unconnected —
-    // Life needs a windowed arena, Creep needs a game-design infection source.
-    // cellular_driver_on_floor_built MUST be called at every floor arrival (not the
-    // LayerId backstop inside cellular_tick, which cannot see recycled slots).
-    giga::CellularDriver stressDriver;
-    stressDriver.params.rule = giga::CellularRule::Sandpile;
-    stressDriver.params.topology = true; // enable collapses (z-slab removal)
 
     game::DoorSet doors;
     game::DoorTick doorTick{};      // last step's report, for the HUD
@@ -1885,8 +1879,8 @@ int main(int argc, char** argv) {
         // back, and it restores immediately after generating — before the pipes
         // are routed and the lamps are hung, so nothing is ever anchored to
         // geometry that is about to change under it. [problems.md] §42
-        streamer.set_floor_restore([](World& w, int floorNumber) {
-            return apply_floor_file(w, floorNumber);
+        streamer.set_floor_restore([&hermeticZones](World& w, int floorNumber) {
+            return apply_floor_file(w, floorNumber, hermeticZones);
         });
 
         const std::uint32_t seeded = streamer.seed_all_modules(pool);
@@ -1954,10 +1948,6 @@ int main(int argc, char** argv) {
         World& w0 = stack.layer(reg.get<Transform>(player).layer);
         voxelMirror.upload_all(w0);
         if (mirrorVerify) voxelMirror.verify(w0);
-        // Arm the sandpile for floor 0. Called here (not inside do_ride) because
-        // the first ride is not taken — the initial floor is direct-built. [§20]
-        const LayerId l0 = reg.get<Transform>(player).layer;
-        giga::cellular_driver_on_floor_built(stressDriver, w0, l0);
     }
 
     InputState input;
@@ -2303,7 +2293,7 @@ int main(int argc, char** argv) {
         pool.save_rows(runState.poolBlob);
         macroSim.save_state(runState.macroBlob);
         runState.factions = factionRel;
-        write_floor_file(stack.layer(pl), currentFloor);
+        write_floor_file(stack.layer(pl), currentFloor, hermeticZones);
         char runPath[128];
         run_save_path(runPath, sizeof runPath);
         return write_run(runState, runPath);
@@ -2348,7 +2338,7 @@ int main(int argc, char** argv) {
             // THE geometry persistence: the next visit (or the next run)
             // stamps it back. A transition is a load screen; I/O is
             // sanctioned here. [save.h]
-            write_floor_file(stack.layer(leaveLayer), currentFloor);
+            write_floor_file(stack.layer(leaveLayer), currentFloor, hermeticZones);
             // AIMEM: clear MotionOwner::Ai on the leaving floor before the
             // streamer recycles the layer. unload() also releases; this is the
             // keyboard/--shot leave seam so a ride without an immediate unload
@@ -2375,8 +2365,7 @@ int main(int argc, char** argv) {
         currentFloor = ride.floor;
 
         {
-            LayerId arrivalLayer = reg.valid(player) ? reg.get<Transform>(player).layer : static_cast<LayerId>(0);
-            vendorKind = game::vendor_kind_for(game::dominant_faction(reg, pool, arrivalLayer));
+            vendorKind = game::vendor_kind_for(game::dominant_faction(pool, currentFloor));
         }
         // §24 discovery: landing on (or via) a lattice hub unlocks THIS floor
         // for the fast-travel network. Boarding the cabin is the discover act.
@@ -2427,10 +2416,6 @@ int main(int argc, char** argv) {
                 streamer.floor_seed_of(registry, currentFloor));
         doors.frozen = true;
         begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
-        // Arm/reseed the sandpile for the new floor AFTER geometry is final
-        // (doors stamped, nav built). The LayerId backstop inside cellular_tick
-        // is a guard, not the contract — it cannot see recycled slots. [§20]
-        giga::cellular_driver_on_floor_built(stressDriver, stack.layer(nl), nl);
         // Arrival geometry is final (floor file + doors stamped): re-snapshot
         // the GPU voxel mirror for the recycled World object.
         voxelMirror.upload_all(stack.layer(nl));
@@ -2610,7 +2595,7 @@ int main(int argc, char** argv) {
                     SDL_SetWindowRelativeMouseMode(window, true);
                 }
                 if (e.type == SDL_EVENT_MOUSE_BUTTON_UP &&
-                    e.button.button == SDL_BUTTON_RIGHT) {
+                           e.button.button == SDL_BUTTON_RIGHT) {
                     input.set_mouselook(false);
                     SDL_SetWindowRelativeMouseMode(window, false);
                 }
@@ -2972,6 +2957,8 @@ int main(int argc, char** argv) {
                         samosborDamage =
                             static_cast<std::int16_t>(samosborDamage + dr_.applied);
                     }
+
+
                 }
                 // Exhaustion costs movement speed, not HP — three stacking HP
                 // drains is a death spiral with no decision in it. Applied to the
@@ -3615,7 +3602,7 @@ int main(int argc, char** argv) {
                     consoleCtx.carveRadius = 0.0f;
                     const std::int32_t removed =
                         carve_sphere(stack.layer(activeLayer), op,
-                                     carveScratch, carveResult);
+                                     carveScratch, carveResult, &hermeticZones.sealed);
                     if (removed > 0) {
                         // No log, no bookkeeping: geometry persistence is the
                         // floor's own file, written when the player leaves
@@ -3883,6 +3870,16 @@ int main(int argc, char** argv) {
                 // Drain combat carve proposals through the same carve_sphere
                 // path the console uses. Frozen bake: drop (v1); console keeps
                 // pending via carveRadius until bake lands.
+                if (combatCarves.count > 0 || combatCarves.droppedFull > 0 ||
+                    combatCarves.droppedDegenerate > 0 || combatCarves.clampedRadius > 0) {
+                    std::fprintf(stderr,
+                                 "[carve] proposals=%u dropped_full=%u dropped_degen=%u clamped=%u\n",
+                                 static_cast<unsigned>(combatCarves.count),
+                                 static_cast<unsigned>(combatCarves.droppedFull),
+                                 static_cast<unsigned>(combatCarves.droppedDegenerate),
+                                 static_cast<unsigned>(combatCarves.clampedRadius));
+                }
+
                 if (!doors.frozen && combatCarves.count > 0) {
                     for (std::uint8_t ci = 0; ci < combatCarves.count; ++ci) {
                         const game::CarveProposal& pr = combatCarves.items[ci];
@@ -3895,7 +3892,7 @@ int main(int argc, char** argv) {
                         op.seed = pr.seed;
                         const std::int32_t removed =
                             carve_sphere(stack.layer(activeLayer), op,
-                                         carveScratch, carveResult);
+                                         carveScratch, carveResult, &hermeticZones.sealed);
                         if (removed > 0) {
                             voxelMirror.mark_dirty(
                                 carveResult.dirtyCells.data(),
@@ -4268,7 +4265,7 @@ int main(int argc, char** argv) {
                             // Per-floor clocks and channels reset, same as any
                             // arrival.
                             samosbor = game::samosbor_new_game(sbRng);
-                            vendorKind = game::vendor_kind_for(game::dominant_faction(reg, pool, nl));
+                            vendorKind = game::vendor_kind_for(game::dominant_faction(pool, currentFloor));
                             rumourLine[0] = 0;
                             rumourAt = 0;
                             game::noise_clear(noiseField);
@@ -4296,7 +4293,6 @@ int main(int argc, char** argv) {
                                                            currentFloor));
                             doors.frozen = true;
                             begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
-                            giga::cellular_driver_on_floor_built(stressDriver, stack.layer(nl), nl); // [§20]
                             if (propPass.ready()) {
                                 merge_ecs_prop_meshes(reg, nl, propPass,
                                   streamer.antourage_at_layer(registry, nl),
@@ -4558,26 +4554,7 @@ int main(int argc, char** argv) {
                 // pressure/light) on the GPU as async compute, so wiring the CPU
                 // `fluid_step` into this tick would install the very thing the
                 // performance mandate forbids. Owner call, not a TODO to grab.
-                // CELLULAR SANDPILE TICK. Runs at 5/s (every 25 sim ticks) and
-                // only when the floor has been stressed. Returns true when a
-                // sweep ran. `last.changes > 0` means grid cells were flipped
-                // (collapses); we owe the diffusion bitset and the GPU mirror.
-                if (activeLayer != kInvalidLayer &&
-                    giga::cellular_tick(stressDriver,
-                                        stack.layer(activeLayer),
-                                        activeLayer, simTick)) {
-                    if (stressDriver.last.changes > 0) {
-                        // Tell the diffusion sweep its walkability bitset is
-                        // stale. Blunt, idempotent, one bool — see [cellular.h].
-                        giga::cellular_mark_geometry_dirty(stressDriver.scratch);
-                        // GPU mirror: no per-cell list from the sandpile, so
-                        // re-upload the whole active layer. Collapses are rare
-                        // (stress >= collapseAt == 10) so the fence-wait cost
-                        // is acceptable. [voxel_mirror.h §future mutators]
-                        if (voxelMirror.ready())
-                            voxelMirror.upload_all(stack.layer(activeLayer));
-                    }
-                }
+
                 simNow += kSimDt;
                 simAccum -= kSimDt;
             }
@@ -5824,7 +5801,7 @@ int main(int argc, char** argv) {
                                                         runState.opened);
                         // Same departure floor-file write as the keyboard
                         // path — two travel sites, one law. [save.h]
-                        write_floor_file(stack.layer(leaveLayer), currentFloor);
+                        write_floor_file(stack.layer(leaveLayer), currentFloor, hermeticZones);
                         // Same AIMEM leave release as do_ride. Two travel
                         // sites; a fix that touches only one proves nothing
                         // under --shot --ride. [ai.h]
@@ -5861,7 +5838,7 @@ int main(int argc, char** argv) {
                         aim_player(reg, player);
                         LayerId nl = reg.get<Transform>(player).layer;
                         activeLayer = nl;
-                        vendorKind = game::vendor_kind_for(game::dominant_faction(reg, pool, nl));
+                        vendorKind = game::vendor_kind_for(game::dominant_faction(pool, currentFloor));
                         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
                         refresh_floor_containers(reg, stack.layer(nl),
                                                  currentFloor, nl);
@@ -5885,7 +5862,6 @@ int main(int argc, char** argv) {
                                 streamer.floor_seed_of(registry, currentFloor));
                         doors.frozen = true;
                         begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
-                        giga::cellular_driver_on_floor_built(stressDriver, stack.layer(nl), nl); // [§20]
                         voxelMirror.upload_all(stack.layer(nl));
                         if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
                         // Same transition autosave as the keyboard path.

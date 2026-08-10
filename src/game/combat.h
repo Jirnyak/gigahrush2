@@ -617,14 +617,31 @@ static_assert(std::is_trivially_copyable_v<CarveProposal>,
 struct CarveProposalQueue {
     CarveProposal items[kMaxCarveProposals] = {};
     std::uint8_t count = 0;
+    std::uint16_t droppedFull = 0;
+    std::uint16_t droppedDegenerate = 0;
+    std::uint16_t clampedRadius = 0;
 
-    void clear() { count = 0; }
+    void clear() {
+        count = 0;
+        droppedFull = 0;
+        droppedDegenerate = 0;
+        clampedRadius = 0;
+    }
 
     bool push(float x, float y, float z, float radius, std::uint16_t power,
               std::uint32_t seed) {
-        if (count >= kMaxCarveProposals) return false;
-        if (radius <= 0.0f || power == 0) return false;
-        if (radius > 8.0f) radius = 8.0f; // one carve, not a demolition service
+        if (count >= kMaxCarveProposals) {
+            ++droppedFull;
+            return false;
+        }
+        if (radius <= 0.0f || power == 0) {
+            ++droppedDegenerate;
+            return false;
+        }
+        if (radius > 8.0f) {
+            radius = 8.0f;
+            ++clampedRadius;
+        } // one carve, not a demolition service
         items[count++] = CarveProposal{x, y, z, radius, power, seed};
         return true;
     }

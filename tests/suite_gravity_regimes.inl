@@ -1,3 +1,5 @@
+#include "world/world.h"
+#include "sim/fluid.h"
 #include "world/gravity.h"
 #include "core/math.h"
 #include "sim/controller.h"
@@ -38,6 +40,37 @@ static void test_gravity_regimes_isotropy() {
             CHECK(f.pull == false);
         }
     }
+}
+
+static void test_fluid_isotropy() {
+    giga::World world;
+    world.gravity().regime = giga::GravityRegime::Zero;
+    world.gravity().global = {0.0f, 0.0f, 0.0f};
+
+    giga::Field<float>& f = world.fields().get_or_create<float>(giga::kFluidField);
+    f.data().assign(giga::kMacroCells, 0.0f);
+
+    int cx = 64, cy = 64, cz = 64;
+    f.at(cx, cy, cz) = 1.0f;
+
+    giga::FluidScratch scratch;
+    giga::FluidParams params;
+    params.maxPerCell = 1.0f;
+    params.viscosity = 1.0f; 
+    
+    giga::fluid_step(world, scratch, params);
+
+    // In GravityRegime::Zero, water should NOT flow down to +X, it should just spread symmetrically or not at all.
+    // The broken code flows exactly all remaining fluid to +X because downAxis defaults to 0 and sign to 1.
+    CHECK(f.at(cx + 1, cy, cz) < 1.0f); // It should not have completely fallen to +X
+    // And ideally it should be symmetrical in all 4 lateral directions if it spreads.
+    // Actually, if downAxis=2 (Z), lateral is X,Y.
+    // If it's correctly falling back to Z without pull, it won't fall down Z, and will spread to X,Y symmetrically.
+}
+
+static void test_gravity_regimes_all() {
+    test_gravity_regimes_isotropy();
+    test_fluid_isotropy();
 }
 
 } // namespace

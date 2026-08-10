@@ -38,7 +38,7 @@ void* operator new(std::size_t size) {
         g_alloc_bytes += size;
     }
     void* p = std::malloc(size ? size : 1);
-    if (!p) throw std::bad_alloc();
+    if (!p) std::abort();
     return p;
 }
 
@@ -56,7 +56,7 @@ void* operator new[](std::size_t size) {
         g_alloc_bytes += size;
     }
     void* p = std::malloc(size ? size : 1);
-    if (!p) throw std::bad_alloc();
+    if (!p) std::abort();
     return p;
 }
 

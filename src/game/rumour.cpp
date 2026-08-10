@@ -44,12 +44,9 @@ std::uint16_t sample_live_mob_kind(const Registry& reg, LayerId layer,
 // Body for body unchanged from the version that lived in the anonymous namespace above;
 // only the linkage moved, so the Territory rumour keeps answering exactly what it did
 // while `src/app/main.cpp` gains the ability to ask the same question. [rumour.h]
-Faction dominant_faction(const Registry& reg, const NpcPool& pool, LayerId layer) {
+Faction dominant_faction(const NpcPool& pool, int floorNumber) {
     std::uint32_t tally[kFactionCount] = {};
-    for (auto e : reg.view<const NpcRef, const Transform>()) {
-        if (reg.get<const Transform>(e).layer != layer) continue;
-        const NpcId id = reg.get<const NpcRef>(e).id;
-        if (!const_cast<NpcPool&>(pool).valid(id)) continue;
+    for (NpcId id : const_cast<NpcPool&>(pool).floor_bucket(floorNumber)) {
         ++tally[body_row(pool, id)];
     }
     std::size_t best = 0;
@@ -250,7 +247,7 @@ Rumour rumour_for(const Registry& reg, const NpcPool& pool, NpcId speaker,
         case RumourKind::Territory:
             r.kind = kind;
             r.subject =
-                static_cast<std::uint16_t>(dominant_faction(reg, pool, layer));
+                static_cast<std::uint16_t>(dominant_faction(pool, floorZ));
             r.valid = true;
             return r;
         case RumourKind::Depth:

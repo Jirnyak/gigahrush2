@@ -170,7 +170,7 @@ static_assert(kRumourLullSpeakMs > kSamosborWarningMs,
 // on — walk into a Scientist floor and the same haul is worth 8% more.
 //
 // O(bodies on the layer), one pass, no allocation. Called on arrival, never per tick.
-Faction dominant_faction(const Registry& reg, const NpcPool& pool, LayerId layer);
+Faction dominant_faction(const NpcPool& pool, int floorNumber);
 
 // Build the rumour a given speaker would tell, from live state and the live samosbor
 // clock.

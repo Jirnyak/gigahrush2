@@ -61,6 +61,7 @@
 #include "game/status.h"      // StatusSet (SAVSTAT v9)
 #include "world/destruct.h"   // CarveOp, CarveScratch, CarveResult, carve_sphere
 #include "world/level_stack.h"  // LayerId, and World via world/world.h
+#include "game/hermetic.h"
 
 namespace giga::game {
 
@@ -235,10 +236,9 @@ inline constexpr std::size_t kCombatSaveWire =
     1 + kRangedWire + 4;  // hasRanged + ranged + kills = 21
 static_assert(kCombatSaveWire == 21);
 // Version 9 / SAVSTAT: StatusSet field-by-field (NOT sizeof — host padding).
-// 6 x u32 remainMs + 6 x u16 intensityE3 + 6 x u8 alt = 24+12+6 = 42.
-inline constexpr std::size_t kStatusWire =
-    kStatusCount * 4 + kStatusCount * 2 + kStatusCount * 1;  // 42
-static_assert(kStatusWire == 42);
+// 6 x u32 remainMs + 6 x u16 intensityE3 + 6 x u8 alt = 28+14+7 = 49.
+inline constexpr std::size_t kStatusWire = 49;
+static_assert(kStatusWire == 49);
 inline constexpr std::size_t kOpenedKeyWire = 5;     // i16 floor + 3 x u8 cell
 inline constexpr std::size_t kSaveFixedWire =
     kLedgerWire + kBookWire + kPlayerWire + kRpgWire + kCraftingWire +
@@ -374,12 +374,14 @@ inline constexpr std::size_t kFloorHeaderWire = 16;
 
 // Encode the World into a complete floor file (header + CRC + snapshot blob).
 void floor_file_write(const World& w, int floorNumber,
+                      const HermeticZones& hermeticZones,
                       std::vector<std::uint8_t>& out);
 
 // Validate a floor file and stamp it onto `w`. False on any rejection (magic,
 // version, size, CRC, malformed blob) — the caller keeps the generated floor and,
 // where it can, says so out loud. `floorOut` reports the floor the blob claims.
 bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
+                     HermeticZones& hermeticZones,
                      std::int32_t* floorOut = nullptr, SaveError* err = nullptr);
 
 // ---------------------------------------------------------------------------
@@ -462,6 +464,7 @@ struct SaveState {
 // arrays are 138 MB; a pathological floor degrades linearly and is bounded by
 // kMaxSnapBytes. Returns the encoded size.
 std::size_t snapshot_floor(const World& w, int floorNumber,
+                           const HermeticZones& hermeticZones,
                            std::vector<std::uint8_t>& out);
 
 // Stamp a snapshot back onto `w`, replacing types, masks and the sub-material field
@@ -471,6 +474,7 @@ std::size_t snapshot_floor(const World& w, int floorNumber,
 // receives the floor number the snapshot claims. Call BEFORE door_build, so the
 // fresh DoorSet re-stamps its leaves over whatever door state the snapshot froze.
 bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
+                          HermeticZones& hermeticZones,
                           std::int32_t* floorOut = nullptr);
 
 // Serialize. `out` is cleared first and ends up exactly `save_bytes_for(opened.size())`
