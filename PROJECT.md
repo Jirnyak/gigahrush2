@@ -1,37 +1,37 @@
-# Project: gigahrush2 Spec 02 Voxel Physics and Fluids
+# Project: gigahrush2 Spec 04 Implementation
 
 ## Architecture
-- Modules:
-  - `src/game/combat.h` & `src/app/main.cpp`: Carve proposal queue (`CarveProposalQueue`), `DropReason` enum (`None`, `QueueFull`, `InvalidRadiusPower`, `BakeInProgress`), `droppedBake` metric counter, stderr logging `[carve] proposals=... dropped_full=... dropped_degen=... dropped_bake=... clamped=...`.
-  - `src/world/types.h`, `src/world/destruct.h`, `src/world/destruct.cpp`: Derived sub-chunk bitshift and mask constants (`kSubDimBits`, `kSubVoxelsBits`, `kSubVoxelsMask`, `kSubMask`, `kMacroBits`, `kMacroMask`), 64-bit key integers (`uint64_t` in `CarveScratch` and key functions), power-of-two assertion.
-  - `src/sim/fluid.cpp`: Gravity regime fallback for `GravityRegime::Custom` via `regime_from_vector`, symmetric neighbor evaluation and outflow scaling in lateral distribution loop.
-  - `tests/`: `suite_combat.inl`, `suite_destruct.inl`, `suite_gravity_regimes.inl`, `game_test`, `world_test`.
+C++/Vulkan rendering engine. Key components:
+- `src/app/main.cpp`: Main render loop, pass execution, push constant setup, envvar checks.
+- `src/render/gpu_timer.h`: GPU timer query pool and pass enum channels.
+- `src/render/voxel_mirror.cpp`: Voxel engine page pool management and fluid simulation buffer sync.
+- `shaders/cube.frag`, `shaders/raymarch.frag`: Fragment shaders handling lighting, samosbor pulse, and raymarching push constants.
 
 ## Feature Inventory
 | # | Feature | Description | Milestone | Source |
 |---|---------|-------------|-----------|--------|
-| 1 | R1. Carving Queue Metrics | Log/assert on dropped proposals in `CarveProposalQueue` (`combat.h` and `main.cpp`) due to capacity, 0 radius/power, or baking | M1 | ORIGINAL_REQUEST §R1 |
-| 2 | R2. De-hardcode kSubDim | Derive bitshift/mask expressions from `kSubDim` in `types.h`, `destruct.h`, `destruct.cpp`, promote keys to uint64_t, ensure `kSubDim=16` works | M2 | ORIGINAL_REQUEST §R2 |
-| 3 | R3. Fluid Anisotropy & Gravity Fixes | Use `regime_from_vector` for `Custom` regime in `fluid.cpp`, fix neighbor evaluation anisotropy bug in distribution loop | M3 | ORIGINAL_REQUEST §R3 |
-| 4 | Build & Test Suite & Runtime Proof | MSVC clean build (`cmake --build build -j 12`), `ctest` pass, stdout/stderr log proof of `[carve]` drop logging | M4 | ORIGINAL_REQUEST §Acceptance Criteria |
-
-## Code Layout
-- `src/game/combat.h`
-- `src/app/main.cpp`
-- `src/world/types.h`, `src/world/destruct.h`, `src/world/destruct.cpp`
-- `src/sim/fluid.cpp`
-- `tests/suite_combat.inl`, `tests/suite_destruct.inl`, `tests/suite_gravity_regimes.inl`
+| 1 | GPU Timer Passes | Add `GpuPass` enum channels (`GpuLightGrid`, `VoxelMirrorFlush`, `GpuCull`, `SimWireClothParticle`, `PropPass`, `DrawWireClothParticle`) and `mark_begin/end` in `main.cpp` | M1 | ORIGINAL_REQUEST §1 |
+| 2 | Envvar Caching & CubePass Removal | Cache `GIGA_WIRE_NOSIM` and `GIGA_PARTICLE_NOSIM` into `static const bool` in `main.cpp`. Remove dead references to `shaders/cube.vert` and `CubePass` across codebase | M2 | ORIGINAL_REQUEST §2 |
+| 3 | Samosbor Pulse & PC Torus Overload | Fix `samosborPulse` calculations and separate `pc.torus.w` overloading into dedicated fields in shaders (`cube.frag`, `raymarch.frag`) and host push constant structs | M3 | ORIGINAL_REQUEST §3 |
+| 4 | Voxel Dynamic Page Allocation | In `src/render/voxel_mirror.cpp`, allocate 768 MiB page pool dynamically per page instead of upfront | M4 | ORIGINAL_REQUEST §4 |
+| 5 | Voxel Fluid Dirty Cell Updates | In `src/render/voxel_mirror.cpp`, send fluid updates via dirty cells rather than re-uploading full 8 MiB | M5 | ORIGINAL_REQUEST §5 |
 
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
-| 0 | Codebase Survey | Full survey of combat.h, destruct.cpp, fluid.cpp, test infra | none | DONE |
-| 1 | Carving Queue Metrics (R1) | `src/game/combat.h`, `src/app/main.cpp`, `tests/suite_combat.inl` | M0 | IN_PROGRESS |
-| 2 | De-hardcode kSubDim (R2) | `src/world/types.h`, `src/world/destruct.h`, `src/world/destruct.cpp`, `tests/suite_destruct.inl` | M0 | PLANNED |
-| 3 | Fluid Anisotropy & Gravity Fixes (R3) | `src/sim/fluid.cpp`, `tests/suite_gravity_regimes.inl` | M0 | PLANNED |
-| 4 | Final Build, Test & Runtime Proof (M4) | MSVC build, ctest, stdout/stderr log proof | M1, M2, M3 | PLANNED |
+| M1 | GPU Timer Passes | `src/render/gpu_timer.h`, `src/app/main.cpp` | None | PLANNED |
+| M2 | Envvar Caching & CubePass Removal | `src/app/main.cpp`, shaders & codebase | M1 | PLANNED |
+| M3 | Samosbor Pulse & Torus Separation | `shaders/cube.frag`, `shaders/raymarch.frag`, host PC structs | None | PLANNED |
+| M4 | Voxel Dynamic Page Pool | `src/render/voxel_mirror.cpp` | None | PLANNED |
+| M5 | Voxel Fluid Dirty Cells | `src/render/voxel_mirror.cpp` | M4 | PLANNED |
 
 ## Interface Contracts
-- `CarveProposalQueue`: `DropReason` enum (`None`, `QueueFull`, `InvalidRadiusPower`, `BakeInProgress`), `droppedBake` counter, POD static assert.
-- `types.h` derived constants: `compile_log2`, `kSubDimBits`, `kSubVoxelsBits`, `kSubVoxelsMask`, `kSubMask`, `kMacroBits`, `kMacroMask`.
-- `fluid.cpp`: gravity regime fallback `if (r == GravityRegime::Custom) r = regime_from_vector(world.gravity().global);`.
+- `gpu_timer.h`: GpuPass enum entries match array indexing for timestamps.
+- `voxel_mirror.cpp`: Dynamic page allocation preserves page index mapping and GPU host visible memory binding.
+- Shaders & Host PC: Push constant struct layout in C++ must strictly match GLSL std430 / push_constant layout in `cube.frag` and `raymarch.frag`.
+
+## Code Layout
+- `src/app/main.cpp`
+- `src/render/gpu_timer.h`
+- `src/render/voxel_mirror.cpp`, `src/render/voxel_mirror.h`
+- `shaders/cube.frag`, `shaders/raymarch.frag`

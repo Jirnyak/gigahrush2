@@ -70,9 +70,15 @@ struct VulkanDevice;
 // The GPU work we bracket, in HUD display order. Add one and the query pool
 // grows automatically; nothing else needs touching.
 enum class GpuPass : std::uint32_t {
-    World = 0,  // CubePass: the instanced voxel world
-    Bodies,     // BodyPass: the embodied crowd
-    Hud,        // ImGuiLayer
+    LightGrid = 0,
+    VoxelFlush,
+    Cull,
+    SimPhysics, // wire/cloth/particle sim
+    World,      // Raymarch
+    Bodies,     // body_pass
+    Props,      // prop_pass
+    DrawPhysics, // wire/cloth/particle draw
+    Hud,
     kCount
 };
 inline constexpr std::uint32_t kGpuPassCount =
