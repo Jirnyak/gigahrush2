@@ -4552,10 +4552,12 @@ int main(int argc, char** argv) {
             // microseconds, and printing those as "0.00" reads as "not measured"
             // — the exact false-confidence this whole module exists to remove.
             if (renderer.timer.supported()) {
-                ImGui::Text("gpu: world %.3f | bodies %.3f | hud %.3f | "
-                            "frame %.3f ms",
+                ImGui::Text("gpu: world %.3f | bodies %.3f | props %.3f | "
+                            "sim %.3f | hud %.3f | frame %.3f ms",
                             renderer.timer.pass_ms(gpu::GpuPass::World),
                             renderer.timer.pass_ms(gpu::GpuPass::Bodies),
+                            renderer.timer.pass_ms(gpu::GpuPass::Props),
+                            renderer.timer.pass_ms(gpu::GpuPass::SimPhysics),
                             renderer.timer.pass_ms(gpu::GpuPass::Hud),
                             renderer.timer.frame_ms());
                 // The median above is DESIGNED to hide spikes — it takes 16 slow frames
@@ -4564,10 +4566,12 @@ int main(int argc, char** argv) {
                 // a stutter; both moving together is a real cost change. `drop` must stay
                 // at 0: a growing value means every figure above is computed over a stale
                 // window and none of them mean anything. [gpu_timer.h]
-                ImGui::Text("gpu peak: world %.3f | bodies %.3f | hud %.3f | "
-                            "frame %.3f ms | drop %u",
+                ImGui::Text("gpu peak: world %.3f | bodies %.3f | props %.3f | "
+                            "sim %.3f | hud %.3f | frame %.3f ms | drop %u",
                             renderer.timer.pass_ms_max(gpu::GpuPass::World),
                             renderer.timer.pass_ms_max(gpu::GpuPass::Bodies),
+                            renderer.timer.pass_ms_max(gpu::GpuPass::Props),
+                            renderer.timer.pass_ms_max(gpu::GpuPass::SimPhysics),
                             renderer.timer.pass_ms_max(gpu::GpuPass::Hud),
                             renderer.timer.frame_ms_max(), renderer.timer.dropped());
             } else {
@@ -5466,10 +5470,18 @@ int main(int argc, char** argv) {
             VkCommandBuffer cmd = renderer.current_cmd();
             float currentTimeSec = static_cast<float>(SDL_GetTicks()) / 1000.0f;
 
+            // The timer bracket is OUTSIDE the ready() test on purpose, and so is
+            // every other bracket this frame writes: collect() reads the whole
+            // frame's query range in one call and VK_NOT_READY on ANY unwritten
+            // query drops the ENTIRE sample ([gpu_timer.cpp]). A skipped pass must
+            // therefore still write its pair — an adjacent begin/end reads as a
+            // truthful 0.0 ms, not as a dead readout.
+            renderer.timer.pass_begin(cmd, gpu::GpuPass::LightGrid);
             if (lightGrid.ready()) {
                 collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, samosbor, reg, activeLayer, &noiseField, &powerGrid);
                 lightGrid.update_and_dispatch(cmd, currentTimeSec, camMat.eye);
             }
+            renderer.timer.pass_end(cmd, gpu::GpuPass::LightGrid);
 
 
 
@@ -5526,6 +5538,9 @@ int main(int argc, char** argv) {
             // that separates "cull.comp corrupts instances" from every other
             // mesh-path suspect in one relaunch.
             static const bool noGpuCull = std::getenv("GIGA_NO_GPU_CULL") != nullptr;
+            static const bool noWireSim = std::getenv("GIGA_WIRE_NOSIM") != nullptr;
+            static const bool noParticleSim = std::getenv("GIGA_PARTICLE_NOSIM") != nullptr;
+            renderer.timer.pass_begin(cmd, gpu::GpuPass::Cull);
             if (!noGpuCull && cullPass.ready() && propPass.ready()) {
                 propPass.set_use_gpu_culling(true);
                 const mat4 vp = mat4_mul(camMat.proj, camMat.view);
@@ -5548,6 +5563,7 @@ int main(int argc, char** argv) {
             } else if (propPass.ready()) {
                 propPass.set_use_gpu_culling(false);
             }
+            renderer.timer.pass_end(cmd, gpu::GpuPass::Cull);
 
             // Push bodies for the verlet passes: EVERY body on the active
             // layer (the same set BodyPass draws, PLUS the camera holder —
@@ -5575,6 +5591,14 @@ int main(int argc, char** argv) {
 
             // Wire verlet: aliveness from the LIVE grid (anchor probe), then
             // the compute step — recorded before the render pass like the cull.
+            //
+            // The SimPhysics span covers wire + cloth + particle compute, and the
+            // particle step is pinned AFTER the mirror flush (see below), so the
+            // nested VoxelFlush bracket is a SUB-span of this one by construction:
+            // subtract it to isolate pure sim cost. It closes after the particle
+            // record, unconditionally — see the LightGrid note on why every
+            // bracket must write its pair each frame.
+            renderer.timer.pass_begin(cmd, gpu::GpuPass::SimPhysics);
             if (wirePass.ready() && wirePass.chain_count() > 0 &&
                 activeLayer != kInvalidLayer) {
                 if (const game::AntourageBake* ab =
@@ -5602,7 +5626,7 @@ int main(int argc, char** argv) {
                     wirePass.write_alive(wireAlive.data(), wireN);
                     wirePass.write_pins(wirePins.data(), wireN);
                 }
-                if (std::getenv("GIGA_WIRE_NOSIM") == nullptr)
+                if (!noWireSim)
                     wirePass.record_sim(
                         cmd, 1.0f / 60.0f,
                         stack.layer(activeLayer).gravity().global);
@@ -5633,7 +5657,7 @@ int main(int argc, char** argv) {
                     clothPass.write_alive(clothAlive.data(), clothN);
                     clothPass.write_pins(clothPins.data(), clothN);
                 }
-                if (std::getenv("GIGA_WIRE_NOSIM") == nullptr)
+                if (!noWireSim)
                     clothPass.record_sim(
                         cmd, 1.0f / 60.0f,
                         stack.layer(activeLayer).gravity().global);
@@ -5643,18 +5667,21 @@ int main(int argc, char** argv) {
                 voxelMirror.mark_dirty(stainDirty.data(), stainDirty.size());
                 stainDirty.clear();
             }
+            renderer.timer.pass_begin(cmd, gpu::GpuPass::VoxelFlush);
             voxelMirror.flush(cmd, renderer.currentFrame,
                               stack.layer(activeLayer));
+            renderer.timer.pass_end(cmd, gpu::GpuPass::VoxelFlush);
 
             // Particle sim AFTER the mirror flush: its barrier orders the
             // masks transfer before compute reads, so a particle collides
             // with THIS frame's carve holes, not last frame's walls.
             // Gravity is the layer's declared VECTOR — the flush above already
             // dereferences activeLayer, so it is valid here.
-            if (std::getenv("GIGA_PARTICLE_NOSIM") == nullptr)
+            if (!noParticleSim)
                 particlePass.record_sim(
                     cmd, 1.0f / 60.0f,
                     stack.layer(activeLayer).gravity().global);
+            renderer.timer.pass_end(cmd, gpu::GpuPass::SimPhysics);
 
             renderer.begin_pass(0.0f, 0.0f, 0.0f);
 
@@ -5687,13 +5714,19 @@ int main(int argc, char** argv) {
             bodyPass.record(cmd, renderer.currentFrame, reg, activeLayer, push, lightGrid.descriptor_set());
             renderer.timer.pass_end(cmd, gpu::GpuPass::Bodies);
             // Props: GPU-instanced arbitrary-mesh pass, same depth buffer.
+            renderer.timer.pass_begin(cmd, gpu::GpuPass::Props);
             if (propPass.ready())
                 propPass.record(cmd, renderer.currentFrame, push, lightGrid.descriptor_set());
+            renderer.timer.pass_end(cmd, gpu::GpuPass::Props);
+
+
+            renderer.timer.pass_begin(cmd, gpu::GpuPass::DrawPhysics);
             wirePass.record_draw(cmd, push);
             clothPass.record_draw(cmd, push);
             // Particles LAST among world passes: alpha-blended sprites need
             // every opaque depth already written.
             particlePass.record_draw(cmd, push);
+            renderer.timer.pass_end(cmd, gpu::GpuPass::DrawPhysics);
 
 
             std::uint64_t t2 = SDL_GetPerformanceCounter();
@@ -5861,10 +5894,12 @@ int main(int argc, char** argv) {
                     }
                     if (renderer.timer.supported())
                         std::fprintf(stderr,
-                                     "gpu-ms: world %.3f bodies %.3f hud %.3f "
-                                     "frame %.3f  (bodies %u)\n",
+                                     "gpu-ms: world %.3f bodies %.3f props %.3f "
+                                     "sim %.3f hud %.3f frame %.3f  (bodies %u)\n",
                                      renderer.timer.pass_ms(gpu::GpuPass::World),
                                      renderer.timer.pass_ms(gpu::GpuPass::Bodies),
+                                     renderer.timer.pass_ms(gpu::GpuPass::Props),
+                                     renderer.timer.pass_ms(gpu::GpuPass::SimPhysics),
                                      renderer.timer.pass_ms(gpu::GpuPass::Hud),
                                      renderer.timer.frame_ms(),
                                      bodyPass.last_instance_count());
@@ -5874,10 +5909,12 @@ int main(int argc, char** argv) {
                     // non-zero drop count invalidates every median in the line above.
                     if (renderer.timer.supported())
                         std::fprintf(stderr,
-                                     "gpu-ms-peak: world %.3f bodies %.3f hud %.3f "
-                                     "frame %.3f  (dropped %u)\n",
+                                     "gpu-ms-peak: world %.3f bodies %.3f props %.3f "
+                                     "sim %.3f hud %.3f frame %.3f  (dropped %u)\n",
                                      renderer.timer.pass_ms_max(gpu::GpuPass::World),
                                      renderer.timer.pass_ms_max(gpu::GpuPass::Bodies),
+                                     renderer.timer.pass_ms_max(gpu::GpuPass::Props),
+                                     renderer.timer.pass_ms_max(gpu::GpuPass::SimPhysics),
                                      renderer.timer.pass_ms_max(gpu::GpuPass::Hud),
                                      renderer.timer.frame_ms_max(),
                                      renderer.timer.dropped());
