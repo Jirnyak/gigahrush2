@@ -192,9 +192,18 @@ while (accumulator ≥ dt):          # fixed 125 Hz (kSimDt, 8 ms exactly)
     input.apply       → write intent onto active camera entity
     controller_step   → intent → velocity
     physics_step      → integrate + collide vs sub-voxel masks
-    (fluid_step)      → NOT CALLED: no floor module seeds the field, so the
-                        cellular liquid step is absent from the shipped loop
-                        (see the call site in main.cpp and problems.md §13)
+    (fluid_step)      → NOT CALLED. The reason previously recorded here — "no
+                        floor module seeds the field" — was FALSE: padic_gen
+                        seeds kFluidField and floor_gen routes all five
+                        FloorKind values through padic_apply_rules, so every
+                        floor seeds standing water and the live consumers
+                        (pos_wet, wet-spawn suppression, crate flotation) read
+                        a field that never evolves. The real blocker is
+                        placement, not seeding: master_prompt.md and
+                        performance.md put every cellular field on the GPU as
+                        async compute, so wiring the CPU step into this loop
+                        would install what the performance mandate forbids
+                        (see main.cpp's call site and problems.md §13)
 compute_camera        → view/proj from CameraTag entity
 render                → mirror flush (dirty cells → GPU) → raymarch world
                         → body/prop/particle passes → ImGui HUD

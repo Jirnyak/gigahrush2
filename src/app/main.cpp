@@ -2920,7 +2920,7 @@ int main(int argc, char** argv) {
                     std::fprintf(stderr, "[aimem] INTENT tick=%llu%s\n",
                                  static_cast<unsigned long long>(simTick), intents);
                 }
-                controller_step(reg, kSimDt);
+                controller_step(reg, kSimDt, &activeWorld.gravity());
                 // Steer the crowd BEFORE physics: wander writes horizontal
                 // velocity, physics integrates it and resolves collision.
                 // Samosbor advances HERE — after controller_step, before
