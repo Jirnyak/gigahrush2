@@ -8,6 +8,12 @@ namespace {
 
 // --- packed sub-voxel keys ---------------------------------------------------
 // key = macro cell index (21 bits) << 9 | sub bit (9 bits). Fits 30 bits.
+// The 9/511 packing below (and the >>/& splits in unpack_key/key_at) is written
+// for kSubDim == 8 and ONLY 8 — types.h calls flipping kSubDim a one-line
+// change, and for the masks it is, but not here. Pinned so a flip is a compile
+// error at the guilty file instead of a silently corrupted carve. [voxels.md]
+static_assert(kSubDim == 8,
+              "pack_key/unpack_key/key_at hardcode the 8^3 sub-voxel packing");
 inline std::uint32_t pack_key(std::uint32_t ci, std::uint32_t bit) {
     return (ci << 9) | bit;
 }

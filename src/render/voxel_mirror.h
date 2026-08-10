@@ -20,8 +20,9 @@
 //   * wholesale (floor build / arrival / F9 / teleport)  -> upload_all()
 //   * carve ([world/destruct.h] CarveResult::dirtyCells) -> mark_dirty()
 //   * doors  ([game/door.h] DoorSet::dirtyCells)         -> mark_dirty()
-//   * future mutators (the cellular sandpile, when the app wires it) owe the
-//     same debt the carve table in [destruct.md] already states.
+//   * any future grid mutator owes the same debt the carve table in
+//     [destruct.md] already states. (The cellular sandpile module that used to
+//     be named here was deleted 2026-08-10: 1492 lines, zero reachable.)
 //
 // Dirty cells are re-uploaded as byte ranges (64 B mask + 2 B type + 4 B page
 // index + 1 KiB page when mixed) through a per-frame staging window — so the

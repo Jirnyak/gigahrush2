@@ -102,6 +102,63 @@
 
 ---
 
+## 📚 Documentation Map
+
+`AGENTS.md` and `ARCHITECTURE.md` both state that this README orchestrates the
+per-system docs; until 2026-08-09 no such index existed here. This is it.
+
+**Authority, in order.** [AGENTS.md](AGENTS.md) (hard rules, working method) →
+[ARCHITECTURE.md](ARCHITECTURE.md) (layers + the owner's game manifesto) → the
+per-system files below. [master_prompt.md](master_prompt.md) wins on "what state
+is the game layer in and what's next"; [problems.md](problems.md) is the defect
+registry (§1–§45) and outranks any doc that disagrees with a measured finding.
+
+**Design specs & roadmap** — the forward-looking layer, added 2026-08-09:
+
+| Document | Scope |
+|---|---|
+| [Docs/MASTER_ROADMAP.md](Docs/MASTER_ROADMAP.md) | Phased plan 0→6, dependency graph, per-phase acceptance number |
+| [Docs/specs/01_ALIFE_AND_UTILITY_AI.md](Docs/specs/01_ALIFE_AND_UTILITY_AI.md) | Social roles, affordance rows, panic, section hierarchy |
+| [Docs/specs/02_VOXEL_PHYSICS_AND_FLUIDS.md](Docs/specs/02_VOXEL_PHYSICS_AND_FLUIDS.md) | Carving gates, GPU fields, structural stress, gas/fire/smoke |
+| [Docs/specs/03_ECONOMY_MASS_AND_CRAFTING.md](Docs/specs/03_ECONOMY_MASS_AND_CRAFTING.md) | Wear/jamming/fouling, equip slots, junk crafting |
+| [Docs/specs/04_RENDER_AND_ACOUSTICS.md](Docs/specs/04_RENDER_AND_ACOUSTICS.md) | Post-process target, CRT toggle, acoustics from zero |
+| [Docs/specs/05_TESTING_AND_PERF_BUDGETS.md](Docs/specs/05_TESTING_AND_PERF_BUDGETS.md) | Isotropy gate, budget assertions, class-closing gates |
+| [Docs/specs/06_SAMOSBOR_AND_CRISIS.md](Docs/specs/06_SAMOSBOR_AND_CRISIS.md) | Fog field, hermetic zones, geometry-rewriting wave, PSI pool |
+| [Docs/specs/07_MAINCPP_DECOMPOSITION.md](Docs/specs/07_MAINCPP_DECOMPOSITION.md) | 5927-line main.cpp split: 8 extractable regions, AppState |
+| [Docs/specs/08_WORLD_FLOORS_AND_ROOMS.md](Docs/specs/08_WORLD_FLOORS_AND_ROOMS.md) | Single floor predicate chain, 11 room fields, anomalies |
+| [Docs/specs/09_COMBAT_BALLISTICS_AND_RPG.md](Docs/specs/09_COMBAT_BALLISTICS_AND_RPG.md) | Honest friendly fire, psi pool, INT attribute, status producers |
+| [Docs/specs/10_SAVE_AND_PERSISTENCE.md](Docs/specs/10_SAVE_AND_PERSISTENCE.md) | Save v10: samosbor clock, NPC memory, no-migration contract |
+| [Docs/specs/11_SOCIAL_SYSTEMS.md](Docs/specs/11_SOCIAL_SYSTEMS.md) | Speech, rumour, vendor, quests; the severed faction→price link |
+| [Docs/specs/12_MACRO_SIM_AND_NPC_POOL.md](Docs/specs/12_MACRO_SIM_AND_NPC_POOL.md) | 2^20 pool, embodiment round trip, the unbudgeted demography sweep |
+| [Docs/specs/13_BESTIARY_TRAITS_AND_SPAWN.md](Docs/specs/13_BESTIARY_TRAITS_AND_SPAWN.md) | 68 kinds, trait dispatch, spawn weighting, hunt throttle |
+| [Docs/specs/14_NEEDS_AND_SURVIVAL.md](Docs/specs/14_NEEDS_AND_SURVIVAL.md) | Five needs, digestion loop, encumbrance, cold-NPC gap |
+| [Docs/specs/15_BAKED_NAVIGATION.md](Docs/specs/15_BAKED_NAVIGATION.md) | 130 MiB/floor (peak 260), flight-field vs walk-field, 9 nav.md divergences |
+| [Docs/specs/16_ELEVATORS_AND_FLOOR_STREAMING.md](Docs/specs/16_ELEVATORS_AND_FLOOR_STREAMING.md) | 16 shafts not 32, 6.4s revisit vs 130ms first visit, no floor stash |
+| [Docs/specs/17_ITEM_DATA_AND_CONTAINERS.md](Docs/specs/17_ITEM_DATA_AND_CONTAINERS.md) | 442 items (not 446), 14 dead CSV columns, nowhere to store anything |
+| [Docs/specs/18_BUILD_GATES_AND_CI.md](Docs/specs/18_BUILD_GATES_AND_CI.md) | CI cannot configure (no Vulkan SDK step), 5 platform asymmetries, no -Werror |
+| [Docs/specs/19_ECS_COMPONENTS_AND_ORDER.md](Docs/specs/19_ECS_COMPONENTS_AND_ORDER.md) | 39 components, 6 Velocity writers, Corpse loot lost on save |
+| [Docs/specs/21_RUMOURS_AND_INFORMATION.md](Docs/specs/21_RUMOURS_AND_INFORMATION.md) | A truth generator with no NPC listener; 4 of 9 kinds unreachable behind a one-line shim |
+
+Each spec opens with **what is already built** so no session re-specifies working
+code, and every claim carries a `file:line`.
+
+Specs 20 and 21 additionally carry a dated **what changed while this was being
+written** section: both subsystems were wired by a parallel session within the
+hour, so the "current state" half of a spec is perishable and is kept separable
+from the reasoning half on purpose.
+
+**Per-system contracts** — what the engine does today:
+
+| Layer | Documents |
+|---|---|
+| World / voxels | [world.md](world.md) · [voxels.md](voxels.md) · [fields.md](fields.md) · [gravity.md](gravity.md) · [destruct.md](destruct.md) |
+| Simulation | [physics.md](physics.md) · [controller.md](controller.md) · [camera.md](camera.md) · [fluid.md](fluid.md) · [diffusion.md](diffusion.md) · [nav.md](nav.md) |
+| Game layer | [floors.md](floors.md) · [elevators.md](elevators.md) · [npcs.md](npcs.md) · [ai.md](ai.md) · [macrosim.md](macrosim.md) · [monsters.md](monsters.md) · [items.md](items.md) · [props.md](props.md) · [antourage.md](antourage.md) |
+| Platform | [render.md](render.md) · [ecs.md](ecs.md) · [events.md](events.md) · [netcode.md](netcode.md) |
+| Cross-cutting | [performance.md](performance.md) · [jirnyak.md](jirnyak.md) · [worldgen.md](worldgen.md) (tombstone) |
+
+---
+
 ## 🔧 Build & Execution
 
 ### Prerequisites

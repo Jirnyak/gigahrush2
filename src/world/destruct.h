@@ -31,16 +31,17 @@
 // owes nothing back). The bound matters on a torus: there is no "ground"
 // component to anchor to, so "attached" is defined operationally as "the
 // bounded flood-fill overflows the limit". Large undermined slabs therefore
-// stay standing — their fate belongs to the sandpile rules ([sim/cellular.h]),
-// not to a carve.
+// stay standing — their fate would belong to structural-collapse rules if the
+// engine grows any (the sandpile module once named here was deleted 2026-08-10
+// as dead code), not to a carve.
 //
 // NO REBAKE HAPPENS HERE. Deliberately. Collision is live (physics reads the
 // masks), but every baked overlay goes stale by exactly the cells listed in
 // CarveResult::dirtyCells. The CALLER owes, per the existing contracts:
-//   * diffusion_mark_cell / cellular_mark_cell per dirty cell (O(1) patches);
+//   * diffusion_mark_cell per dirty cell (O(1) patches);
 //   * cubePass.invalidate() once, if anything was removed;
 //   * nothing for nav — flow fields stay stale until the next full bake, the
-//     same accepted debt door.cpp already carries ([sim/cellular.h] §"stale").
+//     same accepted debt door.cpp already carries.
 // And like every grid mutator, DO NOT carve while a nav bake is in flight
 // (doors.frozen is the app's existing gate).
 #pragma once

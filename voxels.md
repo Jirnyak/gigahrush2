@@ -30,7 +30,11 @@ Three knobs, all in [types.h](src/world/types.h): `kMacroDim` (128), `kSubDim`
 game's block scale, so a sub-voxel is 0.25 m). `kCellSize` ties grid space to ECS
 `Transform` space 1:1, and `kWorldExtent = kMacroDim · kCellSize` (256 m) is the
 torus period entity positions wrap against ([physics.md](physics.md)). Flipping
-`kSubDim` to 16 grows the mask automatically via `kSubMaskWords`. **Why 128 and
+`kSubDim` to 16 grows the mask automatically via `kSubMaskWords`. **⚠ NOT a one-line
+change in practice:** `destruct.cpp` hardcodes the sub-voxel key packing for 8³ (shift 9,
+mask 511, `>>3 & 7`), and a `static_assert(kSubDim == 8)` pins this in the source so the
+mismatch is a compile error rather than a silent wrong answer. A real change to `kSubDim`
+requires updating `pack_key`/`unpack_key`/`key_at` in `destruct.cpp` as well. **Why 128 and
 not 256:** 128³ is the deliberate active-floor size — one floor is live at a time
 and depth comes from the W-stack, so a bigger N buys floor *size*, not more
 simulation, while the renderer's O(N³) surface scan and sub-voxel RAM (138 MB →
