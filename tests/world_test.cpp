@@ -170,6 +170,8 @@ static void test_level_stack() {
     CHECK(s.below(b) == a);
     CHECK(s.above(b) == kInvalidLayer); // top of stack
     CHECK(s.below(a) == kInvalidLayer); // bottom of stack
+    CHECK(s.above(kInvalidLayer) == kInvalidLayer); // Regression test for missing bounds check
+    CHECK(s.below(kInvalidLayer) == kInvalidLayer);
     CHECK(s.valid(a) && !s.valid(99));
 }
 
@@ -489,7 +491,7 @@ static void test_nav_coarse() {
     MacroGrid air;
     CoarseGraph g{};
     std::fprintf(stderr, "test_nav_coarse: running bake_coarse\n"); std::fflush(stderr);
-    bake_coarse(air, g);
+    giga::nav::bake_coarse(air, giga::GravityRegime::Zero, g);
     std::fprintf(stderr, "test_nav_coarse: bake_coarse complete\n"); std::fflush(stderr);
 
     for (int i = 0; i < kNodes; ++i) {
@@ -519,7 +521,7 @@ static void test_nav_coarse() {
 
     // Deterministic: a second bake is bit-identical (schedule-invariant).
     CoarseGraph g2{};
-    bake_coarse(air, g2);
+    giga::nav::bake_coarse(air, giga::GravityRegime::Zero, g2);
     CHECK(std::memcmp(&g, &g2, sizeof(CoarseGraph)) == 0);
 }
 
@@ -531,7 +533,7 @@ static void test_nav_fine() {
     using namespace nav;
     MacroGrid air;
     FineNav f;
-    bake_fine(air, f);
+    giga::nav::bake_fine(air, giga::GravityRegime::Zero, f);
 
     // The node cell itself is "arrived".
     CHECK(f.at(0, 16, 16, 16) == kFlowArrived);
@@ -578,7 +580,7 @@ static void test_nav_fine() {
     // Deterministic: a second bake is bit-identical (schedule-invariant), for
     // both the flow fields and the (single-threaded) nearest-node field.
     FineNav f2;
-    bake_fine(air, f2);
+    giga::nav::bake_fine(air, giga::GravityRegime::Zero, f2);
     CHECK(f.flow.size() == f2.flow.size());
     CHECK(std::memcmp(f.flow.data(), f2.flow.data(), f.flow.size()) == 0);
     CHECK(f.nearest.size() == f2.nearest.size());
@@ -592,9 +594,9 @@ static void test_route_step() {
     using namespace nav;
     MacroGrid air;
     FineNav f;
-    bake_fine(air, f);
+    giga::nav::bake_fine(air, giga::GravityRegime::Zero, f);
     CoarseGraph g{};
-    bake_coarse(air, g);
+    giga::nav::bake_coarse(air, giga::GravityRegime::Zero, g);
 
     // Standing on the destination cell: arrived, no step.
     CHECK(route_step(g, f, ivec3{40, 40, 40}, ivec3{40, 40, 40}) == kFlowArrived);
@@ -620,9 +622,9 @@ static void test_route_step() {
     MacroGrid walled;
     walled.fill_cell(0, 0, 0, 1);
     FineNav fw;
-    bake_fine(walled, fw);
+    giga::nav::bake_fine(walled, giga::GravityRegime::Zero, fw);
     CoarseGraph gw{};
-    bake_coarse(walled, gw);
+    giga::nav::bake_coarse(walled, giga::GravityRegime::Zero, gw);
     CHECK(fw.nearest_node(0, 0, 0) == kFlowNone);
     CHECK(route_step(gw, fw, ivec3{16, 16, 16}, ivec3{0, 0, 0}) == kFlowNone);
     CHECK(route_step(gw, fw, ivec3{0, 0, 0}, ivec3{16, 16, 16}) == kFlowNone);
@@ -636,9 +638,9 @@ static void test_route_step() {
         isolated.fill_cell(16 + kNavDir[d][0], 16 + kNavDir[d][1],
                            16 + kNavDir[d][2], 1);
     FineNav fi;
-    bake_fine(isolated, fi);
+    giga::nav::bake_fine(isolated, giga::GravityRegime::Zero, fi);
     CoarseGraph gi{};
-    bake_coarse(isolated, gi);
+    giga::nav::bake_coarse(isolated, giga::GravityRegime::Zero, gi);
     CHECK(fi.nearest_node(16, 16, 16) == 0);  // node 0 still owns its own cell
     CHECK(gi.dist[1][0] == kUnreachable);     // but it is cut off from the rest
     CHECK(route_step(gi, fi, ivec3{48, 48, 48}, ivec3{16, 16, 16}) == kFlowNone);

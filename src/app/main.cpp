@@ -824,21 +824,18 @@ constexpr DemoFloor kDemoFloors[] = {
 // own claims. Built once. A refused claim — two floors on one number — logs
 // loudly here and is RED in tests/suite_floorcatalog.inl, so a duplicate can
 // never silently shadow a module.
-const game::FloorCatalog& floor_catalog() {
-    static game::FloorCatalog cat;
-    static const bool ok = [] {
-        bool good = game::build_default_floor_catalog(cat);
-        for (const DemoFloor& f : kDemoFloors)
-            good &= cat.claim(f.number, {"demo", f.kind});
-        if (!good)
-            std::fprintf(stderr,
-                         "[floors] catalog claim REFUSED: %d conflicts, first at "
-                         "floor %d — two modules on one number\n",
-                         cat.conflicts(), cat.first_conflict());
-        return good;
-    }();
-    (void)ok;
-    return cat;
+void register_demo_floors() {
+    game::FloorCatalog& cat = game::mutable_floor_catalog();
+    bool good = true;
+    for (const DemoFloor& f : kDemoFloors) {
+        good &= cat.claim(f.number, {"demo", f.kind});
+    }
+    if (!good) {
+        std::fprintf(stderr,
+                     "[floors] catalog claim REFUSED: %d conflicts, first at "
+                     "floor %d — two modules on one number\n",
+                     cat.conflicts(), cat.first_conflict());
+    }
 }
 
 // How far the world has closed in, as a multiplier on the fog range.
@@ -877,7 +874,7 @@ void aim_player(Registry& reg, Entity player) {
 // number and there is a floor there ([floor_catalog.h]), which is what lets
 // teleport and streaming stop caring whether a number was hand-listed.
 game::FloorKind kind_for_floor(int number) {
-    return floor_catalog().resolve(number).kind;
+    return game::floor_catalog().resolve(number).kind;
 }
 const game::FloorSpec* spec_for_floor(int number) {
     return &game::floor_spec(kind_for_floor(number));
@@ -1385,7 +1382,7 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
 // field. That degradation is automatic rather than special-cased.
 void begin_floor_nav(const World& world, int floorNumber, nav::AsyncBake& bake,
                      game::RoomZones& rooms) {
-    bake.start(world.grid());
+    bake.start(world);
     // The ROOM zones are baked here too, and synchronously, because they are three
     // multi-source BFS against the async bake's 128 — measured below in the same
     // line the nav timings print. Synchronous also means there is no second
@@ -1767,6 +1764,7 @@ int main(int argc, char** argv) {
     }
 
     // --- World + ECS setup -------------------------------------------------
+    register_demo_floors();
     // Build the world population-first, then embody the player from it ([npcs.md]).
     LevelStack stack;
     // §22: lazy nav field rebake under frame budget after carves.
@@ -1908,7 +1906,7 @@ int main(int argc, char** argv) {
         // this file naming it). Pattern floors stay unregistered defaults until
         // something claims or streams them.
         for (int f = game::kMinFloor; f <= game::kMaxFloor; ++f) {
-            const game::FloorDef* def = floor_catalog().claimed(f);
+            const game::FloorDef* def = game::floor_catalog().claimed(f);
             if (!def) continue;
             // Vary the seed per floor so same-kind floors still differ.
             std::uint32_t fseed =
@@ -2293,7 +2291,7 @@ int main(int argc, char** argv) {
         consoleCtx.pool = &pool;
         consoleCtx.stack = &stack;
         consoleCtx.floors = &registry;
-        consoleCtx.catalog = &floor_catalog();
+        consoleCtx.catalog = &game::floor_catalog();
         consoleCtx.player = player;
         consoleCtx.currentFloor = currentFloor;
         consoleCtx.fastTravel = &fastTravel; // §24 hub unlock bitset
@@ -3907,7 +3905,7 @@ int main(int argc, char** argv) {
                 shots += game::player_ranged_step(reg, pool, activeLayer,
                                                   haveGun && attackHeld && !paused,
                                                   kSimDt, simTick, &noiseField,
-                                                  &playerStatus, &simBus);
+                                                  &playerStatus, &bus);
                 game::player_melee_step(
                     reg, pool, bus, activeLayer, kSimDt,
                     !haveGun && attackHeld && !paused, simTick,
@@ -5922,7 +5920,7 @@ int main(int argc, char** argv) {
                     postState.hallucination = (30.0f - needs.sanity) / 30.0f;
                 }
                 const game::StatusSet* statuses = reg.try_get<game::StatusSet>(player);
-                if (statuses && game::status_is_active(*statuses, game::StatusId::PsiStun)) {
+                if (statuses && game::status_active(*statuses, game::StatusId::PsiStun)) {
                     postState.stun = 1.0f;
                 }
             }

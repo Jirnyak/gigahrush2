@@ -194,6 +194,9 @@ std::uint16_t str_heavy_weapon_speed_mult_e3(const RpgStats& r,
 std::int16_t melee_damage(const RpgStats& r, ItemId weaponId,
                           std::int16_t weaponDamage);
 
+// Like melee_damage, but for firearms/bows: scales with level and Int.
+std::int16_t ranged_damage(const RpgStats& r, std::int16_t weaponDamage);
+
 // PSI cost after INT efficiency, floored at 1. The reference rounds to one decimal
 // place; costs here are integers, so this rounds to the nearest whole point.
 std::uint16_t adjusted_psi_cost(std::uint16_t baseCost, const RpgStats& r);

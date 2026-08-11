@@ -89,6 +89,7 @@
 #include "game/floor_spec.h" // FloorKind
 #include "game/mob_table.h" // RoomBit — the shared room taxonomy
 #include "game/npc_pool.h"  // Needs — what room_recover advances
+#include "game/room_template.h"
 #include "world/nav.h"      // kNavDir, kFlowArrived, kFlowNone — one convention
 
 namespace giga {
@@ -248,44 +249,6 @@ void room_recover(Needs& n, std::uint16_t bit, float dt,
 // instead of stored state — see `room_furniture_spot`. Adding a bookshelf to the
 // living room is one row here plus one row in data/props.csv, and no code at all.
 // ---------------------------------------------------------------------------
-struct RoomFurniture {
-    std::uint16_t room;   // RoomBit
-    std::uint16_t prop;   // PropId ordinal — kept as a plain integer so this header
-                          // does not drag prop_table.h into ai.cpp's include set
-    std::uint8_t slot;    // 0..kRoomSlots-1, the interior cell it occupies
-    bool useSpot;         // may an NPC stand AT it? (a stove yes, a table no)
-};
-
-// How many distinct interior cells a room offers. The room interior is
-// (stride-1)^2 = 9 cells at stride 4, and a slot is an index into it in row-major
-// order — so a slot is a POSITION, not a piece of stored geometry.
-inline constexpr std::uint8_t kRoomSlots = 9;
-
-// PropId ordinals, spelled once. Kept as literals rather than an include so that
-// `ai.cpp` — which only ever asks "where is the use spot" — pays nothing for the
-// generated prop table. The static_asserts in room_zone.cpp pin them against the
-// real enum, so a CSV reorder breaks the BUILD instead of moving the furniture.
-inline constexpr std::uint16_t kPropKitchenStove = 5;
-inline constexpr std::uint16_t kPropKitchenTable = 6;
-inline constexpr std::uint16_t kPropToiletPan = 7;
-inline constexpr std::uint16_t kPropBedCot = 8;
-
-inline constexpr RoomFurniture kRoomFurniture[] = {
-    // A kitchen: a stove to stand at, and a table that is scenery. Two pieces, so a
-    // kitchen reads as a kitchen from the doorway and not as "a box in a room".
-    {room_bit(RoomBit::Kitchen), kPropKitchenStove, 0, true},
-    {room_bit(RoomBit::Kitchen), kPropKitchenTable, 4, false},
-    // A bathroom: two pans, because a bathroom with ONE fixture makes a queue of
-    // nine residents converge on one voxel.
-    {room_bit(RoomBit::Bathroom), kPropToiletPan, 0, true},
-    {room_bit(RoomBit::Bathroom), kPropToiletPan, 2, true},
-    // A flat: two cots along the far wall.
-    {room_bit(RoomBit::Living), kPropBedCot, 6, true},
-    {room_bit(RoomBit::Living), kPropBedCot, 8, true},
-};
-inline constexpr std::size_t kRoomFurnitureCount =
-    sizeof(kRoomFurniture) / sizeof(kRoomFurniture[0]);
-
 // ---------------------------------------------------------------------------
 // WHERE the rooms are.
 // ---------------------------------------------------------------------------

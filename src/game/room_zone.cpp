@@ -1,6 +1,7 @@
 #include "game/room_zone.h"
 
 #include <cstddef>
+#include <cstdio>
 
 #include "core/jobs.h"        // parallel_for — bake-time only, one job per room bit
 #include "core/rng.h"         // hash2/hash3 — the seat is a hash, not stored state
@@ -387,6 +388,13 @@ void bake_room_zones(const MacroGrid& grid, FloorKind kind, int number,
                   roomsPerAxis, out.nearRoom[bi]);
     });
     out.baked = have;
+    
+    // Spec 08 4.1: Print how many fields we baked (out of 11).
+    int bakedCount = 0;
+    for (std::uint16_t m = have; m; m >>= 1) {
+        bakedCount += static_cast<int>(m & 1);
+    }
+    std::printf("[rooms] baked %d of %zu fields\n", bakedCount, kFloorRoomBits);
 }
 
 // ---------------------------------------------------------------------------
@@ -479,8 +487,20 @@ std::uint32_t seed_room_furniture(Registry& reg, const World& world, LayerId lay
     for (int ry = 0; ry < roomsPerAxis; ++ry) {
         for (int rx = 0; rx < roomsPerAxis; ++rx) {
             const std::uint16_t bit = floor_room_mask(kind, number, rx, ry);
-            for (const RoomFurniture& f : kRoomFurniture) {
-                if (f.room != bit) continue;
+            const RoomTemplate* templ = nullptr;
+            for (const RoomTemplate& t : kRoomTemplates) {
+                if (t.room == bit) {
+                    templ = &t;
+                    break; // Pick the first template (variant 0)
+                }
+            }
+            if (!templ || templ->propCount == 0) continue;
+
+            int propsSpawnedThisRoom = 0;
+            for (std::uint8_t i = 0; i < templ->propCount; ++i) {
+                if (propsSpawnedThisRoom >= templ->maxProps) break;
+                
+                const RoomFurniture& f = kRoomFurniture[templ->firstProp + i];
                 int ox = 0, oy = 0;
                 room_slot_offset(f.slot, stride, ox, oy);
                 const int cx = wrap_macro(rx * stride + ox);
@@ -513,11 +533,14 @@ std::uint32_t seed_room_furniture(Registry& reg, const World& world, LayerId lay
                     6.2831853f;
                 if (spawn_prop_from_id(reg, world, pos, anchor,
                                        static_cast<PropId>(f.prop), layer,
-                                       yaw) != entt::null)
+                                       yaw) != entt::null) {
                     ++placed;
+                    ++propsSpawnedThisRoom;
+                }
             }
         }
     }
+    std::printf("[rooms] seeded %u props on layer %u\n", placed, static_cast<unsigned>(layer));
     return placed;
 }
 

@@ -375,8 +375,8 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
                                  fn->fine);
     }
     if (!haveNav) {
-        nav::bake_coarse(stack.layer(slot).grid(), fn->coarse);
-        nav::bake_fine(stack.layer(slot).grid(), fn->fine);
+        nav::bake_coarse(stack.layer(slot).grid(), stack.layer(slot).gravity().regime, fn->coarse);
+        nav::bake_fine(stack.layer(slot).grid(), stack.layer(slot).gravity().regime, fn->fine);
         if (!cachePath.empty())
             save_nav_cache(cachePath, fm.number, fm.kind, fm.seed, fn->coarse,
                            fn->fine);

@@ -716,6 +716,17 @@ AiTick ai_step(Registry& reg, NpcPool& pool, Field<float>* danger,
             // everything else. With no memory every added field stays at its zero
             // default, so the ranking is identical to the pre-memory one.
             if (haveRecall) apply_recall(recall, p.faction, p);
+            // Samosbor fog blocks LOS and reduces visual perception.
+            if (p.fog > 0.0f) {
+                const float fogCap = 1.0f - p.fog; // p.fog is already clamped 0..1 in field
+                p.visibleHostiles *= fogCap;
+                p.hostilePower *= fogCap;
+                p.allyPower *= fogCap;
+                if (p.threatDistance >= 0.0f) {
+                    // Fog pushes the perceived threat distance towards the edge of vision
+                    p.threatDistance += (18.0f - p.threatDistance) * p.fog;
+                }
+            }
             // Every other Perception field stays at its stubbed default, so its
             // scorer term contributes 0 — the faithful-port invariant.
 

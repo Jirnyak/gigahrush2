@@ -675,7 +675,7 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
             beh, static_cast<std::uint32_t>(entt::to_integral(e)), tick, dist);
         dmg *= burst_damage_mult(bp);
 
-        const std::int16_t raw = static_cast<std::int16_t>(dmg);
+        const std::int16_t raw = static_cast<std::int16_t>(dmg + 0.5f);
 
         // Melee first: if it can touch you, it touches you. Reach is in cells.
         //
@@ -1129,9 +1129,48 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                 kProjGravity * (static_cast<float>(p.gravityPct) * 0.01f) * dt;
             v.v = v.v + projG * (mag / projGLen);
         }
+        
+        vec3 origin = tr.pos;
         tr.pos.x = wrapf(tr.pos.x + v.v.x * dt, kWorldExtent);
         tr.pos.y = wrapf(tr.pos.y + v.v.y * dt, kWorldExtent);
         tr.pos.z += v.v.z * dt;
+
+        float reach = length(v.v) * dt;
+        bool hitWall = false;
+        vec3 hitPos = tr.pos;
+        if (reach > 1e-4f) {
+            vec3 dir = v.v * (1.0f / reach);
+            const float step = kVoxelSize * 0.5f;
+            const int maxSteps = static_cast<int>(std::ceil(reach / step));
+            
+            for (int s = 0; s <= maxSteps; ++s) {
+                float t = std::min(static_cast<float>(s) * step, reach);
+                vec3 pp = origin + dir * t;
+                pp.x = wrapf(pp.x, kWorldExtent);
+                pp.y = wrapf(pp.y, kWorldExtent);
+                
+                const int gz = static_cast<int>(std::floor(pp.z / kVoxelSize));
+                if (gz < 0 || gz >= kMacroDim * kSubDim) {
+                    hitWall = true; hitPos = pp; break;
+                }
+                
+                const int gx = static_cast<int>(std::floor(pp.x / kVoxelSize));
+                const int gy = static_cast<int>(std::floor(pp.y / kVoxelSize));
+                
+                const int cx = wrap_macro(gx / kSubDim);
+                const int cy = wrap_macro(gy / kSubDim);
+                const int cz = gz / kSubDim;
+                
+                const int sx = gx & kSubDimMask;
+                const int sy = gy & kSubDimMask;
+                const int sz = gz & kSubDimMask;
+                
+                if (grid.solid(cx, cy, cz, sx, sy, sz)) {
+                    hitWall = true; hitPos = pp; break;
+                }
+            }
+        }
+        tr.pos = hitPos; // Truncate travel to wall impact, if any.
 
         if (p.ttlMs == 0) {
             resolved.push_back(Hit{e, 0, p.source, false});
@@ -1219,19 +1258,10 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
             if (struck) continue;
         }
 
-        // Solid geometry stops it. Cell-level rather than sub-voxel on purpose: a
-        // shot clipping the corner of a wall should stop, and the sub-voxel mask
-        // would let it slip through a half-carved cell that reads as solid.
-        // Carry p.dmg so phase 2 can propose a wall chip (carve_power_from_dmg);
-        // body damage is still skipped via onWall (no onVictim/other).
-        const int cx = wrap_macro(static_cast<int>(tr.pos.x / kCellSize));
-        const int cy = wrap_macro(static_cast<int>(tr.pos.y / kCellSize));
-        const int cz = static_cast<int>(tr.pos.z / kCellSize);
-        if (cz < 0 || cz >= kMacroDim ||
-            grid.cell(cx, cy, wrap_macro(cz)) != kCellAir) {
+        if (hitWall) {
             Hit h{e, p.dmg, p.source, false};
             h.onWall = true;
-            h.impactPos = tr.pos;
+            h.impactPos = hitPos;
             h.projType = p.proj;
             h.channel = p.channel;
             resolved.push_back(h);
@@ -1428,7 +1458,7 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
 
     if (gunSlot) {
         const ItemDef& gunDef = item_def(gunSlot->item);
-        if (gunDef.wear == WearKind::Jamming) {
+        if (gunDef.wear == static_cast<std::uint8_t>(WearKind::Jamming)) {
             const float fouling = static_cast<float>(255 - gunSlot->condition); // dust is 0 for now
             constexpr float kJamPerFouling = 0.0005f; // approx 12.5% at max wear
             constexpr std::uint64_t kJamSalt = 0x1337babe;
@@ -1504,7 +1534,7 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
         // rows in data/items.csv and every per-channel column in [monster_traits.h]
         // were all mitigating against a channel that only ever arrived as Kinetic.
         spawn_projectile_dir(reg, layer, eye, dir,
-                             static_cast<std::int16_t>(def->dmg),
+                             ranged_damage(reg.get<const RpgStats>(shooter), static_cast<std::int16_t>(def->dmg)),
                              def->projSpeedMmps, shooter, kPlayerGravityPct, 1,
                              def->channel);
     }
@@ -1568,11 +1598,30 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
     // RpgStats component the raw table values are used (identity mults).
     const MeleeDef* wp = &unarmed_melee();
     ItemId heldWeapon = 0;  // 0 = bare hands sentinel [item_table.h]
-    if (const NpcRef* n = reg.try_get<NpcRef>(self))
+    ItemSlot* heldSlot = nullptr;
+    if (const NpcRef* n = reg.try_get<NpcRef>(self)) {
         if (pool.valid(n->id)) {
-            heldWeapon = equipped_melee(pool.inventory(n->id));
-            if (const MeleeDef* m = melee_for_item(heldWeapon)) wp = m;
+            Inventory& inv = pool.inventory(n->id);
+            heldWeapon = equipped_melee(inv);
+            if (heldWeapon != 0) {
+                if (const Equipped* eq = reg.try_get<Equipped>(self)) {
+                    const std::uint8_t slotIdx = eq->invSlot[static_cast<std::size_t>(EquipSlot::Weapon)];
+                    if (slotIdx < kInvSlots && inv.slots[slotIdx].item == heldWeapon) {
+                        heldSlot = &inv.slots[slotIdx];
+                    }
+                }
+                if (!heldSlot) {
+                    for (ItemSlot& sl : inv.slots) {
+                        if (sl.item == heldWeapon && sl.count > 0) {
+                            heldSlot = &sl;
+                            break;
+                        }
+                    }
+                }
+                if (const MeleeDef* m = melee_for_item(heldWeapon)) wp = m;
+            }
         }
+    }
     std::int16_t swingDmg = static_cast<std::int16_t>(wp->dmg);
     std::uint16_t swingCd = wp->cooldownMs;
     if (const RpgStats* rs = reg.try_get<RpgStats>(self)) {
@@ -1595,6 +1644,33 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
                          static_cast<unsigned>(heldWeapon));
         }
     }
+    
+    auto apply_wear = [&]() {
+        if (heldSlot && heldSlot->count > 0) {
+            const ItemDef& wdef = item_def(heldSlot->item);
+            if (wdef.wear == static_cast<std::uint8_t>(WearKind::Durability)) {
+                std::uint32_t wearAmount = wdef.wearPerUse;
+                if (const RpgStats* rs = reg.try_get<RpgStats>(self)) {
+                    wearAmount = (wearAmount * str_durability_wear_mult_e3(*rs)) / 1000u;
+                }
+                if (wearAmount == 0 && wdef.wearPerUse > 0) wearAmount = 1; // Always at least 1 if it wears at all
+                
+                if (heldSlot->condition >= wearAmount) {
+                    heldSlot->condition = static_cast<std::uint8_t>(heldSlot->condition - wearAmount);
+                } else {
+                    heldSlot->condition = 0;
+                }
+                
+                if (heldSlot->condition == 0) {
+                    // Breaks on use
+                    heldSlot->item = kInvalidItem;
+                    heldSlot->count = 0;
+                    heldSlot->condition = 255;
+                }
+            }
+        }
+    };
+    
     // STATMELEE: authored status melee mult (Zhelemish 700/1000). Applied after
     // RPGCMBT so both bite; identity 1000 when status is null or clean.
     if (status) {
@@ -1666,6 +1742,7 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
                              carve_power_from_dmg(swingDmg),
                              static_cast<std::uint32_t>(tick));
                 pm.cooldownMs = swingCd;
+                apply_wear();
                 (void)bus;
                 return true;
             }
@@ -1680,6 +1757,7 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
                                   DamageChannel::Kinetic, self, grid, particles,
                                   gravity);
     pm.cooldownMs = swingCd;
+    apply_wear();
     if (r.lethal) ++pm.kills;
     (void)bus;
     (void)tick;

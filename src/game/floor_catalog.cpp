@@ -83,4 +83,18 @@ bool build_default_floor_catalog(FloorCatalog& cat) {
     return ok;
 }
 
+FloorCatalog& mutable_floor_catalog() {
+    static FloorCatalog cat;
+    static bool init = false;
+    if (!init) {
+        build_default_floor_catalog(cat);
+        init = true;
+    }
+    return cat;
+}
+
+const FloorCatalog& floor_catalog() {
+    return mutable_floor_catalog();
+}
+
 } // namespace giga::game

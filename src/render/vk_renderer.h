@@ -107,8 +107,10 @@ private:
     std::vector<VkImageView> offscreenViews_;
     
     VkRenderPass postRenderPass_ = VK_NULL_HANDLE;
-    
+
+public:
     EyeAdaptPass eyeAdaptPass_;
+private:
 
     bool create_render_passes();
     bool create_offscreen();

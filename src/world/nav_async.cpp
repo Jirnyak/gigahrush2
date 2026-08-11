@@ -3,7 +3,7 @@
 #include <chrono>
 #include <utility>
 
-#include "world/macro_grid.h"
+#include "world/world.h"
 
 namespace giga::nav {
 
@@ -14,7 +14,7 @@ void AsyncBake::join_worker() {
     running_ = false;
 }
 
-void AsyncBake::start(const MacroGrid& grid) {
+void AsyncBake::start(const World& world) {
     // A second start() while a bake is still running is rare (floor change inside
     // a floor change). Join first so the previous worker's writes to pending_*
     // finish before we re-use them — and so the previous worker doesn't outlive
@@ -31,14 +31,14 @@ void AsyncBake::start(const MacroGrid& grid) {
     done_.store(false, std::memory_order_relaxed);
     running_ = true;
 
-    // Capture by pointer: the grid is owned by the caller and must outlive the
+    // Capture by pointer: the world is owned by the caller and must outlive the
     // bake (enforced by the start/travel contract in the header).
-    worker_ = std::thread([this, g = &grid]() {
+    worker_ = std::thread([this, w = &world]() {
         using clock = std::chrono::steady_clock;
         const auto t0 = clock::now();
-        bake_coarse(*g, pending_);
+        bake_coarse(w->grid(), w->gravity().regime, pending_);
         const auto t1 = clock::now();
-        bake_fine(*g, pendingFine_);
+        bake_fine(w->grid(), w->gravity().regime, pendingFine_);
         const auto t2 = clock::now();
         coarseMs_ = std::chrono::duration<float, std::milli>(t1 - t0).count();
         fineMs_ = std::chrono::duration<float, std::milli>(t2 - t1).count();

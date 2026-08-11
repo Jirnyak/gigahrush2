@@ -79,7 +79,11 @@
 #include "world/level_stack.h"   // LayerId
 #include "world/types.h"         // kCellSize
 
-namespace giga::game {
+namespace giga {
+template <class T> class Field;
+namespace game {
+
+struct HermeticZones;
 
 // ---------------------------------------------------------------------------
 // The depth curve — the four numbers everything else follows from
@@ -767,6 +771,9 @@ struct SamosborPressure {
 //     (`src/systems/samosbor.ts:4718,4721`). 4/155 is prose only.
 SamosborPressure samosbor_unsheltered_pressure(SamosborVariant variant);
 
+// Update fogField based on wave dispatch rules
+void samosbor_wave_dispatch_cpu(Field<float>& fogField, const HermeticZones& hermeticZones, vec3 waveOrigin, SamosborVariant variant, float phase01);
+
 // The seal moment as an offset before the end of the Active phase, including the
 // variant's shift. Clamped so a negative-delta variant cannot seal after the
 // event is over.
@@ -925,4 +932,5 @@ ThreatCensus samosbor_census(const Registry& reg, LayerId layer, vec3 around);
 // floor's authored population is unchanged.
 bool samosbor_allows_kind(const MobDef& def, std::uint16_t samosborCount);
 
-} // namespace giga::game
+} // namespace game
+} // namespace giga

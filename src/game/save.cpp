@@ -46,6 +46,7 @@ public:
     explicit Writer(std::vector<std::uint8_t>& out) : out_(&out) {}
 
     void u8(const std::uint8_t& v) { out_->push_back(v); }
+    void u8(const bool& v) { out_->push_back(v ? 1 : 0); }
     void u16(const std::uint16_t& v) {
         out_->push_back(static_cast<std::uint8_t>(v & 0xFFu));
         out_->push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFu));
@@ -98,6 +99,14 @@ public:
             return;
         }
         v = p_[at_++];
+    }
+    void u8(bool& v) {
+        if (at_ >= n_) {
+            ok_ = false;
+            v = false;
+            return;
+        }
+        v = (p_[at_++] != 0);
     }
     void u16(std::uint16_t& v) {
         std::uint8_t a = 0, b = 0;
@@ -301,6 +310,17 @@ void visit_status(Ar& ar, S& s) {
     for (std::size_t i = 0; i < kStatusCount; ++i) ar.u8(s.alt[i]);
 }
 
+template <class Ar, class S>
+void visit_samosbor(Ar& ar, S& s) {
+    ar.u32(s.phaseMs);
+    ar.u32(s.phaseTotalMs);
+    ar.u32(s.activeMs);
+    ar.u16(s.count);
+    ar.u8(s.phase);
+    ar.u8(s.variant);
+    ar.u8(s.sealed);
+}
+
 template <class Ar, class K>
 void visit_key(Ar& ar, K& k) {
     ar.i16(k.floor);
@@ -386,21 +406,21 @@ static_assert(sizeof(SaveHeader) == kSaveHeaderWire,
               "still 64 and only this assert needs relaxing");
 static_assert(kLedgerWire == 8 + 8 + 4 + 4 + 4 + 4 + 1);
 static_assert(kContractWire == 4 + 2 + 4 + 4 + 4 + 1 + 1 + 1);
-static_assert(kNeedsWire == 9 * 4 + 1);
-static_assert(kInventoryWire == 64 * 4);
+static_assert(kNeedsWire == 11 * 4 + 1);
+static_assert(kInventoryWire == 64 * 6);
 // kSaveFixedWire: ledger+book+player + v7 rpg(12)+craft(93) + v8 combat(21)
-// + v9 status(42) + quest log. Was 850 in v8; +42 = 892 in v9.
+// + v9 status(49) + quest log + samosbor(17).
 static_assert(kRpgWire == 12);
 static_assert(kCraftingWire == 93);
 static_assert(kRangedWire == 16);
 static_assert(kCombatSaveWire == 21);
 static_assert(kStatusWire == 49);
-static_assert(kSaveFixedWire == 850 + 28 + 4 + 7);  // 889
-static_assert(kSaveFixedWire == 889);
+static_assert(kSamosborWire == 17);
+static_assert(kSaveFixedWire == 1046);
 static_assert(kFactionWire == 36);
-// header 64 + fixed 889 + faction 36 = 989 for an empty run.
-static_assert(save_bytes_for(0) == 989);
-static_assert(save_bytes_for(0, 100, 50) == 989 + 150);
+// header 64 + fixed 1046 + faction 36 = 1146 for an empty run.
+static_assert(save_bytes_for(0) == 1146);
+static_assert(save_bytes_for(0, 100, 50) == 1146 + 150);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two
@@ -411,9 +431,10 @@ static_assert(save_bytes_for(0, 100, 50) == 989 + 150);
 static_assert(sizeof(ContractBook) == 88,
               "ContractBook is serialized; grow it and bump kSaveVersion in the same "
               "edit");
-static_assert(sizeof(Inventory) == 256, "the 8x8 grid is 64 x 4 B ([inventory.h])");
+static_assert(sizeof(Inventory) == 384, "the 8x8 grid is 64 x 6 B ([inventory.h])");
 
 void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
+    std::printf("kSaveFixedWire is actually %zu, kInventoryWire is %zu\n", kSaveFixedWire, kInventoryWire);
     // Payload first: the header carries the payload's length and checksum, so it cannot
     // be written until the payload exists.
     std::vector<std::uint8_t> body;
@@ -440,6 +461,7 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     bw.u32(st.kills);
     // Version 9 / SAVSTAT: live status effects.
     visit_status(bw, st.status);
+    visit_samosbor(bw, st.samosbor);
     for (const OpenedContainerKey& k : st.opened) visit_key(bw, k);
     // Version 6: the macro world — pool table, macro-sim state, faction matrix.
     body.insert(body.end(), st.poolBlob.begin(), st.poolBlob.end());
@@ -527,18 +549,25 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
         static_cast<std::size_t>(h.openedCount) * kOpenedKeyWire +
         static_cast<std::size_t>(h.poolBytes) +
         static_cast<std::size_t>(h.macroBytes);
-    if (static_cast<std::size_t>(h.payloadBytes) != want)
+    if (static_cast<std::size_t>(h.payloadBytes) != want) {
+        std::printf("SizeMismatch at header: h.payloadBytes=%u, want=%zu (fixed=%zu, opened=%u, pool=%u, macro=%u)\n", 
+            h.payloadBytes, want, kSaveFixedWire, h.openedCount, h.poolBytes, h.macroBytes);
         return fail(SaveError::SizeMismatch);
+    }
     if (n - kSaveHeaderWire < static_cast<std::size_t>(h.payloadBytes))
         return fail(SaveError::TooShort);
     if (crc32(bytes + kSaveHeaderWire, h.payloadBytes) != h.payloadCrc)
         return fail(SaveError::BadChecksum);
 
     // Version 2 quest table checks (after CRC, before parsing).
-    if (h.questCount != static_cast<std::uint32_t>(kQuestCount))
+    if (h.questCount != static_cast<std::uint32_t>(kQuestCount)) {
+        std::printf("SizeMismatch questCount: h.questCount=%u, kQuestCount=%zu\n", h.questCount, kQuestCount);
         return fail(SaveError::SizeMismatch);  // closest existing error for table drift
-    if (h.questFingerprint != quest_table_fingerprint())
+    }
+    if (h.questFingerprint != quest_table_fingerprint()) {
+        std::printf("SizeMismatch questFingerprint: h.questFingerprint=%u, table=%u\n", h.questFingerprint, quest_table_fingerprint());
         return fail(SaveError::SizeMismatch);
+    }
 
     // Parse into a scratch copy and commit only on success: a half-applied load would
     // leave the game in a state no run has ever reached, which is harder to recover from
@@ -564,6 +593,7 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     r.u32(tmp.kills);
     // Version 9 / SAVSTAT: live status effects.
     visit_status(r, tmp.status);
+    visit_samosbor(r, tmp.samosbor);
     tmp.opened.resize(static_cast<std::size_t>(h.openedCount));
     for (std::size_t i = 0; i < tmp.opened.size(); ++i) visit_key(r, tmp.opened[i]);
     // Version 6: the macro blobs, verbatim (decoded by their owners against live
@@ -595,8 +625,11 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     // wire constants and the visitors disagree, which the static_asserts above already
     // forbid — this is the runtime backstop for the case where they are edited together
     // and both are wrong.
-    if (r.at() + kQuestLogWire != static_cast<std::size_t>(h.payloadBytes))
+    if (r.at() + kQuestLogWire != static_cast<std::size_t>(h.payloadBytes)) {
+        std::printf("SizeMismatch at end: r.at()=%zu, kQuestLogWire=%zu, expected payloadBytes=%zu\n",
+            r.at(), kQuestLogWire, static_cast<std::size_t>(h.payloadBytes));
         return fail(SaveError::SizeMismatch);
+    }
 
     st = std::move(tmp);
     return true;
@@ -1154,18 +1187,18 @@ bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
         CellType* pg = mats.ensure_page(cell, types[cell]);
         std::uint16_t runs = 0;
         r.u16(runs);
-        int at = 0;
+        int voxelAt = 0;
         for (std::uint16_t k = 0; k < runs && r.ok(); ++k) {
             std::uint16_t v = 0, len = 0;
             r.u16(v);
             r.u16(len);
             // Subtract-never-add, the same guard the mask and type runs use: a
             // forged length cannot walk past the page.
-            if (len == 0 || len > static_cast<std::uint16_t>(kSubVoxels - at))
+            if (len == 0 || len > static_cast<std::uint16_t>(kSubVoxels - voxelAt))
                 return false;
-            for (std::uint16_t q = 0; q < len; ++q) pg[at++] = v;
+            for (std::uint16_t q = 0; q < len; ++q) pg[voxelAt++] = static_cast<CellType>(v);
         }
-        if (at != kSubVoxels) return false;
+        if (voxelAt != kSubVoxels) return false;
     }
 
     // HermeticZones

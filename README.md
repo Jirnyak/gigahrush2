@@ -45,7 +45,7 @@
 |  - Toroidal 3D wrapping on X/Y/Z axes                                   |
 |  - Destructible materials via probabilistic damage penetration          |
 |  - Samosbor waves & real-time floor geometry baking                     |
-|  - 4x4 Fast-Travel Elevators + 4x4 Up/Down Procedural Elevators         |
+|  - 16 Procedural Elevator Shafts (Fast-Travel & Up/Down)                |
 |  - Hermetic rooms: Living, Toilets, Kitchens, Workshops, Smoking, Lairs |
 +-------------------------------------------------------------------------+
                                     | EnTT ECS Views / Zero-Alloc Ticks

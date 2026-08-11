@@ -1,9 +1,34 @@
 #include "render/post_pass.h"
 #include "render/vk_device.h"
-#include "render/vk_shader.h"
+#include "render/vk_common.h"
+
+
 #include <cstdio>
+#include <vector>
 
 namespace giga::gpu {
+
+namespace {
+VkShaderModule load_shader(const VulkanDevice& dev, const char* dir, const char* file) {
+    char path[1024];
+    std::snprintf(path, sizeof(path), "%s/%s", dir, file);
+    FILE* f = std::fopen(path, "rb");
+    if (!f) return VK_NULL_HANDLE;
+    std::fseek(f, 0, SEEK_END);
+    long size = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    std::vector<uint32_t> code(size / 4);
+    std::fread(code.data(), 1, size, f);
+    std::fclose(f);
+    VkShaderModuleCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    ci.codeSize = size;
+    ci.pCode = code.data();
+    VkShaderModule module = VK_NULL_HANDLE;
+    vkCreateShaderModule(dev.device, &ci, nullptr, &module);
+    return module;
+}
+}
 
 bool PostPass::init(VulkanDevice& dev, VkRenderPass postRenderPass, const char* shaderDir) {
     dev_ = &dev;

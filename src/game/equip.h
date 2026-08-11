@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
 
-namespace giga {
+namespace giga::game {
 
 // Four slots specified in the manifest for an equipped embodied body.
 enum class EquipSlot : std::uint8_t {
@@ -20,4 +20,4 @@ struct Equipped {
 };
 static_assert(sizeof(Equipped) == 4, "Equipped must be exactly 4 bytes");
 
-} // namespace giga
+} // namespace giga::game

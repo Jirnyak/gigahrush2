@@ -36,6 +36,7 @@
 
 #include "game/inventory.h"  // Inventory/ItemSlot — carried-weight reader below
 #include "game/mob_table.h"  // RoomBit — items and mobs share the room taxonomy
+#include "game/equip.h"
 
 namespace giga::game {
 
@@ -58,8 +59,6 @@ enum class ItemCategory : std::uint8_t {
     Note,       //   2
     Count
 };
-
-#include "equip.h"
 
 // What using an item does. Most rows do nothing — the reference implements a use
 // action on only 59. Names map 1:1 onto its closures.

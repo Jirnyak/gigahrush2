@@ -441,7 +441,7 @@ std::int32_t quest_step(QuestLog& log, const NpcPool& pool, Inventory& inv,
         paid += d.reward;
         
         if (rpg) {
-            const std::uint32_t xp = xp_for_quest(d.difficultyE1);
+            const std::uint32_t xp = xp_for_quest(10);
             award_xp(*rpg, xp);
         }
 

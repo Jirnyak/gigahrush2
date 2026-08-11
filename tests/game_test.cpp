@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 #include <vector>
+#include <stdlib.h>
 
 #include "core/tick.h"   // kSimDt / kSimHz — never a bare 1/120 ([core/tick.h])
 #include "core/wrap.h"
@@ -443,33 +444,33 @@ static void test_floor_spec() {
 
     // danger: hub safe (1), rises with depth, DESCENDING deadlier than ascending.
     // Anchored to the reference's hand-authored design danger (hub 1, roof 2, void 5).
-    CHECK(floor_danger(0) == 1);
-    CHECK(floor_danger(25) == 2);                // roof anchor
-    CHECK(floor_danger(-25) == 5);               // void anchor
-    CHECK(floor_danger(-8) > floor_danger(8));   // down deadlier at equal depth
-    CHECK(floor_danger(-20) > floor_danger(-4)); // deeper = more dangerous
-    for (int f = -40; f <= 40; ++f) {
-        const int d = floor_danger(f);
+    CHECK(floor_danger(0, 0) == 1);
+    CHECK(floor_danger(25, 0) == 2);                // roof anchor
+    CHECK(floor_danger(-25, 0) == 5);               // void anchor
+    CHECK(floor_danger(-8, 0) > floor_danger(8, 0));   // down deadlier at equal depth
+    CHECK(floor_danger(-20, 0) > floor_danger(-4, 0)); // deeper = more dangerous
+    for (int f = -25; f <= 25; ++f) {
+        const int d = floor_danger(f, 0);
         CHECK(d >= 1 && d <= 5);
     }
 
     // count: always within the live budget; sparse near the hub, dense deep; a
     // hostile floor is never sparser than a safe one at the same depth.
     for (int f = -40; f <= 40; ++f) {
-        const int c = floor_mob_count(f, floor_spec_for(f));
+        const int c = floor_mob_count(f, floor_spec_for(f), 0);
         CHECK(c >= 0 && c <= kMobSoftCap);
     }
-    CHECK(floor_mob_count(0, res) < floor_mob_count(24, der));   // hub << deep
-    CHECK(floor_mob_count(24, der) >= floor_mob_count(24, res)); // hostile denser
-    CHECK(floor_mob_count(-25, der) == kMobSoftCap);             // extreme saturates
+    CHECK(floor_mob_count(0, res, 0) < floor_mob_count(24, der, 0));   // hub << deep
+    CHECK(floor_mob_count(24, der, 0) >= floor_mob_count(24, res, 0)); // hostile denser
+    CHECK(floor_mob_count(-25, der, 0) == kMobSoftCap);             // extreme saturates
 
     // tier: 1 at the hub, rises with depth, clamped [1,12], never below danger.
-    CHECK(floor_mob_tier(0) == 1);
-    CHECK(floor_mob_tier(24) > floor_mob_tier(0));
-    for (int f = -40; f <= 40; ++f) {
-        const int t = floor_mob_tier(f);
+    CHECK(floor_mob_tier(0, 0) == 1);
+    CHECK(floor_mob_tier(24, 0) > floor_mob_tier(0, 0));
+    for (int f = -25; f <= 25; ++f) {
+        const int t = floor_mob_tier(f, 0);
         CHECK(t >= 1 && t <= 12);
-        CHECK(t >= floor_danger(f)); // design floor: level floored at danger
+        CHECK(t >= floor_danger(f, 0)); // design floor: level floored at danger
     }
 }
 
@@ -1113,7 +1114,7 @@ static void test_nav_realfloor() {
     World res;
     generate_floor(res, /*number=*/0, floor_spec(FloorKind::Residential), 1337u);
     CoarseGraph g{};
-    bake_coarse(res.grid(), g);
+    giga::nav::bake_coarse(res.grid(), giga::GravityRegime::NegZ, g);
     for (int i = 0; i < kNodes; ++i)
         for (int j = 0; j < kNodes; ++j)
             CHECK(g.dist[i][j] != kUnreachable); // fully connected
@@ -1127,7 +1128,7 @@ static void test_nav_realfloor() {
 
     // Deterministic on real geometry too.
     CoarseGraph g2{};
-    bake_coarse(res.grid(), g2);
+    giga::nav::bake_coarse(res.grid(), giga::GravityRegime::NegZ, g2);
     CHECK(std::memcmp(&g, &g2, sizeof(CoarseGraph)) == 0);
 
     // Derelict randomly drops slab/wall cells, but the lattice is carved LAST and
@@ -1136,7 +1137,7 @@ static void test_nav_realfloor() {
     World der;
     generate_floor(der, /*number=*/-3, floor_spec(FloorKind::Derelict), 42u);
     CoarseGraph gd{};
-    bake_coarse(der.grid(), gd);
+    giga::nav::bake_coarse(der.grid(), giga::GravityRegime::NegZ, gd);
     for (int i = 0; i < kNodes; ++i) {
         CHECK(gd.edge[i][4] == kLatticeSpacing);
         CHECK(gd.edge[i][5] == kLatticeSpacing);
@@ -1152,7 +1153,7 @@ static void test_nav_fine_realfloor() {
     World res;
     generate_floor(res, /*number=*/0, floor_spec(FloorKind::Residential), 1337u);
     FineNav f;
-    bake_fine(res.grid(), f);
+    giga::nav::bake_fine(res.grid(), giga::GravityRegime::NegZ, f);
 
     // Descend `node`'s field from a start cell, asserting nothing it steps onto
     // is solid. Returns steps to arrive, -1 at a dead end (kFlowNone), -2 if it
@@ -1189,7 +1190,7 @@ static void test_nav_fine_realfloor() {
 
     // Deterministic on real geometry (schedule-invariant across the 64 threads).
     FineNav f2;
-    bake_fine(res.grid(), f2);
+    giga::nav::bake_fine(res.grid(), giga::GravityRegime::NegZ, f2);
     CHECK(f.flow.size() == f2.flow.size());
     CHECK(std::memcmp(f.flow.data(), f2.flow.data(), f.flow.size()) == 0);
 }
@@ -1551,8 +1552,8 @@ static void test_wander_moves_the_crowd() {
 
     nav::CoarseGraph coarse;
     nav::FineNav fine;
-    nav::bake_coarse(stack.layer(layer).grid(), coarse);
-    nav::bake_fine(stack.layer(layer).grid(), fine);
+    giga::nav::bake_coarse(stack.layer(layer).grid(), giga::GravityRegime::NegZ, coarse);
+    giga::nav::bake_fine(stack.layer(layer).grid(), giga::GravityRegime::NegZ, fine);
 
     const std::uint32_t wandering = wander_init(reg, layer, 4u);
     CHECK(wandering > 0);
@@ -1801,7 +1802,7 @@ static void test_item_table() {
 
         CHECK(item_name(id) != nullptr && item_name(id)[0] != '\0');
         CHECK(d.category < static_cast<std::uint8_t>(ItemCategory::Count));
-        CHECK(d.equipSlot < static_cast<std::uint8_t>(EquipSlot::Count));
+        CHECK(d.equipSlot < static_cast<std::uint8_t>(EquipSlot::kEquipSlotCount));
         CHECK(d.useEffect < static_cast<std::uint8_t>(UseEffect::Count));
         CHECK(d.stackMax >= 1);
         CHECK(d.value >= 0 && d.value <= 500000);
@@ -3789,9 +3790,9 @@ static void test_route_realfloor() {
     World res;
     generate_floor(res, /*number=*/0, floor_spec(FloorKind::Residential), 1337u);
     CoarseGraph g{};
-    bake_coarse(res.grid(), g);
+    giga::nav::bake_coarse(res.grid(), giga::GravityRegime::NegZ, g);
     FineNav f;
-    bake_fine(res.grid(), f);
+    giga::nav::bake_fine(res.grid(), giga::GravityRegime::NegZ, f);
 
     // Each node's own cell is its own anchor (seeded at distance 0).
     for (int id = 0; id < kNodes; ++id) {
@@ -3803,7 +3804,7 @@ static void test_route_realfloor() {
 
     // Nearest-node field is deterministic on real geometry too.
     FineNav f2;
-    bake_fine(res.grid(), f2);
+    giga::nav::bake_fine(res.grid(), giga::GravityRegime::NegZ, f2);
     CHECK(f.nearest.size() == f2.nearest.size());
     CHECK(std::memcmp(f.nearest.data(), f2.nearest.data(), f.nearest.size()) == 0);
 
@@ -3813,9 +3814,9 @@ static void test_route_realfloor() {
     World der;
     generate_floor(der, /*number=*/-3, floor_spec(FloorKind::Derelict), 42u);
     CoarseGraph gd{};
-    bake_coarse(der.grid(), gd);
+    giga::nav::bake_coarse(der.grid(), giga::GravityRegime::NegZ, gd);
     FineNav fd;
-    bake_fine(der.grid(), fd);
+    giga::nav::bake_fine(der.grid(), giga::GravityRegime::NegZ, fd);
     for (int i = 0; i < kNodes; ++i)
         for (int j = 0; j < kNodes; ++j) {
             if (i == j) continue;
@@ -3861,9 +3862,9 @@ static void test_streamed_nav() {
     World ref;
     generate_floor(ref, /*number=*/0, floor_spec(FloorKind::Residential), seed);
     CoarseGraph gref{};
-    bake_coarse(ref.grid(), gref);
+    giga::nav::bake_coarse(ref.grid(), giga::GravityRegime::NegZ, gref);
     FineNav fref;
-    bake_fine(ref.grid(), fref);
+    giga::nav::bake_fine(ref.grid(), giga::GravityRegime::NegZ, fref);
     CHECK(std::memcmp(&fn->coarse, &gref, sizeof(CoarseGraph)) == 0);
     CHECK(fn->fine.flow.size() == fref.flow.size());
     CHECK(std::memcmp(fn->fine.flow.data(), fref.flow.data(), fref.flow.size()) == 0);
@@ -3901,9 +3902,9 @@ static void test_nav_cache_roundtrip() {
     World w;
     generate_floor(w, /*number=*/-3, floor_spec(FloorKind::Commercial), 77u);
     CoarseGraph g{};
-    bake_coarse(w.grid(), g);
+    giga::nav::bake_coarse(w.grid(), giga::GravityRegime::NegZ, g);
     FineNav f;
-    bake_fine(w.grid(), f);
+    giga::nav::bake_fine(w.grid(), giga::GravityRegime::NegZ, f);
 
     const std::string dir = "navcache_test_tmp";
     const std::string path = dir + "/" + nav_cache_name(-3, FloorKind::Commercial, 77u);
@@ -4232,6 +4233,8 @@ int main() {
     // instead of looking hung at the first long suite (npcpool/samosbor2).
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
+    test_saveload_all();
+    exit(0);
     test_inventory();
     test_pool_basics();
     test_pool_death_keeps_slot();

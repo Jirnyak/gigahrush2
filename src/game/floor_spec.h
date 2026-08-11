@@ -82,19 +82,19 @@ float floor_depth01(int floor);
 // Danger rating 1..5, ported from the procedural routeDangerScore: a V about the
 // hub, ASYMMETRIC — descending (−) is deadlier than ascending (+). Feeds count
 // (as a multiplier) and tier (as an additive term + a floor).
-int floor_danger(int floor);
+int floor_danger(int floor, unsigned seed);
 
 // Target LIVE monster count for a floor of character `spec`: the confirmed
 // V-shape — kMobSoftCap · share(depth) · dangerTerm · kindMult, where share is
 // the reference's stretched-exponential monster share, dangerTerm = 1+0.06·
 // (danger−1), and kindMult = 0.7+hostility folds the floor's own character (safe
 // Residential sparse → deadly Derelict dense). Clamped to [0, kMobSoftCap].
-int floor_mob_count(int floor, const FloorSpec& spec);
+int floor_mob_count(int floor, const FloorSpec& spec, unsigned seed);
 
 // Monster tier/level 1..12 for a floor: clamp(round(1 + 8·depth + 0.55·
 // (danger−1)), 1, 12) then floored at `danger` (reference populationLevelForRouteZ
 // + the design max(danger, baseLevel)). Scales a mob's base stats through the
 // mob_scaled_* helpers ([monsters.md]).
-int floor_mob_tier(int floor);
+int floor_mob_tier(int floor, unsigned seed);
 
 } // namespace giga::game
