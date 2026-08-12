@@ -2936,7 +2936,6 @@ static void test_player_shoots() {
     int inFlight = 0;
     for (auto e : reg.view<const Projectile>()) {
         const Projectile& p = reg.get<const Projectile>(e);
-        CHECK(p.team == 1);
         CHECK(p.gravityPct == kPlayerGravityPct);
         CHECK(p.source == shooter);
         ++inFlight;
@@ -2970,20 +2969,102 @@ static void test_player_shoots() {
         reg.emplace<Transform>(gunner, gt);
         reg.emplace<MobRef>(gunner, MobRef{0, 1, 400, 400});
         const std::int16_t gunnerHp0 = reg.get<MobRef>(gunner).hp;
-        // A monster shot: team 0, so it may not touch a mob at all — including itself.
+
+        // GEOMETRY DECIDES THIS, NOT OWNERSHIP — the pair below is the whole of the
+        // 2026-08-12 friendly-fire ruling in two cases.
+        //
+        // This block used to assert "a monster shot may not touch a mob at all,
+        // including itself", and it passed because `Projectile::team` made the hit
+        // loop skip its own shooter. That was a rule paying for a geometry defect:
+        // `spawn_projectile` births the shot 0.6 m above the shooter's origin, INSIDE
+        // kProjHitRadius (0.75 m), so without the rule every ranged monster killed
+        // itself on the first step. The muzzle now sits kMuzzleForward (1.7 m) down
+        // the firing line, and the rule is gone.
+
+        // (a) A shot fired through the real spawner does NOT hit its shooter —
+        //     because it is not born touching it, not because it remembers it.
+        spawn_projectile(reg, layer, gt.pos, vec3{gt.pos.x + 20.0f, gt.pos.y, gt.pos.z},
+                         50, 30000u, gunner,
+                         static_cast<std::uint8_t>(ProjType::Bullet));
+        for (int i = 0; i < 30; ++i)
+            projectile_step(reg, pool, bus, stack, layer, dt,
+                            900u + static_cast<std::uint64_t>(i));
+        CHECK(reg.get<MobRef>(gunner).hp == gunnerHp0);
+
+        // (b) A shot that genuinely occupies the shooter's space DOES hit it. This is
+        //     the manifesto's own example — "осколки бьют и владельца" — and it is
+        //     the case the old exclusion made impossible. Hand-placed at exactly the
+        //     naive position the spawner used to use, so the two cases differ ONLY in
+        //     where the shot is, which is the point being made.
         Entity shot = reg.create();
         Transform pt;
         pt.pos = gt.pos;
-        pt.pos.z += 0.6f;              // exactly the naive placement
+        pt.pos.z += 0.6f;
         pt.layer = layer;
         reg.emplace<Transform>(shot, pt);
-        reg.emplace<Velocity>(shot, Velocity{vec3{30.0f, 0.0f, 0.0f}});
+        reg.emplace<Velocity>(shot, Velocity{vec3{0.0f, 0.0f, 0.0f}});
         reg.emplace<AABB>(shot, AABB{vec3{0.1f, 0.1f, 0.1f}});
-        reg.emplace<Projectile>(shot, Projectile{gunner, 50, kProjTtlMs, 100, 0});
-        for (int i = 0; i < 30 && reg.valid(shot); ++i)
+        reg.emplace<Projectile>(shot, Projectile{gunner, 50, kProjTtlMs, 100});
+        for (int i = 0; i < 4 && reg.valid(shot); ++i)
             projectile_step(reg, pool, bus, stack, layer, dt,
-                            900u + static_cast<std::uint64_t>(i));
-        CHECK(reg.get<MobRef>(gunner).hp == gunnerHp0);   // it did not shoot itself
+                            980u + static_cast<std::uint64_t>(i));
+        CHECK(reg.get<MobRef>(gunner).hp < gunnerHp0);   // its own shot bit it
+
+        // (c) A MONSTER'S SHOT HITS ANOTHER MONSTER standing in its path. This is the
+        //     case `team == 0` existed to forbid, and the header called forbidding it
+        //     "keeping monster-on-monster friendly fire from being an accident". The
+        //     manifesto calls it the rule.
+        Entity bystander = reg.create();
+        Transform bt2;
+        bt2.pos = vec3{gt.pos.x + 6.0f, gt.pos.y, gt.pos.z};
+        bt2.layer = layer;
+        reg.emplace<Transform>(bystander, bt2);
+        reg.emplace<MobRef>(bystander, MobRef{0, 1, 400, 400});
+        const std::int16_t byHp0 = reg.get<MobRef>(bystander).hp;
+        Entity mShot = reg.create();
+        Transform mp;
+        mp.pos = vec3{bt2.pos.x - 0.2f, bt2.pos.y, bt2.pos.z};
+        mp.layer = layer;
+        reg.emplace<Transform>(mShot, mp);
+        reg.emplace<Velocity>(mShot, Velocity{vec3{0.0f, 0.0f, 0.0f}});
+        reg.emplace<AABB>(mShot, AABB{vec3{0.1f, 0.1f, 0.1f}});
+        reg.emplace<Projectile>(mShot, Projectile{gunner, 50, kProjTtlMs, 100});
+        for (int i = 0; i < 4 && reg.valid(mShot); ++i)
+            projectile_step(reg, pool, bus, stack, layer, dt,
+                            1100u + static_cast<std::uint64_t>(i));
+        CHECK(reg.get<MobRef>(bystander).hp < byHp0);
+
+        // (d) And the mirror: a shot passing a CIVILIAN hits the civilian, whoever
+        //     fired it and whatever faction they are. The old crowd branch ran only
+        //     for `team == 0` AND only for bodies `mob_hostile_to` called prey — two
+        //     exclusions stacked, so a player bullet could not graze a resident and a
+        //     stray monster shot spared a Cultist. Neither survives.
+        Entity civ = reg.create();
+        Transform ct;
+        ct.pos = vec3{gt.pos.x, gt.pos.y + 6.0f, gt.pos.z};
+        ct.layer = layer;
+        reg.emplace<Transform>(civ, ct);
+        const NpcId civId = pool.spawn();
+        reg.emplace<NpcRef>(civ, NpcRef{civId});
+        // A freshly spawned row is blank by design ([npc_pool.h]: an untouched
+        // reserve slot must read as "never rolled", not as a healthy body), so the
+        // health is set here rather than assumed.
+        pool.hp(civId) = 100;
+        pool.max_hp(civId) = 100;
+        const std::int16_t civHp0 = pool.hp(civId);
+        CHECK(civHp0 > 0);
+        Entity pShot = reg.create();
+        Transform pp;
+        pp.pos = vec3{ct.pos.x, ct.pos.y - 0.2f, ct.pos.z};
+        pp.layer = layer;
+        reg.emplace<Transform>(pShot, pp);
+        reg.emplace<Velocity>(pShot, Velocity{vec3{0.0f, 0.0f, 0.0f}});
+        reg.emplace<AABB>(pShot, AABB{vec3{0.1f, 0.1f, 0.1f}});
+        reg.emplace<Projectile>(pShot, Projectile{gunner, 20, kProjTtlMs, 100});
+        for (int i = 0; i < 4 && reg.valid(pShot); ++i)
+            projectile_step(reg, pool, bus, stack, layer, dt,
+                            1200u + static_cast<std::uint64_t>(i));
+        CHECK(pool.hp(civId) < civHp0);
     }
 }
 

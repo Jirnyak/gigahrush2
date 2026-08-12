@@ -868,13 +868,37 @@ void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
     const float flat = std::sqrt(dx * dx + dy * dy);
     if (flat < 1e-3f) return;
 
-    const float tof = flat / speed;                   // time of flight
+    // THE MUZZLE IS OUTSIDE THE SHOOTER, and this is what pays for a projectile that
+    // remembers nothing about who fired it.
+    //
+    // This used to be born at `from + (0, 0, 0.6)` — 0.6 m above the shooter's own
+    // origin, INSIDE kProjHitRadius (0.75 m). So the shot was already touching its
+    // own shooter on the very first step, and the only thing that stopped every
+    // ranged monster from killing itself the instant it attacked was the hit loop
+    // remembering `p.source` and skipping it. That was not a rule of the game
+    // pretending to be geometry; it was a geometry defect being paid for with a rule.
+    // `spawn_projectile_dir` never had the problem — it has always used
+    // kMuzzleForward — so the two spawners disagreed about their own physics.
+    //
+    // Fixed by putting the barrel where a barrel is: kMuzzleForward (1.7 m) along the
+    // firing direction, which is more than twice the hit radius. The time of flight
+    // is recomputed from the distance that ACTUALLY remains, so the lob still lands
+    // on the target instead of 1.7 m past it.
+    const float ux = dx / flat;
+    const float uy = dy / flat;
+    const float travel = flat - kMuzzleForward;
+    // Point-blank: the target is already inside the barrel length. Floor the distance
+    // rather than refusing the shot — a monster with its face against you must still
+    // be able to fire, and the arc over 0.1 m is nil anyway.
+    const float tof = (travel > 0.1f ? travel : 0.1f) / speed;
     const float vz = dz / tof + 0.5f * kProjGravity * tof;
 
     Entity e = reg.create();
     Transform tr;
     tr.pos = from;
     tr.pos.z += 0.6f;        // leaves from chest height, not from the feet
+    tr.pos.x += ux * kMuzzleForward;
+    tr.pos.y += uy * kMuzzleForward;
     tr.layer = layer;
     reg.emplace<Transform>(e, tr);
     reg.emplace<Velocity>(
@@ -890,17 +914,16 @@ void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
     const bool web = static_cast<ProjType>(projType) == ProjType::Web;
     reg.emplace<Renderable>(e, Renderable{web ? vec3{0.72f, 0.86f, 0.74f}
                                               : vec3{1.00f, 0.95f, 0.70f}});
-    // gravityPct 100, team 0: a monster shot, fully compensated, and it may only
-    // damage the camera holder.
+    // gravityPct 100: a monster's lob is fully gravity-compensated. Nothing here
+    // records whose shot it is beyond `source`, which is attribution only.
     reg.emplace<Projectile>(
-        e, Projectile{source, dmg, kProjTtlMs, 100, 0, projType});
+        e, Projectile{source, dmg, kProjTtlMs, 100, projType});
 }
 
 void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
                           const vec3& dir, std::int16_t dmg,
                           std::uint16_t projSpeedMmps, Entity source,
-                          std::uint8_t gravityPct, std::uint8_t team,
-                          std::uint8_t channel) {
+                          std::uint8_t gravityPct, std::uint8_t channel) {
     float speed = static_cast<float>(projSpeedMmps) * 0.001f * kCellSize;
     if (speed < 1.0f) speed = 12.0f;
     const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
@@ -928,7 +951,7 @@ void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
     // day one does, the compiler asks about this call site instead of silently
     // handing the player a bullet.
     reg.emplace<Projectile>(
-        e, Projectile{source, dmg, kProjTtlMs, gravityPct, team,
+        e, Projectile{source, dmg, kProjTtlMs, gravityPct,
                       static_cast<std::uint8_t>(ProjType::Bullet), channel});
 }
 
@@ -1135,66 +1158,57 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
             }
         }
 
-        // Monsters, but ONLY for player shots.
+        // EVERYTHING ELSE IN THE AIR, with no memory of who fired it.
         //
-        // Gating on `team` is what stops this from silently inventing monster-on-
-        // monster friendly fire: 13 kinds shoot, and once projectiles test MobRef at
-        // all, every shot fired past another monster would hit it.
+        // This used to be two branches gated on `Projectile::team`: monsters were hit
+        // only by player shots, the crowd only by monster shots, and the crowd branch
+        // additionally spared anyone `mob_hostile_to` said was not prey. Three
+        // exclusions, all of them the thing ARCHITECTURE.md §Манифест п.5 forbids by
+        // name — "никаких friendly-fire-исключений; граната скачет по вокселям,
+        // осколки бьют и владельца".
         //
-        // And `p.source != m` matters even more here than above. A mob's shot is born
-        // 0.6 m from its own chest, kProjHitRadius is 0.75 m, so on the very next step
-        // EVERY ranged monster would kill itself. That is not a hypothetical: it is
-        // arithmetic, and it would have looked like ranged monsters mysteriously
-        // dropping dead the moment they attacked.
-        if (p.team == 1) {
-            bool struck = false;
+        // Owner's ruling, 2026-08-12: **ownership itself is the hardcode.** A shot,
+        // once fired, is a physical object that remembers nothing. It does not know
+        // who pulled the trigger, what team they were on, or which faction is
+        // standing in front of it. It hits what it reaches.
+        //
+        // So this is ONE sweep over everything a projectile can touch, and it takes
+        // the NEAREST — not the first the view happens to yield. With separate
+        // branches "first found" was already arbitrary; merged, arbitrary would mean
+        // a monster shielding a civilian only when EnTT ordered it that way.
+        //
+        // `p.source` survives as ATTRIBUTION and nothing else: `finalize_deaths`
+        // needs to know whose kill it was to award XP. Attribution is not exclusion —
+        // a body can be credited with a death it caused to itself, and now is.
+        {
+            Entity best = entt::null;
+            float bestD2 = kProjHitRadius * kProjHitRadius;
+            auto consider = [&](Entity cand, const vec3& cp) {
+                const float hx = wrap_delta_f(tr.pos.x, cp.x, kWorldExtent);
+                const float hy = wrap_delta_f(tr.pos.y, cp.y, kWorldExtent);
+                const float hz = wrap_delta_f(tr.pos.z, cp.z, kWorldExtent);
+                const float d2 = hx * hx + hy * hy + hz * hz;
+                if (d2 <= bestD2) {
+                    bestD2 = d2;
+                    best = cand;
+                }
+            };
             for (auto m : reg.view<const MobRef, const Transform>()) {
-                if (m == p.source) continue;
                 const Transform& mt = reg.get<const Transform>(m);
                 if (mt.layer != layer) continue;
-                const float hx = wrap_delta_f(tr.pos.x, mt.pos.x, kWorldExtent);
-                const float hy = wrap_delta_f(tr.pos.y, mt.pos.y, kWorldExtent);
-                const float hz = wrap_delta_f(tr.pos.z, mt.pos.z, kWorldExtent);
-                if (hx * hx + hy * hy + hz * hz > kProjHitRadius * kProjHitRadius)
-                    continue;
-                resolved.push_back(Hit{e, p.dmg, p.source, false, m, p.proj,
-                                       p.channel});
-                struck = true;
-                break;
+                consider(m, mt.pos);
             }
-            if (struck) continue;
-        }
-
-        // The crowd, and ONLY for monster shots — the mirror image of the branch
-        // above, and it exists because without it a ranged hunter is broken rather
-        // than merely limited. Every one of the 13 ranged kinds has a 2.4 m melee
-        // reach and a minimum shot range of 1.5-6.8 m, so a hunter that has closed to
-        // [hunt.h]'s 6 m radius is very often INSIDE its shot band and outside its
-        // reach: it would telegraph, fire, burn its cooldown, and the resident would
-        // never take a scratch. Forever.
-        //
-        // Gating on `team == 0` keeps a player bullet from mowing down the civilians
-        // it passes, which would be a different feature with different consequences.
-        // The faction gate is the same `mob_hostile_to` the melee path uses, so a
-        // stray monster shot spares a Cultist too.
-        if (p.team == 0) {
-            bool struck = false;
             for (auto b : reg.view<const NpcRef, const Transform>()) {
-                if (b == victim) continue;      // already tested above, at priority
+                if (b == victim) continue;   // already tested above, at priority
                 const Transform& bt = reg.get<const Transform>(b);
                 if (bt.layer != layer) continue;
-                const float hx = wrap_delta_f(tr.pos.x, bt.pos.x, kWorldExtent);
-                const float hy = wrap_delta_f(tr.pos.y, bt.pos.y, kWorldExtent);
-                const float hz = wrap_delta_f(tr.pos.z, bt.pos.z, kWorldExtent);
-                if (hx * hx + hy * hy + hz * hz > kProjHitRadius * kProjHitRadius)
-                    continue;
-                if (!mob_hostile_to(pool, reg.get<const NpcRef>(b).id)) continue;
-                resolved.push_back(Hit{e, p.dmg, p.source, false, b, p.proj,
-                                       p.channel});
-                struck = true;
-                break;
+                consider(b, bt.pos);
             }
-            if (struck) continue;
+            if (best != entt::null) {
+                resolved.push_back(Hit{e, p.dmg, p.source, false, best, p.proj,
+                                       p.channel});
+                continue;
+            }
         }
 
         // Solid geometry stops it. Cell-level rather than sub-voxel on purpose: a
@@ -1443,7 +1457,7 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
         // were all mitigating against a channel that only ever arrived as Kinetic.
         spawn_projectile_dir(reg, layer, eye, dir,
                              static_cast<std::int16_t>(def->dmg),
-                             def->projSpeedMmps, shooter, kPlayerGravityPct, 1,
+                             def->projSpeedMmps, shooter, kPlayerGravityPct,
                              def->channel);
     }
 

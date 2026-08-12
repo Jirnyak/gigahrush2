@@ -259,14 +259,26 @@ struct Projectile {
     // gets a flatter arc instead. Forking projectile_step to express that would mean
     // maintaining two integrators forever.
     std::uint8_t gravityPct = 100;
-    // 0 = fired by a monster, 1 = fired by the player. Decides who it may hit.
+    // THERE IS NO `team` FIELD, and its absence is the design — deleted 2026-08-12.
     //
-    // It exists so that giving player bullets the ability to damage monsters does not
-    // silently also create monster-on-monster friendly fire: once projectiles test
-    // MobRef at all, a monster shooting past another monster would hit it. One branch
-    // keeps that from being an accident. faction_relations.h is available if a richer
-    // answer is ever wanted.
-    std::uint8_t team = 0;
+    // One lived here: 0 = fired by a monster, 1 = fired by the player, "decides who
+    // it may hit". It bought three exclusions — a player bullet could not touch a
+    // civilian, a monster's shot could not touch another monster, and neither could
+    // touch the body that fired it — and all three are forbidden by name in
+    // ARCHITECTURE.md §Манифест п.5: "никаких friendly-fire-исключений; граната
+    // скачет по вокселям, осколки бьют и владельца".
+    //
+    // Owner's ruling: **ownership itself is the hardcode.** Once a shot leaves the
+    // barrel it is a physical object with no memory. It does not know who fired it,
+    // what team they were on, or which faction is in front of it.
+    //
+    // `source` below stays, and the distinction is the whole point: it is
+    // ATTRIBUTION, not exclusion. `finalize_deaths` needs to know whose kill it was
+    // in order to award XP; nothing reads it to decide what may be hit. A body can
+    // now be credited with killing itself, which is correct rather than a bug.
+    //
+    // Re-adding a team field would not be a tuning change, it would be reversing a
+    // design decision — say so out loud if you do.
     // What KIND of shot this is: a `ProjType` ([mob_table.h]), stored as the same
     // raw u8 `MobDef::projType` is so this header does not have to include the mob
     // table. 0 = Bullet, 1 = Web.
@@ -567,18 +579,19 @@ void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
 void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
                           const vec3& dir, std::int16_t dmg,
                           std::uint16_t projSpeedMmps, Entity source,
-                          std::uint8_t gravityPct = 100, std::uint8_t team = 0,
+                          std::uint8_t gravityPct = 100,
                           std::uint8_t channel = 0);
 
 // Advance every shot in flight: integrate under gravity, stop on solid geometry,
 // damage what it touches on contact, expire on TTL. Destroys spent projectiles.
 //
-// Who a shot may hit is decided by `Projectile::team`, and it is deliberately not
-// symmetric. A player shot (team 1) may hit monsters and never a civilian. A monster
-// shot (team 0) may hit the camera holder or any resident monsters consider prey —
-// without that a ranged hunter would telegraph, fire, burn its cooldown and never
-// land anything, because every ranged kind's minimum shot range starts INSIDE
-// [hunt.h]'s 6 m hunting radius while its 2.4 m melee reach does not cover it.
+// A shot hits the NEAREST thing it reaches, and asks nothing about whose it is.
+// One sweep over every body and every monster on the layer; no team, no faction, no
+// owner. See `Projectile` above for why the field that used to decide this is gone.
+//
+// The nearest, not the first: with the old split branches "first the view yields"
+// was already arbitrary, and merged it would have meant a monster shields a civilian
+// only when EnTT happens to order it that way.
 //
 // Gravity is what makes a ranged monster miss: a shot fired level from chest height
 // reaches the floor in well under a second, so distance is bought with arc. The

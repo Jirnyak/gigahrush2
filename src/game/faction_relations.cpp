@@ -287,7 +287,7 @@ std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
                     spawn_projectile_dir(reg, layer, tr.pos, dir, 
                                          static_cast<std::int16_t>(rdef->dmg), 
                                          static_cast<std::uint16_t>(rdef->projSpeedMmps), e, 
-                                         100, /*team*/ 0, rdef->channel);
+                                         100, rdef->channel);
                 }
                 continue;
             }

@@ -314,7 +314,6 @@ static void test_eventsweb_all() {
             const Projectile& p = reg.get<const Projectile>(shot);
             CHECK(p.proj == static_cast<std::uint8_t>(ProjType::Web));
             CHECK(p.dmg == 0);        // control, not damage
-            CHECK(p.team == 0);
             // A control shot must not look like a lethal one. Render-only, so this
             // changes pixels and nothing else — but a web painted like a bullet
             // teaches the player the wrong thing about what just hit them.

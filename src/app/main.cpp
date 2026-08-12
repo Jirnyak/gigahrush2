@@ -228,7 +228,11 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
         float dy = wrap_delta_f(camPos.y, tr.pos.y, kWorldExtent);
         float dz = wrap_delta_f(camPos.z, tr.pos.z, kWorldExtent);
         if (dx * dx + dy * dy + dz * dz < 48.0f * 48.0f) {
-            vec3 pcol = (proj.team == 1) ? vec3{1.0f, 0.85f, 0.40f} : vec3{0.95f, 0.20f, 0.40f};
+            // One colour for every shot in the air. It used to be two, keyed on
+            // `Projectile::team` — but a bullet no longer knows whose it is, and a
+            // HUD that claimed otherwise would be teaching the player a rule the
+            // simulation stopped having.
+            vec3 pcol = vec3{1.0f, 0.85f, 0.40f};
             grid.add_light(tr.pos, 10.0f, pcol, 2.5f);
         }
     }

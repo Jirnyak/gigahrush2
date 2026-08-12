@@ -822,7 +822,7 @@ if(GIGA_BUILD_TESTS)
     # asks the generated grid whether every cell the menu accepts is standable.
     # Proven to bite by mutation — leaving the generator's local 1 while the shared
     # constant says 2 prints "all air: NO" and fails.
-        PASS_REGULAR_EXPRESSION "game_test: 235891 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "game_test: 235893 checks, 0 failures")
 
 
 
