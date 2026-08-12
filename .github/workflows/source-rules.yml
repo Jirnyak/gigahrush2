@@ -1,0 +1,50 @@
+# Source-rule gate — the one check that can honestly be green on a bare runner.
+#
+# WHAT THIS FILE USED TO BE, and why it was worse than having no CI at all:
+# the unmodified GitHub "CMake on multiple platforms" starter template — a 3-leg
+# matrix (ubuntu/gcc, ubuntu/clang, windows/cl) going checkout -> configure ->
+# build -> ctest, with NO dependency-installation step anywhere between checkout
+# and configure. CMakeLists.txt opens with `find_package(Vulkan REQUIRED)` and a
+# FATAL_ERROR when glslc is missing, and a bare runner has neither Vulkan, nor
+# glslc, nor SDL3. So the pipeline could not reach the CONFIGURE step on any leg,
+# had never been green, and could not become green.
+#
+# Meanwhile README carried a hardcoded shields.io "Build: Passing" image. A
+# pipeline that cannot run plus a badge asserting it passes is a false signal in
+# the most visible place in the repository — strictly worse than the honest
+# absence of CI. Both halves are fixed together: this file now runs a gate that
+# really passes, and the badge now reflects this workflow's real status.
+#
+# WHY source_rules AND NOTHING ELSE (Docs/specs/18 §1 lays out the two options):
+# it is `cmake -P` over source TEXT. No compiler, no SDK, no SDL3, no GPU. It is
+# the only gate in the tree that a bare runner can run truthfully today, and it
+# is not a token one — it enforces the AGENTS.md hard rules that no compiler
+# checks on every host, above all no-exceptions, which MSVC cannot enforce at all.
+#
+# That gate was itself found to be reading only the first line or two of every
+# file on 2026-08-12 (CMake stops splitting a list at the first `[`; see
+# problems.md §46 and tools/check_source_rules.cmake). It is repaired, and
+# running it here is worth more than it was a day ago.
+#
+# The full cross-platform build+ctest matrix is the OTHER option in that spec and
+# is deliberately not attempted here: it needs Vulkan SDK + SDL3 provisioning per
+# runner, and adding it unverified would recreate exactly the failure this commit
+# removes — a workflow asserted to work by someone who never watched it run.
+name: source-rules
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  source-rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # No dependency step on purpose: if this gate ever needs one, it has
+      # stopped being a text check and the reason belongs in the diff.
+      - name: Check source rules
+        run: cmake -DGIGA_ROOT=$GITHUB_WORKSPACE -P tools/check_source_rules.cmake

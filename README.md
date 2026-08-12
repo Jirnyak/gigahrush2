@@ -4,7 +4,7 @@
 
 [![C++23](https://img.shields.io/badge/Standard-C%2B%2B23-blue?style=for-the-badge)]()
 [![Vulkan](https://img.shields.io/badge/Render-Vulkan%20(MoltenVK)-red?style=for-the-badge)]()
-[![Build](https://img.shields.io/badge/Build-Passing-brightgreen?style=for-the-badge)]()
+[![Source rules](https://github.com/Jirnyak/gigahrush2/actions/workflows/source-rules.yml/badge.svg)](https://github.com/Jirnyak/gigahrush2/actions/workflows/source-rules.yml)
 [![Audit](https://img.shields.io/badge/Audit-100%25%20Verified-purple?style=for-the-badge)]()
 [![Zero Alloc](https://img.shields.io/badge/Runtime-Zero%20Allocation-00ff88?style=for-the-badge)]()
 
@@ -45,7 +45,7 @@
 |  - Toroidal 3D wrapping on X/Y/Z axes                                   |
 |  - Destructible materials via probabilistic damage penetration          |
 |  - Samosbor waves & real-time floor geometry baking                     |
-|  - 4x4 Fast-Travel Elevators + 4x4 Up/Down Procedural Elevators         |
+|  - 16 elevator shafts (4x4 lattice), each serving fast-travel AND rides |
 |  - Hermetic rooms: Living, Toilets, Kitchens, Workshops, Smoking, Lairs |
 +-------------------------------------------------------------------------+
                                     | EnTT ECS Views / Zero-Alloc Ticks
