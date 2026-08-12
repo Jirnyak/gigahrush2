@@ -116,10 +116,41 @@ per-`iz` node version is still unbuilt. Full design + history:
   boarding hub; the app performs the ride. Same client-proposes/app-disposes
   shape as the rest of the console seam.
 
+**Built 2026-08-12 — the shaft menu (`L`), and the layout decision behind it.**
+
+The manifesto ([ARCHITECTURE.md](ARCHITECTURE.md) §Манифест п.4) asked for **48
+columns**: 4×4 fixed fast-travel, 4×4 procedural down, 4×4 procedural up. Owner's
+decision: **keep the 16 that exist and let each column offer all three.** Three
+KINDS of transition do not require three SETS of columns.
+
+That is also the only version that leaves the lattice alone, and the number is
+worth stating because it is not small: `nav::kNodes == kLatticeCount ==
+kLatticeDim³`, so five nodes per axis would take the fine nav bake from **128 MiB
+to 250 MiB** and break the nav-cache wire pin (`kNavCoarseWire == 13056`, sized at
+64 nodes). Three separate sets would have needed a second lattice constant.
+
+The window is rows of **console lines** — `ride down`, `ride up`, `ft <N>` — all of
+which existed before it and are unchanged by it, exactly like the pause menu. It
+adds a place to CHOOSE, not a mechanism, so console, keybind and window cannot
+drift apart, and the ride still goes through the deferred request drain rather
+than happening mid-frame. `[` and `]` keep working from anywhere.
+
+Two seams had to be made honest first:
+
+- `on_fast_hub` accepts only the exact centre cell — correct for *landing*
+  (`fast_hub_cell` inverts it), useless for *"is the player in the shaft"*, since a
+  body is 0.8 m wide in a 6 m column. Hence `fast_hub_near`, a second question with
+  its own answer rather than a loosened first one.
+- The shaft radii were **locals in `padic_gen.cpp`** while the gameplay test lived
+  in `fast_travel.h`, so geometry and gameplay agreed at one cell out of nine by
+  coincidence. They are now one constant, and a test asks the generated grid
+  whether every cell the menu accepts is really air (`144 cells across 16 shafts`).
+
 **Still to design / build:**
 
-- The **UI** for the unlocked set (a menu of floors/nodes), and whether the set
-  survives a `samosbor` world-wipe — today it lives in `main`, not in the save.
+- Whether the unlock set survives a `samosbor` world-wipe. (It survives a SAVE
+  since version 10 / SAVCLOCK — 32 bytes in `run.sav`; the older claim here that it
+  "lives in `main`, not in the save" was true when written and is not now.)
 - Boarding a specific **`iz` node** instead of the storey the rider is standing
   on, i.e. the third axis of the 4×4×4 lattice.
 - Gravity/rule changes on arrival ([gravity.md](gravity.md),

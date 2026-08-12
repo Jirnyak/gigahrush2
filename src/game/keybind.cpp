@@ -109,6 +109,10 @@ bool keybind_register_defaults(KeybindTable& t) {
     ok &= t.add({"fly", "fly", scan::kF, 0});
     ok &= t.add({"floor_up", "ride up", scan::kRightBracket, 0});
     ok &= t.add({"floor_down", "ride down", scan::kLeftBracket, 0});
+    // L for lift. The shaft menu offers the SAME three transitions the two rows
+    // above already are, plus fast travel — it adds a place to choose, not a
+    // mechanism ([fast_travel.h]). `[` and `]` keep working from anywhere.
+    ok &= t.add({"elevator", "elevator", scan::kL, 0});
     // Survival + interaction one-shots.
     ok &= t.add({"heal", "heal", scan::kH, 0});
     ok &= t.add({"eat", "eat", scan::kG, 0});

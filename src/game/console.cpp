@@ -333,6 +333,8 @@ constexpr RequestRow kRequestRows[] = {
      ConsoleRequest::Interact},
     {"sell", "sell the haul (on the extraction pad)", ConsoleRequest::Sell},
     {"vendor", "toggle the trader window", ConsoleRequest::Vendor},
+    {"elevator", "toggle the elevator menu (stand in a shaft)",
+     ConsoleRequest::Elevator},
     {"resupply", "buy the resupply package", ConsoleRequest::Resupply},
     {"craft", "toggle the crafting window", ConsoleRequest::Craft},
     {"scrap", "scrap the cheapest junk carried", ConsoleRequest::Scrap},

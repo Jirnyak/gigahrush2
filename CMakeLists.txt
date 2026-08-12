@@ -814,7 +814,15 @@ if(GIGA_BUILD_TESTS)
     # The first version of the rarity term was a CONSTANT wearing a formula (linear
     # against a 50,000 max when the median weight is 800), which doubled every payout
     # and passed every single-input check; the spread assertion is what catches that.
-        PASS_REGULAR_EXPRESSION "game_test: 235826 checks, 0 failures")
+    # 235826 -> 235891 (+65) on 2026-08-12: the elevator shaft menu. `fast_hub_near`
+    # (the shaft column) beside `on_fast_hub` (the exact landing cell), and the shaft
+    # radii moved out of padic_gen.cpp locals into fast_travel.h so the GENERATOR and
+    # the gameplay test read one constant. The assertion that earns that:
+    #   [shaft] 144 cells across 16 shafts, all air: yes
+    # asks the generated grid whether every cell the menu accepts is standable.
+    # Proven to bite by mutation — leaving the generator's local 1 while the shared
+    # constant says 2 prints "all air: NO" and fails.
+        PASS_REGULAR_EXPRESSION "game_test: 235891 checks, 0 failures")
 
 
 

@@ -41,6 +41,7 @@
 #include "game/floors/padic/padic.h"
 
 #include "game/floor_gen.h"
+#include "game/fast_travel.h"   // kFastShaftR / kFastLobbyR — the shaft footprint
 #include "sim/fluid.h"
 #include "world/destruct.h" // kSubMaterialName
 #include "world/lattice.h"
@@ -475,8 +476,13 @@ void punch_holes(MacroGrid& g, SubField<CellType>& sm, const Plan& p, int zc,
 // The mandatory fast-travel lattice ([torus-nav-baking]): open shaft columns,
 // lobbies cleared per storey, hub pads and the four corner posts.
 void stamp_lattice(MacroGrid& g, SubField<CellType>& sm, int number) {
-    constexpr int kShaftR = 1;
-    constexpr int kLobbyR = 3;
+    // The radii come from [game/fast_travel.h], not from locals here. They used to be
+    // locals, and that made the geometry and the "are you at a shaft" test two
+    // independent numbers that happened to agree — the same shape as
+    // padic_module.cpp's local `kLatticeDim`, which shadows the real one and would
+    // not follow a change to it.
+    constexpr int kShaftR = kFastShaftR;
+    constexpr int kLobbyR = kFastLobbyR;
     for (int ny = 0; ny < kLatticeDim; ++ny) {
         for (int nx = 0; nx < kLatticeDim; ++nx) {
             const int cx = lattice_coord(nx);

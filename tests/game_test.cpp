@@ -880,6 +880,73 @@ static void test_fast_travel() {
     CHECK(!on_fast_hub(static_cast<int>(hx) + 1, hy));
     CHECK(!on_fast_hub(hx, static_cast<int>(hy) + 1));
 
+    // --- fast_hub_near: the SHAFT, not the centre cell ------------------------
+    // Two different questions, and conflating them is why this needed a second
+    // function rather than a looser `on_fast_hub`. `on_fast_hub` is where a ride
+    // LANDS you and what `fast_hub_cell` inverts, so it must stay exact — loosen it
+    // and "arrived at hub 5" would name nine cells. `fast_hub_near` is "is the body
+    // standing in the column", and a body is 0.8 m wide in a 6 m shaft, so demanding
+    // the centre cell would make the elevator menu unusable in play.
+    //
+    // The radius is kFastShaftR, and the generator now stamps the air column from
+    // that SAME constant — before 2026-08-12 it was a local in padic_gen.cpp and the
+    // two numbers agreed only by coincidence.
+    CHECK(fast_hub_near(hx, hy) == 0);
+    for (int dy = -kFastShaftR; dy <= kFastShaftR; ++dy)
+        for (int dx = -kFastShaftR; dx <= kFastShaftR; ++dx)
+            CHECK(fast_hub_near(static_cast<int>(hx) + dx,
+                                static_cast<int>(hy) + dy) == 0);
+    // ...and one cell further out is NOT the shaft, on either axis.
+    CHECK(fast_hub_near(static_cast<int>(hx) + kFastShaftR + 1, hy) < 0);
+    CHECK(fast_hub_near(hx, static_cast<int>(hy) + kFastShaftR + 1) < 0);
+    // Every one of the 16 shafts answers with its own index, and the answer agrees
+    // with `fast_hub_at` at the centre — the two functions must not disagree about
+    // WHICH shaft, only about how close you have to be.
+    for (int hub = 0; hub < kFastHubsPerFloor; ++hub) {
+        std::uint8_t cx = 0, cy = 0;
+        fast_hub_cell(hub, cx, cy);
+        CHECK(fast_hub_at(cx, cy) == hub);
+        CHECK(fast_hub_near(cx, cy) == hub);
+        CHECK(fast_hub_near(static_cast<int>(cx) + kFastShaftR, cy) == hub);
+    }
+    // Toroidal, like everything else that takes a macro coordinate: a shaft is
+    // entered from either side of the wrap seam.
+    CHECK(fast_hub_near(static_cast<int>(hx) + kMacroDim, hy) == 0);
+    CHECK(fast_hub_near(static_cast<int>(hx) - kMacroDim, hy) == 0);
+
+    // --- AND THE SHAFT IS REALLY THERE ---------------------------------------
+    // The assertion that makes sharing `kFastShaftR` worth anything. Everything
+    // above is arithmetic about arithmetic; this asks the GENERATED GRID whether
+    // every cell `fast_hub_near` accepts is a cell a body can stand in. Without it,
+    // the constant could be shared and still wrong — both halves agreeing on a
+    // radius that does not match what was stamped.
+    {
+        World shaftWorld;
+        generate_floor(shaftWorld, 0, floor_spec(FloorKind::Residential), 4242u);
+        const int gz = floor_ground_z();
+        int cellsProbed = 0;
+        bool allAir = true;
+        for (int hub = 0; hub < kFastHubsPerFloor; ++hub) {
+            std::uint8_t cx = 0, cy = 0;
+            fast_hub_cell(hub, cx, cy);
+            for (int dy = -kFastShaftR; dy <= kFastShaftR; ++dy)
+                for (int dx = -kFastShaftR; dx <= kFastShaftR; ++dx) {
+                    const int x = wrap_macro(static_cast<int>(cx) + dx);
+                    const int y = wrap_macro(static_cast<int>(cy) + dy);
+                    // The cell the menu is reachable from must be standable, and the
+                    // one above it too — the shaft is a column, not a hole.
+                    if (shaftWorld.grid().cell(x, y, gz) != kCellAir) allAir = false;
+                    if (shaftWorld.grid().cell(x, y, gz + 1) != kCellAir) allAir = false;
+                    ++cellsProbed;
+                }
+        }
+        std::printf("[shaft] %d cells across %d shafts, all air: %s\n", cellsProbed,
+                    kFastHubsPerFloor, allAir ? "yes" : "NO");
+        CHECK(cellsProbed == kFastHubsPerFloor * (2 * kFastShaftR + 1) *
+                                 (2 * kFastShaftR + 1));
+        CHECK(allAir);
+    }
+
     // --- Gate: registered + unlocked + on hub ---
     FloorRegistry freg;
     freg.assign(0, 0);

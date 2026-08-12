@@ -58,6 +58,9 @@ enum class ConsoleRequest : std::uint32_t {
     Heal, Eat, Drink,        // survival one-shots
     Door, Possess, Interact, // world interaction one-shots
     Sell, Vendor, Resupply,  // economy: sell haul / trader window / resupply
+    Elevator,  // toggle the shaft menu: the three KINDS of transition the manifesto
+               // asks for (fast-travel / procedural down / procedural up) offered by
+               // ONE set of 16 columns rather than three sets of 16 ([fast_travel.h])
     Craft, Scrap,            // crafting window / scrap cheapest junk
     AttrStr, AttrAgi, AttrInt, // ATTR1: spend one unspent point on STR/AGI/INT
     Count

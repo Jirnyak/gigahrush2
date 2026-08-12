@@ -46,6 +46,41 @@ inline int fast_hub_at(int cx, int cy) {
     return iy * kLatticeDim + ix;
 }
 
+// --- the shaft's actual footprint, and WHY it lives here --------------------
+// The generator stamps a 3x3 air column through all 128 z (radius kFastShaftR)
+// inside a 7x7 cleared lobby at every storey (radius kFastLobbyR). Those two radii
+// used to exist ONLY as locals in padic_gen.cpp, while `on_fast_hub` above accepted
+// the single exact centre cell — so the geometry and the gameplay test agreed by
+// coincidence at one cell out of nine and disagreed everywhere else.
+//
+// They live here, and the generator includes this header, because this is the file
+// that has to AGREE with the stamped geometry. A second copy is how
+// padic_module.cpp ended up shadowing `kLatticeDim` with its own local 4.
+inline constexpr int kFastShaftR = 1;   // 3x3 air column, full height
+inline constexpr int kFastLobbyR = 3;   // 7x7 cleared lobby at each storey base
+
+// Hub index in [0,16) when (cx,cy) is anywhere INSIDE the shaft column, else -1.
+//
+// `on_fast_hub` is the exact-centre test and stays exact: it is what the ride
+// LANDS you on and what `fast_hub_cell` inverts, so loosening it would make
+// "arrived at hub 5" mean nine different cells. This is the other question —
+// "is the player standing in the shaft" — and a body is 0.8 m wide in a 6 m column,
+// so demanding the centre cell would make the elevator unusable in practice.
+// Toroidal: a shaft at cx = 16 is entered from 15 and 17 alike, and cx = 0 is
+// adjacent to 127.
+inline int fast_hub_near(int cx, int cy) {
+    const int wx = wrapi(cx, kMacroDim);
+    const int wy = wrapi(cy, kMacroDim);
+    const int ix = lattice_axis_of(wx);
+    const int iy = lattice_axis_of(wy);
+    const int dx = wrap_delta(lattice_coord(ix), wx, kMacroDim);
+    const int dy = wrap_delta(lattice_coord(iy), wy, kMacroDim);
+    const int ax = dx < 0 ? -dx : dx;
+    const int ay = dy < 0 ? -dy : dy;
+    if (ax > kFastShaftR || ay > kFastShaftR) return -1;
+    return iy * kLatticeDim + ix;
+}
+
 // Write the macro cell of hub `hub` (0..15) into cx/cy. No-op on a bad index.
 inline void fast_hub_cell(int hub, std::uint8_t& cx, std::uint8_t& cy) {
     if (hub < 0 || hub >= kFastHubsPerFloor) return;

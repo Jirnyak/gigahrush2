@@ -2156,6 +2156,7 @@ int main(int argc, char** argv) {
     bool scrapWanted = false;     // X, consumed by one sim step
     bool showCraftingWindow = false;
     bool showVendorWindow = false;
+    bool showElevatorWindow = false;
     // Run state, not world state, so it lives beside the ledger. CraftingState is a
     // 96-byte POD ([craft.h]) — nothing to own, nothing to free. craft_init zeroes the
     // material bank, sets tier 0 and marks the nine default-known recipes.
@@ -2731,6 +2732,10 @@ int main(int argc, char** argv) {
             if (has(ConsoleRequest::Sell)) sellWanted = true;
             if (has(ConsoleRequest::Resupply)) buyWanted = true;
             if (has(ConsoleRequest::Scrap)) scrapWanted = true;
+            if (has(ConsoleRequest::Elevator)) {
+                showElevatorWindow = !showElevatorWindow;
+                if (showElevatorWindow) input.set_mouselook(false);
+            }
             if (has(ConsoleRequest::Vendor)) {
                 showVendorWindow = !showVendorWindow;
                 if (showVendorWindow) input.set_mouselook(false);
@@ -5278,6 +5283,74 @@ int main(int argc, char** argv) {
             }
         }
 
+        // --- THE SHAFT MENU -------------------------------------------------
+        // The manifesto (p.4) asks for three KINDS of transition: a fixed
+        // fast-travel grid, a procedural ride down, and a procedural ride up. It
+        // spells that as three separate 4x4 sets of columns — 48 shafts. Owner's
+        // decision 2026-08-12: keep ONE set of 16 and let the column offer all three,
+        // which is what this window is.
+        //
+        // That is not only cheaper to build, it is the only version that does not
+        // move `kLatticeDim` — and `nav::kNodes == kLatticeCount == kLatticeDim^3`,
+        // so 5 per axis would take the fine nav bake from 128 MiB to 250 MiB and
+        // break the nav-cache wire pin (`kNavCoarseWire == 13056`, sized at 64
+        // nodes). Three sets of columns would have needed a second lattice constant.
+        //
+        // EVERY ROW IS A CONSOLE LINE, exactly like the pause menu: `ride down`,
+        // `ride up`, `ft <N>` all existed before this window and are unchanged by it.
+        // The menu adds a PLACE TO CHOOSE, not a mechanism — so the console, a
+        // keybind and this window cannot drift, and the deferred-request drain keeps
+        // the ride out of the middle of a frame.
+        if (showElevatorWindow && reg.valid(player)) {
+            const Transform& et = reg.get<Transform>(player);
+            const int ecx = wrap_macro(static_cast<int>(et.pos.x / kCellSize));
+            const int ecy = wrap_macro(static_cast<int>(et.pos.y / kCellSize));
+            const int shaft = game::fast_hub_near(ecx, ecy);
+            ImGui::SetNextWindowSize(ImVec2(360, 0), ImGuiCond_FirstUseEver);
+            if (ImGui::Begin("ЛИФТ / ELEVATOR", &showElevatorWindow)) {
+                if (shaft < 0) {
+                    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.0f),
+                                       "[NOT IN A SHAFT]");
+                    ImGui::TextWrapped(
+                        "Встаньте в колонну лифта — 16 шахт на решётке 4x4, "
+                        "одинаково на каждом этаже.");
+                } else {
+                    ImGui::Text("ШАХТА %d  |  ЭТАЖ %d", shaft, currentFloor);
+                    ImGui::Separator();
+                    refresh_console_ctx();
+                    // 1 & 2 — the procedural halves. `ride` walks to the nearest
+                    // LABELLED floor on that side, which is why this says "next"
+                    // and not "-1": a sparse stack is legal.
+                    if (ImGui::Button("ВНИЗ  /  DESCEND", ImVec2(-FLT_MIN, 0)))
+                        exec_command("ride down");
+                    if (ImGui::Button("ВВЕРХ /  ASCEND", ImVec2(-FLT_MIN, 0)))
+                        exec_command("ride up");
+                    ImGui::Separator();
+                    // 3 — fast travel, and the list IS the unlock set. A floor the
+                    // player has never boarded from is simply not here, so the gate
+                    // and the UI cannot disagree about what is reachable.
+                    ImGui::TextUnformatted("БЫСТРЫЙ ПЕРЕХОД / FAST TRAVEL");
+                    int offered = 0;
+                    for (int f = game::kMinFloor; f <= game::kMaxFloor; ++f) {
+                        if (f == currentFloor) continue;
+                        if (!fastTravel.unlocked(f)) continue;
+                        if (registry.module_at(f) == game::kInvalidModule) continue;
+                        char row[64];
+                        std::snprintf(row, sizeof row, "ЭТАЖ %d##ft%d", f, f);
+                        if (ImGui::Button(row, ImVec2(-FLT_MIN, 0))) {
+                            char cmd[32];
+                            std::snprintf(cmd, sizeof cmd, "ft %d", f);
+                            exec_command(cmd);
+                        }
+                        ++offered;
+                    }
+                    if (offered == 0)
+                        ImGui::TextDisabled("нет открытых этажей — доберитесь пешком");
+                }
+            }
+            ImGui::End();
+        }
+
         if (showVendorWindow && reg.valid(player)) {
             const Transform& vt = reg.get<Transform>(player);
             const bool isOnPad = game::on_extraction_pad(stack.layer(activeLayer).grid(), vt.pos);
@@ -5401,6 +5474,16 @@ int main(int argc, char** argv) {
                         break;
                     }
                 }
+            }
+
+            // Standing in a shaft. Ranked BELOW doors and bodies on purpose: the
+            // shaft is 3x3 and never urgent, while a door you are pressed against
+            // or a survivor you can take over both are.
+            if (!promptText) {
+                const int pcx = wrap_macro(static_cast<int>(ppos.x / kCellSize));
+                const int pcy = wrap_macro(static_cast<int>(ppos.y / kCellSize));
+                if (game::fast_hub_near(pcx, pcy) >= 0)
+                    set_prompt("elevator", "ELEVATOR");
             }
 
             // Bladder/Bowel pressure relief fallback
