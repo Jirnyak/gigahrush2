@@ -48,6 +48,7 @@
 #include "game/item_table.h"
 #include "game/mob_table.h"
 #include "game/npc_pool.h"
+#include "game/rpg.h"        // RpgStats, xp_for_quest, award_xp — the ONE xp path
 
 namespace giga::game {
 
@@ -175,7 +176,41 @@ bool contract_accept(ContractBook& book, const Contract& offer, const RunLedger&
 // twice for the same loot — once as the reward and once as the haul — and that is the
 // difference between an errand and a bonus.
 std::int32_t contract_step(ContractBook& book, const NpcPool& pool, Inventory& inv,
-                           RunLedger& led);
+                           RunLedger& led, RpgStats* rpg = nullptr);
+
+// ---------------------------------------------------------------------------
+// How hard is this job — composed from context that already exists
+// ---------------------------------------------------------------------------
+// Returns difficulty in TENTHS, which is exactly what `xp_for_quest` takes
+// ([rpg.h]: `round(20 * difficulty)` with difficulty arriving x10).
+//
+// THIS FUNCTION IS THE PRINCIPLE, not a helper. ARCHITECTURE.md §Манифест: "максимум
+// контекста, минимум систем", clarified by the owner 2026-08-12 — the number of
+// SYSTEMS is bounded, the number of INPUTS is not. So difficulty is not a column
+// somebody authors and not one signal picked over another; it is every piece of
+// context the engine already has about a job, added up. Nothing below introduces a
+// table, a column or a counter. Each term names the system it reads:
+//
+//   kind      ObjectiveKind          — the one enum of objectives (this file)
+//   depth     mob_depth01            — the same |z| curve that drives monsters,
+//                                      loot and resident level (manifest p.5:
+//                                      "|absN| этажа = уровень опасности")
+//   subject   mob_hp_at_level        — for Hunt: how tough THAT creature is here
+//             ItemDef::spawnWeight   — for Fetch: how rare THAT item is to find
+//   target    the row's own count    — five of a thing is harder than one
+//   timed     the row's own deadline — a clock is pressure
+//
+// ADDING A TERM IS ONE LINE HERE, and that is the acceptance criterion for the
+// "расширяемо" half of the requirement: reputation with the giver, the player's own
+// level, whether the floor is sealed, how far the subject spawns from the giver —
+// each is a `d +=` beside its comment, not a redesign.
+//
+// `depthAbsZ` is |z|, because depth is symmetric: the roof is as far from safety as
+// the basement, which is the same reading `record_floor` already takes. Callers that
+// genuinely do not know it pass 0 and lose exactly the depth term; they do not get a
+// wrong answer, they get a shallower one.
+std::uint16_t objective_difficulty_e1(std::uint8_t kind, std::uint16_t subject,
+                                      std::int32_t target, int depthAbsZ, bool timed);
 
 // A kill happened. Called from wherever the death is finalized, so Hunt progress is
 // driven by the same event the kill feed is.

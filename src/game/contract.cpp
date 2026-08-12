@@ -1,6 +1,7 @@
 #include "core/rng.h"
 #include "game/contract.h"
 
+#include <cmath>
 #include <cstdio>
 
 #include "game/faction_relations.h"
@@ -275,8 +276,99 @@ void contract_on_giver_died(ContractBook& book, NpcId who) {
     }
 }
 
+// See the long note in [contract.h]. MEASURED calibration, printed by
+// `test_quest_all` on every run so it can be argued with rather than trusted —
+// `xp_for_quest` doubles this value, and `xp_for_level(2) == 100`:
+//
+//   cheapest authored row (3x fetch, floors 0..2)     2.0  ->   40 xp
+//   dearest authored row  (8x hunt,  floors 0..2)    12.3  ->  246 xp
+//   deep contract         (5x Polzun at |z| = 50)    15.9  ->  318 xp
+//   one Tvar kill at level 5, for scale                    ->   94 xp
+//
+// So an errand is worth about half a kill, a real job several, and no single quest
+// is a level. That is the ratio the manifesto's two XP sources imply: kills are the
+// bulk, quests are the spine. Note the dearest AUTHORED row pays 246 xp against 180
+// roubles — xp and money are deliberately not the same axis, which is the whole
+// reason difficulty is composed here instead of read off `reward`.
+std::uint16_t objective_difficulty_e1(std::uint8_t kind, std::uint16_t subject,
+                                      std::int32_t target, int depthAbsZ,
+                                      bool timed) {
+    const ObjectiveKind k = static_cast<ObjectiveKind>(kind);
+
+    // 1. KIND — the one enum of objectives. Hunt is dearer than Fetch because it is
+    //    the only one that shoots back.
+    float d = k == ObjectiveKind::Hunt     ? 12.0f
+              : k == ObjectiveKind::Fetch  ? 8.0f
+                                           : 10.0f;  // Descend
+
+    // 2. DEPTH — the same curve monsters, loot and resident level already read, so a
+    //    job's difficulty moves with the floor for the same reason everything else
+    //    does. Not a new notion of "danger", the existing one.
+    const float depth01 = mob_depth01(depthAbsZ);
+    d += 60.0f * depth01;
+
+    // 3. SUBJECT — what the job is actually ABOUT, read from the subject's own table.
+    if (k == ObjectiveKind::Hunt) {
+        // How tough THAT creature is at THIS depth. Danger 5 as the baseline for the
+        // same reason contract pricing uses it a few lines above: a job must not get
+        // harder because a floor spec was retuned.
+        const MobKind mk = static_cast<MobKind>(subject);
+        if (static_cast<std::size_t>(subject) < kMobKindCount) {
+            const std::uint8_t lvl = mob_level_for_floor(depthAbsZ, /*danger=*/5);
+            d += static_cast<float>(mob_hp_at_level(mob_def(mk).hp, lvl)) / 12.0f;
+        }
+    } else if (k == ObjectiveKind::Fetch) {
+        // How RARE that item is to find. Scarcity is the difficulty: six bandages off
+        // any shelf is not one manometer.
+        //
+        // RELATIVE TO THE TYPICAL ITEM, ON A LOG SCALE, and the first version of this
+        // line got it wrong in a way worth recording. `spawnWeight` is milli-weight on
+        // a 0..50,000 range, so normalising linearly against the maximum looked
+        // obvious — and was decoration: measured over data/items.csv the MEDIAN weight
+        // is 800 and every item any quest actually names sits at 1,000, so
+        // `1 - w/50000` returned 0.98 for all of them and the term was a constant
+        // +29.4 dressed as a signal. It also silently doubled every quest's payout,
+        // which is how it got noticed — one shallow courier job paid a whole level.
+        //
+        // The range is skewed (min 12, median 800, max 50,000), so the honest scale is
+        // logarithmic against the common case: an item ~8x rarer than typical is worth
+        // ~18, the rarest in the table saturates, and anything at or above typical is
+        // worth 0. Weight 0 means "never spawns randomly" — the hardest case there is,
+        // so it takes the cap instead of falling through as if it were common.
+        if (item_valid(static_cast<ItemId>(subject))) {
+            const std::uint16_t w = item_def(static_cast<ItemId>(subject)).spawnWeight;
+            constexpr float kTypicalWeight = 1000.0f;  // measured: what quests name
+            float rarity = 30.0f;                      // w == 0: never random
+            if (w != 0) {
+                rarity = 6.0f * std::log2(kTypicalWeight / static_cast<float>(w));
+                if (rarity < 0.0f) rarity = 0.0f;
+                if (rarity > 30.0f) rarity = 30.0f;
+            }
+            d += rarity;
+        }
+    }
+
+    // 4. COUNT — the row's own target. Descend's `target` is a FLOOR, not a count,
+    //    and feeding a floor label into a count term is exactly the double-meaning
+    //    hazard [quest.h] warns about, so it is excluded by kind rather than by luck.
+    if (k != ObjectiveKind::Descend && target > 1) {
+        const float per = k == ObjectiveKind::Hunt ? 14.0f : 5.0f;
+        d += per * static_cast<float>(target - 1);
+    }
+
+    // 5. A CLOCK — the row's own deadline. Pressure, not arithmetic: the same job
+    //    with a timer is a harder job.
+    if (timed) d += 10.0f;
+
+    // ...and the next term goes HERE, one line, naming its system.
+
+    if (d < 1.0f) d = 1.0f;
+    if (d > 65535.0f) d = 65535.0f;
+    return static_cast<std::uint16_t>(d + 0.5f);
+}
+
 std::int32_t contract_step(ContractBook& book, const NpcPool& pool, Inventory& inv,
-                          RunLedger& led) {
+                          RunLedger& led, RpgStats* rpg) {
     std::int32_t paid = 0;
 
     for (int i = 0; i < kMaxContracts; ++i) {
@@ -361,6 +453,19 @@ std::int32_t contract_step(ContractBook& book, const NpcPool& pool, Inventory& i
         book.earned += c.reward;
         ++book.completed;
         paid += c.reward;
+
+        // XP, through the ONE path that awards it ([rpg.cpp] award_xp, which is also
+        // the only thing that levels anyone up). Manifest p.5 asks for XP from quests
+        // as well as kills; `xp_for_quest` was written for it and had no caller
+        // outside tests until 2026-08-12.
+        //
+        // `baseline` is |z| already reached when the job was accepted — depth context
+        // the row ALREADY carries and already serializes, so nothing had to grow to
+        // make this composite honest. Contracts have no deadline field, hence false.
+        if (rpg != nullptr)
+            award_xp(*rpg, xp_for_quest(objective_difficulty_e1(
+                               c.kind, c.subject, c.target,
+                               static_cast<int>(c.baseline), /*timed=*/false)));
     }
     return paid;
 }

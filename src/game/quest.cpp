@@ -333,7 +333,7 @@ int quest_grant_item(Inventory& inv, ItemId item, int count) {
 // ---------------------------------------------------------------------------
 
 std::int32_t quest_step(QuestLog& log, const NpcPool& pool, Inventory& inv,
-                        RunLedger& led, std::uint32_t stepMs) {
+                        RunLedger& led, std::uint32_t stepMs, RpgStats* rpg) {
     std::int32_t paid = 0;
 
     for (std::size_t i = 0; i < kQuestCount; ++i) {
@@ -444,6 +444,24 @@ std::int32_t quest_step(QuestLog& log, const NpcPool& pool, Inventory& inv,
             const int wanted = static_cast<int>(d.rewardCount);
             const int landed = quest_grant_item(inv, d.rewardItem, wanted);
             log.rewardItemsLost += static_cast<std::uint32_t>(wanted - landed);
+        }
+
+        // XP, through the ONE path that awards it ([rpg.cpp] award_xp, the only thing
+        // that levels anyone up). Manifest p.5 asks for XP from quests as well as
+        // kills; `xp_for_quest` was written for it and had no caller outside tests
+        // until 2026-08-12.
+        //
+        // Depth comes from the row's own AUTHORED BAND, not from where the player
+        // happens to be standing: `floorLo`/`floorHi` are what the designer said this
+        // job is about, and the deeper end is the one that characterises it. Using the
+        // live floor instead would make the same quest worth more because it was
+        // handed in downstairs, which is a farm, not a difficulty.
+        if (rpg != nullptr) {
+            const int lo = d.floorLo < 0 ? -d.floorLo : d.floorLo;
+            const int hi = d.floorHi < 0 ? -d.floorHi : d.floorHi;
+            award_xp(*rpg, xp_for_quest(objective_difficulty_e1(
+                               d.kind, d.subject, d.target, lo > hi ? lo : hi,
+                               /*timed=*/d.limitMs != 0)));
         }
     }
     return paid;

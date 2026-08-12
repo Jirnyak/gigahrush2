@@ -4528,11 +4528,20 @@ int main(int argc, char** argv) {
                 if (reg.valid(player))
                     if (const auto* nrc = reg.try_get<game::NpcRef>(player))
                         if (pool.valid(nrc->id)) {
+                            // The character sheet rides in so a completed job can pay
+                            // XP as well as roubles (manifest p.5). It is the LIVE
+                            // component, not `carriedRpg`: `award_xp` may level the
+                            // body up, and the refresh a few hundred lines below
+                            // (`carriedRpg = *rsLive`) then carries that forward, so
+                            // the order here is load-bearing rather than incidental.
+                            // Absent sheet -> nullptr -> money only, exactly as before.
+                            game::RpgStats* rsq = reg.try_get<game::RpgStats>(player);
                             contractPaid += game::contract_step(
-                                contracts, pool, pool.inventory(nrc->id), ledger);
+                                contracts, pool, pool.inventory(nrc->id), ledger, rsq);
                             questPaid += game::quest_step(
                                 quests, pool, pool.inventory(nrc->id), ledger,
-                                static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f));
+                                static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f),
+                                rsq);
                         }
                 // Eating and drinking sit beside healing and AFTER pickup_step, so a
                 // ration picked up this tick can be eaten this tick. Both refuse a

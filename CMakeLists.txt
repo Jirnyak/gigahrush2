@@ -802,7 +802,19 @@ if(GIGA_BUILD_TESTS)
     #   [budget] pool_bytes_per_live_row        13.0 B   limit       256.0  ok
     # The 306 B/row independently reproduces the figure npc_pool.h documents.
     # Proven to bite by mutation: a limit of 1.0 prints OVER and fails.
-        PASS_REGULAR_EXPRESSION "game_test: 235809 checks, 0 failures")
+    # 235809 -> 235826 (+17) on 2026-08-12: quests pay XP, and the difficulty they pay
+    # on is COMPOSED from context that already exists — depth, kind, subject, count,
+    # deadline — rather than authored in a column. Owner's clarification of
+    # ARCHITECTURE.md §Манифест the same day: the number of SYSTEMS is bounded, the
+    # number of INPUTS is not. Printed by the run, and the spread is the point:
+    #   [quest] cheapest  3x fetch, floors 0..2      2.0 ->  40 xp
+    #   [quest] dearest   8x hunt,  floors 0..2     12.3 -> 246 xp
+    #   [quest] contract  5x Polzun at |z|=50       15.9 -> 318 xp
+    #   [quest] scale: one Tvar kill at level 5 = 94 xp; level 2 costs 100
+    # The first version of the rarity term was a CONSTANT wearing a formula (linear
+    # against a 50,000 max when the median weight is 800), which doubled every payout
+    # and passed every single-input check; the spread assertion is what catches that.
+        PASS_REGULAR_EXPRESSION "game_test: 235826 checks, 0 failures")
 
 
 

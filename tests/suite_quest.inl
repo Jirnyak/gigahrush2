@@ -1039,9 +1039,158 @@ void round_trip() {
     CHECK(fnv_over(kQuestBriefs.data(), kQuestCount) != fp);
 }
 
+// A finished job pays XP as well as roubles, and the difficulty it pays on is
+// COMPOSED from context that already exists rather than authored in a column.
+//
+// The manifesto asks for XP from quests (p.5) and `xp_for_quest` was written for it
+// in 2026, then sat with zero callers outside tests until 2026-08-12 — the roadmap
+// filed it as "one line" when in fact the ARGUMENT had no source anywhere in the
+// tree. What follows pins both halves: that the composite reads the context it
+// claims to, and that the XP actually reaches the sheet.
+static void xp_for_finishing_a_job() {
+    // --- the composite responds to every input it names -----------------------
+    // Each pair changes ONE input and nothing else, so a term that silently stops
+    // being read fails here instead of quietly flattening the curve. This is the
+    // "extensible" half made checkable: a new term adds a pair, it does not rewrite
+    // the test.
+    const std::uint8_t kFetch = static_cast<std::uint8_t>(ObjectiveKind::Fetch);
+    const std::uint8_t kHunt = static_cast<std::uint8_t>(ObjectiveKind::Hunt);
+
+    // depth
+    CHECK(objective_difficulty_e1(kFetch, 1u, 1, 60, false) >
+          objective_difficulty_e1(kFetch, 1u, 1, 0, false));
+    // count
+    CHECK(objective_difficulty_e1(kFetch, 1u, 5, 0, false) >
+          objective_difficulty_e1(kFetch, 1u, 1, 0, false));
+    // a clock
+    CHECK(objective_difficulty_e1(kFetch, 1u, 1, 0, true) >
+          objective_difficulty_e1(kFetch, 1u, 1, 0, false));
+    // kind: hunting is dearer than fetching, all else equal
+    CHECK(objective_difficulty_e1(kHunt, 0u, 1, 0, false) >
+          objective_difficulty_e1(kFetch, 0u, 1, 0, false));
+    // never zero, never wrapped, whatever it is handed
+    CHECK(objective_difficulty_e1(kFetch, 0u, 0, 0, false) >= 1u);
+    // Absurd inputs CLAMP rather than wrap. The failure this guards is not a crash,
+    // it is a huge count coming back as a small difficulty through a uint16 wrap and
+    // paying almost nothing — a bug that looks like balance.
+    CHECK(objective_difficulty_e1(kHunt, 0xFFFFu, 1 << 20, 9999, true) == 65535u);
+
+    // Descend's `target` is a FLOOR LABEL, not a count — the double meaning
+    // [quest.h] warns about. Feeding it into the count term would make "descend to
+    // -50" read as fifty items. Excluded by kind, and pinned here because the bug
+    // would be invisible: it produces a plausible number, just a wrong one.
+    const std::uint8_t kDesc = static_cast<std::uint8_t>(ObjectiveKind::Descend);
+    CHECK(objective_difficulty_e1(kDesc, 0u, 50, 20, false) ==
+          objective_difficulty_e1(kDesc, 0u, 1, 20, false));
+
+    // --- calibration, printed so the numbers are arguable ---------------------
+    // AGENTS.md §Measure: a balance figure nobody can see is a balance figure
+    // nobody can dispute. These are real rows from data/quests.csv.
+    // The WHOLE authored table, cheapest and dearest, plus the deep synthetic hunt
+    // that only contracts produce — printing four consecutive rows told me nothing
+    // because the first four are all Fetch, and a calibration that shows one kind is
+    // not a calibration.
+    std::size_t lowIdx = 0, highIdx = 0;
+    std::uint16_t lowD = 0xFFFFu, highD = 0;
+    for (std::size_t i = 0; i < kQuestCount; ++i) {
+        const QuestDef& q = kQuestTable[i];
+        const int a = q.floorLo < 0 ? -q.floorLo : q.floorLo;
+        const int b = q.floorHi < 0 ? -q.floorHi : q.floorHi;
+        const std::uint16_t v = objective_difficulty_e1(q.kind, q.subject, q.target,
+                                                        a > b ? a : b, q.limitMs != 0);
+        if (v < lowD) { lowD = v; lowIdx = i; }
+        if (v > highD) { highD = v; highIdx = i; }
+    }
+    for (std::size_t i : {lowIdx, highIdx}) {
+        const QuestDef& q = kQuestTable[i];
+        const int a = q.floorLo < 0 ? -q.floorLo : q.floorLo;
+        const int b = q.floorHi < 0 ? -q.floorHi : q.floorHi;
+        const std::uint16_t v = objective_difficulty_e1(q.kind, q.subject, q.target,
+                                                        a > b ? a : b, q.limitMs != 0);
+        std::printf("[quest] %-8s row %2zu kind=%u target=%d band=%d..%d -> "
+                    "difficulty %5.1f -> %4u xp (reward %d rub)\n",
+                    i == lowIdx ? "cheapest" : "dearest", i,
+                    static_cast<unsigned>(q.kind), q.target,
+                    static_cast<int>(q.floorLo), static_cast<int>(q.floorHi),
+                    static_cast<double>(v) / 10.0, xp_for_quest(v), q.reward);
+    }
+    {
+        // What a deep contract hunt looks like: five of a heavy kind at |z| = 50.
+        const std::uint16_t deep = objective_difficulty_e1(
+            kHunt, static_cast<std::uint16_t>(MobKind::Polzun), 5, 50, false);
+        std::printf("[quest] %-8s        5x Polzun at |z|=50            -> "
+                    "difficulty %5.1f -> %4u xp\n",
+                    "contract", static_cast<double>(deep) / 10.0, xp_for_quest(deep));
+        // THE SPREAD IS THE ASSERTION. A composite whose hardest job pays like its
+        // easiest is a constant wearing five terms — which is exactly what the first
+        // version of the rarity term turned out to be, and it passed every
+        // single-input check above while doing it.
+        //
+        // Asserted against the CHEAPEST, not against the dearest authored row: the
+        // dearest is an 8-target hunt in a shallow band, and it legitimately rivals a
+        // 5-target hunt at |z| = 50. Requiring the deep contract to beat it would be
+        // asserting that depth outweighs count, which is a balance opinion nobody has
+        // taken. Range is the property; the ordering between those two is not.
+        CHECK(highD > lowD * 3u);   // the authored table itself is not flat
+        CHECK(deep > lowD * 4u);    // and procedural depth reaches past all of it
+    }
+    // One mid-tier kill, for scale — the OTHER xp source the manifesto names, so the
+    // ratio between them is visible instead of assumed.
+    std::printf("[quest] scale: one Tvar kill at level 5 = %u xp; level 2 costs %u\n",
+                xp_for_monster_kill(MobKind::Tvar, 5), xp_for_level(2));
+
+    // --- and the XP actually lands on the sheet -------------------------------
+    NpcPool pool;
+    pool.init();
+    QuestLog log{};
+    Inventory inv{};
+    RunLedger led{};
+    const NpcId giver = pool.spawn();
+
+    // The quest is resolved by WALKING THE TABLE, exactly as `the_chain` does, and
+    // not by `quest_offer`: an offer is a hash over the giver, so picking the job
+    // that way makes the test depend on which NpcId happened to come back. A content
+    // edit that reorders the CSV must not silently retarget this at another quest.
+    QuestId head = kInvalidQuest;
+    for (std::size_t i = 0; i < kQuestCount && head == kInvalidQuest; ++i)
+        if (kQuestTable[i].prereq == kInvalidQuest &&
+            static_cast<ObjectiveKind>(kQuestTable[i].kind) == ObjectiveKind::Fetch &&
+            kQuestTable[i].floorLo <= 0 && kQuestTable[i].floorHi >= 0)
+            head = static_cast<QuestId>(i + 1);
+    CHECK(head != kInvalidQuest);
+    CHECK(quest_accept(log, pool, head, giver, 0, led));
+    const QuestDef& d = quest_def(head);
+    for (int k = 0; k < d.target; ++k) (void)quest_grant_item(inv, d.subject, 1);
+
+    RpgStats sheet = fresh_rpg();
+    const std::uint32_t before = sheet.xp;
+    const std::uint8_t levelBefore = sheet.level;
+    CHECK(quest_step(log, pool, inv, led, static_cast<std::uint32_t>(kSimStepMs),
+                     &sheet) == d.reward);
+    CHECK(quest_state(log, head) == QuestState::Complete);
+    std::printf("[quest] xp on completion: %u -> %u (level %u -> %u)\n", before,
+                sheet.xp, static_cast<unsigned>(levelBefore),
+                static_cast<unsigned>(sheet.level));
+    // Non-zero, and not the whole of a level: a quest is worth a few kills, never a
+    // level, which is the ratio the manifesto's two XP sources imply.
+    CHECK(sheet.xp > before || sheet.level > levelBefore);
+
+    // WITHOUT a sheet the money half is byte-identical. The optional argument must
+    // buy an addition, never a change — every existing caller passes nullptr.
+    QuestLog log2{};
+    Inventory inv2{};
+    RunLedger led2{};
+    CHECK(quest_accept(log2, pool, head, giver, 0, led2));
+    for (int k = 0; k < d.target; ++k) (void)quest_grant_item(inv2, d.subject, 1);
+    CHECK(quest_step(log2, pool, inv2, led2,
+                     static_cast<std::uint32_t>(kSimStepMs)) == d.reward);
+    CHECK(led2.banked == led.banked);
+}
+
 } // namespace quest_test
 
 static void test_quest_all() {
+    quest_test::xp_for_finishing_a_job();
     quest_test::catalog_is_reachable();
     quest_test::offers();
     quest_test::the_chain();
