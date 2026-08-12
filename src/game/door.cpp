@@ -358,8 +358,19 @@ DoorTick door_step(Registry& reg, World& world, DoorSet& doors, LayerId layer,
         if (mr) {
             const MobDef& md = kMobTable[mr->kind];
             if (md.dmg > 0 && md.attackCdMs > 0) {
-                const float dps = static_cast<float>(md.dmg) * 1000.0f /
-                                  static_cast<float>(md.attackCdMs);
+                // LEVEL SCALES HERE TOO, on the same curve and for the same reason
+                // as in `mob_attack_step` ([combat.cpp]): a deep-floor elite is not
+                // only tougher, it hits harder — and a door is a thing it hits.
+                // This was the one place a mob's damage stayed at its table value:
+                // `mr` was already in hand one line above and simply was not asked
+                // for its level, so a level-11 monster chewed through a door at
+                // level-1 speed while hitting a body beside that door for 2.2x.
+                // The `md.dmg > 0` guard above already covers the PAUPSINA case the
+                // combat site documents (the HP curve floors at 1, which is wrong
+                // for damage), so no second guard is needed.
+                const float dps =
+                    static_cast<float>(mob_hp_at_level(md.dmg, mr->level)) * 1000.0f /
+                    static_cast<float>(md.attackCdMs);
                 // Accumulated in uint32 and drained to whole HP immediately, so a
                 // 4000 dmg/s outlier (Sculpture) cannot overflow the 16-bit
                 // remainder no matter how many of them press the same door.

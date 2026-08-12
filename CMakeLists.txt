@@ -784,7 +784,12 @@ if(GIGA_BUILD_TESTS)
     # agrees with itself however wrong the bit-packing is). Proven to bite by
     # mutation: dropping the reader's restore of `count` and of the unlock bytes
     # failed lines 308/315/318 plus the byte-for-byte re-serialize at 438.
-        PASS_REGULAR_EXPRESSION "game_test: 235641 checks, 0 failures")
+    # 235641 -> 235648 (+7) on 2026-08-12: suite_doors.inl gained a level-11 chipping
+    # case. Every mob in every door case was level 1, and mob_hp_at_level is the
+    # IDENTITY at level 1, so the suite was structurally blind to whether door damage
+    # consulted the level at all — and it did not, while mob_attack_step scaled the
+    # same number. Proven to bite: restoring the unscaled dps fails 3 of the 7.
+        PASS_REGULAR_EXPRESSION "game_test: 235648 checks, 0 failures")
 
 
 

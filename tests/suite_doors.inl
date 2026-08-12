@@ -437,6 +437,63 @@ static void test_shut_door_versus_monsters() {
     CHECK(doors.shut == 0);
     const DoorTick idle = door_step(reg, w, doors, layer, dt, 9999u);
     CHECK(idle.pressing == 0 && idle.opened == 0 && idle.broken == 0);
+
+    // --- LEVEL SCALES THE CHIPPING, and nothing saw that until 2026-08-12 ------
+    // Every mob in every door case above is level 1, and `mob_hp_at_level` is the
+    // IDENTITY at level 1 — so this suite was structurally blind to whether door
+    // damage consulted the level at all. It did not: door.cpp read `md.dmg` straight
+    // off the table while `mob_attack_step` scaled the same number on the HP curve,
+    // so a level-11 monster hit a BODY for 2.2x and the DOOR beside that body for
+    // 1.0x. A suite that only ever exercises the identity case cannot fail on a
+    // missing multiplier, which is why this block picks a level far from 1.
+    //
+    // Placed last, and picking a door none of the cases above touched, so the
+    // narrative order of this test is unchanged — an earlier draft inserted it after
+    // the first break and silently stole the door the Paupsina case needs.
+    // Four doors are already spoken for and pick_ground_door only takes three
+    // skips, so the exclusion is spelled out here rather than by widening a helper
+    // the rest of the file is happy with.
+    std::uint32_t pickL = kNoDoor;
+    for (std::uint32_t i = 0; i < doors.doors.size(); ++i)
+        if (i != pick && i != pick2 && i != pick3 && i != pick4 &&
+            doors.doors[i].cz == floor_ground_z() &&
+            doors.doors[i].axis == 0) {
+            pickL = i;
+            break;
+        }
+    CHECK(pickL != kNoDoor);
+    const Door probeL = doors.doors[pickL];
+    CHECK(probeL.state != static_cast<std::uint8_t>(DoorState::Broken));
+    Entity elite = reg.create();
+    reg.emplace<Transform>(
+        elite, Transform{vec3{(static_cast<float>(probeL.cx) + 1.5f) * kCellSize,
+                              (static_cast<float>(probeL.cy) + 0.5f) * kCellSize,
+                              (static_cast<float>(probeL.cz) + 0.5f) * kCellSize},
+                         layer});
+    reg.emplace<Velocity>(elite, Velocity{});
+    constexpr std::uint8_t kElite = 11;
+    reg.emplace<MobRef>(elite, MobRef{static_cast<std::uint8_t>(kind), kElite,
+                                      static_cast<std::int16_t>(md.hp),
+                                      static_cast<std::int16_t>(md.hp)});
+    CHECK(door_set(w, doors, reg, layer, pickL, true));
+    const float dpsL = static_cast<float>(mob_hp_at_level(md.dmg, kElite)) *
+                       1000.0f / static_cast<float>(md.attackCdMs);
+    const int expectL = static_cast<int>(static_cast<float>(kDoorHp) / dpsL / dt);
+    int ticksL = 0;
+    for (; ticksL < expectTicks * 3 + 60; ++ticksL)
+        if (door_step(reg, w, doors, layer, dt,
+                      static_cast<std::uint64_t>(ticksL))
+                .broken)
+            break;
+    // The RATE, in the same 2% band the level-1 case above is held to.
+    CHECK(ticksL > expectL - expectL / 50 - 2);
+    CHECK(ticksL < expectL + expectL / 50 + 2);
+    // And the property stated directly: an elite is STRICTLY faster than a level-1
+    // of the same kind. mob_hp_at_level(x, 11) = 2.2x, so this is a wide margin and
+    // not a coin flip on rounding.
+    CHECK(ticksL < ticks);
+    CHECK(static_cast<float>(ticks) / static_cast<float>(ticksL) > 2.0f);
+    reg.destroy(elite);
 }
 
 // inventory_has_keycard: a keycard of the required tier (or better) grants
