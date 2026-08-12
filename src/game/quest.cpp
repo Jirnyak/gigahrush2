@@ -1,6 +1,6 @@
 #include "game/quest.h"
 #include "game/item_table.h"
-#include "game/rpg.h"
+#include "game/faction_relations.h"
 
 #include <cstdio>
 #include <cstring>
@@ -335,7 +335,7 @@ int quest_grant_item(Inventory& inv, ItemId item, int count) {
 // ---------------------------------------------------------------------------
 
 std::int32_t quest_step(QuestLog& log, const NpcPool& pool, Inventory& inv,
-                        RunLedger& led, std::uint32_t stepMs, RpgStats* rpg) {
+                        RunLedger& led, std::uint32_t stepMs, FactionRelations* rel) {
     std::int32_t paid = 0;
 
     for (std::size_t i = 0; i < kQuestCount; ++i) {
@@ -440,9 +440,9 @@ std::int32_t quest_step(QuestLog& log, const NpcPool& pool, Inventory& inv,
         ++log.completed;
         paid += d.reward;
         
-        if (rpg) {
-            const std::uint32_t xp = xp_for_quest(10);
-            award_xp(*rpg, xp);
+        if (rel) {
+            std::uint8_t giverRow = body_row(pool, npc_handle_id(p.giver));
+            rel->add_mutual(kFactionPlayerRow, giverRow, 3);
         }
 
         // The item half of the reward goes into the BAG, not into the bank — it is a

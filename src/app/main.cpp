@@ -530,7 +530,11 @@ static void DrawVendorWindowUI(bool* p_open, game::Inventory& inv, game::RunLedg
             ImGui::SliderInt("Quantity to Buy", &buyQty, 1, 50);
 
             if (ImGui::Button("Quick Resupply Package (600 rub)", ImVec2(240, 28))) {
-                outSpent += game::vendor_resupply(inv, ledger, 600);
+                std::int32_t spent = game::vendor_resupply(inv, ledger, 600);
+                if (spent > 0) {
+                    outSpent += spent;
+                    factionRel.add_mutual(game::kFactionPlayerRow, static_cast<std::uint8_t>(game::dominant_faction(pool, currentFloor)), +1);
+                }
             }
             ImGui::SameLine();
 
@@ -539,7 +543,11 @@ static void DrawVendorWindowUI(bool* p_open, game::Inventory& inv, game::RunLedg
                 char ammoBtnText[128];
                 snprintf(ammoBtnText, sizeof(ammoBtnText), "Buy Ammo for Gun (%s)", game::item_name(ammoForGun));
                 if (ImGui::Button(ammoBtnText, ImVec2(240, 28))) {
-                    outSpent += (game::vendor_buy(inv, ledger, ammoForGun, buyQty) * game::vendor_buy_price(ammoForGun));
+                    std::uint32_t bought = game::vendor_buy(inv, ledger, ammoForGun, buyQty);
+                    if (bought > 0) {
+                        outSpent += (bought * game::vendor_buy_price(ammoForGun));
+                        factionRel.add_mutual(game::kFactionPlayerRow, static_cast<std::uint8_t>(game::dominant_faction(pool, currentFloor)), +1);
+                    }
                 }
             }
 
@@ -576,7 +584,10 @@ static void DrawVendorWindowUI(bool* p_open, game::Inventory& inv, game::RunLedg
                     if (!canAfford) ImGui::BeginDisabled();
                     if (ImGui::Button(buyBtnLabel)) {
                         std::uint32_t bought = game::vendor_buy(inv, ledger, id, static_cast<std::uint32_t>(buyQty));
-                        outSpent += (bought * price);
+                        if (bought > 0) {
+                            outSpent += (bought * price);
+                            factionRel.add_mutual(game::kFactionPlayerRow, static_cast<std::uint8_t>(game::dominant_faction(pool, currentFloor)), +1);
+                        }
                     }
                     if (!canAfford) ImGui::EndDisabled();
                 }
@@ -1532,6 +1543,16 @@ Entity possess_nearest_survivor(Registry& reg, game::NpcPool& pool, LayerId laye
 
 } // namespace
 
+void on_floor_arrival(game::Samosbor& samosbor, core::Rng& sbRng,
+                      game::VendorKind& vendorKind, const game::NpcPool& pool, int currentFloor,
+                      char* rumourLine, std::uint64_t& rumourAt, game::NoiseField& noiseField) {
+    samosbor = game::samosbor_new_game(sbRng);
+    vendorKind = game::vendor_kind_for(game::dominant_faction(pool, currentFloor));
+    rumourLine[0] = 0;
+    rumourAt = 0;
+    game::noise_clear(noiseField);
+}
+
 int main(int argc, char** argv) {
     // --shot FILE [--frames N] [--ride N]: render, capture, exit.
     //
@@ -2449,9 +2470,6 @@ int main(int argc, char** argv) {
         player = ride.player;
         currentFloor = ride.floor;
 
-        {
-            vendorKind = game::vendor_kind_for(game::dominant_faction(pool, currentFloor));
-        }
         // §24 discovery: landing on (or via) a lattice hub unlocks THIS floor
         // for the fast-travel network. Boarding the cabin is the discover act.
         if (landHub >= 0)
@@ -2460,23 +2478,8 @@ int main(int argc, char** argv) {
         // bidirectional: the roof is as far from safety as the basement.
         // [extraction.h]
         game::record_floor(ledger, currentFloor);
-        // A new floor gets its own clock at its own depth. Not carried over:
-        // the cooldown is a function of |z|, so inheriting a 30-minute surface
-        // gap into the void would silently cancel the entire depth gradient.
-        samosbor = game::samosbor_new_game(sbRng);
-        // A rumour is about a FLOOR, so carrying one across a ride makes it
-        // false. Caught on a capture: the line read "самосбор здесь часто
-        // (17.2%)" while the HUD's own duty for the floor underfoot said 35.0%
-        // — the number was true of the floor the speaker was standing on, two
-        // rides ago. The whole premise of this system is that a rumour is
-        // checkable, so a stale one is worse than none. [rumour.h]
-        rumourLine[0] = 0;
-        rumourAt = 0;
-        // A gunshot on the floor you just left must not be audible to the crowd
-        // on the one you arrived at. The streamer RECYCLES LayerId slots, so a
-        // surviving record would not merely be stale — it would match the new
-        // floor's layer id and be heard there. [noise.h]
-        game::noise_clear(noiseField);
+        
+        on_floor_arrival(samosbor, sbRng, vendorKind, pool, currentFloor, rumourLine, rumourAt, noiseField);
         currentSpec = spec_for_floor(currentFloor);
         // Mobs belong to the floor, not to the player: the departed layer's are
         // destroyed and the arrival's are spawned fresh (deterministically, so
@@ -4410,11 +4413,7 @@ int main(int argc, char** argv) {
                             playerStatus = runState.status;
                             // Per-floor clocks and channels reset, same as any
                             // arrival.
-                            samosbor = game::samosbor_new_game(sbRng);
-                            vendorKind = game::vendor_kind_for(game::dominant_faction(pool, currentFloor));
-                            rumourLine[0] = 0;
-                            rumourAt = 0;
-                            game::noise_clear(noiseField);
+                            on_floor_arrival(samosbor, sbRng, vendorKind, pool, currentFloor, rumourLine, rumourAt, noiseField);
                             // Arrival order is load-path law: containers before
                             // re-open, mobs, floor file, doors, freeze, bake,
                             // then placement. [save.h]
@@ -4593,7 +4592,7 @@ int main(int argc, char** argv) {
                             questPaid += game::quest_step(
                                 quests, pool, pool.inventory(nrc->id), ledger,
                                 static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f),
-                                reg.try_get<game::RpgStats>(player), &factionRel);
+                                &factionRel);
                         }
                 // Eating and drinking sit beside healing and AFTER pickup_step, so a
                 // ration picked up this tick can be eaten this tick. Both refuse a
@@ -6051,11 +6050,11 @@ int main(int argc, char** argv) {
                         // about, hit again by promoting a display variable to a source
                         // of truth. Both sites now set it.
                         currentSpec = spec_for_floor(currentFloor);
-                        samosbor = game::samosbor_new_game(sbRng);
                         aim_player(reg, player);
                         LayerId nl = reg.get<Transform>(player).layer;
                         activeLayer = nl;
-                        vendorKind = game::vendor_kind_for(game::dominant_faction(pool, currentFloor));
+                        
+                        on_floor_arrival(samosbor, sbRng, vendorKind, pool, currentFloor, rumourLine, rumourAt, noiseField);
                         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
                         refresh_floor_containers(reg, stack.layer(nl),
                                                  currentFloor, nl);
