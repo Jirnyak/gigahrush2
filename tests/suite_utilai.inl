@@ -345,7 +345,7 @@ static void test_utilai_all() {
             for (int t = 0; t < kTicks; ++t) {
                 danger.fill((t % 2) == 0 ? kCalmDanger : kScaryDanger);
                 const AiTick tick =
-                    ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+                    ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg);
                 CHECK(tick.considered == static_cast<std::uint32_t>(kBodies));
                 replans += tick.replanned;
                 now += static_cast<double>(kSimDt);
@@ -468,7 +468,7 @@ static void test_utilai_all() {
         for (int t = 0; t < kTicks; ++t) {
             arm_sentinels(reg, all);
             const AiTick tick =
-                ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+                ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg);
             CHECK(tick.considered == static_cast<std::uint32_t>(2 * kGroup));
             CHECK(tick.aiOwned + tick.wanderOwned == tick.considered);
 
@@ -526,7 +526,7 @@ static void test_utilai_all() {
         // Steering direction: group B flees UP-field, i.e. down the danger
         // gradient. The ramp rises with +x, so a fleeing body must move in -x.
         arm_sentinels(reg, all);
-        ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+        ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg);
         for (Entity e : groupB) {
             const Velocity& v = reg.get<Velocity>(e);
             CHECK(v.v.x < 0.0f);
@@ -599,7 +599,7 @@ static void test_utilai_all() {
         double now = 0.0;
         for (int t = 0; t < 50; ++t) {
             const AiTick tick =
-                ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt);
+                ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt);
             CHECK(tick.considered == 0);
             CHECK(tick.replanned == 0);
             CHECK(tick.aiOwned == 0);
@@ -645,7 +645,7 @@ static void test_utilai_all() {
         cfg.enabled = true;
 
         double now = 0.0;
-        ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+        ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg);
         CHECK(reg.get<AiBrain>(e).currentIntent == IntentFlee);
         CHECK(ai_owns_motion(reg, e));
 
@@ -656,7 +656,7 @@ static void test_utilai_all() {
         danger.fill(90.0f);
         now += static_cast<double>(kSimDt);
         reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
-        const AiTick t2 = ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+        const AiTick t2 = ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg);
         CHECK(reg.get<AiBrain>(e).currentIntent == IntentFlee);
         CHECK(!ai_owns_motion(reg, e));
         CHECK(t2.wanderOwned == 1);
@@ -673,14 +673,14 @@ static void test_utilai_all() {
                 for (int z = 0; z < kMacroDim; ++z)
                     danger.at(x, y, z) = static_cast<float>(x * 2);
         now += static_cast<double>(kSimDt);
-        ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+        ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg);
         CHECK(ai_owns_motion(reg, e));
 
         reg.emplace<CameraTag>(e, CameraTag{});
         reg.emplace<Controller>(e, Controller{7.0f, {0, 0, 0}, false});
         now += static_cast<double>(kSimDt);
         reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
-        const AiTick t3 = ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+        const AiTick t3 = ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg);
         CHECK(!ai_owns_motion(reg, e));
         CHECK(t3.considered == 0);   // out of scope entirely once possessed
         CHECK(is_sentinel(reg.get<Velocity>(e)));
@@ -691,7 +691,7 @@ static void test_utilai_all() {
         reg.remove<CameraTag>(e);
         reg.remove<Controller>(e);
         now += static_cast<double>(kSimDt);
-        ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+        ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg);
         CHECK(ai_owns_motion(reg, e));
         CHECK(ai_release(reg, kLayer) == 1u);
         CHECK(!ai_owns_motion(reg, e));
@@ -732,7 +732,7 @@ static void test_utilai_all() {
             cfg.enabled = true;
             double now = 0.0;
             for (int t = 0; t < 600; ++t) {   // ~4.8 s: several full re-plan cycles
-                ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+                ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg);
                 now += static_cast<double>(kSimDt);
             }
             for (Entity e : bodies) {
@@ -1027,7 +1027,7 @@ static void test_utilai_all() {
             double now = 0.0;
             danger.fill(100.0f);   // unitish -> 1.0: maximum severity, worth filing
             for (int t = 0; t < kHot; ++t) {
-                const AiTick tick = ai_step(reg, pool, &danger, grid, kLayer, now,
+                const AiTick tick = ai_step(reg, pool, &danger, nullptr, grid, kLayer, now,
                                             kSimDt, cfg, memPtr);
                 CHECK(tick.considered == static_cast<std::uint32_t>(kBodies));
                 now += static_cast<double>(kSimDt);
@@ -1054,7 +1054,7 @@ static void test_utilai_all() {
             // --- the field evaporates ---
             danger.fill(0.0f);
             for (int t = 0; t < kCold; ++t) {
-                ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg, memPtr);
+                ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg, memPtr);
                 now += static_cast<double>(kSimDt);
             }
             for (int i = 0; i < kBodies; ++i) {
@@ -1243,7 +1243,7 @@ static void test_utilai_all() {
 
         // ---- one tick, the whole arbitration table ------------------------
         arm_sentinels(reg, all);
-        const AiTick t1 = ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg, &mem);
+        const AiTick t1 = ai_step(reg, pool, &danger, nullptr, grid, kLayer, 0.0, kSimDt, cfg, &mem);
         CHECK(t1.considered == static_cast<std::uint32_t>(3 * kGroup));
         CHECK(t1.aiOwned + t1.wanderOwned == t1.considered);
         CHECK(t1.wanderOwned == static_cast<std::uint32_t>(kGroup));     // A
@@ -1285,7 +1285,7 @@ static void test_utilai_all() {
             CHECK(ai_init(reg2, kLayer) == static_cast<std::uint32_t>(kGroup));
             arm_sentinels(reg2, cOnly);
             const AiTick t0 =
-                ai_step(reg2, pool2, &danger, grid, kLayer, 0.0, kSimDt, cfg, nullptr);
+                ai_step(reg2, pool2, &danger, nullptr, grid, kLayer, 0.0, kSimDt, cfg, nullptr);
             CHECK(t0.aiOwned == 0u);
             CHECK(t0.wanderOwned == static_cast<std::uint32_t>(kGroup));
             CHECK(t0.memoryFled == 0u);
@@ -1303,7 +1303,7 @@ static void test_utilai_all() {
         for (int t = 0; t < kTicks; ++t) {
             arm_sentinels(reg, all);
             const AiTick tick =
-                ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg, &mem);
+                ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg, &mem);
             CHECK(tick.aiOwned + tick.wanderOwned == tick.considered);
             for (std::size_t i = 0; i < all.size(); ++i) {
                 aiWrote[i] = !is_sentinel(reg.get<Velocity>(all[i]));
@@ -1434,7 +1434,7 @@ static void test_utilai_all() {
                     hp = static_cast<std::int16_t>(hp - 25);
                 }
                 const AiTick tick =
-                    ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg, &mem);
+                    ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg, &mem);
                 recalls += tick.recalled;
                 replans += tick.replanned;
                 now += static_cast<double>(kSimDt);
@@ -1502,7 +1502,7 @@ static void test_utilai_all() {
 
         AiConfig cfg;
         cfg.enabled = true;
-        ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg, &mem);
+        ai_step(reg, pool, &danger, nullptr, grid, kLayer, 0.0, kSimDt, cfg, &mem);
         CHECK(reg.get<AiBrain>(e).currentIntent == IntentFlee);
         const std::uint32_t before = digest_memory(mem, id);
         const std::uint16_t decisionsBefore = reg.get<AiBrain>(e).decisions;
@@ -1520,7 +1520,7 @@ static void test_utilai_all() {
         CHECK(digest_memory(mem, id) == before);    // ...but the memory is intact
 
         // And it still decides the same way on the other side of the ride.
-        const AiTick after = ai_step(reg, pool, &danger, grid, kLayer,
+        const AiTick after = ai_step(reg, pool, &danger, nullptr, grid, kLayer,
                                      static_cast<double>(kSimDt), kSimDt, cfg, &mem);
         CHECK(after.recalled == 1u);
         CHECK(reg.get<AiBrain>(e).currentIntent == IntentFlee);
@@ -1560,7 +1560,7 @@ static void test_utilai_all() {
         AiConfig cfg;
         cfg.enabled = true;
         MacroGrid grid;
-        ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg);
+        ai_step(reg, pool, &danger, nullptr, grid, kLayer, 0.0, kSimDt, cfg);
 
         const float citPanic = faction_traits(static_cast<std::uint16_t>(Faction::Citizens)).panic;
         const float expectedEmit = kPanicEmit * kSimDt * citPanic;
@@ -1628,7 +1628,7 @@ static void test_utilai_all() {
             MacroGrid grid;
 
             // Calling ai_step with danger = nullptr must NOT dereference null or crash
-            const AiTick tick = ai_step(reg, pool, nullptr, grid, kLayer, 0.0, kSimDt, cfg);
+            const AiTick tick = ai_step(reg, pool, nullptr, nullptr, grid, kLayer, 0.0, kSimDt, cfg);
             CHECK(tick.considered == 1u);
         }
 
@@ -1668,7 +1668,7 @@ static void test_utilai_all() {
                 ai_init(reg, kLayer);
                 reg.get<AiBrain>(e).currentIntent = intent;
                 const float before = danger.at(30, 30, 1);
-                ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg);
+                ai_step(reg, pool, &danger, nullptr, grid, kLayer, 0.0, kSimDt, cfg);
                 const float after = danger.at(30, 30, 1);
                 CHECK(after > before);
             }
@@ -1684,7 +1684,7 @@ static void test_utilai_all() {
                 ai_init(reg, kLayer);
                 reg.get<AiBrain>(e).currentIntent = intent;
                 const float before = danger.at(40, 40, 1);
-                ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg);
+                ai_step(reg, pool, &danger, nullptr, grid, kLayer, 0.0, kSimDt, cfg);
                 const float after = danger.at(40, 40, 1);
                 CHECK(after == before);
             }

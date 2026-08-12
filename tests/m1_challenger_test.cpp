@@ -133,7 +133,7 @@ static void test_zero_allocations_and_rtti() {
     cfg.rethinkSpreadSec = 0.0f;
 
     for (int step = 0; step < 10; ++step) {
-        ai_step(reg, pool, &danger, grid, kLayer, static_cast<double>(step) * kSimDt, kSimDt, cfg, &mem);
+        ai_step(reg, pool, &danger, nullptr, grid, kLayer, static_cast<double>(step) * kSimDt, kSimDt, cfg, &mem);
         ai_patrol_step(reg, coarse, fine, kLayer, kSimDt);
     }
 
@@ -147,7 +147,7 @@ static void test_zero_allocations_and_rtti() {
         const double now = static_cast<double>(step) * kSimDt;
 
         // 1. ai_step execution
-        ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg, &mem);
+        ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg, &mem);
 
         // 2. ai_patrol_step execution
         ai_patrol_step(reg, coarse, fine, kLayer, kSimDt);
@@ -251,7 +251,7 @@ static void test_role_scoring_math() {
 
     AiConfig cfg;
     cfg.enabled = true;
-    ai_step(reg, pool, nullptr, grid, 0, 0.0, kSimDt, cfg);
+    ai_step(reg, pool, nullptr, nullptr, grid, 0, 0.0, kSimDt, cfg);
 
     // Perception is assembled locally in ai_step; nearbyWounded01 is not set from any proximity query
     std::printf("  Perception assembly in ai_step: nearbyWounded01 field is defined in Perception struct but unpopulated by ai_step\n");
@@ -333,7 +333,7 @@ static void test_intent_is_emergency_and_panic() {
     cfg.enabled = true;
     cfg.memory = false;
 
-    ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg);
+    ai_step(reg, pool, &danger, nullptr, grid, kLayer, 0.0, kSimDt, cfg);
 
     const float dangerAfterEmg = danger.at(15, 15, 0);
     const float citPanic = faction_traits(static_cast<std::uint16_t>(Faction::Citizens)).panic;
@@ -348,7 +348,7 @@ static void test_intent_is_emergency_and_panic() {
     brainEmg.currentIntent = IntentWork; // Non-emergency!
     const float dangerBeforeWork = danger.at(15, 15, 0);
 
-    ai_step(reg, pool, &danger, grid, kLayer, 1.0, kSimDt, cfg);
+    ai_step(reg, pool, &danger, nullptr, grid, kLayer, 1.0, kSimDt, cfg);
 
     const float dangerAfterWork = danger.at(15, 15, 0);
     std::printf("  Panic Publish (Non-Emergency IntentWork): before=%.4f, after=%.4f\n",

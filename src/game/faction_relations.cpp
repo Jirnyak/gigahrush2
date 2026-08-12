@@ -278,7 +278,7 @@ std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
             const float effRange = static_cast<float>(rdef->projSpeedMmps) * 0.001f * kCellSize * 0.75f;
             if (d2 <= effRange * effRange) {
                 Velocity& vel = view.get<Velocity>(e);
-                vel.v[gf.tanA] = 0.0f; vel.v[gf.tanB] = 0.0f;
+                (&vel.v.x)[gf.tanA] = 0.0f; (&vel.v.x)[gf.tanB] = 0.0f;
 
                 std::uint32_t visitsPerShot = static_cast<std::uint32_t>(rdef->cooldownMs) /
                     (kFeudPeriod * static_cast<std::uint32_t>(kSimStepMs));

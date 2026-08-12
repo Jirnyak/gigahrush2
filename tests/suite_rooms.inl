@@ -399,7 +399,7 @@ ErrandRun rooms_run_errand(LevelStack& stack, LayerId layer,
     cfg.enabled = true;
     for (int t = 0; t < ticks; ++t) {
         const AiTick a =
-            ai_step(reg, pool, nullptr, w.grid(), layer,
+            ai_step(reg, pool, nullptr, nullptr, w.grid(), layer,
                     static_cast<double>(t) * static_cast<double>(kSimDt), kSimDt,
                     cfg, nullptr, nullptr, nullptr, zones);
         if (a.aiOwned > out.owned) out.owned = a.aiOwned;

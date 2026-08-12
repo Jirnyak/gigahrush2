@@ -249,7 +249,7 @@ static void test_faction2_all() {
         CHECK(quiet != 0);
         reg.get<Velocity>(wld).v = vec3{0, 0, 0};
         for (std::uint64_t t = quiet; t < quiet + kFeudPeriod * 4u; ++t)
-            faction_feud_step(reg, pool, base, kLayer, t);
+            faction_feud_step(reg, pool, base, kLayer, t, giga::GravityField{});
         CHECK(pool.hp(plyId) == 100);
         CHECK(reg.get<Velocity>(wld).v.x == 0.0f);
 
@@ -262,7 +262,7 @@ static void test_faction2_all() {
         CHECK(open != 0);
         reg.get<Transform>(wld).pos = vec3{home.x - 5.0f, home.y, home.z};
         for (std::uint64_t t = open; t < open + kFeudPeriod * 2u; ++t)
-            faction_feud_step(reg, pool, base, kLayer, t);
+            faction_feud_step(reg, pool, base, kLayer, t, giga::GravityField{});
         CHECK(reg.get<Velocity>(wld).v.x > 0.0f);      // toward the player, not away
         CHECK(reg.get<Velocity>(wld).v.y == 0.0f);     // the player is straight ahead
         CHECK(pool.hp(plyId) == 100);                  // walking is not hitting
@@ -273,7 +273,7 @@ static void test_faction2_all() {
         reg.get<Transform>(wld).pos = vec3{home.x + 1.0f, home.y, home.z};
         std::uint32_t hits = 0;
         for (std::uint64_t t = open; t < open + 400u; ++t)
-            hits += faction_feud_step(reg, pool, base, kLayer, t);
+            hits += faction_feud_step(reg, pool, base, kLayer, t, giga::GravityField{});
         CHECK(hits > 0);
         CHECK(pool.hp(plyId) < 100);
         // Standing and fighting, not shoving: in reach the velocity is zeroed, or a
@@ -285,7 +285,7 @@ static void test_faction2_all() {
         // finalize_deaths handles it exactly like every other death in the game.
         pool.hp(plyId) = 2;
         for (std::uint64_t t = open; t < open + 400u; ++t)
-            faction_feud_step(reg, pool, base, kLayer, t);
+            faction_feud_step(reg, pool, base, kLayer, t, giga::GravityField{});
         CHECK(pool.hp(plyId) == 0);
         CHECK(reg.all_of<Dead>(player));
     }
@@ -316,7 +316,7 @@ static void test_faction2_all() {
         // One whole licence window: ~62 swings at the unarmed cadence, i.e. 186
         // damage offered against a 100 HP body.
         for (std::uint64_t t = open; t < open + kFeudEpochTicks; ++t)
-            faction_feud_step(reg, pool, base, kLayer, t);
+            faction_feud_step(reg, pool, base, kLayer, t, giga::GravityField{});
         // Derived from the constant, not spelled as 50: a tuner who moves
         // kFeudMinHpPct should see this pass, and see section 4's lethality assertion
         // keep working, rather than see an unrelated literal fail.
@@ -330,7 +330,7 @@ static void test_faction2_all() {
         make_body(reg, pool, Faction::Citizens,
                   vec3{home.x - 0.5f, home.y, home.z}, 2, frailId);
         for (std::uint64_t t = open; t < open + kFeudEpochTicks; ++t)
-            faction_feud_step(reg, pool, base, kLayer, t);
+            faction_feud_step(reg, pool, base, kLayer, t, giga::GravityField{});
         CHECK(pool.hp(frailId) == 1);
         CHECK(pool.alive(frailId));
     }
@@ -351,7 +351,7 @@ static void test_faction2_all() {
         make_body(calm, cpool, Faction::Citizens, home, 100, a);
         make_body(calm, cpool, Faction::Liquidators, home, 100, b);
         for (std::uint64_t t = 0; t < kFeudEpochTicks * 2u; ++t)
-            faction_feud_step(calm, cpool, base, kLayer, t);
+            faction_feud_step(calm, cpool, base, kLayer, t, giga::GravityField{});
         CHECK(cpool.hp(a) == 100);
         CHECK(cpool.hp(b) == 100);
     }

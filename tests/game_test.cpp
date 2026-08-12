@@ -1572,7 +1572,7 @@ static void test_wander_moves_the_crowd() {
     // steering passes in this window.
     const float dt = kSimDt;
     for (std::uint64_t t = 0; t < static_cast<std::uint64_t>(kSimHz); ++t) {
-        wander_step(reg, stack.layer(layer).grid(), pool, coarse, fine, layer, t, stack.layer(layer).gravity());
+        wander_step(reg, stack.layer(layer).grid(), pool, coarse, fine, layer, t);
         physics_step(reg, stack, dt);
     }
 
@@ -1596,7 +1596,7 @@ static void test_wander_moves_the_crowd() {
     // Steering must be a pure read of the bake: it may not mutate the nav data,
     // or a second floor visit would behave differently from the first.
     nav::CoarseGraph after = coarse;
-    wander_step(reg, stack.layer(layer).grid(), pool, coarse, fine, layer, 999u, stack.layer(layer).gravity());
+    wander_step(reg, stack.layer(layer).grid(), pool, coarse, fine, layer, 999u);
     CHECK(std::memcmp(&after, &coarse, sizeof(coarse)) == 0);
 
     // Immobile mobs are never given a target: a spore carpet must not walk.
