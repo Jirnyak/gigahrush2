@@ -2566,7 +2566,29 @@ int main(int argc, char** argv) {
             if (ev.type != game::EventType::NpcDied) continue;
             if (ev.type == game::EventType::NpcDied) {
                 // `b` is the mob kind, 0xFF when the dead thing was not a monster.
-                if (ev.b != 0xFFu) {
+                //
+                // AND `c` IS THE KILLER, which this site ignored until 2026-08-12.
+                // A Hunt job counted ANY monster death on the floor — one killed by
+                // another monster, by a hazard, by a fall. [problems.md] §40 filed
+                // that as sloppiness because it was nearly unobservable: monsters
+                // could not hit each other, so almost every mob death really was the
+                // player's doing.
+                //
+                // Removing `Projectile::team` the same day turned it into an
+                // EXPLOIT. Monsters now shoot each other as a matter of course, so a
+                // contract for eight Krysnozhka completes while the player stands
+                // still and watches. That is the friendly-fire change handing the
+                // player a reward system it was never meant to touch — and it is the
+                // reason this is fixed in the same session rather than filed.
+                //
+                // The player is the CAMERA HOLDER, not a stored id: "the player is
+                // not special, it is whoever holds the components" ([AGENTS.md]), so
+                // a possessed body earns its own kills without a second rule.
+                // XP already worked this way — `finalize_deaths` credits `d.killer`
+                // — which is exactly why the two disagreed and only this one paid out
+                // for a death across the room.
+                if (ev.b != 0xFFu &&
+                    ev.c == static_cast<std::uint32_t>(entt::to_integral(player))) {
                     game::contract_on_kill(contracts, static_cast<std::uint8_t>(ev.b));
                     game::quest_on_kill(quests, static_cast<std::uint8_t>(ev.b));
                 }
