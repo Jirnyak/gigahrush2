@@ -18,6 +18,7 @@
 #include "world/macro_grid.h" // MacroGrid (open/wall test inside the gradient)
 #include "world/types.h"      // wrap_macro, kCellSize, kMacroDim
 #include "world/world.h"      // World — door_nearest_shelter needs const World&
+#include "world/gravity.h"
 #include "world/lattice.h"    // LatticeNode, lattice_unpack, lattice_coord
 #include "world/nav.h"        // route_step, kFlowArrived
 #include "core/rng.h"         // hash3
@@ -591,7 +592,7 @@ void panic_publish_step(Field<float>& danger, const vec3& pos, float dt, float p
 // ai_step — arbitration first, steering second. See ai.h for the contract, and
 // the file header for the ownership rule this enforces.
 // --------------------------------------------------------------------------
-AiTick ai_step(Registry& reg, NpcPool& pool, Field<float>* danger,
+AiTick ai_step(Registry& reg, NpcPool& pool, Field<float>* danger, Field<float>* rally,
                const MacroGrid& grid, LayerId layer, double now, float dt,
                const AiConfig& cfg, AiMemory* mem,
                const DoorSet* doors, const World* world,
@@ -680,6 +681,47 @@ AiTick ai_step(Registry& reg, NpcPool& pool, Field<float>* danger,
         }
         brain.lastHp = hpNow;
 
+        const std::uint8_t roleId = pool.role(id);
+        float myNearbyWounded01 = 0.0f;
+
+        // -- Medic: heal nearby wounded and compute nearbyWounded01 --
+        if (roleId == static_cast<std::uint8_t>(RoleId::Medic)) {
+            float woundedCount = 0.0f;
+            float totalCount = 0.0f;
+            auto trView = reg.view<const Transform, const NpcRef>();
+            for (auto te : trView) {
+                if (te == e) continue;
+                if (reg.all_of<Dead>(te)) continue;
+                const Transform& ot = trView.get<const Transform>(te);
+                if (ot.layer != layer) continue;
+
+                const float dx = wrap_delta_f(tr.pos.x, ot.pos.x, kWorldExtent);
+                const float dy = wrap_delta_f(tr.pos.y, ot.pos.y, kWorldExtent);
+                const float dz = wrap_delta_f(tr.pos.z, ot.pos.z, kWorldExtent);
+                if (dx*dx + dy*dy + dz*dz <= kMedicReachM * kMedicReachM) {
+                    const NpcId oid = trView.get<const NpcRef>(te).id;
+                    if (pool.valid(oid) && pool.alive(oid)) {
+                        totalCount += 1.0f;
+                        const float hpFrac = static_cast<float>(pool.hp(oid)) / static_cast<float>(pool.max_hp(oid));
+                        if (hpFrac < kMedicThreshold) {
+                            woundedCount += 1.0f;
+                            pool.needs(oid).hpBank += kMedicHealPerSec * dt;
+                            pool.needs(id).sleep -= kMedicFatiguePerSec * dt;
+                        }
+                    }
+                }
+            }
+            if (totalCount > 0.0f) {
+                myNearbyWounded01 = woundedCount / totalCount;
+            }
+        }
+
+        // -- Cultist: emit into rally field --
+        if (roleId == static_cast<std::uint8_t>(RoleId::Cultist) && rally != nullptr) {
+            const float sociability = kRoleTraits[roleId].sociability;
+            rally->at(cx, cy, cz) += kRallyEmit * dt * sociability;
+        }
+
         // --- RECALL, and only when somebody is going to read it --------------
         // Two consumers, so two conditions: the scorer (a re-plan) and the flee
         // steering direction (already fleeing). Everything else pays zero. At the
@@ -707,7 +749,8 @@ AiTick ai_step(Registry& reg, NpcPool& pool, Field<float>* danger,
             p.danger = dangerHere;
             p.fog = fogHere;
             p.currentIntent = brain.currentIntent;
-            p.role = pool.role(id);
+            p.role = roleId;
+            p.nearbyWounded01 = myNearbyWounded01;
             // Zeroed when hysteresis is off, so the two arms of the measurement
             // differ in exactly the mechanism under test and nothing else.
             p.stickinessAmount =
@@ -777,7 +820,10 @@ AiTick ai_step(Registry& reg, NpcPool& pool, Field<float>* danger,
         // Publish panic into danger field for emergency intents (R1).
         if (danger != nullptr && intent_is_emergency(brain.currentIntent)) {
             const FactionTraits& ft = faction_traits(pool.faction(id));
-            panic_publish_step(*danger, cx, cy, cz, dt, ft.panic);
+            if (ft.panic > 0.0f) {
+                panic_publish_step(*danger, cx, cy, cz, dt, ft.panic);
+                out.dangerEmitted = true;
+            }
         }
 
         // --- Arbitrate, then steer ------------------------------------------
@@ -829,14 +875,23 @@ AiTick ai_step(Registry& reg, NpcPool& pool, Field<float>* danger,
                 owned = true;
                 viaMemory = true;
             }
+            // -- Cultist: steer up rally gradient if IntentSocial --
+            if (!owned && brain.currentIntent == IntentSocial && roleId == static_cast<std::uint8_t>(RoleId::Cultist) && rally != nullptr) {
+                const vec3 g = diffusion_gradient(*rally, grid, cx, cy, cz);
+                if (g.x * g.x + g.y * g.y > 1e-10f) {
+                    dir = normalize(g);
+                    owned = true;
+                }
+            }
         } else if (useRooms) {
             // --- THE ERRAND: a non-flee intent that has somewhere to be --------
-            // This is §27 leg (a). Everything about it is a TABLE read: which room
-            // kind satisfies this intent, where the nearest one is, and what one
-            // second inside it does. No intent is named in this branch — adding
-            // "work happens in a Production room" is a row in kRoomAffordance and
-            // not a line here ([room_zone.h]).
-            const std::uint16_t want = intent_room_mask(brain.currentIntent);
+             // is the nearest one is, and what one second inside it does. No intent is named in
+            // this branch - adding "work happens in a Production room" is a row in kRoomAffordance
+            // and not a line here ([room_zone.h]).
+            std::uint16_t want = intent_room_mask(brain.currentIntent);
+            if (brain.currentIntent == IntentSleep) want &= kRoleTraits[roleId].homeRooms;
+            else if (brain.currentIntent == IntentWork) want &= kRoleTraits[roleId].workRooms;
+            
             const std::uint16_t here =
                 want != 0 ? room_bit_at(rooms->kind, rooms->number, cx, cy) : 0;
             // Stall probe, read BEFORE this pass overwrites Velocity — see AiTick.
@@ -980,17 +1035,20 @@ AiTick ai_step(Registry& reg, NpcPool& pool, Field<float>* danger,
         // of the room mid-meal.
         const float speed =
             brain.currentIntent == IntentFlee ? kFleeSpeed : kErrandSpeed;
-        vel.v.x = dir.x * speed;
-        vel.v.y = dir.y * speed;
-        // vel.v.z is intentionally untouched — physics_step owns it (gravity and
-        // jump). Same rule as wander_step: this is locomotion, not flight.
-}
+        const GravityFrame gf = world != nullptr ? regime_frame(world->gravity().regime) : axis_frame(2, 1, false);
+        vel.v[gf.tanA] = dir.x * speed;
+        vel.v[gf.tanB] = dir.y * speed;
+        // The vertical axis is left to gravity: this is locomotion, not flight.
+        // Same rule as wander_step: physics_step owns it (gravity and jump).
+    }
     return out;
 }
 
 void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
-                    const nav::FineNav& fine, LayerId layer, float dt) {
+                    const nav::FineNav& fine, LayerId layer, float dt,
+                    const GravityField& gravity) {
     auto view = reg.view<AiBrain, PatrolPlan, const Transform, Velocity, const NpcRef>();
+    const GravityFrame gf = regime_frame(gravity.regime);
     for (auto e : view) {
         const auto& brain = view.get<AiBrain>(e);
         if (brain.motion != static_cast<std::uint8_t>(MotionOwner::Ai)) continue;
@@ -1023,8 +1081,8 @@ void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
             plan.nodeFrom = plan.nodeTo;
             const std::uint32_t idSeed = identity_seed(nr.id);
             plan.nodeTo = static_cast<std::uint8_t>(hash3(idSeed, plan.hops, kPatrolSalt) % kLatticeCount);
-            vel.v.x = 0.0f;
-            vel.v.y = 0.0f;
+            vel.v[gf.tanA] = 0.0f;
+            vel.v[gf.tanB] = 0.0f;
         } else if (stepDir < 6) {
             if (stepDir < 4) {
                 const int nx = wrap_macro(cx + nav::kNavDir[stepDir][0]);
@@ -1035,8 +1093,8 @@ void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
                 const float dy = wrap_delta_f(tr.pos.y, ty, kWorldExtent);
                 if (dx * dx + dy * dy > kMinFleeGrad2) {
                     vec3 dir = normalize(vec3{dx, dy, 0.0f});
-                    vel.v.x = dir.x * kErrandSpeed;
-                    vel.v.y = dir.y * kErrandSpeed;
+                    vel.v[gf.tanA] = dir.x * kErrandSpeed;
+                    vel.v[gf.tanB] = dir.y * kErrandSpeed;
                 }
             } else {
                 const float tx = (static_cast<float>(dest.x) + 0.5f) * kCellSize;
@@ -1045,8 +1103,8 @@ void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
                 const float dy = wrap_delta_f(tr.pos.y, ty, kWorldExtent);
                 if (dx * dx + dy * dy > kMinFleeGrad2) {
                     vec3 dir = normalize(vec3{dx, dy, 0.0f});
-                    vel.v.x = dir.x * kErrandSpeed;
-                    vel.v.y = dir.y * kErrandSpeed;
+                    vel.v[gf.tanA] = dir.x * kErrandSpeed;
+                    vel.v[gf.tanB] = dir.y * kErrandSpeed;
                 }
             }
         }

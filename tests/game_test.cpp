@@ -1572,7 +1572,7 @@ static void test_wander_moves_the_crowd() {
     // steering passes in this window.
     const float dt = kSimDt;
     for (std::uint64_t t = 0; t < static_cast<std::uint64_t>(kSimHz); ++t) {
-        wander_step(reg, stack.layer(layer).grid(), pool, coarse, fine, layer, t);
+        wander_step(reg, stack.layer(layer).grid(), pool, coarse, fine, layer, t, stack.layer(layer).gravity());
         physics_step(reg, stack, dt);
     }
 
@@ -1596,7 +1596,7 @@ static void test_wander_moves_the_crowd() {
     // Steering must be a pure read of the bake: it may not mutate the nav data,
     // or a second floor visit would behave differently from the first.
     nav::CoarseGraph after = coarse;
-    wander_step(reg, stack.layer(layer).grid(), pool, coarse, fine, layer, 999u);
+    wander_step(reg, stack.layer(layer).grid(), pool, coarse, fine, layer, 999u, stack.layer(layer).gravity());
     CHECK(std::memcmp(&after, &coarse, sizeof(coarse)) == 0);
 
     // Immobile mobs are never given a target: a spore carpet must not walk.
@@ -3206,13 +3206,13 @@ static void test_contracts() {
     // REFUSES rather than overwriting.
     ContractBook book;
     Contract job = a;
-    if (job.giver == kInvalidNpc) {           // this giver happened not to be hiring
+    if (job.giver == kInvalidHandle) {           // this giver happened not to be hiring
         for (std::uint32_t i = 1; i < 500; ++i) {
             job = contract_offer(pool, static_cast<NpcId>(i), -26, 7u);
-            if (job.giver != kInvalidNpc) break;
+            if (job.giver != kInvalidHandle) break;
         }
     }
-    CHECK(job.giver != kInvalidNpc);
+    CHECK(job.giver != kInvalidHandle);
     CHECK(contract_accept(book, job, kNoDescentYet));
     CHECK(!contract_accept(book, job, kNoDescentYet));       // the same job twice is one job
 
@@ -3723,7 +3723,7 @@ static void test_full_loop() {
         job = c;
         break;
     }
-    CHECK(job.giver != kInvalidNpc);
+    CHECK(job.giver != kInvalidHandle);
     CHECK(contract_accept(book, job, kNoDescentYet));
 
     // Kills arrive as the same NpcDied event the kill feed reads — the seam between

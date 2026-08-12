@@ -80,6 +80,7 @@
 #include "game/investigate.h"
 
 #include "sim/fluid.h"
+#include "sim/diffusion.h"
 #include "game/noise.h"
 #include "game/wander.h"
 #include "game/npc_pool.h"
@@ -167,6 +168,7 @@ constexpr float kSamosborFogSqueeze = 0.34f;
 static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
                                  float timeSec, const game::SamosborState& samosbor,
                                  const Registry& reg, LayerId activeLayer,
+                                 const giga::GravityField& gravity,
                                  const game::NoiseField* noiseField = nullptr,
                                  const game::PowerGridState* powerGrid = nullptr) {
     grid.clear_lights();
@@ -250,9 +252,12 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
             float lifeFrac = (loud->lifeMs > 0) ? (static_cast<float>(loud->ttlMs) / static_cast<float>(loud->lifeMs)) : 1.0f;
             float pulse = std::sin(timeSec * 30.0f + static_cast<float>(loud->id)) * 0.35f + 0.65f;
             float intensity = (static_cast<float>(loud->severity) * 2.0f) * lifeFrac * pulse;
-            grid.add_light(npos + vec3{0.0f, 0.0f, 0.8f}, loud->radius * 0.8f, vec3{1.0f, 0.70f, 0.30f}, intensity);
+            const giga::GravityFrame gf = giga::regime_frame(gravity.regime);
+            vec3 loud_up{0.0f, 0.0f, 0.0f}; loud_up[gf.axis] = gf.upSign * 0.8f;
+            vec3 cam_up{0.0f, 0.0f, 0.0f}; cam_up[gf.axis] = gf.upSign * 1.0f;
+            grid.add_light(npos + loud_up, loud->radius * 0.8f, vec3{1.0f, 0.70f, 0.30f}, intensity);
             float acousticFlicker = 1.0f + 0.50f * (static_cast<float>(loud->severity) / 5.0f) * std::sin(timeSec * 40.0f);
-            grid.add_light(camPos + vec3{0.0f, 0.0f, 1.0f}, 14.0f, vec3{0.90f, 0.80f, 0.50f}, 1.5f * acousticFlicker);
+            grid.add_light(camPos + cam_up, 14.0f, vec3{0.90f, 0.80f, 0.50f}, 1.5f * acousticFlicker);
         }
     }
 
@@ -492,7 +497,8 @@ static void DrawCraftingWindowUI(bool* p_open, game::CraftingState& crafting,
 }
 
 static void DrawVendorWindowUI(bool* p_open, game::Inventory& inv, game::RunLedger& ledger, 
-                        game::VendorKind vendorKind, bool isOnPad, std::int32_t& outSold, std::int32_t& outSpent) 
+                        game::VendorKind vendorKind, bool isOnPad, std::int32_t& outSold, std::int32_t& outSpent,
+                        game::FactionRelations& factionRel, const game::NpcPool& pool, std::int16_t currentFloor) 
 {
     if (!p_open || !*p_open) return;
 
@@ -583,6 +589,7 @@ static void DrawVendorWindowUI(bool* p_open, game::Inventory& inv, game::RunLedg
         if (ImGui::BeginTabItem("Sell Inventory")) {
             if (ImGui::Button("Sell All Haul / Trash (Auto Cap)", ImVec2(240, 28))) {
                 outSold += game::vendor_sell_all(inv, ledger, vendorKind);
+                factionRel.add_mutual(game::kFactionPlayerRow, static_cast<std::uint8_t>(game::dominant_faction(pool, currentFloor)), +1);
             }
             ImGui::Separator();
 
@@ -1254,7 +1261,7 @@ void queue_structural_collapse(const giga::World& w, const giga::CarveResult& re
 }
 
 void spawn_carve_particles(gpu::ParticlePass& pass, const CarveResult& res,
-                           std::uint32_t seed) {
+                           std::uint32_t seed, const giga::GravityField& gravity) {
     if (!pass.ready()) return;
     static std::vector<gpu::GpuParticle> tmp;
     tmp.clear();
@@ -1274,7 +1281,14 @@ void spawn_carve_particles(gpu::ParticlePass& pass, const CarveResult& res,
     for (std::size_t i = 0; i < nd; i += sd) {
         const CarvedVoxel& v = res.destroyed[i];
         const vec3 tint = kMaterial[v.mat < kMatCount ? v.mat : 0];
-        pack_particles(tmp, voxel_pos(v), vec3{0.0f, 0.0f, 0.35f}, dust, tint,
+        const vec3 vp = voxel_pos(v);
+        const vec3 grav = gravity.at(vp);
+        const float gl = length(grav);
+        const giga::GravityFrame gf = giga::regime_frame(gravity.regime);
+        vec3 fallback_up{0.0f, 0.0f, 0.0f};
+        fallback_up[gf.axis] = gf.upSign * 0.35f;
+        const vec3 up = gl > 1e-4f ? grav * (-0.35f / gl) : fallback_up;
+        pack_particles(tmp, vp, up, dust, tint,
                        1, seed ^ static_cast<std::uint32_t>(i));
     }
     const game::ParticleDef& debris =
@@ -1284,7 +1298,14 @@ void spawn_carve_particles(gpu::ParticlePass& pass, const CarveResult& res,
     for (std::size_t i = 0; i < nt; i += st) {
         const CarvedVoxel& v = res.detached[i];
         const vec3 tint = kMaterial[v.mat < kMatCount ? v.mat : 0];
-        pack_particles(tmp, voxel_pos(v), vec3{0.0f, 0.0f, -0.2f}, debris,
+        const vec3 vp = voxel_pos(v);
+        const vec3 grav = gravity.at(vp);
+        const float gl = length(grav);
+        const giga::GravityFrame gf = giga::regime_frame(gravity.regime);
+        vec3 fallback_down{0.0f, 0.0f, 0.0f};
+        fallback_down[gf.axis] = -gf.upSign * 0.2f;
+        const vec3 down = gl > 1e-4f ? grav * (0.2f / gl) : fallback_down;
+        pack_particles(tmp, vp, down, debris,
                        tint, 1, seed ^ 0x5bd1e995u ^
                                     static_cast<std::uint32_t>(i));
     }
@@ -1864,6 +1885,7 @@ int main(int argc, char** argv) {
     // what makes a deep 2^20-person building affordable: the sim tick is O(live
     // entities), so exactly one floor's worth is ever simulated.
     game::FloorStreamer streamer;
+    giga::DiffusionDriver diffusionDriver;
 
     int currentFloor = 0;                         // in-game label of the live floor
     const game::FloorSpec* currentSpec = nullptr; // its rule-set (HUD only)
@@ -1976,6 +1998,7 @@ int main(int argc, char** argv) {
                                               streamer.floor_seed_of(registry, 0));
             doors.frozen = true;
             begin_floor_nav(stack.layer(l0), 0, nav, roomZones);
+            giga::diffusion_driver_on_floor_built(diffusionDriver, stack.layer(l0), l0);
             game::ai_init(reg, l0);
             if (propPass.ready()) {
                 merge_ecs_prop_meshes(reg, l0, propPass,
@@ -2478,6 +2501,7 @@ int main(int argc, char** argv) {
                 streamer.floor_seed_of(registry, currentFloor));
         doors.frozen = true;
         begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
+        giga::diffusion_driver_on_floor_built(diffusionDriver, stack.layer(nl), nl);
         // Arrival geometry is final (floor file + doors stamped): re-snapshot
         // the GPU voxel mirror for the recycled World object.
         voxelMirror.upload_all(stack.layer(nl));
@@ -2815,7 +2839,7 @@ int main(int argc, char** argv) {
             // field's only producer) is not wired into the tick yet, so ai_step's
             // threat term reads 0 and nobody flees. Wiring diffusion in is the
             // open task; the fetch stays so that wiring is one call away.
-            [[maybe_unused]] Field<float>* danger = activeWorld.fields().find<float>("danger");
+            Field<float>* danger = activeWorld.fields().find<float>("danger");
             [[maybe_unused]] const MacroGrid& activeGrid = activeWorld.grid();
             int guard = 0;
             while (simAccum >= kSimDt && guard++ < 8) {
@@ -2941,9 +2965,13 @@ int main(int argc, char** argv) {
                 // toilet/sleep intent actually STEER a body — without it every
                 // non-flee intent hands motion straight back to wander_step and the
                 // scorer is decoration (measured: own_ai=0 of 419).
-                aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
+                [[maybe_unused]] Field<float>* rally = activeWorld.fields().find<float>("rally");
+                aiTick = game::ai_step(reg, pool, danger, rally, activeGrid, activeLayer, simNow,
                                        kSimDt, aiCfg, &aiMem, &doors, &activeWorld,
                                        &roomZones);
+                if (aiTick.dangerEmitted) {
+                    diffusionDriver.hot = true;
+                }
                 // AIMEM proof trail: once nav has brains and AI is on, emit a
                 // compact stderr pulse so a --shot harness can assert the store
                 // is live (rows/writes/recalled) without parsing the HUD.
@@ -3411,10 +3439,10 @@ int main(int argc, char** argv) {
                         }
                     }
                 }
-                game::ai_patrol_step(reg, nav.coarse(), nav.fine(), activeLayer, kSimDt);
+                game::ai_patrol_step(reg, nav.coarse(), nav.fine(), activeLayer, kSimDt, activeWorld.gravity());
                 game::wander_step(reg, stack.layer(activeLayer).grid(), pool,
                                   nav.coarse(),
-                                  nav.fine(), activeLayer, simTick);
+                                  nav.fine(), activeLayer, simTick, activeWorld.gravity());
 
                 // Footstep noise generation while walking or running.
                 // "Walking" is speed ACROSS the floor, so the vertical component is
@@ -3572,7 +3600,7 @@ int main(int argc, char** argv) {
                 // no counterplay. The camera holder IS killable: the player has
                 // healing, resupply and possession-on-death. [faction_relations.h]
                 feudHits += game::faction_feud_step(reg, pool, factionRel, activeLayer,
-                                                    simTick);
+                                                    simTick, activeWorld.gravity());
                 // Slowed CAP enforcement: after every velocity writer
                 // (controller / wander / investigate / feud), before integrate.
                 // Was defined in combat.cpp and never called — dead path until now.
@@ -3677,7 +3705,7 @@ int main(int argc, char** argv) {
                         // Dust and debris off the blast, tinted by the carved
                         // material ([particle_pass.h]).
                         spawn_carve_particles(particlePass, carveResult,
-                                              op.seed);
+                                              op.seed, activeWorld.gravity());
 
                         // A blast is the loudest thing after gunfire: let the
                         // crowd hear it.
@@ -3817,9 +3845,9 @@ int main(int argc, char** argv) {
                                     
                                     game::ReliefResult rr;
                                     if (toiletHit) {
-                                        rr = game::relieve_needs(pool.needs(nrg->id), 70.0f, 65.0f);
+                                        rr = game::relieve_needs(pool.needs(nrg->id), game::kToiletPeeRelief, game::kToiletPooRelief);
                                     } else {
-                                        rr = game::relieve_needs(pool.needs(nrg->id), 40.0f, 35.0f);
+                                        rr = game::relieve_needs(pool.needs(nrg->id), game::kFieldPeeRelief, game::kFieldPooRelief);
                                     }
 
                                     if (rr.pee > 0.0f || rr.poo > 0.0f) {
@@ -3834,14 +3862,15 @@ int main(int argc, char** argv) {
                                                         kStainUrine,
                                                         static_cast<std::uint32_t>(simTick),
                                                         stainDirty);
+
+                                            game::NoiseProfile np{3.0f, 500, 1, game::NoiseSource::Footstep};
+                                            game::noise_publish(noiseField, activeLayer, ppos, np, 0);
                                         }
                                         std::snprintf(elevDiagLine, sizeof(elevDiagLine),
                                                       "PHYSIOLOGICAL RELIEF: CLEARED BLADDER (%.0f) & BOWEL (%.0f) PRESSURE",
                                                       rr.pee, rr.poo);
                                         elevDiagAt = simTick;
 
-                                        game::NoiseProfile np{5.0f, 500, 1, game::NoiseSource::Door};
-                                        game::noise_publish(noiseField, activeLayer, ppos, np, 0);
                                     }
                                 }
                             }
@@ -3895,10 +3924,13 @@ int main(int argc, char** argv) {
                 bool haveGun = false;
                 if (reg.valid(player))
                     if (const auto* nrg = reg.try_get<game::NpcRef>(player))
-                        if (pool.valid(nrg->id))
+                        if (pool.valid(nrg->id)) {
+                            const std::uint32_t feuds = game::faction_feud_step(
+                                reg, pool, factionRel, activeLayer, simTick, activeWorld.gravity());
                             haveGun = game::equipped_ranged(
                                           pool.inventory(nrg->id)) !=
                                       game::kInvalidItem;
+                        }
                 // Combat carves: clear, fill during melee/projectiles, dispose
                 // same step if !doors.frozen (v1 drops proposals during bake).
                 combatCarves.clear();
@@ -3969,7 +4001,7 @@ int main(int argc, char** argv) {
                                 carveResult.dirtyCells.data(),
                                 carveResult.dirtyCells.size());
                             spawn_carve_particles(particlePass, carveResult,
-                                                  pr.seed);
+                                                  pr.seed, activeWorld.gravity());
                             std::fprintf(stderr,
                                          "[carve] COMBAT removed=%d power=%u "
                                          "r=%.2f at (%.1f,%.1f,%.1f)\n",
@@ -4031,12 +4063,16 @@ int main(int argc, char** argv) {
                     dripTmp.clear();
                     const game::ParticleDef& dripDef =
                         game::particle_def(game::ParticleKind::Drip);
-                    for (std::size_t i = 0; i < dripEmitters.size(); ++i)
+                    for (std::size_t i = 0; i < dripEmitters.size(); ++i) {
+                        const vec3 grav = activeWorld.gravity().at(dripEmitters[i]);
+                        const float gl = length(grav);
+                        const vec3 down = gl > 1e-4f ? grav * (0.2f / gl) : vec3{0.0f, 0.0f, -0.2f};
                         pack_particles(dripTmp, dripEmitters[i],
-                                       vec3{0.0f, 0.0f, -0.2f}, dripDef,
+                                       down, dripDef,
                                        vec3{dripDef.r, dripDef.g, dripDef.b}, 1,
                                        static_cast<std::uint32_t>(simTick) ^
                                            static_cast<std::uint32_t>(i));
+                    }
                     particlePass.spawn(dripTmp.data(),
                                        static_cast<std::uint32_t>(
                                            dripTmp.size()));
@@ -4056,10 +4092,15 @@ int main(int argc, char** argv) {
                     const auto& camT = reg.get<CameraTag>(player);
                     const vec3 fw = camera_forward(camT.yaw, camT.pitch);
                     const vec3 pp = reg.get<Transform>(player).pos;
+                    const giga::GravityFrame gf = giga::regime_frame(activeWorld.gravity().regime);
+                    vec3 pp2 = pp;
+                    pp2[gf.axis] += gf.upSign * 1.2f;
+                    vec3 burstDir{0.0f, 0.0f, 0.0f};
+                    burstDir[gf.axis] = gf.upSign * 1.0f;
                     particleBursts.push(
-                        vec3{pp.x + fw.x * 3.0f, pp.y + fw.y * 3.0f,
-                             pp.z + 1.2f + fw.z * 3.0f},
-                        vec3{0.0f, 0.0f, 1.0f},
+                        vec3{pp2.x + fw.x * 3.0f, pp2.y + fw.y * 3.0f,
+                             pp2.z + fw.z * 3.0f},
+                        burstDir,
                         static_cast<game::ParticleKind>(dk), 12,
                         kMatElectricGrate, // debris/dust tint: loud yellow
                         static_cast<std::uint32_t>(simTick));
@@ -4140,7 +4181,7 @@ int main(int argc, char** argv) {
                 // ENCUMBRANCE before the needs clock, because it charges the same
                 // sleep bar the clock then reads for its exhaustion penalty — a
                 // load taxes you on the tick you carry it, not one tick later.
-                encumbrance = game::encumbrance_step(reg, pool, activeLayer, kSimDt,
+                encumbrance = game::encumbrance_step(reg, pool, activeLayer, stack.layer(activeLayer).gravity(), kSimDt,
                                                      simTick, &noiseField);
                 needs = game::needs_step(reg, pool, activeLayer, kSimDt, &roomZones);
                 needsHpLost += needs.hpLost;
@@ -4193,6 +4234,11 @@ int main(int argc, char** argv) {
                     loot += fromBox;
                     containerTake += fromBox;
                     game::sync_armour(reg, pool, player);
+                    
+                    const game::NpcId witness = game::nearest_speaker(reg, activeLayer);
+                    if (witness != game::kInvalidNpc) {
+                        factionRel.add_mutual(game::kFactionPlayerRow, static_cast<std::uint8_t>(pool.faction(witness)), -8);
+                    }
                 }
                 const std::int32_t got =
                     game::pickup_step(reg, pool, bus, activeLayer, simTick);
@@ -4397,6 +4443,7 @@ int main(int argc, char** argv) {
                             bake_stress(stack.layer(nl), stressParams, stack.layer(nl).fields().get_or_create<float>("stress", -1.0f));
                             
                             begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
+                            giga::diffusion_driver_on_floor_built(diffusionDriver, stack.layer(nl), nl);
                             if (propPass.ready()) {
                                 merge_ecs_prop_meshes(reg, nl, propPass,
                                   streamer.antourage_at_layer(registry, nl),
@@ -4447,9 +4494,11 @@ int main(int argc, char** argv) {
                         if (const auto* nrv = reg.try_get<game::NpcRef>(player))
                             if (pool.valid(nrv->id)) {
                                 game::Inventory& vi = pool.inventory(nrv->id);
-                                if (sellWanted)
+                                if (sellWanted) {
                                     sold += game::vendor_sell_all(vi, ledger,
                                                                  vendorKind);
+                                    factionRel.add_mutual(game::kFactionPlayerRow, static_cast<std::uint8_t>(game::dominant_faction(pool, currentFloor)), +1);
+                                }
                                 if (buyWanted)
                                     spent += game::vendor_resupply(vi, ledger,
                                                                    kResupplyBudget);
@@ -4544,7 +4593,7 @@ int main(int argc, char** argv) {
                             questPaid += game::quest_step(
                                 quests, pool, pool.inventory(nrc->id), ledger,
                                 static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f),
-                                reg.try_get<game::RpgStats>(player));
+                                reg.try_get<game::RpgStats>(player), &factionRel);
                         }
                 // Eating and drinking sit beside healing and AFTER pickup_step, so a
                 // ration picked up this tick can be eaten this tick. Both refuse a
@@ -4635,11 +4684,11 @@ int main(int argc, char** argv) {
                     // HUD and no window. One line per macro tick, so ~30/minute.
                     std::fprintf(stderr,
                                  "[macro] tick=%llu day=%.1f living=%u births=%u "
-                                 "deaths=%u blocked=%u depart=%u arrive=%u "
+                                 "deaths=%u starvations=%u blocked=%u depart=%u arrive=%u "
                                  "transit=%u reserve=%u\n",
                                  static_cast<unsigned long long>(macroStats.tick),
                                  macroSim.day(), macroStats.living, macroStats.births,
-                                 macroStats.deaths, macroStats.birthsBlocked,
+                                 macroStats.deaths, macroStats.starvations, macroStats.birthsBlocked,
                                  macroStats.departures, macroStats.arrivals,
                                  macroStats.inTransit, macroStats.reserveRemaining);
                 }
@@ -4647,6 +4696,7 @@ int main(int argc, char** argv) {
                     fluid_step(stack.layer(activeLayer));
                     fluidCounter = 0;
                 }
+                giga::diffusion_tick(diffusionDriver, stack.layer(activeLayer), activeLayer, simTick);
                 gas_step(stack.layer(activeLayer), activeLayer, kSimDt);
                 if (const game::AntourageBake* ab = streamer.antourage_at_layer(registry, activeLayer)) {
                     game::antourage_vent_step(stack.layer(activeLayer), *ab, kSimDt);
@@ -5017,10 +5067,10 @@ int main(int argc, char** argv) {
                 // visible proof that the world runs on its own clock. It updates once
                 // every kMacroPeriodTicks (2.000 s), so it deliberately does not track
                 // the frame.
-                ImGui::Text("society %u alive | +%u births / -%u deaths | %u in transit"
+                ImGui::Text("society %u alive | +%u births / -%u deaths (%u starvations) | %u in transit"
                             "%s",
                             macroStats.living, macroStats.births, macroStats.deaths,
-                            macroStats.inTransit,
+                            macroStats.starvations, macroStats.inTransit,
                             macroStats.birthsBlocked != 0
                                 ? "  (RESERVE FLOOR: births refused)"
                                 : "");
@@ -5198,7 +5248,11 @@ int main(int argc, char** argv) {
                         if (game::quest_line(quests, qid, qline, sizeof(qline))) {
                             ImGui::TextColored(ImVec4(0.70f, 0.98f, 0.60f, 1.0f),
                                                "  quest: %s", qline);
-                            // intentionally deferred: quest_objective_text(qid, ...)
+                            char objLine[96];
+                            if (game::quest_objective_text(qid, objLine, sizeof(objLine))) {
+                                ImGui::TextColored(ImVec4(0.80f, 0.80f, 0.80f, 1.0f),
+                                                   "    obj: %s", objLine);
+                            }
                         }
                     }
                 }
@@ -5240,10 +5294,10 @@ int main(int argc, char** argv) {
                                 static_cast<float>(game::kMacroPeriodTicks) *
                                     kSimDt);
                 else
-                    ImGui::Text("society: %u living  +%u/-%u  %u in transit  "
+                    ImGui::Text("society: %u living  +%u/-%u (%u starvations)  %u in transit  "
                                 "| reserve %u  (t%llu, day %.1f)",
                                 macroStats.living, macroStats.births,
-                                macroStats.deaths, macroStats.inTransit,
+                                macroStats.deaths, macroStats.starvations, macroStats.inTransit,
                                 macroStats.reserveRemaining,
                                 static_cast<unsigned long long>(macroStats.tick),
                                 macroSim.day());
@@ -5315,7 +5369,7 @@ int main(int argc, char** argv) {
                     const std::int32_t soldBefore = sold;
                     const std::int32_t spentBefore = spent;
                     DrawVendorWindowUI(&showVendorWindow, pool.inventory(nrv->id), ledger, 
-                                       vendorKind, isOnPad, sold, spent);
+                                       vendorKind, isOnPad, sold, spent, factionRel, pool, static_cast<std::int16_t>(currentFloor));
                     // Same re-derive as the keyboard path. The window is not handed
                     // reg/pool/player, so the CALLER does it — the shape the
                     // crafting window already uses via its `invChanged` out-param.
@@ -5646,7 +5700,7 @@ int main(int argc, char** argv) {
             float currentTimeSec = static_cast<float>(SDL_GetTicks()) / 1000.0f;
 
             if (lightGrid.ready()) {
-                collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, samosbor, reg, activeLayer, &noiseField, &powerGrid);
+                collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, samosbor, reg, activeLayer, stack.layer(activeLayer).gravity(), &noiseField, &powerGrid);
                 renderer.timer.pass_begin(cmd, gpu::GpuPass::LightGrid);
                 lightGrid.update_and_dispatch(cmd, currentTimeSec, camMat.eye);
                 renderer.timer.pass_end(cmd, gpu::GpuPass::LightGrid);
@@ -5870,10 +5924,10 @@ int main(int argc, char** argv) {
             push.fog = vec4{kWorldExtent * 0.30f * fogScale,
                             kWorldExtent * 0.50f * fogScale,
                             kLampRadius, kAmbient};
-            // The wrap period, so cube.vert can place each cell at its nearest
+            // The wrap period, so the shaders can place each cell at its nearest
             // toroidal image itself. Instance origins are absolute, which is what
             // makes the cube pass's instance cache possible.
-            push.torus = vec4{kWorldExtent, kAoDirect, samosborPulse, currentTimeSec};
+            push.torus = vec4{currentTimeSec, kAoDirect, samosborPulse, 0.0f};
             // Each pass is bracketed by GPU timestamps as well as by the CPU
             // clock: the two answer different questions and need opposite fixes.
             // The CPU figure is time spent building instance data on this thread;
@@ -6025,6 +6079,7 @@ int main(int argc, char** argv) {
                                 streamer.floor_seed_of(registry, currentFloor));
                         doors.frozen = true;
                         begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
+                        giga::diffusion_driver_on_floor_built(diffusionDriver, stack.layer(nl), nl);
                         voxelMirror.upload_all(stack.layer(nl));
                         if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
                         // Same transition autosave as the keyboard path.
@@ -6087,7 +6142,7 @@ int main(int argc, char** argv) {
                     }
                     if (renderer.timer.supported())
                         std::fprintf(stderr,
-                                     "gpu-ms: world %.3f bodies %.3f hud %.3f "
+                                     "gpu-ms: world %.3f bodies %.3f props %.3f sim %.3f hud %.3f "
                                      "frame %.3f  (bodies %u)\n",
                                      renderer.timer.pass_ms(gpu::GpuPass::World),
                                      renderer.timer.pass_ms(gpu::GpuPass::Bodies),
