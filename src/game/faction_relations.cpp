@@ -1,4 +1,6 @@
 #include "game/faction_relations.h"
+#include "game/faction.h"
+#include "world/gravity.h"
 
 #include <cmath>
 #include <vector>
@@ -190,7 +192,8 @@ FactionFoe nearest_faction_foe(const Registry& reg, const NpcPool& pool,
 
 std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
                                 const FactionRelations& rel, LayerId layer,
-                                std::uint64_t tick) {
+                                std::uint64_t tick, const GravityField& gravity) {
+    const GravityFrame gf = regime_frame(gravity.regime);
     const std::uint32_t phaseNow = static_cast<std::uint32_t>(tick % kFeudPeriod);
     // The visit counter, not the tick: a body is looked at once per kFeudPeriod, so
     // this is the number of chances it has had, which is what a swing cadence has to
@@ -275,7 +278,7 @@ std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
             const float effRange = static_cast<float>(rdef->projSpeedMmps) * 0.001f * kCellSize * 0.75f;
             if (d2 <= effRange * effRange) {
                 Velocity& vel = view.get<Velocity>(e);
-                vel.v.x = 0.0f; vel.v.y = 0.0f;
+                (&vel.v.x)[gf.tanA] = 0.0f; (&vel.v.x)[gf.tanB] = 0.0f;
 
                 std::uint32_t visitsPerShot = static_cast<std::uint32_t>(rdef->cooldownMs) /
                     (kFeudPeriod * static_cast<std::uint32_t>(kSimStepMs));
@@ -299,14 +302,23 @@ std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
 
         Velocity& vel = view.get<Velocity>(e);
         if (inReach) {
-            vel.v.x = 0.0f;
-            vel.v.y = 0.0f;
+            if (gf.axis != 0) vel.v.x = 0.0f;
+            if (gf.axis != 1) vel.v.y = 0.0f;
+            if (gf.axis != 2) vel.v.z = 0.0f;
         } else {
-            const float len2 = dx * dx + dy * dy;
-            if (len2 > kMinSteerDist2) {
+            float ox = gf.axis == 0 ? 0.0f : dx;
+            float oy = gf.axis == 1 ? 0.0f : dy;
+            float oz = gf.axis == 2 ? 0.0f : dz;
+            const float len2 = ox * ox + oy * oy + oz * oz;
+            if (len2 <= kMinSteerDist2) {
+                if (gf.axis != 0) vel.v.x = 0.0f;
+                if (gf.axis != 1) vel.v.y = 0.0f;
+                if (gf.axis != 2) vel.v.z = 0.0f;
+            } else {
                 const float inv = 1.0f / std::sqrt(len2);
-                vel.v.x = dx * inv * kFeudWalkSpeed;
-                vel.v.y = dy * inv * kFeudWalkSpeed;
+                if (gf.axis != 0) vel.v.x = ox * inv * kFeudWalkSpeed;
+                if (gf.axis != 1) vel.v.y = oy * inv * kFeudWalkSpeed;
+                if (gf.axis != 2) vel.v.z = oz * inv * kFeudWalkSpeed;
             }
             continue;   // out of reach
         }

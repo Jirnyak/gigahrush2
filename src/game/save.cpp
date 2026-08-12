@@ -46,6 +46,7 @@ public:
     explicit Writer(std::vector<std::uint8_t>& out) : out_(&out) {}
 
     void u8(const std::uint8_t& v) { out_->push_back(v); }
+    void u8(const bool& v) { out_->push_back(v ? 1 : 0); }
     void u16(const std::uint16_t& v) {
         out_->push_back(static_cast<std::uint8_t>(v & 0xFFu));
         out_->push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFu));
@@ -98,6 +99,14 @@ public:
             return;
         }
         v = p_[at_++];
+    }
+    void u8(bool& v) {
+        if (at_ >= n_) {
+            ok_ = false;
+            v = false;
+            return;
+        }
+        v = (p_[at_++] != 0);
     }
     void u16(std::uint16_t& v) {
         std::uint8_t a = 0, b = 0;
@@ -221,7 +230,7 @@ void visit_book(Ar& ar, B& b) {
     ar.i64(b.earned);
 }
 
-// All eight floats, including the two "pending" queues and `hpDebt`. Dropping the
+// All nine floats, including the two "pending" queues and `hpDebt`. Dropping the
 // pending queues would silently forgive a bladder you had already filled, and dropping
 // `hpDebt` would forgive sub-1-HP attrition — the exact fraction the elevator test pins
 // as surviving a body swap ([suite_needs.inl] survives_the_body_swap). A save is a
@@ -236,6 +245,9 @@ void visit_needs(Ar& ar, N& n) {
     ar.f32(n.pendingPee);
     ar.f32(n.pendingPoo);
     ar.f32(n.hpDebt);
+    ar.f32(n.hpBank);
+    ar.f32(n.sanity);
+    ar.f32(n.radiation);
     ar.u8(n.seeded);
 }
 
@@ -244,6 +256,8 @@ void visit_inventory(Ar& ar, I& inv) {
     for (int i = 0; i < kInvSlots; ++i) {
         ar.u16(inv.slots[i].item);
         ar.u16(inv.slots[i].count);
+        ar.u8(inv.slots[i].condition);
+        ar.u8(inv.slots[i].pad_);
     }
 }
 
@@ -251,6 +265,8 @@ template <class Ar, class P>
 void visit_player(Ar& ar, P& p) {
     visit_needs(ar, p.clock);
     visit_inventory(ar, p.inv);
+    for (int i = 0; i < static_cast<int>(EquipSlot::kEquipSlotCount); ++i)
+        ar.u8(p.eq.invSlot[i]);
     ar.i32(p.hp);
     ar.i32(p.maxHp);
     ar.i32(p.floorNumber);
@@ -292,6 +308,17 @@ void visit_status(Ar& ar, S& s) {
     for (std::size_t i = 0; i < kStatusCount; ++i) ar.u32(s.remainMs[i]);
     for (std::size_t i = 0; i < kStatusCount; ++i) ar.u16(s.intensityE3[i]);
     for (std::size_t i = 0; i < kStatusCount; ++i) ar.u8(s.alt[i]);
+}
+
+template <class Ar, class S>
+void visit_samosbor(Ar& ar, S& s) {
+    ar.u32(s.phaseMs);
+    ar.u32(s.phaseTotalMs);
+    ar.u32(s.activeMs);
+    ar.u16(s.count);
+    ar.u8(s.phase);
+    ar.u8(s.variant);
+    ar.u8(s.sealed);
 }
 
 template <class Ar, class K>
@@ -379,21 +406,21 @@ static_assert(sizeof(SaveHeader) == kSaveHeaderWire,
               "still 64 and only this assert needs relaxing");
 static_assert(kLedgerWire == 8 + 8 + 4 + 4 + 4 + 4 + 1);
 static_assert(kContractWire == 4 + 2 + 4 + 4 + 4 + 1 + 1 + 1);
-static_assert(kNeedsWire == 8 * 4 + 1);
-static_assert(kInventoryWire == 64 * 4);
+static_assert(kNeedsWire == 11 * 4 + 1);
+static_assert(kInventoryWire == 64 * 6);
 // kSaveFixedWire: ledger+book+player + v7 rpg(12)+craft(93) + v8 combat(21)
-// + v9 status(42) + quest log. Was 850 in v8; +42 = 892 in v9.
+// + v9 status(49) + quest log + samosbor(17).
 static_assert(kRpgWire == 12);
 static_assert(kCraftingWire == 93);
 static_assert(kRangedWire == 16);
 static_assert(kCombatSaveWire == 21);
-static_assert(kStatusWire == 42);
-static_assert(kSaveFixedWire == 850 + 28);  // 878
-static_assert(kSaveFixedWire == 878);
+static_assert(kStatusWire == 49);
+static_assert(kSamosborWire == 17);
+static_assert(kSaveFixedWire == 1046);
 static_assert(kFactionWire == 36);
-// header 64 + fixed 892 + faction 36 = 992 for an empty run.
-static_assert(save_bytes_for(0) == 978);
-static_assert(save_bytes_for(0, 100, 50) == 978 + 150);
+// header 64 + fixed 1046 + faction 36 = 1146 for an empty run.
+static_assert(save_bytes_for(0) == 1146);
+static_assert(save_bytes_for(0, 100, 50) == 1146 + 150);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two
@@ -404,9 +431,10 @@ static_assert(save_bytes_for(0, 100, 50) == 978 + 150);
 static_assert(sizeof(ContractBook) == 88,
               "ContractBook is serialized; grow it and bump kSaveVersion in the same "
               "edit");
-static_assert(sizeof(Inventory) == 256, "the 8x8 grid is 64 x 4 B ([inventory.h])");
+static_assert(sizeof(Inventory) == 384, "the 8x8 grid is 64 x 6 B ([inventory.h])");
 
 void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
+    std::printf("kSaveFixedWire is actually %zu, kInventoryWire is %zu\n", kSaveFixedWire, kInventoryWire);
     // Payload first: the header carries the payload's length and checksum, so it cannot
     // be written until the payload exists.
     std::vector<std::uint8_t> body;
@@ -433,6 +461,7 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     bw.u32(st.kills);
     // Version 9 / SAVSTAT: live status effects.
     visit_status(bw, st.status);
+    visit_samosbor(bw, st.samosbor);
     for (const OpenedContainerKey& k : st.opened) visit_key(bw, k);
     // Version 6: the macro world — pool table, macro-sim state, faction matrix.
     body.insert(body.end(), st.poolBlob.begin(), st.poolBlob.end());
@@ -520,18 +549,25 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
         static_cast<std::size_t>(h.openedCount) * kOpenedKeyWire +
         static_cast<std::size_t>(h.poolBytes) +
         static_cast<std::size_t>(h.macroBytes);
-    if (static_cast<std::size_t>(h.payloadBytes) != want)
+    if (static_cast<std::size_t>(h.payloadBytes) != want) {
+        std::printf("SizeMismatch at header: h.payloadBytes=%u, want=%zu (fixed=%zu, opened=%u, pool=%u, macro=%u)\n", 
+            h.payloadBytes, want, kSaveFixedWire, h.openedCount, h.poolBytes, h.macroBytes);
         return fail(SaveError::SizeMismatch);
+    }
     if (n - kSaveHeaderWire < static_cast<std::size_t>(h.payloadBytes))
         return fail(SaveError::TooShort);
     if (crc32(bytes + kSaveHeaderWire, h.payloadBytes) != h.payloadCrc)
         return fail(SaveError::BadChecksum);
 
     // Version 2 quest table checks (after CRC, before parsing).
-    if (h.questCount != static_cast<std::uint32_t>(kQuestCount))
+    if (h.questCount != static_cast<std::uint32_t>(kQuestCount)) {
+        std::printf("SizeMismatch questCount: h.questCount=%u, kQuestCount=%zu\n", h.questCount, kQuestCount);
         return fail(SaveError::SizeMismatch);  // closest existing error for table drift
-    if (h.questFingerprint != quest_table_fingerprint())
+    }
+    if (h.questFingerprint != quest_table_fingerprint()) {
+        std::printf("SizeMismatch questFingerprint: h.questFingerprint=%u, table=%u\n", h.questFingerprint, quest_table_fingerprint());
         return fail(SaveError::SizeMismatch);
+    }
 
     // Parse into a scratch copy and commit only on success: a half-applied load would
     // leave the game in a state no run has ever reached, which is harder to recover from
@@ -557,6 +593,7 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     r.u32(tmp.kills);
     // Version 9 / SAVSTAT: live status effects.
     visit_status(r, tmp.status);
+    visit_samosbor(r, tmp.samosbor);
     tmp.opened.resize(static_cast<std::size_t>(h.openedCount));
     for (std::size_t i = 0; i < tmp.opened.size(); ++i) visit_key(r, tmp.opened[i]);
     // Version 6: the macro blobs, verbatim (decoded by their owners against live
@@ -588,8 +625,11 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     // wire constants and the visitors disagree, which the static_asserts above already
     // forbid — this is the runtime backstop for the case where they are edited together
     // and both are wrong.
-    if (r.at() + kQuestLogWire != static_cast<std::size_t>(h.payloadBytes))
+    if (r.at() + kQuestLogWire != static_cast<std::size_t>(h.payloadBytes)) {
+        std::printf("SizeMismatch at end: r.at()=%zu, kQuestLogWire=%zu, expected payloadBytes=%zu\n",
+            r.at(), kQuestLogWire, static_cast<std::size_t>(h.payloadBytes));
         return fail(SaveError::SizeMismatch);
+    }
 
     st = std::move(tmp);
     return true;
@@ -951,6 +991,7 @@ PlacedCell place_body_safely(Registry& reg, const World& world, Entity body,
 // carved/stair cells — single-digit MB against the raw 138 MB.
 
 std::size_t snapshot_floor(const World& w, int floorNumber,
+                           const HermeticZones& hermeticZones,
                            std::vector<std::uint8_t>& out) {
     out.clear();
     Writer wr(out);
@@ -1056,10 +1097,25 @@ std::size_t snapshot_floor(const World& w, int floorNumber,
             }
         }
     }
+
+    // HermeticZones (appended after sub-materials)
+    const std::size_t sealedWords = hermeticZones.sealed.size();
+    wr.u32(static_cast<std::uint32_t>(sealedWords));
+    for (std::size_t i = 0; i < sealedWords; ++i) {
+        wr.u64(hermeticZones.sealed[i]);
+    }
+    
+    const std::size_t doorCount = hermeticZones.doorCells.size();
+    wr.u32(static_cast<std::uint32_t>(doorCount));
+    for (std::size_t i = 0; i < doorCount; ++i) {
+        wr.u32(hermeticZones.doorCells[i]);
+    }
+
     return out.size();
 }
 
 bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
+                          HermeticZones& hermeticZones,
                           std::int32_t* floorOut) {
     if (!bytes || n == 0) return false;
     Reader r(bytes, n);
@@ -1131,27 +1187,54 @@ bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
         CellType* pg = mats.ensure_page(cell, types[cell]);
         std::uint16_t runs = 0;
         r.u16(runs);
-        int at = 0;
+        int voxelAt = 0;
         for (std::uint16_t k = 0; k < runs && r.ok(); ++k) {
             std::uint16_t v = 0, len = 0;
             r.u16(v);
             r.u16(len);
             // Subtract-never-add, the same guard the mask and type runs use: a
             // forged length cannot walk past the page.
-            if (len == 0 || len > static_cast<std::uint16_t>(kSubVoxels - at))
+            if (len == 0 || len > static_cast<std::uint16_t>(kSubVoxels - voxelAt))
                 return false;
-            for (std::uint16_t q = 0; q < len; ++q) pg[at++] = v;
+            for (std::uint16_t q = 0; q < len; ++q) pg[voxelAt++] = static_cast<CellType>(v);
         }
-        if (at != kSubVoxels) return false;
+        if (voxelAt != kSubVoxels) return false;
     }
+
+    // HermeticZones
+    std::uint32_t sealedWords = 0;
+    r.u32(sealedWords);
+    // Be robust to older saves that might not have HermeticZones appended.
+    // If the reader hit the end (or fails), just assume empty zones.
+    if (!r.ok()) {
+        hermeticZones = HermeticZones();
+        return true; 
+    }
+    
+    if (sealedWords != (kMacroCells + 63) / 64) return false;
+    hermeticZones.sealed.assign(sealedWords, 0);
+    for (std::uint32_t i = 0; i < sealedWords && r.ok(); ++i) {
+        r.u64(hermeticZones.sealed[i]);
+    }
+
+    std::uint32_t doorCount = 0;
+    r.u32(doorCount);
+    // Sanity limit on door cells (prevent massive alloc on corrupted data)
+    if (doorCount > kMacroCells) return false;
+    hermeticZones.doorCells.resize(doorCount);
+    for (std::uint32_t i = 0; i < doorCount && r.ok(); ++i) {
+        r.u32(hermeticZones.doorCells[i]);
+    }
+
     // Every byte consumed, none left over — same discipline as save_read.
     return r.ok() && r.at() == n;
 }
 
 void floor_file_write(const World& w, int floorNumber,
+                      const HermeticZones& hermeticZones,
                       std::vector<std::uint8_t>& out) {
     std::vector<std::uint8_t> blob;
-    snapshot_floor(w, floorNumber, blob);
+    snapshot_floor(w, floorNumber, hermeticZones, blob);
 
     // SAY IT when the writer outgrows the reader. There is no guard here on
     // purpose — refusing to write would lose the floor silently, which is worse —
@@ -1179,6 +1262,7 @@ void floor_file_write(const World& w, int floorNumber,
 }
 
 bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
+                     HermeticZones& hermeticZones,
                      std::int32_t* floorOut, SaveError* err) {
     if (err) *err = SaveError::None;
     auto fail = [err](SaveError e) {
@@ -1199,7 +1283,7 @@ bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
         return fail(SaveError::SizeMismatch);
     if (crc32(bytes + kFloorHeaderWire, blobBytes) != crc)
         return fail(SaveError::BadChecksum);
-    if (!apply_floor_snapshot(w, bytes + kFloorHeaderWire, blobBytes, floorOut))
+    if (!apply_floor_snapshot(w, bytes + kFloorHeaderWire, blobBytes, hermeticZones, floorOut))
         return fail(SaveError::SizeMismatch);
     return true;
 }

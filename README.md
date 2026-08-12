@@ -45,7 +45,7 @@
 |  - Toroidal 3D wrapping on X/Y/Z axes                                   |
 |  - Destructible materials via probabilistic damage penetration          |
 |  - Samosbor waves & real-time floor geometry baking                     |
-|  - 4x4 Fast-Travel Elevators + 4x4 Up/Down Procedural Elevators         |
+|  - 16 Procedural Elevator Shafts (Fast-Travel & Up/Down)                |
 |  - Hermetic rooms: Living, Toilets, Kitchens, Workshops, Smoking, Lairs |
 +-------------------------------------------------------------------------+
                                     | EnTT ECS Views / Zero-Alloc Ticks
@@ -137,6 +137,7 @@ registry (§1–§45) and outranks any doc that disagrees with a measured findin
 | [Docs/specs/17_ITEM_DATA_AND_CONTAINERS.md](Docs/specs/17_ITEM_DATA_AND_CONTAINERS.md) | 442 items (not 446), 14 dead CSV columns, nowhere to store anything |
 | [Docs/specs/18_BUILD_GATES_AND_CI.md](Docs/specs/18_BUILD_GATES_AND_CI.md) | CI cannot configure (no Vulkan SDK step), 5 platform asymmetries, no -Werror |
 | [Docs/specs/19_ECS_COMPONENTS_AND_ORDER.md](Docs/specs/19_ECS_COMPONENTS_AND_ORDER.md) | 39 components, 6 Velocity writers, Corpse loot lost on save |
+| [Docs/specs/20_CELLULAR_AUTOMATA.md](Docs/specs/20_CELLULAR_AUTOMATA.md) | 1492 unreachable lines, wired within the hour; the gravity fix is half-applied and the gate misses it |
 | [Docs/specs/21_RUMOURS_AND_INFORMATION.md](Docs/specs/21_RUMOURS_AND_INFORMATION.md) | A truth generator with no NPC listener; 4 of 9 kinds unreachable behind a one-line shim |
 
 Each spec opens with **what is already built** so no session re-specifies working

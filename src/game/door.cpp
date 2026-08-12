@@ -207,7 +207,12 @@ bool inventory_has_keycard(const Inventory& inv, std::uint8_t requiredTier) {
         if (!item_valid(slot.item)) continue;
         const ItemDef& def = item_def(slot.item);
         if (def.category == static_cast<std::uint8_t>(ItemCategory::Key)) {
-            return true;
+            // Keycard tier is encoded in useA (1 = Red/Level 1, 2 = Blue/Level 2, 3 = Master).
+            // Master tier (3) opens all doors. Otherwise, tier must meet or exceed requiredTier.
+            const std::uint8_t itemTier = def.useA > 0 ? static_cast<std::uint8_t>(def.useA) : 1;
+            if (itemTier >= static_cast<std::uint8_t>(KeycardTier::Master) || itemTier >= requiredTier) {
+                return true;
+            }
         }
     }
     return false;

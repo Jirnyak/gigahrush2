@@ -290,7 +290,7 @@ FactionFoe nearest_faction_foe(const Registry& reg, const NpcPool& pool,
 // Returns the number of feud hits that landed.
 std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
                                 const FactionRelations& rel, LayerId layer,
-                                std::uint64_t tick);
+                                std::uint64_t tick, const GravityField& gravity);
 
 // What one drain of the death events did to the matrix. Returned rather than only
 // published, so a HUD can print it without the caller having to re-scan the ring.

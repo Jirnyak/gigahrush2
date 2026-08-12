@@ -6,6 +6,7 @@
 #include "game/faction_relations.h"  // FactionRelations, rel_row
 #include "game/floor_registry.h"     // kMinFloor / kMaxFloor / kFloorSlots
 #include "game/population.h"         // height_for_age
+#include "game/item_table.h"
 
 namespace giga::game {
 
@@ -319,6 +320,28 @@ MacroStats MacroSim::step(NpcPool& pool, const MacroParams& params,
             pool.kill(id);
             ++deaths;
             continue;
+        }
+
+        bool fed = false;
+        auto& inv = pool.inventory(id);
+        for (int i = 0; i < game::kInvSlots; ++i) {
+            if (inv.slots[i].item != 0 && game::item_def(inv.slots[i].item).category == static_cast<std::uint8_t>(game::ItemCategory::Food)) {
+                --inv.slots[i].count;
+                if (inv.slots[i].count == 0) inv.slots[i].item = 0;
+                fed = true;
+                break;
+            }
+        }
+        
+        if (fed) {
+            pool.needs(id).food = game::kColdFedLevel;
+        } else {
+            pool.needs(id).food -= game::kColdStarveStep;
+            if (pool.needs(id).food <= 0.0f) {
+                pool.kill(id);
+                ++deaths;
+                continue;
+            }
         }
 
         ++living;

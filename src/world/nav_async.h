@@ -30,7 +30,7 @@
 
 namespace giga {
 
-class MacroGrid;
+class World;
 
 namespace nav {
 
@@ -54,7 +54,7 @@ public:
     // happens if a floor change lands inside another floor change). `grid` must
     // outlive the bake and must not be mutated until `ready()` — see the header
     // note on why this is a contract rather than a copy.
-    void start(const MacroGrid& grid);
+    void start(const World& world);
 
     // Hand a finished bake over to the live side. Cheap and safe to call every
     // frame; returns true on the frame the swap actually happened, which is the

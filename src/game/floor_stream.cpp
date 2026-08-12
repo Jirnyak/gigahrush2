@@ -9,6 +9,7 @@
 #include "game/floor_gen.h"   // generate_floor
 #include "game/nav_cache.h"   // nav_cache_name, save/load_nav_cache
 #include "game/population.h"  // seed_floor_from_spec
+#include "game/role.h"        // RoleId
 #include "game/save.h"        // place_body_safely — blind-seeded cells resolve here
 
 namespace giga::game {
@@ -92,6 +93,21 @@ std::uint32_t FloorStreamer::seed_all_modules(NpcPool& pool) {
         fm.candidate = mint_candidate(pool, cand);
         fm.seeded = true;
     }
+    
+    std::uint32_t roleCounts[5] = {};
+    for (NpcId i = 0; i < pool.count(); ++i) {
+        if (pool.valid(i)) {
+            std::uint8_t r = pool.role(i);
+            if (r < 5) roleCounts[r]++;
+        }
+    }
+    std::fprintf(stderr, "[aimem] roles resident=%u duty=%u medic=%u looter=%u cultist=%u\n",
+                 roleCounts[static_cast<std::uint8_t>(RoleId::Resident)],
+                 roleCounts[static_cast<std::uint8_t>(RoleId::Duty)],
+                 roleCounts[static_cast<std::uint8_t>(RoleId::Medic)],
+                 roleCounts[static_cast<std::uint8_t>(RoleId::Looter)],
+                 roleCounts[static_cast<std::uint8_t>(RoleId::Cultist)]);
+                 
     return static_cast<std::uint32_t>(pool.count() - before);
 }
 
@@ -359,8 +375,8 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
                                  fn->fine);
     }
     if (!haveNav) {
-        nav::bake_coarse(stack.layer(slot).grid(), fn->coarse);
-        nav::bake_fine(stack.layer(slot).grid(), fn->fine);
+        nav::bake_coarse(stack.layer(slot).grid(), stack.layer(slot).gravity().regime, fn->coarse);
+        nav::bake_fine(stack.layer(slot).grid(), stack.layer(slot).gravity().regime, fn->fine);
         if (!cachePath.empty())
             save_nav_cache(cachePath, fm.number, fm.kind, fm.seed, fn->coarse,
                            fn->fine);

@@ -1,5 +1,7 @@
 #include "core/rng.h"
+#include "game/mob_table.h"
 #include "game/population.h"
+#include "game/role.h"
 
 #include "game/floor_gen.h" // floor_ground_z — the module's ground storey
 
@@ -121,6 +123,7 @@ NpcId seed_floor_from_spec(NpcPool& pool, int floor, const FloorSpec& spec,
 
         pool.level(id) = static_cast<std::uint8_t>(1 + (r % 10u));
         pool.faction(id) = sample_faction(spec.factionMix, hash_u32(r ^ 0x51ed270bu));
+        pool.role(id) = static_cast<std::uint8_t>(role_for(id, spec.kind));
         pool.max_hp(id) = 100;
         pool.hp(id) = 100;
         ++placed;

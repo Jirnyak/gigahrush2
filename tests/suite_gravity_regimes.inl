@@ -1,11 +1,14 @@
-// suite_gravity_regimes.inl — the isotropy law, pinned ([gravity.md], AGENTS.md
+// suite_gravity_regimes.inl — spec2.txt §5.1, the isotropy law ([gravity.md], AGENTS.md
 // "gravity is a vector").
 //
-// GATE: all 8 GravityRegimes tested for regime_down/regime_frame shape and for
-// fluid fall direction. A failure here pinpoints a hardcoded axis letter — the
-// defect class problems.md §34 documents. The structural argument is in §d at
-// the bottom: passing for all 6 directional regimes at once is impossible with
-// any single hardcoded axis, so no source grep is needed.
+// GATE: all 8 GravityRegimes tested for regime_down/regime_frame shape, fluid fall
+// direction, and fluid isotropy. A failure here pinpoints a hardcoded axis letter — the
+// defect class problems.md §34 documents.
+//
+// The spec mandates:
+//  - suite_gravity_regimes.inl tests all 8 regimes (NegX..PosZ, Zero, Custom)
+//  - At Zero, water does NOT flow to +X (old bug from downAxis defaulting to 0)
+//  - fluid.cpp calls regime_down(), not its own classifier
 #include "world/world.h"
 #include "sim/fluid.h"
 #include "world/gravity.h"
@@ -178,10 +181,10 @@ static void test_fluid_falls_in_regime_direction() {
     }
 }
 
-// --- §d: the gate itself ---------------------------------------------------
-// No source grep: the isotropy properties above only hold if regime_down() is
-// used. test_fluid_falls_in_regime_direction passing for ALL 6 directional
-// regimes simultaneously is impossible with a single hardcoded axis.
+// --- §d: GATE — verify regime_down() usage and isotropy -------------------
+// The isotropy properties above only hold if regime_down() is used.
+// test_fluid_falls_in_regime_direction passing for ALL 6 directional
+// regimes simultaneously is mathematically impossible with any single hardcoded axis.
 
 static void test_gravity_regimes_all() {
     test_gravity_regimes_isotropy();

@@ -101,4 +101,10 @@ private:
 // which the test suite turns into a failure.
 bool build_default_floor_catalog(FloorCatalog& cat);
 
+// The global catalog singleton. Access via mutable_floor_catalog() during app startup
+// to inject demo or mod floors, and via floor_catalog() everywhere else for read-only
+// lookups (like floor_spec_for).
+FloorCatalog& mutable_floor_catalog();
+const FloorCatalog& floor_catalog();
+
 } // namespace giga::game

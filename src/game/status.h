@@ -1,10 +1,10 @@
-// Timed player status effects — the six the reference authors, as a table.
+// Timed player status effects вЂ” the six the reference authors, as a table.
 //
 // WHAT THIS REPLACES. [combat.h] carries `Slowed`, and its own comment is a careful
 // argument for a CAP rather than a multiplier: `controller_step` rewrites the player's
 // velocity every tick, `wander_step` writes a crowd body's only on its stagger slot,
 // so a repeated multiply would give a resident 0.45^8 = 0.0017 of its speed within one
-// period — a freeze, not a slow. That reasoning is correct and is NOT undone here.
+// period вЂ” a freeze, not a slow. That reasoning is correct and is NOT undone here.
 // `Slowed` is the enforcement mechanism; this is the CONTENT layer that decides what
 // lands and for how long. Five of the six statuses below had authored numbers in the
 // reference and nowhere to live.
@@ -33,11 +33,11 @@
 
 namespace giga::game {
 
-inline constexpr std::size_t kStatusCount = 6;
+inline constexpr std::size_t kStatusCount = 7;
 
 // Row order is data/status.csv row order, and it is load-bearing: a StatusId is an
 // index into the generated table, so INSERTING or REORDERING a row redefines every
-// stored id. Same hazard [save.h] documents for ItemId, same rule — append only.
+// stored id. Same hazard [save.h] documents for ItemId, same rule вЂ” append only.
 enum class StatusId : std::uint8_t {
     ZhelemishSkin = 0,
     PaupsinaWeb,
@@ -45,6 +45,7 @@ enum class StatusId : std::uint8_t {
     GovnyakRelief,
     GovnyakCough,
     GovnyakDebt,
+    PsiStun,
 };
 
 // POD, 24 bytes. Fixed-point throughout; see the header note for the x1000 scale.
@@ -67,7 +68,7 @@ struct StatusDef {
     // `= 0` is load-bearing twice over, and this row had neither. The generator
     // emits twelve initialisers for thirteen fields, so without a default this is
     // (a) six -Wmissing-field-initializers in a tree that must build with none, and
-    // (b) an INDETERMINATE byte inside a table that determinism tests digest —
+    // (b) an INDETERMINATE byte inside a table that determinism tests digest вЂ”
     // two builds of identical sources could disagree. The same default every other
     // generated row already carries ([prop_table.h] pad0_, [mob_table.h] before its
     // pads were reclaimed by massG).
@@ -97,7 +98,7 @@ inline const char* status_name(StatusId id) {
 // ---------------------------------------------------------------------------
 // Fixed-size, so the tick allocates nothing. Six statuses exist and a player can hold
 // all six at once, so the array is exactly kStatusCount and a slot is addressed by its
-// own StatusId — no search, no compaction, no ordering question.
+// own StatusId вЂ” no search, no compaction, no ordering question.
 //
 // An expired slot keeps `remainMs == 0` rather than being cleared, for the reason
 // [combat.h] gives for leaving an expired `Slowed` attached: removing a component
@@ -116,7 +117,7 @@ struct StatusSet {
 // The reference's cap on accumulated intensity (govnyak.ts). x1000.
 inline constexpr std::uint16_t kStatusIntensityCapE3 = 3000;
 
-// Land `id`. `useAlt` selects the alternate duration/multiplier column — the caller
+// Land `id`. `useAlt` selects the alternate duration/multiplier column вЂ” the caller
 // resolves the condition (item worn, food treated) because this module must not reach
 // into an inventory. Refreshes rather than replaces: an already-held status keeps the
 // LONGER remaining time, so re-entering a spore cloud cannot shorten your haze.
@@ -128,7 +129,7 @@ std::uint32_t status_step(StatusSet& set, std::uint32_t dtMs);
 bool status_active(const StatusSet& set, StatusId id);
 
 // ---------------------------------------------------------------------------
-// Queries — the whole reason the effects are data
+// Queries вЂ” the whole reason the effects are data
 // ---------------------------------------------------------------------------
 // Each folds every ACTIVE status into one multiplier, x1000, so a caller applies one
 // number and never enumerates statuses itself. Multiplicative composition, because two

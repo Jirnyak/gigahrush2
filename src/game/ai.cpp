@@ -12,11 +12,16 @@
 #include "game/needs.h"       // needs_roll — substitute for an unseeded pool row
 #include "game/door.h"        // door_nearest_shelter — hermetic flee target (§23)
 #include "game/room_zone.h"   // room affordance table + baked fields (§27 legs a,b)
+#include "game/role.h"        // RoleTraits, role_traits()
 #include "sim/diffusion.h"    // diffusion_gradient — the flee steering field
 #include "world/field.h"      // Field<float>
 #include "world/macro_grid.h" // MacroGrid (open/wall test inside the gradient)
 #include "world/types.h"      // wrap_macro, kCellSize, kMacroDim
 #include "world/world.h"      // World — door_nearest_shelter needs const World&
+#include "world/gravity.h"
+#include "world/lattice.h"    // LatticeNode, lattice_unpack, lattice_coord
+#include "world/nav.h"        // route_step, kFlowArrived
+#include "core/rng.h"         // hash3
 
 namespace giga::game {
 
@@ -261,7 +266,14 @@ void score_intents(const Perception& p, const Needs& needs,
     // per-body so a uniform crowd does not act in lockstep.
     //
     // Note for anyone measuring thrash: this jitter is constant in TIME (it is a
-    // function of identity and intent only), so it cannot itself cause flapping.
+    // Role traits (spec 01 section 3a.6). Applied BEFORE identity jitter.
+    const RoleTraits& rt = role_traits(static_cast<RoleId>(p.role));
+    out[IntentWork]   *= rt.workDrive;
+    out[IntentPatrol] *= rt.patrolDrive;
+    out[IntentSocial] *= rt.sociability;
+    out[IntentWork]   += rt.scavengeDrive * p.localScore[IntentWork] * (1.0f - threat);
+    out[IntentHeal]   += rt.careDrive * p.nearbyWounded01 * (1.0f - threat);
+
     // Time variation comes from the needs, the danger field and the stickiness.
     for (std::uint8_t i = 0; i < kIntentCount; ++i) {
         out[i] = clamp_score(
@@ -565,11 +577,22 @@ std::uint32_t ai_release(Registry& reg, LayerId layer) {
     return n;
 }
 
+void panic_publish_step(Field<float>& danger, int cx, int cy, int cz, float dt, float panic) {
+    danger.at(cx, cy, cz) += kPanicEmit * dt * panic;
+}
+
+void panic_publish_step(Field<float>& danger, const vec3& pos, float dt, float panic) {
+    const int cx = wrap_macro(static_cast<int>(std::floor(pos.x / kCellSize)));
+    const int cy = wrap_macro(static_cast<int>(std::floor(pos.y / kCellSize)));
+    const int cz = wrap_macro(static_cast<int>(std::floor(pos.z / kCellSize)));
+    panic_publish_step(danger, cx, cy, cz, dt, panic);
+}
+
 // --------------------------------------------------------------------------
 // ai_step — arbitration first, steering second. See ai.h for the contract, and
 // the file header for the ownership rule this enforces.
 // --------------------------------------------------------------------------
-AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
+AiTick ai_step(Registry& reg, NpcPool& pool, Field<float>* danger, Field<float>* rally,
                const MacroGrid& grid, LayerId layer, double now, float dt,
                const AiConfig& cfg, AiMemory* mem,
                const DoorSet* doors, const World* world,
@@ -600,6 +623,7 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
     // One allocation-free sweep over the packed columns. Nothing here emplaces or
     // destroys a component, so the view cannot be invalidated mid-iteration —
     // that hazard lives in `ai_init`, by construction rather than by comment.
+    const Field<float>* fogField = world != nullptr ? world->fields().find<float>(kFogField) : nullptr;
     auto view = reg.view<AiBrain, const NpcRef, const Transform, Velocity>();
     for (auto e : view) {
         const Transform& tr = view.get<const Transform>(e);
@@ -637,6 +661,7 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
         const int cz = wrap_macro(static_cast<int>(std::floor(tr.pos.z / kCellSize)));
 
         const float dangerHere = danger != nullptr ? danger->at(cx, cy, cz) : 0.0f;
+        const float fogHere = fogField != nullptr ? fogField->at(cx, cy, cz) : 0.0f;
 
         // --- RECORDER 1: an HP drop, checked EVERY tick ----------------------
         // Damage is an event, not a poll, so the tick it lands on is the only tick
@@ -655,6 +680,47 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                 ++out.remembered;
         }
         brain.lastHp = hpNow;
+
+        const std::uint8_t roleId = pool.role(id);
+        float myNearbyWounded01 = 0.0f;
+
+        // -- Medic: heal nearby wounded and compute nearbyWounded01 --
+        if (roleId == static_cast<std::uint8_t>(RoleId::Medic)) {
+            float woundedCount = 0.0f;
+            float totalCount = 0.0f;
+            auto trView = reg.view<const Transform, const NpcRef>();
+            for (auto te : trView) {
+                if (te == e) continue;
+                if (reg.all_of<Dead>(te)) continue;
+                const Transform& ot = trView.get<const Transform>(te);
+                if (ot.layer != layer) continue;
+
+                const float dx = wrap_delta_f(tr.pos.x, ot.pos.x, kWorldExtent);
+                const float dy = wrap_delta_f(tr.pos.y, ot.pos.y, kWorldExtent);
+                const float dz = wrap_delta_f(tr.pos.z, ot.pos.z, kWorldExtent);
+                if (dx*dx + dy*dy + dz*dz <= kMedicReachM * kMedicReachM) {
+                    const NpcId oid = trView.get<const NpcRef>(te).id;
+                    if (pool.valid(oid) && pool.alive(oid)) {
+                        totalCount += 1.0f;
+                        const float hpFrac = static_cast<float>(pool.hp(oid)) / static_cast<float>(pool.max_hp(oid));
+                        if (hpFrac < kMedicThreshold) {
+                            woundedCount += 1.0f;
+                            pool.needs(oid).hpBank += kMedicHealPerSec * dt;
+                            pool.needs(id).sleep -= kMedicFatiguePerSec * dt;
+                        }
+                    }
+                }
+            }
+            if (totalCount > 0.0f) {
+                myNearbyWounded01 = woundedCount / totalCount;
+            }
+        }
+
+        // -- Cultist: emit into rally field --
+        if (roleId == static_cast<std::uint8_t>(RoleId::Cultist) && rally != nullptr) {
+            const float sociability = kRoleTraits[roleId].sociability;
+            rally->at(cx, cy, cz) += kRallyEmit * dt * sociability;
+        }
 
         // --- RECALL, and only when somebody is going to read it --------------
         // Two consumers, so two conditions: the scorer (a re-plan) and the flee
@@ -681,7 +747,10 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             p.hp = static_cast<float>(hpNow);
             p.maxHp = static_cast<float>(pool.max_hp(id));
             p.danger = dangerHere;
+            p.fog = fogHere;
             p.currentIntent = brain.currentIntent;
+            p.role = roleId;
+            p.nearbyWounded01 = myNearbyWounded01;
             // Zeroed when hysteresis is off, so the two arms of the measurement
             // differ in exactly the mechanism under test and nothing else.
             p.stickinessAmount =
@@ -690,6 +759,17 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             // everything else. With no memory every added field stays at its zero
             // default, so the ranking is identical to the pre-memory one.
             if (haveRecall) apply_recall(recall, p.faction, p);
+            // Samosbor fog blocks LOS and reduces visual perception.
+            if (p.fog > 0.0f) {
+                const float fogCap = 1.0f - p.fog; // p.fog is already clamped 0..1 in field
+                p.visibleHostiles *= fogCap;
+                p.hostilePower *= fogCap;
+                p.allyPower *= fogCap;
+                if (p.threatDistance >= 0.0f) {
+                    // Fog pushes the perceived threat distance towards the edge of vision
+                    p.threatDistance += (18.0f - p.threatDistance) * p.fog;
+                }
+            }
             // Every other Perception field stays at its stubbed default, so its
             // scorer term contributes 0 — the faithful-port invariant.
 
@@ -737,12 +817,22 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
         }
         brain.stateTimer += dt;
 
+        // Publish panic into danger field for emergency intents (R1).
+        if (danger != nullptr && intent_is_emergency(brain.currentIntent)) {
+            const FactionTraits& ft = faction_traits(pool.faction(id));
+            if (ft.panic > 0.0f) {
+                panic_publish_step(*danger, cx, cy, cz, dt, ft.panic);
+                out.dangerEmitted = true;
+            }
+        }
+
         // --- Arbitrate, then steer ------------------------------------------
         // Ownership is decided EVERY tick, not only at re-plan, because the input
         // it depends on (the gradient) evolves between re-plans. The intent is
         // sticky; the ownership derived from it is re-derived, so a flee that
         // loses its gradient hands the body back to wander on the same tick
         // wander runs — which is why ai_step must run first.
+        const GravityFrame gf = world != nullptr ? regime_frame(world->gravity().regime) : axis_frame(2, 1, false);
         vec3 dir{0.0f, 0.0f, 0.0f};
         bool owned = false;
         bool viaMemory = false;
@@ -758,8 +848,15 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                 if (door_nearest_shelter(*world, *doors, cx, cy, cz, ox, oy, oz)) {
                     const float dx = static_cast<float>(wrap_delta(cx, ox, kMacroDim));
                     const float dy = static_cast<float>(wrap_delta(cy, oy, kMacroDim));
-                    if (dx * dx + dy * dy > kMinFleeGrad2) {
-                        dir = normalize(vec3{dx, dy, 0.0f});
+                    const float dz = static_cast<float>(wrap_delta(cz, oz, kMacroDim));
+                    vec3 away{dx, dy, dz};
+                    if (gf.axis == 0) away.x = 0.0f;
+                    else if (gf.axis == 1) away.y = 0.0f;
+                    else away.z = 0.0f;
+                    const float d2 = away.x * away.x + away.y * away.y + away.z * away.z;
+                    if (d2 > kMinFleeGrad2) {
+                        const float inv = 1.0f / std::sqrt(d2);
+                        dir = vec3{away.x * inv, away.y * inv, away.z * inv};
                         owned = true;
                     }
                 }
@@ -769,9 +866,14 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             if (!owned && danger != nullptr) {
                 // Down the gradient: the field is danger, so safety is -grad.
                 const vec3 g = diffusion_gradient(*danger, grid, cx, cy, cz);
-                const vec3 away{-g.x, -g.y, 0.0f};
-                if (away.x * away.x + away.y * away.y > kMinFleeGrad2) {
-                    dir = normalize(away);
+                vec3 away{-g.x, -g.y, -g.z};
+                if (gf.axis == 0) away.x = 0.0f;
+                else if (gf.axis == 1) away.y = 0.0f;
+                else away.z = 0.0f;
+                const float d2 = away.x * away.x + away.y * away.y + away.z * away.z;
+                if (d2 > kMinFleeGrad2) {
+                    const float inv = 1.0f / std::sqrt(d2);
+                    dir = vec3{away.x * inv, away.y * inv, away.z * inv};
                     owned = true;
                 }
             }
@@ -786,14 +888,30 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                 owned = true;
                 viaMemory = true;
             }
+            // -- Cultist: steer up rally gradient if IntentSocial --
+            if (!owned && brain.currentIntent == IntentSocial && roleId == static_cast<std::uint8_t>(RoleId::Cultist) && rally != nullptr) {
+                const vec3 g = diffusion_gradient(*rally, grid, cx, cy, cz);
+                vec3 away{g.x, g.y, g.z};
+                if (gf.axis == 0) away.x = 0.0f;
+                else if (gf.axis == 1) away.y = 0.0f;
+                else away.z = 0.0f;
+                const float d2 = away.x * away.x + away.y * away.y + away.z * away.z;
+                if (d2 > 1e-10f) {
+                    const float inv = 1.0f / std::sqrt(d2);
+                    dir = vec3{away.x * inv, away.y * inv, away.z * inv};
+                    owned = true;
+                }
+            }
         } else if (useRooms) {
             // --- THE ERRAND: a non-flee intent that has somewhere to be --------
-            // This is §27 leg (a). Everything about it is a TABLE read: which room
-            // kind satisfies this intent, where the nearest one is, and what one
-            // second inside it does. No intent is named in this branch — adding
-            // "work happens in a Production room" is a row in kRoomAffordance and
-            // not a line here ([room_zone.h]).
-            const std::uint16_t want = intent_room_mask(brain.currentIntent);
+             // is the nearest one is, and what one second inside it does. No intent is named in
+            // this branch - adding "work happens in a Production room" is a row in kRoomAffordance
+            // and not a line here ([room_zone.h]).
+            std::uint16_t want = intent_room_mask(brain.currentIntent);
+            const RoleTraits& rt = role_traits(static_cast<RoleId>(roleId));
+            if (brain.currentIntent == IntentSleep) want &= rt.homeRooms;
+            else if (brain.currentIntent == IntentWork) want &= rt.workRooms;
+            
             const std::uint16_t here =
                 want != 0 ? room_bit_at(rooms->kind, rooms->number, cx, cy) : 0;
             // Stall probe, read BEFORE this pass overwrites Velocity — see AiTick.
@@ -837,12 +955,16 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                 } else {
                     const float tx = (static_cast<float>(sx) + 0.5f) * kCellSize;
                     const float ty = (static_cast<float>(sy) + 0.5f) * kCellSize;
-                    const float dx = wrap_delta_f(tr.pos.x, tx, kWorldExtent);
-                    const float dy = wrap_delta_f(tr.pos.y, ty, kWorldExtent);
-                    const float d2 = dx * dx + dy * dy;
+                    const float tz = tr.pos.z;
+                    const float dx = gf.axis == 0 ? 0.0f : wrap_delta_f(tr.pos.x, tx, kWorldExtent);
+                    const float dy = gf.axis == 1 ? 0.0f : wrap_delta_f(tr.pos.y, ty, kWorldExtent);
+                    const float dz = gf.axis == 2 ? 0.0f : wrap_delta_f(tr.pos.z, tz, kWorldExtent);
+                    const float d2 = dx * dx + dy * dy + dz * dz;
                     owned = true;
-                    if (d2 > kSeatArriveM * kSeatArriveM)
-                        dir = normalize(vec3{dx, dy, 0.0f});
+                    if (d2 > kSeatArriveM * kSeatArriveM) {
+                        const float inv = 1.0f / std::sqrt(d2);
+                        dir = vec3{dx * inv, dy * inv, dz * inv};
+                    }
                     // else: dir stays zero — SETTLED. Owning the body and writing a
                     // zero is the point, not an oversight: handing it back to
                     // wander here would walk it out of the kitchen mid-meal, which
@@ -874,12 +996,17 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                     // the clearance test actually cleared.
                     const int nx = wrap_macro(cx + nav::kNavDir[r.dir][0]);
                     const int ny = wrap_macro(cy + nav::kNavDir[r.dir][1]);
+                    const int nz = wrap_macro(cz + nav::kNavDir[r.dir][2]);
                     const float tx = (static_cast<float>(nx) + 0.5f) * kCellSize;
                     const float ty = (static_cast<float>(ny) + 0.5f) * kCellSize;
-                    const float dx = wrap_delta_f(tr.pos.x, tx, kWorldExtent);
-                    const float dy = wrap_delta_f(tr.pos.y, ty, kWorldExtent);
-                    if (dx * dx + dy * dy > kMinFleeGrad2) {
-                        dir = normalize(vec3{dx, dy, 0.0f});
+                    const float tz = (static_cast<float>(nz) + 0.5f) * kCellSize;
+                    const float dx = gf.axis == 0 ? 0.0f : wrap_delta_f(tr.pos.x, tx, kWorldExtent);
+                    const float dy = gf.axis == 1 ? 0.0f : wrap_delta_f(tr.pos.y, ty, kWorldExtent);
+                    const float dz = gf.axis == 2 ? 0.0f : wrap_delta_f(tr.pos.z, tz, kWorldExtent);
+                    const float d2 = dx * dx + dy * dy + dz * dz;
+                    if (d2 > kMinFleeGrad2) {
+                        const float inv = 1.0f / std::sqrt(d2);
+                        dir = vec3{dx * inv, dy * inv, dz * inv};
                         owned = true;
                         ++out.errandStep;
                     }
@@ -894,10 +1021,14 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                     // nearest room of that kind, brute-forced at bake time.
                     const float tx = (static_cast<float>(r.targetX) + 0.5f) * kCellSize;
                     const float ty = (static_cast<float>(r.targetY) + 0.5f) * kCellSize;
-                    const float dx = wrap_delta_f(tr.pos.x, tx, kWorldExtent);
-                    const float dy = wrap_delta_f(tr.pos.y, ty, kWorldExtent);
-                    if (dx * dx + dy * dy > kMinFleeGrad2) {
-                        dir = normalize(vec3{dx, dy, 0.0f});
+                    const float tz = tr.pos.z;
+                    const float dx = gf.axis == 0 ? 0.0f : wrap_delta_f(tr.pos.x, tx, kWorldExtent);
+                    const float dy = gf.axis == 1 ? 0.0f : wrap_delta_f(tr.pos.y, ty, kWorldExtent);
+                    const float dz = gf.axis == 2 ? 0.0f : wrap_delta_f(tr.pos.z, tz, kWorldExtent);
+                    const float d2 = dx * dx + dy * dy + dz * dz;
+                    if (d2 > kMinFleeGrad2) {
+                        const float inv = 1.0f / std::sqrt(d2);
+                        dir = vec3{dx * inv, dy * inv, dz * inv};
                         owned = true;
                         ++out.errandColumn;
                     }
@@ -908,6 +1039,11 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                 // sealed pocket, or a floor that has none). Fall through to wander.
             }
             if (owned) ++out.roomOwned;
+        } else if (brain.currentIntent == IntentPatrol) {
+            owned = true; // Claim the body so wander_step skips it.
+            if (!reg.all_of<PatrolPlan>(e)) {
+                reg.emplace<PatrolPlan>(e, PatrolPlan{});
+            }
         }
 
         ++out.byIntent[brain.currentIntent < kIntentCount
@@ -932,12 +1068,90 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
         // of the room mid-meal.
         const float speed =
             brain.currentIntent == IntentFlee ? kFleeSpeed : kErrandSpeed;
-        vel.v.x = dir.x * speed;
-        vel.v.y = dir.y * speed;
-        // vel.v.z is intentionally untouched — physics_step owns it (gravity and
-        // jump). Same rule as wander_step: this is locomotion, not flight.
+        if (gf.axis != 0) vel.v.x = dir.x * speed;
+        if (gf.axis != 1) vel.v.y = dir.y * speed;
+        if (gf.axis != 2) vel.v.z = dir.z * speed;
+        // The vertical axis is left to gravity: this is locomotion, not flight.
+        // Same rule as wander_step: physics_step owns it (gravity and jump).
     }
     return out;
+}
+
+void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
+                    const nav::FineNav& fine, LayerId layer, float dt,
+                    const GravityField& gravity) {
+    auto view = reg.view<AiBrain, PatrolPlan, const Transform, Velocity, const NpcRef>();
+    const GravityFrame gf = regime_frame(gravity.regime);
+    for (auto e : view) {
+        const auto& brain = view.get<AiBrain>(e);
+        if (brain.motion != static_cast<std::uint8_t>(MotionOwner::Ai)) continue;
+        if (brain.currentIntent != IntentPatrol) continue;
+
+        const auto& tr = view.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+
+        auto& plan = view.get<PatrolPlan>(e);
+        auto& vel = view.get<Velocity>(e);
+        const auto& nr = view.get<const NpcRef>(e);
+
+        const int cx = wrap_macro(static_cast<int>(std::floor(tr.pos.x / kCellSize)));
+        const int cy = wrap_macro(static_cast<int>(std::floor(tr.pos.y / kCellSize)));
+        const int cz = static_cast<int>(std::floor(tr.pos.z / kCellSize));
+        ivec3 myCell{cx, cy, cz};
+
+        if (plan.nodeFrom == plan.nodeTo) {
+            const std::uint32_t idSeed = identity_seed(nr.id);
+            plan.nodeTo = static_cast<std::uint8_t>(hash3(idSeed, plan.hops, kPatrolSalt) % kLatticeCount);
+        }
+
+        const LatticeNode n = lattice_unpack(plan.nodeTo);
+        ivec3 dest{lattice_coord(n.ix), lattice_coord(n.iy), lattice_coord(n.iz)};
+
+        const std::uint8_t stepDir = nav::route_step(coarse, fine, myCell, dest);
+
+        if (stepDir == nav::kFlowArrived) {
+            plan.hops++;
+            plan.nodeFrom = plan.nodeTo;
+            const std::uint32_t idSeed = identity_seed(nr.id);
+            plan.nodeTo = static_cast<std::uint8_t>(hash3(idSeed, plan.hops, kPatrolSalt) % kLatticeCount);
+            if (gf.axis != 0) vel.v.x = 0.0f;
+            if (gf.axis != 1) vel.v.y = 0.0f;
+            if (gf.axis != 2) vel.v.z = 0.0f;
+        } else if (stepDir < 6) {
+            if (stepDir < 4) {
+                const int nx = wrap_macro(cx + nav::kNavDir[stepDir][0]);
+                const int ny = wrap_macro(cy + nav::kNavDir[stepDir][1]);
+                const int nz = wrap_macro(cz + nav::kNavDir[stepDir][2]);
+                const float tx = (static_cast<float>(nx) + 0.5f) * kCellSize;
+                const float ty = (static_cast<float>(ny) + 0.5f) * kCellSize;
+                const float tz = (static_cast<float>(nz) + 0.5f) * kCellSize;
+                const float dx = gf.axis == 0 ? 0.0f : wrap_delta_f(tr.pos.x, tx, kWorldExtent);
+                const float dy = gf.axis == 1 ? 0.0f : wrap_delta_f(tr.pos.y, ty, kWorldExtent);
+                const float dz = gf.axis == 2 ? 0.0f : wrap_delta_f(tr.pos.z, tz, kWorldExtent);
+                const float d2 = dx * dx + dy * dy + dz * dz;
+                if (d2 > kMinFleeGrad2) {
+                    const float inv = 1.0f / std::sqrt(d2);
+                    if (gf.axis != 0) vel.v.x = dx * inv * kErrandSpeed;
+                    if (gf.axis != 1) vel.v.y = dy * inv * kErrandSpeed;
+                    if (gf.axis != 2) vel.v.z = dz * inv * kErrandSpeed;
+                }
+            } else {
+                const float tx = (static_cast<float>(dest.x) + 0.5f) * kCellSize;
+                const float ty = (static_cast<float>(dest.y) + 0.5f) * kCellSize;
+                const float tz = (static_cast<float>(dest.z) + 0.5f) * kCellSize;
+                const float dx = gf.axis == 0 ? 0.0f : wrap_delta_f(tr.pos.x, tx, kWorldExtent);
+                const float dy = gf.axis == 1 ? 0.0f : wrap_delta_f(tr.pos.y, ty, kWorldExtent);
+                const float dz = gf.axis == 2 ? 0.0f : wrap_delta_f(tr.pos.z, tz, kWorldExtent);
+                const float d2 = dx * dx + dy * dy + dz * dz;
+                if (d2 > kMinFleeGrad2) {
+                    const float inv = 1.0f / std::sqrt(d2);
+                    if (gf.axis != 0) vel.v.x = dx * inv * kErrandSpeed;
+                    if (gf.axis != 1) vel.v.y = dy * inv * kErrandSpeed;
+                    if (gf.axis != 2) vel.v.z = dz * inv * kErrandSpeed;
+                }
+            }
+        }
+    }
 }
 
 } // namespace giga::game

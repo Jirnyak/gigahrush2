@@ -213,7 +213,7 @@ static void test_console_spawn_god_noclip() {
     // Level comes from the floor's V-shape tier, not a hardcoded 1.
     {
         const std::uint8_t want =
-            static_cast<std::uint8_t>(floor_mob_tier(ctx.currentFloor));
+            static_cast<std::uint8_t>(floor_mob_tier(ctx.currentFloor, 0));
         bool levelled = true;
         for (auto e : ecs.view<const MobRef>())
             levelled &= ecs.get<const MobRef>(e).level == want;

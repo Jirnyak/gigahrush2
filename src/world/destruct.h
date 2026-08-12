@@ -58,10 +58,19 @@ namespace giga {
 // per voxel ([jirnyak.md] §7 — no string lookups in hot paths).
 inline constexpr const char* kSubMaterialName = "sub_material";
 
+// Anchor field name for structural stress calculations. Cells marked in this
+// field are anchors that hold load and never collapse.
+inline constexpr const char* kAnchorFieldName = "anchor";
+
+struct StressParams {
+    float carryPerHardness = 1.0f; // how much weight 1 hardness can carry
+    float collapseAt = 1.0f;       // threshold for collapse
+    int   relaxIters = 4;          // relaxation iterations
+};
+
 // Absolute sub-voxel grid: 128 cells x 8 = 1024 per axis, a power of two, so
 // toroidal wrap is a mask.
-inline constexpr int kSubGridDim = kMacroDim * kSubDim;
-inline constexpr int kSubGridMask = kSubGridDim - 1;
+
 
 // One removed sub-voxel: packed cell index + sub bit, and the material it was.
 // 8 bytes; `cell` is the flat macro_index, `bit` the sub_bit.
@@ -127,13 +136,25 @@ void set_sub_material(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
 // power scaled by quadratic falloff (power * (r^2 - d^2) / r^2), then run the
 // detachment sweep around everything removed. Appends into `out` (cleared
 // first); returns total sub-voxels removed (destroyed + detached).
+// If `sealedMask` is provided, sub-voxels in sealed cells (macro index) are unbreakable.
 std::int32_t carve_sphere(World& w, const CarveOp& op, CarveScratch& scratch,
-                          CarveResult& out);
+                          CarveResult& out,
+                          const std::vector<std::uint64_t>* sealedMask = nullptr);
 
 // Carve a single sub-voxel (the pickaxe primitive): one roll at full power,
 // then the same detachment sweep. Returns true if the voxel was removed.
+// If `sealedMask` is provided, sub-voxels in sealed cells are unbreakable.
 bool carve_at(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
               std::uint16_t power, std::uint32_t seed, CarveScratch& scratch,
-              CarveResult& out);
+              CarveResult& out,
+              const std::vector<std::uint64_t>* sealedMask = nullptr);
+
+// Bake stress field (macro cells) based on structural support.
+// Anchors hold infinite load. Gravity drives support direction.
+void bake_stress(World& world, const StressParams& params, Field<float>& out_stress);
+
+// Find unsupported solid neighbors (stress <= 0) of carved cells to trigger cascading collapse.
+// Appends macro cell indices to out_collapses.
+void find_structural_collapses(const World& w, const CarveResult& res, std::vector<std::size_t>& out_collapses);
 
 } // namespace giga

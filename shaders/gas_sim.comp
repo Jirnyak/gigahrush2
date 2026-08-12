@@ -1,0 +1,129 @@
+#version 450
+// gas_sim.comp — unified chemistry and diffusion for gas (smoke, toxic, oxygen, heat).
+// Double-buffered, dispatched per macro cell.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+layout(std430, binding = 0) readonly  buffer GasIn  { uint gIn[];  };
+layout(std430, binding = 1) writeonly buffer GasOut { uint gOut[]; };
+layout(std430, binding = 2) readonly  buffer MaskBuf { uint uMasks[]; };
+
+layout(push_constant) uniform Push {
+    ivec4 downStep;   // regime_down() e.g. (0, 0, -1, 0)
+    vec4  params;     // x=diffuseRate, y=buoyancy, z=burnRate, w=dt
+} pc;
+
+// Unpack GasCell from uint
+void unpack_gas(uint v, out float toxic, out float smoke, out float oxy, out float heat) {
+    toxic = float(v & 0xFFu);
+    smoke = float((v >> 8) & 0xFFu);
+    oxy   = float((v >> 16) & 0xFFu);
+    heat  = float((v >> 24) & 0xFFu);
+}
+
+// Pack GasCell into uint
+uint pack_gas(float toxic, float smoke, float oxy, float heat) {
+    uint t = uint(clamp(toxic, 0.0, 255.0));
+    uint s = uint(clamp(smoke, 0.0, 255.0));
+    uint o = uint(clamp(oxy, 0.0, 255.0));
+    uint h = uint(clamp(heat, 0.0, 255.0));
+    return t | (s << 8) | (o << 16) | (h << 24);
+}
+
+bool is_completely_solid(ivec3 c) {
+    uint ci = uint(c.x) | (uint(c.y) << 7) | (uint(c.z) << 14);
+    uint andAll = 0xFFFFFFFFu;
+    for (uint i = 0; i < 16u; ++i) {
+        andAll &= uMasks[ci * 16u + i];
+    }
+    return andAll == 0xFFFFFFFFu;
+}
+
+void main() {
+    ivec3 c = ivec3(gl_GlobalInvocationID.xyz);
+    if (c.x >= 128 || c.y >= 128 || c.z >= 128) return;
+    
+    uint ci = uint(c.x) | (uint(c.y) << 7) | (uint(c.z) << 14);
+    uint centerVal = gIn[ci];
+    
+    // Chemistry (Local)
+    float toxic, smoke, oxy, heat;
+    unpack_gas(centerVal, toxic, smoke, oxy, heat);
+    
+    float dt = pc.params.w;
+    
+    // §4a.2 Chemistry Table
+    // Burning
+    if (heat > 200.0 && oxy > 40.0) {
+        oxy -= 12.0 * dt;
+        smoke += 20.0 * dt;
+    } 
+    // Extinguish
+    else if (oxy <= 40.0 && heat > 0.0) {
+        heat -= 60.0 * dt;
+    }
+    
+    // Pyrolysis (omitted material check for simplicity, just assumes constant floor ignition threshold)
+    if (heat > 180.0 && oxy > 40.0) {
+        heat += 30.0 * dt;
+    }
+    
+    // Smoke settling
+    if (smoke > 0.0) smoke -= 2.0 * dt;
+    
+    // Toxic decay
+    if (toxic > 0.0) toxic -= 1.0 * dt;
+    
+    // Displacement (smoke chokes out oxygen)
+    if (toxic + smoke > 200.0) {
+        oxy -= 8.0 * dt;
+    }
+    
+    // Repack intermediate state for diffusion
+    // Diffusion gathers from neighbors
+    
+    ivec3 dirs[6] = ivec3[](
+        ivec3(1,0,0), ivec3(-1,0,0),
+        ivec3(0,1,0), ivec3(0,-1,0),
+        ivec3(0,0,1), ivec3(0,0,-1)
+    );
+    
+    float dToxic = 0.0, dSmoke = 0.0, dOxy = 0.0, dHeat = 0.0;
+    ivec3 gVec = pc.downStep.xyz;
+    float diffuse = pc.params.x;
+    float buoyancy = pc.params.y;
+    
+    for (int i = 0; i < 6; ++i) {
+        ivec3 d = dirs[i];
+        ivec3 nc = (c + d) & 127;
+        
+        if (is_completely_solid(nc)) continue; // no flux boundary
+        
+        uint nci = uint(nc.x) | (uint(nc.y) << 7) | (uint(nc.z) << 14);
+        float nt, ns, no, nh;
+        unpack_gas(gIn[nci], nt, ns, no, nh);
+        
+        // Dot product with gravity vector. If d == gVec, it points DOWN.
+        // up = -dot(d, g) -> +1 if d is UP (opposite g), -1 if d is DOWN.
+        float up = -float(d.x * gVec.x + d.y * gVec.y + d.z * gVec.z);
+        
+        // Smoke and heat rise (buoyancy)
+        float wRise = diffuse * (1.0 + buoyancy * up);
+        // Toxic gas sinks
+        float wSink = diffuse * (1.0 - buoyancy * up);
+        // Oxygen is neutral
+        float wNeutral = diffuse;
+        
+        dToxic += (nt - toxic) * wSink * dt;
+        dSmoke += (ns - smoke) * wRise * dt;
+        dOxy   += (no - oxy) * wNeutral * dt;
+        dHeat  += (nh - heat) * wRise * dt;
+    }
+    
+    toxic += dToxic;
+    smoke += dSmoke;
+    oxy   += dOxy;
+    heat  += dHeat;
+    
+    gOut[ci] = pack_gas(toxic, smoke, oxy, heat);
+}

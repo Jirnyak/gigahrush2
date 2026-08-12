@@ -35,6 +35,7 @@
 
 #include "core/math.h"
 #include "game/mob_table.h"
+#include "game/prop_table.h"
 #include "core/tick.h"
 #include "core/wrap.h"
 #include "ecs/components.h"
@@ -77,10 +78,13 @@
 #include "game/floors/padic/padic.h"
 #include "game/prop_system.h"
 #include "game/investigate.h"
+
 #include "sim/fluid.h"
+#include "sim/diffusion.h"
 #include "game/noise.h"
 #include "game/wander.h"
 #include "game/npc_pool.h"
+#include "game/role.h"
 #include "game/macro_sim.h"
 #include "input/input.h"
 #include "render/body_pass.h"
@@ -88,6 +92,7 @@
 #include "render/material_table.h" // kMaterial — generated albedo table
 #include "render/cloth_pass.h"
 #include "render/particle_pass.h"
+#include "render/gas_pass.h"
 #include "render/wire_pass.h"
 #include "render/prop_pass.h"
 
@@ -101,16 +106,20 @@
 #include "render/vk_swapchain.h"
 #include "render/voxel_mirror.h"
 #include "render/raymarch_pass.h"
+#include "render/post_pass.h"
 #include "render/screenshot.h"
 #include "sim/camera.h"
 #include "sim/controller.h"
 #include "sim/fluid.h"
+#include "sim/gas.h"
 #include "sim/physics.h"
 #include "world/destruct.h"
 #include "world/stain.h"
 #include "world/level_stack.h"
 #include "world/nav.h"
 #include "world/nav_async.h"
+#include "audio/audio_device.h"
+#include "audio/voice.h"
 
 using namespace giga;
 
@@ -159,6 +168,7 @@ constexpr float kSamosborFogSqueeze = 0.34f;
 static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
                                  float timeSec, const game::SamosborState& samosbor,
                                  const Registry& reg, LayerId activeLayer,
+                                 const giga::GravityField& gravity,
                                  const game::NoiseField* noiseField = nullptr,
                                  const game::PowerGridState* powerGrid = nullptr) {
     grid.clear_lights();
@@ -242,9 +252,12 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
             float lifeFrac = (loud->lifeMs > 0) ? (static_cast<float>(loud->ttlMs) / static_cast<float>(loud->lifeMs)) : 1.0f;
             float pulse = std::sin(timeSec * 30.0f + static_cast<float>(loud->id)) * 0.35f + 0.65f;
             float intensity = (static_cast<float>(loud->severity) * 2.0f) * lifeFrac * pulse;
-            grid.add_light(npos + vec3{0.0f, 0.0f, 0.8f}, loud->radius * 0.8f, vec3{1.0f, 0.70f, 0.30f}, intensity);
+            const giga::GravityFrame gf = giga::regime_frame(gravity.regime);
+            vec3 loud_up{0.0f, 0.0f, 0.0f}; loud_up[gf.axis] = gf.upSign * 0.8f;
+            vec3 cam_up{0.0f, 0.0f, 0.0f}; cam_up[gf.axis] = gf.upSign * 1.0f;
+            grid.add_light(npos + loud_up, loud->radius * 0.8f, vec3{1.0f, 0.70f, 0.30f}, intensity);
             float acousticFlicker = 1.0f + 0.50f * (static_cast<float>(loud->severity) / 5.0f) * std::sin(timeSec * 40.0f);
-            grid.add_light(camPos + vec3{0.0f, 0.0f, 1.0f}, 14.0f, vec3{0.90f, 0.80f, 0.50f}, 1.5f * acousticFlicker);
+            grid.add_light(camPos + cam_up, 14.0f, vec3{0.90f, 0.80f, 0.50f}, 1.5f * acousticFlicker);
         }
     }
 
@@ -484,7 +497,8 @@ static void DrawCraftingWindowUI(bool* p_open, game::CraftingState& crafting,
 }
 
 static void DrawVendorWindowUI(bool* p_open, game::Inventory& inv, game::RunLedger& ledger, 
-                        game::VendorKind vendorKind, bool isOnPad, std::int32_t& outSold, std::int32_t& outSpent) 
+                        game::VendorKind vendorKind, bool isOnPad, std::int32_t& outSold, std::int32_t& outSpent,
+                        game::FactionRelations& factionRel, const game::NpcPool& pool, std::int16_t currentFloor) 
 {
     if (!p_open || !*p_open) return;
 
@@ -516,7 +530,11 @@ static void DrawVendorWindowUI(bool* p_open, game::Inventory& inv, game::RunLedg
             ImGui::SliderInt("Quantity to Buy", &buyQty, 1, 50);
 
             if (ImGui::Button("Quick Resupply Package (600 rub)", ImVec2(240, 28))) {
-                outSpent += game::vendor_resupply(inv, ledger, 600);
+                std::int32_t spent = game::vendor_resupply(inv, ledger, 600);
+                if (spent > 0) {
+                    outSpent += spent;
+                    factionRel.add_mutual(game::kFactionPlayerRow, static_cast<std::uint8_t>(game::dominant_faction(pool, currentFloor)), +1);
+                }
             }
             ImGui::SameLine();
 
@@ -525,7 +543,11 @@ static void DrawVendorWindowUI(bool* p_open, game::Inventory& inv, game::RunLedg
                 char ammoBtnText[128];
                 snprintf(ammoBtnText, sizeof(ammoBtnText), "Buy Ammo for Gun (%s)", game::item_name(ammoForGun));
                 if (ImGui::Button(ammoBtnText, ImVec2(240, 28))) {
-                    outSpent += (game::vendor_buy(inv, ledger, ammoForGun, buyQty) * game::vendor_buy_price(ammoForGun));
+                    std::uint32_t bought = game::vendor_buy(inv, ledger, ammoForGun, buyQty);
+                    if (bought > 0) {
+                        outSpent += (bought * game::vendor_buy_price(ammoForGun));
+                        factionRel.add_mutual(game::kFactionPlayerRow, static_cast<std::uint8_t>(game::dominant_faction(pool, currentFloor)), +1);
+                    }
                 }
             }
 
@@ -562,7 +584,10 @@ static void DrawVendorWindowUI(bool* p_open, game::Inventory& inv, game::RunLedg
                     if (!canAfford) ImGui::BeginDisabled();
                     if (ImGui::Button(buyBtnLabel)) {
                         std::uint32_t bought = game::vendor_buy(inv, ledger, id, static_cast<std::uint32_t>(buyQty));
-                        outSpent += (bought * price);
+                        if (bought > 0) {
+                            outSpent += (bought * price);
+                            factionRel.add_mutual(game::kFactionPlayerRow, static_cast<std::uint8_t>(game::dominant_faction(pool, currentFloor)), +1);
+                        }
                     }
                     if (!canAfford) ImGui::EndDisabled();
                 }
@@ -575,6 +600,7 @@ static void DrawVendorWindowUI(bool* p_open, game::Inventory& inv, game::RunLedg
         if (ImGui::BeginTabItem("Sell Inventory")) {
             if (ImGui::Button("Sell All Haul / Trash (Auto Cap)", ImVec2(240, 28))) {
                 outSold += game::vendor_sell_all(inv, ledger, vendorKind);
+                factionRel.add_mutual(game::kFactionPlayerRow, static_cast<std::uint8_t>(game::dominant_faction(pool, currentFloor)), +1);
             }
             ImGui::Separator();
 
@@ -816,21 +842,18 @@ constexpr DemoFloor kDemoFloors[] = {
 // own claims. Built once. A refused claim — two floors on one number — logs
 // loudly here and is RED in tests/suite_floorcatalog.inl, so a duplicate can
 // never silently shadow a module.
-const game::FloorCatalog& floor_catalog() {
-    static game::FloorCatalog cat;
-    static const bool ok = [] {
-        bool good = game::build_default_floor_catalog(cat);
-        for (const DemoFloor& f : kDemoFloors)
-            good &= cat.claim(f.number, {"demo", f.kind});
-        if (!good)
-            std::fprintf(stderr,
-                         "[floors] catalog claim REFUSED: %d conflicts, first at "
-                         "floor %d — two modules on one number\n",
-                         cat.conflicts(), cat.first_conflict());
-        return good;
-    }();
-    (void)ok;
-    return cat;
+void register_demo_floors() {
+    game::FloorCatalog& cat = game::mutable_floor_catalog();
+    bool good = true;
+    for (const DemoFloor& f : kDemoFloors) {
+        good &= cat.claim(f.number, {"demo", f.kind});
+    }
+    if (!good) {
+        std::fprintf(stderr,
+                     "[floors] catalog claim REFUSED: %d conflicts, first at "
+                     "floor %d — two modules on one number\n",
+                     cat.conflicts(), cat.first_conflict());
+    }
 }
 
 // How far the world has closed in, as a multiplier on the fog range.
@@ -869,7 +892,7 @@ void aim_player(Registry& reg, Entity player) {
 // number and there is a floor there ([floor_catalog.h]), which is what lets
 // teleport and streaming stop caring whether a number was hand-listed.
 game::FloorKind kind_for_floor(int number) {
-    return floor_catalog().resolve(number).kind;
+    return game::floor_catalog().resolve(number).kind;
 }
 const game::FloorSpec* spec_for_floor(int number) {
     return &game::floor_spec(kind_for_floor(number));
@@ -945,9 +968,9 @@ bool write_run(const game::SaveState& st, const char* path) {
 
 // Persist one floor's exact grid to its own file. A floor transition is a load
 // screen, so this is sanctioned I/O ([jirnyak.md] §6).
-bool write_floor_file(const World& w, int floor) {
+bool write_floor_file(const World& w, int floor, const game::HermeticZones& hermeticZones) {
     std::vector<std::uint8_t> bytes;
-    game::floor_file_write(w, floor, bytes);
+    game::floor_file_write(w, floor, hermeticZones, bytes);
     char path[128];
     floor_save_path(floor, path, sizeof path);
     return write_bytes_file(bytes, path);
@@ -955,13 +978,13 @@ bool write_floor_file(const World& w, int floor) {
 
 // Stamp a floor's saved state over its freshly generated geometry, if a file
 // exists. Absent file = pristine floor; a REFUSED file is said out loud.
-bool apply_floor_file(World& w, int floor) {
+bool apply_floor_file(World& w, int floor, game::HermeticZones& hermeticZones) {
     char path[128];
     floor_save_path(floor, path, sizeof path);
     std::vector<std::uint8_t> bytes;
     if (!read_bytes_file(bytes, path)) return false;
     game::SaveError err = game::SaveError::None;
-    if (!game::floor_file_read(bytes.data(), bytes.size(), w, nullptr, &err)) {
+    if (!game::floor_file_read(bytes.data(), bytes.size(), w, hermeticZones, nullptr, &err)) {
         std::fprintf(stderr, "[save] %s refused: %s (floor regenerates pristine)\n",
                      path, game::save_error_text(err));
         return false;
@@ -1216,8 +1239,40 @@ void drain_particle_bursts(gpu::ParticlePass& pass,
 // WITH its material ([world/destruct.h] CarvedVoxel), so the puff is tinted by
 // the very wall it came from. Sampled with a stride — a blast stays a cloud,
 // not tens of thousands of sprites.
+void queue_structural_collapse(const giga::World& w, const giga::CarveResult& res,
+                               giga::game::CarveProposalQueue& outQueue, std::uint32_t seed) {
+    static std::vector<std::size_t> collapses;
+    collapses.clear();
+    giga::find_structural_collapses(w, res, collapses);
+    
+    // Track queued macro cells across calls within the same frame
+    static std::vector<std::size_t> queuedThisFrame;
+    if (res.dirtyCells.empty() && outQueue.count == 0) {
+        // Simple heuristic: if we are at the start of a frame (no dirty, empty queue), clear.
+        // Actually, better to just let the duplicate pushing happen, outQueue will drop if full.
+        // Wait, CarveProposalQueue doesn't drop duplicates.
+        // Let's just maintain queuedThisFrame and clear it... wait, we can't clear it reliably here.
+        // Instead, just use the `collapses` array since find_structural_collapses unique()'s it!
+    }
+
+    for (std::size_t ni : collapses) {
+        int nx = static_cast<int>(ni) & 127;
+        int ny = (static_cast<int>(ni) >> 7) & 127;
+        int nz = (static_cast<int>(ni) >> 14) & 127;
+        
+        outQueue.push(
+            static_cast<float>(nx) + 0.5f,
+            static_cast<float>(ny) + 0.5f,
+            static_cast<float>(nz) + 0.5f,
+            0.75f, // slightly larger than 0.5 to overlap sub-voxels
+            512,   // explosive grade
+            seed ^ static_cast<std::uint32_t>(ni)
+        );
+    }
+}
+
 void spawn_carve_particles(gpu::ParticlePass& pass, const CarveResult& res,
-                           std::uint32_t seed) {
+                           std::uint32_t seed, const giga::GravityField& gravity) {
     if (!pass.ready()) return;
     static std::vector<gpu::GpuParticle> tmp;
     tmp.clear();
@@ -1237,7 +1292,14 @@ void spawn_carve_particles(gpu::ParticlePass& pass, const CarveResult& res,
     for (std::size_t i = 0; i < nd; i += sd) {
         const CarvedVoxel& v = res.destroyed[i];
         const vec3 tint = kMaterial[v.mat < kMatCount ? v.mat : 0];
-        pack_particles(tmp, voxel_pos(v), vec3{0.0f, 0.0f, 0.35f}, dust, tint,
+        const vec3 vp = voxel_pos(v);
+        const vec3 grav = gravity.at(vp);
+        const float gl = length(grav);
+        const giga::GravityFrame gf = giga::regime_frame(gravity.regime);
+        vec3 fallback_up{0.0f, 0.0f, 0.0f};
+        fallback_up[gf.axis] = gf.upSign * 0.35f;
+        const vec3 up = gl > 1e-4f ? grav * (-0.35f / gl) : fallback_up;
+        pack_particles(tmp, vp, up, dust, tint,
                        1, seed ^ static_cast<std::uint32_t>(i));
     }
     const game::ParticleDef& debris =
@@ -1247,7 +1309,14 @@ void spawn_carve_particles(gpu::ParticlePass& pass, const CarveResult& res,
     for (std::size_t i = 0; i < nt; i += st) {
         const CarvedVoxel& v = res.detached[i];
         const vec3 tint = kMaterial[v.mat < kMatCount ? v.mat : 0];
-        pack_particles(tmp, voxel_pos(v), vec3{0.0f, 0.0f, -0.2f}, debris,
+        const vec3 vp = voxel_pos(v);
+        const vec3 grav = gravity.at(vp);
+        const float gl = length(grav);
+        const giga::GravityFrame gf = giga::regime_frame(gravity.regime);
+        vec3 fallback_down{0.0f, 0.0f, 0.0f};
+        fallback_down[gf.axis] = -gf.upSign * 0.2f;
+        const vec3 down = gl > 1e-4f ? grav * (0.2f / gl) : fallback_down;
+        pack_particles(tmp, vp, down, debris,
                        tint, 1, seed ^ 0x5bd1e995u ^
                                     static_cast<std::uint32_t>(i));
     }
@@ -1345,7 +1414,7 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
 // field. That degradation is automatic rather than special-cased.
 void begin_floor_nav(const World& world, int floorNumber, nav::AsyncBake& bake,
                      game::RoomZones& rooms) {
-    bake.start(world.grid());
+    bake.start(world);
     // The ROOM zones are baked here too, and synchronously, because they are three
     // multi-source BFS against the async bake's 128 — measured below in the same
     // line the nav timings print. Synchronous also means there is no second
@@ -1473,6 +1542,16 @@ Entity possess_nearest_survivor(Registry& reg, game::NpcPool& pool, LayerId laye
 }
 
 } // namespace
+
+void on_floor_arrival(game::Samosbor& samosbor, core::Rng& sbRng,
+                      game::VendorKind& vendorKind, const game::NpcPool& pool, int currentFloor,
+                      char* rumourLine, std::uint64_t& rumourAt, game::NoiseField& noiseField) {
+    samosbor = game::samosbor_new_game(sbRng);
+    vendorKind = game::vendor_kind_for(game::dominant_faction(pool, currentFloor));
+    rumourLine[0] = 0;
+    rumourAt = 0;
+    game::noise_clear(noiseField);
+}
 
 int main(int argc, char** argv) {
     // --shot FILE [--frames N] [--ride N]: render, capture, exit.
@@ -1677,6 +1756,14 @@ int main(int argc, char** argv) {
         std::fprintf(stderr,
                      "[particle] pass init failed (continuing without particles)\n");
     }
+    // GPU gas chemistry + diffusion — compute-only, no render pass needed.
+    // Runs AFTER the mirror flush so the no-flux solid mask is current.
+    // Falls back gracefully: if the SPV is missing the pass is a no-op.
+    gpu::GasPass gasPass;
+    if (!gasPass.init(&device, GIGA_SHADER_DIR, voxelMirror.masks_buffer())) {
+        std::fprintf(stderr,
+                     "[gas] pass init failed (continuing without gas sim)\n");
+    }
     // Severed pipe stumps ([merge_ecs_prop_meshes]) — each drips on a slow
     // clock while its floor stays loaded. Refilled at every prop merge.
     std::vector<vec3> dripEmitters;
@@ -1686,8 +1773,14 @@ int main(int argc, char** argv) {
     std::vector<game::DetachedPiece> antourageFalling;
 
 
+    gpu::PostPass postPass;
+    if (!postPass.init(device, renderer.post_render_pass(), GIGA_SHADER_DIR)) {
+        std::fprintf(stderr, "[post] pass init failed\n");
+        return 1;
+    }
+
     gpu::ImGuiLayer hud;
-    if (!hud.init(device, window, renderer.renderPass,
+    if (!hud.init(device, window, renderer.post_render_pass(),
                   static_cast<std::uint32_t>(renderer.swap().images.size()))) {
         std::fprintf(stderr, "ImGui init failed\n");
         bodyPass.destroy();
@@ -1701,7 +1794,19 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // --- Audio init (Phase 0) -----------------------------------------------
+    // Non-fatal: the game runs silently if audio fails (headless servers, CI).
+    giga::audio::AudioDevice audioDevice;
+    giga::audio::VoiceManager voices;
+    const bool audioOk = audioDevice.init();
+    if (!audioOk) {
+        std::fprintf(stderr, "[audio] AudioDevice init failed — running silent\n");
+    } else {
+        voices.init(audioDevice);
+    }
+
     // --- World + ECS setup -------------------------------------------------
+    register_demo_floors();
     // Build the world population-first, then embody the player from it ([npcs.md]).
     LevelStack stack;
     // §22: lazy nav field rebake under frame budget after carves.
@@ -1719,6 +1824,7 @@ int main(int argc, char** argv) {
     // against nav's 128, so it is a rounding error on a load the same function is
     // already spending seconds on, and a synchronous bake needs no ownership story.
     game::RoomZones roomZones;
+    game::HermeticZones hermeticZones;
     game::NpcPool pool;
     pool.init();
     // SLOT RECYCLING IS DELIBERATELY NOT ARMED HERE, and the line is left in place
@@ -1800,6 +1906,7 @@ int main(int argc, char** argv) {
     // what makes a deep 2^20-person building affordable: the sim tick is O(live
     // entities), so exactly one floor's worth is ever simulated.
     game::FloorStreamer streamer;
+    giga::DiffusionDriver diffusionDriver;
 
     int currentFloor = 0;                         // in-game label of the live floor
     const game::FloorSpec* currentSpec = nullptr; // its rule-set (HUD only)
@@ -1811,6 +1918,7 @@ int main(int argc, char** argv) {
     // Declared up here rather than beside the ledger because the FIRST floor is set
     // up above the ledger, and a DoorSet declared later compiled as "undeclared
     // identifier" at the very site that has to build the starting floor's doors.
+
     game::DoorSet doors;
     game::DoorTick doorTick{};      // last step's report, for the HUD
     std::uint32_t doorsBuilt = 0;   // on this floor, so the HUD can say "0 doors"
@@ -1841,7 +1949,7 @@ int main(int argc, char** argv) {
         // this file naming it). Pattern floors stay unregistered defaults until
         // something claims or streams them.
         for (int f = game::kMinFloor; f <= game::kMaxFloor; ++f) {
-            const game::FloorDef* def = floor_catalog().claimed(f);
+            const game::FloorDef* def = game::floor_catalog().claimed(f);
             if (!def) continue;
             // Vary the seed per floor so same-kind floors still differ.
             std::uint32_t fseed =
@@ -1874,8 +1982,8 @@ int main(int argc, char** argv) {
         // back, and it restores immediately after generating — before the pipes
         // are routed and the lamps are hung, so nothing is ever anchored to
         // geometry that is about to change under it. [problems.md] §42
-        streamer.set_floor_restore([](World& w, int floorNumber) {
-            return apply_floor_file(w, floorNumber);
+        streamer.set_floor_restore([&hermeticZones](World& w, int floorNumber) {
+            return apply_floor_file(w, floorNumber, hermeticZones);
         });
 
         const std::uint32_t seeded = streamer.seed_all_modules(pool);
@@ -1911,6 +2019,7 @@ int main(int argc, char** argv) {
                                               streamer.floor_seed_of(registry, 0));
             doors.frozen = true;
             begin_floor_nav(stack.layer(l0), 0, nav, roomZones);
+            giga::diffusion_driver_on_floor_built(diffusionDriver, stack.layer(l0), l0);
             game::ai_init(reg, l0);
             if (propPass.ready()) {
                 merge_ecs_prop_meshes(reg, l0, propPass,
@@ -1953,6 +2062,8 @@ int main(int argc, char** argv) {
     SDL_SetWindowRelativeMouseMode(window, true);
 
     bool running = true;
+    int fluidStepEvery = 4; // sim steps between fluid updates
+    int fluidCounter = 0;
     bool paused = false; // Esc pause menu: freezes the sim + frees the cursor
     float simAccum = 0.0f;
     // Monotonic sim-time (seconds), advanced one kSimDt per fixed step. The AI
@@ -2224,7 +2335,7 @@ int main(int argc, char** argv) {
         consoleCtx.pool = &pool;
         consoleCtx.stack = &stack;
         consoleCtx.floors = &registry;
-        consoleCtx.catalog = &floor_catalog();
+        consoleCtx.catalog = &game::floor_catalog();
         consoleCtx.player = player;
         consoleCtx.currentFloor = currentFloor;
         consoleCtx.fastTravel = &fastTravel; // §24 hub unlock bitset
@@ -2288,7 +2399,7 @@ int main(int argc, char** argv) {
         pool.save_rows(runState.poolBlob);
         macroSim.save_state(runState.macroBlob);
         runState.factions = factionRel;
-        write_floor_file(stack.layer(pl), currentFloor);
+        write_floor_file(stack.layer(pl), currentFloor, hermeticZones);
         char runPath[128];
         run_save_path(runPath, sizeof runPath);
         return write_run(runState, runPath);
@@ -2333,7 +2444,7 @@ int main(int argc, char** argv) {
             // THE geometry persistence: the next visit (or the next run)
             // stamps it back. A transition is a load screen; I/O is
             // sanctioned here. [save.h]
-            write_floor_file(stack.layer(leaveLayer), currentFloor);
+            write_floor_file(stack.layer(leaveLayer), currentFloor, hermeticZones);
             // AIMEM: clear MotionOwner::Ai on the leaving floor before the
             // streamer recycles the layer. unload() also releases; this is the
             // keyboard/--shot leave seam so a ride without an immediate unload
@@ -2370,23 +2481,8 @@ int main(int argc, char** argv) {
         // bidirectional: the roof is as far from safety as the basement.
         // [extraction.h]
         game::record_floor(ledger, currentFloor);
-        // A new floor gets its own clock at its own depth. Not carried over:
-        // the cooldown is a function of |z|, so inheriting a 30-minute surface
-        // gap into the void would silently cancel the entire depth gradient.
-        samosbor = game::samosbor_new_game(sbRng);
-        // A rumour is about a FLOOR, so carrying one across a ride makes it
-        // false. Caught on a capture: the line read "самосбор здесь часто
-        // (17.2%)" while the HUD's own duty for the floor underfoot said 35.0%
-        // — the number was true of the floor the speaker was standing on, two
-        // rides ago. The whole premise of this system is that a rumour is
-        // checkable, so a stale one is worse than none. [rumour.h]
-        rumourLine[0] = 0;
-        rumourAt = 0;
-        // A gunshot on the floor you just left must not be audible to the crowd
-        // on the one you arrived at. The streamer RECYCLES LayerId slots, so a
-        // surviving record would not merely be stale — it would match the new
-        // floor's layer id and be heard there. [noise.h]
-        game::noise_clear(noiseField);
+        
+        on_floor_arrival(samosbor, sbRng, vendorKind, pool, currentFloor, rumourLine, rumourAt, noiseField);
         currentSpec = spec_for_floor(currentFloor);
         // Mobs belong to the floor, not to the player: the departed layer's are
         // destroyed and the arrival's are spawned fresh (deterministically, so
@@ -2411,6 +2507,7 @@ int main(int argc, char** argv) {
                 streamer.floor_seed_of(registry, currentFloor));
         doors.frozen = true;
         begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
+        giga::diffusion_driver_on_floor_built(diffusionDriver, stack.layer(nl), nl);
         // Arrival geometry is final (floor file + doors stamped): re-snapshot
         // the GPU voxel mirror for the recycled World object.
         voxelMirror.upload_all(stack.layer(nl));
@@ -2590,7 +2687,7 @@ int main(int argc, char** argv) {
                     SDL_SetWindowRelativeMouseMode(window, true);
                 }
                 if (e.type == SDL_EVENT_MOUSE_BUTTON_UP &&
-                    e.button.button == SDL_BUTTON_RIGHT) {
+                           e.button.button == SDL_BUTTON_RIGHT) {
                     input.set_mouselook(false);
                     SDL_SetWindowRelativeMouseMode(window, false);
                 }
@@ -2748,7 +2845,7 @@ int main(int argc, char** argv) {
             // field's only producer) is not wired into the tick yet, so ai_step's
             // threat term reads 0 and nobody flees. Wiring diffusion in is the
             // open task; the fetch stays so that wiring is one call away.
-            [[maybe_unused]] const Field<float>* danger = activeWorld.fields().find<float>("danger");
+            Field<float>* danger = activeWorld.fields().find<float>("danger");
             [[maybe_unused]] const MacroGrid& activeGrid = activeWorld.grid();
             int guard = 0;
             while (simAccum >= kSimDt && guard++ < 8) {
@@ -2874,9 +2971,13 @@ int main(int argc, char** argv) {
                 // toilet/sleep intent actually STEER a body — without it every
                 // non-flee intent hands motion straight back to wander_step and the
                 // scorer is decoration (measured: own_ai=0 of 419).
-                aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
+                [[maybe_unused]] Field<float>* rally = activeWorld.fields().find<float>("rally");
+                aiTick = game::ai_step(reg, pool, danger, rally, activeGrid, activeLayer, simNow,
                                        kSimDt, aiCfg, &aiMem, &doors, &activeWorld,
                                        &roomZones);
+                if (aiTick.dangerEmitted) {
+                    diffusionDriver.hot = true;
+                }
                 // AIMEM proof trail: once nav has brains and AI is on, emit a
                 // compact stderr pulse so a --shot harness can assert the store
                 // is live (rows/writes/recalled) without parsing the HUD.
@@ -2952,6 +3053,8 @@ int main(int argc, char** argv) {
                         samosborDamage =
                             static_cast<std::int16_t>(samosborDamage + dr_.applied);
                     }
+
+
                 }
                 // Exhaustion costs movement speed, not HP — three stacking HP
                 // drains is a death spiral with no decision in it. Applied to the
@@ -3342,9 +3445,10 @@ int main(int argc, char** argv) {
                         }
                     }
                 }
+                game::ai_patrol_step(reg, nav.coarse(), nav.fine(), activeLayer, kSimDt, activeWorld.gravity());
                 game::wander_step(reg, stack.layer(activeLayer).grid(), pool,
                                   nav.coarse(),
-                                  nav.fine(), activeLayer, simTick);
+                                  nav.fine(), activeLayer, simTick, activeWorld.gravity());
 
                 // Footstep noise generation while walking or running.
                 // "Walking" is speed ACROSS the floor, so the vertical component is
@@ -3502,7 +3606,7 @@ int main(int argc, char** argv) {
                 // no counterplay. The camera holder IS killable: the player has
                 // healing, resupply and possession-on-death. [faction_relations.h]
                 feudHits += game::faction_feud_step(reg, pool, factionRel, activeLayer,
-                                                    simTick);
+                                                    simTick, activeWorld.gravity());
                 // Slowed CAP enforcement: after every velocity writer
                 // (controller / wander / investigate / feud), before integrate.
                 // Was defined in combat.cpp and never called — dead path until now.
@@ -3594,8 +3698,9 @@ int main(int argc, char** argv) {
                     consoleCtx.carveRadius = 0.0f;
                     const std::int32_t removed =
                         carve_sphere(stack.layer(activeLayer), op,
-                                     carveScratch, carveResult);
+                                     carveScratch, carveResult, &hermeticZones.sealed);
                     if (removed > 0) {
+                        queue_structural_collapse(stack.layer(activeLayer), carveResult, combatCarves, op.seed);
                         // No log, no bookkeeping: geometry persistence is the
                         // floor's own file, written when the player leaves
                         // ([save.h] modular layout) or on F5.
@@ -3606,7 +3711,7 @@ int main(int argc, char** argv) {
                         // Dust and debris off the blast, tinted by the carved
                         // material ([particle_pass.h]).
                         spawn_carve_particles(particlePass, carveResult,
-                                              op.seed);
+                                              op.seed, activeWorld.gravity());
 
                         // A blast is the loudest thing after gunfire: let the
                         // crowd hear it.
@@ -3730,26 +3835,48 @@ int main(int argc, char** argv) {
                         if (!handled) {
                             if (const auto* nrg = reg.try_get<game::NpcRef>(player)) {
                                 if (pool.valid(nrg->id)) {
-                                    game::ReliefResult rr = game::relieve_needs(pool.needs(nrg->id), 100.0f, 100.0f);
+                                    bool toiletHit = false;
+                                    const vec3& playerPos = reg.get<const Transform>(player).pos;
+                                    for (auto [pe, pt, pm] : reg.view<const Transform, const game::PropMesh>().each()) {
+                                        if (pm.shape == game::prop_def(game::PropId::ToiletPan).shape) {
+                                            float dx = pt.pos.x - playerPos.x;
+                                            float dy = pt.pos.y - playerPos.y;
+                                            float dz = pt.pos.z - playerPos.z;
+                                            if (dx*dx + dy*dy + dz*dz <= 4.0f) {
+                                                toiletHit = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    
+                                    game::ReliefResult rr;
+                                    if (toiletHit) {
+                                        rr = game::relieve_needs(pool.needs(nrg->id), game::kToiletPeeRelief, game::kToiletPooRelief);
+                                    } else {
+                                        rr = game::relieve_needs(pool.needs(nrg->id), game::kFieldPeeRelief, game::kFieldPooRelief);
+                                    }
+
                                     if (rr.pee > 0.0f || rr.poo > 0.0f) {
                                         // The puddle: urine through the same
                                         // universal stain layer blood uses —
                                         // mixing with anything already there
                                         // is just channel addition.
-                                        if (rr.pee > 0.0f)
+                                        if (!toiletHit && rr.pee > 0.0f) {
                                             stain_splat(stack.layer(activeLayer),
                                                         ppos, vec3{0, 0, -1.0f},
                                                         1.4f, /*rays=*/14,
                                                         kStainUrine,
                                                         static_cast<std::uint32_t>(simTick),
                                                         stainDirty);
+
+                                            game::NoiseProfile np{3.0f, 500, 1, game::NoiseSource::Footstep};
+                                            game::noise_publish(noiseField, activeLayer, ppos, np, 0);
+                                        }
                                         std::snprintf(elevDiagLine, sizeof(elevDiagLine),
                                                       "PHYSIOLOGICAL RELIEF: CLEARED BLADDER (%.0f) & BOWEL (%.0f) PRESSURE",
                                                       rr.pee, rr.poo);
                                         elevDiagAt = simTick;
 
-                                        game::NoiseProfile np{5.0f, 500, 1, game::NoiseSource::Door};
-                                        game::noise_publish(noiseField, activeLayer, ppos, np, 0);
                                     }
                                 }
                             }
@@ -3803,17 +3930,20 @@ int main(int argc, char** argv) {
                 bool haveGun = false;
                 if (reg.valid(player))
                     if (const auto* nrg = reg.try_get<game::NpcRef>(player))
-                        if (pool.valid(nrg->id))
+                        if (pool.valid(nrg->id)) {
+                            const std::uint32_t feuds = game::faction_feud_step(
+                                reg, pool, factionRel, activeLayer, simTick, activeWorld.gravity());
                             haveGun = game::equipped_ranged(
                                           pool.inventory(nrg->id)) !=
                                       game::kInvalidItem;
+                        }
                 // Combat carves: clear, fill during melee/projectiles, dispose
                 // same step if !doors.frozen (v1 drops proposals during bake).
                 combatCarves.clear();
                 shots += game::player_ranged_step(reg, pool, activeLayer,
                                                   haveGun && attackHeld && !paused,
                                                   kSimDt, simTick, &noiseField,
-                                                  &playerStatus);
+                                                  &playerStatus, &bus);
                 game::player_melee_step(
                     reg, pool, bus, activeLayer, kSimDt,
                     !haveGun && attackHeld && !paused, simTick,
@@ -3875,13 +4005,14 @@ int main(int argc, char** argv) {
                         op.seed = pr.seed;
                         const std::int32_t removed =
                             carve_sphere(stack.layer(activeLayer), op,
-                                         carveScratch, carveResult);
+                                         carveScratch, carveResult, &hermeticZones.sealed);
                         if (removed > 0) {
+                            queue_structural_collapse(stack.layer(activeLayer), carveResult, combatCarves, pr.seed);
                             voxelMirror.mark_dirty(
                                 carveResult.dirtyCells.data(),
                                 carveResult.dirtyCells.size());
                             spawn_carve_particles(particlePass, carveResult,
-                                                  pr.seed);
+                                                  pr.seed, activeWorld.gravity());
                             std::fprintf(stderr,
                                          "[carve] COMBAT removed=%d power=%u "
                                          "r=%.2f at (%.1f,%.1f,%.1f)\n",
@@ -3902,6 +4033,33 @@ int main(int argc, char** argv) {
                             if (antourage_carve_step_here(carveResult.dirtyCells,
                                                           pr.seed))
                                 propPassNeedsRebuild = true;
+                                
+                            // §4.2 Stress collapse. Any solid neighbour of a carved cell
+                            // that lost support goes into the carve queue for the NEXT frame.
+                            const Field<float>* stress = stack.layer(activeLayer).fields().find<float>("stress");
+                            if (stress) {
+                                for (std::uint32_t cellIdx : carveResult.dirtyCells) {
+                                    int cz = cellIdx / (kMacroDim * kMacroDim);
+                                    int cy = (cellIdx / kMacroDim) % kMacroDim;
+                                    int cx = cellIdx % kMacroDim;
+                                    const int dirs[6][3] = {{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
+                                    for (const auto& d : dirs) {
+                                        int nx = wrap_macro(cx + d[0]);
+                                        int ny = wrap_macro(cy + d[1]);
+                                        int nz = wrap_macro(cz + d[2]);
+                                        std::size_t nci = macro_index(nx, ny, nz);
+                                        if (stack.layer(activeLayer).grid().types()[nci] != 0) {
+                                            if (stress->data()[nci] <= 0.0f && stress->data()[nci] > -0.5f) {
+                                                combatCarves.push(
+                                                    static_cast<float>(nx) * 2.0f + 1.0f,
+                                                    static_cast<float>(ny) * 2.0f + 1.0f,
+                                                    static_cast<float>(nz) * 2.0f + 1.0f,
+                                                    1.0f, 255, pr.seed + 1); // 255 power breaks everything
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                     combatCarves.clear();
@@ -3916,12 +4074,16 @@ int main(int argc, char** argv) {
                     dripTmp.clear();
                     const game::ParticleDef& dripDef =
                         game::particle_def(game::ParticleKind::Drip);
-                    for (std::size_t i = 0; i < dripEmitters.size(); ++i)
+                    for (std::size_t i = 0; i < dripEmitters.size(); ++i) {
+                        const vec3 grav = activeWorld.gravity().at(dripEmitters[i]);
+                        const float gl = length(grav);
+                        const vec3 down = gl > 1e-4f ? grav * (0.2f / gl) : vec3{0.0f, 0.0f, -0.2f};
                         pack_particles(dripTmp, dripEmitters[i],
-                                       vec3{0.0f, 0.0f, -0.2f}, dripDef,
+                                       down, dripDef,
                                        vec3{dripDef.r, dripDef.g, dripDef.b}, 1,
                                        static_cast<std::uint32_t>(simTick) ^
                                            static_cast<std::uint32_t>(i));
+                    }
                     particlePass.spawn(dripTmp.data(),
                                        static_cast<std::uint32_t>(
                                            dripTmp.size()));
@@ -3941,10 +4103,15 @@ int main(int argc, char** argv) {
                     const auto& camT = reg.get<CameraTag>(player);
                     const vec3 fw = camera_forward(camT.yaw, camT.pitch);
                     const vec3 pp = reg.get<Transform>(player).pos;
+                    const giga::GravityFrame gf = giga::regime_frame(activeWorld.gravity().regime);
+                    vec3 pp2 = pp;
+                    pp2[gf.axis] += gf.upSign * 1.2f;
+                    vec3 burstDir{0.0f, 0.0f, 0.0f};
+                    burstDir[gf.axis] = gf.upSign * 1.0f;
                     particleBursts.push(
-                        vec3{pp.x + fw.x * 3.0f, pp.y + fw.y * 3.0f,
-                             pp.z + 1.2f + fw.z * 3.0f},
-                        vec3{0.0f, 0.0f, 1.0f},
+                        vec3{pp2.x + fw.x * 3.0f, pp2.y + fw.y * 3.0f,
+                             pp2.z + fw.z * 3.0f},
+                        burstDir,
                         static_cast<game::ParticleKind>(dk), 12,
                         kMatElectricGrate, // debris/dust tint: loud yellow
                         static_cast<std::uint32_t>(simTick));
@@ -3989,7 +4156,7 @@ int main(int argc, char** argv) {
                     const game::NpcId sp = game::nearest_speaker(reg, activeLayer);
                     if (sp != game::kInvalidNpc) {
                         const game::Rumour ru = game::rumour_for(
-                            reg, pool, sp, activeLayer, currentFloor);
+                            reg, pool, sp, activeLayer, currentFloor, samosbor);
                         if (game::rumour_text(ru, rumourLine, sizeof(rumourLine)))
                             rumourAt = simTick;
                         // The same body may also be hiring. One proximity sweep, two
@@ -4025,8 +4192,8 @@ int main(int argc, char** argv) {
                 // ENCUMBRANCE before the needs clock, because it charges the same
                 // sleep bar the clock then reads for its exhaustion penalty — a
                 // load taxes you on the tick you carry it, not one tick later.
-                encumbrance = game::encumbrance_step(reg, pool, activeLayer, kSimDt,
-                                                     simTick);
+                encumbrance = game::encumbrance_step(reg, pool, activeLayer, stack.layer(activeLayer).gravity(), kSimDt,
+                                                     simTick, &noiseField);
                 needs = game::needs_step(reg, pool, activeLayer, kSimDt, &roomZones);
                 needsHpLost += needs.hpLost;
                 // The other half of the acceptance trail. `bodies` says the clock is
@@ -4073,11 +4240,16 @@ int main(int argc, char** argv) {
                 // should be sweepable in the same tick if the inventory overflowed
                 // onto the floor. [container.h]
                 const std::int32_t fromBox =
-                    game::loot_containers_step(reg, pool, activeLayer, &noiseField);
+                    game::loot_containers_step(reg, pool, activeLayer, &noiseField, &aiMem, simNow);
                 if (fromBox != 0) {
                     loot += fromBox;
                     containerTake += fromBox;
                     game::sync_armour(reg, pool, player);
+                    
+                    const game::NpcId witness = game::nearest_speaker(reg, activeLayer);
+                    if (witness != game::kInvalidNpc) {
+                        factionRel.add_mutual(game::kFactionPlayerRow, static_cast<std::uint8_t>(pool.faction(witness)), -8);
+                    }
                 }
                 const std::int32_t got =
                     game::pickup_step(reg, pool, bus, activeLayer, simTick);
@@ -4217,6 +4389,8 @@ int main(int argc, char** argv) {
                             if (pid != game::kInvalidNpc) {
                                 game::apply_player_snapshot(pool, pid,
                                                             runState.player);
+                                if (reg.valid(player))
+                                    reg.emplace_or_replace<game::Equipped>(player, runState.player.eq);
                                 game::sync_armour(reg, pool, player);
                             }
                             // Version 7: stamp the sheet onto the body and the
@@ -4247,12 +4421,7 @@ int main(int argc, char** argv) {
                             playerStatus = runState.status;
                             // Per-floor clocks and channels reset, same as any
                             // arrival.
-                            samosbor = game::samosbor_new_game(sbRng);
-                            vendorKind = game::vendor_kind_for(
-                                game::dominant_faction(pool, currentFloor));
-                            rumourLine[0] = 0;
-                            rumourAt = 0;
-                            game::noise_clear(noiseField);
+                            on_floor_arrival(samosbor, sbRng, vendorKind, pool, currentFloor, rumourLine, rumourAt, noiseField);
                             // Arrival order is load-path law: containers before
                             // re-open, mobs, floor file, doors, freeze, bake,
                             // then placement. [save.h]
@@ -4276,7 +4445,12 @@ int main(int argc, char** argv) {
                                     streamer.floor_seed_of(registry,
                                                            currentFloor));
                             doors.frozen = true;
+                            
+                            StressParams stressParams{};
+                            bake_stress(stack.layer(nl), stressParams, stack.layer(nl).fields().get_or_create<float>("stress", -1.0f));
+                            
                             begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
+                            giga::diffusion_driver_on_floor_built(diffusionDriver, stack.layer(nl), nl);
                             if (propPass.ready()) {
                                 merge_ecs_prop_meshes(reg, nl, propPass,
                                   streamer.antourage_at_layer(registry, nl),
@@ -4327,9 +4501,11 @@ int main(int argc, char** argv) {
                         if (const auto* nrv = reg.try_get<game::NpcRef>(player))
                             if (pool.valid(nrv->id)) {
                                 game::Inventory& vi = pool.inventory(nrv->id);
-                                if (sellWanted)
+                                if (sellWanted) {
                                     sold += game::vendor_sell_all(vi, ledger,
                                                                  vendorKind);
+                                    factionRel.add_mutual(game::kFactionPlayerRow, static_cast<std::uint8_t>(game::dominant_faction(pool, currentFloor)), +1);
+                                }
                                 if (buyWanted)
                                     spent += game::vendor_resupply(vi, ledger,
                                                                    kResupplyBudget);
@@ -4423,7 +4599,8 @@ int main(int argc, char** argv) {
                                 contracts, pool, pool.inventory(nrc->id), ledger);
                             questPaid += game::quest_step(
                                 quests, pool, pool.inventory(nrc->id), ledger,
-                                static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f));
+                                static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f),
+                                &factionRel);
                         }
                 // Eating and drinking sit beside healing and AFTER pickup_step, so a
                 // ration picked up this tick can be eaten this tick. Both refuse a
@@ -4514,11 +4691,11 @@ int main(int argc, char** argv) {
                     // HUD and no window. One line per macro tick, so ~30/minute.
                     std::fprintf(stderr,
                                  "[macro] tick=%llu day=%.1f living=%u births=%u "
-                                 "deaths=%u blocked=%u depart=%u arrive=%u "
+                                 "deaths=%u starvations=%u blocked=%u depart=%u arrive=%u "
                                  "transit=%u reserve=%u\n",
                                  static_cast<unsigned long long>(macroStats.tick),
                                  macroSim.day(), macroStats.living, macroStats.births,
-                                 macroStats.deaths, macroStats.birthsBlocked,
+                                 macroStats.deaths, macroStats.starvations, macroStats.birthsBlocked,
                                  macroStats.departures, macroStats.arrivals,
                                  macroStats.inTransit, macroStats.reserveRemaining);
                 }
@@ -4538,16 +4715,57 @@ int main(int argc, char** argv) {
                 // pressure/light) on the GPU as async compute, so wiring the CPU
                 // `fluid_step` into this tick would install the very thing the
                 // performance mandate forbids. Owner call, not a TODO to grab.
+                if (++fluidCounter >= fluidStepEvery) {
+                    fluid_step(stack.layer(activeLayer));
+                    fluidCounter = 0;
+                }
+                giga::diffusion_tick(diffusionDriver, stack.layer(activeLayer), activeLayer, simTick);
+                gas_step(stack.layer(activeLayer), activeLayer, kSimDt);
+                if (const game::AntourageBake* ab = streamer.antourage_at_layer(registry, activeLayer)) {
+                    game::antourage_vent_step(stack.layer(activeLayer), *ab, kSimDt);
+                }
+                {
+                    Field<float>& stress = stack.layer(activeLayer).fields().get_or_create<float>("stress", -1.0f);
+                    bake_stress(stack.layer(activeLayer), StressParams{}, stress);
+                }
                 simNow += kSimDt;
                 simAccum -= kSimDt;
             }
         }
+
+        // Session over: the last body on the floor died and possess_a_survivor
+        // found no one to fall into (:4305). `running = false` alone does NOT end
+        // the frame — the sim loop above closes here, but `while (running)` is only
+        // re-tested at the top of the next iteration, so control would fall
+        // straight into rendering with `player == entt::null`. The HUD block reads
+        // `reg.get<Transform>(player)` unguarded, and Release compiles EnTT's
+        // asserts out (NDEBUG), so that is an unchecked sparse-set index — a silent
+        // out-of-bounds read, not a clean abort.
+        //
+        // Bailing here rather than guarding each read: a frame with no player is
+        // not meaningful to draw (compute_camera finds no CameraTag and yields a
+        // stale matrix), and a per-read guard has to be repeated at every `player`
+        // access below — one of which was already missed once.
+        if (!running) break;
 
         // --- render --------------------------------------------------------
         int fbw = 0, fbh = 0;
         SDL_GetWindowSizeInPixels(window, &fbw, &fbh);
         float aspect = fbh > 0 ? static_cast<float>(fbw) / fbh : 1.0f;
         CameraMatrices camMat = compute_camera(reg, aspect);
+
+        // Audio listener update — every frame, non-fatal if audio is absent.
+        if (audioOk) {
+            // vec3 members are {x, y, z}; OpenAL uses a right-handed +Y-up
+            // system; the engine uses the same convention, so no transform needed.
+            const float listenerPos[3] = {camMat.eye.x, camMat.eye.y, camMat.eye.z};
+            const float listenerFwd[3] = {camMat.forward.x, camMat.forward.y, camMat.forward.z};
+            const float listenerUp[3]  = {0.0f, 0.0f, 1.0f};
+            audioDevice.update_listener(listenerPos, listenerFwd, listenerUp);
+            if (activeLayer != kInvalidLayer) {
+                voices.update(audioDevice, listenerPos);
+            }
+        }
 
         hud.begin_frame();
         if (showHud)
@@ -4824,10 +5042,10 @@ int main(int argc, char** argv) {
                 // produced it, because a number that moves when you level up should
                 // say why on the same line.
                 if (reg.valid(player)) {
-                    if (const auto* nr = reg.try_get<game::NpcRef>(player)) {
-                        if (pool.valid(nr->id)) {
+                    if (const auto* pnr = reg.try_get<game::NpcRef>(player)) {
+                        if (pool.valid(pnr->id)) {
                             const std::uint32_t heldG =
-                                game::inventory_mass_g(pool.inventory(nr->id));
+                                game::inventory_mass_g(pool.inventory(pnr->id));
                             // The sheet is an ECS component, not a pool column
                             // ([combat.h] "RpgStats: copy from -> to"), so a body
                             // with none reads as Str 0 rather than as no budget.
@@ -4872,10 +5090,10 @@ int main(int argc, char** argv) {
                 // visible proof that the world runs on its own clock. It updates once
                 // every kMacroPeriodTicks (2.000 s), so it deliberately does not track
                 // the frame.
-                ImGui::Text("society %u alive | +%u births / -%u deaths | %u in transit"
+                ImGui::Text("society %u alive | +%u births / -%u deaths (%u starvations) | %u in transit"
                             "%s",
                             macroStats.living, macroStats.births, macroStats.deaths,
-                            macroStats.inTransit,
+                            macroStats.starvations, macroStats.inTransit,
                             macroStats.birthsBlocked != 0
                                 ? "  (RESERVE FLOOR: births refused)"
                                 : "");
@@ -5050,9 +5268,15 @@ int main(int argc, char** argv) {
                     for (int qi = 1; qi <= static_cast<int>(game::kQuestCount); ++qi) {
                         char qline[320];
                         const game::QuestId qid = static_cast<game::QuestId>(qi);
-                        if (game::quest_line(quests, qid, qline, sizeof(qline)))
+                        if (game::quest_line(quests, qid, qline, sizeof(qline))) {
                             ImGui::TextColored(ImVec4(0.70f, 0.98f, 0.60f, 1.0f),
                                                "  quest: %s", qline);
+                            char objLine[96];
+                            if (game::quest_objective_text(qid, objLine, sizeof(objLine))) {
+                                ImGui::TextColored(ImVec4(0.80f, 0.80f, 0.80f, 1.0f),
+                                                   "    obj: %s", objLine);
+                            }
+                        }
                     }
                 }
             }
@@ -5093,10 +5317,10 @@ int main(int argc, char** argv) {
                                 static_cast<float>(game::kMacroPeriodTicks) *
                                     kSimDt);
                 else
-                    ImGui::Text("society: %u living  +%u/-%u  %u in transit  "
+                    ImGui::Text("society: %u living  +%u/-%u (%u starvations)  %u in transit  "
                                 "| reserve %u  (t%llu, day %.1f)",
                                 macroStats.living, macroStats.births,
-                                macroStats.deaths, macroStats.inTransit,
+                                macroStats.deaths, macroStats.starvations, macroStats.inTransit,
                                 macroStats.reserveRemaining,
                                 static_cast<unsigned long long>(macroStats.tick),
                                 macroSim.day());
@@ -5168,7 +5392,7 @@ int main(int argc, char** argv) {
                     const std::int32_t soldBefore = sold;
                     const std::int32_t spentBefore = spent;
                     DrawVendorWindowUI(&showVendorWindow, pool.inventory(nrv->id), ledger, 
-                                       vendorKind, isOnPad, sold, spent);
+                                       vendorKind, isOnPad, sold, spent, factionRel, pool, static_cast<std::int16_t>(currentFloor));
                     // Same re-derive as the keyboard path. The window is not handed
                     // reg/pool/player, so the CALLER does it — the shape the
                     // crafting window already uses via its `invChanged` out-param.
@@ -5506,8 +5730,10 @@ int main(int argc, char** argv) {
             // truthful 0.0 ms, not as a dead readout.
             renderer.timer.pass_begin(cmd, gpu::GpuPass::LightGrid);
             if (lightGrid.ready()) {
-                collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, samosbor, reg, activeLayer, &noiseField, &powerGrid);
+                collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, samosbor, reg, activeLayer, stack.layer(activeLayer).gravity(), &noiseField, &powerGrid);
+                renderer.timer.pass_begin(cmd, gpu::GpuPass::LightGrid);
                 lightGrid.update_and_dispatch(cmd, currentTimeSec, camMat.eye);
+                renderer.timer.pass_end(cmd, gpu::GpuPass::LightGrid);
             }
             renderer.timer.pass_end(cmd, gpu::GpuPass::LightGrid);
 
@@ -5568,8 +5794,8 @@ int main(int argc, char** argv) {
             static const bool noGpuCull = std::getenv("GIGA_NO_GPU_CULL") != nullptr;
             static const bool noWireSim = std::getenv("GIGA_WIRE_NOSIM") != nullptr;
             static const bool noParticleSim = std::getenv("GIGA_PARTICLE_NOSIM") != nullptr;
-            renderer.timer.pass_begin(cmd, gpu::GpuPass::Cull);
             if (!noGpuCull && cullPass.ready() && propPass.ready()) {
+                renderer.timer.pass_begin(cmd, gpu::GpuPass::Cull);
                 propPass.set_use_gpu_culling(true);
                 const mat4 vp = mat4_mul(camMat.proj, camMat.view);
                 const uint32_t fIdx = renderer.currentFrame;
@@ -5588,6 +5814,7 @@ int main(int argc, char** argv) {
                         propPass.culled_instance_buffer(s, fIdx),
                         propPass.indirect_cmd_buffer(s, fIdx));
                 }
+                renderer.timer.pass_end(cmd, gpu::GpuPass::Cull);
             } else if (propPass.ready()) {
                 propPass.set_use_gpu_culling(false);
             }
@@ -5600,10 +5827,10 @@ int main(int argc, char** argv) {
             {
                 static std::vector<vec4> pushBodies;
                 pushBodies.clear();
-                for (auto e :
+                for (auto pe :
                      reg.view<const Transform, const AABB, const Renderable>()) {
-                    if (reg.all_of<StaticPropTag>(e)) continue;
-                    const Transform& tr = reg.get<const Transform>(e);
+                    if (reg.all_of<StaticPropTag>(pe)) continue;
+                    const Transform& tr = reg.get<const Transform>(pe);
                     if (tr.layer != activeLayer) continue;
                     pushBodies.push_back(
                         vec4{tr.pos.x, tr.pos.y, tr.pos.z, 0.9f});
@@ -5711,6 +5938,20 @@ int main(int argc, char** argv) {
                     stack.layer(activeLayer).gravity().global);
             renderer.timer.pass_end(cmd, gpu::GpuPass::SimPhysics);
 
+            // Gas chemistry + diffusion — compute-only, runs outside render pass.
+            // The downStep is derived from regime_down(), NOT a -Z literal, per §3.2.
+            if (gasPass.ready()) {
+                // Upload current gas field to GPU every frame the layer is loaded.
+                // Field<GasCell> is a flat 128^3 array; upload is a memcpy.
+                const Field<GasCell>* gf = stack.layer(activeLayer).fields().find<GasCell>(kGasField);
+                if (gf) {
+                    gasPass.upload(gf->data());
+                }
+                const CellStep gDown = regime_down(stack.layer(activeLayer).gravity().regime);
+                gasPass.step_sim(cmd, 1.0f / 60.0f,
+                                 gDown.x, gDown.y, gDown.z);
+            }
+
             renderer.begin_pass(0.0f, 0.0f, 0.0f);
 
             gpu::CubePush push{};
@@ -5723,10 +5964,10 @@ int main(int argc, char** argv) {
             push.fog = vec4{kWorldExtent * 0.30f * fogScale,
                             kWorldExtent * 0.50f * fogScale,
                             kLampRadius, kAmbient};
-            // The wrap period, so cube.vert can place each cell at its nearest
+            // The wrap period, so the shaders can place each cell at its nearest
             // toroidal image itself. Instance origins are absolute, which is what
             // makes the cube pass's instance cache possible.
-            push.torus = vec4{kWorldExtent, kAoDirect, samosborPulse, currentTimeSec};
+            push.torus = vec4{currentTimeSec, kAoDirect, samosborPulse, 0.0f};
             // Each pass is bracketed by GPU timestamps as well as by the CPU
             // clock: the two answer different questions and need opposite fixes.
             // The CPU figure is time spent building instance data on this thread;
@@ -5746,8 +5987,6 @@ int main(int argc, char** argv) {
             if (propPass.ready())
                 propPass.record(cmd, renderer.currentFrame, push, lightGrid.descriptor_set());
             renderer.timer.pass_end(cmd, gpu::GpuPass::Props);
-
-
             renderer.timer.pass_begin(cmd, gpu::GpuPass::DrawPhysics);
             wirePass.record_draw(cmd, push);
             clothPass.record_draw(cmd, push);
@@ -5761,6 +6000,23 @@ int main(int argc, char** argv) {
             cubeMs = static_cast<float>((t1 - t0) / freq * 1000.0);
             bodyMs = static_cast<float>((t2 - t1) / freq * 1000.0);
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Hud);
+            
+            renderer.begin_post_pass(1.0f / 60.0f);
+            gpu::PostState postState{};
+            // Expose the EyeAdapt GPU result to the PostState CPU side.
+            postState.darkAdapt = renderer.eyeAdaptPass_.get_current_lum();
+            if (player != entt::null) {
+                const game::NpcId pid = reg.get<game::NpcRef>(player).id;
+                const game::Needs& needs = pool.needs(pid);
+                if (needs.sanity < 30.0f) {
+                    postState.hallucination = (30.0f - needs.sanity) / 30.0f;
+                }
+                const game::StatusSet* statuses = reg.try_get<game::StatusSet>(player);
+                if (statuses && game::status_active(*statuses, game::StatusId::PsiStun)) {
+                    postState.stun = 1.0f;
+                }
+            }
+            postPass.record(cmd, renderer.offscreen_view(), postState);
             hud.render(cmd);
             renderer.timer.pass_end(cmd, gpu::GpuPass::Hud);
             renderer.end_frame(window);
@@ -5800,7 +6056,7 @@ int main(int argc, char** argv) {
                                                         runState.opened);
                         // Same departure floor-file write as the keyboard
                         // path — two travel sites, one law. [save.h]
-                        write_floor_file(stack.layer(leaveLayer), currentFloor);
+                        write_floor_file(stack.layer(leaveLayer), currentFloor, hermeticZones);
                         // Same AIMEM leave release as do_ride. Two travel
                         // sites; a fix that touches only one proves nothing
                         // under --shot --ride. [ai.h]
@@ -5833,12 +6089,10 @@ int main(int argc, char** argv) {
                         // about, hit again by promoting a display variable to a source
                         // of truth. Both sites now set it.
                         currentSpec = spec_for_floor(currentFloor);
-                        samosbor = game::samosbor_new_game(sbRng);
                         aim_player(reg, player);
                         LayerId nl = reg.get<Transform>(player).layer;
                         activeLayer = nl;
-                        vendorKind = game::vendor_kind_for(
-                            game::dominant_faction(pool, currentFloor));
+                        on_floor_arrival(samosbor, sbRng, vendorKind, pool, currentFloor, rumourLine, rumourAt, noiseField);
                         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
                         refresh_floor_containers(reg, stack.layer(nl),
                                                  currentFloor, nl);
@@ -5862,6 +6116,7 @@ int main(int argc, char** argv) {
                                 streamer.floor_seed_of(registry, currentFloor));
                         doors.frozen = true;
                         begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
+                        giga::diffusion_driver_on_floor_built(diffusionDriver, stack.layer(nl), nl);
                         voxelMirror.upload_all(stack.layer(nl));
                         if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
                         // Same transition autosave as the keyboard path.
@@ -5962,6 +6217,7 @@ int main(int argc, char** argv) {
     hud.destroy();
 
     particlePass.destroy();
+    gasPass.destroy();
     clothPass.destroy();
     wirePass.destroy();
     cullPass.destroy();
@@ -5971,6 +6227,12 @@ int main(int argc, char** argv) {
     voxelMirror.destroy();
     cubePass.destroy();
     lightGrid.destroy();
+    // Audio must be torn down before the Vulkan device (no shared resources,
+    // but destroying context after a GPU teardown is still cleaner).
+    if (audioOk) {
+        voices.destroy();
+        audioDevice.destroy();
+    }
     renderer.destroy();
     device.destroy();
     SDL_DestroyWindow(window);

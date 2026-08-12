@@ -23,6 +23,7 @@
 #include "core/math.h" // ivec3 (route_step cell coordinates)
 #include "world/lattice.h"
 #include "world/types.h"
+#include "world/gravity.h"
 
 namespace giga {
 class MacroGrid;
@@ -55,7 +56,7 @@ struct CoarseGraph {
 // nodes) -> edge weights; then Floyd-Warshall -> all-pairs dist + next-hop.
 // A macro cell is coarse-walkable when it is not fully solid (mask not full);
 // each node is represented by its shaft-centre air cell. Bake-time only.
-void bake_coarse(const MacroGrid& grid, CoarseGraph& out);
+void bake_coarse(const MacroGrid& grid, GravityRegime regime, CoarseGraph& out);
 
 // O(1) tick query: the next node to move to from `from` heading toward `to`.
 inline int coarse_next(const CoarseGraph& g, int from, int to) {
@@ -119,7 +120,7 @@ struct FineNav {
 // race-free and bit-identical regardless of scheduling. Allocates ~128 MiB into
 // out.flow; then a single deterministic multi-source BFS fills the 2 MiB
 // out.nearest. Bake-time only (floor load / post-samosbor), never on the tick.
-void bake_fine(const MacroGrid& grid, FineNav& out);
+void bake_fine(const MacroGrid& grid, GravityRegime regime, FineNav& out);
 
 // --- No partial rebake. Deleted 2026-08-06, with LazyFieldRebaker -----------
 // Four helpers used to live here so a per-frame rebaker could re-touch "only

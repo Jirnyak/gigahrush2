@@ -87,6 +87,8 @@ inline constexpr float kNeedMax = 100.0f;
 inline constexpr float kFoodDrainPerSec  = 0.08f;
 inline constexpr float kWaterDrainPerSec = 0.12f;
 inline constexpr float kSleepDrainPerSec = 0.05f;
+inline constexpr float kSanityDrainPerSec = 0.03f; // sanity degrades slowly over time
+inline constexpr float kRadiationFillPerSec = 0.0f; // radiation only fills from environmental hazards
 static_assert(kWaterDrainPerSec > kFoodDrainPerSec,
               "water must run out before food — that ordering IS the design");
 
@@ -102,6 +104,8 @@ inline constexpr float kPooDigestPerSec = 0.06f;
 inline constexpr float kHungerHpPerSec      = 0.3f;   // food  <= 0
 inline constexpr float kDehydrationHpPerSec = 0.5f;   // water <= 0
 inline constexpr float kOverflowHpPerSec    = 0.1f;   // pee or poo >= 100, each
+inline constexpr float kInsanityHpPerSec    = 0.2f;   // sanity <= 0 (self-harm/panic)
+inline constexpr float kLethalRadHpPerSec   = 1.0f;   // radiation >= 100
 
 // `main.ts:3777-3786`: flat, binary, no ramp.
 inline constexpr float kSleepExhaustedAt = 10.0f;
@@ -114,6 +118,8 @@ inline constexpr float kStartWaterLo = 70.0f, kStartWaterHi = 100.0f;
 inline constexpr float kStartSleepLo = 60.0f, kStartSleepHi = 100.0f;
 inline constexpr float kStartPeeLo   =  0.0f, kStartPeeHi   =  30.0f;
 inline constexpr float kStartPooLo   =  0.0f, kStartPooHi   =  20.0f;
+inline constexpr float kStartSanityLo = 80.0f, kStartSanityHi = 100.0f;
+inline constexpr float kStartRadLo    =  0.0f, kStartRadHi    =  0.0f;
 
 // THE SURVIVAL WINDOW. A reserve `v` at drain `r` lasts `v / r` seconds:
 //
@@ -143,10 +149,12 @@ inline constexpr float kNeedWarnLeadSec = 120.0f;
 inline constexpr float kFoodWarnAt  = kFoodDrainPerSec  * kNeedWarnLeadSec;  //  9.6
 inline constexpr float kWaterWarnAt = kWaterDrainPerSec * kNeedWarnLeadSec;  // 14.4
 inline constexpr float kSleepWarnAt = kSleepDrainPerSec * kNeedWarnLeadSec;  //  6.0
+inline constexpr float kSanityWarnAt = kSanityDrainPerSec * kNeedWarnLeadSec; //  3.6
 // Pressures warn by headroom, and their lead is a WORST case: it only elapses while
 // the pending queue still has something to meter out.
 inline constexpr float kPeeWarnAt = kNeedMax - kPeeDigestPerSec * kNeedWarnLeadSec; // 88.0
 inline constexpr float kPooWarnAt = kNeedMax - kPooDigestPerSec * kNeedWarnLeadSec; // 92.8
+inline constexpr float kRadiationWarnAt = 80.0f; // flat warning since it's driven by external hazards, not steady internal meter
 
 // What goes in comes out. Structural helper constants in the reference
 // (`items.ts:32-34`), not per-item data, so they port verbatim.
@@ -193,12 +201,25 @@ inline constexpr std::int16_t kSleepingPillsHpCost = 4;
 inline constexpr float kToiletPeeRelief = 70.0f;
 inline constexpr float kToiletPooRelief = 65.0f;
 
+// Field relief — squatting in an open area (no ToiletPan prop in reach).
+// Less effective than a toilet and leaves a stain; also publishes noise (spec 14 §9.1).
+// Deliberately well below kToiletPee/PooRelief to make furniture matter.
+inline constexpr float kFieldPeeRelief = 40.0f;
+inline constexpr float kFieldPooRelief = 35.0f;
+
 // One index past the last real `DamageChannel` — see the header comment.
 // `enum class : uint8_t` carries the underlying type's value range, so this cast is
 // well-defined, not UB. It also lands in `Dead::channel`, where it reads as
 // "attrition"; nothing switches on that field.
 inline constexpr DamageChannel kAttritionChannel =
     static_cast<DamageChannel>(kDamageChannels);
+// GUARD: if a sixth damage channel is ever added, kAttritionChannel becomes a valid
+// channel index and apply_damage's armour table would start mitigating starvation.
+// This assert turns that silent break into a build error (spec 14 §9.4).
+static_assert(static_cast<std::size_t>(kAttritionChannel) >= kDamageChannels,
+              "kAttritionChannel must lie OUTSIDE the mitigable channel range: "
+              "a sixth damage channel would silently let armour reduce starvation HP loss. "
+              "Either raise kAttritionChannel or audit apply_damage's guard.");
 
 // HOW FAR INTO ITS OWN DAY A RESIDENT IS BORN, in seconds — DERIVED FROM THE RATES,
 // never picked, for the same reason the warning leads above are. The property that
@@ -215,11 +236,13 @@ static_assert(kStartWaterLo - kWaterDrainPerSec * kResidentPhaseMaxSec > 0.0f,
 
 // One byte answers the HUD, the warning line and the damage sum at once.
 enum NeedBit : std::uint8_t {
-    NeedFood  = 1u << 0,
-    NeedWater = 1u << 1,
-    NeedSleep = 1u << 2,
-    NeedPee   = 1u << 3,
-    NeedPoo   = 1u << 4,
+    NeedFood      = 1u << 0,
+    NeedWater     = 1u << 1,
+    NeedSleep     = 1u << 2,
+    NeedPee       = 1u << 3,
+    NeedPoo       = 1u << 4,
+    NeedSanity    = 1u << 5,
+    NeedRadiation = 1u << 6,
 };
 
 // What one `needs_step` actually did — the "report what LANDED" shape of
@@ -307,7 +330,8 @@ float needs_speed_scale(const Needs& n);
 // No allocation, no exceptions, O(n) in the EMBODIED bodies on one layer.
 struct RoomZones; // room_zone.h — incomplete OK; the full type is only needed in the .cpp
 NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
-                     const RoomZones* rooms = nullptr);
+                     const RoomZones* rooms = nullptr,
+                     class AiMemory* mem = nullptr, double now = 0.0);
 
 // Keyed off `UseEffect`, never `ItemCategory` — and the distinction is real:
 // `calm_brew` is category DRINK and `easter_egg` is category FOOD, but both are

@@ -58,9 +58,12 @@
 #include "game/rpg.h"         // RpgStats
 #include "game/craft.h"       // CraftingState, kCraftingWire, craft_write/read
 #include "game/combat.h"      // PlayerRanged (SAVMAG v8)
+#include "game/samosbor.h"    // SamosborState
 #include "game/status.h"      // StatusSet (SAVSTAT v9)
+#include "game/equip.h"
 #include "world/destruct.h"   // CarveOp, CarveScratch, CarveResult, carve_sphere
 #include "world/level_stack.h"  // LayerId, and World via world/world.h
+#include "game/hermetic.h"
 
 namespace giga::game {
 
@@ -106,8 +109,9 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // Version 9: live status effects travel too — StatusSet (remainMs/intensityE3/alt
 // for all six authored statuses). F5 mid-haze must not wipe the timers on F9;
 // a loaded body keeps the same move/aim/melee mults it saved under. [status.h]
-// SAVSTAT
-inline constexpr std::uint32_t kSaveVersion = 9u;
+// Version 10: Spec 03 Wear and jam states on equipped weapons
+// Version 11: Spec 04 Needs (Sanity, Radiation)
+inline constexpr std::uint32_t kSaveVersion = 11u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -216,9 +220,9 @@ inline constexpr std::size_t kLedgerWire = 33;       // 2x8 + 4x4 + 1
 inline constexpr std::size_t kContractWire = 21;     // 4 + 2 + 3x4 + 3   (pad_ dropped)
 inline constexpr std::size_t kBookWire =
     static_cast<std::size_t>(kMaxContracts) * kContractWire + 4 + 4 + 8;
-inline constexpr std::size_t kNeedsWire = 33;        // 8 floats + seeded
-inline constexpr std::size_t kInventoryWire = static_cast<std::size_t>(kInvSlots) * 4;
-inline constexpr std::size_t kPlayerWire = kNeedsWire + kInventoryWire + 4 + 4 + 4 + 3;
+inline constexpr std::size_t kNeedsWire = 45;        // 11 floats + seeded
+inline constexpr std::size_t kInventoryWire = static_cast<std::size_t>(kInvSlots) * 6; // item(2)+count(2)+condition(1)+pad_(1) = 6 per slot
+inline constexpr std::size_t kPlayerWire = kNeedsWire + kInventoryWire + 19; // eq(4), hp(4), maxHp(4), floor(4), cx/cy/cz(3)
 // Version 7: RpgStats wire — field-by-field LE, NOT sizeof (pad_ is written so the
 // footprint stays 12 and matches the POD layout without host padding surprises).
 inline constexpr std::size_t kRpgWire = 4 + 2 + 1 + 1 + 3 + 1;  // 12
@@ -235,14 +239,14 @@ inline constexpr std::size_t kCombatSaveWire =
     1 + kRangedWire + 4;  // hasRanged + ranged + kills = 21
 static_assert(kCombatSaveWire == 21);
 // Version 9 / SAVSTAT: StatusSet field-by-field (NOT sizeof — host padding).
-// 6 x u32 remainMs + 6 x u16 intensityE3 + 6 x u8 alt = 24+12+6 = 42.
-inline constexpr std::size_t kStatusWire =
-    kStatusCount * 4 + kStatusCount * 2 + kStatusCount * 1;  // 42
-static_assert(kStatusWire == 42);
+// 6 x u32 remainMs + 6 x u16 intensityE3 + 6 x u8 alt = 28+14+7 = 49.
+inline constexpr std::size_t kStatusWire = 49;
+static_assert(kStatusWire == 49);
+inline constexpr std::size_t kSamosborWire = 17;      // 3x u32 (ms) + u16 (count) + 3x u8 (phase, variant, sealed)
 inline constexpr std::size_t kOpenedKeyWire = 5;     // i16 floor + 3 x u8 cell
 inline constexpr std::size_t kSaveFixedWire =
     kLedgerWire + kBookWire + kPlayerWire + kRpgWire + kCraftingWire +
-    kCombatSaveWire + kStatusWire + kQuestLogWire;
+    kCombatSaveWire + kStatusWire + kQuestLogWire + kSamosborWire;
 
 // Sanity ceiling on the opened-container list, so a corrupt header cannot ask for a
 // huge allocation before the checksum has had a chance to reject it. 64 crates per
@@ -374,12 +378,14 @@ inline constexpr std::size_t kFloorHeaderWire = 16;
 
 // Encode the World into a complete floor file (header + CRC + snapshot blob).
 void floor_file_write(const World& w, int floorNumber,
+                      const HermeticZones& hermeticZones,
                       std::vector<std::uint8_t>& out);
 
 // Validate a floor file and stamp it onto `w`. False on any rejection (magic,
 // version, size, CRC, malformed blob) — the caller keeps the generated floor and,
 // where it can, says so out loud. `floorOut` reports the floor the blob claims.
 bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
+                     HermeticZones& hermeticZones,
                      std::int32_t* floorOut = nullptr, SaveError* err = nullptr);
 
 // ---------------------------------------------------------------------------
@@ -397,6 +403,7 @@ bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
 struct PlayerSnapshot {
     Needs clock{};              // the survival clock; canonical in the pool row
     Inventory inv{};            // 64 slots, 256 B
+    Equipped eq{};              // 4 B, equipped slots
     std::int32_t hp = 0;        // also pool-row state, also unreproducible
     std::int32_t maxHp = 0;
     // The SIGNED floor the player stood on. Saved separately and explicitly because
@@ -436,6 +443,7 @@ struct SaveState {
     // Version 9 / SAVSTAT: live status effects. Local `playerStatus` in main —
     // not an ECS component — so capture/restore is a direct assignment.
     StatusSet status{};
+    SamosborState samosbor{};
     // Every crate emptied anywhere in the building, not just on the live floor. Only the
     // resident floor's crates are live entities, so the ones from other floors exist
     // ONLY in this list — see `refresh_opened_containers`.
@@ -462,6 +470,7 @@ struct SaveState {
 // arrays are 138 MB; a pathological floor degrades linearly and is bounded by
 // kMaxSnapBytes. Returns the encoded size.
 std::size_t snapshot_floor(const World& w, int floorNumber,
+                           const HermeticZones& hermeticZones,
                            std::vector<std::uint8_t>& out);
 
 // Stamp a snapshot back onto `w`, replacing types, masks and the sub-material field
@@ -471,6 +480,7 @@ std::size_t snapshot_floor(const World& w, int floorNumber,
 // receives the floor number the snapshot claims. Call BEFORE door_build, so the
 // fresh DoorSet re-stamps its leaves over whatever door state the snapshot froze.
 bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
+                          HermeticZones& hermeticZones,
                           std::int32_t* floorOut = nullptr);
 
 // Serialize. `out` is cleared first and ends up exactly `save_bytes_for(opened.size())`

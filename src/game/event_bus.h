@@ -117,13 +117,16 @@ enum class EventType : std::uint16_t {
     // A prop fell out of the world and needs a GPU handoff.
     // a = pos.x, b = pos.y, c = pos.z
     PropDetached,
+    // A firearm jammed due to wear or dust.
+    // a = shooter NpcId or kInvalidNpc if player.
+    WeaponJammed,
 };
 
 // How many EventType values there are, for the per-type tally arrays. The
 // static_assert is what keeps this honest: add a value past PropDetached and the
 // build stops here rather than silently dropping it out of every count.
-inline constexpr std::size_t kEventTypeCount = 8;
-static_assert(static_cast<std::size_t>(EventType::PropDetached) + 1 ==
+inline constexpr std::size_t kEventTypeCount = 9;
+static_assert(static_cast<std::size_t>(EventType::WeaponJammed) + 1 ==
                   kEventTypeCount,
               "kEventTypeCount must cover every EventType value");
 
@@ -271,6 +274,11 @@ inline bool publish_floor_entered(EventBus& bus, std::int32_t floorNumber,
                                   std::uint64_t tick) {
     return bus.publish(EventType::FloorEntered, pack_floor(floorNumber), layer,
                        npcId, tick);
+}
+
+inline bool publish_weapon_jammed(EventBus& bus, std::uint32_t shooterId,
+                                  std::uint64_t tick) {
+    return bus.publish(EventType::WeaponJammed, shooterId, 0, 0, tick);
 }
 
 // --- one floor arrival, one call --------------------------------------------

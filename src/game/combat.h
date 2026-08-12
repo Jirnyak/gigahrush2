@@ -482,7 +482,9 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
                           std::int16_t raw, DamageChannel ch, Entity source,
                           const MacroGrid* grid = nullptr,
                           ParticleBurstQueue* particles = nullptr,
-                          const GravityField* gravity = nullptr);
+                          const GravityField* gravity = nullptr,
+                          class AiMemory* mem = nullptr,
+                          double now = 0.0);
 
 // THE death finalizer, and the only place an entity dies. Publishes one NpcDied
 // per death (payload: `a` = victim NpcId or kInvalidNpc for a mob, `b` = MobKind
@@ -526,7 +528,9 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
                              NpcPool& pool, EventBus& bus,
                              LayerId layer, float dt, std::uint64_t tick,
                              ParticleBurstQueue* particles = nullptr,
-                             const GravityField* gravity = nullptr);
+                             const GravityField* gravity = nullptr,
+                             class AiMemory* mem = nullptr,
+                             double now = 0.0);
 
 // Cell hazards for EMBODIED BODIES — the player and every resident.
 //
@@ -599,6 +603,13 @@ void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
 // in one step without allocating on the hot path.
 inline constexpr std::size_t kMaxCarveProposals = 128;
 
+enum class DropReason : std::uint8_t {
+    None = 0,
+    QueueFull,
+    InvalidRadiusPower,
+    BakeInProgress
+};
+
 struct CarveProposal {
     float x = 0.0f;
     float y = 0.0f;
@@ -632,13 +643,15 @@ struct CarveProposalQueue {
     }
 
     bool push(float x, float y, float z, float radius, std::uint16_t power,
-              std::uint32_t seed) {
+              std::uint32_t seed, DropReason* outReason = nullptr) {
         if (count >= kMaxCarveProposals) {
             ++droppedFull;
+            if (outReason) *outReason = DropReason::QueueFull;
             return false;
         }
         if (radius <= 0.0f || power == 0) {
             ++droppedDegenerate;
+            if (outReason) *outReason = DropReason::InvalidRadiusPower;
             return false;
         }
         if (radius > 8.0f) {
@@ -646,6 +659,7 @@ struct CarveProposalQueue {
             ++clampedRadius;
         }
         items[count++] = CarveProposal{x, y, z, radius, power, seed};
+        if (outReason) *outReason = DropReason::None;
         return true;
     }
 };
@@ -706,7 +720,8 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
 std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
                                  bool wantFire, float dt, std::uint64_t tick,
                                  NoiseField* noise = nullptr,
-                                 const StatusSet* status = nullptr);
+                                 const StatusSet* status = nullptr,
+                                 EventBus* bus = nullptr);
 
 // Optional `grid` + `carves`: when a swing finds no monster in the facing cone,
 // probe the cell the camera is looking at and propose a wall chip. Without both

@@ -8,6 +8,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <bit>
 
 #include "core/wrap.h"
 
@@ -21,7 +22,13 @@ inline constexpr std::size_t kMacroCells =
 // Sub-voxel block: 8 voxels per axis inside each macro cell => 512 voxels,
 // which packs exactly into 8 x uint64_t. Change to 16 for 4096-voxel blocks.
 inline constexpr int kSubDim = 8;
+inline constexpr int kSubDimShift = std::countr_zero(static_cast<unsigned>(kSubDim));
+inline constexpr int kSubDimMask = kSubDim - 1;
 inline constexpr int kSubVoxels = kSubDim * kSubDim * kSubDim;
+inline constexpr int kSubVoxelsShift = kSubDimShift * 3;
+inline constexpr int kSubVoxelsMask = kSubVoxels - 1;
+inline constexpr int kSubGridDim = kMacroDim * kSubDim;
+inline constexpr int kSubGridMask = kSubGridDim - 1;
 inline constexpr std::size_t kSubMaskWords = (kSubVoxels + 63) / 64;
 
 // World-space size of one macro cell along an axis (arbitrary units). One

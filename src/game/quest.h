@@ -381,8 +381,9 @@ bool quest_accept(QuestLog& log, const NpcPool& pool, QuestId id, NpcId giver, i
 //
 // **Fetch consumes the items**, for contract.cpp's reason: a courier job that let you
 // keep the cargo would pay twice for the same loot.
+struct FactionRelations;
 std::int32_t quest_step(QuestLog& log, const NpcPool& pool, Inventory& inv,
-                        RunLedger& led, std::uint32_t stepMs);
+                        RunLedger& led, std::uint32_t stepMs, FactionRelations* rel = nullptr);
 
 // A kill happened. Same event, same payload, same drain as `contract_on_kill` — main
 // already reads `NpcDied` off the bus once per frame and this hooks the same batch
