@@ -4033,8 +4033,16 @@ int main(int argc, char** argv) {
                 if (simTick - rumourAt >= game::kOverhearCooldownTicks) {
                     const game::NpcId sp = game::nearest_speaker(reg, activeLayer);
                     if (sp != game::kInvalidNpc) {
+                        // Pass the LIVE samosbor clock, not the five-argument shim.
+                        // The shim substitutes a default-constructed SamosborState —
+                        // phase Idle, count 0 — and four of the nine rumour kinds gate
+                        // on exactly those fields, so Imminent (phase Warning), Variant
+                        // (phase Active), Veteran (count > 0) and Lull (a clock that has
+                        // ever been armed) were unreachable in play while being fully
+                        // implemented, texted and unit-tested. `samosbor` is the same
+                        // object speech_context reads a dozen lines above. [rumour.h]
                         const game::Rumour ru = game::rumour_for(
-                            reg, pool, sp, activeLayer, currentFloor);
+                            reg, pool, sp, activeLayer, currentFloor, samosbor);
                         if (game::rumour_text(ru, rumourLine, sizeof(rumourLine)))
                             rumourAt = simTick;
                         // The same body may also be hiring. One proximity sweep, two

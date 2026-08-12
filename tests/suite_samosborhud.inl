@@ -639,7 +639,8 @@ static void test_samosborhud_all() {
         char line[160];
         bool shimSpeaks = true;
         for (int i = 0; i < kCrowd; ++i) {
-            const Rumour r = rumour_for(reg, pool, crowd[i], layer, floorZ);
+            const Rumour r =
+                rumour_for(reg, pool, crowd[i], layer, floorZ, SamosborState{});
             if (!r.valid) shimSpeaks = false;
             if (!rumour_text(r, line, sizeof(line))) shimSpeaks = false;
             else if (!speakable(line, sizeof(line))) shimSpeaks = false;
@@ -659,7 +660,8 @@ static void test_samosborhud_all() {
         // A Fog-band speaker: the one slot that follows the clock.
         NpcId fogSpeaker = kInvalidNpc;
         for (int i = 0; i < kCrowd && fogSpeaker == kInvalidNpc; ++i)
-            if (rumour_for(reg, pool, crowd[i], layer, floorZ).kind == RumourKind::Fog)
+            if (rumour_for(reg, pool, crowd[i], layer, floorZ, SamosborState{}).kind ==
+                RumourKind::Fog)
                 fogSpeaker = crowd[i];
         CHECK(fogSpeaker != kInvalidNpc);
 
@@ -806,7 +808,8 @@ static void test_samosborhud_all() {
         //     the other half worth listening to.
         bool floorFactsStable = true;
         for (int i = 0; i < kCrowd; ++i) {
-            const Rumour base = rumour_for(reg, pool, crowd[i], layer, floorZ);
+            const Rumour base =
+                rumour_for(reg, pool, crowd[i], layer, floorZ, SamosborState{});
             if (base.kind == RumourKind::Fog) continue;   // the one slot that moves
             const Rumour withClock =
                 rumour_for(reg, pool, crowd[i], layer, floorZ, act);

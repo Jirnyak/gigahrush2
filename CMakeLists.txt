@@ -755,7 +755,17 @@ if(GIGA_BUILD_TESTS)
     # isotropy law pinned over all 8 GravityRegimes (regime_down/regime_frame
     # shape, fluid Zero-symmetry, fall direction per regime). Count measured by
     # a real run, per AGENTS.md: pin only on 0 failures.
-        PASS_REGULAR_EXPRESSION "game_test: 235195 checks, 0 failures")
+    # 235195 -> 235585 (+390) on 2026-08-12: suite_packs.inl asks a REAL spawn what
+    # components it produced — every one of the 194 heads carries Mass, and its kg
+    # equals mob_def(kind).massG / 1000. Added because the ABSENCE of this pin was
+    # twice mistaken for the absence of the feature: Docs/specs/13 §7.1 and the
+    # roadmap's "three one-line defects" both filed `mass_g` as dead for mobs and
+    # proposed a line that has stood in mob_spawn.cpp since 2026-08-03. Nothing
+    # contradicted them because every test mob in the tree is hand-rolled with a bare
+    # emplace<MobRef> and so has no Mass — the suites exercised the knockback
+    # FALLBACK, never the live path. Printed by the run:
+    #   [packs] mass: massless=0 kg_min=12.0 kg_max=900.0
+        PASS_REGULAR_EXPRESSION "game_test: 235585 checks, 0 failures")
 
 
 

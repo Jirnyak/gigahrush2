@@ -142,6 +142,39 @@ static void test_packs_all() {
         }
         CHECK(at.size() == n);
 
+        // ---- EVERY SPAWNED MOB CARRIES ITS AUTHORED MASS ---------------------
+        // This pin is here because its absence was mistaken for the absence of the
+        // FEATURE. Docs/specs/13 §7.1 and the roadmap's "three one-line defects"
+        // both recorded `mass_g` as dead for mobs and proposed writing a line that
+        // has stood in mob_spawn.cpp since 2026-08-03. Nothing contradicted them,
+        // because no suite ever asked a REAL spawn what components it produced —
+        // every test mob in the tree is hand-rolled with a bare emplace<MobRef> and
+        // therefore has no Mass, so the suites exercise the knockback FALLBACK
+        // (kKnockbackRefMassKg when the component is missing) and never the live
+        // path. A missing Mass is silent by design at every consumer: combat falls
+        // back to a reference mass, impact.cpp skips the body outright. Silence at
+        // every reader is exactly why the producer needs an assertion.
+        std::size_t massless = 0;
+        float kgMin = 1e9f, kgMax = 0.0f;
+        for (auto e : reg.view<const MobRef>()) {
+            const Mass* m = reg.try_get<const Mass>(e);
+            if (m == nullptr) { ++massless; continue; }
+            // Grams -> kilograms, the one unit convention shared by items, props
+            // and mobs since c8b7dc2d. Exact in float: massG is a whole number of
+            // grams and the table's values are all multiples of 1000.
+            const MobDef& d = mob_def(static_cast<MobKind>(reg.get<const MobRef>(e).kind));
+            CHECK(m->kg == static_cast<float>(d.massG) * 0.001f);
+            CHECK(m->kg > 0.0f);   // a massless body drops out of E = mv^2/2 silently
+            if (m->kg < kgMin) kgMin = m->kg;
+            if (m->kg > kgMax) kgMax = m->kg;
+        }
+        std::fprintf(stderr, "[packs] mass: massless=%zu kg_min=%.1f kg_max=%.1f\n",
+                     massless, static_cast<double>(kgMin), static_cast<double>(kgMax));
+        CHECK(massless == 0);
+        // The spread is the point: if every head weighed the same, knockback and
+        // fall damage would be uniform and the column would be decorative.
+        CHECK(kgMax > kgMin);
+
         // OCCUPIED ROOMS DROP SUBSTANTIALLY. 134 of 256 before, and the assertion is
         // deliberately a hard bound rather than "fewer than before": a later change
         // that half-restores the sprinkle would still pass a relative test.

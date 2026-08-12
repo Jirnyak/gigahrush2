@@ -210,24 +210,30 @@ Faction dominant_faction(const NpcPool& pool, int floorNumber);
 Rumour rumour_for(const Registry& reg, const NpcPool& pool, NpcId speaker,
                   LayerId layer, int floorZ, const SamosborState& sb);
 
-// The clock-free form, kept so the existing call site keeps compiling unchanged.
+// THERE IS NO CLOCK-FREE OVERLOAD, and that is deliberate — deleted 2026-08-12.
 //
-// **It is a compatibility shim, not the one to call.** It passes a default-constructed
-// `SamosborState` — phase Idle, count 0, `phaseTotalMs` 0 — which makes all four
-// samosbor kinds unreachable: Idle is not Warning so `Imminent` never fires, not Active
-// so `Variant` never fires, count 0 fails `Veteran`'s own gate, and `Lull` additionally
-// requires `phaseTotalMs != 0`. Behaviour is therefore byte-identical to what this
-// function did before the samosbor kinds existed, which is the point: a caller that
-// forgets to pass the clock loses the new lines silently rather than getting wrong ones.
+// One existed: a five-argument shim that passed a default-constructed `SamosborState`
+// so "the existing call site keeps compiling unchanged". The call site then kept
+// compiling unchanged for as long as the shim existed, and the four samosbor kinds —
+// `Imminent`, `Variant`, `Veteran`, `Lull` — were unreachable in play the whole time
+// while being fully implemented, texted, and pinned by `test_samosborhud_all`. Idle is
+// not Warning, not Active, count 0 fails Veteran's gate, and Lull additionally requires
+// `phaseTotalMs != 0`; a default state fails all four by construction.
 //
-// That last clause is the one that needed work rather than a comment. `Lull` fires on a
-// SHORT Idle remainder, and a default state's remainder is zero — the shortest there
-// is — so the obvious predicate would have made a never-armed clock the most urgent
-// state in the machine and told 25% of the crowd the fog was 30 s out. `src/app/main.cpp`
-// calls THIS overload today, so that would have shipped. `test_samosborhud_all` pins the
-// shim against all four kinds rather than trusting the reasoning.
-Rumour rumour_for(const Registry& reg, const NpcPool& pool, NpcId speaker,
-                  LayerId layer, int floorZ);
+// The shim was safe in the sense it claimed — a forgetful caller lost lines rather than
+// getting wrong ones — and that is exactly why it went unnoticed. Two overloads that
+// differ only by a trailing argument make "forget the clock" a silent, compiling,
+// test-passing mistake, so the safety property WAS the defect. Requiring the argument
+// makes the same mistake a build error.
+//
+// The tests keep the old behaviour under test by passing `SamosborState{}` explicitly,
+// which says the thing the shim used to say implicitly: with an idle, never-armed clock
+// this function reproduces the original five-way split byte for byte.
+//
+// Note for anyone re-adding a default argument here: `Lull` fires on a SHORT Idle
+// remainder, and a default state's remainder is zero — the shortest there is. The
+// `phaseTotalMs != 0` clause is what stops a never-armed clock from becoming the most
+// urgent state in the machine and telling 25% of the crowd the fog is 30 s out.
 
 // The nearest speaker within kOverhearRange of the camera holder, or kInvalidNpc.
 // Skips the camera holder itself and anything not embodied on this layer.

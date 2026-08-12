@@ -91,14 +91,6 @@ NpcId nearest_speaker(const Registry& reg, LayerId layer) {
 }
 
 Rumour rumour_for(const Registry& reg, const NpcPool& pool, NpcId speaker,
-                  LayerId layer, int floorZ) {
-    // The shim. A default SamosborState is phase Idle with count 0, which is exactly
-    // the input for which the six-argument form reproduces the old five-way split
-    // byte for byte. [rumour.h]
-    return rumour_for(reg, pool, speaker, layer, floorZ, SamosborState{});
-}
-
-Rumour rumour_for(const Registry& reg, const NpcPool& pool, NpcId speaker,
                   LayerId layer, int floorZ, const SamosborState& sb) {
     Rumour r;
     if (!const_cast<NpcPool&>(pool).valid(speaker)) return r;
