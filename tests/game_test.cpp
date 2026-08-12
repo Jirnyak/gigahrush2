@@ -4360,7 +4360,7 @@ int main() {
             "           zero failures means tests were ADDED, not that a guard broke: update the\n"
             "           PASS_REGULAR_EXPRESSION to the number above and say so in the commit.\n"
             "           A FALLING count is the case that matters - it means a suite stopped\n"
-            "           running, which is exactly what this pin exists to catch.\n");
+            "           running, which is exactly what this pin exists to catch.\n");  // giga-check: allow — the English word "catch" inside a printf literal, not a handler; first use of the hatch, and it dates from the day check_source_rules stopped being blind past the first `[` in a file
     }
     return g_fails == 0 ? 0 : 1;
 }

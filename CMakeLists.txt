@@ -768,14 +768,43 @@ if(GIGA_BUILD_TESTS)
     # Rationale, known limits and the `giga-check: allow` escape hatch live in
     # tools/check_source_rules.cmake. Needs no build, so it is cheap and runs first.
     #
-    # Pinned to its last printed line instead of its exit code — but as a FLOOR, not an
-    # exact count, and that difference is deliberate rather than lazy.
+    # Pinned to its last printed line instead of its exit code — the count as a FLOOR,
+    # not an exact count, and that difference is deliberate rather than lazy.
     # `files_scanned=N` is the final statement of the script and is reached only after
     # the zero-violations verdict, so matching it proves the run completed AND found
     # nothing: any violation raises FATAL_ERROR and the line is never printed. The
     # three-digit class then puts a floor of 100 under the scanned set, which upgrades
     # the script's own `EQUAL 0` guard — a broken glob that silently scans four files is
     # green today and red here. OBSERVED 2026-07-29: `files_scanned=167`.
+    #
+    # The count ALONE was the whole pin until 2026-08-12, and Docs/specs/05 §2.1 was
+    # right to call that a gate you cannot fail: it asserted that the script ran, never
+    # that it found nothing. Swap the FATAL_ERROR for a WARNING and every rule in the
+    # file goes dark while ctest stays green, because a three-digit count still prints.
+    # So the verdict token is now pinned beside the count. It is one regex and not two
+    # because CTest ORs a list of PASS_REGULAR_EXPRESSIONs — two entries would mean
+    # "either", i.e. strictly weaker than what is here; hence the script emits both
+    # tokens on one line so a single regex can demand both.
+    #
+    # This does NOT make the pin sufficient on its own, and the honest limit belongs
+    # here rather than in a commit message: the pin still cannot tell a rule that found
+    # nothing from a rule that inspects nothing (§2.2's `://` truncation is exactly
+    # that, and stays a known false negative). Reverse-polarity mutation is what proves
+    # the gate bites, and it is run by hand.
+    #
+    # Running it is not a formality — it is what exposed, on 2026-08-12, that the whole
+    # script had been reading only the first line or two of every file since it was
+    # written. A `throw` planted at the TOP of src/sim/physics.cpp was caught; the same
+    # `throw` at line 3, 20, 40, or appended at EOF was not, in three different files.
+    # Cause and repair are documented at length in tools/check_source_rules.cmake
+    # (CMake stops splitting a list at the first `[`). AFTER the repair, measured the
+    # same day: wrap.h:40 and physics.cpp:302 both reported, at the exact line, and the
+    # clean tree gives GIGA_SOURCE_RULES=PASS files_scanned=245 in ~12 s.
+    #
+    # So: re-run the mutation whenever this script is edited, and plant it in the
+    # MIDDLE of a file, never at the top. A gate that has never failed is
+    # indistinguishable from a gate that does not work, and this one was the latter for
+    # its entire life while printing a three-digit file count every run.
     #
     # An exact count would be WRONG here, unlike game_test. src/ is GLOB_RECURSE with
     # CONFIGURE_DEPENDS, so every new .cpp in the engine moves this number for reasons
@@ -789,7 +818,7 @@ if(GIGA_BUILD_TESTS)
         COMMAND ${CMAKE_COMMAND} -DGIGA_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_source_rules.cmake)
     set_tests_properties(source_rules PROPERTIES
-        PASS_REGULAR_EXPRESSION "files_scanned=[0-9][0-9][0-9]")
+        PASS_REGULAR_EXPRESSION "GIGA_SOURCE_RULES=PASS files_scanned=[0-9][0-9][0-9]")
 
     # Honest crowd benchmark: real floor + 16k wandering agents + real physics.
     # An executable, not a ctest (it measures, it doesn't pass/fail). Runs at the

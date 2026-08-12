@@ -70,13 +70,57 @@ set(GIGA_TOKEN_RHS "[^A-Za-z0-9_]")
 # one source line arrived as several list elements and every line number after it
 # drifted — measured, data/items.csv reported 2465 rows instead of 446. Separately,
 # `;` is CMake's list separator, so a line containing one would split as well.
-# Both are neutralised here.
+# All three hazards are neutralised here.
+#
+# THE THIRD ONE COST THIS GATE ITS ENTIRE REACH, 2026-07-28 to 2026-08-12.
+# CMake's list expansion does not split on a `;` that sits inside square brackets —
+# `[` opens a protected span and the split stops there, permanently, because C++
+# never closes it in a balanced way. Measured on this host:
+#
+#     string(REPLACE "\n" ";" v "a\nb\nc\nd")          -> list length 4
+#     string(REPLACE "\n" ";" v "a\nb [0, size)\nc\nd") -> list length 2
+#
+# So every file was scanned only as far as its FIRST bracket, and in C++ that is a
+# lambda, a subscript, an attribute or a `[0, n)` in a header comment — i.e. line 1
+# or 2. src/core/wrap.h yielded 2 "lines" for 56. Verified by mutation on the day it
+# was found: a `throw` planted at wrap.h line 1 or 2 was caught, the SAME `throw` at
+# line 3, 5, 10, 20, 40, 60 or appended at EOF was not, in src/sim/physics.cpp,
+# src/core/wrap.h and tests/suite_speech.inl alike. Rules 1-5 and 7 were therefore
+# blind over essentially the whole tree — the no-exceptions rule that MSVC cannot
+# enforce and that this file exists to enforce included.
+#
+# This is the failure mode the .inl hole comment below already names — "a check that
+# silently sees nothing" — arriving a second time through a different door, and it is
+# why files_scanned alone was never enough to trust: 245 files were opened, and
+# almost none of them were read past their first bracket.
+#
+# The brackets are put back line by line in _giga_scan, so every rule still matches
+# against the exact source text and a future rule may contain a literal bracket.
 macro(_giga_read_lines _path _out)
     file(READ "${_path}" _giga_raw)
     string(REPLACE ";" "@GIGA_SEMI@" _giga_raw "${_giga_raw}")
+    string(REPLACE "[" "@GIGA_LB@" _giga_raw "${_giga_raw}")
+    string(REPLACE "]" "@GIGA_RB@" _giga_raw "${_giga_raw}")
     string(REPLACE "\r" "" _giga_raw "${_giga_raw}")
-    string(REPLACE "\n" ";" _giga_raw "${_giga_raw}")
+    # Each line is terminated with a marker BEFORE the separator, so that a blank
+    # source line becomes the one-character element `@GIGA_EOL@` rather than the
+    # empty string. `foreach(x IN LISTS l)` silently drops empty elements, so blank
+    # lines used to vanish and every reported line number after the first blank line
+    # was too low — the second, quieter half of the bracket defect above, and the
+    # reason a finding could name a line that holds nothing. A trailing newline still
+    # produces one empty tail element, which is dropped, so no phantom final line.
+    string(REPLACE "\n" "@GIGA_EOL@;" _giga_raw "${_giga_raw}")
     set(${_out} "${_giga_raw}")
+endmacro()
+
+# Undo _giga_read_lines' neutralisation for one line, in place. Split first, restore
+# second: the placeholders exist only to survive CMake's list parsing, and every rule
+# below is written against real source text.
+macro(_giga_restore_line _var)
+    string(REPLACE "@GIGA_EOL@" "" ${_var} "${${_var}}")
+    string(REPLACE "@GIGA_SEMI@" ";" ${_var} "${${_var}}")
+    string(REPLACE "@GIGA_LB@" "[" ${_var} "${${_var}}")
+    string(REPLACE "@GIGA_RB@" "]" ${_var} "${${_var}}")
 endmacro()
 
 # _giga_scan(<file-list-var> <regex> <message>)
@@ -86,6 +130,7 @@ macro(_giga_scan _list_var _regex _message)
         set(_lineno 0)
         foreach(_raw IN LISTS _lines)
             math(EXPR _lineno "${_lineno} + 1")
+            _giga_restore_line(_raw)
 
             # Skip explicit exemptions.
             string(FIND "${_raw}" "giga-check: allow" _exempt)
@@ -290,6 +335,7 @@ macro(_giga_csv_vs_header _csv _header _regex _label)
         _giga_read_lines("${GIGA_ROOT}/${_csv}" _csv_lines)
         set(_rows 0)
         foreach(_l IN LISTS _csv_lines)
+            _giga_restore_line(_l)
             string(STRIP "${_l}" _ls)
             if(NOT _ls STREQUAL "")
                 math(EXPR _rows "${_rows} + 1")
@@ -459,5 +505,10 @@ if(GIGA_FAILURE_COUNT GREATER 0)
         "positive add `giga-check: allow` on the line with a reason.")
 endif()
 
-message("GIGA_SOURCE_RULES=PASS")
-message("files_scanned=${GIGA_FILES_SCANNED}")
+# One line, not two, and that is the whole point. Both tokens are load-bearing for
+# the ctest pin in CMakeLists.txt: the verdict proves a rule was actually asserted,
+# the count proves the glob still saw the tree. CTest's PASS_REGULAR_EXPRESSION is a
+# single regex over the whole output and a list of them ORs rather than ANDs, so the
+# only way to demand BOTH is to emit them adjacent. Keep them on one line, in this
+# order, and keep the `=` spellings — Docs/specs/05 §2.1 and problems.md quote them.
+message("GIGA_SOURCE_RULES=PASS files_scanned=${GIGA_FILES_SCANNED}")
