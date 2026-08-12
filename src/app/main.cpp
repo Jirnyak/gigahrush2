@@ -911,16 +911,61 @@ bool slot_occupied(int slot) {
     return false;
 }
 
+// WRITE BESIDE, THEN RENAME OVER. Never `fopen(path, "wb")` on the real save.
+//
+// "wb" truncates to zero length BEFORE the first byte is written, so the window
+// between the truncation and the last fwrite is a window in which the player's
+// previous save no longer exists and the new one does not exist yet. Anything that
+// ends the process in that window — a disk that fills, a kill, a crash in the very
+// code that is serializing — leaves a zero- or half-length file where a finished run
+// used to be. That is not a corrupted save the player can be warned about; it is
+// their progress, gone, and produced by the button whose entire purpose is to keep it.
+// This was the only defect in the 2026-08-09 audit sweep that DESTROYS work rather
+// than distorting behaviour (Docs/MASTER_ROADMAP.md 0.1а), which is why it goes first.
+//
+// The temp file absorbs the whole window. Until the rename, the old save is the only
+// thing under `path` and it is untouched; after the rename it is replaced in one
+// step. rename(2) over an existing file is atomic within a filesystem, and the temp
+// is deliberately created in the SAME directory so the two are never on different
+// volumes — that is the one thing that would silently turn the rename into a
+// copy-then-delete and hand the window back.
+//
+// Every save in the game goes through here — run.sav via write_run, each floor_N.sav
+// via write_floor_file — so the guarantee is not per-call-site discipline.
+//
+// HONEST LIMIT, stated because the next reader will otherwise assume more: this
+// makes the replacement atomic, not DURABLE. There is no fsync, so a power cut can
+// still lose bytes the OS had only in its page cache. Closing that needs
+// fsync()/_commit() behind a platform ifdef plus a directory fsync on POSIX, and it
+// buys protection against a strictly rarer event than the one above. Deliberately not
+// done here; when it is, it belongs in this function and nowhere else.
 bool write_bytes_file(const std::vector<std::uint8_t>& bytes, const char* path) {
     std::error_code ec; // error_code overloads: the app builds -fno-exceptions
-    std::filesystem::create_directories(
-        std::filesystem::path(path).parent_path(), ec);
-    std::FILE* f = std::fopen(path, "wb");
+    const std::filesystem::path finalPath(path);
+    std::filesystem::create_directories(finalPath.parent_path(), ec);
+
+    std::filesystem::path tmpPath(finalPath);
+    tmpPath += ".tmp";
+    const std::string tmpStr = tmpPath.string();
+
+    std::FILE* f = std::fopen(tmpStr.c_str(), "wb");
     if (!f) return false;
     const std::size_t n = std::fwrite(bytes.data(), 1, bytes.size(), f);
-    const bool ok = (n == bytes.size());
-    std::fclose(f);
-    return ok;
+    // fclose can fail where fwrite succeeded: buffered bytes only reach the OS here,
+    // so a full disk usually surfaces at this call and nowhere earlier. Treating a
+    // failed close as success is how a truncated file gets renamed over a good one.
+    const bool wrote = (n == bytes.size()) && (std::fclose(f) == 0);
+    if (!wrote) {
+        std::filesystem::remove(tmpPath, ec); // leave no debris; old save stands
+        return false;
+    }
+
+    std::filesystem::rename(tmpPath, finalPath, ec);
+    if (ec) {
+        std::filesystem::remove(tmpPath, ec);
+        return false;
+    }
+    return true;
 }
 
 bool read_bytes_file(std::vector<std::uint8_t>& bytes, const char* path) {
