@@ -69,7 +69,30 @@ each one**. Correctness first; speed is a side effect of not backtracking.
 
 ## Hard Rules
 
-- **THE NATIVE-FIRST LAW (ZERO CRUTCH SCRIPTS):** You are ABSOLUTELY FORBIDDEN from creating Python, Bash, Node, or PowerShell wrapper scripts (`_patch_*.py`, `_wire_*.py`, etc.) to edit, append, test, or generate code. You MUST edit source files natively using `replace_file_content` or `replace_in_file`. Any attempt to bypass direct file editing with a script is a CRITICAL COMPLIANCE FAILURE.
+- **NATIVE-FIRST (RELAXED BY THE OWNER 2026-08-12).** The default is unchanged:
+  edit source files **natively**, one reviewable replacement at a time. The old
+  absolute ban on Python/Bash/Node/PowerShell for editing is lifted, on the
+  owner's own terms — *"если ты 100% знаешь что этот скрипт поменяет код под
+  абсолютным контролем, то можно"*. A script is permitted when **all four** hold,
+  and they are the operative test, not the spirit:
+  1. **You know exactly what it will change before it runs** — the match is
+     anchored and counted, not a loose regex over a whole tree. Assert the hit
+     count (`assert s.count(a) == 1`) so a pattern that matches twice, or zero
+     times, aborts instead of silently editing the wrong thing.
+  2. **The change is mechanical and repetitive** — the same edit at N sites, or a
+     move/extract too large to hand-type without transcription error. A one-site
+     edit is always native; reaching for a script there is the crutch the original
+     rule was about.
+  3. **You read `git diff` afterwards** and the build/ctest runs. The script is
+     never the evidence; the diff and the green run are.
+  4. **The script never enters the tree.** It is scratch, and §YOUR SCRATCH IS NOT
+     PROJECT STATE governs it — heredoc it, run it, let it die. A `_patch_*.py`
+     committed anywhere is still a compliance failure.
+
+  What the relaxation does NOT license: editing generated files (§The content
+  tables are GENERATED still rules), a script that "fixes up" code you have not
+  read, or a script whose output you do not diff. The failure this rule was
+  written against was never the interpreter — it was **an edit nobody looked at**.
 - **YOUR SCRATCH IS NOT PROJECT STATE.** Whatever an agent keeps to think with —
   patch scripts, briefings, progress notes, captured stdout/stderr of a test run,
   pid files, its own config — never enters the tree. `.gitignore` already refuses
