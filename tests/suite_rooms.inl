@@ -66,13 +66,42 @@ void rooms_taxonomy_is_read_the_same_way() {
     CHECK(intent_room_mask(IntentDrink) == room_bit(RoomBit::Kitchen));
     CHECK(intent_room_mask(IntentToilet) == room_bit(RoomBit::Bathroom));
     CHECK(intent_room_mask(IntentSleep) == room_bit(RoomBit::Living));
-    // Intents with no row delegate, exactly as before rooms existed.
-    CHECK(intent_room_mask(IntentWork) == 0);
+    CHECK(intent_room_mask(IntentSocial) == room_bit(RoomBit::Common));
+    CHECK(intent_room_mask(IntentWork) == room_bit(RoomBit::Production));
+    // Intents with no row delegate, exactly as before rooms existed. Patrol and
+    // Heal are here ON PURPOSE and must stay here until they have the thing that
+    // makes a destination honest — a route for patrol, a heal bank for heal
+    // ([room_zone.h] names both refusals beside the rows that were added).
+    CHECK(intent_room_mask(IntentPatrol) == 0);
+    CHECK(intent_room_mask(IntentHeal) == 0);
     CHECK(intent_room_mask(IntentWander) == 0);
     CHECK(intent_room_mask(IntentFlee) == 0);
     CHECK(kRoomFieldMask == (room_bit(RoomBit::Kitchen) |
                              room_bit(RoomBit::Bathroom) |
-                             room_bit(RoomBit::Living)));
+                             room_bit(RoomBit::Living) |
+                             room_bit(RoomBit::Common) |
+                             room_bit(RoomBit::Production)));
+
+    // EVERY FloorKind must now bake at least one field. This is the assertion that
+    // states the actual defect: the mask alone was never the problem, the mask
+    // INTERSECTED WITH EACH FLOOR'S MIX was, and six of ten demo floors came out
+    // empty. A future edit that narrows the mask back, or a mix that drops Common
+    // and Production, fails here rather than silently turning the errand branch off
+    // for a whole floor kind.
+    // The mix is derived the way the bake derives it — by asking the lattice, not by
+    // reading a table the test would then be pinning against itself.
+    for (FloorKind fk : {FloorKind::Residential, FloorKind::Commercial,
+                         FloorKind::Industrial, FloorKind::Derelict,
+                         FloorKind::Padic}) {
+        const int stride = floor_room_stride(fk);
+        const int perAxis = kMacroDim / stride;
+        std::uint16_t mix = 0;
+        for (int ry = 0; ry < perAxis; ++ry)
+            for (int rx = 0; rx < perAxis; ++rx)
+                mix = static_cast<std::uint16_t>(mix | floor_room_mask(fk, 0, rx, ry));
+        CHECK(mix != 0);
+        CHECK((mix & kRoomFieldMask) != 0);
+    }
 }
 
 void rooms_bake_follows_the_floor_mix() {
@@ -129,22 +158,54 @@ void rooms_bake_follows_the_floor_mix() {
         }
     }
 
-    // An Industrial floor's mix is Production/Storage/Corridor/Smoking — no room an
-    // intent names. Nothing is baked, `room_route` answers "nothing reachable", and
-    // every consumer degrades to the pre-rooms behaviour with no special case.
+    // An Industrial floor's mix is Production/Storage/Corridor/Smoking. Until
+    // 2026-08-12 that meant NOTHING was baked and this block asserted exactly that —
+    // `!ready()`, `baked == 0`, `resident_bytes() == 0`. Those four assertions were
+    // green for as long as they existed and they were pinning the DEFECT: with
+    // `kRoomFieldMask` limited to Kitchen|Bathroom|Living, six of the ten demo floors
+    // baked nothing at all and `ai_step`'s errand branch was off, not degraded, on
+    // every one of them. A test that spells the hole out in a comment and then
+    // asserts it is the most durable way to keep it.
+    //
+    // `IntentWork -> Production` gives Industrial a field. What is asserted now is
+    // the property that was actually wanted all along: a floor bakes the
+    // intersection of its own mix with the affordance table, and that intersection
+    // is NON-EMPTY for every kind.
     World ind;
     generate_floor(ind, 0, floor_spec(FloorKind::Industrial), 1337u);
     RoomZones zi;
     bake_room_zones(ind.grid(), FloorKind::Industrial, 0, zi);
-    CHECK(!zi.ready());
-    CHECK(zi.baked == 0);
-    CHECK(zi.resident_bytes() == 0);
+    CHECK(zi.ready());
+    CHECK(zi.baked == room_bit(RoomBit::Production));
+    CHECK(zi.resident_bytes() != 0);
+    // Still nothing reachable for an intent whose room this floor does not build —
+    // and this now tests the real path rather than the empty one, because the zones
+    // ARE baked and `room_route` has to reject on the mask instead of on `!ready()`.
     CHECK(room_route(zi, room_bit(RoomBit::Kitchen), 10, 10, 3).bit == 0);
+    // And the Production field is genuinely routable, which is the half that says
+    // the bake produced a FIELD and not just a non-zero mask. Sampled rather than
+    // asserted at one cell: an arbitrary (cx, cy) may sit inside solid geometry,
+    // where `kFlowNone` is the correct answer — the first version of this line
+    // asserted cell (10,10) and failed for exactly that reason, which is the
+    // "measure the property, not a proxy" rule biting on the test side.
+    int routable = 0;
+    for (int y = 0; y < kMacroDim && routable == 0; y += 4)
+        for (int x = 0; x < kMacroDim && routable == 0; x += 4)
+            if (room_route(zi, room_bit(RoomBit::Production), x, y, floor_ground_z())
+                    .bit == room_bit(RoomBit::Production))
+                ++routable;
+    CHECK(routable != 0);
 
     // Re-baking a RECYCLED RoomZones must not inherit the previous floor's fields —
-    // the stale-bake bug class [world/nav.h] documents for its own.
+    // the stale-bake bug class [world/nav.h] documents for its own. `zr` is a
+    // Residential bake (Kitchen|Bathroom|Living|Common); re-baked as Industrial it
+    // must come back as EXACTLY Production, which is a stronger statement than the
+    // old `== 0`: zero could be reached by clearing alone, this can only be reached
+    // by clearing AND rebuilding.
     bake_room_zones(ind.grid(), FloorKind::Industrial, 0, zr);
-    CHECK(zr.baked == 0 && zr.resident_bytes() == 0);
+    CHECK(zr.baked == room_bit(RoomBit::Production));
+    CHECK((zr.baked & room_bit(RoomBit::Kitchen)) == 0);
+    CHECK((zr.baked & room_bit(RoomBit::Common)) == 0);
 }
 
 void rooms_descent_actually_arrives() {

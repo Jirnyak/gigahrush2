@@ -765,7 +765,18 @@ if(GIGA_BUILD_TESTS)
     # emplace<MobRef> and so has no Mass — the suites exercised the knockback
     # FALLBACK, never the live path. Printed by the run:
     #   [packs] mass: massless=0 kg_min=12.0 kg_max=900.0
-        PASS_REGULAR_EXPRESSION "game_test: 235585 checks, 0 failures")
+    # 235585 -> 235601 (+16) on 2026-08-12: suite_rooms.inl. Two affordance rows
+    # (IntentSocial->Common, IntentWork->Production) widened kRoomFieldMask, and FOUR
+    # of these checks are REPLACEMENTS for assertions that pinned the defect: the
+    # Industrial block asserted `!ready() && baked == 0 && resident_bytes() == 0`,
+    # spelled out in a comment as correct, when what it recorded was that six of the
+    # ten demo floors baked no room field at all and ai_step's errand branch was OFF
+    # there. The new block asserts the property that was wanted: every FloorKind's
+    # mix intersects the affordance table non-emptily. Measured on a live run:
+    #   floor 0  Residential 0x0038 ->     0x003A   6297600 -> 8396800 bytes
+    #   floor -8 Derelict    0x0010 ->     0x0112   2099200 -> 6297600 bytes
+    #   floor -14 Industrial 0x0000 ->     0x0100         0 -> 2099200 bytes
+        PASS_REGULAR_EXPRESSION "game_test: 235601 checks, 0 failures")
 
 
 

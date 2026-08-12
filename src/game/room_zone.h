@@ -122,6 +122,31 @@ inline constexpr RoomAffordance kRoomAffordance[] = {
     {IntentDrink, room_bit(RoomBit::Kitchen)},
     {IntentToilet, room_bit(RoomBit::Bathroom)},
     {IntentSleep, room_bit(RoomBit::Living)},
+    // Added 2026-08-12, and taking this file at its word above: a row, not a line.
+    //
+    // WHAT THIS FIXES IS NOT "3 of 11 bits" — it is that SIX OF THE TEN demo floors
+    // baked NOTHING. `kRoomFieldMask` was Kitchen|Bathroom|Living, and the bake
+    // intersects it with the kinds the floor's mix actually rolls
+    // ([floor_gen.cpp] kRooms*): Commercial rolls Office/Common/Storage/Hq/Smoking/
+    // Medical, Industrial rolls Production/Storage/Corridor/Smoking, Padic rolls
+    // Corridor/Storage/Common/Production — NONE of the three. So on those floors
+    // `RoomZones::ready()` was false and `ai_step`'s entire errand branch was off,
+    // not degraded. Derelict rolled Bathroom alone, 1 of 11.
+    //
+    // These two rows are chosen so that EVERY FloorKind bakes at least one field:
+    // Common covers Residential/Commercial/Derelict/Padic, Production covers
+    // Industrial/Derelict/Padic.
+    {IntentSocial, room_bit(RoomBit::Common)},
+    {IntentWork, room_bit(RoomBit::Production)},
+    // NOT added, and each omission is a refusal rather than an oversight:
+    //   * IntentPatrol -> Corridor would make a patrolling body walk to the nearest
+    //     corridor and SIT IN IT. That is loitering wearing patrol's name. Patrol
+    //     needs a ROUTE, which is what `route_step`/`nearest_node` already provide
+    //     and nobody calls yet; giving it a destination first would make the metric
+    //     go green on a behaviour that got worse.
+    //   * IntentHeal -> Medical is the `IntentHeal` deadlock, and it is blocked on
+    //     the crowd heal bank for the reason TABLE 2 states below — sending bodies
+    //     to a room that heals nothing converts a deadlock into a pilgrimage.
 };
 inline constexpr std::size_t kRoomAffordanceCount =
     sizeof(kRoomAffordance) / sizeof(kRoomAffordance[0]);
@@ -191,6 +216,15 @@ struct RoomRecovery {
 
 inline constexpr RoomRecovery kRoomRecovery[kFloorRoomBits] = {
     /* 0 Corridor   */ {},
+    // Common and Production now have an AFFORDANCE (TABLE 1) and still restore
+    // NOTHING, and the two tables being independent is the design, not an omission.
+    // A destination answers "where does this intent send the body"; a recovery row
+    // answers "what does a second there do to a Needs row". Socialising and working
+    // do not feed anyone. Common's reference rate is gated on the LUNCH state and
+    // Office's on `resting`; both gates read a clock this build does not have, so
+    // copying either number ungated would repeat the exact mistake the OFFICE note
+    // below refuses to make — and it would do it on the four floor kinds Common
+    // appears on. The rows stay zero until there is an hour to read.
     /* 1 Common     */ {}, // reference: +1.5 food/water, but only in the LUNCH state
     /* 2 Storage    */ {},
     /* 3 Kitchen    */ {3.5f, 4.5f, 0.0f, 0.0f, 0.0f, 2.1f, 3.5f * 0.35f},
