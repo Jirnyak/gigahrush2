@@ -2418,7 +2418,18 @@ int main(int argc, char** argv) {
         // A new floor gets its own clock at its own depth. Not carried over:
         // the cooldown is a function of |z|, so inheriting a 30-minute surface
         // gap into the void would silently cancel the entire depth gradient.
-        samosbor = game::samosbor_new_game(sbRng);
+        //
+        // That reasoning was right and the function was wrong, for as long as this
+        // line existed. `samosbor_new_game` is the DEPTH-INDEPENDENT flat 120..180 s
+        // new-game roll — its own doc says "once per RUN" — so re-arming with it did
+        // the exact thing the sentence above refuses: at |z| = 50, where the authored
+        // cooldown is 60 s, it handed out 2-3x the calm that floor is meant to give,
+        // and riding down-and-back-up was a free reset of the depth pressure. It also
+        // zeroed `count`, and `count` is what `MobDef::minSamosbor` unlocks against —
+        // with a stack of demo floors the player rides constantly, so the fog roster
+        // was pinned at count 0 forever and the whole `min_samosbor` column of
+        // data/mobs.csv was dead data. Both defects silent. [samosbor.h] names them.
+        samosbor = game::samosbor_enter_floor(samosbor, currentFloor, sbRng);
         // A rumour is about a FLOOR, so carrying one across a ride makes it
         // false. Caught on a capture: the line read "самосбор здесь часто
         // (17.2%)" while the HUD's own duty for the floor underfoot said 35.0%
@@ -2984,6 +2995,30 @@ int main(int argc, char** argv) {
                                                 kSimDt * 1000.0f + 0.5f),
                                             currentFloor, sbRng);
                     if (tr_.cycleEnded) ++samosborCycles;
+                    // PRINT THE NUMBER EVERY RUN ([AGENTS.md] §Measure). The central
+                    // crisis mechanic printed NOTHING to stderr — not a phase change,
+                    // not a variant, not the count — so "did a samosbor happen in that
+                    // run?" was unanswerable outside the HUD, and every claim about the
+                    // clock (including the two silent defects fixed at the ride sites)
+                    // had to be argued from the source instead of read off a log. One
+                    // line per TRANSITION, not per tick: transitions are rare by design
+                    // (>= 45 s apart at the floor), so this cannot flood.
+                    if (tr_.warningBegan || tr_.activeBegan || tr_.activeEnded ||
+                        tr_.cycleEnded) {
+                        std::fprintf(stderr,
+                                     "[samosbor] tick=%llu floor=%d phase=%u variant=%u "
+                                     "count=%u cycles=%u %s%s%s%s\n",
+                                     static_cast<unsigned long long>(simTick),
+                                     currentFloor,
+                                     static_cast<unsigned>(samosbor.phase),
+                                     static_cast<unsigned>(samosbor.variant),
+                                     static_cast<unsigned>(samosbor.count),
+                                     static_cast<unsigned>(samosborCycles),
+                                     tr_.warningBegan ? "WARNING " : "",
+                                     tr_.activeBegan ? "ACTIVE " : "",
+                                     tr_.activeEnded ? "ENDED " : "",
+                                     tr_.cycleEnded ? "CYCLE " : "");
+                    }
                     // The seal is ONE SHOT, not a per-tick drain. Modelled as a DoT a
                     // 15-minute samosbor at |z|=50 would deal 3600 damage instead of
                     // 4 — the correction that mattered most in the port.
@@ -5886,7 +5921,12 @@ int main(int argc, char** argv) {
                         // about, hit again by promoting a display variable to a source
                         // of truth. Both sites now set it.
                         currentSpec = spec_for_floor(currentFloor);
-                        samosbor = game::samosbor_new_game(sbRng);
+                        // Same arrival law as the keyboard ride above, and it has to be
+                        // the same call: this is the "two travel sites" trap the comment
+                        // right above warns about, and the samosbor clock is one more
+                        // thing both sites must set identically. [samosbor.h]
+                        samosbor = game::samosbor_enter_floor(samosbor, currentFloor,
+                                                              sbRng);
                         aim_player(reg, player);
                         LayerId nl = reg.get<Transform>(player).layer;
                         activeLayer = nl;
