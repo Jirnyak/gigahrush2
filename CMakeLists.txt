@@ -789,7 +789,20 @@ if(GIGA_BUILD_TESTS)
     # IDENTITY at level 1, so the suite was structurally blind to whether door damage
     # consulted the level at all — and it did not, while mob_attack_step scaled the
     # same number. Proven to bite: restoring the unscaled dps fails 3 of the 7.
-        PASS_REGULAR_EXPRESSION "game_test: 235648 checks, 0 failures")
+    # 235648 -> 235809 (+161) on 2026-08-12: tests/suite_budgets.inl, the FIRST
+    # budget suite in the project. performance.md calls the CPU tick the only scarce
+    # resource and RAM the one budget that bounds the dense model, and until now not
+    # one ctest asserted a byte or a millisecond — 235k checks of behaviour, zero of
+    # cost. Every budget PRINTS measured and limit whether it passes or fails, and
+    # every limit is a ceiling with headroom, never the current value (a budget
+    # pinned at today's number turns every improvement red). Printed by the run:
+    #   [budget] nav_total_bytes         136314880.0 B   limit 167772160.0  ok
+    #   [budget] room_zones_bytes          8396800.0 B   limit  16777216.0  ok
+    #   [budget] pool_eager_bytes_per_row      306.0 B   limit       512.0  ok
+    #   [budget] pool_bytes_per_live_row        13.0 B   limit       256.0  ok
+    # The 306 B/row independently reproduces the figure npc_pool.h documents.
+    # Proven to bite by mutation: a limit of 1.0 prints OVER and fails.
+        PASS_REGULAR_EXPRESSION "game_test: 235809 checks, 0 failures")
 
 
 

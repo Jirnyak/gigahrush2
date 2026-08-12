@@ -97,6 +97,11 @@ int g_checks = 0;
 #include "suite_loottable.inl"
 #include "suite_utilai.inl"
 #include "suite_rooms.inl"
+// The first budget suite in the project (2026-08-12). Asserts bytes and
+// milliseconds rather than behaviour, and PRINTS every number whether it passes
+// or fails — see the banner in the file for why the printing half matters more
+// than the asserting half.
+#include "suite_budgets.inl"
 // Wired 2026-07-29. This suite existed for its whole life without being included by any
 // translation unit: commit 56c9c6a added src/game/nav_cache.{cpp,h} and tests/suite_navcache.inl
 // and never touched this file, so 733 lines and 104 CHECK sites were dead text while
@@ -4319,6 +4324,7 @@ int main() {
     rooms_a_hungry_body_walks_to_a_kitchen();
     rooms_furniture_makes_the_errand_visible();
     rooms_recovery_closes_the_loop();
+    test_budgets_all();
     test_navcache_all();
     // Wave 6: crafting (446 items carried 11 authored craft_* columns and no system),
     // quests as a layer over contracts, and NPC speech.
