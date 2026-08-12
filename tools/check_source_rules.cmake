@@ -39,13 +39,21 @@
 # that is a deliberate false-positive-over-false-negative choice. Use the escape
 # hatch.
 #
-# ONE known FALSE NEGATIVE, which is the opposite bias and so worth naming: the
-# line is truncated at the FIRST `//`, including a `//` inside a string literal.
-# `const char* u = "http://x"; throw y;` therefore hides its `throw`. Checked
-# 2026-07-29 — no line in src/ or tests/ has a banned token after a `://`, so this
-# is latent, not live. Fixing it means not truncating on `://`, or parsing string
-# literals; do not "fix" it by deleting the truncation, which would flag every
-# doc comment in the tree.
+# The line is truncated at the first `//`, EXCEPT a `//` immediately preceded by
+# `:` — that is a URI scheme separator, not a comment.
+#
+# That exception closed this file's one named FALSE NEGATIVE on 2026-08-12.
+# Previously `const char* u = "http://x"; throw y;` hid its `throw`, because the
+# line was cut inside the string literal. It was recorded as latent (no line in the
+# tree carried a banned token after a `://`) and it was doubly unreachable, since
+# the scan did not read past a file's first bracket at all. Repairing the scan made
+# the hole live, so it was closed in the same commit; the truncation itself stays,
+# because without it every doc comment naming `throw` or `catch` would fire.
+#
+# Still NOT handled, and named so the next reader knows the boundary: a `//` inside
+# a string literal that is not part of a URI (`"a//b"`). Closing that needs a real
+# string-literal parser, and the bias of this file — false positive over false
+# negative — makes it a poor trade.
 
 cmake_minimum_required(VERSION 3.20)
 
@@ -145,11 +153,58 @@ macro(_giga_scan _list_var _regex _message)
             endif()
 
             # Drop a trailing // comment.
-            string(FIND "${_raw}" "//" _slash)
-            if(_slash EQUAL 0)
+            #
+            # `://` is NOT a comment, and until 2026-08-12 this truncated on it
+            # anyway. That was the file's one named FALSE NEGATIVE (see the header):
+            # `const char* u = "http://x"; throw y;` hid its `throw`, because the
+            # line was cut at the `//` inside the string literal. It was recorded as
+            # latent — no line in the tree had a banned token after a `://` — and it
+            # was ALSO unreachable in practice, since the scan never read past a
+            # file's first bracket at all. Repairing the scan made this hole live, so
+            # it is closed in the same breath.
+            #
+            # The rule is narrow ON PURPOSE: only a `//` immediately preceded by `:`
+            # is skipped over, because that is a URI scheme separator and nothing
+            # else in C++ spells it. A general string-literal parser would be the
+            # thorough fix and is not worth it here — the bias of this file is
+            # false-positive over false-negative (a banned token inside a comment or
+            # a string IS flagged, and the escape hatch is the answer), so the only
+            # hole worth closing is the one that hides a token, not one that shows an
+            # extra. Truncation itself must stay: without it every doc comment in the
+            # tree naming `throw` or `catch` would fire.
+            set(_cut -1)
+            set(_scan "${_raw}")
+            set(_base 0)
+            while(TRUE)
+                string(FIND "${_scan}" "//" _rel)
+                if(_rel LESS 0)
+                    break()
+                endif()
+                math(EXPR _abs "${_base} + ${_rel}")
+                set(_isUri FALSE)
+                if(_abs GREATER 0)
+                    math(EXPR _prevAt "${_abs} - 1")
+                    string(SUBSTRING "${_raw}" ${_prevAt} 1 _prev)
+                    if(_prev STREQUAL ":")
+                        set(_isUri TRUE)
+                    endif()
+                endif()
+                if(NOT _isUri)
+                    set(_cut ${_abs})
+                    break()
+                endif()
+                math(EXPR _base "${_abs} + 2")
+                string(LENGTH "${_raw}" _rawLen)
+                if(_base GREATER_EQUAL _rawLen)
+                    break()
+                endif()
+                math(EXPR _restLen "${_rawLen} - ${_base}")
+                string(SUBSTRING "${_raw}" ${_base} ${_restLen} _scan)
+            endwhile()
+            if(_cut EQUAL 0)
                 continue()
-            elseif(_slash GREATER 0)
-                string(SUBSTRING "${_raw}" 0 ${_slash} _raw)
+            elseif(_cut GREATER 0)
+                string(SUBSTRING "${_raw}" 0 ${_cut} _raw)
             endif()
 
             if(" ${_raw} " MATCHES "${_regex}")
