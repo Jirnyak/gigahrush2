@@ -1,7 +1,9 @@
 #include "world/nav_async.h"
 
 #include <chrono>
+#include <cstdint>
 #include <utility>
+#include <vector>
 
 #include "world/macro_grid.h"
 
@@ -23,10 +25,25 @@ void AsyncBake::start(const MacroGrid& grid) {
 
     // Drop the live graph immediately. Until poll() lands the new one, ready()
     // is false and the crowd stands still rather than steering by stale geometry.
-    fine_.flow.clear();
-    fine_.nearest.clear();
-    pendingFine_.flow.clear();
-    pendingFine_.nearest.clear();
+    //
+    // FREE IT, do not merely clear() it — that distinction is 128 MiB.
+    // `std::vector::clear()` sets size to 0 and keeps capacity, so the old code held
+    // the previous floor's entire 128 MiB flow field, as dead bytes, for the whole
+    // ~3.7 s the worker spent allocating and filling the NEXT 128 MiB beside it. The
+    // peak was therefore 256 MiB where half of it was garbage nobody could read
+    // (ready() is false the whole time). poll() move-assigns, which frees the old
+    // buffer — so the waste was invisible at every point except the one that matters,
+    // the bake itself, which is also when the rest of a floor load is at its
+    // hungriest.
+    //
+    // swap-with-a-temporary rather than shrink_to_fit(): shrink_to_fit is a
+    // non-binding REQUEST the standard lets an implementation ignore, and a memory
+    // guarantee that an implementation may decline is not a guarantee.
+    // [performance.md] — RAM is the one budget that bounds the dense model.
+    std::vector<std::uint8_t>().swap(fine_.flow);
+    std::vector<std::uint8_t>().swap(fine_.nearest);
+    std::vector<std::uint8_t>().swap(pendingFine_.flow);
+    std::vector<std::uint8_t>().swap(pendingFine_.nearest);
 
     done_.store(false, std::memory_order_relaxed);
     running_ = true;

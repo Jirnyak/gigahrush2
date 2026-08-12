@@ -1416,6 +1416,14 @@ void begin_floor_nav(const World& world, int floorNumber, nav::AsyncBake& bake,
                  "in %.0f ms\n",
                  floorNumber, static_cast<int>(kind),
                  static_cast<unsigned>(rooms.baked), rooms.resident_bytes(), roomMs);
+    // Nav memory AT THE START of the bake, which is the number no document carried
+    // and the only moment it can be wrong. The old `start()` cleared the live flow
+    // field without freeing it, so this read 130 MiB of dead bytes here while the
+    // worker allocated the next 130 beside them — a 260 MiB peak, half of it
+    // unreadable (`ready()` is false throughout). It now reads ~0.
+    // The matching post-swap figure is on the `[nav]` line from finish_floor_nav.
+    std::fprintf(stderr, "[nav] bake begins: nav holds %.1f MiB\n",
+                 static_cast<double>(bake.resident_bytes()) / (1024.0 * 1024.0));
 }
 
 // Called once the bake has landed: hand the new floor's inhabitants somewhere to
@@ -1425,9 +1433,12 @@ std::uint32_t finish_floor_nav(Registry& reg, LayerId layer, std::uint32_t seed,
     std::uint32_t n = game::wander_init(reg, layer, seed);
     std::uint32_t aiCount = game::ai_init(reg, layer);
     std::fprintf(stderr,
-                 "[nav] bake coarse %.0f ms | fine %.0f ms | %u agents wandering | %u AI brains attached "
+                 "[nav] bake coarse %.0f ms | fine %.0f ms | resident %.1f MiB | "
+                 "%u agents wandering | %u AI brains attached "
                  "(async, off the main thread)\n",
-                 bake.last_coarse_ms(), bake.last_fine_ms(), n, aiCount);
+                 bake.last_coarse_ms(), bake.last_fine_ms(),
+                 static_cast<double>(bake.resident_bytes()) / (1024.0 * 1024.0),
+                 n, aiCount);
     return n;
 }
 

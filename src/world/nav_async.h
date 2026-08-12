@@ -84,6 +84,20 @@ public:
     float last_coarse_ms() const { return coarseMs_; }
     float last_fine_ms() const { return fineMs_; }
 
+    // Everything this object is holding right now, live and pending, counted by
+    // CAPACITY rather than size — capacity is what the allocator is actually keeping,
+    // and the difference between the two is precisely the bug `start()` used to have.
+    //
+    // Printed on every floor load. nav.h states "~130 MiB" for one baked graph and
+    // that is the only figure any document carries; what nobody had written down is
+    // what the class holds DURING a bake, which is the moment a floor load is
+    // hungriest. Now it is a number in the log instead of an inference from a header.
+    std::size_t resident_bytes() const {
+        return fine_.flow.capacity() + fine_.nearest.capacity() +
+               pendingFine_.flow.capacity() + pendingFine_.nearest.capacity() +
+               sizeof(CoarseGraph) * 2;
+    }
+
 private:
     void join_worker();
 
