@@ -46,6 +46,14 @@ public:
     explicit Writer(std::vector<std::uint8_t>& out) : out_(&out) {}
 
     void u8(const std::uint8_t& v) { out_->push_back(v); }
+    // A `bool` field needs its own method, not a cast at the call site. `u8` takes
+    // `std::uint8_t&` on the Reader side, so a bool cannot bind there — and papering
+    // over that with a temporary at each site would be the first place in this file
+    // where the writer and the reader stop being the SAME visit function, which is
+    // the property that keeps the two halves of the format from drifting apart.
+    // Normalised to 0/1 on write and to false/true on read, so no bit pattern other
+    // than those two ever reaches or leaves the file.
+    void b8(const bool& v) { out_->push_back(v ? 1u : 0u); }
     void u16(const std::uint16_t& v) {
         out_->push_back(static_cast<std::uint8_t>(v & 0xFFu));
         out_->push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFu));
@@ -98,6 +106,11 @@ public:
             return;
         }
         v = p_[at_++];
+    }
+    void b8(bool& v) {
+        std::uint8_t b = 0;
+        u8(b);
+        v = (b != 0);
     }
     void u16(std::uint16_t& v) {
         std::uint8_t a = 0, b = 0;
@@ -294,6 +307,21 @@ void visit_status(Ar& ar, S& s) {
     for (std::size_t i = 0; i < kStatusCount; ++i) ar.u8(s.alt[i]);
 }
 
+// Version 10 / SAVCLOCK: the samosbor automaton, field by field. `count` is a u16
+// and rides as one — it is the per-run tally `MobDef::minSamosbor` unlocks against,
+// so widening it later is a wire change and must bump the version. The three tail
+// padding bytes of the struct are NOT written.
+template <class Ar, class S>
+void visit_samosbor(Ar& ar, S& s) {
+    ar.u32(s.phaseMs);
+    ar.u32(s.phaseTotalMs);
+    ar.u32(s.activeMs);
+    ar.u16(s.count);
+    ar.u8(s.phase);
+    ar.u8(s.variant);
+    ar.b8(s.sealed);
+}
+
 template <class Ar, class K>
 void visit_key(Ar& ar, K& k) {
     ar.i16(k.floor);
@@ -382,18 +410,29 @@ static_assert(kContractWire == 4 + 2 + 4 + 4 + 4 + 1 + 1 + 1);
 static_assert(kNeedsWire == 8 * 4 + 1);
 static_assert(kInventoryWire == 64 * 4);
 // kSaveFixedWire: ledger+book+player + v7 rpg(12)+craft(93) + v8 combat(21)
-// + v9 status(42) + quest log. Was 850 in v8; +42 = 892 in v9.
+// + v9 status(42) + v10 samosbor(17)+fastTravel(32) + quest log.
+//
+// The running prose here USED TO SAY "was 850 in v8; +42 = 892 in v9" and "header 64
+// + fixed 892 + faction 36 = 992", while the asserts one line below said 878 and 978.
+// The asserts were right and the sentences were three-version-old drift, repeated
+// into tests/suite_saveload.inl. Numbers that are checked and numbers that are merely
+// written down diverge; only the former are load-bearing, so the arithmetic now lives
+// ONLY in asserts and the prose only names the parts.
 static_assert(kRpgWire == 12);
 static_assert(kCraftingWire == 93);
 static_assert(kRangedWire == 16);
 static_assert(kCombatSaveWire == 21);
 static_assert(kStatusWire == 42);
-static_assert(kSaveFixedWire == 850 + 28);  // 878
-static_assert(kSaveFixedWire == 878);
+static_assert(kSamosborWire == 17);
+static_assert(kFastTravelWire == 32);
+// The wire size and the runtime footprint of the unlock set must not drift apart:
+// widening kFloorSlots changes the struct and would silently change the format.
+static_assert(FastTravelState::wire_bytes() == kFastTravelWire);
+static_assert(kSaveFixedWire == 878 + kSamosborWire + kFastTravelWire);  // 927
+static_assert(kSaveFixedWire == 927);
 static_assert(kFactionWire == 36);
-// header 64 + fixed 892 + faction 36 = 992 for an empty run.
-static_assert(save_bytes_for(0) == 978);
-static_assert(save_bytes_for(0, 100, 50) == 978 + 150);
+static_assert(save_bytes_for(0) == 1027);
+static_assert(save_bytes_for(0, 100, 50) == 1027 + 150);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two
@@ -433,6 +472,12 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     bw.u32(st.kills);
     // Version 9 / SAVSTAT: live status effects.
     visit_status(bw, st.status);
+    // Version 10 / SAVCLOCK: the two run-scoped clocks. Placed HERE — after the last
+    // fixed block, before the variable-length opened-key list — because that is where
+    // v7, v8 and v9 each went in, and appending a fixed block after a variable one
+    // would make the reader's offset depend on a count.
+    visit_samosbor(bw, st.samosbor);
+    for (std::size_t i = 0; i < kFastTravelWire; ++i) bw.u8(st.fastTravel.raw()[i]);
     for (const OpenedContainerKey& k : st.opened) visit_key(bw, k);
     // Version 6: the macro world — pool table, macro-sim state, faction matrix.
     body.insert(body.end(), st.poolBlob.begin(), st.poolBlob.end());
@@ -557,6 +602,9 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     r.u32(tmp.kills);
     // Version 9 / SAVSTAT: live status effects.
     visit_status(r, tmp.status);
+    // Version 10 / SAVCLOCK: mirrors the writer exactly, same order, same position.
+    visit_samosbor(r, tmp.samosbor);
+    for (std::size_t i = 0; i < kFastTravelWire; ++i) r.u8(tmp.fastTravel.raw()[i]);
     tmp.opened.resize(static_cast<std::size_t>(h.openedCount));
     for (std::size_t i = 0; i < tmp.opened.size(); ++i) visit_key(r, tmp.opened[i]);
     // Version 6: the macro blobs, verbatim (decoded by their owners against live

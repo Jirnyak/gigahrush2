@@ -776,7 +776,15 @@ if(GIGA_BUILD_TESTS)
     #   floor 0  Residential 0x0038 ->     0x003A   6297600 -> 8396800 bytes
     #   floor -8 Derelict    0x0010 ->     0x0112   2099200 -> 6297600 bytes
     #   floor -14 Industrial 0x0000 ->     0x0100         0 -> 2099200 bytes
-        PASS_REGULAR_EXPRESSION "game_test: 235601 checks, 0 failures")
+    # 235601 -> 235641 (+40) on 2026-08-12: save version 10 / SAVCLOCK. busy_run now
+    # fills SamosborState and FastTravelState with distinct non-zero values and
+    # same_run compares them — the samosbor field by field (the struct's three tail
+    # padding bytes are not written, so a struct memcmp would be asserting about host
+    # padding), the unlock set over FLOOR LABELS rather than raw bytes (a raw compare
+    # agrees with itself however wrong the bit-packing is). Proven to bite by
+    # mutation: dropping the reader's restore of `count` and of the unlock bytes
+    # failed lines 308/315/318 plus the byte-for-byte re-serialize at 438.
+        PASS_REGULAR_EXPRESSION "game_test: 235641 checks, 0 failures")
 
 
 

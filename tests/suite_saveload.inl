@@ -193,6 +193,29 @@ SaveState busy_run() {
     // remember. (The pool/macro blobs stay empty here so the wire pins stay
     // arithmetic; macro_world_round_trips covers them with real objects.)
     st.factions.add_mutual(0, 4, +30);
+
+    // Version 10 / SAVCLOCK. Every field gets a DISTINCT non-round value, which is
+    // this file's own standing rule and the one §6a.1 of Docs/specs/10 accused it of
+    // breaking: a field left at zero makes the memcmp below pass whether or not the
+    // codec carries it. A samosbor caught mid-Active with three cycles behind it is
+    // also the exact state the old code destroyed on F9.
+    st.samosbor.phaseMs = 4123u;
+    st.samosbor.phaseTotalMs = 15000u;
+    st.samosbor.activeMs = 9876u;
+    st.samosbor.count = 3u;
+    st.samosbor.phase = 2u;    // Active
+    st.samosbor.variant = 5u;
+    st.samosbor.sealed = true;
+
+    // A discovery set that is neither empty nor full, spanning both signs and both
+    // ends of the label range — the negative floors are the half a naive
+    // floor-as-index bitset gets wrong.
+    st.fastTravel.unlock(0);
+    st.fastTravel.unlock(-1);
+    st.fastTravel.unlock(7);
+    st.fastTravel.unlock(-50);
+    st.fastTravel.unlock(kMinFloor);
+    st.fastTravel.unlock(kMaxFloor);
     return st;
 }
 
@@ -274,6 +297,27 @@ void same_run(const SaveState& a, const SaveState& b) {
     CHECK(a.poolBlob == b.poolBlob);
     CHECK(a.macroBlob == b.macroBlob);
     CHECK(std::memcmp(a.factions.v, b.factions.v, sizeof(a.factions.v)) == 0);
+
+    // Version 10 / SAVCLOCK. Field by field rather than a memcmp of the struct: the
+    // three tail padding bytes after `sealed` are NOT written to the file, so a
+    // struct-wide compare would be asserting something about host padding instead of
+    // about the format.
+    CHECK(a.samosbor.phaseMs == b.samosbor.phaseMs);
+    CHECK(a.samosbor.phaseTotalMs == b.samosbor.phaseTotalMs);
+    CHECK(a.samosbor.activeMs == b.samosbor.activeMs);
+    CHECK(a.samosbor.count == b.samosbor.count);
+    CHECK(a.samosbor.phase == b.samosbor.phase);
+    CHECK(a.samosbor.variant == b.samosbor.variant);
+    CHECK(a.samosbor.sealed == b.samosbor.sealed);
+    // The unlock set is compared over the FLOOR LABELS, not over the raw bytes, so
+    // the check fails if the bit-packing and `slot_of` ever disagree — a raw memcmp
+    // would agree with itself no matter how wrong the mapping was.
+    CHECK(a.fastTravel.unlocked_count() == b.fastTravel.unlocked_count());
+    for (int f = kMinFloor; f <= kMaxFloor; ++f)
+        if (a.fastTravel.unlocked(f) != b.fastTravel.unlocked(f)) {
+            CHECK(a.fastTravel.unlocked(f) == b.fastTravel.unlocked(f));
+            break;   // one report, not 255
+        }
 }
 
 void wire_layout() {
@@ -281,19 +325,28 @@ void wire_layout() {
     // depends on the compiler is a save that cannot cross hosts.
     // Derived from the serializers, not measured from a run: 33 ledger + 79 book
     // (3 x 21 + 16) + 304 player (33 needs + 256 inventory + 12 + 3) + 12 rpg +
-    // 93 craft + 21 combat (hasRanged+ranged+kills) + 42 status + 308 quest log = 892,
-    // plus the fixed 36-byte faction matrix and the 64-byte header.
+    // 93 craft + 21 combat (hasRanged+ranged+kills) + 42 status + 17 samosbor +
+    // 32 fast-travel + 294 quest log, plus the fixed 36-byte faction matrix and the
+    // 64-byte header.
+    //
+    // The three numbers this comment used to carry — "= 892", "308 quest log", and
+    // the "992" downstream — were WRONG and had been since v9: the asserts below said
+    // 878 and 978, and asserts are what the build checks. Corrected 2026-08-12 rather
+    // than carried forward, because a comment that disagrees with the assert beside it
+    // teaches the next reader to trust the wrong one.
     static_assert(kSaveHeaderWire == 64);
     static_assert(kRpgWire == 12);
     static_assert(kCraftingWire == 93);
     static_assert(kRangedWire == 16);
     static_assert(kCombatSaveWire == 21);
     static_assert(kStatusWire == 42);
-    static_assert(kSaveFixedWire == 878);
+    static_assert(kSamosborWire == 17);
+    static_assert(kFastTravelWire == 32);
+    static_assert(kSaveFixedWire == 927);
     static_assert(kFactionWire == 36);
-    static_assert(save_bytes_for(0) == 978);
-    static_assert(save_bytes_for(3) == 978 + 15);
-    static_assert(save_bytes_for(3, 100, 50) == 978 + 15 + 150);
+    static_assert(save_bytes_for(0) == 1027);
+    static_assert(save_bytes_for(3) == 1027 + 15);
+    static_assert(save_bytes_for(3, 100, 50) == 1027 + 15 + 150);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -303,11 +356,12 @@ void wire_layout() {
     const SaveState st = busy_run();
     save_write(st, bytes);
     CHECK(bytes.size() == save_bytes_for(3));
-    // 993 B for a full run with three emptied crates and no macro blobs (those are
+    // 1042 B for a full run with three emptied crates and no macro blobs (those are
     // variable-size and pinned by macro_world_round_trips). GEOMETRY lives in the
     // per-floor files ([save.h] modular layout), never here. v8 was 965; the
-    // legacy-content purge re-measured this from 1007.
-    CHECK(bytes.size() == 993);
+    // legacy-content purge re-measured this from 1007; v9 was 993; v10 adds the
+    // samosbor clock (17) and the fast-travel unlock set (32).
+    CHECK(bytes.size() == 1042);
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');

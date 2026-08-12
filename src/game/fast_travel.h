@@ -82,6 +82,26 @@ struct FastTravelState {
         return n;
     }
 
+    // --- persistence seam (save version 10) --------------------------------
+    // The set of floors the player has DISCOVERED is progress, and it used to be
+    // forgotten on quit: this struct lived as a local in main and appeared nowhere
+    // in save.cpp, so every hub found in a session was found again next session
+    // ([problems.md] §43). 32 bytes fixes it.
+    //
+    // Exposed as raw bytes rather than as a floor loop on purpose, and this is the
+    // one place in the save where that is the CONSERVATIVE choice: the state is
+    // already a dense little bitset with no multi-byte field, so there is no host
+    // padding and no byte order to get wrong — the two hazards the field-by-field
+    // rule in [save.h] exists to avoid. A loop over 255 floor labels would encode
+    // the same 255 bits through 255 branches and could disagree with `slot_of`.
+    //
+    // `wire_bytes()` is what the save writes; it is `kBytes` and the static_assert
+    // in save.cpp pins it, so widening kFloorSlots cannot silently change the
+    // format without failing the build.
+    static constexpr std::size_t wire_bytes() { return static_cast<std::size_t>(kBytes); }
+    const std::uint8_t* raw() const { return bits_; }
+    std::uint8_t* raw() { return bits_; }
+
 private:
     static constexpr int kBytes = (kFloorSlots + 7) / 8; // 32
     std::uint8_t bits_[kBytes]{};

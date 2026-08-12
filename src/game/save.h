@@ -59,6 +59,8 @@
 #include "game/craft.h"       // CraftingState, kCraftingWire, craft_write/read
 #include "game/combat.h"      // PlayerRanged (SAVMAG v8)
 #include "game/status.h"      // StatusSet (SAVSTAT v9)
+#include "game/samosbor.h"    // SamosborState (SAVCLOCK v10)
+#include "game/fast_travel.h" // FastTravelState (SAVCLOCK v10)
 #include "world/destruct.h"   // CarveOp, CarveScratch, CarveResult, carve_sphere
 #include "world/level_stack.h"  // LayerId, and World via world/world.h
 
@@ -107,7 +109,20 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // for all six authored statuses). F5 mid-haze must not wipe the timers on F9;
 // a loaded body keeps the same move/aim/melee mults it saved under. [status.h]
 // SAVSTAT
-inline constexpr std::uint32_t kSaveVersion = 9u;
+// Version 10: the two RUN-SCOPED clocks that were being thrown away — SamosborState
+// and FastTravelState. Both lived as locals in `main` and appeared nowhere in this
+// file, and each loss was silent in its own way:
+//   * the samosbor clock is the CENTRAL crisis machine, and saving in an active
+//     phase at |z| = 50 then loading put the automaton back in Idle with `count` 0.
+//     `count` is what `MobDef::minSamosbor` unlocks against, so the fog roster was
+//     reset too. The standard save button cancelled the standard crisis.
+//   * the fast-travel unlock set is DISCOVERY — every hub the player found. It was
+//     re-found from scratch each session ([problems.md] §43).
+// 17 + 32 bytes. Version 9 saves are rejected, per the standing rule; there is no
+// migration and the honest reason is that adding one would need a per-version
+// reader branch, which is exactly the "load that succeeds and is wrong" this file
+// is built to prevent. [samosbor.h] [fast_travel.h] SAVCLOCK
+inline constexpr std::uint32_t kSaveVersion = 10u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -239,10 +254,20 @@ static_assert(kCombatSaveWire == 21);
 inline constexpr std::size_t kStatusWire =
     kStatusCount * 4 + kStatusCount * 2 + kStatusCount * 1;  // 42
 static_assert(kStatusWire == 42);
+// Version 10 / SAVCLOCK: SamosborState field-by-field (NOT sizeof — the struct has
+// three tail padding bytes after `sealed`, and writing them would put uninitialised
+// host padding into a file that a CRC then blesses).
+inline constexpr std::size_t kSamosborWire =
+    4 + 4 + 4 + 2 + 1 + 1 + 1;  // phaseMs, phaseTotalMs, activeMs, count, phase, variant, sealed
+static_assert(kSamosborWire == 17);
+// Version 10 / SAVCLOCK: the fast-travel unlock bitset, raw. Dense bytes with no
+// multi-byte field, so the field-by-field rule has nothing to protect here — see the
+// note beside FastTravelState::raw() in [fast_travel.h].
+inline constexpr std::size_t kFastTravelWire = 32;
 inline constexpr std::size_t kOpenedKeyWire = 5;     // i16 floor + 3 x u8 cell
 inline constexpr std::size_t kSaveFixedWire =
     kLedgerWire + kBookWire + kPlayerWire + kRpgWire + kCraftingWire +
-    kCombatSaveWire + kStatusWire + kQuestLogWire;
+    kCombatSaveWire + kStatusWire + kSamosborWire + kFastTravelWire + kQuestLogWire;
 
 // Sanity ceiling on the opened-container list, so a corrupt header cannot ask for a
 // huge allocation before the checksum has had a chance to reject it. 64 crates per
@@ -436,6 +461,13 @@ struct SaveState {
     // Version 9 / SAVSTAT: live status effects. Local `playerStatus` in main —
     // not an ECS component — so capture/restore is a direct assignment.
     StatusSet status{};
+    // Version 10 / SAVCLOCK: the two run-scoped clocks. Both are locals in main and
+    // both were previously re-armed from scratch on load — the samosbor automaton by
+    // `samosbor_new_game` on the F9 path, the unlock set by never being written at
+    // all. Defaults are the zeroed PODs, which is exactly "new run, nothing
+    // discovered", so a SaveState built by hand still means something sane.
+    SamosborState samosbor{};
+    FastTravelState fastTravel{};
     // Every crate emptied anywhere in the building, not just on the live floor. Only the
     // resident floor's crates are live entities, so the ones from other floors exist
     // ONLY in this list — see `refresh_opened_containers`.

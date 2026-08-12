@@ -2326,6 +2326,14 @@ int main(int argc, char** argv) {
         // ECS component — so capture is a direct assignment. F5 mid-haze must
         // not wipe timers on F9. [status.h]
         runState.status = playerStatus;
+        // v10 / SAVCLOCK: the two run-scoped clocks. Both are plain locals in this
+        // function's scope, which is exactly why they were never saved — nothing in
+        // save.cpp could see them. The samosbor one is the central crisis machine,
+        // and saving inside an Active phase used to hand back an Idle automaton with
+        // `count` 0 on load; the fast-travel one is every hub the player has
+        // discovered ([problems.md] §43). [samosbor.h] [fast_travel.h]
+        runState.samosbor = samosbor;
+        runState.fastTravel = fastTravel;
         // REFRESH, not append and not clear. [save.h]
         game::refresh_opened_containers(reg, pl, currentFloor, runState.opened);
         // v6: the macro world travels whole — pool table, macro clock, faction
@@ -4333,9 +4341,22 @@ int main(int argc, char** argv) {
                             // F9 mid-haze keeps the same move/aim/melee mults.
                             // Local person-state — direct assignment. [status.h]
                             playerStatus = runState.status;
-                            // Per-floor clocks and channels reset, same as any
-                            // arrival.
-                            samosbor = game::samosbor_new_game(sbRng);
+                            // Version 10 / SAVCLOCK: the samosbor clock is RESTORED,
+                            // not re-armed. This line used to read
+                            // `samosbor = samosbor_new_game(sbRng)` under the comment
+                            // "per-floor clocks reset, same as any arrival" — but a
+                            // load is not an arrival, it is a RESUMPTION, and the two
+                            // want opposite things. Re-arming meant the standard save
+                            // button cancelled the central crisis mechanic: a player
+                            // caught mid-Active at |z| = 50 loaded into Idle with the
+                            // per-run `count` back at 0, which also reset the fog
+                            // roster `MobDef::minSamosbor` unlocks against.
+                            // The fast-travel set is restored for the same reason:
+                            // discovery is progress, not per-floor channel state.
+                            samosbor = runState.samosbor;
+                            fastTravel = runState.fastTravel;
+                            // Per-floor channels reset, same as any arrival — these
+                            // ARE floor-scoped, unlike the two clocks above.
                             vendorKind = game::vendor_kind_for(
                                 game::dominant_faction(pool, currentFloor));
                             rumourLine[0] = 0;
