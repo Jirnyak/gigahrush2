@@ -81,6 +81,8 @@
 
 namespace giga::game {
 
+struct StatusSet;
+
 inline constexpr float kNeedMax = 100.0f;
 
 // Drain per REAL second (`needs.ts:22-27`).
@@ -361,7 +363,7 @@ struct ConsumeResult {
 // Faithfully ported oddity: queued pressure is computed from the item's LABEL, not
 // from what landed. Eating a 40-point ration at 99 food wastes the food and still
 // bills the full 40 points of digestion — it went through you either way.
-ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp);
+ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp, StatusSet* status = nullptr);
 
 // The HP `apply_consumable` will charge for `id`, BEFORE the hp-1 survivability floor
 // is applied. 0 for all 17 clean Feed/FeedPsi rows and all 8 Drink/DrinkStim rows;
@@ -416,9 +418,9 @@ std::int16_t consumable_hp_cost(ItemId id);
 // `kAttritionChannel`, publishes `ItemTransferred`.
 // Call site: beside `use_best_heal`, after `pickup_step`, on an input edge.
 ConsumeResult use_best_food(Registry& reg, NpcPool& pool, EventBus& bus,
-                           LayerId layer, std::uint64_t tick);
+                            LayerId layer, std::uint64_t tick, StatusSet* status = nullptr);
 ConsumeResult use_best_drink(Registry& reg, NpcPool& pool, EventBus& bus,
-                            LayerId layer, std::uint64_t tick);
+                             LayerId layer, std::uint64_t tick, StatusSet* status = nullptr);
 
 // Returns what actually came off, so "you did not need to" is distinguishable from
 // "that helped". The hook a toilet object calls once one exists.

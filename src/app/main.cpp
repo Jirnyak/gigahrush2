@@ -26,6 +26,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -1394,7 +1395,7 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
 // field. That degradation is automatic rather than special-cased.
 void begin_floor_nav(const World& world, int floorNumber, nav::AsyncBake& bake,
                      game::RoomZones& rooms) {
-    bake.start(world.grid());
+    bake.start(world);
     // The ROOM zones are baked here too, and synchronously, because they are three
     // multi-source BFS against the async bake's 128 — measured below in the same
     // line the nav timings print. Synchronous also means there is no second
@@ -2858,7 +2859,7 @@ int main(int argc, char** argv) {
             // field's only producer) is not wired into the tick yet, so ai_step's
             // threat term reads 0 and nobody flees. Wiring diffusion in is the
             // open task; the fetch stays so that wiring is one call away.
-            [[maybe_unused]] const Field<float>* danger = activeWorld.fields().find<float>("danger");
+            Field<float>* danger = activeWorld.fields().find<float>("danger");
             [[maybe_unused]] const MacroGrid& activeGrid = activeWorld.grid();
             int guard = 0;
             while (simAccum >= kSimDt && guard++ < 8) {
@@ -2984,7 +2985,7 @@ int main(int argc, char** argv) {
                 // toilet/sleep intent actually STEER a body — without it every
                 // non-flee intent hands motion straight back to wander_step and the
                 // scorer is decoration (measured: own_ai=0 of 419).
-                aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
+                aiTick = game::ai_step(reg, pool, danger, nullptr, activeGrid, activeLayer, simNow,
                                        kSimDt, aiCfg, &aiMem, &doors, &activeWorld,
                                        &roomZones);
                 // AIMEM proof trail: once nav has brains and AI is on, emit a
@@ -3708,7 +3709,7 @@ int main(int argc, char** argv) {
                 // no counterplay. The camera holder IS killable: the player has
                 // healing, resupply and possession-on-death. [faction_relations.h]
                 feudHits += game::faction_feud_step(reg, pool, factionRel, activeLayer,
-                                                    simTick);
+                                                    simTick, activeWorld.gravity());
                 // Slowed CAP enforcement: after every velocity writer
                 // (controller / wander / investigate / feud), before integrate.
                 // Was defined in combat.cpp and never called — dead path until now.
@@ -4194,11 +4195,9 @@ int main(int argc, char** argv) {
                         // `repeatIndex: Math.floor(time)`. Identity is already folded in
                         // by speech_line_index, so this is the only term that has to move
                         // for the same body to say something new.
-                        speechLine = game::speech_say(
-                            speechMem, pool, talker, sc,
-                            static_cast<std::uint32_t>(simTick /
-                                                       game::kSpeechCooldownTicks),
-                            &speechSit);
+                        speechLine = game::speech_say(speechMem, pool, talker, sc,
+                            static_cast<std::uint32_t>(simTick / game::kSpeechCooldownTicks),
+                            &aiMem, simNow, &speechSit);
                         speechAt = simTick;
                     }
                 }
@@ -4687,12 +4686,12 @@ int main(int argc, char** argv) {
                     game::ConsumeResult cr{};
                     if (eatWanted) {
                         cr = game::use_best_food(reg, pool, bus, activeLayer,
-                                                 simTick);
+                                                 simTick, &playerStatus);
                         ateFood += cr.food;
                         eatWanted = false;
                     } else {
                         cr = game::use_best_drink(reg, pool, bus, activeLayer,
-                                                  simTick);
+                                                  simTick, &playerStatus);
                         drankWater += cr.water;
                         drinkWanted = false;
                     }

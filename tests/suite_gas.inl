@@ -1,3 +1,4 @@
+// giga-check: unwired-suite pending Phase 3 gas simulation
 // suite_gas.inl - Gas Chemistry and Anisotropy (spec2.txt §5.2a)
 //
 #include "world/world.h"

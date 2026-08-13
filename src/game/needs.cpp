@@ -1,12 +1,14 @@
 #include "game/needs.h"
 
 #include <cmath>
+#include <cstring>
 
 #include "core/wrap.h"       // wrap_macro — the body's cell is a toroidal lookup
 #include "ecs/components.h"
 #include "game/embody.h"     // NpcRef
 #include "game/inventory.h"
 #include "game/room_zone.h"  // room_bit_at / room_restores / room_recover
+#include "game/status.h"
 #include "world/types.h"     // kCellSize — pos -> macro cell, the one conversion
 
 namespace giga::game {
@@ -91,7 +93,8 @@ float advertised(ItemId id, Appetite want) {
 // clock — and onto zhelemish_raw / infected_mushroom on a pure slot-index tie with
 // rawmeat / soup_cube, where the tighter fit is worth exactly nothing.
 ConsumeResult use_best_for(Registry& reg, NpcPool& pool, EventBus& bus,
-                           LayerId layer, Appetite want, std::uint64_t tick) {
+                           LayerId layer, Appetite want, std::uint64_t tick,
+                           StatusSet* status) {
     ConsumeResult out;
     const PlayerRef me = find_player(reg, pool, layer);
     if (me.entity == entt::null) return out;
@@ -133,7 +136,7 @@ ConsumeResult use_best_for(Registry& reg, NpcPool& pool, EventBus& bus,
     if (best < 0) return out;
 
     const ItemId used = inv.slots[best].item;
-    out = apply_consumable(n, used, pool.hp(me.id));
+    out = apply_consumable(n, used, pool.hp(me.id), status);
     if (!out.used) return out;
 
     if (--inv.slots[best].count == 0) inv.slots[best] = ItemSlot{};
@@ -407,7 +410,7 @@ std::int16_t consumable_hp_cost(ItemId id) {
     }
 }
 
-ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp) {
+ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp, StatusSet* status) {
     ConsumeResult out;
     if (!item_valid(item)) return out;
 
@@ -484,17 +487,22 @@ ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp) {
 
     out.item = item;
     out.used = true;
+
+    if (status != nullptr && std::strstr(item_name(item), "govnyak") != nullptr) {
+        status_apply(*status, StatusId::GovnyakRelief, false);
+    }
+
     return out;
 }
 
 ConsumeResult use_best_food(Registry& reg, NpcPool& pool, EventBus& bus,
-                           LayerId layer, std::uint64_t tick) {
-    return use_best_for(reg, pool, bus, layer, Appetite::Food, tick);
+                           LayerId layer, std::uint64_t tick, StatusSet* status) {
+    return use_best_for(reg, pool, bus, layer, Appetite::Food, tick, status);
 }
 
 ConsumeResult use_best_drink(Registry& reg, NpcPool& pool, EventBus& bus,
-                            LayerId layer, std::uint64_t tick) {
-    return use_best_for(reg, pool, bus, layer, Appetite::Water, tick);
+                            LayerId layer, std::uint64_t tick, StatusSet* status) {
+    return use_best_for(reg, pool, bus, layer, Appetite::Water, tick, status);
 }
 
 ReliefResult relieve_needs(Needs& n, float peeAmount, float pooAmount) {

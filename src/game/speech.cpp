@@ -6,12 +6,15 @@
 // one `hash3`, one modulo, one add.
 #include "game/speech.h"
 #include <algorithm>
+#include <cmath>
 
 #include "core/rng.h"        // hash3 / rand_below — the stateless mixer
 #include "game/ai.h"         // IntentId / kIntentNone / AiBrain — the committed decision
 #include "game/embody.h"     // NpcRef — the NpcId -> Entity link
 #include "game/needs.h"      // the warn thresholds, so speech invents no numbers
 #include "game/samosbor.h"   // SamosborPhase — the clock the three fog kinds read
+#include "game/faction.h"    // kFactionCount
+#include "game/macro_sim.h"  // Relationship
 
 namespace giga::game {
 
@@ -288,6 +291,13 @@ const char* speech_say(SpeechMemory& mem, NpcId speaker, SpeechSituation s,
 const char* speech_say(SpeechMemory& mem, const NpcPool& pool, NpcId speaker,
                        const SpeechContext& ctx, std::uint32_t seed,
                        SpeechSituation* outSituation) {
+    return speech_say(mem, pool, speaker, ctx, seed, nullptr, 0.0, outSituation);
+}
+
+const char* speech_say(SpeechMemory& mem, const NpcPool& pool, NpcId speaker,
+                       const SpeechContext& ctx, std::uint32_t seed,
+                       AiMemory* aiMem, double now,
+                       SpeechSituation* outSituation) {
     // `const_cast` matches `dominant_faction` in rumour.cpp, for the same reason:
     // NpcPool exposes its SoA columns only through non-const references, so a
     // read-only consumer either casts or lies about its own signature. The cast is
@@ -295,6 +305,16 @@ const char* speech_say(SpeechMemory& mem, const NpcPool& pool, NpcId speaker,
     NpcPool& p = const_cast<NpcPool&>(pool);
     const SpeechSituation s = speech_situation(ctx);
     if (outSituation != nullptr) *outSituation = s;
+
+    if (s == SpeechSituation::Social && aiMem != nullptr) {
+        for (const auto& rel : p.relations(speaker)) {
+            if (rel.target != kInvalidNpc && rel.affinity > 0) {
+                ai_remember_actor(*aiMem, speaker, MemAlly, rel.target, 1.0f, now);
+                break;
+            }
+        }
+    }
+
     return speech_say(mem, speaker, s, p.faction(speaker), seed);
 }
 

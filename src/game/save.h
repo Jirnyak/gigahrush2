@@ -231,8 +231,8 @@ inline constexpr std::size_t kLedgerWire = 33;       // 2x8 + 4x4 + 1
 inline constexpr std::size_t kContractWire = 21;     // 4 + 2 + 3x4 + 3   (pad_ dropped)
 inline constexpr std::size_t kBookWire =
     static_cast<std::size_t>(kMaxContracts) * kContractWire + 4 + 4 + 8;
-inline constexpr std::size_t kNeedsWire = 33;        // 8 floats + seeded
-inline constexpr std::size_t kInventoryWire = static_cast<std::size_t>(kInvSlots) * 4;
+inline constexpr std::size_t kNeedsWire = 45;        // 11 floats + seeded
+inline constexpr std::size_t kInventoryWire = static_cast<std::size_t>(kInvSlots) * 6;
 inline constexpr std::size_t kPlayerWire = kNeedsWire + kInventoryWire + 4 + 4 + 4 + 3;
 // Version 7: RpgStats wire — field-by-field LE, NOT sizeof (pad_ is written so the
 // footprint stays 12 and matches the POD layout without host padding surprises).
@@ -252,8 +252,8 @@ static_assert(kCombatSaveWire == 21);
 // Version 9 / SAVSTAT: StatusSet field-by-field (NOT sizeof — host padding).
 // 6 x u32 remainMs + 6 x u16 intensityE3 + 6 x u8 alt = 24+12+6 = 42.
 inline constexpr std::size_t kStatusWire =
-    kStatusCount * 4 + kStatusCount * 2 + kStatusCount * 1;  // 42
-static_assert(kStatusWire == 42);
+    kStatusCount * 4 + kStatusCount * 2 + kStatusCount * 1;  // 49
+static_assert(kStatusWire == 49);
 // Version 10 / SAVCLOCK: SamosborState field-by-field (NOT sizeof — the struct has
 // three tail padding bytes after `sealed`, and writing them would put uninitialised
 // host padding into a file that a CRC then blesses).

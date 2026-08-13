@@ -35,6 +35,18 @@ void status_apply(StatusSet& set, StatusId id, bool useAlt) {
     if (!status_valid(id)) return;
     const std::size_t i = static_cast<std::size_t>(id);
     const StatusDef& d = kStatusTable[i];
+
+    if (id == StatusId::GovnyakRelief) {
+        const std::size_t c_idx = static_cast<std::size_t>(StatusId::GovnyakCough);
+        const std::size_t d_idx = static_cast<std::size_t>(StatusId::GovnyakDebt);
+        std::uint32_t acc = set.intensityE3[i];
+        if (set.remainMs[c_idx] != 0) acc += set.intensityE3[c_idx];
+        if (set.remainMs[d_idx] != 0) acc += set.intensityE3[d_idx];
+        set.intensityE3[i] = acc > kStatusIntensityCapE3 ? kStatusIntensityCapE3 : static_cast<std::uint16_t>(acc);
+        set.remainMs[c_idx] = 0; set.intensityE3[c_idx] = 0; set.alt[c_idx] = 0;
+        set.remainMs[d_idx] = 0; set.intensityE3[d_idx] = 0; set.alt[d_idx] = 0;
+    }
+
     const std::uint32_t ms = useAlt ? d.altDurationMs : d.durationMs;
 
     // The LONGER of the two wins. Re-entering a spore cloud must not shorten a haze
@@ -63,10 +75,23 @@ std::uint32_t status_step(StatusSet& set, std::uint32_t dtMs) {
         const std::uint32_t r = set.remainMs[i];
         if (r == 0) continue;
         if (r <= dtMs) {
+            const std::uint16_t prev_intensity = set.intensityE3[i];
             set.remainMs[i] = 0;
             set.intensityE3[i] = 0;
             set.alt[i] = 0;
             ++expired;
+
+            if (i == static_cast<std::size_t>(StatusId::GovnyakRelief)) {
+                const std::size_t next_i = static_cast<std::size_t>(StatusId::GovnyakCough);
+                set.remainMs[next_i] = kStatusTable[next_i].durationMs;
+                set.intensityE3[next_i] = prev_intensity;
+                set.alt[next_i] = 0;
+            } else if (i == static_cast<std::size_t>(StatusId::GovnyakCough)) {
+                const std::size_t next_i = static_cast<std::size_t>(StatusId::GovnyakDebt);
+                set.remainMs[next_i] = kStatusTable[next_i].durationMs;
+                set.intensityE3[next_i] = prev_intensity;
+                set.alt[next_i] = 0;
+            }
         } else {
             set.remainMs[i] = r - dtMs;
         }

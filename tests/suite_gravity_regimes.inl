@@ -14,6 +14,12 @@
 #include "world/gravity.h"
 #include "core/math.h"
 #include "sim/controller.h"
+#include "world/level_stack.h"
+#include "sim/physics.h"
+#include "world/destruct.h"
+#include "ecs/components.h"
+#include "game/combat.h"
+#include "game/npc_pool.h"
 
 namespace {
 
@@ -186,10 +192,174 @@ static void test_fluid_falls_in_regime_direction() {
 // test_fluid_falls_in_regime_direction passing for ALL 6 directional
 // regimes simultaneously is mathematically impossible with any single hardcoded axis.
 
+// --- §5.1 e: Falling body follows regime_down() and no other axis ----------
+static void test_falling_body_follows_regime_down() {
+    for (giga::GravityRegime r : {
+             giga::GravityRegime::NegX, giga::GravityRegime::PosX,
+             giga::GravityRegime::NegY, giga::GravityRegime::PosY,
+             giga::GravityRegime::NegZ, giga::GravityRegime::PosZ,
+         }) {
+        giga::LevelStack stack;
+        giga::LayerId layerId = stack.push_layer();
+        giga::World& world = stack.layer(layerId);
+        
+        world.gravity().regime = r;
+        giga::CellStep d = giga::regime_down(r);
+        world.gravity().global = {
+            static_cast<float>(d.x) * 9.81f,
+            static_cast<float>(d.y) * 9.81f,
+            static_cast<float>(d.z) * 9.81f
+        };
+        
+        giga::Registry reg;
+        giga::Entity e = reg.create();
+        reg.emplace<giga::Transform>(e, giga::vec3{500.0f, 500.0f, 500.0f}, layerId);
+        reg.emplace<giga::Velocity>(e, giga::vec3{0.0f, 0.0f, 0.0f});
+        reg.emplace<giga::GravityAffected>(e, 1.0f, false);
+        reg.emplace<giga::AABB>(e, giga::vec3{0.5f, 0.5f, 0.5f});
+        
+        giga::PhysicsParams params;
+        giga::physics_step(reg, stack, 1.0f, params);
+        
+        const giga::Velocity& vel = reg.get<giga::Velocity>(e);
+        const giga::Transform& tf = reg.get<giga::Transform>(e);
+        
+        if (d.x == 0) { CHECK(vel.v.x == 0.0f); CHECK(tf.pos.x == 500.0f); }
+        else { CHECK(vel.v.x * d.x > 0.0f); }
+        
+        if (d.y == 0) { CHECK(vel.v.y == 0.0f); CHECK(tf.pos.y == 500.0f); }
+        else { CHECK(vel.v.y * d.y > 0.0f); }
+        
+        if (d.z == 0) { CHECK(vel.v.z == 0.0f); CHECK(tf.pos.z == 500.0f); }
+        else { CHECK(vel.v.z * d.z > 0.0f); }
+    }
+}
+
+// --- §5.1 f: Carving sphere remains a sphere; detachment is isotropic -----
+static void test_carve_sphere_is_isotropic() {
+    giga::World w;
+    for (int cx = 10; cx <= 12; ++cx) {
+        for (int cy = 10; cy <= 12; ++cy) {
+            for (int cz = 10; cz <= 12; ++cz) {
+                w.grid().fill_cell(cx, cy, cz, giga::kMatConcrete);
+            }
+        }
+    }
+    
+    giga::CarveOp op;
+    op.x = (11.0f * 8.0f + 4.0f) * giga::kVoxelSize;
+    op.y = (11.0f * 8.0f + 4.0f) * giga::kVoxelSize;
+    op.z = (11.0f * 8.0f + 4.0f) * giga::kVoxelSize;
+    op.radius = 3.0f * giga::kVoxelSize;
+    op.power = 0xFFFF;
+    op.seed = 42;
+    op.detachLimit = 1024;
+    
+    giga::CarveScratch scratch;
+    giga::CarveResult res;
+    giga::carve_sphere(w, op, scratch, res);
+    
+    int min_dx = 1000, max_dx = -1000;
+    int min_dy = 1000, max_dy = -1000;
+    int min_dz = 1000, max_dz = -1000;
+    
+    const int center_ax = 11 * 8 + 4;
+    for (const auto& d : res.destroyed) {
+        int ax = static_cast<int>(d.cell & 127u) * giga::kSubDim + (d.bit & 7);
+        int ay = static_cast<int>((d.cell >> 7) & 127u) * giga::kSubDim + ((d.bit >> 3) & 7);
+        int az = static_cast<int>((d.cell >> 14) & 127u) * giga::kSubDim + ((d.bit >> 6) & 7);
+        
+        int dx = ax - center_ax;
+        int dy = ay - center_ax;
+        int dz = az - center_ax;
+        
+        if (dx < min_dx) min_dx = dx;
+        if (dx > max_dx) max_dx = dx;
+        if (dy < min_dy) min_dy = dy;
+        if (dy > max_dy) max_dy = dy;
+        if (dz < min_dz) min_dz = dz;
+        if (dz > max_dz) max_dz = dz;
+    }
+    
+    CHECK(min_dx == min_dy);
+    CHECK(min_dx == min_dz);
+    CHECK(max_dx == max_dy);
+    CHECK(max_dx == max_dz);
+    CHECK(min_dx == -max_dx);
+}
+
+// --- §5.1 g: Locomotion builds basis from frame -----
+static void test_locomotion_builds_basis_from_frame() {
+    for (giga::GravityRegime r : {
+             giga::GravityRegime::NegX, giga::GravityRegime::PosX,
+             giga::GravityRegime::NegY, giga::GravityRegime::PosY,
+             giga::GravityRegime::NegZ, giga::GravityRegime::PosZ,
+         }) {
+        giga::World world;
+        world.gravity().regime = r;
+        giga::CellStep d = giga::regime_down(r);
+        world.gravity().global = {
+            static_cast<float>(d.x) * 9.81f,
+            static_cast<float>(d.y) * 9.81f,
+            static_cast<float>(d.z) * 9.81f
+        };
+        
+        giga::Registry reg;
+        giga::Entity e = reg.create();
+        reg.emplace<giga::Velocity>(e, giga::vec3{0.0f, 0.0f, 0.0f});
+        reg.emplace<giga::Controller>(e, 6.0f, giga::vec3{1.0f, 0.0f, 0.0f}, false);
+        reg.emplace<giga::CameraTag>(e, 0.0f, 0.0f, 1.2f, giga::vec3{0,0,0});
+        
+        giga::controller_step(reg, 1.0f, &world.gravity());
+        
+        const giga::Velocity& vel = reg.get<giga::Velocity>(e);
+        giga::GravityFrame f = giga::regime_frame(r);
+        
+        if (f.axis == 0) CHECK(vel.v.x == 0.0f);
+        if (f.axis == 1) CHECK(vel.v.y == 0.0f);
+        if (f.axis == 2) CHECK(vel.v.z == 0.0f);
+        
+        CHECK(vel.v.x * vel.v.x + vel.v.y * vel.v.y + vel.v.z * vel.v.z > 0.0f);
+    }
+}
+
+// --- §5.1 h: Knockback pushes backward, not up -----
+static void test_knockback_pushes_backward_not_up() {
+    giga::World world;
+    world.gravity().regime = giga::GravityRegime::NegZ;
+    world.gravity().global = {0, 0, -9.81f};
+    
+    giga::Registry reg;
+    giga::game::NpcPool pool;
+    
+    giga::Entity target = reg.create();
+    reg.emplace<giga::Transform>(target, giga::vec3{10.0f, 10.0f, 10.0f}, static_cast<giga::LayerId>(0));
+    reg.emplace<giga::Velocity>(target, giga::vec3{0.0f, 0.0f, 0.0f});
+    reg.emplace<giga::Mass>(target, 70.0f);
+    
+    giga::Entity attacker = reg.create();
+    reg.emplace<giga::Transform>(attacker, giga::vec3{12.0f, 10.0f, 10.0f}, static_cast<giga::LayerId>(0));
+    
+    giga::game::apply_damage(reg, pool, target, 50, giga::game::DamageChannel::Kinetic, attacker, nullptr, nullptr, &world.gravity());
+    
+    const giga::Velocity& vel = reg.get<giga::Velocity>(target);
+    CHECK(vel.v.x < 0.0f);
+    CHECK(vel.v.z == 0.0f);
+}
+
+// --- §d: GATE — verify regime_down() usage and isotropy -------------------
+// The isotropy properties above only hold if regime_down() is used.
+// test_fluid_falls_in_regime_direction passing for ALL 6 directional
+// regimes simultaneously is mathematically impossible with any single hardcoded axis.
+
 static void test_gravity_regimes_all() {
     test_gravity_regimes_isotropy();
     test_fluid_isotropy();
     test_fluid_falls_in_regime_direction();
+    test_falling_body_follows_regime_down();
+    test_carve_sphere_is_isotropic();
+    test_locomotion_builds_basis_from_frame();
+    test_knockback_pushes_backward_not_up();
 }
 
 } // namespace

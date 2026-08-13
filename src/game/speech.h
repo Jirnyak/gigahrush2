@@ -281,6 +281,11 @@ const char* speech_say(SpeechMemory& mem, const NpcPool& pool, NpcId speaker,
                        const SpeechContext& ctx, std::uint32_t seed,
                        SpeechSituation* outSituation = nullptr);
 
+const char* speech_say(SpeechMemory& mem, const NpcPool& pool, NpcId speaker,
+                       const SpeechContext& ctx, std::uint32_t seed,
+                       class AiMemory* aiMem, double now,
+                       SpeechSituation* outSituation = nullptr);
+
 // ---------------------------------------------------------------------------
 // `source_rules` registration — NOT yet wired, and this is the note that says so.
 //

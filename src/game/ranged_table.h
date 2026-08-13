@@ -166,7 +166,7 @@ inline float ranged_dps(const RangedDef& d) {
 // test is `ranged_is_thrown`, i.e. the item is its own ammunition; see the header
 // note. Grenades are picked by `equipped_throwable` and thrown by
 // `player_throw_step`, on their own button.
-ItemId equipped_ranged(const Inventory& inv);
+ItemId equipped_ranged(const Inventory& inv, const struct Equipped* eq = nullptr);
 
 // The best explosive in an inventory, by damage x blast radius, or kInvalidItem.
 //

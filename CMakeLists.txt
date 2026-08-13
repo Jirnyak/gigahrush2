@@ -448,7 +448,7 @@ if(GIGA_BUILD_TESTS)
     # may measure: |cross(f, up)|, never dot(f, up), because `up` is a public
     # parameter under no obligation to be unit-length.
     set_tests_properties(world_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "23385/23385 checks passed"
+        PASS_REGULAR_EXPRESSION "23391/23391 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically
@@ -968,6 +968,15 @@ if(GIGA_BUILD_TESTS)
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_wired.cmake)
     set_tests_properties(wired PROPERTIES
         PASS_REGULAR_EXPRESSION "GIGA_WIRED=PASS entry_points=[0-9][0-9]")
+
+    # Task 1.2: CSV Columns Check
+    set(GIGA_DEFERRED_CSV_COLUMNS "ai_flags:generated_elsewhere" "nav_step_sub:deferred" "nav_climb_sub:deferred" "nav_drop_sub:deferred" "nav_fly:deferred")
+    add_test(NAME csv_columns COMMAND python ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_csv_columns.py ${CMAKE_CURRENT_SOURCE_DIR} ${GIGA_DEFERRED_CSV_COLUMNS})
+    set_tests_properties(csv_columns PROPERTIES PASS_REGULAR_EXPRESSION "GIGA_CSV_COLUMNS=PASS")
+
+    # Task 1.3: Memory Kinds Check
+    add_test(NAME memory_kinds COMMAND python ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_memory_kinds.py ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(memory_kinds PROPERTIES PASS_REGULAR_EXPRESSION "GIGA_MEMORY_KINDS=PASS")
 
     # Honest crowd benchmark: real floor + 16k wandering agents + real physics.
     # An executable, not a ctest (it measures, it doesn't pass/fail). Runs at the

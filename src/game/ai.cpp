@@ -323,7 +323,7 @@ void AiMemory::ensure(NpcId id) {
 }
 
 bool AiMemory::remember(NpcId id, std::uint8_t kind, std::uint32_t payload,
-                        float strength01, double now, bool gossip) {
+                        float strength01, double now) {
     if (kind == MemNone || kind >= kMemKindCount) return false;
     if (id >= kNpcPoolSize) return false; // the column can never cover it
     ensure(id);
@@ -342,8 +342,7 @@ bool AiMemory::remember(NpcId id, std::uint8_t kind, std::uint32_t payload,
         if (s.kind() != kind || s.payload() != pay) continue;
         if (t - s.seenAt >= mem_ttl_sec(kind)) continue; // dead; stage 2 reuses it
         const float have = s.strength();
-        s = mem_trace(kind, pay, have > strength01 ? have : strength01, t, gossip && s.is_gossip());
-        ++coalesced_;
+        s = mem_trace(kind, pay, have > strength01 ? have : strength01, t);
         return true;
     }
 
@@ -354,8 +353,7 @@ bool AiMemory::remember(NpcId id, std::uint8_t kind, std::uint32_t payload,
         MemoryTrace& s = row.slot[i];
         const std::uint8_t k = s.kind();
         if (k != MemNone && t - s.seenAt < mem_ttl_sec(k)) continue;
-        s = mem_trace(kind, pay, strength01, t, gossip);
-        ++writes_;
+        s = mem_trace(kind, pay, strength01, t);
         return true;
     }
 
@@ -378,9 +376,7 @@ bool AiMemory::remember(NpcId id, std::uint8_t kind, std::uint32_t payload,
             victim = i;
         }
     }
-    row.slot[victim] = mem_trace(kind, pay, strength01, t, gossip);
-    ++writes_;
-    ++evictions_;
+    row.slot[victim] = mem_trace(kind, pay, strength01, t);
     return true;
 }
 

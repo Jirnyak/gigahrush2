@@ -245,8 +245,8 @@ void same_run(const SaveState& a, const SaveState& b) {
     }
 
     // Padding-free structs, so a raw byte compare is exact rather than optimistic.
-    static_assert(sizeof(Needs) == 8 * 4 + 1 + 3, "Needs has no implicit padding");
-    static_assert(sizeof(Inventory) == 64 * 4, "Inventory has no implicit padding");
+    static_assert(sizeof(Needs) == 48, "Needs has no implicit padding");
+    static_assert(sizeof(Inventory) == 64 * 6, "Inventory has no implicit padding");
     CHECK(std::memcmp(&a.player.clock, &b.player.clock, sizeof(Needs)) == 0);
     CHECK(std::memcmp(&a.player.inv, &b.player.inv, sizeof(Inventory)) == 0);
     CHECK(a.player.hp == b.player.hp);
@@ -339,14 +339,14 @@ void wire_layout() {
     static_assert(kCraftingWire == 93);
     static_assert(kRangedWire == 16);
     static_assert(kCombatSaveWire == 21);
-    static_assert(kStatusWire == 42);
+    static_assert(kStatusWire == 49);
     static_assert(kSamosborWire == 17);
     static_assert(kFastTravelWire == 32);
-    static_assert(kSaveFixedWire == 927);
+    static_assert(kSaveFixedWire == 1074);
     static_assert(kFactionWire == 36);
-    static_assert(save_bytes_for(0) == 1027);
-    static_assert(save_bytes_for(3) == 1027 + 15);
-    static_assert(save_bytes_for(3, 100, 50) == 1027 + 15 + 150);
+    static_assert(save_bytes_for(0) == 1174);
+    static_assert(save_bytes_for(3) == 1174 + 15);
+    static_assert(save_bytes_for(3, 100, 50) == 1174 + 15 + 150);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;

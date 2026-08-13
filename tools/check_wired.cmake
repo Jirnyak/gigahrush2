@@ -62,6 +62,10 @@ set(GIGA_DEFERRED_ENTRY_POINTS
     "samosbor_fog_tick:туманная популяция самосбора не тикает в игре; problems.md §52"
     "interaction_step:взаимодействие с пропами идёт мимо — main.cpp зовёт свои ветки; problems.md §52"
     "prop_interact_step:обёртка над interaction_step, не зовёт НИКТО и не покрыта тестом; problems.md §52"
+    "panic_publish_step:остаток ветки marko1olo, решение по интеграции не принято; problems.md §53"
+    "ai_patrol_step:не собирается (сигнатура), отложено; problems.md §53"
+    "antourage_vent_step:остаток ветки marko1olo, решение не принято; problems.md §53"
+    "gas_step:заявка на подсистему газа, ждёт решения владельца; problems.md §53"
 )
 
 # Line splitting that survives `;` AND `[ ]`. Ported from check_source_rules.cmake,

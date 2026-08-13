@@ -7,8 +7,21 @@ try {
     let out = execSync(declCmd, { encoding: 'utf8', cwd: path.join(__dirname, '..') });
     const funcs = [...new Set(out.split(/\r?\n/).map(s => s.trim()).filter(s => s.length > 0))];
     
+    // Parse GIGA_DEFERRED_ENTRY_POINTS from tools/check_wired.cmake
+    const cmakeStr = fs.readFileSync(path.join(__dirname, '..', 'tools', 'check_wired.cmake'), 'utf8');
+    const deferredFuncs = new Set();
+    const lines = cmakeStr.split(/\r?\n/);
+    for (const l of lines) {
+        const m = l.match(/^\s*"([a-zA-Z0-9_]+):/);
+        if (m) {
+            deferredFuncs.add(m[1]);
+        }
+    }
+
     let failed = false;
     for (const fn of funcs) {
+        if (deferredFuncs.has(fn)) continue;
+
         try {
             const callCmd = `rg "\\b${fn}\\s*\\(" src/`;
             const lines = execSync(callCmd, { encoding: 'utf8', cwd: path.join(__dirname, '..') }).split('\n').filter(l => l.trim().length > 0);

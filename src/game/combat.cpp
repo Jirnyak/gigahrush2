@@ -30,6 +30,7 @@
 #include "world/stain.h" // blood — the universal stain layer
 #include "world/world.h"
 #include "world/types.h"
+#include "game/ai.h"
 
 
 namespace giga::game {
@@ -254,11 +255,19 @@ bool entity_health(const Registry& reg, const NpcPool& pool, Entity e,
 DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
                           std::int16_t raw, DamageChannel ch, Entity source,
                           const MacroGrid* grid, ParticleBurstQueue* particles,
-                          const GravityField* gravity) {
+                          const GravityField* gravity, class AiMemory* mem, double now) {
     DamageResult out;
     if (!reg.valid(target) || raw <= 0) return out;
     if (reg.all_of<Dead>(target)) return out;  // already scheduled to die
     if (reg.all_of<GodMode>(target)) return out; // console god mode: untouchable
+
+    if (mem != nullptr && reg.valid(source) && source != target) {
+        if (const NpcRef* me = reg.try_get<NpcRef>(target)) {
+            if (const NpcRef* him = reg.try_get<NpcRef>(source)) {
+                ai_remember_actor(*mem, me->id, MemFoe, him->id, 1.0f, now);
+            }
+        }
+    }
 
     // Mitigation happens exactly once, here. Nothing downstream sees `raw`.
     std::int16_t dmg = raw;
@@ -618,7 +627,7 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
                              NpcPool& pool, EventBus& bus,
                              LayerId layer, float dt, std::uint64_t tick,
                              ParticleBurstQueue* particles,
-                             const GravityField* gravity) {
+                             const GravityField* gravity, class AiMemory* mem, double now) {
     // The camera holder, resolved ONCE per pass. It is a single entity that every
     // monster may want, so hoisting it out of the loop is free; crowd prey is
     // per-monster and cannot be hoisted the same way ([hunt.h]).
@@ -1802,7 +1811,7 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
 
 std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
                                  bool wantFire, float dt, std::uint64_t tick,
-                                 NoiseField* noise, const StatusSet* status) {
+                                 NoiseField* noise, const StatusSet* status, EventBus* bus) {
     Entity shooter = entt::null;
     for (auto e : reg.view<const CameraTag, const Transform>()) {
         if (reg.get<const Transform>(e).layer != layer) continue;
