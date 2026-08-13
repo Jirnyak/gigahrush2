@@ -307,7 +307,8 @@ float needs_speed_scale(const Needs& n);
 // No allocation, no exceptions, O(n) in the EMBODIED bodies on one layer.
 struct RoomZones; // room_zone.h — incomplete OK; the full type is only needed in the .cpp
 NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
-                     const RoomZones* rooms = nullptr);
+                     const RoomZones* rooms = nullptr,
+                     class AiMemory* mem = nullptr, double now = 0.0);
 
 // Keyed off `UseEffect`, never `ItemCategory` — and the distinction is real:
 // `calm_brew` is category DRINK and `easter_egg` is category FOOD, but both are

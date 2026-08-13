@@ -5,6 +5,7 @@
 #include "game/embody.h"     // NpcRef, body_mass_kg
 #include "game/item_table.h" // inventory_mass_g
 #include "game/needs.h"      // Needs, kNeedMax — the fatigue this charges
+#include "game/noise.h"      // noise_publish, NoiseProfile — crowd footsteps
 #include "game/rpg.h"        // RpgStats, carry_capacity_g
 
 namespace giga::game {
@@ -39,7 +40,8 @@ EncumbranceEffect encumbrance_of(std::uint32_t carriedG, std::uint32_t capacityG
 }
 
 EncumbranceTick encumbrance_step(Registry& reg, NpcPool& pool, LayerId layer,
-                                 float dt, std::uint64_t tick) {
+                                 float dt, std::uint64_t tick,
+                                 NoiseField* noiseField) {
     EncumbranceTick out;
     if (dt <= 0.0f) return out;
 
@@ -96,6 +98,16 @@ EncumbranceTick encumbrance_step(Registry& reg, NpcPool& pool, LayerId layer,
             out.carriedG = carriedG;
             out.capacityG = capacityG;
             out.playerEffect = eff;
+        } else if (noiseField && ((tick & 7u) == (id & 7u))) {
+            // Footsteps only from a body that is actually moving: the 0.25 m²/s²
+            // floor (0.5 m/s) keeps seated and idle bodies silent. Full 3D speed —
+            // a body climbing under a side regime walks as loudly as one on a floor.
+            const auto* vel = reg.try_get<Velocity>(e);
+            const float v2 = vel ? (vel->v.x * vel->v.x + vel->v.y * vel->v.y + vel->v.z * vel->v.z) : 0.0f;
+            if (v2 > 0.25f) {
+                NoiseProfile np{6.0f * eff.noiseMult, 400, 1, NoiseSource::Footstep};
+                noise_publish(*noiseField, layer, view.get<const Transform>(e).pos, np, id);
+            }
         }
     }
     return out;

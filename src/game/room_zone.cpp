@@ -4,6 +4,7 @@
 
 #include "core/jobs.h"        // parallel_for — bake-time only, one job per room bit
 #include "core/rng.h"         // hash2/hash3 — the seat is a hash, not stored state
+#include "game/ai.h"          // ai_remember_cell — recovery that lands files a memory
 #include "game/needs.h"       // kNeedMax — one clamp band for every needs writer
 #include "game/prop_system.h" // spawn_prop_from_id / SubVoxelAnchor — the furnisher
 #include "world/macro_grid.h" // MacroGrid — the bake's walkability test
@@ -93,11 +94,18 @@ bool room_restores(std::uint16_t bit) {
            r.pendingPoo != 0.0f;
 }
 
-void room_recover(Needs& n, std::uint16_t bit, float dt) {
+void room_recover(Needs& n, std::uint16_t bit, float dt,
+                  AiMemory* mem, NpcId id, int cx, int cy, int cz, double now) {
     if (dt <= 0.0f) return;
     const int i = floor_room_bit_index(bit);
     if (i < 0) return;
     const RoomRecovery& r = kRoomRecovery[i];
+
+    const float oldFood  = n.food;
+    const float oldWater = n.water;
+    const float oldSleep = n.sleep;
+    const float oldPee   = n.pee;
+    const float oldPoo   = n.poo;
 
     // Local clamp rather than a call into needs.cpp's file-static: the band is the
     // same [0, kNeedMax] and it is stated once, here, for this file's five writers.
@@ -117,6 +125,20 @@ void room_recover(Needs& n, std::uint16_t bit, float dt) {
     // consequence of eating, which is the whole point of the kitchen row.
     n.pendingPee += r.pendingPee * dt;
     n.pendingPoo += r.pendingPoo * dt;
+
+    // File a place memory only for recovery that LANDED (the bar moved): a full
+    // body learns nothing from a kitchen. MemRest additionally waits for a real
+    // reserve (> 50) so one tick of dozing does not brand a bedroom as home.
+    if (mem && id != kInvalidNpc) {
+        if (r.food > 0.0f && n.food > oldFood)
+            ai_remember_cell(*mem, id, MemFood, cx, cy, cz, 1.0f, now);
+        if (r.water > 0.0f && n.water > oldWater)
+            ai_remember_cell(*mem, id, MemWater, cx, cy, cz, 1.0f, now);
+        if (r.sleep > 0.0f && n.sleep > oldSleep && n.sleep > 50.0f)
+            ai_remember_cell(*mem, id, MemRest, cx, cy, cz, 1.0f, now);
+        if ((r.pee > 0.0f && n.pee < oldPee) || (r.poo > 0.0f && n.poo < oldPoo))
+            ai_remember_cell(*mem, id, MemToilet, cx, cy, cz, 1.0f, now);
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -4251,8 +4251,9 @@ int main(int argc, char** argv) {
                 // sleep bar the clock then reads for its exhaustion penalty — a
                 // load taxes you on the tick you carry it, not one tick later.
                 encumbrance = game::encumbrance_step(reg, pool, activeLayer, kSimDt,
-                                                     simTick);
-                needs = game::needs_step(reg, pool, activeLayer, kSimDt, &roomZones);
+                                                     simTick, &noiseField);
+                needs = game::needs_step(reg, pool, activeLayer, kSimDt, &roomZones,
+                                         &aiMem, simNow);
                 needsHpLost += needs.hpLost;
                 // The other half of the acceptance trail. `bodies` says the clock is
                 // no longer a one-body clock, `recovering` says rooms are actually

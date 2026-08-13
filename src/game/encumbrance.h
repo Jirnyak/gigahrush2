@@ -104,6 +104,8 @@ struct EncumbranceTick {
     bool sawPlayer = false;
 };
 
+struct NoiseField;
+
 // One staggered sweep over the embodied bodies on `layer`.
 //
 // Writes `Mass` (body + load) on every body it visits, and charges the fatigue to
@@ -112,8 +114,15 @@ struct EncumbranceTick {
 // multiplier is folded together and a second writer there is how two systems
 // start fighting over a body's pace.
 //
+// With a non-null `noiseField`, crowd bodies it visits also publish a Footstep
+// into the noise field — but only MOVING ones (velocity gate): a body parked on
+// a chair is not walking, and eff.noiseMult already scales the loud-when-loaded
+// half. The camera holder never publishes here; the player's own noise is the
+// input bridge's business.
+//
 // Runs anywhere in the tick before movement is resolved. No allocation.
 EncumbranceTick encumbrance_step(Registry& reg, NpcPool& pool, LayerId layer,
-                                 float dt, std::uint64_t tick);
+                                 float dt, std::uint64_t tick,
+                                 NoiseField* noiseField = nullptr);
 
 } // namespace giga::game

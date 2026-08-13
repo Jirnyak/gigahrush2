@@ -248,7 +248,7 @@ float needs_speed_scale(const Needs& n) {
 }
 
 NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
-                     const RoomZones* rooms) {
+                     const RoomZones* rooms, AiMemory* mem, double now) {
     NeedsTick out;
     if (dt <= 0.0f) return out;
 
@@ -294,7 +294,8 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
             const int cy = wrap_macro(static_cast<int>(std::floor(tr.pos.y / kCellSize)));
             const std::uint16_t bit = room_bit_at(rooms->kind, rooms->number, cx, cy);
             if (room_restores(bit)) {
-                room_recover(n, bit, dt);
+                const int cz = wrap_macro(static_cast<int>(std::floor(tr.pos.z / kCellSize)));
+                room_recover(n, bit, dt, mem, id, cx, cy, cz, now);
                 ++out.recovering;
             }
         }

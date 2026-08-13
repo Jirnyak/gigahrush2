@@ -244,7 +244,14 @@ bool room_restores(std::uint16_t bit);
 // Advance `n` by one `dt` of standing in a room of kind `bit`. Pure: no registry,
 // no world, no allocation, and a `bit` of 0 (a wall line, or a room kind with a
 // zero row) is a no-op. Clamps into [0, kNeedMax] exactly like `needs_advance`.
-void room_recover(Needs& n, std::uint16_t bit, float dt);
+//
+// With a non-null `mem`, a recovery that actually LANDED (the bar moved, not
+// merely stood in the right room) files a place memory for `id` at cell
+// (cx, cy, cz): MemFood / MemWater / MemRest / MemToilet. Landing is the gate so
+// a full body does not memorise a kitchen it could not use.
+void room_recover(Needs& n, std::uint16_t bit, float dt,
+                  AiMemory* mem = nullptr, NpcId id = kInvalidNpc,
+                  int cx = 0, int cy = 0, int cz = 0, double now = 0.0);
 
 // ---------------------------------------------------------------------------
 // TABLE 3 — what FURNITURE a room kind contains.
