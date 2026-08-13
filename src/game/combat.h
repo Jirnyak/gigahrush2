@@ -626,10 +626,17 @@ std::uint32_t hazard_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                           ParticleBurstQueue* particles = nullptr,
                           const GravityField* gravity = nullptr);
 
+// Optional `gravity`: the field the LOB is solved in. A ballistic launch is one
+// vector equation, `v0 = delta/T - 0.5*a*T`, and the version of it that lived here
+// was that solution written out in a basis where `a` is along -Z. Passing the field
+// makes the frame the layer's own; passing nullptr keeps +Z and is bit-for-bit the
+// pre-change path. `mob_attack_step` already holds one — it forwards the same
+// pointer it gives `apply_damage`.
 void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
                       const vec3& to, std::int16_t dmg,
                       std::uint16_t projSpeedMmps, Entity source,
-                      std::uint8_t projType);
+                      std::uint8_t projType,
+                      const GravityField* gravity = nullptr);
 
 void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
                           const vec3& dir, std::int16_t dmg,

@@ -53,6 +53,7 @@
 #include "sim/physics.h"
 #include "world/lattice.h"
 #include "world/materials.h"
+#include "world/gravity.h"
 #include "world/level_stack.h"
 #include "world/nav.h"
 #include "world/world.h"
@@ -3189,6 +3190,118 @@ static void test_player_shoots() {
 }
 
 
+// THE LOB IS SOLVED IN THE LAYER'S FRAME, not in Z.
+//
+// A ballistic launch is one vector equation — `v0 = Δ/T − 0.5·a·T` — and what stood
+// in `spawn_projectile` was that solution written out in a basis where `a` is along
+// −Z: `sqrt(dx²+dy²)` for the horizontal distance, `dz` for the vertical one, and
+// the whole `+0.5·g·T` compensation on Z. Correct while gravity really is −Z.
+//
+// So the test is the same shot under all SIX directional regimes, with the target
+// offset along the regime's own vertical so the lob has real work to do. Passing for
+// −Z alone is what the old code did; passing for all six is the claim.
+//
+// Latent rather than live, and worth stating: `kPadicGravity` is NegZ and padic is
+// the only geometric module, so no shipping floor exercises this today. It is a law
+// about what the engine may be asked to do, not about what one floor asks.
+static void test_lob_isotropy() {
+    LevelStack stack;
+    LayerId layer = stack.push_layer();
+    // A big hollow box, so a shot has somewhere to arc in whichever direction the
+    // regime calls "up".
+    for (int z = 14; z <= 30; ++z)
+        for (int y = 14; y <= 30; ++y)
+            for (int x = 14; x <= 30; ++x)
+                stack.layer(layer).grid().clear_cell(x, y, z);
+
+    const GravityRegime regimes[6] = {
+        GravityRegime::NegX, GravityRegime::PosX, GravityRegime::NegY,
+        GravityRegime::PosY, GravityRegime::NegZ, GravityRegime::PosZ};
+
+    for (int r = 0; r < 6; ++r) {
+        const GravityRegime reg_ = regimes[r];
+        const CellStep down = regime_down(reg_);
+        const vec3 gdir{static_cast<float>(down.x), static_cast<float>(down.y),
+                        static_cast<float>(down.z)};
+        stack.layer(layer).gravity().regime = reg_;
+        stack.layer(layer).gravity().global = gdir * 9.81f;
+        const vec3 up = gdir * -1.0f;
+
+        Registry reg;
+        NpcPool pool;
+        pool.init();
+        EventBus bus;
+
+        // Shooter and target 12 m apart along an axis PERPENDICULAR to the regime's
+        // gravity, with the target 2 m higher along the regime's own up. The lob has
+        // to climb, whichever axis climbing is.
+        vec3 axisA{1.0f, 0.0f, 0.0f};
+        if (std::fabs(dot(axisA, up)) > 0.5f) axisA = vec3{0.0f, 1.0f, 0.0f};
+
+        const vec3 base{44.0f, 44.0f, 44.0f};
+        Entity shooter = reg.create();
+        Transform st;
+        st.pos = base;
+        st.layer = layer;
+        reg.emplace<Transform>(shooter, st);
+        reg.emplace<MobRef>(shooter, MobRef{0, 1, 500, 500});
+
+        Entity target = reg.create();
+        Transform tt;
+        tt.pos = base + axisA * 12.0f + up * 2.0f;
+        tt.layer = layer;
+        reg.emplace<Transform>(target, tt);
+        reg.emplace<MobRef>(target, MobRef{0, 1, 4000, 4000});
+
+        // Fired through the real spawner, with the layer's own field — the pointer
+        // `mob_attack_step` forwards.
+        // 14 m/s and not the 60 m/s a fast rifle gives, and this number is the
+        // whole test. My first version fired at 30000 mmps: T = 0.17 s over 12 m,
+        // so the ballistic drop is 0.5*g*T^2 = 0.09 m against a 0.75 m hit sphere.
+        // The shot connected whatever frame the lob was solved in — the arc was
+        // smaller than the target. At 7000 mmps T = 0.75 s and the drop is 1.69 m,
+        // more than twice the hit radius, so aiming in the wrong frame MISSES.
+        spawn_projectile(reg, layer, st.pos, tt.pos, 50, 7000u, shooter,
+                         static_cast<std::uint8_t>(ProjType::Bullet),
+                         &stack.layer(layer).gravity());
+
+        const std::int16_t hp0 = reg.get<MobRef>(target).hp;
+        for (int i = 0; i < 400 && !reg.view<const Projectile>().empty(); ++i)
+            projectile_step(reg, pool, bus, stack, layer, kSimDt,
+                            static_cast<std::uint64_t>(i));
+        CHECK(reg.get<MobRef>(target).hp < hp0);   // <<< it connected
+        CHECK(reg.get<MobRef>(shooter).hp == 500); // ...and not with the shooter
+    }
+    std::fprintf(stderr,
+                 "[lob] connected under all 6 directional gravity regimes\n");
+
+    // And the null-field path is the pre-change one: no field means +Z, which is
+    // what every existing call site relies on staying true.
+    {
+        stack.layer(layer).gravity().regime = GravityRegime::NegZ;
+        stack.layer(layer).gravity().global = vec3{0.0f, 0.0f, -9.81f};
+        Registry a, b;
+        const vec3 from{44.0f, 44.0f, 44.0f};
+        const vec3 to{56.0f, 44.0f, 46.0f};
+        spawn_projectile(a, layer, from, to, 50, 30000u, entt::null, 0, nullptr);
+        spawn_projectile(b, layer, from, to, 50, 30000u, entt::null, 0,
+                         &stack.layer(layer).gravity());
+        vec3 va{0, 0, 0}, vb{0, 0, 0}, pa{0, 0, 0}, pb{0, 0, 0};
+        for (auto e : a.view<const Velocity, const Transform>()) {
+            va = a.get<const Velocity>(e).v;
+            pa = a.get<const Transform>(e).pos;
+        }
+        for (auto e : b.view<const Velocity, const Transform>()) {
+            vb = b.get<const Velocity>(e).v;
+            pb = b.get<const Transform>(e).pos;
+        }
+        // Bit-for-bit: dot with (0,0,1) IS dz, and Δ − up*dz IS (dx, dy, 0).
+        CHECK(va.x == vb.x && va.y == vb.y && va.z == vb.z);
+        CHECK(pa.x == pb.x && pa.y == pb.y && pa.z == pb.z);
+    }
+}
+
+
 // GRENADES — the one thing `Projectile::team` was deleted for.
 //
 // The deletion landed on 2026-08-12 and the manifesto clause it was made to satisfy
@@ -5173,6 +5286,7 @@ int main() {
     test_mob_behaviour();
     test_ranged_table();
     test_player_shoots();
+    test_lob_isotropy();
     test_grenade();
     test_needs_all();
     test_noise_all();

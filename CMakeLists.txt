@@ -872,7 +872,23 @@ if(GIGA_BUILD_TESTS)
     # cell boundary, one tick of gravity drops it into the cell below, and the ray to a
     # body then passes UNDER a one-cell wall. The code was right and the test was
     # wrong; a wall in this game is a column of cells.
-        PASS_REGULAR_EXPRESSION "game_test: 236044 checks, 0 failures")
+    # 236044 -> 236058 (+14) on 2026-08-13: the LOB is solved in the layer's frame.
+    # A ballistic launch is one vector equation, v0 = delta/T - 0.5*a*T, and what
+    # stood in spawn_projectile was that solution written out in a basis where `a` is
+    # along -Z: sqrt(dx^2+dy^2) for the horizontal distance, dz for the vertical, and
+    # the whole +0.5*g*T compensation on Z. projectile_step has integrated along the
+    # real gravity vector since 2026-08-12, so the shot FLEW honestly and was AIMED in
+    # the wrong frame — discipline applied unevenly inside one file.
+    #   [lob] connected under all 6 directional gravity regimes
+    # Mutation (hardcode up = +Z again) -> 5 red, one per non-NegZ regime, and NegZ
+    # green because that is the frame the mutation assumes. That signature is the
+    # evidence; a count of 6 or 1 would mean the test was measuring something else.
+    # The FIRST version of it fired at 30000 mmps and the mutation left it GREEN: over
+    # 12 m that is T = 0.17 s and a 0.09 m drop against a 0.75 m hit sphere, so the arc
+    # was smaller than the target and the frame could not matter. 7000 mmps gives
+    # T = 0.75 s and a 1.69 m drop. Latent, not live: kPadicGravity is NegZ and padic
+    # is the only geometric module, so no shipping floor exercises it.
+        PASS_REGULAR_EXPRESSION "game_test: 236058 checks, 0 failures")
 
 
 

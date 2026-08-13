@@ -870,8 +870,10 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
     std::uint32_t swings = 0;
     for (const Swing& s : queued) {
         if (s.ranged) {
+            // `gravity` forwarded, the same pointer this pass already hands
+            // apply_damage: the lob is solved in the layer's frame, not in Z.
             spawn_projectile(reg, layer, s.from, s.to, s.raw,
-                             s.projSpeedMmps, s.mob, s.proj);
+                             s.projSpeedMmps, s.mob, s.proj, gravity);
             ++swings;
             if (MobCombat* mc = reg.try_get<MobCombat>(s.mob))
                 mc->cooldownMs = s.cd;
@@ -1029,15 +1031,55 @@ void sync_armour(Registry& reg, NpcPool& pool, Entity e) {
 void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
                       const vec3& to, std::int16_t dmg,
                       std::uint16_t projSpeedMmps, Entity source,
-                      std::uint8_t projType) {
+                      std::uint8_t projType, const GravityField* gravity) {
     // Table speed is cells/s in fixed point; a cell is kCellSize metres.
     float speed = static_cast<float>(projSpeedMmps) * 0.001f * kCellSize;
     if (speed < 1.0f) speed = 12.0f;   // a ranged kind with no authored speed
 
-    const float dx = wrap_delta_f(from.x, to.x, kWorldExtent);
-    const float dy = wrap_delta_f(from.y, to.y, kWorldExtent);
-    const float dz = wrap_delta_f(from.z, to.z, kWorldExtent);
-    const float flat = std::sqrt(dx * dx + dy * dy);
+    // THE LOB IS SOLVED IN THE LAYER'S OWN FRAME, not in Z.
+    //
+    // The ballistic problem is one vector equation. Under a constant acceleration
+    // `a`, a shot launched at `v0` is at `r0 + v0*T + 0.5*a*T^2`, so the launch that
+    // arrives at the target after T is
+    //
+    //     v0 = Δ/T − 0.5*a*T
+    //
+    // and there is no axis in it. What stood here was exactly that solution written
+    // out in a basis where `a = (0, 0, −kProjGravity)`: the two "horizontal"
+    // components got Δ/T (no acceleration along them) and the "vertical" one got
+    // Δz/T + 0.5*g*T. Correct — and only while `a` really is along −Z.
+    //
+    // Under any other GravityRegime it puts the WHOLE compensation on an axis with
+    // no acceleration and none on the axis that has it, so the miss is of order
+    // 0.5*g*T² — a quarter of a metre at 12 m, one and a half at 30, and wrong along
+    // two axes at once. `projectile_step` has integrated along the real gravity
+    // vector since 2026-08-12; only the launch was still aiming at −Z, so the shot
+    // FLEW honestly and was AIMED in the wrong frame. Discipline applied unevenly
+    // inside one file is the sign of a law kept by hand rather than by a gate.
+    //
+    // Latent, not live, and worth saying plainly: `kPadicGravity` is NegZ and padic
+    // is the only geometric module, so no shipping floor exercises this today. It is
+    // fixed because "x/y/z are equal citizens" is a law about what the engine may be
+    // asked to do, not about what one floor happens to ask.
+    //
+    // `up` is the local vertical; with no field it is +Z and every line below is
+    // bit-for-bit what it replaced (dot with (0,0,1) IS dz, and Δ − up*dz IS
+    // (dx, dy, 0) exactly).
+    vec3 up{0.0f, 0.0f, 1.0f};
+    if (gravity) {
+        const vec3 g = gravity->at(from);
+        const float gLen = length(g);
+        if (gLen > 1e-6f) up = g * (-1.0f / gLen);
+    }
+
+    const vec3 delta{wrap_delta_f(from.x, to.x, kWorldExtent),
+                     wrap_delta_f(from.y, to.y, kWorldExtent),
+                     wrap_delta_f(from.z, to.z, kWorldExtent)};
+    // Δ split into the part along the local vertical and the part perpendicular to
+    // it — the projection that `dz` and `sqrt(dx*dx + dy*dy)` were hardcoding.
+    const float dUp = dot(delta, up);
+    const vec3 across = delta - up * dUp;
+    const float flat = length(across);
     if (flat < 1e-3f) return;
 
     // THE MUZZLE IS OUTSIDE THE SHOOTER, and this is what pays for a projectile that
@@ -1056,14 +1098,15 @@ void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
     // firing direction, which is more than twice the hit radius. The time of flight
     // is recomputed from the distance that ACTUALLY remains, so the lob still lands
     // on the target instead of 1.7 m past it.
-    const float ux = dx / flat;
-    const float uy = dy / flat;
+    const vec3 fwd = across * (1.0f / flat);   // was (dx/flat, dy/flat, 0)
     const float travel = flat - kMuzzleForward;
     // Point-blank: the target is already inside the barrel length. Floor the distance
     // rather than refusing the shot — a monster with its face against you must still
     // be able to fire, and the arc over 0.1 m is nil anyway.
     const float tof = (travel > 0.1f ? travel : 0.1f) / speed;
-    const float vz = dz / tof + 0.5f * kProjGravity * tof;
+    // The compensation, now on the axis that actually has the acceleration. Same
+    // expression as before, one basis vector different: `dUp` for `dz`, `up` for +Z.
+    const float vUp = dUp / tof + 0.5f * kProjGravity * tof;
 
     Entity e = reg.create();
     Transform tr;
@@ -1073,12 +1116,14 @@ void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
     // go wrong. Routed through anyway so there is exactly one function in the tree
     // that answers "where is the barrel", instead of one that answers it and one that
     // happens to agree.
-    tr.pos = muzzle_point(vec3{from.x, from.y, from.z + 0.6f},
-                          vec3{ux, uy, 0.0f}, from);
+    // `up * 0.6` and not `+0.6 z`: chest height is measured against the floor the
+    // body is standing on, and which way that is comes from the field.
+    tr.pos = muzzle_point(from + up * 0.6f, fwd, from);
     tr.layer = layer;
     reg.emplace<Transform>(e, tr);
-    reg.emplace<Velocity>(
-        e, Velocity{vec3{dx / flat * speed, dy / flat * speed, vz}});
+    // v0 = fwd*speed + up*vUp — the same two terms as before (`(ux,uy,0)*speed` and
+    // `vz` on Z), now expressed in the frame the layer actually has.
+    reg.emplace<Velocity>(e, Velocity{fwd * speed + up * vUp});
     reg.emplace<AABB>(e, AABB{vec3{0.10f, 0.10f, 0.10f}});
     // projectile_step owns this entity's motion; keep physics_step off it.
     reg.emplace<SelfIntegrating>(e);
@@ -1720,7 +1765,14 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
             // no impact normal is needed here.
             if (particles) {
                 const int n = 4 + h.dmg / 4;
-                particles->push(h.impactPos, vec3{0.0f, 0.0f, 0.6f},
+                // The 0.6 bias rides the layer's UP, not +Z — the same frame
+                // correction apply_damage's blood spray already makes, and the
+                // last hardcoded vertical in this file. Magnitude untouched.
+                const vec3 gg = stack.layer(layer).gravity().at(h.impactPos);
+                const float ggLen = length(gg);
+                const vec3 sparkUp = ggLen > 1e-6f ? gg * (-0.6f / ggLen)
+                                                   : vec3{0.0f, 0.0f, 0.6f};
+                particles->push(h.impactPos, sparkUp,
                                 ParticleKind::Spark,
                                 static_cast<std::uint8_t>(n > 12 ? 12 : n), 0,
                                 static_cast<std::uint32_t>(tick) ^
