@@ -176,6 +176,8 @@ void ImGuiLayer::begin_frame() {
 
 void ImGuiLayer::draw_crt_overlay() {
     if (!ready_) return;
+    static const bool kDisableCrt = (std::getenv("GIGA_NO_CRT") != nullptr);
+    if (kDisableCrt) return;
     ImGuiIO& io = ImGui::GetIO();
     const float w = io.DisplaySize.x;
     const float h = io.DisplaySize.y;
