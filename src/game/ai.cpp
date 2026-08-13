@@ -632,6 +632,14 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
     // from the previous body; `haveRecall` is what gates every read.
     MemoryRecall recall;
 
+    // This tick's seat claims ([problems.md] §27): a transient list, no owner
+    // column, no handshake. Sized for the embodied window (~64 bodies on errands),
+    // not the pool; overflow degrades to the pre-claims shared seat, never UB.
+    constexpr int kSeatClaimCap = 128;
+    constexpr int kSeatClaimAttempts = 8;
+    std::uint32_t seatClaims[kSeatClaimCap];
+    int numSeatClaims = 0;
+
     // One allocation-free sweep over the packed columns. Nothing here emplaces or
     // destroys a component, so the view cannot be invalidated mid-iteration —
     // that hazard lives in `ai_init`, by construction rather than by comment.
@@ -923,9 +931,40 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                 // placed them from, so the body walks to a thing that is really
                 // there — which is what makes the whole errand VISIBLE instead of
                 // being a number in stderr.
-                room_seat_offset(idSeed, here, rx, ry, roomStride, ox, oy);
-                const int sx = rx * roomStride + ox;
-                const int sy = ry * roomStride + oy;
+                //
+                // CLAIMED THIS TICK, RE-CLAIMED EVERY TICK ([problems.md] §27):
+                // the loop below rotates to the next seat while the hashed one is
+                // already on this tick's claim list. No persistent owner state —
+                // the list dies with the tick, and because this view is iterated
+                // in a stable order (nothing here emplaces or destroys, the same
+                // structural fact the sweep banner states), the same body wins
+                // the same contest every tick: no flicker, and a vacated better
+                // seat is re-won on the very next tick.
+                int sx = 0, sy = 0;
+                for (int attempt = 0; attempt < kSeatClaimAttempts; ++attempt) {
+                    room_seat_offset(idSeed, here, rx, ry, roomStride, ox, oy,
+                                     attempt);
+                    sx = rx * roomStride + ox;
+                    sy = ry * roomStride + oy;
+                    // The seat's CELL, all three axes: kMacroDim is 128, so 7
+                    // bits per axis pack losslessly. Dropping cz would make two
+                    // storeys of one kitchen column contest a single seat.
+                    const std::uint32_t seatKey =
+                        static_cast<std::uint32_t>(sx) |
+                        (static_cast<std::uint32_t>(sy) << 7) |
+                        (static_cast<std::uint32_t>(cz & 127) << 14);
+                    bool taken = false;
+                    for (int i = 0; i < numSeatClaims; ++i) {
+                        if (seatClaims[i] == seatKey) { taken = true; break; }
+                    }
+                    if (!taken) {
+                        if (numSeatClaims < kSeatClaimCap)
+                            seatClaims[numSeatClaims++] = seatKey;
+                        break;
+                    }
+                    // All attempts taken: keep the last candidate — a shared seat
+                    // is the pre-claims behaviour, not a new failure mode.
+                }
 
                 // A seat inside solid geometry is unreachable, and a body that
                 // cannot reach its seat would push into the wall for the rest of

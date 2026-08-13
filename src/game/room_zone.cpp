@@ -175,7 +175,7 @@ void room_slot_offset(std::uint8_t slot, int stride, int& ox, int& oy) {
 }
 
 void room_seat_offset(std::uint32_t idSeed, std::uint16_t roomBit, int rx, int ry,
-                      int stride, int& ox, int& oy) {
+                      int stride, int& ox, int& oy, int attempt) {
     const int span = stride - 1; // interior width: offsets 1..stride-1
     if (span <= 0) {
         ox = 0;
@@ -196,14 +196,18 @@ void room_seat_offset(std::uint32_t idSeed, std::uint16_t roomBit, int rx, int r
         if (f.room != roomBit || !f.useSpot) continue;
         if (n < kRoomSlots) spots[n++] = f.slot;
     }
+    // `attempt` advances to the next candidate — the same rotation for both
+    // branches, so contention resolution never depends on whether a room kind
+    // happens to own furniture. Attempt 0 is the old function bit-for-bit.
+    const std::uint32_t a = static_cast<std::uint32_t>(attempt);
     if (n != 0) {
-        room_slot_offset(spots[h % n], stride, ox, oy);
+        room_slot_offset(spots[(h + a) % n], stride, ox, oy);
         return;
     }
 
     // No furniture for this room kind: a free interior cell, exactly as before.
-    ox = 1 + static_cast<int>(h % static_cast<std::uint32_t>(span));
-    oy = 1 + static_cast<int>((h >> 16) % static_cast<std::uint32_t>(span));
+    ox = 1 + static_cast<int>((h + a) % static_cast<std::uint32_t>(span));
+    oy = 1 + static_cast<int>(((h >> 16) + a) % static_cast<std::uint32_t>(span));
 }
 
 std::size_t RoomZones::resident_bytes() const {

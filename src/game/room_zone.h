@@ -371,8 +371,14 @@ void room_slot_offset(std::uint8_t slot, int stride, int& ox, int& oy);
 // cot), the body is seated AT one of those, chosen by its identity so a crowd
 // spreads across them. A room with no use spot falls back to a free interior cell,
 // which is what keeps every un-furnished room kind working exactly as before.
+//
+// `attempt` rotates to the NEXT candidate seat when the hashed one is already
+// claimed this tick (ai_step's transient claim list, [problems.md] §27): attempt 0
+// is bit-for-bit the old function, attempt k the k-th alternative. Trailing and
+// defaulted so the callers that never contend (tests, single-body paths) read
+// unchanged.
 void room_seat_offset(std::uint32_t idSeed, std::uint16_t roomBit, int rx, int ry,
-                      int stride, int& ox, int& oy);
+                      int stride, int& ox, int& oy, int attempt = 0);
 
 // Furnish every room on `layer` from `kRoomFurniture`, and return how many pieces
 // landed. Spawns ordinary prop ECS entities through `spawn_prop_from_id`, so the

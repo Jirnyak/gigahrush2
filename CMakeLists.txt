@@ -902,7 +902,11 @@ if(GIGA_BUILD_TESTS)
     # The +4 pin the side-regime property (suite_faction2 §4b): under PosX the
     # feud steers in the (y, z) plane and the gravity-axis sentinel survives.
     # Mutation (revert to the .x/.y literal writes) -> red on the sentinel.
-        PASS_REGULAR_EXPRESSION "game_test: 240230 checks, 0 failures")
+    # 240230 -> 240234 (+4) on 2026-08-14: seat claims (§27). The +4 pin the
+    # attempt-rotation: a contested bathroom pan has a real second pan, two pans
+    # wrap at attempt 2, unfurnished rooms rotate free cells, bounds hold
+    # (suite_rooms). Attempt 0 is pinned as the old function by every prior call.
+        PASS_REGULAR_EXPRESSION "game_test: 240234 checks, 0 failures")
 
 
 

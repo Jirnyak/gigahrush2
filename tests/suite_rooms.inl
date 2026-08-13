@@ -386,6 +386,27 @@ void rooms_seat_is_the_micro_goal() {
             if (f.room == room_bit(u.room) && f.useSpot) ++declared;
         CHECK(distinctSpots == declared);
     }
+
+    // --- attempt: the claim-rotation ([problems.md] §27) -------------------------
+    // Attempt 0 must be the OLD function bit-for-bit — the default argument is the
+    // no-contention path and every call above already pins it. Rotation must (a)
+    // move to a DIFFERENT seat when the room offers more than one candidate, and
+    // (b) cycle, not wander: with n candidates, attempt n is attempt 0 again.
+    {
+        // Bathroom declares two pans; a contested first choice has a real second.
+        int a0x = 0, a0y = 0, a1x = 0, a1y = 0, a2x = 0, a2y = 0;
+        room_seat_offset(1234u, room_bit(RoomBit::Bathroom), 4, 4, stride, a0x, a0y, 0);
+        room_seat_offset(1234u, room_bit(RoomBit::Bathroom), 4, 4, stride, a1x, a1y, 1);
+        room_seat_offset(1234u, room_bit(RoomBit::Bathroom), 4, 4, stride, a2x, a2y, 2);
+        CHECK(!(a0x == a1x && a0y == a1y)); // the alternative is a different pan
+        CHECK(a0x == a2x && a0y == a2y);    // two pans: attempt 2 wraps to 0
+        // Unfurnished rooms rotate over free interior cells the same way.
+        int b0x = 0, b0y = 0, b1x = 0, b1y = 0;
+        room_seat_offset(1234u, kNoFurniture, 5, 9, stride, b0x, b0y, 0);
+        room_seat_offset(1234u, kNoFurniture, 5, 9, stride, b1x, b1y, 1);
+        CHECK(!(b0x == b1x && b0y == b1y));
+        CHECK(b1x >= 1 && b1x <= stride - 1 && b1y >= 1 && b1y <= stride - 1);
+    }
 }
 
 // Walk `n` starving bodies for `ticks` and report what the AI did with them. With
