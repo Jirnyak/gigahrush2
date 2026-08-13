@@ -839,4 +839,18 @@ static void test_antourage_all() {
         CHECK(cloth_live_pins(w3.grid(), sheet) == 0u);
         CHECK(!antourage_alive(w3.grid(), sheet));
     }
+
+    // PipeNetwork component connectivity and ventilation
+    {
+        World w4;
+        generate_floor(w4, 0, floor_spec(FloorKind::Residential), 1337u);
+        AntourageBake b4;
+        bake_antourage(w4, 0, 1337u, b4);
+        CHECK(b4.pipeComponent.size() == kMacroCells);
+        CHECK(b4.pipeComponentCount > 0);
+        CHECK(b4.pipeGasOxy.size() == b4.pipeComponentCount + 1);
+        
+        // Vent step runs without error on gas field
+        antourage_vent_step(w4, b4, 0.016f);
+    }
 }
