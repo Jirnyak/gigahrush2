@@ -63,8 +63,43 @@ module can flip or tilt gravity as its own rule. Radial gravity (planetoids),
 sideways gravity (wall-walking), or zero-g (leave `GravityAffected` off the
 entity) all fall out of the same vector.
 
+## Ballistics reads it too — and the shape of getting that wrong
+
+A projectile launch is one vector equation. Under a constant acceleration `a`,
+a shot is at `r0 + v0*T + 0.5*a*T^2`, so the launch that arrives after `T` is
+
+    v0 = delta/T - 0.5*a*T
+
+There is no axis in it. `spawn_projectile` carried that solution written out in
+a basis where `a` is along -Z until 2026-08-13 — `sqrt(dx*dx + dy*dy)` for the
+horizontal distance, `dz` for the vertical one, and the whole `+0.5*g*T`
+compensation on Z. Three quantities, each meaning something the axis letter only
+happens to spell under `NegZ`:
+
+| written | actually means |
+|---|---|
+| `sqrt(dx*dx + dy*dy)` | length of delta projected onto the plane normal to **g** |
+| `dz` | `dot(delta, up)`, where `up = -g/|g|` |
+| `+0.5*g*T` on Z | the compensation along `up` |
+
+Under `PosX` that puts the whole correction on an axis with no acceleration and
+none on the axis that has it — a miss of order `0.5*g*T^2`.
+
+**The lesson generalises past this one function, which is why it is written down
+here and not only in the commit.** The isotropic form is SHORTER than the
+anisotropic one: one projection instead of three separate expressions. Code that
+looks longer because it "handles all three axes" is usually code that has not
+found the projection yet.
+
+**And it is not enough for the integrator to be right.** `projectile_step` had
+been pulling along the real vector since 2026-08-12 while the launch still aimed
+at Z, so the shot FLEW honestly and was AIMED in the wrong frame. Half a system
+in the right frame reads as working, and does, on the one regime everything ships
+with. Ask both halves.
+
 ## Connections
 
-Read by [physics.md](physics.md). Owned per-layer by [world.md](world.md); a
-[floor module](floors.md) may install a `region` override as part of its
-rule-set.
+Read by [physics.md](physics.md) and by combat's launch and blast paths
+([Docs/specs/09](Docs/specs/09_COMBAT_BALLISTICS_AND_RPG.md) §2.2). Owned
+per-layer by [world.md](world.md); a [floor module](floors.md) may install a
+`region` override as part of its rule-set.
