@@ -11,6 +11,7 @@
 #include "game/mob_spawn.h"   // MobRef — the scope exclusion
 #include "game/needs.h"       // needs_roll — substitute for an unseeded pool row
 #include "game/door.h"        // door_nearest_shelter — hermetic flee target (§23)
+#include "game/role.h"        // RoleTraits, role_traits — archetype multipliers
 #include "game/room_zone.h"   // room affordance table + baked fields (§27 legs a,b)
 #include "sim/diffusion.h"    // diffusion_gradient — the flee steering field
 #include "world/field.h"      // Field<float>
@@ -255,6 +256,16 @@ void score_intents(const Perception& p, const Needs& needs,
         9.0f + rhythm + wanderJitter + (p.isTraveler ? 19.0f : 0.0f) +
         local(IntentWander) + stick(IntentWander) - urgent * 12.0f -
         threat * 22.0f - tpen(IntentWander));
+
+    // Role traits ([role.h] TABLE 1) — multipliers BEFORE identity jitter, so the
+    // jitter still breaks ties AFTER a role has stated its preference. Resident is
+    // the all-ones row: a roleless build scores bit-for-bit what it scored before.
+    const RoleTraits& rt = role_traits(static_cast<RoleId>(p.role));
+    out[IntentWork]   *= rt.workDrive;
+    out[IntentPatrol] *= rt.patrolDrive;
+    out[IntentSocial] *= rt.sociability;
+    out[IntentWork]   += rt.scavengeDrive * p.localScore[IntentWork] * (1.0f - threat);
+    out[IntentHeal]   += rt.careDrive * p.nearbyWounded01 * (1.0f - threat);
 
     // addIdentityJitter: each intent gets a per-body signed nudge on its own
     // "score:<name>" channel (amp 2.5), then a final clamp. This breaks ties
@@ -656,6 +667,45 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
         }
         brain.lastHp = hpNow;
 
+        // --- Medic: heal nearby wounded, and measure the ward ----------------
+        // Every tick, not on the re-plan cadence: the credit is dt-scaled, and
+        // running it 1/8th of the time would silently divide kMedicHealPerSec by
+        // the stagger. Cost: medics are 1-3% of the embodied window, and the scan
+        // is over that window, not the pool. The credit lands in the PATIENT's
+        // hpBank — the same bank the Medical room feeds — and the medic pays for
+        // the shift in sleep, so care is work, not a free aura.
+        const std::uint8_t roleId = pool.role(id);
+        float nearbyWounded01 = 0.0f;
+        if (roleId == static_cast<std::uint8_t>(RoleId::Medic)) {
+            float woundedCount = 0.0f;
+            float totalCount = 0.0f;
+            auto trView = reg.view<const Transform, const NpcRef>();
+            for (auto te : trView) {
+                if (te == e) continue;
+                if (reg.all_of<Dead>(te)) continue;
+                const Transform& ot = trView.get<const Transform>(te);
+                if (ot.layer != layer) continue;
+                const float dx = wrap_delta_f(tr.pos.x, ot.pos.x, kWorldExtent);
+                const float dy = wrap_delta_f(tr.pos.y, ot.pos.y, kWorldExtent);
+                const float dz = wrap_delta_f(tr.pos.z, ot.pos.z, kWorldExtent);
+                if (dx * dx + dy * dy + dz * dz > kMedicReachM * kMedicReachM)
+                    continue;
+                const NpcId oid = trView.get<const NpcRef>(te).id;
+                if (!pool.valid(oid) || !pool.alive(oid)) continue;
+                totalCount += 1.0f;
+                const float hpFrac = static_cast<float>(pool.hp(oid)) /
+                                     static_cast<float>(pool.max_hp(oid));
+                if (hpFrac < kMedicThreshold) {
+                    woundedCount += 1.0f;
+                    pool.needs(oid).hpBank += kMedicHealPerSec * dt;
+                    Needs& own = pool.needs(id);
+                    own.sleep -= kMedicFatiguePerSec * dt;
+                    if (own.sleep < 0.0f) own.sleep = 0.0f;
+                }
+            }
+            if (totalCount > 0.0f) nearbyWounded01 = woundedCount / totalCount;
+        }
+
         // --- RECALL, and only when somebody is going to read it --------------
         // Two consumers, so two conditions: the scorer (a re-plan) and the flee
         // steering direction (already fleeing). Everything else pays zero. At the
@@ -678,6 +728,8 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             Perception p;
             p.idSeed = idSeed;
             p.faction = pool.faction(id);
+            p.role = roleId;
+            p.nearbyWounded01 = nearbyWounded01;
             p.hp = static_cast<float>(hpNow);
             p.maxHp = static_cast<float>(pool.max_hp(id));
             p.danger = dangerHere;
@@ -793,7 +845,20 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             // second inside it does. No intent is named in this branch — adding
             // "work happens in a Production room" is a row in kRoomAffordance and
             // not a line here ([room_zone.h]).
-            const std::uint16_t want = intent_room_mask(brain.currentIntent);
+            std::uint16_t want = intent_room_mask(brain.currentIntent);
+            // A role STATES its own home and workplace ([role.h] TABLE 1): a Duty
+            // body works in HQ, a Medic in Medical, and the affordance row is the
+            // roleless default. REPLACE, not AND — Production & Hq is 0, and an
+            // AND would quietly cancel every specialist's errand instead of
+            // redirecting it. A zero mask (Looter's homeRooms) delegates, exactly
+            // like an intent with no row. The fields exist because kRoomFieldMask
+            // folds the role rooms in ([room_zone.h]).
+            {
+                const RoleTraits& rrt = role_traits(static_cast<RoleId>(roleId));
+                if (brain.currentIntent == IntentSleep) want = rrt.homeRooms;
+                else if (brain.currentIntent == IntentWork && rrt.workRooms != 0)
+                    want = rrt.workRooms;
+            }
             const std::uint16_t here =
                 want != 0 ? room_bit_at(rooms->kind, rooms->number, cx, cy) : 0;
             // Stall probe, read BEFORE this pass overwrites Velocity — see AiTick.

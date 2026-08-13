@@ -75,6 +75,7 @@ void NpcPool::init() {
     drop_column(age_);
     drop_column(sex_);
     drop_column(level_);
+    drop_column(role_);
     drop_column(attr_);
     drop_column(name_);
     drop_column(surname_);
@@ -110,6 +111,7 @@ void NpcPool::grow_live_columns(std::uint32_t rows) {
     grow_column(age_, rows);
     grow_column(sex_, rows);
     grow_column(level_, rows);
+    grow_column(role_, rows);
     grow_column(attr_, rows);
     grow_column(gen_, rows);
     // A DEMAND column joins the per-spawn growth set once something has materialized
@@ -230,6 +232,7 @@ void NpcPool::reset_row(NpcId id) {
     if (id < age_.size()) age_[id] = 0;
     if (id < sex_.size()) sex_[id] = SexUnset;
     if (id < level_.size()) level_[id] = 0;
+    if (id < role_.size()) role_[id] = 0;
     if (id < attr_.size()) attr_[id] = std::array<std::uint8_t, kAttrSlots>{};
     // gen_ is deliberately NOT reset — it is the whole point of the generation counter.
 
@@ -390,7 +393,8 @@ std::size_t NpcPool::resident_bytes() const {
            column_bytes(maxHp_) + column_bytes(floor_) + column_bytes(cx_) +
            column_bytes(cy_) + column_bytes(cz_) + column_bytes(heightMm_) +
            column_bytes(inv_) + column_bytes(needs_) + column_bytes(age_) +
-           column_bytes(sex_) + column_bytes(level_) + column_bytes(attr_) +
+           column_bytes(sex_) + column_bytes(level_) + column_bytes(role_) +
+           column_bytes(attr_) +
            column_bytes(name_) + column_bytes(surname_) + column_bytes(rel_) +
            column_bytes(gen_) + column_bytes(nextFree_);
 }
@@ -448,11 +452,11 @@ struct ByteReader {
     }
 };
 
-// Fixed per-row wire width: 27 B of demographic columns (flags 1 + faction 2 +
-// hp/maxHp/floor 6 + cell 3 + height 2 + age/sex/level 3 + attrs 8 + gen 2) +
-// 37 B needs (v11: +hpBank, [save.h]) + 256 B inventory; names add 2 x kNameLen
+// Fixed per-row wire width: 28 B of demographic columns (flags 1 + faction 2 +
+// hp/maxHp/floor 6 + cell 3 + height 2 + age/sex/level/role 4 + attrs 8 + gen 2)
+// + 37 B needs (v11: +hpBank, [save.h]) + 256 B inventory; names add 2 x kNameLen
 // when present.
-inline constexpr std::size_t kPoolRowWire = 27 + 37 + 256;
+inline constexpr std::size_t kPoolRowWire = 28 + 37 + 256;
 inline constexpr std::size_t kPoolHeadWire = 4 + 4 + 1 + 1;
 
 } // namespace
@@ -481,6 +485,9 @@ void NpcPool::save_rows(std::vector<std::uint8_t>& out) const {
         put_u8(out, id < age_.size() ? age_[id] : 0);
         put_u8(out, id < sex_.size() ? sex_[id] : SexUnset);
         put_u8(out, id < level_.size() ? level_[id] : 0);
+        // The role column travels: it is a writable OVERRIDE ([role.h]), and a
+        // reload that re-derived it from role_for() would undo every story event.
+        put_u8(out, id < role_.size() ? role_[id] : 0);
         const std::array<std::uint8_t, kAttrSlots> blank{};
         const auto& a = id < attr_.size() ? attr_[id] : blank;
         for (std::uint8_t v : a) put_u8(out, v);
@@ -547,6 +554,7 @@ bool NpcPool::load_rows(const std::uint8_t* bytes, std::size_t n) {
         age_[id] = r.u8();
         sex_[id] = r.u8();
         level_[id] = r.u8();
+        role_[id] = r.u8();
         for (std::uint8_t& v : attr_[id]) v = r.u8();
         gen_[id] = r.u16();
         Needs& nd = needs_[id];

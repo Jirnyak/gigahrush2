@@ -749,6 +749,10 @@ struct Perception {
     // with no memory scores bit-for-bit what it scored before.
     float localScore[kIntentCount] = {};
     float targetPenalty[kIntentCount] = {};
+
+    // -- role ([role.h]), zero == Resident == the all-ones multiplier row --
+    std::uint8_t role = 0;        // RoleId; the pool column, sampled at re-plan
+    float nearbyWounded01 = 0.0f; // wounded fraction of allies in medic reach
 };
 
 // Fold a recall into a Perception. Pure, and separate from `ai_recall` so the

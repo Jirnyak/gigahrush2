@@ -78,12 +78,19 @@ void rooms_taxonomy_is_read_the_same_way() {
     CHECK(intent_room_mask(IntentPatrol) == 0);
     CHECK(intent_room_mask(IntentWander) == 0);
     CHECK(intent_room_mask(IntentFlee) == 0);
+    // Affordance bits + role home/work rooms ([role.h] TABLE 1): Storage is the
+    // Looter's workplace, Hq and Smoking the Duty's and Cultist's. A role room
+    // outside this mask would be a destination with no field — a goal that exists
+    // in the table and nowhere on the floor.
     CHECK(kRoomFieldMask == (room_bit(RoomBit::Kitchen) |
                              room_bit(RoomBit::Bathroom) |
                              room_bit(RoomBit::Living) |
                              room_bit(RoomBit::Common) |
                              room_bit(RoomBit::Production) |
-                             room_bit(RoomBit::Medical)));
+                             room_bit(RoomBit::Medical) |
+                             room_bit(RoomBit::Storage) |
+                             room_bit(RoomBit::Smoking) |
+                             room_bit(RoomBit::Hq)));
 
     // EVERY FloorKind must now bake at least one field. This is the assertion that
     // states the actual defect: the mask alone was never the problem, the mask
@@ -122,8 +129,10 @@ void rooms_bake_follows_the_floor_mix() {
     const int ki = floor_room_bit_index(room_bit(RoomBit::Kitchen));
     CHECK(zr.flow[ki].size() == kMacroCells);
     CHECK(zr.nearRoom[ki].size() == 32u * 32u);
-    // Bits no intent names are never baked, whatever the floor contains.
-    CHECK(zr.flow[floor_room_bit_index(room_bit(RoomBit::Storage))].empty());
+    // Bits nothing names — no intent, no role — are never baked, whatever the
+    // floor contains. Corridor is the pin now: Storage left this club when it
+    // became the Looter's workplace ([role.h]).
+    CHECK(zr.flow[floor_room_bit_index(room_bit(RoomBit::Corridor))].empty());
     std::printf("[rooms] residential floor 0: baked mask 0x%04X, %zu bytes\n",
                 static_cast<unsigned>(zr.baked), zr.resident_bytes());
 
@@ -179,7 +188,11 @@ void rooms_bake_follows_the_floor_mix() {
     RoomZones zi;
     bake_room_zones(ind.grid(), FloorKind::Industrial, 0, zi);
     CHECK(zi.ready());
-    CHECK(zi.baked == room_bit(RoomBit::Production));
+    // Industrial rolls Production/Storage/Corridor/Smoking; the mask now names
+    // Storage (Looter) and Smoking (Cultist) too, Corridor still nothing.
+    CHECK(zi.baked == (room_bit(RoomBit::Production) |
+                       room_bit(RoomBit::Storage) |
+                       room_bit(RoomBit::Smoking)));
     CHECK(zi.resident_bytes() != 0);
     // Still nothing reachable for an intent whose room this floor does not build —
     // and this now tests the real path rather than the empty one, because the zones
@@ -201,12 +214,14 @@ void rooms_bake_follows_the_floor_mix() {
 
     // Re-baking a RECYCLED RoomZones must not inherit the previous floor's fields —
     // the stale-bake bug class [world/nav.h] documents for its own. `zr` is a
-    // Residential bake (Kitchen|Bathroom|Living|Common); re-baked as Industrial it
-    // must come back as EXACTLY Production, which is a stronger statement than the
-    // old `== 0`: zero could be reached by clearing alone, this can only be reached
-    // by clearing AND rebuilding.
+    // Residential bake; re-baked as Industrial it must come back as EXACTLY the
+    // Industrial set, which is a stronger statement than the old `== 0`: zero could
+    // be reached by clearing alone, this can only be reached by clearing AND
+    // rebuilding.
     bake_room_zones(ind.grid(), FloorKind::Industrial, 0, zr);
-    CHECK(zr.baked == room_bit(RoomBit::Production));
+    CHECK(zr.baked == (room_bit(RoomBit::Production) |
+                       room_bit(RoomBit::Storage) |
+                       room_bit(RoomBit::Smoking)));
     CHECK((zr.baked & room_bit(RoomBit::Kitchen)) == 0);
     CHECK((zr.baked & room_bit(RoomBit::Common)) == 0);
 }

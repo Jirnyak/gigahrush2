@@ -893,7 +893,12 @@ if(GIGA_BUILD_TESTS)
     # second lands in the BANK and only the bank, and that the rate is
     # percent-of-max (a 200-max body banks 2x — time-to-full is the same in-game
     # hour for everyone) (suite_rooms).
-        PASS_REGULAR_EXPRESSION "game_test: 236061 checks, 0 failures")
+    # 236061 -> 240226 (+4165) on 2026-08-13: roles ([role.h]). The bulk is two
+    # property loops — role_for determinism (64) and "a zero weight is a
+    # prohibition": 4096 Residential draws with no Cultist — plus distribution,
+    # delta-response and role-blindness checks (suite_utilai), and the field-mask
+    # pins moving to affordance+role rooms (suite_rooms).
+        PASS_REGULAR_EXPRESSION "game_test: 240226 checks, 0 failures")
 
 
 

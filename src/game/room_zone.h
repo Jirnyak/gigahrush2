@@ -85,6 +85,7 @@
 #include <vector>
 
 #include "game/ai.h"        // IntentId — the affordance table's key
+#include "game/role.h"      // RoleTraits — role home/work rooms join the bake mask
 #include "game/floor_gen.h" // kFloorRoomBits, floor_room_stride/mask/bit_index
 #include "game/floor_spec.h" // FloorKind
 #include "game/mob_table.h" // RoomBit — the shared room taxonomy
@@ -163,11 +164,16 @@ inline constexpr std::uint16_t intent_room_mask(std::uint8_t intent) {
     return m;
 }
 
-// Every bit any intent names — exactly the fields the bake has to build.
+// Every bit any intent names, PLUS every home/work room any role states — exactly
+// the fields the bake has to build. Role rooms are in or a Duty body's "work in
+// HQ" ([role.h] TABLE 1) is a destination with no field: a goal that exists in
+// the table and nowhere on the floor.
 inline constexpr std::uint16_t kRoomFieldMask = [] {
     std::uint16_t m = 0;
     for (const RoomAffordance& r : kRoomAffordance)
         m = static_cast<std::uint16_t>(m | r.rooms);
+    for (const RoleTraits& t : kRoleTraits)
+        m = static_cast<std::uint16_t>(m | t.homeRooms | t.workRooms);
     return m;
 }();
 

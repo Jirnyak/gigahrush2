@@ -520,6 +520,11 @@ public:
     std::uint8_t&  sex(NpcId id)     { return sex_[id]; }      // NpcSex code
     std::uint16_t& height_mm(NpcId id) { return heightMm_[id]; } // stature, mm
     std::uint8_t&  level(NpcId id)   { return level_[id]; }
+    // Behavioural archetype (RoleId as uint8, [role.h]). LIVE column: initialised
+    // from role_for(id, floorKind) at floor seeding, writable for story overrides
+    // (the spec's Resident -> Looter after samosbor), so the COLUMN is the source
+    // of truth at runtime, never the hash.
+    std::uint8_t&  role(NpcId id)    { return role_[id]; }
     // The 8-slot generic attribute block. Addressed by index; slot->name mapping
     // lives in a data table, not here (see kAttrSlots).
     std::array<std::uint8_t, kAttrSlots>& attrs(NpcId id) { return attr_[id]; }
@@ -579,6 +584,7 @@ private:
     std::vector<std::uint8_t>  sex_;    // LIVE — NpcSex code (0 = unset)
     std::vector<std::uint16_t> heightMm_; // stature in mm; drives embodied AABB
     std::vector<std::uint8_t>  level_;  // LIVE
+    std::vector<std::uint8_t>  role_;   // LIVE — RoleId ([role.h]), 1 B/row
     // LIVE — generic sheet block, 8 B/row
     std::vector<std::array<std::uint8_t, kAttrSlots>> attr_;
     std::vector<std::array<char, kNameLen>> name_;      // DEMAND
