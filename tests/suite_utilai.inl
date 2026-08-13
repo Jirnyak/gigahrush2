@@ -1726,5 +1726,34 @@ static void test_utilai_all() {
 
         std::fprintf(stdout, "[utilai] Edge case stress tests (null danger, 0 dt, neg panic, non-emergency, invalid role IDs) PASSED\n");
     }
+
+    // ======================================================================
+    // 19. PATROL EXECUTION STEP VIA ROUTE_STEP (Task 4.3).
+    // ======================================================================
+    {
+        Registry reg;
+        NpcPool pool;
+        pool.init();
+        NpcId id = 0;
+        Entity e = make_body(reg, pool, 32, 32, 1, Faction::Citizens, id);
+        CHECK(ai_init(reg, kLayer) == 1u);
+
+        AiBrain& brain = reg.get<AiBrain>(e);
+        brain.currentIntent = IntentPatrol;
+        reg.emplace<PatrolPlan>(e, PatrolPlan{});
+
+        giga::nav::CoarseGraph coarse{};
+        giga::nav::FineNav fine{};
+        fine.nearest.assign(kMacroCells, 0); // anchor 0
+        fine.flow.assign(giga::nav::kNodes * kMacroCells, 1); // step in +X (kNavDir[1] = {1,0,0})
+
+        ai_patrol_step(reg, coarse, fine, kLayer, kSimDt);
+
+        Velocity& vel = reg.get<Velocity>(e);
+        CHECK(vel.v.x > 0.0f);
+        CHECK(vel.v.y == 0.0f);
+
+        std::fprintf(stdout, "[utilai] Block 19: ai_patrol_step successfully steers entity along navigation flow (vx=%.2f)\n", vel.v.x);
+    }
 }
 

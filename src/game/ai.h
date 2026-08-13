@@ -1026,7 +1026,13 @@ namespace giga::game {
 // but did not steer (Velocity = 0), and steers them via the baked navigation graph.
 void ai_patrol_step(Registry& reg, const giga::nav::CoarseGraph& coarse,
                     const giga::nav::FineNav& fine, LayerId layer, float dt,
-                    const GravityField& gravity);
+                    const GravityField* gravity = nullptr);
+
+inline void ai_patrol_step(Registry& reg, const giga::nav::CoarseGraph& coarse,
+                           const giga::nav::FineNav& fine, LayerId layer, float dt,
+                           const GravityField& gravity) {
+    ai_patrol_step(reg, coarse, fine, layer, dt, &gravity);
+}
 
 // --- Recorders anything may call --------------------------------------------
 // The write side of the seam, deliberately public and deliberately tiny: filing a

@@ -1112,5 +1112,65 @@ AiTick ai_step(Registry& reg, NpcPool& pool, Field<float>* danger, Field<float>*
     return out;
 }
 
+void ai_patrol_step(Registry& reg, const giga::nav::CoarseGraph& coarse,
+                    const giga::nav::FineNav& fine, LayerId layer, float dt,
+                    const GravityField* gravity) {
+    (void)dt;
+    auto view = reg.view<PatrolPlan, AiBrain, Transform, Velocity>();
+    for (auto e : view) {
+        const auto& tr = view.get<Transform>(e);
+        if (tr.layer != layer) continue;
+
+        const auto& brain = view.get<AiBrain>(e);
+        if (brain.currentIntent != IntentPatrol) continue;
+
+        auto& plan = view.get<PatrolPlan>(e);
+        auto& vel = view.get<Velocity>(e);
+
+        const int cx = wrap_macro(static_cast<int>(std::floor(tr.pos.x / kCellSize)));
+        const int cy = wrap_macro(static_cast<int>(std::floor(tr.pos.y / kCellSize)));
+        const int cz = wrap_macro(static_cast<int>(std::floor(tr.pos.z / kCellSize)));
+
+        const std::uint8_t currentAnchor = fine.nearest_node(cx, cy, cz);
+        if (plan.nodeTo >= giga::nav::kNodes || currentAnchor == plan.nodeTo || currentAnchor == giga::nav::kFlowNone) {
+            plan.nodeFrom = (currentAnchor < giga::nav::kNodes) ? currentAnchor : plan.nodeTo;
+            std::uint8_t nextNode = static_cast<std::uint8_t>((plan.nodeFrom + 1) % giga::nav::kNodes);
+            for (std::uint8_t cand = 0; cand < giga::nav::kNodes; ++cand) {
+                std::uint8_t candidate = static_cast<std::uint8_t>((plan.nodeFrom + 1 + cand) % giga::nav::kNodes);
+                if (candidate != plan.nodeFrom && coarse.dist[plan.nodeFrom][candidate] != giga::nav::kUnreachable) {
+                    nextNode = candidate;
+                    break;
+                }
+            }
+            plan.nodeTo = nextNode;
+            ++plan.hops;
+        }
+
+        const std::uint8_t dirByte = fine.at(plan.nodeTo, cx, cy, cz);
+        if (dirByte < 6) {
+            const float kPatrolSpeed = 1.8f;
+            vec3 steerDir{
+                static_cast<float>(giga::nav::kNavDir[dirByte][0]),
+                static_cast<float>(giga::nav::kNavDir[dirByte][1]),
+                static_cast<float>(giga::nav::kNavDir[dirByte][2])
+            };
+            vel.v.x = steerDir.x * kPatrolSpeed;
+            vel.v.y = steerDir.y * kPatrolSpeed;
+            if (gravity != nullptr) {
+                const CellStep down = regime_down(gravity->regime);
+                if (down.z != 0 && std::abs(steerDir.z) < 0.1f) {
+                    // horizontal locomotion, leave vertical axis to gravity
+                } else {
+                    vel.v.z = steerDir.z * kPatrolSpeed;
+                }
+            } else {
+                vel.v.z = steerDir.z * kPatrolSpeed;
+            }
+        } else {
+            vel.v.x = 0.0f;
+            vel.v.y = 0.0f;
+        }
+    }
+}
 
 } // namespace giga::game
