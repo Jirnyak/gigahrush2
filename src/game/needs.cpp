@@ -161,7 +161,7 @@ Needs needs_roll(std::uint32_t seed) {
     n.water = kStartWaterLo + u01(giga::hash_u32(seed ^ 0x85ebca6bu)) * (kStartWaterHi - kStartWaterLo);
     n.sleep = kStartSleepLo + u01(giga::hash_u32(seed ^ 0xc2b2ae35u)) * (kStartSleepHi - kStartSleepLo);
     n.pee   = kStartPeeLo   + u01(giga::hash_u32(seed ^ 0x27d4eb2fu)) * (kStartPeeHi   - kStartPeeLo);
-    n.poo   = kStartPooLo   + u01(giga::hash_u32(seed ^ 0x165667b1u)) * (kStartPooLo   - kStartPooLo);
+    n.poo   = kStartPooLo   + u01(giga::hash_u32(seed ^ 0x165667b1u)) * (kStartPooHi   - kStartPooLo);
     n.sanity = kStartSanityLo + u01(giga::hash_u32(seed ^ 0xb2c84210u)) * (kStartSanityHi - kStartSanityLo);
     n.radiation = kStartRadLo + u01(giga::hash_u32(seed ^ 0xf028ea75u)) * (kStartRadHi - kStartRadLo);
     n.pendingPee = 0.0f;

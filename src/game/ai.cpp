@@ -243,8 +243,10 @@ void score_intents(const Perception& p, const Needs& needs,
         p.samosborActive &&
         p.faction != static_cast<std::uint16_t>(Faction::Liquidators) &&
         p.faction != static_cast<std::uint16_t>(Faction::Cultists);
+    const float threatPatrolTerm =
+        tr.duty >= 0.80f ? threat * 10.0f : -threat * 20.0f;
     out[IntentPatrol] = clamp_score(
-        tr.patrolDrive * 36.0f + tr.duty * 18.0f + rhythm + threat * 10.0f +
+        tr.patrolDrive * 36.0f + tr.duty * 18.0f + rhythm + threatPatrolTerm +
         local(IntentPatrol) + stick(IntentPatrol) - urgent * 18.0f -
         (patrolSamosborPenalty ? 24.0f : 0.0f) - tpen(IntentPatrol));
 
@@ -343,6 +345,7 @@ bool AiMemory::remember(NpcId id, std::uint8_t kind, std::uint32_t payload,
         if (t - s.seenAt >= mem_ttl_sec(kind)) continue; // dead; stage 2 reuses it
         const float have = s.strength();
         s = mem_trace(kind, pay, have > strength01 ? have : strength01, t);
+        ++coalesced_;
         return true;
     }
 
@@ -354,6 +357,7 @@ bool AiMemory::remember(NpcId id, std::uint8_t kind, std::uint32_t payload,
         const std::uint8_t k = s.kind();
         if (k != MemNone && t - s.seenAt < mem_ttl_sec(k)) continue;
         s = mem_trace(kind, pay, strength01, t);
+        ++writes_;
         return true;
     }
 
@@ -377,6 +381,8 @@ bool AiMemory::remember(NpcId id, std::uint8_t kind, std::uint32_t payload,
         }
     }
     row.slot[victim] = mem_trace(kind, pay, strength01, t);
+    ++writes_;
+    ++evictions_;
     return true;
 }
 
@@ -823,14 +829,6 @@ AiTick ai_step(Registry& reg, NpcPool& pool, Field<float>* danger, Field<float>*
         }
         brain.stateTimer += dt;
 
-        // Publish panic into danger field for emergency intents (R1).
-        if (danger != nullptr && intent_is_emergency(brain.currentIntent)) {
-            const FactionTraits& ft = faction_traits(pool.faction(id));
-            if (ft.panic > 0.0f) {
-                panic_publish_step(*danger, cx, cy, cz, dt, ft.panic);
-                out.dangerEmitted = true;
-            }
-        }
 
         // --- Arbitrate, then steer ------------------------------------------
         // Ownership is decided EVERY tick, not only at re-plan, because the input
@@ -870,7 +868,6 @@ AiTick ai_step(Registry& reg, NpcPool& pool, Field<float>* danger, Field<float>*
             // Live danger gradient: preferred over memory when no shelter
             // direction is available (no hermetic door on floor, or already there).
             if (!owned && danger != nullptr) {
-                // Down the gradient: the field is danger, so safety is -grad.
                 const vec3 g = diffusion_gradient(*danger, grid, cx, cy, cz);
                 vec3 away{-g.x, -g.y, -g.z};
                 if (gf.axis == 0) away.x = 0.0f;
@@ -1090,6 +1087,28 @@ AiTick ai_step(Registry& reg, NpcPool& pool, Field<float>* danger, Field<float>*
         // The vertical axis is left to gravity: this is locomotion, not flight.
         // Same rule as wander_step: physics_step owns it (gravity and jump).
     }
+
+    // Publish panic into danger field for emergency intents (R1) AFTER all entities
+    // have read the immutable danger field during this tick's arbitration pass.
+    if (cfg.panicPublish && danger != nullptr) {
+        for (auto e : view) {
+            const auto& tr = view.get<const Transform>(e);
+            if (tr.layer != layer) continue;
+            const auto& brain = view.get<const AiBrain>(e);
+            if (intent_is_emergency(brain.currentIntent)) {
+                const NpcId id = view.get<const NpcRef>(e).id;
+                const FactionTraits& ft = faction_traits(pool.faction(id));
+                if (ft.panic > 0.0f) {
+                    const int cx = wrap_macro(static_cast<int>(std::floor(tr.pos.x / kCellSize)));
+                    const int cy = wrap_macro(static_cast<int>(std::floor(tr.pos.y / kCellSize)));
+                    const int cz = wrap_macro(static_cast<int>(std::floor(tr.pos.z / kCellSize)));
+                    panic_publish_step(*danger, cx, cy, cz, dt, ft.panic);
+                    out.dangerEmitted = true;
+                }
+            }
+        }
+    }
+
     return out;
 }
 

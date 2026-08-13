@@ -888,7 +888,7 @@ if(GIGA_BUILD_TESTS)
     # was smaller than the target and the frame could not matter. 7000 mmps gives
     # T = 0.75 s and a 1.69 m drop. Latent, not live: kPadicGravity is NegZ and padic
     # is the only geometric module, so no shipping floor exercises it.
-        PASS_REGULAR_EXPRESSION "game_test: 236058 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "game_test: 237466 checks, 0 failures")
 
 
 

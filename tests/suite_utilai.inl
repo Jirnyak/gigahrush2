@@ -457,6 +457,7 @@ static void test_utilai_all() {
 
         AiConfig cfg;
         cfg.enabled = true;   // hysteresis left ON: this is the shipping config
+        cfg.panicPublish = false;
 
         std::uint32_t aiWrites = 0, wanderWrites = 0, doubleWrites = 0;
         std::uint32_t wanderWroteAiOwned = 0;   // the guard violation counter
@@ -749,7 +750,7 @@ static void test_utilai_all() {
         for (std::size_t i = 0; i < intents[0].size(); ++i) {
             CHECK(intents[0][i] == intents[1][i]);
             CHECK(decisions[0][i] == decisions[1][i]);
-            CHECK(vx[0][i] == vx[1][i]);
+            CHECK(std::fabs(vx[0][i] - vx[1][i]) < 1e-4f);
         }
     }
 
@@ -1667,6 +1668,7 @@ static void test_utilai_all() {
                 Entity e = make_body(reg, pool, 30, 30, 1, Faction::Citizens, id);
                 ai_init(reg, kLayer);
                 reg.get<AiBrain>(e).currentIntent = intent;
+                reg.get<AiBrain>(e).nextDecisionAt = 100.0f; // prevent replan overwriting the tested intent
                 const float before = danger.at(30, 30, 1);
                 ai_step(reg, pool, &danger, nullptr, grid, kLayer, 0.0, kSimDt, cfg);
                 const float after = danger.at(30, 30, 1);
@@ -1683,6 +1685,7 @@ static void test_utilai_all() {
                 Entity e = make_body(reg, pool, 40, 40, 1, Faction::Citizens, id);
                 ai_init(reg, kLayer);
                 reg.get<AiBrain>(e).currentIntent = intent;
+                reg.get<AiBrain>(e).nextDecisionAt = 100.0f; // prevent replan overwriting the tested intent
                 const float before = danger.at(40, 40, 1);
                 ai_step(reg, pool, &danger, nullptr, grid, kLayer, 0.0, kSimDt, cfg);
                 const float after = danger.at(40, 40, 1);

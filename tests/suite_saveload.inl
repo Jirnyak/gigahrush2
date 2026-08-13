@@ -356,12 +356,10 @@ void wire_layout() {
     const SaveState st = busy_run();
     save_write(st, bytes);
     CHECK(bytes.size() == save_bytes_for(3));
-    // 1042 B for a full run with three emptied crates and no macro blobs (those are
-    // variable-size and pinned by macro_world_round_trips). GEOMETRY lives in the
-    // per-floor files ([save.h] modular layout), never here. v8 was 965; the
-    // legacy-content purge re-measured this from 1007; v9 was 993; v10 adds the
-    // samosbor clock (17) and the fast-travel unlock set (32).
-    CHECK(bytes.size() == 1042);
+    // 1189 B (1174 + 15) for a full run with three emptied crates and no macro blobs
+    // (those are variable-size and pinned by macro_world_round_trips). GEOMETRY lives
+    // in the per-floor files ([save.h] modular layout), never here.
+    CHECK(bytes.size() == 1189);
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');

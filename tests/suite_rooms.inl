@@ -73,14 +73,15 @@ void rooms_taxonomy_is_read_the_same_way() {
     // makes a destination honest — a route for patrol, a heal bank for heal
     // ([room_zone.h] names both refusals beside the rows that were added).
     CHECK(intent_room_mask(IntentPatrol) == 0);
-    CHECK(intent_room_mask(IntentHeal) == 0);
+    CHECK(intent_room_mask(IntentHeal) == room_bit(RoomBit::Medical));
     CHECK(intent_room_mask(IntentWander) == 0);
     CHECK(intent_room_mask(IntentFlee) == 0);
     CHECK(kRoomFieldMask == (room_bit(RoomBit::Kitchen) |
                              room_bit(RoomBit::Bathroom) |
                              room_bit(RoomBit::Living) |
                              room_bit(RoomBit::Common) |
-                             room_bit(RoomBit::Production)));
+                             room_bit(RoomBit::Production) |
+                             room_bit(RoomBit::Medical)));
 
     // EVERY FloorKind must now bake at least one field. This is the assertion that
     // states the actual defect: the mask alone was never the problem, the mask
@@ -608,7 +609,8 @@ void rooms_recovery_closes_the_loop() {
     CHECK(room_restores(room_bit(RoomBit::Living)));
     // Deliberate zero rows, stated in [room_zone.h] rather than quietly copied.
     CHECK(!room_restores(room_bit(RoomBit::Office)));
-    CHECK(!room_restores(room_bit(RoomBit::Medical)));
+    // Medical gained hpBank = 1.2f — it IS a restoring room now.
+    CHECK(room_restores(room_bit(RoomBit::Medical)));
 
     // ONE SECOND IN A KITCHEN, the reference's numbers (needs.ts:257-263).
     Needs n{};

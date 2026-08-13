@@ -131,6 +131,7 @@ int g_checks = 0;
 #include "suite_particles.inl"
 #include "suite_architecture.inl"
 #include "suite_gravity_regimes.inl"
+#include "suite_gas.inl"
 
 static void test_inventory() {
     // Compile-time layout contract: a static_assert, not a CHECK. It is a fact
@@ -1876,7 +1877,7 @@ static void test_item_table() {
 
         CHECK(item_name(id) != nullptr && item_name(id)[0] != '\0');
         CHECK(d.category < static_cast<std::uint8_t>(ItemCategory::Count));
-        CHECK(d.equipSlot < static_cast<std::uint8_t>(EquipSlot::kEquipSlotCount));
+        CHECK(d.equipSlot < static_cast<std::uint8_t>(EquipSlot::kEquipSlotCount) || d.equipSlot == static_cast<std::uint8_t>(EquipSlot::None));
         CHECK(d.useEffect < static_cast<std::uint8_t>(UseEffect::Count));
         CHECK(d.stackMax >= 1);
         CHECK(d.value >= 0 && d.value <= 500000);
@@ -5347,25 +5348,33 @@ int main() {
     test_console_all();
     test_keybind_all();
     test_particles_all();
-    test_gravity_regimes_all();
     test_route_realfloor();
     test_streamed_nav();
     test_nav_cache_roundtrip();
     test_streamed_nav_cache();
     test_floor_bucket_index();
     std::fprintf(stderr, "Entering test_stream_migration_reembodies...\n");
+    std::fflush(stderr);
     test_stream_migration_reembodies();
     std::fprintf(stderr, "Entering test_props_game_all...\n");
+    std::fflush(stderr);
     test_props_game_all();
     std::fprintf(stderr, "Entering test_architecture_gates...\n");
+    std::fflush(stderr);
     test_architecture_gates();
     std::fprintf(stderr, "Entering test_gravity_regimes_all...\n");
+    std::fflush(stderr);
     test_gravity_regimes_all();
 
     std::fprintf(stderr, "Entering test_budgets_thresholds...\n");
+    std::fflush(stderr);
     test_budgets_all();
+    std::fprintf(stderr, "Entering test_gas_chemistry_all...\n");
+    std::fflush(stderr);
+    test_gas_chemistry_all();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
+    std::fflush(stdout);
 
     // Say what to do when the pin trips, because it WILL trip on every legitimate addition, and a
     // bare number in CMakeLists.txt with no instructions beside it is a puzzle rather than a gate.

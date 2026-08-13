@@ -30,6 +30,8 @@ Needs full_clock() {
     n.food = kNeedMax;
     n.water = kNeedMax;
     n.sleep = kNeedMax;
+    n.sanity = kNeedMax;
+    n.radiation = 0.0f;
     n.seeded = 1;
     return n;
 }

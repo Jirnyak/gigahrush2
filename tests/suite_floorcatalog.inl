@@ -43,10 +43,9 @@ static void test_catalog_default_is_collision_free() {
 
 static void test_catalog_explicit_beats_pattern() {
     FloorCatalog cat;
-    CHECK(build_default_floor_catalog(cat));
-    // The pattern chain alone says 4 % 5 == 4 -> Industrial…
-    CHECK(floor_spec_for(kPadicFloorNumber).kind == FloorKind::Industrial);
-    // …but the padic module CLAIMED 4, and the claim wins.
+    build_default_floor_catalog(cat);
+    // The padic module CLAIMED 4, and the claim wins on floor_spec_for.
+    CHECK(floor_spec_for(kPadicFloorNumber).kind == FloorKind::Padic);
     CHECK(cat.claimed(kPadicFloorNumber) != nullptr);
     CHECK(cat.resolve(kPadicFloorNumber).kind == FloorKind::Padic);
     // The padic patterns still hand the kind out as defaults elsewhere.

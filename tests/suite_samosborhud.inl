@@ -635,7 +635,7 @@ static void test_samosborhud_all() {
             const LayerId testLayer = 0;
             
             // Me
-            Transform meAt{vec3{128.0f - 2.0f, 10.0f, 4.0f}, testLayer};
+            Transform meAt{vec3{kWorldExtent - 2.0f, 10.0f, 4.0f}, testLayer};
             const NpcId meId = testPool.spawn();
             testPool.set_player(meId, true);
             testPool.hp(meId) = 100; testPool.max_hp(meId) = 100;
@@ -644,7 +644,7 @@ static void test_samosborhud_all() {
             testReg.emplace<NpcRef>(meE, NpcRef{meId});
             testReg.emplace<CameraTag>(meE, CameraTag{});
 
-            // Speaker 1: 3 meters away across the torus wrap (X: 128-2 to 1 = 3m)
+            // Speaker 1: 3 meters away across the torus wrap (X: kWorldExtent-2 to 1 = 3m)
             Transform s1At{vec3{1.0f, 10.0f, 4.0f}, testLayer};
             const NpcId s1Id = testPool.spawn();
             testPool.hp(s1Id) = 100; testPool.max_hp(s1Id) = 100;
@@ -653,7 +653,7 @@ static void test_samosborhud_all() {
             testReg.emplace<NpcRef>(s1E, NpcRef{s1Id});
 
             // Speaker 2: 7 meters away (Y: 10 to 17 = 7m), beyond 6m radius
-            Transform s2At{vec3{128.0f - 2.0f, 17.0f, 4.0f}, testLayer};
+            Transform s2At{vec3{kWorldExtent - 2.0f, 17.0f, 4.0f}, testLayer};
             const NpcId s2Id = testPool.spawn();
             testPool.hp(s2Id) = 100; testPool.max_hp(s2Id) = 100;
             Entity s2E = testReg.create();
@@ -666,6 +666,7 @@ static void test_samosborhud_all() {
             
             // If s1 is killed, nearest becomes kInvalidNpc
             testPool.hp(s1Id) = 0;
+            testReg.emplace<Dead>(s1E);
             CHECK(nearest_speaker(testReg, testLayer) == kInvalidNpc);
         }
         CHECK(nearest_speaker(reg, layer) != kInvalidNpc);

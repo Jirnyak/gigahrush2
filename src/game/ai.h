@@ -864,6 +864,7 @@ struct AiConfig {
     bool enabled = false;
     bool hysteresis = true;
     bool memory = true;
+    bool panicPublish = true;
     float rethinkBaseSec = kRethinkBaseSec;
     float rethinkSpreadSec = kRethinkSpreadSec;
 };

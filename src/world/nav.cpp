@@ -15,10 +15,8 @@ namespace {
 // floor_gen carves shafts/lobbies/rooms as air and leaves walls/slabs/pads
 // fully solid, so this cleanly separates the traversable void from structure.
 inline bool walkable(const MacroGrid& g, GravityRegime regime, int x, int y, int z) {
-    if (g.mask(x, y, z).full()) return false;
-    if (regime == GravityRegime::Zero) return true;
-    CellStep down = regime_down(regime);
-    return !g.mask(x + down.x, y + down.y, z + down.z).empty();
+    (void)regime;
+    return !g.mask(x, y, z).full();
 }
 
 // The macro cell that represents a lattice node for pathing: its shaft centre,

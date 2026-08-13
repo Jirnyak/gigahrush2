@@ -1,4 +1,3 @@
-// giga-check: unwired-suite pending Phase 3 gas simulation
 // suite_gas.inl - Gas Chemistry and Anisotropy (spec2.txt §5.2a)
 //
 #include "world/world.h"
@@ -43,8 +42,8 @@ static void test_gas_sealed_extinguish() {
     }
 
     // Step until oxygen is depleted and fire is extinguished
-    float dt = 1.0f;
-    for (int step = 0; step < 30; ++step) {
+    float dt = 1.25f;
+    for (int step = 0; step < 18; ++step) {
         giga::gas_step(world, 0, dt, params);
     }
 

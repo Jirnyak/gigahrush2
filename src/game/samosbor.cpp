@@ -540,14 +540,11 @@ SamosborTransition samosbor_step(SamosborState& st, std::uint32_t dtMs, int floo
 SamosborPressure samosbor_unsheltered_pressure(SamosborVariant variant) {
     const float spawnMult = static_cast<float>(kSamosborVariants[static_cast<std::size_t>(variant)].spawnMultX100) / 100.0f;
     
-    // As noted in samosbor.h, the shipped code computes radius and strength based on fogSeedMult (spawnMult):
-    // radius: clamp(round(5*sqrt(fogSeedMult)), 2, 7)
-    // strength: clamp(round(200*fogSeedMult), 90, 230)
-    int rawRadius = static_cast<int>(std::round(5.0f * std::sqrt(spawnMult)));
-    std::uint8_t radius = static_cast<std::uint8_t>(rawRadius < 2 ? 2 : (rawRadius > 7 ? 7 : rawRadius));
+    int rawRadius = static_cast<int>(std::round(static_cast<float>(kSamosborFogRadiusCells) * std::sqrt(spawnMult)));
+    std::uint8_t radius = static_cast<std::uint8_t>(rawRadius < 1 ? 1 : (rawRadius > 255 ? 255 : rawRadius));
     
-    int rawStrength = static_cast<int>(std::round(200.0f * spawnMult));
-    std::uint8_t strength = static_cast<std::uint8_t>(rawStrength < 90 ? 90 : (rawStrength > 230 ? 230 : rawStrength));
+    int rawStrength = static_cast<int>(std::round(static_cast<float>(kSamosborFogStrength) * spawnMult));
+    std::uint8_t strength = static_cast<std::uint8_t>(rawStrength < 1 ? 1 : (rawStrength > 255 ? 255 : rawStrength));
 
     return SamosborPressure{radius, strength, kSamosborUnshelteredHp, kSamosborUnshelteredPsi};
 }

@@ -229,6 +229,9 @@ struct MacroParams {
     // the single largest allocation decision in this file.
     std::uint32_t socialRecordsPerTick = 64;  // ring-scan budget
     float socialFormRatePerYear = 0.0f;       // annual per-capita formation attempts
+
+    // ---- Cold needs (spec 14 §9.2). ----------------------------------------
+    bool enableColdNeeds = false;
 };
 
 // Aggregate results of the last step(), for HUD / bench / tests. Cheap running

@@ -46,7 +46,7 @@ Entity embody(Registry& reg, NpcPool& pool, NpcId id, LayerId layer) {
                   (static_cast<float>(pool.cz(id)) + 0.5f) * kEmbodyCellSize};
     tr.layer = layer;
     reg.emplace<Transform>(e, tr);
-    reg.emplace<Velocity>(e);
+    reg.emplace<Velocity>(e, Velocity{vec3{0.0f, 0.0f, 0.0f}});
 
     // Stature drives the collider: ~0.4 m half-width, half-height from height.
     float hh = body_half_height(pool.height_mm(id));

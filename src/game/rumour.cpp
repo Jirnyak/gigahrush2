@@ -5,6 +5,7 @@
 
 #include "core/wrap.h"
 #include "ecs/components.h"
+#include "game/combat.h"
 #include "game/embody.h"     // NpcRef
 #include "game/faction_relations.h"
 #include "game/mob_spawn.h"  // MobRef
@@ -75,6 +76,7 @@ NpcId nearest_speaker(const Registry& reg, LayerId layer) {
     float bestD2 = kOverhearRange * kOverhearRange;
     for (auto e : reg.view<const NpcRef, const Transform>()) {
         if (e == ear) continue;                  // you do not overhear yourself
+        if (reg.all_of<Dead>(e)) continue;       // dead bodies do not speak
         const Transform& t = reg.get<const Transform>(e);
         if (t.layer != layer) continue;
         // Monsters are not embodied records and carry no NpcRef, so they cannot be

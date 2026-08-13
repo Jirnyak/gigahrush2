@@ -56,10 +56,10 @@ inline constexpr std::uint16_t role_room_bit(RoomBit b) {
 // TABLE 1 -- 5x7 role traits matrix. Source: spec 01 section 3a.6.
 inline constexpr RoleTraits kRoleTraits[kRoleCount] = {
     //           workDrv patrol social scaveng care  homeRooms              workRooms
-    /* Resident */ { 0.30f, 0.05f, 1.00f, 0.10f, 0.05f,
+    /* Resident */ { 1.00f, 1.00f, 1.00f, 0.10f, 0.05f,
                      role_room_bit(RoomBit::Living),
                      role_room_bit(RoomBit::Common) },
-    /* Duty     */ { 1.00f, 1.00f, 0.60f, 0.05f, 0.20f,
+    /* Duty     */ { 1.00f, 1.50f, 0.60f, 0.05f, 0.20f,
                      role_room_bit(RoomBit::Living),
                      role_room_bit(RoomBit::Hq) },
     /* Medic    */ { 1.00f, 0.20f, 0.80f, 0.10f, 1.00f,

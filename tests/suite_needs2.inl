@@ -34,6 +34,8 @@ Needs full_clock() {
     n.food = kNeedMax;
     n.water = kNeedMax;
     n.sleep = kNeedMax;
+    n.sanity = kNeedMax;
+    n.radiation = 0.0f;
     n.seeded = 1;
     return n;
 }
@@ -202,7 +204,7 @@ void pressure_clock_is_feelable() {
     advance_seconds(meal, 3600.0f);
     CHECK(approx(meal.pee, kStartPeeHi + ate.peeQueued, 1e-2f));   // 42.0
     CHECK(approx(meal.poo, kStartPooHi + ate.pooQueued, 1e-2f));   // 48.0
-    CHECK(needs_warn_mask(meal) == (NeedFood | NeedWater | NeedSleep));
+    CHECK(needs_warn_mask(meal) == (NeedFood | NeedWater | NeedSleep | NeedSanity));
     CHECK((needs_warn_mask(meal) & (NeedPee | NeedPoo)) == 0);
     // Three such meals is what it takes from that start: (92.8 - 20) / 28.0 = 2.6.
     CHECK(static_cast<int>((kPooWarnAt - kStartPooHi) / ate.pooQueued) + 1 == 3);

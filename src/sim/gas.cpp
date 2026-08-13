@@ -1,4 +1,5 @@
 #include "sim/gas.h"
+#include "core/jobs.h"
 #include "world/lattice.h"
 #include "world/gravity.h"
 #include "world/destruct.h"
@@ -28,84 +29,85 @@ void gas_step(World& world, int layer, float dt, const GasParams& params) {
     if (data.size() < kMacroCells) data.resize(kMacroCells, pack_gas(0, 0, 255, 0));
 
     std::vector<std::uint32_t> nextData = data;
-    CellStep gVec = regime_down(world.gravity().regime);
-    
+    const CellStep gVec = regime_down(world.gravity().regime);
     const SubMask* masks = world.grid().masks().data();
-    auto is_completely_solid = [&](int ci) {
-        return masks[ci].full();
+    const std::uint32_t* srcData = data.data();
+    std::uint32_t* dstData = nextData.data();
+
+    const CellStep dirs[6] = {
+        {1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}
     };
 
-    for (int ci = 0; ci < kMacroCells; ++ci) {
-        if (is_completely_solid(ci)) continue;
+    parallel_for(128, [&](int cz) {
+        const int zBase = cz << 14;
+        for (int cy = 0; cy < 128; ++cy) {
+            const int yBase = zBase | (cy << 7);
+            for (int cx = 0; cx < 128; ++cx) {
+                const int ci = yBase | cx;
+                if (masks[ci].full()) continue;
 
-        float toxic, smoke, oxy, heat;
-        unpack_gas(data[ci], toxic, smoke, oxy, heat);
+                float toxic, smoke, oxy, heat;
+                unpack_gas(srcData[ci], toxic, smoke, oxy, heat);
 
-        // Chemistry (Local) BEFORE diffusion
-        if (heat > 200.0f && oxy > 40.0f) {
-            oxy -= 12.0f * dt;
-            smoke += 20.0f * dt;
-        } else if (oxy <= 40.0f && heat > 0.0f) {
-            heat -= 60.0f * dt;
+                // Chemistry (Local) BEFORE diffusion
+                if (heat > 200.0f && oxy > 40.0f) {
+                    oxy -= 12.0f * dt;
+                    smoke += 20.0f * dt;
+                } else if (oxy <= 40.0f && heat > 0.0f) {
+                    heat -= 60.0f * dt;
+                }
+
+                if (heat > 180.0f && oxy > 40.0f) {
+                    heat += 30.0f * dt;
+                }
+
+                if (smoke > 0.0f) smoke -= 2.0f * dt;
+                if (toxic > 0.0f) toxic -= 1.0f * dt;
+
+                if (toxic + smoke > 200.0f) {
+                    oxy -= 8.0f * dt;
+                }
+
+                if (toxic > 100.0f) {
+                    oxy -= (toxic - 100.0f) * 0.1f * dt;
+                }
+
+                // Gather Diffusion
+                float dToxic = 0.0f, dSmoke = 0.0f, dOxy = 0.0f, dHeat = 0.0f;
+
+                for (int i = 0; i < 6; ++i) {
+                    const CellStep d = dirs[i];
+                    const int nx = (cx + d.x) & 127;
+                    const int ny = (cy + d.y) & 127;
+                    const int nz = (cz + d.z) & 127;
+                    const int nci = nx | (ny << 7) | (nz << 14);
+
+                    if (masks[nci].full()) continue;
+
+                    float nt, ns, no, nh;
+                    unpack_gas(srcData[nci], nt, ns, no, nh);
+
+                    const float wRise = (d.x == -gVec.x && d.y == -gVec.y && d.z == -gVec.z) ? 0.0f : (d.x == gVec.x && d.y == gVec.y && d.z == gVec.z) ? params.diffuse * 2.0f : params.diffuse;
+                    const float wSink = (d.x == gVec.x && d.y == gVec.y && d.z == gVec.z) ? 0.0f : (d.x == -gVec.x && d.y == -gVec.y && d.z == -gVec.z) ? params.diffuse * 2.0f : params.diffuse;
+                    const float wNeutral = params.diffuse;
+
+                    dToxic += (nt - toxic) * wSink * dt;
+                    dSmoke += (ns - smoke) * wRise * dt;
+                    dOxy   += (no - oxy) * wNeutral * dt;
+                    dHeat  += (nh - heat) * wRise * dt;
+                }
+
+                dstData[ci] = pack_gas(
+                    toxic + dToxic,
+                    smoke + dSmoke,
+                    oxy + dOxy,
+                    heat + dHeat
+                );
+            }
         }
+    });
 
-        if (heat > 180.0f && oxy > 40.0f) {
-            heat += 30.0f * dt;
-        }
-
-        if (smoke > 0.0f) smoke -= 2.0f * dt;
-        if (toxic > 0.0f) toxic -= 1.0f * dt;
-
-        if (toxic + smoke > 200.0f) {
-            oxy -= 8.0f * dt;
-        }
-
-        if (toxic > 100.0f) {
-            oxy -= (toxic - 100.0f) * 0.1f * dt;
-        }
-
-        // Gather Diffusion
-        int cx = ci & 127;
-        int cy = (ci >> 7) & 127;
-        int cz = (ci >> 14);
-
-        float dToxic = 0.0f, dSmoke = 0.0f, dOxy = 0.0f, dHeat = 0.0f;
-
-        const CellStep dirs[6] = {
-            {1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}
-        };
-
-        for (int i = 0; i < 6; ++i) {
-            CellStep d = dirs[i];
-            int nx = (cx + d.x) & 127;
-            int ny = (cy + d.y) & 127;
-            int nz = (cz + d.z) & 127;
-            int nci = nx | (ny << 7) | (nz << 14);
-
-            if (masks[nci].full()) continue;
-
-            float nt, ns, no, nh;
-            unpack_gas(data[nci], nt, ns, no, nh);
-
-            float wRise = (d.x == -gVec.x && d.y == -gVec.y && d.z == -gVec.z) ? 0.0f : (d.x == gVec.x && d.y == gVec.y && d.z == gVec.z) ? params.diffuse * 2.0f : params.diffuse;
-            float wSink = (d.x == gVec.x && d.y == gVec.y && d.z == gVec.z) ? 0.0f : (d.x == -gVec.x && d.y == -gVec.y && d.z == -gVec.z) ? params.diffuse * 2.0f : params.diffuse;
-            float wNeutral = params.diffuse;
-
-            dToxic += (nt - toxic) * wSink * dt;
-            dSmoke += (ns - smoke) * wRise * dt;
-            dOxy   += (no - oxy) * wNeutral * dt;
-            dHeat  += (nh - heat) * wRise * dt;
-        }
-
-        nextData[ci] = pack_gas(
-            toxic + dToxic,
-            smoke + dSmoke,
-            oxy + dOxy,
-            heat + dHeat
-        );
-    }
-
-    data = nextData;
+    data = std::move(nextData);
 }
 
 } // namespace giga
