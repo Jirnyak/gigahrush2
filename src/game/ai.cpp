@@ -323,7 +323,7 @@ void AiMemory::ensure(NpcId id) {
 }
 
 bool AiMemory::remember(NpcId id, std::uint8_t kind, std::uint32_t payload,
-                        float strength01, double now) {
+                        float strength01, double now, bool gossip) {
     if (kind == MemNone || kind >= kMemKindCount) return false;
     if (id >= kNpcPoolSize) return false; // the column can never cover it
     ensure(id);
@@ -342,7 +342,7 @@ bool AiMemory::remember(NpcId id, std::uint8_t kind, std::uint32_t payload,
         if (s.kind() != kind || s.payload() != pay) continue;
         if (t - s.seenAt >= mem_ttl_sec(kind)) continue; // dead; stage 2 reuses it
         const float have = s.strength();
-        s = mem_trace(kind, pay, have > strength01 ? have : strength01, t);
+        s = mem_trace(kind, pay, have > strength01 ? have : strength01, t, gossip && s.is_gossip());
         ++coalesced_;
         return true;
     }
@@ -354,7 +354,7 @@ bool AiMemory::remember(NpcId id, std::uint8_t kind, std::uint32_t payload,
         MemoryTrace& s = row.slot[i];
         const std::uint8_t k = s.kind();
         if (k != MemNone && t - s.seenAt < mem_ttl_sec(k)) continue;
-        s = mem_trace(kind, pay, strength01, t);
+        s = mem_trace(kind, pay, strength01, t, gossip);
         ++writes_;
         return true;
     }
@@ -378,7 +378,7 @@ bool AiMemory::remember(NpcId id, std::uint8_t kind, std::uint32_t payload,
             victim = i;
         }
     }
-    row.slot[victim] = mem_trace(kind, pay, strength01, t);
+    row.slot[victim] = mem_trace(kind, pay, strength01, t, gossip);
     ++writes_;
     ++evictions_;
     return true;
@@ -625,6 +625,16 @@ AiTick ai_step(Registry& reg, NpcPool& pool, Field<float>* danger, Field<float>*
     // that hazard lives in `ai_init`, by construction rather than by comment.
     const Field<float>* fogField = world != nullptr ? world->fields().find<float>(kFogField) : nullptr;
     auto view = reg.view<AiBrain, const NpcRef, const Transform, Velocity>();
+    
+    // --- Resource Claims (Problem 27) ---
+    // A transient array of seats claimed this tick. Because ECS view iteration is stable,
+    // the assignment of seats is deterministic across frames: the same NPC gets the same
+    // seat every frame. If a higher-priority (earlier) NPC abandons its errand, the lower
+    // priority NPC will seamlessly upgrade to the better seat. No persistent state needed!
+    std::uint32_t claimedSeats[512];
+    int numClaims = 0;
+
+    // --- Main Steering Loop ---
     for (auto e : view) {
         const Transform& tr = view.get<const Transform>(e);
         if (tr.layer != layer) continue;
@@ -934,15 +944,25 @@ AiTick ai_step(Registry& reg, NpcPool& pool, Field<float>* danger, Field<float>*
                 // Stateless by construction; see the [room_zone.h] banner.
                 const int rx = cx / roomStride;
                 const int ry = cy / roomStride;
-                int ox = 0, oy = 0;
-                // Seated AT the furniture when the room has any: a stove, a pan, a
-                // cot ([room_zone.h] kRoomFurniture). The same table the furnisher
-                // placed them from, so the body walks to a thing that is really
-                // there — which is what makes the whole errand VISIBLE instead of
-                // being a number in stderr.
-                room_seat_offset(idSeed, here, rx, ry, roomStride, ox, oy);
-                const int sx = rx * roomStride + ox;
-                const int sy = ry * roomStride + oy;
+                int ox = 0, oy = 0, sx = 0, sy = 0;
+                for (int attempt = 0; attempt < 8; ++attempt) {
+                    room_seat_offset(idSeed, here, rx, ry, roomStride, attempt, ox, oy);
+                    sx = rx * roomStride + ox;
+                    sy = ry * roomStride + oy;
+                    const std::uint32_t seatHash = (static_cast<std::uint32_t>(sy) << 16) | static_cast<std::uint32_t>(sx);
+                    
+                    bool taken = false;
+                    for (int i = 0; i < numClaims; ++i) {
+                        if (claimedSeats[i] == seatHash) {
+                            taken = true;
+                            break;
+                        }
+                    }
+                    if (!taken) {
+                        if (numClaims < 512) claimedSeats[numClaims++] = seatHash;
+                        break;
+                    }
+                }
 
                 // A seat inside solid geometry is unreachable, and a body that
                 // cannot reach its seat would push into the wall for the rest of
@@ -1077,81 +1097,5 @@ AiTick ai_step(Registry& reg, NpcPool& pool, Field<float>* danger, Field<float>*
     return out;
 }
 
-void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
-                    const nav::FineNav& fine, LayerId layer, float dt,
-                    const GravityField& gravity) {
-    auto view = reg.view<AiBrain, PatrolPlan, const Transform, Velocity, const NpcRef>();
-    const GravityFrame gf = regime_frame(gravity.regime);
-    for (auto e : view) {
-        const auto& brain = view.get<AiBrain>(e);
-        if (brain.motion != static_cast<std::uint8_t>(MotionOwner::Ai)) continue;
-        if (brain.currentIntent != IntentPatrol) continue;
-
-        const auto& tr = view.get<const Transform>(e);
-        if (tr.layer != layer) continue;
-
-        auto& plan = view.get<PatrolPlan>(e);
-        auto& vel = view.get<Velocity>(e);
-        const auto& nr = view.get<const NpcRef>(e);
-
-        const int cx = wrap_macro(static_cast<int>(std::floor(tr.pos.x / kCellSize)));
-        const int cy = wrap_macro(static_cast<int>(std::floor(tr.pos.y / kCellSize)));
-        const int cz = static_cast<int>(std::floor(tr.pos.z / kCellSize));
-        ivec3 myCell{cx, cy, cz};
-
-        if (plan.nodeFrom == plan.nodeTo) {
-            const std::uint32_t idSeed = identity_seed(nr.id);
-            plan.nodeTo = static_cast<std::uint8_t>(hash3(idSeed, plan.hops, kPatrolSalt) % kLatticeCount);
-        }
-
-        const LatticeNode n = lattice_unpack(plan.nodeTo);
-        ivec3 dest{lattice_coord(n.ix), lattice_coord(n.iy), lattice_coord(n.iz)};
-
-        const std::uint8_t stepDir = nav::route_step(coarse, fine, myCell, dest);
-
-        if (stepDir == nav::kFlowArrived) {
-            plan.hops++;
-            plan.nodeFrom = plan.nodeTo;
-            const std::uint32_t idSeed = identity_seed(nr.id);
-            plan.nodeTo = static_cast<std::uint8_t>(hash3(idSeed, plan.hops, kPatrolSalt) % kLatticeCount);
-            if (gf.axis != 0) vel.v.x = 0.0f;
-            if (gf.axis != 1) vel.v.y = 0.0f;
-            if (gf.axis != 2) vel.v.z = 0.0f;
-        } else if (stepDir < 6) {
-            if (stepDir < 4) {
-                const int nx = wrap_macro(cx + nav::kNavDir[stepDir][0]);
-                const int ny = wrap_macro(cy + nav::kNavDir[stepDir][1]);
-                const int nz = wrap_macro(cz + nav::kNavDir[stepDir][2]);
-                const float tx = (static_cast<float>(nx) + 0.5f) * kCellSize;
-                const float ty = (static_cast<float>(ny) + 0.5f) * kCellSize;
-                const float tz = (static_cast<float>(nz) + 0.5f) * kCellSize;
-                const float dx = gf.axis == 0 ? 0.0f : wrap_delta_f(tr.pos.x, tx, kWorldExtent);
-                const float dy = gf.axis == 1 ? 0.0f : wrap_delta_f(tr.pos.y, ty, kWorldExtent);
-                const float dz = gf.axis == 2 ? 0.0f : wrap_delta_f(tr.pos.z, tz, kWorldExtent);
-                const float d2 = dx * dx + dy * dy + dz * dz;
-                if (d2 > kMinFleeGrad2) {
-                    const float inv = 1.0f / std::sqrt(d2);
-                    if (gf.axis != 0) vel.v.x = dx * inv * kErrandSpeed;
-                    if (gf.axis != 1) vel.v.y = dy * inv * kErrandSpeed;
-                    if (gf.axis != 2) vel.v.z = dz * inv * kErrandSpeed;
-                }
-            } else {
-                const float tx = (static_cast<float>(dest.x) + 0.5f) * kCellSize;
-                const float ty = (static_cast<float>(dest.y) + 0.5f) * kCellSize;
-                const float tz = (static_cast<float>(dest.z) + 0.5f) * kCellSize;
-                const float dx = gf.axis == 0 ? 0.0f : wrap_delta_f(tr.pos.x, tx, kWorldExtent);
-                const float dy = gf.axis == 1 ? 0.0f : wrap_delta_f(tr.pos.y, ty, kWorldExtent);
-                const float dz = gf.axis == 2 ? 0.0f : wrap_delta_f(tr.pos.z, tz, kWorldExtent);
-                const float d2 = dx * dx + dy * dy + dz * dz;
-                if (d2 > kMinFleeGrad2) {
-                    const float inv = 1.0f / std::sqrt(d2);
-                    if (gf.axis != 0) vel.v.x = dx * inv * kErrandSpeed;
-                    if (gf.axis != 1) vel.v.y = dy * inv * kErrandSpeed;
-                    if (gf.axis != 2) vel.v.z = dz * inv * kErrandSpeed;
-                }
-            }
-        }
-    }
-}
 
 } // namespace giga::game

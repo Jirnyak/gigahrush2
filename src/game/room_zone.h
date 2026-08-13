@@ -212,6 +212,7 @@ struct RoomRecovery {
     float poo;         // - per second
     float pendingPee;  // + per second into the digestion queue
     float pendingPoo;  // + per second
+    float hpBank = 0.0f; // + per second into HP recovery bank
 };
 
 inline constexpr RoomRecovery kRoomRecovery[kFloorRoomBits] = {
@@ -227,11 +228,11 @@ inline constexpr RoomRecovery kRoomRecovery[kFloorRoomBits] = {
     // appears on. The rows stay zero until there is an hour to read.
     /* 1 Common     */ {}, // reference: +1.5 food/water, but only in the LUNCH state
     /* 2 Storage    */ {},
-    /* 3 Kitchen    */ {3.5f, 4.5f, 0.0f, 0.0f, 0.0f, 2.1f, 3.5f * 0.35f},
-    /* 4 Bathroom   */ {0.0f, 2.0f, 0.0f, 12.0f, 9.0f, 0.0f, 0.0f},
-    /* 5 Living     */ {0.0f, 0.0f, 2.8f, 0.0f, 0.0f, 0.0f, 0.0f},
+    /* 3 Kitchen    */ {3.5f, 4.5f, 0.0f, 0.0f, 0.0f, 2.1f, 3.5f * 0.35f, 0.0f},
+    /* 4 Bathroom   */ {0.0f, 2.0f, 0.0f, 12.0f, 9.0f, 0.0f, 0.0f, 0.0f},
+    /* 5 Living     */ {0.0f, 0.0f, 2.8f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f},
     /* 6 Office     */ {}, // reference: sleep, but gated on `resting` — see above
-    /* 7 Medical    */ {}, // reference: hp — needs a crowd heal bank, see above
+    /* 7 Medical    */ {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.2f}, // 1.2 HP/s
     /* 8 Production */ {},
     /* 9 Smoking    */ {},
     /*10 Hq         */ {},
@@ -244,7 +245,9 @@ bool room_restores(std::uint16_t bit);
 // Advance `n` by one `dt` of standing in a room of kind `bit`. Pure: no registry,
 // no world, no allocation, and a `bit` of 0 (a wall line, or a room kind with a
 // zero row) is a no-op. Clamps into [0, kNeedMax] exactly like `needs_advance`.
-void room_recover(Needs& n, std::uint16_t bit, float dt);
+void room_recover(Needs& n, std::uint16_t bit, float dt,
+                  class AiMemory* mem = nullptr, NpcId id = kInvalidNpc,
+                  int cx = 0, int cy = 0, int cz = 0, double now = 0.0);
 
 // ---------------------------------------------------------------------------
 // TABLE 3 — what FURNITURE a room kind contains.
@@ -340,7 +343,7 @@ void room_slot_offset(std::uint8_t slot, int stride, int& ox, int& oy);
 // spreads across them. A room with no use spot falls back to a free interior cell,
 // which is what keeps every un-furnished room kind working exactly as before.
 void room_seat_offset(std::uint32_t idSeed, std::uint16_t roomBit, int rx, int ry,
-                      int stride, int& ox, int& oy);
+                      int stride, int attempt, int& ox, int& oy);
 
 // Furnish every room on `layer` from `kRoomFurniture`, and return how many pieces
 // landed. Spawns ordinary prop ECS entities through `spawn_prop_from_id`, so the

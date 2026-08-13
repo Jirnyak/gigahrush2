@@ -301,7 +301,7 @@ void rooms_seat_is_the_micro_goal() {
 
     // --- a room kind with NO furniture: a free interior cell, as before ---------
     for (std::uint32_t id = 0; id < 256; ++id) {
-        room_seat_offset(id, kNoFurniture, 3, 7, stride, ox, oy);
+        room_seat_offset(id, kNoFurniture, 3, 7, stride, 0, ox, oy);
         CHECK(ox >= 1 && ox <= stride - 1);
         CHECK(oy >= 1 && oy <= stride - 1);
     }
@@ -309,13 +309,13 @@ void rooms_seat_is_the_micro_goal() {
     // Stable: the same body in the same room always gets the same seat, so it does
     // not shuffle between ticks. This is what lets the micro-goal be stateless.
     int ax = 0, ay = 0, bx = 0, by = 0;
-    room_seat_offset(1234u, kNoFurniture, 5, 9, stride, ax, ay);
-    room_seat_offset(1234u, kNoFurniture, 5, 9, stride, bx, by);
+    room_seat_offset(1234u, kNoFurniture, 5, 9, stride, 0, ax, ay);
+    room_seat_offset(1234u, kNoFurniture, 5, 9, stride, 0, bx, by);
     CHECK(ax == bx && ay == by);
 
     // Different room, same body: a different seat is expected (you sit where you
     // are), and the whole point is that it needs no stored state to change.
-    room_seat_offset(1234u, kNoFurniture, 6, 9, stride, bx, by);
+    room_seat_offset(1234u, kNoFurniture, 6, 9, stride, 0, bx, by);
     CHECK(bx >= 1 && by >= 1);
 
     // Spread: 256 bodies in one room must not stack on one cell. With 9 interior
@@ -323,7 +323,7 @@ void rooms_seat_is_the_micro_goal() {
     // once, which a constant or a poorly mixed hash would fail.
     int used[16] = {};
     for (std::uint32_t id = 0; id < 256; ++id) {
-        room_seat_offset(id, kNoFurniture, 2, 2, stride, ox, oy);
+        room_seat_offset(id, kNoFurniture, 2, 2, stride, 0, ox, oy);
         ++used[(oy - 1) * (stride - 1) + (ox - 1)];
     }
     int distinct = 0;
@@ -345,7 +345,7 @@ void rooms_seat_is_the_micro_goal() {
         int hits = 0, distinctSpots = 0;
         int seen[16] = {};
         for (std::uint32_t id = 0; id < 256; ++id) {
-            room_seat_offset(id, room_bit(u.room), 4, 4, stride, ox, oy);
+            room_seat_offset(id, room_bit(u.room), 4, 4, stride, 0, ox, oy);
             // Every seat must coincide with a `useSpot` row of THIS room kind.
             bool onFurniture = false;
             for (const RoomFurniture& f : kRoomFurniture) {
@@ -447,7 +447,7 @@ ErrandRun rooms_run_errand(LevelStack& stack, LayerId layer,
     cfg.enabled = true;
     for (int t = 0; t < ticks; ++t) {
         const AiTick a =
-            ai_step(reg, pool, nullptr, w.grid(), layer,
+            ai_step(reg, pool, nullptr, nullptr, w.grid(), layer,
                     static_cast<double>(t) * static_cast<double>(kSimDt), kSimDt,
                     cfg, nullptr, nullptr, nullptr, zones);
         if (a.aiOwned > out.owned) out.owned = a.aiOwned;

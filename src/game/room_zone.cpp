@@ -92,7 +92,7 @@ bool room_restores(std::uint16_t bit) {
     const RoomRecovery& r = kRoomRecovery[i];
     return r.food != 0.0f || r.water != 0.0f || r.sleep != 0.0f ||
            r.pee != 0.0f || r.poo != 0.0f || r.pendingPee != 0.0f ||
-           r.pendingPoo != 0.0f || r.hpBank != 0.0f;
+           r.pendingPoo != 0.0f;
 }
 
 void room_recover(Needs& n, std::uint16_t bit, float dt,
@@ -138,10 +138,6 @@ void room_recover(Needs& n, std::uint16_t bit, float dt,
     // consequence of eating, which is the whole point of the kitchen row.
     n.pendingPee += r.pendingPee * dt;
     n.pendingPoo += r.pendingPoo * dt;
-    // hpBank accumulates fractional HP gain (Medical room = 1.2 HP/s). The whole-HP
-    // spill into pool.hp() happens in needs_step, where the pool is accessible.
-    // Not clamped here: the spill in needs_step drains it each tick.
-    n.hpBank += r.hpBank * dt;
 }
 
 // ---------------------------------------------------------------------------
@@ -172,7 +168,7 @@ void room_slot_offset(std::uint8_t slot, int stride, int& ox, int& oy) {
 }
 
 void room_seat_offset(std::uint32_t idSeed, std::uint16_t roomBit, int rx, int ry,
-                      int stride, int& ox, int& oy) {
+                      int stride, int attempt, int& ox, int& oy) {
     const int span = stride - 1; // interior width: offsets 1..stride-1
     if (span <= 0) {
         ox = 0;
@@ -194,13 +190,13 @@ void room_seat_offset(std::uint32_t idSeed, std::uint16_t roomBit, int rx, int r
         if (n < kRoomSlots) spots[n++] = f.slot;
     }
     if (n != 0) {
-        room_slot_offset(spots[h % n], stride, ox, oy);
+        room_slot_offset(spots[(h + static_cast<std::uint32_t>(attempt)) % n], stride, ox, oy);
         return;
     }
 
     // No furniture for this room kind: a free interior cell, exactly as before.
-    ox = 1 + static_cast<int>(h % static_cast<std::uint32_t>(span));
-    oy = 1 + static_cast<int>((h >> 16) % static_cast<std::uint32_t>(span));
+    ox = 1 + static_cast<int>((h + static_cast<std::uint32_t>(attempt)) % static_cast<std::uint32_t>(span));
+    oy = 1 + static_cast<int>(((h >> 16) + static_cast<std::uint32_t>(attempt)) % static_cast<std::uint32_t>(span));
 }
 
 std::size_t RoomZones::resident_bytes() const {
@@ -487,20 +483,8 @@ std::uint32_t seed_room_furniture(Registry& reg, const World& world, LayerId lay
     for (int ry = 0; ry < roomsPerAxis; ++ry) {
         for (int rx = 0; rx < roomsPerAxis; ++rx) {
             const std::uint16_t bit = floor_room_mask(kind, number, rx, ry);
-            const RoomTemplate* templ = nullptr;
-            for (const RoomTemplate& t : kRoomTemplates) {
-                if (t.room == bit) {
-                    templ = &t;
-                    break; // Pick the first template (variant 0)
-                }
-            }
-            if (!templ || templ->propCount == 0) continue;
-
-            int propsSpawnedThisRoom = 0;
-            for (std::uint8_t i = 0; i < templ->propCount; ++i) {
-                if (propsSpawnedThisRoom >= templ->maxProps) break;
-                
-                const RoomFurniture& f = kRoomFurniture[templ->firstProp + i];
+            for (const RoomFurniture& f : kRoomFurniture) {
+                if (f.room != bit) continue;
                 int ox = 0, oy = 0;
                 room_slot_offset(f.slot, stride, ox, oy);
                 const int cx = wrap_macro(rx * stride + ox);
@@ -533,10 +517,8 @@ std::uint32_t seed_room_furniture(Registry& reg, const World& world, LayerId lay
                     6.2831853f;
                 if (spawn_prop_from_id(reg, world, pos, anchor,
                                        static_cast<PropId>(f.prop), layer,
-                                       yaw) != entt::null) {
+                                       yaw) != entt::null)
                     ++placed;
-                    ++propsSpawnedThisRoom;
-                }
             }
         }
     }
