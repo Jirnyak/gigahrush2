@@ -411,4 +411,24 @@ void craft_write(const CraftingState& st, std::uint8_t* out);
 // already passed, so dropping the bit is belt-and-braces, not the defence.
 bool craft_read(const std::uint8_t* in, std::size_t n, CraftingState& st);
 
+// ---------------------------------------------------------------------------
+// Crafting from Junk / Categories (Spec 03 §4.3, Roadmap 5.6)
+// ---------------------------------------------------------------------------
+struct CategoryRequirement {
+    ItemCategory category = ItemCategory::Misc;
+    std::uint16_t count = 0;
+};
+
+inline constexpr std::size_t kJunkMaxReqs = 4;
+
+struct JunkRecipe {
+    ItemId resultItem = kInvalidItem;
+    std::uint16_t resultCount = 1;
+    CraftStation station = CraftStation::Any;
+    std::uint8_t reqCount = 0;
+    CategoryRequirement reqs[kJunkMaxReqs]{};
+};
+
+CraftResult craft_from_junk(Inventory& inv, const JunkRecipe& recipe, CraftStation at);
+
 } // namespace giga::game

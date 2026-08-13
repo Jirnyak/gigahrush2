@@ -1,4 +1,7 @@
 #include "game/faction_relations.h"
+#include "game/faction.h"
+#include "game/hermetic.h"
+#include "world/gravity.h"
 
 #include <cmath>
 #include <vector>
@@ -435,6 +438,105 @@ RelationTick relations_drain_deaths(FactionRelations& rel, const Registry& reg,
         bus.publish(EventType::RelationChanged, rowK, rowV, pack_relation(nv),
                     tick);
     }
+    return out;
+}
+
+SectionHierarchy bake_section_hierarchy(const NpcPool& pool, const HermeticZones& zones, const FactionRelations& relations) {
+    SectionHierarchy out;
+    for (std::size_t i = 0; i < SectionHierarchy::kMaxSections; ++i) {
+        out.leader[i] = kInvalidNpc;
+    }
+
+    if (zones.sealed.empty()) return out;
+
+    // 2MB array is acceptable during bake
+    std::vector<std::uint8_t> section_map(kMacroCells, 255);
+    std::uint8_t current_section = 0;
+
+    // Find connected components of sealed macro cells
+    for (std::size_t i = 0; i < kMacroCells; ++i) {
+        if ((zones.sealed[i / 64] & (1ULL << (i % 64))) && section_map[i] == 255) {
+            if (current_section >= SectionHierarchy::kMaxSections) break;
+
+            std::vector<int> q;
+            q.push_back(static_cast<int>(i));
+            section_map[i] = current_section;
+
+            std::size_t head = 0;
+            while (head < q.size()) {
+                int curr = q[head++];
+                int cz = curr / (kMacroDim * kMacroDim);
+                int cy = (curr / kMacroDim) % kMacroDim;
+                int cx = curr % kMacroDim;
+
+                const int dx[] = {1, -1, 0, 0, 0, 0};
+                const int dy[] = {0, 0, 1, -1, 0, 0};
+                const int dz[] = {0, 0, 0, 0, 1, -1};
+
+                for (int d = 0; d < 6; ++d) {
+                    int nx = wrap_macro(cx + dx[d]);
+                    int ny = wrap_macro(cy + dy[d]);
+                    int nz = wrap_macro(cz + dz[d]);
+                    int nidx = static_cast<int>(macro_index(nx, ny, nz));
+
+                    if ((zones.sealed[nidx / 64] & (1ULL << (nidx % 64))) && section_map[nidx] == 255) {
+                        section_map[nidx] = current_section;
+                        q.push_back(nidx);
+                    }
+                }
+            }
+            current_section++;
+        }
+    }
+
+    out.sectionCount = current_section;
+    if (current_section == 0) return out;
+
+    NpcPool& p = const_cast<NpcPool&>(pool);
+    std::vector<std::vector<NpcId>> section_residents(current_section);
+
+    for (NpcId id = 0; id < p.count(); ++id) {
+        if (!p.alive(id)) continue;
+        int cx = p.cx(id);
+        int cy = p.cy(id);
+        int cz = p.cz(id);
+        std::size_t idx = macro_index(cx, cy, cz);
+        std::uint8_t sec = section_map[idx];
+        if (sec != 255) {
+            section_residents[sec].push_back(id);
+        }
+    }
+
+    for (std::uint8_t s = 0; s < current_section; ++s) {
+        NpcId best_id = kInvalidNpc;
+        int best_score = -1;
+
+        for (NpcId id : section_residents[s]) {
+            int score = static_cast<int>(p.level(id)) * 10;
+            int positive_edges = 0;
+
+            for (const auto& rel : p.relations(id)) {
+                if (rel.target != kInvalidNpc && rel.affinity > 0) {
+                    bool in_section = false;
+                    for (NpcId other : section_residents[s]) {
+                        if (other == rel.target) {
+                            in_section = true;
+                            break;
+                        }
+                    }
+                    if (in_section) positive_edges++;
+                }
+            }
+            score += positive_edges;
+
+            if (score > best_score) {
+                best_score = score;
+                best_id = id;
+            }
+        }
+        out.leader[s] = best_id;
+    }
+
     return out;
 }
 

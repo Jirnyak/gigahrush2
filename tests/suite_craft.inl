@@ -897,6 +897,50 @@ static void test_craft_all() {
         for (std::size_t i = 0; i < sizeof a.pad_; ++i) CHECK(a.pad_[i] == 0);
     }
 
+    { // ---- 14. crafting from junk tags --------------------------------------
+        ItemId tool1 = chalk;
+        ItemId tool2 = kInvalidItem;
+        for (ItemId id = 1; id <= kCraftRecipeCount; ++id) {
+            if (id != tool1 && cat_of(id) == ItemCategory::Tool && default_known(id)) {
+                tool2 = id; break;
+            }
+        }
+        CHECK(tool2 != kInvalidItem);
+
+        Inventory inv{};
+        inv.slots[0] = ItemSlot{tool1, 1};
+        inv.slots[1] = ItemSlot{tool2, 1};
+        inv.slots[2] = ItemSlot{bandage, 1};
+
+        JunkRecipe jr;
+        jr.resultItem = knife;
+        jr.resultCount = 1;
+        jr.station = CraftStation::Workbench;
+        jr.reqCount = 2;
+        jr.reqs[0] = {ItemCategory::Tool, 2};
+        jr.reqs[1] = {ItemCategory::Medicine, 1};
+
+        CHECK(craft_from_junk(inv, jr, CraftStation::Lathe).fail == CraftFail::StationMismatch);
+
+        JunkRecipe missing = jr;
+        missing.reqs[1] = {ItemCategory::Medicine, 2};
+        CHECK(craft_from_junk(inv, missing, CraftStation::Workbench).fail == CraftFail::InsufficientMaterials);
+
+        Inventory fullInv = inv;
+        for (int i = 0; i < kInvSlots; ++i) {
+            if (fullInv.slots[i].count == 0) fullInv.slots[i] = ItemSlot{bandage, 99};
+        }
+        CHECK(craft_from_junk(fullInv, jr, CraftStation::Workbench).fail == CraftFail::InventoryFull);
+
+        const CraftResult res = craft_from_junk(inv, jr, CraftStation::Workbench);
+        CHECK(res.fail == CraftFail::None);
+        CHECK(res.item == knife);
+        CHECK(held(inv, knife) == 1u);
+        CHECK(held(inv, tool1) == 0u);
+        CHECK(held(inv, tool2) == 0u);
+        CHECK(held(inv, bandage) == 0u);
+    }
+
     // Work counts, printed. Counts and not seconds: the same run does the same
     // amount of work on every host, which a stopwatch cannot promise.
     CHECK(disassembliesRun > 7000u);

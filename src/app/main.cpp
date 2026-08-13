@@ -77,6 +77,7 @@
 #include "game/floors/padic/padic.h"
 #include "game/prop_system.h"
 #include "game/investigate.h"
+#include "game/wear.h"
 #include "sim/fluid.h"
 #include "game/noise.h"
 #include "game/wander.h"
@@ -4255,14 +4256,9 @@ int main(int argc, char** argv) {
                 needs = game::needs_step(reg, pool, activeLayer, kSimDt, &roomZones,
                                          &aiMem, simNow);
                 needsHpLost += needs.hpLost;
-                // The other half of the acceptance trail. `bodies` says the clock is
-                // no longer a one-body clock, `recovering` says rooms are actually
-                // feeding people, and `crowdDead` is the number that would climb if
-                // the ambient half were ever broken again — a silent morgue is the
-                // failure mode this widening had to buy its way past ([needs.h]).
-                // Cadence piggybacks on the [aimem] pulse a few hundred lines up,
-                // which set `lastAimemLogTick` to `simTick` earlier in THIS tick, so
-                // the two lines always describe the same frame.
+                // Acceptance trail: `bodies` (clock is multi-body), `recovering`
+                // (rooms feed people), and `crowdDead` (failure mode tracking).
+                // Piggybacks on [aimem] pulse, logging same frame.
                 crowdDead += needs.crowdKilled;
                 if (aiCfg.enabled && lastAimemLogTick == simTick)
                     std::fprintf(stderr,
@@ -4270,6 +4266,10 @@ int main(int argc, char** argv) {
                                  "crowd_dead_total=%u\n",
                                  static_cast<unsigned long long>(simTick),
                                  needs.bodies, needs.recovering, crowdDead);
+
+                // Wear, environmental fouling and charge decay (Spec 03 §4.2)
+                game::fouling_step(reg, pool, activeLayer, nullptr, kSimDt, simTick, &bus);
+                game::charge_step(reg, pool, activeLayer, kSimDt, simTick, &bus);
                 // Corpses pay out BEFORE they are destroyed. The gap between
                 // "hp hit zero" and "gone" is precisely what the Dead tag exists
                 // to create (combat.h defect 2) — the reference's P0 was culling

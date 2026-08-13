@@ -22,6 +22,8 @@
 #include "game/monster_traits.h"
 #include "game/ranged_table.h"
 #include "game/rpg.h"      // RpgStats, xp_for_monster_kill, award_xp
+#include "game/equip.h"
+#include "game/wear.h"
 #include "game/status.h"   // StatusSet, status_melee/aim mults
 #include "game/weapon_table.h"
 #include "sim/camera.h"   // camera_forward
@@ -1866,6 +1868,28 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
 
     if (!wantFire || pr.cooldownMs > 0) return 0;
 
+    // Find the item slot in inventory for gun
+    ItemSlot* gunSlot = nullptr;
+    if (const auto* eq = reg.try_get<Equipped>(shooter)) {
+        const std::uint8_t sIdx = eq->invSlot[static_cast<std::size_t>(EquipSlot::Weapon)];
+        if (sIdx < kInvSlots && inv.slots[sIdx].item == gun) {
+            gunSlot = &inv.slots[sIdx];
+        }
+    }
+    if (!gunSlot) {
+        for (ItemSlot& sl : inv.slots) {
+            if (sl.item == gun) {
+                gunSlot = &sl;
+                break;
+            }
+        }
+    }
+
+    if (gunSlot && check_weapon_jam(nr->id, *gunSlot, tick, 0.0f, bus)) {
+        pr.cooldownMs = 400; // misfire recovery
+        return 0;
+    }
+
     const CameraTag& cam = reg.get<const CameraTag>(shooter);
     const Transform& tr = reg.get<const Transform>(shooter);
     const vec3 eye{tr.pos.x + cam.eyeOffset.x, tr.pos.y + cam.eyeOffset.y,
@@ -1939,6 +1963,9 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
     // ONE round per shot regardless of pellet count — a shotgun blast costs one shell
     // and produces up to twelve projectiles. The reference's rule.
     --pr.magCount;
+    if (gunSlot) {
+        apply_item_wear(*gunSlot);
+    }
     // RPGCMBT: AGI shortens firearm cooldown (same inverse mult as melee).
     std::uint16_t rcd = def->cooldownMs;
     if (const RpgStats* rs = reg.try_get<RpgStats>(shooter)) {
@@ -2166,6 +2193,19 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
                                   gravity);
     pm.cooldownMs = swingCd;
     if (r.lethal) ++pm.kills;
+    if (heldWeapon != 0) {
+        if (const NpcRef* n = reg.try_get<NpcRef>(self)) {
+            if (pool.valid(n->id)) {
+                Inventory& inv = pool.inventory(n->id);
+                for (ItemSlot& sl : inv.slots) {
+                    if (sl.item == heldWeapon) {
+                        apply_item_wear(sl);
+                        break;
+                    }
+                }
+            }
+        }
+    }
     (void)bus;
     (void)tick;
     return r.hit;

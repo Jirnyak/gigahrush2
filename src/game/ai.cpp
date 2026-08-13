@@ -12,7 +12,7 @@
 #include "game/needs.h"       // needs_roll — substitute for an unseeded pool row
 #include "game/door.h"        // door_nearest_shelter — hermetic flee target (§23)
 #include "game/role.h"        // RoleTraits, role_traits — archetype multipliers
-#include "game/room_zone.h"   // room affordance table + baked fields (§27 legs a,b)
+#include "game/equip.h"       // EquipSlot, Equipped
 #include "sim/diffusion.h"    // diffusion_gradient — the flee steering field
 #include "world/field.h"      // Field<float>
 #include "world/gravity.h"    // GravityFrame / regime_frame — the steering plane
@@ -774,8 +774,35 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             // everything else. With no memory every added field stays at its zero
             // default, so the ranking is identical to the pre-memory one.
             if (haveRecall) apply_recall(recall, p.faction, p);
-            // Every other Perception field stays at its stubbed default, so its
-            // scorer term contributes 0 — the faithful-port invariant.
+            // Samosbor fog blocks LOS and reduces visual perception.
+            if (p.fog > 0.0f) {
+                const float fogCap = 1.0f - p.fog; // p.fog is already clamped 0..1 in field
+                p.visibleHostiles *= fogCap;
+                p.hostilePower *= fogCap;
+                p.allyPower *= fogCap;
+                if (p.threatDistance >= 0.0f) {
+                    // Fog pushes the perceived threat distance towards the edge of vision
+                    p.threatDistance += (18.0f - p.threatDistance) * p.fog;
+                }
+            }
+            // Un-stub Perception::armed (Task 4.6, Spec 01 §2.5)
+            bool isArmed = false;
+            if (const auto* eq = reg.try_get<Equipped>(e)) {
+                const std::uint8_t wSlot = eq->invSlot[static_cast<std::size_t>(EquipSlot::Weapon)];
+                if (wSlot < kInvSlots && pool.inventory(id).slots[wSlot].item != 0) {
+                    isArmed = true;
+                }
+            }
+            if (!isArmed) {
+                const Inventory& inv = pool.inventory(id);
+                for (const auto& sl : inv.slots) {
+                    if (sl.item != 0 && item_def(sl.item).category == static_cast<std::uint8_t>(ItemCategory::Weapon)) {
+                        isArmed = true;
+                        break;
+                    }
+                }
+            }
+            p.armed = isArmed;
 
             const Needs needs = needs_for(pool, id);
             float scores[kIntentCount];

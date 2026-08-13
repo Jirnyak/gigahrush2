@@ -397,4 +397,72 @@ bool craft_read(const std::uint8_t* in, std::size_t n, CraftingState& st) {
     return true;
 }
 
+CraftResult craft_from_junk(Inventory& inv, const JunkRecipe& recipe, CraftStation at) {
+    if (!item_valid(recipe.resultItem)) {
+        return CraftResult{CraftFail::UnknownItem, kInvalidItem, -1, 0};
+    }
+    if (!craft_station_ok(recipe.station, at)) {
+        return CraftResult{CraftFail::StationMismatch, kInvalidItem, -1, 0};
+    }
+    if (recipe.reqCount == 0) {
+        return CraftResult{CraftFail::NoComposition, kInvalidItem, -1, 0};
+    }
+
+    // Check material quantities across inventory
+    for (std::size_t r = 0; r < recipe.reqCount && r < kJunkMaxReqs; ++r) {
+        const auto& req = recipe.reqs[r];
+        std::uint32_t have = 0;
+        for (int i = 0; i < kInvSlots; ++i) {
+            const ItemSlot& sl = inv.slots[i];
+            if (sl.item == 0 || sl.count == 0) continue;
+            if (item_def(sl.item).category == static_cast<std::uint8_t>(req.category)) {
+                have += sl.count;
+            }
+        }
+        if (have < req.count) {
+            return CraftResult{CraftFail::InsufficientMaterials, kInvalidItem, -1, 0};
+        }
+    }
+
+    // Check if there is room for result
+    const int targetSlot = slot_for_one(inv, recipe.resultItem);
+    if (targetSlot < 0) {
+        return CraftResult{CraftFail::InventoryFull, kInvalidItem, -1, 0};
+    }
+
+    // Spend materials deterministically (from lower slots to higher)
+    std::uint32_t totalSpentValue = 0;
+    for (std::size_t r = 0; r < recipe.reqCount && r < kJunkMaxReqs; ++r) {
+        const auto& req = recipe.reqs[r];
+        std::uint32_t needed = req.count;
+        for (int i = 0; i < kInvSlots && needed > 0; ++i) {
+            ItemSlot& sl = inv.slots[i];
+            if (sl.item == 0 || sl.count == 0) continue;
+            if (item_def(sl.item).category == static_cast<std::uint8_t>(req.category)) {
+                const std::uint32_t take = (needed < static_cast<std::uint32_t>(sl.count))
+                                               ? needed
+                                               : static_cast<std::uint32_t>(sl.count);
+                totalSpentValue += static_cast<std::uint32_t>(item_def(sl.item).value) * take;
+                sl.count = static_cast<std::uint16_t>(sl.count - take);
+                needed -= take;
+                if (sl.count == 0) {
+                    sl = ItemSlot{};
+                }
+            }
+        }
+    }
+
+    // Place crafted item in inventory
+    ItemSlot& dst = inv.slots[targetSlot];
+    if (dst.item == recipe.resultItem) {
+        dst.count = static_cast<std::uint16_t>(dst.count + recipe.resultCount);
+    } else {
+        dst.item = recipe.resultItem;
+        dst.count = recipe.resultCount;
+        dst.condition = 255;
+    }
+
+    return CraftResult{CraftFail::None, recipe.resultItem, targetSlot, totalSpentValue};
+}
+
 } // namespace giga::game

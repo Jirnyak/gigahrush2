@@ -1595,4 +1595,39 @@ static void test_utilai_all() {
         CHECK(asLooter[IntentEat] == asResident[IntentEat]);
         CHECK(asMedic[IntentEat] == asResident[IntentEat]);
     }
+
+    // ======================================================================
+    // 20. PERCEPTION ARMED UN-STUBBING & SCORING (Task 4.6).
+    // ======================================================================
+    {
+        Perception pArmed{};
+        pArmed.faction = static_cast<std::uint16_t>(Faction::Citizens);
+        pArmed.hp = 100.0f;
+        pArmed.maxHp = 100.0f;
+        pArmed.armed = true;
+
+        Perception pUnarmed = pArmed;
+        pUnarmed.armed = false;
+
+        Needs needs{};
+        needs.food = 100.0f;
+        needs.water = 100.0f;
+        needs.sleep = 100.0f;
+
+        float armedScores[kIntentCount]{};
+        float unarmedScores[kIntentCount]{};
+
+        score_intents(pArmed, needs, armedScores);
+        score_intents(pUnarmed, needs, unarmedScores);
+
+        // IntentCombat has a +18 bonus when armed and -16 penalty when unarmed (+34 point difference)
+        CHECK(armedScores[IntentCombat] > unarmedScores[IntentCombat]);
+        CHECK(armedScores[IntentCombat] - unarmedScores[IntentCombat] >= 30.0f);
+
+        // IntentFlee is lower when armed (-5 penalty to flee)
+        CHECK(armedScores[IntentFlee] < unarmedScores[IntentFlee]);
+
+        std::fprintf(stdout, "[utilai] Block 20: Perception::armed un-stubbing correctly elevates IntentCombat (%.1f vs %.1f) and reduces IntentFlee\n",
+                     armedScores[IntentCombat], unarmedScores[IntentCombat]);
+    }
 }

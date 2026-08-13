@@ -338,4 +338,20 @@ RelationTick relations_drain_deaths(FactionRelations& rel, const Registry& reg,
                                    const NpcPool& pool, EventBus& bus,
                                    std::uint64_t tick);
 
+// ---------------------------------------------------------------------------
+// Section Hierarchy (Spec 01 §4.3, Roadmap 4.5)
+// ---------------------------------------------------------------------------
+struct SectionHierarchy {
+    static constexpr std::size_t kMaxSections = 64;
+    NpcId leader[kMaxSections]{};
+    std::uint8_t sectionCount = 0;
+};
+
+// Computes the leader for each hermetic section:
+// Leader = argmax over resident NPCs in section S of:
+// (rpg_level * 10 + positive_relations_with_residents_in_section)
+SectionHierarchy bake_section_hierarchy(const NpcPool& pool,
+                                        const struct HermeticZones& zones,
+                                        const FactionRelations& relations);
+
 } // namespace giga::game

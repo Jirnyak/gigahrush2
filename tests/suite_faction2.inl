@@ -14,6 +14,7 @@
 // its own #include of the system under test to keep that diff two lines.
 
 #include "game/faction_relations.h"
+#include "game/hermetic.h"
 
 namespace faction2 {
 
@@ -585,5 +586,43 @@ static void test_faction2_all() {
         CHECK(bus.cycle_count(EventType::ItemTransferred) == EventBus::kCapacity);
         bus.clear();
         CHECK(bus.dropped() == 2);                    // since-init, on purpose
+    }
+
+    // ---- 8. bake_section_hierarchy: identifies the highest scored leader -------
+    {
+        Registry reg;
+        NpcPool pool;
+        pool.init();
+        const FactionRelations base = kBaseFactionMatrix;
+        HermeticZones zones;
+
+        // Setup a 2-cell hermetic zone (connected via x-axis)
+        zones.set_sealed(10, 10, 0, true);
+        zones.set_sealed(11, 10, 0, true);
+
+        NpcId npc1 = pool.spawn();
+        pool.cx(npc1) = 10; pool.cy(npc1) = 10; pool.cz(npc1) = 0;
+        pool.level(npc1) = 2; // base score 20
+
+        NpcId npc2 = pool.spawn();
+        pool.cx(npc2) = 11; pool.cy(npc2) = 10; pool.cz(npc2) = 0;
+        pool.level(npc2) = 2; // base score 20, but gets relation bonus
+
+        NpcId npc3 = pool.spawn();
+        pool.cx(npc3) = 10; pool.cy(npc3) = 10; pool.cz(npc3) = 0;
+        pool.level(npc3) = 1;
+
+        // npc2 has positive relationships with both npc1 and npc3 (who are in the same section)
+        pool.relations(npc2)[0] = {npc1, 50, 0};
+        pool.relations(npc2)[1] = {npc3, 50, 0};
+
+        // npc1: score = 2 * 10 = 20
+        // npc2: score = 2 * 10 + 2 = 22 -> WINNER
+        // npc3: score = 1 * 10 = 10
+
+        SectionHierarchy out = bake_section_hierarchy(pool, zones, base);
+
+        CHECK(out.sectionCount == 1);
+        CHECK(out.leader[0] == npc2);
     }
 }
