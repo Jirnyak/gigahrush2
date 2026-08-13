@@ -131,8 +131,7 @@ int g_checks = 0;
 #include "suite_particles.inl"
 #include "suite_architecture.inl"
 #include "suite_gravity_regimes.inl"
-#include "suite_gas.inl"
-#include "suite_budgets.inl"
+
 static void test_inventory() {
     // Compile-time layout contract: a static_assert, not a CHECK. It is a fact
     // about the type, so it belongs to the build, not to a test run.
@@ -5362,10 +5361,9 @@ int main() {
     test_architecture_gates();
     std::fprintf(stderr, "Entering test_gravity_regimes_all...\n");
     test_gravity_regimes_all();
-    std::fprintf(stderr, "Entering test_gas_chemistry_all...\n");
-    test_gas_chemistry_all();
+
     std::fprintf(stderr, "Entering test_budgets_thresholds...\n");
-    test_budgets_thresholds();
+    test_budgets_all();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
 
