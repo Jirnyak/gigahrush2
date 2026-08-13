@@ -372,4 +372,34 @@ bool spend_attr_point(RpgStats& r, Attr a, std::int16_t* hp, std::int16_t* maxHp
     return true;
 }
 
+bool psi_spend(RpgStats& r, std::uint16_t baseCost) {
+    const std::uint16_t cost = adjusted_psi_cost(baseCost, r);
+    if (r.psi >= cost) {
+        r.psi -= cost;
+        return true;
+    }
+    return false;
+}
+
+void psi_regen_step(RpgStats& r, float dt) {
+    const std::uint16_t cap = max_psi(r);
+    if (r.psi >= cap) return;
+
+    const std::uint8_t intVal = r.attr[static_cast<std::size_t>(Attr::Int)];
+    const float rate = 1.0f + 0.15f * static_cast<float>(intVal);
+    const float gainFloat = rate * std::max(dt, 0.0f);
+    const std::uint16_t gain = static_cast<std::uint16_t>(gainFloat >= 1.0f ? gainFloat : 1);
+
+    const std::uint32_t next = static_cast<std::uint32_t>(r.psi) + gain;
+    r.psi = static_cast<std::uint16_t>(next > cap ? cap : next);
+}
+
+void psi_drain(RpgStats& r, std::uint16_t amount) {
+    if (r.psi > amount) {
+        r.psi -= amount;
+    } else {
+        r.psi = 0;
+    }
+}
+
 } // namespace giga::game

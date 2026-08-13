@@ -126,4 +126,20 @@ bool status_is_rooted(const StatusSet& set) {
     return false;
 }
 
+void status_apply_gas_exposure(StatusSet& set, float toxicLoad, float dt, bool hasRespirator) {
+    if (toxicLoad <= 2.0f) return;
+    (void)dt;
+    status_apply(set, StatusId::SporeHaze, hasRespirator);
+}
+
+void status_apply_govnyak_progression(StatusSet& set, std::uint8_t stage, bool useAlt) {
+    if (stage == 0) {
+        status_apply(set, StatusId::GovnyakRelief, useAlt);
+    } else if (stage == 1) {
+        status_apply(set, StatusId::GovnyakCough, useAlt);
+    } else {
+        status_apply(set, StatusId::GovnyakDebt, useAlt);
+    }
+}
+
 } // namespace giga::game

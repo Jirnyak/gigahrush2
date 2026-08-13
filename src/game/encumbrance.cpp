@@ -67,7 +67,10 @@ EncumbranceTick encumbrance_step(Registry& reg, NpcPool& pool, LayerId layer,
         if (!camera && hash_u32(id) % kEncumbrancePeriod != phase) continue;
 
         const std::uint32_t carriedG = inventory_mass_g(pool.inventory(id));
-        const RpgStats* rs = reg.try_get<RpgStats>(e);
+        RpgStats* rs = reg.try_get<RpgStats>(e);
+        if (rs != nullptr) {
+            psi_regen_step(*rs, camera ? dt : slice);
+        }
         const std::uint32_t capacityG =
             carry_capacity_g(rs != nullptr ? *rs : RpgStats{});
         const EncumbranceEffect eff = encumbrance_of(carriedG, capacityG);

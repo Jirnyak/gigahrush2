@@ -198,6 +198,15 @@ std::int16_t melee_damage(const RpgStats& r, ItemId weaponId,
 // place; costs here are integers, so this rounds to the nearest whole point.
 std::uint16_t adjusted_psi_cost(std::uint16_t baseCost, const RpgStats& r);
 
+// Attempts to spend PSI points after INT cost adjustment. Returns true if afford and debited.
+bool psi_spend(RpgStats& r, std::uint16_t baseCost);
+
+// Regenerates PSI towards max_psi based on INT attribute.
+void psi_regen_step(RpgStats& r, float dt);
+
+// Drains PSI (e.g. from mental damage or samosbor field exposure), clamped to zero.
+void psi_drain(RpgStats& r, std::uint16_t amount);
+
 // ---------------------------------------------------------------------------
 // XP sources
 // ---------------------------------------------------------------------------

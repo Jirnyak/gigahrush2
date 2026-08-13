@@ -892,6 +892,63 @@ static void test_death_spills_inventory_to_corpse_and_cell() {
 }
 
 
+static void test_rpg_psi_lifecycle_and_status_producers() {
+    using namespace giga::game;
+
+    // 1. PSI spend & adjusted cost
+    {
+        RpgStats r = fresh_rpg(1);
+        r.psi = 100;
+        r.attr[static_cast<std::size_t>(Attr::Int)] = 0;
+
+        // Base cost 25 with 0 Int -> spends 25
+        CHECK(psi_spend(r, 25));
+        CHECK(r.psi == 75);
+
+        // Fail when not enough PSI
+        CHECK(!psi_spend(r, 80));
+        CHECK(r.psi == 75); // unmodified
+
+        // Higher INT reduces PSI cost
+        r.attr[static_cast<std::size_t>(Attr::Int)] = 50;
+        CHECK(psi_spend(r, 30));
+        CHECK(r.psi == 55); // 75 - 20 = 55
+    }
+
+    // 2. PSI regen and drain
+    {
+        RpgStats r = fresh_rpg(1);
+        r.psi = 20;
+
+        psi_regen_step(r, 1.0f);
+        CHECK(r.psi > 20);
+
+        psi_drain(r, 15);
+        CHECK(r.psi >= 0);
+
+        psi_drain(r, 500);
+        CHECK(r.psi == 0); // clamps at 0, no underflow
+    }
+
+    // 3. Status Producers (Govnyak and Gas Exposure)
+    {
+        StatusSet statuses{};
+        // Ingest Govnyak Relief
+        status_apply_govnyak_progression(statuses, 0, false);
+        CHECK(status_active(statuses, StatusId::GovnyakRelief));
+        CHECK(statuses.intensityE3[static_cast<std::size_t>(StatusId::GovnyakRelief)] == 1000);
+
+        // Stack second dose
+        status_apply_govnyak_progression(statuses, 0, false);
+        CHECK(statuses.intensityE3[static_cast<std::size_t>(StatusId::GovnyakRelief)] == 2000);
+
+        // Gas exposure with respirator
+        status_apply_gas_exposure(statuses, 10.0f, 0.1f, true);
+        CHECK(status_active(statuses, StatusId::SporeHaze));
+        CHECK(statuses.alt[static_cast<std::size_t>(StatusId::SporeHaze)] == 1);
+    }
+}
+
 static void test_rpg_all() {
     test_rpg_curve();
     test_rpg_derived();
@@ -903,5 +960,6 @@ static void test_rpg_all() {
     test_rpg_combat_wire();
     test_rpg_possess_transfer();
     test_death_spills_inventory_to_corpse_and_cell();
+    test_rpg_psi_lifecycle_and_status_producers();
 }
 

@@ -122,6 +122,12 @@ inline constexpr std::uint16_t kStatusIntensityCapE3 = 3000;
 // LONGER remaining time, so re-entering a spore cloud cannot shorten your haze.
 void status_apply(StatusSet& set, StatusId id, bool useAlt);
 
+// Applies environmental toxic/spore smoke exposure
+void status_apply_gas_exposure(StatusSet& set, float toxicLoad, float dt, bool hasRespirator);
+
+// Applies Govnyak substance ingestion/infection progression (0: Relief, 1: Cough, 2: Debt)
+void status_apply_govnyak_progression(StatusSet& set, std::uint8_t stage, bool useAlt);
+
 // Advance every slot by `dtMs`. Returns how many statuses expired on this call.
 std::uint32_t status_step(StatusSet& set, std::uint32_t dtMs);
 
