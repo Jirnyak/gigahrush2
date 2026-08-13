@@ -12,12 +12,14 @@
 #include "game/needs.h"       // needs_roll — substitute for an unseeded pool row
 #include "game/door.h"        // door_nearest_shelter — hermetic flee target (§23)
 #include "game/role.h"        // RoleTraits, role_traits — archetype multipliers
+#include "game/room_zone.h"   // RoomZones, room affordance table + baked fields
 #include "game/equip.h"       // EquipSlot, Equipped
 #include "sim/diffusion.h"    // diffusion_gradient — the flee steering field
 #include "world/field.h"      // Field<float>
 #include "world/gravity.h"    // GravityFrame / regime_frame — the steering plane
 #include "world/macro_grid.h" // MacroGrid (open/wall test inside the gradient)
 #include "world/types.h"      // wrap_macro, kCellSize, kMacroDim
+#include "world/nav.h"        // kNavDir, route_step
 #include "world/world.h"      // World — door_nearest_shelter needs const World&
 
 namespace giga::game {

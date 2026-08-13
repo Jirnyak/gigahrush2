@@ -20,6 +20,7 @@ struct ItemSlot {
     std::uint16_t item = 0;  // 0 = empty
     std::uint16_t count = 0;
 };
+static_assert(sizeof(ItemSlot) == 4);
 
 // Fixed 8x8 rectangle. POD, trivially copyable — no methods that allocate.
 struct Inventory {

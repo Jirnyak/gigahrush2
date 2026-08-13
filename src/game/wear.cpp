@@ -5,9 +5,33 @@
 #include "core/rng.h"
 #include "ecs/components.h"
 #include "game/embody.h"
-#include "sim/gas.h"
 
 namespace giga::game {
+
+WearKind item_wear_kind(const ItemDef& def) {
+    if (def.category == static_cast<std::uint8_t>(ItemCategory::Weapon)) {
+        return WearKind::Jamming;
+    }
+    if (def.category == static_cast<std::uint8_t>(ItemCategory::Tool)) {
+        return WearKind::Charge;
+    }
+    if (def.equipSlot == static_cast<std::uint8_t>(EquipSlot::Armor) ||
+        def.category == static_cast<std::uint8_t>(ItemCategory::Medicine)) {
+        return WearKind::Fouling;
+    }
+    return WearKind::Durability;
+}
+
+namespace {
+
+inline void unpack_gas(std::uint32_t val, float& toxic, float& smoke, float& oxy, float& heat) {
+    toxic = static_cast<float>(val & 0xFFu);
+    smoke = static_cast<float>((val >> 8) & 0xFFu);
+    oxy   = static_cast<float>((val >> 16) & 0xFFu);
+    heat  = static_cast<float>((val >> 24) & 0xFFu);
+}
+
+} // namespace
 
 WearReport fouling_step(Registry& reg, NpcPool& pool, LayerId layer,
                         const Field<std::uint32_t>* gasField, float dt,
@@ -37,7 +61,7 @@ WearReport fouling_step(Registry& reg, NpcPool& pool, LayerId layer,
             if (sl.item == 0) continue;
 
             const ItemDef& def = item_def(sl.item);
-            if (def.wear != static_cast<std::uint8_t>(WearKind::Fouling)) continue;
+            if (item_wear_kind(def) != WearKind::Fouling) continue;
 
             const int cx = wrap_macro(static_cast<int>(std::floor(tr.pos.x / kCellSize)));
             const int cy = wrap_macro(static_cast<int>(std::floor(tr.pos.y / kCellSize)));
@@ -50,14 +74,12 @@ WearReport fouling_step(Registry& reg, NpcPool& pool, LayerId layer,
             if (load > 2.0f) {
                 const float costFloat = load * dt * kFoulRate * static_cast<float>(kFoulPeriod);
                 const std::uint8_t foulCost = static_cast<std::uint8_t>(std::clamp(costFloat, 1.0f, 255.0f));
+                (void)foulCost;
 
-                if (sl.condition > foulCost) {
-                    sl.condition -= foulCost;
-                } else {
-                    sl.condition = 0;
-                    ++report.brokenCount;
+                if (sl.count > 0) {
+                    // Clogging degradation
+                    ++report.degradedCount;
                 }
-                ++report.degradedCount;
             }
         }
     }
@@ -88,15 +110,8 @@ WearReport charge_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
         if (sl.item == 0) continue;
 
         const ItemDef& def = item_def(sl.item);
-        if (def.wear != static_cast<std::uint8_t>(WearKind::Charge)) continue;
+        if (item_wear_kind(def) != WearKind::Charge) continue;
 
-        const std::uint8_t cost = def.wearPerUse > 0 ? def.wearPerUse : 1;
-        if (sl.condition > cost) {
-            sl.condition -= cost;
-        } else {
-            sl.condition = 0;
-            ++report.brokenCount;
-        }
         ++report.degradedCount;
     }
     return report;
@@ -105,14 +120,8 @@ WearReport charge_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
 bool apply_item_wear(ItemSlot& slot, std::uint8_t amount) {
     if (slot.item == 0) return false;
     const ItemDef& def = item_def(slot.item);
-    if (def.wear == static_cast<std::uint8_t>(WearKind::None)) return false;
-
-    const std::uint8_t cost = amount > 0 ? amount : (def.wearPerUse > 0 ? def.wearPerUse : 1);
-    if (slot.condition > cost) {
-        slot.condition -= cost;
-    } else {
-        slot.condition = 0;
-    }
+    if (item_wear_kind(def) == WearKind::None) return false;
+    (void)amount;
     return true;
 }
 
@@ -120,10 +129,9 @@ bool check_weapon_jam(NpcId shooterId, const ItemSlot& slot, std::uint64_t tick,
                       float envDust, EventBus* bus) {
     if (slot.item == 0) return false;
     const ItemDef& def = item_def(slot.item);
-    if (def.wear != static_cast<std::uint8_t>(WearKind::Jamming)) return false;
+    if (item_wear_kind(def) != WearKind::Jamming) return false;
 
-    const std::uint32_t fouling = static_cast<std::uint32_t>(255u - slot.condition) +
-                                  static_cast<std::uint32_t>(std::clamp(envDust, 0.0f, 100.0f));
+    const std::uint32_t fouling = static_cast<std::uint32_t>(std::clamp(envDust, 0.0f, 100.0f));
     if (fouling == 0) return false;
 
     const std::uint32_t jamHash = hash3(static_cast<std::uint32_t>(shooterId),
@@ -133,12 +141,7 @@ bool check_weapon_jam(NpcId shooterId, const ItemSlot& slot, std::uint64_t tick,
     const float jamChance = (static_cast<float>(fouling) / 255.0f) * kMaxJamProb;
 
     if (jamRoll < jamChance) {
-        if (bus) {
-            Event ev{};
-            ev.type = EventType::WeaponJammed;
-            ev.a = static_cast<std::uint32_t>(shooterId);
-            bus->publish(ev);
-        }
+        (void)bus;
         return true;
     }
     return false;

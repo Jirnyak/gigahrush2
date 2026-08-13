@@ -10,6 +10,16 @@
 
 namespace giga::game {
 
+enum class WearKind : std::uint8_t {
+    None = 0,
+    Durability = 1,
+    Charge = 2,
+    Fouling = 3,
+    Jamming = 4
+};
+
+WearKind item_wear_kind(const ItemDef& def);
+
 inline constexpr std::uint32_t kFoulPeriod = 8;
 inline constexpr float kSmokeFoulMult = 1.25f;
 inline constexpr float kFoulRate = 0.05f;

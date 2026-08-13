@@ -1885,7 +1885,7 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
         }
     }
 
-    if (gunSlot && check_weapon_jam(nr->id, *gunSlot, tick, 0.0f, bus)) {
+    if (gunSlot && check_weapon_jam(nr->id, *gunSlot, tick, 0.0f, nullptr)) {
         pr.cooldownMs = 400; // misfire recovery
         return 0;
     }

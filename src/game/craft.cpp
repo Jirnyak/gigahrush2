@@ -459,7 +459,6 @@ CraftResult craft_from_junk(Inventory& inv, const JunkRecipe& recipe, CraftStati
     } else {
         dst.item = recipe.resultItem;
         dst.count = recipe.resultCount;
-        dst.condition = 255;
     }
 
     return CraftResult{CraftFail::None, recipe.resultItem, targetSlot, totalSpentValue};
