@@ -48,6 +48,7 @@
 #include "game/noise.h"    // blast_noise — a detonation is a severity-5 source
 #include "game/rpg.h"
 #include "world/destruct.h"  // carve_sphere — the blast's hole, drained for real
+#include "world/los.h"     // los_clear — a wall stops a fragment
 
 #include "sim/physics.h"
 #include "world/lattice.h"
@@ -3709,6 +3710,99 @@ static void test_grenade() {
         std::fprintf(stderr,
                      "[grenade] full carve queue: dropped_full=%u (counted, not silent)\n",
                      static_cast<unsigned>(carves.droppedFull));
+    }
+
+    // ---- 7. A WALL STOPS A FRAGMENT ------------------------------------------
+    //
+    // Until this landed, a grenade killed through load-bearing concrete: the sweep
+    // asked distance and nothing else. Distance is not the property the complaint
+    // names — "стена не укрывает" is line of sight ([AGENTS.md] §Measure the thing
+    // the owner is looking at).
+    //
+    // The polarity is INSIDE the block rather than described beside it: the same two
+    // bodies, at the same distance, are detonated on twice — once with a wall
+    // between the blast and one of them, once without. The wall is the only thing
+    // that changes.
+    {
+        const vec3 at{44.0f, 41.0f, 42.0f};       // cell (22, 20, 21)
+        const vec3 openSide{48.0f, 41.0f, 42.0f}; // 4 m, clear air
+        const vec3 wallSide{40.0f, 41.0f, 42.0f}; // 4 m, wall at cell 21 between
+        // 4 m of a 5 m blast: 90 x (1 - 4/5).
+        const std::int16_t expect =
+            static_cast<std::int16_t>(90.0f * (1.0f - 4.0f / kBlastR) + 0.5f);
+        CHECK(expect == 18);
+
+        auto detonate = [&](bool withWall, std::int16_t& openTook,
+                            std::int16_t& shieldedTook) {
+            // A SLAB, not a single cell — and the first version of this test used
+            // one cell and failed, which was the test being wrong rather than the
+            // code. `plant` puts the grenade at z = 42.0, exactly on a cell
+            // boundary, and one tick of gravity drops it a fraction BELOW: it
+            // detonates in the cell under the one it was placed in, and the ray to a
+            // body at z = 42.0 then legitimately passes beneath a one-cell "wall".
+            // A wall in this game is a column of cells; the fix is to build one.
+            for (int wy = 19; wy <= 21; ++wy)
+                for (int wz = 20; wz <= 22; ++wz) {
+                    if (withWall)
+                        stack.layer(layer).grid().fill_cell(21, wy, wz, kMatConcrete);
+                    else
+                        stack.layer(layer).grid().clear_cell(21, wy, wz);
+                }
+
+            Registry reg;
+            NpcPool pool;
+            pool.init();
+            EventBus bus;
+            auto body = [&](const vec3& p) {
+                Entity e = reg.create();
+                Transform t;
+                t.pos = p;
+                t.layer = layer;
+                reg.emplace<Transform>(e, t);
+                reg.emplace<MobRef>(e, MobRef{0, 1, 4000, 4000});
+                return e;
+            };
+            Entity a = body(openSide);
+            Entity b = body(wallSide);
+            plant(reg, at, entt::null, 1u);
+            projectile_step(reg, pool, bus, stack, layer, dt, 900u);
+            openTook = static_cast<std::int16_t>(4000 - reg.get<MobRef>(a).hp);
+            shieldedTook = static_cast<std::int16_t>(4000 - reg.get<MobRef>(b).hp);
+        };
+
+        std::int16_t openA = 0, wallB = 0;
+        detonate(/*withWall=*/true, openA, wallB);
+        CHECK(openA == expect);   // the one in the open pays in full
+        CHECK(wallB == 0);        // <<< the one behind the wall pays NOTHING
+
+        std::int16_t openA2 = 0, wallB2 = 0;
+        detonate(/*withWall=*/false, openA2, wallB2);
+        CHECK(openA2 == expect);  // unchanged, so the wall is what moved
+        CHECK(wallB2 == expect);  // ...and the same body, same distance, now pays
+
+        // The wall must not shield the blast from ITSELF: the carve still lands, so
+        // the thing that absorbed the fragments is the thing that gets the hole.
+        {
+            for (int wy = 19; wy <= 21; ++wy)
+                for (int wz = 20; wz <= 22; ++wz)
+                    stack.layer(layer).grid().fill_cell(21, wy, wz, kMatConcrete);
+            Registry reg;
+            NpcPool pool;
+            pool.init();
+            EventBus bus;
+            CarveProposalQueue carves;
+            plant(reg, at, entt::null, 1u);
+            projectile_step(reg, pool, bus, stack, layer, dt, 950u, nullptr,
+                            entt::null, &carves);
+            CHECK(carves.count == 1);
+            for (int wy = 19; wy <= 21; ++wy)
+                for (int wz = 20; wz <= 22; ++wz)
+                    stack.layer(layer).grid().clear_cell(21, wy, wz);
+        }
+        std::fprintf(stderr,
+                     "[grenade] wall shielded 1 of 2 bodies at %.1f m: %d vs %d "
+                     "(same pair without the wall: %d vs %d)\n",
+                     4.0f, openA, wallB, openA2, wallB2);
     }
 }
 

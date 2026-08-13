@@ -26,6 +26,7 @@
 #include "game/weapon_table.h"
 #include "sim/camera.h"   // camera_forward
 #include "world/macro_grid.h"
+#include "world/los.h"   // los_clear — a wall stops a fragment
 #include "world/stain.h" // blood — the universal stain layer
 #include "world/world.h"
 #include "world/types.h"
@@ -1567,7 +1568,28 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                 const float dy = wrap_delta_f(h.impactPos.y, cp.y, kWorldExtent);
                 const float dz = wrap_delta_f(h.impactPos.z, cp.z, kWorldExtent);
                 const float d2 = dx * dx + dy * dy + dz * dz;
-                if (d2 <= R * R) caught.push_back(Caught{cand, std::sqrt(d2)});
+                if (d2 > R * R) return;
+                // A WALL STOPS A FRAGMENT, and this is the only thing in the blast
+                // that may refuse a target. It is not an exclusion: it does not ask
+                // WHO the body is, it asks whether anything solid stands between the
+                // blast and it — the same question, at the same cell granularity,
+                // that already stops a bullet and bounces a grenade. Distance alone
+                // was a grenade that killed through a load-bearing wall.
+                //
+                // `los_clear` is the first LOS primitive in the tree ([world/los.h]);
+                // it lives in the core because it is a fact about geometry, and
+                // [mob_behaviour.h] has a dropped sight test waiting for it.
+                //
+                // NOT counted here, and the reason is the layer rather than
+                // indifference: every other refusal in this file is counted
+                // (`droppedFull` and friends) because there is a queue to hang the
+                // counter on and an app-side `GIGA_*_DBG` line to print it. There is
+                // neither here, and `giga_game` holds no `getenv` anywhere on
+                // purpose — it stays headless and pure ([AGENTS.md]). So the number
+                // is asserted where it is measured: `test_grenade` block 7 prints
+                // how many bodies the wall shielded, on every ctest run.
+                if (!los_clear(grid, h.impactPos, cp)) return;
+                caught.push_back(Caught{cand, std::sqrt(d2)});
             };
             for (auto m : reg.view<const MobRef, const Transform>()) {
                 const Transform& mt = reg.get<const Transform>(m);

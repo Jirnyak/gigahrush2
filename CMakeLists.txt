@@ -448,7 +448,7 @@ if(GIGA_BUILD_TESTS)
     # may measure: |cross(f, up)|, never dot(f, up), because `up` is a public
     # parameter under no obligation to be unit-length.
     set_tests_properties(world_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "23361/23361 checks passed"
+        PASS_REGULAR_EXPRESSION "23385/23385 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically
@@ -858,7 +858,21 @@ if(GIGA_BUILD_TESTS)
     # and the counts are what the mutated binaries printed:
     #   restore `&& p.source != victim`                  -> 1 red (the lock)
     #   revert `muzzle_point` to `from + dir*kMuzzle`    -> 8 red (statures 2.3..3.0 m)
-        PASS_REGULAR_EXPRESSION "game_test: 236038 checks, 0 failures")
+    # 236038 -> 236044 (+6) on 2026-08-13: a wall stops a fragment. The blast swept on
+    # DISTANCE alone and killed through load-bearing concrete; `los_clear`
+    # ([world/los.h], the first LOS primitive in the tree — mob_behaviour.h has a
+    # dropped sight test waiting for it) is now asked between the blast and each body.
+    # The polarity lives INSIDE the block: the same two bodies at the same 4 m are
+    # detonated on twice, once with the wall and once without, and the wall is the only
+    # thing that moves.
+    #   [grenade] wall shielded 1 of 2 bodies at 4.0 m: 18 vs 0
+    #             (same pair without the wall: 18 vs 18)
+    # Mutation (drop the los_clear line) -> 1 red. The FIRST version of that test used
+    # a one-cell wall and failed — correctly: `plant` sits the grenade exactly on a
+    # cell boundary, one tick of gravity drops it into the cell below, and the ray to a
+    # body then passes UNDER a one-cell wall. The code was right and the test was
+    # wrong; a wall in this game is a column of cells.
+        PASS_REGULAR_EXPRESSION "game_test: 236044 checks, 0 failures")
 
 
 

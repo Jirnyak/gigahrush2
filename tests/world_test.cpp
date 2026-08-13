@@ -20,6 +20,7 @@
 #include "world/destruct.h"
 #include "world/field.h"
 #include "world/level_stack.h"
+#include "world/los.h"
 #include "world/macro_grid.h"
 #include "world/nav.h"
 #include "world/stain.h"
@@ -728,8 +729,99 @@ static void test_mat4_lookAt() {
     check_up_respected(tilted, tallUp);
 }
 
+// Line of sight — the first LOS primitive in the tree ([world/los.h]).
+//
+// Written against the four things that make a voxel raycast wrong rather than
+// against "does it return true in a room": the endpoint cells, the toroidal seam,
+// the axes, and the diagonal that clips a corner.
+static void test_los() {
+    MacroGrid g;   // all air
+
+    const float c = kCellSize;   // 2 m
+    auto mid = [&](int cx, int cy, int cz) {
+        return vec3{(cx + 0.5f) * c, (cy + 0.5f) * c, (cz + 0.5f) * c};
+    };
+
+    // Open air is clear, in both directions and at every separation.
+    CHECK(los_clear(g, mid(10, 10, 10), mid(20, 10, 10)));
+    CHECK(los_clear(g, mid(20, 10, 10), mid(10, 10, 10)));
+    CHECK(los_blockers(g, mid(10, 10, 10), mid(20, 10, 10)) == 0);
+    // Same cell: there is nothing BETWEEN, so it is clear by definition.
+    CHECK(los_clear(g, mid(10, 10, 10), mid(10, 10, 10)));
+    CHECK(los_clear(g, vec3{20.1f, 20.1f, 20.1f}, vec3{20.9f, 20.9f, 20.9f}));
+
+    // ONE cell of wall blocks — on every axis, by the same code and the same
+    // expectation. Isotropy is not "z is special-cased correctly", it is "no letter
+    // is special at all" ([problems.md] §34).
+    for (int a = 0; a < 3; ++a) {
+        MacroGrid w;
+        int lo[3] = {10, 10, 10};
+        int hi[3] = {10, 10, 10};
+        int wall[3] = {10, 10, 10};
+        lo[a] = 8;
+        hi[a] = 12;
+        wall[a] = 10;
+        w.fill_cell(wall[0], wall[1], wall[2], kMatConcrete);
+        const vec3 A = mid(lo[0], lo[1], lo[2]);
+        const vec3 B = mid(hi[0], hi[1], hi[2]);
+        CHECK(!los_clear(w, A, B));
+        CHECK(los_blockers(w, A, B) == 1);
+        CHECK(!los_clear(w, B, A));           // symmetric
+        // ...and removing it restores sight, which is what makes the CHECK above a
+        // statement about the wall rather than about the geometry of the test.
+        w.clear_cell(wall[0], wall[1], wall[2]);
+        CHECK(los_clear(w, A, B));
+    }
+
+    // THE ENDPOINT RULE. A body standing INSIDE a solid cell (a doorway, a carved
+    // pocket, geometry that closed over it) must not be shielded by the cell it is
+    // standing in — otherwise a blast at its feet reads as "did nothing".
+    {
+        MacroGrid w;
+        w.fill_cell(10, 10, 10, kMatConcrete);   // the start cell itself
+        w.fill_cell(14, 10, 10, kMatConcrete);   // and the end cell itself
+        CHECK(los_clear(w, mid(10, 10, 10), mid(14, 10, 10)));
+        // But one cell BETWEEN them does block, so the exemption is exactly the two
+        // endpoints and not "solid cells are ignored".
+        w.fill_cell(12, 10, 10, kMatConcrete);
+        CHECK(!los_clear(w, mid(10, 10, 10), mid(14, 10, 10)));
+    }
+
+    // THE SEAM. x/y wrap, so a blast at cell 1 and a body at cell 126 are four cells
+    // apart the short way, not 125 the long way. The wall is placed on the SHORT
+    // path; a version that walked the long way round would report clear.
+    {
+        MacroGrid w;
+        const vec3 A = mid(1, 10, 10);
+        const vec3 B = mid(kMacroDim - 2, 10, 10);
+        CHECK(los_clear(w, A, B));
+        w.fill_cell(kMacroDim - 1, 10, 10, kMatConcrete);   // cell 127, between them
+        CHECK(!los_clear(w, A, B));
+        // And a wall on the LONG way round changes nothing.
+        MacroGrid w2;
+        w2.fill_cell(64, 10, 10, kMatConcrete);
+        CHECK(los_clear(w2, A, B));
+    }
+
+    // Off the top of the stack blocks: there is nothing up there to see through, and
+    // z does not wrap the way x/y do.
+    CHECK(!los_clear(g, mid(10, 10, 2), vec3{21.0f, 21.0f, -50.0f}));
+
+    // A DIAGONAL through a corner. The two cells forming the corner are solid and
+    // the segment passes exactly between them; an implementation that steps one axis
+    // at a time without visiting both boundary cells slips through the seam.
+    {
+        MacroGrid w;
+        w.fill_cell(11, 10, 10, kMatConcrete);
+        w.fill_cell(10, 11, 10, kMatConcrete);
+        CHECK(!los_clear(w, mid(10, 10, 10), mid(11, 11, 10)));
+    }
+    std::printf("[los] blocked on 3 axes, endpoints exempt, seam honoured\n");
+}
+
 int main() {
     test_wrap();
+    test_los();
     test_nearest_image();
     test_mat4_lookAt();
     test_submask();
