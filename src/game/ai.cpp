@@ -15,6 +15,7 @@
 #include "game/room_zone.h"   // room affordance table + baked fields (§27 legs a,b)
 #include "sim/diffusion.h"    // diffusion_gradient — the flee steering field
 #include "world/field.h"      // Field<float>
+#include "world/gravity.h"    // GravityFrame / regime_frame — the steering plane
 #include "world/macro_grid.h" // MacroGrid (open/wall test inside the gradient)
 #include "world/types.h"      // wrap_macro, kCellSize, kMacroDim
 #include "world/world.h"      // World — door_nearest_shelter needs const World&
@@ -602,6 +603,29 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
     // pre-rooms one — the degradation is a property of the data, not a branch.
     const bool useRooms = (rooms != nullptr) && rooms->ready();
     const int roomStride = useRooms ? floor_room_stride(rooms->kind) : 0;
+    // The gravity FRAME, hoisted: the regime is a property of the world, not of a
+    // body. Every steering vector below is built in the tangent plane of this
+    // frame — under NegZ that reduces to the old {dx, dy, 0} literals bit-for-bit.
+    // Null world (tests) keeps the NegZ frame, same rule as controller_step.
+    // Custom resolves through regime_from_vector, as gravity_frames does.
+    GravityRegime steerRegime = GravityRegime::NegZ;
+    if (world != nullptr) {
+        steerRegime = world->gravity().regime;
+        if (steerRegime == GravityRegime::Custom)
+            steerRegime = regime_from_vector(world->gravity().global);
+    }
+    const GravityFrame gf = regime_frame(steerRegime);
+    // Project a delta onto the walking plane: zero the component along gravity.
+    // KNOWN 2D-DATA CAVEAT, stated rather than hidden: seat targets, room columns
+    // and memory away-vectors are (x, y) data today, so under a SIDE regime the
+    // projected goal loses its along-Z half until the bakes grow a third axis
+    // (roadmap: nav connectivity classes). The frame is honest; the data lags.
+    const auto tangent = [&gf](float x, float y, float z) {
+        if (gf.axis == 0) x = 0.0f;
+        else if (gf.axis == 1) y = 0.0f;
+        else z = 0.0f;
+        return vec3{x, y, z};
+    };
     // Hoisted out of the loop so a body that neither re-plans nor flees pays
     // NOTHING for memory — not even zeroing a MemoryRecall. `ai_recall` returns a
     // fully-initialised value, so the assignment below cannot carry stale fields
@@ -808,10 +832,13 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             if (world != nullptr && doors != nullptr) {
                 int ox = cx, oy = cy, oz = cz;
                 if (door_nearest_shelter(*world, *doors, cx, cy, cz, ox, oy, oz)) {
-                    const float dx = static_cast<float>(wrap_delta(cx, ox, kMacroDim));
-                    const float dy = static_cast<float>(wrap_delta(cy, oy, kMacroDim));
-                    if (dx * dx + dy * dy > kMinFleeGrad2) {
-                        dir = normalize(vec3{dx, dy, 0.0f});
+                    const vec3 away = tangent(
+                        static_cast<float>(wrap_delta(cx, ox, kMacroDim)),
+                        static_cast<float>(wrap_delta(cy, oy, kMacroDim)),
+                        static_cast<float>(wrap_delta(cz, oz, kMacroDim)));
+                    const float d2 = away.x * away.x + away.y * away.y + away.z * away.z;
+                    if (d2 > kMinFleeGrad2) {
+                        dir = away * (1.0f / std::sqrt(d2));
                         owned = true;
                     }
                 }
@@ -821,9 +848,10 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             if (!owned && danger != nullptr) {
                 // Down the gradient: the field is danger, so safety is -grad.
                 const vec3 g = diffusion_gradient(*danger, grid, cx, cy, cz);
-                const vec3 away{-g.x, -g.y, 0.0f};
-                if (away.x * away.x + away.y * away.y > kMinFleeGrad2) {
-                    dir = normalize(away);
+                const vec3 away = tangent(-g.x, -g.y, -g.z);
+                const float d2 = away.x * away.x + away.y * away.y + away.z * away.z;
+                if (d2 > kMinFleeGrad2) {
+                    dir = away * (1.0f / std::sqrt(d2));
                     owned = true;
                 }
             }
@@ -833,10 +861,17 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             // new way a body can take MotionOwner::Ai. `IntentFlee` is still the
             // ONLY owning intent, so the single-writer story in [ai.h] is unchanged.
             if (!owned && haveRecall && recall.haveAway) {
-                // Already unit length from ai_recall; no second normalize.
-                dir = vec3{recall.awayX, recall.awayY, 0.0f};
-                owned = true;
-                viaMemory = true;
+                // Unit length from ai_recall, but the projection can shorten it
+                // (the trace is (x, y) data — the caveat above), so re-normalize
+                // and DON'T own on a vector the projection emptied: owning a zero
+                // here would freeze a fleeing body, not settle it.
+                const vec3 away = tangent(recall.awayX, recall.awayY, 0.0f);
+                const float d2 = away.x * away.x + away.y * away.y + away.z * away.z;
+                if (d2 > 1e-8f) {
+                    dir = away * (1.0f / std::sqrt(d2));
+                    owned = true;
+                    viaMemory = true;
+                }
             }
         } else if (useRooms) {
             // --- THE ERRAND: a non-flee intent that has somewhere to be --------
@@ -869,7 +904,8 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             if (want != 0 && (here & want) == 0 &&
                 brain.motion == static_cast<std::uint8_t>(MotionOwner::Ai)) {
                 const vec3& prev = view.get<Velocity>(e).v;
-                const float sp2 = prev.x * prev.x + prev.y * prev.y;
+                const vec3 walk = tangent(prev.x, prev.y, prev.z);
+                const float sp2 = walk.x * walk.x + walk.y * walk.y + walk.z * walk.z;
                 if (sp2 < kErrandSpeed * kErrandSpeed * 0.0625f) ++out.errandStalled;
             }
 
@@ -902,12 +938,15 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                 } else {
                     const float tx = (static_cast<float>(sx) + 0.5f) * kCellSize;
                     const float ty = (static_cast<float>(sy) + 0.5f) * kCellSize;
-                    const float dx = wrap_delta_f(tr.pos.x, tx, kWorldExtent);
-                    const float dy = wrap_delta_f(tr.pos.y, ty, kWorldExtent);
-                    const float d2 = dx * dx + dy * dy;
+                    // Seat targets are (x, y) data — the 2D caveat above: the
+                    // along-gravity delta is honestly zero, not measured.
+                    const vec3 to = tangent(wrap_delta_f(tr.pos.x, tx, kWorldExtent),
+                                            wrap_delta_f(tr.pos.y, ty, kWorldExtent),
+                                            0.0f);
+                    const float d2 = to.x * to.x + to.y * to.y + to.z * to.z;
                     owned = true;
                     if (d2 > kSeatArriveM * kSeatArriveM)
-                        dir = normalize(vec3{dx, dy, 0.0f});
+                        dir = to * (1.0f / std::sqrt(d2));
                     // else: dir stays zero — SETTLED. Owning the body and writing a
                     // zero is the point, not an oversight: handing it back to
                     // wander here would walk it out of the kitchen mid-meal, which
@@ -923,9 +962,11 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                     out.errandDistCells += static_cast<std::uint32_t>(
                         (ddx < 0 ? -ddx : ddx) + (ddy < 0 ? -ddy : ddy));
                 }
-                if (r.bit != 0 && r.dir < 4) {
-                    // A horizontal step. kNavDir 0..3 are +-x/+-y; 4..5 are the
-                    // gravity axis, and `Velocity.z` belongs to physics.
+                if (r.bit != 0 && (r.dir >> 1) != gf.axis) {
+                    // A step in the WALKING PLANE. kNavDir pairs 0..5 are ±x/±y/±z;
+                    // the pair whose axis is the gravity axis (r.dir >> 1 == gf.axis)
+                    // is the vertical one, and that component of Velocity belongs to
+                    // physics. Under NegZ this is the old `r.dir < 4` exactly.
                     //
                     // AIM AT THE NEXT CELL'S CENTRE, NOT ALONG THE AXIS, and the
                     // difference is not cosmetic — it was measured. Steering by the
@@ -939,12 +980,16 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                     // the clearance test actually cleared.
                     const int nx = wrap_macro(cx + nav::kNavDir[r.dir][0]);
                     const int ny = wrap_macro(cy + nav::kNavDir[r.dir][1]);
+                    const int nz = wrap_macro(cz + nav::kNavDir[r.dir][2]);
                     const float tx = (static_cast<float>(nx) + 0.5f) * kCellSize;
                     const float ty = (static_cast<float>(ny) + 0.5f) * kCellSize;
-                    const float dx = wrap_delta_f(tr.pos.x, tx, kWorldExtent);
-                    const float dy = wrap_delta_f(tr.pos.y, ty, kWorldExtent);
-                    if (dx * dx + dy * dy > kMinFleeGrad2) {
-                        dir = normalize(vec3{dx, dy, 0.0f});
+                    const float tz = (static_cast<float>(nz) + 0.5f) * kCellSize;
+                    const vec3 to = tangent(wrap_delta_f(tr.pos.x, tx, kWorldExtent),
+                                            wrap_delta_f(tr.pos.y, ty, kWorldExtent),
+                                            wrap_delta_f(tr.pos.z, tz, kWorldExtent));
+                    const float d2 = to.x * to.x + to.y * to.y + to.z * to.z;
+                    if (d2 > kMinFleeGrad2) {
+                        dir = to * (1.0f / std::sqrt(d2));
                         owned = true;
                         ++out.errandStep;
                     }
@@ -959,10 +1004,13 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                     // nearest room of that kind, brute-forced at bake time.
                     const float tx = (static_cast<float>(r.targetX) + 0.5f) * kCellSize;
                     const float ty = (static_cast<float>(r.targetY) + 0.5f) * kCellSize;
-                    const float dx = wrap_delta_f(tr.pos.x, tx, kWorldExtent);
-                    const float dy = wrap_delta_f(tr.pos.y, ty, kWorldExtent);
-                    if (dx * dx + dy * dy > kMinFleeGrad2) {
-                        dir = normalize(vec3{dx, dy, 0.0f});
+                    // Room columns are (x, y) data — the 2D caveat above.
+                    const vec3 to = tangent(wrap_delta_f(tr.pos.x, tx, kWorldExtent),
+                                            wrap_delta_f(tr.pos.y, ty, kWorldExtent),
+                                            0.0f);
+                    const float d2 = to.x * to.x + to.y * to.y + to.z * to.z;
+                    if (d2 > kMinFleeGrad2) {
+                        dir = to * (1.0f / std::sqrt(d2));
                         owned = true;
                         ++out.errandColumn;
                     }
@@ -997,10 +1045,13 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
         // of the room mid-meal.
         const float speed =
             brain.currentIntent == IntentFlee ? kFleeSpeed : kErrandSpeed;
-        vel.v.x = dir.x * speed;
-        vel.v.y = dir.y * speed;
-        // vel.v.z is intentionally untouched — physics_step owns it (gravity and
-        // jump). Same rule as wander_step: this is locomotion, not flight.
+        // The component ALONG gravity is intentionally untouched — physics_step
+        // owns it (pull and jump), whatever axis it happens to be. Same rule as
+        // wander_step: this is locomotion, not flight. Under NegZ this writes
+        // exactly the old two lines.
+        if (gf.axis != 0) vel.v.x = dir.x * speed;
+        if (gf.axis != 1) vel.v.y = dir.y * speed;
+        if (gf.axis != 2) vel.v.z = dir.z * speed;
     }
     return out;
 }

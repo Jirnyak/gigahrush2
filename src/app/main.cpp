@@ -3708,7 +3708,7 @@ int main(int argc, char** argv) {
                 // no counterplay. The camera holder IS killable: the player has
                 // healing, resupply and possession-on-death. [faction_relations.h]
                 feudHits += game::faction_feud_step(reg, pool, factionRel, activeLayer,
-                                                    simTick);
+                                                    simTick, &activeWorld.gravity());
                 // Slowed CAP enforcement: after every velocity writer
                 // (controller / wander / investigate / feud), before integrate.
                 // Was defined in combat.cpp and never called — dead path until now.

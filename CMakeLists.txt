@@ -898,7 +898,11 @@ if(GIGA_BUILD_TESTS)
     # prohibition": 4096 Residential draws with no Cultist — plus distribution,
     # delta-response and role-blindness checks (suite_utilai), and the field-mask
     # pins moving to affordance+role rooms (suite_rooms).
-        PASS_REGULAR_EXPRESSION "game_test: 240226 checks, 0 failures")
+    # 240226 -> 240230 (+4) on 2026-08-13: AI/feud steering goes frame-generic.
+    # The +4 pin the side-regime property (suite_faction2 §4b): under PosX the
+    # feud steers in the (y, z) plane and the gravity-axis sentinel survives.
+    # Mutation (revert to the .x/.y literal writes) -> red on the sentinel.
+        PASS_REGULAR_EXPRESSION "game_test: 240230 checks, 0 failures")
 
 
 

@@ -290,6 +290,50 @@ static void test_faction2_all() {
         CHECK(reg.all_of<Dead>(player));
     }
 
+    // ---- 4b. The feud walks ITS floor, not the world's XY: under a side
+    //          regime the steer lands in the tangent plane and the gravity
+    //          axis stays with physics -----------------------------------------
+    //
+    // Mutation check: revert faction_feud_step to the literal .x/.y writes and
+    // the sentinel below is overwritten -> red. Null gravity is pinned NegZ by
+    // the whole of section 4 above.
+    {
+        Registry reg;
+        NpcPool pool;
+        pool.init();
+        const FactionRelations base = kBaseFactionMatrix;
+
+        const vec3 home{40.0f, 40.0f, 40.0f};
+        const NpcId plyId = pool.spawn();
+        pool.faction(plyId) = static_cast<std::uint16_t>(Faction::Citizens);
+        pool.hp(plyId) = 100;
+        pool.max_hp(plyId) = 100;
+        Entity player = embody_as_player(reg, pool, plyId, kLayer);
+        reg.get<Transform>(player).pos = home;
+
+        NpcId wldId = 0;
+        // Parked 5 m in -y: under PosX gravity the y axis is TANGENT, so this
+        // offset is walkable and the steer must come out +y.
+        Entity wld = make_body(reg, pool, Faction::Wild,
+                               vec3{home.x, home.y - 5.0f, home.z}, 100, wldId);
+        const std::uint32_t key = static_cast<std::uint32_t>(entt::to_integral(wld));
+
+        GravityField sideways;
+        sideways.regime = GravityRegime::PosX;
+        sideways.global = vec3{9.81f, 0.0f, 0.0f};
+
+        const std::uint64_t open = first_licensed_window(key);
+        CHECK(open != 0);
+        // The sentinel: a walking feud must not touch the gravity axis — falling
+        // belongs to physics under PosX exactly as v.z did under NegZ.
+        reg.get<Velocity>(wld).v = vec3{0.125f, 0.0f, 0.0f};
+        for (std::uint64_t t = open; t < open + kFeudPeriod * 2u; ++t)
+            faction_feud_step(reg, pool, base, kLayer, t, &sideways);
+        CHECK(reg.get<Velocity>(wld).v.x == 0.125f); // gravity axis untouched
+        CHECK(reg.get<Velocity>(wld).v.y > 0.0f);    // toward the player, in plane
+        CHECK(reg.get<Velocity>(wld).v.z == 0.0f);   // player is straight ahead
+    }
+
     // ---- 5. ...but a feud can never kill a CROWD body ------------------------
     //
     // This is the rule that makes the feature safe to switch on at all: nothing in

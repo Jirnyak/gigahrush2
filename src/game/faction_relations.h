@@ -41,6 +41,7 @@
 #include "game/event_bus.h"      // EventBus, EventType::RelationChanged
 #include "game/faction.h"
 #include "game/npc_pool.h"
+#include "world/gravity.h"       // GravityField — names the feud's walking plane
 #include "world/level_stack.h"   // LayerId
 
 namespace giga::game {
@@ -288,9 +289,13 @@ FactionFoe nearest_faction_foe(const Registry& reg, const NpcPool& pool,
 // finalize_deaths and pickup_step.
 //
 // Returns the number of feud hits that landed.
+// Optional `gravity` names the walking plane, same convention as knockback in
+// [combat.h]: null keeps the NegZ frame bit-for-bit (tests), the app passes the
+// live field so a feud on a side-regime floor walks its floor, not the world's XY.
 std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
                                 const FactionRelations& rel, LayerId layer,
-                                std::uint64_t tick);
+                                std::uint64_t tick,
+                                const GravityField* gravity = nullptr);
 
 // What one drain of the death events did to the matrix. Returned rather than only
 // published, so a HUD can print it without the caller having to re-scan the ring.
