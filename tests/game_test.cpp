@@ -130,6 +130,7 @@ int g_checks = 0;
 #include "suite_particles.inl"
 #include "suite_gravity_regimes.inl"
 #include "suite_wear.inl"
+#include "suite_audio.inl"
 
 static void test_inventory() {
     // Compile-time layout contract: a static_assert, not a CHECK. It is a fact
@@ -5354,6 +5355,7 @@ int main() {
     test_stream_migration_reembodies();
     test_props_game_all();
     test_wear_and_durability_all();
+    test_audio_and_acoustics_all();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
 
