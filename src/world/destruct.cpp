@@ -1,9 +1,21 @@
 #include "world/destruct.h"
+#include "world/gravity.h"
+#include "world/material_props.h"
+#include "world/subfield.h"
+#include "world/world.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 namespace giga {
+
+// Key packing now uses dynamic bitshifts derived from kSubDim (types.h).
+// kSubDim can be changed (e.g. to 16) without breaking these bitwise operations,
+// provided kSubDim is a power of 2.
+static_assert(std::has_single_bit(static_cast<unsigned>(kSubDim)),
+              "kSubDim must be a power of 2 for bitwise math in destruct.cpp");
+
 namespace {
 
 // --- packed sub-voxel keys ---------------------------------------------------
@@ -15,7 +27,7 @@ namespace {
 static_assert(kSubDim == 8,
               "pack_key/unpack_key/key_at hardcode the 8^3 sub-voxel packing");
 inline std::uint32_t pack_key(std::uint32_t ci, std::uint32_t bit) {
-    return (ci << 9) | bit;
+    return (ci << kSubVoxelsShift) | bit;
 }
 
 struct SubCoord {
@@ -24,14 +36,14 @@ struct SubCoord {
 };
 
 inline SubCoord unpack_key(std::uint32_t key) {
-    const std::uint32_t ci = key >> 9, bit = key & 511u;
+    const std::uint32_t ci = key >> kSubVoxelsShift, bit = key & kSubVoxelsMask;
     SubCoord c;
     c.cx = static_cast<int>(ci & 127u);
     c.cy = static_cast<int>((ci >> 7) & 127u);
     c.cz = static_cast<int>(ci >> 14);
-    c.sx = static_cast<int>(bit & 7u);
-    c.sy = static_cast<int>((bit >> 3) & 7u);
-    c.sz = static_cast<int>(bit >> 6);
+    c.sx = static_cast<int>(bit & kSubDimMask);
+    c.sy = static_cast<int>((bit >> kSubDimShift) & 7u);
+    c.sz = static_cast<int>(bit >> (kSubDimShift * 2));
     return c;
 }
 
@@ -42,21 +54,21 @@ inline std::uint32_t key_at(int ax, int ay, int az) {
     ay &= kSubGridMask;
     az &= kSubGridMask;
     const std::uint32_t ci = static_cast<std::uint32_t>(
-        macro_index(ax >> 3, ay >> 3, az >> 3));
+        macro_index(ax >> kSubDimShift, ay >> kSubDimShift, az >> kSubDimShift));
     const std::uint32_t bit =
-        static_cast<std::uint32_t>(sub_bit(ax & 7, ay & 7, az & 7));
+        static_cast<std::uint32_t>(sub_bit(ax & kSubDimMask, ay & kSubDimMask, az & kSubDimMask));
     return pack_key(ci, bit);
 }
 
 inline bool solid_key(const MacroGrid& g, std::uint32_t key) {
-    return g.masks()[key >> 9].test(static_cast<int>(key & 511u));
+    return g.masks()[key >> kSubVoxelsShift].test(static_cast<int>(key & kSubVoxelsMask));
 }
 
 inline CellType mat_key(const World& w, const SubField<CellType>* mats,
                         std::uint32_t key) {
-    const std::size_t ci = key >> 9;
+    const std::size_t ci = key >> kSubVoxelsShift;
     const CellType base = w.grid().types()[ci];
-    return mats ? mats->at(ci, static_cast<int>(key & 511u), base) : base;
+    return mats ? mats->at(ci, static_cast<int>(key & kSubVoxelsMask), base) : base;
 }
 
 // Clear one sub-voxel and keep every invariant: an emptied cell reverts to air
@@ -64,10 +76,10 @@ inline CellType mat_key(const World& w, const SubField<CellType>* mats,
 // dirty marks.
 inline void remove_key(World& w, SubField<CellType>* mats, std::uint32_t key,
                        std::vector<std::uint32_t>& dirty) {
-    const std::uint32_t ci = key >> 9;
+    const std::uint32_t ci = key >> kSubVoxelsShift;
     const SubCoord c = unpack_key(key);
     SubMask& m = w.grid().mask(c.cx, c.cy, c.cz);
-    m.clear(static_cast<int>(key & 511u));
+    m.clear(static_cast<int>(key & kSubVoxelsMask));
     dirty.push_back(ci);
     if (m.empty()) {
         w.grid().set_cell(c.cx, c.cy, c.cz, kCellAir);
@@ -156,7 +168,7 @@ const int kDir6[6][3] = {{1, 0, 0},  {-1, 0, 0}, {0, 1, 0},
 // component was fully enumerated (it dead-ended within the limit), i.e. it is
 // genuinely detached: nothing else in the world holds it. The component's keys
 // are left in scratch.comp.
-bool flood_component(const MacroGrid& g, VisitedSet& vis, CarveScratch& s,
+bool flood_component(const MacroGrid& g, const Field<std::uint8_t>* anchors, VisitedSet& vis, CarveScratch& s,
                      std::uint32_t seedKey, std::uint32_t run,
                      std::int32_t limit) {
     s.comp.clear();
@@ -176,6 +188,7 @@ bool flood_component(const MacroGrid& g, VisitedSet& vis, CarveScratch& s,
             const int r = vis.probe(nk, run);
             if (r == 0) continue;       // our own frontier, already queued
             if (r < 0) return false;    // merged into a supported region
+            if (anchors && anchors->data()[nk >> kSubVoxelsShift] != 0) return false; // anchored
             s.comp.push_back(nk);
             s.queue.push_back(nk);
             if (static_cast<std::int32_t>(s.comp.size()) > limit)
@@ -192,6 +205,7 @@ bool flood_component(const MacroGrid& g, VisitedSet& vis, CarveScratch& s,
 // the final geometry.
 void detach_sweep(World& w, SubField<CellType>* mats, std::int32_t limit,
                   CarveScratch& s, CarveResult& out) {
+    const Field<std::uint8_t>* anchors = w.fields().find<std::uint8_t>(kAnchorFieldName);
     if (out.destroyed.empty() || limit <= 0) return;
     VisitedSet vis(s, static_cast<std::size_t>(limit) * 2 +
                           out.destroyed.size());
@@ -209,10 +223,10 @@ void detach_sweep(World& w, SubField<CellType>* mats, std::int32_t limit,
             // earlier detached component.
             if (!solid_key(w.grid(), nk)) continue;
             ++run;
-            if (!flood_component(w.grid(), vis, s, nk, run, limit)) continue;
+            if (!flood_component(w.grid(), anchors, vis, s, nk, run, limit)) continue;
             for (std::uint32_t k : s.comp) {
                 out.detached.push_back(CarvedVoxel{
-                    k >> 9, static_cast<std::uint16_t>(k & 511u),
+                    k >> kSubVoxelsShift, static_cast<std::uint16_t>(k & kSubVoxelsMask),
                     mat_key(w, mats, k)});
                 remove_key(w, mats, k, out.dirtyCells);
             }
@@ -279,7 +293,8 @@ void set_sub_material(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
 }
 
 std::int32_t carve_sphere(World& w, const CarveOp& op, CarveScratch& scratch,
-                          CarveResult& out) {
+                          CarveResult& out,
+                          const std::vector<std::uint64_t>* sealedMask) {
     out.clear();
     if (op.radius <= 0.0f || op.power == 0) return 0;
     SubField<CellType>* mats = w.subfields().find<CellType>(kSubMaterialName);
@@ -317,12 +332,13 @@ std::int32_t carve_sphere(World& w, const CarveOp& op, CarveScratch& scratch,
                 const std::uint16_t peff = static_cast<std::uint16_t>(
                     static_cast<float>(op.power) * (r2 - d2) / r2);
                 if (peff == 0) continue;
-                const std::uint32_t ci = key >> 9;
-                if (!carve_roll(carve_hash(op.seed, ci, key & 511u), peff,
+                const std::uint32_t ci = key >> kSubVoxelsShift;
+                if (sealedMask && !sealedMask->empty() && ((*sealedMask)[ci / 64] & (1ull << (ci % 64)))) continue;
+                if (!carve_roll(carve_hash(op.seed, ci, key & kSubVoxelsMask), peff,
                                 hardness))
                     continue;
                 out.destroyed.push_back(CarvedVoxel{
-                    ci, static_cast<std::uint16_t>(key & 511u), mat});
+                    ci, static_cast<std::uint16_t>(key & kSubVoxelsMask), mat});
                 remove_key(w, mats, key, out.dirtyCells);
             }
         }
@@ -336,13 +352,15 @@ std::int32_t carve_sphere(World& w, const CarveOp& op, CarveScratch& scratch,
 
 bool carve_at(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
               std::uint16_t power, std::uint32_t seed, CarveScratch& scratch,
-              CarveResult& out) {
+              CarveResult& out,
+              const std::vector<std::uint64_t>* sealedMask) {
     out.clear();
     const std::uint32_t ci = static_cast<std::uint32_t>(
         macro_index(wrap_macro(cx), wrap_macro(cy), wrap_macro(cz)));
     const std::uint32_t bit =
         static_cast<std::uint32_t>(sub_bit(sx, sy, sz));
     const std::uint32_t key = pack_key(ci, bit);
+    if (sealedMask && !sealedMask->empty() && ((*sealedMask)[ci / 64] & (1ull << (ci % 64)))) return false;
     if (!solid_key(w.grid(), key)) return false;
     SubField<CellType>* mats = w.subfields().find<CellType>(kSubMaterialName);
     const CellType mat = mat_key(w, mats, key);
@@ -354,6 +372,84 @@ bool carve_at(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
     detach_sweep(w, mats, kSubVoxels, scratch, out);
     finalize_dirty(out);
     return true;
+}
+
+void bake_stress(World& world, const StressParams& params, Field<float>& out_stress) {
+    auto t0 = std::chrono::high_resolution_clock::now();
+    const Field<std::uint8_t>* anchors = world.fields().find<std::uint8_t>(kAnchorFieldName);
+    
+    // Step 1: anchors hold infinity, air holds 0
+    for (int cy = 0; cy < kMacroDim; ++cy) {
+        for (int cx = 0; cx < kMacroDim; ++cx) {
+            for (int cz = 0; cz < kMacroDim; ++cz) {
+                std::size_t ci = macro_index(cx, cy, cz);
+                bool solid = world.grid().types()[ci] != 0; 
+                if (anchors && anchors->at(cx, cy, cz) != 0) {
+                    out_stress.data()[ci] = 1e9f;
+                } else if (!solid) {
+                    out_stress.data()[ci] = 0.0f;
+                } else {
+                    out_stress.data()[ci] = -1.0f;
+                }
+            }
+        }
+    }
+    
+    // Step 2: relax from support
+    CellStep down = regime_down(world.gravity().regime);
+    
+    for (int iter = 0; iter < params.relaxIters; ++iter) {
+        for (int cy = 0; cy < kMacroDim; ++cy) {
+            for (int cx = 0; cx < kMacroDim; ++cx) {
+                for (int cz = 0; cz < kMacroDim; ++cz) {
+                    std::size_t ci = macro_index(cx, cy, cz);
+                    if (out_stress.data()[ci] == 1e9f || out_stress.data()[ci] == 0.0f) continue;
+                    
+                    int sx = wrap_macro(cx - down.x);
+                    int sy = wrap_macro(cy - down.y);
+                    int sz = wrap_macro(cz - down.z);
+                    std::size_t si = macro_index(sx, sy, sz);
+                    
+                    float support = out_stress.data()[si];
+                    if (support > 0.0f) {
+                        float cellHardness = material_hardness(world.grid().types()[ci]);
+                        out_stress.data()[ci] = std::min(support * 0.9f, cellHardness * params.carryPerHardness);
+                    }
+                }
+            }
+        }
+    }
+    
+    auto t1 = std::chrono::high_resolution_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    std::fprintf(stderr, "[bake] stress field computed in %.2f ms\n", ms);
+}
+
+void find_structural_collapses(const World& w, const CarveResult& res, std::vector<std::size_t>& out_collapses) {
+    const Field<float>* stress = w.fields().find<float>("stress");
+    if (!stress) return;
+    
+    for (std::uint32_t cell : res.dirtyCells) {
+        int cx = static_cast<int>(cell) & 127;
+        int cy = (static_cast<int>(cell) >> 7) & 127;
+        int cz = (static_cast<int>(cell) >> 14) & 127;
+        
+        for (const auto& d : kDir6) {
+            int nx = (cx + d[0]) & 127;
+            int ny = (cy + d[1]) & 127;
+            int nz = (cz + d[2]) & 127;
+            std::size_t ni = static_cast<std::size_t>(nx | (ny << 7) | (nz << 14));
+            
+            if (w.grid().types()[ni] != 0 && stress->data()[ni] <= 0.0f) {
+                out_collapses.push_back(ni);
+            }
+        }
+    }
+    
+    if (!out_collapses.empty()) {
+        std::sort(out_collapses.begin(), out_collapses.end());
+        out_collapses.erase(std::unique(out_collapses.begin(), out_collapses.end()), out_collapses.end());
+    }
 }
 
 } // namespace giga

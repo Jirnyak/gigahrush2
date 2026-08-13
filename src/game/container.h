@@ -119,8 +119,10 @@ std::uint32_t spawn_floor_containers(Registry& reg, const World& world,
 // `noise` is an optional sink for the lid ([noise.h]): opening a crate is audible, so
 // looting a room is no longer free of consequence. Optional and trailing so the two
 // existing call sites — main.cpp and test_containers — compile unchanged.
+// `mem` / `now`: optional sink for MemFood/MemWater (closing spec 01 §2.4).
 std::int32_t loot_containers_step(Registry& reg, class NpcPool& pool, LayerId layer,
-                                  NoiseField* noise = nullptr);
+                                  NoiseField* noise = nullptr,
+                                  class AiMemory* mem = nullptr, double now = 0.0);
 
 // Roll the contents of one container. Exposed for tests: the value cap is the whole
 // design and it needs to be checkable without generating a floor.

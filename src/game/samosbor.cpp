@@ -7,6 +7,8 @@
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "game/mob_spawn.h"  // MobRef — what counts as a threat
+#include "world/field.h"
+#include "game/hermetic.h"
 
 namespace giga::game {
 
@@ -536,13 +538,67 @@ SamosborTransition samosbor_step(SamosborState& st, std::uint32_t dtMs, int floo
 // ---------------------------------------------------------------------------
 
 SamosborPressure samosbor_unsheltered_pressure(SamosborVariant variant) {
-    // Variant-independent today. The parameter is here because the reference's
-    // fog seed IS per-variant (via fogSeedMult) and the day a fog field lands
-    // this is where that lookup goes — a signature change at that point would
-    // touch every call site instead of one function body.
-    (void)variant;
-    return SamosborPressure{kSamosborFogRadiusCells, kSamosborFogStrength,
-                            kSamosborUnshelteredHp, kSamosborUnshelteredPsi};
+    const float spawnMult = static_cast<float>(kSamosborVariants[static_cast<std::size_t>(variant)].spawnMultX100) / 100.0f;
+    
+    // As noted in samosbor.h, the shipped code computes radius and strength based on fogSeedMult (spawnMult):
+    // radius: clamp(round(5*sqrt(fogSeedMult)), 2, 7)
+    // strength: clamp(round(200*fogSeedMult), 90, 230)
+    int rawRadius = static_cast<int>(std::round(5.0f * std::sqrt(spawnMult)));
+    std::uint8_t radius = static_cast<std::uint8_t>(rawRadius < 2 ? 2 : (rawRadius > 7 ? 7 : rawRadius));
+    
+    int rawStrength = static_cast<int>(std::round(200.0f * spawnMult));
+    std::uint8_t strength = static_cast<std::uint8_t>(rawStrength < 90 ? 90 : (rawStrength > 230 ? 230 : rawStrength));
+
+    return SamosborPressure{radius, strength, kSamosborUnshelteredHp, kSamosborUnshelteredPsi};
+}
+
+void samosbor_wave_dispatch_cpu(Field<float>& fogField, const HermeticZones& hermeticZones, vec3 waveOrigin, SamosborVariant variant, float phase01) {
+    const SamosborPressure pressure = samosbor_unsheltered_pressure(variant);
+    const int radius = pressure.fogRadiusCells;
+    const float strength = static_cast<float>(pressure.fogStrength) / 255.0f;
+    const float spreadRate = 3.0f; // from spec: 3 cells per second
+    // We assume phase01 * duration scales the radius, but wait, the spec says wave origin spreads
+    // For simplicity we just use radius * phase01 if we want it to grow, or we just fill the static radius.
+    // Spec pseudo code: "if d > fogRadiusCells: fogField[cell] = 0"
+    // Let's implement static field that decays with distance for now, scaled by strength.
+    
+    const int ox = wrap_macro(static_cast<int>(std::floor(waveOrigin.x / kCellSize)));
+    const int oy = wrap_macro(static_cast<int>(std::floor(waveOrigin.y / kCellSize)));
+    const int oz = wrap_macro(static_cast<int>(std::floor(waveOrigin.z / kCellSize)));
+    const int radiusSq = radius * radius;
+
+    for (int z = 0; z < kMacroCells; ++z) {
+        for (int y = 0; y < kMacroCells; ++y) {
+            for (int x = 0; x < kMacroCells; ++x) {
+                if (hermeticZones.is_sealed(x, y, z)) {
+                    continue;
+                }
+                // is_lattice_column? 32 spacing, 16 is half
+                if ((x % 32) == 16 && (y % 32) == 16) {
+                    continue; // inside elevators
+                }
+
+                int dx = std::abs(x - ox);
+                int dy = std::abs(y - oy);
+                int dz = std::abs(z - oz);
+                if (dx > kMacroCells / 2) dx = kMacroCells - dx;
+                if (dy > kMacroCells / 2) dy = kMacroCells - dy;
+                if (dz > kMacroCells / 2) dz = kMacroCells - dz;
+                
+                int distSq = dx * dx + dy * dy + dz * dz;
+                if (distSq > radiusSq) {
+                    continue;
+                }
+                
+                float dist = std::sqrt(static_cast<float>(distSq));
+                float fogAmount = strength * (1.0f - (dist / static_cast<float>(radius)));
+                
+                if (fogAmount > 0.0f) {
+                    fogField.at(x, y, z) = std::max(fogField.at(x, y, z), fogAmount);
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

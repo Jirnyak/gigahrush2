@@ -35,8 +35,9 @@ bool VulkanRenderer::init(VulkanDevice& d, SDL_Window* window) {
     int w = 0, h = 0;
     drawable_size(window, &w, &h);
     if (!swapchain_->create(d, w, h)) return false;
+    if (!create_offscreen()) return false;
     if (!create_depth()) return false;
-    if (!create_render_pass()) return false;
+    if (!create_render_passes()) return false;
     if (!create_framebuffers()) return false;
     if (!create_commands()) return false;
     if (!create_frame_sync()) return false;
@@ -44,19 +45,22 @@ bool VulkanRenderer::init(VulkanDevice& d, SDL_Window* window) {
     // Deliberately not checked: missing timestamp support disables the readout,
     // it does not stop the game booting (gpu_timer.h).
     timer.init(d);
+    
+    if (!eyeAdaptPass_.init(d)) return false;
+    
     return true;
 }
 
-bool VulkanRenderer::create_render_pass() {
+bool VulkanRenderer::create_render_passes() {
     VkAttachmentDescription color{};
-    color.format = swapchain_->format;
+    color.format = offscreenFormat;
     color.samples = VK_SAMPLE_COUNT_1_BIT;
     color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    color.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    color.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; // Prepare for reading by post_pass
 
     VkAttachmentReference ref{};
     ref.attachment = 0;
@@ -103,6 +107,45 @@ bool VulkanRenderer::create_render_pass() {
     ci.dependencyCount = 1;
     ci.pDependencies = &dep;
     VK_TRY(vkCreateRenderPass(dev->device, &ci, nullptr, &renderPass));
+
+    // Post Render Pass (Swapchain)
+    VkAttachmentDescription postColor{};
+    postColor.format = swapchain_->format;
+    postColor.samples = VK_SAMPLE_COUNT_1_BIT;
+    postColor.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; // We render fullscreen over it
+    postColor.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    postColor.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    postColor.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    postColor.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    postColor.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    VkAttachmentReference postRef{};
+    postRef.attachment = 0;
+    postRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription postSub{};
+    postSub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    postSub.colorAttachmentCount = 1;
+    postSub.pColorAttachments = &postRef;
+
+    VkSubpassDependency postDep{};
+    postDep.srcSubpass = VK_SUBPASS_EXTERNAL;
+    postDep.dstSubpass = 0;
+    postDep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    postDep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    postDep.srcAccessMask = 0;
+    postDep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+    VkRenderPassCreateInfo pci{};
+    pci.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    pci.attachmentCount = 1;
+    pci.pAttachments = &postColor;
+    pci.subpassCount = 1;
+    pci.pSubpasses = &postSub;
+    pci.dependencyCount = 1;
+    pci.pDependencies = &postDep;
+    VK_TRY(vkCreateRenderPass(dev->device, &pci, nullptr, &postRenderPass_));
+
     return true;
 }
 
@@ -149,27 +192,96 @@ void VulkanRenderer::destroy_depth() {
     if (depthMemory) { vkFreeMemory(dev->device, depthMemory, nullptr); depthMemory = VK_NULL_HANDLE; }
 }
 
+bool VulkanRenderer::create_offscreen() {
+    std::size_t numImages = swapchain_->images.size();
+    offscreenImages_.resize(numImages);
+    offscreenMemories_.resize(numImages);
+    offscreenViews_.resize(numImages);
+
+    for (std::size_t i = 0; i < numImages; ++i) {
+        VkImageCreateInfo ii{};
+        ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ii.imageType = VK_IMAGE_TYPE_2D;
+        ii.extent = {swapchain_->extent.width, swapchain_->extent.height, 1};
+        ii.mipLevels = 1;
+        ii.arrayLayers = 1;
+        ii.format = offscreenFormat;
+        ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        ii.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        ii.samples = VK_SAMPLE_COUNT_1_BIT;
+        ii.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VK_TRY(vkCreateImage(dev->device, &ii, nullptr, &offscreenImages_[i]));
+
+        VkMemoryRequirements req{};
+        vkGetImageMemoryRequirements(dev->device, offscreenImages_[i], &req);
+        VkMemoryAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ai.allocationSize = req.size;
+        ai.memoryTypeIndex = find_mem_type(*dev, req.memoryTypeBits,
+                                           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        VK_TRY(vkAllocateMemory(dev->device, &ai, nullptr, &offscreenMemories_[i]));
+        VK_TRY(vkBindImageMemory(dev->device, offscreenImages_[i], offscreenMemories_[i], 0));
+
+        VkImageViewCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = offscreenImages_[i];
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vi.format = offscreenFormat;
+        vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        vi.subresourceRange.levelCount = 1;
+        vi.subresourceRange.layerCount = 1;
+        VK_TRY(vkCreateImageView(dev->device, &vi, nullptr, &offscreenViews_[i]));
+    }
+    return true;
+}
+
+void VulkanRenderer::destroy_offscreen() {
+    for (auto v : offscreenViews_) if (v) vkDestroyImageView(dev->device, v, nullptr);
+    for (auto i : offscreenImages_) if (i) vkDestroyImage(dev->device, i, nullptr);
+    for (auto m : offscreenMemories_) if (m) vkFreeMemory(dev->device, m, nullptr);
+    offscreenViews_.clear();
+    offscreenImages_.clear();
+    offscreenMemories_.clear();
+}
+
 bool VulkanRenderer::create_framebuffers() {
     framebuffers_.resize(swapchain_->views.size());
+    postFramebuffers_.resize(swapchain_->views.size());
+
     for (std::size_t i = 0; i < swapchain_->views.size(); ++i) {
-        VkImageView att[2] = {swapchain_->views[i], depthView};
+        // Main offscreen framebuffer
+        VkImageView atts[2] = {offscreenViews_[i], depthView};
         VkFramebufferCreateInfo ci{};
         ci.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         ci.renderPass = renderPass;
         ci.attachmentCount = 2;
-        ci.pAttachments = att;
+        ci.pAttachments = atts;
         ci.width = swapchain_->extent.width;
         ci.height = swapchain_->extent.height;
         ci.layers = 1;
         VK_TRY(vkCreateFramebuffer(dev->device, &ci, nullptr, &framebuffers_[i]));
+
+        // Post pass framebuffer
+        VkImageView postAtt[1] = {swapchain_->views[i]};
+        VkFramebufferCreateInfo pci{};
+        pci.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        pci.renderPass = postRenderPass_;
+        pci.attachmentCount = 1;
+        pci.pAttachments = postAtt;
+        pci.width = swapchain_->extent.width;
+        pci.height = swapchain_->extent.height;
+        pci.layers = 1;
+        VK_TRY(vkCreateFramebuffer(dev->device, &pci, nullptr, &postFramebuffers_[i]));
     }
     return true;
 }
 
 void VulkanRenderer::destroy_framebuffers() {
-    for (auto fb : framebuffers_)
-        if (fb) vkDestroyFramebuffer(dev->device, fb, nullptr);
+    for (auto fb : framebuffers_) if (fb) vkDestroyFramebuffer(dev->device, fb, nullptr);
+    for (auto fb : postFramebuffers_) if (fb) vkDestroyFramebuffer(dev->device, fb, nullptr);
     framebuffers_.clear();
+    postFramebuffers_.clear();
 }
 
 bool VulkanRenderer::create_commands() {
@@ -288,6 +400,38 @@ void VulkanRenderer::begin_render_pass(float r, float g, float b) {
     vkCmdSetScissor(c, 0, 1, &sc);
 }
 
+void VulkanRenderer::begin_post_pass(float dtSec) {
+    VkCommandBuffer c = cmd[currentFrame];
+    vkCmdEndRenderPass(c); // End the offscreen main render pass
+
+    // Transition offscreen image layout if needed, though the render pass should have left it in SHADER_READ_ONLY_OPTIMAL
+    eyeAdaptPass_.record(*dev, c, offscreenViews_[currentImageIndex], dtSec);
+
+    VkRenderPassBeginInfo rp{};
+    rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rp.renderPass = postRenderPass_;
+    rp.framebuffer = postFramebuffers_[currentImageIndex];
+    rp.renderArea.offset = {0, 0};
+    rp.renderArea.extent = swapchain_->extent;
+    
+    // No clear values needed because loadOp is DONT_CARE and we render fullscreen over it
+    rp.clearValueCount = 0;
+    rp.pClearValues = nullptr;
+    
+    vkCmdBeginRenderPass(c, &rp, VK_SUBPASS_CONTENTS_INLINE);
+
+    VkViewport vp{};
+    vp.x = 0.0f; vp.y = 0.0f;
+    vp.width = static_cast<float>(swapchain_->extent.width);
+    vp.height = static_cast<float>(swapchain_->extent.height);
+    vp.minDepth = 0.0f; vp.maxDepth = 1.0f;
+    vkCmdSetViewport(c, 0, 1, &vp);
+    VkRect2D sc{};
+    sc.offset = {0, 0};
+    sc.extent = swapchain_->extent;
+    vkCmdSetScissor(c, 0, 1, &sc);
+}
+
 bool VulkanRenderer::begin_frame_cmd(SDL_Window* window) {
     if (!acquire_frame(window)) return false;
     timer.frame_begin(cmd[currentFrame], currentFrame);
@@ -393,9 +537,12 @@ bool VulkanRenderer::recreate(SDL_Window* window) {
     vkDeviceWaitIdle(dev->device);
     destroy_present_semaphores();
     destroy_framebuffers();
+    destroy_offscreen();
     destroy_depth();
     swapchain_->destroy(*dev);
+    
     if (!swapchain_->create(*dev, w, h)) return true;
+    if (!create_offscreen()) return false;
     if (!create_depth()) return false;
     if (!create_framebuffers()) return false;
     if (!create_present_semaphores()) return false;
@@ -406,23 +553,26 @@ bool VulkanRenderer::recreate(SDL_Window* window) {
 void VulkanRenderer::destroy() {
     if (!dev) return;
     vkDeviceWaitIdle(dev->device);
-    timer.destroy();
+    destroy_framebuffers();
+    destroy_offscreen();
+    destroy_depth();
     destroy_present_semaphores();
+    if (renderPass) { vkDestroyRenderPass(dev->device, renderPass, nullptr); renderPass = VK_NULL_HANDLE; }
+    if (postRenderPass_) { vkDestroyRenderPass(dev->device, postRenderPass_, nullptr); postRenderPass_ = VK_NULL_HANDLE; }
+    
     for (int i = 0; i < kMaxFramesInFlight; ++i) {
-        if (imageAvailable[i]) vkDestroySemaphore(dev->device, imageAvailable[i], nullptr);
-        if (inFlight[i]) vkDestroyFence(dev->device, inFlight[i], nullptr);
-        imageAvailable[i] = VK_NULL_HANDLE;
-        inFlight[i] = VK_NULL_HANDLE;
+        if (imageAvailable[i]) { vkDestroySemaphore(dev->device, imageAvailable[i], nullptr); imageAvailable[i] = VK_NULL_HANDLE; }
+        if (inFlight[i]) { vkDestroyFence(dev->device, inFlight[i], nullptr); inFlight[i] = VK_NULL_HANDLE; }
     }
     if (cmdPool) { vkDestroyCommandPool(dev->device, cmdPool, nullptr); cmdPool = VK_NULL_HANDLE; }
-    destroy_framebuffers();
-    destroy_depth();
-    if (renderPass) { vkDestroyRenderPass(dev->device, renderPass, nullptr); renderPass = VK_NULL_HANDLE; }
     if (swapchain_) {
         swapchain_->destroy(*dev);
         delete swapchain_;
         swapchain_ = nullptr;
     }
+    timer.destroy();
+    eyeAdaptPass_.destroy(*dev);
+    dev = nullptr;
 }
 
 } // namespace giga::gpu

@@ -77,6 +77,7 @@
 
 #include "game/ai.h"
 #include "game/needs.h"   // needs_roll — NOT reachable from game_test.cpp's prelude
+#include "game/role.h"
 #include "game/wander.h"  // wander_init / wander_step / kWanderPeriod
 #include "sim/diffusion.h"
 #include "world/field.h"
@@ -344,7 +345,7 @@ static void test_utilai_all() {
             for (int t = 0; t < kTicks; ++t) {
                 danger.fill((t % 2) == 0 ? kCalmDanger : kScaryDanger);
                 const AiTick tick =
-                    ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+                    ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg);
                 CHECK(tick.considered == static_cast<std::uint32_t>(kBodies));
                 replans += tick.replanned;
                 now += static_cast<double>(kSimDt);
@@ -467,7 +468,7 @@ static void test_utilai_all() {
         for (int t = 0; t < kTicks; ++t) {
             arm_sentinels(reg, all);
             const AiTick tick =
-                ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+                ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg);
             CHECK(tick.considered == static_cast<std::uint32_t>(2 * kGroup));
             CHECK(tick.aiOwned + tick.wanderOwned == tick.considered);
 
@@ -525,7 +526,7 @@ static void test_utilai_all() {
         // Steering direction: group B flees UP-field, i.e. down the danger
         // gradient. The ramp rises with +x, so a fleeing body must move in -x.
         arm_sentinels(reg, all);
-        ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+        ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg);
         for (Entity e : groupB) {
             const Velocity& v = reg.get<Velocity>(e);
             CHECK(v.v.x < 0.0f);
@@ -598,7 +599,7 @@ static void test_utilai_all() {
         double now = 0.0;
         for (int t = 0; t < 50; ++t) {
             const AiTick tick =
-                ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt);
+                ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt);
             CHECK(tick.considered == 0);
             CHECK(tick.replanned == 0);
             CHECK(tick.aiOwned == 0);
@@ -644,7 +645,7 @@ static void test_utilai_all() {
         cfg.enabled = true;
 
         double now = 0.0;
-        ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+        ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg);
         CHECK(reg.get<AiBrain>(e).currentIntent == IntentFlee);
         CHECK(ai_owns_motion(reg, e));
 
@@ -655,7 +656,7 @@ static void test_utilai_all() {
         danger.fill(90.0f);
         now += static_cast<double>(kSimDt);
         reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
-        const AiTick t2 = ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+        const AiTick t2 = ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg);
         CHECK(reg.get<AiBrain>(e).currentIntent == IntentFlee);
         CHECK(!ai_owns_motion(reg, e));
         CHECK(t2.wanderOwned == 1);
@@ -672,14 +673,14 @@ static void test_utilai_all() {
                 for (int z = 0; z < kMacroDim; ++z)
                     danger.at(x, y, z) = static_cast<float>(x * 2);
         now += static_cast<double>(kSimDt);
-        ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+        ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg);
         CHECK(ai_owns_motion(reg, e));
 
         reg.emplace<CameraTag>(e, CameraTag{});
         reg.emplace<Controller>(e, Controller{7.0f, {0, 0, 0}, false});
         now += static_cast<double>(kSimDt);
         reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
-        const AiTick t3 = ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+        const AiTick t3 = ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg);
         CHECK(!ai_owns_motion(reg, e));
         CHECK(t3.considered == 0);   // out of scope entirely once possessed
         CHECK(is_sentinel(reg.get<Velocity>(e)));
@@ -690,7 +691,7 @@ static void test_utilai_all() {
         reg.remove<CameraTag>(e);
         reg.remove<Controller>(e);
         now += static_cast<double>(kSimDt);
-        ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+        ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg);
         CHECK(ai_owns_motion(reg, e));
         CHECK(ai_release(reg, kLayer) == 1u);
         CHECK(!ai_owns_motion(reg, e));
@@ -731,7 +732,7 @@ static void test_utilai_all() {
             cfg.enabled = true;
             double now = 0.0;
             for (int t = 0; t < 600; ++t) {   // ~4.8 s: several full re-plan cycles
-                ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+                ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg);
                 now += static_cast<double>(kSimDt);
             }
             for (Entity e : bodies) {
@@ -1026,7 +1027,7 @@ static void test_utilai_all() {
             double now = 0.0;
             danger.fill(100.0f);   // unitish -> 1.0: maximum severity, worth filing
             for (int t = 0; t < kHot; ++t) {
-                const AiTick tick = ai_step(reg, pool, &danger, grid, kLayer, now,
+                const AiTick tick = ai_step(reg, pool, &danger, nullptr, grid, kLayer, now,
                                             kSimDt, cfg, memPtr);
                 CHECK(tick.considered == static_cast<std::uint32_t>(kBodies));
                 now += static_cast<double>(kSimDt);
@@ -1053,7 +1054,7 @@ static void test_utilai_all() {
             // --- the field evaporates ---
             danger.fill(0.0f);
             for (int t = 0; t < kCold; ++t) {
-                ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg, memPtr);
+                ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg, memPtr);
                 now += static_cast<double>(kSimDt);
             }
             for (int i = 0; i < kBodies; ++i) {
@@ -1242,7 +1243,7 @@ static void test_utilai_all() {
 
         // ---- one tick, the whole arbitration table ------------------------
         arm_sentinels(reg, all);
-        const AiTick t1 = ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg, &mem);
+        const AiTick t1 = ai_step(reg, pool, &danger, nullptr, grid, kLayer, 0.0, kSimDt, cfg, &mem);
         CHECK(t1.considered == static_cast<std::uint32_t>(3 * kGroup));
         CHECK(t1.aiOwned + t1.wanderOwned == t1.considered);
         CHECK(t1.wanderOwned == static_cast<std::uint32_t>(kGroup));     // A
@@ -1284,7 +1285,7 @@ static void test_utilai_all() {
             CHECK(ai_init(reg2, kLayer) == static_cast<std::uint32_t>(kGroup));
             arm_sentinels(reg2, cOnly);
             const AiTick t0 =
-                ai_step(reg2, pool2, &danger, grid, kLayer, 0.0, kSimDt, cfg, nullptr);
+                ai_step(reg2, pool2, &danger, nullptr, grid, kLayer, 0.0, kSimDt, cfg, nullptr);
             CHECK(t0.aiOwned == 0u);
             CHECK(t0.wanderOwned == static_cast<std::uint32_t>(kGroup));
             CHECK(t0.memoryFled == 0u);
@@ -1302,7 +1303,7 @@ static void test_utilai_all() {
         for (int t = 0; t < kTicks; ++t) {
             arm_sentinels(reg, all);
             const AiTick tick =
-                ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg, &mem);
+                ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg, &mem);
             CHECK(tick.aiOwned + tick.wanderOwned == tick.considered);
             for (std::size_t i = 0; i < all.size(); ++i) {
                 aiWrote[i] = !is_sentinel(reg.get<Velocity>(all[i]));
@@ -1433,7 +1434,7 @@ static void test_utilai_all() {
                     hp = static_cast<std::int16_t>(hp - 25);
                 }
                 const AiTick tick =
-                    ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg, &mem);
+                    ai_step(reg, pool, &danger, nullptr, grid, kLayer, now, kSimDt, cfg, &mem);
                 recalls += tick.recalled;
                 replans += tick.replanned;
                 now += static_cast<double>(kSimDt);
@@ -1501,7 +1502,7 @@ static void test_utilai_all() {
 
         AiConfig cfg;
         cfg.enabled = true;
-        ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg, &mem);
+        ai_step(reg, pool, &danger, nullptr, grid, kLayer, 0.0, kSimDt, cfg, &mem);
         CHECK(reg.get<AiBrain>(e).currentIntent == IntentFlee);
         const std::uint32_t before = digest_memory(mem, id);
         const std::uint16_t decisionsBefore = reg.get<AiBrain>(e).decisions;
@@ -1519,7 +1520,7 @@ static void test_utilai_all() {
         CHECK(digest_memory(mem, id) == before);    // ...but the memory is intact
 
         // And it still decides the same way on the other side of the ride.
-        const AiTick after = ai_step(reg, pool, &danger, grid, kLayer,
+        const AiTick after = ai_step(reg, pool, &danger, nullptr, grid, kLayer,
                                      static_cast<double>(kSimDt), kSimDt, cfg, &mem);
         CHECK(after.recalled == 1u);
         CHECK(reg.get<AiBrain>(e).currentIntent == IntentFlee);
@@ -1530,4 +1531,197 @@ static void test_utilai_all() {
                      decisionsBefore, before, digest_memory(mem, id),
                      kIntentName[reg.get<AiBrain>(e).currentIntent]);
     }
+
+    // ======================================================================
+    // 16. PANIC VIA DIFFUSION PUBLISH (R1).
+    // ======================================================================
+    {
+        Field<float> danger(0.0f);
+        const float panicFactor = 0.5f;
+        const int cx = 10, cy = 12, cz = 1;
+        CHECK(danger.at(cx, cy, cz) == 0.0f);
+
+        panic_publish_step(danger, cx, cy, cz, kSimDt, panicFactor);
+        const float expected = kPanicEmit * kSimDt * panicFactor;
+        CHECK(std::abs(danger.at(cx, cy, cz) - expected) < 1e-5f);
+
+        // Also test via ai_step when body is in an emergency intent
+        Registry reg;
+        NpcPool pool;
+        pool.init();
+        NpcId id = 0;
+        Entity e = make_body(reg, pool, 15, 15, 1, Faction::Citizens, id);
+        CHECK(ai_init(reg, kLayer) == 1u);
+
+        AiBrain& brain = reg.get<AiBrain>(e);
+        brain.currentIntent = IntentFlee; // emergency intent!
+        const float dangerBefore = danger.at(15, 15, 1);
+
+        AiConfig cfg;
+        cfg.enabled = true;
+        MacroGrid grid;
+        ai_step(reg, pool, &danger, nullptr, grid, kLayer, 0.0, kSimDt, cfg);
+
+        const float citPanic = faction_traits(static_cast<std::uint16_t>(Faction::Citizens)).panic;
+        const float expectedEmit = kPanicEmit * kSimDt * citPanic;
+        CHECK(std::abs(danger.at(15, 15, 1) - (dangerBefore + expectedEmit)) < 1e-5f);
+        std::fprintf(stdout, "[utilai] R1 panic publish verified: emitted %.4f into danger field\n", expectedEmit);
+    }
+
+    // ======================================================================
+    // 17. ROLE SCORING INTEGRATION (R6).
+    // ======================================================================
+    {
+        Needs needs = needs_roll(9999u);
+        Perception p;
+        p.idSeed = identity_seed(1u);
+        p.faction = static_cast<std::uint16_t>(Faction::Citizens);
+        p.hp = 100.0f;
+        p.maxHp = 100.0f;
+
+        float scoresResident[kIntentCount];
+        float scoresDuty[kIntentCount];
+        float scoresMedic[kIntentCount];
+
+        p.role = static_cast<std::uint8_t>(RoleId::Resident);
+        score_intents(p, needs, scoresResident);
+
+        p.role = static_cast<std::uint8_t>(RoleId::Duty);
+        score_intents(p, needs, scoresDuty);
+
+        p.role = static_cast<std::uint8_t>(RoleId::Medic);
+        score_intents(p, needs, scoresMedic);
+
+        const RoleTraits& rtDuty = role_traits(RoleId::Duty);
+        const RoleTraits& rtRes = role_traits(RoleId::Resident);
+        const RoleTraits& rtMedic = role_traits(RoleId::Medic);
+
+        // Duty has higher patrolDrive and workDrive than Resident
+        CHECK(rtDuty.patrolDrive > rtRes.patrolDrive);
+        CHECK(scoresDuty[IntentPatrol] > scoresResident[IntentPatrol]);
+
+        // Medic has higher careDrive than Duty
+        CHECK(rtMedic.careDrive > rtDuty.careDrive);
+
+        std::fprintf(stdout, "[utilai] R6 role scoring verified: Resident patrol=%.1f, Duty patrol=%.1f\n",
+                     scoresResident[IntentPatrol], scoresDuty[IntentPatrol]);
+    }
+
+    // ======================================================================
+    // 18. ADVERSARIAL EDGE CASE TESTS (R1 & R6).
+    // ======================================================================
+    {
+        // Edge Case 1: Null danger field pointer in ai_step with emergency intent
+        {
+            Registry reg;
+            NpcPool pool;
+            pool.init();
+            NpcId id = 0;
+            Entity e = make_body(reg, pool, 20, 20, 1, Faction::Citizens, id);
+            CHECK(ai_init(reg, kLayer) == 1u);
+
+            AiBrain& brain = reg.get<AiBrain>(e);
+            brain.currentIntent = IntentFlee; // Emergency intent!
+
+            AiConfig cfg;
+            cfg.enabled = true;
+            MacroGrid grid;
+
+            // Calling ai_step with danger = nullptr must NOT dereference null or crash
+            const AiTick tick = ai_step(reg, pool, nullptr, nullptr, grid, kLayer, 0.0, kSimDt, cfg);
+            CHECK(tick.considered == 1u);
+        }
+
+        // Edge Case 2: 0 dt in panic_publish_step
+        {
+            Field<float> danger(10.0f);
+            const int cx = 5, cy = 5, cz = 1;
+            panic_publish_step(danger, cx, cy, cz, 0.0f, 0.5f);
+            CHECK(danger.at(cx, cy, cz) == 10.0f);
+        }
+
+        // Edge Case 3: Negative panic value in panic_publish_step
+        {
+            Field<float> danger(10.0f);
+            const int cx = 5, cy = 5, cz = 1;
+            const float negPanic = -0.5f;
+            panic_publish_step(danger, cx, cy, cz, kSimDt, negPanic);
+            const float expected = 10.0f + kPanicEmit * kSimDt * negPanic;
+            CHECK(std::abs(danger.at(cx, cy, cz) - expected) < 1e-5f);
+        }
+
+        // Edge Case 4: Emergency vs Non-Emergency Intents panic emission
+        {
+            Field<float> danger(0.0f);
+            Registry reg;
+            NpcPool pool;
+            pool.init();
+            MacroGrid grid;
+            AiConfig cfg;
+            cfg.enabled = true;
+
+            // Emergency intents must publish panic:
+            const std::uint8_t emergencies[] = { IntentSafety, IntentCombat, IntentFlee, IntentHeal };
+            for (std::uint8_t intent : emergencies) {
+                NpcId id = 0;
+                Entity e = make_body(reg, pool, 30, 30, 1, Faction::Citizens, id);
+                ai_init(reg, kLayer);
+                reg.get<AiBrain>(e).currentIntent = intent;
+                const float before = danger.at(30, 30, 1);
+                ai_step(reg, pool, &danger, nullptr, grid, kLayer, 0.0, kSimDt, cfg);
+                const float after = danger.at(30, 30, 1);
+                CHECK(after > before);
+            }
+
+            // Non-emergency intents must NOT publish panic:
+            const std::uint8_t nonEmergencies[] = {
+                IntentToilet, IntentDrink, IntentEat, IntentSleep,
+                IntentWork, IntentSocial, IntentPatrol, IntentFactionAssault, IntentWander
+            };
+            for (std::uint8_t intent : nonEmergencies) {
+                NpcId id = 0;
+                Entity e = make_body(reg, pool, 40, 40, 1, Faction::Citizens, id);
+                ai_init(reg, kLayer);
+                reg.get<AiBrain>(e).currentIntent = intent;
+                const float before = danger.at(40, 40, 1);
+                ai_step(reg, pool, &danger, nullptr, grid, kLayer, 0.0, kSimDt, cfg);
+                const float after = danger.at(40, 40, 1);
+                CHECK(after == before);
+            }
+        }
+
+        // Edge Case 5: Invalid Role IDs in role_traits & score_intents
+        {
+            // Out-of-bounds RoleId (e.g. 255 or 10) must fall back safely to Resident (index 0)
+            const RoleTraits& rtInvalid255 = role_traits(static_cast<RoleId>(255));
+            const RoleTraits& rtInvalid10  = role_traits(static_cast<RoleId>(10));
+            const RoleTraits& rtResident   = role_traits(RoleId::Resident);
+
+            CHECK(rtInvalid255.workDrive == rtResident.workDrive);
+            CHECK(rtInvalid10.workDrive  == rtResident.workDrive);
+
+            Needs needs = needs_roll(1111u);
+            Perception p;
+            p.idSeed = identity_seed(2u);
+            p.faction = static_cast<std::uint16_t>(Faction::Citizens);
+            p.hp = 100.0f;
+            p.maxHp = 100.0f;
+
+            float scoresInvalid[kIntentCount];
+            float scoresResident[kIntentCount];
+
+            p.role = 255;
+            score_intents(p, needs, scoresInvalid);
+
+            p.role = static_cast<std::uint8_t>(RoleId::Resident);
+            score_intents(p, needs, scoresResident);
+
+            for (int i = 0; i < kIntentCount; ++i) {
+                CHECK(scoresInvalid[i] == scoresResident[i]);
+            }
+        }
+
+        std::fprintf(stdout, "[utilai] Edge case stress tests (null danger, 0 dt, neg panic, non-emergency, invalid role IDs) PASSED\n");
+    }
 }
+

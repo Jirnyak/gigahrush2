@@ -1,0 +1,62 @@
+#version 450
+
+layout (local_size_x = 16, local_size_y = 16) in;
+
+layout (set = 0, binding = 0) uniform sampler2D hdrImage;
+
+layout (std140, set = 0, binding = 1) buffer AdaptState {
+    float currentLum;
+    float targetLum;
+    float dt;
+    float pad;
+} state;
+
+shared float sharedLum[256];
+
+const float kAdaptSpeedDarkToLight = 2.0;
+const float kAdaptSpeedLightToDark = 1.0;
+
+// relative luminance
+float luminance(vec3 color) {
+    return dot(color, vec3(0.2126, 0.7152, 0.0722));
+}
+
+void main() {
+    uint localId = gl_LocalInvocationIndex;
+    
+    // Size of the HDR image
+    vec2 imgSize = vec2(textureSize(hdrImage, 0));
+    
+    // Sample a scattered grid based on local_size
+    // This provides a rudimentary downsample/average without full reduction passes
+    vec2 uv = (vec2(gl_LocalInvocationID.xy) + 0.5) / 16.0;
+    
+    vec3 color = texture(hdrImage, uv).rgb;
+    sharedLum[localId] = luminance(color);
+    
+    barrier();
+    
+    // Simple reduction in workgroup
+    for (uint s = 128; s > 0; s >>= 1) {
+        if (localId < s) {
+            sharedLum[localId] += sharedLum[localId + s];
+        }
+        barrier();
+    }
+    
+    // Thread 0 calculates the final adapted luminance
+    if (localId == 0) {
+        float avgLum = sharedLum[0] / 256.0;
+        
+        // Clamp to avoid extreme values
+        avgLum = clamp(avgLum, 0.05, 10.0);
+        
+        state.targetLum = avgLum;
+        
+        // Temporal adaptation
+        float speed = (state.targetLum > state.currentLum) ? kAdaptSpeedDarkToLight : kAdaptSpeedLightToDark;
+        
+        // Exponential decay
+        state.currentLum += (state.targetLum - state.currentLum) * (1.0 - exp(-state.dt * speed));
+    }
+}

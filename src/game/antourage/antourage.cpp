@@ -11,6 +11,8 @@
 // floor pulled sideways and a floor with no gravity at all. Geometry is a frame
 // question and always answerable; only the wire's SAG is a force.
 #include "game/antourage/antourage.h"
+#include "sim/gas.h"
+#include "world/gas_field.h"
 
 #include <cmath>
 
@@ -521,6 +523,60 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
                      static_cast<std::uint8_t>(face), an);
         }
     }
+
+    // --- 5. build PipeNetwork connectivity --------------------------------
+    out.pipeComponent.assign(kMacroCells, 0);
+    out.pipeComponentCount = 0;
+    
+    std::vector<bool> visited(net.size(), false);
+    std::vector<std::uint32_t> stack;
+    
+    for (std::uint32_t st : nodes) {
+        if (!net[st].inNet || visited[st]) continue;
+        if (out.pipeComponentCount >= 255) break;
+        
+        std::uint8_t compId = ++out.pipeComponentCount;
+        stack.push_back(st);
+        visited[st] = true;
+        
+        while (!stack.empty()) {
+            std::uint32_t curr = stack.back();
+            stack.pop_back();
+            
+            std::size_t ci = curr / 6u;
+            out.pipeComponent[ci] = compId;
+            
+            const int face = static_cast<int>(curr % 6u);
+            const WalkCell c = cell_of(ci);
+            
+            for (int axis = 0; axis < 3; ++axis) {
+                if (axis == antourage_face_axis(face)) continue;
+                for (int sgn = -1; sgn <= 1; sgn += 2) {
+                    const WalkCell nb = stepped(c, axis, sgn);
+                    std::size_t nb_st = state_of(macro_index(nb.x, nb.y, nb.z), face);
+                    if (nb_st < net.size() && linked(curr, nb_st) && !visited[nb_st]) {
+                        visited[nb_st] = true;
+                        stack.push_back(static_cast<std::uint32_t>(nb_st));
+                    }
+                }
+            }
+            
+            for (int fi = 0; fi < kFaces; ++fi) {
+                const int other = faceOrder[fi];
+                if (other == face) continue;
+                std::size_t other_st = state_of(ci, other);
+                if (other_st < net.size() && linked(curr, other_st) && !visited[other_st]) {
+                    visited[other_st] = true;
+                    stack.push_back(static_cast<std::uint32_t>(other_st));
+                }
+            }
+        }
+    }
+    
+    out.pipeGasToxic.assign(out.pipeComponentCount + 1, 0.0f);
+    out.pipeGasSmoke.assign(out.pipeComponentCount + 1, 0.0f);
+    out.pipeGasOxy.assign(out.pipeComponentCount + 1, 255.0f); // Default oxygen
+    out.pipeGasHeat.assign(out.pipeComponentCount + 1, 0.0f);
 }
 
 // --- GHOST: hanging wires ---------------------------------------------------
@@ -924,6 +980,67 @@ std::uint32_t antourage_carve_step(const World& w, const AntourageBake& bake,
                         static_cast<std::uint32_t>(i) * 0x9E3779B9u);
     }
     return dead;
+}
+
+void antourage_vent_step(World& w, const AntourageBake& bake, float dt) {
+    if (bake.pipeComponentCount == 0) return;
+
+    Field<std::uint32_t>* gas = w.fields().find<std::uint32_t>(kGasField);
+    if (!gas) return;
+
+    std::vector<float> compToxic(256, 0.0f);
+    std::vector<float> compSmoke(256, 0.0f);
+    std::vector<float> compOxy(256, 0.0f);
+    std::vector<float> compHeat(256, 0.0f);
+    std::vector<int> compCount(256, 0);
+
+    for (int z = 0; z < 128; ++z) {
+        for (int y = 0; y < 128; ++y) {
+            for (int x = 0; x < 128; ++x) {
+                int i = x | (y << 7) | (z << 14);
+                std::uint8_t c = bake.pipeComponent[i];
+                if (c > 0) {
+                    float t, s, o, h;
+                    unpack_gas(gas->data()[i], t, s, o, h);
+                    compToxic[c] += t;
+                    compSmoke[c] += s;
+                    compOxy[c] += o;
+                    compHeat[c] += h;
+                    compCount[c]++;
+                }
+            }
+        }
+    }
+
+    for (int c = 1; c <= bake.pipeComponentCount; ++c) {
+        if (compCount[c] > 0) {
+            compToxic[c] /= compCount[c];
+            compSmoke[c] /= compCount[c];
+            compOxy[c] /= compCount[c];
+            compHeat[c] /= compCount[c];
+        }
+    }
+
+    float kVentRate = 20.0f; 
+    for (int z = 0; z < 128; ++z) {
+        for (int y = 0; y < 128; ++y) {
+            for (int x = 0; x < 128; ++x) {
+                int i = x | (y << 7) | (z << 14);
+                std::uint8_t c = bake.pipeComponent[i];
+                if (c > 0) {
+                    float t, s, o, h;
+                    unpack_gas(gas->data()[i], t, s, o, h);
+                    
+                    t += (compToxic[c] - t) * kVentRate * dt;
+                    s += (compSmoke[c] - s) * kVentRate * dt;
+                    o += (compOxy[c] - o) * kVentRate * dt;
+                    h += (compHeat[c] - h) * kVentRate * dt;
+                    
+                    gas->data()[i] = pack_gas(t, s, o, h);
+                }
+            }
+        }
+    }
 }
 
 } // namespace giga::game

@@ -348,8 +348,8 @@ static void test_packs_all() {
         // screenshot can be fooled by; there is no such window in this test.
         nav::CoarseGraph coarse;
         nav::FineNav fine;
-        nav::bake_coarse(stack.layer(layer).grid(), coarse);
-        nav::bake_fine(stack.layer(layer).grid(), fine);
+        giga::nav::bake_coarse(stack.layer(layer).grid(), giga::GravityRegime::NegZ, coarse);
+        giga::nav::bake_fine(stack.layer(layer).grid(), giga::GravityRegime::NegZ, fine);
         CHECK(!fine.flow.empty());
 
         const std::uint32_t wandering = wander_init(reg, layer, 4u);

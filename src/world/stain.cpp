@@ -11,9 +11,6 @@ namespace giga {
 
 namespace {
 
-constexpr int kSubGrid = kMacroDim * kSubDim; // 1024, a power of two
-constexpr int kSubGridMask = kSubGrid - 1;
-
 std::uint8_t sat_add(std::uint8_t a, std::uint8_t b) {
     const int s = static_cast<int>(a) + static_cast<int>(b);
     return static_cast<std::uint8_t>(s > 255 ? 255 : s);

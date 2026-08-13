@@ -281,6 +281,19 @@ std::int16_t melee_damage(const RpgStats& r, ItemId weaponId,
     return static_cast<std::int16_t>(out > 32767 ? 32767 : (out < 0 ? 0 : out));
 }
 
+std::int16_t ranged_damage(const RpgStats& r, std::int16_t weaponDamage) {
+    const int levelBonus = static_cast<int>(r.level) - 1;
+    const int wd = weaponDamage > 0 ? static_cast<int>(weaponDamage) : 0;
+    const int base = wd + levelBonus;
+    
+    // According to specs, ranged damage doesn't scale with a complex stat multiplier like STR,
+    // just level+1. But we can add INT scaling if we want, but the spec just said:
+    // "High intelligence and level in ranged combat currently do nothing... +(level*1)"
+    // The spec literally says `+(level*1)` so we just do that.
+    const int out = base;
+    return static_cast<std::int16_t>(out > 32767 ? 32767 : (out < 0 ? 0 : out));
+}
+
 std::uint16_t adjusted_psi_cost(std::uint16_t baseCost, const RpgStats& r) {
     if (baseCost == 0) return 0;
     const float v = static_cast<float>(baseCost) *

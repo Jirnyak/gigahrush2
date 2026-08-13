@@ -9,6 +9,7 @@
 #include "game/mob_table.h"          // RoomBit — rooms named in the shared taxonomy
 #include "world/macro_grid.h"        // MacroGrid — the frame helpers query cells
 #include "world/world.h"             // World — live gravity regime + grid
+#include "game/floor_anomaly.h"
 
 namespace giga::game {
 
@@ -212,6 +213,19 @@ void floor_declare_rules(World& world, int number, const FloorSpec& spec,
 void generate_floor(World& world, int number, const FloorSpec& spec,
                     unsigned seed) {
     kGenerators[kind_row(spec)](world, number, spec, seed);
+
+    FloorAnomaly anomaly = floor_anomaly_for(number, seed);
+    if (anomaly != FloorAnomaly::None) {
+        const FloorAnomalyDef& def = floor_anomaly_def(anomaly);
+        if (def.gravityDeltaX10 != 0) {
+            float delta = static_cast<float>(def.gravityDeltaX10) / 10.0f;
+            world.gravity().global.z += delta;
+        }
+        if (def.fogBaseX100 != 0) {
+            float fogBase = static_cast<float>(def.fogBaseX100) / 100.0f;
+            world.fields().get_or_create<float>(kFogField, fogBase);
+        }
+    }
 }
 
 void floor_apply_rules(World& world, int number, const FloorSpec& spec,

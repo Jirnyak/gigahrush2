@@ -102,7 +102,19 @@ struct Controller {
 // A TAG in the core rather than a `Projectile` check inside physics_step, because
 // `src/sim` may not include `src/game` ([AGENTS.md] layering). Anything that integrates
 // its own motion carries this.
-struct SelfIntegrating {};
+struct SelfIntegrating {
+    bool active = true;
+};
+
+// PSI pool: mental health component.
+//
+// Not in Needs (which is in NpcPool) and not in RpgStats.
+struct PsiPool {
+    std::int16_t current = 100;
+    std::int16_t max = 100;
+    // Bank for accumulating fractional regeneration per tick, ~1%/sec during full sleep.
+    float regenBank = 0.0f;
+};
 
 // "Move me, but let me pass through everything" — debug/console noclip.
 //

@@ -186,7 +186,7 @@ bool cmd_spawn(ConsoleContext& ctx, int argc, const char* const* argv,
     const int cy = static_cast<int>(tr.pos.y / kCellSize);
     const int cz = static_cast<int>(tr.pos.z / kCellSize); // the caller's storey
     const std::uint8_t level =
-        static_cast<std::uint8_t>(floor_mob_tier(ctx.currentFloor));
+        static_cast<std::uint8_t>(floor_mob_tier(ctx.currentFloor, 0));
     std::uint32_t spawned = 0;
     for (long i = 0; i < count; ++i) {
         // Ring the player at 2..3 cells so a crowd does not stack in one column.

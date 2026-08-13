@@ -5,6 +5,7 @@
 #include "core/wrap.h"
 #include "core/rng.h"
 #include "ecs/components.h"
+#include "game/ai.h"       // ai_remember_cell
 #include "game/embody.h"   // NpcRef
 #include "game/floor_gen.h" // floor_room_mask — the crate's contents follow the ROOM
 #include "game/npc_pool.h"
@@ -328,7 +329,7 @@ std::uint32_t spawn_floor_containers(Registry& reg, const World& world,
 }
 
 std::int32_t loot_containers_step(Registry& reg, NpcPool& pool, LayerId layer,
-                                  NoiseField* noise) {
+                                  NoiseField* noise, AiMemory* mem, double now) {
     // The looter.
     Entity who = entt::null;
     vec3 pos{0, 0, 0};
@@ -359,8 +360,15 @@ std::int32_t loot_containers_step(Registry& reg, NpcPool& pool, LayerId layer,
         if (dx * dx + dy * dy + dz * dz > kContainerReach * kContainerReach) continue;
 
         bool anyMoved = false;
+        bool hasFood = false;
+        bool hasWater = false;
+
         for (int i = 0; i < kContainerSlots; ++i) {
             if (!item_valid(c.item[i]) || c.count[i] == 0) continue;
+            const ItemCategory cat = static_cast<ItemCategory>(item_def(c.item[i]).category);
+            if (cat == ItemCategory::Food) hasFood = true;
+            if (cat == ItemCategory::Drink) hasWater = true;
+
             const int slot = inv.first_free();
             if (slot < 0) break;   // full: the rest stays in the box, not deleted
             inv.slots[slot] = ItemSlot{c.item[i], c.count[i]};
@@ -387,6 +395,15 @@ std::int32_t loot_containers_step(Registry& reg, NpcPool& pool, LayerId layer,
             // the player nothing about where they have already been, and remembering
             // that yourself across 256 rooms is not reasonable.
             if (Renderable* r = reg.try_get<Renderable>(e)) r->color = kOpenColour;
+
+            if (mem) {
+                const int cx = wrap_macro(static_cast<int>(std::floor(t.pos.x / kCellSize)));
+                const int cy = wrap_macro(static_cast<int>(std::floor(t.pos.y / kCellSize)));
+                const int cz = wrap_macro(static_cast<int>(std::floor(t.pos.z / kCellSize)));
+                if (hasFood) ai_remember_cell(*mem, nr->id, MemFood, cx, cy, cz, 1.0f, now);
+                if (hasWater) ai_remember_cell(*mem, nr->id, MemWater, cx, cy, cz, 1.0f, now);
+                
+            }
         }
     }
     return took;

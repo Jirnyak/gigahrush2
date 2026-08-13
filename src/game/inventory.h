@@ -19,6 +19,9 @@ inline constexpr int kInvSlots = kInvCols * kInvRows; // 64
 struct ItemSlot {
     std::uint16_t item = 0;  // 0 = empty
     std::uint16_t count = 0;
+    // 0..255, where 255 = brand new. Covers durability, charge, fouling, etc.
+    std::uint8_t condition = 255;
+    std::uint8_t pad_ = 0;
 };
 
 // Fixed 8x8 rectangle. POD, trivially copyable — no methods that allocate.

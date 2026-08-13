@@ -14,8 +14,10 @@
 
 #include "render/gpu_timer.h"
 #include "render/vk_common.h" // kMaxFramesInFlight
+#include "render/eye_adapt.h"
 
 struct SDL_Window;
+
 
 namespace giga::gpu {
 
@@ -86,13 +88,33 @@ struct VulkanRenderer {
     const VulkanSwapchain& swap() const { return *swapchain_; }
     bool recreate(SDL_Window* window);
 
+    VkImageView offscreen_view() const { return offscreenViews_[currentImageIndex]; }
+    VkRenderPass post_render_pass() const { return postRenderPass_; }
+
+    void begin_post_pass(float dtSec);
+
 private:
     VulkanSwapchain* swapchain_ = nullptr;
     VkBuffer captureTo_ = VK_NULL_HANDLE;
     bool captureDone_ = false;
-    std::vector<VkFramebuffer> framebuffers_;
+    std::vector<VkFramebuffer> framebuffers_;      // for offscreen world rendering (offscreen + depth)
+    std::vector<VkFramebuffer> postFramebuffers_;  // for post pass rendering (swapchain only)
 
-    bool create_render_pass();
+    // Offscreen target for main render pass (HDR)
+    VkFormat offscreenFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+    std::vector<VkImage> offscreenImages_;
+    std::vector<VkDeviceMemory> offscreenMemories_;
+    std::vector<VkImageView> offscreenViews_;
+    
+    VkRenderPass postRenderPass_ = VK_NULL_HANDLE;
+
+public:
+    EyeAdaptPass eyeAdaptPass_;
+private:
+
+    bool create_render_passes();
+    bool create_offscreen();
+    void destroy_offscreen();
     bool create_depth();
     void destroy_depth();
     bool create_framebuffers();

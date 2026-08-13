@@ -1,4 +1,6 @@
 #include "game/floor_spec.h"
+#include "game/floor_catalog.h"
+#include "game/floor_anomaly.h"
 
 #include <algorithm> // std::min/std::max
 #include <cmath>     // std::exp/std::pow/std::round/std::lround/std::abs
@@ -56,19 +58,7 @@ const FloorSpec& floor_spec(FloorKind kind) {
 }
 
 const FloorSpec& floor_spec_for(int floor) {
-    // Symmetric about the hub (|floor|), so a floor and its mirror share a
-    // character; the hub is always safe and the deep extremes trend derelict —
-    // the KIND half of the V-shape. Pure function of the number, reproducible.
-    const int a = floor < 0 ? -floor : floor;
-    FloorKind kind;
-    if (a == 0)            kind = FloorKind::Residential; // hub: always safe
-    else if (a >= 25)      kind = FloorKind::Padic;       // 4d spectrum extreme
-    else if (a >= 20)      kind = FloorKind::Derelict;    // deep extremes: wrecked
-    else if (a % 11 == 10) kind = FloorKind::Padic;
-    else if (a % 7 == 6)   kind = FloorKind::Derelict;
-    else if (a % 5 == 4)   kind = FloorKind::Industrial;
-    else if (a % 3 == 2)   kind = FloorKind::Commercial;
-    else                   kind = FloorKind::Residential;
+    const FloorKind kind = floor_catalog().resolve(floor).kind;
     return floor_spec(kind);
 }
 
@@ -77,7 +67,7 @@ float floor_depth01(int floor) {
     return a < 0.0f ? 0.0f : (a > 1.0f ? 1.0f : a);
 }
 
-int floor_danger(int floor) {
+int floor_danger(int floor, unsigned seed) {
     // Danger 1..5 as the confirmed DESIGN V-shape (master_prompt §4): safe at the
     // hub, rising with depth, and DEEPER-IS-DEADLIER going DOWN. Anchored to the
     // reference's hand-authored design danger (hub 1, roof 2, void 5;
@@ -89,13 +79,19 @@ int floor_danger(int floor) {
     // asymmetric nudge — the roof/void "weak vs elite" split is future kind-bias.)
     const float depth = floor_depth01(floor);
     const float dirWeight = floor < 0 ? 4.0f : 1.0f; // descending far deadlier
-    const long d = std::lround(1.0f + dirWeight * depth);
+    long d = std::lround(1.0f + dirWeight * depth);
+    
+    // Apply anomaly multiplier
+    const FloorAnomaly anomaly = floor_anomaly_for(floor, seed);
+    const FloorAnomalyDef& def = floor_anomaly_def(anomaly);
+    d = std::lround(static_cast<float>(d) * static_cast<float>(def.dangerMultX100) / 100.0f);
+    
     return d < 1 ? 1 : (d > 5 ? 5 : static_cast<int>(d));
 }
 
-int floor_mob_count(int floor, const FloorSpec& spec) {
+int floor_mob_count(int floor, const FloorSpec& spec, unsigned seed) {
     const double share = monster_share(floor_depth01(floor));
-    const int danger = floor_danger(floor);
+    const int danger = floor_danger(floor, seed);
     const double dangerTerm = 1.0 + 0.06 * static_cast<double>(danger - 1);
     // The floor's own character enters as a multiplier so two floors at the same
     // depth still differ (safe Residential vs. deadly Derelict) — this is what
@@ -108,9 +104,9 @@ int floor_mob_count(int floor, const FloorSpec& spec) {
     return static_cast<int>(c);
 }
 
-int floor_mob_tier(int floor) {
+int floor_mob_tier(int floor, unsigned seed) {
     const float depth = floor_depth01(floor);
-    const int danger = floor_danger(floor);
+    const int danger = floor_danger(floor, seed);
     long lvl = std::lround(1.0f + depth * 8.0f + 0.55f * static_cast<float>(danger - 1));
     if (lvl < 1) lvl = 1;
     if (lvl > 12) lvl = 12;

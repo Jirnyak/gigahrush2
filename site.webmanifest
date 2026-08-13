@@ -1,15 +1,15 @@
 {
-  "name": "Jirnyak/gigahrush2",
-  "short_name": "gigahrush2",
-  "icons": [
-    {
-      "src": "favicon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml"
-    }
-  ],
-  "start_url": "./index.html",
-  "display": "standalone",
-  "background_color": "#090d16",
-  "theme_color": "#00ffcc"
+	"name": "Jirnyak/gigahrush2",
+	"short_name": "gigahrush2",
+	"icons": [
+		{
+			"src": "favicon.svg",
+			"sizes": "any",
+			"type": "image/svg+xml"
+		}
+	],
+	"start_url": "./index.html",
+	"display": "standalone",
+	"background_color": "#090d16",
+	"theme_color": "#00ffcc"
 }

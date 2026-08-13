@@ -349,8 +349,8 @@ static void test_hunt_all() {
 
         nav::CoarseGraph coarse;
         nav::FineNav fine;
-        nav::bake_coarse(stack.layer(layer).grid(), coarse);
-        nav::bake_fine(stack.layer(layer).grid(), fine);
+        giga::nav::bake_coarse(stack.layer(layer).grid(), giga::GravityRegime::NegZ, coarse);
+        giga::nav::bake_fine(stack.layer(layer).grid(), giga::GravityRegime::NegZ, fine);
         wander_init(reg, layer, 5u);
 
         // The scenario is pinned. If the floor stops being 420-vs-600 the survivor

@@ -87,8 +87,8 @@ enum class NoiseSource : std::uint8_t {
     None = 0,
     WeaponFire,   // a gun going off — the loudest thing in the game
     Melee,        // a heavy or metal swing connecting
-    Footstep,     // reserved; nothing publishes this yet
-    Door,         // reserved; there are no doors yet
+    Footstep,     // published by player and NPCs during macro_sim_step
+    Door,         // opening/closing/breaking a door
     Container,    // a crate/safe being opened
     Body,         // something hitting the floor dead
     Siren,        // samosbor warning; reserved

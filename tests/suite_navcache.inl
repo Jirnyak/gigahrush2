@@ -1113,9 +1113,9 @@ void baked_round_trip_routes_identically() {
     generate_floor(w, key.number, floor_spec(key.kind), key.seed);
 
     nav::CoarseGraph cold{};
-    nav::bake_coarse(w.grid(), cold);
+    giga::nav::bake_coarse(w.grid(), giga::GravityRegime::NegZ, cold);
     nav::FineNav coldFine;
-    nav::bake_fine(w.grid(), coldFine);
+    giga::nav::bake_fine(w.grid(), giga::GravityRegime::NegZ, coldFine);
     CHECK(coldFine.flow.size() == kNavFineWire);
     CHECK(coldFine.nearest.size() == kNavNearestWire);
 

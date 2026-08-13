@@ -47,7 +47,7 @@ bool bankable_slot(const Inventory& inv, int slot) {
     // be stillborn.
     if (sl.item == equipped_melee(inv) || sl.item == equipped_armour(inv))
         return false;
-    return bankable_category(static_cast<ItemCategory>(item_def(sl.item).category));
+    return item_valid(sl.item) && bankable_category(static_cast<ItemCategory>(item_def(sl.item).category));
 }
 
 std::int32_t deposit_valuables(Inventory& inv, RunLedger& led) {

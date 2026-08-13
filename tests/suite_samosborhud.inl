@@ -627,6 +627,47 @@ static void test_samosborhud_all() {
             reg.emplace<Transform>(b, at);
             reg.emplace<NpcRef>(b, NpcRef{crowd[i]});
         }
+        {
+            // nearest_speaker coverage: 6m radius, torus wrapping, self-exclusion.
+            Registry testReg;
+            NpcPool testPool;
+            testPool.init();
+            const LayerId testLayer = 0;
+            
+            // Me
+            Transform meAt{vec3{128.0f - 2.0f, 10.0f, 4.0f}, testLayer};
+            const NpcId meId = testPool.spawn();
+            testPool.set_player(meId, true);
+            testPool.hp(meId) = 100; testPool.max_hp(meId) = 100;
+            Entity meE = testReg.create();
+            testReg.emplace<Transform>(meE, meAt);
+            testReg.emplace<NpcRef>(meE, NpcRef{meId});
+            testReg.emplace<CameraTag>(meE, CameraTag{});
+
+            // Speaker 1: 3 meters away across the torus wrap (X: 128-2 to 1 = 3m)
+            Transform s1At{vec3{1.0f, 10.0f, 4.0f}, testLayer};
+            const NpcId s1Id = testPool.spawn();
+            testPool.hp(s1Id) = 100; testPool.max_hp(s1Id) = 100;
+            Entity s1E = testReg.create();
+            testReg.emplace<Transform>(s1E, s1At);
+            testReg.emplace<NpcRef>(s1E, NpcRef{s1Id});
+
+            // Speaker 2: 7 meters away (Y: 10 to 17 = 7m), beyond 6m radius
+            Transform s2At{vec3{128.0f - 2.0f, 17.0f, 4.0f}, testLayer};
+            const NpcId s2Id = testPool.spawn();
+            testPool.hp(s2Id) = 100; testPool.max_hp(s2Id) = 100;
+            Entity s2E = testReg.create();
+            testReg.emplace<Transform>(s2E, s2At);
+            testReg.emplace<NpcRef>(s2E, NpcRef{s2Id});
+
+            // nearest_speaker must return s1Id (close, wrapped) and exclude meId (self) and s2Id (far).
+            NpcId nearest = nearest_speaker(testReg, testLayer);
+            CHECK(nearest == s1Id);
+            
+            // If s1 is killed, nearest becomes kInvalidNpc
+            testPool.hp(s1Id) = 0;
+            CHECK(nearest_speaker(testReg, testLayer) == kInvalidNpc);
+        }
         CHECK(nearest_speaker(reg, layer) != kInvalidNpc);
 
         // **THE SHIM MUST STAY MUTE.** src/app/main.cpp calls the five-argument form, so

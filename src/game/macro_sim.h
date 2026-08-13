@@ -66,6 +66,9 @@ namespace giga::game {
 struct FactionRelations;
 class FloorRegistry;
 
+inline constexpr float kColdFedLevel = 60.0f;
+inline constexpr float kColdStarveStep = 20.0f;
+
 // How often the caller should call step(), in SIM ticks. 250 = exactly 2.000 s at
 // the shipping rate, and it is derived from kSimHz so it cannot drift when the rate
 // changes — the same discipline [faction_relations.h] kFeudEpochTicks uses.

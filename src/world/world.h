@@ -11,6 +11,8 @@
 
 namespace giga {
 
+inline constexpr const char* kFogField = "fog";
+
 class World {
 public:
     MacroGrid& grid() { return grid_; }

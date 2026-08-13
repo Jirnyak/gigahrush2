@@ -29,7 +29,7 @@ namespace giga::game {
 
 static void test_status_all() {
     { // ---- 1. every authored row resolves and is internally consistent ----
-        static_assert(kStatusCount == 6);
+        static_assert(kStatusCount == 7);
         CHECK(kStatusTable.size() == kStatusCount);
         CHECK(kStatusNames.size() == kStatusCount);
 

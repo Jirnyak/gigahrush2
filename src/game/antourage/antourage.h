@@ -33,6 +33,7 @@
 
 namespace giga {
 class World;
+class Layer;
 class MacroGrid;
 }
 
@@ -149,6 +150,14 @@ struct AntourageBake {
     std::vector<AntourageInstance> instances;
     std::vector<WireChain> wires;
     std::vector<ClothSheet> cloths;
+    
+    // PipeNetwork for gas simulation
+    std::vector<std::uint8_t> pipeComponent; // 128x128x128 grid mapping cell -> component ID (0 = none)
+    std::vector<float> pipeGasToxic;
+    std::vector<float> pipeGasSmoke;
+    std::vector<float> pipeGasOxy;
+    std::vector<float> pipeGasHeat;
+    std::uint8_t pipeComponentCount = 0;
     std::uint32_t pipeCells = 0;   // cells the pipe walker traversed (stats)
 };
 
@@ -282,5 +291,8 @@ std::uint32_t antourage_carve_step(const World& w, const AntourageBake& bake,
                                    ParticleBurstQueue& bursts,
                                    std::uint32_t seed,
                                    std::vector<DetachedPiece>* fell = nullptr);
+
+// Gas ventilation step for PipeNetwork components.
+void antourage_vent_step(World& w, const AntourageBake& bake, float dt);
 
 } // namespace giga::game

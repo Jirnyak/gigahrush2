@@ -321,10 +321,5 @@ void main() {
 
     lit = mix(lit, vec3(0.0), fog);
 
-    vec3 srgb = pow(max(lit, vec3(0.0)), vec3(1.0 / kGamma));
-
-    float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
-    srgb += (ign - 0.5) / 255.0 * (1.0 - fog);
-
-    outColor = vec4(srgb, 1.0);
+    outColor = vec4(lit, 1.0);
 }
