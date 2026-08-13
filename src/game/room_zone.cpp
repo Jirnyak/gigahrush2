@@ -92,7 +92,7 @@ bool room_restores(std::uint16_t bit) {
     const RoomRecovery& r = kRoomRecovery[i];
     return r.food != 0.0f || r.water != 0.0f || r.sleep != 0.0f ||
            r.pee != 0.0f || r.poo != 0.0f || r.pendingPee != 0.0f ||
-           r.pendingPoo != 0.0f;
+           r.pendingPoo != 0.0f || r.hpBank != 0.0f;
 }
 
 void room_recover(Needs& n, std::uint16_t bit, float dt,
@@ -121,6 +121,10 @@ void room_recover(Needs& n, std::uint16_t bit, float dt,
     add(n.sleep, r.sleep * dt);
     add(n.pee, -r.pee * dt);
     add(n.poo, -r.poo * dt);
+
+    if (r.hpBank > 0.0f) {
+        n.hpBank += r.hpBank * dt;
+    }
 
     if (mem && id != kInvalidNpc) {
         if (r.food > 0.0f && n.food > oldFood)

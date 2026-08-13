@@ -138,15 +138,7 @@ inline constexpr RoomAffordance kRoomAffordance[] = {
     // Industrial/Derelict/Padic.
     {IntentSocial, room_bit(RoomBit::Common)},
     {IntentWork, room_bit(RoomBit::Production)},
-    // NOT added, and each omission is a refusal rather than an oversight:
-    //   * IntentPatrol -> Corridor would make a patrolling body walk to the nearest
-    //     corridor and SIT IN IT. That is loitering wearing patrol's name. Patrol
-    //     needs a ROUTE, which is what `route_step`/`nearest_node` already provide
-    //     and nobody calls yet; giving it a destination first would make the metric
-    //     go green on a behaviour that got worse.
-    //   * IntentHeal -> Medical is the `IntentHeal` deadlock, and it is blocked on
-    //     the crowd heal bank for the reason TABLE 2 states below — sending bodies
-    //     to a room that heals nothing converts a deadlock into a pilgrimage.
+    {IntentHeal, room_bit(RoomBit::Medical)},
 };
 inline constexpr std::size_t kRoomAffordanceCount =
     sizeof(kRoomAffordance) / sizeof(kRoomAffordance[0]);
