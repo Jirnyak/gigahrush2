@@ -48,6 +48,7 @@ layout(set = 0, binding = 4, std430) readonly buffer ClassBuf { uint uClass[]; }
 layout(set = 0, binding = 5) uniform MarchUbo {
     mat4 invViewProj;   // rays; inverse of pc.viewProj, CPU-inverted per frame
     vec4 albedo[32];    // display-referred material albedo (cube_pass kMaterial)
+    vec4 timeParams;    // x = timeSec, y = samosborPulse, z = reserved, w = reserved
 } ub;
 layout(set = 0, binding = 6, std430) readonly buffer FluidBuf { float uFluid[]; };   // 1 float/cell
 layout(set = 0, binding = 7, std430) readonly buffer StainIdxBuf { uint uStainIdx[]; }; // 1/cell
@@ -699,8 +700,8 @@ void main() {
     // push block (torus.x) rather than a literal; 0.66 mirrors main.cpp's
     // kSamosborFogSqueeze = 0.34 and is the one number still duplicated here.
     // [problems.md] section 20
-    float samosborPulse =
-        clamp((1.0 - pc.fog.y / (pc.torus.x * 0.5)) / 0.66, 0.0, 1.0);
+    float samosborPulse = ub.timeParams.y;
+    float timeSec = ub.timeParams.x;
 
     vec3 gridMin = pc.camPos.xyz - vec3(32.0, 16.0, 32.0);
     vec4 fogVol = march_volumetric_fog(
@@ -716,7 +717,7 @@ void main() {
         gridMin,
         vec3(32.0, 16.0, 32.0),
         vec3(2.0, 2.0, 2.0),
-        pc.torus.w,
+        timeSec,
         samosborPulse
     );
     lit = lit * fogVol.a + fogVol.rgb;
@@ -727,7 +728,7 @@ void main() {
 
     float fog = clamp((effectiveDist - pc.fog.x) / max(pc.fog.y - pc.fog.x, 1e-3), 0.0, 1.0);
 
-    float fogFlicker = 1.0 + samosborPulse * 0.35 * sin(pc.torus.w * 22.0 + vWorldPos.x * 0.4 + vWorldPos.y * 0.3);
+    float fogFlicker = 1.0 + samosborPulse * 0.35 * sin(timeSec * 22.0 + vWorldPos.x * 0.4 + vWorldPos.y * 0.3);
     fog = clamp(fog * fogFlicker, 0.0, 1.0);
 
     lit = mix(lit, vec3(0.0), fog);

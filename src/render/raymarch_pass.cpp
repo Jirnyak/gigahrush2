@@ -14,12 +14,13 @@ namespace giga::gpu {
 
 namespace {
 
-// Matches MarchUbo in shaders/raymarch.frag (std140: mat4 + vec4[32] = 576 B).
+// Matches MarchUbo in shaders/raymarch.frag (std140: mat4 + vec4[32] + vec4 = 592 B).
 struct MarchUbo {
     mat4 invViewProj;
     vec4 albedo[32];
+    vec4 timeParams; // x = timeSec, y = samosborPulse
 };
-static_assert(sizeof(MarchUbo) == 576, "MarchUbo must match the shader block");
+static_assert(sizeof(MarchUbo) == 592, "MarchUbo must match the shader block");
 
 // General 4x4 inverse (cofactor expansion). Runs once per frame on the CPU so
 // ray generation matches the raster projection bit-for-bit; render-local, so
@@ -370,6 +371,7 @@ void RaymarchPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
 
     MarchUbo* u = static_cast<MarchUbo*>(ubo_[f].mapped);
     u->invViewProj = mat4_inverse(push.viewProj);
+    u->timeParams = vec4{push.torus.w, push.torus.z, 0.0f, 0.0f};
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1,
