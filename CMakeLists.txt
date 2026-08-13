@@ -923,6 +923,22 @@ if(GIGA_BUILD_TESTS)
     set_tests_properties(source_rules PROPERTIES
         PASS_REGULAR_EXPRESSION "GIGA_SOURCE_RULES=PASS files_scanned=[0-9][0-9][0-9]")
 
+    # A system that exists and nothing calls. Text gate, no compiler, same shape as
+    # source_rules above — and lifted, with two holes closed, from the one commit of
+    # marko1olo's 39 that survived review (2026-08-13; the other 38 are recorded in
+    # problems.md §51-53 and the branch is kept at tag marko1olo-main-2026-08-13).
+    #
+    # `entry_points=` is pinned as a RANGE and not an exact count, for the reason
+    # source_rules gives above: src/ is GLOB_RECURSE, so an exact number would be a
+    # merge conflict on every new `*_step` and would train the reflex of retyping it.
+    # What the pin has to catch is the gate going blind — a scan that finds ZERO entry
+    # points would still print PASS, and two digits is what forbids that.
+    add_test(NAME wired
+        COMMAND ${CMAKE_COMMAND} -DGIGA_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_wired.cmake)
+    set_tests_properties(wired PROPERTIES
+        PASS_REGULAR_EXPRESSION "GIGA_WIRED=PASS entry_points=[0-9][0-9]")
+
     # Honest crowd benchmark: real floor + 16k wandering agents + real physics.
     # An executable, not a ctest (it measures, it doesn't pass/fail). Runs at the
     # global Release -O3 so the numbers reflect an optimized build. Threads come
