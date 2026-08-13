@@ -98,8 +98,12 @@ EncumbranceTick encumbrance_step(Registry& reg, NpcPool& pool, LayerId layer,
             out.capacityG = capacityG;
             out.playerEffect = eff;
         } else if (noiseField && ((tick & 7u) == (id & 7u))) {
-            NoiseProfile np{6.0f * eff.noiseMult, 400, 1, NoiseSource::Footstep};
-            noise_publish(*noiseField, layer, view.get<const Transform>(e).pos, np, id);
+            const auto* vel = reg.try_get<Velocity>(e);
+            const float v2 = vel ? (vel->v.x * vel->v.x + vel->v.y * vel->v.y + vel->v.z * vel->v.z) : 0.0f;
+            if (v2 > 0.25f) {
+                NoiseProfile np{6.0f * eff.noiseMult, 400, 1, NoiseSource::Footstep};
+                noise_publish(*noiseField, layer, view.get<const Transform>(e).pos, np, id);
+            }
         }
     }
     return out;
