@@ -234,11 +234,12 @@ void visit_book(Ar& ar, B& b) {
     ar.i64(b.earned);
 }
 
-// All eight floats, including the two "pending" queues and `hpDebt`. Dropping the
-// pending queues would silently forgive a bladder you had already filled, and dropping
+// All nine floats, including the two "pending" queues, `hpDebt` and `hpBank`. Dropping
+// the pending queues would silently forgive a bladder you had already filled, dropping
 // `hpDebt` would forgive sub-1-HP attrition — the exact fraction the elevator test pins
-// as surviving a body swap ([suite_needs.inl] survives_the_body_swap). A save is a
-// bigger body swap, so it keeps the same fields.
+// as surviving a body swap ([suite_needs.inl] survives_the_body_swap) — and dropping
+// `hpBank` would forgive healing already earned in a ward. A save is a bigger body
+// swap, so it keeps the same fields.
 template <class Ar, class N>
 void visit_needs(Ar& ar, N& n) {
     ar.f32(n.food);
@@ -249,6 +250,7 @@ void visit_needs(Ar& ar, N& n) {
     ar.f32(n.pendingPee);
     ar.f32(n.pendingPoo);
     ar.f32(n.hpDebt);
+    ar.f32(n.hpBank);
     ar.u8(n.seeded);
 }
 
@@ -407,7 +409,7 @@ static_assert(sizeof(SaveHeader) == kSaveHeaderWire,
               "still 64 and only this assert needs relaxing");
 static_assert(kLedgerWire == 8 + 8 + 4 + 4 + 4 + 4 + 1);
 static_assert(kContractWire == 4 + 2 + 4 + 4 + 4 + 1 + 1 + 1);
-static_assert(kNeedsWire == 8 * 4 + 1);
+static_assert(kNeedsWire == 9 * 4 + 1);
 static_assert(kInventoryWire == 64 * 4);
 // kSaveFixedWire: ledger+book+player + v7 rpg(12)+craft(93) + v8 combat(21)
 // + v9 status(42) + v10 samosbor(17)+fastTravel(32) + quest log.
@@ -428,11 +430,11 @@ static_assert(kFastTravelWire == 32);
 // The wire size and the runtime footprint of the unlock set must not drift apart:
 // widening kFloorSlots changes the struct and would silently change the format.
 static_assert(FastTravelState::wire_bytes() == kFastTravelWire);
-static_assert(kSaveFixedWire == 878 + kSamosborWire + kFastTravelWire);  // 927
-static_assert(kSaveFixedWire == 927);
+static_assert(kSaveFixedWire == 882 + kSamosborWire + kFastTravelWire);  // 931 (v11: +hpBank)
+static_assert(kSaveFixedWire == 931);
 static_assert(kFactionWire == 36);
-static_assert(save_bytes_for(0) == 1027);
-static_assert(save_bytes_for(0, 100, 50) == 1027 + 150);
+static_assert(save_bytes_for(0) == 1031);
+static_assert(save_bytes_for(0, 100, 50) == 1031 + 150);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two

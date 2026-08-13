@@ -138,15 +138,17 @@ inline constexpr RoomAffordance kRoomAffordance[] = {
     // Industrial/Derelict/Padic.
     {IntentSocial, room_bit(RoomBit::Common)},
     {IntentWork, room_bit(RoomBit::Production)},
-    // NOT added, and each omission is a refusal rather than an oversight:
+    // IntentHeal -> Medical was refused here until the crowd heal bank existed —
+    // sending bodies to a room that heals nothing converts a deadlock into a
+    // pilgrimage. The bank now exists (Needs::hpBank, fed by TABLE 2's Medical row,
+    // drained by needs_step), so the row is honest: the destination heals.
+    {IntentHeal, room_bit(RoomBit::Medical)},
+    // NOT added, and the omission is a refusal rather than an oversight:
     //   * IntentPatrol -> Corridor would make a patrolling body walk to the nearest
     //     corridor and SIT IN IT. That is loitering wearing patrol's name. Patrol
     //     needs a ROUTE, which is what `route_step`/`nearest_node` already provide
     //     and nobody calls yet; giving it a destination first would make the metric
     //     go green on a behaviour that got worse.
-    //   * IntentHeal -> Medical is the `IntentHeal` deadlock, and it is blocked on
-    //     the crowd heal bank for the reason TABLE 2 states below — sending bodies
-    //     to a room that heals nothing converts a deadlock into a pilgrimage.
 };
 inline constexpr std::size_t kRoomAffordanceCount =
     sizeof(kRoomAffordance) / sizeof(kRoomAffordance[0]);
@@ -198,12 +200,24 @@ inline constexpr std::uint16_t kRoomFieldMask = [] {
 //     there in a way it is not in a flat, so the row stays zero until the clock
 //     exists. Stated rather than quietly copied.
 //
-// MEDICAL is zero for a different reason: the reference heals `hp` there, and HP is
-// an integer the crowd has no fractional bank for (the player's lives in
-// `Needs::hpDebt`, which is a DAMAGE ledger). Adding a heal bank is the fix for the
-// `IntentHeal` deadlock ([problems.md] §27, [hunt.h]:41-42) and belongs with that
-// work, not smuggled in here as a column nothing reads ([problems.md] §35).
+// MEDICAL heals through `Needs::hpBank` — the fractional heal bank this table was
+// waiting for (HP is an integer the crowd could not accrue a fraction into; the
+// player's `hpDebt` is a DAMAGE ledger, not a heal one). The bank closed the
+// `IntentHeal` deadlock ([problems.md] §27, [hunt.h]:41-42): the row feeds the bank
+// in `room_recover`, `needs_step` spills whole HP into the pool row.
+//
+// The hpBank column is in PERCENT OF MAX HP per second, not HP per second — max_hp
+// is a derived stat (level x STR, [rpg.h]) and an absolute rate would heal a
+// levelled body slower in time-to-full for no stated reason. The rate itself is
+// derived, not chosen: a ward restores a body 0 -> full in ONE IN-GAME HOUR.
 // ---------------------------------------------------------------------------
+// THE IN-GAME HOUR, until a real day clock exists. This build has no clock (the
+// LUNCH/`resting` gates above wait on it), but TABLE 2 already implies a time
+// scale: the kitchen serves a full meal (food 0 -> 100 at 3.5/s) in ~29 s, and a
+// square meal is fictionally ~half an hour — so one in-game hour ~= 60 sim-seconds.
+// When the day clock lands (the room-stocks epic owns it), this constant moves
+// there and this table reads it; the number is a derivation, not a tunable.
+inline constexpr float kGameHourSec = 60.0f;
 struct RoomRecovery {
     float food;        // + per second
     float water;       // + per second
@@ -212,6 +226,7 @@ struct RoomRecovery {
     float poo;         // - per second
     float pendingPee;  // + per second into the digestion queue
     float pendingPoo;  // + per second
+    float hpBank;      // + % of max_hp per second into Needs::hpBank (see above)
 };
 
 inline constexpr RoomRecovery kRoomRecovery[kFloorRoomBits] = {
@@ -227,11 +242,12 @@ inline constexpr RoomRecovery kRoomRecovery[kFloorRoomBits] = {
     // appears on. The rows stay zero until there is an hour to read.
     /* 1 Common     */ {}, // reference: +1.5 food/water, but only in the LUNCH state
     /* 2 Storage    */ {},
-    /* 3 Kitchen    */ {3.5f, 4.5f, 0.0f, 0.0f, 0.0f, 2.1f, 3.5f * 0.35f},
-    /* 4 Bathroom   */ {0.0f, 2.0f, 0.0f, 12.0f, 9.0f, 0.0f, 0.0f},
-    /* 5 Living     */ {0.0f, 0.0f, 2.8f, 0.0f, 0.0f, 0.0f, 0.0f},
+    /* 3 Kitchen    */ {3.5f, 4.5f, 0.0f, 0.0f, 0.0f, 2.1f, 3.5f * 0.35f, 0.0f},
+    /* 4 Bathroom   */ {0.0f, 2.0f, 0.0f, 12.0f, 9.0f, 0.0f, 0.0f, 0.0f},
+    /* 5 Living     */ {0.0f, 0.0f, 2.8f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f},
     /* 6 Office     */ {}, // reference: sleep, but gated on `resting` — see above
-    /* 7 Medical    */ {}, // reference: hp — needs a crowd heal bank, see above
+    /* 7 Medical    */ {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                        100.0f / kGameHourSec}, // 0 -> full in one in-game hour
     /* 8 Production */ {},
     /* 9 Smoking    */ {},
     /*10 Hq         */ {},
@@ -249,9 +265,12 @@ bool room_restores(std::uint16_t bit);
 // merely stood in the right room) files a place memory for `id` at cell
 // (cx, cy, cz): MemFood / MemWater / MemRest / MemToilet. Landing is the gate so
 // a full body does not memorise a kitchen it could not use.
+// `maxHp` scales the hpBank column only (percent-of-max -> HP); every other column
+// is a normalized 0-100 bar and never looks at it.
 void room_recover(Needs& n, std::uint16_t bit, float dt,
                   AiMemory* mem = nullptr, NpcId id = kInvalidNpc,
-                  int cx = 0, int cy = 0, int cz = 0, double now = 0.0);
+                  int cx = 0, int cy = 0, int cz = 0, double now = 0.0,
+                  std::int16_t maxHp = 100);
 
 // ---------------------------------------------------------------------------
 // TABLE 3 — what FURNITURE a room kind contains.

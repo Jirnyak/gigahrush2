@@ -167,10 +167,16 @@ struct Needs {
     float pendingPee = 0.0f;  // drunk/eaten but not yet digested into `pee`
     float pendingPoo = 0.0f;  // ditto for `poo`
     float hpDebt = 0.0f;      // sub-1-HP attrition carried between ticks
+    // Fractional heal bank — the MIRROR of hpDebt: HP is an integer on the crowd
+    // body, so a fractional per-second heal cannot land directly. Medical recovery
+    // accumulates here (percent-of-max, [room_zone.h] TABLE 2) and `needs_step`
+    // spills the whole part into `pool.hp()`. Unpaid healing is still owed across
+    // a reload for the same reason unpaid damage is.
+    float hpBank = 0.0f;
     std::uint8_t seeded = 0;  // 0 = never rolled (see above)
     std::uint8_t pad_[3] = {};
 };
-static_assert(sizeof(Needs) == 36, "Needs must stay a tight 36-byte row");
+static_assert(sizeof(Needs) == 40, "Needs must stay a tight 40-byte row");
 static_assert(alignof(Needs) == 4);
 
 // Semantics of Relationship::affinity — the per-NPC social graph ([macrosim.md]

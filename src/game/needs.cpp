@@ -295,9 +295,27 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
             const std::uint16_t bit = room_bit_at(rooms->kind, rooms->number, cx, cy);
             if (room_restores(bit)) {
                 const int cz = wrap_macro(static_cast<int>(std::floor(tr.pos.z / kCellSize)));
-                room_recover(n, bit, dt, mem, id, cx, cy, cz, now);
+                room_recover(n, bit, dt, mem, id, cx, cy, cz, now,
+                             pool.max_hp(id));
                 ++out.recovering;
             }
+        }
+
+        // HEAL BANK SPILL — the mirror of the hpDebt drain below, and deliberately
+        // NOT behind that section's `rate <= 0` early-out: a body healing in a
+        // Medical room usually has no failed need at all, and gating the spill on
+        // starvation would make the ward heal only the starving. Whole HP moves,
+        // the fraction stays banked. NOT routed through apply_damage: healing is
+        // not a damage channel and must not wake armour or knockback.
+        if (n.hpBank >= 1.0f) {
+            const float whole = std::floor(n.hpBank);
+            n.hpBank -= whole;
+            std::int16_t& hp = pool.hp(id);
+            const std::int16_t maxHp = pool.max_hp(id);
+            const float room = static_cast<float>(maxHp - hp);
+            const std::int16_t gain =
+                static_cast<std::int16_t>(whole < room ? whole : room);
+            if (gain > 0) hp = static_cast<std::int16_t>(hp + gain);
         }
 
         if (camera) {

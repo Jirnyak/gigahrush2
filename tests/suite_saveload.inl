@@ -245,7 +245,7 @@ void same_run(const SaveState& a, const SaveState& b) {
     }
 
     // Padding-free structs, so a raw byte compare is exact rather than optimistic.
-    static_assert(sizeof(Needs) == 8 * 4 + 1 + 3, "Needs has no implicit padding");
+    static_assert(sizeof(Needs) == 9 * 4 + 1 + 3, "Needs has no implicit padding");
     static_assert(sizeof(Inventory) == 64 * 4, "Inventory has no implicit padding");
     CHECK(std::memcmp(&a.player.clock, &b.player.clock, sizeof(Needs)) == 0);
     CHECK(std::memcmp(&a.player.inv, &b.player.inv, sizeof(Inventory)) == 0);
@@ -342,11 +342,11 @@ void wire_layout() {
     static_assert(kStatusWire == 42);
     static_assert(kSamosborWire == 17);
     static_assert(kFastTravelWire == 32);
-    static_assert(kSaveFixedWire == 927);
+    static_assert(kSaveFixedWire == 931);
     static_assert(kFactionWire == 36);
-    static_assert(save_bytes_for(0) == 1027);
-    static_assert(save_bytes_for(3) == 1027 + 15);
-    static_assert(save_bytes_for(3, 100, 50) == 1027 + 15 + 150);
+    static_assert(save_bytes_for(0) == 1031);
+    static_assert(save_bytes_for(3) == 1031 + 15);
+    static_assert(save_bytes_for(3, 100, 50) == 1031 + 15 + 150);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -356,12 +356,13 @@ void wire_layout() {
     const SaveState st = busy_run();
     save_write(st, bytes);
     CHECK(bytes.size() == save_bytes_for(3));
-    // 1042 B for a full run with three emptied crates and no macro blobs (those are
+    // 1046 B for a full run with three emptied crates and no macro blobs (those are
     // variable-size and pinned by macro_world_round_trips). GEOMETRY lives in the
     // per-floor files ([save.h] modular layout), never here. v8 was 965; the
     // legacy-content purge re-measured this from 1007; v9 was 993; v10 adds the
-    // samosbor clock (17) and the fast-travel unlock set (32).
-    CHECK(bytes.size() == 1042);
+    // samosbor clock (17) and the fast-travel unlock set (32); v11 adds the crowd
+    // heal bank `hpBank` (+4).
+    CHECK(bytes.size() == 1046);
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');

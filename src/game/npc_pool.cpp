@@ -450,8 +450,9 @@ struct ByteReader {
 
 // Fixed per-row wire width: 27 B of demographic columns (flags 1 + faction 2 +
 // hp/maxHp/floor 6 + cell 3 + height 2 + age/sex/level 3 + attrs 8 + gen 2) +
-// 33 B needs + 256 B inventory; names add 2 x kNameLen when present.
-inline constexpr std::size_t kPoolRowWire = 27 + 33 + 256;
+// 37 B needs (v11: +hpBank, [save.h]) + 256 B inventory; names add 2 x kNameLen
+// when present.
+inline constexpr std::size_t kPoolRowWire = 27 + 37 + 256;
 inline constexpr std::size_t kPoolHeadWire = 4 + 4 + 1 + 1;
 
 } // namespace
@@ -493,6 +494,7 @@ void NpcPool::save_rows(std::vector<std::uint8_t>& out) const {
         put_f32(out, nd.pendingPee);
         put_f32(out, nd.pendingPoo);
         put_f32(out, nd.hpDebt);
+        put_f32(out, nd.hpBank);
         put_u8(out, nd.seeded);
         const Inventory& inv = inv_[id];
         for (int s = 0; s < kInvSlots; ++s) {
@@ -556,6 +558,7 @@ bool NpcPool::load_rows(const std::uint8_t* bytes, std::size_t n) {
         nd.pendingPee = r.f32();
         nd.pendingPoo = r.f32();
         nd.hpDebt = r.f32();
+        nd.hpBank = r.f32();
         nd.seeded = r.u8();
         Inventory& inv = inv_[id];
         for (int s = 0; s < kInvSlots; ++s) {

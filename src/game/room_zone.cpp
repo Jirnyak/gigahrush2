@@ -91,11 +91,12 @@ bool room_restores(std::uint16_t bit) {
     const RoomRecovery& r = kRoomRecovery[i];
     return r.food != 0.0f || r.water != 0.0f || r.sleep != 0.0f ||
            r.pee != 0.0f || r.poo != 0.0f || r.pendingPee != 0.0f ||
-           r.pendingPoo != 0.0f;
+           r.pendingPoo != 0.0f || r.hpBank != 0.0f;
 }
 
 void room_recover(Needs& n, std::uint16_t bit, float dt,
-                  AiMemory* mem, NpcId id, int cx, int cy, int cz, double now) {
+                  AiMemory* mem, NpcId id, int cx, int cy, int cz, double now,
+                  std::int16_t maxHp) {
     if (dt <= 0.0f) return;
     const int i = floor_room_bit_index(bit);
     if (i < 0) return;
@@ -125,6 +126,11 @@ void room_recover(Needs& n, std::uint16_t bit, float dt,
     // consequence of eating, which is the whole point of the kitchen row.
     n.pendingPee += r.pendingPee * dt;
     n.pendingPoo += r.pendingPoo * dt;
+    // The heal bank is NOT clamped to kNeedMax: like the queues it is a backlog,
+    // and needs_step drains the whole part every tick, so it stays sub-2 in practice.
+    // hpBank column is percent-of-max ([room_zone.h] TABLE 2), scaled to HP here —
+    // the one place the conversion happens.
+    n.hpBank += r.hpBank * (static_cast<float>(maxHp) * 0.01f) * dt;
 
     // File a place memory only for recovery that LANDED (the bar moved): a full
     // body learns nothing from a kitchen. MemRest additionally waits for a real

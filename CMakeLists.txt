@@ -888,7 +888,12 @@ if(GIGA_BUILD_TESTS)
     # was smaller than the target and the frame could not matter. 7000 mmps gives
     # T = 0.75 s and a 1.69 m drop. Latent, not live: kPadicGravity is NegZ and padic
     # is the only geometric module, so no shipping floor exercises it.
-        PASS_REGULAR_EXPRESSION "game_test: 236058 checks, 0 failures")
+    # 236058 -> 236061 (+3) on 2026-08-13: Medical feeds the heal bank (hpBank),
+    # IntentHeal graduated out of the refusal list. The +3 pin that a Medical
+    # second lands in the BANK and only the bank, and that the rate is
+    # percent-of-max (a 200-max body banks 2x — time-to-full is the same in-game
+    # hour for everyone) (suite_rooms).
+        PASS_REGULAR_EXPRESSION "game_test: 236061 checks, 0 failures")
 
 
 

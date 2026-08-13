@@ -68,19 +68,22 @@ void rooms_taxonomy_is_read_the_same_way() {
     CHECK(intent_room_mask(IntentSleep) == room_bit(RoomBit::Living));
     CHECK(intent_room_mask(IntentSocial) == room_bit(RoomBit::Common));
     CHECK(intent_room_mask(IntentWork) == room_bit(RoomBit::Production));
-    // Intents with no row delegate, exactly as before rooms existed. Patrol and
-    // Heal are here ON PURPOSE and must stay here until they have the thing that
-    // makes a destination honest — a route for patrol, a heal bank for heal
-    // ([room_zone.h] names both refusals beside the rows that were added).
+    // Heal graduated out of the refusal list: the crowd heal bank (Needs::hpBank)
+    // exists, TABLE 2's Medical row feeds it, so the destination is honest now.
+    CHECK(intent_room_mask(IntentHeal) == room_bit(RoomBit::Medical));
+    // Intents with no row delegate, exactly as before rooms existed. Patrol is
+    // here ON PURPOSE and must stay here until it has the thing that makes a
+    // destination honest — a ROUTE ([room_zone.h] names the refusal beside the
+    // rows that were added).
     CHECK(intent_room_mask(IntentPatrol) == 0);
-    CHECK(intent_room_mask(IntentHeal) == 0);
     CHECK(intent_room_mask(IntentWander) == 0);
     CHECK(intent_room_mask(IntentFlee) == 0);
     CHECK(kRoomFieldMask == (room_bit(RoomBit::Kitchen) |
                              room_bit(RoomBit::Bathroom) |
                              room_bit(RoomBit::Living) |
                              room_bit(RoomBit::Common) |
-                             room_bit(RoomBit::Production)));
+                             room_bit(RoomBit::Production) |
+                             room_bit(RoomBit::Medical)));
 
     // EVERY FloorKind must now bake at least one field. This is the assertion that
     // states the actual defect: the mask alone was never the problem, the mask
@@ -606,9 +609,11 @@ void rooms_recovery_closes_the_loop() {
     CHECK(room_restores(room_bit(RoomBit::Kitchen)));
     CHECK(room_restores(room_bit(RoomBit::Bathroom)));
     CHECK(room_restores(room_bit(RoomBit::Living)));
-    // Deliberate zero rows, stated in [room_zone.h] rather than quietly copied.
+    // Deliberate zero row, stated in [room_zone.h] rather than quietly copied.
     CHECK(!room_restores(room_bit(RoomBit::Office)));
-    CHECK(!room_restores(room_bit(RoomBit::Medical)));
+    // Medical restores through the heal bank now — the row is hpBank-only, and
+    // room_restores must see it or a body would never be counted as recovering.
+    CHECK(room_restores(room_bit(RoomBit::Medical)));
 
     // ONE SECOND IN A KITCHEN, the reference's numbers (needs.ts:257-263).
     Needs n{};
@@ -631,6 +636,24 @@ void rooms_recovery_closes_the_loop() {
     CHECK(std::fabs(b.pee - 68.0f) < 1e-4f);
     CHECK(std::fabs(b.poo - 71.0f) < 1e-4f);
     CHECK(std::fabs(b.water - 12.0f) < 1e-4f);
+
+    // ONE SECOND IN MEDICAL feeds the BANK, never a bar: HP is not a Needs field,
+    // so the row's whole effect must land in hpBank and nothing else may move.
+    // The rate is a derivation, not a tunable: 0 -> full in one in-game hour, so a
+    // 100-max body banks 100/kGameHourSec HP per second...
+    Needs m{};
+    m.food = 50.0f;
+    room_recover(m, room_bit(RoomBit::Medical), 1.0f);
+    CHECK(std::fabs(m.hpBank - 100.0f / kGameHourSec) < 1e-4f);
+    CHECK(std::fabs(m.food - 50.0f) < 1e-4f);
+    // ...and a LEVELLED body (max_hp is level x STR, [rpg.h]) banks proportionally
+    // more, so time-to-full is the SAME hour for everyone. An absolute rate would
+    // heal the strong slower for no stated reason — that asymmetry is the bug this
+    // check pins out.
+    Needs m2{};
+    room_recover(m2, room_bit(RoomBit::Medical), 1.0f,
+                 nullptr, kInvalidNpc, 0, 0, 0, 0.0, 200);
+    CHECK(std::fabs(m2.hpBank - 200.0f / kGameHourSec) < 1e-4f);
 
     // A corridor second changes nothing at all, and neither does dt <= 0.
     Needs c{};

@@ -122,7 +122,11 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // migration and the honest reason is that adding one would need a per-version
 // reader branch, which is exactly the "load that succeeds and is wrong" this file
 // is built to prevent. [samosbor.h] [fast_travel.h] SAVCLOCK
-inline constexpr std::uint32_t kSaveVersion = 10u;
+//
+// Version 11: Needs grows `hpBank` (+4 on the wire) — the crowd heal bank behind
+// the IntentHeal -> Medical affordance ([room_zone.h] TABLE 2). Version 10 saves
+// are rejected, same standing rule as above.
+inline constexpr std::uint32_t kSaveVersion = 11u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -231,7 +235,7 @@ inline constexpr std::size_t kLedgerWire = 33;       // 2x8 + 4x4 + 1
 inline constexpr std::size_t kContractWire = 21;     // 4 + 2 + 3x4 + 3   (pad_ dropped)
 inline constexpr std::size_t kBookWire =
     static_cast<std::size_t>(kMaxContracts) * kContractWire + 4 + 4 + 8;
-inline constexpr std::size_t kNeedsWire = 33;        // 8 floats + seeded
+inline constexpr std::size_t kNeedsWire = 37;        // 9 floats + seeded (v11: +hpBank)
 inline constexpr std::size_t kInventoryWire = static_cast<std::size_t>(kInvSlots) * 4;
 inline constexpr std::size_t kPlayerWire = kNeedsWire + kInventoryWire + 4 + 4 + 4 + 3;
 // Version 7: RpgStats wire — field-by-field LE, NOT sizeof (pad_ is written so the
