@@ -296,12 +296,47 @@ selects flee and drives `−x`; the deadline gates re-planning).
   ([npcs.md](npcs.md)). Combat is isotropic: an NPC that shoots spawns an honest
   projectile that can hit anyone, the firer included.
 
+## Roles, seat claims and the steering frame (landed 2026-08-14)
+
+Three increments on top of the shape above, ported from the marko1olo batch
+after rework ([problems.md] §54):
+
+- **Roles** ([role.h]): five archetypes as a MULTIPLIER ROW on the scorer
+  (work/patrol/social) plus two additive response gains (scavenge on local
+  recall, care on nearby wounded), applied BEFORE identity jitter. Resident is
+  the all-ones row, so a roleless floor scores bit-for-bit what it scored
+  before. The role is a writable pool column seeded from `role_for(id,
+  floorKind)` — the column, not the hash, is the runtime truth (story
+  overrides survive a reload; it travels in the pool blob). A role REPLACES
+  the sleep/work destination (`homeRooms`/`workRooms`), never ANDs it, and the
+  role rooms join `kRoomFieldMask` so every stated destination has a baked
+  field. The Medic is the one role that acts on ANOTHER body's `Needs::hpBank`
+  — the same bank the Medical room feeds, so a medic in a ward stacks with the
+  ward instead of inventing a second heal path.
+- **Seat claims** (§27): a transient per-tick claim list in `ai_step` plus an
+  `attempt` rotation in `room_seat_offset` — a contested seat rotates to the
+  next furniture spot instead of stacking two bodies on one stove. No owner
+  column, no handshake: stable view order makes the same body win the same
+  contest every tick. The seat key packs ALL THREE axes.
+- **Steering frame**: every steering vector (flee-to-shelter, danger gradient,
+  memory away, seat, route step, room column, faction feud) is built in the
+  tangent plane of the gravity frame — `regime_frame`, hoisted per sweep — and
+  the Velocity write is per-axis, leaving the gravity axis to physics whatever
+  axis that is. Under NegZ everything reduces to the old literals bit-for-bit
+  (240k checks unmoved); the side-regime property is pinned by suite_faction2
+  §4b with a run mutation. Stated caveat: seat targets, room columns and
+  memory away-vectors are still (x, y) data, so under a side regime the
+  projection honestly loses their along-Z half until the bakes grow a third
+  axis (roadmap: nav connectivity classes).
+
 ## Connections
 
 Consumes needs (this doc), the baked nav ([nav.md](nav.md)) and flee field
 ([diffusion.md](diffusion.md)), and the [faction matrix](macrosim.md) (#10d).
-Produces horizontal `Velocity` straight into [physics.md](physics.md) — the same
+Produces walking-plane `Velocity` straight into [physics.md](physics.md) — the same
 integrator the player reaches through [controller.md](controller.md). Runs on the embodied slice the
 [macrosim.md](macrosim.md) macro tick hands to [floors.md](floors.md) streaming.
 Content it acts on (food/drink items, weapons, monster targets) comes from the
-#13 tables ([items.md](items.md) / [monsters.md](monsters.md)).
+#13 tables ([items.md](items.md) / [monsters.md](monsters.md)). Room stocks and
+production, when they land, plug in through the same room tables —
+[production.md](production.md) owns that design.

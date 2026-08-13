@@ -37,8 +37,10 @@
 //     (wander.cpp kNpcWalkSpeed), so the SLOWEST monster on that roster still closes
 //     on a sprinting civilian. Fleeing cannot break contact. And spreading damage
 //     over more bodies does not lower the death toll — it delays it, and leaves a
-//     floor of half-dead residents, because nothing heals a crowd body ([needs.h]
-//     ticks the camera holder's row alone).
+//     floor of half-dead residents. (When this was written nothing healed a crowd
+//     body; since 2026-08-13 the Medical room and the Medic role feed
+//     Needs::hpBank — a wounded floor recovers, slowly, if it can reach a ward.
+//     The argument above still stands for the fight itself.)
 //   * *A per-monster post-kill cooldown.* 600 monsters at one kill per C seconds is
 //     600/C kills per second; holding the toll near 100 per ten minutes would need
 //     C ≈ 50 minutes, which is not a cooldown, it is a disabled feature.

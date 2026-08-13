@@ -870,10 +870,11 @@ Ordered by value. A–C are gameplay; D–F are structural; G is hygiene.
 > that a 4x4x7-sub-voxel collider cannot clear (62 of 63 errand bodies were pinned),
 > and axis-aligned steering let a body clip the jamb of the doorway its own field
 > routed it through (23/64 arrivals against 64/64). Read §27 before touching this
-> area; the remaining debt is listed there under «ЧТО НЕ СДЕЛАНО» —
-> `IntentHeal`'s deadlock, `Perception::armed`, work/social/patrol rows, and the
-> X/Y-only room taxonomy. The brief below is kept as the historical statement of
-> the problem.
+> area; the remaining debt is listed there under «ЧТО НЕ СДЕЛАНО». 2026-08-13
+> closed two of its rows: `IntentHeal`'s deadlock (the crowd heal bank
+> `Needs::hpBank` exists, Medical feeds it — §54) and the work/social rows;
+> still open — `Perception::armed` and the X/Y-only room taxonomy. The brief
+> below is kept as the historical statement of the problem.
 
 **Do NOT start by widening the needs tick.** That was tried on 2026-08-06,
 measured, and reverted: with the clock running for all 419 bodies (`needsCrowd=419`)
@@ -895,8 +896,9 @@ The pillar has three legs and needs all three:
    to steer by it.
 3. **Give it something to RECOVER from.** Ambient recovery in the matching room,
    the way the reference does (`needs.ts:279-314`). Without it a need saturates
-   and the body pins itself in an unsatisfiable emergency — the same deadlock
-   `IntentHeal` already has (`hunt.h:41-42`: nothing heals a crowd body).
+   and the body pins itself in an unsatisfiable emergency — the deadlock
+   `IntentHeal` HAD until 2026-08-13 (`hunt.h:41-42` was «nothing heals a crowd
+   body»; `Needs::hpBank` closed it — [problems.md] §54).
 
 Only THEN widen `needs_step` past the camera holder, and re-pin `suite_needs`
 with the reason in the commit message.
