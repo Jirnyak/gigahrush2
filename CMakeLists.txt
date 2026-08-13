@@ -906,7 +906,12 @@ if(GIGA_BUILD_TESTS)
     # attempt-rotation: a contested bathroom pan has a real second pan, two pans
     # wrap at attempt 2, unfurnished rooms rotate free cells, bounds hold
     # (suite_rooms). Attempt 0 is pinned as the old function by every prior call.
-        PASS_REGULAR_EXPRESSION "game_test: 240234 checks, 0 failures")
+    # 240234 -> 240248 (+14) on 2026-08-14: patrol execution (ai_patrol_step).
+    # The +14 pin: empty bake is a no-op not UB, the step attaches a plan /
+    # claims the body / steers along the flow in the walking plane only, the
+    # PosX gravity-axis sentinel survives (mutation: unconditional axis writes
+    # -> 2 red), and an Ai-owned body is never re-steered (suite_utilai).
+        PASS_REGULAR_EXPRESSION "game_test: 240248 checks, 0 failures")
 
 
 

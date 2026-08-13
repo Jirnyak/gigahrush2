@@ -1002,6 +1002,31 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                const World* world = nullptr,
                const RoomZones* rooms = nullptr);
 
+} // namespace giga::game
+
+namespace giga {
+struct GravityField;
+namespace nav {
+struct CoarseGraph;
+struct FineNav;
+} // namespace nav
+} // namespace giga
+
+namespace giga::game {
+
+// Patrol execution — the FIRST consumer of the baked coarse graph + flow fields
+// as a ROUTE, which is the exact thing the `IntentPatrol -> Corridor` refusal in
+// [room_zone.h] was waiting for: a destination without a route is loitering
+// wearing patrol's name. Runs AFTER `ai_step` and BEFORE `wander_step`: it
+// steers only IntentPatrol bodies `ai_step` left to wander, and CLAIMS them
+// (MotionOwner::Ai) so wander skips them — one writer per body per tick, same
+// arbitration every other steering system obeys. A body whose flow byte says
+// "unreachable from here" is left to wander (a pocket is wander's problem).
+// `gravity` names the walking plane, same convention as `faction_feud_step`.
+void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
+                    const nav::FineNav& fine, LayerId layer, float dt,
+                    const GravityField* gravity = nullptr);
+
 // --- Recorders anything may call --------------------------------------------
 // The write side of the seam, deliberately public and deliberately tiny: filing a
 // fact is ONE call with no registry, no world and no allocation, which is what

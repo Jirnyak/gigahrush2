@@ -3548,6 +3548,13 @@ int main(int argc, char** argv) {
                         }
                     }
                 }
+                // Patrol BEFORE wander, and the order is the arbitration: patrol
+                // claims its bodies (MotionOwner::Ai) and wander's ai_owns_motion
+                // guard then skips them — one Velocity writer per body per tick.
+                // Runs on the same baked nav wander reads; while the bake is in
+                // flight the flow is empty and patrol bodies wander like everyone.
+                game::ai_patrol_step(reg, nav.coarse(), nav.fine(), activeLayer,
+                                     kSimDt, &activeWorld.gravity());
                 game::wander_step(reg, stack.layer(activeLayer).grid(), pool,
                                   nav.coarse(),
                                   nav.fine(), activeLayer, simTick);

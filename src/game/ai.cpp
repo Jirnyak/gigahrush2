@@ -1095,4 +1095,129 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
     return out;
 }
 
+void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
+                    const nav::FineNav& fine, LayerId layer, float dt,
+                    const GravityField* gravity) {
+    // Velocity is a rate and physics integrates it; dt would only matter if this
+    // step accumulated anything, and its whole design is that it does not.
+    (void)dt;
+    // The same empty-bake rule wander_step lives by: while the async bake is in
+    // flight the vectors are empty, and indexing them would be UB, not a no-op.
+    // Patrol bodies simply wander until the floor's nav lands.
+    if (fine.flow.empty() || fine.nearest.empty()) return;
+    // Same frame discipline as ai_step: the regime is a property of the world,
+    // null keeps NegZ bit-for-bit (tests), Custom resolves through the vector.
+    GravityRegime patrolRegime = GravityRegime::NegZ;
+    if (gravity != nullptr) {
+        patrolRegime = gravity->regime;
+        if (patrolRegime == GravityRegime::Custom)
+            patrolRegime = regime_from_vector(gravity->global);
+    }
+    const GravityFrame gf = regime_frame(patrolRegime);
+    const auto tangent = [&gf](float x, float y, float z) {
+        if (gf.axis == 0) x = 0.0f;
+        else if (gf.axis == 1) y = 0.0f;
+        else z = 0.0f;
+        return vec3{x, y, z};
+    };
+
+    auto view = reg.view<AiBrain, const NpcRef, const Transform, Velocity>();
+    for (auto e : view) {
+        const Transform& tr = view.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+        AiBrain& brain = view.get<AiBrain>(e);
+        if (brain.currentIntent != IntentPatrol) continue;
+        // ARBITRATION, not decoration: ai_step never owns IntentPatrol (patrol
+        // has no affordance row on purpose), so an Ai-owned body here means some
+        // OTHER intent's steering from a stale read — leave it alone. The claim
+        // below is what makes wander_step skip patrol bodies this tick.
+        if (brain.motion == static_cast<std::uint8_t>(MotionOwner::Ai)) continue;
+
+        const int cx = wrap_macro(static_cast<int>(std::floor(tr.pos.x / kCellSize)));
+        const int cy = wrap_macro(static_cast<int>(std::floor(tr.pos.y / kCellSize)));
+        const int cz = wrap_macro(static_cast<int>(std::floor(tr.pos.z / kCellSize)));
+
+        // Lazy attach, the PlayerMelee rule: no spawn path has to remember the
+        // plan. Emplacing a component the view does not iterate cannot
+        // invalidate the iteration.
+        if (!reg.all_of<PatrolPlan>(e)) reg.emplace<PatrolPlan>(e);
+        PatrolPlan& plan = reg.get<PatrolPlan>(e);
+
+        // Leg bookkeeping: pick a new target when there is none, or on arrival.
+        if (plan.nodeTo >= nav::kNodes ||
+            fine.at(plan.nodeTo, cx, cy, cz) == nav::kFlowArrived) {
+            const std::uint8_t anchor = fine.nearest_node(cx, cy, cz);
+            if (anchor >= nav::kNodes) continue; // no anchor here: wander's problem
+            plan.nodeFrom = anchor;
+            ++plan.hops;
+            // The next node is HASHED from identity and leg count — the same
+            // stateless spread as seats and jitter — then scanned forward for
+            // REACHABILITY. A sequential pick would march every Duty body on the
+            // floor along one identical cycle.
+            const std::uint32_t h =
+                hash3(identity_seed(view.get<const NpcRef>(e).id),
+                      plan.hops, kPatrolSalt);
+            std::uint8_t pick = 0xFF;
+            for (std::uint8_t k = 0; k < nav::kNodes; ++k) {
+                const std::uint8_t cand =
+                    static_cast<std::uint8_t>((h + k) % nav::kNodes);
+                if (cand == anchor) continue;
+                if (coarse.dist[anchor][cand] == nav::kUnreachable) continue;
+                pick = cand;
+                break;
+            }
+            if (pick == 0xFF) continue; // isolated anchor: wander's problem
+            plan.nodeTo = pick;
+        }
+
+        const std::uint8_t d = fine.at(plan.nodeTo, cx, cy, cz);
+        if (d == nav::kFlowNone) continue; // pocket: delegate, never freeze
+        Velocity& vel = view.get<Velocity>(e);
+        // CLAIM. From here this pass is the body's one writer this tick:
+        // wander_step's ai_owns_motion guard is what turns the claim into the
+        // single-writer rule instead of a comment.
+        brain.motion = static_cast<std::uint8_t>(MotionOwner::Ai);
+
+        vec3 dir{0.0f, 0.0f, 0.0f};
+        if (d < 6 && (d >> 1) != gf.axis) {
+            // A step in the walking plane: aim at the next cell's CENTRE, the
+            // same self-correcting rule (and the same measured reason) as the
+            // errand route step above.
+            const int nx = wrap_macro(cx + nav::kNavDir[d][0]);
+            const int ny = wrap_macro(cy + nav::kNavDir[d][1]);
+            const int nz = wrap_macro(cz + nav::kNavDir[d][2]);
+            dir = tangent(
+                wrap_delta_f(tr.pos.x, (static_cast<float>(nx) + 0.5f) * kCellSize, kWorldExtent),
+                wrap_delta_f(tr.pos.y, (static_cast<float>(ny) + 0.5f) * kCellSize, kWorldExtent),
+                wrap_delta_f(tr.pos.z, (static_cast<float>(nz) + 0.5f) * kCellSize, kWorldExtent));
+        } else if (d < 6) {
+            // The flow wants a step ALONG gravity, which walking cannot spend:
+            // walk toward the target node's column in the tangent plane instead
+            // — the same fallback the errand's vertical step takes, and for the
+            // same reason.
+            const LatticeNode n = lattice_unpack(plan.nodeTo);
+            dir = tangent(
+                wrap_delta_f(tr.pos.x, (static_cast<float>(lattice_coord(n.ix)) + 0.5f) * kCellSize, kWorldExtent),
+                wrap_delta_f(tr.pos.y, (static_cast<float>(lattice_coord(n.iy)) + 0.5f) * kCellSize, kWorldExtent),
+                wrap_delta_f(tr.pos.z, (static_cast<float>(lattice_coord(n.iz)) + 0.5f) * kCellSize, kWorldExtent));
+        }
+        // d == kFlowArrived: freshly advanced above and already standing on the
+        // new target's cell — hold still this tick, the next tick advances.
+
+        const float d2 = dir.x * dir.x + dir.y * dir.y + dir.z * dir.z;
+        if (d2 > kMinFleeGrad2) {
+            const float inv = 1.0f / std::sqrt(d2);
+            dir = dir * inv;
+        } else {
+            dir = vec3{0.0f, 0.0f, 0.0f}; // owned zero: a stop, not a shove
+        }
+        // Patrol WALKS: kErrandSpeed, not a bonus — the kFeudWalkSpeed argument
+        // verbatim (an authored speed edge would let duty outrun the crowd for
+        // no stated reason). Per-axis: the gravity axis belongs to physics.
+        if (gf.axis != 0) vel.v.x = dir.x * kErrandSpeed;
+        if (gf.axis != 1) vel.v.y = dir.y * kErrandSpeed;
+        if (gf.axis != 2) vel.v.z = dir.z * kErrandSpeed;
+    }
+}
+
 } // namespace giga::game

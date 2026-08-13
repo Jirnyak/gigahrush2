@@ -1574,6 +1574,7 @@ static void test_utilai_all() {
         p.role = static_cast<std::uint8_t>(RoleId::Medic);
         score_intents(p, fresh, asMedic);
 
+        // (patrol execution is tested in its own block below)
         // scavengeDrive is a RESPONSE gain, not an absolute boost: the Looter's
         // 0.2 workDrive suppresses ordinary work harder than one recall adds
         // (the first draft of this check asserted the absolute and was wrong).
@@ -1594,5 +1595,77 @@ static void test_utilai_all() {
         // role-blind, so all three arms agree bit-for-bit.
         CHECK(asLooter[IntentEat] == asResident[IntentEat]);
         CHECK(asMedic[IntentEat] == asResident[IntentEat]);
+    }
+
+    // ======================================================================
+    // Patrol execution (ai_patrol_step) — a route, a claim, and a frame.
+    // Synthetic nav (the vectors are public), no floor bake needed.
+    // ======================================================================
+    {
+        Registry reg;
+        NpcPool pool;
+        pool.init();
+        NpcId id = 0;
+        Entity e = make_body(reg, pool, 32, 32, 1, Faction::Citizens, id);
+        CHECK(ai_init(reg, kLayer) == 1u);
+        AiBrain& brain = reg.get<AiBrain>(e);
+        brain.currentIntent = IntentPatrol;
+
+        // Uniform synthetic flow: every cell of every field says "step +x"
+        // (kNavDir[1]); every cell's anchor is node 0; every pair reachable
+        // (zeroed dist != kUnreachable).
+        nav::CoarseGraph coarse{};
+        nav::FineNav fine;
+        fine.nearest.assign(kMacroCells, 0);
+        fine.flow.assign(static_cast<std::size_t>(nav::kNodes) * kMacroCells, 1);
+
+        // 1. EMPTY BAKE IS A NO-OP, not UB — the wander_step rule. No plan may
+        //    be attached and no claim taken while the async bake is in flight.
+        nav::FineNav unbaked;
+        ai_patrol_step(reg, coarse, unbaked, kLayer, kSimDt);
+        CHECK(!reg.all_of<PatrolPlan>(e));
+        CHECK(!ai_owns_motion(reg, e));
+
+        // 2. THE STEP: lazily attaches the plan, picks a REACHABLE leg, steers
+        //    +x toward the next cell centre, and CLAIMS the body — wander's
+        //    ai_owns_motion guard is what makes that a single-writer fact.
+        ai_patrol_step(reg, coarse, fine, kLayer, kSimDt);
+        CHECK(reg.all_of<PatrolPlan>(e));
+        CHECK(reg.get<PatrolPlan>(e).nodeTo < nav::kNodes);
+        CHECK(ai_owns_motion(reg, e));
+        Velocity& vel = reg.get<Velocity>(e);
+        CHECK(vel.v.x > 0.0f);  // along the flow...
+        CHECK(vel.v.y == 0.0f); // ...and only along it
+        CHECK(vel.v.z == 0.0f); // the gravity axis belongs to physics (NegZ)
+
+        // 3. THE FRAME: under PosX the flow's +x step is a step ALONG gravity —
+        //    walking cannot spend it, so the fallback walks toward the target
+        //    node's COLUMN in the (y, z) tangent plane and the x sentinel
+        //    survives. Mutation (write vel.v.z/x unconditionally, the marko
+        //    version) -> red here.
+        GravityField sideways;
+        sideways.regime = GravityRegime::PosX;
+        sideways.global = vec3{9.81f, 0.0f, 0.0f};
+        brain.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
+        vel.v = vec3{0.25f, 0.0f, 0.0f};
+        ai_patrol_step(reg, coarse, fine, kLayer, kSimDt, &sideways);
+        CHECK(ai_owns_motion(reg, e));
+        CHECK(vel.v.x == 0.25f); // gravity-axis sentinel untouched
+        // The tangent write happened (toward the node column) or is an owned
+        // zero if the body already stands on it — both are claims, not shoves;
+        // what may NOT happen is a write along x. Nudge the body off any column
+        // and the tangent speed must be real:
+        reg.get<Transform>(e).pos.y += 3.0f * kCellSize;
+        brain.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
+        ai_patrol_step(reg, coarse, fine, kLayer, kSimDt, &sideways);
+        CHECK(vel.v.x == 0.25f);
+        CHECK(vel.v.y != 0.0f || vel.v.z != 0.0f);
+
+        // 4. ARBITRATION: an Ai-owned body is NOT re-steered — the claim guard,
+        //    with the polarity run both ways (owned -> untouched).
+        brain.motion = static_cast<std::uint8_t>(MotionOwner::Ai);
+        vel.v = vec3{0.0f, 7.0f, 0.0f};
+        ai_patrol_step(reg, coarse, fine, kLayer, kSimDt);
+        CHECK(vel.v.y == 7.0f);
     }
 }

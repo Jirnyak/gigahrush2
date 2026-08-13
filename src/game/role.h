@@ -125,6 +125,23 @@ inline const RoleTraits& role_traits(RoleId r) {
     return kRoleTraits[i < kRoleCount ? i : 0u];
 }
 
+// PatrolPlan — sparse ECS component, IntentPatrol bodies only (a few % of the
+// embodied window). Lazily attached by ai_patrol_step, the same rule as
+// PlayerMelee: no spawn path has to remember it. sizeof == 4: POD, no
+// allocation, cache-friendly.
+struct PatrolPlan {
+    std::uint8_t nodeFrom = 0xFF; // lattice node the current leg started at
+    std::uint8_t nodeTo = 0xFF;   // lattice node this leg walks to; 0xFF = no leg
+    std::uint8_t hops = 0;        // legs completed; feeds the next-node hash
+    std::uint8_t pad_ = 0;
+};
+static_assert(sizeof(PatrolPlan) == 4,
+              "PatrolPlan must stay 4 bytes — sparse hot component");
+
+// Patrol next-node salt. Distinct from kRoleSalt so a body's patrol route and
+// its role assignment cannot correlate by construction.
+inline constexpr std::uint32_t kPatrolSalt = 0x70617472u; // "patr"
+
 // Medic constants. The heal credit lands in the PATIENT's Needs::hpBank — the
 // same bank the Medical room feeds ([room_zone.h] TABLE 2), so a medic in a ward
 // stacks with the ward instead of inventing a second heal path. 3 HP/s is ~2× the
