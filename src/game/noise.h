@@ -92,7 +92,8 @@ enum class NoiseSource : std::uint8_t {
     Container,    // a crate/safe being opened
     Body,         // something hitting the floor dead
     Siren,        // samosbor warning; reserved
-    Explosion,    // reserved
+    Explosion,    // a grenade going off — louder than any gun, and the only
+                  // severity-5 source in the tree ([combat.cpp] projectile_step)
     Decoy,        // a thrown noisemaker; reserved
     Count
 };
@@ -222,6 +223,14 @@ void noise_clear(NoiseField& field);
 // function reads the row instead of computing it. That was not bundled in here
 // because touching a generated table mid-fan-out is how merges break.
 NoiseProfile weapon_fire_noise(const RangedDef& d);
+
+// A detonation, from its BLAST radius in metres — not from its damage, because what
+// a room hears is how far the pressure went, not how much of it a body absorbed.
+//
+// This is what makes the note above literally true again: it says the reference's
+// severity-5 arm is unreachable "because there is no aoeRadius among the 29
+// ProjType::Normal rows". `data/weapons_ranged.csv` row 30 has one.
+NoiseProfile blast_noise(float blastRadiusM);
 
 // A body hitting the floor. Quiet and short: severity 2 is the investigation
 // threshold, so a death is worth one look and no more. Not in the reference as a

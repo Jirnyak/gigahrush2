@@ -1877,6 +1877,7 @@ int main(int argc, char** argv) {
     bool doorWanted = false;        // Q, consumed by one sim step
     bool interactWanted = false;    // E, consumed by one sim step (Terminal / ControlPanel / Relief interact)
     bool possessWanted = false;     // P, consumed by one sim step (Voluntary Mind Projection / Body Swap)
+    bool throwWanted = false;       // Z, consumed by one sim step (player_throw_step)
     char elevDiagLine[160] = {};
     std::uint64_t elevDiagAt = 0;
     game::PowerGridState powerGrid{};
@@ -2814,6 +2815,9 @@ int main(int argc, char** argv) {
                                  rs->attr[0], rs->attr[1], rs->attr[2]);
                 }
             }
+            // Z: pull the pin. One-shot like Interact — a held key would empty the
+            // bag at the weapon's own cooldown, and a grenade is not an automatic.
+            if (has(ConsoleRequest::Throw)) throwWanted = true;
             // Interact takes the job on offer — contract first, then quest if
             // no contract is pending. Both clear on take so a second press is
             // harmless. Quest accept refuses a dead giver or a chain gate;
@@ -3272,6 +3276,78 @@ int main(int argc, char** argv) {
                         attackHeld = true;
                     } else if (shotAction == "interact") {
                         interactWanted = true;
+                    } else if (shotAction == "grenade" && reg.valid(player) &&
+                               shotFramesSeen >= 30) {
+                        // GRENSHOT — the live half of the grenade proof, and the one
+                        // reading that cannot be argued with from a comment: the
+                        // player throws AT HIS OWN FEET and the log has to show his
+                        // own HP going down.
+                        //
+                        // Automates the stock and the aim only. The throw runs through
+                        // the real `player_throw_step`, the flight and the blast
+                        // through the real `projectile_step`, and the hole through the
+                        // real `carve_sphere` — the [carve] COMBAT line a few hundred
+                        // lines down prints it.
+                        static bool grenForced = false;
+                        static bool grenThrown = false;
+                        static std::int16_t grenHpBefore = 0;
+                        if (!grenForced) {
+                            game::ItemId gid = game::kInvalidItem;
+                            for (game::ItemId i = 1; i <= game::kItemCount; ++i)
+                                if (const game::RangedDef* d =
+                                        game::ranged_for_item(i))
+                                    if (game::ranged_is_explosive(*d) &&
+                                        game::ranged_is_thrown(i)) { gid = i; break; }
+                            if (gid == game::kInvalidItem) {
+                                std::fprintf(stderr, "[gren] FORCE FAIL no throwable\n");
+                                grenForced = true;
+                            } else if (const game::NpcRef* nrg =
+                                           reg.try_get<game::NpcRef>(player)) {
+                                if (pool.valid(nrg->id)) {
+                                    const game::RangedDef& gd =
+                                        *game::ranged_for_item(gid);
+                                    pool.inventory(nrg->id).slots[0] =
+                                        game::ItemSlot{gid, 3};
+                                    grenForced = true;
+                                    std::fprintf(
+                                        stderr,
+                                        "[gren] FORCE item=%u name=%s dmg=%u "
+                                        "blast=%.1f m fuse=%.1f s\n",
+                                        static_cast<unsigned>(gid),
+                                        game::item_name(gid),
+                                        static_cast<unsigned>(gd.dmg),
+                                        gd.blastDm * 0.1f, gd.fuseDs * 0.1f);
+                                }
+                            }
+                        }
+                        if (grenForced && !grenThrown) {
+                            // Look down. "Кидай и прячься" without the second half.
+                            auto& gcam = reg.get<CameraTag>(player);
+                            gcam.pitch = -1.5f;
+                            std::int16_t mx = 0;
+                            game::entity_health(reg, pool, player, grenHpBefore, mx);
+                            throwWanted = true;
+                            grenThrown = true;
+                            std::fprintf(stderr,
+                                         "[gren] THROW at own feet, hp before=%d/%d\n",
+                                         grenHpBefore, mx);
+                        } else if (grenThrown) {
+                            // One line per frame until the fuse ends it, so the drop
+                            // is visible as a NUMBER and at a readable moment.
+                            std::int16_t hp = 0, mx = 0;
+                            static bool grenReported = false;
+                            if (!grenReported &&
+                                game::entity_health(reg, pool, player, hp, mx) &&
+                                hp < grenHpBefore) {
+                                grenReported = true;
+                                std::fprintf(
+                                    stderr,
+                                    "[gren] OWN BLAST hp %d -> %d (took %d) — "
+                                    "осколки бьют и владельца\n",
+                                    grenHpBefore, hp,
+                                    static_cast<int>(grenHpBefore - hp));
+                            }
+                        }
                     } else if (shotAction == "corp" && reg.valid(player) &&
                                shotFramesSeen >= 30) {
                         // CORPSHOT: face nearest live mob, hold attack
@@ -3944,6 +4020,17 @@ int main(int argc, char** argv) {
                                                   haveGun && attackHeld && !paused,
                                                   kSimDt, simTick, &noiseField,
                                                   &playerStatus);
+                // IMMEDIATELY AFTER the firearm step and never before it: the two
+                // share `PlayerRanged::cooldownMs` (one pair of hands) and the step
+                // above owns its single decrement ([combat.h] player_throw_step).
+                // Consumed here rather than at the request site so the throw lands on
+                // a sim tick like every other action, not on a frame.
+                if (throwWanted) {
+                    throwWanted = false;
+                    if (!paused && game::player_throw_step(reg, pool, activeLayer,
+                                                           true) > 0)
+                        ++shots;
+                }
                 game::player_melee_step(
                     reg, pool, bus, activeLayer, kSimDt,
                     !haveGun && attackHeld && !paused, simTick,
@@ -3967,7 +4054,7 @@ int main(int argc, char** argv) {
                 meleeHits += game::projectile_step(
                     reg, pool, bus, stack, activeLayer, kSimDt, simTick,
                     &playerStatus, player, &combatCarves, &stainDirty,
-                    &particleBursts);
+                    &particleBursts, &noiseField);
                 // Drain combat carve proposals through the same carve_sphere
                 // path the console uses. Frozen bake: drop (v1); console keeps
                 // pending via carveRadius until bake lands.

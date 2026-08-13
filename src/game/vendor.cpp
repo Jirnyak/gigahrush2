@@ -105,6 +105,14 @@ ItemId vendor_ammo_for(const Inventory& inv) {
     ItemId best = kInvalidItem;
     std::int32_t bestPrice = 0;
     for (const RangedDef& r : kRangedTable) {
+        // AMMUNITION only. A THROWN row's "ammo" is the weapon itself
+        // ([ranged_table.h]), so without this the fallback could hand a man with no
+        // gun a grenade and call it a magazine — which is what this branch promises
+        // it never does. Grenades are bought like any other item, through the shop's
+        // ordinary path, not through the ammo key.
+        if (static_cast<ItemCategory>(item_def(r.ammo).category) !=
+            ItemCategory::Ammo)
+            continue;
         const std::int32_t p = vendor_buy_price(r.ammo);
         if (p <= 0) continue;
         if (best == kInvalidItem || p < bestPrice) { best = r.ammo; bestPrice = p; }

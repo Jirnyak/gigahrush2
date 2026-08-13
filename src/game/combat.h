@@ -310,6 +310,21 @@ struct Projectile {
     // shotgun there deals Kinetic too. The channel that is genuinely authored is Psi,
     // on the 18 rows of the reference's data/psi.ts.
     std::uint8_t channel = static_cast<std::uint8_t>(DamageChannel::Kinetic);
+    // Blast radius in DECIMETRES, 0 for anything that is not explosive.
+    //
+    // Carried here for the third time and for the third identical reason (`proj`
+    // and `channel` above): the thrower may be dead — indeed a grenade dropped at
+    // your own feet is *expected* to outlive you — and what a detonation does must
+    // not depend on whether whoever threw it survived the fuse.
+    //
+    // Decimetres and not metres, because a u8 of metres cannot say 4.5 m and the
+    // whole scale of interest is 1..10 m. 0.1 m of resolution over a 25.5 m ceiling.
+    //
+    // It is also the ONE field that decides a detonation happens at all: `ttlMs`
+    // reaching zero is the fuse, and a Bullet reaching the same zero is a spent shot
+    // that vanishes. Same timer, two meanings, told apart by `proj` — see
+    // `projectile_step`.
+    std::uint8_t blastDm = 0;
 };
 
 // Fraction of gravity a player bullet obeys, in percent. The reference's NORMAL
@@ -333,6 +348,21 @@ inline constexpr std::uint8_t kPlayerGravityPct = 40;
 // is what makes a full pack plant you and a child fly. See combat.cpp's knockback.
 inline constexpr float kKnockbackRefMassKg = 67.4f;
 
+// The MINIMUM barrel length, and no longer the whole of the guarantee.
+//
+// It is a floor rather than the answer because the muzzle is measured from the EYE
+// while the hit test measures from the BODY ORIGIN, and the distance between those
+// two is stature — `body_eye_height` is h*0.43 ([embody.h]). Fire straight down and
+// the clearance is `kMuzzleForward - eyeHeight`, which at the tallest stature
+// `height_for_age` will produce (2200 mm) comes to 0.754 m against a 0.75 m hit
+// sphere: **4 mm**, held together by three constants in three files.
+//
+// That coincidence was what the last owner test in the tree, `p.source != victim`,
+// was quietly insuring against — a rule paying for arithmetic nobody had done, which
+// is the same shape of defect §33 found when a rule was paying for a muzzle nobody
+// had placed. `muzzle_point` (combat.cpp) now solves the ray/sphere exit and pushes
+// the spawn point past this floor when, and only when, it has to. The clearance is a
+// guarantee at every stature, and the rule is deleted.
 inline constexpr float kMuzzleForward = 1.7f;
 
 // The camera holder's firearm state. A sibling of PlayerMelee rather than an
@@ -391,6 +421,31 @@ inline constexpr float kMeleeReachSlack = 0.9f;   // metres
 inline constexpr float kProjGravity = 6.0f;        // m/s^2
 inline constexpr std::uint16_t kProjTtlMs = 4000;
 inline constexpr float kProjHitRadius = 0.75f;     // metres
+
+// GRENADE BALLISTICS. A grenade is the one projectile that does not end on contact
+// — it bounces off the world and detonates on its FUSE, which is what
+// ARCHITECTURE.md §Манифест п.5 means by "граната скачет по вокселям".
+//
+// The restitution pair is measured against the thing it must produce: a grenade
+// thrown down a 2 m corridor has to come to rest inside the fuse rather than
+// ricochet for three seconds (unplayable) or stick where it lands (a mine, not a
+// grenade). 0.38 normal / 0.72 tangential drops a 16 m/s throw below the rest
+// threshold in four bounces, which reads on screen as a couple of hops and a roll.
+//
+// The rest threshold is what stops the perpetual micro-bounce: gravity re-adds
+// ~0.05 m/s every 8 ms tick, so without a floor the last 1% of energy costs as many
+// bounce resolutions as the first throw did, for no visible motion.
+inline constexpr float kGrenadeRestitution = 0.38f;   // normal component kept
+inline constexpr float kGrenadeFriction    = 0.72f;   // tangential kept per bounce
+inline constexpr float kGrenadeRestSpeed   = 0.55f;   // m/s below which it settles
+
+// Fraction of the DAMAGE radius that the geometry carve gets.
+//
+// Not 1.0, and the gap is the design: an RGD-5 kills across a room and opens a hole
+// you could crawl through, not a room-sized crater. Fragments travel; the pressure
+// wave that breaks concrete does not travel nearly as far. 0.35 of a 5.0 m blast is
+// a 1.75 m carve — one honest doorway.
+inline constexpr float kBlastCarveScale = 0.35f;
 
 // What a WEB shot does instead of damage. Both numbers are read off the one
 // authored WEB row rather than picked, and the row is unusually explicit about its
@@ -582,6 +637,51 @@ void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
                           std::uint8_t gravityPct = 100,
                           std::uint8_t channel = 0);
 
+// Throw an explosive. A third spawner and not a flag on the second, because a
+// grenade disagrees with a bullet about three of the four things a spawner decides:
+// it obeys FULL gravity (a thrown weight is not a camera-aimed tracer, so there is
+// no aimbot to avoid — see Projectile::gravityPct), its TTL is a FUSE that is
+// authored per weapon rather than the shared 4 s backstop, and it carries a blast
+// radius. Only the muzzle offset is shared.
+//
+// `fuseMs` becomes `Projectile::ttlMs` outright. There is deliberately no second
+// timer: the fuse IS the lifetime, and a grenade that has not detonated has not
+// expired. Anything else would be two clocks that can disagree — the defect
+// [combat.h]'s header note calls "one cooldown decrement".
+void spawn_grenade(Registry& reg, LayerId layer, const vec3& from,
+                   const vec3& dir, std::int16_t dmg,
+                   std::uint16_t projSpeedMmps, Entity source,
+                   std::uint8_t blastDm, std::uint16_t fuseMs,
+                   std::uint8_t channel = 0);
+
+// The camera holder throws the best explosive in its inventory. Sibling of
+// player_ranged_step, and NOT a branch inside it, because a throw and a shot agree
+// on almost nothing: there is no magazine (the weapon IS the ammunition, so it
+// leaves the inventory one item per throw), there is no reload, and the spread cone
+// belongs to a barrel rather than to an arm.
+//
+// It DOES share `PlayerRanged::cooldownMs`, and that is a decision rather than
+// reuse: a body has one pair of hands. Sharing the timer means you cannot throw a
+// grenade and empty a magazine in the same instant, which is what a second
+// independent cooldown would have quietly allowed.
+//
+// Because the cooldown is shared, the decrement must NOT be repeated here — it is
+// `player_ranged_step`'s, at the top, exactly once per tick (defect 3). Call this
+// AFTER player_ranged_step in the sim order, on the same tick, or the timer runs at
+// half speed on any tick a throw is wanted.
+//
+// No `dt`, no `tick`, no `NoiseField` — the three parameters its siblings carry and
+// this one would not read. A throw ages no timer of its own, needs no random seed
+// (there is no spread cone: a thrown weight goes where you are looking), and is
+// nearly silent; what a floor hears is the detonation, published by `projectile_step`
+// three seconds later and somewhere else. An unread parameter is how a field becomes
+// write-only, which is the defect both `Projectile::proj` and `RangedDef::channel`
+// had to be dug out of.
+//
+// Returns 1 when a grenade actually left the hand.
+std::uint32_t player_throw_step(Registry& reg, NpcPool& pool, LayerId layer,
+                                bool wantThrow);
+
 // Advance every shot in flight: integrate under gravity, stop on solid geometry,
 // damage what it touches on contact, expire on TTL. Destroys spent projectiles.
 //
@@ -601,6 +701,36 @@ void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
 // it hits INSTEAD of damage, and is counted as a hit for it. That is the only place
 // `projType` is read, and reading it is why the field exists at all — before this,
 // the one authored WEB row spat a bullet with the other 68.
+//
+// A GRENADE (`ProjType::Grenade`) inverts both halves of the contract above, and
+// that inversion is the entire feature:
+//
+//   * **Contact does not end it.** Solid geometry REFLECTS it — off the cell FACE it
+//     actually crossed, found by sweeping the step against the three cell-boundary
+//     planes and taking the earliest crossing, never off "the axis with the biggest
+//     component" ([problems.md] §34, isotropy: x/y/z are equal citizens). Bodies do
+//     not stop it either: a grenade is not a bullet with a bigger number, and a
+//     grenade that detonated on the first shoulder it grazed would never reach the
+//     floor the manifesto says it skips across.
+//   * **The TTL is the fuse.** `ttlMs` reaching zero destroys a bullet and DETONATES
+//     a grenade: one area sweep over every body and every monster within the blast
+//     radius, damage falling off with distance, every hit through `apply_damage`
+//     like every other hit in the game.
+//
+// The detonation sweep contains NO owner test of any kind — not the `p.source !=
+// victim` one the direct-contact path above still carries for a bullet leaving a
+// barrel. **The thrower is inside his own blast like anything else standing there**,
+// which is ARCHITECTURE.md §Манифест п.5 in one line ("осколки бьют и владельца")
+// and is the reason `Projectile::team` was deleted on 2026-08-12. `source` is read
+// on this path for exactly one thing — attribution of the kill — and never to decide
+// who may be hit.
+//
+// `noise` is an optional sink for the detonation ([noise.h] blast_noise), and it is
+// the only thing on this path a monster on the far side of a wall can perceive. A
+// bullet impact publishes nothing — 29 rows of small-arms fire would evict the
+// 64-slot field every trigger pull — but an explosion is the loudest event in the
+// game and the first severity-5 source in the tree. Optional and trailing, so every
+// existing call site compiles unchanged and stays silent, bit for bit.
 // Combat → geometry destruction seam ([world/destruct.h]).
 //
 // Combat NEVER mutates the grid. It proposes spheres (position, radius, power,
@@ -687,7 +817,8 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                               Entity playerEntity = entt::null,
                               CarveProposalQueue* carves = nullptr,
                               std::vector<std::uint32_t>* stainDirty = nullptr,
-                              ParticleBurstQueue* particles = nullptr);
+                              ParticleBurstQueue* particles = nullptr,
+                              NoiseField* noise = nullptr);
 
 // The camera holder swings at whatever monster is in front of it.
 //

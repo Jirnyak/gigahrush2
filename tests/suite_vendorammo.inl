@@ -121,7 +121,11 @@ static void test_vendorammo_all() {
         CHECK(unpackRows == 3);        // all three, so the filter selected only packs
         CHECK(chambered == 10);
         CHECK(guns.size() == kRangedCount);
-        static_assert(kRangedCount == 29u);
+        // 29 firearms + `grenade` (2026-08-13). The ammo arithmetic above is unmoved
+        // by the new row and that is the point of pinning it here: a thrown weapon is
+        // its own ammunition, so it adds no AMMO row, chambers no AMMO row, and gives
+        // the vendor nothing new to sell.
+        static_assert(kRangedCount == 30u);
 
         // THE DEFECT, pinned. The row the old rule chose exists, is cheap, and is the
         // ammunition of nothing — so this CHECK is what fails if the price-first
@@ -191,11 +195,19 @@ static void test_vendorammo_all() {
     { // ---- 4. with a gun, it is THAT gun's round, for all 29 -----------------
         // "A vendor selling 7.62 to a man with a shotgun" is the same defect one step
         // quieter, so this is asserted for every row rather than for a sample.
-        std::size_t matched = 0, buyable = 0;
+        //
+        // FIREARMS only. A thrown weapon is its own ammunition ([ranged_table.h]), so
+        // "resupply the round this weapon takes" is not a question it can be asked —
+        // more grenades are more grenades, bought through the shop's ordinary item
+        // path. `firearms` and not `guns.size()` below, so adding a second thrown row
+        // cannot quietly shrink what this block covers.
+        std::size_t matched = 0, buyable = 0, firearms = 0;
         for (ItemId gun : guns) {
             const RangedDef* def = ranged_for_item(gun);
             CHECK(def != nullptr);
             if (!def) continue;
+            if (ranged_is_thrown(gun)) continue;
+            ++firearms;
             Inventory inv{};
             inv.slots[0] = ItemSlot{gun, 1};
             const ItemId pick = vendor_ammo_for(inv);
@@ -213,8 +225,9 @@ static void test_vendorammo_all() {
             if (vendor_buy(inv, led, pick, 4u) == 4u) ++buyable;
             CHECK(held(inv, pick) == 4u);
         }
-        CHECK(matched == guns.size());
-        CHECK(buyable == guns.size());
+        CHECK(firearms == kRangedCount - 1u);   // 30 rows, one of them thrown
+        CHECK(matched == firearms);
+        CHECK(buyable == firearms);
     }
 
     { // ---- 5. 50,000 roubles buys rounds, and the rounds LOAD ----------------

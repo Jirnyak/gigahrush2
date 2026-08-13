@@ -57,6 +57,7 @@ enum class ConsoleRequest : std::uint32_t {
     Load,      // load the run
     Heal, Eat, Drink,        // survival one-shots
     Door, Possess, Interact, // world interaction one-shots
+    Throw,     // throw the best grenade in the bag ([combat.h] player_throw_step)
     Sell, Vendor, Resupply,  // economy: sell haul / trader window / resupply
     Elevator,  // toggle the shaft menu: the three KINDS of transition the manifesto
                // asks for (fast-travel / procedural down / procedural up) offered by

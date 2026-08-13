@@ -18,6 +18,15 @@ constexpr float kWeaponPelletCap = 8.0f;
 constexpr float kWeaponRadiusCap = 24.0f;     // min(24, ...) in the formula
 constexpr std::uint16_t kWeaponTtlMs = 2800;  // 2.8 s
 
+// An explosion is heard four blast radii away — a 5 m grenade is audible at 20 m,
+// which is inside the reference's 24 m cap for a firearm and outside its 13 m
+// severity-3 band, so a detonation is the loudest thing on the floor without being
+// audible across it. Longer-lived than a gunshot (4.0 s against 2.8) because the
+// thing that draws a monster to a blast is the silence after it as much as the bang.
+constexpr float kBlastRadiusMult = 4.0f;
+constexpr float kBlastRadiusCap = 24.0f;
+constexpr std::uint16_t kBlastTtlMs = 4000;
+
 constexpr float kBodyRadius = 6.0f;
 constexpr std::uint16_t kBodyTtlMs = 1600;
 
@@ -169,6 +178,21 @@ NoiseProfile weapon_fire_noise(const RangedDef& d) {
     p.ttlMs = kWeaponTtlMs;
     p.severity = radius >= 21.0f ? 4u : (radius >= 13.0f ? 3u : 2u);
     p.source = NoiseSource::WeaponFire;
+    return p;
+}
+
+NoiseProfile blast_noise(float blastRadiusM) {
+    float radius = blastRadiusM * kBlastRadiusMult;
+    if (radius > kBlastRadiusCap) radius = kBlastRadiusCap;
+    NoiseProfile p;
+    p.radius = radius;
+    p.ttlMs = kBlastTtlMs;
+    // Severity 5, the top of the band — and the FIRST thing in the tree to use it.
+    // `weapon_fire_noise` above records that the reference's severity-5 arm was
+    // unreachable "because there is no aoeRadius among the 29 ProjType::Normal
+    // rows". Row 30 has one, so the arm is reachable and this is it.
+    p.severity = kNoiseSeverityMax;
+    p.source = NoiseSource::Explosion;
     return p;
 }
 

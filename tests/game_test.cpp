@@ -45,7 +45,9 @@
 #include "game/population.h"
 #include "game/encumbrance.h"
 #include "game/room_zone.h"
+#include "game/noise.h"    // blast_noise — a detonation is a severity-5 source
 #include "game/rpg.h"
+#include "world/destruct.h"  // carve_sphere — the blast's hole, drained for real
 
 #include "sim/physics.h"
 #include "world/lattice.h"
@@ -2702,7 +2704,7 @@ static void test_mob_behaviour() {
 // Player firearms. Three of these assertions guard failures that would have shipped
 // silently, and they are first for that reason.
 static void test_ranged_table() {
-    static_assert(sizeof(RangedDef) == 16);
+    static_assert(sizeof(RangedDef) == 18);
     CHECK(kRangedTable.size() == kRangedCount);
 
     // 1. THE ONE-BASED INDEX. kRangedByItem stores slot+1, because 0 means "not a\n//    firearm" and slot 0 is makarov — a real gun. A raw index would make the very
@@ -2714,15 +2716,30 @@ static void test_ranged_table() {
         if (ranged_for_item(i)) ++reachable;
     CHECK(reachable == static_cast<int>(kRangedCount));
 
-    // Every row's ammo must resolve to a real AMMO item. A weapon pointed at a tin of
-    // stew is an unloadable gun, and the generator would rather fail the build.
-    for (const RangedDef& d : kRangedTable) {
-        CHECK(item_valid(d.ammo));
-        CHECK(static_cast<ItemCategory>(item_def(d.ammo).category) ==
-              ItemCategory::Ammo);
-        CHECK(d.dmg > 0 && d.pellets >= 1 && d.magazine >= 1);
-        CHECK(d.cooldownMs > 0 && d.projSpeedMmps > 0);
+    // Every row's ammo must resolve to a real AMMO item — UNLESS the weapon is its own
+    // ammunition, which is how data/items.csv spells "thrown" (`grenade`'s ammo_id is
+    // `grenade`). Iterated by ITEM id rather than over the table, because that
+    // exemption is a statement about the pair (weapon, its ammo) and the row alone
+    // cannot say which item it belongs to. A weapon pointed at a tin of stew is still
+    // an unloadable gun and the generator would still rather fail the build.
+    int thrownRows = 0;
+    for (ItemId i = 1; i <= kItemCount; ++i) {
+        const RangedDef* d = ranged_for_item(i);
+        if (!d) continue;
+        CHECK(item_valid(d->ammo));
+        if (ranged_is_thrown(i)) {
+            ++thrownRows;
+            CHECK(d->ammo == i);   // the exemption is EXACTLY "its own id"
+        } else {
+            CHECK(static_cast<ItemCategory>(item_def(d->ammo).category) ==
+                  ItemCategory::Ammo);
+        }
+        CHECK(d->dmg > 0 && d->pellets >= 1 && d->magazine >= 1);
+        CHECK(d->cooldownMs > 0 && d->projSpeedMmps > 0);
     }
+    // Exactly one today. Pinned so that a second thrown row has to arrive with its
+    // own reason rather than by drifting in behind this exemption.
+    CHECK(thrownRows == 1);
 
     // 2. THE SPREAD UNIT. spreadE4 is radians x 1e-4, and the choice is load-bearing:
     //    ptrs_liquidator is authored at 0.0015 rad, which milliradians would round to
@@ -2954,8 +2971,10 @@ static void test_player_shoots() {
                                 600u + static_cast<std::uint64_t>(i));
     CHECK(hits == 1);
     CHECK(reg.get<MobRef>(mob).hp == mobHp0 - static_cast<std::int16_t>(def.dmg));
-    // Self-hit, the whole reason kMuzzleForward and the source filter exist. Before
-    // those, this shot killed its own shooter on the first integration step.
+    // Self-hit, the whole reason kMuzzleForward exists. Before it, this shot killed
+    // its own shooter on the first integration step. GEOMETRY is all that keeps it
+    // clear now — the source filter that used to share the credit was deleted on
+    // 2026-08-13 and is asserted gone in the block at the end of this function.
     CHECK(pool.hp(sid) == meHp0);
     CHECK(reg.get<PlayerRanged>(shooter).hits == 1);
 
@@ -3065,6 +3084,631 @@ static void test_player_shoots() {
             projectile_step(reg, pool, bus, stack, layer, dt,
                             1200u + static_cast<std::uint64_t>(i));
         CHECK(pool.hp(civId) < civHp0);
+    }
+
+    // ---- THE LAST OWNER TEST, and why it is gone (2026-08-13) ----------------
+    //
+    // Until today this function's `victim` branch read `p.source != victim`. §33
+    // deleted `Projectile::team` and left that one exclusion standing, wearing a
+    // geometry argument: "a shot fired straight down still passes through the
+    // shooter on its way to the floor."
+    //
+    // It does not, and the margin is the point. `body_eye_height` is h*0.43 and
+    // `height_for_age` clamps stature at 2200 mm, so the tallest legal body's own
+    // straight-down muzzle sits 0.754 m below its origin against a 0.75 m hit sphere
+    // — 4 mm, spread across three constants in three files that no comment
+    // connected. The rule was dead code that looked load-bearing.
+    {
+        // (i) THE COINCIDENCE, computed rather than described. Both ends asserted, so
+        //     a retune of ANY of the three constants lands here instead of in a
+        //     bug report about tall bodies shooting themselves.
+        const float eyeClamp = body_eye_height(2200);
+        const float naiveClamp = kMuzzleForward - eyeClamp;   // straight down
+        CHECK(naiveClamp > kProjHitRadius);          // today's clamp escapes...
+        CHECK(naiveClamp - kProjHitRadius < 0.01f);  // ...by under a centimetre
+        // One stature past the clamp and the naive placement is INSIDE the sphere.
+        // Nothing in the types or the pool API forbids that height; only
+        // population.cpp's clamp does, and a geometric guarantee must not depend on
+        // a content table.
+        CHECK(kMuzzleForward - body_eye_height(2500) < kProjHitRadius);
+        std::fprintf(stderr,
+                     "[selfshot] tallest legal body clears its own muzzle by %.3f m "
+                     "(radius %.2f); at 2.5 m stature it would be inside by %.3f m\n",
+                     naiveClamp - kProjHitRadius, kProjHitRadius,
+                     kProjHitRadius - (kMuzzleForward - body_eye_height(2500)));
+
+        // (ii) THE GUARANTEE. Straight down, over a stature sweep that runs well past
+        //      anything the pool can produce: the muzzle must be outside the sphere
+        //      the hit test measures with, at every one.
+        //
+        //      Reverse polarity: replace `muzzle_point` with the plain
+        //      `from + dir*kMuzzleForward` and this loop goes red from 2.3 m up.
+        for (int mm = 1000; mm <= 3000; mm += 100) {
+            Registry r;
+            NpcPool p;
+            p.init();
+            NpcId id = p.spawn();
+            p.hp(id) = 500;
+            p.max_hp(id) = 500;
+            p.height_mm(id) = static_cast<std::uint16_t>(mm);
+            Entity who = embody_as_player(r, p, id, layer);
+            const Transform& wt = r.get<Transform>(who);
+            const CameraTag& wc = r.get<CameraTag>(who);
+            const vec3 eye = wt.pos + wc.eyeOffset;
+            spawn_projectile_dir(r, layer, eye, vec3{0.0f, 0.0f, -1.0f}, 20,
+                                 22000u, who, kPlayerGravityPct, 0);
+            int born = 0;
+            for (auto pe : r.view<const Projectile, const Transform>()) {
+                const vec3& q = r.get<const Transform>(pe).pos;
+                const float dz = q.z - wt.pos.z;
+                CHECK(std::fabs(dz) > kProjHitRadius);
+                ++born;
+            }
+            CHECK(born == 1);
+        }
+
+        // (iii) AND THE DELETION IS LOCKED. A shot that genuinely occupies the camera
+        //       holder's space hits him — the case the removed rule made impossible
+        //       for the player and left possible for everyone else, which is an
+        //       asymmetry in the player's favour and precisely what "the player is
+        //       not special" ([AGENTS.md]) forbids. `test_player_shoots` already
+        //       asserted this for a MONSTER shooting itself; this is the half that
+        //       the exclusion was hiding.
+        //
+        //       Reverse polarity: restore `&& p.source != victim` and this one CHECK
+        //       goes red on its own.
+        Registry r;
+        NpcPool p;
+        p.init();
+        NpcId id = p.spawn();
+        p.hp(id) = 500;
+        p.max_hp(id) = 500;
+        Entity me = embody_as_player(r, p, id, layer);
+        r.get<Transform>(me).pos = vec3{40.0f, 41.0f, 42.0f};
+        const vec3 mine = r.get<Transform>(me).pos;
+
+        Entity own = r.create();
+        Transform ot;
+        ot.pos = mine;                    // dead centre of his own hit sphere
+        ot.layer = layer;
+        r.emplace<Transform>(own, ot);
+        r.emplace<Velocity>(own, Velocity{vec3{0.0f, 0.0f, 0.0f}});
+        r.emplace<AABB>(own, AABB{vec3{0.1f, 0.1f, 0.1f}});
+        r.emplace<Projectile>(own, Projectile{me, 40, kProjTtlMs, 100});
+        const std::int16_t hp0 = p.hp(id);
+        for (int i = 0; i < 4 && r.valid(own); ++i)
+            projectile_step(r, p, bus, stack, layer, dt,
+                            1400u + static_cast<std::uint64_t>(i));
+        CHECK(p.hp(id) < hp0);   // <<< his own bullet, and it knows nothing about him
+        std::fprintf(stderr,
+                     "[selfshot] camera holder hit by his OWN bullet for %d — the "
+                     "last owner test is gone\n",
+                     static_cast<int>(hp0 - p.hp(id)));
+    }
+}
+
+
+// GRENADES — the one thing `Projectile::team` was deleted for.
+//
+// The deletion landed on 2026-08-12 and the manifesto clause it was made to satisfy
+// ("никаких friendly-fire-исключений; граната скачет по вокселям, осколки бьют и
+// владельца", ARCHITECTURE.md §Манифест п.5) could only be half-checked at the time,
+// because there were no grenades: the strongest case available was a bullet placed
+// on top of its own shooter. A bullet flies AWAY from you. Fragments fly AROUND you,
+// and that is the case that actually loads the rule.
+//
+// Six blocks, and block 1 is the whole reason the file exists. Each was verified by
+// REVERSE POLARITY — the change it guards was broken on purpose and the named CHECK
+// was watched to fail — because a green assertion that cannot go red is a comment.
+static void test_grenade() {
+    // ---- 0. THE ROW, and the trap it sets for the gun picker ------------------
+    ItemId gren = kInvalidItem;
+    for (ItemId i = 1; i <= kItemCount; ++i)
+        if (const RangedDef* d = ranged_for_item(i))
+            if (ranged_is_explosive(*d)) { gren = i; break; }
+    CHECK(gren != kInvalidItem);
+    const RangedDef& gdef = *ranged_for_item(gren);
+    CHECK(static_cast<ProjType>(gdef.projType) == ProjType::Grenade);
+    CHECK(ranged_is_thrown(gren));                 // it is its own ammunition
+    CHECK(gdef.blastDm == 50 && gdef.fuseDs == 30);  // 5.0 m, 3.0 s
+    CHECK(gdef.dmg == 90);   // data/items.csv: "Урон 90 по площади"
+    const float kBlastR = static_cast<float>(gdef.blastDm) * 0.1f;
+
+    // The blast must not be narrower than the sphere in which a plain bullet already
+    // connects, or the radius is a lie at its own edge. The generator refuses such a
+    // row; this is the same rule asserted against the shipped table.
+    CHECK(kBlastR > kProjHitRadius);
+
+    // THE DPS TRAP. A grenade is 75 burst DPS and beats 26 of the 29 firearms, so a
+    // picker that ranks on DPS alone hands the player a grenade and player_ranged_step
+    // fires one down the camera ray per trigger pull. The two pickers must be
+    // complements: never both, never neither.
+    {
+        ItemId rifle = kInvalidItem;
+        for (ItemId i = 1; i <= kItemCount; ++i)
+            if (const RangedDef* d = ranged_for_item(i))
+                if (d->dmg == 170) rifle = i;      // ptrs_liquidator
+        CHECK(rifle != kInvalidItem);
+        CHECK(ranged_dps(gdef) > ranged_dps(*ranged_for_item(rifle)));  // the trap is real
+
+        Inventory bag;
+        bag.slots[0] = ItemSlot{gren, 3};
+        CHECK(equipped_ranged(bag) == kInvalidItem);   // a grenade is not a gun
+        CHECK(equipped_throwable(bag) == gren);
+        bag.slots[1] = ItemSlot{rifle, 1};
+        CHECK(equipped_ranged(bag) == rifle);          // ...even beside a worse gun
+        CHECK(equipped_throwable(bag) == gren);
+    }
+
+    // A hollow room to work in: floors are dense interiors, and a grenade in a solid
+    // cell has no face to bounce off.
+    LevelStack stack;
+    LayerId layer = stack.push_layer();
+    generate_floor(stack.layer(layer), 1, floor_spec(FloorKind::Commercial), 5u);
+    for (int z = 20; z <= 24; ++z)
+        for (int y = 16; y <= 24; ++y)
+            for (int x = 16; x <= 30; ++x)
+                stack.layer(layer).grid().clear_cell(x, y, z);
+    // And a FLOOR under it, built rather than assumed. A thrown grenade that finds no
+    // solid cell below simply keeps falling: three seconds of fuse is 27 m of free
+    // fall, so it detonates 26 m from everything the test placed and every blast
+    // assertion reads as "the blast does nothing" instead of "the room has no floor".
+    for (int y = 16; y <= 24; ++y)
+        for (int x = 16; x <= 30; ++x)
+            stack.layer(layer).grid().fill_cell(x, y, 19, kMatConcrete);
+    const float dt = kSimDt;
+
+    // Places a grenade by hand, stationary, with a fuse of `fuseMs`. Hand-built for
+    // the same reason the bullet suite hand-builds its point-blank shot: the test is
+    // about what a detonation DOES, and a thrown arc would make the position an
+    // outcome rather than an input. The throw itself is block 5.
+    auto plant = [&](Registry& r, const vec3& at, Entity src, std::uint16_t fuseMs) {
+        Entity g = r.create();
+        Transform t;
+        t.pos = at;
+        t.layer = layer;
+        r.emplace<Transform>(g, t);
+        r.emplace<Velocity>(g, Velocity{vec3{0.0f, 0.0f, 0.0f}});
+        r.emplace<AABB>(g, AABB{vec3{0.1f, 0.1f, 0.1f}});
+        r.emplace<Projectile>(
+            g, Projectile{src, static_cast<std::int16_t>(gdef.dmg), fuseMs, 100,
+                          static_cast<std::uint8_t>(ProjType::Grenade), 0,
+                          gdef.blastDm});
+        return g;
+    };
+
+    // ---- 1. THE FRAGMENTS HIT THE THROWER -------------------------------------
+    //
+    // The one assertion this entire feature exists to make true. The thrower is the
+    // camera holder, he is inside his own blast, and NOTHING in the detonation sweep
+    // asks whose grenade it was.
+    //
+    // Reverse polarity: add `if (c.e == h.source) continue;` to the sweep in
+    // combat.cpp and this CHECK is the one that goes red. Nothing else in the suite
+    // notices, which is exactly why it is checked by itself and first.
+    {
+        Registry reg;
+        NpcPool pool;
+        pool.init();
+        EventBus bus;
+        NpcId tid = pool.spawn();
+        pool.hp(tid) = 30000;      // survives, so "hurt" can be told from "deleted"
+        pool.max_hp(tid) = 30000;
+        Entity me = embody_as_player(reg, pool, tid, layer);
+        Transform& mt = reg.get<Transform>(me);
+        mt.pos = vec3{44.0f, 41.0f, 42.0f};   // cell (22, 20, 21), inside the room
+
+        // 2 m away — the distance a grenade you dropped ends up at.
+        const vec3 at{mt.pos.x + 2.0f, mt.pos.y, mt.pos.z};
+        plant(reg, at, me, 1u);   // fuse expires on the first step
+
+        const std::int16_t hp0 = pool.hp(tid);
+        const std::uint32_t hits =
+            projectile_step(reg, pool, bus, stack, layer, dt, 10u);
+        CHECK(hits == 1);
+        CHECK(pool.hp(tid) < hp0);        // <<< осколки бьют и владельца
+
+        // And the number is the authored falloff, not "some damage": 90 x (1 - 2/5).
+        const std::int16_t expect =
+            static_cast<std::int16_t>(90.0f * (1.0f - 2.0f / kBlastR) + 0.5f);
+        CHECK(hp0 - pool.hp(tid) == expect);
+        CHECK(expect == 54);
+        // The grenade is spent. A fuse that fires twice would double every blast.
+        CHECK(reg.view<const Projectile>().empty());
+        std::fprintf(stderr,
+                     "[grenade] own blast: thrower took %d at %.1f m of %.1f m\n",
+                     hp0 - pool.hp(tid), 2.0f, kBlastR);
+    }
+
+    // ---- 2. DAMAGE FALLS WITH DISTANCE ----------------------------------------
+    //
+    // Reverse polarity: drop the `f` factor (pass `h.dmg` straight to apply_damage)
+    // and the three strict `>` comparisons below all go red together.
+    {
+        Registry reg;
+        NpcPool pool;
+        pool.init();
+        EventBus bus;
+        const vec3 c{44.0f, 41.0f, 42.0f};
+
+        // Four monsters on one line: inside, inside, at the rim, and clear of it.
+        const float dist[4] = {0.5f, 2.5f, 4.5f, 6.0f};
+        Entity m[4];
+        for (int i = 0; i < 4; ++i) {
+            m[i] = reg.create();
+            Transform t;
+            t.pos = vec3{c.x + dist[i], c.y, c.z};
+            t.layer = layer;
+            reg.emplace<Transform>(m[i], t);
+            reg.emplace<MobRef>(m[i], MobRef{0, 1, 4000, 4000});
+        }
+        plant(reg, c, entt::null, 1u);
+        projectile_step(reg, pool, bus, stack, layer, dt, 20u);
+
+        std::int16_t took[4];
+        for (int i = 0; i < 4; ++i)
+            took[i] = static_cast<std::int16_t>(4000 - reg.get<MobRef>(m[i]).hp);
+        CHECK(took[0] > took[1]);
+        CHECK(took[1] > took[2]);
+        CHECK(took[2] >= 1);      // inside the radius is never free
+        CHECK(took[3] == 0);      // outside it is never charged
+        // Nearest is the authored 90 x (1 - 0.5/5.0) = 81, within the rounding the
+        // one-tick gravity drop can introduce.
+        CHECK(took[0] >= 80 && took[0] <= 82);
+        std::fprintf(stderr,
+                     "[grenade] falloff over %.1f m: %d %d %d %d at %.1f/%.1f/%.1f/%.1f m\n",
+                     kBlastR, took[0], took[1], took[2], took[3],
+                     dist[0], dist[1], dist[2], dist[3]);
+    }
+
+    // ---- 3. IT BOUNCES OFF A WALL, AND DOES NOT GO OFF ON IT ------------------
+    //
+    // Run on all THREE axes with the same code and the same expectation, because the
+    // isotropy law ([problems.md] §34) is not "z is special-cased correctly", it is
+    // "no letter is special at all". The component normal to the face crossed must
+    // flip and lose energy; the other two must not flip.
+    //
+    // Reverse polarity: replace the swept-face search in `grenade_advance` with "the
+    // axis of the largest velocity component" and the diagonal case below (axis 2,
+    // thrown into a ceiling while drifting sideways) reverses the wrong component.
+    {
+        // The wall is BUILT, not assumed. My first version picked cells just outside
+        // the hollowed room and trusted the generator to have filled them; two of the
+        // three were already air, so the grenade flew past the "wall" and the failure
+        // read as a broken bounce rather than as a missing wall.
+        const int solid[3][3] = {{31, 20, 21}, {22, 25, 21}, {22, 20, 25}};
+        for (int a = 0; a < 3; ++a) {
+            for (int dx = -1; dx <= 1; ++dx)
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dz = -1; dz <= 1; ++dz)
+                        stack.layer(layer).grid().fill_cell(
+                            solid[a][0] + dx, solid[a][1] + dy, solid[a][2] + dz,
+                            kMatConcrete);
+        }
+        for (int a = 0; a < 3; ++a) {
+            Registry reg;
+            NpcPool pool;
+            pool.init();
+            EventBus bus;
+
+            // Start one cell short of the wall, moving at it, with a small drift on
+            // the other two axes so "which face" is a real question rather than a
+            // one-dimensional certainty.
+            vec3 start{static_cast<float>(solid[a][0]) * kCellSize + 1.0f,
+                       static_cast<float>(solid[a][1]) * kCellSize + 1.0f,
+                       static_cast<float>(solid[a][2]) * kCellSize + 1.0f};
+            vec3 vel{0.6f, 0.6f, 0.6f};
+            // Step back along `a` into the open room and aim at the wall.
+            (a == 0 ? start.x : a == 1 ? start.y : start.z) -= 2.0f * kCellSize;
+            (a == 0 ? vel.x : a == 1 ? vel.y : vel.z) = 14.0f;
+
+            Entity g = plant(reg, start, entt::null, kProjTtlMs);
+            reg.get<Velocity>(g).v = vel;
+            // A body pressed against the wall: if the grenade detonated on contact,
+            // this is what would take the damage.
+            Entity witness = reg.create();
+            Transform wt;
+            wt.pos = start;
+            (a == 0 ? wt.pos.x : a == 1 ? wt.pos.y : wt.pos.z) += 1.4f;
+            wt.layer = layer;
+            reg.emplace<Transform>(witness, wt);
+            reg.emplace<MobRef>(witness, MobRef{0, 1, 4000, 4000});
+
+            const float v0 = (a == 0 ? vel.x : a == 1 ? vel.y : vel.z);
+            bool flipped = false;
+            for (int i = 0; i < 60 && reg.valid(g) && !flipped; ++i) {
+                projectile_step(reg, pool, bus, stack, layer, dt,
+                                30u + static_cast<std::uint64_t>(i));
+                if (!reg.valid(g)) break;
+                const vec3& v = reg.get<Velocity>(g).v;
+                const float vn = (a == 0 ? v.x : a == 1 ? v.y : v.z);
+                if (vn < 0.0f) flipped = true;
+            }
+            CHECK(flipped);                       // it came back off the face
+            CHECK(reg.valid(g));                  // and it is STILL A GRENADE
+            const vec3& v = reg.get<Velocity>(g).v;
+            const float vn = (a == 0 ? v.x : a == 1 ? v.y : v.z);
+            CHECK(std::fabs(vn) < v0);            // and it lost energy doing it
+            // The other two components kept their sign: nothing else was reflected.
+            for (int b = 0; b < 3; ++b) {
+                if (b == a) continue;
+                const float vb = (b == 0 ? v.x : b == 1 ? v.y : v.z);
+                CHECK(vb >= 0.0f);
+            }
+            // NOTHING DETONATED ON THE WALL. A bullet would be gone and the witness
+            // beside the impact would be hurt; the grenade is neither.
+            CHECK(reg.get<MobRef>(witness).hp == 4000);
+            CHECK(reg.get<Projectile>(g).ttlMs > 0);
+        }
+
+        // THE GRAZING CASE, and it is the only one of the four that can tell a FACE
+        // from an AXIS LETTER.
+        //
+        // The three above cannot, and I only found that out by mutating the code:
+        // replacing the swept-face search with "reflect the largest velocity
+        // component" left all three of them GREEN, because in each the fast axis and
+        // the wall's axis are the same one. A test that cannot fail is a comment.
+        //
+        // So: fast along +x, slow along +z, and a ceiling 0.06 m overhead. The face
+        // crossed is the ceiling's; the biggest component is x. Face reflection turns
+        // z around and leaves x alone. Axis-letter reflection does the opposite, and
+        // both CHECKs below catch it.
+        {
+            for (int cx = 21; cx <= 24; ++cx)
+                for (int cy = 19; cy <= 21; ++cy)
+                    stack.layer(layer).grid().fill_cell(cx, cy, 24, kMatConcrete);
+
+            Registry reg;
+            NpcPool pool;
+            pool.init();
+            EventBus bus;
+            Entity g = plant(reg, vec3{45.0f, 41.0f, 47.94f}, entt::null, kProjTtlMs);
+            reg.get<Velocity>(g).v = vec3{14.0f, 0.0f, 6.0f};
+
+            bool hitCeiling = false;
+            for (int i = 0; i < 20 && reg.valid(g) && !hitCeiling; ++i) {
+                projectile_step(reg, pool, bus, stack, layer, dt,
+                                600u + static_cast<std::uint64_t>(i));
+                if (reg.valid(g) && reg.get<Velocity>(g).v.z < 0.0f) hitCeiling = true;
+            }
+            CHECK(hitCeiling);
+            CHECK(reg.valid(g));
+            const vec3& v = reg.get<Velocity>(g).v;
+            CHECK(v.z < 0.0f);   // the CEILING's face turned it back down
+            CHECK(v.x > 0.0f);   // ...and the fast axis was NOT the one reflected
+            CHECK(v.x < 14.0f);  // only damped, by the tangential friction
+            std::fprintf(stderr,
+                         "[grenade] grazing bounce: v=(%.2f, %.2f, %.2f) — the face "
+                         "reflected, not the biggest component\n",
+                         v.x, v.y, v.z);
+        }
+        std::fprintf(stderr, "[grenade] bounced off a face on all 3 axes, no early blast\n");
+    }
+
+    // ---- 4. THE DETONATION DESTROYS GEOMETRY ----------------------------------
+    //
+    // Not "proposes a carve" — the proposal is drained through the real carve_sphere
+    // and voxels are counted. Combat proposes and the app disposes ([destruct.h]), so
+    // the test does both halves rather than trusting the seam.
+    //
+    // Reverse polarity: comment out the `carves->push` in the detonation block and
+    // `removed > 0` goes red; make the push degenerate (radius 0) and `droppedFull`
+    // stays 0 while `droppedDegenerate` climbs, which the counter CHECK catches.
+    {
+        Registry reg;
+        NpcPool pool;
+        pool.init();
+        EventBus bus;
+        CarveProposalQueue carves;
+        ParticleBurstQueue bursts;
+
+        // Right against the wall of the hollow room, so there is masonry to remove.
+        const vec3 at{31.0f * kCellSize - 0.5f, 41.0f, 42.0f};
+        plant(reg, at, entt::null, 1u);
+        projectile_step(reg, pool, bus, stack, layer, dt, 40u, nullptr, entt::null,
+                        &carves, nullptr, &bursts);
+
+        CHECK(carves.count == 1);
+        CHECK(carves.droppedFull == 0 && carves.droppedDegenerate == 0);
+        const CarveProposal& pr = carves.items[0];
+        CHECK(std::fabs(pr.radius - kBlastR * kBlastCarveScale) < 1e-4f);
+        CHECK(pr.power == carve_power_from_dmg(static_cast<std::int16_t>(gdef.dmg)));
+        CHECK(pr.power > 256);    // above concrete's hardness: it opens a real hole
+        // Sparks AND debris, two rows of data/particles.csv with two lifetimes.
+        CHECK(bursts.count == 2);
+
+        CarveScratch scratch;
+        CarveResult res;
+        CarveOp op;
+        op.x = pr.x; op.y = pr.y; op.z = pr.z;
+        op.radius = pr.radius; op.power = pr.power; op.seed = pr.seed;
+        const std::int32_t removed =
+            carve_sphere(stack.layer(layer), op, scratch, res);
+        CHECK(removed > 0);
+        CHECK(!res.dirtyCells.empty());
+        std::fprintf(stderr,
+                     "[grenade] blast carve r=%.2f m power=%u removed %d sub-voxels "
+                     "across %zu cells\n",
+                     pr.radius, static_cast<unsigned>(pr.power), removed,
+                     res.dirtyCells.size());
+    }
+
+    // ---- 5. THE THROW, AND WHOSE KILL IT IS ([problems.md] §40) ---------------
+    //
+    // §40 was closed on 2026-08-12: a kill counts for a contract only when the killer
+    // is the camera holder. A grenade is the first weapon that can kill without the
+    // thrower being anywhere near the victim, so both directions are checked here.
+    //
+    // Reverse polarity: pass `entt::null` instead of `thrower` to spawn_grenade and
+    // the killer CHECK goes red while every damage assertion above stays green — the
+    // exact shape of the §40 defect, which is why attribution is tested separately
+    // from damage.
+    {
+        Registry reg;
+        NpcPool pool;
+        pool.init();
+        EventBus bus;
+        NpcId tid = pool.spawn();
+        pool.hp(tid) = 30000;
+        pool.max_hp(tid) = 30000;
+        Entity me = embody_as_player(reg, pool, tid, layer);
+        Transform& mt = reg.get<Transform>(me);
+        mt.pos = vec3{44.0f, 41.0f, 42.0f};
+        CameraTag& cam = reg.get<CameraTag>(me);
+        cam.yaw = 0.0f;
+        // STRAIGHT DOWN — "кидай и прячься" without the second half. Not -1.45: at
+        // that angle the throw keeps 1.9 m/s of horizontal speed and the grenade rolls
+        // ~4 m away over its own fuse, which turned this block into a measurement of
+        // rolling friction rather than of who the kill belongs to.
+        cam.pitch = -1.5707f;
+
+        Inventory& inv = pool.inventory(tid);
+        inv.slots[0] = ItemSlot{gren, 2};
+
+        // One idle melee pass, exactly as the app runs every tick, because that is
+        // what attaches `PlayerMelee` lazily. The kill counter the HUD prints lives
+        // there, and a grenade credits it through the same `try_get` the bullet path
+        // uses — so without the component the credit is silently skipped. Attaching
+        // it by hand would have hidden that dependency instead of exercising it.
+        player_melee_step(reg, pool, bus, layer, dt, /*wantsAttack=*/false, 0u);
+        CHECK(reg.all_of<PlayerMelee>(me));
+        CHECK(reg.get<PlayerMelee>(me).kills == 0);
+
+        // The trigger is gated on the SHARED cooldown, which player_ranged_step owns.
+        CHECK(player_throw_step(reg, pool, layer, /*wantThrow=*/false) == 0);
+        CHECK(player_throw_step(reg, pool, layer, true) == 1);
+        CHECK(player_throw_step(reg, pool, layer, true) == 0);   // cooldown holds
+        // ONE grenade left the bag — the weapon IS the round.
+        std::uint16_t left = 0;
+        for (const ItemSlot& sl : inv.slots)
+            if (sl.item == gren) left = sl.count;
+        CHECK(left == 1);
+        CHECK(reg.get<PlayerRanged>(me).cooldownMs == gdef.cooldownMs);
+        // It is in the air, it is a GRENADE, and its fuse is the authored one.
+        int flying = 0;
+        for (auto e : reg.view<const Projectile>()) {
+            const Projectile& p = reg.get<const Projectile>(e);
+            CHECK(static_cast<ProjType>(p.proj) == ProjType::Grenade);
+            CHECK(p.ttlMs == gdef.fuseDs * 100u);
+            CHECK(p.blastDm == gdef.blastDm);
+            CHECK(p.source == me);
+            ++flying;
+        }
+        CHECK(flying == 1);
+
+        // A monster standing next to the thrower, weak enough for the blast to kill.
+        Entity mob = reg.create();
+        Transform bt;
+        bt.pos = vec3{mt.pos.x + 1.0f, mt.pos.y, mt.pos.z};
+        bt.layer = layer;
+        reg.emplace<Transform>(mob, bt);
+        reg.emplace<MobRef>(mob, MobRef{0, 1, 30, 30});
+
+        NoiseField noise;
+        const std::int16_t myHp0 = pool.hp(tid);
+        for (int i = 0; i < 500 && !reg.view<const Projectile>().empty(); ++i)
+            projectile_step(reg, pool, bus, stack, layer, dt,
+                            50u + static_cast<std::uint64_t>(i), nullptr, me,
+                            nullptr, nullptr, nullptr, &noise);
+        CHECK(reg.all_of<Dead>(mob));
+        CHECK(reg.get<Dead>(mob).killer == me);      // §40: it was the player's
+        CHECK(pool.hp(tid) < myHp0);                 // ...and it cost him too
+        CHECK(reg.get<PlayerMelee>(me).kills == 1);  // credited on the one counter
+        // The floor HEARD it: severity 5, the loudest source in the game and the
+        // first thing in the tree to use the top of the band.
+        CHECK(noise.liveCount == 1);
+        int blasts = 0;
+        for (const Noise& n : noise.slot)
+            if (n.id && static_cast<NoiseSource>(n.source) == NoiseSource::Explosion) {
+                CHECK(n.severity == kNoiseSeverityMax);
+                ++blasts;
+            }
+        CHECK(blasts == 1);
+
+        // The event the contract ledger reads carries the same killer.
+        bus.init();
+        finalize_deaths(reg, pool, bus, 999u);
+        int died = 0;
+        for (std::size_t i = 0; i < bus.size(); ++i) {
+            const Event& ev = bus.events()[i];
+            if (ev.type != EventType::NpcDied) continue;
+            CHECK(ev.c == static_cast<std::uint32_t>(entt::to_integral(me)));
+            ++died;
+        }
+        CHECK(died == 1);
+        std::fprintf(stderr,
+                     "[grenade] thrown kill credited to the camera holder; thrower "
+                     "took %d of his own\n",
+                     myHp0 - pool.hp(tid));
+    }
+
+    // A MONSTER's grenade credits the MONSTER, so it closes nobody's contract. The
+    // mirror of the case above, and the one §40 was actually written about.
+    {
+        Registry reg;
+        NpcPool pool;
+        pool.init();
+        EventBus bus;
+        NpcId tid = pool.spawn();
+        pool.hp(tid) = 30000;
+        pool.max_hp(tid) = 30000;
+        Entity me = embody_as_player(reg, pool, tid, layer);
+        reg.get<Transform>(me).pos = vec3{44.0f, 41.0f, 42.0f};
+
+        Entity gunner = reg.create();
+        Transform gt;
+        gt.pos = vec3{47.0f, 41.0f, 42.0f};
+        gt.layer = layer;
+        reg.emplace<Transform>(gunner, gt);
+        reg.emplace<MobRef>(gunner, MobRef{0, 1, 4000, 4000});
+
+        Entity victim = reg.create();
+        Transform vt;
+        vt.pos = vec3{45.0f, 41.0f, 42.0f};
+        vt.layer = layer;
+        reg.emplace<Transform>(victim, vt);
+        reg.emplace<MobRef>(victim, MobRef{0, 1, 30, 30});
+
+        plant(reg, vt.pos, gunner, 1u);
+        projectile_step(reg, pool, bus, stack, layer, dt, 700u);
+        CHECK(reg.all_of<Dead>(victim));
+        CHECK(reg.get<Dead>(victim).killer == gunner);
+        CHECK(reg.get<Dead>(victim).killer != me);   // §40: NOT the player's kill
+        bus.init();
+        finalize_deaths(reg, pool, bus, 1000u);
+        int monsterKills = 0;
+        for (std::size_t i = 0; i < bus.size(); ++i) {
+            const Event& ev = bus.events()[i];
+            if (ev.type != EventType::NpcDied) continue;
+            CHECK(ev.c != static_cast<std::uint32_t>(entt::to_integral(me)));
+            ++monsterKills;
+        }
+        CHECK(monsterKills == 1);
+    }
+
+    // ---- 6. A REFUSED CARVE IS COUNTED, NOT SWALLOWED -------------------------
+    //
+    // kMaxCarveProposals is a hard 128 and a floor full of grenades can reach it. The
+    // failure mode this guards is not the drop — cosmetics may drop — it is the
+    // SILENT drop, a blast that visibly went off and removed nothing with no number
+    // anywhere saying why. [AGENTS.md] §Measure the thing the owner is looking at.
+    {
+        Registry reg;
+        NpcPool pool;
+        pool.init();
+        EventBus bus;
+        CarveProposalQueue carves;
+        while (carves.push(10.0f, 10.0f, 10.0f, 0.5f, 100, 1u)) {}
+        CHECK(carves.count == kMaxCarveProposals);
+        const std::uint16_t dropped0 = carves.droppedFull;
+
+        plant(reg, vec3{44.0f, 41.0f, 42.0f}, entt::null, 1u);
+        projectile_step(reg, pool, bus, stack, layer, dt, 800u, nullptr, entt::null,
+                        &carves);
+        CHECK(carves.droppedFull == dropped0 + 1);   // visible as a number
+        std::fprintf(stderr,
+                     "[grenade] full carve queue: dropped_full=%u (counted, not silent)\n",
+                     static_cast<unsigned>(carves.droppedFull));
     }
 }
 
@@ -4435,6 +5079,7 @@ int main() {
     test_mob_behaviour();
     test_ranged_table();
     test_player_shoots();
+    test_grenade();
     test_needs_all();
     test_noise_all();
     test_packs_all();

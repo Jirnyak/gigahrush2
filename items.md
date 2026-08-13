@@ -124,6 +124,18 @@ Weapon **combat** stats (damage, range, magazine, ammo type) are deliberately a
 the reference splits `ItemDef` from weapon stats. The catalog only marks weapons
 by `category` and their `value` for now.
 
+**`ammo_id` pointing at the row's OWN id means the weapon is THROWN**, and that
+is read rather than declared. `grenade` carries `ammo_id = grenade`, because the
+thing you throw IS the round — there is no pouch of grenade-ammunition, and
+inventing one would have forced a phantom item into the drop tables, the vendor
+stock and the craft outputs so that a category check could pass. So
+`ranged_is_thrown(id)` is `def.ammo == id` ([ranged_table.h]), and it is what
+keeps `equipped_ranged` (which ranks by DPS) from handing the player a grenade
+every time he pulls a trigger — a grenade is 75 DPS and beats 26 of the 29
+firearms. Throwables are picked by `equipped_throwable` and thrown by
+`player_throw_step`, on their own key (`Z`). Five items spell themselves this
+way today: the three grenades and the two demolition charges.
+
 ### Use-effects close the digestion loop
 
 The reference stores `use` as a closure; a closure is not data and cannot sit in

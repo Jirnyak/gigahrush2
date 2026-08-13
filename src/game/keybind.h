@@ -25,7 +25,7 @@ namespace giga::game {
 namespace scan {
 inline constexpr std::uint16_t kA = 4, kB = 5, kC = 6, kD = 7, kE = 8, kF = 9,
     kG = 10, kH = 11, kL = 15, kP = 19, kQ = 20, kR = 21, kS = 22, kT = 23, kV = 25,
-    kW = 26, kX = 27, kEscape = 41, kTab = 43, kSpace = 44, kLeftBracket = 47,
+    kW = 26, kX = 27, kZ = 29, kEscape = 41, kTab = 43, kSpace = 44, kLeftBracket = 47,
     kRightBracket = 48, kGrave = 53, kF1 = 58, kF5 = 62, kF9 = 66,
     // Digit row (SDL_SCANCODE_1/2/3). ATTR1 spends unspent points on STR/AGI/INT.
     k1 = 30, k2 = 31, k3 = 32,

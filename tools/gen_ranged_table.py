@@ -7,20 +7,29 @@ Python, and an unknown token is a hard error rather than a silent default.
 
     python tools/gen_ranged_table.py
 
-Scope: the 29 `ProjType.NORMAL` weapons out of the reference's 48 ranged rows. The
-other 19 are grenades, flamers, BFG and beams, which need detonation, burn statuses,
-area damage or hitscan — none of which exist. Porting their numbers without those
-systems would be a table nothing reads, which is the mistake the mob behaviour column
-made and took a separate commit to undo.
+Scope: the 29 `ProjType.NORMAL` weapons out of the reference's 48 ranged rows, plus
+`grenade` (row 30, 2026-08-13) now that detonation-on-expiry and area damage exist in
+projectile_step. The rest are still flamers, BFG and beams, which need burn statuses
+and hitscan — neither of which exists. Porting their numbers without those systems
+would be a table nothing reads, which is the mistake the mob behaviour column made
+and took a separate commit to undo.
 
-Two things this generator does that gen_weapon_table.py does not:
+Three things this generator does that gen_weapon_table.py does not:
 
   * It resolves `ammo_item` to a 1-based ItemId at BUILD time. That is what dissolves
     the "ammo_id needs interned string ids" deferral recorded in item_table.h — the
     requirement was never string interning, it was an integer in a table that is not
     the 20-byte ItemDef.
   * It checks the resolved ammo item is actually `category == AMMO`, so pointing a
-    weapon at a tin of stew is a build failure rather than an unloadable gun.
+    weapon at a tin of stew is a build failure rather than an unloadable gun. The one
+    exception is a weapon that is its OWN ammunition (`ammo_item == item_id`), which
+    is how data/items.csv already spells "thrown" — a grenade is not loaded from a
+    pouch of grenade-ammo, it IS the round. The exception is exact: same id, or the
+    AMMO check applies as before. It cannot be used to smuggle a stew tin in.
+  * It refuses HALF an explosive. `proj_type = grenade` with no blast radius is a
+    grenade that removes nothing; a blast radius with no fuse is one that never goes
+    off; a blast radius on a `normal` row is a number nothing reads. All three are
+    silent at runtime and all three are a hard error here.
 
 Fields the reference does NOT have, and which are therefore absent here rather than
 invented: `range` (zero on every ranged row — effective range is emergent from speed
@@ -40,8 +49,14 @@ RANGED_CSV = os.path.join(REPO, "data", "weapons_ranged.csv")
 ITEMS_CSV = os.path.join(REPO, "data", "items.csv")
 OUT_PATH = os.path.join(REPO, "src", "game", "ranged_table.cpp")
 
-EXPECTED_ROWS = 29        # ProjType.NORMAL only
+EXPECTED_ROWS = 30        # 29 ProjType.NORMAL + grenade
 EXPECTED_ITEM_ROWS = 442  # must agree with kItemCount
+
+# CSV token -> ProjType ordinal ([mob_table.h]). An unknown token is a hard error,
+# not a default: the whole point of the column is that a row states what it fires,
+# and a typo silently falling through to "bullet" would ship a grenade that is a
+# tracer. `web` is absent on purpose — no WEAPON spits one; it is a monster row.
+PROJ_TYPES = {"normal": 0, "grenade": 2}
 
 
 def die(msg):
@@ -97,17 +112,50 @@ def main():
         ammo = (r.get("ammo_item") or "").strip()
         if ammo not in item_index:
             die("%r: ammo_item %r is not an id in items.csv" % (name, ammo))
-        if item_cat.get(ammo) != "AMMO":
+        # A THROWN weapon is its own ammunition, and items.csv already says so:
+        # `grenade` carries ammo_id `grenade`. Requiring category AMMO there would
+        # force a phantom "grenade_ammo" item into the drop tables, the vendor stock
+        # and the craft outputs — five systems lied to so one check could pass.
+        if ammo != name and item_cat.get(ammo) != "AMMO":
             die("%r: ammo_item %r has category %r, expected AMMO — a weapon "
                 "pointed at a non-ammo item is an unloadable gun"
                 % (name, ammo, item_cat.get(ammo)))
         ammoId = item_index[ammo]
 
+        projTok = (r.get("proj_type") or "normal").strip().lower()
+        if projTok not in PROJ_TYPES:
+            die("%r: proj_type %r is not one of %s"
+                % (name, projTok, "/".join(sorted(PROJ_TYPES))))
+        projType = PROJ_TYPES[projTok]
+
+        # Decimetres and deciseconds — the units [ranged_table.h] declares. A cell is
+        # kCellSize = 2 m, so cells -> decimetres is x20.
+        blastDm = fixed(r, "blast_cells", 20, 0, 255)
+        fuseDs = fixed(r, "fuse_s", 10, 0, 255)
+        explosive = projTok == "grenade"
+        if explosive and (blastDm == 0 or fuseDs == 0):
+            die("%r: proj_type=grenade needs BOTH blast_cells and fuse_s "
+                "(got blast=%d dm, fuse=%d ds) — half an explosive is a dud that "
+                "fails silently" % (name, blastDm, fuseDs))
+        if not explosive and (blastDm or fuseDs):
+            die("%r: proj_type=%s carries blast=%d fuse=%d, which nothing reads — "
+                "projectile_step detonates on ProjType::Grenade only"
+                % (name, projTok, blastDm, fuseDs))
+        # 1.0 m is the floor because kProjHitRadius is 0.75: a blast smaller than the
+        # radius at which a bullet already connects is a grenade that is worse than
+        # being shot, which is never what a row means to say.
+        if explosive and blastDm < 10:
+            die("%r: blast_cells %s is under 1.0 m (%d dm) — below kProjHitRadius "
+                "the blast is narrower than a bullet's own hit sphere"
+                % (name, r.get("blast_cells"), blastDm))
+
         pellets = fixed(r, "pellets", 1, 1, 255)
         out.append(
-            "    // [%2d] %-24s %s x%d\n"
-            "    RangedDef{ %d, %d, %d, %d, %d, %d, %d, %d, 0, 0 }," % (
+            "    // [%2d] %-24s %s x%d%s\n"
+            "    RangedDef{ %d, %d, %d, %d, %d, %d, %d, %d, 0, %d, %d, %d }," % (
                 i, name, ammo, pellets,
+                (" blast %.1f m fuse %.1f s" % (blastDm * 0.1, fuseDs * 0.1))
+                if explosive else "",
                 fixed(r, "dmg", 1, 1, 4000),
                 fixed(r, "cooldown_s", 1000, 20, 20000),
                 fixed(r, "proj_speed_cells", 1000, 1000, 65000),
@@ -118,7 +166,10 @@ def main():
                 fixed(r, "reload_s", 1000, 0, 20000),
                 ammoId,
                 pellets,
-                fixed(r, "magazine", 1, 1, 255)))
+                fixed(r, "magazine", 1, 1, 255),
+                projType,
+                blastDm,
+                fuseDs))
 
     mapped = sum(1 for v in by_item if v)
     if mapped != EXPECTED_ROWS:

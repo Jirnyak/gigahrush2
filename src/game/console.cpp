@@ -331,6 +331,7 @@ constexpr RequestRow kRequestRows[] = {
     {"possess", "project into the nearest survivor", ConsoleRequest::Possess},
     {"interact", "take the offered job / use what is in front",
      ConsoleRequest::Interact},
+    {"grenade", "pull the pin on the best grenade carried", ConsoleRequest::Throw},
     {"sell", "sell the haul (on the extraction pad)", ConsoleRequest::Sell},
     {"vendor", "toggle the trader window", ConsoleRequest::Vendor},
     {"elevator", "toggle the elevator menu (stand in a shaft)",

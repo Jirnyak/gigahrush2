@@ -110,7 +110,14 @@ enum class MobBehaviour : std::uint8_t {
 enum class MobPackMode : std::uint8_t { Loner = 0, Crowd, Territorial, Roamer, Count };
 
 // Only WEB is authored in the reference; BULLET is the implicit default.
-enum class ProjType : std::uint8_t { Bullet = 0, Web, Count };
+//
+// GRENADE is the third, and it is the only one no monster row can select: nothing
+// in data/mobs.csv throws. It arrives from the WEAPON side ([ranged_table.h] —
+// `proj_type` column) because a grenade is a thing a body carries and throws, not a
+// thing a species spits. The enum stays shared anyway, because `Projectile::proj`
+// is one field and a shot in flight must be one kind of thing whoever launched it —
+// the day a monster row does author `grenade`, it costs a CSV cell and no code.
+enum class ProjType : std::uint8_t { Bullet = 0, Web, Grenade, Count };
 
 // Room kinds a monster may be placed in. 11 of the reference's RoomTypes are
 // actually referenced by ecology rows.

@@ -822,7 +822,43 @@ if(GIGA_BUILD_TESTS)
     # asks the generated grid whether every cell the menu accepts is standable.
     # Proven to bite by mutation — leaving the generator's local 1 while the shared
     # constant says 2 prints "all air: NO" and fails.
-        PASS_REGULAR_EXPRESSION "game_test: 235893 checks, 0 failures")
+    # 235893 -> 235992 (+99) on 2026-08-13: GRENADES — the thing `Projectile::team`
+    # was deleted for on 2026-08-12. The manifesto's own example ("осколки бьют и
+    # владельца") could not be checked before, because a bullet flies AWAY from the
+    # shooter; the +99 is six blocks of `test_grenade` plus the table row's knock-on
+    # in test_ranged_table and suite_vendorammo. The assertions that earn it:
+    #   [grenade] own blast: thrower took 54 at 2.0 m of 5.0 m
+    #   [grenade] falloff over 5.0 m: 81 45 9 0 at 0.5/2.5/4.5/6.0 m
+    #   [grenade] grazing bounce: v=(10.08, 0.00, -2.24) — the face reflected, not
+    #             the biggest component
+    #   [grenade] blast carve r=1.75 m power=392 removed 1002 sub-voxels across 12 cells
+    # All five guards RUN as mutations, not asserted as intentions, and the counts are
+    # what the mutated binaries actually printed:
+    #   restore `if (c.e == h.source) continue;` in the detonation sweep   -> 4 red
+    #   drop the distance falloff (f = 1.0)                                -> 4 red
+    #   reflect the biggest velocity component instead of the crossed face -> 1 red
+    #   let a grenade end on contact like a bullet                         -> 2 red
+    #   throw with `entt::null` as the source (no attribution, §40)        -> 4 red
+    # The third of those is the one worth reading twice: the first version of the
+    # bounce test survived it GREEN, because all three of its cases threw fast along
+    # the same axis as the wall, so face and axis-letter agree. The grazing case —
+    # fast along +x, a ceiling 0.06 m overhead — is what makes it bite, and it exists
+    # only because the mutation was run before the claim was written.
+    # 235992 -> 236038 (+46) on 2026-08-13: the LAST owner test deleted.
+    # `projectile_step` still read `p.source != victim` — §33 removed `Projectile::team`
+    # and left one exclusion standing, wearing a geometry argument. The argument was
+    # dead code that looked load-bearing, and the run prints how thin it was:
+    #   [selfshot] tallest legal body clears its own muzzle by 0.004 m (radius 0.75);
+    #             at 2.5 m stature it would be inside by 0.125 m
+    #   [selfshot] camera holder hit by his OWN bullet for 40 — the last owner test is gone
+    # 4 mm, across `body_eye_height` (h*0.43), `height_for_age`'s 2200 mm clamp and
+    # kMuzzleForward — three constants in three files that no comment connected.
+    # `muzzle_point` replaces the coincidence with a solved ray/sphere exit, so the
+    # muzzle is outside the shooter's hit sphere at EVERY stature. Both halves mutated
+    # and the counts are what the mutated binaries printed:
+    #   restore `&& p.source != victim`                  -> 1 red (the lock)
+    #   revert `muzzle_point` to `from + dir*kMuzzle`    -> 8 red (statures 2.3..3.0 m)
+        PASS_REGULAR_EXPRESSION "game_test: 236038 checks, 0 failures")
 
 
 

@@ -46,6 +46,177 @@ bool adjacent_wall(const MacroGrid& grid, const vec3& pos) {
            grid.cell(cx, cy - 1, cz) != kCellAir;
 }
 
+// Component `a` of a vec3 by index, 0/1/2.
+//
+// The grenade bounce below is written entirely over this accessor rather than over
+// `.x` / `.y` / `.z`, and that is [problems.md] §34's isotropy law in code form: the
+// three axes are searched by ONE loop, so none of them can quietly acquire a special
+// case the way "reflect whichever component is biggest" would. What reflects a
+// grenade is the cell FACE it crossed; which letter that face belongs to is a
+// result, never an input.
+inline float& axis(vec3& v, int a) { return a == 0 ? v.x : (a == 1 ? v.y : v.z); }
+inline float axis(const vec3& v, int a) { return a == 0 ? v.x : (a == 1 ? v.y : v.z); }
+
+// Is the cell containing `p` solid? Cell level and not sub-voxel, for the reason the
+// bullet path states: a grenade clipping the corner of a wall should bounce, and the
+// sub-voxel mask would let it slip through a half-carved cell that reads as solid.
+//
+// `MacroGrid::cell` wraps all three indices itself, so an unwrapped world position
+// is safe here — which is what lets the sweep below work in unwrapped coordinates
+// and wrap once, at the end. Out-of-stack z is solid: the bottom of the level has no
+// floor below it to fall through, and a grenade that fell out of the world would
+// detonate 200 m away from where the player watched it land.
+bool cell_solid(const MacroGrid& grid, const vec3& p) {
+    const int cz = static_cast<int>(std::floor(p.z / kCellSize));
+    if (cz < 0 || cz >= kMacroDim) return true;
+    return grid.cell(static_cast<int>(std::floor(p.x / kCellSize)),
+                     static_cast<int>(std::floor(p.y / kCellSize)), cz) != kCellAir;
+}
+
+// How far past a face to place the grenade after a reflection, metres. Big enough
+// that the next step's `floor(p / kCellSize)` lands in the new cell despite float
+// error, small enough to be invisible at a 2 m cell.
+inline constexpr float kBounceEpsilon = 1e-3f;
+
+// Advance one grenade by `dt`, reflecting it off every cell face it crosses.
+//
+// A miniature DDA rather than "integrate, then test the destination": the destination
+// test alone is wrong at a corner, where the step crosses an AIR face first and the
+// solid cell second — it would reflect off the wrong face and send the grenade back
+// up the corridor it came from. So the step is walked crossing by crossing, and each
+// crossing asks the cell it is about to ENTER whether it is solid.
+//
+// Bounded at four crossings. One 8 ms step at the 16 m/s throw speed covers 0.13 m
+// against a 2 m cell, so three is already unreachable; the fourth is there so the
+// bound is a bound and not a guess.
+void grenade_advance(const MacroGrid& grid, vec3& pos, vec3& vel, float dt) {
+    vec3 from = pos;
+    float remain = dt;
+    for (int iter = 0; iter < 4 && remain > 1e-6f; ++iter) {
+        const vec3 to = from + vel * remain;
+
+        // The earliest cell-boundary plane this segment crosses, over all three axes
+        // by the same rule.
+        float bestT = 2.0f;
+        int bestA = -1;
+        float bestDelta = 0.0f;
+        for (int a = 0; a < 3; ++a) {
+            const float f = axis(from, a);
+            const float d = axis(to, a) - f;
+            if (d > -1e-9f && d < 1e-9f) continue;
+            const int cf = static_cast<int>(std::floor(f / kCellSize));
+            const int ct = static_cast<int>(std::floor(axis(to, a) / kCellSize));
+            if (cf == ct) continue;
+            const float plane =
+                static_cast<float>(d > 0.0f ? cf + 1 : cf) * kCellSize;
+            const float t = (plane - f) / d;
+            if (t >= 0.0f && t < bestT) {
+                bestT = t;
+                bestA = a;
+                bestDelta = d;
+            }
+        }
+        if (bestA < 0) {
+            // No face in the way. Either the whole step is free, or the grenade is
+            // ALREADY inside solid — thrown point-blank into a wall from a body that
+            // is itself clipped into geometry. There is no face to reflect off in
+            // that case, so it stops dead and the fuse finishes the job; the
+            // alternative is picking an axis to push out along, which is exactly the
+            // guess §34 forbids. Drifting on through the rock is the one answer that
+            // is definitely wrong.
+            if (cell_solid(grid, to)) vel = vec3{0.0f, 0.0f, 0.0f};
+            else from = to;
+            remain = 0.0f;
+            break;
+        }
+
+        // Contact point, nudged just inside the cell being entered so the solidity
+        // question is asked about that cell and not about the boundary itself.
+        vec3 hit = from + (to - from) * bestT;
+        const float nSign = bestDelta > 0.0f ? -1.0f : 1.0f;
+        vec3 probe = hit;
+        axis(probe, bestA) -= nSign * kBounceEpsilon;
+        remain *= (1.0f - bestT);
+
+        if (!cell_solid(grid, probe)) {   // an open face; keep going
+            from = probe;
+            continue;
+        }
+
+        // REFLECT off this face. The normal component flips and keeps
+        // kGrenadeRestitution; the two tangential components — whichever two are not
+        // `bestA` — keep kGrenadeFriction, which is what turns a bounce into a roll
+        // instead of letting a grenade skate down a corridor forever.
+        for (int a = 0; a < 3; ++a) {
+            if (a == bestA) axis(vel, a) = -axis(vel, a) * kGrenadeRestitution;
+            else axis(vel, a) *= kGrenadeFriction;
+        }
+        axis(hit, bestA) += nSign * kBounceEpsilon;   // rest OUTSIDE the face
+        from = hit;
+        if (length(vel) < kGrenadeRestSpeed) {
+            vel = vec3{0.0f, 0.0f, 0.0f};   // settled; see kGrenadeRestSpeed
+            break;
+        }
+    }
+    // x/y wrap, z does not — the same convention the bullet integrator uses, and the
+    // same one the level stack has (W does not wrap either, [AGENTS.md]).
+    pos.x = wrapf(from.x, kWorldExtent);
+    pos.y = wrapf(from.y, kWorldExtent);
+    pos.z = from.z;
+}
+
+// WHERE THE BARREL IS — the one function that decides it, for every spawner.
+//
+// Returns the point along `from + unitDir * t` at which the shot is provably OUTSIDE
+// the sphere the hit test uses, starting from `kMuzzleForward` and pushing further
+// only if it has to. `sourcePos` is the shooter's `Transform::pos`, which is what the
+// hit test measures distances against — not the eye, and that gap is the whole bug
+// this closes.
+//
+// **This reads the shooter and is NOT an exclusion, and the difference is the entire
+// argument.** Placing a barrel is something a BODY does, once, at the moment it
+// fires: the body has a size and the muzzle is outside it. What the manifesto
+// forbids is a projectile IN FLIGHT that remembers whose it was and refuses to touch
+// him. Nothing here is written onto the shot; it comes out at a position, and from
+// that instant it is a physical object with no memory.
+//
+// Until 2026-08-13 this arithmetic was not done at all, and `projectile_step` carried
+// `p.source != victim` instead — the LAST owner test in the tree, and the thing §33
+// was supposed to have finished. It survived because it looked necessary: fire
+// straight down and the muzzle lands `eyeOffset - kMuzzleForward` below the body
+// origin, which for the default 1.75 m stature is 0.92 m — outside the 0.75 m sphere
+// by 0.17 m. The rule was not paying for that case.
+//
+// It was paying for a case nobody had computed. `body_eye_height` is `h * 0.43`
+// ([embody.cpp]) and `height_for_age` clamps stature at 2200 mm
+// ([population.cpp]), so the tallest legal body has an eye at 0.946 m and its own
+// straight-down shot is born 0.754 m away — **4 mm outside a 0.75 m sphere**. That
+// margin is not geometry, it is a coincidence between three constants in three files
+// that no comment connected, and one retune of any of them turns the tallest bodies
+// in the game into suicides. Solving the ray/sphere exit makes it a guarantee at
+// every stature and deletes the rule.
+vec3 muzzle_point(const vec3& from, const vec3& unitDir, const vec3& sourcePos) {
+    // Clearance, not just contact: the hit test is `<=`, and the shot's own first
+    // integration step must not walk it back in.
+    const float r = kProjHitRadius + 0.05f;
+    const vec3 d{wrap_delta_f(sourcePos.x, from.x, kWorldExtent),
+                 wrap_delta_f(sourcePos.y, from.y, kWorldExtent),
+                 from.z - sourcePos.z};
+    const float b = dot(unitDir, d);
+    const float c = dot(d, d) - r * r;
+    // Ray/sphere: with |unitDir| = 1 the exit parameter is -b + sqrt(b^2 - c). A
+    // negative discriminant means the ray misses the sphere entirely, which is the
+    // common case (a level shot from an eye 1.7 m ahead of a 0.8 m body).
+    const float disc = b * b - c;
+    float t = kMuzzleForward;
+    if (disc > 0.0f) {
+        const float exit = -b + std::sqrt(disc);
+        if (exit > t) t = exit;
+    }
+    return vec3{from.x + unitDir.x * t, from.y + unitDir.y * t,
+                from.z + unitDir.z * t};
+}
+
 // Percentage mitigation, clamped. A negative resist is a vulnerability, which is
 // why this does not clamp the low end at zero.
 std::int16_t mitigate(std::int16_t raw, std::int8_t resistPct) {
@@ -895,10 +1066,14 @@ void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
 
     Entity e = reg.create();
     Transform tr;
-    tr.pos = from;
-    tr.pos.z += 0.6f;        // leaves from chest height, not from the feet
-    tr.pos.x += ux * kMuzzleForward;
-    tr.pos.y += uy * kMuzzleForward;
+    // Through `muzzle_point` like every other spawner, and it changes NOTHING here —
+    // this path offsets by the full kMuzzleForward in the FLAT plane whatever the
+    // pitch, so its clearance is sqrt(1.7^2 + 0.6^2) = 1.80 m with no stature term to
+    // go wrong. Routed through anyway so there is exactly one function in the tree
+    // that answers "where is the barrel", instead of one that answers it and one that
+    // happens to agree.
+    tr.pos = muzzle_point(vec3{from.x, from.y, from.z + 0.6f},
+                          vec3{ux, uy, 0.0f}, from);
     tr.layer = layer;
     reg.emplace<Transform>(e, tr);
     reg.emplace<Velocity>(
@@ -932,11 +1107,19 @@ void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
 
     Entity e = reg.create();
     Transform tr;
-    // Born kMuzzleForward metres in front of the eye. Without this the first
-    // integration step lands inside kProjHitRadius of the shooter — see the constant.
-    tr.pos = vec3{from.x + dir.x * inv * kMuzzleForward,
-                  from.y + dir.y * inv * kMuzzleForward,
-                  from.z + dir.z * inv * kMuzzleForward};
+    // Born in front of the EYE, but cleared against the BODY — the two are not the
+    // same point, and the gap between them is what `p.source != victim` used to
+    // paper over. `muzzle_point` pushes past kMuzzleForward only when the ray still
+    // ends inside the shooter's hit sphere, which is the straight-down shot from a
+    // tall body and nothing else. A source with no Transform (a test, a console
+    // shot) has no body to be inside, so the plain offset stands.
+    const vec3 u{dir.x * inv, dir.y * inv, dir.z * inv};
+    const Transform* stf = reg.valid(source) ? reg.try_get<Transform>(source)
+                                             : nullptr;
+    tr.pos = stf ? muzzle_point(from, u, stf->pos)
+                 : vec3{from.x + u.x * kMuzzleForward,
+                        from.y + u.y * kMuzzleForward,
+                        from.z + u.z * kMuzzleForward};
     tr.layer = layer;
     reg.emplace<Transform>(e, tr);
     reg.emplace<Velocity>(e, Velocity{vec3{dir.x * inv * speed,
@@ -953,6 +1136,50 @@ void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
     reg.emplace<Projectile>(
         e, Projectile{source, dmg, kProjTtlMs, gravityPct,
                       static_cast<std::uint8_t>(ProjType::Bullet), channel});
+}
+
+void spawn_grenade(Registry& reg, LayerId layer, const vec3& from,
+                   const vec3& dir, std::int16_t dmg,
+                   std::uint16_t projSpeedMmps, Entity source,
+                   std::uint8_t blastDm, std::uint16_t fuseMs,
+                   std::uint8_t channel) {
+    float speed = static_cast<float>(projSpeedMmps) * 0.001f * kCellSize;
+    if (speed < 1.0f) speed = 12.0f;
+    const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+    if (len < 1e-4f) return;
+    const float inv = 1.0f / len;
+
+    Entity e = reg.create();
+    Transform tr;
+    // The same `muzzle_point` as every other spawner. A grenade could get away with
+    // less — it does no contact damage, so being born inside the thrower costs
+    // nothing — but "where the barrel is" having one answer is worth more than the
+    // two lines saved, and the day a thrown weapon does something on contact this
+    // will already be right.
+    const vec3 u{dir.x * inv, dir.y * inv, dir.z * inv};
+    const Transform* stf = reg.valid(source) ? reg.try_get<Transform>(source)
+                                             : nullptr;
+    tr.pos = stf ? muzzle_point(from, u, stf->pos)
+                 : vec3{from.x + u.x * kMuzzleForward,
+                        from.y + u.y * kMuzzleForward,
+                        from.z + u.z * kMuzzleForward};
+    tr.layer = layer;
+    reg.emplace<Transform>(e, tr);
+    reg.emplace<Velocity>(e, Velocity{vec3{dir.x * inv * speed,
+                                           dir.y * inv * speed,
+                                           dir.z * inv * speed}});
+    reg.emplace<AABB>(e, AABB{vec3{0.10f, 0.10f, 0.10f}});
+    reg.emplace<SelfIntegrating>(e);
+    // Olive-drab, and darker than either tracer: the one projectile you are supposed
+    // to be able to spot lying on the floor and run away from.
+    reg.emplace<Renderable>(e, Renderable{vec3{0.42f, 0.50f, 0.28f}});
+    // gravityPct 100 — a thrown weight obeys gravity in full. The 40% flattening
+    // exists so a camera-aimed BULLET is not handed a lob it did not aim
+    // ([combat.h] Projectile::gravityPct); an arc is the whole point of a throw.
+    reg.emplace<Projectile>(
+        e, Projectile{source, dmg, fuseMs, 100,
+                      static_cast<std::uint8_t>(ProjType::Grenade), channel,
+                      blastDm});
 }
 
 // **Never call this from inside a live view.** The first web in a session runs
@@ -1056,7 +1283,8 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                               Entity playerEntity,
                               CarveProposalQueue* carves,
                               std::vector<std::uint32_t>* stainDirty,
-                              ParticleBurstQueue* particles) {
+                              ParticleBurstQueue* particles,
+                              NoiseField* noise) {
     if (!stack.valid(layer)) return 0;
     const MacroGrid& grid = stack.layer(layer).grid();
 
@@ -1099,6 +1327,13 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         // with onVictim/other — a body hit never also carves the wall behind it.
         bool onWall = false;
         vec3 impactPos{0, 0, 0};
+        // The fuse ran out on a grenade. Mutually exclusive with all three of the
+        // above: a detonation strikes nothing in particular, it strikes a PLACE
+        // (impactPos) and everything standing in it. Blast radius in decimetres,
+        // carried off the Projectile in phase 1 for the same reason projType and
+        // channel are — the entity is destroyed at the end of the resolution loop.
+        bool onDetonate = false;
+        std::uint8_t blastDm = 0;
     };
     std::vector<Hit> resolved;
 
@@ -1130,24 +1365,63 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                 kProjGravity * (static_cast<float>(p.gravityPct) * 0.01f) * dt;
             v.v = v.v + projG * (mag / projGLen);
         }
-        tr.pos.x = wrapf(tr.pos.x + v.v.x * dt, kWorldExtent);
-        tr.pos.y = wrapf(tr.pos.y + v.v.y * dt, kWorldExtent);
-        tr.pos.z += v.v.z * dt;
+        // A GRENADE SKIPS ACROSS THE VOXELS INSTEAD OF ENDING ON THEM. Everything
+        // above this line is shared — one integrator, one gravity vector — and
+        // everything below it differs, because contact means the opposite thing for
+        // the two: a bullet is spent by the first solid it meets, a grenade is
+        // redirected by it. [ARCHITECTURE.md] §Манифест п.5.
+        const bool grenade = static_cast<ProjType>(p.proj) == ProjType::Grenade;
+        if (grenade) {
+            grenade_advance(grid, tr.pos, v.v, dt);
+        } else {
+            tr.pos.x = wrapf(tr.pos.x + v.v.x * dt, kWorldExtent);
+            tr.pos.y = wrapf(tr.pos.y + v.v.y * dt, kWorldExtent);
+            tr.pos.z += v.v.z * dt;
+        }
 
         if (p.ttlMs == 0) {
-            resolved.push_back(Hit{e, 0, p.source, false});
+            // THE SAME ZERO, TWO MEANINGS. For a bullet the TTL is a backstop and
+            // reaching it means the shot is spent — dmg 0, nothing happens, the
+            // entity goes away. For a grenade it is the FUSE, and reaching it is the
+            // entire point of the object.
+            Hit h{e, grenade ? p.dmg : static_cast<std::int16_t>(0), p.source, false};
+            if (grenade) {
+                h.onDetonate = true;
+                h.impactPos = tr.pos;
+                h.projType = p.proj;
+                h.channel = p.channel;
+                h.blastDm = p.blastDm;
+            }
+            resolved.push_back(h);
             continue;
         }
 
-        // The camera holder, but NEVER by his own bullet.
+        // A live grenade touches nothing else. Not the body it flies past — a
+        // shoulder is not a wall and must not stop it — and not the wall it just
+        // bounced off, which the block above already resolved. Its whole interaction
+        // with the world for the next three seconds is geometry, and geometry is
+        // handled. The fuse is the only thing that can end it.
+        if (grenade) continue;
+
+        // The camera holder, tested like anything else — INCLUDING against his own
+        // bullet, since 2026-08-13.
         //
-        // `p.source != victim` is not defensive tidiness — without it the player
-        // shoots himself the instant he fires. `Projectile::source` was carried for
-        // the kill feed and read by nothing until now; the muzzle offset
-        // (kMuzzleForward) and this test are the two halves of the fix and neither is
-        // sufficient alone, because a shot fired straight down still passes through
-        // the shooter on its way to the floor.
-        if (victim != entt::null && p.source != victim) {
+        // This branch used to read `if (victim != entt::null && p.source != victim)`,
+        // and that was the last owner test in the tree: §33 deleted `Projectile::team`
+        // and left one exclusion standing, wearing a geometry argument. The argument
+        // was that a shot fired straight down passes through the shooter on its way to
+        // the floor — and it does not, but only by 4 mm at the tallest legal stature,
+        // and only because of a clamp in population.cpp that nothing here referenced.
+        // `muzzle_point` above turns that coincidence into a solved ray/sphere exit,
+        // so the rule has nothing left to pay for and is gone.
+        //
+        // What that buys is not tidiness. A shot is now hittable by its own shooter
+        // whenever it is genuinely in his space — a ricochet off a wall he is standing
+        // against, a pellet from a barrel pressed into a corner. Under the old test
+        // those cases were silently impossible for the camera holder and possible for
+        // everyone else, which is an asymmetry in the player's favour and exactly what
+        // "the player is not special" ([AGENTS.md]) forbids.
+        if (victim != entt::null) {
             const float hx = wrap_delta_f(tr.pos.x, victimPos.x, kWorldExtent);
             const float hy = wrap_delta_f(tr.pos.y, victimPos.y, kWorldExtent);
             const float hz = wrap_delta_f(tr.pos.z, victimPos.z, kWorldExtent);
@@ -1263,6 +1537,124 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         // armour's resist[5] mean anything on a shot. Both branches take it, because
         // a channel is a property of the SHOT and not of what it happened to strike.
         const DamageChannel ch = static_cast<DamageChannel>(h.channel);
+
+        // DETONATION — the reason `Projectile::team` was deleted, arriving 24 hours
+        // after the deletion.
+        //
+        // ONE sweep over every body and every monster on the layer, and **not one
+        // exclusion in it**. Not by team, not by faction, not by owner — and there is
+        // now none anywhere else either: the contact path above lost the last one,
+        // `p.source != victim`, on 2026-08-13 once `muzzle_point` made the clearance
+        // it was insuring a guarantee instead of a 4 mm coincidence. A blast never had
+        // even that excuse. It goes off in a PLACE, and everyone in that place pays,
+        // starting with whoever was holding it. ARCHITECTURE.md §Манифест п.5:
+        // "осколки бьют и владельца".
+        //
+        // `h.source` is read exactly twice below, both times to CREDIT a kill, never
+        // to skip a target. That is the whole of the attribution/exclusion
+        // distinction the 2026-08-12 ruling turns on.
+        if (h.onDetonate && h.blastDm > 0) {
+            const float R = static_cast<float>(h.blastDm) * 0.1f;
+
+            // Gather first, damage second — the same two-phase discipline as the
+            // enclosing function, one level down and for the same reason:
+            // `apply_damage` emplaces `Dead`, which can reallocate the component pool
+            // that the sweep is walking.
+            struct Caught { Entity e; float d; };
+            std::vector<Caught> caught;
+            auto sweep = [&](Entity cand, const vec3& cp) {
+                const float dx = wrap_delta_f(h.impactPos.x, cp.x, kWorldExtent);
+                const float dy = wrap_delta_f(h.impactPos.y, cp.y, kWorldExtent);
+                const float dz = wrap_delta_f(h.impactPos.z, cp.z, kWorldExtent);
+                const float d2 = dx * dx + dy * dy + dz * dz;
+                if (d2 <= R * R) caught.push_back(Caught{cand, std::sqrt(d2)});
+            };
+            for (auto m : reg.view<const MobRef, const Transform>()) {
+                const Transform& mt = reg.get<const Transform>(m);
+                if (mt.layer != layer) continue;
+                sweep(m, mt.pos);
+            }
+            for (auto b : reg.view<const NpcRef, const Transform>()) {
+                // Anything already swept as a monster is not swept again as a body.
+                // Nothing in the tree carries both today; a blast that charged such an
+                // entity twice would be a silent double-damage and is cheaper to make
+                // impossible than to notice. The camera holder is an ordinary NpcRef
+                // and IS in this loop — that is how the thrower gets hit.
+                if (reg.all_of<MobRef>(b)) continue;
+                const Transform& bt = reg.get<const Transform>(b);
+                if (bt.layer != layer) continue;
+                sweep(b, bt.pos);
+            }
+
+            for (const Caught& c : caught) {
+                if (!reg.valid(c.e)) continue;
+                // LINEAR falloff, full damage at the centre and 1 at the rim. Linear
+                // and not inverse-square because inverse-square is the law for a
+                // point source radiating into free space, and a fragmentation blast
+                // in a 2 m corridor is not that — it is fragments that spread and
+                // slow. Linear is also the one shape a player can read off two
+                // explosions: half as far, twice the damage.
+                //
+                // The floor of 1 keeps the rim honest: inside the radius you were
+                // caught in the blast, and "caught in the blast for zero" would make
+                // the radius a lie at its own edge.
+                const float f = 1.0f - c.d / R;
+                std::int16_t dmgHere =
+                    static_cast<std::int16_t>(static_cast<float>(h.dmg) * f + 0.5f);
+                if (dmgHere < 1) dmgHere = 1;
+                DamageResult r =
+                    apply_damage(reg, pool, c.e, dmgHere, ch, h.source, &grid,
+                                 particles, &stack.layer(layer).gravity());
+                if (!r.hit) continue;
+                landed = true;
+                // Credited exactly as the bullet path credits a shot, so a grenade
+                // kill counts on the same counter the HUD already prints and, through
+                // `Dead::killer` -> the NpcDied event, on the same contract/quest
+                // ledger ([problems.md] §40). A monster's grenade credits a monster
+                // and therefore closes nobody's contract.
+                if (reg.valid(h.source)) {
+                    if (auto* pr = reg.try_get<PlayerRanged>(h.source)) ++pr->hits;
+                    if (r.lethal)
+                        if (auto* pm = reg.try_get<PlayerMelee>(h.source)) ++pm->kills;
+                }
+            }
+
+            // Geometry, through the ONE carve path ([destruct.h]): combat proposes,
+            // the app disposes. A refusal here is COUNTED, never silent —
+            // `droppedFull` is why a grenade that opened no hole can be told from a
+            // grenade whose proposal never got in ([combat.h] CarveProposalQueue).
+            if (carves) {
+                const std::uint32_t seed =
+                    static_cast<std::uint32_t>(tick) * 0x9e3779b9u ^
+                    static_cast<std::uint32_t>(entt::to_integral(h.proj));
+                if (carves->push(h.impactPos.x, h.impactPos.y, h.impactPos.z,
+                                 R * kBlastCarveScale, carve_power_from_dmg(h.dmg),
+                                 seed)) {
+                    landed = true;
+                }
+            }
+            // Heard, at severity 5 — the loudest thing in the game, and published at
+            // the BLAST rather than at whoever threw it, because the place a monster
+            // should walk toward is where the bang was.
+            if (noise)
+                noise_publish(*noise, layer, h.impactPos, blast_noise(R),
+                              static_cast<std::uint32_t>(
+                                  entt::to_integral(h.source)));
+            // Flash and debris, through the unified pool ([particles.h]). Two bursts
+            // and not one: the spark is the detonation, the debris is the wall it
+            // took with it, and they are separate rows of data/particles.csv with
+            // separate lifetimes.
+            if (particles) {
+                const std::uint32_t pseed =
+                    static_cast<std::uint32_t>(tick) ^
+                    static_cast<std::uint32_t>(entt::to_integral(h.proj));
+                particles->push(h.impactPos, vec3{0.0f, 0.0f, 1.0f},
+                                ParticleKind::Spark, 24, 0, pseed);
+                particles->push(h.impactPos, vec3{0.0f, 0.0f, 0.5f},
+                                ParticleKind::Debris, 18, 0, pseed ^ 0x5bf03635u);
+            }
+        }
+
         if (h.onVictim && victim != entt::null) {
             DamageResult r = apply_damage(reg, pool, victim, h.dmg, ch, h.source,
                                           &grid, particles,
@@ -1482,6 +1874,73 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
         rcd = static_cast<std::uint16_t>(cd > 65535u ? 65535u : (cd < 1u ? 1u : cd));
     }
     pr.cooldownMs = rcd;
+    ++pr.shots;
+    return 1;
+}
+
+std::uint32_t player_throw_step(Registry& reg, NpcPool& pool, LayerId layer,
+                                bool wantThrow) {
+    Entity thrower = entt::null;
+    for (auto e : reg.view<const CameraTag, const Transform>()) {
+        if (reg.get<const Transform>(e).layer != layer) continue;
+        thrower = e;
+        break;
+    }
+    if (thrower == entt::null) return 0;
+
+    // NO DECREMENT HERE. The cooldown is `player_ranged_step`'s and it is aged there,
+    // exactly once per tick, before any early-out — defect 3 in this file's header,
+    // the one the reference committed at ~60 sites. This function READS the timer it
+    // shares and never advances it; see [combat.h] for the ordering requirement that
+    // makes that safe.
+    PlayerRanged& pr = reg.get_or_emplace<PlayerRanged>(thrower);
+    if (!wantThrow || pr.cooldownMs > 0) return 0;
+
+    const NpcRef* nr = reg.try_get<NpcRef>(thrower);
+    if (!nr || !pool.valid(nr->id)) return 0;
+    Inventory& inv = pool.inventory(nr->id);
+
+    const ItemId item = equipped_throwable(inv);
+    const RangedDef* def = ranged_for_item(item);
+    if (!def || !ranged_is_explosive(*def)) return 0;
+
+    // SPEND THE WEAPON, and spend it BEFORE the throw. There is no magazine here and
+    // no reload: the thing in your hand is the round, so one throw is one item out of
+    // the bag. Taken first so a spawn that refuses (a degenerate aim vector) cannot
+    // leave the player holding a grenade he has already thrown.
+    bool paid = false;
+    for (ItemSlot& sl : inv.slots) {
+        if (sl.item != item || sl.count == 0) continue;
+        --sl.count;
+        if (sl.count == 0) sl.item = kInvalidItem;
+        paid = true;
+        break;
+    }
+    if (!paid) return 0;
+
+    const CameraTag& cam = reg.get<const CameraTag>(thrower);
+    const Transform& tr = reg.get<const Transform>(thrower);
+    const vec3 eye{tr.pos.x + cam.eyeOffset.x, tr.pos.y + cam.eyeOffset.y,
+                   tr.pos.z + cam.eyeOffset.z};
+    // Straight down the look ray, and DELIBERATELY not lofted. An automatic upward
+    // arc would be the aimbot `Projectile::gravityPct` exists to refuse, one axis
+    // over: the player would be handed a throw he did not aim. Look up to throw far,
+    // look at your feet to throw short — the arc is gravity's, and the aim is yours.
+    const vec3 dir = camera_forward(cam.yaw, cam.pitch);
+
+    spawn_grenade(reg, layer, eye, dir, static_cast<std::int16_t>(def->dmg),
+                  def->projSpeedMmps, thrower, def->blastDm,
+                  static_cast<std::uint16_t>(def->fuseDs) * 100u, def->channel);
+
+    // NO NoiseField AND NO TICK PARAMETER, which is why this signature is shorter
+    // than its two siblings rather than symmetrical with them. A throw is nearly
+    // silent — what a floor hears is the detonation, three seconds later and
+    // somewhere else, and `projectile_step` publishes exactly that ([noise.h]
+    // blast_noise). A tick would be the seed for a spread cone, and there is no cone:
+    // a thrown weight goes where you are looking. Carrying either as an unread
+    // parameter is how a field becomes write-only, which is the defect
+    // `Projectile::proj` and `RangedDef::channel` were both dug out of.
+    pr.cooldownMs = def->cooldownMs;
     ++pr.shots;
     return 1;
 }

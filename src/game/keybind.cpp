@@ -120,6 +120,10 @@ bool keybind_register_defaults(KeybindTable& t) {
     ok &= t.add({"door", "door", scan::kQ, 0});
     ok &= t.add({"possess", "possess", scan::kP, 0});
     ok &= t.add({"interact", "interact", scan::kE, 0});
+    // Z and not the genre's G, because G is `eat` and has been since before there
+    // was anything to throw. Rebinding a shipped key to make room for a new one is
+    // churn the table exists to avoid — that is what the rebind menu is for.
+    ok &= t.add({"grenade", "grenade", scan::kZ, 0});
     // Economy + crafting.
     ok &= t.add({"sell", "sell", scan::kB, 0});
     ok &= t.add({"vendor", "vendor", scan::kV, 0});
