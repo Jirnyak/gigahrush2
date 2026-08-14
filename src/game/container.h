@@ -108,6 +108,9 @@ std::uint32_t spawn_floor_containers(Registry& reg, const World& world,
                                      int floorNumber, FloorKind kind, LayerId layer,
                                      std::uint32_t seed, std::uint32_t cap);
 
+// Remove every Container entity on `layer`.
+void clear_layer_containers(Registry& reg, LayerId layer);
+
 // Empty every container within reach of the camera holder into its pool-row inventory.
 // Returns the total rouble value taken, which is what the HUD counts and what
 // `extraction.h` will later let you bank.

@@ -1086,11 +1086,7 @@ bool read_run(game::SaveState& st, const char* path, game::SaveError& err) {
 // state a save must eventually keep, while a monster is not ([container.h]).
 std::uint32_t refresh_floor_containers(Registry& reg, const World& world,
                                       int floorNumber, LayerId layer) {
-    // Clear whatever the previous occupant of this layer slot left behind.
-    std::vector<Entity> old_;
-    for (auto e : reg.view<const game::Container, const Transform>())
-        if (reg.get<const Transform>(e).layer == layer) old_.push_back(e);
-    for (Entity e : old_) reg.destroy(e);
+    game::clear_layer_containers(reg, layer);
 
     return game::spawn_floor_containers(
         reg, world, floorNumber, kind_for_floor(floorNumber), layer,

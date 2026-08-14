@@ -394,4 +394,11 @@ std::int32_t loot_containers_step(Registry& reg, NpcPool& pool, LayerId layer,
     return took;
 }
 
+void clear_layer_containers(Registry& reg, LayerId layer) {
+    std::vector<Entity> old_;
+    for (auto e : reg.view<const Container, const Transform>())
+        if (reg.get<const Transform>(e).layer == layer) old_.push_back(e);
+    for (Entity e : old_) reg.destroy(e);
+}
+
 } // namespace giga::game
