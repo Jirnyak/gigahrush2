@@ -326,6 +326,7 @@ struct ConsumeResult {
     float sleep = 0.0f;
     float peeQueued = 0.0f;    // added to pendingPee, not to pee
     float pooQueued = 0.0f;
+    std::uint16_t psi = 0;     // restored PSI points
     std::int16_t hpCost = 0;   // risky food / pills; clamped so it can never kill
     bool used = false;
 };
@@ -338,7 +339,8 @@ struct ConsumeResult {
 // Faithfully ported oddity: queued pressure is computed from the item's LABEL, not
 // from what landed. Eating a 40-point ration at 99 food wastes the food and still
 // bills the full 40 points of digestion — it went through you either way.
-ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp);
+ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp,
+                              RpgStats* rpg = nullptr);
 
 // The HP `apply_consumable` will charge for `id`, BEFORE the hp-1 survivability floor
 // is applied. 0 for all 17 clean Feed/FeedPsi rows and all 8 Drink/DrinkStim rows;
@@ -346,6 +348,8 @@ ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp);
 // pill. Public because it is the PRIMARY key of the selection rule below, so a test
 // can assert that rule directly instead of inferring it from an outcome.
 std::int16_t consumable_hp_cost(ItemId id);
+
+bool item_restores_psi(ItemId id);
 
 // SELECTION IS TWO-KEY: HP COST FIRST, FIT SECOND.
 //
@@ -396,6 +400,8 @@ ConsumeResult use_best_food(Registry& reg, NpcPool& pool, EventBus& bus,
                            LayerId layer, std::uint64_t tick);
 ConsumeResult use_best_drink(Registry& reg, NpcPool& pool, EventBus& bus,
                             LayerId layer, std::uint64_t tick);
+ConsumeResult use_best_psi(Registry& reg, NpcPool& pool, EventBus& bus,
+                          LayerId layer, std::uint64_t tick);
 
 // Returns what actually came off, so "you did not need to" is distinguishable from
 // "that helped". The hook a toilet object calls once one exists.

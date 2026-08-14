@@ -7,6 +7,7 @@
 #include "game/embody.h"     // NpcRef
 #include "game/inventory.h"
 #include "game/room_zone.h"  // room_bit_at / room_restores / room_recover
+#include "game/rpg.h"        // RpgStats, max_psi
 #include "world/types.h"     // kCellSize — pos -> macro cell, the one conversion
 
 namespace giga::game {
@@ -133,7 +134,7 @@ ConsumeResult use_best_for(Registry& reg, NpcPool& pool, EventBus& bus,
     if (best < 0) return out;
 
     const ItemId used = inv.slots[best].item;
-    out = apply_consumable(n, used, pool.hp(me.id));
+    out = apply_consumable(n, used, pool.hp(me.id), reg.try_get<RpgStats>(me.entity));
     if (!out.used) return out;
 
     if (--inv.slots[best].count == 0) inv.slots[best] = ItemSlot{};
@@ -389,6 +390,17 @@ bool item_hydrates(ItemId id) {
     }
 }
 
+bool item_restores_psi(ItemId id) {
+    if (!item_valid(id)) return false;
+    switch (static_cast<UseEffect>(item_def(id).useEffect)) {
+        case UseEffect::HealPsi:
+        case UseEffect::FeedPsi:
+            return true;
+        default:
+            return false;
+    }
+}
+
 std::int16_t consumable_hp_cost(ItemId id) {
     if (!item_valid(id)) return 0;
     switch (static_cast<UseEffect>(item_def(id).useEffect)) {
@@ -398,7 +410,8 @@ std::int16_t consumable_hp_cost(ItemId id) {
     }
 }
 
-ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp) {
+ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp,
+                              RpgStats* rpg) {
     ConsumeResult out;
     if (!item_valid(item)) return out;
 
@@ -421,13 +434,26 @@ ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp) {
             break;
 
         case UseEffect::FeedPsi:
-            // Psi is not modelled in gigahrush2, so the psi half of `kulich` is
-            // dropped and only its food half lands. The generic 0.7 share gives it
-            // 24.5 points of bowel pressure against the reference's authored 25 —
-            // within 2 %, so it does not earn a special case.
             out.food = top_up(n.food, a);
             pooShare = kFeedPooShare;
             peeShare = kFeedPeeShare;
+            if (rpg) {
+                const std::uint16_t mx = max_psi(*rpg);
+                const std::uint16_t cur = rpg->psi;
+                const std::uint16_t gain = static_cast<std::uint16_t>(a * 0.5f);
+                rpg->psi = static_cast<std::uint16_t>(std::min<std::uint32_t>(mx, cur + gain));
+                out.psi = static_cast<std::uint16_t>(rpg->psi - cur);
+            }
+            break;
+
+        case UseEffect::HealPsi:
+            if (rpg) {
+                const std::uint16_t mx = max_psi(*rpg);
+                const std::uint16_t cur = rpg->psi;
+                const std::uint16_t gain = static_cast<std::uint16_t>(a);
+                rpg->psi = static_cast<std::uint16_t>(std::min<std::uint32_t>(mx, cur + gain));
+                out.psi = static_cast<std::uint16_t>(rpg->psi - cur);
+            }
             break;
 
         case UseEffect::FeedRisky:
@@ -486,6 +512,47 @@ ConsumeResult use_best_food(Registry& reg, NpcPool& pool, EventBus& bus,
 ConsumeResult use_best_drink(Registry& reg, NpcPool& pool, EventBus& bus,
                             LayerId layer, std::uint64_t tick) {
     return use_best_for(reg, pool, bus, layer, Appetite::Water, tick);
+}
+
+ConsumeResult use_best_psi(Registry& reg, NpcPool& pool, EventBus& bus,
+                          LayerId layer, std::uint64_t tick) {
+    ConsumeResult out;
+    const PlayerRef me = find_player(reg, pool, layer);
+    if (me.entity == entt::null) return out;
+
+    RpgStats* rpg = reg.try_get<RpgStats>(me.entity);
+    if (!rpg) return out;
+
+    const std::uint16_t mx = max_psi(*rpg);
+    if (rpg->psi >= mx) return out;
+    const float missing = static_cast<float>(mx - rpg->psi);
+
+    Inventory& inv = pool.inventory(me.id);
+    int best = -1;
+    float bestAmt = 0.0f;
+    for (int i = 0; i < kInvSlots; ++i) {
+        const ItemId id = inv.slots[i].item;
+        if (!item_restores_psi(id) || inv.slots[i].count == 0) continue;
+        const float amt = static_cast<float>(item_def(id).useA);
+        const bool bestCovers = bestAmt >= missing;
+        const bool thisCovers = amt >= missing;
+        if (thisCovers && (!bestCovers || amt < bestAmt)) { best = i; bestAmt = amt; }
+        else if (!thisCovers && !bestCovers && amt > bestAmt) { best = i; bestAmt = amt; }
+    }
+    if (best < 0) return out;
+
+    Needs& n = pool.needs(me.id);
+    const ItemId used = inv.slots[best].item;
+    out = apply_consumable(n, used, pool.hp(me.id), rpg);
+    if (!out.used) return out;
+
+    if (--inv.slots[best].count == 0) inv.slots[best] = ItemSlot{};
+
+    if (out.hpCost > 0)
+        apply_damage(reg, pool, me.entity, out.hpCost, kAttritionChannel, entt::null);
+
+    bus.publish(EventType::ItemTransferred, me.id, kInvalidNpc, used, tick);
+    return out;
 }
 
 ReliefResult relieve_needs(Needs& n, float peeAmount, float pooAmount) {
