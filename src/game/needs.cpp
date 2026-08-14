@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include "core/rng.h"
 #include "core/wrap.h"       // wrap_macro — the body's cell is a toroidal lookup
 #include "ecs/components.h"
 #include "game/embody.h"     // NpcRef
@@ -16,8 +17,6 @@
 namespace giga::game {
 
 namespace {
-
-#include "core/rng.h"
 
 // Uniform [0, 1) from a hash, using the top 24 bits — exactly a float's mantissa,
 // so every representable step is reachable and none is reachable twice.

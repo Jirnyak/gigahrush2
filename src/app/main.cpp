@@ -3711,8 +3711,16 @@ int main(int argc, char** argv) {
                     const float moveMult = game::trait_move_mult(mr.kind, wet);
                     if (moveMult != 1.0f) {
                         Velocity& vel = reg.get<Velocity>(me_);
-                        vel.v.x *= moveMult;
-                        vel.v.y *= moveMult;
+                        const vec3 mg = stack.layer(activeLayer).gravity().at(tr.pos);
+                        const float mgLen = length(mg);
+                        if (mgLen > 1e-6f) {
+                            const vec3 up = mg * (-1.0f / mgLen);
+                            const vec3 vert = up * dot(vel.v, up);
+                            const vec3 lat = vel.v - vert;
+                            vel.v = vert + lat * moveMult;
+                        } else {
+                            vel.v = vel.v * moveMult;
+                        }
                     }
 
                     // 1. Wet Regeneration (Lotochnik, etc.)
@@ -3732,7 +3740,7 @@ int main(int argc, char** argv) {
                             if (reg.valid(player)) {
                                 const vec3& ppos = reg.get<Transform>(player).pos;
                                 float dx = wrap_delta_f(tr.pos.x, ppos.x, kWorldExtent);
-                                float dy = tr.pos.y - ppos.y;
+                                float dy = wrap_delta_f(tr.pos.y, ppos.y, kWorldExtent);
                                 float dz = wrap_delta_f(tr.pos.z, ppos.z, kWorldExtent);
                                 if (dx*dx + dy*dy + dz*dz < 14.0f * 14.0f) {
                                     game::apply_slow(reg, player, 0.40f, 1200);
@@ -3748,7 +3756,7 @@ int main(int argc, char** argv) {
                             if (reg.valid(player)) {
                                 const vec3& ppos = reg.get<Transform>(player).pos;
                                 float dx = wrap_delta_f(tr.pos.x, ppos.x, kWorldExtent);
-                                float dy = tr.pos.y - ppos.y;
+                                float dy = wrap_delta_f(tr.pos.y, ppos.y, kWorldExtent);
                                 float dz = wrap_delta_f(tr.pos.z, ppos.z, kWorldExtent);
                                 if (dx*dx + dy*dy + dz*dz < 2.15f * 2.15f) {
                                     game::apply_damage(reg, pool, player, 4, game::DamageChannel::Fire, me_, &activeGrid);
@@ -3850,12 +3858,14 @@ int main(int argc, char** argv) {
                                            game::NoiseSource::Door};
                     game::noise_publish(noiseField, activeLayer,
                                         doorTick.lastBreakPos, np, 0);
+                    diffusion_mark_geometry_dirty(diffusionDriver.scratch);
                 }
                 if (doorTick.opened > 0) {
                     game::NoiseProfile np{8.0f, 800, 2,
                                            game::NoiseSource::Door};
                     game::noise_publish(noiseField, activeLayer,
                                         doorTick.lastOpenPos, np, 0);
+                    diffusion_mark_geometry_dirty(diffusionDriver.scratch);
                 }
                 // Q, consumed once. The player works a door with a keypress; leaning
                 // on one is how MONSTERS open it, and door_step skips the camera
@@ -3885,6 +3895,7 @@ int main(int argc, char** argv) {
                                                    game::NoiseSource::Door};
                             game::noise_publish(noiseField, activeLayer,
                                                 doorPos, np, 0);
+                            diffusion_mark_geometry_dirty(diffusionDriver.scratch);
                         }
                     }
                 }
@@ -3935,6 +3946,7 @@ int main(int argc, char** argv) {
                                               game::NoiseSource::WeaponFire};
                         game::noise_publish(noiseField, activeLayer,
                                             vec3{op.x, op.y, op.z}, np, 0);
+                        diffusion_mark_geometry_dirty(diffusionDriver.scratch);
                         // Props anchored to carved cells fall / ragdoll
                         // ([jirnyak.md] §18). dirtyCells = flat macro_index.
                         // Rebuild PropPass static skin when any prop detached —
@@ -4279,6 +4291,7 @@ int main(int argc, char** argv) {
                             if (antourage_carve_step_here(carveResult.dirtyCells,
                                                           pr.seed))
                                 propPassNeedsRebuild = true;
+                            diffusion_mark_geometry_dirty(diffusionDriver.scratch);
                         }
                     }
                     combatCarves.clear();
