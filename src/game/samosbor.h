@@ -85,6 +85,10 @@ class MacroGrid;
 
 namespace giga::game {
 
+// Forward declarations — full types needed only in samosbor.cpp.
+struct DoorSet;
+class NpcPool;
+
 // ---------------------------------------------------------------------------
 // The depth curve — the four numbers everything else follows from
 // ---------------------------------------------------------------------------
@@ -770,6 +774,32 @@ struct SamosborPressure {
 //     2, 7)` and strength `clamp(round(200*fogSeedMult), 90, 230)` per variant
 //     (`src/systems/samosbor.ts:4718,4721`). 4/155 is prose only.
 SamosborPressure samosbor_unsheltered_pressure(SamosborVariant variant);
+
+// Continuous Active-phase environmental pressure applied every sim tick.
+//
+// Called ONCE PER TICK while samosbor is active, immediately after
+// `samosbor_fog_tick` in `src/app/main.cpp`.
+//
+// CONTRACT: one-shot seal damage (`tr_.sealed`) is handled separately at the
+// call site and must NOT be moved here. This function is the CONTINUOUS drain
+// — the environmental cost of standing in fog — not the seal moment.
+//
+// SHELTER CHECK matches the call site in main.cpp §sealed: toroidal cell
+// distance to the nearest hermetic door (Shut or Locked, hp > 0) ≤ 4 cells
+// (i.e., dx²+dy²+dz² ≤ 16). Sheltered entities pay no cost.
+//
+// UNSHELTERED ENTITIES:
+//   * 0.5 HP/s drain accumulated into Needs::hpDebt, spilled whole via
+//     apply_damage(kAttritionChannel) — unmitigated by armour.
+//   * Variant-specific need drain:
+//       Meat     → water  -= 0.1 / s   (dehydration acceleration)
+//       Electric → sleep  -= 0.1 / s   (fatigue from ionised air)
+//       Veretar  → hpDebt += 0.3 / s   (direct corrosive dissolution)
+//
+// No allocation, no exceptions, O(embodied bodies on layer).
+void samosbor_environmental_step(Registry& reg, NpcPool& pool,
+                                  const DoorSet& doors, LayerId layer,
+                                  const SamosborState& sam, float dt);
 
 // The seal moment as an offset before the end of the Active phase, including the
 // variant's shift. Clamped so a negative-delta variant cannot seal after the

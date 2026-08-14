@@ -3146,6 +3146,14 @@ int main(int argc, char** argv) {
                             }
                         }
                     }
+                    // Continuous Active-phase fog pressure on ALL embodied NPC
+                    // bodies — not just the player. Each unsheltered body
+                    // accumulates 0.5 HP/s (+ variant drain) via Needs::hpDebt,
+                    // spilled unmitigated through kAttritionChannel. The one-shot
+                    // seal cost above stays exactly as authored (4 HP, player
+                    // only). [samosbor.h samosbor_environmental_step]
+                    game::samosbor_environmental_step(
+                        reg, pool, doors, activeLayer, samosbor, kSimDt);
                 }
                 // Exhaustion costs movement speed, not HP — three stacking HP
                 // drains is a death spiral with no decision in it. Applied to the
