@@ -997,6 +997,13 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                     // zero is the point, not an oversight: handing it back to
                     // wander here would walk it out of the kitchen mid-meal, which
                     // is the one failure mode this whole leg exists to prevent.
+                    if (brain.currentIntent == IntentWork && rooms != nullptr) {
+                        const int prevSec = static_cast<int>((brain.stateTimer - dt) / 10.0f);
+                        const int curSec = static_cast<int>(brain.stateTimer / 10.0f);
+                        if (curSec > prevSec && curSec > 0) {
+                            room_stock_produce(const_cast<RoomZones*>(rooms)->stock, rx, ry, roomStride, 1, 200);
+                        }
+                    }
                 }
                 if (owned) ++out.settled;
             } else if (want != 0) {
