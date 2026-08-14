@@ -71,9 +71,10 @@ struct VulkanDevice;
 // grows automatically; nothing else needs touching.
 enum class GpuPass : std::uint32_t {
     LightGrid = 0,
-    VoxelFlush,
     Cull,
     SimPhysics, // wire/cloth/particle sim
+    GasSim,     // GPU cellular gas simulation pass
+    VoxelFlush,
     World,      // Raymarch
     Bodies,     // body_pass
     Props,      // prop_pass

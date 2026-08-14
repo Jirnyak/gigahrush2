@@ -4915,11 +4915,6 @@ int main(int argc, char** argv) {
                 // container.cpp) — they just read a field that never evolves.
                 // Water is painted and frozen.
                 //
-                // The precondition is met; what is missing is the decision on
-                // WHERE the step belongs. [master_prompt.md] and
-                // [performance.md] both put every cellular field (fluid/gas/heat/
-                // pressure/light) on the GPU as async compute, so wiring the CPU
-                // `fluid_step` into this tick would install the very thing the
                 // performance mandate forbids. Owner call, not a TODO to grab.
                 simNow += kSimDt;
                 simAccum -= kSimDt;
@@ -4960,22 +4955,15 @@ int main(int argc, char** argv) {
                         voxelMirror.pages_in_pool(),
                         voxelMirror.page_overflowed() ? " OVERFLOW" : "");
             // Real GPU time, per pass, from timestamp queries — NOT the frame
-            // time above. The frame time is wall-clock around sim + crowd + HUD
-            // + the FIFO present wait, so it sits pinned at the vsync period
-            // whenever the machine keeps up and cannot see a change below the
-            // cap. This line can: it is the GPU's own clock across each pass's
-            // draws. Median of 31 frames, and two frames stale by construction
-            // (gpu_timer.h). Read it before claiming a shader change is free.
-            // Three decimals, not two: the body and HUD passes land in the single
-            // microseconds, and printing those as "0.00" reads as "not measured"
-            // — the exact false-confidence this whole module exists to remove.
+            // time above.
             if (renderer.timer.supported()) {
-                ImGui::Text("gpu: lgrid %.3f | cull %.3f | flush %.3f | sim %.3f | world %.3f | "
+                ImGui::Text("gpu: lgrid %.3f | cull %.3f | flush %.3f | sim %.3f | gas %.3f | world %.3f | "
                             "bodies %.3f | props %.3f | drw-phys %.3f | hud %.3f | frame %.3f ms",
                             renderer.timer.pass_ms(gpu::GpuPass::LightGrid),
                             renderer.timer.pass_ms(gpu::GpuPass::Cull),
                             renderer.timer.pass_ms(gpu::GpuPass::VoxelFlush),
                             renderer.timer.pass_ms(gpu::GpuPass::SimPhysics),
+                            renderer.timer.pass_ms(gpu::GpuPass::GasSim),
                             renderer.timer.pass_ms(gpu::GpuPass::World),
                             renderer.timer.pass_ms(gpu::GpuPass::Bodies),
                             renderer.timer.pass_ms(gpu::GpuPass::Props),
@@ -4988,12 +4976,13 @@ int main(int argc, char** argv) {
                 // a stutter; both moving together is a real cost change. `drop` must stay
                 // at 0: a growing value means every figure above is computed over a stale
                 // window and none of them mean anything. [gpu_timer.h]
-                ImGui::Text("gpu peak: lgrid %.3f | cull %.3f | flush %.3f | sim %.3f | world %.3f | "
+                ImGui::Text("gpu peak: lgrid %.3f | cull %.3f | flush %.3f | sim %.3f | gas %.3f | world %.3f | "
                             "bodies %.3f | props %.3f | drw-phys %.3f | hud %.3f | frame %.3f ms | drop %u",
                             renderer.timer.pass_ms_max(gpu::GpuPass::LightGrid),
                             renderer.timer.pass_ms_max(gpu::GpuPass::Cull),
                             renderer.timer.pass_ms_max(gpu::GpuPass::VoxelFlush),
                             renderer.timer.pass_ms_max(gpu::GpuPass::SimPhysics),
+                            renderer.timer.pass_ms_max(gpu::GpuPass::GasSim),
                             renderer.timer.pass_ms_max(gpu::GpuPass::World),
                             renderer.timer.pass_ms_max(gpu::GpuPass::Bodies),
                             renderer.timer.pass_ms_max(gpu::GpuPass::Props),
@@ -6189,11 +6178,13 @@ int main(int argc, char** argv) {
                 particlePass.record_sim(
                     cmd, 1.0f / 60.0f,
                     stack.layer(activeLayer).gravity().global);
+            renderer.timer.pass_end(cmd, gpu::GpuPass::SimPhysics);
+            renderer.timer.pass_begin(cmd, gpu::GpuPass::GasSim);
             if (gasPass.ready() && activeLayer != kInvalidLayer) {
                 const CellStep downStep = regime_down(stack.layer(activeLayer).gravity().regime);
                 gasPass.record_sim(cmd, downStep, 1.0f / 60.0f, 0.15f, 0.40f);
             }
-            renderer.timer.pass_end(cmd, gpu::GpuPass::SimPhysics);
+            renderer.timer.pass_end(cmd, gpu::GpuPass::GasSim);
 
             renderer.begin_pass(0.0f, 0.0f, 0.0f);
 
@@ -6413,12 +6404,13 @@ int main(int argc, char** argv) {
                     }
                     if (renderer.timer.supported())
                         std::fprintf(stderr,
-                                     "gpu-ms: lgrid %.3f cull %.3f flush %.3f sim %.3f world %.3f "
+                                     "gpu-ms: lgrid %.3f cull %.3f flush %.3f sim %.3f gas %.3f world %.3f "
                                      "bodies %.3f props %.3f drw-phys %.3f hud %.3f frame %.3f (bodies %u)\n",
                                      renderer.timer.pass_ms(gpu::GpuPass::LightGrid),
                                      renderer.timer.pass_ms(gpu::GpuPass::Cull),
                                      renderer.timer.pass_ms(gpu::GpuPass::VoxelFlush),
                                      renderer.timer.pass_ms(gpu::GpuPass::SimPhysics),
+                                     renderer.timer.pass_ms(gpu::GpuPass::GasSim),
                                      renderer.timer.pass_ms(gpu::GpuPass::World),
                                      renderer.timer.pass_ms(gpu::GpuPass::Bodies),
                                      renderer.timer.pass_ms(gpu::GpuPass::Props),
@@ -6432,12 +6424,13 @@ int main(int argc, char** argv) {
                     // non-zero drop count invalidates every median in the line above.
                     if (renderer.timer.supported())
                         std::fprintf(stderr,
-                                     "gpu-ms-peak: lgrid %.3f cull %.3f flush %.3f sim %.3f world %.3f "
+                                     "gpu-ms-peak: lgrid %.3f cull %.3f flush %.3f sim %.3f gas %.3f world %.3f "
                                      "bodies %.3f props %.3f drw-phys %.3f hud %.3f frame %.3f (dropped %u)\n",
                                      renderer.timer.pass_ms_max(gpu::GpuPass::LightGrid),
                                      renderer.timer.pass_ms_max(gpu::GpuPass::Cull),
                                      renderer.timer.pass_ms_max(gpu::GpuPass::VoxelFlush),
                                      renderer.timer.pass_ms_max(gpu::GpuPass::SimPhysics),
+                                     renderer.timer.pass_ms_max(gpu::GpuPass::GasSim),
                                      renderer.timer.pass_ms_max(gpu::GpuPass::World),
                                      renderer.timer.pass_ms_max(gpu::GpuPass::Bodies),
                                      renderer.timer.pass_ms_max(gpu::GpuPass::Props),
