@@ -458,7 +458,7 @@ if(GIGA_BUILD_TESTS)
     # may measure: |cross(f, up)|, never dot(f, up), because `up` is a public
     # parameter under no obligation to be unit-length.
     set_tests_properties(world_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "23385/23385 checks passed"
+        PASS_REGULAR_EXPRESSION "23396/23396 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically
@@ -921,7 +921,7 @@ if(GIGA_BUILD_TESTS)
     # claims the body / steers along the flow in the walking plane only, the
     # PosX gravity-axis sentinel survives (mutation: unconditional axis writes
     # -> 2 red), and an Ai-owned body is never re-steered (suite_utilai).
-        PASS_REGULAR_EXPRESSION "game_test: 243673 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "game_test: 243674 checks, 0 failures")
 
     # Comprehensive Opaque-Box E2E Test Suite for GigaHrush 2 (Milestone M3)
     add_executable(e2e_test tests/e2e_test.cpp)

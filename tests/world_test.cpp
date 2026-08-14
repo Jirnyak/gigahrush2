@@ -56,6 +56,21 @@ static void test_wrap() {
     CHECK(wrap_delta(0, 127, 128) == -1); // shortest path wraps backward
     CHECK(wrap_delta(127, 0, 128) == 1);
     CHECK(wrap_delta(0, 10, 128) == 10);
+
+    // Float wrapping (wrapf)
+    CHECK_NEAR(wrapf(0.0f, 256.0f), 0.0f, 1e-5f);
+    CHECK_NEAR(wrapf(256.0f, 256.0f), 0.0f, 1e-5f);
+    CHECK_NEAR(wrapf(-0.5f, 256.0f), 255.5f, 1e-5f);
+    CHECK_NEAR(wrapf(256.5f, 256.0f), 0.5f, 1e-5f);
+    CHECK_NEAR(wrapf(-256.0f, 256.0f), 0.0f, 1e-5f);
+    CHECK_NEAR(wrapf(512.0f, 256.0f), 0.0f, 1e-5f);
+    CHECK_NEAR(wrapf(-513.0f, 256.0f), 255.0f, 1e-5f);
+
+    // Continuous shortest delta (wrap_delta_f)
+    CHECK_NEAR(wrap_delta_f(0.0f, 255.0f, 256.0f), -1.0f, 1e-5f);
+    CHECK_NEAR(wrap_delta_f(255.0f, 0.0f, 256.0f), 1.0f, 1e-5f);
+    CHECK_NEAR(wrap_delta_f(0.0f, 10.5f, 256.0f), 10.5f, 1e-5f);
+    CHECK_NEAR(wrap_delta_f(0.0f, 513.0f, 256.0f), 1.0f, 1e-5f);
 }
 
 // The minimal-image rule the renderer draws by. This is a *contract test*: the

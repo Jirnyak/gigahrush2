@@ -37,6 +37,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <thread>
 #include <vector>
 
@@ -295,14 +296,26 @@ int main() {
 
     std::printf("\n--- Movement cost, %d wandering agents, Residential floor ---\n",
                 kAgents);
+    std::uint64_t posChecksum = 14695981039346656037ull;
+    for (int i = 0; i < kAgents; ++i) {
+        std::uint32_t px = 0, py = 0, pz = 0;
+        std::memcpy(&px, &c.pos[i].x, sizeof(float));
+        std::memcpy(&py, &c.pos[i].y, sizeof(float));
+        std::memcpy(&pz, &c.pos[i].z, sizeof(float));
+        posChecksum ^= px; posChecksum *= 1099511628211ull;
+        posChecksum ^= py; posChecksum *= 1099511628211ull;
+        posChecksum ^= pz; posChecksum *= 1099511628211ull;
+    }
+
     std::printf("1) REAL physics_step (single-thread):  %7.3f ms/tick  "
                 "(%5.1f ns/agent,  %5.1f%% of budget)\n",
                 refMs, refMs * 1e6 / kAgents, 100.0 * refMs / budget);
     std::printf("2) SoA mirror       (single-thread):  %7.3f ms/tick  "
-                "(mirror/real = %.2f  -> %s)\n",
+                "(mirror/real = %.2f  -> %s, posHash=0x%016llx)\n",
                 mirrorMs, mirrorMs / refMs,
-                (std::fabs(mirrorMs / refMs - 1.0) < 0.25 ? "FAITHFUL"
-                                                          : "DIVERGENT, distrust MT"));
+                (std::fabs(mirrorMs / refMs - 1.0) < 0.25 ? "TIMING MATCH"
+                                                          : "TIMING DIVERGENT"),
+                static_cast<unsigned long long>(posChecksum));
     std::printf("\n   threads   ms/tick   speedup   ns/agent   %% budget   "
                 "max agents @120Hz   @60Hz\n");
     std::printf("   %5d   %8.3f   %6.2fx   %7.1f   %6.1f%%   %14ld   %ld\n", 1,

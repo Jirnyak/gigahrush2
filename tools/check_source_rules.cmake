@@ -559,10 +559,10 @@ foreach(_suite IN LISTS GIGA_SUITE_FILES)
         continue()
     endif()
 
-    string(FIND "${GIGA_TU_TEXT}" "#include \"${_suite_name}\"" _suite_included)
-    if(_suite_included EQUAL -1)
+    string(REGEX MATCH "(^|\n)[ \t]*#include[ \t]*\"${_suite_name}\"" _suite_included "${GIGA_TU_TEXT}")
+    if(NOT _suite_included)
         list(APPEND GIGA_FAILURES
-            "${_suite_rel}:1: compiled by NOBODY — no tests/*.cpp contains #include \"${_suite_name}\", so every assertion in it is dead text. Add the include to the right test translation unit AND call its test_*_all() from that file's main. If it is still being written, put a line starting `// giga-check: unwired-suite <reason>` in it and delete that line when you wire it up.")
+            "${_suite_rel}:1: compiled by NOBODY — no tests/*.cpp contains active #include \"${_suite_name}\", so every assertion in it is dead text. Add the include to the right test translation unit AND call its test_*_all() from that file's main. If it is still being written, put a line starting `// giga-check: unwired-suite <reason>` in it and delete that line when you wire it up.")
         continue()
     endif()
 
@@ -570,18 +570,12 @@ foreach(_suite IN LISTS GIGA_SUITE_FILES)
     # nobody calls is the same defect one layer in, and the compiler is perfectly
     # happy to build a static function that is never invoked.
     # Match on `void ` alone, which subsumes `static void ` - do NOT require `static`.
-    # Measured 2026-07-29: 22 of the 23 entry points are `static void`, and exactly one is bare
-    # `void` (tests/suite_speech.inl:612 `void test_speech_all()`). Requiring `static` made that
-    # one suite's 81 CHECK sites invisible to the dispatch half of this guard, which is the same
-    # class of defect the guard exists to catch - a check that silently sees nothing. Found by an
-    # agent auditing the guard rather than by the guard itself, which is the argument for auditing
-    # new gates instead of trusting them because they are new.
     string(REGEX MATCHALL "void test_[A-Za-z0-9_]*_all\\(\\)" _entries "${_suite_body}")
     foreach(_entry_decl IN LISTS _entries)
         string(REGEX REPLACE "^void " "" _entry "${_entry_decl}")
         string(REGEX REPLACE "\\(\\)$" "" _entry "${_entry}")
-        string(FIND "${GIGA_TU_TEXT}" "${_entry}();" _entry_called)
-        if(_entry_called EQUAL -1)
+        string(REGEX MATCH "(^|\n)[ \t]*${_entry}\\(\\);" _entry_called "${GIGA_TU_TEXT}")
+        if(NOT _entry_called)
             list(APPEND GIGA_FAILURES
                 "${_suite_rel}:1: ${_entry}() is defined but never called from any tests/*.cpp — the suite is compiled and then skipped. Dispatch it from the relevant main().")
         endif()
