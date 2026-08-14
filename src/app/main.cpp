@@ -5148,7 +5148,10 @@ int main(int argc, char** argv) {
         int fbw = 0, fbh = 0;
         SDL_GetWindowSizeInPixels(window, &fbw, &fbh);
         float aspect = fbh > 0 ? static_cast<float>(fbw) / fbh : 1.0f;
-        CameraMatrices camMat = compute_camera(reg, aspect);
+        const vec3 worldUp = (activeLayer != kInvalidLayer)
+            ? stack.layer(activeLayer).gravity().up_vector()
+            : vec3{0.0f, 0.0f, 1.0f};
+        CameraMatrices camMat = compute_camera(reg, aspect, worldUp);
 
         hud.begin_frame();
         if (showHud)

@@ -83,6 +83,16 @@ constexpr GravityFrame regime_frame(GravityRegime r) {
     return axis_frame(2, 1, false);
 }
 
+// Unit vector pointing UP along the frame's gravity direction.
+inline vec3 regime_up(GravityRegime r) {
+    const GravityFrame f = regime_frame(r);
+    vec3 u{0.0f, 0.0f, 0.0f};
+    if (f.axis == 0) u.x = static_cast<float>(f.upSign);
+    else if (f.axis == 1) u.y = static_cast<float>(f.upSign);
+    else u.z = static_cast<float>(f.upSign);
+    return u;
+}
+
 // Every frame Zero can declare: three axes x two faces.
 inline constexpr int kMaxGravityFrames = 6;
 
@@ -101,6 +111,11 @@ inline GravityRegime regime_from_vector(vec3 g) {
 struct GravityField {
     // Global fallback: classic downward pull along -Z.
     vec3 global{0.0f, 0.0f, -9.81f};
+
+    // Upward unit vector derived from the active gravity regime.
+    vec3 up_vector() const {
+        return regime_up(regime);
+    }
 
     // The quantized regime consumers key on. RUNTIME STATE, not generation
     // config: the floor module writes it when it builds the world, and the game
