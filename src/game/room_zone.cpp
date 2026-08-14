@@ -136,6 +136,9 @@ void room_recover(Needs& n, std::uint16_t bit, float dt,
         // consequence of eating, which is the whole point of the kitchen row.
         n.pendingPee += r.pendingPee * dt;
         n.pendingPoo += r.pendingPoo * dt;
+        if (stock != nullptr && ((oldFood < 80.0f && n.food >= 80.0f) || (oldWater < 80.0f && n.water >= 80.0f))) {
+            room_stock_consume(const_cast<RoomStock&>(*stock), rx, ry, stride, 1);
+        }
     }
     add(n.sleep, r.sleep * dt);
     add(n.pee, -r.pee * dt);

@@ -319,7 +319,15 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
             const float room = static_cast<float>(maxHp - hp);
             const std::int16_t gain =
                 static_cast<std::int16_t>(whole < room ? whole : room);
-            if (gain > 0) hp = static_cast<std::int16_t>(hp + gain);
+            if (gain > 0) {
+                hp = static_cast<std::int16_t>(hp + gain);
+                if (rooms != nullptr) {
+                    const int cx = wrap_macro(static_cast<int>(std::floor(tr.pos.x / kCellSize)));
+                    const int cy = wrap_macro(static_cast<int>(std::floor(tr.pos.y / kCellSize)));
+                    const int stride = floor_room_stride(rooms->kind);
+                    room_stock_consume(const_cast<RoomStock&>(rooms->stock), cx / stride, cy / stride, stride, 1);
+                }
+            }
         }
 
         if (camera) {
