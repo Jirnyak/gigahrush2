@@ -361,13 +361,15 @@ std::int32_t loot_containers_step(Registry& reg, NpcPool& pool, LayerId layer,
         bool anyMoved = false;
         for (int i = 0; i < kContainerSlots; ++i) {
             if (!item_valid(c.item[i]) || c.count[i] == 0) continue;
-            const int slot = inv.first_free();
-            if (slot < 0) break;   // full: the rest stays in the box, not deleted
-            inv.slots[slot] = ItemSlot{c.item[i], c.count[i]};
-            took += item_def(c.item[i]).value * c.count[i];
-            c.item[i] = kInvalidItem;
-            c.count[i] = 0;
-            anyMoved = true;
+            const std::uint16_t unplaced = inventory_give(inv, c.item[i], c.count[i]);
+            const std::uint16_t placed = static_cast<std::uint16_t>(c.count[i] - unplaced);
+            if (placed > 0) {
+                took += item_def(c.item[i]).value * static_cast<std::int32_t>(placed);
+                c.count[i] = unplaced;
+                if (unplaced == 0) c.item[i] = kInvalidItem;
+                anyMoved = true;
+            }
+            if (unplaced > 0) break; // inventory is full for this item
         }
         // The lid. Gated on `anyMoved`, so the pass that empties a crate makes one
         // noise and the ticks that merely find it already empty make none — without

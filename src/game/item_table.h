@@ -147,6 +147,39 @@ inline std::uint32_t inventory_mass_g(const Inventory& inv) {
     return g;
 }
 
+// Add `count` of `id` into `inv`, respecting item's stackMax and filling partial
+// stacks before allocating empty slots.
+// Returns the remainder (count that could NOT be placed because inventory is full).
+inline std::uint16_t inventory_give(Inventory& inv, ItemId id, std::uint16_t count) {
+    if (!item_valid(id) || count == 0) return count;
+    const std::uint16_t cap = item_def(id).stackMax ? item_def(id).stackMax : 1;
+    std::uint16_t remaining = count;
+
+    // Pass 1: top up existing partial stacks
+    if (cap > 1) {
+        for (ItemSlot& s : inv.slots) {
+            if (remaining == 0) break;
+            if (s.item != id || s.count >= cap) continue;
+            const std::uint16_t space = static_cast<std::uint16_t>(cap - s.count);
+            const std::uint16_t take = space < remaining ? space : remaining;
+            s.count = static_cast<std::uint16_t>(s.count + take);
+            remaining = static_cast<std::uint16_t>(remaining - take);
+        }
+    }
+
+    // Pass 2: fill empty slots
+    for (ItemSlot& s : inv.slots) {
+        if (remaining == 0) break;
+        if (s.item != kInvalidItem && s.count != 0) continue;
+        const std::uint16_t take = cap < remaining ? cap : remaining;
+        s.item = id;
+        s.count = take;
+        remaining = static_cast<std::uint16_t>(remaining - take);
+    }
+
+    return remaining;
+}
+
 // ---------------------------------------------------------------------------
 // Depth gating — the greed loop, as data
 // ---------------------------------------------------------------------------

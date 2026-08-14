@@ -378,37 +378,19 @@ std::int32_t pickup_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId la
         if (!item_valid(p.item)) { taken.push_back(e); continue; }
         const ItemDef& def = item_def(p.item);
 
-        // Stack into an existing slot where the item allows it, else take a free
-        // one. A full inventory simply leaves the item on the floor — no silent
-        // discard, which is what makes 64 slots a real constraint.
-        int slot = -1;
-        if (def.stackMax > 1) {
-            for (int i = 0; i < kInvSlots; ++i)
-                if (inv.slots[i].item == p.item &&
-                    inv.slots[i].count < def.stackMax) { slot = i; break; }
+        // Unified inventory_give: respects stackMax, tops up partial stacks, fills empty
+        // slots, and returns the exact remainder without silent item loss or overflow.
+        const std::uint16_t unplaced = inventory_give(inv, p.item, p.count);
+        const std::uint16_t placed = static_cast<std::uint16_t>(p.count - unplaced);
+        if (placed > 0) {
+            gained += def.value * static_cast<std::int32_t>(placed);
+            bus.publish(EventType::ItemTransferred, kInvalidNpc, selfId, p.item, tick);
         }
-        if (slot < 0) slot = inv.first_free();
-        if (slot < 0) continue;  // full: it stays where it is
-
-        if (inv.slots[slot].item == p.item) {
-            inv.slots[slot].count =
-                static_cast<std::uint16_t>(inv.slots[slot].count + p.count);
-            // **Clamp to the item's own cap.** An audit put 7 of a cap-8 item in a slot,
-            // dropped a stack of 8 on it, and pickup_step merged the lot into 15 — the
-            // cap was consulted to CHOOSE the slot and then ignored when writing it. A
-            // slot over cap is not a crash; it is an inventory that quietly holds more
-            // than the rules allow, which is worse because nothing complains.
-            if (def.stackMax && inv.slots[slot].count > def.stackMax)
-                inv.slots[slot].count = def.stackMax;
-        } else {
-            inv.slots[slot].item = p.item;
-            inv.slots[slot].count = p.count;
+        if (unplaced == 0) {
+            taken.push_back(e);
+        } else if (unplaced < p.count) {
+            reg.get<Pickup>(e).count = unplaced;
         }
-        gained += def.value * static_cast<std::int32_t>(p.count);
-
-        // `a` = from (the world, kInvalidNpc), `b` = to, `c` = item id.
-        bus.publish(EventType::ItemTransferred, kInvalidNpc, selfId, p.item, tick);
-        taken.push_back(e);
     }
     for (Entity e : taken) reg.destroy(e);
     return gained;
