@@ -125,11 +125,11 @@ void main() {
     // every long leg vanished). Small margin covers yaw rotation slop.
     vec3 center = worldPos;
     vec3 extents = abs(inst.scaleAndPad.xyz) * 0.5 + vec3(0.1);
-    // Yaw spins around the local Y axis, so the X/Z footprint can swap — take
+    // Yaw spins around the Z axis (Z-up), so the X/Y footprint can swap — take
     // the max of the pair and the box stays conservative at any angle.
-    float yawSafe = max(extents.x, extents.z);
+    float yawSafe = max(extents.x, extents.y);
     extents.x = yawSafe;
-    extents.z = yawSafe;
+    extents.y = yawSafe;
 
     bool visible = true;
     for (int i = 0; i < 6; ++i) {
