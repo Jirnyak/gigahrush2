@@ -1,5 +1,7 @@
 <div align="center">
 
+![GIGAH|RUSH 2 Banner](assets/banner.png)
+
 # GIGAH|RUSH 2 — Architectural Manifesto & Next-Gen Voxel Engine
 
 [![C++23](https://img.shields.io/badge/Standard-C%2B%2B23-blue?style=for-the-badge)]()
