@@ -198,6 +198,32 @@ static void test_status_all() {
         CHECK(status_move_mult_e3(s) == 1000);
     }
 
+    { // ---- 9. govnyak stage transitions on expiry & relief resets ----
+        StatusSet s{};
+        status_apply(s, StatusId::GovnyakRelief, false);
+        CHECK(status_active(s, StatusId::GovnyakRelief));
+        CHECK(!status_active(s, StatusId::GovnyakCough));
+        CHECK(!status_active(s, StatusId::GovnyakDebt));
+
+        // Stepping past relief duration (70s) transitions to cough (210s)
+        status_step(s, 70000);
+        CHECK(!status_active(s, StatusId::GovnyakRelief));
+        CHECK(status_active(s, StatusId::GovnyakCough));
+        CHECK(!status_active(s, StatusId::GovnyakDebt));
+
+        // Stepping past cough duration (210s) transitions to debt (480s)
+        status_step(s, 210000);
+        CHECK(!status_active(s, StatusId::GovnyakRelief));
+        CHECK(!status_active(s, StatusId::GovnyakCough));
+        CHECK(status_active(s, StatusId::GovnyakDebt));
+
+        // Applying fresh relief while debt is active clears debt immediately
+        status_apply(s, StatusId::GovnyakRelief, false);
+        CHECK(status_active(s, StatusId::GovnyakRelief));
+        CHECK(!status_active(s, StatusId::GovnyakCough));
+        CHECK(!status_active(s, StatusId::GovnyakDebt));
+    }
+
     std::printf("[test] suite_status: table and composition verified\n");
 }
 

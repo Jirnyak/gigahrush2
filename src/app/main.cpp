@@ -3995,8 +3995,8 @@ int main(int argc, char** argv) {
                                     const int pcy = wrap_macro(static_cast<int>(std::floor(ppos.y / kCellSize)));
                                     const bool inBathroom = (game::room_bit_at(roomZones.kind, roomZones.number, pcx, pcy) &
                                                              game::room_bit(game::RoomBit::Bathroom)) != 0;
-                                    const float maxPee = inBathroom ? 100.0f : game::kToiletPeeRelief;
-                                    const float maxPoo = inBathroom ? 100.0f : game::kToiletPooRelief;
+                                    const float maxPee = inBathroom ? game::kToiletPeeRelief : game::kFieldPeeRelief;
+                                    const float maxPoo = inBathroom ? game::kToiletPooRelief : game::kFieldPooRelief;
 
                                     game::ReliefResult rr = game::relieve_needs(pool.needs(nrg->id), maxPee, maxPoo);
                                     if (rr.pee > 0.0f || rr.poo > 0.0f) {
@@ -4012,8 +4012,8 @@ int main(int argc, char** argv) {
                                                         static_cast<std::uint32_t>(simTick),
                                                         stainDirty);
                                         std::snprintf(elevDiagLine, sizeof(elevDiagLine),
-                                                      inBathroom ? "TOILET FACILITY: FULL RELIEF (%.0f PEE, %.0f POO)"
-                                                                 : "EMERGENCY RELIEF: CLEARED BLADDER (%.0f) & BOWEL (%.0f)",
+                                                      inBathroom ? "TOILET FACILITY: SANITARY RELIEF (%.0f PEE, %.0f POO)"
+                                                                 : "FIELD RELIEF: PARTIAL (%.0f PEE, %.0f POO)",
                                                       rr.pee, rr.poo);
                                         elevDiagAt = simTick;
 
@@ -4785,9 +4785,7 @@ int main(int argc, char** argv) {
                         drankWater += cr.water;
                         drinkWanted = false;
                     }
-                    if (cr.used && cr.hpCost > 0 && reg.valid(player)) {
-                        game::apply_damage(reg, pool, player, cr.hpCost,
-                                           game::DamageChannel::Kinetic, player);
+                    if (cr.used && cr.hpCost > 0) {
                         consumeHpCost += cr.hpCost;
                     }
                 }
@@ -4801,9 +4799,7 @@ int main(int argc, char** argv) {
                         game::use_best_psi(reg, pool, bus, activeLayer, simTick);
                     if (cr.used) {
                         restoredPsi += cr.psi;
-                        if (cr.hpCost > 0 && reg.valid(player)) {
-                            game::apply_damage(reg, pool, player, cr.hpCost,
-                                               game::DamageChannel::Kinetic, player);
+                        if (cr.hpCost > 0) {
                             consumeHpCost += cr.hpCost;
                         }
                     }

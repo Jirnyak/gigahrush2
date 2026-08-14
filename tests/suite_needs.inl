@@ -573,6 +573,19 @@ void consumption() {
     // sixth row would be a cost path the selection rule has never been exercised on.
     CHECK(charged == 5);
 
+    // HealPsi consumable restores psi on RpgStats.
+    const ItemId psiMed = first_with_effect(UseEffect::HealPsi);
+    CHECK(psiMed != kInvalidItem);
+    CHECK(item_restores_psi(psiMed));
+    {
+        Needs n = full_clock();
+        RpgStats rpg = fresh_rpg();
+        rpg.psi = 0;
+        const ConsumeResult r = apply_consumable(n, psiMed, 100, &rpg);
+        CHECK(r.used && r.psi > 0);
+        CHECK(rpg.psi == r.psi);
+    }
+
     // Nothing else touches the clock.
     Needs junk = full_clock();
     CHECK(!apply_consumable(junk, kInvalidItem, 100).used);
@@ -789,6 +802,16 @@ void pressure() {
     CHECK(approx(again.pee, kNeedMax - kToiletPeeRelief, 1e-4f));   // clamped, honest
     CHECK(over.pee == 0.0f);
     CHECK(relieve_needs(over, 0.0f, 0.0f).pee == 0.0f);
+
+    // Field relief is partial (40/35) and leaves a residue
+    Needs fieldOver = full_clock();
+    fieldOver.pee = 90.0f;
+    fieldOver.poo = 80.0f;
+    const ReliefResult fr = relieve_needs(fieldOver, kFieldPeeRelief, kFieldPooRelief);
+    CHECK(approx(fr.pee, kFieldPeeRelief, 1e-4f));
+    CHECK(approx(fr.poo, kFieldPooRelief, 1e-4f));
+    CHECK(approx(fieldOver.pee, 90.0f - kFieldPeeRelief, 1e-4f));
+    CHECK(approx(fieldOver.poo, 80.0f - kFieldPooRelief, 1e-4f));
 
     // End to end: drinking enough water WILL eventually cost you HP. That is the
     // pacing tax on chugging.

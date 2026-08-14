@@ -187,11 +187,12 @@ inline constexpr float kSleepingPillsWaterCost = 16.0f;  // items.ts:37
 inline constexpr float kSleepingPillsFoodCost  =  8.0f;
 inline constexpr std::int16_t kSleepingPillsHpCost = 4;
 
-// The reference's toilet (`interactive.ts:144-166`). No toilet object exists in
-// gigahrush2 yet; these are what `relieve_needs` takes when one does. Deliberately
-// partial, so a long trip still has to come home.
+// The reference's toilet (`interactive.ts:144-166`). Toilet fixture (kPropToiletPan)
+// relief vs emergency field relief. Deliberately partial, so a long trip still has to come home.
 inline constexpr float kToiletPeeRelief = 70.0f;
 inline constexpr float kToiletPooRelief = 65.0f;
+inline constexpr float kFieldPeeRelief  = 40.0f;
+inline constexpr float kFieldPooRelief  = 35.0f;
 
 // One index past the last real `DamageChannel` — see the header comment.
 // `enum class : uint8_t` carries the underlying type's value range, so this cast is
@@ -199,6 +200,8 @@ inline constexpr float kToiletPooRelief = 65.0f;
 // "attrition"; nothing switches on that field.
 inline constexpr DamageChannel kAttritionChannel =
     static_cast<DamageChannel>(kDamageChannels);
+static_assert(static_cast<std::size_t>(kAttritionChannel) >= kDamageChannels,
+              "kAttritionChannel must sit past the last physical damage channel to skip armour");
 
 // HOW FAR INTO ITS OWN DAY A RESIDENT IS BORN, in seconds — DERIVED FROM THE RATES,
 // never picked, for the same reason the warning leads above are. The property that

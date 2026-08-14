@@ -55,10 +55,20 @@ void status_apply(StatusSet& set, StatusId id, bool useAlt) {
     } else {
         set.intensityE3[i] = 1000;
     }
+
+    if (id == StatusId::GovnyakRelief) {
+        set.remainMs[static_cast<std::size_t>(StatusId::GovnyakCough)] = 0;
+        set.remainMs[static_cast<std::size_t>(StatusId::GovnyakDebt)] = 0;
+        set.intensityE3[static_cast<std::size_t>(StatusId::GovnyakCough)] = 0;
+        set.intensityE3[static_cast<std::size_t>(StatusId::GovnyakDebt)] = 0;
+    }
 }
 
 std::uint32_t status_step(StatusSet& set, std::uint32_t dtMs) {
     std::uint32_t expired = 0;
+    bool reliefExpired = false;
+    bool coughExpired = false;
+
     for (std::size_t i = 0; i < kStatusCount; ++i) {
         const std::uint32_t r = set.remainMs[i];
         if (r == 0) continue;
@@ -67,10 +77,20 @@ std::uint32_t status_step(StatusSet& set, std::uint32_t dtMs) {
             set.intensityE3[i] = 0;
             set.alt[i] = 0;
             ++expired;
+
+            if (static_cast<StatusId>(i) == StatusId::GovnyakRelief) reliefExpired = true;
+            if (static_cast<StatusId>(i) == StatusId::GovnyakCough)  coughExpired = true;
         } else {
             set.remainMs[i] = r - dtMs;
         }
     }
+
+    if (reliefExpired && set.remainMs[static_cast<std::size_t>(StatusId::GovnyakRelief)] == 0) {
+        status_apply(set, StatusId::GovnyakCough, false);
+    } else if (coughExpired && set.remainMs[static_cast<std::size_t>(StatusId::GovnyakCough)] == 0) {
+        status_apply(set, StatusId::GovnyakDebt, false);
+    }
+
     return expired;
 }
 

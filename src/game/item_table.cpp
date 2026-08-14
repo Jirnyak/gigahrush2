@@ -124,7 +124,7 @@ const std::array<ItemDef, kItemCount> kItemTable = {{
              u8(ItemCategory::Medicine), u8(EquipSlot::None), 255,
              u8(UseEffect::Heal), {0, 0, 0, 0, 0}, u8(WearKind::None), 0, {0, 0, 0} },
     // [25] id 26  antidep  (120 g)
-    ItemDef{ 95, 120, 700, static_cast<std::uint16_t>(u16(RoomBit::Medical)), 0,
+    ItemDef{ 95, 120, 700, static_cast<std::uint16_t>(u16(RoomBit::Medical)), 12,
              u8(ItemCategory::Medicine), u8(EquipSlot::None), 255,
              u8(UseEffect::HealPsi), {0, 0, 0, 0, 0}, u8(WearKind::None), 0, {0, 0, 0} },
     // [26] id 27  antiemetic  (120 g)

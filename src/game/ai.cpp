@@ -739,6 +739,12 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                     Needs& own = pool.needs(id);
                     own.sleep -= kMedicFatiguePerSec * dt;
                     if (own.sleep < 0.0f) own.sleep = 0.0f;
+                    if (useMem) {
+                        if (ai_remember_actor(*mem, oid, MemAlly, id, 1.0f, now))
+                            ++out.remembered;
+                        if (ai_remember_actor(*mem, id, MemAlly, oid, 0.7f, now))
+                            ++out.remembered;
+                    }
                 }
             }
             if (totalCount > 0.0f) nearbyWounded01 = woundedCount / totalCount;
