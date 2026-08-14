@@ -446,8 +446,12 @@ void VoxelMirror::flush(VkCommandBuffer cmd, std::uint32_t frameIndex,
         const std::uint32_t ci = dirty_[k];
         dirtyBits_[ci >> 6] &= ~(std::uint64_t{1} << (ci & 63u));
     }
-    dirty_.erase(dirty_.begin(),
-                 dirty_.begin() + static_cast<std::ptrdiff_t>(take));
+    if (take == dirty_.size()) {
+        dirty_.clear();
+    } else {
+        dirty_.erase(dirty_.begin(),
+                     dirty_.begin() + static_cast<std::ptrdiff_t>(take));
+    }
     if (!dirty_.empty() && (overflowEvents_++ % 64u) == 0u)
         std::fprintf(stderr,
                      "[mirror] staging window full: %zu cells carried to the "

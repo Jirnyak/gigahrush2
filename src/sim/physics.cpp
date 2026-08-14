@@ -34,16 +34,56 @@ bool voxel_solid(const World& w, int gx, int gy, int gz) {
 
 bool aabb_overlaps_solid(const World& world, vec3 pos, vec3 half) {
     // Voxel range the box covers on each axis.
-    int x0 = floor_div(pos.x - half.x, kVoxelSize);
-    int x1 = floor_div(pos.x + half.x, kVoxelSize);
-    int y0 = floor_div(pos.y - half.y, kVoxelSize);
-    int y1 = floor_div(pos.y + half.y, kVoxelSize);
-    int z0 = floor_div(pos.z - half.z, kVoxelSize);
-    int z1 = floor_div(pos.z + half.z, kVoxelSize);
-    for (int z = z0; z <= z1; ++z)
-        for (int y = y0; y <= y1; ++y)
-            for (int x = x0; x <= x1; ++x)
-                if (voxel_solid(world, x, y, z)) return true;
+    const int x0 = floor_div(pos.x - half.x, kVoxelSize);
+    const int x1 = floor_div(pos.x + half.x, kVoxelSize);
+    const int y0 = floor_div(pos.y - half.y, kVoxelSize);
+    const int y1 = floor_div(pos.y + half.y, kVoxelSize);
+    const int z0 = floor_div(pos.z - half.z, kVoxelSize);
+    const int z1 = floor_div(pos.z + half.z, kVoxelSize);
+
+    const int cx0 = floor_div(static_cast<float>(x0), static_cast<float>(kSubDim));
+    const int cx1 = floor_div(static_cast<float>(x1), static_cast<float>(kSubDim));
+    const int cy0 = floor_div(static_cast<float>(y0), static_cast<float>(kSubDim));
+    const int cy1 = floor_div(static_cast<float>(y1), static_cast<float>(kSubDim));
+    const int cz0 = floor_div(static_cast<float>(z0), static_cast<float>(kSubDim));
+    const int cz1 = floor_div(static_cast<float>(z1), static_cast<float>(kSubDim));
+
+    const MacroGrid& grid = world.grid();
+
+    for (int cz = cz0; cz <= cz1; ++cz) {
+        const int mcz = wrap_macro(cz);
+        const int sz0 = std::max(0, z0 - cz * kSubDim);
+        const int sz1 = std::min(kSubDim - 1, z1 - cz * kSubDim);
+
+        for (int cy = cy0; cy <= cy1; ++cy) {
+            const int mcy = wrap_macro(cy);
+            const int sy0 = std::max(0, y0 - cy * kSubDim);
+            const int sy1 = std::min(kSubDim - 1, y1 - cy * kSubDim);
+
+            for (int cx = cx0; cx <= cx1; ++cx) {
+                const int mcx = wrap_macro(cx);
+                const SubMask& mask = grid.mask(mcx, mcy, mcz);
+                if (mask.empty()) continue;
+
+                const int sx0 = std::max(0, x0 - cx * kSubDim);
+                const int sx1 = std::min(kSubDim - 1, x1 - cx * kSubDim);
+
+                const int xSpan = sx1 - sx0 + 1;
+                const std::uint64_t rowBits = (xSpan >= kSubDim)
+                    ? 0xFFULL
+                    : (((1ULL << xSpan) - 1ULL) << sx0);
+
+                std::uint64_t xyMask = 0;
+                for (int sy = sy0; sy <= sy1; ++sy) {
+                    xyMask |= (rowBits << (sy * kSubDim));
+                }
+
+                for (int sz = sz0; sz <= sz1; ++sz) {
+                    if (mask.words[sz] & xyMask) return true;
+                }
+            }
+        }
+    }
     return false;
 }
 
