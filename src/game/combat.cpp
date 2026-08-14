@@ -504,12 +504,12 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
 
 
             if (auto* aabb = reg.try_get<AABB>(e)) {
-                const float h = aabb->half.y;
-                aabb->half.y = 0.18f;                     // Flatten on ground
-                aabb->half.z = std::max(h * 0.75f, 0.55f); // Extend along floor
+                const float h = aabb->half.z;
+                aabb->half.z = 0.18f;                     // Flatten vertically on ground (Z-up)
+                aabb->half.y = std::max(h * 0.75f, 0.55f); // Extend along floor
             }
             if (auto* tr = reg.try_get<Transform>(e)) {
-                tr->pos.y -= 0.45f; // Place flush on floor surface
+                tr->pos.z -= 0.45f; // Place flush on floor surface (Z-up)
             }
             if (auto* rend = reg.try_get<Renderable>(e)) {
                 // Darken & desaturate tint to read as a cold fallen body
