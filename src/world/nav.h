@@ -103,6 +103,7 @@ struct FineNav {
     // Flow byte at a cell for routing toward `node`. Coordinates are wrapped, so
     // callers can pass raw (possibly out-of-range) cell indices.
     std::uint8_t at(int node, int x, int y, int z) const {
+        if (flow.empty()) return kFlowNone;
         return flow[static_cast<std::size_t>(node) * kMacroCells +
                     macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z))];
     }
@@ -110,6 +111,7 @@ struct FineNav {
     // The nearest lattice node to a cell (its Voronoi anchor), or kFlowNone if the
     // cell is solid / unreachable. Coordinates are wrapped.
     std::uint8_t nearest_node(int x, int y, int z) const {
+        if (nearest.empty()) return kFlowNone;
         return nearest[macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z))];
     }
 };

@@ -351,8 +351,13 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         // Steer toward the CURRENT lattice node on the coarse route, not the
         // final destination: the flow fields route to a node, and the coarse
         // next-hop table is what makes a multi-node journey a sequence of them.
-        const int here = lattice_id(lattice_axis_of(cx), lattice_axis_of(cy),
-                                    lattice_axis_of(cz));
+        // Spec 15 §2: query the baked geodesic nearest_node field (guarantees
+        // reachability), falling back to Voronoi partition if outside fine field.
+        const std::uint8_t nearAnchor = fine.nearest_node(cx, cy, cz);
+        const int here = (nearAnchor < nav::kNodes)
+                             ? static_cast<int>(nearAnchor)
+                             : lattice_id(lattice_axis_of(cx), lattice_axis_of(cy),
+                                          lattice_axis_of(cz));
         const int hop = nav::coarse_next(coarse, here, wt.node);
         std::uint8_t flow = fine.at(hop, cx, cy, cz);
 
