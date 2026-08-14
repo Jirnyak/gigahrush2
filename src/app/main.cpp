@@ -1300,7 +1300,7 @@ void drain_particle_bursts(gpu::ParticlePass& pass,
 // the very wall it came from. Sampled with a stride — a blast stays a cloud,
 // not tens of thousands of sprites.
 void spawn_carve_particles(gpu::ParticlePass& pass, const CarveResult& res,
-                           std::uint32_t seed) {
+                           std::uint32_t seed, const GravityField* gravity = nullptr) {
     if (!pass.ready()) return;
     static std::vector<gpu::GpuParticle> tmp;
     tmp.clear();
@@ -1313,6 +1313,12 @@ void spawn_carve_particles(gpu::ParticlePass& pass, const CarveResult& res,
                     (static_cast<float>(cy * 8 + sy) + 0.5f) * kVoxelSize,
                     (static_cast<float>(cz * 8 + sz) + 0.5f) * kVoxelSize};
     };
+    vec3 up{0.0f, 0.0f, 1.0f};
+    if (gravity) {
+        vec3 g = gravity->at(vec3{0.0f, 0.0f, 0.0f});
+        float gl = length(g);
+        if (gl > 1e-4f) up = g * (-1.0f / gl);
+    }
     const game::ParticleDef& dust =
         game::particle_def(game::ParticleKind::Dust);
     const std::size_t nd = res.destroyed.size();
@@ -1320,7 +1326,7 @@ void spawn_carve_particles(gpu::ParticlePass& pass, const CarveResult& res,
     for (std::size_t i = 0; i < nd; i += sd) {
         const CarvedVoxel& v = res.destroyed[i];
         const vec3 tint = kMaterial[v.mat < kMatCount ? v.mat : 0];
-        pack_particles(tmp, voxel_pos(v), vec3{0.0f, 0.0f, 0.35f}, dust, tint,
+        pack_particles(tmp, voxel_pos(v), up * 0.35f, dust, tint,
                        1, seed ^ static_cast<std::uint32_t>(i));
     }
     const game::ParticleDef& debris =
@@ -1330,7 +1336,7 @@ void spawn_carve_particles(gpu::ParticlePass& pass, const CarveResult& res,
     for (std::size_t i = 0; i < nt; i += st) {
         const CarvedVoxel& v = res.detached[i];
         const vec3 tint = kMaterial[v.mat < kMatCount ? v.mat : 0];
-        pack_particles(tmp, voxel_pos(v), vec3{0.0f, 0.0f, -0.2f}, debris,
+        pack_particles(tmp, voxel_pos(v), up * (-0.2f), debris,
                        tint, 1, seed ^ 0x5bd1e995u ^
                                     static_cast<std::uint32_t>(i));
     }
@@ -4064,7 +4070,8 @@ int main(int argc, char** argv) {
                         // Dust and debris off the blast, tinted by the carved
                         // material ([particle_pass.h]).
                         spawn_carve_particles(particlePass, carveResult,
-                                              op.seed);
+                                              op.seed,
+                                              &stack.layer(activeLayer).gravity());
 
                         // A blast is the loudest thing after gunfire: let the
                         // crowd hear it.
@@ -4396,7 +4403,8 @@ int main(int argc, char** argv) {
                                 carveResult.dirtyCells.data(),
                                 carveResult.dirtyCells.size());
                             spawn_carve_particles(particlePass, carveResult,
-                                                  pr.seed);
+                                                  pr.seed,
+                                                  &stack.layer(activeLayer).gravity());
                             std::fprintf(stderr,
                                          "[carve] COMBAT removed=%d power=%u "
                                          "r=%.2f at (%.1f,%.1f,%.1f)\n",
@@ -4432,9 +4440,13 @@ int main(int argc, char** argv) {
                     dripTmp.clear();
                     const game::ParticleDef& dripDef =
                         game::particle_def(game::ParticleKind::Drip);
+                    vec3 dripPull{0.0f, 0.0f, -0.2f};
+                    const vec3 g = stack.layer(activeLayer).gravity().at(dripEmitters[0]);
+                    const float gl = length(g);
+                    if (gl > 1e-4f) dripPull = g * (0.2f / gl);
                     for (std::size_t i = 0; i < dripEmitters.size(); ++i)
                         pack_particles(dripTmp, dripEmitters[i],
-                                       vec3{0.0f, 0.0f, -0.2f}, dripDef,
+                                       dripPull, dripDef,
                                        vec3{dripDef.r, dripDef.g, dripDef.b}, 1,
                                        static_cast<std::uint32_t>(simTick) ^
                                            static_cast<std::uint32_t>(i));
