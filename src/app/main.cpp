@@ -1167,8 +1167,8 @@ static void upload_wires(gpu::WirePass& wirePass, const game::AntourageBake* ab)
             packed.push_back(g);
         }
     }
-    wirePass.upload(packed.data(), static_cast<std::uint32_t>(packed.size()));
-    if (std::getenv("GIGA_WIRE_DBG") != nullptr)
+    static const bool wireDbg = std::getenv("GIGA_WIRE_DBG") != nullptr;
+    if (wireDbg)
         for (std::size_t i = 0; i < packed.size() && i < 20; ++i)
             std::fprintf(stderr, "[wire] %zu mid (%.1f %.1f %.1f)\n", i,
                          packed[i].cur[4].x, packed[i].cur[4].y,
@@ -1198,7 +1198,8 @@ static void upload_cloths(gpu::ClothPass& clothPass,
         }
     }
     clothPass.upload(packed.data(), static_cast<std::uint32_t>(packed.size()));
-    if (std::getenv("GIGA_WIRE_DBG") != nullptr)
+    static const bool clothDbg = std::getenv("GIGA_WIRE_DBG") != nullptr;
+    if (clothDbg)
         for (std::size_t i = 0; i < packed.size() && i < 20; ++i)
             std::fprintf(stderr, "[cloth] %zu top (%.1f %.1f %.1f)\n", i,
                          packed[i].cur[3].x, packed[i].cur[3].y,
@@ -4934,12 +4935,16 @@ int main(int argc, char** argv) {
             // microseconds, and printing those as "0.00" reads as "not measured"
             // — the exact false-confidence this whole module exists to remove.
             if (renderer.timer.supported()) {
-                ImGui::Text("gpu: world %.3f | bodies %.3f | props %.3f | "
-                            "sim %.3f | hud %.3f | frame %.3f ms",
+                ImGui::Text("gpu: lgrid %.3f | cull %.3f | flush %.3f | sim %.3f | world %.3f | "
+                            "bodies %.3f | props %.3f | drw-phys %.3f | hud %.3f | frame %.3f ms",
+                            renderer.timer.pass_ms(gpu::GpuPass::LightGrid),
+                            renderer.timer.pass_ms(gpu::GpuPass::Cull),
+                            renderer.timer.pass_ms(gpu::GpuPass::VoxelFlush),
+                            renderer.timer.pass_ms(gpu::GpuPass::SimPhysics),
                             renderer.timer.pass_ms(gpu::GpuPass::World),
                             renderer.timer.pass_ms(gpu::GpuPass::Bodies),
                             renderer.timer.pass_ms(gpu::GpuPass::Props),
-                            renderer.timer.pass_ms(gpu::GpuPass::SimPhysics),
+                            renderer.timer.pass_ms(gpu::GpuPass::DrawPhysics),
                             renderer.timer.pass_ms(gpu::GpuPass::Hud),
                             renderer.timer.frame_ms());
                 // The median above is DESIGNED to hide spikes — it takes 16 slow frames
@@ -4948,12 +4953,16 @@ int main(int argc, char** argv) {
                 // a stutter; both moving together is a real cost change. `drop` must stay
                 // at 0: a growing value means every figure above is computed over a stale
                 // window and none of them mean anything. [gpu_timer.h]
-                ImGui::Text("gpu peak: world %.3f | bodies %.3f | props %.3f | "
-                            "sim %.3f | hud %.3f | frame %.3f ms | drop %u",
+                ImGui::Text("gpu peak: lgrid %.3f | cull %.3f | flush %.3f | sim %.3f | world %.3f | "
+                            "bodies %.3f | props %.3f | drw-phys %.3f | hud %.3f | frame %.3f ms | drop %u",
+                            renderer.timer.pass_ms_max(gpu::GpuPass::LightGrid),
+                            renderer.timer.pass_ms_max(gpu::GpuPass::Cull),
+                            renderer.timer.pass_ms_max(gpu::GpuPass::VoxelFlush),
+                            renderer.timer.pass_ms_max(gpu::GpuPass::SimPhysics),
                             renderer.timer.pass_ms_max(gpu::GpuPass::World),
                             renderer.timer.pass_ms_max(gpu::GpuPass::Bodies),
                             renderer.timer.pass_ms_max(gpu::GpuPass::Props),
-                            renderer.timer.pass_ms_max(gpu::GpuPass::SimPhysics),
+                            renderer.timer.pass_ms_max(gpu::GpuPass::DrawPhysics),
                             renderer.timer.pass_ms_max(gpu::GpuPass::Hud),
                             renderer.timer.frame_ms_max(), renderer.timer.dropped());
             } else {
@@ -6365,12 +6374,16 @@ int main(int argc, char** argv) {
                     }
                     if (renderer.timer.supported())
                         std::fprintf(stderr,
-                                     "gpu-ms: world %.3f bodies %.3f props %.3f "
-                                     "sim %.3f hud %.3f frame %.3f  (bodies %u)\n",
+                                     "gpu-ms: lgrid %.3f cull %.3f flush %.3f sim %.3f world %.3f "
+                                     "bodies %.3f props %.3f drw-phys %.3f hud %.3f frame %.3f (bodies %u)\n",
+                                     renderer.timer.pass_ms(gpu::GpuPass::LightGrid),
+                                     renderer.timer.pass_ms(gpu::GpuPass::Cull),
+                                     renderer.timer.pass_ms(gpu::GpuPass::VoxelFlush),
+                                     renderer.timer.pass_ms(gpu::GpuPass::SimPhysics),
                                      renderer.timer.pass_ms(gpu::GpuPass::World),
                                      renderer.timer.pass_ms(gpu::GpuPass::Bodies),
                                      renderer.timer.pass_ms(gpu::GpuPass::Props),
-                                     renderer.timer.pass_ms(gpu::GpuPass::SimPhysics),
+                                     renderer.timer.pass_ms(gpu::GpuPass::DrawPhysics),
                                      renderer.timer.pass_ms(gpu::GpuPass::Hud),
                                      renderer.timer.frame_ms(),
                                      bodyPass.last_instance_count());
@@ -6380,12 +6393,16 @@ int main(int argc, char** argv) {
                     // non-zero drop count invalidates every median in the line above.
                     if (renderer.timer.supported())
                         std::fprintf(stderr,
-                                     "gpu-ms-peak: world %.3f bodies %.3f props %.3f "
-                                     "sim %.3f hud %.3f frame %.3f  (dropped %u)\n",
+                                     "gpu-ms-peak: lgrid %.3f cull %.3f flush %.3f sim %.3f world %.3f "
+                                     "bodies %.3f props %.3f drw-phys %.3f hud %.3f frame %.3f (dropped %u)\n",
+                                     renderer.timer.pass_ms_max(gpu::GpuPass::LightGrid),
+                                     renderer.timer.pass_ms_max(gpu::GpuPass::Cull),
+                                     renderer.timer.pass_ms_max(gpu::GpuPass::VoxelFlush),
+                                     renderer.timer.pass_ms_max(gpu::GpuPass::SimPhysics),
                                      renderer.timer.pass_ms_max(gpu::GpuPass::World),
                                      renderer.timer.pass_ms_max(gpu::GpuPass::Bodies),
                                      renderer.timer.pass_ms_max(gpu::GpuPass::Props),
-                                     renderer.timer.pass_ms_max(gpu::GpuPass::SimPhysics),
+                                     renderer.timer.pass_ms_max(gpu::GpuPass::DrawPhysics),
                                      renderer.timer.pass_ms_max(gpu::GpuPass::Hud),
                                      renderer.timer.frame_ms_max(),
                                      renderer.timer.dropped());

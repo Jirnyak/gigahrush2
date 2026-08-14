@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "core/wrap.h"
 #include "render/vk_common.h"
 #include "render/vk_device.h"
 #include "world/types.h"   // kWorldExtent — the ONE wrap period, never a literal
@@ -214,12 +215,12 @@ void GpuLightGrid::sort_lights_by_distance(const vec3& camPos) noexcept {
     if (stagingLightCount_ <= 1) return;
     std::sort(stagingLights_, stagingLights_ + stagingLightCount_,
               [&camPos](const GpuPointLight& a, const GpuPointLight& b) {
-                  float dxa = a.posRadius.x - camPos.x;
-                  float dya = a.posRadius.y - camPos.y;
-                  float dza = a.posRadius.z - camPos.z;
-                  float dxb = b.posRadius.x - camPos.x;
-                  float dyb = b.posRadius.y - camPos.y;
-                  float dzb = b.posRadius.z - camPos.z;
+                  float dxa = wrap_delta_f(camPos.x, a.posRadius.x, kWorldExtent);
+                  float dya = wrap_delta_f(camPos.y, a.posRadius.y, kWorldExtent);
+                  float dza = wrap_delta_f(camPos.z, a.posRadius.z, kWorldExtent);
+                  float dxb = wrap_delta_f(camPos.x, b.posRadius.x, kWorldExtent);
+                  float dyb = wrap_delta_f(camPos.y, b.posRadius.y, kWorldExtent);
+                  float dzb = wrap_delta_f(camPos.z, b.posRadius.z, kWorldExtent);
                   return (dxa * dxa + dya * dya + dza * dza) < (dxb * dxb + dyb * dyb + dzb * dzb);
               });
 }

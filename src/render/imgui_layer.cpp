@@ -7,6 +7,7 @@
 #include <filesystem>
 
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_vulkan.h"
 
@@ -200,17 +201,20 @@ void ImGuiLayer::draw_crt_overlay() {
     draw->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(w, h),
                         IM_COL32(89, 242, 102, 10));
 
-    // --- CRT scanlines: alternating dark bands at 3px period. Two passes so
-    // the lines read as hardware geometry rather than a flat stripe: a thin
-    // opaque black line on each 3px boundary, plus a softer half-tone under it.
+    // --- CRT scanlines: alternating dark bands at 3px period. Pre-reserve
+    // vertices and indices so the whole raster is emitted in one single batch
+    // without per-line allocation overhead.
+    const int stepCount = static_cast<int>(std::ceil(h / 3.0f)) + 1;
+    const int totalRects = stepCount * 2;
+    draw->PrimReserve(totalRects * 6, totalRects * 4);
+    const ImVec2 uv = draw->_Data->TexUvWhitePixel;
     for (float y = 0.0f; y < h; y += 3.0f) {
         // Primary scanline: the "blanking" row of the raster.
-        draw->AddLine(ImVec2(0.0f, y), ImVec2(w, y), IM_COL32(0, 0, 0, 110));
+        draw->PrimRectUV(ImVec2(0.0f, y), ImVec2(w, y + 1.0f), uv, uv, IM_COL32(0, 0, 0, 110));
         // Secondary row: half-intensity, half-pixel offset below the primary,
         // giving the raster its vertical texture instead of isolated lines.
         if (y + 1.0f < h)
-            draw->AddLine(ImVec2(0.0f, y + 1.0f), ImVec2(w, y + 1.0f),
-                          IM_COL32(0, 0, 0, 45));
+            draw->PrimRectUV(ImVec2(0.0f, y + 1.0f), ImVec2(w, y + 2.0f), uv, uv, IM_COL32(0, 0, 0, 45));
     }
 
     // --- Vignette: the CRT tube darkens toward the corners (screen curvature

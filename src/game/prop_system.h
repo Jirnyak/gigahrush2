@@ -47,9 +47,9 @@ using PropMeshTag    = giga::PropMeshTag;
 
 
 // GPU mesh skin payload for PropPass ([jirnyak.md] §18 — PropPass is a passive
-// skin over reg.view<Transform, PropMeshTag>()). shape is the PropShape ordinal
-// from render/prop_mesh.h; game never includes render headers — main maps
-// shape -> gpu::PropShape when uploading instances.
+// skin over reg.view<const Transform, const PropMesh, const StaticPropTag>()).
+// shape is the PropShape ordinal from render/prop_mesh.h; game never includes
+// render headers — main maps shape -> gpu::PropShape when uploading instances.
 struct PropMesh {
     std::uint8_t shape     = 0;
     float        yaw       = 0.0f;

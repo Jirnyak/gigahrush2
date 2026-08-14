@@ -506,6 +506,9 @@ std::uint32_t collect_static_prop_mesh_instances(const Registry& reg, LayerId la
         inst.shape     = mesh.shape;
         inst.origin    = tr.pos;
         inst.yaw       = mesh.yaw;
+        if (const auto* rot = reg.try_get<Rotation>(e)) {
+            inst.yaw += rot->euler.z;
+        }
         inst.scale     = mesh.scale;
         inst.matId     = mesh.matId;
         inst.emissive  = mesh.emissive;
