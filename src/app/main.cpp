@@ -1532,7 +1532,7 @@ Entity possess_nearest_survivor(Registry& reg, game::NpcPool& pool, LayerId laye
 
         const vec3& pos = reg.get<const Transform>(e).pos;
         float dx = wrap_delta_f(playerPos.x, pos.x, kWorldExtent);
-        float dy = playerPos.y - pos.y;
+        float dy = wrap_delta_f(playerPos.y, pos.y, kWorldExtent);
         float dz = wrap_delta_f(playerPos.z, pos.z, kWorldExtent);
         float d2 = dx * dx + dy * dy + dz * dz;
         if (d2 < bestD2) {
@@ -3568,7 +3568,8 @@ int main(int argc, char** argv) {
                                 reg.get<const Transform>(cEnt).pos;
                             const float dx =
                                 wrap_delta_f(ppos.x, cpos.x, kWorldExtent);
-                            const float dy = ppos.y - cpos.y;
+                            const float dy =
+                                wrap_delta_f(ppos.y, cpos.y, kWorldExtent);
                             const float dz =
                                 wrap_delta_f(ppos.z, cpos.z, kWorldExtent);
                             if (dx * dx + dy * dy + dz * dz < 2.2f * 2.2f) {
@@ -3598,7 +3599,8 @@ int main(int argc, char** argv) {
                                 if (tr.layer != activeLayer) continue;
                                 const float dx = wrap_delta_f(
                                     ppos.x, tr.pos.x, kWorldExtent);
-                                const float dy = ppos.y - tr.pos.y;
+                                const float dy = wrap_delta_f(
+                                    ppos.y, tr.pos.y, kWorldExtent);
                                 const float dz = wrap_delta_f(
                                     ppos.z, tr.pos.z, kWorldExtent);
                                 const float d2 =

@@ -1024,7 +1024,8 @@ std::uint32_t hazard_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
     }
 
     for (const Hit& h : hits)
-        apply_damage(reg, pool, h.body, h.dmg, h.ch, entt::null, &grid, particles);
+        apply_damage(reg, pool, h.body, h.dmg, h.ch, entt::null, &grid, particles,
+                     gravity);
 
     return static_cast<std::uint32_t>(hits.size());
 }
