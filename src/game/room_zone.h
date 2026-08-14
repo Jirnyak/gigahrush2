@@ -84,6 +84,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "game/day_clock.h" // kGameHourSec — the one in-game hour constant
 #include "game/ai.h"        // IntentId — the affordance table's key
 #include "game/role.h"      // RoleTraits — role home/work rooms join the bake mask
 #include "game/floor_gen.h" // kFloorRoomBits, floor_room_stride/mask/bit_index
@@ -217,13 +218,7 @@ inline constexpr std::uint16_t kRoomFieldMask = [] {
 // levelled body slower in time-to-full for no stated reason. The rate itself is
 // derived, not chosen: a ward restores a body 0 -> full in ONE IN-GAME HOUR.
 // ---------------------------------------------------------------------------
-// THE IN-GAME HOUR, until a real day clock exists. This build has no clock (the
-// LUNCH/`resting` gates above wait on it), but TABLE 2 already implies a time
-// scale: the kitchen serves a full meal (food 0 -> 100 at 3.5/s) in ~29 s, and a
-// square meal is fictionally ~half an hour — so one in-game hour ~= 60 sim-seconds.
-// When the day clock lands (the room-stocks epic owns it), this constant moves
-// there and this table reads it; the number is a derivation, not a tunable.
-inline constexpr float kGameHourSec = 60.0f;
+// THE IN-GAME HOUR: defined in game/day_clock.h (kGameHourSec = 60.0f).
 struct RoomRecovery {
     float food;        // + per second
     float water;       // + per second

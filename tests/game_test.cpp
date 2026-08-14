@@ -129,6 +129,8 @@ int g_checks = 0;
 #include "suite_keybind.inl"
 #include "suite_particles.inl"
 #include "suite_gravity_regimes.inl"
+#include "suite_day_clock.inl"
+#include "suite_room_stock.inl"
 static void test_inventory() {
     // Compile-time layout contract: a static_assert, not a CHECK. It is a fact
     // about the type, so it belongs to the build, not to a test run.
@@ -5344,6 +5346,8 @@ int main() {
     test_keybind_all();
     test_particles_all();
     test_gravity_regimes_all();
+    test_day_clock_all();
+    test_room_stock_all();
     test_route_realfloor();
     test_streamed_nav();
     test_nav_cache_roundtrip();

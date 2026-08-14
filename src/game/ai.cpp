@@ -10,6 +10,7 @@
 #include "game/embody.h"      // NpcRef
 #include "game/mob_spawn.h"   // MobRef — the scope exclusion
 #include "game/needs.h"       // needs_roll — substitute for an unseeded pool row
+#include "game/day_clock.h"   // DayClock, rhythm_bias — diurnal routine
 #include "game/door.h"        // door_nearest_shelter — hermetic flee target (§23)
 #include "game/role.h"        // RoleTraits, role_traits — archetype multipliers
 #include "game/room_zone.h"   // room affordance table + baked fields (§27 legs a,b)
@@ -176,10 +177,11 @@ void score_intents(const Perception& p, const Needs& needs,
     const auto tpen = [&](std::uint8_t intent) -> float {
         return p.targetPenalty[intent];
     };
-    // rhythmBias is 0 for every intent while no minute-of-day clock is exposed
-    // (Perception::minuteOfDay < 0); wiring a clock turns the daily routine on
-    // with no scorer edit.
-    const float rhythm = 0.0f;
+    // rhythm term evaluated per intent from the minute-of-day clock.
+    // Pure 0.0f when p.minuteOfDay < 0 (no clock exposed).
+    const auto rhythm = [&](std::uint8_t intent) -> float {
+        return rhythm_bias(p.minuteOfDay, intent);
+    };
     const auto stick = [&](std::uint8_t intent) -> float {
         return p.currentIntent == intent ? p.stickinessAmount : 0.0f;
     };
@@ -204,24 +206,24 @@ void score_intents(const Perception& p, const Needs& needs,
         local(IntentFlee) + stick(IntentFlee) - tpen(IntentFlee));
 
     out[IntentToilet] =
-        clamp_score(toiletP * 92.0f + rhythm + local(IntentToilet) +
+        clamp_score(toiletP * 92.0f + rhythm(IntentToilet) + local(IntentToilet) +
                     stick(IntentToilet) - threat * 18.0f - tpen(IntentToilet));
 
     out[IntentDrink] =
-        clamp_score(drinkP * 88.0f + rhythm + local(IntentDrink) +
+        clamp_score(drinkP * 88.0f + rhythm(IntentDrink) + local(IntentDrink) +
                     stick(IntentDrink) - threat * 16.0f - tpen(IntentDrink));
 
-    out[IntentEat] = clamp_score(eatP * 86.0f + rhythm + local(IntentEat) +
+    out[IntentEat] = clamp_score(eatP * 86.0f + rhythm(IntentEat) + local(IntentEat) +
                                  stick(IntentEat) - threat * 16.0f -
                                  tpen(IntentEat));
 
     out[IntentSleep] = clamp_score(
-        sleepP * 76.0f + rhythm /* + occupation sleep bonus (0: no occupations) */ +
+        sleepP * 76.0f + rhythm(IntentSleep) /* + occupation sleep bonus (0: no occupations) */ +
         local(IntentSleep) + stick(IntentSleep) - threat * 30.0f -
         (p.samosborActive ? 18.0f : 0.0f) - tpen(IntentSleep));
 
     out[IntentWork] = clamp_score(
-        tr.duty * 34.0f + tr.workDrive * 18.0f + rhythm + local(IntentWork) +
+        tr.duty * 34.0f + tr.workDrive * 18.0f + rhythm(IntentWork) + local(IntentWork) +
         stick(IntentWork) - urgent * 30.0f - threat * 42.0f -
         (p.samosborActive ? 45.0f : 0.0f) - tpen(IntentWork));
 
@@ -230,7 +232,7 @@ void score_intents(const Perception& p, const Needs& needs,
         local(IntentHeal) + stick(IntentHeal) - threat * 10.0f - tpen(IntentHeal));
 
     out[IntentSocial] = clamp_score(
-        tr.sociability * 29.0f + rhythm + local(IntentSocial) +
+        tr.sociability * 29.0f + rhythm(IntentSocial) + local(IntentSocial) +
         stick(IntentSocial) - urgent * 15.0f - threat * 34.0f -
         (p.samosborActive ? 25.0f : 0.0f) - tpen(IntentSocial));
 
@@ -241,7 +243,7 @@ void score_intents(const Perception& p, const Needs& needs,
         p.faction != static_cast<std::uint16_t>(Faction::Liquidators) &&
         p.faction != static_cast<std::uint16_t>(Faction::Cultists);
     out[IntentPatrol] = clamp_score(
-        tr.patrolDrive * 36.0f + tr.duty * 18.0f + rhythm + threat * 10.0f +
+        tr.patrolDrive * 36.0f + tr.duty * 18.0f + rhythm(IntentPatrol) + threat * 10.0f +
         local(IntentPatrol) + stick(IntentPatrol) - urgent * 18.0f -
         (patrolSamosborPenalty ? 24.0f : 0.0f) - tpen(IntentPatrol));
 
@@ -254,7 +256,7 @@ void score_intents(const Perception& p, const Needs& needs,
     const float wanderJitter =
         jitter_signed(channel_seed(p.idSeed, "wander_score"), 3.0f);
     out[IntentWander] = clamp_score(
-        9.0f + rhythm + wanderJitter + (p.isTraveler ? 19.0f : 0.0f) +
+        9.0f + rhythm(IntentWander) + wanderJitter + (p.isTraveler ? 19.0f : 0.0f) +
         local(IntentWander) + stick(IntentWander) - urgent * 12.0f -
         threat * 22.0f - tpen(IntentWander));
 
