@@ -11,7 +11,7 @@ vec3 camera_forward(float yaw, float pitch) {
     return normalize(vec3{std::cos(yaw) * cp, std::sin(yaw) * cp, sp});
 }
 
-CameraMatrices compute_camera(Registry& reg, float aspect) {
+CameraMatrices compute_camera(Registry& reg, float aspect, vec3 up) {
     CameraMatrices out;
     auto view = reg.view<Transform, CameraTag>();
     for (auto e : view) {
@@ -22,7 +22,7 @@ CameraMatrices compute_camera(Registry& reg, float aspect) {
         vec3 fwd = camera_forward(cam.yaw, cam.pitch);
         out.eye = eye;
         out.forward = fwd;
-        out.view = mat4_lookAt(eye, eye + fwd, vec3{0, 0, 1});
+        out.view = mat4_lookAt(eye, eye + fwd, up);
 
         // Far plane covers the toroidal minimal-image window (±kWorldExtent/2
         // per axis, diagonal ~0.87·kWorldExtent). Geometry past the fog radius

@@ -19,8 +19,9 @@ struct CameraMatrices {
     bool valid = false;
 };
 
-// aspect = drawable width / height.
-CameraMatrices compute_camera(Registry& reg, float aspect);
+// aspect = drawable width / height. up = world up vector (defaults to +Z).
+CameraMatrices compute_camera(Registry& reg, float aspect,
+                              vec3 up = vec3{0.0f, 0.0f, 1.0f});
 
 // Forward direction from yaw/pitch, shared by camera + input so mouselook and
 // movement agree on where "forward" points.
