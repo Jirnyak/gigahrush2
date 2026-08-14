@@ -3949,14 +3949,20 @@ int main(int argc, char** argv) {
                         if (!handled) {
                             if (const auto* nrg = reg.try_get<game::NpcRef>(player)) {
                                 if (pool.valid(nrg->id)) {
-                                    game::ReliefResult rr = game::relieve_needs(pool.needs(nrg->id), 100.0f, 100.0f);
+                                    const int pcx = wrap_macro(static_cast<int>(std::floor(ppos.x / kCellSize)));
+                                    const int pcy = wrap_macro(static_cast<int>(std::floor(ppos.y / kCellSize)));
+                                    const bool inBathroom = (game::room_bit_at(roomZones.kind, roomZones.number, pcx, pcy) &
+                                                             game::room_bit(game::RoomBit::Bathroom)) != 0;
+                                    const float maxPee = inBathroom ? 100.0f : game::kToiletPeeRelief;
+                                    const float maxPoo = inBathroom ? 100.0f : game::kToiletPooRelief;
+
+                                    game::ReliefResult rr = game::relieve_needs(pool.needs(nrg->id), maxPee, maxPoo);
                                     if (rr.pee > 0.0f || rr.poo > 0.0f) {
                                         game::status_apply(playerStatus, game::StatusId::GovnyakRelief, false);
                                         // The puddle: urine through the same
-                                        // universal stain layer blood uses —
-                                        // mixing with anything already there
-                                        // is just channel addition.
-                                        if (rr.pee > 0.0f)
+                                        // universal stain layer blood uses when
+                                        // relieving outside a dedicated bathroom.
+                                        if (!inBathroom && rr.pee > 0.0f)
                                             stain_splat(stack.layer(activeLayer),
                                                         ppos, vec3{0, 0, -1.0f},
                                                         1.4f, /*rays=*/14,
@@ -3964,11 +3970,12 @@ int main(int argc, char** argv) {
                                                         static_cast<std::uint32_t>(simTick),
                                                         stainDirty);
                                         std::snprintf(elevDiagLine, sizeof(elevDiagLine),
-                                                      "PHYSIOLOGICAL RELIEF: CLEARED BLADDER (%.0f) & BOWEL (%.0f) PRESSURE",
+                                                      inBathroom ? "TOILET FACILITY: FULL RELIEF (%.0f PEE, %.0f POO)"
+                                                                 : "EMERGENCY RELIEF: CLEARED BLADDER (%.0f) & BOWEL (%.0f)",
                                                       rr.pee, rr.poo);
                                         elevDiagAt = simTick;
 
-                                        game::NoiseProfile np{5.0f, 500, 1, game::NoiseSource::Door};
+                                        game::NoiseProfile np{inBathroom ? 2.5f : 5.0f, 500, 1, game::NoiseSource::Door};
                                         game::noise_publish(noiseField, activeLayer, ppos, np, 0);
                                     }
                                 }
