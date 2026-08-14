@@ -292,10 +292,13 @@ FactionFoe nearest_faction_foe(const Registry& reg, const NpcPool& pool,
 // Optional `gravity` names the walking plane, same convention as knockback in
 // [combat.h]: null keeps the NegZ frame bit-for-bit (tests), the app passes the
 // live field so a feud on a side-regime floor walks its floor, not the world's XY.
+class AiMemory;
 std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
                                 const FactionRelations& rel, LayerId layer,
                                 std::uint64_t tick,
-                                const GravityField* gravity = nullptr);
+                                const GravityField* gravity = nullptr,
+                                AiMemory* mem = nullptr,
+                                double now = 0.0);
 
 // What one drain of the death events did to the matrix. Returned rather than only
 // published, so a HUD can print it without the caller having to re-scan the ring.

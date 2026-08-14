@@ -191,7 +191,9 @@ FactionFoe nearest_faction_foe(const Registry& reg, const NpcPool& pool,
 std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
                                 const FactionRelations& rel, LayerId layer,
                                 std::uint64_t tick,
-                                const GravityField* gravity) {
+                                const GravityField* gravity,
+                                AiMemory* mem,
+                                double now) {
     // The walking plane: steer and stop in the two tangent axes, leave the
     // gravity axis to physics. Null (tests) keeps the NegZ frame bit-for-bit.
     GravityRegime feudRegime = GravityRegime::NegZ;
@@ -381,7 +383,14 @@ std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
     for (const Swing& s : queued) {
         const DamageResult r = apply_damage(reg, pool, s.target, s.raw,
                                             DamageChannel::Kinetic, s.attacker);
-        if (r.hit) ++hits;
+        if (r.hit) {
+            ++hits;
+            if (mem != nullptr && reg.all_of<NpcRef>(s.target) && reg.all_of<NpcRef>(s.attacker)) {
+                const NpcId victimId = reg.get<const NpcRef>(s.target).id;
+                const NpcId attackerId = reg.get<const NpcRef>(s.attacker).id;
+                ai_remember_actor(*mem, victimId, MemFoe, attackerId, 1.0f, now);
+            }
+        }
     }
     return hits;
 }

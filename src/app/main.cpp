@@ -3719,7 +3719,8 @@ int main(int argc, char** argv) {
                 // no counterplay. The camera holder IS killable: the player has
                 // healing, resupply and possession-on-death. [faction_relations.h]
                 feudHits += game::faction_feud_step(reg, pool, factionRel, activeLayer,
-                                                    simTick, &activeWorld.gravity());
+                                                    simTick, &activeWorld.gravity(),
+                                                    &aiMem, simNow);
                 // Slowed CAP enforcement: after every velocity writer
                 // (controller / wander / investigate / feud), before integrate.
                 // Was defined in combat.cpp and never called — dead path until now.
@@ -4211,6 +4212,13 @@ int main(int argc, char** argv) {
                                                        game::kSpeechCooldownTicks),
                             &speechSit);
                         speechAt = simTick;
+                        if (aiCfg.memory) {
+                            const auto* pRef = reg.try_get<game::NpcRef>(player);
+                            if (pRef && pool.valid(pRef->id)) {
+                                game::ai_remember_actor(aiMem, talker, game::MemAlly, pRef->id, 1.0f, simNow);
+                                game::ai_remember_actor(aiMem, pRef->id, game::MemAlly, talker, 1.0f, simNow);
+                            }
+                        }
                     }
                 }
                 if (simTick - rumourAt >= game::kOverhearCooldownTicks) {
