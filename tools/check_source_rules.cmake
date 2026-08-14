@@ -458,6 +458,18 @@ _giga_csv_vs_header("data/quests.csv" "src/game/quest.h"
     "kQuestCount[ \t]*=[ \t]*([0-9]+)" "quest")
 
 
+# Ratchet-gate on src/app/main.cpp length (Phase 0.8).
+# Prevents monolithic unbounded growth; forces systems into modular src/game/ and src/sim/ files.
+if(EXISTS "${GIGA_ROOT}/src/app/main.cpp")
+    file(READ "${GIGA_ROOT}/src/app/main.cpp" _main_src)
+    string(REGEX MATCHALL "\n" _main_newlines "${_main_src}")
+    list(LENGTH _main_newlines _main_lines)
+    if(_main_lines GREATER 7000)
+        list(APPEND GIGA_FAILURES
+            "src/app/main.cpp:1: file length ${_main_lines} exceeds 7000-line ceiling. Decompose logic into modular free functions in src/game/ or src/sim/.")
+    endif()
+endif()
+
 # ---- Verdict ---------------------------------------------------------------
 # ---- Guard: every test suite must be compiled by somebody ------------------
 # A `tests/suite_*.inl` reaches a compiler only if some `tests/*.cpp` names it in
