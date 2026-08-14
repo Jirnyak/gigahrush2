@@ -1870,8 +1870,12 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         // colour from the substance table, dirty cells owed to the mirror by
         // the caller. Wall hits bleed nothing; the carve chip is their mark.
         if (landed && stainDirty && !h.onWall && !web && h.dmg > 0) {
+            const vec3 gg = stack.layer(layer).gravity().at(h.impactPos);
+            const float ggLen = length(gg);
+            const vec3 stainBias = ggLen > 1e-6f ? gg * (0.35f / ggLen)
+                                                 : vec3{0.0f, 0.0f, -0.35f};
             stain_splat(stack.layer(layer), h.impactPos,
-                        vec3{0.0f, 0.0f, -0.35f}, 1.6f, /*rays=*/10,
+                        stainBias, 1.6f, /*rays=*/10,
                         kStainBlood,
                         static_cast<std::uint32_t>(tick) ^
                             entt::to_integral(h.proj),

@@ -4094,13 +4094,18 @@ int main(int argc, char** argv) {
                                         // The puddle: urine through the same
                                         // universal stain layer blood uses when
                                         // relieving outside a dedicated bathroom.
-                                        if (!inBathroom && rr.pee > 0.0f)
+                                        if (!inBathroom && rr.pee > 0.0f) {
+                                            const vec3 gg = stack.layer(activeLayer).gravity().at(ppos);
+                                            const float ggLen = length(gg);
+                                            const vec3 peeBias = ggLen > 1e-6f ? gg * (1.0f / ggLen)
+                                                                               : vec3{0.0f, 0.0f, -1.0f};
                                             stain_splat(stack.layer(activeLayer),
-                                                        ppos, vec3{0, 0, -1.0f},
+                                                        ppos, peeBias,
                                                         1.4f, /*rays=*/14,
                                                         kStainUrine,
                                                         static_cast<std::uint32_t>(simTick),
                                                         stainDirty);
+                                        }
                                         std::snprintf(elevDiagLine, sizeof(elevDiagLine),
                                                       inBathroom ? "TOILET FACILITY: SANITARY RELIEF (%.0f PEE, %.0f POO)"
                                                                  : "FIELD RELIEF: PARTIAL (%.0f PEE, %.0f POO)",

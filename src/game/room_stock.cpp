@@ -88,6 +88,9 @@ std::uint32_t room_stock_produce_step(Registry& reg, const NpcPool& pool, LayerI
     std::uint32_t produced = 0;
     const FloorKind kind = static_cast<FloorKind>(floorKind);
     const int stride = floor_room_stride(kind);
+    if (stride <= 0) return 0;
+    const int roomsPerAxis = kMacroDim / stride;
+    if (roomsPerAxis <= 0) return 0;
 
     for (auto e : reg.view<const Transform, const NpcRef>()) {
         const Transform& tr = reg.get<const Transform>(e);
@@ -110,6 +113,23 @@ std::uint32_t room_stock_produce_step(Registry& reg, const NpcPool& pool, LayerI
             const int ry = cy / stride;
             room_stock_produce(stock, rx, ry, stride, 1, 200);
             ++produced;
+
+            // Closed-loop supply chain distribution: route stock to under-stocked Kitchens and Medical rooms
+            for (int dy = -2; dy <= 2; ++dy) {
+                for (int dx = -2; dx <= 2; ++dx) {
+                    const int nrx = wrapi(rx + dx, roomsPerAxis);
+                    const int nry = wrapi(ry + dy, roomsPerAxis);
+                    const int ncx = nrx * stride + stride / 2;
+                    const int ncy = nry * stride + stride / 2;
+                    const std::uint16_t nbit = room_bit_at(kind, floorNumber, ncx, ncy);
+                    if (nbit == room_bit(RoomBit::Kitchen) || nbit == room_bit(RoomBit::Medical)) {
+                        const std::uint16_t cur = room_stock_get(stock, nrx, nry, stride);
+                        if (cur < 60) {
+                            room_stock_produce(stock, nrx, nry, stride, 1, 100);
+                        }
+                    }
+                }
+            }
         }
     }
     return produced;

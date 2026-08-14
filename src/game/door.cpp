@@ -141,6 +141,11 @@ std::uint32_t door_build(World& world, DoorSet& doors, int number,
                     room_is_hermetic(spec.kind, number, rxR, ry)) {
                     d.hermetic = 1;
                 }
+                const std::uint16_t maskL = floor_room_mask(spec.kind, number, rxL, ry);
+                const std::uint16_t maskR = floor_room_mask(spec.kind, number, rxR, ry);
+                if (((maskL | maskR) & static_cast<std::uint16_t>(RoomBit::Hq)) != 0u) {
+                    d.keycardTier = static_cast<std::uint8_t>(KeycardTier::Red);
+                }
             } else {
                 // Wall at y = ry*stride; rooms (rx, ry-1) and (rx, ry).
                 const int ryU = cy / stride;
@@ -149,6 +154,11 @@ std::uint32_t door_build(World& world, DoorSet& doors, int number,
                 if (room_is_hermetic(spec.kind, number, rx, ryD) ||
                     room_is_hermetic(spec.kind, number, rx, ryU)) {
                     d.hermetic = 1;
+                }
+                const std::uint16_t maskD = floor_room_mask(spec.kind, number, rx, ryD);
+                const std::uint16_t maskU = floor_room_mask(spec.kind, number, rx, ryU);
+                if (((maskD | maskU) & static_cast<std::uint16_t>(RoomBit::Hq)) != 0u) {
+                    d.keycardTier = static_cast<std::uint8_t>(KeycardTier::Red);
                 }
             }
         }
