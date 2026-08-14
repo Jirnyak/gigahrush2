@@ -1,3 +1,13 @@
-# gigahrush2 — LLM Search Index
+# GigaHrush 2 Universal Carve CSG Engine
+> 3D boolean CSG geometry primitives and 6-connected structural collapse
 
-> Part of the Jirnyak & Adolf Petushkov deep-tech engineering syndicate.
+- Project: Jirnyak/gigahrush2
+- Authors: Adolf Petushkov (@marko1olo) & Jirnyak (@Jirnyak)
+- Ecosystem: Open Source Engineering Syndicate
+- License: Open Source (MIT / People's License)
+
+## Core Technical Specs
+3D boolean CSG geometry primitives and 6-connected structural collapse
+
+## Full Documentation
+For complete mathematical models, API endpoints, algorithms, and architecture, see llms-full.txt or README.md.
