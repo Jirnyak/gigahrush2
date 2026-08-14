@@ -40,6 +40,7 @@
 #include "ecs/components.h"
 #include "ecs/registry.h"
 #include "game/ai.h"       // the utility AI — adapted, wired, and dormant by default
+#include "game/day_clock.h" // DayClock — single truth of in-game diurnal time
 #include "game/room_zone.h" // room affordance/recovery tables + the baked zone fields
 #include "game/encumbrance.h" // carried weight -> mass, speed, fatigue, noise
 #include "game/embody.h"
@@ -2044,6 +2045,8 @@ int main(int argc, char** argv) {
     // point of the readout is "is anything investigating right now", and a running
     // total would answer a different question badly.
     std::uint32_t heardMobs = 0;
+    // The diurnal day clock. Single truth of in-game time of day.
+    game::DayClock dayClock;
     // The samosbor clock. One per live floor; the demo keeps one floor live, so one
     // clock, re-armed on arrival ([samosbor.h]).
     game::SamosborRng sbRng{0x5A303B0Du};
@@ -2984,9 +2987,10 @@ int main(int argc, char** argv) {
                 // toilet/sleep intent actually STEER a body — without it every
                 // non-flee intent hands motion straight back to wander_step and the
                 // scorer is decoration (measured: own_ai=0 of 419).
+                dayClock.step(kSimDt);
                 aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
                                        kSimDt, aiCfg, &aiMem, &doors, &activeWorld,
-                                       &roomZones);
+                                       &roomZones, dayClock.minute_of_day());
                 // AIMEM proof trail: once nav has brains and AI is on, emit a
                 // compact stderr pulse so a --shot harness can assert the store
                 // is live (rows/writes/recalled) without parsing the HUD.

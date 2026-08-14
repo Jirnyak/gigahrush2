@@ -1000,7 +1000,8 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                const AiConfig& cfg = {}, AiMemory* mem = nullptr,
                const DoorSet* doors = nullptr,
                const World* world = nullptr,
-               const RoomZones* rooms = nullptr);
+               const RoomZones* rooms = nullptr,
+               float minuteOfDay = -1.0f);
 
 } // namespace giga::game
 

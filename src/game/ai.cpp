@@ -10,6 +10,8 @@
 #include "game/embody.h"      // NpcRef
 #include "game/mob_spawn.h"   // MobRef — the scope exclusion
 #include "game/needs.h"       // needs_roll — substitute for an unseeded pool row
+#include "game/combat.h"      // equipped_melee
+#include "game/ranged_table.h"// equipped_ranged
 #include "game/day_clock.h"   // DayClock, rhythm_bias — diurnal routine
 #include "game/door.h"        // door_nearest_shelter — hermetic flee target (§23)
 #include "game/role.h"        // RoleTraits, role_traits — archetype multipliers
@@ -587,7 +589,7 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                const MacroGrid& grid, LayerId layer, double now, float dt,
                const AiConfig& cfg, AiMemory* mem,
                const DoorSet* doors, const World* world,
-               const RoomZones* rooms) {
+               const RoomZones* rooms, float minuteOfDay) {
     AiTick out;
     // Dormant by default. Returning before the sweep means a disabled AI costs
     // one branch, and it means nothing can be left half-arbitrated: the token is
@@ -768,6 +770,9 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             p.maxHp = static_cast<float>(pool.max_hp(id));
             p.danger = dangerHere;
             p.currentIntent = brain.currentIntent;
+            p.minuteOfDay = minuteOfDay;
+            const Inventory& inv = pool.inventory(id);
+            p.armed = (equipped_melee(inv) != kInvalidItem || equipped_ranged(inv) != kInvalidItem);
             // Zeroed when hysteresis is off, so the two arms of the measurement
             // differ in exactly the mechanism under test and nothing else.
             p.stickinessAmount =
