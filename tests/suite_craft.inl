@@ -954,6 +954,17 @@ static void test_craft_all() {
 
         auto_equip_best(inv, eq);
         CHECK(eq.weapon == 3);
+
+        // Test repair logic
+        CraftingState cst{};
+        cst.mat[static_cast<std::size_t>(CraftMaterial::Mechanics)] = 10;
+        RepairResult rep = craft_repair_item(cst, inv, 3, CraftStation::Workbench);
+        CHECK(rep.ok);
+        CHECK(rep.conditionBefore == 200);
+        CHECK(rep.conditionAfter == 255);
+        CHECK(inv.slots[3].condition == 255);
+        CHECK(rep.costSpent > 0);
+        CHECK(cst.mat[static_cast<std::size_t>(CraftMaterial::Mechanics)] < 10);
     }
 
     // Work counts, printed. Counts and not seconds: the same run does the same

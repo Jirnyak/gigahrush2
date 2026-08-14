@@ -223,6 +223,62 @@ DisassembleResult craft_disassemble(CraftingState& st, Inventory& inv, int slot,
     return out;
 }
 
+RepairResult craft_repair_item(CraftingState& st, Inventory& inv, int slot, CraftStation at) {
+    RepairResult out{};
+    if (slot < 0 || slot >= kInvSlots) {
+        out.fail = CraftFail::EmptySlot;
+        return out;
+    }
+    ItemSlot& s = inv.slots[slot];
+    if (!item_valid(s.item) || s.count == 0) {
+        out.fail = CraftFail::EmptySlot;
+        return out;
+    }
+    out.conditionBefore = s.condition;
+    if (s.condition == 255) {
+        out.ok = true;
+        out.conditionAfter = 255;
+        out.costSpent = 0;
+        out.fail = CraftFail::None;
+        return out;
+    }
+    if (at != CraftStation::Workbench && at != CraftStation::Lathe && at != CraftStation::Any) {
+        out.fail = CraftFail::StationMismatch;
+        return out;
+    }
+
+    const std::uint32_t damage = static_cast<std::uint32_t>(255u - s.condition);
+    std::uint32_t totalCost = craft_cost_total(s.item);
+    if (totalCost == 0) totalCost = 2u;
+    const std::uint32_t costNeeded = std::max(1u, (damage * totalCost + 255u) / 510u);
+
+    // Try Mechanics first, then Metal
+    const std::size_t mechIdx = static_cast<std::size_t>(CraftMaterial::Mechanics);
+    const std::size_t metalIdx = static_cast<std::size_t>(CraftMaterial::Metal);
+    const std::uint32_t available = st.mat[mechIdx] + st.mat[metalIdx];
+    if (available < costNeeded) {
+        out.fail = CraftFail::InsufficientMaterials;
+        return out;
+    }
+
+    std::uint32_t rem = costNeeded;
+    if (st.mat[mechIdx] >= rem) {
+        st.mat[mechIdx] -= rem;
+        rem = 0;
+    } else {
+        rem -= st.mat[mechIdx];
+        st.mat[mechIdx] = 0;
+        st.mat[metalIdx] -= rem;
+    }
+
+    s.condition = 255;
+    out.ok = true;
+    out.conditionAfter = 255;
+    out.costSpent = costNeeded;
+    out.fail = CraftFail::None;
+    return out;
+}
+
 bool craft_learn(CraftingState& st, ItemId id) {
     if (!item_valid(id)) return false;
     if ((craft_recipe(id).flags & kCraftDiscoverable) == 0) return false;

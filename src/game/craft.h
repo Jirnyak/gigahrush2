@@ -341,6 +341,16 @@ struct DisassembleResult {
 DisassembleResult craft_disassemble(CraftingState& st, Inventory& inv, int slot,
                                     CraftStation at, std::uint32_t rollKey);
 
+// Spec 03 §4.2: Repair item up to pristine condition (255) using Mechanics / Metal from the material bank.
+struct RepairResult {
+    bool ok = false;
+    std::uint8_t conditionBefore = 255;
+    std::uint8_t conditionAfter = 255;
+    std::uint32_t costSpent = 0;
+    CraftFail fail = CraftFail::None;
+};
+RepairResult craft_repair_item(CraftingState& st, Inventory& inv, int slot, CraftStation at);
+
 // The reference's 50% chance that stripping something teaches its recipe.
 inline constexpr std::uint32_t kCraftLearnPerMille = 500u;
 
