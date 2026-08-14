@@ -548,7 +548,8 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
                           std::int16_t raw, DamageChannel ch, Entity source,
                           const MacroGrid* grid = nullptr,
                           ParticleBurstQueue* particles = nullptr,
-                          const GravityField* gravity = nullptr);
+                          const GravityField* gravity = nullptr,
+                          const float* fluid = nullptr);
 
 // THE death finalizer, and the only place an entity dies. Publishes one NpcDied
 // per death (payload: `a` = victim NpcId or kInvalidNpc for a mob, `b` = MobKind
@@ -592,7 +593,8 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
                              NpcPool& pool, EventBus& bus,
                              LayerId layer, float dt, std::uint64_t tick,
                              ParticleBurstQueue* particles = nullptr,
-                             const GravityField* gravity = nullptr);
+                             const GravityField* gravity = nullptr,
+                             const float* fluid = nullptr);
 
 // Cell hazards for EMBODIED BODIES — the player and every resident.
 //

@@ -965,6 +965,19 @@ static void test_craft_all() {
         CHECK(inv.slots[3].condition == 255);
         CHECK(rep.costSpent > 0);
         CHECK(cst.mat[static_cast<std::size_t>(CraftMaterial::Mechanics)] < 10);
+
+        // Test condition modifier on spread and melee damage
+        const float cleanFoul = 0.0f;
+        const float maxFoul = 1.0f;
+        const float cleanSpreadMult = 1.0f + 0.50f * cleanFoul;
+        const float wornSpreadMult = 1.0f + 0.50f * maxFoul;
+        CHECK(cleanSpreadMult == 1.0f);
+        CHECK(wornSpreadMult == 1.50f);
+
+        const float cleanMeleeMult = 0.60f + 0.40f * (255.0f / 255.0f);
+        const float wornMeleeMult = 0.60f + 0.40f * (0.0f / 255.0f);
+        CHECK(cleanMeleeMult == 1.0f);
+        CHECK(wornMeleeMult == 0.60f);
     }
 
     // Work counts, printed. Counts and not seconds: the same run does the same

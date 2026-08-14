@@ -11,6 +11,7 @@
 #include "ecs/components.h"
 #include "game/floor_gen.h"  // floor_room_stride, floor_room_mask
 #include "game/wander.h"     // wander_init — a fog mob with no WanderTarget is a statue
+#include "game/monster_traits.h"
 #include "sim/fluid.h"       // fluid_data/fluid_at — nothing stands in a sealed sump
 #include "world/macro_grid.h"
 #include "world/world.h"
@@ -34,7 +35,7 @@ constexpr int kPlaceTries = 24;
 // spatial change into a population regression.
 constexpr int kRoomTries = 24;
 
-// A cell a monster may be placed in: air, and not standing water.
+// A cell a monster may be placed in: air, and not standing water (unless water-based).
 //
 // A sump's basin is sealed on all four sides by its kerb ([floor_gen.h] Standing
 // water), so a head placed there is a monster in a box: it can never reach the player,
@@ -45,8 +46,10 @@ constexpr int kRoomTries = 24;
 //
 // `wet` is the layer's resolved fluid array (nullptr on a dry layer), fetched once per
 // spawn call rather than per candidate — a deep floor tests up to 98,304 candidates.
-bool placeable(const float* wet, const World& w, int x, int y, int z) {
+bool placeable(const float* wet, const World& w, int x, int y, int z,
+               std::uint8_t kind = 0xFFu) {
     if (!floor_standable(w, x, y, z)) return false;
+    if (kind != 0xFFu && trait_allows_wet_spawn(kind)) return true;
     return fluid_at(wet, x, y, z) < kFluidMinFlow;
 }
 
@@ -375,7 +378,7 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
             // tower. Members below share it — a pack is one room on one storey.
             packH = static_cast<int>(hash_u32(h ^ 0xA5A5A5A5u) %
                                      static_cast<std::uint32_t>(kMacroDim));
-            if (placeable(wet, world, ax, ay, packH)) { haveAnchor = true; break; }
+            if (placeable(wet, world, ax, ay, packH, static_cast<std::uint8_t>(mobKind))) { haveAnchor = true; break; }
         }
         if (!haveAnchor) continue;  // a room filled solid with rubble
 
@@ -408,7 +411,7 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
                     // rooms and undo the grouping this whole function exists for.
                     cx = x0 + std::clamp(ax - x0 + dx, 1, span);
                     cy = y0 + std::clamp(ay - y0 + dy, 1, span);
-                    if (placeable(wet, world, cx, cy, packH)) {
+                    if (placeable(wet, world, cx, cy, packH, static_cast<std::uint8_t>(mobKind))) {
                         placed = true;
                         break;
                     }
@@ -653,7 +656,7 @@ FogTickReport samosbor_fog_tick_at(Registry& reg, const World& world,
                                       kThreatOuterRadiusCells);
             const int ty = wrap_macro(acy + static_cast<int>((h >> 19) % span) -
                                       kThreatOuterRadiusCells);
-            if (!placeable(wet, world, tx, ty, acz)) continue;
+            if (!placeable(wet, world, tx, ty, acz, static_cast<std::uint8_t>(pick))) continue;
 
             // The census's own arithmetic, on the exact position about to be
             // written. **This is the invariant that makes the budget terminate**:

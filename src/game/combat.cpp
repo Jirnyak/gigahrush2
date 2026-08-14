@@ -256,7 +256,7 @@ bool entity_health(const Registry& reg, const NpcPool& pool, Entity e,
 DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
                           std::int16_t raw, DamageChannel ch, Entity source,
                           const MacroGrid* grid, ParticleBurstQueue* particles,
-                          const GravityField* gravity) {
+                          const GravityField* gravity, const float* fluid) {
     DamageResult out;
     if (!reg.valid(target) || raw <= 0) return out;
     if (reg.all_of<Dead>(target)) return out;  // already scheduled to die
@@ -291,6 +291,21 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
                             dmg = static_cast<std::int16_t>(mitigated);
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // Defender wet terrain incoming damage multiplier (e.g. Lotochnik drain armour)
+    if (fluid && reg.all_of<MobRef>(target)) {
+        if (const MobRef* m = reg.try_get<MobRef>(target)) {
+            if (const Transform* tr = reg.try_get<Transform>(target)) {
+                const bool wet = pos_wet(fluid, tr->pos);
+                const float inMult = trait_incoming_mult(m->kind, wet);
+                if (inMult != 1.0f) {
+                    int mitigated = static_cast<int>(static_cast<float>(dmg) * inMult + 0.5f);
+                    if (mitigated < 1 && dmg > 0) mitigated = 1;
+                    dmg = static_cast<std::int16_t>(mitigated);
                 }
             }
         }
@@ -630,7 +645,8 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
                              NpcPool& pool, EventBus& bus,
                              LayerId layer, float dt, std::uint64_t tick,
                              ParticleBurstQueue* particles,
-                             const GravityField* gravity) {
+                             const GravityField* gravity,
+                             const float* fluid) {
     // The camera holder, resolved ONCE per pass. It is a single entity that every
     // monster may want, so hoisting it out of the loop is free; crowd prey is
     // per-monster and cannot be hoisted the same way ([hunt.h]).
@@ -809,11 +825,7 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         float dmg = def.dmg == 0
                         ? 0.0f
                         : static_cast<float>(mob_hp_at_level(def.dmg, mr.level));
-        // Wall-adjacency bias: the four carriers hit harder with a wall at their
-        // back. Combined with the matching speed bonus in wander.cpp, this makes a
-        // corridor a genuinely worse place to be caught than an open room — level
-        // design out of geometry that already exists. [mob_behaviour.h]
-        // Wall-adjacency bias and precedence logic
+
         const auto beh = static_cast<MobBehaviour>(def.behaviour);
         const bool nearWall = wall_query_needed(def.aiFlags, beh)
                                   ? adjacent_wall(grid, tr.pos)
@@ -824,29 +836,25 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
             dmg *= wall_bias_damage(def.aiFlags, nearWall);
         }
 
-        // Directional damage multiplier for DeadEcho (viewer facing)
         if (victim == player && havePlayer) {
             const float pdx = wrap_delta_f(playerPos.x, tr.pos.x, kWorldExtent);
             const float pdy = wrap_delta_f(playerPos.y, tr.pos.y, kWorldExtent);
             dmg *= facing_damage_mult(beh, playerFwdX, playerFwdY, pdx, pdy);
         }
 
-        // Burst damage multiplier for FractureSprint (sprint phase)
         const float dist = std::sqrt(d2);
         const BurstPhase bp = burst_phase(
             beh, static_cast<std::uint32_t>(entt::to_integral(e)), tick, dist);
         dmg *= burst_damage_mult(bp);
 
+        // Terrain-keyed damage multiplier (e.g. Polzun wet ambush bonus)
+        if (fluid) {
+            const bool wet = pos_wet(fluid, tr.pos);
+            dmg *= trait_damage_mult(mr.kind, wet);
+        }
+
         const std::int16_t raw = static_cast<std::int16_t>(dmg);
 
-        // Melee first: if it can touch you, it touches you. Reach is in cells.
-        //
-        // `raw > 0` guards the branch rather than the function, so every one of the 68
-        // damaging kinds behaves bit-for-bit as before while a control shooter does not
-        // queue a swing that `apply_damage` would refuse anyway. Without the guard it
-        // would queue a 0-damage swing every tick forever: apply_damage returns
-        // hit == false for raw <= 0, so the cooldown is never set and the swing is
-        // re-queued on the next pass.
         const float reach = behaviour_melee_reach(beh, def.meleeReachMm, nearWall);
         if (raw > 0 && d2 <= reach * reach) {
             mc.windupMs = 0;   // contact cancels a shot it was lining up
@@ -855,25 +863,24 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
             continue;
         }
 
-        // Ranged. 13 of the 69 kinds; the rest have shotRangeMm == 0 and stop here.
         if (def.shotRangeMm == 0) continue;
         const float maxR = static_cast<float>(def.shotRangeMm) * 0.001f * kCellSize;
         const float minR = static_cast<float>(def.minRangeMm) * 0.001f * kCellSize;
         if (d2 > maxR * maxR || d2 < minR * minR) {
-            mc.windupMs = 0;   // out of the band: abort whatever it was aiming
+            mc.windupMs = 0;
             continue;
         }
 
-        // The telegraph. A shot is not fired on the tick it is decided: the kind's
-        // authored windup runs first, and leaving the band during it aborts (above).
-        // This is the entire difference between a fair ranged monster and an unfair
-        // one, so it is not optional and not tunable away.
+        if (!los_clear(grid, tr.pos, victimPos)) {
+            mc.windupMs = 0;
+            continue;
+        }
+
         if (mc.windupMs > 0) continue;              // mid-telegraph
         if (!windupDone && def.windupMs > 0) {      // start one
             mc.windupMs = def.windupMs;
             continue;
         }
-        // windupDone, or a kind with no authored windup: the shot leaves now.
 
         queued.push_back(Swing{e, victim, raw, def.attackCdMs, true, tr.pos,
                                victimPos, def.projSpeedMmps, def.projType});
@@ -882,8 +889,6 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
     std::uint32_t swings = 0;
     for (const Swing& s : queued) {
         if (s.ranged) {
-            // `gravity` forwarded, the same pointer this pass already hands
-            // apply_damage: the lob is solved in the layer's frame, not in Z.
             spawn_projectile(reg, layer, s.from, s.to, s.raw,
                              s.projSpeedMmps, s.mob, s.proj, gravity);
             ++swings;
@@ -891,15 +896,9 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
                 mc->cooldownMs = s.cd;
             continue;   // a shot in flight is not a hit yet
         }
-        // No early `break` on a lethal hit any more, and its removal is required
-        // rather than tidying: the queue now holds swings at DIFFERENT targets, so
-        // one body going down must not cancel the monster mauling somebody else in
-        // another room. Nothing is lost by dropping it — apply_damage already refuses
-        // a target that is `Dead`, returns hit == false, and so leaves that mob's
-        // cooldown unset exactly as the break did.
         DamageResult r = apply_damage(reg, pool, s.target, s.raw,
                                       DamageChannel::Kinetic, s.mob, &grid,
-                                      particles, gravity);
+                                      particles, gravity, fluid);
         if (r.hit) {
             ++swings;
             if (MobCombat* mc = reg.try_get<MobCombat>(s.mob))
@@ -909,7 +908,7 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
 
     for (const auto& hit : hazardHits) {
         apply_damage(reg, pool, hit.mob, hit.dmg, hit.ch, entt::null, &grid,
-                     particles);
+                     particles, gravity, fluid);
     }
 
     (void)bus;
@@ -1945,6 +1944,11 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
         if (am != 1000u)
             spread *= static_cast<float>(am) / 1000.0f;
     }
+    // Spec 03 §4.1 / Spec 09: Fouling / weapon wear degrades accuracy by widening the spread cone.
+    if (d.wearKind != static_cast<std::uint8_t>(WearKind::None) && gSlot.condition < 255u) {
+        const float foulingFrac = static_cast<float>(255u - gSlot.condition) / 255.0f;
+        spread *= (1.0f + 0.50f * foulingFrac);
+    }
     // Any two vectors perpendicular to fwd. Guarding on |fwd.z| rather than fwd.x
     // keeps the cross product well-conditioned when looking straight up or down.
     vec3 up = (fwd.z > 0.9f || fwd.z < -0.9f) ? vec3{1, 0, 0} : vec3{0, 0, 1};
@@ -2133,17 +2137,6 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
         const std::uint32_t cd =
             (static_cast<std::uint32_t>(wp->cooldownMs) * agiE3 * strE3) / 1000000u;
         swingCd = static_cast<std::uint16_t>(cd > 65535u ? 65535u : (cd < 1u ? 1u : cd));
-        static int rpgcmbtLog = 0;
-        if ((rpgcmbtLog++ % 30) == 0) {
-            std::fprintf(stderr,
-                         "[rpgcmbt] melee dmg=%d cd=%u str=%u agi=%u "
-                         "lvl=%u weapon=%u\n",
-                         static_cast<int>(swingDmg), swingCd,
-                         static_cast<unsigned>(rs->attr[0]),
-                         static_cast<unsigned>(rs->attr[1]),
-                         static_cast<unsigned>(rs->level),
-                         static_cast<unsigned>(heldWeapon));
-        }
     }
     // STATMELEE: authored status melee mult (Zhelemish 700/1000). Applied after
     // RPGCMBT so both bite; identity 1000 when status is null or clean.
@@ -2156,6 +2149,22 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
             if (scaled < 1 && swingDmg > 0) scaled = 1;
             if (scaled > 32767) scaled = 32767;
             swingDmg = static_cast<std::int16_t>(scaled);
+        }
+    }
+    // Spec 03 §4.1 / Spec 09: Weapon condition degradation (dull blade, cracked club)
+    // scales damage down to 60% minimum at condition 0.
+    if (heldSlot >= 0 && nr && pool.valid(nr->id)) {
+        const Inventory& inv = pool.inventory(nr->id);
+        const ItemSlot& sl = inv.slots[heldSlot];
+        if (item_valid(sl.item)) {
+            const ItemDef& d = item_def(sl.item);
+            if (d.wearKind == static_cast<std::uint8_t>(WearKind::Durability) && sl.condition < 255u) {
+                const float condMult = 0.60f + 0.40f * (static_cast<float>(sl.condition) / 255.0f);
+                int scaled = static_cast<int>(static_cast<float>(swingDmg) * condMult);
+                if (scaled < 1 && swingDmg > 0) scaled = 1;
+                if (scaled > 32767) scaled = 32767;
+                swingDmg = static_cast<std::int16_t>(scaled);
+            }
         }
     }
     const float reach =

@@ -3647,19 +3647,27 @@ int main(int argc, char** argv) {
                 heardMobs = game::investigate_step(reg, noiseField, pool, activeLayer, simTick);
 
                 // --- PER-TICK SPECIAL MONSTER TRAITS & ABILITIES ---
+                const float* fluidData = giga::fluid_data(stack.layer(activeLayer));
                 for (auto me_ : reg.view<game::MobRef, Transform, Velocity>()) {
                     Transform& tr = reg.get<Transform>(me_);
                     if (tr.layer != activeLayer) continue;
                     game::MobRef& mr = reg.get<game::MobRef>(me_);
                     const auto kind = static_cast<game::MobKind>(mr.kind);
+                    const bool wet = game::pos_wet(fluidData, tr.pos);
+
+                    // Trait movement pace multiplier (wet/dry terrain adaptation)
+                    const float moveMult = game::trait_move_mult(mr.kind, wet);
+                    if (moveMult != 1.0f) {
+                        Velocity& vel = reg.get<Velocity>(me_);
+                        vel.v.x *= moveMult;
+                        vel.v.y *= moveMult;
+                    }
 
                     // 1. Wet Regeneration (Lotochnik, etc.)
                     const float regenRate = game::trait_wet_regen_hps(mr.kind);
                     if (regenRate > 0.0f && (simTick % 16 == 0)) {
-                        const float* fluidData = giga::fluid_data(stack.layer(activeLayer));
-                        if (game::pos_wet(fluidData, tr.pos)) {
+                        if (wet) {
                             mr.hp = std::min<std::int16_t>(mr.maxHp, mr.hp + static_cast<std::int16_t>(regenRate * 0.13f + 0.5f));
-
                         }
                     }
 
@@ -4105,7 +4113,8 @@ int main(int argc, char** argv) {
                                    pool, bus, activeLayer,
                                                    kSimDt, simTick,
                                                    &particleBursts,
-                                   &stack.layer(activeLayer).gravity());
+                                   &stack.layer(activeLayer).gravity(),
+                                   fluidData);
                 // Fire, acid and live grates bill EVERY embodied body, not just
                 // monsters. Straight after the monster sweep so both pay on the
                 // same tick and the same 1-in-16 cadence. [problems.md] §41
