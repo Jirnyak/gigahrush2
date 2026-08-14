@@ -733,8 +733,10 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                 totalCount += 1.0f;
                 const float hpFrac = static_cast<float>(pool.hp(oid)) /
                                      static_cast<float>(pool.max_hp(oid));
-                if (hpFrac < kMedicThreshold) {
-                    woundedCount += 1.0f;
+                if (hpFrac < 1.0f) {
+                    if (hpFrac < kMedicThreshold) {
+                        woundedCount += 1.0f;
+                    }
                     pool.needs(oid).hpBank += kMedicHealPerSec * dt;
                     Needs& own = pool.needs(id);
                     own.sleep -= kMedicFatiguePerSec * dt;
