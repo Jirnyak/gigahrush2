@@ -79,6 +79,11 @@
 #include "game/npc_pool.h"    // Needs is a column there
 #include "world/level_stack.h"
 
+namespace giga {
+template <class T>
+class Field;
+}
+
 namespace giga::game {
 
 inline constexpr float kNeedMax = 100.0f;
@@ -313,7 +318,8 @@ struct StatusSet;
 NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
                      const RoomZones* rooms = nullptr,
                      class AiMemory* mem = nullptr, double now = 0.0,
-                     const StatusSet* playerStatus = nullptr);
+                     const StatusSet* playerStatus = nullptr,
+                     const Field<float>* gasField = nullptr);
 
 // Keyed off `UseEffect`, never `ItemCategory` — and the distinction is real:
 // `calm_brew` is category DRINK and `easter_egg` is category FOOD, but both are

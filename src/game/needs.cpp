@@ -5,10 +5,12 @@
 #include "core/wrap.h"       // wrap_macro — the body's cell is a toroidal lookup
 #include "ecs/components.h"
 #include "game/embody.h"     // NpcRef
+#include "game/equip.h"      // Equipped, equipped tools
 #include "game/inventory.h"
 #include "game/room_zone.h"  // room_bit_at / room_restores / room_recover
 #include "game/rpg.h"        // RpgStats, max_psi
 #include "game/status.h"     // status_water_drain_e3
+#include "world/field.h"     // Field<float>
 #include "world/types.h"     // kCellSize — pos -> macro cell, the one conversion
 
 namespace giga::game {
@@ -251,7 +253,8 @@ float needs_speed_scale(const Needs& n) {
 
 NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
                      const RoomZones* rooms, AiMemory* mem, double now,
-                     const StatusSet* playerStatus) {
+                     const StatusSet* playerStatus,
+                     const Field<float>* gasField) {
     NeedsTick out;
     if (dt <= 0.0f) return out;
 
@@ -315,6 +318,34 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
             }
         }
 
+        // GAS / SMOKE SUFFOCATION HAZARD (Spec 02 §4 & Spec 03 §4)
+        if (gasField != nullptr) {
+            const int cx = wrap_macro(static_cast<int>(std::floor(tr.pos.x / kCellSize)));
+            const int cy = wrap_macro(static_cast<int>(std::floor(tr.pos.y / kCellSize)));
+            const int cz = wrap_macro(static_cast<int>(std::floor(tr.pos.z / kCellSize)));
+            const float gasConcentration = gasField->at(cx, cy, cz);
+            if (gasConcentration > 0.01f) {
+                // Check if equipped with working filter (Fouling wear kind with condition > 0)
+                bool protectedByFilter = false;
+                if (const Equipped* eq = reg.try_get<Equipped>(e)) {
+                    if (eq->tool != kEquipNone && eq->tool < kInvSlots) {
+                        const Inventory& inv = pool.inventory(id);
+                        const ItemSlot& slot = inv.slots[eq->tool];
+                        if (item_valid(slot.item) && slot.condition > 0) {
+                            const ItemDef& idef = item_def(slot.item);
+                            if (idef.wearKind == static_cast<std::uint8_t>(WearKind::Fouling)) {
+                                protectedByFilter = true;
+                            }
+                        }
+                    }
+                }
+                if (!protectedByFilter) {
+                    const float suffocationRate = gasConcentration * 0.8f;
+                    n.hpDebt += suffocationRate * dt;
+                }
+            }
+        }
+
         // HEAL BANK SPILL — the mirror of the hpDebt drain below, and deliberately
         // NOT behind that section's `rate <= 0` early-out: a body healing in a
         // Medical room usually has no failed need at all, and gating the spill on
@@ -343,16 +374,16 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
         }
 
         const float rate = needs_hp_rate(n);
-        if (rate <= 0.0f) continue;
+        if (rate > 0.0f) {
+            n.hpDebt += rate * dt;
+        }
+        if (n.hpDebt < 1.0f) continue;
 
         // HP is an integer and the slowest drain is 0.1 HP/s, which at the 125 Hz sim
         // step is 0.00083 HP — truncating that to an int every step would make
         // starvation cost exactly nothing, forever. So the fraction is BANKED in the
         // row and only whole HP is ever spent. The debt is deliberately not forgiven
         // when a need is topped back up: unpaid damage is still owed.
-        n.hpDebt += rate * dt;
-        if (n.hpDebt < 1.0f) continue;
-
         float whole = std::floor(n.hpDebt);
         n.hpDebt -= whole;
         if (whole > 32767.0f) whole = 32767.0f; // a catch-up dt cannot overflow int16

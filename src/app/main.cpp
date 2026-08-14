@@ -4355,9 +4355,11 @@ int main(int argc, char** argv) {
                                                      simTick, &noiseField);
                 // Spec 03 §4.2: Environmental gas/smoke filter degradation & battery drain.
                 // 1-in-16 staggered sweep across equipped tools on active layer.
-                game::fouling_step(reg, pool, activeLayer, nullptr, nullptr, kSimDt, simTick);
+                const auto* liveGasField = activeWorld.fields().find<float>(kGasField);
+                const float* liveGasRaw = liveGasField ? liveGasField->data().data() : nullptr;
+                game::fouling_step(reg, pool, activeLayer, liveGasRaw, nullptr, kSimDt, simTick);
                 needs = game::needs_step(reg, pool, activeLayer, kSimDt, &roomZones,
-                                         &aiMem, simNow, &playerStatus);
+                                         &aiMem, simNow, &playerStatus, liveGasField);
                 needsHpLost += needs.hpLost;
                 // The other half of the acceptance trail. `bodies` says the clock is
                 // no longer a one-body clock, `recovering` says rooms are actually

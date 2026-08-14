@@ -15,6 +15,7 @@
 // the arithmetic that replaced it are in [needs.h]; the count over every deficit the
 // bar can hold is in suite_needs2.inl.
 #include "core/tick.h"   // kSimDt / kSimHz — never a bare 1/120 ([core/tick.h])
+#include "game/equip.h"
 #include "game/needs.h"
 #include "game/room_zone.h" // RoomZones/room_bit_at — the ambient-recovery arm
 #include "game/elevator.h"
@@ -1068,6 +1069,63 @@ void the_whole_floor_lives_on_one_clock() {
     CHECK(!needs_step(reg, pool, 0, 0.0f).ticked);
 }
 
+void gas_smoke_suffocation_and_filter_protection() {
+    giga::Registry reg;
+    giga::game::NpcPool pool;
+    pool.init();
+
+    giga::Field<float> gasField(0.0f);
+    gasField.at(10, 10, 10) = 1.0f; // full gas concentration
+
+    // Body A: Unprotected
+    const giga::game::NpcId idA = pool.spawn();
+    pool.hp(idA) = 100;
+    pool.max_hp(idA) = 100;
+    pool.needs(idA) = full_clock(); // perfect food, water, sleep
+    const giga::Entity eA = reg.create();
+    reg.emplace<giga::Transform>(eA, giga::vec3{20.5f, 20.5f, 20.5f}, giga::LayerId{0});
+    reg.emplace<giga::game::NpcRef>(eA, idA);
+
+    // Body B: Equipped with IP-4 gas mask
+    const giga::game::NpcId idB = pool.spawn();
+    pool.hp(idB) = 100;
+    pool.max_hp(idB) = 100;
+    pool.needs(idB) = full_clock();
+    const giga::Entity eB = reg.create();
+    reg.emplace<giga::Transform>(eB, giga::vec3{20.5f, 20.5f, 20.5f}, giga::LayerId{0});
+    reg.emplace<giga::game::NpcRef>(eB, idB);
+
+    giga::game::Inventory& invB = pool.inventory(idB);
+    giga::game::ItemId foulingItem = 0;
+    for (std::size_t i = 1; i <= giga::game::kItemCount; ++i) {
+        if (giga::game::item_def(static_cast<giga::game::ItemId>(i)).wearKind ==
+            static_cast<std::uint8_t>(giga::game::WearKind::Fouling)) {
+            foulingItem = static_cast<giga::game::ItemId>(i);
+            break;
+        }
+    }
+    CHECK(foulingItem != 0);
+    invB.slots[0].item = foulingItem;
+    invB.slots[0].count = 1;
+    invB.slots[0].condition = 255;
+
+    giga::game::Equipped eqB{};
+    eqB.tool = 0; // tool slot 0 holds the gas mask
+    reg.emplace<giga::game::Equipped>(eB, eqB);
+
+    // Run 1 second of simulation with the live gas field
+    const float dt = 1.0f;
+    needs_step(reg, pool, 0, dt, nullptr, nullptr, 0.0, nullptr, &gasField);
+
+    // Unprotected body A must have accumulated ~0.8 HP suffocation debt
+    const giga::game::Needs& nA = pool.needs(idA);
+    CHECK(nA.hpDebt >= 0.79f);
+
+    // Protected body B must have zero suffocation debt
+    const giga::game::Needs& nB = pool.needs(idB);
+    CHECK(nB.hpDebt < 1e-5f);
+}
+
 } // namespace needs_test
 
 static void test_needs_all() {
@@ -1081,4 +1139,5 @@ static void test_needs_all() {
     needs_test::pressure();
     needs_test::survives_the_body_swap();
     needs_test::the_whole_floor_lives_on_one_clock();
+    needs_test::gas_smoke_suffocation_and_filter_protection();
 }
