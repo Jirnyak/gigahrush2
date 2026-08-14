@@ -1,18 +1,20 @@
-// Crafting — the 4,906 authored numbers that had no reader (446 rows x 11 craft
-// columns; an earlier draft of this line said 4,914, which is not 446 x 11).
+// Crafting — the 4,420 authored numbers that had no reader (442 rows x 10 craft
+// columns; the count was "446 x 11" when this header was first written — the
+// catalog has since shrunk to 442 rows and the ninth material axis was merged
+// into electronics, see "The eight axes" below).
 //
-// `data/items.csv` carries eleven craft columns on every one of its 446 rows:
-// nine material counts, a station and a tier. All 446 x 9 counts are populated
-// (measured: 5,613 material units across 446 rows, minimum row total 1, maximum
-// 180, **zero** rows summing to 0). Until this file existed the only mention of
-// any of it anywhere in `src/` was one comment in [item_table.h] reading
-// "craft[9] + station + tier   crafting is not implemented". The content was
-// authored and paid for; the system that reads it did not exist.
+// `data/items.csv` carries ten craft columns on every one of its 442 rows:
+// eight material counts, a station and a tier. All 442 x 8 counts are populated
+// (measured 2026-08-14: 5,589 material units across 442 rows, minimum row total
+// 1, maximum 180, **zero** rows summing to 0). Until this file existed the only
+// mention of any of it anywhere in `src/` was one comment in [item_table.h]
+// reading "craft[9] + station + tier   crafting is not implemented". The content
+// was authored and paid for; the system that reads it did not exist.
 //
 // **The vector means one thing in both directions, and that is the whole design.**
 // Verified against the reference's `kraft.md` and `src/data/craft_recipes.ts`
 // rather than assumed: `recipeForItem` sets `components = ITEM_COMPOSITIONS[id]`,
-// so an item's nine numbers are simultaneously
+// so an item's eight numbers are simultaneously
 //
 //   * what a recipe SPENDS to build it  (`craftKnownRecipe`), and
 //   * what breaking one down YIELDS     (`disassembleInventorySlot`).
@@ -27,16 +29,17 @@
 // Because the recipes are already in `data/items.csv`, and a second copy of them
 // would be the exact failure [AGENTS.md] warns about for generated tables, one
 // level up: "CSV edited, generator not re-run — invisible to the compiler".
-// Re-typing 4,014 integers into a second file makes that failure *authorable*.
+// Re-typing 3,536 integers into a second file makes that failure *authorable*.
 //
 // Measured before deciding, not asserted after: the reference derives every
 // recipe from the item catalog (one recipe per item id, `resultCount == 1`), its
 // station from `stationForItem(def, components)` and its tier from
-// `tierForComponents(components)`. Replaying `tierForComponents` over items.csv
-// reproduces the `craft_tier` column for **446 of 446 rows, zero mismatches**,
-// and the `craft_station` distribution matches `stationForItem`'s branches
-// (MEDICINE -> lab, 20 of 20; all 9 net_terminal weapons carry cybernetics or
-// metamatter). So columns 27..37 are a faithful export of the reference's derived
+// `tierForComponents(components)`. At export time, replaying `tierForComponents`
+// over items.csv reproduced the `craft_tier` column for **every row, zero
+// mismatches**, and the `craft_station` distribution matched `stationForItem`'s
+// branches (MEDICINE -> lab, 20 of 20; every net_terminal weapon carried the
+// ninth axis or metamatter — that axis has since been merged into electronics,
+// see below). So columns 27..36 are a faithful export of the reference's derived
 // recipe set, not an approximation of it — the recipe table IS the item table,
 // and `kCraftRecipeCount == kItemCount` by construction with recipe N being item
 // N. No id space, no lookup, no drift.
@@ -63,7 +66,7 @@
 //     a reverse-engineered tier-3 recipe sits in your head returning
 //     `CraftFail::TierTooHigh` until somebody trains you.
 //
-// That is where the gate bites, and it is the only place it can: the nine
+// That is where the gate bites, and it is the only place it can: the eight
 // default-known recipes are all tier 0 (measured), so a fresh run can build
 // everything it starts with.
 //
@@ -71,8 +74,8 @@
 // Shape
 // ---------------------------------------------------------------------------
 // Flat and allocation-free throughout, per [AGENTS.md] "dense over sparse": the
-// material bank is nine `std::uint32_t`, the known-recipe set is a 448-bit
-// bitset (7 words) rather than a hash set, and the recipe table is a 5,352-byte
+// material bank is eight `std::uint32_t`, the known-recipe set is a 448-bit
+// bitset (7 words) rather than a hash set, and the recipe table is a 4,862-byte
 // `std::array` that is permanently cache-resident like the item and mob tables.
 // `CraftingState` is 96 bytes, POD and trivially copyable, so it byte-copies into
 // a pool row or a save buffer with no serializer walking a container.
@@ -92,22 +95,31 @@
 namespace giga::game {
 
 // ---------------------------------------------------------------------------
-// The nine axes
+// The eight axes
 // ---------------------------------------------------------------------------
 // **The order is an API, a save and a UI contract** — the reference's kraft.md
 // says so in as many words, and the columns of items.csv are written in it. Do
 // not reorder without bumping the save shape; a swap of two axes is invisible to
-// every compiler and silently re-prices 446 items.
-inline constexpr std::size_t kCraftMaterials = 9;
+// every compiler and silently re-prices 442 items.
+//
+// There were NINE until 2026-08-14. The ninth ("rare NET / robotics / high
+// energy") was half-dead by measurement — 85 units over exactly 7 rows, all of
+// them net_terminal energy weapons, and data/craft_recipes.csv taught nothing
+// that touched it — so it was merged into Electronics, the same territory its
+// own comment claimed, to bring the axis count to a power of two. Eight is
+// load-bearing for hashes, caches and array sizing the same way the 8-slot
+// attribute block is. The seven remapped rows kept their totals: units moved
+// axis, never vanished. Its name survives only in the git history, on purpose —
+// a grep for it today should find nothing to mislead.
+inline constexpr std::size_t kCraftMaterials = 8;
 
 enum class CraftMaterial : std::uint8_t {
-    Mechanics = 0,   // tools, repair, moving parts        904 units over 195 rows
-    Electronics,     // wiring, boards, batteries          372 over  67
-    Consumables,     // paper, fabric, tape, packaging     1106 over 316
-    Bio,             // tissue, slime, fungi, samples      389 over 113
-    Chemical,        // medicine, fuel, reagents           795 over 197
-    Metal,           // metal, ammo bodies, weapons        968 over 136
-    Cybernetics,     // rare NET / robotics / high energy    85 over   7
+    Mechanics = 0,   // tools, repair, moving parts        896 units over 191 rows
+    Electronics,     // wiring, boards, batteries, NET      456 over  66
+    Consumables,     // paper, fabric, tape, packaging     1103 over 315
+    Bio,             // tissue, slime, fungi, samples       388 over 112
+    Chemical,        // medicine, fuel, reagents            794 over 196
+    Metal,           // metal, ammo bodies, weapons         958 over 132
     PsiMatter,       // PSI clots, cult / void matter       749 over  32
     MetaMatter,      // endgame anomaly / VOID material     245 over  10
     Count
@@ -121,14 +133,14 @@ static_assert(static_cast<std::size_t>(CraftMaterial::Count) == kCraftMaterials,
 // `craft_station_ok` is the one place that asymmetry lives.
 enum class CraftStation : std::uint8_t {
     Any = 0,      //  22 recipes: trivial survival / document work
-    Workbench,    // 237, and the only station disassembly works at
-    Lathe,        //  92: mechanical, weapon, ammo, metal, tools
+    Workbench,    // 235, and the only station disassembly works at
+    Lathe,        //  90: mechanical, weapon, ammo, metal, tools
     Lab,          //  77: medical, PSI, samples, reagents
-    NetTerminal,  //  18: cybernetics, NET, metamatter
+    NetTerminal,  //  18: NET, high-energy electronics, metamatter
     Count
 };
 
-// Tiers run 0..4 (230 / 137 / 51 / 17 / 11 recipes). A fresh run is tier 0.
+// Tiers run 0..4 (228 / 135 / 51 / 17 / 11 recipes). A fresh run is tier 0.
 inline constexpr std::uint8_t kCraftMaxTier = 4;
 
 // ---------------------------------------------------------------------------
@@ -139,16 +151,17 @@ inline constexpr std::uint8_t kCraftMaxTier = 4;
 // ([item_table.h]: slot 0 already means "empty"), so the two tables can never
 // disagree about which row is which item.
 //
-// 12 bytes, no interior padding. Material counts fit a `std::uint8_t` with room
-// to spare: the largest single authored axis anywhere in items.csv is 59
-// (`granit4u_belt_shotgun`, metal) and the largest row total is 180.
+// 11 bytes, no interior padding. Material counts fit a `std::uint8_t` with room
+// to spare: the largest single authored axis anywhere in items.csv is 70
+// (`gravity_beam_emitter`, electronics — 50 authored plus the 20 the merged
+// ninth axis folded in) and the largest row total is 180.
 struct CraftRecipe {
-    std::uint8_t comp[kCraftMaterials];  //  0..8  cost AND disassembly yield vector
-    std::uint8_t station;                //  9     CraftStation
-    std::uint8_t tier;                   // 10     0..kCraftMaxTier
-    std::uint8_t flags;                  // 11     kCraftKnownByDefault etc.
+    std::uint8_t comp[kCraftMaterials];  //  0..7  cost AND disassembly yield vector
+    std::uint8_t station;                //  8     CraftStation
+    std::uint8_t tier;                   //  9     0..kCraftMaxTier
+    std::uint8_t flags;                  // 10     kCraftKnownByDefault etc.
 };
-static_assert(sizeof(CraftRecipe) == 12, "CraftRecipe must stay a tight 12-byte row");
+static_assert(sizeof(CraftRecipe) == 11, "CraftRecipe must stay a tight 11-byte row");
 static_assert(std::is_trivially_copyable_v<CraftRecipe>);
 
 // `flags` bits.
@@ -157,7 +170,7 @@ inline constexpr std::uint8_t kCraftDiscoverable   = 1u << 1;  // learnable at a
 
 // One recipe per item, and that equality is the anti-drift invariant: adding an
 // item row adds its recipe, and there is no second count to forget to update.
-inline constexpr std::size_t kCraftRecipeCount = kItemCount;   // 446
+inline constexpr std::size_t kCraftRecipeCount = kItemCount;   // 442
 
 // Generated from data/items.csv + data/craft_recipes.csv by
 // tools/gen_craft_table.py. Row N is item id N+1.
@@ -220,11 +233,11 @@ extern const std::array<const char*, kCraftSourceCount> kCraftSourceText;
 // ---------------------------------------------------------------------------
 // State — 96 bytes the run carries
 // ---------------------------------------------------------------------------
-// 446 recipes need 446 bits; 7 x 64 = 448, so the last 2 bits are always 0 and
+// 442 recipes need 442 bits; 7 x 64 = 448, so the last 6 bits are always 0 and
 // `craft_known_count` can popcount the lot without masking.
 inline constexpr std::size_t kCraftKnownWords = (kCraftRecipeCount + 63) / 64;  // 7
 // The reference's clamp, ported verbatim. Nothing in the game can reach it — the
-// whole catalog disassembled one of each yields 5,613 units across nine axes —
+// whole catalog disassembled one of each yields 5,589 units across eight axes —
 // but a clamp that cannot be reached is a clamp that cannot overflow either.
 inline constexpr std::uint32_t kCraftMaterialMax = 999999u;
 
@@ -232,9 +245,9 @@ inline constexpr std::uint32_t kCraftMaterialMax = 999999u;
 // 8-byte-aligned bitset first, then the material bank, then the byte fields.
 struct CraftingState {
     std::uint64_t known[kCraftKnownWords]{};  //  0..55  one bit per item id
-    std::uint32_t mat[kCraftMaterials]{};     // 56..91  the bank, 0..kCraftMaterialMax
-    std::uint8_t tier = 0;                    // 92      highest craftable tier
-    std::uint8_t pad_[3]{};                   // 93..95
+    std::uint32_t mat[kCraftMaterials]{};     // 56..87  the bank, 0..kCraftMaterialMax
+    std::uint8_t tier = 0;                    // 88      highest craftable tier
+    std::uint8_t pad_[7]{};                   // 89..95
 };
 static_assert(sizeof(CraftingState) == 96, "CraftingState must stay a 96-byte POD");
 static_assert(std::is_trivially_copyable_v<CraftingState>);
@@ -266,7 +279,7 @@ const char* craft_fail_text(CraftFail e);
 // Queries
 // ---------------------------------------------------------------------------
 
-// A fresh run: empty bank, tier 0, the nine `kCraftKnownByDefault` recipes known.
+// A fresh run: empty bank, tier 0, the eight `kCraftKnownByDefault` recipes known.
 void craft_init(CraftingState& st);
 
 bool craft_known(const CraftingState& st, ItemId id);
@@ -389,13 +402,13 @@ int craft_scrap_slot(const Inventory& inv);
 //
 // Little-endian, byte by byte, exactly as [save.h] describes its own fields, so
 // no padding byte and no host byte order reaches the file and a save written by
-// MSVC loads under Clang. 93 bytes: 7 words + 9 counts + the tier.
+// MSVC loads under Clang. 89 bytes: 7 words + 8 counts + the tier.
 //
 // `pad_` is deliberately NOT written — it carries nothing — which is why this is
-// 93 and not `sizeof(CraftingState)`.
+// 89 and not `sizeof(CraftingState)`.
 inline constexpr std::size_t kCraftingWire =
-    kCraftKnownWords * 8 + kCraftMaterials * 4 + 1;   // 93
-static_assert(kCraftingWire == 93);
+    kCraftKnownWords * 8 + kCraftMaterials * 4 + 1;   // 89
+static_assert(kCraftingWire == 89);
 
 // Writes exactly kCraftingWire bytes. Cannot fail.
 void craft_write(const CraftingState& st, std::uint8_t* out);

@@ -411,7 +411,7 @@ static_assert(kLedgerWire == 8 + 8 + 4 + 4 + 4 + 4 + 1);
 static_assert(kContractWire == 4 + 2 + 4 + 4 + 4 + 1 + 1 + 1);
 static_assert(kNeedsWire == 9 * 4 + 1);
 static_assert(kInventoryWire == 64 * 4);
-// kSaveFixedWire: ledger+book+player + v7 rpg(12)+craft(93) + v8 combat(21)
+// kSaveFixedWire: ledger+book+player + v7 rpg(12)+craft(89) + v8 combat(21)
 // + v9 status(42) + v10 samosbor(17)+fastTravel(32) + quest log.
 //
 // The running prose here USED TO SAY "was 850 in v8; +42 = 892 in v9" and "header 64
@@ -421,7 +421,7 @@ static_assert(kInventoryWire == 64 * 4);
 // written down diverge; only the former are load-bearing, so the arithmetic now lives
 // ONLY in asserts and the prose only names the parts.
 static_assert(kRpgWire == 12);
-static_assert(kCraftingWire == 93);
+static_assert(kCraftingWire == 89);
 static_assert(kRangedWire == 16);
 static_assert(kCombatSaveWire == 21);
 static_assert(kStatusWire == 42);
@@ -430,11 +430,14 @@ static_assert(kFastTravelWire == 32);
 // The wire size and the runtime footprint of the unlock set must not drift apart:
 // widening kFloorSlots changes the struct and would silently change the format.
 static_assert(FastTravelState::wire_bytes() == kFastTravelWire);
-static_assert(kSaveFixedWire == 882 + kSamosborWire + kFastTravelWire);  // 931 (v11: +hpBank)
-static_assert(kSaveFixedWire == 931);
+// 927 is ALSO the number v10 asserted before hpBank existed. Same integer, two
+// different formats (v10: nine craft axes, no hpBank; v12: eight axes, hpBank) —
+// the version field is what tells them apart, not this sum.
+static_assert(kSaveFixedWire == 878 + kSamosborWire + kFastTravelWire);  // 927 (v12: craft 9->8 axes)
+static_assert(kSaveFixedWire == 927);
 static_assert(kFactionWire == 36);
-static_assert(save_bytes_for(0) == 1031);
-static_assert(save_bytes_for(0, 100, 50) == 1031 + 150);
+static_assert(save_bytes_for(0) == 1027);
+static_assert(save_bytes_for(0, 100, 50) == 1027 + 150);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two

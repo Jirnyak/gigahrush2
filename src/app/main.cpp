@@ -314,7 +314,7 @@ static void DrawCraftingWindowUI(bool* p_open, game::CraftingState& crafting,
     static bool showOnlyKnown = false;
 
     const char* stationNames[] = { "Bare Hands (Any)", "Workbench", "Lathe", "Lab", "Net Terminal" };
-    const char* matNames[] = { "Mech", "Elec", "Cons", "Bio", "Chem", "Metal", "Cyber", "Psi", "Meta" };
+    const char* matNames[] = { "Mech", "Elec", "Cons", "Bio", "Chem", "Metal", "Psi", "Meta" };
 
     ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "Station: %s | Cert Tier: T%u",
                        stationNames[static_cast<std::size_t>(currentStation)], crafting.tier);
@@ -5110,8 +5110,8 @@ int main(int argc, char** argv) {
                         }
                     }
                 }
-                // Crafting, on screen: C builds or reads, X strips. `bank` is the 9-axis
-                // material vector summed, because nine numbers on the HUD would be noise
+                // Crafting, on screen: C builds or reads, X strips. `bank` is the 8-axis
+                // material vector summed, because eight numbers on the HUD would be noise
                 // — the per-axis detail is what the craft menu is for when one exists.
                 // Tier only rises by reading a blueprint, so it is the one number here
                 // that reports progression rather than activity.

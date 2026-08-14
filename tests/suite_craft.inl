@@ -1,26 +1,28 @@
-// Crafting — the 4,906 authored numbers (446 rows x 11 craft columns), and whether
+// Crafting — the 4,420 authored numbers (442 rows x 10 craft columns), and whether
 // anything reads them correctly.
 //
 // The premise this suite pins first, because the whole lane rests on it: an item's
-// nine `craft_*` columns are ONE vector read in two directions — what a recipe
+// eight `craft_*` columns are ONE vector read in two directions — what a recipe
 // spends, and what breaking the item down yields. That is not an inference from
 // the column names; it is `craft_recipes.ts`'s `recipeForItem` setting
 // `components = ITEM_COMPOSITIONS[id]` and `crafting.ts`'s
 // `disassembleInventorySlot` rolling over that same array.
 //
-// Every number asserted below was measured off data/items.csv directly, so a
-// green run means the compiled table still agrees with the CSV — which is the one
-// thing a generated table can silently stop doing:
+// Every number asserted below was measured off data/items.csv directly (last
+// re-measured 2026-08-14, when the ninth axis was merged into electronics —
+// [craft.h] "The eight axes"), so a green run means the compiled table still
+// agrees with the CSV — which is the one thing a generated table can silently
+// stop doing:
 //
-//   446    recipes, one per item id (kCraftRecipeCount == kItemCount)
-//   5,613  authored material units in total, minimum row 1, maximum row 180
+//   442    recipes, one per item id (kCraftRecipeCount == kItemCount)
+//   5,589  authored material units in total, minimum row 1, maximum row 180
 //   0      rows summing to zero (the generator refuses to emit one)
-//   59     largest single authored axis (granit4u_belt_shotgun, metal)
-//   904 / 372 / 1106 / 389 / 795 / 968 / 85 / 749 / 245   per-axis sums
-//   230 / 137 / 51 / 17 / 11                              tier histogram
-//   22 / 237 / 92 / 77 / 18                               station histogram
-//   9      recipes known by default, ALL of them tier 0
-//   24     knowledge sources teaching 71 recipes between them
+//   70     largest single authored axis (gravity_beam_emitter, electronics)
+//   896 / 456 / 1103 / 388 / 794 / 958 / 749 / 245   per-axis sums
+//   228 / 135 / 51 / 17 / 11                         tier histogram
+//   22 / 235 / 90 / 77 / 18                          station histogram
+//   8      recipes known by default, ALL of them tier 0
+//   24     knowledge sources teaching 67 recipes between them
 //
 // **Nothing here is looked up by name or by a hardcoded id.** items.csv is sorted
 // alphabetically, so inserting one row renumbers everything above it — a test that
@@ -42,7 +44,7 @@
 
 namespace craft_detail {
 
-// Total across the nine axes of a recipe's cost vector.
+// Total across the eight axes of a recipe's cost vector.
 inline std::uint32_t vec_total(const CraftRecipe& r) {
     std::uint32_t t = 0;
     for (std::size_t i = 0; i < kCraftMaterials; ++i) t += r.comp[i];
@@ -120,10 +122,10 @@ static void test_craft_all() {
         // and every number in this file's header comment is stale.
         static_assert(kCraftRecipeCount == kItemCount,
                       "one recipe per item is the anti-drift invariant");
-        static_assert(kCraftMaterials == 9);
-        static_assert(sizeof(CraftRecipe) == 12);
+        static_assert(kCraftMaterials == 8);
+        static_assert(sizeof(CraftRecipe) == 11);
         static_assert(sizeof(CraftingState) == 96);
-        static_assert(kCraftingWire == 93);
+        static_assert(kCraftingWire == 89);
 
         std::uint32_t axis[kCraftMaterials] = {};
         std::uint32_t total = 0, maxRow = 0, maxAxis = 0;
@@ -150,7 +152,7 @@ static void test_craft_all() {
             if (r.flags & kCraftKnownByDefault) {
                 ++defaults;
                 // The tier gate must not lock a fresh run out of its own starting
-                // set. All nine are tier 0 in the reference's data; this is the
+                // set. All eight are tier 0 in the reference's data; this is the
                 // assertion that keeps that true.
                 CHECK(r.tier == 0);
             }
@@ -161,16 +163,15 @@ static void test_craft_all() {
         CHECK(zeroRows == 0);           // craft_disassemble's modulo depends on this
         CHECK(minRow == 1u);
         CHECK(maxRow == 180u);
-        CHECK(maxAxis == 59u);
+        CHECK(maxAxis == 70u);    // gravity_beam_emitter, electronics (50 + the merged 20)
         CHECK(axis[0] == 896u);
-        CHECK(axis[1] == 371u);
+        CHECK(axis[1] == 456u);   // electronics: 371 + the 85 the ninth axis held
         CHECK(axis[2] == 1103u);
         CHECK(axis[3] == 388u);
         CHECK(axis[4] == 794u);
         CHECK(axis[5] == 958u);
-        CHECK(axis[6] == 85u);    // cybernetics
-        CHECK(axis[7] == 749u);   // psimatter
-        CHECK(axis[8] == 245u);   // metamatter
+        CHECK(axis[6] == 749u);   // psimatter
+        CHECK(axis[7] == 245u);   // metamatter
         CHECK(tierHist[0] == 228);
         CHECK(tierHist[1] == 135);
         CHECK(tierHist[2] == 51);
@@ -195,7 +196,7 @@ static void test_craft_all() {
                      stationHist[3], stationHist[4], defaults);
     }
 
-    { // ---- 2. a fresh run knows nine recipes and can afford none of them -----
+    { // ---- 2. a fresh run knows eight recipes and can afford none of them ----
         CraftingState st{};
         craft_init(st);
         CHECK(craft_known_count(st) == 8u);
@@ -355,10 +356,10 @@ static void test_craft_all() {
     }
 
     { // ---- 5. disassembly yields the AUTHORED vector, and only it ------------
-        // The strong claim: over every one of the 446 items and many rolls, the axis
+        // The strong claim: over every one of the 442 items and many rolls, the axis
         // handed back is never an axis the item's own vector left at zero. That is
         // what "yields its authored craft_* vector" means as a testable property —
-        // a bug that returned a fixed axis, or rolled over all nine, dies here.
+        // a bug that returned a fixed axis, or rolled over all eight, dies here.
         std::uint32_t yieldTotal = 0, compTotal = 0;
         std::uint32_t offVector = 0;
         const std::uint32_t kKeys = 7;
@@ -390,7 +391,7 @@ static void test_craft_all() {
         CHECK(yieldTotal == static_cast<std::uint32_t>(kCraftRecipeCount));
 
         // THE RATIO, asserted rather than described. Disassembling one of every item
-        // in the catalog returns 446 units against 5,613 authored — a 92.06% loss.
+        // in the catalog returns 442 units against 5,589 authored — a 92.09% loss.
         // This is the reference's `addCraftMaterial(materialId, 1)` ported exactly,
         // and it is deliberate: disassembly is a trickle that makes junk worth
         // carrying, not a refund that makes crafting free. Asserted with integer
@@ -409,7 +410,7 @@ static void test_craft_all() {
 
     { // ---- 6. the weights are the vector, not a uniform pick -----------------
         // A single-axis item must return that axis for EVERY key: if the weighted
-        // roll were uniform over nine axes this fails immediately.
+        // roll were uniform over eight axes this fails immediately.
         ItemId single = only_item([](ItemId id) {
             const CraftRecipe& r = craft_recipe(id);
             int nz = 0;
@@ -824,7 +825,7 @@ static void test_craft_all() {
         CraftingState st{};
         craft_init(st);
         st.tier = 3;
-        st.mat[0] = 1; st.mat[4] = 4321; st.mat[8] = 999999u;
+        st.mat[0] = 1; st.mat[4] = 4321; st.mat[7] = 999999u;
         CHECK(craft_learn(st, static_cast<ItemId>(kCraftRecipeCount)));  // the LAST bit
         CHECK(craft_learn(st, 1));                                       // and the first
         const std::uint32_t knownBefore = craft_known_count(st);
@@ -868,7 +869,7 @@ static void test_craft_all() {
         CHECK(wild.tier == kCraftMaxTier);
         for (std::size_t i = 0; i < kCraftMaterials; ++i)
             CHECK(wild.mat[i] == kCraftMaterialMax);
-        // 448 bits all set, minus the 2 that name nothing.
+        // 448 bits all set, minus the 6 that name nothing.
         CHECK(craft_known_count(wild) == static_cast<std::uint32_t>(kCraftRecipeCount));
         for (ItemId id = 1; id <= kCraftRecipeCount; ++id) CHECK(craft_known(wild, id));
         std::fprintf(stderr,

@@ -126,7 +126,15 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // Version 11: Needs grows `hpBank` (+4 on the wire) — the crowd heal bank behind
 // the IntentHeal -> Medical affordance ([room_zone.h] TABLE 2). Version 10 saves
 // are rejected, same standing rule as above.
-inline constexpr std::uint32_t kSaveVersion = 11u;
+//
+// Version 12: the crafting bank shrinks from nine axes to eight (-4 on the wire)
+// — the ninth material was merged into electronics ([craft.h] "The eight axes").
+// A v11 bank's nine counts do not map onto eight slots without inventing a rule,
+// so version 11 saves are rejected, same standing rule. Note for the archaeologist:
+// kSaveFixedWire lands back on 927, the same number v10 had before hpBank — a
+// coincidence of two DIFFERENT formats (v10 lacked hpBank and had nine axes),
+// not a compatibility.
+inline constexpr std::uint32_t kSaveVersion = 12u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -242,7 +250,7 @@ inline constexpr std::size_t kPlayerWire = kNeedsWire + kInventoryWire + 4 + 4 +
 // footprint stays 12 and matches the POD layout without host padding surprises).
 inline constexpr std::size_t kRpgWire = 4 + 2 + 1 + 1 + 3 + 1;  // 12
 static_assert(kRpgWire == 12);
-// kCraftingWire (93) is defined in craft.h next to craft_write/craft_read.
+// kCraftingWire (89) is defined in craft.h next to craft_write/craft_read.
 // kQuestLogWire is defined in quest.h.
 // Version 8 / SAVMAG: PlayerRanged field-by-field (NOT sizeof — host padding)
 // + presence flag + cumulative melee kills. Cooldowns ride so a mid-reload F5

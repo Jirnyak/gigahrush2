@@ -157,7 +157,7 @@ SaveState busy_run() {
     craft_init(st.craft);
     st.craft.mat[0] = 111u;
     st.craft.mat[3] = 222u;
-    st.craft.mat[8] = 333u;
+    st.craft.mat[7] = 333u;
     st.craft.tier = 2u;
     // Flip one non-default discoverable bit if the table has room past defaults.
     // craft_learn no-ops on already-known / non-discoverable; the mat/tier pins
@@ -325,7 +325,7 @@ void wire_layout() {
     // depends on the compiler is a save that cannot cross hosts.
     // Derived from the serializers, not measured from a run: 33 ledger + 79 book
     // (3 x 21 + 16) + 304 player (33 needs + 256 inventory + 12 + 3) + 12 rpg +
-    // 93 craft + 21 combat (hasRanged+ranged+kills) + 42 status + 17 samosbor +
+    // 89 craft + 21 combat (hasRanged+ranged+kills) + 42 status + 17 samosbor +
     // 32 fast-travel + 294 quest log, plus the fixed 36-byte faction matrix and the
     // 64-byte header.
     //
@@ -336,17 +336,19 @@ void wire_layout() {
     // teaches the next reader to trust the wrong one.
     static_assert(kSaveHeaderWire == 64);
     static_assert(kRpgWire == 12);
-    static_assert(kCraftingWire == 93);
+    static_assert(kCraftingWire == 89);
     static_assert(kRangedWire == 16);
     static_assert(kCombatSaveWire == 21);
     static_assert(kStatusWire == 42);
     static_assert(kSamosborWire == 17);
     static_assert(kFastTravelWire == 32);
-    static_assert(kSaveFixedWire == 931);
+    // 927 repeats v10's total by coincidence, not compatibility: v10 had nine
+    // craft axes and no hpBank, v12 has eight and hpBank. See [save.cpp].
+    static_assert(kSaveFixedWire == 927);
     static_assert(kFactionWire == 36);
-    static_assert(save_bytes_for(0) == 1031);
-    static_assert(save_bytes_for(3) == 1031 + 15);
-    static_assert(save_bytes_for(3, 100, 50) == 1031 + 15 + 150);
+    static_assert(save_bytes_for(0) == 1027);
+    static_assert(save_bytes_for(3) == 1027 + 15);
+    static_assert(save_bytes_for(3, 100, 50) == 1027 + 15 + 150);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -356,13 +358,13 @@ void wire_layout() {
     const SaveState st = busy_run();
     save_write(st, bytes);
     CHECK(bytes.size() == save_bytes_for(3));
-    // 1046 B for a full run with three emptied crates and no macro blobs (those are
+    // 1042 B for a full run with three emptied crates and no macro blobs (those are
     // variable-size and pinned by macro_world_round_trips). GEOMETRY lives in the
     // per-floor files ([save.h] modular layout), never here. v8 was 965; the
     // legacy-content purge re-measured this from 1007; v9 was 993; v10 adds the
     // samosbor clock (17) and the fast-travel unlock set (32); v11 adds the crowd
-    // heal bank `hpBank` (+4).
-    CHECK(bytes.size() == 1046);
+    // heal bank `hpBank` (+4); v12 drops one craft axis (-4).
+    CHECK(bytes.size() == 1042);
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');
