@@ -470,6 +470,16 @@ if(EXISTS "${GIGA_ROOT}/src/app/main.cpp")
     endif()
 endif()
 
+# Guard against raw struct serialization in src/game/save.cpp (Phase 0.9).
+# Saves must be written field-by-field with explicit little-endian codecs, never raw struct dump.
+if(EXISTS "${GIGA_ROOT}/src/game/save.cpp")
+    file(READ "${GIGA_ROOT}/src/game/save.cpp" _save_src)
+    if(_save_src MATCHES "out_->insert\\([^)]*sizeof" OR _save_src MATCHES "out_->resize\\([^)]*sizeof")
+        list(APPEND GIGA_FAILURES
+            "src/game/save.cpp: raw struct serialization detected. Fields must be emitted through Writer primitive codecs.")
+    endif()
+endif()
+
 # ---- Verdict ---------------------------------------------------------------
 # ---- Guard: every test suite must be compiled by somebody ------------------
 # A `tests/suite_*.inl` reaches a compiler only if some `tests/*.cpp` names it in
