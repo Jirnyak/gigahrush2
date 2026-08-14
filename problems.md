@@ -2575,15 +2575,15 @@ const std::uint8_t itemTier = def.useA > 0 ? static_cast<std::uint8_t>(def.useA)
 | система | состояние |
 |---|---|
 | `cellular_step` | отложена, §13 |
-| `fluid_step` | ждёт GPU-компьют |
-| `diffusion_step` | поле опасности не производится; `ai_step` читает threat = 0, никто не бежит |
-| `diffusion_tick` | тот же долг — драйвер того же поля |
-| `route_step` | целевой шаг по флоу-полю отложен к #13 |
-| `bank_step` | банк начисляет проценты, тик игры его не зовёт |
-| `feed_tick` | лента событий читается только тестом |
-| `samosbor_fog_tick` | туманная популяция самосбора не тикает |
-| `interaction_step` | main.cpp зовёт свои ветки взаимодействия мимо неё |
-| `prop_interact_step` | обёртка, которую не зовёт никто и не покрывает ни один тест |
+| `fluid_step` | ждёт GPU-компьют, performance.md §The compute split |
+| `diffusion_step` | подключён через `diffusion_tick` драйвер и `ai_panic_publish_step` |
+| `diffusion_tick` | подключён к тику симуляции в `main.cpp` |
+| `route_step` | **ЗАКРЫТО 2026-08-14**: подключён в `ai_patrol_step` для навигации патрулей |
+| `bank_step` | **ЗАКРЫТО 2026-08-14**: подключён в тике симуляции к `BankAccount` |
+| `feed_tick` | **ЗАКРЫТО 2026-08-14**: подключён к `EventFeed` в `main.cpp` и HUD |
+| `samosbor_fog_tick` | **ЗАКРЫТО 2026-08-14**: подключён к тику самосбора |
+| `interaction_step` | **ЗАКРЫТО 2026-08-14**: подключён к обработке пропов в `main.cpp` |
+| `prop_interact_step` | **ЗАКРЫТО 2026-08-14**: подключён в `main.cpp` и покрыт `e2e_test` |
 
 **Семь из них были невидимы** для варианта гейта, из которого он поднят: тот
 искал `func(` по всем `src/*.cpp` и засчитывал **собственное определение
