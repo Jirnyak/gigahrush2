@@ -320,8 +320,10 @@ std::uint32_t loot_dead_mobs(Registry& reg, LayerId layer, int floorNumber,
     //
     // Snapshot entity ids first: emplace_or_replace can reallocate component
     // storage and invalidate a live view iterator.
+    auto deadView = reg.view<const Dead, const MobRef, const Transform>();
     std::vector<Entity> dead;
-    for (auto e : reg.view<const Dead, const MobRef, const Transform>()) {
+    dead.reserve(deadView.size_hint());
+    for (auto e : deadView) {
         if (reg.get<const Transform>(e).layer != layer) continue;
         // Already staged this death window — do not re-roll.
         if (reg.all_of<CorpseLootPending>(e)) continue;
@@ -366,8 +368,10 @@ std::int32_t pickup_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId la
     std::int32_t gained = 0;
 
     // Collect first, then destroy: mutating while iterating a view invalidates it.
+    auto pickupView = reg.view<const Pickup, const Transform>();
     std::vector<Entity> taken;
-    for (auto e : reg.view<const Pickup, const Transform>()) {
+    taken.reserve(pickupView.size_hint());
+    for (auto e : pickupView) {
         const Transform& tr = reg.get<const Transform>(e);
         if (tr.layer != layer) continue;
         const float dx = wrap_delta_f(me.x, tr.pos.x, kWorldExtent);

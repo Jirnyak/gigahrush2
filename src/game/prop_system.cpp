@@ -308,11 +308,9 @@ Entity spawn_prop_from_id(Registry& reg, const World& world, const vec3& worldPo
 
 std::uint32_t clear_layer_props(Registry& reg, LayerId layer) {
 
-    std::vector<Entity> old_;
-    // SubVoxelAnchor marks every static prop (terminals, shields, padic bulbs).
-    // Detached ragdolls lose the anchor and are left alone — they belong to the
-    // live sim, not the floor roster.
     auto view = reg.view<const SubVoxelAnchor, const Transform>();
+    std::vector<Entity> old_;
+    old_.reserve(view.size_hint());
     for (auto e : view) {
         if (view.get<const Transform>(e).layer == layer)
             old_.push_back(e);

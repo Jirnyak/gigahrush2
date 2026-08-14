@@ -53,6 +53,9 @@ layout(std430, binding = 2) buffer IndirectCommand {
     VkDrawIndexedIndirectCommand cmd;
 } outCmd;
 
+// Shared memory for frustum planes — extracted once by thread 0, read by all.
+shared vec4 s_planes[6];
+
 void main() {
     uint gID = gl_GlobalInvocationID.x;
 
@@ -64,6 +67,31 @@ void main() {
         outCmd.cmd.firstInstance = push.firstInstance;
     }
 
+    // Extract 6 view frustum planes from VP matrix — ONCE per workgroup
+    // via shared memory.  Must happen BEFORE any early returns so ALL
+    // threads in the workgroup reach the barrier().
+    if (gl_LocalInvocationIndex == 0u) {
+        vec4 r0 = vec4(push.viewProj[0][0], push.viewProj[1][0], push.viewProj[2][0], push.viewProj[3][0]);
+        vec4 r1 = vec4(push.viewProj[0][1], push.viewProj[1][1], push.viewProj[2][1], push.viewProj[3][1]);
+        vec4 r2 = vec4(push.viewProj[0][2], push.viewProj[1][2], push.viewProj[2][2], push.viewProj[3][2]);
+        vec4 r3 = vec4(push.viewProj[0][3], push.viewProj[1][3], push.viewProj[2][3], push.viewProj[3][3]);
+
+        // Pre-normalize so per-thread loop avoids 6x length()+divide
+        vec4 raw[6];
+        raw[0] = r3 + r0; // Left
+        raw[1] = r3 - r0; // Right
+        raw[2] = r3 + r1; // Bottom
+        raw[3] = r3 - r1; // Top
+        raw[4] = r2;      // Near (Vulkan depth [0, 1])
+        raw[5] = r3 - r2; // Far
+        for (int i = 0; i < 6; ++i) {
+            float len = length(raw[i].xyz);
+            s_planes[i] = (len > 0.0) ? raw[i] / len : raw[i];
+        }
+    }
+    barrier();
+
+    // Now safe to early-return — all threads have passed the barrier
     if (gID >= push.objectCount) return;
 
     PropInstance inst = inInst.instances[gID];
@@ -90,21 +118,7 @@ void main() {
 
     vec3 worldPos = camPos + relPos;
 
-    // 3. Extract 6 view frustum planes from VP matrix (column-major in GLSL)
-    vec4 r0 = vec4(push.viewProj[0][0], push.viewProj[1][0], push.viewProj[2][0], push.viewProj[3][0]);
-    vec4 r1 = vec4(push.viewProj[0][1], push.viewProj[1][1], push.viewProj[2][1], push.viewProj[3][1]);
-    vec4 r2 = vec4(push.viewProj[0][2], push.viewProj[1][2], push.viewProj[2][2], push.viewProj[3][2]);
-    vec4 r3 = vec4(push.viewProj[0][3], push.viewProj[1][3], push.viewProj[2][3], push.viewProj[3][3]);
-
-    vec4 planes[6];
-    planes[0] = r3 + r0; // Left
-    planes[1] = r3 - r0; // Right
-    planes[2] = r3 + r1; // Bottom
-    planes[3] = r3 - r1; // Top
-    planes[4] = r2;      // Near (Vulkan depth [0, 1])
-    planes[5] = r3 - r2; // Far
-
-    // 4. Frustum AABB test — PER-INSTANCE bounds, not per-shape. Unit meshes
+    // 3. Frustum AABB test — PER-INSTANCE bounds, not per-shape. Unit meshes
     // span +-0.5 around the origin and the instance scales them, so the true
     // half-extent IS scale/2: a pipe leg stretched to 40 m must not be culled
     // by a 1 m shape box the moment its centre leaves the frustum (measured:
@@ -119,14 +133,9 @@ void main() {
 
     bool visible = true;
     for (int i = 0; i < 6; ++i) {
-        vec3 n = planes[i].xyz;
-        float d = planes[i].w;
-        float len = length(n);
-        if (len > 0.0) {
-            n /= len;
-            d /= len;
-        }
-
+        vec3 n = s_planes[i].xyz;
+        float d = s_planes[i].w;
+        // Planes pre-normalized in shared memory — no per-thread normalize
         float radius = extents.x * abs(n.x) + extents.y * abs(n.y) + extents.z * abs(n.z);
         float dist = dot(n, center) + d;
         if (dist + radius < 0.0) {
@@ -137,7 +146,7 @@ void main() {
 
     if (!visible) return;
 
-    // 5. Append to culled instance output buffer & atomically increment instanceCount
+    // 4. Append to culled instance output buffer & atomically increment instanceCount
     uint outIdx = atomicAdd(outCmd.cmd.instanceCount, 1);
     inst.origin = worldPos; // Store toroidal pre-wrapped origin
     outInst.instances[outIdx] = inst;

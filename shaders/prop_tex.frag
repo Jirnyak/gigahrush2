@@ -254,7 +254,9 @@ float animated_emissive(float baseEmissive, uint mat_id, vec3 worldPos,
         return baseEmissive * max(breathe, 0.05);
     }
     float wave   = sin(t * 3.2 + worldPos.x * 3.5 + worldPos.z * 3.5 + phase);
-    float bubble = pow(max(sin(t * 7.5 + phase * 2.5), 0.0), 10.0) * 1.5;
+    float bSin = max(sin(t * 7.5 + phase * 2.5), 0.0);
+    float b2 = bSin * bSin; float b4 = b2 * b2; float b8 = b4 * b4;
+    float bubble = b8 * b2 * 1.5;
     return baseEmissive * (0.80 + 0.25 * wave + bubble);
 }
 
@@ -338,8 +340,8 @@ void main() {
     float g_hg   = 0.55;
     vec3 lightDir = normalize(vWorldPos - pc.camPos.xyz);
     float cosT    = dot(-V, lightDir);
-    float phase   = (1.0 - g_hg * g_hg) /
-                    pow(max(1.0 + g_hg * g_hg - 2.0 * g_hg * cosT, 1e-4), 1.5);
+    float hg_denom = max(1.0 + g_hg * g_hg - 2.0 * g_hg * cosT, 1e-4);
+    float phase   = (1.0 - g_hg * g_hg) / (hg_denom * sqrt(hg_denom));
 
     float r   = pc.fog.z;
     float att = 1.0 / (1.0 + (d * d) / (r * r));

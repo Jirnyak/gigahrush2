@@ -32,7 +32,8 @@ layout(set = 1, binding = 1, std430) readonly buffer LightGridBuffer {
 // Henyey-Greenstein anisotropic phase function for atmospheric scattering.
 float henyey_greenstein_phase(float cosTheta, float g) {
     float g2 = g * g;
-    return (1.0 - g2) / (12.566370614 * pow(max(1.0 + g2 - 2.0 * g * cosTheta, 1e-4), 1.5));
+    float denom = max(1.0 + g2 - 2.0 * g * cosTheta, 1e-4);
+    return (1.0 - g2) / (12.566370614 * denom * sqrt(denom));
 }
 
 // Interleaved Gradient Noise for screen-space ray jittering (prevents banding with 8-16 steps).

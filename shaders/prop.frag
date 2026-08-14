@@ -197,7 +197,9 @@ float compute_animated_emissive(float baseEmissive, uint mat_id, vec3 worldPos, 
 
     // Case D: Acid Pool Chemical Undulation & Bubble Bursts
     float spatialWave = sin(timeSec * 3.2 + worldPos.x * 3.5 + worldPos.z * 3.5 + phaseRad);
-    float bubblePop   = pow(max(sin(timeSec * 7.5 + phaseRad * 2.5), 0.0), 10.0) * 1.5;
+    float bSin = max(sin(timeSec * 7.5 + phaseRad * 2.5), 0.0);
+    float b2 = bSin * bSin; float b4 = b2 * b2; float b8 = b4 * b4;
+    float bubblePop   = b8 * b2 * 1.5;
     return baseEmissive * (0.80 + 0.25 * spatialWave + bubblePop);
 }
 
@@ -232,7 +234,8 @@ void main() {
     // Headlamp forward light scattering (Henyey-Greenstein phase function)
     float g_scat = 0.55;
     float cosTheta = dot(viewDir, lightDir);
-    float phase = (1.0 - g_scat * g_scat) / pow(max(1.0 + g_scat * g_scat - 2.0 * g_scat * cosTheta, 1e-4), 1.5);
+    float hg_denom = max(1.0 + g_scat * g_scat - 2.0 * g_scat * cosTheta, 1e-4);
+    float phase = (1.0 - g_scat * g_scat) / (hg_denom * sqrt(hg_denom));
 
     float r = pc.fog.z;
     float att = 1.0 / (1.0 + (d * d) / max(r * r, 1e-4));

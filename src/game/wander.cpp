@@ -162,9 +162,9 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         Transform& tr = view.get<Transform>(e);
         if (tr.layer != layer) continue;
 
-        if (reg.all_of<MobRef>(e)) {
-            const MobRef& mr = reg.get<const MobRef>(e);
-            const MobDef& md = kMobTable[mr.kind];
+        const MobRef* mr = reg.try_get<MobRef>(e);
+        if (mr) {
+            const MobDef& md = kMobTable[mr->kind];
             if (!has_flag(md.aiFlags, AiFlag::Flying)) {
                 int cx, cy, cz;
                 agent_cell(tr.pos, cx, cy, cz);
@@ -230,9 +230,8 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         // holder, and the RATE is the whole design — see [hunt.h] before touching
         // this. Residents themselves still walk past the carnage: NPC-on-NPC and
         // NPC-on-monster fighting is a threat model this does not have.
-        if (reg.all_of<MobRef>(e)) {
-            const MobRef& mr = reg.get<const MobRef>(e);
-            const MobDef& md = kMobTable[mr.kind];
+        if (mr) {
+            const MobDef& md = kMobTable[mr->kind];
             const MobBehaviour beh = static_cast<MobBehaviour>(md.behaviour);
             // Ten kinds have their own sight range instead of the flat 20 m: three
             // notice you far LATER (2.15 to 7.5 m), which is the only reason walking
@@ -338,7 +337,7 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                     }
                     const game::BurstPhase bp = game::burst_phase(beh, id, tick, len);
                     sp *= game::burst_speed_mult(bp);
-                    sp *= game::behaviour_hurt_move_mult(beh, mr.hp, mr.maxHp);
+                    sp *= game::behaviour_hurt_move_mult(beh, mr->hp, mr->maxHp);
                     vel.v.x = tx / tl * sp;
                     vel.v.y = ty / tl * sp;
                 }

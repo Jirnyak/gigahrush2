@@ -14,8 +14,10 @@ std::uint32_t impact_damage_step(Registry& reg, NpcPool& pool,
     std::uint32_t hurt = 0;
     // Collect first: apply_damage mutates component storage (Dead tags) and the
     // reports are removed as consumed — never mutate while iterating a view.
+    auto impactView = reg.view<const Impact>();
     std::vector<Entity> reports;
-    for (auto e : reg.view<const Impact>()) reports.push_back(e);
+    reports.reserve(impactView.size());
+    for (auto e : impactView) reports.push_back(e);
 
     for (Entity e : reports) {
         const float speed = reg.get<const Impact>(e).speed;

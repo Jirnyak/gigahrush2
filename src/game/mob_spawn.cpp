@@ -436,8 +436,9 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
 std::uint32_t despawn_layer_mobs(Registry& reg, LayerId layer) {
     // Collect first, then destroy: destroying while iterating a view invalidates
     // it. The list is bounded by the 4096 live-actor budget.
-    std::vector<Entity> doomed;
     auto view = reg.view<const MobRef, const Transform>();
+    std::vector<Entity> doomed;
+    doomed.reserve(view.size_hint());
     for (auto e : view)
         if (view.get<const Transform>(e).layer == layer) doomed.push_back(e);
     for (Entity e : doomed) reg.destroy(e);
@@ -536,8 +537,9 @@ FogRoster samosbor_fog_roster(int floorNumber, std::uint16_t samosborCount) {
 
 std::uint32_t despawn_layer_fog_mobs(Registry& reg, LayerId layer) {
     // Collect first, then destroy: destroying while iterating a view invalidates it.
-    std::vector<Entity> doomed;
     auto view = reg.view<const FogSpawn, const Transform>();
+    std::vector<Entity> doomed;
+    doomed.reserve(view.size_hint());
     for (auto e : view)
         if (view.get<const Transform>(e).layer == layer) doomed.push_back(e);
     for (Entity e : doomed) reg.destroy(e);

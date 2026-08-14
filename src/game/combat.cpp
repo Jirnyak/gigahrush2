@@ -265,8 +265,15 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
     // Mitigation happens exactly once, here. Nothing downstream sees `raw`.
     std::int16_t dmg = raw;
 
+    MobRef* m = reg.try_get<MobRef>(target);
+    const Transform* targetTr = nullptr;
+    auto get_target_tr = [&]() -> const Transform* {
+        if (!targetTr) targetTr = reg.try_get<Transform>(target);
+        return targetTr;
+    };
+
     // Counterplay Vulnerability Floor (e.g. Fire vs Plant/Shark/Swarm monsters)
-    if (const MobRef* m = reg.try_get<MobRef>(target)) {
+    if (m) {
         dmg = trait_counterplay_damage(m->kind, static_cast<std::uint8_t>(ch), dmg, m->maxHp);
     }
 
@@ -276,20 +283,18 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
     }
 
     // Defender behaviour incoming damage multiplier (e.g. WallBrace armour against walls)
-    if (grid && reg.all_of<MobRef>(target)) {
-        if (const MobRef* m = reg.try_get<MobRef>(target)) {
-            if (static_cast<std::size_t>(m->kind) < kMobKindCount) {
-                const MobDef& def = kMobTable[m->kind];
-                const auto beh = static_cast<MobBehaviour>(def.behaviour);
-                if (wall_query_needed(def.aiFlags, beh)) {
-                    if (const Transform* tr = reg.try_get<Transform>(target)) {
-                        const bool nearWall = adjacent_wall(*grid, tr->pos);
-                        const float incMult = behaviour_incoming_mult(beh, nearWall);
-                        if (incMult != 1.0f) {
-                            int mitigated = static_cast<int>(static_cast<float>(dmg) * incMult + 0.5f);
-                            if (mitigated < 1 && dmg > 0) mitigated = 1;
-                            dmg = static_cast<std::int16_t>(mitigated);
-                        }
+    if (grid && m) {
+        if (static_cast<std::size_t>(m->kind) < kMobKindCount) {
+            const MobDef& def = kMobTable[m->kind];
+            const auto beh = static_cast<MobBehaviour>(def.behaviour);
+            if (wall_query_needed(def.aiFlags, beh)) {
+                if (const Transform* tr = get_target_tr()) {
+                    const bool nearWall = adjacent_wall(*grid, tr->pos);
+                    const float incMult = behaviour_incoming_mult(beh, nearWall);
+                    if (incMult != 1.0f) {
+                        int mitigated = static_cast<int>(static_cast<float>(dmg) * incMult + 0.5f);
+                        if (mitigated < 1 && dmg > 0) mitigated = 1;
+                        dmg = static_cast<std::int16_t>(mitigated);
                     }
                 }
             }
@@ -297,16 +302,14 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
     }
 
     // Defender wet terrain incoming damage multiplier (e.g. Lotochnik drain armour)
-    if (fluid && reg.all_of<MobRef>(target)) {
-        if (const MobRef* m = reg.try_get<MobRef>(target)) {
-            if (const Transform* tr = reg.try_get<Transform>(target)) {
-                const bool wet = pos_wet(fluid, tr->pos);
-                const float inMult = trait_incoming_mult(m->kind, wet);
-                if (inMult != 1.0f) {
-                    int mitigated = static_cast<int>(static_cast<float>(dmg) * inMult + 0.5f);
-                    if (mitigated < 1 && dmg > 0) mitigated = 1;
-                    dmg = static_cast<std::int16_t>(mitigated);
-                }
+    if (fluid && m) {
+        if (const Transform* tr = get_target_tr()) {
+            const bool wet = pos_wet(fluid, tr->pos);
+            const float inMult = trait_incoming_mult(m->kind, wet);
+            if (inMult != 1.0f) {
+                int mitigated = static_cast<int>(static_cast<float>(dmg) * inMult + 0.5f);
+                if (mitigated < 1 && dmg > 0) mitigated = 1;
+                dmg = static_cast<std::int16_t>(mitigated);
             }
         }
     }
@@ -316,7 +319,7 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
     // Where the HP lives depends on what the target is, and that is the only
     // branch: everything above and below is common.
     std::int16_t* hp = nullptr;
-    if (MobRef* m = reg.try_get<MobRef>(target)) {
+    if (m) {
         hp = &m->hp;
     } else if (NpcRef* n = reg.try_get<NpcRef>(target)) {
         if (pool.valid(n->id)) hp = &pool.hp(n->id);
@@ -338,10 +341,11 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
     // ground, not up the slope of whichever axis happens to be vertical today.
     // Without a field the raw attacker→target line is used: still isotropic, just
     // uncorrected for slope — no axis is privileged in either branch.
-    if (out.applied > 0 && reg.all_of<Velocity, Transform>(target)) {
+    Velocity* targetVel = (out.applied > 0) ? reg.try_get<Velocity>(target) : nullptr;
+    if (targetVel && get_target_tr()) {
         if (reg.valid(source) && reg.all_of<Transform>(source)) {
             const vec3& srcPos = reg.get<Transform>(source).pos;
-            const vec3& tgtPos = reg.get<Transform>(target).pos;
+            const vec3& tgtPos = targetTr->pos;
             vec3 d = tgtPos - srcPos;
             if (gravity) {
                 const vec3 g = gravity->at(tgtPos);
@@ -376,8 +380,7 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
                     }
                 }
                 const float impulse = kbSpeed * (kKnockbackRefMassKg / kmass);
-                auto& vel = reg.get<Velocity>(target);
-                vel.v = vel.v + d * (impulse / std::sqrt(lenSq));
+                targetVel->v = targetVel->v + d * (impulse / std::sqrt(lenSq));
             }
         }
     }
@@ -397,7 +400,7 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
     // (dx, dy, 0), so `len` is the old sqrt(dx*dx + dy*dy) and the spawn point is
     // the old pos.z + 0.9.
     if (particles && out.applied > 0 && ch != DamageChannel::Psi) {
-        if (const Transform* tt = reg.try_get<Transform>(target)) {
+        if (const Transform* tt = get_target_tr()) {
             vec3 up{0.0f, 0.0f, 1.0f};
             if (gravity) {
                 const vec3 g = gravity->at(tt->pos);
@@ -433,8 +436,10 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
 std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
                               std::uint64_t tick, NoiseField* noise) {
     // Collect before destroying: mutating while iterating a view invalidates it.
+    auto deadView = reg.view<const Dead>();
     std::vector<Entity> doomed;
-    for (auto e : reg.view<const Dead>()) doomed.push_back(e);
+    doomed.reserve(deadView.size());
+    for (auto e : deadView) doomed.push_back(e);
 
     for (Entity e : doomed) {
         const Dead& d = reg.get<const Dead>(e);
@@ -699,6 +704,7 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         std::uint8_t proj;   // ProjType, copied off the row so the launch can read it
     };
     std::vector<Swing> queued;
+    queued.reserve(16);
 
     struct HazardHit {
         Entity mob;
@@ -706,6 +712,7 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         DamageChannel ch;
     };
     std::vector<HazardHit> hazardHits;
+    hazardHits.reserve(8);
 
     for (auto e : reg.view<const MobRef, const Transform, MobCombat>()) {
         MobCombat& mc = reg.get<MobCombat>(e);
@@ -928,6 +935,7 @@ std::uint32_t hazard_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
     // empty std::vector does not allocate — so this costs nothing on a tick where
     // nobody is standing in fire.
     std::vector<Hit> hits;
+    hits.reserve(8);
 
     for (auto e : reg.view<const NpcRef, const Transform>()) {
         const Transform& tr = reg.get<const Transform>(e);
@@ -1411,6 +1419,7 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         std::uint8_t blastDm = 0;
     };
     std::vector<Hit> resolved;
+    resolved.reserve(32);
 
     for (auto e : reg.view<Projectile, Transform, Velocity>()) {
         Transform& tr = reg.get<Transform>(e);
@@ -1637,6 +1646,7 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
             // that the sweep is walking.
             struct Caught { Entity e; float d; };
             std::vector<Caught> caught;
+            caught.reserve(16);
             auto sweep = [&](Entity cand, const vec3& cp) {
                 const float dx = wrap_delta_f(h.impactPos.x, cp.x, kWorldExtent);
                 const float dy = wrap_delta_f(h.impactPos.y, cp.y, kWorldExtent);

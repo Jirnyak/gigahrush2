@@ -319,19 +319,10 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
                     rot->euler.x += ang->w.x * h;
                     rot->euler.y += ang->w.y * h;
                     rot->euler.z += ang->w.z * h;
-                    // Settle spin only when grounded AND not actively rolling.
-                    if (g && g->grounded) {
-                        const float vn = dot(vel.v, up);
-                        const float vLat2 =
-                            (vel.v.x - up.x * vn) * (vel.v.x - up.x * vn) +
-                            (vel.v.y - up.y * vn) * (vel.v.y - up.y * vn) +
-                            (vel.v.z - up.z * vn) * (vel.v.z - up.z * vn);
-                        if (vLat2 <= 1e-4f) {
-                            ang->w.x *= 0.85f;
-                            ang->w.y *= 0.85f;
-                            ang->w.z *= 0.85f;
-                        }
-                    }
+                    // Ground damping is owned by prop_ragdoll_step
+                    // (prop_system.cpp) which runs AFTER physics_step and
+                    // distinguishes air vs ground paths.  Damping here was
+                    // a duplicate that halved the intended settle time.
                 }
             }        }
     }

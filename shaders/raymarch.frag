@@ -339,7 +339,7 @@ float surface(uint mat, vec2 uv, vec3 aw, float px, float g) {
 
     // Z-up world: floors/ceilings have |n.z| ~ 1. Testing Y here shaded
     // ceilings with the wall band logic and walls with the floor path.
-    bool isHorizontal = (abs(aw.z) > 0.7);
+    bool isHorizontal = (aw.z > 0.7);
 
     if (fam == kFamGeneric) {
         if (!isHorizontal) {
@@ -655,7 +655,8 @@ void main() {
 
     float g_scat = 0.55;
     float cosTheta = dot(viewDir, lightDir);
-    float phase = (1.0 - g_scat * g_scat) / pow(max(1.0 + g_scat * g_scat - 2.0 * g_scat * cosTheta, 1e-4), 1.5);
+    float hg_denom = max(1.0 + g_scat * g_scat - 2.0 * g_scat * cosTheta, 1e-4);
+    float phase = (1.0 - g_scat * g_scat) / (hg_denom * sqrt(hg_denom));
     float r = pc.fog.z;
     float att = 1.0 / (1.0 + (d * d) / (r * r));
 
