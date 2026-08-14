@@ -1,11 +1,12 @@
 # Navigation — Baked lattice, flow fields & routing
 
-> **Status: built, headless `ctest`-green** (2026-07-28). The bake lives in
+> **Status: built, ctest-green, runtime consumers active**. The bake lives in
 > `giga_core` (`src/world`), the disk cache + streaming glue in `giga_game`
 > (`src/game`). It is **wired into floor streaming** (each live floor bakes its
-> nav on load) but **no runtime consumer steers by it yet** — the utility-AI that
-> calls `route_step` is task #12 (`master_prompt.md` §7). So nothing in the
-> running game moves differently yet; the nav is *ready*, not *visible*.
+> nav on load). Active runtime consumers:
+> - `wander_step` (`src/game/wander.cpp`): steers NPCs and wandering monsters along baked coarse hops and fine flow fields in the walking tangent plane.
+> - `ai_patrol_step` (`src/game/ai.cpp`): routes specialist patrols (Liquidators, Duty guards) along coarse paths across floors.
+> - `ai_step` (`src/game/ai.cpp`): evaluates room affordances and shelter navigation during Samosbor and crisis events.
 >
 > - **Code:** [src/world/lattice.h](src/world/lattice.h) (the fixed node set),
 >   [src/world/nav.h](src/world/nav.h) / [.cpp](src/world/nav.cpp) (the bake +
@@ -169,16 +170,14 @@ reports `kUnreachable` and `route_step` honestly returns `kFlowNone`. That is
 deferred fix (owner's call) is to carve thin corridors along lattice edges in
 `floor_gen` — a geometry/visual change.
 
-## Still to build
+## Shipped & Active
+- **Coarse Graph & Fine Flow Fields:** 64-node geodesic anchors baked per floor on stream.
+- **Utility-AI & Patrol Integration:** Active via `wander_step`, `ai_patrol_step`, and `ai_step`.
+- **Isotropic Locomotion:** Tangent plane velocity writes obeying 6-directional vector gravity.
 
-- **Dirty local re-bake** — the cheap, approximate in-play patch for
-  destructibility: re-bake only the cells a geometry mutation touched, no freeze,
-  eventually-consistent until the next full bake ([performance.md](performance.md)
-  §Two regimes). The one unbuilt piece of the bake story.
-- **The consumer (#12).** Utility-AI that actually calls `route_step` +
-  [diffusion.md](diffusion.md)'s flee gradient, making the visible crowd move.
-- **Fast-travel elevator hookup** — teleport between unlocked lattice nodes
-  ([elevators.md](elevators.md)); the node set is baked, the travel is not wired.
+## Still to build
+- **Dirty local re-bake** — approximate patch for destructibility: re-bake only modified cells.
+- **Fast-travel elevator hookup** — teleport between unlocked lattice nodes ([elevators.md](elevators.md)).
 
 ## Connections
 
