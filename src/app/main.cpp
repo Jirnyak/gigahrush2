@@ -886,6 +886,36 @@ const game::FloorSpec* spec_for_floor(int number) {
     return &game::floor_spec(kind_for_floor(number));
 }
 
+static game::CraftStation resolve_craft_station(const Registry& reg, Entity player,
+                                                const LevelStack& stack, LayerId activeLayer,
+                                                int currentFloor) {
+    if (!reg.valid(player) || activeLayer == kInvalidLayer) return game::CraftStation::Any;
+    const vec3& pos = reg.get<Transform>(player).pos;
+    if (game::on_extraction_pad(stack.layer(activeLayer).grid(), pos)) {
+        return game::CraftStation::Workbench;
+    }
+    const bool nearTerm = game::find_nearest_interactable(
+        reg, player, game::Interactable::Kind::Terminal,
+        game::interact_def(game::InteractKind::Terminal).reachM).hit;
+    if (nearTerm) return game::CraftStation::NetTerminal;
+
+    const auto fk = kind_for_floor(currentFloor);
+    const int stride = game::floor_room_stride(fk);
+    if (stride > 0) {
+        const int rx = wrap_macro(static_cast<int>(std::floor(pos.x / kCellSize))) / stride;
+        const int ry = wrap_macro(static_cast<int>(std::floor(pos.y / kCellSize))) / stride;
+        const std::uint16_t mask = game::floor_room_mask(fk, currentFloor, rx, ry);
+        if ((mask & (game::room_bit(game::RoomBit::Medical) | game::room_bit(game::RoomBit::Hq))) != 0) {
+            return game::CraftStation::Lab;
+        }
+        if ((mask & (game::room_bit(game::RoomBit::Production) | game::room_bit(game::RoomBit::Storage))) != 0 ||
+            fk == game::FloorKind::Industrial) {
+            return game::CraftStation::Lathe;
+        }
+    }
+    return game::CraftStation::Any;
+}
+
 // Ceiling on how many monsters one floor may add. The V-shape budget saturates
 // at 4096 on the deepest floors, which shares a pool with the embodied crowd and
 // would be a large one-frame allocation; the demo floors (|number| <= 4) are far
@@ -4797,17 +4827,8 @@ int main(int argc, char** argv) {
                 // 22 `Any` recipes and nothing else. Disassembly is workbench-only by the
                 // reference's rule, so it is pad-only too. [craft.h]
                 if ((craftWanted || scrapWanted) && reg.valid(player)) {
-                    const Transform& ct = reg.get<Transform>(player);
-                    // Zero-heap nearest Terminal (4 m = sqrt(16)). [jirnyak.md] §18
-                    const bool nearTerm =
-                        game::find_nearest_interactable(
-                            reg, player, game::Interactable::Kind::Terminal,
-                    game::interact_def(game::InteractKind::Terminal).reachM)
-                            .hit;
                     const game::CraftStation bench =
-                        game::on_extraction_pad(stack.layer(activeLayer).grid(), ct.pos)
-                            ? game::CraftStation::Workbench
-                            : (nearTerm ? game::CraftStation::NetTerminal : game::CraftStation::Any);
+                        resolve_craft_station(reg, player, stack, activeLayer, currentFloor);
                     bool invChanged = false;
                     if (const auto* nrk = reg.try_get<game::NpcRef>(player))
                         if (pool.valid(nrk->id)) {
@@ -5622,17 +5643,8 @@ int main(int argc, char** argv) {
         }
 
         if (showCraftingWindow && reg.valid(player)) {
-            const Transform& ct = reg.get<Transform>(player);
-            // Zero-heap nearest Terminal ([jirnyak.md] section 18) -- same reach as craft hot path.
-            const bool nearTerm =
-                game::find_nearest_interactable(
-                    reg, player, game::Interactable::Kind::Terminal,
-                    game::interact_def(game::InteractKind::Terminal).reachM)
-                    .hit;
             const game::CraftStation bench =
-                game::on_extraction_pad(stack.layer(activeLayer).grid(), ct.pos)
-                    ? game::CraftStation::Workbench
-                    : (nearTerm ? game::CraftStation::NetTerminal : game::CraftStation::Any);
+                resolve_craft_station(reg, player, stack, activeLayer, currentFloor);
 
             if (const auto* nrk = reg.try_get<game::NpcRef>(player)) {
                 if (pool.valid(nrk->id)) {
@@ -5844,6 +5856,20 @@ int main(int argc, char** argv) {
             if (!promptText && activeLayer != kInvalidLayer) {
                 if (game::on_extraction_pad(stack.layer(activeLayer).grid(), ppos)) {
                     set_prompt("vendor", "TRADE / RESUPPLY (EXTRACTION PAD)");
+                }
+            }
+
+            // Crafting Station proximity (Workbench, Lathe, Lab, Net Terminal)
+            if (!promptText && activeLayer != kInvalidLayer) {
+                const game::CraftStation st = resolve_craft_station(reg, player, stack, activeLayer, currentFloor);
+                if (st == game::CraftStation::Workbench) {
+                    set_prompt("craft", "WORKBENCH (EXTRACTION PAD)");
+                } else if (st == game::CraftStation::Lathe) {
+                    set_prompt("craft", "WORKSHOP LATHE (PRODUCTION ROOM)");
+                } else if (st == game::CraftStation::Lab) {
+                    set_prompt("craft", "SCIENCE LAB STATION (MEDICAL / HQ)");
+                } else if (st == game::CraftStation::NetTerminal) {
+                    set_prompt("craft", "NET TERMINAL STATION");
                 }
             }
 

@@ -624,11 +624,12 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
                         const int cz = static_cast<int>(std::floor(ct.pos.z / cs));
                         if (cx != bx || cy != by || cz != bz) continue;
                         Container& c = reg.get<Container>(ce);
-                        // Container::count is uint8_t (stack cap 255 per cell slot).
+                        const std::uint16_t cap = item_def(id).stackMax ? item_def(id).stackMax : 255u;
                         for (std::uint8_t si = 0; si < kContainerSlots && left > 0; ++si) {
                             if (c.item[si] != id || c.count[si] == 0) continue;
+                            if (c.count[si] >= cap) continue;
                             const std::uint16_t room =
-                                static_cast<std::uint16_t>(255u - c.count[si]);
+                                static_cast<std::uint16_t>(cap - c.count[si]);
                             if (room == 0) continue;
                             const std::uint16_t take = left < room ? left : room;
                             c.count[si] = static_cast<std::uint8_t>(c.count[si] + take);
@@ -637,7 +638,7 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
                         for (std::uint8_t si = 0; si < kContainerSlots && left > 0; ++si) {
                             if (c.item[si] != kInvalidItem && c.count[si] != 0) continue;
                             c.item[si] = id;
-                            const std::uint16_t put = left < 255u ? left : static_cast<std::uint16_t>(255);
+                            const std::uint16_t put = left < cap ? left : cap;
                             c.count[si] = static_cast<std::uint8_t>(put);
                             left = static_cast<std::uint16_t>(left - put);
                         }
