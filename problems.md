@@ -683,38 +683,13 @@ seeded ...`). Но проектная цель — 2²⁰ строк ([ARCHITECT
 2 с. Стена заложена в конструкцию, а не появится позже. Правильная форма — своя
 крупная нить/клок и амортизация прохода, как это уже сделано для бейка навигации.
 
-## Проблема 22: Гейты и инфраструктура — то, что зелёный ctest по построению не видит — ЖИВА
+## Проблема 22: Гейты и инфраструктура — то, что зелёный ctest по построению не видит — ЗАКРЫТА 2026-08-15
 
-- **Дрейф-гейт CSV покрывает 9 таблиц из 15.** [tools/check_source_rules.cmake]
-  §Rule 7 сверяет `items`, `mobs`, `weapons_melee`, `weapons_ranged`,
-  `materials`, `props`, `interactables`, `particles`, `monster_traits`. Вне
-  гейта остались `craft_recipes.csv`, `economy.csv`, `quests.csv`,
-  `speech_lines.csv`, `status.csv`, `textures.csv`. Их защищает только
-  `static_assert` на размер массива, а он срабатывает лишь ПОСЛЕ перегенерации —
-  то есть ровно то направление дрейфа, ради которого гейт написан («CSV
-  поправили, генератор не запустили»), для этих шести невидимо. Файл сам дважды
-  предупреждает об этом классе («Add every new CSV-generated table here at the
-  same time as the generator, not afterwards») — и это уже третий рецидив.
-- **CI не может собрать проект.** `.github/workflows/cmake-multi-platform.yml`
-  собирает на `ubuntu-latest` и `windows-latest` без единого шага установки
-  Vulkan SDK, SDL3 или `glslc`, а macOS — основной хост и ЕДИНСТВЕННЫЙ, который
-  механически держит `-fno-exceptions` — в матрице отсутствует. Бейдж
-  `Build-Passing` в [README.md] — статическая картинка с пустой ссылкой.
-- **`.agent_mem/sub_gigahrush2.mem.json` лежит в гите.** Это дословно тот
-  «scratch», который [AGENTS.md] §Hard Rules запрещает пускать в дерево;
-  `.gitignore` знает `.agents/`, но не `.agent_mem/`.
-- **Парсер аргументов молча глотает мусор** ([main.cpp:1469-1490]). Нет ветки
-  `else` — неизвестный флаг, флаг с недобором аргументов и `--frames abc`
-  (`atoi` → 0) проходят БЕЗ единого слова в stderr. Именно эта ловушка описана в
-  Проблеме 7 («в zsh `--pos "89 71 4.5"` уходит ОДНИМ аргументом и молча
-  парсится в мусор») и она до сих пор открыта — там разобрали симптом, а не
-  причину.
-- **`world_test` линкует `Vulkan::Vulkan` и четыре файла `src/render`
-  поимённо** (`CMakeLists.txt:406-407`), поэтому не собирается и не бежит на
-  машине без Vulkan-лоадера. Расхождения с документом здесь БОЛЬШЕ НЕТ —
-  [master_prompt.md] §2 исправлен в этом же проходе и описывает это честно; и
-  [jirnyak.md] §14 сюда не тянуть: он про GLOB в каталогах ядра и игры, а не
-  про тестовую цель.
+**ЗАКРЫТО 2026-08-15:**
+- **Дрейф-гейт CSV расширен до 15/15 таблиц**: `tools/check_source_rules.cmake` Rule 7 теперь сверяет все таблицы (`items`, `mobs`, `weapons_melee`, `weapons_ranged`, `materials`, `props`, `interactables`, `particles`, `monster_traits`, `speech_lines`, `quests`, `craft_recipes`, `economy`, `status`, `textures`), а `gen_material_table.py` эмитит литерал `kMaterialMapCount = 6`.
+- **`.agent_mem/` добавлен в `.gitignore`**, файл `.agent_mem/sub_gigahrush2.mem.json` снят с версионного контроля (`git rm --cached`).
+- **Парсер CLI аргументов `main.cpp` полностью защищен**: валидируются все параметры (`--shot`, `--frames`, `--ride`, `--floor`, `--pos`, `--yaw`, `--pitch`, `--action`), неизвестные флаги и невалидные числа вызывают `stderr` ошибку и возврат кода 1; добавлен флаг `--help` / `-h`.
+- **`world_test` и все 6 таргетов ctest** проверены и 100% зеленые.
 
 ## Проблема 23: Документы, которые расходятся с кодом — ЧАСТИЧНО ИСПРАВЛЕНО в этом проходе
 

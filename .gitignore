@@ -15,6 +15,7 @@ shaders/*.spv
 
 # Agent scratch (briefings/progress/handoffs) — session-local, not project state.
 .agents/
+.agent_mem/
 
 # Editor / OS cruft
 .DS_Store

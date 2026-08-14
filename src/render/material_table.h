@@ -56,7 +56,8 @@ inline constexpr MaterialMap kMaterialMaps[] = {
     {kMatRust, "rusty_metal_03.ktx2", "rusty_metal_03_normal.ktx2", "rusty_metal_03_roughness.ktx2", 0.5f}                            ,  //  4 rust
     {kMatRubble, "rusty_corrugated_iron.ktx2", "rusty_corrugated_iron_normal.ktx2", "rusty_corrugated_iron_roughness.ktx2", 0.5f}        //  5 rubble
 };
-inline constexpr int kMaterialMapCount =
-    static_cast<int>(sizeof(kMaterialMaps) / sizeof(kMaterialMaps[0]));
+inline constexpr int kMaterialMapCount = 6;
+static_assert(sizeof(kMaterialMaps) / sizeof(kMaterialMaps[0]) == kMaterialMapCount,
+              "kMaterialMaps count must match kMaterialMapCount");
 
 } // namespace giga

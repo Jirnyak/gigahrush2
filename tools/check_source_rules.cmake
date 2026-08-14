@@ -456,6 +456,18 @@ _giga_csv_vs_header("data/speech_lines.csv" "src/game/speech.h"
 # Quests table — 19 authored plot quests.
 _giga_csv_vs_header("data/quests.csv" "src/game/quest.h"
     "kQuestCount[ \t]*=[ \t]*([0-9]+)" "quest")
+# Craft recipes table — 24 authored recipe knowledge sources.
+_giga_csv_vs_header("data/craft_recipes.csv" "src/game/craft.h"
+    "kCraftSourceCount[ \t]*=[ \t]*([0-9]+)" "craft recipe source")
+# Economy table — 10 depth bands and wealth tiers.
+_giga_csv_vs_header("data/economy.csv" "src/game/economy.h"
+    "kEconomyRows[ \t]*=[ \t]*([0-9]+)" "economy row")
+# Status effects table — 6 authored status effects.
+_giga_csv_vs_header("data/status.csv" "src/game/status.h"
+    "kStatusCount[ \t]*=[ \t]*([0-9]+)" "status")
+# Textures catalog — 6 KTX2 texture map sets.
+_giga_csv_vs_header("data/textures.csv" "src/render/material_table.h"
+    "kMaterialMapCount[ \t]*=[ \t]*([0-9]+)" "texture map")
 
 
 # Ratchet-gate on src/app/main.cpp length (Phase 0.8).

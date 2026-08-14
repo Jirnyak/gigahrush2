@@ -306,11 +306,12 @@ inline constexpr MaterialMap kMaterialMaps[] = {
                             t["roughness_file"], t["tile_scale"]))
         fh.write(elements(textured, tvals, [m["name"] for m in textured]))
         fh.write("""};
-inline constexpr int kMaterialMapCount =
-    static_cast<int>(sizeof(kMaterialMaps) / sizeof(kMaterialMaps[0]));
+inline constexpr int kMaterialMapCount = %d;
+static_assert(sizeof(kMaterialMaps) / sizeof(kMaterialMaps[0]) == kMaterialMapCount,
+              "kMaterialMaps count must match kMaterialMapCount");
 
 } // namespace giga
-""")
+""" % len(textured))
 
     # --- shaders/material_surface.glsl --------------------------------------
     measured = sum(1 for m in mats if m["src"] != "authored")

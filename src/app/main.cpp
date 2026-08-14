@@ -1607,26 +1607,121 @@ int main(int argc, char** argv) {
     std::uint32_t mirrorFrame = 0;
 
     for (int i = 1; i < argc; ++i) {
-        std::string a = argv[i];
-        if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
-        else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
-        else if (a == "--ride" && i + 1 < argc) shotRide = std::atoi(argv[++i]);
-        else if (a == "--floor" && i + 1 < argc) {
-            shotFloor = std::atoi(argv[++i]);
+        const std::string a = argv[i];
+        if (a == "--shot") {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "error: --shot requires an output file path\n");
+                return 1;
+            }
+            shotPath = argv[++i];
+        } else if (a == "--frames") {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "error: --frames requires a frame count\n");
+                return 1;
+            }
+            char* end = nullptr;
+            const long v = std::strtol(argv[++i], &end, 10);
+            if (!end || *end != '\0' || v <= 0) {
+                std::fprintf(stderr, "error: --frames requires a positive integer\n");
+                return 1;
+            }
+            shotFrames = static_cast<int>(v);
+        } else if (a == "--ride") {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "error: --ride requires a floor delta integer\n");
+                return 1;
+            }
+            char* end = nullptr;
+            const long v = std::strtol(argv[++i], &end, 10);
+            if (!end || *end != '\0') {
+                std::fprintf(stderr, "error: --ride requires an integer floor delta\n");
+                return 1;
+            }
+            shotRide = static_cast<int>(v);
+        } else if (a == "--floor") {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "error: --floor requires a floor index integer\n");
+                return 1;
+            }
+            char* end = nullptr;
+            const long v = std::strtol(argv[++i], &end, 10);
+            if (!end || *end != '\0') {
+                std::fprintf(stderr, "error: --floor requires an integer floor index\n");
+                return 1;
+            }
+            shotFloor = static_cast<int>(v);
             shotFloorWanted = true;
-        }
-        else if (a == "--no-hud" || a == "--nohud") showHud = false;
-        else if (a == "--mirror-verify") mirrorVerify = true;
-        else if (a == "--pos" && i + 3 < argc) {
-            customPos.x = static_cast<float>(std::atof(argv[++i]));
-            customPos.y = static_cast<float>(std::atof(argv[++i]));
-            customPos.z = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--no-hud" || a == "--nohud") {
+            showHud = false;
+        } else if (a == "--mirror-verify") {
+            mirrorVerify = true;
+        } else if (a == "--pos") {
+            if (i + 3 >= argc) {
+                std::fprintf(stderr, "error: --pos requires 3 numbers: <x> <y> <z>\n");
+                return 1;
+            }
+            char* e1 = nullptr;
+            char* e2 = nullptr;
+            char* e3 = nullptr;
+            customPos.x = std::strtof(argv[++i], &e1);
+            customPos.y = std::strtof(argv[++i], &e2);
+            customPos.z = std::strtof(argv[++i], &e3);
+            if (!e1 || *e1 != '\0' || !e2 || *e2 != '\0' || !e3 || *e3 != '\0') {
+                std::fprintf(stderr, "error: --pos arguments must be valid float numbers\n");
+                return 1;
+            }
             hasCustomPos = true;
+        } else if (a == "--yaw") {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "error: --yaw requires an angle in degrees\n");
+                return 1;
+            }
+            char* end = nullptr;
+            customYaw = std::strtof(argv[++i], &end);
+            if (!end || *end != '\0') {
+                std::fprintf(stderr, "error: --yaw requires a valid float angle\n");
+                return 1;
+            }
+            hasCustomAng = true;
+        } else if (a == "--pitch") {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "error: --pitch requires an angle in degrees\n");
+                return 1;
+            }
+            char* end = nullptr;
+            customPitch = std::strtof(argv[++i], &end);
+            if (!end || *end != '\0') {
+                std::fprintf(stderr, "error: --pitch requires a valid float angle\n");
+                return 1;
+            }
+            hasCustomAng = true;
+        } else if (a == "--orbit") {
+            shotOrbit = true;
+        } else if (a == "--action") {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "error: --action requires an action string\n");
+                return 1;
+            }
+            shotAction = argv[++i];
+        } else if (a == "--help" || a == "-h") {
+            std::fprintf(stderr,
+                         "Usage: gigahrush2 [OPTIONS]\n"
+                         "  --shot <file.png>       Render frames and capture screenshot to file\n"
+                         "  --frames <N>            Number of frames to render in --shot mode\n"
+                         "  --ride <delta>          Travel elevator by delta floors before capture\n"
+                         "  --floor <index>         Spawn directly on floor index\n"
+                         "  --no-hud, --nohud       Disable HUD overlay\n"
+                         "  --mirror-verify         Verify CPU/GPU voxel mirror sync\n"
+                         "  --pos <x> <y> <z>       Override player spawn position\n"
+                         "  --yaw <deg>             Override player camera yaw\n"
+                         "  --pitch <deg>           Override player camera pitch\n"
+                         "  --orbit                 Enable camera orbit in shot mode\n"
+                         "  --action <act>          Simulate automated action before capture\n");
+            return 0;
+        } else {
+            std::fprintf(stderr, "error: unknown argument '%s' (use --help for usage)\n", a.c_str());
+            return 1;
         }
-        else if (a == "--yaw" && i + 1 < argc) { customYaw = static_cast<float>(std::atof(argv[++i])); hasCustomAng = true; }
-        else if (a == "--pitch" && i + 1 < argc) { customPitch = static_cast<float>(std::atof(argv[++i])); hasCustomAng = true; }
-        else if (a == "--orbit") { shotOrbit = true; }
-        else if (a == "--action" && i + 1 < argc) { shotAction = argv[++i]; }
     }
     const bool shotFloorRequested = shotFloorWanted;
 
