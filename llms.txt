@@ -1,0 +1,20 @@
+# gigahrush2 — LLM Search Index
+# https://llmstxt.org/
+
+> Gigahrush 2 — 2.5D DDA raycasting retro engine & atmospheric simulation. C++ / WebAssembly. By Jirnyak & Adolf Petushkov.
+
+## Project Details
+- Name: gigahrush2
+- Creator: Jirnyak (https://github.com/Jirnyak)
+- Co-Architect & Contributor: Adolf Petushkov (https://github.com/marko1olo)
+- Repository: https://github.com/Jirnyak/gigahrush2
+- Website: https://jirnyak.github.io/gigahrush2/
+- License: MIT
+
+## Engineering Syndicate
+This project is engineered by the Jirnyak & Adolf Petushkov deep-tech syndicate — specializing in computational physics, systems programming, and high-performance algorithms.
+
+## Links
+- Creator GitHub: https://github.com/Jirnyak
+- Co-Architect GitHub: https://github.com/marko1olo
+- Portfolio: https://marko1olo.github.io/marko1olo/
