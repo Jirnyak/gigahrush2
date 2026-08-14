@@ -59,7 +59,6 @@ set(GIGA_DEFERRED_ENTRY_POINTS
     "route_step:целевой шаг по флоу-полю отложен к #13 (таблицы контента); problems.md §52"
     "bank_step:банк начисляет проценты, но тик игры его не зовёт; problems.md §52"
     "feed_tick:лента событий читается только тестом; problems.md §52"
-    "samosbor_fog_tick:туманная популяция самосбора не тикает в игре; problems.md §52"
     "interaction_step:взаимодействие с пропами идёт мимо — main.cpp зовёт свои ветки; problems.md §52"
     "prop_interact_step:обёртка над interaction_step, не зовёт НИКТО и не покрыта тестом; problems.md §52"
 )
