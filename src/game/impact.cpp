@@ -1,7 +1,5 @@
 #include "game/impact.h"
 
-#include <vector>
-
 #include "ecs/components.h"
 #include "game/combat.h"
 #include "game/embody.h"    // NpcRef
@@ -9,17 +7,25 @@
 
 namespace giga::game {
 
+// Static scratch for the collect-then-process pattern. 512 exceeds the
+// plausible impact count in a single tick (one per active body on the floor).
+static constexpr std::size_t kMaxImpactScratch = 512;
+static Entity sImpactScratch[kMaxImpactScratch];
+
 std::uint32_t impact_damage_step(Registry& reg, NpcPool& pool,
                                  ParticleBurstQueue* particles) {
     std::uint32_t hurt = 0;
     // Collect first: apply_damage mutates component storage (Dead tags) and the
     // reports are removed as consumed — never mutate while iterating a view.
     auto impactView = reg.view<const Impact>();
-    std::vector<Entity> reports;
-    reports.reserve(impactView.size());
-    for (auto e : impactView) reports.push_back(e);
+    std::size_t count = 0;
+    for (auto e : impactView) {
+        if (count >= kMaxImpactScratch) break;
+        sImpactScratch[count++] = e;
+    }
 
-    for (Entity e : reports) {
+    for (std::size_t i = 0; i < count; ++i) {
+        Entity e = sImpactScratch[i];
         const float speed = reg.get<const Impact>(e).speed;
         // Consume the report unconditionally — a free landing must not linger
         // and stack with next tick's.

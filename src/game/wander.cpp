@@ -364,8 +364,9 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                     const float gy =
                         wrap_delta_f(victimPos.y, tr.pos.y, kWorldExtent);
                     if (frozen_by_gaze(beh, fwdX, fwdY, gx, gy)) {
-                        vel.v.x = 0.0f;
-                        vel.v.y = 0.0f;
+                        if (gf.axis != 0) vel.v.x = 0.0f;
+                        if (gf.axis != 1) vel.v.y = 0.0f;
+                        if (gf.axis != 2) vel.v.z = 0.0f;
                         continue;
                     }
                 }
