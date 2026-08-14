@@ -427,6 +427,11 @@ void bake_room_zones(const MacroGrid& grid, FloorKind kind, int number,
 // data/props.csv row order is load-bearing ([prop_table.h]) — reorder it and every
 // kitchen quietly grows a toilet, with nothing failing. These four lines are what
 // turn that into a build error instead.
+static_assert(kPropTerminal == static_cast<std::uint16_t>(PropId::Terminal));
+static_assert(kPropElectricalShield == static_cast<std::uint16_t>(PropId::ElectricalShield));
+static_assert(kPropBareBulb == static_cast<std::uint16_t>(PropId::BareBulb));
+static_assert(kPropFloodLamp == static_cast<std::uint16_t>(PropId::FloodLamp));
+static_assert(kPropPadicStairBulb == static_cast<std::uint16_t>(PropId::PadicStairBulb));
 static_assert(kPropKitchenStove == static_cast<std::uint16_t>(PropId::KitchenStove));
 static_assert(kPropKitchenTable == static_cast<std::uint16_t>(PropId::KitchenTable));
 static_assert(kPropToiletPan == static_cast<std::uint16_t>(PropId::ToiletPan));

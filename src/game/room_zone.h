@@ -306,23 +306,46 @@ inline constexpr std::uint8_t kRoomSlots = 9;
 // `ai.cpp` — which only ever asks "where is the use spot" — pays nothing for the
 // generated prop table. The static_asserts in room_zone.cpp pin them against the
 // real enum, so a CSV reorder breaks the BUILD instead of moving the furniture.
+inline constexpr std::uint16_t kPropTerminal = 0;
+inline constexpr std::uint16_t kPropElectricalShield = 1;
+inline constexpr std::uint16_t kPropBareBulb = 2;
+inline constexpr std::uint16_t kPropFloodLamp = 3;
+inline constexpr std::uint16_t kPropPadicStairBulb = 4;
 inline constexpr std::uint16_t kPropKitchenStove = 5;
 inline constexpr std::uint16_t kPropKitchenTable = 6;
 inline constexpr std::uint16_t kPropToiletPan = 7;
 inline constexpr std::uint16_t kPropBedCot = 8;
 
 inline constexpr RoomFurniture kRoomFurniture[] = {
-    // A kitchen: a stove to stand at, and a table that is scenery. Two pieces, so a
-    // kitchen reads as a kitchen from the doorway and not as "a box in a room".
+    // A kitchen: a stove to stand at, and a table that is scenery.
     {room_bit(RoomBit::Kitchen), kPropKitchenStove, 0, true},
     {room_bit(RoomBit::Kitchen), kPropKitchenTable, 4, false},
-    // A bathroom: two pans, because a bathroom with ONE fixture makes a queue of
-    // nine residents converge on one voxel.
+    // A bathroom: two pans, avoiding single-fixture queues
     {room_bit(RoomBit::Bathroom), kPropToiletPan, 0, true},
     {room_bit(RoomBit::Bathroom), kPropToiletPan, 2, true},
     // A flat: two cots along the far wall.
     {room_bit(RoomBit::Living), kPropBedCot, 6, true},
     {room_bit(RoomBit::Living), kPropBedCot, 8, true},
+    // Office: Terminal workstation and desk
+    {room_bit(RoomBit::Office), kPropTerminal, 0, true},
+    {room_bit(RoomBit::Office), kPropKitchenTable, 4, false},
+    // Hq: Terminal workstation and flood lamp
+    {room_bit(RoomBit::Hq), kPropTerminal, 0, true},
+    {room_bit(RoomBit::Hq), kPropFloodLamp, 8, false},
+    // Production: Electrical shield workstation and table
+    {room_bit(RoomBit::Production), kPropElectricalShield, 0, true},
+    {room_bit(RoomBit::Production), kPropKitchenTable, 4, false},
+    // Storage: Electrical shield and lighting
+    {room_bit(RoomBit::Storage), kPropElectricalShield, 0, false},
+    {room_bit(RoomBit::Storage), kPropBareBulb, 8, false},
+    // Common: table and rest cot
+    {room_bit(RoomBit::Common), kPropKitchenTable, 4, false},
+    {room_bit(RoomBit::Common), kPropBedCot, 6, true},
+    // Medical: two hospital ward cots
+    {room_bit(RoomBit::Medical), kPropBedCot, 0, true},
+    {room_bit(RoomBit::Medical), kPropBedCot, 2, true},
+    // Smoking: table
+    {room_bit(RoomBit::Smoking), kPropKitchenTable, 4, false},
 };
 inline constexpr std::size_t kRoomFurnitureCount =
     sizeof(kRoomFurniture) / sizeof(kRoomFurniture[0]);
