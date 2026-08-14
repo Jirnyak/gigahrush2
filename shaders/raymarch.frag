@@ -193,9 +193,9 @@ Hit march(vec3 ro, vec3 rd, float tCap) {
     h.sub = ivec3(0);
 
     // Degenerate components poison 1/rd with NaNs at exact cell boundaries.
-    rd.x = abs(rd.x) < 1e-6 ? 1e-6 : rd.x;
-    rd.y = abs(rd.y) < 1e-6 ? 1e-6 : rd.y;
-    rd.z = abs(rd.z) < 1e-6 ? 1e-6 : rd.z;
+    rd.x = abs(rd.x) < 1e-6 ? (rd.x >= 0.0 ? 1e-6 : -1e-6) : rd.x;
+    rd.y = abs(rd.y) < 1e-6 ? (rd.y >= 0.0 ? 1e-6 : -1e-6) : rd.y;
+    rd.z = abs(rd.z) < 1e-6 ? (rd.z >= 0.0 ? 1e-6 : -1e-6) : rd.z;
     vec3 rinv = 1.0 / rd;
     ivec3 stp = ivec3(sign(rd));
 
