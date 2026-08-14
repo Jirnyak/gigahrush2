@@ -2990,7 +2990,7 @@ int main(int argc, char** argv) {
                 dayClock.step(kSimDt);
                 aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
                                        kSimDt, aiCfg, &aiMem, &doors, &activeWorld,
-                                       &roomZones, dayClock.minute_of_day());
+                                       &roomZones, dayClock.minute_of_day(), &samosbor);
                 // AIMEM proof trail: once nav has brains and AI is on, emit a
                 // compact stderr pulse so a --shot harness can assert the store
                 // is live (rows/writes/recalled) without parsing the HUD.

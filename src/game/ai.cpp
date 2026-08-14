@@ -14,6 +14,7 @@
 #include "game/ranged_table.h"// equipped_ranged
 #include "game/day_clock.h"   // DayClock, rhythm_bias — diurnal routine
 #include "game/door.h"        // door_nearest_shelter — hermetic flee target (§23)
+#include "game/samosbor.h"    // SamosborState / SamosborPhase — emergency threat state
 #include "game/role.h"        // RoleTraits, role_traits — archetype multipliers
 #include "game/room_zone.h"   // room affordance table + baked fields (§27 legs a,b)
 #include "sim/diffusion.h"    // diffusion_gradient — the flee steering field
@@ -589,7 +590,8 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                const MacroGrid& grid, LayerId layer, double now, float dt,
                const AiConfig& cfg, AiMemory* mem,
                const DoorSet* doors, const World* world,
-               const RoomZones* rooms, float minuteOfDay) {
+               const RoomZones* rooms, float minuteOfDay,
+               const SamosborState* samosbor) {
     AiTick out;
     // Dormant by default. Returning before the sweep means a disabled AI costs
     // one branch, and it means nothing can be left half-arbitrated: the token is
@@ -773,6 +775,13 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             p.minuteOfDay = minuteOfDay;
             const Inventory& inv = pool.inventory(id);
             p.armed = (equipped_melee(inv) != kInvalidItem || equipped_ranged(inv) != kInvalidItem);
+            if (samosbor != nullptr) {
+                p.samosborActive = (samosbor->phase == static_cast<std::uint8_t>(SamosborPhase::Active));
+                p.samosborWarning = (samosbor->phase == static_cast<std::uint8_t>(SamosborPhase::Warning));
+            }
+            if (rooms != nullptr) {
+                p.inShelter = (room_bit_at(rooms->kind, rooms->number, cx, cy) != 0);
+            }
             // Zeroed when hysteresis is off, so the two arms of the measurement
             // differ in exactly the mechanism under test and nothing else.
             p.stickinessAmount =

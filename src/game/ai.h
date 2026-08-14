@@ -995,13 +995,15 @@ std::uint32_t ai_release(Registry& reg, LayerId layer);
 // neither had to learn anything about rooms.
 struct DoorSet;   // door.h — incomplete OK; full type only needed in ai.cpp
 struct RoomZones; // room_zone.h — likewise
+struct SamosborState; // samosbor.h — likewise
 AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                const MacroGrid& grid, LayerId layer, double now, float dt,
                const AiConfig& cfg = {}, AiMemory* mem = nullptr,
                const DoorSet* doors = nullptr,
                const World* world = nullptr,
                const RoomZones* rooms = nullptr,
-               float minuteOfDay = -1.0f);
+               float minuteOfDay = -1.0f,
+               const SamosborState* samosbor = nullptr);
 
 } // namespace giga::game
 
