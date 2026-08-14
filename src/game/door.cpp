@@ -217,7 +217,10 @@ bool inventory_has_keycard(const Inventory& inv, std::uint8_t requiredTier) {
         if (!item_valid(slot.item)) continue;
         const ItemDef& def = item_def(slot.item);
         if (def.category == static_cast<std::uint8_t>(ItemCategory::Key)) {
-            return true;
+            const std::uint8_t itemTier = def.useA > 0 ? static_cast<std::uint8_t>(def.useA) : 1u;
+            if (itemTier >= requiredTier || itemTier >= static_cast<std::uint8_t>(KeycardTier::Master)) {
+                return true;
+            }
         }
     }
     return false;
