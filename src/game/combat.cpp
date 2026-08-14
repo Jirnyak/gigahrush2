@@ -42,7 +42,6 @@ bool adjacent_wall(const MacroGrid& grid, const vec3& pos) {
     const int cx = static_cast<int>(pos.x / kCellSize);
     const int cy = static_cast<int>(pos.y / kCellSize);
     const int cz = static_cast<int>(pos.z / kCellSize);
-    if (cz < 0 || cz >= kMacroDim) return false;
     return grid.cell(cx + 1, cy, cz) != kCellAir ||
            grid.cell(cx - 1, cy, cz) != kCellAir ||
            grid.cell(cx, cy + 1, cz) != kCellAir ||
