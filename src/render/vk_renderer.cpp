@@ -395,7 +395,7 @@ bool VulkanRenderer::recreate(SDL_Window* window) {
     destroy_framebuffers();
     destroy_depth();
     swapchain_->destroy(*dev);
-    if (!swapchain_->create(*dev, w, h)) return true;
+    if (!swapchain_->create(*dev, w, h)) return false;
     if (!create_depth()) return false;
     if (!create_framebuffers()) return false;
     if (!create_present_semaphores()) return false;
