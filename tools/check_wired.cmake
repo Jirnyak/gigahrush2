@@ -56,11 +56,6 @@ set(GIGA_DEFERRED_ENTRY_POINTS
     # list; a row leaving this file means the system got wired or got deleted.
     "diffusion_step:не подключён к тику — src/app/main.cpp:2857, поле danger всегда null"
     "diffusion_tick:тот же долг, что diffusion_step — драйвер поля опасности; problems.md §52"
-    "route_step:целевой шаг по флоу-полю отложен к #13 (таблицы контента); problems.md §52"
-    "bank_step:банк начисляет проценты, но тик игры его не зовёт; problems.md §52"
-    "feed_tick:лента событий читается только тестом; problems.md §52"
-    "interaction_step:взаимодействие с пропами идёт мимо — main.cpp зовёт свои ветки; problems.md §52"
-    "prop_interact_step:обёртка над interaction_step, не зовёт НИКТО и не покрыта тестом; problems.md §52"
 )
 
 # Line splitting that survives `;` AND `[ ]`. Ported from check_source_rules.cmake,

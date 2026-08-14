@@ -60,6 +60,7 @@
 #include "game/rumour.h"
 #include "game/speech.h"
 #include "game/samosbor.h"
+#include "game/economy.h"
 #include "game/contract.h"
 #include "game/vendor.h"
 #include "game/craft.h"
@@ -2111,6 +2112,9 @@ int main(int argc, char** argv) {
     // rewriting the statement. MSVC did not warn; Clang -Wunused-but-set-variable does.
     [[maybe_unused]] std::uint32_t shots = 0;   // rounds the player has fired
     game::RunLedger& ledger = runState.ledger;
+    game::BankAccount bankAccount{};
+    game::bank_open(bankAccount, currentFloor, streamer.floor_seed_of(registry, currentFloor));
+    game::EventFeed eventFeed{};
     // F5 saves, F9 loads. Recorded as intent and acted on in the sim loop, the same
     // shape sellWanted/buyWanted use: a load rewrites world state and belongs on the
     // sim's clock, not the window's.
@@ -2460,6 +2464,7 @@ int main(int argc, char** argv) {
         // bidirectional: the roof is as far from safety as the basement.
         // [extraction.h]
         game::record_floor(ledger, currentFloor);
+        game::bank_open(bankAccount, currentFloor, streamer.floor_seed_of(registry, currentFloor));
         // A new floor gets its own clock at its own depth. Not carried over:
         // the cooldown is a function of |z|, so inheriting a 30-minute surface
         // gap into the void would silently cancel the entire depth gradient.
@@ -2643,6 +2648,7 @@ int main(int argc, char** argv) {
         // `bus.clear()`, is exactly the contract the header asks for and is
         // double-count-free. [faction_relations.h]
         relTick = game::relations_drain_deaths(factionRel, reg, pool, bus, simTick);
+        game::feed_drain(eventFeed, bus);
         bus.clear();
 
         // Hand over a finished nav bake. Cheap every frame; true only on the frame
@@ -3967,38 +3973,42 @@ int main(int argc, char** argv) {
                         }
 
                         // 2. Terminal / ControlPanel — zero-heap nearest Interactable
-                        // ([jirnyak.md] §18 interaction_step). No vector collect,
+                        // ([jirnyak.md] §18 interaction_step / prop_interact_step). No vector collect,
                         // no fake hit when nothing is in reach.
                         if (!handled && activeLayer != kInvalidLayer) {
-                            game::InteractionHit termHit = game::find_nearest_interactable(
-                                reg, player, game::Interactable::Kind::Terminal,
-                    game::interact_def(game::InteractKind::Terminal).reachM);
-                            if (termHit.hit) {
-                                game::TerminalInteractResult tres =
-                                    game::embody_interact_terminal(
-                                        reg, stack.layer(activeLayer), doors,
-                                        activeLayer, termHit.pos);
-                                if (tres.interacted) {
-                                    handled = true;
-                                    std::snprintf(elevDiagLine, sizeof(elevDiagLine),
-                                                  "ELEVATOR DIAGNOSTIC: FLOOR %d TERMINAL LINKED | DOORS %s (%u TOGGLED)",
-                                                  currentFloor, tres.doorsLocked ? "LOCKED" : "UNLOCKED", tres.doorsToggled);
-                                    elevDiagAt = simTick;
-                                    std::fprintf(stderr, "[gameplay] Terminal/ControlPanel interact: doors %s (%u toggled) | ElecArc burst emitted at (%.1f, %.1f, %.1f)\n",
-                                                 tres.doorsLocked ? "LOCKED" : "UNLOCKED", tres.doorsToggled,
-                                                 tres.propPos.x, tres.propPos.y, tres.propPos.z);
+                            if (game::prop_interact_step(
+                                    reg, player, game::Interactable::Kind::Terminal, bus)) {
+                                game::InteractionHit termHit{};
+                                if (game::interaction_step(
+                                        reg, player, game::Interactable::Kind::Terminal,
+                                        bus, &termHit)) {
+                                    game::TerminalInteractResult tres =
+                                        game::embody_interact_terminal(
+                                            reg, stack.layer(activeLayer), doors,
+                                            activeLayer, termHit.pos);
+                                    if (tres.interacted) {
+                                        handled = true;
+                                        std::snprintf(elevDiagLine, sizeof(elevDiagLine),
+                                                      "ELEVATOR DIAGNOSTIC: FLOOR %d TERMINAL LINKED | DOORS %s (%u TOGGLED)",
+                                                      currentFloor, tres.doorsLocked ? "LOCKED" : "UNLOCKED", tres.doorsToggled);
+                                        elevDiagAt = simTick;
+                                        std::fprintf(stderr, "[gameplay] Terminal/ControlPanel interact: doors %s (%u toggled) | ElecArc burst emitted at (%.1f, %.1f, %.1f)\n",
+                                                     tres.doorsLocked ? "LOCKED" : "UNLOCKED", tres.doorsToggled,
+                                                     tres.propPos.x, tres.propPos.y, tres.propPos.z);
 
-                                    game::NoiseProfile np{12.0f, 2000, 3, game::NoiseSource::Door};
-                                    game::noise_publish(noiseField, activeLayer, tres.propPos, np, 0);
+                                        game::NoiseProfile np{12.0f, 2000, 3, game::NoiseSource::Door};
+                                        game::noise_publish(noiseField, activeLayer, tres.propPos, np, 0);
+                                    }
                                 }
                             }
                         }
 
                         // 3. ElectricalShield sabotage — zero-heap nearest.
                         if (!handled && activeLayer != kInvalidLayer) {
-                            game::InteractionHit shieldHit = game::find_nearest_interactable(
-                                reg, player, game::Interactable::Kind::ElectricalShield, 3.5f);
-                            if (shieldHit.hit) {
+                            game::InteractionHit shieldHit{};
+                            if (game::interaction_step(
+                                    reg, player, game::Interactable::Kind::ElectricalShield,
+                                    bus, &shieldHit)) {
                                 const vec3& sp = shieldHit.pos;
                                 int scx = static_cast<int>(sp.x / kCellSize);
                                 int scy = static_cast<int>(sp.y / kCellSize);
@@ -4540,6 +4550,7 @@ int main(int argc, char** argv) {
                                 stack, registry, reg, pool, savedFloor, pid);
                             currentFloor = savedFloor;
                             currentSpec = spec_for_floor(currentFloor);
+                            game::bank_open(bankAccount, currentFloor, streamer.floor_seed_of(registry, currentFloor));
                             const LayerId nl = lr.layer;
                             activeLayer = nl;
                             player = pid != game::kInvalidNpc
@@ -4799,6 +4810,8 @@ int main(int argc, char** argv) {
                                 game::relations_nudge_player(factionRel, f, +3);
                             }
                         }
+                // Bank step: accrue interest on deposits and loans per interest period.
+                game::bank_step(bankAccount, simTick);
                 // Eating and drinking sit beside healing and AFTER pickup_step, so a
                 // ration picked up this tick can be eaten this tick. Both refuse a
                 // full bar, so a mistimed press costs nothing; both also fill
@@ -5487,6 +5500,14 @@ int main(int argc, char** argv) {
                                 macroStats.reserveRemaining,
                                 static_cast<unsigned long long>(macroStats.tick),
                                 macroSim.day());
+            }
+            for (std::size_t fi = 0; fi < eventFeed.live; ++fi) {
+                const char* fline = game::feed_line(eventFeed, fi);
+                const std::uint64_t ftick = game::feed_tick(eventFeed, fi);
+                if (fline != nullptr && ftick != 0) {
+                    ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.3f, 0.9f), "[feed %llu] %s",
+                                       static_cast<unsigned long long>(ftick), fline);
+                }
             }
             ImGui::TextUnformatted(
                 "WASD move | mouse look | Tab toggle look | Space jump | "
@@ -6297,6 +6318,7 @@ int main(int argc, char** argv) {
                         player = r.player;
                         currentFloor = r.floor;
                         game::record_floor(ledger, currentFloor);
+                        game::bank_open(bankAccount, currentFloor, streamer.floor_seed_of(registry, currentFloor));
                         // currentSpec was "(HUD only)" until door_build started reading
                         // it, and only the KEYBOARD ride path maintained it — so a
                         // --shot ride built floor -36's doors against floor 0's

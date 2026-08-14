@@ -921,8 +921,16 @@ if(GIGA_BUILD_TESTS)
     # claims the body / steers along the flow in the walking plane only, the
     # PosX gravity-axis sentinel survives (mutation: unconditional axis writes
     # -> 2 red), and an Ai-owned body is never re-steered (suite_utilai).
-    # 243672 on 2026-08-14: verified full ALife memory traces, gas suffocation & filter protection suite.
         PASS_REGULAR_EXPRESSION "game_test: 243672 checks, 0 failures")
+
+    # Comprehensive Opaque-Box E2E Test Suite for GigaHrush 2 (Milestone M3)
+    add_executable(e2e_test tests/e2e_test.cpp)
+    target_link_libraries(e2e_test PRIVATE giga_game)
+    giga_target_flags(e2e_test OFF)
+    add_test(NAME e2e_test COMMAND e2e_test)
+    set_tests_properties(e2e_test PROPERTIES
+        PASS_REGULAR_EXPRESSION "e2e_test: [0-9]+ checks, 0 failures")
+
 
 
 

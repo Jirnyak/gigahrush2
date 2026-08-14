@@ -21,6 +21,7 @@
 #include "world/field.h"      // Field<float>
 #include "world/gravity.h"    // GravityFrame / regime_frame — the steering plane
 #include "world/macro_grid.h" // MacroGrid (open/wall test inside the gradient)
+#include "world/nav.h"        // CoarseGraph, FineNav, route_step, etc.
 #include "world/types.h"      // wrap_macro, kCellSize, kMacroDim
 #include "world/world.h"      // World — door_nearest_shelter needs const World&
 
@@ -1169,6 +1170,7 @@ void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
         const int cx = wrap_macro(static_cast<int>(std::floor(tr.pos.x / kCellSize)));
         const int cy = wrap_macro(static_cast<int>(std::floor(tr.pos.y / kCellSize)));
         const int cz = wrap_macro(static_cast<int>(std::floor(tr.pos.z / kCellSize)));
+        const ivec3 fromCell{cx, cy, cz};
 
         // Lazy attach, the PlayerMelee rule: no spawn path has to remember the
         // plan. Emplacing a component the view does not iterate cannot
@@ -1176,9 +1178,22 @@ void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
         if (!reg.all_of<PatrolPlan>(e)) reg.emplace<PatrolPlan>(e);
         PatrolPlan& plan = reg.get<PatrolPlan>(e);
 
+        ivec3 toCell{0, 0, 0};
+        if (plan.nodeTo < nav::kNodes) {
+            const LatticeNode tn = lattice_unpack(plan.nodeTo);
+            toCell = ivec3{lattice_coord(tn.ix), lattice_coord(tn.iy), lattice_coord(tn.iz)};
+        }
+
         // Leg bookkeeping: pick a new target when there is none, or on arrival.
-        if (plan.nodeTo >= nav::kNodes ||
-            fine.at(plan.nodeTo, cx, cy, cz) == nav::kFlowArrived) {
+        bool needNewTarget = (plan.nodeTo >= nav::kNodes);
+        if (!needNewTarget) {
+            const std::uint8_t stepCheck = nav::route_step(coarse, fine, fromCell, toCell);
+            if (stepCheck == nav::kFlowArrived) {
+                needNewTarget = true;
+            }
+        }
+
+        if (needNewTarget) {
             const std::uint8_t anchor = fine.nearest_node(cx, cy, cz);
             if (anchor >= nav::kNodes) continue; // no anchor here: wander's problem
             plan.nodeFrom = anchor;
@@ -1212,9 +1227,12 @@ void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
             }
             if (pick == 0xFF) continue; // isolated anchor: wander's problem
             plan.nodeTo = pick;
+
+            const LatticeNode tn = lattice_unpack(plan.nodeTo);
+            toCell = ivec3{lattice_coord(tn.ix), lattice_coord(tn.iy), lattice_coord(tn.iz)};
         }
 
-        const std::uint8_t d = fine.at(plan.nodeTo, cx, cy, cz);
+        const std::uint8_t d = nav::route_step(coarse, fine, fromCell, toCell);
         if (d == nav::kFlowNone) continue; // pocket: delegate, never freeze
         Velocity& vel = view.get<Velocity>(e);
         // CLAIM. From here this pass is the body's one writer this tick:
