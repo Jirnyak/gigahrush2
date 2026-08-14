@@ -3951,6 +3951,7 @@ int main(int argc, char** argv) {
                                 if (pool.valid(nrg->id)) {
                                     game::ReliefResult rr = game::relieve_needs(pool.needs(nrg->id), 100.0f, 100.0f);
                                     if (rr.pee > 0.0f || rr.poo > 0.0f) {
+                                        game::status_apply(playerStatus, game::StatusId::GovnyakRelief, false);
                                         // The puddle: urine through the same
                                         // universal stain layer blood uses —
                                         // mixing with anything already there
