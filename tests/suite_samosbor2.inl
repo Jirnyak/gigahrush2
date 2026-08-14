@@ -630,11 +630,10 @@ static void test_samosbor2_all() {
         // 0.9375 * 300000 * 4 = 1,125,000 HP.
         CHECK(billed < 100);
         CHECK(billed > 0);
-        // The accessor agrees with the constants it fronts, so replacing the raw
-        // constant at the call site changed nothing but the number's owner.
+        // The accessor agrees with the variant specs (Spec 02 §4.3).
         const SamosborPressure p = samosbor_unsheltered_pressure(SamosborVariant::Meat);
-        CHECK(p.hpDamage == kSamosborUnshelteredHp);
-        CHECK(p.psiDamage == kSamosborUnshelteredPsi);
-        CHECK(p.fogRadiusCells == kSamosborFogRadiusCells);
+        CHECK(p.hpDamage == 6);
+        CHECK(p.psiDamage == 1);
+        CHECK(p.fogRadiusCells == 6);
     }
 }

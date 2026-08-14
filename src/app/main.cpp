@@ -3134,7 +3134,7 @@ int main(int argc, char** argv) {
                                     static_cast<game::SamosborVariant>(samosbor.variant));
                             const game::DamageResult dr_ = game::apply_damage(
                                 reg, pool, player, sp.hpDamage,
-                                game::DamageChannel::Kinetic, player);
+                                game::kAttritionChannel, player);
                             samosborDamage =
                                 static_cast<std::int16_t>(samosborDamage + dr_.applied);
                             if (auto* rpg = reg.try_get<game::RpgStats>(player)) {
@@ -3625,7 +3625,8 @@ int main(int argc, char** argv) {
                                      kSimDt, &activeWorld.gravity());
                 game::wander_step(reg, stack.layer(activeLayer).grid(), pool,
                                   nav.coarse(),
-                                  nav.fine(), activeLayer, simTick);
+                                  nav.fine(), activeLayer, simTick,
+                                  &activeWorld.gravity());
 
                 // Footstep noise generation while walking or running.
                 // "Walking" is speed ACROSS the floor, so the vertical component is

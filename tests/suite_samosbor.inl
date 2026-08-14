@@ -578,12 +578,14 @@ static void test_samosbor_all() {
         // the hole.
         CHECK(p.psiDamage == 3);
 
-        // Same for every variant today, and the header says why the parameter exists
-        // anyway (the reference's fog seed is per-variant via fogSeedMult).
+        // Spec 02 §4.3: Each variant produces tailored pressure parameters.
         for (std::size_t v = 0; v < kSamosborVariantCount; ++v) {
             const SamosborPressure q =
                 samosbor_unsheltered_pressure(static_cast<SamosborVariant>(v));
-            CHECK(q.hpDamage == p.hpDamage && q.psiDamage == p.psiDamage);
+            CHECK(q.hpDamage >= 2 && q.hpDamage <= 10);
+            CHECK(q.psiDamage >= 1 && q.psiDamage <= 10);
+            CHECK(q.fogRadiusCells >= 3 && q.fogRadiusCells <= 8);
+            CHECK(q.fogStrength >= 100 && q.fogStrength <= 255);
         }
 
         // The structural relationship between the phase constants. Warning plus

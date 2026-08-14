@@ -15,6 +15,7 @@
 #include "game/mob_behaviour.h"
 #include "game/mob_table.h"
 #include "game/mob_spawn.h"
+#include "world/gravity.h"
 #include "world/lattice.h"
 #include "world/types.h"
 
@@ -117,8 +118,23 @@ bool adjacent_wall(const MacroGrid& grid, const vec3& pos) {
 
 void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                  const nav::CoarseGraph& coarse,
-                 const nav::FineNav& fine, LayerId layer, std::uint64_t tick) {
+                 const nav::FineNav& fine, LayerId layer, std::uint64_t tick,
+                 const GravityField* gravity) {
     if (fine.flow.empty()) return;  // nav not baked for this floor
+
+    GravityRegime steerRegime = GravityRegime::NegZ;
+    if (gravity != nullptr) {
+        steerRegime = gravity->regime;
+        if (steerRegime == GravityRegime::Custom)
+            steerRegime = regime_from_vector(gravity->global);
+    }
+    const GravityFrame gf = regime_frame(steerRegime);
+    const auto tangent = [&gf](float x, float y, float z) {
+        if (gf.axis == 0) x = 0.0f;
+        else if (gf.axis == 1) y = 0.0f;
+        else z = 0.0f;
+        return vec3{x, y, z};
+    };
 
     const std::uint32_t phase = static_cast<std::uint32_t>(tick % kWanderPeriod);
 
@@ -338,8 +354,13 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                     const game::BurstPhase bp = game::burst_phase(beh, id, tick, len);
                     sp *= game::burst_speed_mult(bp);
                     sp *= game::behaviour_hurt_move_mult(beh, mr->hp, mr->maxHp);
-                    vel.v.x = tx / tl * sp;
-                    vel.v.y = ty / tl * sp;
+                    const vec3 to = tangent(tx, ty, 0.0f);
+                    const float toLen = length(to);
+                    if (toLen > 0.001f) {
+                        if (gf.axis != 0) vel.v.x = (to.x / toLen) * sp;
+                        if (gf.axis != 1) vel.v.y = (to.y / toLen) * sp;
+                        if (gf.axis != 2) vel.v.z = (to.z / toLen) * sp;
+                    }
                 }
                 continue;  // no repath, no flow read — it has a target
             }
@@ -368,70 +389,51 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         if (arrived || stuck) {
             // Pick a fresh destination, but not every pass — thrashing between
             // unreachable nodes would burn the whole stagger budget on repathing.
-            //
-            // A PACKED agent does not re-roll: its node is the pack's, and rolling a
-            // private one here is precisely the bug that would let a member peel off
-            // the first time it arrived or hit a dead end. It instead waits out the
-            // epoch, which reads as a pack that has arrived and is milling about.
-            // The honest cost: a pack aimed at a node it cannot reach stands still
-            // until the epoch turns (kPackEpochTicks, ~15 s) rather than retrying
-            // after ~1.1 s.
             if (wt.pack == 0 && wt.cooldown == 0) {
                 std::uint32_t h = hash_u32(id ^ static_cast<std::uint32_t>(tick));
                 wt.node = static_cast<std::uint8_t>(h % nav::kNodes);
                 wt.cooldown = kRepathCooldown;
             }
-            vel.v.x = 0.0f;
-            vel.v.y = 0.0f;
+            if (gf.axis != 0) vel.v.x = 0.0f;
+            if (gf.axis != 1) vel.v.y = 0.0f;
+            if (gf.axis != 2) vel.v.z = 0.0f;
             continue;
         }
 
-        float dirX = 0.0f, dirY = 0.0f;
-        const bool horizontalStep =
-            (flow < 6) && (nav::kNavDir[flow][2] == 0);
+        const bool inWalkingPlane =
+            (flow < 6) && ((flow >> 1) != gf.axis);
 
-        if (horizontalStep) {
+        vec3 dir{0.0f, 0.0f, 0.0f};
+        if (inWalkingPlane) {
             // The common, good case: the bake hands us the exact next step along a
             // shortest wrapped path, obstacle avoidance included, for one byte.
-            dirX = static_cast<float>(nav::kNavDir[flow][0]);
-            dirY = static_cast<float>(nav::kNavDir[flow][1]);
+            dir.x = static_cast<float>(nav::kNavDir[flow][0]);
+            dir.y = static_cast<float>(nav::kNavDir[flow][1]);
+            dir.z = static_cast<float>(nav::kNavDir[flow][2]);
         } else {
-            // The flow says "climb" (or we are standing on the hop node). A walking
-            // body cannot climb a storey, and stairwell traversal is not wired.
-            //
-            // This is NOT a rare edge case, which is why it gets a real fallback
-            // instead of a shrug: measured on a Residential floor, 110 of 120
-            // ground-storey residents get a vertical first step. All 64 lattice
-            // nodes sit at cell z in {16, 48, 80, 112} while a floor module's crowd
-            // stands at z = 1, so nearly every route begins by going up. Refusing
-            // the step left 92% of the crowd standing still.
-            //
-            // Fall back to the horizontal bearing toward the hop node's column: the
-            // agent walks toward the shaft rather than freezing, which is both
-            // plausible behaviour and the direction a future stairwell traversal
-            // would want anyway. Physics resolves whatever it walks into.
+            // Fall back to the bearing toward the hop node's column in the tangent plane:
             const LatticeNode ln = lattice_unpack(hop);
             const float tx = static_cast<float>(lattice_coord(ln.ix)) * kCellSize;
             const float ty = static_cast<float>(lattice_coord(ln.iy)) * kCellSize;
-            const float ox = wrap_delta_f(tr.pos.x, tx, kWorldExtent);
-            const float oy = wrap_delta_f(tr.pos.y, ty, kWorldExtent);
-            const float len = std::sqrt(ox * ox + oy * oy);
+            const float tz = static_cast<float>(lattice_coord(ln.iz)) * kCellSize;
+            const vec3 delta = tangent(
+                wrap_delta_f(tr.pos.x, tx, kWorldExtent),
+                wrap_delta_f(tr.pos.y, ty, kWorldExtent),
+                wrap_delta_f(tr.pos.z, tz, kWorldExtent));
+            const float len = length(delta);
             if (len < kCellSize) {
-                // Already in the node's column with nowhere horizontal to go. Same
-                // rule as the repath above: a packed agent keeps the pack's node and
-                // waits out the epoch instead of privately picking another.
                 if (wt.pack == 0 && wt.cooldown == 0) {
                     std::uint32_t h =
                         hash_u32(id ^ static_cast<std::uint32_t>(tick) ^ 0x5bf03635u);
                     wt.node = static_cast<std::uint8_t>(h % nav::kNodes);
                     wt.cooldown = kRepathCooldown;
                 }
-                vel.v.x = 0.0f;
-                vel.v.y = 0.0f;
+                if (gf.axis != 0) vel.v.x = 0.0f;
+                if (gf.axis != 1) vel.v.y = 0.0f;
+                if (gf.axis != 2) vel.v.z = 0.0f;
                 continue;
             }
-            dirX = ox / len;
-            dirY = oy / len;
+            dir = delta * (1.0f / len);
         }
 
         float speed = kNpcWalkSpeed;
@@ -441,9 +443,10 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                     kCellSize;
         }
 
-        vel.v.x = dirX * speed;
-        vel.v.y = dirY * speed;
-        // z is left to gravity: this is locomotion, not flight.
+        if (gf.axis != 0) vel.v.x = dir.x * speed;
+        if (gf.axis != 1) vel.v.y = dir.y * speed;
+        if (gf.axis != 2) vel.v.z = dir.z * speed;
+        // Gravity axis is left to physics_step
     }
 
     for (const auto& hit : hazardHits) {

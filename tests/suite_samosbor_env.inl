@@ -291,4 +291,49 @@ static void test_samosbor_env_all() {
         const giga::game::Needs& n = pool.needs(id);
         CHECK(n.hpDebt < 1e-6f);
     }
+
+    { // ---- unsheltered_pressure_variant_specs --------------------------------
+        // Spec 02 §4.3: pin variant-specific unsheltered seal pressure parameters
+        const auto c = giga::game::samosbor_unsheltered_pressure(SamosborVariant::Classic);
+        CHECK(c.hpDamage == 4);
+        CHECK(c.psiDamage == 3);
+        CHECK(c.fogRadiusCells == 4);
+        CHECK(c.fogStrength == 155);
+
+        const auto w = giga::game::samosbor_unsheltered_pressure(SamosborVariant::Wet);
+        CHECK(w.hpDamage == 4);
+        CHECK(w.psiDamage == 2);
+        CHECK(w.fogRadiusCells == 5);
+        CHECK(w.fogStrength == 180);
+
+        const auto el = giga::game::samosbor_unsheltered_pressure(SamosborVariant::Electric);
+        CHECK(el.hpDamage == 5);
+        CHECK(el.psiDamage == 6);
+        CHECK(el.fogRadiusCells == 4);
+        CHECK(el.fogStrength == 165);
+
+        const auto mt = giga::game::samosbor_unsheltered_pressure(SamosborVariant::Meat);
+        CHECK(mt.hpDamage == 6);
+        CHECK(mt.psiDamage == 1);
+        CHECK(mt.fogRadiusCells == 6);
+        CHECK(mt.fogStrength == 210);
+
+        const auto mr = giga::game::samosbor_unsheltered_pressure(SamosborVariant::Maronary);
+        CHECK(mr.hpDamage == 3);
+        CHECK(mr.psiDamage == 6);
+        CHECK(mr.fogRadiusCells == 3);
+        CHECK(mr.fogStrength == 130);
+
+        const auto is = giga::game::samosbor_unsheltered_pressure(SamosborVariant::Istotit);
+        CHECK(is.hpDamage == 2);
+        CHECK(is.psiDamage == 1);
+        CHECK(is.fogRadiusCells == 3);
+        CHECK(is.fogStrength == 110);
+
+        const auto vr = giga::game::samosbor_unsheltered_pressure(SamosborVariant::Veretar);
+        CHECK(vr.hpDamage == 7);
+        CHECK(vr.psiDamage == 2);
+        CHECK(vr.fogRadiusCells == 5);
+        CHECK(vr.fogStrength == 225);
+    }
 }

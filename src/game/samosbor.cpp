@@ -545,13 +545,68 @@ SamosborTransition samosbor_step(SamosborState& st, std::uint32_t dtMs, int floo
 // ---------------------------------------------------------------------------
 
 SamosborPressure samosbor_unsheltered_pressure(SamosborVariant variant) {
-    // Variant-independent today. The parameter is here because the reference's
-    // fog seed IS per-variant (via fogSeedMult) and the day a fog field lands
-    // this is where that lookup goes — a signature change at that point would
-    // touch every call site instead of one function body.
-    (void)variant;
-    return SamosborPressure{kSamosborFogRadiusCells, kSamosborFogStrength,
-                            kSamosborUnshelteredHp, kSamosborUnshelteredPsi};
+    // Base parameters from canonical constants
+    std::uint8_t radius = kSamosborFogRadiusCells;
+    std::uint8_t strength = kSamosborFogStrength;
+    std::int16_t hp = kSamosborUnshelteredHp;
+    std::int16_t psi = kSamosborUnshelteredPsi;
+
+    // Spec 02 §4.3: Scale fog parameters and seal shock according to variant mechanics
+    switch (variant) {
+        case SamosborVariant::Classic:
+            // Standard GOST-S purple fog
+            hp = 4;
+            psi = 3;
+            radius = 4;
+            strength = 155;
+            break;
+        case SamosborVariant::Wet:
+            // Heavy humidity: acoustic dampening, moderate physical shock
+            hp = 4;
+            psi = 2;
+            radius = 5;
+            strength = 180;
+            break;
+        case SamosborVariant::Electric:
+            // Ozone breakdown: severe psychic/electrical discharge
+            hp = 5;
+            psi = 6;
+            radius = 4;
+            strength = 165;
+            break;
+        case SamosborVariant::Meat:
+            // Biological biomass expansion: high trauma, dehydration
+            hp = 6;
+            psi = 1;
+            radius = 6;
+            strength = 210;
+            break;
+        case SamosborVariant::Maronary:
+            // Identity dissolution: severe psychological collapse
+            hp = 3;
+            psi = 6;
+            radius = 3;
+            strength = 130;
+            break;
+        case SamosborVariant::Istotit:
+            // Milder, constructive anomaly: low threat, reduced fog
+            hp = 2;
+            psi = 1;
+            radius = 3;
+            strength = 110;
+            break;
+        case SamosborVariant::Veretar:
+            // White corrosive residue: violent chemical dissolution
+            hp = 7;
+            psi = 2;
+            radius = 5;
+            strength = 225;
+            break;
+        default:
+            break;
+    }
+
+    return SamosborPressure{radius, strength, hp, psi};
 }
 
 // ---------------------------------------------------------------------------

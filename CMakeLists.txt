@@ -921,8 +921,8 @@ if(GIGA_BUILD_TESTS)
     # claims the body / steers along the flow in the walking plane only, the
     # PosX gravity-axis sentinel survives (mutation: unconditional axis writes
     # -> 2 red), and an Ai-owned body is never re-steered (suite_utilai).
-    # 243590 on 2026-08-14: samosbor_environmental_step Active-phase continuous fog pressure suite (suite_samosbor_env.inl).
-        PASS_REGULAR_EXPRESSION "game_test: 243590 checks, 0 failures")
+    # 243648 on 2026-08-14: samosbor_unsheltered_pressure variant scaling & isotropic wander_step gravity projection suite.
+        PASS_REGULAR_EXPRESSION "game_test: 243648 checks, 0 failures")
 
 
 

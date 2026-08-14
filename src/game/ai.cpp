@@ -854,7 +854,9 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
         vec3 dir{0.0f, 0.0f, 0.0f};
         bool owned = false;
         bool viaMemory = false;
-        if (brain.currentIntent == IntentFlee) {
+        const bool isCrisisMotion = (brain.currentIntent == IntentFlee ||
+                                     brain.currentIntent == IntentSafety);
+        if (isCrisisMotion) {
             // §23 hermetic shelter first: a sealed apartment is a real destination
             // during Samosbor purple fog, not just "away from the gradient". Both
             // world and doors must be live (main wires them; tests pass null and
