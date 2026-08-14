@@ -1,3 +1,4 @@
+#include "core/rng.h"
 #include "game/quest.h"
 
 #include <cstdio>
@@ -6,12 +7,6 @@
 namespace giga::game {
 
 namespace {
-
-// The same 32-bit finalizer contract.cpp uses. Duplicated rather than shared because
-// it is a file-static there and hoisting it would be an edit to contract.cpp for no
-// behavioural reason; both are the well-known lowbias32 constants, so the two cannot
-// drift into disagreement about anything that matters.
-#include "core/rng.h"
 // ---------------------------------------------------------------------------
 // Russian text fragments, as hex escapes
 // ---------------------------------------------------------------------------
