@@ -658,7 +658,7 @@ FogTickReport samosbor_fog_tick_at(Registry& reg, const World& world,
                                       kThreatOuterRadiusCells);
             const int ty = wrap_macro(acy + static_cast<int>((h >> 19) % span) -
                                       kThreatOuterRadiusCells);
-            if (!placeable(wet, world, tx, ty, acz, static_cast<std::uint8_t>(pick))) continue;
+            if (!placeable(wet, world, tx, ty, acz, static_cast<std::uint8_t>(kind))) continue;
 
             // The census's own arithmetic, on the exact position about to be
             // written. **This is the invariant that makes the budget terminate**:

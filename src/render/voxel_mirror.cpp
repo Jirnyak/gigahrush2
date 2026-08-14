@@ -351,6 +351,7 @@ void VoxelMirror::flush(VkCommandBuffer cmd, std::uint32_t frameIndex,
         classCopies_.push_back({off, static_cast<VkDeviceSize>(c0),
                                 static_cast<VkDeviceSize>(len)});
         off += len;
+        off = (off + 3u) & ~std::size_t(3u);
 
         bytes = static_cast<std::size_t>(len) * sizeof(std::uint32_t);
         std::uint32_t* dst = reinterpret_cast<std::uint32_t*>(base + off);

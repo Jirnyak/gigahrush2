@@ -42,6 +42,7 @@ InvestigateHeard investigate_hear(const NoiseField& field, MobBehaviour beh, Lay
     out.heard = true;
     out.dx = wrap_delta_f(mobPos.x, n->x, kWorldExtent);
     out.dy = wrap_delta_f(mobPos.y, n->y, kWorldExtent);
+    out.dz = n->z - mobPos.z;
     out.dist = dist;
     out.noiseId = n->id;
     out.severity = n->severity;

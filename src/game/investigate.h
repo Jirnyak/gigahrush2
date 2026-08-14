@@ -85,6 +85,7 @@ struct InvestigateHeard {
     bool heard = false;
     float dx = 0.0f;             // toroidal delta from the mob TO the noise, metres
     float dy = 0.0f;
+    float dz = 0.0f;
     float dist = 0.0f;           // full 3D distance, metres
     std::uint32_t noiseId = 0;   // monotonic; what a one-shot behaviour remembers
     std::uint8_t severity = 0;

@@ -921,7 +921,7 @@ if(GIGA_BUILD_TESTS)
     # claims the body / steers along the flow in the walking plane only, the
     # PosX gravity-axis sentinel survives (mutation: unconditional axis writes
     # -> 2 red), and an Ai-owned body is never re-steered (suite_utilai).
-        PASS_REGULAR_EXPRESSION "game_test: 243672 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "game_test: 243673 checks, 0 failures")
 
     # Comprehensive Opaque-Box E2E Test Suite for GigaHrush 2 (Milestone M3)
     add_executable(e2e_test tests/e2e_test.cpp)
