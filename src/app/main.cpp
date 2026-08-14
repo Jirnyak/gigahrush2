@@ -4352,6 +4352,9 @@ int main(int argc, char** argv) {
                 // load taxes you on the tick you carry it, not one tick later.
                 encumbrance = game::encumbrance_step(reg, pool, activeLayer, kSimDt,
                                                      simTick, &noiseField);
+                // Spec 03 §4.2: Environmental gas/smoke filter degradation & battery drain.
+                // 1-in-16 staggered sweep across equipped tools on active layer.
+                game::fouling_step(reg, pool, activeLayer, nullptr, nullptr, kSimDt, simTick);
                 needs = game::needs_step(reg, pool, activeLayer, kSimDt, &roomZones,
                                          &aiMem, simNow, &playerStatus);
                 needsHpLost += needs.hpLost;

@@ -1,6 +1,7 @@
 #include "game/samosbor.h"
 
 #include <algorithm>
+#include <cmath>      // std::floor — samosbor_environmental_step cell lookup
 #include <cstdio>   // snprintf — samosbor_beat_text is the only user
 
 #include "core/rng.h"
