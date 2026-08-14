@@ -771,9 +771,9 @@ void samosbor_environmental_step(Registry& reg, NpcPool& pool,
         // Apply atmospheric sensory fog/coughing status to unsheltered camera holder
         if (reg.all_of<CameraTag>(e) && playerStatus != nullptr) {
             if (variant == SamosborVariant::Meat) {
-                status_apply(*playerStatus, StatusId::GovnyakCough);
+                status_apply(*playerStatus, StatusId::GovnyakCough, false);
             } else {
-                status_apply(*playerStatus, StatusId::SporeHaze);
+                status_apply(*playerStatus, StatusId::SporeHaze, false);
             }
         }
 

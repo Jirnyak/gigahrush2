@@ -394,7 +394,7 @@ std::int32_t pickup_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId la
         if (unplaced == 0) {
             taken.push_back(e);
         } else if (unplaced < p.count) {
-            reg.get<Pickup>(e).count = unplaced;
+            reg.get<Pickup>(e).count = static_cast<std::uint8_t>(unplaced);
         }
     }
     for (Entity e : taken) reg.destroy(e);

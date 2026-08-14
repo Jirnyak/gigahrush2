@@ -1179,18 +1179,19 @@ bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
         CellType* pg = mats.ensure_page(cell, types[cell]);
         std::uint16_t runs = 0;
         r.u16(runs);
-        int at = 0;
+        int pageOffset = 0;
         for (std::uint16_t k = 0; k < runs && r.ok(); ++k) {
             std::uint16_t v = 0, len = 0;
             r.u16(v);
             r.u16(len);
             // Subtract-never-add, the same guard the mask and type runs use: a
             // forged length cannot walk past the page.
-            if (len == 0 || len > static_cast<std::uint16_t>(kSubVoxels - at))
+            if (len == 0 || len > static_cast<std::uint16_t>(kSubVoxels - pageOffset))
                 return false;
-            for (std::uint16_t q = 0; q < len; ++q) pg[at++] = v;
+            for (std::uint32_t j = 0; j < len; ++j) pg[pageOffset + j] = v;
+            pageOffset += len;
         }
-        if (at != kSubVoxels) return false;
+        if (pageOffset != kSubVoxels) return false;
     }
     // Every byte consumed, none left over — same discipline as save_read.
     return r.ok() && r.at() == n;
