@@ -83,14 +83,14 @@ Entity embody(Registry& reg, NpcPool& pool, NpcId id, LayerId layer) {
     return e;
 }
 
-Entity embody_as_player(Registry& reg, NpcPool& pool, NpcId id, LayerId layer) {
+Entity embody_as_player(Registry& reg, NpcPool& pool, NpcId id, LayerId layer, vec3 up) {
     Entity e = embody(reg, pool, id, layer);
     if (e == entt::null) return e;
 
     // The camera sits at THIS body's eye height, so swapping into a shorter or
     // taller record immediately views from its stature.
     CameraTag cam;
-    cam.eyeOffset = vec3{0.0f, 0.0f, body_eye_height(pool.height_mm(id))};
+    cam.eyeOffset = up * body_eye_height(pool.height_mm(id));
     reg.emplace<CameraTag>(e, cam);
     reg.emplace<Controller>(e, Controller{7.0f, {0, 0, 0}, false});
 

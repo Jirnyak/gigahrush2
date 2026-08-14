@@ -1494,7 +1494,8 @@ std::uint32_t finish_floor_nav(Registry& reg, LayerId layer, std::uint32_t seed,
 //
 // Returns entt::null when the floor has nobody left to be, which is the honest
 // end state and the caller must handle it.
-Entity possess_a_survivor(Registry& reg, game::NpcPool& pool, LayerId layer) {
+Entity possess_a_survivor(Registry& reg, game::NpcPool& pool, LayerId layer,
+                          vec3 up = vec3{0.0f, 0.0f, 1.0f}) {
     // Choose first, mutate after: adding a component while a view is being
     // iterated can dangle that view if EnTT has to grow its pool container. The
     // pools involved here already exist, so this is insurance rather than a fix —
@@ -1513,8 +1514,7 @@ Entity possess_a_survivor(Registry& reg, game::NpcPool& pool, LayerId layer) {
     if (chosen == entt::null) return entt::null;
 
     CameraTag cam;
-    cam.eyeOffset =
-        vec3{0.0f, 0.0f, game::body_eye_height(pool.height_mm(chosenId))};
+    cam.eyeOffset = up * game::body_eye_height(pool.height_mm(chosenId));
     reg.emplace<CameraTag>(chosen, cam);
     reg.emplace<Controller>(chosen, Controller{7.0f, {0, 0, 0}, false});
     pool.set_player(chosenId, true);
@@ -1522,7 +1522,9 @@ Entity possess_a_survivor(Registry& reg, game::NpcPool& pool, LayerId layer) {
     return chosen;
 }
 
-Entity possess_nearest_survivor(Registry& reg, game::NpcPool& pool, LayerId layer, const vec3& playerPos, float reachM) {
+Entity possess_nearest_survivor(Registry& reg, game::NpcPool& pool, LayerId layer,
+                                const vec3& playerPos, float reachM,
+                                vec3 up = vec3{0.0f, 0.0f, 1.0f}) {
     Entity chosen = entt::null;
     game::NpcId chosenId = game::kInvalidNpc;
     float bestD2 = reachM * reachM;
@@ -1561,8 +1563,7 @@ Entity possess_nearest_survivor(Registry& reg, game::NpcPool& pool, LayerId laye
     }
 
     CameraTag cam;
-    cam.eyeOffset =
-        vec3{0.0f, 0.0f, game::body_eye_height(pool.height_mm(chosenId))};
+    cam.eyeOffset = up * game::body_eye_height(pool.height_mm(chosenId));
     reg.emplace<CameraTag>(chosen, cam);
     reg.emplace<Controller>(chosen, Controller{7.0f, {0, 0, 0}, false});
     pool.set_player(chosenId, true);

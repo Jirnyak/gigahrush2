@@ -69,10 +69,11 @@ float body_eye_height(std::uint16_t height_mm);
 // returns entt::null if id is invalid.
 Entity embody(Registry& reg, NpcPool& pool, NpcId id, LayerId layer);
 
-// Embody `id` and additionally attach a CameraTag (eye offset from stature) and
-// a Controller, and set the NpcPlayer bit. This is the ONLY thing that makes a
+// Embody `id` and additionally attach a CameraTag (eye offset from stature along `up`)
+// and a Controller, and set the NpcPlayer bit. This is the ONLY thing that makes a
 // record "the player" — there is no separate player object.
-Entity embody_as_player(Registry& reg, NpcPool& pool, NpcId id, LayerId layer);
+Entity embody_as_player(Registry& reg, NpcPool& pool, NpcId id, LayerId layer,
+                        vec3 up = vec3{0.0f, 0.0f, 1.0f});
 
 // Fold a live entity's transient state back into its record and de-embody it:
 // writes the macro cell (and clears NpcEmbodied / NpcPlayer), then destroys the
