@@ -1451,7 +1451,7 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         } else {
             tr.pos.x = wrapf(tr.pos.x + v.v.x * dt, kWorldExtent);
             tr.pos.y = wrapf(tr.pos.y + v.v.y * dt, kWorldExtent);
-            tr.pos.z += v.v.z * dt;
+            tr.pos.z = wrapf(tr.pos.z + v.v.z * dt, kWorldExtent);
         }
 
         if (p.ttlMs == 0) {
