@@ -3009,7 +3009,7 @@ int main(int argc, char** argv) {
                 // non-flee intent hands motion straight back to wander_step and the
                 // scorer is decoration (measured: own_ai=0 of 419).
                 dayClock.step(kSimDt);
-                game::ai_panic_publish_step(reg, pool, diffusionDriver, activeWorld, activeLayer, kSimDt);
+                game::ai_panic_publish_step(reg, pool, diffusionDriver, activeWorld, activeLayer, kSimDt, &samosbor);
                 diffusion_tick(diffusionDriver, activeWorld, activeLayer, simTick);
                 danger = activeWorld.fields().find<float>("danger");
                 aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,

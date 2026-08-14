@@ -1284,7 +1284,8 @@ void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
 
 void ai_panic_publish_step(Registry& reg, const NpcPool& pool,
                            DiffusionDriver& driver, World& world,
-                           LayerId layer, float dt) {
+                           LayerId layer, float dt,
+                           const SamosborState* samosbor) {
     constexpr float kPanicEmit = 1.0f;
 
     auto view = reg.view<const AiBrain, const NpcRef, const Transform>();
@@ -1298,7 +1299,11 @@ void ai_panic_publish_step(Registry& reg, const NpcPool& pool,
             if (!pool.valid(id)) continue;
 
             const FactionTraits& ft = faction_traits(pool.faction(id));
-            const float emitAmount = kPanicEmit * dt * ft.panic;
+            float emitAmount = kPanicEmit * dt * ft.panic;
+            if (samosbor && samosbor_active(*samosbor)) {
+                // Amplify panic emission during active Samosbor
+                emitAmount *= 1.5f;
+            }
             if (emitAmount > 0.0f) {
                 diffusion_driver_add_at(driver, world, tr.pos, emitAmount, kDangerField);
             }
