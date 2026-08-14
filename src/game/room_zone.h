@@ -85,6 +85,7 @@
 #include <vector>
 
 #include "game/day_clock.h" // kGameHourSec — the one in-game hour constant
+#include "game/room_stock.h"// RoomStock — closed-loop per-room inventory
 #include "game/ai.h"        // IntentId — the affordance table's key
 #include "game/role.h"      // RoleTraits — role home/work rooms join the bake mask
 #include "game/floor_gen.h" // kFloorRoomBits, floor_room_stride/mask/bit_index
@@ -271,7 +272,8 @@ bool room_restores(std::uint16_t bit);
 void room_recover(Needs& n, std::uint16_t bit, float dt,
                   AiMemory* mem = nullptr, NpcId id = kInvalidNpc,
                   int cx = 0, int cy = 0, int cz = 0, double now = 0.0,
-                  std::int16_t maxHp = 100);
+                  std::int16_t maxHp = 100,
+                  const RoomStock* stock = nullptr, int rx = 0, int ry = 0, int stride = 4);
 
 // ---------------------------------------------------------------------------
 // TABLE 3 — what FURNITURE a room kind contains.
@@ -406,6 +408,9 @@ struct RoomZones {
     // nearRoom[bitIndex]: one entry per room of the (128/stride)^2 lattice, packed
     // rx | ry << 8, naming the nearest room carrying that bit. Empty when not baked.
     std::vector<std::uint16_t> nearRoom[kFloorRoomBits];
+
+    // Closed-loop room stock: inventory of goods/food/supplies for up to 1024 room columns.
+    RoomStock stock{};
 
     bool ready() const { return baked != 0; }
     std::size_t resident_bytes() const;

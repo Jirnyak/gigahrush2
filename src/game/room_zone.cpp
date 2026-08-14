@@ -96,7 +96,8 @@ bool room_restores(std::uint16_t bit) {
 
 void room_recover(Needs& n, std::uint16_t bit, float dt,
                   AiMemory* mem, NpcId id, int cx, int cy, int cz, double now,
-                  std::int16_t maxHp) {
+                  std::int16_t maxHp,
+                  const RoomStock* stock, int rx, int ry, int stride) {
     if (dt <= 0.0f) return;
     const int i = floor_room_bit_index(bit);
     if (i < 0) return;
@@ -108,6 +109,17 @@ void room_recover(Needs& n, std::uint16_t bit, float dt,
     const float oldPee   = n.pee;
     const float oldPoo   = n.poo;
 
+    // Closed-loop room stock gating: empty kitchen cannot feed, empty medical cannot heal
+    bool canEatDrink = true;
+    bool canHeal = true;
+    if (stock != nullptr) {
+        const std::uint16_t currentStock = room_stock_get(*stock, rx, ry, stride);
+        if (currentStock == 0) {
+            if (r.food > 0.0f || r.water > 0.0f) canEatDrink = false;
+            if (r.hpBank > 0.0f) canHeal = false;
+        }
+    }
+
     // Local clamp rather than a call into needs.cpp's file-static: the band is the
     // same [0, kNeedMax] and it is stated once, here, for this file's five writers.
     const auto add = [](float& v, float d) {
@@ -116,21 +128,26 @@ void room_recover(Needs& n, std::uint16_t bit, float dt,
         if (v > kNeedMax) v = kNeedMax;
     };
 
-    add(n.food, r.food * dt);
-    add(n.water, r.water * dt);
+    if (canEatDrink) {
+        add(n.food, r.food * dt);
+        add(n.water, r.water * dt);
+        // The queues are NOT clamped to kNeedMax: they are a backlog, and `digest`
+        // meters them out ([needs.h]). Clamping them here would silently forgive the
+        // consequence of eating, which is the whole point of the kitchen row.
+        n.pendingPee += r.pendingPee * dt;
+        n.pendingPoo += r.pendingPoo * dt;
+    }
     add(n.sleep, r.sleep * dt);
     add(n.pee, -r.pee * dt);
     add(n.poo, -r.poo * dt);
-    // The queues are NOT clamped to kNeedMax: they are a backlog, and `digest`
-    // meters them out ([needs.h]). Clamping them here would silently forgive the
-    // consequence of eating, which is the whole point of the kitchen row.
-    n.pendingPee += r.pendingPee * dt;
-    n.pendingPoo += r.pendingPoo * dt;
-    // The heal bank is NOT clamped to kNeedMax: like the queues it is a backlog,
-    // and needs_step drains the whole part every tick, so it stays sub-2 in practice.
-    // hpBank column is percent-of-max ([room_zone.h] TABLE 2), scaled to HP here —
-    // the one place the conversion happens.
-    n.hpBank += r.hpBank * (static_cast<float>(maxHp) * 0.01f) * dt;
+
+    if (canHeal) {
+        // The heal bank is NOT clamped to kNeedMax: like the queues it is a backlog,
+        // and needs_step drains the whole part every tick, so it stays sub-2 in practice.
+        // hpBank column is percent-of-max ([room_zone.h] TABLE 2), scaled to HP here —
+        // the one place the conversion happens.
+        n.hpBank += r.hpBank * (static_cast<float>(maxHp) * 0.01f) * dt;
+    }
 
     // File a place memory only for recovery that LANDED (the bar moved): a full
     // body learns nothing from a kitchen. MemRest additionally waits for a real
@@ -349,6 +366,8 @@ void bake_room_zones(const MacroGrid& grid, FloorKind kind, int number,
     out.kind = kind;
     out.number = number;
     out.baked = 0;
+    room_stock_init(out.stock, static_cast<std::uint8_t>(kind),
+                    hash3(0x570c12u, static_cast<std::uint32_t>(number), 0x1337u));
 
     const int stride = floor_room_stride(kind);
     if (stride <= 1) return;
