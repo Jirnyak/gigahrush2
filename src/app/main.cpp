@@ -4274,7 +4274,7 @@ int main(int argc, char** argv) {
                 encumbrance = game::encumbrance_step(reg, pool, activeLayer, kSimDt,
                                                      simTick, &noiseField);
                 needs = game::needs_step(reg, pool, activeLayer, kSimDt, &roomZones,
-                                         &aiMem, simNow);
+                                         &aiMem, simNow, &playerStatus);
                 needsHpLost += needs.hpLost;
                 // The other half of the acceptance trail. `bodies` says the clock is
                 // no longer a one-body clock, `recovering` says rooms are actually
@@ -4726,7 +4726,7 @@ int main(int argc, char** argv) {
                 }
                 if (healWanted) {
                     healed += game::use_best_heal(reg, pool, bus, activeLayer,
-                                                  simTick);
+                                                  simTick, &playerStatus);
                     healWanted = false;
                 }
                 // The player is not exempt: if it died it no longer exists, and

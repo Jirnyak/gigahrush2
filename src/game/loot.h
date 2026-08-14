@@ -131,6 +131,8 @@ std::uint32_t roll_mob_loot_slots(std::uint8_t mobKind, std::uint8_t mobTier,
 std::int32_t pickup_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId layer,
                          std::uint64_t tick);
 
+struct StatusSet;
+
 // Consume the best healing item in the camera holder's inventory, if any and if it
 // would help. Returns the HP restored, 0 if nothing was used.
 //
@@ -138,7 +140,8 @@ std::int32_t pickup_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId la
 // the largest available — so a bandage is not wasted on a scratch and a full medkit
 // is not saved for a corpse.
 std::int16_t use_best_heal(Registry& reg, NpcPool& pool, EventBus& bus,
-                           LayerId layer, std::uint64_t tick);
+                           LayerId layer, std::uint64_t tick,
+                           const StatusSet* status = nullptr);
 
 // How much ammo drops alongside a firearm, from the reference's own bundling rule.
 //

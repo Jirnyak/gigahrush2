@@ -348,7 +348,17 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
                 const float kmass = km != nullptr && km->kg > 1.0f
                                         ? km->kg
                                         : kKnockbackRefMassKg;
-                const float impulse = 2.5f * (kKnockbackRefMassKg / kmass);
+                float kbSpeed = 1.5f;
+                if (const NpcRef* sn = reg.try_get<NpcRef>(source)) {
+                    if (pool.valid(sn->id)) {
+                        const ItemId weaponId = equipped_melee(pool.inventory(sn->id));
+                        const MeleeDef* mdef = melee_for_item(weaponId);
+                        if (mdef && mdef->knockbackMm > 0) {
+                            kbSpeed = static_cast<float>(mdef->knockbackMm) * 0.001f * kCellSize;
+                        }
+                    }
+                }
+                const float impulse = kbSpeed * (kKnockbackRefMassKg / kmass);
                 auto& vel = reg.get<Velocity>(target);
                 vel.v = vel.v + d * (impulse / std::sqrt(lenSq));
             }

@@ -8,6 +8,7 @@
 #include "game/inventory.h"
 #include "game/room_zone.h"  // room_bit_at / room_restores / room_recover
 #include "game/rpg.h"        // RpgStats, max_psi
+#include "game/status.h"     // status_water_drain_e3
 #include "world/types.h"     // kCellSize — pos -> macro cell, the one conversion
 
 namespace giga::game {
@@ -249,7 +250,8 @@ float needs_speed_scale(const Needs& n) {
 }
 
 NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
-                     const RoomZones* rooms, AiMemory* mem, double now) {
+                     const RoomZones* rooms, AiMemory* mem, double now,
+                     const StatusSet* playerStatus) {
     NeedsTick out;
     if (dt <= 0.0f) return out;
 
@@ -285,6 +287,13 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
         }
 
         needs_advance(n, dt);
+        if (camera && playerStatus) {
+            const float extraDrain =
+                static_cast<float>(status_water_drain_e3(*playerStatus)) * 0.001f * dt;
+            if (extraDrain > 0.0f) {
+                n.water = clamp_need(n.water - extraDrain);
+            }
+        }
         ++out.bodies;
 
         // AMBIENT RECOVERY — the other half of the widened scope. Standing in a

@@ -13,6 +13,7 @@
 #include "game/mob_table.h"
 #include "game/prop_system.h" // Interactable::Kind::Loot — §18 interaction tag
 #include "game/ranged_table.h"
+#include "game/status.h"
 #include "world/types.h"
 
 
@@ -397,7 +398,8 @@ std::int32_t pickup_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId la
 }
 
 std::int16_t use_best_heal(Registry& reg, NpcPool& pool, EventBus& bus,
-                           LayerId layer, std::uint64_t tick) {
+                           LayerId layer, std::uint64_t tick,
+                           const StatusSet* status) {
     Entity self = entt::null;
     NpcId selfId = kInvalidNpc;
     for (auto e : reg.view<const CameraTag, const Transform, const NpcRef>()) {
@@ -444,8 +446,11 @@ std::int16_t use_best_heal(Registry& reg, NpcPool& pool, EventBus& bus,
     }
     if (best < 0) return 0;
 
+    const std::uint16_t healMult = status ? status_heal_mult_e3(*status) : 1000u;
+    const std::int16_t effectiveAmt = static_cast<std::int16_t>(
+        (static_cast<std::int32_t>(bestAmt) * healMult + 500) / 1000);
     const std::int16_t healed =
-        bestAmt < missing ? bestAmt : missing;   // report what landed, not the label
+        effectiveAmt < missing ? effectiveAmt : missing;   // report what landed, not the label
     pool.hp(selfId) = static_cast<std::int16_t>(hp + healed);
 
     const ItemId used = inv.slots[best].item;
