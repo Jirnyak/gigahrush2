@@ -1351,7 +1351,8 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
                                   const std::vector<game::DetachedPiece>* falling =
                                       nullptr) {
     propPass.clear_instances();
-    std::vector<game::PropMeshInstance> insts;
+    static std::vector<game::PropMeshInstance> insts;
+    insts.clear();
     game::collect_static_prop_mesh_instances(reg, layer, insts);
     for (const auto& m : insts) {
         if (m.shape >= static_cast<std::uint8_t>(gpu::kPropShapeCount)) continue;
