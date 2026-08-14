@@ -1198,6 +1198,7 @@ static void upload_wires(gpu::WirePass& wirePass, const game::AntourageBake* ab)
             packed.push_back(g);
         }
     }
+    wirePass.upload(packed.data(), static_cast<std::uint32_t>(packed.size()));
     static const bool wireDbg = std::getenv("GIGA_WIRE_DBG") != nullptr;
     if (wireDbg)
         for (std::size_t i = 0; i < packed.size() && i < 20; ++i)
