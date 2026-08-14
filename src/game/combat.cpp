@@ -2289,9 +2289,8 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
                              eye.z + fwd.z * t};
                 const int cx = wrap_macro(static_cast<int>(p.x / kCellSize));
                 const int cy = wrap_macro(static_cast<int>(p.y / kCellSize));
-                const int cz = static_cast<int>(p.z / kCellSize);
-                if (cz < 0 || cz >= kMacroDim) continue;
-                if (grid->cell(cx, cy, wrap_macro(cz)) != kCellAir) {
+                const int cz = wrap_macro(static_cast<int>(p.z / kCellSize));
+                if (grid->cell(cx, cy, cz) != kCellAir) {
                     hitWall = true;
                     hitAt = p;
                     break;
