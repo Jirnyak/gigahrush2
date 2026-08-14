@@ -3082,14 +3082,41 @@ int main(int argc, char** argv) {
                     // 15-minute samosbor at |z|=50 would deal 3600 damage instead of
                     // 4 — the correction that mattered most in the port.
                     if (tr_.sealed && reg.valid(player)) {
-                        // No shelter model yet, so everyone is caught outside. That is
-                        // the honest placeholder: the cost is real and small, and it
-                        // starts meaning something the day shelter exists.
-                        const game::DamageResult dr_ = game::apply_damage(
-                            reg, pool, player, game::kSamosborUnshelteredHp,
-                            game::DamageChannel::Kinetic, player);
-                        samosborDamage =
-                            static_cast<std::int16_t>(samosborDamage + dr_.applied);
+                        const auto& meTr = reg.get<const Transform>(player);
+                        const int pcx = wrap_macro(static_cast<int>(std::floor(meTr.pos.x / kCellSize)));
+                        const int pcy = wrap_macro(static_cast<int>(std::floor(meTr.pos.y / kCellSize)));
+                        const int pcz = wrap_macro(static_cast<int>(std::floor(meTr.pos.z / kCellSize)));
+                        bool playerSheltered = false;
+                        for (const auto& d : doors.doors) {
+                            if (d.hermetic && d.hp > 0 &&
+                                (d.state == static_cast<std::uint8_t>(game::DoorState::Shut) ||
+                                 d.state == static_cast<std::uint8_t>(game::DoorState::Locked))) {
+                                const int dx = wrap_delta(pcx, static_cast<int>(d.cx), kMacroDim);
+                                const int dy = wrap_delta(pcy, static_cast<int>(d.cy), kMacroDim);
+                                const int dz = wrap_delta(pcz, static_cast<int>(d.cz), kMacroDim);
+                                if (dx * dx + dy * dy + dz * dz <= 16) {
+                                    playerSheltered = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!playerSheltered) {
+                            const game::SamosborPressure sp =
+                                game::samosbor_unsheltered_pressure(
+                                    static_cast<game::SamosborVariant>(samosbor.variant));
+                            const game::DamageResult dr_ = game::apply_damage(
+                                reg, pool, player, sp.hpDamage,
+                                game::DamageChannel::Kinetic, player);
+                            samosborDamage =
+                                static_cast<std::int16_t>(samosborDamage + dr_.applied);
+                            if (auto* rpg = reg.try_get<game::RpgStats>(player)) {
+                                if (sp.psiDamage > 0) {
+                                    rpg->psi = rpg->psi > static_cast<std::uint16_t>(sp.psiDamage)
+                                                   ? static_cast<std::uint16_t>(rpg->psi - sp.psiDamage)
+                                                   : 0u;
+                                }
+                            }
+                        }
                     }
                 }
                 // Exhaustion costs movement speed, not HP — three stacking HP
