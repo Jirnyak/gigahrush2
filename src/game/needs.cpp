@@ -346,6 +346,27 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
             }
         }
 
+        // AUTONOMOUS INVENTORY CONSUMPTION FALLBACK
+        // If an NPC is starving or dehydrated (< 15.0f), check personal inventory for emergency rations
+        if (!camera && (n.food < 15.0f || n.water < 15.0f)) {
+            Inventory& inv = pool.inventory(id);
+            for (int i = 0; i < kInvSlots; ++i) {
+                ItemSlot& s = inv.slots[i];
+                if (!item_valid(s.item) || s.count == 0) continue;
+                if (n.food < 15.0f && item_feeds(s.item)) {
+                    apply_consumable(n, s.item, pool.hp(id), reg.try_get<RpgStats>(e));
+                    s.count = static_cast<std::uint16_t>(s.count - 1);
+                    if (s.count == 0) s = ItemSlot{};
+                    break;
+                } else if (n.water < 15.0f && item_hydrates(s.item)) {
+                    apply_consumable(n, s.item, pool.hp(id), reg.try_get<RpgStats>(e));
+                    s.count = static_cast<std::uint16_t>(s.count - 1);
+                    if (s.count == 0) s = ItemSlot{};
+                    break;
+                }
+            }
+        }
+
         // HEAL BANK SPILL — the mirror of the hpDebt drain below, and deliberately
         // NOT behind that section's `rate <= 0` early-out: a body healing in a
         // Medical room usually has no failed need at all, and gating the spill on

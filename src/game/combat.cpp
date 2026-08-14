@@ -161,11 +161,10 @@ void grenade_advance(const MacroGrid& grid, vec3& pos, vec3& vel, float dt) {
             break;
         }
     }
-    // x/y wrap, z does not — the same convention the bullet integrator uses, and the
-    // same one the level stack has (W does not wrap either, [AGENTS.md]).
+    // All three axes wrap on the 128^3 torus
     pos.x = wrapf(from.x, kWorldExtent);
     pos.y = wrapf(from.y, kWorldExtent);
-    pos.z = from.z;
+    pos.z = wrapf(from.z, kWorldExtent);
 }
 
 // WHERE THE BARREL IS — the one function that decides it, for every spawner.
@@ -2414,38 +2413,56 @@ std::uint32_t fouling_step(Registry& reg, NpcPool& pool, LayerId layer,
         if ((tick + static_cast<std::uint64_t>(nr.id)) % 16 != 0) continue;
 
         const Equipped& eq = reg.get<const Equipped>(e);
-        if (eq.tool == kEquipNone || eq.tool >= kInvSlots) continue;
-
         Inventory& inv = pool.inventory(nr.id);
-        ItemSlot& toolSlot = inv.slots[eq.tool];
-        if (!item_valid(toolSlot.item) || toolSlot.count == 0) continue;
 
-        const ItemDef& def = item_def(toolSlot.item);
-        if (def.wearKind == static_cast<std::uint8_t>(WearKind::Fouling)) {
-            // Environment gas / smoke absorption
-            float envHazard = 0.0f;
-            if (gasField || smokeField) {
-                const int cx = wrap_macro(static_cast<int>(tr.pos.x / kCellSize));
-                const int cy = wrap_macro(static_cast<int>(tr.pos.y / kCellSize));
-                const int cz = wrap_macro(static_cast<int>(tr.pos.z / kCellSize));
-                const std::size_t idx = macro_index(cx, cy, cz);
-                if (gasField) envHazard += gasField[idx];
-                if (smokeField) envHazard += smokeField[idx] * 0.5f;
-            }
+        float envHazard = 0.0f;
+        if (gasField || smokeField) {
+            const int cx = wrap_macro(static_cast<int>(tr.pos.x / kCellSize));
+            const int cy = wrap_macro(static_cast<int>(tr.pos.y / kCellSize));
+            const int cz = wrap_macro(static_cast<int>(tr.pos.z / kCellSize));
+            const std::size_t idx = macro_index(cx, cy, cz);
+            if (gasField) envHazard += gasField[idx];
+            if (smokeField) envHazard += smokeField[idx] * 0.5f;
+        }
 
-            if (envHazard > 0.05f) {
-                const std::uint8_t foulRate = static_cast<std::uint8_t>(
-                    std::clamp(static_cast<int>(envHazard * 4.0f + 0.5f), 1, 8));
-                if (toolSlot.condition > foulRate) toolSlot.condition = static_cast<std::uint8_t>(toolSlot.condition - foulRate);
-                else toolSlot.condition = 0;
-                ++processed;
+        // 1. Tool fouling & charge (gas masks, batteries, filters)
+        if (eq.tool != kEquipNone && eq.tool < kInvSlots) {
+            ItemSlot& toolSlot = inv.slots[eq.tool];
+            if (item_valid(toolSlot.item) && toolSlot.count > 0) {
+                const ItemDef& def = item_def(toolSlot.item);
+                if (def.wearKind == static_cast<std::uint8_t>(WearKind::Fouling)) {
+                    if (envHazard > 0.05f) {
+                        const std::uint8_t foulRate = static_cast<std::uint8_t>(
+                            std::clamp(static_cast<int>(envHazard * 4.0f + 0.5f), 1, 8));
+                        if (toolSlot.condition > foulRate) toolSlot.condition = static_cast<std::uint8_t>(toolSlot.condition - foulRate);
+                        else toolSlot.condition = 0;
+                        ++processed;
+                    }
+                } else if (def.wearKind == static_cast<std::uint8_t>(WearKind::Charge)) {
+                    if (def.wearPerUse > 0 && toolSlot.condition > 0) {
+                        if (toolSlot.condition > def.wearPerUse) toolSlot.condition = static_cast<std::uint8_t>(toolSlot.condition - def.wearPerUse);
+                        else toolSlot.condition = 0;
+                        ++processed;
+                    }
+                }
             }
-        } else if (def.wearKind == static_cast<std::uint8_t>(WearKind::Charge)) {
-            // Continuous battery consumption
-            if (def.wearPerUse > 0 && toolSlot.condition > 0) {
-                if (toolSlot.condition > def.wearPerUse) toolSlot.condition = static_cast<std::uint8_t>(toolSlot.condition - def.wearPerUse);
-                else toolSlot.condition = 0;
-                ++processed;
+        }
+
+        // 2. Equipped weapon environmental fouling (soot / corrosive gas deposits on firearms)
+        if (eq.weapon != kEquipNone && eq.weapon < kInvSlots) {
+            ItemSlot& wepSlot = inv.slots[eq.weapon];
+            if (item_valid(wepSlot.item) && wepSlot.count > 0) {
+                const ItemDef& def = item_def(wepSlot.item);
+                if (def.wearKind == static_cast<std::uint8_t>(WearKind::Jamming) ||
+                    def.wearKind == static_cast<std::uint8_t>(WearKind::Fouling)) {
+                    if (envHazard > 0.10f) {
+                        const std::uint8_t foulRate = static_cast<std::uint8_t>(
+                            std::clamp(static_cast<int>(envHazard * 2.0f + 0.5f), 1, 4));
+                        if (wepSlot.condition > foulRate) wepSlot.condition = static_cast<std::uint8_t>(wepSlot.condition - foulRate);
+                        else wepSlot.condition = 0;
+                        ++processed;
+                    }
+                }
             }
         }
     }

@@ -12,7 +12,8 @@ inline constexpr int wrapi(int v, int size) {
 
 inline float wrapf(float v, float size) {
     float m = std::fmod(v, size);
-    return m < 0 ? m + size : m;
+    float out = m < 0.0f ? m + size : m;
+    return out >= size ? 0.0f : out;
 }
 
 // Shortest signed delta from a to b on a wrapped axis of the given size.

@@ -32,6 +32,7 @@
 // generator prepay.
 #pragma once
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -173,8 +174,10 @@ public:
     template <class T>
     SubField<T>& get_or_create(const std::string& name) {
         auto it = fields_.find(name);
-        if (it != fields_.end())
+        if (it != fields_.end()) {
+            assert(it->second->tag == type_tag<T>() && "SubField type mismatch in get_or_create");
             return *static_cast<SubField<T>*>(it->second->ptr);
+        }
         auto holder = std::make_unique<Holder>();
         auto* f = new SubField<T>();
         holder->ptr = f;
@@ -208,7 +211,7 @@ public:
 private:
     struct Holder {
         void* ptr = nullptr;
-        TypeTag tag = nullptr;
+        const void* tag = nullptr;
         void (*deleter)(void*) = nullptr;
         ~Holder() {
             if (ptr && deleter) deleter(ptr);
