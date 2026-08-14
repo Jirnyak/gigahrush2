@@ -65,8 +65,9 @@
 #include "core/math.h"
 #include "ecs/registry.h"
 #include "game/event_bus.h"
-#include "game/item_table.h"
+#include "game/interact_table.h"
 #include "game/inventory.h"
+#include "game/item_table.h"
 #include "game/npc_pool.h"
 #include "world/level_stack.h"
 
@@ -79,10 +80,9 @@ struct Pickup {
     std::uint8_t count = 1;
 };
 
-// How close you must be to sweep something up, metres. Generous on purpose: a
-// pickup is a 30 cm box in a dark corridor and hunting for it with a cursor is not
-// the tension this game is going for.
-inline constexpr float kPickupReach = 1.8f;
+// How close you must be to sweep something up, metres. Derived from
+// data/interactables.csv (InteractKind::Loot row) so reach is unified across systems.
+inline constexpr float kPickupReach = kInteractTable[static_cast<std::uint8_t>(InteractKind::Loot)].reachM;
 
 // Stage the spoils of every mob that is tagged Dead but not yet finalized.
 //

@@ -192,13 +192,30 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
             // Gravity + jump (only if the entity opts in).
             vec3 up{0, 0, 1};
             auto* g = reg.try_get<GravityAffected>(e);
+            const GravityRegime regime = w.gravity().regime;
+            const GravityFrame frame = regime_frame(regime);
             if (g) {
                 vec3 accel = w.gravity().at(tr.pos) * g->scale;
-                up = normalize(accel * -1.0f);
+                const float aLen = length(accel);
+                if (aLen > 1e-6f) {
+                    up = accel * (-1.0f / aLen);
+                } else if (frame.pull) {
+                    const CellStep ds = regime_down(regime);
+                    up = vec3{static_cast<float>(-ds.x), static_cast<float>(-ds.y), static_cast<float>(-ds.z)};
+                } else {
+                    up = vec3{0, 0, 0};
+                }
                 vel.v += accel * h;
 
+                // Terminal velocity clamp: prevents runaway acceleration across toroidal boundary
+                constexpr float kTerminalSpeed = 80.0f;
+                const float curSpeed = length(vel.v);
+                if (curSpeed > kTerminalSpeed) {
+                    vel.v = vel.v * (kTerminalSpeed / curSpeed);
+                }
+
                 if (auto* j = reg.try_get<Jump>(e)) {
-                    if (j->wants_jump && g->grounded) {
+                    if (j->wants_jump && g->grounded && frame.pull) {
                         vel.v += up * j->impulse;
                         g->grounded = false;
                     }
@@ -208,7 +225,8 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
 
             // Whether the entity was moving "downward" (against up) this step,
             // captured before collisions zero the velocity.
-            bool movingDown = dot(vel.v, up) <= 0.0f;
+            const float upLen = length(up);
+            bool movingDown = (upLen > 1e-6f && frame.pull) ? (dot(vel.v, up) <= 0.0f) : false;
 
             // The dominant axis of "up", shared by the auto-step and the
             // ground check below.
@@ -216,7 +234,7 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
                   az = std::fabs(up.z);
             int upComp = (az >= ax && az >= ay) ? 2 : (ay >= ax) ? 1 : 0;
             float upSign = axis_of(up, upComp) >= 0.0f ? 1.0f : -1.0f;
-            const bool canStep = g && g->grounded;
+            const bool canStep = g && g->grounded && frame.pull;
 
             // Integrate + collide, one axis at a time; grounded walkers step
             // over single sub-voxel atoms instead of snagging on them.
@@ -248,8 +266,12 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
             // Ground check: a collision on the axis most aligned with "up",
             // while descending, means we are standing on something.
             if (g) {
-                bool upAxisHit = upComp == 2 ? hitZ : upComp == 1 ? hitY : hitX;
-                g->grounded = upAxisHit && movingDown;
+                if (!frame.pull || upLen < 1e-6f) {
+                    g->grounded = false;
+                } else {
+                    bool upAxisHit = upComp == 2 ? hitZ : upComp == 1 ? hitY : hitX;
+                    g->grounded = upAxisHit && movingDown;
+                }
             }
 
             // Toroidal world: wrap the entity's position back into [0, extent)
