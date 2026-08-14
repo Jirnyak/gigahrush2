@@ -1,4 +1,5 @@
 #include "game/floor_spec.h"
+#include "game/floor_catalog.h"
 
 #include <algorithm> // std::min/std::max
 #include <cmath>     // std::exp/std::pow/std::round/std::lround/std::abs
@@ -56,20 +57,7 @@ const FloorSpec& floor_spec(FloorKind kind) {
 }
 
 const FloorSpec& floor_spec_for(int floor) {
-    // Symmetric about the hub (|floor|), so a floor and its mirror share a
-    // character; the hub is always safe and the deep extremes trend derelict —
-    // the KIND half of the V-shape. Pure function of the number, reproducible.
-    const int a = floor < 0 ? -floor : floor;
-    FloorKind kind;
-    if (a == 0)            kind = FloorKind::Residential; // hub: always safe
-    else if (a >= 25)      kind = FloorKind::Padic;       // 4d spectrum extreme
-    else if (a >= 20)      kind = FloorKind::Derelict;    // deep extremes: wrecked
-    else if (a % 11 == 10) kind = FloorKind::Padic;
-    else if (a % 7 == 6)   kind = FloorKind::Derelict;
-    else if (a % 5 == 4)   kind = FloorKind::Industrial;
-    else if (a % 3 == 2)   kind = FloorKind::Commercial;
-    else                   kind = FloorKind::Residential;
-    return floor_spec(kind);
+    return floor_spec(default_floor_catalog().resolve(floor).kind);
 }
 
 float floor_depth01(int floor) {

@@ -27,9 +27,10 @@ inline int room_stock_index(int rx, int ry, int stride) {
 
 void room_stock_init(RoomStock& rs, std::uint8_t floorKind, std::uint32_t seed) {
     rs.floorKind = floorKind;
+    const std::uint32_t floorSeed = seed ^ (static_cast<std::uint32_t>(floorKind) * 0x9E3779B9u);
     for (std::size_t i = 0; i < RoomStock::kMaxRoomsPerFloor; ++i) {
         // Deterministic initial supply seeded by floor, room index and salt
-        const std::uint32_t h = hash3(seed, static_cast<std::uint32_t>(i), 0x570C12u);
+        const std::uint32_t h = hash3(floorSeed, static_cast<std::uint32_t>(i), 0x570C12u);
         // Initial stock 10..40 units per room
         rs.stock[i] = static_cast<std::uint16_t>(10 + rand_below(h, 31));
     }

@@ -2170,6 +2170,7 @@ int main(int argc, char** argv) {
     bool healWanted = false;
     bool eatWanted = false;       // G, consumed by one sim step
     bool drinkWanted = false;     // T, consumed by one sim step
+    bool psiWanted = false;       // Y, consumed by one sim step
     bool sellWanted = false;      // B, consumed by one sim step
     bool buyWanted = false;       // R, consumed by one sim step       // set by H, consumed by one sim step
     bool craftWanted = false;     // C, consumed by one sim step
@@ -2218,6 +2219,7 @@ int main(int argc, char** argv) {
     std::int32_t healed = 0;
     float ateFood = 0.0f;      // food points that LANDED, for the HUD
     float drankWater = 0.0f;
+    float restoredPsi = 0.0f;
     std::int32_t consumeHpCost = 0;   // HP paid for risky food, running total
 
     // ── Debug console (~) ───────────────────────────────────────────────
@@ -2767,6 +2769,7 @@ int main(int argc, char** argv) {
             if (has(ConsoleRequest::Heal)) healWanted = true;
             if (has(ConsoleRequest::Eat)) eatWanted = true;
             if (has(ConsoleRequest::Drink)) drinkWanted = true;
+            if (has(ConsoleRequest::Psi)) psiWanted = true;
             if (has(ConsoleRequest::Door)) doorWanted = true;
             if (has(ConsoleRequest::Possess)) possessWanted = true;
             if (has(ConsoleRequest::Save)) saveWanted = true;
@@ -3077,6 +3080,18 @@ int main(int argc, char** argv) {
                                      tr_.activeBegan ? "ACTIVE " : "",
                                      tr_.activeEnded ? "ENDED " : "",
                                      tr_.cycleEnded ? "CYCLE " : "");
+                    }
+                    const std::uint8_t floorDanger = static_cast<std::uint8_t>(
+                        currentSpec ? game::danger_for_hostility(currentSpec->hostility) : 1);
+                    const game::FogTickReport fogReport = game::samosbor_fog_tick(
+                        reg, stack.layer(activeLayer), samosbor, tr_, activeLayer,
+                        player, currentFloor, floorDanger, simTick);
+                    if (fogReport.spawned > 0 || fogReport.despawned > 0) {
+                        std::fprintf(stderr,
+                                     "[fog] tick=%llu floor=%d spawned=%u despawned=%u living_fog=%u\n",
+                                     static_cast<unsigned long long>(simTick),
+                                     currentFloor, fogReport.spawned, fogReport.despawned,
+                                     game::count_layer_fog_mobs(reg, activeLayer));
                     }
                     // The seal is ONE SHOT, not a per-tick drain. Modelled as a DoT a
                     // 15-minute samosbor at |z|=50 would deal 3600 damage instead of
@@ -4762,6 +4777,19 @@ int main(int argc, char** argv) {
                     healed += game::use_best_heal(reg, pool, bus, activeLayer,
                                                   simTick, &playerStatus);
                     healWanted = false;
+                }
+                if (psiWanted) {
+                    const game::ConsumeResult cr =
+                        game::use_best_psi(reg, pool, bus, activeLayer, simTick);
+                    if (cr.used) {
+                        restoredPsi += cr.psi;
+                        if (cr.hpCost > 0 && reg.valid(player)) {
+                            game::apply_damage(reg, pool, player, cr.hpCost,
+                                               game::DamageChannel::Kinetic, player);
+                            consumeHpCost += cr.hpCost;
+                        }
+                    }
+                    psiWanted = false;
                 }
                 // The player is not exempt: if it died it no longer exists, and
                 // everything below reads through it. Take another body now.

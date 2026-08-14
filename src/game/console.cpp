@@ -327,6 +327,7 @@ constexpr RequestRow kRequestRows[] = {
     {"heal", "use the best medkit", ConsoleRequest::Heal},
     {"eat", "eat the best food carried", ConsoleRequest::Eat},
     {"drink", "drink the best water carried", ConsoleRequest::Drink},
+    {"psi", "use the best PSI restorative item", ConsoleRequest::Psi},
     {"door", "work the nearest door", ConsoleRequest::Door},
     {"possess", "project into the nearest survivor", ConsoleRequest::Possess},
     {"interact", "take the offered job / use what is in front",

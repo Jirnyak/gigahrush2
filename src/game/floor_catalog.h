@@ -101,4 +101,7 @@ private:
 // which the test suite turns into a failure.
 bool build_default_floor_catalog(FloorCatalog& cat);
 
+// Global default floor catalog containing registered patterns and module claims.
+const FloorCatalog& default_floor_catalog();
+
 } // namespace giga::game

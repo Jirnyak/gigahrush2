@@ -630,12 +630,11 @@ void rooms_furniture_makes_the_errand_visible() {
     CHECK(anchorAir == 0);
     CHECK(floating == 0);
 
-    // An Industrial floor rolls none of the three kinds, so it furnishes NOTHING
-    // and costs nothing — the same data-driven degradation the fields have.
+    // An Industrial floor now furnishes its authored production and storage rooms.
     World ind;
     generate_floor(ind, 0, floor_spec(FloorKind::Industrial), 1337u);
     Registry reg2;
-    CHECK(seed_room_furniture(reg2, ind, 0, FloorKind::Industrial, 0) == 0u);
+    CHECK(seed_room_furniture(reg2, ind, 0, FloorKind::Industrial, 0) > 0u);
 }
 
 void rooms_recovery_closes_the_loop() {

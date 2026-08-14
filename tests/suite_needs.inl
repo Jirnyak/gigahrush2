@@ -951,6 +951,8 @@ void the_whole_floor_lives_on_one_clock() {
     RoomZones zones;
     zones.kind = FloorKind::Residential;
     zones.number = 0;
+    room_stock_init(zones.stock, static_cast<std::uint8_t>(FloorKind::Residential), 1337u);
+    for (auto& s : zones.stock.stock) s = 5000;
 
     // One cell of each room kind the affordance table names, plus a corridor for the
     // bodies whose winning intent has no destination. `needs_step` reads only

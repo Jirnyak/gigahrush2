@@ -55,7 +55,7 @@ enum class ConsoleRequest : std::uint32_t {
     FloorDown, // ride one floor down
     Save,      // save the run
     Load,      // load the run
-    Heal, Eat, Drink,        // survival one-shots
+    Heal, Eat, Drink, Psi,   // survival one-shots
     Door, Possess, Interact, // world interaction one-shots
     Throw,     // throw the best grenade in the bag ([combat.h] player_throw_step)
     Sell, Vendor, Resupply,  // economy: sell haul / trader window / resupply
