@@ -57,6 +57,7 @@
 #include "game/mob_spawn.h"
 #include "game/monster_traits.h"
 #include "game/needs.h"
+#include "game/room_stock.h"
 #include "game/rumour.h"
 #include "game/speech.h"
 #include "game/samosbor.h"
@@ -3159,7 +3160,7 @@ int main(int argc, char** argv) {
                     // seal cost above stays exactly as authored (4 HP, player
                     // only). [samosbor.h samosbor_environmental_step]
                     game::samosbor_environmental_step(
-                        reg, pool, doors, activeLayer, samosbor, kSimDt);
+                        reg, pool, doors, activeLayer, samosbor, kSimDt, &playerStatus);
                 }
                 // Exhaustion costs movement speed, not HP — three stacking HP
                 // drains is a death spiral with no decision in it. Applied to the
@@ -3664,6 +3665,29 @@ int main(int argc, char** argv) {
                             game::NoiseSource::Footstep};
                         game::noise_publish(noiseField, activeLayer, ppos, footstepNoise,
                                             static_cast<std::uint32_t>(entt::to_integral(player)));
+                    }
+                }
+
+                // Crowd NPCs also generate footstep noise when walking/running,
+                // staggered across 28 ticks so active noise is heard by Duty/Guards/monsters.
+                for (auto ce : reg.view<const Velocity, const Transform, const game::NpcRef>()) {
+                    if (ce == player) continue;
+                    if ((simTick + static_cast<std::uint64_t>(entt::to_integral(ce))) % 28 != 0) continue;
+                    const auto& tr = reg.get<const Transform>(ce);
+                    if (tr.layer != activeLayer) continue;
+                    const auto& vel = reg.get<const Velocity>(ce);
+                    const vec3 pg = stack.layer(activeLayer).gravity().at(tr.pos);
+                    const float pgLen = length(pg);
+                    vec3 lat = vel.v;
+                    if (pgLen > 1e-6f) {
+                        const vec3 up = pg * (-1.0f / pgLen);
+                        lat = lat - up * dot(lat, up);
+                    }
+                    const float speedSq = dot(lat, lat);
+                    if (speedSq > 0.5f) {
+                        game::NoiseProfile crowdNoise{5.0f, 350, 1, game::NoiseSource::Footstep};
+                        game::noise_publish(noiseField, activeLayer, tr.pos, crowdNoise,
+                                            static_cast<std::uint32_t>(entt::to_integral(ce)));
                     }
                 }
 
@@ -4371,6 +4395,10 @@ int main(int argc, char** argv) {
                 needs = game::needs_step(reg, pool, activeLayer, kSimDt, &roomZones,
                                          &aiMem, simNow, &playerStatus, liveGasField);
                 needsHpLost += needs.hpLost;
+                // Closed-loop room stock production: working citizens in Production/HQ replenish floor stock
+                game::room_stock_produce_step(reg, pool, activeLayer, roomZones.stock,
+                                              static_cast<std::uint8_t>(kind_for_floor(currentFloor)),
+                                              currentFloor, simTick);
                 // The other half of the acceptance trail. `bodies` says the clock is
                 // no longer a one-body clock, `recovering` says rooms are actually
                 // feeding people, and `crowdDead` is the number that would climb if
@@ -5224,10 +5252,10 @@ int main(int argc, char** argv) {
                 // produced it, because a number that moves when you level up should
                 // say why on the same line.
                 if (reg.valid(player)) {
-                    if (const auto* nr = reg.try_get<game::NpcRef>(player)) {
-                        if (pool.valid(nr->id)) {
+                    if (const auto* pNr = reg.try_get<game::NpcRef>(player)) {
+                        if (pool.valid(pNr->id)) {
                             const std::uint32_t heldG =
-                                game::inventory_mass_g(pool.inventory(nr->id));
+                                game::inventory_mass_g(pool.inventory(pNr->id));
                             // The sheet is an ECS component, not a pool column
                             // ([combat.h] "RpgStats: copy from -> to"), so a body
                             // with none reads as Str 0 rather than as no budget.
@@ -6090,10 +6118,10 @@ int main(int argc, char** argv) {
             {
                 static std::vector<vec4> pushBodies;
                 pushBodies.clear();
-                for (auto e :
+                for (auto pushEntity :
                      reg.view<const Transform, const AABB, const Renderable>()) {
-                    if (reg.all_of<StaticPropTag>(e)) continue;
-                    const Transform& tr = reg.get<const Transform>(e);
+                    if (reg.all_of<StaticPropTag>(pushEntity)) continue;
+                    const Transform& tr = reg.get<const Transform>(pushEntity);
                     if (tr.layer != activeLayer) continue;
                     pushBodies.push_back(
                         vec4{tr.pos.x, tr.pos.y, tr.pos.z, 0.9f});

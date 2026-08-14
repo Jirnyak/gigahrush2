@@ -94,6 +94,25 @@ inline constexpr std::uint64_t kPackEpochTicks = 15u * static_cast<std::uint64_t
 // agreement from where the bodies ended up.
 std::uint8_t pack_target_node(std::uint8_t pack, std::uint64_t tick);
 
+// Pack target coordination — when one member of pack N spots prey, it raises
+// an alert for pack N. Other members of pack N within pack alert range (24 m)
+// join the chase, converging with flanking or encirclement offsets.
+struct PackAlert {
+    vec3 pos{0.0f, 0.0f, 0.0f};
+    std::uint32_t targetId = 0;
+    std::uint64_t alertTick = 0;
+    LayerId layer{0};
+    bool active = false;
+};
+
+inline constexpr std::uint64_t kPackAlertTtlTicks = 3u * static_cast<std::uint64_t>(kSimHz);
+inline constexpr float kPackAlertRange = 24.0f; // metres
+
+void pack_alert_broadcast(std::uint8_t pack, LayerId layer, const vec3& pos,
+                          std::uint32_t targetId, std::uint64_t tick);
+PackAlert pack_alert_get(std::uint8_t pack, LayerId layer, std::uint64_t tick);
+void pack_alert_clear();
+
 // Give every mob and embodied NPC on `layer` a wander target. Call after a floor
 // is populated (embody + mob spawn); entities that already have a target keep it.
 // The player is skipped — it holds CameraTag and is steered by input.

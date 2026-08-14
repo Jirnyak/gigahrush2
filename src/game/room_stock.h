@@ -13,7 +13,12 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "ecs/registry.h"
+#include "world/level_stack.h"
+
 namespace giga::game {
+
+class NpcPool;
 
 struct RoomStock {
     static constexpr std::size_t kMaxRoomsPerFloor = 1024;
@@ -36,5 +41,13 @@ void room_stock_produce(RoomStock& rs, int rx, int ry, int stride, std::uint16_t
 
 // Total stock across all rooms on this floor.
 std::uint32_t room_stock_total(const RoomStock& rs);
+
+// Periodic production and restocking pass:
+// Working NPCs in Production/HQ rooms generate local supply stock,
+// which flows to floor kitchens and medical rooms.
+// Returns count of active production events produced this tick.
+std::uint32_t room_stock_produce_step(Registry& reg, const NpcPool& pool, LayerId layer,
+                                      RoomStock& stock, std::uint8_t floorKind,
+                                      int floorNumber, std::uint64_t tick);
 
 } // namespace giga::game

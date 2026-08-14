@@ -13,6 +13,7 @@
 #include "game/mob_spawn.h"  // MobRef — what counts as a threat
 #include "game/needs.h"     // kAttritionChannel, Needs (via npc_pool)
 #include "game/npc_pool.h"  // NpcPool
+#include "game/status.h"    // StatusSet, status_apply
 #include "world/los.h"        // los_clear
 #include "world/macro_grid.h" // MacroGrid
 #include "world/types.h"    // kCellSize, kMacroDim
@@ -687,7 +688,8 @@ bool samosbor_allows_kind(const MobDef& def, std::uint16_t samosborCount) {
 
 void samosbor_environmental_step(Registry& reg, NpcPool& pool,
                                   const DoorSet& doors, LayerId layer,
-                                  const SamosborState& sam, float dt) {
+                                  const SamosborState& sam, float dt,
+                                  StatusSet* playerStatus) {
     // Only runs during Active phase.
     if (sam.phase != static_cast<std::uint8_t>(SamosborPhase::Active))
         return;
@@ -765,6 +767,15 @@ void samosbor_environmental_step(Registry& reg, NpcPool& pool,
             }
         }
         if (sheltered) continue;
+
+        // Apply atmospheric sensory fog/coughing status to unsheltered camera holder
+        if (reg.all_of<CameraTag>(e) && playerStatus != nullptr) {
+            if (variant == SamosborVariant::Meat) {
+                status_apply(*playerStatus, StatusId::GovnyakCough);
+            } else {
+                status_apply(*playerStatus, StatusId::SporeHaze);
+            }
+        }
 
         // Unsheltered: accumulate continuous fog pressure.
         Needs& n = pool.needs(id);

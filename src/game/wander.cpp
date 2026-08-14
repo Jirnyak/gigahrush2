@@ -23,7 +23,6 @@ namespace giga::game {
 
 namespace {
 
-
 // Walking speed for an ordinary resident, m/s. Mobs override this from their
 // table row (speed is authored in cells/s, and a cell is kCellSize metres).
 constexpr float kNpcWalkSpeed = 1.35f;
@@ -31,6 +30,12 @@ constexpr float kNpcWalkSpeed = 1.35f;
 // Visits to wait before choosing a new destination after arriving or failing.
 // Staggered visits, not ticks: with kWanderPeriod = 8 at 120 Hz this is ~1.1 s.
 constexpr std::uint8_t kRepathCooldown = 16;
+
+// Pack alert coordination storage (256 pack slots)
+struct PackAlertTable {
+    PackAlert slots[256]{};
+};
+PackAlertTable g_packAlerts{};
 
 // kAggroRadius moved to wander.h — [investigate.h] needs the same number to decide
 // whether a mob is already hunting by sight or is free to investigate a sound.
@@ -44,6 +49,31 @@ void agent_cell(const vec3& pos, int& cx, int& cy, int& cz) {
 
 } // namespace
 
+void pack_alert_broadcast(std::uint8_t pack, LayerId layer, const vec3& pos,
+                          std::uint32_t targetId, std::uint64_t tick) {
+    if (pack == 0) return;
+    PackAlert& a = g_packAlerts.slots[pack];
+    a.pos = pos;
+    a.targetId = targetId;
+    a.alertTick = tick;
+    a.layer = layer;
+    a.active = true;
+}
+
+PackAlert pack_alert_get(std::uint8_t pack, LayerId layer, std::uint64_t tick) {
+    if (pack == 0) return PackAlert{};
+    const PackAlert& a = g_packAlerts.slots[pack];
+    if (!a.active || a.layer != layer) return PackAlert{};
+    if (tick > a.alertTick && (tick - a.alertTick) > kPackAlertTtlTicks) {
+        return PackAlert{};
+    }
+    return a;
+}
+
+void pack_alert_clear() {
+    for (auto& s : g_packAlerts.slots) s = PackAlert{};
+}
+
 std::uint8_t pack_target_node(std::uint8_t pack, std::uint64_t tick) {
     const std::uint32_t epoch = static_cast<std::uint32_t>(tick / kPackEpochTicks);
     // The epoch is mixed before it is combined, not after: raw epochs are 0,1,2...
@@ -55,6 +85,7 @@ std::uint8_t pack_target_node(std::uint8_t pack, std::uint64_t tick) {
 }
 
 std::uint32_t wander_init(Registry& reg, LayerId layer, std::uint32_t seed) {
+    pack_alert_clear();
     // Two phases, and the split is the discipline combat.cpp documents at length,
     // not tidiness: `emplace<WanderTarget>` on the FIRST agent creates that
     // component's storage, which can reallocate the registry's pool container and
@@ -272,7 +303,12 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                 ax = wrap_delta_f(tr.pos.x, victimPos.x, kWorldExtent);
                 ay = wrap_delta_f(tr.pos.y, victimPos.y, kWorldExtent);
                 const float az = wrap_delta_f(tr.pos.z, victimPos.z, kWorldExtent);
-                if (ax * ax + ay * ay + az * az < radius * radius) chasing = true;
+                if (ax * ax + ay * ay + az * az < radius * radius) {
+                    chasing = true;
+                    if (wt.pack != 0) {
+                        pack_alert_broadcast(wt.pack, layer, victimPos, victimId, tick);
+                    }
+                }
             }
             if (!chasing && mob_hunts_npcs(id, tick)) {
                 // Clamped to the mob's OWN sight radius, not left at the flat 6 m.
@@ -292,6 +328,24 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                     ay = wrap_delta_f(tr.pos.y, pr.pos.y, kWorldExtent);
                     chaseId = static_cast<std::uint32_t>(entt::to_integral(pr.e));
                     chasing = true;
+                    if (wt.pack != 0) {
+                        pack_alert_broadcast(wt.pack, layer, pr.pos, chaseId, tick);
+                    }
+                }
+            }
+            // Pack target coordination: if not directly aggroed, check if a pack mate has alerted
+            if (!chasing && wt.pack != 0) {
+                const PackAlert pa = pack_alert_get(wt.pack, layer, tick);
+                if (pa.active) {
+                    const float pax = wrap_delta_f(tr.pos.x, pa.pos.x, kWorldExtent);
+                    const float pay = wrap_delta_f(tr.pos.y, pa.pos.y, kWorldExtent);
+                    const float paz = wrap_delta_f(tr.pos.z, pa.pos.z, kWorldExtent);
+                    if (pax * pax + pay * pay + paz * paz < kPackAlertRange * kPackAlertRange) {
+                        ax = pax;
+                        ay = pay;
+                        chaseId = pa.targetId;
+                        chasing = true;
+                    }
                 }
             }
             if (chasing) {

@@ -30,8 +30,12 @@ InvestigateHeard investigate_hear(const NoiseField& field, MobBehaviour beh, Lay
     // [noise.h] "What this unblocks".
     if (beh == MobBehaviour::DeadEcho) return out;
 
+    float hearingMult = kInvestigateHearing;
+    if (beh == MobBehaviour::GreenDogPack) hearingMult = kDogHearing;
+    else if (beh == MobBehaviour::LastSoundBeam) hearingMult = kBeamHearing;
+
     float dist = 0.0f;
-    const Noise* n = loudest_heard(field, layer, mobPos, kInvestigateHearing,
+    const Noise* n = loudest_heard(field, layer, mobPos, hearingMult,
                                    kInvestigateMinSeverity, mobId, &dist);
     if (!n) return out;
 
@@ -119,8 +123,15 @@ std::uint32_t investigate_step(Registry& reg, const NoiseField& field, NpcPool& 
         // path at the monster's own speed and there is no authored "search pace" to
         // port. Inventing one would be a balance decision wearing a port's clothes.
         const float sp = static_cast<float>(md.speedMmps) * 0.001f * kCellSize;
-        vel.v.x = hh.dx / len * sp;
-        vel.v.y = hh.dy / len * sp;
+        const bool fearsNoise = mob_fears_noise(beh, hh.severity);
+        if (fearsNoise) {
+            // Skittish mobs (e.g. GreenDogPack) flee AWAY from severe gunfire / explosions
+            vel.v.x = -(hh.dx / len) * sp;
+            vel.v.y = -(hh.dy / len) * sp;
+        } else {
+            vel.v.x = (hh.dx / len) * sp;
+            vel.v.y = (hh.dy / len) * sp;
+        }
         // z is left to gravity: this is locomotion, not flight. Same rule as
         // wander_step, and it is why a sound one storey up is heard (z counts toward
         // the distance) but cannot be walked to yet.

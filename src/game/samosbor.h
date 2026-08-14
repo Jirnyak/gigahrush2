@@ -88,6 +88,7 @@ namespace giga::game {
 // Forward declarations — full types needed only in samosbor.cpp.
 struct DoorSet;
 class NpcPool;
+struct StatusSet;
 
 // ---------------------------------------------------------------------------
 // The depth curve — the four numbers everything else follows from
@@ -799,7 +800,8 @@ SamosborPressure samosbor_unsheltered_pressure(SamosborVariant variant);
 // No allocation, no exceptions, O(embodied bodies on layer).
 void samosbor_environmental_step(Registry& reg, NpcPool& pool,
                                   const DoorSet& doors, LayerId layer,
-                                  const SamosborState& sam, float dt);
+                                  const SamosborState& sam, float dt,
+                                  StatusSet* playerStatus = nullptr);
 
 // The seal moment as an offset before the end of the Active phase, including the
 // variant's shift. Clamped so a negative-delta variant cannot seal after the

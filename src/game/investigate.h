@@ -90,6 +90,12 @@ struct InvestigateHeard {
     std::uint8_t severity = 0;
 };
 
+// Should this mob flee rather than investigate?
+// Green Dogs fear severe noises (gunshots, explosions, severity >= 3) within fear radius.
+inline constexpr bool mob_fears_noise(MobBehaviour beh, std::uint8_t severity) {
+    return (beh == MobBehaviour::GreenDogPack) && (severity >= 3);
+}
+
 // Should this mob go and look at something? Answers no for a behaviour that is
 // authored deaf, and no when nothing audible passes the severity gate.
 //

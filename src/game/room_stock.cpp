@@ -3,6 +3,13 @@
 #include <algorithm>
 #include "core/rng.h"
 #include "core/wrap.h"
+#include "ecs/components.h"
+#include "ecs/registry.h"
+#include "game/ai.h"
+#include "game/embody.h"
+#include "game/floor_gen.h"
+#include "game/npc_pool.h"
+#include "game/room_zone.h"
 #include "world/types.h"
 
 namespace giga::game {
@@ -22,6 +29,8 @@ inline int room_stock_index(int rx, int ry, int stride) {
     }
     return idx;
 }
+
+inline constexpr std::uint64_t kStockProduceCadence = 125;
 
 } // namespace
 
@@ -69,6 +78,41 @@ std::uint32_t room_stock_total(const RoomStock& rs) {
         sum += rs.stock[i];
     }
     return sum;
+}
+
+std::uint32_t room_stock_produce_step(Registry& reg, const NpcPool& pool, LayerId layer,
+                                      RoomStock& stock, std::uint8_t floorKind,
+                                      int floorNumber, std::uint64_t tick) {
+    if ((tick % kStockProduceCadence) != 0) return 0;
+
+    std::uint32_t produced = 0;
+    const FloorKind kind = static_cast<FloorKind>(floorKind);
+    const int stride = floor_room_stride(kind);
+
+    for (auto e : reg.view<const Transform, const NpcRef>()) {
+        const Transform& tr = reg.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+
+        const NpcId id = reg.get<const NpcRef>(e).id;
+        if (!pool.valid(id) || !pool.alive(id)) continue;
+
+        const AiBrain* brain = reg.try_get<AiBrain>(e);
+        const bool isWorking = (brain && brain->currentIntent == IntentWork);
+
+        const int cx = wrap_macro(static_cast<int>(std::floor(tr.pos.x / kCellSize)));
+        const int cy = wrap_macro(static_cast<int>(std::floor(tr.pos.y / kCellSize)));
+        const std::uint16_t bit = room_bit_at(kind, floorNumber, cx, cy);
+
+        const bool inProdRoom = (bit == room_bit(RoomBit::Production) || bit == room_bit(RoomBit::Hq));
+
+        if (isWorking || inProdRoom) {
+            const int rx = cx / stride;
+            const int ry = cy / stride;
+            room_stock_produce(stock, rx, ry, stride, 1, 200);
+            ++produced;
+        }
+    }
+    return produced;
 }
 
 } // namespace giga::game
