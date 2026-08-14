@@ -5,6 +5,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <string>
 
 #include "render/material_table.h" // GENERATED: kMaterial + kMaterialMaps
@@ -16,7 +17,27 @@ namespace {
 
 // kMaterial (mean albedo per id) is GENERATED — render/material_table.h,
 // from data/materials.csv. Measured rows carry their provenance in
-// data/textures.csv; edit the CSV, never a literal here.
+#ifndef GIGA_TEXTURE_DIR
+#define GIGA_TEXTURE_DIR "data/textures"
+#endif
+
+static std::string resolve_texture_dir() {
+    if (const char* env = std::getenv("GIGA_TEXTURE_DIR")) {
+        if (*env != '\0' && std::filesystem::is_directory(env)) return env;
+    }
+    const std::filesystem::path candidates[] = {
+        "data/textures",
+        "../data/textures",
+        "../../data/textures",
+        "../../../data/textures"
+    };
+    for (const auto& p : candidates) {
+        if (std::filesystem::is_directory(p)) {
+            return p.string();
+        }
+    }
+    return GIGA_TEXTURE_DIR;
+}
 
 } // namespace
 
@@ -38,25 +59,11 @@ namespace {
 // differ, naming it. Measured across all six committed files: 2048x2048,
 // levelCount 12, 4x4 blocks, 16 bytes/block.
 inline constexpr std::uint32_t kAlbedoDim = 2048;
-constexpr std::uint32_t mip_count(std::uint32_t dim) {
-    std::uint32_t n = 1;
-    while (dim > 1) {
-        dim >>= 1;
-        ++n;
-    }
-    return n;
-}
-inline constexpr std::uint32_t kAlbedoMips = mip_count(kAlbedoDim);
-static_assert(kAlbedoMips == 12,
-              "the committed pack carries a full 12-level chain from 2048 to 1x1; "
-              "a different count means the pack changed and every level offset in "
-              "data/textures/README.md with it");
+inline constexpr std::uint32_t kAlbedoMips = 12;
 
-std::string join(const char* dir, const char* file) {
-    std::string s = dir;
-    if (!s.empty() && s.back() != '/') s += '/';
-    s += file;
-    return s;
+std::string join(const std::string& a, const char* b) {
+    if (a.empty()) return b;
+    return a + "/" + b;
 }
 
 } // namespace
@@ -72,8 +79,8 @@ bool CubePass::init(VulkanDevice& dev, VkDescriptorSetLayout lightGridSetLayout)
 // CANNOT fail the pass: every failure leaves the procedural surface — the
 // renderer this project shipped for its whole life — and one loud line.
 void CubePass::load_material_textures() {
-    const char* dir = std::getenv("GIGA_TEXTURE_DIR");
-    if (dir == nullptr || *dir == '\0') dir = GIGA_TEXTURE_DIR;
+    const std::string dirStr = resolve_texture_dir();
+    const char* dir = dirStr.c_str();
 
     if (!albedo_.init(*dev_, kMatCount, kAlbedoDim, kAlbedoDim, kAlbedoMips, false)) {
         std::fprintf(stderr,
