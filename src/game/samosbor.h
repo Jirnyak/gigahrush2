@@ -79,6 +79,10 @@
 #include "world/level_stack.h"   // LayerId
 #include "world/types.h"         // kCellSize
 
+namespace giga {
+class MacroGrid;
+}
+
 namespace giga::game {
 
 // ---------------------------------------------------------------------------
@@ -876,13 +880,10 @@ std::uint8_t samosbor_threat_target(int floorZ, SamosborVariant variant,
 // four heads every 8 ms reads as monsters teleporting in; at 2 s the same budget
 // reads as pressure building. Estimated, not profiled: no profiler was run.
 //
-// **`withLos` is left at 0 and the LOS gate is therefore dormant.** There is no
-// cheap line-of-fire query in the sim yet: `nav.h` is bake-time only and running
-// a raycast per mob per fog tick would violate the O(n) tick rule. A caller that
-// has a line-of-fire test may fill the field itself and the gate starts working
-// with no change here. Documented rather than faked — a census that guessed at
-// LOS would make the gate look enforced while enforcing nothing.
-ThreatCensus samosbor_census(const Registry& reg, LayerId layer, vec3 around);
+// Optional `grid`: when non-null, tests los_clear on hostiles within near radius
+// and populates withLos. Null keeps withLos at 0.
+ThreatCensus samosbor_census(const Registry& reg, LayerId layer, vec3 around,
+                             const MacroGrid* grid = nullptr);
 
 // Does the samosbor count on this floor allow this monster kind to spawn?
 //

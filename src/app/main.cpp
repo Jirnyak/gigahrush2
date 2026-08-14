@@ -490,7 +490,7 @@ static void DrawCraftingWindowUI(bool* p_open, game::CraftingState& crafting,
 
 static void DrawVendorWindowUI(bool* p_open, game::Inventory& inv, game::RunLedger& ledger, 
                         game::VendorKind vendorKind, bool isOnPad, std::int32_t& outSold, std::int32_t& outSpent,
-                        const game::RpgStats* rpg = nullptr) 
+                        const game::RpgStats* rpg = nullptr, std::int8_t playerRelation = 0) 
 {
     if (!p_open || !*p_open) return;
 
@@ -505,7 +505,7 @@ static void DrawVendorWindowUI(bool* p_open, game::Inventory& inv, game::RunLedg
                                  "Wild Zone Scavenger (Buy 1.15x / Sell 0.72x)" };
 
     ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "Vendor: %s", vendorNames[static_cast<std::size_t>(vendorKind)]);
-    ImGui::Text("Account Balance: %lld roubles", static_cast<long long>(ledger.banked));
+    ImGui::Text("Account Balance: %lld roubles | Standing: %d", static_cast<long long>(ledger.banked), static_cast<int>(playerRelation));
     
     if (!isOnPad) {
         ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "[OFF EXTRACTION PAD] Walk to the Extraction Pad to trade.");
@@ -531,7 +531,7 @@ static void DrawVendorWindowUI(bool* p_open, game::Inventory& inv, game::RunLedg
                 char ammoBtnText[128];
                 snprintf(ammoBtnText, sizeof(ammoBtnText), "Buy Ammo for Gun (%s)", game::item_name(ammoForGun));
                 if (ImGui::Button(ammoBtnText, ImVec2(240, 28))) {
-                    outSpent += (game::vendor_buy(inv, ledger, ammoForGun, buyQty) * game::vendor_buy_price(ammoForGun));
+                    outSpent += (game::vendor_buy(inv, ledger, ammoForGun, buyQty, playerRelation) * game::vendor_buy_price(ammoForGun, playerRelation));
                 }
             }
 
@@ -551,7 +551,7 @@ static void DrawVendorWindowUI(bool* p_open, game::Inventory& inv, game::RunLedg
                     const char* itemName = game::item_name(id);
                     if (buyFilter[0] != '\0' && !contains_icase(itemName, buyFilter)) continue;
 
-                    const std::int32_t price = game::vendor_buy_price(id);
+                    const std::int32_t price = game::vendor_buy_price(id, playerRelation);
                     const std::int32_t totalPrice = price * buyQty;
                     const bool canAfford = (ledger.banked >= totalPrice);
 
@@ -567,7 +567,7 @@ static void DrawVendorWindowUI(bool* p_open, game::Inventory& inv, game::RunLedg
 
                     if (!canAfford) ImGui::BeginDisabled();
                     if (ImGui::Button(buyBtnLabel)) {
-                        std::uint32_t bought = game::vendor_buy(inv, ledger, id, static_cast<std::uint32_t>(buyQty));
+                        std::uint32_t bought = game::vendor_buy(inv, ledger, id, static_cast<std::uint32_t>(buyQty), playerRelation);
                         outSpent += (bought * price);
                     }
                     if (!canAfford) ImGui::EndDisabled();
@@ -580,7 +580,7 @@ static void DrawVendorWindowUI(bool* p_open, game::Inventory& inv, game::RunLedg
 
         if (ImGui::BeginTabItem("Sell Inventory")) {
             if (ImGui::Button("Sell All Haul / Trash (Auto Cap)", ImVec2(240, 28))) {
-                outSold += game::vendor_sell_all(inv, ledger, vendorKind, rpg);
+                outSold += game::vendor_sell_all(inv, ledger, vendorKind, rpg, playerRelation);
             }
             ImGui::Separator();
 
@@ -597,7 +597,7 @@ static void DrawVendorWindowUI(bool* p_open, game::Inventory& inv, game::RunLedg
                     game::ItemSlot& s = inv.slots[slot];
                     if (!game::item_valid(s.item) || s.count == 0) continue;
 
-                    const std::int32_t unitSell = game::vendor_sell_price(s.item, vendorKind, rpg);
+                    const std::int32_t unitSell = game::vendor_sell_price(s.item, vendorKind, rpg, playerRelation);
                     const std::int32_t totalSell = unitSell * s.count;
 
                     ImGui::TableNextRow();
@@ -4636,12 +4636,20 @@ int main(int argc, char** argv) {
                         if (const auto* nrv = reg.try_get<game::NpcRef>(player))
                             if (pool.valid(nrv->id)) {
                                 game::Inventory& vi = pool.inventory(nrv->id);
-                                if (sellWanted)
-                                    sold += game::vendor_sell_all(vi, ledger,
-                                                                 vendorKind, reg.try_get<game::RpgStats>(player));
-                                if (buyWanted)
-                                    spent += game::vendor_resupply(vi, ledger,
-                                                                   kResupplyBudget);
+                                const game::Faction vf = game::dominant_faction(pool, currentFloor);
+                                const std::int8_t playerRel = factionRel.at(game::kFactionPlayerRow, static_cast<std::uint8_t>(vf));
+                                if (sellWanted) {
+                                    const std::int32_t s = game::vendor_sell_all(vi, ledger,
+                                                                                 vendorKind, reg.try_get<game::RpgStats>(player), playerRel);
+                                    sold += s;
+                                    if (s > 0) game::relations_nudge_player(factionRel, vf, +1);
+                                }
+                                if (buyWanted) {
+                                    const std::int32_t b = game::vendor_resupply(vi, ledger,
+                                                                                 kResupplyBudget);
+                                    spent += b;
+                                    if (b > 0) game::relations_nudge_player(factionRel, vf, +1);
+                                }
                                 // Trade changed the bag, so the ARMOUR component
                                 // has to be re-derived from it. The rule is stated
                                 // in this file ("call after anything that changes
@@ -4736,12 +4744,22 @@ int main(int argc, char** argv) {
                             // the order here is load-bearing rather than incidental.
                             // Absent sheet -> nullptr -> money only, exactly as before.
                             game::RpgStats* rsq = reg.try_get<game::RpgStats>(player);
+                            const std::int32_t cBefore = contractPaid;
+                            const std::int32_t qBefore = questPaid;
                             contractPaid += game::contract_step(
                                 contracts, pool, pool.inventory(nrc->id), ledger, rsq);
                             questPaid += game::quest_step(
                                 quests, pool, pool.inventory(nrc->id), ledger,
                                 static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f),
                                 rsq);
+                            if (contractPaid > cBefore) {
+                                const game::Faction f = game::dominant_faction(pool, currentFloor);
+                                game::relations_nudge_player(factionRel, f, +2);
+                            }
+                            if (questPaid > qBefore) {
+                                const game::Faction f = game::dominant_faction(pool, currentFloor);
+                                game::relations_nudge_player(factionRel, f, +3);
+                            }
                         }
                 // Eating and drinking sit beside healing and AFTER pickup_step, so a
                 // ration picked up this tick can be eaten this tick. Both refuse a
@@ -5566,15 +5584,19 @@ int main(int argc, char** argv) {
                 if (pool.valid(nrv->id)) {
                     const std::int32_t soldBefore = sold;
                     const std::int32_t spentBefore = spent;
+                    const game::Faction vf = game::dominant_faction(pool, currentFloor);
+                    const std::int8_t playerRel = factionRel.at(game::kFactionPlayerRow, static_cast<std::uint8_t>(vf));
                     DrawVendorWindowUI(&showVendorWindow, pool.inventory(nrv->id), ledger, 
-                                       vendorKind, isOnPad, sold, spent, reg.try_get<game::RpgStats>(player));
+                                       vendorKind, isOnPad, sold, spent, reg.try_get<game::RpgStats>(player), playerRel);
                     // Same re-derive as the keyboard path. The window is not handed
                     // reg/pool/player, so the CALLER does it — the shape the
                     // crafting window already uses via its `invChanged` out-param.
                     // Either counter moving means stock crossed the bag boundary.
                     // [problems.md] 28.3
-                    if (sold != soldBefore || spent != spentBefore)
+                    if (sold != soldBefore || spent != spentBefore) {
+                        game::relations_nudge_player(factionRel, vf, +1);
                         game::sync_armour(reg, pool, player);
+                    }
                 }
             }
         }

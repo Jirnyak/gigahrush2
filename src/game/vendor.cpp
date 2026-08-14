@@ -83,12 +83,18 @@ bool vendor_stocks_item(ItemId id) {
     return true;
 }
 
-std::int32_t vendor_buy_price(ItemId id) {
+std::int32_t vendor_buy_price(ItemId id, std::int8_t playerRelation) {
     if (!vendor_stocks_item(id)) return 0;
     const ItemDef& d = item_def(id);
     if (d.value <= 0) return 0;
+    float mult = kBuyMult;
+    if (playerRelation > 0) {
+        mult -= (static_cast<float>(playerRelation) * 0.15f / 100.0f);
+    } else if (playerRelation < 0) {
+        mult += (static_cast<float>(-playerRelation) * 0.25f / 100.0f);
+    }
     const std::int32_t p =
-        static_cast<std::int32_t>(static_cast<float>(d.value) * kBuyMult);
+        static_cast<std::int32_t>(static_cast<float>(d.value) * mult);
     return p < 1 ? 1 : p;   // nothing is free, however cheap
 }
 
@@ -121,7 +127,8 @@ ItemId vendor_ammo_for(const Inventory& inv) {
     return best;
 }
 
-std::int32_t vendor_sell_price(ItemId id, VendorKind who, const RpgStats* rpg) {
+std::int32_t vendor_sell_price(ItemId id, VendorKind who, const RpgStats* rpg,
+                               std::int8_t playerRelation) {
     if (!item_valid(id)) return 0;
     const ItemDef& d = item_def(id);
     if (d.value <= 0) return 0;
@@ -129,6 +136,12 @@ std::int32_t vendor_sell_price(ItemId id, VendorKind who, const RpgStats* rpg) {
     // — that asymmetry is the point. You sell what you hauled up and buy what keeps you
     // alive; the shop is not a mirror.
     float m = kSellMult[static_cast<std::size_t>(who)];
+    if (playerRelation > 0) {
+        m += (static_cast<float>(playerRelation) * 0.15f / 100.0f);
+    } else if (playerRelation < 0) {
+        m -= (static_cast<float>(-playerRelation) * 0.20f / 100.0f);
+        if (m < 0.10f) m = 0.10f;
+    }
     if (rpg != nullptr && static_cast<ItemCategory>(d.category) == ItemCategory::Note) {
         m *= static_cast<float>(int_document_reward_mult_e3(*rpg)) / 1000.0f;
     }
@@ -143,8 +156,8 @@ std::int32_t vendor_sell_price(ItemId id, VendorKind who, const RpgStats* rpg) {
 }
 
 std::uint32_t vendor_buy(Inventory& inv, RunLedger& led, ItemId id,
-                         std::uint32_t count) {
-    const std::int32_t unit = vendor_buy_price(id);
+                         std::uint32_t count, std::int8_t playerRelation) {
+    const std::int32_t unit = vendor_buy_price(id, playerRelation);
     if (unit <= 0 || count == 0) return 0;
     const std::uint8_t stack = item_def(id).stackMax;
 
@@ -174,7 +187,8 @@ std::uint32_t vendor_buy(Inventory& inv, RunLedger& led, ItemId id,
     return bought;
 }
 
-std::int32_t vendor_sell_all(Inventory& inv, RunLedger& led, VendorKind who, const RpgStats* rpg) {
+std::int32_t vendor_sell_all(Inventory& inv, RunLedger& led, VendorKind who,
+                             const RpgStats* rpg, std::int8_t playerRelation) {
     const ItemId keepWeapon = equipped_melee(inv);
     const ItemId keepArmour = equipped_armour(inv);
 
@@ -206,7 +220,7 @@ std::int32_t vendor_sell_all(Inventory& inv, RunLedger& led, VendorKind who, con
             have[ci] = static_cast<std::uint16_t>(have[ci] - sellable);
         }
 
-        const std::int32_t unit = vendor_sell_price(s.item, who, rpg);
+        const std::int32_t unit = vendor_sell_price(s.item, who, rpg, playerRelation);
         if (unit <= 0) continue;
         // Respect the per-visit cap exactly rather than overshooting on the last stack.
         std::int32_t room = kSellPerVisitCap - got;

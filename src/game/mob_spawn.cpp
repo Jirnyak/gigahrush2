@@ -572,7 +572,7 @@ FogTickReport samosbor_fog_tick_at(Registry& reg, const World& world,
     const SamosborVariant variant = static_cast<SamosborVariant>(st.variant);
     const bool highRisk = danger >= kFogHighRiskDanger;
 
-    out.census = samosbor_census(reg, layer, around);
+    out.census = samosbor_census(reg, layer, around, &world.grid());
     out.censused = true;
     out.target = samosbor_threat_target(floorNumber, variant, highRisk);
     out.headroom = samosbor_threat_headroom(out.census, highRisk);

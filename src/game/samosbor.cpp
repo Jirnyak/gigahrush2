@@ -7,6 +7,8 @@
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "game/mob_spawn.h"  // MobRef — what counts as a threat
+#include "world/los.h"        // los_clear
+#include "world/macro_grid.h" // MacroGrid
 
 namespace giga::game {
 
@@ -582,7 +584,8 @@ std::uint8_t samosbor_threat_target(int floorZ, SamosborVariant variant,
     return static_cast<std::uint8_t>(std::clamp(want, 1, cap));
 }
 
-ThreatCensus samosbor_census(const Registry& reg, LayerId layer, vec3 around) {
+ThreatCensus samosbor_census(const Registry& reg, LayerId layer, vec3 around,
+                             const MacroGrid* grid) {
     ThreatCensus out;
     // Squared radii, so the whole scan is multiplies and compares with no sqrt.
     const float nearR2 = kThreatNearRadiusM * kThreatNearRadiusM;
@@ -602,11 +605,13 @@ ThreatCensus samosbor_census(const Registry& reg, LayerId layer, vec3 around) {
         const float d2 = dx * dx + dy * dy + dz * dz;
         if (d2 > outerR2) continue;
         if (out.withinOuter < 0xFFu) ++out.withinOuter;
-        if (d2 <= nearR2 && out.withinNear < 0xFFu) ++out.withinNear;
+        if (d2 <= nearR2) {
+            if (out.withinNear < 0xFFu) ++out.withinNear;
+            if (grid && los_clear(*grid, around, tr.pos)) {
+                if (out.withLos < 0xFFu) ++out.withLos;
+            }
+        }
     }
-    // withLos stays 0 — see the header. The sim has no cheap line-of-fire query
-    // and faking one here would make the LOS gate look enforced while enforcing
-    // nothing.
     return out;
 }
 

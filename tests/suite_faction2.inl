@@ -14,6 +14,7 @@
 // its own #include of the system under test to keep that diff two lines.
 
 #include "game/faction_relations.h"
+#include "game/vendor.h"
 
 namespace faction2 {
 
@@ -585,5 +586,43 @@ static void test_faction2_all() {
         CHECK(bus.cycle_count(EventType::ItemTransferred) == EventBus::kCapacity);
         bus.clear();
         CHECK(bus.dropped() == 2);                    // since-init, on purpose
+    }
+
+    // ---- 8. relations_nudge_player and reputation-based vendor pricing -------
+    {
+        FactionRelations rel = kBaseFactionMatrix;
+        CHECK(rel.at(kPly, kCit) == 50);
+
+        // Nudge player reputation with Citizens
+        relations_nudge_player(rel, Faction::Citizens, +10);
+        CHECK(rel.at(kPly, kCit) == 60);
+        CHECK(rel.at(kCit, kPly) == 60);
+
+        relations_nudge_player(rel, Faction::Citizens, -25);
+        CHECK(rel.at(kPly, kCit) == 35);
+        CHECK(rel.at(kCit, kPly) == 35);
+
+        // Vendor pricing with standing:
+        // Find any valid buyable item (e.g. food / drink)
+        ItemId testItem = kInvalidItem;
+        for (ItemId id = 1; id <= kItemCount; ++id) {
+            if (vendor_stocks_item(id) && item_def(id).value > 50) {
+                testItem = id;
+                break;
+            }
+        }
+        if (testItem != kInvalidItem) {
+            const std::int32_t baseBuy = vendor_buy_price(testItem, 0);
+            const std::int32_t repBuy = vendor_buy_price(testItem, 50); // +50 standing discount
+            const std::int32_t badBuy = vendor_buy_price(testItem, -50); // -50 standing penalty
+            CHECK(repBuy <= baseBuy);
+            CHECK(badBuy >= baseBuy);
+
+            const std::int32_t baseSell = vendor_sell_price(testItem, VendorKind::Citizen, nullptr, 0);
+            const std::int32_t repSell = vendor_sell_price(testItem, VendorKind::Citizen, nullptr, 50);
+            const std::int32_t badSell = vendor_sell_price(testItem, VendorKind::Citizen, nullptr, -50);
+            CHECK(repSell >= baseSell);
+            CHECK(badSell <= baseSell);
+        }
     }
 }

@@ -94,6 +94,11 @@ struct FactionRelations {
 };
 static_assert(sizeof(FactionRelations) == 36);
 
+// Shift relations between player and a given faction by `delta`.
+inline std::int8_t relations_nudge_player(FactionRelations& rel, Faction f, int delta) {
+    return rel.add_mutual(kFactionPlayerRow, static_cast<std::uint8_t>(f), delta);
+}
+
 // The authored starting matrix. Readable as fiction, which is the point:
 //   * Citizens / Liquidators / Scientists are a civil bloc at +50.
 //   * Cultists are cold-neutral (0) to Citizens — they live *among* them, they are

@@ -450,6 +450,12 @@ _giga_csv_vs_header("data/particles.csv" "src/game/particle_table.h"
 # table, so it drifts the moment a row is added to the CSV alone.
 _giga_csv_vs_header("data/monster_traits.csv" "src/game/monster_traits.h"
     "kMonsterTraitRows[ \t]*=[ \t]*([0-9]+)" "monster traits")
+# Speech lines table — 273 authored Russian dialogue barks.
+_giga_csv_vs_header("data/speech_lines.csv" "src/game/speech.h"
+    "kSpeechLineCount[ \t]*=[ \t]*([0-9]+)" "speech line")
+# Quests table — 19 authored plot quests.
+_giga_csv_vs_header("data/quests.csv" "src/game/quest.h"
+    "kQuestCount[ \t]*=[ \t]*([0-9]+)" "quest")
 
 
 # ---- Verdict ---------------------------------------------------------------
