@@ -1185,17 +1185,28 @@ void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
             // stateless spread as seats and jitter — then scanned forward for
             // REACHABILITY. A sequential pick would march every Duty body on the
             // floor along one identical cycle.
-            const std::uint32_t h =
-                hash3(identity_seed(view.get<const NpcRef>(e).id),
-                      plan.hops, kPatrolSalt);
+            const std::uint32_t idSeed = identity_seed(view.get<const NpcRef>(e).id);
+            const std::uint32_t h = hash3(idSeed, plan.hops, kPatrolSalt);
             std::uint8_t pick = 0xFF;
-            for (std::uint8_t k = 0; k < nav::kNodes; ++k) {
-                const std::uint8_t cand =
-                    static_cast<std::uint8_t>((h + k) % nav::kNodes);
-                if (cand == anchor) continue;
-                if (coarse.dist[anchor][cand] == nav::kUnreachable) continue;
-                pick = cand;
-                break;
+            const std::uint32_t start_dir = rand_below(h, 6);
+            
+            // Prefer immediate 1-hop physical lattice neighbours
+            for (int k = 0; k < 6; ++k) {
+                const int dir = static_cast<int>((start_dir + static_cast<std::uint32_t>(k)) % 6u);
+                if (coarse.edge[anchor][dir] != nav::kUnreachable) {
+                    pick = static_cast<std::uint8_t>(lattice_neighbor(anchor, dir));
+                    break;
+                }
+            }
+            // Fallback: scan reachable nodes across the floor if immediate neighbours are closed
+            if (pick == 0xFF) {
+                for (std::uint8_t k = 0; k < nav::kNodes; ++k) {
+                    const std::uint8_t cand = static_cast<std::uint8_t>((h + k) % nav::kNodes);
+                    if (cand == anchor) continue;
+                    if (coarse.dist[anchor][cand] == nav::kUnreachable) continue;
+                    pick = cand;
+                    break;
+                }
             }
             if (pick == 0xFF) continue; // isolated anchor: wander's problem
             plan.nodeTo = pick;
@@ -1248,6 +1259,30 @@ void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
         if (gf.axis != 0) vel.v.x = dir.x * kErrandSpeed;
         if (gf.axis != 1) vel.v.y = dir.y * kErrandSpeed;
         if (gf.axis != 2) vel.v.z = dir.z * kErrandSpeed;
+    }
+}
+
+void ai_panic_publish_step(Registry& reg, const NpcPool& pool,
+                           DiffusionDriver& driver, World& world,
+                           LayerId layer, float dt) {
+    constexpr float kPanicEmit = 1.0f;
+
+    auto view = reg.view<const AiBrain, const NpcRef, const Transform>();
+    for (auto e : view) {
+        const Transform& tr = view.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+
+        const AiBrain& brain = view.get<const AiBrain>(e);
+        if (brain.currentIntent == IntentFlee || brain.currentIntent == IntentSafety) {
+            const NpcId id = view.get<const NpcRef>(e).id;
+            if (!pool.valid(id)) continue;
+
+            const FactionTraits& ft = faction_traits(pool.faction(id));
+            const float emitAmount = kPanicEmit * dt * ft.panic;
+            if (emitAmount > 0.0f) {
+                diffusion_driver_add_at(driver, world, tr.pos, emitAmount, kDangerField);
+            }
+        }
     }
 }
 

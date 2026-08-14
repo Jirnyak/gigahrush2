@@ -79,6 +79,7 @@
 #include "game/prop_system.h"
 #include "game/investigate.h"
 #include "sim/fluid.h"
+#include "sim/diffusion.h"
 #include "game/noise.h"
 #include "game/wander.h"
 #include "game/npc_pool.h"
@@ -2197,6 +2198,7 @@ int main(int argc, char** argv) {
     // elevator fold keeps the row: the cold NpcId is the key, not the body.
     // Passed to every ai_step; null would be bit-for-bit the pre-memory pass.
     game::AiMemory aiMem;
+    DiffusionDriver diffusionDriver;
     game::AiTick aiTick{};
     std::uint64_t lastAimemLogTick = ~0ull;
     // Cumulative residents finished off by attrition since the run began. A running
@@ -2862,12 +2864,8 @@ int main(int argc, char** argv) {
             // 0 and no one flees, the scorer's stubbed-input stance ([ai.md]).
             // Fetched once per frame: the fixed loop below never (re)creates it.
             World& activeWorld = stack.layer(activeLayer);
-            // NOTE: `danger` is null in the shipped game — diffusion_step (the
-            // field's only producer) is not wired into the tick yet, so ai_step's
-            // threat term reads 0 and nobody flees. Wiring diffusion in is the
-            // open task; the fetch stays so that wiring is one call away.
-            [[maybe_unused]] const Field<float>* danger = activeWorld.fields().find<float>("danger");
-            [[maybe_unused]] const MacroGrid& activeGrid = activeWorld.grid();
+            const Field<float>* danger = activeWorld.fields().find<float>("danger");
+            const MacroGrid& activeGrid = activeWorld.grid();
             int guard = 0;
             while (simAccum >= kSimDt && guard++ < 8) {
                 // Age the noise field ONCE per tick, at the top ([noise.h]). Everything
@@ -2993,6 +2991,9 @@ int main(int argc, char** argv) {
                 // non-flee intent hands motion straight back to wander_step and the
                 // scorer is decoration (measured: own_ai=0 of 419).
                 dayClock.step(kSimDt);
+                game::ai_panic_publish_step(reg, pool, diffusionDriver, activeWorld, activeLayer, kSimDt);
+                diffusion_tick(diffusionDriver, activeWorld, activeLayer, simTick);
+                danger = activeWorld.fields().find<float>("danger");
                 aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
                                        kSimDt, aiCfg, &aiMem, &doors, &activeWorld,
                                        &roomZones, dayClock.minute_of_day(), &samosbor);

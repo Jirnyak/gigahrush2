@@ -1009,6 +1009,8 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
 
 namespace giga {
 struct GravityField;
+struct DiffusionDriver;
+class World;
 namespace nav {
 struct CoarseGraph;
 struct FineNav;
@@ -1029,6 +1031,12 @@ namespace giga::game {
 void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
                     const nav::FineNav& fine, LayerId layer, float dt,
                     const GravityField* gravity = nullptr);
+
+// Broadcasts panic from agents in emergency states (IntentFlee, IntentSafety, hurt)
+// back into the diffusion danger field. Implements Docs/specs/01_ALIFE_AND_UTILITY_AI.md §4.2.
+void ai_panic_publish_step(Registry& reg, const NpcPool& pool,
+                           DiffusionDriver& driver, World& world,
+                           LayerId layer, float dt);
 
 // --- Recorders anything may call --------------------------------------------
 // The write side of the seam, deliberately public and deliberately tiny: filing a

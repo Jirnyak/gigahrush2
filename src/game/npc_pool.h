@@ -470,27 +470,20 @@ public:
     // id < count(). That was already the contract (nothing bounds-checks) and the
     // LIVE columns now depend on it: they are only sized to cover count().
     std::uint8_t&  flags(NpcId id)   { return flags_[id]; }
+    std::uint8_t   flags(NpcId id) const { return flags_[id]; }
     std::uint16_t& faction(NpcId id) { return faction_[id]; }
+    std::uint16_t  faction(NpcId id) const { return faction_[id]; }
     std::int16_t&  hp(NpcId id)      { return hp_[id]; }
+    std::int16_t   hp(NpcId id) const { return hp_[id]; }
     std::int16_t&  max_hp(NpcId id)  { return maxHp_[id]; }
-
-    // SIGNED, and that is load-bearing: the building descends, so the demo stack's
-    // labels are {0,1,2,-8,-14,-26,-36,-50,14,30} and FloorRegistry's legal range is
-    // kMinFloor -127 .. kMaxFloor +127. As std::uint16_t this column stored floor -50
-    // as 65486 and floor -127 as 65409; nothing in src/ read it back, which is the
-    // only reason it never showed. master_prompt #10 (per-floor bucket index over
-    // pool.floor(id), replacing FloorStreamer's fixed [firstId, count) roster) is
-    // exactly the reader that would have hit it. int16_t, not int32_t, so the column
-    // stays 2 B/row — the fix costs nothing.
-    // READ-ONLY on purpose. main originally exposed `std::int16_t& floor(NpcId)` to
-    // fix the signedness below, and the branch added the per-floor bucket index that a
-    // writable reference silently desyncs. Both halves were right: the column stays
-    // SIGNED, and every write goes through set_floor() so the index cannot rot. The
-    // read accessor lives just below, next to set_floor.
+    std::int16_t   max_hp(NpcId id) const { return maxHp_[id]; }
 
     std::uint8_t&  cx(NpcId id)      { return cx_[id]; }
+    std::uint8_t   cx(NpcId id) const { return cx_[id]; }
     std::uint8_t&  cy(NpcId id)      { return cy_[id]; }
+    std::uint8_t   cy(NpcId id) const { return cy_[id]; }
     std::uint8_t&  cz(NpcId id)      { return cz_[id]; }
+    std::uint8_t   cz(NpcId id) const { return cz_[id]; }
 
     // Floor LABEL (logical, not a storage slot — floors.md). READ with floor();
     // WRITE with set_floor(), which also maintains the per-floor bucket index so a
@@ -517,26 +510,35 @@ public:
     // age/sex/level/attrs are LIVE columns: sized by spawn(), so a reference from one
     // of them dies at the next spawn().
     std::uint8_t&  age(NpcId id)     { return age_[id]; }      // years, 1..100
+    std::uint8_t   age(NpcId id) const { return age_[id]; }
     std::uint8_t&  sex(NpcId id)     { return sex_[id]; }      // NpcSex code
+    std::uint8_t   sex(NpcId id) const { return sex_[id]; }
     std::uint16_t& height_mm(NpcId id) { return heightMm_[id]; } // stature, mm
+    std::uint16_t  height_mm(NpcId id) const { return heightMm_[id]; }
     std::uint8_t&  level(NpcId id)   { return level_[id]; }
+    std::uint8_t   level(NpcId id) const { return level_[id]; }
     // Behavioural archetype (RoleId as uint8, [role.h]). LIVE column: initialised
     // from role_for(id, floorKind) at floor seeding, writable for story overrides
     // (the spec's Resident -> Looter after samosbor), so the COLUMN is the source
     // of truth at runtime, never the hash.
     std::uint8_t&  role(NpcId id)    { return role_[id]; }
+    std::uint8_t   role(NpcId id) const { return role_[id]; }
     // The 8-slot generic attribute block. Addressed by index; slot->name mapping
     // lives in a data table, not here (see kAttrSlots).
     std::array<std::uint8_t, kAttrSlots>& attrs(NpcId id) { return attr_[id]; }
+    const std::array<std::uint8_t, kAttrSlots>& attrs(NpcId id) const { return attr_[id]; }
 
     Inventory&     inventory(NpcId id) { return inv_[id]; }
+    const Inventory& inventory(NpcId id) const { return inv_[id]; }
     // The survival clock. Canonical here, not on the entity, so it survives the
     // body swap an elevator ride performs ([needs.h]).
     Needs&         needs(NpcId id)     { return needs_[id]; }
+    const Needs&   needs(NpcId id) const { return needs_[id]; }
     // DEMAND column: the first call materializes 128 B x count() and enrols rel_ in
     // spawn()'s growth set. Out of line because that is not header-shaped, and
     // because a call is no longer free — nothing in src/ makes one today.
     std::array<Relationship, kRelSlots>& relations(NpcId id);
+    const std::array<Relationship, kRelSlots>& relations(NpcId id) const;
     // DEMAND columns, read-only side: blank until set_name() has allocated them. A
     // const accessor cannot materialize a column, so an unallocated row reads as the
     // empty string — which is what a never-named record means anyway.

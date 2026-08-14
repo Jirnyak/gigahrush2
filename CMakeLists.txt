@@ -284,6 +284,16 @@ add_custom_command(
     COMMENT "glslc particle_sim.comp -> particle_sim.comp.spv")
 list(APPEND _giga_spv_files ${_giga_spv_dir}/particle_sim.comp.spv)
 
+# GPU 4-channel gas and atmospheric simulation shader.
+add_custom_command(
+    OUTPUT ${_giga_spv_dir}/gas_sim.comp.spv
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0
+        ${CMAKE_SOURCE_DIR}/shaders/gas_sim.comp
+        -o ${_giga_spv_dir}/gas_sim.comp.spv
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/gas_sim.comp
+    COMMENT "glslc gas_sim.comp -> gas_sim.comp.spv")
+list(APPEND _giga_spv_files ${_giga_spv_dir}/gas_sim.comp.spv)
+
 # GPU compute prop frustum culling shader.
 add_custom_command(
     OUTPUT ${_giga_spv_dir}/cull.comp.spv
