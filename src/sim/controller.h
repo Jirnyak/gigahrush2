@@ -5,7 +5,7 @@
 // to gravity; the physics system owns the component along it (gravity + jump).
 // Fly mode: full 6DoF, wish drives all three axes and gravity is ignored by
 // leaving it off the entity. This is the same system whether it steers the
-// player, an NPC given a Controller, or a debug free-cam.
+// embodied player, an active CameraTag-bearing body, or a debug free-cam.
 #pragma once
 
 #include "ecs/registry.h"

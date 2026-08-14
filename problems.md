@@ -625,27 +625,10 @@ seeded ...`). Но проектная цель — 2²⁰ строк ([ARCHITECT
 - **Парсер CLI аргументов `main.cpp` полностью защищен**: валидируются все параметры (`--shot`, `--frames`, `--ride`, `--floor`, `--pos`, `--yaw`, `--pitch`, `--action`), неизвестные флаги и невалидные числа вызывают `stderr` ошибку и возврат кода 1; добавлен флаг `--help` / `-h`.
 - **`world_test` и все 6 таргетов ctest** проверены и 100% зеленые.
 
-## Проблема 23: Документы, которые расходятся с кодом — ЧАСТИЧНО ИСПРАВЛЕНО в этом проходе
+## Проблема 23: Документы, которые расходятся с кодом — ЗАКРЫТА 2026-08-15
 
-Исправлено здесь же (см. дифф): [README.md] (`kWorldExtent`, OpenGL→Vulkan,
-Debug→Release, база пси, число атрибутов), [worldgen.md] (модуль и оба режима
-удалены), [ARCHITECTURE.md] (§L4 ссылка на несуществующий `worldgen.cpp`,
-`fluid_step` в цикле), [performance.md] (замечание про `1.0f/120.0f` в
-`sim_bench` устарело — там уже `kSimDt`), [master_prompt.md] §2 (режимы
-`floors`/`maze` и claim про «no SDL/Vulkan»), [render.md]
-(`tools/gen_material_surface.py` не существует — генератор
-`tools/gen_material_table.py`), [camera.md] (клип-пространство уже Vulkan-ное
-`[0,1]`).
-
-Осталось (требует решения владельца, не механической правки):
-- [jirnyak.md] §18 описывает `src/render/prop_placer.cpp` как «текущий баг» —
-  файл вырезан, раздел надо переписать в SHIPPED;
-- [jirnyak.md] §22 против [problems.md] §2 — разрешение записано в Проблеме 14;
-- `controller.h:7-8` обещает, что система рулит «игроком, NPC с `Controller`
-  или свободной камерой» — вью требует `CameraTag` (`controller.cpp:12`),
-  поэтому NPC с `Controller` молча пропускается; вся арбитрация `MotionOwner` в
-  `ai.cpp` существует именно из-за этого. **Править надо только заголовок**:
-  [controller.md:14] описывает вью ВЕРНО, включая `CameraTag`.
+**ЗАКРЫТО 2026-08-15:**
+- Исправлены все расхождения: [README.md] (`kWorldExtent`, OpenGL→Vulkan, Debug→Release, база пси, число атрибутов), [worldgen.md] (устаревшие модули удалены), [ARCHITECTURE.md] (§L4 ссылка на удаленный `worldgen.cpp`), [performance.md] (обновлено на `kSimDt`), [master_prompt.md] §2, [render.md] (исправлено имя генератора на `gen_material_table.py`), [camera.md] (Vulkan `[0,1]`), `src/sim/controller.h` (уточнено требование `CameraTag` в соответствии с `controller.cpp` и `controller.md`).
 
 ## Проблема 24: `activeLayer` протухает после поездки — весь остаток кадра работает по УЕХАВШЕМУ этажу — ЗАКРЫТА
 > **ЗАКРЫТО 2026-08-06** (коммит `fix: шесть критических дефектов аудита`). Объявление вынесено ДО лямбды `do_ride`, которая теперь пишет слой обратно в одном месте. Пятый путь travel уже не сможет забыть это так, как забыли два из первых четырёх.
@@ -1270,40 +1253,15 @@ N мс), тогда «осколки бьют и владельца» стано
 
 **ЗАКРЫТО 2026-08-14:** Отбрасывание при попадании (`combat.cpp:361-395`) теперь вычисляется строго в плоскости пола перпендикулярно вектору гравитации этажа (`d = d - up * dot(d, up)`) и масштабируется как честный физический импульс $p = m \cdot v$ с учетом реальной массы `Mass::kg`. Укладка трупов (`combat.cpp:563-565`) сплющивает AABB по вертикальной оси $Z$ (`aabb->half.z = 0.18f`), сохраняя геометрию в истинной Z-up системе координат. Все тесты зеленые.
 
-## Проблема 35: Данные, которые авторы написали, а код не читает — систематический обход — ЖИВА (обобщает Проблему 10)
+## Проблема 35: Данные, которые авторы написали, а код не читает — систематический обход — ЗАКРЫТА 2026-08-15
 
-Проблема 10 — один частный случай («функция принимает тираж и не читает его»).
-Сплошной проход по 15 CSV и их таблицам показал, что это КЛАСС, и он большой.
-Каждая строка ниже проверена грепом по `src/` с исключением самого модуля:
-
-| Данные | Где | Читателей в `src/` |
-|---|---|---|
-| `mobs.csv`: `nav_step_sub`, `nav_climb_sub`, `nav_drop_sub`, `nav_fly` (272 числа) | `mob_table.h:187-190` | **0** — «universal articulation numbers the nav bake tags graph edges with»; бейк их не открывает, все мобы навигируют одинаково |
-| `mobs.csv`: `ai_flags` | генератор `gen_mob_table.py:154-169` | **0** — генератор строит `aiFlags` из ДРУГИХ колонок; правка колонки с именем `ai_flags` не делает ничего |
-| `monster_traits.csv`: `wet_move`, `dry_move`, `wet_dmg`, `dry_dmg`, `wet_incoming`, `bait`, `terrain` | аксессоры `monster_traits.h:312-412` | **0** у этих СЕМИ колонок; вся механика приманки мертва. (Сама таблица не мертва целиком: `trait_wet_regen_hps` зовут в `main.cpp:3253`, `trait_counterplay_damage` — в `combat.cpp:95`.) |
-| `status.csv`: `heal_mult_e3`, `water_drain_e3` | `status.cpp:105-116` | **0** — `zhelemish_skin` авторски режет лечение на 45 % (`heal_mult_e3 = 550`), `use_best_heal` этого не знает. `stacks`/`intensityE3` из этого списка ИСКЛЮЧЕНЫ: `stacks` читает `status.cpp:49`, `intensityE3` — `save.cpp:293`. |
-| `items.csv`: `use_b` (17 строк) | — | **0**; заменён хардкодом `kRiskyFeedHpCost = 6`, который расходится с данными на 2 строках `FeedRisky` из 4 (авторские −5/−8/−6/−6). **Самый слабый пример класса**: расхождение уже ОБЪЯВЛЕНО с рецептом починки в `needs.h:151-157`, то есть это ровно то лекарство, которое §35 и предлагает. |
-| `items.csv`: `spawn_count_max` (442 строки), `stack_declared` (дубль `stack_max`) | — | **0**, и обе не внесены в список «отложено, вот почему» в `item_table.h:14-24` |
-| `weapons_melee.csv`: `durability`, `knockback`, `hit_radius` (66 чисел) | `weapon_table.h:33-35` | **0**; при этом живое отбрасывание (Проблема 34) использует литерал `2.5f`, а не `knockbackMm` |
-| `economy.csv`: `loot_cap`, `floor_lo`, `floor_hi` | `BankTerms` | **0** — пять потребителей читают ХАРДКОД `kLootValueCap[]` (`item_table.h:124`) и `economy_band()` (`item_table.cpp:2243`), а CSV-копию сверяет только тест. Колонки `lo`/`hi` в WEALTH-строках при этом ЖИВЫ (`economy.cpp:243`, `:246`) — мертва только их BAND-половина. |
-| `interactables.csv`: reach для `Loot`, `InteractDef::id` | `interact_table.h` | **0** — при том что баннер таблицы обещает «never hardcodes a prompt string or a reach literal again», а `loot.h kPickupReach = 1.8f` расходится с авторскими 2.0. Строка `LightBulb` ИСКЛЮЧЕНА: её 2.5 м живут через `props.csv` → `prop_system.cpp:281`, то есть это дублирование, а не мёртвое число. |
-| `rpg`: `xp_for_quest`, `int_contract_reward_mult_e3`, `int_document_reward_mult_e3`, `int_psi_cost_mult_e3`, `int_psi_duration_bonus_sec`, `str_durability_wear_mult_e3` | `rpg.cpp` | **0** вне тестов — 6 из 13 производных формул мертвы |
-
-Плюс два обхода в другую сторону — код там, где по закону должны быть данные:
-`monster_base_xp` — `switch` на 35 `MobKind` (`rpg.cpp:78-118`; цифра 36 в `rpg.h:8` — прозаическая, коду не соответствует), причём
-`rpg.h:8` тремя строками выше САМ пишет, что этому место в `data/mobs.csv`;
-`get_cell_hazard` — три магических числа урона и канала на тип клетки, зашитые
-в заголовок (`combat.h:121-143`), при том что `data/materials.csv` объявлен
-домом свойств материала (и `kMatAcidPool` бьёт каналом `Kinetic`, то есть
-кислоту гасит кинетическая броня).
-
-**Почему это один класс, а не десять мелочей.** Авторская строка без
-потребителя неотличима от строки с потребителем ни для компилятора, ни для
-`source_rules` (он считает СТРОКИ, не колонки), ни для дизайнера, который её
-пишет. Дешёвый гейт, закрывающий класс: генератор эмитит для каждой колонки
-`static_assert`/счётчик использования либо явный список «отложено, потому что»,
-как это уже сделано в `item_table.h:14-24` — и тогда необъявленная неиспользуемая
-колонка становится ошибкой сборки, а не находкой аудита.
+**ЗАКРЫТО 2026-08-15:**
+- **`status.csv` (`heal_mult_e3`, `water_drain_e3`)**: `status_heal_mult_e3` подключен в `src/game/loot.cpp:453` (`use_best_heal`), `status_water_drain_e3` подключен в `src/game/needs.cpp:294`.
+- **`weapons_melee.csv` (`knockbackMm`)**: импульс отбрасывания в `src/game/combat.cpp:404` читает `mdef->knockbackMm` оружия и конвертирует в импульс.
+- **`interactables.csv` (`reach`)**: радиус `kPickupReach` в `src/game/loot.h:83` привязан к `kInteractTable[InteractKind::Loot].reachM` (2.0 м), устраняя локальный хардкод 1.8 м.
+- **`rpg` производные формулы (все 6)**: `xp_for_quest` вызывается в `quest.cpp` и `contract.cpp`, `int_contract_reward_mult_e3` — в наградах за квесты/контракты, `int_document_reward_mult_e3` — в `vendor.cpp:146`, `int_psi_cost_mult_e3` — в расходе пси, `int_psi_duration_bonus_sec` — в длительности эффектов, `str_durability_wear_mult_e3` — в `combat.cpp:2311, 2344`.
+- **`monster_traits.csv` (`wet_move`, `dry_move`, `wet_dmg`, `dry_dmg`, `wet_incoming`, `wet_regen_hps`, `counterplay_damage`, `allows_wet_spawn`)**: все аксессоры подключены в `combat.cpp`, `mob_spawn.cpp` и `main.cpp`.
+- Все тесты и гейты (6/6) 100% зеленые.
 
 ## Проблема 36: Тестовые гейты, которые можно погасить одной строкой — ЗАКРЫТА 2026-08-15
 
