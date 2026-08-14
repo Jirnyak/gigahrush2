@@ -676,7 +676,8 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
                              LayerId layer, float dt, std::uint64_t tick,
                              ParticleBurstQueue* particles,
                              const GravityField* gravity,
-                             const float* fluid) {
+                             const float* fluid,
+                             bool samosborFrenzy) {
     // The camera holder, resolved ONCE per pass. It is a single entity that every
     // monster may want, so hoisting it out of the loop is free; crowd prey is
     // per-monster and cannot be hoisted the same way ([hunt.h]).
@@ -698,8 +699,13 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         break;
     }
 
-    const std::uint16_t elapsedMs =
+    std::uint16_t elapsedMs =
         static_cast<std::uint16_t>(dt * 1000.0f + 0.5f);
+    if (elapsedMs == 0) elapsedMs = 1;
+    if (samosborFrenzy) {
+        // Active Samosbor blood frenzy: monsters attack 15% faster
+        elapsedMs = static_cast<std::uint16_t>(elapsedMs + (elapsedMs * 15u + 50u) / 100u);
+    }
 
     // Two phases, and the split is a CRASH FIX rather than a style choice.
     //

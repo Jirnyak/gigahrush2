@@ -4170,7 +4170,8 @@ int main(int argc, char** argv) {
                                                    kSimDt, simTick,
                                                    &particleBursts,
                                    &stack.layer(activeLayer).gravity(),
-                                   fluidData);
+                                   fluidData,
+                                   game::samosbor_active(samosbor));
                 // Fire, acid and live grates bill EVERY embodied body, not just
                 // monsters. Straight after the monster sweep so both pay on the
                 // same tick and the same 1-in-16 cadence. [problems.md] §41
