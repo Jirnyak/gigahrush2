@@ -433,10 +433,13 @@ std::int32_t quest_step(QuestLog& log, const NpcPool& pool, Inventory& inv,
         p.state = static_cast<std::uint8_t>(QuestState::Complete);
         // Paid straight into the banked total, for contract.h's reason: a job's reward
         // is not carried loot and must not be at risk on the walk home.
-        led.banked += d.reward;
-        log.earned += d.reward;
+        const std::uint32_t reward = rpg != nullptr
+            ? static_cast<std::uint32_t>((static_cast<std::uint64_t>(d.reward) * int_contract_reward_mult_e3(*rpg) + 500u) / 1000u)
+            : d.reward;
+        led.banked += reward;
+        log.earned += reward;
         ++log.completed;
-        paid += d.reward;
+        paid += reward;
 
         // The item half of the reward goes into the BAG, not into the bank — it is a
         // thing, not money, and it is at risk like everything else you carry.

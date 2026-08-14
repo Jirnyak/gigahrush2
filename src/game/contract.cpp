@@ -449,10 +449,13 @@ std::int32_t contract_step(ContractBook& book, const NpcPool& pool, Inventory& i
         // Paid straight into the banked total: a contract reward is not carried loot
         // and must not be at risk on the walk home. That is what being PAID means, and
         // it is the one thing that makes a contract safer than looting the same value.
-        led.banked += c.reward;
-        book.earned += c.reward;
+        const std::uint32_t reward = rpg != nullptr
+            ? static_cast<std::uint32_t>((static_cast<std::uint64_t>(c.reward) * int_contract_reward_mult_e3(*rpg) + 500u) / 1000u)
+            : c.reward;
+        led.banked += reward;
+        book.earned += reward;
         ++book.completed;
-        paid += c.reward;
+        paid += reward;
 
         // XP, through the ONE path that awards it ([rpg.cpp] award_xp, which is also
         // the only thing that levels anyone up). Manifest p.5 asks for XP from quests
