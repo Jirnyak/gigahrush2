@@ -113,7 +113,23 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
         // Canonical Velocity{vec3} form (combat.cpp). AngularVelocity/Rotation
         // (core components) are integrated by physics_step each substep.
         reg.emplace_or_replace<Velocity>(prop, Velocity{impulse});
-        reg.emplace_or_replace<AngularVelocity>(prop, AngularVelocity{vec3{impulse.z, impulse.x, 2.0f}});
+
+        // Direction of force and spin are read from the frame / vector field.
+        // Construct isotropic angular velocity using tangent components and up vector
+        // derived from the impulse / gravity frame ([problems.md] §15).
+        const float iLen = length(impulse);
+        const vec3 up = iLen > 1e-6f ? impulse * (1.0f / iLen) : vec3{0.0f, 0.0f, 1.0f};
+        const GravityRegime r = regime_from_vector(up * -1.0f);
+        const GravityFrame f = regime_frame(r);
+
+        vec3 angVel{0.0f, 0.0f, 0.0f};
+        const float* impComp = &impulse.x;
+        float* angComp = &angVel.x;
+        angComp[f.tanA] = impComp[f.axis];
+        angComp[f.tanB] = impComp[f.tanA];
+        angComp[f.axis] = 2.0f * static_cast<float>(f.upSign);
+
+        reg.emplace_or_replace<AngularVelocity>(prop, AngularVelocity{angVel});
         reg.emplace_or_replace<Rotation>(prop);
     } else {
         // SimpleFall: a small shove along the pull. Derived by negating the
@@ -132,7 +148,8 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
 
 bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& projVel,
                                 float projHitRadius, EventBus& bus,
-                                ParticleBurstQueue* bursts, std::uint32_t seed)
+                                ParticleBurstQueue* bursts, std::uint32_t seed,
+                                vec3 up)
 {
     const float radiusSq = projHitRadius * projHitRadius;
     const int pcx = wrap_macro(static_cast<int>(projPos.x / kCellSize));
@@ -170,7 +187,9 @@ bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& 
     }
 
     if (hitEntity != entt::null) {
-        vec3 impulse = normalize(projVel) * 3.0f + vec3{0.0f, 0.0f, 1.0f};
+        const float upLen = length(up);
+        const vec3 upNorm = upLen > 1e-6f ? up * (1.0f / upLen) : vec3{0.0f, 0.0f, 1.0f};
+        vec3 impulse = normalize(projVel) * 3.0f + upNorm * 1.0f;
         detach_single_prop(reg, hitEntity, hitMode, impulse, hitPos, hitColor, 0,
                            bus, bursts, seed);
         return true;
@@ -408,65 +427,106 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
     std::uint32_t count = 0;
     constexpr float kCell = kCellSize;
 
-    // Mirror PropPlacer::populate light branch:
+    // Mirror PropPlacer::populate light branch across the active gravity frames:
     //   solidAbove && (rngLight % 100 < lightChancePct)
-    //   origin = {wx, wy, wz + 1.55f}
-    // Anchor into the solid ceiling cell (Z+1) so spawn_prop solid() and
+    // Anchor into the solid ceiling cell so spawn_prop solid() and
     // anchor_validate_step stay honest — lamp falls when ceiling is carved.
-    for (int z = 0; z < kMacroDim; ++z) {
-        for (int y = 0; y < kMacroDim; ++y) {
-            for (int x = 0; x < kMacroDim; ++x) {
-                if (grid.cell(x, y, z) != kCellAir) continue;
+    GravityFrame frames[kMaxGravityFrames];
+    const int frameCount = gravity_frames(world.gravity(), frames);
+    if (frameCount <= 0) return 0;
 
-                const CellType above = grid.cell(x, y, z + 1);
-                if (!is_solid_cell(above)) continue;
+    for (int fi = 0; fi < frameCount; ++fi) {
+        const GravityFrame& f = frames[fi];
+        const int axis = f.axis;
+        const int upSign = f.upSign;
+        const int tanA = f.tanA;
+        const int tanB = f.tanB;
 
-                // No lamps in doorway/niche cells: walls on BOTH opposite sides
-                // means a lintel slot, and a bulb there floats in the opening.
-                const bool nichX = is_solid_cell(grid.cell(x - 1, y, z)) &&
-                                   is_solid_cell(grid.cell(x + 1, y, z));
-                const bool nichY = is_solid_cell(grid.cell(x, y - 1, z)) &&
-                                   is_solid_cell(grid.cell(x, y + 1, z));
-                if (nichX || nichY) continue;
+        const int ceilStepX = (axis == 0 ? upSign : 0);
+        const int ceilStepY = (axis == 1 ? upSign : 0);
+        const int ceilStepZ = (axis == 2 ? upSign : 0);
 
-                const std::uint32_t rngLight = giga::spatial_hash(x, y, z, seed ^ kSaltLight);
-                if ((rngLight % 100u) >= kLightChancePct) continue;
+        const int tanAStepX = (tanA == 0 ? 1 : 0);
+        const int tanAStepY = (tanA == 1 ? 1 : 0);
+        const int tanAStepZ = (tanA == 2 ? 1 : 0);
 
-                // Hang from the REAL ceiling under-face: the sandwich is
-                // partially carved from below, and the cell-plane form left
-                // bulbs floating mid-air. A holed centre column = no lamp.
-                const int faceSz =
-                    grid.mask(x, y, z + 1).lowest_layer_centre();
-                if (faceSz < 0) continue;
-                const float faceM = (static_cast<float>(z) + 1.0f) * kCell +
-                                    static_cast<float>(faceSz) * (kCell / 8.0f);
+        const int tanBStepX = (tanB == 0 ? 1 : 0);
+        const int tanBStepY = (tanB == 1 ? 1 : 0);
+        const int tanBStepZ = (tanB == 2 ? 1 : 0);
 
-                // Cell CENTRE — the corner form hung bulbs on whatever wall
-                // shared the corner (the same bug the wall seeder had).
-                const float wx = (static_cast<float>(x) + 0.5f) * kCell;
-                const float wy = (static_cast<float>(y) + 0.5f) * kCell;
-                const float wz = faceM - 0.14f;
+        const std::uint32_t lightChance = kLightChancePct / static_cast<std::uint32_t>(frameCount);
 
-                SubVoxelAnchor anchor;
-                anchor.cx   = x;
-                anchor.cy   = y;
-                anchor.cz   = wrap_macro(z + 1);
-                anchor.subX = 4;
-                anchor.subY = 4;
-                anchor.subZ = 0; // bottom of ceiling cell
-                anchor.face = 2; // ceiling
+        for (int z = 0; z < kMacroDim; ++z) {
+            for (int y = 0; y < kMacroDim; ++y) {
+                for (int x = 0; x < kMacroDim; ++x) {
+                    if (grid.cell(x, y, z) != kCellAir) continue;
 
-                // BareBulb vs FloodLamp choice stays procedural; skin from props.csv.
-                const PropId pid =
-                    (rngLight & 1u) ? PropId::BareBulb : PropId::FloodLamp;
-                const float yaw = static_cast<float>(rngLight % 4u) * kHalfPi;
-                const std::uint8_t anim =
-                    static_cast<std::uint8_t>(rngLight & 0xFFu);
+                    const int cx = wrap_macro(x + ceilStepX);
+                    const int cy = wrap_macro(y + ceilStepY);
+                    const int cz = wrap_macro(z + ceilStepZ);
 
-                Entity e = spawn_prop_from_id(reg, world, vec3{wx, wy, wz}, anchor,
-                                             pid, layer, yaw, anim, /*flags*/0);
-                if (e != entt::null) ++count;
+                    const CellType above = grid.cell(cx, cy, cz);
+                    if (!is_solid_cell(above)) continue;
 
+                    // No lamps in doorway/niche cells: walls on BOTH opposite sides
+                    // along either tangent axis means a lintel slot, and a bulb there floats in the opening.
+                    const bool nichA = is_solid_cell(grid.cell(x - tanAStepX, y - tanAStepY, z - tanAStepZ)) &&
+                                       is_solid_cell(grid.cell(x + tanAStepX, y + tanAStepY, z + tanAStepZ));
+                    const bool nichB = is_solid_cell(grid.cell(x - tanBStepX, y - tanBStepY, z - tanBStepZ)) &&
+                                       is_solid_cell(grid.cell(x + tanBStepX, y + tanBStepY, z + tanBStepZ));
+                    if (nichA || nichB) continue;
+
+                    const std::uint32_t rngLight = giga::spatial_hash(x, y, z, seed ^ kSaltLight ^ static_cast<std::uint32_t>(fi * 0x9e3779b9u));
+                    if ((rngLight % 100u) >= lightChance) continue;
+
+                    // Hang from the REAL ceiling under-face: the sandwich is
+                    // partially carved from below, and the cell-plane form left
+                    // bulbs floating mid-air. A holed centre column = no lamp.
+                    const int faceSz = (axis == 2 && upSign > 0)
+                        ? grid.mask(cx, cy, cz).lowest_layer_centre()
+                        : grid.mask(cx, cy, cz).face_layer(axis, upSign > 0 ? -1 : 1, true);
+                    if (faceSz < 0) continue;
+
+                    vec3 wPos{0.0f, 0.0f, 0.0f};
+                    float* wPosComp = &wPos.x;
+                    const int coords[3] = {x, y, z};
+
+                    // Tangent axes: cell centre
+                    wPosComp[tanA] = (static_cast<float>(coords[tanA]) + 0.5f) * kCell;
+                    wPosComp[tanB] = (static_cast<float>(coords[tanB]) + 0.5f) * kCell;
+
+                    // Gravity axis: offset along face
+                    if (upSign > 0) {
+                        const float faceM = static_cast<float>(coords[axis] + 1) * kCell +
+                                            static_cast<float>(faceSz) * (kCell / 8.0f);
+                        wPosComp[axis] = faceM - 0.14f;
+                    } else {
+                        const float faceM = static_cast<float>(coords[axis] - 1) * kCell +
+                                            static_cast<float>(faceSz + 1) * (kCell / 8.0f);
+                        wPosComp[axis] = faceM + 0.14f;
+                    }
+
+                    SubVoxelAnchor anchor;
+                    anchor.cx   = cx;
+                    anchor.cy   = cy;
+                    anchor.cz   = cz;
+                    anchor.subX = (axis == 0 ? (upSign > 0 ? 0 : 7) : 4);
+                    anchor.subY = (axis == 1 ? (upSign > 0 ? 0 : 7) : 4);
+                    anchor.subZ = (axis == 2 ? (upSign > 0 ? 0 : 7) : 4);
+                    anchor.face = 2; // ceiling
+
+                    // BareBulb vs FloodLamp choice stays procedural; skin from props.csv.
+                    const PropId pid =
+                        (rngLight & 1u) ? PropId::BareBulb : PropId::FloodLamp;
+                    const float yaw = static_cast<float>(rngLight % 4u) * kHalfPi;
+                    const std::uint8_t anim =
+                        static_cast<std::uint8_t>(rngLight & 0xFFu);
+
+                    Entity e = spawn_prop_from_id(reg, world, wPos, anchor,
+                                                 pid, layer, yaw, anim, /*flags*/0);
+                    if (e != entt::null) ++count;
+
+                }
             }
         }
     }

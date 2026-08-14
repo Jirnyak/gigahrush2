@@ -155,7 +155,8 @@ std::uint32_t collect_static_prop_mesh_instances(const Registry& reg, LayerId la
 bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& projVel,
                                 float projHitRadius, EventBus& bus,
                                 ParticleBurstQueue* bursts = nullptr,
-                                std::uint32_t seed = 0);
+                                std::uint32_t seed = 0,
+                                vec3 up = vec3{0.0f, 0.0f, 1.0f});
 
 // Validate SubVoxelAnchor props against MacroGrid after geometry mutation.
 // `dirtyCells` is CarveResult::dirtyCells / DoorSet::dirtyCells — flat
