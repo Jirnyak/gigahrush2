@@ -267,6 +267,10 @@ template <class Ar, class P>
 void visit_player(Ar& ar, P& p) {
     visit_needs(ar, p.clock);
     visit_inventory(ar, p.inv);
+    ar.u8(p.equipped.weapon);
+    ar.u8(p.equipped.armor);
+    ar.u8(p.equipped.tool);
+    ar.u8(p.equipped.pad_);
     ar.i32(p.hp);
     ar.i32(p.maxHp);
     ar.i32(p.floorNumber);
@@ -424,11 +428,11 @@ static_assert(kFastTravelWire == 32);
 // The wire size and the runtime footprint of the unlock set must not drift apart:
 // widening kFloorSlots changes the struct and would silently change the format.
 static_assert(FastTravelState::wire_bytes() == kFastTravelWire);
-static_assert(kSaveFixedWire == 878 + 64 + kSamosborWire + kFastTravelWire);  // 991 (v13: inv condition +64)
-static_assert(kSaveFixedWire == 991);
+static_assert(kSaveFixedWire == 878 + 64 + 4 + kSamosborWire + kFastTravelWire);  // 995 (v14: Equipped +4)
+static_assert(kSaveFixedWire == 995);
 static_assert(kFactionWire == 36);
-static_assert(save_bytes_for(0) == 1091);
-static_assert(save_bytes_for(0, 100, 50) == 1091 + 150);
+static_assert(save_bytes_for(0) == 1095);
+static_assert(save_bytes_for(0, 100, 50) == 1095 + 150);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two

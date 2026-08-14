@@ -462,9 +462,9 @@ struct ByteReader {
 
 // Fixed per-row wire width: 28 B of demographic columns (flags 1 + faction 2 +
 // hp/maxHp/floor 6 + cell 3 + height 2 + age/sex/level/role 4 + attrs 8 + gen 2)
-// + 37 B needs (v11: +hpBank, [save.h]) + 256 B inventory; names add 2 x kNameLen
+// + 37 B needs (v11: +hpBank, [save.h]) + 320 B inventory (64 slots x 5 B: item u16 + count u16 + condition u8); names add 2 x kNameLen
 // when present.
-inline constexpr std::size_t kPoolRowWire = 28 + 37 + 256;
+inline constexpr std::size_t kPoolRowWire = 28 + 37 + (kInvSlots * 5);
 inline constexpr std::size_t kPoolHeadWire = 4 + 4 + 1 + 1;
 
 } // namespace
@@ -515,6 +515,7 @@ void NpcPool::save_rows(std::vector<std::uint8_t>& out) const {
         for (int s = 0; s < kInvSlots; ++s) {
             put_u16(out, inv.slots[s].item);
             put_u16(out, inv.slots[s].count);
+            put_u8(out, inv.slots[s].condition);
         }
         if (names) {
             for (char c : name_[id])
@@ -580,6 +581,7 @@ bool NpcPool::load_rows(const std::uint8_t* bytes, std::size_t n) {
         for (int s = 0; s < kInvSlots; ++s) {
             inv.slots[s].item = r.u16();
             inv.slots[s].count = r.u16();
+            inv.slots[s].condition = r.u8();
         }
         if (names) {
             for (char& c : name_[id]) c = static_cast<char>(r.u8());

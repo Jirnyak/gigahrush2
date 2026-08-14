@@ -138,6 +138,7 @@ SaveState busy_run() {
     st.player.inv.slots[0] = ItemSlot{static_cast<ItemId>(1), 3, 200};
     st.player.inv.slots[7] = ItemSlot{static_cast<ItemId>(kItemCount), 1, 150};
     st.player.inv.slots[kInvSlots - 1] = ItemSlot{static_cast<ItemId>(200), 255, 50};
+    st.player.equipped = Equipped{0, 7, kEquipNone, 0};
     st.player.hp = 73;
     st.player.maxHp = 100;
     st.player.floorNumber = -50;
@@ -249,6 +250,9 @@ void same_run(const SaveState& a, const SaveState& b) {
     static_assert(sizeof(Inventory) == 64 * 6, "Inventory has no implicit padding");
     CHECK(std::memcmp(&a.player.clock, &b.player.clock, sizeof(Needs)) == 0);
     CHECK(std::memcmp(&a.player.inv, &b.player.inv, sizeof(Inventory)) == 0);
+    CHECK(a.player.equipped.weapon == b.player.equipped.weapon);
+    CHECK(a.player.equipped.armor == b.player.equipped.armor);
+    CHECK(a.player.equipped.tool == b.player.equipped.tool);
     CHECK(a.player.hp == b.player.hp);
     CHECK(a.player.maxHp == b.player.maxHp);
     CHECK(a.player.floorNumber == b.player.floorNumber);
@@ -342,11 +346,11 @@ void wire_layout() {
     static_assert(kStatusWire == 42);
     static_assert(kSamosborWire == 17);
     static_assert(kFastTravelWire == 32);
-    static_assert(kSaveFixedWire == 991);
+    static_assert(kSaveFixedWire == 995);
     static_assert(kFactionWire == 36);
-    static_assert(save_bytes_for(0) == 1091);
-    static_assert(save_bytes_for(3) == 1091 + 15);
-    static_assert(save_bytes_for(3, 100, 50) == 1091 + 15 + 150);
+    static_assert(save_bytes_for(0) == 1095);
+    static_assert(save_bytes_for(3) == 1095 + 15);
+    static_assert(save_bytes_for(3, 100, 50) == 1095 + 15 + 150);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -361,8 +365,8 @@ void wire_layout() {
     // per-floor files ([save.h] modular layout), never here. v8 was 965; the
     // legacy-content purge re-measured this from 1007; v9 was 993; v10 adds the
     // samosbor clock (17) and the fast-travel unlock set (32); v11 adds the crowd
-    // heal bank `hpBank` (+4); v12 drops one craft axis (-4); v13 inventory slot condition (+64).
-    CHECK(bytes.size() == 1106);
+    // heal bank `hpBank` (+4); v12 drops one craft axis (-4); v13 inventory slot condition (+64); v14 Equipped (+4).
+    CHECK(bytes.size() == 1110);
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');

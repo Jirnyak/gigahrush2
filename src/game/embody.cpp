@@ -1,5 +1,6 @@
 #include "game/embody.h"
 
+#include "game/equip.h"
 #include "game/faction.h"
 #include "game/rpg.h"      // RpgStats, random_rpg
 // NOTE: #include "game/ai.h" (AiBrain) goes back here when the utility AI is
@@ -103,6 +104,10 @@ Entity embody_as_player(Registry& reg, NpcPool& pool, NpcId id, LayerId layer) {
     // a body swap (main.cpp does this for the kill tally) overwrites this
     // immediately afterwards, and the body is freshly built here in either case.
     reg.emplace_or_replace<RpgStats>(e, random_rpg(pool.level(id), id));
+
+    Equipped eq{};
+    auto_equip_best(pool.inventory(id), eq);
+    reg.emplace_or_replace<Equipped>(e, eq);
 
     pool.set_player(id, true);
     return e;

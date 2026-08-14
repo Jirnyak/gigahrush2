@@ -53,6 +53,7 @@
 #include "game/extraction.h"  // RunLedger
 #include "game/faction_relations.h" // FactionRelations, kRelFactionCount
 #include "game/inventory.h"   // Inventory
+#include "game/equip.h"       // Equipped (SAVMAG v14)
 #include "game/npc_pool.h"    // Needs
 #include "game/quest.h"       // QuestLog, kQuestLogWire, quest_table_fingerprint
 #include "game/rpg.h"         // RpgStats
@@ -136,7 +137,9 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // Version 13: Inventory slot grows `condition` (0..255) (+64 bytes on the wire,
 // 5 bytes per slot: item u16 + count u16 + condition u8). Version 12 saves
 // are rejected, same standing rule.
-inline constexpr std::uint32_t kSaveVersion = 13u;
+// Version 14: PlayerSnapshot adds `Equipped` items (+4 B on wire: weapon, armor, tool, pad_).
+// Version 13 saves are rejected, same standing rule.
+inline constexpr std::uint32_t kSaveVersion = 14u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -247,7 +250,9 @@ inline constexpr std::size_t kBookWire =
     static_cast<std::size_t>(kMaxContracts) * kContractWire + 4 + 4 + 8;
 inline constexpr std::size_t kNeedsWire = 37;        // 9 floats + seeded (v11: +hpBank)
 inline constexpr std::size_t kInventoryWire = static_cast<std::size_t>(kInvSlots) * 5;
-inline constexpr std::size_t kPlayerWire = kNeedsWire + kInventoryWire + 4 + 4 + 4 + 3;
+inline constexpr std::size_t kEquippedWire = 4;       // weapon, armor, tool, pad_
+inline constexpr std::size_t kPlayerWire = kNeedsWire + kInventoryWire + kEquippedWire + 4 + 4 + 4 + 3; // 376
+static_assert(kPlayerWire == 376);
 // Version 7: RpgStats wire — field-by-field LE, NOT sizeof (pad_ is written so the
 // footprint stays 12 and matches the POD layout without host padding surprises).
 inline constexpr std::size_t kRpgWire = 4 + 2 + 1 + 1 + 3 + 1;  // 12
@@ -436,6 +441,7 @@ bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
 struct PlayerSnapshot {
     Needs clock{};              // the survival clock; canonical in the pool row
     Inventory inv{};            // 64 slots, 256 B
+    Equipped equipped{};        // equipped weapon/armor/tool slot indices
     std::int32_t hp = 0;        // also pool-row state, also unreproducible
     std::int32_t maxHp = 0;
     // The SIGNED floor the player stood on. Saved separately and explicitly because

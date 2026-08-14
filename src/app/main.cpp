@@ -2326,6 +2326,10 @@ int main(int argc, char** argv) {
         runState.player.inv = pool.inventory(nr->id);
         runState.player.hp = pool.hp(nr->id);
         runState.player.maxHp = pool.max_hp(nr->id);
+        if (const game::Equipped* eq = reg.try_get<game::Equipped>(player))
+            runState.player.equipped = *eq;
+        else
+            runState.player.equipped = game::Equipped{};
         // The SIGNED floor, explicitly: NpcPool::floor() is the seeding label
         // and LayerId is a recycled storage slot. [save.h]
         runState.player.floorNumber = currentFloor;
@@ -4531,6 +4535,8 @@ int main(int argc, char** argv) {
                             if (pid != game::kInvalidNpc) {
                                 game::apply_player_snapshot(pool, pid,
                                                             runState.player);
+                                reg.emplace_or_replace<game::Equipped>(
+                                    player, runState.player.equipped);
                                 game::sync_armour(reg, pool, player);
                             }
                             // Version 7: stamp the sheet onto the body and the
