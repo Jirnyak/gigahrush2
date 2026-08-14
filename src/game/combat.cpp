@@ -5,10 +5,12 @@
 #include <vector>
 
 #include "core/math.h"
+#include "core/rng.h"
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "game/container.h" // Container — inventory overflow on death
 #include "game/embody.h"   // NpcRef
+#include "game/equip.h"
 #include "game/hunt.h"
 #include "game/inventory.h" // Inventory — spill NPC bag into Corpse / cell containers
 #include "game/loot.h"      // Pickup — floor overflow when corpse + cell containers full
@@ -977,41 +979,59 @@ std::uint32_t hazard_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
     return static_cast<std::uint32_t>(hits.size());
 }
 
-ItemId equipped_melee(const Inventory& inv) {
-    ItemId best = kInvalidItem;
+int equipped_melee_slot(const Inventory& inv, const Equipped* eq) {
+    if (eq && eq->weapon < kInvSlots) {
+        const ItemSlot& s = inv.slots[eq->weapon];
+        if (s.item != kInvalidItem && s.count > 0 && melee_for_item(s.item)) {
+            return eq->weapon;
+        }
+    }
+    int bestIdx = -1;
     std::uint16_t bestDmg = 0;
-    for (const ItemSlot& s : inv.slots) {
+    for (int i = 0; i < kInvSlots; ++i) {
+        const ItemSlot& s = inv.slots[i];
         if (s.item == kInvalidItem || s.count == 0) continue;
         const MeleeDef* m = melee_for_item(s.item);
         if (!m) continue;
-        if (m->dmg > bestDmg) { bestDmg = m->dmg; best = s.item; }
+        if (m->dmg > bestDmg) { bestDmg = m->dmg; bestIdx = i; }
     }
-    return best;
+    return bestIdx;
 }
 
-// What is worn is decided by the item's declared equip slot, NOT by "it happens to
-// have resistances". Today the two agree exactly — measured on data/items.csv, the five
-// rows with a nonzero resist are precisely the five with equip_slot=Armor — so this
-// changes no current behaviour. It closes a trap that was one CSV row from firing:
-// author a Misc trinket with resist_psi > 0 (a lead-lined charm is entirely in genre)
-// and the resist-sum rule would silently wear it as body armour. `bankable_slot` would
-// then refuse to ever bank it, because you cannot bank what you are holding, so
-// high-value loot would become permanently unsellable and nothing would object.
-//
-// There is no ItemCategory::Armour to test instead: all five armour rows carry category
-// MISC. `equipSlot` is the only field that actually encodes the intent.
-ItemId equipped_armour(const Inventory& inv) {
-    ItemId best = kInvalidItem;
+ItemId equipped_melee(const Inventory& inv, const Equipped* eq) {
+    const int idx = equipped_melee_slot(inv, eq);
+    if (idx >= 0 && idx < kInvSlots) return inv.slots[idx].item;
+    return kInvalidItem;
+}
+
+int equipped_armour_slot(const Inventory& inv, const Equipped* eq) {
+    if (eq && eq->armor < kInvSlots) {
+        const ItemSlot& s = inv.slots[eq->armor];
+        if (s.item != kInvalidItem && s.count > 0 && item_valid(s.item)) {
+            const ItemDef& d = item_def(s.item);
+            if (d.equipSlot == static_cast<std::uint8_t>(EquipSlot::Armor)) {
+                return eq->armor;
+            }
+        }
+    }
+    int bestIdx = -1;
     int bestSum = 0;
-    for (const ItemSlot& s : inv.slots) {
+    for (int i = 0; i < kInvSlots; ++i) {
+        const ItemSlot& s = inv.slots[i];
         if (s.item == kInvalidItem || s.count == 0 || !item_valid(s.item)) continue;
         const ItemDef& d = item_def(s.item);
         if (d.equipSlot != static_cast<std::uint8_t>(EquipSlot::Armor)) continue;
         int sum = 0;
         for (std::size_t c = 0; c < kItemResistChannels; ++c) sum += d.resist[c];
-        if (sum > bestSum) { bestSum = sum; best = s.item; }
+        if (sum > bestSum) { bestSum = sum; bestIdx = i; }
     }
-    return best;
+    return bestIdx;
+}
+
+ItemId equipped_armour(const Inventory& inv, const Equipped* eq) {
+    const int idx = equipped_armour_slot(inv, eq);
+    if (idx >= 0 && idx < kInvSlots) return inv.slots[idx].item;
+    return kInvalidItem;
 }
 
 void sync_armour(Registry& reg, NpcPool& pool, Entity e) {
@@ -1019,7 +1039,7 @@ void sync_armour(Registry& reg, NpcPool& pool, Entity e) {
     const NpcRef* n = reg.try_get<NpcRef>(e);
     if (!n || !pool.valid(n->id)) return;
 
-    const ItemId worn = equipped_armour(pool.inventory(n->id));
+    const ItemId worn = equipped_armour(pool.inventory(n->id), reg.try_get<Equipped>(e));
     if (worn == kInvalidItem) {
         if (reg.all_of<Armour>(e)) reg.remove<Armour>(e);
         return;
@@ -1812,7 +1832,8 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
 
 std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
                                  bool wantFire, float dt, std::uint64_t tick,
-                                 NoiseField* noise, const StatusSet* status) {
+                                 NoiseField* noise, const StatusSet* status,
+                                 EventBus* bus) {
     Entity shooter = entt::null;
     for (auto e : reg.view<const CameraTag, const Transform>()) {
         if (reg.get<const Transform>(e).layer != layer) continue;
@@ -1838,7 +1859,10 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
     if (!nr || !pool.valid(nr->id)) return 0;
     Inventory& inv = pool.inventory(nr->id);
 
-    const ItemId gun = equipped_ranged(inv);
+    const Equipped* eq = reg.try_get<Equipped>(shooter);
+    const int gunSlot = equipped_ranged_slot(inv, eq);
+    if (gunSlot < 0) return 0;
+    const ItemId gun = inv.slots[gunSlot].item;
     const RangedDef* def = ranged_for_item(gun);
     if (!def) return 0;
 
@@ -1875,6 +1899,30 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
     }
 
     if (!wantFire || pr.cooldownMs > 0) return 0;
+
+    // Spec 03 §4.1: Jamming malfunction roll on fouled weapons.
+    ItemSlot& gSlot = inv.slots[gunSlot];
+    const ItemDef& d = item_def(gSlot.item);
+    if (d.wearKind == static_cast<std::uint8_t>(WearKind::Jamming)) {
+        const std::uint32_t fouling = static_cast<std::uint32_t>(255u - gSlot.condition);
+        if (fouling > 0) {
+            const std::uint32_t jamHash = hash_u32((static_cast<std::uint32_t>(nr->id) * 0x9e3779b9u) ^
+                                                   (static_cast<std::uint32_t>(tick) * 0x7feb352du) ^ 0x7A391u);
+            const std::uint32_t jamRoll = jamHash % 1000u;
+            if (jamRoll < (fouling * 300u / 255u)) {
+                pr.cooldownMs = static_cast<std::uint16_t>(def->cooldownMs * 2);
+                if (bus) {
+                    bus->publish(EventType::WeaponJammed, nr->id, gSlot.item, fouling, tick);
+                }
+                return 0; // Jammed! Misfire
+            }
+        }
+        if (gSlot.condition > d.wearPerUse) {
+            gSlot.condition = static_cast<std::uint8_t>(gSlot.condition - d.wearPerUse);
+        } else {
+            gSlot.condition = 0;
+        }
+    }
 
     const CameraTag& cam = reg.get<const CameraTag>(shooter);
     const Transform& tr = reg.get<const Transform>(shooter);
@@ -2063,14 +2111,21 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
     // RpgStats component the raw table values are used (identity mults).
     const MeleeDef* wp = &unarmed_melee();
     ItemId heldWeapon = 0;  // 0 = bare hands sentinel [item_table.h]
-    if (const NpcRef* n = reg.try_get<NpcRef>(self))
-        if (pool.valid(n->id)) {
-            heldWeapon = equipped_melee(pool.inventory(n->id));
+    const NpcRef* nr = reg.try_get<NpcRef>(self);
+    const RpgStats* rs = reg.try_get<RpgStats>(self);
+    const Equipped* eq = reg.try_get<Equipped>(self);
+    int heldSlot = -1;
+    if (nr && pool.valid(nr->id)) {
+        Inventory& inv = pool.inventory(nr->id);
+        heldSlot = equipped_melee_slot(inv, eq);
+        if (heldSlot >= 0 && heldSlot < kInvSlots) {
+            heldWeapon = inv.slots[heldSlot].item;
             if (const MeleeDef* m = melee_for_item(heldWeapon)) wp = m;
         }
+    }
     std::int16_t swingDmg = static_cast<std::int16_t>(wp->dmg);
     std::uint16_t swingCd = wp->cooldownMs;
-    if (const RpgStats* rs = reg.try_get<RpgStats>(self)) {
+    if (rs) {
         swingDmg = melee_damage(*rs, heldWeapon, static_cast<std::int16_t>(wp->dmg));
         // Combine AGI attack-speed and STR heavy-weapon speed as e3 mults.
         const std::uint32_t agiE3 = agi_attack_speed_mult_e3(*rs);
@@ -2161,7 +2216,24 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
                              carve_power_from_dmg(swingDmg),
                              static_cast<std::uint32_t>(tick));
                 pm.cooldownMs = swingCd;
-                (void)bus;
+                if (heldSlot >= 0 && nr && pool.valid(nr->id)) {
+                    Inventory& inv = pool.inventory(nr->id);
+                    ItemSlot& sl = inv.slots[heldSlot];
+                    if (item_valid(sl.item)) {
+                        const ItemDef& d = item_def(sl.item);
+                        if (d.wearKind == static_cast<std::uint8_t>(WearKind::Durability)) {
+                            const std::uint32_t strWearMult = rs ? str_durability_wear_mult_e3(*rs) : 1000u;
+                            const std::uint32_t wearRate = std::max(1u, (static_cast<std::uint32_t>(d.wearPerUse) * strWearMult + 500u) / 1000u);
+                            if (sl.condition > wearRate) {
+                                sl.condition = static_cast<std::uint8_t>(sl.condition - wearRate);
+                            } else {
+                                sl.condition = 0;
+                                bus.publish(EventType::WeaponBroken, nr->id, sl.item, 0, tick);
+                                sl = ItemSlot{};
+                            }
+                        }
+                    }
+                }
                 return true;
             }
         }
@@ -2176,8 +2248,25 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
                                   gravity);
     pm.cooldownMs = swingCd;
     if (r.lethal) ++pm.kills;
-    (void)bus;
-    (void)tick;
+
+    if (r.hit && heldSlot >= 0 && nr && pool.valid(nr->id)) {
+        Inventory& inv = pool.inventory(nr->id);
+        ItemSlot& sl = inv.slots[heldSlot];
+        if (item_valid(sl.item)) {
+            const ItemDef& d = item_def(sl.item);
+            if (d.wearKind == static_cast<std::uint8_t>(WearKind::Durability)) {
+                const std::uint32_t strWearMult = rs ? str_durability_wear_mult_e3(*rs) : 1000u;
+                const std::uint32_t wearRate = std::max(1u, (static_cast<std::uint32_t>(d.wearPerUse) * strWearMult + 500u) / 1000u);
+                if (sl.condition > wearRate) {
+                    sl.condition = static_cast<std::uint8_t>(sl.condition - wearRate);
+                } else {
+                    sl.condition = 0;
+                    bus.publish(EventType::WeaponBroken, nr->id, sl.item, 0, tick);
+                    sl = ItemSlot{};
+                }
+            }
+        }
+    }
     return r.hit;
 }
 

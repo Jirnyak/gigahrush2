@@ -134,6 +134,13 @@ bool event_line(const Event& e, char* out, std::size_t cap) {
         case EventType::PropDetached:
             std::snprintf(out, cap, "prop detached at (%u,%u,%u)", e.a, e.b, e.c);
             return true;
+        case EventType::WeaponJammed:
+            std::snprintf(out, cap, "weapon %u jammed on actor %u (fouling %u)",
+                          e.b, e.a, e.c);
+            return true;
+        case EventType::WeaponBroken:
+            std::snprintf(out, cap, "weapon %u broke on actor %u", e.b, e.a);
+            return true;
         case EventType::None:
         default:
             return false;

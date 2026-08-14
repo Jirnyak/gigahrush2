@@ -4082,7 +4082,7 @@ int main(int argc, char** argv) {
                 shots += game::player_ranged_step(reg, pool, activeLayer,
                                                   haveGun && attackHeld && !paused,
                                                   kSimDt, simTick, &noiseField,
-                                                  &playerStatus);
+                                                  &playerStatus, &bus);
                 // IMMEDIATELY AFTER the firearm step and never before it: the two
                 // share `PlayerRanged::cooldownMs` (one pair of hands) and the step
                 // above owns its single decrement ([combat.h] player_throw_step).

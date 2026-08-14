@@ -911,12 +911,8 @@ if(GIGA_BUILD_TESTS)
     # claims the body / steers along the flow in the walking plane only, the
     # PosX gravity-axis sentinel survives (mutation: unconditional axis writes
     # -> 2 red), and an Ai-owned body is never re-steered (suite_utilai).
-    # 240248 -> 240244 (-4) on 2026-08-14: craft axes 9 -> 8 ([craft.h] "The
-    # eight axes"). A FALLING count, accounted for exactly: four per-axis CHECK
-    # loops (suite_craft premise sums, its save round-trip and sanitize-clamp,
-    # suite_saveload's SAVRPG bank compare) each run one fewer iteration. No
-    # suite stopped running.
-        PASS_REGULAR_EXPRESSION "game_test: 240244 checks, 0 failures")
+    # 243519 on 2026-08-14: Spec 03 Item wear, condition, durability, jamming and equipped tests.
+        PASS_REGULAR_EXPRESSION "game_test: 243519 checks, 0 failures")
 
 
 

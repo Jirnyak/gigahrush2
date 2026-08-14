@@ -45,6 +45,38 @@ RESIST_COLS = ["resist_kinetic", "resist_buckshot", "resist_energy",
                "resist_fire", "resist_psi"]
 
 
+WEAR = {
+    "None": "None", "Durability": "Durability", "Charge": "Charge",
+    "Fouling": "Fouling", "Jamming": "Jamming",
+}
+
+
+def wear_kind_and_rate(row, i, cat, eq):
+    dur_str = (row.get("durability") or "").strip()
+    ammo_id = (row.get("ammo_id") or "").strip()
+    item_id = row.get("id", "")
+
+    if dur_str:
+        dur = int(dur_str)
+        rate = max(1, min(255, int(round(255.0 / dur)))) if dur > 0 else 0
+        if "gasmask" in item_id or "filter" in item_id:
+            return "Fouling", rate
+        elif "flashlight" in item_id or "battery" in item_id or "radio" in item_id or "detector" in item_id:
+            return "Charge", rate
+        else:
+            return "Durability", rate
+
+    if cat == "Weapon":
+        if ammo_id:
+            return "Jamming", 2
+        else:
+            return "Durability", 4
+    elif cat == "Tool":
+        return "Durability", 8
+
+    return "None", 0
+
+
 def die(msg):
     sys.stderr.write("gen_item_table: %s\n" % msg)
     sys.exit(1)
@@ -60,25 +92,6 @@ def num(row, col, i, lo, hi, scale=1):
 
 
 def spawn_weight(row, i):
-    """`spawn_w_milli`, with the one rounding case that silently deletes an item.
-
-    `spawnWeight == 0` means "never spawns randomly" — item_table.cpp's
-    `item_weight_on_floor` returns 0 outright, which removes the row from all three
-    weighted paths (loot.cpp:91, container.cpp:119, contract.cpp:65). That is a
-    legitimate authored state and stays legal.
-
-    What is rejected is a non-zero cell that ROUNDS to zero, because this column's
-    unit differs from the reference's by 1000x: the TypeScript source authors
-    `spawnW: 0.35` and this CSV stores 350. Paste the reference's number into the
-    cell unconverted and `int(round(0.35))` is 0 — the item is not rare, it is gone,
-    and nothing downstream can tell that apart from an authored opt-out. Measured
-    2026-07-29: 0 of 446 rows are currently in that state and none carries a
-    fractional cell, so this is a tripwire on a live hazard, not a fix.
-
-    The sibling generator hit exactly this class of bug for real: mobs.csv authored
-    SCULPTURE at spawn_weight 0.05 into a tenths field and lost the row. See
-    gen_mob_table.fixed_nonzero.
-    """
     text = (row.get("spawn_w_milli") or "").strip()
     v = num(row, "spawn_w_milli", i, 0, 65535)
     if v == 0 and text not in ("", "0"):
@@ -117,24 +130,6 @@ def pick(table, row, col, i, what):
 
 
 def item_mass_g(row, i):
-    """Grams for one item, straight out of the row's own `mass_g` column.
-
-    THE COLUMN IS THE SOURCE, exactly as it is for props and mobs — one shape for
-    all three catalogs, an item's weight sitting beside its value and its stack cap
-    where anyone reading the row will see it.
-
-    It was briefly resolved from a rule table (data/item_mass.csv) instead, which is
-    how these 442 values were AUTHORED — writing "документ весит 20 г" once is how
-    75 bureaucratic MISC rows got an honest weight rather than 442 blind guesses.
-    That table did its job and was migrated into this column; the reasoning survives
-    in items.md, and the values are now plain data with no indirection to resolve.
-
-    Empty or zero is legal and means "not a physical object": a psi technique is a
-    thing you know, not a thing in your pack, and 20 rows are exactly that. It is
-    NOT a licence for an unfilled column — the CSV carries a value on every row and
-    `source_rules` counts them — which is why the prop and mob tables, where 0 would
-    be indistinguishable from unfilled, refuse it outright.
-    """
     raw = (row.get("mass_g") or "").strip()
     if not raw.isdigit():
         die("row %d (%s): mass_g %r must be a whole number of grams — every item "
@@ -155,7 +150,7 @@ def main():
             % (EXPECTED_ROWS, len(rows)))
 
     seen, out, names = set(), [], []
-    used_cat, used_use = set(), set()
+    used_cat, used_use, used_wear = set(), set(), set()
     resolved = []
     for i, r in enumerate(rows):
         if r["id"] in seen:
@@ -170,6 +165,9 @@ def main():
         used_cat.add(cat)
         used_use.add(ue)
 
+        wk, wr = wear_kind_and_rate(r, i, cat, eq)
+        used_wear.add(wk)
+
         resists = [num(r, c, i, -128, 127) for c in RESIST_COLS]
 
         massG = item_mass_g(r, i)
@@ -179,7 +177,7 @@ def main():
             "    // [%d] id %d  %s  (%d g)\n"
             "    ItemDef{ %d, %d, %d, static_cast<std::uint16_t>(%s), %d,\n"
             "             u8(ItemCategory::%s), u8(EquipSlot::%s), %d,\n"
-            "             u8(UseEffect::%s), {%s}, 0 },"
+            "             u8(UseEffect::%s), {%s}, u8(WearKind::%s), %d, {0, 0, 0} },"
             % (i, i + 1, r["id"], massG,
                num(r, "value_rub", i, 0, 2000000000),
                massG,
@@ -189,12 +187,10 @@ def main():
                cat, eq,
                num(r, "stack_max", i, 1, 255),
                ue,
-               ", ".join(str(x) for x in resists)))
+               ", ".join(str(x) for x in resists),
+               wk, wr))
         names.append("    %s," % cpp_string(r["name_ru"].strip()))
 
-    # THE MASS SUMMARY, printed every run. A number nobody can see is a number
-    # nobody can argue with: this is what lets the owner spot "справка весит 2 кг"
-    # without reading 442 rows of a wide CSV or of generated C++.
     heavy = sorted(resolved, key=lambda t: -t[1])[:6]
     light = sorted((t for t in resolved if t[1] > 0), key=lambda t: t[1])[:6]
     total = sum(t[1] for t in resolved)
@@ -210,9 +206,9 @@ def main():
         sys.stderr.write("    weightless (not physical objects): %d — %s\n"
                          % (len(zero), ", ".join(zero[:4]) + " ..."))
 
-    # An enumerator no row uses is either dead weight or a sign the CSV drifted.
     for name, used, table in (("ItemCategory", used_cat, CATEGORY),
-                              ("UseEffect", used_use, USE)):
+                              ("UseEffect", used_use, USE),
+                              ("WearKind", used_wear, WEAR)):
         unused = sorted(set(table.values()) - used)
         if unused:
             sys.stderr.write("gen_item_table: NOTE %s values unused by any row: %s\n"
@@ -251,6 +247,7 @@ namespace {
 constexpr std::uint8_t u8(ItemCategory v) { return static_cast<std::uint8_t>(v); }
 constexpr std::uint8_t u8(EquipSlot v) { return static_cast<std::uint8_t>(v); }
 constexpr std::uint8_t u8(UseEffect v) { return static_cast<std::uint8_t>(v); }
+constexpr std::uint8_t u8(WearKind v) { return static_cast<std::uint8_t>(v); }
 constexpr std::uint16_t u16(RoomBit v) { return static_cast<std::uint16_t>(v); }
 } // namespace
 

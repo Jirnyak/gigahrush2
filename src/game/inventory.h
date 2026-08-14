@@ -15,11 +15,14 @@ inline constexpr int kInvRows = 8;
 inline constexpr int kInvSlots = kInvCols * kInvRows; // 64
 
 // One inventory cell. `item == 0` means the slot is empty; item ids index the
-// global item table ([items.md]). Kept to 4 bytes so a full inventory is 256 B.
+// global item table ([items.md]). 6 bytes POD (condition 0..255, 255 = pristine).
 struct ItemSlot {
-    std::uint16_t item = 0;  // 0 = empty
+    std::uint16_t item = 0;       // 0 = empty
     std::uint16_t count = 0;
+    std::uint8_t condition = 255; // 0..255 (255 = pristine, 0 = broken)
+    std::uint8_t pad_ = 0;
 };
+static_assert(sizeof(ItemSlot) == 6, "ItemSlot must stay a tight 6-byte POD");
 
 // Fixed 8x8 rectangle. POD, trivially copyable — no methods that allocate.
 struct Inventory {

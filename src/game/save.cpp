@@ -259,6 +259,7 @@ void visit_inventory(Ar& ar, I& inv) {
     for (int i = 0; i < kInvSlots; ++i) {
         ar.u16(inv.slots[i].item);
         ar.u16(inv.slots[i].count);
+        ar.u8(inv.slots[i].condition);
     }
 }
 
@@ -410,16 +411,9 @@ static_assert(sizeof(SaveHeader) == kSaveHeaderWire,
 static_assert(kLedgerWire == 8 + 8 + 4 + 4 + 4 + 4 + 1);
 static_assert(kContractWire == 4 + 2 + 4 + 4 + 4 + 1 + 1 + 1);
 static_assert(kNeedsWire == 9 * 4 + 1);
-static_assert(kInventoryWire == 64 * 4);
+static_assert(kInventoryWire == 64 * 5);
 // kSaveFixedWire: ledger+book+player + v7 rpg(12)+craft(89) + v8 combat(21)
-// + v9 status(42) + v10 samosbor(17)+fastTravel(32) + quest log.
-//
-// The running prose here USED TO SAY "was 850 in v8; +42 = 892 in v9" and "header 64
-// + fixed 892 + faction 36 = 992", while the asserts one line below said 878 and 978.
-// The asserts were right and the sentences were three-version-old drift, repeated
-// into tests/suite_saveload.inl. Numbers that are checked and numbers that are merely
-// written down diverge; only the former are load-bearing, so the arithmetic now lives
-// ONLY in asserts and the prose only names the parts.
+// + v9 status(42) + v10 samosbor(17)+fastTravel(32) + quest log + v13 inv condition(64).
 static_assert(kRpgWire == 12);
 static_assert(kCraftingWire == 89);
 static_assert(kRangedWire == 16);
@@ -430,14 +424,11 @@ static_assert(kFastTravelWire == 32);
 // The wire size and the runtime footprint of the unlock set must not drift apart:
 // widening kFloorSlots changes the struct and would silently change the format.
 static_assert(FastTravelState::wire_bytes() == kFastTravelWire);
-// 927 is ALSO the number v10 asserted before hpBank existed. Same integer, two
-// different formats (v10: nine craft axes, no hpBank; v12: eight axes, hpBank) —
-// the version field is what tells them apart, not this sum.
-static_assert(kSaveFixedWire == 878 + kSamosborWire + kFastTravelWire);  // 927 (v12: craft 9->8 axes)
-static_assert(kSaveFixedWire == 927);
+static_assert(kSaveFixedWire == 878 + 64 + kSamosborWire + kFastTravelWire);  // 991 (v13: inv condition +64)
+static_assert(kSaveFixedWire == 991);
 static_assert(kFactionWire == 36);
-static_assert(save_bytes_for(0) == 1027);
-static_assert(save_bytes_for(0, 100, 50) == 1027 + 150);
+static_assert(save_bytes_for(0) == 1091);
+static_assert(save_bytes_for(0, 100, 50) == 1091 + 150);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two
@@ -448,7 +439,7 @@ static_assert(save_bytes_for(0, 100, 50) == 1027 + 150);
 static_assert(sizeof(ContractBook) == 88,
               "ContractBook is serialized; grow it and bump kSaveVersion in the same "
               "edit");
-static_assert(sizeof(Inventory) == 256, "the 8x8 grid is 64 x 4 B ([inventory.h])");
+static_assert(sizeof(Inventory) == 384, "the 8x8 grid is 64 x 6 B ([inventory.h])");
 
 void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     // Payload first: the header carries the payload's length and checksum, so it cannot

@@ -505,14 +505,13 @@ float slow_scale(const Registry& reg, Entity e);
 // caught in mid-air.
 std::uint32_t slow_step(Registry& reg, LayerId layer, float dt);
 
-// The best melee weapon in an inventory, or kInvalidItem for bare hands. "Best"
-// is highest damage — reach and speed are not traded off, because with no stamina
-// or stagger system there is nothing to trade them against yet.
-ItemId equipped_melee(const Inventory& inv);
+struct Equipped;
 
-// The best armour in an inventory, by total resistance across all channels, or
-// kInvalidItem for none.
-ItemId equipped_armour(const Inventory& inv);
+int equipped_melee_slot(const Inventory& inv, const Equipped* eq = nullptr);
+ItemId equipped_melee(const Inventory& inv, const Equipped* eq = nullptr);
+
+int equipped_armour_slot(const Inventory& inv, const Equipped* eq = nullptr);
+ItemId equipped_armour(const Inventory& inv, const Equipped* eq = nullptr);
 
 // Copy the equipped armour's resistances onto `e`'s Armour component, adding or
 // removing it as needed. Call after anything that changes the inventory, so that
@@ -857,7 +856,8 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
 std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
                                  bool wantFire, float dt, std::uint64_t tick,
                                  NoiseField* noise = nullptr,
-                                 const StatusSet* status = nullptr);
+                                 const StatusSet* status = nullptr,
+                                 EventBus* bus = nullptr);
 
 // Optional `grid` + `carves`: when a swing finds no monster in the facing cone,
 // probe the cell the camera is looking at and propose a wall chip. Without both

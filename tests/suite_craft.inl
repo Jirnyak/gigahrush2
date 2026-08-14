@@ -898,6 +898,64 @@ static void test_craft_all() {
         for (std::size_t i = 0; i < sizeof a.pad_; ++i) CHECK(a.pad_[i] == 0);
     }
 
+    { // ---- Spec 03 §3.1, §3.2, §3.3: Item Wear, Condition, and Equipped Component ----
+        static_assert(sizeof(ItemSlot) == 6, "ItemSlot must be 6-byte POD");
+        static_assert(sizeof(Inventory) == 384, "Inventory must be 384-byte POD");
+        static_assert(sizeof(Equipped) == 4, "Equipped must be 4-byte POD");
+
+        ItemSlot sl{};
+        CHECK(sl.condition == 255);
+        CHECK(sl.item == kInvalidItem);
+
+        // Verify wearKind distribution across items
+        std::size_t durableCount = 0;
+        std::size_t jammingCount = 0;
+        std::size_t chargeCount = 0;
+        for (ItemId id = 1; id <= kItemCount; ++id) {
+            const ItemDef& d = item_def(id);
+            if (d.wearKind == static_cast<std::uint8_t>(WearKind::Durability)) {
+                ++durableCount;
+                CHECK(d.wearPerUse >= 1);
+            } else if (d.wearKind == static_cast<std::uint8_t>(WearKind::Jamming)) {
+                ++jammingCount;
+                CHECK(d.wearPerUse >= 1);
+            } else if (d.wearKind == static_cast<std::uint8_t>(WearKind::Charge)) {
+                ++chargeCount;
+            }
+        }
+        CHECK(durableCount >= 10);
+        CHECK(jammingCount >= 20);
+        CHECK(chargeCount >= 5);
+
+        // Test Equipped component helpers
+        Inventory inv{};
+        Equipped eq{};
+        CHECK(eq.weapon == 0xFF);
+        CHECK(eq.armor == 0xFF);
+        CHECK(eq.tool == 0xFF);
+
+        // Put a melee weapon in slot 3
+        ItemId meleeItem = kInvalidItem;
+        for (ItemId id = 1; id <= kItemCount; ++id) {
+            if (melee_for_item(id)) { meleeItem = id; break; }
+        }
+        CHECK(meleeItem != kInvalidItem);
+
+        inv.slots[3] = ItemSlot{meleeItem, 1, 200};
+        equip_item(inv, eq, 3);
+        CHECK(eq.weapon == 3);
+        CHECK(equipped_item(inv, eq, EquipSlot::Weapon) == meleeItem);
+        CHECK(equipped_melee_slot(inv, &eq) == 3);
+        CHECK(equipped_melee(inv, &eq) == meleeItem);
+
+        unequip_slot(eq, EquipSlot::Weapon);
+        CHECK(eq.weapon == 0xFF);
+        CHECK(equipped_item(inv, eq, EquipSlot::Weapon) == kInvalidItem);
+
+        auto_equip_best(inv, eq);
+        CHECK(eq.weapon == 3);
+    }
+
     // Work counts, printed. Counts and not seconds: the same run does the same
     // amount of work on every host, which a stopwatch cannot promise.
     CHECK(disassembliesRun > 7000u);

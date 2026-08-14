@@ -1,29 +1,36 @@
 #include "game/ranged_table.h"
+#include "game/equip.h"
 
 namespace giga::game {
 
-// Hand-written sibling of the generated table, so re-running the generator cannot
-// clobber it. Same split as [weapon_table.h]'s helpers.
-ItemId equipped_ranged(const Inventory& inv) {
-    ItemId best = kInvalidItem;
+int equipped_ranged_slot(const Inventory& inv, const Equipped* eq) {
+    if (eq && eq->weapon < kInvSlots) {
+        const ItemSlot& sl = inv.slots[eq->weapon];
+        if (item_valid(sl.item) && sl.count > 0) {
+            const RangedDef* d = ranged_for_item(sl.item);
+            if (d && !ranged_is_thrown(sl.item)) return eq->weapon;
+        }
+    }
+    int bestIdx = -1;
     float bestDps = 0.0f;
-    for (const ItemSlot& sl : inv.slots) {
+    for (int i = 0; i < kInvSlots; ++i) {
+        const ItemSlot& sl = inv.slots[i];
         if (!item_valid(sl.item) || sl.count == 0) continue;
         const RangedDef* d = ranged_for_item(sl.item);
-        if (!d) continue;
-        // A THROWN weapon is not a gun, and the exclusion is load-bearing rather
-        // than tidy: `grenade` is 75 DPS and beats 26 of the 29 firearms, so without
-        // this line "the best gun in the bag" resolves to a grenade and
-        // player_ranged_step fires one down the camera ray per trigger pull.
-        // [ranged_table.h] ranged_is_thrown — the item is its own ammunition.
-        if (ranged_is_thrown(sl.item)) continue;
+        if (!d || ranged_is_thrown(sl.item)) continue;
         const float dps = ranged_dps(*d);
         if (dps > bestDps) {
             bestDps = dps;
-            best = sl.item;
+            bestIdx = i;
         }
     }
-    return best;
+    return bestIdx;
+}
+
+ItemId equipped_ranged(const Inventory& inv, const Equipped* eq) {
+    const int slot = equipped_ranged_slot(inv, eq);
+    if (slot >= 0 && slot < kInvSlots) return inv.slots[slot].item;
+    return kInvalidItem;
 }
 
 ItemId equipped_throwable(const Inventory& inv) {

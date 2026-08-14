@@ -16,6 +16,7 @@
 #include "game/combat.h"
 #include "game/embody.h"
 #include "game/elevator.h"
+#include "game/equip.h"
 #include "game/fast_travel.h" // §24 hub unlock + boarding gate
 
 #include "game/event_bus.h"

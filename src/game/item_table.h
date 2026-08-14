@@ -71,13 +71,21 @@ enum class UseEffect : std::uint8_t {
     Count
 };
 
+enum class WearKind : std::uint8_t {
+    None = 0,     // never wears (junk, food, documents, ammo)
+    Durability,   // wears per action: melee weapons, tools
+    Charge,       // wears per second/use: battery, flashlight, medkit
+    Fouling,      // wears from environment: filter, gasmask
+    Jamming,      // firearms: fouling accumulates -> misfire roll
+    Count
+};
+
 // Armour channels an item can resist. Must equal DamageChannel::Count in
 // combat.h; asserted in item_table.cpp, which includes both. Declared here rather
 // than including combat.h so this header stays free of the pool/event-bus weight.
 inline constexpr std::size_t kItemResistChannels = 5;
 
-// POD, trivially copyable, 20 bytes, no interior padding. The whole table is
-// 8,920 B — permanently cache-resident, like the mob table.
+// POD, trivially copyable, 28 bytes, no interior padding.
 struct ItemDef {
     std::int32_t value;         //  0  roubles, 0 .. 500,000
     // GRAMS — the SAME unit as [prop_table.h] massG and [mob_table.h] massG, so
@@ -102,9 +110,11 @@ struct ItemDef {
     std::uint8_t stackMax;      // 16  1..255
     std::uint8_t useEffect;     // 17  UseEffect
     std::int8_t resist[kItemResistChannels];  // 18..22, armour; 441 are zero
-    std::uint8_t pad_;          // 23
+    std::uint8_t wearKind;      // 23  WearKind
+    std::uint8_t wearPerUse;    // 24  wear rate per action / second
+    std::uint8_t pad_[3];       // 25..27
 };
-static_assert(sizeof(ItemDef) == 24, "ItemDef must stay a tight 24-byte row");
+static_assert(sizeof(ItemDef) == 28, "ItemDef must stay a tight 28-byte row");
 static_assert(alignof(ItemDef) == 4);
 static_assert(std::is_trivially_copyable_v<ItemDef>);
 

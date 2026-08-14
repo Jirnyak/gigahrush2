@@ -69,6 +69,8 @@
 
 namespace giga::game {
 
+struct Equipped;
+
 inline constexpr std::size_t kRangedCount = 30;
 
 // POD, 18 bytes, no interior padding. The whole table is 540 B.
@@ -166,7 +168,8 @@ inline float ranged_dps(const RangedDef& d) {
 // test is `ranged_is_thrown`, i.e. the item is its own ammunition; see the header
 // note. Grenades are picked by `equipped_throwable` and thrown by
 // `player_throw_step`, on their own button.
-ItemId equipped_ranged(const Inventory& inv);
+ItemId equipped_ranged(const Inventory& inv, const Equipped* eq = nullptr);
+int equipped_ranged_slot(const Inventory& inv, const Equipped* eq = nullptr);
 
 // The best explosive in an inventory, by damage x blast radius, or kInvalidItem.
 //

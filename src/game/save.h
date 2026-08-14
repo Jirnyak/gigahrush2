@@ -133,8 +133,10 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // so version 11 saves are rejected, same standing rule. Note for the archaeologist:
 // kSaveFixedWire lands back on 927, the same number v10 had before hpBank — a
 // coincidence of two DIFFERENT formats (v10 lacked hpBank and had nine axes),
-// not a compatibility.
-inline constexpr std::uint32_t kSaveVersion = 12u;
+// Version 13: Inventory slot grows `condition` (0..255) (+64 bytes on the wire,
+// 5 bytes per slot: item u16 + count u16 + condition u8). Version 12 saves
+// are rejected, same standing rule.
+inline constexpr std::uint32_t kSaveVersion = 13u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -244,7 +246,7 @@ inline constexpr std::size_t kContractWire = 21;     // 4 + 2 + 3x4 + 3   (pad_ 
 inline constexpr std::size_t kBookWire =
     static_cast<std::size_t>(kMaxContracts) * kContractWire + 4 + 4 + 8;
 inline constexpr std::size_t kNeedsWire = 37;        // 9 floats + seeded (v11: +hpBank)
-inline constexpr std::size_t kInventoryWire = static_cast<std::size_t>(kInvSlots) * 4;
+inline constexpr std::size_t kInventoryWire = static_cast<std::size_t>(kInvSlots) * 5;
 inline constexpr std::size_t kPlayerWire = kNeedsWire + kInventoryWire + 4 + 4 + 4 + 3;
 // Version 7: RpgStats wire — field-by-field LE, NOT sizeof (pad_ is written so the
 // footprint stays 12 and matches the POD layout without host padding surprises).

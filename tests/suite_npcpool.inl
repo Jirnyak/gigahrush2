@@ -220,8 +220,8 @@ static void test_npcpool_all() {
         // The capacity is exactly 2^20, so 1 B of row width == 1.0 MiB of table and
         // every figure here is just a row width.
         constexpr std::size_t kRow = static_cast<std::size_t>(kNpcPoolSize);
-        constexpr std::size_t kOldTable = 493u * kRow;   // all 18 columns assign()ed
-        constexpr std::size_t kEagerTable = 306u * kRow; // what init() still writes
+        constexpr std::size_t kOldTable = 621u * kRow;   // all 18 columns assign()ed (Inventory 384 B)
+        constexpr std::size_t kEagerTable = 434u * kRow; // what init() still writes (Inventory 384 B)
 
         NpcPool pool;
         pool.init();
@@ -277,7 +277,7 @@ static void test_npcpool_all() {
                     "(13 B/row eager would be 13.0 MiB)\n",
                     static_cast<unsigned>(live));
         CHECK(live < 128u * 1024u); // 53,248 B: still inside the first 4096-row chunk
-        CHECK(pool.resident_bytes() < 320u * static_cast<std::size_t>(kNpcPoolSize));
+        CHECK(pool.resident_bytes() < 450u * static_cast<std::size_t>(kNpcPoolSize));
     }
 
     { // ---- kill() IS IDEMPOTENT: alive() cannot be double-decremented ----
