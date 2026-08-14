@@ -104,6 +104,109 @@
 
 ---
 
+
+---
+
+## 🧊 Universal Carve System & 3D CSG Voxel Destruction
+
+Destruction in GIGAH\RUSH 2 is not scripted pre-fractured geometry. Every explosion, drill bit, and high-caliber bullet cuts real 3D volumetric boolean subtractions ($A \setminus B$) directly into the sub-voxel material atom grid:
+
+```mermaid
+graph TD
+    A[💥 High-Explosive Charge / Drill Tool] -->|Carve Shape: Sphere / Cylinder| B[Volumetric CSG Carve Kernel]
+    B -->|Bitmask Zeroing in 8x8x8 Atom Cells| C[Octree Chunk Mesh Invalidation]
+    C -->|Bounding Box Sweep| D[6-Connected BFS Structural Support Graph]
+    D -->|Ground Attachment Intact| E[Regenerate Greedy Mesh in O_1]
+    D -->|Disconnected Voxel Cluster| F[Spawn Dynamic Rigid Body Physics Cluster]
+    F -->|Kinetic Momentum Impact on Floor| G[Seismic Sub-Bass Audio DSP Web Audio]
+    E -->|GPU Vertex Buffer Update| H[WebGL 2.0 / Vulkan Render Pipeline]
+```
+
+### ⛏️ 1. Carve Geometry Primitives & Material Hardness Thresholds
+
+| Carve Tool / Munition | Geometry Primitive | Bounding Radius ($r$) | Penetration Limit | Material Destruction Threshold |
+| :--- | :--- | :--- | :--- | :--- |
+| **Pickaxe / Crowbar** | Point Ellipsoid | $r = 0.35\text{ m}$ | Single cell ($1\text{ atom}$) | Plaster, drywall, glass, rotted wood |
+| **12.7mm AP Heavy Bullet**| Linear Cylinder Tunnel | $r = 0.12\text{ m}, L = 2.4\text{ m}$ | Pierces 3 walls | Cinder blocks, brickwork, light sheet metal |
+| **Mining Plasma Torch** | Conical Extrusion | $r = 0.60\text{ m}, L = 1.8\text{ m}$ | Continuous stream | Reinforced concrete, rebar lattice, safe doors |
+| **RPG-7 Shaped Charge** | Dual-Stage Cone + Sphere | $r_{\text{jet}} = 0.15\text{ m}, r_{\text{blast}} = 2.2\text{ m}$ | Pierces armored bunker | Sintered titanium plates, blast vault doors |
+| **Samosbor Reality Breach**| Non-Euclidean Wavefront| $r = \text{Floor-wide wave}$ | Eradicates all materials | Erases voxels into purple vacuum voids |
+
+---
+
+### 🏗️ 2. 6-Connected BFS Structural Integrity & Collapse Algorithm
+
+When voxels are carved, the engine executes a lightning-fast 6-connected Breadth-First Search (BFS) bounded within the affected chunk neighborhood to ensure structural stability:
+
+```cpp
+// Production C++23 Structural Support BFS Traversal
+bool EvaluateStructuralSupport(const VoxelCoord& origin, const VoxelChunkGrid& grid) {
+    std::queue<VoxelCoord> bfsQueue;
+    std::unordered_set<uint64_t> visitedKeys;
+    
+    bfsQueue.push(origin);
+    visitedKeys.insert(origin.PackKey());
+    
+    while (!bfsQueue.empty()) {
+        VoxelCoord current = bfsQueue.front();
+        bfsQueue.pop();
+        
+        // Ground anchor reached (Level Floor Y == 0 or Bedrock Beam)
+        if (current.y == 0 || grid.IsIndestructibleBedrock(current)) {
+            return true; // Structure is solidly grounded
+        }
+        
+        // Check 6 axial neighbors (+X, -X, +Y, -Y, +Z, -Z)
+        for (const auto& offset : kSixAxialNeighbors) {
+            VoxelCoord neighbor = current + offset;
+            uint64_t key = neighbor.PackKey();
+            
+            if (grid.IsSolidVoxel(neighbor) && !visitedKeys.contains(key)) {
+                visitedKeys.insert(key);
+                bfsQueue.push(neighbor);
+            }
+        }
+        
+        // Bounded neighborhood limit to prevent worst-case stalls
+        if (visitedKeys.size() > kMaxStructuralSearchDepth) {
+            return true; // Assumed anchored beyond local search radius
+        }
+    }
+    
+    return false; // Unsupported floating cluster: detach and apply gravity!
+}
+```
+
+---
+
+### 🎨 3. Greedy Meshing & Ambient Occlusion (AO) Vertex Packing
+
+To render complex brutalist megastructures at 60+ FPS, adjacent co-planar voxel faces are merged into optimized quads with packed 32-bit vertex attributes:
+
+```
+               PACKED 32-BIT VERTEX ATTRIBUTE FORMAT
+ ┌──────────────┬──────────────┬──────────────┬──────────┬─────────────┐
+ │ Position X   │ Position Y   │ Position Z   │ AO Level │ Material ID │
+ │ (6 bits:0-63)│ (6 bits:0-63)│ (6 bits:0-63)│ (2 bits) │ (12 bits)   │
+ └──────────────┴──────────────┴──────────────┴──────────┴─────────────┘
+  31          26 25          20 19          14 13      12 11          0
+```
+
+* **Ambient Occlusion (AO)**: Evaluates 4 corner occlusion values ($0 = \text{Dark Corner}, 3 = \text{Unobstructed Flat}$) computed from 3 neighboring adjacent voxels.
+* **Zero-Allocation Chunk Mesh Rebuild**: Invalidation flags only trigger vertex buffer uploads for modified $16^3$ sub-chunks.
+
+---
+
+### 👥 4. 1,000,000 Cold NPC Macropopulation Sim Engine
+
+The cold society simulation operates as a deterministic background cellular automaton tracking all 1,000,000 tower inhabitants across 10,000 vertical floors:
+
+| Simulation Tier | Entity Capacity | Update Frequency | Tracked Parameters | Memory Footprint |
+| :--- | :--- | :--- | :--- | :--- |
+| **Hot Tier (Embodied)** | Up to $16,000\text{ NPCs}$ | Every frame ($60\text{ Hz}$) | Real 3D physics, combat AI, raycasts, inventory | $\approx 32\text{ MB}$ (EnTT ECS) |
+| **Warm Tier (Current Floor)** | Up to $64,000\text{ NPCs}$ | Every second ($1\text{ Hz}$) | Cell room location, hunger/sleep, social gossip | $\approx 8\text{ MB}$ (Flat Arrays) |
+| **Cold Tier (Entire Tower)** | $1,000,000\text{ NPCs}$ | Every $60\text{ seconds}$ | Floor migration, economy barter, birth/death rate| $\approx 48\text{ MB}$ (Packed Structs)|
+
 ## 📚 Documentation Map
 
 `AGENTS.md` and `ARCHITECTURE.md` both state that this README orchestrates the
