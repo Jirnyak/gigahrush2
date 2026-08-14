@@ -1,6 +1,8 @@
 #include "game/extraction.h"
 
+#include <cmath>
 #include "game/combat.h"   // equipped_melee / equipped_armour
+#include "game/ranged_table.h" // equipped_ranged
 #include "world/materials.h"
 #include "world/types.h"
 
@@ -12,9 +14,9 @@ bool on_extraction_pad(const MacroGrid& grid, const vec3& pos) {
     // sandwich at z=127 (the torus's z-wrap), which is exactly where the
     // extraction paint lives. The old "z must not wrap" guard came from the
     // pre-module stack-of-storeys geometry and made the bank undetectable.
-    const int cx = static_cast<int>(pos.x / kCellSize);
-    const int cy = static_cast<int>(pos.y / kCellSize);
-    const int cz = static_cast<int>(pos.z / kCellSize);
+    const int cx = wrap_macro(static_cast<int>(std::floor(pos.x / kCellSize)));
+    const int cy = wrap_macro(static_cast<int>(std::floor(pos.y / kCellSize)));
+    const int cz = wrap_macro(static_cast<int>(std::floor(pos.z / kCellSize)));
     // The cell the feet are in, then the one below. A standing body's origin sits a
     // little above the surface it rests on, so checking only the containing cell
     // makes the pad work when you clip into it and not when you stand on it.
@@ -45,7 +47,8 @@ bool bankable_slot(const Inventory& inv, int slot) {
     // What you are holding stays in your hands. Banking must never disarm you — if
     // it did, the optimal play would be to never bank, and the whole mechanic would
     // be stillborn.
-    if (sl.item == equipped_melee(inv) || sl.item == equipped_armour(inv))
+    if (sl.item == equipped_melee(inv) || sl.item == equipped_ranged(inv) ||
+        sl.item == equipped_armour(inv))
         return false;
     return bankable_category(static_cast<ItemCategory>(item_def(sl.item).category));
 }

@@ -470,7 +470,8 @@ static void DrawCraftingWindowUI(bool* p_open, game::CraftingState& crafting,
 
                     if (ImGui::Button(btnId)) {
                         game::DisassembleResult dres = game::craft_disassemble(
-                            crafting, inv, slot, currentStation, static_cast<std::uint32_t>(simTick));
+                            crafting, inv, slot, currentStation,
+                            static_cast<std::uint32_t>(simTick ^ (static_cast<std::uint32_t>(slot) * 0x9e3779b9u)));
                         if (dres.fail == game::CraftFail::None) {
                             outScrapped++;
                             if (dres.learned) outLearned++;
@@ -1596,6 +1597,7 @@ int main(int argc, char** argv) {
         else if (a == "--orbit") { shotOrbit = true; }
         else if (a == "--action" && i + 1 < argc) { shotAction = argv[++i]; }
     }
+    const bool shotFloorRequested = shotFloorWanted;
 
     // SAY WHICH BINARY THIS IS, every launch. An unoptimized tree is ~10x
     // slower on the sim (measured 2026-08-05: 62 ms/frame at -O0 against 5.9 ms
@@ -5829,12 +5831,19 @@ int main(int argc, char** argv) {
                     if (!pool.valid(id) || !pool.alive(id)) continue;
                     const vec3& npos = reg.get<const Transform>(npcEnt).pos;
                     const float dx = wrap_delta_f(ppos.x, npos.x, kWorldExtent);
-                    const float dy = ppos.y - npos.y;
+                    const float dy = wrap_delta_f(ppos.y, npos.y, kWorldExtent);
                     const float dz = wrap_delta_f(ppos.z, npos.z, kWorldExtent);
                     if (dx * dx + dy * dy + dz * dz < 6.0f * 6.0f) {
                         set_prompt("possess", "POSSESS SURVIVOR");
                         break;
                     }
+                }
+            }
+
+            // Standing on extraction pad -> vendor trade / resupply available
+            if (!promptText && activeLayer != kInvalidLayer) {
+                if (game::on_extraction_pad(stack.layer(activeLayer).grid(), ppos)) {
+                    set_prompt("vendor", "TRADE / RESUPPLY (EXTRACTION PAD)");
                 }
             }
 
@@ -6347,8 +6356,8 @@ int main(int argc, char** argv) {
             if (shotPath) {
                 ++shotFramesSeen;
                 // --floor: one absolute hop through the console-teleport seam,
-                // at the same cadence rides use (the nav bake needs its ~5 s).
-                if (shotFloorWanted && shotFramesSeen % 420 == 0) {
+                // triggered on frame 1 or at the 420 cadence for rides.
+                if (shotFloorWanted && (shotFramesSeen == 1 || shotFramesSeen % 420 == 0)) {
                     shotFloorWanted = false;
                     pendingTeleport = shotFloor;
                 }
@@ -6480,6 +6489,11 @@ int main(int argc, char** argv) {
                     std::fprintf(stderr, "shot: %s -> %s (floor %d, %d frames)\n",
                                  ok ? "saved" : "FAILED", shotPath, currentFloor,
                                  shotFramesSeen);
+                    if (shotFloorRequested && currentFloor != shotFloor) {
+                        std::fprintf(stderr,
+                                     "shot: WARNING: requested floor %d != captured floor %d\n",
+                                     shotFloor, currentFloor);
+                    }
                     if (shotAction == "mag" && reg.valid(player)) {
                         const game::PlayerRanged* pr =
                             reg.try_get<game::PlayerRanged>(player);

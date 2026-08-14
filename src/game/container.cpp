@@ -355,7 +355,7 @@ std::int32_t loot_containers_step(Registry& reg, NpcPool& pool, LayerId layer,
         if (t.layer != layer) continue;
         const float dx = wrap_delta_f(pos.x, t.pos.x, kWorldExtent);
         const float dy = wrap_delta_f(pos.y, t.pos.y, kWorldExtent);
-        const float dz = wrap_delta_f(pos.z, t.pos.z, kWorldExtent);
+        const float dz = pos.z - t.pos.z;
         if (dx * dx + dy * dy + dz * dz > kContainerReach * kContainerReach) continue;
 
         bool anyMoved = false;
@@ -365,7 +365,7 @@ std::int32_t loot_containers_step(Registry& reg, NpcPool& pool, LayerId layer,
             const std::uint16_t placed = static_cast<std::uint16_t>(c.count[i] - unplaced);
             if (placed > 0) {
                 took += item_def(c.item[i]).value * static_cast<std::int32_t>(placed);
-                c.count[i] = unplaced;
+                c.count[i] = static_cast<std::uint8_t>(unplaced);
                 if (unplaced == 0) c.item[i] = kInvalidItem;
                 anyMoved = true;
             }

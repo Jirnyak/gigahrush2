@@ -474,7 +474,7 @@ CorpseLootResult loot_corpse_interact(Registry& reg, NpcPool& pool, EventBus& bu
         const Transform& tr = reg.get<const Transform>(e);
         if (tr.layer != layer) continue;
         float dx = wrap_delta_f(playerPos.x, tr.pos.x, kWorldExtent);
-        float dy = playerPos.y - tr.pos.y;
+        float dy = wrap_delta_f(playerPos.y, tr.pos.y, kWorldExtent);
         float dz = wrap_delta_f(playerPos.z, tr.pos.z, kWorldExtent);
         float distSq = dx * dx + dy * dy + dz * dz;
         if (distSq < minDistSq) {
