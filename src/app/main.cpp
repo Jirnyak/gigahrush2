@@ -95,6 +95,7 @@
 
 #include "render/gpu_timer.h"
 #include "render/gpu_light_grid.h"
+#include "render/gpu_gas_pass.h"
 
 #include "render/gpu_cull_pass.h"
 #include "render/imgui_layer.h"
@@ -1740,6 +1741,12 @@ int main(int argc, char** argv) {
                            voxelMirror.masks_buffer())) {
         std::fprintf(stderr,
                      "[particle] pass init failed (continuing without particles)\n");
+    }
+
+    gpu::GpuGasPass gasPass;
+    if (!gasPass.init(&device, GIGA_SHADER_DIR, voxelMirror.class_buffer())) {
+        std::fprintf(stderr,
+                     "[gas] pass init failed (continuing without GPU gas sim)\n");
     }
     // Severed pipe stumps ([merge_ecs_prop_meshes]) — each drips on a slow
     // clock while its floor stays loaded. Refilled at every prop merge.
@@ -6162,6 +6169,10 @@ int main(int argc, char** argv) {
                 particlePass.record_sim(
                     cmd, 1.0f / 60.0f,
                     stack.layer(activeLayer).gravity().global);
+            if (gasPass.ready() && activeLayer != kInvalidLayer) {
+                const CellStep downStep = regime_down(stack.layer(activeLayer).gravity().regime);
+                gasPass.record_sim(cmd, downStep, 1.0f / 60.0f, 0.15f, 0.40f);
+            }
             renderer.timer.pass_end(cmd, gpu::GpuPass::SimPhysics);
 
             renderer.begin_pass(0.0f, 0.0f, 0.0f);
@@ -6427,6 +6438,7 @@ int main(int argc, char** argv) {
     // --- teardown (reverse order) -----------------------------------------
     hud.destroy();
 
+    gasPass.destroy();
     particlePass.destroy();
     clothPass.destroy();
     wirePass.destroy();

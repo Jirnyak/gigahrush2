@@ -505,6 +505,12 @@ float slow_scale(const Registry& reg, Entity e);
 // caught in mid-air.
 std::uint32_t slow_step(Registry& reg, LayerId layer, float dt);
 
+// Environmental gas/smoke absorption by equipped filters and continuous battery usage (Spec 03 §4.2).
+// Staggered 1-in-16 by entity id. Returns count of degraded items.
+std::uint32_t fouling_step(Registry& reg, NpcPool& pool, LayerId layer,
+                           const float* gasField, const float* smokeField,
+                           float dt, std::uint64_t tick);
+
 struct Equipped;
 
 int equipped_melee_slot(const Inventory& inv, const Equipped* eq = nullptr);

@@ -316,6 +316,31 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
 
     out.blocked = static_cast<std::int16_t>(raw - dmg);
 
+    // Spec 03 §4.1: Armor condition degradation when absorbing damage
+    if (out.blocked > 0 && reg.valid(target)) {
+        if (const NpcRef* tn = reg.try_get<NpcRef>(target)) {
+            if (pool.valid(tn->id)) {
+                Inventory& inv = pool.inventory(tn->id);
+                const Equipped* eq = reg.try_get<Equipped>(target);
+                const int armSlot = equipped_armour_slot(inv, eq);
+                if (armSlot >= 0 && armSlot < kInvSlots) {
+                    ItemSlot& aslot = inv.slots[armSlot];
+                    if (item_valid(aslot.item) && aslot.condition > 0) {
+                        const ItemDef& adef = item_def(aslot.item);
+                        const std::uint32_t wearRate = std::max(1u, (static_cast<std::uint32_t>(out.blocked) *
+                            (adef.wearPerUse > 0 ? static_cast<std::uint32_t>(adef.wearPerUse) : 2u) + 7u) / 8u);
+                        if (aslot.condition > wearRate) {
+                            aslot.condition = static_cast<std::uint8_t>(aslot.condition - wearRate);
+                        } else {
+                            aslot.condition = 0;
+                        }
+                        sync_armour(reg, pool, target);
+                    }
+                }
+            }
+        }
+    }
+
     // Where the HP lives depends on what the target is, and that is the only
     // branch: everything above and below is common.
     std::int16_t* hp = nullptr;
@@ -1046,15 +1071,29 @@ void sync_armour(Registry& reg, NpcPool& pool, Entity e) {
     const NpcRef* n = reg.try_get<NpcRef>(e);
     if (!n || !pool.valid(n->id)) return;
 
-    const ItemId worn = equipped_armour(pool.inventory(n->id), reg.try_get<Equipped>(e));
-    if (worn == kInvalidItem) {
+    const Equipped* eq = reg.try_get<Equipped>(e);
+    const Inventory& inv = pool.inventory(n->id);
+    const int slotIdx = equipped_armour_slot(inv, eq);
+    if (slotIdx < 0 || slotIdx >= kInvSlots) {
         if (reg.all_of<Armour>(e)) reg.remove<Armour>(e);
         return;
     }
-    const ItemDef& d = item_def(worn);
+
+    const ItemSlot& sl = inv.slots[slotIdx];
+    if (sl.item == kInvalidItem || sl.count == 0 || sl.condition == 0) {
+        if (reg.all_of<Armour>(e)) reg.remove<Armour>(e);
+        return;
+    }
+
+    const ItemDef& d = item_def(sl.item);
     Armour a{};
-    for (std::size_t c = 0; c < kDamageChannels; ++c)
-        a.resist[c] = d.resist[c];
+    const float condScale = 0.20f + 0.80f * (static_cast<float>(sl.condition) / 255.0f);
+    for (std::size_t c = 0; c < kDamageChannels; ++c) {
+        int scaledResist = static_cast<int>(static_cast<float>(d.resist[c]) * condScale + 0.5f);
+        if (scaledResist > 95) scaledResist = 95;
+        if (scaledResist < -100) scaledResist = -100;
+        a.resist[c] = static_cast<std::int8_t>(scaledResist);
+    }
     reg.emplace_or_replace<Armour>(e, a);
 }
 
@@ -1909,18 +1948,35 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
 
     if (!wantFire || pr.cooldownMs > 0) return 0;
 
-    // Spec 03 §4.1: Jamming malfunction roll on fouled weapons.
+    // Spec 03 §4.1: Piecewise jamming malfunction roll on fouled weapons.
     ItemSlot& gSlot = inv.slots[gunSlot];
     const ItemDef& d = item_def(gSlot.item);
     if (d.wearKind == static_cast<std::uint8_t>(WearKind::Jamming)) {
-        const std::uint32_t fouling = static_cast<std::uint32_t>(255u - gSlot.condition);
-        if (fouling > 0) {
+        const std::uint8_t cond = gSlot.condition;
+        if (cond < 200u) {
+            float jamProb = 0.0f;
+            if (cond >= 128u) {
+                // Low risk zone: 0% .. 5%
+                jamProb = (static_cast<float>(200u - cond) / 72.0f) * 0.05f;
+            } else {
+                // Critical fouling zone: 5% .. 50%
+                const float t = static_cast<float>(128u - cond) / 128.0f;
+                jamProb = 0.05f + 0.45f * (t * t);
+            }
+
+            if (const RpgStats* rs = reg.try_get<RpgStats>(shooter)) {
+                const float agiFactor = static_cast<float>(agi_attack_speed_mult_e3(*rs)) / 1000.0f;
+                jamProb *= agiFactor;
+            }
+
+            const std::uint32_t jamThreshold = static_cast<std::uint32_t>(jamProb * 1000.0f + 0.5f);
             const std::uint32_t jamHash = hash_u32((static_cast<std::uint32_t>(nr->id) * 0x9e3779b9u) ^
                                                    (static_cast<std::uint32_t>(tick) * 0x7feb352du) ^ 0x7A391u);
             const std::uint32_t jamRoll = jamHash % 1000u;
-            if (jamRoll < (fouling * 300u / 255u)) {
+            if (jamRoll < jamThreshold) {
                 pr.cooldownMs = static_cast<std::uint16_t>(def->cooldownMs * 2);
                 if (bus) {
+                    const std::uint32_t fouling = static_cast<std::uint32_t>(255u - cond);
                     bus->publish(EventType::WeaponJammed, nr->id, gSlot.item, fouling, tick);
                 }
                 return 0; // Jammed! Misfire
@@ -2329,6 +2385,61 @@ void transfer_player_progression(Registry& reg, Entity from, Entity to) {
         dst.hits = hits;
         reg.emplace_or_replace<PlayerRanged>(to, dst);
     }
+}
+
+std::uint32_t fouling_step(Registry& reg, NpcPool& pool, LayerId layer,
+                           const float* gasField, const float* smokeField,
+                           float dt, std::uint64_t tick) {
+    (void)dt;
+    std::uint32_t processed = 0;
+
+    for (auto e : reg.view<const NpcRef, const Transform, const Equipped>()) {
+        const Transform& tr = reg.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+
+        const NpcRef& nr = reg.get<const NpcRef>(e);
+        if (!pool.valid(nr.id)) continue;
+
+        // Identity stagger 1-in-16 ticks (matches encumbrance_step)
+        if ((tick + static_cast<std::uint64_t>(nr.id)) % 16 != 0) continue;
+
+        const Equipped& eq = reg.get<const Equipped>(e);
+        if (eq.tool == kEquipNone || eq.tool >= kInvSlots) continue;
+
+        Inventory& inv = pool.inventory(nr.id);
+        ItemSlot& toolSlot = inv.slots[eq.tool];
+        if (!item_valid(toolSlot.item) || toolSlot.count == 0) continue;
+
+        const ItemDef& def = item_def(toolSlot.item);
+        if (def.wearKind == static_cast<std::uint8_t>(WearKind::Fouling)) {
+            // Environment gas / smoke absorption
+            float envHazard = 0.0f;
+            if (gasField || smokeField) {
+                const int cx = wrap_macro(static_cast<int>(tr.pos.x / kCellSize));
+                const int cy = wrap_macro(static_cast<int>(tr.pos.y / kCellSize));
+                const int cz = wrap_macro(static_cast<int>(tr.pos.z / kCellSize));
+                const std::size_t idx = macro_index(cx, cy, cz);
+                if (gasField) envHazard += gasField[idx];
+                if (smokeField) envHazard += smokeField[idx] * 0.5f;
+            }
+
+            if (envHazard > 0.05f) {
+                const std::uint8_t foulRate = static_cast<std::uint8_t>(
+                    std::clamp(static_cast<int>(envHazard * 4.0f + 0.5f), 1, 8));
+                if (toolSlot.condition > foulRate) toolSlot.condition = static_cast<std::uint8_t>(toolSlot.condition - foulRate);
+                else toolSlot.condition = 0;
+                ++processed;
+            }
+        } else if (def.wearKind == static_cast<std::uint8_t>(WearKind::Charge)) {
+            // Continuous battery consumption
+            if (def.wearPerUse > 0 && toolSlot.condition > 0) {
+                if (toolSlot.condition > def.wearPerUse) toolSlot.condition = static_cast<std::uint8_t>(toolSlot.condition - def.wearPerUse);
+                else toolSlot.condition = 0;
+                ++processed;
+            }
+        }
+    }
+    return processed;
 }
 
 } // namespace giga::game

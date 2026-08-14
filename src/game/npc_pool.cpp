@@ -371,6 +371,14 @@ std::array<Relationship, kRelSlots>& NpcPool::relations(NpcId id) {
     return rel_[id];
 }
 
+const std::array<Relationship, kRelSlots>& NpcPool::relations(NpcId id) const {
+    // Const accessor cannot materialise the column. If rel_ has not been touched
+    // yet, return a static blank row (all kInvalidNpc targets).
+    static const std::array<Relationship, kRelSlots> kBlankRel{};
+    if (id >= rel_.size()) return kBlankRel;
+    return rel_[id];
+}
+
 void NpcPool::set_name(NpcId id, const char* first, const char* last) {
     if (!valid(id)) return;
     // valid(id) means id < count_, so growing to count_ always covers the row.
