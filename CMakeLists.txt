@@ -921,8 +921,8 @@ if(GIGA_BUILD_TESTS)
     # claims the body / steers along the flow in the walking plane only, the
     # PosX gravity-axis sentinel survives (mutation: unconditional axis writes
     # -> 2 red), and an Ai-owned body is never re-steered (suite_utilai).
-    # 243651 on 2026-08-14: environmental gas suffocation & filter protection suite (suite_needs.inl).
-        PASS_REGULAR_EXPRESSION "game_test: 243651 checks, 0 failures")
+    # 243672 on 2026-08-14: verified full ALife memory traces, gas suffocation & filter protection suite.
+        PASS_REGULAR_EXPRESSION "game_test: 243672 checks, 0 failures")
 
 
 
