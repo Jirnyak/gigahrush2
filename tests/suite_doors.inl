@@ -606,7 +606,7 @@ static void test_door_shut_all_and_locks() {
 
     DoorSet doors;
     const std::uint32_t built = door_build(w, doors, /*number=*/0, res, layer);
-    if (built == 0) return;
+    CHECK(built > 0);
 
     Registry reg;
     // With nothing shut, toggle_locks shuts every door.

@@ -410,7 +410,7 @@ std::int32_t contract_step(ContractBook& book, const NpcPool& pool, Inventory& i
                     if (s.item != c.subject) continue;
                     const std::int32_t take = s.count < need ? s.count : need;
                     s.count = static_cast<std::uint16_t>(s.count - take);
-                    if (s.count == 0) s.item = kInvalidItem;
+                    if (s.count == 0) s = ItemSlot{};
                     need -= take;
                 }
                 break;

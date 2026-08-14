@@ -6197,23 +6197,19 @@ int main(int argc, char** argv) {
             // the player is an NPC with a camera, never a special case:
             // wires and curtains answer to the whole crowd identically).
             {
-                static std::vector<vec4> pushBodies;
-                pushBodies.clear();
+                static std::array<vec4, gpu::kMaxPushBodies> pushBodies;
+                std::uint32_t pushBodyCount = 0;
                 for (auto pushEntity :
                      reg.view<const Transform, const AABB, const Renderable>()) {
                     if (reg.all_of<StaticPropTag>(pushEntity)) continue;
                     const Transform& tr = reg.get<const Transform>(pushEntity);
                     if (tr.layer != activeLayer) continue;
-                    pushBodies.push_back(
-                        vec4{tr.pos.x, tr.pos.y, tr.pos.z, 0.9f});
-                    if (pushBodies.size() >= gpu::kMaxPushBodies) break;
+                    pushBodies[pushBodyCount++] =
+                        vec4{tr.pos.x, tr.pos.y, tr.pos.z, 0.9f};
+                    if (pushBodyCount >= gpu::kMaxPushBodies) break;
                 }
-                wirePass.upload_bodies(pushBodies.data(),
-                                       static_cast<std::uint32_t>(
-                                           pushBodies.size()));
-                clothPass.upload_bodies(pushBodies.data(),
-                                        static_cast<std::uint32_t>(
-                                            pushBodies.size()));
+                wirePass.upload_bodies(pushBodies.data(), pushBodyCount);
+                clothPass.upload_bodies(pushBodies.data(), pushBodyCount);
             }
 
             // Wire verlet: aliveness from the LIVE grid (anchor probe), then

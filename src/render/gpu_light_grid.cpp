@@ -219,16 +219,25 @@ void GpuLightGrid::add_light(const vec3& pos, float radius, const vec3& color, f
 
 void GpuLightGrid::sort_lights_by_distance(const vec3& camPos) noexcept {
     if (stagingLightCount_ <= 1) return;
-    std::sort(stagingLights_, stagingLights_ + stagingLightCount_,
-              [&camPos](const GpuPointLight& a, const GpuPointLight& b) {
-                  float dxa = wrap_delta_f(camPos.x, a.posRadius.x, kWorldExtent);
-                  float dya = wrap_delta_f(camPos.y, a.posRadius.y, kWorldExtent);
-                  float dza = wrap_delta_f(camPos.z, a.posRadius.z, kWorldExtent);
-                  float dxb = wrap_delta_f(camPos.x, b.posRadius.x, kWorldExtent);
-                  float dyb = wrap_delta_f(camPos.y, b.posRadius.y, kWorldExtent);
-                  float dzb = wrap_delta_f(camPos.z, b.posRadius.z, kWorldExtent);
-                  return (dxa * dxa + dya * dya + dza * dza) < (dxb * dxb + dyb * dyb + dzb * dzb);
-              });
+    struct LightDist {
+        uint16_t idx;
+        float distSq;
+    };
+    LightDist dists[kMaxPointLights];
+    for (uint32_t i = 0; i < stagingLightCount_; ++i) {
+        const vec4& p = stagingLights_[i].posRadius;
+        const float dx = wrap_delta_f(camPos.x, p.x, kWorldExtent);
+        const float dy = wrap_delta_f(camPos.y, p.y, kWorldExtent);
+        const float dz = wrap_delta_f(camPos.z, p.z, kWorldExtent);
+        dists[i] = { static_cast<uint16_t>(i), dx * dx + dy * dy + dz * dz };
+    }
+    std::sort(dists, dists + stagingLightCount_,
+              [](const LightDist& a, const LightDist& b) { return a.distSq < b.distSq; });
+    GpuPointLight temp[kMaxPointLights];
+    for (uint32_t i = 0; i < stagingLightCount_; ++i) {
+        temp[i] = stagingLights_[dists[i].idx];
+    }
+    std::memcpy(stagingLights_, temp, stagingLightCount_ * sizeof(GpuPointLight));
 }
 
 void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, uint32_t frameIndex, float timeSec, const vec3& camPos) noexcept {

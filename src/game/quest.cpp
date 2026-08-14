@@ -371,7 +371,7 @@ std::int32_t quest_step(QuestLog& log, const NpcPool& pool, Inventory& inv,
                             : need;
                     s.count = static_cast<std::uint16_t>(
                         static_cast<std::int32_t>(s.count) - take);
-                    if (s.count == 0) s.item = kInvalidItem;
+                    if (s.count == 0) s = ItemSlot{};
                     need -= take;
                 }
                 break;

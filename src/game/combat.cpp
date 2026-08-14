@@ -203,7 +203,7 @@ vec3 muzzle_point(const vec3& from, const vec3& unitDir, const vec3& sourcePos) 
     const float r = kProjHitRadius + 0.05f;
     const vec3 d{wrap_delta_f(sourcePos.x, from.x, kWorldExtent),
                  wrap_delta_f(sourcePos.y, from.y, kWorldExtent),
-                 from.z - sourcePos.z};
+                 wrap_delta_f(sourcePos.z, from.z, kWorldExtent)};
     const float b = dot(unitDir, d);
     const float c = dot(d, d) - r * r;
     // Ray/sphere: with |unitDir| = 1 the exit parameter is -b + sqrt(b^2 - c). A
@@ -370,7 +370,9 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
         if (reg.valid(source) && reg.all_of<Transform>(source)) {
             const vec3& srcPos = reg.get<Transform>(source).pos;
             const vec3& tgtPos = targetTr->pos;
-            vec3 d = tgtPos - srcPos;
+            vec3 d{wrap_delta_f(srcPos.x, tgtPos.x, kWorldExtent),
+                   wrap_delta_f(srcPos.y, tgtPos.y, kWorldExtent),
+                   wrap_delta_f(srcPos.z, tgtPos.z, kWorldExtent)};
             if (gravity) {
                 const vec3 g = gravity->at(tgtPos);
                 const float gLen = length(g);
@@ -434,7 +436,9 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
             vec3 dir = up * 0.45f;
             if (reg.valid(source)) {
                 if (const Transform* st = reg.try_get<Transform>(source)) {
-                    vec3 away = tt->pos - st->pos;
+                    vec3 away{wrap_delta_f(st->pos.x, tt->pos.x, kWorldExtent),
+                              wrap_delta_f(st->pos.y, tt->pos.y, kWorldExtent),
+                              wrap_delta_f(st->pos.z, tt->pos.z, kWorldExtent)};
                     away = away - up * dot(away, up);  // drop the vertical part
                     const float len = length(away);
                     if (len > 1e-3f) dir = dir + away * (0.8f / len);
@@ -601,7 +605,7 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
                 const float cs = static_cast<float>(kCellSize);
                 const int bx = wrap_macro(static_cast<int>(std::floor(bodyPos.x / cs)));
                 const int by = wrap_macro(static_cast<int>(std::floor(bodyPos.y / cs)));
-                const int bz = static_cast<int>(std::floor(bodyPos.z / cs));
+                const int bz = wrap_macro(static_cast<int>(std::floor(bodyPos.z / cs)));
 
                 auto push_corpse = [&](ItemId id, std::uint16_t count) -> std::uint16_t {
                     if (id == kInvalidItem || count == 0) return 0;
@@ -621,7 +625,7 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
                         if (ct.layer != bodyLayer) continue;
                         const int cx = wrap_macro(static_cast<int>(std::floor(ct.pos.x / cs)));
                         const int cy = wrap_macro(static_cast<int>(std::floor(ct.pos.y / cs)));
-                        const int cz = static_cast<int>(std::floor(ct.pos.z / cs));
+                        const int cz = wrap_macro(static_cast<int>(std::floor(ct.pos.z / cs)));
                         if (cx != bx || cy != by || cz != bz) continue;
                         Container& c = reg.get<Container>(ce);
                         const std::uint16_t cap = item_def(id).stackMax ? item_def(id).stackMax : 255u;
@@ -757,11 +761,19 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
 
         // Environmental hazard check
         if (!has_flag(def.aiFlags, AiFlag::Flying)) {
-            int cx = wrap_macro(static_cast<int>(tr.pos.x / kCellSize));
-            int cy = wrap_macro(static_cast<int>(tr.pos.y / kCellSize));
-            int cz = wrap_macro(static_cast<int>(tr.pos.z / kCellSize));
+            const int cx = wrap_macro(static_cast<int>(std::floor(tr.pos.x / kCellSize)));
+            const int cy = wrap_macro(static_cast<int>(std::floor(tr.pos.y / kCellSize)));
+            const int cz = wrap_macro(static_cast<int>(std::floor(tr.pos.z / kCellSize)));
             CellType cellType = grid.cell(cx, cy, cz);
-            CellType floorType = grid.cell(cx, cy, wrap_macro(cz - 1));
+            CellStep d{0, 0, -1};
+            if (gravity) {
+                GravityRegime r = gravity->regime;
+                if (r == GravityRegime::Custom) r = regime_from_vector(gravity->at(tr.pos));
+                d = regime_down(r);
+            }
+            CellType floorType = (d.x != 0 || d.y != 0 || d.z != 0)
+                ? grid.cell(wrap_macro(cx + d.x), wrap_macro(cy + d.y), wrap_macro(cz + d.z))
+                : kCellAir;
             CellHazard hz = get_cell_hazard(cellType);
             if (!hz.active) hz = get_cell_hazard(floorType);
             if (hz.active) {
@@ -1148,10 +1160,15 @@ void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
     // bit-for-bit what it replaced (dot with (0,0,1) IS dz, and Δ − up*dz IS
     // (dx, dy, 0) exactly).
     vec3 up{0.0f, 0.0f, 1.0f};
+    float gMag = kProjGravity;
     if (gravity) {
         const vec3 g = gravity->at(from);
         const float gLen = length(g);
-        if (gLen > 1e-6f) up = g * (-1.0f / gLen);
+        if (gLen > 1e-6f) {
+            up = g * (-1.0f / gLen);
+        } else {
+            gMag = 0.0f;
+        }
     }
 
     const vec3 delta{wrap_delta_f(from.x, to.x, kWorldExtent),
@@ -1162,33 +1179,17 @@ void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
     const float dUp = dot(delta, up);
     const vec3 across = delta - up * dUp;
     const float flat = length(across);
-    if (flat < 1e-3f) return;
 
-    // THE MUZZLE IS OUTSIDE THE SHOOTER, and this is what pays for a projectile that
-    // remembers nothing about who fired it.
-    //
-    // This used to be born at `from + (0, 0, 0.6)` — 0.6 m above the shooter's own
-    // origin, INSIDE kProjHitRadius (0.75 m). So the shot was already touching its
-    // own shooter on the very first step, and the only thing that stopped every
-    // ranged monster from killing itself the instant it attacked was the hit loop
-    // remembering `p.source` and skipping it. That was not a rule of the game
-    // pretending to be geometry; it was a geometry defect being paid for with a rule.
-    // `spawn_projectile_dir` never had the problem — it has always used
-    // kMuzzleForward — so the two spawners disagreed about their own physics.
-    //
-    // Fixed by putting the barrel where a barrel is: kMuzzleForward (1.7 m) along the
-    // firing direction, which is more than twice the hit radius. The time of flight
-    // is recomputed from the distance that ACTUALLY remains, so the lob still lands
-    // on the target instead of 1.7 m past it.
-    const vec3 fwd = across * (1.0f / flat);   // was (dx/flat, dy/flat, 0)
-    const float travel = flat - kMuzzleForward;
+    const vec3 fwd = (flat >= 1e-3f) ? across * (1.0f / flat)
+                                     : (dUp >= 0.0f ? up : up * -1.0f);
+    const float travel = (flat >= 1e-3f) ? (flat - kMuzzleForward)
+                                         : (std::abs(dUp) - kMuzzleForward);
     // Point-blank: the target is already inside the barrel length. Floor the distance
     // rather than refusing the shot — a monster with its face against you must still
     // be able to fire, and the arc over 0.1 m is nil anyway.
     const float tof = (travel > 0.1f ? travel : 0.1f) / speed;
-    // The compensation, now on the axis that actually has the acceleration. Same
-    // expression as before, one basis vector different: `dUp` for `dz`, `up` for +Z.
-    const float vUp = dUp / tof + 0.5f * kProjGravity * tof;
+    // The compensation, now on the axis that actually has the acceleration.
+    const float vUp = dUp / tof + 0.5f * gMag * tof;
 
     Entity e = reg.create();
     Transform tr;
