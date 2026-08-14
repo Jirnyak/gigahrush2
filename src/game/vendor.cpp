@@ -2,6 +2,7 @@
 
 #include "game/combat.h"         // equipped_melee / equipped_armour
 #include "game/ranged_table.h"   // kRangedTable / ranged_for_item / equipped_ranged
+#include "game/rpg.h"            // RpgStats / int_document_reward_mult_e3
 
 namespace giga::game {
 
@@ -120,14 +121,17 @@ ItemId vendor_ammo_for(const Inventory& inv) {
     return best;
 }
 
-std::int32_t vendor_sell_price(ItemId id, VendorKind who) {
+std::int32_t vendor_sell_price(ItemId id, VendorKind who, const RpgStats* rpg) {
     if (!item_valid(id)) return 0;
     const ItemDef& d = item_def(id);
     if (d.value <= 0) return 0;
     // A vendor BUYS anything with a price, including the trade goods it does not stock
     // — that asymmetry is the point. You sell what you hauled up and buy what keeps you
     // alive; the shop is not a mirror.
-    const float m = kSellMult[static_cast<std::size_t>(who)];
+    float m = kSellMult[static_cast<std::size_t>(who)];
+    if (rpg != nullptr && static_cast<ItemCategory>(d.category) == ItemCategory::Note) {
+        m *= static_cast<float>(int_document_reward_mult_e3(*rpg)) / 1000.0f;
+    }
     const std::int32_t p = static_cast<std::int32_t>(static_cast<float>(d.value) * m);
     // NOT clamped up to 1, unlike the buy price. A test asserting "sell < buy for every
     // stocked item" caught this: clamping both sides made a 1-rouble item buy for 1 and
@@ -170,7 +174,7 @@ std::uint32_t vendor_buy(Inventory& inv, RunLedger& led, ItemId id,
     return bought;
 }
 
-std::int32_t vendor_sell_all(Inventory& inv, RunLedger& led, VendorKind who) {
+std::int32_t vendor_sell_all(Inventory& inv, RunLedger& led, VendorKind who, const RpgStats* rpg) {
     const ItemId keepWeapon = equipped_melee(inv);
     const ItemId keepArmour = equipped_armour(inv);
 
@@ -202,7 +206,7 @@ std::int32_t vendor_sell_all(Inventory& inv, RunLedger& led, VendorKind who) {
             have[ci] = static_cast<std::uint16_t>(have[ci] - sellable);
         }
 
-        const std::int32_t unit = vendor_sell_price(s.item, who);
+        const std::int32_t unit = vendor_sell_price(s.item, who, rpg);
         if (unit <= 0) continue;
         // Respect the per-visit cap exactly rather than overshooting on the last stack.
         std::int32_t room = kSellPerVisitCap - got;

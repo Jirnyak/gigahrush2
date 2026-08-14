@@ -489,7 +489,8 @@ static void DrawCraftingWindowUI(bool* p_open, game::CraftingState& crafting,
 }
 
 static void DrawVendorWindowUI(bool* p_open, game::Inventory& inv, game::RunLedger& ledger, 
-                        game::VendorKind vendorKind, bool isOnPad, std::int32_t& outSold, std::int32_t& outSpent) 
+                        game::VendorKind vendorKind, bool isOnPad, std::int32_t& outSold, std::int32_t& outSpent,
+                        const game::RpgStats* rpg = nullptr) 
 {
     if (!p_open || !*p_open) return;
 
@@ -579,7 +580,7 @@ static void DrawVendorWindowUI(bool* p_open, game::Inventory& inv, game::RunLedg
 
         if (ImGui::BeginTabItem("Sell Inventory")) {
             if (ImGui::Button("Sell All Haul / Trash (Auto Cap)", ImVec2(240, 28))) {
-                outSold += game::vendor_sell_all(inv, ledger, vendorKind);
+                outSold += game::vendor_sell_all(inv, ledger, vendorKind, rpg);
             }
             ImGui::Separator();
 
@@ -596,7 +597,7 @@ static void DrawVendorWindowUI(bool* p_open, game::Inventory& inv, game::RunLedg
                     game::ItemSlot& s = inv.slots[slot];
                     if (!game::item_valid(s.item) || s.count == 0) continue;
 
-                    const std::int32_t unitSell = game::vendor_sell_price(s.item, vendorKind);
+                    const std::int32_t unitSell = game::vendor_sell_price(s.item, vendorKind, rpg);
                     const std::int32_t totalSell = unitSell * s.count;
 
                     ImGui::TableNextRow();
@@ -4587,7 +4588,7 @@ int main(int argc, char** argv) {
                                 game::Inventory& vi = pool.inventory(nrv->id);
                                 if (sellWanted)
                                     sold += game::vendor_sell_all(vi, ledger,
-                                                                 vendorKind);
+                                                                 vendorKind, reg.try_get<game::RpgStats>(player));
                                 if (buyWanted)
                                     spent += game::vendor_resupply(vi, ledger,
                                                                    kResupplyBudget);
@@ -5503,7 +5504,7 @@ int main(int argc, char** argv) {
                     const std::int32_t soldBefore = sold;
                     const std::int32_t spentBefore = spent;
                     DrawVendorWindowUI(&showVendorWindow, pool.inventory(nrv->id), ledger, 
-                                       vendorKind, isOnPad, sold, spent);
+                                       vendorKind, isOnPad, sold, spent, reg.try_get<game::RpgStats>(player));
                     // Same re-derive as the keyboard path. The window is not handed
                     // reg/pool/player, so the CALLER does it — the shape the
                     // crafting window already uses via its `invChanged` out-param.

@@ -147,10 +147,11 @@ bool vendor_stocks_item(ItemId id);
 ItemId vendor_ammo_for(const Inventory& inv);
 
 // What one unit costs to buy, in roubles. 0 when the item is not stocked.
+struct RpgStats;
 std::int32_t vendor_buy_price(ItemId id);
 
 // What one unit fetches when sold to this vendor. 0 when the vendor will not take it.
-std::int32_t vendor_sell_price(ItemId id, VendorKind who);
+std::int32_t vendor_sell_price(ItemId id, VendorKind who, const RpgStats* rpg = nullptr);
 
 // Buy `count` of `id` into `inv`, paying from `led.banked`.
 //
@@ -168,7 +169,7 @@ std::uint32_t vendor_buy(Inventory& inv, RunLedger& led, ItemId id,
 // Never sells the equipped weapon or armour, and never sells the last of a survival
 // consumable: a vendor that strips you naked and thirsty for a profit is a trap
 // disguised as a convenience, and the player would learn not to use it.
-std::int32_t vendor_sell_all(Inventory& inv, RunLedger& led, VendorKind who);
+std::int32_t vendor_sell_all(Inventory& inv, RunLedger& led, VendorKind who, const RpgStats* rpg = nullptr);
 
 // The cheapest useful re-supply: water, medicine, food and a magazine, within a budget.
 // Returns roubles spent. This is the one-keypress path — the interesting decision is
