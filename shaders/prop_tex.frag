@@ -414,7 +414,7 @@ void main() {
 
     // ── fog ───────────────────────────────────────────────────────────────────
     const float kHeightFogScale = 0.04;
-    float heightPos     = min(vWorldPos.y, vWorldPos.z);
+    float heightPos     = vWorldPos.z;
     float heightDensity = exp(-clamp(kHeightFogScale * heightPos, -3.0, 3.0));
     float effectiveDist = d * heightDensity;
     float fogFactor     = clamp((effectiveDist - pc.fog.x) / max(pc.fog.y - pc.fog.x, 1e-3), 0.0, 1.0);
@@ -423,7 +423,10 @@ void main() {
     lit = mix(lit, vec3(0.0), fogFactor);
 
     // ── tonemap + dither ──────────────────────────────────────────────────────
-    vec3 srgb = pow(max(lit, vec3(0.0)), vec3(1.0 / kGamma));
+    // ACES Filmic Tonemapping (matches raymarch.frag / cube.frag)
+    vec3 x = max(lit, vec3(0.0));
+    vec3 mapped = clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+    vec3 srgb = pow(mapped, vec3(1.0 / kGamma));
     float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
     srgb += (ign - 0.5) / 255.0 * (1.0 - fogFactor);
 

@@ -28,6 +28,7 @@ struct VulkanDevice {
     VkQueue presentQueue = VK_NULL_HANDLE;
     QueueFamilies families;
     VkPhysicalDeviceProperties props{};
+    VkPhysicalDeviceFeatures features{};
     // Timestamp counter width of the GRAPHICS family, from
     // VkQueueFamilyProperties. 0 means that family cannot write timestamps at
     // all, which is legal and happens on real drivers — it is the authoritative

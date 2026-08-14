@@ -33,50 +33,51 @@ bool voxel_solid(const World& w, int gx, int gy, int gz) {
 } // namespace
 
 bool aabb_overlaps_solid(const World& world, vec3 pos, vec3 half) {
-    // Voxel range the box covers on each axis.
-    const int x0 = floor_div(pos.x - half.x, kVoxelSize);
-    const int x1 = floor_div(pos.x + half.x, kVoxelSize);
-    const int y0 = floor_div(pos.y - half.y, kVoxelSize);
-    const int y1 = floor_div(pos.y + half.y, kVoxelSize);
-    const int z0 = floor_div(pos.z - half.z, kVoxelSize);
-    const int z1 = floor_div(pos.z + half.z, kVoxelSize);
+    // kVoxelSize is 0.25f (4 sub-voxels per metre). Direct multiply + floor:
+    constexpr float kInvVoxel = 1.0f / kVoxelSize;
+    const int x0 = static_cast<int>(std::floor((pos.x - half.x) * kInvVoxel));
+    const int x1 = static_cast<int>(std::floor((pos.x + half.x) * kInvVoxel));
+    const int y0 = static_cast<int>(std::floor((pos.y - half.y) * kInvVoxel));
+    const int y1 = static_cast<int>(std::floor((pos.y + half.y) * kInvVoxel));
+    const int z0 = static_cast<int>(std::floor((pos.z - half.z) * kInvVoxel));
+    const int z1 = static_cast<int>(std::floor((pos.z + half.z) * kInvVoxel));
 
-    const int cx0 = floor_div(static_cast<float>(x0), static_cast<float>(kSubDim));
-    const int cx1 = floor_div(static_cast<float>(x1), static_cast<float>(kSubDim));
-    const int cy0 = floor_div(static_cast<float>(y0), static_cast<float>(kSubDim));
-    const int cy1 = floor_div(static_cast<float>(y1), static_cast<float>(kSubDim));
-    const int cz0 = floor_div(static_cast<float>(z0), static_cast<float>(kSubDim));
-    const int cz1 = floor_div(static_cast<float>(z1), static_cast<float>(kSubDim));
+    // Macro cell coordinates (kSubDim = 8; arithmetic right shift in C++20 is floor division):
+    const int cx0 = x0 >> 3, cx1 = x1 >> 3;
+    const int cy0 = y0 >> 3, cy1 = y1 >> 3;
+    const int cz0 = z0 >> 3, cz1 = z1 >> 3;
 
     const MacroGrid& grid = world.grid();
 
     for (int cz = cz0; cz <= cz1; ++cz) {
         const int mcz = wrap_macro(cz);
-        const int sz0 = std::max(0, z0 - cz * kSubDim);
-        const int sz1 = std::min(kSubDim - 1, z1 - cz * kSubDim);
+        const int sz0 = std::max(0, z0 - (cz << 3));
+        const int sz1 = std::min(kSubDim - 1, z1 - (cz << 3));
 
         for (int cy = cy0; cy <= cy1; ++cy) {
             const int mcy = wrap_macro(cy);
-            const int sy0 = std::max(0, y0 - cy * kSubDim);
-            const int sy1 = std::min(kSubDim - 1, y1 - cy * kSubDim);
+            const int sy0 = std::max(0, y0 - (cy << 3));
+            const int sy1 = std::min(kSubDim - 1, y1 - (cy << 3));
 
             for (int cx = cx0; cx <= cx1; ++cx) {
                 const int mcx = wrap_macro(cx);
                 const SubMask& mask = grid.mask(mcx, mcy, mcz);
                 if (mask.empty()) continue;
+                if (mask.full()) return true;
 
-                const int sx0 = std::max(0, x0 - cx * kSubDim);
-                const int sx1 = std::min(kSubDim - 1, x1 - cx * kSubDim);
+                const int sx0 = std::max(0, x0 - (cx << 3));
+                const int sx1 = std::min(kSubDim - 1, x1 - (cx << 3));
 
                 const int xSpan = sx1 - sx0 + 1;
                 const std::uint64_t rowBits = (xSpan >= kSubDim)
                     ? 0xFFULL
                     : (((1ULL << xSpan) - 1ULL) << sx0);
 
-                std::uint64_t xyMask = 0;
-                for (int sy = sy0; sy <= sy1; ++sy) {
-                    xyMask |= (rowBits << (sy * kSubDim));
-                }
+                const int ySpan = sy1 - sy0 + 1;
+                const std::uint64_t yPattern = (ySpan >= 8)
+                    ? 0x0101010101010101ULL
+                    : ((0x0101010101010101ULL >> ((8 - ySpan) * 8)) << (sy0 * 8));
+                const std::uint64_t xyMask = yPattern * rowBits;
 
                 for (int sz = sz0; sz <= sz1; ++sz) {
                     if (mask.words[sz] & xyMask) return true;
@@ -190,7 +191,8 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
 
             // Gravity + jump (only if the entity opts in).
             vec3 up{0, 0, 1};
-            if (auto* g = reg.try_get<GravityAffected>(e)) {
+            auto* g = reg.try_get<GravityAffected>(e);
+            if (g) {
                 vec3 accel = w.gravity().at(tr.pos) * g->scale;
                 up = normalize(accel * -1.0f);
                 vel.v += accel * h;
@@ -214,7 +216,6 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
                   az = std::fabs(up.z);
             int upComp = (az >= ax && az >= ay) ? 2 : (ay >= ax) ? 1 : 0;
             float upSign = axis_of(up, upComp) >= 0.0f ? 1.0f : -1.0f;
-            auto* g = reg.try_get<GravityAffected>(e);
             const bool canStep = g && g->grounded;
 
             // Integrate + collide, one axis at a time; grounded walkers step

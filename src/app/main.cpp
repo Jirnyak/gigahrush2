@@ -4896,6 +4896,13 @@ int main(int argc, char** argv) {
                 simNow += kSimDt;
                 simAccum -= kSimDt;
             }
+            // Spiral-guard clamp: if the fixed-step loop hit the guard limit
+            // (8 iterations), accumulated time debt can grow unboundedly.
+            // Cap simAccum so recovery is instant instead of a multi-frame
+            // catch-up spiral that pegs every subsequent frame at 8 ticks.
+            if (guard >= 8) {
+                simAccum = std::min(simAccum, kSimDt);
+            }
         }
 
         // --- render --------------------------------------------------------
@@ -5952,7 +5959,7 @@ int main(int argc, char** argv) {
             renderer.timer.pass_begin(cmd, gpu::GpuPass::LightGrid);
             if (lightGrid.ready()) {
                 collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, samosbor, reg, activeLayer, &noiseField, &powerGrid);
-                lightGrid.update_and_dispatch(cmd, currentTimeSec, camMat.eye);
+                lightGrid.update_and_dispatch(cmd, renderer.currentFrame, currentTimeSec, camMat.eye);
             }
             renderer.timer.pass_end(cmd, gpu::GpuPass::LightGrid);
 
@@ -6179,17 +6186,17 @@ int main(int argc, char** argv) {
             std::uint64_t t0 = SDL_GetPerformanceCounter();
             renderer.timer.pass_begin(cmd, gpu::GpuPass::World);
             raymarchPass.record(cmd, renderer.currentFrame, push,
-                                lightGrid.descriptor_set());
+                                lightGrid.descriptor_set(renderer.currentFrame));
             renderer.timer.pass_end(cmd, gpu::GpuPass::World);
             std::uint64_t t1 = SDL_GetPerformanceCounter();
             // Draw the embodied population on the active layer (shared depth).
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Bodies);
-            bodyPass.record(cmd, renderer.currentFrame, reg, activeLayer, push, lightGrid.descriptor_set());
+            bodyPass.record(cmd, renderer.currentFrame, reg, activeLayer, push, lightGrid.descriptor_set(renderer.currentFrame));
             renderer.timer.pass_end(cmd, gpu::GpuPass::Bodies);
             // Props: GPU-instanced arbitrary-mesh pass, same depth buffer.
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Props);
             if (propPass.ready())
-                propPass.record(cmd, renderer.currentFrame, push, lightGrid.descriptor_set());
+                propPass.record(cmd, renderer.currentFrame, push, lightGrid.descriptor_set(renderer.currentFrame));
             renderer.timer.pass_end(cmd, gpu::GpuPass::Props);
 
 

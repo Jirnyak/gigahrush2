@@ -21,6 +21,8 @@ namespace {
 // capacity 0, so the transfer clamp below zeroes every candidate move.
 float capacity_frac(const MacroGrid& g, int x, int y, int z) {
     const SubMask& m = g.mask(x, y, z);
+    if (m.empty()) return 1.0f;
+    if (m.full()) return 0.0f;
     int solid = 0;
     for (auto w : m.words) solid += std::popcount(w);
     return 1.0f - static_cast<float>(solid) / static_cast<float>(kSubVoxels);

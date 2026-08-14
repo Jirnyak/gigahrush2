@@ -78,12 +78,18 @@ struct SubMask {
     // Is any sub-voxel of the layer `s` along a TANGENT axis (0 or 1) solid?
     // The two axes that are not the packing axis stride across every word.
     bool tangent_layer_solid(int axis, int s, bool centreOnly) const {
-        const int a0 = centreOnly ? kSubDim / 2 - 1 : 0;
-        const int a1 = centreOnly ? kSubDim / 2 : kSubDim - 1;
-        for (int a = a0; a <= a1; ++a)
-            for (int b = a0; b <= a1; ++b)
-                if (test(sub_bit(axis == 0 ? s : a, axis == 0 ? a : s, b)))
-                    return true;
+        if (centreOnly) {
+            const std::uint64_t mask = (axis == 0)
+                ? ((std::uint64_t{1} << (kSubDim * (kSubDim / 2 - 1))) |
+                   (std::uint64_t{1} << (kSubDim * (kSubDim / 2)))) << s
+                : (std::uint64_t{0x18} << (s * kSubDim));
+            return (words[kSubDim / 2 - 1] & mask) != 0 || (words[kSubDim / 2] & mask) != 0;
+        }
+        const std::uint64_t mask = (axis == 0)
+            ? (std::uint64_t{0x0101010101010101ULL} << s)
+            : (std::uint64_t{0xFFULL} << (s * kSubDim));
+        for (int sz = 0; sz < kSubDim; ++sz)
+            if (words[sz] & mask) return true;
         return false;
     }
 
@@ -92,13 +98,9 @@ struct SubMask {
         return true;
     }
     bool full() const {
-        // Every bit up to kSubVoxels must be set.
-        for (std::size_t i = 0; i + 1 < kSubMaskWords; ++i)
-            if (words[i] != ~std::uint64_t{0}) return false;
-        int rem = kSubVoxels - static_cast<int>((kSubMaskWords - 1) * 64);
-        std::uint64_t lastFull =
-            rem >= 64 ? ~std::uint64_t{0} : ((std::uint64_t{1} << rem) - 1);
-        return words[kSubMaskWords - 1] == lastFull;
+        for (auto w : words)
+            if (w != ~std::uint64_t{0}) return false;
+        return true;
     }
     bool test(int bit) const {
         return (words[bit >> 6] >> (bit & 63)) & 1u;

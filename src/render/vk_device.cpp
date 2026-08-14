@@ -250,6 +250,12 @@ bool VulkanDevice::init(SDL_Window* window, bool enableValidation) {
     // slots); with robustness off any stale slot is genuine UB. robustBufferAccess
     // is the one feature the spec guarantees on every implementation.
     feats.robustBufferAccess = VK_TRUE;
+    VkPhysicalDeviceFeatures supported{};
+    vkGetPhysicalDeviceFeatures(physical, &supported);
+    if (supported.samplerAnisotropy) {
+        feats.samplerAnisotropy = VK_TRUE;
+    }
+    features = feats;
 
     VkDeviceCreateInfo dci{};
     dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;

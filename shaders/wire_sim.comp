@@ -93,9 +93,8 @@ void main() {
                 np += dp / d * (r - d) * 0.35;
             }
         }
-        // Land on the world instead of sinking through it.
         wb.c[i].prev[k] = vec4(cur.xyz, 0.0);
-        wb.c[i].cur[k] = vec4(world_land(cur.xyz, np), cur.w);
+        wb.c[i].cur[k] = vec4(np, cur.w);
     }
 
     // Distance constraints, a few relaxation sweeps.
@@ -112,4 +111,11 @@ void main() {
             wb.c[i].cur[k].xyz += corr * (A.w / ws);
             wb.c[i].cur[k + 1].xyz -= corr * (B.w / ws);
         }
+
+    // Final collision projection so constraints never pull nodes inside solid matter.
+    for (int k = 0; k < 8; ++k) {
+        if (wb.c[i].cur[k].w == 0.0) continue;
+        vec3 p = wb.c[i].cur[k].xyz;
+        wb.c[i].cur[k].xyz = world_land(wb.c[i].prev[k].xyz, p);
+    }
 }

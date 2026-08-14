@@ -92,10 +92,8 @@ void main() {
                 np += dp / d * (r - d) * 0.35;
             }
         }
-        // Land on the world instead of sinking through it (see world_land:
-        // `prev` staying put IS the stop).
         sb.s[i].prev[k] = vec4(cur.xyz, 0.0);
-        sb.s[i].cur[k] = vec4(world_land(cur.xyz, np), cur.w);
+        sb.s[i].cur[k] = vec4(np, cur.w);
     }
 
     // Distance constraints along both axes, a few relaxation sweeps.
@@ -130,5 +128,12 @@ void main() {
                 sb.s[i].cur[a].xyz += corr * (A.w / ws);
                 sb.s[i].cur[e].xyz -= corr * (B.w / ws);
             }
+    }
+
+    // Final collision projection so constraints never pull cloth vertices inside solid matter.
+    for (int k = 0; k < W * H; ++k) {
+        if (sb.s[i].cur[k].w == 0.0) continue;
+        vec3 p = sb.s[i].cur[k].xyz;
+        sb.s[i].cur[k].xyz = world_land(sb.s[i].prev[k].xyz, p);
     }
 }

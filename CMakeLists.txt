@@ -93,14 +93,14 @@ endif()
 # and macOS catches it while Windows stays green. See tools/win/README.md.
 function(giga_target_flags tgt rtti)
     if(MSVC)
-        target_compile_options(${tgt} PRIVATE /W4 /EHsc
+        target_compile_options(${tgt} PRIVATE /W4 /EHsc /arch:AVX2
             /wd4100  # unreferenced formal parameter (== -Wno-unused-parameter)
         )
         if(NOT rtti)
             target_compile_options(${tgt} PRIVATE /GR-)
         endif()
     else()
-        target_compile_options(${tgt} PRIVATE -Wall -Wextra -Wno-unused-parameter)
+        target_compile_options(${tgt} PRIVATE -Wall -Wextra -Wno-unused-parameter -mavx2 -mfma)
         if(NOT rtti)
             target_compile_options(${tgt} PRIVATE -fno-rtti -fno-exceptions)
         endif()

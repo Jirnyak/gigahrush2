@@ -68,20 +68,26 @@ bool GpuLightGrid::init(VulkanDevice* dev, const char* shaderDir) {
 bool GpuLightGrid::create_buffers() noexcept {
     // 16 bytes header (uPointLightCount + 3 reserved uints) + 256 * 32 B PointLight = 8208 B
     constexpr VkDeviceSize kLightBufSize = 16 + kMaxPointLights * sizeof(GpuPointLight);
-    if (!lightBuf_.create_host_visible(*dev_, kLightBufSize,
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "light-point-buf")) {
-        return false;
-    }
-    lightMapped_ = lightBuf_.mapped;
-    std::memset(lightMapped_, 0, static_cast<std::size_t>(kLightBufSize));
-
-    // 32 x 16 x 32 cells = 16384 cells * 64 B LightGridCell = 1,048,576 B (1.0 MiB)
     constexpr VkDeviceSize kGridBufSize = kTotalGridCells * sizeof(GpuGridCell);
     std::vector<uint8_t> zeroGrid(static_cast<std::size_t>(kGridBufSize), 0);
-    if (!gridSSBO_.create_device_local(*dev_, zeroGrid.data(), kGridBufSize,
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            "light-grid-ssbo")) {
-        return false;
+
+    for (int i = 0; i < kMaxFramesInFlight; ++i) {
+        char labelLight[32], labelGrid[32];
+        std::snprintf(labelLight, sizeof(labelLight), "light-point-buf-%d", i);
+        std::snprintf(labelGrid, sizeof(labelGrid), "light-grid-ssbo-%d", i);
+
+        if (!lightBuf_[i].create_host_visible(*dev_, kLightBufSize,
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, labelLight)) {
+            return false;
+        }
+        lightMapped_[i] = lightBuf_[i].mapped;
+        std::memset(lightMapped_[i], 0, static_cast<std::size_t>(kLightBufSize));
+
+        if (!gridSSBO_[i].create_device_local(*dev_, zeroGrid.data(), kGridBufSize,
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                labelGrid)) {
+            return false;
+        }
     }
 
     return true;
@@ -109,46 +115,46 @@ bool GpuLightGrid::create_descriptor_sets() noexcept {
     dslci.pBindings = bindings;
     VK_TRY(vkCreateDescriptorSetLayout(d, &dslci, nullptr, &descriptorSetLayout_));
 
-    // Pool
+    // Pool for kMaxFramesInFlight sets (2 storage buffers each)
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSize.descriptorCount = 2;
+    poolSize.descriptorCount = static_cast<uint32_t>(2 * kMaxFramesInFlight);
 
     VkDescriptorPoolCreateInfo poolci{};
     poolci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolci.maxSets = 1;
+    poolci.maxSets = static_cast<uint32_t>(kMaxFramesInFlight);
     poolci.poolSizeCount = 1;
     poolci.pPoolSizes = &poolSize;
     VK_TRY(vkCreateDescriptorPool(d, &poolci, nullptr, &descPool_));
 
-    // Allocate Set 0
-    VkDescriptorSetAllocateInfo alloci{};
-    alloci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    alloci.descriptorPool = descPool_;
-    alloci.descriptorSetCount = 1;
-    alloci.pSetLayouts = &descriptorSetLayout_;
-    VK_TRY(vkAllocateDescriptorSets(d, &alloci, &descriptorSet_));
+    for (int f = 0; f < kMaxFramesInFlight; ++f) {
+        VkDescriptorSetAllocateInfo alloci{};
+        alloci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        alloci.descriptorPool = descPool_;
+        alloci.descriptorSetCount = 1;
+        alloci.pSetLayouts = &descriptorSetLayout_;
+        VK_TRY(vkAllocateDescriptorSets(d, &alloci, &descriptorSet_[f]));
 
-    // Write descriptor sets
-    VkDescriptorBufferInfo bufi[2]{};
-    bufi[0].buffer = lightBuf_.buffer;
-    bufi[0].offset = 0;
-    bufi[0].range = VK_WHOLE_SIZE;
+        VkDescriptorBufferInfo bufi[2]{};
+        bufi[0].buffer = lightBuf_[f].buffer;
+        bufi[0].offset = 0;
+        bufi[0].range = VK_WHOLE_SIZE;
 
-    bufi[1].buffer = gridSSBO_.buffer;
-    bufi[1].offset = 0;
-    bufi[1].range = VK_WHOLE_SIZE;
+        bufi[1].buffer = gridSSBO_[f].buffer;
+        bufi[1].offset = 0;
+        bufi[1].range = VK_WHOLE_SIZE;
 
-    VkWriteDescriptorSet writes[2]{};
-    for (uint32_t i = 0; i < 2; ++i) {
-        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet = descriptorSet_;
-        writes[i].dstBinding = i;
-        writes[i].descriptorCount = 1;
-        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[i].pBufferInfo = &bufi[i];
+        VkWriteDescriptorSet writes[2]{};
+        for (uint32_t i = 0; i < 2; ++i) {
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = descriptorSet_[f];
+            writes[i].dstBinding = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[i].pBufferInfo = &bufi[i];
+        }
+        vkUpdateDescriptorSets(d, 2, writes, 0, nullptr);
     }
-    vkUpdateDescriptorSets(d, 2, writes, 0, nullptr);
     return true;
 }
 
@@ -225,17 +231,18 @@ void GpuLightGrid::sort_lights_by_distance(const vec3& camPos) noexcept {
               });
 }
 
-void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const vec3& camPos) noexcept {
-    if (!ready() || !lightMapped_) return;
+void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, uint32_t frameIndex, float timeSec, const vec3& camPos) noexcept {
+    const uint32_t f = frameIndex % kMaxFramesInFlight;
+    if (!ready() || !lightMapped_[f]) return;
 
     // Sort active point lights by distance to camera so nearest lights take priority
     sort_lights_by_distance(camPos);
 
     // Upload light count and point lights array to persistent mapped memory
     uint32_t header[4] = {stagingLightCount_, 0, 0, 0};
-    std::memcpy(lightMapped_, header, sizeof(header));
+    std::memcpy(lightMapped_[f], header, sizeof(header));
     if (stagingLightCount_ > 0) {
-        std::memcpy(static_cast<char*>(lightMapped_) + 16, stagingLights_,
+        std::memcpy(static_cast<char*>(lightMapped_[f]) + 16, stagingLights_,
                     stagingLightCount_ * sizeof(GpuPointLight));
     }
 
@@ -250,20 +257,11 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const
     push.gridMin = vec4{gridMinPos.x, gridMinPos.y, gridMinPos.z, cellSize.x};
     push.gridExt = vec4{static_cast<float>(kGridDimX), static_cast<float>(kGridDimY),
                         static_cast<float>(kGridDimZ), cellSize.y};
-    // params.w carries the TORUS WRAP PERIOD. It used to be a spare 0 while the
-    // shader wrapped against a hardcoded `128.0` — half the real 256 m extent, and
-    // only on x and z. The literal itself turned out to be harmless (128 divides
-    // 256, and `collect_scene_lights` culls every light past 48 m before it ever
-    // reaches this buffer), but the MISSING Y WRAP was not: a lamp two metres away
-    // across the y seam reads as ~254 m, falls outside the grid box and is never
-    // binned at all, so the fog goes dark exactly where it should glow. Sending the
-    // period makes the shader's period unfalsifiable by construction — the same
-    // rule [problems.md] §7 wrote after the phantom-lamp hunt.
     push.params = vec4{timeSec, 15.0f, static_cast<float>(stagingLightCount_),
                        kWorldExtent};
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline_);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout_, 0, 1, &descriptorSet_, 0, nullptr);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout_, 0, 1, &descriptorSet_[f], 0, nullptr);
     vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(GridPush), &push);
 
     // Workgroup size: (8, 4, 8) -> Dispatch (32/8, 16/4, 32/8) = (4, 4, 4)
@@ -276,7 +274,7 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.buffer = gridSSBO_.buffer;
+    barrier.buffer = gridSSBO_[f].buffer;
     barrier.offset = 0;
     barrier.size = VK_WHOLE_SIZE;
 
@@ -300,9 +298,12 @@ void GpuLightGrid::destroy() noexcept {
     if (descPool_)        { vkDestroyDescriptorPool(d, descPool_, nullptr); descPool_ = VK_NULL_HANDLE; }
     if (descriptorSetLayout_) { vkDestroyDescriptorSetLayout(d, descriptorSetLayout_, nullptr); descriptorSetLayout_ = VK_NULL_HANDLE; }
 
-    lightBuf_.destroy(*dev_);
-    gridSSBO_.destroy(*dev_);
-    lightMapped_ = nullptr;
+    for (int f = 0; f < kMaxFramesInFlight; ++f) {
+        lightBuf_[f].destroy(*dev_);
+        gridSSBO_[f].destroy(*dev_);
+        lightMapped_[f] = nullptr;
+        descriptorSet_[f] = VK_NULL_HANDLE;
+    }
     dev_ = nullptr;
 }
 

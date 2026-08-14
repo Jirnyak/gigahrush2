@@ -4,6 +4,7 @@
 #include <vulkan/vulkan.h>
 #include "core/math.h"
 #include "render/vk_buffer.h"
+#include "render/vk_common.h"
 #include "render/vk_device.h"
 
 #ifdef _MSC_VER
@@ -70,10 +71,15 @@ public:
 
     // Record compute dispatch (3D spatial grid binning) & pipeline memory barrier.
     // Must execute outside active render pass on current_cmd().
-    void update_and_dispatch(VkCommandBuffer cmd, float timeSec, const vec3& camPos) noexcept;
+    void update_and_dispatch(VkCommandBuffer cmd, uint32_t frameIndex, float timeSec, const vec3& camPos) noexcept;
+    void update_and_dispatch(VkCommandBuffer cmd, float timeSec, const vec3& camPos) noexcept {
+        update_and_dispatch(cmd, 0, timeSec, camPos);
+    }
 
     VkDescriptorSetLayout descriptor_set_layout() const noexcept { return descriptorSetLayout_; }
-    VkDescriptorSet descriptor_set() const noexcept { return descriptorSet_; }
+    VkDescriptorSet descriptor_set(uint32_t frameIndex = 0) const noexcept {
+        return descriptorSet_[frameIndex % kMaxFramesInFlight];
+    }
     bool ready() const noexcept { return computePipeline_ != VK_NULL_HANDLE; }
 
     uint32_t active_light_count() const noexcept { return stagingLightCount_; }
@@ -85,14 +91,14 @@ private:
 
     VulkanDevice* dev_ = nullptr;
 
-    VulkanBuffer lightBuf_{}; // HOST_VISIBLE persistent mapped storage for point lights
-    VulkanBuffer gridSSBO_{}; // DEVICE_LOCAL storage for 3D grid cells
+    VulkanBuffer lightBuf_[kMaxFramesInFlight]{}; // HOST_VISIBLE persistent mapped storage for point lights
+    VulkanBuffer gridSSBO_[kMaxFramesInFlight]{}; // DEVICE_LOCAL storage for 3D grid cells
 
-    void* lightMapped_ = nullptr;
+    void* lightMapped_[kMaxFramesInFlight]{};
 
     VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
-    VkDescriptorSet descriptorSet_ = VK_NULL_HANDLE;
+    VkDescriptorSet descriptorSet_[kMaxFramesInFlight]{};
 
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline computePipeline_ = VK_NULL_HANDLE;

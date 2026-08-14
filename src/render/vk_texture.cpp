@@ -356,14 +356,13 @@ bool VulkanTextureArray::create_view_and_sampler() {
     si.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     si.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     si.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    // ANISOTROPY IS OFF, and not because it would not help. vk_device.cpp creates
-    // the logical device with a zero-initialised VkPhysicalDeviceFeatures, so
-    // samplerAnisotropy is NOT enabled and requesting it here would be an invalid
-    // sampler rather than a slow one. Enabling the feature is a one-line change in
-    // a file this lane does not own; until it happens, floors seen at a grazing
-    // angle are blurrier than they need to be. Stated rather than papered over.
-    si.anisotropyEnable = VK_FALSE;
-    si.maxAnisotropy = 1.0f;
+    if (dev_->features.samplerAnisotropy) {
+        si.anisotropyEnable = VK_TRUE;
+        si.maxAnisotropy = std::min(16.0f, dev_->props.limits.maxSamplerAnisotropy);
+    } else {
+        si.anisotropyEnable = VK_FALSE;
+        si.maxAnisotropy = 1.0f;
+    }
     si.compareEnable = VK_FALSE;
     si.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
     si.unnormalizedCoordinates = VK_FALSE;

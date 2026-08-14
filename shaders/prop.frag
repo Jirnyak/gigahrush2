@@ -307,12 +307,16 @@ void main() {
         lit += emitCol * animEmissive;
     }
 
-    // Atmospheric height-based fog (increases at lower vertical/Z levels)
+    // Atmospheric height-based fog (increases at lower Z levels; Z-up convention)
     const float kHeightFogScale = 0.04;
-    float heightPos = min(vWorldPos.y, vWorldPos.z);
+    float heightPos = vWorldPos.z;
     float heightDensity = exp(-clamp(kHeightFogScale * heightPos, -3.0, 3.0));
     float effectiveDist = d * heightDensity;
     float fog = clamp((effectiveDist - pc.fog.x) / max(pc.fog.y - pc.fog.x, 1e-3), 0.0, 1.0);
+
+    // Dynamic Samosbor fog flickering (matches raymarch.frag / cube.frag)
+    float fogFlicker = 1.0 + samosborPulse * 0.35 * sin(timeSec * 22.0 + vWorldPos.x * 0.4 + vWorldPos.y * 0.3);
+    fog = clamp(fog * fogFlicker, 0.0, 1.0);
 
     // Enforce fog = 1.0 at max toroidal distance pc.fog.y to protect wrap seam
     if (d >= pc.fog.y) {
@@ -321,7 +325,10 @@ void main() {
 
     lit = mix(lit, vec3(0.0), fog);
 
-    vec3 srgb = pow(max(lit, vec3(0.0)), vec3(1.0 / kGamma));
+    // ACES Filmic Tonemapping (matches raymarch.frag / cube.frag)
+    vec3 x = max(lit, vec3(0.0));
+    vec3 mapped = clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+    vec3 srgb = pow(mapped, vec3(1.0 / kGamma));
 
     float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
     srgb += (ign - 0.5) / 255.0 * (1.0 - fog);
