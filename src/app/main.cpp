@@ -4051,7 +4051,33 @@ int main(int argc, char** argv) {
                             }
                         }
 
-                        // 3. Physiological relief fallback
+                        // 4. LightBulb toggle / unscrew — tactical stealth
+                        if (!handled && activeLayer != kInvalidLayer) {
+                            game::InteractionHit bulbHit{};
+                            if (game::interaction_step(
+                                    reg, player, game::Interactable::Kind::LightBulb,
+                                    bus, &bulbHit)) {
+                                if (reg.valid(bulbHit.entity) && reg.all_of<game::Interactable>(bulbHit.entity)) {
+                                    auto& ia = reg.get<game::Interactable>(bulbHit.entity);
+                                    if (ia.active) {
+                                        handled = true;
+                                        ia.active = false;
+                                        if (auto* pm = reg.try_get<game::PropMesh>(bulbHit.entity)) {
+                                            pm->emissive = 0;
+                                            pm->animPhase = 0;
+                                        }
+                                        std::snprintf(elevDiagLine, sizeof(elevDiagLine),
+                                                      "LIGHT BULB UNSCREWED: ZONE DARKENED FOR STEALTH");
+                                        elevDiagAt = simTick;
+
+                                        game::NoiseProfile np{3.5f, 400, 1, game::NoiseSource::Door};
+                                        game::noise_publish(noiseField, activeLayer, bulbHit.pos, np, 0);
+                                    }
+                                }
+                            }
+                        }
+
+                        // 5. Physiological relief fallback
                         if (!handled) {
                             if (const auto* nrg = reg.try_get<game::NpcRef>(player)) {
                                 if (pool.valid(nrg->id)) {

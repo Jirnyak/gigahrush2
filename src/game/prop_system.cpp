@@ -541,7 +541,7 @@ InteractionHit find_nearest_interactable(const Registry& reg, Entity player,
         if (!ia.active || ia.kind != kind) continue;
 
         const float dx = wrap_delta_f(ppos.x, tr.pos.x, kWorldExtent);
-        const float dy = ppos.y - tr.pos.y;
+        const float dy = wrap_delta_f(ppos.y, tr.pos.y, kWorldExtent);
         const float dz = wrap_delta_f(ppos.z, tr.pos.z, kWorldExtent);
         const float d2 = dx * dx + dy * dy + dz * dz;
         if (d2 < best) {
