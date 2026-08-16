@@ -119,28 +119,35 @@ bool ImGuiLayer::init(VulkanDevice& dev, SDL_Window* window,
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr; // no imgui.ini side effects for a debug HUD
 
-    // Cyrillic. The default ImGui font is ProggyClean, which is ASCII-only, so any
-    // Russian string handed to ImGui::Text renders as mojibake — and the HUD now
-    // prints item and monster names straight out of the content tables, all of
-    // which are Russian. This was a live defect: the weapon/armour line was showing
-    // garbage rather than "Арматура".
-    //
-    // A system font is loaded rather than a vendored one so no font binary lands in
-    // the repository. If it is missing the default font is kept: a HUD in mojibake
-    // is worse than one in ASCII, but neither is worth failing to boot over, and
-    // ImGui falls back on its own if AddFontFromFileTTF returns null.
+    // Cyrillic & Typography. The default ImGui font is ProggyClean, which is
+    // ASCII-only, so any Russian string handed to ImGui::Text renders as mojibake.
+    // We configure the font atlas with full Cyrillic (0x0400..0x052F), General
+    // Punctuation (0x2000..0x206F for em-dashes —, en-dashes –, quotes, ellipsis),
+    // and Cyrillic Extended ranges.
     {
-        static const ImWchar* cyr = io.Fonts->GetGlyphRangesCyrillic();
+        static const ImWchar kCyrillicWithPunctuationRanges[] = {
+            0x0020, 0x00FF, // Basic Latin + Latin Supplement
+            0x0400, 0x052F, // Cyrillic + Cyrillic Supplement
+            0x2000, 0x206F, // General Punctuation (em-dash —, quotes, ellipsis)
+            0x2DE0, 0x2DFF, // Cyrillic Extended-A
+            0xA640, 0xA69F, // Cyrillic Extended-B
+            0
+        };
         const char* candidates[] = {
             "C:/Windows/Fonts/consola.ttf",  // monospace suits a debug readout
             "C:/Windows/Fonts/tahoma.ttf",
             "C:/Windows/Fonts/segoeui.ttf",
+            "C:/Windows/Fonts/arial.ttf",
             "/System/Library/Fonts/Menlo.ttc",          // macOS
             "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+            "/Library/Fonts/Arial Unicode.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+            "/usr/share/fonts/liberation/LiberationMono-Regular.ttf",
         };
         for (const char* path : candidates) {
             if (std::filesystem::exists(path)) {
-                if (io.Fonts->AddFontFromFileTTF(path, 15.0f, nullptr, cyr)) break;
+                if (io.Fonts->AddFontFromFileTTF(path, 15.0f, nullptr, kCyrillicWithPunctuationRanges)) break;
             }
         }
     }
@@ -176,67 +183,9 @@ void ImGuiLayer::begin_frame() {
 }
 
 void ImGuiLayer::draw_crt_overlay() {
-    if (!ready_) return;
-    static const bool kDisableCrt = (std::getenv("GIGA_NO_CRT") != nullptr);
-    if (kDisableCrt) return;
-    ImGuiIO& io = ImGui::GetIO();
-    const float w = io.DisplaySize.x;
-    const float h = io.DisplaySize.y;
-    if (w <= 0.0f || h <= 0.0f) return;
-
-    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
-    ImGui::SetNextWindowSize(ImVec2(w, h));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    ImGui::Begin("CRT_Overlay", nullptr,
-                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
-                 ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoFocusOnAppearing |
-                 ImGuiWindowFlags_NoBringToFrontOnFocus);
-
-    ImDrawList* draw = ImGui::GetWindowDrawList();
-
-    // --- Phosphor wash: faint green tint across the whole display, so the
-    // 3D world bleeds through the HUD like it is being viewed through a CRT
-    // screen (low alpha phosphor residue). (#59F266 @ ~4% alpha.)
-    draw->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(w, h),
-                        IM_COL32(89, 242, 102, 10));
-
-    // --- CRT scanlines: alternating dark bands at 3px period. Pre-reserve
-    // vertices and indices so the whole raster is emitted in one single batch
-    // without per-line allocation overhead.
-    const int stepCount = static_cast<int>(std::ceil(h / 3.0f)) + 1;
-    const int totalRects = stepCount * 2;
-    draw->PrimReserve(totalRects * 6, totalRects * 4);
-    const ImVec2 uv = draw->_Data->TexUvWhitePixel;
-    for (float y = 0.0f; y < h; y += 3.0f) {
-        // Primary scanline: the "blanking" row of the raster.
-        draw->PrimRectUV(ImVec2(0.0f, y), ImVec2(w, y + 1.0f), uv, uv, IM_COL32(0, 0, 0, 110));
-        // Secondary row: half-intensity, half-pixel offset below the primary,
-        // giving the raster its vertical texture instead of isolated lines.
-        if (y + 1.0f < h)
-            draw->PrimRectUV(ImVec2(0.0f, y + 1.0f), ImVec2(w, y + 2.0f), uv, uv, IM_COL32(0, 0, 0, 45));
-    }
-
-    // --- Vignette: the CRT tube darkens toward the corners (screen curvature
-    // is too expensive a shader to fake here, but a radial falloff reads as
-    // "tube" and kills the flat-panel look the mandate forbids). Drawn as four
-    // overlapping gradient quads so the falloff is smooth, not a hard band.
-    constexpr std::uint32_t kVig = 60u;
-    draw->AddRectFilledMultiColor(ImVec2(0.0f, 0.0f), ImVec2(w * 0.5f, h * 0.5f),
-                                  IM_COL32(0, 0, 0, kVig), IM_COL32(0, 0, 0, 0),
-                                  IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, kVig));
-    draw->AddRectFilledMultiColor(ImVec2(w * 0.5f, 0.0f), ImVec2(w, h * 0.5f),
-                                  IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, kVig),
-                                  IM_COL32(0, 0, 0, kVig), IM_COL32(0, 0, 0, 0));
-    draw->AddRectFilledMultiColor(ImVec2(0.0f, h * 0.5f), ImVec2(w * 0.5f, h),
-                                  IM_COL32(0, 0, 0, kVig), IM_COL32(0, 0, 0, 0),
-                                  IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, kVig));
-    draw->AddRectFilledMultiColor(ImVec2(w * 0.5f, h * 0.5f), ImVec2(w, h),
-                                  IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, kVig),
-                                  IM_COL32(0, 0, 0, kVig), IM_COL32(0, 0, 0, 0));
-
-    ImGui::End();
-    ImGui::PopStyleVar(2);
+    // Zero CPU AddLine / PrimReserve CRT rasterization.
+    // All CRT curvature, scanlines, aberration, vignette, and phosphor wash
+    // are executed on the GPU via shaders/post_pass.frag in VulkanRenderer.
 }
 
 void ImGuiLayer::render(VkCommandBuffer cmd) {

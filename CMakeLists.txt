@@ -233,7 +233,7 @@ set(_giga_spv_files "")
 # explicit list rather than a GLOB — a stray .glsl should not silently start forcing
 # every shader to recompile.
 set(_giga_glsl_includes ${CMAKE_SOURCE_DIR}/shaders/material_surface.glsl ${CMAKE_SOURCE_DIR}/shaders/volumetric_fog.glsl)
-foreach(_sh cube.frag body.vert prop.vert prop.frag raymarch.vert raymarch.frag wire.vert wire.frag particle.vert particle.frag cloth.vert cloth.frag)
+foreach(_sh cube.frag body.vert prop.vert prop.frag raymarch.vert raymarch.frag wire.vert wire.frag particle.vert particle.frag cloth.vert cloth.frag post_pass.vert post_pass.frag)
     add_custom_command(
         OUTPUT ${_giga_spv_dir}/${_sh}.spv
         COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O
@@ -357,6 +357,13 @@ list(APPEND _giga_spv_files ${_giga_spv_dir}/raymarch_tex.frag.spv)
 
 add_custom_target(giga_shaders DEPENDS ${_giga_spv_files})
 
+# ---- Audio Subsystem ------------------------------------------------------
+file(GLOB_RECURSE GIGA_AUDIO_SOURCES CONFIGURE_DEPENDS src/audio/*.cpp)
+add_library(giga_audio STATIC ${GIGA_AUDIO_SOURCES})
+target_include_directories(giga_audio PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(giga_audio PUBLIC giga_game giga_core SDL3::SDL3)
+giga_target_flags(giga_audio OFF)
+
 # ---- Rendering + app shell ------------------------------------------------
 # GLOB_RECURSE, matching giga_core/giga_game. A plain file(GLOB) silently drops
 # any .cpp added in a subdirectory, and the symptom is a link error far from the
@@ -383,7 +390,7 @@ target_compile_definitions(gigahrush2 PRIVATE
 # giga_core/giga_game must stay free of platform and third-party headers (AGENTS.md). Also
 # note the target name is lowercase `ktx`, not a KTX:: namespaced alias — KTX-Software
 # exports it unnamespaced when built as a subproject.
-target_link_libraries(gigahrush2 PRIVATE giga_game giga_core giga_imgui
+target_link_libraries(gigahrush2 PRIVATE giga_game giga_core giga_audio giga_imgui
     SDL3::SDL3 Vulkan::Vulkan ktx)
 target_include_directories(gigahrush2 PRIVATE ${ktx_SOURCE_DIR}/include)
 # RTTI is permitted in the app shell (ON) — only the core/game libs forbid it.
@@ -551,7 +558,7 @@ if(GIGA_BUILD_TESTS)
     # reason nobody wrote down is how this stops meaning anything. Deliberate friction
     # on ~4k assertions is the price of coverage that cannot shrink in silence.
     add_executable(game_test tests/game_test.cpp)
-    target_link_libraries(game_test PRIVATE giga_game)
+    target_link_libraries(game_test PRIVATE giga_game giga_audio)
     giga_target_flags(game_test OFF)
     add_test(NAME game_test COMMAND game_test)
     set_tests_properties(game_test PROPERTIES
@@ -921,7 +928,15 @@ if(GIGA_BUILD_TESTS)
     # claims the body / steers along the flow in the walking plane only, the
     # PosX gravity-axis sentinel survives (mutation: unconditional axis writes
     # -> 2 red), and an Ai-owned body is never re-steered (suite_utilai).
-        PASS_REGULAR_EXPRESSION "game_test: 243674 checks, 0 failures")
+    # 240248 -> 536031 (+295783) on 2026-08-16: procedural audio DSP engine
+    # (suite_audio.inl — 14 test functions: PRNG distribution, SVF filter
+    # response, Geiger Poisson rate scaling, siren motor glide & frequencies,
+    # CRT & 50 Hz harmonics, UI sounds, spatial distance/azimuth/occlusion,
+    # mixer master limiting), day clock (suite_day_clock.inl), and room stock
+    # production/consumption loop (suite_room_stock.inl). The bulk of the delta
+    # is the full-floor alife loop exercising the new production rates and the
+    # spatial audio 360-degree panning sweep.
+        PASS_REGULAR_EXPRESSION "game_test: 536031 checks, 0 failures")
 
     # Comprehensive Opaque-Box E2E Test Suite for GigaHrush 2 (Milestone M3)
     add_executable(e2e_test tests/e2e_test.cpp)

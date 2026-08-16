@@ -1,65 +1,76 @@
-# Project: GigaHrush 2 — Resolution of Architectural Problems (11, 15, 21, 29)
+# Project: GigaHrush 2 — Vulkan GPU Post-Pass CRT Shader, Cyrillic Localization, Character Creation & Dialogue/Quest Systems
 
 ## Architecture
-GigaHrush 2 is a high-performance, Data-Oriented Design (DOD) entity-component-system (ECS) engine.
-- Pure POD components in `src/ecs/components.h`.
-- Free-function `*_step` simulation systems without dynamic allocations in the 125 Hz hot loop (`kSimDt = 1.0f / 125.0f`).
-- Vector gravity frame projection via `GravityFrame`, `regime_frame(r)`, `world.gravity().at(pos)` supporting all 8 isotropic regimes (`NegX`, `PosX`, `NegY`, `PosY`, `NegZ`, `PosZ`, `Zero`, `Custom`).
-- Toroidal wrapping on X/Y/Z (`wrap_delta_f`, `wrap_macro`) with linear W.
-- Strict presentation vs simulation decoupling: `src/app/main.cpp` coordinates Vulkan rendering + SDL3 loop; `src/game/` (`giga_game`) owns all simulation, world streaming, entity lifecycle, and save/load logic.
+- **Rendering Subsystem (`src/render/`)**:
+  - `vk_renderer.*`: Two-pass Vulkan pipeline (`sceneRenderPass` renders linear HDR to `VK_FORMAT_R16G16B16A16_SFLOAT` offscreen attachment; `postRenderPass` executes fullscreen triangle shader `post_pass.vert` / `post_pass.frag` into swapchain).
+  - `imgui_layer.*`: ImGui font atlas with extended Cyrillic + General Punctuation ranges (`0x0400..0x052F`, `0x2000..0x206F`). Zero CPU `AddLine` scanlines.
+  - `shaders/`: `post_pass.vert`, `post_pass.frag` compiled via `glslc -O` to SPIR-V. Implements CRT curvature, scanline phosphor mask, chromatic aberration, vignette, and asymmetric dark adaptation.
+- **Menu & Character Creation Subsystem (`src/app/`, `src/game/`)**:
+  - `main.cpp` / menu state machine: Page 0 (Root), Page 1 (Load Slot), Page 2 (New Game Slot), Page 3 (Character Creation), Page 4 (Settings).
+  - `role.h`, `rpg.h`, `rpg.cpp`: 5 Role archetypes (`Resident`, `Duty`, `Medic`, `Looter`, `Cultist`), base attributes (`STR`, `AGI`, `INT`), derived stats (`HP`, `Carry Capacity`, `PSI`, `Speed`, `Melee Dmg`).
+  - `embody.cpp`, `npc_pool.h`: Player entity & NPC pool initialization with chosen archetype stats and starting inventory loadout.
+- **Dialogue & Quest UI Subsystem (`src/app/`, `src/game/`)**:
+  - `speech.h`, `speech.cpp`, `speech_table.cpp`: 13 `SpeechSituation`s, 273 authored Russian speech lines, `SpeechMemory`, 5 factions.
+  - `quest.h`, `quest.cpp`, `quest_table.cpp`, `contract.h`: 19 plot quests, 3 contract slots, persistent quest log.
+  - `dialogue_ui.h`, `quest_ui.h`: Interactive NPC Dialogue window (portrait, faction badge, situation, choices) and Quest Log UI (active assignments, contracts, history).
+- **Build & Verification Track**:
+  - CMake targets: `gigahrush2`, `world_test`, `audit_test`, `e2e_test`, `game_test`.
+  - Static source rules: `tools/check_source_rules.cmake` (`GIGA_SOURCE_RULES=PASS`).
 
 ## Feature Inventory
 | # | Feature | Description | Milestone | Source |
 |---|---------|-------------|-----------|--------|
-| F1 | Deep Gravity Frame Isotropy | CameraTag::eyeOffset, compute_camera up vector, prop_system angular impulse/projectile pops/ceiling lights, prop.frag fog, cull.comp yaw-box, and GPU compute passes (particle/wire/cloth/gas) | M1 (Problem 15) | ORIGINAL_REQUEST §R2, problems.md Prob 15 |
-| F2 | Multi-Floor Symmetry & Layer Independence | Fix container.cpp Z wrap, remove LayerId{0} fallbacks across main.cpp/combat.cpp, direct --floor initialization, unified elevator/travel transitions | M2 (Problem 11) | ORIGINAL_REQUEST §R1, problems.md Prob 11 |
-| F3 | MacroSim Slicing & Amortized Aging | Chunked ring cursor (agingRecordsPerTick = 4096) for demographic sweep in MacroSim::step; maintain <0.05ms budget at 2^20 scale with exact population accounting and deterministic hashing | M3 (Problem 21) | ORIGINAL_REQUEST §R3, problems.md Prob 21 |
-| F4 | Modular Decomposition of main.cpp | Extract floor lifecycle, possession, interaction, monster traits, and save IO from main.cpp into dedicated giga_game modules in src/game/; reduce main.cpp <2,500 lines | M4 (Problem 29) | ORIGINAL_REQUEST §R4, problems.md Prob 29 |
-| F5 | E2E Regression, Audit & Hardening | 100% green pass on world_test, audit_test, game_test, e2e_test, check_source_rules, check_wired; formal problem closure in problems.md | M5 (Final Milestone) | ORIGINAL_REQUEST Acceptance Criteria |
+| 1 | Vulkan Offscreen HDR Render Target | Linear HDR color attachment (`VK_FORMAT_R16G16B16A16_SFLOAT`) and fullscreen triangle pass | M1 | ORIGINAL_REQUEST §R1 |
+| 2 | GPU CRT Fragment Shader | GPU-side CRT barrel curvature, 3px scanline phosphor mask, chromatic aberration, radial vignette, green phosphor wash | M1 | ORIGINAL_REQUEST §R1 |
+| 3 | Asymmetric Dark Adaptation | Room illumination modulation with fast constriction (tau=0.15s) and slow dilation (tau=2.50s) | M1 | ORIGINAL_REQUEST §R1 |
+| 4 | Eliminate CPU ImGui Scanlines | Remove ~960 CPU `AddLine`/`PrimReserve` draw calls from `imgui_layer.cpp` | M1 | ORIGINAL_REQUEST §R1, AC |
+| 5 | Cyrillic TTF Font Atlas Loading | ImGui font atlas configured with Cyrillic (`0x0400..0x052F`) and General Punctuation (`0x2000..0x206F`) | M2 | ORIGINAL_REQUEST §R2 |
+| 6 | Russian Typography & Localization | HUD, lore, faction titles, NPC speech barks, and Samosbor warnings rendered in clean Russian without mojibake | M2 | ORIGINAL_REQUEST §R2 |
+| 7 | Main Menu Navigation & Settings | Menu pages reordered (Page 0 Root, Page 1 Load, Page 2 Slot Select, Page 3 Char Creation, Page 4 Settings) | M3 | ORIGINAL_REQUEST §R3 |
+| 8 | Role Archetype Selection | Interactive selection of 5 archetypes: `Resident`, `Duty`, `Medic`, `Looter`, `Cultist` | M3 | ORIGINAL_REQUEST §R3 |
+| 9 | Base Attributes & Derived Stats | Allocation of STR, AGI, INT with live preview of HP, Carry Weight, PSI, Speed, Melee Dmg | M3 | ORIGINAL_REQUEST §R3 |
+| 10 | Player Entity & Loadout Init | Direct injection of chosen archetype, RPG stats, and starting items into live player entity and `NpcPool` | M3 | ORIGINAL_REQUEST §R3 |
+| 11 | Rich NPC Dialogue Window | Interactive dialogue UI with speaker portrait, faction badge, situation context, speech/rumours, and action choices | M4 | ORIGINAL_REQUEST §R4 |
+| 12 | Interactive Quest Log UI | Multi-tab quest log displaying active assignments, objectives, timers, ruble rewards, and contract history | M4 | ORIGINAL_REQUEST §R4 |
+| 13 | Build & Static Source Rules Gate | Zero warnings/errors Release build and `GIGA_SOURCE_RULES=PASS` in `check_source_rules.cmake` | M5 | ORIGINAL_REQUEST §AC |
+| 14 | Regression & E2E Verification | 100% pass across `world_test` (23,396), `audit_test` (150), `e2e_test` (2,445), and screenshot validation | M5 | ORIGINAL_REQUEST §AC |
 
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
-| M1 | Problem 15: Deep Gravity Frame Isotropy | CameraTag, compute_camera, prop_system, shaders (prop.frag, cull.comp), compute passes | None | IN_PROGRESS |
-| M2 | Problem 11: Multi-Floor Symmetry & Layer Independence | container.cpp wrap_delta_f(dz), LayerId dynamic resolution, direct boot floor, elevator travel unification | M1 | PLANNED |
-| M3 | Problem 21: MacroSim Slicing & Amortized Aging | MacroSim aging ring cursor, agingRecordsPerTick, demographic stationarity, FNV-1a cycle indexing | None | PLANNED |
-| M4 | Problem 29: Modular Decomposition of main.cpp | Extract floor_lifecycle, possession, interaction, monster_traits, save_io into src/game/ | M1, M2 | PLANNED |
-| M5 | E2E Full Verification, Formal Closure & Iron Gate | 100% test pass, zero heap allocs in hot loop, update problems.md, commit | M1, M2, M3, M4 | PLANNED |
+| 1 | M1: Vulkan Fullscreen GPU Post-Pass & CRT Shader | Offscreen HDR target, `post_pass.vert`/`frag`, CRT curvature/scanlines/aberration/vignette, dark adaptation, remove CPU AddLine | none | PLANNED |
+| 2 | M2: Cyrillic TTF Font Support & Typography | ImGui font atlas Cyrillic + Punctuation glyphs, candidate TTF loader, localization audit | none | PLANNED |
+| 3 | M3: Character Creation & Settings Page | Menu Page 3 Char Creation UI, Role archetypes, STR/AGI/INT allocation, derived stats, player entity/pool initialization, Page 4 Settings | none | PLANNED |
+| 4 | M4: Rich Dialogue Window & Quest Log UI | Modular `dialogue_ui.h` & `quest_ui.h`, speaker portrait/badge/situation, choice dispatch, quest log tabs/timers/rewards | none | PLANNED |
+| 5 | M5: E2E Integration & Verification Gate | Full Release build, static source rules check, 100% test pass (`world_test`, `audit_test`, `e2e_test`), screenshot proof | M1, M2, M3, M4 | PLANNED |
 
 ## Interface Contracts
-### Gravity Frame ↔ Systems
-- `compute_camera(reg, aspect, up)` accepts the layer's gravity `up` vector derived from `world.gravity().at(playerPos)`.
-- `prop_system` impulses and angular velocity use `frame.up`, `frame.tangent0`, and `frame.tangent1`.
-- Compute push constants pass `vec4 grav` to `particle_sim.comp`, `wire_sim.comp`, `cloth_sim.comp`, `gas_sim.comp`.
 
-### Floor & World Lifecycle ↔ Simulation
-- `perform_floor_transition(World& world, Registry& reg, LayerId from, LayerId to, int targetFloor)` unifies transition and persistence logic.
-- All floor queries dynamic against `FloorRegistry` and `LevelStack`.
-- No `LayerId{0}` fallback when active layer is known.
+### M1: Vulkan Post-Pass Pipeline
+- Shaders: `shaders/post_pass.vert`, `shaders/post_pass.frag`
+- Descriptor Set: Binding 0 = `sampler2D sSceneColor` (HDR linear offscreen texture).
+- Push Constants / Uniforms: `time`, `resolution`, `darkAdaptationFactor`, `crtCurvature`, `scanlineIntensity`, `vignettePower`.
+- Framebuffer: `VkFramebuffer postPassFramebuffer` presenting to swapchain image view.
 
-### MacroSim ↔ Fixed-Step Sim Loop
-- `MacroSim::step(pool, params, rel)` runs amortized sweep: `cursor = (cursor + agingRecordsPerTick) % n`.
-- Cycles tracked via `cycleCount_`; deterministic hashing uses `cycleCount_ ^ id`.
-- Stationarity maintained via exact running counts and closed-loop replacement births.
+### M2: ImGui Typography
+- Function: `void ImGuiLayer::init_font_atlas(const char* custom_font_path = nullptr)`
+- Glyph Ranges: `static const ImWchar kCyrillicWithPunctuationRanges[] = { 0x0020, 0x00FF, 0x0400, 0x052F, 0x2000, 0x206F, 0x2DE0, 0x2DFF, 0xA640, 0xA69F, 0 };`
 
-### Main Coordinator ↔ Game Modules
-- `main.cpp` calls free functions from `src/game/`:
-  - `giga::refresh_floor_entities(world, reg, layer, ...)`
-  - `giga::tick_monster_traits(reg, dt)`
-  - `giga::dispatch_player_interaction(world, reg, player, ...)`
-  - `giga::save_world_state(...)` / `giga::load_world_state(...)`
-- Zero SDL3/Vulkan/ImGui headers in `src/game/`.
+### M3: Character Creation & Player Embodiment
+- Structure: `struct CharCreationState { Role role; int str; int agi; int intell; int unallocated; };`
+- Derived Formulas: `max_hp = round(level_hp(1) * (1.0f + 0.01f * str))`, `carry_g = 64000 + 4000 * str`, `max_psi = round(level_psi(1) * (1.0f + 0.01f * intell))`.
+- Integration: `void apply_character_creation(Registry& reg, Entity player, NpcPool& pool, const CharCreationState& cc);`
+
+### M4: Dialogue & Quest UI
+- Function: `void draw_dialogue_window_ui(AppUIContext& ctx, const DialogueState& state, DialogueAction& outAction);`
+- Function: `void draw_quest_log_ui(AppUIContext& ctx, const QuestLog& questLog, const ContractBoard& contracts);`
 
 ## Code Layout
-- `src/ecs/components.h`: POD components
-- `src/sim/camera.h`, `src/sim/camera.cpp`: Camera projection
-- `src/game/prop_system.cpp`: Prop physics, fixtures, interactions
-- `src/game/container.cpp`: Containers and looting
-- `src/game/macro_sim.h`, `src/game/macro_sim.cpp`: Macro-simulation
-- `src/game/floor_lifecycle.h`, `src/game/floor_lifecycle.cpp`: Floor lifecycle & entity refresh
-- `src/game/possession.h`, `src/game/possession.cpp`: Survivor possession & player transfer
-- `src/game/interaction.h`, `src/game/interaction.cpp`: Player interactions & terminal toggles
-- `src/game/monster_traits.h`, `src/game/monster_traits.cpp`: Monster autonomous traits
-- `src/game/save_io.h`, `src/game/save_io.cpp`: Run state & floor disk I/O
-- `src/app/main.cpp`: Presentation coordinator, render passes, window loop
-- `shaders/`: GLSL compute and raster shaders
+- `src/render/vk_renderer.*` — Vulkan offscreen HDR target, render passes, and post-pass pipeline.
+- `src/render/imgui_layer.*` — Font atlas configuration, Cyrillic glyphs, UI rendering.
+- `shaders/post_pass.vert` / `shaders/post_pass.frag` — GPU CRT post-processing shader.
+- `src/app/main.cpp` — Menu state machine, page routing, game loop.
+- `src/app/dialogue_ui.h` / `dialogue_ui.cpp` — Interactive Dialogue window.
+- `src/app/quest_ui.h` / `quest_ui.cpp` — Interactive Quest Log window.
+- `src/game/role.*`, `src/game/rpg.*`, `src/game/embody.*` — Role archetypes, RPG stats, entity embodiment.
+- `tests/` — Test suites (`world_test.cpp`, `audit_test.cpp`, `e2e_test.cpp`, `game_test.cpp`).

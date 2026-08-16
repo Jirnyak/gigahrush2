@@ -69,6 +69,7 @@
 #include "game/container.h"
 #include "game/door.h"
 #include "game/combat.h"
+#include "audio/audio_system.h"
 #include "game/status.h"
 #include "game/rpg.h"
 #include "game/extraction.h"
@@ -116,6 +117,9 @@
 #include "world/level_stack.h"
 #include "world/nav.h"
 #include "world/nav_async.h"
+#include "app/char_create_ui.h"
+#include "app/dialogue_ui.h"
+#include "app/quest_ui.h"
 
 using namespace giga;
 
@@ -1737,7 +1741,7 @@ int main(int argc, char** argv) {
     // `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release`.
     std::fprintf(stderr, "[build] %s\n", kBuildKind);
 
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) {
         std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
@@ -2261,7 +2265,10 @@ int main(int argc, char** argv) {
     // never alter a deterministic capture.
     enum class AppScreen : std::uint8_t { Menu, Playing };
     AppScreen screen = shotPath ? AppScreen::Playing : AppScreen::Menu;
-    int menuScreenPage = 0; // 0 root, 1 load slots, 2 new-game slots, 3 settings
+    int menuScreenPage = 0; // 0 root, 1 load slots, 2 new-game slots, 3 char creation, 4 settings
+    CharCreationState ccState{};
+    DialogueSession dialogueSession{};
+    QuestUIState questUIState{};
     if (screen == AppScreen::Menu) {
         input.set_mouselook(false);
         SDL_SetWindowRelativeMouseMode(window, false);
@@ -2676,6 +2683,9 @@ int main(int argc, char** argv) {
         return true;
     };
 
+    audio::AudioSystem audioSys;
+    audioSys.init();
+
     while (running) {
         activeLayer = reg.get<Transform>(player).layer;
         bool propPassNeedsRebuild = false;
@@ -2810,6 +2820,32 @@ int main(int argc, char** argv) {
             hud.process_event(e);
             if (e.type == SDL_EVENT_QUIT) running = false;
             if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat) {
+                audioSys.trigger_ui(audio::UiSound::KeyClick);
+                if (e.key.scancode == SDL_SCANCODE_J && screen == AppScreen::Playing && !ImGui::GetIO().WantTextInput) {
+                    questUIState.open = !questUIState.open;
+                    if (questUIState.open) {
+                        input.set_mouselook(false);
+                        SDL_SetWindowRelativeMouseMode(window, false);
+                    } else if (!dialogueSession.active && !paused) {
+                        input.set_mouselook(true);
+                        SDL_SetWindowRelativeMouseMode(window, true);
+                    }
+                }
+                if (e.key.scancode == SDL_SCANCODE_ESCAPE && screen == AppScreen::Playing && !ImGui::GetIO().WantTextInput) {
+                    if (dialogueSession.active) {
+                        dialogueSession.active = false;
+                        if (!questUIState.open && !paused) {
+                            input.set_mouselook(true);
+                            SDL_SetWindowRelativeMouseMode(window, true);
+                        }
+                    } else if (questUIState.open) {
+                        questUIState.open = false;
+                        if (!dialogueSession.active && !paused) {
+                            input.set_mouselook(true);
+                            SDL_SetWindowRelativeMouseMode(window, true);
+                        }
+                    }
+                }
                 if (rebindCapture >= 0) {
                     // The menu is listening: this key becomes the row's binding
                     // (Esc cancels). Saved immediately — a rebind the app then
@@ -4108,6 +4144,37 @@ int main(int argc, char** argv) {
                     if (reg.valid(player)) {
                         const vec3 ppos = reg.get<Transform>(player).pos;
                         bool handled = false;
+
+                        // 0. NPC Dialogue Window interaction (R4)
+                        const game::NpcId talker = game::nearest_speaker(reg, activeLayer);
+                        if (talker != game::kInvalidNpc && pool.valid(talker) && pool.alive(talker)) {
+                            dialogueSession.speaker = talker;
+                            dialogueSession.faction = static_cast<game::Faction>(pool.faction(talker));
+                            dialogueSession.role = static_cast<game::RoleId>(pool.role(talker));
+                            dialogueSession.situation = speechSit;
+                            std::snprintf(dialogueSession.speakerName, sizeof(dialogueSession.speakerName),
+                                          "%s #%u (%s)", game::faction_name(dialogueSession.faction),
+                                          dialogueSession.speaker,
+                                          dialogueSession.role == game::RoleId::Resident ? "Житель" :
+                                          dialogueSession.role == game::RoleId::Duty ? "Ликвидатор" :
+                                          dialogueSession.role == game::RoleId::Medic ? "Медик" :
+                                          dialogueSession.role == game::RoleId::Looter ? "Мародёр" : "Культист");
+                            if (speechLine) std::snprintf(dialogueSession.speechText, sizeof(dialogueSession.speechText), "%s", speechLine);
+                            if (rumourLine[0]) std::snprintf(dialogueSession.rumourText, sizeof(dialogueSession.rumourText), "%s", rumourLine);
+                            dialogueSession.contractOffer = offer;
+                            std::snprintf(dialogueSession.contractText, sizeof(dialogueSession.contractText), "%s", offerLine);
+                            dialogueSession.questOffer = questOffer;
+                            dialogueSession.questOfferGiver = questOfferGiver;
+                            std::snprintf(dialogueSession.questText, sizeof(dialogueSession.questText), "%s", questOfferLine);
+                            dialogueSession.speakerHp = pool.hp(talker);
+                            dialogueSession.speakerMaxHp = pool.max_hp(talker);
+                            dialogueSession.traderNear = game::on_extraction_pad(stack.layer(activeLayer).grid(), ppos);
+                            dialogueSession.canPossess = true;
+                            dialogueSession.active = true;
+                            input.set_mouselook(false);
+                            SDL_SetWindowRelativeMouseMode(window, false);
+                            handled = true;
+                        }
 
                         // 1. Corpse loot — gate on §18 find_nearest Kind::Corpse,
                         // then specialized loot_corpse_interact backend.
@@ -5662,6 +5729,13 @@ int main(int argc, char** argv) {
                                                "  quest: %s", qline);
                     }
                 }
+                if (ImGui::Button("[J] ЖУРНАЛ ЗАДАНИЙ / QUEST LOG")) {
+                    questUIState.open = !questUIState.open;
+                    if (questUIState.open) {
+                        input.set_mouselook(false);
+                        SDL_SetWindowRelativeMouseMode(window, false);
+                    }
+                }
             }
             if (rumourLine[0])
                 ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.91f, 1.0f), "\"%s\"",
@@ -5963,6 +6037,14 @@ int main(int argc, char** argv) {
                 }
             }
 
+            // Nearby speaker for Dialogue (E key)
+            if (!promptText && activeLayer != kInvalidLayer) {
+                const game::NpcId talker = game::nearest_speaker(reg, activeLayer);
+                if (talker != game::kInvalidNpc && pool.valid(talker) && pool.alive(talker)) {
+                    set_prompt("interact", "TALK / DIALOGUE (E)");
+                }
+            }
+
             // Standing on extraction pad -> vendor trade / resupply available
             if (!promptText && activeLayer != kInvalidLayer) {
                 if (game::on_extraction_pad(stack.layer(activeLayer).grid(), ppos)) {
@@ -6032,78 +6114,132 @@ int main(int argc, char** argv) {
         // more page here when it lands. Labels are ASCII — the default ImGui
         // font ships no Cyrillic glyphs.
         if (screen == AppScreen::Menu) {
-            ImGuiIO& io = ImGui::GetIO();
-            ImGui::SetNextWindowPos(
-                ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
-                ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-            ImGui::Begin("##mainmenu", nullptr,
-                         ImGuiWindowFlags_AlwaysAutoResize |
-                             ImGuiWindowFlags_NoCollapse |
-                             ImGuiWindowFlags_NoMove |
-                             ImGuiWindowFlags_NoTitleBar |
-                             ImGuiWindowFlags_NoSavedSettings);
-            const ImVec2 btn(240.0f, 0.0f);
-            if (menuScreenPage == 0) {
-                ImGui::TextUnformatted("G I G A H R U S H  2");
-                ImGui::Separator();
-                if (ImGui::Button("New Game", btn)) menuScreenPage = 2;
-                if (ImGui::Button("Load Game", btn)) menuScreenPage = 1;
-                if (ImGui::Button("Settings", btn)) menuScreenPage = 3;
-                ImGui::Spacing();
-                if (ImGui::Button("Quit", btn)) running = false;
-            } else if (menuScreenPage == 1) {
-                ImGui::TextUnformatted("Load Game");
-                ImGui::Separator();
-                bool any = false;
-                for (int s = 1; s <= kMaxSaveSlots; ++s) {
-                    if (!slot_occupied(s)) continue;
-                    any = true;
-                    char label[32];
-                    std::snprintf(label, sizeof label, "Slot %d", s);
-                    if (ImGui::Button(label, btn)) {
-                        // The load itself runs on the sim clock next frame —
-                        // and BEFORE the player has touched anything, which is
-                        // what makes the full v6 world restore safe.
-                        g_saveSlot = s;
-                        loadWanted = true;
-                        menu_start_playing();
-                    }
+            if (menuScreenPage == 3) {
+                bool beginExpedition = false;
+                bool backToSlotPicker = false;
+                draw_character_creation_ui(ccState, beginExpedition, backToSlotPicker);
+                if (beginExpedition) {
+                    apply_character_creation(reg, player, pool, carriedRpg, ccState);
+                    menu_start_playing();
                 }
-                if (!any) ImGui::TextUnformatted("(no saves yet)");
-                ImGui::Spacing();
-                if (ImGui::Button("Back", btn)) menuScreenPage = 0;
-            } else if (menuScreenPage == 2) {
-                ImGui::TextUnformatted("New Game - pick a slot");
-                ImGui::Separator();
-                for (int s = 1; s <= kMaxSaveSlots; ++s) {
-                    char label[48];
-                    std::snprintf(label, sizeof label, "Slot %d%s", s,
-                                  slot_occupied(s) ? "  (overwrite)" : "");
-                    if (ImGui::Button(label, btn)) {
-                        g_saveSlot = s;
-                        // A new game clears its slot's directory: stale floor
-                        // files from the previous run in this slot must not
-                        // leak into a fresh one. Player-directed, labelled.
-                        char dir[128];
-                        slot_dir_path(dir, sizeof dir, s);
-                        std::error_code ec;
-                        std::filesystem::remove_all(dir, ec);
-                        menu_start_playing();
-                    }
+                if (backToSlotPicker) {
+                    menuScreenPage = 2;
                 }
-                ImGui::Spacing();
-                if (ImGui::Button("Back", btn)) menuScreenPage = 0;
+            } else if (menuScreenPage == 4) {
+                bool backToRoot = false;
+                draw_settings_menu_ui(backToRoot);
+                if (backToRoot) {
+                    menuScreenPage = 0;
+                }
             } else {
-                ImGui::TextUnformatted("Settings");
-                ImGui::Separator();
-                ImGui::TextUnformatted(
-                    "Key bindings: pause menu (Esc in game), persisted.");
-                ImGui::TextUnformatted(
-                    "Character creation lands here as its own page.");
-                ImGui::Spacing();
-                if (ImGui::Button("Back", btn)) menuScreenPage = 0;
+                ImGuiIO& io = ImGui::GetIO();
+                ImGui::SetNextWindowPos(
+                    ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                    ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+                ImGui::Begin("##mainmenu", nullptr,
+                             ImGuiWindowFlags_AlwaysAutoResize |
+                                 ImGuiWindowFlags_NoCollapse |
+                                 ImGuiWindowFlags_NoMove |
+                                 ImGuiWindowFlags_NoTitleBar |
+                                 ImGuiWindowFlags_NoSavedSettings);
+                const ImVec2 btn(240.0f, 0.0f);
+                if (menuScreenPage == 0) {
+                    ImGui::TextUnformatted("G I G A H R U S H  2");
+                    ImGui::Separator();
+                    if (ImGui::Button("New Game", btn)) menuScreenPage = 2;
+                    if (ImGui::Button("Load Game", btn)) menuScreenPage = 1;
+                    if (ImGui::Button("Settings", btn)) menuScreenPage = 4;
+                    ImGui::Spacing();
+                    if (ImGui::Button("Quit", btn)) running = false;
+                } else if (menuScreenPage == 1) {
+                    ImGui::TextUnformatted("Load Game");
+                    ImGui::Separator();
+                    bool any = false;
+                    for (int s = 1; s <= kMaxSaveSlots; ++s) {
+                        if (!slot_occupied(s)) continue;
+                        any = true;
+                        char label[32];
+                        std::snprintf(label, sizeof label, "Slot %d", s);
+                        if (ImGui::Button(label, btn)) {
+                            // The load itself runs on the sim clock next frame —
+                            // and BEFORE the player has touched anything, which is
+                            // what makes the full v6 world restore safe.
+                            g_saveSlot = s;
+                            loadWanted = true;
+                            menu_start_playing();
+                        }
+                    }
+                    if (!any) ImGui::TextUnformatted("(no saves yet)");
+                    ImGui::Spacing();
+                    if (ImGui::Button("Back", btn)) menuScreenPage = 0;
+                } else if (menuScreenPage == 2) {
+                    ImGui::TextUnformatted("New Game - pick a slot");
+                    ImGui::Separator();
+                    for (int s = 1; s <= kMaxSaveSlots; ++s) {
+                        char label[48];
+                        std::snprintf(label, sizeof label, "Slot %d%s", s,
+                                      slot_occupied(s) ? "  (overwrite)" : "");
+                        if (ImGui::Button(label, btn)) {
+                            g_saveSlot = s;
+                            // A new game clears its slot's directory: stale floor
+                            // files from the previous run in this slot must not
+                            // leak into a fresh one. Player-directed, labelled.
+                            char dir[128];
+                            slot_dir_path(dir, sizeof dir, s);
+                            std::error_code ec;
+                            std::filesystem::remove_all(dir, ec);
+                            menuScreenPage = 3; // transition to Character Creation
+                        }
+                    }
+                    ImGui::Spacing();
+                    if (ImGui::Button("Back", btn)) menuScreenPage = 0;
+                }
+                ImGui::End();
             }
-            ImGui::End();
+        }
+
+        // NPC Dialogue Window (R4)
+        if (screen == AppScreen::Playing && dialogueSession.active) {
+            DialogueAction dAction = DialogueAction::None;
+            draw_dialogue_window_ui(dialogueSession, dAction);
+            if (dAction == DialogueAction::Close) {
+                dialogueSession.active = false;
+                if (!paused && !questUIState.open) {
+                    input.set_mouselook(true);
+                    SDL_SetWindowRelativeMouseMode(window, true);
+                }
+            } else if (dAction == DialogueAction::AskRumours) {
+                const game::Rumour ru = game::rumour_for(reg, pool, dialogueSession.speaker, activeLayer, currentFloor, samosbor);
+                game::rumour_text(ru, dialogueSession.rumourText, sizeof(dialogueSession.rumourText));
+            } else if (dAction == DialogueAction::AcceptContract) {
+                if (game::contract_accept(contracts, dialogueSession.contractOffer, ledger)) {
+                    offer = game::Contract{};
+                    offerLine[0] = 0;
+                    dialogueSession.contractText[0] = 0;
+                }
+            } else if (dAction == DialogueAction::AcceptQuest) {
+                if (game::quest_valid(dialogueSession.questOffer) && dialogueSession.questOfferGiver != game::kInvalidNpc &&
+                    game::quest_accept(quests, pool, dialogueSession.questOffer, dialogueSession.questOfferGiver, currentFloor, ledger)) {
+                    questOffer = game::kInvalidQuest;
+                    questOfferGiver = game::kInvalidNpc;
+                    questOfferLine[0] = 0;
+                    dialogueSession.questText[0] = 0;
+                }
+            } else if (dAction == DialogueAction::OpenTrade) {
+                showVendorWindow = true;
+            } else if (dAction == DialogueAction::Possess) {
+                possessWanted = true;
+                dialogueSession.active = false;
+                if (!paused && !questUIState.open) {
+                    input.set_mouselook(true);
+                    SDL_SetWindowRelativeMouseMode(window, true);
+                }
+            }
+        }
+
+        // Quest Log Window (R4)
+        if (screen == AppScreen::Playing && questUIState.open) {
+            draw_quest_log_ui(questUIState, quests, contracts);
         }
 
         // Pause menu (Esc). Extensible BY DATA: a main-page item is a label plus
@@ -6197,10 +6333,27 @@ int main(int argc, char** argv) {
 
         // CRT / VHS full-screen overlay: scanlines, phosphor wash and tube
         // vignette drawn on top of every ImGui window (and the 3D world through
-        // the transparent background), per the Soviet служебный aesthetic
-        // mandate ([jirnyak.md] §19/§8.6). Must be recorded after all HUD and
-        // menu windows so it sits on top of them, and before ImGui::Render().
+        // CRT overlays are executed via GPU fragment shader post-pass.
         hud.draw_crt_overlay();
+
+        // Asymmetric Dark Adaptation: fast constriction (tau=0.15s) when entering light,
+        // slow dilation (tau=2.50s) when entering dark room depths.
+        {
+            static float s_darkAdaptation = 1.0f;
+            float sceneLuminance = kAmbient + kFillStrength;
+            if (reg.valid(player)) {
+                sceneLuminance += kLampIntensity * 0.25f;
+            }
+            float targetExposure = std::clamp(1.0f / (sceneLuminance + 0.10f), 0.20f, 2.50f);
+            if (targetExposure < s_darkAdaptation) {
+                float alpha = 1.0f - std::exp(-frameDt / 0.15f);
+                s_darkAdaptation = s_darkAdaptation + (targetExposure - s_darkAdaptation) * alpha;
+            } else {
+                float alpha = 1.0f - std::exp(-frameDt / 2.50f);
+                s_darkAdaptation = s_darkAdaptation + (targetExposure - s_darkAdaptation) * alpha;
+            }
+            renderer.set_dark_adaptation(s_darkAdaptation);
+        }
 
         // Begin command recording & compute pass before graphics render pass
         if (renderer.begin_frame_cmd(window)) {
@@ -6688,9 +6841,19 @@ int main(int argc, char** argv) {
                 }
             }
         }
+
+        if (reg.valid(player)) {
+            const auto& pTr = reg.get<Transform>(player);
+            const auto& pCam = reg.get<CameraTag>(player);
+            const Field<float>* dangerFld = stack.layer(activeLayer).fields().find<float>("danger");
+            audioSys.update(frameDt, pTr.pos, pCam.yaw, pCam.pitch,
+                            stack.layer(activeLayer).grid(), dangerFld,
+                            samosbor, bus, noiseField, (showHud && !paused) ? 1.0f : 0.2f);
+        }
     }
 
     // --- teardown (reverse order) -----------------------------------------
+    audioSys.shutdown();
     hud.destroy();
 
     gasPass.destroy();
