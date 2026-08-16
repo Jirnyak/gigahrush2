@@ -593,7 +593,8 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
                              NpcPool& pool, EventBus& bus,
                              LayerId layer, float dt, std::uint64_t tick,
                              ParticleBurstQueue* particles = nullptr,
-                             const GravityField* gravity = nullptr);
+                             const GravityField* gravity = nullptr,
+                             bool samosborFrenzy = false);
 
 // Cell hazards for EMBODIED BODIES — the player and every resident.
 //
