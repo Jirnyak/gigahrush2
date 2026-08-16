@@ -15,6 +15,7 @@
 #include "game/mob_behaviour.h"
 #include "game/mob_table.h"
 #include "game/mob_spawn.h"
+#include "world/gravity.h"
 #include "world/lattice.h"
 #include "world/types.h"
 
@@ -117,8 +118,23 @@ bool adjacent_wall(const MacroGrid& grid, const vec3& pos) {
 
 void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                  const nav::CoarseGraph& coarse,
-                 const nav::FineNav& fine, LayerId layer, std::uint64_t tick) {
+                 const nav::FineNav& fine, LayerId layer, std::uint64_t tick,
+                 const GravityField* gravity) {
     if (fine.flow.empty()) return;  // nav not baked for this floor
+
+    GravityRegime steerRegime = GravityRegime::NegZ;
+    if (gravity != nullptr) {
+        steerRegime = gravity->regime;
+        if (steerRegime == GravityRegime::Custom)
+            steerRegime = regime_from_vector(gravity->global);
+    }
+    const GravityFrame gf = regime_frame(steerRegime);
+    const auto tangent = [&gf](float x, float y, float z) {
+        if (gf.axis == 0) x = 0.0f;
+        else if (gf.axis == 1) y = 0.0f;
+        else z = 0.0f;
+        return vec3{x, y, z};
+    };
 
     const std::uint32_t phase = static_cast<std::uint32_t>(tick % kWanderPeriod);
 
@@ -162,9 +178,9 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         Transform& tr = view.get<Transform>(e);
         if (tr.layer != layer) continue;
 
-        if (reg.all_of<MobRef>(e)) {
-            const MobRef& mr = reg.get<const MobRef>(e);
-            const MobDef& md = kMobTable[mr.kind];
+        const MobRef* mr = reg.try_get<MobRef>(e);
+        if (mr) {
+            const MobDef& md = kMobTable[mr->kind];
             if (!has_flag(md.aiFlags, AiFlag::Flying)) {
                 int cx, cy, cz;
                 agent_cell(tr.pos, cx, cy, cz);
@@ -230,9 +246,8 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         // holder, and the RATE is the whole design — see [hunt.h] before touching
         // this. Residents themselves still walk past the carnage: NPC-on-NPC and
         // NPC-on-monster fighting is a threat model this does not have.
-        if (reg.all_of<MobRef>(e)) {
-            const MobRef& mr = reg.get<const MobRef>(e);
-            const MobDef& md = kMobTable[mr.kind];
+        if (mr) {
+            const MobDef& md = kMobTable[mr->kind];
             const MobBehaviour beh = static_cast<MobBehaviour>(md.behaviour);
             // Ten kinds have their own sight range instead of the flat 20 m: three
             // notice you far LATER (2.15 to 7.5 m), which is the only reason walking
@@ -338,9 +353,14 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                     }
                     const game::BurstPhase bp = game::burst_phase(beh, id, tick, len);
                     sp *= game::burst_speed_mult(bp);
-                    sp *= game::behaviour_hurt_move_mult(beh, mr.hp, mr.maxHp);
-                    vel.v.x = tx / tl * sp;
-                    vel.v.y = ty / tl * sp;
+                    sp *= game::behaviour_hurt_move_mult(beh, mr->hp, mr->maxHp);
+                    const vec3 to = tangent(tx, ty, 0.0f);
+                    const float toLen = length(to);
+                    if (toLen > 0.001f) {
+                        if (gf.axis != 0) vel.v.x = (to.x / toLen) * sp;
+                        if (gf.axis != 1) vel.v.y = (to.y / toLen) * sp;
+                        if (gf.axis != 2) vel.v.z = (to.z / toLen) * sp;
+                    }
                 }
                 continue;  // no repath, no flow read — it has a target
             }
@@ -352,8 +372,13 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         // Steer toward the CURRENT lattice node on the coarse route, not the
         // final destination: the flow fields route to a node, and the coarse
         // next-hop table is what makes a multi-node journey a sequence of them.
-        const int here = lattice_id(lattice_axis_of(cx), lattice_axis_of(cy),
-                                    lattice_axis_of(cz));
+        // Spec 15 §2: query the baked geodesic nearest_node field (guarantees
+        // reachability), falling back to Voronoi partition if outside fine field.
+        const std::uint8_t nearAnchor = fine.nearest_node(cx, cy, cz);
+        const int here = (nearAnchor < nav::kNodes)
+                             ? static_cast<int>(nearAnchor)
+                             : lattice_id(lattice_axis_of(cx), lattice_axis_of(cy),
+                                          lattice_axis_of(cz));
         const int hop = nav::coarse_next(coarse, here, wt.node);
         std::uint8_t flow = fine.at(hop, cx, cy, cz);
 
@@ -377,57 +402,46 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                 wt.node = static_cast<std::uint8_t>(h % nav::kNodes);
                 wt.cooldown = kRepathCooldown;
             }
-            vel.v.x = 0.0f;
-            vel.v.y = 0.0f;
+            if (gf.axis != 0) vel.v.x = 0.0f;
+            if (gf.axis != 1) vel.v.y = 0.0f;
+            if (gf.axis != 2) vel.v.z = 0.0f;
             continue;
         }
 
-        float dirX = 0.0f, dirY = 0.0f;
-        const bool horizontalStep =
-            (flow < 6) && (nav::kNavDir[flow][2] == 0);
+        const bool inWalkingPlane =
+            (flow < 6) && ((flow >> 1) != gf.axis);
 
-        if (horizontalStep) {
+        vec3 dir{0.0f, 0.0f, 0.0f};
+        if (inWalkingPlane) {
             // The common, good case: the bake hands us the exact next step along a
             // shortest wrapped path, obstacle avoidance included, for one byte.
-            dirX = static_cast<float>(nav::kNavDir[flow][0]);
-            dirY = static_cast<float>(nav::kNavDir[flow][1]);
+            dir.x = static_cast<float>(nav::kNavDir[flow][0]);
+            dir.y = static_cast<float>(nav::kNavDir[flow][1]);
+            dir.z = static_cast<float>(nav::kNavDir[flow][2]);
         } else {
-            // The flow says "climb" (or we are standing on the hop node). A walking
-            // body cannot climb a storey, and stairwell traversal is not wired.
-            //
-            // This is NOT a rare edge case, which is why it gets a real fallback
-            // instead of a shrug: measured on a Residential floor, 110 of 120
-            // ground-storey residents get a vertical first step. All 64 lattice
-            // nodes sit at cell z in {16, 48, 80, 112} while a floor module's crowd
-            // stands at z = 1, so nearly every route begins by going up. Refusing
-            // the step left 92% of the crowd standing still.
-            //
-            // Fall back to the horizontal bearing toward the hop node's column: the
-            // agent walks toward the shaft rather than freezing, which is both
-            // plausible behaviour and the direction a future stairwell traversal
-            // would want anyway. Physics resolves whatever it walks into.
+            // Fall back to the bearing toward the hop node's column in the tangent plane:
             const LatticeNode ln = lattice_unpack(hop);
             const float tx = static_cast<float>(lattice_coord(ln.ix)) * kCellSize;
             const float ty = static_cast<float>(lattice_coord(ln.iy)) * kCellSize;
-            const float ox = wrap_delta_f(tr.pos.x, tx, kWorldExtent);
-            const float oy = wrap_delta_f(tr.pos.y, ty, kWorldExtent);
-            const float len = std::sqrt(ox * ox + oy * oy);
+            const float tz = static_cast<float>(lattice_coord(ln.iz)) * kCellSize;
+            const vec3 delta = tangent(
+                wrap_delta_f(tr.pos.x, tx, kWorldExtent),
+                wrap_delta_f(tr.pos.y, ty, kWorldExtent),
+                wrap_delta_f(tr.pos.z, tz, kWorldExtent));
+            const float len = length(delta);
             if (len < kCellSize) {
-                // Already in the node's column with nowhere horizontal to go. Same
-                // rule as the repath above: a packed agent keeps the pack's node and
-                // waits out the epoch instead of privately picking another.
                 if (wt.pack == 0 && wt.cooldown == 0) {
                     std::uint32_t h =
                         hash_u32(id ^ static_cast<std::uint32_t>(tick) ^ 0x5bf03635u);
                     wt.node = static_cast<std::uint8_t>(h % nav::kNodes);
                     wt.cooldown = kRepathCooldown;
                 }
-                vel.v.x = 0.0f;
-                vel.v.y = 0.0f;
+                if (gf.axis != 0) vel.v.x = 0.0f;
+                if (gf.axis != 1) vel.v.y = 0.0f;
+                if (gf.axis != 2) vel.v.z = 0.0f;
                 continue;
             }
-            dirX = ox / len;
-            dirY = oy / len;
+            dir = delta * (1.0f / len);
         }
 
         float speed = kNpcWalkSpeed;
@@ -437,9 +451,10 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                     kCellSize;
         }
 
-        vel.v.x = dirX * speed;
-        vel.v.y = dirY * speed;
-        // z is left to gravity: this is locomotion, not flight.
+        if (gf.axis != 0) vel.v.x = dir.x * speed;
+        if (gf.axis != 1) vel.v.y = dir.y * speed;
+        if (gf.axis != 2) vel.v.z = dir.z * speed;
+        // Gravity axis is left to physics_step
     }
 
     for (const auto& hit : hazardHits) {

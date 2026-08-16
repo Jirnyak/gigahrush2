@@ -3632,7 +3632,8 @@ int main(int argc, char** argv) {
                                      kSimDt, &activeWorld.gravity());
                 game::wander_step(reg, stack.layer(activeLayer).grid(), pool,
                                   nav.coarse(),
-                                  nav.fine(), activeLayer, simTick);
+                                  nav.fine(), activeLayer, simTick,
+                                  &activeWorld.gravity());
 
                 // Footstep noise generation while walking or running.
                 // "Walking" is speed ACROSS the floor, so the vertical component is

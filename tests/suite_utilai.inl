@@ -131,6 +131,8 @@ inline Entity make_body(Registry& reg, NpcPool& pool, int cx, int cy, int cz,
 // documents).
 inline void fill_flow_plus_x(nav::FineNav& fine) {
     fine.flow.assign(kMacroCells, static_cast<std::uint8_t>(1)); // kNavDir[1] = +x
+    // Invariant of bake_fine: `nearest` exists whenever `flow` does ([nav.h]).
+    fine.nearest.assign(kMacroCells, nav::kFlowNone);
 }
 
 // Snapshot every body's Velocity to the sentinel.

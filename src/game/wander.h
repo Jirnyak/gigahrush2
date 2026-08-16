@@ -28,6 +28,10 @@
 #include "world/macro_grid.h"
 #include "world/nav.h"
 
+namespace giga {
+struct GravityField;
+}
+
 namespace giga::game {
 
 // The lattice node this agent is currently walking toward. THREE bytes: an agent's
@@ -125,6 +129,7 @@ std::uint32_t wander_init(Registry& reg, LayerId layer, std::uint32_t seed);
 // emptying a floor is [hunt.h]; read it before changing what a mob chases.
 void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                  const nav::CoarseGraph& coarse,
-                 const nav::FineNav& fine, LayerId layer, std::uint64_t tick);
+                 const nav::FineNav& fine, LayerId layer, std::uint64_t tick,
+                 const GravityField* gravity = nullptr);
 
 } // namespace giga::game
