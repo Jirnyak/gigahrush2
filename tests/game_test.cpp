@@ -84,6 +84,7 @@ int g_checks = 0;
 #include "suite_samosbor.inl"
 #include "suite_doors.inl"
 #include "suite_antourage.inl"
+#include "suite_audio.inl"
 #include "suite_saveload.inl"
 #include "suite_macrosim.inl"
 #include "suite_behaviours.inl"
@@ -5300,6 +5301,7 @@ int main() {
     test_antourage_detached_pipe_falls_and_lands();
     test_gravity_frames();
     test_antourage_isotropy();
+    test_audio_all();
     test_saveload_all();
     test_macrosim_all();
     test_behaviours_all();

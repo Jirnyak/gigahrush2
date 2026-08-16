@@ -91,7 +91,14 @@ public:
     // was actually oversized was the ENCODING on disk, and that was fixed where it
     // belonged: the floor snapshot run-length-encodes pages now ([save.h] v2), 736
     // -> 125 MB and 6.6 -> 1.3 s, with the material model untouched.
-    static constexpr std::uint32_t kPageCap = 786432u;
+    // 786432 -> 1048576 (2026-08-17): +52% headroom over the measured 690k.
+    // NOT the fork's 4M: that cap was sized for a 512x512x16 world and exceeds
+    // even our theoretical maximum (every cell mixed = 2 GiB) — paying for a
+    // hypothesis. 1 GiB covers generation + a long run's worth of carving on
+    // the 16 GiB heap this host reports; the loud OVERFLOW log stays the
+    // watchdog, and the HUD's `pages` line is the gauge to read before
+    // touching this number again.
+    static constexpr std::uint32_t kPageCap = 1048576u;
 
     static constexpr std::size_t kMaskBytesPerCell = 64;                    // 8x uint64
     static constexpr std::size_t kPageBytes = kSubVoxels * sizeof(std::uint16_t);

@@ -98,6 +98,7 @@
 
 #include "render/gpu_cull_pass.h"
 #include "app/ui_shell.h"
+#include "audio/audio_system.h"
 #include "render/imgui_layer.h"
 #include "render/intro_ui.h"
 #include "render/inventory_ui.h"
@@ -1605,7 +1606,7 @@ int main(int argc, char** argv) {
     // `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release`.
     std::fprintf(stderr, "[build] %s\n", kBuildKind);
 
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) {
         std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
@@ -2244,6 +2245,11 @@ int main(int argc, char** argv) {
     game::Console console;
     if (!game::console_register_defaults(console))
         std::fprintf(stderr, "[console] duplicate default command REFUSED\n");
+    // Аудио: процедурный DSP + артистские override'ы ([audio.md], политика
+    // текстур). Микс на главном потоке; отказ устройства — тишина, не смерть.
+    audio::AudioSystem audioSys;
+    audioSys.init();
+
     game::ConsoleContext consoleCtx;
     bool showConsole = false;
     bool consoleFocus = false;
@@ -6420,6 +6426,19 @@ int main(int argc, char** argv) {
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Hud);
             hud.render(cmd);
             renderer.timer.pass_end(cmd, gpu::GpuPass::Hud);
+            // Аудио-кадр: слушатель = тело с камерой, события — NoiseField,
+            // опасность — danger-поле слоя. [audio/audio_system.h]
+            if (reg.valid(player)) {
+                const Transform& atr = reg.get<Transform>(player);
+                const CameraTag* acam = reg.try_get<CameraTag>(player);
+                const Field<float>* adanger =
+                    stack.layer(activeLayer).fields().find<float>(kDangerField);
+                audioSys.update(frameDt, atr.pos, acam ? acam->yaw : 0.0f,
+                                acam ? acam->pitch : 0.0f,
+                                stack.layer(activeLayer).grid(), adanger,
+                                samosbor, bus, noiseField, 1.0f, &doors,
+                                activeLayer);
+            }
             renderer.end_frame(window);
 
             // --mirror-verify heartbeat: prove the incremental dirty path (not

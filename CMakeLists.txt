@@ -232,9 +232,20 @@ giga_target_flags(giga_core OFF)
 # top of the game-agnostic core. Kept as its own lib so headless tests can link
 # and exercise it without SDL/Vulkan, and so the engine core stays pure.
 file(GLOB_RECURSE GIGA_GAME_SOURCES CONFIGURE_DEPENDS src/game/*.cpp)
+# Аудио: DSP-слой платформы не знает (тестируется game_test'ом), SDL-мост
+# audio_system.cpp живёт в исполняемом файле — SDL не протекает в тесты.
+file(GLOB GIGA_AUDIO_DSP CONFIGURE_DEPENDS
+    src/audio/audio_mixer.cpp src/audio/spatial_audio.cpp
+    src/audio/synth_ambient.cpp src/audio/synth_geiger.cpp
+    src/audio/synth_siren.cpp src/audio/synth_ui.cpp)
+add_library(giga_audio STATIC ${GIGA_AUDIO_DSP})
+target_include_directories(giga_audio PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(giga_audio PUBLIC giga_core)
+giga_target_flags(giga_audio OFF)
+
 add_library(giga_game STATIC ${GIGA_GAME_SOURCES})
 target_include_directories(giga_game PUBLIC ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(giga_game PUBLIC giga_core)
+target_link_libraries(giga_game PUBLIC giga_core giga_audio)
 giga_target_flags(giga_game OFF)
 
 # ---- Shader compilation (GLSL -> SPIR-V) ----------------------------------
@@ -378,7 +389,7 @@ add_custom_target(giga_shaders DEPENDS ${_giga_spv_files})
 # cause.
 file(GLOB_RECURSE GIGA_RENDER_SOURCES CONFIGURE_DEPENDS src/render/*.cpp)
 file(GLOB_RECURSE GIGA_APP_SOURCES CONFIGURE_DEPENDS
-    src/app/*.cpp src/input/*.cpp)
+    src/app/*.cpp src/input/*.cpp src/audio/audio_system.cpp)
 
 # Dear ImGui is third-party: its own target with default warnings, so our
 # zero-warning policy applies to *our* code only and never has to be relaxed
@@ -989,7 +1000,12 @@ if(GIGA_BUILD_TESTS)
     # segfault was the incomplete hand-built FineNav fixtures, fixed in the
     # wander wave; the one edit here is apply_damage's arity (his tree had a
     # trailing fluid param). Knockback under a gravity field, per-regime.
-        PASS_REGULAR_EXPRESSION "game_test: 240357 checks, 0 failures")
+    # 240357 -> 240553 (+196) on 2026-08-17: suite_audio — DSP-примитивы,
+    # гейгер-пуассон, сирена С-40, эмбиент-гармоники, equal-power панорама,
+    # окклюзия. Сьюта форка ПРОРЕЖЕНА: его 295k пер-сэмпловых NaN-ассертов
+    # схлопнуты в аккумуляторы (один CHECK на цикл) — ратчет счётчика чеков
+    # не должен обесцениваться буфером на 48k сэмплов. Mutation RUN: см. коммит.
+        PASS_REGULAR_EXPRESSION "game_test: 240553 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются
