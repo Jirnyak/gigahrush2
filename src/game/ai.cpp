@@ -1085,8 +1085,10 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
         // A SETTLED body has `dir` at zero, so this writes a real stop — owning the
         // body and holding it still is what keeps wander from walking it back out
         // of the room mid-meal.
-        const float speed =
-            brain.currentIntent == IntentFlee ? kFleeSpeed : kErrandSpeed;
+        const float speed = (brain.currentIntent == IntentFlee ||
+                             brain.currentIntent == IntentSafety)
+                                ? kFleeSpeed
+                                : kErrandSpeed;
         // The component ALONG gravity is intentionally untouched — physics_step
         // owns it (pull and jump), whatever axis it happens to be. Same rule as
         // wander_step: this is locomotion, not flight. Under NegZ this writes
