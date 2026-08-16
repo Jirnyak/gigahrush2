@@ -5,34 +5,35 @@
 // there is no sun down here, so the light the player actually sees is the light
 // they carry.
 //
-//   headlamp  a camera-attached point light with 1/(1+d^2/r^2) falloff. This is
-//             what makes depth readable: every metre of distance changes the
-//             brightness of a surface, so a corridor gets a real light cone
-//             instead of reading as a flat mosaic of rectangles.
-//   fill      a weak directional term so geometry outside the lamp cone is a
-//             dim shape rather than a black silhouette.
-//   ambient   a low hemispheric term, up-facing faces slightly brighter and
-//             cooler than down-facing ones.
+// Multi-Biome Procedural Material Rendering:
+//   - Floor 0 (Soviet Padic): Authentically weathered two-tone oil enamel (peeling
+//     paint flakes with micro-cavity shadow, plaster reveal), concrete floor slabs
+//     with distinct bevelled seams, micro-grain roughness, damp floor patches,
+//     and subtle grazing-angle specular reflection, conduit pipes with
+//     anisotropic metallic glints, ceiling concrete texture.
+//   - Floor 2 (Industrial Factory): Heavy rusted cast iron, dark oxidized steel, hazard
+//     warning yellow-black diagonal stripes on door frames/pillars, high-contrast
+//     metallic specular.
+//   - Floor 4 (Sterile Bio-Lab): Glazed white/mint ceramic tiles with sharp specular
+//     grid lines, glowing green bioluminescent vats/tubes.
 //
-// Lighting is done in LINEAR space and encoded to sRGB at the very end, because
-// the swapchain is deliberately VK_FORMAT_B8G8R8A8_UNORM in
-// VK_COLOR_SPACE_SRGB_NONLINEAR_KHR (vk_swapchain.cpp choose_format): a UNORM
-// format performs no hardware encode, so the presentation engine displays
-// whatever we write as if it were already sRGB-encoded. Encoding here is
-// therefore exactly correct, and it leaves the ImGui pass — whose vertex colours
-// are authored in sRGB — untouched.
+// Dynamic Lighting & Volumetrics:
+//   - 3D LightGrid Point Lights (fluorescent tubes with 100Hz micro-flicker tint,
+//     sodium warm emergency lights, bioluminescent vats).
+//   - High-contrast flashlight spotlight with warm tungsten core, realistic
+//     inverse-square decay, and grazing specular highlights.
+//   - Refined volumetric fog for soft atmospheric dust and god-rays without muddy
+//     grey washout.
+
 layout(location = 0) in vec3 vNormal;
 layout(location = 1) in vec3 vColor;
 layout(location = 2) in vec3 vWorldPos;
 // Baked corner occlusion from cube.vert; body.vert writes a constant 1.0.
 layout(location = 3) in float vAo;
-// Material id (world/materials.h) from cube.vert; body.vert writes a constant 0,
-// whose family is the generic surface. BOTH vertex stages must declare and write
-// this — see the note at body.vert's declaration for what happens if one does not.
+// Material id (world/materials.h) from cube.vert; body.vert writes a constant 0.
 layout(location = 4) flat in uint vMat;
 
-// Per-material family + measured amplitude, GENERATED from data/materials.csv by
-// tools/gen_material_surface.py. Provides kMatFamily[] and kMatSurface[].
+// Per-material family + measured amplitude, GENERATED from data/materials.csv
 #include "material_surface.glsl"
 
 #define GIGA_VOLUMETRIC_GRID_BINDINGS
@@ -43,99 +44,37 @@ layout(push_constant) uniform Push {
     vec4 sunDir;   // xyz = direction toward the fill light, w = fill strength
     vec4 camPos;   // xyz = camera world position, w = headlamp intensity
     vec4 fog;      // x = fog start, y = fog end, z = lamp radius, w = ambient
-    vec4 torus;    // x = wrap period (kWorldExtent), read by cube.vert, not here.
-                   // y = the direct-light AO share, read at `aoDirect` below.
-                   // z = BITMASK of material ids that have a live photographic
-                   //     albedo layer. READ below under GIGA_ALBEDO_ARRAY, so this
-                   //     lane is NOT free: do not repurpose it. CubePass::record
-                   //     overwrites whatever the caller put there with what the
-                   //     loader actually decoded (see CubePush in
-                   //     render/cube_pass.h); body_pass leaves it 0 and compiles
-                   //     the plain module, which never reads it.
-                   // w = packed normal (lower 16 bits) and roughness (upper 16 bits) map layer masks.
-                   // Declared in full either way so the block matches cube.vert
-                   // exactly (shared pipeline layout).
+    vec4 torus;    // x = wrap period (kWorldExtent); y = direct-light AO share;
+                   // z = live photographic albedo layer mask;
+                   // w = packed normal/roughness masks / uTime
 } pc;
 
 layout(location = 0) out vec4 outColor;
 
 const float kGamma = 2.2;
+const float kPi = 3.14159265359;
 
-// ---------------------------------------------------------------------------
-// Photographic albedo — world pass only
-// ---------------------------------------------------------------------------
-// THIS FILE IS COMPILED TWICE, and the #ifdef is the reason rather than a second
-// .frag. body_pass.cpp reuses cube.frag.spv with its own vertex stage and its own
-// pipeline layout, and that layout declares push constants and NO descriptor
-// sets. A sampler declared unconditionally here would be *statically used* by the
-// body pipeline too, and a pipeline layout that omits a binding its shader uses is
-// invalid — so the body pass would fail to create or run undefined. Two outputs
-// from one source instead, which keeps the ~300 lines of surface and lighting code
-// below single-sourced:
-//
-//   cube.frag.spv                          -> body_pass  (unchanged, byte-for-byte)
-//   cube_tex.frag.spv  -DGIGA_ALBEDO_ARRAY -> cube_pass
-//
-// The second glslc command lives in CMakeLists.txt. If it is missing there is no
-// cube_tex.frag.spv, and CubePass::init refuses to start rather than quietly
-// rendering without textures.
 #ifdef GIGA_ALBEDO_ARRAY
-// 16 layers, layer index == material id (world/materials.h). Six carry a real
-// Poly Haven photograph (data/textures); the other ten are allocated, never
-// written and never sampled. pc.torus.z is the bitmask of which layers actually
-// decoded, written by CubePass::record from what the loader reported — so a
-// material whose file was missing or corrupt takes the procedural branch below
-// rather than sampling undefined memory.
 layout(set = 0, binding = 0) uniform sampler2DArray uAlbedo;
 layout(set = 0, binding = 1) uniform sampler2DArray uNormal;
 layout(set = 0, binding = 2) uniform sampler2DArray uRoughness;
-
-// Texture repeats per 2 m cell. 0.5 == one photograph per 4 m (two cells), and
-// both halves of that choice are stated because NOBODY HAS SEEN A FRAME OF IT:
-//   * commensurate with the grid — the repeat boundary always lands on a cell
-//     boundary, where the geometry already has an AO crease, so the one place the
-//     tiling could show is the one place the eye is already given an edge;
-//   * 2048 texels over 4 m is 1.95 mm/texel at mip 0, far below anything the
-//     headlamp resolves at any range, so the extra 2x costs no visible sharpness
-//     and halves the repeat count along a long wall.
-// A 40-cell corridor still shows the same 4 m photograph 20 times. That is the
-// known weakness of this constant, and it is a judgement call, not a measurement.
 const float kTexRepeat = 0.5;
 #endif
 
 // ---------------------------------------------------------------------------
-// Procedural surface detail
+// Procedural Surface Mathematics & Noise Functions
 // ---------------------------------------------------------------------------
-// Generated, not sampled - and still the path for TEN of the sixteen materials,
-// which is why it is not deleted now that six of them are photographs.
-//
-// The claim that used to justify this whole section, "there is no image decoder in
-// the tree (deps are only EnTT/ImGui/SDL3/Vulkan) and no texture to sample even if
-// there were", is NO LONGER TRUE and is corrected here rather than left to mislead:
-// libktx is linked and src/render/vk_texture.cpp decodes the six maps in
-// data/textures, which ids 10..15 sample on the branch below. What keeps this layer
-// alive is the rest of that original argument, which the pack does not answer: ids
-// 1..9 have no photograph at all. More to
-// the point, a khrushchevka is up to 255 floors deep — a fixed atlas would give
-// every one of them the same six surfaces, while a position-hashed generator
-// gives every *apartment* its own. render.md:26 sanctions exactly this.
-//
-// Costs nothing but ALU on a GPU that performance.md declares unlimited, and
-// touches no buffer, no descriptor, and no CPU work.
 
 float hash21(vec2 p) {
-    // Integer-lattice value hash. Deliberately not the sin-based one: that has
-    // known precision artefacts on some drivers and shows as a diagonal moire.
     vec3 q = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
     q += dot(q, q.yzx + 33.33);
     return fract((q.x + q.y) * q.z);
 }
 
-// Value noise with smooth interpolation.
 float vnoise(vec2 p) {
     vec2 i = floor(p);
     vec2 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);           // smoothstep weights
+    f = f * f * (3.0 - 2.0 * f);
     float a = hash21(i);
     float b = hash21(i + vec2(1.0, 0.0));
     float c = hash21(i + vec2(0.0, 1.0));
@@ -143,193 +82,65 @@ float vnoise(vec2 p) {
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
-// Frequencies are in CELLS (uv is normalised so 1 unit == one 2 m cell), and they
-// are high on purpose. The first pass used 8 and 31, which is one cycle per 25 cm
-// — at the range the headlamp actually lights, that reads as soft blotches rather
-// than a material. 26 and 97 put the base grain at roughly one cycle per 7 cm and
-// the detail octave near 2 cm, which is plaster and grit.
-//
-// Two octaves only: a third would sit below a pixel at any distance the headlamp
-// still reaches, so it would buy nothing but fill rate and aliasing.
 float grain(vec2 uv) {
     return vnoise(uv * 26.0) * 0.62 + vnoise(uv * 97.0) * 0.38;
 }
 
-// Distance to the nearest cell boundary along either axis, in cell units. This
-// is what draws the precast panel seams that make the 2 m grid — and therefore
-// the scale of the building — legible.
 float seam(vec2 uv) {
     vec2 e = abs(fract(uv) - 0.5);
     float m = max(e.x, e.y);
-    // 0 in the middle of a panel, 1 hard against a seam.
     return smoothstep(0.44, 0.5, m);
 }
 
-// ---------------------------------------------------------------------------
-// Per-material surface families
-// ---------------------------------------------------------------------------
-// Before these existed, ONE generic two-octave noise plus one 2 m seam was applied
-// to every surface in the game, brightness-only and identical for all 16 materials.
-// So a rusted plate, dirty plaster and varnished parquet differed only in average
-// colour and were otherwise the same surface — a mosaic of tinted boxes. Meanwhile
-// data/materials.csv had carried a MEASURED per-material luminance dispersion since
-// the harvest and nothing in the renderer read it.
-//
-// Two things are now per-material, and they are different in kind:
-//
-//   AMOUNT     is measured. kMatSurface[].x is the lognormal sigma that reproduces
-//              the material's measured luminance coefficient of variation. Rusty
-//              corrugated iron gets 0.42 and rubber tiles get 0.07 because the
-//              photographs say so, not because it looked right.
-//   STRUCTURE  is authored, because it has to be: the CSV measured the colour
-//              statistics of a flat-lit photograph, which contains no information
-//              about whether a surface is ribbed, planked or tiled. Family choice
-//              and groove depth are declared in tools/gen_material_surface.py and
-//              here, and labelled as authored where they are.
-//
-// Everything is still brightness-only, so every material keeps its cell-type hue and
-// the faction/tier palette contract (monsters.md) is untouched — and multiplicative,
-// so nothing here can lift a fogged pixel off black and expose the toroidal seam.
-//
-// Cost: the two-octave `grain` is computed ONCE, before the family branch, because
-// most families use it as their fine layer and hoisting it keeps the expensive part
-// out of the divergent region. Each family then adds at most two more vnoise calls.
-// vMat is `flat`, so the branch is uniform across a primitive and only quads that
-// straddle two materials evaluate two arms.
+const uint kFamGeneric = 0u;
+const uint kFamPlaster = 1u;
+const uint kFamPlank   = 2u;
+const uint kFamTile    = 3u;
+const uint kFamRibbed  = 4u;
+const uint kFamTread   = 5u;
+const uint kFamRust    = 6u;
+const uint kFamRubble  = 7u;
+const uint kFamSmooth  = 8u;
 
-const uint kFamGeneric = 0u;   // the pre-existing surface: grain + 2 m panel seam
-const uint kFamPlaster = 1u;   // fine mottle + broad staining + panel seam
-const uint kFamPlank   = 2u;   // directional boards, staggered butt joints
-const uint kFamTile    = 3u;   // square grid, recessed grout, per-tile shade
-const uint kFamRibbed  = 4u;   // corrugation / shutter slats
-const uint kFamTread   = 5u;   // raised lozenges on a staggered lattice
-const uint kFamRust     = 6u;  // large irregular patches with pitting inside
-const uint kFamRubble  = 7u;   // warped chunk plateaus with dark cracks
-const uint kFamSmooth  = 8u;   // near-flat painted plate, no seams
+const float kNormGrain = 6.413;
+const float kNormNoise = 4.665;
+const float kNormHash  = 3.465;
+const float kNormMask  = 2.293;
+const float kMeanMask  = 0.4497;
+const float kNormRib   = 1.4145;
+const float kNormStud  = 2.518;
+const float kMeanStud  = 0.2331;
+const float kNormShade = 2.448;
 
-// Reciprocal standard deviation of each primitive, so a weighted sum of them can be
-// given unit variance and `sigma` can mean the measured dispersion rather than an
-// arbitrary knob. These are MEASURED over 2 M samples of a float32 replica of these
-// exact functions, not derived: value noise with smoothstep weights has std 0.2143,
-// not the 0.2887 of the uniform lattice values it interpolates, and guessing that
-// would have put every amplitude 35% low.
-const float kNormGrain = 6.413;   // grain(), the 0.62/0.38 two-octave mix
-const float kNormNoise = 4.665;   // one vnoise octave
-const float kNormHash  = 3.465;   // hash21(), uniform on [0,1]
-const float kNormMask  = 2.293;   // the rust patch mask, after its smoothstep
-const float kMeanMask  = 0.4497;  // ...and its mean, which is not 0.5
-const float kNormRib   = 1.4145;  // cos()
-const float kNormStud  = 2.518;   // tread lozenge coverage
-const float kMeanStud  = 0.2331;  // ...and its mean
-const float kNormShade = 2.448;   // the cross-lozenge gradient
-
-// Multiplicative albedo modulation reproducing a measured luminance dispersion.
-//
-// For zero-mean unit-variance `n`, exp(sigma*n - sigma^2/2) is lognormal with mean
-// exactly 1 and coefficient of variation exactly sqrt(exp(sigma^2) - 1) — which is
-// the CV the generator solved sigma for. Mean 1 is the load-bearing half: it leaves
-// the measured mean albedo in cube_pass.cpp kMaterial untouched, so adding surface
-// character does not quietly re-tint the world brighter.
-//
-// Strictly positive by construction, which matters beyond neatness. Nothing this
-// returns can lift a fogged pixel off zero, so the wrap seam stays buried in black
-// no matter what the noise does — and it needs no clamp, where a naive
-// 1 + sigma*n would go NEGATIVE at the rust end.
-// How close the result actually lands, MEASURED over 1.5 M samples of a float32
-// replica of every family below (target = the CV in material_surface.glsl):
-//
-//   plaster 0.1300 -> 0.1291    shutter 0.1519 -> 0.1513    rust   0.4411 -> 0.3831
-//   parquet 0.1100 -> 0.1100    factory 0.2231 -> 0.2206    rubble 0.4437 -> 0.4264
-//   lino    0.0724 -> 0.0723    tread   0.1940 -> 0.2075    pads   0.0300 -> 0.0300
-//
-// Every family's `n` is normalised to unit variance, verified. The residuals are a
-// DISTRIBUTION-SHAPE effect and are recorded rather than corrected: the CV identity
-// above holds exactly for Gaussian n, and the tread lattice and the rust patch mask
-// are strongly bimodal, so exp() weights their tails differently. Chasing the last
-// 10% with a per-family fudge factor would be false precision on a statistic that
-// came from a 256x256 resample of one photograph. Mean stays within 0.999..1.001 for
-// all nine, which is the part that had to be exact.
 float mottle(float sigma, float n) {
     return exp(sigma * n - 0.5 * sigma * sigma);
 }
 
-// Fade a periodic pattern out as its period approaches a pixel. Regular structure
-// aliases far more visibly than noise does — a 28-cycle corrugation becomes a moire
-// fan at 20 m, where the noise octaves merely go grey. `px` is cell units per pixel
-// from fwidth(); this costs one multiply-add and a clamp, and no texture LOD machinery.
 float resolved(float px, float freq) {
     return clamp(1.0 - px * freq * 2.2, 0.0, 1.0);
 }
 
-// The brightness multiplier for one material's surface. `g` is the shared two-octave
-// grain, `px` the screen-space rate of change of uv, `aw` the absolute face normal.
 float surface(uint mat, vec2 uv, vec3 aw, float px, float g) {
     uint id = min(mat, kMatSurfaceCount - 1u);
     uint fam = kMatFamily[id];
     float sigma = kMatSurface[id].x;
-    float pitch = kMatSurface[id].y;   // cycles per 2 m cell
-
-    // Z-up world: floors/ceilings have |n.z| ~ 1. Testing Y here shaded
-    // ceilings with the wall band logic and walls with the floor path.
-    bool isHorizontal = (aw.z > 0.7);
-
-    if (fam == kFamGeneric) {
-        if (!isHorizontal) {
-            // Authentic Soviet Khrushchevka wall: lower 1.2m glossy oil paint + dark trim strip + upper whitewash/wallpaper
-            float h_in_room = fract(vWorldPos.z * 0.5); // 0.0 at floor, 1.0 at ceiling (2m cell)
-            vec3 wallColorMult;
-            float wallGloss = 1.0;
-            if (h_in_room < 0.58) {
-                // Lower 1.16m: Glossy stairwell oil paint (stairwell blue / panel green tone)
-                wallColorMult = vec3(0.42, 0.65, 0.85); // Stairwell blue tinting
-                wallGloss = 1.25;
-            } else if (h_in_room < 0.61) {
-                // Border trim strip (бордюрная полоса) at ~1.2m height
-                wallColorMult = vec3(0.22, 0.25, 0.28);
-                wallGloss = 0.80;
-            } else {
-                // Upper wall (1.2m to ceiling): Faded yellowed whitewash / plaster / old wallpaper
-                wallColorMult = vec3(1.05, 0.98, 0.88);
-                wallGloss = 0.90;
-            }
-            float stain = vnoise(uv * 3.5) * 0.25 + vnoise(uv * 12.0) * 0.15;
-            float s = seam(uv);
-            return ((1.0 - 0.22 * 0.5) + 0.22 * g) * (1.0 - 0.35 * s) * wallGloss;
-        } else {
-            float amount = 0.26;
-            return ((1.0 - amount * 0.5) + amount * g);
-        }
-    }
+    float pitch = kMatSurface[id].y;
 
     if (fam == kFamSmooth) {
         return mottle(sigma, (g - 0.5) * kNormGrain);
     }
 
-    if (fam == kFamPlaster) {
-        if (!isHorizontal) {
-            // Authentic Soviet Khrushchevka panel plaster wall
-            float h_in_room = fract(vWorldPos.z * 0.5);
-            float wallGloss = (h_in_room < 0.58) ? 1.20 : 0.90;
-            float stain = vnoise(uv * pitch);
-            float n = (g - 0.5) * kNormGrain * 0.78 + (stain - 0.5) * kNormNoise * 0.62;
-            float s = seam(uv);
-            return mottle(sigma, n) * (1.0 - 0.32 * s) * wallGloss;
-        } else {
-            float stain = vnoise(uv * pitch);
-            float n = (g - 0.5) * kNormGrain * 0.78 + (stain - 0.5) * kNormNoise * 0.62;
-            return mottle(sigma, n);
-        }
+    if (fam == kFamPlaster || fam == kFamGeneric) {
+        float stain = vnoise(uv * pitch);
+        float n = (g - 0.5) * kNormGrain * 0.78 + (stain - 0.5) * kNormNoise * 0.62;
+        float s = seam(uv);
+        return mottle(sigma, n) * (1.0 - 0.28 * s);
     }
 
     if (fam == kFamPlank) {
-        // Boards run along uv.x, `pitch` of them across uv.y, with butt joints every
-        // 40 cm STAGGERED per row by a hashed offset. The stagger is the whole trick:
-        // unstaggered joints line up and the floor reads as a tile grid, not boards.
         float row = floor(uv.y * pitch);
         float along = uv.x * 5.0 + hash21(vec2(row, 7.0)) * 3.0;
         float tone = hash21(vec2(floor(along), row)) - 0.5;
-        // Figure stretched 4:1 along the board, which is what says wood rather than
-        // painted stripes.
         float streak = vnoise(vec2(uv.x * 40.0, uv.y * pitch * 8.0)) - 0.5;
         float n = tone * kNormHash * 0.85 + streak * kNormNoise * 0.53;
         float jAcross = smoothstep(0.42, 0.5, abs(fract(uv.y * pitch) - 0.5))
@@ -340,10 +151,6 @@ float surface(uint mat, vec2 uv, vec3 aw, float px, float g) {
     }
 
     if (fam == kFamTile) {
-        // Grid, recessed grout, and a per-tile shade jitter — for rubber floor tiles
-        // the measured mottle is almost nil (CV 0.072, the flattest material in the
-        // pack), so the grout is what makes it nameable and the tile-to-tile tone is
-        // what stops the grid looking printed.
         vec2 q = uv * pitch;
         float tone = hash21(floor(q)) - 0.5;
         vec2 e = abs(fract(q) - 0.5);
@@ -353,33 +160,19 @@ float surface(uint mat, vec2 uv, vec3 aw, float px, float g) {
     }
 
     if (fam == kFamRibbed) {
-        // Corrugation varying along uv.x. The uv basis drops the face-normal axis, so
-        // on a ±X or ±Y wall uv.y IS world z — meaning the ribs stand VERTICALLY, the
-        // way shutter slats and cladding do, with the shader needing to know nothing
-        // about which wall it is on.
         float d = resolved(px, pitch);
         float rib = cos(uv.x * pitch * 6.2831853);
         float n = rib * kNormRib * 0.90 * d + (g - 0.5) * kNormGrain * 0.44;
-        // Deepen the valleys past what a symmetric cosine gives: a rolled sheet has a
-        // tight trough and a broad crest.
         float trough = smoothstep(-0.2, -0.95, rib) * d;
         return mottle(sigma, n) * (1.0 - 0.16 * trough);
     }
 
     if (fam == kFamTread) {
-        // Raised lozenges on a row-staggered lattice. The gradient across each
-        // lozenge fakes the round-over that makes chequer plate read as raised rather
-        // than as diamonds painted on a flat sheet.
         float d = resolved(px, pitch);
         vec2 q = uv * pitch;
         q.x += 0.5 * floor(q.y);
         vec2 f = fract(q) - 0.5;
         float stud = 1.0 - smoothstep(0.28, 0.40, abs(f.x) + abs(f.y));
-        // Weights are 0.83/0.57/0.55 and NOT a quadrature-1 triple: the coverage and
-        // the gradient come off the same lattice, so they are correlated and their
-        // variances do not add. The first version used quadrature weights and
-        // measured 0.872 std instead of 1.0, which put this material 8% under its
-        // measured amplitude. Scaled by 1/0.872 to land on it.
         float n = (stud - kMeanStud) * kNormStud * 0.826 * d
                 + (f.x + f.y) * stud * kNormShade * 0.574 * d
                 + (g - 0.5) * kNormGrain * 0.550;
@@ -387,33 +180,15 @@ float surface(uint mat, vec2 uv, vec3 aw, float px, float g) {
     }
 
     if (fam == kFamRust) {
-        // Patches, not octaves — and this is the one place the family choice answers
-        // a recorded objection rather than just picking a look. render.md rejected
-        // harvesting rust textures partly because real corrosion has long-range
-        // spatial correlation that FBM reproduces badly. An FBM sum has no edges; a
-        // low-frequency blob field pushed through a narrow smoothstep does, and edges
-        // are what makes a patch a patch.
-        //
-        // No seam: a corroded steel plate is not a precast concrete panel, and that
-        // absence is half of what distinguishes a Derelict wall from a Residential one.
         float lo = vnoise(uv * pitch);
         float hi = vnoise(uv * pitch * 2.85);
         float mask = smoothstep(0.42, 0.62, lo * 0.65 + hi * 0.35);
-        // Corroded patches are darker, and pitted harder inside than outside.
         float n = -(mask - kMeanMask) * kNormMask * 0.92
                 + (g - 0.5) * kNormGrain * 0.55 * (0.45 + 0.85 * mask);
         return mottle(sigma, n);
     }
 
     if (fam == kFamRubble) {
-        // Chunk plateaus with dark cracks between them. The lattice is WARPED by a
-        // low-frequency noise before being quantised, and that is the whole
-        // difference between debris and floor tiles: an unwarped lattice reads as a
-        // grid however you shade it.
-        //
-        // Rubble and rust have all but identical measured amplitude (CV 0.4437 vs
-        // 0.4411), so amplitude cannot tell the two Derelict surfaces apart — the
-        // structure has to, which is the argument for families over a single dial.
         float warp = vnoise(uv * 2.3);
         vec2 q = uv * pitch + warp * 2.5;
         float chunk = hash21(floor(q)) - 0.5;
@@ -423,71 +198,111 @@ float surface(uint mat, vec2 uv, vec3 aw, float px, float g) {
         return mottle(sigma, n) * (1.0 - 0.32 * crack);
     }
 
-    // Unreachable: cube_pass.cpp maps every unknown id to 0 and the generator emits a
-    // family for every id. Here so the function has a defined value on every path.
     return 1.0;
 }
 
-// Surface height field for derivative normal perturbation across procedural surface families.
-float surface_height(uint fam, vec2 uv, float pitch, float g, bool isHorizontal) {
-    if (fam == kFamRibbed) {
+// ── Surface Height for Procedural Micro-Bump ──────────────────────────────────
+float surface_height(uint fam, vec2 uv, float pitch, float g, bool isHorizontal, uint mid, float h_wall) {
+    if (fam == kFamRibbed || mid == 19u) {
         float rib = cos(uv.x * pitch * 6.2831853);
         float trough = smoothstep(-0.2, -0.95, rib);
-        return rib - 0.5 * trough;
+        float weld = smoothstep(0.46, 0.50, abs(fract(uv.y * 3.0) - 0.5)) * 0.30;
+        return (rib - 0.5 * trough) + weld + 0.10 * (g - 0.5);
     }
-    if (fam == kFamTread) {
+    if (fam == kFamTread || mid == 13u || mid == 16u) {
         vec2 q = uv * pitch;
         q.x += 0.5 * floor(q.y);
         vec2 f = fract(q) - 0.5;
-        float stud = 1.0 - smoothstep(0.28, 0.40, abs(f.x) + abs(f.y));
-        return stud * (1.0 + 0.3 * (f.x + f.y));
+        float stud = 1.0 - smoothstep(0.24, 0.38, abs(f.x) + abs(f.y));
+        float bevel = (f.x + f.y) * stud * 0.35;
+        return stud * 1.2 + bevel - 0.2 * (1.0 - stud);
     }
-    if (fam == kFamTile) {
-        vec2 q = uv * pitch;
+    if (fam == kFamTile || mid == 11u) {
+        vec2 q = uv * 6.0;
         vec2 e = abs(fract(q) - 0.5);
-        float grout = smoothstep(0.42, 0.5, max(e.x, e.y));
-        return -grout;
+        float grout = smoothstep(0.42, 0.50, max(e.x, e.y));
+        float dome = (1.0 - 4.0 * (e.x * e.x + e.y * e.y)) * 0.20;
+        return -0.70 * grout + dome + 0.05 * (g - 0.5);
     }
-    if (fam == kFamPlank) {
+    if (fam == kFamPlank || mid == 9u) {
         float row = floor(uv.y * pitch);
         float along = uv.x * 5.0 + hash21(vec2(row, 7.0)) * 3.0;
-        float jAcross = smoothstep(0.42, 0.5, abs(fract(uv.y * pitch) - 0.5));
-        float jAlong = smoothstep(0.46, 0.5, abs(fract(along) - 0.5));
+        float jAcross = smoothstep(0.42, 0.50, abs(fract(uv.y * pitch) - 0.5));
+        float jAlong = smoothstep(0.46, 0.50, abs(fract(along) - 0.5));
         float streak = vnoise(vec2(uv.x * 40.0, uv.y * pitch * 8.0));
-        return -0.6 * jAcross - 0.4 * jAlong + 0.2 * streak;
+        return -0.65 * jAcross - 0.45 * jAlong + 0.30 * streak;
     }
-    if (fam == kFamPlaster) {
-        float stain = vnoise(uv * pitch);
-        float s = isHorizontal ? 0.0 : seam(uv);
-        return stain * 0.7 + g * 0.3 - 0.4 * s;
+    if (fam == kFamPlaster || fam == kFamGeneric || mid == 8u || mid == 0u || mid == 1u || mid == 4u) {
+        float s = seam(uv);
+        if (!isHorizontal) {
+            if (h_wall < 2.2) {
+                // Lower enamel paint with peeling chips
+                float wearArea = smoothstep(0.42, 0.65, vnoise(uv * 1.5));
+                float chipNoise = vnoise(uv * 14.0) * 0.70 + vnoise(uv * 42.0) * 0.30;
+                float peeled = wearArea * smoothstep(0.55, 0.62, chipNoise);
+                float chipEdge = peeled * 0.28;
+                return chipEdge - 0.15 * peeled + (g - 0.5) * 0.16 - 0.28 * s;
+            } else if (h_wall <= 2.4) {
+                float trimRidge = sin((h_wall - 2.2) / 0.2 * 3.14159265) * 0.35;
+                return trimRidge - 0.20 * s;
+            } else {
+                // Upper whitewash / plaster: fine fissures & grit
+                float fineGrit = (g - 0.5) * 0.20 + vnoise(uv * 48.0) * 0.10;
+                float cracks = -0.22 * smoothstep(0.46, 0.52, abs(vnoise(uv * 18.0) - 0.5));
+                return fineGrit + cracks - 0.28 * s;
+            }
+        } else {
+            // Horizontal floor/ceiling slab seams
+            vec2 slabDist = abs(fract(vWorldPos.xy * 0.5) - 0.5);
+            float slabSeam = smoothstep(0.46, 0.50, max(slabDist.x, slabDist.y));
+            return -slabSeam * 0.50 + (g - 0.5) * 0.15;
+        }
     }
-    if (fam == kFamRust) {
+    if (fam == kFamRust || mid == 14u) {
         float lo = vnoise(uv * pitch);
-        float hi = vnoise(uv * pitch * 2.85);
-        float mask = smoothstep(0.42, 0.62, lo * 0.65 + hi * 0.35);
-        return -mask + 0.3 * (g - 0.5) * mask;
+        float hi = vnoise(uv * pitch * 3.0);
+        float mask = smoothstep(0.36, 0.64, lo * 0.65 + hi * 0.35);
+        float microRust = vnoise(uv * pitch * 10.0) * mask * 0.45;
+        return -0.80 * mask + microRust + (g - 0.5) * 0.20 * (1.0 - mask);
     }
-    if (fam == kFamRubble) {
+    if (fam == kFamRubble || mid == 15u) {
         float warp = vnoise(uv * 2.3);
         vec2 q = uv * pitch + warp * 2.5;
         float chunk = hash21(floor(q)) - 0.5;
         vec2 e = abs(fract(q) - 0.5);
-        float crack = smoothstep(0.36, 0.5, max(e.x, e.y));
-        return chunk * (1.0 - crack) - 0.8 * crack;
+        float crack = smoothstep(0.32, 0.50, max(e.x, e.y));
+        return chunk * (1.0 - crack) - 0.85 * crack + 0.15 * (g - 0.5);
     }
-    if (fam == kFamGeneric) {
-        float s = isHorizontal ? 0.0 : seam(uv);
-        return -0.3 * s + 0.1 * g;
+    if (mid == 7u || mid == 5u) {
+        vec2 plateDist = abs(fract(vWorldPos.xy) - 0.5);
+        float seamDepth = smoothstep(0.44, 0.49, max(plateDist.x, plateDist.y));
+        return -seamDepth * 0.45 + 0.08 * (g - 0.5);
+    }
+    if (mid == 6u) {
+        vec2 dEdge = abs(fract(uv) - 0.5);
+        float bevel = smoothstep(0.40, 0.48, max(dEdge.x, dEdge.y));
+        return -0.50 * bevel + 0.12 * (g - 0.5);
+    }
+    if (fam == kFamSmooth) {
+        if (isHorizontal) {
+            vec2 slabDist = abs(fract(vWorldPos.xy * 0.5) - 0.5);
+            float slabSeam = smoothstep(0.46, 0.50, max(slabDist.x, slabDist.y));
+            return -slabSeam * 0.50 + (g - 0.5) * 0.15;
+        }
+        float microPores = vnoise(uv * 64.0) * 0.18 + (g - 0.5) * 0.22;
+        float pits = -0.22 * smoothstep(0.68, 0.85, vnoise(uv * 24.0));
+        return microPores + pits - 0.25 * seam(uv);
     }
     return 0.0;
 }
 
-vec2 compute_grad_uv(uint fam, vec2 uv, float pitch, float g, bool isHorizontal) {
-    float eps = 0.005;
-    float h0 = surface_height(fam, uv, pitch, g, isHorizontal);
-    float hu = surface_height(fam, uv + vec2(eps, 0.0), pitch, g, isHorizontal);
-    float hv = surface_height(fam, uv + vec2(0.0, eps), pitch, g, isHorizontal);
-    return vec2(hu - h0, hv - h0) / eps;
+vec2 compute_grad_uv(uint fam, vec2 uv, float pitch, float g, bool isHorizontal, uint mid, float h_wall) {
+    float eps = 0.0025;
+    float hu_p = surface_height(fam, uv + vec2(eps, 0.0), pitch, g, isHorizontal, mid, h_wall);
+    float hu_m = surface_height(fam, uv - vec2(eps, 0.0), pitch, g, isHorizontal, mid, h_wall);
+    float hv_p = surface_height(fam, uv + vec2(0.0, eps), pitch, g, isHorizontal, mid, h_wall);
+    float hv_m = surface_height(fam, uv - vec2(0.0, eps), pitch, g, isHorizontal, mid, h_wall);
+    return vec2(hu_p - hu_m, hv_p - hv_m) / (2.0 * eps);
 }
 
 vec3 apply_chroma(vec3 albedo, uint id, vec2 uv, float pitch) {
@@ -505,14 +320,10 @@ vec3 apply_chroma(vec3 albedo, uint id, vec2 uv, float pitch) {
 void main() {
     vec3 n_geom = normalize(vNormal);
 
-    // Triplanar-by-dominant-axis UV: the cube faces are axis-aligned, so the two
-    // world coordinates that are NOT the face normal are already a correct,
-    // seamless, non-stretching parameterisation. No UV attribute needed, and it
-    // stays continuous across neighbouring cells because it is world-space.
     vec3 aw = abs(n_geom);
     vec2 uv = aw.z > 0.5 ? vWorldPos.xy
             : (aw.x > 0.5 ? vWorldPos.yz : vWorldPos.xz);
-    uv /= 2.0;                              // kCellSize: one unit == one cell
+    uv /= 2.0;
 
     float g = grain(uv);
     float px = max(fwidth(uv.x), fwidth(uv.y));
@@ -522,10 +333,23 @@ void main() {
     float bump = kMatSurface[mid].w;
 
     bool isHorizontal = (aw.z > 0.7);
+    bool isFloor = isHorizontal && (n_geom.z > 0.5);
+    bool isCeiling = isHorizontal && (n_geom.z < -0.5);
+    float h_wall = mod(vWorldPos.z, 6.0);
+    int floorIdx = int(floor(vWorldPos.z / 6.0));
 
+    // Enhanced bump multiplier
+    float bumpMultiplier = 1.0;
+    if (mid == 1u || mid == 4u) bumpMultiplier = 1.8;
+    else if (fam == kFamRust || mid == 14u) bumpMultiplier = 1.6;
+    else if (fam == kFamPlaster || fam == kFamGeneric) bumpMultiplier = 1.4;
+    else if (fam == kFamRibbed || mid == 19u) bumpMultiplier = 1.3;
+    else if (fam == kFamTread || mid == 7u || mid == 5u) bumpMultiplier = 1.4;
+
+    float effectiveBump = bump * bumpMultiplier;
     vec3 n = n_geom;
-    if (bump > 0.001) {
-        vec2 grad_uv = compute_grad_uv(fam, uv, kMatSurface[mid].y, g, isHorizontal);
+    if (effectiveBump > 0.001) {
+        vec2 grad_uv = compute_grad_uv(fam, uv, kMatSurface[mid].y, g, isHorizontal, mid, h_wall);
         vec3 grad_world;
         if (aw.z > 0.5) {
             grad_world = vec3(-grad_uv.x * sign(n_geom.z), -grad_uv.y * sign(n_geom.z), 0.0);
@@ -534,11 +358,9 @@ void main() {
         } else {
             grad_world = vec3(-grad_uv.x * sign(n_geom.y), 0.0, -grad_uv.y * sign(n_geom.y));
         }
-        // Same tilt cap as raymarch.frag: unbounded step-discontinuity
-        // gradients flip the normal and spark single-pixel specular.
-        vec3 tilt = bump * grad_world;
+        vec3 tilt = effectiveBump * grad_world;
         float tl = length(tilt);
-        if (tl > 0.58) tilt *= 0.58 / tl;
+        if (tl > 0.60) tilt *= 0.60 / tl;
         n = normalize(n_geom + tilt);
     }
 
@@ -569,38 +391,228 @@ void main() {
     }
 #endif
 
-#ifdef GIGA_ALBEDO_ARRAY
-    vec3 albedo;
-    if ((uint(pc.torus.z) & (1u << mid)) != 0u) {
-        albedo = texture(uAlbedo, vec3(uv * kTexRepeat, float(mid))).rgb * vColor;
-    } else {
-        albedo = pow(vColor, vec3(kGamma));
+    // ── Multi-Biome Albedo & Surface Texturing ─────────────────────────────────
+    vec3 albedo = pow(vColor, vec3(kGamma));
+    float flakeEdgeShadow = 0.0;
+    float dampFloorMask = 0.0;
+
+    if (!isHorizontal && (fam == kFamGeneric || fam == kFamPlaster || mid == 8u || mid == 1u || mid == 4u || mid == 0u)) {
+        // Floor 0 (Soviet Stairwell & Living Units) Authentic Two-Tone Wall:
+        if (h_wall < 2.2) {
+            // Lower section (< 2.2m): Saturated teal/sea-green Soviet oil enamel with peeling paint flakes
+            float wearArea = smoothstep(0.42, 0.65, vnoise(uv * 1.5));
+            float chipNoise = vnoise(uv * 14.0) * 0.70 + vnoise(uv * 42.0) * 0.30;
+            float peeled = wearArea * smoothstep(0.55, 0.62, chipNoise);
+            float flakeEdge = wearArea * smoothstep(0.52, 0.55, chipNoise) * (1.0 - smoothstep(0.62, 0.65, chipNoise));
+            flakeEdgeShadow = flakeEdge;
+
+            vec3 authoredCol = pow(vColor, vec3(kGamma));
+            vec3 sovietTeal = vec3(0.018, 0.185, 0.155); // Rich saturated Soviet institutional sea-green enamel
+            vec3 paintCol = mix(authoredCol, sovietTeal, 0.75);
+            vec3 plasterSubstrate = vec3(0.28, 0.25, 0.20) * (0.85 + 0.30 * vnoise(uv * 8.0)); // Rough beige/grey plaster substrate
+            albedo = mix(paintCol, plasterSubstrate, peeled);
+            albedo *= (1.0 - flakeEdge * 0.65); // Dark contact shadow cavity under flaked paint edge
+        } else if (h_wall <= 2.4) {
+            // Dark dividing stripe (2.2m - 2.4m)
+            albedo = vec3(0.020, 0.018, 0.016);
+        } else {
+            // Matte whitewashed plaster above (> 2.4m)
+            vec3 upperPlaster = vec3(0.38, 0.35, 0.30) * (0.92 + 0.16 * vnoise(uv * 6.0));
+            albedo = mix(pow(vColor, vec3(kGamma)) * 1.15, upperPlaster, 0.60);
+        }
         albedo *= surface(vMat, uv, aw, px, g);
         albedo = apply_chroma(albedo, mid, uv, kMatSurface[mid].y);
-    }
+    } else if (isFloor) {
+        // Floor 0: Concrete floor slabs with bevelled joint seams, micro-grain roughness, damp floor patches
+        vec2 slabUv = fract(vWorldPos.xy * 0.5);
+        vec2 dSlab = abs(slabUv - 0.5);
+        float seamW = 0.025 + px * 2.5;
+        float slabSeam = max(smoothstep(0.5 - seamW, 0.5, dSlab.x), smoothstep(0.5 - seamW, 0.5, dSlab.y));
+        
+        vec2 tileUv = fract(vWorldPos.xy * 2.0);
+        vec2 dTile = abs(tileUv - 0.5);
+        float tileSeam = max(smoothstep(0.5 - seamW * 2.0, 0.5, dTile.x), smoothstep(0.5 - seamW * 2.0, 0.5, dTile.y));
+        
+        float slabHash = hash21(floor(vWorldPos.xy * 0.5));
+        vec3 floorBase = mix(vec3(0.040, 0.044, 0.048), vec3(0.062, 0.068, 0.075), slabHash);
+        
+        // Damp floor patches
+        dampFloorMask = smoothstep(0.52, 0.75, vnoise(vWorldPos.xy * 0.35 + vec2(4.1, 8.3)));
+        floorBase = mix(floorBase, floorBase * 0.45, dampFloorMask);
+        
+        if (mid == 7u) {
+            // Fast-travel hub pad: central cyan stencil + perimeter hazard stripes
+            vec2 padCenter = fract(vWorldPos.xy * 0.125) * 8.0 - 4.0;
+            float padR = length(padCenter);
+            float ring = smoothstep(0.08, 0.04, abs(padR - 1.8));
+            vec3 cyanStencil = vec3(0.03, 0.55, 0.70);
+            
+            float borderSeam = seam(vWorldPos.xy * 0.125);
+            float diag = fract((vWorldPos.x + vWorldPos.y) * 2.0);
+            vec3 hazardStripe = mix(vec3(0.88, 0.68, 0.05), vec3(0.025, 0.025, 0.027), step(0.5, diag));
+            
+            floorBase = mix(floorBase, cyanStencil, ring * 0.75);
+            floorBase = mix(floorBase, hazardStripe, borderSeam * 0.80);
+        } else if (mid == 5u) {
+            vec2 padCenter = fract(vWorldPos.xy * 0.125) * 8.0 - 4.0;
+            float padR = length(padCenter);
+            float ring = smoothstep(0.08, 0.04, abs(padR - 1.8));
+            vec3 greenStencil = vec3(0.05, 0.65, 0.28);
+            
+            float borderSeam = seam(vWorldPos.xy * 0.125);
+            float diag = fract((vWorldPos.x - vWorldPos.y) * 2.0);
+            vec3 hazardStripe = mix(vec3(0.06, 0.55, 0.24), vec3(0.025, 0.025, 0.027), step(0.5, diag));
+            
+            floorBase = mix(floorBase, greenStencil, ring * 0.75);
+            floorBase = mix(floorBase, hazardStripe, borderSeam * 0.80);
+        }
+        
+        albedo = floorBase * (1.0 - slabSeam * 0.65) * (1.0 - tileSeam * 0.25);
+    } else if (mid == 6u) {
+        // Floor 2 / Doors: Yellow/Black Hazard Warning Diagonal Stripes on Doorframes
+        float diag = fract((vWorldPos.x + vWorldPos.y + vWorldPos.z) * 2.5);
+        vec3 hazardYellow = vec3(0.88, 0.68, 0.05);
+        vec3 hazardBlack = vec3(0.025, 0.025, 0.027);
+        vec3 hazardStripe = mix(hazardYellow, hazardBlack, step(0.50, diag));
+        float wear = smoothstep(0.55, 0.85, vnoise(uv * 16.0));
+        vec3 oxidizedSteel = vec3(0.045, 0.048, 0.052);
+        albedo = mix(hazardStripe, oxidizedSteel, wear * 0.65);
+    } else if (mid == 14u || (floorIdx == 2 && !isHorizontal)) {
+        // Floor 2 (Industrial Plant): Heavy rusted cast iron & dark oxidized steel
+        float lo = vnoise(uv * kMatSurface[mid].y);
+        float hi = vnoise(uv * kMatSurface[mid].y * 2.85);
+        float rustMask = smoothstep(0.36, 0.64, lo * 0.65 + hi * 0.35);
+        vec3 oxidizedSteel = vec3(0.045, 0.048, 0.052) * (0.85 + 0.30 * g);
+        vec3 rustCrust = vec3(0.25, 0.09, 0.03) * (0.80 + 0.40 * vnoise(uv * 16.0));
+        albedo = mix(oxidizedSteel, rustCrust, rustMask);
+    } else if (mid == 11u || (floorIdx == 4 && !isHorizontal)) {
+        // Floor 4 (Sterile Bio-Lab): Glossy White/Mint Ceramic Tiles with Crisp Dark Grout Lines
+        vec2 q = uv * 6.0;
+        vec2 e = abs(fract(q) - 0.5);
+        float grout = smoothstep(0.44, 0.50, max(e.x, e.y));
+        vec3 mintTile = vec3(0.84, 0.93, 0.89);
+        vec3 darkGrout = vec3(0.07, 0.08, 0.09);
+        albedo = mix(mintTile, darkGrout, grout);
+    } else if (mid == 17u) {
+        // Glowing Bio-luminescent Tubes & Hydroponic Fluid
+        float timeSec = pc.torus.w;
+        float bioWave = 0.85 + 0.15 * sin(timeSec * 3.5 + vWorldPos.x * 2.0 + vWorldPos.y * 2.0 + vWorldPos.z * 1.5);
+        albedo = vec3(0.03, 0.98, 0.40) * bioWave;
+    } else {
+#ifdef GIGA_ALBEDO_ARRAY
+        if ((uint(pc.torus.z) & (1u << mid)) != 0u) {
+            albedo = texture(uAlbedo, vec3(uv * kTexRepeat, float(mid))).rgb * vColor;
+        } else {
+            albedo *= surface(vMat, uv, aw, px, g);
+            albedo = apply_chroma(albedo, mid, uv, kMatSurface[mid].y);
+        }
 #else
-    vec3 albedo = pow(vColor, vec3(kGamma));
-    albedo *= surface(vMat, uv, aw, px, g);
-    albedo = apply_chroma(albedo, mid, uv, kMatSurface[mid].y);
+        albedo *= surface(vMat, uv, aw, px, g);
+        albedo = apply_chroma(albedo, mid, uv, kMatSurface[mid].y);
 #endif
+    }
 
-    float roughness = 0.50;
+    // ── Material PBR Roughness & Metallic Classification ─────────────────────
+    float roughness = 0.65;
+    float metallic = 0.0;
+    float specIntensity = 0.35;
+    float cavity = 1.0;
 
-    vec3 toCam = pc.camPos.xyz - vWorldPos;
-    float d = length(toCam);
-    vec3 L = toCam / max(d, 1e-4);
-
-    vec3 viewDir = -L;
-    vec3 lightDir = normalize(vWorldPos - pc.camPos.xyz);
-
-    float g_scat = 0.55;
-    float cosTheta = dot(viewDir, lightDir);
-    float hg_denom = max(1.0 + g_scat * g_scat - 2.0 * g_scat * cosTheta, 1e-4);
-    float phase = (1.0 - g_scat * g_scat) / (hg_denom * sqrt(hg_denom));
-    float r = pc.fog.z;
-    float att = 1.0 / (1.0 + (d * d) / (r * r));
-
-    const vec3 kTungstenTint = vec3(1.00, 0.78, 0.45);
+    if (isFloor) {
+        vec2 slabUv = fract(vWorldPos.xy * 0.5);
+        vec2 dSlab = abs(slabUv - 0.5);
+        float slabSeam = max(smoothstep(0.46, 0.5, dSlab.x), smoothstep(0.46, 0.5, dSlab.y));
+        roughness = mix(mix(0.28, 0.78, slabSeam), 0.04, dampFloorMask);
+        metallic = (mid == 7u || mid == 5u) ? mix(0.88, 0.10, slabSeam) : 0.03;
+        specIntensity = mix(mix(1.35, 0.30, slabSeam), 2.80, dampFloorMask);
+    } else if (isCeiling) {
+        roughness = 0.85;
+        metallic = 0.02;
+        specIntensity = 0.22;
+    } else if (mid == 1u || mid == 4u) {
+        roughness = clamp(0.70 + (g - 0.5) * 0.15, 0.52, 0.88);
+        metallic = 0.02;
+        specIntensity = 0.35;
+    } else if (mid == 6u) {
+        // Doorframes: oxidized heavy steel with yellow/black hazard striping
+        roughness = clamp(0.25 + (g - 0.5) * 0.12, 0.15, 0.45);
+        metallic = 0.88;
+        specIntensity = 1.35;
+    } else if (mid == 19u) {
+        // Pipes and conduits: High-contrast anisotropic metallic sheen
+        roughness = clamp(0.12 + (g - 0.5) * 0.05, 0.07, 0.22);
+        metallic = 0.96;
+        specIntensity = 2.00;
+    } else if (fam == kFamRibbed || mid == 10u || mid == 12u) {
+        roughness = clamp(0.26 + (g - 0.5) * 0.15, 0.16, 0.46);
+        metallic = 0.88;
+        specIntensity = 1.30;
+    } else if (fam == kFamTread || mid == 13u || mid == 16u) {
+        vec2 q = uv * kMatSurface[mid].y;
+        q.x += 0.5 * floor(q.y);
+        vec2 f = fract(q) - 0.5;
+        float stud = 1.0 - smoothstep(0.24, 0.38, abs(f.x) + abs(f.y));
+        roughness = mix(0.68, 0.16, stud);
+        metallic = mix(0.40, 0.94, stud);
+        specIntensity = mix(0.40, 1.55, stud);
+    } else if (fam == kFamRust || mid == 14u || (floorIdx == 2 && !isHorizontal)) {
+        // Floor 2: Heavy rusted cast iron & dark oxidized steel
+        float lo = vnoise(uv * kMatSurface[mid].y);
+        float hi = vnoise(uv * kMatSurface[mid].y * 2.85);
+        float rustMask = smoothstep(0.36, 0.64, lo * 0.65 + hi * 0.35);
+        roughness = mix(0.22, 0.94, rustMask);
+        metallic = mix(0.92, 0.02, rustMask);
+        specIntensity = mix(1.75, 0.15, rustMask);
+        cavity = mix(1.0, 0.45, rustMask);
+    } else if (fam == kFamPlaster || fam == kFamGeneric || mid == 8u || mid == 0u) {
+        if (!isHorizontal) {
+            if (h_wall < 2.2) {
+                // Lower enamel paint with peeling chips
+                float wearArea = smoothstep(0.42, 0.65, vnoise(uv * 1.5));
+                float chipNoise = vnoise(uv * 14.0) * 0.70 + vnoise(uv * 42.0) * 0.30;
+                float peeled = wearArea * smoothstep(0.55, 0.62, chipNoise);
+                roughness = mix(0.18 + (g - 0.5) * 0.08, 0.88, peeled);
+                metallic = mix(0.04, 0.0, peeled);
+                specIntensity = mix(1.60, 0.20, peeled);
+                cavity = 1.0 - flakeEdgeShadow * 0.60;
+            } else if (h_wall <= 2.4) {
+                // Dark dividing stripe
+                roughness = 0.42;
+                metallic = 0.02;
+                specIntensity = 0.55;
+            } else {
+                // Matte whitewashed plaster above
+                roughness = clamp(0.82 + (g - 0.5) * 0.10, 0.65, 0.95);
+                metallic = 0.0;
+                specIntensity = 0.24;
+            }
+        } else {
+            roughness = 0.72;
+            metallic = 0.0;
+            specIntensity = 0.30;
+        }
+    } else if (mid == 11u || floorIdx == 4) {
+        // Floor 4: Bio-Lab Glazed Ceramic Tile with crisp dark grout lines
+        vec2 q = uv * 6.0;
+        vec2 e = abs(fract(q) - 0.5);
+        float grout = smoothstep(0.44, 0.50, max(e.x, e.y));
+        roughness = mix(0.06, 0.80, grout);
+        metallic = 0.02;
+        specIntensity = mix(2.60, 0.22, grout);
+    } else if (mid == 17u) {
+        // Bio-vat glowing fluid
+        roughness = 0.03;
+        metallic = 0.08;
+        specIntensity = 3.00;
+    } else if (fam == kFamPlank || mid == 9u) {
+        roughness = clamp(0.28 + (g - 0.5) * 0.10, 0.16, 0.45);
+        metallic = 0.02;
+        specIntensity = 0.85;
+    } else if (fam == kFamRubble || mid == 15u) {
+        roughness = 0.85;
+        metallic = 0.0;
+        specIntensity = 0.20;
+    }
 
 #ifdef GIGA_ALBEDO_ARRAY
     if (roughnessMask != 0u && (roughnessMask & (1u << mid)) != 0u) {
@@ -608,48 +620,167 @@ void main() {
     }
 #endif
 
-    float specPow = max(2.0 / (roughness * roughness * roughness * roughness + 1e-4) - 2.0, 1.0);
-    float specIntensity = (1.0 - roughness) * 0.25;
-    float spec = 0.0;
-    if (dot(n, L) > 0.0) {
-        vec3 H = normalize(L + viewDir);
-        float NdotH = max(dot(n, H), 0.0);
-        spec = pow(NdotH, specPow) * specIntensity * att * pc.camPos.w;
+    // ── Vectors & Lighting Formulation ───────────────────────────────────────
+    vec3 toCam = pc.camPos.xyz - vWorldPos;
+    float d = length(toCam);
+    vec3 V = toCam / max(d, 1e-4);
+
+    vec3 F0 = mix(vec3(0.04), albedo, metallic);
+
+    float r4 = roughness * roughness * roughness * roughness;
+    float specPow = max(2.0 / (r4 + 1e-4) - 2.0, 1.0);
+    float normFactor = (specPow + 8.0) / (8.0 * kPi);
+
+    // 1. High-Contrast Player Flashlight Cone (Hot Tungsten Core + Realistic Inverse-Square Decay)
+    vec3 camForward = -normalize(vec3(pc.viewProj[0][2], pc.viewProj[1][2], pc.viewProj[2][2]));
+    vec3 rayDir = normalize(vWorldPos - pc.camPos.xyz);
+
+    float cosAngle = dot(rayDir, camForward);
+    float spotCore = smoothstep(0.88, 0.99, cosAngle);
+    float spotCone = smoothstep(0.50, 0.88, cosAngle);
+    float spotFactor = mix(0.15, 1.80, spotCone * 0.35 + spotCore * 0.65);
+    float lampIntensity = pc.camPos.w * spotFactor * 2.8;
+
+    float r_lamp = pc.fog.z * 2.5;
+    float att_head = 1.0 / (1.0 + (d * d) / (r_lamp * r_lamp));
+
+    float NdotV = max(dot(n, V), 0.0);
+    vec3 headSpec = vec3(0.0);
+    if (NdotV > 0.0) {
+        float NdotH = NdotV;
+        vec3 F_head = F0 + (vec3(1.0) - F0) * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
+        headSpec = F_head * (pow(NdotH, specPow) * normFactor * specIntensity * att_head * lampIntensity * 2.4);
+
+        // High-contrast anisotropic metallic sheen for pipes and conduits
+        if (mid == 19u || fam == kFamRibbed) {
+            vec3 T_aniso = abs(n.z) > 0.7 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 0.0, 1.0);
+            vec3 anisoH = cross(n, T_aniso);
+            float anisoDot = dot(anisoH, V);
+            float anisoTerm = pow(max(1.0 - anisoDot * anisoDot, 0.0), specPow * 0.40);
+            headSpec += F_head * (anisoTerm * normFactor * 2.5 * specIntensity * att_head * lampIntensity);
+        }
     }
 
-    float lampDirect = pc.camPos.w * att * max(dot(n, L), 0.0);
-    float lampScatter = pc.camPos.w * att * phase * 0.25;
-    float lamp = lampDirect + lampScatter;
+    float g_scat = 0.55;
+    float cosTheta = dot(-V, rayDir);
+    float hg_denom = max(1.0 + g_scat * g_scat - 2.0 * g_scat * cosTheta, 1e-4);
+    float phase = (1.0 - g_scat * g_scat) / (hg_denom * sqrt(hg_denom));
 
-    vec3 lampColor = kTungstenTint * lamp;
-    float fill = pc.sunDir.w * max(dot(n, normalize(pc.sunDir.xyz)), 0.0);
+    const vec3 kTungstenTint = vec3(1.04, 0.88, 0.68);
+    float lampDirect = lampIntensity * att_head * NdotV;
+    float lampScatter = lampIntensity * att_head * phase * 0.25;
+    vec3 lampDiffuse = kTungstenTint * (lampDirect + lampScatter) * (1.0 - metallic);
 
-    // World +Z as "up" is a render-local aesthetic choice, not a claim about
-    // gravity — gravity is a vector and lives in the sim (world.gravity()).
-    // Deleting this term changes pixels, never outcomes.
+    // 2. Sun / Fill Light
+    vec3 L_fill = normalize(pc.sunDir.xyz);
+    float NdotFill = max(dot(n, L_fill), 0.0);
+    vec3 fillDiffuse = vec3(pc.sunDir.w * NdotFill * (1.0 - metallic));
+
+    // 3. GPU LightGrid Point Lights (Ceiling fluorescent tubes with 100Hz micro-flicker, warm sodium emergency lamps)
+    vec3 gridDiffuse = vec3(0.0);
+    vec3 gridSpec = vec3(0.0);
+    float timeSec = pc.torus.w;
+
+#ifdef GIGA_VOLUMETRIC_GRID_BINDINGS
+    vec3 gridMin = pc.camPos.xyz - vec3(32.0, 16.0, 32.0);
+    vec3 gridExt = vec3(32.0, 16.0, 32.0);
+    vec3 cellSize = vec3(2.0, 2.0, 2.0);
+    uvec3 gridDim = uvec3(32, 16, 32);
+
+    vec3 localPos = vWorldPos - gridMin;
+    ivec3 cellCoord = ivec3(floor(localPos / cellSize));
+
+    if (cellCoord.x >= 0 && cellCoord.x < int(gridDim.x) &&
+        cellCoord.y >= 0 && cellCoord.y < int(gridDim.y) &&
+        cellCoord.z >= 0 && cellCoord.z < int(gridDim.z)) {
+
+        uint flatIdx = uint(cellCoord.x + cellCoord.y * int(gridDim.x) + cellCoord.z * int(gridDim.x * gridDim.y));
+        LightGridCell cell = uGridCells[flatIdx];
+        uint count = min(cell.count, 15u);
+
+        for (uint k = 0u; k < count; ++k) {
+            uint lightIdx = cell.lightIndices[k];
+            if (lightIdx == 0u) continue;
+
+            PointLight pt = uPointLights[lightIdx];
+
+            vec3 toPt = pt.posRadius.xyz - vWorldPos;
+            toPt -= 256.0 * floor((toPt + 128.0) / 256.0);
+
+            float dPtSq = dot(toPt, toPt);
+            float radius = pt.posRadius.w;
+
+            if (dPtSq < radius * radius && dPtSq > 1e-6) {
+                float dPt = sqrt(dPtSq);
+                vec3 L_pt = toPt / dPt;
+
+                float NdotL_pt = max(dot(n, L_pt), 0.0);
+                if (NdotL_pt > 0.0) {
+                    float dOverR = dPt / radius;
+                    float dOverR2 = dOverR * dOverR;
+                    float win = clamp(1.0 - dOverR2 * dOverR2, 0.0, 1.0);
+                    float att_pt = (win * win) / (dPtSq + 0.15);
+
+                    vec3 ptCol = pt.colorIntensity.rgb;
+                    if (ptCol.r < ptCol.b * 1.15) {
+                        // Ceiling Fluorescent Tube 100Hz AC magnetic ballast micro-flicker & cool phosphor tint
+                        float flick = 1.0 + 0.045 * sin(timeSec * 628.3185 + pt.posRadius.x * 23.1 + pt.posRadius.y * 17.3 + pt.posRadius.z * 13.7);
+                        ptCol *= flick * vec3(0.92, 0.98, 1.05);
+                    } else if (ptCol.r > ptCol.b * 1.8) {
+                        // Warm Sodium Emergency Lamp
+                        ptCol = mix(ptCol, vec3(1.0, 0.58, 0.10), 0.45);
+                    }
+
+                    vec3 radiance = ptCol * (pt.colorIntensity.w * att_pt * 2.8);
+
+                    gridDiffuse += radiance * NdotL_pt * (1.0 - metallic);
+
+                    vec3 H_pt = normalize(L_pt + V);
+                    float NdotH_pt = max(dot(n, H_pt), 0.0);
+                    float VdotH_pt = max(dot(V, H_pt), 0.0);
+                    vec3 F_pt = F0 + (vec3(1.0) - F0) * pow(clamp(1.0 - VdotH_pt, 0.0, 1.0), 5.0);
+
+                    gridSpec += radiance * F_pt * (pow(NdotH_pt, specPow) * normFactor * specIntensity * NdotL_pt * 1.45);
+                }
+            }
+        }
+    }
+#endif
+
+    // 4. Ambient, Ceiling Bounce & Corner AO
     float hemi = 0.5 + 0.5 * n.z;
-    vec3 amb = pc.fog.w * mix(vec3(0.025, 0.022, 0.018), vec3(0.055, 0.048, 0.040), hemi);
+    vec3 amb = pc.fog.w * mix(vec3(0.045, 0.052, 0.060), vec3(0.140, 0.130, 0.115), hemi);
+    
+    float ceilingBounce = max(n.z, 0.0) * 0.04;
+    vec3 ceilingBounceCol = vec3(0.045, 0.042, 0.038) * ceilingBounce;
+    amb += ceilingBounceCol;
 
-    const float kAoFloor = 0.32;
-    float ao = kAoFloor + (1.0 - kAoFloor) * vAo;
+    const float kAoFloor = 0.25;
+    float ao = (kAoFloor + (1.0 - kAoFloor) * vAo) * cavity;
     float aoDirect = mix(1.0, ao, pc.torus.y);
-    vec3 lit = albedo * (amb * ao + (lampColor + vec3(fill)) * aoDirect) + kTungstenTint * spec * aoDirect;
 
-    // Dynamically scale fog opacity & flickering during Samosbor hazard triggers
-    // fog.y is kWorldExtent*0.50*fogScale, so fogScale = fog.y / (extent*0.5) and
-    // the pulse is (1 - fogScale) / (1 - kSamosborFogSqueeze). Both constants used
-    // to be wrong here: the divisor was 128.0*0.50 = 64 instead of the 128 that is
-    // kWorldExtent*0.5, and the ramp was /0.70 instead of /0.66. Together they ran
-    // the effect at 0.457 where the CPU says 1.0 at full samosbor, and pinned it
-    // to zero for the whole first half of the ramp. The extent now comes from the
-    // push block (torus.x) rather than a literal; 0.66 mirrors main.cpp's
-    // kSamosborFogSqueeze = 0.34 and is the one number still duplicated here.
-    // [problems.md] section 20
+    // 5. Subtle Grazing-Angle Specular Sheen (Fresnel Reflection for Damp Concrete Floor & Enamel)
+    vec3 R = reflect(-V, n);
+    float skyHemi = 0.5 + 0.5 * R.z;
+    vec3 envRefl = mix(vec3(0.035, 0.042, 0.050), vec3(0.14, 0.13, 0.11), skyHemi);
+    vec3 F_env = F0 + (vec3(1.0) - F0) * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
+    vec3 envSpec = envRefl * F_env * (1.0 - roughness * 0.75) * specIntensity * 1.65;
+
+    // Total Lit Surface Radiance
+    vec3 lit = albedo * (amb * ao + (lampDiffuse + fillDiffuse + gridDiffuse) * aoDirect)
+             + (kTungstenTint * headSpec + gridSpec + envSpec) * aoDirect;
+
+    // Bioluminescent emission for Bio-Lab vats
+    if (mid == 17u) {
+        float bioWave = 0.85 + 0.15 * sin(timeSec * 3.5 + vWorldPos.x * 2.0 + vWorldPos.y * 2.0 + vWorldPos.z * 1.5);
+        lit += vec3(0.04, 0.98, 0.40) * (bioWave * 2.2);
+    }
+
+    // ── Volumetric Fog Integration ───────────────────────────────────────────
     float samosborPulse =
         clamp((1.0 - pc.fog.y / (pc.torus.x * 0.5)) / 0.66, 0.0, 1.0);
 
-    // Volumetric fog raymarching with 3D light grid lookup and Samosbor pulse scaling
-    vec3 gridMin = pc.camPos.xyz - vec3(32.0, 16.0, 32.0);
+    vec3 gridMinFog = pc.camPos.xyz - vec3(32.0, 16.0, 32.0);
     vec4 fogVol = march_volumetric_fog(
         pc.camPos.xyz,
         normalize(vWorldPos - pc.camPos.xyz),
@@ -660,29 +791,26 @@ void main() {
         pc.fog.z,
         pc.sunDir.xyz,
         pc.sunDir.w,
-        gridMin,
+        gridMinFog,
         vec3(32.0, 16.0, 32.0),
         vec3(2.0, 2.0, 2.0),
-        pc.torus.w,
+        timeSec,
         samosborPulse
     );
     lit = lit * fogVol.a + fogVol.rgb;
 
-    // Height-based fog density using world-space position vWorldPos.z
-    // (exponential density increase at lower z / subterranean floor levels).
     const float kHeightFogScale = 0.04;
     float heightDensity = exp(-clamp(kHeightFogScale * vWorldPos.z, -3.0, 3.0));
     float effectiveDist = d * heightDensity;
 
     float fog = clamp((effectiveDist - pc.fog.x) / max(pc.fog.y - pc.fog.x, 1e-3), 0.0, 1.0);
 
-    // Dynamic Samosbor fog flickering
-    float fogFlicker = 1.0 + samosborPulse * 0.35 * sin(pc.torus.w * 22.0 + vWorldPos.x * 0.4 + vWorldPos.y * 0.3);
+    float fogFlicker = 1.0 + samosborPulse * 0.35 * sin(timeSec * 22.0 + vWorldPos.x * 0.4 + vWorldPos.y * 0.3);
     fog = clamp(fog * fogFlicker, 0.0, 1.0);
 
     lit = mix(lit, vec3(0.0), fog);
 
-    // ACES Filmic Tonemapping to compress highlights with rich filmic toe & shoulder:
+    // ACES Filmic Tonemapping
     vec3 x = max(lit, vec3(0.0));
     vec3 mapped = clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
     vec3 srgb = pow(mapped, vec3(1.0 / kGamma));

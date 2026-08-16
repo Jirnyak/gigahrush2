@@ -351,8 +351,10 @@ void stamp_walls(MacroGrid& g, SubField<CellType>& sm, const Plan& p, int b) {
                     put_bits(g, sm, x, y, b + 1, wz, pat, kMatPlaster);
                 }
             }
-            for (int wz = 0; wz < 6; ++wz)
-                put_bits(g, sm, x, y, b + 2, wz, pat, kMatPlaster);
+            for (int wz = 0; wz < 6; ++wz) {
+                const CellType lintelMat = (gap && wz < 2) ? kMatDoor : kMatPlaster;
+                put_bits(g, sm, x, y, b + 2, wz, pat, lintelMat);
+            }
         }
     }
 }

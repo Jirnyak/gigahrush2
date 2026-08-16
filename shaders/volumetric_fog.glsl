@@ -36,17 +36,25 @@ float henyey_greenstein_phase(float cosTheta, float g) {
     return (1.0 - g2) / (12.566370614 * denom * sqrt(denom));
 }
 
+// Dual-lobe phase function: sharp forward Mie beam + gentle backscatter
+float dual_lobe_phase(float cosTheta, float gForward, float gBack, float forwardWeight) {
+    return mix(henyey_greenstein_phase(cosTheta, gBack),
+               henyey_greenstein_phase(cosTheta, gForward),
+               forwardWeight);
+}
+
 // Interleaved Gradient Noise for screen-space ray jittering (prevents banding with 8-16 steps).
 float ign_jitter(vec2 fragCoord) {
     return fract(52.9829189 * fract(dot(fragCoord, vec2(0.06711056, 0.00583715))));
 }
 
-// Lognormal height fog density with spatial micro-turbulent mist
-float sample_volumetric_fog_density(vec3 pos, float heightScale) {
+// Lognormal height fog density with spatial micro-turbulent airborne dust motes
+float sample_volumetric_fog_density(vec3 pos, float heightScale, float timeSec) {
     // Z-up world: height rides z; the mist swirl noise lives in the xy plane.
     float baseDensity = exp(-clamp(heightScale * pos.z, -3.0, 3.0));
-    // Spatial noise perturbation for dynamic mist swirl
-    vec2 p = pos.xy * 0.15;
+    
+    // Spatial noise perturbation for dynamic mist swirl and airborne dust motes
+    vec2 p = pos.xy * 0.15 + vec2(timeSec * 0.02, -timeSec * 0.015);
     vec2 i = floor(p);
     vec2 f = fract(p);
     f = f * f * (3.0 - 2.0 * f);
@@ -56,7 +64,16 @@ float sample_volumetric_fog_density(vec3 pos, float heightScale) {
     float d = fract(sin(dot(i + vec2(1.0, 1.0), vec2(12.9898, 78.233))) * 43758.5453);
     float mistNoise = mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 
-    return baseDensity * (0.85 + 0.30 * mistNoise);
+    // Fine floating dust mote noise with turbulent air drift
+    vec3 dp = pos * 1.25 + vec3(timeSec * 0.06, timeSec * 0.04, -timeSec * 0.05);
+    float dust = fract(sin(dot(floor(dp), vec3(27.1, 61.7, 12.4))) * 43758.5453);
+    float mote = smoothstep(0.70, 0.95, dust) * 0.50;
+
+    return baseDensity * (0.80 + 0.35 * mistNoise + mote);
+}
+
+float sample_volumetric_fog_density(vec3 pos, float heightScale) {
+    return sample_volumetric_fog_density(pos, heightScale, 0.0);
 }
 
 // Raymarching Volumetric Accumulation
@@ -78,16 +95,19 @@ vec4 march_volumetric_fog(
     float timeSec,
     float samosborPulse
 ) {
-    // Step-count-invariant (measured 2026-08-03: 12 vs 24 steps, p99 frame
-    // delta = 2/765) — raise freely if the IGN dither ever reads as noise.
-    const int kNumSteps = 12;
+    // 16 steps with IGN dither for ultra-smooth god-ray integration without staircasing
+    const int kNumSteps = 16;
     float jitter = ign_jitter(fragCoord);
     float stepSize = maxDist / float(kNumSteps);
 
     vec3 inscatter = vec3(0.0);
     float transmittance = 1.0;
-    // Dynamic extinction scaling when Samosbor hazard strikes (samosbor.pulse)
-    float kAbsorption = 0.035 * (1.0 + clamp(samosborPulse, 0.0, 1.0) * 3.5);
+    
+    // Dynamic extinction scaling with Samosbor hazard triggers (samosbor.pulse)
+    // Blue wavelengths scatter slightly more than red for deep atmospheric scattering
+    float pulse = clamp(samosborPulse, 0.0, 1.0);
+    vec3 baseExtinction = mix(vec3(0.024, 0.028, 0.034), vec3(0.085, 0.035, 0.015), pulse);
+    float kAbsorption = (1.0 + pulse * 4.0);
 
     uvec3 gridDim = uvec3(uint(gridExt.x), uint(gridExt.y), uint(gridExt.z));
 
@@ -97,27 +117,29 @@ vec4 march_volumetric_fog(
 
         vec3 p = rayOrigin + rayDir * t;
 
-        // Sample fog density at current ray position
-        float density = sample_volumetric_fog_density(p, 0.04);
-        float stepExtinction = density * kAbsorption * stepSize;
+        // Sample fog density at current ray position (with airborne dust turbulence)
+        float density = sample_volumetric_fog_density(p, 0.04, timeSec);
+        vec3 stepExtinction = density * baseExtinction * kAbsorption * stepSize;
 
         // Apply Beer-Lambert law
-        float stepTransmittance = exp(-stepExtinction);
+        float stepTransmittance = exp(-dot(stepExtinction, vec3(0.3333)));
 
-        // 1. Headlamp forward scattering
+        // 1. Headlamp forward scattering (sharp god-rays with hot tungsten core)
         vec3 toLamp = headlampPos - p;
         float lampDistSq = dot(toLamp, toLamp);
         float lampAtt = 1.0 / (1.0 + lampDistSq / max(headlampRadius * headlampRadius, 1e-4));
         float lampCos = dot(-rayDir, toLamp) * inversesqrt(max(lampDistSq, 1e-6));
-        float lampPhase = henyey_greenstein_phase(lampCos, 0.55);
-        vec3 lampColor = vec3(0.95, 0.92, 0.85) * (headlampIntensity * lampAtt * lampPhase * 0.35);
+        // Mie forward lobe for crisp light shafts (gForward = 0.72)
+        float lampPhase = dual_lobe_phase(lampCos, 0.72, -0.20, 0.88);
+        const vec3 kTungstenFog = vec3(1.04, 0.88, 0.68);
+        vec3 lampColor = kTungstenFog * (headlampIntensity * lampAtt * lampPhase * 0.48);
 
-        // 2. Fill light ambient scattering
+        // 2. Fill light ambient scattering (cool deep atmospheric silhouette, prevents muddy grey)
         float fillCos = dot(-rayDir, normalize(fillDir));
         float fillPhase = henyey_greenstein_phase(fillCos, 0.25);
-        vec3 fillColor = vec3(0.20, 0.22, 0.28) * (fillStrength * fillPhase * 0.15);
+        vec3 fillColor = vec3(0.10, 0.14, 0.22) * (fillStrength * fillPhase * 0.15);
 
-        // 3. 3D Light Grid Point Light In-scattering
+        // 3. 3D Light Grid Point Light In-scattering (Fluorescent tubes, sodium emergency lamps, bioluminescent tubes)
         vec3 pointLightScat = vec3(0.0);
 #ifdef GIGA_VOLUMETRIC_GRID_BINDINGS
         vec3 localGridPos = p - gridMin;
@@ -129,31 +151,40 @@ vec4 march_volumetric_fog(
 
             uint flatIdx = uint(cellCoord.x + cellCoord.y * int(gridDim.x) + cellCoord.z * int(gridDim.x * gridDim.y));
             LightGridCell cell = uGridCells[flatIdx];
+            uint count = min(cell.count, 15u);
 
-            for (uint k = 0u; k < cell.count && k < 15u; ++k) {
+            for (uint k = 0u; k < count; ++k) {
                 uint lightIdx = cell.lightIndices[k];
+                if (lightIdx == 0u) continue; // Headlamp handled separately above
+
                 PointLight pt = uPointLights[lightIdx];
 
-                // Torus wrap on ALL three axes with the true 256 m period
-                // (kWorldExtent). The old 128 m half-period folded a light
-                // 130 m away to 2 m — phantom fog glow in the wrong place —
-                // and y never wrapped at all.
+                // Torus wrap on ALL three axes with 256 m period
                 vec3 toPt = pt.posRadius.xyz - p;
                 toPt -= 256.0 * floor((toPt + 128.0) / 256.0);
                 float dPtSq = dot(toPt, toPt);
                 float radius = pt.posRadius.w;
 
-                if (dPtSq < radius * radius) {
+                if (dPtSq < radius * radius && dPtSq > 1e-6) {
                     float dPt = sqrt(dPtSq);
                     float ptAtt = clamp(1.0 - (dPt / radius), 0.0, 1.0);
-                    ptAtt *= ptAtt; // Smooth falloff quadratic
+                    ptAtt = ptAtt * ptAtt; // Quadratic falloff
 
-                    // No normalize(): a sample landing on the light centre
-                    // would emit NaN into the additive inscatter term.
                     float ptCos = dot(-rayDir, toPt) / max(dPt, 1e-3);
-                    float ptPhase = henyey_greenstein_phase(ptCos, 0.40);
+                    float ptPhase = dual_lobe_phase(ptCos, 0.52, -0.18, 0.82);
 
-                    pointLightScat += pt.colorIntensity.rgb * (pt.colorIntensity.w * ptAtt * ptPhase);
+                    // Dynamic light response: 100Hz micro-flicker for fluorescent lights
+                    vec3 ptCol = pt.colorIntensity.rgb;
+                    if (ptCol.r < ptCol.b * 1.15) {
+                        // Fluorescent tube 100Hz AC ballast flicker & phosphor tint
+                        float flick = 1.0 + 0.045 * sin(timeSec * 628.3185 + pt.posRadius.x * 23.1 + pt.posRadius.y * 17.3 + pt.posRadius.z * 13.7);
+                        ptCol *= flick * vec3(0.92, 0.98, 1.05);
+                    } else if (ptCol.r > ptCol.b * 1.8) {
+                        // Sodium warm emergency light
+                        ptCol = mix(ptCol, vec3(1.0, 0.58, 0.10), 0.45);
+                    }
+
+                    pointLightScat += ptCol * (pt.colorIntensity.w * ptAtt * ptPhase * 1.30);
                 }
             }
         }

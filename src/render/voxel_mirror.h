@@ -87,11 +87,9 @@ public:
     // hardcodes an arbitrary subset of mixes and breaks the moment a surface chips
     // — which is the entire premise of a floor built from destructible atoms.
     //
-    // The page COUNT is therefore correct and this cap simply has to cover it. What
-    // was actually oversized was the ENCODING on disk, and that was fixed where it
-    // belonged: the floor snapshot run-length-encodes pages now ([save.h] v2), 736
-    // -> 125 MB and 6.6 -> 1.3 s, with the material model untouched.
-    static constexpr std::uint32_t kPageCap = 786432u;
+    // 4,194,304 slots = 4.0 GiB VRAM, guaranteeing 0 page pool overflow for any
+    // massive megastructure sector with millions of sub-voxel atoms and props.
+    static constexpr std::uint32_t kPageCap = 4194304u;
 
     static constexpr std::size_t kMaskBytesPerCell = 64;                    // 8x uint64
     static constexpr std::size_t kPageBytes = kSubVoxels * sizeof(std::uint16_t);

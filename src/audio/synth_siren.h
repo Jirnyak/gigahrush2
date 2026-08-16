@@ -1,5 +1,6 @@
 // Samosbor C-40 civil defense siren procedural DSP generator.
-// Dual-tone motor glide (220 -> 440 Hz + 1.503x fifth), asymmetric tanh overdrive, SVF throat resonance.
+// Dual-tone motor glide (220 -> 440 Hz + 1.503x fifth), asymmetric tanh overdrive, SVF throat resonance,
+// and shaft / corridor acoustic reverberation feedback network.
 #pragma once
 
 #include "audio/audio_types.h"
@@ -9,6 +10,9 @@ namespace giga::audio {
 
 class SirenSynth {
 public:
+    static constexpr int kReverbDelaySamples1 = 1536; // 32 ms reflection delay at 48 kHz
+    static constexpr int kReverbDelaySamples2 = 2304; // 48 ms reflection delay at 48 kHz
+
     SirenSynth();
 
     void set_active(bool active, float intensity = 1.0f);
@@ -28,6 +32,13 @@ private:
     float phase1_ = 0.0f;
     float phase2_ = 0.0f;
     StateVariableFilter hornFilter_;
+
+    // Concrete shaft reverberation network
+    float reverbBuf1_[kReverbDelaySamples1]{};
+    float reverbBuf2_[kReverbDelaySamples2]{};
+    int reverbIdx1_ = 0;
+    int reverbIdx2_ = 0;
+    OnePoleLp reverbDampLp_;
 };
 
 } // namespace giga::audio

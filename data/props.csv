@@ -8,3 +8,8 @@ kitchen_stove,Плита,Box,SimpleFall,KitchenStation,0,4,420,430,400,2500,8000
 kitchen_table,Стол,Box,SimpleFall,Workbench,0,3,520,420,300,2500,25000,1.1,0.7,0.78
 toilet_pan,Унитаз,CylinderZ,SimpleFall,Terminal,0,3,880,890,870,2500,35000,0.4,0.4,0.75
 bed_cot,Койка,Box,SimpleFall,Terminal,0,3,300,340,420,2500,40000,1.9,0.85,0.5
+emergency_beacon,Аварийный маяк,CylinderZ,SimpleFall,LightBulb,255,0,1600,300,180,2500,1500,0.22,0.22,0.32
+soviet_radiator,Чугунный радиатор,Box,SimpleFall,None,0,4,480,460,420,2500,38000,0.95,0.22,0.65
+junction_box,Распредкоробка,Box,SimpleFall,None,0,4,220,240,260,2500,4000,0.35,0.16,0.35
+vent_grate,Вентрешетка,Box,SimpleFall,None,0,13,260,270,280,2500,6000,0.70,0.08,0.45
+wall_conduit,Кабель-канал,Box,SimpleFall,None,0,19,180,200,220,2500,3000,0.85,0.12,0.12

@@ -250,6 +250,12 @@ void FloorStreamer::embody_crowd(Registry& ecs, NpcPool& pool, const World& worl
         if (id == playerId) continue;
         Entity e;
         if (playerId == kInvalidNpc && id == designate) {
+            if (fm.number == 0) {
+                // Spawn fresh player in main illuminated corridor looking down the hallway
+                pool.cx(id) = 80;
+                pool.cy(id) = 70;
+                pool.cz(id) = 3;
+            }
             e = embody_as_player(ecs, pool, id, layer);
             playerId = id;
             outPlayer = e;

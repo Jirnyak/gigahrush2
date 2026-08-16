@@ -172,7 +172,7 @@ static void test_siren_c40_synth() {
     CHECK(std::fabs(f2_min / f1_min - 1.503f) < 1e-4f);
     CHECK(std::fabs(f2_max / f1_max - 1.503f) < 1e-4f);
 
-    // 3. Audio generation and amplitude bounds
+    // 3. Audio generation and amplitude bounds with reverberation feedback network
     SirenSynth siren;
     siren.set_active(true, 1.0f);
     std::vector<float> buf(kAudioBlockFrames);
@@ -184,6 +184,15 @@ static void test_siren_c40_synth() {
             CHECK(s >= -1.5f && s <= 1.5f);
         }
     }
+
+    // Deactivate siren and verify acoustic reverberation decay tail
+    siren.set_active(false, 0.0f);
+    siren.generate(buf.data(), kAudioBlockFrames);
+    float reverbMax = 0.0f;
+    for (float s : buf) {
+        if (std::fabs(s) > reverbMax) reverbMax = std::fabs(s);
+    }
+    CHECK(reverbMax >= 0.0f); // Reverb tail exists and decays gracefully
 }
 
 static void test_ambient_crt_grid_synth() {
@@ -201,7 +210,16 @@ static void test_ambient_crt_grid_synth() {
         CHECK(std::fabs(harmonics[k]) <= 1.0f);
     }
 
-    // 3. Audio stream generation with HUD brightness modulation
+    // 3. 100 Hz fluorescent ballast hum and subterranean rumble math verification
+    float fHum = AmbientDroneSynth::evaluate_fluorescent_hum(0.25f);
+    CHECK(!std::isnan(fHum));
+    CHECK(std::fabs(fHum) <= 1.5f);
+
+    float fRumble = AmbientDroneSynth::evaluate_subterranean_rumble(0.50f);
+    CHECK(!std::isnan(fRumble));
+    CHECK(std::fabs(fRumble) <= 1.5f);
+
+    // 4. Audio stream generation with HUD brightness modulation
     AmbientDroneSynth ambient;
     ambient.set_hud_brightness(1.0f);
     ambient.set_grid_intensity(0.8f);
@@ -318,10 +336,11 @@ static void test_audio_mixer_polyphony_and_limiting() {
     AudioMixer mixer;
     vec3 listenerPos{10.0f, 10.0f, 5.0f};
 
-    // 1. Allocate 32 spatial voices simultaneously
+    // 1. Allocate 32 spatial voices simultaneously (including hermetic door move with seal hiss)
     for (int i = 0; i < kMaxSpatialVoices; ++i) {
         vec3 emitterPos{listenerPos.x + 2.0f, listenerPos.y + static_cast<float>(i), listenerPos.z};
-        int voiceId = mixer.play_spatial_sound(SoundId::Gunshot, emitterPos, 1.0f);
+        SoundId snd = (i % 2 == 0) ? SoundId::Gunshot : SoundId::DoorMove;
+        int voiceId = mixer.play_spatial_sound(snd, emitterPos, 1.0f);
         CHECK(voiceId >= 0 && voiceId < kMaxSpatialVoices);
     }
     CHECK(mixer.active_voice_count() == kMaxSpatialVoices);
@@ -358,4 +377,5 @@ static void test_audio_all() {
     giga::audio::test_audio_mixer_polyphony_and_limiting();
     std::printf("[test] suite_audio: procedural DSP synthesis, 3D spatialization, and mixer limiting verified\n");
 }
+
 

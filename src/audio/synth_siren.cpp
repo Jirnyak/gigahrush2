@@ -18,6 +18,13 @@ void SirenSynth::reset() {
     phase2_ = 0.0f;
     hornFilter_.reset();
     hornFilter_.set_params(1450.0f, 2.2f, kAudioSampleRate);
+
+    std::fill_n(reverbBuf1_, kReverbDelaySamples1, 0.0f);
+    std::fill_n(reverbBuf2_, kReverbDelaySamples2, 0.0f);
+    reverbIdx1_ = 0;
+    reverbIdx2_ = 0;
+    reverbDampLp_.reset();
+    reverbDampLp_.set_cutoff(2200.0f, kAudioSampleRate);
 }
 
 void SirenSynth::set_active(bool active, float intensity) {
@@ -56,7 +63,17 @@ void SirenSynth::generate(float* buffer, int numSamples) {
         }
 
         if (currentAmp_ <= 1e-6f && !active_) {
-            buffer[n] = 0.0f;
+            // Drain reverb tail
+            float delayOut1 = reverbBuf1_[reverbIdx1_];
+            float delayOut2 = reverbBuf2_[reverbIdx2_];
+            float reverbSum = 0.5f * (delayOut1 + delayOut2);
+            float damped = reverbDampLp_.process(reverbSum);
+            reverbBuf1_[reverbIdx1_] = 0.35f * damped;
+            reverbBuf2_[reverbIdx2_] = 0.30f * damped;
+            reverbIdx1_ = (reverbIdx1_ + 1) % kReverbDelaySamples1;
+            reverbIdx2_ = (reverbIdx2_ + 1) % kReverbDelaySamples2;
+
+            buffer[n] = 0.30f * damped;
             continue;
         }
 
@@ -84,8 +101,22 @@ void SirenSynth::generate(float* buffer, int numSamples) {
         // Horn throat resonance filter (1450 Hz, Q = 2.2)
         float resonantSignal = hornFilter_.process_bp(distSignal);
 
-        // Blended acoustic horn output
-        float finalSample = (0.45f * distSignal + 0.55f * resonantSignal) * currentAmp_;
+        // Blended direct acoustic horn output
+        float directHorn = (0.45f * distSignal + 0.55f * resonantSignal) * currentAmp_;
+
+        // Concrete shaft reverberation feedback network
+        float delayOut1 = reverbBuf1_[reverbIdx1_];
+        float delayOut2 = reverbBuf2_[reverbIdx2_];
+        float reverbSum = 0.5f * (delayOut1 + delayOut2);
+        float dampedReverb = reverbDampLp_.process(reverbSum);
+
+        reverbBuf1_[reverbIdx1_] = directHorn + 0.40f * dampedReverb;
+        reverbBuf2_[reverbIdx2_] = directHorn + 0.35f * dampedReverb;
+
+        reverbIdx1_ = (reverbIdx1_ + 1) % kReverbDelaySamples1;
+        reverbIdx2_ = (reverbIdx2_ + 1) % kReverbDelaySamples2;
+
+        float finalSample = 0.70f * directHorn + 0.30f * dampedReverb;
         buffer[n] = finalSample;
     }
 }

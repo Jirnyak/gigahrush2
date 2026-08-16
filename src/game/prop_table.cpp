@@ -23,6 +23,16 @@ const std::array<PropDef, kPropCount> kPropTable = {{
     PropDef{ 35000, 3, 0, 0, 0, 3, 0, 880, 890, 870, 2500, 400, 400, 750 },
     // [8] bed_cot
     PropDef{ 40000, 0, 0, 0, 0, 3, 0, 300, 340, 420, 2500, 1900, 850, 500 },
+    // [9] emergency_beacon
+    PropDef{ 1500, 3, 0, 2, 255, 0, 0, 1600, 300, 180, 2500, 220, 220, 320 },
+    // [10] soviet_radiator
+    PropDef{ 38000, 0, 0, 255, 0, 4, 0, 480, 460, 420, 2500, 950, 220, 650 },
+    // [11] junction_box
+    PropDef{ 4000, 0, 0, 255, 0, 4, 0, 220, 240, 260, 2500, 350, 160, 350 },
+    // [12] vent_grate
+    PropDef{ 6000, 0, 0, 255, 0, 13, 0, 260, 270, 280, 2500, 700, 80, 450 },
+    // [13] wall_conduit
+    PropDef{ 3000, 0, 0, 255, 0, 19, 0, 180, 200, 220, 2500, 850, 120, 120 },
 }};
 
 // Display names. Cyrillic; suites assert non-empty / lead bytes.
@@ -36,6 +46,11 @@ const std::array<const char*, kPropCount> kPropNames = {{
     "Стол",  // kitchen_table
     "Унитаз",  // toilet_pan
     "Койка",  // bed_cot
+    "Аварийный маяк",  // emergency_beacon
+    "Чугунный радиатор",  // soviet_radiator
+    "Распредкоробка",  // junction_box
+    "Вентрешетка",  // vent_grate
+    "Кабель-канал",  // wall_conduit
 }};
 
 const std::array<const char*, kPropCount> kPropIds = {{
@@ -48,6 +63,11 @@ const std::array<const char*, kPropCount> kPropIds = {{
     "kitchen_table",
     "toilet_pan",
     "bed_cot",
+    "emergency_beacon",
+    "soviet_radiator",
+    "junction_box",
+    "vent_grate",
+    "wall_conduit",
 }};
 
 } // namespace giga::game

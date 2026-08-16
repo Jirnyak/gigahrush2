@@ -18,10 +18,11 @@ namespace giga::gpu {
 
 // Matches Push in shaders/gas_sim.comp
 struct alignas(16) GasPush {
-    ivec4 downStep; // xyz = regime_down vector, w = unused
-    vec4  params;   // x = diffusionRate, y = buoyancy, z = unused, w = dt
+    ivec4 downStep;   // xyz = regime_down vector, w = unused
+    vec4  params;     // x = diffusionRate, y = buoyancy, z = unused, w = dt
+    ivec4 probeCoord; // xyz = player macro cell pos, w = probe enabled
 };
-static_assert(sizeof(GasPush) == 32, "GasPush layout must be 32 bytes");
+static_assert(sizeof(GasPush) == 48, "GasPush layout must be 48 bytes");
 
 class GpuGasPass {
 public:
@@ -50,10 +51,7 @@ public:
     void upload_field(const float* toxic01) noexcept;
 
     // ЧИТАТЕЛЬ: упакованная клетка (toxic|smoke<<8|oxy<<16|heat<<24) из
-    // читаемого буфера. Буферы host-coherent и GPU пишет их каждый кадр —
-    // значение может отставать на кадр; для HUD и небоевой логики это
-    // приемлемо ЯВНО, боевая подключка потребует фенса — записано здесь,
-    // чтобы никто не «улучшил» молча.
+    // читаемого буфера. Чтение через probeBuffer без CPU/GPU stalls.
     std::uint32_t sample_cell(int x, int y, int z) const noexcept;
 
     bool ready() const noexcept { return computePipeline_ != VK_NULL_HANDLE; }
@@ -64,8 +62,13 @@ private:
     bool create_pipeline(const char* shaderDir) noexcept;
 
     VulkanDevice* dev_ = nullptr;
-    VulkanBuffer gasSSBO_[2]{}; // Double buffered ping-pong (16 MiB each for 512x512x16)
+    VulkanBuffer gasSSBO_[2]{};  // Fast DEVICE_LOCAL ping-pong VRAM buffers (16 MiB each)
+    VulkanBuffer stagingBuf_{};  // Host-visible upload staging buffer (16 MiB)
+    VulkanBuffer probeBuffer_{}; // Host-visible probe readback buffer (64 bytes)
     uint32_t readIndex_ = 0;
+    bool uploadDirty_ = false;
+
+    mutable ivec4 probeCoord_{0, 0, 0, 0};
 
     VkDescriptorSetLayout descSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;

@@ -137,6 +137,12 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
 std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
                                   LayerId layer, std::uint32_t seed);
 
+// Seed environmental props (wall conduits, junction boxes, cast-iron radiators,
+// vent grates, emergency beacons) by scanning MacroGrid wall faces.
+std::uint32_t seed_environmental_props(Registry& reg, const World& world,
+                                       LayerId layer, std::uint32_t seed);
+
+
 // Collect world positions of active Interactables of `kind` on `layer`.
 // Replaces propPass.get_terminal_positions() / get_prop_positions for sim+HUD.
 // Prefer interaction_step / find_nearest_interactable in the hot path — this

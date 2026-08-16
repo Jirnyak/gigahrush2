@@ -1,23 +1,5 @@
-// gigahrush2 entry point.
-//
-// Brings up an SDL3 window + Vulkan, builds the level stack, seeds an alife
-// population and embodies one of its records as the player (who owns the
-// CameraTag + Controller — the "player is just an embodied record" model,
-// [npcs.md]), and runs a fixed-timestep sim loop against a variable-rate render
-// loop with an ImGui HUD.
-//
-// The default world is the floor-MODULE stack: several distinct 128^3 floors,
-// each themed by its FloorKind (floor_gen.h / floors.md) and wired through a
-// FloorRegistry. Only the ACTIVE floor is kept live — its World is generated and
-// its crowd embodied on entry, and folded back into the cold pool on exit
-// (streaming, floor_stream.h / master_prompt #9). `[` and `]` ride down/up a
-// floor.
-//
-// Controls are DATA, not code: every key lives in the KeybindTable
-// ([keybind.h]) as a row mapping a scancode to a console command
-// ([console.h]), rebindable in the pause menu (Esc) and persisted to
-// gigahrush2.keys. Defaults: WASD move, mouse look (hold right mouse / Tab),
-// Space jump, F fly, Q door, E interact, [ / ] floor travel, ~ console.
+// gigahrush2 entry point: SDL3 + Vulkan runtime, level stack, alife streaming,
+// data-driven keybinds, and fixed-timestep simulation loop.
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <SDL3/SDL_vulkan.h>
@@ -151,28 +133,12 @@ constexpr int kWinH = 720;
 // The sim tick rate now lives in core/tick.h so the tests can see the same number.
 // See that header for why it is 125 and not 120.
 
-// Lighting tunables, packed into the dead lanes of CubePush (see cube.frag).
-// The floors are windowless interiors, so the headlamp the player carries is the
-// primary light and ambient is deliberately near-black; raise kAmbient and the
-// world flattens back into an evenly-lit mosaic.
-constexpr float kLampIntensity = 2.2f;  // camPos.w
-constexpr float kLampRadius = 14.0f;    // fog.z, metres (7 macro cells)
-constexpr float kFillStrength = 0.02f;  // sunDir.w, dark subterranean backstop
-constexpr float kAmbient = 0.06f;       // fog.w, scales the atmospheric hemispheric term
-// How much of the DIRECT light (headlamp + fill) baked AO is allowed to occlude.
-// Ambient is always fully occluded; this is the share of the lamp, and it is a dial
-// because occluding a direct light is not physical — it is a legibility choice. At
-// 0 AO is nearly invisible in this scene, because ambient is only ~8% of the image
-// here (see cube.frag). 0.65 reads as contact shadow without making corridors feel
-// like caves.
+// Subterranean lighting tunables (headlamp, direct AO share, samosbor fog squeeze)
+constexpr float kLampIntensity = 5.0f;  // camPos.w
+constexpr float kLampRadius = 28.0f;    // fog.z, metres (14 macro cells)
+constexpr float kFillStrength = 0.04f;  // sunDir.w, dark subterranean backstop
+constexpr float kAmbient = 0.15f;       // fog.w, scales the atmospheric hemispheric term
 constexpr float kAoDirect = 0.65f;
-// How far the world closes in at the peak of a samosbor, as a fraction of the normal
-// fog end. The fog is the ONLY visual the hazard has right now, and it is deliberately
-// a range squeeze rather than a colour: fog mixes to BLACK and the encode satisfies
-// f(0) == 0, which is what hides the toroidal wrap seam ([cube.frag]). Tinting the fog
-// would break that unless the clear colour moved with it, and a visible seam is the
-// worst failure this renderer has. Pulling the range IN is strictly safe — more fog
-// hides the seam harder, never less.
 constexpr float kSamosborFogSqueeze = 0.34f;
 
 static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
@@ -271,16 +237,16 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
         }
     }
 
-    // 7. Ceiling Light Bulbs (ECS LightBulb Interactables — never propPass).
-    // Seeded by seed_ceiling_lights to match PropPlacer BareBulb/FloodLamp cells.
-    // Suppressed when local ElectricalShield power is cut. [jirnyak.md] §18.
+    // 7. Light Fixtures, Wall Devices & Active Workstations (ECS Interactables).
+    // Bins light fixtures (FloodLamp/BareBulb), wall devices (Terminal CRT, ElectricalShield),
+    // and workstations into GpuLightGrid. Suppressed when local power is cut. [jirnyak.md] §18.
     {
-        auto lampView = reg.view<const Transform, const game::Interactable>();
-        for (auto e : lampView) {
-            const Transform& tr = lampView.get<const Transform>(e);
+        auto iaView = reg.view<const Transform, const game::Interactable>();
+        for (auto e : iaView) {
+            const Transform& tr = iaView.get<const Transform>(e);
             if (tr.layer != activeLayer) continue;
-            const game::Interactable& ia = lampView.get<const game::Interactable>(e);
-            if (!ia.active || ia.kind != game::Interactable::Kind::LightBulb) continue;
+            const game::Interactable& ia = iaView.get<const game::Interactable>(e);
+            if (!ia.active) continue;
 
             const vec3& pos = tr.pos;
             if (powerGrid && powerGrid->is_power_cut(pos)) continue; // Local power cut!
@@ -288,14 +254,37 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
             float dx = wrap_delta_f(camPos.x, pos.x, kWorldExtent);
             float dy = wrap_delta_f(camPos.y, pos.y, kWorldExtent);
             float dz = wrap_delta_f(camPos.z, pos.z, kWorldExtent);
-            if (dx * dx + dy * dy + dz * dz > 36.0f * 36.0f) continue;
+            if (dx * dx + dy * dy + dz * dz > 48.0f * 48.0f) continue;
 
-            // Khrushchevka unstable power grid flickering (pure deterministic DOD math)
-            float flick = std::sin(timeSec * 12.0f + pos.x * 1.7f + pos.z * 2.3f) * 0.18f;
-            float microFlick = (std::fmod(timeSec * 47.0f + pos.x * 3.1f + pos.z * 5.7f, 1.0f) < 0.07f) ? -0.50f : 0.0f;
-            float intensity = std::max(0.2f, 1.8f + flick + microFlick);
+            if (ia.kind == game::Interactable::Kind::LightBulb) {
+                // Khrushchevka unstable power grid flickering (pure deterministic DOD math)
+                float flick = std::sin(timeSec * 12.0f + pos.x * 1.7f + pos.z * 2.3f) * 0.18f;
+                float microFlick = (std::fmod(timeSec * 47.0f + pos.x * 3.1f + pos.z * 5.7f, 1.0f) < 0.07f) ? -0.50f : 0.0f;
+                float intensity = std::max(0.4f, 2.2f + flick + microFlick);
 
-            grid.add_light(pos + vec3{0.0f, 0.0f, -0.2f}, 12.0f, vec3{1.00f, 0.88f, 0.65f}, intensity);
+                // Alternating cool fluorescent and warm incandescent ceiling lighting
+                std::uint32_t sh = spatial_hash(static_cast<int>(pos.x), static_cast<int>(pos.y), static_cast<int>(pos.z), 0x517cc1b7u);
+                vec3 col = (sh & 1u) ? vec3{0.88f, 0.94f, 1.00f} : vec3{1.00f, 0.90f, 0.70f};
+                grid.add_light(pos + vec3{0.0f, 0.0f, -0.25f}, 14.0f, col, intensity);
+            } else if (ia.kind == game::Interactable::Kind::Terminal) {
+                // Green/cyan CRT phosphor glow with 60Hz raster jitter
+                float crtJitter = 1.0f + 0.06f * std::sin(timeSec * 60.0f + pos.x * 2.0f);
+                grid.add_light(pos, 4.0f, vec3{0.25f, 0.90f, 0.65f}, 0.85f * crtJitter);
+            } else if (ia.kind == game::Interactable::Kind::ElectricalShield) {
+                // Amber status LED / relay glow
+                float ledPulse = 0.75f + 0.25f * std::sin(timeSec * 4.0f + pos.y * 3.0f);
+                grid.add_light(pos, 3.0f, vec3{1.00f, 0.55f, 0.15f}, 0.65f * ledPulse);
+            } else if (ia.kind == game::Interactable::Kind::Workbench) {
+                // Task lamp over workbench
+                grid.add_light(pos + vec3{0.0f, 0.0f, 0.5f}, 4.5f, vec3{0.95f, 0.85f, 0.60f}, 0.80f);
+            } else if (ia.kind == game::Interactable::Kind::KitchenStation) {
+                // Gas/electric burner glow
+                float flame = 0.85f + 0.15f * std::sin(timeSec * 16.0f + pos.x * 4.0f);
+                grid.add_light(pos + vec3{0.0f, 0.0f, 0.3f}, 3.5f, vec3{1.00f, 0.45f, 0.15f}, 0.70f * flame);
+            } else if (ia.kind == game::Interactable::Kind::MedicalStation) {
+                // Clean cyan diagnostic glow
+                grid.add_light(pos + vec3{0.0f, 0.0f, 0.4f}, 3.5f, vec3{0.35f, 0.85f, 1.00f}, 0.75f);
+            }
         }
     }
 }
@@ -444,21 +433,7 @@ struct DemoFloor {
     int number;
     game::FloorKind kind;
 };
-//
-// The numbers are DEEP on purpose, and this is a correction rather than content.
-// The stack used to be 0..4, and every depth budget in the game keys off |z|:
-//
-//   * `anchor_for_floor` snaps anything within a few floors of 0 to FloorBit::Z0, so
-//     all five floors drew from the same habitat slice of the 69-kind roster.
-//   * `samosbor_duty01` at |z| <= 4 is ~2%, so the depth gradient the samosbor clock
-//     exists to produce was invisible — one duty figure, five floors.
-//   * `economy_band` put every floor in E0, capping loot at 90 roubles, so the
-//     extraction loop's entire risk/reward curve was flat.
-//
-// Three shipped systems were therefore unobservable, and no test would have said so
-// because each of them is correct in isolation. The anchors the mob ecology actually
-// authors are {-50, -36, -26, 0, +14, +30}, so the stack now reaches them: the hub,
-// two shallow floors, then the four descending anchors and the two above.
+// Demo floor stack covering key depth anchors {-50, -36, -26, -14, -8, 0, 1, 2, 14, 30}.
 constexpr DemoFloor kDemoFloors[] = {
     {0, game::FloorKind::Residential},   // start / hub — E0, samosbor ~2% duty
     {1, game::FloorKind::Commercial},
@@ -517,20 +492,140 @@ float samosbor_fog_scale(const game::SamosborState& st) {
         return kSamosborFogSqueeze + (1.0f - kSamosborFogSqueeze) * p;
     return 1.0f;
 }
-
-// Point the fresh player's camera somewhere interesting and start in fly mode
-// (the `fly` bind toggles) so the view is free to explore.
+// Point the fresh player's camera straight down the illuminated corridor (+Y)
+// with a slight downward pitch framing the ceiling fixtures, wall devices, and floor depth.
 void aim_player(Registry& reg, Entity player) {
     auto& cam = reg.get<CameraTag>(player);
-    cam.yaw = 0.8f;
-    cam.pitch = -0.10f;
+    cam.yaw = 1.5707963f;
+    cam.pitch = -0.04f;
     reg.get<Controller>(player).fly = true;
 }
 
-// Kind / rule-set for ANY floor number, resolved through the catalog: an
-// explicit claim when one exists, else the pattern defaults. TOTAL — pick any
-// number and there is a floor there ([floor_catalog.h]), which is what lets
-// teleport and streaming stop caring whether a number was hand-listed.
+// Open corridor finder for shot captures and camera staging
+struct CorridorView {
+    vec3 pos{128.5f, 140.0f, 2.15f};
+    float yaw = 0.0f;
+    float pitch = -0.04f;
+    float clearDist = 0.0f;
+    bool found = false;
+};
+
+CorridorView find_open_corridor(const MacroGrid& grid, float startX = 35.0f, float startY = 35.0f, float startZ = 1.0f, int maxRadius = 64) {
+    CorridorView best;
+    float bestScore = -1e9f;
+    const int cx0 = wrap_macro_x(static_cast<int>(std::floor(startX / kCellSize)));
+    const int cy0 = wrap_macro_y(static_cast<int>(std::floor(startY / kCellSize)));
+    const int cz0 = std::clamp(static_cast<int>(std::floor(startZ / kCellSize)), 1, kMacroDimZ - 2);
+
+    struct Dir { int dx, dy; float yaw; };
+    const Dir dirs[4] = {
+        { 0,  1,  1.5707963f}, // +Y
+        { 0, -1, -1.5707963f}, // -Y
+        { 1,  0,  0.0000000f}, // +X
+        {-1,  0,  3.14159265f}  // -X
+    };
+
+    for (int r = 0; r <= maxRadius; ++r) {
+        for (int dz = -1; dz <= 2; ++dz) {
+            const int cz = std::clamp(cz0 + dz, 1, kMacroDimZ - 2);
+
+            for (int dx = -r; dx <= r; ++dx) {
+                for (int dy = -r; dy <= r; ++dy) {
+                    if (std::max(std::abs(dx), std::abs(dy)) != r) continue;
+                    const int cx = wrap_macro_x(cx0 + dx);
+                    const int cy = wrap_macro_y(cy0 + dy);
+                    if (grid.cell(cx, cy, cz) != kCellAir) continue;
+
+                    const int mx = (cx % 32 + 32) % 32;
+                    const int my = (cy % 32 + 32) % 32;
+                    const bool isLatX = (my == 16 || my == 17);
+                    const bool isLatY = (mx == 16 || mx == 17);
+
+                    for (const auto& d : dirs) {
+                        const bool aligned = (isLatX && d.dx != 0) || (isLatY && d.dy != 0);
+                        int clearSteps = 0;
+                        for (int s = 1; s <= 48; ++s) {
+                            const int nx = wrap_macro_x(cx + d.dx * s);
+                            const int ny = wrap_macro_y(cy + d.dy * s);
+                            if (grid.cell(nx, ny, cz) != kCellAir) break;
+                            ++clearSteps;
+                        }
+                        const float sightM = static_cast<float>(clearSteps) * kCellSize;
+                        if (sightM < 16.0f) continue;
+
+                        int walls = 0;
+                        for (int s = 0; s <= std::min(clearSteps, 12); ++s) {
+                            const int sx = wrap_macro_x(cx + d.dx * s);
+                            const int sy = wrap_macro_y(cy + d.dy * s);
+                            if (grid.cell(wrap_macro_x(sx - d.dy), wrap_macro_y(sy + d.dx), cz) != kCellAir) ++walls;
+                            if (grid.cell(wrap_macro_x(sx + d.dy), wrap_macro_y(sy - d.dx), cz) != kCellAir) ++walls;
+                        }
+
+                        const float score = sightM * 4.0f + static_cast<float>(walls) * 3.5f + (aligned ? 250.0f : 0.0f) - static_cast<float>(r) * 0.15f;
+                        if (score > bestScore) {
+                            bestScore = score;
+                            best.pos = vec3{(static_cast<float>(cx) + 0.5f) * kCellSize,
+                                            (static_cast<float>(cy) + 0.5f) * kCellSize,
+                                            static_cast<float>(cz) * kCellSize + 1.15f};
+                            best.yaw = d.yaw;
+                            best.pitch = -0.04f;
+                            best.clearDist = sightM;
+                            best.found = true;
+                        }
+                    }
+                }
+            }
+        }
+        if (best.found && bestScore > 350.0f && r >= 16) break;
+    }
+    return best;
+}
+
+void stage_player_camera(Registry& reg, Entity player, const MacroGrid& grid,
+                         bool shotMode, bool topdown, bool iso,
+                         bool customPos, const vec3& userPos,
+                         bool customAng, float userYaw, float userPitch) {
+    if (!reg.valid(player)) return;
+    auto& tr = reg.get<Transform>(player);
+    auto& cam = reg.get<CameraTag>(player);
+    auto* ctl = reg.try_get<Controller>(player);
+
+    if (customPos) tr.pos = userPos;
+    if (customAng) { cam.yaw = userYaw; cam.pitch = userPitch; }
+
+    if (topdown || iso || (shotMode && !customPos && !customAng)) {
+        CorridorView cv = find_open_corridor(grid, tr.pos.x, tr.pos.y, tr.pos.z, 64);
+        if (cv.found) { tr.pos = cv.pos; cam.yaw = cv.yaw; cam.pitch = cv.pitch; }
+        if (ctl) ctl->fly = true;
+
+        int cx = wrap_macro_x(static_cast<int>(tr.pos.x / kCellSize));
+        int cy = wrap_macro_y(static_cast<int>(tr.pos.y / kCellSize));
+        int czMax = 1;
+        for (int z = 1; z < kMacroDimZ; ++z) {
+            if (grid.mask(cx, cy, z).empty()) czMax = z;
+            else break;
+        }
+
+        if (topdown) {
+            tr.pos.z = czMax * kCellSize - 0.25f;
+            cam.yaw = cv.found ? cv.yaw : 0.0f;
+            cam.pitch = -1.15f;
+            cam.fovY = 1.65f;
+        } else if (iso) {
+            tr.pos.z = czMax * kCellSize - 0.25f;
+            cam.yaw = (cv.found ? cv.yaw : 0.0f) + 0.30f;
+            cam.pitch = -0.45f;
+            cam.fovY = 1.35f;
+        } else {
+            cam.fovY = 1.22f;
+            std::fprintf(stderr, "[corridor-finder] staged pos=(%.2f, %.2f, %.2f) yaw=%.2f pitch=%.2f clear=%.1fm\n",
+                         cv.pos.x, cv.pos.y, cv.pos.z, cv.yaw, cv.pitch, cv.clearDist);
+        }
+    } else if (!customAng) {
+        aim_player(reg, player);
+    }
+}
+
 game::FloorKind kind_for_floor(int number) {
     return floor_catalog().resolve(number).kind;
 }
@@ -619,34 +714,8 @@ bool slot_occupied(int slot) {
     return false;
 }
 
-// WRITE BESIDE, THEN RENAME OVER. Never `fopen(path, "wb")` on the real save.
-//
-// "wb" truncates to zero length BEFORE the first byte is written, so the window
-// between the truncation and the last fwrite is a window in which the player's
-// previous save no longer exists and the new one does not exist yet. Anything that
-// ends the process in that window — a disk that fills, a kill, a crash in the very
-// code that is serializing — leaves a zero- or half-length file where a finished run
-// used to be. That is not a corrupted save the player can be warned about; it is
-// their progress, gone, and produced by the button whose entire purpose is to keep it.
-// This was the only defect in the 2026-08-09 audit sweep that DESTROYS work rather
-// than distorting behaviour (Docs/MASTER_ROADMAP.md 0.1а), which is why it goes first.
-//
-// The temp file absorbs the whole window. Until the rename, the old save is the only
-// thing under `path` and it is untouched; after the rename it is replaced in one
-// step. rename(2) over an existing file is atomic within a filesystem, and the temp
-// is deliberately created in the SAME directory so the two are never on different
-// volumes — that is the one thing that would silently turn the rename into a
-// copy-then-delete and hand the window back.
-//
-// Every save in the game goes through here — run.sav via write_run, each floor_N.sav
-// via write_floor_file — so the guarantee is not per-call-site discipline.
-//
-// HONEST LIMIT, stated because the next reader will otherwise assume more: this
-// makes the replacement atomic, not DURABLE. There is no fsync, so a power cut can
-// still lose bytes the OS had only in its page cache. Closing that needs
-// fsync()/_commit() behind a platform ifdef plus a directory fsync on POSIX, and it
-// buys protection against a strictly rarer event than the one above. Deliberately not
-// done here; when it is, it belongs in this function and nowhere else.
+// Atomic file write: write beside to .tmp in same directory, then atomic rename over target path.
+// Protects against zero-length saves on crash/interrupt before serialization completes.
 bool write_bytes_file(const std::vector<std::uint8_t>& bytes, const char* path) {
     std::error_code ec; // error_code overloads: the app builds -fno-exceptions
     const std::filesystem::path finalPath(path);
@@ -814,6 +883,7 @@ std::uint32_t refresh_floor_props(Registry& reg, const World& world,
     // LightBulb Interactables live in ECS so lighting/HUD never read propPass
     // ([jirnyak.md] §18 — last get_prop_positions sim path).
     count += game::seed_ceiling_lights(reg, world, layer, wallSeed);
+    count += game::seed_environmental_props(reg, world, layer, wallSeed);
     if (kind_for_floor(floorNumber) == game::FloorKind::Padic)
         count += game::seed_padic_props(reg, world, layer, floorNumber, padicSeed, bus);
     // FURNISH THE ROOMS ([room_zone.h] kRoomFurniture). Not decoration and not a
@@ -1265,6 +1335,8 @@ int main(int argc, char** argv) {
     vec3 customPos{89.0f, 71.0f, 2.9f};
     bool hasCustomAng = false;
     float customYaw = 0.8f, customPitch = -0.5f;
+    bool shotTopdown = false;
+    bool shotIso = false;
     bool shotOrbit = false;
     std::string shotAction;
     bool shotActionConsumed = false; // one-shot save/load; attack stays held
@@ -1321,6 +1393,10 @@ int main(int argc, char** argv) {
             }
             shotFloor = static_cast<int>(v);
             shotFloorWanted = true;
+        } else if (a == "--topdown" || a == "--slice") {
+            shotTopdown = true;
+        } else if (a == "--iso") {
+            shotIso = true;
         } else if (a == "--no-hud" || a == "--nohud") {
             showHud = false;
         } else if (a == "--no-crt" || a == "--nocrt") {
@@ -1349,11 +1425,12 @@ int main(int argc, char** argv) {
                 return 1;
             }
             char* end = nullptr;
-            customYaw = std::strtof(argv[++i], &end);
+            float deg = std::strtof(argv[++i], &end);
             if (!end || *end != '\0') {
                 std::fprintf(stderr, "error: --yaw requires a valid float angle\n");
                 return 1;
             }
+            customYaw = deg * (3.141592653589793f / 180.0f);
             hasCustomAng = true;
         } else if (a == "--pitch") {
             if (i + 1 >= argc) {
@@ -1361,11 +1438,12 @@ int main(int argc, char** argv) {
                 return 1;
             }
             char* end = nullptr;
-            customPitch = std::strtof(argv[++i], &end);
+            float deg = std::strtof(argv[++i], &end);
             if (!end || *end != '\0') {
                 std::fprintf(stderr, "error: --pitch requires a valid float angle\n");
                 return 1;
             }
+            customPitch = deg * (3.141592653589793f / 180.0f);
             hasCustomAng = true;
         } else if (a == "--orbit") {
             shotOrbit = true;
@@ -1382,7 +1460,10 @@ int main(int argc, char** argv) {
                          "  --frames <N>            Number of frames to render in --shot mode\n"
                          "  --ride <delta>          Travel elevator by delta floors before capture\n"
                          "  --floor <index>         Spawn directly on floor index\n"
+                         "  --topdown, --slice      Bird's-eye architectural rendering from ceiling height\n"
+                         "  --iso                   Isometric 45-degree angle architectural rendering\n"
                          "  --no-hud, --nohud       Disable HUD overlay\n"
+                         "  --no-crt, --nocrt       Disable CRT post-processing filter\n"
                          "  --mirror-verify         Verify CPU/GPU voxel mirror sync\n"
                          "  --pos <x> <y> <z>       Override player spawn position\n"
                          "  --yaw <deg>             Override player camera yaw\n"
@@ -1600,43 +1681,8 @@ int main(int argc, char** argv) {
     game::RoomZones roomZones;
     game::NpcPool pool;
     pool.init();
-    // SLOT RECYCLING IS DELIBERATELY NOT ARMED HERE, and the line is left in place
-    // rather than omitted so the gate travels with it. Armed, a dead slot returns to an
-    // intrusive free list and a birth stops being a one-way draw on a finite reserve:
-    // measured in suite_npcpool.inl, 101,000 births cost 1,000 slots armed against
-    // 101,000 unarmed, and over 250 macro ticks against a 60-slot reserve the population
-    // holds at 3002 with 0 births refused instead of decaying to 2336 with 1197 refused.
-    //
-    // ARMED. A recycled id is a REUSED id, so every place that holds a bare NpcId ACROSS
-    // TIME had to become generation-checked first. All of them now are, and the count is
-    // written out because "fix one and declare victory" is how this would have shipped
-    // broken — I made that mistake twice and was corrected twice:
-    //   DONE  MacroSim::Journey::id  — stamps the departing generation, compares on landing.
-    //   DONE  Contract::giver        — an NpcHandle; contract_step polls handle_valid().
-    //                                  Measured A/B: with a bare id the job paid 700 rub to
-    //                                  a newborn who never offered it and read Complete;
-    //                                  with the handle it pays 0 and Fails.
-    //   DONE  QuestProgress::giver   — the identical defect, same fix, quest.cpp now polls
-    //                                  handle_valid(p.giver).
-    //   DONE  Relationship::target   — the generation went into the dead `pad` field, so
-    //                                  rel_ (128 B/row, 128.0 MiB at capacity) gained
-    //                                  nothing. social_edge_target() returns kInvalidNpc for
-    //                                  a stale edge, so the line callers already wrote for
-    //                                  empty slots makes staleness safe by construction.
-    //   DONE  FloorModule::candidate — an NpcHandle in the same 32 bits (a 20-bit id leaves
-    //                                  room for the 12-bit generation). A stale designate
-    //                                  RE-DESIGNATES from the floor's live roster instead of
-    //                                  handing the camera to whoever inherited the slot.
-    //   SAFE  NpcRef::id — the sixth store [npc_pool.h] names, and the ONE that needed no
-    //                      change. Its lifetime is COUPLED, not merely short: the macro
-    //                      demographic sweep skips `pool.embodied(id)` before it can reach
-    //                      either kill() (macro_sim.cpp), so a macro death can never touch
-    //                      an embodied body; and the only other pool.kill() caller anywhere
-    //                      in src/ is combat.cpp, which kills the record at :138 and
-    //                      destroys the entity at :148 in the same loop. So no entity can
-    //                      outlive the record its NpcRef names. That is an argument from
-    //                      the call graph rather than a generation check — if a third
-    //                      pool.kill() caller ever appears, this line is what it invalidates.
+    // Slot recycling armed: dead slots return to intrusive free list. Generation-checked handles
+    // protect against stale ID reuse across time (Journey, Contract, Quest, Relationships). [npc_pool.h]
     pool.set_recycling(true);
     //
     // The demo seeds ~1,930 records into 2^20, so the reserve is not the binding
@@ -1769,20 +1815,28 @@ int main(int argc, char** argv) {
         currentFloor = 0;
         currentSpec = spec_for_floor(0);
         if (player != entt::null) {
-            aim_player(reg, player);
-            if (hasCustomPos) reg.get<Transform>(player).pos = customPos;
-            if (hasCustomAng) {
-                auto& cam = reg.get<CameraTag>(player);
-                cam.yaw = customYaw;
-                cam.pitch = customPitch;
-            }
+            LayerId l0 = reg.get<Transform>(player).layer;
+            stage_player_camera(reg, player, stack.layer(l0).grid(),
+                                shotPath != nullptr, shotTopdown, shotIso,
+                                hasCustomPos, customPos, hasCustomAng, customYaw, customPitch);
             {
                 const auto& tr = reg.get<Transform>(player);
                 const auto& cam = reg.get<CameraTag>(player);
                 std::fprintf(stderr, "[player-spawn] pos=(%.2f, %.2f, %.2f) eyeOffset=(%.2f, %.2f, %.2f) yaw=%.2f pitch=%.2f\n",
                              tr.pos.x, tr.pos.y, tr.pos.z, cam.eyeOffset.x, cam.eyeOffset.y, cam.eyeOffset.z, cam.yaw, cam.pitch);
+                const auto& g = stack.layer(l0).grid();
+                int ex = static_cast<int>(std::floor(tr.pos.x * 0.5f));
+                int ey = static_cast<int>(std::floor(tr.pos.y * 0.5f));
+                int ez = static_cast<int>(std::floor((tr.pos.z + cam.eyeOffset.z) * 0.5f));
+                std::fprintf(stderr, "[debug-eye] eye cell=(%d,%d,%d) type=%u empty=%d full=%d\n",
+                             ex, ey, ez, static_cast<unsigned>(g.cell(ex, ey, ez)),
+                             g.mask(ex, ey, ez).empty() ? 1 : 0, g.mask(ex, ey, ez).full() ? 1 : 0);
+                for (int dy = 0; dy < 5; ++dy) {
+                    std::fprintf(stderr, "  ahead y+%d: cell(%d,%d,%d) type=%u empty=%d full=%d\n",
+                                 dy, ex, ey + dy, ez, static_cast<unsigned>(g.cell(ex, ey + dy, ez)),
+                                 g.mask(ex, ey + dy, ez).empty() ? 1 : 0, g.mask(ex, ey + dy, ez).full() ? 1 : 0);
+                }
             }
-            LayerId l0 = reg.get<Transform>(player).layer;
             refresh_floor_mobs(reg, stack.layer(l0), 0, l0);
             refresh_floor_containers(reg, stack.layer(l0), 0, l0);
             refresh_floor_props(reg, stack.layer(l0), 0, l0,
@@ -2305,18 +2359,7 @@ int main(int argc, char** argv) {
         game::bank_open(bankAccount, currentFloor, streamer.floor_seed_of(registry, currentFloor));
         // A new floor gets its own clock at its own depth. Not carried over:
         // the cooldown is a function of |z|, so inheriting a 30-minute surface
-        // gap into the void would silently cancel the entire depth gradient.
-        //
-        // That reasoning was right and the function was wrong, for as long as this
-        // line existed. `samosbor_new_game` is the DEPTH-INDEPENDENT flat 120..180 s
-        // new-game roll — its own doc says "once per RUN" — so re-arming with it did
-        // the exact thing the sentence above refuses: at |z| = 50, where the authored
-        // cooldown is 60 s, it handed out 2-3x the calm that floor is meant to give,
-        // and riding down-and-back-up was a free reset of the depth pressure. It also
-        // zeroed `count`, and `count` is what `MobDef::minSamosbor` unlocks against —
-        // with a stack of demo floors the player rides constantly, so the fog roster
-        // was pinned at count 0 forever and the whole `min_samosbor` column of
-        // data/mobs.csv was dead data. Both defects silent. [samosbor.h] names them.
+        // Depth-dependent samosbor timing on new floor entry [samosbor.h]
         samosbor = game::samosbor_enter_floor(samosbor, currentFloor, sbRng);
         // The CONTRACT call ([diffusion.h]): a LevelStack slot is recycled, and
         // generate_floor clears the grid but not the FieldRegistry, so the
@@ -2378,6 +2421,9 @@ int main(int argc, char** argv) {
         // wall forever (physics backs out every tick). F9 already calls
         // place_body_at_cell; keyboard/--shot did not. [save.h]
         game::place_body_safely(reg, stack.layer(nl), player);
+        stage_player_camera(reg, player, stack.layer(nl).grid(),
+                            shotPath != nullptr, shotTopdown, shotIso,
+                            hasCustomPos, customPos, hasCustomAng, customYaw, customPitch);
         // Publish the new slot to the enclosing frame. ONE place, so a fifth
         // travel site cannot forget it the way two of the first four did.
         activeLayer = nl;
@@ -2450,28 +2496,7 @@ int main(int argc, char** argv) {
             const game::Event& ev = bus.events()[i];
             if (ev.type != game::EventType::NpcDied) continue;
             if (ev.type == game::EventType::NpcDied) {
-                // `b` is the mob kind, 0xFF when the dead thing was not a monster.
-                //
-                // AND `c` IS THE KILLER, which this site ignored until 2026-08-12.
-                // A Hunt job counted ANY monster death on the floor — one killed by
-                // another monster, by a hazard, by a fall. [problems.md] §40 filed
-                // that as sloppiness because it was nearly unobservable: monsters
-                // could not hit each other, so almost every mob death really was the
-                // player's doing.
-                //
-                // Removing `Projectile::team` the same day turned it into an
-                // EXPLOIT. Monsters now shoot each other as a matter of course, so a
-                // contract for eight Krysnozhka completes while the player stands
-                // still and watches. That is the friendly-fire change handing the
-                // player a reward system it was never meant to touch — and it is the
-                // reason this is fixed in the same session rather than filed.
-                //
-                // The player is the CAMERA HOLDER, not a stored id: "the player is
-                // not special, it is whoever holds the components" ([AGENTS.md]), so
-                // a possessed body earns its own kills without a second rule.
-                // XP already worked this way — `finalize_deaths` credits `d.killer`
-                // — which is exactly why the two disagreed and only this one paid out
-                // for a death across the room.
+                // ev.b: mob kind, ev.c: killer entity (player credit check for contracts and quests).
                 if (ev.b != 0xFFu &&
                     ev.c == static_cast<std::uint32_t>(entt::to_integral(player))) {
                     game::contract_on_kill(contracts, static_cast<std::uint8_t>(ev.b));
@@ -2914,44 +2939,8 @@ int main(int argc, char** argv) {
                         }
                     }
                 }
-                // Embodied crowd (#12): needs decay, then the utility brain
-
-                // re-plans (identity-staggered) and steers each NON-player body's
-                // Velocity — BEFORE the controller/physics that integrate it, the
-                // same locomotion path as the player ([ai.md], [npcs.md]).
-                // PARKED: game::needs_step(reg, pool, kSimDt);  <- branch 3-arg call
-                // main already steps the clock at line ~1043 with the layer-scoped
-                // 4-arg signature and keeps its NeedsTick report for the HUD. The branch
-                // call operated on its per-entity Needs COMPONENT; main keeps the
-                // survival clock in the pool row, because the elevator destroys the body
-                // and a component would reset the clock on every floor ride.
-                // THE UTILITY AI, UNPARKED — and dormant, which is not the same as absent.
-                //
-                // It sat commented out because two systems writing Velocity fight every
-                // tick. That is now settled by a TOKEN rather than by hope: `AiBrain::motion`
-                // decides per body, and both foreign writers — wander_step and
-                // faction_feud_step — carry `if (ai_owns_motion(reg, e)) continue;`.
-                // MEASURED over 200 ticks x 24 bodies: ai_step wrote Velocity 2400 times,
-                // wander_step 300, and BOTH in one tick ZERO times; wander wrote 0 times
-                // while the token was held and 600 once delegated. [ai.h]
-                //
-                // `aiCfg.enabled` is TRUE and `aiMem` is passed every tick. Memory is the
-                // demand column owned above; null would disable recall/record bit-for-bit.
-                // `ai_init` attaches brains in finish_floor_nav; `ai_release` runs on floor
-                // leave (do_ride + --shot travel) and again inside FloorStreamer::unload.
-                // Clearing enabled mid-run without release would strand MotionOwner::Ai
-                // and freeze bodies under wander_step — that trap is what AIMEM closes.
-                // NOTE the `activeLayer` argument: the parked call was
-                // `ai_step(reg, pool, danger, activeGrid, simNow, kSimDt)` against an older
-                // SIX-argument signature with no layer, so it would not even have compiled
-                // if anyone had uncommented it. That is what "parked until adapted" was
-                // really hiding — a commented-out call is not a call, and nothing checks it.
-                // §23 hermetic flee: doors + activeWorld let IntentFlee steer toward
-                // door_nearest_shelter (sealed apartments) before −∇danger / memory.
-                // §27 legs (a)+(b): `roomZones` is what lets a winning eat/drink/
-                // toilet/sleep intent actually STEER a body — without it every
-                // non-flee intent hands motion straight back to wander_step and the
-                // scorer is decoration (measured: own_ai=0 of 419).
+                // Embodied crowd: utility AI evaluates priorities (flee, needs, room zones)
+                // and steers motion via token ownership to prevent conflicts with wander_step. [ai.h]
                 dayClock.step(kSimDt);
                 game::ai_panic_publish_step(reg, pool, diffusionDriver, activeWorld, activeLayer, kSimDt, &samosbor);
                 diffusion_tick(diffusionDriver, activeWorld, activeLayer, simTick);
@@ -5834,23 +5823,7 @@ int main(int argc, char** argv) {
         }
 
         // --- THE SHAFT MENU -------------------------------------------------
-        // The manifesto (p.4) asks for three KINDS of transition: a fixed
-        // fast-travel grid, a procedural ride down, and a procedural ride up. It
-        // spells that as three separate 4x4 sets of columns — 48 shafts. Owner's
-        // decision 2026-08-12: keep ONE set of 16 and let the column offer all three,
-        // which is what this window is.
-        //
-        // That is not only cheaper to build, it is the only version that does not
-        // move `kLatticeDim` — and `nav::kNodes == kLatticeCount == kLatticeDim^3`,
-        // so 5 per axis would take the fine nav bake from 128 MiB to 250 MiB and
-        // break the nav-cache wire pin (`kNavCoarseWire == 13056`, sized at 64
-        // nodes). Three sets of columns would have needed a second lattice constant.
-        //
-        // EVERY ROW IS A CONSOLE LINE, exactly like the pause menu: `ride down`,
-        // `ride up`, `ft <N>` all existed before this window and are unchanged by it.
-        // The menu adds a PLACE TO CHOOSE, not a mechanism — so the console, a
-        // keybind and this window cannot drift, and the deferred-request drain keeps
-        // the ride out of the middle of a frame.
+        // Fast-travel / ride menu for 16 lattice shaft columns (4x4 grid). [fast_travel.h]
         if (showElevatorWindow && reg.valid(player)) {
             const Transform& et = reg.get<Transform>(player);
             const int ecx = wrap_macro(static_cast<int>(et.pos.x / kCellSize));
@@ -6548,15 +6521,9 @@ int main(int argc, char** argv) {
             }
             renderer.timer.pass_end(cmd, gpu::GpuPass::Cull);
 
-            // Газ: один диспатч на кадр, изотропный (regime_down активного
-            // слоя через push). Фиксированный шаг 1/60 — поле ВИЗУАЛЬНОЕ/
-            // фоновое, не сим-детерминизм; боевая подключка (удушье) пойдёт
-            // через сим-тик отдельным решением. [gpu_gas_pass.h]
+            // Газ: засев поля лениво при смене (этаж, слой) ([gpu_gas_pass.h]).
+            // Симуляция выполняется в GasSim с фиксированной частотой 25 Гц.
             if (gasPass.ready()) {
-                // ЗАСЕВ — лениво, по смене (этаж, слой), у самого диспатча:
-                // один писатель на все пути входа (стартовый спавн, do_ride,
-                // fast travel) ПО ПОСТРОЕНИЮ — травел-сайтная версия этого
-                // кода снята именно потому, что стартовый путь шёл мимо неё.
                 static int gasSeedFloor = INT_MIN;
                 static LayerId gasSeedLayer = static_cast<LayerId>(~0u);
                 if (gasSeedFloor != currentFloor || gasSeedLayer != activeLayer) {
@@ -6566,9 +6533,6 @@ int main(int argc, char** argv) {
                         stack.layer(activeLayer).fields().find<float>(kGasField);
                     gasPass.upload_field(gSeed ? gSeed->data().data() : nullptr);
                 }
-                const CellStep gd =
-                    regime_down(stack.layer(activeLayer).gravity().regime);
-                gasPass.record_sim(cmd, gd, 1.0f / 60.0f);
             }
 
             // Push bodies for the verlet passes: EVERY body on the active
@@ -6684,10 +6648,20 @@ int main(int argc, char** argv) {
                     cmd, 1.0f / 60.0f,
                     stack.layer(activeLayer).gravity().global);
             renderer.timer.pass_end(cmd, gpu::GpuPass::SimPhysics);
+
+            // Газ: шаг симуляции с фиксированной частотой 25 Гц (dt = 0.04 с).
+            // Не тратит GPU время на каждом кадре высокой герцовки (60..240+ FPS).
+            static float gasTimeAccum = 0.0f;
+            constexpr float kGasSimHz = 25.0f;
+            constexpr float kGasSimDt = 1.0f / kGasSimHz;
+            gasTimeAccum += frameDt;
+            if (gasTimeAccum > 0.2f) gasTimeAccum = 0.2f;
+
             renderer.timer.pass_begin(cmd, gpu::GpuPass::GasSim);
-            if (gasPass.ready() && activeLayer != kInvalidLayer) {
+            if (gasPass.ready() && activeLayer != kInvalidLayer && gasTimeAccum >= kGasSimDt) {
+                gasTimeAccum -= kGasSimDt;
                 const CellStep downStep = regime_down(stack.layer(activeLayer).gravity().regime);
-                gasPass.record_sim(cmd, downStep, 1.0f / 60.0f, 0.15f, 0.40f);
+                gasPass.record_sim(cmd, downStep, kGasSimDt, 0.15f, 0.40f);
             }
             renderer.timer.pass_end(cmd, gpu::GpuPass::GasSim);
 
@@ -6879,6 +6853,9 @@ int main(int argc, char** argv) {
                         // sites; a fix that touches only one leaves --shot soft-locked
                         // in a wall. [save.h]
                         game::place_body_safely(reg, stack.layer(nl), player);
+                        stage_player_camera(reg, player, stack.layer(nl).grid(),
+                                            shotPath != nullptr, shotTopdown, shotIso,
+                                            hasCustomPos, customPos, hasCustomAng, customYaw, customPitch);
                     }
                     ++shotRideDone;
                 }

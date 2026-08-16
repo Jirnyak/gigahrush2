@@ -113,11 +113,6 @@ vec3 construct_perturbed_normal(vec3 n_geom, uint mat_id, vec2 uv, vec3 aw, floa
     vec3 B = cross(n_geom, T);
 
     const float eps = 0.002;
-    // Grain's finest octave (~2 cm period) is far below the 4 mm tap spacing:
-    // differencing across it decorrelates the shading normal from geometry
-    // (58 deg median tilt — single-pixel specular sparks). Hold grain constant
-    // across the taps so that octave cancels, exactly as the world pass's
-    // compute_grad_uv already does.
     float g0 = grain(uv);
     float s_right = surface(mat_id, uv + vec2(eps, 0.0), aw, px, g0);
     float s_left  = surface(mat_id, uv - vec2(eps, 0.0), aw, px, g0);
@@ -127,8 +122,6 @@ vec3 construct_perturbed_normal(vec3 n_geom, uint mat_id, vec2 uv, vec3 aw, floa
     float dSdu = (s_right - s_left) / (2.0 * eps);
     float dSdv = (s_top - s_bot)   / (2.0 * eps);
 
-    // Residual step discontinuities (floor/fract families in surface()) still
-    // divide by 0.004; cap the tilt so no tap can flip the normal past ~30 deg.
     vec3 tilt = bumpScale * (dSdu * T + dSdv * B);
     float tl = length(tilt);
     if (tl > 0.58) tilt *= 0.58 / tl;
@@ -143,10 +136,12 @@ float compute_prop_roughness(uint mat_id, float g_noise) {
     float sigma = kMatSurface[mid].x;
 
     float baseRoughness = 0.50;
-    if (fam == kFamSmooth || mat_id >= 3u) {
+    if (mid == 19u) {
+        baseRoughness = 0.12; // Pipes and conduits
+    } else if (fam == kFamSmooth || mat_id >= 3u) {
         baseRoughness = 0.22 + sigma * 1.5;
     } else if (fam == kFamRibbed) {
-        baseRoughness = 0.42 + sigma;
+        baseRoughness = 0.38 + sigma;
     } else if (fam == kFamRust || fam == kFamRubble) {
         baseRoughness = 0.82 + sigma * 0.3;
     } else if (fam == kFamPlaster || fam == kFamPlank) {
@@ -185,11 +180,10 @@ float compute_animated_emissive(float baseEmissive, uint mat_id, vec3 worldPos, 
 
     // Case C: CRT Screen / Terminal & Control Panel Oscilloscope Scanlines
     if (mat_id == 12u || mat_id == 19u) {
-        float scanline = sin(vWorldPos.y * 120.0 + timeSec * 15.0) * 0.20 + 0.80;
-        float staticNoise = hash11(floor(vWorldPos.y * 80.0) + floor(timeSec * 35.0 + phaseRad)) * 0.25;
-        float oscWave = exp(-180.0 * pow(fract(vWorldPos.x * 2.0) - (0.5 + 0.3 * sin(vWorldPos.z * 10.0 + timeSec * 6.0)), 2.0));
+        float scanline = sin(worldPos.y * 120.0 + timeSec * 15.0) * 0.20 + 0.80;
+        float staticNoise = hash11(floor(worldPos.y * 80.0) + floor(timeSec * 35.0 + phaseRad)) * 0.25;
+        float oscWave = exp(-180.0 * pow(fract(worldPos.x * 2.0) - (0.5 + 0.3 * sin(worldPos.z * 10.0 + timeSec * 6.0)), 2.0));
 
-        // Dynamically scale CRT oscilloscope noise and wave distortion during Samosbor hazard (samosbor.pulse)
         staticNoise *= (1.0 + samosborPulse * 4.5);
         oscWave *= (1.0 + samosborPulse * 3.0 * (0.5 + 0.5 * sin(timeSec * 40.0)));
         return baseEmissive * (scanline + staticNoise + oscWave * 2.5);
@@ -237,13 +231,13 @@ void main() {
     float hg_denom = max(1.0 + g_scat * g_scat - 2.0 * g_scat * cosTheta, 1e-4);
     float phase = (1.0 - g_scat * g_scat) / (hg_denom * sqrt(hg_denom));
 
-    float r = pc.fog.z;
+    float r = pc.fog.z * 2.5;
     float att = 1.0 / (1.0 + (d * d) / max(r * r, 1e-4));
 
     // Calibrated material roughness & Blinn-Phong specular
     float roughness = compute_prop_roughness(vMat, g);
     float specPow     = max(2.0 / (roughness * roughness * roughness * roughness + 1e-4) - 2.0, 1.0);
-    float specIntensity = (1.0 - roughness) * 0.5;
+    float specIntensity = (1.0 - roughness) * 0.65;
     float spec = 0.0;
     vec3 V = L; // View vector towards camera
     if (dot(n_shading, L) > 0.0) {
@@ -256,28 +250,29 @@ void main() {
         spec += pow(max(dot(n_shading, Hsun), 0.0), specPow) * specIntensity * pc.sunDir.w;
     }
     // Metallic Anisotropic Specular Highlight for Pipes & Industrial Metal
-    if (vMat == 4u || vMat == 3u) {
+    if (vMat == 4u || vMat == 3u || vMat == 19u) {
         vec3 T = abs(n_shading.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
         vec3 anisotropicH = cross(n_shading, T);
         float anisoDot = dot(anisotropicH, L);
-        float anisoSpec = pow(max(1.0 - anisoDot * anisoDot, 0.0), specPow * 0.5) * specIntensity * 1.2;
+        float anisoSpec = pow(max(1.0 - anisoDot * anisoDot, 0.0), specPow * 0.45) * specIntensity * 1.8;
         spec += anisoSpec * att * pc.camPos.w;
     }
 
+    const vec3 kTungstenTint = vec3(1.04, 0.88, 0.68);
     float lampDirect  = pc.camPos.w * att * max(dot(n_shading, L), 0.0);
     float lampScatter = pc.camPos.w * att * phase * 0.25;
-    float lamp = lampDirect + lampScatter;
+    vec3 lampDiffuse = kTungstenTint * (lampDirect + lampScatter);
 
     float fill = pc.sunDir.w * max(dot(n_shading, normalize(pc.sunDir.xyz)), 0.0);
 
     float hemi = 0.5 + 0.5 * n_shading.z;
-    vec3 amb = pc.fog.w * mix(vec3(0.10, 0.11, 0.14), vec3(0.24, 0.23, 0.21), hemi);
+    vec3 amb = pc.fog.w * mix(vec3(0.045, 0.052, 0.060), vec3(0.140, 0.130, 0.115), hemi);
 
     const float kAoFloor = 0.32;
     float ao = kAoFloor + (1.0 - kAoFloor) * vAo;
     float aoDirect = mix(1.0, ao, pc.torus.y);
 
-    vec3 lit = albedo * (amb * ao + vec3(lamp + fill) * aoDirect) + vec3(spec) * aoDirect;
+    vec3 lit = albedo * (amb * ao + (lampDiffuse + vec3(fill)) * aoDirect) + vec3(spec) * aoDirect;
 
     float timeSec = pc.torus.w;
     float samosborPulse = pc.torus.z > 0.0 ? pc.torus.z : clamp((1.0 - pc.fog.x / (128.0 * 0.30 * 2.0)) / 0.66, 0.0, 1.0);
@@ -317,18 +312,17 @@ void main() {
     float effectiveDist = d * heightDensity;
     float fog = clamp((effectiveDist - pc.fog.x) / max(pc.fog.y - pc.fog.x, 1e-3), 0.0, 1.0);
 
-    // Dynamic Samosbor fog flickering (matches raymarch.frag / cube.frag)
+    // Dynamic Samosbor fog flickering
     float fogFlicker = 1.0 + samosborPulse * 0.35 * sin(timeSec * 22.0 + vWorldPos.x * 0.4 + vWorldPos.y * 0.3);
     fog = clamp(fog * fogFlicker, 0.0, 1.0);
 
-    // Enforce fog = 1.0 at max toroidal distance pc.fog.y to protect wrap seam
     if (d >= pc.fog.y) {
         fog = 1.0;
     }
 
     lit = mix(lit, vec3(0.0), fog);
 
-    // ACES Filmic Tonemapping (matches raymarch.frag / cube.frag)
+    // ACES Filmic Tonemapping
     vec3 x = max(lit, vec3(0.0));
     vec3 mapped = clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
     vec3 srgb = pow(mapped, vec3(1.0 / kGamma));

@@ -476,8 +476,21 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
                                        is_solid_cell(grid.cell(x + tanBStepX, y + tanBStepY, z + tanBStepZ));
                     if (nichA || nichB) continue;
 
+                    // Corridors (macro coordinate % 32 in {16, 17}) receive guaranteed rhythmic
+                    // ceiling lights every 4 cells, while rooms use procedural chance.
+                    const int mx = (x % 32 + 32) % 32;
+                    const int my = (y % 32 + 32) % 32;
+                    const bool isCorrX = (my == 16 || my == 17);
+                    const bool isCorrY = (mx == 16 || mx == 17);
+                    const bool isCorridor = isCorrX || isCorrY;
+
                     const std::uint32_t rngLight = giga::spatial_hash(x, y, z, seed ^ kSaltLight ^ static_cast<std::uint32_t>(fi * 0x9e3779b9u));
-                    if ((rngLight % 100u) >= lightChance) continue;
+                    if (isCorridor) {
+                        const bool corridorSlot = isCorrX ? (x % 4 == 0) : (y % 4 == 0);
+                        if (!corridorSlot) continue;
+                    } else {
+                        if ((rngLight % 100u) >= lightChance) continue;
+                    }
 
                     // Hang from the REAL ceiling under-face: the sandwich is
                     // partially carved from below, and the cell-plane form left
@@ -515,10 +528,13 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
                     anchor.subZ = (axis == 2 ? (upSign > 0 ? 0 : 7) : 4);
                     anchor.face = 2; // ceiling
 
-                    // BareBulb vs FloodLamp choice stays procedural; skin from props.csv.
-                    const PropId pid =
-                        (rngLight & 1u) ? PropId::BareBulb : PropId::FloodLamp;
-                    const float yaw = static_cast<float>(rngLight % 4u) * kHalfPi;
+                    // Corridors get fluorescent FloodLamps aligned with corridor axis; rooms procedural.
+                    PropId pid = (rngLight & 1u) ? PropId::BareBulb : PropId::FloodLamp;
+                    float yaw = static_cast<float>(rngLight % 4u) * kHalfPi;
+                    if (isCorridor) {
+                        pid = PropId::FloodLamp;
+                        yaw = isCorrX ? 0.0f : kHalfPi;
+                    }
                     const std::uint8_t anim =
                         static_cast<std::uint8_t>(rngLight & 0xFFu);
 
@@ -532,6 +548,159 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
     }
     return count;
 }
+
+static bool find_solid_sub(const MacroGrid& grid, int cx, int cy, int cz,
+                           int preferredSz, std::uint8_t& outSx, std::uint8_t& outSy,
+                           std::uint8_t& outSz) {
+    const SubMask& m = grid.mask(cx, cy, cz);
+    if (m.empty()) return false;
+    int sz0 = std::clamp(preferredSz, 0, kSubDim - 1);
+    for (int d = 0; d < kSubDim; ++d) {
+        for (int sign : {0, 1, -1}) {
+            int sz = sz0 + d * sign;
+            if (sz < 0 || sz >= kSubDim) continue;
+            if (m.words[sz] != 0) {
+                for (int sy = 0; sy < kSubDim; ++sy) {
+                    for (int sx = 0; sx < kSubDim; ++sx) {
+                        if ((m.words[sz] >> (sx + sy * kSubDim)) & 1u) {
+                            outSx = static_cast<std::uint8_t>(sx);
+                            outSy = static_cast<std::uint8_t>(sy);
+                            outSz = static_cast<std::uint8_t>(sz);
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
+std::uint32_t seed_environmental_props(Registry& reg, const World& world,
+                                       LayerId layer, std::uint32_t seed)
+{
+    const MacroGrid& grid = world.grid();
+    std::uint32_t count = 0;
+    constexpr float kCell = kCellSize;
+
+    struct WallCandidate {
+        int dx, dy;
+        float yaw;
+    };
+    const WallCandidate cands[4] = {
+        {-1,  0, kHalfPi}, // West wall
+        { 1,  0, kHalfPi}, // East wall
+        { 0, -1, 0.0f},    // South wall
+        { 0,  1, 0.0f}     // North wall
+    };
+
+    for (int z = 0; z < kMacroDimZ; ++z) {
+        for (int y = 0; y < kMacroDimY; ++y) {
+            for (int x = 0; x < kMacroDimX; ++x) {
+                if (grid.cell(x, y, z) != kCellAir) continue;
+
+                const int mx = (x % 32 + 32) % 32;
+                const int my = (y % 32 + 32) % 32;
+                const bool isCorrX = (my == 16 || my == 17);
+                const bool isCorrY = (mx == 16 || mx == 17);
+                const bool isCorridor = isCorrX || isCorrY;
+                const bool isIntersection = isCorrX && isCorrY;
+
+                for (const auto& w : cands) {
+                    const int ncx = wrap_macro_x(x + w.dx);
+                    const int ncy = wrap_macro_y(y + w.dy);
+                    if (grid.cell(ncx, ncy, z) == kCellAir) continue;
+
+                    const std::uint32_t rng = giga::spatial_hash(
+                        x, y, z, seed ^ 0x507137u ^ ((w.dx + 2) << 8) ^ (w.dy + 2));
+                    const std::uint32_t roll = rng % 1000u;
+
+                    PropId pid = PropId::WallConduit;
+                    float relZ = 1.75f;
+                    int prefSz = 7;
+
+                    if (isIntersection && (roll < 150u)) {
+                        // Emergency red beacons at corridor crossings
+                        pid = PropId::EmergencyBeacon;
+                        relZ = 1.82f;
+                        prefSz = 7;
+                    } else if (isCorridor && ((isCorrX && w.dy != 0) || (isCorrY && w.dx != 0))) {
+                        // Conduits and fixtures along corridor walls
+                        if (roll < 35u) {
+                            pid = PropId::JunctionBox;
+                            relZ = 1.65f;
+                            prefSz = 6;
+                        } else if (roll < 75u) {
+                            pid = PropId::VentGrate;
+                            relZ = 1.70f;
+                            prefSz = 6;
+                        } else if (roll < 130u && z > 0 && grid.cell(x, y, z - 1) != kCellAir) {
+                            pid = PropId::SovietRadiator;
+                            relZ = 0.35f;
+                            prefSz = 1;
+                        } else if (roll < 450u) {
+                            pid = PropId::WallConduit;
+                            relZ = 1.75f;
+                            prefSz = 7;
+                        } else {
+                            continue;
+                        }
+                    } else {
+                        // Rooms and alcoves
+                        if (roll < 25u) {
+                            pid = PropId::JunctionBox;
+                            relZ = 1.65f;
+                            prefSz = 6;
+                        } else if (roll < 55u) {
+                            pid = PropId::VentGrate;
+                            relZ = 1.70f;
+                            prefSz = 6;
+                        } else if (roll < 95u && z > 0 && grid.cell(x, y, z - 1) != kCellAir) {
+                            pid = PropId::SovietRadiator;
+                            relZ = 0.35f;
+                            prefSz = 1;
+                        } else if (roll < 180u) {
+                            pid = PropId::WallConduit;
+                            relZ = 1.75f;
+                            prefSz = 7;
+                        } else {
+                            continue;
+                        }
+                    }
+
+                    std::uint8_t subX = 0, subY = 0, subZ = 0;
+                    if (!find_solid_sub(grid, ncx, ncy, z, prefSz, subX, subY, subZ))
+                        continue;
+
+                    const PropDef& d = prop_def(pid);
+                    const float thick = static_cast<float>(d.sizeYMm) * 0.001f;
+                    const float slide = 1.0f - (0.5f * thick + 0.02f);
+                    const float wx = (static_cast<float>(x) + 0.5f) * kCell +
+                                     static_cast<float>(w.dx) * slide;
+                    const float wy = (static_cast<float>(y) + 0.5f) * kCell +
+                                     static_cast<float>(w.dy) * slide;
+                    const float wz = static_cast<float>(z) * kCell + relZ;
+
+                    SubVoxelAnchor anchor{};
+                    anchor.cx   = ncx;
+                    anchor.cy   = ncy;
+                    anchor.cz   = z;
+                    anchor.subX = subX;
+                    anchor.subY = subY;
+                    anchor.subZ = subZ;
+                    anchor.face = 1; // wall
+
+                    const std::uint8_t anim = static_cast<std::uint8_t>(rng & 0xFFu);
+                    Entity e = spawn_prop_from_id(reg, world, vec3{wx, wy, wz}, anchor,
+                                                 pid, layer, w.yaw, anim, /*flags*/0);
+                    if (e != entt::null) ++count;
+                }
+            }
+        }
+    }
+    return count;
+}
+
 
 std::uint32_t collect_interactable_positions(const Registry& reg, LayerId layer,
                                              Interactable::Kind kind,

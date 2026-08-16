@@ -84,7 +84,7 @@ int AudioMixer::play_spatial_sound(SoundId sound, const vec3& pos, float gain,
         v.totalSamples = static_cast<uint32_t>(kAudioSampleRate * 0.045f); // 45 ms
         break;
     case SoundId::DoorMove:
-        v.totalSamples = static_cast<uint32_t>(kAudioSampleRate * 0.22f); // 220 ms
+        v.totalSamples = static_cast<uint32_t>(kAudioSampleRate * 0.28f); // 280 ms
         break;
     case SoundId::ContainerOpen:
         v.totalSamples = static_cast<uint32_t>(kAudioSampleRate * 0.16f); // 160 ms
@@ -147,10 +147,17 @@ void AudioMixer::synthesize_spatial_voice_sample(SpatialVoice& v, float& outMono
         break;
     }
     case SoundId::DoorMove: {
-        // Metal sliding friction and mechanical click
-        float grind = splitmix32_fsym(v.seed) * std::sin(kTwoPi * 320.0f * t);
-        float env = std::sin(kPi * progress);
-        s = 0.45f * grind * env;
+        // Soviet Hermetic Blast Door:
+        // 1. Heavy mechanical gear/hinge friction
+        float grind = splitmix32_fsym(v.seed) * std::sin(kTwoPi * 320.0f * t) * std::sin(kPi * progress);
+        // 2. High-pressure pneumatic seal hiss (air-lock decompression / rubber gasket seat equalization)
+        float rawNoise = splitmix32_fsym(v.seed);
+        float envHiss = std::exp(-t / 0.055f) + 0.6f * std::exp(-std::fabs(t - 0.16f) / 0.025f);
+        float hiss = rawNoise * std::sin(kTwoPi * 3400.0f * t) * envHiss;
+        // 3. Heavy steel locking dog / latch impact clack
+        float envLatch = std::exp(-std::fabs(t - 0.20f) / 0.008f);
+        float latch = std::sin(kTwoPi * 780.0f * t) * envLatch;
+        s = 0.40f * grind + 0.38f * hiss + 0.42f * latch;
         break;
     }
     case SoundId::ContainerOpen: {
