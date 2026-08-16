@@ -336,4 +336,76 @@ static void test_samosbor_env_all() {
         CHECK(vr.fogRadiusCells == 5);
         CHECK(vr.fogStrength == 225);
     }
+
+    { // ---- samosbor_stage_progression_and_atmosphere -------------------------
+        using giga::game::SamosborStage;
+        using giga::game::SamosborPhase;
+
+        // Stage progression mapping from SamosborState
+        giga::game::SamosborState st;
+        st.phase = static_cast<std::uint8_t>(SamosborPhase::Idle);
+        CHECK(giga::game::samosbor_current_stage(st) == SamosborStage::Idle);
+
+        st.phase = static_cast<std::uint8_t>(SamosborPhase::Warning);
+        st.phaseTotalMs = 30000;
+        st.phaseMs = 15000;
+        CHECK(giga::game::samosbor_current_stage(st) == SamosborStage::Warning);
+
+        st.phase = static_cast<std::uint8_t>(SamosborPhase::Active);
+        st.phaseTotalMs = 100000;
+        // p = 0.10 -> Active onset (< 0.25)
+        st.phaseMs = 90000;
+        CHECK(giga::game::samosbor_current_stage(st) == SamosborStage::Active);
+
+        // p = 0.50 -> Peak (0.25 <= p < 0.75)
+        st.phaseMs = 50000;
+        CHECK(giga::game::samosbor_current_stage(st) == SamosborStage::Peak);
+
+        // p = 0.85 -> Dissipation (>= 0.75)
+        st.phaseMs = 15000;
+        CHECK(giga::game::samosbor_current_stage(st) == SamosborStage::Dissipation);
+
+        st.phase = static_cast<std::uint8_t>(SamosborPhase::Aftermath);
+        st.phaseTotalMs = 12000;
+        st.phaseMs = 6000;
+        CHECK(giga::game::samosbor_current_stage(st) == SamosborStage::Aftermath);
+
+        // Barometric pressure drops
+        const float pDropSurface = giga::game::samosbor_floor_pressure_drop(0, SamosborVariant::Classic, SamosborStage::Peak);
+        const float pDropDeep = giga::game::samosbor_floor_pressure_drop(50, SamosborVariant::Classic, SamosborStage::Peak);
+        CHECK(pDropSurface == 45.0f);
+        CHECK(pDropDeep == 70.0f);
+        CHECK(pDropDeep > pDropSurface);
+
+        // Variant scaling on pressure drop (Electric is 1.25x)
+        const float pDropElec = giga::game::samosbor_floor_pressure_drop(0, SamosborVariant::Electric, SamosborStage::Peak);
+        CHECK(std::fabs(pDropElec - 45.0f * 1.25f) < 1e-3f);
+
+        // Ambient toxicity
+        const float toxIdle = giga::game::samosbor_ambient_toxicity(0, SamosborVariant::Classic, SamosborStage::Idle, 0.0f);
+        CHECK(toxIdle == 0.0f);
+
+        const float toxPeak = giga::game::samosbor_ambient_toxicity(0, SamosborVariant::Classic, SamosborStage::Peak, 0.5f);
+        CHECK(toxPeak == 0.85f);
+
+        const float toxPeakDeep = giga::game::samosbor_ambient_toxicity(50, SamosborVariant::Classic, SamosborStage::Peak, 0.5f);
+        CHECK(toxPeakDeep == 1.0f);
+
+        // Veretar variant toxicity multiplier (1.5x)
+        const float toxVeretar = giga::game::samosbor_ambient_toxicity(0, SamosborVariant::Veretar, SamosborStage::Peak, 0.5f);
+        CHECK(toxVeretar == 1.0f); // clamped to 1.0
+
+        // Compute Atmosphere struct
+        st.phase = static_cast<std::uint8_t>(SamosborPhase::Active);
+        st.variant = static_cast<std::uint8_t>(SamosborVariant::Maronary);
+        st.phaseTotalMs = 100000;
+        st.phaseMs = 50000; // Peak
+        const auto atm = giga::game::samosbor_compute_atmosphere(st, -25, 10.0f);
+        CHECK(atm.stage == SamosborStage::Peak);
+        CHECK(atm.pressureKpa < 101.325f);
+        CHECK(atm.toxicity01 > 0.5f);
+        CHECK(atm.fogDensity > 0.8f);
+        CHECK(atm.chromaticAberration > 0.010f); // Amplified by Maronary
+        CHECK(atm.fogScale == giga::game::kSamosborFogSqueeze);
+    }
 }

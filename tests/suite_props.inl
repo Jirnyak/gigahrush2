@@ -23,8 +23,12 @@ struct PropPassInspector {
     VkPipeline pipeline_;
     std::array<PropMesh, kPropShapeCount> meshes_;
     std::array<std::vector<PropInstance>, kPropShapeCount> cpuInst_;
+    std::array<std::uint32_t, kPropShapeCount> droppedInst_;
     std::array<std::array<VulkanBuffer, kMaxFramesInFlight>, kPropShapeCount> instBufs_;
+    std::array<std::array<VulkanBuffer, kMaxFramesInFlight>, kPropShapeCount> culledInstBufs_;
+    std::array<std::array<VulkanBuffer, kMaxFramesInFlight>, kPropShapeCount> indirectCmdBufs_;
     uint32_t lastDrawCount_;
+    bool useGpuCulling_;
 };
 
 inline const PropPassInspector& inspect(const PropPass& pass) {
@@ -65,6 +69,10 @@ static void test_prop_shape_enum_coverage() {
         CHECK(insp.cpuInst_[s][0].matId == static_cast<uint8_t>(s % 16));
         CHECK(insp.cpuInst_[s][0].emissive == static_cast<uint8_t>(s * 10));
     }
+
+    // Calling upload on uninitialized pass must be safe no-op
+    pass.upload(0);
+    pass.upload(1);
 
     pass.clear_instances();
     for (int s = 0; s < kPropShapeCount; ++s) {

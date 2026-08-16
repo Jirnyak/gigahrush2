@@ -343,12 +343,12 @@ constexpr RequestRow kRequestRows[] = {
     // ATTR1 bits are set by cmd_attr (multi-word), not bare request rows.
 };
 
-// ATTR1: `attr str|agi|int` — spend one unspent point. The app drains the
+// ATTR1: `attr str|agi|end|int|per` — spend one unspent point. The app drains the
 // matching ConsoleRequest bit and calls spend_attr_point with pool HP ptrs.
 bool cmd_attr(ConsoleContext& ctx, int argc, const char* const* argv,
               char* out, std::size_t cap) {
     if (argc < 2 || !argv[1] || !argv[1][0]) {
-        if (out && cap) std::snprintf(out, cap, "usage: attr <str|agi|int>");
+        if (out && cap) std::snprintf(out, cap, "usage: attr <str|agi|end|int|per>");
         return false;
     }
     ConsoleRequest bit = ConsoleRequest::Count;
@@ -357,10 +357,14 @@ bool cmd_attr(ConsoleContext& ctx, int argc, const char* const* argv,
         bit = ConsoleRequest::AttrStr;
     else if (std::strcmp(a, "agi") == 0 || std::strcmp(a, "AGI") == 0)
         bit = ConsoleRequest::AttrAgi;
+    else if (std::strcmp(a, "end") == 0 || std::strcmp(a, "END") == 0)
+        bit = ConsoleRequest::AttrEnd;
     else if (std::strcmp(a, "int") == 0 || std::strcmp(a, "INT") == 0)
         bit = ConsoleRequest::AttrInt;
+    else if (std::strcmp(a, "per") == 0 || std::strcmp(a, "PER") == 0)
+        bit = ConsoleRequest::AttrPer;
     else {
-        if (out && cap) std::snprintf(out, cap, "attr: want str|agi|int, got %s", a);
+        if (out && cap) std::snprintf(out, cap, "attr: want str|agi|end|int|per, got %s", a);
         return false;
     }
     ctx.requestBits |= request_bit(bit);
@@ -372,7 +376,7 @@ std::uint32_t complete_attr(const ConsoleContext&,
                             int argIndex, const char* prefix,
                             const char** out, std::uint32_t cap) {
     if (argIndex != 1 || !out || cap == 0) return 0;
-    static constexpr const char* kOpts[] = {"str", "agi", "int"};
+    static constexpr const char* kOpts[] = {"str", "agi", "end", "int", "per"};
     std::uint32_t n = 0;
     const std::size_t plen = prefix ? std::strlen(prefix) : 0;
     for (const char* o : kOpts) {

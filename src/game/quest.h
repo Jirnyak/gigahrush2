@@ -156,6 +156,13 @@ enum class QuestState : std::uint8_t {
     Count
 };
 
+// Multi-stage progression step
+enum class QuestStage : std::uint8_t {
+    Objective = 0,    // Stage 0: Find item / Hunt target / Reach depth
+    Deliver = 1,      // Stage 1: Deliver to NPC / Return to Giver
+    CollectBounty = 2 // Stage 2: Collect bounty / Completed
+};
+
 // One authored quest. POD, 24 bytes, no pointers — the same shape and the same size as
 // `Contract`, so it serializes verbatim and copies into a report without a thought.
 //
@@ -212,33 +219,6 @@ struct QuestProgress {
     // Bound at accept and never rebound, so this names that person for the rest of the
     // run — and it is a GENERATION-TAGGED HANDLE, which is what makes that sentence true
     // rather than conditional on a pool policy.
-    //
-    // It used to be a bare `NpcId`, resting on [npc_pool.h] never-reclaim. That is the
-    // DEFAULT policy and not a property of the type: `set_recycling(true)` suspends it,
-    // and a recycled id is a REUSED id. The hole was silent rather than loud, exactly as
-    // it was for `Contract::giver` before the same migration: `quest_on_giver_died` fires
-    // only from the frame-top combat drain, so a giver killed by the MACRO sweep publishes
-    // no event, the slot goes to a newborn, and `quest_step`'s poll — then
-    // `!valid(id) || !alive(id)` — saw a living record at that index, kept the row, and
-    // paid an authored quest out to a stranger who never offered it. Which is the
-    // reference's own broken quest binding that contract.h opens by claiming this engine
-    // is immune to.
-    //
-    // `pool.handle_valid()` makes that unrepresentable: `kill()` bumps the generation
-    // whether or not the slot is reused, so one test answers "is this still the person I
-    // was holding?" for three distinct failures — an id past the high-water mark, a
-    // cleared alive bit, and a reclaimed slot. [tests/suite_quest.inl]
-    // `the_slot_is_recycled` is the witness. It closes ONE of the bare-NpcId stores
-    // [src/app/main.cpp] gates `set_recycling(true)` on — **not the last one**, and that
-    // gate's own list is the count of record, not this header. Do not read a single
-    // closed field as permission to arm recycling; open the gate and read it.
-    //
-    // Costs the save nothing, and that is MEASURED rather than argued: an `NpcHandle` is
-    // the same 32 bits an `NpcId` was, so `visit_quest_row`'s `ar.u32(p.giver)` emits the
-    // identical bytes. One log with every field distinct serialises to the same 308 bytes
-    // with the same FNV-1a digest (0397A7BC) before and after this change, at
-    // `kQuestRowWire = 14`, `sizeof(QuestProgress) == 16` and `sizeof(QuestLog) == 352`;
-    // `quest_table_fingerprint()` is unmoved at 54E84EEA.
     NpcHandle giver = kInvalidHandle;
     std::uint8_t state = 0;     // QuestState
     // |z| already reached when this was accepted, so a Descend objective pays only for
@@ -246,7 +226,8 @@ struct QuestProgress {
     // reason contract.h gives: a rule the caller has to remember is a rule that gets
     // forgotten, and an audit measured 900 roubles twice over for standing still.
     std::uint8_t baseline = 0;
-    std::uint8_t pad_[2] = {0, 0};
+    std::uint8_t stage = 0;     // QuestStage
+    std::uint8_t pad_ = 0;
 };
 static_assert(sizeof(QuestProgress) == 16, "QuestProgress must stay a tight 16-byte row");
 static_assert(alignof(QuestProgress) == 4);
@@ -286,6 +267,13 @@ inline QuestState quest_state(const QuestLog& log, QuestId id) {
     return quest_valid(id) ? static_cast<QuestState>(log.row[id - 1].state)
                            : QuestState::Count;
 }
+
+inline QuestStage quest_stage(const QuestLog& log, QuestId id) {
+    return quest_valid(id) ? static_cast<QuestStage>(log.row[id - 1].stage)
+                           : QuestStage::Objective;
+}
+
+const char* quest_stage_name(QuestStage stage);
 
 // Share of bodies carrying an authored quest, when one is eligible at all. Lower than
 // `kOfferPct`'s 18 % for contracts on purpose: authored content is meant to be rarer
@@ -386,8 +374,11 @@ bool quest_accept(QuestLog& log, const NpcPool& pool, QuestId id, NpcId giver, i
 // that only cares about money, and the headless society sim) must not be forced to
 // invent one. Passing it turns on the XP half of the reward — see the completion
 // site and [contract.h] `objective_difficulty_e1`.
+struct FactionRelations;
+
 std::int32_t quest_step(QuestLog& log, const NpcPool& pool, Inventory& inv,
-                        RunLedger& led, std::uint32_t stepMs, RpgStats* rpg = nullptr);
+                        RunLedger& led, std::uint32_t stepMs, RpgStats* rpg = nullptr,
+                        FactionRelations* rel = nullptr);
 
 // A kill happened. Same event, same payload, same drain as `contract_on_kill` — main
 // already reads `NpcDied` off the bus once per frame and this hooks the same batch
@@ -429,7 +420,8 @@ void quest_on_kill(QuestLog& log, std::uint8_t mobKind);
 // This is a fast path, not the guard, and the asymmetry is the reason: it fires only for a
 // death that publishes, i.e. the combat drain, never for a macro-sweep death.
 // `quest_step`'s `handle_valid` poll is what actually catches a dead giver.
-void quest_on_giver_died(QuestLog& log, NpcId who);
+void quest_on_giver_died(QuestLog& log, NpcId who, FactionRelations* rel = nullptr,
+                         const NpcPool* pool = nullptr);
 
 // ---------------------------------------------------------------------------
 // Rewards

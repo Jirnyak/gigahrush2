@@ -63,7 +63,7 @@ enum class ConsoleRequest : std::uint32_t {
                // asks for (fast-travel / procedural down / procedural up) offered by
                // ONE set of 16 columns rather than three sets of 16 ([fast_travel.h])
     Craft, Scrap,            // crafting window / scrap cheapest junk
-    AttrStr, AttrAgi, AttrInt, // ATTR1: spend one unspent point on STR/AGI/INT
+    AttrStr, AttrAgi, AttrEnd, AttrInt, AttrPer, // ATTR1: spend one unspent point on STR/AGI/END/INT/PER
     Count
 };
 

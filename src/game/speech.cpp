@@ -295,7 +295,8 @@ const char* speech_say(SpeechMemory& mem, const NpcPool& pool, NpcId speaker,
     NpcPool& p = const_cast<NpcPool&>(pool);
     const SpeechSituation s = speech_situation(ctx);
     if (outSituation != nullptr) *outSituation = s;
-    return speech_say(mem, speaker, s, p.faction(speaker), seed);
+    const std::uint16_t fac = p.valid(speaker) ? p.faction(speaker) : static_cast<std::uint16_t>(Faction::Citizens);
+    return speech_say(mem, speaker, s, fac, seed);
 }
 
 } // namespace giga::game

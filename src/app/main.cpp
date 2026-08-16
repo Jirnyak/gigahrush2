@@ -55,6 +55,7 @@
 #include "game/floor_stream.h"
 #include "game/macro_sim.h"
 #include "game/mob_spawn.h"
+#include "game/monster.h"
 #include "game/monster_traits.h"
 #include "game/needs.h"
 #include "game/room_stock.h"
@@ -118,8 +119,11 @@
 #include "world/nav.h"
 #include "world/nav_async.h"
 #include "app/char_create_ui.h"
+#include "app/container_ui.h"
+#include "app/craft_ui.h"
 #include "app/dialogue_ui.h"
 #include "app/quest_ui.h"
+#include "app/vendor_ui.h"
 
 using namespace giga;
 
@@ -290,367 +294,11 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
     }
 }
 
-static bool contains_icase(const char* haystack, const char* needle) {
-    if (!haystack || !needle || !*needle) return true;
-    for (; *haystack; ++haystack) {
-        const char* h = haystack;
-        const char* n = needle;
-        while (*h && *n && (std::tolower(static_cast<unsigned char>(*h)) == std::tolower(static_cast<unsigned char>(*n)))) {
-            ++h; ++n;
-        }
-        if (!*n) return true;
-    }
-    return false;
-}
 
-static void DrawCraftingWindowUI(bool* p_open, game::CraftingState& crafting, 
-                          game::Inventory& inv, game::CraftStation currentStation, 
-                          std::uint64_t simTick, Registry& reg, Entity player,
-                          game::NpcPool& pool, std::uint32_t& outCrafted, 
-                          std::uint32_t& outScrapped, std::uint32_t& outLearned) 
-{
-    if (!p_open || !*p_open) return;
 
-    ImGui::SetNextWindowSize(ImVec2(820, 560), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Workbench & Crafting Studio", p_open)) {
-        ImGui::End();
-        return;
-    }
 
-    static int selectedRecipeId = 1;
-    static int craftQty = 1;
-    static char recipeFilter[64] = "";
-    static bool showOnlyKnown = false;
 
-    const char* stationNames[] = { "Bare Hands (Any)", "Workbench", "Lathe", "Lab", "Net Terminal" };
-    const char* matNames[] = { "Mech", "Elec", "Cons", "Bio", "Chem", "Metal", "Psi", "Meta" };
 
-    ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "Station: %s | Cert Tier: T%u",
-                       stationNames[static_cast<std::size_t>(currentStation)], crafting.tier);
-    ImGui::Separator();
-
-    ImGui::Text("Material Bank:");
-    ImGui::SameLine();
-    for (std::size_t i = 0; i < game::kCraftMaterials; ++i) {
-        ImGui::Text("%s: %u", matNames[i], crafting.mat[i]);
-        if (i < game::kCraftMaterials - 1) ImGui::SameLine();
-    }
-    ImGui::Separator();
-
-    if (ImGui::BeginTabBar("CraftingTabs")) {
-        if (ImGui::BeginTabItem("Craft Items")) {
-            ImGui::BeginChild("RecipeListPane", ImVec2(340, 320), true);
-            ImGui::InputText("Filter", recipeFilter, sizeof(recipeFilter));
-            ImGui::Checkbox("Known Only", &showOnlyKnown);
-
-            ImGui::Separator();
-            if (ImGui::BeginListBox("##Recipes", ImVec2(-FLT_MIN, -FLT_MIN))) {
-                for (game::ItemId id = 1; id <= game::kCraftRecipeCount; ++id) {
-                    const bool isKnown = game::craft_known(crafting, id);
-                    if (showOnlyKnown && !isKnown) continue;
-
-                    const char* name = game::item_name(id);
-                    if (recipeFilter[0] != '\0' && !contains_icase(name, recipeFilter)) continue;
-
-                    const game::CraftFail fail = game::craft_check(crafting, inv, id, currentStation);
-
-                    char label[128];
-                    snprintf(label, sizeof(label), "%s [%s]%s", 
-                             name, isKnown ? "Learned" : "Locked", 
-                             fail == game::CraftFail::None ? " *" : "");
-
-                    bool isSelected = (selectedRecipeId == static_cast<int>(id));
-                    if (ImGui::Selectable(label, isSelected)) {
-                        selectedRecipeId = static_cast<int>(id);
-                    }
-                    if (isSelected) ImGui::SetItemDefaultFocus();
-                }
-                ImGui::EndListBox();
-            }
-            ImGui::EndChild();
-
-            ImGui::SameLine();
-
-            ImGui::BeginChild("RecipeDetailPane", ImVec2(0, 320), true);
-            if (selectedRecipeId >= 1 && selectedRecipeId <= static_cast<int>(game::kCraftRecipeCount)) {
-                const auto id = static_cast<game::ItemId>(selectedRecipeId);
-                const game::CraftRecipe& rec = game::craft_recipe(id);
-                const char* itemName = game::item_name(id);
-                const bool known = game::craft_known(crafting, id);
-                const game::CraftFail checkResult = game::craft_check(crafting, inv, id, currentStation);
-
-                ImGui::TextColored(ImVec4(1.0f, 0.9f, 0.4f, 1.0f), "%s", itemName);
-                ImGui::Text("Required Tier: T%u | Required Bench: %s", rec.tier, stationNames[rec.station]);
-                ImGui::Text("Knowledge Status: %s", known ? "Learned" : "Not Learned");
-                ImGui::Separator();
-
-                std::uint32_t missing[game::kCraftMaterials] = {};
-                game::craft_missing(crafting, id, missing);
-
-                ImGui::Text("Required Components:");
-                if (ImGui::BeginTable("CompTable", 4, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg)) {
-                    ImGui::TableSetupColumn("Material");
-                    ImGui::TableSetupColumn("Required");
-                    ImGui::TableSetupColumn("In Bank");
-                    ImGui::TableSetupColumn("Shortfall");
-                    ImGui::TableHeadersRow();
-
-                    for (std::size_t i = 0; i < game::kCraftMaterials; ++i) {
-                        if (rec.comp[i] == 0) continue;
-                        ImGui::TableNextRow();
-                        ImGui::TableSetColumnIndex(0); ImGui::Text("%s", matNames[i]);
-                        ImGui::TableSetColumnIndex(1); ImGui::Text("%u", rec.comp[i]);
-                        ImGui::TableSetColumnIndex(2); ImGui::Text("%u", crafting.mat[i]);
-                        ImGui::TableSetColumnIndex(3);
-                        if (missing[i] > 0) {
-                            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "-%u", missing[i]);
-                        } else {
-                            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "OK");
-                        }
-                    }
-                    ImGui::EndTable();
-                }
-
-                ImGui::Separator();
-                ImGui::SliderInt("Quantity", &craftQty, 1, 10);
-
-                const bool canCraft = (checkResult == game::CraftFail::None);
-                if (!canCraft) ImGui::BeginDisabled();
-
-                if (ImGui::Button("Craft Item(s)", ImVec2(160, 32))) {
-                    for (int q = 0; q < craftQty; ++q) {
-                        game::CraftResult res = game::craft_item(crafting, inv, id, currentStation);
-                        if (res.fail == game::CraftFail::None) {
-                            outCrafted++;
-                            game::sync_armour(reg, pool, player);
-                        } else {
-                            break;
-                        }
-                    }
-                }
-
-                if (!canCraft) {
-                    ImGui::EndDisabled();
-                    ImGui::SameLine();
-                    ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "[%s]", game::craft_fail_text(checkResult));
-                }
-            }
-            ImGui::EndChild();
-
-            ImGui::EndTabItem();
-        }
-
-        if (ImGui::BeginTabItem("Disassemble Inventory")) {
-            ImGui::Text("Disassemble items into base materials (Requires Workbench).");
-            if (currentStation != game::CraftStation::Workbench) {
-                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "WARNING: Requires a Workbench!");
-            }
-            ImGui::Separator();
-
-            if (ImGui::BeginTable("DisassemblyTable", 5, ImGuiTableFlags_ScrollY | ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg, ImVec2(0, 350))) {
-                ImGui::TableSetupColumn("Slot", ImGuiTableColumnFlags_WidthFixed, 40.0f);
-                ImGui::TableSetupColumn("Item Name");
-                ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, 60.0f);
-                ImGui::TableSetupColumn("Est. Value");
-                ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 120.0f);
-                ImGui::TableHeadersRow();
-
-                for (int slot = 0; slot < game::kInvSlots; ++slot) {
-                    const game::ItemSlot& s = inv.slots[slot];
-                    if (!game::item_valid(s.item) || s.count == 0) continue;
-
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0); ImGui::Text("#%d", slot);
-                    ImGui::TableSetColumnIndex(1); ImGui::Text("%s", game::item_name(s.item));
-                    ImGui::TableSetColumnIndex(2); ImGui::Text("%u", s.count);
-                    ImGui::TableSetColumnIndex(3); ImGui::Text("%d rub", game::item_def(s.item).value);
-                    ImGui::TableSetColumnIndex(4);
-
-                    char btnId[32];
-                    snprintf(btnId, sizeof(btnId), "Scrap##%d", slot);
-
-                    const bool canDis = (currentStation == game::CraftStation::Workbench);
-                    if (!canDis) ImGui::BeginDisabled();
-
-                    if (ImGui::Button(btnId)) {
-                        game::DisassembleResult dres = game::craft_disassemble(
-                            crafting, inv, slot, currentStation,
-                            static_cast<std::uint32_t>(simTick ^ (static_cast<std::uint32_t>(slot) * 0x9e3779b9u)));
-                        if (dres.fail == game::CraftFail::None) {
-                            outScrapped++;
-                            if (dres.learned) outLearned++;
-                            game::sync_armour(reg, pool, player);
-                        }
-                    }
-
-                    if (!canDis) ImGui::EndDisabled();
-                }
-                ImGui::EndTable();
-            }
-
-            ImGui::EndTabItem();
-        }
-
-        ImGui::EndTabBar();
-    }
-
-    ImGui::End();
-}
-
-static void DrawVendorWindowUI(bool* p_open, game::Inventory& inv, game::RunLedger& ledger, 
-                        game::VendorKind vendorKind, bool isOnPad, std::int32_t& outSold, std::int32_t& outSpent,
-                        const game::RpgStats* rpg = nullptr, std::int8_t playerRelation = 0) 
-{
-    if (!p_open || !*p_open) return;
-
-    ImGui::SetNextWindowSize(ImVec2(800, 560), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Trader Supply & Exchange", p_open)) {
-        ImGui::End();
-        return;
-    }
-
-    const char* vendorNames[] = { "Civil Citizen Trader (Buy 1.15x / Sell 0.85x)",
-                                 "Scientist Outpost (Buy 1.15x / Sell 0.92x)",
-                                 "Wild Zone Scavenger (Buy 1.15x / Sell 0.72x)" };
-
-    ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "Vendor: %s", vendorNames[static_cast<std::size_t>(vendorKind)]);
-    ImGui::Text("Account Balance: %lld roubles | Standing: %d", static_cast<long long>(ledger.banked), static_cast<int>(playerRelation));
-    
-    if (!isOnPad) {
-        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "[OFF EXTRACTION PAD] Walk to the Extraction Pad to trade.");
-        ImGui::End();
-        return;
-    }
-    ImGui::Separator();
-
-    if (ImGui::BeginTabBar("VendorTabs")) {
-        if (ImGui::BeginTabItem("Buy Supplies")) {
-            static char buyFilter[64] = "";
-            static int buyQty = 1;
-            ImGui::InputText("Search Stock", buyFilter, sizeof(buyFilter));
-            ImGui::SliderInt("Quantity to Buy", &buyQty, 1, 50);
-
-            if (ImGui::Button("Quick Resupply Package (600 rub)", ImVec2(240, 28))) {
-                outSpent += game::vendor_resupply(inv, ledger, 600);
-            }
-            ImGui::SameLine();
-
-            const game::ItemId ammoForGun = game::vendor_ammo_for(inv);
-            if (ammoForGun != game::kInvalidItem) {
-                char ammoBtnText[128];
-                snprintf(ammoBtnText, sizeof(ammoBtnText), "Buy Ammo for Gun (%s)", game::item_name(ammoForGun));
-                if (ImGui::Button(ammoBtnText, ImVec2(240, 28))) {
-                    outSpent += (game::vendor_buy(inv, ledger, ammoForGun, buyQty, playerRelation) * game::vendor_buy_price(ammoForGun, playerRelation));
-                }
-            }
-
-            ImGui::Separator();
-
-            if (ImGui::BeginTable("ShopCatalogTable", 5, ImGuiTableFlags_ScrollY | ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg, ImVec2(0, 340))) {
-                ImGui::TableSetupColumn("Item Name");
-                ImGui::TableSetupColumn("Category", ImGuiTableColumnFlags_WidthFixed, 100.0f);
-                ImGui::TableSetupColumn("Stack Max", ImGuiTableColumnFlags_WidthFixed, 80.0f);
-                ImGui::TableSetupColumn("Unit Price", ImGuiTableColumnFlags_WidthFixed, 90.0f);
-                ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 100.0f);
-                ImGui::TableHeadersRow();
-
-                for (game::ItemId id = 1; id <= game::kItemCount; ++id) {
-                    if (!game::vendor_stocks_item(id)) continue;
-
-                    const char* itemName = game::item_name(id);
-                    if (buyFilter[0] != '\0' && !contains_icase(itemName, buyFilter)) continue;
-
-                    const std::int32_t price = game::vendor_buy_price(id, playerRelation);
-                    const std::int32_t totalPrice = price * buyQty;
-                    const bool canAfford = (ledger.banked >= totalPrice);
-
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0); ImGui::Text("%s", itemName);
-                    ImGui::TableSetColumnIndex(1); ImGui::Text("Cat #%d", game::item_def(id).category);
-                    ImGui::TableSetColumnIndex(2); ImGui::Text("%u", game::item_def(id).stackMax);
-                    ImGui::TableSetColumnIndex(3); ImGui::Text("%d rub", price);
-                    ImGui::TableSetColumnIndex(4);
-
-                    char buyBtnLabel[32];
-                    snprintf(buyBtnLabel, sizeof(buyBtnLabel), "Buy##%d", id);
-
-                    if (!canAfford) ImGui::BeginDisabled();
-                    if (ImGui::Button(buyBtnLabel)) {
-                        std::uint32_t bought = game::vendor_buy(inv, ledger, id, static_cast<std::uint32_t>(buyQty), playerRelation);
-                        outSpent += (bought * price);
-                    }
-                    if (!canAfford) ImGui::EndDisabled();
-                }
-                ImGui::EndTable();
-            }
-
-            ImGui::EndTabItem();
-        }
-
-        if (ImGui::BeginTabItem("Sell Inventory")) {
-            if (ImGui::Button("Sell All Haul / Trash (Auto Cap)", ImVec2(240, 28))) {
-                outSold += game::vendor_sell_all(inv, ledger, vendorKind, rpg, playerRelation);
-            }
-            ImGui::Separator();
-
-            if (ImGui::BeginTable("SellInventoryTable", 6, ImGuiTableFlags_ScrollY | ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg, ImVec2(0, 360))) {
-                ImGui::TableSetupColumn("Slot", ImGuiTableColumnFlags_WidthFixed, 40.0f);
-                ImGui::TableSetupColumn("Item Name");
-                ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, 60.0f);
-                ImGui::TableSetupColumn("Unit Value", ImGuiTableColumnFlags_WidthFixed, 90.0f);
-                ImGui::TableSetupColumn("Total Value", ImGuiTableColumnFlags_WidthFixed, 90.0f);
-                ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 140.0f);
-                ImGui::TableHeadersRow();
-
-                for (int slot = 0; slot < game::kInvSlots; ++slot) {
-                    game::ItemSlot& s = inv.slots[slot];
-                    if (!game::item_valid(s.item) || s.count == 0) continue;
-
-                    const std::int32_t unitSell = game::vendor_sell_price(s.item, vendorKind, rpg, playerRelation);
-                    const std::int32_t totalSell = unitSell * s.count;
-
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0); ImGui::Text("#%d", slot);
-                    ImGui::TableSetColumnIndex(1); ImGui::Text("%s", game::item_name(s.item));
-                    ImGui::TableSetColumnIndex(2); ImGui::Text("%u", s.count);
-                    ImGui::TableSetColumnIndex(3); ImGui::Text("%d rub", unitSell);
-                    ImGui::TableSetColumnIndex(4); ImGui::Text("%d rub", totalSell);
-                    ImGui::TableSetColumnIndex(5);
-
-                    char sellOneLabel[32], sellAllLabel[32];
-                    snprintf(sellOneLabel, sizeof(sellOneLabel), "Sell 1##%d", slot);
-                    snprintf(sellAllLabel, sizeof(sellAllLabel), "Sell Stack##%d", slot);
-
-                    const bool canSell = (unitSell > 0);
-                    if (!canSell) ImGui::BeginDisabled();
-
-                    if (ImGui::Button(sellOneLabel)) {
-                        ledger.banked += unitSell;
-                        outSold += unitSell;
-                        s.count--;
-                        if (s.count == 0) s.item = game::kInvalidItem;
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::Button(sellAllLabel)) {
-                        ledger.banked += totalSell;
-                        outSold += totalSell;
-                        s.count = 0;
-                        s.item = game::kInvalidItem;
-                    }
-
-                    if (!canSell) ImGui::EndDisabled();
-                }
-                ImGui::EndTable();
-            }
-
-            ImGui::EndTabItem();
-        }
-
-        ImGui::EndTabBar();
-    }
-
-    ImGui::End();
-}
 
 // ── Debug console overlay (~) ──────────────────────────────────────────────
 // Thin ImGui shell over game::Console ([console.h]): parsing, the command
@@ -898,6 +546,21 @@ static game::CraftStation resolve_craft_station(const Registry& reg, Entity play
     if (game::on_extraction_pad(stack.layer(activeLayer).grid(), pos)) {
         return game::CraftStation::Workbench;
     }
+    const bool nearWorkbench = game::find_nearest_interactable(
+        reg, player, game::Interactable::Kind::Workbench,
+        game::interact_def(game::InteractKind::Workbench).reachM).hit;
+    if (nearWorkbench) return game::CraftStation::Workbench;
+
+    const bool nearKitchen = game::find_nearest_interactable(
+        reg, player, game::Interactable::Kind::KitchenStation,
+        game::interact_def(game::InteractKind::KitchenStation).reachM).hit;
+    if (nearKitchen) return game::CraftStation::Workbench;
+
+    const bool nearMed = game::find_nearest_interactable(
+        reg, player, game::Interactable::Kind::MedicalStation,
+        game::interact_def(game::InteractKind::MedicalStation).reachM).hit;
+    if (nearMed) return game::CraftStation::Lab;
+
     const bool nearTerm = game::find_nearest_interactable(
         reg, player, game::Interactable::Kind::Terminal,
         game::interact_def(game::InteractKind::Terminal).reachM).hit;
@@ -2269,6 +1932,10 @@ int main(int argc, char** argv) {
     CharCreationState ccState{};
     DialogueSession dialogueSession{};
     QuestUIState questUIState{};
+    VendorUIState vendorUIState{};
+    CraftUIState craftUIState{};
+    ContainerUIState containerUIState{};
+    Entity containerTargetEntity = entt::null;
     if (screen == AppScreen::Menu) {
         input.set_mouselook(false);
         SDL_SetWindowRelativeMouseMode(window, false);
@@ -2474,6 +2141,13 @@ int main(int argc, char** argv) {
             runState.player.equipped = *eq;
         else
             runState.player.equipped = game::Equipped{};
+        if (const auto* cam = reg.try_get<CameraTag>(player)) {
+            runState.player.yaw = cam->yaw;
+            runState.player.pitch = cam->pitch;
+        } else {
+            runState.player.yaw = 0.0f;
+            runState.player.pitch = 0.0f;
+        }
         // The SIGNED floor, explicitly: NpcPool::floor() is the seeding label
         // and LayerId is a recycled storage slot. [save.h]
         runState.player.floorNumber = currentFloor;
@@ -2515,6 +2189,9 @@ int main(int argc, char** argv) {
         // discovered ([problems.md] §43). [samosbor.h] [fast_travel.h]
         runState.samosbor = samosbor;
         runState.fastTravel = fastTravel;
+        // Version 15: BankAccount and PowerGridState
+        runState.bank = bankAccount;
+        runState.powerGrid = powerGrid;
         // REFRESH, not append and not clear. [save.h]
         game::refresh_opened_containers(reg, pl, currentFloor, runState.opened);
         // v6: the macro world travels whole — pool table, macro clock, faction
@@ -2775,8 +2452,8 @@ int main(int argc, char** argv) {
                 // `a` is the pool id, kInvalidNpc when the dead thing had no record.
                 // Giver death fails Active contracts AND Active quests the same way.
                 if (ev.a != game::kInvalidNpc) {
-                    game::contract_on_giver_died(contracts, ev.a);
-                    game::quest_on_giver_died(quests, ev.a);
+                    game::contract_on_giver_died(contracts, ev.a, &factionRel, &pool);
+                    game::quest_on_giver_died(quests, ev.a, &factionRel, &pool);
                 }
 
 
@@ -2834,16 +2511,23 @@ int main(int argc, char** argv) {
                 if (e.key.scancode == SDL_SCANCODE_ESCAPE && screen == AppScreen::Playing && !ImGui::GetIO().WantTextInput) {
                     if (dialogueSession.active) {
                         dialogueSession.active = false;
-                        if (!questUIState.open && !paused) {
-                            input.set_mouselook(true);
-                            SDL_SetWindowRelativeMouseMode(window, true);
-                        }
                     } else if (questUIState.open) {
                         questUIState.open = false;
-                        if (!dialogueSession.active && !paused) {
-                            input.set_mouselook(true);
-                            SDL_SetWindowRelativeMouseMode(window, true);
-                        }
+                    } else if (containerUIState.open) {
+                        containerUIState.open = false;
+                        containerTargetEntity = entt::null;
+                    } else if (showCraftingWindow || craftUIState.open) {
+                        showCraftingWindow = false;
+                        craftUIState.open = false;
+                    } else if (showVendorWindow || vendorUIState.open) {
+                        showVendorWindow = false;
+                        vendorUIState.open = false;
+                    }
+                    if (!dialogueSession.active && !questUIState.open && !containerUIState.open &&
+                        !showCraftingWindow && !craftUIState.open &&
+                        !showVendorWindow && !vendorUIState.open && !paused) {
+                        input.set_mouselook(true);
+                        SDL_SetWindowRelativeMouseMode(window, true);
                     }
                 }
                 if (rebindCapture >= 0) {
@@ -2980,9 +2664,10 @@ int main(int argc, char** argv) {
                 if (showCraftingWindow) input.set_mouselook(false);
             }
             // ATTR1: spend one unspent point. HP ptrs from the pool row so
-            // STR immediately credits max-HP the same way award_xp does.
+            // STR/END immediately credits max-HP the same way award_xp does.
             if ((has(ConsoleRequest::AttrStr) || has(ConsoleRequest::AttrAgi) ||
-                 has(ConsoleRequest::AttrInt)) &&
+                 has(ConsoleRequest::AttrEnd) || has(ConsoleRequest::AttrInt) ||
+                 has(ConsoleRequest::AttrPer)) &&
                 reg.valid(player)) {
                 if (auto* rs = reg.try_get<game::RpgStats>(player)) {
                     std::int16_t* hp = nullptr;
@@ -2999,16 +2684,22 @@ int main(int argc, char** argv) {
                     if (has(ConsoleRequest::AttrAgi)) {
                         which = game::Attr::Agi;
                         tag = "agi";
+                    } else if (has(ConsoleRequest::AttrEnd)) {
+                        which = game::Attr::End;
+                        tag = "end";
                     } else if (has(ConsoleRequest::AttrInt)) {
                         which = game::Attr::Int;
                         tag = "int";
+                    } else if (has(ConsoleRequest::AttrPer)) {
+                        which = game::Attr::Per;
+                        tag = "per";
                     }
                     const bool ok = game::spend_attr_point(*rs, which, hp, maxHp);
                     std::fprintf(stderr,
                                  "[attr] spend %s ok=%d pts_left=%u "
-                                 "str=%u agi=%u int=%u\n",
+                                 "str=%u agi=%u end=%u int=%u per=%u\n",
                                  tag, ok ? 1 : 0, rs->attrPoints,
-                                 rs->attr[0], rs->attr[1], rs->attr[2]);
+                                 rs->attr[0], rs->attr[1], rs->attr[2], rs->attr[3], rs->attr[4]);
                 }
             }
             // Z: pull the pin. One-shot like Interact — a held key would empty the
@@ -3286,23 +2977,7 @@ int main(int argc, char** argv) {
                     // 4 — the correction that mattered most in the port.
                     if (tr_.sealed && reg.valid(player)) {
                         const auto& meTr = reg.get<const Transform>(player);
-                        const int pcx = wrap_macro(static_cast<int>(std::floor(meTr.pos.x / kCellSize)));
-                        const int pcy = wrap_macro(static_cast<int>(std::floor(meTr.pos.y / kCellSize)));
-                        const int pcz = wrap_macro(static_cast<int>(std::floor(meTr.pos.z / kCellSize)));
-                        bool playerSheltered = false;
-                        for (const auto& d : doors.doors) {
-                            if (d.hermetic && d.hp > 0 &&
-                                (d.state == static_cast<std::uint8_t>(game::DoorState::Shut) ||
-                                 d.state == static_cast<std::uint8_t>(game::DoorState::Locked))) {
-                                const int dx = wrap_delta(pcx, static_cast<int>(d.cx), kMacroDim);
-                                const int dy = wrap_delta(pcy, static_cast<int>(d.cy), kMacroDim);
-                                const int dz = wrap_delta(pcz, static_cast<int>(d.cz), kMacroDim);
-                                if (dx * dx + dy * dy + dz * dz <= 16) {
-                                    playerSheltered = true;
-                                    break;
-                                }
-                            }
-                        }
+                        const bool playerSheltered = game::samosbor_is_sheltered(meTr.pos, doors);
                         if (!playerSheltered) {
                             const game::SamosborPressure sp =
                                 game::samosbor_unsheltered_pressure(
@@ -3342,6 +3017,9 @@ int main(int argc, char** argv) {
                     const std::uint32_t dtMs =
                         static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f);
                     game::status_step(playerStatus, dtMs);
+                    if (auto* rs = reg.try_get<game::RpgStats>(player)) {
+                        game::implant_degrade_step(*rs, kSimDt);
+                    }
                     if (auto* ctl_ = reg.try_get<Controller>(player)) {
                         float sm = game::status_move_mult_e3(playerStatus) / 1000.0f;
                         if (game::status_is_rooted(playerStatus))
@@ -3352,11 +3030,18 @@ int main(int argc, char** argv) {
                         // together, which is the only reason they cannot fight.
                         ctl_->moveSpeed = kPlayerWalkSpeed * needs.speedScale * sm *
                                           encumbrance.playerEffect.speedScale;
-                        // AGIMV: AGI multiplies walk speed (linear +1%/pt).
+                        // AGIMV: AGI multiplies walk speed (linear +1%/pt, +50% if AdrenalineGland <30% HP).
                         if (const game::RpgStats* rs =
                                 reg.try_get<game::RpgStats>(player)) {
+                            std::int16_t php = -1, pmaxHp = -1;
+                            if (const auto* nr = reg.try_get<game::NpcRef>(player)) {
+                                if (pool.valid(nr->id)) {
+                                    php = pool.hp(nr->id);
+                                    pmaxHp = pool.max_hp(nr->id);
+                                }
+                            }
                             ctl_->moveSpeed *=
-                                game::agi_move_speed_mult_e3(*rs) / 1000.0f;
+                                game::agi_move_speed_mult_e3(*rs, php, pmaxHp) / 1000.0f;
                         }
                     }
                     // Periodic proof trail while anything is up.
@@ -3980,12 +3665,15 @@ int main(int argc, char** argv) {
                             const float spd = std::sqrt(dot(tlat, tlat));
                             const float alpha = (spd > 0.5f) ? 0.85f : 0.15f;
                             rend->color = vec3{0.20f * alpha, 0.30f * alpha, 0.40f * alpha};
-
                         }
                     }
-
-
                 }
+
+                // --- SPECIALIZED MONSTER BEHAVIOR ROUTINES (Dog Pack, Burer, Snork, Bloodsucker) ---
+                game::monster_special_step(reg, stack.layer(activeLayer).grid(), pool,
+                                           stack, activeLayer, kSimDt, simTick,
+                                           &particleBursts, &noiseField);
+
                 // NPC-vs-NPC: bodies holding a staggered fight licence steer at their
                 // nearest enemy and swing when it is in reach. Placed AFTER wander_step
                 // and investigate_step so it overrides both for the licensed handful —
@@ -4176,37 +3864,72 @@ int main(int argc, char** argv) {
                             handled = true;
                         }
 
-                        // 1. Corpse loot — gate on §18 find_nearest Kind::Corpse,
-                        // then specialized loot_corpse_interact backend.
-                        {
+                        // 1. Corpse loot UI
+                        if (!handled && activeLayer != kInvalidLayer) {
                             const game::InteractionHit corpseHit =
                                 game::find_nearest_interactable(
                                     reg, player, game::Interactable::Kind::Corpse,
-                        game::interact_def(game::InteractKind::Corpse).reachM);
-                            if (corpseHit.hit) {
-                                game::CorpseLootResult clr = game::loot_corpse_interact(
-                                    reg, pool, bus, activeLayer, ppos, 2.2f, simTick);
-                                if (clr.foundCorpse) {
-                                    handled = true;
-                                    std::snprintf(elevDiagLine, sizeof(elevDiagLine),
-                                                  "CORPSE LOOTED: TAKEN %u ITEMS (+%d RUB)",
-                                                  clr.itemsTaken, clr.roublesGained);
-                                    elevDiagAt = simTick;
-                                    // Headless --shot audit trail (HUD is invisible in captures).
-                                    // Log once per interact edge — not every sim tick.
-                                    static std::uint64_t lastCorpseLootLogTick = ~0ull;
-                                    if (lastCorpseLootLogTick != simTick) {
-                                        lastCorpseLootLogTick = simTick;
-                                        std::fprintf(stderr,
-                                                     "[corp] CORPSE LOOTED: TAKEN %u ITEMS "
-                                                     "(+%d RUB) floor=%d\n",
-                                                     clr.itemsTaken, clr.roublesGained,
-                                                     currentFloor);
+                                    game::interact_def(game::InteractKind::Corpse).reachM);
+                            if (corpseHit.hit && reg.valid(corpseHit.entity)) {
+                                if (shotAction == "corp") {
+                                    game::CorpseLootResult clr = game::loot_corpse_interact(
+                                        reg, pool, bus, activeLayer, ppos, 2.2f, simTick);
+                                    if (clr.foundCorpse) {
+                                        handled = true;
+                                        std::snprintf(elevDiagLine, sizeof(elevDiagLine),
+                                                      "CORPSE LOOTED: TAKEN %u ITEMS (+%d RUB)",
+                                                      clr.itemsTaken, clr.roublesGained);
+                                        elevDiagAt = simTick;
+                                        static std::uint64_t lastCorpseLootLogTick = ~0ull;
+                                        if (lastCorpseLootLogTick != simTick) {
+                                            lastCorpseLootLogTick = simTick;
+                                            std::fprintf(stderr,
+                                                         "[corp] CORPSE LOOTED: TAKEN %u ITEMS "
+                                                         "(+%d RUB) floor=%d\n",
+                                                         clr.itemsTaken, clr.roublesGained,
+                                                         currentFloor);
+                                        }
+                                        game::NoiseProfile np{6.0f, 600, 1, game::NoiseSource::Door};
+                                        game::noise_publish(noiseField, activeLayer, ppos, np, 0);
                                     }
-
-                                    game::NoiseProfile np{6.0f, 600, 1, game::NoiseSource::Door};
-                                    game::noise_publish(noiseField, activeLayer, ppos, np, 0);
+                                } else {
+                                    containerTargetEntity = corpseHit.entity;
+                                    containerUIState.open = true;
+                                    containerUIState.isCorpse = true;
+                                    containerUIState.containerEntityId = static_cast<std::uint32_t>(corpseHit.entity);
+                                    input.set_mouselook(false);
+                                    SDL_SetWindowRelativeMouseMode(window, false);
+                                    handled = true;
                                 }
+                            }
+                        }
+
+                        // 1.5 Container / Crate / Safe loot UI
+                        if (!handled && activeLayer != kInvalidLayer) {
+                            Entity nearBox = entt::null;
+                            float nearBoxD2 = 1.0e9f;
+                            for (auto cEnt : reg.view<const game::Container, const Transform>()) {
+                                const Transform& ctr = reg.get<const Transform>(cEnt);
+                                if (ctr.layer != activeLayer) continue;
+                                const float dx = wrap_delta_f(ppos.x, ctr.pos.x, kWorldExtent);
+                                const float dy = wrap_delta_f(ppos.y, ctr.pos.y, kWorldExtent);
+                                const float dz = ppos.z - ctr.pos.z;
+                                const float d2 = dx * dx + dy * dy + dz * dz;
+                                if (d2 <= game::kContainerReach * game::kContainerReach && d2 < nearBoxD2) {
+                                    nearBoxD2 = d2;
+                                    nearBox = cEnt;
+                                }
+                            }
+                            if (nearBox != entt::null) {
+                                const auto& c = reg.get<const game::Container>(nearBox);
+                                containerTargetEntity = nearBox;
+                                containerUIState.open = true;
+                                containerUIState.isCorpse = false;
+                                containerUIState.kind = static_cast<game::ContainerKind>(c.kind);
+                                containerUIState.containerEntityId = static_cast<std::uint32_t>(nearBox);
+                                input.set_mouselook(false);
+                                SDL_SetWindowRelativeMouseMode(window, false);
+                                handled = true;
                             }
                         }
 
@@ -4288,6 +4011,30 @@ int main(int argc, char** argv) {
                                         game::noise_publish(noiseField, activeLayer, bulbHit.pos, np, 0);
                                     }
                                 }
+                            }
+                        }
+
+                        // 4.5 Workbench / KitchenStation / MedicalStation interaction
+                        if (!handled && activeLayer != kInvalidLayer) {
+                            game::InteractionHit wbHit = game::find_nearest_interactable(
+                                reg, player, game::Interactable::Kind::Workbench,
+                                game::interact_def(game::InteractKind::Workbench).reachM);
+                            if (!wbHit.hit) {
+                                wbHit = game::find_nearest_interactable(
+                                    reg, player, game::Interactable::Kind::KitchenStation,
+                                    game::interact_def(game::InteractKind::KitchenStation).reachM);
+                            }
+                            if (!wbHit.hit) {
+                                wbHit = game::find_nearest_interactable(
+                                    reg, player, game::Interactable::Kind::MedicalStation,
+                                    game::interact_def(game::InteractKind::MedicalStation).reachM);
+                            }
+                            if (wbHit.hit) {
+                                handled = true;
+                                craftUIState.open = true;
+                                showCraftingWindow = true;
+                                input.set_mouselook(false);
+                                SDL_SetWindowRelativeMouseMode(window, false);
                             }
                         }
 
@@ -4884,6 +4631,9 @@ int main(int argc, char** argv) {
                             // discovery is progress, not per-floor channel state.
                             samosbor = runState.samosbor;
                             fastTravel = runState.fastTravel;
+                            // Version 15: BankAccount and PowerGridState
+                            bankAccount = runState.bank;
+                            powerGrid = runState.powerGrid;
                             // Per-floor channels reset, same as any arrival — these
                             // ARE floor-scoped, unlike the two clocks above.
                             vendorKind = game::vendor_kind_for(
@@ -4930,6 +4680,10 @@ int main(int argc, char** argv) {
                                 placed = game::place_body_at_cell(
                                     reg, stack.layer(nl), player, scx, scy, scz);
                                 aim_player(reg, player);
+                                if (auto* cam = reg.try_get<CameraTag>(player)) {
+                                    cam->yaw = runState.player.yaw;
+                                    cam->pitch = runState.player.pitch;
+                                }
                             }
 
                             // Honest HUD: place slip / ok, with the society size.
@@ -5064,22 +4818,12 @@ int main(int argc, char** argv) {
                             // the order here is load-bearing rather than incidental.
                             // Absent sheet -> nullptr -> money only, exactly as before.
                             game::RpgStats* rsq = reg.try_get<game::RpgStats>(player);
-                            const std::int32_t cBefore = contractPaid;
-                            const std::int32_t qBefore = questPaid;
                             contractPaid += game::contract_step(
-                                contracts, pool, pool.inventory(nrc->id), ledger, rsq);
+                                contracts, pool, pool.inventory(nrc->id), ledger, rsq, &factionRel);
                             questPaid += game::quest_step(
                                 quests, pool, pool.inventory(nrc->id), ledger,
                                 static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f),
-                                rsq);
-                            if (contractPaid > cBefore) {
-                                const game::Faction f = game::dominant_faction(pool, currentFloor);
-                                game::relations_nudge_player(factionRel, f, +2);
-                            }
-                            if (questPaid > qBefore) {
-                                const game::Faction f = game::dominant_faction(pool, currentFloor);
-                                game::relations_nudge_player(factionRel, f, +3);
-                            }
+                                rsq, &factionRel);
                         }
                 // Bank step: accrue interest on deposits and loans per interest period.
                 game::bank_step(bankAccount, simTick);
@@ -5378,8 +5122,8 @@ int main(int argc, char** argv) {
                         ImGui::Text("LVL %u  XP %u / %u", rs->level, rs->xp, need);
                     else
                         ImGui::Text("LVL %u  (MAX)", rs->level);
-                    ImGui::Text("STR %u  AGI %u  INT %u%s",
-                                rs->attr[0], rs->attr[1], rs->attr[2],
+                    ImGui::Text("STR %u  AGI %u  END %u  INT %u  PER %u%s",
+                                rs->attr[0], rs->attr[1], rs->attr[2], rs->attr[3], rs->attr[4],
                                 rs->attrPoints > 0 ? "   [+pts]" : "");
                     ImGui::Text("PSI %u / %u", rs->psi, game::max_psi(*rs));
                 }
@@ -5827,15 +5571,17 @@ int main(int argc, char** argv) {
             consoleCtx.requestLandHub = -1;
         }
 
-        if (showCraftingWindow && reg.valid(player)) {
+        if ((showCraftingWindow || craftUIState.open) && reg.valid(player)) {
+            craftUIState.open = true;
             const game::CraftStation bench =
                 resolve_craft_station(reg, player, stack, activeLayer, currentFloor);
 
             if (const auto* nrk = reg.try_get<game::NpcRef>(player)) {
                 if (pool.valid(nrk->id)) {
-                    DrawCraftingWindowUI(&showCraftingWindow, crafting, pool.inventory(nrk->id), 
-                                         bench, simTick, reg, player, pool, 
-                                         crafted, scrapped, recipesLearned);
+                    draw_crafting_window_ui(craftUIState, crafting, pool.inventory(nrk->id),
+                                            bench, simTick, reg, player, pool,
+                                            &audioSys, crafted, scrapped, recipesLearned);
+                    showCraftingWindow = craftUIState.open;
                 }
             }
         }
@@ -5908,7 +5654,8 @@ int main(int argc, char** argv) {
             ImGui::End();
         }
 
-        if (showVendorWindow && reg.valid(player)) {
+        if ((showVendorWindow || vendorUIState.open) && reg.valid(player)) {
+            vendorUIState.open = true;
             const Transform& vt = reg.get<Transform>(player);
             const bool isOnPad = game::on_extraction_pad(stack.layer(activeLayer).grid(), vt.pos);
             if (const auto* nrv = reg.try_get<game::NpcRef>(player)) {
@@ -5917,8 +5664,10 @@ int main(int argc, char** argv) {
                     const std::int32_t spentBefore = spent;
                     const game::Faction vf = game::dominant_faction(pool, currentFloor);
                     const std::int8_t playerRel = factionRel.at(game::kFactionPlayerRow, static_cast<std::uint8_t>(vf));
-                    DrawVendorWindowUI(&showVendorWindow, pool.inventory(nrv->id), ledger, 
-                                       vendorKind, isOnPad, sold, spent, reg.try_get<game::RpgStats>(player), playerRel);
+                    draw_vendor_trading_ui(vendorUIState, pool.inventory(nrv->id), ledger,
+                                           vendorKind, isOnPad, sold, spent,
+                                           reg.try_get<game::RpgStats>(player), playerRel, vf);
+                    showVendorWindow = vendorUIState.open;
                     // Same re-derive as the keyboard path. The window is not handed
                     // reg/pool/player, so the CALLER does it — the shape the
                     // crafting window already uses via its `invChanged` out-param.
@@ -5927,6 +5676,11 @@ int main(int argc, char** argv) {
                     if (sold != soldBefore || spent != spentBefore) {
                         game::relations_nudge_player(factionRel, vf, +1);
                         game::sync_armour(reg, pool, player);
+                    }
+                    if (!showVendorWindow && !vendorUIState.open && !dialogueSession.active && !questUIState.open &&
+                        !containerUIState.open && !showCraftingWindow && !craftUIState.open && !paused) {
+                        input.set_mouselook(true);
+                        SDL_SetWindowRelativeMouseMode(window, true);
                     }
                 }
             }
@@ -6010,12 +5764,34 @@ int main(int argc, char** argv) {
                             reg.try_get<game::Corpse>(corpseHit.entity)) {
                         set_prompt("interact",
                                    corpse->searched
-                                       ? "LOOT CORPSE (REMAINDER)"
+                                       ? "LOOT CORPSE (REMAINDER) (E)"
                                        : game::interact_def(game::InteractKind::Corpse).prompt);
                     } else {
                         set_prompt("interact",
                                    game::interact_def(game::InteractKind::Corpse).prompt);
                     }
+                }
+            }
+
+            // Container / Crate / Safe proximity
+            if (!promptText && activeLayer != kInvalidLayer) {
+                Entity nearBox = entt::null;
+                float nearBoxD2 = 1.0e9f;
+                for (auto cEnt : reg.view<const game::Container, const Transform>()) {
+                    const Transform& ctr = reg.get<const Transform>(cEnt);
+                    if (ctr.layer != activeLayer) continue;
+                    const float dx = wrap_delta_f(ppos.x, ctr.pos.x, kWorldExtent);
+                    const float dy = wrap_delta_f(ppos.y, ctr.pos.y, kWorldExtent);
+                    const float dz = ppos.z - ctr.pos.z;
+                    const float d2 = dx * dx + dy * dy + dz * dz;
+                    if (d2 <= game::kContainerReach * game::kContainerReach && d2 < nearBoxD2) {
+                        nearBoxD2 = d2;
+                        nearBox = cEnt;
+                    }
+                }
+                if (nearBox != entt::null) {
+                    const auto& c = reg.get<const game::Container>(nearBox);
+                    set_prompt("interact", c.opened ? "CHECK CONTAINER (REMAINDER) (E)" : "LOOT CONTAINER (E)");
                 }
             }
 
@@ -6227,6 +6003,10 @@ int main(int argc, char** argv) {
                 }
             } else if (dAction == DialogueAction::OpenTrade) {
                 showVendorWindow = true;
+                vendorUIState.open = true;
+                dialogueSession.active = false;
+                input.set_mouselook(false);
+                SDL_SetWindowRelativeMouseMode(window, false);
             } else if (dAction == DialogueAction::Possess) {
                 possessWanted = true;
                 dialogueSession.active = false;
@@ -6240,6 +6020,31 @@ int main(int argc, char** argv) {
         // Quest Log Window (R4)
         if (screen == AppScreen::Playing && questUIState.open) {
             draw_quest_log_ui(questUIState, quests, contracts);
+        }
+
+        // Container / Corpse Loot Window
+        if (screen == AppScreen::Playing && containerUIState.open && reg.valid(player)) {
+            if (const auto* nr = reg.try_get<game::NpcRef>(player)) {
+                if (pool.valid(nr->id)) {
+                    game::Container* cntPtr = nullptr;
+                    game::Corpse* corpsePtr = nullptr;
+                    if (reg.valid(containerTargetEntity)) {
+                        cntPtr = reg.try_get<game::Container>(containerTargetEntity);
+                        corpsePtr = reg.try_get<game::Corpse>(containerTargetEntity);
+                    }
+                    const bool changed = draw_container_loot_ui(
+                        containerUIState, pool.inventory(nr->id), cntPtr, corpsePtr,
+                        reg.try_get<game::RpgStats>(player));
+                    if (changed) {
+                        game::sync_armour(reg, pool, player);
+                    }
+                    if (!containerUIState.open && !paused && !questUIState.open && !dialogueSession.active &&
+                        !showCraftingWindow && !craftUIState.open && !showVendorWindow && !vendorUIState.open) {
+                        input.set_mouselook(true);
+                        SDL_SetWindowRelativeMouseMode(window, true);
+                    }
+                }
+            }
         }
 
         // Pause menu (Esc). Extensible BY DATA: a main-page item is a label plus
@@ -6374,7 +6179,11 @@ int main(int argc, char** argv) {
                 float alpha = 1.0f - std::exp(-frameDt / 2.50f);
                 s_darkAdaptation = s_darkAdaptation + (targetExposure - s_darkAdaptation) * alpha;
             }
+            const float curTimeSec = static_cast<float>(SDL_GetTicks()) / 1000.0f;
+            const game::SamosborAtmosphere atm =
+                game::samosbor_compute_atmosphere(samosbor, currentFloor, curTimeSec);
             renderer.set_dark_adaptation(s_darkAdaptation);
+            renderer.chromaticAberration = atm.chromaticAberration;
         }
 
         // Begin command recording & compute pass before graphics render pass
@@ -6455,8 +6264,9 @@ int main(int argc, char** argv) {
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Cull);
             if (!noGpuCull && cullPass.ready() && propPass.ready()) {
                 propPass.set_use_gpu_culling(true);
-                const mat4 vp = mat4_mul(camMat.proj, camMat.view);
                 const uint32_t fIdx = renderer.currentFrame;
+                propPass.upload(fIdx);
+                const mat4 vp = mat4_mul(camMat.proj, camMat.view);
                 const float fogEnd = kWorldExtent * 0.50f * samosbor_fog_scale(samosbor);
                 const float torusPeriod = kWorldExtent;
                 for (int s = 0; s < gpu::kPropShapeCount; ++s) {
@@ -6465,7 +6275,7 @@ int main(int argc, char** argv) {
                     vec3 bMin{-1.0f, -1.0f, -1.0f}, bMax{1.0f, 2.0f, 1.0f};
                     gpu::GpuCullPass::get_shape_aabb(static_cast<gpu::PropShape>(s), bMin, bMax);
                     cullPass.record_cull(
-                        cmd, vp, camMat.eye, fogEnd, torusPeriod,
+                        cmd, fIdx, vp, camMat.eye, fogEnd, torusPeriod,
                         propPass.instance_buffer(s, fIdx), count,
                         propPass.mesh(s).indexCount, 0, 0, 0,
                         bMin, bMax,

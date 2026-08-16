@@ -400,4 +400,60 @@ const char* wealth_tier_name(std::uint8_t tier);
 const BankEntry* bank_last_entry(const BankAccount& acct);
 const char* bank_op_name(BankOp op);
 
+// ---------------------------------------------------------------------------
+// Dynamic Market Fluctuations & Scarcity Drift
+// ---------------------------------------------------------------------------
+
+// Supply & demand indices and combined price multiplier for an item or category.
+struct MarketQuote {
+    float supplyIndex = 1.0f;     // Supply availability on floor (lower = scarce)
+    float demandIndex = 1.0f;     // Demand intensity on floor (higher = desperate)
+    float priceMultiplier = 1.0f; // Combined price multiplier against baseline
+};
+
+// Restock cycle cadence: 6 game hours (360 sim seconds at 60s/hour).
+inline constexpr float kVendorRestockIntervalSec = 360.0f;
+inline constexpr std::size_t kVendorMaxStockedItems = 64;
+
+struct VendorStockItem {
+    ItemId id = kInvalidItem;
+    std::uint16_t count = 0;
+    std::uint16_t maxCapacity = 0;
+};
+
+struct VendorRestockState {
+    float lastRestockSec = 0.0f;
+    std::uint32_t restockCycles = 0;
+    std::int16_t floorZ = 0;
+    std::uint8_t itemCount = 0;
+    std::uint8_t initialized = 0;
+    VendorStockItem items[kVendorMaxStockedItems]{};
+};
+
+struct RpgStats;
+
+// Category price multiplier on floorZ given game clock seconds.
+// Ammo & Meds drift significantly higher on deeper floors (higher danger/scarcity).
+float market_category_price_mult(ItemCategory cat, int floorZ, float gameClockSec = 0.0f);
+
+// Full market quote (supply, demand, combined multiplier) for an item on floorZ.
+MarketQuote market_quote_item(ItemId id, int floorZ, float gameClockSec = 0.0f);
+
+// Dynamic buy price (roubles) reflecting floor depth scarcity, game-clock drift,
+// and player reputation.
+std::int32_t dynamic_market_buy_price(ItemId id, int floorZ, float gameClockSec = 0.0f,
+                                      std::int8_t playerRelation = 0);
+
+// Dynamic sell price (roubles) guaranteeing strict sell < buy no-arbitrage invariant.
+std::int32_t dynamic_market_sell_price(ItemId id, std::uint8_t vendorKind, int floorZ,
+                                       float gameClockSec = 0.0f,
+                                       const RpgStats* rpg = nullptr,
+                                       std::int8_t playerRelation = 0);
+
+// Vendor restock lifecycle:
+void vendor_restock_init(VendorRestockState& state, int floorZ, float gameClockSec = 0.0f);
+bool vendor_restock_step(VendorRestockState& state, int floorZ, float gameClockSec);
+std::uint16_t vendor_get_item_stock(const VendorRestockState& state, ItemId id);
+std::uint16_t vendor_consume_item_stock(VendorRestockState& state, ItemId id, std::uint16_t count);
+
 } // namespace giga::game

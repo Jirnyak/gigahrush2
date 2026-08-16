@@ -61,6 +61,7 @@
 #include "game/combat.h"      // PlayerRanged (SAVMAG v8)
 #include "game/status.h"      // StatusSet (SAVSTAT v9)
 #include "game/samosbor.h"    // SamosborState (SAVCLOCK v10)
+#include "game/economy.h"    // BankAccount, kBankLedgerSlots (SAVMAG v15)
 #include "game/fast_travel.h" // FastTravelState (SAVCLOCK v10)
 #include "world/destruct.h"   // CarveOp, CarveScratch, CarveResult, carve_sphere
 #include "world/level_stack.h"  // LayerId, and World via world/world.h
@@ -139,7 +140,9 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // are rejected, same standing rule.
 // Version 14: PlayerSnapshot adds `Equipped` items (+4 B on wire: weapon, armor, tool, pad_).
 // Version 13 saves are rejected, same standing rule.
-inline constexpr std::uint32_t kSaveVersion = 14u;
+// Version 15: BankAccount (+352 B on wire: deposit, loan, ledger ring, terms), PlayerSnapshot camera angles (+8 B on wire: yaw, pitch), and PowerGridState (+1028 B on wire: count, destroyed shield cell keys).
+// Version 14 saves are rejected, same standing rule.
+inline constexpr std::uint32_t kSaveVersion = 15u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -251,8 +254,9 @@ inline constexpr std::size_t kBookWire =
 inline constexpr std::size_t kNeedsWire = 37;        // 9 floats + seeded (v11: +hpBank)
 inline constexpr std::size_t kInventoryWire = static_cast<std::size_t>(kInvSlots) * 5;
 inline constexpr std::size_t kEquippedWire = 4;       // weapon, armor, tool, pad_
-inline constexpr std::size_t kPlayerWire = kNeedsWire + kInventoryWire + kEquippedWire + 4 + 4 + 4 + 3; // 376
-static_assert(kPlayerWire == 376);
+inline constexpr std::size_t kPlayerWire =
+    kNeedsWire + kInventoryWire + kEquippedWire + 4 + 4 + 4 + 3 + 4 + 4; // 384 (+yaw, +pitch)
+static_assert(kPlayerWire == 384);
 // Version 7: RpgStats wire — field-by-field LE, NOT sizeof (pad_ is written so the
 // footprint stays 12 and matches the POD layout without host padding surprises).
 inline constexpr std::size_t kRpgWire = 4 + 2 + 1 + 1 + 3 + 1;  // 12
@@ -283,10 +287,23 @@ static_assert(kSamosborWire == 17);
 // multi-byte field, so the field-by-field rule has nothing to protect here — see the
 // note beside FastTravelState::raw() in [fast_travel.h].
 inline constexpr std::size_t kFastTravelWire = 32;
+// Version 15: BankAccount field-by-field (deposit 8, loanPrincipal 8, loanAccrued 8,
+// interestEarned 8, interestPaid 8, lastInterestTick 8, creditLimit 4, entries 4,
+// 24 x BankEntry 12 (amount 4, tick 4, op 1, band 1, pad_ 2), band 1, pad_ 7 = 352).
+inline constexpr std::size_t kBankEntryWire = 4 + 4 + 1 + 1 + 2; // 12
+static_assert(kBankEntryWire == 12);
+inline constexpr std::size_t kBankWire =
+    8 * 6 + 4 + 4 + static_cast<std::size_t>(kBankLedgerSlots) * kBankEntryWire + 1 + 7; // 352
+static_assert(kBankWire == 352);
+// Version 15: PowerGridState field-by-field (count 4, destroyedShieldKeys 128 x 8 = 1028).
+inline constexpr std::size_t kPowerGridWire =
+    4 + static_cast<std::size_t>(kMaxDestroyedShields) * 8; // 1028
+static_assert(kPowerGridWire == 1028);
 inline constexpr std::size_t kOpenedKeyWire = 5;     // i16 floor + 3 x u8 cell
 inline constexpr std::size_t kSaveFixedWire =
     kLedgerWire + kBookWire + kPlayerWire + kRpgWire + kCraftingWire +
-    kCombatSaveWire + kStatusWire + kSamosborWire + kFastTravelWire + kQuestLogWire;
+    kCombatSaveWire + kStatusWire + kSamosborWire + kFastTravelWire +
+    kBankWire + kPowerGridWire + kQuestLogWire;
 
 // Sanity ceiling on the opened-container list, so a corrupt header cannot ask for a
 // huge allocation before the checksum has had a chance to reject it. 64 crates per
@@ -456,6 +473,8 @@ struct PlayerSnapshot {
     std::uint8_t cy = 0;
     std::uint8_t cz = 0;
     std::uint8_t pad_ = 0;
+    float yaw = 0.0f;
+    float pitch = 0.0f;
 };
 
 // One run, complete. Assembled by the caller, because every piece of it lives somewhere
@@ -488,6 +507,10 @@ struct SaveState {
     // discovered", so a SaveState built by hand still means something sane.
     SamosborState samosbor{};
     FastTravelState fastTravel{};
+    // Version 15: Bank account persistence (deposit, loans, interest, and ledger ring).
+    BankAccount bank{};
+    // Version 15: Power grid outage & destroyed electrical shield state.
+    PowerGridState powerGrid{};
     // Every crate emptied anywhere in the building, not just on the live floor. Only the
     // resident floor's crates are live entities, so the ones from other floors exist
     // ONLY in this list — see `refresh_opened_containers`.

@@ -601,7 +601,8 @@ bool NpcPool::load_rows(const std::uint8_t* bytes, std::size_t n) {
             }
             floor_[id] = label;
         } else {
-            floor_[id] = label;
+            floor_[id] = kNoFloorLabel;
+            slotInBucket_[id] = 0u;
         }
     }
     if (!r.ok || r.at != n) return false;

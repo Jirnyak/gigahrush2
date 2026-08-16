@@ -1,7 +1,12 @@
 #include "game/economy.h"
 
+#include <algorithm>
+#include <cmath>
+
 #include "core/rng.h"          // hash2 — the per-branch credit jitter
 #include "game/extraction.h"   // RunLedger: `banked` is the account this bank moves
+#include "game/rpg.h"          // int_document_reward_mult_e3
+#include "game/vendor.h"       // vendor_stocks_item, kBuyMult, kSellMult, VendorKind
 
 namespace giga::game {
 
@@ -269,6 +274,248 @@ const char* bank_op_name(BankOp op) {
         case BankOp::Count:
         default:                      return "none";
     }
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic Market Fluctuations & Scarcity Drift
+// ---------------------------------------------------------------------------
+
+float market_category_price_mult(ItemCategory cat, int floorZ, float gameClockSec) {
+    const std::uint8_t band = economy_band(floorZ);
+    const float b = static_cast<float>(band);
+
+    float baseMult = 1.0f;
+    switch (cat) {
+        case ItemCategory::Ammo:
+            // High danger on deep floors -> ammunition becomes critically scarce and valuable.
+            baseMult = 1.0f + 0.35f * b;
+            break;
+        case ItemCategory::Medicine:
+            // Medical supplies and trauma treatments are desperately sought in deep zones.
+            baseMult = 1.0f + 0.28f * b;
+            break;
+        case ItemCategory::Drink:
+            baseMult = 1.0f + 0.15f * b;
+            break;
+        case ItemCategory::Food:
+            baseMult = 1.0f + 0.12f * b;
+            break;
+        case ItemCategory::Misc:
+            baseMult = 1.0f + 0.08f * b;
+            break;
+        case ItemCategory::Tool:
+        case ItemCategory::Key:
+            baseMult = 1.0f + 0.10f * b;
+            break;
+        case ItemCategory::Note:
+            baseMult = 1.0f + 0.20f * b;
+            break;
+        default:
+            baseMult = 1.0f;
+            break;
+    }
+
+    // Diurnal / periodic market cycle: subtle +/-8% drift over the 1440-second in-game day.
+    float drift = 0.0f;
+    if (gameClockSec > 0.0f) {
+        constexpr float kTwoPi = 6.283185307f;
+        const float phase = (gameClockSec / 1440.0f) * kTwoPi + static_cast<float>(cat) * 1.25f;
+        drift = 0.08f * std::sin(phase);
+    }
+
+    float mult = baseMult * (1.0f + drift);
+    if (mult < 0.4f) mult = 0.4f;
+    if (mult > 4.0f) mult = 4.0f;
+    return mult;
+}
+
+MarketQuote market_quote_item(ItemId id, int floorZ, float gameClockSec) {
+    if (!item_valid(id)) {
+        return MarketQuote{1.0f, 1.0f, 1.0f};
+    }
+    const ItemDef& d = item_def(id);
+    const auto cat = static_cast<ItemCategory>(d.category);
+    const float catMult = market_category_price_mult(cat, floorZ, gameClockSec);
+
+    const std::uint8_t band = economy_band(floorZ);
+    const float depthMod = 1.0f + 0.25f * static_cast<float>(band);
+
+    // Rarity factor from spawn weight
+    float rarity = 1.5f;
+    if (d.spawnWeight > 0) {
+        const float w = static_cast<float>(d.spawnWeight);
+        rarity = std::clamp(1000.0f / (w + 100.0f), 0.5f, 2.5f);
+    }
+
+    float supply = 1.0f;
+    float demand = 1.0f;
+
+    if (cat == ItemCategory::Ammo) {
+        supply = std::max(0.20f, 1.25f / depthMod);
+        demand = 0.90f * depthMod * rarity;
+    } else if (cat == ItemCategory::Medicine) {
+        supply = std::max(0.25f, 1.20f / depthMod);
+        demand = 0.85f * depthMod * rarity;
+    } else if (cat == ItemCategory::Food || cat == ItemCategory::Drink) {
+        supply = std::max(0.35f, 1.10f / (1.0f + 0.12f * static_cast<float>(band)));
+        demand = 0.90f * (1.0f + 0.10f * static_cast<float>(band)) * rarity;
+    } else {
+        supply = std::max(0.30f, 1.00f / (1.0f + 0.08f * static_cast<float>(band)));
+        demand = 1.00f * rarity;
+    }
+
+    float priceMult = catMult * (demand / supply);
+    if (priceMult < 0.4f) priceMult = 0.4f;
+    if (priceMult > 5.0f) priceMult = 5.0f;
+
+    return MarketQuote{supply, demand, priceMult};
+}
+
+std::int32_t dynamic_market_buy_price(ItemId id, int floorZ, float gameClockSec,
+                                      std::int8_t playerRelation) {
+    if (!vendor_stocks_item(id)) return 0;
+    const ItemDef& d = item_def(id);
+    if (d.value <= 0) return 0;
+
+    const MarketQuote quote = market_quote_item(id, floorZ, gameClockSec);
+    float mult = kBuyMult * quote.priceMultiplier;
+
+    if (playerRelation > 0) {
+        mult -= (static_cast<float>(playerRelation) * 0.15f / 100.0f);
+    } else if (playerRelation < 0) {
+        mult += (static_cast<float>(-playerRelation) * 0.25f / 100.0f);
+    }
+    if (mult < 0.2f) mult = 0.2f;
+
+    const std::int32_t p = static_cast<std::int32_t>(static_cast<float>(d.value) * mult);
+    return p < 1 ? 1 : p;
+}
+
+std::int32_t dynamic_market_sell_price(ItemId id, std::uint8_t vendorKind, int floorZ,
+                                       float gameClockSec, const RpgStats* rpg,
+                                       std::int8_t playerRelation) {
+    if (!item_valid(id)) return 0;
+    const ItemDef& d = item_def(id);
+    if (d.value <= 0) return 0;
+
+    const std::size_t vk = vendorKind < static_cast<std::size_t>(VendorKind::Count) ? vendorKind : 0;
+    float m = kSellMult[vk];
+    const MarketQuote quote = market_quote_item(id, floorZ, gameClockSec);
+    m *= quote.priceMultiplier;
+
+    if (playerRelation > 0) {
+        m += (static_cast<float>(playerRelation) * 0.15f / 100.0f);
+    } else if (playerRelation < 0) {
+        m -= (static_cast<float>(-playerRelation) * 0.20f / 100.0f);
+        if (m < 0.10f) m = 0.10f;
+    }
+    if (rpg != nullptr && static_cast<ItemCategory>(d.category) == ItemCategory::Note) {
+        m *= static_cast<float>(int_document_reward_mult_e3(*rpg)) / 1000.0f;
+    }
+
+    // Strict no-arbitrage invariant: sell rate can NEVER exceed buy rate * 0.88
+    float buyM = kBuyMult * quote.priceMultiplier;
+    if (playerRelation > 0) {
+        buyM -= (static_cast<float>(playerRelation) * 0.15f / 100.0f);
+    } else if (playerRelation < 0) {
+        buyM += (static_cast<float>(-playerRelation) * 0.25f / 100.0f);
+    }
+    const float maxAllowedSellM = buyM * 0.88f;
+    if (m > maxAllowedSellM) m = maxAllowedSellM;
+
+    std::int32_t p = static_cast<std::int32_t>(static_cast<float>(d.value) * m);
+    if (vendor_stocks_item(id)) {
+        const std::int32_t buyP = dynamic_market_buy_price(id, floorZ, gameClockSec, playerRelation);
+        if (p >= buyP && buyP > 0) {
+            p = buyP - 1;
+        }
+    }
+    return p < 1 ? 0 : p;
+}
+
+void vendor_restock_init(VendorRestockState& state, int floorZ, float gameClockSec) {
+    state.floorZ = static_cast<std::int16_t>(floorZ);
+    state.lastRestockSec = gameClockSec;
+    state.restockCycles = 0;
+    state.initialized = 1;
+    state.itemCount = 0;
+
+    for (std::size_t i = 0; i < kVendorMaxStockedItems; ++i) {
+        state.items[i] = VendorStockItem{};
+    }
+
+    for (ItemId id = 1; id <= kItemCount; ++id) {
+        if (!vendor_stocks_item(id)) continue;
+        const ItemDef& d = item_def(id);
+        const auto cat = static_cast<ItemCategory>(d.category);
+
+        std::uint16_t cap = d.stackMax;
+        if (cat == ItemCategory::Ammo) {
+            cap = std::max<std::uint16_t>(cap, 60);
+        } else if (cat == ItemCategory::Drink || cat == ItemCategory::Food) {
+            cap = std::max<std::uint16_t>(cap, 12);
+        } else if (cat == ItemCategory::Medicine) {
+            cap = std::max<std::uint16_t>(cap, 6);
+        }
+
+        VendorStockItem& entry = state.items[state.itemCount++];
+        entry.id = id;
+        entry.maxCapacity = cap;
+        entry.count = cap;
+
+        if (state.itemCount >= kVendorMaxStockedItems) break;
+    }
+}
+
+bool vendor_restock_step(VendorRestockState& state, int floorZ, float gameClockSec) {
+    if (!state.initialized || state.floorZ != static_cast<std::int16_t>(floorZ)) {
+        vendor_restock_init(state, floorZ, gameClockSec);
+        return true;
+    }
+    if (gameClockSec < state.lastRestockSec) {
+        state.lastRestockSec = gameClockSec;
+        return false;
+    }
+
+    const float elapsed = gameClockSec - state.lastRestockSec;
+    if (elapsed < kVendorRestockIntervalSec) {
+        return false;
+    }
+
+    const std::uint32_t cycles = static_cast<std::uint32_t>(elapsed / kVendorRestockIntervalSec);
+    state.lastRestockSec += static_cast<float>(cycles) * kVendorRestockIntervalSec;
+    state.restockCycles += cycles;
+
+    for (std::uint8_t i = 0; i < state.itemCount; ++i) {
+        VendorStockItem& item = state.items[i];
+        if (item.id == kInvalidItem || item.maxCapacity == 0) continue;
+        const std::uint16_t add = static_cast<std::uint16_t>((item.maxCapacity / 2 + 1) * cycles);
+        item.count = std::min<std::uint16_t>(item.maxCapacity, static_cast<std::uint16_t>(item.count + add));
+    }
+    return true;
+}
+
+std::uint16_t vendor_get_item_stock(const VendorRestockState& state, ItemId id) {
+    if (!state.initialized || !item_valid(id)) return 0;
+    for (std::uint8_t i = 0; i < state.itemCount; ++i) {
+        if (state.items[i].id == id) {
+            return state.items[i].count;
+        }
+    }
+    return 0;
+}
+
+std::uint16_t vendor_consume_item_stock(VendorRestockState& state, ItemId id, std::uint16_t count) {
+    if (!state.initialized || !item_valid(id) || count == 0) return 0;
+    for (std::uint8_t i = 0; i < state.itemCount; ++i) {
+        if (state.items[i].id == id) {
+            const std::uint16_t available = state.items[i].count;
+            const std::uint16_t consumed = count < available ? count : available;
+            state.items[i].count = static_cast<std::uint16_t>(available - consumed);
+            return consumed;
+        }
+    }
+    return 0;
 }
 
 } // namespace giga::game

@@ -74,6 +74,13 @@ enum class ContractState : std::uint8_t {
     Count
 };
 
+// Multi-stage progression step for contracts
+enum class ContractStage : std::uint8_t {
+    Objective = 0,    // Stage 0: Find item / Hunt target / Reach depth
+    Deliver = 1,      // Stage 1: Deliver to NPC / Return to Giver
+    CollectBounty = 2 // Stage 2: Collect bounty / Completed
+};
+
 // One job. POD, 24 bytes, no pointers — it serializes with the save verbatim and can
 // be copied into a report without a thought.
 // A Descend job stamps how deep you ALREADY were when you took it, in `baseline`, and
@@ -96,9 +103,15 @@ struct Contract {
     // padding bytes rather than growing the row, and a uint8 is enough because the
     // floor stack is bounded at +/-127 ([floor_registry.h] kMinFloor/kMaxFloor).
     std::uint8_t baseline = 0;
-    std::uint8_t pad_ = 0;
+    std::uint8_t stage = 0;      // ContractStage
 };
 static_assert(sizeof(Contract) == 24, "Contract must stay a tight 24-byte row");
+
+inline ContractStage contract_stage(const Contract& c) {
+    return static_cast<ContractStage>(c.stage);
+}
+
+const char* contract_stage_name(ContractStage stage);
 
 // How many can be active at once. Small on purpose: three jobs you remember beats ten
 // you cannot, and there is no journal UI to read a longer list from.
@@ -175,8 +188,11 @@ bool contract_accept(ContractBook& book, const Contract& offer, const RunLedger&
 // **Fetch consumes the items.** A courier job that let you keep the cargo would pay
 // twice for the same loot — once as the reward and once as the haul — and that is the
 // difference between an errand and a bonus.
+struct FactionRelations;
+
 std::int32_t contract_step(ContractBook& book, const NpcPool& pool, Inventory& inv,
-                           RunLedger& led, RpgStats* rpg = nullptr);
+                           RunLedger& led, RpgStats* rpg = nullptr,
+                           FactionRelations* rel = nullptr);
 
 // ---------------------------------------------------------------------------
 // How hard is this job — composed from context that already exists
@@ -228,6 +244,7 @@ void contract_on_kill(ContractBook& book, std::uint8_t mobKind);
 //
 // This is a fast path, not the guard. `contract_step`'s `handle_valid` poll is what
 // actually catches a dead giver — including the macro-sweep deaths that publish no event.
-void contract_on_giver_died(ContractBook& book, NpcId who);
+void contract_on_giver_died(ContractBook& book, NpcId who, FactionRelations* rel = nullptr,
+                            const NpcPool* pool = nullptr);
 
 } // namespace giga::game

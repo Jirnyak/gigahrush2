@@ -5,11 +5,16 @@
 
 #include "ecs/components.h"   // giga::Transform
 #include "game/ai.h"          // ai_release on unload (MotionOwner token)
+#include "game/combat.h"      // PlayerRanged, PlayerMelee
 #include "game/embody.h"      // embody, embody_as_player, fold_back, NpcRef
-#include "game/floor_gen.h"   // generate_floor
+#include "game/fast_travel.h" // on_fast_hub, fast_hub_cell, kFastHubsPerFloor
+#include "game/floor_gen.h"   // generate_floor, floor_gravity_regime
 #include "game/nav_cache.h"   // nav_cache_name, save/load_nav_cache
 #include "game/population.h"  // seed_floor_from_spec
+#include "game/rpg.h"         // RpgStats
 #include "game/save.h"        // place_body_safely — blind-seeded cells resolve here
+#include "game/status.h"      // StatusSet
+
 
 namespace giga::game {
 
@@ -44,6 +49,7 @@ NpcHandle mint_candidate(const NpcPool& pool, NpcId id) {
 
 void FloorStreamer::init(LevelStack& stack, int keepRadius) {
     keepRadius_ = keepRadius < 0 ? 0 : keepRadius;
+    multiFloorNavCache_.set_cache_dir(navCacheDir_);
     // Peak residency during a ride = the kept window (2R+1) plus the destination
     // loaded before the trailing floor is pruned (+1). Reserve exactly that many
     // recyclable physical layers up front; floors cycle through them.
@@ -62,8 +68,14 @@ ModuleId FloorStreamer::add_module(FloorRegistry& reg, int number, FloorKind kin
     fm.kind = kind;
     fm.seed = seed;
     reg.assign(number, m);
+    refresh_vertical_links(reg);
+    if (!navCacheDir_.empty()) {
+        nav::CoarseGraph cg{};
+        multiFloorNavCache_.ensure_coarse(NavCacheKey{number, kind, seed}, cg);
+    }
     return m;
 }
+
 
 std::uint32_t FloorStreamer::floor_seed_of(const FloorRegistry& reg,
                                            int number) const {
@@ -365,8 +377,10 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
             save_nav_cache(cachePath, fm.number, fm.kind, fm.seed, fn->coarse,
                            fn->fine);
     }
+    multiFloorNavCache_.store_coarse(fm.number, fn->coarse);
     nav_[m] = std::move(fn);
     }
+
 
     fm.bodies.clear();
     embody_crowd(ecs, pool, stack.layer(slot), fm, slot, playerId, out.player);
@@ -516,26 +530,173 @@ RideResult FloorStreamer::teleport(LevelStack& stack, FloorRegistry& reg,
     if (toFloor == fromFloor) return r;                     // already there
     if (reg.module_at(toFloor) == kInvalidModule) return r; // no such floor -> no-op
 
-    // Load the destination on demand. playerId is valid here, so its crowd is
-    // embodied as plain bodies and the player (embodied on the source) is skipped;
-    // then the elevator moves the player across.
-    ensure_loaded(stack, reg, ecs, pool, toFloor, playerId);
-    // Hand the elevator the resolved delta so it agrees with the module that
-    // was just loaded. Passing a raw direction would move the player to a floor
-    // whose geometry is not resident. landHub plants the cabin when the call is
-    // a fast-travel ride ([elevators.md] §24); -1 keeps mirrored x/y.
-    RideResult ride = ride_elevator(ecs, pool, reg, player, fromFloor,
-                                    toFloor - fromFloor, arrivalCoord, landHub);
+    // Seamless streaming re-embodiment preserving all entity components across floor transition
+    RideResult ride = reembody_entity_transit(stack, reg, ecs, pool, player, fromFloor,
+                                             toFloor, arrivalCoord, playerId, landHub);
     if (!ride.moved) return ride;
 
-
-    // The ride built a fresh player body on the destination; adopt it into the
-    // destination module so a later unload folds it, then prune to the kept window
-    // — which folds the whole departed crowd back into the cold pool.
-    ModuleId dm = reg.module_at(toFloor);
-    if (dm != kInvalidModule) modules_[dm].bodies.push_back(ride.player);
     keep_only(stack, reg, ecs, pool, toFloor);
     return ride;
 }
 
+void FloorStreamer::refresh_vertical_links(const FloorRegistry& reg) {
+    verticalLinks_.clear();
+    for (ModuleId m = 0; m < next_; ++m) {
+        const FloorModule& fm = modules_[m];
+        if (!fm.used) continue;
+
+        const int upFloor = next_labelled_floor(reg, fm.number, 1);
+        if (upFloor != fm.number) {
+            nav::generate_shaft_waypoint_links(fm.number, upFloor, verticalLinks_);
+        }
+        const int downFloor = next_labelled_floor(reg, fm.number, -1);
+        if (downFloor != fm.number) {
+            nav::generate_shaft_waypoint_links(fm.number, downFloor, verticalLinks_);
+        }
+    }
+}
+
+std::vector<nav::VerticalWaypointLink> FloorStreamer::vertical_links_for_floor(int floorNumber) const {
+    std::vector<nav::VerticalWaypointLink> res;
+    for (const auto& lk : verticalLinks_) {
+        if (lk.fromFloor == floorNumber) {
+            res.push_back(lk);
+        }
+    }
+    return res;
+}
+
+nav::MultiFloorPathStep FloorStreamer::query_entity_route(const FloorRegistry& reg,
+                                                         int fromFloor, ivec3 fromCell,
+                                                         int toFloor, ivec3 toCell) const {
+    nav::MultiFloorPathStep res;
+    const FloorNav* fn = nav_at(reg, fromFloor);
+    if (fn != nullptr) {
+        return nav::multi_floor_route_step(fn->coarse, fn->fine, fromFloor, fromCell,
+                                           toFloor, toCell, verticalLinks_);
+    }
+
+    const nav::CoarseGraph* cg = multiFloorNavCache_.coarse_for(fromFloor);
+    if (cg != nullptr) {
+        nav::FineNav emptyFine;
+        return nav::multi_floor_route_step(*cg, emptyFine, fromFloor, fromCell,
+                                           toFloor, toCell, verticalLinks_);
+    }
+
+    res.dir = nav::kFlowNone;
+    res.crossFloor = (fromFloor != toFloor);
+    res.targetFloor = toFloor;
+    return res;
+}
+
+RideResult FloorStreamer::reembody_entity_transit(LevelStack& stack, FloorRegistry& reg,
+                                                  Registry& ecs, NpcPool& pool,
+                                                  Entity entity, int fromFloor,
+                                                  int toFloor, std::uint8_t arrivalCoord,
+                                                  NpcId& playerId, int landHub) {
+    RideResult r;
+    r.player = entity;
+    r.floor = fromFloor;
+    if (auto* tr = ecs.try_get<Transform>(entity)) r.layer = tr->layer;
+
+    if (toFloor == fromFloor) return r;
+    ModuleId dm = reg.module_at(toFloor);
+    if (dm == kInvalidModule || !modules_[dm].used) return r;
+
+    NpcId id = kInvalidNpc;
+    if (auto* ref = ecs.try_get<NpcRef>(entity)) id = ref->id;
+
+    float yaw = 0.0f, pitch = 0.0f, fovY = 1.2f;
+    const bool isPlayer = ecs.all_of<CameraTag>(entity);
+    if (auto* cam = ecs.try_get<CameraTag>(entity)) {
+        yaw = cam->yaw;
+        pitch = cam->pitch;
+        fovY = cam->fovY;
+    }
+    bool fly = false;
+    if (auto* ctl = ecs.try_get<Controller>(entity)) fly = ctl->fly;
+
+    const bool hadRanged = ecs.all_of<PlayerRanged>(entity);
+    PlayerRanged ranged{};
+    if (hadRanged) ranged = ecs.get<PlayerRanged>(entity);
+
+    const bool hadMelee = ecs.all_of<PlayerMelee>(entity);
+    PlayerMelee melee{};
+    if (hadMelee) melee = ecs.get<PlayerMelee>(entity);
+
+    const bool hadRpg = ecs.all_of<RpgStats>(entity);
+    RpgStats rpg{};
+    if (hadRpg) rpg = ecs.get<RpgStats>(entity);
+
+    const bool hadAi = ecs.all_of<AiBrain>(entity);
+    AiBrain aiBrain{};
+    if (hadAi) aiBrain = ecs.get<AiBrain>(entity);
+
+    const bool hadStatus = ecs.all_of<StatusSet>(entity);
+    StatusSet statusSet{};
+    if (hadStatus) statusSet = ecs.get<StatusSet>(entity);
+
+    ensure_loaded(stack, reg, ecs, pool, toFloor, playerId);
+    const LayerId dstLayer = reg.layer_at(toFloor);
+    if (dstLayer == kInvalidLayer) return r;
+
+    if (id != kInvalidNpc) {
+        fold_back(ecs, pool, id, entity);
+    } else {
+        ecs.destroy(entity);
+    }
+
+    const CellStep down = regime_down(floor_gravity_regime());
+    if (id != kInvalidNpc) {
+        if (down.x != 0) pool.cx(id) = arrivalCoord;
+        else if (down.y != 0) pool.cy(id) = arrivalCoord;
+        else if (down.z != 0) pool.cz(id) = arrivalCoord;
+
+        if (landHub >= 0 && landHub < kFastHubsPerFloor) {
+            if (down.x != 0) fast_hub_cell(landHub, pool.cy(id), pool.cz(id));
+            else if (down.y != 0) fast_hub_cell(landHub, pool.cx(id), pool.cz(id));
+            else fast_hub_cell(landHub, pool.cx(id), pool.cy(id));
+        }
+    }
+
+    Entity ne = entt::null;
+    if (id != kInvalidNpc) {
+        if (isPlayer || id == playerId) {
+            ne = embody_as_player(ecs, pool, id, dstLayer);
+            playerId = id;
+        } else {
+            ne = embody(ecs, pool, id, dstLayer);
+        }
+    }
+
+    if (ne == entt::null) {
+        return r;
+    }
+
+    place_body_safely(ecs, stack.layer(dstLayer), ne);
+
+    if (auto* cam = ecs.try_get<CameraTag>(ne)) {
+        cam->yaw = yaw;
+        cam->pitch = pitch;
+        cam->fovY = fovY;
+    }
+    if (auto* ctl = ecs.try_get<Controller>(ne)) ctl->fly = fly;
+    if (hadRanged) ecs.emplace_or_replace<PlayerRanged>(ne, ranged);
+    if (hadMelee) ecs.emplace_or_replace<PlayerMelee>(ne, melee);
+    if (hadRpg) ecs.emplace_or_replace<RpgStats>(ne, rpg);
+    if (hadAi) ecs.emplace_or_replace<AiBrain>(ne, aiBrain);
+    if (hadStatus) ecs.emplace_or_replace<StatusSet>(ne, statusSet);
+
+    modules_[dm].bodies.push_back(ne);
+
+    keep_only(stack, reg, ecs, pool, toFloor);
+
+    r.player = ne;
+    r.layer = reg.layer_at(toFloor);
+    r.floor = toFloor;
+    r.moved = true;
+    return r;
+}
+
 } // namespace giga::game
+

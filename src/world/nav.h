@@ -16,8 +16,10 @@
 // one node's row, so the result is bit-identical regardless of scheduling.
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <thread>
 #include <vector>
 
 #include "core/math.h" // ivec3 (route_step cell coordinates)
@@ -156,5 +158,102 @@ void bake_fine(const MacroGrid& grid, FineNav& out);
 std::uint8_t route_step(const CoarseGraph& coarse, const FineNav& fine,
                         ivec3 from, ivec3 to);
 
+// --- Vertical transit & Multi-floor navigation ------------------------------
+
+// Kinds of vertical transit connections between storeys or floor slices.
+enum class VerticalTransitKind : std::uint8_t {
+    ElevatorShaft = 0, // 4x4 lattice shaft elevator cabin
+    Stairwell = 1,     // Padic stairwell or architectural staircase
+    Ladder = 2,        // Vertical access ladder
+    GravityChute = 3,  // Unidirectional vertical drop / pneumatic chute
+};
+
+// A vertical waypoint link connecting a point on fromFloor to a point on toFloor.
+struct VerticalWaypointLink {
+    int fromFloor = 0;
+    int toFloor = 0;
+    ivec3 fromCell{0, 0, 0};
+    ivec3 toCell{0, 0, 0};
+    VerticalTransitKind kind = VerticalTransitKind::ElevatorShaft;
+    std::uint8_t hubIndex = 0xFFu; // 0..15 for planar lattice hub shafts, 0xFF for stairs/ladders
+    Dist cost = 0;                 // Traversal cost metric
+};
+
+// Result of a multi-floor route query step.
+struct MultiFloorPathStep {
+    std::uint8_t dir = kFlowNone;       // 0..5 unit step direction, kFlowArrived, kFlowNone
+    bool crossFloor = false;            // True when agent is at the vertical transit link
+    int targetFloor = 0;                // Target floor for the current leg of travel
+    ivec3 transitCell{0, 0, 0};         // Coordinate of the vertical transit waypoint
+    VerticalTransitKind transitKind = VerticalTransitKind::ElevatorShaft;
+};
+
+// Complete multi-floor path query result across floor boundaries.
+struct MultiFloorQueryResult {
+    bool reachable = false;
+    std::uint32_t totalDist = 0;
+    std::vector<int> floorHops;
+    std::vector<VerticalWaypointLink> transitChain;
+};
+
+// Generate vertical waypoint links for the 16 fixed lattice elevator shafts
+// connecting fromFloor to toFloor.
+void generate_shaft_waypoint_links(int fromFloor, int toFloor,
+                                  std::vector<VerticalWaypointLink>& outLinks);
+
+// Generate vertical waypoint links (shafts, stairwells, ladders) for a floor slice.
+void generate_vertical_links(const MacroGrid& grid, int floorNumber,
+                            int adjacentFloor,
+                            std::vector<VerticalWaypointLink>& outLinks);
+
+// Multi-floor route step: resolves routing on the current floor toward destination on toFloor.
+// If on the same floor, behaves as route_step. If on different floors, navigates to the best
+// reachable vertical transit link on fromFloor, signaling crossFloor when arrival at the shaft
+// or stair landing is reached.
+MultiFloorPathStep multi_floor_route_step(const CoarseGraph& coarse,
+                                          const FineNav& fine,
+                                          int fromFloor, ivec3 fromCell,
+                                          int toFloor, ivec3 toCell,
+                                          const std::vector<VerticalWaypointLink>& links);
+
+// Multi-floor path planner across multiple cached or resident floors.
+MultiFloorQueryResult query_multi_floor_path(int fromFloor, ivec3 fromCell,
+                                            int toFloor, ivec3 toCell,
+                                            const std::vector<int>& floorNumbers,
+                                            const std::vector<CoarseGraph>& coarseGraphs,
+                                            const std::vector<VerticalWaypointLink>& allLinks);
+
+// Asynchronous multi-floor path query across floor boundaries.
+// Computes multi-floor route planning in a background worker thread, allowing
+// agents and macro-sim to plan cross-floor itineraries asynchronously without blocking the sim tick.
+class AsyncMultiFloorPathQuery {
+public:
+    AsyncMultiFloorPathQuery() = default;
+    ~AsyncMultiFloorPathQuery();
+    AsyncMultiFloorPathQuery(const AsyncMultiFloorPathQuery&) = delete;
+    AsyncMultiFloorPathQuery& operator=(const AsyncMultiFloorPathQuery&) = delete;
+    AsyncMultiFloorPathQuery(AsyncMultiFloorPathQuery&& other) noexcept;
+    AsyncMultiFloorPathQuery& operator=(AsyncMultiFloorPathQuery&& other) noexcept;
+
+    void start(int fromFloor, ivec3 fromCell, int toFloor, ivec3 toCell,
+               std::vector<int> floorNumbers,
+               std::vector<CoarseGraph> coarseGraphs,
+               std::vector<VerticalWaypointLink> allLinks);
+
+    bool poll(MultiFloorQueryResult& outResult);
+    bool busy() const { return busy_; }
+    bool ready() const { return ready_; }
+    void cancel();
+
+private:
+    void join_worker();
+
+    std::thread worker_;
+    std::atomic<bool> busy_{false};
+    std::atomic<bool> ready_{false};
+    MultiFloorQueryResult result_{};
+};
+
 } // namespace nav
 } // namespace giga
+

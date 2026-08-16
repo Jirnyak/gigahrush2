@@ -1,12 +1,21 @@
-#include "core/rng.h"
 #include "game/contract.h"
 
 #include <cmath>
 #include <cstdio>
 
+#include "core/rng.h"
 #include "game/faction_relations.h"
 
 namespace giga::game {
+
+const char* contract_stage_name(ContractStage stage) {
+    switch (stage) {
+        case ContractStage::Objective:     return "Objective";
+        case ContractStage::Deliver:       return "Deliver";
+        case ContractStage::CollectBounty: return "CollectBounty";
+        default:                           return "?";
+    }
+}
 
 namespace {
 
@@ -237,6 +246,7 @@ bool contract_accept(ContractBook& book, const Contract& offer,
         if (s.state == static_cast<std::uint8_t>(ContractState::Active)) continue;
         s = offer;
         s.state = static_cast<std::uint8_t>(ContractState::Active);
+        s.stage = static_cast<std::uint8_t>(ContractStage::Objective);
         s.baseline = baseline;
         s.progress = 0;
         return true;
@@ -254,7 +264,8 @@ void contract_on_kill(ContractBook& book, std::uint8_t mobKind) {
     }
 }
 
-void contract_on_giver_died(ContractBook& book, NpcId who) {
+void contract_on_giver_died(ContractBook& book, NpcId who, FactionRelations* rel,
+                            const NpcPool* pool) {
     for (int i = 0; i < kMaxContracts; ++i) {
         Contract& c = book.slot[i];
         if (c.state != static_cast<std::uint8_t>(ContractState::Active)) continue;
@@ -272,7 +283,13 @@ void contract_on_giver_died(ContractBook& book, NpcId who) {
         // Nobody left to pay you. Quietly paying anyway would make the giver decorative,
         // and the whole point of a generation-tagged handle is that the person is real.
         c.state = static_cast<std::uint8_t>(ContractState::Failed);
+        c.stage = static_cast<std::uint8_t>(ContractStage::Objective);
         ++book.failed;
+
+        if (rel != nullptr && pool != nullptr && pool->valid(who)) {
+            const Faction gf = static_cast<Faction>(pool->faction(who) % kFactionCount);
+            relations_nudge_player(*rel, gf, -2);
+        }
     }
 }
 
@@ -368,7 +385,7 @@ std::uint16_t objective_difficulty_e1(std::uint8_t kind, std::uint16_t subject,
 }
 
 std::int32_t contract_step(ContractBook& book, const NpcPool& pool, Inventory& inv,
-                          RunLedger& led, RpgStats* rpg) {
+                           RunLedger& led, RpgStats* rpg, FactionRelations* rel) {
     std::int32_t paid = 0;
 
     for (int i = 0; i < kMaxContracts; ++i) {
@@ -390,33 +407,35 @@ std::int32_t contract_step(ContractBook& book, const NpcPool& pool, Inventory& i
         // when the question was "is my giver alive". [contract.h]
         if (!pool.handle_valid(c.giver)) {
             c.state = static_cast<std::uint8_t>(ContractState::Failed);
+            c.stage = static_cast<std::uint8_t>(ContractStage::Objective);
             ++book.failed;
+            if (rel != nullptr) {
+                const NpcId gid = npc_handle_id(c.giver);
+                if (pool.valid(gid)) {
+                    const Faction gf = static_cast<Faction>(pool.faction(gid) % kFactionCount);
+                    relations_nudge_player(*rel, gf, -2);
+                }
+            }
             continue;
         }
 
+        // Multi-stage progression: Objective -> Deliver -> CollectBounty
+        bool objectiveMet = false;
         switch (static_cast<ObjectiveKind>(c.kind)) {
             case ObjectiveKind::Fetch: {
                 std::int32_t have = 0;
                 for (const ItemSlot& s : inv.slots)
                     if (s.item == c.subject) have += s.count;
                 c.progress = have;
-                if (have < c.target) continue;
-                // CONSUME. A courier job that let you keep the cargo would pay twice
-                // for the same loot — once as the reward and once as the haul — which
-                // is the difference between an errand and a bonus.
-                std::int32_t need = c.target;
-                for (ItemSlot& s : inv.slots) {
-                    if (need <= 0) break;
-                    if (s.item != c.subject) continue;
-                    const std::int32_t take = s.count < need ? s.count : need;
-                    s.count = static_cast<std::uint16_t>(s.count - take);
-                    if (s.count == 0) s = ItemSlot{};
-                    need -= take;
+                if (have >= c.target) {
+                    objectiveMet = true;
                 }
                 break;
             }
             case ObjectiveKind::Hunt:
-                if (c.progress < c.target) continue;
+                if (c.progress >= c.target) {
+                    objectiveMet = true;
+                }
                 break;
             case ObjectiveKind::Descend: {
                 // |z|, because depth is bidirectional and a job to reach the roof is
@@ -424,28 +443,41 @@ std::int32_t contract_step(ContractBook& book, const NpcPool& pool, Inventory& i
                 const int reached = led.deepestFloor < 0 ? -led.deepestFloor
                                                          : led.deepestFloor;
                 const int want = c.target < 0 ? -c.target : c.target;
-                // **Against where you were WHEN YOU TOOK IT, not against the run's
-                // high-water mark.** `RunLedger::deepestFloor` never falls, so comparing
-                // to it paid instantly for a descent made before the job existed — and
-                // paid AGAIN on every re-accept. An audit measured 900 roubles on accept
-                // and 900 more on re-accept with the player never moving: an infinite
-                // press, limited only by how fast the accept key could be pressed.
-                //
-                // `baseline` is stamped at accept time ([contract.h]), so a Descend job
-                // now requires progress beyond that point. A job whose target is already
-                // behind you is refused by contract_accept and never reaches this loop —
-                // that refusal is implemented now; this comment used to promise it while
-                // nothing did it, which left slots that could not be cleared by playing.
-                if (reached < want) { c.progress = reached; continue; }
-                if (want <= c.baseline) continue;   // nothing was actually descended
                 c.progress = reached;
+                if (reached >= want && want > c.baseline) {
+                    objectiveMet = true;
+                }
                 break;
             }
             default:
-                continue;
+                break;
         }
 
+        if (!objectiveMet) {
+            c.stage = static_cast<std::uint8_t>(ContractStage::Objective);
+            continue;
+        }
+
+        // Advance to Stage 1 (Deliver)
+        c.stage = static_cast<std::uint8_t>(ContractStage::Deliver);
+
+        // Stage 1 -> Stage 2: Deliver cargo / consume items for Fetch
+        if (static_cast<ObjectiveKind>(c.kind) == ObjectiveKind::Fetch) {
+            std::int32_t need = c.target;
+            for (ItemSlot& s : inv.slots) {
+                if (need <= 0) break;
+                if (s.item != c.subject) continue;
+                const std::int32_t take = s.count < need ? s.count : need;
+                s.count = static_cast<std::uint16_t>(s.count - take);
+                if (s.count == 0) s = ItemSlot{};
+                need -= take;
+            }
+        }
+
+        // Advance to Stage 2 (CollectBounty / Complete)
+        c.stage = static_cast<std::uint8_t>(ContractStage::CollectBounty);
         c.state = static_cast<std::uint8_t>(ContractState::Complete);
+
         // Paid straight into the banked total: a contract reward is not carried loot
         // and must not be at risk on the walk home. That is what being PAID means, and
         // it is the one thing that makes a contract safer than looting the same value.
@@ -469,6 +501,15 @@ std::int32_t contract_step(ContractBook& book, const NpcPool& pool, Inventory& i
             award_xp(*rpg, xp_for_quest(objective_difficulty_e1(
                                c.kind, c.subject, c.target,
                                static_cast<int>(c.baseline), /*timed=*/false)));
+
+        // Faction reputation reward propagation on contract completion
+        if (rel != nullptr) {
+            const NpcId gid = npc_handle_id(c.giver);
+            if (pool.valid(gid)) {
+                const Faction gf = static_cast<Faction>(pool.faction(gid) % kFactionCount);
+                relations_nudge_player(*rel, gf, +2);
+            }
+        }
     }
     return paid;
 }

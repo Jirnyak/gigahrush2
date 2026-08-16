@@ -1,4 +1,5 @@
 #include "game/status.h"
+#include "game/rpg.h"
 
 namespace giga::game {
 namespace {
@@ -24,18 +25,45 @@ std::uint16_t fold_e3(const StatusSet& set, Pick pick) {
     std::uint16_t acc = 1000;
     for (std::size_t i = 0; i < kStatusCount; ++i) {
         if (set.remainMs[i] == 0) continue;
-        acc = mul_e3(acc, pick(kStatusTable[i], set.alt[i] != 0));
+        const std::uint16_t base = pick(kStatusTable[i], set.alt[i] != 0);
+        if (base == 1000) continue;
+        const std::uint16_t stacks =
+            set.intensityE3[i] >= 1000 ? static_cast<std::uint16_t>(set.intensityE3[i] / 1000) : 1u;
+        for (std::uint16_t s = 0; s < stacks; ++s) {
+            acc = mul_e3(acc, base);
+        }
     }
     return acc;
 }
 
 } // namespace
 
-void status_apply(StatusSet& set, StatusId id, bool useAlt) {
+void status_apply(StatusSet& set, StatusId id, bool useAlt, const RpgStats* rpg) {
     if (!status_valid(id)) return;
+
+    if (rpg) {
+        // GillsOfGigahrush: immunity to SporeHaze and toxic choking
+        if (id == StatusId::SporeHaze && has_mutation(*rpg, BioMutationId::GillsOfGigahrush)) {
+            return;
+        }
+    }
+
     const std::size_t i = static_cast<std::size_t>(id);
     const StatusDef& d = kStatusTable[i];
-    const std::uint32_t ms = useAlt ? d.altDurationMs : d.durationMs;
+    std::uint32_t ms = useAlt ? d.altDurationMs : d.durationMs;
+
+    if (rpg) {
+        if (has_trait(*rpg, TraitId::ChemResistant)) {
+            ms = (ms + 1u) / 2u; // 50% drug/chemical status duration
+        }
+        if (implant_is_functioning(*rpg, ImplantSlot::Thoracic)) {
+            if (rpg->implantId[static_cast<std::size_t>(ImplantSlot::Thoracic)] ==
+                static_cast<std::uint8_t>(ImplantId::CardioFilterPump) &&
+                id == StatusId::SporeHaze) {
+                ms = (ms * 60u + 50u) / 100u; // -40% toxic duration
+            }
+        }
+    }
 
     // The LONGER of the two wins. Re-entering a spore cloud must not shorten a haze
     // you already carry, and the reference does the same (`Math.max` on expiresAt).
@@ -86,9 +114,9 @@ std::uint32_t status_step(StatusSet& set, std::uint32_t dtMs) {
     }
 
     if (reliefExpired && set.remainMs[static_cast<std::size_t>(StatusId::GovnyakRelief)] == 0) {
-        status_apply(set, StatusId::GovnyakCough, false);
+        status_apply(set, StatusId::GovnyakCough, false, nullptr);
     } else if (coughExpired && set.remainMs[static_cast<std::size_t>(StatusId::GovnyakCough)] == 0) {
-        status_apply(set, StatusId::GovnyakDebt, false);
+        status_apply(set, StatusId::GovnyakDebt, false, nullptr);
     }
 
     return expired;
@@ -108,7 +136,13 @@ std::uint16_t status_move_mult_e3(const StatusSet& set) {
         const std::uint32_t dur = (set.alt[i] != 0) ? d.altDurationMs : d.durationMs;
         const bool rooted =
             d.rootMs != 0 && set.remainMs[i] > (dur > d.rootMs ? dur - d.rootMs : 0u);
-        acc = mul_e3(acc, rooted ? d.altMoveMultE3 : d.moveMultE3);
+        const std::uint16_t base = rooted ? d.altMoveMultE3 : d.moveMultE3;
+        if (base == 1000) continue;
+        const std::uint16_t stacks =
+            set.intensityE3[i] >= 1000 ? static_cast<std::uint16_t>(set.intensityE3[i] / 1000) : 1u;
+        for (std::uint16_t s = 0; s < stacks; ++s) {
+            acc = mul_e3(acc, base);
+        }
     }
     return acc;
 }
@@ -123,16 +157,29 @@ std::uint16_t status_melee_mult_e3(const StatusSet& set) {
     return fold_e3(set, [](const StatusDef& d, bool) { return d.meleeMultE3; });
 }
 
-std::uint16_t status_heal_mult_e3(const StatusSet& set) {
-    return fold_e3(set, [](const StatusDef& d, bool) { return d.healMultE3; });
+std::uint16_t status_heal_mult_e3(const StatusSet& set, const RpgStats* rpg) {
+    std::uint16_t base = fold_e3(set, [](const StatusDef& d, bool) { return d.healMultE3; });
+    if (rpg) {
+        base = mul_e3(base, rpg_heal_mult_e3(*rpg));
+    }
+    return base;
 }
 
-std::uint32_t status_water_drain_e3(const StatusSet& set) {
+std::uint32_t status_water_drain_e3(const StatusSet& set, const RpgStats* rpg) {
     // Rates ADD, they do not compose multiplicatively. Two sources of thirst are
     // twice the thirst, not the product of two fractions.
     std::uint32_t sum = 0;
-    for (std::size_t i = 0; i < kStatusCount; ++i)
-        if (set.remainMs[i] != 0) sum += kStatusTable[i].waterDrainE3;
+    for (std::size_t i = 0; i < kStatusCount; ++i) {
+        if (set.remainMs[i] != 0) {
+            const std::uint32_t stacks =
+                set.intensityE3[i] >= 1000 ? static_cast<std::uint32_t>(set.intensityE3[i] / 1000) : 1u;
+            sum += kStatusTable[i].waterDrainE3 * stacks;
+        }
+    }
+    if (rpg) {
+        const std::uint32_t mult = rpg_water_drain_mult_e3(*rpg);
+        sum = (sum * mult + 500u) / 1000u;
+    }
     return sum;
 }
 

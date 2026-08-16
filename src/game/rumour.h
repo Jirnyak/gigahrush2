@@ -23,6 +23,8 @@
 // how a crowd should feel.
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 
 #include "core/math.h"
@@ -90,169 +92,113 @@ enum class RumourKind : std::uint8_t {
     // "Samosbor in <N>." Fires in IDLE, and only when the wait is short enough to be a
     // decision — see `kRumourLullSpeakMs`. `value` is seconds until the fog lands
     // (Idle remainder plus the whole warning window), `subject` unused.
-    //
-    // **This is the phase the crowd had nothing to say about, and it is the phase where
-    // being told is worth most.** `Imminent` starts at the siren, by which point the
-    // route decision is already a sprint; the four floor facts and the duty-cycle line
-    // are all true forever and so carry no urgency at all. A body that says "two
-    // minutes" is the only channel in the game that turns the clock into a plan: finish
-    // the crate or leave it, take the corridor or the stairwell.
-    //
-    // It is also the one rumour whose FREQUENCY is depth-scaled without a depth term
-    // anywhere in it, which is this file's own trick and worth stating. At |z| = 50 the
-    // whole Idle phase is 3..33 s (`samosbor_enter_floor`), so the threshold is never
-    // not met and the crowd warns you continuously. At z = 0 Idle runs ~22..38 min, so
-    // the same threshold speaks in only the last ~13-22% of it and the surface stays
-    // quiet. One constant, two behaviours, no `if (deep)`.
     Lull,
+
+    // --- Dynamic Social & Network-Propagated Rumours --------------------------
+    // "Did you hear? That stranger cleared <N> beasts on floor <Z>."
+    // Player heroic deed propagated across NPC social networks.
+    Heroic,
+    // "Beware the outsider! On floor <Z> they slaughtered <N> people from <Faction>."
+    // Player atrocities propagated across NPC social networks.
+    Atrocity,
+    // "On floor <Z> a war broke out between <FactionA> and <FactionB>! Casualties: <N>."
+    // Faction war & territorial dispute news.
+    WarNews,
+
     Count
 };
 
-// One overheard line. POD, no pointers, no allocation — it is built on demand from
-// world state and thrown away, never stored per NPC.
+// One overheard line. POD, no pointers, no allocation.
 struct Rumour {
     RumourKind kind = RumourKind::Threat;
     // The subject: a MobKind for Threat, a Faction for Territory, a floor for Depth, a
-    // SamosborVariant for Imminent and Variant, a fog-roster size for Veteran.
-    // Unused for Wealth, Fog and Lull, which carry their number in `value`.
+    // SamosborVariant for Imminent and Variant, a fog-roster size for Veteran,
+    // a victim Faction for Atrocity, packed Faction pair for WarNews.
+    // Unused for Wealth, Fog, Lull, Heroic, which carry their numbers in `value` and `floorZ`.
     std::uint16_t subject = 0;
     std::int32_t value = 0;
+    std::int16_t floorZ = 0;
+    std::uint8_t credibility = 100;
+    std::uint8_t hops = 0;
     bool valid = false;
 };
 
-// How close you must be to overhear, metres. Wider than melee reach and narrower than
-// the aggro radius on purpose: you should catch remarks while walking past a group,
-// not sweep the whole floor from a doorway.
+// How close you must be to overhear, metres.
 inline constexpr float kOverhearRange = 6.0f;
 
-// Cooldown between overheard lines, in sim ticks. Without one, standing in a crowd
-// would replace the line every frame and none of them would be readable — the system
-// would produce a flicker rather than information.
-//
-// Derived from kSimHz rather than written out. It was a literal 240 documented as "2 s
-// at 120 Hz", and the sim has run at 125 Hz since [core/tick.h] — so the constant was
-// really 1.92 s and the comment was a rate the game does not have. That is the exact
-// class of drift tick.h exists to kill.
+// Cooldown between overheard lines, in sim ticks.
 inline constexpr std::uint32_t kOverhearCooldownTicks =
     2u * static_cast<std::uint32_t>(kSimHz);   // 250 ticks = 2 s, exactly
 
 // How close the next samosbor has to be before the crowd starts counting it down
-// (`RumourKind::Lull`). Wall time until the fog lands, warning window included.
-//
-// AUTHORED, and the number is a decision horizon rather than a tuning dial: 5 minutes is
-// about one room cleared, one crate emptied and one corridor walked at 6 m/s, so it is
-// the shortest wait at which "finish this or leave now" is still a real choice. Shorter
-// and the line arrives after the decision; much longer and it is background noise on
-// every shallow floor, which is how a rumour becomes something the player skips.
-//
-// Stated in ms against `SamosborState::phaseMs`, and deliberately NOT in ticks: this is
-// a duration in seconds, and the sim's tick rate is not allowed to change what it means
-// ([core/tick.h]).
 inline constexpr std::uint32_t kRumourLullSpeakMs = 5u * 60u * 1000u;
-// The predicate is written `phaseMs <= kRumourLullSpeakMs - kSamosborWarningMs` and not
-// `phaseMs + kSamosborWarningMs <= kRumourLullSpeakMs`, so that a corrupt or truncated
-// `phaseMs` near UINT32_MAX cannot wrap the addition into a small number and make a
-// 49-day wait read as imminent. The subtraction is compile-time; this is what keeps it
-// from being the underflow instead.
 static_assert(kRumourLullSpeakMs > kSamosborWarningMs,
               "the lull horizon must be longer than the warning window it contains");
 
+// Maximum active dynamic social rumor events tracked in the network
+inline constexpr std::size_t kMaxRumourNetworkEvents = 64;
+
+struct RumourNode {
+    Rumour rumour{};
+    NpcId sourceNpc = kInvalidNpc;
+    std::uint64_t birthTick = 0;
+    std::uint32_t diffusionCount = 0;
+    bool active = false;
+};
+
+// Dynamic Rumour Diffusion Network across NPC social graphs and campfire / break routines
+class RumourNetwork {
+public:
+    void init();
+
+    // Seed a new rumor event in the social network (e.g. from player heroic deed, atrocity, or faction clash)
+    bool seed_rumour(RumourKind kind, std::int16_t floorZ, std::uint16_t subject,
+                     std::int32_t value, NpcId originNpc, std::uint64_t tick,
+                     std::uint8_t initialCredibility = 100);
+
+    // Propagate rumours between two interacting NPCs (e.g. during campfire, break, or social routine).
+    // Returns true if a new rumor was successfully shared or updated.
+    bool share_rumours_between(NpcPool& pool, NpcId speaker, NpcId listener,
+                               std::int16_t affinity, bool isCampfireOrBreak,
+                               std::uint64_t tick);
+
+    // Diffusion pass over a floor during campfire / common room routine or macro social pass.
+    // Advances propagation across connected NPC social graphs.
+    std::uint32_t diffuse_step(NpcPool& pool, std::int16_t floorZ,
+                               std::uint64_t tick, std::uint32_t budget = 32);
+
+    // Find the most prominent / urgent propagated rumour known or relevant to an NPC
+    Rumour best_rumour_for_npc(const NpcPool& pool, NpcId id, std::int16_t floorZ) const;
+
+    // Clear stale rumours (older than expiration horizon)
+    void prune_stale(std::uint64_t currentTick, std::uint64_t maxAgeTicks);
+
+    std::size_t active_count() const { return count_; }
+    const RumourNode* events() const { return nodes_.data(); }
+
+private:
+    std::array<RumourNode, kMaxRumourNetworkEvents> nodes_{};
+    std::size_t count_ = 0;
+};
+
+RumourNetwork& global_rumour_network();
+
 // The dominant faction among the embodied bodies on `layer`, counted rather than
-// authored. Ties break toward the lower Faction value; an empty layer answers
-// Citizens, which is also the default vendor.
-//
-// **Exported because the Territory rumour was not its only consumer — it was just the
-// only one that could reach it.** This lived in rumour.cpp's anonymous namespace, so
-// `src/app/main.cpp` had no way to ask which faction holds a floor, and
-// `VendorKind` therefore stayed on Citizen forever: two of its three sell rates were
-// dead constants ([vendor.h]). Pair it with `vendor_kind_for` on floor arrival and the
-// rumour becomes information you can act on — walk into a Scientist floor and the same
-// haul is worth 8% more.
-//
-// O(records in the floor bucket), one pass, no allocation. Called on arrival,
-// never per tick. Tallies the floor's whole COLD roster, not the embodied
-// window — a vendor's allegiance is a property of the floor.
+// authored.
 Faction dominant_faction(const NpcPool& pool, int floorNumber);
 
 // Build the rumour a given speaker would tell, from live state and the live samosbor
-// clock.
-//
-// Deterministic in (speakerId, floorZ) **while the clock is quiet**: the same person
-// says the same thing about the same floor, so a rumour reads as something that body
-// KNOWS rather than as dice, and walking back to them repeats it.
-//
-// THE CLOCK IS THE ONE EXCEPTION, and it is deliberate rather than a hole in the
-// contract. Two overrides, both stated here so a caller does not have to read the .cpp
-// to know when the promise holds:
-//
-//   1. **Warning phase overrides everyone.** Every speaker answers `Imminent`. The
-//      determinism that matters during a 30 s siren is "everybody tells you the same
-//      urgent thing", not "this one still has an opinion about crate prices".
-//   2. **The Fog slot follows the clock, and only that slot.** The 25% of speakers
-//      whose deterministic pick is `Fog` answer, in priority order: `Variant` while the
-//      samosbor is Active; `Lull` while it is Idle and the fog is within
-//      `kRumourLullSpeakMs`; `Veteran` on half of the rest (by a seed bit, so it is
-//      still per-speaker stable) once the run has a non-zero `count`; and otherwise the
-//      floor's duty cycle, unchanged. The other four slots — Threat, Wealth, Territory,
-//      Depth — are untouched, so the four rumours that are genuinely floor facts stay
-//      floor facts and 75% of the crowd remains a stable, re-checkable source.
-//
-//      The ORDER is the design, not an implementation detail. An event in progress
-//      outranks one that is coming, which outranks a statistic about the run, which
-//      outranks a statistic about the floor — i.e. strictly decreasing urgency, so a
-//      speaker never volunteers the less actionable of two true things.
-//
-// All overrides are still TRUE and CHECKABLE, which is this file's actual rule: the
-// seconds count down with the clock, the variant is the one `samosbor_step` has already
-// committed to, the Lull countdown is the same `phaseMs` the HUD prints, and the Veteran
-// roster size is `samosbor_fog_roster`'s own answer for the same floor and count the
-// spawner will use.
+// clock, optionally taking propagated social network rumours into account.
 Rumour rumour_for(const Registry& reg, const NpcPool& pool, NpcId speaker,
-                  LayerId layer, int floorZ, const SamosborState& sb);
-
-// THERE IS NO CLOCK-FREE OVERLOAD, and that is deliberate — deleted 2026-08-12.
-//
-// One existed: a five-argument shim that passed a default-constructed `SamosborState`
-// so "the existing call site keeps compiling unchanged". The call site then kept
-// compiling unchanged for as long as the shim existed, and the four samosbor kinds —
-// `Imminent`, `Variant`, `Veteran`, `Lull` — were unreachable in play the whole time
-// while being fully implemented, texted, and pinned by `test_samosborhud_all`. Idle is
-// not Warning, not Active, count 0 fails Veteran's gate, and Lull additionally requires
-// `phaseTotalMs != 0`; a default state fails all four by construction.
-//
-// The shim was safe in the sense it claimed — a forgetful caller lost lines rather than
-// getting wrong ones — and that is exactly why it went unnoticed. Two overloads that
-// differ only by a trailing argument make "forget the clock" a silent, compiling,
-// test-passing mistake, so the safety property WAS the defect. Requiring the argument
-// makes the same mistake a build error.
-//
-// The tests keep the old behaviour under test by passing `SamosborState{}` explicitly,
-// which says the thing the shim used to say implicitly: with an idle, never-armed clock
-// this function reproduces the original five-way split byte for byte.
-//
-// Note for anyone re-adding a default argument here: `Lull` fires on a SHORT Idle
-// remainder, and a default state's remainder is zero — the shortest there is. The
-// `phaseTotalMs != 0` clause is what stops a never-armed clock from becoming the most
-// urgent state in the machine and telling 25% of the crowd the fog is 30 s out.
+                  LayerId layer, int floorZ, const SamosborState& sb,
+                  const RumourNetwork* net = nullptr);
 
 // The nearest speaker within kOverhearRange of the camera holder, or kInvalidNpc.
-// Skips the camera holder itself and anything not embodied on this layer.
 NpcId nearest_speaker(const Registry& reg, LayerId layer);
 
 // Render a rumour into `out` as a Russian sentence. Returns false when the rumour is
 // invalid, in which case `out` is untouched.
-//
 // Bounded, no allocation, no exceptions. `out` must be at least 160 bytes.
-//
-// 160 still holds with the samosbor kinds, MEASURED rather than assumed: `Variant` is
-// the longest at 121 bytes (12 of literal, plus 41 for the longest display name
-// "Красный биологический", plus 68 for the longest effect clause), `Imminent` is 101,
-// `Veteran` 69 and `Lull` 65 in its longest ("мин") form: 64 of literal plus one
-// digit, since `kRumourLullSpeakMs` caps the minute count at 5. The pre-existing
-// `Threat` line is the real ceiling — a monster name out
-// of `kMobTable` is unbounded from this file's point of view — and it was already living
-// with snprintf's truncation, which is why 160 is a floor on `cap` and not a promise
-// that nothing ever truncates.
 bool rumour_text(const Rumour& r, char* out, std::size_t cap);
 
 } // namespace giga::game

@@ -1,242 +1,333 @@
-// RPG progression — levels, XP, the three attributes, and every derived stat.
-//
-// Ported from the reference `systems/rpg.ts` (418 lines). The reference's own
-// `data/rpg_progression.ts` is TWO LINES — just the two caps — so the numbers below
-// come from the system file, not from a data table. That is why this lands as a
-// header of constants rather than a generated CSV table like items/mobs: there are
-// no ROWS here, only formulas. The one genuinely row-shaped thing in the reference
-// (per-kind kill XP, 36 authored entries over 69 kinds) belongs in data/mobs.csv
-// beside the stats it scales, not in a second parallel file.
-//
-// WHAT ALREADY EXISTED, and is deliberately not duplicated. `mob_table.h` already
-// carries the monster-scaling half of `rpg.ts`: `mob_hp_at_level` is that file's
-// `scaleMonsterHp` (1 + 0.12*(L-1)). The dmg/speed curves (1 + 0.10, 1 + 0.02) are
-// documented there as inline. This file is the PLAYER/NPC half, which had nowhere
-// to live: level, xp, attrPoints, str/agi/int, psi, and the 13 derived multipliers.
-//
-// FIXED POINT, x1000, for the same reason [status.h] gives: this tree pins bit-exact
-// digests and a float multiplier chain is not guaranteed identical between MSVC and
-// Clang ([AGENTS.md]). x1.0 is 1000. The reference computes in doubles; every value
-// here is the rounded x1000 integer of that double, and the tests pin the reference's
-// own worked examples.
-//
-// NOT PORTED, deliberately, with the reason:
-//   * `regenPsi` — the reference body is empty (PSI recovers only from items and
-//     level-ups). An empty function is not a feature; the absence IS the design.
-//   * `randomGaussian` / `generateHeight` — this tree already has `height_for_age`
-//     in [population.h], and a Box-Muller pair needs stored RNG state, which the
-//     stateless `(id,salt)` hashing in [core/rng.h] exists to avoid.
-//   * `calcZoneLevel` — its ZONE_CELL is W/8 over the reference's flat 1024-wide
-//     zone grid. This engine's danger model is the V-shape about the hub keyed on
-//     floor NUMBER ([mob_table.h] `mob_level_for_floor`), which is already built and
-//     is not the same function. Porting the zone version would be a second,
-//     disagreeing definition of monster level.
-//   * `questDifficulty` / `questXpReward` / `questMoneyReward` — quest rewards are
-//     [quest.h]'s business; the XP half enters through `xp_for_quest` below so there
-//     is exactly one XP awarder.
+// RPG progression — levels, XP, 5 attributes, perks, traits, bio-mutations, and augmentations.
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <type_traits>
-#include "game/item_table.h"
 
+#include "game/item_table.h"
 #include "game/mob_table.h"
 
 namespace giga::game {
 
-// Both caps are the reference's `RPG_LEVEL_CAP` / `RPG_ATTRIBUTE_CAP` = 255.
-//
-// 255 and not 256 is load-bearing: level and each attribute are stored in a
-// std::uint8_t, so the cap is exactly the storage maximum and a clamp at the cap
-// cannot be confused with a wrap to 0. `NpcPool::level()` is already u8.
 inline constexpr std::uint8_t kRpgLevelCap = 255;
 inline constexpr std::uint8_t kRpgAttributeCap = 255;
 
-// The three attributes, and WHICH SLOT each occupies in the pool's generic 8-slot
-// `attrs()` block ([npc_pool.h]).
-//
-// That block is documented as deliberately unnamed — "attribute names are not
-// finalized". They are finalized now, by the reference: str/agi/int and nothing
-// else. Naming the first three slots rather than adding three new pool columns
-// keeps the 2^20-record footprint unchanged (the slots are already allocated and
-// already seeded 3..15 by `seed_floor_from_spec`), and leaves slots 3..7 free.
-enum class Attr : std::uint8_t { Str = 0, Agi, Int, Count };
+// The five core attributes.
+enum class Attr : std::uint8_t {
+    Str = 0,   // Strength: Melee damage, carry capacity, heavy weapon cooldown efficiency
+    Agi = 1,   // Agility: Move speed, attack speed/cooldown, ranged spread reduction, evasion
+    End = 2,   // Endurance: Max HP bonus, radiation/toxin resistance, stamina efficiency
+    Int = 3,   // Intellect: Max PSI, XP bonus, PSI cost reduction, duration, contract rewards
+    Per = 4,   // Perception: Critical strike chance, effective ranged accuracy, detection range
+    Count = 5
+};
 inline constexpr std::size_t kAttrCount = static_cast<std::size_t>(Attr::Count);
+
+// ---------------------------------------------------------------------------
+// Character Traits (Starting / Archetype Specializations with tradeoffs)
+// ---------------------------------------------------------------------------
+enum class TraitId : std::uint8_t {
+    None = 0,
+    HeavyHanded,      // +20% melee damage, -10% attack speed
+    FastMetabolism,   // +30% heal rate, +25% rad sensitivity & hunger drain
+    Gifted,           // +1 all attributes, -10% XP gain rate
+    TunnelVision,     // +15% accuracy, -15% peripheral detection
+    ConcreteBlood,    // +20 max HP, -5% move speed
+    PsionicAttuned,   // +30 max PSI, -10% kinetic damage resist
+    PackMule,         // +16 kg carry capacity, -5% agility speed
+    ChemResistant,    // 50% drug duration/addiction, 50% medicine effectiveness
+    NightOwl,         // +10% speed/perception in darkness, -10% in bright light
+    Hoarder,          // +10% scrap/loot value, +10% equipment wear
+    Count
+};
+inline constexpr std::size_t kTraitCount = static_cast<std::size_t>(TraitId::Count);
+
+struct TraitDef {
+    TraitId id = TraitId::None;
+    const char* name = "";
+    const char* nameRu = "";
+    const char* desc = "";
+    std::int16_t hpBonus = 0;
+    std::int16_t psiBonus = 0;
+    std::int32_t carryBonusG = 0;
+    std::int16_t meleeMultE3 = 1000;
+    std::int16_t attackSpeedMultE3 = 1000;
+    std::int16_t moveSpeedMultE3 = 1000;
+    std::int16_t xpMultE3 = 1000;
+    std::int16_t radSensitivityE3 = 1000;
+    std::int16_t accuracyMultE3 = 1000;
+    std::int16_t healMultE3 = 1000;
+    std::int16_t kineticResistPct = 0;
+    std::int8_t attrBonus = 0;
+};
+
+// ---------------------------------------------------------------------------
+// Perks (Level-up Progression with Attribute/Level Prerequisites)
+// ---------------------------------------------------------------------------
+enum class PerkId : std::uint8_t {
+    None = 0,
+    IronGrip,             // Str 6, Lvl 2: Heavy weapon CD penalty removed, +10% melee dmg
+    Sprinter,             // Agi 6, Lvl 2: +10% move speed, reduced stamina cost
+    LeadBelly,            // End 5, Lvl 2: Immune to contaminated food/water radiation
+    Educated,             // Int 6, Lvl 2: +15% XP and document reward, +1 extra skill point/3 lvls
+    EagleEye,             // Per 6, Lvl 2: +10% ranged crit, +5m detection range
+    Gunslinger,           // Agi 7, Per 5, Lvl 4: -25% reload time, -15% weapon spread
+    Toughness,            // End 6, Lvl 4: +25 Max HP, +5% damage reduction to all channels
+    Pyromaniac,           // Int 5, Lvl 4: +25% Fire damage dealt, fire resistance
+    SilentStep,           // Agi 7, Lvl 4: Footstep noise -50%, detection delay +30%
+    CyberneticAffinity,   // Int 7, End 5, Lvl 6: Implant rejection 0%, implant degradation -50%
+    PsiOverload,          // Int 8, Lvl 6: Critical hits discharge psionic shock wave
+    SamosborSurvivor,     // End 8, Lvl 8: 50% damage reduction from Samosbor fog/psi pressure
+    Count
+};
+inline constexpr std::size_t kPerkCount = static_cast<std::size_t>(PerkId::Count);
+
+struct PerkDef {
+    PerkId id = PerkId::None;
+    const char* name = "";
+    const char* nameRu = "";
+    const char* desc = "";
+    std::uint8_t minLevel = 1;
+    std::uint8_t minAttr[kAttrCount] = {0, 0, 0, 0, 0};
+    PerkId requiredPerk = PerkId::None;
+};
+
+// ---------------------------------------------------------------------------
+// Bio-Mutations (Radiation-Induced Genetic Alterations)
+// ---------------------------------------------------------------------------
+enum class BioMutationId : std::uint8_t {
+    None = 0,
+    ChitinousPlates,      // +25% kinetic/buckshot resist, +20 Max HP, BUT -20% Agi speed, suit weight +50%
+    HypertrophiedMuscles, // +35% melee damage, +16 kg carry capacity, BUT -3 Intellect, +50% hunger drain
+    ThirdEye,             // +3 Perception, +35 Max PSI, monster wall detection, BUT -20% Fire resist, light sensitivity
+    AcidicBlood,          // Melee attackers take 15 acid damage, BUT bleeding 2x, medicine heal -30%
+    GillsOfGigahrush,     // Toxic gas / SporeHaze immunity, water drain -30%, BUT takes 1.5x fire dmg, -10 Max HP
+    SporeSymbiosis,       // Passive HP regen near fungus/slime, BUT Govnyak vulnerability, antibiotic immunity
+    BoneClaws,            // Unarmed damage +25 + bleeding, BUT delicate firearm handling penalty
+    AdrenalineGland,      // Low HP (<30%) grants +50% speed / +30% attack speed, BUT -20 Max PSI, +40% fatigue
+    Count
+};
+inline constexpr std::size_t kBioMutationCount = static_cast<std::size_t>(BioMutationId::Count);
+
+struct BioMutationDef {
+    BioMutationId id = BioMutationId::None;
+    const char* name = "";
+    const char* nameRu = "";
+    const char* buffDesc = "";
+    const char* penaltyDesc = "";
+    std::int16_t hpBonus = 0;
+    std::int16_t psiBonus = 0;
+    std::int32_t carryBonusG = 0;
+    std::int16_t meleeMultE3 = 1000;
+    std::int16_t moveSpeedMultE3 = 1000;
+    std::int16_t kineticResistPct = 0;
+    std::int16_t fireResistPct = 0;
+    std::int16_t acidResistPct = 0;
+    std::int16_t gasResistPct = 0;
+};
+
+// ---------------------------------------------------------------------------
+// Cybernetic / Mechanical Augmentations (Implants & Durability)
+// ---------------------------------------------------------------------------
+enum class ImplantSlot : std::uint8_t {
+    Cranial = 0,    // Neural co-processor / PSI relay
+    Ocular,         // Bionic thermal/optical HUD
+    Thoracic,       // Heart/lung cardio filter pump
+    ArmLeft,        // Left arm hydraulic servo
+    ArmRight,       // Right arm recoil stabilizer
+    LegLeft,        // Left leg pneumatic actuator
+    LegRight,       // Right leg pneumatic actuator
+    Subdermal,      // Subdermal armor mesh
+    Count
+};
+inline constexpr std::size_t kImplantSlotCount = static_cast<std::size_t>(ImplantSlot::Count);
+
+enum class ImplantId : std::uint8_t {
+    None = 0,
+    NeuralCoProcessor,       // +4 Intellect, -20% PSI cost, +15% XP
+    BionicEyeThermal,        // +3 Perception, monster outline, +15% ranged crit
+    CardioFilterPump,        // +3 Endurance, +40% toxic/gas resist, -30% stamina drain
+    HydraulicArmServo,       // +4 Strength, +35% melee dmg, -30% recoil
+    PneumaticLegActuators,   // +20% move speed, +50% jump height, -50% fall damage
+    SubdermalArmorPlating,   // +15% all damage mitigation, +25 Max HP
+    PsiEmitterRelay,         // +40 Max PSI, enables active psionic wave
+    DermalInsulator,         // +25% Energy & Fire resistance, shock protection
+    Count
+};
+inline constexpr std::size_t kImplantCount = static_cast<std::size_t>(ImplantId::Count);
+
+struct ImplantDef {
+    ImplantId id = ImplantId::None;
+    ImplantSlot slot = ImplantSlot::Cranial;
+    const char* name = "";
+    const char* nameRu = "";
+    const char* desc = "";
+    std::uint16_t maxDurability = 1000; // x10 scale (1000 = 100.0%)
+    std::int8_t attrBonus[kAttrCount] = {0, 0, 0, 0, 0};
+    std::int16_t hpBonus = 0;
+    std::int16_t psiBonus = 0;
+    std::int16_t meleeMultE3 = 1000;
+    std::int16_t moveMultE3 = 1000;
+    std::int16_t damageMitigatePct = 0;
+    std::int16_t gasResistPct = 0;
+    std::int16_t fireResistPct = 0;
+    std::int16_t energyResistPct = 0;
+};
 
 // ---------------------------------------------------------------------------
 // The XP curve
 // ---------------------------------------------------------------------------
-// Cost to advance FROM level-1 TO `level`: 75 + 25*rank + 10*rank*(rank-1), where
-// rank = level-1. The reference pins three worked values in its own comment, and
-// they are the tests: xpForLevel(2) = 100, (5) = 295, (10) = 1020.
-//
-// Returns 0 for level <= 1 (there is no cost to be level 1). u32 is sufficient and
-// checked: at the cap, rank = 254 gives 75 + 6350 + 10*254*253 = 649,045.
 std::uint32_t xp_for_level(std::uint8_t level);
-
-// Cumulative XP to reach `level` from scratch — the reference's `totalXpForLevel`,
-// which sums `xpForLevel(1..level)`. u64 because the sum to the cap is ~54.9M; it
-// fits u32, but the running sum is clearer unbounded and this is not a hot path.
 std::uint64_t total_xp_for_level(std::uint8_t level);
-
 std::uint8_t clamp_rpg_level(int level);
 std::uint8_t clamp_rpg_attribute(int points);
 
 // ---------------------------------------------------------------------------
-// Live per-character state
+// Live per-character state (Tight POD)
 // ---------------------------------------------------------------------------
-// POD, 12 bytes. This is the reference's `RPGStats` minus the two fields that are
-// derived rather than stored: `maxPsi` (always `max_psi(*this)`) and `maxHp`
-// (always `max_hp(*this)`). The reference stores maxPsi AND recomputes it at four
-// separate sites, which is the same class of defect [combat.h] documents for
-// damage — a cached value that can disagree with its own formula. Here there is
-// nowhere for it to drift.
-//
-// `psi` IS stored, because it is a spendable resource, not a derived stat.
 struct RpgStats {
     std::uint32_t xp = 0;          // 0  toward the NEXT level, not cumulative
     std::uint16_t psi = 100;       // 4  current; max is derived
     std::uint8_t level = 1;        // 6
-    std::uint8_t attrPoints = 0;   // 7  unspent
-    std::uint8_t attr[kAttrCount] = {0, 0, 0};  // 8  str, agi, int
-    std::uint8_t pad_ = 0;         // 11
+    std::uint8_t attrPoints = 0;   // 7  unspent attribute points
+    std::uint8_t attr[kAttrCount] = {0, 0, 0, 0, 0}; // 8..12: Str, Agi, End, Int, Per
+    std::uint8_t perkPoints = 0;   // 13 unspent perk points
+    std::uint16_t radDose = 0;     // 14 accumulated radiation exposure (mSv)
+    std::uint32_t traitMask = 0;   // 16 active TraitId bitset
+    std::uint32_t perkMask = 0;    // 20 active PerkId bitset
+    std::uint32_t mutationMask = 0;// 24 active BioMutationId bitset
+    std::uint8_t implantId[kImplantSlotCount] = {}; // 28 installed ImplantId per slot
+    std::uint16_t implantDurability[kImplantSlotCount] = {}; // 36 durability per slot (0..1000)
+    std::uint8_t pad_ = 0;         // 52
 };
-static_assert(sizeof(RpgStats) == 12, "RpgStats must stay a tight POD");
 static_assert(std::is_trivially_copyable_v<RpgStats>);
 
 // ---------------------------------------------------------------------------
-// CARRY CAPACITY — what STRENGTH is for, and the first thing in this file that
-// spends an attribute on something the player can feel.
+// RAW & EFFECTIVE ATTRIBUTES
 // ---------------------------------------------------------------------------
-// 64 kg base, +4 kg per point of Str. Both are powers of two in KILOGRAMS
-// (2^6 and 2^2), which is the owner's call and the house style ([jirnyak.md] §1:
-// prefer powers of two wherever a number is free to be one). The useful
-// consequence is that a capacity is always 64 + 4*str — even, and readable at a
-// glance as "how many rifles" rather than as an arbitrary budget.
-//
-// GRAMS, like every other mass in the tree ([item_table.h] massG, [prop_table.h],
-// [mob_table.h]) — a capacity and a load must be the same kind of number or the
-// comparison needs a conversion, and a conversion is where units go wrong.
-//
-// It reads STRENGTH and not Endurance deliberately: `Attr` is {Str, Agi, Int}
-// ([rpg.h] above) and the manifesto's eight-attribute sheet is not built. Hanging
-// this off Str is the honest wiring for the attributes that EXIST; the day
-// Endurance lands, this is the one line that moves.
+std::uint8_t raw_attr_of(const RpgStats& r, Attr a);
+std::uint8_t effective_attr_of(const RpgStats& r, Attr a);
+
+// ---------------------------------------------------------------------------
+// CARRY CAPACITY & BASE STATS
+// ---------------------------------------------------------------------------
 inline constexpr std::uint32_t kCarryBaseG = 64000;
 inline constexpr std::uint32_t kCarryPerStrG = 4000;
+inline constexpr std::uint32_t kCarryPerEndG = 2000;
 
-inline constexpr std::uint32_t carry_capacity_g(const RpgStats& r) {
-    return kCarryBaseG +
-           kCarryPerStrG * static_cast<std::uint32_t>(r.attr[static_cast<std::size_t>(Attr::Str)]);
-}
+std::uint32_t carry_capacity_g(const RpgStats& r);
 
-// Base + per-level linear growth, straight from the reference constants.
 inline constexpr std::uint16_t kBaseHp = 100;
 inline constexpr std::uint16_t kHpPerLevel = 1;
 inline constexpr std::uint16_t kBasePsi = 100;
 inline constexpr std::uint16_t kPsiPerLevel = 1;
 
-// Level component only, before the attribute multiplier.
 std::uint16_t level_hp(std::uint8_t level);
 std::uint16_t level_psi(std::uint8_t level);
-
-// Level base times the attribute multiplier, rounded. STR feeds HP at +1%/point,
-// INT feeds PSI at +1%/point.
 std::uint16_t max_hp(const RpgStats& r);
 std::uint16_t max_psi(const RpgStats& r);
 
-// A level-1 character with no points spent, at full PSI.
 RpgStats fresh_rpg(std::uint8_t level = 1);
-
-// An NPC/monster rolled to `level`: it has (level-1) points, distributed 34/33/33
-// across str/agi/int. Deterministic from `seed` via [core/rng.h]'s stateless
-// hashing — the reference calls a stateful `rng()` per point, which cannot be
-// replayed; same substitution `loot_table.cpp` documents.
 RpgStats random_rpg(std::uint8_t level, std::uint32_t seed);
 
 // ---------------------------------------------------------------------------
 // Derived stats — every multiplier x1000
 // ---------------------------------------------------------------------------
-// Three shapes, and which one a stat uses is the reference's choice, not ours:
-//
-//   LINEAR      1 + p*k          — grows without bound (HP, melee dmg, move speed)
-//   INVERSE     1 / (1 + p*k)    — approaches 0, never reaches it (cooldowns,
-//                                  spread, wear, psi cost). This is what keeps AGI
-//                                  from ever giving a zero-cooldown attack.
-//   ASYMPTOTIC  1 + A*(1-e^(-pk/A)) — saturates at a hard ceiling A (xp, contract
-//                                  and document rewards). INT's xp bonus can never
-//                                  exceed +100% no matter how many points go in.
 std::uint16_t str_melee_dmg_mult_e3(const RpgStats& r);
 std::uint16_t str_durability_wear_mult_e3(const RpgStats& r);
-std::uint16_t agi_move_speed_mult_e3(const RpgStats& r);
-std::uint16_t agi_attack_speed_mult_e3(const RpgStats& r);   // <1000 = faster
+bool rpg_adrenaline_active(const RpgStats& r, std::int16_t hp, std::int16_t maxHp);
+std::uint16_t agi_move_speed_mult_e3(const RpgStats& r, std::int16_t hp = -1, std::int16_t maxHp = -1);
+std::uint16_t agi_attack_speed_mult_e3(const RpgStats& r, std::int16_t hp = -1, std::int16_t maxHp = -1);   // <1000 = faster
 std::uint16_t agi_ranged_spread_mult_e3(const RpgStats& r);  // <1000 = tighter
+std::uint16_t agi_dodge_chance_e3(const RpgStats& r);
+
+std::uint16_t end_max_hp_mult_e3(const RpgStats& r);
+std::uint16_t end_radiation_resist_e3(const RpgStats& r);
+std::uint16_t end_stamina_drain_mult_e3(const RpgStats& r);
+
 std::uint16_t int_xp_mult_e3(const RpgStats& r);
 std::uint16_t int_psi_cost_mult_e3(const RpgStats& r);
 std::uint16_t int_contract_reward_mult_e3(const RpgStats& r);
 std::uint16_t int_document_reward_mult_e3(const RpgStats& r);
-
-// Flat seconds added to a PSI effect's duration, +1 s per INT point.
+std::uint16_t int_hack_success_mult_e3(const RpgStats& r);
 std::uint16_t int_psi_duration_bonus_sec(const RpgStats& r);
 
-// A heavy weapon (base cooldown >= 0.65 s) is sped up by STR; a light one is not.
-// The threshold is the reference's `HEAVY_WEAPON_COOLDOWN` and the gate is why STR
-// is not simply a universal attack-speed stat.
+std::uint16_t per_crit_chance_e3(const RpgStats& r);
+float per_detection_range_m(const RpgStats& r);
+std::uint16_t per_ranged_accuracy_mult_e3(const RpgStats& r);
+
 inline constexpr std::uint16_t kHeavyWeaponCooldownMs = 650;
 std::uint16_t str_heavy_weapon_speed_mult_e3(const RpgStats& r,
                                             std::uint16_t baseCooldownMs);
 
-// Melee damage for a swing, rounded. Matches the reference's two-branch
-// `meleeBaseDamage`: WITH a weapon, damage is `weaponDamage + (level-1)`; BARE
-// HANDED it is `max(1, level)` and the weapon number is ignored entirely. Then the
-// STR multiplier applies to whichever. `weaponId == 0` means bare hands, the same
-// sentinel [item_table.h] uses.
 std::int16_t melee_damage(const RpgStats& r, ItemId weaponId,
                           std::int16_t weaponDamage);
 
-// PSI cost after INT efficiency, floored at 1. The reference rounds to one decimal
-// place; costs here are integers, so this rounds to the nearest whole point.
 std::uint16_t adjusted_psi_cost(std::uint16_t baseCost, const RpgStats& r);
 
+// Total damage resistance for channel from traits, perks, mutations, and functioning implants
+std::int16_t rpg_damage_resistance_pct(const RpgStats& r, std::uint8_t damageChannel);
+std::uint16_t rpg_heal_mult_e3(const RpgStats& r);
+std::uint16_t rpg_water_drain_mult_e3(const RpgStats& r);
+
 // ---------------------------------------------------------------------------
-// XP sources
+// Traits & Perks API
 // ---------------------------------------------------------------------------
-// Every kill/quest XP number in the game comes from one of these three, so the INT
-// bonus is applied in exactly one place (`award_xp`) and cannot be double-counted.
-//
-// Per-kind base XP times the monster's own level: base * (1 + 0.22*(L-1)). The
-// reference authors 36 of the 69 kinds explicitly and defaults the rest to 10.
+const TraitDef& trait_def(TraitId id);
+bool has_trait(const RpgStats& r, TraitId id);
+bool add_trait(RpgStats& r, TraitId id);
+bool remove_trait(RpgStats& r, TraitId id);
+
+const PerkDef& perk_def(PerkId id);
+bool perk_prerequisites_met(const RpgStats& r, PerkId id);
+bool has_perk(const RpgStats& r, PerkId id);
+bool unlock_perk(RpgStats& r, PerkId id);
+
+// ---------------------------------------------------------------------------
+// Bio-Mutation API
+// ---------------------------------------------------------------------------
+const BioMutationDef& bio_mutation_def(BioMutationId id);
+bool has_mutation(const RpgStats& r, BioMutationId id);
+bool apply_mutation(RpgStats& r, BioMutationId id,
+                    std::int16_t* hp = nullptr, std::int16_t* maxHp = nullptr);
+bool remove_mutation(RpgStats& r, BioMutationId id,
+                     std::int16_t* hp = nullptr, std::int16_t* maxHp = nullptr);
+BioMutationId roll_random_mutation(const RpgStats& r, std::uint32_t seed);
+void add_radiation_dose(RpgStats& r, std::uint16_t mSv, std::uint32_t seed = 0,
+                        std::int16_t* hp = nullptr, std::int16_t* maxHp = nullptr);
+
+// ---------------------------------------------------------------------------
+// Augmentation / Cybernetic Implant API
+// ---------------------------------------------------------------------------
+const ImplantDef& implant_def(ImplantId id);
+bool implant_is_functioning(const RpgStats& r, ImplantSlot slot);
+bool implant_install(RpgStats& r, ImplantSlot slot, ImplantId id,
+                     std::int16_t* hp = nullptr, std::int16_t* maxHp = nullptr);
+bool implant_uninstall(RpgStats& r, ImplantSlot slot,
+                       std::int16_t* hp = nullptr, std::int16_t* maxHp = nullptr);
+bool implant_repair(RpgStats& r, ImplantSlot slot, std::uint16_t repairPoints);
+void implant_degrade_step(RpgStats& r, float dtSec);
+void implant_take_damage(RpgStats& r, std::int16_t dmg, std::uint8_t damageChannel);
+
+// ---------------------------------------------------------------------------
+// XP Sources & Progression
+// ---------------------------------------------------------------------------
 std::uint32_t xp_for_monster_kill(MobKind kind, std::uint8_t monsterLevel);
 std::uint32_t xp_for_npc_kill(std::uint8_t npcLevel);
-std::uint32_t xp_for_quest(std::uint16_t difficultyE1);  // difficulty x10
+std::uint32_t xp_for_quest(std::uint16_t difficultyE1);
 
-// What one `award_xp` call did. Returned rather than pushed to a message log,
-// because `giga_game` has no HUD — the caller turns this into a feed line.
 struct XpAward {
-    std::uint32_t granted = 0;      // after the INT multiplier
+    std::uint32_t granted = 0;      // after INT & trait multipliers
     std::uint8_t levelsGained = 0;
     std::uint8_t newLevel = 1;
     bool atCap = false;
 };
 
-// Award XP, applying the INT bonus, and level up as many times as the total
-// allows. Each level grants +1 attribute point and refills PSI to the new max.
-//
-// `hp`/`maxHp` are optional and updated in step: a level-up raises max HP via the
-// STR curve, and the reference adds the DIFFERENCE to current HP rather than
-// refilling — so levelling heals you by exactly what it added, never fully. Pass
-// nullptr for a character whose HP lives elsewhere ([combat.h] documents that split).
-//
-// At the cap, XP is zeroed rather than accumulated: a capped character's xp bar is
-// meaningless and a growing number would eventually overflow.
 XpAward award_xp(RpgStats& r, std::uint32_t amount,
                  std::int16_t* hp = nullptr, std::int16_t* maxHp = nullptr);
 
-// Spend one unspent point on `a`. Returns false with nothing changed if there are
-// no points, or the attribute is already at cap.
-//
-// STR and INT immediately re-derive max HP / max PSI and credit the gain to the
-// current value, matching `award_xp`'s difference rule.
 bool spend_attr_point(RpgStats& r, Attr a,
                       std::int16_t* hp = nullptr, std::int16_t* maxHp = nullptr);
 

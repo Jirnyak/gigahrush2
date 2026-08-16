@@ -36,10 +36,12 @@
 #include "game/elevator.h"       // giga::game::RideResult, ride_elevator
 #include "game/floor_registry.h" // giga::game::FloorRegistry, ModuleId
 #include "game/floor_spec.h"     // giga::game::FloorKind
+#include "game/nav_cache.h"      // giga::game::MultiFloorNavCache
 #include "game/npc_pool.h"       // giga::game::NpcPool, NpcId
 #include "world/level_stack.h"   // giga::LevelStack, LayerId
-#include "world/nav.h"           // giga::nav::CoarseGraph, FineNav
+#include "world/nav.h"           // giga::nav::CoarseGraph, FineNav, VerticalWaypointLink
 #include "game/antourage/antourage.h" // AntourageBake — per-floor baked dressing
+
 
 namespace giga::game {
 
@@ -292,6 +294,26 @@ public:
     const AntourageBake* antourage_at_layer(const FloorRegistry& reg,
                                             LayerId layer) const;
 
+    // Multi-floor navigation cache accessors.
+    const MultiFloorNavCache& multi_floor_cache() const { return multiFloorNavCache_; }
+    MultiFloorNavCache& multi_floor_cache() { return multiFloorNavCache_; }
+
+    // Vertical transit links across registered and active floors.
+    const std::vector<nav::VerticalWaypointLink>& vertical_links() const { return verticalLinks_; }
+    std::vector<nav::VerticalWaypointLink> vertical_links_for_floor(int floorNumber) const;
+    void refresh_vertical_links(const FloorRegistry& reg);
+
+    // Multi-floor cross-boundary routing query: resolves next step toward target on another floor.
+    nav::MultiFloorPathStep query_entity_route(const FloorRegistry& reg, int fromFloor,
+                                               ivec3 fromCell, int toFloor, ivec3 toCell) const;
+
+    // Seamless streaming re-embodiment when entities travel between active and cached floors.
+    RideResult reembody_entity_transit(LevelStack& stack, FloorRegistry& reg,
+                                       Registry& ecs, NpcPool& pool, Entity entity,
+                                       int fromFloor, int toFloor,
+                                       std::uint8_t arrivalCoord, NpcId& playerId,
+                                       int landHub = -1);
+
     int keep_radius() const { return keepRadius_; }
 
 private:
@@ -323,6 +345,9 @@ private:
     std::string navCacheDir_; // empty = on-disk nav cache disabled
     bool navBake_ = false;    // see set_nav_bake: OFF for the app, on for tests
     std::function<bool(World&, int)> restore_;  // see set_floor_restore
+    MultiFloorNavCache multiFloorNavCache_;
+    std::vector<nav::VerticalWaypointLink> verticalLinks_;
 };
 
 } // namespace giga::game
+

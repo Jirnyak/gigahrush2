@@ -145,6 +145,8 @@ SaveState busy_run() {
     st.player.cx = 40;
     st.player.cy = 91;
     st.player.cz = 1;
+    st.player.yaw = 1.234f;
+    st.player.pitch = -0.456f;
 
     // Version 7 / SAVRPG: a non-default sheet and a mutated craft bank so a
     // dropped field cannot hide behind fresh_rpg(1) / craft_init defaults.
@@ -217,6 +219,22 @@ SaveState busy_run() {
     st.fastTravel.unlock(-50);
     st.fastTravel.unlock(kMinFloor);
     st.fastTravel.unlock(kMaxFloor);
+
+    // Version 15: BankAccount and PowerGridState
+    st.bank.deposit = 123'456LL;
+    st.bank.loanPrincipal = 50'000LL;
+    st.bank.loanAccrued = 1'200LL;
+    st.bank.interestEarned = 3'400LL;
+    st.bank.interestPaid = 800LL;
+    st.bank.lastInterestTick = 75'000ULL;
+    st.bank.creditLimit = 60'000;
+    st.bank.entries = 5u;
+    st.bank.band = 2u;
+    st.bank.ledger[0] = BankEntry{1000, 15000, static_cast<std::uint8_t>(BankOp::Deposit), 2, {0, 0}};
+    st.bank.ledger[1] = BankEntry{500, 30000, static_cast<std::uint8_t>(BankOp::TakeLoan), 2, {0, 0}};
+
+    st.powerGrid.destroy_shield(10, 20, 3);
+    st.powerGrid.destroy_shield(40, 50, 6);
     return st;
 }
 
@@ -259,6 +277,8 @@ void same_run(const SaveState& a, const SaveState& b) {
     CHECK(a.player.cx == b.player.cx);
     CHECK(a.player.cy == b.player.cy);
     CHECK(a.player.cz == b.player.cz);
+    CHECK(a.player.yaw == b.player.yaw);
+    CHECK(a.player.pitch == b.player.pitch);
 
     // Version 7 / SAVRPG: sheet + craft bank.
     CHECK(a.rpg.xp == b.rpg.xp);
@@ -322,22 +342,34 @@ void same_run(const SaveState& a, const SaveState& b) {
             CHECK(a.fastTravel.unlocked(f) == b.fastTravel.unlocked(f));
             break;   // one report, not 255
         }
+
+    // Version 15: BankAccount
+    CHECK(a.bank.deposit == b.bank.deposit);
+    CHECK(a.bank.loanPrincipal == b.bank.loanPrincipal);
+    CHECK(a.bank.loanAccrued == b.bank.loanAccrued);
+    CHECK(a.bank.interestEarned == b.bank.interestEarned);
+    CHECK(a.bank.interestPaid == b.bank.interestPaid);
+    CHECK(a.bank.lastInterestTick == b.bank.lastInterestTick);
+    CHECK(a.bank.creditLimit == b.bank.creditLimit);
+    CHECK(a.bank.entries == b.bank.entries);
+    CHECK(a.bank.band == b.bank.band);
+    for (std::size_t i = 0; i < kBankLedgerSlots; ++i) {
+        CHECK(a.bank.ledger[i].amount == b.bank.ledger[i].amount);
+        CHECK(a.bank.ledger[i].tick == b.bank.ledger[i].tick);
+        CHECK(a.bank.ledger[i].op == b.bank.ledger[i].op);
+        CHECK(a.bank.ledger[i].band == b.bank.ledger[i].band);
+    }
+
+    // Version 15: PowerGridState
+    CHECK(a.powerGrid.count == b.powerGrid.count);
+    for (std::size_t i = 0; i < kMaxDestroyedShields; ++i) {
+        CHECK(a.powerGrid.destroyedShieldKeys[i] == b.powerGrid.destroyedShieldKeys[i]);
+    }
 }
 
 void wire_layout() {
     // The format's footprint is arithmetic, not a measurement — a save whose length
     // depends on the compiler is a save that cannot cross hosts.
-    // Derived from the serializers, not measured from a run: 33 ledger + 79 book
-    // (3 x 21 + 16) + 304 player (33 needs + 256 inventory + 12 + 3) + 12 rpg +
-    // 89 craft + 21 combat (hasRanged+ranged+kills) + 42 status + 17 samosbor +
-    // 32 fast-travel + 294 quest log, plus the fixed 36-byte faction matrix and the
-    // 64-byte header.
-    //
-    // The three numbers this comment used to carry — "= 892", "308 quest log", and
-    // the "992" downstream — were WRONG and had been since v9: the asserts below said
-    // 878 and 978, and asserts are what the build checks. Corrected 2026-08-12 rather
-    // than carried forward, because a comment that disagrees with the assert beside it
-    // teaches the next reader to trust the wrong one.
     static_assert(kSaveHeaderWire == 64);
     static_assert(kRpgWire == 12);
     static_assert(kCraftingWire == 89);
@@ -346,11 +378,13 @@ void wire_layout() {
     static_assert(kStatusWire == 42);
     static_assert(kSamosborWire == 17);
     static_assert(kFastTravelWire == 32);
-    static_assert(kSaveFixedWire == 995);
+    static_assert(kBankWire == 352);
+    static_assert(kPowerGridWire == 1028);
+    static_assert(kSaveFixedWire == 2383);
     static_assert(kFactionWire == 36);
-    static_assert(save_bytes_for(0) == 1095);
-    static_assert(save_bytes_for(3) == 1095 + 15);
-    static_assert(save_bytes_for(3, 100, 50) == 1095 + 15 + 150);
+    static_assert(save_bytes_for(0) == 2483);
+    static_assert(save_bytes_for(3) == 2483 + 15);
+    static_assert(save_bytes_for(3, 100, 50) == 2483 + 15 + 150);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -360,13 +394,8 @@ void wire_layout() {
     const SaveState st = busy_run();
     save_write(st, bytes);
     CHECK(bytes.size() == save_bytes_for(3));
-    // 1042 B for a full run with three emptied crates and no macro blobs (those are
-    // variable-size and pinned by macro_world_round_trips). GEOMETRY lives in the
-    // per-floor files ([save.h] modular layout), never here. v8 was 965; the
-    // legacy-content purge re-measured this from 1007; v9 was 993; v10 adds the
-    // samosbor clock (17) and the fast-travel unlock set (32); v11 adds the crowd
-    // heal bank `hpBank` (+4); v12 drops one craft axis (-4); v13 inventory slot condition (+64); v14 Equipped (+4).
-    CHECK(bytes.size() == 1110);
+    // 2498 B for a full run with three emptied crates and no macro blobs.
+    CHECK(bytes.size() == 2498);
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');

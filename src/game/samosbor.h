@@ -89,6 +89,7 @@ namespace giga::game {
 struct DoorSet;
 class NpcPool;
 struct StatusSet;
+struct RoomZones;
 
 // ---------------------------------------------------------------------------
 // The depth curve — the four numbers everything else follows from
@@ -776,32 +777,58 @@ struct SamosborPressure {
 //     (`src/systems/samosbor.ts:4718,4721`). 4/155 is prose only.
 SamosborPressure samosbor_unsheltered_pressure(SamosborVariant variant);
 
+// ---------------------------------------------------------------------------
+// Atmospheric Hazard Dynamics, Stage Progression & Post-Processing
+// ---------------------------------------------------------------------------
+
+// Samosbor stage progression matching the full atmospheric storm lifecycle.
+// Idle -> Warning -> Active (onset) -> Peak (maximum crisis) -> Dissipation -> Aftermath
+enum class SamosborStage : std::uint8_t {
+    Idle = 0,
+    Warning,      // Siren / alarm sounds, barometric pressure begins dropping
+    Active,       // Fog onset, toxic gas diffusion, pressure depression accelerates
+    Peak,         // Vortex maximum: minimal pressure, peak ambient toxicity, heavy aberration & screen shake
+    Dissipation,  // Hazard receding, pressure recovering, toxicity clearing
+    Aftermath,    // Hazard cleared, residual haze settling, count incremented
+    Count
+};
+inline constexpr std::size_t kSamosborStageCount =
+    static_cast<std::size_t>(SamosborStage::Count);
+
+// Atmospheric post-processing and physical parameters for rendering and HUD.
+struct SamosborAtmosphere {
+    SamosborStage stage = SamosborStage::Idle;
+    float pressureKpa = 101.325f;     // Floor barometric pressure (101.3 kPa standard, drops down to ~30-60 kPa in Peak)
+    float toxicity01 = 0.0f;          // Ambient toxicity level [0.0, 1.0] (scaled by variant and depth)
+    float fogDensity = 0.0f;          // Volumetric fog density [0.0, 1.0]
+    float chromaticAberration = 0.003f;// Radial chromatic aberration for post-processing shader
+    float screenShake = 0.0f;         // Screen/camera shake amplitude (metres / radians)
+    float fogScale = 1.0f;            // Visual fog distance multiplier (1.0 normal, 0.34 in peak)
+};
+
+inline constexpr float kSamosborFogSqueeze = 0.34f;
+
+const char* samosbor_stage_name(SamosborStage s);
+SamosborStage samosbor_current_stage(const SamosborState& st);
+float samosbor_floor_pressure_drop(int floorZ, SamosborVariant variant, SamosborStage stage);
+float samosbor_ambient_toxicity(int floorZ, SamosborVariant variant, SamosborStage stage, float phase01 = 0.5f);
+SamosborAtmosphere samosbor_compute_atmosphere(const SamosborState& st, int floorZ, float timeSec = 0.0f);
+
+// Blast door hermetic seal check: hermetic sealing prevents toxic gas diffusion
+// into shelter rooms (distance <= 4 cells / dx²+dy²+dz² <= 16 to a shut/locked hermetic door).
+bool samosbor_is_sheltered(const vec3& pos, const DoorSet& doors,
+                           const MacroGrid* grid = nullptr,
+                           const RoomZones* rooms = nullptr);
+
 // Continuous Active-phase environmental pressure applied every sim tick.
-//
-// Called ONCE PER TICK while samosbor is active, immediately after
-// `samosbor_fog_tick` in `src/app/main.cpp`.
-//
-// CONTRACT: one-shot seal damage (`tr_.sealed`) is handled separately at the
-// call site and must NOT be moved here. This function is the CONTINUOUS drain
-// — the environmental cost of standing in fog — not the seal moment.
-//
-// SHELTER CHECK matches the call site in main.cpp §sealed: toroidal cell
-// distance to the nearest hermetic door (Shut or Locked, hp > 0) ≤ 4 cells
-// (i.e., dx²+dy²+dz² ≤ 16). Sheltered entities pay no cost.
-//
-// UNSHELTERED ENTITIES:
-//   * 0.5 HP/s drain accumulated into Needs::hpDebt, spilled whole via
-//     apply_damage(kAttritionChannel) — unmitigated by armour.
-//   * Variant-specific need drain:
-//       Meat     → water  -= 0.1 / s   (dehydration acceleration)
-//       Electric → sleep  -= 0.1 / s   (fatigue from ionised air)
-//       Veretar  → hpDebt += 0.3 / s   (direct corrosive dissolution)
-//
-// No allocation, no exceptions, O(embodied bodies on layer).
+// Unsealed entities take 0.5 HP/s base drain + variant need drains.
+// Sheltered entities in hermetically sealed rooms/sectors take zero damage.
 void samosbor_environmental_step(Registry& reg, NpcPool& pool,
                                   const DoorSet& doors, LayerId layer,
                                   const SamosborState& sam, float dt,
-                                  StatusSet* playerStatus = nullptr);
+                                  StatusSet* playerStatus = nullptr,
+                                  const MacroGrid* grid = nullptr,
+                                  const RoomZones* rooms = nullptr);
 
 // The seal moment as an offset before the end of the Active phase, including the
 // variant's shift. Clamped so a negative-delta variant cannot seal after the

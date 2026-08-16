@@ -3188,7 +3188,7 @@ static void test_player_shoots() {
                             1400u + static_cast<std::uint64_t>(i));
         CHECK(p.hp(id) < hp0);   // <<< his own bullet, and it knows nothing about him
         std::fprintf(stderr,
-                     "[selfshot] camera holder hit by his OWN bullet for %d — the "
+                     "[selfshot] camera holder hit by his OWN bullet for %d - the "
                      "last owner test is gone\n",
                      static_cast<int>(hp0 - p.hp(id)));
     }

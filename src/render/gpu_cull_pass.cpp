@@ -67,6 +67,13 @@ void GpuCullPass::destroy() noexcept {
     if (pipelineLayout_) { vkDestroyPipelineLayout(d, pipelineLayout_, nullptr); pipelineLayout_ = VK_NULL_HANDLE; }
     if (descPool_)       { vkDestroyDescriptorPool(d, descPool_, nullptr); descPool_ = VK_NULL_HANDLE; }
     if (descSetLayout_)  { vkDestroyDescriptorSetLayout(d, descSetLayout_, nullptr); descSetLayout_ = VK_NULL_HANDLE; }
+
+    for (int f = 0; f < kMaxFramesInFlight; ++f) {
+        descSets_[f].fill(VK_NULL_HANDLE);
+        setHead_[f] = 0;
+        lastFrameIndex_[f] = UINT32_MAX;
+    }
+    dev_ = nullptr;
 }
 
 bool GpuCullPass::create_descriptor_set_layout() noexcept {
@@ -90,26 +97,39 @@ bool GpuCullPass::create_descriptor_set_layout() noexcept {
 
     VK_TRY(vkCreateDescriptorSetLayout(d, &dslci, nullptr, &descSetLayout_));
 
+    constexpr uint32_t kTotalSets = kMaxCullSetsPerFrame * kMaxFramesInFlight;
+
     VkDescriptorPoolSize poolSize{};
     poolSize.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSize.descriptorCount = 64 * 3;
+    poolSize.descriptorCount = kTotalSets * 3;
 
     VkDescriptorPoolCreateInfo poolci{};
     poolci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolci.maxSets       = 64;
+    poolci.maxSets       = kTotalSets;
     poolci.poolSizeCount = 1;
     poolci.pPoolSizes    = &poolSize;
 
     VK_TRY(vkCreateDescriptorPool(d, &poolci, nullptr, &descPool_));
 
-    std::vector<VkDescriptorSetLayout> layouts(64, descSetLayout_);
+    std::vector<VkDescriptorSetLayout> layouts(kTotalSets, descSetLayout_);
+    std::vector<VkDescriptorSet> flatSets(kTotalSets, VK_NULL_HANDLE);
+
     VkDescriptorSetAllocateInfo alloci{};
     alloci.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     alloci.descriptorPool     = descPool_;
-    alloci.descriptorSetCount = 64;
+    alloci.descriptorSetCount = kTotalSets;
     alloci.pSetLayouts        = layouts.data();
 
-    VK_TRY(vkAllocateDescriptorSets(d, &alloci, descSets_.data()));
+    VK_TRY(vkAllocateDescriptorSets(d, &alloci, flatSets.data()));
+
+    for (int f = 0; f < kMaxFramesInFlight; ++f) {
+        for (uint32_t i = 0; i < kMaxCullSetsPerFrame; ++i) {
+            descSets_[f][i] = flatSets[f * kMaxCullSetsPerFrame + i];
+        }
+        setHead_[f] = 0;
+        lastFrameIndex_[f] = UINT32_MAX;
+    }
+
     return true;
 }
 
@@ -156,6 +176,7 @@ bool GpuCullPass::create_compute_pipeline(const char* shaderDir) noexcept {
 }
 
 void GpuCullPass::record_cull(VkCommandBuffer cmd,
+                              uint32_t frameIndex,
                               const mat4& viewProj,
                               const vec3& camPos,
                               float fogEnd,
@@ -175,21 +196,26 @@ void GpuCullPass::record_cull(VkCommandBuffer cmd,
     // 1. Reset instanceCount field (offset 4, 4 bytes) in the indirect command buffer to 0
     vkCmdFillBuffer(cmd, outIndirectBuf, offsetof(GpuDrawIndexedIndirectCommand, instanceCount), sizeof(uint32_t), 0);
 
-    // Barrier: Transfer write -> Compute shader read/write
+    // Barrier: Transfer write & Host write -> Compute shader read/write
     VkMemoryBarrier mb1{};
     mb1.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    mb1.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    mb1.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_HOST_WRITE_BIT;
     mb1.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
     vkCmdPipelineBarrier(cmd,
-                         VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_HOST_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          0, 1, &mb1, 0, nullptr, 0, nullptr);
 
-    // 2. Bind compute pipeline and update/bind descriptor set
+    // 2. Bind compute pipeline and update/bind descriptor set from frame's partitioned pool
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
 
-    VkDescriptorSet set = descSets_[setHead_ % descSets_.size()];
-    ++setHead_;
+    const uint32_t f = frameIndex % kMaxFramesInFlight;
+    if (lastFrameIndex_[f] != frameIndex) {
+        lastFrameIndex_[f] = frameIndex;
+        setHead_[f] = 0;
+    }
+    const uint32_t setIdx = (setHead_[f]++) % kMaxCullSetsPerFrame;
+    VkDescriptorSet set = descSets_[f][setIdx];
 
     VkDescriptorBufferInfo b0{srcInstanceBuf, 0, VK_WHOLE_SIZE};
     VkDescriptorBufferInfo b1{outCulledInstanceBuf, 0, VK_WHOLE_SIZE};
@@ -238,13 +264,9 @@ void GpuCullPass::record_cull(VkCommandBuffer cmd,
                          0, 1, &mb2, 0, nullptr, 0, nullptr);
 }
 
-void GpuCullPass::get_shape_aabb(PropShape shape, vec3& outMin, vec3& outMax) noexcept {
-    switch (shape) {
-    default:
-        outMin = {-1.00f, -1.00f, -1.00f};
-        outMax = { 1.00f,  2.00f,  1.00f};
-        break;
-    }
+void GpuCullPass::get_shape_aabb([[maybe_unused]] PropShape shape, vec3& outMin, vec3& outMax) noexcept {
+    outMin = {-1.00f, -1.00f, -1.00f};
+    outMax = { 1.00f,  2.00f,  1.00f};
 }
 
 } // namespace giga::gpu

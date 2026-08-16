@@ -85,9 +85,11 @@
 // transform would be absurd.
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "game/floor_spec.h" // giga::game::FloorKind
@@ -375,6 +377,70 @@ NavCacheSweep nav_cache_evict(const std::string& dir,
                               const NavCachePolicy& policy = NavCachePolicy{},
                               const NavCacheKey* keep = nullptr);
 
+// --- Multi-Floor Navigation Caching ----------------------------------------
+
+// Structure representing a cached coarse navigation entry for multi-floor queries.
+struct MultiFloorCoarseEntry {
+    NavCacheKey key;
+    nav::CoarseGraph coarse{};
+    bool loaded = false;
+};
+
+// Batch loads coarse graphs for multiple floors across the level stack directly
+// from disk cache, skipping the 128 MiB fine flow fields. This allows instantaneous
+// multi-floor path planning across floor boundaries with only ~13 KB RAM per floor.
+bool load_multi_floor_coarse_cache(const std::string& dir,
+                                   const std::vector<NavCacheKey>& floorKeys,
+                                   std::vector<nav::CoarseGraph>& outCoarse,
+                                   std::vector<bool>& outLoaded);
+
+// Multi-floor navigation cache manager that maintains lightweight coarse graphs
+// for multi-floor cross-boundary path planning across all registered floors.
+class MultiFloorNavCache {
+public:
+    MultiFloorNavCache() = default;
+    explicit MultiFloorNavCache(std::string dir) : dir_(std::move(dir)) {}
+    ~MultiFloorNavCache();
+    MultiFloorNavCache(const MultiFloorNavCache&) = delete;
+    MultiFloorNavCache& operator=(const MultiFloorNavCache&) = delete;
+    MultiFloorNavCache(MultiFloorNavCache&& other) noexcept;
+    MultiFloorNavCache& operator=(MultiFloorNavCache&& other) noexcept;
+
+    void set_cache_dir(const std::string& dir) { dir_ = dir; }
+    const std::string& cache_dir() const { return dir_; }
+
+    // Load or retrieve coarse graph for a given key.
+    bool ensure_coarse(const NavCacheKey& key, nav::CoarseGraph& outCoarse);
+
+    // Batch load coarse graphs for all given keys synchronously.
+    std::size_t load_stack(const std::vector<NavCacheKey>& keys);
+
+    // Asynchronous background preloading for stack coarse graphs.
+    void start_async_load_stack(const std::vector<NavCacheKey>& keys);
+    bool poll_async_load();
+    bool async_loading() const { return asyncLoading_; }
+    void cancel_async_load();
+
+    bool has_coarse(int floorNumber) const;
+    const nav::CoarseGraph* coarse_for(int floorNumber) const;
+    void store_coarse(int floorNumber, const nav::CoarseGraph& coarse);
+    void clear();
+
+    std::size_t cached_count() const { return entries_.size(); }
+    const std::vector<MultiFloorCoarseEntry>& entries() const { return entries_; }
+
+private:
+    void join_worker();
+
+    std::string dir_;
+    std::vector<MultiFloorCoarseEntry> entries_;
+
+    std::thread asyncWorker_;
+    std::atomic<bool> asyncLoading_{false};
+    std::atomic<bool> asyncDone_{false};
+    std::vector<MultiFloorCoarseEntry> asyncResults_;
+};
+
 // -- WHAT THE INTEGRITY CHECK DOES AND DOES NOT COVER, stated rather than implied ------
 //
 // The coarse section carries a CRC-32. The two fine sections do NOT, and that is a
@@ -389,3 +455,4 @@ NavCacheSweep nav_cache_evict(const std::string& dir,
 // that trade ever stops being acceptable, the fix is a table-driven CRC in a shared core
 // header, not a bit-serial one here.
 } // namespace giga::game
+

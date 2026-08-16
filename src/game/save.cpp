@@ -277,6 +277,8 @@ void visit_player(Ar& ar, P& p) {
     ar.u8(p.cx);
     ar.u8(p.cy);
     ar.u8(p.cz);
+    ar.f32(p.yaw);
+    ar.f32(p.pitch);
 }
 
 // Version 7: RpgStats field-by-field. pad_ is written so the wire is exactly
@@ -327,6 +329,44 @@ void visit_samosbor(Ar& ar, S& s) {
     ar.u8(s.phase);
     ar.u8(s.variant);
     ar.b8(s.sealed);
+}
+
+// Version 15: BankEntry field-by-field (12 B).
+template <class Ar, class E>
+void visit_bank_entry(Ar& ar, E& e) {
+    ar.i32(e.amount);
+    ar.u32(e.tick);
+    ar.u8(e.op);
+    ar.u8(e.band);
+    ar.u8(e.pad_[0]);
+    ar.u8(e.pad_[1]);
+}
+
+// Version 15: BankAccount field-by-field (352 B).
+template <class Ar, class B>
+void visit_bank(Ar& ar, B& b) {
+    ar.i64(b.deposit);
+    ar.i64(b.loanPrincipal);
+    ar.i64(b.loanAccrued);
+    ar.i64(b.interestEarned);
+    ar.i64(b.interestPaid);
+    ar.u64(b.lastInterestTick);
+    ar.i32(b.creditLimit);
+    ar.u32(b.entries);
+    for (std::size_t i = 0; i < kBankLedgerSlots; ++i) {
+        visit_bank_entry(ar, b.ledger[i]);
+    }
+    ar.u8(b.band);
+    for (std::size_t i = 0; i < 7; ++i) ar.u8(b.pad_[i]);
+}
+
+// Version 15: PowerGridState field-by-field (1028 B).
+template <class Ar, class G>
+void visit_power_grid(Ar& ar, G& g) {
+    ar.u32(g.count);
+    for (std::size_t i = 0; i < kMaxDestroyedShields; ++i) {
+        ar.u64(g.destroyedShieldKeys[i]);
+    }
 }
 
 template <class Ar, class K>
@@ -425,14 +465,16 @@ static_assert(kCombatSaveWire == 21);
 static_assert(kStatusWire == 42);
 static_assert(kSamosborWire == 17);
 static_assert(kFastTravelWire == 32);
+static_assert(kBankWire == 352);
+static_assert(kPowerGridWire == 1028);
 // The wire size and the runtime footprint of the unlock set must not drift apart:
 // widening kFloorSlots changes the struct and would silently change the format.
 static_assert(FastTravelState::wire_bytes() == kFastTravelWire);
-static_assert(kSaveFixedWire == 878 + 64 + 4 + kSamosborWire + kFastTravelWire);  // 995 (v14: Equipped +4)
-static_assert(kSaveFixedWire == 995);
+static_assert(kSaveFixedWire == 995 + 8 + kBankWire + kPowerGridWire);  // 2383 (v15: BankAccount +352, PowerGrid +1028, Yaw/Pitch +8)
+static_assert(kSaveFixedWire == 2383);
 static_assert(kFactionWire == 36);
-static_assert(save_bytes_for(0) == 1095);
-static_assert(save_bytes_for(0, 100, 50) == 1095 + 150);
+static_assert(save_bytes_for(0) == 2483);
+static_assert(save_bytes_for(0, 100, 50) == 2483 + 150);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two
@@ -478,6 +520,9 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     // would make the reader's offset depend on a count.
     visit_samosbor(bw, st.samosbor);
     for (std::size_t i = 0; i < kFastTravelWire; ++i) bw.u8(st.fastTravel.raw()[i]);
+    // Version 15: Bank account persistence & power grid state.
+    visit_bank(bw, st.bank);
+    visit_power_grid(bw, st.powerGrid);
     for (const OpenedContainerKey& k : st.opened) visit_key(bw, k);
     // Version 6: the macro world — pool table, macro-sim state, faction matrix.
     body.insert(body.end(), st.poolBlob.begin(), st.poolBlob.end());
@@ -605,6 +650,11 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     // Version 10 / SAVCLOCK: mirrors the writer exactly, same order, same position.
     visit_samosbor(r, tmp.samosbor);
     for (std::size_t i = 0; i < kFastTravelWire; ++i) r.u8(tmp.fastTravel.raw()[i]);
+    // Version 15: Bank account persistence & power grid state.
+    visit_bank(r, tmp.bank);
+    visit_power_grid(r, tmp.powerGrid);
+    if (tmp.powerGrid.count > kMaxDestroyedShields)
+        tmp.powerGrid.count = static_cast<std::uint32_t>(kMaxDestroyedShields);
     tmp.opened.resize(static_cast<std::size_t>(h.openedCount));
     for (std::size_t i = 0; i < tmp.opened.size(); ++i) visit_key(r, tmp.opened[i]);
     // Version 6: the macro blobs, verbatim (decoded by their owners against live

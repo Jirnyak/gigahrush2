@@ -11,6 +11,7 @@
 #include "ecs/components.h"
 #include "game/floor_gen.h"  // floor_room_stride, floor_room_mask
 #include "game/wander.h"     // wander_init — a fog mob with no WanderTarget is a statue
+#include "game/monster.h"
 #include "game/monster_traits.h"
 #include "sim/fluid.h"       // fluid_data/fluid_at — nothing stands in a sealed sump
 #include "world/macro_grid.h"
@@ -194,6 +195,10 @@ Entity emplace_mob(Registry& reg, LayerId layer, MobKind kind, const MobDef& def
     // on the frame the player walks in.
     reg.emplace<MobCombat>(
         e, MobCombat{static_cast<std::uint16_t>(headHash % (def.attackCdMs + 1u))});
+
+    // Attach specialized ALife components (BlindDogPackMember, BurerAi, SnorkAi, BloodsuckerAi)
+    monster_special_init_entity(reg, e, kind);
+
     return e;
 }
 

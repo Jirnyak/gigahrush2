@@ -44,6 +44,11 @@ public:
     void add_instance(PropShape shape, const PropInstance& inst);
     void clear_instances();
 
+    // Upload CPU instance data to host-visible GPU buffer for the given frame.
+    // Decoupled from record() so compute shaders (GpuCullPass) can process
+    // current-frame instance data before graphics rendering.
+    void upload(uint32_t frameIndex);
+
     // Record all prop draw calls into `cmd`. Push constants must already be
     // bound by the caller (CubePass::record() does this for the world pass;
     // the prop pass is drawn inside the same render-pass subpass so they carry
@@ -56,6 +61,7 @@ public:
 
     uint32_t last_draw_count() const { return lastDrawCount_; }
     uint32_t instance_count(int s) const { return static_cast<uint32_t>(cpuInst_[s].size()); }
+    const std::vector<PropInstance>& instances(int s) const { return cpuInst_[s]; }
     VkBuffer instance_buffer(int s, uint32_t f) const { return instBufs_[s][f].buffer; }
     const PropMesh& mesh(int s) const { return meshes_[s]; }
 

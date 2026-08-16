@@ -4,3 +4,6 @@ electrical_shield,ElectricalShield,SABOTAGE ELECTRICAL SHIELD,3.5,power-grid nod
 light_bulb,LightBulb,LIGHT BULB,2.5,ceiling light: shootable / future switch wiring
 corpse,Corpse,LOOT CORPSE,2.2,searchable body: loot transfer UI
 loot,Loot,PICK UP,2.0,floor loot pickup
+workbench,Workbench,WORKBENCH & CRAFTING (E),2.5,workbench: crafting and disassembly station
+kitchen_station,KitchenStation,KITCHEN STATION (E),2.5,kitchen cooking and preparation station
+medical_station,MedicalStation,MEDICAL STATION (E),2.5,medical lab and chemistry station

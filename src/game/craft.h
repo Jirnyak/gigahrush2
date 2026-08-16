@@ -175,6 +175,7 @@ inline constexpr std::size_t kCraftRecipeCount = kItemCount;   // 442
 // Generated from data/items.csv + data/craft_recipes.csv by
 // tools/gen_craft_table.py. Row N is item id N+1.
 extern const std::array<CraftRecipe, kCraftRecipeCount> kCraftTable;
+inline constexpr const std::array<CraftRecipe, kCraftRecipeCount>& kCraftRecipes = kCraftTable;
 
 inline const CraftRecipe& craft_recipe(ItemId id) {
     return kCraftTable[static_cast<std::size_t>(id) - 1];

@@ -145,7 +145,21 @@ std::int32_t vendor_sell_price(ItemId id, VendorKind who, const RpgStats* rpg,
     if (rpg != nullptr && static_cast<ItemCategory>(d.category) == ItemCategory::Note) {
         m *= static_cast<float>(int_document_reward_mult_e3(*rpg)) / 1000.0f;
     }
-    const std::int32_t p = static_cast<std::int32_t>(static_cast<float>(d.value) * m);
+    // Strict economic invariant: sell multiplier can NEVER exceed buy_mult * 0.88f
+    // to prevent infinite arbitrage loops with Scientist vendors at high reputation.
+    const float buyM = (playerRelation > 0)
+        ? (kBuyMult - static_cast<float>(playerRelation) * 0.15f / 100.0f)
+        : (kBuyMult + static_cast<float>(-playerRelation) * 0.25f / 100.0f);
+    const float maxAllowedSellM = buyM * 0.88f;
+    if (m > maxAllowedSellM) m = maxAllowedSellM;
+
+    std::int32_t p = static_cast<std::int32_t>(static_cast<float>(d.value) * m);
+    if (vendor_stocks_item(id)) {
+        const std::int32_t buyP = vendor_buy_price(id, playerRelation);
+        if (p >= buyP && buyP > 0) {
+            p = buyP - 1;
+        }
+    }
     // NOT clamped up to 1, unlike the buy price. A test asserting "sell < buy for every
     // stocked item" caught this: clamping both sides made a 1-rouble item buy for 1 and
     // sell for 1, so cycling it was free rather than lossy — the money press left ajar

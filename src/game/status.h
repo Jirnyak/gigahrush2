@@ -33,6 +33,8 @@
 
 namespace giga::game {
 
+struct RpgStats;
+
 inline constexpr std::size_t kStatusCount = 6;
 
 // Row order is data/status.csv row order, and it is load-bearing: a StatusId is an
@@ -120,7 +122,9 @@ inline constexpr std::uint16_t kStatusIntensityCapE3 = 3000;
 // resolves the condition (item worn, food treated) because this module must not reach
 // into an inventory. Refreshes rather than replaces: an already-held status keeps the
 // LONGER remaining time, so re-entering a spore cloud cannot shorten your haze.
-void status_apply(StatusSet& set, StatusId id, bool useAlt);
+// Accepts optional `rpg` to factor in mutations (e.g. GillsOfGigahrush spore immunity),
+// traits (ChemResistant halved duration), and implants (CardioFilterPump).
+void status_apply(StatusSet& set, StatusId id, bool useAlt, const RpgStats* rpg = nullptr);
 
 // Advance every slot by `dtMs`. Returns how many statuses expired on this call.
 std::uint32_t status_step(StatusSet& set, std::uint32_t dtMs);
@@ -136,10 +140,10 @@ bool status_active(const StatusSet& set, StatusId id);
 std::uint16_t status_move_mult_e3(const StatusSet& set);
 std::uint16_t status_aim_mult_e3(const StatusSet& set);
 std::uint16_t status_melee_mult_e3(const StatusSet& set);
-std::uint16_t status_heal_mult_e3(const StatusSet& set);
+std::uint16_t status_heal_mult_e3(const StatusSet& set, const RpgStats* rpg = nullptr);
 
 // Extra water drain per second, x1000, summed. A drain is a RATE and rates add.
-std::uint32_t status_water_drain_e3(const StatusSet& set);
+std::uint32_t status_water_drain_e3(const StatusSet& set, const RpgStats* rpg = nullptr);
 
 // True while any status is inside its leading root window. Paupsina's 0.65 s.
 bool status_is_rooted(const StatusSet& set);

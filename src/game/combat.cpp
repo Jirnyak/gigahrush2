@@ -21,6 +21,7 @@
 #include "game/faction_relations.h"
 #include "game/mob_behaviour.h"
 #include "game/mob_table.h"
+#include "game/monster.h"
 #include "game/monster_traits.h"
 #include "game/ranged_table.h"
 #include "game/rpg.h"      // RpgStats, xp_for_monster_kill, award_xp
@@ -275,9 +276,29 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
         dmg = trait_counterplay_damage(m->kind, static_cast<std::uint8_t>(ch), dmg, m->maxHp);
     }
 
+    if (reg.valid(source)) {
+        if (const RpgStats* sRpg = reg.try_get<RpgStats>(source)) {
+            if (ch == DamageChannel::Fire && has_perk(*sRpg, PerkId::Pyromaniac)) {
+                int boosted = static_cast<int>(static_cast<float>(dmg) * 1.25f + 0.5f);
+                dmg = static_cast<std::int16_t>(boosted > 32767 ? 32767 : (boosted < 0 ? 0 : boosted));
+            }
+        }
+    }
+
     if (const Armour* a = reg.try_get<Armour>(target)) {
         std::size_t i = static_cast<std::size_t>(ch);
         if (i < kDamageChannels) dmg = mitigate(dmg, a->resist[i]);
+    }
+    if (const RpgStats* tRpg = reg.try_get<RpgStats>(target)) {
+        const std::int16_t rpgRes = rpg_damage_resistance_pct(*tRpg, static_cast<std::uint8_t>(ch));
+        if (rpgRes != 0) dmg = mitigate(dmg, static_cast<std::int8_t>(rpgRes));
+    }
+
+    // Burer kinetic shield mitigation / reactive activation:
+    if (BurerAi* burer = reg.try_get<BurerAi>(target)) {
+        const Transform* tr = get_target_tr();
+        const vec3 tpos = tr ? tr->pos : vec3{0.0f, 0.0f, 0.0f};
+        dmg = burer_mitigate_damage(*burer, ch, dmg, tpos, particles);
     }
 
     // Defender behaviour incoming damage multiplier (e.g. WallBrace armour against walls)
@@ -356,6 +377,12 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
     *hp = after;
 
     out.applied = static_cast<std::int16_t>(before - after);
+
+    if (out.applied > 0) {
+        if (RpgStats* tRpg = reg.try_get<RpgStats>(target)) {
+            implant_take_damage(*tRpg, out.applied, static_cast<std::uint8_t>(ch));
+        }
+    }
 
     // Directional knockback impulse on hit (DOD DOD-compliant pure math).
     // LATERAL means "perpendicular to gravity", never "XZ": the plane is derived
@@ -555,6 +582,13 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
 
         // Convert NPC/mob entity to a persistent fallen Corpse on the floor
         if (reg.valid(e)) {
+            // Blind Dog Pack AI: notify pack table on mob member/leader killed
+            if (const MobRef* m = reg.try_get<MobRef>(e)) {
+                if (m->pack != 0) {
+                    dog_pack_on_member_killed(reg, e, m->pack);
+                }
+            }
+
             // Pure NPC deaths carry NpcRef only — MobRef is optional.
             if (reg.all_of<MobRef>(e)) reg.remove<MobRef>(e);
             if (reg.all_of<MobCombat>(e)) reg.remove<MobCombat>(e);
@@ -902,7 +936,14 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
             dmg *= trait_damage_mult(mr.kind, wet);
         }
 
-        const std::int16_t raw = static_cast<std::int16_t>(dmg);
+        // Bloodsucker decloak and backstab strike evaluation:
+        if (BloodsuckerAi* bs = reg.try_get<BloodsuckerAi>(e)) {
+            dmg *= bloodsucker_evaluate_strike(*bs, tr.pos, victimPos, playerFwdX, playerFwdY, particles);
+        }
+
+        const std::int16_t raw = (dmg > 0.0f && dmg < 1.0f)
+                                     ? static_cast<std::int16_t>(1)
+                                     : static_cast<std::int16_t>(dmg);
 
         const float reach = behaviour_melee_reach(beh, def.meleeReachMm, nearWall);
         if (raw > 0 && d2 <= reach * reach) {
@@ -2014,6 +2055,7 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
     float spread = static_cast<float>(def->spreadE4) * 1e-4f;
     if (const RpgStats* rs = reg.try_get<RpgStats>(shooter)) {
         spread *= static_cast<float>(agi_ranged_spread_mult_e3(*rs)) / 1000.0f;
+        spread *= static_cast<float>(per_ranged_accuracy_mult_e3(*rs)) / 1000.0f;
     }
     // STATAIM: SporeHaze (and friends) widen the cone via status_aim_mult_e3.
     if (status) {
@@ -2081,9 +2123,16 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
     // RPGCMBT: AGI shortens firearm cooldown (same inverse mult as melee).
     std::uint16_t rcd = def->cooldownMs;
     if (const RpgStats* rs = reg.try_get<RpgStats>(shooter)) {
+        std::int16_t php = -1, pmaxHp = -1;
+        if (const NpcRef* snr = reg.try_get<NpcRef>(shooter)) {
+            if (pool.valid(snr->id)) {
+                php = pool.hp(snr->id);
+                pmaxHp = pool.max_hp(snr->id);
+            }
+        }
         const std::uint32_t cd =
             (static_cast<std::uint32_t>(def->cooldownMs) *
-             agi_attack_speed_mult_e3(*rs)) / 1000u;
+             agi_attack_speed_mult_e3(*rs, php, pmaxHp)) / 1000u;
         rcd = static_cast<std::uint16_t>(cd > 65535u ? 65535u : (cd < 1u ? 1u : cd));
     }
     pr.cooldownMs = rcd;
@@ -2209,7 +2258,12 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
     if (rs) {
         swingDmg = melee_damage(*rs, heldWeapon, static_cast<std::int16_t>(wp->dmg));
         // Combine AGI attack-speed and STR heavy-weapon speed as e3 mults.
-        const std::uint32_t agiE3 = agi_attack_speed_mult_e3(*rs);
+        std::int16_t php = -1, pmaxHp = -1;
+        if (nr && pool.valid(nr->id)) {
+            php = pool.hp(nr->id);
+            pmaxHp = pool.max_hp(nr->id);
+        }
+        const std::uint32_t agiE3 = agi_attack_speed_mult_e3(*rs, php, pmaxHp);
         const std::uint32_t strE3 = str_heavy_weapon_speed_mult_e3(*rs, wp->cooldownMs);
         const std::uint32_t cd =
             (static_cast<std::uint32_t>(wp->cooldownMs) * agiE3 * strE3) / 1000000u;

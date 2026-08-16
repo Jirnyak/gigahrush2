@@ -15,8 +15,12 @@ struct CharCreationState {
     game::RoleId role = game::RoleId::Resident;
     int str = 5;
     int agi = 5;
+    int end = 5;
     int intell = 5;
+    int per = 5;
     int unallocated = 5;
+    game::TraitId trait1 = game::TraitId::None;
+    game::TraitId trait2 = game::TraitId::None;
 };
 
 // Populate inventory with starter equipment according to role archetype.

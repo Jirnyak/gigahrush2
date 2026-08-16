@@ -960,4 +960,173 @@ NavCacheSweep nav_cache_evict(const std::string& dir, const NavCachePolicy& poli
     return sw;
 }
 
+bool load_multi_floor_coarse_cache(const std::string& dir,
+                                   const std::vector<NavCacheKey>& floorKeys,
+                                   std::vector<nav::CoarseGraph>& outCoarse,
+                                   std::vector<bool>& outLoaded) {
+    outCoarse.resize(floorKeys.size());
+    outLoaded.assign(floorKeys.size(), false);
+    if (dir.empty() || floorKeys.empty()) return false;
+
+    bool anyLoaded = false;
+    for (std::size_t i = 0; i < floorKeys.size(); ++i) {
+        const auto& key = floorKeys[i];
+        const std::string path = dir + "/" + nav_cache_name(key);
+        nav::CoarseGraph cg{};
+        if (load_nav_cache_sections(path, key.number, key.kind, key.seed, &cg, nullptr, nullptr)) {
+            outCoarse[i] = cg;
+            outLoaded[i] = true;
+            anyLoaded = true;
+        }
+    }
+    return anyLoaded;
+}
+
+bool MultiFloorNavCache::ensure_coarse(const NavCacheKey& key, nav::CoarseGraph& outCoarse) {
+    for (auto& ent : entries_) {
+        if (ent.key.number == key.number && ent.key.kind == key.kind && ent.key.seed == key.seed) {
+            if (ent.loaded) {
+                outCoarse = ent.coarse;
+                return true;
+            }
+        }
+    }
+
+    if (!dir_.empty()) {
+        const std::string path = dir_ + "/" + nav_cache_name(key);
+        nav::CoarseGraph cg{};
+        if (load_nav_cache_sections(path, key.number, key.kind, key.seed, &cg, nullptr, nullptr)) {
+            store_coarse(key.number, cg);
+            outCoarse = cg;
+            return true;
+        }
+    }
+    return false;
+}
+
+std::size_t MultiFloorNavCache::load_stack(const std::vector<NavCacheKey>& keys) {
+    std::size_t loadedCount = 0;
+    for (const auto& k : keys) {
+        nav::CoarseGraph cg{};
+        if (ensure_coarse(k, cg)) {
+            ++loadedCount;
+        }
+    }
+    return loadedCount;
+}
+
+bool MultiFloorNavCache::has_coarse(int floorNumber) const {
+    for (const auto& ent : entries_) {
+        if (ent.key.number == floorNumber && ent.loaded) return true;
+    }
+    return false;
+}
+
+const nav::CoarseGraph* MultiFloorNavCache::coarse_for(int floorNumber) const {
+    for (const auto& ent : entries_) {
+        if (ent.key.number == floorNumber && ent.loaded) return &ent.coarse;
+    }
+    return nullptr;
+}
+
+void MultiFloorNavCache::store_coarse(int floorNumber, const nav::CoarseGraph& coarse) {
+    for (auto& ent : entries_) {
+        if (ent.key.number == floorNumber) {
+            ent.coarse = coarse;
+            ent.loaded = true;
+            return;
+        }
+    }
+    MultiFloorCoarseEntry ent;
+    ent.key.number = floorNumber;
+    ent.coarse = coarse;
+    ent.loaded = true;
+    entries_.push_back(ent);
+}
+
+MultiFloorNavCache::~MultiFloorNavCache() {
+    cancel_async_load();
+}
+
+MultiFloorNavCache::MultiFloorNavCache(MultiFloorNavCache&& other) noexcept {
+    other.cancel_async_load();
+    dir_ = std::move(other.dir_);
+    entries_ = std::move(other.entries_);
+    asyncLoading_ = false;
+    asyncDone_ = false;
+    asyncResults_.clear();
+}
+
+MultiFloorNavCache& MultiFloorNavCache::operator=(MultiFloorNavCache&& other) noexcept {
+    if (this != &other) {
+        cancel_async_load();
+        other.cancel_async_load();
+        dir_ = std::move(other.dir_);
+        entries_ = std::move(other.entries_);
+        asyncLoading_ = false;
+        asyncDone_ = false;
+        asyncResults_.clear();
+    }
+    return *this;
+}
+
+void MultiFloorNavCache::join_worker() {
+    if (asyncWorker_.joinable()) {
+        asyncWorker_.join();
+    }
+}
+
+void MultiFloorNavCache::cancel_async_load() {
+    join_worker();
+    asyncLoading_ = false;
+    asyncDone_ = false;
+    asyncResults_.clear();
+}
+
+void MultiFloorNavCache::start_async_load_stack(const std::vector<NavCacheKey>& keys) {
+    join_worker();
+    asyncLoading_ = true;
+    asyncDone_ = false;
+    asyncResults_.clear();
+
+    const std::string dirCopy = dir_;
+    asyncWorker_ = std::thread([this, dirCopy, keysCopy = keys]() {
+        std::vector<MultiFloorCoarseEntry> results;
+        for (const auto& k : keysCopy) {
+            if (!dirCopy.empty()) {
+                const std::string path = dirCopy + "/" + nav_cache_name(k);
+                nav::CoarseGraph cg{};
+                if (load_nav_cache_sections(path, k.number, k.kind, k.seed, &cg, nullptr, nullptr)) {
+                    MultiFloorCoarseEntry ent;
+                    ent.key = k;
+                    ent.coarse = cg;
+                    ent.loaded = true;
+                    results.push_back(ent);
+                }
+            }
+        }
+        this->asyncResults_ = std::move(results);
+        this->asyncDone_ = true;
+        this->asyncLoading_ = false;
+    });
+}
+
+bool MultiFloorNavCache::poll_async_load() {
+    if (!asyncDone_) return false;
+    join_worker();
+    for (const auto& r : asyncResults_) {
+        store_coarse(r.key.number, r.coarse);
+    }
+    asyncResults_.clear();
+    asyncDone_ = false;
+    asyncLoading_ = false;
+    return true;
+}
+
+void MultiFloorNavCache::clear() {
+    cancel_async_load();
+    entries_.clear();
+}
+
 } // namespace giga::game
+

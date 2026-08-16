@@ -94,21 +94,39 @@ namespace {
 // axis is selected by `comp` (0=x,1=y,2=z). Returns true if a collision on this
 // axis stopped the motion (used to zero the matching velocity component).
 bool sweep_axis(const World& w, vec3& pos, vec3 half, int comp, float delta) {
+    if (delta == 0.0f) return false;
     float* p = (comp == 0) ? &pos.x : (comp == 1) ? &pos.y : &pos.z;
-    float old = *p;
-    *p = old + delta;
-    if (!aabb_overlaps_solid(w, pos, half)) return false;
+    const float old = *p;
+    const float dist = std::fabs(delta);
 
-    // Collided: binary-search back to the last non-overlapping position so the
-    // box rests flush against the sub-voxel surface.
-    float lo = 0.0f, hi = delta;
-    for (int i = 0; i < 12; ++i) {
-        float mid = 0.5f * (lo + hi);
-        *p = old + mid;
-        if (aabb_overlaps_solid(w, pos, half)) hi = mid; else lo = mid;
+    // If displacement along this axis is within one sub-voxel, a single check at
+    // the endpoint suffices; otherwise sample intermediate steps to prevent
+    // tunneling through thin sub-voxel walls.
+    const int numSteps = (dist <= kVoxelSize)
+        ? 1
+        : std::max(1, static_cast<int>(std::ceil(dist / kVoxelSize)));
+
+    const float stepDelta = delta / static_cast<float>(numSteps);
+
+    for (int step = 1; step <= numSteps; ++step) {
+        const float t_curr = (step == numSteps) ? delta : (static_cast<float>(step) * stepDelta);
+        *p = old + t_curr;
+        if (aabb_overlaps_solid(w, pos, half)) {
+            // Collided: binary-search back to the last non-overlapping position so the
+            // box rests flush against the sub-voxel surface.
+            const float t_prev = static_cast<float>(step - 1) * stepDelta;
+            float lo = t_prev, hi = t_curr;
+            for (int i = 0; i < 12; ++i) {
+                float mid = 0.5f * (lo + hi);
+                *p = old + mid;
+                if (aabb_overlaps_solid(w, pos, half)) hi = mid; else lo = mid;
+            }
+            *p = old + lo;
+            return true;
+        }
     }
-    *p = old + lo;
-    return true;
+    *p = old + delta;
+    return false;
 }
 
 float axis_of(const vec3& v, int comp) {
@@ -160,14 +178,32 @@ bool sweep_axis_walk(const World& w, vec3& pos, vec3 half, int comp,
 void physics_step(Registry& reg, LevelStack& stack, float dt,
                   const PhysicsParams& params) {
     if (dt <= 0.0f) return;
-    int steps = std::clamp(
-        static_cast<int>(std::ceil(dt / params.maxStep)), 1, params.maxSubsteps);
-    float h = dt / static_cast<float>(steps);
 
     // Excludes anything that integrates its own motion. Projectiles do, and until
     // this exclusion existed they were moved twice per tick — double speed, double
     // gravity, every shot in the game. [components.h SelfIntegrating]
     auto view = reg.view<Transform, Velocity>(entt::exclude<SelfIntegrating>);
+
+    // Dynamic substepping: calculate substep count based on max velocity magnitude
+    // to guarantee no step displacement exceeds voxel boundary limits (kVoxelSize).
+    float maxSpeedSq = 0.0f;
+    for (auto e : view) {
+        if (reg.all_of<NoClip>(e)) continue;
+        const auto& vel = view.get<Velocity>(e);
+        const float speedSq = vel.v.x * vel.v.x + vel.v.y * vel.v.y + vel.v.z * vel.v.z;
+        if (speedSq > maxSpeedSq) {
+            maxSpeedSq = speedSq;
+        }
+    }
+    const float maxSpeed = std::sqrt(maxSpeedSq);
+
+    const int timeSteps = static_cast<int>(std::ceil(dt / params.maxStep));
+    const int velSteps = (maxSpeed > 0.0f)
+        ? static_cast<int>(std::ceil((maxSpeed * dt) / kVoxelSize))
+        : 0;
+    const int neededSteps = std::max(timeSteps, velSteps);
+    const int steps = std::clamp(neededSteps, 1, std::max(1, params.maxSubsteps));
+    const float h = dt / static_cast<float>(steps);
     for (int s = 0; s < steps; ++s) {
         for (auto e : view) {
             auto& tr = view.get<Transform>(e);

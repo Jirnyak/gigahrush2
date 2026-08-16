@@ -4,7 +4,18 @@
 #include <cstdio>
 #include <cstring>
 
+#include "game/faction_relations.h"
+
 namespace giga::game {
+
+const char* quest_stage_name(QuestStage stage) {
+    switch (stage) {
+        case QuestStage::Objective:     return "Objective";
+        case QuestStage::Deliver:       return "Deliver";
+        case QuestStage::CollectBounty: return "CollectBounty";
+        default:                        return "?";
+    }
+}
 
 namespace {
 // ---------------------------------------------------------------------------
@@ -278,6 +289,7 @@ bool quest_accept(QuestLog& log, const NpcPool& pool, QuestId id, NpcId giver, i
     QuestProgress& p = log.row[static_cast<std::size_t>(id) - 1];
     p = QuestProgress{};
     p.state = static_cast<std::uint8_t>(QuestState::Active);
+    p.stage = static_cast<std::uint8_t>(QuestStage::Objective);
     // Minted HERE and nowhere else: the bare id is what `quest_offer` hashed and what the
     // caller holds, this is the (generation, id) pair that outlives the tick. `giver` is
     // known live from the guard at the top, so `handle()` reads a real generation rather
@@ -303,7 +315,8 @@ int quest_grant_item(Inventory& inv, ItemId item, int count) {
 // ---------------------------------------------------------------------------
 
 std::int32_t quest_step(QuestLog& log, const NpcPool& pool, Inventory& inv,
-                        RunLedger& led, std::uint32_t stepMs, RpgStats* rpg) {
+                        RunLedger& led, std::uint32_t stepMs, RpgStats* rpg,
+                        FactionRelations* rel) {
     std::int32_t paid = 0;
 
     for (std::size_t i = 0; i < kQuestCount; ++i) {
@@ -330,8 +343,16 @@ std::int32_t quest_step(QuestLog& log, const NpcPool& pool, Inventory& inv,
             p.state = static_cast<std::uint8_t>(QuestState::Orphaned);
             p.remainingMs = 0;
             p.progress = 0;
+            p.stage = static_cast<std::uint8_t>(QuestStage::Objective);
             ++log.failed;
             ++log.orphaned;
+            if (rel != nullptr) {
+                const NpcId gid = npc_handle_id(p.giver);
+                if (pool.valid(gid)) {
+                    const Faction gf = static_cast<Faction>(pool.faction(gid) % kFactionCount);
+                    relations_nudge_player(*rel, gf, -2);
+                }
+            }
             continue;
         }
 
@@ -343,41 +364,41 @@ std::int32_t quest_step(QuestLog& log, const NpcPool& pool, Inventory& inv,
             if (p.remainingMs <= stepMs) {
                 p.remainingMs = 0;
                 p.state = static_cast<std::uint8_t>(QuestState::Expired);
+                p.stage = static_cast<std::uint8_t>(QuestStage::Objective);
                 ++log.failed;
                 ++log.expired;
+                if (rel != nullptr) {
+                    const NpcId gid = npc_handle_id(p.giver);
+                    if (pool.valid(gid)) {
+                        const Faction gf = static_cast<Faction>(pool.faction(gid) % kFactionCount);
+                        relations_nudge_player(*rel, gf, -3);
+                    }
+                }
                 continue;
             }
             p.remainingMs -= stepMs;
         }
 
-        // 3. THE OBJECTIVE. Measured by the same three systems contract_step measures
-        // through — there is one notion of each objective in this engine.
+        // 3. MULTI-STAGE OBJECTIVE PROGRESSION:
+        // Stage 0: Objective (Find items / Hunt monsters / Reach depth)
+        // Stage 1: Deliver to NPC / Hand over cargo
+        // Stage 2: Collect Bounty / Reward completion
+        bool objectiveMet = false;
         switch (static_cast<ObjectiveKind>(d.kind)) {
             case ObjectiveKind::Fetch: {
                 std::int32_t have = 0;
                 for (const ItemSlot& s : inv.slots)
                     if (s.item == d.subject) have += static_cast<std::int32_t>(s.count);
                 p.progress = have;
-                if (have < d.target) continue;
-                // CONSUME. A courier job that let you keep the cargo would pay twice
-                // for the same loot — once as the reward and once as the haul.
-                std::int32_t need = d.target;
-                for (ItemSlot& s : inv.slots) {
-                    if (need <= 0) break;
-                    if (s.item != d.subject) continue;
-                    const std::int32_t take =
-                        static_cast<std::int32_t>(s.count) < need
-                            ? static_cast<std::int32_t>(s.count)
-                            : need;
-                    s.count = static_cast<std::uint16_t>(
-                        static_cast<std::int32_t>(s.count) - take);
-                    if (s.count == 0) s = ItemSlot{};
-                    need -= take;
+                if (have >= d.target) {
+                    objectiveMet = true;
                 }
                 break;
             }
             case ObjectiveKind::Hunt:
-                if (p.progress < d.target) continue;
+                if (p.progress >= d.target) {
+                    objectiveMet = true;
+                }
                 break;
             case ObjectiveKind::Descend: {
                 // |z|, because depth is bidirectional here and `RunLedger` keeps only
@@ -388,19 +409,45 @@ std::int32_t quest_step(QuestLog& log, const NpcPool& pool, Inventory& inv,
                 const int reached =
                     led.deepestFloor < 0 ? -led.deepestFloor : led.deepestFloor;
                 const int want = d.target < 0 ? -d.target : d.target;
-                if (reached < want) {
-                    p.progress = reached;
-                    continue;
-                }
-                if (want <= static_cast<int>(p.baseline)) continue;
                 p.progress = reached;
+                if (reached >= want && want > static_cast<int>(p.baseline)) {
+                    objectiveMet = true;
+                }
                 break;
             }
             default:
-                continue;
+                break;
         }
 
+        if (!objectiveMet) {
+            p.stage = static_cast<std::uint8_t>(QuestStage::Objective);
+            continue;
+        }
+
+        // Advance to Stage 1 (Deliver)
+        p.stage = static_cast<std::uint8_t>(QuestStage::Deliver);
+
+        // Stage 1 -> Stage 2: Deliver cargo / consume items for Fetch
+        if (static_cast<ObjectiveKind>(d.kind) == ObjectiveKind::Fetch) {
+            std::int32_t need = d.target;
+            for (ItemSlot& s : inv.slots) {
+                if (need <= 0) break;
+                if (s.item != d.subject) continue;
+                const std::int32_t take =
+                    static_cast<std::int32_t>(s.count) < need
+                        ? static_cast<std::int32_t>(s.count)
+                        : need;
+                s.count = static_cast<std::uint16_t>(
+                    static_cast<std::int32_t>(s.count) - take);
+                if (s.count == 0) s = ItemSlot{};
+                need -= take;
+            }
+        }
+
+        // Advance to Stage 2 (CollectBounty / Complete)
+        p.stage = static_cast<std::uint8_t>(QuestStage::CollectBounty);
         p.state = static_cast<std::uint8_t>(QuestState::Complete);
+
         // Paid straight into the banked total, for contract.h's reason: a job's reward
         // is not carried loot and must not be at risk on the walk home.
         const std::uint32_t reward = rpg != nullptr
@@ -436,6 +483,15 @@ std::int32_t quest_step(QuestLog& log, const NpcPool& pool, Inventory& inv,
                                d.kind, d.subject, d.target, lo > hi ? lo : hi,
                                /*timed=*/d.limitMs != 0)));
         }
+
+        // Faction reputation reward propagation on quest completion
+        if (rel != nullptr) {
+            const NpcId gid = npc_handle_id(p.giver);
+            if (pool.valid(gid)) {
+                const Faction gf = static_cast<Faction>(pool.faction(gid) % kFactionCount);
+                relations_nudge_player(*rel, gf, +3);
+            }
+        }
     }
     return paid;
 }
@@ -451,7 +507,8 @@ void quest_on_kill(QuestLog& log, std::uint8_t mobKind) {
     }
 }
 
-void quest_on_giver_died(QuestLog& log, NpcId who) {
+void quest_on_giver_died(QuestLog& log, NpcId who, FactionRelations* rel,
+                         const NpcPool* pool) {
     if (who == kInvalidNpc) return;
     for (std::size_t i = 0; i < kQuestCount; ++i) {
         QuestProgress& p = log.row[i];
@@ -472,8 +529,14 @@ void quest_on_giver_died(QuestLog& log, NpcId who) {
         p.state = static_cast<std::uint8_t>(QuestState::Orphaned);
         p.remainingMs = 0;
         p.progress = 0;
+        p.stage = static_cast<std::uint8_t>(QuestStage::Objective);
         ++log.failed;
         ++log.orphaned;
+
+        if (rel != nullptr && pool != nullptr && pool->valid(who)) {
+            const Faction gf = static_cast<Faction>(pool->faction(who) % kFactionCount);
+            relations_nudge_player(*rel, gf, -2);
+        }
     }
 }
 

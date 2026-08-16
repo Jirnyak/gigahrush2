@@ -12,6 +12,7 @@
 #include "core/math.h"
 #include "render/prop_mesh.h"
 #include "render/vk_buffer.h"
+#include "render/vk_common.h"
 #include "render/vk_device.h"
 
 namespace giga::gpu {
@@ -39,6 +40,8 @@ struct alignas(16) CullPush {
 };
 static_assert(sizeof(CullPush) == 128, "CullPush layout size must be exactly 128 bytes");
 
+static constexpr uint32_t kMaxCullSetsPerFrame = 32;
+
 class GpuCullPass {
 public:
     GpuCullPass()  = default;
@@ -54,6 +57,7 @@ public:
     // Record compute dispatch & barriers for GPU frustum culling.
     // Writes culled instances to `outCulledInstanceBuf` and indirect command to `outIndirectBuf`.
     void record_cull(VkCommandBuffer cmd,
+                     uint32_t frameIndex,
                      const mat4& viewProj,
                      const vec3& camPos,
                      float fogEnd,
@@ -85,8 +89,12 @@ private:
     VkPipelineLayout      pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline            pipeline_       = VK_NULL_HANDLE;
     VkDescriptorPool      descPool_       = VK_NULL_HANDLE;
-    std::array<VkDescriptorSet, 64> descSets_{};
-    uint32_t              setHead_        = 0;
+
+    // Partitioned per-frame descriptor sets to eliminate race conditions between
+    // CPU descriptor updates and GPU in-flight compute dispatches.
+    std::array<std::array<VkDescriptorSet, kMaxCullSetsPerFrame>, kMaxFramesInFlight> descSets_{};
+    std::array<uint32_t, kMaxFramesInFlight> setHead_{};
+    std::array<uint32_t, kMaxFramesInFlight> lastFrameIndex_{};
 };
 
 } // namespace giga::gpu

@@ -280,6 +280,20 @@ void PropPass::clear_instances() {
     }
 }
 
+void PropPass::upload(uint32_t frameIndex) {
+    if (!dev_) return;
+    const uint32_t f = frameIndex % kMaxFramesInFlight;
+    for (int s = 0; s < kPropShapeCount; ++s) {
+        const auto& src = cpuInst_[s];
+        if (src.empty()) continue;
+        auto& buf = instBufs_[s][f];
+        if (!buf.mapped) continue;
+        uint32_t uploadCount = std::min(static_cast<uint32_t>(src.size()),
+                                        static_cast<uint32_t>(kMaxPropInstances));
+        std::memcpy(buf.mapped, src.data(), uploadCount * sizeof(PropInstance));
+    }
+}
+
 void PropPass::record(VkCommandBuffer cmd, uint32_t frameIndex,
                       const CubePush& push, VkDescriptorSet lightGridSet) {
     if (!pipeline_) return;
@@ -299,29 +313,28 @@ void PropPass::record(VkCommandBuffer cmd, uint32_t frameIndex,
     const float fogEnd   = push.fog.y;
     const float period   = push.torus.x;
 
+    const uint32_t f = frameIndex % kMaxFramesInFlight;
     lastDrawCount_ = 0;
     for (int s = 0; s < kPropShapeCount; ++s) {
         const auto& src = cpuInst_[s];
         if (src.empty()) continue;
 
         if (useGpuCulling_) {
-            auto& buf = instBufs_[s][frameIndex];
-            uint32_t uploadCount = std::min(static_cast<uint32_t>(src.size()), static_cast<uint32_t>(kMaxPropInstances));
-            std::memcpy(buf.mapped, src.data(), uploadCount * sizeof(PropInstance));
-
             // GPU Multi-Draw Indirect (MDI) path: instances were culled by cull.comp SSBO shader into culledInstBufs_
             // and the indirect draw command was populated in indirectCmdBufs_.
-            VkBuffer     bufs[2] = {meshes_[s].vertexBuffer, culledInstBufs_[s][frameIndex].buffer};
+            // Instance upload already occurred in upload() before cullPass.record_cull().
+            VkBuffer     bufs[2] = {meshes_[s].vertexBuffer, culledInstBufs_[s][f].buffer};
             VkDeviceSize offs[2] = {0, 0};
             vkCmdBindVertexBuffers(cmd, 0, 2, bufs, offs);
             vkCmdBindIndexBuffer(cmd, meshes_[s].indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-            vkCmdDrawIndexedIndirect(cmd, indirectCmdBufs_[s][frameIndex].buffer, 0, 1, sizeof(VkDrawIndexedIndirectCommand));
+            vkCmdDrawIndexedIndirect(cmd, indirectCmdBufs_[s][f].buffer, 0, 1, sizeof(VkDrawIndexedIndirectCommand));
+            uint32_t uploadCount = std::min(static_cast<uint32_t>(src.size()), static_cast<uint32_t>(kMaxPropInstances));
             lastDrawCount_ += uploadCount;
             continue;
         }
 
         // CPU frustum/fog cull fallback
-        auto& buf = instBufs_[s][frameIndex];
+        auto& buf = instBufs_[s][f];
         auto* dst = static_cast<PropInstance*>(buf.mapped);
         uint32_t count = 0;
 

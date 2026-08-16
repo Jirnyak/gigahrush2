@@ -15,6 +15,7 @@
 #include "game/mob_behaviour.h"
 #include "game/mob_table.h"
 #include "game/mob_spawn.h"
+#include "game/monster.h"
 #include "world/gravity.h"
 #include "world/lattice.h"
 #include "world/types.h"
@@ -86,6 +87,7 @@ std::uint8_t pack_target_node(std::uint8_t pack, std::uint64_t tick) {
 
 std::uint32_t wander_init(Registry& reg, LayerId layer, std::uint32_t seed) {
     pack_alert_clear();
+    dog_pack_init_table();
     // Two phases, and the split is the discipline combat.cpp documents at length,
     // not tidiness: `emplace<WanderTarget>` on the FIRST agent creates that
     // component's storage, which can reallocate the registry's pool container and
@@ -239,6 +241,11 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         // switched on instead of in the same commit.
         if (ai_owns_motion(reg, e)) continue;
 
+        // Snork leap/recovery state machine ownership guard:
+        if (const SnorkAi* snork = reg.try_get<SnorkAi>(e)) {
+            if (snork_is_in_recovery(*snork) || snork->state == SnorkLeapState::Airborne) continue;
+        }
+
         // The player is steered by input, never by the flow field. wander_init
         // already refuses to GIVE the camera holder a target (see the CameraTag
         // check in its loop above), but that only protects a body that was the
@@ -297,12 +304,12 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
             // components that already exist, so it can neither create a storage nor
             // reallocate the pool container this live view is holding.
             bool chasing = false;
-            float ax = 0.0f, ay = 0.0f;
+            float ax = 0.0f, ay = 0.0f, az = 0.0f;
             std::uint32_t chaseId = victimId;
             if (haveVictim) {
                 ax = wrap_delta_f(tr.pos.x, victimPos.x, kWorldExtent);
                 ay = wrap_delta_f(tr.pos.y, victimPos.y, kWorldExtent);
-                const float az = wrap_delta_f(tr.pos.z, victimPos.z, kWorldExtent);
+                az = wrap_delta_f(tr.pos.z, victimPos.z, kWorldExtent);
                 if (ax * ax + ay * ay + az * az < radius * radius) {
                     chasing = true;
                     if (wt.pack != 0) {
@@ -326,6 +333,7 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                 if (pr.e != entt::null) {
                     ax = wrap_delta_f(tr.pos.x, pr.pos.x, kWorldExtent);
                     ay = wrap_delta_f(tr.pos.y, pr.pos.y, kWorldExtent);
+                    az = wrap_delta_f(tr.pos.z, pr.pos.z, kWorldExtent);
                     chaseId = static_cast<std::uint32_t>(entt::to_integral(pr.e));
                     chasing = true;
                     if (wt.pack != 0) {
@@ -343,12 +351,37 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                     if (pax * pax + pay * pay + paz * paz < kPackAlertRange * kPackAlertRange) {
                         ax = pax;
                         ay = pay;
+                        az = paz;
                         chaseId = pa.targetId;
                         chasing = true;
                     }
                 }
             }
+            // Dog pack retreat behavior (when pack leader is killed)
+            if (const BlindDogPackMember* dog = reg.try_get<BlindDogPackMember>(e)) {
+                if (dog->isRetreating || (wt.pack != 0 && dog_pack_is_retreating(wt.pack))) {
+                    if (haveVictim) {
+                        float sp = static_cast<float>(md.speedMmps) * 0.001f * kCellSize;
+                        const vec3 steer = dog_pack_calculate_steer(e, wt.pack, tr.pos, victimPos, sp, tick, true);
+                        if (gf.axis != 0) vel.v.x = steer.x;
+                        if (gf.axis != 1) vel.v.y = steer.y;
+                        if (gf.axis != 2) vel.v.z = steer.z;
+                        continue;
+                    }
+                }
+            }
+
             if (chasing) {
+                // Blind Dog Pack AI: coordinated circling / flanking around prey
+                if (const BlindDogPackMember* dog = reg.try_get<BlindDogPackMember>(e)) {
+                    float sp = static_cast<float>(md.speedMmps) * 0.001f * kCellSize;
+                    const vec3 steer = dog_pack_calculate_steer(e, wt.pack, tr.pos, victimPos, sp, tick, dog->isRetreating);
+                    if (gf.axis != 0) vel.v.x = steer.x;
+                    if (gf.axis != 1) vel.v.y = steer.y;
+                    if (gf.axis != 2) vel.v.z = steer.z;
+                    continue;
+                }
+
                 // Frozen while looked at. This returns BEFORE any velocity is
                 // written, so a gazed Sculpture holds perfectly still instead of
                 // coasting on last pass's velocity.
@@ -370,20 +403,21 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                         continue;
                     }
                 }
-                const float len = std::sqrt(ax * ax + ay * ay);
+                const vec3 tangDelta = tangent(ax, ay, az);
+                const float len = length(tangDelta);
                 if (len > 0.05f) {
                     // Steer at a SLOT around the victim, not at the victim itself.
                     // Two behaviours turn a converging queue into an encirclement,
                     // and both offsets are pure functions of entity ids — no state,
                     // no coordination, no spatial query. [mob_behaviour.h]
+                    const vec3 dir = tangDelta * (1.0f / len);
                     const PursuitOffset off =
-                        pursuit_offset(beh, id, chaseId, ax / len, ay / len);
-                    float tx = ax + off.x;
-                    float ty = ay + off.y;
-                    float tl = std::sqrt(tx * tx + ty * ty);
+                        pursuit_offset(beh, id, chaseId, dir.x, dir.y);
+                    vec3 to = tangDelta + tangent(off.x, off.y, 0.0f);
+                    float toLen = length(to);
                     // Standing exactly on the slot must not divide by zero, and
                     // must not stop the chase either: fall back to the direct line.
-                    if (tl < 0.05f) { tx = ax; ty = ay; tl = len; }
+                    if (toLen < 0.05f) { to = tangDelta; toLen = len; }
                     float sp = static_cast<float>(md.speedMmps) *
                                0.001f * kCellSize;
                     // Wall-adjacency pace. The four AiFlag::WallBias carriers move
@@ -409,12 +443,11 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                     const game::BurstPhase bp = game::burst_phase(beh, id, tick, len);
                     sp *= game::burst_speed_mult(bp);
                     sp *= game::behaviour_hurt_move_mult(beh, mr->hp, mr->maxHp);
-                    const vec3 to = tangent(tx, ty, 0.0f);
-                    const float toLen = length(to);
                     if (toLen > 0.001f) {
-                        if (gf.axis != 0) vel.v.x = (to.x / toLen) * sp;
-                        if (gf.axis != 1) vel.v.y = (to.y / toLen) * sp;
-                        if (gf.axis != 2) vel.v.z = (to.z / toLen) * sp;
+                        const vec3 step = to * (1.0f / toLen);
+                        if (gf.axis != 0) vel.v.x = step.x * sp;
+                        if (gf.axis != 1) vel.v.y = step.y * sp;
+                        if (gf.axis != 2) vel.v.z = step.z * sp;
                     }
                 }
                 continue;  // no repath, no flow read — it has a target

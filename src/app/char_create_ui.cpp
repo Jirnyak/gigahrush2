@@ -69,7 +69,7 @@ void draw_character_creation_ui(CharCreationState& state, bool& outBeginGame, bo
     ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
                            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(760.0f, 620.0f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(840.0f, 680.0f), ImGuiCond_Appearing);
 
     ImGui::Begin("СОЗДАНИЕ ПЕРСОНАЖА / CHARACTER CREATION##cc_window", nullptr,
                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove |
@@ -81,7 +81,7 @@ void draw_character_creation_ui(CharCreationState& state, bool& outBeginGame, bo
     ImGui::Spacing();
 
     // 1. Role Archetype Selection
-    ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.25f, 1.0f), "АРХЕТИП И СПЕЦИАЛИЗАЦИЯ (ROLE ARCHETYPE):");
+    ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.25f, 1.0f), "1. АРХЕТИП И СПЕЦИАЛИЗАЦИЯ (ROLE ARCHETYPE):");
 
     struct RoleInfo {
         game::RoleId id;
@@ -121,8 +121,8 @@ void draw_character_creation_ui(CharCreationState& state, bool& outBeginGame, bo
     }
 
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.04f, 0.08f, 0.04f, 0.85f));
-    ImGui::BeginChild("##role_desc_box", ImVec2(0.0f, 68.0f), true);
-    ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.91f, 1.0f), "Фракционная принадлежность: %s", curRole->factionTag);
+    ImGui::BeginChild("##role_desc_box", ImVec2(0.0f, 52.0f), true);
+    ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.91f, 1.0f), "Фракция: %s", curRole->factionTag);
     ImGui::TextWrapped("%s", curRole->desc);
     ImGui::EndChild();
     ImGui::PopStyleColor();
@@ -133,40 +133,44 @@ void draw_character_creation_ui(CharCreationState& state, bool& outBeginGame, bo
 
     // 2. Base Attributes Allocation & Live Derived Stats
     ImGui::Columns(2, "##cc_columns", false);
-    ImGui::SetColumnWidth(0, 360.0f);
+    ImGui::SetColumnWidth(0, 410.0f);
 
-    ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.25f, 1.0f), "ХАРАКТЕРИСТИКИ (ATTRIBUTES):");
+    ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.25f, 1.0f), "2. ХАРАКТЕРИСТИКИ (5 ATTRIBUTES):");
     ImGui::Text("Свободных очков (Points pool): ");
     ImGui::SameLine();
     ImGui::TextColored(ImVec4(0.35f, 0.95f, 0.40f, 1.0f), "[ %d ]", state.unallocated);
 
-    auto draw_attr_row = [&](const char* name, int& val) {
-        ImGui::Text("%-16s", name);
+    auto draw_attr_row = [&](const char* name, int& val, const char* hint) {
+        ImGui::Text("%-18s", name);
         ImGui::SameLine();
         char btnMinus[32], btnPlus[32];
         std::snprintf(btnMinus, sizeof(btnMinus), "-##%s", name);
         std::snprintf(btnPlus, sizeof(btnPlus), "+##%s", name);
 
-        if (ImGui::Button(btnMinus, ImVec2(28.0f, 24.0f))) {
+        if (ImGui::Button(btnMinus, ImVec2(26.0f, 22.0f))) {
             if (val > 1) {
                 --val;
                 ++state.unallocated;
             }
         }
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 1.0f), "  %2d  ", val);
+        ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 1.0f), " %2d ", val);
         ImGui::SameLine();
-        if (ImGui::Button(btnPlus, ImVec2(28.0f, 24.0f))) {
+        if (ImGui::Button(btnPlus, ImVec2(26.0f, 22.0f))) {
             if (state.unallocated > 0 && val < 255) {
                 ++val;
                 --state.unallocated;
             }
         }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(%s)", hint);
     };
 
-    draw_attr_row("СИЛА (STR)", state.str);
-    draw_attr_row("ЛОВКОСТЬ (AGI)", state.agi);
-    draw_attr_row("ИНТЕЛЛЕКТ (INT)", state.intell);
+    draw_attr_row("СИЛА (STR)", state.str, "+4 кг, +1% melee");
+    draw_attr_row("ЛОВКОСТЬ (AGI)", state.agi, "+1% бег, -2% кд");
+    draw_attr_row("ВЫНОСЛИВОСТЬ (END)", state.end, "+1.5% HP, +радио");
+    draw_attr_row("ИНТЕЛЛЕКТ (INT)", state.intell, "+1% PSI, +XP, -PSI кд");
+    draw_attr_row("ВОСПРИЯТИЕ (PER)", state.per, "+крит, +обзор");
 
     ImGui::NextColumn();
 
@@ -174,29 +178,85 @@ void draw_character_creation_ui(CharCreationState& state, bool& outBeginGame, bo
     game::RpgStats previewRpg = game::fresh_rpg(1);
     previewRpg.attr[static_cast<std::size_t>(game::Attr::Str)] = static_cast<std::uint8_t>(state.str);
     previewRpg.attr[static_cast<std::size_t>(game::Attr::Agi)] = static_cast<std::uint8_t>(state.agi);
+    previewRpg.attr[static_cast<std::size_t>(game::Attr::End)] = static_cast<std::uint8_t>(state.end);
     previewRpg.attr[static_cast<std::size_t>(game::Attr::Int)] = static_cast<std::uint8_t>(state.intell);
+    previewRpg.attr[static_cast<std::size_t>(game::Attr::Per)] = static_cast<std::uint8_t>(state.per);
+    if (state.trait1 != game::TraitId::None) game::add_trait(previewRpg, state.trait1);
+    if (state.trait2 != game::TraitId::None) game::add_trait(previewRpg, state.trait2);
 
     const int previewHp = game::max_hp(previewRpg);
     const float previewCarryKg = static_cast<float>(game::carry_capacity_g(previewRpg)) / 1000.0f;
     const int previewPsi = game::max_psi(previewRpg);
     const float speedMult = static_cast<float>(game::agi_move_speed_mult_e3(previewRpg)) / 1000.0f;
     const float meleeMult = static_cast<float>(game::str_melee_dmg_mult_e3(previewRpg)) / 1000.0f;
+    const float critPct = static_cast<float>(game::per_crit_chance_e3(previewRpg)) / 10.0f;
+    const float radResistPct = static_cast<float>(game::end_radiation_resist_e3(previewRpg)) / 10.0f;
+    const float detectRange = game::per_detection_range_m(previewRpg);
+    const float xpMult = static_cast<float>(game::int_xp_mult_e3(previewRpg)) / 1000.0f;
+    const float docMult = static_cast<float>(game::int_document_reward_mult_e3(previewRpg)) / 1000.0f;
 
-    ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.25f, 1.0f), "РАСЧЁТНЫЕ ПАРАМЕТРЫ (DERIVED STATS):");
-    ImGui::BulletText("Здоровье (Max HP): %d HP (+%d%%)", previewHp, state.str);
-    ImGui::BulletText("Грузоподъёмность: %.1f кг (+%.1f кг)", previewCarryKg, static_cast<float>(state.str * 4));
-    ImGui::BulletText("ПСИ-энергия (Max PSI): %d PSI (+%d%%)", previewPsi, state.intell);
-    ImGui::BulletText("Скорость бега: x%.2f (+%.1f%%)", speedMult, static_cast<float>(state.agi));
-    ImGui::BulletText("Множитель урона: x%.2f (+%.1f%%)", meleeMult, static_cast<float>(state.str));
+    ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.25f, 1.0f), "РАСЧЁТНЫЕ ПАРАМЕТРЫ (DERIVED):");
+    ImGui::BulletText("Здоровье (Max HP): %d HP", previewHp);
+    ImGui::BulletText("Грузоподъёмность: %.1f кг", previewCarryKg);
+    ImGui::BulletText("ПСИ-энергия (Max PSI): %d PSI", previewPsi);
+    ImGui::BulletText("Скорость бега: x%.2f", speedMult);
+    ImGui::BulletText("Множитель урона: x%.2f", meleeMult);
+    ImGui::BulletText("Шанс крита: %.1f%%", critPct);
+    ImGui::BulletText("Защита от радиации: %.1f%%", radResistPct);
+    ImGui::BulletText("Радиус обнаружения: %.1f м", detectRange);
+    ImGui::BulletText("Опыт за убийства: x%.2f | Награды: x%.2f", xpMult, docMult);
 
     ImGui::Columns(1);
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
-    // 3. Starting Equipment Preview
-    ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.25f, 1.0f), "СТАРТОВОЕ СНАРЯЖЕНИЕ (STARTING EQUIPMENT):");
-    ImGui::BeginChild("##equip_preview", ImVec2(0.0f, 90.0f), true);
+    // 3. Starting Traits Selection (Tradeoffs)
+    ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.25f, 1.0f), "3. ОСОБЕННОСТИ И ЧЕРТЫ (STARTING TRAITS — ВЫБОР ДО 2 ЧЕРТ):");
+
+    auto draw_trait_combo = [&](const char* label, game::TraitId& selected, game::TraitId other) {
+        const char* curName = (selected == game::TraitId::None) ? "(Нет / None)" : game::trait_def(selected).nameRu;
+        if (ImGui::BeginCombo(label, curName)) {
+            if (ImGui::Selectable("(Нет / None)", selected == game::TraitId::None)) {
+                selected = game::TraitId::None;
+            }
+            for (std::size_t i = 1; i < game::kTraitCount; ++i) {
+                const auto tid = static_cast<game::TraitId>(i);
+                if (tid == other) continue; // cannot pick the same trait twice
+                const auto& td = game::trait_def(tid);
+                bool isCur = (selected == tid);
+                if (ImGui::Selectable(td.nameRu, isCur)) {
+                    selected = tid;
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s\n%s", td.name, td.desc);
+                }
+            }
+            ImGui::EndCombo();
+        }
+    };
+
+    ImGui::Columns(2, "##trait_cols", false);
+    draw_trait_combo("Черта 1##t1", state.trait1, state.trait2);
+    if (state.trait1 != game::TraitId::None) {
+        const auto& td1 = game::trait_def(state.trait1);
+        ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.91f, 1.0f), "Эффект: %s", td1.desc);
+    }
+    ImGui::NextColumn();
+    draw_trait_combo("Черта 2##t2", state.trait2, state.trait1);
+    if (state.trait2 != game::TraitId::None) {
+        const auto& td2 = game::trait_def(state.trait2);
+        ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.91f, 1.0f), "Эффект: %s", td2.desc);
+    }
+    ImGui::Columns(1);
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // 4. Starting Equipment Preview
+    ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.25f, 1.0f), "4. СТАРТОВОЕ СНАРЯЖЕНИЕ (STARTING EQUIPMENT):");
+    ImGui::BeginChild("##equip_preview", ImVec2(0.0f, 64.0f), true);
 
     game::Inventory tmpInv{};
     populate_archetype_inventory(tmpInv, state.role);
@@ -219,7 +279,7 @@ void draw_character_creation_ui(CharCreationState& state, bool& outBeginGame, bo
     ImGui::Separator();
     ImGui::Spacing();
 
-    // 4. Action Buttons
+    // 5. Action Buttons
     const ImVec2 actionBtn(260.0f, 36.0f);
     if (ImGui::Button("НАЗАД / BACK", ImVec2(160.0f, 36.0f))) {
         outBack = true;
@@ -325,11 +385,16 @@ void draw_settings_menu_ui(bool& outBack) {
 
 void apply_character_creation(Registry& reg, Entity player, game::NpcPool& pool,
                               game::RpgStats& carriedRpg, const CharCreationState& cc) {
-    // 1. Initialize RpgStats sheet with allocated attributes
+    // 1. Initialize RpgStats sheet with allocated attributes and selected traits
     game::RpgStats customRpg = game::fresh_rpg(1);
     customRpg.attr[static_cast<std::size_t>(game::Attr::Str)] = static_cast<std::uint8_t>(std::clamp(cc.str, 1, 255));
     customRpg.attr[static_cast<std::size_t>(game::Attr::Agi)] = static_cast<std::uint8_t>(std::clamp(cc.agi, 1, 255));
+    customRpg.attr[static_cast<std::size_t>(game::Attr::End)] = static_cast<std::uint8_t>(std::clamp(cc.end, 1, 255));
     customRpg.attr[static_cast<std::size_t>(game::Attr::Int)] = static_cast<std::uint8_t>(std::clamp(cc.intell, 1, 255));
+    customRpg.attr[static_cast<std::size_t>(game::Attr::Per)] = static_cast<std::uint8_t>(std::clamp(cc.per, 1, 255));
+    if (cc.trait1 != game::TraitId::None) game::add_trait(customRpg, cc.trait1);
+    if (cc.trait2 != game::TraitId::None) game::add_trait(customRpg, cc.trait2);
+
     customRpg.psi = game::max_psi(customRpg);
     customRpg.attrPoints = static_cast<std::uint8_t>(std::max(0, cc.unallocated));
     carriedRpg = customRpg;
@@ -345,6 +410,8 @@ void apply_character_creation(Registry& reg, Entity player, game::NpcPool& pool,
                 pool.attrs(pid)[0] = customRpg.attr[0];
                 pool.attrs(pid)[1] = customRpg.attr[1];
                 pool.attrs(pid)[2] = customRpg.attr[2];
+                pool.attrs(pid)[3] = customRpg.attr[3];
+                pool.attrs(pid)[4] = customRpg.attr[4];
 
                 const std::int16_t mhp = static_cast<std::int16_t>(game::max_hp(customRpg));
                 pool.max_hp(pid) = mhp;

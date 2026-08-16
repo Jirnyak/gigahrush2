@@ -392,7 +392,7 @@ target_compile_definitions(gigahrush2 PRIVATE
 # exports it unnamespaced when built as a subproject.
 target_link_libraries(gigahrush2 PRIVATE giga_game giga_core giga_audio giga_imgui
     SDL3::SDL3 Vulkan::Vulkan ktx)
-target_include_directories(gigahrush2 PRIVATE ${ktx_SOURCE_DIR}/include)
+target_include_directories(gigahrush2 PRIVATE ${ktx_SOURCE_DIR}/include ${CMAKE_BINARY_DIR}/_deps/ktx-src/include)
 # RTTI is permitted in the app shell (ON) — only the core/game libs forbid it.
 giga_target_flags(gigahrush2 ON)
 
@@ -936,7 +936,10 @@ if(GIGA_BUILD_TESTS)
     # production/consumption loop (suite_room_stock.inl). The bulk of the delta
     # is the full-floor alife loop exercising the new production rates and the
     # spatial audio 360-degree panning sweep.
-        PASS_REGULAR_EXPRESSION "game_test: 536031 checks, 0 failures")
+    # 536031 -> 537211 (+1180) on 2026-08-16: BankAccount & PowerGridState persistence
+    # (v15: 352 B bank, 1028 B power grid, +8 B player yaw/pitch camera angles).
+        TIMEOUT 600
+        PASS_REGULAR_EXPRESSION "game_test: 537211 checks, 0 failures")
 
     # Comprehensive Opaque-Box E2E Test Suite for GigaHrush 2 (Milestone M3)
     add_executable(e2e_test tests/e2e_test.cpp)
