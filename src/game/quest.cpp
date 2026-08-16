@@ -299,33 +299,14 @@ bool quest_accept(QuestLog& log, const NpcPool& pool, QuestId id, NpcId giver, i
 
 int quest_grant_item(Inventory& inv, ItemId item, int count) {
     if (!item_valid(item) || count <= 0) return 0;
-    const int stackMax =
-        item_def(item).stackMax < 1 ? 1 : static_cast<int>(item_def(item).stackMax);
-
-    int left = count;
-    int landed = 0;
-    // Top up partial stacks of the same item first, so a reward of 2 bandages does not
-    // consume a slot the player still needs when they already carry 60.
-    for (ItemSlot& s : inv.slots) {
-        if (left <= 0) break;
-        if (s.item != item) continue;
-        const int room = stackMax - static_cast<int>(s.count);
-        if (room <= 0) continue;
-        const int take = room < left ? room : left;
-        s.count = static_cast<std::uint16_t>(static_cast<int>(s.count) + take);
-        left -= take;
-        landed += take;
-    }
-    for (ItemSlot& s : inv.slots) {
-        if (left <= 0) break;
-        if (s.item != kInvalidItem) continue;
-        const int take = stackMax < left ? stackMax : left;
-        s.item = item;
-        s.count = static_cast<std::uint16_t>(take);
-        left -= take;
-        landed += take;
-    }
-    return landed;
+    // A thin wrapper over THE transfer primitive ([item_table.h]
+    // inventory_give) — this function WAS its prototype, and keeping a second
+    // copy of the stack law here is exactly how the two would drift. A quest
+    // reward is always mint (condition default).
+    const std::uint16_t want = count > 0xFFFF ? std::uint16_t{0xFFFF}
+                                              : static_cast<std::uint16_t>(count);
+    const std::uint16_t unplaced = inventory_give(inv, item, want);
+    return static_cast<int>(want) - static_cast<int>(unplaced);
 }
 
 // ---------------------------------------------------------------------------

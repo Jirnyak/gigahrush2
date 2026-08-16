@@ -1025,6 +1025,48 @@ static void test_craft_all() {
         CHECK(wear_resist_scale(100, 0) == 20);
     }
 
+    { // ---- inventory_give: the stack law lives ONCE ([item_table.h]) --------
+        // A stackable row by property (stackMax > 1), never by id.
+        ItemId stk = kInvalidItem;
+        for (std::size_t i = 1; i <= kItemCount; ++i) {
+            const ItemId id = static_cast<ItemId>(i);
+            if (item_valid(id) && item_def(id).stackMax > 4) { stk = id; break; }
+        }
+        CHECK(stk != kInvalidItem);
+        const int cap = item_def(stk).stackMax;
+
+        // Top-up before fresh slots, clamp at cap, remainder returned intact.
+        Inventory g{};
+        g.slots[2] = ItemSlot{stk, 1};
+        CHECK(inventory_give(g, stk, static_cast<std::uint16_t>(cap)) == 0);
+        CHECK(static_cast<int>(g.slots[2].count) == cap);  // topped up first
+        CHECK(g.slots[0].item == stk && g.slots[0].count == 1);  // overflow -> fresh
+
+        // Law 1: different wear is a different stack — a ruined batch must NOT
+        // merge into the mint stack, and vice versa.
+        Inventory h{};
+        h.slots[0] = ItemSlot{stk, 1};            // mint (condition 255)
+        CHECK(inventory_give(h, stk, 1, 7) == 0); // battered batch
+        CHECK(h.slots[0].count == 1);             // mint stack untouched
+        CHECK(h.slots[1].item == stk && h.slots[1].condition == 7);
+
+        // Law 2: a freed slot's stale wear byte must not infect a fresh give.
+        // Emptiers zero item and count only — that is the trap this pins.
+        Inventory j{};
+        j.slots[0] = ItemSlot{stk, 3};
+        j.slots[0].condition = 9;                 // battered stack...
+        j.slots[0].item = kInvalidItem;           // ...sold/spilled: slot freed
+        j.slots[0].count = 0;                     //    the stale 9 stays behind
+        CHECK(inventory_give(j, stk, 1) == 0);
+        CHECK(j.slots[0].condition == 255);       // fresh give is MINT
+
+        // A full grid returns the whole remainder; nothing is deleted.
+        Inventory full{};
+        for (int i = 0; i < kInvSlots; ++i)
+            full.slots[i] = ItemSlot{stk, static_cast<std::uint8_t>(cap)};
+        CHECK(inventory_give(full, stk, 5) == 5);
+    }
+
     // Work counts, printed. Counts and not seconds: the same run does the same
     // amount of work on every host, which a stopwatch cannot promise.
     CHECK(disassembliesRun > 7000u);

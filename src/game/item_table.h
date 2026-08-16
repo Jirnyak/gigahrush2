@@ -134,6 +134,17 @@ inline const char* item_name(ItemId id) {
     return kItemNames[static_cast<std::size_t>(id) - 1];
 }
 
+// THE transfer primitive (problems.md §39): every path that puts items INTO an
+// 8x8 grid — pickup, container take, quest reward — so the stack law lives
+// once. Tops up same-item SAME-CONDITION stacks first (different wear is a
+// different stack), then fills fresh slots writing `condition` explicitly (a
+// freed slot keeps a stale wear byte). Returns the UNPLACED remainder and
+// never deletes anything — the caller owns what a remainder means.
+// Defined in inventory_give.cpp, the hand-written sibling of the generated
+// table, same split as ranged_pick.cpp.
+std::uint16_t inventory_give(Inventory& inv, ItemId id, std::uint16_t count,
+                             std::uint8_t condition = 255);
+
 // --- CARRIED WEIGHT ----------------------------------------------------------
 // The reader `massG` exists for, and it lands in the SAME change as the column on
 // purpose: a data column with no consumer is [problems.md] §35's whole class, and

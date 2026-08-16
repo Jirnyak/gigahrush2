@@ -953,7 +953,12 @@ if(GIGA_BUILD_TESTS)
     # false = exactly 3 red (one-use, frac-row, roll-row lifetimes);
     # wear_resist_scale -> identity = exactly 3 red (both worn-vest deltas in
     # suite_needs + the 20%-floor endpoint pin).
-        PASS_REGULAR_EXPRESSION "game_test: 240288 checks, 0 failures")
+    # 240288 -> 240298 (+10) on 2026-08-16: inventory_give — THE transfer
+    # primitive (§39). The +10 pin: top-up-before-fresh with clamp, wear splits
+    # stacks (law 1), a freed slot's stale wear byte cannot infect a fresh give
+    # (law 2), a full grid returns the remainder undeleted. Mutations RUN, see
+    # the commit for measured reds.
+        PASS_REGULAR_EXPRESSION "game_test: 240298 checks, 0 failures")
 
 
 

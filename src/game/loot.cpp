@@ -379,39 +379,26 @@ std::int32_t pickup_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId la
         if (!item_valid(p.item)) { taken.push_back(e); continue; }
         const ItemDef& def = item_def(p.item);
 
-        // Stack into an existing slot where the item allows it, else take a free
-        // one. A full inventory simply leaves the item on the floor — no silent
-        // discard, which is what makes 64 slots a real constraint.
-        int slot = -1;
-        if (def.stackMax > 1) {
-            for (int i = 0; i < kInvSlots; ++i)
-                if (inv.slots[i].item == p.item &&
-                    inv.slots[i].count < def.stackMax) { slot = i; break; }
-        }
-        if (slot < 0) slot = inv.first_free();
-        if (slot < 0) continue;  // full: it stays where it is
-
-        if (inv.slots[slot].item == p.item) {
-            // **Clamp to the item's own cap — computed in int BEFORE the store.**
-            // An audit put 7 of a cap-8 item in a slot, dropped a stack of 8 on
-            // it, and pickup_step merged the lot into 15 — the cap was consulted
-            // to CHOOSE the slot and then ignored when writing it. With the u8
-            // count ([inventory.h] addition law) the order is load-bearing too:
-            // summing IN the slot would wrap at 256 before any clamp could see it.
-            int merged = static_cast<int>(inv.slots[slot].count) +
-                         static_cast<int>(p.count);
-            const int cap = def.stackMax ? def.stackMax : 255;
-            if (merged > cap) merged = cap;
-            inv.slots[slot].count = static_cast<std::uint8_t>(merged);
-        } else {
-            inv.slots[slot].item = p.item;
-            inv.slots[slot].count = p.count;
-        }
-        gained += def.value * static_cast<std::int32_t>(p.count);
+        // THE transfer primitive does the stacking ([item_table.h]
+        // inventory_give): same-condition top-up, explicit condition on fresh
+        // slots, clamp-before-store. The remainder STAYS ON THE FLOOR as a
+        // smaller Pickup — the old path both destroyed the overflow of a
+        // clamped merge and paid `gained` for it, a silent discard that
+        // briefly made 64 slots a soft constraint.
+        const std::uint16_t unplaced =
+            inventory_give(inv, p.item, p.count, p.condition);
+        const std::uint16_t placed =
+            static_cast<std::uint16_t>(p.count - unplaced);
+        if (placed == 0) continue;  // full: it stays where it is
+        gained += def.value * static_cast<std::int32_t>(placed);
 
         // `a` = from (the world, kInvalidNpc), `b` = to, `c` = item id.
         bus.publish(EventType::ItemTransferred, kInvalidNpc, selfId, p.item, tick);
-        taken.push_back(e);
+        if (unplaced == 0) {
+            taken.push_back(e);
+        } else {
+            reg.get<Pickup>(e).count = static_cast<std::uint8_t>(unplaced);
+        }
     }
     for (Entity e : taken) reg.destroy(e);
     return gained;

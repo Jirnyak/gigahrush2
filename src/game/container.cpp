@@ -361,12 +361,19 @@ std::int32_t loot_containers_step(Registry& reg, NpcPool& pool, LayerId layer,
         bool anyMoved = false;
         for (int i = 0; i < kContainerSlots; ++i) {
             if (!item_valid(c.item[i]) || c.count[i] == 0) continue;
-            const int slot = inv.first_free();
-            if (slot < 0) break;   // full: the rest stays in the box, not deleted
-            inv.slots[slot] = ItemSlot{c.item[i], c.count[i]};
-            took += item_def(c.item[i]).value * c.count[i];
-            c.item[i] = kInvalidItem;
-            c.count[i] = 0;
+            // THE transfer primitive ([item_table.h] inventory_give): stacks
+            // top up before fresh slots are spent, the remainder stays in the
+            // box, not deleted. Container cells carry no wear byte yet — a
+            // crated find is mint until the container seam of [production.md]
+            // says otherwise.
+            const std::uint16_t unplaced =
+                inventory_give(inv, c.item[i], c.count[i]);
+            const std::uint16_t moved =
+                static_cast<std::uint16_t>(c.count[i] - unplaced);
+            if (moved == 0) break;  // full: the rest stays in the box
+            took += item_def(c.item[i]).value * moved;
+            c.count[i] = static_cast<std::uint8_t>(unplaced);
+            if (c.count[i] == 0) c.item[i] = kInvalidItem;
             anyMoved = true;
         }
         // The lid. Gated on `anyMoved`, so the pass that empties a crate makes one
