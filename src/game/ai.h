@@ -1032,12 +1032,28 @@ void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
                     const nav::FineNav& fine, LayerId layer, float dt,
                     const GravityField* gravity = nullptr);
 
+// The danger field's PRODUCER — the write half of the loop ai_step's threat
+// term has been waiting on ([diffusion.h], problems.md §52). Fleeing bodies
+// (IntentFlee/IntentSafety) publish `faction panic × dt` at their own cell
+// through the driver; the sweep and decay stay the driver's business. Runs
+// before diffusion_tick in the same sim tick, so a panic published on tick N
+// spreads on the next cadence sweep, never racing it.
 // Broadcasts panic from agents in emergency states (IntentFlee, IntentSafety, hurt)
 // back into the diffusion danger field. Implements Docs/specs/01_ALIFE_AND_UTILITY_AI.md §4.2.
 void ai_panic_publish_step(Registry& reg, const NpcPool& pool,
                            DiffusionDriver& driver, World& world,
                            LayerId layer, float dt,
                            const SamosborState* samosbor = nullptr);
+
+// The NPC equip DECIDER ([equip.h]): экипировка — решение, и для тел с AiBrain
+// решает этот проход. Staggered per body (~2 s game time), re-scores the bag —
+// weapon (gun over club, then DPS/damage), armour (total resist) — and records
+// the choice in the body's Equipped component, which combat's strict readers
+// then obey. THE single writer of Equipped for AiBrain bodies; the player's is
+// written only by their own hand (console `equip`). Runs after ai_step in the
+// tick: intent first, wardrobe second.
+void ai_equip_step(Registry& reg, const NpcPool& pool, LayerId layer,
+                   std::uint64_t tick);
 
 // --- Recorders anything may call --------------------------------------------
 // The write side of the seam, deliberately public and deliberately tiny: filing a

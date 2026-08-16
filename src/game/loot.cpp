@@ -78,8 +78,9 @@ std::uint16_t weapon_ammo_count(ItemId weapon, std::uint32_t seed) {
 bool push_slot(ItemSlot* out, std::uint8_t cap, std::uint8_t& n,
                ItemId id, std::uint16_t count) {
     if (!out || n >= cap || id == kInvalidItem || count == 0) return false;
-    if (count > 0xFFFFu) count = 0xFFFFu;
-    out[n++] = ItemSlot{id, count};
+    // The cell's count is u8 by law ([inventory.h]); clamp BEFORE the store.
+    if (count > 0xFFu) count = 0xFFu;
+    out[n++] = ItemSlot{id, static_cast<std::uint8_t>(count)};
     return true;
 }
 
@@ -383,17 +384,24 @@ std::int32_t pickup_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId la
         if (!item_valid(p.item)) { taken.push_back(e); continue; }
         const ItemDef& def = item_def(p.item);
 
-        // Unified inventory_give: respects stackMax, tops up partial stacks, fills empty
-        // slots, and returns the exact remainder without silent item loss or overflow.
-        const std::uint16_t unplaced = inventory_give(inv, p.item, p.count);
-        const std::uint16_t placed = static_cast<std::uint16_t>(p.count - unplaced);
-        if (placed > 0) {
-            gained += def.value * static_cast<std::int32_t>(placed);
-            bus.publish(EventType::ItemTransferred, kInvalidNpc, selfId, p.item, tick);
-        }
+        // THE transfer primitive does the stacking ([item_table.h]
+        // inventory_give): same-condition top-up, explicit condition on fresh
+        // slots, clamp-before-store. The remainder STAYS ON THE FLOOR as a
+        // smaller Pickup — the old path both destroyed the overflow of a
+        // clamped merge and paid `gained` for it, a silent discard that
+        // briefly made 64 slots a soft constraint.
+        const std::uint16_t unplaced =
+            inventory_give(inv, p.item, p.count, p.condition);
+        const std::uint16_t placed =
+            static_cast<std::uint16_t>(p.count - unplaced);
+        if (placed == 0) continue;  // full: it stays where it is
+        gained += def.value * static_cast<std::int32_t>(placed);
+
+        // `a` = from (the world, kInvalidNpc), `b` = to, `c` = item id.
+        bus.publish(EventType::ItemTransferred, kInvalidNpc, selfId, p.item, tick);
         if (unplaced == 0) {
             taken.push_back(e);
-        } else if (unplaced < p.count) {
+        } else {
             reg.get<Pickup>(e).count = static_cast<std::uint8_t>(unplaced);
         }
     }
@@ -536,7 +544,7 @@ CorpseLootResult loot_corpse_interact(Registry& reg, NpcPool& pool, EventBus& bu
                         : 0);
                 if (space == 0) break;
                 moved = slotItem.count < space ? slotItem.count : space;
-                inv.slots[targetSlot].count = static_cast<std::uint16_t>(
+                inv.slots[targetSlot].count = static_cast<std::uint8_t>(
                     inv.slots[targetSlot].count + moved);
             } else {
                 // Fresh slot: take up to stackMax, leave the rest on the corpse.
@@ -544,10 +552,10 @@ CorpseLootResult loot_corpse_interact(Registry& reg, NpcPool& pool, EventBus& bu
                 if (def.stackMax && moved > def.stackMax)
                     moved = def.stackMax;
                 inv.slots[targetSlot].item = slotItem.item;
-                inv.slots[targetSlot].count = moved;
+                inv.slots[targetSlot].count = static_cast<std::uint8_t>(moved);
             }
 
-            slotItem.count = static_cast<std::uint16_t>(slotItem.count - moved);
+            slotItem.count = static_cast<std::uint8_t>(slotItem.count - moved);
             res.roublesGained += def.value * static_cast<std::int32_t>(moved);
             res.itemsTaken++;
             bus.publish(EventType::ItemTransferred, kInvalidNpc, selfId,

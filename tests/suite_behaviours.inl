@@ -105,6 +105,9 @@ static void test_behaviours_all() {
     nav::CoarseGraph coarse{};                 // next[i][j] == 0 for every pair
     nav::FineNav fine;
     fine.flow.assign(kMacroCells, nav::kFlowNone);   // one node's worth; hop is always 0
+    // `nearest` is baked whenever `flow` is ([nav.h] bake_fine) — a hand-built
+    // fixture must honour the same invariant or nearest_node() indexes nothing.
+    fine.nearest.assign(kMacroCells, nav::kFlowNone);
     CHECK(!fine.flow.empty());                       // or wander_step returns immediately
     CHECK(nav::coarse_next(coarse, 17, 42) == 0);    // the hop every mob will read
 

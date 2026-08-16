@@ -78,6 +78,10 @@ namespace giga::game {
 struct Pickup {
     ItemId item = kInvalidItem;
     std::uint8_t count = 1;
+    // The instance's wear rides the floor with it ([inventory.h] condition):
+    // a dropped ruined tool is still ruined when swept back up. 255 default
+    // keeps every existing aggregate-init spawner minting fresh.
+    std::uint8_t condition = 255;
 };
 
 // How close you must be to sweep something up, metres. Derived from

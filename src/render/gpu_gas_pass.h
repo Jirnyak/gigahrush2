@@ -42,6 +42,20 @@ public:
         return gasSSBO_[readIndex_].buffer;
     }
 
+    // ИСТОЧНИК: залить CPU-поле kGasField (float 0..1 на клетку — засев шахт
+    // из padic_gen) в toxic-канал ОБОИХ буферов, oxy = 255, остальное 0.
+    // Зовётся при входе на этаж, тем же контрактом, что
+    // diffusion_driver_on_floor_built: рециклированный слот не должен держать
+    // газ ушедшего этажа. nullptr = чистая атмосфера.
+    void upload_field(const float* toxic01) noexcept;
+
+    // ЧИТАТЕЛЬ: упакованная клетка (toxic|smoke<<8|oxy<<16|heat<<24) из
+    // читаемого буфера. Буферы host-coherent и GPU пишет их каждый кадр —
+    // значение может отставать на кадр; для HUD и небоевой логики это
+    // приемлемо ЯВНО, боевая подключка потребует фенса — записано здесь,
+    // чтобы никто не «улучшил» молча.
+    std::uint32_t sample_cell(int x, int y, int z) const noexcept;
+
     bool ready() const noexcept { return computePipeline_ != VK_NULL_HANDLE; }
 
 private:
@@ -50,7 +64,7 @@ private:
     bool create_pipeline(const char* shaderDir) noexcept;
 
     VulkanDevice* dev_ = nullptr;
-    VulkanBuffer gasSSBO_[2]{}; // Double buffered ping-pong (8 MiB each for 128^3)
+    VulkanBuffer gasSSBO_[2]{}; // Double buffered ping-pong (16 MiB each for 512x512x16)
     uint32_t readIndex_ = 0;
 
     VkDescriptorSetLayout descSetLayout_ = VK_NULL_HANDLE;

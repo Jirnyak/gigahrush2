@@ -64,6 +64,8 @@ enum class ConsoleRequest : std::uint32_t {
                // ONE set of 16 columns rather than three sets of 16 ([fast_travel.h])
     Craft, Scrap,            // crafting window / scrap cheapest junk
     AttrStr, AttrAgi, AttrEnd, AttrInt, AttrPer, // ATTR1: spend one unspent point on STR/AGI/END/INT/PER
+    Inventory, // toggle the inventory grid ([inventory.md] — the ONE cell
+               // widget; vendor/craft windows fold into it as policies later)
     Count
 };
 

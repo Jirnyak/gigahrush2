@@ -2,71 +2,72 @@
 
 #include <algorithm>
 
+#include "core/rng.h"          // hash_u32, rand_below — the wear roll
+#include "game/weapon_table.h" // melee_for_item — the melee durability source
+
 namespace giga::game {
 
 namespace {
 
-inline std::uint8_t slot_for_enum(const Equipped& eq, EquipSlot slot) {
+std::uint8_t* eq_cell(Equipped& eq, EquipSlot slot) {
     switch (slot) {
-        case EquipSlot::Weapon: return eq.weapon;
-        case EquipSlot::Armor:  return eq.armor;
-        case EquipSlot::Tool:   return eq.tool;
-        default:                return kEquipNone;
+        case EquipSlot::Weapon: return &eq.weapon;
+        case EquipSlot::Armor:  return &eq.armor;
+        case EquipSlot::Tool:   return &eq.tool;
+        default:                return nullptr;
     }
 }
 
-inline void set_slot_for_enum(Equipped& eq, EquipSlot slot, std::uint8_t idx) {
-    switch (slot) {
-        case EquipSlot::Weapon: eq.weapon = idx; break;
-        case EquipSlot::Armor:  eq.armor  = idx; break;
-        case EquipSlot::Tool:   eq.tool   = idx; break;
-        default: break;
-    }
+const std::uint8_t* eq_cell(const Equipped& eq, EquipSlot slot) {
+    return eq_cell(const_cast<Equipped&>(eq), slot);
 }
 
 } // namespace
 
-ItemId equipped_item(const Inventory& inv, const Equipped& eq, EquipSlot slot) {
-    const std::uint8_t idx = slot_for_enum(eq, slot);
-    if (idx >= kInvSlots) return kInvalidItem;
-    const ItemSlot& s = inv.slots[idx];
-    if (s.item == 0 || s.count == 0 || !item_valid(s.item)) return kInvalidItem;
-    return s.item;
-}
-
-ItemSlot* equipped_slot(Inventory& inv, const Equipped& eq, EquipSlot slot) {
-    const std::uint8_t idx = slot_for_enum(eq, slot);
-    if (idx >= kInvSlots) return nullptr;
-    ItemSlot& s = inv.slots[idx];
-    if (s.item == 0 || s.count == 0 || !item_valid(s.item)) return nullptr;
-    return &s;
-}
-
-const ItemSlot* equipped_slot(const Inventory& inv, const Equipped& eq, EquipSlot slot) {
-    const std::uint8_t idx = slot_for_enum(eq, slot);
-    if (idx >= kInvSlots) return nullptr;
-    const ItemSlot& s = inv.slots[idx];
-    if (s.item == 0 || s.count == 0 || !item_valid(s.item)) return nullptr;
-    return &s;
-}
-
-bool equip_item(Inventory& inv, Equipped& eq, std::uint8_t slotIdx) {
+bool equip_item(const Inventory& inv, Equipped& eq, std::uint8_t slotIdx) {
     if (slotIdx >= kInvSlots) return false;
     const ItemSlot& s = inv.slots[slotIdx];
-    if (s.item == 0 || s.count == 0 || !item_valid(s.item)) return false;
-    const ItemDef& d = item_def(s.item);
-    const EquipSlot targetSlot = static_cast<EquipSlot>(d.equipSlot);
-    if (targetSlot == EquipSlot::None || targetSlot >= EquipSlot::Count) {
-        return false;
-    }
-    set_slot_for_enum(eq, targetSlot, slotIdx);
+    if (s.item == kInvalidItem || s.count == 0 || !item_valid(s.item)) return false;
+    const EquipSlot target = static_cast<EquipSlot>(item_def(s.item).equipSlot);
+    std::uint8_t* cell = eq_cell(eq, target);
+    if (!cell) return false; // equip_slot=None: предмет не носится
+    *cell = slotIdx;
     return true;
 }
 
 bool unequip_slot(Equipped& eq, EquipSlot slot) {
-    if (slot == EquipSlot::None || slot >= EquipSlot::Count) return false;
-    set_slot_for_enum(eq, slot, kEquipNone);
+    std::uint8_t* cell = eq_cell(eq, slot);
+    if (!cell) return false;
+    *cell = kEquipNone;
     return true;
+}
+
+int equipped_index(const Inventory& inv, const Equipped& eq, EquipSlot slot) {
+    const std::uint8_t* cell = eq_cell(eq, slot);
+    if (!cell || *cell >= kInvSlots) return -1;
+    const ItemSlot& s = inv.slots[*cell];
+    // Протухший индекс — не ошибка, а «решения больше нет»: инвентарь мутировал
+    // после записи (продажа, разлив, банк). Валидация по данным, не по памяти.
+    if (s.item == kInvalidItem || s.count == 0 || !item_valid(s.item)) return -1;
+    if (static_cast<EquipSlot>(item_def(s.item).equipSlot) != slot) return -1;
+    return static_cast<int>(*cell);
+}
+
+ItemId equipped_item(const Inventory& inv, const Equipped& eq, EquipSlot slot) {
+    const int idx = equipped_index(inv, eq, slot);
+    return idx >= 0 ? inv.slots[idx].item : kInvalidItem;
+}
+
+ItemSlot* equipped_slot(Inventory& inv, const Equipped& eq, EquipSlot slot) {
+    const int idx = equipped_index(inv, eq, slot);
+    if (idx < 0) return nullptr;
+    return &inv.slots[idx];
+}
+
+const ItemSlot* equipped_slot(const Inventory& inv, const Equipped& eq, EquipSlot slot) {
+    const int idx = equipped_index(inv, eq, slot);
+    if (idx < 0) return nullptr;
+    return &inv.slots[idx];
 }
 
 void auto_equip_best(const Inventory& inv, Equipped& eq) {
@@ -171,6 +172,37 @@ std::uint8_t degrade_equipped_durability(Inventory& inv, const Equipped& eq, Equ
     const std::uint8_t lost = std::min(amount, s->condition);
     s->condition = static_cast<std::uint8_t>(s->condition - lost);
     return lost;
+}
+
+std::uint16_t item_durability(ItemId id) {
+    // Melee rows carry their own authored lifetime ([weapon_table.h]
+    // durability, weapons_melee.csv); everything else reads wearPerUse.
+    // ONE resolver by law — see the header.
+    if (!item_valid(id)) return 0;
+    if (const MeleeDef* m = melee_for_item(id)) return m->durability;
+    const ItemDef& d = item_def(id);
+    if (d.wearPerUse > 0) {
+        return static_cast<std::uint16_t>(255u / d.wearPerUse);
+    }
+    return 0;
+}
+
+bool wear_equipped(Inventory& inv, const Equipped& eq, EquipSlot slot,
+                   std::uint32_t seed) {
+    const int idx = equipped_index(inv, eq, slot);
+    if (idx < 0) return false;
+    ItemSlot& s = inv.slots[idx];
+    const std::uint16_t dur = item_durability(s.item);
+    if (dur == 0) return false;          // вечный — контентное решение строки
+    if (s.condition == 0) return false;  // руины дальше не изнашиваются
+
+    // 255 = base * dur + frac: целая часть каждый раз, дробная — роллом.
+    std::uint32_t dec = 255u / dur;
+    const std::uint32_t frac = 255u % dur;
+    if (frac != 0 && rand_below(hash_u32(seed), dur) < frac) ++dec;
+    s.condition = static_cast<std::uint8_t>(
+        dec >= s.condition ? 0 : s.condition - dec);
+    return true;
 }
 
 } // namespace giga::game

@@ -54,8 +54,19 @@ set(GIGA_DEFERRED_ENTRY_POINTS
     # They are listed rather than fixed because wiring nine systems is nine separate
     # decisions, each needing a place in the tick order. problems.md §52 owns the
     # list; a row leaving this file means the system got wired or got deleted.
-    "diffusion_step:не подключён к тику — src/app/main.cpp:2857, поле danger всегда null"
-    "diffusion_tick:тот же долг, что diffusion_step — драйвер поля опасности; problems.md §52"
+    # НЕ отложка, а слепое пятно гейта: diffusion_tick вживлён в тик (main.cpp),
+    # и он — единственный законный вызывающий diffusion_step ([diffusion.h]
+    # прямо запрещает звать шаг мимо драйвера). Оба вызова лежат в diffusion.cpp,
+    # а гейт одноуровневый: «вызов из файла определения не считается». Снять эту
+    # строку можно, только научив гейт транзитивной проводке — не раньше.
+    "diffusion_step:зовётся ТОЛЬКО diffusion_tick'ом из своего же файла по контракту; tick вживлён — main.cpp"
+    "route_step:целевой шаг по флоу-полю отложен к #13 (таблицы контента); problems.md §52"
+    "bank_step:банк начисляет проценты, но тик игры его не зовёт; problems.md §52"
+    "feed_tick:лента событий читается только тестом; problems.md §52"
+    "samosbor_fog_tick:туманная популяция самосбора не тикает в игре; problems.md §52"
+    "interaction_step:взаимодействие с пропами идёт мимо — main.cpp зовёт свои ветки; problems.md §52"
+    "prop_interact_step:обёртка над interaction_step, не зовёт НИКТО и не покрыта тестом; problems.md §52"
+    "vendor_restock_step:периодический ресток ассортимента торговцев; problems.md §52"
 )
 
 # Line splitting that survives `;` AND `[ ]`. Ported from check_source_rules.cmake,

@@ -135,6 +135,23 @@ inline const ItemDef& item_def(ItemId id) {
 inline const char* item_name(ItemId id) {
     return kItemNames[static_cast<std::size_t>(id) - 1];
 }
+// Authored flavour text (desc_ru), one per row by generator law — the
+// inventory card's line ([inventory.md]); nothing in the sim reads it.
+extern const std::array<const char*, kItemCount> kItemDescs;
+inline const char* item_desc(ItemId id) {
+    return kItemDescs[static_cast<std::size_t>(id) - 1];
+}
+
+// THE transfer primitive (problems.md §39): every path that puts items INTO an
+// 8x8 grid — pickup, container take, quest reward — so the stack law lives
+// once. Tops up same-item SAME-CONDITION stacks first (different wear is a
+// different stack), then fills fresh slots writing `condition` explicitly (a
+// freed slot keeps a stale wear byte). Returns the UNPLACED remainder and
+// never deletes anything — the caller owns what a remainder means.
+// Defined in inventory_give.cpp, the hand-written sibling of the generated
+// table, same split as ranged_pick.cpp.
+std::uint16_t inventory_give(Inventory& inv, ItemId id, std::uint16_t count,
+                             std::uint8_t condition = 255);
 
 // --- CARRIED WEIGHT ----------------------------------------------------------
 // The reader `massG` exists for, and it lands in the SAME change as the column on
@@ -155,39 +172,6 @@ inline std::uint32_t inventory_mass_g(const Inventory& inv) {
         g += item_def(s.item).massG * static_cast<std::uint32_t>(s.count);
     }
     return g;
-}
-
-// Add `count` of `id` into `inv`, respecting item's stackMax and filling partial
-// stacks before allocating empty slots.
-// Returns the remainder (count that could NOT be placed because inventory is full).
-inline std::uint16_t inventory_give(Inventory& inv, ItemId id, std::uint16_t count) {
-    if (!item_valid(id) || count == 0) return count;
-    const std::uint16_t cap = item_def(id).stackMax ? item_def(id).stackMax : 1;
-    std::uint16_t remaining = count;
-
-    // Pass 1: top up existing partial stacks
-    if (cap > 1) {
-        for (ItemSlot& s : inv.slots) {
-            if (remaining == 0) break;
-            if (s.item != id || s.count >= cap) continue;
-            const std::uint16_t space = static_cast<std::uint16_t>(cap - s.count);
-            const std::uint16_t take = space < remaining ? space : remaining;
-            s.count = static_cast<std::uint16_t>(s.count + take);
-            remaining = static_cast<std::uint16_t>(remaining - take);
-        }
-    }
-
-    // Pass 2: fill empty slots
-    for (ItemSlot& s : inv.slots) {
-        if (remaining == 0) break;
-        if (s.item != kInvalidItem && s.count != 0) continue;
-        const std::uint16_t take = cap < remaining ? cap : remaining;
-        s.item = id;
-        s.count = take;
-        remaining = static_cast<std::uint16_t>(remaining - take);
-    }
-
-    return remaining;
 }
 
 // ---------------------------------------------------------------------------

@@ -379,6 +379,10 @@ void attrition() {
     rig.reset(200);
     rig.needs().water = 0.0f;
     rig.pool.inventory(rig.id).slots[0] = ItemSlot{vest, 1};
+    // The vest must be DECIDED into the armour cell first ([equip.h]) — a vest
+    // in the bag protects nobody, which is precisely the difference this block
+    // measures.
+    equip_item(rig.pool.inventory(rig.id), rig.reg.get<Equipped>(rig.body), 0);
     sync_armour(rig.reg, rig.pool, rig.body);
     CHECK(rig.reg.all_of<Armour>(rig.body));   // the vest really is worn
     const std::int32_t armoured = run_step_seconds(rig, 61.0f, kSimStep);
@@ -390,6 +394,16 @@ void attrition() {
     const DamageResult k = apply_damage(rig.reg, rig.pool, rig.body, 100,
                                         DamageChannel::Kinetic, entt::null);
     CHECK(k.blocked > 0 && k.applied < 100);
+    // WEAR: ruin the decided vest by hand and re-sync — the Armour component
+    // must now carry the 20% floor ([equip.h] wear_resist_scale), so the same
+    // hit hurts more than it did on the mint vest.
+    rig.pool.inventory(rig.id).slots[0].condition = 0;
+    sync_armour(rig.reg, rig.pool, rig.body);
+    const DamageResult worn = apply_damage(rig.reg, rig.pool, rig.body, 100,
+                                           DamageChannel::Kinetic, entt::null);
+    CHECK(worn.hit);
+    CHECK(worn.blocked < k.blocked);
+    CHECK(worn.applied > k.applied);
 
     // Starving to death is the SAME death as being clubbed to death: Dead tag, one
     // finalizer, one NpcDied event. There is no second death route.

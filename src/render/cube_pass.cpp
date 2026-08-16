@@ -51,10 +51,6 @@ namespace {
 // kMaterialMaps (id -> KTX2 set) is GENERATED — render/material_table.h,
 // from data/materials.csv texture_id bindings against data/textures.csv.
 
-#ifndef GIGA_TEXTURE_DIR
-#define GIGA_TEXTURE_DIR "data/textures"
-#endif
-
 // The pack's shape; load_layer() rejects a file whose dimensions or level count
 // differ, naming it. Measured across all six committed files: 2048x2048,
 // levelCount 12, 4x4 blocks, 16 bytes/block.

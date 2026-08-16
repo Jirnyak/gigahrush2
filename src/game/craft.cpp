@@ -4,6 +4,7 @@
 
 #include "core/rng.h"            // hash2 / rand01 / rand_below — stateless, no seed to advance
 #include "game/combat.h"         // equipped_melee / equipped_armour
+#include "game/equip.h"          // item_durability — repair only what wears
 #include "game/ranged_table.h"   // equipped_ranged
 
 namespace giga::game {
@@ -61,6 +62,7 @@ const char* craft_fail_text(CraftFail e) {
         case CraftFail::EmptySlot:             return "nothing in that slot";
         case CraftFail::DisassemblyStation:    return "need a workbench";
         case CraftFail::NoComposition:         return "item has no composition";
+        case CraftFail::NotRepairable:         return "item does not wear";
         case CraftFail::Count:                 break;
     }
     return "unknown";
@@ -220,62 +222,6 @@ DisassembleResult craft_disassemble(CraftingState& st, Inventory& inv, int slot,
     // recipe learned this way answers TierTooHigh until a source raises the tier.
     if (rand_below(hash2(rollKey, kLearnSalt ^ id), 1000u) < kCraftLearnPerMille)
         out.learned = craft_learn(st, id);
-    return out;
-}
-
-RepairResult craft_repair_item(CraftingState& st, Inventory& inv, int slot, CraftStation at) {
-    RepairResult out{};
-    if (slot < 0 || slot >= kInvSlots) {
-        out.fail = CraftFail::EmptySlot;
-        return out;
-    }
-    ItemSlot& s = inv.slots[slot];
-    if (!item_valid(s.item) || s.count == 0) {
-        out.fail = CraftFail::EmptySlot;
-        return out;
-    }
-    out.conditionBefore = s.condition;
-    if (s.condition == 255) {
-        out.ok = true;
-        out.conditionAfter = 255;
-        out.costSpent = 0;
-        out.fail = CraftFail::None;
-        return out;
-    }
-    if (at != CraftStation::Workbench && at != CraftStation::Lathe && at != CraftStation::Any) {
-        out.fail = CraftFail::StationMismatch;
-        return out;
-    }
-
-    const std::uint32_t damage = static_cast<std::uint32_t>(255u - s.condition);
-    std::uint32_t totalCost = craft_cost_total(s.item);
-    if (totalCost == 0) totalCost = 2u;
-    const std::uint32_t costNeeded = std::max(1u, (damage * totalCost + 255u) / 510u);
-
-    // Try Mechanics first, then Metal
-    const std::size_t mechIdx = static_cast<std::size_t>(CraftMaterial::Mechanics);
-    const std::size_t metalIdx = static_cast<std::size_t>(CraftMaterial::Metal);
-    const std::uint32_t available = st.mat[mechIdx] + st.mat[metalIdx];
-    if (available < costNeeded) {
-        out.fail = CraftFail::InsufficientMaterials;
-        return out;
-    }
-
-    std::uint32_t rem = costNeeded;
-    if (st.mat[mechIdx] >= rem) {
-        st.mat[mechIdx] -= rem;
-        rem = 0;
-    } else {
-        rem -= st.mat[mechIdx];
-        st.mat[mechIdx] = 0;
-        st.mat[metalIdx] -= rem;
-    }
-
-    s.condition = 255;
-    out.ok = true;
-    out.conditionAfter = 255;
-    out.costSpent = costNeeded;
-    out.fail = CraftFail::None;
     return out;
 }
 
@@ -451,6 +397,56 @@ bool craft_read(const std::uint8_t* in, std::size_t n, CraftingState& st) {
 
     st = tmp;
     return true;
+}
+
+RepairResult craft_repair_item(CraftingState& st, Inventory& inv, int slot,
+                               CraftStation at) {
+    RepairResult out{};
+    if (slot < 0 || slot >= kInvSlots) {
+        out.fail = CraftFail::EmptySlot;
+        return out;
+    }
+    ItemSlot& s = inv.slots[slot];
+    if (!item_valid(s.item) || s.count == 0) {
+        out.fail = CraftFail::EmptySlot;
+        return out;
+    }
+    out.conditionBefore = s.condition;
+    if (item_durability(s.item) == 0) {
+        out.fail = CraftFail::NotRepairable;  // вечный предмет — чинить нечего
+        return out;
+    }
+    if (s.condition == 255) {   // минт: успех даром, не отказ — кнопка «починить
+        out.ok = true;          // всё» не должна спотыкаться о целые предметы
+        return out;
+    }
+
+    const CraftRecipe& r = craft_recipe(s.item);
+    if (!craft_station_ok(static_cast<CraftStation>(r.station), at)) {
+        out.fail = CraftFail::StationMismatch;
+        return out;
+    }
+
+    // Цена по осям: ceil(comp[i] * damage / 510) — пропорция урона, вполцены
+    // постройки. Проверка ДО списания всех осей: одна короткая ось — отказ
+    // целиком, банк не тронут (частичное списание — это ремонт, которого не
+    // было, за деньги, которые были).
+    const std::uint32_t damage = 255u - s.condition;
+    std::uint32_t need[kCraftMaterials];
+    for (std::size_t i = 0; i < kCraftMaterials; ++i) {
+        need[i] = (static_cast<std::uint32_t>(r.comp[i]) * damage + 509u) / 510u;
+        if (need[i] > st.mat[i]) {
+            out.fail = CraftFail::InsufficientMaterials;
+            return out;
+        }
+    }
+    for (std::size_t i = 0; i < kCraftMaterials; ++i) {
+        st.mat[i] -= need[i];
+        out.costTotal += need[i];
+    }
+    s.condition = 255;
+    out.ok = true;
+    return out;
 }
 
 } // namespace giga::game

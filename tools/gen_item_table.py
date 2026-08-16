@@ -149,7 +149,7 @@ def main():
             "EXPECTED_ROWS here AND kItemCount in item_table.h"
             % (EXPECTED_ROWS, len(rows)))
 
-    seen, out, names = set(), [], []
+    seen, out, names, descs = set(), [], [], []
     used_cat, used_use, used_wear = set(), set(), set()
     resolved = []
     for i, r in enumerate(rows):
@@ -190,6 +190,12 @@ def main():
                ", ".join(str(x) for x in resists),
                wk, wr))
         names.append("    %s," % cpp_string(r["name_ru"].strip()))
+        # Authored flavour text — all 442 rows carry one. The inventory card
+        # ([inventory.md]) is its consumer; an empty cell would be a CSV defect.
+        d = (r.get("desc_ru") or "").strip()
+        if not d:
+            die("row %d (%s) has no desc_ru" % (i, r["id"]))
+        descs.append("    %s," % cpp_string(d))
 
     heavy = sorted(resolved, key=lambda t: -t[1])[:6]
     light = sorted((t for t in resolved if t[1] > 0), key=lambda t: t[1])[:6]
@@ -221,6 +227,9 @@ def main():
         fh.write("\n}};\n\n")
         fh.write("const std::array<const char*, kItemCount> kItemNames = {{\n")
         fh.write("\n".join(names))
+        fh.write("\n}};\n\n")
+        fh.write("const std::array<const char*, kItemCount> kItemDescs = {{\n")
+        fh.write("\n".join(descs))
         fh.write("\n}};\n\n")
         fh.write(FOOTER)
 

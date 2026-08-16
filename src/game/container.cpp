@@ -361,6 +361,11 @@ std::int32_t loot_containers_step(Registry& reg, NpcPool& pool, LayerId layer,
         bool anyMoved = false;
         for (int i = 0; i < kContainerSlots; ++i) {
             if (!item_valid(c.item[i]) || c.count[i] == 0) continue;
+            // THE transfer primitive ([item_table.h] inventory_give): stacks
+            // top up before fresh slots are spent, the remainder stays in the
+            // box, not deleted. Container cells carry no wear byte yet — a
+            // crated find is mint until the container seam of [production.md]
+            // says otherwise.
             const std::uint16_t unplaced = inventory_give(inv, c.item[i], c.count[i]);
             const std::uint16_t placed = static_cast<std::uint16_t>(c.count[i] - unplaced);
             if (placed > 0) {

@@ -2132,244 +2132,415 @@ int main() {
     // Tier 1: Feature Coverage (75 tests)
     // =======================================================================
     // F1
+
+    std::fprintf(stderr, "[e2e] test_t1_f1_01_resident_baseline_traits_and_scoring\n");
     test_t1_f1_01_resident_baseline_traits_and_scoring();
+    std::fprintf(stderr, "[e2e] test_t1_f1_02_duty_traits_and_patrol_hq_preference\n");
     test_t1_f1_02_duty_traits_and_patrol_hq_preference();
+    std::fprintf(stderr, "[e2e] test_t1_f1_03_medic_traits_and_care_drive_scoring\n");
     test_t1_f1_03_medic_traits_and_care_drive_scoring();
+    std::fprintf(stderr, "[e2e] test_t1_f1_04_looter_traits_scavenge_and_anywhere_sleep\n");
     test_t1_f1_04_looter_traits_scavenge_and_anywhere_sleep();
+    std::fprintf(stderr, "[e2e] test_t1_f1_05_cultist_sociability_and_smoking_rooms\n");
     test_t1_f1_05_cultist_sociability_and_smoking_rooms();
 
     // F2
+    std::fprintf(stderr, "[e2e] test_t1_f2_01_residential_distribution_prohibition_of_cultists\n");
     test_t1_f2_01_residential_distribution_prohibition_of_cultists();
+    std::fprintf(stderr, "[e2e] test_t1_f2_02_derelict_cultist_looter_dominance\n");
     test_t1_f2_02_derelict_cultist_looter_dominance();
+    std::fprintf(stderr, "[e2e] test_t1_f2_03_deterministic_reproducibility\n");
     test_t1_f2_03_deterministic_reproducibility();
+    std::fprintf(stderr, "[e2e] test_t1_f2_04_pool_column_persistence_and_override\n");
     test_t1_f2_04_pool_column_persistence_and_override();
+    std::fprintf(stderr, "[e2e] test_t1_f2_05_multi_floor_demographic_seeding\n");
     test_t1_f2_05_multi_floor_demographic_seeding();
 
     // F3
+    std::fprintf(stderr, "[e2e] test_t1_f3_01_patrol_plan_component_pod_layout\n");
     test_t1_f3_01_patrol_plan_component_pod_layout();
+    std::fprintf(stderr, "[e2e] test_t1_f3_02_duty_patrol_intent_activation\n");
     test_t1_f3_02_duty_patrol_intent_activation();
+    std::fprintf(stderr, "[e2e] test_t1_f3_03_patrol_step_lazy_attachment\n");
     test_t1_f3_03_patrol_step_lazy_attachment();
+    std::fprintf(stderr, "[e2e] test_t1_f3_04_patrol_leg_progression_and_hop_increment\n");
     test_t1_f3_04_patrol_leg_progression_and_hop_increment();
+    std::fprintf(stderr, "[e2e] test_t1_f3_05_patrol_steering_in_walking_plane\n");
     test_t1_f3_05_patrol_steering_in_walking_plane();
 
     // F4
+    std::fprintf(stderr, "[e2e] test_t1_f4_01_medic_constants_verification\n");
     test_t1_f4_01_medic_constants_verification();
+    std::fprintf(stderr, "[e2e] test_t1_f4_02_medic_healing_wounded_ally_rate\n");
     test_t1_f4_02_medic_healing_wounded_ally_rate();
+    std::fprintf(stderr, "[e2e] test_t1_f4_03_medic_fatigue_accumulation\n");
     test_t1_f4_03_medic_fatigue_accumulation();
+    std::fprintf(stderr, "[e2e] test_t1_f4_04_medic_reach_boundary_within_2m\n");
     test_t1_f4_04_medic_reach_boundary_within_2m();
+    std::fprintf(stderr, "[e2e] test_t1_f4_05_medic_healing_stacks_with_medical_room\n");
     test_t1_f4_05_medic_healing_stacks_with_medical_room();
 
     // F5
+    std::fprintf(stderr, "[e2e] test_t1_f5_01_liquidator_faction_traits\n");
     test_t1_f5_01_liquidator_faction_traits();
+    std::fprintf(stderr, "[e2e] test_t1_f5_02_liquidator_combat_intent_under_danger\n");
     test_t1_f5_02_liquidator_combat_intent_under_danger();
+    std::fprintf(stderr, "[e2e] test_t1_f5_03_liquidator_grudge_combat_conversion\n");
     test_t1_f5_03_liquidator_grudge_combat_conversion();
+    std::fprintf(stderr, "[e2e] test_t1_f5_04_liquidator_vs_citizen_panic_divergence\n");
     test_t1_f5_04_liquidator_vs_citizen_panic_divergence();
+    std::fprintf(stderr, "[e2e] test_t1_f5_05_liquidator_fireline_samosbor_stance\n");
     test_t1_f5_05_liquidator_fireline_samosbor_stance();
 
     // F6
+    std::fprintf(stderr, "[e2e] test_t1_f6_01_looter_scavenge_drive_and_storage_rooms\n");
     test_t1_f6_01_looter_scavenge_drive_and_storage_rooms();
+    std::fprintf(stderr, "[e2e] test_t1_f6_02_looter_homerooms_zero_anywhere_sleep\n");
     test_t1_f6_02_looter_homerooms_zero_anywhere_sleep();
+    std::fprintf(stderr, "[e2e] test_t1_f6_03_cultist_social_drive_and_smoking_rooms\n");
     test_t1_f6_03_cultist_social_drive_and_smoking_rooms();
+    std::fprintf(stderr, "[e2e] test_t1_f6_04_cultist_monster_non_aggression\n");
     test_t1_f6_04_cultist_monster_non_aggression();
+    std::fprintf(stderr, "[e2e] test_t1_f6_05_looter_memory_recall_scavenge_affordance\n");
     test_t1_f6_05_looter_memory_recall_scavenge_affordance();
 
     // F7
+    std::fprintf(stderr, "[e2e] test_t1_f7_01_coarse_graph_reachability_and_symmetry\n");
     test_t1_f7_01_coarse_graph_reachability_and_symmetry();
+    std::fprintf(stderr, "[e2e] test_t1_f7_02_fine_nav_anchor_arrived_flow\n");
     test_t1_f7_02_fine_nav_anchor_arrived_flow();
+    std::fprintf(stderr, "[e2e] test_t1_f7_03_route_step_adjacent_anchors\n");
     test_t1_f7_03_route_step_adjacent_anchors();
+    std::fprintf(stderr, "[e2e] test_t1_f7_04_route_step_identical_cells\n");
     test_t1_f7_04_route_step_identical_cells();
+    std::fprintf(stderr, "[e2e] test_t1_f7_05_route_step_wiring_in_ai_patrol_step\n");
     test_t1_f7_05_route_step_wiring_in_ai_patrol_step();
 
     // F8
+    std::fprintf(stderr, "[e2e] test_t1_f8_01_motion_token_default_wander\n");
     test_t1_f8_01_motion_token_default_wander();
+    std::fprintf(stderr, "[e2e] test_t1_f8_02_ai_owns_motion_true_when_ai\n");
     test_t1_f8_02_ai_owns_motion_true_when_ai();
+    std::fprintf(stderr, "[e2e] test_t1_f8_03_ai_owns_motion_false_when_missing_component\n");
     test_t1_f8_03_ai_owns_motion_false_when_missing_component();
+    std::fprintf(stderr, "[e2e] test_t1_f8_04_wander_step_skips_ai_owned\n");
     test_t1_f8_04_wander_step_skips_ai_owned();
+    std::fprintf(stderr, "[e2e] test_t1_f8_05_ai_release_restores_all_wander\n");
     test_t1_f8_05_ai_release_restores_all_wander();
 
     // F9
+    std::fprintf(stderr, "[e2e] test_t1_f9_01_all_six_cardinal_regime_frames\n");
     test_t1_f9_01_all_six_cardinal_regime_frames();
+    std::fprintf(stderr, "[e2e] test_t1_f9_02_regime_down_cardinal_steps\n");
     test_t1_f9_02_regime_down_cardinal_steps();
+    std::fprintf(stderr, "[e2e] test_t1_f9_03_zero_gravity_frame_isotropy\n");
     test_t1_f9_03_zero_gravity_frame_isotropy();
+    std::fprintf(stderr, "[e2e] test_t1_f9_04_regime_from_vector_classification\n");
     test_t1_f9_04_regime_from_vector_classification();
+    std::fprintf(stderr, "[e2e] test_t1_f9_05_tangent_velocity_preserves_gravity_axis\n");
     test_t1_f9_05_tangent_velocity_preserves_gravity_axis();
 
     // F10
+    std::fprintf(stderr, "[e2e] test_t1_f10_01_wrap_delta_f_continuous_torus\n");
     test_t1_f10_01_wrap_delta_f_continuous_torus();
+    std::fprintf(stderr, "[e2e] test_t1_f10_02_nearest_image_projection\n");
     test_t1_f10_02_nearest_image_projection();
+    std::fprintf(stderr, "[e2e] test_t1_f10_03_discrete_wrap_macro_and_wrapi\n");
     test_t1_f10_03_discrete_wrap_macro_and_wrapi();
+    std::fprintf(stderr, "[e2e] test_t1_f10_04_toroidal_distance_symmetry\n");
     test_t1_f10_04_toroidal_distance_symmetry();
+    std::fprintf(stderr, "[e2e] test_t1_f10_05_multi_period_coordinate_invariance\n");
     test_t1_f10_05_multi_period_coordinate_invariance();
 
     // F11
+    std::fprintf(stderr, "[e2e] test_t1_f11_01_bank_open_and_terms_assignment\n");
     test_t1_f11_01_bank_open_and_terms_assignment();
+    std::fprintf(stderr, "[e2e] test_t1_f11_02_bank_deposit_and_withdraw_cycle\n");
     test_t1_f11_02_bank_deposit_and_withdraw_cycle();
+    std::fprintf(stderr, "[e2e] test_t1_f11_03_bank_loan_and_repay_lifecycle\n");
     test_t1_f11_03_bank_loan_and_repay_lifecycle();
+    std::fprintf(stderr, "[e2e] test_t1_f11_04_bank_step_periodic_settlement\n");
     test_t1_f11_04_bank_step_periodic_settlement();
+    std::fprintf(stderr, "[e2e] test_t1_f11_05_net_worth_conservation\n");
     test_t1_f11_05_net_worth_conservation();
 
     // F12
+    std::fprintf(stderr, "[e2e] test_t1_f12_01_event_bus_publish_and_size\n");
     test_t1_f12_01_event_bus_publish_and_size();
+    std::fprintf(stderr, "[e2e] test_t1_f12_02_feed_drain_transfers_events\n");
     test_t1_f12_02_feed_drain_transfers_events();
+    std::fprintf(stderr, "[e2e] test_t1_f12_03_feed_tick_returns_exact_timestamps\n");
     test_t1_f12_03_feed_tick_returns_exact_timestamps();
+    std::fprintf(stderr, "[e2e] test_t1_f12_04_feed_line_formatting_for_all_event_types\n");
     test_t1_f12_04_feed_line_formatting_for_all_event_types();
+    std::fprintf(stderr, "[e2e] test_t1_f12_05_feed_circular_eviction_order\n");
     test_t1_f12_05_feed_circular_eviction_order();
 
     // F13
+    std::fprintf(stderr, "[e2e] test_t1_f13_01_interaction_step_finds_nearest_within_reach\n");
     test_t1_f13_01_interaction_step_finds_nearest_within_reach();
+    std::fprintf(stderr, "[e2e] test_t1_f13_02_prop_interact_step_success\n");
     test_t1_f13_02_prop_interact_step_success();
+    std::fprintf(stderr, "[e2e] test_t1_f13_03_interaction_kind_filtering\n");
     test_t1_f13_03_interaction_kind_filtering();
+    std::fprintf(stderr, "[e2e] test_t1_f13_04_layer_isolation_enforcement\n");
     test_t1_f13_04_layer_isolation_enforcement();
+    std::fprintf(stderr, "[e2e] test_t1_f13_05_collect_interactable_positions\n");
     test_t1_f13_05_collect_interactable_positions();
 
     // F14
+    std::fprintf(stderr, "[e2e] test_t1_f14_01_bank_step_contract_and_signature\n");
     test_t1_f14_01_bank_step_contract_and_signature();
+    std::fprintf(stderr, "[e2e] test_t1_f14_02_feed_tick_and_drain_contract\n");
     test_t1_f14_02_feed_tick_and_drain_contract();
+    std::fprintf(stderr, "[e2e] test_t1_f14_03_interaction_step_contract\n");
     test_t1_f14_03_interaction_step_contract();
+    std::fprintf(stderr, "[e2e] test_t1_f14_04_route_step_contract\n");
     test_t1_f14_04_route_step_contract();
+    std::fprintf(stderr, "[e2e] test_t1_f14_05_entry_point_idempotency_and_no_heap_alloc\n");
     test_t1_f14_05_entry_point_idempotency_and_no_heap_alloc();
 
     // F15
+    std::fprintf(stderr, "[e2e] test_t1_f15_01_samosbor_four_phase_cycle\n");
     test_t1_f15_01_samosbor_four_phase_cycle();
+    std::fprintf(stderr, "[e2e] test_t1_f15_02_samosbor_duty_cycle_depth_scaling\n");
     test_t1_f15_02_samosbor_duty_cycle_depth_scaling();
+    std::fprintf(stderr, "[e2e] test_t1_f15_03_samosbor_specialist_perception_reaction\n");
     test_t1_f15_03_samosbor_specialist_perception_reaction();
+    std::fprintf(stderr, "[e2e] test_t1_f15_04_samosbor_alarm_and_beat_hud_level\n");
     test_t1_f15_04_samosbor_alarm_and_beat_hud_level();
+    std::fprintf(stderr, "[e2e] test_t1_f15_05_samosbor_floor_transit_preserves_cycle_count\n");
     test_t1_f15_05_samosbor_floor_transit_preserves_cycle_count();
 
     // =======================================================================
     // Tier 2: Boundary & Corner Cases (75 tests)
     // =======================================================================
     // F1 Boundaries
+    std::fprintf(stderr, "[e2e] test_t2_f1_01_invalid_role_enum_fallback\n");
     test_t2_f1_01_invalid_role_enum_fallback();
+    std::fprintf(stderr, "[e2e] test_t2_f1_02_zero_needs_with_extreme_trait_multipliers\n");
     test_t2_f1_02_zero_needs_with_extreme_trait_multipliers();
+    std::fprintf(stderr, "[e2e] test_t2_f1_03_max_needs_with_zero_drive_traits\n");
     test_t2_f1_03_max_needs_with_zero_drive_traits();
+    std::fprintf(stderr, "[e2e] test_t2_f1_04_role_trait_matrix_constness_and_determinism\n");
     test_t2_f1_04_role_trait_matrix_constness_and_determinism();
+    std::fprintf(stderr, "[e2e] test_t2_f1_05_role_transition_mid_simulation\n");
     test_t2_f1_05_role_transition_mid_simulation();
 
     // F2 Boundaries
+    std::fprintf(stderr, "[e2e] test_t2_f2_01_invalid_floorkind_fallback\n");
     test_t2_f2_01_invalid_floorkind_fallback();
+    std::fprintf(stderr, "[e2e] test_t2_f2_02_extreme_npcid_hash_safety\n");
     test_t2_f2_02_extreme_npcid_hash_safety();
+    std::fprintf(stderr, "[e2e] test_t2_f2_03_single_npc_monoculture_spec\n");
     test_t2_f2_03_single_npc_monoculture_spec();
+    std::fprintf(stderr, "[e2e] test_t2_f2_04_role_column_zero_initialization\n");
     test_t2_f2_04_role_column_zero_initialization();
+    std::fprintf(stderr, "[e2e] test_t2_f2_05_floor_boundary_numbers\n");
     test_t2_f2_05_floor_boundary_numbers();
 
     // F3 Boundaries
+    std::fprintf(stderr, "[e2e] test_t2_f3_01_patrol_plan_unreachable_destination_fallback\n");
     test_t2_f3_01_patrol_plan_unreachable_destination_fallback();
+    std::fprintf(stderr, "[e2e] test_t2_f3_02_patrol_plan_with_empty_nav_graphs\n");
     test_t2_f3_02_patrol_plan_with_empty_nav_graphs();
+    std::fprintf(stderr, "[e2e] test_t2_f3_03_patrol_hop_counter_overflow_wrap\n");
     test_t2_f3_03_patrol_hop_counter_overflow_wrap();
+    std::fprintf(stderr, "[e2e] test_t2_f3_04_patrol_plan_on_dead_or_despawned_entity\n");
     test_t2_f3_04_patrol_plan_on_dead_or_despawned_entity();
+    std::fprintf(stderr, "[e2e] test_t2_f3_05_patrol_plan_in_single_node_accessible_pocket\n");
     test_t2_f3_05_patrol_plan_in_single_node_accessible_pocket();
 
     // F4 Boundaries
+    std::fprintf(stderr, "[e2e] test_t2_f4_01_medic_ignores_dead_corpses\n");
     test_t2_f4_01_medic_ignores_dead_corpses();
+    std::fprintf(stderr, "[e2e] test_t2_f4_02_medic_ignores_healthy_allies\n");
     test_t2_f4_02_medic_ignores_healthy_allies();
+    std::fprintf(stderr, "[e2e] test_t2_f4_03_medic_refuses_hostile_enemies\n");
     test_t2_f4_03_medic_refuses_hostile_enemies();
+    std::fprintf(stderr, "[e2e] test_t2_f4_04_medic_at_maximum_fatigue\n");
     test_t2_f4_04_medic_at_maximum_fatigue();
+    std::fprintf(stderr, "[e2e] test_t2_f4_05_medic_patient_with_zero_max_hp\n");
     test_t2_f4_05_medic_patient_with_zero_max_hp();
 
     // F5 Boundaries
+    std::fprintf(stderr, "[e2e] test_t2_f5_01_liquidator_critical_low_hp_flee_threshold\n");
     test_t2_f5_01_liquidator_critical_low_hp_flee_threshold();
+    std::fprintf(stderr, "[e2e] test_t2_f5_02_liquidator_overwhelming_hostile_odds\n");
     test_t2_f5_02_liquidator_overwhelming_hostile_odds();
+    std::fprintf(stderr, "[e2e] test_t2_f5_03_liquidator_zero_danger_routine\n");
     test_t2_f5_03_liquidator_zero_danger_routine();
+    std::fprintf(stderr, "[e2e] test_t2_f5_04_liquidator_unarmed_combat_scoring\n");
     test_t2_f5_04_liquidator_unarmed_combat_scoring();
+    std::fprintf(stderr, "[e2e] test_t2_f5_05_liquidator_corrupted_faction_id_fallback\n");
     test_t2_f5_05_liquidator_corrupted_faction_id_fallback();
 
     // F6 Boundaries
+    std::fprintf(stderr, "[e2e] test_t2_f6_01_looter_in_floor_with_no_storage_rooms\n");
     test_t2_f6_01_looter_in_floor_with_no_storage_rooms();
+    std::fprintf(stderr, "[e2e] test_t2_f6_02_cultist_mob_aggression_with_invalid_npc\n");
     test_t2_f6_02_cultist_mob_aggression_with_invalid_npc();
+    std::fprintf(stderr, "[e2e] test_t2_f6_03_looter_sleep_intent_with_empty_world\n");
     test_t2_f6_03_looter_sleep_intent_with_empty_world();
+    std::fprintf(stderr, "[e2e] test_t2_f6_04_cultist_rally_with_zero_allies\n");
     test_t2_f6_04_cultist_rally_with_zero_allies();
+    std::fprintf(stderr, "[e2e] test_t2_f6_05_looter_memory_full_slot_eviction\n");
     test_t2_f6_05_looter_memory_full_slot_eviction();
 
     // F7 Boundaries
+    std::fprintf(stderr, "[e2e] test_t2_f7_01_route_step_solid_wall_endpoint\n");
     test_t2_f7_01_route_step_solid_wall_endpoint();
+    std::fprintf(stderr, "[e2e] test_t2_f7_02_route_step_disconnected_subgraph\n");
     test_t2_f7_02_route_step_disconnected_subgraph();
+    std::fprintf(stderr, "[e2e] test_t2_f7_03_route_step_across_toroidal_boundary\n");
     test_t2_f7_03_route_step_across_toroidal_boundary();
+    std::fprintf(stderr, "[e2e] test_t2_f7_04_route_step_unbaked_empty_fine_nav\n");
     test_t2_f7_04_route_step_unbaked_empty_fine_nav();
+    std::fprintf(stderr, "[e2e] test_t2_f7_05_route_step_out_of_bounds_coordinates\n");
     test_t2_f7_05_route_step_out_of_bounds_coordinates();
 
     // F8 Boundaries
+    std::fprintf(stderr, "[e2e] test_t2_f8_01_null_entity_ai_owns_motion\n");
     test_t2_f8_01_null_entity_ai_owns_motion();
+    std::fprintf(stderr, "[e2e] test_t2_f8_02_destroyed_entity_token_safety\n");
     test_t2_f8_02_destroyed_entity_token_safety();
+    std::fprintf(stderr, "[e2e] test_t2_f8_03_motion_token_corrupted_byte\n");
     test_t2_f8_03_motion_token_corrupted_byte();
+    std::fprintf(stderr, "[e2e] test_t2_f8_04_rapid_token_toggle_stability\n");
     test_t2_f8_04_rapid_token_toggle_stability();
+    std::fprintf(stderr, "[e2e] test_t2_f8_05_multi_layer_ai_release_isolation\n");
     test_t2_f8_05_multi_layer_ai_release_isolation();
 
     // F9 Boundaries
+    std::fprintf(stderr, "[e2e] test_t2_f9_01_zero_magnitude_vector\n");
     test_t2_f9_01_zero_magnitude_vector();
+    std::fprintf(stderr, "[e2e] test_t2_f9_02_near_threshold_vector_epsilon\n");
     test_t2_f9_02_near_threshold_vector_epsilon();
+    std::fprintf(stderr, "[e2e] test_t2_f9_03_diagonal_equal_magnitude_tie_break\n");
     test_t2_f9_03_diagonal_equal_magnitude_tie_break();
+    std::fprintf(stderr, "[e2e] test_t2_f9_04_invalid_regime_enum_safety\n");
     test_t2_f9_04_invalid_regime_enum_safety();
+    std::fprintf(stderr, "[e2e] test_t2_f9_05_gravity_field_null_region_callback\n");
     test_t2_f9_05_gravity_field_null_region_callback();
 
     // F10 Boundaries
+    std::fprintf(stderr, "[e2e] test_t2_f10_01_exact_half_period_boundary\n");
     test_t2_f10_01_exact_half_period_boundary();
+    std::fprintf(stderr, "[e2e] test_t2_f10_02_extreme_large_coordinates\n");
     test_t2_f10_02_extreme_large_coordinates();
+    std::fprintf(stderr, "[e2e] test_t2_f10_03_extreme_negative_discrete_indices\n");
     test_t2_f10_03_extreme_negative_discrete_indices();
+    std::fprintf(stderr, "[e2e] test_t2_f10_04_sub_voxel_cell_cross_seam_distance\n");
     test_t2_f10_04_sub_voxel_cell_cross_seam_distance();
+    std::fprintf(stderr, "[e2e] test_t2_f10_05_floating_point_epsilon_near_seams\n");
     test_t2_f10_05_floating_point_epsilon_near_seams();
 
     // F11 Boundaries
+    std::fprintf(stderr, "[e2e] test_t2_f11_01_zero_and_negative_operation_amounts\n");
     test_t2_f11_01_zero_and_negative_operation_amounts();
+    std::fprintf(stderr, "[e2e] test_t2_f11_02_bank_max_principal_ceiling\n");
     test_t2_f11_02_bank_max_principal_ceiling();
+    std::fprintf(stderr, "[e2e] test_t2_f11_03_loan_exceeding_credit_limit\n");
     test_t2_f11_03_loan_exceeding_credit_limit();
+    std::fprintf(stderr, "[e2e] test_t2_f11_04_bank_catchup_clamped_at_24_periods\n");
     test_t2_f11_04_bank_catchup_clamped_at_24_periods();
+    std::fprintf(stderr, "[e2e] test_t2_f11_05_fractional_interest_asymmetric_rounding\n");
     test_t2_f11_05_fractional_interest_asymmetric_rounding();
 
     // F12 Boundaries
+    std::fprintf(stderr, "[e2e] test_t2_f12_01_feed_tick_out_of_bounds\n");
     test_t2_f12_01_feed_tick_out_of_bounds();
+    std::fprintf(stderr, "[e2e] test_t2_f12_02_feed_drain_empty_bus\n");
     test_t2_f12_02_feed_drain_empty_bus();
+    std::fprintf(stderr, "[e2e] test_t2_f12_03_bus_ring_overflow_drop_counter\n");
     test_t2_f12_03_bus_ring_overflow_drop_counter();
+    std::fprintf(stderr, "[e2e] test_t2_f12_04_signed_floor_payload_packing\n");
     test_t2_f12_04_signed_floor_payload_packing();
+    std::fprintf(stderr, "[e2e] test_t2_f12_05_feed_retention_across_bus_clear\n");
     test_t2_f12_05_feed_retention_across_bus_clear();
 
     // F13 Boundaries
+    std::fprintf(stderr, "[e2e] test_t2_f13_01_exact_reach_boundary_distance\n");
     test_t2_f13_01_exact_reach_boundary_distance();
+    std::fprintf(stderr, "[e2e] test_t2_f13_02_null_or_invalid_player_entity\n");
     test_t2_f13_02_null_or_invalid_player_entity();
+    std::fprintf(stderr, "[e2e] test_t2_f13_03_disabled_interactable_rejection\n");
     test_t2_f13_03_disabled_interactable_rejection();
+    std::fprintf(stderr, "[e2e] test_t2_f13_04_zero_reach_query\n");
     test_t2_f13_04_zero_reach_query();
+    std::fprintf(stderr, "[e2e] test_t2_f13_05_multiple_interactables_closest_selection\n");
     test_t2_f13_05_multiple_interactables_closest_selection();
 
     // F14 Boundaries
+    std::fprintf(stderr, "[e2e] test_t2_f14_01_entry_points_null_input_safety\n");
     test_t2_f14_01_entry_points_null_input_safety();
+    std::fprintf(stderr, "[e2e] test_t2_f14_02_entry_points_extreme_ticks\n");
     test_t2_f14_02_entry_points_extreme_ticks();
+    std::fprintf(stderr, "[e2e] test_t2_f14_03_entry_points_zero_delta_time\n");
     test_t2_f14_03_entry_points_zero_delta_time();
+    std::fprintf(stderr, "[e2e] test_t2_f14_04_entry_points_reentrant_concurrency_safety\n");
     test_t2_f14_04_entry_points_reentrant_concurrency_safety();
+    std::fprintf(stderr, "[e2e] test_t2_f14_05_static_gate_regex_compliance\n");
     test_t2_f14_05_static_gate_regex_compliance();
 
     // F15 Boundaries
+    std::fprintf(stderr, "[e2e] test_t2_f15_01_samosbor_extreme_depth_duty_cycle\n");
     test_t2_f15_01_samosbor_extreme_depth_duty_cycle();
+    std::fprintf(stderr, "[e2e] test_t2_f15_02_samosbor_large_dt_multi_step_crossing\n");
     test_t2_f15_02_samosbor_large_dt_multi_step_crossing();
+    std::fprintf(stderr, "[e2e] test_t2_f15_03_samosbor_unsheltered_pressure_one_shot\n");
     test_t2_f15_03_samosbor_unsheltered_pressure_one_shot();
+    std::fprintf(stderr, "[e2e] test_t2_f15_04_samosbor_variant_weights_normalization\n");
     test_t2_f15_04_samosbor_variant_weights_normalization();
+    std::fprintf(stderr, "[e2e] test_t2_f15_05_samosbor_zero_dt_step\n");
     test_t2_f15_05_samosbor_zero_dt_step();
 
     // =======================================================================
     // Tier 3: Cross-Feature Combinations (15 tests)
     // =======================================================================
+    std::fprintf(stderr, "[e2e] test_t3_01_medic_healing_and_hpbank_during_samosbor\n");
     test_t3_01_medic_healing_and_hpbank_during_samosbor();
+    std::fprintf(stderr, "[e2e] test_t3_02_duty_guard_patrol_plan_with_toroidal_wrapping\n");
     test_t3_02_duty_guard_patrol_plan_with_toroidal_wrapping();
+    std::fprintf(stderr, "[e2e] test_t3_03_bank_debt_and_interest_across_floor_transit\n");
     test_t3_03_bank_debt_and_interest_across_floor_transit();
+    std::fprintf(stderr, "[e2e] test_t3_04_prop_interaction_during_ai_navigation_single_writer\n");
     test_t3_04_prop_interaction_during_ai_navigation_single_writer();
+    std::fprintf(stderr, "[e2e] test_t3_05_vector_gravity_with_duty_lattice_patrol\n");
     test_t3_05_vector_gravity_with_duty_lattice_patrol();
+    std::fprintf(stderr, "[e2e] test_t3_06_economy_events_wired_to_event_feed\n");
     test_t3_06_economy_events_wired_to_event_feed();
+    std::fprintf(stderr, "[e2e] test_t3_07_toroidal_wrap_with_prop_interaction\n");
     test_t3_07_toroidal_wrap_with_prop_interaction();
+    std::fprintf(stderr, "[e2e] test_t3_08_liquidator_defense_vs_civilian_panic_diffusion\n");
     test_t3_08_liquidator_defense_vs_civilian_panic_diffusion();
+    std::fprintf(stderr, "[e2e] test_t3_09_looter_scavenging_via_memory_during_samosbor_aftermath\n");
     test_t3_09_looter_scavenging_via_memory_during_samosbor_aftermath();
+    std::fprintf(stderr, "[e2e] test_t3_10_cultist_monster_immunity_during_samosbor_fog_spawns\n");
     test_t3_10_cultist_monster_immunity_during_samosbor_fog_spawns();
+    std::fprintf(stderr, "[e2e] test_t3_11_role_distribution_seeding_with_floor_spec_and_bank_terms\n");
     test_t3_11_role_distribution_seeding_with_floor_spec_and_bank_terms();
+    std::fprintf(stderr, "[e2e] test_t3_12_route_step_navigation_with_vector_gravity_tangent_plane\n");
     test_t3_12_route_step_navigation_with_vector_gravity_tangent_plane();
+    std::fprintf(stderr, "[e2e] test_t3_13_samosbor_alarm_feed_logging_and_event_bus_emission\n");
     test_t3_13_samosbor_alarm_feed_logging_and_event_bus_emission();
+    std::fprintf(stderr, "[e2e] test_t3_14_medic_healing_interrupted_by_samosbor_unsheltered_damage\n");
     test_t3_14_medic_healing_interrupted_by_samosbor_unsheltered_damage();
+    std::fprintf(stderr, "[e2e] test_t3_15_single_writer_token_arbitration_with_patrol_and_wander\n");
     test_t3_15_single_writer_token_arbitration_with_patrol_and_wander();
 
     // =======================================================================
     // Tier 4: Real-World Workload Scenarios (5 tests)
     // =======================================================================
+    std::fprintf(stderr, "[e2e] test_t4_01_multi_floor_alife_demographics_and_roles_simulation\n");
     test_t4_01_multi_floor_alife_demographics_and_roles_simulation();
+    std::fprintf(stderr, "[e2e] test_t4_02_long_duration_economy_compound_interest_lifecycle\n");
     test_t4_02_long_duration_economy_compound_interest_lifecycle();
+    std::fprintf(stderr, "[e2e] test_t4_03_long_duration_specialist_patrol_and_errand_marathon\n");
     test_t4_03_long_duration_specialist_patrol_and_errand_marathon();
+    std::fprintf(stderr, "[e2e] test_t4_04_full_samosbor_disaster_and_specialist_response_cycle\n");
     test_t4_04_full_samosbor_disaster_and_specialist_response_cycle();
+    std::fprintf(stderr, "[e2e] test_t4_05_headless_integrated_engine_game_loop\n");
     test_t4_05_headless_integrated_engine_game_loop();
 
     std::printf("e2e_test: %d checks, %d failures\n", g_checks, g_fails);

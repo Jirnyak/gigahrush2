@@ -898,7 +898,7 @@ static void stack_max_respected() {
 
     NpcId sid = pool.spawn();
     Inventory& inv = pool.inventory(sid);
-    inv.slots[0] = ItemSlot{stacky, static_cast<std::uint16_t>(cap - 1)};
+    inv.slots[0] = ItemSlot{stacky, static_cast<std::uint8_t>(cap - 1)};
 
     Entity me = reg.create();
     Transform mt;

@@ -104,6 +104,11 @@ bool keybind_register_defaults(KeybindTable& t) {
     ok &= t.add({"menu", "menu", scan::kEscape, static_cast<std::uint8_t>(kBindAlways | kBindTyping)});
     ok &= t.add({"console", "console", scan::kGrave, static_cast<std::uint8_t>(kBindAlways | kBindTyping)});
     ok &= t.add({"hud", "hud", scan::kF1, kBindAlways});
+    // kBindTyping: пока сетка открыта, обычные бинды подавлены как при вводе
+    // текста ([main.cpp] typing-гейт) — а этот обязан пробиться, чтобы клавиша
+    // могла закрыть то, что открыла. Тот же приём, что у console.
+    ok &= t.add({"inventory", "inventory", scan::kI,
+                 static_cast<std::uint8_t>(kBindTyping)});
     ok &= t.add({"mouselook", "mouselook", scan::kTab, 0});
     // Movement mode + floor travel.
     ok &= t.add({"fly", "fly", scan::kF, 0});

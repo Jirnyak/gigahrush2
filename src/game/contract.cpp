@@ -460,19 +460,6 @@ std::int32_t contract_step(ContractBook& book, const NpcPool& pool, Inventory& i
         // Advance to Stage 1 (Deliver)
         c.stage = static_cast<std::uint8_t>(ContractStage::Deliver);
 
-        // Stage 1 -> Stage 2: Deliver cargo / consume items for Fetch
-        if (static_cast<ObjectiveKind>(c.kind) == ObjectiveKind::Fetch) {
-            std::int32_t need = c.target;
-            for (ItemSlot& s : inv.slots) {
-                if (need <= 0) break;
-                if (s.item != c.subject) continue;
-                const std::int32_t take = s.count < need ? s.count : need;
-                s.count = static_cast<std::uint16_t>(s.count - take);
-                if (s.count == 0) s = ItemSlot{};
-                need -= take;
-            }
-        }
-
         // Advance to Stage 2 (CollectBounty / Complete)
         c.stage = static_cast<std::uint8_t>(ContractStage::CollectBounty);
         c.state = static_cast<std::uint8_t>(ContractState::Complete);

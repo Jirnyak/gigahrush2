@@ -41,19 +41,52 @@ bool GpuGasPass::init(VulkanDevice* dev, const char* shaderDir, VkBuffer classBu
 }
 
 bool GpuGasPass::create_buffers() noexcept {
-    constexpr VkDeviceSize kGasBufSize = kMacroCells * sizeof(uint32_t); // 2,097,152 * 4 = 8 MiB
-    std::vector<uint32_t> initialOxy(kMacroCells, 0x00FF0000u); // oxy=255, toxic=0, smoke=0, heat=0
-
+    constexpr VkDeviceSize kGasBufSize = kMacroCells * sizeof(uint32_t); // 4,194,304 * 4 = 16 MiB
+    // HOST_VISIBLE, не device-local, и это РЕШЕНИЕ, не лень: источник (засев
+    // этажа) — один memcpy, читатель (HUD/логика) — прямое чтение, ноль
+    // staging-обвязки. На unified-памяти (наш мак) это бесплатно; на
+    // дискретной винде GPU читает через шину каждый кадр — если замер
+    // sim_bench это покажет, путь оптимизации известен: device-local +
+    // staging-копия на upload, крошечный readback-буфер на sample. Форма API
+    // (upload_field/sample_cell) при этом не меняется — вот что делает выбор
+    // безопасным сейчас.
     for (int i = 0; i < 2; ++i) {
         char label[32];
         std::snprintf(label, sizeof(label), "gas-ssbo-%d", i);
-        if (!gasSSBO_[i].create_device_local(*dev_, initialOxy.data(), kGasBufSize,
+        if (!gasSSBO_[i].create_host_visible(*dev_, kGasBufSize,
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                 label)) {
             return false;
         }
     }
+    upload_field(nullptr);  // чистая атмосфера: oxy=255 везде
     return true;
+}
+
+void GpuGasPass::upload_field(const float* toxic01) noexcept {
+    for (int i = 0; i < 2; ++i) {
+        if (!gasSSBO_[i].mapped) continue;
+        uint32_t* cells = static_cast<uint32_t*>(gasSSBO_[i].mapped);
+        for (std::size_t c = 0; c < kMacroCells; ++c) {
+            uint32_t toxic = 0;
+            if (toxic01) {
+                float t = toxic01[c];
+                if (t < 0.0f) t = 0.0f;
+                if (t > 1.0f) t = 1.0f;
+                toxic = static_cast<uint32_t>(t * 255.0f + 0.5f);
+            }
+            cells[c] = toxic | 0x00FF0000u;  // oxy=255, smoke=0, heat=0
+        }
+    }
+}
+
+std::uint32_t GpuGasPass::sample_cell(int x, int y, int z) const noexcept {
+    if (!gasSSBO_[readIndex_].mapped) return 0x00FF0000u;
+    const uint32_t* cells = static_cast<const uint32_t*>(gasSSBO_[readIndex_].mapped);
+    const std::size_t i = static_cast<std::size_t>(x & 511) |
+                          (static_cast<std::size_t>(y & 511) << 9) |
+                          (static_cast<std::size_t>(z & 15) << 18);
+    return cells[i];
 }
 
 bool GpuGasPass::create_descriptors(VkBuffer classBuffer) noexcept {

@@ -230,7 +230,7 @@ static void test_knockback_all_gravity_regimes() {
 
         // Apply physical damage with gravity field
         giga::game::apply_damage(reg, pool, tgt, 20, giga::game::DamageChannel::Kinetic,
-                                 src, nullptr, nullptr, &gf, nullptr);
+                                 src, nullptr, nullptr, &gf);
 
         const giga::Velocity& v = reg.get<giga::Velocity>(tgt);
         // Knockback velocity must be non-zero (hit applied)

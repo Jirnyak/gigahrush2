@@ -472,6 +472,8 @@ public:
     std::uint8_t&  flags(NpcId id)   { return flags_[id]; }
     std::uint8_t   flags(NpcId id) const { return flags_[id]; }
     std::uint16_t& faction(NpcId id) { return faction_[id]; }
+    // Const read side, for passes that take `const NpcPool&` (the panic
+    // publisher reads faction traits and must not be handed write access).
     std::uint16_t  faction(NpcId id) const { return faction_[id]; }
     std::int16_t&  hp(NpcId id)      { return hp_[id]; }
     std::int16_t   hp(NpcId id) const { return hp_[id]; }
@@ -529,6 +531,8 @@ public:
     const std::array<std::uint8_t, kAttrSlots>& attrs(NpcId id) const { return attr_[id]; }
 
     Inventory&     inventory(NpcId id) { return inv_[id]; }
+    // Const read side, same rule as faction() above: the equip decider scores
+    // the bag without earning write access to it.
     const Inventory& inventory(NpcId id) const { return inv_[id]; }
     // The survival clock. Canonical here, not on the entity, so it survives the
     // body swap an elevator ride performs ([needs.h]).

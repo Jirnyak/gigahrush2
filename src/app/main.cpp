@@ -23,6 +23,7 @@
 #include <SDL3/SDL_vulkan.h>
 
 #include <cmath>
+#include <climits>  // INT_MIN — the gas reseed sentinel
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -95,6 +96,7 @@
 #include "render/cube_pass.h"
 #include "render/material_table.h" // kMaterial — generated albedo table
 #include "render/cloth_pass.h"
+#include "render/gpu_gas_pass.h"
 #include "render/particle_pass.h"
 #include "render/wire_pass.h"
 #include "render/prop_pass.h"
@@ -105,6 +107,7 @@
 
 #include "render/gpu_cull_pass.h"
 #include "render/imgui_layer.h"
+#include "render/inventory_ui.h"
 #include "render/vk_device.h"
 #include "render/vk_renderer.h"
 #include "render/vk_swapchain.h"
@@ -113,6 +116,7 @@
 #include "render/screenshot.h"
 #include "sim/camera.h"
 #include "sim/controller.h"
+#include "sim/diffusion.h"
 #include "sim/fluid.h"
 #include "sim/physics.h"
 #include "world/destruct.h"
@@ -295,12 +299,6 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
         }
     }
 }
-
-
-
-
-
-
 
 // ── Debug console overlay (~) ──────────────────────────────────────────────
 // Thin ImGui shell over game::Console ([console.h]): parsing, the command
@@ -838,8 +836,6 @@ std::uint32_t refresh_floor_props(Registry& reg, const World& world,
     }
     return count;
 }
-
-
 
 // Upload StaticPropTag + PropMesh entities into PropPass after PropPlacer fills
 // non-interactable cosmetics. Interactable shapes (Terminal, ElectricalShield,
@@ -1537,6 +1533,16 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "[cloth] pass init failed (continuing without cloth)\n");
     }
 
+    // GPU gas/atmosphere: 4 канала (toxic/smoke/oxy/heat) над макро-решёткой,
+    // изотропный (regime_down через push) ([render/gpu_gas_pass.h]). Источник —
+    // засев шахт CPU-полем kGasField при входе на этаж; читатель — sample_cell
+    // в HUD. Живая петля с первого дня; туман/удушье подключатся к ЭТОМУ полю
+    // отдельными решениями владельца, не к статичной константе.
+    gpu::GpuGasPass gasPass;
+    if (!gasPass.init(&device, GIGA_SHADER_DIR, voxelMirror.class_buffer())) {
+        std::fprintf(stderr, "[gas] pass init failed (continuing without gas)\n");
+    }
+
     // The unified particle pool: blood/dust/sparks/drips, one compute sim
     // colliding against the voxel mirror ([render/particle_pass.h]).
     gpu::ParticlePass particlePass;
@@ -1545,12 +1551,6 @@ int main(int argc, char** argv) {
         std::fprintf(stderr,
                      "[particle] pass init failed (continuing without particles)\n");
     }
-
-    gpu::GpuGasPass gasPass;
-    if (!gasPass.init(&device, GIGA_SHADER_DIR, voxelMirror.class_buffer())) {
-        std::fprintf(stderr,
-                     "[gas] pass init failed (continuing without GPU gas sim)\n");
-    }
     // Severed pipe stumps ([merge_ecs_prop_meshes]) — each drips on a slow
     // clock while its floor stays loaded. Refilled at every prop merge.
     std::vector<vec3> dripEmitters;
@@ -1558,7 +1558,6 @@ int main(int argc, char** argv) {
     // Transient render/sim state, never persisted: a reloaded floor re-bakes its
     // dressing whole, so anything mid-air simply never happened.
     std::vector<game::DetachedPiece> antourageFalling;
-
 
     gpu::ImGuiLayer hud;
     if (!hud.init(device, window, renderer.renderPass,
@@ -2018,6 +2017,10 @@ int main(int argc, char** argv) {
     // elevator fold keeps the row: the cold NpcId is the key, not the body.
     // Passed to every ai_step; null would be bit-for-bit the pre-memory pass.
     game::AiMemory aiMem;
+    // The danger field's producer loop ([diffusion.h]): panicked bodies publish,
+    // the driver sweeps at its own cadence, ai_step's threat term finally reads
+    // a real number. Lives beside aiMem because both are per-run brain state
+    // that survives floor travel; the FIELD does not (on_floor_built re-parks it).
     DiffusionDriver diffusionDriver;
     game::AiTick aiTick{};
     std::uint64_t lastAimemLogTick = ~0ull;
@@ -2056,6 +2059,10 @@ int main(int argc, char** argv) {
     game::ConsoleContext consoleCtx;
     bool showConsole = false;
     bool consoleFocus = false;
+    // Инвентарная сетка ([inventory.md]): UI-состояние здесь, игровые данные —
+    // только по указателям в момент отрисовки. Заявка применяется НИЖЕ по
+    // кадру, на существующих примитивах.
+    InvUiState invUi;
     char consoleInput[256] = {};
     std::vector<std::string> consoleLog;
     std::vector<std::string> consoleHistory;
@@ -2299,6 +2306,13 @@ int main(int argc, char** argv) {
         // was pinned at count 0 forever and the whole `min_samosbor` column of
         // data/mobs.csv was dead data. Both defects silent. [samosbor.h] names them.
         samosbor = game::samosbor_enter_floor(samosbor, currentFloor, sbRng);
+        // The CONTRACT call ([diffusion.h]): a LevelStack slot is recycled, and
+        // generate_floor clears the grid but not the FieldRegistry, so the
+        // departed floor's danger would keep sitting in the arrival's cells.
+        // The layer-id backstop inside diffusion_tick cannot see this case.
+        diffusion_driver_on_floor_built(diffusionDriver,
+                                        stack.layer(reg.get<Transform>(player).layer),
+                                        reg.get<Transform>(player).layer);
         // A rumour is about a FLOOR, so carrying one across a ride makes it
         // false. Caught on a capture: the line read "самосбор здесь часто
         // (17.2%)" while the HUD's own duty for the floor underfoot said 35.0%
@@ -2457,8 +2471,6 @@ int main(int argc, char** argv) {
                     game::contract_on_giver_died(contracts, ev.a, &factionRel, &pool);
                     game::quest_on_giver_died(quests, ev.a, &factionRel, &pool);
                 }
-
-
             }
         }
         // Diplomacy reads the same ring, in the same frame-top drain, and for the same
@@ -2561,15 +2573,13 @@ int main(int argc, char** argv) {
                     save_binds();
                     input.set_move_binds(game::keybind_move_binds(binds));
                 } else {
-                    const bool typing = ImGui::GetIO().WantTextInput;
+                    // Открытая сетка владеет клавишами так же, как текстовый
+                    // ввод: обычные бинды молчат (E внутри инвентаря — это
+                    // «экипировать», а не глобальный interact), kBindTyping
+                    // пробиваются, чтобы закрыть то, что открыли.
+                    const bool typing = ImGui::GetIO().WantTextInput || is_modal_active();
                     const game::KeyBind* kb = binds.find_scancode(
                         static_cast<std::uint16_t>(e.key.scancode));
-                    // Plain rows fire only in live play; kBindAlways rows (menu,
-                    // console, hud) fire while paused, kBindTyping rows even
-                    // while a text field owns the keyboard — so the toggle key
-                    // can always close what it opened. This gate also stops a
-                    // vendor-filter keystroke from eating rations, which the old
-                    // chain happily did.
                     if (screen == AppScreen::Playing && kb &&
                         (!typing || (kb->flags & game::kBindTyping)) &&
                         (!paused || (kb->flags & game::kBindAlways)) &&
@@ -2577,6 +2587,7 @@ int main(int argc, char** argv) {
                         exec_command(kb->command);
                 }
             }
+
             // While a modal or pause menu is up, ignore look/move/attack input: ImGui owns
             // the cursor and input bleed is strictly prevented.
             if (!is_modal_active()) {
@@ -2646,6 +2657,14 @@ int main(int argc, char** argv) {
                 const bool on = !input.mouselook();
                 input.set_mouselook(on);
                 SDL_SetWindowRelativeMouseMode(window, on);
+            }
+            if (has(ConsoleRequest::Inventory)) {
+                // Открытие освобождает курсор для клеток; закрытие возвращает
+                // mouselook — сетка, в отличие от консоли, открывается по сто
+                // раз за ран, и «верни взгляд руками» стало бы налогом.
+                invUi.open = !invUi.open;
+                input.set_mouselook(!invUi.open);
+                SDL_SetWindowRelativeMouseMode(window, !invUi.open);
             }
             // Floor travel (#8/#9): streams the destination in on demand and
             // folds the departed floor's crowd back into the cold pool, so only
@@ -2788,6 +2807,12 @@ int main(int argc, char** argv) {
             // 0 and no one flees, the scorer's stubbed-input stance ([ai.md]).
             // Fetched once per frame: the fixed loop below never (re)creates it.
             World& activeWorld = stack.layer(activeLayer);
+            // `danger` is LIVE now: ai_panic_publish_step below writes panic into
+            // the field through the driver, diffusion_tick sweeps it, and ai_step's
+            // threat term reads a real number — the long-open §52 debt. The fetch
+            // is re-done after diffusion_tick inside the loop, because the first
+            // publish on a floor CREATES the field and this pre-loop pointer
+            // predates it.
             const Field<float>* danger = activeWorld.fields().find<float>("danger");
             const MacroGrid& activeGrid = activeWorld.grid();
             int guard = 0;
@@ -2801,8 +2826,9 @@ int main(int argc, char** argv) {
                                  static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f));
                 // While the console input line owns the keyboard, WASD is text,
                 // not movement: skip the bridge and park the intent so the body
-                // does not glide on the last pre-console wishDir.
-                if (showConsole && ImGui::GetIO().WantTextInput) {
+                // does not glide on the last pre-console wishDir. The open
+                // inventory grid owns the keys the same way ([inventory.md]).
+                if ((showConsole && ImGui::GetIO().WantTextInput) || invUi.open) {
                     if (reg.valid(player))
                         if (auto* c = reg.try_get<Controller>(player))
                             c->wishDir = vec3{0, 0, 0};
@@ -2921,6 +2947,9 @@ int main(int argc, char** argv) {
                 aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
                                        kSimDt, aiCfg, &aiMem, &doors, &activeWorld,
                                        &roomZones, dayClock.minute_of_day(), &samosbor);
+                // Intent first, wardrobe second: the equip DECIDER re-scores
+                // each body's bag on its own staggered slot. [ai.h] [equip.h]
+                game::ai_equip_step(reg, pool, activeLayer, simTick);
                 // AIMEM proof trail: once nav has brains and AI is on, emit a
                 // compact stderr pulse so a --shot harness can assert the store
                 // is live (rows/writes/recalled) without parsing the HUD.
@@ -3876,7 +3905,6 @@ int main(int argc, char** argv) {
                             dressingSetChanged = true;
                         }
                     }
-
                 }
                 if (interactWanted) {
                     interactWanted = false;
@@ -4196,7 +4224,8 @@ int main(int argc, char** argv) {
                     if (const auto* nrg = reg.try_get<game::NpcRef>(player))
                         if (pool.valid(nrg->id))
                             haveGun = game::equipped_ranged(
-                                          pool.inventory(nrg->id)) !=
+                                          pool.inventory(nrg->id),
+                                          reg.try_get<game::Equipped>(player)) !=
                                       game::kInvalidItem;
                 // Combat carves: clear, fill during melee/projectiles, dispose
                 // same step if !doors.frozen (v1 drops proposals during bake).
@@ -4361,9 +4390,6 @@ int main(int argc, char** argv) {
                 }
                 // Drain this tick's blood/spark proposals into the GPU pool.
                 drain_particle_bursts(particlePass, particleBursts);
-
-
-
 
                 // them and still before finalize_deaths: a monster's blow lands
                 // first, and if that already killed you apply_damage refuses the
@@ -5084,18 +5110,12 @@ int main(int argc, char** argv) {
             // Real GPU time, per pass, from timestamp queries — NOT the frame
             // time above.
             if (renderer.timer.supported()) {
-                ImGui::Text("gpu: lgrid %.3f | cull %.3f | flush %.3f | sim %.3f | gas %.3f | world %.3f | "
-                            "bodies %.3f | props %.3f | drw-phys %.3f | hud %.3f | frame %.3f ms",
-                            renderer.timer.pass_ms(gpu::GpuPass::LightGrid),
-                            renderer.timer.pass_ms(gpu::GpuPass::Cull),
-                            renderer.timer.pass_ms(gpu::GpuPass::VoxelFlush),
-                            renderer.timer.pass_ms(gpu::GpuPass::SimPhysics),
-                            renderer.timer.pass_ms(gpu::GpuPass::GasSim),
-                            renderer.timer.pass_ms(gpu::GpuPass::World),
-                            renderer.timer.pass_ms(gpu::GpuPass::Bodies),
-                            renderer.timer.pass_ms(gpu::GpuPass::Props),
-                            renderer.timer.pass_ms(gpu::GpuPass::DrawPhysics),
-                            renderer.timer.pass_ms(gpu::GpuPass::Hud),
+                ImGui::Text("gpu: lg %.2f | cl %.2f | fl %.2f | sim %.2f | gas %.2f | wld %.2f | bod %.2f | prp %.2f | drw %.2f | hud %.2f | fr %.2f ms",
+                            renderer.timer.pass_ms(gpu::GpuPass::LightGrid), renderer.timer.pass_ms(gpu::GpuPass::Cull),
+                            renderer.timer.pass_ms(gpu::GpuPass::VoxelFlush), renderer.timer.pass_ms(gpu::GpuPass::SimPhysics),
+                            renderer.timer.pass_ms(gpu::GpuPass::GasSim), renderer.timer.pass_ms(gpu::GpuPass::World),
+                            renderer.timer.pass_ms(gpu::GpuPass::Bodies), renderer.timer.pass_ms(gpu::GpuPass::Props),
+                            renderer.timer.pass_ms(gpu::GpuPass::DrawPhysics), renderer.timer.pass_ms(gpu::GpuPass::Hud),
                             renderer.timer.frame_ms());
                 // The median above is DESIGNED to hide spikes — it takes 16 slow frames
                 // out of 31 to move it — so it cannot see a hitch. This line is the WORST
@@ -5103,18 +5123,12 @@ int main(int argc, char** argv) {
                 // a stutter; both moving together is a real cost change. `drop` must stay
                 // at 0: a growing value means every figure above is computed over a stale
                 // window and none of them mean anything. [gpu_timer.h]
-                ImGui::Text("gpu peak: lgrid %.3f | cull %.3f | flush %.3f | sim %.3f | gas %.3f | world %.3f | "
-                            "bodies %.3f | props %.3f | drw-phys %.3f | hud %.3f | frame %.3f ms | drop %u",
-                            renderer.timer.pass_ms_max(gpu::GpuPass::LightGrid),
-                            renderer.timer.pass_ms_max(gpu::GpuPass::Cull),
-                            renderer.timer.pass_ms_max(gpu::GpuPass::VoxelFlush),
-                            renderer.timer.pass_ms_max(gpu::GpuPass::SimPhysics),
-                            renderer.timer.pass_ms_max(gpu::GpuPass::GasSim),
-                            renderer.timer.pass_ms_max(gpu::GpuPass::World),
-                            renderer.timer.pass_ms_max(gpu::GpuPass::Bodies),
-                            renderer.timer.pass_ms_max(gpu::GpuPass::Props),
-                            renderer.timer.pass_ms_max(gpu::GpuPass::DrawPhysics),
-                            renderer.timer.pass_ms_max(gpu::GpuPass::Hud),
+                ImGui::Text("gpu peak: lg %.2f | cl %.2f | fl %.2f | sim %.2f | gas %.2f | wld %.2f | bod %.2f | prp %.2f | drw %.2f | hud %.2f | fr %.2f ms | drop %u",
+                            renderer.timer.pass_ms_max(gpu::GpuPass::LightGrid), renderer.timer.pass_ms_max(gpu::GpuPass::Cull),
+                            renderer.timer.pass_ms_max(gpu::GpuPass::VoxelFlush), renderer.timer.pass_ms_max(gpu::GpuPass::SimPhysics),
+                            renderer.timer.pass_ms_max(gpu::GpuPass::GasSim), renderer.timer.pass_ms_max(gpu::GpuPass::World),
+                            renderer.timer.pass_ms_max(gpu::GpuPass::Bodies), renderer.timer.pass_ms_max(gpu::GpuPass::Props),
+                            renderer.timer.pass_ms_max(gpu::GpuPass::DrawPhysics), renderer.timer.pass_ms_max(gpu::GpuPass::Hud),
                             renderer.timer.frame_ms_max(), renderer.timer.dropped());
             } else {
                 // Deliberately no longer "queue family writes no timestamps": supported()
@@ -5235,14 +5249,18 @@ int main(int argc, char** argv) {
                     for (const auto& sl : inv.slots)
                         if (sl.item != 0) ++slots;
 
-                    const game::ItemId wpn = game::equipped_melee(inv);
-                    const game::ItemId arm = game::equipped_armour(inv);
+                    // The player's HUD shows the player's DECISION, not a scan:
+                    // fists until `equip` says otherwise. [equip.h]
+                    const game::Equipped* peq =
+                        reg.try_get<game::Equipped>(player);
+                    const game::ItemId wpn = game::equipped_melee(inv, peq);
+                    const game::ItemId arm = game::equipped_armour(inv, peq);
                     const game::MeleeDef* md = game::melee_for_item(wpn);
                     if (!md) md = &game::unarmed_melee();
                     // The firearm, when there is one. Named separately from the
                     // melee line because they are different loadout slots, not two
                     // spellings of the same one.
-                    if (const game::ItemId g_ = game::equipped_ranged(inv)) {
+                    if (const game::ItemId g_ = game::equipped_ranged(inv, peq)) {
                         const game::RangedDef* rd = game::ranged_for_item(g_);
                         const auto* prs = reg.try_get<game::PlayerRanged>(player);
                         if (rd)
@@ -5501,6 +5519,19 @@ int main(int argc, char** argv) {
                             samosborCycles, fogScale, samosborDamage);
                 if (elevDiagLine[0] && simTick - elevDiagAt < 8u * kSimHz)
                     ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "%s", elevDiagLine);
+                // Атмосфера клетки под камерой — ЧИТАТЕЛЬ газовой петли
+                // ([gpu_gas_pass.h] sample_cell): без этой строки петля была
+                // бы диспатчем в никуда.
+                if (gasPass.ready() && reg.valid(player)) {
+                    const vec3& gp = reg.get<Transform>(player).pos;
+                    const std::uint32_t cell = gasPass.sample_cell(
+                        static_cast<int>(std::floor(gp.x / kCellSize)),
+                        static_cast<int>(std::floor(gp.y / kCellSize)),
+                        static_cast<int>(std::floor(gp.z / kCellSize)));
+                    ImGui::Text("gas: tox %u smoke %u oxy %u heat %u",
+                                cell & 0xFFu, (cell >> 8) & 0xFFu,
+                                (cell >> 16) & 0xFFu, (cell >> 24) & 0xFFu);
+                }
             }
             {
                 const game::Needs& nd = [&]() -> const game::Needs& {
@@ -5646,6 +5677,114 @@ int main(int argc, char** argv) {
             DrawConsoleUI(&showConsole, &consoleFocus, consoleInput,
                           sizeof consoleInput, console, consoleCtx, consoleLog,
                           consoleHistory, consoleHistPos);
+        }
+
+        // ── Инвентарная сетка ([inventory.md]) ─────────────────────────
+        // Виджет ЧИТАЕТ и возвращает заявку; применяем её здесь же, на тех же
+        // примитивах, что консоль и ИИ ([equip.h]) — третьего пути к Equipped
+        // не появляется.
+        if (invUi.open && reg.valid(player)) {
+            if (const auto* nrInv = reg.try_get<game::NpcRef>(player);
+                nrInv && pool.valid(nrInv->id)) {
+                game::Inventory& pinv = pool.inventory(nrInv->id);
+                game::Equipped& peq =
+                    reg.get_or_emplace<game::Equipped>(player);
+                InvUiPolicy policy{};  // self-режим: см. [inventory.md]
+                policy.allowUse = false;  // послотовый Use придёт с примитивом
+                const InvUiRequest r = inventory_ui_draw(
+                    invUi, policy, pinv, &peq,
+                    game::inventory_mass_g(pinv));
+                switch (r.kind) {
+                    case InvUiRequest::Kind::Equip:
+                        if (game::equip_item(pinv, peq, r.slot))
+                            game::sync_armour(reg, pool, player);
+                        break;
+                    case InvUiRequest::Kind::Unequip:
+                        game::unequip_slot(peq, r.eqSlot);
+                        game::sync_armour(reg, pool, player);
+                        break;
+                    case InvUiRequest::Kind::Drop: {
+                        game::ItemSlot& s = pinv.slots[r.slot];
+                        if (s.item != game::kInvalidItem && s.count > 0) {
+                            // Один предмет из стека — на пол, с его износом
+                            // ([loot.h] Pickup.condition). Тот же спавн, что
+                            // у разлива трупа: Transform/AABB/Mass, физика
+                            // общая.
+                            const vec3 at = reg.get<Transform>(player).pos;
+                            Entity pe = reg.create();
+                            Transform ptr2;
+                            ptr2.pos = vec3{at.x, at.y, at.z};
+                            ptr2.layer = activeLayer;
+                            reg.emplace<Transform>(pe, ptr2);
+                            reg.emplace<Velocity>(pe);
+                            reg.emplace<AABB>(pe, AABB{vec3{0.15f, 0.15f, 0.15f}});
+                            reg.emplace<GravityAffected>(pe, GravityAffected{1.0f, false});
+                            reg.emplace<Renderable>(pe,
+                                Renderable{vec3{0.55f, 0.75f, 0.45f}});
+                            game::Pickup pk;
+                            pk.item = s.item;
+                            pk.count = 1;
+                            pk.condition = s.condition;
+                            reg.emplace<game::Pickup>(pe, pk);
+                            reg.emplace<Mass>(pe,
+                                Mass{static_cast<float>(
+                                         game::item_def(s.item).massG) *
+                                     0.001f});
+                            reg.emplace<game::Interactable>(
+                                pe, game::Interactable{
+                                        game::Interactable::Kind::Loot,
+                                        game::kPickupReach, true});
+                            if (--s.count == 0) s = game::ItemSlot{};
+                            // Решение могло протухнуть вместе со слотом —
+                            // строгое чтение это увидит; броню пересинхронизи-
+                            // ровать надо сейчас.
+                            game::sync_armour(reg, pool, player);
+                        }
+                        break;
+                    }
+                    case InvUiRequest::Kind::Repair: {
+                        // Станция — та же тройка, что у крафт-окна: пад =
+                        // верстак, терминал рядом = NetTerminal, иначе голые
+                        // руки. Цену/станцию судит примитив; отказ — словами
+                        // в консоль-лог, как крафт и делает. [craft.h]
+                        const Transform& rct = reg.get<Transform>(player);
+                        const bool nearTermR =
+                            game::find_nearest_interactable(
+                                reg, player,
+                                game::Interactable::Kind::Terminal,
+                                game::interact_def(game::InteractKind::Terminal)
+                                    .reachM)
+                                .hit;
+                        const game::CraftStation benchR =
+                            game::on_extraction_pad(
+                                stack.layer(activeLayer).grid(), rct.pos)
+                                ? game::CraftStation::Workbench
+                                : (nearTermR ? game::CraftStation::NetTerminal
+                                             : game::CraftStation::Any);
+                        const game::RepairResult rr = game::craft_repair_item(
+                            crafting, pinv, r.slot, benchR);
+                        char line[128];
+                        if (rr.ok)
+                            std::snprintf(line, sizeof line,
+                                          "repair: %s %u -> 255 (cost %u)",
+                                          game::item_name(pinv.slots[r.slot].item),
+                                          rr.conditionBefore, rr.costTotal);
+                        else
+                            std::snprintf(line, sizeof line, "repair: %s",
+                                          game::craft_fail_text(rr.fail));
+                        consoleLog.push_back(line);
+                        // Починенная решённая броня держит больше — резисты
+                        // масштабируются состоянием ([combat.cpp] sync_armour).
+                        if (rr.ok) game::sync_armour(reg, pool, player);
+                        break;
+                    }
+                    default:
+                        // Use — послотовое использование придёт со своим
+                        // примитивом; политика self-режима его пока не
+                        // предлагает ([inventory_ui.h]).
+                        break;
+                }
+            }
         }
 
         // DRAINED UNCONDITIONALLY, outside the console overlay.
@@ -6316,8 +6455,6 @@ int main(int argc, char** argv) {
             }
             renderer.timer.pass_end(cmd, gpu::GpuPass::LightGrid);
 
-
-
             // Voxel-mirror upkeep, outside the render pass: doors publish
             // their mask edits the same way carve does ([game/door.h]
             // dirtyCells) — drain once per frame, then record this frame's
@@ -6398,6 +6535,29 @@ int main(int argc, char** argv) {
                 propPass.set_use_gpu_culling(false);
             }
             renderer.timer.pass_end(cmd, gpu::GpuPass::Cull);
+
+            // Газ: один диспатч на кадр, изотропный (regime_down активного
+            // слоя через push). Фиксированный шаг 1/60 — поле ВИЗУАЛЬНОЕ/
+            // фоновое, не сим-детерминизм; боевая подключка (удушье) пойдёт
+            // через сим-тик отдельным решением. [gpu_gas_pass.h]
+            if (gasPass.ready()) {
+                // ЗАСЕВ — лениво, по смене (этаж, слой), у самого диспатча:
+                // один писатель на все пути входа (стартовый спавн, do_ride,
+                // fast travel) ПО ПОСТРОЕНИЮ — травел-сайтная версия этого
+                // кода снята именно потому, что стартовый путь шёл мимо неё.
+                static int gasSeedFloor = INT_MIN;
+                static LayerId gasSeedLayer = static_cast<LayerId>(~0u);
+                if (gasSeedFloor != currentFloor || gasSeedLayer != activeLayer) {
+                    gasSeedFloor = currentFloor;
+                    gasSeedLayer = activeLayer;
+                    const Field<float>* gSeed =
+                        stack.layer(activeLayer).fields().find<float>(kGasField);
+                    gasPass.upload_field(gSeed ? gSeed->data().data() : nullptr);
+                }
+                const CellStep gd =
+                    regime_down(stack.layer(activeLayer).gravity().regime);
+                gasPass.record_sim(cmd, gd, 1.0f / 60.0f);
+            }
 
             // Push bodies for the verlet passes: EVERY body on the active
             // layer (the same set BodyPass draws, PLUS the camera holder —
@@ -6555,7 +6715,6 @@ int main(int argc, char** argv) {
                 propPass.record(cmd, renderer.currentFrame, push, lightGrid.descriptor_set(renderer.currentFrame));
             renderer.timer.pass_end(cmd, gpu::GpuPass::Props);
 
-
             renderer.timer.pass_begin(cmd, gpu::GpuPass::DrawPhysics);
             wirePass.record_draw(cmd, push);
             clothPass.record_draw(cmd, push);
@@ -6563,7 +6722,6 @@ int main(int argc, char** argv) {
             // every opaque depth already written.
             particlePass.record_draw(cmd, push);
             renderer.timer.pass_end(cmd, gpu::GpuPass::DrawPhysics);
-
 
             std::uint64_t t2 = SDL_GetPerformanceCounter();
             cubeMs = static_cast<float>((t1 - t0) / freq * 1000.0);
@@ -6651,6 +6809,11 @@ int main(int argc, char** argv) {
                         aim_player(reg, player);
                         LayerId nl = reg.get<Transform>(player).layer;
                         activeLayer = nl;
+                        // Third thing both travel sites must do identically:
+                        // the diffusion CONTRACT call ([diffusion.h]), or the
+                        // recycled slot keeps the departed floor's danger.
+                        diffusion_driver_on_floor_built(diffusionDriver,
+                                                        stack.layer(nl), nl);
                         vendorKind = game::vendor_kind_for(
                             game::dominant_faction(pool, currentFloor));
                         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);

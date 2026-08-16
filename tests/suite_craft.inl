@@ -979,6 +979,252 @@ static void test_craft_all() {
         CHECK(cleanMeleeMult == 1.0f);
         CHECK(wornMeleeMult == 0.60f);
     }
+    { // ---- equip is a DECISION, and no one decides for you ([equip.h]) ------
+        // Resolve fixtures by PROPERTY off the compiled table, never by id.
+        ItemId knife2 = kInvalidItem, gun = kInvalidItem, vest = kInvalidItem;
+        for (std::size_t i = 1; i <= kItemCount; ++i) {
+            const ItemId id = static_cast<ItemId>(i);
+            if (!item_valid(id)) continue;
+            if (knife2 == kInvalidItem && melee_for_item(id)) knife2 = id;
+            if (gun == kInvalidItem && ranged_for_item(id) && !ranged_is_thrown(id))
+                gun = id;
+            if (vest == kInvalidItem &&
+                item_def(id).equipSlot == static_cast<std::uint8_t>(EquipSlot::Armor))
+                vest = id;
+        }
+        CHECK(knife2 != kInvalidItem);
+        CHECK(gun != kInvalidItem);
+        CHECK(vest != kInvalidItem);
+
+        Inventory bag2{};
+        bag2.slots[3] = ItemSlot{knife2, 1};
+        bag2.slots[5] = ItemSlot{gun, 1};
+        bag2.slots[9] = ItemSlot{vest, 1};
+
+        // THE no-auto-equip pin: a bag full of weapons plus an empty decision
+        // is BARE HANDS on the strict read — while the legacy scan (no decider)
+        // still finds the knife. A mutation that re-adds a scan fallback under
+        // a non-null Equipped turns exactly these red.
+        Equipped eq{};
+        CHECK(equipped_melee(bag2, &eq) == kInvalidItem);
+        CHECK(equipped_ranged(bag2, &eq) == kInvalidItem);
+        CHECK(equipped_armour(bag2, &eq) == kInvalidItem);
+        CHECK(equipped_melee(bag2) == knife2);
+
+        // Record decisions; the ONE weapon cell answers to exactly one reader:
+        // a decided knife is not a gun, a decided gun is not a club.
+        CHECK(equip_item(bag2, eq, 3));
+        CHECK(equipped_melee(bag2, &eq) == knife2);
+        CHECK(equipped_ranged(bag2, &eq) == kInvalidItem);
+        CHECK(equip_item(bag2, eq, 5));
+        CHECK(equipped_ranged(bag2, &eq) == gun);
+        CHECK(equipped_melee(bag2, &eq) == kInvalidItem);
+        CHECK(equip_item(bag2, eq, 9));
+        CHECK(equipped_armour(bag2, &eq) == vest);
+
+        // A rotted index is "no decision", not garbage: empty the slot under
+        // the recorded choice and the strict read returns to bare hands.
+        bag2.slots[5] = ItemSlot{};
+        CHECK(equipped_ranged(bag2, &eq) == kInvalidItem);
+        // Un-wearable input is refused, the previous decision stands.
+        CHECK(!equip_item(bag2, eq, 5));
+        CHECK(!equip_item(bag2, eq, 63));
+        CHECK(unequip_slot(eq, EquipSlot::Armor));
+        CHECK(equipped_armour(bag2, &eq) == kInvalidItem);
+    }
+
+    { // ---- wear: the durability column IS the lifetime ([equip.h]) ----------
+        // Fixtures by property off the compiled table: one eternal row
+        // (durability 0), one one-use row, one row whose 255/dur has a
+        // fraction, one row larger than the condition byte itself.
+        ItemId eternal = kInvalidItem, oneUse = kInvalidItem,
+               fracRow = kInvalidItem, bigRow = kInvalidItem;
+        for (std::size_t i = 1; i <= kItemCount; ++i) {
+            const ItemId id = static_cast<ItemId>(i);
+            if (!item_valid(id)) continue;
+            const ItemDef& d = item_def(id);
+            const bool wearable =
+                d.equipSlot != static_cast<std::uint8_t>(EquipSlot::None);
+            // item_durability, NOT the raw column: melee rows carry their own
+            // authored lifetime and the resolver is the law ([equip.h]).
+            const std::uint16_t dur = item_durability(id);
+            if (eternal == kInvalidItem && wearable && dur == 0)
+                eternal = id;
+            if (oneUse == kInvalidItem && wearable && dur == 1)
+                oneUse = id;
+            if (fracRow == kInvalidItem && wearable && dur > 1 &&
+                dur <= 255 && 255 % dur != 0)
+                fracRow = id;
+            if (bigRow == kInvalidItem && wearable && dur > 255)
+                bigRow = id;
+        }
+        CHECK(eternal != kInvalidItem);
+        CHECK(oneUse != kInvalidItem);   // door_kit/block_kit, dur = 1
+        CHECK(fracRow != kInvalidItem);  // chalk-class, base + fractional roll
+        CHECK(bigRow != kInvalidItem);   // flashlight 300 > 255: roll-only
+
+        auto wear_out = [](ItemId id) -> int {
+            // Uses until ruined under a deterministic seed walk; -1 = never.
+            Inventory b{};
+            b.slots[0] = ItemSlot{id, 1};
+            Equipped e{};
+            CHECK(equip_item(b, e, 0));
+            const EquipSlot sl = static_cast<EquipSlot>(item_def(id).equipSlot);
+            for (int u = 1; u <= 4000; ++u) {
+                if (!wear_equipped(b, e, sl, hash3(7u, id, static_cast<std::uint32_t>(u))))
+                    return -1;                       // refused: eternal row
+                if (b.slots[0].condition == 0) return u;
+            }
+            return -2;                               // never ruined: broken math
+        };
+        CHECK(wear_out(eternal) == -1);
+        CHECK(wear_out(oneUse) == 1);
+        {   // Expectation law: uses-to-ruin tracks the column, both régimes.
+            const int fu = wear_out(fracRow);
+            const int fd = static_cast<int>(item_durability(fracRow));
+            CHECK(fu > 0 && fu >= fd / 2 && fu <= fd * 2);
+            const int bu = wear_out(bigRow);
+            const int bd = static_cast<int>(item_durability(bigRow));
+            CHECK(bu > 0 && bu >= bd / 2 && bu <= bd * 2);
+        }
+        // Ruined stays ruined: at condition 0 the roll is a refusal, not a wrap.
+        {
+            Inventory b{};
+            b.slots[0] = ItemSlot{oneUse, 1};
+            b.slots[0].condition = 0;
+            Equipped e{};
+            CHECK(equip_item(b, e, 0));
+            const EquipSlot sl =
+                static_cast<EquipSlot>(item_def(oneUse).equipSlot);
+            CHECK(!wear_equipped(b, e, sl, 1u));
+            CHECK(b.slots[0].condition == 0);
+        }
+        // The ONLY two effect formulas, endpoints pinned: mint is identity,
+        // ruin is the floor (60% damage, 20% resist), midpoint is between.
+        CHECK(wear_damage_scale(100, 255) == 100);
+        CHECK(wear_damage_scale(100, 0) == 60);
+        const std::int16_t mid = wear_damage_scale(100, 128);
+        CHECK(mid > 60 && mid < 100);
+        CHECK(wear_resist_scale(100, 255) == 100);
+        CHECK(wear_resist_scale(100, 0) == 20);
+    }
+
+    { // ---- inventory_give: the stack law lives ONCE ([item_table.h]) --------
+        // A stackable row by property (stackMax > 1), never by id.
+        ItemId stk = kInvalidItem;
+        for (std::size_t i = 1; i <= kItemCount; ++i) {
+            const ItemId id = static_cast<ItemId>(i);
+            if (item_valid(id) && item_def(id).stackMax > 4) { stk = id; break; }
+        }
+        CHECK(stk != kInvalidItem);
+        const int cap = item_def(stk).stackMax;
+
+        // Top-up before fresh slots, clamp at cap, remainder returned intact.
+        Inventory g{};
+        g.slots[2] = ItemSlot{stk, 1};
+        CHECK(inventory_give(g, stk, static_cast<std::uint16_t>(cap)) == 0);
+        CHECK(static_cast<int>(g.slots[2].count) == cap);  // topped up first
+        CHECK(g.slots[0].item == stk && g.slots[0].count == 1);  // overflow -> fresh
+
+        // Law 1: different wear is a different stack — a ruined batch must NOT
+        // merge into the mint stack, and vice versa.
+        Inventory h{};
+        h.slots[0] = ItemSlot{stk, 1};            // mint (condition 255)
+        CHECK(inventory_give(h, stk, 1, 7) == 0); // battered batch
+        CHECK(h.slots[0].count == 1);             // mint stack untouched
+        CHECK(h.slots[1].item == stk && h.slots[1].condition == 7);
+
+        // Law 2: a freed slot's stale wear byte must not infect a fresh give.
+        // Emptiers zero item and count only — that is the trap this pins.
+        Inventory j{};
+        j.slots[0] = ItemSlot{stk, 3};
+        j.slots[0].condition = 9;                 // battered stack...
+        j.slots[0].item = kInvalidItem;           // ...sold/spilled: slot freed
+        j.slots[0].count = 0;                     //    the stale 9 stays behind
+        CHECK(inventory_give(j, stk, 1) == 0);
+        CHECK(j.slots[0].condition == 255);       // fresh give is MINT
+
+        // A full grid returns the whole remainder; nothing is deleted.
+        Inventory full{};
+        for (int i = 0; i < kInvSlots; ++i)
+            full.slots[i] = ItemSlot{stk, static_cast<std::uint8_t>(cap)};
+        CHECK(inventory_give(full, stk, 5) == 5);
+    }
+
+    { // ---- repair: the item's OWN recipe pays, halved, axis by axis --------
+        // A wearable item with a nonzero recipe, resolved by property: any
+        // melee weapon (durability authored in weapons_melee.csv) whose recipe
+        // station is not Any — so the station refusal below tests something.
+        ItemId rw = kInvalidItem;
+        for (ItemId id = 1; id <= kCraftRecipeCount; ++id) {
+            if (!item_valid(id)) continue;
+            if (item_durability(id) == 0) continue;
+            if (item_def(id).equipSlot ==
+                static_cast<std::uint8_t>(EquipSlot::None)) continue;
+            if (craft_recipe(id).station ==
+                static_cast<std::uint8_t>(CraftStation::Any)) continue;
+            rw = id;
+            break;
+        }
+        CHECK(rw != kInvalidItem);
+        const CraftRecipe& rr = craft_recipe(rw);
+        const CraftStation stn = static_cast<CraftStation>(rr.station);
+
+        // The exact per-axis price of repairing from ruin: ceil(comp/2).
+        std::uint32_t half[kCraftMaterials];
+        for (std::size_t i = 0; i < kCraftMaterials; ++i)
+            half[i] = (static_cast<std::uint32_t>(rr.comp[i]) * 255u + 509u) / 510u;
+
+        Inventory ri{};
+        ri.slots[0] = ItemSlot{rw, 1};
+        ri.slots[0].condition = 0;   // ruined
+
+        // Fund EXACTLY the half-price and repair: success is proven by the
+        // bank being EMPTY after — the pricing is exact, not approximate.
+        CraftingState rb{};
+        for (std::size_t i = 0; i < kCraftMaterials; ++i)
+            rb.mat[i] = static_cast<std::uint16_t>(half[i]);
+        const RepairResult ok1 = craft_repair_item(rb, ri, 0, stn);
+        CHECK(ok1.ok);
+        CHECK(ri.slots[0].condition == 255);
+        CHECK(bank_total(rb) == 0);
+
+        // One short axis = whole refusal, bank untouched, condition untouched.
+        ri.slots[0].condition = 0;
+        std::size_t fatAxis = 0;
+        for (std::size_t i = 0; i < kCraftMaterials; ++i)
+            if (half[i] > half[fatAxis]) fatAxis = i;
+        CHECK(half[fatAxis] > 0);   // or the underfund below funds fully
+        for (std::size_t i = 0; i < kCraftMaterials; ++i)
+            rb.mat[i] = static_cast<std::uint16_t>(half[i]);
+        rb.mat[fatAxis] -= 1;
+        const std::uint32_t before = bank_total(rb);
+        const RepairResult no1 = craft_repair_item(rb, ri, 0, stn);
+        CHECK(!no1.ok);
+        CHECK(no1.fail == CraftFail::InsufficientMaterials);
+        CHECK(ri.slots[0].condition == 0);
+        CHECK(bank_total(rb) == before);   // no partial spend, ever
+
+        // Wrong bench refuses BEFORE money is looked at; bare hands is not a
+        // station for a stationed recipe (craft_station_ok's asymmetry).
+        const RepairResult no2 = craft_repair_item(rb, ri, 0, CraftStation::Any);
+        CHECK(!no2.ok);
+        CHECK(no2.fail == CraftFail::StationMismatch);
+
+        // Mint is a free success (a repair-all button must not trip on it);
+        // an eternal row is NotRepairable, not silently "fixed".
+        ri.slots[0].condition = 255;
+        CHECK(craft_repair_item(rb, ri, 0, stn).ok);
+        ItemId eternal2 = kInvalidItem;
+        for (ItemId id = 1; id <= kCraftRecipeCount; ++id)
+            if (item_valid(id) && item_durability(id) == 0) { eternal2 = id; break; }
+        CHECK(eternal2 != kInvalidItem);
+        ri.slots[1] = ItemSlot{eternal2, 1};
+        ri.slots[1].condition = 100;   // корозия на вечном — байт есть, износа нет
+        const RepairResult no3 = craft_repair_item(rb, ri, 1, stn);
+        CHECK(!no3.ok);
+        CHECK(no3.fail == CraftFail::NotRepairable);
+    }
 
     // Work counts, printed. Counts and not seconds: the same run does the same
     // amount of work on every host, which a stopwatch cannot promise.

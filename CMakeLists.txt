@@ -93,17 +93,32 @@ endif()
 # and macOS catches it while Windows stays green. See tools/win/README.md.
 function(giga_target_flags tgt rtti)
     if(MSVC)
-        target_compile_options(${tgt} PRIVATE /W4 /EHsc /arch:AVX2
+        target_compile_options(${tgt} PRIVATE /W4 /EHsc
             /wd4100  # unreferenced formal parameter (== -Wno-unused-parameter)
         )
         if(NOT rtti)
             target_compile_options(${tgt} PRIVATE /GR-)
         endif()
     else()
-        target_compile_options(${tgt} PRIVATE -Wall -Wextra -Wno-unused-parameter -mavx2 -mfma)
+        target_compile_options(${tgt} PRIVATE -Wall -Wextra -Wno-unused-parameter)
         if(NOT rtti)
             target_compile_options(${tgt} PRIVATE -fno-rtti -fno-exceptions)
         endif()
+    endif()
+    # ---- Architecture baseline — the ONE place per-ISA flags live ------------
+    # Two shipping platforms, two ISAs: Windows/Linux are x86-64 and get AVX2+FMA
+    # (the fork's Windows perf work, kept); macOS is arm64 where NEON is the
+    # compiler default and no flag exists or is needed. Any future per-ISA flag
+    # goes HERE, not next to its feature — that is how this stays one decision
+    # instead of an accretion of scattered gates.
+    # STEAM MINSPEC CALL, deliberately open: /arch:AVX2 makes the binary refuse
+    # pre-2013 x86 CPUs (a few % of the Steam survey). Revisit before shipping;
+    # the compromise then is a lower baseline or runtime dispatch, decided on a
+    # sim_bench measurement, not here.
+    if(MSVC)
+        target_compile_options(${tgt} PRIVATE /arch:AVX2)
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+        target_compile_options(${tgt} PRIVATE -mavx2 -mfma)
     endif()
     if(_giga_ipo)
         # Release only. MSVC adds /INCREMENTAL to RelWithDebInfo, which conflicts
@@ -253,6 +268,16 @@ add_custom_command(
     DEPENDS ${CMAKE_SOURCE_DIR}/shaders/light_grid.comp
     COMMENT "glslc light_grid.comp -> light_grid.comp.spv")
 list(APPEND _giga_spv_files ${_giga_spv_dir}/light_grid.comp.spv)
+
+# GPU 4-channel gas/atmosphere sim over the 128^3 macro grid ([gpu_gas_pass.h]).
+add_custom_command(
+    OUTPUT ${_giga_spv_dir}/gas_sim.comp.spv
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0
+        ${CMAKE_SOURCE_DIR}/shaders/gas_sim.comp
+        -o ${_giga_spv_dir}/gas_sim.comp.spv
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/gas_sim.comp
+    COMMENT "glslc gas_sim.comp -> gas_sim.comp.spv")
+list(APPEND _giga_spv_files ${_giga_spv_dir}/gas_sim.comp.spv)
 
 # GPU verlet for hanging wires (antourage ghost chains).
 add_custom_command(
@@ -948,7 +973,6 @@ if(GIGA_BUILD_TESTS)
     add_test(NAME e2e_test COMMAND e2e_test)
     set_tests_properties(e2e_test PROPERTIES
         PASS_REGULAR_EXPRESSION "e2e_test: [0-9]+ checks, 0 failures")
-
 
 
 

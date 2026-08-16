@@ -454,7 +454,7 @@ void draw_crafting_window_ui(CraftUIState& state,
                         if (audioSys) audioSys->trigger_ui(audio::UiSound::InventoryRustle);
                         std::snprintf(state.statusMsg, sizeof(state.statusMsg),
                                       "Отремонтировано: %s (Потрачено: %u ед. компонентов)",
-                                      name, rres.costSpent);
+                                      name, rres.costTotal);
                     } else {
                         if (audioSys) audioSys->trigger_ui(audio::UiSound::ErrorChirp);
                     }

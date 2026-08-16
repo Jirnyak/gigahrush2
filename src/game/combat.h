@@ -36,6 +36,7 @@
 #include "ecs/registry.h"
 #include "game/event_bus.h"
 #include "game/status.h"
+#include "game/equip.h"    // Equipped — the decision the strict helpers read
 #include "game/inventory.h"
 #include "game/item_table.h"
 #include <unordered_set>
@@ -515,9 +516,21 @@ std::uint32_t fouling_step(Registry& reg, NpcPool& pool, LayerId layer,
 struct Equipped;
 
 int equipped_melee_slot(const Inventory& inv, const Equipped* eq = nullptr);
+// The best melee weapon in an inventory, or kInvalidItem for bare hands. "Best"
+// is highest damage — reach and speed are not traded off, because with no stamina
+// or stagger system there is nothing to trade them against yet.
+//
+// `eq` switches the SEMANTICS, not just the source ([equip.h]): non-null means a
+// DECIDER owns this body (ai_equip_step for NPCs, the console for the player) and
+// only its recorded choice is read — no choice, or a rotted index, is bare hands.
+// Null keeps the legacy best-scan for bodies no decider owns (monsters read the
+// mob table's way, cold paths predate the component). Auto-equip as a system does
+// not exist; the scan surviving under null is scoped to exactly those callers.
 ItemId equipped_melee(const Inventory& inv, const Equipped* eq = nullptr);
 
 int equipped_armour_slot(const Inventory& inv, const Equipped* eq = nullptr);
+// The best armour in an inventory, by total resistance across all channels, or
+// kInvalidItem for none. Same `eq` strictness rule as equipped_melee.
 ItemId equipped_armour(const Inventory& inv, const Equipped* eq = nullptr);
 
 // Copy the equipped armour's resistances onto `e`'s Armour component, adding or
@@ -526,7 +539,9 @@ ItemId equipped_armour(const Inventory& inv, const Equipped* eq = nullptr);
 //
 // This is what finally gives Armour data: the resistances were in the item table
 // all along (5 of 446 items carry them) — mitigation just had nothing feeding it.
-void sync_armour(Registry& reg, NpcPool& pool, Entity e);
+// `pool` is CONST: the sync reads the bag and writes only the entity's Armour
+// component — the signature says so instead of asking for trust.
+void sync_armour(Registry& reg, const NpcPool& pool, Entity e);
 
 struct DamageResult {
     std::int16_t applied = 0;  // AFTER mitigation — the only number worth reporting

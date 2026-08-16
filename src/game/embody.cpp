@@ -1,6 +1,6 @@
 #include "game/embody.h"
 
-#include "game/equip.h"
+#include "game/equip.h"    // Equipped — the empty decision cells on embodiment
 #include "game/faction.h"
 #include "game/rpg.h"      // RpgStats, random_rpg
 // NOTE: #include "game/ai.h" (AiBrain) goes back here when the utility AI is
@@ -105,9 +105,10 @@ Entity embody_as_player(Registry& reg, NpcPool& pool, NpcId id, LayerId layer, v
     // immediately afterwards, and the body is freshly built here in either case.
     reg.emplace_or_replace<RpgStats>(e, random_rpg(pool.level(id), id));
 
-    Equipped eq{};
-    auto_equip_best(pool.inventory(id), eq);
-    reg.emplace_or_replace<Equipped>(e, eq);
+    // The equip DECISION cells, all empty ([equip.h]): the player decides by
+    // hand, so a fresh embodiment fights with fists until `equip` says
+    // otherwise. No auto-equip — its absence here is the design, not a gap.
+    reg.emplace_or_replace<Equipped>(e, Equipped{});
 
     pool.set_player(id, true);
     return e;

@@ -10,6 +10,7 @@ int equipped_ranged_slot(const Inventory& inv, const Equipped* eq) {
             const RangedDef* d = ranged_for_item(sl.item);
             if (d && !ranged_is_thrown(sl.item)) return eq->weapon;
         }
+        return -1;
     }
     int bestIdx = -1;
     float bestDps = 0.0f;
@@ -27,6 +28,8 @@ int equipped_ranged_slot(const Inventory& inv, const Equipped* eq) {
     return bestIdx;
 }
 
+// Hand-written sibling of the generated table, so re-running the generator cannot
+// clobber it. Same split as [weapon_table.h]'s helpers.
 ItemId equipped_ranged(const Inventory& inv, const Equipped* eq) {
     const int slot = equipped_ranged_slot(inv, eq);
     if (slot >= 0 && slot < kInvSlots) return inv.slots[slot].item;

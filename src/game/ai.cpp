@@ -15,7 +15,10 @@
 #include "game/day_clock.h"   // DayClock, rhythm_bias — diurnal routine
 #include "game/door.h"        // door_nearest_shelter — hermetic flee target (§23)
 #include "game/samosbor.h"    // SamosborState / SamosborPhase — emergency threat state
+#include "game/combat.h"      // sync_armour — worn choice must reach the Armour component
+#include "game/equip.h"       // Equipped, equip_item — the decision the pass writes
 #include "game/role.h"        // RoleTraits, role_traits — archetype multipliers
+#include "game/weapon_table.h" // melee_for_item — the weapon scorer's melee half
 #include "game/room_zone.h"   // room affordance table + baked fields (§27 legs a,b)
 #include "sim/diffusion.h"    // diffusion_gradient — the flee steering field
 #include "world/field.h"      // Field<float>
@@ -1281,6 +1284,10 @@ void ai_panic_publish_step(Registry& reg, const NpcPool& pool,
                            DiffusionDriver& driver, World& world,
                            LayerId layer, float dt,
                            const SamosborState* samosbor) {
+    // 1.0 danger-unit per second of full-panic flight. The faction trait scales
+    // it: a fleeing Liquidator (panic 0.22) alarms a corridor less than a
+    // fleeing Citizen (0.50) — the same table ai_step scores from, so the field
+    // and the behaviour cannot drift apart.
     constexpr float kPanicEmit = 1.0f;
 
     auto view = reg.view<const AiBrain, const NpcRef, const Transform>();
@@ -1303,6 +1310,80 @@ void ai_panic_publish_step(Registry& reg, const NpcPool& pool,
                 diffusion_driver_add_at(driver, world, tr.pos, emitAmount, kDangerField);
             }
         }
+    }
+}
+
+void ai_equip_step(Registry& reg, const NpcPool& pool, LayerId layer,
+                   std::uint64_t tick) {
+    // Re-decide once per ~2 s of game time per body, staggered by identity so
+    // the floor's whole crowd never decides on the same tick. The cadence is a
+    // DECISION rate, not a reaction time: picking loot up mid-fight still waits
+    // for the body's next slot, which is what "решение, не рефлекс" means.
+    constexpr std::uint64_t kEquipDecideTicks = 250;
+
+    auto view = reg.view<const AiBrain, const NpcRef, const Transform>();
+    for (auto e : view) {
+        if (view.get<const Transform>(e).layer != layer) continue;
+        const NpcId id = view.get<const NpcRef>(e).id;
+        if (!pool.valid(id)) continue;
+        if ((tick + id * 37ull) % kEquipDecideTicks != 0) continue;
+
+        const Inventory& inv = pool.inventory(id);
+        Equipped& eq = reg.get_or_emplace<Equipped>(e);
+
+        // WEAPON. A working firearm outranks any club — the same order the
+        // combat steps resolve in. Within a kind: guns by DPS, melee by damage.
+        // EXTENSION POINT, by design ([equip.h]): when the first consumer
+        // arrives, this scorer grows a context argument (enemy resist profile,
+        // ambient threat, ammo count) — the decision already lives in ONE place,
+        // so the context lands here and nowhere else.
+        int bestIdx = -1;
+        bool bestIsGun = false;
+        float bestScore = 0.0f;
+        for (int i = 0; i < kInvSlots; ++i) {
+            const ItemSlot& s = inv.slots[i];
+            if (s.item == kInvalidItem || s.count == 0 || !item_valid(s.item)) continue;
+            if (const RangedDef* rd = ranged_for_item(s.item)) {
+                if (ranged_is_thrown(s.item)) continue;
+                const float score = ranged_dps(*rd);
+                if (!bestIsGun || score > bestScore) {
+                    bestIdx = i; bestScore = score; bestIsGun = true;
+                }
+            } else if (const MeleeDef* md = melee_for_item(s.item)) {
+                if (bestIsGun) continue;
+                if (static_cast<float>(md->dmg) > bestScore) {
+                    bestIdx = i; bestScore = static_cast<float>(md->dmg);
+                }
+            }
+        }
+        if (bestIdx >= 0)
+            equip_item(inv, eq, static_cast<std::uint8_t>(bestIdx));
+        else
+            unequip_slot(eq, EquipSlot::Weapon);
+
+        // ARMOUR: best total resistance, the sum sync_armour integrates.
+        int bestArm = -1;
+        int bestSum = 0;
+        for (int i = 0; i < kInvSlots; ++i) {
+            const ItemSlot& s = inv.slots[i];
+            if (s.item == kInvalidItem || s.count == 0 || !item_valid(s.item)) continue;
+            const ItemDef& d = item_def(s.item);
+            if (d.equipSlot != static_cast<std::uint8_t>(EquipSlot::Armor)) continue;
+            int sum = 0;
+            for (std::size_t c = 0; c < kItemResistChannels; ++c) sum += d.resist[c];
+            if (sum > bestSum) { bestSum = sum; bestArm = i; }
+        }
+        if (bestArm >= 0)
+            equip_item(inv, eq, static_cast<std::uint8_t>(bestArm));
+        else
+            unequip_slot(eq, EquipSlot::Armor);
+        // TOOL: no scorer yet — nothing consumes a held tool. The cell exists
+        // so the day one does, the decision has a place to land.
+
+        // The decision changed what is WORN, so the Armour component must
+        // follow now — sync_armour is documented as "call after anything that
+        // changes the inventory", and a changed choice is the same event.
+        sync_armour(reg, pool, e);
     }
 }
 

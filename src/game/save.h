@@ -52,8 +52,8 @@
 #include "game/contract.h"    // ContractBook, Contract
 #include "game/extraction.h"  // RunLedger
 #include "game/faction_relations.h" // FactionRelations, kRelFactionCount
+#include "game/equip.h"       // Equipped — the player's recorded decisions
 #include "game/inventory.h"   // Inventory
-#include "game/equip.h"       // Equipped (SAVMAG v14)
 #include "game/npc_pool.h"    // Needs
 #include "game/quest.h"       // QuestLog, kQuestLogWire, quest_table_fingerprint
 #include "game/rpg.h"         // RpgStats
@@ -61,7 +61,7 @@
 #include "game/combat.h"      // PlayerRanged (SAVMAG v8)
 #include "game/status.h"      // StatusSet (SAVSTAT v9)
 #include "game/samosbor.h"    // SamosborState (SAVCLOCK v10)
-#include "game/economy.h"    // BankAccount, kBankLedgerSlots (SAVMAG v15)
+#include "game/economy.h"     // BankAccount, kBankLedgerSlots (SAVMAG v15)
 #include "game/fast_travel.h" // FastTravelState (SAVCLOCK v10)
 #include "world/destruct.h"   // CarveOp, CarveScratch, CarveResult, carve_sphere
 #include "world/level_stack.h"  // LayerId, and World via world/world.h
@@ -135,9 +135,13 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // so version 11 saves are rejected, same standing rule. Note for the archaeologist:
 // kSaveFixedWire lands back on 927, the same number v10 had before hpBank — a
 // coincidence of two DIFFERENT formats (v10 lacked hpBank and had nine axes),
-// Version 13: Inventory slot grows `condition` (0..255) (+64 bytes on the wire,
-// 5 bytes per slot: item u16 + count u16 + condition u8). Version 12 saves
-// are rejected, same standing rule.
+// not a compatibility.
+// Version 13: the inventory cell's u16 count splits into u8 count + u8
+// condition ([inventory.h] — wear state, 255 = mint). Zero bytes moved on the
+// wire (a slot is 4 B either way), but a v12 reader would fuse count and
+// condition into one u16, so version 12 saves are rejected, same standing
+// rule. Pool rows carry the same cell and change in the same stroke
+// ([npc_pool.cpp] save_rows/load_rows).
 // Version 14: PlayerSnapshot adds `Equipped` items (+4 B on wire: weapon, armor, tool, pad_).
 // Version 13 saves are rejected, same standing rule.
 // Version 15: BankAccount (+352 B on wire: deposit, loan, ledger ring, terms), PlayerSnapshot camera angles (+8 B on wire: yaw, pitch), and PowerGridState (+1028 B on wire: count, destroyed shield cell keys).
@@ -254,11 +258,11 @@ inline constexpr std::size_t kContractWire = 21;     // 4 + 2 + 3x4 + 3   (pad_ 
 inline constexpr std::size_t kBookWire =
     static_cast<std::size_t>(kMaxContracts) * kContractWire + 4 + 4 + 8;
 inline constexpr std::size_t kNeedsWire = 37;        // 9 floats + seeded (v11: +hpBank)
-inline constexpr std::size_t kInventoryWire = static_cast<std::size_t>(kInvSlots) * 5;
+inline constexpr std::size_t kInventoryWire = static_cast<std::size_t>(kInvSlots) * 4; // 256
 inline constexpr std::size_t kEquippedWire = 4;       // weapon, armor, tool, pad_
 inline constexpr std::size_t kPlayerWire =
-    kNeedsWire + kInventoryWire + kEquippedWire + 4 + 4 + 4 + 3 + 4 + 4; // 384 (+yaw, +pitch)
-static_assert(kPlayerWire == 384);
+    kNeedsWire + kInventoryWire + kEquippedWire + 4 + 4 + 4 + 3 + 4 + 4; // 320 (+yaw, +pitch)
+static_assert(kPlayerWire == 320);
 // Version 16: RpgStats wire — field-by-field LE, NOT sizeof:
 // xp (4) + psi (2) + level (1) + attrPoints (1) + attr[5] (5) + perkPoints (1) +
 // radDose (2) + traitMask (4) + perkMask (4) + mutationMask (4) +
@@ -326,34 +330,6 @@ inline constexpr std::size_t kFactionWire =
 
 // Ceiling on a floor file's snapshot blob before its checksum has vouched for the
 // header.
-//
-// WAS 256 MiB, and that number was derived from the WRONG worst case. It counted
-// mask runs and type runs — "a checkerboard floor: 2 M mask-state runs (5 B each)
-// + 2 M mixed masks (64 B each) + full type runs, ~150 MB" — and never counted the
-// term that actually dominates: the `sub_material` PAGES. A pristine padic floor
-// carries 689,958 pages x 1 KiB = 706 MB, so a MEASURED, never-shot-at floor wrote
-// a 772.0 MB file that this reader refused on sight (2026-08-06).
-//
-// The consequence was not a slow save, it was NO save: `floor_file_write` has no
-// size guard, so every `floor_<N>.sav` the game produced was unreadable by its own
-// reader, and every carve, every door state and every sub-material edit was lost on
-// revisit while 736 MiB of disk was burned per floor per save. [problems.md] §37.
-//
-// 1 GiB restores the property the number is FOR — a corrupt header asking for
-// gigabytes is still refused, `blobBytes` still fits a uint32 with 4x slack — while
-// admitting the real measured payload with ~39% headroom.
-//
-// The size that forced this ceiling up has since been dealt with at its real
-// cause — the ENCODING, not the model: v2 run-length-encodes sub-material pages
-// and a pristine floor went 736 -> 125 MB. The cap stays at 1 GiB because it
-// costs nothing and a heavily destroyed floor legitimately grows.
-//
-// Two tempting "fixes" were considered and REJECTED, recorded so they are not
-// revived: (a) promoting common sub-voxel mixes to CellTypes — hardcodes a finite
-// set of combinations into an infinite space and dies at the first chipped
-// surface; (b) storing only the DELTA from a regenerated floor — makes the
-// generator a permanent part of the save format, so any generator change silently
-// decodes every existing save into a subtly different floor.
 inline constexpr std::uint32_t kMaxSnapBytes = 1024u * 1024u * 1024u;
 
 // Exact byte count `save_write` will produce for the given section sizes.
@@ -367,41 +343,6 @@ inline constexpr std::size_t save_bytes_for(std::size_t openedCount,
 // ---------------------------------------------------------------------------
 // An opened crate, identified by something that survives a restart
 // ---------------------------------------------------------------------------
-// `Container::opened` is a bool inside the ECS component ([container.h]), i.e. it is
-// per-ENTITY — and an entity id is the one thing that is guaranteed NOT to be stable.
-// The crates are destroyed and respawned on every floor entry
-// ([main.cpp] refresh_floor_containers), and EnTT recycles handles, so an `entt::entity`
-// written to disk names a different object on the next run, or nothing at all.
-//
-// So the key is what the GENERATOR is a function of: the floor number, plus the macro
-// cell the crate stands in. `spawn_floor_containers` is deterministic in
-// (floorNumber, seed) and places each crate at a wrapped macro cell, so the same crate
-// reappears in the same cell every visit and the pair (floor, cell) reproduces.
-//
-// **The honest limitation, with the number:** the generator's own spawn index `i` would
-// be a perfect key, and it is not recoverable — nothing stores it on the entity and
-// `Container` has no room for it. The cell is therefore a key that can collide. Worked
-// out for Residential, the densest case: stride 8 gives 16x16 = 256 rooms, each offering
-// a 5x5 block of interior offsets (`ox`/`oy` in [2, 7), [container.cpp]), so 6,400
-// candidate cells for `container_budget` = 256/6 = 42 draws. Expected colliding pairs
-// C(42,2)/6400 = 0.135, i.e. **one collision on about 13% of Residential floors**. When
-// it happens, opening one crate restores the other as opened too: a crate lost, never an
-// item duplicated. The strong fix is one `std::uint16_t spawnIndex` on `Container`, set
-// by `spawn_floor_containers`; that is an edit to `container.h`, which this lane does not
-// own, so the cell key ships and the collision is measured rather than hidden.
-//
-// The floor is the signed FLOOR NUMBER, never a `LayerId` (a recycled storage slot,
-// [floors.md]) and never `NpcPool::floor()`.
-//
-// **Corrected 2026-07-29:** the reason given here used to be that `NpcPool::floor()` is
-// a `std::uint16_t` storing floor -50 as 65486. That is no longer true — the column is
-// `std::int16_t` today ([npc_pool.h], widened with the demo stack's negative labels as
-// the stated reason), so a negative label round-trips through it fine. The live reason
-// is different and stronger: that column is written in exactly ONE place,
-// `seed_floor_from_spec` ([population.cpp]), and read in NONE. Nothing updates it when
-// the player travels — `ride_elevator` writes `pool.cz` and nothing else — so it names
-// the floor a record was SEEDED on, not the floor its body is standing on. For the
-// player those two diverge on the first elevator ride.
 struct OpenedContainerKey {
     std::int16_t floor = 0;     // in-game floor number, [-127, 127]
     std::uint8_t cx = 0;        // macro cell, already wrapped onto [0, 128)
@@ -422,20 +363,7 @@ OpenedContainerKey container_key(int floorNumber, const vec3& pos);
 // ---------------------------------------------------------------------------
 // Per-floor state files — the modular half of the save
 // ---------------------------------------------------------------------------
-// One `floor_<N>.sav` per visited floor, in the app's save directory. Written when
-// the player LEAVES a floor (a floor transition is a load screen, so disk I/O is
-// sanctioned there, [jirnyak.md] §6) and on a manual save for the resident floor;
-// stamped over the freshly generated geometry whenever that floor is built again —
-// an elevator revisit and an F9 arrival are the same code path, and a floor whose
-// file does not exist simply generates pristine. run.sav never carries geometry.
-//
-// Wire: u32 magic "GH2F" | u32 version | u32 blobBytes | u32 crc32(blob) | blob,
-// where blob is exactly what snapshot_floor() produces (it embeds the floor number).
 inline constexpr std::uint32_t kFloorMagic = 0x46324847u; // 'G','H','2','F'
-// v2 (2026-08-06): sub-material PAGES are run-length encoded instead of raw.
-// A page is 512 materials and almost never 512 distinct ones, so the raw form
-// spent 1024 B on what usually needs a dozen. Nothing about the material model
-// changed — a page may still hold any mix of atoms, it just encodes cheaply.
 inline constexpr std::uint32_t kFloorFileVersion = 2u;
 inline constexpr std::size_t kFloorHeaderWire = 16;
 
@@ -454,27 +382,15 @@ bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
 // ---------------------------------------------------------------------------
 
 // The player's row, lifted out of the pool.
-//
-// `Needs` lives in the pool row rather than on the entity for a reason that matters
-// here too: the elevator's `fold_back` -> `embody_as_player` DESTROYS the player's body
-// and builds a new one ([embody.h]), so the clock is attached to the record, not to the
-// body. On load there is no body yet at all, which is the same situation one step
-// further — so the snapshot restores into `pool.needs(id)` / `pool.inventory(id)`, and
-// embodiment happens afterwards and reads what is already there.
 struct PlayerSnapshot {
     Needs clock{};              // the survival clock; canonical in the pool row
     Inventory inv{};            // 64 slots, 256 B
     Equipped equipped{};        // equipped weapon/armor/tool slot indices
     std::int32_t hp = 0;        // also pool-row state, also unreproducible
     std::int32_t maxHp = 0;
-    // The SIGNED floor the player stood on. Saved separately and explicitly because
-    // there is no way to recover it from anything else: `NpcPool::floor()` is the
-    // SEEDING label and is never updated by travel (see the correction above), and
-    // `LayerId` is a recycled storage slot that means nothing across a restart.
+    // The SIGNED floor the player stood on.
     std::int32_t floorNumber = 0;
-    // The macro cell within that floor, by the same truncate-and-wrap `macro_cell_of`
-    // below performs. Written by the save side from the live `Transform`, consumed by
-    // `place_body_at_cell` on the way back in — one convention, stated once.
+    // The macro cell within that floor.
     std::uint8_t cx = 0;
     std::uint8_t cy = 0;
     std::uint8_t cz = 0;
@@ -490,44 +406,28 @@ struct SaveState {
     RunLedger ledger{};
     ContractBook book{};
     PlayerSnapshot player{};
-    // Version 7: character sheet. Lives on the player entity at runtime
-    // ([rpg.h]); captured into the run on F5 and stamped back on F9. Default is
-    // a zeroed POD — main seeds a real sheet via fresh_rpg / embody.
+    // Version 7: character sheet.
     RpgStats rpg{};
-    // Version 7: crafting bank + known-recipe bits + tier ([craft.h]). Run state
-    // beside the ledger in main; craft_write/craft_read own the 93-byte codec.
+    // Version 7: crafting bank + known-recipe bits + tier ([craft.h]).
     CraftingState craft{};
-    // Version 8 / SAVMAG: chambered firearm + kill tally. hasRanged mirrors the
-    // elevator's lazy-attach rule — do not invent PlayerRanged on a body that
-    // never fired. kills is the cumulative melee tally (local `kills` in main).
+    // Version 8 / SAVMAG: chambered firearm + kill tally.
     std::uint8_t hasRanged = 0;
     PlayerRanged ranged{};
     std::uint32_t kills = 0;
-    // Version 9 / SAVSTAT: live status effects. Local `playerStatus` in main —
-    // not an ECS component — so capture/restore is a direct assignment.
+    // Version 9 / SAVSTAT: live status effects.
     StatusSet status{};
-    // Version 10 / SAVCLOCK: the two run-scoped clocks. Both are locals in main and
-    // both were previously re-armed from scratch on load — the samosbor automaton by
-    // `samosbor_new_game` on the F9 path, the unlock set by never being written at
-    // all. Defaults are the zeroed PODs, which is exactly "new run, nothing
-    // discovered", so a SaveState built by hand still means something sane.
+    // Version 10 / SAVCLOCK: the two run-scoped clocks.
     SamosborState samosbor{};
     FastTravelState fastTravel{};
     // Version 15: Bank account persistence (deposit, loans, interest, and ledger ring).
     BankAccount bank{};
     // Version 15: Power grid outage & destroyed electrical shield state.
     PowerGridState powerGrid{};
-    // Every crate emptied anywhere in the building, not just on the live floor. Only the
-    // resident floor's crates are live entities, so the ones from other floors exist
-    // ONLY in this list — see `refresh_opened_containers`.
+    // Every crate emptied anywhere in the building, not just on the live floor.
     std::vector<OpenedContainerKey> opened;
-    // Version 2: quest log persisted across F5/F9. Written last by
-    // quest_log_write; read back by quest_log_read. Exactly kQuestLogWire bytes.
+    // Version 2: quest log persisted across F5/F9.
     QuestLog quests{};
-    // Version 6: the macro world. poolBlob is NpcPool::save_rows' verbatim table,
-    // macroBlob is MacroSim::save_state, and factions is the LIVE relations
-    // matrix (36 POD bytes). Restored at the earliest possible point — from the
-    // MAIN MENU, before anything is embodied — so no body can hold a stale id.
+    // Version 6: the macro world.
     std::vector<std::uint8_t> poolBlob;
     std::vector<std::uint8_t> macroBlob;
     FactionRelations factions = kBaseFactionMatrix;
@@ -536,33 +436,16 @@ struct SaveState {
 // ---------------------------------------------------------------------------
 // The active-floor snapshot — state, not history
 // ---------------------------------------------------------------------------
-// Encode the World's entire grid into `out` (cleared first): floor number, cell
-// types (RLE), mask occupancy as an empty/full/mixed RLE with raw 64-byte masks for
-// the mixed cells only, and every "sub_material" page. A generated floor is
-// overwhelmingly uniform, so a real floor encodes in single-digit MB where the raw
-// arrays are 138 MB; a pathological floor degrades linearly and is bounded by
-// kMaxSnapBytes. Returns the encoded size.
 std::size_t snapshot_floor(const World& w, int floorNumber,
                            std::vector<std::uint8_t>& out);
 
-// Stamp a snapshot back onto `w`, replacing types, masks and the sub-material field
-// wholesale. Returns false — leaving `w` in its pre-call state for the types/masks
-// it has not yet touched is NOT guaranteed on a malformed blob, so the caller should
-// treat false as "regenerate and fall back to the carve log". `floorOut` (optional)
-// receives the floor number the snapshot claims. Call BEFORE door_build, so the
-// fresh DoorSet re-stamps its leaves over whatever door state the snapshot froze.
 bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
                           std::int32_t* floorOut = nullptr);
 
-// Serialize. `out` is cleared first and ends up exactly `save_bytes_for(opened.size())`
-// long. Cannot fail: there is no allocation to check and nothing to validate.
+// Serialize. `out` is cleared first and ends up exactly `save_bytes_for(opened.size())` long.
 void save_write(const SaveState& st, std::vector<std::uint8_t>& out);
 
-// Parse. Returns false and leaves `st` COMPLETELY untouched on any rejection — a
-// half-applied load would be worse than no load, because it would put the game into a
-// state no run has ever been in. `err` and `hdrOut` are optional; `hdrOut` is filled
-// whenever the header itself parsed, even on rejection, so a caller can report
-// "written by version 3, tick 120" for a save it just refused.
+// Parse.
 bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st,
                SaveError* err = nullptr, SaveHeader* hdrOut = nullptr);
 
@@ -570,34 +453,12 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st,
 // Container state <-> registry
 // ---------------------------------------------------------------------------
 
-// Append a key for every OPENED crate resident on `layer`. Appends; does not clear.
 std::size_t collect_opened_containers(Registry& reg, LayerId layer, int floorNumber,
                                      std::vector<OpenedContainerKey>& out);
 
-// Bring `set` up to date for ONE floor: drop every key already recorded for
-// `floorNumber`, then re-scan that floor from the registry. Returns the number of keys
-// the floor now contributes.
-//
-// This is the function a save should call, and the reason is that only ONE floor is ever
-// resident ([floor_stream.h] keeps a single World live). Every other floor's opened set
-// exists nowhere but in `set`, so a plain append would duplicate the live floor's keys
-// on every single save, and a plain clear would forget all nine other floors.
 std::size_t refresh_opened_containers(Registry& reg, LayerId layer, int floorNumber,
                                       std::vector<OpenedContainerKey>& set);
 
-// Re-open the crates on a freshly generated floor. Call it AFTER
-// `spawn_floor_containers` has built the floor's crates; returns how many matched.
-//
-// Also empties what it opens. `loot_containers_step` only sets `opened` once a crate is
-// actually empty ([container.cpp]), so an opened crate is an empty crate by
-// construction, and leaving rolled contents inside a restored one would be a pile of
-// items waiting for the first feature that looks inside a spent box.
-//
-// `openedColour` is optional and exists because the "spent crate" tint is
-// `kOpenColour`, a file-static constant inside `container.cpp` — unreachable from here
-// and NOT worth copying, since a copied colour drifts silently the day the original is
-// retuned. Pass it from the call site, or pass nullptr and accept that a restored crate
-// looks unopened until `container.h` hoists that constant into the header.
 std::size_t apply_opened_containers(Registry& reg, LayerId layer, int floorNumber,
                                     const OpenedContainerKey* keys, std::size_t n,
                                     const vec3* openedColour = nullptr);
@@ -605,68 +466,9 @@ std::size_t apply_opened_containers(Registry& reg, LayerId layer, int floorNumbe
 // ---------------------------------------------------------------------------
 // Coming back to where you stood
 // ---------------------------------------------------------------------------
-// The format has carried `floorNumber` + cx/cy/cz since v1 and the game did nothing
-// with either: a load restored the RUN and left the body standing where it already was,
-// reporting "loaded N rub (saved on floor -26, you are on 0)". Everything below is what
-// the app shell needs to close that gap, split into two halves that fail independently.
-//
-//   * TRAVEL — `travel_to_saved_floor` drives the EXISTING elevator path
-//     (`FloorStreamer::travel`) once per labelled floor until it arrives. It is a
-//     driver, not a second travel path: nothing here generates a floor, embodies a
-//     crowd or touches a `LayerId`. That matters because the streamer's bookkeeping
-//     (adopting the freshly-embodied player body into the destination module, then
-//     `keep_only` folding the departed crowd back) is easy to get subtly wrong and
-//     already correct in one place.
-//   * PLACEMENT — `place_body_at_cell` puts the body in the saved cell, or in the
-//     nearest cell it actually fits in, or refuses. See the soft-lock note there.
-//
-// **THE ORDERING CONSTRAINT, because it is not optional.** `nav::AsyncBake` hands a raw
-// pointer to the live `MacroGrid` to a worker for a measured ~1.9 s + ~1.8 s and its
-// contract is "do not mutate or regenerate that World until ready()" ([nav_async.h]).
-// Travel regenerates floors, so the caller MUST NOT start a travelling load while a
-// bake is in flight — check `nav.baking()` and retry next frame. This is not
-// theoretical: `FloorStreamer::init(stack, keepRadius=0)` reserves exactly
-// `2*0 + 2 = 2` recyclable layers, so hop 1 generates into the free slot (safe, the
-// bake is reading the floor being left) and then frees the departed slot — which is
-// the slot hop 2 allocates and regenerates, the very grid the worker is still reading.
-// A single hop is safe; two are not. `AsyncBake::start()` joins, so re-arming the floor
-// AFTER arrival is always safe; it is the hops in between that have no guard.
-//
-// Then the arrival sequence, in this order and for these reasons:
-//   1. `refresh_floor_containers` — the destination floor has no crates until the app
-//      spawns them, and they must exist before step 2 can re-open any.
-//   2. `apply_opened_containers` — with the loaded key set.
-//   3. `refresh_floor_mobs` — a streamed-in floor has no monsters either.
-//   4. `door_build` — AFTER generation, BEFORE the bake, because it leaves every door
-//      Open so the grid the worker reads is the all-open geometry the bake must assume
-//      ([door.h]). Note `door_build` clears `DoorSet::frozen` itself, so the freeze has
-//      to be re-applied after it, never before.
-//   5. `doors.frozen = true`, then `begin_floor_nav`.
-//   6. placement — last, and independent of all of the above: it reads solidity and
-//      writes one `Transform`. Doing it before `door_build` would still be correct
-//      today (door frames are recolours, not solidity changes) but would silently stop
-//      being correct the day a door is built Shut.
-
-// The arrival storey an elevator ride drops the player on: the geometry module's
-// ground standing cell (air with a solid floor below — [floor_gen.h]
-// floor_ground_z; floor_gen.cpp static_asserts the two stay equal). Named here
-// because `main.cpp` passes it at both of its travel sites and a load is the
-// third — three spellings of one number is how it drifts.
 inline constexpr std::uint8_t kArrivalCoord = 3;
-
-// Hop ceiling for the loop below. Equal to FloorRegistry's kFloorSlots (255 labels), so
-// even a pathological stack cannot spin: every hop crosses at least one label and no
-// label is visited twice. `save.cpp` static_asserts this against the real constant.
 inline constexpr int kMaxLoadHops = 255;
 
-// Where driving the elevator to a saved floor ended up.
-//
-// `moved` and `arrived` are separate on purpose, and the caller must honour the
-// difference: a load that crossed three floors and then hit the end of the stack has
-// `moved == true, arrived == false`, and the floor it is standing on still needs its
-// crates, its monsters, its doors and its nav bake — an intermediate hop gets none of
-// those. Treating "did not arrive" as "nothing happened" would leave the player on a
-// live floor with no monsters and no navigation.
 struct LoadTravel {
     int floor = 0;                // where the player actually ended up
     Entity player = entt::null;   // the CURRENT player entity: a ride rebuilds the body
@@ -676,18 +478,6 @@ struct LoadTravel {
     bool arrived = false;         // ...and it is the floor the save named
 };
 
-// Ride from `fromFloor` to `targetFloor`, one labelled floor per hop, through
-// `FloorStreamer::travel`. No-op (arrived, zero hops) when already there.
-//
-// Refuses without touching anything when `targetFloor` maps to no registered module —
-// a save from a build whose stack had a floor this one does not — and when `player`
-// carries no `NpcRef`. That second guard is not paranoia: `travel` forwards the player's
-// record id to `ensure_loaded`, and with `kInvalidNpc` that call DESIGNATES A NEW PLAYER
-// on the destination floor, i.e. a second camera holder.
-//
-// Rides one labelled floor at a time rather than jumping, because `next_labelled_floor`
-// is what makes a sparse stack legal ({0,1,2,-8,-26,-50,14,30} is a valid building) and
-// the destination of a ride has to be a floor the streamer has actually loaded.
 LoadTravel travel_to_saved_floor(LevelStack& stack, FloorRegistry& reg, Registry& ecs,
                                  NpcPool& pool, FloorStreamer& streamer, Entity player,
                                  int fromFloor, int targetFloor,
@@ -696,44 +486,9 @@ LoadTravel travel_to_saved_floor(LevelStack& stack, FloorRegistry& reg, Registry
 // ---------------------------------------------------------------------------
 // Placement — a body in solid geometry never moves again
 // ---------------------------------------------------------------------------
-// `physics_step` resolves a swept AABB by backing out of the overlap, so a body that is
-// ALREADY inside solid has nowhere to back out to: `sweep_axis` binary-searches to zero
-// on all three axes and zeroes all three velocity components, every tick, forever. Fly
-// mode does not help — `controller_step` writes velocity and physics still collides
-// ([controller.cpp], [physics.cpp]). This is the same failure `door_set` refuses to
-// cause when it will not shut a door on a body ([door.h]), and it is a soft-lock rather
-// than a squeeze: nothing in the tree can free the player again.
-//
-// **The saved cell is not the dangerous case, and this is worth being exact about.**
-// `generate_floor` is a pure function of (seed, number, kind) and clears to air first,
-// so the same build rebuilds the floor bit-for-bit and a cell the player stood in comes
-// back air. What is dangerous is the ARRIVAL cell of an elevator ride, which is
-// `(cx, cy)` from the floor you LEFT and `z = kArrivalCoord`: the wall lattices of two floor
-// kinds do not align (strides 8 / 16 / 32), so the arrival column is frequently inside
-// a full-height wall. Counted from the generator's own table for the densest case,
-// Residential: 128^2 - 112^2 = 3840 of 16384 columns (23.4%) sit on a wall line, and at
-// cell z=2 the generator carves back only the 512 doorway columns and ~208 lattice-lobby
-// columns while ADDING 64 elevator posts — so on the order of 3200 columns, about ONE
-// ARRIVAL IN FIVE, is solid. Both of `main.cpp`'s travel sites can already do this
-// today; the load path is simply the third caller that must not.
-//
-// The other live case is a save written by an EARLIER build: geometry is not
-// fingerprinted (only the item and mob tables are), so retuning a `kGeom` row or a seed
-// constant moves walls under a valid save. That one no purity argument covers.
-
-// Search radius, in macro cells, when the requested cell is unusable. 8 cells = 16 m is
-// one Residential room pitch ([floor_gen.cpp] stride 8), i.e. "somewhere in this room or
-// the next one" rather than "somewhere on this floor". Bounded because an unbounded
-// search would happily relocate the player across the building, and being wrong about
-// WHERE you woke up is worse than being told the load could not place you.
 inline constexpr int kPlaceRadius = 8;
-
-// Hard ceiling on the radius a caller may ask for. (2*24+1)^3 = 117,649 candidate cells
-// is already 24x the default's 4,913; past that the "nearest" cell stops being anywhere
-// near you and the cost stops being free.
 inline constexpr int kPlaceRadiusMax = 24;
 
-// Where a body may actually stand, and how far that is from where it was asked to.
 struct PlacedCell {
     std::uint8_t cx = 0;
     std::uint8_t cy = 0;
@@ -741,98 +496,25 @@ struct PlacedCell {
     std::uint8_t rings = 0;   // Chebyshev distance in cells from the requested cell
     bool ok = false;          // false: no cell in the neighbourhood fits a body at all
     bool moved = false;       // the requested cell was solid; this is a substitute
-    bool supported = false;   // something solid under the feet (see below)
+    bool supported = false;   // something solid under the feet
 };
 
-// The macro cell a body at `pos` occupies: truncate, then wrap. `pos` is expected to be
-// already normalized into [0, kWorldExtent) — `physics_step` does that every step — so
-// the truncation never sees a negative. Shared by `container_key` and by the save side's
-// `PlayerSnapshot`, which is the point: two spellings of this would put a restored body
-// one cell from where it was saved.
 void macro_cell_of(const vec3& pos, std::uint8_t& cx, std::uint8_t& cy,
                    std::uint8_t& cz);
 
-// The world-space centre of a macro cell — exactly where `embody` places a body standing
-// in it ([embody.cpp]), so a placed body and an embodied one are in the same place.
 vec3 macro_cell_centre(std::uint8_t cx, std::uint8_t cy, std::uint8_t cz);
 
-// The nearest cell a body of half-extents `half` fits in, starting at (cx, cy, cz).
-//
-// Three outcomes, and the third is the one the caller must not ignore:
-//
-//   1. the requested cell fits -> it is returned unchanged (`rings == 0`,
-//      `moved == false`). Support is REPORTED but not required here: a player who saved
-//      mid-jump or in fly mode was legitimately in mid-air, and relocating them to the
-//      nearest floor would be a 16 m teleport to fix a non-problem. Physics simply drops
-//      them, which is what would have happened anyway.
-//   2. it does not fit -> the nearest cell that does, preferring one with a floor under
-//      it, is returned with `moved == true`. Ties break on the smallest ring, then the
-//      smallest vertical displacement (crossing a storey is a longer walk back than
-//      stepping sideways — a Residential storey is 4 cells), then the smallest planar
-//      distance. Deterministic, so two runs of the same load place you identically.
-//   3. NOTHING in the neighbourhood fits -> `ok == false` and the requested cell is
-//      returned UNCHANGED. That is deliberate: there is no safe cell to invent, so the
-//      helper reports failure loudly instead of handing back a cell inside a wall that
-//      a caller would then teleport a body into. A caller that ignores `ok` reproduces
-//      the exact soft-lock this function exists to prevent, which is why the returned
-//      cell is the input rather than a plausible-looking substitute.
-//
-// "Fits" is `aabb_overlaps_solid` at the cell centre — the SAME predicate `physics_step`
-// resolves against, not a cheaper cell-type or mask-is-full test. That is what makes the
-// answer exact for any stature: the seeder's tallest adult is 1.87 m in a 2 m cell
-// ([population.cpp] height_for_age, 1750 +- 120 mm), which fits inside one cell with
-// 6.5 cm to spare, but the clamp allows 2.2 m and a mask test would quietly get that
-// body wrong. "Supported" is the same predicate on a one-voxel-thick slab directly under
-// the feet, which is why a cell over a collapsed Derelict slab (12% of them are missing)
-// is passed over in favour of one with a floor.
 PlacedCell find_standable_cell(const World& world, const vec3& half, std::uint8_t cx,
                                std::uint8_t cy, std::uint8_t cz,
                                int radius = kPlaceRadius);
 
-// Move `body` to (cx, cy, cz) or to the nearest cell it fits in, and stop it dead.
-//
-// On failure (`!ok`) the body is NOT moved at all — the caller keeps a body wherever it
-// already was, which may be wrong but is at least somewhere physics has already
-// accepted. Uses the body's own `AABB`, falling back to the 0.4 m cube `physics_step`
-// itself assumes for an entity without one, so the test can never be more permissive
-// than the solver.
-//
-// Zeroing `Velocity` is not tidiness: a load can land while the body is falling, and
-// physics resolves the next step from the NEW position — a carried-over 30 m/s would
-// drive it straight through the floor it was just placed on. Nothing else is written:
-// `fold_back` re-derives the cold row's cell from this transform ([embody.cpp]) and the
-// save side reads the transform too, so the pool row cannot drift from the body.
 PlacedCell place_body_at_cell(Registry& reg, const World& world, Entity body,
                               std::uint8_t cx, std::uint8_t cy, std::uint8_t cz,
                               int radius = kPlaceRadius);
 
-// Same, for a body that is already somewhere: resolve the cell it is standing in. This
-// is what an elevator arrival needs — `ride_elevator` keeps x/y from the floor you left
-// and sets z = arrivalCoord, which is the ~1-in-5 wall case measured above.
 PlacedCell place_body_safely(Registry& reg, const World& world, Entity body,
                              int radius = kPlaceRadius);
 
-// Write the snapshot's unreproducible state back into a pool row.
-//
-// The ROW, not the body, and that is the whole reason this is one call: `needs_step`
-// reads the clock from the row rather than from the entity precisely so it survives the
-// body swap an elevator ride performs ([needs.h]), and hp/inventory are canonical there
-// too ([embody.h]). So it does not matter whether the body has been rebuilt yet — nothing
-// this writes is read by `embody`, which only reads stature, and stature is not in the
-// save.
-//
-// **What the caller must do after it: `sync_armour(reg, pool, player)`.** The restored
-// inventory changes what the body is wearing, and `Armour` is a component copied off the
-// equipped item — `combat.h` says in as many words "call after anything that changes the
-// inventory". A load is the largest inventory change there is, and the load path did not
-// do this before, so a restored run kept the vest it was wearing at the moment of the
-// keypress.
-//
-// `maxHp` is restored only when the save carries a positive one. A v1 save written by a
-// live player always does, but a default-constructed `SaveState` carries 0, and writing
-// 0 into the row would make `entity_health` report 0/0 and every heal a no-op — worse
-// than leaving the record's own maximum alone. Both values are clamped into the row's
-// `std::int16_t`, which is narrower than the wire's `std::int32_t`.
 void apply_player_snapshot(NpcPool& pool, NpcId id, const PlayerSnapshot& snap);
 
 } // namespace giga::game

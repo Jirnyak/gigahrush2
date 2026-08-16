@@ -306,8 +306,14 @@ bool quest_accept(QuestLog& log, const NpcPool& pool, QuestId id, NpcId giver, i
 
 int quest_grant_item(Inventory& inv, ItemId item, int count) {
     if (!item_valid(item) || count <= 0) return 0;
-    const std::uint16_t unplaced = inventory_give(inv, item, static_cast<std::uint16_t>(count));
-    return count - static_cast<int>(unplaced);
+    // A thin wrapper over THE transfer primitive ([item_table.h]
+    // inventory_give) — this function WAS its prototype, and keeping a second
+    // copy of the stack law here is exactly how the two would drift. A quest
+    // reward is always mint (condition default).
+    const std::uint16_t want = count > 0xFFFF ? std::uint16_t{0xFFFF}
+                                              : static_cast<std::uint16_t>(count);
+    const std::uint16_t unplaced = inventory_give(inv, item, want);
+    return static_cast<int>(want) - static_cast<int>(unplaced);
 }
 
 // ---------------------------------------------------------------------------
@@ -437,7 +443,7 @@ std::int32_t quest_step(QuestLog& log, const NpcPool& pool, Inventory& inv,
                     static_cast<std::int32_t>(s.count) < need
                         ? static_cast<std::int32_t>(s.count)
                         : need;
-                s.count = static_cast<std::uint16_t>(
+                s.count = static_cast<std::uint8_t>(
                     static_cast<std::int32_t>(s.count) - take);
                 if (s.count == 0) s = ItemSlot{};
                 need -= take;
