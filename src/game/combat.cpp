@@ -1193,7 +1193,7 @@ void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
     // gravityPct 100: a monster's lob is fully gravity-compensated. Nothing here
     // records whose shot it is beyond `source`, which is attribution only.
     reg.emplace<Projectile>(
-        e, Projectile{source, dmg, kProjTtlMs, 100, projType});
+        e, Projectile{source, dmg, proj_ttl_for_speed(speed), 100, projType});
 }
 
 void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
@@ -1235,7 +1235,7 @@ void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
     // day one does, the compiler asks about this call site instead of silently
     // handing the player a bullet.
     reg.emplace<Projectile>(
-        e, Projectile{source, dmg, kProjTtlMs, gravityPct,
+        e, Projectile{source, dmg, proj_ttl_for_speed(speed), gravityPct,
                       static_cast<std::uint8_t>(ProjType::Bullet), channel});
 }
 

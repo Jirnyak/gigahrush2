@@ -2086,6 +2086,65 @@ static void test_t4_04_full_samosbor_disaster_and_specialist_response_cycle() {
     CHECK(samosbor.phase == static_cast<std::uint8_t>(SamosborPhase::Idle));
 }
 
+// --- Баллистика на торе: пуля не имеет права обогнать мир -------------------
+// Ответ на «пуля через wrap бьёт стрелка» — ЗАМЕРОМ, не спором. Свойство по
+// ВСЕЙ авторской таблице: ни один ствол с кэпом proj_ttl_for_speed не
+// пролетает один период мира. До кэпа это было живо ровно у ЧЕТЫРЁХ
+// быстрейших строк (32/33/34/44 cells/s x 4 s >= 256 m) — мутация «вернуть
+// kProjTtlMs без кэпа» даёт ровно 6 красных (4 строки + сводный счёт +
+// живой полёт), прогнано и измерено.
+static void test_ballistics_never_laps_the_torus() {
+    int overWorld = 0;
+    for (std::size_t i = 0; i < kRangedCount; ++i) {
+        const RangedDef& rd = kRangedTable[i];
+        const float speed =
+            static_cast<float>(rd.projSpeedMmps) * 0.001f * kCellSize;
+        const float ttlS =
+            static_cast<float>(proj_ttl_for_speed(speed)) * 0.001f;
+        const float range = speed * ttlS;
+        if (range >= kWorldExtent) ++overWorld;
+        CHECK(range < kWorldExtent);
+    }
+    CHECK(overWorld == 0);
+
+    // Живой полёт: самый быстрый ствол, выстрел строго вверх в ПУСТОМ мире
+    // (генератор не звался — весь объём воздух, худший случай: бесконечный
+    // столб). Пуля обязана умереть по TTL, не долетев до собственной высоты
+    // спавна через wrap.
+    LevelStack stack;
+    const LayerId L = stack.push_layer();
+    Registry reg;
+    NpcPool pool;
+    EventBus bus;
+    float topSpeed = 0.0f;
+    for (std::size_t i = 0; i < kRangedCount; ++i)
+        topSpeed = std::max(
+            topSpeed,
+            static_cast<float>(kRangedTable[i].projSpeedMmps) * 0.001f * kCellSize);
+    const std::uint16_t mmps = static_cast<std::uint16_t>(
+        topSpeed / kCellSize * 1000.0f + 0.5f);
+    const vec3 from{64.0f, 64.0f, 10.0f};
+    spawn_projectile_dir(reg, L, from, vec3{0.0f, 0.0f, 1.0f}, 10, mmps,
+                         entt::null, /*gravityPct=*/0,
+                         static_cast<std::uint8_t>(DamageChannel::Kinetic));
+    Entity proj = entt::null;
+    for (auto e : reg.view<const Projectile>()) proj = e;
+    CHECK(proj != entt::null);
+    float risen = 0.0f;
+    vec3 prev = reg.get<Transform>(proj).pos;
+    const float dt = 1.0f / 125.0f;
+    for (int t = 0; t < 125 * 5 && reg.valid(proj); ++t) {
+        projectile_step(reg, pool, bus, stack, L, dt,
+                        static_cast<std::uint64_t>(t));
+        if (!reg.valid(proj)) break;
+        const vec3 now = reg.get<Transform>(proj).pos;
+        risen += std::fabs(wrap_delta_f(now.z, prev.z, kWorldExtent));
+        prev = now;
+    }
+    CHECK(!reg.valid(proj));          // умерла по TTL, не летает вечно
+    CHECK(risen < kWorldExtent);      // и НЕ обогнула мир по вертикали
+}
+
 static void test_t4_05_headless_integrated_engine_game_loop() {
     Registry reg;
     NpcPool pool;
@@ -2539,6 +2598,8 @@ int main() {
     test_t4_03_long_duration_specialist_patrol_and_errand_marathon();
     std::fprintf(stderr, "[e2e] test_t4_04_full_samosbor_disaster_and_specialist_response_cycle\n");
     test_t4_04_full_samosbor_disaster_and_specialist_response_cycle();
+    std::fprintf(stderr, "[e2e] test_ballistics_never_laps_the_torus\n");
+    test_ballistics_never_laps_the_torus();
     std::fprintf(stderr, "[e2e] test_t4_05_headless_integrated_engine_game_loop\n");
     test_t4_05_headless_integrated_engine_game_loop();
 

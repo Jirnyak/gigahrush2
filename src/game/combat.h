@@ -423,6 +423,26 @@ inline constexpr float kProjGravity = 6.0f;        // m/s^2
 inline constexpr std::uint16_t kProjTtlMs = 4000;
 inline constexpr float kProjHitRadius = 0.75f;     // metres
 
+// A projectile may never OUT-RUN the world. On a torus a shot whose flight
+// range exceeds one world period (256 m) returns to its own line of fire —
+// fired down an unobstructed column or corridor it can reach its own shooter.
+// With the authored tables that was LIVE for exactly the FOUR fastest guns
+// (32/33/34/44 cells/s x 4000 ms = 256..352 m >= 256 m — measured by the e2e
+// pin, mutation "drop the cap" = exactly 6 red); the other 25 rows never
+// reach the seam. The fix is a per-shot TTL cap so the flight distance stays
+// under one period minus both muzzle clearances: the self-hit CLASS dies by
+// construction, no slower weapon loses a metre of its reach, and the topology
+// — which is the world's law, not a bug — stays untouched. This is the
+// "лечится константой" answer, measured against data instead of asserted.
+inline constexpr float kProjMaxRangeM = kWorldExtent - 2.0f * kMuzzleForward;
+inline std::uint16_t proj_ttl_for_speed(float speedMps) {
+    if (speedMps <= 0.0f) return kProjTtlMs;
+    const float ms = kProjMaxRangeM / speedMps * 1000.0f;
+    return ms >= static_cast<float>(kProjTtlMs)
+               ? kProjTtlMs
+               : static_cast<std::uint16_t>(ms);
+}
+
 // GRENADE BALLISTICS. A grenade is the one projectile that does not end on contact
 // — it bounces off the world and detonates on its FUSE, which is what
 // ARCHITECTURE.md §Манифест п.5 means by "граната скачет по вокселям".
