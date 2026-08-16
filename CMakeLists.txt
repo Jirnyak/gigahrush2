@@ -105,6 +105,21 @@ function(giga_target_flags tgt rtti)
             target_compile_options(${tgt} PRIVATE -fno-rtti -fno-exceptions)
         endif()
     endif()
+    # ---- Architecture baseline — the ONE place per-ISA flags live ------------
+    # Two shipping platforms, two ISAs: Windows/Linux are x86-64 and get AVX2+FMA
+    # (the fork's Windows perf work, kept); macOS is arm64 where NEON is the
+    # compiler default and no flag exists or is needed. Any future per-ISA flag
+    # goes HERE, not next to its feature — that is how this stays one decision
+    # instead of an accretion of scattered gates.
+    # STEAM MINSPEC CALL, deliberately open: /arch:AVX2 makes the binary refuse
+    # pre-2013 x86 CPUs (a few % of the Steam survey). Revisit before shipping;
+    # the compromise then is a lower baseline or runtime dispatch, decided on a
+    # sim_bench measurement, not here.
+    if(MSVC)
+        target_compile_options(${tgt} PRIVATE /arch:AVX2)
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+        target_compile_options(${tgt} PRIVATE -mavx2 -mfma)
+    endif()
     if(_giga_ipo)
         # Release only. MSVC adds /INCREMENTAL to RelWithDebInfo, which conflicts
         # with the /LTCG that IPO implies (LNK4075); LTO also defeats the point
