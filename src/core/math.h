@@ -13,6 +13,7 @@ struct vec2 { float x, y; };
 struct vec3 { float x, y, z; };
 struct vec4 { float x, y, z, w; };
 struct ivec3 { int x, y, z; };
+struct ivec4 { int x, y, z, w; };  // push-constant mirror of GLSL ivec4
 
 inline vec3 v3(float x, float y, float z) { return {x, y, z}; }
 

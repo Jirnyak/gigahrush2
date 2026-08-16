@@ -23,6 +23,7 @@
 #include <SDL3/SDL_vulkan.h>
 
 #include <cmath>
+#include <climits>  // INT_MIN — the gas reseed sentinel
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -87,6 +88,7 @@
 #include "render/cube_pass.h"
 #include "render/material_table.h" // kMaterial — generated albedo table
 #include "render/cloth_pass.h"
+#include "render/gpu_gas_pass.h"
 #include "render/particle_pass.h"
 #include "render/wire_pass.h"
 #include "render/prop_pass.h"
@@ -1730,6 +1732,16 @@ int main(int argc, char** argv) {
     if (!clothPass.init(&device, renderer.renderPass, GIGA_SHADER_DIR,
                         voxelMirror.masks_buffer())) {
         std::fprintf(stderr, "[cloth] pass init failed (continuing without cloth)\n");
+    }
+
+    // GPU gas/atmosphere: 4 канала (toxic/smoke/oxy/heat) над макро-решёткой,
+    // изотропный (regime_down через push) ([render/gpu_gas_pass.h]). Источник —
+    // засев шахт CPU-полем kGasField при входе на этаж; читатель — sample_cell
+    // в HUD. Живая петля с первого дня; туман/удушье подключатся к ЭТОМУ полю
+    // отдельными решениями владельца, не к статичной константе.
+    gpu::GpuGasPass gasPass;
+    if (!gasPass.init(&device, GIGA_SHADER_DIR, voxelMirror.class_buffer())) {
+        std::fprintf(stderr, "[gas] pass init failed (continuing without gas)\n");
     }
 
     // The unified particle pool: blood/dust/sparks/drips, one compute sim
@@ -5332,6 +5344,19 @@ int main(int argc, char** argv) {
                             samosborCycles, fogScale, samosborDamage);
                 if (elevDiagLine[0] && simTick - elevDiagAt < 8u * kSimHz)
                     ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "%s", elevDiagLine);
+                // Атмосфера клетки под камерой — ЧИТАТЕЛЬ газовой петли
+                // ([gpu_gas_pass.h] sample_cell): без этой строки петля была
+                // бы диспатчем в никуда.
+                if (gasPass.ready() && reg.valid(player)) {
+                    const vec3& gp = reg.get<Transform>(player).pos;
+                    const std::uint32_t cell = gasPass.sample_cell(
+                        static_cast<int>(std::floor(gp.x / kCellSize)),
+                        static_cast<int>(std::floor(gp.y / kCellSize)),
+                        static_cast<int>(std::floor(gp.z / kCellSize)));
+                    ImGui::Text("gas: tox %u smoke %u oxy %u heat %u",
+                                cell & 0xFFu, (cell >> 8) & 0xFFu,
+                                (cell >> 16) & 0xFFu, (cell >> 24) & 0xFFu);
+                }
             }
             {
                 const game::Needs& nd = [&]() -> const game::Needs& {
@@ -6087,6 +6112,29 @@ int main(int argc, char** argv) {
                 propPass.set_use_gpu_culling(false);
             }
             renderer.timer.pass_end(cmd, gpu::GpuPass::Cull);
+
+            // Газ: один диспатч на кадр, изотропный (regime_down активного
+            // слоя через push). Фиксированный шаг 1/60 — поле ВИЗУАЛЬНОЕ/
+            // фоновое, не сим-детерминизм; боевая подключка (удушье) пойдёт
+            // через сим-тик отдельным решением. [gpu_gas_pass.h]
+            if (gasPass.ready()) {
+                // ЗАСЕВ — лениво, по смене (этаж, слой), у самого диспатча:
+                // один писатель на все пути входа (стартовый спавн, do_ride,
+                // fast travel) ПО ПОСТРОЕНИЮ — травел-сайтная версия этого
+                // кода снята именно потому, что стартовый путь шёл мимо неё.
+                static int gasSeedFloor = INT_MIN;
+                static LayerId gasSeedLayer = static_cast<LayerId>(~0u);
+                if (gasSeedFloor != currentFloor || gasSeedLayer != activeLayer) {
+                    gasSeedFloor = currentFloor;
+                    gasSeedLayer = activeLayer;
+                    const Field<float>* gSeed =
+                        stack.layer(activeLayer).fields().find<float>(kGasField);
+                    gasPass.upload_field(gSeed ? gSeed->data().data() : nullptr);
+                }
+                const CellStep gd =
+                    regime_down(stack.layer(activeLayer).gravity().regime);
+                gasPass.record_sim(cmd, gd, 1.0f / 60.0f);
+            }
 
             // Push bodies for the verlet passes: EVERY body on the active
             // layer (the same set BodyPass draws, PLUS the camera holder —
