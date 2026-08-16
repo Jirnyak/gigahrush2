@@ -1,5 +1,5 @@
 #version 450
-// gas_sim.comp — GPU 4-channel gas and atmosphere simulation over the 128^3 macro grid.
+// gas_sim.comp — GPU 4-channel gas and atmosphere simulation over the 128^3 macro grid (torus, all axes wrap).
 // Channels packed in one 32-bit word (GasCell):
 //   - Byte 0 (bits 0..7):   toxic (0..255) - chemical hazard / spore (heavy, sinks)
 //   - Byte 1 (bits 8..15):  smoke (0..255) - obscuration / soot (light, rises)
@@ -8,24 +8,18 @@
 //
 // Strictly ISOTROPIC: downStep is pushed via push constants from regime_down(world.gravity().regime).
 
-layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(std430, binding = 0) readonly  buffer GasIn   { uint gIn[];    };
 layout(std430, binding = 1) writeonly buffer GasOut  { uint gOut[];   };
 layout(std430, binding = 2) readonly  buffer ClassBuf{ uint uClass[]; }; // VoxelMirror classification (4 cells/uint)
+layout(std430, binding = 3) buffer ProbeBuf { uint probeCell; } probe;
 
 layout(push_constant) uniform Push {
     ivec4 downStep;   // xyz from regime_down(), NO HARDCODED -Z. w = unused
     vec4  params;     // x=diffusionRate, y=buoyancy, z=unused, w=dt
+    ivec4 probeCoord; // xyz = player macro cell pos, w = probe enabled
 } pc;
-
-// Checks if the macro cell is solid (0 = empty, 1 = full solid, 2 = partial)
-bool cell_solid(ivec3 c) {
-    ivec3 wrapC = c & 127;
-    uint ci = uint(wrapC.x) | (uint(wrapC.y) << 7) | (uint(wrapC.z) << 14);
-    uint cls = (uClass[ci >> 2] >> ((ci & 3u) * 8u)) & 0xFFu;
-    return cls == 1u; // Fully solid cells block gas flux completely
-}
 
 vec4 unpackGas(uint g) {
     return vec4(
@@ -43,18 +37,54 @@ uint packGas(vec4 g) {
            ((uint(clamp(round(g.w), 0.0, 255.0)) & 0xFFu) << 24);
 }
 
+void accumulateFlux(inout vec4 delta, vec4 center, uint rawCenter, uint nIdx, float upDir, float diffDt, float buoyDt) {
+    uint cls = (uClass[nIdx >> 2] >> ((nIdx & 3u) * 8u)) & 0xFFu;
+    if (cls == 1u) return; // Fully solid cells block gas flux completely
+
+    uint rawNeighbor = gIn[nIdx];
+    // Скип ТОЛЬКО для чистого вакуума (oxy=255, остальное 0): у равных, но
+    // НЕнулевых клеток диффузия нулевая, а АДВЕКЦИЯ — нет (дым на границе
+    // однородного облака обязан всплывать). Скип «любых равных» — регрессия
+    // физики форка, поймана аудитом; вакуумный скип сохраняет весь выигрыш:
+    // пустой воздух — подавляющее большинство поля.
+    if (rawNeighbor == rawCenter && rawCenter == 0x00FF0000u) return;
+
+    vec4 neighbor = unpackGas(rawNeighbor);
+
+    // Symmetric diffusion flux: kDiff * (N - C) * dt
+    vec4 diffFlux = (neighbor - center) * diffDt;
+
+    // Upwind advection flux for buoyant channels:
+    // Smoke & Heat rise (+upDir), Toxin sinks (-upDir), Oxygen neutral (0.0)
+    float vSmoke = buoyDt * upDir;
+    float vHeat  = buoyDt * upDir;
+    float vToxic = -buoyDt * upDir;
+
+    float advSmoke = (vSmoke > 0.0) ? (center.y * -vSmoke) : (neighbor.y * -vSmoke);
+    float advHeat  = (vHeat  > 0.0) ? (center.w * -vHeat)  : (neighbor.w * -vHeat);
+    float advToxic = (vToxic > 0.0) ? (center.x * -vToxic) : (neighbor.x * -vToxic);
+
+    vec4 advFlux = vec4(advToxic, advSmoke, 0.0, advHeat);
+    delta += diffFlux + advFlux;
+}
+
 void main() {
     ivec3 pos = ivec3(gl_GlobalInvocationID.xyz);
     if (pos.x >= 128 || pos.y >= 128 || pos.z >= 128) return;
 
     uint flatIdx = uint(pos.x) | (uint(pos.y) << 7) | (uint(pos.z) << 14);
 
-    if (cell_solid(pos)) {
+    uint clsCenter = (uClass[flatIdx >> 2] >> ((flatIdx & 3u) * 8u)) & 0xFFu;
+    if (clsCenter == 1u) {
         gOut[flatIdx] = 0u;
+        // Probe пишется И для солидной клетки: иначе защёлка навсегда
+        // держит инит-значение и читатель видит «чистую атмосферу» в стене.
+        if (pc.probeCoord.w != 0 && pos == pc.probeCoord.xyz) probe.probeCell = 0u;
         return;
     }
 
-    vec4 center = unpackGas(gIn[flatIdx]);
+    uint rawCenter = gIn[flatIdx];
+    vec4 center = unpackGas(rawCenter);
     float dt = pc.params.w;
     
     // 1. Chemical Reaction Kinetics (Spec 02 §4a.2)
@@ -65,7 +95,7 @@ void main() {
         center.w = max(center.w, 220.0); // sustain fire
     } else if (center.z < 40.0) {
         center.w = max(0.0, center.w - 60.0 * dt); // extinguish heat
-    } else {
+    } else if (center.w > 0.0) {
         center.w = max(0.0, center.w - 8.0 * dt);  // ambient cooling
     }
     
@@ -75,54 +105,38 @@ void main() {
     }
     
     // Toxin decay & Smoke dissipation
-    center.x = max(0.0, center.x - 1.0 * dt);
-    center.y = max(0.0, center.y - 2.0 * dt);
+    if (center.x > 0.0) center.x = max(0.0, center.x - 1.0 * dt);
+    if (center.y > 0.0) center.y = max(0.0, center.y - 2.0 * dt);
 
     // 2. Conservative 6-Point Relaxation with Upwind Buoyancy
-    const ivec3 dirs[6] = ivec3[](
-        ivec3( 1,  0,  0), ivec3(-1,  0,  0),
-        ivec3( 0,  1,  0), ivec3( 0, -1,  0),
-        ivec3( 0,  0,  1), ivec3( 0,  0, -1)
-    );
-
     vec4 delta = vec4(0.0);
     float diffRate = pc.params.x;
     float buoyancy = pc.params.y;
+    float diffDt = diffRate * dt;
+    float buoyDt = buoyancy * dt;
     vec3 downVec = vec3(pc.downStep.xyz);
 
-    for (int i = 0; i < 6; ++i) {
-        ivec3 dir = dirs[i];
-        ivec3 neighborPos = (pos + dir) & 127;
-        
-        if (cell_solid(neighborPos)) {
-            continue; // No-flux boundary on solid obstacle
-        }
-        
-        uint nIdx = uint(neighborPos.x) | (uint(neighborPos.y) << 7) | (uint(neighborPos.z) << 14);
-        vec4 neighbor = unpackGas(gIn[nIdx]);
+    uint xBase = uint(pos.x);
+    uint yBase = uint(pos.y) << 7;
+    uint zBase = uint(pos.z) << 14;
 
-        // Symmetric diffusion flux: kDiff * (N - C)
-        vec4 diffFlux = (neighbor - center) * diffRate;
+    // +X / -X
+    accumulateFlux(delta, center, rawCenter, ((uint(pos.x) + 1u) & 127u) | yBase | zBase, -downVec.x, diffDt, buoyDt);
+    accumulateFlux(delta, center, rawCenter, ((uint(pos.x) - 1u) & 127u) | yBase | zBase,  downVec.x, diffDt, buoyDt);
 
-        // Upwind advection flux for buoyant channels:
-        // upDir > 0 means moving against gravity (upward)
-        float upDir = -dot(vec3(dir), downVec);
+    // +Y / -Y
+    accumulateFlux(delta, center, rawCenter, xBase | (((uint(pos.y) + 1u) & 127u) << 7) | zBase, -downVec.y, diffDt, buoyDt);
+    accumulateFlux(delta, center, rawCenter, xBase | (((uint(pos.y) - 1u) & 127u) << 7) | zBase,  downVec.y, diffDt, buoyDt);
 
-        // Buoyancy velocities per channel:
-        // Smoke & Heat rise (+upDir), Toxin sinks (-upDir), Oxygen neutral (0.0)
-        float vSmoke = buoyancy * upDir;
-        float vHeat  = buoyancy * upDir;
-        float vToxic = -buoyancy * upDir;
-
-        float advSmoke = (vSmoke > 0.0) ? (center.y * -vSmoke) : (neighbor.y * -vSmoke);
-        float advHeat  = (vHeat  > 0.0) ? (center.w * -vHeat)  : (neighbor.w * -vHeat);
-        float advToxic = (vToxic > 0.0) ? (center.x * -vToxic) : (neighbor.x * -vToxic);
-
-        vec4 advFlux = vec4(advToxic, advSmoke, 0.0, advHeat);
-
-        delta += (diffFlux + advFlux) * dt;
-    }
+    // +Z / -Z
+    accumulateFlux(delta, center, rawCenter, xBase | yBase | (((uint(pos.z) + 1u) & 127u) << 14), -downVec.z, diffDt, buoyDt);
+    accumulateFlux(delta, center, rawCenter, xBase | yBase | (((uint(pos.z) - 1u) & 127u) << 14),  downVec.z, diffDt, buoyDt);
 
     center += delta;
-    gOut[flatIdx] = packGas(center);
+    uint outPacked = packGas(center);
+    gOut[flatIdx] = outPacked;
+
+    if (pc.probeCoord.w != 0 && pos.x == pc.probeCoord.x && pos.y == pc.probeCoord.y && pos.z == pc.probeCoord.z) {
+        probe.probeCell = outPacked;
+    }
 }

@@ -18,10 +18,11 @@ namespace giga::gpu {
 
 // Matches Push in shaders/gas_sim.comp
 struct alignas(16) GasPush {
-    ivec4 downStep; // xyz = regime_down vector, w = unused
-    vec4  params;   // x = diffusionRate, y = buoyancy, z = unused, w = dt
+    ivec4 downStep;   // xyz = regime_down vector, w = unused
+    vec4  params;     // x = diffusionRate, y = buoyancy, z = unused, w = dt
+    ivec4 probeCoord; // xyz = player macro cell pos, w = probe enabled
 };
-static_assert(sizeof(GasPush) == 32, "GasPush layout must be 32 bytes");
+static_assert(sizeof(GasPush) == 48, "GasPush layout must be 48 bytes");
 
 class GpuGasPass {
 public:
@@ -50,10 +51,15 @@ public:
     void upload_field(const float* toxic01) noexcept;
 
     // ЧИТАТЕЛЬ: упакованная клетка (toxic|smoke<<8|oxy<<16|heat<<24) из
-    // читаемого буфера. Буферы host-coherent и GPU пишет их каждый кадр —
-    // значение может отставать на кадр; для HUD и небоевой логики это
-    // приемлемо ЯВНО, боевая подключка потребует фенса — записано здесь,
-    // чтобы никто не «улучшил» молча.
+    // читаемого буфера. Чтение через probeBuffer без CPU/GPU stalls.
+    //
+    // ОДИН слот-защёлка: вызов запоминает координату, шейдер пишет её
+    // значение на СЛЕДУЮЩЕМ диспатче, читается оно вызовом ещё на кадр позже.
+    // Двум конкурирующим читателям тут места нет — последний вызов до
+    // record_sim перетирает координату первого, и тот вечно видит чужую
+    // клетку (отладочная проба часами читала «чистый воздух» игрока, пока
+    // газ жил в шахте). Законный читатель ровно один: тело под камерой.
+    // Понадобится второй — расширять до массива слотов, не звать вторым.
     std::uint32_t sample_cell(int x, int y, int z) const noexcept;
 
     bool ready() const noexcept { return computePipeline_ != VK_NULL_HANDLE; }
@@ -64,8 +70,13 @@ private:
     bool create_pipeline(const char* shaderDir) noexcept;
 
     VulkanDevice* dev_ = nullptr;
-    VulkanBuffer gasSSBO_[2]{}; // Double buffered ping-pong (8 MiB each for 128^3)
+    VulkanBuffer gasSSBO_[2]{};  // Fast DEVICE_LOCAL ping-pong VRAM buffers (16 MiB each)
+    VulkanBuffer stagingBuf_{};  // Host-visible upload staging buffer (16 MiB)
+    VulkanBuffer probeBuffer_{}; // Host-visible probe readback buffer (64 bytes)
     uint32_t readIndex_ = 0;
+    bool uploadDirty_ = false;
+
+    mutable ivec4 probeCoord_{0, 0, 0, 0};
 
     VkDescriptorSetLayout descSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
