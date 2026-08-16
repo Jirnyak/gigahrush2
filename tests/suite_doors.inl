@@ -511,11 +511,12 @@ static void test_inventory_keycard() {
         CHECK(!inventory_has_keycard(empty, 1));
         CHECK(!inventory_has_keycard(empty, static_cast<std::uint8_t>(KeycardTier::Red)));
     }
-    // A card is any item whose row sits in the `Key` CATEGORY, and the tier the
-    // door asks for is NOT compared against anything — one key opens every tier.
-    // That is a real gap (the doors carry `keycardTier` and nothing honours it,
-    // [problems.md] §10); these CHECKs pin what the code DOES so the day the gap
-    // closes it fails here loudly instead of silently changing access rules.
+    // A card is any item whose row sits in the `Key` CATEGORY, and its tier is
+    // the `useA` column of that row (default 1) — data, not a hardcoded id
+    // ([problems.md] §10, closed: `inventory_has_keycard` compares it against
+    // the door's `requiredTier`, with `KeycardTier::Master` opening everything).
+    // These CHECKs pin the tier comparison both ways: grants at-or-below the
+    // card's tier, denies above it.
     // The catalog is generated from data/items.csv, so resolve a real Key row by
     // CATEGORY rather than hardcoding an id that a content edit would move.
     ItemId keyId = kInvalidItem, plainId = kInvalidItem;
@@ -529,22 +530,23 @@ static void test_inventory_keycard() {
     }
     CHECK(keyId != kInvalidItem);
     CHECK(plainId != kInvalidItem);
-    {   // ---- one Key-category item satisfies every tier today
+    {   // ---- one Key-category item satisfies tier 1 / Red, and no higher
         Inventory inv;
         inv.clear();
         ItemSlot& s = inv.slots[0];
         s.item = keyId;
         s.count = 1;   // count 0 is an EMPTY slot, not a held item
         CHECK(inventory_has_keycard(inv, 1));
-        CHECK(inventory_has_keycard(inv, 2));
         CHECK(inventory_has_keycard(inv, static_cast<std::uint8_t>(KeycardTier::Red)));
+        CHECK(!inventory_has_keycard(inv, static_cast<std::uint8_t>(KeycardTier::Blue)));
+        CHECK(!inventory_has_keycard(inv, static_cast<std::uint8_t>(KeycardTier::Master)));
     }
     {   // ---- a card deep in the grid is still found; a non-key item is not one
         Inventory inv;
         inv.clear();
         inv.slots[7].item = keyId;
         inv.slots[7].count = 1;
-        CHECK(inventory_has_keycard(inv, static_cast<std::uint8_t>(KeycardTier::Blue)));
+        CHECK(inventory_has_keycard(inv, static_cast<std::uint8_t>(KeycardTier::Red)));
         Inventory bread;
         bread.clear();
         bread.slots[0].item = plainId;

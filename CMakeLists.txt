@@ -916,7 +916,13 @@ if(GIGA_BUILD_TESTS)
     # loops (suite_craft premise sums, its save round-trip and sanitize-clamp,
     # suite_saveload's SAVRPG bank compare) each run one fewer iteration. No
     # suite stopped running.
-        PASS_REGULAR_EXPRESSION "game_test: 240244 checks, 0 failures")
+    # 240244 -> 240245 (+1) on 2026-08-16: §10 keycard pin flipped (suite_doors
+    # test_inventory_keycard). The old 3-CHECK block pinned "one Key satisfies
+    # every tier"; the new 4-CHECK block pins the tier comparison both ways
+    # (grant 1/Red, deny Blue/Master). Net +1. Mutation RUN, not assumed: revert
+    # door.cpp to the category-only `return true` -> exactly 2 red (the two
+    # deny CHECKs), 240245 checks, 2 failures.
+        PASS_REGULAR_EXPRESSION "game_test: 240245 checks, 0 failures")
 
 
 
