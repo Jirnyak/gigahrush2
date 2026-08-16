@@ -160,9 +160,57 @@ std::uint8_t route_step(const CoarseGraph& coarse, const FineNav& fine,
 
 // --- Vertical transit & Multi-floor navigation ------------------------------
 
+// 512 x 512 x 16 Sector Coarse Navigation Grid (Spec 22 Requirement R4)
+inline constexpr int kSectorDimX = 32;
+inline constexpr int kSectorDimY = 32;
+inline constexpr int kSectorDimZ = 1;
+inline constexpr int kSectorsPerFloor = kSectorDimX * kSectorDimY; // 1024 coarse nodes per floor slice
+inline constexpr int kSectorCellSize = 16;                         // 16 macro cells = 32 metres along X and Y
+
+// 100-floor stack vertical bounds:
+inline constexpr int kMinFloor = -50;
+inline constexpr int kMaxFloor = 50;
+inline constexpr int kTotalStackFloors = 101; // [-50 .. +50]
+
+// Coordinate conversions for the 32x32 sector coarse grid:
+inline constexpr int sector_coord_x(int sx) { return sx * kSectorCellSize + kSectorCellSize / 2; }
+inline constexpr int sector_coord_y(int sy) { return sy * kSectorCellSize + kSectorCellSize / 2; }
+inline constexpr int sector_coord_z(int /*sz*/ = 0) { return kSectorCellSize / 2; } // Midpoint of 16-cell height
+
+inline constexpr int sector_axis_of_x(int cx) {
+    const int c = cx < 0 ? 0 : (cx >= 512 ? 511 : cx);
+    return c / kSectorCellSize;
+}
+inline constexpr int sector_axis_of_y(int cy) {
+    const int c = cy < 0 ? 0 : (cy >= 512 ? 511 : cy);
+    return c / kSectorCellSize;
+}
+
+inline constexpr int sector_node_id(int sx, int sy) {
+    return sy * kSectorDimX + sx;
+}
+
+inline constexpr void sector_unpack_node(int id, int& sx, int& sy) {
+    sx = id % kSectorDimX;
+    sy = id / kSectorDimX;
+}
+
+inline constexpr int sector_neighbor(int id, int dir) {
+    int sx = id % kSectorDimX;
+    int sy = id / kSectorDimX;
+    switch (dir) {
+        case 0: if (sx > 0) --sx; else return -1; break; // -X
+        case 1: if (sx + 1 < kSectorDimX) ++sx; else return -1; break; // +X
+        case 2: if (sy > 0) --sy; else return -1; break; // -Y
+        case 3: if (sy + 1 < kSectorDimY) ++sy; else return -1; break; // +Y
+        default: return -1;
+    }
+    return sector_node_id(sx, sy);
+}
+
 // Kinds of vertical transit connections between storeys or floor slices.
 enum class VerticalTransitKind : std::uint8_t {
-    ElevatorShaft = 0, // 4x4 lattice shaft elevator cabin
+    ElevatorShaft = 0, // 4x4 primary elevator shaft across 100-floor stack
     Stairwell = 1,     // Padic stairwell or architectural staircase
     Ladder = 2,        // Vertical access ladder
     GravityChute = 3,  // Unidirectional vertical drop / pneumatic chute
@@ -175,8 +223,8 @@ struct VerticalWaypointLink {
     ivec3 fromCell{0, 0, 0};
     ivec3 toCell{0, 0, 0};
     VerticalTransitKind kind = VerticalTransitKind::ElevatorShaft;
-    std::uint8_t hubIndex = 0xFFu; // 0..15 for planar lattice hub shafts, 0xFF for stairs/ladders
-    Dist cost = 0;                 // Traversal cost metric
+    std::uint16_t hubIndex = 0xFFFFu; // 0..1023 for sector/hub index, 0xFFFF for stairs/ladders/chutes
+    Dist cost = 0;                    // Traversal cost metric
 };
 
 // Result of a multi-floor route query step.

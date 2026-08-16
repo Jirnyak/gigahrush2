@@ -41,6 +41,7 @@
 #include "world/level_stack.h"   // giga::LevelStack, LayerId
 #include "world/nav.h"           // giga::nav::CoarseGraph, FineNav, VerticalWaypointLink
 #include "game/antourage/antourage.h" // AntourageBake — per-floor baked dressing
+#include "game/sector_layout.h"  // SectorLayout, 5 Vertical Biomes, Fuzzy Boundaries
 
 
 namespace giga::game {
@@ -101,6 +102,9 @@ struct FloorModule {
     // static_assert or byte count moves — and it would not anyway, NpcHandle being the
     // same uint32 an `ar.u32(...)` already wrote.
     NpcHandle candidate = kInvalidHandle; // the seed's player-designate (gen-checked)
+
+    // Sector layout (512 x 512 x 16) & 5 vertical biomes
+    SectorLayout sectorLayout{};
 
     // Live set while loaded (empty when cold): the entities embodied for this
     // module, so unload folds exactly them back.
@@ -314,9 +318,16 @@ public:
                                        std::uint8_t arrivalCoord, NpcId& playerId,
                                        int landHub = -1);
 
+    // Sector layout (512 x 512 x 16) & World Seed management
+    void set_world_seed(std::uint32_t seed) { worldSeed_ = seed; }
+    std::uint32_t world_seed() const { return worldSeed_; }
+    const SectorLayout* sector_layout_at(const FloorRegistry& reg, int number) const;
+
     int keep_radius() const { return keepRadius_; }
 
 private:
+    std::uint32_t worldSeed_ = 1337u;
+
     // Population uses a seed offset from the geometry seed so a floor's crowd
     // layout and its walls don't correlate.
     static constexpr std::uint32_t kPopSeedSalt = 0x51ed270bu;

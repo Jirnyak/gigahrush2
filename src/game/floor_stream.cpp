@@ -13,6 +13,7 @@
 #include "game/population.h"  // seed_floor_from_spec
 #include "game/rpg.h"         // RpgStats
 #include "game/save.h"        // place_body_safely — blind-seeded cells resolve here
+#include "game/sector_layout.h" // SectorLayout, 5 Vertical Biomes, Fuzzy Boundaries
 #include "game/status.h"      // StatusSet
 
 
@@ -66,16 +67,23 @@ ModuleId FloorStreamer::add_module(FloorRegistry& reg, int number, FloorKind kin
     fm.used = true;
     fm.number = number;
     fm.kind = kind;
-    fm.seed = seed;
+    fm.seed = (seed != 0) ? seed : compute_sector_seed(worldSeed_, number);
+    fm.sectorLayout = generate_sector_layout(number, worldSeed_);
     reg.assign(number, m);
     refresh_vertical_links(reg);
     if (!navCacheDir_.empty()) {
         nav::CoarseGraph cg{};
-        multiFloorNavCache_.ensure_coarse(NavCacheKey{number, kind, seed}, cg);
+        multiFloorNavCache_.ensure_coarse(NavCacheKey{number, kind, fm.seed}, cg);
     }
     return m;
 }
 
+const SectorLayout* FloorStreamer::sector_layout_at(const FloorRegistry& reg,
+                                                    int number) const {
+    const ModuleId m = reg.module_at(number);
+    if (m == kInvalidModule || !modules_[m].used) return nullptr;
+    return &modules_[m].sectorLayout;
+}
 
 std::uint32_t FloorStreamer::floor_seed_of(const FloorRegistry& reg,
                                            int number) const {
@@ -321,8 +329,10 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
     const auto t1 = std::chrono::steady_clock::now();
     const bool restored = restore_ && restore_(stack.layer(slot), fm.number);
     const auto t2 = std::chrono::steady_clock::now();
-    if (!restored)
+    if (!restored) {
         generate_floor(stack.layer(slot), fm.number, floor_spec(fm.kind), fm.seed);
+        apply_sector_fuzzy_boundaries(stack.layer(slot), fm.number, fm.seed, fm.sectorLayout.biome);
+    }
     const auto t3 = std::chrono::steady_clock::now();
 
     floor_apply_rules(stack.layer(slot), fm.number, floor_spec(fm.kind), fm.seed);
@@ -332,8 +342,9 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
             return std::chrono::duration<double, std::milli>(b - a).count();
         };
         std::fprintf(stderr,
-                     "[floor] %d: laws %.1f ms | %s %.1f ms | rules %.1f ms\n",
-                     fm.number, ms(t0, t1),
+                     "[floor] %d (%s | %s): laws %.1f ms | %s %.1f ms | rules %.1f ms\n",
+                     fm.number, vertical_biome_name(fm.sectorLayout.biome),
+                     floor_spec(fm.kind).name, ms(t0, t1),
                      restored ? "RESTORED" : "generated",
                      restored ? ms(t1, t2) : ms(t2, t3), ms(t3, t4));
     }

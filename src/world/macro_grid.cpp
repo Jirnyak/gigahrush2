@@ -6,15 +6,15 @@ MacroGrid::MacroGrid()
     : types_(kMacroCells, kCellAir), masks_(kMacroCells) {}
 
 void MacroGrid::fill_cell(int x, int y, int z, CellType t) {
-    int wx = wrap_macro(x), wy = wrap_macro(y), wz = wrap_macro(z);
-    std::size_t i = macro_index(wx, wy, wz);
+    const auto c = clamp_macro(x, y, z);
+    std::size_t i = macro_index(c.x, c.y, c.z);
     types_[i] = t;
     masks_[i].set_all();
 }
 
 void MacroGrid::clear_cell(int x, int y, int z) {
-    int wx = wrap_macro(x), wy = wrap_macro(y), wz = wrap_macro(z);
-    std::size_t i = macro_index(wx, wy, wz);
+    const auto c = clamp_macro(x, y, z);
+    std::size_t i = macro_index(c.x, c.y, c.z);
     types_[i] = kCellAir;
     masks_[i].clear_all();
 }

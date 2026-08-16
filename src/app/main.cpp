@@ -53,6 +53,7 @@
 #include "game/floor_registry.h"
 #include "game/floor_spec.h"
 #include "game/floor_stream.h"
+#include "game/sector_layout.h"
 #include "game/macro_sim.h"
 #include "game/mob_spawn.h"
 #include "game/monster.h"
@@ -1716,9 +1717,9 @@ int main(int argc, char** argv) {
         for (int f = game::kMinFloor; f <= game::kMaxFloor; ++f) {
             const game::FloorDef* def = floor_catalog().claimed(f);
             if (!def) continue;
-            // Vary the seed per floor so same-kind floors still differ.
+            // Vary the seed per floor: Seed = WorldSeed ^ FloorNumber
             std::uint32_t fseed =
-                1337u ^ (static_cast<std::uint32_t>(f) * 0x9e3779b9u);
+                game::compute_sector_seed(streamer.world_seed(), f);
             streamer.add_module(registry, f, def->kind, fseed);
         }
         // Migration destinations are the REGISTERED floor set, never a [lo,hi] band.
@@ -3048,6 +3049,9 @@ int main(int argc, char** argv) {
                     // only). [samosbor.h samosbor_environmental_step]
                     game::samosbor_environmental_step(
                         reg, pool, doors, activeLayer, samosbor, kSimDt, &playerStatus);
+                    game::sector_perimeter_hazard_step(
+                        reg, pool, &doors, activeLayer, currentFloor, kSimDt, &playerStatus,
+                        &stack.layer(activeLayer).grid(), &roomZones);
                 }
                 // Exhaustion costs movement speed, not HP — three stacking HP
                 // drains is a death spiral with no decision in it. Applied to the
@@ -6058,7 +6062,7 @@ int main(int argc, char** argv) {
                 }
             } else if (dAction == DialogueAction::AcceptContract) {
                 if (game::contract_accept(contracts, dialogueSession.contractOffer, ledger)) {
-                    audioSys.trigger_ui(audio::UiSound::PaperRustle);
+                    audioSys.trigger_ui(audio::UiSound::InventoryRustle);
                     offer = game::Contract{};
                     offerLine[0] = 0;
                     dialogueSession.contractText[0] = 0;
@@ -6066,7 +6070,7 @@ int main(int argc, char** argv) {
             } else if (dAction == DialogueAction::AcceptQuest) {
                 if (game::quest_valid(dialogueSession.questOffer) && dialogueSession.questOfferGiver != game::kInvalidNpc &&
                     game::quest_accept(quests, pool, dialogueSession.questOffer, dialogueSession.questOfferGiver, currentFloor, ledger)) {
-                    audioSys.trigger_ui(audio::UiSound::PaperRustle);
+                    audioSys.trigger_ui(audio::UiSound::InventoryRustle);
                     questOffer = game::kInvalidQuest;
                     questOfferGiver = game::kInvalidNpc;
                     questOfferLine[0] = 0;

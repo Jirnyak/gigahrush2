@@ -13,24 +13,22 @@ namespace {
 // Words in the walkability bitset: 2,097,152 bits = 32,768 uint64 = 256 KiB.
 constexpr std::size_t kOpenWords = (kMacroCells + 63) / 64;
 
-// Flat strides. x is contiguous, y is one row, z is one plane — 512 B and 64 KiB
-// respectively at kMacroDim = 128, so a plane-ordered sweep keeps the three live z
-// planes (192 KiB) inside L2 and the +-z probes are the only ones that travel.
-constexpr std::size_t kRow = static_cast<std::size_t>(kMacroDim);
-constexpr std::size_t kPlane = kRow * kRow;
-constexpr std::size_t kSpan = kPlane * kRow;
+// Flat strides. x is contiguous, y is one row, z is one plane.
+constexpr std::size_t kRow = static_cast<std::size_t>(kMacroDimX);
+constexpr std::size_t kPlane = kRow * static_cast<std::size_t>(kMacroDimY);
+constexpr std::size_t kSpan = kPlane * static_cast<std::size_t>(kMacroDimZ);
 
 // The wrap offsets in the sweep are derived from these three, so if the flat layout in
-// world/types.h ever stops being x + y*N + z*N*N the sweep must not silently start
-// diffusing into the wrong cells.
+// world/types.h ever stops being x + y*kMacroDimX + z*kMacroDimX*kMacroDimY the sweep must not
+// silently start diffusing into the wrong cells.
 static_assert(kSpan == kMacroCells,
-              "macro_index must stay x + y*kMacroDim + z*kMacroDim^2");
+              "macro_index must stay x + y*kMacroDimX + z*kMacroDimX*kMacroDimY");
 
 // One 64-cell GROUP is one word of the walkability bitset, and the sweep is organised
 // around it: kWordsPerRow groups tile a row exactly. That tiling is the whole reason
 // the row-blocked loop below is allowed to resolve each neighbour row's bitset word
 // ONCE per row — every row, and every neighbour row, starts on a word boundary only
-// because kMacroDim divides by 64.
+// because kMacroDimX divides by 64.
 constexpr std::size_t kWordsPerRow = kRow / 64;
 static_assert(kRow % 64 == 0,
               "a row must be a whole number of walkability words: the sweep resolves "
@@ -135,15 +133,16 @@ vec3 gradient_impl(const Field<float>& f, OpenFn isOpen, int x, int y, int z) {
 
 } // namespace
 
-void diffusion_refresh_walkable(const MacroGrid& grid, DiffusionScratch& scratch) {
-    // assign() rather than resize() so a rebuild starts from all-solid and cannot
+void diffusion_refresh_walkable(const MacroGrid& grid,
+                                DiffusionScratch& scratch) {
+    // Re-allocate or re-zero rather than bitwise OR: a re-sweep on a modified floor must not
     // inherit stale open bits from the previous floor's geometry.
     scratch.open.assign(kOpenWords, 0ull);
     std::uint64_t* words = scratch.open.data();
-    for (int z = 0; z < kMacroDim; ++z)
-        for (int y = 0; y < kMacroDim; ++y) {
+    for (int z = 0; z < kMacroDimZ; ++z)
+        for (int y = 0; y < kMacroDimY; ++y) {
             std::size_t i = macro_index(0, y, z); // x is the contiguous axis
-            for (int x = 0; x < kMacroDim; ++x, ++i)
+            for (int x = 0; x < kMacroDimX; ++x, ++i)
                 if (cell_open(grid, x, y, z)) words[i >> 6] |= 1ull << (i & 63);
         }
     scratch.geomDirty = false;
@@ -168,25 +167,25 @@ void diffusion_on_floor_built(World& world, DiffusionScratch& scratch,
     diffusion_refresh_walkable(world.grid(), scratch);
     // NON-creating: a floor nobody has wounded must not acquire an 8.00 MiB field just
     // by being loaded. Field<T>::fill is a std::fill over the flat vector, so this is
-    // one 8.00 MiB streaming write and no allocation.
-    if (Field<float>* f = world.fields().find<float>(field)) f->fill(0.0f);
+    // O(kMacroCells) cache-streamed bytes and zero syscalls.
+    Field<float>* f = world.fields().find<float>(field);
+    if (f) f->fill(0.0f);
 }
 
 float diffusion_add(World& world, int x, int y, int z, float amount,
                     const std::string& field) {
+    if (amount <= 0.0f) return 0.0f;
     const int cx = wrap_macro(x);
     const int cy = wrap_macro(y);
     const int cz = wrap_macro(z);
-    // Refuse a source inside structure. The sweep pins solid cells to 0, so storing it
-    // would report mass this sweep that provably vanishes on the next one — and a
-    // total that oscillates is worse than a source that honestly did not take.
+    // A depositor inside a solid wall deposits NOTHING: gas released inside rock does not
+    // exist. The caller is responsible for checking if the cell is air; we enforce it
+    // here so an overlooked caller cannot leak mass into stone.
     if (!cell_open(world.grid(), cx, cy, cz)) return 0.0f;
-
     Field<float>& f = world.fields().get_or_create<float>(field, 0.0f);
-    float& cell = f.at(cx, cy, cz);
-    cell += amount;
-    if (cell < 0.0f) cell = 0.0f; // a negative level has no meaning for any consumer
-    return cell;
+    float& cur = f.at(cx, cy, cz);
+    cur += amount;
+    return cur;
 }
 
 float diffusion_add_at(World& world, vec3 pos, float amount,
@@ -196,11 +195,10 @@ float diffusion_add_at(World& world, vec3 pos, float amount,
 }
 
 DiffusionStep diffusion_step(World& world, DiffusionScratch& scratch,
-                             const DiffusionParams& params) {
+                             const DiffusionParams& params,
+                             const SpatialActivityGrid* activity,
+                             std::uint64_t tick) {
     DiffusionStep out;
-    // NON-CREATING lookup, deliberately: see the diffusion_add comment in the header.
-    // A layer nobody has wounded pays one string hash per sweep, not 8.00 MiB and
-    // 2,097,152 zero cells.
     Field<float>* fp = world.fields().find<float>(params.field);
     if (fp == nullptr) return out;
     out.present = true;
@@ -213,77 +211,38 @@ DiffusionStep diffusion_step(World& world, DiffusionScratch& scratch,
     if (!scratch.walkable_ready() || scratch.geomDirty)
         diffusion_refresh_walkable(world.grid(), scratch);
     if (scratch.back.size() != kMacroCells) scratch.back.resize(kMacroCells);
-
     if (scratch.hotGroups.size() != kGroupWords) scratch.hotGroups.resize(kGroupWords);
 
-    // Raw pointers, and __restrict because these two buffers genuinely cannot alias:
-    // one is the Field's vector, the other the scratch's, and the swap happens after
-    // the loop. Measured worth nothing on its own (0.97x) — kept only because it is
-    // free and true, not as an optimisation.
     const float* __restrict src = f.data().data();
     float* __restrict dst = scratch.back.data();
     const std::uint64_t* __restrict open = scratch.open.data();
 
-    // Clamped, not rejected: there is no exception to raise ([AGENTS.md]) and a rate
-    // above 1/6 makes the explicit 6-neighbour stencil unstable, so the checkerboard
-    // mode would grow every sweep instead of the field spreading. Clamping turns that
-    // typo into "spreads a little slower than asked".
     const float rate = std::clamp(params.rate, 0.0f, kDiffusionMaxRate);
     const float keep = 1.0f - std::clamp(params.decay, 0.0f, 1.0f);
     const float minLevel = params.minLevel;
 
-    // ---- PASS 1: which 64-cell groups hold anything at all -----------------
-    //
-    // THE SKIP THIS BUYS, and its proof. If a group's 256 bytes are bitwise zero, and
-    // so are the seven groups any of its cells can read from (the two x-adjacent groups
-    // in the row, and the same group index in the +-y and +-z neighbour ROWS), then
-    // every cell in it has c == +0.0f and every neighbour term is (+0.0f - +0.0f) ==
-    // +0.0f. So acc == +0.0f, next == (+0.0f + rate*+0.0f) * keep == +0.0f for ANY
-    // finite rate and keep — including keep == 0 — and the clamp cannot turn +0.0f into
-    // anything else. Writing 0.0f over the whole group is therefore BIT-IDENTICAL to
-    // computing it, `total` is unchanged (adding +0.0 to a double is a no-op) and
-    // `live` is unchanged. Solid cells in the group were going to be zeroed anyway.
-    //
-    // WHY IT IS WORTH A WHOLE 8.00 MiB READ: a real floor is almost entirely quiet. The
-    // suite's own scenario has 2,592 non-zero cells against 1,253,822 open ones —
-    // 0.2%. Diffusion is a LOCAL stencil, so danger never occupies more than the L1
-    // ball its deposits have had time to reach; there is no state in which a floor is
-    // uniformly hot for long, because `keep` is pulling every cell down at the same
-    // time. Measured 15.4x on that scenario, and 1.86x — still faster than the
-    // per-cell form it replaced — when every open cell is above minLevel.
-    //
-    // AND IT HAS NO INVALIDATION HAZARD, which is the whole reason it is a pass and not
-    // a cached set. It is derived from `src` inside the sweep that uses it, so unlike
-    // scratch.open there is no geometry-moved / floor-changed / deposit-behind-my-back
-    // case: nothing can make it stale, and diffusion_add needs to know nothing about it.
-    std::uint64_t* __restrict hot = scratch.hotGroups.data();
-    std::memset(hot, 0, kGroupWords * sizeof(std::uint64_t));
-    for (std::size_t g = 0; g < kOpenWords; ++g)
-        if (std::memcmp(src + g * 64u, kZeroGroup, sizeof(kZeroGroup)) != 0)
-            hot[g >> 6] |= 1ull << (g & 63);
-    const auto group_hot = [hot](std::size_t g) {
-        return ((hot[g >> 6] >> (g & 63)) & 1ull) != 0ull;
-    };
-
-    // DOUBLE accumulator for a float field, on purpose. Summing up to 2,097,152 floats
-    // in float loses precision as the running total grows past the individual terms — a
-    // widely spread field is exactly the case where `total` matters and exactly the
-    // case where a float sum is worst. One double register costs nothing against
-    // 16 MiB of memory traffic. It stays a single ORDERED chain rather than four
-    // partial sums: splitting it was measured at 1.31x against the row-blocked form's
-    // 1.93x, i.e. the chain is not the bottleneck, so there is no reason to pay a
-    // different `total` for it.
     double total = 0.0;
     std::uint32_t live = 0;
-
-    // The work count is the popcount of the walkability bitset, which is exactly the
-    // set of cells this sweep is responsible for. Counting it here rather than
-    // incrementing per cell keeps the inner loop free of a dependency on it; the two
-    // are equal by construction because every open cell is either computed or proved
-    // to be 0 by the skip above.
     std::size_t openSwept = 0;
-    for (std::size_t g = 0; g < kOpenWords; ++g)
-        openSwept += static_cast<std::size_t>(std::popcount(open[g]));
+
+    // ---- PASS 1: classify 64-cell groups into `hot` ------------------------
+    scratch.hotGroups.assign(kGroupWords, 0ull);
+    std::uint64_t* hot = scratch.hotGroups.data();
+    for (std::size_t g = 0; g < kMacroCells / 64; ++g) {
+        const float* p = src + g * 64;
+        bool any = false;
+        for (int k = 0; k < 64; ++k) {
+            if (p[k] >= minLevel) {
+                any = true;
+                break;
+            }
+        }
+        if (any) hot[g >> 6] |= 1ull << (g & 63);
+    }
+
+    const auto group_hot = [hot](std::size_t g) -> bool {
+        return ((hot[g >> 6] >> (g & 63)) & 1ull) != 0ull;
+    };
 
     // ---- PASS 2: the sweep, one ROW at a time ------------------------------
     //
@@ -293,16 +252,15 @@ DiffusionStep diffusion_step(World& world, DiffusionScratch& scratch,
     // reads exactly one word from each of them. So the row prologue resolves the four
     // offsets and the row bases once, the group prologue loads the four neighbour words
     // once, and the body is register-only bit tests over a contiguous row.
-    for (int z = 0; z < kMacroDim; ++z) {
-        // ALL THREE axes wrap ([world.md]). Hoisted to the plane and the row, where the
-        // wrap is a property of the coordinate rather than of the cell.
+    for (int z = 0; z < kMacroDimZ; ++z) {
         const std::size_t zm = (z == 0) ? (kSpan - kPlane) : (std::size_t(0) - kPlane);
         const std::size_t zp =
-            (z == kMacroDim - 1) ? (std::size_t(0) - (kSpan - kPlane)) : kPlane;
-        for (int y = 0; y < kMacroDim; ++y) {
+            (z == kMacroDimZ - 1) ? (std::size_t(0) - (kSpan - kPlane)) : kPlane;
+        for (int y = 0; y < kMacroDimY; ++y) {
+            const int sy = (y / SpatialActivityGrid::kSectorCellsY) % SpatialActivityGrid::kSectorsY;
             const std::size_t ym = (y == 0) ? (kPlane - kRow) : (std::size_t(0) - kRow);
             const std::size_t yp =
-                (y == kMacroDim - 1) ? (std::size_t(0) - (kPlane - kRow)) : kRow;
+                (y == kMacroDimY - 1) ? (std::size_t(0) - (kPlane - kRow)) : kRow;
             const std::size_t i0 = macro_index(0, y, z);
             const std::size_t w0 = i0 >> 6;
             const std::size_t wym = (i0 + ym) >> 6, wyp = (i0 + yp) >> 6;
@@ -314,21 +272,18 @@ DiffusionStep diffusion_step(World& world, DiffusionScratch& scratch,
             const float* __restrict rzp = src + i0 + zp;
             float* __restrict rd = dst + i0;
 
-            // The two cells of each 64-cell group whose x neighbour leaves the group:
-            // their walkability bit lives in another word and their index may wrap the
-            // row, so they take the general path. 2 of 64 cells.
-            //
-            // CALLED IN x ORDER, before and after the group body, and that is not
-            // cosmetic: `total` is one ordered chain of double adds, so visiting bit 63
-            // before bits 1..62 would change its last bits. Cells in x order means the
-            // sequence of adds is the open cells in increasing x, exactly as the
-            // per-cell form did them, which is what makes `total` bit-identical by
-            // construction rather than by luck.
             const auto edge_cell = [&](int x) {
                 const std::size_t i = i0 + static_cast<std::size_t>(x);
                 if (!bit_open(open, i)) return; // a wall; the group memset already did it
-                const int xm = (x == 0) ? (kMacroDim - 1) : (x - 1);
-                const int xp = (x == kMacroDim - 1) ? 0 : (x + 1);
+                const int sx = (x / SpatialActivityGrid::kSectorCellsX) % SpatialActivityGrid::kSectorsX;
+                if (activity != nullptr && !activity->should_step(sx, sy, tick)) {
+                    rd[x] = rs[x];
+                    total += static_cast<double>(rs[x]);
+                    if (rs[x] > 0.0f) ++live;
+                    return;
+                }
+                const int xm = (x == 0) ? (kMacroDimX - 1) : (x - 1);
+                const int xp = (x == kMacroDimX - 1) ? 0 : (x + 1);
                 const float c = rs[x];
                 float acc = 0.0f;
                 if (bit_open(open, i0 + static_cast<std::size_t>(xm))) acc += rs[xm] - c;
@@ -360,6 +315,27 @@ DiffusionStep diffusion_step(World& world, DiffusionScratch& scratch,
                     !group_hot(w0 + (g + 1) % kWordsPerRow) && !group_hot(wym + g) &&
                     !group_hot(wyp + g) && !group_hot(wzm + g) && !group_hot(wzp + g))
                     continue; // provably all zero — see the PASS 1 proof above
+
+                if (activity != nullptr) {
+                    bool anyActive = false;
+                    for (int k = 0; k < 4; ++k) {
+                        int sx = (static_cast<int>(g) * 4 + k) % SpatialActivityGrid::kSectorsX;
+                        if (activity->should_step(sx, sy, tick)) {
+                            anyActive = true;
+                            break;
+                        }
+                    }
+                    if (!anyActive) {
+                        std::memcpy(rd + xg, rs + xg, 64u * sizeof(float));
+                        for (int k = 0; k < 64; ++k) {
+                            float v = rs[xg + k];
+                            total += static_cast<double>(v);
+                            if (v > 0.0f) ++live;
+                        }
+                        continue;
+                    }
+                }
+
                 const std::uint64_t mym = open[wym + g], myp = open[wyp + g];
                 const std::uint64_t mzm = open[wzm + g], mzp = open[wzp + g];
 
@@ -374,6 +350,13 @@ DiffusionStep diffusion_step(World& world, DiffusionScratch& scratch,
                     const int b = std::countr_zero(m);
                     m &= m - 1ull;
                     const int x = xg + b;
+                    const int sx = (x / SpatialActivityGrid::kSectorCellsX) % SpatialActivityGrid::kSectorsX;
+                    if (activity != nullptr && !activity->should_step(sx, sy, tick)) {
+                        rd[x] = rs[x];
+                        total += static_cast<double>(rs[x]);
+                        if (rs[x] > 0.0f) ++live;
+                        continue;
+                    }
                     const float c = rs[x];
                     // Discrete Laplacian over the OPEN neighbours only, in the same
                     // order and with the same float operations as the per-cell form it
@@ -416,12 +399,14 @@ DiffusionStep diffusion_step(World& world, DiffusionScratch& scratch,
     return out;
 }
 
-DiffusionStep diffusion_step(World& world, const DiffusionParams& params) {
+DiffusionStep diffusion_step(World& world, const DiffusionParams& params,
+                             const SpatialActivityGrid* activity,
+                             std::uint64_t tick) {
     // One code path, so this cannot drift from the scratch form. The cost of the
     // convenience is stated in the header: an 8.00 MiB allocation and a full bitset
     // rebuild, both discarded when this returns.
     DiffusionScratch once;
-    return diffusion_step(world, once, params);
+    return diffusion_step(world, once, params, activity, tick);
 }
 
 vec3 diffusion_gradient(const Field<float>& f, const MacroGrid& g, int x, int y,
@@ -493,7 +478,8 @@ void diffusion_driver_on_floor_built(DiffusionDriver& driver, World& world, Laye
 }
 
 bool diffusion_tick(DiffusionDriver& driver, World& world, LayerId layer,
-                    std::uint64_t simTick, const DiffusionParams& params) {
+                    std::uint64_t simTick, const DiffusionParams& params,
+                    const SpatialActivityGrid* activity) {
     // The sim is stepping a different layer than the bitset was built from. Rebuild
     // BEFORE the cadence check, not after: the bitset must be right by the time anything
     // sweeps, and a rebuild is bake-time work that must not wait for a cadence tick.
@@ -515,7 +501,7 @@ bool diffusion_tick(DiffusionDriver& driver, World& world, LayerId layer,
     // 200 ms forever.
     if (!driver.hot) return false;
 
-    driver.last = diffusion_step(world, driver.scratch, params);
+    driver.last = diffusion_step(world, driver.scratch, params, activity, simTick);
     ++driver.sweeps;
     // Re-close the gate from the sweep's own report, which is the whole reason
     // DiffusionStep returns observations instead of void: `present == false` means this

@@ -125,20 +125,24 @@ class MacroGrid {
 public:
     MacroGrid();
 
-    // --- typed cell access (toroidal) --------------------------------------
+    // --- typed cell access (bounded) --------------------------------------
     CellType cell(int x, int y, int z) const {
-        return types_[macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z))];
+        const auto c = clamp_macro(x, y, z);
+        return types_[macro_index(c.x, c.y, c.z)];
     }
     void set_cell(int x, int y, int z, CellType t) {
-        types_[macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z))] = t;
+        const auto c = clamp_macro(x, y, z);
+        types_[macro_index(c.x, c.y, c.z)] = t;
     }
 
-    // --- sub-voxel occupancy (toroidal) ------------------------------------
+    // --- sub-voxel occupancy (bounded) ------------------------------------
     const SubMask& mask(int x, int y, int z) const {
-        return masks_[macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z))];
+        const auto c = clamp_macro(x, y, z);
+        return masks_[macro_index(c.x, c.y, c.z)];
     }
     SubMask& mask(int x, int y, int z) {
-        return masks_[macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z))];
+        const auto c = clamp_macro(x, y, z);
+        return masks_[macro_index(c.x, c.y, c.z)];
     }
 
     // Convenience: is a single sub-voxel solid? Coordinates are macro cell +
@@ -157,7 +161,7 @@ public:
 
     // Mutable raw access for wholesale state restore (a floor snapshot stamping
     // the grid back, [game/save.h]). Bulk writers only — per-cell mutation goes
-    // through the toroidal accessors above.
+    // through the bounded accessors above.
     std::vector<CellType>& types_mut() { return types_; }
     std::vector<SubMask>& masks_mut() { return masks_; }
 

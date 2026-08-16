@@ -62,9 +62,10 @@ public:
         return p == kNoPage ? base : pages_[p].v[bit];
     }
 
-    // Toroidal convenience mirroring Field<T>::at.
+    // Bounded convenience mirroring Field<T>::at.
     T at(int cx, int cy, int cz, int sx, int sy, int sz, T base) const {
-        return at(macro_index(wrap_macro(cx), wrap_macro(cy), wrap_macro(cz)),
+        const auto c = clamp_macro(cx, cy, cz);
+        return at(macro_index(c.x, c.y, c.z),
                   sub_bit(sx, sy, sz), base);
     }
 

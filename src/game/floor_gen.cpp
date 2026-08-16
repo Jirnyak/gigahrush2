@@ -7,6 +7,7 @@
 
 #include "game/floors/padic/padic.h" // the module every kind dispatches to today
 #include "game/mob_table.h"          // RoomBit — rooms named in the shared taxonomy
+#include "game/sector_layout.h"      // VerticalBiome, 5 biomes, fuzzy boundary
 #include "world/macro_grid.h"        // MacroGrid — the frame helpers query cells
 #include "world/world.h"             // World — live gravity regime + grid
 
@@ -58,6 +59,24 @@ constexpr RoomMix kRoomsDerelict[] = {
 constexpr RoomMix kRoomsPadic[] = {
     {RoomBit::Corridor, 34}, {RoomBit::Storage, 30},
     {RoomBit::Common, 20},   {RoomBit::Production, 16},
+};
+
+// 5 Vertical Biomes room mixes (Spec 22 §5)
+constexpr RoomMix kRoomsUpperClean[] = {
+    {RoomBit::Office, 34},   {RoomBit::Medical, 18}, {RoomBit::Hq, 16},
+    {RoomBit::Common, 14},   {RoomBit::Living, 10},  {RoomBit::Storage, 8},
+};
+constexpr RoomMix kRoomsCentralHub[] = {
+    {RoomBit::Common, 34},   {RoomBit::Office, 20},  {RoomBit::Hq, 16},
+    {RoomBit::Storage, 14},  {RoomBit::Medical, 10}, {RoomBit::Corridor, 6},
+};
+constexpr RoomMix kRoomsDeepReactor[] = {
+    {RoomBit::Storage, 36},  {RoomBit::Corridor, 28}, {RoomBit::Production, 18},
+    {RoomBit::Smoking, 10},  {RoomBit::Hq, 8},
+};
+constexpr RoomMix kRoomsFuzzyOutskirts[] = {
+    {RoomBit::Storage, 45},  {RoomBit::Corridor, 35}, {RoomBit::Production, 12},
+    {RoomBit::Common, 8},
 };
 
 struct RoomMixRow { const RoomMix* tab; std::uint8_t n; };
@@ -135,14 +154,36 @@ int floor_room_bit_index(std::uint16_t mask) {
 }
 
 std::uint16_t floor_room_mask(FloorKind kind, int number, int rx, int ry) {
-    std::size_t k = static_cast<std::size_t>(kind);
-    if (k >= static_cast<std::size_t>(FloorKind::Count)) k = 0;
-    const RoomMixRow& row = kRoomMix[k];
+    const int sx = (rx * kRoomStride * kSectorDimX) / kMacroDim;
+    const int sy = (ry * kRoomStride * kSectorDimY) / kMacroDim;
+    const bool inFuzzy = is_cell_in_fuzzy_boundary(sx, sy);
+
+    RoomMixRow row;
+    if (inFuzzy) {
+        row = room_row(kRoomsFuzzyOutskirts);
+    } else if (kind == FloorKind::Padic) {
+        row = room_row(kRoomsPadic);
+    } else {
+        const VerticalBiome vb = floor_vertical_biome(number);
+        switch (vb) {
+            case VerticalBiome::UpperClean:  row = room_row(kRoomsUpperClean); break;
+            case VerticalBiome::Residential: row = room_row(kRoomsResidential); break;
+            case VerticalBiome::CentralHub:  row = room_row(kRoomsCentralHub); break;
+            case VerticalBiome::Industrial:  row = room_row(kRoomsIndustrial); break;
+            case VerticalBiome::DeepReactor: row = room_row(kRoomsDeepReactor); break;
+            default: {
+                std::size_t k = static_cast<std::size_t>(kind);
+                if (k >= static_cast<std::size_t>(FloorKind::Count)) k = 0;
+                row = kRoomMix[k];
+                break;
+            }
+        }
+    }
 
     // A pure hash of the room's identity, with each input on its own odd multiplier so
     // a floor's rooms decorrelate from its neighbour's at the same (rx, ry).
     const std::uint32_t h =
-        hash_u32(static_cast<std::uint32_t>(k) * 0x9E3779B9u ^
+        hash_u32(static_cast<std::uint32_t>(kind) * 0x9E3779B9u ^
               static_cast<std::uint32_t>(number) * 0x85EBCA6Bu ^
               static_cast<std::uint32_t>(rx) * 0x27220A95u ^
               static_cast<std::uint32_t>(ry) * 0x165667B1u);

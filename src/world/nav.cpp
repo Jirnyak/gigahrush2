@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <queue>
 #include <vector>
 
 #include "core/jobs.h"
@@ -253,24 +254,29 @@ void generate_shaft_waypoint_links(int fromFloor, int toFloor,
     const int dir = toFloor > fromFloor ? 1 : -1;
     const Dist floorStepCost = static_cast<Dist>((dir > 0 ? (toFloor - fromFloor) : (fromFloor - toFloor)) * 16);
 
-    for (int hub = 0; hub < kLatticeDim * kLatticeDim; ++hub) {
-        const int ix = hub % kLatticeDim;
-        const int iy = hub / kLatticeDim;
-        const int cx = lattice_coord(ix);
-        const int cy = lattice_coord(iy);
+    // 16 primary elevator shafts distributed across the 32x32 sector grid
+    // Hub sectors at sx in {4, 12, 20, 28}, sy in {4, 12, 20, 28}
+    constexpr int kHubSectors[4] = {4, 12, 20, 28};
+    for (int iyIdx = 0; iyIdx < 4; ++iyIdx) {
+        for (int ixIdx = 0; ixIdx < 4; ++ixIdx) {
+            const int sx = kHubSectors[ixIdx];
+            const int sy = kHubSectors[iyIdx];
+            const int cx = sector_coord_x(sx);
+            const int cy = sector_coord_y(sy);
 
-        const int depZ = (dir > 0) ? lattice_coord(kLatticeDim - 1) : lattice_coord(0);
-        const int arrZ = (dir > 0) ? lattice_coord(0) : lattice_coord(kLatticeDim - 1);
+            const int depZ = (dir > 0) ? 12 : 4;
+            const int arrZ = (dir > 0) ? 4 : 12;
 
-        VerticalWaypointLink link;
-        link.fromFloor = fromFloor;
-        link.toFloor = toFloor;
-        link.fromCell = ivec3{cx, cy, depZ};
-        link.toCell = ivec3{cx, cy, arrZ};
-        link.kind = VerticalTransitKind::ElevatorShaft;
-        link.hubIndex = static_cast<std::uint8_t>(hub);
-        link.cost = floorStepCost;
-        outLinks.push_back(link);
+            VerticalWaypointLink link;
+            link.fromFloor = fromFloor;
+            link.toFloor = toFloor;
+            link.fromCell = ivec3{cx, cy, depZ};
+            link.toCell = ivec3{cx, cy, arrZ};
+            link.kind = VerticalTransitKind::ElevatorShaft;
+            link.hubIndex = static_cast<std::uint16_t>(iyIdx * 4 + ixIdx);
+            link.cost = floorStepCost;
+            outLinks.push_back(link);
+        }
     }
 }
 
@@ -286,58 +292,61 @@ void generate_vertical_links(const MacroGrid& grid, int floorNumber,
     const Dist ladderCost = static_cast<Dist>(absDelta * 32);
     const Dist chuteCost = static_cast<Dist>(absDelta * 8);
 
-    for (int iz = 0; iz < kLatticeDim; ++iz) {
-        const int cz = lattice_coord(iz);
-        for (int iy = 0; iy < kLatticeDim; ++iy) {
-            for (int ix = 0; ix < kLatticeDim; ++ix) {
-                const int cx = lattice_coord(ix);
-                const int cy = lattice_coord(iy);
+    // Scan across the 32x32 sector grid for vertical transit points
+    for (int sy = 0; sy < kSectorDimY; ++sy) {
+        for (int sx = 0; sx < kSectorDimX; ++sx) {
+            const int cx = sector_coord_x(sx);
+            const int cy = sector_coord_y(sy);
+            const int cz = sector_coord_z(0);
 
-                // Stairwell: architectural staircases near room corners
-                const int sx = wrap_macro(cx + 4);
-                const int sy = wrap_macro(cy + 4);
-                if (!grid.mask(sx, sy, cz).full()) {
+            // Stairwells: architectural staircases near sector junctions (every 4 sectors)
+            if ((sx % 4 == 2) && (sy % 4 == 2)) {
+                const int stX = cx + 4;
+                const int stY = cy + 4;
+                if (stX < 512 && stY < 512 && !grid.mask(stX % kMacroDim, stY % kMacroDim, cz % kMacroDim).full()) {
                     VerticalWaypointLink stairLink;
                     stairLink.fromFloor = floorNumber;
                     stairLink.toFloor = adjacentFloor;
-                    stairLink.fromCell = ivec3{sx, sy, cz};
-                    stairLink.toCell = ivec3{sx, sy, wrap_macro(cz + (dir > 0 ? 32 : -32))};
+                    stairLink.fromCell = ivec3{stX, stY, cz};
+                    stairLink.toCell = ivec3{stX, stY, cz};
                     stairLink.kind = VerticalTransitKind::Stairwell;
-                    stairLink.hubIndex = 0xFFu;
+                    stairLink.hubIndex = 0xFFFFu;
                     stairLink.cost = stairCost;
                     outLinks.push_back(stairLink);
                 }
+            }
 
-                // Ladder: vertical maintenance access ladders at shaft perimeter
-                const int lx = wrap_macro(cx - 2);
-                const int ly = wrap_macro(cy - 2);
-                if (!grid.mask(lx, ly, cz).full()) {
+            // Maintenance Ladders: vertical service ladders at perimeter utility corridors
+            if ((sx % 4 == 0) && (sy % 4 == 0)) {
+                const int ldX = cx - 4;
+                const int ldY = cy - 4;
+                if (ldX >= 0 && ldY >= 0 && !grid.mask(ldX % kMacroDim, ldY % kMacroDim, cz % kMacroDim).full()) {
                     VerticalWaypointLink ladderLink;
                     ladderLink.fromFloor = floorNumber;
                     ladderLink.toFloor = adjacentFloor;
-                    ladderLink.fromCell = ivec3{lx, ly, cz};
-                    ladderLink.toCell = ivec3{lx, ly, wrap_macro(cz + (dir > 0 ? 32 : -32))};
+                    ladderLink.fromCell = ivec3{ldX, ldY, cz};
+                    ladderLink.toCell = ivec3{ldX, ldY, cz};
                     ladderLink.kind = VerticalTransitKind::Ladder;
-                    ladderLink.hubIndex = 0xFFu;
+                    ladderLink.hubIndex = 0xFFFFu;
                     ladderLink.cost = ladderCost;
                     outLinks.push_back(ladderLink);
                 }
+            }
 
-                // Gravity Chute: unidirectional downward drops
-                if (dir < 0) {
-                    const int gx = wrap_macro(cx + 2);
-                    const int gy = wrap_macro(cy - 2);
-                    if (!grid.mask(gx, gy, cz).full()) {
-                        VerticalWaypointLink chuteLink;
-                        chuteLink.fromFloor = floorNumber;
-                        chuteLink.toFloor = adjacentFloor;
-                        chuteLink.fromCell = ivec3{gx, gy, cz};
-                        chuteLink.toCell = ivec3{gx, gy, wrap_macro(cz - 32)};
-                        chuteLink.kind = VerticalTransitKind::GravityChute;
-                        chuteLink.hubIndex = 0xFFu;
-                        chuteLink.cost = chuteCost;
-                        outLinks.push_back(chuteLink);
-                    }
+            // Gravity Chutes: Unidirectional emergency drop chutes (strictly downwards)
+            if (dir < 0 && ((sx % 4 == 3) && (sy % 4 == 3))) {
+                const int chX = cx + 2;
+                const int chY = cy - 2;
+                if (chX < 512 && chY >= 0 && !grid.mask(chX % kMacroDim, chY % kMacroDim, cz % kMacroDim).full()) {
+                    VerticalWaypointLink chuteLink;
+                    chuteLink.fromFloor = floorNumber;
+                    chuteLink.toFloor = adjacentFloor;
+                    chuteLink.fromCell = ivec3{chX, chY, cz};
+                    chuteLink.toCell = ivec3{chX, chY, cz};
+                    chuteLink.kind = VerticalTransitKind::GravityChute;
+                    chuteLink.hubIndex = 0xFFFFu;
+                    chuteLink.cost = chuteCost;
+                    outLinks.push_back(chuteLink);
                 }
             }
         }
@@ -372,20 +381,25 @@ MultiFloorPathStep multi_floor_route_step(const CoarseGraph& coarse,
 
         const std::uint8_t lNode = fine.nearest_node(link.fromCell.x, link.fromCell.y, link.fromCell.z);
         Dist coarseDist = 0;
-        if (fNode != kFlowNone && lNode != kFlowNone) {
+        if (fNode != kFlowNone && lNode != kFlowNone && fNode < kNodes && lNode < kNodes) {
             coarseDist = coarse.dist[fNode][lNode];
-            if (coarseDist == kUnreachable) continue;
+            if (coarseDist == kUnreachable) {
+                const int dx = std::abs(fromCell.x - link.fromCell.x);
+                const int dy = std::abs(fromCell.y - link.fromCell.y);
+                const int dz = std::abs(fromCell.z - link.fromCell.z);
+                coarseDist = static_cast<Dist>(dx + dy + dz);
+            }
         } else {
-            const int dx = wrap_delta(fromCell.x, link.fromCell.x, kMacroDim);
-            const int dy = wrap_delta(fromCell.y, link.fromCell.y, kMacroDim);
-            const int dz = wrap_delta(fromCell.z, link.fromCell.z, kMacroDim);
-            coarseDist = static_cast<Dist>(std::abs(dx) + std::abs(dy) + std::abs(dz));
+            const int dx = std::abs(fromCell.x - link.fromCell.x);
+            const int dy = std::abs(fromCell.y - link.fromCell.y);
+            const int dz = std::abs(fromCell.z - link.fromCell.z);
+            coarseDist = static_cast<Dist>(dx + dy + dz);
         }
 
-        const int ex = wrap_delta(link.toCell.x, toCell.x, kMacroDim);
-        const int ey = wrap_delta(link.toCell.y, toCell.y, kMacroDim);
-        const int ez = wrap_delta(link.toCell.z, toCell.z, kMacroDim);
-        const std::uint32_t remDist = static_cast<std::uint32_t>(std::abs(ex) + std::abs(ey) + std::abs(ez));
+        const int ex = std::abs(link.toCell.x - toCell.x);
+        const int ey = std::abs(link.toCell.y - toCell.y);
+        const int ez = std::abs(link.toCell.z - toCell.z);
+        const std::uint32_t remDist = static_cast<std::uint32_t>(ex + ey + ez);
 
         const std::uint32_t totalScore = static_cast<std::uint32_t>(coarseDist) + link.cost + remDist;
         if (totalScore < bestScore) {
@@ -396,26 +410,25 @@ MultiFloorPathStep multi_floor_route_step(const CoarseGraph& coarse,
 
     VerticalWaypointLink fallbackLink;
     if (bestLink == nullptr) {
-        const int ix = lattice_axis_of(fromCell.x);
-        const int iy = lattice_axis_of(fromCell.y);
-        const int hub = iy * kLatticeDim + ix;
+        const int sx = sector_axis_of_x(fromCell.x);
+        const int sy = sector_axis_of_y(fromCell.y);
         fallbackLink.fromFloor = fromFloor;
         fallbackLink.toFloor = toFloor;
-        fallbackLink.fromCell = ivec3{lattice_coord(ix), lattice_coord(iy), fromCell.z};
-        fallbackLink.toCell = ivec3{lattice_coord(ix), lattice_coord(iy), toCell.z};
+        fallbackLink.fromCell = ivec3{sector_coord_x(sx), sector_coord_y(sy), fromCell.z};
+        fallbackLink.toCell = ivec3{sector_coord_x(sx), sector_coord_y(sy), toCell.z};
         fallbackLink.kind = VerticalTransitKind::ElevatorShaft;
-        fallbackLink.hubIndex = static_cast<std::uint8_t>(hub);
+        fallbackLink.hubIndex = static_cast<std::uint16_t>(sector_node_id(sx, sy));
         fallbackLink.cost = static_cast<Dist>(std::abs(toFloor - fromFloor) * 16);
         bestLink = &fallbackLink;
     }
 
-    const int dx = wrap_delta(fromCell.x, bestLink->fromCell.x, kMacroDim);
-    const int dy = wrap_delta(fromCell.y, bestLink->fromCell.y, kMacroDim);
-    const int dz = wrap_delta(fromCell.z, bestLink->fromCell.z, kMacroDim);
+    const int dx = std::abs(fromCell.x - bestLink->fromCell.x);
+    const int dy = std::abs(fromCell.y - bestLink->fromCell.y);
+    const int dz = std::abs(fromCell.z - bestLink->fromCell.z);
 
     const bool inShaft = (bestLink->kind == VerticalTransitKind::ElevatorShaft &&
-                          std::abs(dx) <= 1 && std::abs(dy) <= 1);
-    const bool atCell = (dx == 0 && dy == 0 && dz == 0);
+                          dx <= 2 && dy <= 2);
+    const bool atCell = (dx == 0 && dy == 0 && dz <= 2);
 
     if (inShaft || atCell) {
         step.dir = kFlowArrived;
@@ -427,6 +440,13 @@ MultiFloorPathStep multi_floor_route_step(const CoarseGraph& coarse,
     }
 
     step.dir = route_step(coarse, fine, fromCell, bestLink->fromCell);
+    if (step.dir == kFlowNone) {
+        if (std::abs(bestLink->fromCell.x - fromCell.x) > std::abs(bestLink->fromCell.y - fromCell.y)) {
+            step.dir = (bestLink->fromCell.x > fromCell.x) ? 1 : 0; // +X or -X
+        } else {
+            step.dir = (bestLink->fromCell.y > fromCell.y) ? 3 : 2; // +Y or -Y
+        }
+    }
     step.crossFloor = false;
     step.targetFloor = fromFloor;
     step.transitCell = bestLink->fromCell;
@@ -439,8 +459,9 @@ MultiFloorQueryResult query_multi_floor_path(int fromFloor, ivec3 fromCell,
                                             const std::vector<int>& floorNumbers,
                                             const std::vector<CoarseGraph>& coarseGraphs,
                                             const std::vector<VerticalWaypointLink>& allLinks) {
+    (void)coarseGraphs;
     MultiFloorQueryResult result;
-    if (floorNumbers.empty() || floorNumbers.size() != coarseGraphs.size()) {
+    if (floorNumbers.empty()) {
         return result;
     }
 
@@ -456,91 +477,98 @@ MultiFloorQueryResult query_multi_floor_path(int fromFloor, ivec3 fromCell,
     if (sIdx < 0 || tIdx < 0) return result;
 
     if (fromFloor == toFloor) {
-        const int sNode = lattice_id(lattice_axis_of(fromCell.x),
-                                     lattice_axis_of(fromCell.y),
-                                     lattice_axis_of(fromCell.z));
-        const int tNode = lattice_id(lattice_axis_of(toCell.x),
-                                     lattice_axis_of(toCell.y),
-                                     lattice_axis_of(toCell.z));
-        const Dist d = coarseGraphs[static_cast<std::size_t>(sIdx)].dist[sNode][tNode];
-        if (d != kUnreachable) {
-            result.reachable = true;
-            result.totalDist = d;
-            result.floorHops.push_back(fromFloor);
-        }
+        result.reachable = true;
+        const int dx = std::abs(fromCell.x - toCell.x);
+        const int dy = std::abs(fromCell.y - toCell.y);
+        const int dz = std::abs(fromCell.z - toCell.z);
+        result.totalDist = static_cast<std::uint32_t>(dx + dy + dz);
+        result.floorHops.push_back(fromFloor);
         return result;
     }
 
     const std::size_t numFloors = floorNumbers.size();
-    const std::size_t totalStates = numFloors * static_cast<std::size_t>(kNodes);
+    constexpr std::size_t kNodesPerFloor = static_cast<std::size_t>(kSectorsPerFloor); // 1024
+    const std::size_t totalStates = numFloors * kNodesPerFloor;
+
+    const int startSx = sector_axis_of_x(fromCell.x);
+    const int startSy = sector_axis_of_y(fromCell.y);
+    const int startNode = sector_node_id(startSx, startSy);
+
+    const int targetSx = sector_axis_of_x(toCell.x);
+    const int targetSy = sector_axis_of_y(toCell.y);
+    const int targetNode = sector_node_id(targetSx, targetSy);
+
+    const std::size_t startState = static_cast<std::size_t>(sIdx) * kNodesPerFloor + static_cast<std::size_t>(startNode);
+    const std::size_t targetState = static_cast<std::size_t>(tIdx) * kNodesPerFloor + static_cast<std::size_t>(targetNode);
+
+    // Pre-bucket vertical links by (floorIndex, fromSectorNode) for O(1) adjacency lookup in Dijkstra
+    std::vector<std::vector<int>> linksByState(totalStates);
+    for (std::size_t li = 0; li < allLinks.size(); ++li) {
+        const auto& link = allLinks[li];
+        const int srcFIdx = floorIndex(link.fromFloor);
+        if (srcFIdx < 0) continue;
+        const int linkSx = sector_axis_of_x(link.fromCell.x);
+        const int linkSy = sector_axis_of_y(link.fromCell.y);
+        const int linkNode = sector_node_id(linkSx, linkSy);
+        const std::size_t st = static_cast<std::size_t>(srcFIdx) * kNodesPerFloor + static_cast<std::size_t>(linkNode);
+        if (st < totalStates) {
+            linksByState[st].push_back(static_cast<int>(li));
+        }
+    }
+
     std::vector<std::uint32_t> dist(totalStates, 0xFFFFFFFFu);
     std::vector<int> prev(totalStates, -1);
     std::vector<int> prevLink(totalStates, -1);
 
-    const int startNode = lattice_id(lattice_axis_of(fromCell.x),
-                                     lattice_axis_of(fromCell.y),
-                                     lattice_axis_of(fromCell.z));
-    const int targetNode = lattice_id(lattice_axis_of(toCell.x),
-                                      lattice_axis_of(toCell.y),
-                                      lattice_axis_of(toCell.z));
-
-    const std::size_t startState = static_cast<std::size_t>(sIdx) * kNodes + static_cast<std::size_t>(startNode);
-    const std::size_t targetState = static_cast<std::size_t>(tIdx) * kNodes + static_cast<std::size_t>(targetNode);
-
     dist[startState] = 0;
-    std::vector<bool> visited(totalStates, false);
 
-    for (std::size_t it = 0; it < totalStates; ++it) {
-        std::size_t u = totalStates;
-        std::uint32_t minDist = 0xFFFFFFFFu;
-        for (std::size_t i = 0; i < totalStates; ++i) {
-            if (!visited[i] && dist[i] < minDist) {
-                minDist = dist[i];
-                u = i;
-            }
-        }
-        if (u == totalStates || minDist == 0xFFFFFFFFu) break;
+    // Min-heap Priority Queue for Dijkstra across 100-floor stack (up to 102,400 states)
+    using PQEntry = std::pair<std::uint32_t, std::uint32_t>; // (dist, state)
+    std::priority_queue<PQEntry, std::vector<PQEntry>, std::greater<PQEntry>> pq;
+    pq.push({0u, static_cast<std::uint32_t>(startState)});
+
+    while (!pq.empty()) {
+        const auto [d, u] = pq.top();
+        pq.pop();
+
+        if (d > dist[u]) continue;
         if (u == targetState) break;
-        visited[u] = true;
 
-        const int fIdx = static_cast<int>(u / kNodes);
-        const int uNode = static_cast<int>(u % kNodes);
-        const int fNum = floorNumbers[static_cast<std::size_t>(fIdx)];
-        const auto& cGraph = coarseGraphs[static_cast<std::size_t>(fIdx)];
+        const int fIdx = static_cast<int>(u / kNodesPerFloor);
+        const int uNode = static_cast<int>(u % kNodesPerFloor);
 
-        for (int d = 0; d < 6; ++d) {
-            const int vNode = lattice_neighbor(uNode, d);
-            const Dist w = cGraph.edge[uNode][d];
-            if (w != kUnreachable) {
-                const std::size_t vState = static_cast<std::size_t>(fIdx) * kNodes + static_cast<std::size_t>(vNode);
-                if (dist[u] + w < dist[vState]) {
-                    dist[vState] = dist[u] + w;
-                    prev[vState] = static_cast<int>(u);
-                    prevLink[vState] = -1;
-                }
+        // 1. Planar 4-neighbor transitions within the same floor slice
+        for (int dir = 0; dir < 4; ++dir) {
+            const int vNode = sector_neighbor(uNode, dir);
+            if (vNode < 0) continue;
+
+            const std::size_t vState = static_cast<std::size_t>(fIdx) * kNodesPerFloor + static_cast<std::size_t>(vNode);
+            constexpr std::uint32_t kStepCost = static_cast<std::uint32_t>(kSectorCellSize); // 16 cells per sector
+            if (dist[u] + kStepCost < dist[vState]) {
+                dist[vState] = dist[u] + kStepCost;
+                prev[vState] = static_cast<int>(u);
+                prevLink[vState] = -1; // Intra-floor step
+                pq.push({dist[vState], static_cast<std::uint32_t>(vState)});
             }
         }
 
-        for (std::size_t li = 0; li < allLinks.size(); ++li) {
-            const auto& link = allLinks[li];
-            if (link.fromFloor != fNum) continue;
-            const int linkDepNode = lattice_id(lattice_axis_of(link.fromCell.x),
-                                               lattice_axis_of(link.fromCell.y),
-                                               lattice_axis_of(link.fromCell.z));
-            if (linkDepNode != uNode) continue;
-
+        // 2. Vertical transit transitions via ElevatorShaft, Stairwell, Ladder, GravityChute
+        for (int li : linksByState[u]) {
+            const auto& link = allLinks[static_cast<std::size_t>(li)];
             const int dstFIdx = floorIndex(link.toFloor);
             if (dstFIdx < 0) continue;
 
-            const int linkArrNode = lattice_id(lattice_axis_of(link.toCell.x),
-                                               lattice_axis_of(link.toCell.y),
-                                               lattice_axis_of(link.toCell.z));
-            const std::size_t vState = static_cast<std::size_t>(dstFIdx) * kNodes + static_cast<std::size_t>(linkArrNode);
-            const std::uint32_t cost = dist[u] + link.cost;
+            const int dstSx = sector_axis_of_x(link.toCell.x);
+            const int dstSy = sector_axis_of_y(link.toCell.y);
+            const int dstNode = sector_node_id(dstSx, dstSy);
+            const std::size_t vState = static_cast<std::size_t>(dstFIdx) * kNodesPerFloor + static_cast<std::size_t>(dstNode);
+
+            const std::uint32_t cost = dist[u] + static_cast<std::uint32_t>(link.cost);
             if (cost < dist[vState]) {
                 dist[vState] = cost;
                 prev[vState] = static_cast<int>(u);
-                prevLink[vState] = static_cast<int>(li);
+                prevLink[vState] = li;
+                pq.push({cost, static_cast<std::uint32_t>(vState)});
             }
         }
     }
@@ -563,7 +591,7 @@ MultiFloorQueryResult query_multi_floor_path(int fromFloor, ivec3 fromCell,
 
     int lastFloor = -999999;
     for (int st : pathStates) {
-        const int fl = floorNumbers[static_cast<std::size_t>(st / kNodes)];
+        const int fl = floorNumbers[static_cast<std::size_t>(st / kNodesPerFloor)];
         if (fl != lastFloor) {
             result.floorHops.push_back(fl);
             lastFloor = fl;

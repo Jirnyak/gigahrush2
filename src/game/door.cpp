@@ -8,6 +8,7 @@
 #include "game/item_table.h"
 #include "game/mob_spawn.h"   // MobRef
 #include "game/mob_table.h"
+#include "game/sector_layout.h"
 #include "world/materials.h"
 #include "world/world.h"
 
@@ -181,6 +182,10 @@ std::uint32_t door_build(World& world, DoorSet& doors, int number,
         if (g.cell(cx, cy, cz + h) != kCellAir)
             g.set_cell(cx, cy, cz + h, kMatDoor);
     }
+
+    // Stamp sealed zero-class airlock bulkheads along the ~400m fuzzy boundary perimeter
+    generate_sector_airlock_bulkheads(world, doors, number, spec, seed);
+
     return static_cast<std::uint32_t>(doors.doors.size());
 }
 

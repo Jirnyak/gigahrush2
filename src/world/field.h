@@ -24,7 +24,7 @@
 
 namespace giga {
 
-// A dense 128^3 array of T. Toroidal accessors mirror the macro grid so field
+// A dense 512x512x16 array of T. Bounded accessors mirror the macro grid so field
 // coordinates and cell coordinates always line up.
 template <class T>
 class Field {
@@ -32,10 +32,12 @@ public:
     explicit Field(const T& init = T{}) : data_(kMacroCells, init) {}
 
     T& at(int x, int y, int z) {
-        return data_[macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z))];
+        const auto c = clamp_macro(x, y, z);
+        return data_[macro_index(c.x, c.y, c.z)];
     }
     const T& at(int x, int y, int z) const {
-        return data_[macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z))];
+        const auto c = clamp_macro(x, y, z);
+        return data_[macro_index(c.x, c.y, c.z)];
     }
 
     std::vector<T>& data() { return data_; }

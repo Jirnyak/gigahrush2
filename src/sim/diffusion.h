@@ -150,6 +150,7 @@
 
 #include "core/math.h"         // giga::vec3
 #include "core/tick.h"         // giga::kSimHz — the sweep cadence is stated in sim ticks
+#include "sim/spatial_activity.h" // giga::SpatialActivityGrid
 #include "world/field.h"       // giga::Field
 #include "world/level_stack.h" // giga::LayerId, kInvalidLayer — the driver's floor token
 #include "world/world.h"       // giga::World, MacroGrid
@@ -373,16 +374,22 @@ float diffusion_add_at(World& world, vec3 pos, float amount,
 //     resume when it next deposits. Skipping this is the difference between paying
 //     a sweep every 200 ms forever and paying it only while a floor is actually hot.
 //
-// A caller that ignores both still gets correct results, just at full price.
+// Advance the named field one deterministic sweep over `world`.
+// If `activity` is non-null, only active HOT (125 Hz) and WARM (25 Hz on tick % 5 == 0)
+// sectors are stepped; COLD sectors and skipped WARM sectors preserve their values.
 DiffusionStep diffusion_step(World& world, DiffusionScratch& scratch,
-                             const DiffusionParams& params = {});
+                             const DiffusionParams& params = {},
+                             const SpatialActivityGrid* activity = nullptr,
+                             std::uint64_t tick = 0);
 
 // Scratchless overload for one-off callers and tests: allocates a DiffusionScratch,
 // sweeps once, and drops it. Bit-identical to the scratch form — same code path, the
 // scratch just does not survive the call — so it costs the 8.00 MiB back buffer plus a
 // full bitset rebuild EVERY call. Correct anywhere, affordable only where the cadence
 // is "once"; anything sweeping on a clock owns a scratch.
-DiffusionStep diffusion_step(World& world, const DiffusionParams& params = {});
+DiffusionStep diffusion_step(World& world, const DiffusionParams& params = {},
+                             const SpatialActivityGrid* activity = nullptr,
+                             std::uint64_t tick = 0);
 
 // The spatial gradient of a field at a cell: a wrapped central difference over OPEN
 // neighbours per axis, one-sided when a side is walled (that side carries no flux),
@@ -508,6 +515,7 @@ void diffusion_driver_on_floor_built(DiffusionDriver& driver, World& world, Laye
 // any monotonically increasing per-step counter works and the phase is whatever the
 // caller's counter already has.
 bool diffusion_tick(DiffusionDriver& driver, World& world, LayerId layer,
-                    std::uint64_t simTick, const DiffusionParams& params = {});
+                    std::uint64_t simTick, const DiffusionParams& params = {},
+                    const SpatialActivityGrid* activity = nullptr);
 
 } // namespace giga

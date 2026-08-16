@@ -424,6 +424,7 @@ public:
     bool has_coarse(int floorNumber) const;
     const nav::CoarseGraph* coarse_for(int floorNumber) const;
     void store_coarse(int floorNumber, const nav::CoarseGraph& coarse);
+    void store_coarse(const NavCacheKey& key, const nav::CoarseGraph& coarse);
     void clear();
 
     std::size_t cached_count() const { return entries_.size(); }

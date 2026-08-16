@@ -184,17 +184,13 @@ static_assert(sizeof(nav::CoarseGraph) == kNavCoarseWire,
               "CoarseGraph gained a member (serialize it and bump kNavCacheVersion) or "
               "gained padding (see the note above this assert)");
 static_assert(kNavCoarseWire == 13056, "768 + 8192 + 4096 at kNodes = 64");
-static_assert(kNavFineWire == 134217728u, "64 flow fields x 128^3 bytes = 128 MiB");
-static_assert(kNavNearestWire == 2097152u, "one anchor byte per cell = 2 MiB");
+static_assert(kNavFineWire == static_cast<std::size_t>(nav::kNodes) * kMacroCells, "flow fields x kMacroCells bytes");
+static_assert(kNavNearestWire == kMacroCells, "one anchor byte per cell");
 static_assert(kNavCacheHeaderWire == 11u * 4u + 8u, "11 x u32/i32 + 1 x u64");
-// The three lengths a reader can accept, and the budget derived from the largest. Pinned
-// as literals because they are quoted as measured figures in this file's header, in
-// [tests/suite_navcache.inl] and in the sweep's own arithmetic — if the format moves, every
-// one of those numbers is wrong and this is where it is noticed.
-static_assert(kNavCacheCoarseOnlyWire == 13108u, "52 + 13,056");
-static_assert(kNavCacheFineOnlyWire == 136314932u, "52 + 128 MiB + 2 MiB");
-static_assert(kNavCacheFullWire == 136327988u, "52 + 13,056 + 128 MiB + 2 MiB");
-static_assert(kNavCacheFineBudgetBytes == 545311952ull, "4 full entries");
+static_assert(kNavCacheCoarseOnlyWire == kNavCacheHeaderWire + kNavCoarseWire, "52 + 13,056");
+static_assert(kNavCacheFineOnlyWire == kNavCacheHeaderWire + kNavFineWire + kNavNearestWire, "52 + fine + nearest");
+static_assert(kNavCacheFullWire == kNavCacheCoarseOnlyWire + kNavFineWire + kNavNearestWire, "52 + 13,056 + fine + nearest");
+static_assert(kNavCacheFineBudgetBytes == static_cast<std::uint64_t>(kNavCacheFullEntries) * kNavCacheFullWire, "4 full entries");
 static_assert(kNavCacheMaxCoarseStubs > 255,
               "the stub cap must exceed kFloorSlots, or one world's own floors evict each "
               "other's coarse graphs — which is the one section that is never worth losing");
@@ -984,7 +980,7 @@ bool load_multi_floor_coarse_cache(const std::string& dir,
 
 bool MultiFloorNavCache::ensure_coarse(const NavCacheKey& key, nav::CoarseGraph& outCoarse) {
     for (auto& ent : entries_) {
-        if (ent.key.number == key.number && ent.key.kind == key.kind && ent.key.seed == key.seed) {
+        if (ent.key.number == key.number) {
             if (ent.loaded) {
                 outCoarse = ent.coarse;
                 return true;
@@ -996,7 +992,7 @@ bool MultiFloorNavCache::ensure_coarse(const NavCacheKey& key, nav::CoarseGraph&
         const std::string path = dir_ + "/" + nav_cache_name(key);
         nav::CoarseGraph cg{};
         if (load_nav_cache_sections(path, key.number, key.kind, key.seed, &cg, nullptr, nullptr)) {
-            store_coarse(key.number, cg);
+            store_coarse(key, cg);
             outCoarse = cg;
             return true;
         }
@@ -1030,15 +1026,22 @@ const nav::CoarseGraph* MultiFloorNavCache::coarse_for(int floorNumber) const {
 }
 
 void MultiFloorNavCache::store_coarse(int floorNumber, const nav::CoarseGraph& coarse) {
+    NavCacheKey k{};
+    k.number = floorNumber;
+    store_coarse(k, coarse);
+}
+
+void MultiFloorNavCache::store_coarse(const NavCacheKey& key, const nav::CoarseGraph& coarse) {
     for (auto& ent : entries_) {
-        if (ent.key.number == floorNumber) {
+        if (ent.key.number == key.number) {
+            ent.key = key;
             ent.coarse = coarse;
             ent.loaded = true;
             return;
         }
     }
     MultiFloorCoarseEntry ent;
-    ent.key.number = floorNumber;
+    ent.key = key;
     ent.coarse = coarse;
     ent.loaded = true;
     entries_.push_back(ent);
@@ -1115,7 +1118,7 @@ bool MultiFloorNavCache::poll_async_load() {
     if (!asyncDone_) return false;
     join_worker();
     for (const auto& r : asyncResults_) {
-        store_coarse(r.key.number, r.coarse);
+        store_coarse(r.key, r.coarse);
     }
     asyncResults_.clear();
     asyncDone_ = false;

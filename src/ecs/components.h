@@ -81,6 +81,15 @@ struct CameraTag {
     vec3 eyeOffset{0, 0, 0.7f}; // eye relative to Transform::pos
 };
 
+// Marks an entity as an active observer (camera, sensor, player view, detector).
+// SpatialActivityGrid uses this to assign HOT status (125 Hz) to sectors within 200m.
+struct ObserverTag {};
+
+// Marks an active combat engagement / focal point in world space.
+// SpatialActivityGrid uses this to assign HOT status (125 Hz) to sectors within 200m.
+struct ActiveCombatTag {};
+
+
 // Attach to make an entity respond to input. The input layer writes movement
 // intent here; the controller system turns it into velocity.
 struct Controller {

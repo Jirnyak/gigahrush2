@@ -88,38 +88,68 @@ bool aabb_overlaps_solid(const World& world, vec3 pos, vec3 half) {
     return false;
 }
 
+bool aabb_overlaps_macro(const World& world, vec3 pos, vec3 half) {
+    constexpr float kInvCell = 1.0f / kCellSize;
+    const int cx0 = static_cast<int>(std::floor((pos.x - half.x) * kInvCell));
+    const int cx1 = static_cast<int>(std::floor((pos.x + half.x) * kInvCell));
+    const int cy0 = static_cast<int>(std::floor((pos.y - half.y) * kInvCell));
+    const int cy1 = static_cast<int>(std::floor((pos.y + half.y) * kInvCell));
+    const int cz0 = static_cast<int>(std::floor((pos.z - half.z) * kInvCell));
+    const int cz1 = static_cast<int>(std::floor((pos.z + half.z) * kInvCell));
+
+    const MacroGrid& grid = world.grid();
+
+    for (int cz = cz0; cz <= cz1; ++cz) {
+        const int mcz = wrap_macro(cz);
+        for (int cy = cy0; cy <= cy1; ++cy) {
+            const int mcy = wrap_macro(cy);
+            for (int cx = cx0; cx <= cx1; ++cx) {
+                const int mcx = wrap_macro(cx);
+                const SubMask& mask = grid.mask(mcx, mcy, mcz);
+                if (!mask.empty()) return true;
+            }
+        }
+    }
+    return false;
+}
+
 namespace {
 
 // Move `pos` along one axis by `delta`, backing out of any solid overlap. The
 // axis is selected by `comp` (0=x,1=y,2=z). Returns true if a collision on this
 // axis stopped the motion (used to zero the matching velocity component).
-bool sweep_axis(const World& w, vec3& pos, vec3 half, int comp, float delta) {
+bool sweep_axis(const World& w, vec3& pos, vec3 half, int comp, float delta, bool macroOnly = false) {
     if (delta == 0.0f) return false;
     float* p = (comp == 0) ? &pos.x : (comp == 1) ? &pos.y : &pos.z;
     const float old = *p;
     const float dist = std::fabs(delta);
+    const float stepSize = macroOnly ? kCellSize : kVoxelSize;
 
-    // If displacement along this axis is within one sub-voxel, a single check at
+    // If displacement along this axis is within one step, a single check at
     // the endpoint suffices; otherwise sample intermediate steps to prevent
-    // tunneling through thin sub-voxel walls.
-    const int numSteps = (dist <= kVoxelSize)
+    // tunneling through thin walls.
+    const int numSteps = (dist <= stepSize)
         ? 1
-        : std::max(1, static_cast<int>(std::ceil(dist / kVoxelSize)));
+        : std::max(1, static_cast<int>(std::ceil(dist / stepSize)));
 
     const float stepDelta = delta / static_cast<float>(numSteps);
 
     for (int step = 1; step <= numSteps; ++step) {
         const float t_curr = (step == numSteps) ? delta : (static_cast<float>(step) * stepDelta);
         *p = old + t_curr;
-        if (aabb_overlaps_solid(w, pos, half)) {
+        const bool overlap = macroOnly ? aabb_overlaps_macro(w, pos, half)
+                                       : aabb_overlaps_solid(w, pos, half);
+        if (overlap) {
             // Collided: binary-search back to the last non-overlapping position so the
-            // box rests flush against the sub-voxel surface.
+            // box rests flush against the surface.
             const float t_prev = static_cast<float>(step - 1) * stepDelta;
             float lo = t_prev, hi = t_curr;
             for (int i = 0; i < 12; ++i) {
                 float mid = 0.5f * (lo + hi);
                 *p = old + mid;
-                if (aabb_overlaps_solid(w, pos, half)) hi = mid; else lo = mid;
+                const bool midOverlap = macroOnly ? aabb_overlaps_macro(w, pos, half)
+                                                  : aabb_overlaps_solid(w, pos, half);
+                if (midOverlap) hi = mid; else lo = mid;
             }
             *p = old + lo;
             return true;
@@ -146,20 +176,22 @@ constexpr float kStepGainEps = 1e-4f;
 // walkers on regional/inverted gravity step the same way; flyers and
 // projectiles never pass `canStep` and keep the plain sweep.
 bool sweep_axis_walk(const World& w, vec3& pos, vec3 half, int comp,
-                     float delta, bool canStep, int upComp, float upSign) {
+                     float delta, bool canStep, int upComp, float upSign,
+                     bool macroOnly = false) {
     vec3 flush = pos;
-    const bool hit = sweep_axis(w, flush, half, comp, delta);
+    const bool hit = sweep_axis(w, flush, half, comp, delta, macroOnly);
     if (!hit || !canStep || comp == upComp) {
         pos = flush;
         return hit;
     }
 
+    const float stepRise = macroOnly ? (kCellSize + 0.01f) : kStepRise;
     vec3 lifted = pos;
-    if (sweep_axis(w, lifted, half, upComp, kStepRise * upSign)) {
+    if (sweep_axis(w, lifted, half, upComp, stepRise * upSign, macroOnly)) {
         pos = flush; // no headroom above — nothing to step onto
         return true;
     }
-    const bool hitLifted = sweep_axis(w, lifted, half, comp, delta);
+    const bool hitLifted = sweep_axis(w, lifted, half, comp, delta, macroOnly);
     const float dir = delta > 0.0f ? 1.0f : -1.0f;
     const float gain =
         (axis_of(lifted, comp) - axis_of(flush, comp)) * dir;
@@ -168,7 +200,7 @@ bool sweep_axis_walk(const World& w, vec3& pos, vec3 half, int comp,
         return true;
     }
     // Settle flush onto the step; the landing is this sweep's own clamp.
-    sweep_axis(w, lifted, half, upComp, -kStepRise * upSign);
+    sweep_axis(w, lifted, half, upComp, -stepRise * upSign, macroOnly);
     pos = lifted;
     return hitLifted;
 }
@@ -176,7 +208,9 @@ bool sweep_axis_walk(const World& w, vec3& pos, vec3 half, int comp,
 } // namespace
 
 void physics_step(Registry& reg, LevelStack& stack, float dt,
-                  const PhysicsParams& params) {
+                  const PhysicsParams& params,
+                  const SpatialActivityGrid* activity,
+                  std::uint64_t tick) {
     if (dt <= 0.0f) return;
 
     // Excludes anything that integrates its own motion. Projectiles do, and until
@@ -189,6 +223,10 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
     float maxSpeedSq = 0.0f;
     for (auto e : view) {
         if (reg.all_of<NoClip>(e)) continue;
+        if (activity != nullptr) {
+            const auto& tr = view.get<Transform>(e);
+            if (activity->activity_at(tr.pos) == SectorActivity::Cold) continue;
+        }
         const auto& vel = view.get<Velocity>(e);
         const float speedSq = vel.v.x * vel.v.x + vel.v.y * vel.v.y + vel.v.z * vel.v.z;
         if (speedSq > maxSpeedSq) {
@@ -209,6 +247,18 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
             auto& tr = view.get<Transform>(e);
             auto& vel = view.get<Velocity>(e);
             if (!stack.valid(tr.layer)) continue;
+
+            bool macroOnly = false;
+            if (activity != nullptr) {
+                const SectorActivity act = activity->activity_at(tr.pos);
+                if (act == SectorActivity::Cold) {
+                    continue; // Skip COLD sectors (MacroSim)
+                }
+                if (act == SectorActivity::Warm) {
+                    macroOnly = true; // Macro-cell collision for WARM sectors
+                }
+            }
+
             World& w = stack.layer(tr.layer);
 
             // Noclip: integrate + wrap, nothing else. No gravity, no jump, no
@@ -275,11 +325,11 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
             // Integrate + collide, one axis at a time; grounded walkers step
             // over single sub-voxel atoms instead of snagging on them.
             bool hitX = sweep_axis_walk(w, tr.pos, half, 0, vel.v.x * h,
-                                        canStep, upComp, upSign);
+                                        canStep, upComp, upSign, macroOnly);
             bool hitY = sweep_axis_walk(w, tr.pos, half, 1, vel.v.y * h,
-                                        canStep, upComp, upSign);
+                                        canStep, upComp, upSign, macroOnly);
             bool hitZ = sweep_axis_walk(w, tr.pos, half, 2, vel.v.z * h,
-                                        canStep, upComp, upSign);
+                                        canStep, upComp, upSign, macroOnly);
             // Impact report BEFORE zeroing: the killed velocity is the impact
             // speed the game layer's universal law (E = m*v^2/2 over Mass)
             // consumes. 4 m/s floor keeps ordinary walking/jump landings from
@@ -328,13 +378,17 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
             const bool isDebris = reg.all_of<DynamicBodyTag>(e);
             if (g && g->grounded && isDebris) {
                 constexpr float kContactSkin = 0.02f;
-                if (aabb_overlaps_solid(w, tr.pos, half)) {
+                const auto overlap_check = [&](vec3 p) {
+                    return macroOnly ? aabb_overlaps_macro(w, p, half)
+                                     : aabb_overlaps_solid(w, p, half);
+                };
+                if (overlap_check(tr.pos)) {
                     vec3 lifted = tr.pos;
                     const float lift = kContactSkin * upSign;
                     if (upComp == 0) lifted.x += lift;
                     else if (upComp == 1) lifted.y += lift;
                     else lifted.z += lift;
-                    if (!aabb_overlaps_solid(w, lifted, half)) {
+                    if (!overlap_check(lifted)) {
                         tr.pos = lifted;
                     }
                 }

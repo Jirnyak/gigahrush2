@@ -10,6 +10,7 @@
 #pragma once
 
 #include "ecs/registry.h"
+#include "sim/spatial_activity.h"
 #include "world/level_stack.h"
 
 namespace giga {
@@ -35,11 +36,20 @@ struct PhysicsParams {
 };
 
 // Advance all dynamic entities by dt seconds against their layers.
+// If `activity` is non-null, entities in COLD sectors (>450m) are skipped (MacroSim),
+// entities in WARM sectors (200-450m) use macro-cell collision, and entities in HOT
+// sectors (<=200m) use full sub-voxel swept collision.
 void physics_step(Registry& reg, LevelStack& stack, float dt,
-                  const PhysicsParams& params = {});
+                  const PhysicsParams& params = {},
+                  const SpatialActivityGrid* activity = nullptr,
+                  std::uint64_t tick = 0);
 
 // True if the AABB centered at `pos` overlaps any solid sub-voxel in `world`.
 // Exposed for tests and for gameplay queries (line-of-fire, placement checks).
 bool aabb_overlaps_solid(const class World& world, vec3 pos, vec3 half);
+
+// True if the AABB centered at `pos` overlaps any non-empty macro-cell in `world`.
+// Used for fast macro-cell collision in WARM sectors (Spec 22 §3.1).
+bool aabb_overlaps_macro(const class World& world, vec3 pos, vec3 half);
 
 } // namespace giga
