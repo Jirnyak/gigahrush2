@@ -471,6 +471,9 @@ public:
     // LIVE columns now depend on it: they are only sized to cover count().
     std::uint8_t&  flags(NpcId id)   { return flags_[id]; }
     std::uint16_t& faction(NpcId id) { return faction_[id]; }
+    // Const read side, for passes that take `const NpcPool&` (the panic
+    // publisher reads faction traits and must not be handed write access).
+    std::uint16_t  faction(NpcId id) const { return faction_[id]; }
     std::int16_t&  hp(NpcId id)      { return hp_[id]; }
     std::int16_t&  max_hp(NpcId id)  { return maxHp_[id]; }
 

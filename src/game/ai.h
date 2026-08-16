@@ -1006,6 +1006,8 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
 
 namespace giga {
 struct GravityField;
+struct DiffusionDriver;
+class World;
 namespace nav {
 struct CoarseGraph;
 struct FineNav;
@@ -1026,6 +1028,16 @@ namespace giga::game {
 void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
                     const nav::FineNav& fine, LayerId layer, float dt,
                     const GravityField* gravity = nullptr);
+
+// The danger field's PRODUCER — the write half of the loop ai_step's threat
+// term has been waiting on ([diffusion.h], problems.md §52). Fleeing bodies
+// (IntentFlee/IntentSafety) publish `faction panic × dt` at their own cell
+// through the driver; the sweep and decay stay the driver's business. Runs
+// before diffusion_tick in the same sim tick, so a panic published on tick N
+// spreads on the next cadence sweep, never racing it.
+void ai_panic_publish_step(Registry& reg, const NpcPool& pool,
+                           DiffusionDriver& driver, World& world,
+                           LayerId layer, float dt);
 
 // --- Recorders anything may call --------------------------------------------
 // The write side of the seam, deliberately public and deliberately tiny: filing a

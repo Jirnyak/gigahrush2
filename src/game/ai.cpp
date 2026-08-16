@@ -1220,4 +1220,32 @@ void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
     }
 }
 
+void ai_panic_publish_step(Registry& reg, const NpcPool& pool,
+                           DiffusionDriver& driver, World& world,
+                           LayerId layer, float dt) {
+    // 1.0 danger-unit per second of full-panic flight. The faction trait scales
+    // it: a fleeing Liquidator (panic 0.22) alarms a corridor less than a
+    // fleeing Citizen (0.50) — the same table ai_step scores from, so the field
+    // and the behaviour cannot drift apart.
+    constexpr float kPanicEmit = 1.0f;
+
+    auto view = reg.view<const AiBrain, const NpcRef, const Transform>();
+    for (auto e : view) {
+        const Transform& tr = view.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+
+        const AiBrain& brain = view.get<const AiBrain>(e);
+        if (brain.currentIntent == IntentFlee || brain.currentIntent == IntentSafety) {
+            const NpcId id = view.get<const NpcRef>(e).id;
+            if (!pool.valid(id)) continue;
+
+            const FactionTraits& ft = faction_traits(pool.faction(id));
+            const float emitAmount = kPanicEmit * dt * ft.panic;
+            if (emitAmount > 0.0f) {
+                diffusion_driver_add_at(driver, world, tr.pos, emitAmount, kDangerField);
+            }
+        }
+    }
+}
+
 } // namespace giga::game
