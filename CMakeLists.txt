@@ -259,7 +259,7 @@ set(_giga_spv_files "")
 # explicit list rather than a GLOB — a stray .glsl should not silently start forcing
 # every shader to recompile.
 set(_giga_glsl_includes ${CMAKE_SOURCE_DIR}/shaders/material_surface.glsl ${CMAKE_SOURCE_DIR}/shaders/volumetric_fog.glsl)
-foreach(_sh cube.frag body.vert prop.vert prop.frag raymarch.vert raymarch.frag wire.vert wire.frag particle.vert particle.frag cloth.vert cloth.frag)
+foreach(_sh cube.frag body.vert prop.vert prop.frag raymarch.vert raymarch.frag wire.vert wire.frag particle.vert particle.frag cloth.vert cloth.frag post_pass.vert post_pass.frag)
     add_custom_command(
         OUTPUT ${_giga_spv_dir}/${_sh}.spv
         COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O

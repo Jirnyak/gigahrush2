@@ -1,10 +1,31 @@
-// Frame lifecycle: swapchain, depth buffer, render pass, framebuffers, and the
-// per-frame sync primitives. Owns the double-buffered command recording and the
-// acquire/submit/present dance, including resize-driven swapchain recreation.
+// Frame lifecycle: swapchain, offscreen HDR scene target, depth buffer, the two
+// render passes, framebuffers, and the per-frame sync primitives. Owns the
+// double-buffered command recording and the acquire/submit/present dance,
+// including resize-driven swapchain recreation.
 //
-// The renderer itself is draw-agnostic: begin_frame() opens the render pass and
-// hands back the active command buffer; callers (the cube pass, the ImGui pass)
-// record into it; end_frame() closes and presents.
+// Кадр — ДВА паса (порт форка 16004b86 с двумя правками, см. ниже):
+//   1. Сценовый пас: мир/тела/пропсы рисуют в оффскрин HDR-таргет
+//      (R16G16B16A16F). begin_pass() открывает его.
+//   2. Пост-пас: полноэкранный треугольник (post_pass.frag) семплит HDR-таргет
+//      в свопчейн — CRT-кривизна, скан-линии, хроматика, виньетка, фосфорный
+//      налёт, экспозиция тёмной адаптации. begin_post_pass() закрывает сцену и
+//      открывает его; ImGui пишет ПОСЛЕ треугольника, ПОВЕРХ обработки.
+//
+// Правка 1 — UI вне трубки: у форка ImGui жил в сценовом пасе, и весь
+// интерфейс гнуло кривизной и глушило адаптацией. Пиксельная заставка, сетка
+// инвентаря и HUD обязаны быть резкими: UI — это НЕ то, что видит герой через
+// люминофор, это то, что видит игрок. Поэтому begin_post_pass() зовётся ДО
+// hud.render(), и весь ImGui ложится в свопчейн нетронутым.
+//
+// Правка 2 — гонка write-after-read: единственный HDR-таргет читается
+// пост-пасом кадра N фрагмент-шейдером, а кадр N+1 начинает писать в него же;
+// у форка external-зависимость сценового паса ждала только COLOR_ATTACHMENT,
+// чтение же происходит в FRAGMENT_SHADER — кадры в полёте могли наложиться.
+// Дублировать таргет не нужно: достаточно FRAGMENT_SHADER в srcStageMask
+// external-зависимости (WAR-хазард закрывается execution-зависимостью).
+//
+// The renderer itself is draw-agnostic: begin_frame() opens the scene pass and
+// hands back the active command buffer; callers record into it.
 #pragma once
 
 #include <vulkan/vulkan.h>
@@ -26,11 +47,32 @@ struct VulkanRenderer {
     // Non-owning; must outlive the renderer.
     VulkanDevice* dev = nullptr;
 
-    VkRenderPass renderPass = VK_NULL_HANDLE;
+    VkRenderPass renderPass = VK_NULL_HANDLE; // сценовый пас (HDR-таргет)
     VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
     VkImage depthImage = VK_NULL_HANDLE;
     VkDeviceMemory depthMemory = VK_NULL_HANDLE;
     VkImageView depthView = VK_NULL_HANDLE;
+
+    // Оффскрин HDR-таргет сцены — вход пост-паса.
+    VkFormat hdrFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+    VkImage hdrImage = VK_NULL_HANDLE;
+    VkDeviceMemory hdrMemory = VK_NULL_HANDLE;
+    VkImageView hdrView = VK_NULL_HANDLE;
+    VkSampler hdrSampler = VK_NULL_HANDLE;
+
+    // Пост-пас: свопчейн-таргет, полноэкранный треугольник + ImGui поверх.
+    VkRenderPass postRenderPass = VK_NULL_HANDLE;
+
+    // Ручки пост-обработки; main выставляет их до begin_post_pass().
+    // darkAdaptation — экспозиция зрачка (драйвер в main: асимметричные тау),
+    // остальное — характер трубки. crtEnabled=false (--no-crt) даёт сырой кадр.
+    float darkAdaptation = 1.0f;
+    bool crtEnabled = true;
+    float chromaticAberration = 0.003f;
+    float crtCurvature = 0.035f;
+    float scanlineIntensity = 0.35f;
+    float vignettePower = 0.40f;
+    float phosphorWash = 0.04f;
 
     VkCommandPool cmdPool = VK_NULL_HANDLE;
     VkCommandBuffer cmd[kMaxFramesInFlight] = {};
@@ -51,18 +93,24 @@ struct VulkanRenderer {
     // bracket their own draws with timer.pass_begin/pass_end. See gpu_timer.h.
     GpuTimer timer;
 
-    bool init(VulkanDevice& dev, SDL_Window* window);
+    bool init(VulkanDevice& dev, SDL_Window* window, const char* shaderDir);
     void destroy();
 
     // Begins command buffer recording for the frame without starting the render pass.
     bool begin_frame_cmd(SDL_Window* window);
-    // Begins the render pass with the given clear colour.
+    // Begins the scene render pass with the given clear colour.
     void begin_pass(float r, float g, float b);
 
-    // Begins the frame + render pass with the given clear colour. Returns false
+    // Begins the frame + scene pass with the given clear colour. Returns false
     // if the frame was skipped (e.g. swapchain out of date / minimized).
     bool begin_frame(SDL_Window* window, float r, float g, float b);
-    // Closes the render pass, submits, and presents.
+
+    // Закрывает сценовый пас, открывает пост-пас и рисует CRT-треугольник.
+    // Пас остаётся ОТКРЫТЫМ: всё, что запишется дальше (ImGui), ложится в
+    // свопчейн поверх обработки — резкое, без кривизны и экспозиции.
+    void begin_post_pass();
+
+    // Closes the post pass, submits, and presents.
     bool end_frame(SDL_Window* window);
 
     VkCommandBuffer current_cmd() const { return cmd[currentFrame]; }
@@ -90,13 +138,26 @@ private:
     VulkanSwapchain* swapchain_ = nullptr;
     VkBuffer captureTo_ = VK_NULL_HANDLE;
     bool captureDone_ = false;
-    std::vector<VkFramebuffer> framebuffers_;
+    VkFramebuffer sceneFramebuffer_ = VK_NULL_HANDLE; // hdrView + depthView
+    std::vector<VkFramebuffer> postFramebuffers_;     // по свопчейн-имиджу
+
+    VkDescriptorSetLayout postSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorPool postPool_ = VK_NULL_HANDLE;
+    VkDescriptorSet postSet_ = VK_NULL_HANDLE;
+    VkPipelineLayout postLayout_ = VK_NULL_HANDLE;
+    VkPipeline postPipeline_ = VK_NULL_HANDLE;
 
     bool create_render_pass();
+    bool create_post_render_pass();
+    bool create_hdr_target();
+    void destroy_hdr_target();
     bool create_depth();
     void destroy_depth();
     bool create_framebuffers();
     void destroy_framebuffers();
+    bool create_post_descriptors();
+    void write_post_descriptor();
+    bool create_post_pipeline(const char* shaderDir);
     bool create_commands();
     bool create_frame_sync();
     bool create_present_semaphores();

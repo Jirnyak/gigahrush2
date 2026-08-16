@@ -1569,6 +1569,9 @@ int main(int argc, char** argv) {
     std::string shotAction;
     bool shotActionConsumed = false; // one-shot save/load; attack stays held
     bool showHud = true;
+    // --no-crt: сырой кадр без пост-обработки (диагностика, пиксель-точные
+    // сравнения скриншотов). Сама трубка — vk_renderer.h.
+    bool noCrt = false;
     // --mirror-verify: after every wholesale upload and every ~300 frames, read
     // the GPU voxel mirror back and memcmp it against the CPU grid. Diagnostic
     // (queue-idles); the proof harness for the raymarch migration's stage 1.
@@ -1585,6 +1588,7 @@ int main(int argc, char** argv) {
             shotFloorWanted = true;
         }
         else if (a == "--no-hud" || a == "--nohud") showHud = false;
+        else if (a == "--no-crt" || a == "--nocrt") noCrt = true;
         else if (a == "--mirror-verify") mirrorVerify = true;
         else if (a == "--pos" && i + 3 < argc) {
             customPos.x = static_cast<float>(std::atof(argv[++i]));
@@ -1634,13 +1638,15 @@ int main(int argc, char** argv) {
     }
 
     gpu::VulkanRenderer renderer;
-    if (!renderer.init(device, window)) {
+    if (!renderer.init(device, window, GIGA_SHADER_DIR)) {
         std::fprintf(stderr, "Renderer init failed\n");
         device.destroy();
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
     }
+
+    renderer.crtEnabled = !noCrt;
 
     gpu::GpuLightGrid lightGrid;
     if (!lightGrid.init(&device, GIGA_SHADER_DIR)) {
@@ -1765,7 +1771,7 @@ int main(int argc, char** argv) {
 
 
     gpu::ImGuiLayer hud;
-    if (!hud.init(device, window, renderer.renderPass,
+    if (!hud.init(device, window, renderer.postRenderPass,
                   static_cast<std::uint32_t>(renderer.swap().images.size()))) {
         std::fprintf(stderr, "ImGui init failed\n");
         bodyPass.destroy();
@@ -6423,6 +6429,45 @@ int main(int argc, char** argv) {
             std::uint64_t t2 = SDL_GetPerformanceCounter();
             cubeMs = static_cast<float>((t1 - t0) / freq * 1000.0);
             bodyMs = static_cast<float>((t2 - t1) / freq * 1000.0);
+
+            // Тёмная адаптация — асимметричный зрачок (порт форка e6b5e24b):
+            // сжатие на свету быстрое (тау 0.15 с), расширение в темноте
+            // медленное (тау 2.5 с). Яркость сцены — световые константы +
+            // лампы в радиусе 16 м (те же LightBulb, что collect_scene_lights,
+            // с тем же уважением к обрезанной сети) + вспышка тревоги
+            // самосбора. Экспозицию применяет ТОЛЬКО пост-пас к сцене: UI
+            // рисуется после begin_post_pass и глаз игрока не «слепнет».
+            {
+                static float darkAdapt = 1.0f;
+                float sceneLum = kAmbient + kFillStrength + kLampIntensity * 0.25f;
+                auto lampView = reg.view<const Transform, const game::Interactable>();
+                for (auto e : lampView) {
+                    const Transform& tr = lampView.get<const Transform>(e);
+                    if (tr.layer != activeLayer) continue;
+                    const game::Interactable& ia =
+                        lampView.get<const game::Interactable>(e);
+                    if (!ia.active
+                        || ia.kind != game::Interactable::Kind::LightBulb)
+                        continue;
+                    if (powerGrid.is_power_cut(tr.pos)) continue;
+                    const float dx = wrap_delta_f(camMat.eye.x, tr.pos.x, kWorldExtent);
+                    const float dy = wrap_delta_f(camMat.eye.y, tr.pos.y, kWorldExtent);
+                    const float dz = wrap_delta_f(camMat.eye.z, tr.pos.z, kWorldExtent);
+                    const float d2 = dx * dx + dy * dy + dz * dz;
+                    if (d2 < 16.0f * 16.0f)
+                        sceneLum += 1.5f * (1.0f - std::sqrt(d2) / 16.0f);
+                }
+                const game::SamosborAlarm alarm = game::samosbor_alarm(samosbor);
+                if (alarm.pulse > 0.01f) sceneLum += alarm.pulse * 2.0f;
+                const float target =
+                    std::clamp(1.0f / (sceneLum + 0.10f), 0.20f, 2.50f);
+                const float tau = target < darkAdapt ? 0.15f : 2.50f;
+                darkAdapt +=
+                    (target - darkAdapt) * (1.0f - std::exp(-frameDt / tau));
+                renderer.darkAdaptation = darkAdapt;
+            }
+            // Сцена закрыта; CRT-треугольник в свопчейн; ImGui — поверх, резкий.
+            renderer.begin_post_pass();
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Hud);
             hud.render(cmd);
             renderer.timer.pass_end(cmd, gpu::GpuPass::Hud);
