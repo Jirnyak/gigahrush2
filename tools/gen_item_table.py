@@ -179,7 +179,7 @@ def main():
             "    // [%d] id %d  %s  (%d g)\n"
             "    ItemDef{ %d, %d, %d, static_cast<std::uint16_t>(%s), %d,\n"
             "             u8(ItemCategory::%s), u8(EquipSlot::%s), %d,\n"
-            "             u8(UseEffect::%s), {%s}, 0 },"
+            "             u8(UseEffect::%s), {%s}, 0, %d, {0, 0} },"
             % (i, i + 1, r["id"], massG,
                num(r, "value_rub", i, 0, 2000000000),
                massG,
@@ -189,7 +189,9 @@ def main():
                cat, eq,
                num(r, "stack_max", i, 1, 255),
                ue,
-               ", ".join(str(x) for x in resists)))
+               ", ".join(str(x) for x in resists),
+               # durability: USES until ruined; empty column = 0 = never wears.
+               num(r, "durability", i, 0, 65535)))
         names.append("    %s," % cpp_string(r["name_ru"].strip()))
 
     # THE MASS SUMMARY, printed every run. A number nobody can see is a number

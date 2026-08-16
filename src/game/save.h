@@ -134,7 +134,13 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // kSaveFixedWire lands back on 927, the same number v10 had before hpBank — a
 // coincidence of two DIFFERENT formats (v10 lacked hpBank and had nine axes),
 // not a compatibility.
-inline constexpr std::uint32_t kSaveVersion = 12u;
+// Version 13: the inventory cell's u16 count splits into u8 count + u8
+// condition ([inventory.h] — wear state, 255 = mint). Zero bytes moved on the
+// wire (a slot is 4 B either way), but a v12 reader would fuse count and
+// condition into one u16, so version 12 saves are rejected, same standing
+// rule. Pool rows carry the same cell and change in the same stroke
+// ([npc_pool.cpp] save_rows/load_rows).
+inline constexpr std::uint32_t kSaveVersion = 13u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around

@@ -552,7 +552,8 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
                         return count;
                     ItemSlot& ls = corpse.lootSlots[corpse.slotCount++];
                     ls.item = id;
-                    ls.count = count;
+                    // Addition law ([inventory.h]): clamp before the u8 store.
+                    ls.count = static_cast<std::uint8_t>(count > 0xFFu ? 0xFFu : count);
                     return 0;
                 };
                 auto push_cell_containers = [&](ItemId id, std::uint16_t count) -> std::uint16_t {

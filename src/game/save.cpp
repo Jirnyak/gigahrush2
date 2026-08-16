@@ -256,9 +256,12 @@ void visit_needs(Ar& ar, N& n) {
 
 template <class Ar, class I>
 void visit_inventory(Ar& ar, I& inv) {
+    // Still 4 B per slot, still 256 B per grid ([inventory.h]) — the u16 count
+    // split into u8 count + u8 condition is version 13's format change.
     for (int i = 0; i < kInvSlots; ++i) {
         ar.u16(inv.slots[i].item);
-        ar.u16(inv.slots[i].count);
+        ar.u8(inv.slots[i].count);
+        ar.u8(inv.slots[i].condition);
     }
 }
 

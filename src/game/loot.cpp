@@ -77,8 +77,9 @@ std::uint16_t weapon_ammo_count(ItemId weapon, std::uint32_t seed) {
 bool push_slot(ItemSlot* out, std::uint8_t cap, std::uint8_t& n,
                ItemId id, std::uint16_t count) {
     if (!out || n >= cap || id == kInvalidItem || count == 0) return false;
-    if (count > 0xFFFFu) count = 0xFFFFu;
-    out[n++] = ItemSlot{id, count};
+    // The cell's count is u8 by law ([inventory.h]); clamp BEFORE the store.
+    if (count > 0xFFu) count = 0xFFu;
+    out[n++] = ItemSlot{id, static_cast<std::uint8_t>(count)};
     return true;
 }
 
@@ -391,15 +392,17 @@ std::int32_t pickup_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId la
         if (slot < 0) continue;  // full: it stays where it is
 
         if (inv.slots[slot].item == p.item) {
-            inv.slots[slot].count =
-                static_cast<std::uint16_t>(inv.slots[slot].count + p.count);
-            // **Clamp to the item's own cap.** An audit put 7 of a cap-8 item in a slot,
-            // dropped a stack of 8 on it, and pickup_step merged the lot into 15 — the
-            // cap was consulted to CHOOSE the slot and then ignored when writing it. A
-            // slot over cap is not a crash; it is an inventory that quietly holds more
-            // than the rules allow, which is worse because nothing complains.
-            if (def.stackMax && inv.slots[slot].count > def.stackMax)
-                inv.slots[slot].count = def.stackMax;
+            // **Clamp to the item's own cap — computed in int BEFORE the store.**
+            // An audit put 7 of a cap-8 item in a slot, dropped a stack of 8 on
+            // it, and pickup_step merged the lot into 15 — the cap was consulted
+            // to CHOOSE the slot and then ignored when writing it. With the u8
+            // count ([inventory.h] addition law) the order is load-bearing too:
+            // summing IN the slot would wrap at 256 before any clamp could see it.
+            int merged = static_cast<int>(inv.slots[slot].count) +
+                         static_cast<int>(p.count);
+            const int cap = def.stackMax ? def.stackMax : 255;
+            if (merged > cap) merged = cap;
+            inv.slots[slot].count = static_cast<std::uint8_t>(merged);
         } else {
             inv.slots[slot].item = p.item;
             inv.slots[slot].count = p.count;

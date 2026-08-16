@@ -504,9 +504,12 @@ void NpcPool::save_rows(std::vector<std::uint8_t>& out) const {
         put_f32(out, nd.hpBank);
         put_u8(out, nd.seeded);
         const Inventory& inv = inv_[id];
+        // Save v13 cell: u8 count + u8 condition in the byte the u16 count
+        // held — 4 B per slot either way ([inventory.h], [save.h]).
         for (int s = 0; s < kInvSlots; ++s) {
             put_u16(out, inv.slots[s].item);
-            put_u16(out, inv.slots[s].count);
+            put_u8(out, inv.slots[s].count);
+            put_u8(out, inv.slots[s].condition);
         }
         if (names) {
             for (char c : name_[id])
@@ -571,7 +574,8 @@ bool NpcPool::load_rows(const std::uint8_t* bytes, std::size_t n) {
         Inventory& inv = inv_[id];
         for (int s = 0; s < kInvSlots; ++s) {
             inv.slots[s].item = r.u16();
-            inv.slots[s].count = r.u16();
+            inv.slots[s].count = r.u8();
+            inv.slots[s].condition = r.u8();
         }
         if (names) {
             for (char& c : name_[id]) c = static_cast<char>(r.u8());

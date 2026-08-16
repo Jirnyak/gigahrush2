@@ -103,8 +103,16 @@ struct ItemDef {
     std::uint8_t useEffect;     // 17  UseEffect
     std::int8_t resist[kItemResistChannels];  // 18..22, armour; 441 are zero
     std::uint8_t pad_;          // 23
+    // USES until ruined, straight from the `durability` column of
+    // data/items.csv. 0 = does not wear (the 400+ unfilled rows), and that is
+    // a CONTENT statement, not a default to paper over in code: an item starts
+    // wearing the day its row gets a number. u16 because the column's real
+    // values (flashlight 300) outgrow a byte — the row pays 4 B of growth
+    // (24 -> 28 with tail padding) rather than lie about its own data.
+    std::uint16_t durability;   // 24..25
+    std::uint8_t pad2_[2];      // 26..27
 };
-static_assert(sizeof(ItemDef) == 24, "ItemDef must stay a tight 24-byte row");
+static_assert(sizeof(ItemDef) == 28, "ItemDef is a tight 28-byte row");
 static_assert(alignof(ItemDef) == 4);
 static_assert(std::is_trivially_copyable_v<ItemDef>);
 
