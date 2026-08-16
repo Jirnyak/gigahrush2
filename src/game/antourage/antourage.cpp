@@ -41,9 +41,9 @@ int cell_axis(const WalkCell& c, int axis) {
 // keeps an out-of-range coordinate around.
 WalkCell stepped(const WalkCell& c, int axis, int d) {
     WalkCell r = c;
-    if (axis == 0) r.x = wrap_macro(r.x + d);
-    else if (axis == 1) r.y = wrap_macro(r.y + d);
-    else r.z = wrap_macro(r.z + d);
+    if (axis == 0) r.x = wrap_macro_x(r.x + d);
+    else if (axis == 1) r.y = wrap_macro_y(r.y + d);
+    else r.z = wrap_macro_z(r.z + d);
     return r;
 }
 // The same step WITHOUT wrapping, for a SPAN: the far end of a wire or a sheet
@@ -59,7 +59,7 @@ WalkCell offset(const WalkCell& c, int axis, int d) {
     return r;
 }
 WalkCell wrap_all(const WalkCell& c) {
-    return {wrap_macro(c.x), wrap_macro(c.y), wrap_macro(c.z)};
+    return {wrap_macro_x(c.x), wrap_macro_y(c.y), wrap_macro_z(c.z)};
 }
 float vec_axis(const vec3& v, int axis) {
     return axis == 0 ? v.x : axis == 1 ? v.y : v.z;
@@ -192,9 +192,9 @@ struct NetNode {
 };
 
 WalkCell cell_of(std::size_t idx) {
-    return {static_cast<int>(idx % kMacroDim),
-            static_cast<int>((idx / kMacroDim) % kMacroDim),
-            static_cast<int>(idx / (kMacroDim * kMacroDim))};
+    return {static_cast<int>(idx % kMacroDimX),
+            static_cast<int>((idx / kMacroDimX) % kMacroDimY),
+            static_cast<int>(idx / (kMacroDimX * kMacroDimY))};
 }
 
 inline std::size_t state_of(std::size_t cellIdx, int face) {

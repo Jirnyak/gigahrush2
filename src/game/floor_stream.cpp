@@ -216,6 +216,15 @@ void FloorStreamer::embody_crowd(Registry& ecs, NpcPool& pool, const World& worl
             if (designate != kInvalidNpc) fm.candidate = pool.handle(designate);
         }
     }
+    if (playerId == kInvalidNpc && designate == kInvalidNpc && !crowd.empty()) {
+        for (NpcId id : crowd) {
+            if (!pool.embodied(id) && pool.valid(id)) {
+                designate = id;
+                fm.candidate = pool.handle(id);
+                break;
+            }
+        }
+    }
 
     for (NpcId id : crowd) {
         // Bucket residents are alive by construction (kill/leave drop them). Skip
@@ -253,6 +262,22 @@ void FloorStreamer::embody_crowd(Registry& ecs, NpcPool& pool, const World& worl
         // passes through, so the resolve lives here rather than in embody().
         place_body_safely(ecs, world, e);
         fm.bodies.push_back(e);
+    }
+    if (playerId == kInvalidNpc && outPlayer == entt::null) {
+        const NpcId fallbackId = pool.spawn();
+        if (fallbackId != kInvalidNpc) {
+            pool.set_floor(fallbackId, static_cast<std::int16_t>(fm.number));
+            pool.hp(fallbackId) = 100;
+            pool.max_hp(fallbackId) = 100;
+            pool.cx(fallbackId) = 64;
+            pool.cy(fallbackId) = 64;
+            pool.cz(fallbackId) = 64;
+            Entity e = embody_as_player(ecs, pool, fallbackId, layer);
+            place_body_safely(ecs, world, e);
+            fm.bodies.push_back(e);
+            playerId = fallbackId;
+            outPlayer = e;
+        }
     }
 }
 

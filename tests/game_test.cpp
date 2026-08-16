@@ -602,19 +602,19 @@ static void test_lattice() {
     // Geometry contract, so a static_assert rather than a CHECK: 4^3 nodes at a
     // 32-cell spacing is what makes the lattice a cyclic (Z/4)^3 torus graph.
     static_assert(kLatticeCount == 64, "4x4x4 nav lattice ([floors.md])");
-    static_assert(kLatticeSpacing == 32, "128 / 4 == 32 cells between nodes");
+    static_assert(kLatticeSpacing == 128, "512 / 4 == 128 cells between nodes");
 
-    CHECK(lattice_coord(0) == 16);
-    CHECK(lattice_coord(1) == 48);
-    CHECK(lattice_coord(2) == 80);
-    CHECK(lattice_coord(3) == 112);
+    CHECK(lattice_coord(0) == 64);
+    CHECK(lattice_coord(1) == 192);
+    CHECK(lattice_coord(2) == 320);
+    CHECK(lattice_coord(3) == 448);
 
-    // Each axis band is the node's Voronoi cell: [0,32)->0 ... [96,128)->3.
+    // Each axis band is the node's Voronoi cell: [0,128)->0 ... [384,512)->3.
     CHECK(lattice_axis_of(0) == 0);
-    CHECK(lattice_axis_of(31) == 0);
-    CHECK(lattice_axis_of(32) == 1);
-    CHECK(lattice_axis_of(112) == 3);
-    CHECK(lattice_axis_of(127) == 3);
+    CHECK(lattice_axis_of(127) == 0);
+    CHECK(lattice_axis_of(128) == 1);
+    CHECK(lattice_axis_of(448) == 3);
+    CHECK(lattice_axis_of(511) == 3);
 
     // id <-> (ix,iy,iz) round-trips for all 64 nodes.
     for (int id = 0; id < kLatticeCount; ++id) {

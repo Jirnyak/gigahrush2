@@ -152,9 +152,9 @@ bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& 
                                 vec3 up)
 {
     const float radiusSq = projHitRadius * projHitRadius;
-    const int pcx = wrap_macro(static_cast<int>(projPos.x / kCellSize));
-    const int pcy = wrap_macro(static_cast<int>(projPos.y / kCellSize));
-    const int pcz = wrap_macro(static_cast<int>(projPos.z / kCellSize));
+    const int pcx = wrap_macro_x(static_cast<int>(projPos.x / kCellSize));
+    const int pcy = wrap_macro_y(static_cast<int>(projPos.y / kCellSize));
+    const int pcz = wrap_macro_z(static_cast<int>(projPos.z / kCellSize));
 
     Entity hitEntity = entt::null;
     PropFallMode hitMode = PropFallMode::SimpleFall;
@@ -165,9 +165,9 @@ bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& 
     for (auto entity : view) {
         const auto& anchor = view.get<SubVoxelAnchor>(entity);
 
-        if (std::abs(wrap_delta(anchor.cx, pcx, kMacroDim)) > 1 ||
-            std::abs(wrap_delta(anchor.cy, pcy, kMacroDim)) > 1 ||
-            std::abs(wrap_delta(anchor.cz, pcz, kMacroDim)) > 1)
+        if (std::abs(wrap_delta(anchor.cx, pcx, kMacroDimX)) > 1 ||
+            std::abs(wrap_delta(anchor.cy, pcy, kMacroDimY)) > 1 ||
+            std::abs(wrap_delta(anchor.cz, pcz, kMacroDimZ)) > 1)
         {
             continue;
         }
@@ -215,9 +215,9 @@ std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& 
     for (auto entity : view) {
         const auto& anchor = view.get<SubVoxelAnchor>(entity);
 
-        const int cx = wrap_macro(anchor.cx);
-        const int cy = wrap_macro(anchor.cy);
-        const int cz = wrap_macro(anchor.cz);
+        const int cx = wrap_macro_x(anchor.cx);
+        const int cy = wrap_macro_y(anchor.cy);
+        const int cz = wrap_macro_z(anchor.cz);
         const std::uint32_t key =
             static_cast<std::uint32_t>(macro_index(cx, cy, cz));
 
@@ -261,9 +261,9 @@ Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
                   LayerId layer, float yaw, std::uint8_t emissive,
                   std::uint8_t matId, std::uint8_t animPhase, std::uint8_t flags)
 {
-    int cx = wrap_macro(anchor.cx);
-    int cy = wrap_macro(anchor.cy);
-    int cz = wrap_macro(anchor.cz);
+    int cx = wrap_macro_x(anchor.cx);
+    int cy = wrap_macro_y(anchor.cy);
+    int cz = wrap_macro_z(anchor.cz);
 
     if (!world.grid().solid(cx, cy, cz, anchor.subX, anchor.subY, anchor.subZ)) {
         return entt::null;
@@ -461,9 +461,9 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
                 for (int x = 0; x < kMacroDimX; ++x) {
                     if (grid.cell(x, y, z) != kCellAir) continue;
 
-                    const int cx = wrap_macro(x + ceilStepX);
-                    const int cy = wrap_macro(y + ceilStepY);
-                    const int cz = wrap_macro(z + ceilStepZ);
+                    const int cx = wrap_macro_x(x + ceilStepX);
+                    const int cy = wrap_macro_y(y + ceilStepY);
+                    const int cz = wrap_macro_z(z + ceilStepZ);
 
                     const CellType above = grid.cell(cx, cy, cz);
                     if (!is_solid_cell(above)) continue;

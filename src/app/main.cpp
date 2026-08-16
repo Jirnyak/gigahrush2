@@ -2161,11 +2161,11 @@ int main(int argc, char** argv) {
         // and LayerId is a recycled storage slot. [save.h]
         runState.player.floorNumber = currentFloor;
         runState.player.cx = static_cast<std::uint8_t>(
-            wrap_macro(static_cast<int>(sp.x / kCellSize)));
+            wrap_macro_x(static_cast<int>(sp.x / kCellSize)));
         runState.player.cy = static_cast<std::uint8_t>(
-            wrap_macro(static_cast<int>(sp.y / kCellSize)));
+            wrap_macro_y(static_cast<int>(sp.y / kCellSize)));
         runState.player.cz = static_cast<std::uint8_t>(
-            wrap_macro(static_cast<int>(sp.z / kCellSize)));
+            wrap_macro_z(static_cast<int>(sp.z / kCellSize)));
         // Version 7: character sheet + crafting bank. Prefer the live entity
         // component; fall back to the death-surviving carried snapshot so a
         // mid-death F5 still banks progression. [save.h] SAVRPG
@@ -2868,9 +2868,9 @@ int main(int argc, char** argv) {
                                     cy + static_cast<float>(oy) * kCellSize;
                                 const int gx = wrap_macro(
                                     static_cast<int>(px / kCellSize));
-                                const int gy = wrap_macro(
+                                const int gy = wrap_macro_y(
                                     static_cast<int>(py / kCellSize));
-                                if (g.cell(gx, gy, wrap_macro(gz)) ==
+                                if (g.cell(gx, gy, wrap_macro_z(gz)) ==
                                     kCellAir)
                                     continue;
                                 const float dx =
@@ -3484,9 +3484,9 @@ int main(int argc, char** argv) {
                                                      kCellSize;
                                         const int gx = wrap_macro(
                                             static_cast<int>(px / kCellSize));
-                                        const int gy = wrap_macro(
+                                        const int gy = wrap_macro_y(
                                             static_cast<int>(py / kCellSize));
-                                        if (g.cell(gx, gy, wrap_macro(gz)) ==
+                                        if (g.cell(gx, gy, wrap_macro_z(gz)) ==
                                             kCellAir)
                                             continue;
                                         const float dx = wrap_delta_f(

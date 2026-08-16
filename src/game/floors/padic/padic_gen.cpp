@@ -59,7 +59,7 @@ namespace {
 
 // ---- storey layout ---------------------------------------------------------
 inline constexpr int kStorey = 3;      // cells per storey
-inline constexpr int kLastBase = 123;  // storeys at b = 0,3,...,123; 126..127 attic
+inline constexpr int kLastBase = (kMacroDimZ > 2) ? ((kMacroDimZ - 3) / kStorey) * kStorey : 0;  // storeys at b = 0,3,...,kLastBase; top attic
 inline constexpr int kCeilW = 6;       // sandwich: ceiling sub-layer == mask word 6
 inline constexpr int kFloorW = 7;      // sandwich: floor sub-layer  == mask word 7
 
@@ -86,15 +86,14 @@ inline int rnd(std::uint32_t& s, int lo, int hi) { // inclusive
     return lo + static_cast<int>(lcg(s) % static_cast<std::uint32_t>(hi - lo + 1));
 }
 
-// ---- the shared plan ---------------------------------------------------------
 struct PlanWall {
     std::uint8_t axis; // 0: wall line x==c spanning y; 1: wall line y==c spanning x
-    std::uint8_t c;
-    std::uint8_t a0;   // start along the span axis (wrapped)
-    std::uint8_t len;  // cells covered (unwrapped length)
+    int c;
+    int a0;   // start along the span axis (wrapped)
+    int len;  // cells covered (unwrapped length)
 };
 struct PlanStair {
-    std::uint8_t x, y; // box cells [x, x+3] times rows {y (flight A), y+1 (flight B)}
+    int x, y; // box cells [x, x+3] times rows {y (flight A), y+1 (flight B)}
 };
 struct Plan {
     std::vector<PlanWall> walls;
@@ -107,7 +106,6 @@ struct Plan {
     std::vector<std::uint8_t> blockOf;
 };
 
-inline std::uint8_t w8(int c) { return static_cast<std::uint8_t>(wrap_macro(c)); }
 inline std::size_t p2(int x, int y) {
     return static_cast<std::size_t>(wrap_macro(y)) * kMacroDim + wrap_macro(x);
 }
@@ -120,11 +118,13 @@ struct Rect {
 };
 
 void add_wall(Plan& p, int axis, int c, int a0, int a1) {
-    p.walls.push_back({static_cast<std::uint8_t>(axis), w8(c), w8(a0),
-                       static_cast<std::uint8_t>(a1 - a0 + 1)});
+    p.walls.push_back({static_cast<std::uint8_t>(axis), wrap_macro(c), wrap_macro(a0),
+                       a1 - a0 + 1});
 }
 void add_door(Plan& p, int x, int y, int axis) {
-    p.doors.push_back({w8(x), w8(y), 0, 2, static_cast<std::uint8_t>(axis)});
+    p.doors.push_back({static_cast<std::uint16_t>(wrap_macro(x)),
+                       static_cast<std::uint16_t>(wrap_macro(y)), 0, 2,
+                       static_cast<std::uint8_t>(axis)});
     p.opening[p2(x, y)] = 1;
 }
 
@@ -252,7 +252,7 @@ void build_plan(Plan& p, unsigned seed, int number) {
                 // Stair box on the north edge (facing the X-corridor): rows
                 // by+1, by+2 between ring walls, entry gap in the perimeter.
                 const int sx = bx + 13;
-                p.stairs.push_back({w8(sx), w8(by + 1)});
+                p.stairs.push_back({wrap_macro(sx), wrap_macro(by + 1)});
                 add_wall(p, 1, by + 3, block.x0, block.x1); // strip boundary
                 add_wall(p, 0, sx - 1, by, by + 3);          // shaft ring west
                 add_wall(p, 0, sx + 4, by, by + 3);          // shaft ring east
@@ -667,12 +667,12 @@ void generate_padic_floor(World& world, int number, const FloorSpec& spec,
     // Attic: the 2-cell crawl whose sandwich is storey 0's floor. No holes —
     // the arrival floor stays solid. Stair entry strips so the ground-storey
     // landings have something to stand on.
-    stamp_sandwich(g, sm, p, kMacroDim - 1);
+    stamp_sandwich(g, sm, p, kMacroDimZ - 1);
     for (const PlanStair& st : p.stairs)
         for (int row = 0; row < 2; ++row) {
-            put_bits(g, sm, st.x, st.y + row, kMacroDim - 1, kCeilW, kEntryX04,
+            put_bits(g, sm, st.x, st.y + row, kMacroDimZ - 1, kCeilW, kEntryX04,
                      kMatConcrete);
-            put_bits(g, sm, st.x, st.y + row, kMacroDim - 1, kFloorW, kEntryX04,
+            put_bits(g, sm, st.x, st.y + row, kMacroDimZ - 1, kFloorW, kEntryX04,
                      kMatConcrete);
         }
 

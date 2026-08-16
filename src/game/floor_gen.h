@@ -152,8 +152,8 @@ int floor_room_bit_index(std::uint16_t mask);
 //   0 -> the wall line x == cx, so the jambs are at (cx, cy+-1)
 //   1 -> the wall line y == cy, so the jambs are at (cx+-1, cy)
 struct Doorway {
-    std::uint8_t cx = 0;   // opening cell, X
-    std::uint8_t cy = 0;   // opening cell, Y
+    std::uint16_t cx = 0;   // opening cell, X
+    std::uint16_t cy = 0;   // opening cell, Y
     std::uint8_t cz = 0;   // BOTTOM cell of the opening
     std::uint8_t h = 0;    // opening height in cells, >= 1
     std::uint8_t axis = 0; // which wall line holds it (see above)
