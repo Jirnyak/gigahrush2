@@ -5968,7 +5968,8 @@ int main(int argc, char** argv) {
                              ImGuiWindowFlags_NoSavedSettings);
             const ImVec2 btn(240.0f, 0.0f);
             if (shell.menuPage == 0) {
-                ImGui::TextUnformatted("G I G A H R U S H  2");
+                // Титул теперь пиксельный, из клеток заставки ([intro_ui.h])
+                // — ASCII-дубль в окне меню снят.
                 ImGui::Separator();
                 if (ImGui::Button("New Game", btn)) shell.menuPage = 2;
                 if (ImGui::Button("Load Game", btn)) shell.menuPage = 1;
