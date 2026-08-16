@@ -19,7 +19,7 @@ void InputState::handle_event(const SDL_Event& e) {
         // Jump is the only key EDGE the bridge still reads itself; every other
         // pressed action goes key -> KeybindTable row -> console command, and
         // fly arrives via queue_fly_toggle() on that path.
-        if (!e.key.repeat) {
+        if (mouselook_ && !e.key.repeat) {
             if (static_cast<std::uint16_t>(e.key.scancode) == binds_.jump)
                 jumpEdge_ = true;
         }
@@ -38,7 +38,7 @@ game::PlayerCommand InputState::build_command(Registry& reg, Entity avatar) cons
     // post-toggle state here for wishDir, exactly reproducing that ordering.
     bool willFly = false;
     if (const auto* ctl = reg.try_get<Controller>(avatar)) willFly = ctl->fly;
-    if (toggleFlyEdge_) {
+    if (toggleFlyEdge_ && mouselook_) {
         cmd.buttons |= game::bit(game::Button::FlyToggle);
         willFly = !willFly;
     }
@@ -58,22 +58,26 @@ game::PlayerCommand InputState::build_command(Registry& reg, Entity avatar) cons
 
     // Movement intent, camera-local. Scancodes are layout-independent and come
     // from the keybinding table's axis rows ([keybind.h]), not from constants.
-    const bool* ks = SDL_GetKeyboardState(nullptr);
-    float fwd = 0.0f, right = 0.0f, up = 0.0f;
-    if (ks[binds_.fwd]) fwd += 1.0f;
-    if (ks[binds_.back]) fwd -= 1.0f;
-    if (ks[binds_.right]) right += 1.0f;
-    if (ks[binds_.left]) right -= 1.0f;
-    if (willFly) {
-        if (ks[binds_.up] || ks[binds_.jump]) up += 1.0f;
-        if (ks[binds_.down] || ks[binds_.downAlt]) up -= 1.0f;
-    }
-    cmd.wishDir = vec3{fwd, right, up};
+    // When mouselook is disabled (e.g. modals, dialogue, trading, looting, crafting,
+    // or menus are open), movement intent is strictly zeroed to prevent input bleeding.
+    if (mouselook_) {
+        const bool* ks = SDL_GetKeyboardState(nullptr);
+        float fwd = 0.0f, right = 0.0f, up = 0.0f;
+        if (ks[binds_.fwd]) fwd += 1.0f;
+        if (ks[binds_.back]) fwd -= 1.0f;
+        if (ks[binds_.right]) right += 1.0f;
+        if (ks[binds_.left]) right -= 1.0f;
+        if (willFly) {
+            if (ks[binds_.up] || ks[binds_.jump]) up += 1.0f;
+            if (ks[binds_.down] || ks[binds_.downAlt]) up -= 1.0f;
+        }
+        cmd.wishDir = vec3{fwd, right, up};
 
-    // Jump edge (walk mode only; fly uses wishDir.z). The server re-checks the
-    // fly guard, so sending the bit unconditionally is safe and keeps the client
-    // dumb — it proposes, the server disposes.
-    if (jumpEdge_) cmd.buttons |= game::bit(game::Button::Jump);
+        // Jump edge (walk mode only; fly uses wishDir.z). The server re-checks the
+        // fly guard, so sending the bit unconditionally is safe and keeps the client
+        // dumb — it proposes, the server disposes.
+        if (jumpEdge_) cmd.buttons |= game::bit(game::Button::Jump);
+    }
 
     return cmd;
 }

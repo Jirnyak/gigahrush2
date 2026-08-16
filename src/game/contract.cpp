@@ -45,8 +45,7 @@ constexpr std::int32_t kDescendPayPerBand = 900;
 Contract contract_offer(const NpcPool& pool, NpcId giver, int floorZ,
                         std::uint32_t seed) {
     Contract c;
-    NpcPool& p = const_cast<NpcPool&>(pool);
-    if (!p.valid(giver) || !p.alive(giver)) return c;
+    if (!pool.valid(giver) || !pool.alive(giver)) return c;
 
     // Deterministic in (giver, floor): the same person always offers the same job, so
     // walking away and coming back cannot reroll it into something better.

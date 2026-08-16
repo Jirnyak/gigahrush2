@@ -8,7 +8,9 @@
 #include "imgui.h"
 #include "game/combat.h"
 #include "game/craft.h"
+#include "game/encumbrance.h"
 #include "game/item_table.h"
+#include "game/rpg.h"
 
 namespace giga {
 
@@ -150,11 +152,34 @@ void draw_crafting_window_ui(CraftUIState& state,
         return;
     }
 
-    // 1. Header: Station Proximity, Player Tier, Material Bank Chips
+    // 1. Header: Station Proximity, Player Tier, Material Bank Chips, Carry Capacity
+    const game::RpgStats* rpg = reg.try_get<game::RpgStats>(player);
+    const std::uint32_t carriedMassG = game::inventory_mass_g(inv);
+    const std::uint32_t capacityG = rpg ? game::carry_capacity_g(*rpg) : 64000;
+    const float weightFrac = capacityG > 0 ? static_cast<float>(carriedMassG) / static_cast<float>(capacityG) : 0.0f;
+
     ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f),
-                       "СТАНЦИЯ: %s | ДОПУСК КРАФТА: T%u | ИЗУЧЕНО ЧЕРТЕЖЕЙ: %u / %zu",
+                       "СТАНЦИЯ: %s | ДОПУСК: T%u | ИЗУЧЕНО: %u / %zu",
                        station_name_str(currentStation), crafting.tier,
                        game::craft_known_count(crafting), game::kCraftRecipeCount);
+
+    ImGui::SameLine(ImGui::GetWindowWidth() - 320.0f);
+    char weightBuf[64];
+    std::snprintf(weightBuf, sizeof(weightBuf), "Вес: %.1f / %.1f кг",
+                  static_cast<float>(carriedMassG) / 1000.0f,
+                  static_cast<float>(capacityG) / 1000.0f);
+    ImVec4 barColor = (weightFrac > 1.0f) ? ImVec4(0.95f, 0.25f, 0.25f, 1.0f)
+                    : (weightFrac > 0.8f) ? ImVec4(0.95f, 0.75f, 0.25f, 1.0f)
+                                          : ImVec4(0.35f, 0.85f, 0.45f, 1.0f);
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, barColor);
+    ImGui::ProgressBar(weightFrac, ImVec2(200.0f, 16.0f), weightBuf);
+    ImGui::PopStyleColor();
+
+    if (weightFrac > 1.0f) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(1.0f, 0.25f, 0.25f, 1.0f), "[ПЕРЕГРУЗ]");
+    }
+
     ImGui::Spacing();
 
     // Material Bank Overview Chips

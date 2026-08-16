@@ -1,5 +1,5 @@
 // Geiger counter stochastic Poisson click generator (Soviet STS-5 / SBM-20 model).
-// Modulated by radiation/danger field with ionization dead-time saturation.
+// Modulated by radiation/danger field and radDose with ionization dead-time saturation and dynamic pitch.
 #pragma once
 
 #include <cstdint>
@@ -17,18 +17,24 @@ public:
     GeigerSynth();
 
     void set_danger(float danger);
+    void set_rad_dose(float radDose);
+    void set_radiation(float danger, float radDose = 0.0f);
     float get_danger() const { return danger_; }
+    float get_rad_dose() const { return radDose_; }
     void generate(float* buffer, int numSamples);
     void reset();
 
 private:
     struct ActiveClick {
-        int sampleIndex = -1; // -1 = inactive
+        float sampleIndex = -1.0f; // -1.0f = inactive
+        float pitchRate = 1.0f;    // Dynamic pitch playback speed
         float amplitude = 1.0f;
     };
 
     float danger_ = 0.0f;
+    float radDose_ = 0.0f;
     float smoothDanger_ = 0.0f;
+    float smoothRadDose_ = 0.0f;
     uint32_t rngState_ = 0x1337beefu;
     int deadTimeRemaining_ = 0;
     ActiveClick clicks_[kMaxClicks]{};

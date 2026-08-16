@@ -112,7 +112,35 @@ static void test_geiger_poisson_synth() {
     // High danger should generate hundreds of clicks per second
     CHECK(radClicks > 200);
 
-    // 3. Amplitude bounds: output must remain bounded within [-2.5, 2.5]
+    // 3. Radiation dose rate scaling at radDose = 500.0f
+    geiger.reset();
+    geiger.set_rad_dose(500.0f);
+    int doseClicks = 0;
+    for (int s = 0; s < 2; ++s) {
+        geiger.generate(buf.data(), kSecSamples);
+        for (int i = 1; i < kSecSamples; ++i) {
+            if (buf[i] > 0.4f && buf[i - 1] <= 0.4f) {
+                ++doseClicks;
+            }
+        }
+    }
+    CHECK(doseClicks > 100);
+
+    // 4. Combined radiation hazard (danger + radDose)
+    geiger.reset();
+    geiger.set_radiation(0.8f, 250.0f);
+    int combinedClicks = 0;
+    for (int s = 0; s < 2; ++s) {
+        geiger.generate(buf.data(), kSecSamples);
+        for (int i = 1; i < kSecSamples; ++i) {
+            if (buf[i] > 0.4f && buf[i - 1] <= 0.4f) {
+                ++combinedClicks;
+            }
+        }
+    }
+    CHECK(combinedClicks > 200);
+
+    // 5. Amplitude bounds: output must remain bounded within [-2.5, 2.5]
     for (float sample : buf) {
         CHECK(!std::isnan(sample));
         CHECK(!std::isinf(sample));

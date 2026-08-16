@@ -43,9 +43,9 @@ PackAlertTable g_packAlerts{};
 
 // Cell the agent currently occupies.
 void agent_cell(const vec3& pos, int& cx, int& cy, int& cz) {
-    cx = wrap_macro(static_cast<int>(pos.x / kCellSize));
-    cy = wrap_macro(static_cast<int>(pos.y / kCellSize));
-    cz = wrap_macro(static_cast<int>(pos.z / kCellSize));
+    cx = wrap_macro(static_cast<int>(std::floor(pos.x / kCellSize)));
+    cy = wrap_macro(static_cast<int>(std::floor(pos.y / kCellSize)));
+    cz = wrap_macro(static_cast<int>(std::floor(pos.z / kCellSize)));
 }
 
 } // namespace
@@ -138,9 +138,9 @@ namespace {
 // has a consumer here, so only that is computed — four cell reads instead of
 // twenty-one, for the one number that is actually read.
 bool adjacent_wall(const MacroGrid& grid, const vec3& pos) {
-    const int cx = static_cast<int>(pos.x / kCellSize);
-    const int cy = static_cast<int>(pos.y / kCellSize);
-    const int cz = static_cast<int>(pos.z / kCellSize);
+    const int cx = static_cast<int>(std::floor(pos.x / kCellSize));
+    const int cy = static_cast<int>(std::floor(pos.y / kCellSize));
+    const int cz = static_cast<int>(std::floor(pos.z / kCellSize));
     return grid.cell(cx + 1, cy, cz) != kCellAir ||
            grid.cell(cx - 1, cy, cz) != kCellAir ||
            grid.cell(cx, cy + 1, cz) != kCellAir ||

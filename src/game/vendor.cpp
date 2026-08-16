@@ -245,7 +245,7 @@ std::int32_t vendor_sell_all(Inventory& inv, RunLedger& led, VendorKind who,
 
         got += static_cast<std::int32_t>(n) * unit;
         s.count = static_cast<std::uint16_t>(s.count - n);
-        if (s.count == 0) s.item = kInvalidItem;
+        if (s.count == 0) s = ItemSlot{};
     }
     // Straight into banked, not into a wallet: there is no cash/account split here and
     // inventing one would give value two homes.
@@ -311,7 +311,7 @@ std::int32_t vendor_resupply(Inventory& inv, RunLedger& led, std::int32_t budget
                 if (p <= 0) continue;
                 if (best == kInvalidItem || p < bestPrice) { best = id; bestPrice = p; }
             }
-            if (best == kInvalidItem) continue;
+            if (best == kInvalidItem || bestPrice <= 0) continue;
         }
         // A quarter of what is left, per category, so one cheap category cannot eat the
         // whole purse and leave you with no medicine — and so the last category in the

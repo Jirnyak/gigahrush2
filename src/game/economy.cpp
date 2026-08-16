@@ -364,7 +364,10 @@ MarketQuote market_quote_item(ItemId id, int floorZ, float gameClockSec) {
         demand = 1.00f * rarity;
     }
 
-    float priceMult = catMult * (demand / supply);
+    if (supply <= 0.0001f) supply = 0.0001f;
+    if (demand < 0.0f) demand = 0.0f;
+
+    float priceMult = (catMult > 0.0f ? catMult : 0.4f) * (demand / supply);
     if (priceMult < 0.4f) priceMult = 0.4f;
     if (priceMult > 5.0f) priceMult = 5.0f;
 
@@ -489,8 +492,9 @@ bool vendor_restock_step(VendorRestockState& state, int floorZ, float gameClockS
     for (std::uint8_t i = 0; i < state.itemCount; ++i) {
         VendorStockItem& item = state.items[i];
         if (item.id == kInvalidItem || item.maxCapacity == 0) continue;
-        const std::uint16_t add = static_cast<std::uint16_t>((item.maxCapacity / 2 + 1) * cycles);
-        item.count = std::min<std::uint16_t>(item.maxCapacity, static_cast<std::uint16_t>(item.count + add));
+        const std::uint64_t add = static_cast<std::uint64_t>(item.maxCapacity / 2 + 1) * static_cast<std::uint64_t>(cycles);
+        item.count = static_cast<std::uint16_t>(
+            std::min<std::uint64_t>(item.maxCapacity, static_cast<std::uint64_t>(item.count) + add));
     }
     return true;
 }

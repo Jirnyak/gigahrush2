@@ -2492,6 +2492,23 @@ int main(int argc, char** argv) {
         // `if` chain is gone — adding a key action is a KeybindTable row plus a
         // ConsoleCommand row, no app edit.
         refresh_console_ctx();
+
+        auto is_modal_active = [&]() -> bool {
+            return dialogueSession.active ||
+                   questUIState.open ||
+                   containerUIState.open ||
+                   showCraftingWindow || craftUIState.open ||
+                   showVendorWindow || vendorUIState.open ||
+                   showElevatorWindow ||
+                   showConsole ||
+                   paused ||
+                   screen != AppScreen::Playing;
+        };
+
+        if (is_modal_active()) {
+            attackHeld = false;
+        }
+
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             hud.process_event(e);
@@ -2503,7 +2520,8 @@ int main(int argc, char** argv) {
                     if (questUIState.open) {
                         input.set_mouselook(false);
                         SDL_SetWindowRelativeMouseMode(window, false);
-                    } else if (!dialogueSession.active && !paused) {
+                        attackHeld = false;
+                    } else if (!is_modal_active()) {
                         input.set_mouselook(true);
                         SDL_SetWindowRelativeMouseMode(window, true);
                     }
@@ -2522,10 +2540,10 @@ int main(int argc, char** argv) {
                     } else if (showVendorWindow || vendorUIState.open) {
                         showVendorWindow = false;
                         vendorUIState.open = false;
+                    } else if (showElevatorWindow) {
+                        showElevatorWindow = false;
                     }
-                    if (!dialogueSession.active && !questUIState.open && !containerUIState.open &&
-                        !showCraftingWindow && !craftUIState.open &&
-                        !showVendorWindow && !vendorUIState.open && !paused) {
+                    if (!is_modal_active()) {
                         input.set_mouselook(true);
                         SDL_SetWindowRelativeMouseMode(window, true);
                     }
@@ -2556,20 +2574,23 @@ int main(int argc, char** argv) {
                         exec_command(kb->command);
                 }
             }
-            // While the pause menu is up, ignore all look/move input: ImGui owns
-            // the cursor and the game is frozen.
-            if (!paused) {
+            // While a modal or pause menu is up, ignore look/move/attack input: ImGui owns
+            // the cursor and input bleed is strictly prevented.
+            if (!is_modal_active()) {
                 if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
                     e.button.button == SDL_BUTTON_LEFT) {
-                    attackHeld = true;
+                    if (input.mouselook() && !ImGui::GetIO().WantCaptureMouse)
+                        attackHeld = true;
                 } else if (e.type == SDL_EVENT_MOUSE_BUTTON_UP &&
                            e.button.button == SDL_BUTTON_LEFT) {
                     attackHeld = false;
                 }
                 if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
                     e.button.button == SDL_BUTTON_RIGHT) {
-                    input.set_mouselook(true);
-                    SDL_SetWindowRelativeMouseMode(window, true);
+                    if (!ImGui::GetIO().WantCaptureMouse) {
+                        input.set_mouselook(true);
+                        SDL_SetWindowRelativeMouseMode(window, true);
+                    }
                 }
                 if (e.type == SDL_EVENT_MOUSE_BUTTON_UP &&
                     e.button.button == SDL_BUTTON_RIGHT) {
@@ -2578,7 +2599,7 @@ int main(int argc, char** argv) {
                 }
                 // Feed movement/look events unless the HUD wants the cursor (only
                 // relevant when look is off — relative mode hides the cursor).
-                if (input.mouselook() || !ImGui::GetIO().WantCaptureMouse)
+                if (input.mouselook() && !ImGui::GetIO().WantCaptureMouse)
                     input.handle_event(e);
             }
         }
@@ -2652,16 +2673,39 @@ int main(int argc, char** argv) {
             if (has(ConsoleRequest::Scrap)) scrapWanted = true;
             if (has(ConsoleRequest::Elevator)) {
                 showElevatorWindow = !showElevatorWindow;
-                if (showElevatorWindow) input.set_mouselook(false);
+                if (showElevatorWindow) {
+                    input.set_mouselook(false);
+                    SDL_SetWindowRelativeMouseMode(window, false);
+                    attackHeld = false;
+                } else if (!is_modal_active()) {
+                    input.set_mouselook(true);
+                    SDL_SetWindowRelativeMouseMode(window, true);
+                }
             }
             if (has(ConsoleRequest::Vendor)) {
                 showVendorWindow = !showVendorWindow;
-                if (showVendorWindow) input.set_mouselook(false);
+                vendorUIState.open = showVendorWindow;
+                if (showVendorWindow) {
+                    input.set_mouselook(false);
+                    SDL_SetWindowRelativeMouseMode(window, false);
+                    attackHeld = false;
+                } else if (!is_modal_active()) {
+                    input.set_mouselook(true);
+                    SDL_SetWindowRelativeMouseMode(window, true);
+                }
             }
             if (has(ConsoleRequest::Craft)) {
                 craftWanted = true;
                 showCraftingWindow = !showCraftingWindow;
-                if (showCraftingWindow) input.set_mouselook(false);
+                craftUIState.open = showCraftingWindow;
+                if (showCraftingWindow) {
+                    input.set_mouselook(false);
+                    SDL_SetWindowRelativeMouseMode(window, false);
+                    attackHeld = false;
+                } else if (!is_modal_active()) {
+                    input.set_mouselook(true);
+                    SDL_SetWindowRelativeMouseMode(window, true);
+                }
             }
             // ATTR1: spend one unspent point. HP ptrs from the pool row so
             // STR/END immediately credits max-HP the same way award_xp does.
@@ -3840,6 +3884,9 @@ int main(int argc, char** argv) {
                             dialogueSession.faction = static_cast<game::Faction>(pool.faction(talker));
                             dialogueSession.role = static_cast<game::RoleId>(pool.role(talker));
                             dialogueSession.situation = speechSit;
+                            const game::DialoguePrompt dPrompt = game::generate_dialogue_prompt(
+                                reg, pool, talker, currentFloor, factionRel, samosbor);
+                            dialogueSession.attitude = dPrompt.attitude;
                             std::snprintf(dialogueSession.speakerName, sizeof(dialogueSession.speakerName),
                                           "%s #%u (%s)", game::faction_name(dialogueSession.faction),
                                           dialogueSession.speaker,
@@ -3847,8 +3894,19 @@ int main(int argc, char** argv) {
                                           dialogueSession.role == game::RoleId::Duty ? "Ликвидатор" :
                                           dialogueSession.role == game::RoleId::Medic ? "Медик" :
                                           dialogueSession.role == game::RoleId::Looter ? "Мародёр" : "Культист");
-                            if (speechLine) std::snprintf(dialogueSession.speechText, sizeof(dialogueSession.speechText), "%s", speechLine);
-                            if (rumourLine[0]) std::snprintf(dialogueSession.rumourText, sizeof(dialogueSession.rumourText), "%s", rumourLine);
+                            if (speechLine && speechLine[0]) {
+                                std::snprintf(dialogueSession.speechText, sizeof(dialogueSession.speechText), "%s", speechLine);
+                            } else {
+                                std::snprintf(dialogueSession.speechText, sizeof(dialogueSession.speechText), "%s", dPrompt.greeting);
+                            }
+                            if (rumourLine[0]) {
+                                std::snprintf(dialogueSession.rumourText, sizeof(dialogueSession.rumourText), "%s", rumourLine);
+                            } else {
+                                std::snprintf(dialogueSession.rumourText, sizeof(dialogueSession.rumourText), "%s", dPrompt.rumourResponse);
+                            }
+                            if (dPrompt.warResponse[0]) {
+                                std::snprintf(dialogueSession.warReportText, sizeof(dialogueSession.warReportText), "%s", dPrompt.warResponse);
+                            }
                             dialogueSession.contractOffer = offer;
                             std::snprintf(dialogueSession.contractText, sizeof(dialogueSession.contractText), "%s", offerLine);
                             dialogueSession.questOffer = questOffer;
@@ -3861,6 +3919,7 @@ int main(int argc, char** argv) {
                             dialogueSession.active = true;
                             input.set_mouselook(false);
                             SDL_SetWindowRelativeMouseMode(window, false);
+                            attackHeld = false;
                             handled = true;
                         }
 
@@ -5677,8 +5736,7 @@ int main(int argc, char** argv) {
                         game::relations_nudge_player(factionRel, vf, +1);
                         game::sync_armour(reg, pool, player);
                     }
-                    if (!showVendorWindow && !vendorUIState.open && !dialogueSession.active && !questUIState.open &&
-                        !containerUIState.open && !showCraftingWindow && !craftUIState.open && !paused) {
+                    if (!showVendorWindow && !vendorUIState.open && !is_modal_active()) {
                         input.set_mouselook(true);
                         SDL_SetWindowRelativeMouseMode(window, true);
                     }
@@ -5980,15 +6038,27 @@ int main(int argc, char** argv) {
             draw_dialogue_window_ui(dialogueSession, dAction);
             if (dAction == DialogueAction::Close) {
                 dialogueSession.active = false;
-                if (!paused && !questUIState.open) {
+                if (!is_modal_active()) {
                     input.set_mouselook(true);
                     SDL_SetWindowRelativeMouseMode(window, true);
                 }
             } else if (dAction == DialogueAction::AskRumours) {
                 const game::Rumour ru = game::rumour_for(reg, pool, dialogueSession.speaker, activeLayer, currentFloor, samosbor);
                 game::rumour_text(ru, dialogueSession.rumourText, sizeof(dialogueSession.rumourText));
+            } else if (dAction == DialogueAction::AskWarSituation) {
+                const game::FloorWarRecord* fwr = game::global_territory_war_manager().find(currentFloor);
+                if (fwr && fwr->totalCasualties > 0) {
+                    std::snprintf(dialogueSession.warReportText, sizeof(dialogueSession.warReportText),
+                                  "Сводка этажа %d: боевые потери %u чел. Идут межфракционные столкновения.",
+                                  currentFloor, fwr->totalCasualties);
+                } else {
+                    std::snprintf(dialogueSession.warReportText, sizeof(dialogueSession.warReportText),
+                                  "На этаже %d обстановка стабильная. Масштабных боестолкновений нет.",
+                                  currentFloor);
+                }
             } else if (dAction == DialogueAction::AcceptContract) {
                 if (game::contract_accept(contracts, dialogueSession.contractOffer, ledger)) {
+                    audioSys.trigger_ui(audio::UiSound::PaperRustle);
                     offer = game::Contract{};
                     offerLine[0] = 0;
                     dialogueSession.contractText[0] = 0;
@@ -5996,6 +6066,7 @@ int main(int argc, char** argv) {
             } else if (dAction == DialogueAction::AcceptQuest) {
                 if (game::quest_valid(dialogueSession.questOffer) && dialogueSession.questOfferGiver != game::kInvalidNpc &&
                     game::quest_accept(quests, pool, dialogueSession.questOffer, dialogueSession.questOfferGiver, currentFloor, ledger)) {
+                    audioSys.trigger_ui(audio::UiSound::PaperRustle);
                     questOffer = game::kInvalidQuest;
                     questOfferGiver = game::kInvalidNpc;
                     questOfferLine[0] = 0;
@@ -6007,10 +6078,11 @@ int main(int argc, char** argv) {
                 dialogueSession.active = false;
                 input.set_mouselook(false);
                 SDL_SetWindowRelativeMouseMode(window, false);
+                attackHeld = false;
             } else if (dAction == DialogueAction::Possess) {
                 possessWanted = true;
                 dialogueSession.active = false;
-                if (!paused && !questUIState.open) {
+                if (!is_modal_active()) {
                     input.set_mouselook(true);
                     SDL_SetWindowRelativeMouseMode(window, true);
                 }
@@ -6020,6 +6092,10 @@ int main(int argc, char** argv) {
         // Quest Log Window (R4)
         if (screen == AppScreen::Playing && questUIState.open) {
             draw_quest_log_ui(questUIState, quests, contracts);
+            if (!questUIState.open && !is_modal_active()) {
+                input.set_mouselook(true);
+                SDL_SetWindowRelativeMouseMode(window, true);
+            }
         }
 
         // Container / Corpse Loot Window
@@ -6038,8 +6114,7 @@ int main(int argc, char** argv) {
                     if (changed) {
                         game::sync_armour(reg, pool, player);
                     }
-                    if (!containerUIState.open && !paused && !questUIState.open && !dialogueSession.active &&
-                        !showCraftingWindow && !craftUIState.open && !showVendorWindow && !vendorUIState.open) {
+                    if (!containerUIState.open && !is_modal_active()) {
                         input.set_mouselook(true);
                         SDL_SetWindowRelativeMouseMode(window, true);
                     }
@@ -6678,9 +6753,12 @@ int main(int argc, char** argv) {
             const auto& pTr = reg.get<Transform>(player);
             const auto& pCam = reg.get<CameraTag>(player);
             const Field<float>* dangerFld = stack.layer(activeLayer).fields().find<float>("danger");
+            const auto* rpg = reg.try_get<game::RpgStats>(player);
+            const float radDose = rpg ? static_cast<float>(rpg->radDose) : 0.0f;
             audioSys.update(frameDt, pTr.pos, pCam.yaw, pCam.pitch,
                             stack.layer(activeLayer).grid(), dangerFld,
-                            samosbor, bus, noiseField, (showHud && !paused) ? 1.0f : 0.2f);
+                            samosbor, bus, noiseField, (showHud && !paused) ? 1.0f : 0.2f,
+                            &doors, radDose, activeLayer, currentFloor);
         }
     }
 

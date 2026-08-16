@@ -6,11 +6,16 @@
 #include "core/math.h"
 #include "world/macro_grid.h"
 #include "world/field.h"
+#include "world/level_stack.h"
 #include "game/samosbor.h"
 #include "game/event_bus.h"
 #include "game/noise.h"
 
 struct SDL_AudioStream;
+
+namespace giga::game {
+struct DoorSet;
+}
 
 namespace giga::audio {
 
@@ -26,7 +31,9 @@ public:
     void update(float dt, const vec3& listenerPos, float listenerYaw, float listenerPitch,
                 const MacroGrid& grid, const Field<float>* dangerField,
                 const game::SamosborState& samosbor, const game::EventBus& bus,
-                const game::NoiseField& noiseField, float hudBrightness = 1.0f);
+                const game::NoiseField& noiseField, float hudBrightness = 1.0f,
+                const game::DoorSet* doors = nullptr, float radDose = 0.0f,
+                LayerId activeLayer = 0, int currentFloor = 0);
 
     // Direct sound triggers
     void trigger_ui(UiSound sound);
@@ -49,7 +56,7 @@ private:
     // Fixed staging buffer for hardware stream pushes
     float renderBuffer_[kAudioBlockFrames * kAudioChannels]{};
 
-    void process_noise_events(const game::NoiseField& noiseField);
+    void process_noise_events(const game::NoiseField& noiseField, LayerId activeLayer = 0);
 };
 
 } // namespace giga::audio

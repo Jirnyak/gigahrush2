@@ -261,7 +261,8 @@ void burer_telekinetic_pushback(Registry& reg, Entity burerEntity, const vec3& b
 
         Velocity& pv = projView.get<Velocity>(pe);
         const float currSpeed = std::sqrt(pv.v.x * pv.v.x + pv.v.y * pv.v.y + pv.v.z * pv.v.z);
-        const float newSpeed = currSpeed > 10.0f ? currSpeed + 5.0f : 20.0f;
+        constexpr float kMaxProjSpeed = 40.0f;
+        const float newSpeed = std::min(kMaxProjSpeed, currSpeed > 10.0f ? currSpeed + 5.0f : 25.0f);
 
         // Invert and repel projectile trajectory away from Burer
         pv.v.x = udx * newSpeed;
@@ -278,11 +279,12 @@ void burer_telekinetic_pushback(Registry& reg, Entity burerEntity, const vec3& b
         }
     }
 
-    // 2. Apply telekinetic pushback shockwave to nearby physical entities
+    // 2. Apply telekinetic pushback shockwave to nearby physical entities (excluding projectiles)
     auto bodyView = reg.view<Transform, Velocity>();
     for (auto be : bodyView) {
         if (be == burerEntity) continue;
         if (reg.all_of<Dead>(be)) continue;
+        if (reg.all_of<Projectile>(be)) continue;
 
         Transform& btr = bodyView.get<Transform>(be);
         if (btr.layer != layer) continue;
@@ -295,11 +297,26 @@ void burer_telekinetic_pushback(Registry& reg, Entity burerEntity, const vec3& b
 
         const float d = std::sqrt(d2);
         const float falloff = 1.0f - (d / radius);
-        const float impulse = force * falloff;
+
+        float massKg = 70.0f;
+        if (const Mass* m = reg.try_get<Mass>(be)) massKg = std::max(10.0f, m->kg);
+        const float massScale = 70.0f / massKg;
+        const float impulse = force * falloff * massScale;
 
         Velocity& bv = bodyView.get<Velocity>(be);
         bv.v.x += (dx / d) * impulse;
         bv.v.y += (dy / d) * impulse;
+        bv.v.z += std::max(0.0f, (dz / d) * impulse * 0.4f);
+
+        // Clamp entity speed to prevent physics tunneling
+        constexpr float kMaxPushSpeed = 22.0f;
+        const float speed = std::sqrt(bv.v.x * bv.v.x + bv.v.y * bv.v.y + bv.v.z * bv.v.z);
+        if (speed > kMaxPushSpeed) {
+            const float invSp = kMaxPushSpeed / speed;
+            bv.v.x *= invSp;
+            bv.v.y *= invSp;
+            bv.v.z *= invSp;
+        }
     }
 
     if (particles) {
@@ -445,20 +462,31 @@ void snork_update(Registry& reg, const MacroGrid& grid, NpcPool& pool,
             if (snork.leapCooldown < 0.0f) snork.leapCooldown = 0.0f;
         }
 
+        // Find potential victim (player first, or nearest prey)
+        Entity victim = player;
+        vec3 victimPos = playerPos;
+        if (victim == entt::null) {
+            const Prey pr = nearest_prey(reg, pool, layer, tr.pos, snork.maxLeapDist);
+            if (pr.e != entt::null) {
+                victim = pr.e;
+                victimPos = pr.pos;
+            }
+        }
+
         switch (snork.state) {
             case SnorkLeapState::Idle: {
-                if (snork.leapCooldown <= 0.0f && player != entt::null) {
-                    const float dx = wrap_delta_f(tr.pos.x, playerPos.x, kWorldExtent);
-                    const float dy = wrap_delta_f(tr.pos.y, playerPos.y, kWorldExtent);
-                    const float dz = wrap_delta_f(tr.pos.z, playerPos.z, kWorldExtent);
+                if (snork.leapCooldown <= 0.0f && victim != entt::null) {
+                    const float dx = wrap_delta_f(tr.pos.x, victimPos.x, kWorldExtent);
+                    const float dy = wrap_delta_f(tr.pos.y, victimPos.y, kWorldExtent);
+                    const float dz = wrap_delta_f(tr.pos.z, victimPos.z, kWorldExtent);
                     const float distSq = dx * dx + dy * dy + dz * dz;
 
                     if (distSq >= snork.minLeapDist * snork.minLeapDist &&
                         distSq <= snork.maxLeapDist * snork.maxLeapDist) {
-                        if (los_clear(grid, tr.pos, playerPos)) {
+                        if (los_clear(grid, tr.pos, victimPos)) {
                             snork.state = SnorkLeapState::Windup;
                             snork.stateTimer = snork.windupDuration;
-                            snork.leapTarget = playerPos;
+                            snork.leapTarget = victimPos;
                             // Freeze horizontal velocity during crouch windup
                             vel.v.x = 0.0f;
                             vel.v.y = 0.0f;
@@ -506,22 +534,31 @@ void snork_update(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                 snork.stateTimer -= dt;
 
                 // Check landing / collision with target
-                const float dx = wrap_delta_f(tr.pos.x, playerPos.x, kWorldExtent);
-                const float dy = wrap_delta_f(tr.pos.y, playerPos.y, kWorldExtent);
-                const float dz = wrap_delta_f(tr.pos.z, playerPos.z, kWorldExtent);
-                const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+                float dist = 100.0f;
+                if (victim != entt::null) {
+                    const float dx = wrap_delta_f(tr.pos.x, victimPos.x, kWorldExtent);
+                    const float dy = wrap_delta_f(tr.pos.y, victimPos.y, kWorldExtent);
+                    const float dz = wrap_delta_f(tr.pos.z, victimPos.z, kWorldExtent);
+                    dist = std::sqrt(dx * dx + dy * dy + dz * dz);
 
-                if (!snork.hitVictimOnLanding && dist < 1.8f && player != entt::null) {
-                    apply_damage(reg, pool, player, static_cast<std::int16_t>(snork.leapDamage),
-                                 DamageChannel::Kinetic, e, &grid, particles);
-                    snork.hitVictimOnLanding = true;
+                    if (!snork.hitVictimOnLanding && dist < 1.8f) {
+                        apply_damage(reg, pool, victim, static_cast<std::int16_t>(snork.leapDamage),
+                                     DamageChannel::Kinetic, e, &grid, particles);
+                        snork.hitVictimOnLanding = true;
+                    }
                 }
 
-                if (snork.stateTimer <= 0.0f || (dist < 1.4f && snork.hitVictimOnLanding)) {
+                // Check grounded or obstacle contact
+                const GravityAffected* ga = reg.try_get<GravityAffected>(e);
+                const bool touchGround = (ga && ga->grounded && snork.stateTimer < 0.25f);
+                const bool impactHit = reg.all_of<Impact>(e);
+
+                if (snork.stateTimer <= 0.0f || touchGround || impactHit || (dist < 1.4f && snork.hitVictimOnLanding)) {
                     snork.state = SnorkLeapState::Recovery;
                     snork.stateTimer = snork.recoveryDuration;
                     vel.v.x = 0.0f;
                     vel.v.y = 0.0f;
+                    vel.v.z = 0.0f;
 
                     if (particles) {
                         particles->push(tr.pos, vec3{0.0f, 0.0f, 0.8f},

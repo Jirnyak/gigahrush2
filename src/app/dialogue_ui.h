@@ -4,6 +4,7 @@
 #include <cstdint>
 #include "ecs/registry.h"
 #include "game/contract.h"
+#include "game/dialogue.h"
 #include "game/faction.h"
 #include "game/npc_pool.h"
 #include "game/quest.h"
@@ -15,6 +16,7 @@ namespace giga {
 enum class DialogueAction : std::uint8_t {
     None = 0,
     AskRumours,
+    AskWarSituation,
     AcceptContract,
     AcceptQuest,
     OpenTrade,
@@ -28,9 +30,11 @@ struct DialogueSession {
     game::Faction faction = game::Faction::Citizens;
     game::RoleId role = game::RoleId::Resident;
     game::SpeechSituation situation = game::SpeechSituation::Ambient;
+    game::DialogueAttitude attitude = game::DialogueAttitude::Neutral;
     char speakerName[64] = {};
     char speechText[320] = {};
     char rumourText[256] = {};
+    char warReportText[320] = {};
     game::Contract contractOffer{};
     char contractText[200] = {};
     game::QuestId questOffer = game::kInvalidQuest;

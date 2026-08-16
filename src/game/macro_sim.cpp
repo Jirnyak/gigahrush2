@@ -192,6 +192,13 @@ MacroStats MacroSim::step(NpcPool& pool, const MacroParams& params,
             continue;
         }
 
+        // Lethal health threshold check for cold records
+        if (pool.hp(id) <= 0 && pool.max_hp(id) > 0) {
+            pool.kill(id);
+            ++deaths;
+            continue;
+        }
+
         std::uint32_t d = static_cast<std::uint32_t>(ageDays_[id]) +
                           static_cast<std::uint32_t>(days);
         int age = static_cast<int>(pool.age(id));
@@ -448,17 +455,17 @@ MacroStats MacroSim::step(NpcPool& pool, const MacroParams& params,
 namespace {
 
 void ms_u8(std::vector<std::uint8_t>& o, std::uint8_t v) { o.push_back(v); }
-void ms_u16(std::vector<std::uint8_t>& o, std::uint8_t v) {
+void ms_u16(std::vector<std::uint8_t>& o, std::uint16_t v) {
     o.push_back(static_cast<std::uint8_t>(v & 0xFFu));
-    o.push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFu));
+    o.push_back(static_cast<std::uint8_t>((static_cast<std::uint32_t>(v) >> 8) & 0xFFu));
 }
 void ms_u32(std::vector<std::uint8_t>& o, std::uint32_t v) {
     for (int i = 0; i < 4; ++i)
-        o.push_back(static_cast<std::uint8_t>((v >> (i * 8)) & 0xFFu));
+        o.push_back(static_cast<std::uint8_t>((v >> (static_cast<std::uint32_t>(i) * 8u)) & 0xFFu));
 }
 void ms_u64(std::vector<std::uint8_t>& o, std::uint64_t v) {
     for (int i = 0; i < 8; ++i)
-        o.push_back(static_cast<std::uint8_t>((v >> (i * 8)) & 0xFFu));
+        o.push_back(static_cast<std::uint8_t>((v >> (static_cast<std::uint64_t>(i) * 8ull)) & 0xFFull));
 }
 
 struct MsReader {
@@ -476,12 +483,12 @@ struct MsReader {
     }
     std::uint32_t u32() {
         std::uint32_t v = 0;
-        for (int i = 0; i < 4; ++i) v |= static_cast<std::uint32_t>(u8()) << (i * 8);
+        for (int i = 0; i < 4; ++i) v |= static_cast<std::uint32_t>(u8()) << (static_cast<std::uint32_t>(i) * 8u);
         return v;
     }
     std::uint64_t u64() {
         std::uint64_t v = 0;
-        for (int i = 0; i < 8; ++i) v |= static_cast<std::uint64_t>(u8()) << (i * 8);
+        for (int i = 0; i < 8; ++i) v |= static_cast<std::uint64_t>(u8()) << (static_cast<std::uint64_t>(i) * 8ull);
         return v;
     }
 };

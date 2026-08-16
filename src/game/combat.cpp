@@ -215,8 +215,9 @@ vec3 muzzle_point(const vec3& from, const vec3& unitDir, const vec3& sourcePos) 
         const float exit = -b + std::sqrt(disc);
         if (exit > t) t = exit;
     }
-    return vec3{from.x + unitDir.x * t, from.y + unitDir.y * t,
-                from.z + unitDir.z * t};
+    return vec3{wrapf(from.x + unitDir.x * t, kWorldExtent),
+                wrapf(from.y + unitDir.y * t, kWorldExtent),
+                wrapf(from.z + unitDir.z * t, kWorldExtent)};
 }
 
 // Percentage mitigation, clamped. A negative resist is a vulnerability, which is
@@ -287,7 +288,25 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
 
     if (const Armour* a = reg.try_get<Armour>(target)) {
         std::size_t i = static_cast<std::size_t>(ch);
-        if (i < kDamageChannels) dmg = mitigate(dmg, a->resist[i]);
+        if (i < kDamageChannels) {
+            const std::int8_t r = a->resist[i];
+            std::int16_t dt = 0;
+            if (r > 0) {
+                if (ch == DamageChannel::Buckshot) {
+                    dt = static_cast<std::int16_t>(r / 8); // Higher DT vs buckshot pellets
+                } else if (ch == DamageChannel::Kinetic) {
+                    dt = static_cast<std::int16_t>(r / 15); // Low DT vs kinetic bullets
+                } else if (ch == DamageChannel::Energy) {
+                    dt = 0; // Energy penetrates DT completely
+                }
+            }
+            std::int16_t afterDt = dmg;
+            if (dt > 0) {
+                const std::int16_t minPenetration = static_cast<std::int16_t>(std::max(1, (dmg * 15 + 50) / 100)); // 15% min bleed-through
+                afterDt = static_cast<std::int16_t>(std::max(static_cast<int>(minPenetration), static_cast<int>(dmg - dt)));
+            }
+            dmg = mitigate(afterDt, r);
+        }
     }
     if (const RpgStats* tRpg = reg.try_get<RpgStats>(target)) {
         const std::int16_t rpgRes = rpg_damage_resistance_pct(*tRpg, static_cast<std::uint8_t>(ch));
@@ -2003,9 +2022,19 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
     // Spec 03 §4.1: Piecewise jamming malfunction roll on fouled weapons.
     ItemSlot& gSlot = inv.slots[gunSlot];
     const ItemDef& d = item_def(gSlot.item);
-    if (d.wearKind == static_cast<std::uint8_t>(WearKind::Jamming)) {
+    if (d.wearKind == static_cast<std::uint8_t>(WearKind::Jamming) ||
+        d.wearKind == static_cast<std::uint8_t>(WearKind::Durability)) {
         const std::uint8_t cond = gSlot.condition;
-        if (cond < 200u) {
+        // Weapon broken at condition 0 cannot fire:
+        if (cond == 0) {
+            pr.cooldownMs = static_cast<std::uint16_t>(def->cooldownMs * 2);
+            if (bus) {
+                bus->publish(EventType::WeaponJammed, nr->id, gSlot.item, 255u, tick);
+            }
+            return 0; // Completely jammed / broken
+        }
+
+        if (d.wearKind == static_cast<std::uint8_t>(WearKind::Jamming) && cond < 200u) {
             float jamProb = 0.0f;
             if (cond >= 128u) {
                 // Low risk zone: 0% .. 5%
@@ -2034,8 +2063,9 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
                 return 0; // Jammed! Misfire
             }
         }
-        if (gSlot.condition > d.wearPerUse) {
-            gSlot.condition = static_cast<std::uint8_t>(gSlot.condition - d.wearPerUse);
+        const std::uint8_t wearAmount = d.wearPerUse > 0 ? d.wearPerUse : 1u;
+        if (gSlot.condition > wearAmount) {
+            gSlot.condition = static_cast<std::uint8_t>(gSlot.condition - wearAmount);
         } else {
             gSlot.condition = 0;
         }
@@ -2339,11 +2369,12 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
             constexpr int kSteps = 8;
             for (int i = 1; i <= kSteps; ++i) {
                 const float t = reach * (static_cast<float>(i) / kSteps);
-                const vec3 p{eye.x + fwd.x * t, eye.y + fwd.y * t,
-                             eye.z + fwd.z * t};
-                const int cx = wrap_macro(static_cast<int>(p.x / kCellSize));
-                const int cy = wrap_macro(static_cast<int>(p.y / kCellSize));
-                const int cz = wrap_macro(static_cast<int>(p.z / kCellSize));
+                const vec3 p{wrapf(eye.x + fwd.x * t, kWorldExtent),
+                             wrapf(eye.y + fwd.y * t, kWorldExtent),
+                             wrapf(eye.z + fwd.z * t, kWorldExtent)};
+                const int cx = wrap_macro(static_cast<int>(std::floor(p.x / kCellSize)));
+                const int cy = wrap_macro(static_cast<int>(std::floor(p.y / kCellSize)));
+                const int cz = wrap_macro(static_cast<int>(std::floor(p.z / kCellSize)));
                 if (grid->cell(cx, cy, cz) != kCellAir) {
                     hitWall = true;
                     hitAt = p;
