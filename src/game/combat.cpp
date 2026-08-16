@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "core/math.h"
+#include "core/rng.h"  // hash3 — deterministic wear-roll seeds
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "game/container.h" // Container — inventory overflow on death
@@ -294,6 +295,27 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
     }
 
     out.blocked = static_cast<std::int16_t>(raw - dmg);
+
+    // WEAR: blocked damage is the armour's USE ([equip.h]) — a vest that
+    // stopped something is a vest that frayed. Only decided armour wears (the
+    // Equipped strict read), and a changed condition must re-sync the Armour
+    // component now, because its resists scale with wear (sync_armour).
+    // Seed caveat, recorded: apply_damage has no tick, so the roll is seeded
+    // off (id, hp, blocked) — pathological identical full-block loops repeat
+    // the roll, but full blocks are the rare case (resists cap below 100%),
+    // and rows with durability <= 255 progress every hit regardless.
+    if (out.blocked > 0)
+        if (const NpcRef* tn = reg.try_get<NpcRef>(target))
+            if (pool.valid(tn->id))
+                if (const Equipped* teq = reg.try_get<Equipped>(target)) {
+                    const std::uint32_t seed =
+                        hash3(tn->id, static_cast<std::uint32_t>(
+                                          pool.hp(tn->id) + 32768),
+                              static_cast<std::uint32_t>(out.blocked));
+                    if (wear_equipped(pool.inventory(tn->id), *teq,
+                                      EquipSlot::Armor, seed))
+                        sync_armour(reg, pool, target);
+                }
 
     // Where the HP lives depends on what the target is, and that is the only
     // branch: everything above and below is common.
@@ -1028,16 +1050,26 @@ void sync_armour(Registry& reg, const NpcPool& pool, Entity e) {
     // A body with an Equipped component is owned by a decider — worn armour is
     // its recorded choice, strictly. Without one (monsters, cold paths) the
     // legacy best-scan stands. [equip.h]
-    const ItemId worn =
-        equipped_armour(pool.inventory(n->id), reg.try_get<Equipped>(e));
+    const Equipped* eq = reg.try_get<Equipped>(e);
+    const Inventory& inv = pool.inventory(n->id);
+    const ItemId worn = equipped_armour(inv, eq);
     if (worn == kInvalidItem) {
         if (reg.all_of<Armour>(e)) reg.remove<Armour>(e);
         return;
     }
+    // WEAR: a decided vest protects at 20%..100% of its authored resists,
+    // linearly in its condition ([equip.h] wear_resist_scale). Identity at 255
+    // and on the legacy no-decider path (condition is a per-cell byte the
+    // best-scan cannot see, so it wears nothing and scales nothing).
+    std::uint8_t cond = 255;
+    if (eq) {
+        const int ai = equipped_index(inv, *eq, EquipSlot::Armor);
+        if (ai >= 0) cond = inv.slots[ai].condition;
+    }
     const ItemDef& d = item_def(worn);
     Armour a{};
     for (std::size_t c = 0; c < kDamageChannels; ++c)
-        a.resist[c] = d.resist[c];
+        a.resist[c] = wear_resist_scale(d.resist[c], cond);
     reg.emplace_or_replace<Armour>(e, a);
 }
 
@@ -1959,6 +1991,12 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
     // ONE round per shot regardless of pellet count — a shotgun blast costs one shell
     // and produces up to twelve projectiles. The reference's rule.
     --pr.magCount;
+    // WEAR: one shot = one use of the decided firearm ([equip.h]). Sleeps
+    // until firearm rows carry a durability number; thrown weapons are their
+    // own ammo and never reach this line.
+    if (const Equipped* seq = reg.try_get<Equipped>(shooter))
+        wear_equipped(inv, *seq, EquipSlot::Weapon,
+                      hash3(static_cast<std::uint32_t>(tick), nr->id, 0x57EA9u));
     // RPGCMBT: AGI shortens firearm cooldown (same inverse mult as melee).
     std::uint16_t rcd = def->cooldownMs;
     if (const RpgStats* rs = reg.try_get<RpgStats>(shooter)) {
@@ -2073,11 +2111,19 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
     // RpgStats component the raw table values are used (identity mults).
     const MeleeDef* wp = &unarmed_melee();
     ItemId heldWeapon = 0;  // 0 = bare hands sentinel [item_table.h]
+    NpcId selfId = kInvalidNpc;
+    const Equipped* selfEq = reg.try_get<Equipped>(self);
+    std::uint8_t weaponCond = 255;  // fists: mint by definition
     if (const NpcRef* n = reg.try_get<NpcRef>(self))
         if (pool.valid(n->id)) {
-            heldWeapon = equipped_melee(pool.inventory(n->id),
-                                        reg.try_get<Equipped>(self));
+            selfId = n->id;
+            heldWeapon = equipped_melee(pool.inventory(n->id), selfEq);
             if (const MeleeDef* m = melee_for_item(heldWeapon)) wp = m;
+            if (selfEq && heldWeapon != kInvalidItem) {
+                const int wi = equipped_index(pool.inventory(selfId), *selfEq,
+                                              EquipSlot::Weapon);
+                if (wi >= 0) weaponCond = pool.inventory(selfId).slots[wi].condition;
+            }
         }
     std::int16_t swingDmg = static_cast<std::int16_t>(wp->dmg);
     std::uint16_t swingCd = wp->cooldownMs;
@@ -2101,6 +2147,10 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
                          static_cast<unsigned>(heldWeapon));
         }
     }
+    // WEAR: a ruined blade hits at 60% ([equip.h] wear_damage_scale). After
+    // RPGCMBT (skill scales the weapon you actually hold), before STATMELEE.
+    // Identity at 255, so fists and mint weapons pay nothing.
+    swingDmg = wear_damage_scale(swingDmg, weaponCond);
     // STATMELEE: authored status melee mult (Zhelemish 700/1000). Applied after
     // RPGCMBT so both bite; identity 1000 when status is null or clean.
     if (status) {
@@ -2171,6 +2221,13 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
                              carve_power_from_dmg(swingDmg),
                              static_cast<std::uint32_t>(tick));
                 pm.cooldownMs = swingCd;
+                // A swing into a wall is a USE — the same one wear counts on
+                // flesh. Sleeps until the weapon's CSV row carries durability.
+                if (selfEq && selfId != kInvalidNpc)
+                    wear_equipped(pool.inventory(selfId), *selfEq,
+                                  EquipSlot::Weapon,
+                                  hash3(static_cast<std::uint32_t>(tick),
+                                        selfId, 0x57EA9u));
                 (void)bus;
                 return true;
             }
@@ -2186,8 +2243,12 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
                                   gravity);
     pm.cooldownMs = swingCd;
     if (r.lethal) ++pm.kills;
+    // WEAR: one landed swing = one use of the decided weapon ([equip.h]).
+    // Fists (no decision) and durability-0 rows are no-ops inside.
+    if (r.hit && selfEq && selfId != kInvalidNpc)
+        wear_equipped(pool.inventory(selfId), *selfEq, EquipSlot::Weapon,
+                      hash3(static_cast<std::uint32_t>(tick), selfId, 0x57EA9u));
     (void)bus;
-    (void)tick;
     return r.hit;
 }
 

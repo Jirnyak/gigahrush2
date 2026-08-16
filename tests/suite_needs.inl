@@ -393,6 +393,16 @@ void attrition() {
     const DamageResult k = apply_damage(rig.reg, rig.pool, rig.body, 100,
                                         DamageChannel::Kinetic, entt::null);
     CHECK(k.blocked > 0 && k.applied < 100);
+    // WEAR: ruin the decided vest by hand and re-sync — the Armour component
+    // must now carry the 20% floor ([equip.h] wear_resist_scale), so the same
+    // hit hurts more than it did on the mint vest.
+    rig.pool.inventory(rig.id).slots[0].condition = 0;
+    sync_armour(rig.reg, rig.pool, rig.body);
+    const DamageResult worn = apply_damage(rig.reg, rig.pool, rig.body, 100,
+                                           DamageChannel::Kinetic, entt::null);
+    CHECK(worn.hit);
+    CHECK(worn.blocked < k.blocked);
+    CHECK(worn.applied > k.applied);
 
     // Starving to death is the SAME death as being clubbed to death: Dead tag, one
     // finalizer, one NpcDied event. There is no second death route.

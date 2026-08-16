@@ -952,6 +952,79 @@ static void test_craft_all() {
         CHECK(equipped_armour(bag2, &eq) == kInvalidItem);
     }
 
+    { // ---- wear: the durability column IS the lifetime ([equip.h]) ----------
+        // Fixtures by property off the compiled table: one eternal row
+        // (durability 0), one one-use row, one row whose 255/dur has a
+        // fraction, one row larger than the condition byte itself.
+        ItemId eternal = kInvalidItem, oneUse = kInvalidItem,
+               fracRow = kInvalidItem, bigRow = kInvalidItem;
+        for (std::size_t i = 1; i <= kItemCount; ++i) {
+            const ItemId id = static_cast<ItemId>(i);
+            if (!item_valid(id)) continue;
+            const ItemDef& d = item_def(id);
+            const bool wearable =
+                d.equipSlot != static_cast<std::uint8_t>(EquipSlot::None);
+            if (eternal == kInvalidItem && wearable && d.durability == 0)
+                eternal = id;
+            if (oneUse == kInvalidItem && wearable && d.durability == 1)
+                oneUse = id;
+            if (fracRow == kInvalidItem && wearable && d.durability > 1 &&
+                d.durability <= 255 && 255 % d.durability != 0)
+                fracRow = id;
+            if (bigRow == kInvalidItem && wearable && d.durability > 255)
+                bigRow = id;
+        }
+        CHECK(eternal != kInvalidItem);
+        CHECK(oneUse != kInvalidItem);   // door_kit/block_kit, dur = 1
+        CHECK(fracRow != kInvalidItem);  // chalk-class, base + fractional roll
+        CHECK(bigRow != kInvalidItem);   // flashlight 300 > 255: roll-only
+
+        auto wear_out = [](ItemId id) -> int {
+            // Uses until ruined under a deterministic seed walk; -1 = never.
+            Inventory b{};
+            b.slots[0] = ItemSlot{id, 1};
+            Equipped e{};
+            CHECK(equip_item(b, e, 0));
+            const EquipSlot sl = static_cast<EquipSlot>(item_def(id).equipSlot);
+            for (int u = 1; u <= 4000; ++u) {
+                if (!wear_equipped(b, e, sl, hash3(7u, id, static_cast<std::uint32_t>(u))))
+                    return -1;                       // refused: eternal row
+                if (b.slots[0].condition == 0) return u;
+            }
+            return -2;                               // never ruined: broken math
+        };
+        CHECK(wear_out(eternal) == -1);
+        CHECK(wear_out(oneUse) == 1);
+        {   // Expectation law: uses-to-ruin tracks the column, both régimes.
+            const int fu = wear_out(fracRow);
+            const int fd = static_cast<int>(item_def(fracRow).durability);
+            CHECK(fu > 0 && fu >= fd / 2 && fu <= fd * 2);
+            const int bu = wear_out(bigRow);
+            const int bd = static_cast<int>(item_def(bigRow).durability);
+            CHECK(bu > 0 && bu >= bd / 2 && bu <= bd * 2);
+        }
+        // Ruined stays ruined: at condition 0 the roll is a refusal, not a wrap.
+        {
+            Inventory b{};
+            b.slots[0] = ItemSlot{oneUse, 1};
+            b.slots[0].condition = 0;
+            Equipped e{};
+            CHECK(equip_item(b, e, 0));
+            const EquipSlot sl =
+                static_cast<EquipSlot>(item_def(oneUse).equipSlot);
+            CHECK(!wear_equipped(b, e, sl, 1u));
+            CHECK(b.slots[0].condition == 0);
+        }
+        // The ONLY two effect formulas, endpoints pinned: mint is identity,
+        // ruin is the floor (60% damage, 20% resist), midpoint is between.
+        CHECK(wear_damage_scale(100, 255) == 100);
+        CHECK(wear_damage_scale(100, 0) == 60);
+        const std::int16_t mid = wear_damage_scale(100, 128);
+        CHECK(mid > 60 && mid < 100);
+        CHECK(wear_resist_scale(100, 255) == 100);
+        CHECK(wear_resist_scale(100, 0) == 20);
+    }
+
     // Work counts, printed. Counts and not seconds: the same run does the same
     // amount of work on every host, which a stopwatch cannot promise.
     CHECK(disassembliesRun > 7000u);

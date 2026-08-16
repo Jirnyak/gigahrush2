@@ -943,7 +943,17 @@ if(GIGA_BUILD_TESTS)
     # read), decision recording per slot kind, rot-to-bare-hands, refusals.
     # Mutation RUN, not assumed: disable the strict branch in equipped_melee
     # (`if (false && eq)`) -> exactly 2 red, both on the no-auto-equip pins.
-        PASS_REGULAR_EXPRESSION "game_test: 240265 checks, 0 failures")
+    # 240265 -> 240288 (+23) on 2026-08-16: wear mechanics ([equip.h]). The +23
+    # pin: the durability column IS the lifetime (eternal refuses, one-use
+    # ruins in one, frac/roll rows land within 2x of their column), ruin is
+    # sticky, the two effect formulas' endpoints (60% damage / 20% resist
+    # floors, mint identity), and a ruined vest blocking less than a mint one
+    # through apply_damage + sync_armour (suite_craft, suite_needs). Mutations
+    # RUN on the committed tree, both measured: wear_equipped -> early return
+    # false = exactly 3 red (one-use, frac-row, roll-row lifetimes);
+    # wear_resist_scale -> identity = exactly 3 red (both worn-vest deltas in
+    # suite_needs + the 20%-floor endpoint pin).
+        PASS_REGULAR_EXPRESSION "game_test: 240288 checks, 0 failures")
 
 
 

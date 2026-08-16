@@ -53,4 +53,30 @@ int equipped_index(const Inventory& inv, const Equipped& eq, EquipSlot slot);
 // То же, но сразу ItemId (kInvalidItem, если решения нет).
 ItemId equipped_item(const Inventory& inv, const Equipped& eq, EquipSlot slot);
 
+// --- Износ ------------------------------------------------------------------
+// Состояние — байт `condition` клетки ([inventory.h]); СКОРОСТЬ — колонка
+// `durability` строки предмета (число использований до руин; 0 = вечный).
+// Один вызов = одно использование. Декремент — вероятностный хэш-ролл в
+// традиции carve ([destruct.h]): base = 255/durability, дробный остаток
+// добирается роллом, так что МАТОЖИДАНИЕ использований до нуля равно колонке
+// точно — и для durability 300, которое в целые шаги не делится.
+// `seed` — детерминизм вызывающего (tick/id/соль), не Math.random.
+// false — нет решения, слот протух или предмет вечный.
+bool wear_equipped(Inventory& inv, const Equipped& eq, EquipSlot slot,
+                   std::uint32_t seed);
+
+// Эффект состояния, ЕДИНСТВЕННЫЕ две формулы (никаких локальных копий):
+// оружие держит 60% урона на руинах, броня — 20% резистов. Целочисленно,
+// монотонно, 255 -> ровно 100%.
+inline std::int16_t wear_damage_scale(std::int16_t dmg, std::uint8_t cond) {
+    // 60% + 40% * cond/255
+    return static_cast<std::int16_t>(
+        (static_cast<std::int32_t>(dmg) * (153 + (102 * cond) / 255)) / 255);
+}
+inline std::int8_t wear_resist_scale(std::int8_t resist, std::uint8_t cond) {
+    // 20% + 80% * cond/255
+    return static_cast<std::int8_t>(
+        (static_cast<std::int32_t>(resist) * (51 + (204 * cond) / 255)) / 255);
+}
+
 } // namespace giga::game

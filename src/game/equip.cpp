@@ -1,5 +1,7 @@
 #include "game/equip.h"
 
+#include "core/rng.h"  // hash_u32, rand_below — the wear roll
+
 namespace giga::game {
 
 namespace {
@@ -51,6 +53,24 @@ int equipped_index(const Inventory& inv, const Equipped& eq, EquipSlot slot) {
 ItemId equipped_item(const Inventory& inv, const Equipped& eq, EquipSlot slot) {
     const int idx = equipped_index(inv, eq, slot);
     return idx >= 0 ? inv.slots[idx].item : kInvalidItem;
+}
+
+bool wear_equipped(Inventory& inv, const Equipped& eq, EquipSlot slot,
+                   std::uint32_t seed) {
+    const int idx = equipped_index(inv, eq, slot);
+    if (idx < 0) return false;
+    ItemSlot& s = inv.slots[idx];
+    const std::uint16_t dur = item_def(s.item).durability;
+    if (dur == 0) return false;          // вечный — контентное решение строки
+    if (s.condition == 0) return false;  // руины дальше не изнашиваются
+
+    // 255 = base * dur + frac: целая часть каждый раз, дробная — роллом.
+    std::uint32_t dec = 255u / dur;
+    const std::uint32_t frac = 255u % dur;
+    if (frac != 0 && rand_below(hash_u32(seed), dur) < frac) ++dec;
+    s.condition = static_cast<std::uint8_t>(
+        dec >= s.condition ? 0 : s.condition - dec);
+    return true;
 }
 
 } // namespace giga::game
