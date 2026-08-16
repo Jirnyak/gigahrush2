@@ -27,6 +27,7 @@
 #include "game/weapon_table.h"
 #include "sim/camera.h"   // camera_forward
 #include "world/macro_grid.h"
+#include "world/material_props.h" // material_hardness — окно угла рикошета
 #include "world/los.h"   // los_clear — a wall stops a fragment
 #include "world/stain.h" // blood — the universal stain layer
 #include "world/world.h"
@@ -1476,6 +1477,10 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         // the two: a bullet is spent by the first solid it meets, a grenade is
         // redirected by it. [ARCHITECTURE.md] §Манифест п.5.
         const bool grenade = static_cast<ProjType>(p.proj) == ProjType::Grenade;
+        // Точка ДО интеграции — из неё восстанавливается пересечённая грань,
+        // если шаг закончился в твёрдом (рикошет ниже). Без обёртки: тест
+        // плоскостей работает в непрерывных координатах, обернёт финал.
+        const vec3 prevPos = tr.pos;
         if (grenade) {
             grenade_advance(grid, tr.pos, v.v, dt);
         } else {
@@ -1598,8 +1603,91 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         const int cx = wrap_macro(static_cast<int>(tr.pos.x / kCellSize));
         const int cy = wrap_macro(static_cast<int>(tr.pos.y / kCellSize));
         const int cz = static_cast<int>(tr.pos.z / kCellSize);
-        if (cz < 0 || cz >= kMacroDim ||
-            grid.cell(cx, cy, wrap_macro(cz)) != kCellAir) {
+        const bool outOfZ = cz < 0 || cz >= kMacroDim;
+        if (outOfZ || grid.cell(cx, cy, wrap_macro(cz)) != kCellAir) {
+            // РИКОШЕТ по касательной от твёрдой поверхности (формула форка
+            // 16004b86, нормаль — НАША). У форка нормаль бралась из argmax
+            // скорости — у такой «нормали» cos падения ≥ 1/√3 ≈ 0.577, что
+            // выше обоих порогов (0.55/0.40): его рикошет был мёртвым кодом.
+            // Честная нормаль — грань, через которую шаг ВОШЁЛ в терминальную
+            // клетку: по каждой оси со сменой индекса клетки берётся время
+            // пересечения её границы, грань входа — ПОЗДНЕЙШЕЕ из них (та же
+            // плоскостная арифметика, что в grenade_advance, только с конца).
+            const CellType mat =
+                outOfZ ? kMatConcrete : grid.cell(cx, cy, wrap_macro(cz));
+            const float spd = length(v.v);
+            const bool bullet =
+                static_cast<ProjType>(p.proj) == ProjType::Bullet && p.dmg >= 4;
+            if (bullet && spd > 1.0f) {
+                const vec3 dir = v.v * (1.0f / spd);
+                float bestT = -1.0f;
+                int bestA = -1;
+                float bestD = 0.0f;
+                const vec3 to = prevPos + v.v * dt; // непрерывные координаты
+                for (int a = 0; a < 3; ++a) {
+                    const float f = axis(prevPos, a);
+                    const float d = axis(to, a) - f;
+                    if (d > -1e-9f && d < 1e-9f) continue;
+                    const int cf = static_cast<int>(std::floor(f / kCellSize));
+                    const int ct =
+                        static_cast<int>(std::floor(axis(to, a) / kCellSize));
+                    if (cf == ct) continue;
+                    // Граница терминальной клетки по этой оси, со стороны входа.
+                    const float plane =
+                        static_cast<float>(d > 0.0f ? ct : ct + 1) * kCellSize;
+                    const float t = (plane - f) / d;
+                    if (t > bestT) { bestT = t; bestA = a; bestD = d; }
+                }
+                if (bestA >= 0) {
+                    vec3 n{0.0f, 0.0f, 0.0f};
+                    axis(n, bestA) = bestD > 0.0f ? -1.0f : 1.0f;
+                    const float cosInc = -dot(dir, n); // ~0 — касание вскользь
+                    // Сталь звонче бетона: шире окно угла, выше упругость,
+                    // меньше съеденного урона. Мягкое (hardness < 180 и не из
+                    // списков) не отражает вовсе — пуля вязнет, как раньше.
+                    const bool isSteel =
+                        mat == kMatTread || mat == kMatElectricGrate ||
+                        mat == kMatPipeMetal || mat == kMatDoor ||
+                        mat == kMatShopShutter;
+                    const bool isConcrete = mat == kMatConcrete ||
+                                            mat == kMatFactoryWall ||
+                                            mat == kMatSlabTan || outOfZ;
+                    const bool isHard = material_hardness(mat) >= 180 ||
+                                        isSteel || isConcrete;
+                    const float maxCos = isSteel ? 0.55f : 0.40f;
+                    if (isHard && cosInc > 0.01f && cosInc < maxCos) {
+                        const float eRest = isSteel ? 0.55f : 0.40f;
+                        const float fFric = isSteel ? 0.85f : 0.70f;
+                        const vec3 vn = n * dot(v.v, n);
+                        const vec3 vt = v.v - vn;
+                        v.v = vt * fFric - vn * eRest;
+                        // Точка контакта + отжим от грани, чтобы следующий шаг
+                        // спрашивал воздух, а не ту же клетку.
+                        vec3 hitP =
+                            prevPos + (to - prevPos) * (bestT < 0.0f ? 0.0f : bestT);
+                        axis(hitP, bestA) += axis(n, bestA) * 0.02f;
+                        tr.pos.x = wrapf(hitP.x, kWorldExtent);
+                        tr.pos.y = wrapf(hitP.y, kWorldExtent);
+                        tr.pos.z = hitP.z;
+                        p.dmg = static_cast<std::int16_t>(
+                            (p.dmg * (isSteel ? 65 : 50) + 50) / 100);
+                        const std::uint32_t rseed =
+                            static_cast<std::uint32_t>(tick) ^
+                            static_cast<std::uint32_t>(entt::to_integral(e));
+                        // Скол мельче прямого попадания, искры — от материала,
+                        // который высекли, не от выдуманного.
+                        if (carves)
+                            carves->push(tr.pos.x, tr.pos.y, tr.pos.z,
+                                         kBulletCarveRadius * 0.6f,
+                                         carve_power_from_dmg(p.dmg), rseed);
+                        if (particles)
+                            particles->push(tr.pos, n * 0.5f - dir * 0.5f,
+                                            ParticleKind::Spark,
+                                            isSteel ? 12 : 6, mat, rseed);
+                        continue; // пуля жива и летит дальше
+                    }
+                }
+            }
             Hit h{e, p.dmg, p.source, false};
             h.onWall = true;
             h.impactPos = tr.pos;

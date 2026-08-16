@@ -3920,6 +3920,77 @@ static void test_grenade() {
     }
 }
 
+// РИКОШЕТ: пуля по касательной от твёрдой грани живёт и летит дальше;
+// пуля в лоб гаснет, как гасла всегда. Нормаль — грань входа в терминальную
+// клетку (плоскостная арифметика grenade_advance), НЕ argmax скорости: у
+// той cos падения ≥ 1/√3 ≈ 0.577 при порогах 0.55/0.40, и рикошет форка был
+// мёртвым кодом — что и есть главная проверка этого теста.
+//
+// Обратная полярность: сузь окно угла до нуля (maxCos = 0 в combat.cpp) — и
+// красными станут ровно проверки блока 1; блок 2 не дрогнет.
+static void test_ricochet() {
+    LevelStack stack;
+    LayerId layer = stack.push_layer();
+    generate_floor(stack.layer(layer), 1, floor_spec(FloorKind::Commercial), 5u);
+    // Полая комната + бетонный пол под ней — та же геометрия, что у гранаты.
+    for (int z = 20; z <= 24; ++z)
+        for (int y = 16; y <= 24; ++y)
+            for (int x = 16; x <= 30; ++x)
+                stack.layer(layer).grid().clear_cell(x, y, z);
+    for (int y = 16; y <= 24; ++y)
+        for (int x = 16; x <= 30; ++x)
+            stack.layer(layer).grid().fill_cell(x, y, 19, kMatConcrete);
+
+    auto shoot = [&](Registry& r, const vec3& at, const vec3& vel,
+                     std::int16_t dmg) {
+        Entity b = r.create();
+        Transform t;
+        t.pos = at;
+        t.layer = layer;
+        r.emplace<Transform>(b, t);
+        r.emplace<Velocity>(b, Velocity{vel});
+        r.emplace<AABB>(b, AABB{vec3{0.05f, 0.05f, 0.05f}});
+        // gravityPct 0: тест про геометрию отражения, не про баллистику.
+        r.emplace<Projectile>(
+            b, Projectile{entt::null, dmg, 5000, 0,
+                          static_cast<std::uint8_t>(ProjType::Bullet), 0, 0});
+        return b;
+    };
+
+    NpcPool pool;
+    pool.init();
+    EventBus bus;
+
+    // ---- 1. Касание вскользь: отражение, затухание, жизнь ------------------
+    {
+        Registry reg;
+        // 15 мм над полом (верх бетона на z = 40.0), почти параллельно ему:
+        // dir.z = -3/60.07 ≈ -0.05, cos падения 0.05 < 0.40 (окно бетона).
+        Entity b = shoot(reg, vec3{34.0f, 40.0f, 40.015f},
+                         vec3{60.0f, 0.0f, -3.0f}, 100);
+        projectile_step(reg, pool, bus, stack, layer, kSimDt, 1u);
+        CHECK(reg.valid(b));                       // пуля пережила контакт
+        const Velocity& v = reg.get<Velocity>(b);
+        CHECK(v.v.z > 0.0f);                       // нормальная компонента отражена
+        CHECK(std::abs(v.v.z - 3.0f * 0.40f) < 1e-3f);   // eRest бетона
+        CHECK(std::abs(v.v.x - 60.0f * 0.70f) < 1e-3f);  // fFric бетона
+        CHECK(reg.get<Projectile>(b).dmg == 50);   // бетон съедает половину
+        CHECK(reg.get<Transform>(b).pos.z > 40.0f); // отжата НАД грань
+        // Дальше летит как обычная пуля: ещё шаг — всё ещё жива, воздух вокруг.
+        projectile_step(reg, pool, bus, stack, layer, kSimDt, 2u);
+        CHECK(reg.valid(b));
+    }
+
+    // ---- 2. В лоб: гаснет, рикошет не подменяет попадание ------------------
+    {
+        Registry reg;
+        Entity b = shoot(reg, vec3{44.0f, 40.0f, 40.5f},
+                         vec3{0.0f, 0.0f, -63.0f}, 100);  // cos падения 1.0
+        projectile_step(reg, pool, bus, stack, layer, kSimDt, 1u);
+        CHECK(!reg.valid(b));                      // стена по-прежнему стена
+    }
+}
+
 
 // The faction matrix, as a LIVE mechanic rather than a table.
 //
@@ -5289,6 +5360,7 @@ int main() {
     test_player_shoots();
     test_lob_isotropy();
     test_grenade();
+    test_ricochet();
     test_needs_all();
     test_noise_all();
     test_packs_all();

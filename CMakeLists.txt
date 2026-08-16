@@ -1000,12 +1000,14 @@ if(GIGA_BUILD_TESTS)
     # segfault was the incomplete hand-built FineNav fixtures, fixed in the
     # wander wave; the one edit here is apply_damage's arity (his tree had a
     # trailing fluid param). Knockback under a gravity field, per-regime.
+    # 240553 -> 240561 (+8) on 2026-08-17: test_ricochet — касание вскользь
+    # отражается (нормаль/тангенс/урон/отжим/выживание, 7), в лоб гаснет (1).
     # 240357 -> 240553 (+196) on 2026-08-17: suite_audio — DSP-примитивы,
     # гейгер-пуассон, сирена С-40, эмбиент-гармоники, equal-power панорама,
     # окклюзия. Сьюта форка ПРОРЕЖЕНА: его 295k пер-сэмпловых NaN-ассертов
     # схлопнуты в аккумуляторы (один CHECK на цикл) — ратчет счётчика чеков
     # не должен обесцениваться буфером на 48k сэмплов. Mutation RUN: см. коммит.
-        PASS_REGULAR_EXPRESSION "game_test: 240553 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "game_test: 240561 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются
