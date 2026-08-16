@@ -3007,6 +3007,9 @@ int main(int argc, char** argv) {
                 aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
                                        kSimDt, aiCfg, &aiMem, &doors, &activeWorld,
                                        &roomZones);
+                // Intent first, wardrobe second: the equip DECIDER re-scores
+                // each body's bag on its own staggered slot. [ai.h] [equip.h]
+                game::ai_equip_step(reg, pool, activeLayer, simTick);
                 // AIMEM proof trail: once nav has brains and AI is on, emit a
                 // compact stderr pulse so a --shot harness can assert the store
                 // is live (rows/writes/recalled) without parsing the HUD.
@@ -4065,7 +4068,8 @@ int main(int argc, char** argv) {
                     if (const auto* nrg = reg.try_get<game::NpcRef>(player))
                         if (pool.valid(nrg->id))
                             haveGun = game::equipped_ranged(
-                                          pool.inventory(nrg->id)) !=
+                                          pool.inventory(nrg->id),
+                                          reg.try_get<game::Equipped>(player)) !=
                                       game::kInvalidItem;
                 // Combat carves: clear, fill during melee/projectiles, dispose
                 // same step if !doors.frozen (v1 drops proposals during bake).
@@ -5027,14 +5031,18 @@ int main(int argc, char** argv) {
                     for (const auto& sl : inv.slots)
                         if (sl.item != 0) ++slots;
 
-                    const game::ItemId wpn = game::equipped_melee(inv);
-                    const game::ItemId arm = game::equipped_armour(inv);
+                    // The player's HUD shows the player's DECISION, not a scan:
+                    // fists until `equip` says otherwise. [equip.h]
+                    const game::Equipped* peq =
+                        reg.try_get<game::Equipped>(player);
+                    const game::ItemId wpn = game::equipped_melee(inv, peq);
+                    const game::ItemId arm = game::equipped_armour(inv, peq);
                     const game::MeleeDef* md = game::melee_for_item(wpn);
                     if (!md) md = &game::unarmed_melee();
                     // The firearm, when there is one. Named separately from the
                     // melee line because they are different loadout slots, not two
                     // spellings of the same one.
-                    if (const game::ItemId g_ = game::equipped_ranged(inv)) {
+                    if (const game::ItemId g_ = game::equipped_ranged(inv, peq)) {
                         const game::RangedDef* rd = game::ranged_for_item(g_);
                         const auto* prs = reg.try_get<game::PlayerRanged>(player);
                         if (rd)

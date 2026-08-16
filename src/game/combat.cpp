@@ -973,7 +973,14 @@ std::uint32_t hazard_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
     return static_cast<std::uint32_t>(hits.size());
 }
 
-ItemId equipped_melee(const Inventory& inv) {
+ItemId equipped_melee(const Inventory& inv, const Equipped* eq) {
+    // A decider owns this body: only its recorded choice counts, and only if
+    // that slot still holds a MELEE weapon — a decided firearm is not a club.
+    // No choice / rotted index = bare hands, never a silent best-scan. [equip.h]
+    if (eq) {
+        const ItemId chosen = equipped_item(inv, *eq, EquipSlot::Weapon);
+        return melee_for_item(chosen) ? chosen : kInvalidItem;
+    }
     ItemId best = kInvalidItem;
     std::uint16_t bestDmg = 0;
     for (const ItemSlot& s : inv.slots) {
@@ -996,7 +1003,9 @@ ItemId equipped_melee(const Inventory& inv) {
 //
 // There is no ItemCategory::Armour to test instead: all five armour rows carry category
 // MISC. `equipSlot` is the only field that actually encodes the intent.
-ItemId equipped_armour(const Inventory& inv) {
+ItemId equipped_armour(const Inventory& inv, const Equipped* eq) {
+    // Strict decision read, same rule as equipped_melee above. [equip.h]
+    if (eq) return equipped_item(inv, *eq, EquipSlot::Armor);
     ItemId best = kInvalidItem;
     int bestSum = 0;
     for (const ItemSlot& s : inv.slots) {
@@ -1010,12 +1019,16 @@ ItemId equipped_armour(const Inventory& inv) {
     return best;
 }
 
-void sync_armour(Registry& reg, NpcPool& pool, Entity e) {
+void sync_armour(Registry& reg, const NpcPool& pool, Entity e) {
     if (!reg.valid(e)) return;
     const NpcRef* n = reg.try_get<NpcRef>(e);
     if (!n || !pool.valid(n->id)) return;
 
-    const ItemId worn = equipped_armour(pool.inventory(n->id));
+    // A body with an Equipped component is owned by a decider — worn armour is
+    // its recorded choice, strictly. Without one (monsters, cold paths) the
+    // legacy best-scan stands. [equip.h]
+    const ItemId worn =
+        equipped_armour(pool.inventory(n->id), reg.try_get<Equipped>(e));
     if (worn == kInvalidItem) {
         if (reg.all_of<Armour>(e)) reg.remove<Armour>(e);
         return;
@@ -1834,7 +1847,7 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
     if (!nr || !pool.valid(nr->id)) return 0;
     Inventory& inv = pool.inventory(nr->id);
 
-    const ItemId gun = equipped_ranged(inv);
+    const ItemId gun = equipped_ranged(inv, reg.try_get<Equipped>(shooter));
     const RangedDef* def = ranged_for_item(gun);
     if (!def) return 0;
 
@@ -2061,7 +2074,8 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
     ItemId heldWeapon = 0;  // 0 = bare hands sentinel [item_table.h]
     if (const NpcRef* n = reg.try_get<NpcRef>(self))
         if (pool.valid(n->id)) {
-            heldWeapon = equipped_melee(pool.inventory(n->id));
+            heldWeapon = equipped_melee(pool.inventory(n->id),
+                                        reg.try_get<Equipped>(self));
             if (const MeleeDef* m = melee_for_item(heldWeapon)) wp = m;
         }
     std::int16_t swingDmg = static_cast<std::int16_t>(wp->dmg);

@@ -1039,6 +1039,16 @@ void ai_panic_publish_step(Registry& reg, const NpcPool& pool,
                            DiffusionDriver& driver, World& world,
                            LayerId layer, float dt);
 
+// The NPC equip DECIDER ([equip.h]): экипировка — решение, и для тел с AiBrain
+// решает этот проход. Staggered per body (~2 s game time), re-scores the bag —
+// weapon (gun over club, then DPS/damage), armour (total resist) — and records
+// the choice in the body's Equipped component, which combat's strict readers
+// then obey. THE single writer of Equipped for AiBrain bodies; the player's is
+// written only by their own hand (console `equip`). Runs after ai_step in the
+// tick: intent first, wardrobe second.
+void ai_equip_step(Registry& reg, const NpcPool& pool, LayerId layer,
+                   std::uint64_t tick);
+
 // --- Recorders anything may call --------------------------------------------
 // The write side of the seam, deliberately public and deliberately tiny: filing a
 // fact is ONE call with no registry, no world and no allocation, which is what

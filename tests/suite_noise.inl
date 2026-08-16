@@ -362,6 +362,10 @@ static void test_noise_moves_a_monster_that_cannot_see_you() {
         CHECK(def != nullptr);
         inv.slots[0] = ItemSlot{gun, 1};
         if (def) inv.slots[1] = ItemSlot{def->ammo, 40};
+        // The DECISION, recorded: a bag with a gun in it is bare hands until
+        // someone equips it ([equip.h]) — this is the player's hand doing so,
+        // the same write `equip 0` performs in the console.
+        equip_item(inv, r.reg.get<Equipped>(r.player), 0);
         // Pre-armed: weapon already drawn, magazine already full.
         //
         // Without this the test cannot fire at all, and it is worth recording why,

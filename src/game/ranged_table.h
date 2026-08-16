@@ -64,6 +64,7 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "game/equip.h"       // Equipped — strict-read decision ([equip.h])
 #include "game/inventory.h"   // Inventory, for equipped_ranged
 #include "game/item_table.h"
 
@@ -166,7 +167,12 @@ inline float ranged_dps(const RangedDef& d) {
 // test is `ranged_is_thrown`, i.e. the item is its own ammunition; see the header
 // note. Grenades are picked by `equipped_throwable` and thrown by
 // `player_throw_step`, on their own button.
-ItemId equipped_ranged(const Inventory& inv);
+//
+// `eq` non-null switches to the strict decision read, same rule as
+// equipped_melee ([combat.h]): only the recorded weapon choice counts, and it
+// counts only if that slot still holds a FIREARM (a decided melee weapon does
+// not make this hand a gun).
+ItemId equipped_ranged(const Inventory& inv, const Equipped* eq = nullptr);
 
 // The best explosive in an inventory, by damage x blast radius, or kInvalidItem.
 //

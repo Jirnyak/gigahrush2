@@ -533,6 +533,9 @@ public:
     std::array<std::uint8_t, kAttrSlots>& attrs(NpcId id) { return attr_[id]; }
 
     Inventory&     inventory(NpcId id) { return inv_[id]; }
+    // Const read side, same rule as faction() above: the equip decider scores
+    // the bag without earning write access to it.
+    const Inventory& inventory(NpcId id) const { return inv_[id]; }
     // The survival clock. Canonical here, not on the entity, so it survives the
     // body swap an elevator ride performs ([needs.h]).
     Needs&         needs(NpcId id)     { return needs_[id]; }

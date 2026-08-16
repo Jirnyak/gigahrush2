@@ -612,6 +612,108 @@ bool cmd_spawn_ball(ConsoleContext& ctx, int argc, const char* const* argv,
     return true;
 }
 
+// --- equip / unequip / gear — the player's HAND on the decision cells --------
+// Экипировка — решение ([equip.h]); у игрока решает не проход ИИ, а этот ввод.
+// The trio is the player-side writer of Equipped, the exact counterpart of
+// ai_equip_step for AiBrain bodies.
+
+// Shared preamble: the player's pool row id, or false with a put() message.
+bool equip_ctx(ConsoleContext& ctx, const char* who, char* out, std::size_t cap,
+               NpcId* id) {
+    if (!ctx.pool || !ctx.ecs || ctx.player == entt::null ||
+        !ctx.ecs->valid(ctx.player)) {
+        if (out && cap) std::snprintf(out, cap, "%s: no live player", who);
+        return false;
+    }
+    const auto* nr = ctx.ecs->try_get<NpcRef>(ctx.player);
+    if (!nr || !ctx.pool->valid(nr->id)) {
+        if (out && cap) std::snprintf(out, cap, "%s: player has no pool body", who);
+        return false;
+    }
+    *id = nr->id;
+    return true;
+}
+
+bool cmd_equip(ConsoleContext& ctx, int argc, const char* const* argv,
+               char* out, std::size_t cap) {
+    NpcId id{};
+    if (!equip_ctx(ctx, "equip", out, cap, &id)) return false;
+    if (argc < 2) {
+        put(out, cap, "usage: equip <inventory slot 0..63> (see `gear`)");
+        return false;
+    }
+    char* end = nullptr;
+    const long idx = std::strtol(argv[1], &end, 10);
+    if (end == argv[1] || (end && *end) || idx < 0 || idx >= kInvSlots) {
+        if (out && cap)
+            std::snprintf(out, cap, "equip: '%s' is not a slot 0..63", argv[1]);
+        return false;
+    }
+    const Inventory& inv = ctx.pool->inventory(id);
+    Equipped& eq = ctx.ecs->get_or_emplace<Equipped>(ctx.player);
+    if (!equip_item(inv, eq, static_cast<std::uint8_t>(idx))) {
+        if (out && cap)
+            std::snprintf(out, cap, "equip: slot %ld is empty or not wearable",
+                          idx);
+        return false;
+    }
+    // A changed choice of ARMOUR must reach the Armour component now, same
+    // contract as every inventory mutation site. [combat.h] sync_armour
+    sync_armour(*ctx.ecs, *ctx.pool, ctx.player);
+    if (out && cap)
+        std::snprintf(out, cap, "equipped: %s (slot %ld)",
+                      item_name(inv.slots[idx].item), idx);
+    return true;
+}
+
+bool cmd_unequip(ConsoleContext& ctx, int argc, const char* const* argv,
+                 char* out, std::size_t cap) {
+    NpcId id{};
+    if (!equip_ctx(ctx, "unequip", out, cap, &id)) return false;
+    EquipSlot slot = EquipSlot::None;
+    if (argc >= 2) {
+        if (std::strcmp(argv[1], "weapon") == 0) slot = EquipSlot::Weapon;
+        else if (std::strcmp(argv[1], "armor") == 0) slot = EquipSlot::Armor;
+        else if (std::strcmp(argv[1], "tool") == 0) slot = EquipSlot::Tool;
+    }
+    if (slot == EquipSlot::None) {
+        put(out, cap, "usage: unequip <weapon|armor|tool>");
+        return false;
+    }
+    Equipped& eq = ctx.ecs->get_or_emplace<Equipped>(ctx.player);
+    unequip_slot(eq, slot);
+    sync_armour(*ctx.ecs, *ctx.pool, ctx.player);
+    if (out && cap) std::snprintf(out, cap, "unequipped %s", argv[1]);
+    return true;
+}
+
+bool cmd_gear(ConsoleContext& ctx, int, const char* const*, char* out,
+              std::size_t cap) {
+    NpcId id{};
+    if (!equip_ctx(ctx, "gear", out, cap, &id)) return false;
+    const Inventory& inv = ctx.pool->inventory(id);
+    const Equipped* eq = ctx.ecs->try_get<Equipped>(ctx.player);
+    const Equipped none{};
+    if (!eq) eq = &none;
+    const ItemId w = equipped_item(inv, *eq, EquipSlot::Weapon);
+    const ItemId a = equipped_item(inv, *eq, EquipSlot::Armor);
+    // One line of decisions, then every wearable slot — the number printed in
+    // brackets is exactly the argument `equip` takes.
+    int n = std::snprintf(out, cap, "weapon: %s | armor: %s |",
+                          w != kInvalidItem ? item_name(w) : "fists",
+                          a != kInvalidItem ? item_name(a) : "none");
+    for (int i = 0; i < kInvSlots && n > 0 && static_cast<std::size_t>(n) < cap;
+         ++i) {
+        const ItemSlot& s = inv.slots[i];
+        if (s.item == kInvalidItem || s.count == 0 || !item_valid(s.item)) continue;
+        if (item_def(s.item).equipSlot ==
+            static_cast<std::uint8_t>(EquipSlot::None)) continue;
+        n += std::snprintf(out + n, cap - static_cast<std::size_t>(n),
+                           " [%d]=%s", i, item_name(s.item));
+    }
+    return true;
+}
+
 } // namespace
 
 bool console_register_defaults(Console& con) {
@@ -643,6 +745,15 @@ bool console_register_defaults(Console& con) {
     ok &= con.add({"spawn_ball", "spawn_ball",
                    "spawn a rolling test ball (Type A) beside player",
                    cmd_spawn_ball, nullptr});
+    ok &= con.add({"gear", "gear",
+                   "show equipped decisions and wearable inventory slots",
+                   cmd_gear, nullptr});
+    ok &= con.add({"equip", "equip <slot 0..63>",
+                   "equip the item in an inventory slot (see `gear`)",
+                   cmd_equip, nullptr});
+    ok &= con.add({"unequip", "unequip <weapon|armor|tool>",
+                   "clear an equip decision back to fists/none",
+                   cmd_unequip, nullptr});
     ok &= con.add({"spawn_test_ball", "spawn_test_ball",
                    "alias for spawn_ball",
                    cmd_spawn_ball, nullptr});

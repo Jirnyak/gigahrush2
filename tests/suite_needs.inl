@@ -378,6 +378,10 @@ void attrition() {
     rig.reset(200);
     rig.needs().water = 0.0f;
     rig.pool.inventory(rig.id).slots[0] = ItemSlot{vest, 1};
+    // The vest must be DECIDED into the armour cell first ([equip.h]) — a vest
+    // in the bag protects nobody, which is precisely the difference this block
+    // measures.
+    equip_item(rig.pool.inventory(rig.id), rig.reg.get<Equipped>(rig.body), 0);
     sync_armour(rig.reg, rig.pool, rig.body);
     CHECK(rig.reg.all_of<Armour>(rig.body));   // the vest really is worn
     const std::int32_t armoured = run_step_seconds(rig, 61.0f, kSimStep);

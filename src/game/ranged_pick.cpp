@@ -4,7 +4,15 @@ namespace giga::game {
 
 // Hand-written sibling of the generated table, so re-running the generator cannot
 // clobber it. Same split as [weapon_table.h]'s helpers.
-ItemId equipped_ranged(const Inventory& inv) {
+ItemId equipped_ranged(const Inventory& inv, const Equipped* eq) {
+    // Strict decision read ([equip.h]): the ONE weapon cell holds either a club
+    // or a gun, and this reader answers only when it is a real firearm — thrown
+    // stays excluded for the same load-bearing reason as the scan below.
+    if (eq) {
+        const ItemId chosen = equipped_item(inv, *eq, EquipSlot::Weapon);
+        if (!ranged_for_item(chosen) || ranged_is_thrown(chosen)) return kInvalidItem;
+        return chosen;
+    }
     ItemId best = kInvalidItem;
     float bestDps = 0.0f;
     for (const ItemSlot& sl : inv.slots) {

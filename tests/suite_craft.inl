@@ -898,6 +898,60 @@ static void test_craft_all() {
         for (std::size_t i = 0; i < sizeof a.pad_; ++i) CHECK(a.pad_[i] == 0);
     }
 
+    { // ---- equip is a DECISION, and no one decides for you ([equip.h]) ------
+        // Resolve fixtures by PROPERTY off the compiled table, never by id.
+        ItemId knife2 = kInvalidItem, gun = kInvalidItem, vest = kInvalidItem;
+        for (std::size_t i = 1; i <= kItemCount; ++i) {
+            const ItemId id = static_cast<ItemId>(i);
+            if (!item_valid(id)) continue;
+            if (knife2 == kInvalidItem && melee_for_item(id)) knife2 = id;
+            if (gun == kInvalidItem && ranged_for_item(id) && !ranged_is_thrown(id))
+                gun = id;
+            if (vest == kInvalidItem &&
+                item_def(id).equipSlot == static_cast<std::uint8_t>(EquipSlot::Armor))
+                vest = id;
+        }
+        CHECK(knife2 != kInvalidItem);
+        CHECK(gun != kInvalidItem);
+        CHECK(vest != kInvalidItem);
+
+        Inventory bag2{};
+        bag2.slots[3] = ItemSlot{knife2, 1};
+        bag2.slots[5] = ItemSlot{gun, 1};
+        bag2.slots[9] = ItemSlot{vest, 1};
+
+        // THE no-auto-equip pin: a bag full of weapons plus an empty decision
+        // is BARE HANDS on the strict read — while the legacy scan (no decider)
+        // still finds the knife. A mutation that re-adds a scan fallback under
+        // a non-null Equipped turns exactly these red.
+        Equipped eq{};
+        CHECK(equipped_melee(bag2, &eq) == kInvalidItem);
+        CHECK(equipped_ranged(bag2, &eq) == kInvalidItem);
+        CHECK(equipped_armour(bag2, &eq) == kInvalidItem);
+        CHECK(equipped_melee(bag2) == knife2);
+
+        // Record decisions; the ONE weapon cell answers to exactly one reader:
+        // a decided knife is not a gun, a decided gun is not a club.
+        CHECK(equip_item(bag2, eq, 3));
+        CHECK(equipped_melee(bag2, &eq) == knife2);
+        CHECK(equipped_ranged(bag2, &eq) == kInvalidItem);
+        CHECK(equip_item(bag2, eq, 5));
+        CHECK(equipped_ranged(bag2, &eq) == gun);
+        CHECK(equipped_melee(bag2, &eq) == kInvalidItem);
+        CHECK(equip_item(bag2, eq, 9));
+        CHECK(equipped_armour(bag2, &eq) == vest);
+
+        // A rotted index is "no decision", not garbage: empty the slot under
+        // the recorded choice and the strict read returns to bare hands.
+        bag2.slots[5] = ItemSlot{};
+        CHECK(equipped_ranged(bag2, &eq) == kInvalidItem);
+        // Un-wearable input is refused, the previous decision stands.
+        CHECK(!equip_item(bag2, eq, 5));
+        CHECK(!equip_item(bag2, eq, 63));
+        CHECK(unequip_slot(eq, EquipSlot::Armor));
+        CHECK(equipped_armour(bag2, &eq) == kInvalidItem);
+    }
+
     // Work counts, printed. Counts and not seconds: the same run does the same
     // amount of work on every host, which a stopwatch cannot promise.
     CHECK(disassembliesRun > 7000u);

@@ -937,7 +937,13 @@ if(GIGA_BUILD_TESTS)
     # (grant 1/Red, deny Blue/Master). Net +1. Mutation RUN, not assumed: revert
     # door.cpp to the category-only `return true` -> exactly 2 red (the two
     # deny CHECKs), 240245 checks, 2 failures.
-        PASS_REGULAR_EXPRESSION "game_test: 240245 checks, 0 failures")
+    # 240245 -> 240265 (+20) on 2026-08-16: экипировка-как-решение ([equip.h]).
+    # The +20 pin the equip primitives block (suite_craft): the no-auto-equip
+    # pins (a bag full of weapons + an empty decision = bare hands on the strict
+    # read), decision recording per slot kind, rot-to-bare-hands, refusals.
+    # Mutation RUN, not assumed: disable the strict branch in equipped_melee
+    # (`if (false && eq)`) -> exactly 2 red, both on the no-auto-equip pins.
+        PASS_REGULAR_EXPRESSION "game_test: 240265 checks, 0 failures")
 
 
 
