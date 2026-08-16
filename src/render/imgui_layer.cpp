@@ -121,20 +121,28 @@ bool ImGuiLayer::init(VulkanDevice& dev, SDL_Window* window,
 
     // Cyrillic & Typography. The default ImGui font is ProggyClean, which is
     // ASCII-only, so any Russian string handed to ImGui::Text renders as mojibake.
-    // We configure the font atlas with full Cyrillic (0x0400..0x052F), General
-    // Punctuation (0x2000..0x206F for em-dashes —, en-dashes –, quotes, ellipsis),
-    // and Cyrillic Extended ranges.
+    // We configure the font atlas with full Cyrillic (GetGlyphRangesCyrillic),
+    // General Punctuation (em-dash —, en-dash –, quotes «»“”, ellipsis …),
+    // Cyrillic Extended, and Soviet notation symbols (№ 0x2116).
     {
-        static const ImWchar kCyrillicWithPunctuationRanges[] = {
-            0x0020, 0x00FF, // Basic Latin + Latin Supplement
-            0x0400, 0x052F, // Cyrillic + Cyrillic Supplement
-            0x2000, 0x206F, // General Punctuation (em-dash —, quotes, ellipsis)
+        ImFontGlyphRangesBuilder builder;
+        builder.AddRanges(io.Fonts->GetGlyphRangesDefault());
+        builder.AddRanges(io.Fonts->GetGlyphRangesCyrillic());
+        static const ImWchar kExtraRanges[] = {
+            0x2000, 0x206F, // General Punctuation (em-dash —, en-dash –, quotes, ellipsis)
+            0x2100, 0x214F, // Letterlike Symbols (№ 0x2116)
             0x2DE0, 0x2DFF, // Cyrillic Extended-A
             0xA640, 0xA69F, // Cyrillic Extended-B
             0
         };
+        builder.AddRanges(kExtraRanges);
+        builder.AddText("—–«»„“”№…•→←↑↓");
+        static ImVector<ImWchar> glyphRanges;
+        glyphRanges.clear();
+        builder.BuildRanges(&glyphRanges);
+
         const char* candidates[] = {
-            "C:/Windows/Fonts/consola.ttf",  // monospace suits a debug readout
+            "C:/Windows/Fonts/consola.ttf",  // monospace suits a Soviet service readout
             "C:/Windows/Fonts/tahoma.ttf",
             "C:/Windows/Fonts/segoeui.ttf",
             "C:/Windows/Fonts/arial.ttf",
@@ -147,7 +155,7 @@ bool ImGuiLayer::init(VulkanDevice& dev, SDL_Window* window,
         };
         for (const char* path : candidates) {
             if (std::filesystem::exists(path)) {
-                if (io.Fonts->AddFontFromFileTTF(path, 15.0f, nullptr, kCyrillicWithPunctuationRanges)) break;
+                if (io.Fonts->AddFontFromFileTTF(path, 15.0f, nullptr, glyphRanges.Data)) break;
             }
         }
     }

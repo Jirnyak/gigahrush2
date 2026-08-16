@@ -15,52 +15,52 @@ void populate_archetype_inventory(game::Inventory& inv, game::RoleId role) {
     inv.clear();
     switch (role) {
         case game::RoleId::Resident:
-            // Wrench (433), Yeast Bread (434) x2, Water (423) x2, Bandage (41) x2
+            // Wrench (433), Yeast Bread (434) x2, Water (423) x2, Bandage (40) x2
             game::inventory_give(inv, 433, 1);
             game::inventory_give(inv, 434, 2);
             game::inventory_give(inv, 423, 2);
-            game::inventory_give(inv, 41, 2);
+            game::inventory_give(inv, 40, 2);
             break;
 
         case game::RoleId::Duty:
-            // TT Pistol (411), 7.62x25 Ammo (12) x30, Liquidator Axe (216), Bandage (41) x2, Liquidator Ration (221) x1
+            // TT Pistol (411), 7.62x25 Ammo (11) x30, Liquidator Axe (215), Bandage (40) x2, Liquidator Ration (220) x1
             game::inventory_give(inv, 411, 1);
-            game::inventory_give(inv, 12, 30);
-            game::inventory_give(inv, 216, 1);
-            game::inventory_give(inv, 41, 2);
-            game::inventory_give(inv, 221, 1);
+            game::inventory_give(inv, 11, 30);
+            game::inventory_give(inv, 215, 1);
+            game::inventory_give(inv, 40, 2);
+            game::inventory_give(inv, 220, 1);
             break;
 
         case game::RoleId::Medic:
-            // Bandage (41) x5, Antibiotic (26) x2, Morphine Ampoule (240) x1, Alcohol (6) x2, Iodine (196) x2
-            game::inventory_give(inv, 41, 5);
-            game::inventory_give(inv, 26, 2);
-            game::inventory_give(inv, 240, 1);
-            game::inventory_give(inv, 6, 2);
-            game::inventory_give(inv, 196, 2);
+            // Bandage (40) x5, Antibiotic (25) x2, Morphine Ampoule (239) x1, Alcohol (5) x2, Iodine (195) x2
+            game::inventory_give(inv, 40, 5);
+            game::inventory_give(inv, 25, 2);
+            game::inventory_give(inv, 239, 1);
+            game::inventory_give(inv, 5, 2);
+            game::inventory_give(inv, 195, 2);
             break;
 
         case game::RoleId::Looter:
-            // Knife (206), Wrench (433), Lighter (214), Kasha (202) x2, Water (423) x2
-            game::inventory_give(inv, 206, 1);
+            // Knife (205), Wrench (433), Lighter (213), Kasha (201) x2, Water (423) x2
+            game::inventory_give(inv, 205, 1);
             game::inventory_give(inv, 433, 1);
-            game::inventory_give(inv, 214, 1);
-            game::inventory_give(inv, 202, 2);
+            game::inventory_give(inv, 213, 1);
+            game::inventory_give(inv, 201, 2);
             game::inventory_give(inv, 423, 2);
             break;
 
         case game::RoleId::Cultist:
-            // Knife (206), Meat Rune (231), Istotit Candle (198) x3, Water (423) x2, Antidepressant (27) x1
-            game::inventory_give(inv, 206, 1);
-            game::inventory_give(inv, 231, 1);
-            game::inventory_give(inv, 198, 3);
+            // Knife (205), Meat Rune (230), Istotit Candle (197) x3, Water (423) x2, Antidepressant (26) x1
+            game::inventory_give(inv, 205, 1);
+            game::inventory_give(inv, 230, 1);
+            game::inventory_give(inv, 197, 3);
             game::inventory_give(inv, 423, 2);
-            game::inventory_give(inv, 27, 1);
+            game::inventory_give(inv, 26, 1);
             break;
 
         default:
             game::inventory_give(inv, 433, 1);
-            game::inventory_give(inv, 41, 2);
+            game::inventory_give(inv, 40, 2);
             break;
     }
 }

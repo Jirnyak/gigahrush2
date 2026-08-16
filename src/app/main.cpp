@@ -6343,6 +6343,28 @@ int main(int argc, char** argv) {
             float sceneLuminance = kAmbient + kFillStrength;
             if (reg.valid(player)) {
                 sceneLuminance += kLampIntensity * 0.25f;
+                const vec3& playerPos = camMat.eye;
+                if (!powerGrid.is_power_cut(playerPos)) {
+                    auto lampView = reg.view<const Transform, const game::Interactable>();
+                    for (auto lampEntity : lampView) {
+                        const Transform& tr = lampView.get<const Transform>(lampEntity);
+                        if (tr.layer != activeLayer) continue;
+                        const game::Interactable& ia = lampView.get<const game::Interactable>(lampEntity);
+                        if (!ia.active || ia.kind != game::Interactable::Kind::LightBulb) continue;
+                        float dx = wrap_delta_f(playerPos.x, tr.pos.x, kWorldExtent);
+                        float dy = wrap_delta_f(playerPos.y, tr.pos.y, kWorldExtent);
+                        float dz = wrap_delta_f(playerPos.z, tr.pos.z, kWorldExtent);
+                        float distSq = dx * dx + dy * dy + dz * dz;
+                        if (distSq < 16.0f * 16.0f) {
+                            float atten = 1.0f - (std::sqrt(distSq) / 16.0f);
+                            sceneLuminance += 1.5f * atten;
+                        }
+                    }
+                }
+            }
+            const game::SamosborAlarm alarm = game::samosbor_alarm(samosbor);
+            if (alarm.pulse > 0.01f) {
+                sceneLuminance += alarm.pulse * 2.0f;
             }
             float targetExposure = std::clamp(1.0f / (sceneLuminance + 0.10f), 0.20f, 2.50f);
             if (targetExposure < s_darkAdaptation) {
