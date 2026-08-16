@@ -1269,6 +1269,7 @@ int main(int argc, char** argv) {
     std::string shotAction;
     bool shotActionConsumed = false; // one-shot save/load; attack stays held
     bool showHud = true;
+    bool disableCrt = false;
     // --mirror-verify: after every wholesale upload and every ~300 frames, read
     // the GPU voxel mirror back and memcmp it against the CPU grid. Diagnostic
     // (queue-idles); the proof harness for the raymarch migration's stage 1.
@@ -1322,6 +1323,8 @@ int main(int argc, char** argv) {
             shotFloorWanted = true;
         } else if (a == "--no-hud" || a == "--nohud") {
             showHud = false;
+        } else if (a == "--no-crt" || a == "--nocrt") {
+            disableCrt = true;
         } else if (a == "--mirror-verify") {
             mirrorVerify = true;
         } else if (a == "--pos") {
@@ -1436,6 +1439,9 @@ int main(int argc, char** argv) {
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
+    }
+    if (disableCrt) {
+        renderer.set_crt_enabled(false);
     }
 
     gpu::GpuLightGrid lightGrid;

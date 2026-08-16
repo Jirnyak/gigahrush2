@@ -25,7 +25,7 @@
 
 namespace giga::gpu {
 
-static constexpr int kMaxPropInstances = 4096; // per shape per frame
+static constexpr int kMaxPropInstances = 32768; // per shape per frame
 
 class PropPass {
 public:

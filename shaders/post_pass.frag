@@ -49,34 +49,56 @@ void main() {
         color = texture(sSceneColor, uv).rgb;
     }
 
-    // 3. Asymmetric Dark Adaptation & Exposure Modulation
-    float exposure = max(pc.params0.y, 0.01);
-    vec3 col = max(color, vec3(0.0)) * exposure;
-
-    // 4. Tone Mapping & Dynamic Range Compression for HDR radiance
-    vec3 srgb = clamp(col, 0.0, 1.0);
-
-    // 5. CRT Phosphor Mask, 3px Scanlines, Tube Vignette, and Phosphor Wash
+    // 3. High-Energy Phosphor Bloom / Halation on Lamps & Hot Highlights
+    vec3 bloom = vec3(0.0);
     if (crtOn) {
-        // 3px periodic scanlines (alternating dark bands)
-        float scanY = mod(gl_FragCoord.y, 3.0);
-        float scan = (scanY < 1.0) ? (1.0 - pc.params1.y) : ((scanY < 2.0) ? (1.0 - pc.params1.y * 0.4) : 1.0);
-        srgb *= scan;
+        vec2 invRes = pc.resolution.zw;
+        if (invRes.x <= 0.0) invRes = vec2(1.0 / 1920.0, 1.0 / 1080.0);
 
-        // RGB Phosphor Triads (subpixel vertical mask)
+        vec2 bOffsets[8] = vec2[](
+            vec2(-2.0, -2.0), vec2(2.0, -2.0), vec2(-2.0, 2.0), vec2(2.0, 2.0),
+            vec2(-3.5, 0.0),  vec2(3.5, 0.0),  vec2(0.0, -3.5), vec2(0.0, 3.5)
+        );
+        float bWeights[8] = float[](
+            0.10, 0.10, 0.10, 0.10,
+            0.15, 0.15, 0.15, 0.15
+        );
+
+        for (int i = 0; i < 8; ++i) {
+            vec3 s = texture(sSceneColor, uv + bOffsets[i] * invRes).rgb;
+            float sLum = dot(s, vec3(0.2126, 0.7152, 0.0722));
+            float sBright = max(sLum - 0.45, 0.0) * 1.5;
+            bloom += s * sBright * bWeights[i];
+        }
+    }
+
+    // 4. Asymmetric Dark Adaptation & Exposure Modulation
+    float exposure = max(pc.params0.y, 0.01);
+    vec3 col = (color + bloom * 0.25) * exposure;
+
+    // 5. Soviet CRT Phosphor Response & Scanlines
+    float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+
+    if (crtOn) {
+        // Dynamic Scanlines: crisp, subtle scanlines that naturally bleed across bright phosphors
+        float scanlineDepth = pc.params1.y * clamp(1.0 - lum * 0.75, 0.05, 0.45);
+        float scan = 1.0 - scanlineDepth * (0.5 + 0.5 * sin(gl_FragCoord.y * 3.14159265));
+        col *= scan;
+
+        // Subpixel RGB Phosphor Triad Mask
         float triadX = mod(gl_FragCoord.x, 3.0);
-        vec3 triadMask = (triadX < 1.0) ? vec3(1.05, 0.95, 0.95) : ((triadX < 2.0) ? vec3(0.95, 1.05, 0.95) : vec3(0.95, 0.95, 1.05));
-        srgb *= triadMask;
+        vec3 triadMask = (triadX < 1.0) ? vec3(1.03, 0.98, 0.98) : ((triadX < 2.0) ? vec3(0.98, 1.03, 0.98) : vec3(0.98, 0.98, 1.03));
+        col *= triadMask;
 
         // Radial Tube Vignette
         vec2 vigUv = uv * (1.0 - uv);
         float vig = clamp(pow(16.0 * vigUv.x * vigUv.y, pc.params1.z), 0.0, 1.0);
-        srgb *= vig;
+        col *= vig;
 
-        // Soviet Phosphor Green Wash (#59F266 = rgb(0.349, 0.949, 0.400) @ faint alpha)
+        // Luminance-Modulated Phosphor Green Wash (preserves pitch black in shadows)
         vec3 phosphorTint = vec3(0.349, 0.949, 0.400);
-        srgb += phosphorTint * pc.params1.w;
+        col += phosphorTint * (pc.params1.w * pow(clamp(lum, 0.0, 1.0), 0.8) * 0.5);
     }
 
-    outColor = vec4(clamp(srgb, 0.0, 1.0), 1.0);
+    outColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }
