@@ -1070,6 +1070,81 @@ static void test_craft_all() {
         CHECK(inventory_give(full, stk, 5) == 5);
     }
 
+    { // ---- repair: the item's OWN recipe pays, halved, axis by axis --------
+        // A wearable item with a nonzero recipe, resolved by property: any
+        // melee weapon (durability authored in weapons_melee.csv) whose recipe
+        // station is not Any — so the station refusal below tests something.
+        ItemId rw = kInvalidItem;
+        for (ItemId id = 1; id <= kCraftRecipeCount; ++id) {
+            if (!item_valid(id)) continue;
+            if (item_durability(id) == 0) continue;
+            if (item_def(id).equipSlot ==
+                static_cast<std::uint8_t>(EquipSlot::None)) continue;
+            if (craft_recipe(id).station ==
+                static_cast<std::uint8_t>(CraftStation::Any)) continue;
+            rw = id;
+            break;
+        }
+        CHECK(rw != kInvalidItem);
+        const CraftRecipe& rr = craft_recipe(rw);
+        const CraftStation stn = static_cast<CraftStation>(rr.station);
+
+        // The exact per-axis price of repairing from ruin: ceil(comp/2).
+        std::uint32_t half[kCraftMaterials];
+        for (std::size_t i = 0; i < kCraftMaterials; ++i)
+            half[i] = (static_cast<std::uint32_t>(rr.comp[i]) * 255u + 509u) / 510u;
+
+        Inventory ri{};
+        ri.slots[0] = ItemSlot{rw, 1};
+        ri.slots[0].condition = 0;   // ruined
+
+        // Fund EXACTLY the half-price and repair: success is proven by the
+        // bank being EMPTY after — the pricing is exact, not approximate.
+        CraftingState rb{};
+        for (std::size_t i = 0; i < kCraftMaterials; ++i)
+            rb.mat[i] = static_cast<std::uint16_t>(half[i]);
+        const RepairResult ok1 = craft_repair_item(rb, ri, 0, stn);
+        CHECK(ok1.ok);
+        CHECK(ri.slots[0].condition == 255);
+        CHECK(bank_total(rb) == 0);
+
+        // One short axis = whole refusal, bank untouched, condition untouched.
+        ri.slots[0].condition = 0;
+        std::size_t fatAxis = 0;
+        for (std::size_t i = 0; i < kCraftMaterials; ++i)
+            if (half[i] > half[fatAxis]) fatAxis = i;
+        CHECK(half[fatAxis] > 0);   // or the underfund below funds fully
+        for (std::size_t i = 0; i < kCraftMaterials; ++i)
+            rb.mat[i] = static_cast<std::uint16_t>(half[i]);
+        rb.mat[fatAxis] -= 1;
+        const std::uint32_t before = bank_total(rb);
+        const RepairResult no1 = craft_repair_item(rb, ri, 0, stn);
+        CHECK(!no1.ok);
+        CHECK(no1.fail == CraftFail::InsufficientMaterials);
+        CHECK(ri.slots[0].condition == 0);
+        CHECK(bank_total(rb) == before);   // no partial spend, ever
+
+        // Wrong bench refuses BEFORE money is looked at; bare hands is not a
+        // station for a stationed recipe (craft_station_ok's asymmetry).
+        const RepairResult no2 = craft_repair_item(rb, ri, 0, CraftStation::Any);
+        CHECK(!no2.ok);
+        CHECK(no2.fail == CraftFail::StationMismatch);
+
+        // Mint is a free success (a repair-all button must not trip on it);
+        // an eternal row is NotRepairable, not silently "fixed".
+        ri.slots[0].condition = 255;
+        CHECK(craft_repair_item(rb, ri, 0, stn).ok);
+        ItemId eternal2 = kInvalidItem;
+        for (ItemId id = 1; id <= kCraftRecipeCount; ++id)
+            if (item_valid(id) && item_durability(id) == 0) { eternal2 = id; break; }
+        CHECK(eternal2 != kInvalidItem);
+        ri.slots[1] = ItemSlot{eternal2, 1};
+        ri.slots[1].condition = 100;   // корозия на вечном — байт есть, износа нет
+        const RepairResult no3 = craft_repair_item(rb, ri, 1, stn);
+        CHECK(!no3.ok);
+        CHECK(no3.fail == CraftFail::NotRepairable);
+    }
+
     // Work counts, printed. Counts and not seconds: the same run does the same
     // amount of work on every host, which a stopwatch cannot promise.
     CHECK(disassembliesRun > 7000u);

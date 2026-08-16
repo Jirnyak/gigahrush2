@@ -271,9 +271,31 @@ enum class CraftFail : std::uint8_t {
     EmptySlot,              // disassembly: nothing in that slot
     DisassemblyStation,     // disassembly: not at a workbench
     NoComposition,          // an all-zero vector; see craft_disassemble
+    NotRepairable,          // repair: the item does not wear (durability 0)
     Count
 };
 const char* craft_fail_text(CraftFail e);
+
+// ---------------------------------------------------------------------------
+// Repair — the wear system's other half ([equip.h] wear_equipped)
+// ---------------------------------------------------------------------------
+// Починка тратит вектор СОБСТВЕННОГО рецепта предмета, пропорционально урону
+// и ВПОЛЦЕНЫ постройки: полный ремонт руин = ceil(comp[i]/2) по каждой оси —
+// дороже, и рациональный игрок просто скрафтит новый. Оси НЕ взаимозаменяемы
+// (закон восьми осей): нехватка одной — отказ целиком, банк не тронут.
+// Станция — станция рецепта (craft_station_ok), как у постройки. ЗНАНИЕ
+// рецепта и тир НЕ требуются — чинить найденный артефакт можно, не умея его
+// построить; решение записано здесь, а не подразумевается.
+// Форк (878511ca) платил осями Mechanics→Metal за всё подряд и принимал любой
+// верстак — обе оси решения переделаны, взята только форма API.
+struct RepairResult {
+    bool ok = false;
+    CraftFail fail = CraftFail::None;
+    std::uint8_t conditionBefore = 0;
+    std::uint32_t costTotal = 0;  // units debited across all axes
+};
+RepairResult craft_repair_item(CraftingState& st, Inventory& inv, int slot,
+                               CraftStation at);
 
 // ---------------------------------------------------------------------------
 // Queries

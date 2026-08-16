@@ -5552,6 +5552,42 @@ int main(int argc, char** argv) {
                         }
                         break;
                     }
+                    case InvUiRequest::Kind::Repair: {
+                        // Станция — та же тройка, что у крафт-окна: пад =
+                        // верстак, терминал рядом = NetTerminal, иначе голые
+                        // руки. Цену/станцию судит примитив; отказ — словами
+                        // в консоль-лог, как крафт и делает. [craft.h]
+                        const Transform& rct = reg.get<Transform>(player);
+                        const bool nearTermR =
+                            game::find_nearest_interactable(
+                                reg, player,
+                                game::Interactable::Kind::Terminal,
+                                game::interact_def(game::InteractKind::Terminal)
+                                    .reachM)
+                                .hit;
+                        const game::CraftStation benchR =
+                            game::on_extraction_pad(
+                                stack.layer(activeLayer).grid(), rct.pos)
+                                ? game::CraftStation::Workbench
+                                : (nearTermR ? game::CraftStation::NetTerminal
+                                             : game::CraftStation::Any);
+                        const game::RepairResult rr = game::craft_repair_item(
+                            crafting, pinv, r.slot, benchR);
+                        char line[128];
+                        if (rr.ok)
+                            std::snprintf(line, sizeof line,
+                                          "repair: %s %u -> 255 (cost %u)",
+                                          game::item_name(pinv.slots[r.slot].item),
+                                          rr.conditionBefore, rr.costTotal);
+                        else
+                            std::snprintf(line, sizeof line, "repair: %s",
+                                          game::craft_fail_text(rr.fail));
+                        consoleLog.push_back(line);
+                        // Починенная решённая броня держит больше — резисты
+                        // масштабируются состоянием ([combat.cpp] sync_armour).
+                        if (rr.ok) game::sync_armour(reg, pool, player);
+                        break;
+                    }
                     default:
                         // Use — послотовое использование придёт со своим
                         // примитивом; политика self-режима его пока не

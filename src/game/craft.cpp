@@ -4,6 +4,7 @@
 
 #include "core/rng.h"            // hash2 / rand01 / rand_below — stateless, no seed to advance
 #include "game/combat.h"         // equipped_melee / equipped_armour
+#include "game/equip.h"          // item_durability — repair only what wears
 #include "game/ranged_table.h"   // equipped_ranged
 
 namespace giga::game {
@@ -61,6 +62,7 @@ const char* craft_fail_text(CraftFail e) {
         case CraftFail::EmptySlot:             return "nothing in that slot";
         case CraftFail::DisassemblyStation:    return "need a workbench";
         case CraftFail::NoComposition:         return "item has no composition";
+        case CraftFail::NotRepairable:         return "item does not wear";
         case CraftFail::Count:                 break;
     }
     return "unknown";
@@ -395,6 +397,56 @@ bool craft_read(const std::uint8_t* in, std::size_t n, CraftingState& st) {
 
     st = tmp;
     return true;
+}
+
+RepairResult craft_repair_item(CraftingState& st, Inventory& inv, int slot,
+                               CraftStation at) {
+    RepairResult out{};
+    if (slot < 0 || slot >= kInvSlots) {
+        out.fail = CraftFail::EmptySlot;
+        return out;
+    }
+    ItemSlot& s = inv.slots[slot];
+    if (!item_valid(s.item) || s.count == 0) {
+        out.fail = CraftFail::EmptySlot;
+        return out;
+    }
+    out.conditionBefore = s.condition;
+    if (item_durability(s.item) == 0) {
+        out.fail = CraftFail::NotRepairable;  // вечный предмет — чинить нечего
+        return out;
+    }
+    if (s.condition == 255) {   // минт: успех даром, не отказ — кнопка «починить
+        out.ok = true;          // всё» не должна спотыкаться о целые предметы
+        return out;
+    }
+
+    const CraftRecipe& r = craft_recipe(s.item);
+    if (!craft_station_ok(static_cast<CraftStation>(r.station), at)) {
+        out.fail = CraftFail::StationMismatch;
+        return out;
+    }
+
+    // Цена по осям: ceil(comp[i] * damage / 510) — пропорция урона, вполцены
+    // постройки. Проверка ДО списания всех осей: одна короткая ось — отказ
+    // целиком, банк не тронут (частичное списание — это ремонт, которого не
+    // было, за деньги, которые были).
+    const std::uint32_t damage = 255u - s.condition;
+    std::uint32_t need[kCraftMaterials];
+    for (std::size_t i = 0; i < kCraftMaterials; ++i) {
+        need[i] = (static_cast<std::uint32_t>(r.comp[i]) * damage + 509u) / 510u;
+        if (need[i] > st.mat[i]) {
+            out.fail = CraftFail::InsufficientMaterials;
+            return out;
+        }
+    }
+    for (std::size_t i = 0; i < kCraftMaterials; ++i) {
+        st.mat[i] -= need[i];
+        out.costTotal += need[i];
+    }
+    s.condition = 255;
+    out.ok = true;
+    return out;
 }
 
 } // namespace giga::game

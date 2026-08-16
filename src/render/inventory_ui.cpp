@@ -6,6 +6,7 @@
 
 #include "core/rng.h"           // hash_u32 — детерминированные акценты глифа
 #include "game/item_table.h"    // item_def/name/desc — карточка и глиф
+#include "game/equip.h"         // item_durability — полоска износа и кнопка починки
 #include "game/ranged_table.h"  // ranged_for_item — строка урона в карточке
 #include "game/weapon_table.h"  // melee_for_item — строка урона в карточке
 #include "world/types.h"        // kCellSize — reach в метрах для карточки
@@ -265,6 +266,15 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
             if (ImGui::Button("Бросить [G]") ||
                 ImGui::IsKeyPressed(ImGuiKey_G, false))
                 req = {InvUiRequest::Kind::Drop, slot8, EquipSlot::None};
+        }
+        if (policy.allowRepair && game::item_durability(sel.item) > 0 &&
+            sel.condition < 255) {
+            ImGui::SameLine();
+            // Цену и станцию судит примитив ([craft.h] craft_repair_item) —
+            // кнопка лишь заявка, отказ придёт словами craft_fail_text.
+            if (ImGui::Button("Починить [R]") ||
+                ImGui::IsKeyPressed(ImGuiKey_R, false))
+                req = {InvUiRequest::Kind::Repair, slot8, EquipSlot::None};
         }
         ImGui::NewLine();
     } else {

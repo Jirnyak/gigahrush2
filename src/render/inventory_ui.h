@@ -20,7 +20,7 @@ namespace giga {
 
 // Заявка виджета. None — ничего не просили в этом кадре.
 struct InvUiRequest {
-    enum class Kind : std::uint8_t { None, Equip, Unequip, Use, Drop };
+    enum class Kind : std::uint8_t { None, Equip, Unequip, Use, Drop, Repair };
     Kind kind = Kind::None;
     std::uint8_t slot = 0;               // индекс клетки 0..63
     game::EquipSlot eqSlot = game::EquipSlot::None;  // для Unequip
@@ -40,6 +40,7 @@ struct InvUiPolicy {
     bool allowEquip = true;
     bool allowUse = true;
     bool allowDrop = true;
+    bool allowRepair = true;  // починка у станции рецепта ([craft.h])
 };
 
 // Нарисовать открытый виджет поверх игры и собрать заявку. `carriedG` —

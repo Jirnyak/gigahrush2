@@ -977,7 +977,14 @@ if(GIGA_BUILD_TESTS)
     # adapted pick — the silent `if (built == 0) return;` early-out (a test
     # that could pass by testing nothing) becomes CHECK(built > 0). One of the
     # fork's verified-good Problem 36 pieces.
-        PASS_REGULAR_EXPRESSION "game_test: 240300 checks, 0 failures")
+    # 240300 -> 240327 (+27) on 2026-08-16: repair (suite_craft). The +27 pin:
+    # exact per-axis half-price (funded exactly -> bank EMPTY after), one short
+    # axis = whole refusal with bank and condition untouched, station refusal
+    # before money, mint free success, eternal row NotRepairable. Mutation RUN
+    # on the committed tree, measured: pricing /510 -> /255 (full price) =
+    # exactly 3 red (the exactly-funded repair refuses whole: ok, condition
+    # and empty-bank checks).
+        PASS_REGULAR_EXPRESSION "game_test: 240327 checks, 0 failures")
 
 
 
