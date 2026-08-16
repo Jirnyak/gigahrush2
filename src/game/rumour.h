@@ -104,6 +104,12 @@ enum class RumourKind : std::uint8_t {
     // "On floor <Z> a war broke out between <FactionA> and <FactionB>! Casualties: <N>."
     // Faction war & territorial dispute news.
     WarNews,
+    // "On floor <Z> a severe samosbor struck! Variant: <variant>, casualties: <N>."
+    // Samosbor aftermath & disaster propagation.
+    SamosborStrike,
+    // "On floor <Z> vendors ran out of <category>! Prices surged by <N>%."
+    // Critical supply shortage and market panic.
+    VendorShortage,
 
     Count
 };
@@ -112,8 +118,8 @@ enum class RumourKind : std::uint8_t {
 struct Rumour {
     RumourKind kind = RumourKind::Threat;
     // The subject: a MobKind for Threat, a Faction for Territory, a floor for Depth, a
-    // SamosborVariant for Imminent and Variant, a fog-roster size for Veteran,
-    // a victim Faction for Atrocity, packed Faction pair for WarNews.
+    // SamosborVariant for Imminent, Variant, and SamosborStrike, a fog-roster size for Veteran,
+    // a victim Faction for Atrocity, packed Faction pair for WarNews, ItemCategory for VendorShortage.
     // Unused for Wealth, Fog, Lull, Heroic, which carry their numbers in `value` and `floorZ`.
     std::uint16_t subject = 0;
     std::int32_t value = 0;
@@ -135,8 +141,8 @@ inline constexpr std::uint32_t kRumourLullSpeakMs = 5u * 60u * 1000u;
 static_assert(kRumourLullSpeakMs > kSamosborWarningMs,
               "the lull horizon must be longer than the warning window it contains");
 
-// Maximum active dynamic social rumor events tracked in the network
-inline constexpr std::size_t kMaxRumourNetworkEvents = 64;
+// Maximum active dynamic social rumor events tracked in the network across vertical floors (-50..+50)
+inline constexpr std::size_t kMaxRumourNetworkEvents = 128;
 
 struct RumourNode {
     Rumour rumour{};
@@ -146,7 +152,7 @@ struct RumourNode {
     bool active = false;
 };
 
-// Dynamic Rumour Diffusion Network across NPC social graphs and campfire / break routines
+// Dynamic Rumour Diffusion Network across NPC social graphs, vertical shafts, and campfire / break routines
 class RumourNetwork {
 public:
     void init();
@@ -167,8 +173,22 @@ public:
     std::uint32_t diffuse_step(NpcPool& pool, std::int16_t floorZ,
                                std::uint64_t tick, std::uint32_t budget = 32);
 
+    // Propagate rumours vertically across adjacent floors (-50..+50) via active elevator shafts and stairwells over time.
+    std::uint32_t diffuse_vertical_step(NpcPool& pool, const std::vector<std::int16_t>& activeFloors,
+                                        std::uint64_t tick, std::uint32_t budget = 32);
+
+    // Carry and seed rumors when an NPC travels between floors via elevator or stairwell.
+    bool carry_rumour_migration(NpcPool& pool, NpcId traveler, std::int16_t fromFloor,
+                                std::int16_t toFloor, std::uint64_t tick);
+
     // Find the most prominent / urgent propagated rumour known or relevant to an NPC
     Rumour best_rumour_for_npc(const NpcPool& pool, NpcId id, std::int16_t floorZ) const;
+
+    // Check if a vendor shortage rumour is active on floorZ for a category
+    bool has_shortage_rumour(std::int16_t floorZ, ItemCategory cat) const;
+
+    // Check if a samosbor strike rumour is active on floorZ
+    bool has_samosbor_strike_rumour(std::int16_t floorZ) const;
 
     // Clear stale rumours (older than expiration horizon)
     void prune_stale(std::uint64_t currentTick, std::uint64_t maxAgeTicks);
@@ -182,6 +202,9 @@ private:
 };
 
 RumourNetwork& global_rumour_network();
+
+// Russian name for item category in rumour messages
+const char* item_category_name_ru(ItemCategory cat);
 
 // The dominant faction among the embodied bodies on `layer`, counted rather than
 // authored.

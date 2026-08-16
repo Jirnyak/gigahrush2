@@ -3049,7 +3049,8 @@ int main(int argc, char** argv) {
                     // seal cost above stays exactly as authored (4 HP, player
                     // only). [samosbor.h samosbor_environmental_step]
                     game::samosbor_environmental_step(
-                        reg, pool, doors, activeLayer, samosbor, kSimDt, &playerStatus);
+                        reg, pool, doors, activeLayer, samosbor, kSimDt, &playerStatus,
+                        &stack.layer(activeLayer).grid(), &roomZones, currentFloor);
                     game::sector_perimeter_hazard_step(
                         reg, pool, &doors, activeLayer, currentFloor, kSimDt, &playerStatus,
                         &stack.layer(activeLayer).grid(), &roomZones);
@@ -4448,13 +4449,29 @@ int main(int argc, char** argv) {
                 // ENCUMBRANCE before the needs clock, because it charges the same
                 // sleep bar the clock then reads for its exhaustion penalty — a
                 // load taxes you on the tick you carry it, not one tick later.
+                const float samosborPressureDrop =
+                    (samosbor.phase == static_cast<std::uint8_t>(game::SamosborPhase::Active) ||
+                     samosbor.phase == static_cast<std::uint8_t>(game::SamosborPhase::Warning))
+                        ? game::samosbor_floor_pressure_drop(
+                              currentFloor,
+                              static_cast<game::SamosborVariant>(samosbor.variant < game::kSamosborVariantCount ? samosbor.variant : 0),
+                              game::samosbor_current_stage(samosbor))
+                        : 0.0f;
                 encumbrance = game::encumbrance_step(reg, pool, activeLayer, kSimDt,
-                                                     simTick, &noiseField);
+                                                     simTick, &noiseField, samosborPressureDrop);
                 // Spec 03 §4.2: Environmental gas/smoke filter degradation & battery drain.
                 // 1-in-16 staggered sweep across equipped tools on active layer.
                 const auto* liveGasField = activeWorld.fields().find<float>(kGasField);
                 const float* liveGasRaw = liveGasField ? liveGasField->data().data() : nullptr;
-                game::fouling_step(reg, pool, activeLayer, liveGasRaw, nullptr, kSimDt, simTick);
+                const float ambientTox =
+                    (samosbor.phase == static_cast<std::uint8_t>(game::SamosborPhase::Active))
+                        ? game::samosbor_ambient_toxicity(
+                              currentFloor,
+                              static_cast<game::SamosborVariant>(samosbor.variant < game::kSamosborVariantCount ? samosbor.variant : 0),
+                              game::samosbor_current_stage(samosbor),
+                              game::samosbor_phase01(samosbor))
+                        : 0.0f;
+                game::fouling_step(reg, pool, activeLayer, liveGasRaw, nullptr, kSimDt, simTick, ambientTox);
                 needs = game::needs_step(reg, pool, activeLayer, kSimDt, &roomZones,
                                          &aiMem, simNow, &playerStatus, liveGasField);
                 needsHpLost += needs.hpLost;

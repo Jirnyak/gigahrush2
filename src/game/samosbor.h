@@ -828,7 +828,9 @@ void samosbor_environmental_step(Registry& reg, NpcPool& pool,
                                   const SamosborState& sam, float dt,
                                   StatusSet* playerStatus = nullptr,
                                   const MacroGrid* grid = nullptr,
-                                  const RoomZones* rooms = nullptr);
+                                  const RoomZones* rooms = nullptr,
+                                  int floorZ = 0,
+                                  const Field<float>* gasField = nullptr);
 
 // The seal moment as an offset before the end of the Active phase, including the
 // variant's shift. Clamped so a negative-delta variant cannot seal after the

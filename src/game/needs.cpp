@@ -343,12 +343,28 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
                 if (!protectedByFilter) {
                     if (const Equipped* eq = reg.try_get<Equipped>(e)) {
                         if (eq->tool != kEquipNone && eq->tool < kInvSlots) {
-                            const Inventory& inv = pool.inventory(id);
-                            const ItemSlot& slot = inv.slots[eq->tool];
+                            Inventory& inv = pool.inventory(id);
+                            ItemSlot& slot = inv.slots[eq->tool];
                             if (item_valid(slot.item) && slot.condition > 0) {
                                 const ItemDef& idef = item_def(slot.item);
                                 if (idef.wearKind == static_cast<std::uint8_t>(WearKind::Fouling)) {
                                     protectedByFilter = true;
+                                    // Filter actively absorbs gas hazard and degrades
+                                    const float filterLossRate = gasConcentration * 3.5f;
+                                    float condLoss = filterLossRate * dt;
+                                    while (condLoss >= 1.0f && slot.condition > 0) {
+                                        --slot.condition;
+                                        condLoss -= 1.0f;
+                                    }
+                                    if (condLoss > 0.0f && slot.condition > 0) {
+                                        const std::uint32_t h = giga::hash_u32(static_cast<std::uint32_t>(id * 7919u + static_cast<std::uint32_t>(cx + cy * 64)));
+                                        if ((h & 0xFFFFu) < static_cast<std::uint32_t>(condLoss * 65535.0f)) {
+                                            --slot.condition;
+                                        }
+                                    }
+                                    if (slot.condition == 0) {
+                                        protectedByFilter = false;
+                                    }
                                 }
                             }
                         }

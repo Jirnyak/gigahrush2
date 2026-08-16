@@ -171,22 +171,142 @@ std::uint32_t RumourNetwork::diffuse_step(NpcPool& pool, std::int16_t floorZ,
     return shared;
 }
 
+std::uint32_t RumourNetwork::diffuse_vertical_step(NpcPool& pool, const std::vector<std::int16_t>& activeFloors,
+                                                    std::uint64_t tick, std::uint32_t budget) {
+    (void)pool;
+    if (count_ == 0 || activeFloors.empty()) return 0;
+
+    std::uint32_t diffusions = 0;
+    const std::size_t nNodes = count_ < kMaxRumourNetworkEvents ? count_ : kMaxRumourNetworkEvents;
+    const std::uint32_t limit = budget < nNodes ? budget : static_cast<std::uint32_t>(nNodes);
+
+    for (std::uint32_t k = 0; k < limit; ++k) {
+        const std::size_t idx = static_cast<std::size_t>(hash3(k, static_cast<std::uint32_t>(tick), 0x9876u) % nNodes);
+        if (!nodes_[idx].active || !nodes_[idx].rumour.valid) continue;
+
+        RumourNode& src = nodes_[idx];
+        if (src.rumour.credibility <= 15u || src.rumour.hops >= 16u) continue;
+
+        // Propagate vertically to adjacent floors (via active elevator shafts and stairwells)
+        const std::int16_t currentFloor = src.rumour.floorZ;
+        const std::int16_t adjFloors[2] = {
+            static_cast<std::int16_t>(currentFloor + 1),
+            static_cast<std::int16_t>(currentFloor - 1)
+        };
+
+        for (int d = 0; d < 2; ++d) {
+            const std::int16_t targetFloor = adjFloors[d];
+            if (targetFloor < -50 || targetFloor > 50) continue;
+
+            // Verify targetFloor exists in activeFloors
+            bool floorExists = false;
+            for (std::int16_t af : activeFloors) {
+                if (af == targetFloor) { floorExists = true; break; }
+            }
+            if (!floorExists) continue;
+
+            // Deterministic diffusion chance along vertical elevator shafts & stairwells
+            const std::uint32_t roll = hash3(static_cast<std::uint32_t>(src.rumour.kind),
+                                             static_cast<std::uint32_t>(targetFloor),
+                                             static_cast<std::uint32_t>(tick + k)) % 100u;
+            if (roll >= 45u) continue;
+
+            const std::uint8_t decayedCredibility = src.rumour.credibility > 12u ? src.rumour.credibility - 10u : 5u;
+            const std::uint8_t nextHops = src.rumour.hops + 1u;
+
+            // Check if already present on target floor
+            bool exists = false;
+            for (std::size_t j = 0; j < count_; ++j) {
+                if (!nodes_[j].active) continue;
+                if (nodes_[j].rumour.kind == src.rumour.kind &&
+                    nodes_[j].rumour.floorZ == targetFloor &&
+                    nodes_[j].rumour.subject == src.rumour.subject) {
+                    exists = true;
+                    // Reinforce if fresh
+                    if (decayedCredibility > nodes_[j].rumour.credibility) {
+                        nodes_[j].rumour.credibility = decayedCredibility;
+                        nodes_[j].rumour.value = src.rumour.value;
+                        nodes_[j].birthTick = tick;
+                        ++nodes_[j].diffusionCount;
+                        ++diffusions;
+                    }
+                    break;
+                }
+            }
+
+            if (!exists) {
+                if (seed_rumour(src.rumour.kind, targetFloor, src.rumour.subject,
+                                src.rumour.value, src.sourceNpc, tick, decayedCredibility)) {
+                    for (std::size_t j = 0; j < count_; ++j) {
+                        if (nodes_[j].active && nodes_[j].rumour.kind == src.rumour.kind &&
+                            nodes_[j].rumour.floorZ == targetFloor &&
+                            nodes_[j].rumour.subject == src.rumour.subject) {
+                            nodes_[j].rumour.hops = nextHops;
+                            break;
+                        }
+                    }
+                    ++diffusions;
+                }
+            }
+        }
+    }
+    return diffusions;
+}
+
+bool RumourNetwork::carry_rumour_migration(NpcPool& pool, NpcId traveler, std::int16_t fromFloor,
+                                            std::int16_t toFloor, std::uint64_t tick) {
+    if (fromFloor == toFloor || count_ == 0) return false;
+
+    // Traveler carries the top rumour from their origin floor
+    const Rumour r = best_rumour_for_npc(pool, traveler, fromFloor);
+    if (!r.valid || r.credibility <= 20u) return false;
+
+    const std::uint8_t carriedCredibility = r.credibility > 10u ? r.credibility - 8u : 5u;
+    const bool seeded = seed_rumour(r.kind, toFloor, r.subject, r.value, traveler, tick, carriedCredibility);
+    if (seeded) {
+        for (std::size_t i = 0; i < count_; ++i) {
+            if (nodes_[i].active && nodes_[i].rumour.kind == r.kind &&
+                nodes_[i].rumour.floorZ == toFloor &&
+                nodes_[i].rumour.subject == r.subject) {
+                nodes_[i].rumour.hops = r.hops + 1u;
+                break;
+            }
+        }
+    }
+    return seeded;
+}
+
 Rumour RumourNetwork::best_rumour_for_npc(const NpcPool& pool, NpcId id, std::int16_t floorZ) const {
     (void)pool;
     (void)id;
     Rumour best{};
     if (count_ == 0) return best;
 
-    // Preference: Floor-matching rumors > High-credibility atrocities/heroics > War news
+    // Preference: Local floor rumors > High-impact events (Samosbor strikes, atrocities, shortages, wars, heroics)
     std::uint32_t bestScore = 0;
     for (std::size_t i = 0; i < count_; ++i) {
         if (!nodes_[i].active || !nodes_[i].rumour.valid) continue;
         const Rumour& r = nodes_[i].rumour;
         std::uint32_t score = r.credibility;
-        if (r.floorZ == floorZ) score += 50u;
-        if (r.kind == RumourKind::Atrocity) score += 30u;
-        else if (r.kind == RumourKind::Heroic) score += 20u;
-        else if (r.kind == RumourKind::WarNews) score += 25u;
+        if (r.floorZ == floorZ) {
+            score += 60u;
+        } else {
+            const int dist = std::abs(static_cast<int>(r.floorZ) - static_cast<int>(floorZ));
+            if (dist <= 4) {
+                score += static_cast<std::uint32_t>(30 - dist * 6);
+            }
+        }
+
+        if (r.kind == RumourKind::SamosborStrike) score += 45u;
+        else if (r.kind == RumourKind::Atrocity) score += 35u;
+        else if (r.kind == RumourKind::VendorShortage) score += 30u;
+        else if (r.kind == RumourKind::WarNews) score += 28u;
+        else if (r.kind == RumourKind::Heroic) score += 25u;
+
+        if (r.hops > 5u) {
+            const std::uint32_t hopPenalty = static_cast<std::uint32_t>(r.hops - 5u) * 3u;
+            score = score > hopPenalty ? score - hopPenalty : 1u;
+        }
 
         if (score > bestScore) {
             bestScore = score;
@@ -196,11 +316,64 @@ Rumour RumourNetwork::best_rumour_for_npc(const NpcPool& pool, NpcId id, std::in
     return best;
 }
 
+bool RumourNetwork::has_shortage_rumour(std::int16_t floorZ, ItemCategory cat) const {
+    for (std::size_t i = 0; i < count_; ++i) {
+        if (!nodes_[i].active || !nodes_[i].rumour.valid) continue;
+        if (nodes_[i].rumour.kind == RumourKind::VendorShortage &&
+            nodes_[i].rumour.floorZ == floorZ &&
+            nodes_[i].rumour.subject == static_cast<std::uint16_t>(cat)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool RumourNetwork::has_samosbor_strike_rumour(std::int16_t floorZ) const {
+    for (std::size_t i = 0; i < count_; ++i) {
+        if (!nodes_[i].active || !nodes_[i].rumour.valid) continue;
+        if (nodes_[i].rumour.kind == RumourKind::SamosborStrike &&
+            nodes_[i].rumour.floorZ == floorZ) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void RumourNetwork::prune_stale(std::uint64_t currentTick, std::uint64_t maxAgeTicks) {
     for (std::size_t i = 0; i < count_; ++i) {
         if (nodes_[i].active && (currentTick - nodes_[i].birthTick > maxAgeTicks)) {
             nodes_[i].active = false;
         }
+    }
+}
+
+const char* item_category_name_ru(ItemCategory cat) {
+    switch (cat) {
+        case ItemCategory::Ammo:
+            // "патроны"
+            return "\xd0\xbf\xd0\xb0\xd1\x82\xd1\x80\xd0\xbe\xd0\xbd\xd1\x8b";
+        case ItemCategory::Medicine:
+            // "медикаменты"
+            return "\xd0\xbc\xd0\xb5\xd0\xb4\xd0\xb8\xd0\xba\xd0\xb0\xd0\xbc\xd0\xb5\xd0\xbd\xd1\x82\xd1\x8b";
+        case ItemCategory::Drink:
+            // "чистая вода"
+            return "\xd1\x87\xd0\xb8\xd1\x81\xd1\x82\xd0\xb0\xd1\x8f \xd0\xb2\xd0\xbe\xd0\xb4\xd0\xb0";
+        case ItemCategory::Food:
+            // "провизия"
+            return "\xd0\xbf\xd1\x80\xd0\xbe\xd0\xb2\xd0\xb8\xd0\xb7\xd0\xb8\xd1\x8f";
+        case ItemCategory::Tool:
+            // "инструменты"
+            return "\xd0\xb8\xd0\xbd\xd1\x81\xd1\x82\xd1\x80\xd1\x83\xd0\xbc\xd0\xb5\xd0\xbd\xd1\x82\xd1\x8b";
+        case ItemCategory::Note:
+            // "документы"
+            return "\xd0\xb4\xd0\xbe\xd0\xba\xd1\x83\xd0\xbc\xd0\xb5\xd0\xbd\xd1\x82\xd1\x8b";
+        case ItemCategory::Key:
+            // "ключи доступа"
+            return "\xd0\xba\xd0\xbb\xd1\x8e\xd1\x87\xd0\xb8 \xd0\xb4\xd0\xbe\xd1\x81\xd1\x82\xd1\x83\xd0\xbf\xd0\xb0";
+        case ItemCategory::Misc:
+        default:
+            // "припасы"
+            return "\xd0\xbf\xd1\x80\xd0\xb8\xd0\xbf\xd0\xb0\xd1\x81\xd1\x8b";
     }
 }
 
@@ -504,6 +677,36 @@ bool rumour_text(const Rumour& r, char* out, std::size_t cap) {
                           static_cast<int>(r.floorZ),
                           faction_name(static_cast<Faction>(r.subject & 0xFF)),
                           faction_name(static_cast<Faction>((r.subject >> 8) & 0xFF)),
+                          static_cast<int>(r.value));
+            return true;
+        case RumourKind::SamosborStrike:
+            // "На этаже %d ударил свирепый самосбор (%s)! Потерь: %d чел. Не суйся туда!"
+            std::snprintf(out, cap,
+                          "\xd0\x9d\xd0\xb0 \xd1\x8d\xd1\x82\xd0\xb0\xd0\xb6\xd0\xb5"
+                          " %d \xd1\x83\xd0\xb4\xd0\xb0\xd1\x80\xd0\xb8\xd0\xbb"
+                          " \xd1\x81\xd0\xb2\xd0\xb8\xd1\x80\xd0\xb5\xd0\xbf"
+                          "\xd1\x8b\xd0\xb9 \xd1\x81\xd0\xb0\xd0\xbc\xd0\xbe"
+                          "\xd1\x81\xd0\xb1\xd0\xbe\xd1\x80 (%s)! \xd0\x9f"
+                          "\xd0\xbe\xd1\x82\xd0\xb5\xd1\x80\xd1\x8c: %d \xd1"
+                          "\x87\xd0\xb5\xd0\xbb. \xd0\x9d\xd0\xb5 \xd1\x81"
+                          "\xd1\x83\xd0\xb9\xd1\x81\xd1\x8f \xd1\x82\xd1\x83"
+                          "\xd0\xb4\xd0\xb0!",
+                          static_cast<int>(r.floorZ),
+                          samosbor_variant_name_ru(static_cast<SamosborVariant>(r.subject)),
+                          static_cast<int>(r.value));
+            return true;
+        case RumourKind::VendorShortage:
+            // "На этаже %d у торговцев дефицит (%s)! Цены взлетели на %d%%."
+            std::snprintf(out, cap,
+                          "\xd0\x9d\xd0\xb0 \xd1\x8d\xd1\x82\xd0\xb0\xd0\xb6\xd0\xb5"
+                          " %d \xd1\x83 \xd1\x82\xd0\xbe\xd1\x80\xd0\xb3\xd0"
+                          "\xbe\xd0\xb2\xd1\x86\xd0\xb5\xd0\xb2 \xd0\xb4\xd0"
+                          "\xb5\xd1\x84\xd0\xb8\xd1\x86\xd0\xb8\xd1\x82 (%s)!"
+                          " \xd0\xa6\xd0\xb5\xd0\xbd\xd1\x8b \xd0\xb2\xd0\xb7"
+                          "\xd0\xbb\xd0\xb5\xd1\x82\xd0\xb5\xd0\xbb\xd0\xb8"
+                          " \xd0\xbd\xd0\xb0 %d%%.",
+                          static_cast<int>(r.floorZ),
+                          item_category_name_ru(static_cast<ItemCategory>(r.subject)),
                           static_cast<int>(r.value));
             return true;
         case RumourKind::Depth:

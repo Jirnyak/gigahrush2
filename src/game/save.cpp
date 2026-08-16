@@ -281,17 +281,27 @@ void visit_player(Ar& ar, P& p) {
     ar.f32(p.pitch);
 }
 
-// Version 7: RpgStats field-by-field. pad_ is written so the wire is exactly
-// kRpgWire (12) and a future non-zero pad cannot silently drop.
+// Version 16: RpgStats field-by-field (53 B).
 template <class Ar, class R>
 void visit_rpg(Ar& ar, R& r) {
     ar.u32(r.xp);
     ar.u16(r.psi);
     ar.u8(r.level);
     ar.u8(r.attrPoints);
-    ar.u8(r.attr[0]);
-    ar.u8(r.attr[1]);
-    ar.u8(r.attr[2]);
+    for (std::size_t i = 0; i < kAttrCount; ++i) {
+        ar.u8(r.attr[i]);
+    }
+    ar.u8(r.perkPoints);
+    ar.u16(r.radDose);
+    ar.u32(r.traitMask);
+    ar.u32(r.perkMask);
+    ar.u32(r.mutationMask);
+    for (std::size_t i = 0; i < kImplantSlotCount; ++i) {
+        ar.u8(r.implantId[i]);
+    }
+    for (std::size_t i = 0; i < kImplantSlotCount; ++i) {
+        ar.u16(r.implantDurability[i]);
+    }
     ar.u8(r.pad_);
 }
 
@@ -456,9 +466,9 @@ static_assert(kLedgerWire == 8 + 8 + 4 + 4 + 4 + 4 + 1);
 static_assert(kContractWire == 4 + 2 + 4 + 4 + 4 + 1 + 1 + 1);
 static_assert(kNeedsWire == 9 * 4 + 1);
 static_assert(kInventoryWire == 64 * 5);
-// kSaveFixedWire: ledger+book+player + v7 rpg(12)+craft(89) + v8 combat(21)
-// + v9 status(42) + v10 samosbor(17)+fastTravel(32) + quest log + v13 inv condition(64).
-static_assert(kRpgWire == 12);
+// kSaveFixedWire: ledger+book+player + v16 rpg(53)+craft(89) + v8 combat(21)
+// + v9 status(42) + v10 samosbor(17)+fastTravel(32) + bank(352) + powerGrid(1028) + quest log + v13 inv condition(64).
+static_assert(kRpgWire == 53);
 static_assert(kCraftingWire == 89);
 static_assert(kRangedWire == 16);
 static_assert(kCombatSaveWire == 21);
@@ -470,11 +480,11 @@ static_assert(kPowerGridWire == 1028);
 // The wire size and the runtime footprint of the unlock set must not drift apart:
 // widening kFloorSlots changes the struct and would silently change the format.
 static_assert(FastTravelState::wire_bytes() == kFastTravelWire);
-static_assert(kSaveFixedWire == 995 + 8 + kBankWire + kPowerGridWire);  // 2383 (v15: BankAccount +352, PowerGrid +1028, Yaw/Pitch +8)
-static_assert(kSaveFixedWire == 2383);
+static_assert(kSaveFixedWire == 995 + 8 + 41 + kBankWire + kPowerGridWire);  // 2424 (v16: Complete RpgStats +41, BankAccount +352, PowerGrid +1028, Yaw/Pitch +8)
+static_assert(kSaveFixedWire == 2424);
 static_assert(kFactionWire == 36);
-static_assert(save_bytes_for(0) == 2483);
-static_assert(save_bytes_for(0, 100, 50) == 2483 + 150);
+static_assert(save_bytes_for(0) == 2524);
+static_assert(save_bytes_for(0, 100, 50) == 2524 + 150);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two

@@ -34,7 +34,21 @@ bool equip_item(Inventory& inv, Equipped& eq, std::uint8_t slotIdx);
 // Unequip a slot.
 bool unequip_slot(Equipped& eq, EquipSlot slot);
 
-// Scan inventory and automatically equip best weapon/armor/tool if slots are empty.
+// Scan inventory and automatically equip best weapon/armor/tool if slots are empty or broken.
 void auto_equip_best(const Inventory& inv, Equipped& eq);
+
+// Check if the entity has a functional gas mask / respiratory filter equipped.
+bool has_working_filter(const Inventory& inv, const Equipped& eq);
+
+// Check if the entity has environmental/hazmat armor protection equipped.
+bool has_hazmat_protection(const Inventory& inv, const Equipped& eq);
+
+// Degrade the condition of the equipped fouling tool/filter by `amount`.
+// Returns the actual amount degraded.
+std::uint8_t degrade_equipped_filter(Inventory& inv, const Equipped& eq, std::uint8_t amount);
+
+// Degrade the condition of the equipped item in `slot` by `amount`.
+// Returns the actual amount degraded.
+std::uint8_t degrade_equipped_durability(Inventory& inv, const Equipped& eq, EquipSlot slot, std::uint8_t amount);
 
 } // namespace giga::game

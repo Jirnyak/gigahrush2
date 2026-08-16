@@ -111,7 +111,7 @@ DialoguePrompt generate_dialogue_prompt(
         }
     } else if (topRumour.valid && topRumour.kind == RumourKind::Heroic && playerStanding >= 0) {
         prompt.attitude = DialogueAttitude::HeroVeneration;
-    } else if (inWar) {
+    } else if (inWar || (topRumour.valid && topRumour.kind == RumourKind::SamosborStrike)) {
         prompt.attitude = DialogueAttitude::WarAnxious;
     } else if (playerStanding <= -50) {
         prompt.attitude = DialogueAttitude::Hostile;

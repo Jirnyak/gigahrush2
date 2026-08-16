@@ -432,23 +432,27 @@ struct VendorRestockState {
 
 struct RpgStats;
 
-// Category price multiplier on floorZ given game clock seconds.
-// Ammo & Meds drift significantly higher on deeper floors (higher danger/scarcity).
-float market_category_price_mult(ItemCategory cat, int floorZ, float gameClockSec = 0.0f);
+// Category price multiplier on floorZ given game clock seconds, accounting for
+// vertical biomes, depth gradient, and active rumour network effects.
+float market_category_price_mult(ItemCategory cat, int floorZ, float gameClockSec = 0.0f,
+                                 const VendorRestockState* restock = nullptr);
 
 // Full market quote (supply, demand, combined multiplier) for an item on floorZ.
-MarketQuote market_quote_item(ItemId id, int floorZ, float gameClockSec = 0.0f);
+MarketQuote market_quote_item(ItemId id, int floorZ, float gameClockSec = 0.0f,
+                              const VendorRestockState* restock = nullptr);
 
 // Dynamic buy price (roubles) reflecting floor depth scarcity, game-clock drift,
-// and player reputation.
+// vendor stock elasticity, active shortage rumours, and player reputation.
 std::int32_t dynamic_market_buy_price(ItemId id, int floorZ, float gameClockSec = 0.0f,
-                                      std::int8_t playerRelation = 0);
+                                      std::int8_t playerRelation = 0,
+                                      const VendorRestockState* restock = nullptr);
 
 // Dynamic sell price (roubles) guaranteeing strict sell < buy no-arbitrage invariant.
 std::int32_t dynamic_market_sell_price(ItemId id, std::uint8_t vendorKind, int floorZ,
                                        float gameClockSec = 0.0f,
                                        const RpgStats* rpg = nullptr,
-                                       std::int8_t playerRelation = 0);
+                                       std::int8_t playerRelation = 0,
+                                       const VendorRestockState* restock = nullptr);
 
 // Vendor restock lifecycle:
 void vendor_restock_init(VendorRestockState& state, int floorZ, float gameClockSec = 0.0f);

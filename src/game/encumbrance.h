@@ -34,6 +34,8 @@
 //     later — and `sleep < 10` already halves speed on its own ([needs.h]), so
 //     the emergent shape is "hauling a full load home is a decision about how
 //     long the trip can be", which is exactly what the survival clock exists for.
+//     Fatigue additionally scales under environmental barometric pressure drops
+//     (hypoxia strain in Samosbor) and is mitigated by Endurance & cardio implants.
 //
 // ===========================================================================
 // COST, and why the sweep is staggered
@@ -79,8 +81,8 @@ inline constexpr float kOverloadSleepDrainPerSec = 0.10f;
 // punished for the strength it paid for.
 inline constexpr float kNoiseLoadGain = 0.6f;
 
-// What one body's load costs it. All three numbers are pure functions of
-// (carried, capacity) so they can be unit-tested without a registry.
+// What one body's load costs it. All numbers are pure functions of
+// (carried, capacity, pressureDropKpa, staminaDrainMultE3).
 struct EncumbranceEffect {
     float speedScale = 1.0f;    // multiply into Controller::moveSpeed
     float extraSleepPerSec = 0.0f;
@@ -91,7 +93,11 @@ struct EncumbranceEffect {
 // PURE. `capacityG` of 0 is treated as "no budget known" and yields no penalty
 // rather than an infinite one — a body with no character sheet must not be
 // crushed by a division.
-EncumbranceEffect encumbrance_of(std::uint32_t carriedG, std::uint32_t capacityG);
+// `pressureDropKpa`: barometric depression from Samosbor/depth (0 = standard 101.3 kPa).
+// `staminaDrainMultE3`: stamina efficiency multiplier (1000 = 1.0x).
+EncumbranceEffect encumbrance_of(std::uint32_t carriedG, std::uint32_t capacityG,
+                                float pressureDropKpa = 0.0f,
+                                std::uint16_t staminaDrainMultE3 = 1000u);
 
 // What one sweep did. `playerEffect` is the camera holder's, so the app can fold
 // it into the Controller without a second lookup.
@@ -123,6 +129,7 @@ struct NoiseField;
 // Runs anywhere in the tick before movement is resolved. No allocation.
 EncumbranceTick encumbrance_step(Registry& reg, NpcPool& pool, LayerId layer,
                                  float dt, std::uint64_t tick,
-                                 NoiseField* noiseField = nullptr);
+                                 NoiseField* noiseField = nullptr,
+                                 float pressureDropKpa = 0.0f);
 
 } // namespace giga::game

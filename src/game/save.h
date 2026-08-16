@@ -142,7 +142,9 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // Version 13 saves are rejected, same standing rule.
 // Version 15: BankAccount (+352 B on wire: deposit, loan, ledger ring, terms), PlayerSnapshot camera angles (+8 B on wire: yaw, pitch), and PowerGridState (+1028 B on wire: count, destroyed shield cell keys).
 // Version 14 saves are rejected, same standing rule.
-inline constexpr std::uint32_t kSaveVersion = 15u;
+// Version 16: Complete RpgStats persistence — all 5 attributes (Str/Agi/End/Int/Per), perkPoints, radDose, traitMask, perkMask, mutationMask (BioMutations), and cybernetic implant IDs + implantDurability wear (8 slots). (+41 B on wire).
+// Version 15 saves are rejected, same standing rule.
+inline constexpr std::uint32_t kSaveVersion = 16u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -257,10 +259,14 @@ inline constexpr std::size_t kEquippedWire = 4;       // weapon, armor, tool, pa
 inline constexpr std::size_t kPlayerWire =
     kNeedsWire + kInventoryWire + kEquippedWire + 4 + 4 + 4 + 3 + 4 + 4; // 384 (+yaw, +pitch)
 static_assert(kPlayerWire == 384);
-// Version 7: RpgStats wire — field-by-field LE, NOT sizeof (pad_ is written so the
-// footprint stays 12 and matches the POD layout without host padding surprises).
-inline constexpr std::size_t kRpgWire = 4 + 2 + 1 + 1 + 3 + 1;  // 12
-static_assert(kRpgWire == 12);
+// Version 16: RpgStats wire — field-by-field LE, NOT sizeof:
+// xp (4) + psi (2) + level (1) + attrPoints (1) + attr[5] (5) + perkPoints (1) +
+// radDose (2) + traitMask (4) + perkMask (4) + mutationMask (4) +
+// implantId[8] (8) + implantDurability[8] (16) + pad_ (1) = 53 bytes.
+inline constexpr std::size_t kRpgWire =
+    4 + 2 + 1 + 1 + kAttrCount + 1 + 2 + 4 + 4 + 4 +
+    kImplantSlotCount + kImplantSlotCount * 2 + 1;  // 53
+static_assert(kRpgWire == 53);
 // kCraftingWire (89) is defined in craft.h next to craft_write/craft_read.
 // kQuestLogWire is defined in quest.h.
 // Version 8 / SAVMAG: PlayerRanged field-by-field (NOT sizeof — host padding)

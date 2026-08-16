@@ -8,15 +8,19 @@
 #include <algorithm>
 #include <cmath>
 
+#include "core/rng.h"
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "game/combat.h"
 #include "game/door.h"
 #include "game/embody.h"
+#include "game/equip.h"
 #include "game/needs.h"
 #include "game/npc_pool.h"
 #include "game/room_zone.h"
+#include "game/rpg.h"
 #include "game/status.h"
+#include "world/field.h"
 #include "world/macro_grid.h"
 #include "world/types.h"
 
@@ -276,11 +280,16 @@ void samosbor_environmental_step(Registry& reg, NpcPool& pool,
                                   const SamosborState& sam, float dt,
                                   StatusSet* playerStatus,
                                   const MacroGrid* grid,
-                                  const RoomZones* rooms) {
+                                  const RoomZones* rooms,
+                                  int floorZ,
+                                  const Field<float>* gasField) {
     if (sam.phase != static_cast<std::uint8_t>(SamosborPhase::Active))
         return;
 
     const auto variant = static_cast<SamosborVariant>(sam.variant < kSamosborVariantCount ? sam.variant : 0);
+    const SamosborStage stage = samosbor_current_stage(sam);
+    const float phase01 = samosbor_phase01(sam);
+    const float ambientTox = samosbor_ambient_toxicity(floorZ, variant, stage, phase01);
 
     // Pre-build a flat list of shut+locked hermetic doors on this floor for fast O(n*m) shelter check
     struct HermeticCell { std::int32_t cx, cy, cz; };
@@ -343,20 +352,87 @@ void samosbor_environmental_step(Registry& reg, NpcPool& pool,
         }
         if (sheltered) continue;
 
-        // Apply atmospheric sensory fog/coughing status to unsheltered camera holder
-        if (reg.all_of<CameraTag>(e) && playerStatus != nullptr) {
-            if (variant == SamosborVariant::Meat) {
-                status_apply(*playerStatus, StatusId::GovnyakCough, false);
-            } else {
-                status_apply(*playerStatus, StatusId::SporeHaze, false);
+        // Biological immunity check
+        bool filterProtected = false;
+        if (const RpgStats* rpg = reg.try_get<RpgStats>(e)) {
+            if (has_mutation(*rpg, BioMutationId::GillsOfGigahrush)) {
+                filterProtected = true;
             }
         }
 
-        // Unsheltered: accumulate continuous fog pressure
+        // Equipment Hazmat & Gas Mask Filter Degradation
+        Inventory& inv = pool.inventory(id);
+        const Equipped* eq = reg.try_get<Equipped>(e);
+        bool hazmatProtected = false;
+
+        if (eq) {
+            // Check tool and armor slots for working respiratory filter (WearKind::Fouling)
+            ItemSlot* toolSlot = equipped_slot(inv, *eq, EquipSlot::Tool);
+            if (toolSlot && toolSlot->condition > 0 && item_valid(toolSlot->item)) {
+                const ItemDef& tdef = item_def(toolSlot->item);
+                if (tdef.wearKind == static_cast<std::uint8_t>(WearKind::Fouling)) {
+                    filterProtected = true;
+                    // Gas mask filter durability degradation scales with ambient toxicity and local gas
+                    float localGas = 0.0f;
+                    if (gasField != nullptr) localGas = gasField->at(pcx, pcy, pcz);
+                    const float gasIntensity = ambientTox + localGas;
+                    const float wearMult = (variant == SamosborVariant::Veretar) ? 2.5f : 1.0f;
+                    const float filterLossRate = std::max(0.5f, gasIntensity * 3.5f * wearMult);
+
+                    float condLoss = filterLossRate * dt;
+                    while (condLoss >= 1.0f && toolSlot->condition > 0) {
+                        --toolSlot->condition;
+                        condLoss -= 1.0f;
+                    }
+                    if (condLoss > 0.0f && toolSlot->condition > 0) {
+                        const std::uint32_t h = ::giga::hash_u32(static_cast<std::uint32_t>(id * 1013u + static_cast<std::uint32_t>(sam.activeMs)));
+                        if ((h & 0xFFFFu) < static_cast<std::uint32_t>(condLoss * 65535.0f)) {
+                            --toolSlot->condition;
+                        }
+                    }
+                    if (toolSlot->condition == 0) {
+                        filterProtected = false; // filter just fouled / expired
+                    }
+                }
+            }
+
+            // Check hazmat suit protection (EquipSlot::Armor)
+            ItemSlot* armorSlot = equipped_slot(inv, *eq, EquipSlot::Armor);
+            if (armorSlot && armorSlot->condition > 0 && item_valid(armorSlot->item)) {
+                const ItemDef& adef = item_def(armorSlot->item);
+                if (adef.resist[3] > 0 || adef.resist[2] > 0 || adef.resist[0] >= 60) {
+                    hazmatProtected = true;
+                    // Corrosive acid vapor wear in Veretar Samosbor
+                    if (variant == SamosborVariant::Veretar && ambientTox > 0.25f) {
+                        const float armorLossRate = 0.4f;
+                        float aLoss = armorLossRate * dt;
+                        if (aLoss > 0.0f && armorSlot->condition > 0) {
+                            const std::uint32_t ah = ::giga::hash_u32(static_cast<std::uint32_t>(id * 2017u + static_cast<std::uint32_t>(sam.activeMs)));
+                            if ((ah & 0xFFFFu) < static_cast<std::uint32_t>(aLoss * 65535.0f)) {
+                                --armorSlot->condition;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Apply atmospheric sensory fog/coughing status to unsheltered camera holder
+        if (reg.all_of<CameraTag>(e) && playerStatus != nullptr) {
+            if (variant == SamosborVariant::Meat) {
+                status_apply(*playerStatus, StatusId::GovnyakCough, filterProtected);
+            } else {
+                status_apply(*playerStatus, StatusId::SporeHaze, filterProtected);
+            }
+        }
+
+        // Unsheltered: accumulate continuous fog and toxic pressure
         Needs& n = pool.needs(id);
 
-        // 0.5 HP/s base fog drain — unmitigated by armour via kAttritionChannel
-        n.hpDebt += 0.5f * dt;
+        // Base fog drain: absorbed by functional gas mask filter
+        if (!filterProtected) {
+            n.hpDebt += 0.5f * dt;
+        }
 
         // Variant-specific additional drain
         switch (variant) {
@@ -367,7 +443,19 @@ void samosbor_environmental_step(Registry& reg, NpcPool& pool,
                 n.sleep = std::max(0.0f, n.sleep - 0.1f * dt);
                 break;
             case SamosborVariant::Veretar:
-                n.hpDebt += 0.3f * dt;
+                // Toxic corrosive atmosphere: mitigated by gas mask (respiratory) and hazmat armor (skin)
+                if (filterProtected && hazmatProtected) {
+                    // Full hazmat seal: complete protection
+                } else if (filterProtected && !hazmatProtected) {
+                    // Lungs safe, but exposed skin suffers minor acidic burn
+                    n.hpDebt += 0.08f * dt;
+                } else if (!filterProtected && hazmatProtected) {
+                    // Body safe, but inhaling toxic Veretar vapors
+                    n.hpDebt += 0.25f * dt;
+                } else {
+                    // Unmitigated corrosive chemical vapor
+                    n.hpDebt += 0.30f * dt;
+                }
                 break;
             default:
                 break;

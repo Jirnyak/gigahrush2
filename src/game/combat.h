@@ -91,9 +91,9 @@ struct PowerGridState {
             int sz = static_cast<int>(k & 0xFFFF);
             // Z-up: the 0.40 m mount offset rides the vertical (z) axis.
             vec3 shieldPos{sx * kCellSize, sy * kCellSize, sz * kCellSize + 0.40f};
-            float dx = wrap_delta_f(pos.x, shieldPos.x, kWorldExtent);
-            float dy = wrap_delta_f(pos.y, shieldPos.y, kWorldExtent);
-            float dz = wrap_delta_f(pos.z, shieldPos.z, kWorldExtent);
+            float dx = wrap_delta_f(pos.x, shieldPos.x, kWorldExtentX);
+            float dy = wrap_delta_f(pos.y, shieldPos.y, kWorldExtentY);
+            float dz = wrap_delta_f(pos.z, shieldPos.z, kWorldExtentZ);
             if (dx * dx + dy * dy + dz * dz <= 12.0f * 12.0f) {
                 return true;
             }
@@ -509,7 +509,8 @@ std::uint32_t slow_step(Registry& reg, LayerId layer, float dt);
 // Staggered 1-in-16 by entity id. Returns count of degraded items.
 std::uint32_t fouling_step(Registry& reg, NpcPool& pool, LayerId layer,
                            const float* gasField, const float* smokeField,
-                           float dt, std::uint64_t tick);
+                           float dt, std::uint64_t tick,
+                           float ambientTox = 0.0f);
 
 struct Equipped;
 

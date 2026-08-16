@@ -28,6 +28,7 @@
 #include "game/status.h"   // StatusSet, status_melee/aim mults
 #include "game/weapon_table.h"
 #include "sim/camera.h"   // camera_forward
+#include "world/material_props.h"
 #include "world/macro_grid.h"
 #include "world/los.h"   // los_clear — a wall stops a fragment
 #include "world/stain.h" // blood — the universal stain layer
@@ -40,13 +41,13 @@ namespace giga::game {
 namespace {
 
 bool adjacent_wall(const MacroGrid& grid, const vec3& pos) {
-    const int cx = static_cast<int>(pos.x / kCellSize);
-    const int cy = static_cast<int>(pos.y / kCellSize);
-    const int cz = static_cast<int>(pos.z / kCellSize);
-    return grid.cell(cx + 1, cy, cz) != kCellAir ||
-           grid.cell(cx - 1, cy, cz) != kCellAir ||
-           grid.cell(cx, cy + 1, cz) != kCellAir ||
-           grid.cell(cx, cy - 1, cz) != kCellAir;
+    const int cx = wrap_macro_x(static_cast<int>(std::floor(pos.x / kCellSize)));
+    const int cy = wrap_macro_y(static_cast<int>(std::floor(pos.y / kCellSize)));
+    const int cz = clamp_macro_z(static_cast<int>(std::floor(pos.z / kCellSize)));
+    return grid.cell(wrap_macro_x(cx + 1), cy, cz) != kCellAir ||
+           grid.cell(wrap_macro_x(cx - 1), cy, cz) != kCellAir ||
+           grid.cell(cx, wrap_macro_y(cy + 1), cz) != kCellAir ||
+           grid.cell(cx, wrap_macro_y(cy - 1), cz) != kCellAir;
 }
 
 // Component `a` of a vec3 by index, 0/1/2.
@@ -72,8 +73,8 @@ inline float axis(const vec3& v, int a) { return a == 0 ? v.x : (a == 1 ? v.y : 
 bool cell_solid(const MacroGrid& grid, const vec3& p) {
     const int cz = static_cast<int>(std::floor(p.z / kCellSize));
     if (cz < 0 || cz >= kMacroDimZ) return true;
-    return grid.cell(static_cast<int>(std::floor(p.x / kCellSize)),
-                     static_cast<int>(std::floor(p.y / kCellSize)), cz) != kCellAir;
+    return grid.cell(wrap_macro_x(static_cast<int>(std::floor(p.x / kCellSize))),
+                     wrap_macro_y(static_cast<int>(std::floor(p.y / kCellSize))), cz) != kCellAir;
 }
 
 // How far past a face to place the grenade after a reflection, metres. Big enough
@@ -161,10 +162,10 @@ void grenade_advance(const MacroGrid& grid, vec3& pos, vec3& vel, float dt) {
             break;
         }
     }
-    // All three axes wrap on the 128^3 torus
-    pos.x = wrapf(from.x, kWorldExtent);
-    pos.y = wrapf(from.y, kWorldExtent);
-    pos.z = wrapf(from.z, kWorldExtent);
+    // All three axes wrap on the sector torus
+    pos.x = wrapf(from.x, kWorldExtentX);
+    pos.y = wrapf(from.y, kWorldExtentY);
+    pos.z = wrapf(from.z, kWorldExtentZ);
 }
 
 // WHERE THE BARREL IS — the one function that decides it, for every spawner.
@@ -201,9 +202,9 @@ vec3 muzzle_point(const vec3& from, const vec3& unitDir, const vec3& sourcePos) 
     // Clearance, not just contact: the hit test is `<=`, and the shot's own first
     // integration step must not walk it back in.
     const float r = kProjHitRadius + 0.05f;
-    const vec3 d{wrap_delta_f(sourcePos.x, from.x, kWorldExtent),
-                 wrap_delta_f(sourcePos.y, from.y, kWorldExtent),
-                 wrap_delta_f(sourcePos.z, from.z, kWorldExtent)};
+    const vec3 d{wrap_delta_f(sourcePos.x, from.x, kWorldExtentX),
+                 wrap_delta_f(sourcePos.y, from.y, kWorldExtentY),
+                 wrap_delta_f(sourcePos.z, from.z, kWorldExtentZ)};
     const float b = dot(unitDir, d);
     const float c = dot(d, d) - r * r;
     // Ray/sphere: with |unitDir| = 1 the exit parameter is -b + sqrt(b^2 - c). A
@@ -215,9 +216,9 @@ vec3 muzzle_point(const vec3& from, const vec3& unitDir, const vec3& sourcePos) 
         const float exit = -b + std::sqrt(disc);
         if (exit > t) t = exit;
     }
-    return vec3{wrapf(from.x + unitDir.x * t, kWorldExtent),
-                wrapf(from.y + unitDir.y * t, kWorldExtent),
-                wrapf(from.z + unitDir.z * t, kWorldExtent)};
+    return vec3{wrapf(from.x + unitDir.x * t, kWorldExtentX),
+                wrapf(from.y + unitDir.y * t, kWorldExtentY),
+                wrapf(from.z + unitDir.z * t, kWorldExtentZ)};
 }
 
 // Percentage mitigation, clamped. A negative resist is a vulnerability, which is
@@ -430,9 +431,9 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
         if (reg.valid(source) && reg.all_of<Transform>(source)) {
             const vec3& srcPos = reg.get<Transform>(source).pos;
             const vec3& tgtPos = targetTr->pos;
-            vec3 d{wrap_delta_f(srcPos.x, tgtPos.x, kWorldExtent),
-                   wrap_delta_f(srcPos.y, tgtPos.y, kWorldExtent),
-                   wrap_delta_f(srcPos.z, tgtPos.z, kWorldExtent)};
+            vec3 d{wrap_delta_f(srcPos.x, tgtPos.x, kWorldExtentX),
+                   wrap_delta_f(srcPos.y, tgtPos.y, kWorldExtentY),
+                   wrap_delta_f(srcPos.z, tgtPos.z, kWorldExtentZ)};
             if (gravity) {
                 const vec3 g = gravity->at(tgtPos);
                 const float gLen = length(g);
@@ -496,9 +497,9 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
             vec3 dir = up * 0.45f;
             if (reg.valid(source)) {
                 if (const Transform* st = reg.try_get<Transform>(source)) {
-                    vec3 away{wrap_delta_f(st->pos.x, tt->pos.x, kWorldExtent),
-                              wrap_delta_f(st->pos.y, tt->pos.y, kWorldExtent),
-                              wrap_delta_f(st->pos.z, tt->pos.z, kWorldExtent)};
+                    vec3 away{wrap_delta_f(st->pos.x, tt->pos.x, kWorldExtentX),
+                              wrap_delta_f(st->pos.y, tt->pos.y, kWorldExtentY),
+                              wrap_delta_f(st->pos.z, tt->pos.z, kWorldExtentZ)};
                     away = away - up * dot(away, up);  // drop the vertical part
                     const float len = length(away);
                     if (len > 1e-3f) dir = dir + away * (0.8f / len);
@@ -910,9 +911,9 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         if (mob_hunts_npcs(static_cast<std::uint32_t>(entt::to_integral(e)), tick)) {
             bool playerClose = false;
             if (player != entt::null) {
-                const float px = wrap_delta_f(tr.pos.x, playerPos.x, kWorldExtent);
-                const float py = wrap_delta_f(tr.pos.y, playerPos.y, kWorldExtent);
-                const float pz = wrap_delta_f(tr.pos.z, playerPos.z, kWorldExtent);
+                const float px = wrap_delta_f(tr.pos.x, playerPos.x, kWorldExtentX);
+                const float py = wrap_delta_f(tr.pos.y, playerPos.y, kWorldExtentY);
+                const float pz = wrap_delta_f(tr.pos.z, playerPos.z, kWorldExtentZ);
                 playerClose =
                     px * px + py * py + pz * pz <= kHuntRadius * kHuntRadius;
             }
@@ -927,9 +928,9 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         if (victim == entt::null) continue;
 
         // Distances are toroidal.
-        const float dx = wrap_delta_f(tr.pos.x, victimPos.x, kWorldExtent);
-        const float dy = wrap_delta_f(tr.pos.y, victimPos.y, kWorldExtent);
-        const float dz = wrap_delta_f(tr.pos.z, victimPos.z, kWorldExtent);
+        const float dx = wrap_delta_f(tr.pos.x, victimPos.x, kWorldExtentX);
+        const float dy = wrap_delta_f(tr.pos.y, victimPos.y, kWorldExtentY);
+        const float dz = wrap_delta_f(tr.pos.z, victimPos.z, kWorldExtentZ);
         const float d2 = dx * dx + dy * dy + dz * dz;
 
         // Damage scales with the mob's level on the same curve as its HP, so a
@@ -959,8 +960,8 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         }
 
         if (victim == player && havePlayer) {
-            const float pdx = wrap_delta_f(playerPos.x, tr.pos.x, kWorldExtent);
-            const float pdy = wrap_delta_f(playerPos.y, tr.pos.y, kWorldExtent);
+            const float pdx = wrap_delta_f(playerPos.x, tr.pos.x, kWorldExtentX);
+            const float pdy = wrap_delta_f(playerPos.y, tr.pos.y, kWorldExtentY);
             dmg *= facing_damage_mult(beh, playerFwdX, playerFwdY, pdx, pdy);
         }
 
@@ -1251,9 +1252,9 @@ void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
         }
     }
 
-    const vec3 delta{wrap_delta_f(from.x, to.x, kWorldExtent),
-                     wrap_delta_f(from.y, to.y, kWorldExtent),
-                     wrap_delta_f(from.z, to.z, kWorldExtent)};
+    const vec3 delta{wrap_delta_f(from.x, to.x, kWorldExtentX),
+                     wrap_delta_f(from.y, to.y, kWorldExtentY),
+                     wrap_delta_f(from.z, to.z, kWorldExtentZ)};
     // Δ split into the part along the local vertical and the part perpendicular to
     // it — the projection that `dz` and `sqrt(dx*dx + dy*dy)` were hardcoding.
     const float dUp = dot(delta, up);
@@ -1584,9 +1585,9 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         if (grenade) {
             grenade_advance(grid, tr.pos, v.v, dt);
         } else {
-            tr.pos.x = wrapf(tr.pos.x + v.v.x * dt, kWorldExtent);
-            tr.pos.y = wrapf(tr.pos.y + v.v.y * dt, kWorldExtent);
-            tr.pos.z = wrapf(tr.pos.z + v.v.z * dt, kWorldExtent);
+            tr.pos.x = wrapf(tr.pos.x + v.v.x * dt, kWorldExtentX);
+            tr.pos.y = wrapf(tr.pos.y + v.v.y * dt, kWorldExtentY);
+            tr.pos.z = wrapf(tr.pos.z + v.v.z * dt, kWorldExtentZ);
         }
 
         if (p.ttlMs == 0) {
@@ -1615,26 +1616,10 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
 
         // The camera holder, tested like anything else — INCLUDING against his own
         // bullet, since 2026-08-13.
-        //
-        // This branch used to read `if (victim != entt::null && p.source != victim)`,
-        // and that was the last owner test in the tree: §33 deleted `Projectile::team`
-        // and left one exclusion standing, wearing a geometry argument. The argument
-        // was that a shot fired straight down passes through the shooter on its way to
-        // the floor — and it does not, but only by 4 mm at the tallest legal stature,
-        // and only because of a clamp in population.cpp that nothing here referenced.
-        // `muzzle_point` above turns that coincidence into a solved ray/sphere exit,
-        // so the rule has nothing left to pay for and is gone.
-        //
-        // What that buys is not tidiness. A shot is now hittable by its own shooter
-        // whenever it is genuinely in his space — a ricochet off a wall he is standing
-        // against, a pellet from a barrel pressed into a corner. Under the old test
-        // those cases were silently impossible for the camera holder and possible for
-        // everyone else, which is an asymmetry in the player's favour and exactly what
-        // "the player is not special" ([AGENTS.md]) forbids.
         if (victim != entt::null) {
-            const float hx = wrap_delta_f(tr.pos.x, victimPos.x, kWorldExtent);
-            const float hy = wrap_delta_f(tr.pos.y, victimPos.y, kWorldExtent);
-            const float hz = wrap_delta_f(tr.pos.z, victimPos.z, kWorldExtent);
+            const float hx = wrap_delta_f(tr.pos.x, victimPos.x, kWorldExtentX);
+            const float hy = wrap_delta_f(tr.pos.y, victimPos.y, kWorldExtentY);
+            const float hz = wrap_delta_f(tr.pos.z, victimPos.z, kWorldExtentZ);
             if (hx * hx + hy * hy + hz * hz <= kProjHitRadius * kProjHitRadius) {
                 resolved.push_back(
                     Hit{e, p.dmg, p.source, true, entt::null, p.proj, p.channel});
@@ -1643,34 +1628,13 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         }
 
         // EVERYTHING ELSE IN THE AIR, with no memory of who fired it.
-        //
-        // This used to be two branches gated on `Projectile::team`: monsters were hit
-        // only by player shots, the crowd only by monster shots, and the crowd branch
-        // additionally spared anyone `mob_hostile_to` said was not prey. Three
-        // exclusions, all of them the thing ARCHITECTURE.md §Манифест п.5 forbids by
-        // name — "никаких friendly-fire-исключений; граната скачет по вокселям,
-        // осколки бьют и владельца".
-        //
-        // Owner's ruling, 2026-08-12: **ownership itself is the hardcode.** A shot,
-        // once fired, is a physical object that remembers nothing. It does not know
-        // who pulled the trigger, what team they were on, or which faction is
-        // standing in front of it. It hits what it reaches.
-        //
-        // So this is ONE sweep over everything a projectile can touch, and it takes
-        // the NEAREST — not the first the view happens to yield. With separate
-        // branches "first found" was already arbitrary; merged, arbitrary would mean
-        // a monster shielding a civilian only when EnTT ordered it that way.
-        //
-        // `p.source` survives as ATTRIBUTION and nothing else: `finalize_deaths`
-        // needs to know whose kill it was to award XP. Attribution is not exclusion —
-        // a body can be credited with a death it caused to itself, and now is.
         {
             Entity best = entt::null;
             float bestD2 = kProjHitRadius * kProjHitRadius;
             auto consider = [&](Entity cand, const vec3& cp) {
-                const float hx = wrap_delta_f(tr.pos.x, cp.x, kWorldExtent);
-                const float hy = wrap_delta_f(tr.pos.y, cp.y, kWorldExtent);
-                const float hz = wrap_delta_f(tr.pos.z, cp.z, kWorldExtent);
+                const float hx = wrap_delta_f(tr.pos.x, cp.x, kWorldExtentX);
+                const float hy = wrap_delta_f(tr.pos.y, cp.y, kWorldExtentY);
+                const float hz = wrap_delta_f(tr.pos.z, cp.z, kWorldExtentZ);
                 const float d2 = hx * hx + hy * hy + hz * hz;
                 if (d2 <= bestD2) {
                     bestD2 = d2;
@@ -1695,16 +1659,92 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
             }
         }
 
-        // Solid geometry stops it. Cell-level rather than sub-voxel on purpose: a
-        // shot clipping the corner of a wall should stop, and the sub-voxel mask
-        // would let it slip through a half-carved cell that reads as solid.
-        // Carry p.dmg so phase 2 can propose a wall chip (carve_power_from_dmg);
-        // body damage is still skipped via onWall (no onVictim/other).
-        const int cx = wrap_macro(static_cast<int>(tr.pos.x / kCellSize));
-        const int cy = wrap_macro(static_cast<int>(tr.pos.y / kCellSize));
-        const int cz = static_cast<int>(tr.pos.z / kCellSize);
-        if (cz < 0 || cz >= kMacroDimZ ||
-            grid.cell(cx, cy, cz) != kCellAir) {
+        // Solid geometry interaction: ricochet off hard surfaces (steel/concrete),
+        // penetrate softer barriers, or stop and embed.
+        const int cx = wrap_macro_x(static_cast<int>(std::floor(tr.pos.x / kCellSize)));
+        const int cy = wrap_macro_y(static_cast<int>(std::floor(tr.pos.y / kCellSize)));
+        const int cz = static_cast<int>(std::floor(tr.pos.z / kCellSize));
+        const bool outOfZ = (cz < 0 || cz >= kMacroDimZ);
+        const CellType mat = outOfZ ? kMatConcrete : grid.cell(cx, cy, cz);
+        if (outOfZ || mat != kCellAir) {
+            const std::uint16_t hardness = giga::material_hardness(mat);
+            const float spd = length(v.v);
+            const bool bullet = static_cast<ProjType>(p.proj) == ProjType::Bullet && p.dmg > 0;
+
+            if (bullet && spd > 1.0f) {
+                const vec3 dir = v.v * (1.0f / spd);
+                // Compute impact face normal from dominant entry axis:
+                const float ax = std::abs(dir.x), ay = std::abs(dir.y), az = std::abs(dir.z);
+                vec3 n{0.0f, 0.0f, 0.0f};
+                if (az >= ax && az >= ay) n.z = (dir.z > 0.0f) ? -1.0f : 1.0f;
+                else if (ay >= ax) n.y = (dir.y > 0.0f) ? -1.0f : 1.0f;
+                else n.x = (dir.x > 0.0f) ? -1.0f : 1.0f;
+
+                const float cosIncidence = -dot(dir, n); // ~0 for grazing angle
+                const bool isSteel = (mat == kMatTread || mat == kMatElectricGrate ||
+                                      mat == kMatPipeMetal || mat == kMatDoor ||
+                                      mat == kMatShopShutter);
+                const bool isConcrete = (mat == kMatConcrete || mat == kMatFactoryWall ||
+                                         mat == kMatSlabTan || outOfZ);
+                const bool isHard = (hardness >= 180 || isSteel || isConcrete);
+                const float maxCosAngle = isSteel ? 0.55f : (isConcrete ? 0.40f : 0.0f);
+
+                // 1. RICOCHET on hard surfaces at shallow grazing angles:
+                if (isHard && cosIncidence > 0.01f && cosIncidence < maxCosAngle && p.dmg >= 4) {
+                    const float eRest = isSteel ? 0.55f : 0.40f;
+                    const float fFric = isSteel ? 0.85f : 0.70f;
+                    const vec3 vn = n * dot(v.v, n);
+                    const vec3 vt = v.v - vn;
+                    v.v = vt * fFric - vn * eRest;
+                    tr.pos.x = wrapf(tr.pos.x + n.x * 0.08f, kWorldExtentX);
+                    tr.pos.y = wrapf(tr.pos.y + n.y * 0.08f, kWorldExtentY);
+                    tr.pos.z = wrapf(tr.pos.z + n.z * 0.08f, kWorldExtentZ);
+                    p.dmg = static_cast<std::int16_t>((p.dmg * (isSteel ? 65 : 50) + 50) / 100);
+                    if (carves) {
+                        carves->push(tr.pos.x, tr.pos.y, tr.pos.z,
+                                     kBulletCarveRadius * 0.6f,
+                                     carve_power_from_dmg(p.dmg),
+                                     static_cast<std::uint32_t>(tick) ^
+                                         static_cast<std::uint32_t>(entt::to_integral(e)));
+                    }
+                    if (particles) {
+                        particles->push(tr.pos, n * 0.5f - dir * 0.5f,
+                                        ParticleKind::Spark,
+                                        isSteel ? 12 : 6,
+                                        isSteel ? kMatElectricGrate : kMatConcrete,
+                                        static_cast<std::uint32_t>(tick) ^
+                                            static_cast<std::uint32_t>(entt::to_integral(e)));
+                    }
+                    continue; // Bullet ricocheted! Continues flight.
+                }
+
+                // 2. PENETRATION through thin/soft materials:
+                const std::int16_t penCost = static_cast<std::int16_t>(
+                    std::max(4, static_cast<int>(hardness / 6)));
+                if (!outOfZ && hardness < 180 && p.dmg > penCost + 4 && spd > 10.0f) {
+                    p.dmg = static_cast<std::int16_t>(p.dmg - penCost);
+                    v.v = v.v * 0.75f;
+                    tr.pos.x = wrapf(tr.pos.x + dir.x * 0.35f, kWorldExtentX);
+                    tr.pos.y = wrapf(tr.pos.y + dir.y * 0.35f, kWorldExtentY);
+                    tr.pos.z = wrapf(tr.pos.z + dir.z * 0.35f, kWorldExtentZ);
+                    if (carves) {
+                        carves->push(tr.pos.x, tr.pos.y, tr.pos.z,
+                                     kBulletCarveRadius,
+                                     carve_power_from_dmg(penCost * 2),
+                                     static_cast<std::uint32_t>(tick) ^
+                                         static_cast<std::uint32_t>(entt::to_integral(e)));
+                    }
+                    if (particles) {
+                        particles->push(tr.pos, dir * 0.5f,
+                                        ParticleKind::Debris, 8, mat,
+                                        static_cast<std::uint32_t>(tick) ^
+                                            static_cast<std::uint32_t>(entt::to_integral(e)));
+                    }
+                    continue; // Bullet penetrated! Continues flight.
+                }
+            }
+
+            // 3. FULL IMPACT (embedded/stopped in solid):
             Hit h{e, p.dmg, p.source, false};
             h.onWall = true;
             h.impactPos = tr.pos;
@@ -1714,90 +1754,34 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         }
     }
 
-
     std::uint32_t hits = 0;
     for (const Hit& h : resolved) {
-        // What a WEB shot delivers, and the ONLY reader of `MobDef::projType` in the
-        // tree. A web carries dmg 0 (its one authored row is the only zero-damage row
-        // in data/mobs.csv), so `apply_damage` would refuse it and the shot would
-        // land as nothing at all — the slow IS the hit, and it is counted as one so
-        // the HUD's hit tally does not report a web-spitter as permanently missing.
-        //
-        // Applied before apply_damage rather than after, because apply_damage may tag
-        // `Dead`, and slowing a corpse is a wasted 8 bytes on an entity that is about
-        // to be destroyed. A web cannot itself be lethal, so ordering costs nothing.
-        //
-        // `landed` and not `++hits` in two places: a shot must count once whatever it
-        // delivered, or a future WEB row with nonzero damage would report two hits for
-        // one projectile and quietly inflate the tally the HUD prints.
         bool landed = false;
         const bool web = static_cast<ProjType>(h.projType) == ProjType::Web;
         const Entity body = h.onVictim ? victim : h.other;
         if (web && body != entt::null && reg.valid(body)) {
             landed = apply_slow(reg, body, kWebSlowScale, kWebSlowMs);
-            // Content layer: Slowed is the velocity CAP; PaupsinaWeb is the
-            // authored row (root window + move 540/220). Both coexist.
             if (landed && playerStatus && body == playerEntity) {
                 status_apply(*playerStatus, StatusId::PaupsinaWeb,
                              /*useAlt=*/false);
             }
         }
 
-        // `h.channel` and not `DamageChannel::Kinetic`: this is the line that makes
-        // armour's resist[5] mean anything on a shot. Both branches take it, because
-        // a channel is a property of the SHOT and not of what it happened to strike.
         const DamageChannel ch = static_cast<DamageChannel>(h.channel);
 
-        // DETONATION — the reason `Projectile::team` was deleted, arriving 24 hours
-        // after the deletion.
-        //
-        // ONE sweep over every body and every monster on the layer, and **not one
-        // exclusion in it**. Not by team, not by faction, not by owner — and there is
-        // now none anywhere else either: the contact path above lost the last one,
-        // `p.source != victim`, on 2026-08-13 once `muzzle_point` made the clearance
-        // it was insuring a guarantee instead of a 4 mm coincidence. A blast never had
-        // even that excuse. It goes off in a PLACE, and everyone in that place pays,
-        // starting with whoever was holding it. ARCHITECTURE.md §Манифест п.5:
-        // "осколки бьют и владельца".
-        //
-        // `h.source` is read exactly twice below, both times to CREDIT a kill, never
-        // to skip a target. That is the whole of the attribution/exclusion
-        // distinction the 2026-08-12 ruling turns on.
+        // DETONATION
         if (h.onDetonate && h.blastDm > 0) {
             const float R = static_cast<float>(h.blastDm) * 0.1f;
 
-            // Gather first, damage second — the same two-phase discipline as the
-            // enclosing function, one level down and for the same reason:
-            // `apply_damage` emplaces `Dead`, which can reallocate the component pool
-            // that the sweep is walking.
             struct Caught { Entity e; float d; };
             std::vector<Caught> caught;
             caught.reserve(16);
             auto sweep = [&](Entity cand, const vec3& cp) {
-                const float dx = wrap_delta_f(h.impactPos.x, cp.x, kWorldExtent);
-                const float dy = wrap_delta_f(h.impactPos.y, cp.y, kWorldExtent);
-                const float dz = wrap_delta_f(h.impactPos.z, cp.z, kWorldExtent);
+                const float dx = wrap_delta_f(h.impactPos.x, cp.x, kWorldExtentX);
+                const float dy = wrap_delta_f(h.impactPos.y, cp.y, kWorldExtentY);
+                const float dz = wrap_delta_f(h.impactPos.z, cp.z, kWorldExtentZ);
                 const float d2 = dx * dx + dy * dy + dz * dz;
                 if (d2 > R * R) return;
-                // A WALL STOPS A FRAGMENT, and this is the only thing in the blast
-                // that may refuse a target. It is not an exclusion: it does not ask
-                // WHO the body is, it asks whether anything solid stands between the
-                // blast and it — the same question, at the same cell granularity,
-                // that already stops a bullet and bounces a grenade. Distance alone
-                // was a grenade that killed through a load-bearing wall.
-                //
-                // `los_clear` is the first LOS primitive in the tree ([world/los.h]);
-                // it lives in the core because it is a fact about geometry, and
-                // [mob_behaviour.h] has a dropped sight test waiting for it.
-                //
-                // NOT counted here, and the reason is the layer rather than
-                // indifference: every other refusal in this file is counted
-                // (`droppedFull` and friends) because there is a queue to hang the
-                // counter on and an app-side `GIGA_*_DBG` line to print it. There is
-                // neither here, and `giga_game` holds no `getenv` anywhere on
-                // purpose — it stays headless and pure ([AGENTS.md]). So the number
-                // is asserted where it is measured: `test_grenade` block 7 prints
-                // how many bodies the wall shielded, on every ctest run.
                 if (!los_clear(grid, h.impactPos, cp)) return;
                 caught.push_back(Caught{cand, std::sqrt(d2)});
             };
@@ -1807,11 +1791,6 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                 sweep(m, mt.pos);
             }
             for (auto b : reg.view<const NpcRef, const Transform>()) {
-                // Anything already swept as a monster is not swept again as a body.
-                // Nothing in the tree carries both today; a blast that charged such an
-                // entity twice would be a silent double-damage and is cheaper to make
-                // impossible than to notice. The camera holder is an ordinary NpcRef
-                // and IS in this loop — that is how the thrower gets hit.
                 if (reg.all_of<MobRef>(b)) continue;
                 const Transform& bt = reg.get<const Transform>(b);
                 if (bt.layer != layer) continue;
@@ -1820,16 +1799,6 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
 
             for (const Caught& c : caught) {
                 if (!reg.valid(c.e)) continue;
-                // LINEAR falloff, full damage at the centre and 1 at the rim. Linear
-                // and not inverse-square because inverse-square is the law for a
-                // point source radiating into free space, and a fragmentation blast
-                // in a 2 m corridor is not that — it is fragments that spread and
-                // slow. Linear is also the one shape a player can read off two
-                // explosions: half as far, twice the damage.
-                //
-                // The floor of 1 keeps the rim honest: inside the radius you were
-                // caught in the blast, and "caught in the blast for zero" would make
-                // the radius a lie at its own edge.
                 const float f = 1.0f - c.d / R;
                 std::int16_t dmgHere =
                     static_cast<std::int16_t>(static_cast<float>(h.dmg) * f + 0.5f);
@@ -1839,11 +1808,25 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                                  particles, &stack.layer(layer).gravity());
                 if (!r.hit) continue;
                 landed = true;
-                // Credited exactly as the bullet path credits a shot, so a grenade
-                // kill counts on the same counter the HUD already prints and, through
-                // `Dead::killer` -> the NpcDied event, on the same contract/quest
-                // ledger ([problems.md] §40). A monster's grenade credits a monster
-                // and therefore closes nobody's contract.
+
+                // Swept-AABB explosive impulse physics on caught bodies:
+                if (Velocity* tgtVel = reg.try_get<Velocity>(c.e)) {
+                    if (const Transform* tgtTr = reg.try_get<Transform>(c.e)) {
+                        const Mass* km = reg.try_get<Mass>(c.e);
+                        const float mass = (km && km->kg > 1.0f) ? km->kg : kKnockbackRefMassKg;
+                        vec3 blastDir{wrap_delta_f(h.impactPos.x, tgtTr->pos.x, kWorldExtentX),
+                                      wrap_delta_f(h.impactPos.y, tgtTr->pos.y, kWorldExtentY),
+                                      wrap_delta_f(h.impactPos.z, tgtTr->pos.z, kWorldExtentZ)};
+                        const float bLen = length(blastDir);
+                        if (bLen > 1e-3f) {
+                            blastDir = blastDir * (1.0f / bLen);
+                            const float impulse = (static_cast<float>(h.dmg) * 0.15f * f) *
+                                                  (kKnockbackRefMassKg / mass);
+                            tgtVel->v += blastDir * impulse + vec3{0.0f, 0.0f, 1.2f} * (impulse * 0.4f);
+                        }
+                    }
+                }
+
                 if (reg.valid(h.source)) {
                     if (auto* pr = reg.try_get<PlayerRanged>(h.source)) ++pr->hits;
                     if (r.lethal)
@@ -1851,10 +1834,6 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                 }
             }
 
-            // Geometry, through the ONE carve path ([destruct.h]): combat proposes,
-            // the app disposes. A refusal here is COUNTED, never silent —
-            // `droppedFull` is why a grenade that opened no hole can be told from a
-            // grenade whose proposal never got in ([combat.h] CarveProposalQueue).
             if (carves) {
                 const std::uint32_t seed =
                     static_cast<std::uint32_t>(tick) * 0x9e3779b9u ^
@@ -1865,17 +1844,10 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                     landed = true;
                 }
             }
-            // Heard, at severity 5 — the loudest thing in the game, and published at
-            // the BLAST rather than at whoever threw it, because the place a monster
-            // should walk toward is where the bang was.
             if (noise)
                 noise_publish(*noise, layer, h.impactPos, blast_noise(R),
                               static_cast<std::uint32_t>(
                                   entt::to_integral(h.source)));
-            // Flash and debris, through the unified pool ([particles.h]). Two bursts
-            // and not one: the spark is the detonation, the debris is the wall it
-            // took with it, and they are separate rows of data/particles.csv with
-            // separate lifetimes.
             if (particles) {
                 const std::uint32_t pseed =
                     static_cast<std::uint32_t>(tick) ^
@@ -1898,23 +1870,14 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                                           &stack.layer(layer).gravity());
             if (r.hit) {
                 landed = true;
-                // Credit the shooter, the same way the melee path credits a swing.
-                // Only a player carries PlayerRanged, so this quietly does nothing for
-                // the monster-shot-hit-a-resident case and needs no team test.
                 if (reg.valid(h.source)) {
                     if (auto* pr = reg.try_get<PlayerRanged>(h.source)) ++pr->hits;
-                    // And a KILL is a kill however it was made. `PlayerMelee::kills` is
-                    // the game's only kill counter and the HUD prints it as "kills", so
-                    // leaving shot monsters out of it meant a player with a rifle watched
-                    // the number stay at zero while the corridor emptied. The field's
-                    // NAME is now wrong; the behaviour was worse.
                     if (r.lethal)
                         if (auto* pm = reg.try_get<PlayerMelee>(h.source)) ++pm->kills;
                 }
             }
         }
         // Wall chip: combat proposes, app disposes via carve_sphere ([destruct.h]).
-        // WEB is control, not demolition — skip. Power from weapon dmg (not 0).
         if (h.onWall && carves && !web && h.dmg > 0) {
             const std::uint16_t pow = carve_power_from_dmg(h.dmg);
             if (carves->push(h.impactPos.x, h.impactPos.y, h.impactPos.z,
@@ -1924,15 +1887,8 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                                      entt::to_integral(h.proj)))) {
                 landed = true;
             }
-            // Sparks — the projectile-on-wall writer of the unified pool
-            // ([particles.h]). The chip carve above is the scar; this is the
-            // flash. The sim's voxel bounce scatters them off the surface, so
-            // no impact normal is needed here.
             if (particles) {
                 const int n = 4 + h.dmg / 4;
-                // The 0.6 bias rides the layer's UP, not +Z — the same frame
-                // correction apply_damage's blood spray already makes, and the
-                // last hardcoded vertical in this file. Magnitude untouched.
                 const vec3 gg = stack.layer(layer).gravity().at(h.impactPos);
                 const float ggLen = length(gg);
                 const vec3 sparkUp = ggLen > 1e-6f ? gg * (-0.6f / ggLen)
@@ -1946,10 +1902,6 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
             }
         }
         if (landed) ++hits;
-        // Blood: a shot that landed on a BODY splatters the world through the
-        // universal stain layer ([world/stain.h]) — same op for every channel,
-        // colour from the substance table, dirty cells owed to the mirror by
-        // the caller. Wall hits bleed nothing; the carve chip is their mark.
         if (landed && stainDirty && !h.onWall && !web && h.dmg > 0) {
             const vec3 gg = stack.layer(layer).gravity().at(h.impactPos);
             const float ggLen = length(gg);
@@ -2363,9 +2315,9 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
     for (auto e : reg.view<const MobRef, const Transform>()) {
         const Transform& tr = reg.get<const Transform>(e);
         if (tr.layer != layer) continue;
-        const float dx = wrap_delta_f(me.pos.x, tr.pos.x, kWorldExtent);
-        const float dy = wrap_delta_f(me.pos.y, tr.pos.y, kWorldExtent);
-        const float dz = wrap_delta_f(me.pos.z, tr.pos.z, kWorldExtent);
+        const float dx = wrap_delta_f(me.pos.x, tr.pos.x, kWorldExtentX);
+        const float dy = wrap_delta_f(me.pos.y, tr.pos.y, kWorldExtentY);
+        const float dz = wrap_delta_f(me.pos.z, tr.pos.z, kWorldExtentZ);
         const float d2 = dx * dx + dy * dy + dz * dz;
         if (d2 > bestD2) continue;
         const float len = std::sqrt(d2);
@@ -2389,13 +2341,13 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
             constexpr int kSteps = 8;
             for (int i = 1; i <= kSteps; ++i) {
                 const float t = reach * (static_cast<float>(i) / kSteps);
-                const vec3 p{wrapf(eye.x + fwd.x * t, kWorldExtent),
-                             wrapf(eye.y + fwd.y * t, kWorldExtent),
-                             wrapf(eye.z + fwd.z * t, kWorldExtent)};
-                const int cx = wrap_macro(static_cast<int>(std::floor(p.x / kCellSize)));
-                const int cy = wrap_macro(static_cast<int>(std::floor(p.y / kCellSize)));
-                const int cz = wrap_macro(static_cast<int>(std::floor(p.z / kCellSize)));
-                if (grid->cell(cx, cy, cz) != kCellAir) {
+                const vec3 p{wrapf(eye.x + fwd.x * t, kWorldExtentX),
+                             wrapf(eye.y + fwd.y * t, kWorldExtentY),
+                             wrapf(eye.z + fwd.z * t, kWorldExtentZ)};
+                const int cx = wrap_macro_x(static_cast<int>(std::floor(p.x / kCellSize)));
+                const int cy = wrap_macro_y(static_cast<int>(std::floor(p.y / kCellSize)));
+                const int cz = static_cast<int>(std::floor(p.z / kCellSize));
+                if (cz < 0 || cz >= kMacroDimZ || grid->cell(cx, cy, cz) != kCellAir) {
                     hitWall = true;
                     hitAt = p;
                     break;
@@ -2504,7 +2456,8 @@ void transfer_player_progression(Registry& reg, Entity from, Entity to) {
 
 std::uint32_t fouling_step(Registry& reg, NpcPool& pool, LayerId layer,
                            const float* gasField, const float* smokeField,
-                           float dt, std::uint64_t tick) {
+                           float dt, std::uint64_t tick,
+                           float ambientTox) {
     (void)dt;
     std::uint32_t processed = 0;
 
@@ -2521,11 +2474,11 @@ std::uint32_t fouling_step(Registry& reg, NpcPool& pool, LayerId layer,
         const Equipped& eq = reg.get<const Equipped>(e);
         Inventory& inv = pool.inventory(nr.id);
 
-        float envHazard = 0.0f;
+        float envHazard = ambientTox;
         if (gasField || smokeField) {
-            const int cx = wrap_macro(static_cast<int>(tr.pos.x / kCellSize));
-            const int cy = wrap_macro(static_cast<int>(tr.pos.y / kCellSize));
-            const int cz = wrap_macro(static_cast<int>(tr.pos.z / kCellSize));
+            const int cx = wrap_macro_x(static_cast<int>(tr.pos.x / kCellSize));
+            const int cy = wrap_macro_y(static_cast<int>(tr.pos.y / kCellSize));
+            const int cz = clamp_macro_z(static_cast<int>(tr.pos.z / kCellSize));
             const std::size_t idx = macro_index(cx, cy, cz);
             if (gasField) envHazard += gasField[idx];
             if (smokeField) envHazard += smokeField[idx] * 0.5f;

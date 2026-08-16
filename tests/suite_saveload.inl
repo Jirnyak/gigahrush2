@@ -148,7 +148,8 @@ SaveState busy_run() {
     st.player.yaw = 1.234f;
     st.player.pitch = -0.456f;
 
-    // Version 7 / SAVRPG: a non-default sheet and a mutated craft bank so a
+    // Version 7 / SAVRPG / Version 16: a non-default sheet with all 5 attributes,
+    // perks, mutations, implants, and a mutated craft bank so a
     // dropped field cannot hide behind fresh_rpg(1) / craft_init defaults.
     st.rpg = fresh_rpg(10);
     st.rpg.xp = 12345u;
@@ -156,7 +157,19 @@ SaveState busy_run() {
     st.rpg.attrPoints = 3u;
     st.rpg.attr[0] = 20u;  // STR
     st.rpg.attr[1] = 15u;  // AGI
-    st.rpg.attr[2] = 8u;   // INT
+    st.rpg.attr[2] = 8u;   // END
+    st.rpg.attr[3] = 12u;  // INT
+    st.rpg.attr[4] = 14u;  // PER
+    st.rpg.perkPoints = 2u;
+    st.rpg.radDose = 150u;
+    st.rpg.traitMask = 0x12345678u;
+    st.rpg.perkMask = 0x0ABCDEF0u;
+    st.rpg.mutationMask = (1u << static_cast<std::uint32_t>(BioMutationId::ChitinousPlates)) |
+                          (1u << static_cast<std::uint32_t>(BioMutationId::ThirdEye));
+    st.rpg.implantId[0] = static_cast<std::uint8_t>(ImplantId::NeuralCoProcessor);
+    st.rpg.implantDurability[0] = 850u;
+    st.rpg.implantId[1] = static_cast<std::uint8_t>(ImplantId::BionicEyeThermal);
+    st.rpg.implantDurability[1] = 420u;
     craft_init(st.craft);
     st.craft.mat[0] = 111u;
     st.craft.mat[3] = 222u;
@@ -280,14 +293,23 @@ void same_run(const SaveState& a, const SaveState& b) {
     CHECK(a.player.yaw == b.player.yaw);
     CHECK(a.player.pitch == b.player.pitch);
 
-    // Version 7 / SAVRPG: sheet + craft bank.
+    // Version 7 / SAVRPG / Version 16: sheet + craft bank.
     CHECK(a.rpg.xp == b.rpg.xp);
     CHECK(a.rpg.psi == b.rpg.psi);
     CHECK(a.rpg.level == b.rpg.level);
     CHECK(a.rpg.attrPoints == b.rpg.attrPoints);
-    CHECK(a.rpg.attr[0] == b.rpg.attr[0]);
-    CHECK(a.rpg.attr[1] == b.rpg.attr[1]);
-    CHECK(a.rpg.attr[2] == b.rpg.attr[2]);
+    for (std::size_t i = 0; i < kAttrCount; ++i) {
+        CHECK(a.rpg.attr[i] == b.rpg.attr[i]);
+    }
+    CHECK(a.rpg.perkPoints == b.rpg.perkPoints);
+    CHECK(a.rpg.radDose == b.rpg.radDose);
+    CHECK(a.rpg.traitMask == b.rpg.traitMask);
+    CHECK(a.rpg.perkMask == b.rpg.perkMask);
+    CHECK(a.rpg.mutationMask == b.rpg.mutationMask);
+    for (std::size_t i = 0; i < kImplantSlotCount; ++i) {
+        CHECK(a.rpg.implantId[i] == b.rpg.implantId[i]);
+        CHECK(a.rpg.implantDurability[i] == b.rpg.implantDurability[i]);
+    }
     CHECK(a.craft.tier == b.craft.tier);
     for (std::size_t w = 0; w < kCraftKnownWords; ++w)
         CHECK(a.craft.known[w] == b.craft.known[w]);
@@ -371,7 +393,7 @@ void wire_layout() {
     // The format's footprint is arithmetic, not a measurement — a save whose length
     // depends on the compiler is a save that cannot cross hosts.
     static_assert(kSaveHeaderWire == 64);
-    static_assert(kRpgWire == 12);
+    static_assert(kRpgWire == 53);
     static_assert(kCraftingWire == 89);
     static_assert(kRangedWire == 16);
     static_assert(kCombatSaveWire == 21);
@@ -380,11 +402,11 @@ void wire_layout() {
     static_assert(kFastTravelWire == 32);
     static_assert(kBankWire == 352);
     static_assert(kPowerGridWire == 1028);
-    static_assert(kSaveFixedWire == 2383);
+    static_assert(kSaveFixedWire == 2424);
     static_assert(kFactionWire == 36);
-    static_assert(save_bytes_for(0) == 2483);
-    static_assert(save_bytes_for(3) == 2483 + 15);
-    static_assert(save_bytes_for(3, 100, 50) == 2483 + 15 + 150);
+    static_assert(save_bytes_for(0) == 2524);
+    static_assert(save_bytes_for(3) == 2524 + 15);
+    static_assert(save_bytes_for(3, 100, 50) == 2524 + 15 + 150);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -394,8 +416,8 @@ void wire_layout() {
     const SaveState st = busy_run();
     save_write(st, bytes);
     CHECK(bytes.size() == save_bytes_for(3));
-    // 2498 B for a full run with three emptied crates and no macro blobs.
-    CHECK(bytes.size() == 2498);
+    // 2539 B for a full run with three emptied crates and no macro blobs.
+    CHECK(bytes.size() == 2539);
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');

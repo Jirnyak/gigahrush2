@@ -24,8 +24,8 @@ int los_blockers(const MacroGrid& grid, const vec3& a, const vec3& b) {
     // frame anchored at `a` means the traversal never has to think about the seam:
     // it walks a straight segment in unwrapped space and wraps only when it asks the
     // grid a question, which is what `MacroGrid::cell` already does for us.
-    const vec3 d{wrap_delta_f(a.x, b.x, kWorldExtent),
-                 wrap_delta_f(a.y, b.y, kWorldExtent),
+    const vec3 d{wrap_delta_f(a.x, b.x, kWorldExtentX),
+                 wrap_delta_f(a.y, b.y, kWorldExtentY),
                  b.z - a.z};
 
     // Amanatides–Woo: step cell by cell along the segment, always advancing the axis
@@ -69,7 +69,7 @@ int los_blockers(const MacroGrid& grid, const vec3& a, const vec3& b) {
     // One cell per iteration; the bound is the Manhattan cell distance plus slack,
     // so a degenerate segment cannot spin. `kWorldExtent / kCellSize` is the whole
     // grid, and no minimal-image segment is longer than half of it per axis.
-    const int guard = 3 * kMacroDim + 3;
+    const int guard = 3 * kMacroDimX + 3;
     for (int i = 0; i < guard; ++i) {
         // Advance along whichever axis reaches its next boundary first.
         int stepAxis = 0;
@@ -100,7 +100,7 @@ int los_blockers(const MacroGrid& grid, const vec3& a, const vec3& b) {
             ++blockers;
             continue;
         }
-        if (grid.cell(cell.x, cell.y, cell.z) != kCellAir) ++blockers;
+        if (grid.cell(wrap_macro_x(cell.x), wrap_macro_y(cell.y), cell.z) != kCellAir) ++blockers;
     }
     return blockers;
 }

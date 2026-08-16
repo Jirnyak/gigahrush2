@@ -6,6 +6,8 @@
 #include "core/rng.h"          // hash2 — the per-branch credit jitter
 #include "game/extraction.h"   // RunLedger: `banked` is the account this bank moves
 #include "game/rpg.h"          // int_document_reward_mult_e3
+#include "game/rumour.h"       // global_rumour_network, has_shortage_rumour, has_samosbor_strike_rumour
+#include "game/sector_layout.h"// VerticalBiome, floor_vertical_biome
 #include "game/vendor.h"       // vendor_stocks_item, kBuyMult, kSellMult, VendorKind
 
 namespace giga::game {
@@ -280,39 +282,110 @@ const char* bank_op_name(BankOp op) {
 // Dynamic Market Fluctuations & Scarcity Drift
 // ---------------------------------------------------------------------------
 
-float market_category_price_mult(ItemCategory cat, int floorZ, float gameClockSec) {
+float market_category_price_mult(ItemCategory cat, int floorZ, float gameClockSec,
+                                 const VendorRestockState* restock) {
+    const VerticalBiome vb = floor_vertical_biome(floorZ);
     const std::uint8_t band = economy_band(floorZ);
     const float b = static_cast<float>(band);
 
     float baseMult = 1.0f;
-    switch (cat) {
-        case ItemCategory::Ammo:
-            // High danger on deep floors -> ammunition becomes critically scarce and valuable.
-            baseMult = 1.0f + 0.35f * b;
+    switch (vb) {
+        case VerticalBiome::UpperClean: // [+50 .. +25]: High-tech research & labs
+            switch (cat) {
+                case ItemCategory::Note:     baseMult = 2.20f; break; // Rare documents/research logs in high demand
+                case ItemCategory::Ammo:     baseMult = 1.40f; break; // Guard ammo wanted
+                case ItemCategory::Medicine: baseMult = 0.85f; break; // Clean medicine surplus
+                case ItemCategory::Drink:    baseMult = 1.15f; break;
+                case ItemCategory::Food:     baseMult = 1.10f; break;
+                case ItemCategory::Tool:
+                case ItemCategory::Key:      baseMult = 1.20f; break;
+                default:                     baseMult = 1.00f; break;
+            }
             break;
-        case ItemCategory::Medicine:
-            // Medical supplies and trauma treatments are desperately sought in deep zones.
-            baseMult = 1.0f + 0.28f * b;
+
+        case VerticalBiome::Residential: // [+24 .. +1]: Standard block housing, civil crowd
+            switch (cat) {
+                case ItemCategory::Drink:    baseMult = 1.35f; break; // Clean water always needed
+                case ItemCategory::Food:     baseMult = 1.30f; break; // Food demand
+                case ItemCategory::Medicine: baseMult = 1.10f; break;
+                case ItemCategory::Ammo:     baseMult = 1.05f; break;
+                case ItemCategory::Tool:
+                case ItemCategory::Key:      baseMult = 1.00f; break;
+                case ItemCategory::Note:     baseMult = 0.90f; break;
+                default:                     baseMult = 0.95f; break;
+            }
             break;
-        case ItemCategory::Drink:
-            baseMult = 1.0f + 0.15f * b;
+
+        case VerticalBiome::CentralHub: // [0]: Central Atrium & Neutral Trade Hub
+            baseMult = 1.0f; // Baseline equilibrium
             break;
-        case ItemCategory::Food:
-            baseMult = 1.0f + 0.12f * b;
+
+        case VerticalBiome::Industrial: // [-1 .. -25]: Heavy pipelines, machine shops, steam & sludge
+            switch (cat) {
+                case ItemCategory::Ammo:     baseMult = 1.55f; break; // Hazard & beast protection
+                case ItemCategory::Medicine: baseMult = 1.50f; break; // Trauma & burn treatment
+                case ItemCategory::Drink:    baseMult = 1.25f; break; // Industrial dehydration
+                case ItemCategory::Food:     baseMult = 1.20f; break;
+                case ItemCategory::Tool:
+                case ItemCategory::Key:      baseMult = 0.75f; break; // Machine shop tool surplus
+                case ItemCategory::Note:     baseMult = 1.00f; break;
+                default:                     baseMult = 0.90f; break;
+            }
             break;
-        case ItemCategory::Misc:
-            baseMult = 1.0f + 0.08f * b;
-            break;
-        case ItemCategory::Tool:
-        case ItemCategory::Key:
-            baseMult = 1.0f + 0.10f * b;
-            break;
-        case ItemCategory::Note:
-            baseMult = 1.0f + 0.20f * b;
-            break;
+
+        case VerticalBiome::DeepReactor: // [-26 .. -50]: Pitch dark catacombs, radiation, Veretar fog
         default:
-            baseMult = 1.0f;
+            switch (cat) {
+                case ItemCategory::Ammo:     baseMult = 2.80f + 0.25f * b; break; // Critical ammunition shortage
+                case ItemCategory::Medicine: baseMult = 2.60f + 0.20f * b; break; // Anti-rad & trauma desperation
+                case ItemCategory::Drink:    baseMult = 1.80f; break; // Clean water is life
+                case ItemCategory::Food:     baseMult = 1.60f; break;
+                case ItemCategory::Note:     baseMult = 2.40f; break; // Black box secrets
+                case ItemCategory::Tool:
+                case ItemCategory::Key:      baseMult = 1.45f; break;
+                default:                     baseMult = 1.35f; break;
+            }
             break;
+    }
+
+    // Active Rumour Network feedback on demand:
+    // If a Samosbor strike was reported on this floor, medical and ammo demand spikes +30%
+    if (global_rumour_network().has_samosbor_strike_rumour(static_cast<std::int16_t>(floorZ))) {
+        if (cat == ItemCategory::Medicine || cat == ItemCategory::Ammo || cat == ItemCategory::Drink) {
+            baseMult *= 1.30f;
+        }
+    }
+    // If a Vendor Shortage rumour is active for this category, price multiplier rises +25%
+    if (global_rumour_network().has_shortage_rumour(static_cast<std::int16_t>(floorZ), cat)) {
+        baseMult *= 1.25f;
+    }
+
+    // Vendor stock depletion elasticity feedback
+    if (restock != nullptr && restock->initialized && restock->itemCount > 0) {
+        std::uint32_t totalCount = 0;
+        std::uint32_t totalCap = 0;
+        for (std::uint8_t i = 0; i < restock->itemCount; ++i) {
+            const ItemId itemId = restock->items[i].id;
+            if (item_valid(itemId) && static_cast<ItemCategory>(item_def(itemId).category) == cat) {
+                totalCount += restock->items[i].count;
+                totalCap += restock->items[i].maxCapacity;
+            }
+        }
+        if (totalCap > 0) {
+            const float stockRatio = static_cast<float>(totalCount) / static_cast<float>(totalCap);
+            // Elasticity: low stock pushes prices up by up to +50%
+            const float stockMultiplier = 1.0f + 0.50f * (1.0f - stockRatio);
+            baseMult *= stockMultiplier;
+
+            // If stock ratio is critically low (< 25%), seed a shortage rumour
+            if (stockRatio < 0.25f && baseMult >= 1.80f) {
+                const std::int32_t inflationPct = static_cast<std::int32_t>((baseMult - 1.0f) * 100.0f);
+                global_rumour_network().seed_rumour(RumourKind::VendorShortage,
+                                                    static_cast<std::int16_t>(floorZ),
+                                                    static_cast<std::uint16_t>(cat),
+                                                    inflationPct, kInvalidNpc, 0, 85);
+            }
+        }
     }
 
     // Diurnal / periodic market cycle: subtle +/-8% drift over the 1440-second in-game day.
@@ -324,21 +397,23 @@ float market_category_price_mult(ItemCategory cat, int floorZ, float gameClockSe
     }
 
     float mult = baseMult * (1.0f + drift);
-    if (mult < 0.4f) mult = 0.4f;
-    if (mult > 4.0f) mult = 4.0f;
+    if (mult < 0.35f) mult = 0.35f;
+    if (mult > 5.0f) mult = 5.0f;
     return mult;
 }
 
-MarketQuote market_quote_item(ItemId id, int floorZ, float gameClockSec) {
+MarketQuote market_quote_item(ItemId id, int floorZ, float gameClockSec,
+                              const VendorRestockState* restock) {
     if (!item_valid(id)) {
         return MarketQuote{1.0f, 1.0f, 1.0f};
     }
     const ItemDef& d = item_def(id);
     const auto cat = static_cast<ItemCategory>(d.category);
-    const float catMult = market_category_price_mult(cat, floorZ, gameClockSec);
+    const float catMult = market_category_price_mult(cat, floorZ, gameClockSec, restock);
 
+    const VerticalBiome vb = floor_vertical_biome(floorZ);
     const std::uint8_t band = economy_band(floorZ);
-    const float depthMod = 1.0f + 0.25f * static_cast<float>(band);
+    const float depthMod = 1.0f + (floorZ < 0 ? 0.35f : 0.20f) * static_cast<float>(band);
 
     // Rarity factor from spawn weight
     float rarity = 1.5f;
@@ -350,37 +425,115 @@ MarketQuote market_quote_item(ItemId id, int floorZ, float gameClockSec) {
     float supply = 1.0f;
     float demand = 1.0f;
 
-    if (cat == ItemCategory::Ammo) {
-        supply = std::max(0.20f, 1.25f / depthMod);
-        demand = 0.90f * depthMod * rarity;
-    } else if (cat == ItemCategory::Medicine) {
-        supply = std::max(0.25f, 1.20f / depthMod);
-        demand = 0.85f * depthMod * rarity;
-    } else if (cat == ItemCategory::Food || cat == ItemCategory::Drink) {
-        supply = std::max(0.35f, 1.10f / (1.0f + 0.12f * static_cast<float>(band)));
-        demand = 0.90f * (1.0f + 0.10f * static_cast<float>(band)) * rarity;
-    } else {
-        supply = std::max(0.30f, 1.00f / (1.0f + 0.08f * static_cast<float>(band)));
-        demand = 1.00f * rarity;
+    switch (vb) {
+        case VerticalBiome::UpperClean:
+            if (cat == ItemCategory::Ammo) {
+                supply = std::max(0.25f, 0.90f / depthMod);
+                demand = 1.10f * rarity;
+            } else if (cat == ItemCategory::Medicine) {
+                supply = std::max(0.50f, 1.40f / depthMod);
+                demand = 0.85f * rarity;
+            } else if (cat == ItemCategory::Note) {
+                supply = std::max(0.15f, 0.50f / depthMod);
+                demand = 1.80f * rarity;
+            } else {
+                supply = std::max(0.35f, 1.00f / depthMod);
+                demand = 1.00f * rarity;
+            }
+            break;
+
+        case VerticalBiome::Residential:
+            if (cat == ItemCategory::Food || cat == ItemCategory::Drink) {
+                supply = std::max(0.30f, 0.80f / depthMod);
+                demand = 1.40f * rarity;
+            } else if (cat == ItemCategory::Medicine) {
+                supply = std::max(0.35f, 1.05f / depthMod);
+                demand = 1.10f * rarity;
+            } else if (cat == ItemCategory::Ammo) {
+                supply = std::max(0.35f, 1.00f / depthMod);
+                demand = 1.00f * rarity;
+            } else {
+                supply = std::max(0.35f, 1.10f / depthMod);
+                demand = 0.95f * rarity;
+            }
+            break;
+
+        case VerticalBiome::CentralHub:
+            supply = 1.00f;
+            demand = 1.00f * rarity;
+            break;
+
+        case VerticalBiome::Industrial:
+            if (cat == ItemCategory::Tool || cat == ItemCategory::Key) {
+                supply = std::max(0.50f, 1.60f / depthMod);
+                demand = 0.70f * rarity;
+            } else if (cat == ItemCategory::Ammo) {
+                supply = std::max(0.20f, 0.70f / depthMod);
+                demand = 1.50f * rarity;
+            } else if (cat == ItemCategory::Medicine) {
+                supply = std::max(0.20f, 0.75f / depthMod);
+                demand = 1.45f * rarity;
+            } else {
+                supply = std::max(0.30f, 0.90f / depthMod);
+                demand = 1.10f * rarity;
+            }
+            break;
+
+        case VerticalBiome::DeepReactor:
+        default:
+            if (cat == ItemCategory::Ammo) {
+                supply = std::max(0.10f, 0.35f / depthMod);
+                demand = 2.40f * depthMod * rarity;
+            } else if (cat == ItemCategory::Medicine) {
+                supply = std::max(0.12f, 0.40f / depthMod);
+                demand = 2.20f * depthMod * rarity;
+            } else if (cat == ItemCategory::Drink || cat == ItemCategory::Food) {
+                supply = std::max(0.15f, 0.55f / depthMod);
+                demand = 1.60f * depthMod * rarity;
+            } else if (cat == ItemCategory::Note) {
+                supply = std::max(0.10f, 0.30f / depthMod);
+                demand = 2.50f * rarity;
+            } else {
+                supply = std::max(0.20f, 0.60f / depthMod);
+                demand = 1.30f * depthMod * rarity;
+            }
+            break;
+    }
+
+    // Specific item stock elasticity if restock state exists
+    if (restock != nullptr && restock->initialized) {
+        const std::uint16_t itemStock = vendor_get_item_stock(*restock, id);
+        for (std::uint8_t i = 0; i < restock->itemCount; ++i) {
+            if (restock->items[i].id == id && restock->items[i].maxCapacity > 0) {
+                const float sRatio = static_cast<float>(itemStock) / static_cast<float>(restock->items[i].maxCapacity);
+                supply *= (0.25f + 0.75f * sRatio);
+                break;
+            }
+        }
     }
 
     if (supply <= 0.0001f) supply = 0.0001f;
     if (demand < 0.0f) demand = 0.0f;
 
-    float priceMult = (catMult > 0.0f ? catMult : 0.4f) * (demand / supply);
-    if (priceMult < 0.4f) priceMult = 0.4f;
+    const float elasticityExponent = 0.85f;
+    const float rawRatio = demand / supply;
+    const float elasticRatio = std::pow(rawRatio, elasticityExponent);
+
+    float priceMult = (catMult > 0.0f ? catMult : 0.35f) * elasticRatio;
+    if (priceMult < 0.35f) priceMult = 0.35f;
     if (priceMult > 5.0f) priceMult = 5.0f;
 
     return MarketQuote{supply, demand, priceMult};
 }
 
 std::int32_t dynamic_market_buy_price(ItemId id, int floorZ, float gameClockSec,
-                                      std::int8_t playerRelation) {
+                                      std::int8_t playerRelation,
+                                      const VendorRestockState* restock) {
     if (!vendor_stocks_item(id)) return 0;
     const ItemDef& d = item_def(id);
     if (d.value <= 0) return 0;
 
-    const MarketQuote quote = market_quote_item(id, floorZ, gameClockSec);
+    const MarketQuote quote = market_quote_item(id, floorZ, gameClockSec, restock);
     float mult = kBuyMult * quote.priceMultiplier;
 
     if (playerRelation > 0) {
@@ -396,14 +549,15 @@ std::int32_t dynamic_market_buy_price(ItemId id, int floorZ, float gameClockSec,
 
 std::int32_t dynamic_market_sell_price(ItemId id, std::uint8_t vendorKind, int floorZ,
                                        float gameClockSec, const RpgStats* rpg,
-                                       std::int8_t playerRelation) {
+                                       std::int8_t playerRelation,
+                                       const VendorRestockState* restock) {
     if (!item_valid(id)) return 0;
     const ItemDef& d = item_def(id);
     if (d.value <= 0) return 0;
 
     const std::size_t vk = vendorKind < static_cast<std::size_t>(VendorKind::Count) ? vendorKind : 0;
     float m = kSellMult[vk];
-    const MarketQuote quote = market_quote_item(id, floorZ, gameClockSec);
+    const MarketQuote quote = market_quote_item(id, floorZ, gameClockSec, restock);
     m *= quote.priceMultiplier;
 
     if (playerRelation > 0) {
@@ -428,7 +582,7 @@ std::int32_t dynamic_market_sell_price(ItemId id, std::uint8_t vendorKind, int f
 
     std::int32_t p = static_cast<std::int32_t>(static_cast<float>(d.value) * m);
     if (vendor_stocks_item(id)) {
-        const std::int32_t buyP = dynamic_market_buy_price(id, floorZ, gameClockSec, playerRelation);
+        const std::int32_t buyP = dynamic_market_buy_price(id, floorZ, gameClockSec, playerRelation, restock);
         if (p >= buyP && buyP > 0) {
             p = buyP - 1;
         }

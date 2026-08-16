@@ -1,16 +1,20 @@
 #include "game/encumbrance.h"
 
+#include <algorithm>
+
 #include "core/rng.h"        // hash_u32 — the identity stagger
 #include "ecs/components.h"  // Mass, Transform, CameraTag
 #include "game/embody.h"     // NpcRef, body_mass_kg
 #include "game/item_table.h" // inventory_mass_g
 #include "game/needs.h"      // Needs, kNeedMax — the fatigue this charges
 #include "game/noise.h"      // noise_publish, NoiseProfile — crowd footsteps
-#include "game/rpg.h"        // RpgStats, carry_capacity_g
+#include "game/rpg.h"        // RpgStats, carry_capacity_g, end_stamina_drain_mult_e3
 
 namespace giga::game {
 
-EncumbranceEffect encumbrance_of(std::uint32_t carriedG, std::uint32_t capacityG) {
+EncumbranceEffect encumbrance_of(std::uint32_t carriedG, std::uint32_t capacityG,
+                                float pressureDropKpa,
+                                std::uint16_t staminaDrainMultE3) {
     EncumbranceEffect out;
     if (capacityG == 0) return out; // no budget known: no penalty, not an infinite one
 
@@ -22,7 +26,17 @@ EncumbranceEffect encumbrance_of(std::uint32_t carriedG, std::uint32_t capacityG
     // is not punished for the larger budget its Strength bought.
     out.noiseMult = 1.0f + kNoiseLoadGain * ratio;
 
-    if (ratio <= 1.0f) return out; // inside the free band: nothing else applies
+    const float pDrop = std::max(0.0f, pressureDropKpa);
+    const float pressureMult = 1.0f + pDrop * 0.02f; // at 50 kPa drop (Peak Samosbor), exertion strain is 2.0x
+    const float stamMult = static_cast<float>(staminaDrainMultE3) * 0.001f;
+
+    // Environmental hypoxia strain under severe barometric pressure drops (> 10 kPa)
+    const float hypoxiaDrain = (pDrop > 10.0f) ? (pDrop - 10.0f) * 0.0010f * stamMult : 0.0f;
+
+    if (ratio <= 1.0f) {
+        out.extraSleepPerSec = hypoxiaDrain;
+        return out; // inside the free band: only hypoxia (if any) applies
+    }
     out.overloaded = true;
 
     // SPEED: capacity/carried, so double the budget is half the pace. Continuous
@@ -33,15 +47,17 @@ EncumbranceEffect encumbrance_of(std::uint32_t carriedG, std::uint32_t capacityG
     if (scale < kEncumbranceMinScale) scale = kEncumbranceMinScale;
     out.speedScale = scale;
 
-    // FATIGUE: linear in the OVERLOAD, not in the load, so the free band really is
-    // free. At double capacity this is exactly kOverloadSleepDrainPerSec.
-    out.extraSleepPerSec = kOverloadSleepDrainPerSec * (ratio - 1.0f);
+    // FATIGUE: linear in the OVERLOAD, not in the load, multiplied by barometric
+    // pressure depression factor and character stamina efficiency.
+    const float baseOverloadDrain = kOverloadSleepDrainPerSec * (ratio - 1.0f);
+    out.extraSleepPerSec = (baseOverloadDrain * pressureMult + hypoxiaDrain) * stamMult;
     return out;
 }
 
 EncumbranceTick encumbrance_step(Registry& reg, NpcPool& pool, LayerId layer,
                                  float dt, std::uint64_t tick,
-                                 NoiseField* noiseField) {
+                                 NoiseField* noiseField,
+                                 float pressureDropKpa) {
     EncumbranceTick out;
     if (dt <= 0.0f) return out;
 
@@ -70,7 +86,10 @@ EncumbranceTick encumbrance_step(Registry& reg, NpcPool& pool, LayerId layer,
         const RpgStats* rs = reg.try_get<RpgStats>(e);
         const std::uint32_t capacityG =
             carry_capacity_g(rs != nullptr ? *rs : RpgStats{});
-        const EncumbranceEffect eff = encumbrance_of(carriedG, capacityG);
+        const std::uint16_t stamMultE3 =
+            rs != nullptr ? end_stamina_drain_mult_e3(*rs) : 1000u;
+        const EncumbranceEffect eff =
+            encumbrance_of(carriedG, capacityG, pressureDropKpa, stamMultE3);
 
         // MASS = BODY + LOAD. This is the whole "no new mechanic" half: from here
         // `E = m*v^2/2` and `p = m*v` see the pack without either law changing.

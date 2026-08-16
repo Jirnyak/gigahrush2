@@ -243,6 +243,7 @@ std::uint32_t carve_hash(std::uint32_t seed, std::uint32_t cell,
 bool carve_roll(std::uint32_t h, std::uint16_t power, std::uint16_t hardness) {
     if (hardness == kHardnessUnbreakable) return false;
     if (hardness == 0) return true;
+    if (power >= hardness) return true;
     // P(remove) = min(1, power / hardness), decided against a 16-bit slice of
     // the hash. power == hardness makes the inequality unconditionally true.
     return static_cast<std::uint64_t>(h & 0xFFFFu) * hardness <
@@ -256,7 +257,7 @@ CellType sub_material_at(const World& w, int cx, int cy, int cz, int sx,
     const CellType base = w.grid().types()[ci];
     const SubField<CellType>* f =
         w.subfields().find<CellType>(kSubMaterialName);
-    return f ? f->at(ci, sub_bit(sx, sy, sz), base) : base;
+    return f ? f->at(ci, sub_bit(sx & (kSubDim - 1), sy & (kSubDim - 1), sz & (kSubDim - 1)), base) : base;
 }
 
 void set_sub_material(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
@@ -264,6 +265,9 @@ void set_sub_material(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
     cx = wrap_macro_x(cx);
     cy = wrap_macro_y(cy);
     cz = clamp_macro_z(cz);
+    sx &= (kSubDim - 1);
+    sy &= (kSubDim - 1);
+    sz &= (kSubDim - 1);
     const std::size_t ci = macro_index(cx, cy, cz);
     const CellType base = w.grid().types()[ci];
     SubField<CellType>& f =
@@ -285,12 +289,16 @@ std::int32_t carve_sphere(World& w, const CarveOp& op, CarveScratch& scratch,
     SubField<CellType>* mats = w.subfields().find<CellType>(kSubMaterialName);
 
     // Work in sub-voxel units. The unwrapped distance inside the iteration box
-    // is exact as long as the sphere fits inside a half-torus; clamp far below
-    // that (a quarter world = 64 m radius) so the box never self-overlaps.
+    // is exact as long as the sphere fits inside a half-torus; clamp to
+    // anisotropic sector bounds so the box never self-overlaps on Z (128 sub-voxels).
     const float inv = 1.0f / kVoxelSize;
     const float cx = op.x * inv, cy = op.y * inv, cz = op.z * inv;
-    const float r =
-        std::min(op.radius * inv, static_cast<float>(kSubGridDim) * 0.25f);
+    const float maxRadiusVoxels = std::min({
+        static_cast<float>(kSubGridDimX) * 0.25f,
+        static_cast<float>(kSubGridDimY) * 0.25f,
+        static_cast<float>(kSubGridDimZ) * 0.5f - 1.0f
+    });
+    const float r = std::clamp(op.radius * inv, 0.0f, maxRadiusVoxels);
     const float r2 = r * r;
     const int lo[3] = {static_cast<int>(std::floor(cx - r)),
                        static_cast<int>(std::floor(cy - r)),
@@ -341,7 +349,7 @@ bool carve_at(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
     const std::uint32_t ci = static_cast<std::uint32_t>(
         macro_index(wrap_macro_x(cx), wrap_macro_y(cy), clamp_macro_z(cz)));
     const std::uint32_t bit =
-        static_cast<std::uint32_t>(sub_bit(sx, sy, sz));
+        static_cast<std::uint32_t>(sub_bit(sx & (kSubDim - 1), sy & (kSubDim - 1), sz & (kSubDim - 1)));
     const std::uint32_t key = pack_key(ci, bit);
     if (!solid_key(w.grid(), key)) return false;
     SubField<CellType>* mats = w.subfields().find<CellType>(kSubMaterialName);

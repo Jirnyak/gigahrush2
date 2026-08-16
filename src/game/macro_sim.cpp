@@ -299,6 +299,7 @@ MacroStats MacroSim::step(NpcPool& pool, const MacroParams& params,
     const std::uint64_t afterTenths = dayTenths_ + tenths;
     std::uint32_t departures = 0;
     std::uint32_t arrivals = 0;
+    std::uint32_t rumoursDiffused = 0;
 
     if (!journeys_.empty()) {
         std::size_t w = 0;
@@ -311,7 +312,11 @@ MacroStats MacroSim::step(NpcPool& pool, const MacroParams& params,
             traveling_[j.id] = 0;
             if (pool.alive(j.id) && pool.generation(j.id) == j.gen &&
                 !pool.embodied(j.id)) {
+                const std::int16_t origFloor = pool.floor(j.id);
                 pool.set_floor(j.id, static_cast<std::int16_t>(j.toFloor));
+                if (global_rumour_network().carry_rumour_migration(pool, j.id, origFloor, static_cast<std::int16_t>(j.toFloor), tick_)) {
+                    ++rumoursDiffused;
+                }
                 ++arrivals;
             }
         }
@@ -377,7 +382,6 @@ MacroStats MacroSim::step(NpcPool& pool, const MacroParams& params,
 
     std::uint32_t socialEdges = 0;
     std::uint32_t socialStale = 0;
-    std::uint32_t rumoursDiffused = 0;
     std::uint32_t territoryShifts = 0;
 
     if (factions != nullptr && params.socialFormRatePerYear > 0.0f &&
@@ -429,6 +433,9 @@ MacroStats MacroSim::step(NpcPool& pool, const MacroParams& params,
                 ++territoryShifts;
             }
         }
+        // Vertical rumour diffusion via active elevator shafts and stairwells across adjacent floors (-50..+50)
+        rumoursDiffused += global_rumour_network().diffuse_vertical_step(pool, floors_, tick_, 32);
+        global_rumour_network().prune_stale(tick_, 6000u);
         global_territory_war_manager().step(tick_, static_cast<std::uint32_t>(days));
     }
 

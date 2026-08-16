@@ -66,6 +66,7 @@ LayerId FloorRegistry::layer_at(int number) const {
 
 int next_labelled_floor(const FloorRegistry& reg, int from, int dir) {
     if (dir == 0) return from;
+    const int sdir = dir > 0 ? 1 : -1;
     int best = from;
     int bestGap = 0;
     // Linear over the labelled floors. The stack is tens of entries, this runs on a
@@ -73,7 +74,7 @@ int next_labelled_floor(const FloorRegistry& reg, int from, int dir) {
     // renumbering the registry exists to allow.
     for (int f = kMinFloor; f <= kMaxFloor; ++f) {
         if (reg.module_at(f) == kInvalidModule) continue;
-        const int gap = (f - from) * dir;
+        const int gap = (f - from) * sdir;
         if (gap <= 0) continue;                      // wrong side, or `from` itself
         if (bestGap == 0 || gap < bestGap) { bestGap = gap; best = f; }
     }
