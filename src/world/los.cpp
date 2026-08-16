@@ -96,7 +96,7 @@ int los_blockers(const MacroGrid& grid, const vec3& a, const vec3& b) {
         // Off the top or the bottom of the stack: there is nothing there to see
         // through, so it blocks. z does not wrap ([AGENTS.md]: W and the vertical
         // extent of the stack are not toroidal the way x/y are).
-        if (cell.z < 0 || cell.z >= kMacroDim) {
+        if (cell.z < 0 || cell.z >= kMacroDimZ) {
             ++blockers;
             continue;
         }

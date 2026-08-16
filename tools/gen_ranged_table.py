@@ -150,9 +150,10 @@ def main():
                 % (name, r.get("blast_cells"), blastDm))
 
         pellets = fixed(r, "pellets", 1, 1, 255)
+        channel = 2 if ammo == "ammo_energy" else (1 if pellets > 1 else 0)
         out.append(
             "    // [%2d] %-24s %s x%d%s\n"
-            "    RangedDef{ %d, %d, %d, %d, %d, %d, %d, %d, 0, %d, %d, %d }," % (
+            "    RangedDef{ %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d }," % (
                 i, name, ammo, pellets,
                 (" blast %.1f m fuse %.1f s" % (blastDm * 0.1, fuseDs * 0.1))
                 if explosive else "",
@@ -167,6 +168,7 @@ def main():
                 ammoId,
                 pellets,
                 fixed(r, "magazine", 1, 1, 255),
+                channel,
                 projType,
                 blastDm,
                 fuseDs))

@@ -184,8 +184,8 @@ void GpuGasPass::record_sim(VkCommandBuffer cmd, const CellStep& downStep, float
     vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(GasPush), &push);
 
-    // Grid 128x128x128 / (8,8,4) = Dispatch (16, 16, 32)
-    vkCmdDispatch(cmd, 16, 16, 32);
+    // Grid 512x512x16 / (8,8,4) = Dispatch (64, 64, 4)
+    vkCmdDispatch(cmd, 64, 64, 4);
 
     // Barrier: Compute write -> Compute/Fragment read
     VkBufferMemoryBarrier postBarrier{};

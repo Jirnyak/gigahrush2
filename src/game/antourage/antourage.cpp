@@ -273,9 +273,9 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
         antourage_face_pack(f.tanA, -1), antourage_face_pack(f.tanA, 1),
         antourage_face_pack(f.tanB, -1), antourage_face_pack(f.tanB, 1),
     };
-    for (int z = 0; z < kMacroDim; ++z)
-        for (int y = 0; y < kMacroDim; ++y)
-            for (int x = 0; x < kMacroDim; ++x) {
+    for (int z = 0; z < kMacroDimZ; ++z)
+        for (int y = 0; y < kMacroDimY; ++y)
+            for (int x = 0; x < kMacroDimX; ++x) {
                 const WalkCell c{x, y, z};
                 if (!is_air(g, c)) continue;
                 const std::size_t ci = macro_index(x, y, z);

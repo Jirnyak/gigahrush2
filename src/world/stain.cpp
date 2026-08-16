@@ -3,16 +3,13 @@
 
 #include <cmath>
 
-#include "core/wrap.h"
+#include "world/destruct.h"
 #include "world/subfield.h"
 #include "world/world.h"
 
 namespace giga {
 
 namespace {
-
-constexpr int kSubGrid = kMacroDim * kSubDim; // 1024, a power of two
-constexpr int kSubGridMask = kSubGrid - 1;
 
 std::uint8_t sat_add(std::uint8_t a, std::uint8_t b) {
     const int s = static_cast<int>(a) + static_cast<int>(b);
@@ -27,9 +24,9 @@ float u01(std::uint32_t h) {
 
 std::uint32_t stain_paint(World& w, int gx, int gy, int gz, StainRGB add) {
     if (add.r == 0 && add.g == 0 && add.b == 0) return UINT32_MAX;
-    gx &= kSubGridMask;
-    gy &= kSubGridMask;
-    gz &= kSubGridMask;
+    if (gz < 0 || gz >= kSubGridDimZ) return UINT32_MAX;
+    gx &= kSubGridMaskX;
+    gy &= kSubGridMaskY;
     const int cx = gx / kSubDim, cy = gy / kSubDim, cz = gz / kSubDim;
     const int bit = sub_bit(gx % kSubDim, gy % kSubDim, gz % kSubDim);
     if (!w.grid().mask(cx, cy, cz).test(bit)) return UINT32_MAX; // air holds no paint

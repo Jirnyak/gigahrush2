@@ -299,9 +299,9 @@ void bake_near(const std::uint8_t* present, int roomsPerAxis,
 void bake_walkable(const MacroGrid& g, std::vector<std::uint8_t>& out) {
     out.assign(kMacroCells, 0u);
     std::uint8_t* base = out.data();
-    parallel_for(kMacroDim, [&g, base](int z) {
-        for (int y = 0; y < kMacroDim; ++y)
-            for (int x = 0; x < kMacroDim; ++x)
+    parallel_for(kMacroDimZ, [&g, base](int z) {
+        for (int y = 0; y < kMacroDimY; ++y)
+            for (int x = 0; x < kMacroDimX; ++x)
                 base[macro_index(x, y, z)] = blocked(g, x, y, z) ? 0u : 1u;
     });
 }
@@ -316,11 +316,11 @@ void bake_flow(const std::uint8_t* walkable, FloorKind kind, int number,
     std::vector<int> q;
     q.reserve(1u << 18);
 
-    const int W = kMacroDim;
-    for (int z = 0; z < W; ++z) {
-        for (int y = 0; y < W; ++y) {
+    const int W = kMacroDimX;
+    for (int z = 0; z < kMacroDimZ; ++z) {
+        for (int y = 0; y < kMacroDimY; ++y) {
             if (y % stride == 0) continue; // wall line: no room
-            for (int x = 0; x < W; ++x) {
+            for (int x = 0; x < kMacroDimX; ++x) {
                 if (x % stride == 0) continue;
                 if (floor_room_mask(kind, number, x / stride, y / stride) != bit)
                     continue;
@@ -340,9 +340,9 @@ void bake_flow(const std::uint8_t* walkable, FloorKind kind, int number,
         const int cy = (ci / W) % W;
         const int cx = ci % W;
         for (int d = 0; d < 6; ++d) {
-            const int nx = wrap_macro(cx + nav::kNavDir[d][0]);
-            const int ny = wrap_macro(cy + nav::kNavDir[d][1]);
-            const int nz = wrap_macro(cz + nav::kNavDir[d][2]);
+            const int nx = wrap_macro_x(cx + nav::kNavDir[d][0]);
+            const int ny = wrap_macro_y(cy + nav::kNavDir[d][1]);
+            const int nz = wrap_macro_z(cz + nav::kNavDir[d][2]);
             const std::size_t ni = macro_index(nx, ny, nz);
             if (out[ni] != nav::kFlowNone) continue; // reached, or a seed
             if (walkable[ni] == 0) continue;         // wall stays kFlowNone
@@ -568,10 +568,10 @@ RoomRoute room_route(const RoomZones& z, std::uint16_t mask, int x, int y,
 
     const int stride = floor_room_stride(z.kind);
     if (stride <= 1) return out;
-    const int roomsPerAxis = kMacroDim / stride;
-    const std::size_t ci = macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z_));
-    const int rx = wrap_macro(x) / stride;
-    const int ry = wrap_macro(y) / stride;
+    const int roomsPerAxis = kMacroDimX / stride;
+    const std::size_t ci = macro_index(wrap_macro_x(x), wrap_macro_y(y), wrap_macro_z(z_));
+    const int rx = wrap_macro_x(x) / stride;
+    const int ry = wrap_macro_y(y) / stride;
     const std::size_t ri = static_cast<std::size_t>(ry) * roomsPerAxis + rx;
 
     // Bits in index order; an ARRIVED reading wins outright over any step, so a body

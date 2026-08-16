@@ -222,11 +222,12 @@ SamosborAtmosphere samosbor_compute_atmosphere(const SamosborState& st, int floo
 
 bool samosbor_is_sheltered(const vec3& pos, const DoorSet& doors,
                            const MacroGrid* /*grid*/,
-                           const RoomZones* /*rooms*/) {
-    const int pcx = ((static_cast<int>(std::floor(pos.x / kCellSize)) % kMacroDim) + kMacroDim) % kMacroDim;
-    const int pcy = ((static_cast<int>(std::floor(pos.y / kCellSize)) % kMacroDim) + kMacroDim) % kMacroDim;
-    const int pcz = ((static_cast<int>(std::floor(pos.z / kCellSize)) % kMacroDim) + kMacroDim) % kMacroDim;
+                           const RoomZones* rooms) {
+    const int pcx = wrap_macro_x(static_cast<int>(std::floor(pos.x / kCellSize)));
+    const int pcy = wrap_macro_y(static_cast<int>(std::floor(pos.y / kCellSize)));
+    const int pcz = wrap_macro_z(static_cast<int>(std::floor(pos.z / kCellSize)));
 
+    // 1. Direct proximity check to any shut or locked hermetic door (dx^2 + dy^2 + dz^2 <= 16 cells)
     for (const Door& d : doors.doors) {
         if (!d.hermetic || d.hp <= 0) continue;
         const std::uint8_t s = d.state;
@@ -234,13 +235,39 @@ bool samosbor_is_sheltered(const vec3& pos, const DoorSet& doors,
             s != static_cast<std::uint8_t>(DoorState::Locked))
             continue;
 
-        const int dx = wrap_delta(pcx, static_cast<int>(d.cx), kMacroDim);
-        const int dy = wrap_delta(pcy, static_cast<int>(d.cy), kMacroDim);
-        const int dz = wrap_delta(pcz, static_cast<int>(d.cz), kMacroDim);
+        const int dx = wrap_delta(pcx, static_cast<int>(d.cx), kMacroDimX);
+        const int dy = wrap_delta(pcy, static_cast<int>(d.cy), kMacroDimY);
+        const int dz = wrap_delta(pcz, static_cast<int>(d.cz), kMacroDimZ);
         if (dx * dx + dy * dy + dz * dz <= 16) {
             return true;
         }
     }
+
+    // 2. Room-based hermetic apartment sealing check when RoomZones is available
+    if (rooms != nullptr && rooms->ready()) {
+        const std::uint16_t roomBit = room_bit_at(rooms->kind, rooms->number, pcx, pcy);
+        constexpr std::uint16_t kHermeticMask =
+            room_bit(RoomBit::Living) |
+            room_bit(RoomBit::Medical) |
+            room_bit(RoomBit::Hq);
+        if ((roomBit & kHermeticMask) != 0u) {
+            for (const Door& d : doors.doors) {
+                if (!d.hermetic || d.hp <= 0) continue;
+                const std::uint8_t s = d.state;
+                if (s != static_cast<std::uint8_t>(DoorState::Shut) &&
+                    s != static_cast<std::uint8_t>(DoorState::Locked))
+                    continue;
+
+                const int dx = wrap_delta(pcx, static_cast<int>(d.cx), kMacroDimX);
+                const int dy = wrap_delta(pcy, static_cast<int>(d.cy), kMacroDimY);
+                const int dz = wrap_delta(pcz, static_cast<int>(d.cz), kMacroDimZ);
+                if (dx * dx + dy * dy <= 36 && dz * dz <= 16) {
+                    return true;
+                }
+            }
+        }
+    }
+
     return false;
 }
 
@@ -297,21 +324,21 @@ void samosbor_environmental_step(Registry& reg, NpcPool& pool,
         const NpcId id = view.get<const NpcRef>(e).id;
         if (!pool.valid(id) || !pool.alive(id)) continue;
 
-        const int pcx = ((static_cast<int>(std::floor(tr.pos.x / kCellSize)) % kMacroDim) + kMacroDim) % kMacroDim;
-        const int pcy = ((static_cast<int>(std::floor(tr.pos.y / kCellSize)) % kMacroDim) + kMacroDim) % kMacroDim;
-        const int pcz = ((static_cast<int>(std::floor(tr.pos.z / kCellSize)) % kMacroDim) + kMacroDim) % kMacroDim;
+        const int pcx = wrap_macro_x(static_cast<int>(std::floor(tr.pos.x / kCellSize)));
+        const int pcy = wrap_macro_y(static_cast<int>(std::floor(tr.pos.y / kCellSize)));
+        const int pcz = wrap_macro_z(static_cast<int>(std::floor(tr.pos.z / kCellSize)));
 
         bool sheltered = false;
         for (std::size_t i = 0; i < totalCells; ++i) {
-            const int dx = wrap_delta(pcx, static_cast<int>(cells[i].cx), kMacroDim);
-            const int dy = wrap_delta(pcy, static_cast<int>(cells[i].cy), kMacroDim);
-            const int dz = wrap_delta(pcz, static_cast<int>(cells[i].cz), kMacroDim);
+            const int dx = wrap_delta(pcx, static_cast<int>(cells[i].cx), kMacroDimX);
+            const int dy = wrap_delta(pcy, static_cast<int>(cells[i].cy), kMacroDimY);
+            const int dz = wrap_delta(pcz, static_cast<int>(cells[i].cz), kMacroDimZ);
             if (dx * dx + dy * dy + dz * dz <= 16) {
                 sheltered = true;
                 break;
             }
         }
-        if (!sheltered && grid && rooms) {
+        if (!sheltered && (grid || rooms)) {
             sheltered = samosbor_is_sheltered(tr.pos, doors, grid, rooms);
         }
         if (sheltered) continue;

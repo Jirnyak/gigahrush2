@@ -96,11 +96,19 @@ inline bool cell_open(const MacroGrid& g, int x, int y, int z) {
     return !g.mask(x, y, z).full();
 }
 
-// Macro cell containing a world-space coordinate. Truncation then wrap, matching
-// [game/door.cpp] / [game/combat.cpp] / [game/wander.cpp] exactly — a different
-// rounding here would put a corpse's danger one cell off from where the body is.
+// Macro cell containing a world-space coordinate. Truncation then wrap per-axis.
+inline int cell_of_x(float coord) {
+    return wrap_macro_x(static_cast<int>(coord / kCellSize));
+}
+inline int cell_of_y(float coord) {
+    return wrap_macro_y(static_cast<int>(coord / kCellSize));
+}
+inline int cell_of_z(float coord) {
+    return wrap_macro_z(static_cast<int>(coord / kCellSize));
+}
+
 inline int cell_of(float coord) {
-    return wrap_macro(static_cast<int>(coord / kCellSize));
+    return wrap_macro_x(static_cast<int>(coord / kCellSize));
 }
 
 // The gradient, once, over any walkability oracle. `isOpen(x, y, z)` takes RAW
@@ -151,9 +159,9 @@ void diffusion_refresh_walkable(const MacroGrid& grid,
 void diffusion_mark_cell(const MacroGrid& grid, DiffusionScratch& scratch, int x, int y,
                          int z) {
     if (scratch.open.empty()) return; // nothing built yet — nothing to patch
-    const int cx = wrap_macro(x);
-    const int cy = wrap_macro(y);
-    const int cz = wrap_macro(z);
+    const int cx = wrap_macro_x(x);
+    const int cy = wrap_macro_y(y);
+    const int cz = wrap_macro_z(z);
     const std::size_t i = macro_index(cx, cy, cz);
     const std::uint64_t bit = 1ull << (i & 63);
     if (cell_open(grid, cx, cy, cz))
@@ -175,9 +183,9 @@ void diffusion_on_floor_built(World& world, DiffusionScratch& scratch,
 float diffusion_add(World& world, int x, int y, int z, float amount,
                     const std::string& field) {
     if (amount <= 0.0f) return 0.0f;
-    const int cx = wrap_macro(x);
-    const int cy = wrap_macro(y);
-    const int cz = wrap_macro(z);
+    const int cx = wrap_macro_x(x);
+    const int cy = wrap_macro_y(y);
+    const int cz = wrap_macro_z(z);
     // A depositor inside a solid wall deposits NOTHING: gas released inside rock does not
     // exist. The caller is responsible for checking if the cell is air; we enforce it
     // here so an overlooked caller cannot leak mass into stone.
@@ -190,8 +198,8 @@ float diffusion_add(World& world, int x, int y, int z, float amount,
 
 float diffusion_add_at(World& world, vec3 pos, float amount,
                        const std::string& field) {
-    return diffusion_add(world, cell_of(pos.x), cell_of(pos.y), cell_of(pos.z), amount,
-                         field);
+    return diffusion_add(world, cell_of_x(pos.x), cell_of_y(pos.y), cell_of_z(pos.z),
+                         amount, field);
 }
 
 DiffusionStep diffusion_step(World& world, DiffusionScratch& scratch,
@@ -414,7 +422,7 @@ vec3 diffusion_gradient(const Field<float>& f, const MacroGrid& g, int x, int y,
     return gradient_impl(
         f,
         [&g](int cx, int cy, int cz) {
-            return cell_open(g, wrap_macro(cx), wrap_macro(cy), wrap_macro(cz));
+            return cell_open(g, wrap_macro_x(cx), wrap_macro_y(cy), wrap_macro_z(cz));
         },
         x, y, z);
 }
@@ -431,8 +439,8 @@ vec3 diffusion_gradient(const Field<float>& f, const DiffusionScratch& scratch, 
     return gradient_impl(
         f,
         [open](int cx, int cy, int cz) {
-            return bit_open(open, macro_index(wrap_macro(cx), wrap_macro(cy),
-                                              wrap_macro(cz)));
+            return bit_open(open, macro_index(wrap_macro_x(cx), wrap_macro_y(cy),
+                                              wrap_macro_z(cz)));
         },
         x, y, z);
 }
@@ -441,7 +449,7 @@ float diffusion_at(const World& world, int x, int y, int z, const std::string& f
     // The one const_cast. FieldRegistry::find is non-const only because it hands back a
     // mutable Field; nothing on this path writes one. [sim/fluid.cpp] does the same.
     const Field<float>* f = const_cast<World&>(world).fields().find<float>(field);
-    return f ? f->at(x, y, z) : 0.0f;
+    return f ? f->at(wrap_macro_x(x), wrap_macro_y(y), wrap_macro_z(z)) : 0.0f;
 }
 
 float diffusion_driver_add(DiffusionDriver& driver, World& world, int x, int y, int z,
@@ -461,8 +469,8 @@ float diffusion_driver_add_at(DiffusionDriver& driver, World& world, vec3 pos,
                               float amount, const std::string& field) {
     // Through diffusion_driver_add rather than beside it, so the arming rule above has
     // one implementation and the two entry points cannot drift on it.
-    return diffusion_driver_add(driver, world, cell_of(pos.x), cell_of(pos.y),
-                                cell_of(pos.z), amount, field);
+    return diffusion_driver_add(driver, world, cell_of_x(pos.x), cell_of_y(pos.y),
+                                cell_of_z(pos.z), amount, field);
 }
 
 void diffusion_driver_on_floor_built(DiffusionDriver& driver, World& world, LayerId layer,

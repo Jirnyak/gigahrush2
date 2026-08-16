@@ -288,7 +288,7 @@ void build_plan(Plan& p, unsigned seed, int number) {
 // pages ([render/cube_pass.cpp]).
 void put_bits(MacroGrid& g, SubField<CellType>& sm, int x, int y, int z, int wz,
               std::uint64_t bits, CellType mat) {
-    if (bits == 0 || z < 0 || z >= kMacroDim) return;
+    if (bits == 0 || z < 0 || z >= kMacroDimZ) return;
     x = wrap_macro(x);
     y = wrap_macro(y);
     const std::size_t ci = macro_index(x, y, z);
@@ -487,7 +487,7 @@ void stamp_lattice(MacroGrid& g, SubField<CellType>& sm, int number) {
         for (int nx = 0; nx < kLatticeDim; ++nx) {
             const int cx = lattice_coord(nx);
             const int cy = lattice_coord(ny);
-            for (int z = 0; z < kMacroDim; ++z)
+            for (int z = 0; z < kMacroDimZ; ++z)
                 for (int dy = -kShaftR; dy <= kShaftR; ++dy)
                     for (int dx = -kShaftR; dx <= kShaftR; ++dx) {
                         const int x = wrap_macro(cx + dx), y = wrap_macro(cy + dy);
@@ -516,7 +516,7 @@ void stamp_lattice(MacroGrid& g, SubField<CellType>& sm, int number) {
             // Hub pads: recolour whatever is solid at the node layers. A paged
             // cell recolours by dropping the page — the pad marker wins.
             for (int nz = 0; nz < kLatticeDim; ++nz) {
-                const int z0 = lattice_coord(nz);
+                const int z0 = lattice_coord_z(nz);
                 for (int dy = -kLobbyR; dy <= kLobbyR; ++dy)
                     for (int dx = -kLobbyR; dx <= kLobbyR; ++dx) {
                         const int x = wrap_macro(cx + dx), y = wrap_macro(cy + dy);
@@ -532,7 +532,7 @@ void stamp_lattice(MacroGrid& g, SubField<CellType>& sm, int number) {
                 for (int dy = -kLobbyR; dy <= kLobbyR; ++dy)
                     for (int dx = -kLobbyR; dx <= kLobbyR; ++dx) {
                         const int x = wrap_macro(cx + dx), y = wrap_macro(cy + dy);
-                        for (const int z : {0, kMacroDim - 1})
+                        for (const int z : {0, kMacroDimZ - 1})
                             if (g.cell(x, y, z) != kCellAir) {
                                 sm.drop_page(macro_index(x, y, z));
                                 g.set_cell(x, y, z, kMatExtract);
@@ -541,7 +541,7 @@ void stamp_lattice(MacroGrid& g, SubField<CellType>& sm, int number) {
             }
             for (int sy = -1; sy <= 1; sy += 2)
                 for (int sx = -1; sx <= 1; sx += 2)
-                    for (int z = 0; z < kMacroDim; ++z) {
+                    for (int z = 0; z < kMacroDimZ; ++z) {
                         const int x = wrap_macro(cx + sx * 2);
                         const int y = wrap_macro(cy + sy * 2);
                         sm.drop_page(macro_index(x, y, z));
@@ -642,9 +642,9 @@ void generate_padic_floor(World& world, int number, const FloorSpec& spec,
     // Clear to air — including stale material pages from the floor this World
     // object held before (floor streaming recycles Worlds in place).
     sm.clear();
-    for (int z = 0; z < kMacroDim; ++z)
-        for (int y = 0; y < kMacroDim; ++y)
-            for (int x = 0; x < kMacroDim; ++x) g.clear_cell(x, y, z);
+    for (int z = 0; z < kMacroDimZ; ++z)
+        for (int y = 0; y < kMacroDimY; ++y)
+            for (int x = 0; x < kMacroDimX; ++x) g.clear_cell(x, y, z);
 
     Plan p;
     build_plan(p, seed, number);

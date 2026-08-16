@@ -90,7 +90,7 @@ struct RangedDef {
     ItemId ammo;                  // 10  1-based ItemId, resolved at generation time
     std::uint8_t pellets;         // 12  1..12; >1 is a shotgun
     std::uint8_t magazine;        // 13  1..100
-    std::uint8_t channel;         // 14  DamageChannel; Kinetic on all 30 today
+    std::uint8_t channel;         // 14  DamageChannel: Kinetic (0), Buckshot (1), Energy (2)
     // What the round IS: a `ProjType` ([mob_table.h]), stored as the raw u8 the enum
     // is so this header need not include the mob table. This byte was `pad_`.
     //

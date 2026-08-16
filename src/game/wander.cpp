@@ -503,11 +503,11 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
             const LatticeNode ln = lattice_unpack(hop);
             const float tx = static_cast<float>(lattice_coord(ln.ix)) * kCellSize;
             const float ty = static_cast<float>(lattice_coord(ln.iy)) * kCellSize;
-            const float tz = static_cast<float>(lattice_coord(ln.iz)) * kCellSize;
+            const float tz = static_cast<float>(lattice_coord_z(ln.iz)) * kCellSize;
             const vec3 delta = tangent(
-                wrap_delta_f(tr.pos.x, tx, kWorldExtent),
-                wrap_delta_f(tr.pos.y, ty, kWorldExtent),
-                wrap_delta_f(tr.pos.z, tz, kWorldExtent));
+                wrap_delta_f(tr.pos.x, tx, kWorldExtentX),
+                wrap_delta_f(tr.pos.y, ty, kWorldExtentY),
+                wrap_delta_f(tr.pos.z, tz, kWorldExtentZ));
             const float len = length(delta);
             if (len < kCellSize) {
                 if (wt.pack == 0 && wt.cooldown == 0) {

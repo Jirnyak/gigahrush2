@@ -80,12 +80,12 @@ FluidStep fluid_step(World& world, FluidScratch& scratch, const FluidParams& par
     CellStep downStep = regime_down(world.gravity().regime);
 
     auto step_cell = [&](int x, int y, int z, const CellStep& s) {
-        return macro_index(wrap_macro(x + s.x), wrap_macro(y + s.y), wrap_macro(z + s.z));
+        return macro_index(wrap_macro_x(x + s.x), wrap_macro_y(y + s.y), wrap_macro_z(z + s.z));
     };
 
-    for (int z = 0; z < kMacroDim; ++z)
-    for (int y = 0; y < kMacroDim; ++y)
-    for (int x = 0; x < kMacroDim; ++x) {
+    for (int z = 0; z < kMacroDimZ; ++z)
+    for (int y = 0; y < kMacroDimY; ++y)
+    for (int x = 0; x < kMacroDimX; ++x) {
         std::size_t i = macro_index(x, y, z);
         float amount = src[i];
         if (amount < params.minFlow) continue;

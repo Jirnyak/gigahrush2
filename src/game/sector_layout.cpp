@@ -203,14 +203,14 @@ void apply_sector_fuzzy_boundaries(World& world, int floorNumber, std::uint32_t 
 
                 // Outer perimeter wall (dist >= 505m): 100% solid monolithic boundary
                 if (dist >= 505.0f) {
-                    g.set_cell(x, y, z, kMatConcrete);
+                    g.fill_cell(x, y, z, kMatConcrete);
                     continue;
                 }
 
                 // Outskirts structural collapse: rubble cave-ins, buckled concrete slabs
                 const std::uint32_t threshold = static_cast<std::uint32_t>(decay * 80.0f);
                 if ((h % 100u) < threshold) {
-                    g.set_cell(x, y, z, kMatConcrete);
+                    g.fill_cell(x, y, z, kMatConcrete);
                 }
             }
         }
@@ -250,19 +250,19 @@ std::uint32_t generate_sector_airlock_bulkheads(World& world, DoorSet& doors, in
                         d.keycardTier = static_cast<std::uint8_t>(KeycardTier::Master);
                         d.hp = 2500; // Zero-class sealed titanium bulkhead: "СЕКТОР КОНСЕРВИРОВАН"
 
-                        const std::size_t idx = macro_index(wrap_macro(cx), wrap_macro(cy), wrap_macro(z));
+                        const std::size_t idx = macro_index(wrap_macro_x(cx), wrap_macro_y(cy), wrap_macro_z(z));
                         if (doors.index.size() > idx && doors.index[idx] == 0) {
                             const std::uint32_t doorId = static_cast<std::uint32_t>(doors.doors.size());
                             doors.doors.push_back(d);
                             doors.index[idx] = doorId + 1u;
                             if (z + 1 < kMacroDimZ) {
-                                const std::size_t idxTop = macro_index(wrap_macro(cx), wrap_macro(cy), wrap_macro(z + 1));
+                                const std::size_t idxTop = macro_index(wrap_macro_x(cx), wrap_macro_y(cy), wrap_macro_z(z + 1));
                                 if (doors.index.size() > idxTop) doors.index[idxTop] = doorId + 1u;
                             }
                             ++added;
                             ++doors.shut;
-                            g.set_cell(cx, cy, z, kMatConcrete);
-                            if (z + 1 < kMacroDimZ) g.set_cell(cx, cy, z + 1, kMatConcrete);
+                            g.fill_cell(cx, cy, z, kMatConcrete);
+                            if (z + 1 < kMacroDimZ) g.fill_cell(cx, cy, z + 1, kMatConcrete);
                         }
                     }
                 }

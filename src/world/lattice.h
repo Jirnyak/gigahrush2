@@ -29,25 +29,33 @@ inline constexpr int kLatticeCount = kLatticeDim * kLatticeDim * kLatticeDim; //
 // Cell spacing between adjacent nodes on one axis, and half of it. Spacing 32
 // divides every FloorKind's storey height (4/8/16) and room stride (8/16/32),
 // so a node always lands on a slab + room line — see floor_gen.cpp.
-inline constexpr int kLatticeSpacing = kMacroDim / kLatticeDim; // 32
-inline constexpr int kLatticeHalf = kLatticeSpacing / 2;        // 16
+inline constexpr int kLatticeSpacing = kMacroDim / kLatticeDim; // 128
+inline constexpr int kLatticeHalf = kLatticeSpacing / 2;        // 64
+inline constexpr int kLatticeSpacingZ = kMacroDimZ / kLatticeDim; // 4
+inline constexpr int kLatticeHalfZ = kLatticeSpacingZ / 2;        // 2
 
 static_assert(kMacroDim % kLatticeDim == 0,
               "the lattice must tile the torus evenly");
 static_assert(kLatticeSpacing * kLatticeDim == kMacroDim, "spacing sanity");
+static_assert(kMacroDimZ % kLatticeDim == 0,
+              "the lattice must tile Z evenly");
+static_assert(kLatticeSpacingZ * kLatticeDim == kMacroDimZ, "Z spacing sanity");
 
 // Cell-centre coordinate (one axis) of lattice index i in [0, kLatticeDim).
-// Centres are {16, 48, 80, 112}: the midpoint of each spacing-wide band, so
-// every node sits as far as possible from its neighbours on the torus.
+// Centres are {64, 192, 320, 448} for X/Y and {2, 6, 10, 14} for Z.
 inline constexpr int lattice_coord(int i) {
     return i * kLatticeSpacing + kLatticeHalf;
 }
+inline constexpr int lattice_coord_z(int i) {
+    return i * kLatticeSpacingZ + kLatticeHalfZ;
+}
 
-// Nearest lattice index on one axis to a macro coordinate. Each node owns the
-// contiguous band [i*spacing, (i+1)*spacing); because the centre is the band
-// midpoint, that band IS the node's Voronoi cell on the torus.
+// Nearest lattice index on one axis to a macro coordinate.
 inline constexpr int lattice_axis_of(int c) {
     return wrapi(c, kMacroDim) / kLatticeSpacing;
+}
+inline constexpr int lattice_axis_of_z(int c) {
+    return wrapi(c, kMacroDimZ) / kLatticeSpacingZ;
 }
 
 // Pack / unpack a node's (ix,iy,iz) in [0,kLatticeDim)^3 to a flat id in [0,64).

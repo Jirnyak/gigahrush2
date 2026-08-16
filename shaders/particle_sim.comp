@@ -30,12 +30,15 @@ layout(push_constant) uniform Push {
 } pc;
 
 // Solidity of the sub-voxel containing world point `w` (toroidal).
-// Cell = 2 m, sub-voxel = 0.25 m; kMacroDim = 128 so wrap is a power-of-two AND.
+// Cell = 2 m, sub-voxel = 0.25 m; 512x512x16 sector grid.
 bool solid_at(vec3 w) {
     vec3 q = w * 0.5; // cell space
-    ivec3 c = ivec3(floor(q)) & 127;
+    ivec3 c = ivec3(floor(q));
+    c.x &= 511;
+    c.y &= 511;
+    c.z &= 15;
     ivec3 s = ivec3(floor(fract(q) * 8.0)) & 7;
-    uint ci = uint(c.x) | (uint(c.y) << 7) | (uint(c.z) << 14);
+    uint ci = uint(c.x) | (uint(c.y) << 9) | (uint(c.z) << 18);
     uint bit = uint(s.x) | (uint(s.y) << 3) | (uint(s.z) << 6);
     return ((uMasks[ci * 16u + (bit >> 5)] >> (bit & 31u)) & 1u) != 0u;
 }

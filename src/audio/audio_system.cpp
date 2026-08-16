@@ -140,9 +140,9 @@ void AudioSystem::update(float dt, const vec3& listenerPos, float listenerYaw, f
     // 1. Update Geiger counter danger and radiation dose level
     float dangerSample = 0.0f;
     if (dangerField) {
-        int cx = static_cast<int>(std::floor(listenerPos.x * 0.5f));
-        int cy = static_cast<int>(std::floor(listenerPos.y * 0.5f));
-        int cz = static_cast<int>(std::floor(listenerPos.z * 0.5f));
+        int cx = wrap_macro_x(static_cast<int>(std::floor(listenerPos.x / kCellSize)));
+        int cy = wrap_macro_y(static_cast<int>(std::floor(listenerPos.y / kCellSize)));
+        int cz = wrap_macro_z(static_cast<int>(std::floor(listenerPos.z / kCellSize)));
         dangerSample = dangerField->at(cx, cy, cz);
     }
     mixer_.geiger().set_radiation(dangerSample, radDose);

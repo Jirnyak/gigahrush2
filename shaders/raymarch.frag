@@ -83,13 +83,15 @@ const float kGamma = 2.2;
 // =============================================================================
 // == voxel fetch ==============================================================
 // =============================================================================
-const int kMacroDim = 128;
+const int kMacroDimX = 512;
+const int kMacroDimY = 512;
+const int kMacroDimZ = 16;
 const float kCell = 2.0;
 const float kVoxel = 0.25;
 
 uint cell_index(ivec3 c) {
-    c &= (kMacroDim - 1); // torus: power-of-two wrap is one AND per axis
-    return uint(c.x) | (uint(c.y) << 7) | (uint(c.z) << 14);
+    ivec3 w = ivec3(c.x & (kMacroDimX - 1), c.y & (kMacroDimY - 1), c.z & (kMacroDimZ - 1));
+    return uint(w.x) | (uint(w.y) << 9) | (uint(w.z) << 18);
 }
 
 uint cell_class(uint ci) { // 0 empty, 1 full, 2 partial

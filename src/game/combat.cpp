@@ -71,7 +71,7 @@ inline float axis(const vec3& v, int a) { return a == 0 ? v.x : (a == 1 ? v.y : 
 // detonate 200 m away from where the player watched it land.
 bool cell_solid(const MacroGrid& grid, const vec3& p) {
     const int cz = static_cast<int>(std::floor(p.z / kCellSize));
-    if (cz < 0 || cz >= kMacroDim) return true;
+    if (cz < 0 || cz >= kMacroDimZ) return true;
     return grid.cell(static_cast<int>(std::floor(p.x / kCellSize)),
                      static_cast<int>(std::floor(p.y / kCellSize)), cz) != kCellAir;
 }
@@ -1703,8 +1703,8 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         const int cx = wrap_macro(static_cast<int>(tr.pos.x / kCellSize));
         const int cy = wrap_macro(static_cast<int>(tr.pos.y / kCellSize));
         const int cz = static_cast<int>(tr.pos.z / kCellSize);
-        if (cz < 0 || cz >= kMacroDim ||
-            grid.cell(cx, cy, wrap_macro(cz)) != kCellAir) {
+        if (cz < 0 || cz >= kMacroDimZ ||
+            grid.cell(cx, cy, cz) != kCellAir) {
             Hit h{e, p.dmg, p.source, false};
             h.onWall = true;
             h.impactPos = tr.pos;

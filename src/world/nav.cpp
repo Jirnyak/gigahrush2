@@ -26,7 +26,7 @@ inline void node_cell(int id, int& cx, int& cy, int& cz) {
     const LatticeNode n = lattice_unpack(id);
     cx = lattice_coord(n.ix);
     cy = lattice_coord(n.iy);
-    cz = lattice_coord(n.iz);
+    cz = lattice_coord_z(n.iz);
 }
 
 // One node's BFS: flood the walkable void from its shaft cell and record the
@@ -47,7 +47,7 @@ void bake_node(const MacroGrid& g, int id, CoarseGraph& out) {
     std::vector<int> q;
     q.reserve(1u << 16);
 
-    const int W = kMacroDim;
+    const int W = kMacroDimX;
     const int start = static_cast<int>(macro_index(sx, sy, sz));
     dist[static_cast<std::size_t>(start)] = 0;
     q.push_back(start);
@@ -66,9 +66,9 @@ void bake_node(const MacroGrid& g, int id, CoarseGraph& out) {
             {cx, cy, cz - 1}, {cx, cy, cz + 1},
         };
         for (int k = 0; k < 6; ++k) {
-            const int nx = wrap_macro(nbr[k][0]);
-            const int ny = wrap_macro(nbr[k][1]);
-            const int nz = wrap_macro(nbr[k][2]);
+            const int nx = wrap_macro_x(nbr[k][0]);
+            const int ny = wrap_macro_y(nbr[k][1]);
+            const int nz = wrap_macro_z(nbr[k][2]);
             const std::size_t ni = macro_index(nx, ny, nz);
             if (dist[ni] != kUnreachable) continue; // already reached
             if (blocked(g, nx, ny, nz)) continue;    // not walkable
@@ -98,7 +98,7 @@ void bake_fine_node(const MacroGrid& g, int id, std::uint8_t* slice) {
     std::vector<int> q;
     q.reserve(1u << 16);
 
-    const int W = kMacroDim;
+    const int W = kMacroDimX;
     const int start = static_cast<int>(macro_index(sx, sy, sz));
     slice[start] = kFlowArrived;
     q.push_back(start);
@@ -109,9 +109,9 @@ void bake_fine_node(const MacroGrid& g, int id, std::uint8_t* slice) {
         const int cy = (ci / W) % W;
         const int cx = ci % W;
         for (int d = 0; d < 6; ++d) {
-            const int nx = wrap_macro(cx + kNavDir[d][0]);
-            const int ny = wrap_macro(cy + kNavDir[d][1]);
-            const int nz = wrap_macro(cz + kNavDir[d][2]);
+            const int nx = wrap_macro_x(cx + kNavDir[d][0]);
+            const int ny = wrap_macro_y(cy + kNavDir[d][1]);
+            const int nz = wrap_macro_z(cz + kNavDir[d][2]);
             const std::size_t ni = macro_index(nx, ny, nz);
             if (slice[ni] != kFlowNone) continue; // already reached (or arrived)
             if (blocked(g, nx, ny, nz)) continue;  // wall stays kFlowNone
@@ -134,7 +134,7 @@ void bake_fine_node(const MacroGrid& g, int id, std::uint8_t* slice) {
 void bake_nearest(const MacroGrid& g, std::uint8_t* nearest) {
     std::vector<int> q;
     q.reserve(1u << 16);
-    const int W = kMacroDim;
+    const int W = kMacroDimX;
 
     for (int id = 0; id < kNodes; ++id) {
         int sx, sy, sz;
@@ -153,9 +153,9 @@ void bake_nearest(const MacroGrid& g, std::uint8_t* nearest) {
         const int cx = ci % W;
         const std::uint8_t owner = nearest[ci]; // propagate this cell's anchor
         for (int d = 0; d < 6; ++d) {
-            const int nx = wrap_macro(cx + kNavDir[d][0]);
-            const int ny = wrap_macro(cy + kNavDir[d][1]);
-            const int nz = wrap_macro(cz + kNavDir[d][2]);
+            const int nx = wrap_macro_x(cx + kNavDir[d][0]);
+            const int ny = wrap_macro_y(cy + kNavDir[d][1]);
+            const int nz = wrap_macro_z(cz + kNavDir[d][2]);
             const std::size_t ni = macro_index(nx, ny, nz);
             if (nearest[ni] != kFlowNone) continue; // already claimed (nearer or tie)
             if (blocked(g, nx, ny, nz)) continue;    // wall stays kFlowNone
@@ -303,7 +303,7 @@ void generate_vertical_links(const MacroGrid& grid, int floorNumber,
             if ((sx % 4 == 2) && (sy % 4 == 2)) {
                 const int stX = cx + 4;
                 const int stY = cy + 4;
-                if (stX < 512 && stY < 512 && !grid.mask(stX % kMacroDim, stY % kMacroDim, cz % kMacroDim).full()) {
+                if (stX < kMacroDimX && stY < kMacroDimY && !grid.mask(stX % kMacroDimX, stY % kMacroDimY, cz % kMacroDimZ).full()) {
                     VerticalWaypointLink stairLink;
                     stairLink.fromFloor = floorNumber;
                     stairLink.toFloor = adjacentFloor;
@@ -320,7 +320,7 @@ void generate_vertical_links(const MacroGrid& grid, int floorNumber,
             if ((sx % 4 == 0) && (sy % 4 == 0)) {
                 const int ldX = cx - 4;
                 const int ldY = cy - 4;
-                if (ldX >= 0 && ldY >= 0 && !grid.mask(ldX % kMacroDim, ldY % kMacroDim, cz % kMacroDim).full()) {
+                if (ldX >= 0 && ldY >= 0 && !grid.mask(ldX % kMacroDimX, ldY % kMacroDimY, cz % kMacroDimZ).full()) {
                     VerticalWaypointLink ladderLink;
                     ladderLink.fromFloor = floorNumber;
                     ladderLink.toFloor = adjacentFloor;
@@ -337,7 +337,7 @@ void generate_vertical_links(const MacroGrid& grid, int floorNumber,
             if (dir < 0 && ((sx % 4 == 3) && (sy % 4 == 3))) {
                 const int chX = cx + 2;
                 const int chY = cy - 2;
-                if (chX < 512 && chY >= 0 && !grid.mask(chX % kMacroDim, chY % kMacroDim, cz % kMacroDim).full()) {
+                if (chX < kMacroDimX && chY >= 0 && !grid.mask(chX % kMacroDimX, chY % kMacroDimY, cz % kMacroDimZ).full()) {
                     VerticalWaypointLink chuteLink;
                     chuteLink.fromFloor = floorNumber;
                     chuteLink.toFloor = adjacentFloor;

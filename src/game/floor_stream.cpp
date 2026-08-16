@@ -658,6 +658,10 @@ RideResult FloorStreamer::reembody_entity_transit(LevelStack& stack, FloorRegist
     const bool hadObserver = ecs.all_of<ObserverTag>(entity);
     const bool hadNoClip = ecs.all_of<NoClip>(entity);
 
+    if (id == kInvalidNpc && playerId != kInvalidNpc && isPlayer) {
+        id = playerId;
+    }
+
     ensure_loaded(stack, reg, ecs, pool, toFloor, playerId);
     const LayerId dstLayer = reg.layer_at(toFloor);
     if (dstLayer == kInvalidLayer) return r;
@@ -699,6 +703,12 @@ RideResult FloorStreamer::reembody_entity_transit(LevelStack& stack, FloorRegist
         } else {
             ne = embody(ecs, pool, id, dstLayer);
         }
+    } else {
+        ne = ecs.create();
+        Transform newTr{};
+        newTr.layer = dstLayer;
+        newTr.pos = vec3{512.0f, 512.0f, 8.0f * kCellSize};
+        ecs.emplace<Transform>(ne, newTr);
     }
 
     if (ne == entt::null) {
@@ -707,16 +717,24 @@ RideResult FloorStreamer::reembody_entity_transit(LevelStack& stack, FloorRegist
 
     place_body_safely(ecs, stack.layer(dstLayer), ne);
 
-    if (auto* cam = ecs.try_get<CameraTag>(ne)) {
-        cam->yaw = yaw;
-        cam->pitch = pitch;
-        cam->fovY = fovY;
-        cam->eyeOffset = eyeOffset;
+    if (isPlayer || ecs.all_of<CameraTag>(ne)) {
+        CameraTag camTag{};
+        camTag.yaw = yaw;
+        camTag.pitch = pitch;
+        camTag.fovY = fovY;
+        camTag.eyeOffset = eyeOffset;
+        ecs.emplace_or_replace<CameraTag>(ne, camTag);
     }
     if (auto* ctl = ecs.try_get<Controller>(ne)) {
         ctl->fly = fly;
         ctl->moveSpeed = moveSpeed;
         ctl->wishDir = wishDir;
+    } else if (isPlayer) {
+        Controller ctlTag{};
+        ctlTag.fly = fly;
+        ctlTag.moveSpeed = moveSpeed;
+        ctlTag.wishDir = wishDir;
+        ecs.emplace<Controller>(ne, ctlTag);
     }
     if (hadRanged) ecs.emplace_or_replace<PlayerRanged>(ne, ranged);
     if (hadMelee) ecs.emplace_or_replace<PlayerMelee>(ne, melee);

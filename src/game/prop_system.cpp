@@ -351,9 +351,9 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
     // shield to one ankle-height row per storey). The device anchors INTO the
     // wall cell it hangs on and sits FLUSH against the wall face, centred in
     // the cell, at panel height.
-    for (int z = 0; z < kMacroDim; ++z) {
-        for (int y = 0; y < kMacroDim; ++y) {
-            for (int x = 0; x < kMacroDim; ++x) {
+    for (int z = 0; z < kMacroDimZ; ++z) {
+        for (int y = 0; y < kMacroDimY; ++y) {
+            for (int x = 0; x < kMacroDimX; ++x) {
                 if (grid.cell(x, y, z) != kCellAir) continue;
 
                 const bool solidWest  = is_solid_cell(grid.cell(x - 1, y, z));
@@ -456,9 +456,9 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
 
         const std::uint32_t lightChance = kLightChancePct / static_cast<std::uint32_t>(frameCount);
 
-        for (int z = 0; z < kMacroDim; ++z) {
-            for (int y = 0; y < kMacroDim; ++y) {
-                for (int x = 0; x < kMacroDim; ++x) {
+        for (int z = 0; z < kMacroDimZ; ++z) {
+            for (int y = 0; y < kMacroDimY; ++y) {
+                for (int x = 0; x < kMacroDimX; ++x) {
                     if (grid.cell(x, y, z) != kCellAir) continue;
 
                     const int cx = wrap_macro(x + ceilStepX);

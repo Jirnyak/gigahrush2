@@ -3890,7 +3890,7 @@ int main(int argc, char** argv) {
                             dialogueSession.role = static_cast<game::RoleId>(pool.role(talker));
                             dialogueSession.situation = speechSit;
                             const game::DialoguePrompt dPrompt = game::generate_dialogue_prompt(
-                                reg, pool, talker, currentFloor, factionRel, samosbor);
+                                reg, pool, talker, static_cast<std::int16_t>(currentFloor), factionRel, samosbor);
                             dialogueSession.attitude = dPrompt.attitude;
                             std::snprintf(dialogueSession.speakerName, sizeof(dialogueSession.speakerName),
                                           "%s #%u (%s)", game::faction_name(dialogueSession.faction),
@@ -6051,7 +6051,7 @@ int main(int argc, char** argv) {
                 const game::Rumour ru = game::rumour_for(reg, pool, dialogueSession.speaker, activeLayer, currentFloor, samosbor);
                 game::rumour_text(ru, dialogueSession.rumourText, sizeof(dialogueSession.rumourText));
             } else if (dAction == DialogueAction::AskWarSituation) {
-                const game::FloorWarRecord* fwr = game::global_territory_war_manager().find(currentFloor);
+                const game::FloorWarRecord* fwr = game::global_territory_war_manager().find(static_cast<std::int16_t>(currentFloor));
                 if (fwr && fwr->totalCasualties > 0) {
                     std::snprintf(dialogueSession.warReportText, sizeof(dialogueSession.warReportText),
                                   "Сводка этажа %d: боевые потери %u чел. Идут межфракционные столкновения.",

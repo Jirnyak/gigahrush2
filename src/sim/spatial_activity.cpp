@@ -4,6 +4,7 @@
 #include <cmath>
 #include <vector>
 
+#include "core/wrap.h"
 #include "ecs/components.h"
 
 namespace giga {
@@ -36,6 +37,9 @@ SectorActivity SpatialActivityGrid::activity_at(vec3 pos) const {
 }
 
 SectorActivity SpatialActivityGrid::activity_at_cell(int cx, int cy, int cz) const {
+    if (!in_bounds(cx, cy, cz)) {
+        return SectorActivity::Cold;
+    }
     const int sx = cx / kSectorCellsX;
     const int sy = cy / kSectorCellsY;
     return activity(sx, sy);
@@ -97,13 +101,17 @@ void SpatialActivityGrid::update(const Registry& reg, LayerId layer,
             constexpr float maxZ = kSectorHeight;
 
             float minDistSq = 1e30f;
+            const float secMidX = minX + 0.5f * kSectorSize;
+            const float secMidY = minY + 0.5f * kSectorSize;
             for (const vec3& f : foci) {
-                const float cx = std::clamp(f.x, minX, maxX);
-                const float cy = std::clamp(f.y, minY, maxY);
+                const float fx = nearest_image(f.x, secMidX, kWorldExtentX);
+                const float fy = nearest_image(f.y, secMidY, kWorldExtentY);
+                const float cx = std::clamp(fx, minX, maxX);
+                const float cy = std::clamp(fy, minY, maxY);
                 const float cz = std::clamp(f.z, minZ, maxZ);
 
-                const float dx = f.x - cx;
-                const float dy = f.y - cy;
+                const float dx = fx - cx;
+                const float dy = fy - cy;
                 const float dz = f.z - cz;
                 const float d2 = dx * dx + dy * dy + dz * dz;
                 if (d2 < minDistSq) {

@@ -4,12 +4,11 @@
 #include "core/wrap.h"
 #include "world/los.h"
 #include "world/macro_grid.h"
+#include "world/types.h"
 #include <algorithm>
 #include <cmath>
 
 namespace giga::audio {
-
-constexpr float kWorldPeriodM = 256.0f; // 128 cells * 2.0 m
 
 float compute_occlusion_cutoff(int numBlockerWalls) {
     if (numBlockerWalls <= 0) {
@@ -30,9 +29,9 @@ float compute_wall_attenuation(int numBlockerWalls) {
 
 void spatial_evaluate_geom(const vec3& listenerPos, float listenerYaw, float listenerPitch,
                            const vec3& emitterPos, float& outGainL, float& outGainR, float& outDist) {
-    // 1. Toroidal minimal-image delta in X and Y, non-wrapping in Z
-    float dx = wrap_delta_f(listenerPos.x, emitterPos.x, kWorldPeriodM);
-    float dy = wrap_delta_f(listenerPos.y, emitterPos.y, kWorldPeriodM);
+    // 1. Toroidal minimal-image delta in X and Y, non-wrapping in Z across 1024m x 1024m sector
+    float dx = wrap_delta_f(listenerPos.x, emitterPos.x, kWorldExtentX);
+    float dy = wrap_delta_f(listenerPos.y, emitterPos.y, kWorldExtentY);
     float dz = emitterPos.z - listenerPos.z;
     float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
     outDist = dist;

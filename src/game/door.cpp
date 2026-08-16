@@ -20,9 +20,9 @@ namespace {
 // truncation, wrapped, because a body's Transform::pos is already normalized into
 // [0, kWorldExtent) by physics_step.
 void agent_cell(const vec3& pos, int& cx, int& cy, int& cz) {
-    cx = wrap_macro(static_cast<int>(pos.x / kCellSize));
-    cy = wrap_macro(static_cast<int>(pos.y / kCellSize));
-    cz = wrap_macro(static_cast<int>(pos.z / kCellSize));
+    cx = wrap_macro_x(static_cast<int>(pos.x / kCellSize));
+    cy = wrap_macro_y(static_cast<int>(pos.y / kCellSize));
+    cz = wrap_macro_z(static_cast<int>(pos.z / kCellSize));
 }
 
 // Does entity box (pos, half) overlap the door's leaf column? Toroidal on all
@@ -100,7 +100,7 @@ std::uint32_t door_build(World& world, DoorSet& doors, int number,
 
     // Room lattice for §23 hermetic tagging (same stride as floor_doorways).
     const int stride = floor_room_stride(spec.kind);
-    const int roomsPerAxis = (stride > 0) ? (kMacroDim / stride) : 1;
+    const int roomsPerAxis = (stride > 0) ? (kMacroDimX / stride) : 1;
 
     for (const Doorway& w : ways) {
         const int cx = w.cx, cy = w.cy, cz = w.cz, h = w.h;
@@ -167,8 +167,8 @@ std::uint32_t door_build(World& world, DoorSet& doors, int number,
         const std::uint32_t id = static_cast<std::uint32_t>(doors.doors.size());
         doors.doors.push_back(d);
         for (int z = cz; z < cz + h; ++z)
-            doors.index[macro_index(wrap_macro(cx), wrap_macro(cy),
-                                    wrap_macro(z))] = id + 1u;
+            doors.index[macro_index(wrap_macro_x(cx), wrap_macro_y(cy),
+                                    wrap_macro_z(z))] = id + 1u;
 
         // The frame. Two jambs plus the lintel, recoloured in place over cells that
         // were already solid wall — no solidity changes, so this is invisible to the
@@ -252,15 +252,15 @@ std::uint32_t door_toggle_near(World& world, DoorSet& doors, const Registry& reg
                 // sphere and not the cell box the search walked.
                 const float ex = wrap_delta_f(
                     pos.x, (static_cast<float>(d.cx) + 0.5f) * kCellSize,
-                    kWorldExtent);
+                    kWorldExtentX);
                 const float ey = wrap_delta_f(
                     pos.y, (static_cast<float>(d.cy) + 0.5f) * kCellSize,
-                    kWorldExtent);
+                    kWorldExtentY);
                 const float ez = wrap_delta_f(
                     pos.z,
                     (static_cast<float>(d.cz) + static_cast<float>(d.h) * 0.5f) *
                         kCellSize,
-                    kWorldExtent);
+                    kWorldExtentZ);
                 const float d2 = ex * ex + ey * ey + ez * ez;
                 if (d2 >= bestD2) continue;
                 bestD2 = d2;
@@ -300,15 +300,15 @@ std::uint32_t door_query_near(const DoorSet& doors, const vec3& pos) {
                     continue;
                 const float ex = wrap_delta_f(
                     pos.x, (static_cast<float>(d.cx) + 0.5f) * kCellSize,
-                    kWorldExtent);
+                    kWorldExtentX);
                 const float ey = wrap_delta_f(
                     pos.y, (static_cast<float>(d.cy) + 0.5f) * kCellSize,
-                    kWorldExtent);
+                    kWorldExtentY);
                 const float ez = wrap_delta_f(
                     pos.z,
                     (static_cast<float>(d.cz) + static_cast<float>(d.h) * 0.5f) *
                         kCellSize,
-                    kWorldExtent);
+                    kWorldExtentZ);
                 const float d2 = ex * ex + ey * ey + ez * ez;
                 if (d2 >= bestD2) continue;
                 bestD2 = d2;
@@ -459,9 +459,9 @@ bool door_nearest_shelter(const World& /*world*/, const DoorSet& doors,
         if (d.hp <= 0) continue;
         // Prefer same-Z slab when possible; still accept other floors of the door
         // column so a body one cell below the lintel still finds the shelter.
-        const int dx = wrap_delta(cx, static_cast<int>(d.cx), kMacroDim);
-        const int dy = wrap_delta(cy, static_cast<int>(d.cy), kMacroDim);
-        const int dz = wrap_delta(cz, static_cast<int>(d.cz), kMacroDim);
+        const int dx = wrap_delta(cx, static_cast<int>(d.cx), kMacroDimX);
+        const int dy = wrap_delta(cy, static_cast<int>(d.cy), kMacroDimY);
+        const int dz = wrap_delta(cz, static_cast<int>(d.cz), kMacroDimZ);
         const int d2 = dx * dx + dy * dy + dz * dz;
         if (!found || d2 < bestD2) {
             found = true;

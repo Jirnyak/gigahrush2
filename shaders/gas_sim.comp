@@ -21,8 +21,8 @@ layout(push_constant) uniform Push {
 
 // Checks if the macro cell is solid (0 = empty, 1 = full solid, 2 = partial)
 bool cell_solid(ivec3 c) {
-    ivec3 wrapC = c & 127;
-    uint ci = uint(wrapC.x) | (uint(wrapC.y) << 7) | (uint(wrapC.z) << 14);
+    ivec3 wrapC = ivec3(c.x & 511, c.y & 511, c.z & 15);
+    uint ci = uint(wrapC.x) | (uint(wrapC.y) << 9) | (uint(wrapC.z) << 18);
     uint cls = (uClass[ci >> 2] >> ((ci & 3u) * 8u)) & 0xFFu;
     return cls == 1u; // Fully solid cells block gas flux completely
 }
@@ -45,9 +45,9 @@ uint packGas(vec4 g) {
 
 void main() {
     ivec3 pos = ivec3(gl_GlobalInvocationID.xyz);
-    if (pos.x >= 128 || pos.y >= 128 || pos.z >= 128) return;
+    if (pos.x >= 512 || pos.y >= 512 || pos.z >= 16) return;
 
-    uint flatIdx = uint(pos.x) | (uint(pos.y) << 7) | (uint(pos.z) << 14);
+    uint flatIdx = uint(pos.x) | (uint(pos.y) << 9) | (uint(pos.z) << 18);
 
     if (cell_solid(pos)) {
         gOut[flatIdx] = 0u;
@@ -92,13 +92,13 @@ void main() {
 
     for (int i = 0; i < 6; ++i) {
         ivec3 dir = dirs[i];
-        ivec3 neighborPos = (pos + dir) & 127;
+        ivec3 neighborPos = ivec3((pos.x + dir.x) & 511, (pos.y + dir.y) & 511, (pos.z + dir.z) & 15);
         
         if (cell_solid(neighborPos)) {
             continue; // No-flux boundary on solid obstacle
         }
         
-        uint nIdx = uint(neighborPos.x) | (uint(neighborPos.y) << 7) | (uint(neighborPos.z) << 14);
+        uint nIdx = uint(neighborPos.x) | (uint(neighborPos.y) << 9) | (uint(neighborPos.z) << 18);
         vec4 neighbor = unpackGas(gIn[nIdx]);
 
         // Symmetric diffusion flux: kDiff * (N - C)

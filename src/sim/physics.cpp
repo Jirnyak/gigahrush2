@@ -6,25 +6,23 @@
 #include "core/math.h"
 #include "core/wrap.h"
 #include "ecs/components.h"
+#include "world/destruct.h"
 #include "world/world.h"
 
 namespace giga {
 
 namespace {
 
-// Total voxels per axis across the whole world (wraps as a torus).
-constexpr int kVoxAxis = kMacroDim * kSubDim;
-
 int floor_div(float v, float s) {
     return static_cast<int>(std::floor(v / s));
 }
 
 // Is the global voxel (gx, gy, gz) solid? Global voxel coords wrap on the
-// 1024^3 torus; they decompose into a macro cell + local sub index.
+// anisotropic torus; they decompose into a macro cell + local sub index.
 bool voxel_solid(const World& w, int gx, int gy, int gz) {
-    gx = wrapi(gx, kVoxAxis);
-    gy = wrapi(gy, kVoxAxis);
-    gz = wrapi(gz, kVoxAxis);
+    if (gz < 0 || gz >= kSubGridDimZ) return false;
+    gx = wrapi(gx, kSubGridDimX);
+    gy = wrapi(gy, kSubGridDimY);
     int cx = gx / kSubDim, cy = gy / kSubDim, cz = gz / kSubDim;
     int sx = gx % kSubDim, sy = gy % kSubDim, sz = gz % kSubDim;
     return w.grid().mask(cx, cy, cz).test(sub_bit(sx, sy, sz));
@@ -50,17 +48,18 @@ bool aabb_overlaps_solid(const World& world, vec3 pos, vec3 half) {
     const MacroGrid& grid = world.grid();
 
     for (int cz = cz0; cz <= cz1; ++cz) {
-        const int mcz = wrap_macro(cz);
+        if (cz < 0 || cz >= kMacroDimZ) continue;
+        const int mcz = cz;
         const int sz0 = std::max(0, z0 - (cz << 3));
         const int sz1 = std::min(kSubDim - 1, z1 - (cz << 3));
 
         for (int cy = cy0; cy <= cy1; ++cy) {
-            const int mcy = wrap_macro(cy);
+            const int mcy = wrap_macro_y(cy);
             const int sy0 = std::max(0, y0 - (cy << 3));
             const int sy1 = std::min(kSubDim - 1, y1 - (cy << 3));
 
             for (int cx = cx0; cx <= cx1; ++cx) {
-                const int mcx = wrap_macro(cx);
+                const int mcx = wrap_macro_x(cx);
                 const SubMask& mask = grid.mask(mcx, mcy, mcz);
                 if (mask.empty()) continue;
                 if (mask.full()) return true;
@@ -100,11 +99,12 @@ bool aabb_overlaps_macro(const World& world, vec3 pos, vec3 half) {
     const MacroGrid& grid = world.grid();
 
     for (int cz = cz0; cz <= cz1; ++cz) {
-        const int mcz = wrap_macro(cz);
+        if (cz < 0 || cz >= kMacroDimZ) continue;
+        const int mcz = cz;
         for (int cy = cy0; cy <= cy1; ++cy) {
-            const int mcy = wrap_macro(cy);
+            const int mcy = wrap_macro_y(cy);
             for (int cx = cx0; cx <= cx1; ++cx) {
-                const int mcx = wrap_macro(cx);
+                const int mcx = wrap_macro_x(cx);
                 const SubMask& mask = grid.mask(mcx, mcy, mcz);
                 if (!mask.empty()) return true;
             }
@@ -266,9 +266,9 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
             // toggles the tag; [components.h NoClip]).
             if (reg.all_of<NoClip>(e)) {
                 tr.pos += vel.v * h;
-                tr.pos.x = wrapf(tr.pos.x, kWorldExtent);
-                tr.pos.y = wrapf(tr.pos.y, kWorldExtent);
-                tr.pos.z = wrapf(tr.pos.z, kWorldExtent);
+                tr.pos.x = wrapf(tr.pos.x, kWorldExtentX);
+                tr.pos.y = wrapf(tr.pos.y, kWorldExtentY);
+                tr.pos.z = wrapf(tr.pos.z, kWorldExtentZ);
                 continue;
             }
 
@@ -365,9 +365,9 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
             // not just for collision queries — walk or fall off any face and
             // you seamlessly re-enter from the opposite one (top<->bottom,
             // left<->right, front<->back). Isotropy by construction.
-            tr.pos.x = wrapf(tr.pos.x, kWorldExtent);
-            tr.pos.y = wrapf(tr.pos.y, kWorldExtent);
-            tr.pos.z = wrapf(tr.pos.z, kWorldExtent);
+            tr.pos.x = wrapf(tr.pos.x, kWorldExtentX);
+            tr.pos.y = wrapf(tr.pos.y, kWorldExtentY);
+            tr.pos.z = wrapf(tr.pos.z, kWorldExtentZ);
 
             // Ragdoll / tumbling + grounded roll ([jirnyak.md] section 18).
             // BodyPass is still axis-aligned; Rotation/AngularVelocity are sim

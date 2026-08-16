@@ -42,27 +42,27 @@ const std::array<RangedDef, kRangedCount> kRangedTable = {{
     // [17] ptrs_liquidator          ammo_harpoon x1
     RangedDef{ 170, 4250, 34000, 15, 1000, 18, 1, 5, 0, 0, 0, 0 },
     // [18] shotgun                  ammo_shells x7
-    RangedDef{ 12, 1200, 15000, 3400, 1000, 23, 7, 1, 0, 0, 0, 0 },
+    RangedDef{ 12, 1200, 15000, 3400, 1000, 23, 7, 1, 1, 0, 0, 0 },
     // [19] toz_shotgun              ammo_shells x8
-    RangedDef{ 11, 1600, 20000, 1300, 1000, 23, 8, 2, 0, 0, 0, 0 },
+    RangedDef{ 11, 1600, 20000, 1300, 1000, 23, 8, 2, 1, 0, 0, 0 },
     // [20] chizh3_shotgun           ammo_shells x8
-    RangedDef{ 13, 1000, 17000, 2400, 1000, 23, 8, 2, 0, 0, 0, 0 },
+    RangedDef{ 13, 1000, 17000, 2400, 1000, 23, 8, 2, 1, 0, 0, 0 },
     // [21] conscripts_doublebarrel  ammo_shells x7
-    RangedDef{ 10, 1450, 15000, 2800, 1000, 23, 7, 2, 0, 0, 0, 0 },
+    RangedDef{ 10, 1450, 15000, 2800, 1000, 23, 7, 2, 1, 0, 0, 0 },
     // [22] rb91_auto_shotgun        ammo_shells x9
-    RangedDef{ 11, 650, 16000, 3000, 1000, 23, 9, 10, 0, 0, 0, 0 },
+    RangedDef{ 11, 650, 16000, 3000, 1000, 23, 9, 10, 1, 0, 0, 0 },
     // [23] granit4u_belt_shotgun    ammo_shells x12
-    RangedDef{ 8, 2350, 14000, 4600, 1000, 23, 12, 20, 0, 0, 0, 0 },
+    RangedDef{ 8, 2350, 14000, 4600, 1000, 23, 12, 20, 1, 0, 0, 0 },
     // [24] pushkin_shotgun          ammo_shells x6
-    RangedDef{ 14, 820, 19000, 1200, 1000, 23, 6, 6, 0, 0, 0, 0 },
+    RangedDef{ 14, 820, 19000, 1200, 1000, 23, 6, 6, 1, 0, 0, 0 },
     // [25] nailgun                  ammo_nails x1
     RangedDef{ 14, 330, 20000, 140, 1000, 21, 1, 1, 0, 0, 0, 0 },
     // [26] harpoon_gun              ammo_harpoon x1
     RangedDef{ 88, 2350, 18000, 30, 1000, 18, 1, 1, 0, 0, 0, 0 },
     // [27] gauss                    ammo_energy x1
-    RangedDef{ 180, 2600, 44000, 0, 1000, 16, 1, 1, 0, 0, 0, 0 },
+    RangedDef{ 180, 2600, 44000, 0, 1000, 16, 1, 1, 2, 0, 0, 0 },
     // [28] plasma                   ammo_energy x1
-    RangedDef{ 26, 160, 14000, 1800, 1000, 16, 1, 1, 0, 0, 0, 0 },
+    RangedDef{ 26, 160, 14000, 1800, 1000, 16, 1, 1, 2, 0, 0, 0 },
     // [29] grenade                  grenade x1 blast 5.0 m fuse 3.0 s
     RangedDef{ 90, 1200, 8000, 300, 0, 172, 1, 1, 0, 2, 50, 30 },
 }};

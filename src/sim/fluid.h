@@ -98,7 +98,7 @@ const float* fluid_data(const World& world);
 
 // Toroidal read from a resolved pointer; a nullptr layer is dry everywhere.
 inline float fluid_at(const float* data, int x, int y, int z) {
-    return data ? data[macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z))]
+    return data ? data[macro_index(wrap_macro_x(x), wrap_macro_y(y), wrap_macro_z(z))]
                 : 0.0f;
 }
 

@@ -1176,7 +1176,7 @@ void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
         ivec3 toCell{0, 0, 0};
         if (plan.nodeTo < nav::kNodes) {
             const LatticeNode tn = lattice_unpack(plan.nodeTo);
-            toCell = ivec3{lattice_coord(tn.ix), lattice_coord(tn.iy), lattice_coord(tn.iz)};
+            toCell = ivec3{lattice_coord(tn.ix), lattice_coord(tn.iy), lattice_coord_z(tn.iz)};
         }
 
         // Leg bookkeeping: pick a new target when there is none, or on arrival.
@@ -1224,7 +1224,7 @@ void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
             plan.nodeTo = pick;
 
             const LatticeNode tn = lattice_unpack(plan.nodeTo);
-            toCell = ivec3{lattice_coord(tn.ix), lattice_coord(tn.iy), lattice_coord(tn.iz)};
+            toCell = ivec3{lattice_coord(tn.ix), lattice_coord(tn.iy), lattice_coord_z(tn.iz)};
         }
 
         const std::uint8_t d = nav::route_step(coarse, fine, fromCell, toCell);
@@ -1240,13 +1240,13 @@ void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
             // A step in the walking plane: aim at the next cell's CENTRE, the
             // same self-correcting rule (and the same measured reason) as the
             // errand route step above.
-            const int nx = wrap_macro(cx + nav::kNavDir[d][0]);
-            const int ny = wrap_macro(cy + nav::kNavDir[d][1]);
-            const int nz = wrap_macro(cz + nav::kNavDir[d][2]);
+            const int nx = wrap_macro_x(cx + nav::kNavDir[d][0]);
+            const int ny = wrap_macro_y(cy + nav::kNavDir[d][1]);
+            const int nz = wrap_macro_z(cz + nav::kNavDir[d][2]);
             dir = tangent(
-                wrap_delta_f(tr.pos.x, (static_cast<float>(nx) + 0.5f) * kCellSize, kWorldExtent),
-                wrap_delta_f(tr.pos.y, (static_cast<float>(ny) + 0.5f) * kCellSize, kWorldExtent),
-                wrap_delta_f(tr.pos.z, (static_cast<float>(nz) + 0.5f) * kCellSize, kWorldExtent));
+                wrap_delta_f(tr.pos.x, (static_cast<float>(nx) + 0.5f) * kCellSize, kWorldExtentX),
+                wrap_delta_f(tr.pos.y, (static_cast<float>(ny) + 0.5f) * kCellSize, kWorldExtentY),
+                wrap_delta_f(tr.pos.z, (static_cast<float>(nz) + 0.5f) * kCellSize, kWorldExtentZ));
         } else if (d < 6) {
             // The flow wants a step ALONG gravity, which walking cannot spend:
             // walk toward the target node's column in the tangent plane instead
@@ -1254,9 +1254,9 @@ void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
             // same reason.
             const LatticeNode n = lattice_unpack(plan.nodeTo);
             dir = tangent(
-                wrap_delta_f(tr.pos.x, (static_cast<float>(lattice_coord(n.ix)) + 0.5f) * kCellSize, kWorldExtent),
-                wrap_delta_f(tr.pos.y, (static_cast<float>(lattice_coord(n.iy)) + 0.5f) * kCellSize, kWorldExtent),
-                wrap_delta_f(tr.pos.z, (static_cast<float>(lattice_coord(n.iz)) + 0.5f) * kCellSize, kWorldExtent));
+                wrap_delta_f(tr.pos.x, (static_cast<float>(lattice_coord(n.ix)) + 0.5f) * kCellSize, kWorldExtentX),
+                wrap_delta_f(tr.pos.y, (static_cast<float>(lattice_coord(n.iy)) + 0.5f) * kCellSize, kWorldExtentY),
+                wrap_delta_f(tr.pos.z, (static_cast<float>(lattice_coord_z(n.iz)) + 0.5f) * kCellSize, kWorldExtentZ));
         }
         // d == kFlowArrived: freshly advanced above and already standing on the
         // new target's cell — hold still this tick, the next tick advances.
