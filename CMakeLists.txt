@@ -984,7 +984,22 @@ if(GIGA_BUILD_TESTS)
     # on the committed tree, measured: pricing /510 -> /255 (full price) =
     # exactly 3 red (the exactly-funded repair refuses whole: ok, condition
     # and empty-bank checks).
-        PASS_REGULAR_EXPRESSION "game_test: 240327 checks, 0 failures")
+    # 240327 -> 240357 (+30) on 2026-08-16: the fork's gravity-regime scenario
+    # block (suite_gravity_regimes) revived on our signatures — its earlier
+    # segfault was the incomplete hand-built FineNav fixtures, fixed in the
+    # wander wave; the one edit here is apply_damage's arity (his tree had a
+    # trailing fluid param). Knockback under a gravity field, per-regime.
+        PASS_REGULAR_EXPRESSION "game_test: 240357 checks, 0 failures")
+
+    # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
+    # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются
+    # пачками, их дрейф ловит game_test-пин; здесь пин — ноль падений.
+    add_executable(e2e_test tests/e2e_test.cpp)
+    target_link_libraries(e2e_test PRIVATE giga_game)
+    giga_target_flags(e2e_test OFF)
+    add_test(NAME e2e_test COMMAND e2e_test)
+    set_tests_properties(e2e_test PROPERTIES
+        PASS_REGULAR_EXPRESSION "e2e_test: [0-9]+ checks, 0 failures")
 
 
 

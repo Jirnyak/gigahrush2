@@ -222,6 +222,12 @@ void bake_fine(const MacroGrid& grid, FineNav& out) {
 
 std::uint8_t route_step(const CoarseGraph& coarse, const FineNav& fine,
                         ivec3 from, ivec3 to) {
+    // EMPTY BAKE IS A NO-OP, NOT UB — the same contract wander_step keeps: an
+    // async bake in flight means "no route yet", never an index into nothing.
+    // Found by the e2e contract test, which crashed here instead of reading
+    // kFlowNone back.
+    if (fine.flow.empty() || fine.nearest.empty()) return kFlowNone;
+
     // Already standing on the destination cell.
     if (from.x == to.x && from.y == to.y && from.z == to.z) return kFlowArrived;
 
