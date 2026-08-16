@@ -99,6 +99,7 @@
 #include "render/gpu_cull_pass.h"
 #include "app/ui_shell.h"
 #include "render/imgui_layer.h"
+#include "render/intro_ui.h"
 #include "render/inventory_ui.h"
 #include "render/vk_device.h"
 #include "render/vk_renderer.h"
@@ -2128,6 +2129,7 @@ int main(int argc, char** argv) {
     // --shot прыгает сразу в Playing: харнесс снимает игру, не заставку.
     UiShell shell;
     shell.screen = shotPath ? AppScreen::Playing : AppScreen::Intro;
+    IntroFx introFx;  // пиксельная сборка TENEVIK GAMES -> титул [intro_ui.h]
     if (shell.sim_frozen()) {
         input.set_mouselook(false);
         SDL_SetWindowRelativeMouseMode(window, false);
@@ -2687,8 +2689,11 @@ int main(int argc, char** argv) {
                 (e.type == SDL_EVENT_KEY_DOWN ||
                  e.type == SDL_EVENT_MOUSE_BUTTON_DOWN)) {
                 // Заставка ждёт ЛЮБОЙ ввод и уходит в меню ([ui_shell.h]).
+                // Клетки логотипа не пропадают — перетекают в титул меню.
                 shell.screen = AppScreen::Menu;
                 shell.menuPage = 0;
+                introFx.retarget_title(ImGui::GetIO().DisplaySize.x,
+                                       ImGui::GetIO().DisplaySize.y);
                 continue;
             }
             if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat) {
@@ -5925,30 +5930,33 @@ int main(int argc, char** argv) {
             for (float y = 0; y < io.DisplaySize.y; y += 4.0f)
                 idl->AddRectFilled(ImVec2(0, y), ImVec2(io.DisplaySize.x, y + 1),
                                    IM_COL32(0, 0, 0, 60));
-            const char* title = "ГИГАХРУШ 2";
-            const char* sub = "служебная аппаратура смотрителя";
+            // Пиксельная сборка «TENEVIK GAMES» ([intro_ui.h]) — палитра
+            // красный/оранжевый/зелёный, у каждой клетки свой темп.
+            const bool assembled = introFx.step_draw(
+                idl, io.DisplaySize.x, io.DisplaySize.y, io.DeltaTime);
             const float cx = io.DisplaySize.x * 0.5f;
-            const float cy = io.DisplaySize.y * 0.38f;
-            const ImVec2 ts = ImGui::CalcTextSize(title);
-            idl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 3.0f,
-                         ImVec2(cx - ts.x * 1.5f, cy),
-                         IM_COL32(89, 242, 102, 255), title);
-            const ImVec2 ss = ImGui::CalcTextSize(sub);
-            idl->AddText(ImVec2(cx - ss.x * 0.5f, cy + ImGui::GetFontSize() * 4.0f),
-                         IM_COL32(60, 140, 66, 255), sub);
-            // Мигание — от кадрового счётчика, не от Date: детерминизм заставки
-            // никому не нужен, но привычка нужна всем.
-            static std::uint32_t introBlink = 0;
-            if (((introBlink++) / 45u) % 2u == 0u) {
-                const char* hint = "[ нажмите любую клавишу ]";  // ASCII-рамка: у шрифта нет глифа em-dash
-                const ImVec2 hs = ImGui::CalcTextSize(hint);
-                idl->AddText(ImVec2(cx - hs.x * 0.5f, io.DisplaySize.y * 0.72f),
-                             IM_COL32(89, 242, 102, 220), hint);
+            if (assembled) {
+                const char* sub = "экспериментальные независимые игры";
+                const ImVec2 ss = ImGui::CalcTextSize(sub);
+                idl->AddText(ImVec2(cx - ss.x * 0.5f, io.DisplaySize.y * 0.68f),
+                             IM_COL32(60, 140, 66, 255), sub);
+                static std::uint32_t introBlink = 0;
+                if (((introBlink++) / 45u) % 2u == 0u) {
+                    const char* hint = "[ нажмите любую клавишу ]";
+                    const ImVec2 hs = ImGui::CalcTextSize(hint);
+                    idl->AddText(
+                        ImVec2(cx - hs.x * 0.5f, io.DisplaySize.y * 0.74f),
+                        IM_COL32(89, 242, 102, 220), hint);
+                }
             }
             ImGui::End();
         }
         if (shell.screen == AppScreen::Menu) {
             ImGuiIO& io = ImGui::GetIO();
+            // Титул «ГИГАХРУЩ 2» из тех же клеток, что собирали логотип
+            // студии — фоновым дроулистом, под окном меню. [intro_ui.h]
+            introFx.step_draw(ImGui::GetBackgroundDrawList(),
+                              io.DisplaySize.x, io.DisplaySize.y, io.DeltaTime);
             ImGui::SetNextWindowPos(
                 ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
                 ImGuiCond_Always, ImVec2(0.5f, 0.5f));
