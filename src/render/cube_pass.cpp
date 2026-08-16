@@ -5,6 +5,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <string>
 
 #include "render/material_table.h" // GENERATED: kMaterial + kMaterialMaps
@@ -17,6 +18,34 @@ namespace {
 // kMaterial (mean albedo per id) is GENERATED — render/material_table.h,
 // from data/materials.csv. Measured rows carry their provenance in
 // data/textures.csv; edit the CSV, never a literal here.
+
+#ifndef GIGA_TEXTURE_DIR
+#define GIGA_TEXTURE_DIR "data/textures"
+#endif
+
+// Multi-candidate: the env var wins, then CWD-relative walks up three levels.
+// This is the WINDOWS seam — MSVC's out-of-source build runs the binary from
+// build/Release/, and the ../ walk is what finds data/ there without every
+// developer exporting an env var first. On a CWD nobody predicted, the
+// compile-time default stands and load_material_textures() reports the miss
+// loudly instead of dying.
+static std::string resolve_texture_dir() {
+    if (const char* env = std::getenv("GIGA_TEXTURE_DIR")) {
+        if (*env != '\0' && std::filesystem::is_directory(env)) return env;
+    }
+    const std::filesystem::path candidates[] = {
+        "data/textures",
+        "../data/textures",
+        "../../data/textures",
+        "../../../data/textures"
+    };
+    for (const auto& p : candidates) {
+        if (std::filesystem::is_directory(p)) {
+            return p.string();
+        }
+    }
+    return GIGA_TEXTURE_DIR;
+}
 
 } // namespace
 
@@ -52,11 +81,9 @@ static_assert(kAlbedoMips == 12,
               "a different count means the pack changed and every level offset in "
               "data/textures/README.md with it");
 
-std::string join(const char* dir, const char* file) {
-    std::string s = dir;
-    if (!s.empty() && s.back() != '/') s += '/';
-    s += file;
-    return s;
+std::string join(const std::string& a, const char* b) {
+    if (a.empty()) return b;
+    return a + "/" + b;
 }
 
 } // namespace
@@ -72,8 +99,8 @@ bool CubePass::init(VulkanDevice& dev, VkDescriptorSetLayout lightGridSetLayout)
 // CANNOT fail the pass: every failure leaves the procedural surface — the
 // renderer this project shipped for its whole life — and one loud line.
 void CubePass::load_material_textures() {
-    const char* dir = std::getenv("GIGA_TEXTURE_DIR");
-    if (dir == nullptr || *dir == '\0') dir = GIGA_TEXTURE_DIR;
+    const std::string dirStr = resolve_texture_dir();
+    const char* dir = dirStr.c_str();
 
     if (!albedo_.init(*dev_, kMatCount, kAlbedoDim, kAlbedoDim, kAlbedoMips, false)) {
         std::fprintf(stderr,
