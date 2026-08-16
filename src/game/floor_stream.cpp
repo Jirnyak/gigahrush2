@@ -271,7 +271,7 @@ void FloorStreamer::embody_crowd(Registry& ecs, NpcPool& pool, const World& worl
             pool.max_hp(fallbackId) = 100;
             pool.cx(fallbackId) = 64;
             pool.cy(fallbackId) = 64;
-            pool.cz(fallbackId) = 64;
+            pool.cz(fallbackId) = 4;
             Entity e = embody_as_player(ecs, pool, fallbackId, layer);
             place_body_safely(ecs, world, e);
             fm.bodies.push_back(e);

@@ -856,9 +856,9 @@ LoadTravel travel_to_saved_floor(LevelStack& stack, FloorRegistry& reg, Registry
 
 void macro_cell_of(const vec3& pos, std::uint8_t& cx, std::uint8_t& cy,
                    std::uint8_t& cz) {
-    cx = static_cast<std::uint8_t>(wrap_macro(static_cast<int>(pos.x / kCellSize)));
-    cy = static_cast<std::uint8_t>(wrap_macro(static_cast<int>(pos.y / kCellSize)));
-    cz = static_cast<std::uint8_t>(wrap_macro(static_cast<int>(pos.z / kCellSize)));
+    cx = static_cast<std::uint8_t>(wrap_macro_x(static_cast<int>(pos.x / kCellSize)));
+    cy = static_cast<std::uint8_t>(wrap_macro_y(static_cast<int>(pos.y / kCellSize)));
+    cz = static_cast<std::uint8_t>(clamp_macro_z(static_cast<int>(pos.z / kCellSize)));
 }
 
 vec3 macro_cell_centre(std::uint8_t cx, std::uint8_t cy, std::uint8_t cz) {
@@ -882,9 +882,14 @@ vec3 half_extents_of(Registry& reg, Entity e) {
 // Coordinates are raw (possibly out of range) cell indices; both axes wrap.
 void probe_cell(const World& world, const vec3& half, int cx, int cy, int cz,
                 bool& fits, bool& supported) {
-    const vec3 c = macro_cell_centre(static_cast<std::uint8_t>(wrap_macro(cx)),
-                                     static_cast<std::uint8_t>(wrap_macro(cy)),
-                                     static_cast<std::uint8_t>(wrap_macro(cz)));
+    if (cz < 0 || cz >= kMacroDimZ) {
+        fits = false;
+        supported = false;
+        return;
+    }
+    const vec3 c = macro_cell_centre(static_cast<std::uint8_t>(wrap_macro_x(cx)),
+                                     static_cast<std::uint8_t>(wrap_macro_y(cy)),
+                                     static_cast<std::uint8_t>(cz));
     fits = !aabb_overlaps_solid(world, c, half);
     supported = false;
     if (!fits) return;
@@ -953,6 +958,8 @@ PlacedCell find_standable_cell(const World& world, const vec3& half, std::uint8_
     };
 
     for (int dz = -radius; dz <= radius; ++dz) {
+        const int targetCz = static_cast<int>(cz) + dz;
+        if (targetCz < 0 || targetCz >= kMacroDimZ) continue;
         const int adz = dz < 0 ? -dz : dz;
         for (int dy = -radius; dy <= radius; ++dy) {
             const int ady = dy < 0 ? -dy : dy;
@@ -968,16 +975,16 @@ PlacedCell find_standable_cell(const World& world, const vec3& half, std::uint8_
                 // is what keeps the default 17^3 = 4,913-cell neighbourhood cheap: once
                 // a ring-1 cell is found, only ring-1 cells are ever probed again.
                 if (!couldSup && !couldFree) continue;
-                probe_cell(world, half, cx + dx, cy + dy, cz + dz, fits, supported);
+                probe_cell(world, half, static_cast<int>(cx) + dx, static_cast<int>(cy) + dy, targetCz, fits, supported);
                 if (!fits) continue;
                 if (!(supported ? couldSup : couldFree)) continue;
                 Best& b = best[supported ? 0 : 1];
                 b.ring = ring;
                 b.adz = adz;
                 b.planar = planar;
-                b.cx = static_cast<std::uint8_t>(wrap_macro(cx + dx));
-                b.cy = static_cast<std::uint8_t>(wrap_macro(cy + dy));
-                b.cz = static_cast<std::uint8_t>(wrap_macro(cz + dz));
+                b.cx = static_cast<std::uint8_t>(wrap_macro_x(static_cast<int>(cx) + dx));
+                b.cy = static_cast<std::uint8_t>(wrap_macro_y(static_cast<int>(cy) + dy));
+                b.cz = static_cast<std::uint8_t>(targetCz);
                 b.have = true;
             }
         }
@@ -1009,6 +1016,14 @@ PlacedCell place_body_at_cell(Registry& reg, const World& world, Entity body,
     if (!tr) return out;   // not an embodied body; there is nothing to place
 
     out = find_standable_cell(world, half_extents_of(reg, body), cx, cy, cz, radius);
+    if (!out.ok) {
+        // Fallback: search wider from the floor ground level (cz = 2)
+        out = find_standable_cell(world, half_extents_of(reg, body), cx, cy, 2, kPlaceRadiusMax);
+        if (!out.ok) {
+            // Absolute fallback: probe central sector hub
+            out = find_standable_cell(world, half_extents_of(reg, body), 64, 64, 2, kPlaceRadiusMax);
+        }
+    }
     // SHOTLOG: headless --shot harnesses cannot see a soft-lock; emit when the
     // requested cell was solid (relocated) or nothing nearby fits (refused).
     // Quiet on the common path (ok && !moved) so interactive play stays clean.

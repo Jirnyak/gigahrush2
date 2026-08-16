@@ -100,7 +100,7 @@ NpcId seed_floor_from_spec(NpcPool& pool, int floor, const FloorSpec& spec,
         pool.cx(id) = static_cast<std::uint8_t>(rx * kRoomStride + ox);
         pool.cy(id) = static_cast<std::uint8_t>(ry * kRoomStride + oy);
         pool.cz(id) = static_cast<std::uint8_t>(hash_u32(r ^ 0x51ED270Bu) %
-                                                static_cast<std::uint32_t>(kMacroDim));
+                                                static_cast<std::uint32_t>(kMacroDimZ));
 
         // The label is signed end to end: `floor` is an int (FloorRegistry's range is
         // kMinFloor -127 .. kMaxFloor +127) and the column is std::int16_t, so a

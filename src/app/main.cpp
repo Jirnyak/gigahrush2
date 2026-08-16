@@ -523,7 +523,7 @@ float samosbor_fog_scale(const game::SamosborState& st) {
 void aim_player(Registry& reg, Entity player) {
     auto& cam = reg.get<CameraTag>(player);
     cam.yaw = 0.8f;
-    cam.pitch = -0.5f;
+    cam.pitch = -0.10f;
     reg.get<Controller>(player).fly = true;
 }
 
@@ -1769,6 +1769,12 @@ int main(int argc, char** argv) {
                 auto& cam = reg.get<CameraTag>(player);
                 cam.yaw = customYaw;
                 cam.pitch = customPitch;
+            }
+            {
+                const auto& tr = reg.get<Transform>(player);
+                const auto& cam = reg.get<CameraTag>(player);
+                std::fprintf(stderr, "[player-spawn] pos=(%.2f, %.2f, %.2f) eyeOffset=(%.2f, %.2f, %.2f) yaw=%.2f pitch=%.2f\n",
+                             tr.pos.x, tr.pos.y, tr.pos.z, cam.eyeOffset.x, cam.eyeOffset.y, cam.eyeOffset.z, cam.yaw, cam.pitch);
             }
             LayerId l0 = reg.get<Transform>(player).layer;
             refresh_floor_mobs(reg, stack.layer(l0), 0, l0);

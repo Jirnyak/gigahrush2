@@ -132,6 +132,7 @@ vec3 sub_stain(uint ci, ivec3 s) {
 // Solidity of one sub-voxel by GLOBAL (unwrapped) sub coordinates — the AO taps.
 bool sub_solid_global(ivec3 g) {
     ivec3 c = ivec3(floor(vec3(g) / 8.0));
+    if (c.z < 0 || c.z >= kMacroDimZ) return false;
     uint ci = cell_index(c);
     uint cls = cell_class(ci);
     if (cls == 0u) return false;
@@ -210,28 +211,30 @@ Hit march(vec3 ro, vec3 rd, float tCap) {
 
     // 64-cell fog radius; sqrt(3) diagonal and slack bound the loop.
     for (int i = 0; i < 224; ++i) {
-        uint ci = cell_index(c);
-        uint cls = cell_class(ci);
-        if (cls != 0u) {
-            float tExit = min(min(tMax.x, tMax.y), tMax.z);
-            if (cls == 1u) {
-                // Fully solid: the entry face is the hit — no bit tests.
-                vec3 q = ro + rd * (t + 1e-4);
-                ivec3 s = clamp(ivec3(floor((q - vec3(c) * kCell) / kVoxel)),
-                                ivec3(0), ivec3(7));
-                h.t = t;
-                h.n = vec3(0.0);
-                if (axis >= 0) h.n[axis] = -float(stp[axis]);
-                else h.n = -rd;
-                h.mat = sub_mat(ci, s);
-                h.ci = ci;
-                h.sub = s;
-                h.ok = true;
-                return h;
+        if (c.z >= 0 && c.z < kMacroDimZ) {
+            uint ci = cell_index(c);
+            uint cls = cell_class(ci);
+            if (cls != 0u) {
+                float tExit = min(min(tMax.x, tMax.y), tMax.z);
+                if (cls == 1u) {
+                    // Fully solid: the entry face is the hit — no bit tests.
+                    vec3 q = ro + rd * (t + 1e-4);
+                    ivec3 s = clamp(ivec3(floor((q - vec3(c) * kCell) / kVoxel)),
+                                    ivec3(0), ivec3(7));
+                    h.t = t;
+                    h.n = vec3(0.0);
+                    if (axis >= 0) h.n[axis] = -float(stp[axis]);
+                    else h.n = -rd;
+                    h.mat = sub_mat(ci, s);
+                    h.ci = ci;
+                    h.sub = s;
+                    h.ok = true;
+                    return h;
+                }
+                if (march_cell(ci, ro, rd, rinv, stp, vec3(c) * kCell, t,
+                               min(tExit, tCap), axis, h))
+                    return h;
             }
-            if (march_cell(ci, ro, rd, rinv, stp, vec3(c) * kCell, t,
-                           min(tExit, tCap), axis, h))
-                return h;
         }
         axis = tMax.x < tMax.y ? (tMax.x < tMax.z ? 0 : 2)
                                : (tMax.y < tMax.z ? 1 : 2);
