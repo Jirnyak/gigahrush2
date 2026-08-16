@@ -39,6 +39,8 @@ enum class UiSound : std::uint8_t {
     Count
 };
 
+inline constexpr int kCombDelaySamples = 768; // ~16 ms reflection delay at 48 kHz
+
 struct SpatialVoice {
     vec3 pos{0.0f, 0.0f, 0.0f};
     float gain = 1.0f;
@@ -56,6 +58,9 @@ struct SpatialVoice {
     float currentGainL = 1.0f;
     float currentGainR = 1.0f;
     float currentCutoff = 20000.0f;
+    float shaftReverb = 0.0f;
+    float combBuf[kCombDelaySamples]{};
+    int combIdx = 0;
 };
 
 struct AudioConfig {

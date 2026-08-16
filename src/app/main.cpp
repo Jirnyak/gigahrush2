@@ -78,6 +78,7 @@
 #include "game/save.h"
 #include "game/faction_relations.h"
 #include "game/loot.h"
+#include "app/hud_overlay.h"
 #include "game/weapon_table.h"
 #include "game/event_bus.h"
 #include "game/floors/padic/padic.h"
@@ -5049,6 +5050,20 @@ int main(int argc, char** argv) {
         hud.begin_frame();
         if (showHud)
         {
+            ImDrawList* bgList = ImGui::GetBackgroundDrawList();
+            const float screenW = static_cast<float>(renderer.swap().extent.width);
+            const float screenH = static_cast<float>(renderer.swap().extent.height);
+            const float timeSec = static_cast<float>(simTick) / 125.0f;
+            const bool isSamosborActive = (samosbor.phase == static_cast<std::uint8_t>(game::SamosborPhase::Active) ||
+                                           samosbor.phase == static_cast<std::uint8_t>(game::SamosborPhase::Warning));
+            const float samosborProgress = samosbor.phaseTotalMs > 0
+                ? (1.0f - static_cast<float>(samosbor.phaseMs) / static_cast<float>(samosbor.phaseTotalMs))
+                : 0.0f;
+            draw_soviet_crt_hud_brackets(bgList, screenW, screenH, timeSec,
+                                         isSamosborActive, samosborProgress);
+            GasMaskFeedbackState maskFeedback = query_gas_mask_feedback(reg, pool, player);
+            draw_gas_mask_hud_overlay(bgList, screenW, screenH, timeSec, maskFeedback);
+
             ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
             ImGui::Begin("gigahrush2");
             ImGui::Text("%.1f FPS (%.2f ms)", frameDt > 0 ? 1.0f / frameDt : 0.0f,
