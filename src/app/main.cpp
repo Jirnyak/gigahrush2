@@ -96,6 +96,7 @@
 
 #include "render/gpu_cull_pass.h"
 #include "render/imgui_layer.h"
+#include "render/inventory_ui.h"
 #include "render/vk_device.h"
 #include "render/vk_renderer.h"
 #include "render/vk_swapchain.h"
@@ -2234,6 +2235,10 @@ int main(int argc, char** argv) {
     game::ConsoleContext consoleCtx;
     bool showConsole = false;
     bool consoleFocus = false;
+    // Инвентарная сетка ([inventory.md]): UI-состояние здесь, игровые данные —
+    // только по указателям в момент отрисовки. Заявка применяется НИЖЕ по
+    // кадру, на существующих примитивах.
+    InvUiState invUi;
     char consoleInput[256] = {};
     std::vector<std::string> consoleLog;
     std::vector<std::string> consoleHistory;
@@ -2676,7 +2681,12 @@ int main(int argc, char** argv) {
                     save_binds();
                     input.set_move_binds(game::keybind_move_binds(binds));
                 } else {
-                    const bool typing = ImGui::GetIO().WantTextInput;
+                    // Открытая сетка владеет клавишами так же, как текстовый
+                    // ввод: обычные бинды молчат (E внутри инвентаря — это
+                    // «экипировать», а не глобальный interact), kBindTyping
+                    // пробиваются, чтобы закрыть то, что открыли.
+                    const bool typing =
+                        ImGui::GetIO().WantTextInput || invUi.open;
                     const game::KeyBind* kb = binds.find_scancode(
                         static_cast<std::uint16_t>(e.key.scancode));
                     // Plain rows fire only in live play; kBindAlways rows (menu,
@@ -2694,8 +2704,10 @@ int main(int argc, char** argv) {
             // While the pause menu is up, ignore all look/move input: ImGui owns
             // the cursor and the game is frozen.
             if (!paused) {
+                // Клик по открытой сетке — выбор клетки, не замах: пока
+                // инвентарь владеет курсором, мышь до боя не доходит.
                 if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
-                    e.button.button == SDL_BUTTON_LEFT) {
+                    e.button.button == SDL_BUTTON_LEFT && !invUi.open) {
                     attackHeld = true;
                 } else if (e.type == SDL_EVENT_MOUSE_BUTTON_UP &&
                            e.button.button == SDL_BUTTON_LEFT) {
@@ -2757,6 +2769,14 @@ int main(int argc, char** argv) {
                 const bool on = !input.mouselook();
                 input.set_mouselook(on);
                 SDL_SetWindowRelativeMouseMode(window, on);
+            }
+            if (has(ConsoleRequest::Inventory)) {
+                // Открытие освобождает курсор для клеток; закрытие возвращает
+                // mouselook — сетка, в отличие от консоли, открывается по сто
+                // раз за ран, и «верни взгляд руками» стало бы налогом.
+                invUi.open = !invUi.open;
+                input.set_mouselook(!invUi.open);
+                SDL_SetWindowRelativeMouseMode(window, !invUi.open);
             }
             // Floor travel (#8/#9): streams the destination in on demand and
             // folds the departed floor's crowd back into the cold pool, so only
@@ -2887,8 +2907,9 @@ int main(int argc, char** argv) {
                                  static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f));
                 // While the console input line owns the keyboard, WASD is text,
                 // not movement: skip the bridge and park the intent so the body
-                // does not glide on the last pre-console wishDir.
-                if (showConsole && ImGui::GetIO().WantTextInput) {
+                // does not glide on the last pre-console wishDir. The open
+                // inventory grid owns the keys the same way ([inventory.md]).
+                if ((showConsole && ImGui::GetIO().WantTextInput) || invUi.open) {
                     if (reg.valid(player))
                         if (auto* c = reg.try_get<Controller>(player))
                             c->wishDir = vec3{0, 0, 0};
@@ -5431,6 +5452,78 @@ int main(int argc, char** argv) {
             DrawConsoleUI(&showConsole, &consoleFocus, consoleInput,
                           sizeof consoleInput, console, consoleCtx, consoleLog,
                           consoleHistory, consoleHistPos);
+        }
+
+        // ── Инвентарная сетка ([inventory.md]) ─────────────────────────
+        // Виджет ЧИТАЕТ и возвращает заявку; применяем её здесь же, на тех же
+        // примитивах, что консоль и ИИ ([equip.h]) — третьего пути к Equipped
+        // не появляется.
+        if (invUi.open && reg.valid(player)) {
+            if (const auto* nrInv = reg.try_get<game::NpcRef>(player);
+                nrInv && pool.valid(nrInv->id)) {
+                game::Inventory& pinv = pool.inventory(nrInv->id);
+                game::Equipped& peq =
+                    reg.get_or_emplace<game::Equipped>(player);
+                InvUiPolicy policy{};  // self-режим: см. [inventory.md]
+                policy.allowUse = false;  // послотовый Use придёт с примитивом
+                const InvUiRequest r = inventory_ui_draw(
+                    invUi, policy, pinv, &peq,
+                    game::inventory_mass_g(pinv));
+                switch (r.kind) {
+                    case InvUiRequest::Kind::Equip:
+                        if (game::equip_item(pinv, peq, r.slot))
+                            game::sync_armour(reg, pool, player);
+                        break;
+                    case InvUiRequest::Kind::Unequip:
+                        game::unequip_slot(peq, r.eqSlot);
+                        game::sync_armour(reg, pool, player);
+                        break;
+                    case InvUiRequest::Kind::Drop: {
+                        game::ItemSlot& s = pinv.slots[r.slot];
+                        if (s.item != game::kInvalidItem && s.count > 0) {
+                            // Один предмет из стека — на пол, с его износом
+                            // ([loot.h] Pickup.condition). Тот же спавн, что
+                            // у разлива трупа: Transform/AABB/Mass, физика
+                            // общая.
+                            const vec3 at = reg.get<Transform>(player).pos;
+                            Entity pe = reg.create();
+                            Transform ptr2;
+                            ptr2.pos = vec3{at.x, at.y, at.z};
+                            ptr2.layer = activeLayer;
+                            reg.emplace<Transform>(pe, ptr2);
+                            reg.emplace<Velocity>(pe);
+                            reg.emplace<AABB>(pe, AABB{vec3{0.15f, 0.15f, 0.15f}});
+                            reg.emplace<GravityAffected>(pe, GravityAffected{1.0f, false});
+                            reg.emplace<Renderable>(pe,
+                                Renderable{vec3{0.55f, 0.75f, 0.45f}});
+                            game::Pickup pk;
+                            pk.item = s.item;
+                            pk.count = 1;
+                            pk.condition = s.condition;
+                            reg.emplace<game::Pickup>(pe, pk);
+                            reg.emplace<Mass>(pe,
+                                Mass{static_cast<float>(
+                                         game::item_def(s.item).massG) *
+                                     0.001f});
+                            reg.emplace<game::Interactable>(
+                                pe, game::Interactable{
+                                        game::Interactable::Kind::Loot,
+                                        game::kPickupReach, true});
+                            if (--s.count == 0) s = game::ItemSlot{};
+                            // Решение могло протухнуть вместе со слотом —
+                            // строгое чтение это увидит; броню пересинхронизи-
+                            // ровать надо сейчас.
+                            game::sync_armour(reg, pool, player);
+                        }
+                        break;
+                    }
+                    default:
+                        // Use — послотовое использование придёт со своим
+                        // примитивом; политика self-режима его пока не
+                        // предлагает ([inventory_ui.h]).
+                        break;
+                }
+            }
         }
 
         // DRAINED UNCONDITIONALLY, outside the console overlay.

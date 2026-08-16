@@ -133,6 +133,12 @@ inline const ItemDef& item_def(ItemId id) {
 inline const char* item_name(ItemId id) {
     return kItemNames[static_cast<std::size_t>(id) - 1];
 }
+// Authored flavour text (desc_ru), one per row by generator law — the
+// inventory card's line ([inventory.md]); nothing in the sim reads it.
+extern const std::array<const char*, kItemCount> kItemDescs;
+inline const char* item_desc(ItemId id) {
+    return kItemDescs[static_cast<std::size_t>(id) - 1];
+}
 
 // THE transfer primitive (problems.md §39): every path that puts items INTO an
 // 8x8 grid — pickup, container take, quest reward — so the stack law lives

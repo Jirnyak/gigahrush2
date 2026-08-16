@@ -154,7 +154,7 @@ def main():
             "EXPECTED_ROWS here AND kItemCount in item_table.h"
             % (EXPECTED_ROWS, len(rows)))
 
-    seen, out, names = set(), [], []
+    seen, out, names, descs = set(), [], [], []
     used_cat, used_use = set(), set()
     resolved = []
     for i, r in enumerate(rows):
@@ -193,6 +193,12 @@ def main():
                # durability: USES until ruined; empty column = 0 = never wears.
                num(r, "durability", i, 0, 65535)))
         names.append("    %s," % cpp_string(r["name_ru"].strip()))
+        # Authored flavour text — all 442 rows carry one. The inventory card
+        # ([inventory.md]) is its consumer; an empty cell would be a CSV defect.
+        d = (r.get("desc_ru") or "").strip()
+        if not d:
+            die("row %d (%s) has no desc_ru" % (i, r["id"]))
+        descs.append("    %s," % cpp_string(d))
 
     # THE MASS SUMMARY, printed every run. A number nobody can see is a number
     # nobody can argue with: this is what lets the owner spot "справка весит 2 кг"
@@ -227,6 +233,9 @@ def main():
         fh.write("\n}};\n\n")
         fh.write("const std::array<const char*, kItemCount> kItemNames = {{\n")
         fh.write("\n".join(names))
+        fh.write("\n}};\n\n")
+        fh.write("const std::array<const char*, kItemCount> kItemDescs = {{\n")
+        fh.write("\n".join(descs))
         fh.write("\n}};\n\n")
         fh.write(FOOTER)
 

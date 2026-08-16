@@ -964,14 +964,17 @@ static void test_craft_all() {
             const ItemDef& d = item_def(id);
             const bool wearable =
                 d.equipSlot != static_cast<std::uint8_t>(EquipSlot::None);
-            if (eternal == kInvalidItem && wearable && d.durability == 0)
+            // item_durability, NOT the raw column: melee rows carry their own
+            // authored lifetime and the resolver is the law ([equip.h]).
+            const std::uint16_t dur = item_durability(id);
+            if (eternal == kInvalidItem && wearable && dur == 0)
                 eternal = id;
-            if (oneUse == kInvalidItem && wearable && d.durability == 1)
+            if (oneUse == kInvalidItem && wearable && dur == 1)
                 oneUse = id;
-            if (fracRow == kInvalidItem && wearable && d.durability > 1 &&
-                d.durability <= 255 && 255 % d.durability != 0)
+            if (fracRow == kInvalidItem && wearable && dur > 1 &&
+                dur <= 255 && 255 % dur != 0)
                 fracRow = id;
-            if (bigRow == kInvalidItem && wearable && d.durability > 255)
+            if (bigRow == kInvalidItem && wearable && dur > 255)
                 bigRow = id;
         }
         CHECK(eternal != kInvalidItem);
@@ -997,10 +1000,10 @@ static void test_craft_all() {
         CHECK(wear_out(oneUse) == 1);
         {   // Expectation law: uses-to-ruin tracks the column, both régimes.
             const int fu = wear_out(fracRow);
-            const int fd = static_cast<int>(item_def(fracRow).durability);
+            const int fd = static_cast<int>(item_durability(fracRow));
             CHECK(fu > 0 && fu >= fd / 2 && fu <= fd * 2);
             const int bu = wear_out(bigRow);
-            const int bd = static_cast<int>(item_def(bigRow).durability);
+            const int bd = static_cast<int>(item_durability(bigRow));
             CHECK(bu > 0 && bu >= bd / 2 && bu <= bd * 2);
         }
         // Ruined stays ruined: at condition 0 the roll is a refusal, not a wrap.

@@ -958,7 +958,12 @@ if(GIGA_BUILD_TESTS)
     # stacks (law 1), a freed slot's stale wear byte cannot infect a fresh give
     # (law 2), a full grid returns the remainder undeleted. Mutations RUN, see
     # the commit for measured reds.
-        PASS_REGULAR_EXPRESSION "game_test: 240298 checks, 0 failures")
+    # 240298 -> 240299 (+1) on 2026-08-16: the `inventory` keybind row (I ->
+    # inventory grid, [inventory.md]). The +1 is the cross-table weld in
+    # suite_keybind (every bind's command resolves via Console::find) running
+    # over one more row — the weld checking the new bind is exactly what it
+    # exists for.
+        PASS_REGULAR_EXPRESSION "game_test: 240299 checks, 0 failures")
 
 
 

@@ -1,6 +1,7 @@
 #include "game/equip.h"
 
-#include "core/rng.h"  // hash_u32, rand_below — the wear roll
+#include "core/rng.h"          // hash_u32, rand_below — the wear roll
+#include "game/weapon_table.h" // melee_for_item — the melee durability source
 
 namespace giga::game {
 
@@ -55,12 +56,20 @@ ItemId equipped_item(const Inventory& inv, const Equipped& eq, EquipSlot slot) {
     return idx >= 0 ? inv.slots[idx].item : kInvalidItem;
 }
 
+std::uint16_t item_durability(ItemId id) {
+    // Melee rows carry their own authored lifetime ([weapon_table.h]
+    // durability, weapons_melee.csv); everything else reads the items.csv
+    // column. ONE resolver by law — see the header.
+    if (const MeleeDef* m = melee_for_item(id)) return m->durability;
+    return item_def(id).durability;
+}
+
 bool wear_equipped(Inventory& inv, const Equipped& eq, EquipSlot slot,
                    std::uint32_t seed) {
     const int idx = equipped_index(inv, eq, slot);
     if (idx < 0) return false;
     ItemSlot& s = inv.slots[idx];
-    const std::uint16_t dur = item_def(s.item).durability;
+    const std::uint16_t dur = item_durability(s.item);
     if (dur == 0) return false;          // вечный — контентное решение строки
     if (s.condition == 0) return false;  // руины дальше не изнашиваются
 

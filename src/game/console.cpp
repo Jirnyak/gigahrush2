@@ -339,6 +339,7 @@ constexpr RequestRow kRequestRows[] = {
     {"resupply", "buy the resupply package", ConsoleRequest::Resupply},
     {"craft", "toggle the crafting window", ConsoleRequest::Craft},
     {"scrap", "scrap the cheapest junk carried", ConsoleRequest::Scrap},
+    {"inventory", "toggle the inventory grid", ConsoleRequest::Inventory},
     // ATTR1 bits are set by cmd_attr (multi-word), not bare request rows.
 };
 
