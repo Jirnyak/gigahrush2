@@ -213,7 +213,9 @@ std::int32_t vendor_sell_all(Inventory& inv, RunLedger& led, VendorKind who) {
 
         got += static_cast<std::int32_t>(n) * unit;
         s.count = static_cast<std::uint16_t>(s.count - n);
-        if (s.count == 0) s.item = kInvalidItem;
+        // Слот освобождается ЦЕЛИКОМ: остаток condition от проданного
+        // «заражал» бы следующий предмет ([inventory.h] law 2).
+        if (s.count == 0) s = ItemSlot{};
     }
     // Straight into banked, not into a wallet: there is no cash/account split here and
     // inventing one would give value two homes.

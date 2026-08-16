@@ -214,8 +214,12 @@ vec3 muzzle_point(const vec3& from, const vec3& unitDir, const vec3& sourcePos) 
         const float exit = -b + std::sqrt(disc);
         if (exit > t) t = exit;
     }
-    return vec3{from.x + unitDir.x * t, from.y + unitDir.y * t,
-                from.z + unitDir.z * t};
+    // Завёрнутая точка: дельта выше уже считана через wrap, а сырой from+dir*t
+    // один кадр жил вне [0, kWorldExtent) и в таком виде попадал в Transform
+    // и хит-тесты (аудит c5eaaa50). wrapf — тот же, что у интегратора.
+    return vec3{wrapf(from.x + unitDir.x * t, kWorldExtent),
+                wrapf(from.y + unitDir.y * t, kWorldExtent),
+                wrapf(from.z + unitDir.z * t, kWorldExtent)};
 }
 
 // Percentage mitigation, clamped. A negative resist is a vulnerability, which is
@@ -2210,9 +2214,11 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
                 const float t = reach * (static_cast<float>(i) / kSteps);
                 const vec3 p{eye.x + fwd.x * t, eye.y + fwd.y * t,
                              eye.z + fwd.z * t};
-                const int cx = wrap_macro(static_cast<int>(p.x / kCellSize));
-                const int cy = wrap_macro(static_cast<int>(p.y / kCellSize));
-                const int cz = wrap_macro(static_cast<int>(p.z / kCellSize));
+                // floor, не усечение: p ∈ (-2,0) обязан дать клетку 127,
+                // не 0 — торовый шов класса hazard/finalize (аудит c5eaaa50).
+                const int cx = wrap_macro(static_cast<int>(std::floor(p.x / kCellSize)));
+                const int cy = wrap_macro(static_cast<int>(std::floor(p.y / kCellSize)));
+                const int cz = wrap_macro(static_cast<int>(std::floor(p.z / kCellSize)));
                 if (grid->cell(cx, cy, cz) != kCellAir) {
                     hitWall = true;
                     hitAt = p;

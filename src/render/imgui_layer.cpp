@@ -129,17 +129,39 @@ bool ImGuiLayer::init(VulkanDevice& dev, SDL_Window* window,
     // is worse than one in ASCII, but neither is worth failing to boot over, and
     // ImGui falls back on its own if AddFontFromFileTTF returns null.
     {
-        static const ImWchar* cyr = io.Fonts->GetGlyphRangesCyrillic();
+        // Диапазоны через builder, не голый GetGlyphRangesCyrillic: тот не
+        // покрывает General Punctuation — em-dash «—» в заставке рендерился
+        // «?» (живой дефект, пойман скрин-пробой). Плюс № (0x2116) и стрелки.
+        ImFontGlyphRangesBuilder builder;
+        builder.AddRanges(io.Fonts->GetGlyphRangesDefault());
+        builder.AddRanges(io.Fonts->GetGlyphRangesCyrillic());
+        static const ImWchar kExtraRanges[] = {
+            0x2000, 0x206F, // General Punctuation (— – «» … •)
+            0x2100, 0x214F, // Letterlike Symbols (№)
+            0x2DE0, 0x2DFF, // Cyrillic Extended-A
+            0xA640, 0xA69F, // Cyrillic Extended-B
+            0
+        };
+        builder.AddRanges(kExtraRanges);
+        builder.AddText("—–«»„“”№…•→←↑↓");
+        static ImVector<ImWchar> glyphRanges;
+        glyphRanges.clear();
+        builder.BuildRanges(&glyphRanges);
         const char* candidates[] = {
             "C:/Windows/Fonts/consola.ttf",  // monospace suits a debug readout
             "C:/Windows/Fonts/tahoma.ttf",
             "C:/Windows/Fonts/segoeui.ttf",
             "/System/Library/Fonts/Menlo.ttc",          // macOS
             "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
-        };
+                    "C:/Windows/Fonts/arial.ttf",
+            "/Library/Fonts/Arial Unicode.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+            "/usr/share/fonts/liberation/LiberationMono-Regular.ttf",
+};
         for (const char* path : candidates) {
             if (std::filesystem::exists(path)) {
-                if (io.Fonts->AddFontFromFileTTF(path, 15.0f, nullptr, cyr)) break;
+                if (io.Fonts->AddFontFromFileTTF(path, 15.0f, nullptr, glyphRanges.Data)) break;
             }
         }
     }

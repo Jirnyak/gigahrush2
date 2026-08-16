@@ -36,7 +36,7 @@ constexpr std::int32_t kDescendPayPerBand = 900;
 Contract contract_offer(const NpcPool& pool, NpcId giver, int floorZ,
                         std::uint32_t seed) {
     Contract c;
-    NpcPool& p = const_cast<NpcPool&>(pool);
+    const NpcPool& p = pool;  // valid()/alive() давно const — const_cast был мусором
     if (!p.valid(giver) || !p.alive(giver)) return c;
 
     // Deterministic in (giver, floor): the same person always offers the same job, so

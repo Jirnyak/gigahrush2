@@ -456,7 +456,9 @@ float diffusion_at(const World& world, int x, int y, int z, const std::string& f
     // The one const_cast. FieldRegistry::find is non-const only because it hands back a
     // mutable Field; nothing on this path writes one. [sim/fluid.cpp] does the same.
     const Field<float>* f = const_cast<World&>(world).fields().find<float>(field);
-    return f ? f->at(x, y, z) : 0.0f;
+    // Обёрнутые координаты: незавёрнутый вызов с клеткой за периодом читал
+    // мимо поля (фикс из аудита форка, переписан на наш единый wrap_macro).
+    return f ? f->at(wrap_macro(x), wrap_macro(y), wrap_macro(z)) : 0.0f;
 }
 
 float diffusion_driver_add(DiffusionDriver& driver, World& world, int x, int y, int z,

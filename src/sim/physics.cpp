@@ -93,21 +93,42 @@ namespace {
 // axis is selected by `comp` (0=x,1=y,2=z). Returns true if a collision on this
 // axis stopped the motion (used to zero the matching velocity component).
 bool sweep_axis(const World& w, vec3& pos, vec3 half, int comp, float delta) {
+    if (delta == 0.0f) return false;
     float* p = (comp == 0) ? &pos.x : (comp == 1) ? &pos.y : &pos.z;
-    float old = *p;
-    *p = old + delta;
-    if (!aabb_overlaps_solid(w, pos, half)) return false;
+    const float old = *p;
+    const float dist = std::fabs(delta);
 
-    // Collided: binary-search back to the last non-overlapping position so the
-    // box rests flush against the sub-voxel surface.
-    float lo = 0.0f, hi = delta;
-    for (int i = 0; i < 12; ++i) {
-        float mid = 0.5f * (lo + hi);
-        *p = old + mid;
-        if (aabb_overlaps_solid(w, pos, half)) hi = mid; else lo = mid;
+    // СУБСЭМПЛИРОВАНИЕ (из аудита форка, e462579b): раньше проверялась только
+    // конечная точка — быстрый снаряд/рэгдолл проскакивал субвоксельную стену
+    // целиком за шаг. Теперь шаг ограничен kVoxelSize: вдоль оси проскочить
+    // нечего. Заодно бинарный поиск сужен до [t_prev, t_curr]: старый искал в
+    // [0, delta] и мог схлопнуться к ДАЛЬНЕМУ препятствию, пропустив ближнее.
+    // (Диагональные углы это не закрывает — оси по-прежнему раздельны; честный
+    // slab-sweep — отдельное решение, если угол когда-нибудь стрельнёт.)
+    const int numSteps = (dist <= kVoxelSize)
+        ? 1
+        : std::max(1, static_cast<int>(std::ceil(dist / kVoxelSize)));
+    const float stepDelta = delta / static_cast<float>(numSteps);
+
+    for (int step = 1; step <= numSteps; ++step) {
+        const float tCurr =
+            (step == numSteps) ? delta : (static_cast<float>(step) * stepDelta);
+        *p = old + tCurr;
+        if (aabb_overlaps_solid(w, pos, half)) {
+            // Collided: binary-search back to the last non-overlapping position
+            // so the box rests flush against the sub-voxel surface.
+            float lo = static_cast<float>(step - 1) * stepDelta, hi = tCurr;
+            for (int i = 0; i < 12; ++i) {
+                const float mid = 0.5f * (lo + hi);
+                *p = old + mid;
+                if (aabb_overlaps_solid(w, pos, half)) hi = mid; else lo = mid;
+            }
+            *p = old + lo;
+            return true;
+        }
     }
-    *p = old + lo;
-    return true;
+    *p = old + delta;
+    return false;
 }
 
 float axis_of(const vec3& v, int comp) {

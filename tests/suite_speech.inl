@@ -28,7 +28,9 @@ namespace speech_t {
 // AGENTS.md quotes per-file counts the same way for item_table.cpp (6,608) and
 // mob_table.cpp (644). If this fails after a CSV edit, re-measure; if it fails WITHOUT
 // one, the Cyrillic did not survive.
-constexpr int kExpectedCyrillicLeadBytes = 9196;
+// 9196 -> 9610 (+414) 2026-08-17: одиннадцать блатных строк WILD из фольклора
+// форка (двенадцатая — анти-торная агитка — в мусор по слову владельца §56).
+constexpr int kExpectedCyrillicLeadBytes = 9610;
 
 // One line pinned byte-for-byte: COMBAT x CULTISTS. Escaped rather than pasted, so the
 // literal is exactly 40 bytes of UTF-8 no matter what the compiler thinks the source
