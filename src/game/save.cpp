@@ -275,6 +275,13 @@ void visit_player(Ar& ar, P& p) {
     ar.u8(p.cx);
     ar.u8(p.cy);
     ar.u8(p.cz);
+    // v13: the player's equip decisions ride the snapshot ([save.h] eq).
+    // pad_ is written so the wire is exactly 4 and a future non-zero pad
+    // cannot silently drop — the same rule visit_rpg states.
+    ar.u8(p.eq.weapon);
+    ar.u8(p.eq.armor);
+    ar.u8(p.eq.tool);
+    ar.u8(p.eq.pad_);
 }
 
 // Version 7: RpgStats field-by-field. pad_ is written so the wire is exactly
@@ -436,11 +443,11 @@ static_assert(FastTravelState::wire_bytes() == kFastTravelWire);
 // 927 is ALSO the number v10 asserted before hpBank existed. Same integer, two
 // different formats (v10: nine craft axes, no hpBank; v12: eight axes, hpBank) —
 // the version field is what tells them apart, not this sum.
-static_assert(kSaveFixedWire == 878 + kSamosborWire + kFastTravelWire);  // 927 (v12: craft 9->8 axes)
-static_assert(kSaveFixedWire == 927);
+static_assert(kSaveFixedWire == 882 + kSamosborWire + kFastTravelWire);  // 931 (v13: +4 Equipped)
+static_assert(kSaveFixedWire == 931);
 static_assert(kFactionWire == 36);
-static_assert(save_bytes_for(0) == 1027);
-static_assert(save_bytes_for(0, 100, 50) == 1027 + 150);
+static_assert(save_bytes_for(0) == 1031);  // v13: +4 player Equipped cells
+static_assert(save_bytes_for(0, 100, 50) == 1031 + 150);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two

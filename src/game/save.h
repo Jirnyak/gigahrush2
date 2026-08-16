@@ -52,6 +52,7 @@
 #include "game/contract.h"    // ContractBook, Contract
 #include "game/extraction.h"  // RunLedger
 #include "game/faction_relations.h" // FactionRelations, kRelFactionCount
+#include "game/equip.h"       // Equipped — the player's recorded decisions
 #include "game/inventory.h"   // Inventory
 #include "game/npc_pool.h"    // Needs
 #include "game/quest.h"       // QuestLog, kQuestLogWire, quest_table_fingerprint
@@ -251,7 +252,8 @@ inline constexpr std::size_t kBookWire =
     static_cast<std::size_t>(kMaxContracts) * kContractWire + 4 + 4 + 8;
 inline constexpr std::size_t kNeedsWire = 37;        // 9 floats + seeded (v11: +hpBank)
 inline constexpr std::size_t kInventoryWire = static_cast<std::size_t>(kInvSlots) * 4;
-inline constexpr std::size_t kPlayerWire = kNeedsWire + kInventoryWire + 4 + 4 + 4 + 3;
+inline constexpr std::size_t kPlayerWire =
+    kNeedsWire + kInventoryWire + 4 + 4 + 4 + 3 + 4;  // +4: Equipped cells (v13)
 // Version 7: RpgStats wire — field-by-field LE, NOT sizeof (pad_ is written so the
 // footprint stays 12 and matches the POD layout without host padding surprises).
 inline constexpr std::size_t kRpgWire = 4 + 2 + 1 + 1 + 3 + 1;  // 12
@@ -454,6 +456,12 @@ struct PlayerSnapshot {
     std::uint8_t cy = 0;
     std::uint8_t cz = 0;
     std::uint8_t pad_ = 0;
+    // The player's equip DECISIONS ([equip.h]). Snapshotted because the player
+    // decides by HAND — losing the choice on F9 would make the load re-decide
+    // for them, which is exactly the auto-equip this tree refuses to have.
+    // NPC bodies deliberately do not save theirs: ai_equip_step re-decides
+    // within seconds, and a re-decision by the same scorer is the same choice.
+    Equipped eq{};
 };
 
 // One run, complete. Assembled by the caller, because every piece of it lives somewhere

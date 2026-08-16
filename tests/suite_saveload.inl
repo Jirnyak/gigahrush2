@@ -344,11 +344,11 @@ void wire_layout() {
     static_assert(kFastTravelWire == 32);
     // 927 repeats v10's total by coincidence, not compatibility: v10 had nine
     // craft axes and no hpBank, v12 has eight and hpBank. See [save.cpp].
-    static_assert(kSaveFixedWire == 927);
+    static_assert(kSaveFixedWire == 931);  // v13: +4 player Equipped cells
     static_assert(kFactionWire == 36);
-    static_assert(save_bytes_for(0) == 1027);
-    static_assert(save_bytes_for(3) == 1027 + 15);
-    static_assert(save_bytes_for(3, 100, 50) == 1027 + 15 + 150);
+    static_assert(save_bytes_for(0) == 1031);  // v13: +4 player Equipped
+    static_assert(save_bytes_for(3) == 1031 + 15);
+    static_assert(save_bytes_for(3, 100, 50) == 1031 + 15 + 150);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -363,8 +363,9 @@ void wire_layout() {
     // per-floor files ([save.h] modular layout), never here. v8 was 965; the
     // legacy-content purge re-measured this from 1007; v9 was 993; v10 adds the
     // samosbor clock (17) and the fast-travel unlock set (32); v11 adds the crowd
-    // heal bank `hpBank` (+4); v12 drops one craft axis (-4).
-    CHECK(bytes.size() == 1042);
+    // heal bank `hpBank` (+4); v12 drops one craft axis (-4); v13 adds the
+    // player's Equipped cells (+4).
+    CHECK(bytes.size() == 1046);
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');

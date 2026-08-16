@@ -2322,6 +2322,10 @@ int main(int argc, char** argv) {
         runState.player.inv = pool.inventory(nr->id);
         runState.player.hp = pool.hp(nr->id);
         runState.player.maxHp = pool.max_hp(nr->id);
+        // The equip DECISIONS ride the snapshot ([save.h] eq) — the player
+        // decided by hand, a load must not re-decide for them.
+        if (const auto* peqS = reg.try_get<game::Equipped>(player))
+            runState.player.eq = *peqS;
         // The SIGNED floor, explicitly: NpcPool::floor() is the seeding label
         // and LayerId is a recycled storage slot. [save.h]
         runState.player.floorNumber = currentFloor;
@@ -4523,6 +4527,11 @@ int main(int argc, char** argv) {
                             if (pid != game::kInvalidNpc) {
                                 game::apply_player_snapshot(pool, pid,
                                                             runState.player);
+                                // Decisions BEFORE the armour sync, or the sync
+                                // reads the fresh body's empty cells and strips
+                                // the vest the save says is worn. [save.h] eq
+                                reg.emplace_or_replace<game::Equipped>(
+                                    player, runState.player.eq);
                                 game::sync_armour(reg, pool, player);
                             }
                             // Version 7: stamp the sheet onto the body and the
