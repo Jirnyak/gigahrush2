@@ -37,7 +37,7 @@ inline constexpr const char* kGasField = "gas";
 inline constexpr float kFluidMinFlow = 1e-4f;
 
 struct FluidParams {
-    std::string field = kFluidField;  // name of the float field to simulate
+    const char* field = kFluidField;  // name of the float field to simulate
     float maxPerCell = 1.0f;          // a full cell of liquid
     float minFlow = kFluidMinFlow;    // ignore dribbles below this
     float viscosity = 0.25f;          // fraction of the excess that spreads per step

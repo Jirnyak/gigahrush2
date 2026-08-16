@@ -85,8 +85,9 @@ std::uint16_t status_move_mult_e3(const StatusSet& set) {
     for (std::size_t i = 0; i < kStatusCount; ++i) {
         if (set.remainMs[i] == 0) continue;
         const StatusDef& d = kStatusTable[i];
+        const std::uint32_t dur = (set.alt[i] != 0) ? d.altDurationMs : d.durationMs;
         const bool rooted =
-            d.rootMs != 0 && set.remainMs[i] > (d.durationMs - d.rootMs);
+            d.rootMs != 0 && set.remainMs[i] > (dur > d.rootMs ? dur - d.rootMs : 0u);
         acc = mul_e3(acc, rooted ? d.altMoveMultE3 : d.moveMultE3);
     }
     return acc;
@@ -121,7 +122,8 @@ bool status_is_rooted(const StatusSet& set) {
         const StatusDef& d = kStatusTable[i];
         // The root is the LEADING window, so it is active while the remaining time is
         // still above (duration - rootMs).
-        if (d.rootMs != 0 && set.remainMs[i] > (d.durationMs - d.rootMs)) return true;
+        const std::uint32_t dur = (set.alt[i] != 0) ? d.altDurationMs : d.durationMs;
+        if (d.rootMs != 0 && set.remainMs[i] > (dur > d.rootMs ? dur - d.rootMs : 0u)) return true;
     }
     return false;
 }

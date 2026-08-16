@@ -6103,12 +6103,12 @@ int main(int argc, char** argv) {
                         vec4{tr.pos.x, tr.pos.y, tr.pos.z, 0.9f});
                     if (pushBodies.size() >= gpu::kMaxPushBodies) break;
                 }
-                wirePass.upload_bodies(pushBodies.data(),
-                                       static_cast<std::uint32_t>(
-                                           pushBodies.size()));
-                clothPass.upload_bodies(pushBodies.data(),
-                                        static_cast<std::uint32_t>(
-                                            pushBodies.size()));
+                wirePass.upload_bodies(
+                    pushBodies.data(),
+                    static_cast<std::uint32_t>(pushBodies.size()));
+                clothPass.upload_bodies(
+                    pushBodies.data(),
+                    static_cast<std::uint32_t>(pushBodies.size()));
             }
 
             // Wire verlet: aliveness from the LIVE grid (anchor probe), then

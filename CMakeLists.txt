@@ -963,7 +963,11 @@ if(GIGA_BUILD_TESTS)
     # suite_keybind (every bind's command resolves via Console::find) running
     # over one more row — the weld checking the new bind is exactly what it
     # exists for.
-        PASS_REGULAR_EXPRESSION "game_test: 240299 checks, 0 failures")
+    # 240299 -> 240300 (+1) on 2026-08-16: ad5f6d0d's suite_doors fix rides the
+    # adapted pick — the silent `if (built == 0) return;` early-out (a test
+    # that could pass by testing nothing) becomes CHECK(built > 0). One of the
+    # fork's verified-good Problem 36 pieces.
+        PASS_REGULAR_EXPRESSION "game_test: 240300 checks, 0 failures")
 
 
 
