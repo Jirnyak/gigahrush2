@@ -127,7 +127,6 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
                                const game::Equipped* eq,
                                std::uint32_t carriedG) {
     InvUiRequest req;
-    if (!st.open) return req;
 
     // Курсор — крестовиной, по торусу клеток НЕ заворачиваем: край сетки это
     // край, у 8x8 нет топологии мира.

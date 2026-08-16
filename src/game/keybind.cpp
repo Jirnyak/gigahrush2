@@ -117,7 +117,7 @@ bool keybind_register_defaults(KeybindTable& t) {
     // L for lift. The shaft menu offers the SAME three transitions the two rows
     // above already are, plus fast travel — it adds a place to choose, not a
     // mechanism ([fast_travel.h]). `[` and `]` keep working from anywhere.
-    ok &= t.add({"elevator", "elevator", scan::kL, 0});
+    ok &= t.add({"elevator", "elevator", scan::kL, static_cast<std::uint8_t>(kBindTyping)});
     // Survival + interaction one-shots.
     ok &= t.add({"heal", "heal", scan::kH, 0});
     ok &= t.add({"eat", "eat", scan::kG, 0});
@@ -131,9 +131,12 @@ bool keybind_register_defaults(KeybindTable& t) {
     ok &= t.add({"grenade", "grenade", scan::kZ, 0});
     // Economy + crafting.
     ok &= t.add({"sell", "sell", scan::kB, 0});
-    ok &= t.add({"vendor", "vendor", scan::kV, 0});
+    // kBindTyping у оконных тумблеров: открытое окно глушит обычные бинды
+    // ([main.cpp] typing-гейт), а СВОЯ клавиша обязана пробиться и закрыть
+    // то, что открыла — тот же приём, что console и inventory.
+    ok &= t.add({"vendor", "vendor", scan::kV, static_cast<std::uint8_t>(kBindTyping)});
     ok &= t.add({"resupply", "resupply", scan::kR, 0});
-    ok &= t.add({"craft", "craft", scan::kC, 0});
+    ok &= t.add({"craft", "craft", scan::kC, static_cast<std::uint8_t>(kBindTyping)});
     ok &= t.add({"scrap", "scrap", scan::kX, 0});
     // ATTR1: spend one unspent attribute point (console `attr str|agi|int`).
     ok &= t.add({"attr_str", "attr str", scan::k1, 0});

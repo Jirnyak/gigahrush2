@@ -97,6 +97,7 @@
 #include "render/gpu_light_grid.h"
 
 #include "render/gpu_cull_pass.h"
+#include "app/ui_shell.h"
 #include "render/imgui_layer.h"
 #include "render/inventory_ui.h"
 #include "render/vk_device.h"
@@ -2029,7 +2030,6 @@ int main(int argc, char** argv) {
     SDL_SetWindowRelativeMouseMode(window, true);
 
     bool running = true;
-    bool paused = false; // Esc pause menu: freezes the sim + frees the cursor
     float simAccum = 0.0f;
     // Monotonic sim-time (seconds), advanced one kSimDt per fixed step. The AI
     // re-plan stagger ([ai.md] #12c) schedules each agent's next decision against
@@ -2124,16 +2124,17 @@ int main(int argc, char** argv) {
     // safe: it happens before the player has touched anything. --shot captures
     // skip the menu and start Playing directly, so a stray save directory can
     // never alter a deterministic capture.
-    enum class AppScreen : std::uint8_t { Menu, Playing };
-    AppScreen screen = shotPath ? AppScreen::Playing : AppScreen::Menu;
-    int menuScreenPage = 0; // 0 root, 1 load slots, 2 new-game slots, 3 settings
-    if (screen == AppScreen::Menu) {
+    // ЕДИНЫЙ источник истины экрана/окна/страницы меню ([ui_shell.h]).
+    // --shot прыгает сразу в Playing: харнесс снимает игру, не заставку.
+    UiShell shell;
+    shell.screen = shotPath ? AppScreen::Playing : AppScreen::Intro;
+    if (shell.sim_frozen()) {
         input.set_mouselook(false);
         SDL_SetWindowRelativeMouseMode(window, false);
     }
     auto menu_start_playing = [&]() {
-        screen = AppScreen::Playing;
-        menuScreenPage = 0;
+        shell.screen = AppScreen::Playing;
+        shell.menuPage = 0;
         input.set_mouselook(true);
         SDL_SetWindowRelativeMouseMode(window, true);
     };
@@ -2185,9 +2186,6 @@ int main(int argc, char** argv) {
     bool buyWanted = false;       // R, consumed by one sim step       // set by H, consumed by one sim step
     bool craftWanted = false;     // C, consumed by one sim step
     bool scrapWanted = false;     // X, consumed by one sim step
-    bool showCraftingWindow = false;
-    bool showVendorWindow = false;
-    bool showElevatorWindow = false;
     // Run state, not world state, so it lives beside the ledger. CraftingState is a
     // 96-byte POD ([craft.h]) — nothing to own, nothing to free. craft_init zeroes the
     // material bank, sets tier 0 and marks the nine default-known recipes.
@@ -2685,6 +2683,14 @@ int main(int argc, char** argv) {
         while (SDL_PollEvent(&e)) {
             hud.process_event(e);
             if (e.type == SDL_EVENT_QUIT) running = false;
+            if (shell.screen == AppScreen::Intro &&
+                (e.type == SDL_EVENT_KEY_DOWN ||
+                 e.type == SDL_EVENT_MOUSE_BUTTON_DOWN)) {
+                // Заставка ждёт ЛЮБОЙ ввод и уходит в меню ([ui_shell.h]).
+                shell.screen = AppScreen::Menu;
+                shell.menuPage = 0;
+                continue;
+            }
             if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat) {
                 if (rebindCapture >= 0) {
                     // The menu is listening: this key becomes the row's binding
@@ -2701,8 +2707,8 @@ int main(int argc, char** argv) {
                     // ввод: обычные бинды молчат (E внутри инвентаря — это
                     // «экипировать», а не глобальный interact), kBindTyping
                     // пробиваются, чтобы закрыть то, что открыли.
-                    const bool typing =
-                        ImGui::GetIO().WantTextInput || invUi.open;
+                    const bool typing = ImGui::GetIO().WantTextInput ||
+                                        shell.window != UiWindow::None;
                     const game::KeyBind* kb = binds.find_scancode(
                         static_cast<std::uint16_t>(e.key.scancode));
                     // Plain rows fire only in live play; kBindAlways rows (menu,
@@ -2711,19 +2717,24 @@ int main(int argc, char** argv) {
                     // can always close what it opened. This gate also stops a
                     // vendor-filter keystroke from eating rations, which the old
                     // chain happily did.
-                    if (screen == AppScreen::Playing && kb &&
-                        (!typing || (kb->flags & game::kBindTyping)) &&
-                        (!paused || (kb->flags & game::kBindAlways)))
+                    // Playing — все бинды по typing-правилу; Pause — только
+                    // kBindAlways (menu/console/hud). Intro/Menu — ничего.
+                    if (kb &&
+                        (shell.playing() ||
+                         (shell.screen == AppScreen::Pause &&
+                          (kb->flags & game::kBindAlways))) &&
+                        (!typing || (kb->flags & game::kBindTyping)))
                         exec_command(kb->command);
                 }
             }
             // While the pause menu is up, ignore all look/move input: ImGui owns
             // the cursor and the game is frozen.
-            if (!paused) {
+            if (shell.playing()) {
                 // Клик по открытой сетке — выбор клетки, не замах: пока
                 // инвентарь владеет курсором, мышь до боя не доходит.
                 if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
-                    e.button.button == SDL_BUTTON_LEFT && !invUi.open) {
+                    e.button.button == SDL_BUTTON_LEFT &&
+                    shell.window == UiWindow::None) {
                     attackHeld = true;
                 } else if (e.type == SDL_EVENT_MOUSE_BUTTON_UP &&
                            e.button.button == SDL_BUTTON_LEFT) {
@@ -2758,16 +2769,27 @@ int main(int argc, char** argv) {
                 return (reqs & game::request_bit(r)) != 0;
             };
             if (has(ConsoleRequest::Quit)) running = false;
-            if (has(ConsoleRequest::Menu) && screen == AppScreen::Playing) {
+            if (has(ConsoleRequest::Menu) &&
+                (shell.screen == AppScreen::Playing || shell.screen == AppScreen::Pause)) {
+                // Esc: открытое окно закрывается ПЕРВЫМ, пауза — вторым; один
+                // источник истины делает порядок выразимым одной веткой.
                 // Pausing frees the cursor so the menu is clickable and the OS
                 // window can be moved / minimised; leaving re-arms mouselook.
-                paused = !paused;
-                if (!paused) {
-                    menuPage = 0;
-                    rebindCapture = -1;
+                if (shell.playing() && shell.window != UiWindow::None) {
+                    shell.close_window();
+                    input.set_mouselook(true);
+                    SDL_SetWindowRelativeMouseMode(window, true);
+                } else {
+                    shell.screen = shell.screen == AppScreen::Pause
+                                       ? AppScreen::Playing
+                                       : AppScreen::Pause;
+                    if (shell.playing()) {
+                        menuPage = 0;
+                        rebindCapture = -1;
+                    }
+                    input.set_mouselook(shell.playing());
+                    SDL_SetWindowRelativeMouseMode(window, shell.playing());
                 }
-                input.set_mouselook(!paused);
-                SDL_SetWindowRelativeMouseMode(window, !paused);
             }
             if (has(ConsoleRequest::Hud)) showHud = !showHud;
             if (has(ConsoleRequest::Console)) {
@@ -2781,7 +2803,7 @@ int main(int argc, char** argv) {
                     SDL_SetWindowRelativeMouseMode(window, false);
                 }
             }
-            if (has(ConsoleRequest::Mouselook) && !paused) {
+            if (has(ConsoleRequest::Mouselook) && shell.playing()) {
                 const bool on = !input.mouselook();
                 input.set_mouselook(on);
                 SDL_SetWindowRelativeMouseMode(window, on);
@@ -2790,21 +2812,22 @@ int main(int argc, char** argv) {
                 // Открытие освобождает курсор для клеток; закрытие возвращает
                 // mouselook — сетка, в отличие от консоли, открывается по сто
                 // раз за ран, и «верни взгляд руками» стало бы налогом.
-                invUi.open = !invUi.open;
-                input.set_mouselook(!invUi.open);
-                SDL_SetWindowRelativeMouseMode(window, !invUi.open);
+                shell.toggle(UiWindow::Inventory);
+                const bool giveMouse = shell.window == UiWindow::None;
+                input.set_mouselook(giveMouse);
+                SDL_SetWindowRelativeMouseMode(window, giveMouse);
             }
             // Floor travel (#8/#9): streams the destination in on demand and
             // folds the departed floor's crowd back into the cold pool, so only
             // ONE floor is ever live. The whole depart/arrive sequence is shared
             // with the console teleport — see do_ride above the loop.
-            if (has(ConsoleRequest::FloorDown) && !paused)
+            if (has(ConsoleRequest::FloorDown) && shell.playing())
                 do_ride(/*absolute=*/false, -1);
-            if (has(ConsoleRequest::FloorUp) && !paused)
+            if (has(ConsoleRequest::FloorUp) && shell.playing())
                 do_ride(/*absolute=*/false, +1);
             // Fly stays a PlayerCommand button: the bridge queues the edge and
             // the server flips the state ([netcode-seam]).
-            if (has(ConsoleRequest::Fly) && !paused) input.queue_fly_toggle();
+            if (has(ConsoleRequest::Fly) && shell.playing()) input.queue_fly_toggle();
             // Survival / persistence / trade one-shots are recorded as INTENT
             // and acted on in the sim loop, exactly as before: they mutate pool
             // rows or world state, which belongs on the sim's clock, not the
@@ -2821,17 +2844,17 @@ int main(int argc, char** argv) {
             if (has(ConsoleRequest::Resupply)) buyWanted = true;
             if (has(ConsoleRequest::Scrap)) scrapWanted = true;
             if (has(ConsoleRequest::Elevator)) {
-                showElevatorWindow = !showElevatorWindow;
-                if (showElevatorWindow) input.set_mouselook(false);
+                shell.toggle(UiWindow::Elevator);
+                if (shell.window != UiWindow::None) input.set_mouselook(false);
             }
             if (has(ConsoleRequest::Vendor)) {
-                showVendorWindow = !showVendorWindow;
-                if (showVendorWindow) input.set_mouselook(false);
+                shell.toggle(UiWindow::Vendor);
+                if (shell.window != UiWindow::None) input.set_mouselook(false);
             }
             if (has(ConsoleRequest::Craft)) {
                 craftWanted = true;
-                showCraftingWindow = !showCraftingWindow;
-                if (showCraftingWindow) input.set_mouselook(false);
+                shell.toggle(UiWindow::Craft);
+                if (shell.window != UiWindow::None) input.set_mouselook(false);
             }
             // ATTR1: spend one unspent point. HP ptrs from the pool row so
             // STR immediately credits max-HP the same way award_xp does.
@@ -2895,7 +2918,7 @@ int main(int argc, char** argv) {
         // --- fixed-step simulation ----------------------------------------
         // Frozen while the pause menu is up; drop accumulated time so resuming
         // does not fast-forward the missed interval.
-        if (paused || screen == AppScreen::Menu) {
+        if (shell.sim_frozen()) {
             simAccum = 0.0f;
         } else {
             simAccum += frameDt;
@@ -2925,7 +2948,8 @@ int main(int argc, char** argv) {
                 // not movement: skip the bridge and park the intent so the body
                 // does not glide on the last pre-console wishDir. The open
                 // inventory grid owns the keys the same way ([inventory.md]).
-                if ((showConsole && ImGui::GetIO().WantTextInput) || invUi.open) {
+                if ((showConsole && ImGui::GetIO().WantTextInput) ||
+                    shell.window != UiWindow::None) {
                     if (reg.valid(player))
                         if (auto* c = reg.try_get<Controller>(player))
                             c->wishDir = vec3{0, 0, 0};
@@ -4113,7 +4137,7 @@ int main(int argc, char** argv) {
                 // same step if !doors.frozen (v1 drops proposals during bake).
                 combatCarves.clear();
                 shots += game::player_ranged_step(reg, pool, activeLayer,
-                                                  haveGun && attackHeld && !paused,
+                                                  haveGun && attackHeld && shell.playing(),
                                                   kSimDt, simTick, &noiseField,
                                                   &playerStatus);
                 // IMMEDIATELY AFTER the firearm step and never before it: the two
@@ -4123,13 +4147,13 @@ int main(int argc, char** argv) {
                 // a sim tick like every other action, not on a frame.
                 if (throwWanted) {
                     throwWanted = false;
-                    if (!paused && game::player_throw_step(reg, pool, activeLayer,
+                    if (shell.playing() && game::player_throw_step(reg, pool, activeLayer,
                                                            true) > 0)
                         ++shots;
                 }
                 game::player_melee_step(
                     reg, pool, bus, activeLayer, kSimDt,
-                    !haveGun && attackHeld && !paused, simTick,
+                    !haveGun && attackHeld && shell.playing(), simTick,
                     &stack.layer(activeLayer).grid(), &combatCarves,
                     &playerStatus, &particleBursts,
                     &stack.layer(activeLayer).gravity());
@@ -5493,7 +5517,7 @@ int main(int argc, char** argv) {
         // Виджет ЧИТАЕТ и возвращает заявку; применяем её здесь же, на тех же
         // примитивах, что консоль и ИИ ([equip.h]) — третьего пути к Equipped
         // не появляется.
-        if (invUi.open && reg.valid(player)) {
+        if ((shell.window == UiWindow::Inventory) && reg.valid(player)) {
             if (const auto* nrInv = reg.try_get<game::NpcRef>(player);
                 nrInv && pool.valid(nrInv->id)) {
                 game::Inventory& pinv = pool.inventory(nrInv->id);
@@ -5616,7 +5640,7 @@ int main(int argc, char** argv) {
             consoleCtx.requestLandHub = -1;
         }
 
-        if (showCraftingWindow && reg.valid(player)) {
+        if ((shell.window == UiWindow::Craft) && reg.valid(player)) {
             const Transform& ct = reg.get<Transform>(player);
             // Zero-heap nearest Terminal ([jirnyak.md] section 18) -- same reach as craft hot path.
             const bool nearTerm =
@@ -5631,9 +5655,11 @@ int main(int argc, char** argv) {
 
             if (const auto* nrk = reg.try_get<game::NpcRef>(player)) {
                 if (pool.valid(nrk->id)) {
-                    DrawCraftingWindowUI(&showCraftingWindow, crafting, pool.inventory(nrk->id), 
+                    bool craftOpen = true;  // мост к bool* закрывашки окна
+                    DrawCraftingWindowUI(&craftOpen, crafting, pool.inventory(nrk->id), 
                                          bench, simTick, reg, player, pool, 
                                          crafted, scrapped, recipesLearned);
+                    if (!craftOpen) shell.close_window();
                 }
             }
         }
@@ -5656,13 +5682,14 @@ int main(int argc, char** argv) {
         // The menu adds a PLACE TO CHOOSE, not a mechanism — so the console, a
         // keybind and this window cannot drift, and the deferred-request drain keeps
         // the ride out of the middle of a frame.
-        if (showElevatorWindow && reg.valid(player)) {
+        if ((shell.window == UiWindow::Elevator) && reg.valid(player)) {
             const Transform& et = reg.get<Transform>(player);
             const int ecx = wrap_macro(static_cast<int>(et.pos.x / kCellSize));
             const int ecy = wrap_macro(static_cast<int>(et.pos.y / kCellSize));
             const int shaft = game::fast_hub_near(ecx, ecy);
             ImGui::SetNextWindowSize(ImVec2(360, 0), ImGuiCond_FirstUseEver);
-            if (ImGui::Begin("ЛИФТ / ELEVATOR", &showElevatorWindow)) {
+            bool elevOpen = true;  // мост к bool* закрывашки окна
+            if (ImGui::Begin("ЛИФТ / ELEVATOR", &elevOpen)) {
                 if (shaft < 0) {
                     ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.0f),
                                        "[NOT IN A SHAFT]");
@@ -5704,17 +5731,20 @@ int main(int argc, char** argv) {
                 }
             }
             ImGui::End();
+            if (!elevOpen) shell.close_window();
         }
 
-        if (showVendorWindow && reg.valid(player)) {
+        if ((shell.window == UiWindow::Vendor) && reg.valid(player)) {
             const Transform& vt = reg.get<Transform>(player);
             const bool isOnPad = game::on_extraction_pad(stack.layer(activeLayer).grid(), vt.pos);
             if (const auto* nrv = reg.try_get<game::NpcRef>(player)) {
                 if (pool.valid(nrv->id)) {
                     const std::int32_t soldBefore = sold;
                     const std::int32_t spentBefore = spent;
-                    DrawVendorWindowUI(&showVendorWindow, pool.inventory(nrv->id), ledger, 
+                    bool vendOpen = true;  // мост к bool* закрывашки окна
+                    DrawVendorWindowUI(&vendOpen, pool.inventory(nrv->id), ledger, 
                                        vendorKind, isOnPad, sold, spent);
+                    if (!vendOpen) shell.close_window();
                     // Same re-derive as the keyboard path. The window is not handed
                     // reg/pool/player, so the CALLER does it — the shape the
                     // crafting window already uses via its `invChanged` out-param.
@@ -5730,7 +5760,7 @@ int main(int argc, char** argv) {
         // A centered bottom-screen hint that appears when the player is
         // close enough to interact with a door or terminal. Rendered as a
         // borderless auto-sized ImGui window so it floats cleanly.
-        if (showHud && !paused && reg.valid(player)) {
+        if (showHud && shell.playing() && reg.valid(player)) {
             const vec3 ppos = reg.get<Transform>(player).pos;
             const char* promptText = nullptr;
             // Prompts name the BOUND key, not a literal: rebind `door` in the
@@ -5878,7 +5908,46 @@ int main(int argc, char** argv) {
         // over the same char-sheet columns the pool serializes) plugs in as one
         // more page here when it lands. Labels are ASCII — the default ImGui
         // font ships no Cyrillic glyphs.
-        if (screen == AppScreen::Menu) {
+        if (shell.screen == AppScreen::Intro) {
+            // Титульная заставка ([ui_shell.h]): фосфор на чёрном, сканлайны,
+            // мигающая строка. Любой ввод (event loop) уводит в меню — здесь
+            // только пиксели, ноль состояния.
+            ImGuiIO& io = ImGui::GetIO();
+            ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(io.DisplaySize, ImGuiCond_Always);
+            ImGui::Begin("##intro", nullptr,
+                         ImGuiWindowFlags_NoDecoration |
+                             ImGuiWindowFlags_NoBackground |
+                             ImGuiWindowFlags_NoInputs);
+            ImDrawList* idl = ImGui::GetWindowDrawList();
+            idl->AddRectFilled(ImVec2(0, 0), io.DisplaySize,
+                               IM_COL32(2, 8, 3, 255));
+            for (float y = 0; y < io.DisplaySize.y; y += 4.0f)
+                idl->AddRectFilled(ImVec2(0, y), ImVec2(io.DisplaySize.x, y + 1),
+                                   IM_COL32(0, 0, 0, 60));
+            const char* title = "ГИГАХРУШ 2";
+            const char* sub = "служебная аппаратура смотрителя";
+            const float cx = io.DisplaySize.x * 0.5f;
+            const float cy = io.DisplaySize.y * 0.38f;
+            const ImVec2 ts = ImGui::CalcTextSize(title);
+            idl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 3.0f,
+                         ImVec2(cx - ts.x * 1.5f, cy),
+                         IM_COL32(89, 242, 102, 255), title);
+            const ImVec2 ss = ImGui::CalcTextSize(sub);
+            idl->AddText(ImVec2(cx - ss.x * 0.5f, cy + ImGui::GetFontSize() * 4.0f),
+                         IM_COL32(60, 140, 66, 255), sub);
+            // Мигание — от кадрового счётчика, не от Date: детерминизм заставки
+            // никому не нужен, но привычка нужна всем.
+            static std::uint32_t introBlink = 0;
+            if (((introBlink++) / 45u) % 2u == 0u) {
+                const char* hint = "[ нажмите любую клавишу ]";  // ASCII-рамка: у шрифта нет глифа em-dash
+                const ImVec2 hs = ImGui::CalcTextSize(hint);
+                idl->AddText(ImVec2(cx - hs.x * 0.5f, io.DisplaySize.y * 0.72f),
+                             IM_COL32(89, 242, 102, 220), hint);
+            }
+            ImGui::End();
+        }
+        if (shell.screen == AppScreen::Menu) {
             ImGuiIO& io = ImGui::GetIO();
             ImGui::SetNextWindowPos(
                 ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
@@ -5890,15 +5959,15 @@ int main(int argc, char** argv) {
                              ImGuiWindowFlags_NoTitleBar |
                              ImGuiWindowFlags_NoSavedSettings);
             const ImVec2 btn(240.0f, 0.0f);
-            if (menuScreenPage == 0) {
+            if (shell.menuPage == 0) {
                 ImGui::TextUnformatted("G I G A H R U S H  2");
                 ImGui::Separator();
-                if (ImGui::Button("New Game", btn)) menuScreenPage = 2;
-                if (ImGui::Button("Load Game", btn)) menuScreenPage = 1;
-                if (ImGui::Button("Settings", btn)) menuScreenPage = 3;
+                if (ImGui::Button("New Game", btn)) shell.menuPage = 2;
+                if (ImGui::Button("Load Game", btn)) shell.menuPage = 1;
+                if (ImGui::Button("Settings", btn)) shell.menuPage = 3;
                 ImGui::Spacing();
                 if (ImGui::Button("Quit", btn)) running = false;
-            } else if (menuScreenPage == 1) {
+            } else if (shell.menuPage == 1) {
                 ImGui::TextUnformatted("Load Game");
                 ImGui::Separator();
                 bool any = false;
@@ -5918,8 +5987,8 @@ int main(int argc, char** argv) {
                 }
                 if (!any) ImGui::TextUnformatted("(no saves yet)");
                 ImGui::Spacing();
-                if (ImGui::Button("Back", btn)) menuScreenPage = 0;
-            } else if (menuScreenPage == 2) {
+                if (ImGui::Button("Back", btn)) shell.menuPage = 0;
+            } else if (shell.menuPage == 2) {
                 ImGui::TextUnformatted("New Game - pick a slot");
                 ImGui::Separator();
                 for (int s = 1; s <= kMaxSaveSlots; ++s) {
@@ -5939,7 +6008,7 @@ int main(int argc, char** argv) {
                     }
                 }
                 ImGui::Spacing();
-                if (ImGui::Button("Back", btn)) menuScreenPage = 0;
+                if (ImGui::Button("Back", btn)) shell.menuPage = 0;
             } else {
                 ImGui::TextUnformatted("Settings");
                 ImGui::Separator();
@@ -5948,7 +6017,7 @@ int main(int argc, char** argv) {
                 ImGui::TextUnformatted(
                     "Character creation lands here as its own page.");
                 ImGui::Spacing();
-                if (ImGui::Button("Back", btn)) menuScreenPage = 0;
+                if (ImGui::Button("Back", btn)) shell.menuPage = 0;
             }
             ImGui::End();
         }
@@ -5959,7 +6028,7 @@ int main(int argc, char** argv) {
         // one table entry — never a new handler. The Key Bindings page edits the
         // KeybindTable live and persists it. Labels are ASCII — the default
         // ImGui font ships no Cyrillic glyphs.
-        if (paused) {
+        if (shell.screen == AppScreen::Pause) {
             ImGuiIO& io = ImGui::GetIO();
             ImGui::SetNextWindowPos(
                 ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
