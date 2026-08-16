@@ -121,7 +121,7 @@ inline constexpr std::size_t kSpeechFactionSlots = kFactionCount + 1u;
 // Row count of `data/speech_lines.csv`. The `source_rules` ctest compares the two and
 // fails on drift, the same way it guards `kItemCount` — see the note at the bottom of
 // this file for the exact registration line.
-inline constexpr std::size_t kSpeechLineCount = 273;
+inline constexpr std::size_t kSpeechLineCount = 285;
 
 // Half health. AUTHORED, and deliberately not derived from the AI: `IntentHeal`'s
 // score in ai.cpp crosses its own 58-point emergency override at hp/maxHp ~ 0.45, but

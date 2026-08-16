@@ -441,10 +441,20 @@ MultiFloorPathStep multi_floor_route_step(const CoarseGraph& coarse,
 
     step.dir = route_step(coarse, fine, fromCell, bestLink->fromCell);
     if (step.dir == kFlowNone) {
-        if (std::abs(bestLink->fromCell.x - fromCell.x) > std::abs(bestLink->fromCell.y - fromCell.y)) {
-            step.dir = (bestLink->fromCell.x > fromCell.x) ? 1 : 0; // +X or -X
+        const int cdx = bestLink->fromCell.x - fromCell.x;
+        const int cdy = bestLink->fromCell.y - fromCell.y;
+        const int cdz = bestLink->fromCell.z - fromCell.z;
+        const int adx = std::abs(cdx);
+        const int ady = std::abs(cdy);
+        const int adz = std::abs(cdz);
+        if (adx >= ady && adx >= adz && adx > 0) {
+            step.dir = (cdx > 0) ? 1 : 0; // +X or -X
+        } else if (ady >= adz && ady > 0) {
+            step.dir = (cdy > 0) ? 3 : 2; // +Y or -Y
+        } else if (adz > 0) {
+            step.dir = (cdz > 0) ? 5 : 4; // +Z or -Z
         } else {
-            step.dir = (bestLink->fromCell.y > fromCell.y) ? 3 : 2; // +Y or -Y
+            step.dir = kFlowArrived;
         }
     }
     step.crossFloor = false;
@@ -453,6 +463,23 @@ MultiFloorPathStep multi_floor_route_step(const CoarseGraph& coarse,
     step.transitKind = bestLink->kind;
     return step;
 }
+
+namespace {
+inline float sector_distance_from_center(int sx, int sy) {
+    const int cx = sector_coord_x(sx);
+    const int cy = sector_coord_y(sy);
+    const float dx = static_cast<float>(cx - 256) * 2.0f;
+    const float dy = static_cast<float>(cy - 256) * 2.0f;
+    return std::sqrt(dx * dx + dy * dy);
+}
+
+inline float sector_fuzzy_decay(float dist) {
+    if (dist <= 400.0f) return 0.0f;
+    constexpr float span = 512.0f - 400.0f;
+    const float t = (dist - 400.0f) / span;
+    return std::clamp(t, 0.0f, 1.0f);
+}
+} // namespace
 
 MultiFloorQueryResult query_multi_floor_path(int fromFloor, ivec3 fromCell,
                                             int toFloor, ivec3 toCell,
@@ -542,8 +569,18 @@ MultiFloorQueryResult query_multi_floor_path(int fromFloor, ivec3 fromCell,
             const int vNode = sector_neighbor(uNode, dir);
             if (vNode < 0) continue;
 
+            const int vx = vNode % kSectorDimX;
+            const int vy = vNode / kSectorDimX;
+            const float vDist = sector_distance_from_center(vx, vy);
+            if (vDist >= 505.0f) continue; // Solid outer monolithic concrete wall
+
+            std::uint32_t kStepCost = static_cast<std::uint32_t>(kSectorCellSize); // 16 cells per sector
+            if (vDist > 400.0f) {
+                const float decay = sector_fuzzy_decay(vDist);
+                kStepCost += static_cast<std::uint32_t>(decay * 32.0f);
+            }
+
             const std::size_t vState = static_cast<std::size_t>(fIdx) * kNodesPerFloor + static_cast<std::size_t>(vNode);
-            constexpr std::uint32_t kStepCost = static_cast<std::uint32_t>(kSectorCellSize); // 16 cells per sector
             if (dist[u] + kStepCost < dist[vState]) {
                 dist[vState] = dist[u] + kStepCost;
                 prev[vState] = static_cast<int>(u);

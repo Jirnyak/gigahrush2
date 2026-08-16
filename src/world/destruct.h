@@ -58,10 +58,17 @@ namespace giga {
 // per voxel ([jirnyak.md] §7 — no string lookups in hot paths).
 inline constexpr const char* kSubMaterialName = "sub_material";
 
-// Absolute sub-voxel grid: 128 cells x 8 = 1024 per axis, a power of two, so
-// toroidal wrap is a mask.
-inline constexpr int kSubGridDim = kMacroDim * kSubDim;
-inline constexpr int kSubGridMask = kSubGridDim - 1;
+// Absolute sub-voxel grid: 512x512x16 cells x 8 = 4096 x 4096 x 128 sub-voxels.
+inline constexpr int kSubGridDimX = kMacroDimX * kSubDim; // 4096
+inline constexpr int kSubGridDimY = kMacroDimY * kSubDim; // 4096
+inline constexpr int kSubGridDimZ = kMacroDimZ * kSubDim; // 128
+inline constexpr int kSubGridMaskX = kSubGridDimX - 1;
+inline constexpr int kSubGridMaskY = kSubGridDimY - 1;
+inline constexpr int kSubGridMaskZ = kSubGridDimZ - 1;
+
+// Legacy aliases
+inline constexpr int kSubGridDim = kSubGridDimX;
+inline constexpr int kSubGridMask = kSubGridMaskX;
 
 // One removed sub-voxel: packed cell index + sub bit, and the material it was.
 // 8 bytes; `cell` is the flat macro_index, `bit` the sub_bit.

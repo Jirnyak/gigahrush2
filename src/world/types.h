@@ -98,7 +98,20 @@ inline constexpr int sub_bit(int sx, int sy, int sz) {
     return sx + sy * kSubDim + sz * kSubDim * kSubDim;
 }
 
-// Legacy 1D coordinate wrapper (deprecated, use clamp_macro / in_bounds).
+// Coordinate wrappers per axis and 3D.
+inline int wrap_macro_x(int c) { return wrapi(c, kMacroDimX); }
+inline int wrap_macro_y(int c) { return wrapi(c, kMacroDimY); }
+inline int wrap_macro_z(int c) { return wrapi(c, kMacroDimZ); }
+
+inline ivec3 wrap_macro(int x, int y, int z) {
+    return {wrap_macro_x(x), wrap_macro_y(y), wrap_macro_z(z)};
+}
+
+inline ivec3 wrap_macro(ivec3 c) {
+    return wrap_macro(c.x, c.y, c.z);
+}
+
+// 1D coordinate wrapper (default to X/Y dim).
 inline int wrap_macro(int c) { return wrapi(c, kMacroDimX); }
 
 } // namespace giga

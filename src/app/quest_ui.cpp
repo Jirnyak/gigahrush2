@@ -101,6 +101,7 @@ void draw_quest_log_ui(QuestUIState& state, const game::QuestLog& quests, const 
             // Right Pane: Detail View
             ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.25f, 1.0f), "ПОДРОБНЫЙ БРИФИНГ ЗАДАНИЯ:");
             ImGui::BeginChild("##active_detail", ImVec2(0.0f, 400.0f), true);
+            ImGui::PushTextWrapPos(0.0f);
 
             if (state.selectedQuestId > 0 && state.selectedQuestId <= static_cast<int>(game::kQuestCount)) {
                 const game::QuestId qid = static_cast<game::QuestId>(state.selectedQuestId);
@@ -149,6 +150,7 @@ void draw_quest_log_ui(QuestUIState& state, const game::QuestLog& quests, const 
                                    "Выберите задание из левого списка для просмотра подробностей.");
             }
 
+            ImGui::PopTextWrapPos();
             ImGui::EndChild();
             ImGui::Columns(1);
             ImGui::EndTabItem();
@@ -171,6 +173,7 @@ void draw_quest_log_ui(QuestUIState& state, const game::QuestLog& quests, const 
 
                 ImGui::PushID(i);
                 ImGui::BeginChild(title, ImVec2(0.0f, 110.0f), true);
+                ImGui::PushTextWrapPos(0.0f);
 
                 const char* stateStr = "Пусто (Empty)";
                 ImVec4 stateColor(0.5f, 0.5f, 0.5f, 1.0f);
@@ -197,6 +200,7 @@ void draw_quest_log_ui(QuestUIState& state, const game::QuestLog& quests, const 
                     ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Слот свободен для новых контрактов от жителей.");
                 }
 
+                ImGui::PopTextWrapPos();
                 ImGui::EndChild();
                 ImGui::PopID();
                 ImGui::Spacing();

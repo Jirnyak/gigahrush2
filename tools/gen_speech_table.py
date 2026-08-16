@@ -39,7 +39,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CSV_PATH = os.path.join(REPO, "data", "speech_lines.csv")
 OUT_PATH = os.path.join(REPO, "src", "game", "speech_table.cpp")
 
-EXPECTED_ROWS = 273
+EXPECTED_ROWS = 285
 
 # Order MUST match `enum class SpeechSituation` in src/game/speech.h: it is the
 # generated bucket table's major index.

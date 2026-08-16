@@ -866,13 +866,17 @@ std::int16_t rpg_damage_resistance_pct(const RpgStats& r, std::uint8_t damageCha
         }
     }
 
-    // Specific damage channels: 0=Kinetic, 1=Energy, 2=Fire, 3=Acid/Toxic, 4=Psi
+    // Specific damage channels: 0=Kinetic, 1=Buckshot, 2=Energy, 3=Fire, 4=Psi
     switch (damageChannel) {
         case 0: // Kinetic
             if (has_trait(r, TraitId::PsionicAttuned)) resist -= 10;
             if (has_mutation(r, BioMutationId::ChitinousPlates)) resist += 25;
             break;
-        case 1: // Energy
+        case 1: // Buckshot
+            if (has_trait(r, TraitId::PsionicAttuned)) resist -= 10;
+            if (has_mutation(r, BioMutationId::ChitinousPlates)) resist += 25;
+            break;
+        case 2: // Energy
             for (std::size_t s = 0; s < kImplantSlotCount; ++s) {
                 if (implant_is_functioning(r, static_cast<ImplantSlot>(s))) {
                     const auto& idf = implant_def(static_cast<ImplantId>(r.implantId[s]));
@@ -880,7 +884,7 @@ std::int16_t rpg_damage_resistance_pct(const RpgStats& r, std::uint8_t damageCha
                 }
             }
             break;
-        case 2: // Fire
+        case 3: // Fire
             if (has_perk(r, PerkId::Pyromaniac)) resist += 20;
             if (has_mutation(r, BioMutationId::ThirdEye)) resist -= 20;
             if (has_mutation(r, BioMutationId::GillsOfGigahrush)) resist -= 50;
@@ -888,16 +892,6 @@ std::int16_t rpg_damage_resistance_pct(const RpgStats& r, std::uint8_t damageCha
                 if (implant_is_functioning(r, static_cast<ImplantSlot>(s))) {
                     const auto& idf = implant_def(static_cast<ImplantId>(r.implantId[s]));
                     resist += idf.fireResistPct;
-                }
-            }
-            break;
-        case 3: // Acid / Toxic / Gas
-            if (has_mutation(r, BioMutationId::AcidicBlood)) resist += 40;
-            if (has_mutation(r, BioMutationId::GillsOfGigahrush)) resist += 80;
-            for (std::size_t s = 0; s < kImplantSlotCount; ++s) {
-                if (implant_is_functioning(r, static_cast<ImplantSlot>(s))) {
-                    const auto& idf = implant_def(static_cast<ImplantId>(r.implantId[s]));
-                    resist += idf.gasResistPct;
                 }
             }
             break;

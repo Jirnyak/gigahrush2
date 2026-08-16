@@ -400,6 +400,21 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
     if (out.applied > 0) {
         if (RpgStats* tRpg = reg.try_get<RpgStats>(target)) {
             implant_take_damage(*tRpg, out.applied, static_cast<std::uint8_t>(ch));
+
+            // AcidicBlood retaliation: melee attackers take 15 acid damage
+            if (has_mutation(*tRpg, BioMutationId::AcidicBlood) && reg.valid(source) && source != target) {
+                if (const Transform* st = reg.try_get<Transform>(source)) {
+                    if (const Transform* tt = get_target_tr()) {
+                        const float dx = wrap_delta_f(st->pos.x, tt->pos.x, kWorldExtent);
+                        const float dy = wrap_delta_f(st->pos.y, tt->pos.y, kWorldExtent);
+                        const float dz = wrap_delta_f(st->pos.z, tt->pos.z, kWorldExtent);
+                        if (dx * dx + dy * dy + dz * dz <= 3.5f * 3.5f) {
+                            apply_damage(reg, pool, source, 15, DamageChannel::Kinetic, entt::null,
+                                         grid, particles, gravity, fluid);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -857,6 +872,11 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         else mc.windupMs = 0;
 
         if (mc.cooldownMs > 0) continue;
+
+        if (const SnorkAi* snork = reg.try_get<SnorkAi>(e)) {
+            if (snork_is_in_recovery(*snork) || snork->state == SnorkLeapState::Airborne)
+                continue;
+        }
 
         // A CONTROL shooter is a monster whose whole attack is its projectile's
         // effect, so it has to get past a damage gate that was written as if damage
@@ -2034,11 +2054,11 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
             return 0; // Completely jammed / broken
         }
 
-        if (d.wearKind == static_cast<std::uint8_t>(WearKind::Jamming) && cond < 200u) {
+        if (d.wearKind == static_cast<std::uint8_t>(WearKind::Jamming) && cond < 250u) {
             float jamProb = 0.0f;
             if (cond >= 128u) {
-                // Low risk zone: 0% .. 5%
-                jamProb = (static_cast<float>(200u - cond) / 72.0f) * 0.05f;
+                // Low risk zone: 0% .. 5% (below 250 condition)
+                jamProb = (static_cast<float>(250u - cond) / 122.0f) * 0.05f;
             } else {
                 // Critical fouling zone: 5% .. 50%
                 const float t = static_cast<float>(128u - cond) / 128.0f;

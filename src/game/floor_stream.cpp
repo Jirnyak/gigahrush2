@@ -618,14 +618,22 @@ RideResult FloorStreamer::reembody_entity_transit(LevelStack& stack, FloorRegist
     if (auto* ref = ecs.try_get<NpcRef>(entity)) id = ref->id;
 
     float yaw = 0.0f, pitch = 0.0f, fovY = 1.2f;
+    vec3 eyeOffset{0.0f, 0.0f, 0.7f};
     const bool isPlayer = ecs.all_of<CameraTag>(entity);
     if (auto* cam = ecs.try_get<CameraTag>(entity)) {
         yaw = cam->yaw;
         pitch = cam->pitch;
         fovY = cam->fovY;
+        eyeOffset = cam->eyeOffset;
     }
     bool fly = false;
-    if (auto* ctl = ecs.try_get<Controller>(entity)) fly = ctl->fly;
+    float moveSpeed = 6.0f;
+    vec3 wishDir{0.0f, 0.0f, 0.0f};
+    if (auto* ctl = ecs.try_get<Controller>(entity)) {
+        fly = ctl->fly;
+        moveSpeed = ctl->moveSpeed;
+        wishDir = ctl->wishDir;
+    }
 
     const bool hadRanged = ecs.all_of<PlayerRanged>(entity);
     PlayerRanged ranged{};
@@ -647,9 +655,19 @@ RideResult FloorStreamer::reembody_entity_transit(LevelStack& stack, FloorRegist
     StatusSet statusSet{};
     if (hadStatus) statusSet = ecs.get<StatusSet>(entity);
 
+    const bool hadObserver = ecs.all_of<ObserverTag>(entity);
+    const bool hadNoClip = ecs.all_of<NoClip>(entity);
+
     ensure_loaded(stack, reg, ecs, pool, toFloor, playerId);
     const LayerId dstLayer = reg.layer_at(toFloor);
     if (dstLayer == kInvalidLayer) return r;
+
+    // Erase the departing entity from source module bodies to prevent dangling entity leakage
+    const ModuleId fm = reg.module_at(fromFloor);
+    if (fm != kInvalidModule && modules_[fm].used) {
+        auto& fromBodies = modules_[fm].bodies;
+        fromBodies.erase(std::remove(fromBodies.begin(), fromBodies.end(), entity), fromBodies.end());
+    }
 
     if (id != kInvalidNpc) {
         fold_back(ecs, pool, id, entity);
@@ -659,6 +677,9 @@ RideResult FloorStreamer::reembody_entity_transit(LevelStack& stack, FloorRegist
 
     const CellStep down = regime_down(floor_gravity_regime());
     if (id != kInvalidNpc) {
+        // Officially register NPC on the destination floor in the pool bucket index
+        pool.set_floor(id, static_cast<std::int16_t>(toFloor));
+
         if (down.x != 0) pool.cx(id) = arrivalCoord;
         else if (down.y != 0) pool.cy(id) = arrivalCoord;
         else if (down.z != 0) pool.cz(id) = arrivalCoord;
@@ -690,13 +711,20 @@ RideResult FloorStreamer::reembody_entity_transit(LevelStack& stack, FloorRegist
         cam->yaw = yaw;
         cam->pitch = pitch;
         cam->fovY = fovY;
+        cam->eyeOffset = eyeOffset;
     }
-    if (auto* ctl = ecs.try_get<Controller>(ne)) ctl->fly = fly;
+    if (auto* ctl = ecs.try_get<Controller>(ne)) {
+        ctl->fly = fly;
+        ctl->moveSpeed = moveSpeed;
+        ctl->wishDir = wishDir;
+    }
     if (hadRanged) ecs.emplace_or_replace<PlayerRanged>(ne, ranged);
     if (hadMelee) ecs.emplace_or_replace<PlayerMelee>(ne, melee);
     if (hadRpg) ecs.emplace_or_replace<RpgStats>(ne, rpg);
     if (hadAi) ecs.emplace_or_replace<AiBrain>(ne, aiBrain);
     if (hadStatus) ecs.emplace_or_replace<StatusSet>(ne, statusSet);
+    if (hadObserver) ecs.emplace_or_replace<ObserverTag>(ne);
+    if (hadNoClip) ecs.emplace_or_replace<NoClip>(ne);
 
     modules_[dm].bodies.push_back(ne);
 

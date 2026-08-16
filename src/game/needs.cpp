@@ -289,6 +289,14 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
         }
 
         needs_advance(n, dt);
+        if (const RpgStats* rpg = reg.try_get<RpgStats>(e)) {
+            if (has_mutation(*rpg, BioMutationId::HypertrophiedMuscles)) {
+                n.food = clamp_need(n.food - kFoodDrainPerSec * 0.50f * dt); // +50% hunger drain
+            }
+            if (has_trait(*rpg, TraitId::FastMetabolism)) {
+                n.food = clamp_need(n.food - kFoodDrainPerSec * 0.25f * dt); // +25% hunger drain
+            }
+        }
         if (camera && playerStatus) {
             const float extraDrain =
                 static_cast<float>(status_water_drain_e3(*playerStatus)) * 0.001f * dt;
@@ -325,15 +333,23 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
             const float gasConcentration = gasField->at(cx, cy, cz);
             if (gasConcentration > 0.01f) {
                 // Check if equipped with working filter (Fouling wear kind with condition > 0)
+                // or endowed with GillsOfGigahrush mutation
                 bool protectedByFilter = false;
-                if (const Equipped* eq = reg.try_get<Equipped>(e)) {
-                    if (eq->tool != kEquipNone && eq->tool < kInvSlots) {
-                        const Inventory& inv = pool.inventory(id);
-                        const ItemSlot& slot = inv.slots[eq->tool];
-                        if (item_valid(slot.item) && slot.condition > 0) {
-                            const ItemDef& idef = item_def(slot.item);
-                            if (idef.wearKind == static_cast<std::uint8_t>(WearKind::Fouling)) {
-                                protectedByFilter = true;
+                if (const RpgStats* rpg = reg.try_get<RpgStats>(e)) {
+                    if (has_mutation(*rpg, BioMutationId::GillsOfGigahrush)) {
+                        protectedByFilter = true;
+                    }
+                }
+                if (!protectedByFilter) {
+                    if (const Equipped* eq = reg.try_get<Equipped>(e)) {
+                        if (eq->tool != kEquipNone && eq->tool < kInvSlots) {
+                            const Inventory& inv = pool.inventory(id);
+                            const ItemSlot& slot = inv.slots[eq->tool];
+                            if (item_valid(slot.item) && slot.condition > 0) {
+                                const ItemDef& idef = item_def(slot.item);
+                                if (idef.wearKind == static_cast<std::uint8_t>(WearKind::Fouling)) {
+                                    protectedByFilter = true;
+                                }
                             }
                         }
                     }

@@ -26,21 +26,21 @@ struct SubCoord {
 inline SubCoord unpack_key(std::uint32_t key) {
     const std::uint32_t ci = key >> 9, bit = key & 511u;
     SubCoord c;
-    c.cx = static_cast<int>(ci & 127u);
-    c.cy = static_cast<int>((ci >> 7) & 127u);
-    c.cz = static_cast<int>(ci >> 14);
+    c.cx = static_cast<int>(ci % kMacroDimX);
+    c.cy = static_cast<int>((ci / kMacroDimX) % kMacroDimY);
+    c.cz = static_cast<int>(ci / (kMacroDimX * kMacroDimY));
     c.sx = static_cast<int>(bit & 7u);
     c.sy = static_cast<int>((bit >> 3) & 7u);
     c.sz = static_cast<int>(bit >> 6);
     return c;
 }
 
-// Key from ABSOLUTE sub-voxel coordinates; wraps on the 1024^3 sub torus with
-// a mask (power of two).
+// Key from ABSOLUTE sub-voxel coordinates; wraps on the anisotropic sub torus with
+// power of two masks.
 inline std::uint32_t key_at(int ax, int ay, int az) {
-    ax &= kSubGridMask;
-    ay &= kSubGridMask;
-    az &= kSubGridMask;
+    ax &= kSubGridMaskX;
+    ay &= kSubGridMaskY;
+    az &= kSubGridMaskZ;
     const std::uint32_t ci = static_cast<std::uint32_t>(
         macro_index(ax >> 3, ay >> 3, az >> 3));
     const std::uint32_t bit =
@@ -252,7 +252,7 @@ bool carve_roll(std::uint32_t h, std::uint16_t power, std::uint16_t hardness) {
 CellType sub_material_at(const World& w, int cx, int cy, int cz, int sx,
                          int sy, int sz) {
     const std::size_t ci =
-        macro_index(wrap_macro(cx), wrap_macro(cy), wrap_macro(cz));
+        macro_index(wrap_macro_x(cx), wrap_macro_y(cy), clamp_macro_z(cz));
     const CellType base = w.grid().types()[ci];
     const SubField<CellType>* f =
         w.subfields().find<CellType>(kSubMaterialName);
@@ -261,9 +261,9 @@ CellType sub_material_at(const World& w, int cx, int cy, int cz, int sx,
 
 void set_sub_material(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
                       CellType mat) {
-    cx = wrap_macro(cx);
-    cy = wrap_macro(cy);
-    cz = wrap_macro(cz);
+    cx = wrap_macro_x(cx);
+    cy = wrap_macro_y(cy);
+    cz = clamp_macro_z(cz);
     const std::size_t ci = macro_index(cx, cy, cz);
     const CellType base = w.grid().types()[ci];
     SubField<CellType>& f =
@@ -339,7 +339,7 @@ bool carve_at(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
               CarveResult& out) {
     out.clear();
     const std::uint32_t ci = static_cast<std::uint32_t>(
-        macro_index(wrap_macro(cx), wrap_macro(cy), wrap_macro(cz)));
+        macro_index(wrap_macro_x(cx), wrap_macro_y(cy), clamp_macro_z(cz)));
     const std::uint32_t bit =
         static_cast<std::uint32_t>(sub_bit(sx, sy, sz));
     const std::uint32_t key = pack_key(ci, bit);

@@ -185,9 +185,9 @@ void apply_sector_fuzzy_boundaries(World& world, int floorNumber, std::uint32_t 
                                  (biome == VerticalBiome::Industrial)  ? 1.1f : 1.0f;
 
     // Check cells across the macro volume
-    for (int z = 0; z < kMacroDim; ++z) {
-        for (int y = 0; y < kMacroDim; ++y) {
-            for (int x = 0; x < kMacroDim; ++x) {
+    for (int z = 0; z < kMacroDimZ; ++z) {
+        for (int y = 0; y < kMacroDimY; ++y) {
+            for (int x = 0; x < kMacroDimX; ++x) {
                 // Map to 512-sector coordinate representation
                 const int sx = (x * kSectorDimX) / kMacroDim;
                 const int sy = (y * kSectorDimY) / kMacroDim;
@@ -240,8 +240,8 @@ std::uint32_t generate_sector_airlock_bulkheads(World& world, DoorSet& doors, in
                 for (int z = 2; z <= 4; ++z) {
                     if (g.cell(cx, cy, z) == kCellAir) {
                         Door d;
-                        d.cx = static_cast<std::uint8_t>(cx);
-                        d.cy = static_cast<std::uint8_t>(cy);
+                        d.cx = static_cast<std::uint16_t>(cx);
+                        d.cy = static_cast<std::uint16_t>(cy);
                         d.cz = static_cast<std::uint8_t>(z);
                         d.h = 2;
                         d.axis = (rx % 2 == 0) ? 0 : 1;
@@ -255,7 +255,7 @@ std::uint32_t generate_sector_airlock_bulkheads(World& world, DoorSet& doors, in
                             const std::uint32_t doorId = static_cast<std::uint32_t>(doors.doors.size());
                             doors.doors.push_back(d);
                             doors.index[idx] = doorId + 1u;
-                            if (z + 1 < kMacroDim) {
+                            if (z + 1 < kMacroDimZ) {
                                 const std::size_t idxTop = macro_index(wrap_macro(cx), wrap_macro(cy), wrap_macro(z + 1));
                                 if (doors.index.size() > idxTop) doors.index[idxTop] = doorId + 1u;
                             }
@@ -300,8 +300,13 @@ void sector_perimeter_hazard_step(Registry& reg, NpcPool& pool, const DoorSet* d
         }
         if (sheltered) continue;
 
-        // Apply sensory coughing and toxic haze to unsheltered camera holder
-        if (reg.all_of<CameraTag>(e) && playerStatus != nullptr) {
+        // Apply sensory coughing and toxic haze to unsheltered camera holder / entities with status sets
+        if (auto* entStatus = reg.try_get<StatusSet>(e)) {
+            status_apply(*entStatus, StatusId::SporeHaze, false);
+            if (decay > 0.4f) {
+                status_apply(*entStatus, StatusId::GovnyakCough, false);
+            }
+        } else if (reg.all_of<CameraTag>(e) && playerStatus != nullptr) {
             status_apply(*playerStatus, StatusId::SporeHaze, false);
             if (decay > 0.4f) {
                 status_apply(*playerStatus, StatusId::GovnyakCough, false);

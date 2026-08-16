@@ -2571,7 +2571,8 @@ int main(int argc, char** argv) {
                     // chain happily did.
                     if (screen == AppScreen::Playing && kb &&
                         (!typing || (kb->flags & game::kBindTyping)) &&
-                        (!paused || (kb->flags & game::kBindAlways)))
+                        (!paused || (kb->flags & game::kBindAlways)) &&
+                        (!is_modal_active() || (kb->flags & game::kBindAlways)))
                         exec_command(kb->command);
                 }
             }

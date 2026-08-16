@@ -34,11 +34,11 @@ bool body_in_leaf(const Door& d, const vec3& pos, const vec3& half) {
     const float ccz =
         (static_cast<float>(d.cz) + static_cast<float>(d.h) * 0.5f) * kCellSize;
     const float hz = static_cast<float>(d.h) * 0.5f * kCellSize;
-    return std::fabs(wrap_delta_f(ccx, pos.x, kWorldExtent)) <
+    return std::fabs(wrap_delta_f(ccx, pos.x, kWorldExtentX)) <
                kCellSize * 0.5f + half.x &&
-           std::fabs(wrap_delta_f(ccy, pos.y, kWorldExtent)) <
+           std::fabs(wrap_delta_f(ccy, pos.y, kWorldExtentY)) <
                kCellSize * 0.5f + half.y &&
-           std::fabs(wrap_delta_f(ccz, pos.z, kWorldExtent)) < hz + half.z;
+           std::fabs(wrap_delta_f(ccz, pos.z, kWorldExtentZ)) < hz + half.z;
 }
 
 // Is any body standing in this doorway? Read-only over the layer's transforms; a
@@ -58,7 +58,7 @@ void fill_leaf(MacroGrid& g, DoorSet& doors, const Door& d) {
     for (int z = 0; z < d.h; ++z) {
         g.fill_cell(d.cx, d.cy, d.cz + z, kMatDoor);
         doors.dirtyCells.push_back(static_cast<std::uint32_t>(macro_index(
-            wrap_macro(d.cx), wrap_macro(d.cy), wrap_macro(d.cz + z))));
+            wrapi(d.cx, kMacroDimX), wrapi(d.cy, kMacroDimY), wrapi(d.cz + z, kMacroDimZ))));
     }
 }
 
@@ -66,7 +66,7 @@ void clear_leaf(MacroGrid& g, DoorSet& doors, const Door& d) {
     for (int z = 0; z < d.h; ++z) {
         g.clear_cell(d.cx, d.cy, d.cz + z);
         doors.dirtyCells.push_back(static_cast<std::uint32_t>(macro_index(
-            wrap_macro(d.cx), wrap_macro(d.cy), wrap_macro(d.cz + z))));
+            wrapi(d.cx, kMacroDimX), wrapi(d.cy, kMacroDimY), wrapi(d.cz + z, kMacroDimZ))));
     }
 }
 
@@ -122,8 +122,8 @@ std::uint32_t door_build(World& world, DoorSet& doors, int number,
         if (!ok) continue;
 
         Door d;
-        d.cx = static_cast<std::uint8_t>(cx);
-        d.cy = static_cast<std::uint8_t>(cy);
+        d.cx = static_cast<std::uint16_t>(cx);
+        d.cy = static_cast<std::uint16_t>(cy);
         d.cz = static_cast<std::uint8_t>(cz);
         d.h = static_cast<std::uint8_t>(h);
         d.axis = w.axis;
@@ -402,7 +402,7 @@ DoorTick door_step(Registry& reg, World& world, DoorSet& doors, LayerId layer,
                     d.hp = static_cast<std::int16_t>(nh < -1 ? -1 : nh);
                 }
                 d.chipMilli = static_cast<std::uint16_t>(acc);
-                d.lastTick = now;
+                d.lastTick = static_cast<std::uint16_t>(now);
                 if (d.hp <= 0) {
                     clear_leaf(g, doors, d);
                     d.state = static_cast<std::uint8_t>(DoorState::Broken);
@@ -423,8 +423,8 @@ DoorTick door_step(Registry& reg, World& world, DoorSet& doors, LayerId layer,
         // Everything else pushes: every resident, and the one monster in the table
         // with no attack at all. This branch is why a shut door can never jam an
         // agent permanently — the flow field routes it here and it gets through.
-        if (now - d.lastTick > 1u) d.forceMs = 0;   // contact must be continuous
-        d.lastTick = now;
+        if (static_cast<std::uint16_t>(now - d.lastTick) > 1u) d.forceMs = 0;   // contact must be continuous
+        d.lastTick = static_cast<std::uint16_t>(now);
         const std::uint32_t ms =
             static_cast<std::uint32_t>(d.forceMs) +
             static_cast<std::uint32_t>(dt * 1000.0f + 0.5f);

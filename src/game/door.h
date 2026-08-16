@@ -121,10 +121,10 @@ inline constexpr std::uint16_t kDoorForceMs = 1500;
 // One door. 16 bytes, POD, no pointers — 16 k doors on a Residential floor is
 // 256 KiB, against the 128 MiB of flow fields beside it.
 struct Door {
-    std::uint8_t cx = 0;    // leaf column, X
-    std::uint8_t cy = 0;    // leaf column, Y
-    std::uint8_t cz = 0;    // BOTTOM leaf cell, Z
-    std::uint8_t h = 0;     // leaf height in cells
+    std::uint16_t cx = 0;    // leaf column, X (0..511)
+    std::uint16_t cy = 0;    // leaf column, Y (0..511)
+    std::uint8_t cz = 0;     // BOTTOM leaf cell, Z (0..15)
+    std::uint8_t h = 0;      // leaf height in cells
     std::uint8_t axis : 2 = 0;        // Doorway::axis (0 or 1)
     std::uint8_t keycardTier : 5 = 0; // Keycard access tier (0=None, 1=Red, 2=Blue, 3=Master)
     // §23 гермодверь: apartment door on Living / Medical / Hq. Seals Samosbor
@@ -139,7 +139,7 @@ struct Door {
     std::uint16_t forceMs = 0;
     // Tick of the last contact, so `forceMs` can require CONTINUOUS pressing
     // without any per-door sweep to decay it. A gap of more than one tick resets.
-    std::uint32_t lastTick = 0;
+    std::uint16_t lastTick = 0;
 };
 static_assert(sizeof(Door) == 16, "Door must stay a tight 16-byte row");
 
@@ -169,11 +169,13 @@ struct DoorSet {
 
     bool empty() const { return doors.empty(); }
 
-    // Door occupying a cell, or kNoDoor. Wraps, so raw cell indices are fine.
+    // Door occupying a cell, or kNoDoor. Clamps coordinates to valid sector bounds.
     std::uint32_t at(int x, int y, int z) const {
         if (index.empty()) return kNoDoor;
-        const std::uint32_t v =
-            index[macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z))];
+        const auto c = clamp_macro(x, y, z);
+        const std::size_t idx = macro_index(c.x, c.y, c.z);
+        if (idx >= index.size()) return kNoDoor;
+        const std::uint32_t v = index[idx];
         return v ? v - 1u : kNoDoor;
     }
     // Same, but only reports a door that is currently blocking.

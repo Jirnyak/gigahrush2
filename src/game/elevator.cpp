@@ -68,6 +68,7 @@ RideResult ride_elevator(Registry& reg, NpcPool& pool,
     // ([floor_gen.h] frame — x/y/z are equal citizens, the regime picks which
     // one an elevator rides), and re-embody as player on the destination layer.
     fold_back(reg, pool, id, player);
+    pool.set_floor(id, static_cast<std::int16_t>(dstFloor));
     const CellStep down = regime_down(floor_gravity_regime());
     if (down.x != 0)
         pool.cx(id) = arrivalCoord;
