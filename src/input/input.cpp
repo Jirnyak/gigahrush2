@@ -36,9 +36,16 @@ game::PlayerCommand InputState::build_command(Registry& reg, Entity avatar) cons
     // state. But the movement up-axis below depends on the fly state AS OF THIS
     // FRAME (the old code toggled fly first, then read it) — so predict the
     // post-toggle state here for wishDir, exactly reproducing that ordering.
+    //
+    // БЕЗ гейта на mouselook_ — сознательно. Эдж ставит ровно один путь:
+    // консольный запрос `fly` (клавиши по умолчанию у полёта нет). Пока стоял
+    // `&& mouselook_`, команда была недостижима по построению: консоль
+    // открыта -> mouselook снят -> единственное место, где команду можно
+    // НАБРАТЬ, гарантировало, что её эдж будет молча стёрт в apply(). Явный
+    // запрос пользователя — не «утечка ввода», которую гейт ловит для осей.
     bool willFly = false;
     if (const auto* ctl = reg.try_get<Controller>(avatar)) willFly = ctl->fly;
-    if (toggleFlyEdge_ && mouselook_) {
+    if (toggleFlyEdge_) {
         cmd.buttons |= game::bit(game::Button::FlyToggle);
         willFly = !willFly;
     }

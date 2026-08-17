@@ -2724,7 +2724,19 @@ int main(int argc, char** argv) {
                     // ввод: обычные бинды молчат (E внутри инвентаря — это
                     // «экипировать», а не глобальный interact), kBindTyping
                     // пробиваются, чтобы закрыть то, что открыли.
-                    const bool typing = ImGui::GetIO().WantTextInput ||
+                    //
+                    // Консоль — по showConsole, НЕ по WantTextInput: фокус
+                    // слетает с поля после Enter или клика по логу, и одну
+                    // клавишу спустя WantTextInput уже false при открытой
+                    // консоли — так буквы набора дёргали бинды. И пока консоль
+                    // открыта, глушится ВСЯ таблица, включая kBindTyping-
+                    // тумблеры окон: их право пробивать typing существует,
+                    // чтобы I закрывала сетку, которая сама же и глушит, — а не
+                    // чтобы L в набранном `fly` открывала лифт (ровно это и
+                    // происходило). Единственное исключение — сам тумблер
+                    // консоли, иначе её нечем закрыть с клавиатуры.
+                    const bool typing = showConsole ||
+                                        ImGui::GetIO().WantTextInput ||
                                         shell.window != UiWindow::None;
                     const game::KeyBind* kb = binds.find_scancode(
                         static_cast<std::uint16_t>(e.key.scancode));
@@ -2740,7 +2752,10 @@ int main(int argc, char** argv) {
                         (shell.playing() ||
                          (shell.screen == AppScreen::Pause &&
                           (kb->flags & game::kBindAlways))) &&
-                        (!typing || (kb->flags & game::kBindTyping)))
+                        (!typing ||
+                         ((kb->flags & game::kBindTyping) &&
+                          (!showConsole ||
+                           std::strcmp(kb->action, "console") == 0))))
                         exec_command(kb->command);
                 }
             }
@@ -2961,12 +2976,13 @@ int main(int argc, char** argv) {
                 // tick N+1 rather than racing the pass that fired it.
                 game::noise_step(noiseField,
                                  static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f));
-                // While the console input line owns the keyboard, WASD is text,
-                // not movement: skip the bridge and park the intent so the body
-                // does not glide on the last pre-console wishDir. The open
-                // inventory grid owns the keys the same way ([inventory.md]).
-                if ((showConsole && ImGui::GetIO().WantTextInput) ||
-                    shell.window != UiWindow::None) {
+                // While the console is OPEN, WASD is text, not movement: skip
+                // the bridge and park the intent so the body does not glide on
+                // the last pre-console wishDir. The open inventory grid owns
+                // the keys the same way ([inventory.md]). showConsole, не
+                // `showConsole && WantTextInput`: фокус слетает с поля после
+                // Enter/клика по логу, и тело шло по WASD при открытой консоли.
+                if (showConsole || shell.window != UiWindow::None) {
                     if (reg.valid(player))
                         if (auto* c = reg.try_get<Controller>(player))
                             c->wishDir = vec3{0, 0, 0};
@@ -5516,9 +5532,11 @@ int main(int argc, char** argv) {
                                 static_cast<unsigned long long>(macroStats.tick),
                                 macroSim.day());
             }
+            // `fly` — консольная команда без клавиши (решение владельца);
+            // строка обязана говорить правду о том, где полёт живёт СЕЙЧАС.
             ImGui::TextUnformatted(
                 "WASD move | mouse look | Tab toggle look | Space jump | "
-                "F fly | Q door | G eat | T drink | F5/F9 save/load | [ / ] floor | Esc menu");
+                "~ console (fly) | Q door | G eat | T drink | F5/F9 save/load | [ / ] floor | Esc menu");
             ImGui::End();
         }
 
