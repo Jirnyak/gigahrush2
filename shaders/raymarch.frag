@@ -476,9 +476,35 @@ float surface_height(uint fam, vec2 uv, float pitch, float g, bool isHorizontal)
         return -0.6 * jAcross - 0.4 * jAlong + 0.2 * streak;
     }
     if (fam == kFamPlaster) {
+        // Советская стена в три пояса (порт форка 16004b86, гейт — СЕМЬЯ
+        // материала, не floorIdx: один материал обязан выглядеть одинаково
+        // на любом этаже). Граница поясов — та же 0.58 доли клетки, что уже
+        // делит глянец в surface_albedo: рельеф и блеск режутся ОДНОЙ линией.
         float stain = vnoise(uv * pitch);
-        float s = isHorizontal ? 0.0 : seam(uv);
-        return stain * 0.7 + g * 0.3 - 0.4 * s;
+        if (isHorizontal) {
+            // Плиты пола/потолка: швы по 2-метровой сетке клеток.
+            vec2 slabDist = abs(fract(vWorldPos.xy * 0.5) - 0.5);
+            float slabSeam = smoothstep(0.46, 0.50, max(slabDist.x, slabDist.y));
+            return stain * 0.5 + g * 0.25 - 0.5 * slabSeam;
+        }
+        float s = seam(uv);
+        float h_in_room = fract(vWorldPos.z * 0.5);
+        if (h_in_room < 0.58) {
+            // Нижняя панель: масляная эмаль, облупленная пятнами износа —
+            // скол приподнят кромкой и просажен теллом.
+            float wearArea = smoothstep(0.42, 0.65, vnoise(uv * 1.5));
+            float chipNoise = vnoise(uv * 14.0) * 0.70 + vnoise(uv * 42.0) * 0.30;
+            float peeled = wearArea * smoothstep(0.55, 0.62, chipNoise);
+            return peeled * 0.28 - 0.15 * peeled + (g - 0.5) * 0.16 - 0.28 * s;
+        } else if (h_in_room < 0.66) {
+            // Бортик-отбивка между эмалью и побелкой.
+            float trimRidge = sin((h_in_room - 0.58) / 0.08 * 3.14159265) * 0.35;
+            return trimRidge - 0.20 * s;
+        }
+        // Побелка: мелкое зерно и волосяные трещины.
+        float fineGrit = (g - 0.5) * 0.20 + vnoise(uv * 48.0) * 0.10;
+        float cracks = -0.22 * smoothstep(0.46, 0.52, abs(vnoise(uv * 18.0) - 0.5));
+        return fineGrit + cracks - 0.28 * s;
     }
     if (fam == kFamRust) {
         float lo = vnoise(uv * pitch);
