@@ -1102,6 +1102,13 @@ if(GIGA_BUILD_TESTS)
     # An executable, not a ctest (it measures, it doesn't pass/fail). Runs at the
     # global Release -O3 so the numbers reflect an optimized build. Threads come
     # in transitively via giga_core now; kept explicit here to document the need.
+    # X-Ray blueprint: оффлайн-карты этажа (структура/зоны/популяция/нав/
+    # опасность/пропсы) в PNG — диагностика генератора и алайфа без запуска
+    # игры. Порт форка 16004b86, адаптирован к тору 128^3.
+    add_executable(xray_map tools/xray_map.cpp)
+    target_link_libraries(xray_map PRIVATE giga_game Threads::Threads)
+    giga_target_flags(xray_map OFF)
+
     add_executable(sim_bench tests/sim_bench.cpp)
     target_link_libraries(sim_bench PRIVATE giga_game Threads::Threads)
     giga_target_flags(sim_bench OFF)
