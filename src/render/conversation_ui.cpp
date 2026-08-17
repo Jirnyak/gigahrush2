@@ -143,11 +143,12 @@ DiceUiRequest dice_ui_draw(const game::DiceGame& g, const char* header) {
 }
 
 BankUiRequest bank_ui_draw(std::int64_t banked, std::int64_t cash,
-                           const char* header) {
+                           std::int64_t deposit, std::int64_t debt,
+                           std::int64_t creditFree, const char* header) {
     BankUiRequest req;
     const ImGuiViewport* vp = ImGui::GetMainViewport();
-    const float winW = 440.0f;
-    const float winH = 170.0f;
+    const float winW = 460.0f;
+    const float winH = 230.0f;
     ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + (vp->WorkSize.x - winW) * 0.5f,
                                    vp->WorkPos.y + (vp->WorkSize.y - winH) * 0.6f),
                             ImGuiCond_Always);
@@ -161,10 +162,25 @@ BankUiRequest bank_ui_draw(std::int64_t banked, std::int64_t cash,
     ImGui::Separator();
     ImGui::Text("СЧЁТ:    %lld руб", static_cast<long long>(banked));
     ImGui::Text("НАЛИЧКА: %lld руб", static_cast<long long>(cash));
+    ImGui::Text("ВКЛАД:   %lld руб (копит процент)",
+                static_cast<long long>(deposit));
+    if (debt > 0)
+        ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.30f, 1.0f),
+                           "ДОЛГ:    %lld руб (капает процент)",
+                           static_cast<long long>(debt));
+    else
+        ImGui::TextDisabled("КРЕДИТ:  доступно %lld руб",
+                            static_cast<long long>(creditFree));
     ImGui::Separator();
-    ImGui::TextDisabled("Enter ВНЕСТИ ВСЁ | T СНЯТЬ 1000 | Esc УЙТИ");
+    ImGui::TextDisabled("Enter внести наличку | T снять 1000 наличкой");
+    ImGui::TextDisabled("D счёт -> вклад | W вклад -> счёт | L кредит | R погасить");
+    ImGui::TextDisabled("Esc уйти");
     if (ImGui::IsKeyPressed(ImGuiKey_Enter, false)) req.depositAll = true;
     if (ImGui::IsKeyPressed(ImGuiKey_T, false)) req.withdraw = true;
+    if (ImGui::IsKeyPressed(ImGuiKey_D, false)) req.toDeposit = true;
+    if (ImGui::IsKeyPressed(ImGuiKey_W, false)) req.fromDeposit = true;
+    if (ImGui::IsKeyPressed(ImGuiKey_L, false)) req.borrow = true;
+    if (ImGui::IsKeyPressed(ImGuiKey_R, false)) req.repay = true;
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) req.close = true;
     ImGui::End();
     return req;

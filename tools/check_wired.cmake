@@ -66,7 +66,6 @@ set(GIGA_DEFERRED_ENTRY_POINTS
     # строку можно, только научив гейт транзитивной проводке — не раньше.
     "diffusion_step:зовётся ТОЛЬКО diffusion_tick'ом из своего же файла по контракту; tick вживлён — main.cpp"
     "route_step:целевой шаг по флоу-полю отложен к #13 (таблицы контента); problems.md §52"
-    "bank_step:банк начисляет проценты, но тик игры его не зовёт; problems.md §52"
     "feed_tick:лента событий читается только тестом; problems.md §52"
     "samosbor_fog_tick:туманная популяция самосбора не тикает в игре; problems.md §52"
     "interaction_step:взаимодействие с пропами идёт мимо — main.cpp зовёт свои ветки; problems.md §52"

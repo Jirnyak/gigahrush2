@@ -58,6 +58,7 @@
 #include "game/quest.h"       // QuestLog, kQuestLogWire, quest_table_fingerprint
 #include "game/rpg.h"         // RpgStats
 #include "game/craft.h"       // CraftingState, kCraftingWire, craft_write/read
+#include "game/economy.h"     // BankAccount (SAVBANK v16)
 #include "game/combat.h"      // PlayerRanged (SAVMAG v8); Corpse (v15 records)
 #include "game/container.h"   // Container — the v15 record carries it whole
 #include "game/status.h"      // StatusSet (SAVSTAT v9)
@@ -157,7 +158,17 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // the state is what is IN them, and a partial take or a deposit now survives
 // both a floor re-entry and a save. The old mechanism is deleted, not wrapped:
 // two writers stamping the same crate is how they disagree. [barter increment A]
-inline constexpr std::uint32_t kSaveVersion = 15u;
+// Version 16 / SAVBANK: the BANK ACCOUNT travels — deposit, loan principal +
+// accrued, lifetime interest counters, credit limit, band and the 24-entry op
+// ring ([economy.h] BankAccount, wired to the Duty clerk's counter and to the
+// sim tick this same day; problems.md §52's bank_step entry closes with it).
+// `lastInterestTick` deliberately does NOT travel: the sim clock restarts every
+// session, so a saved tick would be a lie in a new one — the loader re-arms the
+// clock at the current tick instead, costing at most one 60-second period of
+// interest per reload and making save-scumming interest impossible. Entry ticks
+// in the ring are session-relative history and ride as-is (cosmetic). v15 saves
+// are rejected, standing rule.
+inline constexpr std::uint32_t kSaveVersion = 16u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -301,6 +312,12 @@ static_assert(kSamosborWire == 17);
 // multi-byte field, so the field-by-field rule has nothing to protect here — see the
 // note beside FastTravelState::raw() in [fast_travel.h].
 inline constexpr std::size_t kFastTravelWire = 32;
+// Version 16 / SAVBANK: BankAccount field by field (NOT sizeof — tail padding),
+// minus lastInterestTick (see the version note): 5 x i64 + creditLimit + entries
+// + band + 24 entries x (amount 4 + tick 4 + op 1 + band 1).
+inline constexpr std::size_t kBankWire =
+    5 * 8 + 4 + 4 + 1 + kBankLedgerSlots * 10;  // 289
+static_assert(kBankWire == 289);
 // v15 records. A container row is its key + the whole component: 5 (key) + 1
 // (kind) + 1 (opened) + 4 slots x 5 B ([inventory] cell wire) = 27. A corpse row
 // is 2 (floor) + 3 x 12 (pos / colour / half-extents, f32) + 3 (mobKind /
@@ -311,7 +328,8 @@ inline constexpr std::size_t kContainerRecWire = 5 + 1 + 1 + 4 * 5;   // 27
 inline constexpr std::size_t kCorpseRecWire = 2 + 36 + 3 + 8 * 5;     // 81
 inline constexpr std::size_t kSaveFixedWire =
     kLedgerWire + kBookWire + kPlayerWire + kRpgWire + kCraftingWire +
-    kCombatSaveWire + kStatusWire + kSamosborWire + kFastTravelWire + kQuestLogWire;
+    kCombatSaveWire + kStatusWire + kSamosborWire + kFastTravelWire + kBankWire +
+    kQuestLogWire;
 
 // Sanity ceiling on the container/corpse record lists, so a corrupt header cannot
 // ask for a huge allocation before the checksum has had a chance to reject it. 64
@@ -558,6 +576,10 @@ struct SaveState {
     // discovered", so a SaveState built by hand still means something sane.
     SamosborState samosbor{};
     FastTravelState fastTravel{};
+    // Version 16 / SAVBANK: the account. Lives in the run state (main aliases
+    // it like the ledger), so F5/F9 stopped forgetting the deposit and the debt
+    // — the gap economy.h stated in words since the day it was written.
+    BankAccount bank{};
     // v15: every crate and every corpse anywhere in the building, contents and
     // all — not just the live floor's. Only the resident floor's are live
     // entities, so the other floors' exist ONLY in these lists — see

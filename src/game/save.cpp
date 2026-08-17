@@ -384,6 +384,27 @@ void visit_corpse_rec(Ar& ar, R& rec) {
     }
 }
 
+// v16 / SAVBANK: the account, field by field. lastInterestTick is skipped by
+// design ([save.h] version note) — the READER arms it to zero and the load site
+// re-bases it to the current sim tick.
+template <class Ar, class B>
+void visit_bank(Ar& ar, B& b) {
+    ar.i64(b.deposit);
+    ar.i64(b.loanPrincipal);
+    ar.i64(b.loanAccrued);
+    ar.i64(b.interestEarned);
+    ar.i64(b.interestPaid);
+    ar.i32(b.creditLimit);
+    ar.u32(b.entries);
+    ar.u8(b.band);
+    for (std::size_t i = 0; i < kBankLedgerSlots; ++i) {
+        ar.i32(b.ledger[i].amount);
+        ar.u32(b.ledger[i].tick);
+        ar.u8(b.ledger[i].op);
+        ar.u8(b.ledger[i].band);
+    }
+}
+
 // CRC-32 (reflected 0xEDB88320), computed bit-serially rather than from a table.
 // 8 shifts per byte over a ~3.6 KB save is a few microseconds — a lookup table would be
 // 1 KB of static data and a first-use question, to save nothing measurable on a
@@ -485,15 +506,16 @@ static_assert(FastTravelState::wire_bytes() == kFastTravelWire);
 // 927 is ALSO the number v10 asserted before hpBank existed. Same integer, two
 // different formats (v10: nine craft axes, no hpBank; v12: eight axes, hpBank) —
 // the version field is what tells them apart, not this sum.
-static_assert(kSaveFixedWire == 946 + kSamosborWire + kFastTravelWire);  // 995 (v14: +64 inventory)
-static_assert(kSaveFixedWire == 995);
+static_assert(kSaveFixedWire ==
+              946 + kSamosborWire + kFastTravelWire + kBankWire);
+static_assert(kSaveFixedWire == 1284);  // v16: +289 bank
 static_assert(kFactionWire == 36);
-// v15: the empty save carries the fixed 995 + faction 36 + header 64 + the
-// inline corpse-count u32 = 1099; container/corpse rows are 27 / 81 B each.
-static_assert(save_bytes_for(0) == 1099);
-static_assert(save_bytes_for(2) == 1099 + 2 * kContainerRecWire);
-static_assert(save_bytes_for(0, 3) == 1099 + 3 * kCorpseRecWire);
-static_assert(save_bytes_for(0, 0, 100, 50) == 1099 + 150);
+// v16: the empty save carries the fixed 1284 + faction 36 + header 64 + the
+// inline corpse-count u32 = 1388; container/corpse rows are 27 / 81 B each.
+static_assert(save_bytes_for(0) == 1388);
+static_assert(save_bytes_for(2) == 1388 + 2 * kContainerRecWire);
+static_assert(save_bytes_for(0, 3) == 1388 + 3 * kCorpseRecWire);
+static_assert(save_bytes_for(0, 0, 100, 50) == 1388 + 150);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two
@@ -539,6 +561,12 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     // would make the reader's offset depend on a count.
     visit_samosbor(bw, st.samosbor);
     for (std::size_t i = 0; i < kFastTravelWire; ++i) bw.u8(st.fastTravel.raw()[i]);
+    // Version 16 / SAVBANK: the account, after the clocks, before the records —
+    // fixed blocks stay ahead of the variable ones, same law as v7..v10.
+    {
+        BankAccount tmpBank = st.bank;   // the visitor is read/write
+        visit_bank(bw, tmpBank);
+    }
     // Version 15: the container rows (header-counted), then the corpse rows
     // behind their own inline u32 — see save_bytes_for for why the count is here.
     for (const ContainerRecord& rec : st.containers) {
@@ -687,6 +715,8 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     // Version 10 / SAVCLOCK: mirrors the writer exactly, same order, same position.
     visit_samosbor(r, tmp.samosbor);
     for (std::size_t i = 0; i < kFastTravelWire; ++i) r.u8(tmp.fastTravel.raw()[i]);
+    visit_bank(r, tmp.bank);
+    tmp.bank.lastInterestTick = 0;   // re-armed by the load site ([save.h])
     tmp.containers.resize(static_cast<std::size_t>(h.containerCount));
     for (ContainerRecord& rec : tmp.containers) visit_container_rec(r, rec);
     {

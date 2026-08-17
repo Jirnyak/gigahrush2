@@ -1029,7 +1029,9 @@ if(GIGA_BUILD_TESTS)
     # разговора (suite_dice: ставка/жадный пакет/физрасчёт/сдача/детерминизм).
     # 243026 -> 243045 (+19) on 2026-08-17: банкир (инкремент C) — касса
     # teller banked<->монеты (клампы по счёту и сумке) + гейт «БАНК» на Duty.
-        PASS_REGULAR_EXPRESSION "game_test: 243045 checks, 0 failures")
+    # 243045 -> 243565 (+520) on 2026-08-17: сейв v16 (SAVBANK) — счёт едет
+    # целиком минус lastInterestTick; раунд-трип пофилдово + 24 строки кольца.
+        PASS_REGULAR_EXPRESSION "game_test: 243565 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются
