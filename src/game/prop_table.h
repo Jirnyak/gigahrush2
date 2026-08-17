@@ -46,24 +46,35 @@ enum class PropId : std::uint16_t {
 // 1 g .. 4294 tonnes, which brackets a 9 mm cartridge and a lift cabin with one
 // encoding and no per-table conversion to misremember.
 //
-// Layout is explicit: 1 x uint32, 6 x uint8, 7 x uint16 = 24 bytes, no hidden pad.
+// СВЕТ — ИЗ ЭТОЙ ЖЕ СТРОКИ ([ddalight.md]): lightRadiusMm != 0 означает «проп
+// излучает», и коллектор света видит ЛЮБОЙ такой проп — спец-случаев
+// «лампочка» в коде нет. Радиус в мм, как reachMm — одна единица на таблицу.
+// lightConeDeg — ПОЛУугол конуса, 0 = омни (занял бывший pad0_).
+//
+// Layout is explicit: 1 x uint32, 6 x uint8, 9 x uint16, 1 x uint32 pad = 32 bytes.
 struct PropDef {
-    std::uint32_t massG;         // 0  universal mass, GRAMS ([ecs] Mass)
-    std::uint8_t  shape;         // 4  PropShape ordinal
-    std::uint8_t  fallMode;      // 5  PropFallMode ordinal
-    std::uint8_t  interactKind;  // 6  Interactable::Kind or 255
-    std::uint8_t  emissive;      // 7  0..255 PropPass emissive
-    std::uint8_t  matId;         // 8
-    std::uint8_t  pad0_ = 0;     // 9
-    std::uint16_t colorRE3;      // 10 RGB x1000
-    std::uint16_t colorGE3;      // 12
-    std::uint16_t colorBE3;      // 14
-    std::uint16_t reachMm;       // 16 Interactable reach in millimetres
-    std::uint16_t sizeXMm;       // 18 authored mesh size, millimetres — the
-    std::uint16_t sizeYMm;       // 20 unit shape is scaled to exactly this,
-    std::uint16_t sizeZMm;       // 22 so a bulb is a bulb and not a 1 m drum
+    std::uint32_t massG;            // 0  universal mass, GRAMS ([ecs] Mass)
+    std::uint8_t  shape;            // 4  PropShape ordinal
+    std::uint8_t  fallMode;         // 5  PropFallMode ordinal
+    std::uint8_t  interactKind;     // 6  Interactable::Kind or 255
+    std::uint8_t  emissive;         // 7  0..255 PropPass emissive
+    std::uint8_t  matId;            // 8
+    std::uint8_t  lightConeDeg;     // 9  полуугол конуса света, 0 = омни
+    std::uint16_t colorRE3;         // 10 RGB x1000
+    std::uint16_t colorGE3;         // 12
+    std::uint16_t colorBE3;         // 14
+    std::uint16_t reachMm;          // 16 Interactable reach in millimetres
+    std::uint16_t sizeXMm;          // 18 authored mesh size, millimetres — the
+    std::uint16_t sizeYMm;          // 20 unit shape is scaled to exactly this,
+    std::uint16_t sizeZMm;          // 22 so a bulb is a bulb and not a 1 m drum
+    std::uint16_t lightRadiusMm;    // 24 0 = не светит
+    std::uint16_t lightIntensityE3; // 26 интенсивность x1000
+    std::uint8_t  flickerProfile;   // 28 FlickerProfile ([game/flicker.h]):
+                                    //    свет И emissive носителя, синхронно
+    std::uint8_t  pad0_ = 0;        // 29
+    std::uint16_t pad1_ = 0;        // 30
 };
-static_assert(sizeof(PropDef) == 24, "PropDef must stay a tight 24-byte row");
+static_assert(sizeof(PropDef) == 32, "PropDef must stay a tight 32-byte row");
 static_assert(alignof(PropDef) == 4);
 static_assert(std::is_trivially_copyable_v<PropDef>);
 
@@ -98,6 +109,12 @@ inline PropId prop_id_by_string(const char* id) {
             return static_cast<PropId>(i);
     }
     return static_cast<PropId>(kPropCount);
+}
+
+// Строка светит? Радиус и интенсивность обязаны идти парой — одинокий ноль
+// в любой из колонок означает «не источник».
+inline bool prop_emits_light(const PropDef& d) {
+    return d.lightRadiusMm != 0 && d.lightIntensityE3 != 0;
 }
 
 // Color as vec3 in 0..2 range (e3 / 1000).

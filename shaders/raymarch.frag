@@ -269,6 +269,17 @@ float voxel_ao(vec3 hitP, vec3 n) {
     return 1.0 - clamp(occ, 0.0, 1.0);
 }
 
+// Тень поверхности: короткий DDA-луч к источнику ПО ТОЙ ЖЕ геометрии, что
+// физика и пули, — march() и есть los_clear рендера. Ноль shadow map'ов, ноль
+// дополнительных пассов; прокарвил дыру — свет хлынул в тот же кадр, потому что
+// луч читает тот самый обновлённый воксельный mirror. Смещения старта/финиша —
+// у вызывающего surface_light, единые для всех реализаций.
+float giga_shadow(vec3 p, vec3 dirToLight, float dist) {
+    if (dist <= 0.0) return 1.0;
+    Hit sh = march(p, dirToLight, dist);
+    return sh.ok ? 0.0 : 1.0;
+}
+
 // =============================================================================
 // == shading — verbatim port of cube.frag (single-sourced here once the
 // == mesher and cube.frag's world half are deleted) ===========================
@@ -674,18 +685,7 @@ void main() {
 
     vec3 toCam = pc.camPos.xyz - vWorldPos;
     float d = length(toCam);
-    vec3 L = toCam / max(d, 1e-4);
-
-    vec3 viewDir = -L;
-    vec3 lightDir = normalize(vWorldPos - pc.camPos.xyz);
-
-    float g_scat = 0.55;
-    float cosTheta = dot(viewDir, lightDir);
-    float phase = (1.0 - g_scat * g_scat) / pow(max(1.0 + g_scat * g_scat - 2.0 * g_scat * cosTheta, 1e-4), 1.5);
-    float r = pc.fog.z;
-    float att = 1.0 / (1.0 + (d * d) / (r * r));
-
-    const vec3 kTungstenTint = vec3(1.00, 0.78, 0.45);
+    vec3 V = toCam / max(d, 1e-4);
 
 #ifdef GIGA_ALBEDO_ARRAY
     if (roughnessMask != 0u && (roughnessMask & (1u << mid)) != 0u) {
@@ -695,18 +695,14 @@ void main() {
 
     float specPow = max(2.0 / (roughness * roughness * roughness * roughness + 1e-4) - 2.0, 1.0);
     float specIntensity = (1.0 - roughness) * 0.25;
-    float spec = 0.0;
-    if (dot(n, L) > 0.0) {
-        vec3 H = normalize(L + viewDir);
-        float NdotH = max(dot(n, H), 0.0);
-        spec = pow(NdotH, specPow) * specIntensity * att * pc.camPos.w;
-    }
 
-    float lampDirect = pc.camPos.w * att * max(dot(n, L), 0.0);
-    float lampScatter = pc.camPos.w * att * phase * 0.25;
-    float lamp = lampDirect + lampScatter;
+    // Прямой свет — ЕДИНЫЙ цикл по light grid: лампочки, налобник (свет №0
+    // сетки — его аналитический двойник удалён, он учитывался дважды), мобы,
+    // трассеры, конусы. Тень каждого источника — giga_shadow выше.
+    vec3 directDiffuse, directSpec;
+    surface_light(vWorldPos, n, V, specPow, specIntensity, pc.torus.x,
+                  d, pc.fog.x, directDiffuse, directSpec);
 
-    vec3 lampColor = kTungstenTint * lamp;
     float fill = pc.sunDir.w * max(dot(n, normalize(pc.sunDir.xyz)), 0.0);
 
     float hemi = 0.5 + 0.5 * n.z;
@@ -715,7 +711,11 @@ void main() {
     const float kAoFloor = 0.32;
     float ao = kAoFloor + (1.0 - kAoFloor) * vAo;
     float aoDirect = mix(1.0, ao, pc.torus.y);
-    vec3 lit = albedo * (amb * ao + (lampColor + vec3(fill)) * aoDirect) + kTungstenTint * spec * aoDirect;
+    vec3 lit = albedo * (amb * ao + (directDiffuse + vec3(fill)) * aoDirect) + directSpec * aoDirect;
+
+    // Светоматериал светится сам ([ddalight.md]): нарисованный неон читается
+    // и в полной тьме; сам СВЕТ от него в сетку кладёт бейк этажа.
+    lit += albedo * kMatEmissive[mid];
 
     // fog.y is kWorldExtent*0.50*fogScale, so fogScale = fog.y / (extent*0.5) and
     // the pulse is (1 - fogScale) / (1 - kSamosborFogSqueeze). Both constants used
@@ -729,31 +729,19 @@ void main() {
     float samosborPulse = ub.timeParams.y;
     float timeSec = ub.timeParams.x;
 
-    vec3 gridMin = pc.camPos.xyz - vec3(32.0, 16.0, 32.0);
     vec4 fogVol = march_volumetric_fog(
         pc.camPos.xyz,
         normalize(vWorldPos - pc.camPos.xyz),
         min(d, pc.fog.y),
         gl_FragCoord.xy,
-        pc.camPos.xyz,
-        pc.camPos.w,
-        pc.fog.z,
         pc.sunDir.xyz,
         pc.sunDir.w,
-        gridMin,
-        vec3(32.0, 16.0, 32.0),
-        vec3(2.0, 2.0, 2.0),
-        timeSec,
+        pc.torus.x,
         samosborPulse
     );
     lit = lit * fogVol.a + fogVol.rgb;
 
-    // Бывшая «высотная» модуляция exp(-0.04*z) — шов на врапе тора; константа
-    // = её значение на жилых высотах (z≈40 м). [volumetric_fog.glsl]
-    const float kFogDistScale = 0.20;
-    float effectiveDist = d * kFogDistScale;
-
-    float fog = clamp((effectiveDist - pc.fog.x) / max(pc.fog.y - pc.fog.x, 1e-3), 0.0, 1.0);
+    float fog = distance_fog(d, pc.fog.x, pc.fog.y);
 
     float fogFlicker = 1.0 + samosborPulse * 0.35 * sin(timeSec * 22.0 + vWorldPos.x * 0.4 + vWorldPos.y * 0.3);
     fog = clamp(fog * fogFlicker, 0.0, 1.0);

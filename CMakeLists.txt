@@ -258,7 +258,7 @@ set(_giga_spv_files "")
 # leaves the stale .spv in place, and the change looks like it did nothing. Kept an
 # explicit list rather than a GLOB — a stray .glsl should not silently start forcing
 # every shader to recompile.
-set(_giga_glsl_includes ${CMAKE_SOURCE_DIR}/shaders/material_surface.glsl ${CMAKE_SOURCE_DIR}/shaders/volumetric_fog.glsl)
+set(_giga_glsl_includes ${CMAKE_SOURCE_DIR}/shaders/material_surface.glsl ${CMAKE_SOURCE_DIR}/shaders/volumetric_fog.glsl ${CMAKE_SOURCE_DIR}/shaders/flicker.glsl ${CMAKE_SOURCE_DIR}/shaders/shadow_march.glsl)
 foreach(_sh cube.frag body.vert prop.vert prop.frag raymarch.vert raymarch.frag wire.vert wire.frag particle.vert particle.frag cloth.vert cloth.frag post_pass.vert post_pass.frag)
     add_custom_command(
         OUTPUT ${_giga_spv_dir}/${_sh}.spv
@@ -330,15 +330,10 @@ add_custom_command(
     COMMENT "glslc cull.comp -> cull.comp.spv")
 list(APPEND _giga_spv_files ${_giga_spv_dir}/cull.comp.spv)
 
-# prop_tex.frag — triplanar KTX2 texture variant for prop pass.
-add_custom_command(
-    OUTPUT ${_giga_spv_dir}/prop_tex.frag.spv
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O -DGIGA_PROP_ALBEDO_ARRAY
-        ${CMAKE_SOURCE_DIR}/shaders/prop_tex.frag
-        -o ${_giga_spv_dir}/prop_tex.frag.spv
-    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/prop_tex.frag ${_giga_glsl_includes}
-    COMMENT "glslc prop_tex.frag -DGIGA_PROP_ALBEDO_ARRAY -> prop_tex.frag.spv")
-list(APPEND _giga_spv_files ${_giga_spv_dir}/prop_tex.frag.spv)
+# prop_tex.frag УДАЛЁН 2026-08-17: компилировался каждый билд, но НИ ОДИН
+# пасс его не загружал (grep prop_tex по src/ пуст) — сирота marko-эпохи и
+# последний носитель выпиленного аналитического налобника. Текстурные пропсы,
+# когда понадобятся, — вариант prop.frag через -D, как cube_tex ниже.
 
 # cube.frag compiled a SECOND time, with -DGIGA_ALBEDO_ARRAY, into cube_tex.frag.spv.
 #
@@ -1031,7 +1026,10 @@ if(GIGA_BUILD_TESTS)
     # teller banked<->монеты (клампы по счёту и сумке) + гейт «БАНК» на Duty.
     # 243045 -> 243565 (+520) on 2026-08-17: сейв v16 (SAVBANK) — счёт едет
     # целиком минус lastInterestTick; раунд-трип пофилдово + 24 строки кольца.
-        PASS_REGULAR_EXPRESSION "game_test: 243565 checks, 0 failures")
+    # 243565 -> 243576 (+11) on 2026-08-17: light_bake — светоматериалы в
+    # эмиттеры: пустой мир, полоса-кластер (центроид/радиус/цвет/интенсивность),
+    # раздельные пятна, кластер через шов тора ([ddalight.md]).
+        PASS_REGULAR_EXPRESSION "game_test: 243576 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

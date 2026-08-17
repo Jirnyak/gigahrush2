@@ -174,6 +174,13 @@ public:
     VkBuffer stain_index_buffer() const { return stainIdx_.buffer; }
     VkBuffer stain_pool_buffer() const { return stainPool_.buffer; }
 
+    // Теневой сет ([ddalight.md]): masks + class для DDA-луча giga_shadow в
+    // РАСТРОВЫХ пассах (тела/пропсы) — только занятость, без материалов.
+    // Владелец буферов владеет и их дескрипторами; raymarch держит свой
+    // полный сет отдельно, как и раньше.
+    VkDescriptorSetLayout shadow_set_layout() const { return shadowSetLayout_; }
+    VkDescriptorSet shadow_set() const { return shadowSet_; }
+
 private:
     bool upload_via_staging(VulkanBuffer& dst, const void* src, std::size_t bytes);
     bool readback_compare(VulkanBuffer& src, const void* expected,
@@ -198,6 +205,10 @@ private:
     VkCommandPool oneShotPool_ = VK_NULL_HANDLE;
     VkCommandBuffer oneShotCmd_ = VK_NULL_HANDLE;
     VkFence oneShotFence_ = VK_NULL_HANDLE;
+
+    VkDescriptorSetLayout shadowSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorPool shadowPool_ = VK_NULL_HANDLE;
+    VkDescriptorSet shadowSet_ = VK_NULL_HANDLE;
 
     // Dirty queue: dedup bitset (kMacroCells bits = 256 KiB) + the cell list.
     std::vector<std::uint64_t> dirtyBits_;

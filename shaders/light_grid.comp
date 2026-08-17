@@ -6,11 +6,14 @@ layout(local_size_x = 8, local_size_y = 4, local_size_z = 8) in;
 struct PointLight {
     vec4 posRadius;      // xyz = world position (m), w = radius (m)
     vec4 colorIntensity; // rgb = linear color (0..1), w = effective intensity
+    vec4 dirCone;        // xyz = spot dir, w = cos(outer half-angle); <= -1.5 = омни.
+                         // Биннинг конус НЕ режет — сфера радиуса консервативна;
+                         // конус применяют потребители (surface_light / fog march).
 };
 
 struct LightGridCell {
-    uint count;            // number of intersecting lights (max 15)
-    uint lightIndices[15]; // indices into uPointLights array
+    uint count;            // number of intersecting lights (max 31)
+    uint lightIndices[31]; // indices into uPointLights array
 };
 
 layout(set = 0, binding = 0, std430) readonly buffer PointLightBuffer {
@@ -59,14 +62,20 @@ float dist_sq_point_aabb_toroidal(vec3 p, vec3 bMin, vec3 bMax, float L) {
     return dot(delta, delta);
 }
 
+// Кооперативный тайл биннинга: 256 потоков воркгруппы грузят 256 светов
+// (ТОЛЬКО posRadius — цвет биннингу не нужен) в shared один раз, и каждый
+// тестирует их против своей клетки. Наивный вариант читал полный 48-байтовый
+// структ на каждую пару клетка×свет: 262144 клетки × 512 светов × 48 B =
+// 6.4 GB/кадр из VRAM — 26 мс кадра на плотном этаже (замер 2026-08-17).
+// Тайл режет чтения в 256 раз (одна загрузка на воркгруппу, не на поток).
+shared vec4 sTile[256];
+
 void main() {
     uvec3 cellIdx = gl_GlobalInvocationID;
     uvec3 gridDim = uvec3(uint(pc.gridExt.x), uint(pc.gridExt.y), uint(pc.gridExt.z));
 
-    if (cellIdx.x >= gridDim.x || cellIdx.y >= gridDim.y || cellIdx.z >= gridDim.z) {
-        return;
-    }
-
+    // Диспатч всегда кратен воркгруппе (64/8, 64/4, 64/8) — потоков вне сетки
+    // не существует; ранний return здесь запрещён барьерами тайла.
     uint flatCellIndex = cellIdx.x + cellIdx.y * gridDim.x + cellIdx.z * (gridDim.x * gridDim.y);
 
     vec3 cellSize = vec3(pc.gridMin.w, pc.gridExt.w, pc.gridMin.w);
@@ -75,31 +84,75 @@ void main() {
 
     uint activeCount = min(uPointLightCount, uint(pc.params.z));
     uint foundCount = 0u;
-    uint indices[15];
+    uint indices[31];
+    float scores[31];
+    // Худший слот кэшируется и пересчитывается ТОЛЬКО после замены — скан
+    // всех 31 на каждого кандидата давал 26 мс кадра в плотном поле ламп
+    // (блейм, ~200 кандидатов на клетку; замер 2026-08-17).
+    uint worst = 0u;
+    float worstScore = -1.0;
 
-    for (uint i = 0u; i < activeCount; ++i) {
-        PointLight light = uPointLights[i];
-        float radius = light.posRadius.w;
-        if (radius <= 0.0) continue;
+    // Перелив клетки решается ВКЛАДОМ В КЛЕТКУ (top-K по d²/r²), а не порядком
+    // CPU-сортировки по камере. Порядок-по-камере был живым багом: у плотного
+    // кластера ламп подлёт камеры отдавал весь лимит клетки лампам У КАМЕРЫ,
+    // дальние клетки теряли свои родные лампы, и комната ТЕМНЕЛА при
+    // приближении к свету (репорт владельца со скринами, 2026-08-17). Вклад в
+    // клетку от камеры не зависит — картинка стабильна с любого расстояния.
+    const uint tid = gl_LocalInvocationIndex;
+    for (uint base = 0u; base < activeCount; base += 256u) {
+        const uint n = min(activeCount - base, 256u);
+        if (tid < n) sTile[tid] = uPointLights[base + tid].posRadius;
+        barrier();
 
-        float intensity = light.colorIntensity.w;
-        if (intensity <= 0.001) continue;
+        for (uint j = 0u; j < n; ++j) {
+            vec4 pr = sTile[j];
+            float radius = pr.w;
+            // CPU add_light уже отверг radius<=0 и intensity<=0.001 — здесь
+            // только геометрия.
+            float dSq =
+                dist_sq_point_aabb_toroidal(pr.xyz, cellMin, cellMax, pc.params.w);
 
-        vec3 lightPos = light.posRadius.xyz;
-        float dSq =
-            dist_sq_point_aabb_toroidal(lightPos, cellMin, cellMax, pc.params.w);
+            if (dSq > radius * radius) continue;
+            float score = dSq / (radius * radius); // 0 = внутри клетки, 1 = едва касается
 
-        if (dSq <= radius * radius) {
-            if (foundCount < 15u) {
-                indices[foundCount] = i;
+            if (foundCount < 31u) {
+                indices[foundCount] = base + j;
+                scores[foundCount] = score;
+                if (score > worstScore) { worstScore = score; worst = foundCount; }
                 foundCount++;
+                continue;
+            }
+            // Полный список: вытесняем худшего, если новый вкладнее.
+            if (score < worstScore) {
+                indices[worst] = base + j;
+                scores[worst] = score;
+                worstScore = -1.0;
+                for (uint k = 0u; k < 31u; ++k) {
+                    if (scores[k] > worstScore) { worstScore = scores[k]; worst = k; }
+                }
             }
         }
+        barrier();
+    }
+
+    // Список клетки пишется ОТСОРТИРОВАННЫМ по вкладу (лучший — первым):
+    // потребители тратят бюджет (теневые лучи, шаги дымки) на сильнейшие
+    // источники и режут тусклый хвост стабильно, без мерцания состава.
+    for (uint a = 1u; a < foundCount; ++a) {
+        float s = scores[a];
+        uint  v = indices[a];
+        uint  b = a;
+        for (; b > 0u && scores[b - 1u] > s; --b) {
+            scores[b] = scores[b - 1u];
+            indices[b] = indices[b - 1u];
+        }
+        scores[b] = s;
+        indices[b] = v;
     }
 
     LightGridCell cell;
     cell.count = foundCount;
-    for (uint k = 0u; k < 15u; ++k) {
+    for (uint k = 0u; k < 31u; ++k) {
         cell.lightIndices[k] = (k < foundCount) ? indices[k] : 0u;
     }
 

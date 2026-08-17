@@ -60,6 +60,25 @@ struct PropMesh {
     std::uint8_t animPhase = 0;
 };
 
+// Свет пропа — испечён из его строки data/props.csv при спавне
+// (light_radius_mm / light_intensity_e3 / light_cone_deg / flicker; цвет =
+// цвет пропа). Вешается spawn_prop_from_id ТОЛЬКО когда строка светит;
+// коллектор света ([main.cpp] collect_scene_lights) видит любой проп с этим
+// компонентом — спец-случаев «лампочка» в коде нет ([ddalight.md]).
+// flicker — FlickerProfile ([game/flicker.h]): та же чистая функция мерцания
+// применяется к интенсивности света здесь и к emissive поверхности в
+// prop.frag — плафон и свет синхронны по построению. Mains-профиль гаснет от
+// power cut; прибор со своим питанием — нет. dropM — подвес: свет у нижней
+// кромки арматуры (полвысоты меша), а не внутри неё.
+struct PropLight {
+    vec3  color{1.0f, 1.0f, 1.0f};
+    float radiusM   = 0.0f;
+    float intensity = 0.0f;
+    float dropM     = 0.0f;
+    std::uint8_t coneDeg = 0; // полуугол, 0 = омни
+    std::uint8_t flicker = 0; // FlickerProfile ordinal
+};
+
 // Headless POD mirror of gpu::PropInstance for tests / main upload.
 // Collect only StaticPropTag entities (detached props go to BodyPass).
 struct PropMeshInstance {

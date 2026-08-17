@@ -16,7 +16,7 @@ namespace {
 
 // Push-константы пост-паса; раскладка зеркалит post_pass.frag.
 struct PostPush {
-    float params0[4];    // timeSec, darkAdaptation, crtEnabled, chromAberr
+    float params0[4];    // timeSec, СВОБОДЕН (бывш. экспозиция), crtEnabled, chromAberr
     float params1[4];    // curvature, scanlineIntensity, vignettePower, phosphorWash
     float resolution[4]; // w, h, 1/w, 1/h
 };
@@ -639,7 +639,7 @@ void VulkanRenderer::begin_post_pass() {
 
     PostPush push{};
     push.params0[0] = static_cast<float>(SDL_GetTicks()) / 1000.0f;
-    push.params0[1] = darkAdaptation;
+    push.params0[1] = 0.0f; // свободный слот (бывш. экспозиция, вырезана)
     push.params0[2] = crtEnabled ? 1.0f : 0.0f;
     push.params0[3] = chromaticAberration;
     push.params1[0] = crtCurvature;

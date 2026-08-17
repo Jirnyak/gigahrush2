@@ -39,7 +39,8 @@ inline constexpr std::uint16_t kMatHardness[kMatCount] = {
     384                 ,  // 16 electric_grate
     16                  ,  // 17 acid_pool
     16                  ,  // 18 fire_cell
-    180                    // 19 pipe_metal
+    180                 ,  // 19 pipe_metal
+    48                     // 20 neon_tube
 };
 
 static_assert(sizeof(kMatHardness) / sizeof(kMatHardness[0]) == kMatCount,
@@ -74,13 +75,143 @@ inline constexpr float kMatDensity[kMatCount] = {
     7800.0f,  // 16 electric_grate
     1100.0f,  // 17 acid_pool
     200.0f ,  // 18 fire_cell
-    7800.0f   // 19 pipe_metal
+    7800.0f,  // 19 pipe_metal
+    1400.0f   // 20 neon_tube
 };
 
 // Mass of ONE sub-voxel (0.25 m cube) of this material, in kg.
 inline constexpr float kSubVoxelVolumeM3 = 0.25f * 0.25f * 0.25f;
 inline float material_subvoxel_mass_kg(CellType t) {
     return (t < kMatCount ? kMatDensity[t] : 0.0f) * kSubVoxelVolumeM3;
+}
+
+// СВЕТОМАТЕРИАЛЫ ([ddalight.md]): light_radius_mm != 0 — ячейки этого
+// материала излучают; бейк этажа кластеризует их в статические эмиттеры
+// (game/light_bake.h). Цвет источника = альбедо материала: нарисованный
+// неон светит тем цветом, каким покрашен. Единицы — мм и x1000, как в
+// data/props.csv (одна величина = одна единица во всех таблицах).
+inline constexpr std::uint16_t kMatLightRadiusMm[kMatCount] = {
+    0   ,  //  0 air
+    0   ,  //  1 concrete
+    0   ,  //  2 soil
+    0   ,  //  3 water_mark
+    0   ,  //  4 slab_tan
+    0   ,  //  5 extract
+    0   ,  //  6 door
+    0   ,  //  7 hub_pad
+    0   ,  //  8 plaster
+    0   ,  //  9 parquet
+    0   ,  // 10 shop_shutter
+    0   ,  // 11 lino
+    0   ,  // 12 factory_wall
+    0   ,  // 13 tread
+    0   ,  // 14 rust
+    0   ,  // 15 rubble
+    0   ,  // 16 electric_grate
+    0   ,  // 17 acid_pool
+    0   ,  // 18 fire_cell
+    0   ,  // 19 pipe_metal
+    8000   // 20 neon_tube
+};
+
+inline constexpr std::uint16_t kMatLightIntensityE3[kMatCount] = {
+    0   ,  //  0 air
+    0   ,  //  1 concrete
+    0   ,  //  2 soil
+    0   ,  //  3 water_mark
+    0   ,  //  4 slab_tan
+    0   ,  //  5 extract
+    0   ,  //  6 door
+    0   ,  //  7 hub_pad
+    0   ,  //  8 plaster
+    0   ,  //  9 parquet
+    0   ,  // 10 shop_shutter
+    0   ,  // 11 lino
+    0   ,  // 12 factory_wall
+    0   ,  // 13 tread
+    0   ,  // 14 rust
+    0   ,  // 15 rubble
+    0   ,  // 16 electric_grate
+    0   ,  // 17 acid_pool
+    0   ,  // 18 fire_cell
+    0   ,  // 19 pipe_metal
+    1500   // 20 neon_tube
+};
+
+// Linear albedo per id — the light colour source for emitters (and the same
+// numbers render/material_table.h carries for shading).
+inline constexpr float kMatAlbedoR[kMatCount] = {
+    0.000f,  //  0 air
+    0.300f,  //  1 concrete
+    0.240f,  //  2 soil
+    0.180f,  //  3 water_mark
+    0.360f,  //  4 slab_tan
+    0.100f,  //  5 extract
+    0.160f,  //  6 door
+    0.000f,  //  7 hub_pad
+    0.480f,  //  8 plaster
+    0.320f,  //  9 parquet
+    0.380f,  // 10 shop_shutter
+    0.260f,  // 11 lino
+    0.220f,  // 12 factory_wall
+    0.380f,  // 13 tread
+    0.400f,  // 14 rust
+    0.220f,  // 15 rubble
+    0.850f,  // 16 electric_grate
+    0.150f,  // 17 acid_pool
+    0.850f,  // 18 fire_cell
+    0.130f,  // 19 pipe_metal
+    0.250f   // 20 neon_tube
+};
+inline constexpr float kMatAlbedoG[kMatCount] = {
+    0.000f,  //  0 air
+    0.300f,  //  1 concrete
+    0.360f,  //  2 soil
+    0.280f,  //  3 water_mark
+    0.300f,  //  4 slab_tan
+    0.850f,  //  5 extract
+    0.240f,  //  6 door
+    0.800f,  //  7 hub_pad
+    0.440f,  //  8 plaster
+    0.200f,  //  9 parquet
+    0.400f,  // 10 shop_shutter
+    0.160f,  // 11 lino
+    0.300f,  // 12 factory_wall
+    0.240f,  // 13 tread
+    0.200f,  // 14 rust
+    0.180f,  // 15 rubble
+    0.700f,  // 16 electric_grate
+    0.750f,  // 17 acid_pool
+    0.250f,  // 18 fire_cell
+    0.160f,  // 19 pipe_metal
+    0.950f   // 20 neon_tube
+};
+inline constexpr float kMatAlbedoB[kMatCount] = {
+    0.000f,  //  0 air
+    0.280f,  //  1 concrete
+    0.180f,  //  2 soil
+    0.550f,  //  3 water_mark
+    0.220f,  //  4 slab_tan
+    0.420f,  //  5 extract
+    0.420f,  //  6 door
+    0.950f,  //  7 hub_pad
+    0.380f,  //  8 plaster
+    0.100f,  //  9 parquet
+    0.420f,  // 10 shop_shutter
+    0.120f,  // 11 lino
+    0.220f,  // 12 factory_wall
+    0.150f,  // 13 tread
+    0.080f,  // 14 rust
+    0.140f,  // 15 rubble
+    0.150f,  // 16 electric_grate
+    0.120f,  // 17 acid_pool
+    0.040f,  // 18 fire_cell
+    0.140f,  // 19 pipe_metal
+    0.850f   // 20 neon_tube
+};
+
+inline bool material_emits_light(CellType t) {
+    return t < kMatCount && kMatLightRadiusMm[t] != 0 && kMatLightIntensityE3[t] != 0;
 }
 
 } // namespace giga

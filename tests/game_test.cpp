@@ -119,6 +119,7 @@ int g_checks = 0;
 // src/game/floor_stream.cpp called nav_cache on every floor load. tools/check_source_rules.cmake
 // now fails on any suite_*.inl that no tests/*.cpp includes, so this cannot recur silently.
 #include "suite_navcache.inl"
+#include "suite_lightbake.inl"
 // Wave 6 — three ports from the TypeScript original. Same self-contained-includes
 // discipline as the wave-5 block above: each reaches for headers this file never needed
 // (game/craft.h, game/quest.h, game/speech.h and the generated tables behind them).
@@ -5390,6 +5391,7 @@ int main() {
     test_floor_bucket_index();
     test_stream_migration_reembodies();
     test_props_game_all();
+    test_light_bake_clusters();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
 

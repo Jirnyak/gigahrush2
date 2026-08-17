@@ -80,9 +80,11 @@ bool make_module(VkDevice dev, const std::vector<char>& spv, VkShaderModule* m) 
 } // namespace
 
 bool BodyPass::init(VulkanDevice& dev, VkRenderPass renderPass,
-                    const char* shaderDir, VkDescriptorSetLayout lightGridSetLayout) {
+                    const char* shaderDir, VkDescriptorSetLayout lightGridSetLayout,
+                    VkDescriptorSetLayout shadowSetLayout) {
     dev_ = &dev;
     lightGridSetLayout_ = lightGridSetLayout;
+    shadowSetLayout_ = shadowSetLayout;
     if (!create_cube_mesh()) return false;
     if (!create_pipeline(renderPass, shaderDir)) return false;
 
@@ -205,7 +207,7 @@ bool BodyPass::create_pipeline(VkRenderPass renderPass, const char* shaderDir) {
     lci.pPushConstantRanges = &pcr;
 
     VkDescriptorSetLayout dummySet0 = VK_NULL_HANDLE;
-    VkDescriptorSetLayout setLayouts[2] = {};
+    VkDescriptorSetLayout setLayouts[3] = {};
     if (lightGridSetLayout_ != VK_NULL_HANDLE) {
         VkDescriptorSetLayoutCreateInfo li{};
         li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -214,6 +216,13 @@ bool BodyPass::create_pipeline(VkRenderPass renderPass, const char* shaderDir) {
         setLayouts[0] = dummySet0;
         setLayouts[1] = lightGridSetLayout_;
         lci.setLayoutCount = 2;
+        // Set 2 — теневой сет вокселного зеркала: тела принимают тени мира
+        // ([ddalight.md]; отбрасывать свои — отдельная задача, тел нет в
+        // зеркале).
+        if (shadowSetLayout_ != VK_NULL_HANDLE) {
+            setLayouts[2] = shadowSetLayout_;
+            lci.setLayoutCount = 3;
+        }
         lci.pSetLayouts = setLayouts;
     }
 
@@ -250,7 +259,7 @@ bool BodyPass::create_pipeline(VkRenderPass renderPass, const char* shaderDir) {
 
 void BodyPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
                       const Registry& reg, LayerId layer, const CubePush& push,
-                      VkDescriptorSet lightGridSet) {
+                      VkDescriptorSet lightGridSet, VkDescriptorSet shadowSet) {
     const vec3 camPos{push.camPos.x, push.camPos.y, push.camPos.z};
     const float fogEnd = push.fog.y;
     const float fogEndSq = fogEnd * fogEnd;
@@ -293,6 +302,9 @@ void BodyPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
     if (lightGridSet != VK_NULL_HANDLE) {
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 1, 1, &lightGridSet, 0, nullptr);
+    }
+    if (shadowSet != VK_NULL_HANDLE) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 2, 1, &shadowSet, 0, nullptr);
     }
     vkCmdPushConstants(cmd, layout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,

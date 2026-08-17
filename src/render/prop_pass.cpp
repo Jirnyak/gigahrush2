@@ -281,13 +281,17 @@ void PropPass::clear_instances() {
 }
 
 void PropPass::record(VkCommandBuffer cmd, uint32_t frameIndex,
-                      const CubePush& push, VkDescriptorSet lightGridSet) {
+                      const CubePush& push, VkDescriptorSet lightGridSet,
+                      VkDescriptorSet shadowSet) {
     if (!pipeline_) return;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
     if (layout_ != VK_NULL_HANDLE) {
         if (lightGridSet != VK_NULL_HANDLE) {
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 1, 1, &lightGridSet, 0, nullptr);
+        }
+        if (shadowSet != VK_NULL_HANDLE) {
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 2, 1, &shadowSet, 0, nullptr);
         }
         vkCmdPushConstants(cmd, layout_,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,

@@ -13,7 +13,7 @@
 
 // Rows read from data/materials.csv — ONE PER CellType, so this IS the material
 // count. The `source_rules` ctest compares it against the CSV's data-row count.
-const uint kMaterialCsvRows = 20u;
+const uint kMaterialCsvRows = 21u;
 
 // Family per material id — see the kFam* constants in cube.frag.
 //   0 air                  generic  authored                 CV 0.0000
@@ -59,12 +59,15 @@ const uint kMaterialCsvRows = 20u;
 //  19 pipe_metal           ribbed   authored                 CV 0.1000
 //     AUTHORED: baked wall-pipe runs (antourage) — painted steel conduit,
 //     dents and joint rings
+//  20 neon_tube            smooth   authored                 CV 0.0400
+//     неоновая трубка — светоматериал: лепи вывески/лампы вокселями, бейк
+//     кластеризует в эмиттеры (ddalight.md)
 // Table length. cube.frag clamps the incoming material id against
 // this, so an id the CPU should never emit cannot index past the
 // arrays — an out-of-range const-array read is undefined in GLSL.
-const uint kMatSurfaceCount = 20u;
+const uint kMatSurfaceCount = 21u;
 
-const uint kMatFamily[20] = uint[20](
+const uint kMatFamily[21] = uint[21](
     0u,  //  0 air
     8u,  //  1 concrete
     8u,  //  2 soil
@@ -84,14 +87,15 @@ const uint kMatFamily[20] = uint[20](
     5u,  // 16 electric_grate
     8u,  // 17 acid_pool
     8u,  // 18 fire_cell
-    4u   // 19 pipe_metal
+    4u,  // 19 pipe_metal
+    8u   // 20 neon_tube
 );
 
 // x = lognormal sigma reproducing measured luminance CV,
 // y = structural pitch in cycles per 2 m cell,
 // z = chroma_sigma (lognormal chroma width),
 // w = bump_scale (normal perturbation scale).
-const vec4 kMatSurface[20] = vec4[20](
+const vec4 kMatSurface[21] = vec4[21](
     vec4(0.00000,   0.00, 0.00000, 0.00000),  //  0 air
     vec4(0.07987,   1.00, 0.03000, 0.04000),  //  1 concrete
     vec4(0.21741,   0.80, 0.12000, 0.10000),  //  2 soil
@@ -111,11 +115,12 @@ const vec4 kMatSurface[20] = vec4[20](
     vec4(0.08982,   8.00, 0.06000, 0.30000),  // 16 electric_grate
     vec4(0.09975,   0.80, 0.10000, 0.05000),  // 17 acid_pool
     vec4(0.14917,   1.20, 0.12000, 0.05000),  // 18 fire_cell
-    vec4(0.09975,  10.00, 0.06000, 0.30000)   // 19 pipe_metal
+    vec4(0.09975,  10.00, 0.06000, 0.30000),  // 19 pipe_metal
+    vec4(0.03998,   0.00, 0.00000, 0.00000)   // 20 neon_tube
 );
 
 // RGB chroma tint axis per material id.
-const vec3 kMatChromaAxis[20] = vec3[20](
+const vec3 kMatChromaAxis[21] = vec3[21](
     vec3(1.00000, 1.00000, 1.00000),  //  0 air
     vec3(1.00000, 1.00000, 1.00000),  //  1 concrete
     vec3(1.15000, 0.90000, 0.65000),  //  2 soil
@@ -135,5 +140,33 @@ const vec3 kMatChromaAxis[20] = vec3[20](
     vec3(1.10000, 1.00000, 0.60000),  // 16 electric_grate
     vec3(0.80000, 1.20000, 0.70000),  // 17 acid_pool
     vec3(1.25000, 0.85000, 0.50000),  // 18 fire_cell
-    vec3(0.95000, 1.00000, 1.05000)   // 19 pipe_metal
+    vec3(0.95000, 1.00000, 1.05000),  // 19 pipe_metal
+    vec3(1.00000, 1.00000, 1.00000)   // 20 neon_tube
+);
+
+// Самосвечение поверхности (albedo * kMatEmissive): нарисованный
+// светоматериал читается источником даже в полной тьме; сам СВЕТ
+// от него в сетку кладёт бейк этажа ([ddalight.md]).
+const float kMatEmissive[21] = float[21](
+    0.000,  //  0 air
+    0.000,  //  1 concrete
+    0.000,  //  2 soil
+    0.000,  //  3 water_mark
+    0.000,  //  4 slab_tan
+    0.000,  //  5 extract
+    0.000,  //  6 door
+    0.000,  //  7 hub_pad
+    0.000,  //  8 plaster
+    0.000,  //  9 parquet
+    0.000,  // 10 shop_shutter
+    0.000,  // 11 lino
+    0.000,  // 12 factory_wall
+    0.000,  // 13 tread
+    0.000,  // 14 rust
+    0.000,  // 15 rubble
+    0.000,  // 16 electric_grate
+    0.000,  // 17 acid_pool
+    0.000,  // 18 fire_cell
+    0.000,  // 19 pipe_metal
+    1.600   // 20 neon_tube
 );

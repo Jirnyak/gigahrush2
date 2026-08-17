@@ -120,6 +120,58 @@ bool VoxelMirror::init(VulkanDevice& dev) {
     fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     VK_TRY(vkCreateFence(dev.device, &fi, nullptr, &oneShotFence_));
 
+    // Теневой сет для растровых пассов ([ddalight.md]): masks(0) + class(1),
+    // фрагментный стейдж — giga_shadow телам/пропсам маршует ту же занятость,
+    // что мир и физика. Один сет на всех потребителей; raymarch держит свой.
+    {
+        VkDescriptorSetLayoutBinding b[2]{};
+        for (uint32_t i = 0; i < 2; ++i) {
+            b[i].binding = i;
+            b[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            b[i].descriptorCount = 1;
+            b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo li{};
+        li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        li.bindingCount = 2;
+        li.pBindings = b;
+        VK_TRY(vkCreateDescriptorSetLayout(dev.device, &li, nullptr,
+                                           &shadowSetLayout_));
+
+        VkDescriptorPoolSize ps{};
+        ps.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        ps.descriptorCount = 2;
+        VkDescriptorPoolCreateInfo pci{};
+        pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        pci.maxSets = 1;
+        pci.poolSizeCount = 1;
+        pci.pPoolSizes = &ps;
+        VK_TRY(vkCreateDescriptorPool(dev.device, &pci, nullptr, &shadowPool_));
+
+        VkDescriptorSetAllocateInfo sai{};
+        sai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        sai.descriptorPool = shadowPool_;
+        sai.descriptorSetCount = 1;
+        sai.pSetLayouts = &shadowSetLayout_;
+        VK_TRY(vkAllocateDescriptorSets(dev.device, &sai, &shadowSet_));
+
+        VkDescriptorBufferInfo bi[2]{};
+        bi[0].buffer = masks_.buffer;
+        bi[0].range = VK_WHOLE_SIZE;
+        bi[1].buffer = classes_.buffer;
+        bi[1].range = VK_WHOLE_SIZE;
+        VkWriteDescriptorSet w[2]{};
+        for (uint32_t i = 0; i < 2; ++i) {
+            w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[i].dstSet = shadowSet_;
+            w[i].dstBinding = i;
+            w[i].descriptorCount = 1;
+            w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w[i].pBufferInfo = &bi[i];
+        }
+        vkUpdateDescriptorSets(dev.device, 2, w, 0, nullptr);
+    }
+
     dirtyBits_.assign((kMacroCells + 63u) / 64u, 0u);
     dirty_.reserve(4096);
     ready_ = true;
@@ -128,6 +180,12 @@ bool VoxelMirror::init(VulkanDevice& dev) {
 
 void VoxelMirror::destroy() {
     if (!dev_) return;
+    if (shadowPool_) vkDestroyDescriptorPool(dev_->device, shadowPool_, nullptr);
+    if (shadowSetLayout_)
+        vkDestroyDescriptorSetLayout(dev_->device, shadowSetLayout_, nullptr);
+    shadowPool_ = VK_NULL_HANDLE;
+    shadowSetLayout_ = VK_NULL_HANDLE;
+    shadowSet_ = VK_NULL_HANDLE;
     if (oneShotFence_) vkDestroyFence(dev_->device, oneShotFence_, nullptr);
     if (oneShotPool_) vkDestroyCommandPool(dev_->device, oneShotPool_, nullptr);
     oneShotFence_ = VK_NULL_HANDLE;

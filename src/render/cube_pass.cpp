@@ -88,9 +88,11 @@ std::string join(const std::string& a, const char* b) {
 
 } // namespace
 
-bool CubePass::init(VulkanDevice& dev, VkDescriptorSetLayout lightGridSetLayout) {
+bool CubePass::init(VulkanDevice& dev, VkDescriptorSetLayout lightGridSetLayout,
+                    VkDescriptorSetLayout shadowSetLayout) {
     dev_ = &dev;
     lightGridSetLayout_ = lightGridSetLayout;
+    shadowSetLayout_ = shadowSetLayout;
     load_material_textures();
     return create_layout();
 }
@@ -237,7 +239,7 @@ bool CubePass::create_layout() {
         vkCreateDescriptorSetLayout(dev_->device, &li, nullptr, &dummySet0);
     }
 
-    VkDescriptorSetLayout setLayouts[2]{};
+    VkDescriptorSetLayout setLayouts[3]{};
     std::uint32_t setCount = 0;
     if (textured_) {
         setLayouts[0] = descriptorSetLayout_;
@@ -249,6 +251,13 @@ bool CubePass::create_layout() {
     if (lightGridSetLayout_ != VK_NULL_HANDLE) {
         setLayouts[1] = lightGridSetLayout_;
         setCount = 2;
+    }
+    // Set 2 — теневой сет вокселного зеркала ([ddalight.md]): giga_shadow в
+    // cube.frag/prop.frag маршует занятость мира. Пайплайны prop-пасса делят
+    // ЭТОТ layout, так что сет достаётся им бесплатно.
+    if (shadowSetLayout_ != VK_NULL_HANDLE) {
+        setLayouts[2] = shadowSetLayout_;
+        setCount = 3;
     }
     lci.setLayoutCount = setCount;
     lci.pSetLayouts = (setCount > 0) ? setLayouts : nullptr;

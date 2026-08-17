@@ -685,6 +685,49 @@ bool cmd_unequip(ConsoleContext& ctx, int argc, const char* const* argv,
     return true;
 }
 
+// give <item id|номер строки> [count] — предмет из таблицы в рюкзак игрока.
+// Универсально по построению: любой id из data/items.csv, никакого списка
+// «разрешённых». Кладёт THE transfer primitive ([item_table.h]
+// inventory_give) — та же стековая математика, что у лута и наград.
+bool cmd_give(ConsoleContext& ctx, int argc, const char* const* argv,
+              char* out, std::size_t cap) {
+    NpcId id{};
+    if (!equip_ctx(ctx, "give", out, cap, &id)) return false;
+    if (argc < 2) {
+        put(out, cap, "usage: give <item id|row#> [count] (data/items.csv)");
+        return false;
+    }
+    ItemId item = item_by_string(argv[1]);
+    if (item == kInvalidItem) {
+        char* end = nullptr;
+        const long v = std::strtol(argv[1], &end, 10);
+        if (end != argv[1] && end && !*end && v >= 1 &&
+            v <= static_cast<long>(kItemCount))
+            item = static_cast<ItemId>(v);
+    }
+    if (item == kInvalidItem) {
+        if (out && cap)
+            std::snprintf(out, cap, "give: unknown item '%s'", argv[1]);
+        return false;
+    }
+    long count = 1;
+    if (argc >= 3) {
+        char* end = nullptr;
+        count = std::strtol(argv[2], &end, 10);
+        if (end == argv[2] || (end && *end) || count < 1 || count > 65535) {
+            put(out, cap, "give: count must be 1..65535");
+            return false;
+        }
+    }
+    Inventory& inv = ctx.pool->inventory(id);
+    const std::uint16_t rest =
+        inventory_give(inv, item, static_cast<std::uint16_t>(count));
+    if (out && cap)
+        std::snprintf(out, cap, "given: %s x%ld%s", item_name(item),
+                      count - rest, rest ? " (pack full, remainder dropped)" : "");
+    return rest < count;
+}
+
 bool cmd_gear(ConsoleContext& ctx, int, const char* const*, char* out,
               std::size_t cap) {
     NpcId id{};
@@ -743,6 +786,9 @@ bool console_register_defaults(Console& con) {
     ok &= con.add({"spawn_ball", "spawn_ball",
                    "spawn a rolling test ball (Type A) beside player",
                    cmd_spawn_ball, nullptr});
+    ok &= con.add({"give", "give <item> [count]",
+                   "spawn an item from data/items.csv into the pack",
+                   cmd_give, nullptr});
     ok &= con.add({"gear", "gear",
                    "show equipped decisions and wearable inventory slots",
                    cmd_gear, nullptr});

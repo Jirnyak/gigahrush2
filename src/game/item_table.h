@@ -33,6 +33,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <type_traits>
 
 #include "game/inventory.h"  // Inventory/ItemSlot — carried-weight reader below
@@ -127,9 +128,16 @@ struct ItemDef {
     // values (flashlight 300) outgrow a byte — the row pays 4 B of growth
     // (24 -> 28 with tail padding) rather than lie about its own data.
     std::uint16_t durability;   // 24..25
-    std::uint8_t pad2_[2];      // 26..27
+    // СВЕТ ИЗ РУК ([ddalight.md]): lightRadiusMm != 0 — экипированный предмет
+    // излучает (фонарик — конус); та же четвёрка колонок, что у props.csv,
+    // одна единица на величину во всех таблицах. Цвет пока белый — цветовые
+    // колонки добавим с первым цветным носимым источником.
+    std::uint16_t lightRadiusMm;    // 26..27  0 = не светит
+    std::uint16_t lightIntensityE3; // 28..29
+    std::uint8_t  lightConeDeg;     // 30      полуугол, 0 = омни
+    std::uint8_t  flickerProfile;   // 31      FlickerProfile ([game/flicker.h])
 };
-static_assert(sizeof(ItemDef) == 28, "ItemDef is a tight 28-byte row");
+static_assert(sizeof(ItemDef) == 32, "ItemDef is a tight 32-byte row");
 static_assert(alignof(ItemDef) == 4);
 static_assert(std::is_trivially_copyable_v<ItemDef>);
 
@@ -139,6 +147,7 @@ extern const std::array<ItemDef, kItemCount> kItemTable;
 // Russian display names, parallel to kItemTable. Kept out of ItemDef so the row
 // stays pointer-free and trivially serializable.
 extern const std::array<const char*, kItemCount> kItemNames;
+extern const std::array<const char*, kItemCount> kItemIdStrs;
 
 // Item ids are 1-based; these are the only sanctioned way to index the table.
 inline bool item_valid(ItemId id) {
@@ -150,6 +159,17 @@ inline const ItemDef& item_def(ItemId id) {
 inline const char* item_name(ItemId id) {
     return kItemNames[static_cast<std::size_t>(id) - 1];
 }
+// O(n) поиск по CSV-строке id (для консоли `give`) — не для горячего тика.
+// kInvalidItem, если такого id нет.
+inline ItemId item_by_string(const char* id) {
+    if (!id || !*id) return kInvalidItem;
+    for (std::size_t i = 0; i < kItemCount; ++i) {
+        if (std::strcmp(kItemIdStrs[i], id) == 0)
+            return static_cast<ItemId>(i + 1);
+    }
+    return kInvalidItem;
+}
+
 // Authored flavour text (desc_ru), one per row by generator law — the
 // inventory card's line ([inventory.md]); nothing in the sim reads it.
 extern const std::array<const char*, kItemCount> kItemDescs;

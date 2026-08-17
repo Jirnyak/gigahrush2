@@ -72,9 +72,10 @@ void main() {
         }
     }
 
-    // 4. Asymmetric Dark Adaptation & Exposure Modulation
-    float exposure = max(pc.params0.y, 0.01);
-    vec3 col = (color + bloom * 0.25) * exposure;
+    // 4. Экспозиции НЕТ ([ddalight.md] закон №10): «тёмная адаптация»
+    // (marko-порт) глушила кадр по сумме ламп у камеры — вырезана 2026-08-17.
+    // params0.y свободен.
+    vec3 col = color + bloom * 0.25;
 
     // 5. Soviet CRT Phosphor Response & Scanlines
     float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));

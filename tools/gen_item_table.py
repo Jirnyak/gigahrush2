@@ -24,6 +24,9 @@ CATEGORY = {
     "MISC": "Misc", "WEAPON": "Weapon", "FOOD": "Food", "MEDICINE": "Medicine",
     "AMMO": "Ammo", "TOOL": "Tool", "DRINK": "Drink", "KEY": "Key", "NOTE": "Note",
 }
+# FlickerProfile ordinals — lockstep с src/game/flicker.h / gen_prop_table.py.
+FLICKER = {"none": 0, "mains": 1, "arc": 2, "pulse": 3, "crt": 4}
+
 EQUIP = {"None": "None", "": "None", "Weapon": "Weapon", "Armor": "Armor",
          "Tool": "Tool"}
 USE = {
@@ -175,11 +178,21 @@ def main():
         massG = item_mass_g(r, i)
         resolved.append((r["id"], massG))
 
+        flicker = (r.get("flicker") or "none").strip()
+        if flicker not in FLICKER:
+            die("row %d (%s): unknown flicker %r" % (i, r["id"], flicker))
+        light_radius = num(r, "light_radius_mm", i, 0, 65535)
+        light_intensity = num(r, "light_intensity_e3", i, 0, 65535)
+        light_cone = num(r, "light_cone_deg", i, 0, 89)
+        if (light_radius == 0) != (light_intensity == 0):
+            die("row %d (%s): light_radius_mm and light_intensity_e3 must be "
+                "both zero or both set" % (i, r["id"]))
+
         out.append(
             "    // [%d] id %d  %s  (%d g)\n"
             "    ItemDef{ %d, %d, %d, static_cast<std::uint16_t>(%s), %d, %d,\n"
             "             u8(ItemCategory::%s), u8(EquipSlot::%s),\n"
-            "             u8(UseEffect::%s), {%s}, %d, {0, 0} },"
+            "             u8(UseEffect::%s), {%s}, %d, %d, %d, %d, %d },"
             % (i, i + 1, r["id"], massG,
                num(r, "value_rub", i, 0, 2000000000),
                massG,
@@ -194,7 +207,8 @@ def main():
                ue,
                ", ".join(str(x) for x in resists),
                # durability: USES until ruined; empty column = 0 = never wears.
-               num(r, "durability", i, 0, 65535)))
+               num(r, "durability", i, 0, 65535),
+               light_radius, light_intensity, light_cone, FLICKER[flicker]))
         names.append("    %s," % cpp_string(r["name_ru"].strip()))
         # Authored flavour text — all 442 rows carry one. The inventory card
         # ([inventory.md]) is its consumer; an empty cell would be a CSV defect.
@@ -255,6 +269,12 @@ def main():
         fh.write("const std::array<const char*, kItemCount> kItemDescs = {{\n")
         fh.write("\n".join(descs))
         fh.write("\n}};\n\n")
+        fh.write("// CSV id strings, parallel to kItemTable — the console's `give`\n"
+                 "// resolves items by these ([item_table.h] item_by_string).\n")
+        fh.write("const std::array<const char*, kItemCount> kItemIdStrs = {{\n")
+        for iid in ids:
+            fh.write('    "%s",\n' % iid)
+        fh.write("}};\n\n")
         fh.write(FOOTER)
 
     sys.stderr.write("gen_item_table: wrote %d rows to %s\n" % (len(rows), OUT_PATH))
