@@ -111,7 +111,11 @@ bool keybind_register_defaults(KeybindTable& t) {
                  static_cast<std::uint8_t>(kBindTyping)});
     ok &= t.add({"mouselook", "mouselook", scan::kTab, 0});
     // Movement mode + floor travel.
-    ok &= t.add({"fly", "fly", scan::kF, 0});
+    // fly НЕ имеет клавиши по умолчанию (решение владельца, плейтест
+    // 2026-08-18): полёт — отладочный режим, ему место в консоли (`fly`),
+    // а не на F посреди боевой раскладки. Строка остаётся — ребинд в
+    // настройках может вернуть клавишу тому, кому она нужна.
+    ok &= t.add({"fly", "fly", 0, 0});
     ok &= t.add({"floor_up", "ride up", scan::kRightBracket, 0});
     ok &= t.add({"floor_down", "ride down", scan::kLeftBracket, 0});
     // L for lift. The shaft menu offers the SAME three transitions the two rows

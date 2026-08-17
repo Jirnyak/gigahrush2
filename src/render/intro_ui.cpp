@@ -378,6 +378,17 @@ void IntroFx::retarget_title(float w, float h) {
 
 bool IntroFx::step_draw(ImDrawList* dl, float w, float h, float dt) {
     if (!builtLogo) build_logo(w, h);
+    // Ресайз окна (фуллскрин): слоты разложены под старый центр — без
+    // пере-раскладки слово уезжает из центра (плейтест владельца). Титул
+    // перетаргетируется на лету (retarget_title идемпотентен: те же клетки,
+    // новые дома — красиво доезжают пружинами); сборка логотипа строится
+    // заново — её лента записана в старых координатах.
+    if (lastW > 0.0f && (std::abs(w - lastW) > 0.5f ||
+                         std::abs(h - lastH) > 0.5f)) {
+        if (titleMode) retarget_title(w, h);
+        else build_logo(w, h);
+    }
+    lastW = w; lastH = h;
     if (dt > 0.05f) dt = 0.05f;
     phaseTime += dt;
     drawPx += (targetPx - drawPx) * std::min(1.0f, dt * 4.0f);
