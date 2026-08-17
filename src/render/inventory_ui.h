@@ -23,7 +23,12 @@ namespace giga {
 // Give.slot — своей; применяет app через inventory_give, третьего пути нет.
 struct InvUiRequest {
     enum class Kind : std::uint8_t {
-        None, Equip, Unequip, Use, Drop, Repair, Take, Give, TakeAll
+        None, Equip, Unequip, Use, Drop, Repair, Take, Give, TakeAll,
+        // Deal-режим ([conversation.md] бартер): Enter — метка слота в оффер
+        // (какой стороны — по kind), T — просьба подписать сделку. Метки
+        // держит app (это игровое состояние сделки, не курсор), виджет их
+        // только рисует и просит переключить.
+        MarkOwn, MarkOther, Commit
     };
     Kind kind = Kind::None;
     std::uint8_t slot = 0;               // индекс клетки 0..63
@@ -58,6 +63,14 @@ struct InvUiPolicy {
     bool allowUse = true;
     bool allowDrop = true;
     bool allowRepair = true;  // починка у станции рецепта ([craft.h])
+    // Deal-режим (бартер, [conversation.md]): Enter метит слоты в оффер вместо
+    // мгновенного переноса, T просит подписать. Метки и строку баланса даёт
+    // app (превью считает game-слой, [barter.h] — виджет цен не знает).
+    bool deal = false;
+    std::uint64_t ownMarks = 0;    // бит k — клетка k своей сетки в оффере
+    std::uint64_t otherMarks = 0;  // ...и чужой
+    const char* dealLine = nullptr;  // строка баланса; амбер при dealOk
+    bool dealOk = false;             // сделка подписуема (красит строку/T)
 };
 
 // Нарисовать открытый виджет поверх игры и собрать заявку. `carriedG` —

@@ -63,7 +63,8 @@
 #include "game/speech.h"
 #include "game/samosbor.h"
 #include "game/contract.h"
-#include "game/vendor.h"
+#include "game/barter.h"        // сделка ([conversation.md]); vendor.h — термы
+#include "game/conversation.h"
 #include "game/craft.h"
 #include "game/quest.h"
 #include "game/container.h"
@@ -103,6 +104,7 @@
 #include "audio/audio_system.h"
 #include "render/imgui_layer.h"
 #include "render/intro_ui.h"
+#include "render/conversation_ui.h"
 #include "render/inventory_ui.h"
 #include "render/vk_device.h"
 #include "render/vk_renderer.h"
@@ -496,160 +498,6 @@ static void DrawCraftingWindowUI(bool* p_open, game::CraftingState& crafting,
     ImGui::End();
 }
 
-static void DrawVendorWindowUI(bool* p_open, game::Inventory& inv, game::RunLedger& ledger, 
-                        game::VendorKind vendorKind, bool isOnPad, std::int32_t& outSold, std::int32_t& outSpent) 
-{
-    if (!p_open || !*p_open) return;
-
-    ImGui::SetNextWindowSize(ImVec2(800, 560), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Trader Supply & Exchange", p_open)) {
-        ImGui::End();
-        return;
-    }
-
-    const char* vendorNames[] = { "Civil Citizen Trader (Buy 1.15x / Sell 0.85x)",
-                                 "Scientist Outpost (Buy 1.15x / Sell 0.92x)",
-                                 "Wild Zone Scavenger (Buy 1.15x / Sell 0.72x)" };
-
-    ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "Vendor: %s", vendorNames[static_cast<std::size_t>(vendorKind)]);
-    ImGui::Text("Account Balance: %lld roubles", static_cast<long long>(ledger.banked));
-    
-    if (!isOnPad) {
-        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "[OFF EXTRACTION PAD] Walk to the Extraction Pad to trade.");
-        ImGui::End();
-        return;
-    }
-    ImGui::Separator();
-
-    if (ImGui::BeginTabBar("VendorTabs")) {
-        if (ImGui::BeginTabItem("Buy Supplies")) {
-            static char buyFilter[64] = "";
-            static int buyQty = 1;
-            ImGui::InputText("Search Stock", buyFilter, sizeof(buyFilter));
-            ImGui::SliderInt("Quantity to Buy", &buyQty, 1, 50);
-
-            if (ImGui::Button("Quick Resupply Package (600 rub)", ImVec2(240, 28))) {
-                outSpent += game::vendor_resupply(inv, ledger, 600);
-            }
-            ImGui::SameLine();
-
-            const game::ItemId ammoForGun = game::vendor_ammo_for(inv);
-            if (ammoForGun != game::kInvalidItem) {
-                char ammoBtnText[128];
-                snprintf(ammoBtnText, sizeof(ammoBtnText), "Buy Ammo for Gun (%s)", game::item_name(ammoForGun));
-                if (ImGui::Button(ammoBtnText, ImVec2(240, 28))) {
-                    outSpent += (game::vendor_buy(inv, ledger, ammoForGun, buyQty) * game::vendor_buy_price(ammoForGun));
-                }
-            }
-
-            ImGui::Separator();
-
-            if (ImGui::BeginTable("ShopCatalogTable", 5, ImGuiTableFlags_ScrollY | ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg, ImVec2(0, 340))) {
-                ImGui::TableSetupColumn("Item Name");
-                ImGui::TableSetupColumn("Category", ImGuiTableColumnFlags_WidthFixed, 100.0f);
-                ImGui::TableSetupColumn("Stack Max", ImGuiTableColumnFlags_WidthFixed, 80.0f);
-                ImGui::TableSetupColumn("Unit Price", ImGuiTableColumnFlags_WidthFixed, 90.0f);
-                ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 100.0f);
-                ImGui::TableHeadersRow();
-
-                for (game::ItemId id = 1; id <= game::kItemCount; ++id) {
-                    if (!game::vendor_stocks_item(id)) continue;
-
-                    const char* itemName = game::item_name(id);
-                    if (buyFilter[0] != '\0' && !contains_icase(itemName, buyFilter)) continue;
-
-                    const std::int32_t price = game::vendor_buy_price(id);
-                    const std::int32_t totalPrice = price * buyQty;
-                    const bool canAfford = (ledger.banked >= totalPrice);
-
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0); ImGui::Text("%s", itemName);
-                    ImGui::TableSetColumnIndex(1); ImGui::Text("Cat #%d", game::item_def(id).category);
-                    ImGui::TableSetColumnIndex(2); ImGui::Text("%u", game::item_def(id).stackMax);
-                    ImGui::TableSetColumnIndex(3); ImGui::Text("%d rub", price);
-                    ImGui::TableSetColumnIndex(4);
-
-                    char buyBtnLabel[32];
-                    snprintf(buyBtnLabel, sizeof(buyBtnLabel), "Buy##%d", id);
-
-                    if (!canAfford) ImGui::BeginDisabled();
-                    if (ImGui::Button(buyBtnLabel)) {
-                        std::uint32_t bought = game::vendor_buy(inv, ledger, id, static_cast<std::uint32_t>(buyQty));
-                        outSpent += (bought * price);
-                    }
-                    if (!canAfford) ImGui::EndDisabled();
-                }
-                ImGui::EndTable();
-            }
-
-            ImGui::EndTabItem();
-        }
-
-        if (ImGui::BeginTabItem("Sell Inventory")) {
-            if (ImGui::Button("Sell All Haul / Trash (Auto Cap)", ImVec2(240, 28))) {
-                outSold += game::vendor_sell_all(inv, ledger, vendorKind);
-            }
-            ImGui::Separator();
-
-            if (ImGui::BeginTable("SellInventoryTable", 6, ImGuiTableFlags_ScrollY | ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg, ImVec2(0, 360))) {
-                ImGui::TableSetupColumn("Slot", ImGuiTableColumnFlags_WidthFixed, 40.0f);
-                ImGui::TableSetupColumn("Item Name");
-                ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, 60.0f);
-                ImGui::TableSetupColumn("Unit Value", ImGuiTableColumnFlags_WidthFixed, 90.0f);
-                ImGui::TableSetupColumn("Total Value", ImGuiTableColumnFlags_WidthFixed, 90.0f);
-                ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 140.0f);
-                ImGui::TableHeadersRow();
-
-                for (int slot = 0; slot < game::kInvSlots; ++slot) {
-                    game::ItemSlot& s = inv.slots[slot];
-                    if (!game::item_valid(s.item) || s.count == 0) continue;
-
-                    const std::int32_t unitSell = game::vendor_sell_price(s.item, vendorKind);
-                    const std::int32_t totalSell = unitSell * s.count;
-
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0); ImGui::Text("#%d", slot);
-                    ImGui::TableSetColumnIndex(1); ImGui::Text("%s", game::item_name(s.item));
-                    ImGui::TableSetColumnIndex(2); ImGui::Text("%u", s.count);
-                    ImGui::TableSetColumnIndex(3); ImGui::Text("%d rub", unitSell);
-                    ImGui::TableSetColumnIndex(4); ImGui::Text("%d rub", totalSell);
-                    ImGui::TableSetColumnIndex(5);
-
-                    char sellOneLabel[32], sellAllLabel[32];
-                    snprintf(sellOneLabel, sizeof(sellOneLabel), "Sell 1##%d", slot);
-                    snprintf(sellAllLabel, sizeof(sellAllLabel), "Sell Stack##%d", slot);
-
-                    const bool canSell = (unitSell > 0);
-                    if (!canSell) ImGui::BeginDisabled();
-
-                    if (ImGui::Button(sellOneLabel)) {
-                        ledger.banked += unitSell;
-                        outSold += unitSell;
-                        s.count--;
-                        if (s.count == 0) s.item = game::kInvalidItem;
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::Button(sellAllLabel)) {
-                        ledger.banked += totalSell;
-                        outSold += totalSell;
-                        s.count = 0;
-                        s.item = game::kInvalidItem;
-                    }
-
-                    if (!canSell) ImGui::EndDisabled();
-                }
-                ImGui::EndTable();
-            }
-
-            ImGui::EndTabItem();
-        }
-
-        ImGui::EndTabBar();
-    }
-
-    ImGui::End();
-}
-
 // ── Debug console overlay (~) ──────────────────────────────────────────────
 // Thin ImGui shell over game::Console ([console.h]): parsing, the command
 // table, and contextual completion are HEADLESS game code (tested in
@@ -780,11 +628,6 @@ static void DrawConsoleUI(bool* p_open, bool* p_focus, char* inputBuf,
 // Controller it overwrites — otherwise the first exhausted tick would halve the
 // speed and the second would halve the already-halved value, decaying to zero.
 // Matches Controller::moveSpeed's own default ([components.h]).
-// What one R press spends on supplies. A fixed budget rather than a shopping UI: the
-// interesting decision is HOW MUCH of the run to convert back into survival, not which
-// of 446 items to click. [vendor.h]
-constexpr std::int32_t kResupplyBudget = 600;
-
 constexpr float kPlayerWalkSpeed = 6.0f;       // fog.w, scales the hemispheric term
 
 // The demo floor stack: one row per floor MODULE. Numbers are the in-game labels
@@ -2165,12 +2008,10 @@ int main(int argc, char** argv) {
     std::int32_t contractPaid = 0;    // roubles paid by finished jobs
     game::QuestLog& quests = runState.quests;  // lives in SaveState; F5/F9 persists it
     std::int32_t questPaid = 0;       // roubles paid by finished quests
-    std::int32_t sold = 0;            // roubles taken for the haul
-    std::int32_t spent = 0;           // roubles spent on supplies
-    // Who buys on this floor. The dominant faction sets the sell rate, which gives the
-    // faction matrix a second live consumer and makes the territory rumour worth
-    // acting on rather than being colour. [vendor.h]
-    game::VendorKind vendorKind = game::VendorKind::Citizen;
+    // (sold/spent/vendorKind died with the Vendor window: trade is a barter
+    // DEAL against the partner's own bag now — [conversation.md]. The faction
+    // matrix keeps its live consumer: barter_terms_for prices by the PARTNER's
+    // faction row, per body instead of per floor.)
     std::uint32_t deaths = 0;
     std::uint32_t kills = 0;       // carried across possession
     // The character sheet, carried across possession for the same reason `kills`
@@ -2197,8 +2038,6 @@ int main(int argc, char** argv) {
     bool healWanted = false;
     bool eatWanted = false;       // G, consumed by one sim step
     bool drinkWanted = false;     // T, consumed by one sim step
-    bool sellWanted = false;      // B, consumed by one sim step
-    bool buyWanted = false;       // R, consumed by one sim step       // set by H, consumed by one sim step
     bool craftWanted = false;     // C, consumed by one sim step
     bool scrapWanted = false;     // X, consumed by one sim step
     // Run state, not world state, so it lives beside the ledger. CraftingState is a
@@ -2274,6 +2113,15 @@ int main(int argc, char** argv) {
     // Протухает вместе с окном (см. инвалидацию перед отрисовкой).
     Entity lootEntity = entt::null;
     bool lootIsCorpse = false;
+    // Бартер ([conversation.md]): экран обыска в deal-режиме против пул-строки
+    // NPC. Метки — игровое состояние сделки, живут тут (виджет их рисует).
+    bool lootIsBarter = false;
+    game::NpcId convNpc = game::kInvalidNpc;   // собеседник (и партнёр сделки)
+    Entity convEntity = entt::null;
+    char convLine[256] = {};                   // последняя реплика в меню
+    ConvUiState convUi{};
+    std::uint64_t barterOwnMarks = 0, barterOtherMarks = 0;
+    char dealLine[160] = {};
     char consoleInput[256] = {};
     std::vector<std::string> consoleLog;
     std::vector<std::string> consoleHistory;
@@ -2562,10 +2410,8 @@ int main(int argc, char** argv) {
         if (!ride.moved) return false;
         player = ride.player;
         currentFloor = ride.floor;
-        // The vendor answers to whoever OWNS this floor — re-asked on every
-        // arrival path (ride / load / floor change), because a stale kind from
-        // the departure floor mispriced every trade until the next reload.
-        vendorKind = game::vendor_kind_for(game::dominant_faction(pool, currentFloor));
+        // (vendorKind died with the window; barter prices by the partner's
+        // own faction, per body — [conversation.md].)
         // §24 discovery: landing on (or via) a lattice hub unlocks THIS floor
         // for the fast-travel network. Boarding the cabin is the discover act.
         if (landHub >= 0)
@@ -2969,15 +2815,9 @@ int main(int argc, char** argv) {
             if (has(ConsoleRequest::Possess)) possessWanted = true;
             if (has(ConsoleRequest::Save)) saveWanted = true;
             if (has(ConsoleRequest::Load)) loadWanted = true;
-            if (has(ConsoleRequest::Sell)) sellWanted = true;
-            if (has(ConsoleRequest::Resupply)) buyWanted = true;
             if (has(ConsoleRequest::Scrap)) scrapWanted = true;
             if (has(ConsoleRequest::Elevator)) {
                 shell.toggle(UiWindow::Elevator);
-                if (shell.window != UiWindow::None) input.set_mouselook(false);
-            }
-            if (has(ConsoleRequest::Vendor)) {
-                shell.toggle(UiWindow::Vendor);
                 if (shell.window != UiWindow::None) input.set_mouselook(false);
             }
             if (has(ConsoleRequest::Craft)) {
@@ -4087,6 +3927,7 @@ int main(int argc, char** argv) {
                                 handled = true;
                                 lootEntity = corpseHit.entity;
                                 lootIsCorpse = true;
+                                lootIsBarter = false;
                                 shell.window = UiWindow::Inventory;
                                 input.set_mouselook(false);
                                 SDL_SetWindowRelativeMouseMode(window, false);
@@ -4124,6 +3965,7 @@ int main(int argc, char** argv) {
                                 handled = true;
                                 lootEntity = bestBox;
                                 lootIsCorpse = false;
+                                lootIsBarter = false;
                                 shell.window = UiWindow::Inventory;
                                 input.set_mouselook(false);
                                 SDL_SetWindowRelativeMouseMode(window, false);
@@ -4134,6 +3976,35 @@ int main(int argc, char** argv) {
                                 game::noise_publish(
                                     noiseField, activeLayer,
                                     reg.get<const Transform>(bestBox).pos, np, 0);
+                            }
+                        }
+
+                        // 1в. Живой NPC: E открывает МЕНЮ взаимодействия
+                        // ([conversation.md]) — разговор/задание/торг, игры
+                        // придут строками таблицы. Ниже трупа и ящика по
+                        // приоритету: мёртвое и запертое не убегает, живой
+                        // собеседник подождёт клавишу.
+                        if (!handled && activeLayer != kInvalidLayer) {
+                            const game::InteractionHit npcHit =
+                                game::find_nearest_interactable(
+                                    reg, player, game::Interactable::Kind::Npc,
+                                    game::interact_def(game::InteractKind::Npc)
+                                        .reachM);
+                            if (npcHit.hit &&
+                                reg.all_of<game::NpcRef>(npcHit.entity)) {
+                                const game::NpcId cid =
+                                    reg.get<game::NpcRef>(npcHit.entity).id;
+                                if (pool.valid(cid) && pool.alive(cid)) {
+                                    handled = true;
+                                    convEntity = npcHit.entity;
+                                    convNpc = cid;
+                                    convLine[0] = 0;
+                                    convUi.sel = 0;
+                                    shell.window = UiWindow::Conversation;
+                                    input.set_mouselook(false);
+                                    SDL_SetWindowRelativeMouseMode(window,
+                                                                   false);
+                                }
                             }
                         }
 
@@ -4745,8 +4616,6 @@ int main(int argc, char** argv) {
                             fastTravel = runState.fastTravel;
                             // Per-floor channels reset, same as any arrival — these
                             // ARE floor-scoped, unlike the two clocks above.
-                            vendorKind = game::vendor_kind_for(
-                                game::dominant_faction(pool, currentFloor));
                             rumourLine[0] = 0;
                             rumourAt = 0;
                             game::noise_clear(noiseField);
@@ -4818,37 +4687,8 @@ int main(int argc, char** argv) {
                         std::fprintf(stderr, "[load] %s\n", saveLine);
                     }
                 }
-                // The pad is the shop, and only the pad. A vendor reachable from
-                // anywhere would make the walk home pointless, and the walk home IS
-                // the extraction loop. [vendor.h]
-                if ((sellWanted || buyWanted) && reg.valid(player)) {
-                    const Transform& vt = reg.get<Transform>(player);
-                    if (game::on_extraction_pad(stack.layer(activeLayer).grid(),
-                                                vt.pos)) {
-                        if (const auto* nrv = reg.try_get<game::NpcRef>(player))
-                            if (pool.valid(nrv->id)) {
-                                game::Inventory& vi = pool.inventory(nrv->id);
-                                if (sellWanted)
-                                    sold += game::vendor_sell_all(vi, ledger,
-                                                                 vendorKind);
-                                if (buyWanted)
-                                    spent += game::vendor_resupply(vi, ledger,
-                                                                   kResupplyBudget);
-                                // Trade changed the bag, so the ARMOUR component
-                                // has to be re-derived from it. The rule is stated
-                                // in this file ("call after anything that changes
-                                // the inventory") and every craft/loot path obeys
-                                // it; all three vendor paths did not. Selling the
-                                // vest you are wearing removed it from the bag and
-                                // left the resistances on the entity — permanent
-                                // free armour, paid for. [problems.md] 28.3
-                                if (sellWanted || buyWanted)
-                                    game::sync_armour(reg, pool, player);
-                            }
-                    }
-                    sellWanted = false;
-                    buyWanted = false;
-                }
+                // (The pad shop is gone — [conversation.md]: trade is a deal
+                // with a BODY, not a place. The pad keeps its one job, banking.)
                 // CRAFTING. The extraction pad is the only bench in the game today, and
                 // that is a measured limitation rather than a placeholder: 259 of the 446
                 // recipes (22 `Any` + 237 Workbench) are reachable there, and the other
@@ -5334,9 +5174,7 @@ int main(int argc, char** argv) {
                     if (game::on_extraction_pad(stack.layer(activeLayer).grid(),
                                                 vt2.pos))
                         ImGui::TextColored(ImVec4(0.29f, 0.75f, 0.57f, 1.0f),
-                                           "PAD: banking | B sell haul | R resupply "
-                                           "(%d rub) | sold %d spent %d",
-                                           kResupplyBudget, sold, spent);
+                                           "PAD: banking");
                 }
                 {
                     int shut = 0, open = 0;
@@ -5686,8 +5524,16 @@ int main(int argc, char** argv) {
         // примитивах, что консоль и ИИ ([equip.h]) — третьего пути к Equipped
         // не появляется.
         // Цель обыска живёт ровно пока открыто окно и жива сущность.
-        if (shell.window != UiWindow::Inventory || !reg.valid(lootEntity))
+        if (shell.window != UiWindow::Inventory || !reg.valid(lootEntity)) {
             lootEntity = entt::null;
+            lootIsBarter = false;
+        }
+        // Партнёр сделки обязан оставаться жив: труп торговца — уже труп,
+        // его обыскивают, а не торгуются ([conversation.md]).
+        if (lootIsBarter && (!pool.valid(convNpc) || !pool.alive(convNpc))) {
+            lootEntity = entt::null;
+            lootIsBarter = false;
+        }
         if ((shell.window == UiWindow::Inventory) && reg.valid(player)) {
             if (const auto* nrInv = reg.try_get<game::NpcRef>(player);
                 nrInv && pool.valid(nrInv->id)) {
@@ -5702,9 +5548,58 @@ int main(int argc, char** argv) {
                 // читает); труп отдаёт свои ItemSlot как есть.
                 game::Container* boxC = nullptr;
                 game::Corpse* corpseC = nullptr;
+                game::Inventory* npcInv = nullptr;
                 game::ItemSlot boxView[game::kContainerSlots];
                 InvUiSide side{};
-                if (lootEntity != entt::null) {
+                game::BarterPreview bpv{};
+                game::BarterTerms bterms{};
+                const game::Equipped* npcEq = nullptr;
+                if (lootEntity != entt::null && lootIsBarter) {
+                    // Сделка ([conversation.md]): вторая сетка — ПУЛ-СТРОКА
+                    // собеседника (его настоящая сумка), политика — deal.
+                    npcInv = &pool.inventory(convNpc);
+                    npcEq = reg.try_get<game::Equipped>(lootEntity);
+                    side.title = "БАРТЕР";
+                    side.slots = npcInv->slots;
+                    side.count = game::kInvSlots;
+                    bterms = game::barter_terms_for(
+                        static_cast<game::Faction>(pool.faction(convNpc)));
+                    bpv = game::barter_preview(pinv, &peq, *npcInv, npcEq,
+                                               barterOwnMarks, barterOtherMarks,
+                                               bterms);
+                    if (!bpv.anyMarked) {
+                        std::snprintf(dealLine, sizeof dealLine,
+                                      "отметь, что берёшь и что даёшь");
+                    } else if (bpv.equippedBlocked) {
+                        std::snprintf(dealLine, sizeof dealLine,
+                                      "надетое в сделку не идёт");
+                    } else if (!bpv.covered) {
+                        std::snprintf(
+                            dealLine, sizeof dealLine,
+                            "ВЗЯТЬ %lld | ДАТЬ %lld | %s не хватает %lld руб",
+                            static_cast<long long>(bpv.takeCost),
+                            static_cast<long long>(bpv.givePay),
+                            bpv.cash > 0 ? "тебе" : "ему",
+                            static_cast<long long>(
+                                (bpv.cash > 0 ? bpv.cash : -bpv.cash) -
+                                bpv.debtorRub));
+                    } else {
+                        std::snprintf(
+                            dealLine, sizeof dealLine,
+                            "ВЗЯТЬ %lld | ДАТЬ %lld | доплата %lld руб %s — "
+                            "T подписать",
+                            static_cast<long long>(bpv.takeCost),
+                            static_cast<long long>(bpv.givePay),
+                            static_cast<long long>(bpv.cash > 0 ? bpv.cash
+                                                                : -bpv.cash),
+                            bpv.cash >= 0 ? "с тебя" : "тебе");
+                    }
+                    policy.deal = true;
+                    policy.ownMarks = barterOwnMarks;
+                    policy.otherMarks = barterOtherMarks;
+                    policy.dealLine = dealLine;
+                    policy.dealOk = bpv.ok;
+                } else if (lootEntity != entt::null) {
                     if (lootIsCorpse) {
                         corpseC = reg.try_get<game::Corpse>(lootEntity);
                         if (corpseC) {
@@ -5736,7 +5631,7 @@ int main(int argc, char** argv) {
                     }
                 }
                 const bool twoSided = side.slots != nullptr;
-                if (twoSided) policy.title = "ОБЫСК";
+                if (twoSided) policy.title = lootIsBarter ? "СДЕЛКА" : "ОБЫСК";
 
                 // Один перенос ящик→сумка, все счётчики в одном месте:
                 // и Take, и TakeAll ходят сюда, третьей копии закона нет.
@@ -5800,6 +5695,33 @@ int main(int argc, char** argv) {
                             : game::RpgStats{}),
                     twoSided ? &side : nullptr);
                 switch (r.kind) {
+                    // ── Deal-режим ([conversation.md], [barter.h]) ─────────
+                    case InvUiRequest::Kind::MarkOwn:
+                        if (lootIsBarter && r.slot < game::kInvSlots)
+                            barterOwnMarks ^= (1ull << r.slot);
+                        break;
+                    case InvUiRequest::Kind::MarkOther:
+                        if (lootIsBarter && r.slot < game::kInvSlots)
+                            barterOtherMarks ^= (1ull << r.slot);
+                        break;
+                    case InvUiRequest::Kind::Commit: {
+                        if (!lootIsBarter || !npcInv) break;
+                        // Атомарно или никак: barter_commit сам перепроверяет
+                        // маски и двигает обе сумки только целиком.
+                        const game::BarterPreview done = game::barter_commit(
+                            pinv, &peq, *npcInv, npcEq, barterOwnMarks,
+                            barterOtherMarks, bterms);
+                        if (done.ok) {
+                            barterOwnMarks = 0;
+                            barterOtherMarks = 0;
+                            // Сумки обеих сторон изменились — броня обеих
+                            // пересобирается из инвентаря ([combat.h] правило
+                            // «после любого изменения сумки»).
+                            game::sync_armour(reg, pool, player);
+                            game::sync_armour(reg, pool, lootEntity);
+                        }
+                        break;
+                    }
                     case InvUiRequest::Kind::Take: {
                         if (boxC && r.slot < game::kContainerSlots)
                             take_box_slot(r.slot);
@@ -6084,24 +6006,80 @@ int main(int argc, char** argv) {
             if (!elevOpen) shell.close_window();
         }
 
-        if ((shell.window == UiWindow::Vendor) && reg.valid(player)) {
-            const Transform& vt = reg.get<Transform>(player);
-            const bool isOnPad = game::on_extraction_pad(stack.layer(activeLayer).grid(), vt.pos);
-            if (const auto* nrv = reg.try_get<game::NpcRef>(player)) {
-                if (pool.valid(nrv->id)) {
-                    const std::int32_t soldBefore = sold;
-                    const std::int32_t spentBefore = spent;
-                    bool vendOpen = true;  // мост к bool* закрывашки окна
-                    DrawVendorWindowUI(&vendOpen, pool.inventory(nrv->id), ledger, 
-                                       vendorKind, isOnPad, sold, spent);
-                    if (!vendOpen) shell.close_window();
-                    // Same re-derive as the keyboard path. The window is not handed
-                    // reg/pool/player, so the CALLER does it — the shape the
-                    // crafting window already uses via its `invChanged` out-param.
-                    // Either counter moving means stock crossed the bag boundary.
-                    // [problems.md] 28.3
-                    if (sold != soldBefore || spent != spentBefore)
-                        game::sync_armour(reg, pool, player);
+        // ── Разговор с NPC ([conversation.md]) ─────────────────────────
+        // Меню опций; game-слой проецирует и толкует (conv_options /
+        // conv_activate), окно только рисует и возвращает выбранный id.
+        if (shell.window == UiWindow::Conversation) {
+            // Собеседник обязан быть жив, телесен и в досягаемости — каждый
+            // кадр, не только при открытии: он может умереть или уйти.
+            bool convValid = reg.valid(convEntity) && pool.valid(convNpc) &&
+                             pool.alive(convNpc) && reg.valid(player);
+            if (convValid) {
+                const vec3 pp = reg.get<Transform>(player).pos;
+                const vec3 np = reg.get<Transform>(convEntity).pos;
+                const float dx = wrap_delta_f(pp.x, np.x, kWorldExtent);
+                const float dy = wrap_delta_f(pp.y, np.y, kWorldExtent);
+                const float dz = wrap_delta_f(pp.z, np.z, kWorldExtent);
+                const float reach =
+                    game::interact_def(game::InteractKind::Npc).reachM + 1.0f;
+                convValid = dx * dx + dy * dy + dz * dz <= reach * reach;
+            }
+            if (!convValid) {
+                shell.close_window();
+                input.set_mouselook(true);
+                SDL_SetWindowRelativeMouseMode(window, true);
+            } else {
+                game::ConvContext cctx;
+                cctx.reg = &reg;
+                cctx.pool = &pool;
+                cctx.player = player;
+                cctx.npcBody = convEntity;
+                cctx.npc = convNpc;
+                cctx.book = &contracts;
+                cctx.speech = &speechMem;
+                cctx.seed = giga::hash2(convNpc, static_cast<std::uint32_t>(
+                                                     simTick / kSimHz));
+                game::ConvOption opts[game::kConvMaxOptions];
+                const std::size_t nOpts =
+                    game::conv_options(cctx, opts, game::kConvMaxOptions);
+                char header[96];
+                std::snprintf(header, sizeof header, "%s",
+                              game::faction_name(static_cast<game::Faction>(
+                                  pool.faction(convNpc))));
+                const ConvUiRequest cr = conversation_ui_draw(
+                    convUi, header, convLine[0] ? convLine : nullptr, opts,
+                    nOpts);
+                if (cr.optionId) {
+                    const game::ConvAction act =
+                        game::conv_activate(cctx, cr.optionId);
+                    switch (act.kind) {
+                        case game::ConvActionKind::Line:
+                            std::snprintf(convLine, sizeof convLine, "%s",
+                                          act.line ? act.line : "");
+                            break;
+                        case game::ConvActionKind::Barter:
+                            // Тот же экран обыска, политика — сделка: вторая
+                            // сетка = пул-строка собеседника, метки с нуля.
+                            lootEntity = convEntity;
+                            lootIsCorpse = false;
+                            lootIsBarter = true;
+                            barterOwnMarks = 0;
+                            barterOtherMarks = 0;
+                            shell.window = UiWindow::Inventory;
+                            break;
+                        case game::ConvActionKind::Close:
+                            shell.close_window();
+                            input.set_mouselook(true);
+                            SDL_SetWindowRelativeMouseMode(window, true);
+                            break;
+                        default:
+                            break;
+                    }
+                }
+                if (cr.wantClose) {
+                    shell.close_window();
+                    input.set_mouselook(true);
+                    SDL_SetWindowRelativeMouseMode(window, true);
                 }
             }
         }
@@ -6692,7 +6670,7 @@ int main(int argc, char** argv) {
                                kLampIntensity};
             const float fogScale = samosbor_fog_scale(samosbor);
             const float samosborPulse = std::clamp((1.0f - fogScale) / (1.0f - kSamosborFogSqueeze), 0.0f, 1.0f);
-            push.fog = vec4{kWorldExtent * 0.30f * fogScale,
+            push.fog = vec4{kWorldExtent * 0.25f * fogScale,
                             kWorldExtent * 0.50f * fogScale,
                             kLampRadius, kAmbient};
             // The wrap period, so cube.vert can place each cell at its nearest
@@ -6872,8 +6850,6 @@ int main(int argc, char** argv) {
                         // recycled slot keeps the departed floor's danger.
                         diffusion_driver_on_floor_built(diffusionDriver,
                                                         stack.layer(nl), nl);
-                        vendorKind = game::vendor_kind_for(
-                            game::dominant_faction(pool, currentFloor));
                         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
                         refresh_floor_containers(reg, stack.layer(nl),
                                                  currentFloor, nl);

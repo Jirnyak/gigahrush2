@@ -2,6 +2,7 @@
 
 #include "game/equip.h"    // Equipped — the empty decision cells on embodiment
 #include "game/faction.h"
+#include "game/prop_system.h" // Interactable — a living body is a menu ([conversation.md])
 #include "game/rpg.h"      // RpgStats, random_rpg
 // NOTE: #include "game/ai.h" (AiBrain) goes back here when the utility AI is
 // adapted to main mob_table -- see tools/branch_port_pending/README.md
@@ -64,6 +65,13 @@ Entity embody(Registry& reg, NpcPool& pool, NpcId id, LayerId layer) {
     // (the body pass reads it; the sim never does), so the whole embodied crowd
     // is visible out of the box.
     reg.emplace<Renderable>(e, Renderable{faction_color(pool.faction(id), id)});
+
+    // Every living body is an interaction target ([conversation.md]): E opens
+    // the option menu — talk, quest, barter, the games to come. The player's
+    // own body carries it too (no special case; the finders skip self).
+    reg.emplace<Interactable>(
+        e, Interactable{Interactable::Kind::Npc,
+                        interact_def(InteractKind::Npc).reachM, true});
 
     // Utility-AI transient state ([ai.md]): 0..100 needs seeded deterministically
     // from the stable id, and an empty hysteresis/stagger brain. Both materialise

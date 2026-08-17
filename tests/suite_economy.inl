@@ -700,8 +700,7 @@ static void test_economy_all() {
         }
         std::fprintf(stderr,
                      "[economy] a maxed loan costs %lld/%lld/%lld/%lld/%lld rub per real "
-                     "hour at E0..E4 on limits %d/%d/%d/%d/%d (one vendor_resupply is "
-                     "600 rub)\n",
+                     "hour at E0..E4 on limits %d/%d/%d/%d/%d\n",
                      static_cast<long long>(cost[0]), static_cast<long long>(cost[1]),
                      static_cast<long long>(cost[2]), static_cast<long long>(cost[3]),
                      static_cast<long long>(cost[4]),
@@ -711,30 +710,26 @@ static void test_economy_all() {
     }
 
     { // ---- 8. the deposit is genuinely LESS liquid, which is its whole cost ----
-        // The vendor spends `led.banked` and cannot see the deposit ([vendor.cpp]
-        // `if (led.banked < unit) break;`). So this is the decision the bank creates,
-        // and it is asserted rather than asserted-in-prose.
+        // Deposited money is not in `banked` — it can neither be extracted with
+        // nor (come increment C, the banker) be withdrawn into rubles without a
+        // trip. Asserted on the numbers themselves: the balance really moves
+        // OUT of the liquid pocket and only a withdraw brings it back. (This
+        // used to be proven through vendor_resupply, which died with the pad
+        // shop — [conversation.md]; the property is the ledger's, not a shop's.)
         BankAccount acct{};
         RunLedger led{};
         bank_open(acct, 0, 31u);
         led.banked = 5000;
         CHECK(bank_deposit_all(acct, led, 0u) == 5000);
-        CHECK(led.banked == 0);
+        CHECK(led.banked == 0);                 // the liquid pocket is EMPTY
         CHECK(acct.deposit == 5000);
-        CHECK(net_worth(led, acct) == 5000);
-        // A vendor asked to resupply now has nothing to spend, even though net worth
-        // says 5,000.
-        Inventory inv{};
-        CHECK(vendor_resupply(inv, led, 600) == 0);
-        CHECK(inv.empty());
-        // Withdraw and the same call succeeds. Same money, one keypress apart.
+        CHECK(net_worth(led, acct) == 5000);    // the worth did not vanish
+        // Withdraw and the same 600 is spendable again. One keypress apart.
         CHECK(bank_withdraw(acct, led, 600, 1u) == 600);
-        const std::int32_t spent = vendor_resupply(inv, led, 600);
-        CHECK(spent > 0);
-        CHECK(!inv.empty());
+        CHECK(led.banked == 600);
         std::fprintf(stderr,
-                     "[economy] 5,000 rub on deposit buys nothing (resupply 0 rub, "
-                     "0 slots); after withdrawing 600 it buys %d rub of kit\n", spent);
+                     "[economy] 5,000 rub on deposit leaves banked at 0; a 600 "
+                     "withdraw restores exactly 600 liquid\n");
 
         // The overflow guard, and it reports a partial like vendor_buy does.
         BankAccount big{};

@@ -11,6 +11,8 @@
 #include "ecs/components.h"
 #include "ecs/registry.h"
 #include "game/contract.h"
+#include "game/barter.h"
+#include "game/conversation.h"
 #include "game/vendor.h"
 #include "game/container.h"
 #include "game/combat.h"
@@ -92,7 +94,8 @@ int g_checks = 0;
 #include "suite_samosborhud.inl"
 #include "suite_eventsweb.inl"
 #include "suite_needs2.inl"
-#include "suite_vendorammo.inl"
+#include "suite_barter.inl"
+#include "suite_conversation.inl"
 #include "suite_npcpool.inl"
 #include "suite_samosbor2.inl"
 #include "suite_faction2.inl"
@@ -4482,210 +4485,42 @@ static void test_contracts() {
 }
 
 
-// The vendor. One assertion carries the whole design: buying then selling the same item
-// must LOSE money. Without the spread, the optimal play is to stand on the pad cycling
-// one item forever, and every other number in the economy becomes decoration.
-static void test_vendor() {
-    // Something the vendor stocks, with a real price.
-    ItemId drink = kInvalidItem;
-    for (ItemId i = 1; i <= kItemCount; ++i) {
-        const ItemDef& d = item_def(i);
-        if (static_cast<ItemCategory>(d.category) != ItemCategory::Drink) continue;
-        if (d.value <= 0) continue;
-        if (static_cast<UseEffect>(d.useEffect) == UseEffect::None) continue;
-        drink = i;
-        break;
-    }
-    CHECK(drink != kInvalidItem);
+// Barter terms — what survived the vendor window ([conversation.md]).
+//
+// The window, vendor_buy/sell_all/resupply and the per-visit cap are gone:
+// trade is an atomic DEAL between two real inventories now (suite_barter.inl
+// carries the mechanics). What this pins is the authored SPREAD the deal is
+// priced by — sell < buy at every rate, scientist > citizen > wild — because
+// barter_terms_for is built from vendor.h's surviving constants and a retuned
+// constant would silently reprice every deal in the game.
+static void test_barter_terms() {
+    const BarterTerms sci = barter_terms_for(Faction::Scientists);
+    const BarterTerms cit = barter_terms_for(Faction::Citizens);
+    const BarterTerms liq = barter_terms_for(Faction::Liquidators);
+    const BarterTerms cul = barter_terms_for(Faction::Cultists);
+    const BarterTerms wild = barter_terms_for(Faction::Wild);
 
-    // THE round-trip loss. 1.15 out, 0.85 back = 26% gone.
-    const std::int32_t buy = vendor_buy_price(drink);
-    const std::int32_t sell = vendor_sell_price(drink, VendorKind::Citizen);
-    CHECK(buy > 0 && sell > 0);
-    CHECK(sell < buy);
+    // One charge rate for everyone — the reference authors one.
+    CHECK(sci.chargeMultE3 == 1150);
+    CHECK(cit.chargeMultE3 == 1150);
+    CHECK(wild.chargeMultE3 == 1150);
 
-    // **The invariant that holds at EVERY price: sell < buy, always.** Truncating 0.85x
-    // can never exceed truncating 1.15x, so the money press is closed for all 446 items
-    // regardless of how cheap they are. Checked exhaustively, because this is the one
-    // property the whole economy rests on.
-    for (ItemId i = 1; i <= kItemCount; ++i) {
-        const std::int32_t b = vendor_buy_price(i);
-        if (b <= 0) continue;   // not stocked
-        for (std::uint8_t v = 0; v < static_cast<std::uint8_t>(VendorKind::Count); ++v) {
-            const std::int32_t sp = vendor_sell_price(i, static_cast<VendorKind>(v));
-            // 0 means the vendor will not take it at all — correct for a 1-rouble item,
-            // and the reason the sell price is NOT clamped up to 1 the way the buy price
-            // is. Clamping both left the press ajar: buy 1, sell 1, cycle for free.
-            CHECK(sp == 0 || sp < b);
-        }
-    }
+    // The pay ladder, and the civil bloc's collapse onto the default rate.
+    CHECK(sci.payMultE3 == 920);
+    CHECK(cit.payMultE3 == 850);
+    CHECK(liq.payMultE3 == 850);
+    CHECK(cul.payMultE3 == 850);
+    CHECK(wild.payMultE3 == 720);
 
-    // The 0.739 RATE, however, is only representable above about 7 roubles. Below that
-    // integer roubles cannot express a 26% spread — water at 2 buys for 2 and sells for
-    // 1, a 50% loss — and the three faction rates collapse onto one integer. That is a
-    // real limitation of integer currency, recorded in the header, not a test bug: my
-    // first version asserted the ratio on the cheapest drink and failed for exactly
-    // this reason.
-    ItemId dearDrink = kInvalidItem;
-    for (ItemId i = 1; i <= kItemCount; ++i) {
-        const ItemDef& d = item_def(i);
-        if (static_cast<ItemCategory>(d.category) != ItemCategory::Drink) continue;
-        if (d.value < 40) continue;
-        dearDrink = i;
-        break;
-    }
-    if (dearDrink != kInvalidItem) {
-        const float ratio =
-            static_cast<float>(vendor_sell_price(dearDrink, VendorKind::Citizen)) /
-            static_cast<float>(vendor_buy_price(dearDrink));
-        CHECK(ratio > 0.70f && ratio < 0.78f);   // 0.85 / 1.15 = 0.739
-        // And the faction order IS strict once it is representable.
-        CHECK(vendor_sell_price(dearDrink, VendorKind::Scientist) >
-              vendor_sell_price(dearDrink, VendorKind::Citizen));
-        CHECK(vendor_sell_price(dearDrink, VendorKind::Wild) <
-              vendor_sell_price(dearDrink, VendorKind::Citizen));
-    }
-    // At any price the order is at least non-strict, which is what a caller may rely on.
-    CHECK(vendor_sell_price(drink, VendorKind::Scientist) >=
-          vendor_sell_price(drink, VendorKind::Citizen));
-    CHECK(vendor_sell_price(drink, VendorKind::Wild) <=
-          vendor_sell_price(drink, VendorKind::Citizen));
+    // Sell strictly under buy at every rate: the money press stays closed.
+    CHECK(sci.payMultE3 < sci.chargeMultE3);
+    CHECK(wild.payMultE3 < wild.chargeMultE3);
 
-    // No weapons for sale: a shop that sells guns removes the reason to open a weapon
-    // crate on a deep floor, and the crate is the better story.
-    CHECK(!vendor_stocks(ItemCategory::Weapon));
-    CHECK(vendor_stocks(ItemCategory::Drink));
-    CHECK(vendor_stocks(ItemCategory::Ammo));
-
-    // Buying spends BANKED and reports what LANDED.
-    RunLedger led;
-    led.banked = buy * 5;
-    Inventory inv;
-    CHECK(vendor_buy(inv, led, drink, 3) == 3);
-    CHECK(led.banked == buy * 2);
-    // Broke: a partial buy, charged only for what arrived, never a negative balance.
-    led.banked = buy;
-    CHECK(vendor_buy(inv, led, drink, 4) == 1);
-    CHECK(led.banked == 0);
-    CHECK(vendor_buy(inv, led, drink, 1) == 0);
-    CHECK(led.banked == 0);
-
-    // A full inventory buys nothing rather than dropping items on the floor.
-    {
-        Inventory full;
-        ItemId single = kInvalidItem;
-        for (ItemId i = 1; i <= kItemCount; ++i)
-            if (item_def(i).stackMax == 1) { single = i; break; }
-        CHECK(single != kInvalidItem);
-        for (int i = 0; i < kInvSlots; ++i) full.slots[i] = ItemSlot{single, 1};
-        RunLedger rich;
-        rich.banked = 1000000;
-        CHECK(vendor_buy(full, rich, drink, 5) == 0);
-        CHECK(rich.banked == 1000000);
-    }
-
-    // Selling never takes the equipped weapon.
-    {
-        ItemId wpn = kInvalidItem;
-        for (ItemId i = 1; i <= kItemCount; ++i)
-            if (melee_for_item(i)) { wpn = i; break; }
-        CHECK(wpn != kInvalidItem);
-        Inventory si;
-        si.slots[0] = ItemSlot{wpn, 1};
-        CHECK(equipped_melee(si) == wpn);
-        RunLedger sl;
-        vendor_sell_all(si, sl, VendorKind::Citizen);
-        CHECK(equipped_melee(si) == wpn);   // still armed
-    }
-
-    // ...and never the last of a survival consumable. A vendor that strips you thirsty
-    // for a profit is a trap dressed as a convenience.
-    {
-        Inventory si;
-        si.slots[0] = ItemSlot{drink, 1};
-        si.slots[1] = ItemSlot{drink, 1};
-        RunLedger sl;
-        CHECK(vendor_sell_all(si, sl, VendorKind::Citizen) == 0);
-        std::int32_t left = 0;
-        for (const ItemSlot& x : si.slots) if (x.item == drink) left += x.count;
-        CHECK(left == 2);
-        // With plenty, the spare IS sold and exactly two are kept back.
-        Inventory bi;
-        bi.slots[0] = ItemSlot{drink, 9};
-        RunLedger bl;
-        CHECK(vendor_sell_all(bi, bl, VendorKind::Citizen) == sell * 7);
-        std::int32_t kept = 0;
-        for (const ItemSlot& x : bi.slots) if (x.item == drink) kept += x.count;
-        CHECK(kept == 2);
-    }
-
-    // The per-visit cap stands in for the reference's missing trader liquidity cap,
-    // which its own balance doc calls a P0: an unlimited buyer converts one deep safe
-    // into enough money to skip the early game.
-    {
-        ItemId dear = kInvalidItem;
-        for (ItemId i = 1; i <= kItemCount; ++i)
-            if (item_def(i).value > 8000 && item_def(i).stackMax == 1) { dear = i; break; }
-        if (dear != kInvalidItem) {
-            Inventory ci;
-            for (int i = 0; i < 20; ++i) ci.slots[i] = ItemSlot{dear, 1};
-            RunLedger cl;
-            const std::int32_t got = vendor_sell_all(ci, cl, VendorKind::Citizen);
-            CHECK(got <= kSellPerVisitCap);
-            // And the unsold remainder is still THERE, not deleted.
-            std::int32_t remaining = 0;
-            for (const ItemSlot& x : ci.slots) if (x.item == dear) remaining += x.count;
-            CHECK(remaining > 0);
-        }
-    }
-
-    // Resupply spends the budget and buys things that actually DO something —
-    // `calm_brew` is a DRINK with no effect, and buying it would be a placebo sale.
-    {
-        Inventory ri;
-        RunLedger rl;
-        rl.banked = 3000;
-        const std::int32_t used = vendor_resupply(ri, rl, 600);
-        CHECK(used > 0 && used <= 600);
-        CHECK(rl.banked == 3000 - used);
-        int items = 0;
-        for (const ItemSlot& x : ri.slots) {
-            if (!item_valid(x.item)) continue;
-            items += x.count;
-            // Ammo is exempt, and the exemption IS the fix. `vendor_resupply` used to
-            // filter candidates on `useEffect != None`, which of the 17 AMMO rows
-            // selects exactly the 3 unpack-packs and excludes all 13 loadable rounds —
-            // so it always bought the cheapest, `homemade_9mm`, which is the ammo_item
-            // of none of the 29 guns and whose UseEffect::Unpack has no handler
-            // anywhere. The vendor converted roubles into a permanently unusable item
-            // while its own comment called it the only reliable ammo source. A real
-            // round has UseEffect::None by design; asserting otherwise pinned the bug.
-            if (static_cast<ItemCategory>(item_def(x.item).category) == ItemCategory::Ammo)
-                continue;
-            CHECK(static_cast<UseEffect>(item_def(x.item).useEffect) != UseEffect::None);
-        }
-        CHECK(items > 0);
-        // Broke means nothing is bought and nothing goes negative.
-        RunLedger poor;
-        Inventory pi;
-        CHECK(vendor_resupply(pi, poor, 600) == 0);
-        CHECK(poor.banked == 0);
-    }
+    // Out-of-range garbage still maps to a real rate (total function).
+    const BarterTerms junk = barter_terms_for(static_cast<Faction>(250));
+    CHECK(junk.payMultE3 == 850);
 }
 
-
-// The WHOLE loop, through the real systems, in one test.
-//
-// Every system in this game was proven on its own and none of them was ever proven
-// together. That is the gap this closes, and it is the gap that matters: eight systems
-// were written separately and hand-integrated from worktrees on stale bases, so the
-// SEAMS are where the bugs live, not the interiors. A test per system cannot see a seam.
-//
-// The chain, in the order a player experiences it:
-//   spawn a floor with crates -> loot one -> ride to the hub -> bank the haul
-//   -> sell the rest -> re-supply -> take a job -> finish it -> get paid
-//
-// Every assertion below is about a HANDOFF, not about a system.
 static void test_full_loop() {
     LevelStack stack;
     FloorRegistry registry;
@@ -4858,57 +4693,52 @@ static void test_full_loop() {
     // you carry.
     CHECK(at_risk_value(inv) <= carried);
 
-    // --- seam 4: the vendor turns banked value into survival -----------------
-    // Sell whatever the pad would not take (trade goods it declined, consumables above
-    // the keep-back), then buy supplies with the proceeds.
-    const std::int64_t beforeSale = led.banked;
-    vendor_sell_all(inv, led, VendorKind::Citizen);
-    CHECK(led.banked >= beforeSale);                     // selling never loses money
-
-    const std::int64_t beforeBuy = led.banked;
-    const std::int32_t spent = vendor_resupply(inv, led, 600);
-    CHECK(led.banked == beforeBuy - spent);              // charged exactly once, always
-    // Whether anything was bought depends on what the crate paid out and how full the
-    // inventory is, so the assertion is conditional — but if money moved, what arrived
-    // must actually DO something. That is the placebo guard, and it is the part worth
-    // pinning: a vendor selling `calm_brew` (a DRINK with UseEffect::None) would take
-    // money for nothing.
-    if (spent > 0) {
-        int useful = 0;
-        for (const ItemSlot& sl : inv.slots) {
-            if (!item_valid(sl.item)) continue;
-            if (static_cast<UseEffect>(item_def(sl.item).useEffect) != UseEffect::None)
-                ++useful;
-        }
-        CHECK(useful > 0);
-    }
-    // With a guaranteed purse and an empty inventory it MUST buy, though — otherwise the
-    // resupply path is dead and the money has nowhere to go.
+    // --- seam 4: barter turns the haul into survival -------------------------
+    // The vendor window died with the barter increment ([conversation.md]):
+    // trade is an atomic deal against a partner's REAL bag now. The seam that
+    // must survive the rewrite is the same one the pad shop pinned: a round
+    // trip through the spread LOSES value, so trading is a service you pay
+    // for, never a money press. Priced through barter_commit itself — the same
+    // call the search screen's T key makes.
     {
-        Inventory fresh;
-        RunLedger rich;
-        rich.banked = 20000;
-        const std::int32_t s2 = vendor_resupply(fresh, rich, 4000);
-        CHECK(s2 > 0);
-        CHECK(rich.banked == 20000 - s2);
-    }
-
-    // The round trip LOSES money. Buy then immediately sell the same thing back and the
-    // banked total must fall — this is the one property that stops the pad being a money
-    // press, and it is a seam between vendor pricing and the ledger, not a vendor
-    // internal.
-    {
-        ItemId thing = kInvalidItem;
+        // A partner with a priced stack and enough cash to be a real buyer.
+        const NpcId trader = pool.spawn();
+        Inventory& ti = pool.inventory(trader);
+        ItemId goods = kInvalidItem;
         for (ItemId i = 1; i <= kItemCount; ++i)
-            if (vendor_buy_price(i) > 20) { thing = i; break; }
-        CHECK(thing != kInvalidItem);
-        Inventory ci;
-        RunLedger cl;
-        cl.banked = 100000;
-        const std::int64_t start = cl.banked;
-        CHECK(vendor_buy(ci, cl, thing, 10) == 10);
-        vendor_sell_all(ci, cl, VendorKind::Citizen);
-        CHECK(cl.banked < start);
+            if (i != kItemRuble && item_def(i).value >= 20 &&
+                item_def(i).stackMax >= 10) { goods = i; break; }
+        CHECK(goods != kInvalidItem);
+        ti.slots[0] = ItemSlot{goods, 10};
+        CHECK(inventory_give(ti, kItemRuble, 5000) == 0);
+
+        Inventory mine;
+        CHECK(inventory_give(mine, kItemRuble, 5000) == 0);
+        const std::int32_t worth0 = inventory_value(mine);
+
+        const BarterTerms terms = barter_terms_for(Faction::Citizens);
+        // Buy the stack: mark THEIR slot 0, cash settles itself.
+        const BarterPreview buy =
+            barter_commit(mine, nullptr, ti, nullptr, 0ull, 1ull, terms);
+        CHECK(buy.ok);
+        CHECK(buy.cash > 0);   // the goods cost money, and it left my rubles
+
+        // Sell it straight back: mark MY slot that now holds the stack.
+        std::uint64_t sellMark = 0;
+        for (int i = 0; i < kInvSlots; ++i)
+            if (mine.slots[i].item == goods) { sellMark = 1ull << i; break; }
+        CHECK(sellMark != 0);
+        const BarterPreview sell =
+            barter_commit(mine, nullptr, ti, nullptr, sellMark, 0ull, terms);
+        CHECK(sell.ok);
+
+        // Same items, two signatures later: strictly poorer. 26% round-trip
+        // loss at the citizen rate, same invariant the old window pinned.
+        CHECK(inventory_value(mine) < worth0);
+        // And nothing was minted or burned: the pair's total worth is constant
+        // — barter moves value, only the SPLIT changes.
+        CHECK(inventory_value(mine) + inventory_value(ti) ==
+              worth0 + item_def(goods).value * 10 + 5000);
     }
 
     // --- seam 5: a job, and it pays into the bank ---------------------------
@@ -5480,7 +5310,7 @@ int main() {
     test_extraction();
     test_containers();
     test_contracts();
-    test_vendor();
+    test_barter_terms();
     test_hunt_all();
     test_full_loop();
     test_extraction_reachable();
@@ -5511,7 +5341,8 @@ int main() {
     test_samosborhud_all();
     test_eventsweb_all();
     test_needs2_all();
-    test_vendorammo_all();
+    test_barter_all();
+    test_conversation_all();
     test_npcpool_all();
     test_samosbor2_all();
     test_faction2_all();

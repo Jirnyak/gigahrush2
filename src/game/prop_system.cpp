@@ -534,6 +534,9 @@ InteractionHit find_nearest_interactable(const Registry& reg, Entity player,
 
     auto view = reg.view<const Transform, const Interactable>();
     for (auto e : view) {
+        // Never yourself: the player's own body is an Interactable too now
+        // (Kind::Npc, [conversation.md]) and stands at distance zero.
+        if (e == player) continue;
         const auto& tr = view.get<const Transform>(e);
         if (tr.layer != layer) continue;
         const auto& ia = view.get<const Interactable>(e);

@@ -4,3 +4,4 @@ electrical_shield,ElectricalShield,SABOTAGE ELECTRICAL SHIELD,3.5,power-grid nod
 light_bulb,LightBulb,LIGHT BULB,2.5,ceiling light: shootable / future switch wiring
 corpse,Corpse,LOOT CORPSE,2.2,searchable body: loot transfer UI
 loot,Loot,PICK UP,2.0,floor loot pickup
+npc,Npc,BARTER / TRADE,2.2,living body: two-sided barter deal on the search screen
