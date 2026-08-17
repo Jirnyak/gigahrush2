@@ -4944,7 +4944,11 @@ int main(int argc, char** argv) {
         CameraMatrices camMat = compute_camera(reg, aspect, worldUp);
 
         hud.begin_frame();
-        if (showHud)
+        // Дебаг-панель — только в игре и паузе: поверх заставки и главного
+        // меню ей не место (плейтест владельца: «меню всратое» — панель со
+        // статами закрывала пол-экрана и титул).
+        if (showHud && (shell.screen == AppScreen::Playing ||
+                        shell.screen == AppScreen::Pause))
         {
             ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
             ImGui::Begin("gigahrush2");
@@ -5966,9 +5970,17 @@ int main(int argc, char** argv) {
         if (shell.screen == AppScreen::Menu) {
             ImGuiIO& io = ImGui::GetIO();
             // Титул «ГИГАХРУЩ 2» из тех же клеток, что собирали логотип
-            // студии — фоновым дроулистом, под окном меню. [intro_ui.h]
-            introFx.step_draw(ImGui::GetBackgroundDrawList(),
-                              io.DisplaySize.x, io.DisplaySize.y, io.DeltaTime);
+            // студии — фоновым дроулистом, под окном меню, НА ЧЁРНОМ: без
+            // подложки за титулом просвечивал живой мир и красные клетки
+            // терялись (плейтест владельца). Та же подложка, что у интро.
+            ImDrawList* mdl = ImGui::GetBackgroundDrawList();
+            mdl->AddRectFilled(ImVec2(0, 0), io.DisplaySize,
+                               IM_COL32(2, 8, 3, 255));
+            for (float y = 0; y < io.DisplaySize.y; y += 4.0f)
+                mdl->AddRectFilled(ImVec2(0, y), ImVec2(io.DisplaySize.x, y + 1),
+                                   IM_COL32(0, 0, 0, 60));
+            introFx.step_draw(mdl, io.DisplaySize.x, io.DisplaySize.y,
+                              io.DeltaTime);
             ImGui::SetNextWindowPos(
                 ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
                 ImGuiCond_Always, ImVec2(0.5f, 0.5f));
