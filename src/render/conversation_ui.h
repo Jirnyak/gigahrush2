@@ -52,10 +52,17 @@ DiceUiRequest dice_ui_draw(const game::DiceGame& g, const char* header);
 struct BankUiRequest {
     bool depositAll = false;   // Enter — вся наличка на счёт
     bool withdraw = false;     // T — снять до 1000 монетами
+    bool toDeposit = false;    // D — весь счёт на срочный вклад
+    bool fromDeposit = false;  // W — весь вклад назад на счёт
+    bool borrow = false;       // L — кредит до лимита ветки
+    bool repay = false;        // R — погасить долг со счёта
     bool close = false;        // Esc — от стойки
 };
 
+// Стойка теперь полный стол ([economy.h]): счёт/наличка + срочный вклад под
+// процент и кредит под процент. Числа читает, глаголы зовёт app.
 BankUiRequest bank_ui_draw(std::int64_t banked, std::int64_t cash,
-                           const char* header);
+                           std::int64_t deposit, std::int64_t debt,
+                           std::int64_t creditFree, const char* header);
 
 } // namespace giga

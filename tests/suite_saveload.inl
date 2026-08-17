@@ -225,6 +225,20 @@ SaveState busy_run() {
     // arithmetic; macro_world_round_trips covers them with real objects.)
     st.factions.add_mutual(0, 4, +30);
 
+    // Version 16 / SAVBANK: distinct non-round values in every serialized
+    // field, per this file's standing rule — a zero field cannot prove its
+    // codec. lastInterestTick stays 0 on purpose: it does NOT travel.
+    st.bank.deposit = 4321;
+    st.bank.loanPrincipal = 1500;
+    st.bank.loanAccrued = 37;
+    st.bank.interestEarned = 210;
+    st.bank.interestPaid = 96;
+    st.bank.creditLimit = 2500;
+    st.bank.entries = 5;
+    st.bank.band = 2;
+    st.bank.ledger[0] = BankEntry{111, 2222u, 1, 2};
+    st.bank.ledger[4] = BankEntry{333, 4444u, 3, 2};
+
     // Version 10 / SAVCLOCK. Every field gets a DISTINCT non-round value, which is
     // this file's own standing rule and the one §6a.1 of Docs/specs/10 accused it of
     // breaking: a field left at zero makes the memcmp below pass whether or not the
@@ -320,6 +334,23 @@ void same_run(const SaveState& a, const SaveState& b) {
         CHECK(a.status.alt[i] == b.status.alt[i]);
     }
 
+    // v16: the account, field by field (lastInterestTick excluded — it does
+    // not travel and the reader arms it to zero).
+    CHECK(a.bank.deposit == b.bank.deposit);
+    CHECK(a.bank.loanPrincipal == b.bank.loanPrincipal);
+    CHECK(a.bank.loanAccrued == b.bank.loanAccrued);
+    CHECK(a.bank.interestEarned == b.bank.interestEarned);
+    CHECK(a.bank.interestPaid == b.bank.interestPaid);
+    CHECK(a.bank.creditLimit == b.bank.creditLimit);
+    CHECK(a.bank.entries == b.bank.entries);
+    CHECK(a.bank.band == b.bank.band);
+    for (std::size_t i = 0; i < kBankLedgerSlots; ++i) {
+        CHECK(a.bank.ledger[i].amount == b.bank.ledger[i].amount);
+        CHECK(a.bank.ledger[i].tick == b.bank.ledger[i].tick);
+        CHECK(a.bank.ledger[i].op == b.bank.ledger[i].op);
+        CHECK(a.bank.ledger[i].band == b.bank.ledger[i].band);
+    }
+
     CHECK(a.containers.size() == b.containers.size());
     const std::size_t nk = a.containers.size() < b.containers.size()
                                ? a.containers.size()
@@ -407,14 +438,14 @@ void wire_layout() {
     static_assert(kFastTravelWire == 32);
     // 927 repeats v10's total by coincidence, not compatibility: v10 had nine
     // craft axes and no hpBank, v12 has eight and hpBank. See [save.cpp].
-    static_assert(kSaveFixedWire == 995);  // v14: 5 B inventory slots (+64)
+    static_assert(kSaveFixedWire == 1284);  // v16: +289 bank ([save.h] SAVBANK)
     static_assert(kFactionWire == 36);
-    // v15: 995 fixed + 36 faction + 64 header + 4 inline corpse count = 1099
+    // v16: 1284 fixed + 36 faction + 64 header + 4 inline corpse count = 1388
     // empty; a container row is 27 B, a corpse row 81 B.
-    static_assert(save_bytes_for(0) == 1099);
-    static_assert(save_bytes_for(3) == 1099 + 3 * kContainerRecWire);
+    static_assert(save_bytes_for(0) == 1388);
+    static_assert(save_bytes_for(3) == 1388 + 3 * kContainerRecWire);
     static_assert(save_bytes_for(3, 1, 100, 50) ==
-                  1099 + 3 * kContainerRecWire + kCorpseRecWire + 150);
+                  1388 + 3 * kContainerRecWire + kCorpseRecWire + 150);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -431,10 +462,10 @@ void wire_layout() {
     // samosbor clock (17) and the fast-travel unlock set (32); v11 adds the crowd
     // heal bank `hpBank` (+4); v12 drops one craft axis (-4); v13 adds the
     // player's Equipped cells (+4); v14 widens the slot count to u16 (+64);
-    // v15 swaps opened keys for whole-crate records (27 B a row, corpse rows
-    // 81 B, plus the inline corpse-count u32 that is part of the 1099 base):
-    // busy_run's 3 crates and 1 body land on 1099 + 81 + 81 = 1261.
-    CHECK(bytes.size() == 1099 + 3 * kContainerRecWire + kCorpseRecWire);
+    // v15 swapped opened keys for whole-crate records (27 B a row, corpse rows
+    // 81 B, plus the inline corpse-count u32 in the base); v16 adds the 289 B
+    // bank block: busy_run's 3 crates and 1 body land on 1388 + 81 + 81 = 1550.
+    CHECK(bytes.size() == 1388 + 3 * kContainerRecWire + kCorpseRecWire);
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');

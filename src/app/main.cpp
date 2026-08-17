@@ -1972,6 +1972,9 @@ int main(int argc, char** argv) {
     // rewriting the statement. MSVC did not warn; Clang -Wunused-but-set-variable does.
     [[maybe_unused]] std::uint32_t shots = 0;   // rounds the player has fired
     game::RunLedger& ledger = runState.ledger;
+    // v16: счёт живёт в ран-стейте, как леджер — F5/F9 больше не забывают
+    // вклад и долг ([economy.h], [save.h] SAVBANK).
+    game::BankAccount& bankAcct = runState.bank;
     // F5 saves, F9 loads. Recorded as intent and acted on in the sim loop, the same
     // shape sellWanted/buyWanted use: a load rewrites world state and belongs on the
     // sim's clock, not the window's.
@@ -3097,6 +3100,24 @@ int main(int argc, char** argv) {
                 controller_step(reg, kSimDt, &activeWorld.gravity());
                 // Steer the crowd BEFORE physics: wander writes horizontal
                 // velocity, physics integrates it and resolves collision.
+                // Банк тикает ЗДЕСЬ же: bank_open идемпотентен по (этаж, сид)
+                // и потому зовётся каждый тик — у travel-сайтов главного цикла
+                // уже дважды ловили «починили один из двух» ([economy.h] сама
+                // рекомендует эту проводку); bank_step O(1) и почти всегда
+                // выходит сразу. Закрывает запись §52 в check_wired.
+                game::bank_open(bankAcct, currentFloor, 0xBA4B5EEDu);
+                {
+                    const game::BankTick bt = game::bank_step(bankAcct, simTick);
+                    if (bt.earned || bt.paid)
+                        std::fprintf(stderr,
+                                     "[bank] period: +%d earned, -%d paid, "
+                                     "deposit %lld, debt %lld\n",
+                                     bt.earned, bt.paid,
+                                     static_cast<long long>(bankAcct.deposit),
+                                     static_cast<long long>(
+                                         game::bank_debt(bankAcct)));
+                }
+
                 // Samosbor advances HERE — after controller_step, before
                 // wander_step — for the three reasons in [samosbor.h]: the seal can
                 // kill and must precede finalize_deaths by a whole tick; behaviour
@@ -4619,6 +4640,10 @@ int main(int argc, char** argv) {
                             // discovery is progress, not per-floor channel state.
                             samosbor = runState.samosbor;
                             fastTravel = runState.fastTravel;
+                            // SAVBANK: часы процентов перезаводятся на ЖИВОЙ
+                            // тик — сим-клок каждой сессии свой, а сохранённый
+                            // тик в новой сессии — ложь ([save.h] v16).
+                            bankAcct.lastInterestTick = simTick;
                             // Per-floor channels reset, same as any arrival — these
                             // ARE floor-scoped, unlike the two clocks above.
                             rumourLine[0] = 0;
@@ -6048,8 +6073,10 @@ int main(int argc, char** argv) {
                     std::snprintf(header, sizeof header, "%s",
                                   game::faction_name(static_cast<game::Faction>(
                                       pool.faction(convNpc))));
-                    const BankUiRequest br =
-                        bank_ui_draw(ledger.banked, cash, header);
+                    const BankUiRequest br = bank_ui_draw(
+                        ledger.banked, cash, bankAcct.deposit,
+                        game::bank_debt(bankAcct),
+                        game::bank_credit_available(bankAcct), header);
                     if (br.depositAll) {
                         const std::int32_t in =
                             game::teller_deposit_cash(binv, ledger);
@@ -6066,6 +6093,40 @@ int main(int argc, char** argv) {
                         else
                             std::snprintf(convLine, sizeof convLine,
                                           "Выдавать нечего либо некуда.");
+                    }
+                    // Срочный стол ([economy.h]): one-keypress формы, суммы
+                    // судят сами глаголы (клампы по счёту/лимиту/принципалу).
+                    if (br.toDeposit) {
+                        const std::int32_t v =
+                            game::bank_deposit_all(bankAcct, ledger, simTick);
+                        std::snprintf(convLine, sizeof convLine,
+                                      v > 0 ? "На вклад: %d руб."
+                                            : "Вкладывать нечего.",
+                                      v);
+                    }
+                    if (br.fromDeposit) {
+                        const std::int32_t v =
+                            game::bank_withdraw_all(bankAcct, ledger, simTick);
+                        std::snprintf(convLine, sizeof convLine,
+                                      v > 0 ? "Вклад закрыт: %d руб на счёт."
+                                            : "Вклада нет.",
+                                      v);
+                    }
+                    if (br.borrow) {
+                        const std::int32_t v =
+                            game::bank_borrow_max(bankAcct, ledger, simTick);
+                        std::snprintf(convLine, sizeof convLine,
+                                      v > 0 ? "Кредит выдан: %d руб на счёт."
+                                            : "Лимит исчерпан.",
+                                      v);
+                    }
+                    if (br.repay) {
+                        const std::int32_t v =
+                            game::bank_repay_all(bankAcct, ledger, simTick);
+                        std::snprintf(convLine, sizeof convLine,
+                                      v > 0 ? "Погашено: %d руб."
+                                            : "Долга нет либо счёт пуст.",
+                                      v);
                     }
                     if (br.close) bankCounterOpen = false;
                 } else {
