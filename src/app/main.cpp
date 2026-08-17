@@ -65,6 +65,7 @@
 #include "game/contract.h"
 #include "game/barter.h"        // сделка ([conversation.md]); vendor.h — термы
 #include "game/conversation.h"
+#include "game/dice.h"
 #include "game/craft.h"
 #include "game/quest.h"
 #include "game/container.h"
@@ -2122,6 +2123,8 @@ int main(int argc, char** argv) {
     ConvUiState convUi{};
     std::uint64_t barterOwnMarks = 0, barterOtherMarks = 0;
     char dealLine[160] = {};
+    // Партия в кости ([dice.h]) — одна за раз, за столом разговора.
+    game::DiceGame diceGame{};
     char consoleInput[256] = {};
     std::vector<std::string> consoleLog;
     std::vector<std::string> consoleHistory;
@@ -6025,9 +6028,40 @@ int main(int argc, char** argv) {
                 convValid = dx * dx + dy * dy + dz * dz <= reach * reach;
             }
             if (!convValid) {
+                diceGame = game::DiceGame{};   // собеседник пропал — стол пуст
                 shell.close_window();
                 input.set_mouselook(true);
                 SDL_SetWindowRelativeMouseMode(window, true);
+            } else if (diceGame.active) {
+                // Стол занят: панель партии ВМЕСТО меню, один читатель клавиш.
+                char header[96];
+                std::snprintf(header, sizeof header, "%s",
+                              game::faction_name(static_cast<game::Faction>(
+                                  pool.faction(convNpc))));
+                const DiceUiRequest dr = dice_ui_draw(diceGame, header);
+                if (dr.roll) game::dice_roll(diceGame, pool);
+                if (dr.hold) game::dice_hold(diceGame, pool);
+                if (dr.surrender) game::dice_surrender(diceGame, pool);
+                if (dr.close) {
+                    // Итог — репликой в меню, стол освобождается.
+                    switch (diceGame.winner) {
+                        case game::DiceWinner::Player:
+                            std::snprintf(convLine, sizeof convLine,
+                                          "Кости легли за тебя: +%d руб.",
+                                          diceGame.paid);
+                            break;
+                        case game::DiceWinner::Npc:
+                            std::snprintf(convLine, sizeof convLine,
+                                          "Продул %d руб. Кости помнят.",
+                                          diceGame.paid);
+                            break;
+                        default:
+                            std::snprintf(convLine, sizeof convLine,
+                                          "Ничья — деньги по карманам.");
+                            break;
+                    }
+                    diceGame = game::DiceGame{};
+                }
             } else {
                 game::ConvContext cctx;
                 cctx.reg = &reg;
@@ -6057,6 +6091,23 @@ int main(int argc, char** argv) {
                             std::snprintf(convLine, sizeof convLine, "%s",
                                           act.line ? act.line : "");
                             break;
+                        case game::ConvActionKind::Dice: {
+                            // Сид — от сим-тика, НЕ от мирового сида: перезаход
+                            // не должен читать следующий бросок ([dice.h]).
+                            game::NpcId pidDice = game::kInvalidNpc;
+                            if (const auto* nrd =
+                                    reg.try_get<game::NpcRef>(player))
+                                pidDice = nrd->id;
+                            if (pidDice != game::kInvalidNpc &&
+                                !game::dice_start(
+                                    diceGame, pool, pidDice, convNpc,
+                                    giga::hash2(
+                                        static_cast<std::uint32_t>(simTick),
+                                        convNpc)))
+                                std::snprintf(convLine, sizeof convLine,
+                                              "Кости не легли на стол.");
+                            break;
+                        }
                         case game::ConvActionKind::Barter:
                             // Тот же экран обыска, политика — сделка: вторая
                             // сетка = пул-строка собеседника, метки с нуля.

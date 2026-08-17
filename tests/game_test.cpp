@@ -13,6 +13,7 @@
 #include "game/contract.h"
 #include "game/barter.h"
 #include "game/conversation.h"
+#include "game/dice.h"
 #include "game/vendor.h"
 #include "game/container.h"
 #include "game/combat.h"
@@ -96,6 +97,7 @@ int g_checks = 0;
 #include "suite_needs2.inl"
 #include "suite_barter.inl"
 #include "suite_conversation.inl"
+#include "suite_dice.inl"
 #include "suite_npcpool.inl"
 #include "suite_samosbor2.inl"
 #include "suite_faction2.inl"
@@ -5343,6 +5345,7 @@ int main() {
     test_needs2_all();
     test_barter_all();
     test_conversation_all();
+    test_dice_all();
     test_npcpool_all();
     test_samosbor2_all();
     test_faction2_all();

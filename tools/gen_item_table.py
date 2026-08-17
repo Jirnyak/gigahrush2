@@ -233,13 +233,19 @@ def main():
     # kItemRuble): refuse a catalog without it rather than emitting a table the
     # cash-roll paths cannot index.
     ids = [r["id"] for r in rows]
-    if "ruble" not in ids:
-        die("no 'ruble' row — the barter economy's money item is mandatory")
-    ruble_id = ids.index("ruble") + 1   # ids are 1-based row indices
+    # Named ids the code addresses directly. Each is load-bearing for a system
+    # (money for barter, dice for the conversation game row) — refuse a catalog
+    # without them rather than emitting a table those systems cannot index.
+    named = {}
+    for key in ("ruble", "dice_bone"):
+        if key not in ids:
+            die("no '%s' row — a named-id consumer depends on it" % key)
+        named[key] = ids.index(key) + 1   # ids are 1-based row indices
 
     with open(OUT_PATH, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(HEADER)
-        fh.write("const ItemId kItemRuble = %d;\n\n" % ruble_id)
+        fh.write("const ItemId kItemRuble = %d;\n" % named["ruble"])
+        fh.write("const ItemId kItemDiceBone = %d;\n\n" % named["dice_bone"])
         fh.write("const std::array<ItemDef, kItemCount> kItemTable = {{\n")
         fh.write("\n".join(out))
         fh.write("\n}};\n\n")

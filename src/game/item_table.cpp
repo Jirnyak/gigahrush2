@@ -22,6 +22,7 @@ constexpr std::uint16_t u16(RoomBit v) { return static_cast<std::uint16_t>(v); }
 } // namespace
 
 const ItemId kItemRuble = 342;
+const ItemId kItemDiceBone = 117;
 
 const std::array<ItemDef, kItemCount> kItemTable = {{
     // [0] id 1  acid_bottle  (700 g)
