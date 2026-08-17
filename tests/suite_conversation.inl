@@ -131,7 +131,36 @@ static void conversation_party_holds_gates_the_games() {
     CHECK(!conv_party_holds(c, kInvalidItem));
 }
 
+static void conversation_bank_is_the_duty_clerks() {
+    using namespace conversation_detail;
+    ConvFixture f;
+    ConvContext c = f.ctx();
+
+    // A resident offers no counter; the id acts as nothing.
+    ConvOption opts[kConvMaxOptions];
+    std::size_t n = conv_options(c, opts, kConvMaxOptions);
+    bool seen = false;
+    for (std::size_t i = 0; i < n; ++i)
+        if (std::strcmp(opts[i].id, "bank") == 0) seen = true;
+    CHECK(!seen);
+    CHECK(conv_activate(c, "bank").kind == ConvActionKind::None);
+
+    // Appoint the Duty clerk — the ROLE column is the gate, and it is
+    // writable (a story override can open a counter anywhere).
+    f.pool.role(f.npc) = static_cast<std::uint8_t>(RoleId::Duty);
+    n = conv_options(c, opts, kConvMaxOptions);
+    seen = false;
+    for (std::size_t i = 0; i < n; ++i)
+        if (std::strcmp(opts[i].id, "bank") == 0) {
+            seen = true;
+            CHECK(i >= 1 && std::strcmp(opts[i - 1].id, "trade") == 0);
+        }
+    CHECK(seen);
+    CHECK(conv_activate(c, "bank").kind == ConvActionKind::Bank);
+}
+
 static void test_conversation_all() {
+    conversation_bank_is_the_duty_clerks();
     conversation_menu_is_the_sorted_table();
     conversation_quest_marker_follows_the_giver();
     conversation_activation_routes();

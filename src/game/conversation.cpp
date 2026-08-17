@@ -4,6 +4,7 @@
 
 #include "game/contract.h"   // ContractBook — the quest option reads givers
 #include "game/dice.h"       // dice_stake_for — the game row prices itself
+#include "game/role.h"       // RoleId — the Duty clerk is the teller
 #include "game/embody.h"     // NpcRef — the player's bag is a pool row too
 
 namespace giga::game {
@@ -85,6 +86,24 @@ ConvAction trade_activate(ConvContext&) {
     return a;
 }
 
+// --- bank — the teller counter ([economy.h], инкремент C) --------------------
+// The owner's law: banked is an ACCOUNT and moving cash in and out of it is an
+// interaction with a BODY, never pad magic. Who is a banker: the Duty clerk —
+// the ведомственная касса — until a dedicated role arrives with the production
+// loop. Gated on the ROLE column (a story override can appoint one).
+bool bank_visible(const ConvContext& ctx) {
+    if (!ctx.pool || ctx.npc == kInvalidNpc) return false;
+    return static_cast<RoleId>(ctx.pool->role(ctx.npc)) == RoleId::Duty;
+}
+
+const char* bank_label(const ConvContext&) { return "БАНК"; }
+
+ConvAction bank_activate(ConvContext&) {
+    ConvAction a;
+    a.kind = ConvActionKind::Bank;
+    return a;
+}
+
 // --- dice — the first GAME row, exactly the shape the table promised ---------
 // Visible when the dice are AT THE TABLE — either party's pocket counts, one
 // set is enough ([conversation.md]). The row prices itself on activation and
@@ -137,6 +156,7 @@ constexpr ConvOptionDef kConvOptions[] = {
     {"talk", 0, talk_label, nullptr, talk_activate},
     {"quest", 10, quest_label, nullptr, quest_activate},
     {"trade", 20, trade_label, nullptr, trade_activate},
+    {"bank", 30, bank_label, bank_visible, bank_activate},
     // The games band starts at 100, per the reference's spacing: dice first,
     // durak/domino/checkers land as siblings without renumbering anything.
     {"dice", 100, dice_label, dice_visible, dice_activate},
@@ -146,7 +166,8 @@ constexpr ConvOptionDef kConvOptions[] = {
 static_assert(kConvOptions[0].order <= kConvOptions[1].order &&
                   kConvOptions[1].order <= kConvOptions[2].order &&
                   kConvOptions[2].order <= kConvOptions[3].order &&
-                  kConvOptions[3].order <= kConvOptions[4].order,
+                  kConvOptions[3].order <= kConvOptions[4].order &&
+                  kConvOptions[4].order <= kConvOptions[5].order,
               "keep kConvOptions sorted by order; the projection relies on it");
 
 bool option_visible(const ConvOptionDef& def, const ConvContext& ctx) {

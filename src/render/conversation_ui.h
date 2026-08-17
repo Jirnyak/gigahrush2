@@ -47,4 +47,15 @@ struct DiceUiRequest {
 
 DiceUiRequest dice_ui_draw(const game::DiceGame& g, const char* header);
 
+// Касса ([economy.h] teller) — тоже вместо меню, пока стойка открыта. Панель
+// читает два числа и возвращает нажатия; глаголы зовёт app.
+struct BankUiRequest {
+    bool depositAll = false;   // Enter — вся наличка на счёт
+    bool withdraw = false;     // T — снять до 1000 монетами
+    bool close = false;        // Esc — от стойки
+};
+
+BankUiRequest bank_ui_draw(std::int64_t banked, std::int64_t cash,
+                           const char* header);
+
 } // namespace giga
