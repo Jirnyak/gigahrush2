@@ -50,6 +50,9 @@ def _load_interacts():
 
 INTERACTS = _load_interacts()
 
+# FlickerProfile ordinals — lockstep с src/game/flicker.h и shaders/flicker.glsl.
+FLICKER = {"none": 0, "mains": 1, "arc": 2, "pulse": 3, "crt": 4}
+
 
 def die(msg):
     sys.stderr.write("gen_prop_table: %s\n" % msg)
@@ -125,6 +128,16 @@ def main():
         cg = num(r, "color_g_e3", 0, 2000)
         cb = num(r, "color_b_e3", 0, 2000)
         reach = num(r, "reach_mm", 0, 10000)
+        light_radius = num(r, "light_radius_mm", 0, 65535)
+        light_intensity = num(r, "light_intensity_e3", 0, 65535)
+        light_cone = num(r, "light_cone_deg", 0, 89)
+        flicker = (r.get("flicker") or "").strip()
+        if flicker not in FLICKER:
+            die("%r: unknown flicker %r (want %s)"
+                % (sid, flicker, ", ".join(sorted(FLICKER))))
+        if (light_radius == 0) != (light_intensity == 0):
+            die("%r: light_radius_mm and light_intensity_e3 must be both zero "
+                "or both set" % sid)
 
         enum_name = camel(sid)
         enum_lines.append("    %s = %d," % (enum_name, i))
@@ -151,10 +164,10 @@ def main():
         if not (0 < massG <= 4294967295):
             die("row %d: mass_g %r out of range (1..2^32-1, and a prop may not be "
                 "massless)" % (i, mass_raw))
-        # Layout: massG (uint32), 6 uint8 (shape..mat + pad), 7 uint16.
+        # Layout: massG (uint32), 6 uint8 (shape..cone), 9 uint16, flicker + pads.
         defs.append(
             "    // [%d] %s\n"
-            "    PropDef{ %d, %d, %d, %d, %d, %d, 0, %d, %d, %d, %d, %d, %d, %d }," % (
+            "    PropDef{ %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, 0, 0 }," % (
                 i, sid,
                 massG,
                 shape,
@@ -162,9 +175,12 @@ def main():
                 INTERACTS[interact],
                 emissive,
                 mat_id,
+                light_cone,
                 cr, cg, cb,
                 reach,
-                sizes[0], sizes[1], sizes[2]))
+                sizes[0], sizes[1], sizes[2],
+                light_radius, light_intensity,
+                FLICKER[flicker]))
 
     count = len(rows)
 
@@ -237,24 +253,35 @@ BODY_H = """// POD row. shape is the PropShape ordinal (render/prop_mesh.h); gam
 // 1 g .. 4294 tonnes, which brackets a 9 mm cartridge and a lift cabin with one
 // encoding and no per-table conversion to misremember.
 //
-// Layout is explicit: 1 x uint32, 6 x uint8, 7 x uint16 = 24 bytes, no hidden pad.
+// СВЕТ — ИЗ ЭТОЙ ЖЕ СТРОКИ ([ddalight.md]): lightRadiusMm != 0 означает «проп
+// излучает», и коллектор света видит ЛЮБОЙ такой проп — спец-случаев
+// «лампочка» в коде нет. Радиус в мм, как reachMm — одна единица на таблицу.
+// lightConeDeg — ПОЛУугол конуса, 0 = омни (занял бывший pad0_).
+//
+// Layout is explicit: 1 x uint32, 6 x uint8, 9 x uint16, 1 x uint32 pad = 32 bytes.
 struct PropDef {
-    std::uint32_t massG;         // 0  universal mass, GRAMS ([ecs] Mass)
-    std::uint8_t  shape;         // 4  PropShape ordinal
-    std::uint8_t  fallMode;      // 5  PropFallMode ordinal
-    std::uint8_t  interactKind;  // 6  Interactable::Kind or 255
-    std::uint8_t  emissive;      // 7  0..255 PropPass emissive
-    std::uint8_t  matId;         // 8
-    std::uint8_t  pad0_ = 0;     // 9
-    std::uint16_t colorRE3;      // 10 RGB x1000
-    std::uint16_t colorGE3;      // 12
-    std::uint16_t colorBE3;      // 14
-    std::uint16_t reachMm;       // 16 Interactable reach in millimetres
-    std::uint16_t sizeXMm;       // 18 authored mesh size, millimetres — the
-    std::uint16_t sizeYMm;       // 20 unit shape is scaled to exactly this,
-    std::uint16_t sizeZMm;       // 22 so a bulb is a bulb and not a 1 m drum
+    std::uint32_t massG;            // 0  universal mass, GRAMS ([ecs] Mass)
+    std::uint8_t  shape;            // 4  PropShape ordinal
+    std::uint8_t  fallMode;         // 5  PropFallMode ordinal
+    std::uint8_t  interactKind;     // 6  Interactable::Kind or 255
+    std::uint8_t  emissive;         // 7  0..255 PropPass emissive
+    std::uint8_t  matId;            // 8
+    std::uint8_t  lightConeDeg;     // 9  полуугол конуса света, 0 = омни
+    std::uint16_t colorRE3;         // 10 RGB x1000
+    std::uint16_t colorGE3;         // 12
+    std::uint16_t colorBE3;         // 14
+    std::uint16_t reachMm;          // 16 Interactable reach in millimetres
+    std::uint16_t sizeXMm;          // 18 authored mesh size, millimetres — the
+    std::uint16_t sizeYMm;          // 20 unit shape is scaled to exactly this,
+    std::uint16_t sizeZMm;          // 22 so a bulb is a bulb and not a 1 m drum
+    std::uint16_t lightRadiusMm;    // 24 0 = не светит
+    std::uint16_t lightIntensityE3; // 26 интенсивность x1000
+    std::uint8_t  flickerProfile;   // 28 FlickerProfile ([game/flicker.h]):
+                                    //    свет И emissive носителя, синхронно
+    std::uint8_t  pad0_ = 0;        // 29
+    std::uint16_t pad1_ = 0;        // 30
 };
-static_assert(sizeof(PropDef) == 24, "PropDef must stay a tight 24-byte row");
+static_assert(sizeof(PropDef) == 32, "PropDef must stay a tight 32-byte row");
 static_assert(alignof(PropDef) == 4);
 static_assert(std::is_trivially_copyable_v<PropDef>);
 
@@ -289,6 +316,12 @@ inline PropId prop_id_by_string(const char* id) {
             return static_cast<PropId>(i);
     }
     return static_cast<PropId>(kPropCount);
+}
+
+// Строка светит? Радиус и интенсивность обязаны идти парой — одинокий ноль
+// в любой из колонок означает «не источник».
+inline bool prop_emits_light(const PropDef& d) {
+    return d.lightRadiusMm != 0 && d.lightIntensityE3 != 0;
 }
 
 // Color as vec3 in 0..2 range (e3 / 1000).

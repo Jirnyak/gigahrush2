@@ -41,7 +41,8 @@ struct BodyInstance {
 class BodyPass {
 public:
     bool init(VulkanDevice& dev, VkRenderPass renderPass, const char* shaderDir,
-              VkDescriptorSetLayout lightGridSetLayout = VK_NULL_HANDLE);
+              VkDescriptorSetLayout lightGridSetLayout = VK_NULL_HANDLE,
+              VkDescriptorSetLayout shadowSetLayout = VK_NULL_HANDLE);
     void destroy();
 
     // Rebuild the instance list from every drawable entity on `layer` into this
@@ -51,13 +52,15 @@ public:
     // centre is past the fog radius (push.fog.y) are culled.
     void record(VkCommandBuffer cmd, std::uint32_t frameIndex,
                 const Registry& reg, LayerId layer, const CubePush& push,
-                VkDescriptorSet lightGridSet = VK_NULL_HANDLE);
+                VkDescriptorSet lightGridSet = VK_NULL_HANDLE,
+                VkDescriptorSet shadowSet = VK_NULL_HANDLE);
 
     std::uint32_t last_instance_count() const { return lastInstanceCount_; }
 
 private:
     VulkanDevice* dev_ = nullptr;
     VkDescriptorSetLayout lightGridSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout shadowSetLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
 

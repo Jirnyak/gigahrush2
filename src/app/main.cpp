@@ -81,6 +81,8 @@
 #include "game/weapon_table.h"
 #include "game/event_bus.h"
 #include "game/floors/padic/padic.h"
+#include "game/flicker.h"
+#include "game/light_bake.h"
 #include "game/prop_system.h"
 #include "game/investigate.h"
 #include "sim/fluid.h"
@@ -169,15 +171,59 @@ constexpr float kAoDirect = 0.65f;
 // hides the seam harder, never less.
 constexpr float kSamosborFogSqueeze = 0.34f;
 
+// Статические эмиттеры светоматериалов активного этажа ([game/light_bake.h]):
+// печётся в refresh_floor_props, читается collect_scene_lights. Файловый
+// статик, как g_saveSlot — этаж один, владелец один.
+static std::vector<game::BakedLight> g_bakedFloorLights;
+
+// Сфера carve задевает светоматериал? Проверка ДО carve (после — ячейки уже
+// воздух): бокс сферы мал (радиус carve — метры), скан копеечный. true велит
+// вызывающему перепечь эмиттеры этажа — выломал неон, свет погас тем же
+// кадром, ровно как дыра в стене впускает свет: одно событие «ячейка
+// изменилась», два честных следствия. [ddalight.md]
+static bool carve_touches_light_material(const World& w, const CarveOp& op) {
+    const MacroGrid& g = w.grid();
+    const int r = static_cast<int>(op.radius / kCellSize) + 1;
+    const int cx = static_cast<int>(std::floor(op.x / kCellSize));
+    const int cy = static_cast<int>(std::floor(op.y / kCellSize));
+    const int cz = static_cast<int>(std::floor(op.z / kCellSize));
+    for (int dz = -r; dz <= r; ++dz)
+        for (int dy = -r; dy <= r; ++dy)
+            for (int dx = -r; dx <= r; ++dx)
+                if (material_emits_light(g.cell(cx + dx, cy + dy, cz + dz)))
+                    return true;
+    return false;
+}
+
 static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
                                  float timeSec, const game::SamosborState& samosbor,
                                  const Registry& reg, LayerId activeLayer,
                                  const game::NoiseField* noiseField = nullptr,
-                                 const game::PowerGridState* powerGrid = nullptr) {
+                                 const game::PowerGridState* powerGrid = nullptr,
+                                 const vec3& camForward = vec3{1.0f, 0.0f, 0.0f},
+                                 const vec3& camUp = vec3{0.0f, 0.0f, 1.0f},
+                                 const game::NpcPool* pool = nullptr,
+                                 Entity player = entt::null) {
     grid.clear_lights();
 
-    // 1. Player Headlamp
-    grid.add_light(camPos, kLampRadius, vec3{0.95f, 0.92f, 0.85f}, kLampIntensity);
+    // Свет от камеры ЗАПРЕЩЁН (решение владельца 2026-08-17): НПЦ = игрок,
+    // бесплатного налобника не существует. Фонарик будет ПРЕДМЕТОМ инвентаря —
+    // add_light с конусом, тем же, каким получат его и NPC. [ddalight.md]
+    //
+    // Единственный закон калла: источник существует, если его сфера СВОЕГО
+    // радиуса касается сферы видимости (радиус тумана) вокруг КАМЕРЫ. Общих
+    // констант нет — лампы разные, решает радиус каждой. Иначе лампа
+    // «загорается» при приближении (репорт владельца — каллы были 32-48 м при
+    // видимости 128). Бюджет держит сортировка: на GPU едут ближайшие
+    // kMaxPointLights. [gpu_light_grid.h] [ddalight.md]
+    const float kFogRadius = kWorldExtent * 0.5f; // = fog.y (push ниже по файлу)
+    auto light_reaches_view = [&](const vec3& pos, float radius) {
+        const float dx = wrap_delta_f(camPos.x, pos.x, kWorldExtent);
+        const float dy = wrap_delta_f(camPos.y, pos.y, kWorldExtent);
+        const float dz = wrap_delta_f(camPos.z, pos.z, kWorldExtent);
+        const float reach = kFogRadius + radius;
+        return dx * dx + dy * dy + dz * dz <= reach * reach;
+    };
 
     // 2. Samosbor Alarm Hazard Light
     const game::SamosborAlarm alarm = game::samosbor_alarm(samosbor);
@@ -203,14 +249,9 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
         const game::MobRef& m = reg.get<const game::MobRef>(e);
         const auto kind = static_cast<game::MobKind>(m.kind);
 
-        float dx = wrap_delta_f(camPos.x, tr.pos.x, kWorldExtent);
-        float dy = wrap_delta_f(camPos.y, tr.pos.y, kWorldExtent);
-        float dz = wrap_delta_f(camPos.z, tr.pos.z, kWorldExtent);
-        if (dx * dx + dy * dy + dz * dz > 48.0f * 48.0f) continue;
-
-        if (kind == game::MobKind::Lampovy) {
+        if (kind == game::MobKind::Lampovy && light_reaches_view(tr.pos, 12.0f)) {
             grid.add_light(tr.pos + vec3{0.0f, 0.0f, 1.2f}, 12.0f, vec3{1.0f, 0.88f, 0.65f}, 2.0f);
-        } else if (kind == game::MobKind::Lampoglaz) {
+        } else if (kind == game::MobKind::Lampoglaz && light_reaches_view(tr.pos, 16.0f)) {
             grid.add_light(tr.pos + vec3{0.0f, 0.0f, 1.5f}, 16.0f, vec3{0.70f, 0.95f, 1.0f}, 2.8f);
         }
     }
@@ -220,13 +261,8 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
         const Transform& tr = reg.get<const Transform>(e);
         if (tr.layer != activeLayer) continue;
         const game::Container& cnt = reg.get<const game::Container>(e);
-        if (!cnt.opened) {
-            float dx = wrap_delta_f(camPos.x, tr.pos.x, kWorldExtent);
-            float dy = wrap_delta_f(camPos.y, tr.pos.y, kWorldExtent);
-            float dz = wrap_delta_f(camPos.z, tr.pos.z, kWorldExtent);
-            if (dx * dx + dy * dy + dz * dz < 32.0f * 32.0f) {
-                grid.add_light(tr.pos + vec3{0.0f, 0.0f, 0.5f}, 6.0f, vec3{0.30f, 0.90f, 0.50f}, 1.2f);
-            }
+        if (!cnt.opened && light_reaches_view(tr.pos, 6.0f)) {
+            grid.add_light(tr.pos + vec3{0.0f, 0.0f, 0.5f}, 6.0f, vec3{0.30f, 0.90f, 0.50f}, 1.2f);
         }
     }
 
@@ -237,10 +273,7 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
         const game::Projectile& proj = reg.get<const game::Projectile>(e);
         if (proj.ttlMs == 0) continue;
 
-        float dx = wrap_delta_f(camPos.x, tr.pos.x, kWorldExtent);
-        float dy = wrap_delta_f(camPos.y, tr.pos.y, kWorldExtent);
-        float dz = wrap_delta_f(camPos.z, tr.pos.z, kWorldExtent);
-        if (dx * dx + dy * dy + dz * dz < 48.0f * 48.0f) {
+        if (light_reaches_view(tr.pos, 10.0f)) {
             // One colour for every shot in the air. It used to be two, keyed on
             // `Projectile::team` — but a bullet no longer knows whose it is, and a
             // HUD that claimed otherwise would be teaching the player a rule the
@@ -250,46 +283,134 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
         }
     }
 
-    // 6. Loud Game Noise Events (game::loudest_heard) -> Point Light Modulation in GpuLightGrid
-    if (noiseField && !noiseField->quiet()) {
-        float noiseDist = 0.0f;
-        const game::Noise* loud = game::loudest_heard(*noiseField, activeLayer, camPos, 1.0f, 1, 0, &noiseDist);
-        if (loud && loud->severity >= 1) {
-            vec3 npos{loud->x, loud->y, loud->z};
-            float lifeFrac = (loud->lifeMs > 0) ? (static_cast<float>(loud->ttlMs) / static_cast<float>(loud->lifeMs)) : 1.0f;
-            float pulse = std::sin(timeSec * 30.0f + static_cast<float>(loud->id)) * 0.35f + 0.65f;
-            float intensity = (static_cast<float>(loud->severity) * 2.0f) * lifeFrac * pulse;
-            grid.add_light(npos + vec3{0.0f, 0.0f, 0.8f}, loud->radius * 0.8f, vec3{1.0f, 0.70f, 0.30f}, intensity);
-            float acousticFlicker = 1.0f + 0.50f * (static_cast<float>(loud->severity) / 5.0f) * std::sin(timeSec * 40.0f);
-            grid.add_light(camPos + vec3{0.0f, 0.0f, 1.0f}, 14.0f, vec3{0.90f, 0.80f, 0.50f}, 1.5f * acousticFlicker);
-        }
-    }
+    // 6. «Свет из шума» УДАЛЁН (2026-08-17). Блок вешал мерцающий свет на
+    // КАМЕРУ по каждому громкому событию — а шум шагов существует только на
+    // земле (grounded-гейт encumbrance_step), поэтому читалось как «налобник
+    // включается от WASD и гаснет в прыжке» (репорт владельца). Пока свет
+    // красил один туман, обман был незаметен; когда лампы стали освещать
+    // поверхности — вылез. Звук из физики, свет из ПРЕДМЕТОВ; синестезии не
+    // место в сетке. [ddalight.md]
 
-    // 7. Ceiling Light Bulbs (ECS LightBulb Interactables — never propPass).
-    // Seeded by seed_ceiling_lights to match PropPlacer BareBulb/FloodLamp cells.
-    // Suppressed when local ElectricalShield power is cut. [jirnyak.md] §18.
+    // 7. Пропы-света: ЛЮБОЙ проп, чья строка data/props.csv светит, — PropLight
+    // испечён при спавне ([prop_system.h]), спец-случая «лампочка» нет; радиус,
+    // цвет и интенсивность — из таблицы. Гейты: Interactable.active (выкручена/
+    // разбита) для всех; power cut и хрущёвское мерцание — только для mains
+    // (проп на общей сети, interact LightBulb); прибор со своим питанием живёт
+    // при обесточке. [ddalight.md]
+    std::uint32_t dbgTotal = 0, dbgLit = 0, dbgUnpowered = 0, dbgInactive = 0,
+                  dbgCulled = 0;
     {
-        auto lampView = reg.view<const Transform, const game::Interactable>();
+        auto lampView = reg.view<const Transform, const game::PropLight>();
         for (auto e : lampView) {
             const Transform& tr = lampView.get<const Transform>(e);
             if (tr.layer != activeLayer) continue;
-            const game::Interactable& ia = lampView.get<const game::Interactable>(e);
-            if (!ia.active || ia.kind != game::Interactable::Kind::LightBulb) continue;
+            ++dbgTotal;
+            const game::PropLight& pl = lampView.get<const game::PropLight>(e);
+            if (const auto* ia = reg.try_get<const game::Interactable>(e);
+                ia && !ia->active) {
+                ++dbgInactive;
+                continue;
+            }
 
-            const vec3& pos = tr.pos;
-            if (powerGrid && powerGrid->is_power_cut(pos)) continue; // Local power cut!
+            const vec3 pos = tr.pos + vec3{0.0f, 0.0f, -pl.dropM};
+            const auto profile = static_cast<game::FlickerProfile>(pl.flicker);
+            // Только mains-профиль сидит на общей сети — power cut гасит его;
+            // прибор со своим питанием живёт при обесточке. (Сеть под
+            // пересмотром владельца — глубже не связываемся.)
+            if (profile == game::FlickerProfile::Mains && powerGrid &&
+                powerGrid->is_power_cut(pos)) {
+                ++dbgUnpowered;
+                continue;
+            }
+            if (!light_reaches_view(pos, pl.radiusM)) {
+                ++dbgCulled;
+                continue;
+            }
 
-            float dx = wrap_delta_f(camPos.x, pos.x, kWorldExtent);
-            float dy = wrap_delta_f(camPos.y, pos.y, kWorldExtent);
-            float dz = wrap_delta_f(camPos.z, pos.z, kWorldExtent);
-            if (dx * dx + dy * dy + dz * dz > 36.0f * 36.0f) continue;
+            // ЕДИНАЯ функция мерцания ([game/flicker.h] == shaders/flicker.glsl):
+            // та же математика красит emissive плафона в prop.frag — свет и
+            // арматура пульсируют синхронно по построению.
+            const float intensity =
+                pl.intensity * game::flicker_factor(profile, pos, timeSec);
 
-            // Khrushchevka unstable power grid flickering (pure deterministic DOD math)
-            float flick = std::sin(timeSec * 12.0f + pos.x * 1.7f + pos.z * 2.3f) * 0.18f;
-            float microFlick = (std::fmod(timeSec * 47.0f + pos.x * 3.1f + pos.z * 5.7f, 1.0f) < 0.07f) ? -0.50f : 0.0f;
-            float intensity = std::max(0.2f, 1.8f + flick + microFlick);
+            grid.add_light(pos, pl.radiusM, pl.color, intensity);
+            ++dbgLit;
+        }
+    }
 
-            grid.add_light(pos + vec3{0.0f, 0.0f, -0.2f}, 12.0f, vec3{1.00f, 0.88f, 0.65f}, intensity);
+    // 8. Светоматериалы — статические эмиттеры бейка этажа ([light_bake.h]):
+    // нарисованная светом вывеска, неоновая полоса, вылепленная вокселями
+    // лампа — настоящие источники, с тенями и гало.
+    for (const game::BakedLight& bl : g_bakedFloorLights) {
+        if (light_reaches_view(bl.pos, bl.radiusM))
+            grid.add_light(bl.pos, bl.radiusM, bl.color, bl.intensity);
+    }
+
+    // 9. Свет из РУК: экипированный инструмент игрока ([equip.h] Tool), чья
+    // строка data/items.csv светит — фонарик конусом по взгляду. Это ПРЕДМЕТ,
+    // не свет камеры: его находят в луте, экипируют решением (`equip`), его
+    // можно проиграть в кости или отдать — закон «НПЦ = игрок» цел. NPC
+    // получат тот же путь, когда ai_equip_step научится инструментам.
+    // Цвет пока белый — цветовые колонки items.csv добавим с первым цветным
+    // носимым источником ([item_table.h]).
+    if (pool && reg.valid(player)) {
+        const game::NpcRef* nr = reg.try_get<game::NpcRef>(player);
+        const game::Equipped* eq = reg.try_get<game::Equipped>(player);
+        if (nr && eq && pool->valid(nr->id)) {
+            const game::ItemId tool = game::equipped_item(
+                pool->inventory(nr->id), *eq, game::EquipSlot::Tool);
+            if (tool != game::kInvalidItem) {
+                const game::ItemDef& d = game::item_def(tool);
+                if (d.lightRadiusMm != 0 && d.lightIntensityE3 != 0) {
+                    // Фонарик — В РУКЕ, не в глазу. Свет с нулевым параллаксом
+                    // от камеры не может показать НИ ОДНОЙ тени по построению
+                    // (заслон прячет путь света и путь взгляда одновременно) и
+                    // читается «искусственным кругом» (репорт владельца).
+                    // Рука: полплеча вправо (0.28), локоть ниже глаз (0.30),
+                    // чуть вперёд (0.10) — параллакс возвращает тени и живой
+                    // край луча; камера просто рендерит. NPC получат ту же
+                    // руку от своего Transform/facing.
+                    const vec3 right = normalize(cross(camForward, camUp));
+                    const vec3 handPos = vec3{
+                        camPos.x + right.x * 0.28f - camUp.x * 0.30f + camForward.x * 0.10f,
+                        camPos.y + right.y * 0.28f - camUp.y * 0.30f + camForward.y * 0.10f,
+                        camPos.z + right.z * 0.28f - camUp.z * 0.30f + camForward.z * 0.10f};
+                    const float radius =
+                        static_cast<float>(d.lightRadiusMm) * 0.001f;
+                    const float intensity =
+                        static_cast<float>(d.lightIntensityE3) * 0.001f *
+                        game::flicker_factor(
+                            static_cast<game::FlickerProfile>(d.flickerProfile),
+                            handPos, timeSec);
+                    const vec3 white{1.0f, 1.0f, 1.0f};
+                    if (d.lightConeDeg != 0) {
+                        const float cosOuter = std::cos(
+                            static_cast<float>(d.lightConeDeg) *
+                            (3.14159265f / 180.0f));
+                        grid.add_light(handPos, radius, white, intensity,
+                                       camForward, cosOuter);
+                    } else {
+                        grid.add_light(handPos, radius, white, intensity);
+                    }
+                }
+            }
+        }
+    }
+
+    // GIGA_LIGHT_DBG=1: строка раз в ~2 с — кто из пропов-светов жив и куда
+    // делись остальные; хвост — сколько реально уедет на GPU. Диагностика
+    // «ниже не светятся» ([ddalight.md]).
+    static const bool kLightDbg = std::getenv("GIGA_LIGHT_DBG") != nullptr;
+    if (kLightDbg) {
+        static std::uint32_t frame = 0;
+        if ((frame++ % 120u) == 0u) {
+            const std::uint32_t staged = grid.active_light_count();
+            std::fprintf(stderr,
+                         "[light-dbg] props total=%u lit=%u inactive=%u unpowered=%u culled=%u"
+                         " | staged=%u dropped=%u upload=%u\n",
+                         dbgTotal, dbgLit, dbgInactive, dbgUnpowered, dbgCulled,
+                         staged, grid.overflow_dropped(),
+                         staged < gpu::kMaxPointLights ? staged : gpu::kMaxPointLights);
         }
     }
 }
@@ -990,6 +1111,14 @@ std::uint32_t refresh_floor_props(Registry& reg, const World& world,
         std::fprintf(stderr, "[rooms] floor %d: %u pieces of furniture placed\n",
                      floorNumber, furniture);
     }
+
+    // Светоматериалы → статические эмиттеры ([game/light_bake.h]): скан +
+    // кластеризация при каждой постройке этажа, той же геометрии, что и всё.
+    g_bakedFloorLights = game::bake_material_lights(world);
+    if (!g_bakedFloorLights.empty())
+        std::fprintf(stderr, "[light-bake] floor %d: %zu emitter clusters\n",
+                     floorNumber, g_bakedFloorLights.size());
+
     return count;
 }
 
@@ -1504,9 +1633,12 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "[light-grid] pass init failed\n");
     }
 
-    gpu::CubePass cubePass;
-    if (!cubePass.init(device, lightGrid.descriptor_set_layout())) {
-        std::fprintf(stderr, "Cube pass init failed\n");
+    // GPU mirror of the active floor's voxel truth ([render/voxel_mirror.h]).
+    // Инитится ДО cube/body-пассов: они несут его теневой сет (set 2,
+    // [ddalight.md]) в своих pipeline layout'ах.
+    gpu::VoxelMirror voxelMirror;
+    if (!voxelMirror.init(device)) {
+        std::fprintf(stderr, "Voxel mirror init failed\n");
         lightGrid.destroy();
         renderer.destroy();
         device.destroy();
@@ -1515,13 +1647,11 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // GPU mirror of the active floor's voxel truth ([render/voxel_mirror.h]) —
-    // stage 1 of the raymarch migration. No pass consumes it yet; it becomes
-    // the raymarcher's world in stage 2, so its plumbing boots with the rest.
-    gpu::VoxelMirror voxelMirror;
-    if (!voxelMirror.init(device)) {
-        std::fprintf(stderr, "Voxel mirror init failed\n");
-        cubePass.destroy();
+    gpu::CubePass cubePass;
+    if (!cubePass.init(device, lightGrid.descriptor_set_layout(),
+                       voxelMirror.shadow_set_layout())) {
+        std::fprintf(stderr, "Cube pass init failed\n");
+        voxelMirror.destroy();
         lightGrid.destroy();
         renderer.destroy();
         device.destroy();
@@ -1552,7 +1682,7 @@ int main(int argc, char** argv) {
     // Draws the population: one instanced, lit box per embodied entity, sharing
     // the world pass's render pass + depth so bodies and voxels occlude cleanly.
     gpu::BodyPass bodyPass;
-    if (!bodyPass.init(device, renderer.renderPass, GIGA_SHADER_DIR, lightGrid.descriptor_set_layout())) {
+    if (!bodyPass.init(device, renderer.renderPass, GIGA_SHADER_DIR, lightGrid.descriptor_set_layout(), voxelMirror.shadow_set_layout())) {
         std::fprintf(stderr, "Body pass init failed\n");
         raymarchPass.destroy();
         voxelMirror.destroy();
@@ -3889,9 +4019,14 @@ int main(int argc, char** argv) {
                     // command stream, and the next swing is a fresh roll.
                     op.seed = static_cast<std::uint32_t>(simTick);
                     consoleCtx.carveRadius = 0.0f;
+                    const bool relight = carve_touches_light_material(
+                        stack.layer(activeLayer), op);
                     const std::int32_t removed =
                         carve_sphere(stack.layer(activeLayer), op,
                                      carveScratch, carveResult);
+                    if (removed > 0 && relight)
+                        g_bakedFloorLights =
+                            game::bake_material_lights(stack.layer(activeLayer));
                     if (removed > 0) {
                         // No log, no bookkeeping: geometry persistence is the
                         // floor's own file, written when the player leaves
@@ -4245,9 +4380,14 @@ int main(int argc, char** argv) {
                         op.radius = pr.radius;
                         op.power = pr.power;
                         op.seed = pr.seed;
+                        const bool relight = carve_touches_light_material(
+                            stack.layer(activeLayer), op);
                         const std::int32_t removed =
                             carve_sphere(stack.layer(activeLayer), op,
                                          carveScratch, carveResult);
+                        if (removed > 0 && relight)
+                            g_bakedFloorLights = game::bake_material_lights(
+                                stack.layer(activeLayer));
                         if (removed > 0) {
                             voxelMirror.mark_dirty(
                                 carveResult.dirtyCells.data(),
@@ -6587,7 +6727,7 @@ int main(int argc, char** argv) {
             // truthful 0.0 ms, not as a dead readout.
             renderer.timer.pass_begin(cmd, gpu::GpuPass::LightGrid);
             if (lightGrid.ready()) {
-                collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, samosbor, reg, activeLayer, &noiseField, &powerGrid);
+                collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, samosbor, reg, activeLayer, &noiseField, &powerGrid, camMat.forward, worldUp, &pool, player);
                 lightGrid.update_and_dispatch(cmd, currentTimeSec, camMat.eye);
             }
             renderer.timer.pass_end(cmd, gpu::GpuPass::LightGrid);
@@ -6843,12 +6983,12 @@ int main(int argc, char** argv) {
             std::uint64_t t1 = SDL_GetPerformanceCounter();
             // Draw the embodied population on the active layer (shared depth).
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Bodies);
-            bodyPass.record(cmd, renderer.currentFrame, reg, activeLayer, push, lightGrid.descriptor_set());
+            bodyPass.record(cmd, renderer.currentFrame, reg, activeLayer, push, lightGrid.descriptor_set(), voxelMirror.shadow_set());
             renderer.timer.pass_end(cmd, gpu::GpuPass::Bodies);
             // Props: GPU-instanced arbitrary-mesh pass, same depth buffer.
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Props);
             if (propPass.ready())
-                propPass.record(cmd, renderer.currentFrame, push, lightGrid.descriptor_set());
+                propPass.record(cmd, renderer.currentFrame, push, lightGrid.descriptor_set(), voxelMirror.shadow_set());
             renderer.timer.pass_end(cmd, gpu::GpuPass::Props);
 
 
@@ -6865,42 +7005,16 @@ int main(int argc, char** argv) {
             cubeMs = static_cast<float>((t1 - t0) / freq * 1000.0);
             bodyMs = static_cast<float>((t2 - t1) / freq * 1000.0);
 
-            // Тёмная адаптация — асимметричный зрачок (порт форка e6b5e24b):
-            // сжатие на свету быстрое (тау 0.15 с), расширение в темноте
-            // медленное (тау 2.5 с). Яркость сцены — световые константы +
-            // лампы в радиусе 16 м (те же LightBulb, что collect_scene_lights,
-            // с тем же уважением к обрезанной сети) + вспышка тревоги
-            // самосбора. Экспозицию применяет ТОЛЬКО пост-пас к сцене: UI
-            // рисуется после begin_post_pass и глаз игрока не «слепнет».
-            {
-                static float darkAdapt = 1.0f;
-                float sceneLum = kAmbient + kFillStrength + kLampIntensity * 0.25f;
-                auto lampView = reg.view<const Transform, const game::Interactable>();
-                for (auto e : lampView) {
-                    const Transform& tr = lampView.get<const Transform>(e);
-                    if (tr.layer != activeLayer) continue;
-                    const game::Interactable& ia =
-                        lampView.get<const game::Interactable>(e);
-                    if (!ia.active
-                        || ia.kind != game::Interactable::Kind::LightBulb)
-                        continue;
-                    if (powerGrid.is_power_cut(tr.pos)) continue;
-                    const float dx = wrap_delta_f(camMat.eye.x, tr.pos.x, kWorldExtent);
-                    const float dy = wrap_delta_f(camMat.eye.y, tr.pos.y, kWorldExtent);
-                    const float dz = wrap_delta_f(camMat.eye.z, tr.pos.z, kWorldExtent);
-                    const float d2 = dx * dx + dy * dy + dz * dz;
-                    if (d2 < 16.0f * 16.0f)
-                        sceneLum += 1.5f * (1.0f - std::sqrt(d2) / 16.0f);
-                }
-                const game::SamosborAlarm alarm = game::samosbor_alarm(samosbor);
-                if (alarm.pulse > 0.01f) sceneLum += alarm.pulse * 2.0f;
-                const float target =
-                    std::clamp(1.0f / (sceneLum + 0.10f), 0.20f, 2.50f);
-                const float tau = target < darkAdapt ? 0.15f : 2.50f;
-                darkAdapt +=
-                    (target - darkAdapt) * (1.0f - std::exp(-frameDt / tau));
-                renderer.darkAdaptation = darkAdapt;
-            }
+            // «Тёмная адаптация» (порт форка e6b5e24b) УДАЛЕНА 2026-08-17.
+            // Она была тем самым «подлетаешь к свету — и он тускнеет»
+            // (репорт владельца со скринами, стабильно весь день): «яркость
+            // сцены» считалась СУММОЙ ЛАМП В 16 М ОТ КАМЕРЫ ПО ДИСТАНЦИИ —
+            // не по свету, попавшему в глаз, — и экспозиция глушила кадр до
+            // 5x возле любого источника; лампа ЗА СТЕНОЙ душила так же, а на
+            // плотном этаже у света всегда стояло максимальное удушение.
+            // Свет обязан быть честным ([ddalight.md] закон №10); честная
+            // адаптация глаза, если понадобится, — это GPU-редукция реальной
+            // яркости кадра, осознанной системой, не суммой дистанций.
             // Сцена закрыта; CRT-треугольник в свопчейн; ImGui — поверх, резкий.
             renderer.begin_post_pass();
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Hud);
@@ -7141,6 +7255,11 @@ int main(int argc, char** argv) {
     lightGrid.destroy();
     renderer.destroy();
     device.destroy();
+    // Аудио гасится ДО SDL_Quit: audioSys живёт на стеке main и её деструктор
+    // сработал бы ПОСЛЕ return — SDL_DestroyAudioStream по мёртвому девайсу,
+    // сегфолт на каждом выходе из игры (стек: ~AudioSystem →
+    // SDL_UnbindAudioStreams → pthread_mutex_lock; крэши 01:39/03:44/05:04).
+    audioSys.shutdown();
     SDL_DestroyWindow(window);
     SDL_Quit();
     return 0;

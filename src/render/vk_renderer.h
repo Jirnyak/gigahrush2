@@ -64,9 +64,8 @@ struct VulkanRenderer {
     VkRenderPass postRenderPass = VK_NULL_HANDLE;
 
     // Ручки пост-обработки; main выставляет их до begin_post_pass().
-    // darkAdaptation — экспозиция зрачка (драйвер в main: асимметричные тау),
-    // остальное — характер трубки. crtEnabled=false (--no-crt) даёт сырой кадр.
-    float darkAdaptation = 1.0f;
+    // Характер трубки. crtEnabled=false (--no-crt) даёт сырой кадр.
+    // Экспозиции здесь НЕТ: «тёмная адаптация» вырезана ([ddalight.md] №10).
     bool crtEnabled = true;
     float chromaticAberration = 0.003f;
     float crtCurvature = 0.035f;

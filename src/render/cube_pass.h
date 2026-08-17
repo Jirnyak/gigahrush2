@@ -58,7 +58,8 @@ public:
     // Loads the material texture pack and builds the shared pipeline layout.
     // Never fails on missing/corrupt textures — the procedural surface is the
     // shipped fallback; fails only on real Vulkan errors.
-    bool init(VulkanDevice& dev, VkDescriptorSetLayout lightGridSetLayout);
+    bool init(VulkanDevice& dev, VkDescriptorSetLayout lightGridSetLayout,
+              VkDescriptorSetLayout shadowSetLayout = VK_NULL_HANDLE);
     void destroy();
 
     // The photographic albedo/normal/roughness arrays, for passes that shade
@@ -86,6 +87,7 @@ private:
 
     VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout lightGridSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout shadowSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
     VkDescriptorSet descriptorSet_ = VK_NULL_HANDLE;
 

@@ -1,4 +1,6 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#include "volumetric_fog.glsl" // только distance_fog(); SSBO-биндинги за ifdef
 // cloth.vert — pulls sheet points straight from the sim SSBO (no vertex
 // buffer): 7x3 quads x 6 vertices = 126 per sheet over an 8x4 point grid.
 // Push block layout = CubePush, shared with the whole pass family.
@@ -67,6 +69,6 @@ void main() {
 
     gl_Position = pc.viewProj * vec4(world, 1.0);
     float dist = length(world - pc.camPos.xyz);
-    vFog = clamp((dist - pc.fog.x) / max(pc.fog.y - pc.fog.x, 1e-3), 0.0, 1.0);
+    vFog = distance_fog(dist, pc.fog.x, pc.fog.y);
     vWorldPos = world;
 }

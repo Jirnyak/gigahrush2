@@ -2,6 +2,7 @@
 #include "render/gpu_light_grid.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -47,6 +48,10 @@ bool GpuLightGrid::init(VulkanDevice* dev, const char* shaderDir) {
     dev_ = dev;
     if (!dev_) return false;
 
+    stagingLights_.resize(kStagingLights);
+    sortScratch_.resize(kStagingLights);
+    sortKeys_.resize(kStagingLights);
+
     if (!create_buffers()) {
         std::fprintf(stderr, "[light-grid] failed to allocate GPU buffers\n");
         return false;
@@ -65,7 +70,7 @@ bool GpuLightGrid::init(VulkanDevice* dev, const char* shaderDir) {
 }
 
 bool GpuLightGrid::create_buffers() noexcept {
-    // 16 bytes header (uPointLightCount + 3 reserved uints) + 256 * 32 B PointLight = 8208 B
+    // 16 bytes header (uPointLightCount + 3 reserved uints) + 512 * 48 B PointLight
     constexpr VkDeviceSize kLightBufSize = 16 + kMaxPointLights * sizeof(GpuPointLight);
     if (!lightBuf_.create_host_visible(*dev_, kLightBufSize,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "light-point-buf")) {
@@ -74,7 +79,7 @@ bool GpuLightGrid::create_buffers() noexcept {
     lightMapped_ = lightBuf_.mapped;
     std::memset(lightMapped_, 0, static_cast<std::size_t>(kLightBufSize));
 
-    // 32 x 16 x 32 cells = 16384 cells * 64 B LightGridCell = 1,048,576 B (1.0 MiB)
+    // 64³ cells (весь тор, 4 м клетка) * 128 B LightGridCell = 32 MiB device-local
     constexpr VkDeviceSize kGridBufSize = kTotalGridCells * sizeof(GpuGridCell);
     std::vector<uint8_t> zeroGrid(static_cast<std::size_t>(kGridBufSize), 0);
     if (!gridSSBO_.create_device_local(*dev_, zeroGrid.data(), kGridBufSize,
@@ -198,39 +203,54 @@ bool GpuLightGrid::create_compute_pipeline(const char* shaderDir) noexcept {
 
 void GpuLightGrid::clear_lights() noexcept {
     stagingLightCount_ = 0;
+    overflowDropped_ = 0;
 }
 
 void GpuLightGrid::add_light(const vec3& pos, float radius, const vec3& color, float intensity) noexcept {
-    if (stagingLightCount_ >= kMaxPointLights || radius <= 0.0f || intensity <= 0.001f) {
+    if (radius <= 0.0f || intensity <= 0.001f) return;
+    if (stagingLightCount_ >= kStagingLights) {
+        ++overflowDropped_; // считаем, не молчим — GIGA_LIGHT_DBG покажет
         return;
     }
 
     GpuPointLight& pt = stagingLights_[stagingLightCount_++];
     pt.posRadius = vec4{pos.x, pos.y, pos.z, radius};
     pt.colorIntensity = vec4{color.x, color.y, color.z, intensity};
+    // w = -2: сентинель «омни». Нулевой w означал бы конус 90° — молчаливый баг.
+    pt.dirCone = vec4{0.0f, 0.0f, 1.0f, -2.0f};
+}
+
+void GpuLightGrid::add_light(const vec3& pos, float radius, const vec3& color, float intensity,
+                             const vec3& dir, float cosOuter) noexcept {
+    if (radius <= 0.0f || intensity <= 0.001f) return;
+    if (stagingLightCount_ >= kStagingLights) {
+        ++overflowDropped_;
+        return;
+    }
+
+    GpuPointLight& pt = stagingLights_[stagingLightCount_++];
+    pt.posRadius = vec4{pos.x, pos.y, pos.z, radius};
+    pt.colorIntensity = vec4{color.x, color.y, color.z, intensity};
+    const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+    const float inv = len > 1e-6f ? 1.0f / len : 0.0f;
+    pt.dirCone = vec4{dir.x * inv, dir.y * inv, dir.z * inv, cosOuter};
 }
 
 void GpuLightGrid::sort_lights_by_distance(const vec3& camPos) noexcept {
     if (stagingLightCount_ <= 1) return;
-    struct LightDist {
-        uint16_t idx;
-        float distSq;
-    };
-    LightDist dists[kMaxPointLights];
     for (uint32_t i = 0; i < stagingLightCount_; ++i) {
         const vec4& p = stagingLights_[i].posRadius;
         const float dx = wrap_delta_f(camPos.x, p.x, kWorldExtent);
         const float dy = wrap_delta_f(camPos.y, p.y, kWorldExtent);
         const float dz = wrap_delta_f(camPos.z, p.z, kWorldExtent);
-        dists[i] = { static_cast<uint16_t>(i), dx * dx + dy * dy + dz * dz };
+        sortKeys_[i] = { dx * dx + dy * dy + dz * dz, static_cast<uint16_t>(i) };
     }
-    std::sort(dists, dists + stagingLightCount_,
-              [](const LightDist& a, const LightDist& b) { return a.distSq < b.distSq; });
-    GpuPointLight temp[kMaxPointLights];
+    std::sort(sortKeys_.begin(), sortKeys_.begin() + stagingLightCount_);
     for (uint32_t i = 0; i < stagingLightCount_; ++i) {
-        temp[i] = stagingLights_[dists[i].idx];
+        sortScratch_[i] = stagingLights_[sortKeys_[i].second];
     }
-    std::memcpy(stagingLights_, temp, stagingLightCount_ * sizeof(GpuPointLight));
+    std::memcpy(stagingLights_.data(), sortScratch_.data(),
+                stagingLightCount_ * sizeof(GpuPointLight));
 }
 
 void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const vec3& camPos) noexcept {
@@ -239,25 +259,23 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const
     // Sort active point lights by distance to camera so nearest lights take priority
     sort_lights_by_distance(camPos);
 
-    // Upload light count and point lights array to persistent mapped memory
-    uint32_t header[4] = {stagingLightCount_, 0, 0, 0};
+    // На GPU едут БЛИЖАЙШИЕ kMaxPointLights (стейджинг уже отсортирован по
+    // дистанции) — лишними остаются только самые дальние, они за туманом.
+    const uint32_t uploadCount = std::min(stagingLightCount_, kMaxPointLights);
+    uint32_t header[4] = {uploadCount, 0, 0, 0};
     std::memcpy(lightMapped_, header, sizeof(header));
-    if (stagingLightCount_ > 0) {
-        std::memcpy(static_cast<char*>(lightMapped_) + 16, stagingLights_,
-                    stagingLightCount_ * sizeof(GpuPointLight));
+    if (uploadCount > 0) {
+        std::memcpy(static_cast<char*>(lightMapped_) + 16, stagingLights_.data(),
+                    uploadCount * sizeof(GpuPointLight));
     }
 
-    // Grid bounding box in world space centered on camera position
-    vec3 cellSize{2.0f, 2.0f, 2.0f};
-    vec3 gridMinPos = camPos - vec3(kGridDimX * cellSize.x * 0.5f,
-                                    kGridDimY * cellSize.y * 0.5f,
-                                    kGridDimZ * cellSize.z * 0.5f);
-
+    // World-aligned: сетка — весь тор, начало в нуле мира, камера ни при чём.
+    // Врап у потребителей — битовое И индекса; «вне сетки» не существует.
     GridPush push{};
-    push.camPos = vec4{camPos.x, camPos.y, camPos.z, 48.0f}; // 48m max cull range
-    push.gridMin = vec4{gridMinPos.x, gridMinPos.y, gridMinPos.z, cellSize.x};
+    push.camPos = vec4{camPos.x, camPos.y, camPos.z, 0.0f};
+    push.gridMin = vec4{0.0f, 0.0f, 0.0f, kGridCellMeters};
     push.gridExt = vec4{static_cast<float>(kGridDimX), static_cast<float>(kGridDimY),
-                        static_cast<float>(kGridDimZ), cellSize.y};
+                        static_cast<float>(kGridDimZ), kGridCellMeters};
     // params.w carries the TORUS WRAP PERIOD. It used to be a spare 0 while the
     // shader wrapped against a hardcoded `128.0` — half the real 256 m extent, and
     // only on x and z. The literal itself turned out to be harmless (128 divides
@@ -267,14 +285,14 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const
     // binned at all, so the fog goes dark exactly where it should glow. Sending the
     // period makes the shader's period unfalsifiable by construction — the same
     // rule [problems.md] §7 wrote after the phantom-lamp hunt.
-    push.params = vec4{timeSec, 15.0f, static_cast<float>(stagingLightCount_),
+    push.params = vec4{timeSec, 31.0f, static_cast<float>(uploadCount),
                        kWorldExtent};
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout_, 0, 1, &descriptorSet_, 0, nullptr);
     vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(GridPush), &push);
 
-    // Workgroup size: (8, 4, 8) -> Dispatch (32/8, 16/4, 32/8) = (4, 4, 4)
+    // Workgroup size: (8, 4, 8) -> Dispatch (64/8, 64/4, 64/8) = (8, 16, 8)
     vkCmdDispatch(cmd, kGridDimX / 8, kGridDimY / 4, kGridDimZ / 8);
 
     // Insert VkBufferMemoryBarrier: COMPUTE SHADER WRITE -> FRAGMENT SHADER READ

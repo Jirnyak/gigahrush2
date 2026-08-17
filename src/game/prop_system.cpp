@@ -302,6 +302,22 @@ Entity spawn_prop_from_id(Registry& reg, const World& world, const vec3& worldPo
         auto& ia = reg.get<Interactable>(e);
         ia.reachM = static_cast<float>(d.reachMm) * 0.001f;
     }
+    // Светящаяся строка таблицы = светящийся проп, кем бы он ни был. [ddalight.md]
+    if (prop_emits_light(d)) {
+        PropLight pl;
+        pl.color     = prop_color(d);
+        pl.radiusM   = static_cast<float>(d.lightRadiusMm) * 0.001f;
+        pl.intensity = static_cast<float>(d.lightIntensityE3) * 0.001f;
+        pl.dropM     = static_cast<float>(d.sizeZMm) * 0.0005f;
+        pl.coneDeg   = d.lightConeDeg;
+        pl.flicker   = d.flickerProfile;
+        reg.emplace_or_replace<PropLight>(e, pl);
+    }
+    // Профиль мерцания едет в биты 0..2 PropMesh.flags → vFlags → prop.frag:
+    // emissive поверхности мигает ТОЙ ЖЕ функцией, что свет ([game/flicker.h]).
+    if (auto* pm = reg.try_get<PropMesh>(e))
+        pm->flags = static_cast<std::uint8_t>((pm->flags & ~0x07u) |
+                                              (d.flickerProfile & 0x07u));
     return e;
 }
 

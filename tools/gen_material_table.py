@@ -163,8 +163,14 @@ def main():
                             fnum(r, "chroma_b", i)),
             "bump": fnum(r, "bump_scale", i, 0),
             "density": fnum(r, "density_kg_m3", i, 0),
+            "emissive_e3": int(fnum(r, "emissive_e3", i, 0, 4000)),
+            "light_radius_mm": int(fnum(r, "light_radius_mm", i, 0, 65535)),
+            "light_intensity_e3": int(fnum(r, "light_intensity_e3", i, 0, 65535)),
             "note": r["note"],
         })
+        if (mats[-1]["light_radius_mm"] == 0) != (mats[-1]["light_intensity_e3"] == 0):
+            die("row %d (%s): light_radius_mm and light_intensity_e3 must be "
+                "both zero or both set" % (i, r["name"]))
     n = len(mats)
     names = [m["name"] for m in mats]
 
@@ -259,8 +265,38 @@ inline float material_subvoxel_mass_kg(CellType t) {
     return (t < kMatCount ? kMatDensity[t] : 0.0f) * kSubVoxelVolumeM3;
 }
 
+// СВЕТОМАТЕРИАЛЫ ([ddalight.md]): light_radius_mm != 0 — ячейки этого
+// материала излучают; бейк этажа кластеризует их в статические эмиттеры
+// (game/light_bake.h). Цвет источника = альбедо материала: нарисованный
+// неон светит тем цветом, каким покрашен. Единицы — мм и x1000, как в
+// data/props.csv (одна величина = одна единица во всех таблицах).
+inline constexpr std::uint16_t kMatLightRadiusMm[kMatCount] = {
+%(light_radius)s};
+
+inline constexpr std::uint16_t kMatLightIntensityE3[kMatCount] = {
+%(light_intensity)s};
+
+// Linear albedo per id — the light colour source for emitters (and the same
+// numbers render/material_table.h carries for shading).
+inline constexpr float kMatAlbedoR[kMatCount] = {
+%(albedo_r)s};
+inline constexpr float kMatAlbedoG[kMatCount] = {
+%(albedo_g)s};
+inline constexpr float kMatAlbedoB[kMatCount] = {
+%(albedo_b)s};
+
+inline bool material_emits_light(CellType t) {
+    return t < kMatCount && kMatLightRadiusMm[t] != 0 && kMatLightIntensityE3[t] != 0;
+}
+
 } // namespace giga
-""")
+""" % {
+            "light_radius": elements(mats, ["%d" % m["light_radius_mm"] for m in mats], names),
+            "light_intensity": elements(mats, ["%d" % m["light_intensity_e3"] for m in mats], names),
+            "albedo_r": elements(mats, ["%.3ff" % m["albedo"][0] for m in mats], names),
+            "albedo_g": elements(mats, ["%.3ff" % m["albedo"][1] for m in mats], names),
+            "albedo_b": elements(mats, ["%.3ff" % m["albedo"][2] for m in mats], names),
+        })
 
     # --- src/render/material_table.h ---------------------------------------
     textured = [m for m in mats if m["tex"]]
@@ -364,6 +400,15 @@ const uint kMaterialCsvRows = %du;
         fh.write(elements(mats,
                           ["vec3(%.5f, %.5f, %.5f)" % m["chroma_axis"]
                            for m in mats], names))
+        fh.write(");\n\n")
+
+        fh.write("// Самосвечение поверхности (albedo * kMatEmissive): нарисованный\n"
+                 "// светоматериал читается источником даже в полной тьме; сам СВЕТ\n"
+                 "// от него в сетку кладёт бейк этажа ([ddalight.md]).\n")
+        fh.write("const float kMatEmissive[%d] = float[%d](\n" % (n, n))
+        fh.write(elements(mats,
+                          ["%.3f" % (m["emissive_e3"] * 0.001) for m in mats],
+                          names))
         fh.write(");\n")
 
     sys.stderr.write(

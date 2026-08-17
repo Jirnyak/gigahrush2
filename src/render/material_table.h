@@ -34,7 +34,8 @@ inline constexpr vec3 kMaterial[kMatCount] = {
     {0.85f, 0.70f, 0.15f},  // 16 electric_grate
     {0.15f, 0.75f, 0.12f},  // 17 acid_pool
     {0.85f, 0.25f, 0.04f},  // 18 fire_cell
-    {0.13f, 0.16f, 0.14f}   // 19 pipe_metal
+    {0.13f, 0.16f, 0.14f},  // 19 pipe_metal
+    {0.25f, 0.95f, 0.85f}   // 20 neon_tube
 };
 static_assert(sizeof(kMaterial) / sizeof(kMaterial[0]) == kMatCount,
               "one albedo row per material id");

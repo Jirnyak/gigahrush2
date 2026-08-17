@@ -3,7 +3,8 @@
 A minimal-but-real **Vulkan** backend (MoltenVK on macOS, LunarG on Windows) that
 opens an SDL3 window and **raymarches the voxel world per pixel** — a two-level
 DDA over the GPU **voxel mirror** of the same sub-voxel masks physics collides
-against — under a camera-carried headlamp, with raster passes (bodies, props,
+against — lit by the unified DDA light system ([ddalight.md](ddalight.md): world
+lights only, no camera-carried headlamp), with raster passes (bodies, props,
 particles) over the honest depth it writes, and a Dear ImGui HUD. This is L3 —
 platform side, outside `giga_core`. The instanced-cube mesher this file used to
 describe was deleted 2026-08-01: there is no instance list, no remesh, and a

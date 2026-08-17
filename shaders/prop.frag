@@ -15,6 +15,12 @@ layout(location = 7) flat in float vAnimPhase;
 
 #define GIGA_VOLUMETRIC_GRID_BINDINGS
 #include "volumetric_fog.glsl"
+#include "flicker.glsl" // единое мерцание: та же функция, что у света (CPU)
+
+// Настоящие тени: теневой сет вокселного зеркала через ОБЩИЙ с cube-пассом
+// pipeline layout (set 2) — пропсы принимают тени мира. [ddalight.md]
+#define GIGA_SHADOW_SET 2
+#include "shadow_march.glsl"
 
 layout(push_constant) uniform Push {
     mat4 viewProj;
@@ -157,48 +163,26 @@ float compute_prop_roughness(uint mat_id, float g_noise) {
     return clamp(baseRoughness + microVariation, 0.05, 0.98);
 }
 
-// Animated Emissive Effects
-float hash11(float p) {
-    p = fract(p * 0.1031);
-    p *= p + 33.33;
-    p *= p + p;
-    return fract(p);
-}
-
-float compute_animated_emissive(float baseEmissive, uint mat_id, vec3 worldPos, float phaseRad, float timeSec, float samosborPulse) {
+// Emissive носителя: профиль мерцания — из ЕГО СТРОКИ props.csv (биты 0..2
+// vFlags), формула — та же единая функция, что красит ЕГО СВЕТ на CPU
+// ([game/flicker.h]): плафон и свет пульсируют синхронно по построению.
+// Бывший зоопарк Case A-D с ветками по mat_id и порогам baseEmissive умер —
+// семантика через магические диапазоны числа против законов проекта.
+// CRT (профиль 4) — не мерцание, а поверхностная анимация экрана: скан-линии
+// и осциллограф, взвинчиваемые самосбором.
+float compute_animated_emissive(float baseEmissive, uint flickerProfile, vec3 worldPos, float phaseRad, float timeSec, float samosborPulse) {
     if (baseEmissive < 0.001) return 0.0;
 
-    // Case A: High-frequency electrical flicker (for lamps / cabinets / bright lights)
-    if (baseEmissive > 1.2) {
-        float stepTime = floor(timeSec * 22.0 + phaseRad * 3.0);
-        float stochasticFlicker = mix(1.0, step(0.20, hash11(stepTime)), 0.30);
-        float hum = 1.0 + 0.06 * sin(timeSec * 60.0 * 6.2831853 + phaseRad);
-        return baseEmissive * stochasticFlicker * hum;
-    }
-
-    // Case B: Bioluminescent Crystal / Organic Breathing Pulse
-    if (mat_id == 0u || baseEmissive > 0.8) {
-        float breathe = 1.0 + 0.28 * sin(timeSec * 2.2 + phaseRad)
-                            + 0.10 * cos(timeSec * 4.3 + phaseRad * 1.7);
-        return baseEmissive * max(breathe, 0.05);
-    }
-
-    // Case C: CRT Screen / Terminal & Control Panel Oscilloscope Scanlines
-    if (mat_id == 12u || mat_id == 19u) {
+    if (flickerProfile == 4u) { // crt: анимация ЭКРАНА
         float scanline = sin(vWorldPos.y * 120.0 + timeSec * 15.0) * 0.20 + 0.80;
-        float staticNoise = hash11(floor(vWorldPos.y * 80.0) + floor(timeSec * 35.0 + phaseRad)) * 0.25;
+        float staticNoise = flicker_hash11(floor(vWorldPos.y * 80.0) + floor(timeSec * 35.0 + phaseRad)) * 0.25;
         float oscWave = exp(-180.0 * pow(fract(vWorldPos.x * 2.0) - (0.5 + 0.3 * sin(vWorldPos.z * 10.0 + timeSec * 6.0)), 2.0));
-
-        // Dynamically scale CRT oscilloscope noise and wave distortion during Samosbor hazard (samosbor.pulse)
         staticNoise *= (1.0 + samosborPulse * 4.5);
         oscWave *= (1.0 + samosborPulse * 3.0 * (0.5 + 0.5 * sin(timeSec * 40.0)));
         return baseEmissive * (scanline + staticNoise + oscWave * 2.5);
     }
 
-    // Case D: Acid Pool Chemical Undulation & Bubble Bursts
-    float spatialWave = sin(timeSec * 3.2 + worldPos.x * 3.5 + worldPos.z * 3.5 + phaseRad);
-    float bubblePop   = pow(max(sin(timeSec * 7.5 + phaseRad * 2.5), 0.0), 10.0) * 1.5;
-    return baseEmissive * (0.80 + 0.25 * spatialWave + bubblePop);
+    return baseEmissive * flicker_factor(flickerProfile, worldPos, timeSec);
 }
 
 void main() {
@@ -224,48 +208,38 @@ void main() {
     // Lighting vectors
     vec3 toCam = pc.camPos.xyz - vWorldPos;
     float d = length(toCam);
-    vec3 L = toCam / max(d, 1e-4);
-
-    vec3 viewDir = -L;
-    vec3 lightDir = normalize(vWorldPos - pc.camPos.xyz);
-
-    // Headlamp forward light scattering (Henyey-Greenstein phase function)
-    float g_scat = 0.55;
-    float cosTheta = dot(viewDir, lightDir);
-    float phase = (1.0 - g_scat * g_scat) / pow(max(1.0 + g_scat * g_scat - 2.0 * g_scat * cosTheta, 1e-4), 1.5);
-
-    float r = pc.fog.z;
-    float att = 1.0 / (1.0 + (d * d) / max(r * r, 1e-4));
+    vec3 V = toCam / max(d, 1e-4);
 
     // Calibrated material roughness & Blinn-Phong specular
     float roughness = compute_prop_roughness(vMat, g);
     float specPow     = max(2.0 / (roughness * roughness * roughness * roughness + 1e-4) - 2.0, 1.0);
     float specIntensity = (1.0 - roughness) * 0.5;
+
+    // Прямой свет — ЕДИНЫЙ цикл по light grid: лампочки, налобник (свет №0
+    // сетки), мобы, трассеры, конусы. [volumetric_fog.glsl]
+    vec3 directDiffuse, directSpec;
+    surface_light(vWorldPos, n_shading, V, specPow, specIntensity, pc.torus.x,
+                  d, pc.fog.x, directDiffuse, directSpec);
+
     float spec = 0.0;
-    vec3 V = L; // View vector towards camera
-    if (dot(n_shading, L) > 0.0) {
-        vec3 H = normalize(L + V);
-        spec += pow(max(dot(n_shading, H), 0.0), specPow) * specIntensity * att * pc.camPos.w;
-    }
     vec3 Lsun = normalize(pc.sunDir.xyz);
     if (pc.sunDir.w > 0.0 && dot(n_shading, Lsun) > 0.0) {
         vec3 Hsun = normalize(Lsun + V);
         spec += pow(max(dot(n_shading, Hsun), 0.0), specPow) * specIntensity * pc.sunDir.w;
     }
-    // Metallic Anisotropic Specular Highlight for Pipes & Industrial Metal
+    // Metallic Anisotropic Specular Highlight for Pipes & Industrial Metal.
+    // Масштаб — по ФАКТИЧЕСКИ пришедшему прямому свету (бывший множитель
+    // att*camPos.w знал только про налобник).
     if (vMat == 4u || vMat == 3u) {
         vec3 T = abs(n_shading.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
         vec3 anisotropicH = cross(n_shading, T);
-        float anisoDot = dot(anisotropicH, L);
+        float anisoDot = dot(anisotropicH, V);
         float anisoSpec = pow(max(1.0 - anisoDot * anisoDot, 0.0), specPow * 0.5) * specIntensity * 1.2;
-        spec += anisoSpec * att * pc.camPos.w;
+        float directLum = dot(directDiffuse, vec3(0.2126, 0.7152, 0.0722));
+        spec += anisoSpec * directLum;
     }
 
-    float lampDirect  = pc.camPos.w * att * max(dot(n_shading, L), 0.0);
-    float lampScatter = pc.camPos.w * att * phase * 0.25;
-    float lamp = lampDirect + lampScatter;
-
-    float fill = pc.sunDir.w * max(dot(n_shading, normalize(pc.sunDir.xyz)), 0.0);
+    float fill = pc.sunDir.w * max(dot(n_shading, Lsun), 0.0);
 
     float hemi = 0.5 + 0.5 * n_shading.z;
     vec3 amb = pc.fog.w * mix(vec3(0.10, 0.11, 0.14), vec3(0.24, 0.23, 0.21), hemi);
@@ -274,50 +248,33 @@ void main() {
     float ao = kAoFloor + (1.0 - kAoFloor) * vAo;
     float aoDirect = mix(1.0, ao, pc.torus.y);
 
-    vec3 lit = albedo * (amb * ao + vec3(lamp + fill) * aoDirect) + vec3(spec) * aoDirect;
+    vec3 lit = albedo * (amb * ao + (directDiffuse + vec3(fill)) * aoDirect) + (directSpec + vec3(spec)) * aoDirect;
 
     float timeSec = pc.torus.w;
     float samosborPulse = pc.torus.z > 0.0 ? pc.torus.z : clamp((1.0 - pc.fog.x / (128.0 * 0.30 * 2.0)) / 0.66, 0.0, 1.0);
 
-    // Volumetric fog raymarching with 3D light grid lookup and Samosbor pulse scaling
-    vec3 gridMin = pc.camPos.xyz - vec3(32.0, 16.0, 32.0);
+    // Volumetric fog raymarching with world-aligned light grid & Samosbor pulse
     vec4 fogVol = march_volumetric_fog(
         pc.camPos.xyz,
         normalize(vWorldPos - pc.camPos.xyz),
         min(d, pc.fog.y),
         gl_FragCoord.xy,
-        pc.camPos.xyz,
-        pc.camPos.w,
-        pc.fog.z,
         pc.sunDir.xyz,
         pc.sunDir.w,
-        gridMin,
-        vec3(32.0, 16.0, 32.0),
-        vec3(2.0, 2.0, 2.0),
-        timeSec,
+        pc.torus.x,
         samosborPulse
     );
     lit = lit * fogVol.a + fogVol.rgb;
 
     // Emissive term with time-based animation and Samosbor pulse scaling
-    float animEmissive = compute_animated_emissive(vEmissive, vMat, vWorldPos, vAnimPhase, timeSec, samosborPulse);
+    float animEmissive = compute_animated_emissive(vEmissive, vFlags & 7u, vWorldPos, vAnimPhase, timeSec, samosborPulse);
 
     if (animEmissive > 0.001) {
         vec3 emitCol = pow(vColor, vec3(kGamma));
         lit += emitCol * animEmissive;
     }
 
-    // Бывшая «высотная» модуляция exp(-0.04*min(y,z)) — ДВОЙНОЙ грех: шов на
-    // врапе тора плюс рудимент Y-up в выборе оси. Константа = значение прежней
-    // формулы на жилых высотах (z≈40 м). [volumetric_fog.glsl]
-    const float kFogDistScale = 0.20;
-    float effectiveDist = d * kFogDistScale;
-    float fog = clamp((effectiveDist - pc.fog.x) / max(pc.fog.y - pc.fog.x, 1e-3), 0.0, 1.0);
-
-    // Enforce fog = 1.0 at max toroidal distance pc.fog.y to protect wrap seam
-    if (d >= pc.fog.y) {
-        fog = 1.0;
-    }
+    float fog = distance_fog(d, pc.fog.x, pc.fog.y);
 
     lit = mix(lit, vec3(0.0), fog);
 

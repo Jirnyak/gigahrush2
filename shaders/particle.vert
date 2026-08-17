@@ -1,4 +1,6 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#include "volumetric_fog.glsl" // только distance_fog(); SSBO-биндинги за ifdef
 // particle.vert — camera-facing billboards pulled straight from the particle
 // pool SSBO (no vertex buffer): 6 vertices per particle, one quad. Dead
 // particles (life <= 0) clip to 1e9, same trick as dead wire chains.
@@ -71,8 +73,7 @@ void main() {
     float alpha = clamp(life / (lifeTotal * 0.33), 0.0, 1.0);
 
     float dist = length(world - pc.camPos.xyz);
-    float fogF = clamp((dist - pc.fog.x) / max(pc.fog.y - pc.fog.x, 1e-3),
-                       0.0, 1.0);
+    float fogF = distance_fog(dist, pc.fog.x, pc.fog.y);
 
     vColor = pb.p[id].colorSize.rgb;
     vMisc = vec3(fogF, pb.p[id].phys.w / 255.0, alpha);
