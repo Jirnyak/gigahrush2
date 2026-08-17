@@ -58,14 +58,15 @@ enum class ConsoleRequest : std::uint32_t {
     Heal, Eat, Drink,        // survival one-shots
     Door, Possess, Interact, // world interaction one-shots
     Throw,     // throw the best grenade in the bag ([combat.h] player_throw_step)
-    Sell, Vendor, Resupply,  // economy: sell haul / trader window / resupply
+    // (Sell/Vendor/Resupply died with the pad shop — торговля стала сделкой
+    // с телом на экране обыска, [conversation.md].)
     Elevator,  // toggle the shaft menu: the three KINDS of transition the manifesto
                // asks for (fast-travel / procedural down / procedural up) offered by
                // ONE set of 16 columns rather than three sets of 16 ([fast_travel.h])
     Craft, Scrap,            // crafting window / scrap cheapest junk
     AttrStr, AttrAgi, AttrInt, // ATTR1: spend one unspent point on STR/AGI/INT
     Inventory, // toggle the inventory grid ([inventory.md] — the ONE cell
-               // widget; vendor/craft windows fold into it as policies later)
+               // widget; торговля уже сложилась в него deal-политикой)
     Count
 };
 

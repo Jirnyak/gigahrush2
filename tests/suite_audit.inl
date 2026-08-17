@@ -461,15 +461,13 @@ static void gun_kills_counted() {
 //   * `roll_container(WeaponCrate, ...)` admits Weapon|Ammo (container.cpp:98-100)
 //     and can only ever produce weapons. container.h:51 calls the kind "Ammo and a
 //     weapon" and the file header calls it "ammo and access"; neither can happen.
-//   * `vendor_stocks(Ammo)` is true (vendor.cpp:52) and `vendor_buy_price` prices it,
-//     but `vendor_resupply` — the ONLY buy path wired to a key (src/app/main.cpp:1255)
-//     — walked Drink, Medicine and Food only, so the promise and the one key-wired buy
-//     path disagreed. Ammo is in that list now, last (vendor.cpp:251-255); the two-step
-//     history, including the "fix" that picked the wrong row, is at vendor.cpp:227-236.
+//   * (The second source this section used to audit — `vendor_resupply`'s buy
+//     path — died with the pad shop, [conversation.md]. Ammo now reaches the
+//     player through the crate slot below, the corpse bundle, and barter with
+//     whoever carries rounds in their own bag.)
 //
-// So the only ammunition in the game is `drop_weapon_ammo`, bundled onto a firearm
-// that fell off a corpse. Loot a gun out of a crate, or buy your way back to strength
-// at the pad, and you have a gun you can never load.
+// So outside of trade the only ammunition is `drop_weapon_ammo`'s bundle and the
+// weapon crate's reserved slot; a gun without either is a gun you cannot load.
 // A run that has not descended: the strict baseline for a Descend job.
 static const RunLedger kNoDescentYet{};
 static void ammo_has_a_source() {
@@ -500,22 +498,10 @@ static void ammo_has_a_source() {
         }
     CHECK(crateAmmo);
 
-    // (b) the vendor stocks ammo, so the one wired buy path must be able to sell it.
-    {
-        RunLedger led{};
-        led.banked = 200000;
-        Inventory inv{};
-        vendor_resupply(inv, led, 50000);
-        bool boughtAmmo = false;
-        for (const ItemSlot& s : inv.slots) {
-            if (!item_valid(s.item) || s.count == 0) continue;
-            if (static_cast<ItemCategory>(item_def(s.item).category) ==
-                ItemCategory::Ammo)
-                boughtAmmo = true;
-        }
-        CHECK(vendor_stocks(ItemCategory::Ammo));   // the promise
-        CHECK(boughtAmmo);                          // the delivery
-    }
+    // (b) — the vendor buy path this section used to exercise is deleted
+    // ([conversation.md]); the crate slot above and loot.cpp's weapon bundle
+    // are the audited sources now, and barter needs no audit of its own here:
+    // it moves what EXISTS, it cannot mint a round.
 }
 
 // ---------------------------------------------------------------------------

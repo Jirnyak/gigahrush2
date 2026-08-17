@@ -36,11 +36,12 @@ enum class AppScreen : std::uint8_t {
 
 enum class UiWindow : std::uint8_t {
     None = 0,
-    Inventory,  // клеточная сетка ([inventory.md])
-    Vendor,     // торговец — станет политикой сетки, пока своё окно
-    Craft,      // верстак — то же
-    Elevator,   // шахтное меню
-    Dialog,     // VN-оверлей: интро рана, реплики NPC (зарезервировано)
+    Inventory,     // клеточная сетка ([inventory.md]); торговля — её deal-режим
+    Conversation,  // меню взаимодействия с NPC ([conversation.md]) — сменило
+                   // окно Vendor: торговец больше не окно, а опция «Торг»
+    Craft,         // верстак — то же
+    Elevator,      // шахтное меню
+    Dialog,        // VN-оверлей: интро рана, реплики NPC (зарезервировано)
 };
 
 struct UiShell {

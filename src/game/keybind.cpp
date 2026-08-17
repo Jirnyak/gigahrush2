@@ -134,12 +134,9 @@ bool keybind_register_defaults(KeybindTable& t) {
     // churn the table exists to avoid — that is what the rebind menu is for.
     ok &= t.add({"grenade", "grenade", scan::kZ, 0});
     // Economy + crafting.
-    ok &= t.add({"sell", "sell", scan::kB, 0});
     // kBindTyping у оконных тумблеров: открытое окно глушит обычные бинды
     // ([main.cpp] typing-гейт), а СВОЯ клавиша обязана пробиться и закрыть
     // то, что открыла — тот же приём, что console и inventory.
-    ok &= t.add({"vendor", "vendor", scan::kV, static_cast<std::uint8_t>(kBindTyping)});
-    ok &= t.add({"resupply", "resupply", scan::kR, 0});
     ok &= t.add({"craft", "craft", scan::kC, static_cast<std::uint8_t>(kBindTyping)});
     ok &= t.add({"scrap", "scrap", scan::kX, 0});
     // ATTR1: spend one unspent attribute point (console `attr str|agi|int`).

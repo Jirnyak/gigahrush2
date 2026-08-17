@@ -30,6 +30,8 @@ constexpr ImU32 kCellBg = IM_COL32(8, 20, 10, 200);
 constexpr ImU32 kCellEdge = IM_COL32(26, 72, 30, 255);
 constexpr ImU32 kScanline = IM_COL32(0, 0, 0, 38);
 constexpr ImU32 kRuinRed = IM_COL32(242, 110, 89, 255);
+// Амбер активных состояний ([AGENTS.md] #F2C740) — рамка метки оффера.
+constexpr ImU32 kAmber = IM_COL32(242, 199, 64, 255);
 
 // --- Процедурный глиф предмета ----------------------------------------------
 // Референс — item_sprites GigaHrush 1: иконка ВЫВОДИТСЯ из данных, не лежит в
@@ -130,7 +132,8 @@ namespace {
 // а те же клетки с другим span'ом ([inventory.md] закон зеркала).
 void draw_cells(ImDrawList* dl, ImVec2 g0, float cell, const ItemSlot* slots,
                 int count, int* sel, bool focused, bool* clickedFocus,
-                const game::Equipped* eq, const char* idPrefix) {
+                const game::Equipped* eq, const char* idPrefix,
+                std::uint64_t marks = 0) {
     for (int i = 0; i < count; ++i) {
         const int col = i % kInvCols, row = i / kInvCols;
         const ImVec2 a(g0.x + col * cell, g0.y + row * cell);
@@ -146,6 +149,11 @@ void draw_cells(ImDrawList* dl, ImVec2 g0, float cell, const ItemSlot* slots,
             dl->AddRectFilled(ImVec2(a.x, y), ImVec2(b.x, y + 1.0f), kScanline);
         dl->AddRect(a, b, selected ? kPhosphor : kCellEdge, 0.0f, 0,
                     selected ? 2.0f : 1.0f);
+        // Метка оффера (deal-режим): амбер-рамка — «это уходит в сделку».
+        // Поверх рамки выбора, чтобы читались обе: снаружи метка, внутри курсор.
+        if (i < 64 && ((marks >> i) & 1u))
+            dl->AddRect(ImVec2(a.x - 1, a.y - 1), ImVec2(b.x + 1, b.y + 1),
+                        kAmber, 0.0f, 0, 2.0f);
 
         // Мышь: клик выбирает клетку И перетягивает фокус на её сторону.
         ImGui::SetCursorScreenPos(a);
@@ -271,22 +279,30 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
                     other->title);
         draw_cells(dl, ImVec2(top.x, top.y + 18.0f), cell, other->slots,
                    other->count, &st.selOther, st.focusOther, &clickOther,
-                   nullptr, "oc");
+                   nullptr, "oc", policy.otherMarks);
     }
     const ImVec2 g0(top.x + otherW, top.y + (twoSided ? 18.0f : 0.0f));
     if (twoSided)
         dl->AddText(ImVec2(g0.x, top.y), st.focusOther ? kPhosphorDim : kPhosphor,
                     "СВОЁ");
     draw_cells(dl, g0, cell, inv.slots, kInvSlots, &st.sel, !st.focusOther,
-               &clickOwn, eq, "cell");
+               &clickOwn, eq, "cell", policy.ownMarks);
     if (clickOther) st.focusOther = true;
     if (clickOwn) st.focusOther = false;
 
     // Перенос — клавишами, симметрично: Enter несёт выбранное С АКТИВНОЙ
     // стороны на другую, T — забрать всё (хоткей форка). Заявки, не мутации.
+    // Deal-режим ([conversation.md]): Enter — МЕТКА в оффер вместо переноса,
+    // T — просьба подписать; сами метки держит и толкует app.
     if (twoSided) {
         if (ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
-            if (st.focusOther)
+            if (policy.deal)
+                req = {st.focusOther ? InvUiRequest::Kind::MarkOther
+                                     : InvUiRequest::Kind::MarkOwn,
+                       static_cast<std::uint8_t>(st.focusOther ? st.selOther
+                                                               : st.sel),
+                       EquipSlot::None};
+            else if (st.focusOther)
                 req = {InvUiRequest::Kind::Take,
                        static_cast<std::uint8_t>(st.selOther),
                        EquipSlot::None};
@@ -295,7 +311,9 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
                        static_cast<std::uint8_t>(st.sel), EquipSlot::None};
         }
         if (ImGui::IsKeyPressed(ImGuiKey_T, false))
-            req = {InvUiRequest::Kind::TakeAll, 0, EquipSlot::None};
+            req = {policy.deal ? InvUiRequest::Kind::Commit
+                               : InvUiRequest::Kind::TakeAll,
+                   0, EquipSlot::None};
     }
 
     // --- Карточка выбранного АКТИВНОЙ стороны: всё из таблиц ----------------
@@ -324,7 +342,20 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
         // Действия — ЗАЯВКИ ([inventory.md]): кнопка и её горячая клавиша
         // пишут одинаковый req, применяет app на сим-клоке. У чужой стороны
         // действие одно — взять; свои действия живут только на своей сетке.
-        if (st.focusOther) {
+        if (policy.deal) {
+            // Одна кнопка на обе стороны: слот либо в оффере, либо нет.
+            const bool marked = st.focusOther
+                                    ? ((policy.otherMarks >> st.selOther) & 1u)
+                                    : ((policy.ownMarks >> st.sel) & 1u);
+            if (ImGui::Button(marked ? "Снять метку [Enter]"
+                                     : "В сделку [Enter]"))
+                req = {st.focusOther ? InvUiRequest::Kind::MarkOther
+                                     : InvUiRequest::Kind::MarkOwn,
+                       static_cast<std::uint8_t>(st.focusOther ? st.selOther
+                                                               : st.sel),
+                       EquipSlot::None};
+            ImGui::NewLine();
+        } else if (st.focusOther) {
             if (ImGui::Button("Взять [Enter]"))
                 req = {InvUiRequest::Kind::Take,
                        static_cast<std::uint8_t>(st.selOther), EquipSlot::None};
@@ -382,7 +413,19 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
     }
     ImGui::EndGroup();
     ImGui::SetCursorScreenPos(ImVec2(g0.x, g0.y + cell * kInvCols + 6.0f));
-    if (twoSided)
+    if (policy.deal) {
+        // Баланс сделки — строку даёт app (цены считает game-слой, [barter.h]);
+        // амбер = подписуемо, тускло = чего-то не хватает (строка говорит чего).
+        if (policy.dealLine) {
+            if (policy.dealOk)
+                ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.25f, 1.0f), "%s",
+                                   policy.dealLine);
+            else
+                ImGui::TextDisabled("%s", policy.dealLine);
+        }
+        ImGui::TextDisabled(
+            "Enter метка | Tab сторона | T СДЕЛКА | Esc закрыть");
+    } else if (twoSided)
         ImGui::TextDisabled(
             "Enter взять/положить | Tab сторона | T всё | I/Esc закрыть");
     else

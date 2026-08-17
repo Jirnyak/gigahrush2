@@ -517,6 +517,8 @@ if(GIGA_BUILD_TESTS)
     # The cost is that adding a CHECK is a deliberate edit here, which is the intended
     # friction for this file.
     #
+    # 148 -> 146 on 2026-08-17: инкремент B убрал вендорную половину
+    # ammo_has_a_source (путь закупки умер вместе с падовым магазином).
     # 150 -> 148 on 2026-08-17: travel_keeps_opened_crates переписан в
     # travel_keeps_crate_records (сейв v15 — записи вместо ключей): чеки на
     # «пустой после apply» ушли вместе с семантикой, добавились чеки вклада.
@@ -543,7 +545,7 @@ if(GIGA_BUILD_TESTS)
     # configures first) or `cmake -S . -B build-win` before trusting a ctest verdict on a pin.
     add_test(NAME audit_findings COMMAND audit_test)
     set_tests_properties(audit_findings PROPERTIES
-        PASS_REGULAR_EXPRESSION "audit_test: 148 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "audit_test: 146 checks, 0 failures")
 
     # THE COUNT IS PINNED HERE TOO — the same mechanism as audit_findings above, now on
     # the target that carries 3,887 of the repo's 4,036 CHECK sites. Until this line
@@ -1017,7 +1019,11 @@ if(GIGA_BUILD_TESTS)
     # 242646 -> 242828 (+182) on 2026-08-17: сейв v15 — opened-ключи заменены
     # записями (полный Container + трупы): раунд-трип сравнивает контент
     # пофилдово, e2e-перезаход проверяет вклад/частичный забор/труп.
-        PASS_REGULAR_EXPRESSION "game_test: 242828 checks, 0 failures")
+    # 242828 -> 242761 (-67) on 2026-08-17: инкремент B — окно Vendor и его
+    # тесты (test_vendor, suite_vendorammo) выпилены вместе с системой;
+    # взамен suite_barter (законы сделки) + suite_conversation (меню NPC) +
+    # test_barter_terms (спред) + бартер-шов в test_full_loop.
+        PASS_REGULAR_EXPRESSION "game_test: 242761 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются
