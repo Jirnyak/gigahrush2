@@ -34,6 +34,7 @@
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 
+#include "app/hud_ui.h"
 #include "core/math.h"
 #include "game/mob_table.h"
 #include "core/tick.h"
@@ -1570,7 +1571,9 @@ int main(int argc, char** argv) {
     bool shotOrbit = false;
     std::string shotAction;
     bool shotActionConsumed = false; // one-shot save/load; attack stays held
-    bool showHud = true;
+    // Дебаг-портянка по умолчанию СКРЫТА (плейтест владельца 2026-08-17):
+    // игрок стартует с чистым худом ([hud_ui.h]); F1 / `hud` открывает её.
+    bool showHud = false;
     // --no-crt: сырой кадр без пост-обработки (диагностика, пиксель-точные
     // сравнения скриншотов). Сама трубка — vk_renderer.h.
     bool noCrt = false;
@@ -4963,6 +4966,32 @@ int main(int argc, char** argv) {
         CameraMatrices camMat = compute_camera(reg, aspect, worldUp);
 
         hud.begin_frame();
+        // Худ ИГРОКА ([hud_ui.h]) — таблица элементов по углам стекла. Только
+        // в Playing: пауза показывает меню, заставка — ничего. Рисуется и при
+        // открытом окне/консоли — стекло не гаснет от того, что поверх него
+        // подняли аппаратуру.
+        if (shell.screen == AppScreen::Playing) {
+            HudContext hctx;
+            hctx.reg = &reg;
+            hctx.pool = &pool;
+            hctx.player = player;
+            hctx.status = &playerStatus;
+            hctx.samosbor = &samosbor;
+            hctx.needsTick = &needs;
+            if (gasPass.ready() && reg.valid(player)) {
+                const vec3& gp = reg.get<Transform>(player).pos;
+                const std::uint32_t cell = gasPass.sample_cell(
+                    static_cast<int>(std::floor(gp.x / kCellSize)),
+                    static_cast<int>(std::floor(gp.y / kCellSize)),
+                    static_cast<int>(std::floor(gp.z / kCellSize)));
+                hctx.gas.tox = static_cast<std::uint8_t>(cell & 0xFFu);
+                hctx.gas.smoke = static_cast<std::uint8_t>((cell >> 8) & 0xFFu);
+                hctx.gas.oxy = static_cast<std::uint8_t>((cell >> 16) & 0xFFu);
+                hctx.gas.heat = static_cast<std::uint8_t>((cell >> 24) & 0xFFu);
+                hctx.gas.valid = true;
+            }
+            hud_ui_draw(hctx);
+        }
         // Дебаг-панель — только в игре и паузе: поверх заставки и главного
         // меню ей не место (плейтест владельца: «меню всратое» — панель со
         // статами закрывала пол-экрана и титул).
