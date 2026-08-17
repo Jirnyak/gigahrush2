@@ -866,13 +866,15 @@ float samosbor_fog_scale(const game::SamosborState& st) {
     return 1.0f;
 }
 
-// Point the fresh player's camera somewhere interesting and start in fly mode
-// (the `fly` bind toggles) so the view is free to explore.
+// Point the fresh player's camera somewhere interesting and start ON FOOT.
+// Полёт — отладочный чит (владелец, 2026-08-17), не режим по умолчанию:
+// жилец прибывает на этаж телом, с гравитацией и трением, а не свободной
+// камерой. Включается только явной консольной командой `fly`.
 void aim_player(Registry& reg, Entity player) {
     auto& cam = reg.get<CameraTag>(player);
     cam.yaw = 0.8f;
     cam.pitch = -0.5f;
-    reg.get<Controller>(player).fly = true;
+    reg.get<Controller>(player).fly = false;
 }
 
 // Kind / rule-set for ANY floor number, resolved through the catalog: an
@@ -3046,8 +3048,9 @@ int main(int argc, char** argv) {
                         cam.yaw = std::atan2(bestDy, bestDx);
                         cam.pitch = 0.0f;
                         if (auto* ctl = reg.try_get<Controller>(player)) {
-                            // aim_player starts fly=true; wall walk needs ground
-                            // locomotion so collision/wish actually close gap.
+                            // Walk старт и так дефолт (aim_player), но харнесс
+                            // не должен зависеть от чужого дефолта: wall walk
+                            // needs ground locomotion, спелим её явно.
                             ctl->fly = false;
                             // Always walk forward while out of unarmed reach
                             // (~1.9 m). wishDir.x is camera-local forward.
