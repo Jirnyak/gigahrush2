@@ -75,6 +75,10 @@ inline constexpr int kContainerSlots = 4;
 struct Container {
     ItemId item[kContainerSlots] = {};
     std::uint8_t count[kContainerSlots] = {};
+    // Износ содержимого ([inventory.h] ItemSlot::condition, тот же байт).
+    // Появился вместе с двухсторонним экраном обыска: класть потёртый ствол
+    // в ящик и доставать «как новый» — дюп-ремонт; свежероллленный лут — 255.
+    std::uint8_t condition[kContainerSlots] = {255, 255, 255, 255};
     std::uint8_t kind = 0;      // ContainerKind
     bool opened = false;        // stays in the world once emptied; see the comment
 };

@@ -122,52 +122,23 @@ void card_combat_line(ItemId id, char* out, std::size_t cap) {
 
 } // namespace
 
-InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
-                               const game::Inventory& inv,
-                               const game::Equipped* eq,
-                               std::uint32_t carriedG) {
-    InvUiRequest req;
+namespace {
 
-    // Курсор — крестовиной, по торусу клеток НЕ заворачиваем: край сетки это
-    // край, у 8x8 нет топологии мира.
-    if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow) && st.sel % kInvCols > 0) --st.sel;
-    if (ImGui::IsKeyPressed(ImGuiKey_RightArrow) && st.sel % kInvCols < kInvCols - 1) ++st.sel;
-    if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) && st.sel >= kInvCols) st.sel -= kInvCols;
-    if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) && st.sel < kInvSlots - kInvCols) st.sel += kInvCols;
-
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    const float cell = 44.0f;
-    const float gridW = cell * kInvCols;
-    const float cardW = 340.0f;
-    const float pad = 14.0f;
-    const float winW = gridW + cardW + pad * 3;
-    const float winH = cell * kInvCols / 1.0f + 96.0f;
-    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + (vp->WorkSize.x - winW) * 0.5f,
-                                   vp->WorkPos.y + (vp->WorkSize.y - winH) * 0.5f),
-                            ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(winW, winH), ImGuiCond_Always);
-    ImGui::Begin(policy.title, nullptr,
-                 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
-                     ImGuiWindowFlags_NoTitleBar);
-
-    ImGui::Text("%s", policy.title);
-    ImGui::SameLine(winW - 180.0f);
-    ImGui::TextDisabled("%.1f кг | I/Esc закрыть",
-                        static_cast<double>(carriedG) / 1000.0);
-    ImGui::Separator();
-
-    // --- Сетка 8x8: клетка k — слот k, зеркало POD без пере-сортировки -------
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImVec2 g0 = ImGui::GetCursorScreenPos();
-    for (int i = 0; i < kInvSlots; ++i) {
+// Одна сетка клеток: рисует span слотов, двигает свой курсор мышью, вешает
+// глиф/стек/износ; скобки решения — только там, где дали Equipped (своя
+// сторона). Обе стороны экрана — ЭТОТ код: чужая витрина не «другой виджет»,
+// а те же клетки с другим span'ом ([inventory.md] закон зеркала).
+void draw_cells(ImDrawList* dl, ImVec2 g0, float cell, const ItemSlot* slots,
+                int count, int* sel, bool focused, bool* clickedFocus,
+                const game::Equipped* eq, const char* idPrefix) {
+    for (int i = 0; i < count; ++i) {
         const int col = i % kInvCols, row = i / kInvCols;
         const ImVec2 a(g0.x + col * cell, g0.y + row * cell);
         const ImVec2 b(a.x + cell - 3.0f, a.y + cell - 3.0f);
-        const ItemSlot& s = inv.slots[i];
+        const ItemSlot& s = slots[i];
         const bool filled =
             s.item != kInvalidItem && s.count > 0 && game::item_valid(s.item);
-        const bool selected = (i == st.sel);
+        const bool selected = focused && (i == *sel);
 
         dl->AddRectFilled(a, b, kCellBg);
         // VHS-сканлайны клетки, как в референсе.
@@ -176,13 +147,14 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
         dl->AddRect(a, b, selected ? kPhosphor : kCellEdge, 0.0f, 0,
                     selected ? 2.0f : 1.0f);
 
-        // Мышь: клик выбирает. Клетка — и кнопка, и пиксели; InvisibleButton
-        // держит id-скоуп ImGui честным.
+        // Мышь: клик выбирает клетку И перетягивает фокус на её сторону.
         ImGui::SetCursorScreenPos(a);
-        char bid[16];
-        std::snprintf(bid, sizeof bid, "##cell%d", i);
-        if (ImGui::InvisibleButton(bid, ImVec2(cell - 3.0f, cell - 3.0f)))
-            st.sel = i;
+        char bid[24];
+        std::snprintf(bid, sizeof bid, "##%s%d", idPrefix, i);
+        if (ImGui::InvisibleButton(bid, ImVec2(cell - 3.0f, cell - 3.0f))) {
+            *sel = i;
+            *clickedFocus = true;
+        }
 
         if (!filled) continue;
         const game::ItemDef& d = game::item_def(s.item);
@@ -212,12 +184,127 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
             dl->AddLine(ImVec2(b.x - 1, b.y - 1), ImVec2(b.x - 1, b.y - 7), kPhosphor, 2.0f);
         }
     }
-    // --- Карточка выбранного: всё из таблиц, UI ничего не хранит -------------
+}
+
+// Крестовина по сетке `count` клеток шириной kInvCols. Край — край: у сетки
+// нет топологии мира, торусом не заворачиваем.
+void move_cursor(int* sel, int count) {
+    if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow) && *sel % kInvCols > 0) --*sel;
+    if (ImGui::IsKeyPressed(ImGuiKey_RightArrow) &&
+        *sel % kInvCols < kInvCols - 1 && *sel + 1 < count)
+        ++*sel;
+    if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) && *sel >= kInvCols)
+        *sel -= kInvCols;
+    if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) && *sel + kInvCols < count)
+        *sel += kInvCols;
+}
+
+} // namespace
+
+InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
+                               const game::Inventory& inv,
+                               const game::Equipped* eq,
+                               std::uint32_t carriedG,
+                               std::uint32_t capacityG,
+                               const InvUiSide* other) {
+    InvUiRequest req;
+
+    const bool twoSided = other && other->slots && other->count > 0;
+    if (!twoSided) st.focusOther = false;
+    if (twoSided && ImGui::IsKeyPressed(ImGuiKey_Tab, false))
+        st.focusOther = !st.focusOther;
+    if (st.focusOther) {
+        move_cursor(&st.selOther, other->count);
+        if (st.selOther >= other->count) st.selOther = other->count - 1;
+    } else {
+        move_cursor(&st.sel, kInvSlots);
+    }
+
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    const float cell = 44.0f;
+    const float gridW = cell * kInvCols;
+    const float cardW = 340.0f;
+    const float pad = 14.0f;
+    const float otherW = twoSided ? gridW + pad : 0.0f;
+    const float winW = otherW + gridW + cardW + pad * 3;
+    const float winH = cell * kInvCols / 1.0f + 96.0f;
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + (vp->WorkSize.x - winW) * 0.5f,
+                                   vp->WorkPos.y + (vp->WorkSize.y - winH) * 0.5f),
+                            ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(winW, winH), ImGuiCond_Always);
+    ImGui::Begin(policy.title, nullptr,
+                 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
+                     ImGuiWindowFlags_NoTitleBar);
+
+    ImGui::Text("%s", policy.title);
+    // Вес-бар с бюджетом тела (идея из окна форка, наши пороги тревоги):
+    // перегруз — красный, подступ к нему — янтарь, иначе тихий фосфор.
+    if (capacityG > 0) {
+        const float frac =
+            static_cast<float>(carriedG) / static_cast<float>(capacityG);
+        ImGui::SameLine(winW * 0.5f - 100.0f);
+        char wbuf[48];
+        std::snprintf(wbuf, sizeof wbuf, "%.1f / %.1f кг",
+                      static_cast<double>(carriedG) / 1000.0,
+                      static_cast<double>(capacityG) / 1000.0);
+        ImGui::PushStyleColor(
+            ImGuiCol_PlotHistogram,
+            frac > 1.0f   ? ImVec4(0.90f, 0.31f, 0.36f, 1.0f)
+            : frac > 0.8f ? ImVec4(0.95f, 0.78f, 0.25f, 1.0f)
+                          : ImVec4(0.35f, 0.55f, 0.38f, 1.0f));
+        ImGui::ProgressBar(frac > 1.0f ? 1.0f : frac, ImVec2(200.0f, 14.0f),
+                           wbuf);
+        ImGui::PopStyleColor();
+    } else {
+        ImGui::SameLine(winW - 180.0f);
+        ImGui::TextDisabled("%.1f кг", static_cast<double>(carriedG) / 1000.0);
+    }
+    ImGui::Separator();
+
+    // --- Сетки: чужая витрина слева, своя справа; клетка k — слот k ----------
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 top = ImGui::GetCursorScreenPos();
+    bool clickOther = false, clickOwn = false;
+    if (twoSided) {
+        dl->AddText(ImVec2(top.x, top.y), st.focusOther ? kPhosphor : kPhosphorDim,
+                    other->title);
+        draw_cells(dl, ImVec2(top.x, top.y + 18.0f), cell, other->slots,
+                   other->count, &st.selOther, st.focusOther, &clickOther,
+                   nullptr, "oc");
+    }
+    const ImVec2 g0(top.x + otherW, top.y + (twoSided ? 18.0f : 0.0f));
+    if (twoSided)
+        dl->AddText(ImVec2(g0.x, top.y), st.focusOther ? kPhosphorDim : kPhosphor,
+                    "СВОЁ");
+    draw_cells(dl, g0, cell, inv.slots, kInvSlots, &st.sel, !st.focusOther,
+               &clickOwn, eq, "cell");
+    if (clickOther) st.focusOther = true;
+    if (clickOwn) st.focusOther = false;
+
+    // Перенос — клавишами, симметрично: Enter несёт выбранное С АКТИВНОЙ
+    // стороны на другую, T — забрать всё (хоткей форка). Заявки, не мутации.
+    if (twoSided) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
+            if (st.focusOther)
+                req = {InvUiRequest::Kind::Take,
+                       static_cast<std::uint8_t>(st.selOther),
+                       EquipSlot::None};
+            else
+                req = {InvUiRequest::Kind::Give,
+                       static_cast<std::uint8_t>(st.sel), EquipSlot::None};
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_T, false))
+            req = {InvUiRequest::Kind::TakeAll, 0, EquipSlot::None};
+    }
+
+    // --- Карточка выбранного АКТИВНОЙ стороны: всё из таблиц ----------------
     // Прижата к ВЕРХУ, рядом с сеткой — курсор ImGui после сетки стоит внизу,
     // и без явной постановки карточка липла к полу окна.
-    ImGui::SetCursorScreenPos(ImVec2(g0.x + gridW + pad, g0.y));
+    ImGui::SetCursorScreenPos(ImVec2(g0.x + gridW + pad, top.y));
     ImGui::BeginGroup();
-    const ItemSlot& sel = inv.slots[st.sel];
+    const ItemSlot& sel = st.focusOther ? other->slots[st.selOther]
+                                        : inv.slots[st.sel];
     if (sel.item != kInvalidItem && sel.count > 0 && game::item_valid(sel.item)) {
         const game::ItemDef& d = game::item_def(sel.item);
         ImGui::TextUnformatted(game::item_name(sel.item));
@@ -235,7 +322,14 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
         ImGui::Spacing();
 
         // Действия — ЗАЯВКИ ([inventory.md]): кнопка и её горячая клавиша
-        // пишут одинаковый req, применяет app на сим-клоке.
+        // пишут одинаковый req, применяет app на сим-клоке. У чужой стороны
+        // действие одно — взять; свои действия живут только на своей сетке.
+        if (st.focusOther) {
+            if (ImGui::Button("Взять [Enter]"))
+                req = {InvUiRequest::Kind::Take,
+                       static_cast<std::uint8_t>(st.selOther), EquipSlot::None};
+            ImGui::NewLine();
+        } else {
         const std::uint8_t slot8 = static_cast<std::uint8_t>(st.sel);
         const EquipSlot es = static_cast<EquipSlot>(d.equipSlot);
         const bool wearable = es != EquipSlot::None;
@@ -275,12 +369,24 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
                 ImGui::IsKeyPressed(ImGuiKey_R, false))
                 req = {InvUiRequest::Kind::Repair, slot8, EquipSlot::None};
         }
+        // Двухсторонний экран: своё можно ПОЛОЖИТЬ на ту сторону.
+        if (twoSided) {
+            ImGui::SameLine();
+            if (ImGui::Button("Положить [Enter]"))
+                req = {InvUiRequest::Kind::Give, slot8, EquipSlot::None};
+        }
         ImGui::NewLine();
+        }
     } else {
         ImGui::TextDisabled("пустая ячейка");
     }
     ImGui::EndGroup();
     ImGui::SetCursorScreenPos(ImVec2(g0.x, g0.y + cell * kInvCols + 6.0f));
+    if (twoSided)
+        ImGui::TextDisabled(
+            "Enter взять/положить | Tab сторона | T всё | I/Esc закрыть");
+    else
+        ImGui::TextDisabled("I/Esc закрыть");
 
     ImGui::End();
     return req;

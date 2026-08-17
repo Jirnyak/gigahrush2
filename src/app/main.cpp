@@ -2269,6 +2269,11 @@ int main(int argc, char** argv) {
     // только по указателям в момент отрисовки. Заявка применяется НИЖЕ по
     // кадру, на существующих примитивах.
     InvUiState invUi;
+    // Цель обыска — ящик или труп, чьи слоты показаны второй сеткой
+    // ([inventory_ui.h] InvUiSide). entt::null = одиночный экран «свой».
+    // Протухает вместе с окном (см. инвалидацию перед отрисовкой).
+    Entity lootEntity = entt::null;
+    bool lootIsCorpse = false;
     char consoleInput[256] = {};
     std::vector<std::string> consoleLog;
     std::vector<std::string> consoleHistory;
@@ -4062,37 +4067,68 @@ int main(int argc, char** argv) {
                         const vec3 ppos = reg.get<Transform>(player).pos;
                         bool handled = false;
 
-                        // 1. Corpse loot — gate on §18 find_nearest Kind::Corpse,
-                        // then specialized loot_corpse_interact backend.
+                        // 1. Труп: E открывает ЭКРАН обыска (двухсторонняя
+                        // сетка, [inventory_ui.h]) вместо старого авто-лута
+                        // всем скопом — что взять, решают руки, а не reach.
+                        // loot_corpse_interact остался бэкендом харнесса
+                        // (--shot corp) и тестов; путь игрока — заявки Take.
                         {
                             const game::InteractionHit corpseHit =
                                 game::find_nearest_interactable(
                                     reg, player, game::Interactable::Kind::Corpse,
                         game::interact_def(game::InteractKind::Corpse).reachM);
-                            if (corpseHit.hit) {
-                                game::CorpseLootResult clr = game::loot_corpse_interact(
-                                    reg, pool, bus, activeLayer, ppos, 2.2f, simTick);
-                                if (clr.foundCorpse) {
-                                    handled = true;
-                                    std::snprintf(elevDiagLine, sizeof(elevDiagLine),
-                                                  "CORPSE LOOTED: TAKEN %u ITEMS (+%d RUB)",
-                                                  clr.itemsTaken, clr.roublesGained);
-                                    elevDiagAt = simTick;
-                                    // Headless --shot audit trail (HUD is invisible in captures).
-                                    // Log once per interact edge — not every sim tick.
-                                    static std::uint64_t lastCorpseLootLogTick = ~0ull;
-                                    if (lastCorpseLootLogTick != simTick) {
-                                        lastCorpseLootLogTick = simTick;
-                                        std::fprintf(stderr,
-                                                     "[corp] CORPSE LOOTED: TAKEN %u ITEMS "
-                                                     "(+%d RUB) floor=%d\n",
-                                                     clr.itemsTaken, clr.roublesGained,
-                                                     currentFloor);
-                                    }
+                            if (corpseHit.hit &&
+                                reg.all_of<game::Corpse>(corpseHit.entity)) {
+                                handled = true;
+                                lootEntity = corpseHit.entity;
+                                lootIsCorpse = true;
+                                shell.window = UiWindow::Inventory;
+                                input.set_mouselook(false);
+                                SDL_SetWindowRelativeMouseMode(window, false);
+                                // Ворошить тело слышно ([noise.h]).
+                                game::NoiseProfile np{6.0f, 600, 1,
+                                                      game::NoiseSource::Body};
+                                game::noise_publish(noiseField, activeLayer,
+                                                    ppos, np, 0);
+                            }
+                        }
 
-                                    game::NoiseProfile np{6.0f, 600, 1, game::NoiseSource::Door};
-                                    game::noise_publish(noiseField, activeLayer, ppos, np, 0);
-                                }
+                        // 1б. Ящик: E открывает тот же экран. Авто-высасывание
+                        // по близости (loot_containers_step в тике) снято —
+                        // ящик больше не пылесос, он ХРАНИЛИЩЕ: можно и брать,
+                        // и класть ([container.h] condition — износ едет).
+                        if (!handled) {
+                            Entity bestBox = entt::null;
+                            float bestD2 =
+                                game::kContainerReach * game::kContainerReach;
+                            for (auto ce :
+                                 reg.view<game::Container, const Transform>()) {
+                                const Transform& bt =
+                                    reg.get<const Transform>(ce);
+                                if (bt.layer != activeLayer) continue;
+                                const float dx = wrap_delta_f(ppos.x, bt.pos.x,
+                                                              kWorldExtent);
+                                const float dy = wrap_delta_f(ppos.y, bt.pos.y,
+                                                              kWorldExtent);
+                                const float dz = wrap_delta_f(ppos.z, bt.pos.z,
+                                                              kWorldExtent);
+                                const float d2 = dx * dx + dy * dy + dz * dz;
+                                if (d2 < bestD2) { bestD2 = d2; bestBox = ce; }
+                            }
+                            if (bestBox != entt::null) {
+                                handled = true;
+                                lootEntity = bestBox;
+                                lootIsCorpse = false;
+                                shell.window = UiWindow::Inventory;
+                                input.set_mouselook(false);
+                                SDL_SetWindowRelativeMouseMode(window, false);
+                                // Крышка слышна ([noise.h] kContainerRadius/
+                                // TtlMs) — обыск по-прежнему не бесплатен.
+                                game::NoiseProfile np{7.0f, 2200, 1,
+                                                      game::NoiseSource::Container};
+                                game::noise_publish(
+                                    noiseField, activeLayer,
+                                    reg.get<const Transform>(bestBox).pos, np, 0);
                             }
                         }
 
@@ -4512,16 +4548,10 @@ int main(int argc, char** argv) {
                 // (combat.h). Nothing else in the tree destroys a damaged entity.
                 deaths += game::finalize_deaths(reg, pool, bus, simTick,
                                                 &noiseField);
-                // Containers first, then loose pickups: a crate emptied this tick
-                // should be sweepable in the same tick if the inventory overflowed
-                // onto the floor. [container.h]
-                const std::int32_t fromBox =
-                    game::loot_containers_step(reg, pool, activeLayer, &noiseField);
-                if (fromBox != 0) {
-                    loot += fromBox;
-                    containerTake += fromBox;
-                    game::sync_armour(reg, pool, player);
-                }
+                // Ящики больше НЕ пылесосятся близостью: E открывает экран
+                // обыска, забор — заявками Take ([inventory_ui.h]), и там же
+                // ведутся loot/containerTake. loot_containers_step остался
+                // тест-бэкендом ([container.h]) — из тика он выписан.
                 const std::int32_t got =
                     game::pickup_step(reg, pool, bus, activeLayer, simTick);
                 if (got != 0) {
@@ -5645,6 +5675,9 @@ int main(int argc, char** argv) {
         // Виджет ЧИТАЕТ и возвращает заявку; применяем её здесь же, на тех же
         // примитивах, что консоль и ИИ ([equip.h]) — третьего пути к Equipped
         // не появляется.
+        // Цель обыска живёт ровно пока открыто окно и жива сущность.
+        if (shell.window != UiWindow::Inventory || !reg.valid(lootEntity))
+            lootEntity = entt::null;
         if ((shell.window == UiWindow::Inventory) && reg.valid(player)) {
             if (const auto* nrInv = reg.try_get<game::NpcRef>(player);
                 nrInv && pool.valid(nrInv->id)) {
@@ -5653,10 +5686,189 @@ int main(int argc, char** argv) {
                     reg.get_or_emplace<game::Equipped>(player);
                 InvUiPolicy policy{};  // self-режим: см. [inventory.md]
                 policy.allowUse = false;  // послотовый Use придёт с примитивом
+
+                // Вторая сторона: живые слоты цели. Ящик хранит POD-тройки —
+                // зеркалим их во временные ItemSlot на кадр (виджет только
+                // читает); труп отдаёт свои ItemSlot как есть.
+                game::Container* boxC = nullptr;
+                game::Corpse* corpseC = nullptr;
+                game::ItemSlot boxView[game::kContainerSlots];
+                InvUiSide side{};
+                if (lootEntity != entt::null) {
+                    if (lootIsCorpse) {
+                        corpseC = reg.try_get<game::Corpse>(lootEntity);
+                        if (corpseC) {
+                            side.title = "ТРУП";
+                            side.slots = corpseC->lootSlots;
+                            side.count =
+                                static_cast<int>(game::kMaxCorpseSlots);
+                        }
+                    } else {
+                        boxC = reg.try_get<game::Container>(lootEntity);
+                        if (boxC) {
+                            for (int i = 0; i < game::kContainerSlots; ++i)
+                                boxView[i] = game::ItemSlot{
+                                    boxC->item[i], boxC->count[i],
+                                    boxC->condition[i]};
+                            switch (static_cast<game::ContainerKind>(
+                                boxC->kind)) {
+                                case game::ContainerKind::Safe:
+                                    side.title = "СЕЙФ"; break;
+                                case game::ContainerKind::WeaponCrate:
+                                    side.title = "АРСЕНАЛ"; break;
+                                case game::ContainerKind::RoomStash:
+                                    side.title = "ТАЙНИК"; break;
+                                default: side.title = "ЯЩИК"; break;
+                            }
+                            side.slots = boxView;
+                            side.count = game::kContainerSlots;
+                        }
+                    }
+                }
+                const bool twoSided = side.slots != nullptr;
+                if (twoSided) policy.title = "ОБЫСК";
+
+                // Один перенос ящик→сумка, все счётчики в одном месте:
+                // и Take, и TakeAll ходят сюда, третьей копии закона нет.
+                auto take_box_slot = [&](int i) {
+                    if (!boxC) return;
+                    if (!game::item_valid(boxC->item[i]) || boxC->count[i] == 0)
+                        return;
+                    const std::uint16_t unplaced = game::inventory_give(
+                        pinv, boxC->item[i], boxC->count[i],
+                        boxC->condition[i]);
+                    const std::uint16_t moved = static_cast<std::uint16_t>(
+                        boxC->count[i] - unplaced);
+                    if (moved == 0) return;  // сумка полна — остаток в ящике
+                    const std::int32_t v =
+                        game::item_def(boxC->item[i]).value * moved;
+                    loot += v;
+                    containerTake += v;
+                    boxC->count[i] = static_cast<std::uint8_t>(unplaced);
+                    if (boxC->count[i] == 0) boxC->item[i] = game::kInvalidItem;
+                };
+                auto take_corpse_slot = [&](int i) {
+                    if (!corpseC) return;
+                    game::ItemSlot& s = corpseC->lootSlots[i];
+                    if (!game::item_valid(s.item) || s.count == 0) return;
+                    const std::uint16_t unplaced = game::inventory_give(
+                        pinv, s.item, s.count, s.condition);
+                    const std::uint16_t moved =
+                        static_cast<std::uint16_t>(s.count - unplaced);
+                    if (moved == 0) return;
+                    loot += game::item_def(s.item).value * moved;
+                    s.count = static_cast<std::uint8_t>(unplaced);
+                    if (s.count == 0) s = game::ItemSlot{};
+                };
+                // Пустая цель помечается ПОСЛЕ мутаций: opened — память карты
+                // «здесь уже был» ([container.h]), searched — её труп-близнец.
+                auto mark_if_empty = [&]() {
+                    if (boxC) {
+                        bool empty = true;
+                        for (int i = 0; i < game::kContainerSlots; ++i)
+                            if (game::item_valid(boxC->item[i]) &&
+                                boxC->count[i])
+                                empty = false;
+                        if (empty) boxC->opened = true;
+                    }
+                    if (corpseC) {
+                        bool empty = true;
+                        for (std::size_t i = 0; i < game::kMaxCorpseSlots; ++i)
+                            if (game::item_valid(corpseC->lootSlots[i].item) &&
+                                corpseC->lootSlots[i].count)
+                                empty = false;
+                        if (empty) corpseC->searched = true;
+                    }
+                };
+
                 const InvUiRequest r = inventory_ui_draw(
                     invUi, policy, pinv, &peq,
-                    game::inventory_mass_g(pinv));
+                    game::inventory_mass_g(pinv),
+                    game::carry_capacity_g(
+                        reg.all_of<game::RpgStats>(player)
+                            ? reg.get<game::RpgStats>(player)
+                            : game::RpgStats{}),
+                    twoSided ? &side : nullptr);
                 switch (r.kind) {
+                    case InvUiRequest::Kind::Take: {
+                        if (boxC && r.slot < game::kContainerSlots)
+                            take_box_slot(r.slot);
+                        else if (corpseC && r.slot < game::kMaxCorpseSlots)
+                            take_corpse_slot(r.slot);
+                        mark_if_empty();
+                        game::sync_armour(reg, pool, player);
+                        break;
+                    }
+                    case InvUiRequest::Kind::TakeAll: {
+                        for (int i = 0; i < game::kContainerSlots; ++i)
+                            take_box_slot(i);
+                        for (std::size_t i = 0; i < game::kMaxCorpseSlots; ++i)
+                            take_corpse_slot(static_cast<int>(i));
+                        mark_if_empty();
+                        game::sync_armour(reg, pool, player);
+                        break;
+                    }
+                    case InvUiRequest::Kind::Give: {
+                        game::ItemSlot& s = pinv.slots[r.slot];
+                        if (!game::item_valid(s.item) || s.count == 0) break;
+                        bool placed = false;
+                        if (boxC) {
+                            // Сначала доложить в одноимённый стек ТОГО ЖЕ
+                            // износа (закон inventory_give: смешать байты —
+                            // заразить свежий стек), потом в пустую ячейку.
+                            const std::uint8_t stackMax =
+                                game::item_def(s.item).stackMax;
+                            for (int i = 0; i < game::kContainerSlots && !placed;
+                                 ++i)
+                                if (boxC->item[i] == s.item &&
+                                    boxC->condition[i] == s.condition &&
+                                    boxC->count[i] < stackMax) {
+                                    ++boxC->count[i];
+                                    placed = true;
+                                }
+                            for (int i = 0; i < game::kContainerSlots && !placed;
+                                 ++i)
+                                if (!game::item_valid(boxC->item[i]) ||
+                                    boxC->count[i] == 0) {
+                                    boxC->item[i] = s.item;
+                                    boxC->count[i] = 1;
+                                    boxC->condition[i] = s.condition;
+                                    placed = true;
+                                }
+                        } else if (corpseC) {
+                            const std::uint8_t stackMax =
+                                game::item_def(s.item).stackMax;
+                            for (std::size_t i = 0;
+                                 i < game::kMaxCorpseSlots && !placed; ++i) {
+                                game::ItemSlot& cs = corpseC->lootSlots[i];
+                                if (cs.item == s.item &&
+                                    cs.condition == s.condition &&
+                                    cs.count < stackMax) {
+                                    ++cs.count;
+                                    placed = true;
+                                }
+                            }
+                            for (std::size_t i = 0;
+                                 i < game::kMaxCorpseSlots && !placed; ++i) {
+                                game::ItemSlot& cs = corpseC->lootSlots[i];
+                                if (!game::item_valid(cs.item) ||
+                                    cs.count == 0) {
+                                    cs = game::ItemSlot{s.item, 1, s.condition};
+                                    if (static_cast<std::size_t>(
+                                            corpseC->slotCount) <= i)
+                                        corpseC->slotCount =
+                                            static_cast<std::uint8_t>(i + 1);
+                                    placed = true;
+                                }
+                            }
+                        }
+                        if (placed) {
+                            if (--s.count == 0) s = game::ItemSlot{};
+                            // Решение могло протухнуть вместе со слотом.
+                            game::sync_armour(reg, pool, player);
+                        }
+                        break;
+                    }
                     case InvUiRequest::Kind::Equip:
                         if (game::equip_item(pinv, peq, r.slot))
                             game::sync_armour(reg, pool, player);

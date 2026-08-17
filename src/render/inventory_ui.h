@@ -19,19 +19,35 @@
 namespace giga {
 
 // Заявка виджета. None — ничего не просили в этом кадре.
+// Take/Give/TakeAll — двухсторонний режим: Take.slot — клетка ЧУЖОЙ стороны,
+// Give.slot — своей; применяет app через inventory_give, третьего пути нет.
 struct InvUiRequest {
-    enum class Kind : std::uint8_t { None, Equip, Unequip, Use, Drop, Repair };
+    enum class Kind : std::uint8_t {
+        None, Equip, Unequip, Use, Drop, Repair, Take, Give, TakeAll
+    };
     Kind kind = Kind::None;
     std::uint8_t slot = 0;               // индекс клетки 0..63
     game::EquipSlot eqSlot = game::EquipSlot::None;  // для Unequip
 };
 
-// Состояние виджета между кадрами — только UI-шные вещи (курсор), никаких
+// Состояние виджета между кадрами — только UI-шные вещи (курсоры), никаких
 // игровых данных.
 // Видимость окна — НЕ здесь: единственный источник истины про «какое окно
 // открыто» — UiShell ([ui_shell.h]); виджет рисуется, когда его позвали.
 struct InvUiState {
-    int sel = 0;  // выбранная клетка 0..63
+    int sel = 0;       // выбранная клетка своей сетки 0..63
+    int selOther = 0;  // выбранная клетка чужой стороны
+    bool focusOther = false;  // Tab: чья сетка держит курсор
+};
+
+// Вторая сторона экрана — витрина ЧУЖОГО хранилища (ящик, труп; торговец
+// придёт политикой цен). Тот же закон зеркала: клетка k — слот k стороны,
+// никакой пере-сортировки. Виджет только ЧИТАЕТ эти слоты; nullptr slots =
+// стороны нет, экран одиночный.
+struct InvUiSide {
+    const char* title = "";
+    const game::ItemSlot* slots = nullptr;
+    int count = 0;
 };
 
 // Режим = политика, не второе окно ([inventory.md]). Self-режим: всё можно.
@@ -46,10 +62,14 @@ struct InvUiPolicy {
 
 // Нарисовать открытый виджет поверх игры и собрать заявку. `carriedG` —
 // текущий вес сумки в граммах (читается снаружи, у виджета нет доступа к
-// таблицам массы намеренно — он показывает, что дали).
+// таблицам массы намеренно — он показывает, что дали). `capacityG` — бюджет
+// тела для вес-бара (0 = бар не рисовать); `other` — вторая сторона обыска
+// (nullptr = одиночный экран «свой»).
 InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
                                const game::Inventory& inv,
                                const game::Equipped* eq,
-                               std::uint32_t carriedG);
+                               std::uint32_t carriedG,
+                               std::uint32_t capacityG = 0,
+                               const InvUiSide* other = nullptr);
 
 } // namespace giga

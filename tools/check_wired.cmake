@@ -43,6 +43,11 @@ endif()
 set(GIGA_DEFERRED_ENTRY_POINTS
     "cellular_step:решение по problems.md §13 ожидается"
     "fluid_step:ждёт GPU-компьют, см. performance.md §The compute split"
+    # 2026-08-17: экран обыска ([inventory_ui.h] InvUiSide) заменил авто-лут по
+    # близости — ящик теперь хранилище, забор заявками Take. Функция осталась
+    # тест-бэкендом контейнерной экономики (roll/cap/stack-пути в suite);
+    # кандидат на выпил при следующей ревизии контейнеров ([container.h]).
+    "loot_containers_step:экран обыска заменил авто-лут; тест-бэкенд, inventory.md"
     # --- found by this gate on the day it was adopted, 2026-08-13 ---------------
     #
     # Nine systems, not two. Seven of these were INVISIBLE to the version this gate
