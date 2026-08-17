@@ -3792,38 +3792,13 @@ int main(int argc, char** argv) {
                                   nav.fine(), activeLayer, simTick,
                                   &activeWorld.gravity());
 
-                // Footstep noise generation while walking or running.
-                // "Walking" is speed ACROSS the floor, so the vertical component is
-                // stripped using the layer's gravity vector, never a hardcoded axis
-                // ([AGENTS.md]: gravity is a vector). The old x^2+z^2 sum counted
-                // falling as footsteps and left motion along one real horizontal
-                // axis completely silent — mobs simply could not hear you walk it.
-                if (reg.valid(player)) {
-                    const auto& vel = reg.get<Velocity>(player);
-                    const vec3 pg =
-                        stack.layer(activeLayer).gravity().at(reg.get<Transform>(player).pos);
-                    const float pgLen = length(pg);
-                    vec3 lat = vel.v;
-                    if (pgLen > 1e-6f) {
-                        const vec3 up = pg * (-1.0f / pgLen);
-                        lat = lat - up * dot(lat, up);
-                    }
-                    const float speedSq = dot(lat, lat);
-                    if (speedSq > 0.5f && (simTick % 28 == 0)) {
-                        const vec3& ppos = reg.get<Transform>(player).pos;
-                        // A LOADED BODY IS LOUDER. Not a penalty rule — it is what
-                        // carrying things sounds like, so it is charged from the
-                        // first gram and scales with the load RATIO ([encumbrance.h]
-                        // kNoiseLoadGain), never with raw kilogrammes: a strong
-                        // character must not be punished for the bigger budget its
-                        // Strength bought.
-                        game::NoiseProfile footstepNoise{
-                            6.0f * encumbrance.playerEffect.noiseMult, 400, 1,
-                            game::NoiseSource::Footstep};
-                        game::noise_publish(noiseField, activeLayer, ppos, footstepNoise,
-                                            static_cast<std::uint32_t>(entt::to_integral(player)));
-                    }
-                }
+                // Шаги игрока БОЛЬШЕ НЕ ЗДЕСЬ. Их публикует encumbrance_step —
+                // один закон на все тела, камера включительно (игрок = NPC), с
+                // гейтом grounded: прыжок и полёт не топают. Этот блок был
+                // особым игроцким паблишером без проверки земли — звук шагов
+                // в воздухе, пойманный плейтестом владельца 2026-08-17, и
+                // повод записать правило «звук — производная физики, не
+                // ввода» в [AGENTS.md].
 
                 // Sound overrides sight's absence: a mob with no visible prey that
                 // heard something recently walks at the sound instead of at a random

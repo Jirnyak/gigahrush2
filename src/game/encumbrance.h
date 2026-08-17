@@ -79,6 +79,11 @@ inline constexpr float kOverloadSleepDrainPerSec = 0.10f;
 // punished for the strength it paid for.
 inline constexpr float kNoiseLoadGain = 0.6f;
 
+// Период шага (тики, 224 мс на 125 Гц) — каденция, обкатанная на игроке до
+// объединения закона. ОДИН для всех тел: игрок = NPC, шаги — производная
+// физики (grounded + скорость), не ввода — см. encumbrance.cpp.
+inline constexpr std::uint32_t kFootstepPeriodTicks = 28;
+
 // What one body's load costs it. All three numbers are pure functions of
 // (carried, capacity) so they can be unit-tested without a registry.
 struct EncumbranceEffect {

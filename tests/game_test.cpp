@@ -2854,6 +2854,61 @@ static void test_ranged_table() {
 }
 
 
+// Правило владельца ([AGENTS.md] «Звук — производная физики, не ввода»):
+// шаги публикует ОДИН закон в encumbrance_step для всех тел, из сим-состояния
+// (grounded + скорость), камера не особенная. Три полярности: идущее по земле
+// тело топает (КАЖДОЕ — старый двойной стаггер молчал у 7/8 толпы), тело в
+// воздухе немо (пойманный плейтестом «топот в прыжке»), стоящее немо.
+static void test_footsteps_from_physics() {
+    NpcPool pool;
+    pool.init();
+    Registry reg;
+    seed_floor_population(pool, /*floor=*/0, /*n=*/4, /*seed=*/3u);
+    NoiseField nf;
+    Entity bodies[4];
+    for (int i = 0; i < 4; ++i) {
+        bodies[i] = embody(reg, pool, static_cast<NpcId>(i), 0);
+        CHECK(bodies[i] != entt::null);
+        reg.get<GravityAffected>(bodies[i]).grounded = true;
+        reg.emplace_or_replace<Velocity>(bodies[i],
+                                         Velocity{vec3{2.0f, 0.0f, 0.0f}});
+    }
+    // Камера на первом теле: игрок обязан быть слышен ТЕМ ЖЕ законом.
+    reg.emplace<CameraTag>(bodies[0]);
+
+    auto steps_of = [&](std::uint32_t actor) {
+        int n = 0;
+        for (const Noise& s : nf.slot)
+            if (s.id != 0 &&
+                s.source == static_cast<std::uint8_t>(NoiseSource::Footstep) &&
+                s.actor == actor)
+                ++n;
+        return n;
+    };
+    auto run = [&](std::uint64_t t0) {
+        for (std::uint64_t t = 0; t < 64; ++t)
+            encumbrance_step(reg, pool, 0, kSimDt, t0 + t, &nf);
+    };
+
+    run(0);
+    for (std::uint32_t i = 0; i < 4; ++i) CHECK(steps_of(i) >= 1);
+
+    // В воздухе — немота, у всех: прыжок и полёт не топают.
+    noise_clear(nf);
+    for (int i = 0; i < 4; ++i)
+        reg.get<GravityAffected>(bodies[i]).grounded = false;
+    run(100);
+    CHECK(nf.live() == 0);
+
+    // Стоящее на земле тело тоже немо: звук — от ДВИЖЕНИЯ, не от существования.
+    for (int i = 0; i < 4; ++i) {
+        reg.get<GravityAffected>(bodies[i]).grounded = true;
+        reg.emplace_or_replace<Velocity>(bodies[i], Velocity{});
+    }
+    run(200);
+    CHECK(nf.live() == 0);
+}
+
 // Трение воздуха на снаряде: projectile_step применяет ТОТ ЖЕ закон, что
 // physics_step ([sim/drag.h]), и пин двусторонний — пуля обязана терять скорость
 // (проводка жива), но почти её не терять (полоса приёмки: ~1% на ~100 м полёта).
@@ -5400,6 +5455,7 @@ int main() {
     test_extraction_reachable();
     test_mob_behaviour();
     test_ranged_table();
+    test_footsteps_from_physics();
     test_projectile_air_drag();
     test_player_shoots();
     test_lob_isotropy();

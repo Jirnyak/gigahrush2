@@ -132,6 +132,17 @@ each one**. Correctness first; speed is a side effect of not backtracking.
   reachability, visibility) by reading the framebuffer/depth buffer — that lives
   in the sim. Fog, culling, and toroidal placement are render-local; deleting
   them changes pixels, never outcomes.
+- **Звук — производная ФИЗИКИ мира, никогда не ввода (владелец, 2026-08-17).**
+  Зеркало правила о рендере: ввод порождает только КОМАНДЫ симуляции
+  (PlayerCommand: движение, интеракции — камера навешивается на любой entity,
+  игрок не особенный), а звук исходит из физических изменений мира — шаги из
+  grounded+скорости тела, выстрел/взрыв/попадание из своих сим-событий, всё
+  через шумовое поле ([src/game/noise.h] NoiseField → audio) или сим-события.
+  Нажатие клавиши само по себе не звучит. Пойманный кейс: шаги игрока
+  публиковал особый блок по латеральной скорости без проверки земли — прыжок
+  топал в воздухе; закон один в `encumbrance_step`, игрок = NPC. Захотелось
+  звук прямо от инпута (UI-клик и т.п.) — это спец-кейс, крайне нежелателен
+  и обсуждается с владельцем ДО кода.
 - **Always render around the camera.** The world wraps (torus), so every pass
   draws each cell at its **nearest toroidal image** relative to the camera, never
   at fixed absolute coordinates — the camera sits at the centre of a seamless

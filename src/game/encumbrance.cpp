@@ -98,15 +98,37 @@ EncumbranceTick encumbrance_step(Registry& reg, NpcPool& pool, LayerId layer,
             out.carriedG = carriedG;
             out.capacityG = capacityG;
             out.playerEffect = eff;
-        } else if (noiseField && ((tick & 7u) == (id & 7u))) {
-            // Footsteps only from a body that is actually moving: the 0.25 m²/s²
-            // floor (0.5 m/s) keeps seated and idle bodies silent. Full 3D speed —
-            // a body climbing under a side regime walks as loudly as one on a floor.
+        }
+
+        // ШАГИ — ОДИН закон для ВСЕХ тел, камера включительно (правило
+        // владельца 2026-08-17: звук — производная ФИЗИКИ мира, никогда не
+        // ввода; игрок = NPC, [AGENTS.md]). До этого игрока обслуживал
+        // бесхозный блок в main.cpp без проверки земли — прыжок и полёт
+        // топали в воздухе, потому что латеральная скорость есть, а ног на
+        // полу нет. Гейт двойной и весь из сим-состояния:
+        //   * grounded ([components.h] GravityAffected) — шаг существует
+        //     только у тела, стоящего на опоре; падение, прыжок, Zero-G и
+        //     noclip немы по построению;
+        //   * скорость > 0.5 м/с — сидящие и стоящие тихи. Полная 3D: под
+        //     боковым режимом «пол» вертикален, grounded это уже знает.
+        // Каденция: раз в kFootstepPeriodTicks (224 мс — обкатанный шаг
+        // игрока), фаза — identity-hash. `< interval`, а не `== 0`, потому
+        // что толпа ВИЗИТИТСЯ раз в kEncumbrancePeriod тиков и точку `== 0`
+        // почти всегда пропускает — старый гейт `(tick&7)==(id&7)` поверх
+        // визитного `hash%8` именно так и промахивался: два независимых
+        // стаггера совпадали фазами лишь у 1/8 тел, остальные 7/8 толпы были
+        // НАВСЕГДА немы для поля слуха мобов.
+        if (noiseField) {
+            const auto* g = reg.try_get<GravityAffected>(e);
             const auto* vel = reg.try_get<Velocity>(e);
-            const float v2 = vel ? (vel->v.x * vel->v.x + vel->v.y * vel->v.y + vel->v.z * vel->v.z) : 0.0f;
-            if (v2 > 0.25f) {
-                NoiseProfile np{6.0f * eff.noiseMult, 400, 1, NoiseSource::Footstep};
-                noise_publish(*noiseField, layer, view.get<const Transform>(e).pos, np, id);
+            const float v2 = vel ? dot(vel->v, vel->v) : 0.0f;
+            const std::uint32_t interval = camera ? 1u : kEncumbrancePeriod;
+            if (g && g->grounded && v2 > 0.25f &&
+                (tick + hash_u32(id)) % kFootstepPeriodTicks < interval) {
+                NoiseProfile np{6.0f * eff.noiseMult, 400, 1,
+                                NoiseSource::Footstep};
+                noise_publish(*noiseField, layer,
+                              view.get<const Transform>(e).pos, np, id);
             }
         }
     }
