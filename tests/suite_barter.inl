@@ -203,7 +203,59 @@ static void barter_condition_travels() {
     CHECK(found);
 }
 
+// --- the pockets that make the market real ([population.cpp] seed_pocket) ---
+static void barter_crowd_has_pockets() {
+    NpcPool pool;
+    pool.init();
+    seed_floor_population(pool, /*floor=*/-26, /*n=*/200, /*seed=*/77u);
+
+    std::uint32_t withGoods = 0, withCash = 0, armedOrWearable = 0;
+    std::int64_t cashTotal = 0;
+    for (NpcId id = 0; id < 200; ++id) {
+        const Inventory& inv = pool.inventory(id);
+        bool goods = false;
+        for (const ItemSlot& sl : inv.slots) {
+            if (!item_valid(sl.item) || sl.count == 0) continue;
+            if (sl.item == kItemRuble) {
+                ++withCash;
+                cashTotal += sl.count;
+                // Weight-capped: nobody spawns buried under their own wad.
+                CHECK(sl.count <= 5000);
+                continue;
+            }
+            goods = true;
+            const ItemDef& d = item_def(sl.item);
+            // The pocket must not arm the crowd: ai_equip_step re-decides from
+            // the bag, so one seeded knife is 950k armed civilians.
+            if (static_cast<EquipSlot>(d.equipSlot) != EquipSlot::None ||
+                static_cast<ItemCategory>(d.category) == ItemCategory::Weapon)
+                ++armedOrWearable;
+        }
+        if (goods) ++withGoods;
+    }
+    // A market, not a jackpot: most people carry SOMETHING, nobody carries arms.
+    CHECK(withGoods > 100);          // ~3/4 draw at least one possession
+    CHECK(withCash > 150);           // cash is near-universal at depth
+    CHECK(armedOrWearable == 0);
+    CHECK(cashTotal > 0);
+    // Deterministic: the same seed builds the same pockets, coin for coin.
+    NpcPool again;
+    again.init();
+    seed_floor_population(again, -26, 200, 77u);
+    bool identical = true;
+    for (NpcId id = 0; id < 200; ++id)
+        if (std::memcmp(&pool.inventory(id), &again.inventory(id),
+                        sizeof(Inventory)) != 0)
+            identical = false;
+    CHECK(identical);
+    std::fprintf(stderr,
+                 "[barter] pockets at -26: %u/200 carry goods, %u/200 carry "
+                 "cash (%lld rub total), 0 armed\n",
+                 withGoods, withCash, static_cast<long long>(cashTotal));
+}
+
 static void test_barter_all() {
+    barter_crowd_has_pockets();
     barter_cash_settles_the_difference();
     barter_liquidity_is_physical();
     barter_money_at_par();
