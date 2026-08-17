@@ -68,7 +68,7 @@ std::uint16_t weapon_ammo_count(ItemId weapon, std::uint32_t seed) {
         const std::uint16_t base = def->magazine > 10 ? def->magazine : 10;
         count = static_cast<std::uint16_t>(base + (h % 20u));
     }
-    const std::uint8_t cap = item_def(def->ammo).stackMax;
+    const std::uint16_t cap = item_def(def->ammo).stackMax;
     if (cap && count > cap) count = cap;
     return count;
 }
@@ -77,9 +77,9 @@ std::uint16_t weapon_ammo_count(ItemId weapon, std::uint32_t seed) {
 bool push_slot(ItemSlot* out, std::uint8_t cap, std::uint8_t& n,
                ItemId id, std::uint16_t count) {
     if (!out || n >= cap || id == kInvalidItem || count == 0) return false;
-    // The cell's count is u8 by law ([inventory.h]); clamp BEFORE the store.
-    if (count > 0xFFu) count = 0xFFu;
-    out[n++] = ItemSlot{id, static_cast<std::uint8_t>(count)};
+    // The cell's count is u16 by law ([inventory.h]); the wire matches, so a
+    // full ruble stack rides one slot with nothing to clamp against but itself.
+    out[n++] = ItemSlot{id, count};
     return true;
 }
 
@@ -127,7 +127,7 @@ std::uint32_t roll_mob_loot_slots(std::uint8_t mobKind, std::uint8_t mobTier,
             kd.count = 1;
         }
         const ItemId id = kd.item;
-        const std::uint8_t cap = item_def(id).stackMax;
+        const std::uint16_t cap = item_def(id).stackMax;
         if (kd.count < 1) kd.count = 1;
         if (cap && kd.count > cap) kd.count = cap;
 
@@ -232,7 +232,7 @@ std::uint32_t drop_mob_loot(Registry& reg, LayerId layer, const vec3& pos,
         // inventory slot may legally hold is silently truncated by pickup_step. The
         // authored counts are 1..2 and every count-bearing row stacks well past that, so
         // this is the rule stated rather than a bug fixed.
-        const std::uint8_t cap = item_def(id).stackMax;
+        const std::uint16_t cap = item_def(id).stackMax;
         if (kd.count < 1) kd.count = 1;
         if (cap && kd.count > cap) kd.count = cap;
         reg.emplace<Pickup>(e, Pickup{id, kd.count});
@@ -283,7 +283,7 @@ std::uint32_t drop_weapon_ammo(Registry& reg, LayerId layer, const vec3& pos,
     }
     // Never exceed the item's own stack cap, or a single pickup would carry more than
     // an inventory slot can legally hold and pickup_step would silently drop the rest.
-    const std::uint8_t cap = item_def(def->ammo).stackMax;
+    const std::uint16_t cap = item_def(def->ammo).stackMax;
     if (cap && count > cap) count = cap;
 
     Entity e = reg.create();
@@ -297,9 +297,9 @@ std::uint32_t drop_weapon_ammo(Registry& reg, LayerId layer, const vec3& pos,
     reg.emplace<AABB>(e, AABB{kPickupHalf});
     reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
     reg.emplace<Renderable>(e, Renderable{kPickupColor});
-    const std::uint32_t bundled = count > 255 ? 255u : count;
+    const std::uint32_t bundled = count;   // already stack-capped above; u16 cell
     reg.emplace<Pickup>(e, Pickup{def->ammo,
-                                  static_cast<std::uint8_t>(bundled)});
+                                  static_cast<std::uint16_t>(bundled)});
     // The bundle weighs its ROUNDS, not one round — the same stack multiply
     // `inventory_mass_g` does, because a pile of sixty on the floor and the same
     // sixty in a pocket must not disagree about what they weigh.
@@ -397,7 +397,7 @@ std::int32_t pickup_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId la
         if (unplaced == 0) {
             taken.push_back(e);
         } else {
-            reg.get<Pickup>(e).count = static_cast<std::uint8_t>(unplaced);
+            reg.get<Pickup>(e).count = unplaced;
         }
     }
     for (Entity e : taken) reg.destroy(e);

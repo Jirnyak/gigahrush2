@@ -58,49 +58,49 @@ constexpr ItemId kItBottledVoice        =   60;  // bottled_voice           250 
 constexpr ItemId kItCigs                =   88;  // cigs                      5 rub
 constexpr ItemId kItCircuitBoard        =   89;  // circuit_board            35 rub
 constexpr ItemId kItClothRoll           =   94;  // cloth_roll                6 rub
-constexpr ItemId kItDuctTape            = 121;  // duct_tape                 8 rub
-constexpr ItemId kItFakePass            = 132;  // fake_pass                45 rub
-constexpr ItemId kItFibrousCapsuleCut   = 134;  // fibrous_capsule_cut     145 rub  w=0
-constexpr ItemId kItFilterLayer         = 137;  // filter_layer             16 rub
-constexpr ItemId kItFuse                = 156;  // fuse                     20 rub
-constexpr ItemId kItGasmaskFilter       = 159;  // gasmask_filter           70 rub
-constexpr ItemId kItHermoGasket         = 183;  // hermo_gasket             60 rub
-constexpr ItemId kItIdolChernobog       = 189;  // idol_chernobog          200 rub
-constexpr ItemId kItInkBottle           = 192;  // ink_bottle                8 rub
-constexpr ItemId kItLampBulb            = 210;  // lamp_bulb                12 rub
-constexpr ItemId kItLiquidatorToken     = 221;  // liquidator_token         80 rub
-constexpr ItemId kItManometer           = 227;  // manometer                35 rub
-constexpr ItemId kItMeatRune            = 230;  // meat_rune               220 rub
-constexpr ItemId kItMetalSheet          = 232;  // metal_sheet              22 rub
-constexpr ItemId kItMetalWater          = 233;  // metal_water               2 rub
-constexpr ItemId kItMutantTissueSample  = 242;  // mutant_tissue_sample    115 rub  w=0
-constexpr ItemId kItNeighborComplaint   = 246;  // neighbor_complaint        5 rub
-constexpr ItemId kItNote                = 254;  // note                      1 rub
-constexpr ItemId kItOfficialPermitSlip  = 256;  // official_permit_slip     48 rub
-constexpr ItemId kItPsiConcreteSplinter = 287;  // psi_concrete_splinter 14000 rub
-constexpr ItemId kItPsiDust             = 289;  // psi_dust                120 rub
-constexpr ItemId kItPsiMark             = 291;  // psi_mark              10000 rub
-constexpr ItemId kItPsiOrderSeal        = 293;  // psi_order_seal        24000 rub
-constexpr ItemId kItQuarantineMedcard   = 311;  // quarantine_medcard       45 rub  w=0
-constexpr ItemId kItRawmeat             = 324;  // rawmeat                   1 rub
-constexpr ItemId kItRebar               = 326;  // rebar                    80 rub
-constexpr ItemId kItRedMoldSample       = 329;  // red_mold_sample         180 rub  w=0
-constexpr ItemId kItRelayDiagram        = 330;  // relay_diagram            30 rub
-constexpr ItemId kItRockSalt            = 334;  // rock_salt                 4 rub
-constexpr ItemId kItSealWax             = 351;  // seal_wax                 14 rub
-constexpr ItemId kItSealantTube         = 352;  // sealant_tube             20 rub
-constexpr ItemId kItSharkScale          = 355;  // shark_scale            1000 rub
-constexpr ItemId kItSirenShard          = 364;  // siren_shard              90 rub
-constexpr ItemId kItSlimeSampleBlack    = 372;  // slime_sample_black      220 rub  w=0
-constexpr ItemId kItSlimeSampleBrown    = 374;  // slime_sample_brown       35 rub  w=0
-constexpr ItemId kItSlimeSampleGreen    = 377;  // slime_sample_green      120 rub  w=0
-constexpr ItemId kItSporePrint          = 390;  // spore_print              12 rub
-constexpr ItemId kItStrangeClot         = 397;  // strange_clot            500 rub  w=0
-constexpr ItemId kItUnpeopleDetector    = 413;  // unpeople_detector       300 rub
-constexpr ItemId kItUnsignedOrder       = 414;  // unsigned_order           22 rub
-constexpr ItemId kItVoidSpike           = 421;  // void_spike             1500 rub  w=0
-constexpr ItemId kItWetRagBundle        = 432;  // wet_rag_bundle            4 rub
-constexpr ItemId kItSpring              = 391;  // spring                    7 rub
+constexpr ItemId kItDuctTape            =  121;  // duct_tape                 8 rub
+constexpr ItemId kItFakePass            =  132;  // fake_pass                45 rub
+constexpr ItemId kItFibrousCapsuleCut   =  134;  // fibrous_capsule_cut     145 rub  w=0
+constexpr ItemId kItFilterLayer         =  137;  // filter_layer             16 rub
+constexpr ItemId kItFuse                =  156;  // fuse                     20 rub
+constexpr ItemId kItGasmaskFilter       =  159;  // gasmask_filter           70 rub
+constexpr ItemId kItHermoGasket         =  183;  // hermo_gasket             60 rub
+constexpr ItemId kItIdolChernobog       =  189;  // idol_chernobog          200 rub
+constexpr ItemId kItInkBottle           =  192;  // ink_bottle                8 rub
+constexpr ItemId kItLampBulb            =  210;  // lamp_bulb                12 rub
+constexpr ItemId kItLiquidatorToken     =  221;  // liquidator_token         80 rub
+constexpr ItemId kItManometer           =  227;  // manometer                35 rub
+constexpr ItemId kItMeatRune            =  230;  // meat_rune               220 rub
+constexpr ItemId kItMetalSheet          =  232;  // metal_sheet              22 rub
+constexpr ItemId kItMetalWater          =  233;  // metal_water               2 rub
+constexpr ItemId kItMutantTissueSample  =  242;  // mutant_tissue_sample    115 rub  w=0
+constexpr ItemId kItNeighborComplaint   =  246;  // neighbor_complaint        5 rub
+constexpr ItemId kItNote                =  254;  // note                      1 rub
+constexpr ItemId kItOfficialPermitSlip  =  256;  // official_permit_slip     48 rub
+constexpr ItemId kItPsiConcreteSplinter =  287;  // psi_concrete_splinter 14000 rub
+constexpr ItemId kItPsiDust             =  289;  // psi_dust                120 rub
+constexpr ItemId kItPsiMark             =  291;  // psi_mark              10000 rub
+constexpr ItemId kItPsiOrderSeal        =  293;  // psi_order_seal        24000 rub
+constexpr ItemId kItQuarantineMedcard   =  311;  // quarantine_medcard       45 rub  w=0
+constexpr ItemId kItRawmeat             =  324;  // rawmeat                   1 rub
+constexpr ItemId kItRebar               =  326;  // rebar                    80 rub
+constexpr ItemId kItRedMoldSample       =  329;  // red_mold_sample         180 rub  w=0
+constexpr ItemId kItRelayDiagram        =  330;  // relay_diagram            30 rub
+constexpr ItemId kItRockSalt            =  334;  // rock_salt                 4 rub
+constexpr ItemId kItSealWax             =  352;  // seal_wax                 14 rub
+constexpr ItemId kItSealantTube         =  353;  // sealant_tube             20 rub
+constexpr ItemId kItSharkScale          =  356;  // shark_scale            1000 rub
+constexpr ItemId kItSirenShard          =  365;  // siren_shard              90 rub
+constexpr ItemId kItSlimeSampleBlack    =  373;  // slime_sample_black      220 rub  w=0
+constexpr ItemId kItSlimeSampleBrown    =  375;  // slime_sample_brown       35 rub  w=0
+constexpr ItemId kItSlimeSampleGreen    =  378;  // slime_sample_green      120 rub  w=0
+constexpr ItemId kItSporePrint          =  391;  // spore_print              12 rub
+constexpr ItemId kItStrangeClot         =  398;  // strange_clot            500 rub  w=0
+constexpr ItemId kItUnpeopleDetector    =  414;  // unpeople_detector       300 rub
+constexpr ItemId kItUnsignedOrder       =  415;  // unsigned_order           22 rub
+constexpr ItemId kItVoidSpike           =  422;  // void_spike             1500 rub  w=0
+constexpr ItemId kItWetRagBundle        =  433;  // wet_rag_bundle            4 rub
+constexpr ItemId kItSpring              =  392;  // spring                    7 rub
 
 // ===========================================================================
 // rareDrops — one array per kind. ORDER IS LOAD-BEARING: first-hit-single means the
@@ -339,7 +339,7 @@ KindDrop roll_kind_drop(std::uint8_t kind, int floorZ, std::uint32_t seed) {
         if (c <= 0.0f || draw > c) continue;
         if (amount <= 0) continue;
         out.item = le.itemId;
-        out.count = static_cast<std::uint8_t>(amount);
+        out.count = static_cast<std::uint16_t>(amount);
     }
     if (out.item != kInvalidItem) return out;
 

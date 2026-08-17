@@ -21,7 +21,7 @@ namespace giga::game {
 std::uint16_t inventory_give(Inventory& inv, ItemId id, std::uint16_t count,
                              std::uint8_t condition) {
     if (!item_valid(id) || count == 0) return count;
-    const std::uint8_t rawMax = item_def(id).stackMax;
+    const std::uint16_t rawMax = item_def(id).stackMax;
     const int cap = rawMax < 1 ? 1 : static_cast<int>(rawMax);
 
     int left = static_cast<int>(count);
@@ -36,7 +36,7 @@ std::uint16_t inventory_give(Inventory& inv, ItemId id, std::uint16_t count,
         const int room = cap - static_cast<int>(s.count);
         if (room <= 0) continue;
         const int take = room < left ? room : left;
-        s.count = static_cast<std::uint8_t>(static_cast<int>(s.count) + take);
+        s.count = static_cast<std::uint16_t>(static_cast<int>(s.count) + take);
         left -= take;
     }
 
@@ -46,7 +46,7 @@ std::uint16_t inventory_give(Inventory& inv, ItemId id, std::uint16_t count,
         if (s.item != kInvalidItem && s.count != 0) continue;
         const int take = cap < left ? cap : left;
         s.item = id;
-        s.count = static_cast<std::uint8_t>(take);
+        s.count = static_cast<std::uint16_t>(take);
         s.condition = condition;
         left -= take;
     }

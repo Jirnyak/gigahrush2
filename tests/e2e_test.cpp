@@ -613,7 +613,6 @@ static void test_t1_f9_04_regime_from_vector_classification() {
 }
 
 static void test_t1_f9_05_tangent_velocity_preserves_gravity_axis() {
-    GravityFrame fx = regime_frame(GravityRegime::PosX);
     // Gravity along X, tangent plane is Y/Z
     vec3 v{9.81f, 0.0f, 0.0f};
     v.y = 1.35f; // Steer along tanA
@@ -2094,7 +2093,6 @@ static void test_t4_05_headless_integrated_engine_game_loop() {
     bus.init();
     EventFeed feed{};
     BankAccount acct{};
-    RunLedger led{};
     bank_open(acct, 0, 123u);
 
     NpcId pid = pool.spawn();

@@ -6,8 +6,9 @@
 > ([inventory.h](src/game/inventory.h)) and the embodied needs
 > ([needs.h](src/game/needs.h)).
 >
-> - **Source of truth is [data/items.csv](data/items.csv)** - **442 rows** (the port
->   landed 446; four have since been purged). Adding an item
+> - **Source of truth is [data/items.csv](data/items.csv)** - **443 rows** (the port
+>   landed 446; four purged, plus the **ruble** — money-as-item, value 1, stack
+>   65535, the row the barter economy stands on). Adding an item
 >   is one row plus `python tools/gen_item_table.py`, which regenerates
 >   [src/game/item_table.cpp](src/game/item_table.cpp). The `source_rules` ctest
 >   compares the csv row count against `kItemCount`, so a regenerated table and an

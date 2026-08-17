@@ -28,7 +28,7 @@ ITEMS_CSV = os.path.join(REPO, "data", "items.csv")
 OUT_PATH = os.path.join(REPO, "src", "game", "weapon_table.cpp")
 
 EXPECTED_ROWS = 22        # 21 item-backed + fists
-EXPECTED_ITEM_ROWS = 442  # must agree with kItemCount
+EXPECTED_ITEM_ROWS = 443  # must agree with kItemCount
 
 
 def die(msg):

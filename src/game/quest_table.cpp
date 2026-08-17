@@ -20,16 +20,16 @@ constexpr std::uint8_t u8(ObjectiveKind v) { return static_cast<std::uint8_t>(v)
 
 const std::array<QuestDef, kQuestCount> kQuestTable = {{
     // [0] QuestId 1  pump_1
-    QuestDef{ 0u, 3, 120, 418, 0,
+    QuestDef{ 0u, 3, 120, 419, 0,
               0, u8(ObjectiveKind::Fetch), 0, 0, 2, {0, 0, 0} },
     // [1] QuestId 2  pump_2
-    QuestDef{ 900000u, 1, 260, 227, 352,
+    QuestDef{ 900000u, 1, 260, 227, 353,
               1, u8(ObjectiveKind::Fetch), 1, -14, 2, {0, 0, 0} },
     // [2] QuestId 3  medpost_1
     QuestDef{ 0u, 6, 90, 40, 0,
               0, u8(ObjectiveKind::Fetch), 0, 0, 2, {0, 0, 0} },
     // [3] QuestId 4  medpost_2
-    QuestDef{ 600000u, 2, 300, 25, 407,
+    QuestDef{ 600000u, 2, 300, 25, 408,
               2, u8(ObjectiveKind::Fetch), 3, -8, 2, {0, 0, 0} },
     // [4] QuestId 5  medpost_3
     QuestDef{ 900000u, 5, 420, 21, 0,
@@ -38,7 +38,7 @@ const std::array<QuestDef, kQuestCount> kQuestTable = {{
     QuestDef{ 0u, 2, 140, 46, 0,
               0, u8(ObjectiveKind::Fetch), 0, 14, 30, {0, 0, 0} },
     // [6] QuestId 7  kantselyariya_2
-    QuestDef{ 1200000u, 1, 700, 237, 404,
+    QuestDef{ 1200000u, 1, 700, 237, 405,
               1, u8(ObjectiveKind::Fetch), 6, 14, 30, {0, 0, 0} },
     // [7] QuestId 8  kantselyariya_3
     QuestDef{ 1500000u, 3, 1200, 44, 0,
@@ -59,7 +59,7 @@ const std::array<QuestDef, kQuestCount> kQuestTable = {{
     QuestDef{ 480000u, 4, 500, 58, 0,
               0, u8(ObjectiveKind::Hunt), 0, -8, 14, {0, 0, 0} },
     // [13] QuestId 14  urgent_morphine
-    QuestDef{ 90000u, 1, 400, 239, 392,
+    QuestDef{ 90000u, 1, 400, 239, 393,
               2, u8(ObjectiveKind::Fetch), 0, -14, -4, {0, 0, 0} },
     // [14] QuestId 15  eel_pit
     QuestDef{ 900000u, 2, 1100, 53, 0,

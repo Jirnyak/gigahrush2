@@ -18,7 +18,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CSV_PATH = os.path.join(REPO, "data", "items.csv")
 OUT_PATH = os.path.join(REPO, "src", "game", "item_table.cpp")
 
-EXPECTED_ROWS = 442
+EXPECTED_ROWS = 443
 
 CATEGORY = {
     "MISC": "Misc", "WEAPON": "Weapon", "FOOD": "Food", "MEDICINE": "Medicine",
@@ -177,17 +177,20 @@ def main():
 
         out.append(
             "    // [%d] id %d  %s  (%d g)\n"
-            "    ItemDef{ %d, %d, %d, static_cast<std::uint16_t>(%s), %d,\n"
-            "             u8(ItemCategory::%s), u8(EquipSlot::%s), %d,\n"
-            "             u8(UseEffect::%s), {%s}, 0, %d, {0, 0} },"
+            "    ItemDef{ %d, %d, %d, static_cast<std::uint16_t>(%s), %d, %d,\n"
+            "             u8(ItemCategory::%s), u8(EquipSlot::%s),\n"
+            "             u8(UseEffect::%s), {%s}, %d, {0, 0} },"
             % (i, i + 1, r["id"], massG,
                num(r, "value_rub", i, 0, 2000000000),
                massG,
                spawn_weight(r, i),
                room_mask(r, i),
                num(r, "use_a", i, -32768, 32767),
+               # stack_max is u16 since the ruble row (money stacks to the
+               # honest u16 ceiling); field order follows ItemDef, where the
+               # width move re-slotted it beside the other u16s.
+               num(r, "stack_max", i, 1, 65535),
                cat, eq,
-               num(r, "stack_max", i, 1, 255),
                ue,
                ", ".join(str(x) for x in resists),
                # durability: USES until ruined; empty column = 0 = never wears.
@@ -226,8 +229,17 @@ def main():
             sys.stderr.write("gen_item_table: NOTE %s values unused by any row: %s\n"
                              % (name, ", ".join(unused)))
 
+    # The money row is load-bearing for the barter economy ([item_table.h]
+    # kItemRuble): refuse a catalog without it rather than emitting a table the
+    # cash-roll paths cannot index.
+    ids = [r["id"] for r in rows]
+    if "ruble" not in ids:
+        die("no 'ruble' row — the barter economy's money item is mandatory")
+    ruble_id = ids.index("ruble") + 1   # ids are 1-based row indices
+
     with open(OUT_PATH, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(HEADER)
+        fh.write("const ItemId kItemRuble = %d;\n\n" % ruble_id)
         fh.write("const std::array<ItemDef, kItemCount> kItemTable = {{\n")
         fh.write("\n".join(out))
         fh.write("\n}};\n\n")

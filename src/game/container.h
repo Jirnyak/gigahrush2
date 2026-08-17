@@ -74,7 +74,9 @@ inline constexpr int kContainerSlots = 4;
 
 struct Container {
     ItemId item[kContainerSlots] = {};
-    std::uint8_t count[kContainerSlots] = {};
+    // u16 like ItemSlot::count ([inventory.h]): the cash slot holds up to a
+    // full ruble stack, and a box must be able to hold what a bag can.
+    std::uint16_t count[kContainerSlots] = {};
     // Износ содержимого ([inventory.h] ItemSlot::condition, тот же байт).
     // Появился вместе с двухсторонним экраном обыска: класть потёртый ствол
     // в ящик и доставать «как новый» — дюп-ремонт; свежероллленный лут — 255.

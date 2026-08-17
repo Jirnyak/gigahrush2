@@ -246,7 +246,9 @@ void same_run(const SaveState& a, const SaveState& b) {
 
     // Padding-free structs, so a raw byte compare is exact rather than optimistic.
     static_assert(sizeof(Needs) == 9 * 4 + 1 + 3, "Needs has no implicit padding");
-    static_assert(sizeof(Inventory) == 64 * 4, "Inventory has no implicit padding");
+    static_assert(sizeof(Inventory) == 64 * 6,
+                  "Inventory: 6 B cells since the v14 u16 count; the pad byte is\n"
+                  "explicit ([inventory.h]), so a raw compare is still exact");
     CHECK(std::memcmp(&a.player.clock, &b.player.clock, sizeof(Needs)) == 0);
     CHECK(std::memcmp(&a.player.inv, &b.player.inv, sizeof(Inventory)) == 0);
     CHECK(a.player.hp == b.player.hp);
@@ -344,11 +346,11 @@ void wire_layout() {
     static_assert(kFastTravelWire == 32);
     // 927 repeats v10's total by coincidence, not compatibility: v10 had nine
     // craft axes and no hpBank, v12 has eight and hpBank. See [save.cpp].
-    static_assert(kSaveFixedWire == 931);  // v13: +4 player Equipped cells
+    static_assert(kSaveFixedWire == 995);  // v14: 5 B inventory slots (+64)
     static_assert(kFactionWire == 36);
-    static_assert(save_bytes_for(0) == 1031);  // v13: +4 player Equipped
-    static_assert(save_bytes_for(3) == 1031 + 15);
-    static_assert(save_bytes_for(3, 100, 50) == 1031 + 15 + 150);
+    static_assert(save_bytes_for(0) == 1095);  // v14: 5 B inventory slots
+    static_assert(save_bytes_for(3) == 1095 + 15);
+    static_assert(save_bytes_for(3, 100, 50) == 1095 + 15 + 150);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -364,8 +366,8 @@ void wire_layout() {
     // legacy-content purge re-measured this from 1007; v9 was 993; v10 adds the
     // samosbor clock (17) and the fast-travel unlock set (32); v11 adds the crowd
     // heal bank `hpBank` (+4); v12 drops one craft axis (-4); v13 adds the
-    // player's Equipped cells (+4).
-    CHECK(bytes.size() == 1046);
+    // player's Equipped cells (+4); v14 widens the slot count to u16 (+64).
+    CHECK(bytes.size() == 1110);
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');

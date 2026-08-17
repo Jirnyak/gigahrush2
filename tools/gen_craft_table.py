@@ -46,7 +46,7 @@ OUT_PATH = os.path.join(REPO, "src", "game", "craft_table.cpp")
 # Must equal kItemCount in item_table.h AND kCraftRecipeCount in craft.h, which is
 # defined as kItemCount — so the recipe count cannot drift from the item count by
 # construction and this is only a guard on the CSV itself.
-EXPECTED_ITEM_ROWS = 442
+EXPECTED_ITEM_ROWS = 443
 # Must equal kCraftSourceCount in craft.h. The `source_rules` ctest compares this
 # CSV's row count against that constant; see the note at the bottom of this file.
 EXPECTED_SOURCE_ROWS = 24

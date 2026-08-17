@@ -17,7 +17,7 @@ namespace {
 // one is buried inside a pickup loop and not callable, so this mirrors it rather
 // than diverging from it. Returns -1 when the bag has no room at all.
 int slot_for_one(const Inventory& inv, ItemId id) {
-    const std::uint8_t cap = item_def(id).stackMax;
+    const std::uint16_t cap = item_def(id).stackMax;
     if (cap > 1) {
         for (int i = 0; i < kInvSlots; ++i)
             if (inv.slots[i].item == id && inv.slots[i].count < cap) return i;

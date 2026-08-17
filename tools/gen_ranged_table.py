@@ -50,7 +50,7 @@ ITEMS_CSV = os.path.join(REPO, "data", "items.csv")
 OUT_PATH = os.path.join(REPO, "src", "game", "ranged_table.cpp")
 
 EXPECTED_ROWS = 30        # 29 ProjType.NORMAL + grenade
-EXPECTED_ITEM_ROWS = 442  # must agree with kItemCount
+EXPECTED_ITEM_ROWS = 443  # must agree with kItemCount
 
 # CSV token -> ProjType ordinal ([mob_table.h]). An unknown token is a hard error,
 # not a default: the whole point of the column is that a row states what it fires,

@@ -5744,7 +5744,7 @@ int main(int argc, char** argv) {
                         game::item_def(boxC->item[i]).value * moved;
                     loot += v;
                     containerTake += v;
-                    boxC->count[i] = static_cast<std::uint8_t>(unplaced);
+                    boxC->count[i] = unplaced;
                     if (boxC->count[i] == 0) boxC->item[i] = game::kInvalidItem;
                 };
                 auto take_corpse_slot = [&](int i) {
@@ -5757,7 +5757,7 @@ int main(int argc, char** argv) {
                         static_cast<std::uint16_t>(s.count - unplaced);
                     if (moved == 0) return;
                     loot += game::item_def(s.item).value * moved;
-                    s.count = static_cast<std::uint8_t>(unplaced);
+                    s.count = unplaced;
                     if (s.count == 0) s = game::ItemSlot{};
                 };
                 // Пустая цель помечается ПОСЛЕ мутаций: opened — память карты
@@ -5816,7 +5816,7 @@ int main(int argc, char** argv) {
                             // Сначала доложить в одноимённый стек ТОГО ЖЕ
                             // износа (закон inventory_give: смешать байты —
                             // заразить свежий стек), потом в пустую ячейку.
-                            const std::uint8_t stackMax =
+                            const std::uint16_t stackMax =
                                 game::item_def(s.item).stackMax;
                             for (int i = 0; i < game::kContainerSlots && !placed;
                                  ++i)
@@ -5836,7 +5836,7 @@ int main(int argc, char** argv) {
                                     placed = true;
                                 }
                         } else if (corpseC) {
-                            const std::uint8_t stackMax =
+                            const std::uint16_t stackMax =
                                 game::item_def(s.item).stackMax;
                             for (std::size_t i = 0;
                                  i < game::kMaxCorpseSlots && !placed; ++i) {

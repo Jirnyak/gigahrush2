@@ -220,8 +220,11 @@ static void test_npcpool_all() {
         // The capacity is exactly 2^20, so 1 B of row width == 1.0 MiB of table and
         // every figure here is just a row width.
         constexpr std::size_t kRow = static_cast<std::size_t>(kNpcPoolSize);
-        constexpr std::size_t kOldTable = 493u * kRow;   // all 18 columns assign()ed
-        constexpr std::size_t kEagerTable = 306u * kRow; // what init() still writes
+        // 621 = the same 18 columns at TODAY'S widths (inv_ went 256 -> 384 when
+        // v14 widened the slot count to u16, [inventory.h]) — the comparison is
+        // against what eager-everything would cost NOW, not a 2026-07 memory.
+        constexpr std::size_t kOldTable = 621u * kRow;   // all 18 columns assign()ed
+        constexpr std::size_t kEagerTable = 434u * kRow; // what init() still writes
 
         NpcPool pool;
         pool.init();
@@ -277,7 +280,7 @@ static void test_npcpool_all() {
                     "(13 B/row eager would be 13.0 MiB)\n",
                     static_cast<unsigned>(live));
         CHECK(live < 128u * 1024u); // 53,248 B: still inside the first 4096-row chunk
-        CHECK(pool.resident_bytes() < 320u * static_cast<std::size_t>(kNpcPoolSize));
+        CHECK(pool.resident_bytes() < 448u * static_cast<std::size_t>(kNpcPoolSize));
     }
 
     { // ---- kill() IS IDEMPOTENT: alive() cannot be double-decremented ----

@@ -215,7 +215,8 @@ enum NpcSex : std::uint8_t { SexUnset = 0, SexMale = 1, SexFemale = 2 };
 // capacity is exactly 2^20, 1 B/row == 1.0 MiB of table; every figure below is just
 // the row width.)
 //
-// Measured row widths: inv_ 256, rel_ 128, needs_ 36, name_ 24, surname_ 24, attr_ 8,
+// Measured row widths: inv_ 384 (256 until v14 widened the slot count to u16,
+// [inventory.h]), rel_ 128, needs_ 36, name_ 24, surname_ 24, attr_ 8,
 // faction_/hp_/maxHp_/floor_/heightMm_ 2 each, flags_/cx_/cy_/cz_/age_/sex_/level_ 1
 // each = 493 B when this policy was written. Slot recycling added two more: gen_ 2 B
 // (LIVE) and nextFree_ 4 B (DEMAND, and only when recycling is actually on), for 499 B
@@ -231,8 +232,8 @@ enum NpcSex : std::uint8_t { SexUnset = 0, SexMale = 1, SexFemale = 2 };
 //   EAGER  — flags_, faction_, hp_, maxHp_, floor_, cx_/cy_/cz_, heightMm_, inv_,
 //            needs_. Read on live paths (combat, loot, needs, embody, wander), so
 //            they keep the old "sized once at init(), never resized" contract and a
-//            reference into them is stable for the pool's whole life. 306 B/row =
-//            306.0 MiB.
+//            reference into them is stable for the pool's whole life. 434 B/row =
+//            434.0 MiB (306 before the v14 slot widening — the +128 is all inv_).
 //   LIVE   — age_, sex_, level_, attr_, gen_. The first four are written for every
 //            seeded record by seed_floor_from_spec; gen_ is written by kill(). All
 //            track count_ and are grown inside spawn(). 13 B/row: the demo stack's
@@ -246,11 +247,12 @@ enum NpcSex : std::uint8_t { SexUnset = 0, SexMale = 1, SexFemale = 2 };
 //            materializes and then JOINS the LIVE set, so relations() itself never
 //            resizes afterwards.
 //
-// New resident footprint after init(): 306.0 MiB (was 493.0 MiB), and the demo stack
-// adds 52.0 KiB of LIVE columns rather than 13.0 MiB. resident_bytes() reports the
-// live figure so this is checkable at runtime, not only on paper. 256 of the
-// remaining 306 B/row is inv_, which stays EAGER because loot / containers / vendor /
-// needs all read it — it is the obvious next 256.0 MiB, not this lane's.
+// New resident footprint after init(): 434.0 MiB (was 493.0 before the demand split,
+// 306.0 before v14 widened the inventory slot), and the demo stack adds 52.0 KiB of
+// LIVE columns rather than 13.0 MiB. resident_bytes() reports the live figure so
+// this is checkable at runtime, not only on paper. 384 of the resident 434 B/row is
+// inv_, which stays EAGER because loot / containers / vendor / needs all read it —
+// it is the obvious next 384.0 MiB, not this lane's.
 //
 // Reference-lifetime rule, unchanged in spirit but worth stating: a reference handed
 // out by attrs() / relations() / level() is invalidated by a later spawn(), because
@@ -322,7 +324,7 @@ inline constexpr std::array<char, kNameLen> kBlankName{};
 // described above — dense over sparse either way ([performance.md]).
 class NpcPool {
 public:
-    // Allocate the EAGER backing arrays (one time): 306 B/row x 2^20 = 306.0 MiB.
+    // Allocate the EAGER backing arrays (one time): 434 B/row x 2^20 = 434.0 MiB.
     // The LIVE and DEMAND columns start empty and are grown by spawn() / first touch
     // ("Column allocation policy" above), which is where the other 187.0 MiB went.
     void init();

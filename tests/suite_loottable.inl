@@ -37,9 +37,9 @@ constexpr ItemId kPsiMark             = 291;
 constexpr ItemId kPsiOrderSeal        = 293;
 constexpr ItemId kRawmeat             = 324;
 constexpr ItemId kRebar               = 326;
-constexpr ItemId kSlimeSampleGreen    = 377;
-constexpr ItemId kWetRagBundle        = 432;
-constexpr ItemId kSpring              = 391;
+constexpr ItemId kSlimeSampleGreen    = 378;
+constexpr ItemId kWetRagBundle        = 433;
+constexpr ItemId kSpring              = 392;
 
 // The catalog roll's own gate, so the suite can assert "the catalog CANNOT produce this"
 // from the same function `drop_mob_loot` calls rather than from a claim in a comment.
@@ -343,7 +343,7 @@ static void test_loottable_all() {
                 ++filled;
                 ++total;
                 CHECK(s.count >= 1);
-                const std::uint8_t cap = item_def(s.item).stackMax;
+                const std::uint16_t cap = item_def(s.item).stackMax;
                 if (cap && s.count > cap) ++overCap;
                 if (s.item == kSlimeSampleGreen) ++green;
             }

@@ -4,10 +4,11 @@
 // the catalog, it only shifts which rows are likely to appear ([items.md]). Adding
 // an item is one row in `data/items.csv` plus `python tools/gen_item_table.py`.
 //
-// **442 items** live in the CSV today (kItemCount is generated from it and is
+// **443 items** live in the CSV today (kItemCount is generated from it and is
 // the truth). The port originally landed 446 — what `Object.keys(ITEMS)` of the
 // TypeScript reference actually yields once spreads and computed keys resolve
-// (not the ~434 its own docs claim) — and four rows have since been purged.
+// (not the ~434 its own docs claim) — four rows have since been purged, and one
+// added: the RUBLE, the money-as-item the barter economy stands on ([barter]).
 //
 // This table is deliberately LEAN. The reference's `ItemDef` carries ~40 fields;
 // only the ones with a live consumer are ported, because a column nothing reads is
@@ -44,7 +45,14 @@ namespace giga::game {
 using ItemId = std::uint16_t;
 inline constexpr ItemId kInvalidItem = 0;
 
-inline constexpr std::size_t kItemCount = 442;
+inline constexpr std::size_t kItemCount = 443;
+
+// The money row ([barter]): value=1, stackMax 65535, an ordinary MISC item in an
+// ordinary slot. Named because loot/vendor code rolls cash by id, and a runtime
+// string lookup over a table with no string ids is not a thing. Generated with
+// the table — the generator refuses a CSV without the row, so this can never
+// silently go stale against an insertion above it.
+extern const ItemId kItemRuble;
 
 enum class ItemCategory : std::uint8_t {
     Misc = 0,   // 268
@@ -97,12 +105,15 @@ struct ItemDef {
     std::uint16_t spawnWeight;  //  8  milli-weight, 0..50,000; 0 = never random
     std::uint16_t roomMask;     // 10  RoomBit bitmask — where it is found
     std::int16_t useA;          // 12  primary use magnitude, signed (-6 .. 60)
-    std::uint8_t category;      // 14  ItemCategory
-    std::uint8_t equipSlot;     // 15  EquipSlot
-    std::uint8_t stackMax;      // 16  1..255
-    std::uint8_t useEffect;     // 17  UseEffect
-    std::int8_t resist[kItemResistChannels];  // 18..22, armour; 441 are zero
-    std::uint8_t pad_;          // 23
+    // 1..65535. Was u8 at offset 16 with a pad byte at 23; widened for the
+    // RUBLE row (money stacks to the honest u16 ceiling, [inventory.h]) and
+    // moved up beside the other u16s, which is what keeps the row at 28 B
+    // with no interior padding — the width change costs zero bytes.
+    std::uint16_t stackMax;     // 14
+    std::uint8_t category;      // 16  ItemCategory
+    std::uint8_t equipSlot;     // 17  EquipSlot
+    std::uint8_t useEffect;     // 18  UseEffect
+    std::int8_t resist[kItemResistChannels];  // 19..23, armour; 442 are zero
     // USES until ruined, straight from the `durability` column of
     // data/items.csv. 0 = does not wear (the 400+ unfilled rows), and that is
     // a CONTENT statement, not a default to paper over in code: an item starts

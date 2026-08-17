@@ -454,9 +454,9 @@ struct ByteReader {
 
 // Fixed per-row wire width: 28 B of demographic columns (flags 1 + faction 2 +
 // hp/maxHp/floor 6 + cell 3 + height 2 + age/sex/level/role 4 + attrs 8 + gen 2)
-// + 37 B needs (v11: +hpBank, [save.h]) + 256 B inventory; names add 2 x kNameLen
-// when present.
-inline constexpr std::size_t kPoolRowWire = 28 + 37 + 256;
+// + 37 B needs (v11: +hpBank, [save.h]) + 320 B inventory (v14: u16 count makes
+// the slot 5 B on the wire); names add 2 x kNameLen when present.
+inline constexpr std::size_t kPoolRowWire = 28 + 37 + 320;
 inline constexpr std::size_t kPoolHeadWire = 4 + 4 + 1 + 1;
 
 } // namespace
@@ -504,11 +504,11 @@ void NpcPool::save_rows(std::vector<std::uint8_t>& out) const {
         put_f32(out, nd.hpBank);
         put_u8(out, nd.seeded);
         const Inventory& inv = inv_[id];
-        // Save v13 cell: u8 count + u8 condition in the byte the u16 count
-        // held — 4 B per slot either way ([inventory.h], [save.h]).
+        // Save v14 cell: u16 count is back beside the u8 condition — 5 B per
+        // slot; the pad byte never travels ([inventory.h], [save.h]).
         for (int s = 0; s < kInvSlots; ++s) {
             put_u16(out, inv.slots[s].item);
-            put_u8(out, inv.slots[s].count);
+            put_u16(out, inv.slots[s].count);
             put_u8(out, inv.slots[s].condition);
         }
         if (names) {
@@ -574,7 +574,7 @@ bool NpcPool::load_rows(const std::uint8_t* bytes, std::size_t n) {
         Inventory& inv = inv_[id];
         for (int s = 0; s < kInvSlots; ++s) {
             inv.slots[s].item = r.u16();
-            inv.slots[s].count = r.u8();
+            inv.slots[s].count = r.u16();
             inv.slots[s].condition = r.u8();
         }
         if (names) {

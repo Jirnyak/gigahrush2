@@ -6,7 +6,8 @@
 // `data/items.csv` carries ten craft columns on every one of its 442 rows:
 // eight material counts, a station and a tier. All 442 x 8 counts are populated
 // (measured 2026-08-14: 5,589 material units across 442 rows, minimum row total
-// 1, maximum 180, **zero** rows summing to 0). Until this file existed the only
+// 1, maximum 180, **zero** rows summing to 0; +1 unit and row 2026-08-17 — the
+// ruble melts to 1 metal, [item_table.h] kItemRuble). Until this file existed the only
 // mention of any of it anywhere in `src/` was one comment in [item_table.h]
 // reading "craft[9] + station + tier   crafting is not implemented". The content
 // was authored and paid for; the system that reads it did not exist.

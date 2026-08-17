@@ -1856,7 +1856,7 @@ static void test_melee_cooldown_and_reach() {
 static void test_item_table() {
     // 446, not the ~434 items.md and the reference's own desdoc.md both claim, and
     // not the 253 in its balance.md. Compile-time, so it belongs to the build.
-    static_assert(kItemCount == 442, "442 items ([items.md])");
+    static_assert(kItemCount == 443, "442 ported + the ruble ([items.md], [barter])");
     static_assert(kMeleeCount == 22, "22 melee weapons, 21 of them items");
 
     CHECK(kItemTable.size() == kItemCount);
@@ -4262,17 +4262,25 @@ static void test_containers() {
         }
     }
 
-    // A public box is survival support only — never a weapon, never trade goods. That
-    // is what keeps it useful at depth without ever being a jackpot.
+    // A public box is survival support only — never a weapon, never trade goods.
+    // CASH IS survival support: the reference authors "0..120 rub" on this very
+    // kind, so the ruble slot is admitted by name. What stays banned is goods.
+    bool boxCash = false;
     for (std::uint32_t s = 0; s < 200; ++s) {
         const Container c = roll_container(ContainerKind::PublicBox, -50, s * 7919u);
         for (int i = 0; i < kContainerSlots; ++i) {
             if (!item_valid(c.item[i])) continue;
+            if (c.item[i] == kItemRuble) {
+                boxCash = true;
+                CHECK(c.count[i] <= 120);   // flat at every depth, by design
+                continue;
+            }
             const auto cat = static_cast<ItemCategory>(item_def(c.item[i]).category);
             CHECK(cat == ItemCategory::Food || cat == ItemCategory::Drink ||
                   cat == ItemCategory::Medicine || cat == ItemCategory::Ammo);
         }
     }
+    CHECK(boxCash);   // ~199 of 200 rolls carry a nonzero wad; zero of them did before
 
     // A weapon crate carries weapons and ammo and nothing else, or it is just a
     // differently-coloured stash.

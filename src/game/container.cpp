@@ -100,6 +100,38 @@ std::uint32_t build_pool(ContainerKind kind, int floorZ, std::int32_t cap,
     return total;
 }
 
+// CASH — the LAST slot, and only for the civilian kinds. Money is an ordinary
+// item ([item_table.h] kItemRuble), so a box carries it in an ordinary slot:
+// that is what lets the search screen and the coming barter policy move it
+// with the same inventory_give as everything else, no wallet special case.
+//
+// The amounts are the reference's own economics rows ([container.h] header):
+//   * PublicBox — 0..120 rub at EVERY depth. "Survival support only": the
+//     reference keeps public containers low at every tier on purpose, so this
+//     one range is flat rather than band-scaled.
+//   * RoomStash / Safe — 0..their share of the band cap, the same `cap` the
+//     item slots obey, so "deep is richer" prices the cash exactly as it
+//     prices the goods. Clamped to one honest u16 stack.
+//   * WeaponCrate — none: "ammo and access, not free early military kit".
+// The fill loop never reaches slot 3 (fill caps at 3), so the slot is free by
+// construction and cash never evicts a rolled item. Called on BOTH exits of
+// roll_in_room, because a box whose room offers no legal ITEM (the measured
+// corridor PublicBox case) still carries its cash.
+void roll_cash(Container& c, ContainerKind kind, std::int32_t cap,
+               std::uint32_t seed) {
+    if (kind == ContainerKind::WeaponCrate) return;
+    const std::uint32_t hc = giga::hash_u32(seed ^ 0xCA5B0117u);
+    std::int32_t cash = static_cast<std::int32_t>(
+        hc % static_cast<std::uint32_t>(cap + 1));
+    if (kind == ContainerKind::PublicBox)
+        cash = static_cast<std::int32_t>(hc % 121u);
+    if (cash > 65535) cash = 65535;
+    if (cash > 0) {
+        c.item[kContainerSlots - 1] = kItemRuble;
+        c.count[kContainerSlots - 1] = static_cast<std::uint16_t>(cash);
+    }
+}
+
 // Roll one container's contents against a specific ROOM.
 //
 // **The fallback is the whole difficulty of this function, and it is measured.**
@@ -141,7 +173,10 @@ Container roll_in_room(ContainerKind kind, int floorZ, std::uint32_t seed,
         cum.clear();
         total = build_pool(kind, floorZ, cap, 0, pool, cum);
     }
-    if (total == 0) return c;   // nothing legal here; an empty container is honest
+    if (total == 0) {           // no legal item here; the cash still rides
+        roll_cash(c, kind, cap, seed);
+        return c;
+    }
 
     // How many slots this kind fills. A safe holds fewer, better things.
     const std::uint32_t h0 = giga::hash_u32(seed);
@@ -190,10 +225,10 @@ Container roll_in_room(ContainerKind kind, int floorZ, std::uint32_t seed,
             }
         }
         if (ammo != kInvalidItem) {
-            const std::uint8_t st = item_def(ammo).stackMax;
+            const std::uint16_t st = item_def(ammo).stackMax;
             const std::uint32_t n = 8u + (giga::hash_u32(seed ^ 0xA11A0u) % 16u);
             c.item[0] = ammo;
-            c.count[0] = static_cast<std::uint8_t>(n > st ? st : n);
+            c.count[0] = static_cast<std::uint16_t>(n > st ? st : n);
             firstSlot = 1;
         }
     }
@@ -208,13 +243,15 @@ Container roll_in_room(ContainerKind kind, int floorZ, std::uint32_t seed,
             if (cum[mid] <= r) lo = mid + 1; else hi = mid;
         }
         const ItemId id = pool[lo];
-        const std::uint8_t stack = item_def(id).stackMax;
+        const std::uint16_t stack = item_def(id).stackMax;
         // Consumables and ammo come in useful numbers; anything else comes as one.
         std::uint32_t n = 1;
         if (stack > 1) n = 1u + ((h >> 8) % (stack < 12u ? stack : 12u));
         c.item[i] = id;
-        c.count[i] = static_cast<std::uint8_t>(n);
+        c.count[i] = static_cast<std::uint16_t>(n);
     }
+
+    roll_cash(c, kind, cap, seed);
     return c;
 }
 
@@ -371,7 +408,7 @@ std::int32_t loot_containers_step(Registry& reg, NpcPool& pool, LayerId layer,
                 static_cast<std::uint16_t>(c.count[i] - unplaced);
             if (moved == 0) break;  // full: the rest stays in the box
             took += item_def(c.item[i]).value * moved;
-            c.count[i] = static_cast<std::uint8_t>(unplaced);
+            c.count[i] = unplaced;
             if (c.count[i] == 0) c.item[i] = kInvalidItem;
             anyMoved = true;
         }

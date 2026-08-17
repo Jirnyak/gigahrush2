@@ -142,7 +142,7 @@ std::uint32_t vendor_buy(Inventory& inv, RunLedger& led, ItemId id,
                          std::uint32_t count) {
     const std::int32_t unit = vendor_buy_price(id);
     if (unit <= 0 || count == 0) return 0;
-    const std::uint8_t stack = item_def(id).stackMax;
+    const std::uint16_t stack = item_def(id).stackMax;
 
     std::uint32_t bought = 0;
     while (bought < count) {

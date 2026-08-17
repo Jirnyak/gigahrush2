@@ -256,11 +256,13 @@ void visit_needs(Ar& ar, N& n) {
 
 template <class Ar, class I>
 void visit_inventory(Ar& ar, I& inv) {
-    // Still 4 B per slot, still 256 B per grid ([inventory.h]) — the u16 count
-    // split into u8 count + u8 condition is version 13's format change.
+    // Version 14: 5 B per slot — the count went back to u16 for the ruble's
+    // 65535 stack, and condition kept its byte, so this time the width is paid
+    // on the wire instead of traded ([inventory.h]). The struct's pad byte
+    // never travels.
     for (int i = 0; i < kInvSlots; ++i) {
         ar.u16(inv.slots[i].item);
-        ar.u8(inv.slots[i].count);
+        ar.u16(inv.slots[i].count);
         ar.u8(inv.slots[i].condition);
     }
 }
@@ -420,7 +422,7 @@ static_assert(sizeof(SaveHeader) == kSaveHeaderWire,
 static_assert(kLedgerWire == 8 + 8 + 4 + 4 + 4 + 4 + 1);
 static_assert(kContractWire == 4 + 2 + 4 + 4 + 4 + 1 + 1 + 1);
 static_assert(kNeedsWire == 9 * 4 + 1);
-static_assert(kInventoryWire == 64 * 4);
+static_assert(kInventoryWire == 64 * 5);  // v14: item u16 + count u16 + condition u8
 // kSaveFixedWire: ledger+book+player + v7 rpg(12)+craft(89) + v8 combat(21)
 // + v9 status(42) + v10 samosbor(17)+fastTravel(32) + quest log.
 //
@@ -443,11 +445,11 @@ static_assert(FastTravelState::wire_bytes() == kFastTravelWire);
 // 927 is ALSO the number v10 asserted before hpBank existed. Same integer, two
 // different formats (v10: nine craft axes, no hpBank; v12: eight axes, hpBank) —
 // the version field is what tells them apart, not this sum.
-static_assert(kSaveFixedWire == 882 + kSamosborWire + kFastTravelWire);  // 931 (v13: +4 Equipped)
-static_assert(kSaveFixedWire == 931);
+static_assert(kSaveFixedWire == 946 + kSamosborWire + kFastTravelWire);  // 995 (v14: +64 inventory)
+static_assert(kSaveFixedWire == 995);
 static_assert(kFactionWire == 36);
-static_assert(save_bytes_for(0) == 1031);  // v13: +4 player Equipped cells
-static_assert(save_bytes_for(0, 100, 50) == 1031 + 150);
+static_assert(save_bytes_for(0) == 1095);  // v14: inventory slots are 5 B
+static_assert(save_bytes_for(0, 100, 50) == 1095 + 150);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two
@@ -458,7 +460,7 @@ static_assert(save_bytes_for(0, 100, 50) == 1031 + 150);
 static_assert(sizeof(ContractBook) == 88,
               "ContractBook is serialized; grow it and bump kSaveVersion in the same "
               "edit");
-static_assert(sizeof(Inventory) == 256, "the 8x8 grid is 64 x 4 B ([inventory.h])");
+static_assert(sizeof(Inventory) == 384, "the 8x8 grid is 64 x 6 B ([inventory.h])");
 
 void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     // Payload first: the header carries the payload's length and checksum, so it cannot
