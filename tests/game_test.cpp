@@ -2907,6 +2907,29 @@ static void test_footsteps_from_physics() {
     }
     run(200);
     CHECK(nf.live() == 0);
+
+    // Каденция — физика, не константа ([encumbrance.h] footstep_period_ticks,
+    // чистая функция): частота = скорость / (доля роста). Владелец, 2026-08-17:
+    // «частота шагов зависит от скорости и обратно от роста — невысокие семенят».
+    {
+        const std::uint32_t walk = footstep_period_ticks(2.0f, 1750, kSimDt);
+        CHECK(walk >= 26 && walk <= 30); // калибровка: обкатанные ~224 мс
+        CHECK(footstep_period_ticks(6.0f, 1750, kSimDt) < walk);  // бег частит
+        CHECK(footstep_period_ticks(2.0f, 1300, kSimDt) < walk);  // семенит
+        CHECK(footstep_period_ticks(50.0f, 1750, kSimDt) == kFootstepPeriodMin);
+        CHECK(footstep_period_ticks(0.0f, 1750, kSimDt) == kFootstepPeriodMax);
+    }
+    // И через реальный паблишер: то же тело втрое быстрее — заметно чаще.
+    noise_clear(nf);
+    pool.height_mm(0) = 1700;
+    reg.emplace_or_replace<Velocity>(bodies[0], Velocity{vec3{2.0f, 0.0f, 0.0f}});
+    run(300);
+    const int slowSteps = steps_of(0);
+    CHECK(slowSteps >= 1);
+    noise_clear(nf);
+    reg.emplace_or_replace<Velocity>(bodies[0], Velocity{vec3{6.0f, 0.0f, 0.0f}});
+    run(400);
+    CHECK(steps_of(0) > slowSteps);
 }
 
 // Трение воздуха на снаряде: projectile_step применяет ТОТ ЖЕ закон, что

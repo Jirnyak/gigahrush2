@@ -1,5 +1,7 @@
 #include "game/encumbrance.h"
 
+#include <cmath>             // sqrt — скорость для каденции шага
+
 #include "core/rng.h"        // hash_u32 — the identity stagger
 #include "ecs/components.h"  // Mass, Transform, CameraTag
 #include "game/embody.h"     // NpcRef, body_mass_kg
@@ -111,8 +113,10 @@ EncumbranceTick encumbrance_step(Registry& reg, NpcPool& pool, LayerId layer,
         //     noclip немы по построению;
         //   * скорость > 0.5 м/с — сидящие и стоящие тихи. Полная 3D: под
         //     боковым режимом «пол» вертикален, grounded это уже знает.
-        // Каденция: раз в kFootstepPeriodTicks (224 мс — обкатанный шаг
-        // игрока), фаза — identity-hash. `< interval`, а не `== 0`, потому
+        // Каденция — ФИЗИКА, не константа ([encumbrance.h]
+        // footstep_period_ticks): частота = скорость / (kStepStrideOfHeight *
+        // рост) — бегущий частит, невысокий семенит, из тех же чисел, что
+        // масса тела. Фаза — identity-hash; `< interval`, а не `== 0`, потому
         // что толпа ВИЗИТИТСЯ раз в kEncumbrancePeriod тиков и точку `== 0`
         // почти всегда пропускает — старый гейт `(tick&7)==(id&7)` поверх
         // визитного `hash%8` именно так и промахивался: два независимых
@@ -123,12 +127,15 @@ EncumbranceTick encumbrance_step(Registry& reg, NpcPool& pool, LayerId layer,
             const auto* vel = reg.try_get<Velocity>(e);
             const float v2 = vel ? dot(vel->v, vel->v) : 0.0f;
             const std::uint32_t interval = camera ? 1u : kEncumbrancePeriod;
-            if (g && g->grounded && v2 > 0.25f &&
-                (tick + hash_u32(id)) % kFootstepPeriodTicks < interval) {
-                NoiseProfile np{6.0f * eff.noiseMult, 400, 1,
-                                NoiseSource::Footstep};
-                noise_publish(*noiseField, layer,
-                              view.get<const Transform>(e).pos, np, id);
+            if (g && g->grounded && v2 > 0.25f) {
+                const std::uint32_t period = footstep_period_ticks(
+                    std::sqrt(v2), pool.height_mm(id), dt);
+                if ((tick + hash_u32(id)) % period < interval) {
+                    NoiseProfile np{6.0f * eff.noiseMult, 400, 1,
+                                    NoiseSource::Footstep};
+                    noise_publish(*noiseField, layer,
+                                  view.get<const Transform>(e).pos, np, id);
+                }
             }
         }
     }

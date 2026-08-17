@@ -1007,7 +1007,7 @@ if(GIGA_BUILD_TESTS)
     # окклюзия. Сьюта форка ПРОРЕЖЕНА: его 295k пер-сэмпловых NaN-ассертов
     # схлопнуты в аккумуляторы (один CHECK на цикл) — ратчет счётчика чеков
     # не должен обесцениваться буфером на 48k сэмплов. Mutation RUN: см. коммит.
-        PASS_REGULAR_EXPRESSION "game_test: 240577 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "game_test: 240584 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

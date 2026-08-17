@@ -79,10 +79,33 @@ inline constexpr float kOverloadSleepDrainPerSec = 0.10f;
 // punished for the strength it paid for.
 inline constexpr float kNoiseLoadGain = 0.6f;
 
-// Период шага (тики, 224 мс на 125 Гц) — каденция, обкатанная на игроке до
-// объединения закона. ОДИН для всех тел: игрок = NPC, шаги — производная
-// физики (grounded + скорость), не ввода — см. encumbrance.cpp.
-inline constexpr std::uint32_t kFootstepPeriodTicks = 28;
+// КАДЕНЦИЯ ШАГА — физика, не константа (владелец, 2026-08-17): частота =
+// скорость / длина шага, длина шага = kStepStrideOfHeight * рост. Невысокие
+// семенят, бегущие частят — одна формула на все тела, ноль таблиц (тот же
+// приём, что drag_q у трения). 0.26 калиброван так, что рост 1.75 м на
+// ходьбе 2 м/с даёт обкатанные ~224 мс между шагами.
+inline constexpr float kStepStrideOfHeight = 0.26f;
+
+// Каденция в тиках из скорости и роста. Клампы: снизу kEncumbrancePeriod —
+// период короче визитного стаггера толпы публиковал бы шаг КАЖДЫЙ визит
+// (см. `< interval` в encumbrance.cpp); сверху секунда — реже уже не ритм
+// шагов, а одиночные скрипы, и модульная фаза почти не находила бы окно.
+inline constexpr std::uint32_t kFootstepPeriodMin = 8;    // = kEncumbrancePeriod
+inline constexpr std::uint32_t kFootstepPeriodMax = 125;  // 1 с на 125 Гц
+
+inline std::uint32_t footstep_period_ticks(float speedMps,
+                                           std::uint16_t heightMm,
+                                           float simDt) {
+    const float stride =
+        kStepStrideOfHeight * static_cast<float>(heightMm) * 0.001f;
+    if (speedMps <= 0.01f || simDt <= 0.0f) return kFootstepPeriodMax;
+    const float ticks = stride / (speedMps * simDt);
+    if (ticks <= static_cast<float>(kFootstepPeriodMin))
+        return kFootstepPeriodMin;
+    if (ticks >= static_cast<float>(kFootstepPeriodMax))
+        return kFootstepPeriodMax;
+    return static_cast<std::uint32_t>(ticks);
+}
 
 // What one body's load costs it. All three numbers are pure functions of
 // (carried, capacity) so they can be unit-tested without a registry.
