@@ -141,7 +141,13 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // condition into one u16, so version 12 saves are rejected, same standing
 // rule. Pool rows carry the same cell and change in the same stroke
 // ([npc_pool.cpp] save_rows/load_rows).
-inline constexpr std::uint32_t kSaveVersion = 13u;
+// Version 14: the count goes back to u16 — beside condition this time, so the
+// slot is 5 B on the wire (+64 per grid) — because the RUBLE landed in
+// items.csv and money-as-item needs the honest u16 stack ([inventory.h],
+// [item_table.h] kItemRuble). items.csv also grew its row (442 -> 443), so a
+// v13 save is doubly dead: the fingerprint gate catches the id shift and the
+// version gate catches the width. Pool rows change in the same stroke, again.
+inline constexpr std::uint32_t kSaveVersion = 14u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -251,7 +257,8 @@ inline constexpr std::size_t kContractWire = 21;     // 4 + 2 + 3x4 + 3   (pad_ 
 inline constexpr std::size_t kBookWire =
     static_cast<std::size_t>(kMaxContracts) * kContractWire + 4 + 4 + 8;
 inline constexpr std::size_t kNeedsWire = 37;        // 9 floats + seeded (v11: +hpBank)
-inline constexpr std::size_t kInventoryWire = static_cast<std::size_t>(kInvSlots) * 4;
+// v14: item u16 + count u16 + condition u8 = 5 B per slot; the pad byte stays home.
+inline constexpr std::size_t kInventoryWire = static_cast<std::size_t>(kInvSlots) * 5;
 inline constexpr std::size_t kPlayerWire =
     kNeedsWire + kInventoryWire + 4 + 4 + 4 + 3 + 4;  // +4: Equipped cells (v13)
 // Version 7: RpgStats wire — field-by-field LE, NOT sizeof (pad_ is written so the
@@ -295,7 +302,9 @@ inline constexpr std::size_t kSaveFixedWire =
 // is four times that.
 inline constexpr std::uint32_t kMaxOpenedKeys = 65536u;
 // Ceilings for the v6 blobs, again before the CRC has vouched: the pool's honest
-// worst case is 2^20 rows x ~364 B ≈ 382 MB; macro state is a fraction of that.
+// worst case is 2^20 rows x 385 B wire (433 with names, [npc_pool.cpp]
+// kPoolRowWire — v14's 5 B slots put it there) ≈ 454 MB; macro state is a
+// fraction of that. 512 MB still clears it, with ~13% headroom instead of ~34%.
 inline constexpr std::uint32_t kMaxPoolBytes = 512u * 1024u * 1024u;
 inline constexpr std::uint32_t kMaxMacroBytes = 64u * 1024u * 1024u;
 // The faction matrix rides fixed-size: 36 signed bytes ([faction_relations.h]).

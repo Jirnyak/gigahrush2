@@ -586,8 +586,10 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
                         return count;
                     ItemSlot& ls = corpse.lootSlots[corpse.slotCount++];
                     ls.item = id;
-                    // Addition law ([inventory.h]): clamp before the u8 store.
-                    ls.count = static_cast<std::uint8_t>(count > 0xFFu ? 0xFFu : count);
+                    // Addition law ([inventory.h]): the u16 cell holds any legal
+                    // shrapnel count; clamp to the item's own stack cap.
+                    const std::uint16_t cap = item_def(id).stackMax;
+                    ls.count = cap && count > cap ? cap : count;
                     return 0;
                 };
                 auto push_cell_containers = [&](ItemId id, std::uint16_t count) -> std::uint16_t {
@@ -602,21 +604,24 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
                         const int cz = wrap_macro(static_cast<int>(std::floor(ct.pos.z / cs)));
                         if (cx != bx || cy != by || cz != bz) continue;
                         Container& c = reg.get<Container>(ce);
-                        // Container::count is uint8_t (stack cap 255 per cell slot).
+                        // Container::count is u16 like the bag cell; the slot's
+                        // ceiling is the item's own stackMax ([inventory.h]).
+                        const std::uint16_t cap = item_def(id).stackMax;
+                        const std::uint16_t lim = cap ? cap : 1;
                         for (std::uint8_t si = 0; si < kContainerSlots && left > 0; ++si) {
                             if (c.item[si] != id || c.count[si] == 0) continue;
+                            if (c.count[si] >= lim) continue;
                             const std::uint16_t room =
-                                static_cast<std::uint16_t>(255u - c.count[si]);
-                            if (room == 0) continue;
+                                static_cast<std::uint16_t>(lim - c.count[si]);
                             const std::uint16_t take = left < room ? left : room;
-                            c.count[si] = static_cast<std::uint8_t>(c.count[si] + take);
+                            c.count[si] = static_cast<std::uint16_t>(c.count[si] + take);
                             left = static_cast<std::uint16_t>(left - take);
                         }
                         for (std::uint8_t si = 0; si < kContainerSlots && left > 0; ++si) {
                             if (c.item[si] != kInvalidItem && c.count[si] != 0) continue;
                             c.item[si] = id;
-                            const std::uint16_t put = left < 255u ? left : static_cast<std::uint16_t>(255);
-                            c.count[si] = static_cast<std::uint8_t>(put);
+                            const std::uint16_t put = left < lim ? left : lim;
+                            c.count[si] = put;
                             left = static_cast<std::uint16_t>(left - put);
                         }
 

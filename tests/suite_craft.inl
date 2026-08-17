@@ -15,7 +15,7 @@
 // stop doing:
 //
 //   442    recipes, one per item id (kCraftRecipeCount == kItemCount)
-//   5,589  authored material units in total, minimum row 1, maximum row 180
+//   5,590  authored material units in total, minimum row 1, maximum row 180
 //   0      rows summing to zero (the generator refuses to emit one)
 //   70     largest single authored axis (gravity_beam_emitter, electronics)
 //   896 / 456 / 1103 / 388 / 794 / 958 / 749 / 245   per-axis sums
@@ -159,7 +159,7 @@ static void test_craft_all() {
             if (r.flags & kCraftDiscoverable) ++discoverable;
         }
 
-        CHECK(total == 5589u);
+        CHECK(total == 5590u);   // 5,589 ported + the ruble's 1 metal (melt value)
         CHECK(zeroRows == 0);           // craft_disassemble's modulo depends on this
         CHECK(minRow == 1u);
         CHECK(maxRow == 180u);
@@ -169,15 +169,15 @@ static void test_craft_all() {
         CHECK(axis[2] == 1103u);
         CHECK(axis[3] == 388u);
         CHECK(axis[4] == 794u);
-        CHECK(axis[5] == 958u);
+        CHECK(axis[5] == 959u);   // metal: 958 + the ruble's melt unit
         CHECK(axis[6] == 749u);   // psimatter
         CHECK(axis[7] == 245u);   // metamatter
-        CHECK(tierHist[0] == 228);
+        CHECK(tierHist[0] == 229);   // +ruble, tier 0
         CHECK(tierHist[1] == 135);
         CHECK(tierHist[2] == 51);
         CHECK(tierHist[3] == 17);
         CHECK(tierHist[4] == 11);
-        CHECK(stationHist[static_cast<std::size_t>(CraftStation::Any)] == 22);
+        CHECK(stationHist[static_cast<std::size_t>(CraftStation::Any)] == 23);  // +ruble
         CHECK(stationHist[static_cast<std::size_t>(CraftStation::Workbench)] == 235);
         CHECK(stationHist[static_cast<std::size_t>(CraftStation::Lathe)] == 90);
         CHECK(stationHist[static_cast<std::size_t>(CraftStation::Lab)] == 77);
@@ -387,7 +387,7 @@ static void test_craft_all() {
             }
         }
         CHECK(offVector == 0u);
-        CHECK(compTotal == 5589u);
+        CHECK(compTotal == 5590u);   // +the ruble's 1 metal
         CHECK(yieldTotal == static_cast<std::uint32_t>(kCraftRecipeCount));
 
         // THE RATIO, asserted rather than described. Disassembling one of every item

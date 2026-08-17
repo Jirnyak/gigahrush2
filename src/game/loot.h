@@ -76,7 +76,9 @@ namespace giga::game {
 // it renders through the existing body pass with no new render code.
 struct Pickup {
     ItemId item = kInvalidItem;
-    std::uint8_t count = 1;
+    // u16 like every other count ([inventory.h]): a dropped ruble stack is a
+    // pickup too, and money outgrew the byte.
+    std::uint16_t count = 1;
     // The instance's wear rides the floor with it ([inventory.h] condition):
     // a dropped ruined tool is still ruined when swept back up. 255 default
     // keeps every existing aggregate-init spawner minting fresh.

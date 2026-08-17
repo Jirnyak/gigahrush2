@@ -184,7 +184,7 @@ float band_drop_scale(ItemId id, int floorZ);
 // One substituted drop, or nothing.
 struct KindDrop {
     ItemId item = kInvalidItem;
-    std::uint8_t count = 0;
+    std::uint16_t count = 0;   // u16 like the cell it lands in ([inventory.h])
 };
 
 // Roll `kind`'s authored drop for ONE of `drop_mob_loot`'s rolls. Deterministic in
