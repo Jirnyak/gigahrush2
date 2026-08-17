@@ -98,7 +98,7 @@
 //                          BEFORE streamer.travel and apply AFTER the respawn, loot
 //                          -> elevator -> return refills every emptied box. Both
 //                          travel sites (keyboard [ ] and --shot) now call
-//                          refresh_opened_containers / apply_opened_containers the
+//                          refresh_floor_records / apply_container_records the
 //                          same way F5/F9 already did. This pin is the destroy+
 //                          respawn seam those sites share — no entity id in the key.
 //  10. travel_arrival_not_in_wall
@@ -968,21 +968,23 @@ static void budget_vs_demo_cap() {
 }
 
 // ---------------------------------------------------------------------------
-// PIN (green): travel destroy+respawn keeps looted crates empty
+// PIN (green): travel destroy+respawn keeps crate CONTENTS (v15 records)
 // ---------------------------------------------------------------------------
 // main.cpp refresh_floor_containers tears down every Container on the arrival layer and
 // re-rolls spawn_floor_containers with seed 0xC0FFEE ^ floor*0x9e3779b9. That is correct
-// for a first visit. A RETURN visit must re-empty crates whose OpenedContainerKey was
-// captured on the way out — otherwise loot → elevator → return is a free refill.
+// for a first visit. A RETURN visit must stamp back the recorded state — otherwise
+// loot -> elevator -> return is a free refill, and (v15, the stronger half) a partial
+// take or a DEPOSIT would be silently rolled away.
 //
-// The keyboard [ ] path and the --shot ride path both do:
-//   refresh_opened_containers(leaveLayer, floor)   // BEFORE streamer.travel
+// All travel paths and the save do:
+//   refresh_floor_records(leaveLayer, floor)          // BEFORE streamer.travel
 //   ... travel + refresh_floor_containers ...
-//   apply_opened_containers(nl, floor, keys)       // AFTER respawn
-// This pin is that seam without the streamer: spawn → open → capture → destroy →
-// respawn same seed → apply → assert empty. saveload's opened_crates_survive_a_restart
+//   apply_container_records(nl, floor, recs)          // AFTER respawn
+//   spawn_corpse_records(nl, floor, recs)
+// This pin is that seam without the streamer: spawn -> mutate -> capture -> destroy ->
+// respawn same seed -> apply -> assert stamped. saveload's floor_records_survive_a_restart
 // covers the F5/F9 byte round-trip; this one covers the in-memory travel path.
-static void travel_keeps_opened_crates() {
+static void travel_keeps_crate_records() {
     World w;
     const int floorZ = -3;
     const FloorKind kind = FloorKind::Residential;
@@ -998,28 +1000,39 @@ static void travel_keeps_opened_crates() {
     CHECK(made > 4u);
 
     int openedByHand = 0;
+    int deposits = 0;
     int i = 0;
     for (auto e : reg.view<Container, const Transform>()) {
-        if ((i++ % 3) != 0) continue;
         Container& c = reg.get<Container>(e);
-        for (int s = 0; s < kContainerSlots; ++s) {
-            c.item[s] = kInvalidItem;
-            c.count[s] = 0;
+        if ((i % 3) == 0) {
+            for (int s = 0; s < kContainerSlots; ++s) {
+                c.item[s] = kInvalidItem;
+                c.count[s] = 0;
+            }
+            c.opened = true;
+            ++openedByHand;
+        } else if ((i % 5) == 0) {
+            c.item[0] = 40;   // deposit: worn bandages, the state a key could not carry
+            c.count[0] = 3;
+            c.condition[0] = 77;
+            ++deposits;
         }
-        c.opened = true;
-        ++openedByHand;
+        ++i;
     }
     CHECK(openedByHand > 1);
+    CHECK(deposits > 0);
 
-    std::vector<OpenedContainerKey> opened;
-    // Foreign-floor key must survive a floor-scoped refresh (travel only rewrites the
-    // floor being left).
-    opened.push_back(OpenedContainerKey{2, 66, 66, 1, 0});
+    std::vector<ContainerRecord> boxes;
+    std::vector<CorpseRecord> corpses;
+    // Foreign-floor record must survive a floor-scoped refresh (travel only rewrites
+    // the floor being left).
+    boxes.push_back(ContainerRecord{OpenedContainerKey{2, 66, 66, 1, 0}, {}});
     const std::size_t fromFloor =
-        refresh_opened_containers(reg, layer, floorZ, opened);
-    CHECK(fromFloor == static_cast<std::size_t>(openedByHand));
-    CHECK(opened.size() == 1u + fromFloor);
-    CHECK(opened[0].floor == 2);
+        refresh_floor_records(reg, layer, floorZ, boxes, corpses);
+    CHECK(fromFloor == static_cast<std::size_t>(made));   // every crate, no corpse
+    CHECK(boxes.size() == 1u + made);
+    CHECK(boxes[0].key.floor == 2);
+    CHECK(corpses.empty());
 
     // Tear down — the streamer recycles LayerId; refresh_floor_containers does this.
     std::vector<Entity> dead;
@@ -1033,21 +1046,24 @@ static void travel_keeps_opened_crates() {
     CHECK(remade == made);
 
     // Without apply, every remade crate is full again — the refill bug.
-    const std::size_t hits = apply_opened_containers(
-        reg, layer, floorZ, opened.data(), opened.size());
-    CHECK(hits >= static_cast<std::size_t>(openedByHand));
+    const std::size_t hits = apply_container_records(
+        reg, layer, floorZ, boxes.data(), boxes.size());
+    CHECK(hits == static_cast<std::size_t>(made));   // every crate has a record
 
-    std::size_t openNow = 0;
+    std::size_t openNow = 0, depositNow = 0;
     for (auto e : reg.view<const Container, const Transform>()) {
         const Transform& t = reg.get<const Transform>(e);
         if (t.layer != layer) continue;
         const Container& c = reg.get<const Container>(e);
-        if (!c.opened) continue;
-        ++openNow;
-        for (int s = 0; s < kContainerSlots; ++s) CHECK(c.item[s] == kInvalidItem);
+        if (c.opened) {
+            ++openNow;
+            for (int s = 0; s < kContainerSlots; ++s)
+                CHECK(c.item[s] == kInvalidItem);
+        }
+        if (c.item[0] == 40 && c.count[0] == 3 && c.condition[0] == 77) ++depositNow;
     }
     CHECK(openNow >= static_cast<std::size_t>(openedByHand));
-    CHECK(hits == openNow);
+    CHECK(depositNow >= static_cast<std::size_t>(deposits));   // вклад пережил рейс
 }
 
 // ---------------------------------------------------------------------------
@@ -1161,7 +1177,7 @@ static void test_audit_all() {
     audit_test::hunt_is_findable();
     audit_test::stack_max_respected();
     audit_test::budget_vs_demo_cap();
-    audit_test::travel_keeps_opened_crates();
+    audit_test::travel_keeps_crate_records();
     audit_test::travel_arrival_not_in_wall();
 }
 

@@ -2483,8 +2483,10 @@ int main(int argc, char** argv) {
         // discovered ([problems.md] §43). [samosbor.h] [fast_travel.h]
         runState.samosbor = samosbor;
         runState.fastTravel = fastTravel;
-        // REFRESH, not append and not clear. [save.h]
-        game::refresh_opened_containers(reg, pl, currentFloor, runState.opened);
+        // REFRESH, not append and not clear. v15: whole crates AND corpses,
+        // contents included — the search screen made both mutable stores. [save.h]
+        game::refresh_floor_records(reg, pl, currentFloor, runState.containers,
+                                    runState.corpses);
         // v6: the macro world travels whole — pool table, macro clock, faction
         // matrix. The society you come back to is the one you left. [save.h]
         pool.save_rows(runState.poolBlob);
@@ -2529,8 +2531,8 @@ int main(int argc, char** argv) {
             const LayerId leaveLayer = reg.valid(player)
                                            ? reg.get<Transform>(player).layer
                                            : static_cast<LayerId>(0);
-            game::refresh_opened_containers(reg, leaveLayer, currentFloor,
-                                            runState.opened);
+            game::refresh_floor_records(reg, leaveLayer, currentFloor,
+                                         runState.containers, runState.corpses);
             // The departing floor's exact grid goes to its own file — this is
             // THE geometry persistence: the next visit (or the next run)
             // stamps it back. A transition is a load screen; I/O is
@@ -2616,12 +2618,15 @@ int main(int argc, char** argv) {
         refresh_floor_containers(reg, stack.layer(nl), currentFloor, nl);
         refresh_floor_props(reg, stack.layer(nl), currentFloor, nl,
                            streamer.floor_seed_of(registry, currentFloor), bus);
-        // Re-empty crates already looted on a prior visit to this floor.
-        // Deterministic spawn would otherwise refill them — the brick this pair
-        // closes. Same seam as F9 apply. [save.h]
-        game::apply_opened_containers(reg, nl, currentFloor,
-                                       runState.opened.data(),
-                                       runState.opened.size());
+        // Stamp recorded state over the deterministic respawn: a half-taken
+        // crate comes back half-taken, a deposit is still inside, and the
+        // floor's corpses lie where they fell. Same seam as F9 apply. [save.h]
+        game::apply_container_records(reg, nl, currentFloor,
+                                      runState.containers.data(),
+                                      runState.containers.size());
+        game::spawn_corpse_records(reg, nl, currentFloor,
+                                   runState.corpses.data(),
+                                   runState.corpses.size());
         // (The floor's own file is restored INSIDE ensure_loaded now — before the
         //  dressing bake and the props, not after them. [problems.md] §42)
         // Doors before the bake, frozen for its duration. [door.h]
@@ -4584,7 +4589,8 @@ int main(int argc, char** argv) {
                                       "saved: floor %d, %u rub, %u crates",
                                       currentFloor,
                                       static_cast<unsigned>(ledger.banked),
-                                      static_cast<unsigned>(runState.opened.size()));
+                                      static_cast<unsigned>(
+                                          runState.containers.size()));
                     else {
                         char runPath[128];
                         run_save_path(runPath, sizeof runPath);
@@ -4750,10 +4756,14 @@ int main(int argc, char** argv) {
                             refresh_floor_containers(reg, stack.layer(nl),
                                                      currentFloor, nl);
                             const std::size_t reopened =
-                                game::apply_opened_containers(
+                                game::apply_container_records(
                                     reg, nl, currentFloor,
-                                    runState.opened.data(),
-                                    runState.opened.size());
+                                    runState.containers.data(),
+                                    runState.containers.size());
+                            game::spawn_corpse_records(
+                                reg, nl, currentFloor,
+                                runState.corpses.data(),
+                                runState.corpses.size());
                             refresh_floor_mobs(reg, stack.layer(nl), currentFloor,
                                                nl);
                             refresh_floor_props(
@@ -6810,8 +6820,9 @@ int main(int argc, char** argv) {
                         const LayerId leaveLayer =
                             reg.valid(player) ? reg.get<Transform>(player).layer
                                               : static_cast<LayerId>(0);
-                        game::refresh_opened_containers(reg, leaveLayer, currentFloor,
-                                                        runState.opened);
+                        game::refresh_floor_records(reg, leaveLayer, currentFloor,
+                                                    runState.containers,
+                                                    runState.corpses);
                         // Same departure floor-file write as the keyboard
                         // path — two travel sites, one law. [save.h]
                         write_floor_file(stack.layer(leaveLayer), currentFloor);
@@ -6869,11 +6880,14 @@ int main(int argc, char** argv) {
                         refresh_floor_props(
                             reg, stack.layer(nl), currentFloor, nl,
                             streamer.floor_seed_of(registry, currentFloor), bus);
-                        // Re-empty crates already looted on a prior visit.
+                        // Stamp recorded crate/corpse state over the respawn.
                         // Same seam as keyboard ride + F9 apply. [save.h]
-                        game::apply_opened_containers(
-                            reg, nl, currentFloor, runState.opened.data(),
-                            runState.opened.size());
+                        game::apply_container_records(
+                            reg, nl, currentFloor, runState.containers.data(),
+                            runState.containers.size());
+                        game::spawn_corpse_records(
+                            reg, nl, currentFloor, runState.corpses.data(),
+                            runState.corpses.size());
                         // Arrival floor file BEFORE doors, then doors before
                         // the bake, frozen for its duration — the same law as
                         // the keyboard ride path. This is the SECOND travel

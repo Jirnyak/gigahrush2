@@ -183,11 +183,42 @@ SaveState busy_run() {
     st.status.intensityE3[3] = 1500u;
     st.status.alt[1] = 1u;
 
-    // Two floors' worth of emptied crates, one of them below the hub — the negative
+    // Two floors' worth of crates, one of them below the hub — the negative
     // floor is the case a `std::uint16_t` floor column could not express at all.
-    st.opened.push_back(OpenedContainerKey{-3, 18, 42, 1, 0});
-    st.opened.push_back(OpenedContainerKey{-3, 114, 6, 1, 0});
-    st.opened.push_back(OpenedContainerKey{2, 66, 66, 1, 0});
+    // v15: records carry CONTENTS, so give them some — a half-taken stack with
+    // wear, an emptied opened box, and a deposit — the exact states the search
+    // screen produces and the old opened-key list could not express.
+    {
+        ContainerRecord r1;
+        r1.key = OpenedContainerKey{-3, 18, 42, 1, 0};
+        r1.c.kind = 1;
+        r1.c.item[0] = 40;         // bandage, half-taken, worn
+        r1.c.count[0] = 3;
+        r1.c.condition[0] = 128;
+        r1.c.item[3] = kItemRuble; // the cash slot, partially spent
+        r1.c.count[3] = 12345;     // needs the u16 — the whole point of v14
+        st.containers.push_back(r1);
+        ContainerRecord r2;
+        r2.key = OpenedContainerKey{-3, 114, 6, 1, 0};
+        r2.c.opened = true;        // emptied: all slots zero, flag set
+        st.containers.push_back(r2);
+        ContainerRecord r3;
+        r3.key = OpenedContainerKey{2, 66, 66, 1, 0};
+        r3.c.item[1] = 121;        // a deposit the player made
+        r3.c.count[1] = 2;
+        st.containers.push_back(r3);
+        CorpseRecord cr;
+        cr.floor = -3;
+        cr.pos = vec3{81.3f, 43.7f, 2.45f};
+        cr.colour = vec3{0.2f, 0.1f, 0.1f};
+        cr.half = vec3{0.4f, 0.18f, 0.6f};
+        cr.mobKind = 7;
+        cr.slotCount = 2;
+        cr.searched = 0;
+        cr.slots[0] = ItemSlot{40, 2, 200};
+        cr.slots[1] = ItemSlot{kItemRuble, 650, 255};
+        st.corpses.push_back(cr);
+    }
 
     // Version 6: a matrix that has drifted from base — a grudge the save must
     // remember. (The pool/macro blobs stay empty here so the wire pins stay
@@ -289,10 +320,40 @@ void same_run(const SaveState& a, const SaveState& b) {
         CHECK(a.status.alt[i] == b.status.alt[i]);
     }
 
-    CHECK(a.opened.size() == b.opened.size());
-    const std::size_t nk = a.opened.size() < b.opened.size() ? a.opened.size()
-                                                             : b.opened.size();
-    for (std::size_t i = 0; i < nk; ++i) CHECK(same_container(a.opened[i], b.opened[i]));
+    CHECK(a.containers.size() == b.containers.size());
+    const std::size_t nk = a.containers.size() < b.containers.size()
+                               ? a.containers.size()
+                               : b.containers.size();
+    for (std::size_t i = 0; i < nk; ++i) {
+        CHECK(same_container(a.containers[i].key, b.containers[i].key));
+        // memcmp is safe HERE: Container is 22 B with no interior or tail
+        // padding (2+2 arrays, then four u8-sized fields on align-2), asserted
+        // right below so a field addition cannot silently make this read junk.
+        static_assert(sizeof(Container) ==
+                      kContainerSlots * (2 + 2 + 1) + 1 + 1);
+        CHECK(std::memcmp(&a.containers[i].c, &b.containers[i].c,
+                          sizeof(Container)) == 0);
+    }
+    CHECK(a.corpses.size() == b.corpses.size());
+    // Field-by-field, NOT memcmp: CorpseRecord has 2 padding bytes after its
+    // i16 floor (vec3 wants 4-alignment), and padding is exactly what a byte
+    // compare is not entitled to read.
+    for (std::size_t i = 0; i < a.corpses.size() && i < b.corpses.size(); ++i) {
+        const CorpseRecord& x = a.corpses[i];
+        const CorpseRecord& y = b.corpses[i];
+        CHECK(x.floor == y.floor);
+        CHECK(x.pos.x == y.pos.x && x.pos.y == y.pos.y && x.pos.z == y.pos.z);
+        CHECK(x.colour.x == y.colour.x && x.colour.y == y.colour.y &&
+              x.colour.z == y.colour.z);
+        CHECK(x.half.x == y.half.x && x.half.y == y.half.y && x.half.z == y.half.z);
+        CHECK(x.mobKind == y.mobKind && x.slotCount == y.slotCount &&
+              x.searched == y.searched);
+        for (std::size_t j = 0; j < kMaxCorpseSlots; ++j) {
+            CHECK(x.slots[j].item == y.slots[j].item);
+            CHECK(x.slots[j].count == y.slots[j].count);
+            CHECK(x.slots[j].condition == y.slots[j].condition);
+        }
+    }
 
     // Version 6: the macro-world sections. The blobs travel verbatim; the matrix
     // is 36 POD bytes and must carry its runtime drift, not reset to base.
@@ -348,9 +409,12 @@ void wire_layout() {
     // craft axes and no hpBank, v12 has eight and hpBank. See [save.cpp].
     static_assert(kSaveFixedWire == 995);  // v14: 5 B inventory slots (+64)
     static_assert(kFactionWire == 36);
-    static_assert(save_bytes_for(0) == 1095);  // v14: 5 B inventory slots
-    static_assert(save_bytes_for(3) == 1095 + 15);
-    static_assert(save_bytes_for(3, 100, 50) == 1095 + 15 + 150);
+    // v15: 995 fixed + 36 faction + 64 header + 4 inline corpse count = 1099
+    // empty; a container row is 27 B, a corpse row 81 B.
+    static_assert(save_bytes_for(0) == 1099);
+    static_assert(save_bytes_for(3) == 1099 + 3 * kContainerRecWire);
+    static_assert(save_bytes_for(3, 1, 100, 50) ==
+                  1099 + 3 * kContainerRecWire + kCorpseRecWire + 150);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -359,15 +423,18 @@ void wire_layout() {
 
     const SaveState st = busy_run();
     save_write(st, bytes);
-    CHECK(bytes.size() == save_bytes_for(3));
+    CHECK(bytes.size() == save_bytes_for(3, 1));
     // 1042 B for a full run with three emptied crates and no macro blobs (those are
     // variable-size and pinned by macro_world_round_trips). GEOMETRY lives in the
     // per-floor files ([save.h] modular layout), never here. v8 was 965; the
     // legacy-content purge re-measured this from 1007; v9 was 993; v10 adds the
     // samosbor clock (17) and the fast-travel unlock set (32); v11 adds the crowd
     // heal bank `hpBank` (+4); v12 drops one craft axis (-4); v13 adds the
-    // player's Equipped cells (+4); v14 widens the slot count to u16 (+64).
-    CHECK(bytes.size() == 1110);
+    // player's Equipped cells (+4); v14 widens the slot count to u16 (+64);
+    // v15 swaps opened keys for whole-crate records (27 B a row, corpse rows
+    // 81 B, plus the inline corpse-count u32 that is part of the 1099 base):
+    // busy_run's 3 crates and 1 body land on 1099 + 81 + 81 = 1261.
+    CHECK(bytes.size() == 1099 + 3 * kContainerRecWire + kCorpseRecWire);
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');
@@ -398,10 +465,11 @@ void wire_layout() {
     CHECK(h.version == kSaveVersion);
     CHECK(h.itemCount == static_cast<std::uint32_t>(kItemCount));
     CHECK(h.mobKindCount == static_cast<std::uint32_t>(kMobKindCount));
-    CHECK(h.openedCount == 3u);
+    CHECK(h.containerCount == 3u);
     CHECK(h.poolBytes == 0u);
     CHECK(h.macroBytes == 0u);
-    CHECK(h.payloadBytes == kSaveFixedWire + kFactionWire + 3u * kOpenedKeyWire);
+    CHECK(h.payloadBytes == kSaveFixedWire + kFactionWire +
+                                3u * kContainerRecWire + 4u + kCorpseRecWire);
 
     // A save written by the 120 Hz build STILL LOADS, and this is deliberate rather
     // than an oversight. Nothing currently in the payload is tick-derived — the clock is
@@ -458,7 +526,8 @@ void round_trip() {
     SaveState zback;
     CHECK(save_read(z.data(), z.size(), zback, &err));
     CHECK(err == SaveError::None);
-    CHECK(zback.opened.empty());
+    CHECK(zback.containers.empty());
+    CHECK(zback.corpses.empty());
     same_run(fresh, zback);
 
     // The signed floor survives, which is the point of storing it at all. `NpcPool`'s
@@ -468,7 +537,13 @@ void round_trip() {
     static_assert(static_cast<int>(static_cast<std::uint16_t>(-50)) == 65486);
     CHECK(dst.player.floorNumber == -50);
     CHECK(dst.ledger.deepestFloor == -50);
-    CHECK(dst.opened[0].floor == -3);
+    CHECK(dst.containers[0].key.floor == -3);
+    CHECK(dst.corpses[0].floor == -3);
+    // The contents rode whole: the half-taken worn stack and the u16 cash wad.
+    CHECK(dst.containers[0].c.count[0] == 3 && dst.containers[0].c.condition[0] == 128);
+    CHECK(dst.containers[0].c.item[3] == kItemRuble &&
+          dst.containers[0].c.count[3] == 12345);
+    CHECK(dst.corpses[0].slots[1].count == 650);
 }
 
 // Version 6: the macro world is a flat table, so it saves flat. A small society
@@ -734,7 +809,7 @@ void rejects_the_rest() {
     SaveState keep;
     keep.ledger.deaths = 777u;
     keep.player.hp = 55;
-    keep.opened.push_back(OpenedContainerKey{9, 1, 2, 3, 0});
+    keep.containers.push_back(ContainerRecord{OpenedContainerKey{9, 1, 2, 3, 0}, {}});
     SaveError err = SaveError::None;
 
     auto refused = [&](std::vector<std::uint8_t>& buf, SaveError want) {
@@ -743,7 +818,7 @@ void rejects_the_rest() {
         CHECK(err == want);
         CHECK(keep.ledger.deaths == 777u);
         CHECK(keep.player.hp == 55);
-        CHECK(keep.opened.size() == 1u);
+        CHECK(keep.containers.size() == 1u);
     };
 
     // Nothing at all.
@@ -861,10 +936,14 @@ void keys_not_entity_ids() {
                   "a crate taller than its cell would key into the cell above");
 }
 
-void opened_crates_survive_a_restart() {
-    // The end-to-end claim: a floor destroyed and regenerated from the same seed comes
-    // back with the same crates, and the ones already emptied come back emptied — with
-    // no entity id anywhere in the save.
+void floor_records_survive_a_restart() {
+    // The end-to-end claim, v15 edition: a floor destroyed and regenerated from
+    // the same seed comes back with the same crates — and each crate comes back
+    // with the CONTENTS it was left with, not its fresh roll. A half-taken box
+    // stays half-taken, a deposit is still inside, an emptied one is opened and
+    // empty, and a corpse lies where it fell with its loot — no entity id
+    // anywhere in the save. This is the "частичный забор/вклад переживает
+    // перезаход этажа" requirement, stated as a test.
     World w;
     const int floorZ = -3;
     const FloorKind kind = FloorKind::Residential;
@@ -875,110 +954,180 @@ void opened_crates_survive_a_restart() {
     const LayerId layer = 0;
     const std::uint32_t made =
         spawn_floor_containers(reg, w, floorZ, kind, layer, seed, /*cap=*/64u);
-    CHECK(made > 4u);   // enough crates for "some opened, some not" to mean anything
+    CHECK(made > 4u);
 
-    // Empty every third crate by hand — this is what looting them would have left
-    // behind — and remember the handles so the restart can prove they died.
+    // Mutate the floor the way a play session would: empty every third crate
+    // (a full loot), and DEPOSIT into every fifth (the search screen's Give) —
+    // the state the old opened-key mechanism could not express at all.
     std::vector<Entity> before;
     int i = 0;
-    int openedByHand = 0;
+    int emptiedByHand = 0;
+    int depositedInto = 0;
     for (auto e : reg.view<Container, const Transform>()) {
         before.push_back(e);
-        if ((i++ % 3) != 0) continue;
         Container& c = reg.get<Container>(e);
-        for (int s = 0; s < kContainerSlots; ++s) {
-            c.item[s] = kInvalidItem;
-            c.count[s] = 0;
+        if ((i % 3) == 0) {
+            for (int sl = 0; sl < kContainerSlots; ++sl) {
+                c.item[sl] = kInvalidItem;
+                c.count[sl] = 0;
+            }
+            c.opened = true;
+            ++emptiedByHand;
+        } else if ((i % 5) == 0) {
+            c.item[0] = 40;            // a worn bandage stack, deposited
+            c.count[0] = 3;
+            c.condition[0] = 77;
+            ++depositedInto;
         }
-        c.opened = true;
-        ++openedByHand;
+        ++i;
     }
     CHECK(before.size() == static_cast<std::size_t>(made));
-    CHECK(openedByHand > 1);
+    CHECK(emptiedByHand > 1);
+    CHECK(depositedInto > 0);
 
-    // Save. Only the resident floor is scannable, so `refresh_opened_containers` is what
-    // a real save calls; seed the set with another floor's keys first to prove they are
-    // not collateral damage.
+    // A corpse with loot, exactly the POD finalize_deaths leaves behind.
+    const vec3 corpsePos{40.9f, 41.3f, 2.1f};
+    {
+        Entity ce = reg.create();
+        Transform tr;
+        tr.pos = corpsePos;
+        tr.layer = layer;
+        reg.emplace<Transform>(ce, tr);
+        reg.emplace<AABB>(ce, AABB{vec3{0.4f, 0.18f, 0.6f}});
+        reg.emplace<Renderable>(ce, Renderable{vec3{0.2f, 0.1f, 0.1f}});
+        Corpse c;
+        c.mobKind = 7;
+        c.slotCount = 2;
+        c.lootSlots[0] = ItemSlot{40, 2, 200};
+        c.lootSlots[1] = ItemSlot{kItemRuble, 650, 255};
+        reg.emplace<Corpse>(ce, c);
+    }
+
+    // Save. Only the resident floor is scannable, so `refresh_floor_records` is
+    // what a real save calls; seed the lists with another floor's records first
+    // to prove they are not collateral damage, and with a stale record for THIS
+    // floor to prove refresh replaces rather than appends.
     SaveState st;
-    st.opened.push_back(OpenedContainerKey{2, 66, 66, 1, 0});
-    st.opened.push_back(
-        OpenedContainerKey{static_cast<std::int16_t>(floorZ), 99, 99, 9, 0});  // stale
+    st.containers.push_back(ContainerRecord{OpenedContainerKey{2, 66, 66, 1, 0}, {}});
+    st.containers.push_back(ContainerRecord{
+        OpenedContainerKey{static_cast<std::int16_t>(floorZ), 99, 99, 9, 0}, {}});
+    CorpseRecord staleCorpse;
+    staleCorpse.floor = static_cast<std::int16_t>(floorZ);
+    st.corpses.push_back(staleCorpse);
     const std::size_t fromFloor =
-        refresh_opened_containers(reg, layer, floorZ, st.opened);
-    CHECK(fromFloor == static_cast<std::size_t>(openedByHand));
-    CHECK(st.opened.size() == 1u + fromFloor);
-    CHECK(st.opened[0].floor == 2);          // the other floor survived the refresh
-    CHECK(st.opened[0].cx == 66);
-    // Calling it twice must not double the list — the bug a plain append would have.
-    const std::size_t again = refresh_opened_containers(reg, layer, floorZ, st.opened);
+        refresh_floor_records(reg, layer, floorZ, st.containers, st.corpses);
+    // EVERY crate is recorded (not only the touched ones), plus the corpse.
+    CHECK(fromFloor == static_cast<std::size_t>(made) + 1u);
+    CHECK(st.containers.size() == 1u + made);
+    CHECK(st.containers[0].key.floor == 2);   // the other floor survived
+    CHECK(st.corpses.size() == 1u);           // the stale one was dropped
+    CHECK(st.corpses[0].mobKind == 7);
+    // Calling it twice must not double the lists — the bug a plain append would have.
+    const std::size_t again =
+        refresh_floor_records(reg, layer, floorZ, st.containers, st.corpses);
     CHECK(again == fromFloor);
-    CHECK(st.opened.size() == 1u + fromFloor);
+    CHECK(st.containers.size() == 1u + made);
 
     std::vector<std::uint8_t> bytes;
     save_write(st, bytes);
 
-    // --- restart: the floor is torn down and rebuilt from the same three numbers ---
+    // --- restart: the floor is torn down and rebuilt from the same numbers ---
     std::vector<Entity> dead;
-    for (auto e : reg.view<const Container, const Transform>())
+    for (auto e : reg.view<const Transform>())
         if (reg.get<const Transform>(e).layer == layer) dead.push_back(e);
     for (Entity e : dead) reg.destroy(e);
-    // Every handle the save might have stored is now invalid. This is the whole reason
-    // the key is (floor, cell): an entity id written to disk names nothing on reload.
     for (Entity e : before) CHECK(!reg.valid(e));
 
     SaveState loaded;
     SaveError err = SaveError::None;
     CHECK(save_read(bytes.data(), bytes.size(), loaded, &err));
     CHECK(err == SaveError::None);
-    CHECK(loaded.opened.size() == st.opened.size());
+    CHECK(loaded.containers.size() == st.containers.size());
+    CHECK(loaded.corpses.size() == 1u);
 
     const std::uint32_t remade =
         spawn_floor_containers(reg, w, floorZ, kind, layer, seed, /*cap=*/64u);
     CHECK(remade == made);   // deterministic in (floor, kind, seed)
 
-    const std::size_t hits = apply_opened_containers(
-        reg, layer, floorZ, loaded.opened.data(), loaded.opened.size());
+    const std::size_t hits = apply_container_records(
+        reg, layer, floorZ, loaded.containers.data(), loaded.containers.size());
+    const std::size_t bodies = spawn_corpse_records(
+        reg, layer, floorZ, loaded.corpses.data(), loaded.corpses.size());
+    CHECK(bodies == 1u);
 
-    // The contract, stated exactly: a crate is opened if and only if its key is in the
-    // set. Written this way rather than as a count because the (floor, cell) key can
-    // collide, and when it does BOTH crates are legitimately in the set — a count
-    // comparison would fail for a reason that is not a bug.
-    std::size_t openNow = 0;
-    std::size_t shutNow = 0;
+    // The contract, stated exactly: every crate's component equals its record.
+    // (The (floor, cell) key can collide; when it does one record stamps both
+    // crates, so the comparison is record-driven, not count-driven.)
+    std::size_t openNow = 0, shutNow = 0, matched = 0, deposits = 0;
     for (auto e : reg.view<const Container, const Transform>()) {
         const Transform& t = reg.get<const Transform>(e);
         if (t.layer != layer) continue;
         const Container& c = reg.get<const Container>(e);
         const OpenedContainerKey k = container_key(floorZ, t.pos);
-        bool listed = false;
-        for (std::size_t j = 0; j < loaded.opened.size() && !listed; ++j)
-            listed = same_container(loaded.opened[j], k);
-        CHECK(c.opened == listed);
+        const ContainerRecord* rec = nullptr;
+        for (std::size_t j = 0; j < loaded.containers.size() && !rec; ++j)
+            if (same_container(loaded.containers[j].key, k))
+                rec = &loaded.containers[j];
+        CHECK(rec != nullptr);   // refresh recorded every crate, so all match
+        if (!rec) continue;
+        ++matched;
+        CHECK(std::memcmp(&c, &rec->c, sizeof(Container)) == 0);
         if (c.opened) {
             ++openNow;
-            // A restored crate is empty, not merely flagged.
-            for (int s = 0; s < kContainerSlots; ++s) CHECK(c.item[s] == kInvalidItem);
+            for (int sl = 0; sl < kContainerSlots; ++sl)
+                CHECK(c.item[sl] == kInvalidItem);
         } else {
             ++shutNow;
         }
+        if (c.item[0] == 40 && c.count[0] == 3 && c.condition[0] == 77) ++deposits;
     }
-    CHECK(hits == openNow);
-    CHECK(openNow >= static_cast<std::size_t>(openedByHand));
-    CHECK(shutNow > 0u);   // and the untouched crates are still worth walking to
+    CHECK(hits == matched);
+    CHECK(openNow >= static_cast<std::size_t>(emptiedByHand));
+    CHECK(shutNow > 0u);   // untouched crates still worth walking to
+    CHECK(deposits >= static_cast<std::size_t>(depositedInto));  // вклад пережил
 
-    // Applying the same set twice is a no-op: already-opened crates are skipped, so an
-    // autosave-on-every-floor-entry cannot re-loot or re-clear anything.
-    CHECK(apply_opened_containers(reg, layer, floorZ, loaded.opened.data(),
-                                  loaded.opened.size()) == 0u);
+    // The corpse came back: position, slots, wear, the cash wad — and searched
+    // stays false, so it is still lootable.
+    {
+        std::size_t corpses = 0;
+        for (auto e : reg.view<const Corpse, const Transform>()) {
+            const Transform& t = reg.get<const Transform>(e);
+            if (t.layer != layer) continue;
+            ++corpses;
+            const Corpse& c = reg.get<const Corpse>(e);
+            CHECK(c.mobKind == 7);
+            CHECK(!c.searched);
+            CHECK(c.lootSlots[0].item == 40 && c.lootSlots[0].count == 2 &&
+                  c.lootSlots[0].condition == 200);
+            CHECK(c.lootSlots[1].item == kItemRuble && c.lootSlots[1].count == 650);
+            CHECK(t.pos.x == corpsePos.x && t.pos.y == corpsePos.y &&
+                  t.pos.z == corpsePos.z);
+        }
+        CHECK(corpses == 1u);
+    }
+
+    // Re-applying is idempotent: the records stamp the same state again, and the
+    // corpse rebuild replaces rather than duplicates — an autosave-on-entry
+    // cannot re-loot, re-fill or double a body.
+    CHECK(apply_container_records(reg, layer, floorZ, loaded.containers.data(),
+                                  loaded.containers.size()) == hits);
+    CHECK(spawn_corpse_records(reg, layer, floorZ, loaded.corpses.data(),
+                               loaded.corpses.size()) == 1u);
+    {
+        std::size_t corpses = 0;
+        for (auto e : reg.view<const Corpse>()) { (void)e; ++corpses; }
+        CHECK(corpses == 1u);
+    }
     // An empty set touches nothing, and a null one does not walk off a pointer.
-    CHECK(apply_opened_containers(reg, layer, floorZ, nullptr, 0) == 0u);
-    // Another floor's keys never match this floor's crates.
-    const OpenedContainerKey elsewhere[1] = {OpenedContainerKey{2, 66, 66, 1, 0}};
-    CHECK(apply_opened_containers(reg, layer, floorZ, elsewhere, 1u) == 0u);
+    CHECK(apply_container_records(reg, layer, floorZ, nullptr, 0) == 0u);
+    // Another floor's records never match this floor's crates.
+    const ContainerRecord elsewhere[1] = {
+        ContainerRecord{OpenedContainerKey{2, 66, 66, 1, 0}, {}}};
+    CHECK(apply_container_records(reg, layer, floorZ, elsewhere, 1u) == 0u);
     // Nor does a layer that holds nothing.
-    CHECK(apply_opened_containers(reg, static_cast<LayerId>(42), floorZ,
-                                  loaded.opened.data(),
-                                  loaded.opened.size()) == 0u);
+    CHECK(apply_container_records(reg, static_cast<LayerId>(42), floorZ,
+                                  loaded.containers.data(),
+                                  loaded.containers.size()) == 0u);
 }
 
 void ledger_is_pinned() {
@@ -1011,14 +1160,15 @@ void ledger_is_pinned() {
         SaveState st;
         st.ledger.deepestFloor = z;
         st.player.floorNumber = z;
-        st.opened.push_back(OpenedContainerKey{static_cast<std::int16_t>(z), 1, 2, 3, 0});
+        st.containers.push_back(ContainerRecord{
+            OpenedContainerKey{static_cast<std::int16_t>(z), 1, 2, 3, 0}, {}});
         std::vector<std::uint8_t> bytes;
         save_write(st, bytes);
         SaveState back;
         CHECK(save_read(bytes.data(), bytes.size(), back, nullptr, nullptr));
         CHECK(back.ledger.deepestFloor == z);
         CHECK(back.player.floorNumber == z);
-        CHECK(back.opened[0].floor == static_cast<std::int16_t>(z));
+        CHECK(back.containers[0].key.floor == static_cast<std::int16_t>(z));
     }
 }
 
@@ -1858,7 +2008,7 @@ static void test_saveload_all() {
     saveload_test::weak_check_vs_strong_check();
     saveload_test::rejects_the_rest();
     saveload_test::keys_not_entity_ids();
-    saveload_test::opened_crates_survive_a_restart();
+    saveload_test::floor_records_survive_a_restart();
     saveload_test::ledger_is_pinned();
     saveload_test::cell_conventions();
     saveload_test::arrival_cell_is_often_a_wall();

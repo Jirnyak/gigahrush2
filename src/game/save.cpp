@@ -15,7 +15,8 @@
 #include "game/quest.h"       // QuestLog, quest_log_write, quest_log_read, kQuestLogWire
 #include "game/craft.h"       // craft_write, craft_read, kCraftingWire
 #include "game/rpg.h"         // RpgStats (visit_rpg)
-#include "game/combat.h"      // PlayerRanged (visit_ranged / SAVMAG)
+#include "game/combat.h"      // PlayerRanged (visit_ranged / SAVMAG); Corpse (v15)
+#include "game/prop_system.h" // Interactable — a respawned corpse must be findable
 #include "sim/physics.h"      // aabb_overlaps_solid — the solver's own predicate
 #include "world/types.h"      // kCellSize, kVoxelSize, wrap_macro
 #include "world/world.h"      // World::grid, for the placement probes
@@ -184,7 +185,7 @@ void visit_header(Ar& ar, H& h) {
     ar.u32(h.mobKindCount);
     ar.u32(h.itemFingerprint);
     ar.u32(h.mobFingerprint);
-    ar.u32(h.openedCount);
+    ar.u32(h.containerCount);
     ar.u16(h.ledgerBytes);
     ar.u16(h.bookBytes);
     ar.u16(h.needsBytes);
@@ -344,6 +345,45 @@ void visit_key(Ar& ar, K& k) {
     ar.u8(k.cz);
 }
 
+// v15: one crate, whole. The slot triple matches visit_inventory's cell wire.
+template <class Ar, class R>
+void visit_container_rec(Ar& ar, R& rec) {
+    visit_key(ar, rec.key);
+    ar.u8(rec.c.kind);
+    std::uint8_t opened = rec.c.opened ? 1 : 0;
+    ar.u8(opened);
+    rec.c.opened = opened != 0;
+    for (int i = 0; i < kContainerSlots; ++i) {
+        ar.u16(rec.c.item[i]);
+        ar.u16(rec.c.count[i]);
+        ar.u8(rec.c.condition[i]);
+    }
+}
+
+template <class Ar>
+void visit_vec3(Ar& ar, vec3& v) {
+    ar.f32(v.x);
+    ar.f32(v.y);
+    ar.f32(v.z);
+}
+
+// v15: one fallen body. deathTick deliberately absent ([save.h] — no reader).
+template <class Ar, class R>
+void visit_corpse_rec(Ar& ar, R& rec) {
+    ar.i16(rec.floor);
+    visit_vec3(ar, rec.pos);
+    visit_vec3(ar, rec.colour);
+    visit_vec3(ar, rec.half);
+    ar.u8(rec.mobKind);
+    ar.u8(rec.slotCount);
+    ar.u8(rec.searched);
+    for (std::size_t i = 0; i < kMaxCorpseSlots; ++i) {
+        ar.u16(rec.slots[i].item);
+        ar.u16(rec.slots[i].count);
+        ar.u8(rec.slots[i].condition);
+    }
+}
+
 // CRC-32 (reflected 0xEDB88320), computed bit-serially rather than from a table.
 // 8 shifts per byte over a ~3.6 KB save is a few microseconds — a lookup table would be
 // 1 KB of static data and a first-use question, to save nothing measurable on a
@@ -448,8 +488,12 @@ static_assert(FastTravelState::wire_bytes() == kFastTravelWire);
 static_assert(kSaveFixedWire == 946 + kSamosborWire + kFastTravelWire);  // 995 (v14: +64 inventory)
 static_assert(kSaveFixedWire == 995);
 static_assert(kFactionWire == 36);
-static_assert(save_bytes_for(0) == 1095);  // v14: inventory slots are 5 B
-static_assert(save_bytes_for(0, 100, 50) == 1095 + 150);
+// v15: the empty save carries the fixed 995 + faction 36 + header 64 + the
+// inline corpse-count u32 = 1099; container/corpse rows are 27 / 81 B each.
+static_assert(save_bytes_for(0) == 1099);
+static_assert(save_bytes_for(2) == 1099 + 2 * kContainerRecWire);
+static_assert(save_bytes_for(0, 3) == 1099 + 3 * kCorpseRecWire);
+static_assert(save_bytes_for(0, 0, 100, 50) == 1099 + 150);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two
@@ -469,8 +513,8 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     // The same size the writer will actually produce, minus the header this
     // buffer does not carry — `save_bytes_for` is the one place that arithmetic
     // lives, so the reserve cannot drift from the wire format.
-    body.reserve(save_bytes_for(st.opened.size(), st.poolBlob.size(),
-                                st.macroBlob.size()) -
+    body.reserve(save_bytes_for(st.containers.size(), st.corpses.size(),
+                                st.poolBlob.size(), st.macroBlob.size()) -
                  kSaveHeaderWire);
     Writer bw(body);
     visit_ledger(bw, st.ledger);
@@ -495,7 +539,17 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     // would make the reader's offset depend on a count.
     visit_samosbor(bw, st.samosbor);
     for (std::size_t i = 0; i < kFastTravelWire; ++i) bw.u8(st.fastTravel.raw()[i]);
-    for (const OpenedContainerKey& k : st.opened) visit_key(bw, k);
+    // Version 15: the container rows (header-counted), then the corpse rows
+    // behind their own inline u32 — see save_bytes_for for why the count is here.
+    for (const ContainerRecord& rec : st.containers) {
+        ContainerRecord tmp = rec;   // the visitor is read/write; write side copies
+        visit_container_rec(bw, tmp);
+    }
+    bw.u32(static_cast<std::uint32_t>(st.corpses.size()));
+    for (const CorpseRecord& rec : st.corpses) {
+        CorpseRecord tmp = rec;
+        visit_corpse_rec(bw, tmp);
+    }
     // Version 6: the macro world — pool table, macro-sim state, faction matrix.
     body.insert(body.end(), st.poolBlob.begin(), st.poolBlob.end());
     body.insert(body.end(), st.macroBlob.begin(), st.macroBlob.end());
@@ -513,7 +567,7 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     h.mobKindCount = static_cast<std::uint32_t>(kMobKindCount);
     h.itemFingerprint = item_table_fingerprint();
     h.mobFingerprint = mob_table_fingerprint();
-    h.openedCount = static_cast<std::uint32_t>(st.opened.size());
+    h.containerCount = static_cast<std::uint32_t>(st.containers.size());
     h.poolBytes = static_cast<std::uint32_t>(st.poolBlob.size());
     h.macroBytes = static_cast<std::uint32_t>(st.macroBlob.size());
     h.ledgerBytes = static_cast<std::uint16_t>(sizeof(RunLedger));
@@ -574,15 +628,26 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     // Bound the count BEFORE it is used to size anything, so a corrupt or hostile header
     // cannot ask for a large allocation on the strength of numbers the checksum has not
     // vouched for yet.
-    if (h.openedCount > kMaxOpenedKeys) return fail(SaveError::SizeMismatch);
+    if (h.containerCount > kMaxFloorRecords) return fail(SaveError::SizeMismatch);
     if (h.poolBytes > kMaxPoolBytes) return fail(SaveError::SizeMismatch);
     if (h.macroBytes > kMaxMacroBytes) return fail(SaveError::SizeMismatch);
-    const std::size_t want =
+    // v15: the corpse count rides inline (the 64-byte header is full), so the
+    // size gate works by SUBTRACTION — every other section is exactly
+    // computable from the header, and what remains must be a whole number of
+    // corpse rows under the same ceiling. The inline count is then required to
+    // agree with this remainder during the parse, so a payload cannot smuggle
+    // a different row count past the arithmetic.
+    const std::size_t wantSansCorpses =
         kSaveFixedWire + kFactionWire +
-        static_cast<std::size_t>(h.openedCount) * kOpenedKeyWire +
+        static_cast<std::size_t>(h.containerCount) * kContainerRecWire + 4 +
         static_cast<std::size_t>(h.poolBytes) +
         static_cast<std::size_t>(h.macroBytes);
-    if (static_cast<std::size_t>(h.payloadBytes) != want)
+    if (static_cast<std::size_t>(h.payloadBytes) < wantSansCorpses)
+        return fail(SaveError::SizeMismatch);
+    const std::size_t corpseBytes =
+        static_cast<std::size_t>(h.payloadBytes) - wantSansCorpses;
+    if (corpseBytes % kCorpseRecWire != 0) return fail(SaveError::SizeMismatch);
+    if (corpseBytes / kCorpseRecWire > kMaxFloorRecords)
         return fail(SaveError::SizeMismatch);
     if (n - kSaveHeaderWire < static_cast<std::size_t>(h.payloadBytes))
         return fail(SaveError::TooShort);
@@ -622,8 +687,17 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     // Version 10 / SAVCLOCK: mirrors the writer exactly, same order, same position.
     visit_samosbor(r, tmp.samosbor);
     for (std::size_t i = 0; i < kFastTravelWire; ++i) r.u8(tmp.fastTravel.raw()[i]);
-    tmp.opened.resize(static_cast<std::size_t>(h.openedCount));
-    for (std::size_t i = 0; i < tmp.opened.size(); ++i) visit_key(r, tmp.opened[i]);
+    tmp.containers.resize(static_cast<std::size_t>(h.containerCount));
+    for (ContainerRecord& rec : tmp.containers) visit_container_rec(r, rec);
+    {
+        std::uint32_t nCorpses = 0;
+        r.u32(nCorpses);
+        if (!r.ok()) return fail(SaveError::TooShort);
+        if (static_cast<std::size_t>(nCorpses) != corpseBytes / kCorpseRecWire)
+            return fail(SaveError::SizeMismatch);
+        tmp.corpses.resize(nCorpses);
+        for (CorpseRecord& rec : tmp.corpses) visit_corpse_rec(r, rec);
+    }
     // Version 6: the macro blobs, verbatim (decoded by their owners against live
     // objects, which a parse must not require), then the faction matrix.
     {
@@ -680,71 +754,142 @@ OpenedContainerKey container_key(int floorNumber, const vec3& pos) {
     return k;
 }
 
-std::size_t collect_opened_containers(Registry& reg, LayerId layer, int floorNumber,
-                                     std::vector<OpenedContainerKey>& out) {
+std::size_t refresh_floor_records(Registry& reg, LayerId layer, int floorNumber,
+                                  std::vector<ContainerRecord>& boxes,
+                                  std::vector<CorpseRecord>& corpses) {
+    // Compact in place rather than erase-remove: the lists are a few hundred small
+    // rows, and one pass with no allocation is easier to be sure about than an
+    // iterator dance.
+    const std::int16_t f = static_cast<std::int16_t>(floorNumber);
+    std::size_t keep = 0;
+    for (std::size_t i = 0; i < boxes.size(); ++i) {
+        if (boxes[i].key.floor == f) continue;
+        boxes[keep++] = boxes[i];
+    }
+    boxes.resize(keep);
+    keep = 0;
+    for (std::size_t i = 0; i < corpses.size(); ++i) {
+        if (corpses[i].floor == f) continue;
+        corpses[keep++] = corpses[i];
+    }
+    corpses.resize(keep);
+
     std::size_t n = 0;
+    // EVERY crate, not only the touched ones. A "changed since roll" diff would
+    // need the pristine roll to compare against, i.e. it would make the
+    // generator part of the record's meaning — the exact trap the floor-file
+    // ceiling comment rejects for geometry. ~64 rows x 27 B is not a cost.
     for (auto e : reg.view<const Container, const Transform>()) {
-        if (!reg.get<const Container>(e).opened) continue;
         const Transform& t = reg.get<const Transform>(e);
         if (t.layer != layer) continue;
-        out.push_back(container_key(floorNumber, t.pos));
+        ContainerRecord rec;
+        rec.key = container_key(floorNumber, t.pos);
+        rec.c = reg.get<const Container>(e);
+        boxes.push_back(rec);
+        ++n;
+    }
+    for (auto e : reg.view<const Corpse, const Transform>()) {
+        const Transform& t = reg.get<const Transform>(e);
+        if (t.layer != layer) continue;
+        const Corpse& c = reg.get<const Corpse>(e);
+        CorpseRecord rec;
+        rec.floor = f;
+        rec.pos = t.pos;
+        if (const Renderable* rr = reg.try_get<Renderable>(e)) rec.colour = rr->color;
+        if (const AABB* bb = reg.try_get<AABB>(e)) rec.half = bb->half;
+        rec.mobKind = c.mobKind;
+        rec.slotCount = c.slotCount;
+        rec.searched = c.searched ? 1 : 0;
+        for (std::size_t i = 0; i < kMaxCorpseSlots; ++i) rec.slots[i] = c.lootSlots[i];
+        corpses.push_back(rec);
         ++n;
     }
     return n;
 }
 
-std::size_t refresh_opened_containers(Registry& reg, LayerId layer, int floorNumber,
-                                      std::vector<OpenedContainerKey>& set) {
-    // Compact in place rather than erase-remove: the list is a few hundred 6-byte rows,
-    // and one pass with no allocation is easier to be sure about than an iterator dance.
-    const std::int16_t f = static_cast<std::int16_t>(floorNumber);
-    std::size_t keep = 0;
-    for (std::size_t i = 0; i < set.size(); ++i) {
-        if (set[i].floor == f) continue;
-        set[keep++] = set[i];
-    }
-    set.resize(keep);
-    return collect_opened_containers(reg, layer, floorNumber, set);
-}
-
-std::size_t apply_opened_containers(Registry& reg, LayerId layer, int floorNumber,
-                                    const OpenedContainerKey* keys, std::size_t n,
+std::size_t apply_container_records(Registry& reg, LayerId layer, int floorNumber,
+                                    const ContainerRecord* recs, std::size_t n,
                                     const vec3* openedColour) {
-    if (!keys || n == 0) return 0;
+    if (!recs || n == 0) return 0;
     const std::int16_t f = static_cast<std::int16_t>(floorNumber);
 
     std::size_t hits = 0;
+    // Records are CONSUMED one-to-one, not shared: the (floor, cell) key can
+    // collide — two crates in one cell produce two records under one key — and
+    // a first-match-wins lookup would stamp the FIRST record onto BOTH crates,
+    // losing the second's state and, when the survivor is the un-opened one,
+    // quietly resurrecting loot. Consuming makes the match a multiset: N crates
+    // in a cell take that cell's N records (assignment within the cell is
+    // arbitrary, which only ever swaps two boxes standing in the same square).
+    std::vector<std::uint8_t> used(n, 0);
     for (auto e : reg.view<Container, const Transform>()) {
-        Container& c = reg.get<Container>(e);
-        if (c.opened) continue;
         const Transform& t = reg.get<const Transform>(e);
         if (t.layer != layer) continue;
 
         const OpenedContainerKey k = container_key(floorNumber, t.pos);
-        bool hit = false;
+        const ContainerRecord* hit = nullptr;
         for (std::size_t i = 0; i < n && !hit; ++i) {
-            if (keys[i].floor != f) continue;   // other floors' keys, skipped cheaply
-            hit = same_container(keys[i], k);
+            if (used[i]) continue;
+            if (recs[i].key.floor != f) continue;  // other floors, skipped cheaply
+            if (same_container(recs[i].key, k)) {
+                hit = &recs[i];
+                used[i] = 1;
+            }
         }
-        if (!hit) continue;
+        if (!hit) continue;   // a crate with no record keeps its fresh roll
 
-        c.opened = true;
-        // Emptied as well as flagged — see the header. An opened crate is an empty crate
-        // by construction in `loot_containers_step`, so restoring one that still had
-        // rolled contents inside would be a discrepancy waiting for the first feature
-        // that reads a spent box.
-        for (int i = 0; i < kContainerSlots; ++i) {
-            c.item[i] = kInvalidItem;
-            c.count[i] = 0;
-        }
-        if (openedColour)
+        // The WHOLE component, not a flag: a half-taken crate comes back
+        // half-taken, a deposit is still inside, wear bytes and all.
+        reg.get<Container>(e) = hit->c;
+        if (hit->c.opened && openedColour)
             if (Renderable* rr = reg.try_get<Renderable>(e)) rr->color = *openedColour;
         ++hits;
     }
-    // O(crates x keys) — 64 x 640 worst case on the demo stack, once per floor entry.
-    // Load time is unbounded by contract ([performance.md]) and the sim tick never runs
-    // this, so a hash set would buy nothing but a container to allocate.
+    // O(crates x records) — 64 x 640 worst case on the demo stack, once per floor
+    // entry. Load time is unbounded by contract ([performance.md]) and the sim
+    // tick never runs this, so a hash set would buy nothing but an allocation.
     return hits;
+}
+
+std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,
+                                 const CorpseRecord* recs, std::size_t n) {
+    // Destroy-first is what makes this a REBUILD rather than an append: an F9
+    // onto the currently resident floor still has last session's corpse
+    // entities standing, and spawning records beside them would double every
+    // body. Two-phase — collect, then destroy — because destroying inside a
+    // view invalidates it.
+    std::vector<Entity> stale;
+    for (auto e : reg.view<const Corpse, const Transform>()) {
+        if (reg.get<const Transform>(e).layer == layer) stale.push_back(e);
+    }
+    for (Entity e : stale) reg.destroy(e);
+
+    if (!recs || n == 0) return 0;
+    const std::int16_t f = static_cast<std::int16_t>(floorNumber);
+    std::size_t made = 0;
+    for (std::size_t i = 0; i < n; ++i) {
+        const CorpseRecord& rec = recs[i];
+        if (rec.floor != f) continue;
+        Entity e = reg.create();
+        Transform tr;
+        tr.pos = rec.pos;
+        tr.layer = layer;
+        reg.emplace<Transform>(e, tr);
+        reg.emplace<AABB>(e, AABB{rec.half});
+        reg.emplace<Renderable>(e, Renderable{rec.colour});
+        Corpse c;
+        c.mobKind = rec.mobKind;
+        c.slotCount = rec.slotCount;
+        c.searched = rec.searched != 0;
+        for (std::size_t j = 0; j < kMaxCorpseSlots; ++j) c.lootSlots[j] = rec.slots[j];
+        reg.emplace<Corpse>(e, c);
+        // The same reach constant finalize_deaths uses; a respawned body must be
+        // findable by the same interaction that found it live. [jirnyak.md] §18
+        reg.emplace<Interactable>(
+            e, Interactable{Interactable::Kind::Corpse, 2.2f, true});
+        ++made;
+    }
+    return made;
 }
 
 // ---------------------------------------------------------------------------

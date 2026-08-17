@@ -58,7 +58,8 @@
 #include "game/quest.h"       // QuestLog, kQuestLogWire, quest_table_fingerprint
 #include "game/rpg.h"         // RpgStats
 #include "game/craft.h"       // CraftingState, kCraftingWire, craft_write/read
-#include "game/combat.h"      // PlayerRanged (SAVMAG v8)
+#include "game/combat.h"      // PlayerRanged (SAVMAG v8); Corpse (v15 records)
+#include "game/container.h"   // Container — the v15 record carries it whole
 #include "game/status.h"      // StatusSet (SAVSTAT v9)
 #include "game/samosbor.h"    // SamosborState (SAVCLOCK v10)
 #include "game/fast_travel.h" // FastTravelState (SAVCLOCK v10)
@@ -147,7 +148,16 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // [item_table.h] kItemRuble). items.csv also grew its row (442 -> 443), so a
 // v13 save is doubly dead: the fingerprint gate catches the id shift and the
 // version gate catches the width. Pool rows change in the same stroke, again.
-inline constexpr std::uint32_t kSaveVersion = 14u;
+// Version 15: the world's containers and corpses travel WHOLE. The opened-key
+// list — 6 B per emptied crate, restore-as-empty — is REPLACED by
+// ContainerRecord (the full Container POD per crate: contents, wear, kind,
+// opened) plus CorpseRecord (a fallen body: position, tint, silhouette, its 8
+// loot slots, searched). The search screen made a crate a STORE and a corpse a
+// cache ([inventory.md]), so "which boxes are empty" stopped being the state —
+// the state is what is IN them, and a partial take or a deposit now survives
+// both a floor re-entry and a save. The old mechanism is deleted, not wrapped:
+// two writers stamping the same crate is how they disagree. [barter increment A]
+inline constexpr std::uint32_t kSaveVersion = 15u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -227,7 +237,7 @@ struct SaveHeader {
     std::uint32_t mobKindCount = 0;       // 16  kMobKindCount     (weak)
     std::uint32_t itemFingerprint = 0;    // 20  item name hash    (strong)
     std::uint32_t mobFingerprint = 0;     // 24  mob name hash     (strong)
-    std::uint32_t openedCount = 0;        // 28  OpenedContainerKey records that follow
+    std::uint32_t containerCount = 0;     // 28  ContainerRecord rows that follow (v15)
     std::uint16_t ledgerBytes = 0;        // 32  sizeof(RunLedger) in the writing build
     std::uint16_t bookBytes = 0;          // 34  sizeof(ContractBook)
     std::uint16_t needsBytes = 0;         // 36  sizeof(Needs)
@@ -291,16 +301,24 @@ static_assert(kSamosborWire == 17);
 // multi-byte field, so the field-by-field rule has nothing to protect here — see the
 // note beside FastTravelState::raw() in [fast_travel.h].
 inline constexpr std::size_t kFastTravelWire = 32;
-inline constexpr std::size_t kOpenedKeyWire = 5;     // i16 floor + 3 x u8 cell
+// v15 records. A container row is its key + the whole component: 5 (key) + 1
+// (kind) + 1 (opened) + 4 slots x 5 B ([inventory] cell wire) = 27. A corpse row
+// is 2 (floor) + 3 x 12 (pos / colour / half-extents, f32) + 3 (mobKind /
+// slotCount / searched) + 8 slots x 5 B = 81. `deathTick` deliberately does NOT
+// travel: nothing in src/ reads it back (grep 2026-08-17 — one write, zero
+// reads), and serializing a column with no consumer is [problems.md] §35's class.
+inline constexpr std::size_t kContainerRecWire = 5 + 1 + 1 + 4 * 5;   // 27
+inline constexpr std::size_t kCorpseRecWire = 2 + 36 + 3 + 8 * 5;     // 81
 inline constexpr std::size_t kSaveFixedWire =
     kLedgerWire + kBookWire + kPlayerWire + kRpgWire + kCraftingWire +
     kCombatSaveWire + kStatusWire + kSamosborWire + kFastTravelWire + kQuestLogWire;
 
-// Sanity ceiling on the opened-container list, so a corrupt header cannot ask for a
-// huge allocation before the checksum has had a chance to reject it. 64 crates per
-// floor ([main.cpp] refresh_floor_containers cap) x 255 floor labels is 16,320; this
-// is four times that.
-inline constexpr std::uint32_t kMaxOpenedKeys = 65536u;
+// Sanity ceiling on the container/corpse record lists, so a corrupt header cannot
+// ask for a huge allocation before the checksum has had a chance to reject it. 64
+// crates per floor ([main.cpp] refresh_floor_containers cap) x 255 floor labels is
+// 16,320; this is four times that, and corpses share the same ceiling — a floor
+// that accumulates 65k persistent bodies has a different problem than its save.
+inline constexpr std::uint32_t kMaxFloorRecords = 65536u;
 // Ceilings for the v6 blobs, again before the CRC has vouched: the pool's honest
 // worst case is 2^20 rows x 385 B wire (433 with names, [npc_pool.cpp]
 // kPoolRowWire — v14's 5 B slots put it there) ≈ 454 MB; macro state is a
@@ -343,18 +361,27 @@ inline constexpr std::size_t kFactionWire =
 // decodes every existing save into a subtly different floor.
 inline constexpr std::uint32_t kMaxSnapBytes = 1024u * 1024u * 1024u;
 
-// Exact byte count `save_write` will produce for the given section sizes.
-inline constexpr std::size_t save_bytes_for(std::size_t openedCount,
+// Exact byte count `save_write` will produce for the given section sizes. The
+// bare `+ 4` is the corpse-count u32: corpses ride AFTER the container rows the
+// header already counts, so their count lives inline in the payload rather than
+// growing the 64-byte header.
+inline constexpr std::size_t save_bytes_for(std::size_t containerCount,
+                                            std::size_t corpseCount = 0,
                                             std::size_t poolBytes = 0,
                                             std::size_t macroBytes = 0) {
     return kSaveHeaderWire + kSaveFixedWire + kFactionWire +
-           openedCount * kOpenedKeyWire + poolBytes + macroBytes;
+           containerCount * kContainerRecWire + 4 +
+           corpseCount * kCorpseRecWire + poolBytes + macroBytes;
 }
 
 // ---------------------------------------------------------------------------
-// An opened crate, identified by something that survives a restart
+// A crate, identified by something that survives a restart
 // ---------------------------------------------------------------------------
-// `Container::opened` is a bool inside the ECS component ([container.h]), i.e. it is
+// (The key predates v15 and kept its name: renaming it would touch every test
+// that spells it for zero wire change. It stopped meaning "this crate was
+// opened" and now means "this crate", full stop — the v15 record it keys
+// carries the whole component, opened flag included.)
+// `Container` state lives in an ECS component ([container.h]), i.e. it is
 // per-ENTITY — and an entity id is the one thing that is guaranteed NOT to be stable.
 // The crates are destroyed and respawned on every floor entry
 // ([main.cpp] refresh_floor_containers), and EnTT recycles handles, so an `entt::entity`
@@ -372,8 +399,9 @@ inline constexpr std::size_t save_bytes_for(std::size_t openedCount,
 // a 5x5 block of interior offsets (`ox`/`oy` in [2, 7), [container.cpp]), so 6,400
 // candidate cells for `container_budget` = 256/6 = 42 draws. Expected colliding pairs
 // C(42,2)/6400 = 0.135, i.e. **one collision on about 13% of Residential floors**. When
-// it happens, opening one crate restores the other as opened too: a crate lost, never an
-// item duplicated. The strong fix is one `std::uint16_t spawnIndex` on `Container`, set
+// it happens, ONE record stamps BOTH crates (v15): the second crate's own rolled
+// contents are shadowed by the first's — a crate's roll lost, never an item
+// duplicated, because refresh scans live entities and a scan cannot invent items. The strong fix is one `std::uint16_t spawnIndex` on `Container`, set
 // by `spawn_floor_containers`; that is an edit to `container.h`, which this lane does not
 // own, so the cell key ships and the collision is measured rather than hidden.
 //
@@ -405,6 +433,33 @@ inline bool same_container(const OpenedContainerKey& a, const OpenedContainerKey
 // The key a crate at `pos` on floor `floorNumber` would be saved under. Pure; exposed
 // so a test can key a crate without a registry.
 OpenedContainerKey container_key(int floorNumber, const vec3& pos);
+
+// ---------------------------------------------------------------------------
+// v15 records — the world's containers and corpses, whole
+// ---------------------------------------------------------------------------
+// One crate: its key plus the COMPONENT, verbatim. Carrying `Container` itself
+// rather than a projection is the point — the search screen mutates the
+// component ([inventory.md]), so any field it can touch is state, and a record
+// that picked fields would silently drop the next one the screen learns to edit.
+struct ContainerRecord {
+    OpenedContainerKey key{};
+    Container c{};
+};
+
+// One fallen body. Everything `finalize_deaths` derived from the live body at
+// the moment of death — the flattened AABB, the darkened tint, the exact resting
+// position — is recorded rather than re-derived, because the body it was derived
+// FROM no longer exists on a revisit. `deathTick` does not travel (no reader).
+struct CorpseRecord {
+    std::int16_t floor = 0;      // signed floor label, same convention as the key
+    vec3 pos{};                  // exact resting position, not a cell
+    vec3 colour{};               // the darkened body tint finalize computed
+    vec3 half{};                 // the flattened silhouette
+    std::uint8_t mobKind = 0xFF; // MobKind, or 0xFF for an NPC's body
+    std::uint8_t slotCount = 0;
+    std::uint8_t searched = 0;
+    ItemSlot slots[kMaxCorpseSlots] = {};
+};
 
 // ---------------------------------------------------------------------------
 // Per-floor state files — the modular half of the save
@@ -503,10 +558,12 @@ struct SaveState {
     // discovered", so a SaveState built by hand still means something sane.
     SamosborState samosbor{};
     FastTravelState fastTravel{};
-    // Every crate emptied anywhere in the building, not just on the live floor. Only the
-    // resident floor's crates are live entities, so the ones from other floors exist
-    // ONLY in this list — see `refresh_opened_containers`.
-    std::vector<OpenedContainerKey> opened;
+    // v15: every crate and every corpse anywhere in the building, contents and
+    // all — not just the live floor's. Only the resident floor's are live
+    // entities, so the other floors' exist ONLY in these lists — see
+    // `refresh_floor_records`.
+    std::vector<ContainerRecord> containers;
+    std::vector<CorpseRecord> corpses;
     // Version 2: quest log persisted across F5/F9. Written last by
     // quest_log_write; read back by quest_log_read. Exactly kQuestLogWire bytes.
     QuestLog quests{};
@@ -553,40 +610,46 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st,
                SaveError* err = nullptr, SaveHeader* hdrOut = nullptr);
 
 // ---------------------------------------------------------------------------
-// Container state <-> registry
+// Container / corpse state <-> registry (v15)
 // ---------------------------------------------------------------------------
 
-// Append a key for every OPENED crate resident on `layer`. Appends; does not clear.
-std::size_t collect_opened_containers(Registry& reg, LayerId layer, int floorNumber,
-                                     std::vector<OpenedContainerKey>& out);
-
-// Bring `set` up to date for ONE floor: drop every key already recorded for
-// `floorNumber`, then re-scan that floor from the registry. Returns the number of keys
-// the floor now contributes.
+// Bring BOTH record lists up to date for ONE floor: drop every record already
+// held for `floorNumber`, then re-scan that floor's live entities — every crate
+// (not only the touched ones: recording all ~24..64 costs under 2 KB and needs
+// no diff against a re-roll) and every corpse. Returns records now contributed.
 //
-// This is the function a save should call, and the reason is that only ONE floor is ever
-// resident ([floor_stream.h] keeps a single World live). Every other floor's opened set
-// exists nowhere but in `set`, so a plain append would duplicate the live floor's keys
-// on every single save, and a plain clear would forget all nine other floors.
-std::size_t refresh_opened_containers(Registry& reg, LayerId layer, int floorNumber,
-                                      std::vector<OpenedContainerKey>& set);
+// This is the function a save AND a floor-leave call, and the reason is that
+// only ONE floor is ever resident ([floor_stream.h] keeps a single World live).
+// Every other floor's state exists nowhere but in these lists, so a plain
+// append would duplicate the live floor on every save, and a plain clear would
+// forget all nine other floors.
+std::size_t refresh_floor_records(Registry& reg, LayerId layer, int floorNumber,
+                                  std::vector<ContainerRecord>& boxes,
+                                  std::vector<CorpseRecord>& corpses);
 
-// Re-open the crates on a freshly generated floor. Call it AFTER
-// `spawn_floor_containers` has built the floor's crates; returns how many matched.
-//
-// Also empties what it opens. `loot_containers_step` only sets `opened` once a crate is
-// actually empty ([container.cpp]), so an opened crate is an empty crate by
-// construction, and leaving rolled contents inside a restored one would be a pile of
-// items waiting for the first feature that looks inside a spent box.
+// Stamp recorded contents over the freshly generated floor's crates. Call it
+// AFTER `spawn_floor_containers` has built them; returns how many matched. The
+// whole component is stamped — contents, wear, opened — so a half-taken crate
+// comes back half-taken and a deposit is still there, which is the state the
+// search screen made real ([inventory.md]).
 //
 // `openedColour` is optional and exists because the "spent crate" tint is
-// `kOpenColour`, a file-static constant inside `container.cpp` — unreachable from here
-// and NOT worth copying, since a copied colour drifts silently the day the original is
-// retuned. Pass it from the call site, or pass nullptr and accept that a restored crate
-// looks unopened until `container.h` hoists that constant into the header.
-std::size_t apply_opened_containers(Registry& reg, LayerId layer, int floorNumber,
-                                    const OpenedContainerKey* keys, std::size_t n,
+// `kOpenColour`, a file-static constant inside `container.cpp` — unreachable from
+// here and NOT worth copying, since a copied colour drifts silently the day the
+// original is retuned. Pass it from the call site, or pass nullptr and accept
+// that a restored spent crate looks unopened until `container.h` hoists it.
+std::size_t apply_container_records(Registry& reg, LayerId layer, int floorNumber,
+                                    const ContainerRecord* recs, std::size_t n,
                                     const vec3* openedColour = nullptr);
+
+// Rebuild the floor's corpses from records: DESTROYS every Corpse entity on
+// `layer` first (an F9 onto the same floor would otherwise duplicate every
+// body), then spawns one entity per matching record — Transform, flattened
+// AABB, darkened Renderable, the Corpse slots and the Interactable, exactly the
+// shape `finalize_deaths` leaves behind. No Mass and no Velocity: a recorded
+// corpse is at rest by definition. Returns how many were spawned.
+std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,
+                                 const CorpseRecord* recs, std::size_t n);
 
 // ---------------------------------------------------------------------------
 // Coming back to where you stood
@@ -621,7 +684,8 @@ std::size_t apply_opened_containers(Registry& reg, LayerId layer, int floorNumbe
 // Then the arrival sequence, in this order and for these reasons:
 //   1. `refresh_floor_containers` — the destination floor has no crates until the app
 //      spawns them, and they must exist before step 2 can re-open any.
-//   2. `apply_opened_containers` — with the loaded key set.
+//   2. `apply_container_records` + `spawn_corpse_records` — with the loaded
+//      record lists.
 //   3. `refresh_floor_mobs` — a streamed-in floor has no monsters either.
 //   4. `door_build` — AFTER generation, BEFORE the bake, because it leaves every door
 //      Open so the grid the worker reads is the all-open geometry the bake must assume
