@@ -14,21 +14,9 @@ namespace giga {
 namespace {
 
 // Total voxels per axis across the whole world (wraps as a torus).
-constexpr int kVoxAxis = kMacroDim * kSubDim;
 
 int floor_div(float v, float s) {
     return static_cast<int>(std::floor(v / s));
-}
-
-// Is the global voxel (gx, gy, gz) solid? Global voxel coords wrap on the
-// 1024^3 torus; they decompose into a macro cell + local sub index.
-bool voxel_solid(const World& w, int gx, int gy, int gz) {
-    gx = wrapi(gx, kVoxAxis);
-    gy = wrapi(gy, kVoxAxis);
-    gz = wrapi(gz, kVoxAxis);
-    int cx = gx / kSubDim, cy = gy / kSubDim, cz = gz / kSubDim;
-    int sx = gx % kSubDim, sy = gy % kSubDim, sz = gz % kSubDim;
-    return w.grid().mask(cx, cy, cz).test(sub_bit(sx, sy, sz));
 }
 
 } // namespace

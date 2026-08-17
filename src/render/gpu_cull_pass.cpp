@@ -45,7 +45,6 @@ bool make_shader(VkDevice dev, const std::vector<char>& spv, VkShaderModule* m) 
     return vkCreateShaderModule(dev, &ci, nullptr, m) == VK_SUCCESS;
 }
 
-static constexpr uint32_t kMaxCullDescriptorSets = 64;
 
 } // namespace
 

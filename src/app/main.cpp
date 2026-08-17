@@ -66,6 +66,7 @@
 #include "game/barter.h"        // сделка ([conversation.md]); vendor.h — термы
 #include "game/conversation.h"
 #include "game/dice.h"
+#include "game/economy.h"
 #include "game/craft.h"
 #include "game/quest.h"
 #include "game/container.h"
@@ -2125,6 +2126,7 @@ int main(int argc, char** argv) {
     char dealLine[160] = {};
     // Партия в кости ([dice.h]) — одна за раз, за столом разговора.
     game::DiceGame diceGame{};
+    bool bankCounterOpen = false;   // стойка кассы ([economy.h] teller)
     char consoleInput[256] = {};
     std::vector<std::string> consoleLog;
     std::vector<std::string> consoleHistory;
@@ -6029,9 +6031,46 @@ int main(int argc, char** argv) {
             }
             if (!convValid) {
                 diceGame = game::DiceGame{};   // собеседник пропал — стол пуст
+                bankCounterOpen = false;
                 shell.close_window();
                 input.set_mouselook(true);
                 SDL_SetWindowRelativeMouseMode(window, true);
+            } else if (bankCounterOpen) {
+                // Стойка кассы вместо меню ([economy.h] teller): два числа,
+                // три клавиши; глаголы клампят сами (сумка/счёт), UI слеп.
+                if (const auto* nrb = reg.try_get<game::NpcRef>(player);
+                    nrb && pool.valid(nrb->id)) {
+                    game::Inventory& binv = pool.inventory(nrb->id);
+                    std::int64_t cash = 0;
+                    for (const auto& bs : binv.slots)
+                        if (bs.item == game::kItemRuble) cash += bs.count;
+                    char header[96];
+                    std::snprintf(header, sizeof header, "%s",
+                                  game::faction_name(static_cast<game::Faction>(
+                                      pool.faction(convNpc))));
+                    const BankUiRequest br =
+                        bank_ui_draw(ledger.banked, cash, header);
+                    if (br.depositAll) {
+                        const std::int32_t in =
+                            game::teller_deposit_cash(binv, ledger);
+                        if (in > 0)
+                            std::snprintf(convLine, sizeof convLine,
+                                          "Принято на счёт: %d руб.", in);
+                    }
+                    if (br.withdraw) {
+                        const std::int32_t out =
+                            game::teller_withdraw_cash(binv, ledger, 1000);
+                        if (out > 0)
+                            std::snprintf(convLine, sizeof convLine,
+                                          "Выдано наличкой: %d руб.", out);
+                        else
+                            std::snprintf(convLine, sizeof convLine,
+                                          "Выдавать нечего либо некуда.");
+                    }
+                    if (br.close) bankCounterOpen = false;
+                } else {
+                    bankCounterOpen = false;
+                }
             } else if (diceGame.active) {
                 // Стол занят: панель партии ВМЕСТО меню, один читатель клавиш.
                 char header[96];
@@ -6090,6 +6129,9 @@ int main(int argc, char** argv) {
                         case game::ConvActionKind::Line:
                             std::snprintf(convLine, sizeof convLine, "%s",
                                           act.line ? act.line : "");
+                            break;
+                        case game::ConvActionKind::Bank:
+                            bankCounterOpen = true;
                             break;
                         case game::ConvActionKind::Dice: {
                             // Сид — от сим-тика, НЕ от мирового сида: перезаход

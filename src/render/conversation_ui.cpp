@@ -142,4 +142,32 @@ DiceUiRequest dice_ui_draw(const game::DiceGame& g, const char* header) {
     return req;
 }
 
+BankUiRequest bank_ui_draw(std::int64_t banked, std::int64_t cash,
+                           const char* header) {
+    BankUiRequest req;
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    const float winW = 440.0f;
+    const float winH = 170.0f;
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + (vp->WorkSize.x - winW) * 0.5f,
+                                   vp->WorkPos.y + (vp->WorkSize.y - winH) * 0.6f),
+                            ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(winW, winH), ImGuiCond_Always);
+    ImGui::Begin("##bank", nullptr,
+                 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
+                     ImGuiWindowFlags_NoTitleBar);
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kAmber),
+                       "КАССА | %s", header ? header : "");
+    ImGui::Separator();
+    ImGui::Text("СЧЁТ:    %lld руб", static_cast<long long>(banked));
+    ImGui::Text("НАЛИЧКА: %lld руб", static_cast<long long>(cash));
+    ImGui::Separator();
+    ImGui::TextDisabled("Enter ВНЕСТИ ВСЁ | T СНЯТЬ 1000 | Esc УЙТИ");
+    if (ImGui::IsKeyPressed(ImGuiKey_Enter, false)) req.depositAll = true;
+    if (ImGui::IsKeyPressed(ImGuiKey_T, false)) req.withdraw = true;
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) req.close = true;
+    ImGui::End();
+    return req;
+}
+
 } // namespace giga

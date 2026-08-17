@@ -3,12 +3,13 @@
 // ---------------------------------------------------------------------------
 // What was already here, and what the reference adds
 // ---------------------------------------------------------------------------
-// Read [vendor.h] and [extraction.h] before this file. Between them the build already
+// Read [barter.h] and [extraction.h] before this file. Between them the build already
 // ships a working two-sided economy: `deposit_valuables` turns carried loot into
-// `RunLedger::banked` at the pad, `vendor_sell_all` / `vendor_resupply` turn roubles
-// back into water and rounds at a 26% round-trip spread, and `item_table.h` prices 446
-// items with a depth-gated value cap. That is a complete loop and this file does not
-// rebuild any of it.
+// `RunLedger::banked` at the pad, and the barter deal turns goods into ruble ITEMS
+// and back at the reference's 26% round-trip spread ([conversation.md] — this
+// replaced vendor_sell_all/vendor_resupply on 2026-08-17), with `item_table.h`
+// pricing the catalog under a depth-gated value cap. That is a complete loop and
+// this file does not rebuild any of it.
 //
 // The reference (`../gigahrush/src/systems/{banking,economy,stock_market,trade,
 // production,caravans,gambling,ration_coupons,permits}.ts`, ~215 KB, plus
@@ -24,11 +25,11 @@
 //                      capped at 5x. It is genuinely missing here — every floor prices
 //                      water at exactly `int(2 * 1.15) = 2` forever. It is NOT ported
 //                      because the only consumer that could pay a moved price is
-//                      `vendor_buy_price` / `vendor_sell_price` in vendor.cpp, and a
-//                      price function no vendor reads is decoration. It needs a hook
-//                      in that file plus the item->resource mapping, which wants the
-//                      interned string ids [item_table.h] already defers. Recorded as
-//                      the next increment rather than half-built here.
+//                      the barter terms ([barter.h]), and a price function no deal
+//                      reads is decoration. It needs a hook there plus the
+//                      item->resource mapping, which wants the interned string ids
+//                      [item_table.h] already defers. Recorded as a future
+//                      increment rather than half-built here.
 //   stock market       Its own balance doc lists it as a P0 exploit: a 5.5% random
 //     (stock_market.ts) move every 45 s, so "no reliable doubling in under 30 real
 //                      minutes" already fails in the reference. Nothing in this build
@@ -37,9 +38,11 @@
 //   production,        Each needs multi-tick per-floor state and a resource flow that
 //   caravans           does not exist yet (12 factories / 42 recipes / 6 lanes). They
 //                      are downstream of scarcity, not beside it.
-//   trade liquidity    Already covered: `kSellPerVisitCap` in [vendor.h] is exactly the
-//                      trader-liquidity cap the reference's balance doc lists as its
-//                      own missing P0. Porting `trade.ts` would give it two homes.
+//   trade liquidity    Closed better than the reference asks: barter's partners pay
+//                      with the rubles physically in their pockets ([barter.h] закон
+//                      2), which IS the liquidity cap its balance doc lists as a
+//                      missing P0. (kSellPerVisitCap, the old stand-in, died with
+//                      the vendor window.) Porting `trade.ts` would give it two homes.
 //   gambling, coupons, Content, not economy structure. `UseEffect::RedeemCoupon`
 //   permits            already exists in the item table with no handler, so coupons
 //                      are a use-verb increment, not a banking one.
@@ -50,16 +53,17 @@
 // "A place to put roubles so death does not take everything" describes a gap this
 // build does not have. `record_death` ([extraction.h]) adds `at_risk_value(lost)` —
 // the value of the dead row's INVENTORY — to `lostToDeath` and never touches
-// `banked`. There is no carried-cash concept at all: `vendor_sell_all` credits
-// `led.banked` directly and its own comment says so ("there is no cash/account split
-// here and inventing one would give value two homes"). So roubles are already
-// permanent the instant they exist, and a second wallet added to manufacture a
-// death-risk on cash would be exactly the duplicate that comment warns about.
+// `banked`. SINCE THE RUBLE ITEM LANDED (v14) the cash/account split is real:
+// pocket rubles are inventory, AT RISK like any loot, and `banked` is the safe
+// account the Duty clerk's teller verbs below move them into and out of. Death
+// with a wad in the pocket now loses the wad — the risk is not manufactured, it
+// is the same risk every carried valuable already ran.
 //
 // What this bank therefore adds is not safety, it is **cost and yield**:
 //
-//   * a **term deposit** is strictly LESS liquid than `banked` — `vendor_buy` spends
-//     `led.banked` and cannot see the deposit — and pays interest for that. So the
+//   * a **term deposit** is strictly LESS liquid than `banked` — spending money
+//     means withdrawing COINS through the teller first, and the deposit is a step
+//     further away even than that — and it pays interest for the distance. So the
 //     decision is "how much can I afford to make unspendable before the next run",
 //     which is a real one against a survival clock.
 //   * a **loan** is the first way to spend roubles that have not been earned yet, and
@@ -114,7 +118,7 @@
 //     HUB even once every 48 minutes out-earns a quarter-million on deposit, and floor
 //     -13's 462,171 out-earns it by 50x per clear. Deposits cannot replace descending.
 //     This is the number to move if that ever stops holding.
-//   * a `vendor_resupply` at main's shipped budget of 600 rub is the unit a loan is
+//   * a 600-rub resupply basket (the old shop's unit) is the scale a loan is
 //     measured in, so E0's 500 funds most of one kit and E4's 50,000 about 83.
 //
 // ---------------------------------------------------------------------------
@@ -249,7 +253,7 @@ inline constexpr std::int32_t kBankCreditJitterBp = 2000;
 // behaviour in a multiply. `bank_step` computes `principal * loanBp` in int64; at this
 // ceiling and the highest authored rate (45 bp) that is 4.5e13, four orders of
 // magnitude below INT64_MAX. A deposit is accepted up to the ceiling and the remainder
-// is refused, reported as a partial like `vendor_buy` reports what landed.
+// is refused, reported as a partial — the house rule: report what LANDED.
 inline constexpr std::int64_t kBankMaxPrincipal = 1'000'000'000'000ll;
 
 // ---------------------------------------------------------------------------
@@ -321,7 +325,7 @@ struct BankTick {
 // ---------------------------------------------------------------------------
 // Amounts are `int32_t` because one operation is bounded; balances are `int64_t`
 // because `RunLedger::banked` is. Every mutator reports what landed rather than a
-// bool, following `vendor_buy` and `use_best_heal`: a partial deposit is a real
+// bool, following `use_best_heal`: a partial deposit is a real
 // outcome and a caller that cannot see the difference will print the wrong number.
 
 // Terms of band `band`. Total: an out-of-range index clamps to the last band rather
@@ -399,5 +403,29 @@ const char* wealth_tier_name(std::uint8_t tier);
 // The most recent ledger entry, or nullptr when nothing has happened yet.
 const BankEntry* bank_last_entry(const BankAccount& acct);
 const char* bank_op_name(BankOp op);
+
+// ---------------------------------------------------------------------------
+// The teller — banked <-> coins ([conversation.md] «БАНК», инкремент C)
+// ---------------------------------------------------------------------------
+// The owner's law (2026-08-17): `banked` is an ACCOUNT, cash is the ruble ITEM
+// in the pocket, and moving between them is an interaction with a body — the
+// Duty clerk's «БАНК» option — never pad magic. These two verbs are that
+// interaction, and they are deliberately dumb: no fee, no interest, no limit
+// but physics. The term-deposit/loan machinery above stays a separate, deeper
+// desk (still unwired — check_wired's bank_step entry stands until it earns a
+// consumer).
+//
+// Deposit takes EVERY coin in the bag — the decision at the counter is "do I
+// bank my cash", not slot bookkeeping. Withdraw mints coins back and is
+// clamped twice: by the account, and by what the bag physically ACCEPTS —
+// `inventory_give`'s remainder stays in the account rather than on the floor,
+// so a full bag under-withdraws and never destroys a ruble.
+
+// All pocket rubles -> banked. Returns the amount moved.
+std::int32_t teller_deposit_cash(Inventory& inv, RunLedger& led);
+
+// banked -> coins in the bag, up to `amount`. Returns what actually landed.
+std::int32_t teller_withdraw_cash(Inventory& inv, RunLedger& led,
+                                  std::int32_t amount);
 
 } // namespace giga::game

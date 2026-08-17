@@ -47,6 +47,7 @@ enum class ConvActionKind : std::uint8_t {
     Line,       // show `line` in the conversation panel, stay open
     Barter,     // switch to the barter-mode search screen ([barter.h])
     Dice,       // put the dice on the table ([dice.h]) — the app starts the game
+    Bank,       // open the teller counter ([economy.h] teller verbs)
     Close,      // close the conversation
 };
 

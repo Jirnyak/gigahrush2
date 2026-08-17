@@ -122,6 +122,46 @@ inline Settled run_periods(BankAccount& acct, std::uint32_t periods,
 static void test_economy_all() {
     using namespace economy_detail;
 
+    { // ---- 0. the teller: banked <-> coins, clamped by physics ----
+        // [economy.h] teller verbs — the C increment's whole surface. Deposit
+        // sweeps every coin; withdraw mints back, clamped by the account AND by
+        // what the bag accepts, remainder staying banked (never on the floor).
+        Inventory inv{};
+        RunLedger led{};
+        CHECK(inventory_give(inv, kItemRuble, 65535) == 0);
+        CHECK(inventory_give(inv, kItemRuble, 465) == 0);   // second stack
+        CHECK(teller_deposit_cash(inv, led) == 66000);
+        CHECK(led.banked == 66000);
+        CHECK(inv.empty());
+        // Depositing an empty bag is a zero, not an error.
+        CHECK(teller_deposit_cash(inv, led) == 0);
+
+        // Withdraw a slice; the account shrinks by exactly what LANDED.
+        CHECK(teller_withdraw_cash(inv, led, 1000) == 1000);
+        CHECK(led.banked == 65000);
+        std::int64_t cash = 0;
+        for (const ItemSlot& sl : inv.slots)
+            if (sl.item == kItemRuble) cash += sl.count;
+        CHECK(cash == 1000);
+        // Asking past the account clamps to it...
+        CHECK(teller_withdraw_cash(inv, led, 90000) == 65000);
+        CHECK(led.banked == 0);
+        // ...and a FULL bag under-withdraws, coins staying banked, none minted
+        // into the void.
+        led.banked = 500;
+        Inventory full{};
+        ItemId one = kInvalidItem;
+        for (ItemId i = 1; i <= kItemCount; ++i)
+            if (i != kItemRuble && item_def(i).stackMax == 1) { one = i; break; }
+        CHECK(one != kInvalidItem);
+        for (int i = 0; i < kInvSlots; ++i) full.slots[i] = ItemSlot{one, 1};
+        CHECK(teller_withdraw_cash(full, led, 500) == 0);
+        CHECK(led.banked == 500);
+        std::fprintf(stderr,
+                     "[economy] teller: 66,000 in two stacks banked whole; "
+                     "withdraw clamps to account and to bag space\n");
+    }
+
     { // ---- 1. every authored row resolves, and agrees with the rest of the tree ----
         // The CSV is one of two homes for three of these numbers; the generator
         // cross-checks at build time and this re-checks at run time, because a
